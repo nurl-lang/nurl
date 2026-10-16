@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_string_global_owned_safe.nu:10:56: error: the global 'g_label' would own this string, and every thread can read it: the next assignment frees the string it owns, under a reader in another thread. A mutable 's' global holds literals in safe code. Keep text that changes at run time in a '( Locked String )' global set at start (': ( Locked String ) g ( make )'), or assign it from an 'unsafe' function, which vouches that nothing races on it.
+@ relabel s a → v { = g_label ( nurl_str_cat a `!` ) }
+                                                       ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

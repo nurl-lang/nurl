@@ -34,6 +34,23 @@
     : i b ? > a 0 { + a 10 } { 0 }
     ( nurl_println_int b )
 
+    // NOT warned: a bare scope block that ends in an assignment. The block
+    // falls off with its last statement's value, and an assignment is not
+    // a discarded value.
+    : ~ i c 0
+    {
+        : i t + a 2
+        = c t
+    }
+    ( nurl_println_int c )
+
+    // Dead: a bare block whose last statement is a bare value — warned at
+    // THAT statement's line.
+    {
+        : i u + a 3
+        u
+    }
+
     // NOT warned: call statement (effects) and `^` return operand.
     ( nurl_print `ok\n` )
     ^ 0

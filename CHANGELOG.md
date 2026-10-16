@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A view handed to a function defined further down the file no longer
+makes the container it was handed with stale by itself. In raw code,
+`( f c ( string_data x ) )` with `f` below the call was taken to keep the
+view in `c`, so a later mutation of `x` rejected the next use of `c` even
+when `f` only copied the string — and with `f` above, the same program
+compiled. The borrow is now conditional on `f` keeping that argument and
+is decided after the module, like the other verdicts that depend on a
+callee (compiler/tests/diag_stale_borrow_kept_forward.nu). gpukit hit it:
+`gk_run_checked` sits above the window parser it calls.
+
+Mutable globals no longer race. A scalar mutable global (an integer,
+bool, float or `s`) is read and written with relaxed atomics, so two
+threads touching it see whole values instead of having undefined
+behaviour; on x86-64 and AArch64 the instructions are the same ones (the
+compiler's self-compile, the heaviest user of globals there is, retires
+0.4 % more instructions in the same cycles). Two holes in safe code are
+closed: a struct global was read and written whole from several threads
+(h272; it is now `unsafe`-only, like a global that owns something), and a
+`s` global took ownership of a fresh string, which the next assignment
+freed under a reader in another thread — a use-after-free ASan reports
+within a few thousand iterations (h273; in safe code a `s` global now
+holds literals, and text that changes at run time lives in a
+`( Locked String )` set at start). agora's refusal message had exactly
+that race and moves into a `Locked String`. nurlc runs on one thread, and
+the 47 functions that store owned strings into its globals are marked
+`unsafe`.
+A `( mem_dup x )` copy handed straight to a call
+(`( f ( mem_dup x ) )`) was never dropped: the copy is no call, so the
+argument path had no callee to ask whether the caller owned it. It is
+dropped after the call now, as any owned call result is
+(`compiler/tests/mem_dup_temp_arg.nu`); packages/embed leaked a share of
+every weight chunk per forward this way.
+The borrow checker no longer takes a binding whose block has ended for
+live storage of the caller's: a local copy of a parameter's element read
+in a loop body made a later store into another field of that parameter an
+error (`compiler/tests/loop_copy_then_param_field_store.nu`).
+A bare `{ … }` block in statement position is a dead value exactly when
+its last statement is one: a scope block that ends in an assignment or a
+call no longer draws "has no effect", and one that ends in a bare value is
+reported at that value's line instead of the block's
+(`compiler/tests/should_warn_dead_value.nu`).
+
 Taking `unsafe` out of the packages. A handle's state is changed in safe
 code now: `rc_take` / `rc_restore` (stdlib/std/rc.nu) and `locked_take` /
 `locked_restore` (stdlib/std/thread.nu) check the state out of an `Rc` or

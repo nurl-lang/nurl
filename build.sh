@@ -672,8 +672,8 @@ if (( RUN_TESTS == 1 )); then
     # --no-cpu-dispatch and requires the baseline lowering to produce
     # the same goldens — the ML-KEM / ML-DSA keys are the same keys on
     # a machine without AVX2 or they are not, and nothing else asks.
-    step "split equivalence + simd dispatch IR + simd baseline agree" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree
+    step "split equivalence + simd dispatch IR + simd baseline agree + global atomics IR" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree global_atomic_ir
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

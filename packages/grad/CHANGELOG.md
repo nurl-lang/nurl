@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.13.3] — 2026-10-15
+
+### Changed
+
+- **The per-node device path has no `unsafe` left.** All 27 tape kernels (forward, backward, the optimizer) are gpukit checked kernels. They reach buffers only through `LD` / `ST`, which check every index against the buffer bound, so no launcher has to vouch for the sizes it passes. They are written once in f64; pure f32 goes through the same textual substitution as before, and mixed precision binds f32 buffers (loads widen, stores narrow). `_gp_run` is gone.
+- Each node's launches are recorded on the first replay and replayed after it (`gk_record_dev` / `gk_replay`), as are the gradient zeroing, the loss seed and the optimizer step. A replay does no argument building. Records are cleared when `gpopt_add` / `gpopt_set_clip` change the step.
+- The clip norm no longer reads a table of raw gradient addresses. One single-thread launch per active parameter adds its squared gradient to a one-element accumulator, in registration order, so the sum is the one the old kernel computed. The accumulator is f32 for a pure-f32 program and f64 otherwise.
+- The single-thread sum (`sum` / `mean`) loads eight elements before adding them, in the same order.
+- **gpfuse has no `unsafe` either, so grad has none** (3 → 0). The fusion passes still write plain CUDA C over node buffers, but that text is never launched. Each kernel is rewritten into gpukit's checked subset when the plan is built:
+  - `v12[i]` becomes `LD(v12, i)` and `g7[i] = x;` becomes `ST(g7, i, x);`, with every `v<k>` / `g<k>` bound to node k's value or gradient.
+  - The early-return guards become an enclosing `if`, single-statement loop bodies are braced, and CUDA's coordinates become the subset's.
+  - Launches are recorded once and replayed.
+
+  The plan no longer uploads tables of raw device addresses (`vtab`, `gtab`), and the one-launch zero fill over an address table is a generated checked kernel with one block per gradient, as before. The plan's source is no longer freed by hand.
+- Verified: fused forward and backward are bit-identical to the per-node path on CUDA and the CPU backend (gpfuse 21/21), and the PyTorch oracles pass (f64, LoRA f64 and f32, emitted C bit-equal). The megakernel episode runs at 78–79 ms against 78 ms before.
+
+### Verified
+
+- Every test is identical on CUDA and on the CPU backend: grad 23, parity 15 (bit-for-bit against the CPU tape), f32 5, mixed 5, lora 11, train 7, gpfuse 21, lazy-const 7, drop-consts 6.
+- `tests/gput_bench.nu` on an RTX 4090 (360 episodes): device replay 291 → 252 ms, graph-fused 237 → 220 ms, megakernel 78 → 77 ms.
+
+## [0.13.2] — 2026-10-15
+
+### Fixed
+
+- `_gp_run` launched a kernel over whatever argument words it was handed, yet it was declared `unsafe @`, a promise to every caller. A program importing grad could call it from safe code with made-up device addresses. It is now `raw`, and the six launchers that build its arguments from a program's own buffers vouch for them (`unsafe`). Moving these kernels into gpukit's checked subset, which takes the vouching away, is the next step.
+- The f32 and mixed-precision kernel sources were cached lazily in string globals. Two threads training at once could each build one and free the other's while it was launching from it. Both are now built once at start (`( Arc String )`, a few microseconds) and borrowed by every launch.
+
 ## [0.13.1] — 2026-10-15
 
 ### Changed

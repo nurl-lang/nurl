@@ -10,7 +10,9 @@
 // headless Chrome through tests/webgpu_chrome.mjs).
 //
 // Every kernel in K must have a case here — a kernel added to the set
-// without one fails the run.
+// without one fails the run. A case lists a checked kernel's arguments
+// without the lengths and the end word: each `__gk_n<k>` is filled in as
+// the element count of the buffer before it, `__gk_end` as 0.
 
 import { makeWebGPUHost } from "../web/webgpu.js";
 import { K, SENTINEL, layout } from "../web/kernels_wgsl.js";
@@ -75,25 +77,26 @@ const R = {
 };
 
 // Each case: { name, args: [...in parameter order], total, out: [argIndex...], ref: () => [Float32Array|BigInt64Array per out] }
-// A buffer argument is a Float32Array / BigInt64Array (uploaded) or null
-// (the null pointer); a scalar is a number (or BigInt for a long long).
+// A buffer argument is a Float32Array / BigInt64Array (uploaded); a
+// scalar is a number (or BigInt for a long long). `out` indexes `args`.
 function cases() {
   const cs = [];
   const add = (c) => cs.push(c);
-  // gemm_tiled — transB is ignored, as in the CUDA body; both the
-  // workgroup-per-output (M*N < 16384) and thread-per-output shapes, with
-  // and without the bias pointer
+  // gemm_tiled (transB=0) — both the workgroup-per-output (M*N < 16384)
+  // and thread-per-output shapes, with and without the bias (hasB=0: Cb
+  // is bound but not read)
   for (const [M, N, Kd, withC] of [[3, 5, 70, true], [1, 7, 300, false], [130, 130, 5, true], [129, 131, 3, false]]) {
-    const A = rnd(M * Kd), B = rnd(Kd * N), C = withC ? rnd(N) : null;
-    add({ name: "gk32_gemm_tiled", label: `M${M} N${N} K${Kd}${withC ? "" : " C=null"}`,
-      args: [A, B, C, new Float32Array(M * N), M, N, Kd, 0.75, 1.25, 0], total: thr(ceil(M, 8) * ceil(N, 32)),
-      out: [3], ref: () => [R.gemm(A, B, C, M, N, Kd, 0.75, 1.25, 0)] });
-  }
-  for (const [M, N, Kd, tb] of [[4, 6, 33, 1], [4, 6, 33, 0], [140, 120, 4, 1]]) {
     const A = rnd(M * Kd), B = rnd(Kd * N), C = rnd(N);
-    add({ name: "gk32_gemm", label: `M${M} N${N} K${Kd} transB${tb}`,
-      args: [A, B, C, new Float32Array(M * N), M, N, Kd, 1, 1, tb], total: thr(M * N),
-      out: [3], ref: () => [R.gemm(A, B, C, M, N, Kd, 1, 1, tb)] });
+    add({ name: "gk32_gemm_tiled", label: `M${M} N${N} K${Kd}${withC ? "" : " no bias"}`,
+      args: [A, B, C, new Float32Array(M * N), M, N, Kd, 0.75, 1.25, withC ? 1 : 0], total: thr(ceil(M, 8) * ceil(N, 32)),
+      out: [3], ref: () => [R.gemm(A, B, withC ? C : null, M, N, Kd, 0.75, 1.25, 0)] });
+  }
+  // gemm: the per-element kernel, which a fixed kernel set runs for transB=1
+  for (const [M, N, Kd] of [[4, 6, 33], [140, 120, 4]]) {
+    const A = rnd(M * Kd), B = rnd(Kd * N), C = rnd(N);
+    add({ name: "gk32_gemm", label: `M${M} N${N} K${Kd} transB1`,
+      args: [A, B, C, new Float32Array(M * N), M, N, Kd, 1, 1, 1], total: thr(M * N),
+      out: [3], ref: () => [R.gemm(A, B, C, M, N, Kd, 1, 1, 1)] });
   }
   { // bmm_tiled: 3 batches of [5x7]@[7x40], A/B batch strides with padding
     const nb = 3, M = 5, N = 40, Kd = 7, as = M * Kd + 3, bs = Kd * N + 5;
@@ -104,7 +107,7 @@ function cases() {
       Y[(b * M + r) * N + c] = acc;
     }
     const tiles = nb * ceil(M, 8) * ceil(N, 32);
-    add({ name: "gk32_bmm_tiled", args: [A, B, new Float32Array(nb * M * N), M, N, Kd, as, bs, tiles], total: thr(tiles), out: [2], ref: () => [Y] });
+    add({ name: "gk32_bmm_tiled", args: [A, B, new Float32Array(nb * M * N), M, N, Kd, as, bs, nb], total: thr(tiles), out: [2], ref: () => [Y] });
   }
   // conv2d: every lane of the 2-channel × 4-wide body — k3s1 with an OW
   // tail, k3s2, k1s1, a generic k5, odd Cout, no bias
@@ -114,8 +117,9 @@ function cases() {
     ["k1s1", 4, 6, 8, 3, 1, 1, 0, 0, 1, 1, 1],
     ["k5s1 generic, no bias", 2, 9, 9, 5, 5, 5, 2, 2, 1, 1, 0]]) {
     const OH = Math.floor((H + 2 * ph - kh) / sh) + 1, OW = Math.floor((W + 2 * pw - kw) / sw) + 1;
-    const X = rnd(Cin * H * W), Wt = rnd(Cout * Cin * kh * kw), B = hasB ? rnd(Cout) : null;
-    add({ name: "gk32_conv2d", label, args: [X, Wt, B, new Float32Array(Cout * OH * OW), Cin, H, W, Cout, kh, kw, OH, OW, ph, pw, sh, sw, hasB],
+    const X = rnd(Cin * H * W), Wt = rnd(Cout * Cin * kh * kw), B = rnd(Cout);
+    // (mode and tw shape the host kernel's tile; this body has its own)
+    add({ name: "gk32_conv2d", label, args: [X, Wt, B, new Float32Array(Cout * OH * OW), Cin, H, W, Cout, kh, kw, OH, OW, ph, pw, sh, sw, 0, 16, hasB],
       total: thr(ceil(Cout, 4) * OH * ceil(OW, 4)), out: [3], ref: () => [R.conv(X, Wt, B, Cin, H, W, Cout, kh, kw, OH, OW, ph, pw, sh, sw, hasB)] });
   }
   { const Cin = 2, H = 9, W = 8, Cout = 3, kh = 3, kw = 3, ph = 2, pw = 2, sh = 1, sw = 1, dh = 2, dw = 2;
@@ -168,7 +172,7 @@ function cases() {
     const d = [1, 1, 1, 2, 3, 4], As = [0, 0, 0, 12, 4, 1], Bs = [0, 0, 0, 4, 0, 1];
     const a = rnd(24), b = rnd(8, 0.5, 2); const n = 24; const Y = new Float32Array(n);
     for (let i = 0; i < n; i++) { let t = i, ai = 0, bi = 0; for (let k = 5; k >= 1; k--) { const c = t % d[k]; t = Math.floor(t / d[k]); ai += c * As[k]; bi += c * Bs[k]; } ai += t * As[0]; bi += t * Bs[0]; Y[i] = op(a[ai], b[bi]); }
-    add({ name, args: [a, b, new Float32Array(n), n, ...d, ...As, ...Bs], total: thr(n), out: [2], ref: () => [Y] });
+    add({ name, args: [a, b, new Float32Array(n), n, ...d.flatMap((x, k) => [x, As[k], Bs[k]])], total: thr(n), out: [2], ref: () => [Y] });
   }
   { const outer = 2, src_ax = 5, inner = 3, sz = 2, soff = 2; const S = rnd(outer * src_ax * inner); const Y = [];
     for (let o = 0; o < outer; o++) for (let a = 0; a < sz; a++) for (let ii = 0; ii < inner; ii++) Y.push(S[(o * src_ax + soff + a) * inner + ii]);
@@ -181,7 +185,7 @@ function cases() {
     for (let idx = 0; idx < tot; idx++) { const oc = []; let t = idx; for (let i = 5; i >= 0; i--) { oc[i] = t % O[i]; t = Math.floor(t / O[i]); }
       const inn = []; for (let i = 0; i < 6; i++) inn[P[i]] = oc[i];
       Y[idx] = X[((((inn[0] * d[1] + inn[1]) * d[2] + inn[2]) * d[3] + inn[3]) * d[4] + inn[4]) * d[5] + inn[5]]; }
-    add({ name: "gk32_perm6", args: [X, new Float32Array(tot), ...d, ...P], total: thr(tot), out: [1], ref: () => [Y] }); }
+    add({ name: "gk32_perm6", args: [X, new Float32Array(tot), ...d.flatMap((x, k) => [x, P[k]])], total: thr(tot), out: [1], ref: () => [Y] }); }
   for (const align of [0, 1]) {
     const C = 2, H = 3, W = 4, OH = 7, OW = 5; const X = rnd(C * H * W); const Y = new Float32Array(C * OH * OW);
     for (let idx = 0; idx < C * OH * OW; idx++) { const ox = idx % OW, oy = Math.floor(idx / OW) % OH, c = Math.floor(idx / (OW * OH));
@@ -238,6 +242,11 @@ export default async function run(args, log = console.log) {
   // the sentinel gpu_open probes
   u8().set(new TextEncoder().encode(SENTINEL + "\0"), 64);
   ok(H.wgpu_pipeline(64) > 0n, `sentinel ${SENTINEL} compiles`);
+  // a checked kernel's entry name finds its base name's entry
+  u8().set(new TextEncoder().encode("gk32_relu__gk0123456789abcdef\0"), 64);
+  ok(H.wgpu_pipeline(64) > 0n, "a checked kernel's hashed entry name resolves to its base entry");
+  u8().set(new TextEncoder().encode("gk32_relu__gkxyz\0"), 64);
+  ok(H.wgpu_pipeline(64) === 0n, "a name that is not one is not resolved");
 
   const all = cases();
   const covered = new Set(all.map((c) => c.name));
@@ -249,12 +258,21 @@ export default async function run(args, log = console.log) {
     const pid = H.wgpu_pipeline(64);
     if (pid <= 0n) { ok(false, `${tag}: no pipeline`); continue; }
     const l = layout(c.name);
-    if (l.length !== c.args.length) { ok(false, `${tag}: case has ${c.args.length} args, kernel ${l.length}`); continue; }
+    // the full argument list: a length after each buffer, 0 for the end word
+    const full = [], argAt = [];
+    { let j = 0, prev = null;
+      for (const p of l) {
+        if (/^__gk_n[0-9]+$/.test(p.c)) full.push(prev ? prev.length : 0);
+        else if (p.c === "__gk_end") full.push(0);
+        else { argAt[j] = full.length; prev = c.args[j]; full.push(c.args[j++]); }
+      }
+      if (j !== c.args.length) { ok(false, `${tag}: case has ${c.args.length} args, kernel takes ${j}`); continue; } }
+    const outAt = c.out.map((oi) => argAt[oi]);
     // upload buffers through a staging area, write the argument cells
     const ids = [];
     let at = 4096;
     for (let i = 0; i < l.length; i++) {
-      const a = c.args[i];
+      const a = full[i];
       if (a && a.buffer) {
         const id = H.wgpu_alloc(BigInt(a.byteLength));
         u8().set(new Uint8Array(a.buffer, a.byteOffset, a.byteLength), at);
@@ -264,10 +282,11 @@ export default async function run(args, log = console.log) {
     }
     const cells = 1024;
     for (let i = 0; i < l.length; i++) {
-      const a = c.args[i], k = l[i].kind;
+      const a = full[i], k = l[i].kind;
       let v;
       if (k === "b" || k === "w" || k === "q" || k === "Q") v = ids[i];
       else if (k === "f") v = BigInt(new Int32Array(new Float32Array([a]).buffer)[0]);
+      else if (k === "d") v = new BigInt64Array(new Float64Array([a]).buffer)[0];
       else v = BigInt(a);
       dv().setBigInt64(cells + i * 8, v, true);
     }
@@ -276,8 +295,8 @@ export default async function run(args, log = console.log) {
     const refs = c.ref();
     let worst = 0, bad = false;
     for (let j = 0; j < c.out.length; j++) {
-      const oi = c.out[j], want = refs[j];
-      const got = await host.readBuffer(ids[oi], c.args[oi].byteLength);
+      const oi = outAt[j], want = refs[j];
+      const got = await host.readBuffer(ids[oi], full[oi].byteLength);
       if (want instanceof BigInt64Array) {
         const g = new BigInt64Array(got);
         for (let e = 0; e < want.length; e++) if (g[e] !== want[e]) { bad = true; log(`   [${e}] got ${g[e]} want ${want[e]}`); break; }
@@ -294,13 +313,34 @@ export default async function run(args, log = console.log) {
     ok(!bad, `${tag}  max rel err ${worst.toExponential(1)}`);
   }
 
+  { // a view — a buffer's handle plus a byte offset, as a program's zero-copy
+    // slice (onnx's Split) passes it: the kernel reads and writes from there
+    u8().set(new TextEncoder().encode("gk32_relu\0"), 64);
+    const pid = H.wgpu_pipeline(64);
+    const n = 8, X = rnd(n + 4, -4, 4), Y0 = new Float32Array(n + 2);
+    const xb = H.wgpu_alloc(BigInt(X.byteLength)), yb = H.wgpu_alloc(BigInt(Y0.byteLength));
+    u8().set(new Uint8Array(X.buffer), 4096); H.wgpu_upload(xb, 4096n, BigInt(X.byteLength));
+    u8().set(new Uint8Array(Y0.buffer), 4096); H.wgpu_upload(yb, 4096n, BigInt(Y0.byteLength));
+    const cells = [xb + 16n, BigInt(n), yb + 8n, BigInt(n), BigInt(n), 0n];
+    cells.forEach((v, i) => dv().setBigInt64(1024 + i * 8, v, true));
+    const r = H.wgpu_launch(pid, 256n, 1024n, BigInt(cells.length));
+    const g = new Float32Array(await host.readBuffer(yb, Y0.byteLength));
+    let good = r === 0n && g[0] === 0 && g[1] === 0;
+    for (let i = 0; i < n; i++) if (g[2 + i] !== (X[4 + i] > 0 ? X[4 + i] : 0)) good = false;
+    // and a view read back from its offset
+    const tail = new Float32Array(await host.readBuffer(yb + 8n, n * 4));
+    for (let i = 0; i < n; i++) if (tail[i] !== g[2 + i]) good = false;
+    ok(good, "a view (handle + byte offset) is read and written from its offset");
+    H.wgpu_free(xb); H.wgpu_free(yb);
+  }
   { // a long long that does not fit the i32 WGSL computes in is refused
     u8().set(new TextEncoder().encode("gk32_relu\0"), 64);
     const pid = H.wgpu_pipeline(64);
     const x = H.wgpu_alloc(16n), y = H.wgpu_alloc(16n);
-    dv().setBigInt64(1024, x, true); dv().setBigInt64(1032, y, true); dv().setBigInt64(1040, 1n << 40n, true);
+    dv().setBigInt64(1024, x, true); dv().setBigInt64(1032, 4n, true); dv().setBigInt64(1040, y, true);
+    dv().setBigInt64(1048, 4n, true); dv().setBigInt64(1056, 1n << 40n, true); dv().setBigInt64(1064, 0n, true);
     const prev = console.error; console.error = () => {};
-    const r = H.wgpu_launch(pid, 256n, 1024n, 3n);
+    const r = H.wgpu_launch(pid, 256n, 1024n, 6n);
     console.error = prev;
     ok(r === -3n, "a long long beyond i32 is refused, not truncated");
     H.wgpu_free(x); H.wgpu_free(y);

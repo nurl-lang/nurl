@@ -71,8 +71,6 @@ $ `stdlib/std/thread.nu`
     ?? ( vec_get [GkBuf] v k ) { T x → { ^ x } F → { ^ ( __voc_nobuf ) } }
 }
 
-@ __voc_dptr ( Vec GkBuf ) v i k → i { ^ . ( __voc_bget v k ) dptr }
-
 @ __voc_get ( Vec f ) v i k → f {
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
@@ -248,7 +246,7 @@ $ `stdlib/std/thread.nu`
     ^ __res
 }
 
-unsafe @ __voc_decode_in inout VocosImpl v ( Vec f ) mel i frames ( Vec f ) out → b {
+@ __voc_decode_in inout VocosImpl v ( Vec f ) mel i frames ( Vec f ) out → b {
     : i dim . v dim
     : i inner . v inner
     ? ( __voc_alloc v frames ) {} { ^ F }
@@ -260,29 +258,29 @@ unsafe @ __voc_decode_in inout VocosImpl v ( Vec f ) mel i frames ( Vec f ) out 
     : GkBuf spec ( __voc_view . v spec 0 * frames + . v nfft 2 )
     : ~ b ok ( gk_dbuf_upload . v kit melb mel )
     // the stem: one convolution across all hundred mel bands, then a norm
-    = ok & ok ( f5k_conv1d_t4 . v kit . melb dptr . t1 dptr . . v emb_w dptr
-    . . v emb_b dptr 1 frames . v nmel dim 7 3 1 )
-    = ok & ok ( f5k_lnaff . v kit . t1 dptr . h dptr . . v n_w dptr . . v n_b dptr
+    = ok & ok ( f5k_conv1d_t4 . v kit melb t1 . v emb_w
+    . v emb_b 1 frames . v nmel dim 7 3 1 )
+    = ok & ok ( f5k_lnaff . v kit t1 h . v n_w . v n_b
     frames dim 1.0e-6 )
     ? ok {} { ^ F }
     : ~ i L 0
     ~ < L . v layers {
-        = ok & ok ( f5k_conv1d_t4 . v kit . h dptr . t1 dptr ( __voc_dptr . v dw_w L )
-        ( __voc_dptr . v dw_b L ) 1 frames dim dim 7 3 dim )
-        = ok & ok ( f5k_lnaff . v kit . t1 dptr . t2 dptr ( __voc_dptr . v nw L )
-        ( __voc_dptr . v nb L ) frames dim 1.0e-6 )
+        = ok & ok ( f5k_conv1d_t4 . v kit h t1 ( __voc_bget . v dw_w L )
+        ( __voc_bget . v dw_b L ) 1 frames dim dim 7 3 dim )
+        = ok & ok ( f5k_lnaff . v kit t1 t2 ( __voc_bget . v nw L )
+        ( __voc_bget . v nb L ) frames dim 1.0e-6 )
         = ok & ok ( gkd_gemm . v kit big t2 ( __voc_bget . v p1w L ) ( __voc_bget . v p1b L )
         1 frames inner dim 1.0 1.0 1 )
-        = ok & ok ( f5k_gelu_erf . v kit . big dptr * frames inner )
+        = ok & ok ( f5k_gelu_erf . v kit big * frames inner )
         = ok & ok ( gkd_gemm . v kit t1 big ( __voc_bget . v p2w L ) ( __voc_bget . v p2b L )
         1 frames dim inner 1.0 1.0 1 )
         // the layer scale, then the residual — ConvNeXt v1's gamma, not v2's GRN
-        = ok & ok ( f5k_scalecols . v kit . t1 dptr ( __voc_dptr . v gam L ) frames dim )
-        = ok & ok ( f5k_addinto . v kit . h dptr . t1 dptr * frames dim )
+        = ok & ok ( f5k_scalecols . v kit t1 ( __voc_bget . v gam L ) frames dim )
+        = ok & ok ( f5k_addinto . v kit h t1 * frames dim )
         ? ok {} { ^ F }
         = L + L 1
     }
-    = ok & ok ( f5k_lnaff . v kit . h dptr . t1 dptr . . v fn_w dptr . . v fn_b dptr
+    = ok & ok ( f5k_lnaff . v kit h t1 . v fn_w . v fn_b
     frames dim 1.0e-6 )
     = ok & ok ( gkd_gemm . v kit spec t1 . v out_w . v out_b 1 frames + . v nfft 2 dim 1.0 1.0 1 )
     ? ok {} { ^ F }

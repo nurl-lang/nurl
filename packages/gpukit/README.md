@@ -125,13 +125,13 @@ fact: matmul/bmm/gemm carry a register-tiled body for the CPU backend
 tiled one for CUDA, because 256 accumulators per thread is right on a
 core and far past a CUDA thread's register budget. The CUDA numbers,
 measured on an RTX 4090 in f32, all bit-identical to the per-element
-kernels they replaced (see Numerics):
+kernels they replaced (see Numerics) and all of them checked kernels:
 
 | | before | after |
 | --- | --- | --- |
-| `gkd_gemm` 783x1024x1024 | 3.1 TFLOP/s | **19.1** |
-| the same with `transb=1` | 0.6 | **20.1** |
-| `gkd_bmm` 16 x 783x64x783 | 3.9 | **16.0** |
+| `gkd_gemm` 783x1024x1024 | 3.1 TFLOP/s | **24.9** |
+| the same with `transb=1` | 0.6 | **24.9** |
+| `gkd_bmm` 16 x 783x64x783 | 3.9 | **20.6** |
 | `gkd_layernorm` [783, 1024] | 300 us | **53** |
 | `gkd_conv2d` 3x3 256→256 | 2.5 ms | **1.15** |
 | a DPT depth head's 30 convolutions | 39 ms | **22** |
@@ -148,7 +148,8 @@ in advance whether it will run, so a caller can size its workspace
 before the first call. `gkd_attention_masked` is the same kernel with a
 per-key additive bias (`heads/hpb` rows of `nkv` floats, 0 keeps a key,
 -1e30 drops it) — what a padded batch needs to leave its real rows
-unchanged.
+unchanged. It is a checked kernel like the rest: its tiles are shared
+arrays read through windows.
 
 ## Numerics
 
@@ -230,7 +231,59 @@ kernels:
 : ( Vec f ) ys ( gk_call_take_f c `y` )
 ```
 
-A load past the end reads element 0, and a store past it is dropped. An
-output starts as the Vec it was bound with. arima's device evaluator is
-written this way and runs as fast as its unchecked predecessor did.
+A load past the end reads the buffer's last element, and a store past it
+is dropped. An output starts as the Vec it was bound with. arima's device
+evaluator is written this way and runs as fast as its unchecked
+predecessor did.
+
+### On device buffers
+
+`gk_run_checked_dev` (and `gk_record_dev` / `gk_replay`, which bind and
+check once and then only launch) take device-resident bindings:
+`gk_call_dev_in` / `gk_call_dev` for f32/f64/i64 `GkBuf`s,
+`gk_call_half_in` for half or bfloat16 `GkHBuf`s, and
+`gk_call_bytes_in` / `gk_call_bytes` for `GkBBuf` byte buffers. On a byte
+buffer `LD(q, i)` is the byte, `LD16` / `LD32` the aligned 16- or 32-bit
+word holding byte `i`, and `F16(bits)` / `BF16(bits)` turn 16 bits into a
+float; `ST` stores the low byte. A quantised weight format is read this
+way, without a pointer. `LD4(x, i, a, b, c, d)` loads the aligned group of
+four f32 holding element `i` in one instruction (the buffer must be
+16-byte aligned). Cooperative kernels have `SYNC()`, `SHARED_*` arrays
+(up to 48 KB a block) and `SHFL_DOWN` / `SHFL_XOR`, under a rule the
+checker proves: every `if` / `for` / `while` around one decides the same
+for the whole block.
+
+**Windows** make a loop's checks free. `WIN(w, buf, off, len);` (or
+`WINS(w, buf, off, len, stride);`) checks a range of a device or byte
+buffer once; `LD(w, i)` / `ST(w, i, v)` then index it from 0 and
+`LEN(w)` is its length. A window that does not fit its buffer is empty.
+A loop bounded by `LEN(w)` lets the compiler drop every per-load check:
+
+```
+WIN(xr, x, row * n, n);
+float ss = 0.0f;
+for (int j = 0; j < LEN(xr); j++) { ss += LD(xr, j) * LD(xr, j); }
+```
+
+The check folds for a signed counter compared to `LEN`, so count with an
+`int` (NVRTC also unrolls an `int` loop four times further than a
+`long long` one). Inside `if (LEN(w) == 32) { … }` a constant bound
+works too. `WIN2(w, buf, off, rows, stride, cols);` is the 2-D form
+(`LD2(w, r, c)`, `ROWS(w)`, `COLS(w)`): a tile of a matrix, checked once.
+`WIN3(w, buf, off, planes, pstride, rows, stride, cols);` is the 3-D one
+(`LD3(w, p, r, c)`, `PLANES(w)`): an NCHW feature map, say. Each index is
+checked against its own extent, so each check folds against whatever
+bounds that index alone — a loop counter, a `continue` past the padding —
+where one flattened index would need the compiler to reason about a sum.
+A window may look into a shared array too: `WIN2(t, tile, 0, 64, 65, 64);`
+then `LD2(t, row, d)` reads a padded tile with the column checked against
+the loop that counts it and the row against the tile, so a thread's row
+masked to the tile (`(tid / 16) & 15`) folds as well.
+nurllama's RMSNorm, attention and quantised matvecs are written this
+way, on both backends: within 4 % of their raw originals, or faster.
+
+A kernel compiled per shape can go further: `gk_call_exact c` builds it
+for its buffers' lengths (each a constant in the source and part of the
+cache key; other lengths build another kernel), so with the dimensions
+constant too every window is checked at compile time.
 

@@ -38,8 +38,10 @@
 #    NURL_TEST_JOBS=N             # parallelism (default: nproc)
 #
 #  Artifacts are retained under a unique build/tests/run.* directory, printed
-#  at startup. Independent invocations, even of the same tests, never overwrite
-#  each other's compiler output, binaries, scratch data or worker records.
+#  at startup; the newest $NURL_TEST_KEEP_RUNS (default 3) earlier runs are
+#  kept and older ones removed as a run starts (never one still running).
+#  Independent invocations, even of the same tests, never overwrite each
+#  other's compiler output, binaries, scratch data or worker records.
 #
 #  Exit code: 0 iff every test matches its golden, no failures, no
 #  missing goldens and no orphans. 1 otherwise. 2 on setup error.
@@ -61,6 +63,7 @@ OUTDIR="$SCRIPT_DIR/outputs"
 # Shared helper is loaded before allocating the compiler probe path.
 . "$SCRIPT_DIR/test_harness.sh"
 WORKDIR=$(create_test_workdir "$ROOT_DIR/build/tests") || exit 2
+hold_test_workdir "$WORKDIR"
 printf 'Artifacts: %s\n' "$WORKDIR"
 
 UPDATE=0

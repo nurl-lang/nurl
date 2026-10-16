@@ -6,13 +6,12 @@ $ `stdlib/std/time.nu`
 : ~ i ku_port 0
 : ~ i ku_role 0
 : ~ i ku_mode 0
-: ~ s ku_cert ``
-: ~ s ku_key ``
 : ~ i ku_result 2
 
 @ ku_open → !TcpConn NetErr {
     ? == ku_role 0 { ^ ( tcp_connect_tls `127.0.0.1` ku_port `localhost` 0 ) } {}
-    : TcpListener listener \ ( tcp_listen_tls `127.0.0.1` 0 ku_cert ku_key )
+    // (the certificate and key paths are arguments 4 and 5)
+    : TcpListener listener \ ( tcp_listen_tls `127.0.0.1` 0 ( nurl_argv_get 4 ) ( nurl_argv_get 5 ) )
     : String addr ( tcp_local_addr listener )
     ( nurl_println ( string_data addr ) ) ( nurl_flush_stdout )
     : !TcpConn NetErr accepted ( tcp_accept listener )
@@ -66,8 +65,6 @@ $ `stdlib/std/time.nu`
     = ku_port ( nurl_str_to_int ( nurl_argv_get 1 ) )
     = ku_role ( nurl_str_to_int ( nurl_argv_get 2 ) )
     = ku_mode ( nurl_str_to_int ( nurl_argv_get 3 ) )
-    : s cert ( nurl_argv_get 4 ) : s key ( nurl_argv_get 5 )
-    = ku_cert cert = ku_key key
     ? >= ku_mode 2 {
         ( runtime_init 1 )
         : Fiber worker ( spawn_owned \ → v { = ku_result ( ku_run ) } )

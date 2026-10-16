@@ -540,7 +540,23 @@ value at compile time (`const_eval_int`):
 ```
 
 A mutable global (`: ~ type Name value`) may be reassigned at runtime
-with `= Name expr` (§5.2).
+with `= Name expr` (§5.2). Every thread can reach it, so how it is read
+and written depends on its type:
+
+- A **scalar** global — an integer, a bool, a float, a `s` or another
+  pointer — is read and written with relaxed (monotonic) atomic
+  accesses. Threads that race on it see whole values, never torn ones;
+  nothing else is ordered by it (use a `Mutex`, a `Channel` or a
+  `( Locked T )` for that). On x86-64 and AArch64 these are the same load
+  and store instructions as plain ones.
+- A `s` global holds **literals** in safe code: an assignment that would
+  hand it a string to own (`= g ( nurl_str_cat a b )`) is rejected,
+  because the next assignment frees what it owns while another thread may
+  be reading it. Text that changes at run time belongs in a
+  `( Locked String )` global set at start (below).
+- A global of a **struct or an option** of plain values is more than one
+  word, which no atomic covers: only an `unsafe` function (§3.3d) reads or
+  writes it, as for a global that owns something.
 
 A mutable global may also have a type that owns something — a `String`, a
 `Vec`, a struct of them, an option `?T`, a closure, a library handle — with

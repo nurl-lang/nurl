@@ -12,8 +12,12 @@ compiler/tests/should_warn_dead_value.nu:31:5: warning: the statement on line 28
 compiler/tests/should_warn_dead_value.nu:34:5: warning: the statement on line 31 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
     : i b ? > a 0 { + a 10 } { 0 }
     ^
+compiler/tests/should_warn_dead_value.nu:55:5: warning: the statement on line 51 has no effect — it produces a value that is discarded. If it was meant as an operand, the prefix operator before it is short an argument (fixed arity, no closing bracket); otherwise bind the value (': T name …') or remove the statement.
+    ( nurl_print `ok\n` )
+    ^
 LINK OK
 EXIT 0
 OUTPUT
 15
+7
 ok

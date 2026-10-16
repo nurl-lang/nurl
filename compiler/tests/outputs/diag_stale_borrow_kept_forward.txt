@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stale_borrow_kept_forward.nu:34:15: error: pointer 'views' borrowed from 'src' is stale: 'src' was mutated on line 33 and may have reallocated its buffer
+  note: take the view again after the mutation (views = ( string_data / vec_data … src ) ), or read through the owner
+compiler/tests/diag_stale_borrow_kept_forward.nu:43:15: error: pointer 'views' borrowed from 'src' is stale: 'src' was mutated on line 42 and may have reallocated its buffer
+  note: take the view again after the mutation (views = ( string_data / vec_data … src ) ), or read through the owner
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

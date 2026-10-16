@@ -848,7 +848,7 @@ $ `stdlib/std/thread.nu`
     : ~ i l 0
     ~ & ok < l nl {
         ?? ( vec_get [EmbedLayer] . e layers l ) {
-            T lay → { = ok ( __em_block e ( mem_dup lay ) hid mask np ) }
+            T lay → { = ok ( __em_block e lay hid mask np ) }
             F → { = ok F }
         }
         = l + l 1
@@ -976,7 +976,7 @@ $ `stdlib/std/thread.nu`
     : ~ i l 0
     ~ & ok < l nl {
         ?? ( vec_get [EmbedLayer] . e layers l ) {
-            T lay → { = ok ( __em_block_x e ( mem_dup lay ) hid mask bq np ) }
+            T lay → { = ok ( __em_block_x e lay hid mask bq np ) }
             F → { = ok F }
         }
         = l + l 1

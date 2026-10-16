@@ -15,8 +15,8 @@
 //   - gpukit accepts every census call (a wrapper whose validation moved
 //     under the census fails here);
 //   - every recorded kernel can run on the static backend (no block
-//     barriers), and kernels_static.c generates with every override still
-//     matching its kernel's parameter list and every kernel registered.
+//     barriers), and kernels_static.c generates with every kernel
+//     registered.
 //
 // tests/static_test.sh compiles that file and runs a model on it.
 // Run from the package root:
@@ -142,7 +142,7 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `[generate]\n` )
     : String out ( string_with_cap 131072 )
     : ( Vec String ) names ( vec_new [String] )
-    ( check == ( onnx_static_kernels_c out names ) 0 `kernels_static.c generates (every override still fits)` )
+    ( check == ( onnx_static_kernels_c out names ) 0 `kernels_static.c generates` )
     ( check == ( vec_len [String] names ) nk `one static entry per recorded kernel` )
     : ~ i missing 0
     = k 0

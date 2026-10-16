@@ -75,7 +75,8 @@
 #                        The ThinLTO cache.
 #    NURL_CACHE_DIR=DIR  Move the cache (default $XDG_CACHE_HOME/nurl,
 #                        i.e. usually ~/.cache/nurl; the ThinLTO part
-#                        is auto-pruned to 2 GB).
+#                        and the object part are each auto-pruned to
+#                        2 GB — NURL_OBJ_CACHE_MB sets the latter).
 #    NURL_SAN=1          Instrument generated memory accesses with ASan;
 #                        instrument the C runtime with ASan + UBSan.
 #                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
@@ -929,6 +930,23 @@ if [ -n "$LTO_CACHED" ] && [ -z "$COVERAGE_FLAGS" ] && [ -n "$PROBE_CACHE" ]; th
     mkdir -p "$OBJ_CACHE_DIR" 2>/dev/null || OBJ_CACHE_DIR=""
     if [ -n "$OBJ_CACHE_DIR" ]; then
         find "$OBJ_CACHE_DIR" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+        # …and the cache stays under $NURL_OBJ_CACHE_MB (default 2048):
+        # the least recently used objects go first. Checked at most once
+        # an hour (a stamp file), so a build does not list 20 000 files.
+        # The same pass drops probe results nobody has used for two
+        # weeks (every compiler rebuild keys a new one) and the ThinLTO
+        # cache's pre-`thinlto-a64` directory, which nothing reads now.
+        _oc_root="${OBJ_CACHE_DIR%/objs}"
+        _oc_stamp="$_oc_root/.prune-stamp"
+        if [ -z "$(find "$_oc_stamp" -mmin -60 2>/dev/null)" ]; then
+            touch "$_oc_stamp" 2>/dev/null || true
+            _oc_cap=$(( ${NURL_OBJ_CACHE_MB:-2048} * 1048576 ))
+            find "$OBJ_CACHE_DIR" -type f -name '*.o' -printf '%T@ %s %p\n' 2>/dev/null | sort -rn |
+                awk -v cap="$_oc_cap" '{ t += $2; if (t > cap) { $1 = ""; $2 = ""; sub(/^  /, ""); print } }' |
+                while IFS= read -r _oc_f; do rm -f -- "$_oc_f"; done
+            find "$_oc_root" -maxdepth 1 -type f -name 'probes.*' -mtime +14 -exec rm -f {} + 2>/dev/null || true
+            [ -d "$_oc_root/thinlto" ] && rm -rf -- "$_oc_root/thinlto" 2>/dev/null || true
+        fi
     fi
 fi
 # cc_c_cached <src.ll> <out.o> — compile through the cache. The flag

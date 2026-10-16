@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.8.1] — 2026-10-16
+
+- The terminal preview reads the terminal's size with stdlib's `term_width` / `term_height` instead of its own `unsafe` ioctl on stdout. It also honours `$COLUMNS` / `$LINES` off a tty now. `unsafe` functions: 8 → 7; the rest are the X11 window and the V4L2 camera, which talk to their kernels' ABIs through the FFI.
+
 ## [0.8.0] — 2026-10-15
 
 ### Changed

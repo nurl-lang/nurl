@@ -111,7 +111,13 @@ $ `stdlib/std/arc.nu`
 // from the request's principal, the CLI and the scheduler name
 // themselves; the action is set by the operation that changes margins
 // (finetune, autotune, edit) around its calls to model_set_margin.
-: ~ s g_an_actor `library`
+// (The actor is a Locked String read as a copy: a request's gate sets it
+// while the analyze handler, which lets go of the service lock as it
+// waits, may be writing an audit line — as a string global, the old name
+// was freed under that reader.)
+@ __an_actor0 → ( Locked String ) { ^ ( locked_new [String] ( string_from `library` ) ) }
+
+: ( Locked String ) g_an_actor ( __an_actor0 )
 : ~ s g_an_action `set_margin`
 : i ANOM_ACTOR_MAX 200
 
@@ -125,8 +131,11 @@ $ `stdlib/std/arc.nu`
 // long as its request; a long name is cut). The action is always a
 // literal and is kept as given.
 @ anomaly_set_actor s who → v {
-    : i n ( nurl_str_len who )
-    = g_an_actor ( nurl_str_slice who 0 ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
+    : ( Slice u ) wv ( slice_of_str who )
+    : i n ( slice_len [u] wv )
+    : ~ String a ( string_with_cap ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
+    ( string_push_window a wv 0 ? > n ANOM_ACTOR_MAX ANOM_ACTOR_MAX n )
+    ( locked_set [String] g_an_actor a )
 }
 
 @ _an_set_action s what → v {
@@ -3977,7 +3986,8 @@ $ `stdlib/std/arc.nu`
     ? == ( f64_to_bits before ) ( f64_to_bits after ) { ^ } {}
     : Json e ( json_obj_new )
     ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
-    ( json_obj_set e `actor` ( json_str_lit g_an_actor ) )
+    : String actor ( locked_get [String] g_an_actor )
+    ( json_obj_set e `actor` ( json_str_lit ( string_data actor ) ) )
     ( json_obj_set e `action` ( json_str_lit g_an_action ) )
     ( json_obj_set e `version` ( json_str_lit vname ) )
     ( json_obj_set e `from` ( json_float before ) )

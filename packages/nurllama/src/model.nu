@@ -42,6 +42,10 @@
 // applied.
 // Tied-embedding models (no output.weight) reuse token_embd as the
 // output projection.
+//
+// Device memory is gpukit's: every weight, cache and scratch buffer is a
+// GkBuf (a weight also as its GGUF bytes, GkBBuf) and every kernel a checked
+// one (kernels.nu). Nothing here handles a device address.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -54,14 +58,41 @@ $ `deps/safetensor/src/safetensor.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
+$ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/dev.nu`
 $ `src/kernels.nu`
 $ `src/tokenizer.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 
+// A weight and the byte offset where it starts inside its tensor — a row
+// RANGE of a fused tensor (phi3's attn_qkv, ffn_up) or one MoE expert.
+: LmW { LkW w i off }
+
+// One recorded evaluation: its launches, the call shape they were recorded
+// for (count positions, causal or not, logits mode), and the launches
+// whose scalars move with the position — every RoPE (pos0), every KV-cache
+// append (its offset) and every attention (npos0, two launches).
+: LmPlan {
+    ( Vec GkLaunch ) l
+    i count
+    b causal
+    i mode
+    ( Vec i ) rope
+    ( Vec i ) copy
+    ( Vec i ) attn
+}
+
+// The plans kept: a prompt's chunk and remainder, decode, one more.
+: i LM_PLANS 4
+
+@ __lm_w_none → LmW { ^ @ LmW { ( lk_w_none ) 0 } }
+
+@ __lm_w_ok LmW w → b { ^ ( lk_w_ok . w w ) }
+
 : LlmImpl {
-    Gpu g
-    LlmKernels ks
+    GpuKit kit
+    b warp  // the CUDA kernel shapes (warp shuffles): F on the CPU backend
     Tok tok
     i n_embd
     i n_layer
@@ -99,34 +130,28 @@ $ `stdlib/core/slice.nu`
     i shexp_ff
     f route_scale
     b weights_norm
-    ( Vec i ) gate_inp
-    ( Vec i ) tq_gate_inp
+    ( Vec LmW ) gate_inp
     ( Vec f ) exp_bias
-    ( Vec i ) gate_exps
-    ( Vec i ) up_exps
-    ( Vec i ) down_exps
-    ( Vec i ) tq_gate_exps
-    ( Vec i ) tq_up_exps
-    ( Vec i ) tq_down_exps
-    ( Vec i ) gate_shexp
-    ( Vec i ) up_shexp
-    ( Vec i ) down_shexp
-    ( Vec i ) tq_gate_shexp
-    ( Vec i ) tq_up_shexp
-    ( Vec i ) tq_down_shexp
-    i rlogitsd
+    ( Vec LmW ) gate_exps
+    ( Vec LmW ) up_exps
+    ( Vec LmW ) down_exps
+    ( Vec LmW ) gate_shexp
+    ( Vec LmW ) up_shexp
+    ( Vec LmW ) down_shexp
+    GkBuf rlogitsd
     GpuHost router_host
-    i moe_outd
-    // batched-MoE scratch: the assignment table (expert id + weight per
-    // (position, selected-expert) pair) and the expert hidden/down buffers
-    i moe_expid
-    i moe_wts
-    i moe_gate
-    i moe_up
-    i moe_downb
+    GkBuf moe_outd
+    // batched-MoE scratch: the assignment table (expert id — i64 — and
+    // weight per (position, selected-expert) pair) and the expert
+    // hidden/down buffers
+    GkBuf moe_expid
+    GkBuf moe_wts
+    GkBuf moe_gate
+    GkBuf moe_up
+    GkBuf moe_downb
     // all layers' expert bias as f32 on the device (n_layer · n_expert),
     // read at offset L · n_expert by the on-device router
-    i bias_all
+    GkBuf bias_all
     Gguf gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
@@ -138,63 +163,60 @@ $ `stdlib/core/slice.nu`
     i st_embd
     i embd_idx
     ( Vec u ) embd_host
-    ( Vec i ) wdptr
-    ( Vec i ) wbytes
-    ( Vec GpuBuffer ) wbufs  // the owners of wdptr's allocations (released with them)
-    ( Vec i ) tq_attn_norm
-    ( Vec i ) tq_wq
-    ( Vec i ) tq_wk
-    ( Vec i ) tq_wv
-    ( Vec i ) bq
-    ( Vec i ) bk
-    ( Vec i ) bv
-    ( Vec i ) tq_wo
-    ( Vec i ) tq_ffn_norm
-    ( Vec i ) tq_gate
-    ( Vec i ) tq_down
-    ( Vec i ) tq_up
-    i tq_output
-    ( Vec i ) attn_norm
-    ( Vec i ) q_norm
-    ( Vec i ) k_norm
-    ( Vec i ) post_attn_norm
-    ( Vec i ) post_ffn_norm
-    ( Vec i ) wq
-    ( Vec i ) wk
-    ( Vec i ) wv
-    ( Vec i ) wo
-    ( Vec i ) ffn_norm
-    ( Vec i ) w_gate
-    ( Vec i ) w_down
-    ( Vec i ) w_up
-    i out_norm
-    i w_output
-    ( Vec i ) kcache
-    ( Vec i ) vcache
-    i xd
-    i xnd
-    i qd
-    i kd
-    i vd
-    i aod
-    i tmpd
+    i dev_bytes  // device memory the model holds (NURLLAMA_VERBOSE)
+    b alloc_failed  // a device allocation came back empty while loading
+    ( Vec GkBuf ) attn_norm
+    ( Vec GkBuf ) q_norm  // none where the model has none
+    ( Vec GkBuf ) k_norm
+    ( Vec GkBuf ) post_attn_norm
+    ( Vec GkBuf ) post_ffn_norm
+    ( Vec GkBuf ) bq  // qwen2's Q/K/V biases (none elsewhere)
+    ( Vec GkBuf ) bk
+    ( Vec GkBuf ) bv
+    ( Vec LmW ) wq
+    ( Vec LmW ) wk
+    ( Vec LmW ) wv
+    ( Vec LmW ) wo
+    ( Vec GkBuf ) ffn_norm
+    ( Vec LmW ) w_gate
+    ( Vec LmW ) w_down
+    ( Vec LmW ) w_up
+    GkBuf out_norm
+    LmW w_output
+    ( Vec GkBuf ) kcache
+    ( Vec GkBuf ) vcache
+    GkBuf xd
+    GkBuf xnd
+    GkBuf qd
+    GkBuf kd
+    GkBuf vd
+    GkBuf aod
+    GkBuf tmpd
     // rmsnorm reads the whole row to form its sum of squares, so it can never
     // write back into its own input: another block would already have
     // overwritten the row under it. gemma's Q/K and post-block norms
     // therefore need somewhere to land.
-    i qn2d
-    i kn2d
-    i tn2d
-    i gd
-    i ud
-    i scored
-    i logitsd
+    GkBuf qn2d
+    GkBuf kn2d
+    GkBuf tn2d
+    GkBuf gd
+    GkBuf ud
+    GkBuf scored
+    GkBuf logitsd
     GpuHost logits_host
     // greedy argmax + confidence per window position (device + host)
-    i amid_d
-    i amprob_d
-    GpuHost amid_h
+    GkBuf amid_d  // i64 ids
+    GkBuf amprob_d
+    ( Vec i ) amid_v
     GpuHost amprob_h
+    // The recorded evaluations (__lm_eval_core), the oldest first: one per
+    // call shape — a prompt alternates a full chunk and its
+    // remainder, then decode is one position — and, while __lm_emit
+    // records one, where in it the position-dependent scalars sit.
+    ( Vec LmPlan ) plans
+    ( Vec i ) pl_rope
+    ( Vec i ) pl_copy
+    ( Vec i ) pl_attn
     // coarse phase profiler (NURLLAMA_PROF): sync+timer per phase
     b prof_on
     i prof_attn_ns
@@ -231,7 +253,21 @@ $ `stdlib/core/slice.nu`
 // no device, no kernels, an empty tokenizer and container, empty Vecs.
 // llm_open_st fills every field before anything reads it, and an early
 // return drops the half-built engine whole.
-@ __lm_blank → ( Locked LlmImpl ) { ^ ( locked_new [LlmImpl] @ LlmImpl { ( gpu_none ) @ LlmKernels { ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) ( gpu_kernel_none ) F } ( tok_empty ) 0 0 0 0 0 0 0 0 0 0 0.0 0.0 0 0.0 0.0 F 0 0 0.0 F 0 0 0 0 0 0 0 0 0.0 F ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( gpu_host_none ) 0 0 0 0 0 0 0 ( gguf_empty ) @ ?St { F } F 0 0 ( vec_new [u] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 0 ( vec_new [i] ) ( vec_new [i] ) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ( gpu_host_none ) 0 0 ( gpu_host_none ) ( gpu_host_none ) F 0 0 0 0 0 } ) }
+@ __lm_blank → ( Locked LlmImpl ) {
+    ^ ( locked_new [LlmImpl] @ LlmImpl { ( gk_none ) F ( tok_empty ) 0 0 0 0 0 0 0 0 0 0 0.0 0.0 0 0.0 0.0 F 0 0 0.0
+        F 0 0 0 0 0 0 0 0 0.0 F
+        ( vec_new [LmW] ) ( vec_new [f] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
+        ( gk_buf_none GK_F32 ) ( gpu_host_none ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_I64 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( gguf_empty ) @ ?St { F } F 0 0 ( vec_new [u] ) 0 F
+        ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [GkBuf] ) ( vec_new [LmW] ) ( vec_new [LmW] ) ( vec_new [LmW] )
+        ( gk_buf_none GK_F32 ) ( __lm_w_none ) ( vec_new [GkBuf] ) ( vec_new [GkBuf] )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gpu_host_none )
+        ( gk_buf_none GK_I64 ) ( gk_buf_none GK_F32 ) ( vec_new [i] ) ( gpu_host_none )
+        ( vec_new [LmPlan] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+        F 0 0 0 0 0 } )
+}
 
 @ __lm_handle sink LlmImpl m → Llm {
     : LlmInfo inf @ LlmInfo { ( Tok_share . m tok ) . m n_vocab . m n_ctx . m mask_id . m bidir }
@@ -245,7 +281,7 @@ $ `stdlib/core/slice.nu`
 // Profiler clock: drain the GPU queue, then read the monotonic clock, so a
 // phase's accumulated ns reflect real device work rather than launch return.
 @ __lm_prof_now inout LlmImpl m → i {
-    : i _s ( gpu_sync . m g )
+    : b _s ( gk_sync . m kit )
     ^ ( monotonic_ns )
 }
 
@@ -274,10 +310,10 @@ $ `stdlib/core/slice.nu`
     ^ v
 }
 
-// Dequantise tensor `name` to f32 and upload; returns the device
-// pointer (tracked in wdptr/wbytes for teardown), -1 on failure.
+// Upload tensor `name` (none when it is absent or a step failed).
 // Weight types with a device matvec kernel: their GGUF bytes upload
-// verbatim and the kernel decodes blocks inside the matmul.
+// verbatim and the kernel decodes blocks inside the matmul; any other
+// type is dequantised to f32 on the host first.
 // NURLLAMA_DEQUANT=host forces every weight through the host
 // dequantiser instead — the f32 reference path, and the switch the
 // kernel-vs-oracle equivalence test flips.
@@ -296,31 +332,47 @@ $ `stdlib/core/slice.nu`
     ^ ? ( nurl_str_eq ( string_data a ) raw ) T F
 }
 
-// Publishes the uploaded tensor's ggml type (0 when it was
-// host-dequantised to f32), so the caller records which matvec kernel
-// the weight needs.
-: ~ i __lm_last_type -1
-
 : ~ i __lm_up_ns 0
 
 : ~ i __lm_rp_ns 0
-
-// Set when any device allocation comes back null (out of device
-// memory). Checked once at the end of llm_open_st: a silent failure
-// here used to surface as an all-zero forward pass — the model "ran"
-// and produced token 0 forever — instead of an error naming the cause.
-: ~ b __lm_alloc_failed F
 
 // Positions per prefill chunk. Bounds the batched activation scratch
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-@ __lm_upload inout LlmImpl m Gguf gg s name → i {
+// A fresh device block of `bytes` (whole f32 words), counted; none — and
+// `alloc_failed` set — when the device is out of memory. (A failure here
+// once surfaced as an all-zero forward pass: the model "ran" and produced
+// token 0 forever, instead of an error naming the cause.)
+@ __lm_block inout LlmImpl m i bytes → GkBuf {
+    : GkBuf b ( gk_dbuf_new . m kit / + bytes 3 4 GK_F32 )
+    ? ( gk_buf_ok b ) { = . m dev_bytes + . m dev_bytes * 4 ( gk_buf_len b ) } { = . m alloc_failed T }
+    ^ b
+}
+
+// The weight in `blk` (its first `nb` bytes): as bytes, and for f32 / f16
+// as floats / halves too.
+@ __lm_w_of GkBuf blk i gt i nb → LkW {
+    ? == gt 0 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_view blk 0 / nb 4 ) ( gk_hbuf_none ) } } {}
+    ? == gt 1 { ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_of blk 0 / nb 2 F ) } } {}
+    ^ @ LkW { gt ( gk_bbuf_of blk 0 nb ) ( gk_buf_none GK_F32 ) ( gk_hbuf_none ) }
+}
+
+// `raw` (host f32 bytes) onto the device, as an f32 weight.
+@ __lm_up_f32 inout LlmImpl m ( Vec u ) raw → LkW {
+    : i n ( vec_len [u] raw )
+    : GkBuf b ( __lm_block m n )
+    ? ( gk_buf_ok b ) {} { ^ ( lk_w_none ) }
+    ? ( gk_dbuf_upload_bytes . m kit b ( slice_from_vec [u] raw ) ) {} { = . m alloc_failed T ^ ( lk_w_none ) }
+    ^ ( __lm_w_of b 0 n )
+}
+
+@ __lm_upload inout LlmImpl m Gguf gg s name → LkW {
     // A second container, when one was given: same tensor, different file.
     ?? . m st {
         T sf → {
-            : i d ( __lm_upload_st m name )
-            ? >= d 0 { ^ d } {}
+            : LkW d ( __lm_upload_st m name )
+            ? ( lk_w_ok d ) { ^ d } {}
             // fall through: a tensor the safetensors file does not carry (a tied
             // `output.weight`) is still resolved from the GGUF, so the two paths
             // agree on what "absent" means.
@@ -328,7 +380,7 @@ $ `stdlib/core/slice.nu`
         F → {}
     }
     : i ti ( gguf_find_tensor gg name )
-    ? < ti 0 { ^ -1 } {}
+    ? < ti 0 { ^ ( lk_w_none ) } {}
     : ~ i gt -1
     : ~ i nb -1
     : ~ i ne0 0
@@ -341,71 +393,34 @@ $ `stdlib/core/slice.nu`
         F → {}
     }
     ? & ( __lm_native gt ) > nb 0 {
-        : GpuBuffer bq ( gpu_alloc . m g nb )
-        ? == . bq dptr 0 {
-            = __lm_alloc_failed T
-            ^ -1
-        } {}
+        : GkBuf bq ( __lm_block m nb )
+        ? ( gk_buf_ok bq ) {} { ^ ( lk_w_none ) }
         : i _t0 ( monotonic_ns )
-        : i _uq ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → ( gpu_upload_bytes bq ( gguf_tensor_bytes gg t ) ) F → -1 }
+        // every native type is a whole number of 16-bit words: up as halves
+        : b up ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → ( gk_hbuf_upload_bytes . m kit ( gk_hbuf_of bq 0 / nb 2 F ) ( gguf_tensor_bytes gg t ) ) F → F }
         = __lm_up_ns + __lm_up_ns - ( monotonic_ns ) _t0
-        // q8_0 goes to the device in the SPLIT per-row layout the
-        // matvec kernels read (scales together, 4-aligned quants) —
-        // a one-time on-device repack, then the interleaved copy is
-        // freed. Every q8_0 kernel expects this layout.
+        ? up {} { ^ ( lk_w_none ) }
+        // q8_0 goes to the device in the SPLIT per-row layout the matvec
+        // kernels read (scales together, 4-aligned quants) — a one-time
+        // on-device repack, then the interleaved copy goes back. Every q8_0
+        // kernel expects this layout.
         ? & == gt 8 & > ne0 0 == % ne0 32 0 {
-            : GpuBuffer br ( gpu_alloc . m g nb )
-            ? == . br dptr 0 {
-                = __lm_alloc_failed T
-                ^ -1
-            } {}
+            : GkBuf br ( __lm_block m nb )
+            ? ( gk_buf_ok br ) {} { ^ ( lk_w_none ) }
             : i _t1 ( monotonic_ns )
-            ( __lm_q8_repack m bq br / ne0 32 / nb 34 )
-            : i _rs ( gpu_sync . m g )
+            : ~ ( Vec GkLaunch ) rp ( vec_new [GkLaunch] )
+            : b ok & ( lk_q8_repack . m kit ( gk_bbuf_of bq 0 nb ) ( gk_bbuf_of br 0 nb ) / ne0 32 / nb 34 rp ) ( lk_run rp )
+            : b _s ( gk_sync . m kit )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
-            : i br_dp . br dptr
-            ( vec_push [i] . m wdptr br_dp )
-            ( vec_push [i] . m wbytes . br bytes )
-            ( vec_push [GpuBuffer] . m wbufs br )
-            = __lm_last_type gt
-            ^ br_dp
+            ? ok {} { ^ ( lk_w_none ) }
+            ^ ( __lm_w_of br gt nb )
         } {}
-        : i bq_dp . bq dptr
-        ( vec_push [i] . m wdptr bq_dp )
-        ( vec_push [i] . m wbytes . bq bytes )
-        ( vec_push [GpuBuffer] . m wbufs bq )
-        = __lm_last_type gt
-        ^ bq_dp
+        ^ ( __lm_w_of bq gt nb )
     } {}
-    : !( Vec u ) String r ( gguf_dequant gg ti )
-    ?? r {
-        T raw → {
-            : i n ( vec_len [u] raw )
-            : GpuBuffer b ( gpu_alloc . m g n )
-            ? == . b dptr 0 {
-                = __lm_alloc_failed T
-                ^ -1
-            } {}
-            : i _u ( gpu_upload_vec b raw )
-            : i b_dp . b dptr
-            ( vec_push [i] . m wdptr b_dp )
-            ( vec_push [i] . m wbytes . b bytes )
-            ( vec_push [GpuBuffer] . m wbufs b )
-            = __lm_last_type 0
-            ^ b_dp
-        }
-        F e → {
-            ^ -1
-        }
+    ?? ( gguf_dequant gg ti ) {
+        T raw → { ^ ( __lm_up_f32 m raw ) }
+        F e → { ^ ( lk_w_none ) }
     }
-}
-
-// q8_0 weights into the split per-row layout the matvec kernels read:
-// `src` holds nblk interleaved 34-byte blocks, `dst` as many bytes —
-// both buffers the caller just sized to the tensor.
-unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk → v {
-    ? & == . src bytes . dst bytes <= * nblk 34 . src bytes {} { ^ }
-    ( lk_q8_repack . m ks . src dptr . dst dptr nb nblk )
 }
 
 // Bytes one weight ROW occupies on the device: a quantised row is
@@ -427,33 +442,19 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
 }
 
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
-@ __lm_scratch inout LlmImpl m i nfloats → i {
-    : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
-    ? == . b dptr 0 {
-        = __lm_alloc_failed T
-        ^ -1
-    } {}
-    : i b_dp . b dptr
-    ( vec_push [i] . m wdptr b_dp )
-    ( vec_push [i] . m wbytes . b bytes )
-    ( vec_push [GpuBuffer] . m wbufs b )
-    ^ b_dp
+// An f32 scratch/cache device buffer of n floats.
+@ __lm_scratch inout LlmImpl m i nfloats → GkBuf {
+    : GkBuf b ( __lm_block m * nfloats 4 )
+    ? ( gk_buf_ok b ) { ^ ( gk_buf_view b 0 nfloats ) } {}
+    ^ b
 }
-
 // The same, filled from host bytes (`bytes` holds at least nfloats*4).
-@ __lm_scratch_from inout LlmImpl m i nfloats ( Vec u ) bytes → i {
-    : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
-    ? | == . b dptr 0 != 0 ( gpu_upload_vec b bytes ) {
-        = __lm_alloc_failed T
-        ^ -1
-    } {}
-    : i b_dp . b dptr
-    ( vec_push [i] . m wdptr b_dp )
-    ( vec_push [i] . m wbytes . b bytes )
-    ( vec_push [GpuBuffer] . m wbufs b )
-    ^ b_dp
+@ __lm_scratch_from inout LlmImpl m i nfloats ( Vec u ) bytes → GkBuf {
+    : GkBuf b ( __lm_scratch m nfloats )
+    ? ( gk_buf_ok b ) {} { ^ b }
+    ? ( gk_dbuf_upload_bytes . m kit b ( slice_prefix [u] ( slice_from_vec [u] bytes ) * nfloats 4 ) ) {} { = . m alloc_failed T }
+    ^ b
 }
-
 // Per-layer tensor name: blk.<L>.<suffix>
 @ __lm_tname i layer s suffix → String {
     : String nm ( string_from `blk.` )
@@ -606,39 +607,26 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
 // to happen here, on this path only. (Getting this wrong is not subtle: the
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
-@ __lm_upload_st inout LlmImpl m s name → i {
-    : St sf ?? . m st { T s0 → s0 F → { ^ -1 } }
+@ __lm_upload_st inout LlmImpl m s name → LkW {
+    : St sf ?? . m st { T s0 → s0 F → { ^ ( lk_w_none ) } }
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
-        ^ -1
+        ^ ( lk_w_none )
     } {}
     : i ti ( st_find_tensor sf ( string_data hf ) )
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
-    ? < ti 0 { ^ -1 } {}
+    ? < ti 0 { ^ ( lk_w_none ) } {}
     ?? ( st_dequant sf ti ) {
         T raw → {
             ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
-            : i n ( vec_len [u] raw )
-            : GpuBuffer b ( gpu_alloc . m g n )
-            ? == . b dptr 0 {
-                = __lm_alloc_failed T
-                ^ -1
-            } {}
-            : i _u ( gpu_upload_vec b raw )
-            : i b_dp . b dptr
-            ( vec_push [i] . m wdptr b_dp )
-            ( vec_push [i] . m wbytes . b bytes )
-            ( vec_push [GpuBuffer] . m wbufs b )
-            = __lm_last_type 0
-            ^ b_dp
+            ^ ( __lm_up_f32 m raw )
         }
         F e → {
-            ^ -1
+            ^ ( lk_w_none )
         }
     }
 }
-
 // x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
 @ __lm_add1 ( Vec u ) raw → v {
     : ( Slice u ) p ( slice_from_vec [u] raw )
@@ -654,49 +642,52 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-@ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → i {
+@ __lm_upload_opt inout LlmImpl m Gguf gg i layer s suffix → GkBuf {
     : String nm ( __lm_tname layer suffix )
     ?? . m st {
         T sf → {
-            : i d ( __lm_upload_st m ( string_data nm ) )
-            ? >= d 0 {
-                ^ d
-            } {}
+            : LkW d ( __lm_upload_st m ( string_data nm ) )
+            ? ( lk_w_ok d ) { ^ . d f } {}
         }
         F → {}
     }
     : i ti ( gguf_find_tensor gg ( string_data nm ) )
-    ? < ti 0 {
-        ^ -1
-    } {}
-    : !( Vec u ) String r ( gguf_dequant gg ti )
-    ?? r {
+    ? < ti 0 { ^ ( gk_buf_none GK_F32 ) } {}
+    ?? ( gguf_dequant gg ti ) {
         T raw → {
-            : i n ( vec_len [u] raw )
-            : GpuBuffer b ( gpu_alloc . m g n )
-            ? == . b dptr 0 {
-                = __lm_alloc_failed T
-                ^ -1
-            } {}
-            : i _u ( gpu_upload_vec b raw )
-            : i b_dp . b dptr
-            ( vec_push [i] . m wdptr b_dp )
-            ( vec_push [i] . m wbytes . b bytes )
-            ( vec_push [GpuBuffer] . m wbufs b )
-            ^ b_dp
+            : LkW d ( __lm_up_f32 m raw )
+            ^ . d f
         }
         F e → {
-            ^ -1
+            ^ ( gk_buf_none GK_F32 )
         }
     }
 }
-
-@ __lm_upload_layer inout LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+// One layer's tensor `suffix`, uploaded (none when it is missing or failed).
+@ __lm_upload_layer inout LlmImpl m Gguf gg i layer s suffix → LmW {
     : String nm ( __lm_tname layer suffix )
-    : i d ( __lm_upload m gg ( string_data nm ) )
-    ? < d 0 { ^ F } {}
-    ( vec_push [i] dst d )
-    ( vec_push [i] tdst __lm_last_type )
+    ^ @ LmW { ( __lm_upload m gg ( string_data nm ) ) 0 }
+}
+
+// A norm or bias: its f32 view (none when missing).
+@ __lm_upload_layer_f inout LlmImpl m Gguf gg i layer s suffix → GkBuf {
+    : LmW u ( __lm_upload_layer m gg layer suffix )
+    ^ . . u w f
+}
+
+// Append an uploaded weight to the model's per-layer column `dst`; F when
+// it is missing. (Two steps, not one call that takes the model and one of
+// its own columns: a callee holding the whole model could replace the
+// column it was also handed.)
+@ __lm_put LmW u inout ( Vec LmW ) dst → b {
+    ? ( __lm_w_ok u ) {} { ^ F }
+    ( vec_push [LmW] dst u )
+    ^ T
+}
+
+@ __lm_putf GkBuf u inout ( Vec GkBuf ) dst → b {
+    ? ( gk_buf_ok u ) {} { ^ F }
+    ( vec_push [GkBuf] dst u )
     ^ T
 }
 
@@ -736,7 +727,7 @@ unsafe @ __lm_q8_repack inout LlmImpl m GpuBuffer src GpuBuffer dst i nb i nblk 
     = __lm_lt now
 }
 
-unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
+@ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
     : Gguf gg ?? ( gguf_open path ) {
         T g0 → g0
@@ -763,7 +754,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     // return drops a half-built model cleanly
     : ( Locked LlmImpl ) lk ( __lm_blank )
     : ~ LlmImpl m ( locked_take [LlmImpl] lk )
-    = __lm_alloc_failed F
+    = . m alloc_failed F
     = . m prof_on F
     = . m prof_attn_ns 0
     = . m prof_moe_ns 0
@@ -872,19 +863,19 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     }
     = . m n_vocab ( tok_n_vocab . m tok )
 
-    // device + kernels — the best GPU on the box, not merely the first
-    // one the driver enumerates ($NURL_GPU_DEVICE overrides)
+    // the device — the best GPU on the box, not merely the first one the
+    // driver enumerates ($NURL_GPU_DEVICE overrides)
     ( __lm_lp `tok` )
-    = . m g ( gpu_open ( gpu_best_device ) )
+    = . m kit ( gk_open_best )
     ( __lm_lp `gpu_open` )
-    ? ( gpu_ok . m g ) {} {
+    ? ( gk_ok . m kit ) {} {
         ^ ( __lm_err `nurllama: no compute device (set NURL_GPU=cpu for the host backend)` )
     }
-    = . m ks ( lk_build . m g )
-    ( __lm_lp `kernels` )
-    ? . . m ks ok {} {
-        ^ ( __lm_err `nurllama: kernel compilation failed` )
-    }
+    // launches queue behind each other; a download is what waits
+    ( gk_async . m kit T )
+    // The warp-per-row matvecs use warp shuffles — CUDA only. On the CPU
+    // backend the portable kernels stay in charge.
+    = . m warp != 0 ( nurl_str_eq ( gk_backend . m kit ) `cuda` )
 
     // The second weight source, when one was named. Opened AFTER the
     // architecture is known: whether the norm weights need the +1 fold depends
@@ -905,53 +896,6 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
         }
     } {}
 
-    = . m wdptr ( vec_new [i] )
-    = . m wbufs ( vec_new [GpuBuffer] )
-    = . m wbytes ( vec_new [i] )
-    = . m tq_attn_norm ( vec_new [i] )
-    = . m tq_wq ( vec_new [i] )
-    = . m tq_wk ( vec_new [i] )
-    = . m tq_wv ( vec_new [i] )
-    = . m bq ( vec_new [i] )
-    = . m bk ( vec_new [i] )
-    = . m bv ( vec_new [i] )
-    = . m tq_wo ( vec_new [i] )
-    = . m tq_ffn_norm ( vec_new [i] )
-    = . m tq_gate ( vec_new [i] )
-    = . m tq_down ( vec_new [i] )
-    = . m tq_up ( vec_new [i] )
-    = . m tq_output 0
-    = . m attn_norm ( vec_new [i] )
-    = . m q_norm ( vec_new [i] )
-    = . m k_norm ( vec_new [i] )
-    = . m post_attn_norm ( vec_new [i] )
-    = . m post_ffn_norm ( vec_new [i] )
-    = . m wq ( vec_new [i] )
-    = . m wk ( vec_new [i] )
-    = . m wv ( vec_new [i] )
-    = . m wo ( vec_new [i] )
-    = . m ffn_norm ( vec_new [i] )
-    = . m w_gate ( vec_new [i] )
-    = . m w_down ( vec_new [i] )
-    = . m w_up ( vec_new [i] )
-    = . m kcache ( vec_new [i] )
-    = . m vcache ( vec_new [i] )
-    = . m gate_inp ( vec_new [i] )
-    = . m tq_gate_inp ( vec_new [i] )
-    = . m exp_bias ( vec_new [f] )
-    = . m gate_exps ( vec_new [i] )
-    = . m up_exps ( vec_new [i] )
-    = . m down_exps ( vec_new [i] )
-    = . m tq_gate_exps ( vec_new [i] )
-    = . m tq_up_exps ( vec_new [i] )
-    = . m tq_down_exps ( vec_new [i] )
-    = . m gate_shexp ( vec_new [i] )
-    = . m up_shexp ( vec_new [i] )
-    = . m down_shexp ( vec_new [i] )
-    = . m tq_gate_shexp ( vec_new [i] )
-    = . m tq_up_shexp ( vec_new [i] )
-    = . m tq_down_shexp ( vec_new [i] )
-
     // Embeddings are NOT expanded: the model keeps its GGUF mapping
     // open and dequantises exactly the token's row (n_embd values) per
     // decode step. For a 32k-vocab Q4_K table that is ~150 MB of host
@@ -962,77 +906,69 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     ? < . m embd_idx 0 { = ok F } {}
 
     // weights
-    = . m out_norm ( __lm_upload m gg `output_norm.weight` )
-    ? < . m out_norm 0 { = ok F } {}
-    = . m w_output ( __lm_upload m gg `output.weight` )
-    = . m tq_output __lm_last_type
-    ? < . m w_output 0 {
+    : LkW onw ( __lm_upload m gg `output_norm.weight` )
+    = . m out_norm . onw f
+    ? ( gk_buf_ok . m out_norm ) {} { = ok F }
+    = . m w_output @ LmW { ( __lm_upload m gg `output.weight` ) 0 }
+    ? ( __lm_w_ok . m w_output ) {} {
         // tied embeddings: reuse token_embd as the output projection
-        = . m w_output ( __lm_upload m gg `token_embd.weight` )
-        = . m tq_output __lm_last_type
-        ? < . m w_output 0 { = ok F } {}
-    } {}
+        = . m w_output @ LmW { ( __lm_upload m gg `token_embd.weight` ) 0 }
+        ? ( __lm_w_ok . m w_output ) {} { = ok F }
+    }
     : ~ i L 0
     ~ & ok < L . m n_layer {
-        ? ( __lm_upload_layer m gg L `attn_norm.weight` . m attn_norm . m tq_attn_norm ) {} { = ok F }
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `attn_norm.weight` ) . m attn_norm ) {} { = ok F }
         // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
         // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
-        // split: a weight is just a device pointer plus a row count, so the
-        // parts are row RANGES inside the uploaded buffer. The row stride comes
-        // from the quantisation type, and every split lands on a block
-        // boundary because a row is a whole number of blocks.
+        // split: a weight is a buffer plus where it starts, so the parts are
+        // row RANGES inside the uploaded tensor. The row stride comes from the
+        // quantisation type, and every split lands on a block boundary because
+        // a row is a whole number of blocks.
         : String qkvn ( __lm_tname L `attn_qkv.weight` )
         : i qkv_rows ( __lm_tensor_rows gg ( string_data qkvn ) )
         ? >= qkv_rows 0 {
-            : i base ( __lm_upload m gg ( string_data qkvn ) )
-            : i gt __lm_last_type
-            ? < base 0 { = ok F } {
-                : i rb ( __lm_row_bytes gt . m n_embd )
+            : LkW base ( __lm_upload m gg ( string_data qkvn ) )
+            ? ( lk_w_ok base ) {
+                : i rb ( __lm_row_bytes . base gt . m n_embd )
                 : i kvd * . m n_kv . m head_dim
-                ( vec_push [i] . m wq base )
-                ( vec_push [i] . m tq_wq gt )
-                ( vec_push [i] . m wk + base * . m q_dim rb )
-                ( vec_push [i] . m tq_wk gt )
-                ( vec_push [i] . m wv + base * + . m q_dim kvd rb )
-                ( vec_push [i] . m tq_wv gt )
-            }
+                ( vec_push [LmW] . m wq @ LmW { ( mem_dup base ) 0 } )
+                ( vec_push [LmW] . m wk @ LmW { ( mem_dup base ) * . m q_dim rb } )
+                ( vec_push [LmW] . m wv @ LmW { base * + . m q_dim kvd rb } )
+            } { = ok F }
         } {
-            ? ( __lm_upload_layer m gg L `attn_q.weight` . m wq . m tq_wq ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_q.weight` ) . m wq ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_k.weight` ) . m wk ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `attn_v.weight` ) . m wv ) {} { = ok F }
         }
-        ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo . m tq_wo ) {} { = ok F }
-        // qwen2 carries Q/K/V biases; llama does not. Absent = -1 = skip.
-        ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
-        ( vec_push [i] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
-        ( vec_push [i] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
+        ? ( __lm_put ( __lm_upload_layer m gg L `attn_output.weight` ) . m wo ) {} { = ok F }
+        // qwen2 carries Q/K/V biases; llama does not. Absent = none = skip.
+        ( vec_push [GkBuf] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
+        ( vec_push [GkBuf] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
+        ( vec_push [GkBuf] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
         // gemma3: per-head Q/K norms (applied before RoPE) and the post-block
         // norms it puts on the attention and FFN outputs before each residual
-        // add. Absent on llama/qwen2 → -1 → skipped in the forward pass.
-        ( vec_push [i] . m q_norm ( __lm_upload_opt m gg L `attn_q_norm.weight` ) )
-        ( vec_push [i] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
-        ( vec_push [i] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
-        ( vec_push [i] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
-        ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
+        // add. Absent on llama/qwen2 → none → skipped in the forward pass.
+        ( vec_push [GkBuf] . m q_norm ( __lm_upload_opt m gg L `attn_q_norm.weight` ) )
+        ( vec_push [GkBuf] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
+        ( vec_push [GkBuf] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
+        ( vec_push [GkBuf] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
+        ? ( __lm_putf ( __lm_upload_layer_f m gg L `ffn_norm.weight` ) . m ffn_norm ) {} { = ok F }
         : b moe_layer & . m bidir >= L . m first_dense
         ? moe_layer {
             // MoE layer: no dense FFN tensors — placeholders keep the
             // per-layer vectors index-aligned.
-            ( vec_push [i] . m w_down -1 )
-            ( vec_push [i] . m tq_down 0 )
-            ( vec_push [i] . m w_gate -1 )
-            ( vec_push [i] . m tq_gate 0 )
-            ( vec_push [i] . m w_up -1 )
-            ( vec_push [i] . m tq_up 0 )
-            ? ( __lm_upload_layer m gg L `ffn_gate_inp.weight` . m gate_inp . m tq_gate_inp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_gate_exps.weight` . m gate_exps . m tq_gate_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_up_exps.weight` . m up_exps . m tq_up_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_down_exps.weight` . m down_exps . m tq_down_exps ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` . m gate_shexp . m tq_gate_shexp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_up_shexp.weight` . m up_shexp . m tq_up_shexp ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_down_shexp.weight` . m down_shexp . m tq_down_shexp ) {} { = ok F }
-            // the router bias is HOST data: the grouped top-k runs on the
-            // CPU over 256 scores per position
+            ( vec_push [LmW] . m w_down ( __lm_w_none ) )
+            ( vec_push [LmW] . m w_gate ( __lm_w_none ) )
+            ( vec_push [LmW] . m w_up ( __lm_w_none ) )
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_inp.weight` ) . m gate_inp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_exps.weight` ) . m gate_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_exps.weight` ) . m up_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_exps.weight` ) . m down_exps ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` ) . m gate_shexp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up_shexp.weight` ) . m up_shexp ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down_shexp.weight` ) . m down_shexp ) {} { = ok F }
+            // the router bias is HOST data here; it goes up whole below for
+            // the on-device router, and the host router reads it from here
             : String bn ( __lm_tname L `exp_probs_b.bias` )
             : i bi ( gguf_find_tensor gg ( string_data bn ) )
             ? >= bi 0 {
@@ -1053,39 +989,29 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
                 }
             } { = ok F }
         } {
-            ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
+            ? ( __lm_put ( __lm_upload_layer m gg L `ffn_down.weight` ) . m w_down ) {} { = ok F }
             // Fused FFN gate+up (phi3): one tensor of 2*n_ff rows, gate first.
             : String upn ( __lm_tname L `ffn_up.weight` )
             : i up_rows ( __lm_tensor_rows gg ( string_data upn ) )
             ? & > . m n_ff 0 == up_rows * 2 . m n_ff {
-                : i ubase ( __lm_upload m gg ( string_data upn ) )
-                : i ugt __lm_last_type
-                ? < ubase 0 { = ok F } {
-                    : i urb ( __lm_row_bytes ugt . m n_embd )
-                    ( vec_push [i] . m w_gate ubase )
-                    ( vec_push [i] . m tq_gate ugt )
-                    ( vec_push [i] . m w_up + ubase * . m n_ff urb )
-                    ( vec_push [i] . m tq_up ugt )
-                }
+                : LkW ubase ( __lm_upload m gg ( string_data upn ) )
+                ? ( lk_w_ok ubase ) {
+                    : i urb ( __lm_row_bytes . ubase gt . m n_embd )
+                    ( vec_push [LmW] . m w_gate @ LmW { ( mem_dup ubase ) 0 } )
+                    ( vec_push [LmW] . m w_up @ LmW { ubase * . m n_ff urb } )
+                } { = ok F }
             } {
-                ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
-                ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `ffn_gate.weight` ) . m w_gate ) {} { = ok F }
+                ? ( __lm_put ( __lm_upload_layer m gg L `ffn_up.weight` ) . m w_up ) {} { = ok F }
             }
             // placeholders on the MoE side too
-            ( vec_push [i] . m gate_inp -1 )
-            ( vec_push [i] . m tq_gate_inp 0 )
-            ( vec_push [i] . m gate_exps -1 )
-            ( vec_push [i] . m up_exps -1 )
-            ( vec_push [i] . m down_exps -1 )
-            ( vec_push [i] . m tq_gate_exps 0 )
-            ( vec_push [i] . m tq_up_exps 0 )
-            ( vec_push [i] . m tq_down_exps 0 )
-            ( vec_push [i] . m gate_shexp -1 )
-            ( vec_push [i] . m up_shexp -1 )
-            ( vec_push [i] . m down_shexp -1 )
-            ( vec_push [i] . m tq_gate_shexp 0 )
-            ( vec_push [i] . m tq_up_shexp 0 )
-            ( vec_push [i] . m tq_down_shexp 0 )
+            ( vec_push [LmW] . m gate_inp ( __lm_w_none ) )
+            ( vec_push [LmW] . m gate_exps ( __lm_w_none ) )
+            ( vec_push [LmW] . m up_exps ( __lm_w_none ) )
+            ( vec_push [LmW] . m down_exps ( __lm_w_none ) )
+            ( vec_push [LmW] . m gate_shexp ( __lm_w_none ) )
+            ( vec_push [LmW] . m up_shexp ( __lm_w_none ) )
+            ( vec_push [LmW] . m down_shexp ( __lm_w_none ) )
             ? . m bidir {
                 : ~ i e 0
                 ~ < e . m n_expert {
@@ -1101,7 +1027,7 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     // The model's last owner unmaps it.
     = . m gg gg
     ? ok {} {
-        ? __lm_alloc_failed {
+        ? . m alloc_failed {
             ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
         } {}
         ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
@@ -1120,8 +1046,8 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     : i kvdim * . m n_kv . m head_dim
     = L 0
     ~ < L . m n_layer {
-        ( vec_push [i] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
-        ( vec_push [i] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+        ( vec_push [GkBuf] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
+        ( vec_push [GkBuf] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
         = L + L 1
     }
     // Activation scratch is sized for a whole prefill chunk; decode uses
@@ -1145,23 +1071,16 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     = . m logitsd ( __lm_scratch m * logit_rows . m n_vocab )
     = . m logits_host ( gpu_host_alloc * * logit_rows . m n_vocab 4 )
     ? . m bidir {
-        = . m amid_d ( __lm_scratch m LM_CHUNK )
+        = . m amid_d ( gk_buf_view_as ( __lm_scratch m * LM_CHUNK 2 ) 0 LM_CHUNK GK_I64 )
         = . m amprob_d ( __lm_scratch m LM_CHUNK )
-        = . m amid_h ( gpu_host_alloc * LM_CHUNK 4 )
+        = . m amid_v ( vec_zeroed [i] LM_CHUNK )
         = . m amprob_h ( gpu_host_alloc * LM_CHUNK 4 )
-    } {
-        = . m amid_d -1
-        = . m amprob_d -1
-        = . m amid_h ( gpu_host_none )
-        = . m amprob_h ( gpu_host_none )
-    }
-    ? . m bidir {
         = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
         = . m router_host ( gpu_host_alloc * * LM_CHUNK . m n_expert 4 )
         = . m moe_outd ( __lm_scratch m . m n_embd )
         // n_assign = LM_CHUNK · n_expert_used at most
         : i nasn * LM_CHUNK . m n_expert_used
-        = . m moe_expid ( __lm_scratch m nasn )
+        = . m moe_expid ( gk_buf_view_as ( __lm_scratch m * nasn 2 ) 0 nasn GK_I64 )
         = . m moe_wts ( __lm_scratch m nasn )
         = . m moe_gate ( __lm_scratch m * nasn . m moe_ff )
         = . m moe_up ( __lm_scratch m * nasn . m moe_ff )
@@ -1177,36 +1096,22 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
             = bi + bi 1
         }
         = . m bias_all ( __lm_scratch_from m nbias bb )
-    } {
-        = . m rlogitsd -1
-        = . m router_host ( gpu_host_none )
-        = . m moe_outd -1
-        = . m moe_expid -1
-        = . m moe_wts -1
-        = . m moe_gate -1
-        = . m moe_up -1
-        = . m moe_downb -1
-        = . m bias_all -1
-    }
-    ? __lm_alloc_failed {
+    } {}
+    ? . m alloc_failed {
         ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
     } {}
-    // the weights are up — release the upload path's pinned staging
+    // the weights are up — release the upload path's pinned staging, and
+    // the pool's idle blocks (the interleaved q8_0 copies)
     ( gpu_staging_free )
+    ( gk_pool_release . m kit )
     ( __lm_lp `scratch+bias` )
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
         T v → {
-            : ~ i total 0
-            : ~ i k 0
-            ~ < k ( vec_len [i] . m wbytes ) {
-                = total + total ( _lm_geti . m wbytes k )
-                = k + k 1
-            }
             : String dmsg ( string_from `[nurllama] device: ` )
-            ( string_push_str dmsg ( gpu_name . m g ) )
+            ( string_push_str dmsg ( gpu_name ( gk_gpu . m kit ) ) )
             ( nurl_eprintln ( string_data dmsg ) )
             : String msg ( string_from `[nurllama] device memory: ` )
-            ( string_push_int msg / total 1048576 )
+            ( string_push_int msg / . m dev_bytes 1048576 )
             ( string_push_str msg ` MiB (weights + KV cache + scratch)` )
             ( nurl_eprintln ( string_data msg ) )
         }
@@ -1437,55 +1342,53 @@ unsafe @ llm_open_st s path s weights i want_ctx → !Llm String {
     }
 }
 
-unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
-    ? < count 1 { ^ v } {}
+// A matvec of weight `w` (its range starting `w.off` bytes in), the dispatch
+// kernels.nu picks for the shape.
+@ __lm_mv inout LlmImpl m LmW w i extra GkBuf x i xoff GkBuf y i rows i cols i batch inout ( Vec GkLaunch ) p → b {
+    : i gt . . w w gt
+    : i boff + . w off extra
+    : i woff ? == gt 0 / boff 4 ? == gt 1 / boff 2 boff
+    ^ ( lk_matvec . m kit . m warp . w w woff x xoff y 0 rows cols batch p )
+}
+
+// Run what `p` holds now and start it afresh — the host needs a result
+// mid-evaluation (the profiler's clock, the host MoE router). An
+// evaluation that does this is not kept as a plan.
+@ __lm_flush inout LlmImpl m inout ( Vec GkLaunch ) p inout b keep → v {
+    : b _r ( lk_run p )
+    ( vec_clear [GkLaunch] p )
+    = keep F
+}
+
+@ __lm_prof_mark inout LlmImpl m inout ( Vec GkLaunch ) p inout b keep → i {
+    ? . m prof_on {} { ^ 0 }
+    ( __lm_flush m p keep )
+    ^ ( __lm_prof_now m )
+}
+
+// Record (into `p`) every launch of one evaluation of `count` positions at
+// pos0 — the forward pass and the logits its mode asks for. `keep` is
+// cleared when the host had to step in on the way (see __lm_flush).
+@ __lm_emit inout LlmImpl m inout ( Vec GkLaunch ) p i count i pos0 i kvlen b causal i logits_mode inout b keep → b {
+    : GpuKit kit . m kit
+    : b wp . m warp
     : i ne . m n_embd
     : i hd . m head_dim
     : i nh . m n_head
     : i nkv . m n_kv
     : i kvdim * nkv hd
-
-    // x ← the batch's embedding rows, dequantised on demand out of the
-    // still-open GGUF mapping (no full-table expansion)
-    : ~ i bi 0
-    ~ < bi count {
-        : i tok ( _lm_geti ids + first bi )
-        : GpuBuffer xb ( gpu_buffer_view + . m xd * * bi ne 4 * ne 4 )
-        // The embedding table is never expanded: exactly this token's row is
-        // decoded, out of whichever container the weights came from. A
-        // safetensors row range is exact (no block quantisation), a GGUF one is
-        // block-aligned — both land here as f32.
-        ?? . m st {
-            T sf → {
-                ?? ( st_dequant_range sf . m st_embd * tok ne ne ) {
-                    T row → {
-                        : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-                    }
-                    F _e → {}
-                }
-            }
-            F → {
-                ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
-                    T row → {
-                        : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-                    }
-                    F _e → {}
-                }
-            }
-        }
-        = bi + bi 1
-    }
-
     : i qd_ . m q_dim
+    : GkBuf none ( gk_buf_none GK_F32 )
+    ( vec_clear [i] . m pl_rope )
+    ( vec_clear [i] . m pl_copy )
+    ( vec_clear [i] . m pl_attn )
+    : ~ b ok T
 
     // gemma scales the embedding row by sqrt(n_embd) before the first block.
-    ? != . m embd_scale 1.0 { ( lk_scale . m ks . m xd . m embd_scale * ne count ) } {}
+    ? != . m embd_scale 1.0 { = ok & ok ( lk_scale kit . m xd . m embd_scale * ne count p ) } {}
 
     : ~ i L 0
-    ~ < L . m n_layer {
-        // gemma3 attends within a sliding window on every layer but each
-        // sixth, and the windowed layers carry their own (smaller) RoPE base.
-        // Period 0 = never slide = the llama shape.
+    ~ & ok < L . m n_layer {
         // Sliding-window layers. `swa_window` 0 = no windowing at all (llama,
         // qwen2). Otherwise `swa_period` says how often a FULL-attention layer
         // comes around: gemma3 has one every sixth layer, phi3 has none at all
@@ -1497,77 +1400,76 @@ unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i k
         : f rbase ? full . m rope_base . m rope_base_swa
 
         // ── attention ──
-        : i _pa ? . m prof_on ( __lm_prof_now m ) 0
-        ( lk_rmsnorm . m ks . m xd ( _lm_geti . m attn_norm L ) . m xnd ne . m eps count )
-        : b _q1 ( lk_matvec_q . m ks ( _lm_geti . m tq_wq L ) ( _lm_geti . m wq L ) . m xnd . m qd qd_ ne count )
-        : b _q2 ( lk_matvec_q . m ks ( _lm_geti . m tq_wk L ) ( _lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
-        : b _q3 ( lk_matvec_q . m ks ( _lm_geti . m tq_wv L ) ( _lm_geti . m wv L ) . m xnd . m vd kvdim ne count )
+        : i _pa ( __lm_prof_mark m p keep )
+        = ok & ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m attn_norm L ) . m xnd ne . m eps count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wq L ) 0 . m xnd 0 . m qd qd_ ne count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wk L ) 0 . m xnd 0 . m kd kvdim ne count p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wv L ) 0 . m xnd 0 . m vd kvdim ne count p )
         // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
-        : i bqd ( _lm_geti . m bq L )
-        : i bkd ( _lm_geti . m bk L )
-        : i bvd ( _lm_geti . m bv L )
-        ? >= bqd 0 { ( lk_addrow . m ks . m qd bqd qd_ count ) } {}
-        ? >= bkd 0 { ( lk_addrow . m ks . m kd bkd kvdim count ) } {}
-        ? >= bvd 0 { ( lk_addrow . m ks . m vd bvd kvdim count ) } {}
-        // gemma3: RMSNorm every head's Q and K vector before the rotation.
-        // The rows of q are head_dim wide and there are nh of them per
-        // position, so this is the ordinary rmsnorm over nh*count rows.
-        : i qnd ( _lm_geti . m q_norm L )
-        : i knd ( _lm_geti . m k_norm L )
-        : ~ i qbuf . m qd
-        : ~ i kbuf . m kd
-        ? >= qnd 0 {
-            ( lk_rmsnorm . m ks . m qd qnd . m qn2d hd . m eps * nh count )
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m bq L ) ) { = ok & ok ( lk_addrow kit . m qd ( vec_at [GkBuf] . m bq L ) qd_ count p ) } {}
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m bk L ) ) { = ok & ok ( lk_addrow kit . m kd ( vec_at [GkBuf] . m bk L ) kvdim count p ) } {}
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m bv L ) ) { = ok & ok ( lk_addrow kit . m vd ( vec_at [GkBuf] . m bv L ) kvdim count p ) } {}
+        // gemma3 / qwen3: RMSNorm every head's Q and K vector before the
+        // rotation. The rows of q are head_dim wide and there are nh of them
+        // per position, so this is the ordinary rmsnorm over nh*count rows.
+        : ~ GkBuf qbuf . m qd
+        : ~ GkBuf kbuf . m kd
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m q_norm L ) ) {
+            = ok & ok ( lk_rmsnorm kit . m qd ( vec_at [GkBuf] . m q_norm L ) . m qn2d hd . m eps * nh count p )
             = qbuf . m qn2d
         } {}
-        ? >= knd 0 {
-            ( lk_rmsnorm . m ks . m kd knd . m kn2d hd . m eps * nkv count )
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m k_norm L ) ) {
+            = ok & ok ( lk_rmsnorm kit . m kd ( vec_at [GkBuf] . m k_norm L ) . m kn2d hd . m eps * nkv count p )
             = kbuf . m kn2d
         } {}
-        ( lk_rope . m ks qbuf nh hd . m rope_dim pos0 rbase . m rope_style count )
-        ( lk_rope . m ks kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit qbuf nh hd . m rope_dim pos0 rbase . m rope_style count p )
+        ( vec_push [i] . m pl_rope ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_rope kit kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count p )
         // the whole batch's K/V rows land in the cache before any position
         // attends, so a position can see every earlier one in this chunk
-        ( lk_copyat . m ks ( _lm_geti . m kcache L ) kbuf * pos0 kvdim * count kvdim )
-        ( lk_copyat . m ks ( _lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
-        ( lk_attn . m ks qbuf ( _lm_geti . m kcache L ) ( _lm_geti . m vcache L )
-        . m aod . m scored nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 )
-        : b _q4 ( lk_matvec_q . m ks ( _lm_geti . m tq_wo L ) ( _lm_geti . m wo L ) . m aod . m tmpd ne qd_ count )
+        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m kcache L ) kbuf * pos0 kvdim * count kvdim p )
+        ( vec_push [i] . m pl_copy ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_copyat kit ( vec_at [GkBuf] . m vcache L ) . m vd * pos0 kvdim * count kvdim p )
+        ( vec_push [i] . m pl_attn ( vec_len [GkLaunch] p ) )
+        = ok & ok ( lk_attn kit wp qbuf ( vec_at [GkBuf] . m kcache L ) ( vec_at [GkBuf] . m vcache L ) . m aod . m scored
+        nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 p )
+        = ok & ok ( __lm_mv m ( vec_at [LmW] . m wo L ) 0 . m aod 0 . m tmpd ne qd_ count p )
         // gemma3 norms the block's OUTPUT as well, before the residual add.
-        : i pan ( _lm_geti . m post_attn_norm L )
-        : ~ i abuf . m tmpd
-        ? >= pan 0 {
-            ( lk_rmsnorm . m ks . m tmpd pan . m tn2d ne . m eps count )
+        : ~ GkBuf abuf . m tmpd
+        ? ( gk_buf_ok ( vec_at [GkBuf] . m post_attn_norm L ) ) {
+            = ok & ok ( lk_rmsnorm kit . m tmpd ( vec_at [GkBuf] . m post_attn_norm L ) . m tn2d ne . m eps count p )
             = abuf . m tn2d
         } {}
-        ( lk_addv . m ks . m xd abuf * ne count )
-        ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_now m ) _pa } {}
+        = ok & ok ( lk_addv kit . m xd abuf * ne count p )
+        ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_mark m p keep ) _pa } {}
 
         // ── FFN ──
-        : i _pf ? . m prof_on ( __lm_prof_now m ) 0
-        ? >= ( _lm_geti . m gate_exps L ) 0 {
+        : i _pf ( __lm_prof_mark m p keep )
+        ? ( __lm_w_ok ( vec_at [LmW] . m gate_exps L ) ) {
             // MoE (llada2): shared expert over the whole batch, then the
-            // fp32-sigmoid router picks n_expert_used experts per
-            // position out of the fused 3D expert tensors — each expert
-            // is a row RANGE inside the uploaded (still quantised)
-            // tensor, exactly the phi3 fused-weight trick — and their
-            // weighted down-projections accumulate onto the residual.
-            ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
-            : i _psh ? . m prof_on ( __lm_prof_now m ) 0
+            // fp32-sigmoid router picks n_expert_used experts per position
+            // out of the fused 3D expert tensors — each expert is a row
+            // RANGE inside the uploaded (still quantised) tensor, the phi3
+            // fused-weight trick — and their weighted down-projections
+            // accumulate onto the residual.
+            = ok & ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m ffn_norm L ) . m xnd ne . m eps count p )
+            : i _psh ( __lm_prof_mark m p keep )
             : i shf . m shexp_ff
-            : b _s1 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_shexp L ) ( _lm_geti . m gate_shexp L ) . m xnd . m gd shf ne count )
-            : b _s2 ( lk_matvec_q . m ks ( _lm_geti . m tq_up_shexp L ) ( _lm_geti . m up_shexp L ) . m xnd . m ud shf ne count )
-            ( lk_silumul . m ks . m gd . m ud * shf count )
-            : b _s3 ( lk_matvec_q . m ks ( _lm_geti . m tq_down_shexp L ) ( _lm_geti . m down_shexp L ) . m gd . m tmpd ne shf count )
-            ( lk_addv . m ks . m xd . m tmpd * ne count )
-            ? . m prof_on { = . m prof_shexp_ns + . m prof_shexp_ns - ( __lm_prof_now m ) _psh } {}
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m gate_shexp L ) 0 . m xnd 0 . m gd shf ne count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m up_shexp L ) 0 . m xnd 0 . m ud shf ne count p )
+            = ok & ok ( lk_silumul kit . m gd . m ud * shf count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m down_shexp L ) 0 . m gd 0 . m tmpd ne shf count p )
+            = ok & ok ( lk_addv kit . m xd . m tmpd * ne count p )
+            ? . m prof_on { = . m prof_shexp_ns + . m prof_shexp_ns - ( __lm_prof_mark m p keep ) _psh } {}
             // router logits for every position (256 per position)
-            : b _s4 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_inp L ) ( _lm_geti . m gate_inp L ) . m xnd . m rlogitsd . m n_expert ne count )
-            : i gt_g ( _lm_geti . m tq_gate_exps L )
-            : i gt_u ( _lm_geti . m tq_up_exps L )
-            : i gt_d ( _lm_geti . m tq_down_exps L )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m gate_inp L ) 0 . m xnd 0 . m rlogitsd . m n_expert ne count p )
+            : LmW wg ( vec_at [LmW] . m gate_exps L )
+            : LmW wu ( vec_at [LmW] . m up_exps L )
+            : LmW wdn ( vec_at [LmW] . m down_exps L )
             : i K . m n_expert_used
-            ? & ( lk_experts_supported . m ks gt_g ) & ( lk_experts_supported . m ks gt_u ) ( lk_experts_supported . m ks gt_d ) {
+            ? & ( lk_experts_supported . . wg w gt ) & ( lk_experts_supported . . wu w gt ) ( lk_experts_supported . . wdn w gt ) {
                 // ── fully on-device path ──────────────────────────────
                 // The router runs on the GPU (one thread per position,
                 // writing the assignment table straight to device memory),
@@ -1575,42 +1477,39 @@ unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i k
                 // batched gate, batched up, silu, batched down, scatter.
                 // Nothing crosses to the host — the CPU only launches.
                 : i nasn * count K
-                : i biasoff + . m bias_all * * L . m n_expert 4
-                ( lk_moe_route . m ks . m rlogitsd biasoff . m moe_expid . m moe_wts
-                . m n_expert . m n_group . m n_group_used K . m route_scale ? . m weights_norm 1 0 count )
+                = ok & ok ( lk_moe_route kit . m rlogitsd . m bias_all * L . m n_expert . m moe_expid . m moe_wts
+                . m n_expert . m n_group . m n_group_used K . m route_scale ? . m weights_norm 1 0 count p )
                 // gate/up read x by POSITION (xk = K); down reads the
                 // per-assignment hidden (xk = 1)
-                : b _b1 ( lk_matvec_experts . m ks gt_g ( _lm_geti . m gate_exps L ) . m xnd . m moe_gate . m moe_expid . m moe_ff ne K nasn )
-                : b _b2 ( lk_matvec_experts . m ks gt_u ( _lm_geti . m up_exps L ) . m xnd . m moe_up . m moe_expid . m moe_ff ne K nasn )
-                ( lk_silumul . m ks . m moe_gate . m moe_up * nasn . m moe_ff )
-                : b _b3 ( lk_matvec_experts . m ks gt_d ( _lm_geti . m down_exps L ) . m moe_gate . m moe_downb . m moe_expid ne . m moe_ff 1 nasn )
-                ( lk_moe_scatter . m ks . m moe_downb . m moe_wts . m xd K ne count )
+                = ok & ok ( lk_matvec_experts kit . wg w . m xnd . m moe_gate . m moe_expid . m moe_ff ne K nasn p )
+                = ok & ok ( lk_matvec_experts kit . wu w . m xnd . m moe_up . m moe_expid . m moe_ff ne K nasn p )
+                = ok & ok ( lk_silumul kit . m moe_gate . m moe_up * nasn . m moe_ff p )
+                = ok & ok ( lk_matvec_experts kit . wdn w . m moe_gate . m moe_downb . m moe_expid ne . m moe_ff 1 nasn p )
+                = ok & ok ( lk_moe_scatter kit . m moe_downb . m moe_wts . m xd K ne count p )
             } {
                 // ── fallback: host routing + per-(position, expert)
                 // launches (any weight type without a batched kernel) ──
-                : GpuBuffer rb ( gpu_buffer_view . m rlogitsd * * count . m n_expert 4 )
-                : i _d1 ( gpu_download ( gpu_host_ptr . m router_host ) rb )
-                : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
-                : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
-                : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
+                ( __lm_flush m p keep )
+                : b _d1 ( gk_dbuf_download_host kit . m rlogitsd . m router_host )
+                : i stride_g * . m moe_ff ( __lm_row_bytes . . wg w gt ne )
+                : i stride_u * . m moe_ff ( __lm_row_bytes . . wu w gt ne )
+                : i stride_d * ne ( __lm_row_bytes . . wdn w gt . m moe_ff )
                 : ~ i b2 0
                 ~ < b2 count {
                     : ( Vec i ) sel ( vec_new [i] )
                     : ( Vec f ) wts ( vec_new [f] )
                     ( __lm_moe_route m L b2 sel wts )
-                    : i xrow + . m xnd * * b2 ne 4
-                    : i orow + . m xd * * b2 ne 4
                     : ~ i j 0
                     ~ < j ( vec_len [i] sel ) {
                         : ~ i e2 0
                         ?? ( vec_get [i] sel j ) { T x → { = e2 x } F → {} }
                         : ~ f w 0.0
                         ?? ( vec_get [f] wts j ) { T x → { = w x } F → {} }
-                        : b _e1 ( lk_matvec_q . m ks gt_g + ( _lm_geti . m gate_exps L ) * e2 stride_g xrow . m gd . m moe_ff ne 1 )
-                        : b _e2 ( lk_matvec_q . m ks gt_u + ( _lm_geti . m up_exps L ) * e2 stride_u xrow . m ud . m moe_ff ne 1 )
-                        ( lk_silumul . m ks . m gd . m ud . m moe_ff )
-                        : b _e3 ( lk_matvec_q . m ks gt_d + ( _lm_geti . m down_exps L ) * e2 stride_d . m gd . m moe_outd ne . m moe_ff 1 )
-                        ( lk_axpy . m ks orow . m moe_outd w ne )
+                        = ok & ok ( __lm_mv m wg * e2 stride_g . m xnd * b2 ne . m gd . m moe_ff ne 1 p )
+                        = ok & ok ( __lm_mv m wu * e2 stride_u . m xnd * b2 ne . m ud . m moe_ff ne 1 p )
+                        = ok & ok ( lk_silumul kit . m gd . m ud . m moe_ff p )
+                        = ok & ok ( __lm_mv m wdn * e2 stride_d . m gd 0 . m moe_outd ne . m moe_ff 1 p )
+                        = ok & ok ( lk_axpy kit . m xd * b2 ne . m moe_outd 0 w ne p )
                         = j + j 1
                     }
                     = b2 + b2 1
@@ -1618,55 +1517,134 @@ unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i k
             }
         } {
             // dense FFN (SwiGLU for llama/qwen2/llada2 layer 0, GeGLU for gemma)
-            ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
-            : b _q5 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate L ) ( _lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
-            : b _q6 ( lk_matvec_q . m ks ( _lm_geti . m tq_up L ) ( _lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
+            = ok & ok ( lk_rmsnorm kit . m xd ( vec_at [GkBuf] . m ffn_norm L ) . m xnd ne . m eps count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m w_gate L ) 0 . m xnd 0 . m gd . m n_ff ne count p )
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m w_up L ) 0 . m xnd 0 . m ud . m n_ff ne count p )
             ? . m ffn_gelu
-            { ( lk_gelumul . m ks . m gd . m ud * . m n_ff count ) }
-            { ( lk_silumul . m ks . m gd . m ud * . m n_ff count ) }
-            : b _q7 ( lk_matvec_q . m ks ( _lm_geti . m tq_down L ) ( _lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
-            : i pfn ( _lm_geti . m post_ffn_norm L )
-            : ~ i fbuf . m tmpd
-            ? >= pfn 0 {
-                ( lk_rmsnorm . m ks . m tmpd pfn . m tn2d ne . m eps count )
+            { = ok & ok ( lk_gelumul kit . m gd . m ud * . m n_ff count p ) }
+            { = ok & ok ( lk_silumul kit . m gd . m ud * . m n_ff count p ) }
+            = ok & ok ( __lm_mv m ( vec_at [LmW] . m w_down L ) 0 . m gd 0 . m tmpd ne . m n_ff count p )
+            : ~ GkBuf fbuf . m tmpd
+            ? ( gk_buf_ok ( vec_at [GkBuf] . m post_ffn_norm L ) ) {
+                = ok & ok ( lk_rmsnorm kit . m tmpd ( vec_at [GkBuf] . m post_ffn_norm L ) . m tn2d ne . m eps count p )
                 = fbuf . m tn2d
             } {}
-            ( lk_addv . m ks . m xd fbuf * ne count )
+            = ok & ok ( lk_addv kit . m xd fbuf * ne count p )
         }
         ? . m prof_on {
-            ? >= ( _lm_geti . m gate_exps L ) 0
-            { = . m prof_moe_ns + . m prof_moe_ns - ( __lm_prof_now m ) _pf }
-            { = . m prof_dense_ns + . m prof_dense_ns - ( __lm_prof_now m ) _pf }
+            ? ( __lm_w_ok ( vec_at [LmW] . m gate_exps L ) )
+            { = . m prof_moe_ns + . m prof_moe_ns - ( __lm_prof_mark m p keep ) _pf }
+            { = . m prof_dense_ns + . m prof_dense_ns - ( __lm_prof_mark m p keep ) _pf }
         } {}
         = L + L 1
     }
 
     // logits: 0 = none (a prefill block), 1 = last position only
-    // (autoregressive decode), 2 = every position (diffusion denoise)
+    // (autoregressive decode), 2 = every position (diffusion denoise),
+    // 3 = greedy argmax + confidence for every position, on the device
+    ? > logits_mode 0 {
+        = ok & ok ( lk_rmsnorm kit . m xd . m out_norm . m xnd ne . m eps count p )
+        ? == logits_mode 1 {
+            = ok & ok ( __lm_mv m . m w_output 0 . m xnd * - count 1 ne . m logitsd . m n_vocab ne 1 p )
+        } {
+            = ok & ok ( __lm_mv m . m w_output 0 . m xnd 0 . m logitsd . m n_vocab ne count p )
+        }
+        ? == logits_mode 3 {
+            = ok & ok ( lk_argmax_conf kit wp . m logitsd . m amid_d . m amprob_d . m n_vocab count p )
+        } {}
+    } {}
+    ^ ok
+}
+
+@ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
+    ? < count 1 { ^ } {}
+    : i ne . m n_embd
+
+    // x ← the batch's embedding rows, dequantised on demand out of the
+    // still-open GGUF mapping (no full-table expansion). A safetensors row
+    // range is exact (no block quantisation), a GGUF one is block-aligned —
+    // both land here as f32.
+    // The rows gather on the host and go up in one copy (a copy a row
+    // waits on the device that many times).
+    : ~ ( Vec u ) rows ( vec_with_cap [u] * * count ne 4 )
+    : ~ i bi 0
+    ~ < bi count {
+        : i tok ( _lm_geti ids + first bi )
+        : i at ( vec_len [u] rows )
+        ?? . m st {
+            T sf → {
+                ?? ( st_dequant_range sf . m st_embd * tok ne ne ) {
+                    T row → { ( vec_extend [u] rows row ) }
+                    F _e → {}
+                }
+            }
+            F → {
+                ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
+                    T row → { ( vec_extend [u] rows row ) }
+                    F _e → {}
+                }
+            }
+        }
+        // a row that would not dequantise stays zero, as it stayed
+        // whatever the device held before
+        ? == ( vec_len [u] rows ) at { : b _z ( vec_resize_zeroed [u] rows + at * ne 4 ) } {}
+        = bi + bi 1
+    }
+    : b _u ( gk_dbuf_upload_bytes . m kit ( gk_buf_view . m xd 0 * count ne ) ( slice_from_vec [u] rows ) )
+
+    // The launches of this call shape were recorded by an earlier call:
+    // give them this call's position and run them again. Otherwise record
+    // them now (and keep them unless the host had to step in).
+    : i kvdim * . m n_kv . m head_dim
+    : i npos0 ? causal + pos0 1 kvlen
+    : ~ i pi -1
+    : ~ i k 0
+    ~ < k ( vec_len [LmPlan] . m plans ) {
+        : LmPlan q ( vec_at [LmPlan] . m plans k )
+        ? & & == . q count count == . q causal causal == . q mode logits_mode { = pi k } {}
+        = k + k 1
+    }
+    ? >= pi 0 {
+        : b _r ( vec_apply [LmPlan b] . m plans pi F \ inout LmPlan q → b {
+            : ~ b ok T
+            : ~ i j 0
+            ~ < j ( vec_len [i] . q rope ) { = ok & ok ( lk_set . q l ( vec_at [i] . q rope j ) `pos0` pos0 ) = j + j 1 }
+            = j 0
+            ~ < j ( vec_len [i] . q copy ) { = ok & ok ( lk_set . q l ( vec_at [i] . q copy j ) `off` * pos0 kvdim ) = j + j 1 }
+            = j 0
+            ~ < j ( vec_len [i] . q attn ) {
+                : i at ( vec_at [i] . q attn j )
+                = ok & ok ( lk_set . q l at `npos0` npos0 )
+                = ok & ok ( lk_set . q l + at 1 `npos0` npos0 )
+                = j + j 1
+            }
+            ^ & ok ( lk_run . q l )
+        } )
+    } {
+        : ~ ( Vec GkLaunch ) p ( vec_new [GkLaunch] )
+        : ~ b keep T
+        : b ok ( __lm_emit m p count pos0 kvlen causal logits_mode keep )
+        : b _r ( lk_run p )
+        ? & ok keep {
+            // the oldest shape makes room
+            ? >= ( vec_len [LmPlan] . m plans ) LM_PLANS { : ?LmPlan _old ( vec_remove [LmPlan] . m plans 0 ) } {}
+            ( vec_push [LmPlan] . m plans @ LmPlan { p count causal logits_mode ( mem_replace [( Vec i )] . m pl_rope ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_copy ( vec_new [i] ) ) ( mem_replace [( Vec i )] . m pl_attn ( vec_new [i] ) ) } )
+        } {}
+    }
+
+    // what the mode asks back: the logits (one row or the window), or the
+    // window's argmax ids and confidences — count·2 small values instead
+    // of count·vocab
+    : i _po ? . m prof_on ( __lm_prof_now m ) 0
     ? == logits_mode 1 {
-        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
-        : i last_row + . m xnd * * - count 1 ne 4
-        : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
-        : GpuBuffer lb ( gpu_buffer_view . m logitsd * . m n_vocab 4 )
-        : i _u2 ( gpu_download ( gpu_host_ptr . m logits_host ) lb )
+        : b _d ( gk_dbuf_download_host . m kit ( gk_buf_view . m logitsd 0 . m n_vocab ) . m logits_host )
     } {}
     ? == logits_mode 2 {
-        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
-        : b _q9 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
-        : GpuBuffer lb2 ( gpu_buffer_view . m logitsd * * count . m n_vocab 4 )
-        : i _u3 ( gpu_download ( gpu_host_ptr . m logits_host ) lb2 )
+        : b _d ( gk_dbuf_download_host . m kit ( gk_buf_view . m logitsd 0 * count . m n_vocab ) . m logits_host )
     } {}
-    // mode 3: greedy argmax + confidence on the DEVICE for every window
-    // position, so only count·(id,prob) come back — not count·vocab.
     ? == logits_mode 3 {
-        : i _po ? . m prof_on ( __lm_prof_now m ) 0
-        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
-        : b _q10 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
-        ( lk_argmax_conf . m ks . m logitsd . m amid_d . m amprob_d . m n_vocab count )
-        : GpuBuffer ib ( gpu_buffer_view . m amid_d * count 4 )
-        : i _u4 ( gpu_download ( gpu_host_ptr . m amid_h ) ib )
-        : GpuBuffer pb ( gpu_buffer_view . m amprob_d * count 4 )
-        : i _u5 ( gpu_download ( gpu_host_ptr . m amprob_h ) pb )
+        : b _d1 ( gk_dbuf_download_i . m kit . m amid_d . m amid_v )
+        : b _d2 ( gk_dbuf_download_host . m kit . m amprob_d . m amprob_h )
         ? . m prof_on { = . m prof_out_ns + . m prof_out_ns - ( __lm_prof_now m ) _po } {}
     } {}
 }
@@ -1675,7 +1653,7 @@ unsafe @ __lm_eval_core inout LlmImpl m ( Vec i ) ids i first i count i pos0 i k
 // softmax probability for window row `row`.
 @ llm_win_id Llm h i row → i {
     : LlmImpl m ( locked_take [LlmImpl] . h l )
-    : i r # i ( gpu_host_get_i32 . m amid_h row )
+    : i r ?? ( vec_get [i] . m amid_v row ) { T x → x F → 0 }
     ( locked_restore [LlmImpl] . h l m )
     ^ r
 }

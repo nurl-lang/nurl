@@ -6,39 +6,14 @@
 // two vertical pixels, giving a square-ish picture in any truecolor terminal
 // (gnome-terminal, kitty, xterm, … and over SSH). No X11, no SDL, no library.
 //
-// The frame is scaled to fit the terminal (size via TIOCGWINSZ) preserving
-// aspect, built into one String, and printed after homing the cursor so a
-// continuous capture loop overwrites in place like a video.
+// The frame is scaled to fit the terminal (stdlib's term_width /
+// term_height) preserving aspect, built into one String, and printed after
+// homing the cursor so a continuous capture loop overwrites in place like a
+// video.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/std/term.nu`
 $ `image.nu`
-
-// `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
-// stdlib/std/term.nu declares the same symbol, and one linker symbol
-// has one ABI: stating it with `i` where C says `int` is a different
-// function, which the compiler now rejects rather than miscompiling.
-& `c` @ ioctl i32 fd i req ... → i32
-
-& `c` @ nurl_poke_i32 *u base i idx i32 val → v
-
-& `c` @ nurl_peek_i32 *u base i idx → i32
-
-@ __TIOCGWINSZ → i { ^ 21523 }  // 0x5413; struct winsize { u16 row, col, xpx, ypx }
-
-: WinSz { i rows i cols }
-
-// Terminal (rows, cols) from ioctl on stdout; sensible fallback off a tty.
-unsafe @ __winsize → WinSz {
-    : ( Vec u ) wsv ( vec_zeroed [u] 8 )
-    : *u ws ( vec_data [u] wsv )
-    : i r ( ioctl # i32 1 ( __TIOCGWINSZ ) ws )
-    : i v ( nurl_peek_i32 ws 0 )  // [row:16][col:16] little-endian
-    : ~ i rows & v 65535
-    : ~ i cols & >> v 16 65535
-    ? | < r 0 == rows 0 { = rows 24 } {}
-    ? == cols 0 { = cols 80 } {}
-    ^ @ WinSz { rows cols }
-}
 
 // Push the decimal digits of n (0..255) onto a String.
 @ __push_num String s i n → v { ( string_push_str s ( nurl_str_int n ) ) }
@@ -91,9 +66,9 @@ unsafe @ __winsize → WinSz {
 @ img_show Image im → v {
     : i W ( img_w im )
     : i H ( img_h im )
-    : WinSz wsz ( __winsize )
-    : i cols . wsz cols
-    : i rows . wsz rows
+    // the terminal's size (80 × 24 off a tty)
+    : i cols ( term_width )
+    : i rows ( term_height )
 
     // Use the FULL terminal width (each cell = 1 px wide × 2 px tall), then
     // pick the row count that preserves aspect, capped to the window height.

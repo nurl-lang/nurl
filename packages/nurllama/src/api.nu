@@ -51,39 +51,91 @@ $ `stdlib/std/thread.nu`
 
 : ( Locked ? Llm ) g_api_llm ( __api_llm_blank )  // the resident model (F = none)
 : ~ i g_api_style 0
-: ~ s g_api_name ``
-: ~ s g_api_root ``
 
 // Config for the wizard-started server (`nurllama start`): the default
 // model the web UI chats with, the bearer token (empty = open access),
 // and the SQLite history path.
 : ~ i g_api_auth 0
-: ~ s g_api_token ``
-: ~ s g_api_model ``
-: ~ s g_api_histpath ``
 
-@ __api_set_token s tok → v { = g_api_token ( nurl_str_cat tok `` ) }
+// The server's text settings: the resident model's name (it changes as
+// requests load and unload models), the model store's root, and the
+// wizard's default model, bearer token, history path and --weights file.
+// Handlers run on many threads, so they live in a Locked struct and are
+// read as copies; as plain string globals, a model switch freed the name
+// another request was comparing against.
+: ApiCfg {
+    String name
+    String root
+    String token
+    String model
+    String histpath
+    String weights  // serve --weights (empty = none)
+}
 
-@ __api_set_model s m → v { = g_api_model ( nurl_str_cat m `` ) }
+@ __api_cfg0 → ( Locked ApiCfg ) {
+    ^ ( locked_new [ApiCfg] @ ApiCfg { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } )
+}
 
-@ __api_set_histpath s p → v { = g_api_histpath ( nurl_str_cat p `` ) }
+: ( Locked ApiCfg ) g_api_cfg ( __api_cfg0 )
 
-@ __api_set_name s name → v { = g_api_name ( nurl_str_cat name `` ) }
+// Setting `k` (0 name, 1 root, 2 token, 3 model, 4 histpath, 5 weights).
+@ __api_cfg_set i k s v → v {
+    : ~ ApiCfg c ( locked_take [ApiCfg] g_api_cfg )
+    ? == k 0 { = . c name ( string_from v ) } {}
+    ? == k 1 { = . c root ( string_from v ) } {}
+    ? == k 2 { = . c token ( string_from v ) } {}
+    ? == k 3 { = . c model ( string_from v ) } {}
+    ? == k 4 { = . c histpath ( string_from v ) } {}
+    ? == k 5 { = . c weights ( string_from v ) } {}
+    ( locked_restore [ApiCfg] g_api_cfg c )
+}
 
-@ api_set_root String root → v { = g_api_root ( nurl_str_cat ( string_data root ) `` ) }
+// A copy of setting `k`.
+@ __api_cfg_get i k → String {
+    : ~ ApiCfg c ( locked_take [ApiCfg] g_api_cfg )
+    : ~ String r ( string_new )
+    ? == k 0 { = r ( string_from ( string_data . c name ) ) } {}
+    ? == k 1 { = r ( string_from ( string_data . c root ) ) } {}
+    ? == k 2 { = r ( string_from ( string_data . c token ) ) } {}
+    ? == k 3 { = r ( string_from ( string_data . c model ) ) } {}
+    ? == k 4 { = r ( string_from ( string_data . c histpath ) ) } {}
+    ? == k 5 { = r ( string_from ( string_data . c weights ) ) } {}
+    ( locked_restore [ApiCfg] g_api_cfg c )
+    ^ r
+}
+
+@ __api_cfg_name → String { ^ ( __api_cfg_get 0 ) }
+
+@ __api_cfg_root → String { ^ ( __api_cfg_get 1 ) }
+
+@ __api_cfg_token → String { ^ ( __api_cfg_get 2 ) }
+
+@ __api_cfg_model → String { ^ ( __api_cfg_get 3 ) }
+
+@ __api_cfg_histpath → String { ^ ( __api_cfg_get 4 ) }
+
+@ __api_cfg_weights → String { ^ ( __api_cfg_get 5 ) }
+
+@ __api_set_token s tok → v { ( __api_cfg_set 2 tok ) }
+
+@ __api_set_model s m → v { ( __api_cfg_set 3 m ) }
+
+@ __api_set_histpath s p → v { ( __api_cfg_set 4 p ) }
+
+@ __api_set_name s name → v { ( __api_cfg_set 0 name ) }
+
+@ api_set_root String root → v { ( __api_cfg_set 1 ( string_data root ) ) }
 
 @ __api_unload → v {
     ( locked_set [? Llm] g_api_llm @ ?Llm { F } )
-    = g_api_name ( nurl_str_cat `` `` )
+    ( __api_cfg_set 0 `` )
 }
 
 // serve --weights: when set, every model this server opens takes its
 // tensors from this safetensors file instead of the GGUF's own (the GGUF
 // still supplies the hyperparameters and the tokenizer) — the API twin of
 // `run --weights`, for serving a finetuned/merged checkpoint. Empty = none.
-: ~ s g_api_weights ``
-
-@ api_set_weights s w → v { = g_api_weights ( nurl_str_cat w `` ) }
+@ api_set_weights s w → v { ( __api_cfg_set 5 w ) }
 
 // One more owner of the resident model (a handler runs after __api_ensure
 // loaded it).
@@ -107,9 +159,9 @@ $ `stdlib/std/thread.nu`
 
 // Load `name` unless it is already resident. Empty error = success.
 @ __api_ensure s name → String {
-    ? & ( __api_resident ) != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
+    ? & ( __api_resident ) != 0 ( nurl_str_eq ( string_data ( __api_cfg_name ) ) name ) { ^ ( string_new ) } {}
     ( __api_unload )
-    : String rootS ( string_from g_api_root )
+    : String rootS ( __api_cfg_root )
     : ?String rp ( nl_resolve rootS name )
     ?? rp {
         T path → {
@@ -121,8 +173,8 @@ $ `stdlib/std/thread.nu`
                 }
                 F _e → {}
             }
-            : !Llm String lr ? > ( nurl_str_len g_api_weights ) 0
-            ( llm_open_st ( string_data path ) g_api_weights 0 )
+            : !Llm String lr ? > ( nurl_str_len ( string_data ( __api_cfg_weights ) ) ) 0
+            ( llm_open_st ( string_data path ) ( string_data ( __api_cfg_weights ) ) 0 )
             ( llm_open ( string_data path ) 0 )
             ?? lr {
                 T m → {
@@ -370,7 +422,7 @@ i npredict f temp i topk f topp i seed → b {
             // the request's own model, or the server's default
             : ~ String model ( __api_str j `model` `` )
             ? > ( string_len model ) 0 {} {
-                = model ( string_from g_api_model )
+                = model ( __api_cfg_model )
             }
             ? > ( string_len model ) 0 {} {
                 ^ ( __api_error_chunked c 400 `missing "model" and the server has no default — start it as: nurllama serve <model>` )
@@ -425,8 +477,8 @@ i npredict f temp i topk f topp i seed → b {
 
 @ __api_tags HttpRequest req Params ps → HttpResponse {
     : Json arr ( json_arr_new )
-    : String rootS ( string_from g_api_root )
-    : String mdir ( path_join g_api_root `manifests` )
+    : String rootS ( __api_cfg_root )
+    : String mdir ( path_join ( string_data ( __api_cfg_root ) ) `manifests` )
     ?? ( dir_list ( string_data mdir ) ) {
         T names → {
             : ~ i k 0
@@ -471,7 +523,7 @@ i npredict f temp i topk f topp i seed → b {
         F _ → { ^ ( response_text 400 `{"error":"invalid JSON body"}\n` ) }
         T j → {
             : String model ( __api_str j `model` `` )
-            : String rootS ( string_from g_api_root )
+            : String rootS ( __api_cfg_root )
             : ?String rp ( nl_resolve rootS ( string_data model ) )
             ?? rp {
                 F → {
@@ -528,7 +580,7 @@ i npredict f temp i topk f topp i seed → b {
     ?? ( header_get . req headers `Authorization` ) {
         T h → {
             : String want ( string_from `Bearer ` )
-            ( string_push_str want g_api_token )
+            ( string_push_str want ( string_data ( __api_cfg_token ) ) )
             : b ok ( nurl_str_eq ( string_data h ) ( string_data want ) )
             ^ ok
         }
@@ -601,10 +653,10 @@ i npredict f temp i topk f topp i seed → b {
 // through its chat template, and return the assistant's reply — or
 // the reason it cannot (no model configured / the load failed).
 @ __web_reply Json history s new_content → !String String {
-    ? == 0 ( nurl_str_len g_api_model ) {
+    ? == 0 ( nurl_str_len ( string_data ( __api_cfg_model ) ) ) {
         ^ @ !String String { F ( string_from `no model is configured — restart the server with a model: nurllama serve MODEL (or run the setup wizard: nurllama start)` ) }
     } {}
-    : String lerr ( __api_ensure g_api_model )
+    : String lerr ( __api_ensure ( string_data ( __api_cfg_model ) ) )
     ? > ( string_len lerr ) 0 {
         ^ @ !String String { F lerr }
     } {}
@@ -637,10 +689,10 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : b _e ( hist_ensure_client g_api_histpath ( string_data guid ) ( hist_now ) )
+    : b _e ( hist_ensure_client ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( hist_now ) )
     : Json o ( json_obj_new )
     : b _1 ( json_obj_set o `client` ( json_str_lit ( string_data guid ) ) )
-    : b _2 ( json_obj_set o `model` ( json_str_lit g_api_model ) )
+    : b _2 ( json_obj_set o `model` ( json_str_lit ( string_data ( __api_cfg_model ) ) ) )
     : String txt ( json_stringify o )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
     ^ r
@@ -651,7 +703,7 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : Json arr ( hist_list_conversations g_api_histpath ( string_data guid ) )
+    : Json arr ( hist_list_conversations ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) )
     : String txt ( json_stringify arr )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
     ^ r
@@ -669,12 +721,12 @@ i npredict f temp i topk f topp i seed → b {
         }
         F → {}
     }
-    : String owner ( hist_conversation_owner g_api_histpath conv )
+    : String owner ( hist_conversation_owner ( string_data ( __api_cfg_histpath ) ) conv )
     : b owns ( nurl_str_eq ( string_data owner ) ( string_data guid ) )
     ? owns {} {
         ^ ( response_text 404 `{"error":"not found"}\n` )
     }
-    : Json arr ( hist_get_messages g_api_histpath conv )
+    : Json arr ( hist_get_messages ( string_data ( __api_cfg_histpath ) ) conv )
     : String txt ( json_stringify arr )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
     ^ r
@@ -692,7 +744,7 @@ i npredict f temp i topk f topp i seed → b {
         }
         F → {}
     }
-    : b ok ( hist_delete_conversation g_api_histpath conv ( string_data guid ) )
+    : b ok ( hist_delete_conversation ( string_data ( __api_cfg_histpath ) ) conv ( string_data guid ) )
     : Json o ( json_obj_new )
     : b _1 ( json_obj_set o `ok` ( json_bool ok ) )
     : String txt ( json_stringify o )
@@ -707,7 +759,7 @@ i npredict f temp i topk f topp i seed → b {
     ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
     : HttpResponse resp ( response_new 200 )
     : String guid ( __web_guid req resp )
-    : b _e ( hist_ensure_client g_api_histpath ( string_data guid ) ( hist_now ) )
+    : b _e ( hist_ensure_client ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( hist_now ) )
     : ~ i rc_status 200
     : ~ String out_txt ( string_new )
     ?? ( __api_body_json req ) {
@@ -728,18 +780,18 @@ i npredict f temp i topk f topp i seed → b {
                 }
                 // an unknown or someone-else's conversation starts a new one
                 ? >= conv 0 {
-                    : String own ( hist_conversation_owner g_api_histpath conv )
+                    : String own ( hist_conversation_owner ( string_data ( __api_cfg_histpath ) ) conv )
                     ? ( nurl_str_eq ( string_data own ) ( string_data guid ) ) {} { = conv -1 }
                 } {}
                 ? < conv 0 {
-                    = conv ( hist_new_conversation g_api_histpath ( string_data guid ) g_api_model ( hist_now ) )
+                    = conv ( hist_new_conversation ( string_data ( __api_cfg_histpath ) ) ( string_data guid ) ( string_data ( __api_cfg_model ) ) ( hist_now ) )
                 } {}
                 // the prior turns (before adding this one) are the context
-                : Json history ( hist_get_messages g_api_histpath conv )
-                : b _u ( hist_add_message g_api_histpath conv `user` ( string_data content ) ( hist_now ) )
+                : Json history ( hist_get_messages ( string_data ( __api_cfg_histpath ) ) conv )
+                : b _u ( hist_add_message ( string_data ( __api_cfg_histpath ) ) conv `user` ( string_data content ) ( hist_now ) )
                 ?? ( __web_reply history ( string_data content ) ) {
                     T reply → {
-                        : b _a ( hist_add_message g_api_histpath conv `assistant` ( string_data reply ) ( hist_now ) )
+                        : b _a ( hist_add_message ( string_data ( __api_cfg_histpath ) ) conv `assistant` ( string_data reply ) ( hist_now ) )
                         : Json o ( json_obj_new )
                         : b _1 ( json_obj_set o `conversation_id` ( json_int conv ) )
                         : b _2 ( json_obj_set o `reply` ( json_str_lit ( string_data reply ) ) )

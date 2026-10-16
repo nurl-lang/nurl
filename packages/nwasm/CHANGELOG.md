@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.1.2] — 2026-10-16
+
+- The CLI reads an exported function's parameter and result types through `module_func_sig`, a safe accessor that returns the `FuncType` (copied) or F. Its `__param_ty` / `__result_ty_at` / `__result_count` took an opaque type pointer and stayed `unsafe`; they take the `?FuncType` now. The opaque-pointer `module_func_type`, which nothing else called, is gone (the interpreter keeps its internal `_module_func_type`). `unsafe` functions: main.nu 3 → 0, module.nu 3 → 2. Invoke mode prints the same results.
+
 ## [3.1.1] — 2026-10-15
 
 - `unsafe` functions: interp.nu 95 → 90, module.nu 4 → 3 (the package: 102 → 96). `f32/f64.nearest` use the stdlib's `float_round_even` instead of declaring libm `rint` itself. `random_get` draws through the stdlib's `rand_bytes`, which fails closed. Block-type arities read their `FuncType` with `box_get`. `functype_eq` takes its two types by value. `__param_ty`, `__result_ty_at` and `__result_count` needed no `unsafe` at all. Suites are byte-identical under every engine, and interpreted `call_indirect` runs 0.15 % fewer instructions.

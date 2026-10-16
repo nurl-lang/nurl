@@ -259,14 +259,20 @@ fi
 
 # Checked kernels: the subset's verdicts, and one run on the CPU backend.
 if $NURL tests/checkedcheck.nu "$WORK/checkedcheck" >/dev/null 2>"$WORK/ckbuild.err"; then
-    NURL_GPU=cpu "$WORK/checkedcheck" > "$WORK/checked.out" 2>&1
-    if grep -q "^SKIP\|need a C++ compiler" "$WORK/checked.out"; then
-        echo "  (checked kernels skipped — no backend)"
-    elif grep -q "^checked: all passed" "$WORK/checked.out"; then
-        ok "checked kernels: $(grep -c '^ok ' "$WORK/checked.out") cases"
-    else
-        bad "checked kernels"; grep '^FAIL' "$WORK/checked.out" | sed 's/^/    /'
-    fi
+    # On the CPU backend, and on CUDA when there is a device: the subset's
+    # loads, shuffles and half conversions are written once per backend.
+    for be in cpu default; do
+        if [ $be = cpu ]; then NURL_GPU=cpu "$WORK/checkedcheck" > "$WORK/checked.out" 2>&1
+        else "$WORK/checkedcheck" > "$WORK/checked.out" 2>&1; fi
+        if [ $be = default ] && ! grep -q "on cuda\|cuda" "$WORK/def.out" 2>/dev/null; then continue; fi
+        if grep -q "^SKIP\|need a C++ compiler" "$WORK/checked.out"; then
+            echo "  (checked kernels skipped on $be — no backend)"
+        elif grep -q "^checked: all passed" "$WORK/checked.out"; then
+            ok "checked kernels ($be): $(grep -c '^ok ' "$WORK/checked.out") cases"
+        else
+            bad "checked kernels ($be)"; grep '^FAIL' "$WORK/checked.out" | sed 's/^/    /'
+        fi
+    done
 else
     bad "checkedcheck build"; tail -4 "$WORK/ckbuild.err"
 fi

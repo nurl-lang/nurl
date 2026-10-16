@@ -205,7 +205,6 @@ static void __nurl_ensure(int n) {
     ( string_push_char needle 40 )
     : i hit ( nurl_str_find src ( string_data needle ) )
     : i nlen ( string_len needle )
-    ( string_free needle )
     : ~ i op - 0 1
     ? >= hit 0 { = op + hit - nlen 1 } {
         : ~ i i 0
@@ -233,14 +232,6 @@ static void __nurl_ensure(int n) {
     ^ out
 }
 
-@ __tmp_path s name s ext → String {
-    : String p ( string_with_cap 64 )
-    ( string_push_str p `/tmp/nurlcpu_` )
-    ( string_push_str p name )
-    ( string_push_str p ext )
-    ^ p
-}
-
 @ __write_file s path s content → i {
     ?? ( write_file path content ) { T _ → ^ 0 F _ → ^ - 0 1 }
 }
@@ -252,7 +243,6 @@ static void __nurl_ensure(int n) {
     ?? ( env_get `NURL_GPU_CACHE` ) {
         T v → {
             : b off ? ( nurl_str_eq ( string_data v ) `off` ) T F
-            ( string_free v )
             ^ off
         }
         F → { ^ F }
@@ -267,7 +257,6 @@ static void __nurl_ensure(int n) {
     ?? ( env_get `XDG_CACHE_HOME` ) {
         T v → {
             : String p ( path_join ( string_data v ) `nurl-gpu` )
-            ( string_free v )
             ^ p
         }
         F → {}
@@ -275,8 +264,6 @@ static void __nurl_ensure(int n) {
     : String home ( env_var_or `HOME` `.` )
     : String c ( path_join ( string_data home ) `.cache` )
     : String p ( path_join ( string_data c ) `nurl-gpu` )
-    ( string_free home )
-    ( string_free c )
     ^ p
 }
 
@@ -300,22 +287,17 @@ static void __nurl_ensure(int n) {
     ( string_push_char keyed 10 )
     ( string_push_str keyed src )
     : ( Vec u ) sb ( bytes_from_str ( string_data keyed ) )
-    ( string_free keyed )
     : String hex ( blake3_hex sb )
-    ( vec_free [u] sb )
     : String nm ( string_from `cpu-` )
     ( string_push_str nm ( string_data hex ) )
     ( string_push_str nm `.so` )
-    ( string_free hex )
     : String p ( path_join ( string_data dir ) ( string_data nm ) )
-    ( string_free dir )
-    ( string_free nm )
     ^ p
 }
 
 // Compile CUDA-C `src` (entry `name`) to a host shared object and dlopen it.
 // Returns the dlopen handle (0 on failure), analogous to cuda_module_load.
-unsafe @ cpu_compile s src s name → *u {
+raw @ cpu_compile s src s name → *u {
     : String casts ( __parse_casts src name )
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
@@ -346,7 +328,6 @@ unsafe @ cpu_compile s src s name → *u {
         ( string_push_str c ( string_data args ) )
         ( string_push_str c `);\n}\n}\n}\n}\n` )
     }
-    ( string_free casts )
 
     // Cache key: the hash of the GENERATED source (kernel + shim +
     // launcher), so an edited kernel misses and rebuilds while a
@@ -355,29 +336,39 @@ unsafe @ cpu_compile s src s name → *u {
     : ~ b use_cache ! ( __cpu_cache_off )
     : ~ String sopath ( string_new )
     ? use_cache {
-        ( string_free sopath )
         = sopath ( __cpu_cache_path ( string_data c ) )
         ? ( file_exists ( string_data sopath ) ) {
             : *u h0 ( dlopen ( string_data sopath ) 2 )
             ? != # i h0 0 {
                 // Cache hit — the generated source was only needed to
-                // compute the key; free it on the way out.
-                ( string_free c )
-                ( string_free sopath )
+                // compute the key.
                 ^ h0
             } {}
         } {}
-    } {
-        ( string_free sopath )
-        = sopath ( __tmp_path name `.so` )
+    } {}
+    // Every compile builds in a directory of its own: the source, the
+    // object and the compiler's log are never a path another process (or
+    // thread) compiling a same-named kernel writes too. They were shared
+    // /tmp names, and two compiles could build each other's source into a
+    // cache entry keyed by the wrong hash — a kernel whose arguments are
+    // not the ones its caller lays out. The object reaches the cache by an
+    // atomic rename (the build directory sits in the cache directory, on
+    // the same filesystem), so no process dlopens a half-written one.
+    : String bdir_parent ? use_cache ( __cpu_cache_dir ) ( string_from `/tmp` )
+    : !v IoErr _mk ( dir_create_all ( string_data bdir_parent ) )
+    : String bdir ?? ( fs_tempdir ( string_data bdir_parent ) `.nurlcpu-build-` ) {
+        T d → d
+        F _e → {
+            ( nurl_eprint `[gpu/cpu] cannot make a build directory in ` ) ( nurl_eprint ( string_data bdir_parent ) ) ( nurl_eprint `\n` )
+            ^ # *u 0
+        }
     }
-    : String cpath ( __tmp_path name `.cc` )
+    : String cpath ( path_join ( string_data bdir ) `k.cc` )
+    : String opath ( path_join ( string_data bdir ) `k.so` )
+    : String lpath ( path_join ( string_data bdir ) `cc.log` )
     : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
-    ( string_free c )
     ? != 0 wr {
         ( nurl_eprint `[gpu/cpu] cannot write ` ) ( nurl_eprint ( string_data cpath ) ) ( nurl_eprint `\n` )
-        ( string_free cpath )
-        ( string_free sopath )
         ^ # *u 0
     } {}
 
@@ -397,23 +388,45 @@ unsafe @ cpu_compile s src s name → *u {
         ( string_push_str cmd `${CXX:-c++} ` )
         ( string_push_str cmd ( __cpu_cc_flags cand ) )
         ( string_push_str cmd ` -ffp-contract=off -fPIC -shared -o ` )
-        ( string_push_str cmd ( string_data sopath ) )
+        ( string_push_str cmd ( string_data opath ) )
         ( string_push_char cmd 32 )
         ( string_push_str cmd ( string_data cpath ) )
-        ( string_push_str cmd ` 2>/tmp/nurlcpu_cc.log` )
+        ( string_push_str cmd ` 2>` )
+        ( string_push_str cmd ( string_data lpath ) )
         = rc # i ( system ( string_data cmd ) )
-        ( string_free cmd )
         = cand + cand 1
     }
-    ( string_free cpath )
     ? != rc 0 {
-        ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name )
-        ( nurl_eprint ` (see /tmp/nurlcpu_cc.log; need a C++ compiler on PATH)\n` )
-        ( string_free sopath )
+        // The shell's 127: no compiler at all. Anything else is the
+        // compiler refusing this kernel, and its own words say why.
+        ? == / rc 256 127 {
+            ( nurl_eprint `[gpu/cpu] no C++ compiler on PATH (set CXX) for ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
+        } {
+            ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name ) ( nurl_eprint `:\n` )
+            ?? ( read_file ( string_data lpath ) ) {
+                T log → {
+                    : i n ( string_len log )
+                    ( nurl_eprint ( string_data ( string_substr log 0 ? > n 2000 2000 n ) ) )
+                    ? > n 2000 { ( nurl_eprint `\n…\n` ) } {}
+                }
+                F _e → {}
+            }
+        }
+        : !v IoErr _rm0 ( dir_remove_all ( string_data bdir ) )
         ^ # *u 0
     } {}
-    : *u handle ( dlopen ( string_data sopath ) 2 )  // RTLD_NOW
-    ( string_free sopath )
+    // Into the cache, whole; without one (or should the rename fail) the
+    // object is opened where it was built. Either way the build directory
+    // goes: an opened object stays mapped after its file is removed.
+    : ~ String lib ( string_from ( string_data opath ) )
+    ? use_cache {
+        ?? ( fs_rename ( string_data opath ) ( string_data sopath ) ) {
+            T _ → { = lib ( string_from ( string_data sopath ) ) }
+            F _e → {}
+        }
+    } {}
+    : *u handle ( dlopen ( string_data lib ) 2 )  // RTLD_NOW
+    : !v IoErr _rm ( dir_remove_all ( string_data bdir ) )
     ^ handle
 }
 
@@ -435,13 +448,13 @@ unsafe @ __copy_words * u dst * u src i bytes → v {
     ~ < k words { ( nurl_poke_i32 dst k ( nurl_peek_i32 src k ) ) = k + k 1 }
 }
 
-unsafe @ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
+raw @ cpu_htod i dst * u host i bytes → i { ( __copy_words # *u dst host bytes ) ^ 0 }
 
-unsafe @ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
+raw @ cpu_dtoh * u host i src i bytes → i { ( __copy_words host # *u src bytes ) ^ 0 }
 
 // Run a compiled kernel: `fn` is the __cpu_launch pointer, `params` the same
 // void** array gpu_launch builds for CUDA. 0 == success.
-unsafe @ cpu_launch i fn i params i grid i block → i {
+raw @ cpu_launch i fn i params i grid i block → i {
     ( nurl_cpu_launch # *u fn # *u params grid block )
     ^ 0
 }
@@ -488,7 +501,6 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
 @ cpu_static_unit s ename s src → String {
     : String srcs ( string_from src )
     : String cleaned ( string_replace srcs `extern "C" ` `` )
-    ( string_free srcs )
     : String casts ( __parse_casts src ename )
     : String out ( string_with_cap + 1024 ( string_len cleaned ) )
     ( string_push_str out ( string_data cleaned ) )
@@ -499,8 +511,6 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
     ( string_push_char out 40 )
     ( string_push_str out ( string_data casts ) )
     ( string_push_str out `);\n}\n}\n` )
-    ( string_free casts )
-    ( string_free cleaned )
     ^ out
 }
 

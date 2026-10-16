@@ -2,6 +2,39 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.22.0] — 2026-10-16
+
+- **Every kernel is a gpukit checked kernel.** The 39 CUDA-C kernels launched over raw device addresses are gone: a weight is a byte buffer (`GkBBuf`) read with byte, 16- and 32-bit word loads, activations are `GkBuf`s, and every load and store is bounds-checked. `unsafe` 3 → 0, `raw` 18 → 0. The engine holds no device address.
+- **Same bits.** Each new kernel was compared with the raw one it replaces on random inputs over every routing the backend takes (103 cases on CUDA, 77 on the CPU backend), all identical. Logits, greedy tokens and prefill hashes are identical on Qwen3-0.6B Q8_0, Qwen3-4B Q8_0, Qwen3-14B Q4_K_M and SmolLM-135M Q4_K_M, on CUDA and on the CPU backend.
+- **Faster on an RTX 4090:**
+
+  | Model | Decode, ms a token | Prompt of 150 |
+  |---|---|---|
+  | Qwen3-14B Q4_K_M | 56.7 → 50.7 | 6.3 → 5.3–5.6 s |
+  | Qwen3-0.6B Q8_0 | 3.81 → 3.63 | 75.2 → 74.5 ms (repeated) |
+  | Qwen3-4B Q8_0 | 9.93 → 9.89 | 532 → 539 ms |
+  | SmolLM-135M Q4_K_M | 2.84 → 2.48 | 31.5 → 29.4 ms (repeated) |
+
+  - The decode attention is one block per position and head: the block's maximum through shared memory, each softmax weight computed once into a shared tile, and every thread summing in position order — the old kernel's bits, without each of the head's threads recomputing every weight (17.8 → 10.0 µs a layer on Qwen3-0.6B). The score pass and RMSNorm stay 4–6 % behind their raw originals (11.8 → 12.5 µs, 9.3 → 9.7 µs).
+  - Q6_K's matvec is 26–28 % faster than the raw one and Q4_K / Q5_K are level or faster. A block is a window: every offset inside it is a constant plus a loop counter, so no check is left in the block.
+  - Up to four call shapes stay recorded (a prompt's 64-position chunks, its remainder, decode), each replayed with the new position. The single kept plan used to be recorded again twice per prompt, as chunk and remainder took turns.
+  - A chunk's embedding rows go to the device in one copy rather than one per row.
+- **The CPU backend is faster too** (i7-5930K, 8 threads; identical hashes):
+
+  | Model | Decode, ms a token | Prompt of 150 |
+  |---|---|---|
+  | Qwen3-0.6B Q8_0 | 109.4 → 84.5 | 6.73 → 5.53 s |
+  | SmolLM-135M Q4_K_M | 41.8 → 32.9 | 4.63 → 3.43 s |
+
+  The host adds one float a cycle on one port and converts integers on the same one, so it gets its own matvecs (routed when the backend is not CUDA). Each keeps the GPU form's order of additions — the same bits — but computes the products (dequantised value × x) in loops the host compiler vectorises, through windows checked once a block, and runs independent blocks' sums side by side where a format sums each block on its own. The batch matvecs (q8_0, f32) read a 2-D window and write their 32 products out, so the compiler vectorises across positions as it did the raw kernels. Every format is level with its raw original or faster (single position: q8_0 1.6×, q5_K 1.6×, q5_0 1.35×). RMSNorm and the attention scores take a row per thread there (the sum once, not once per element), and the attention's weighted sum stays a thread per output (a block barrier is a fiber switch on the CPU backend). The q8_0 repack at load copies a row per thread.
+- A first prompt costs a few milliseconds more than before (each kernel is checked and each call shape recorded on first use) and loading costs less (13 kernel modules loaded instead of 39).
+- `finetune.nu`: four locals that shadowed outer names are renamed.
+
+## [0.21.3] — 2026-10-15
+
+- The API server's text settings (the resident model's name, the store root, the wizard's model, token and history path, `--weights`) are a `( Locked ApiCfg )` read as copies. As string globals they were replaced at run time (a model switch renames the resident model) while other requests read them, and the compiler now refuses that in safe code.
+- `llm_open_st` is no longer `unsafe` (4 → 3). Each layer tensor is uploaded first and then appended to the model's per-layer columns by `__lm_put`, which takes only those two columns. Before, one call took the whole model `inout` together with two of its own columns, and the borrow checker rightly refused it: through the model, the callee could have replaced a column it was also holding. Inference is unchanged: the 22 inference checks (numpy logits and greedy text, CPU/GPU parity, K-quants, gemma3, qwen2) pass.
+
 ## [0.21.2] — 2026-10-15
 
 - Weight uploads are safe code. GGUF tensors are uploaded from `gguf_tensor_bytes` views with `gpu_upload_bytes`, dequantised ones with `gpu_upload_vec`, and the router bias with a new `__lm_scratch_from`. Only the q8_0 repack kernel launch stays `unsafe`, in its own helper. `unsafe` functions: 6 → 4.

@@ -1,5 +1,33 @@
 # Changelog
 
+## [3.3.0] — 2026-10-16
+
+The engine runs on packages/gpukit's checked kernels and has no `unsafe` and no `raw` function left (9 `unsafe` and 13 `raw` in 3.2.1). Every kernel reaches device memory only through bounds-checked loads and stores over the buffers its launcher binds, and every device buffer is a `GkBuf` (a `GkHBuf` for a matrix kept in the checkpoint's own halves) instead of an integer address. A decode step past the KV cache's end, which used to write past it, now stores nothing.
+
+It is faster as well. Measured on an RTX 4090 (one 30-second window, then 150 greedy tokens):
+
+| Model | Encoder + cross K/V | Decode, per token |
+|---|---|---|
+| large-v3 (ggml) | 203 → 142 ms | 7.97 → 3.89 ms |
+| large-v3-turbo | 188 → 128 ms | 1.20 → 0.63 ms |
+| tiny | 12.3 → 5.2 ms | 367 → 361 µs |
+
+The 150-token greedy streams are identical, and the transcripts of 14 runs (tiny, distil-large-v3, turbo and large-v3; safetensors and ggml; `--timestamps`, `--vad`, the CPU backend) are byte-identical to 3.2.1. Where the time came from:
+
+- **The stride-2 conv1d was 20 % of the encoder.** It gave each thread one output and had it walk its own weight row three floats apart. On CUDA it is now an implicit GEMM through the tiled matmul, which gathers its A slab from the frames around each output: 40 ms → 0.8 ms on large-v3. The sum is the same terms in another order, so the encoder output differs in the last bits (4·10⁻⁶ relative). The CPU backend keeps the direct form.
+- **Half weights are converted by the hardware** (gpukit's `cvt.f32.f16`) instead of a branchy software conversion at every load. The decoder's matvecs are 3× faster.
+- **Recorded plans.** The encoder, the cross-attention projections and one decoder step are recorded when the model opens and replayed. A step only updates its token, position and key count (`gk_launch_set_i64`).
+- **Fewer kernels per decoder layer, 21 → 15, same arithmetic in the same order.** Each residual add is done by the LayerNorm that follows it, fc1's GELU is applied as it stores, k and v are written straight into their row of the KV cache, and the token and position embeddings are one kernel.
+- The fused attention reads its key and value tiles with 128-bit shared loads (1.08 → 0.98 ms per encoder layer), and the argmax folds with warp shuffles.
+- **Fixed: the weight arena was never used.** A carve sized above zero took its own allocation, so a model was ~1,300 device allocations instead of ~40. The arena works now: opening and closing large-v3 takes 0.90 s where it took 0.99 s, turbo 0.55 s where it took 0.59 s.
+
+`tests/whisper_test.sh` takes its files from `WHISPER_TEST_CACHE` when that is set and never touches the network then. Requires gpukit 0.11.12. `gg_ptr`, which nothing called, is gone.
+
+## [3.2.1] — 2026-10-15
+
+- **Fixed: WebSocket streams shared their settings.** The sample format and the language a stream sends in its config message lived in two globals. Two streams open at once took each other's format, so float32 audio was decoded as PCM16, and each other's language; one could also free the language string the other was transcribing with. Each connection now keeps its own `WsCfg`.
+- The server's model directory, default language and token are a `( Locked SrvCfg )` that requests and the unload reaper read as copies. As string globals they were replaced and reset while other threads could read them, which the compiler now refuses in safe code.
+
 ## [3.2.0] — 2026-10-15
 
 - The load queue holds device views and tensor indices instead of raw host addresses. At flush it builds checked views of the mapped file (ggml or safetensors) and sends them with gpu 0.17.2's `gpu_upload_views`, still one batch. Host reads of the encoder output, logits and argmax go through gpu's bounds-checked `gpu_host_get_f32` / `gpu_host_get_i32`. `unsafe` functions: 13 → 9.

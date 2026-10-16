@@ -45,12 +45,28 @@ $ `src/run.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/option.nu`
 
-: ~ s g_srv_lang ``
 : ~ b g_srv_vad F
 : ~ b g_srv_ts F
 : ~ i g_srv_max 0
 : ~ f g_srv_nospeech 0.6
-: ~ s g_srv_token ``  // empty = open server (loopback default)
+
+// The server's text settings: the model argument (kept for the reloads),
+// the default language, and the bearer token (empty = open server, the
+// loopback default). Set before the port opens; requests and the unload
+// reaper read copies. (As string globals, the compiler cannot see that
+// nothing replaces them while another thread reads them, and reset at the
+// end they would be.)
+: SrvCfg {
+    String dir
+    String lang
+    String token
+}
+
+@ __srv_cfg0 → ( Locked SrvCfg ) { ^ ( locked_new [SrvCfg] @ SrvCfg { ( string_new ) ( string_new ) ( string_new ) } ) }
+
+: ( Locked SrvCfg ) g_srv_cfg ( __srv_cfg0 )
+
+@ __srv_cfg → SrvCfg { ^ ( locked_get [SrvCfg] g_srv_cfg ) }
 
 // ── the model as a lease: loaded on demand, released when idle ──────
 //
@@ -88,8 +104,6 @@ $ `stdlib/core/option.nu`
 
 : ( Locked ? Tok ) g_srv_tok ( __srv_tok_blank )  // one owner of the tokenizer, kept while serving
 
-: ~ s g_srv_dir ``  // the model argument, kept for the reloads
-
 // One more owner of the loaded model, for a request or a stream that holds
 // `busy` (the reaper leaves a held model alone).
 @ __srv_model → Whisper {
@@ -122,14 +136,16 @@ $ `stdlib/core/option.nu`
     ( locked_restore [SrvState] g_srv st )
 }
 
-// Open the model at g_srv_dir into the state (taken by the caller). The
+// Open the model at the configured dir into the state (taken by the caller). The
 // tokenizer is not rebuilt: it was made once, before the port opened, and
 // a vocabulary does not change between loads of the same file.
 @ __srv_load inout SrvState st → b {
     : i t0 ( monotonic_ns )
     : ~ b ok F
-    ? ( _wh_is_ggml g_srv_dir ) {
-        ?? ( wh_open_ggml g_srv_dir ) {
+    : SrvCfg cf ( __srv_cfg )
+    : s dir ( string_data . cf dir )
+    ? ( _wh_is_ggml dir ) {
+        ?? ( wh_open_ggml dir ) {
             T w → {
                 = . st w @ ?Whisper { T w }
                 = ok T
@@ -139,8 +155,8 @@ $ `stdlib/core/option.nu`
             }
         }
     } {
-        : String cfg ( _wh_path g_srv_dir `config.json` )
-        : String wts ( _wh_path g_srv_dir `model.safetensors` )
+        : String cfg ( _wh_path dir `config.json` )
+        : String wts ( _wh_path dir `model.safetensors` )
         ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
             T w → {
                 = . st w @ ?Whisper { T w }
@@ -261,13 +277,15 @@ $ `stdlib/core/option.nu`
 // upgrade or an <img>/fetch to a bare URL, so the query form is the one
 // that works everywhere).
 @ __srv_authed HttpRequest req → b {
-    ? == ( nurl_str_len g_srv_token ) 0 { ^ T } {}
+    : SrvCfg cf ( __srv_cfg )
+    : s tok ( string_data . cf token )
+    ? == ( nurl_str_len tok ) 0 { ^ T } {}
     : ~ b ok F
     ?? ( header_get . req headers `authorization` ) {
         T hv → {
             : s h ( string_data hv )
             ? & > ( nurl_str_len h ) 7 != 0 ( nurl_str_starts h `Bearer ` ) {
-                ? ( __srv_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) g_srv_token ) { = ok T } {}
+                ? ( __srv_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) tok ) { = ok T } {}
             } {}
         }
         F → {}
@@ -275,7 +293,7 @@ $ `stdlib/core/option.nu`
     ? ok { ^ T } {}
     : String qt ( __srv_query_token ( string_data . req query ) )
     ? > ( string_len qt ) 0 {
-        ? ( __srv_tok_eq ( string_data qt ) g_srv_token ) { = ok T } {}
+        ? ( __srv_tok_eq ( string_data qt ) tok ) { = ok T } {}
     } {}
     ^ ok
 }
@@ -411,7 +429,8 @@ $ `stdlib/core/option.nu`
             ? == 0 ( vec_len [u] wav ) {
                 ^ ( __srv_err 400 `multipart form has no 'file' field` )
             } {}
-            : ~ s lang g_srv_lang
+            : SrvCfg cf ( __srv_cfg )
+            : ~ s lang ( string_data . cf lang )
             ? > ( string_len lang_s ) 0 { = lang ( string_data lang_s ) } {}
             : b vs ? ( nurl_str_eq ( string_data vad_s ) `true` ) T F
             : b ts2 ? ( nurl_str_eq ( string_data ts_s ) `true` ) T F
@@ -436,7 +455,8 @@ $ `stdlib/core/option.nu`
         }
         = k + k 1
     }
-    ^ ( __srv_run wav g_srv_lang g_srv_vad g_srv_ts F )
+    : SrvCfg cf2 ( __srv_cfg )
+    ^ ( __srv_run wav ( string_data . cf2 lang ) g_srv_vad g_srv_ts F )
 }
 
 // Where the test page lives on disk. Resolution mirrors packages/anomaly's
@@ -534,19 +554,25 @@ $ `stdlib/core/option.nu`
 // port, not two: the fork needs a second listener because its HTTP and WS
 // stacks cannot share one, and ours are the same stack by construction.
 
-: ~ i g_ws_f32 0  // 1 = client sends float32 frames, else PCM16
-: ~ s g_ws_lang ``  // per-connection language override (`` = server default)
+// One stream's settings, from its config messages. They belong to the
+// connection: as globals, two streams open at once took each other's
+// sample format and language (and one could free the language string the
+// other was transcribing with).
+: WsCfg {
+    b f32  // the client sends float32 frames, else PCM16
+    String lang  // the language override ("" = the server's default)
+}
 
-@ __srv_ws_ack TcpConn c → v {
+@ __srv_ws_ack TcpConn c WsCfg wc → v {
     : Json o ( json_obj_new )
     : b _a ( json_obj_set o `status` ( json_str_lit `ok` ) )
-    : b _b ( json_obj_set o `format` ( json_str_lit ? != g_ws_f32 0 `float32` `pcm16` ) )
+    : b _b ( json_obj_set o `format` ( json_str_lit ? . wc f32 `float32` `pcm16` ) )
     : b _c ( json_obj_set o `vad` ( json_str_lit `adaptive-floor` ) )
     : String body ( json_stringify o )
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
 }
 
-@ __srv_ws_config TcpConn c ( Vec u ) payload → v {
+@ __srv_ws_config TcpConn c ( Vec u ) payload inout WsCfg wc → v {
     : String ps ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [u] payload ) {
@@ -561,7 +587,7 @@ $ `stdlib/core/option.nu`
             ?? ( json_obj_get j `format` ) {
                 T v → {
                     : s fs ( json_as_str v )
-                    = g_ws_f32 ? ( nurl_str_eq fs `float32` ) 1 0
+                    = . wc f32 != 0 ( nurl_str_eq fs `float32` )
                 }
                 F → {}
             }
@@ -569,7 +595,7 @@ $ `stdlib/core/option.nu`
                 T v → {
                     : s ls ( json_as_str v )
                     ? > ( nurl_str_len ls ) 0 {
-                        = g_ws_lang ( nurl_str_cat ls `` )
+                        = . wc lang ( string_from ls )
                     } {}
                 }
                 F → {}
@@ -577,15 +603,15 @@ $ `stdlib/core/option.nu`
         }
         F _ → {}
     }
-    ( __srv_ws_ack c )
+    ( __srv_ws_ack c wc )
 }
 
 // binary frame → f32 samples at 16 kHz (the client's job to resample; a
 // microphone opened at 16 kHz is the normal case)
-@ __srv_ws_samples ( Vec u ) d → ( Vec f ) {
+@ __srv_ws_samples ( Vec u ) d b f32 → ( Vec f ) {
     : ( Vec f ) out ( vec_new [f] )
     : i n ( vec_len [u] d )
-    ? != g_ws_f32 0 {
+    ? f32 {
         : ~ i k 0
         ~ <= + k 4 n {
             : ~ i b0 0
@@ -617,11 +643,12 @@ $ `stdlib/core/option.nu`
 }
 
 // A closed utterance: transcribe it, send {"text","t0","t1"}.
-@ __srv_ws_emit TcpConn c VadStream vs → v {
+@ __srv_ws_emit TcpConn c VadStream vs WsCfg wc → v {
     : VadSeg g ( vad_stream_seg vs )
     : ( Vec f ) seg ( vad_stream_take vs )
-    : ~ s lang g_srv_lang
-    ? > ( nurl_str_len g_ws_lang ) 0 { = lang g_ws_lang } {}
+    : SrvCfg cf ( __srv_cfg )
+    : ~ s lang ( string_data . cf lang )
+    ? > ( string_len . wc lang ) 0 { = lang ( string_data . wc lang ) } {}
     : Whisper w ( __srv_model )
     : Tok t ( __srv_tok )
     : ( Vec u ) text ( vec_new [u] )
@@ -680,8 +707,7 @@ $ `stdlib/core/option.nu`
         : !v WsErr _c ( ws_send_close c 1011 `the model could not be loaded` )
         ^ T
     }
-    = g_ws_f32 0
-    = g_ws_lang ``
+    : ~ WsCfg wc @ WsCfg { F ( string_new ) }
     : VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
     : WsLimits lim ( ws_default_limits )
     : ~ b open T
@@ -689,11 +715,11 @@ $ `stdlib/core/option.nu`
         ?? ( ws_read_message c lim ) {
             T msg → {
                 ? == . msg opcode ( ws_opcode_text ) {
-                    ( __srv_ws_config c . msg payload )
+                    ( __srv_ws_config c . msg payload wc )
                 } {
-                    : ( Vec f ) x ( __srv_ws_samples . msg payload )
+                    : ( Vec f ) x ( __srv_ws_samples . msg payload . wc f32 )
                     ( vad_stream_push vs x )
-                    ~ ( vad_stream_poll vs ) { ( __srv_ws_emit c vs ) }
+                    ~ ( vad_stream_poll vs ) { ( __srv_ws_emit c vs wc ) }
                 }
             }
             F _ → { = open F }
@@ -702,9 +728,8 @@ $ `stdlib/core/option.nu`
     // the stream ended: an open utterance is still an utterance — transcribe
     // and send it before answering the close (RFC 6455 allows pending frames
     // before the close reply)
-    ? ( vad_stream_flush vs ) { ( __srv_ws_emit c vs ) } {}
+    ? ( vad_stream_flush vs ) { ( __srv_ws_emit c vs wc ) } {}
     : !v WsErr _c ( ws_send_close c 1000 `bye` )
-    = g_ws_lang ``
     ( __srv_release )
     ^ T
 }
@@ -718,7 +743,7 @@ $ `stdlib/core/option.nu`
     // the server owns the model from here
     ( locked_set [SrvState] g_srv @ SrvState { @ ?Whisper { T w } 0 0 ( monotonic_ns ) 1 0 0 * unload_s 1000 } )
     ( locked_set [? Tok] g_srv_tok @ ?Tok { T ( Tok_share t ) } )
-    = g_srv_dir ( nurl_str_cat dir `` )
+    ( locked_set [SrvCfg] g_srv_cfg @ SrvCfg { ( string_from dir ) ( string_from lang ) ( string_from token ) } )
     ? > unload_s 0 {
         : ( @ v ) reaper \ → v { ( __srv_reaper ) }
         ?? ( thread_spawn_owned reaper ) {
@@ -731,11 +756,9 @@ $ `stdlib/core/option.nu`
             }
         }
     } {}
-    = g_srv_lang ( nurl_str_cat lang `` )
     = g_srv_vad use_vad
     = g_srv_ts with_ts
     = g_srv_max maxtok
-    = g_srv_token ( nurl_str_cat token `` )
     : HttpApp a ( http_app_new )
     // One inference runs one model on one GPU; a second concurrent request
     // would serialise on the model mutex anyway, so a single worker is the
@@ -789,7 +812,7 @@ $ `stdlib/core/option.nu`
     : ~ SrvState st ( locked_take [SrvState] g_srv )
     = . st w @ ?Whisper { F }  // the server's owner, dropped here
     ( locked_restore [SrvState] g_srv st )
-    = g_srv_lang ``
+    ( locked_set [SrvCfg] g_srv_cfg @ SrvCfg { ( string_new ) ( string_new ) ( string_new ) } )
     ^ rc
 }
 

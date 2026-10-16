@@ -39,6 +39,7 @@
 // device outlives its memory whichever order the owners go in. Nothing is
 // released by hand; `gk_close` is an optional early release of one owner.
 
+$ `stdlib/std/hashmap.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
@@ -48,12 +49,35 @@ $ `stdlib/std/thread.nu`
 $ `deps/gpu/src/gpu.nu`
 
 // The device-memory pool's process-wide counters and switches (see the
-// pool section below).
-: ~ i g_pool_n 0  // rows, every kit's pools together
-: ~ b g_pool_on T
-: ~ i g_pool_idle 0  // bytes currently held idle
-: ~ i g_pool_max -1  // budget in bytes; <0 = not set yet, 0 = unlimited
-: ~ i g_pool_clock 0  // LRU stamp source
+// pool section below). Every kit on every thread updates them, so they
+// live behind one lock: as plain globals two threads' `n + 1`s could
+// both read the same n, and the idle total that decides evictions drifted.
+: GkPoolG {
+    i n  // rows, every kit's pools together
+    b on
+    i idle  // bytes currently held idle
+    i max  // budget in bytes; <0 = not set yet, 0 = unlimited
+    i clock  // LRU stamp source
+}
+
+@ __gkp0 → ( Locked GkPoolG ) { ^ ( locked_new [GkPoolG] @ GkPoolG { 0 T 0 -1 0 } ) }
+
+: ( Locked GkPoolG ) g_pool ( __gkp0 )
+
+// The totals now.
+@ _gkp → GkPoolG { ^ ( locked_get [GkPoolG] g_pool ) }
+
+// `dn` more rows and `didle` more idle bytes; the LRU clock advances by
+// `tick`. The clock's new value.
+@ _gkp_add i dn i didle i tick → i {
+    : ~ GkPoolG p ( locked_take [GkPoolG] g_pool )
+    = . p n + . p n dn
+    = . p idle + . p idle didle
+    = . p clock + . p clock tick
+    : i c . p clock
+    ( locked_restore [GkPoolG] g_pool p )
+    ^ c
+}
 
 // A single argument to a kernel launch.
 //   kind 0 = input buffer   1 = output buffer   2 = scalar
@@ -89,6 +113,7 @@ $ `deps/gpu/src/gpu.nu`
 // code that could ask for it again.
 : GkState {
     ( Vec GkKernelEntry ) cache
+    ( HashMap String i ) cix  // an entry name → its cache slot
     ( Vec i ) kcalls  // per cache slot: launches, counted only while gk_prof_on
     ( Vec i ) kns  // per cache slot: device time in those launches (CUDA events)
     ( Vec String ) csrc  // census only: each cache slot's kernel source
@@ -99,6 +124,7 @@ $ `deps/gpu/src/gpu.nu`
     ( Vec i ) pstamp
     GpuTimer ev0  // the profiler's event pair (gk_prof)
     GpuTimer ev1
+    b async  // gk_async: launches on this kit do not wait for the device
 }
 
 // The process-wide pool counters (gk_pool_count / gk_pool_idle_bytes) sum
@@ -107,12 +133,13 @@ $ `deps/gpu/src/gpu.nu`
 // released by the compiler after this (drop glue).
 % Drop GkState {
     @ drop GkState x → v {
-        = g_pool_n - g_pool_n ( vec_len [i] . x pdptr )
+        : ~ i idle 0
         : ~ i k 0
         ~ < k ( vec_len [i] . x pdptr ) {
-            ? == ( __gk_col . x pinuse k ) 0 { = g_pool_idle - g_pool_idle ( __gk_col . x pbytes k ) } {}
+            ? == ( __gk_col . x pinuse k ) 0 { = idle + idle ( __gk_col . x pbytes k ) } {}
             = k + k 1
         }
+        : i _c ( _gkp_add - 0 ( vec_len [i] . x pdptr ) - 0 idle 0 )
     }
 }
 
@@ -130,9 +157,9 @@ $ `deps/gpu/src/gpu.nu`
 @ __gk_col ( Vec i ) v i k → i { ^ ( vec_at [i] v k ) }
 
 @ __gk_state → GkState {
-    ^ @ GkState { ( vec_new [GkKernelEntry] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
+    ^ @ GkState { ( vec_new [GkKernelEntry] ) ( map_new [String i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
         ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-        ( gpu_timer_none ) ( gpu_timer_none ) }
+        ( gpu_timer_none ) ( gpu_timer_none ) F }
 }
 
 @ __gk_kit sink Gpu g b ok b census → GpuKit {
@@ -289,41 +316,46 @@ $ `deps/gpu/src/gpu.nu`
 // under its budget behaves exactly as before.
 // (the pool counters live at the top of the file, beside the kit's state)
 
-@ gk_pool b on → v { = g_pool_on on }
+@ gk_pool b on → v { ( locked_update [GkPoolG] g_pool \ inout GkPoolG p → v { = . p on on } ) }
 
-@ gk_pool_enabled → b { ^ g_pool_on }
+@ gk_pool_enabled → b { ^ . ( _gkp ) on }
 
 // Blocks the pools hold, in use or idle — for tests and for anyone
 // wondering where the VRAM went.
-@ gk_pool_count → i { ^ g_pool_n }
+@ gk_pool_count → i { ^ . ( _gkp ) n }
 
 // Bytes the pools are holding that nothing is using.
-@ gk_pool_idle_bytes → i { ^ g_pool_idle }
+@ gk_pool_idle_bytes → i { ^ . ( _gkp ) idle }
 
 // Cap the idle side at `bytes` (0 = unlimited). Trims immediately.
 @ gk_pool_budget GpuKit kit i bytes → v {
-    = g_pool_max ? < bytes 0 { 0 } { bytes }
+    : i b2 ? < bytes 0 { 0 } { bytes }
+    ( locked_update [GkPoolG] g_pool \ inout GkPoolG p → v { = . p max b2 } )
     : ~ GkState st ( locked_take [GkState] . kit st )
     ( __gk_pool_trim st )
     ( locked_restore [GkState] . kit st st )
 }
 
-@ gk_pool_budget_bytes → i { ^ ? < g_pool_max 0 { 0 } { g_pool_max } }
+@ gk_pool_budget_bytes → i {
+    : i m . ( _gkp ) max
+    ^ ? < m 0 { 0 } { m }
+}
 
 // The budget a caller who never sets one gets: $NURL_GK_POOL_MAX (bytes)
 // when set, else a quarter of the device's memory — enough that a steady
 // shape mix never evicts, small enough that a drifting one cannot eat the
 // card. Resolved once, on the first allocation.
 @ _gk_pool_default GkInfo inf → v {
-    ? >= g_pool_max 0 { ^ } {}
+    ? >= . ( _gkp ) max 0 { ^ } {}
     : ~ i fromenv 0
     ?? ( env_get `NURL_GK_POOL_MAX` ) {
         T ev → { = fromenv ( nurl_str_to_int ( string_data ev ) ) }
         F → {}
     }
-    ? > fromenv 0 { = g_pool_max fromenv ^ } {}
     : i tot ( gpu_mem_total . inf gpu )
-    = g_pool_max ? > tot 0 { / tot 4 } { 0 }
+    : i m ? > fromenv 0 { fromenv } { ? > tot 0 { / tot 4 } { 0 } }
+    // (whoever resolves it first sets it; a budget set meanwhile stands)
+    ( locked_update [GkPoolG] g_pool \ inout GkPoolG p → v { ? < . p max 0 { = . p max m } {} } )
 }
 
 // Drop row `k`: the last row moves into its slot, and the block that was
@@ -342,14 +374,15 @@ $ `deps/gpu/src/gpu.nu`
     : ?i _g ( vec_pop [i] . kit pbytes )
     : ?i _h ( vec_pop [i] . kit pinuse )
     : ?i _i ( vec_pop [i] . kit pstamp )
-    = g_pool_n - g_pool_n 1
+    : i _c ( _gkp_add -1 0 0 )
 }
 
 // Evict least-recently-idled blocks until the idle side is inside the
 // budget. Called on every give, and whenever the budget changes.
 @ __gk_pool_trim inout GkState kit → v {
-    ? > g_pool_max 0 {} { ^ }
-    ~ > g_pool_idle g_pool_max {
+    : i max . ( _gkp ) max
+    ? > max 0 {} { ^ }
+    ~ > . ( _gkp ) idle max {
         : i n ( vec_len [i] . kit pdptr )
         : ~ i best - 0 1
         : ~ i beststamp 0
@@ -362,7 +395,7 @@ $ `deps/gpu/src/gpu.nu`
             = k + k 1
         }
         ? < best 0 { ^ } {}
-        = g_pool_idle - g_pool_idle ( __gk_col . kit pbytes best )
+        : i _c ( _gkp_add 0 - 0 ( __gk_col . kit pbytes best ) 0 )
         ( __gk_pool_drop kit best )
     }
 }
@@ -370,13 +403,13 @@ $ `deps/gpu/src/gpu.nu`
 // An idle block of exactly `bytes`, marked in-use — its device pointer,
 // or 0.
 @ _gk_pool_take inout GkState kit i bytes → i {
-    ? g_pool_on {} { ^ 0 }
+    ? . ( _gkp ) on {} { ^ 0 }
     : i n ( vec_len [i] . kit pdptr )
     : ~ i k 0
     ~ < k n {
         ? & == ( vec_at [i] . kit pbytes k ) bytes == ( vec_at [i] . kit pinuse k ) 0 {
             ( vec_put [i] . kit pinuse k 1 )
-            = g_pool_idle - g_pool_idle bytes
+            : i _c ( _gkp_add 0 - 0 bytes 0 )
             ^ ( __gk_col . kit pdptr k )
         } {}
         = k + k 1
@@ -391,7 +424,7 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] . kit pinuse 1 )
     ( vec_push [i] . kit pstamp 0 )
     ( vec_push [GpuBuffer] . kit pbuf gb )
-    = g_pool_n + g_pool_n 1
+    : i _c ( _gkp_add 1 0 0 )
 }
 
 // The last owner of the block at `dptr` let go of it: idle in the pool,
@@ -407,11 +440,9 @@ $ `deps/gpu/src/gpu.nu`
     : ~ i k 0
     ~ < k n {
         ? & == ( vec_at [i] . kit pdptr k ) dptr == ( vec_at [i] . kit pinuse k ) 1 {
-            ? g_pool_on {
+            ? . ( _gkp ) on {
                 ( vec_put [i] . kit pinuse k 0 )
-                = g_pool_clock + g_pool_clock 1
-                ( vec_put [i] . kit pstamp k g_pool_clock )
-                = g_pool_idle + g_pool_idle ( __gk_col . kit pbytes k )
+                ( vec_put [i] . kit pstamp k ( _gkp_add 0 ( __gk_col . kit pbytes k ) 1 ) )
                 ( __gk_pool_trim kit )
             } { ( __gk_pool_drop kit k ) }
             ^
@@ -432,7 +463,7 @@ $ `deps/gpu/src/gpu.nu`
     : ~ i k - ( vec_len [i] . kit pdptr ) 1
     ~ >= k 0 {
         ? == ( __gk_col . kit pinuse k ) 0 {
-            = g_pool_idle - g_pool_idle ( __gk_col . kit pbytes k )
+            : i _c ( _gkp_add 0 - 0 ( __gk_col . kit pbytes k ) 0 )
             ( __gk_pool_drop kit k )
         } {}
         = k - k 1
@@ -519,23 +550,20 @@ unsafe @ gk_f32 f v → GkArg {
 //
 // (unsafe: the source is compiled — gpu_compile is raw — and every caller
 // launches what it compiles only over buffers it has checked.)
+@ __gk_hname s x → i { ^ ( hash_string x ) }
+
+// (a launch finds its kernel by a hash of the entry name, not a scan of
+// every kernel the kit has built)
 unsafe @ _gk_kernel_slot inout GkState kit GkInfo inf s src s name → i {
     : i n ( vec_len [GkKernelEntry] . kit cache )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → {
-                ? == 1 ( nurl_str_eq ( string_data . e name ) name ) { ^ k } {}
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
+    : i hit ?? ( map_get_with [String i s] . kit cix name \ s x → i { ^ ( __gk_hname x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } ) { T v → v F → -1 }
+    ? >= hit 0 { ^ hit } {}
     ? . inf census {
         ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) ( gpu_kernel_none ) } )
         ( vec_push [i] . kit kcalls 0 )
         ( vec_push [i] . kit kns 0 )
         ( vec_push [String] . kit csrc ( string_from src ) )
+        : ?i _o ( map_set [String i] . kit cix ( string_from name ) n \ String x → i { ^ ( __gk_hname ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
         ^ n
     } {}
     : GpuKernel kn ( gpu_compile . inf gpu src name )
@@ -543,6 +571,7 @@ unsafe @ _gk_kernel_slot inout GkState kit GkInfo inf s src s name → i {
     ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) kn } )
     ( vec_push [i] . kit kcalls 0 )
     ( vec_push [i] . kit kns 0 )
+    : ?i _o2 ( map_set [String i] . kit cix ( string_from name ) n \ String x → i { ^ ( __gk_hname ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
     ^ n
 }
 

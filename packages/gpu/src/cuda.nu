@@ -211,7 +211,7 @@ unsafe @ cuda_device_mem i dev → i {
 // it fails every driver call with CUDA_ERROR_INVALID_CONTEXT, which is
 // what a server that opens the device on its main thread and then runs
 // the model from a worker sees. Cheap enough to do per call.
-unsafe @ cuda_ctx_bind i ctx → b {
+raw @ cuda_ctx_bind i ctx → b {
     ? == ctx 0 { ^ F } {}
     ^ == # i ( cuCtxSetCurrent ctx ) 0
 }
@@ -231,9 +231,9 @@ unsafe @ cuda_ctx_create i dev → i {
 
 // Release one retain on the device's primary context (the ctx handle is
 // not destroyed until every retain is released and the process exits).
-unsafe @ cuda_ctx_destroy_dev i dev → i { ^ # i ( cuDevicePrimaryCtxRelease_v2 # i32 dev ) }
+raw @ cuda_ctx_destroy_dev i dev → i { ^ # i ( cuDevicePrimaryCtxRelease_v2 # i32 dev ) }
 
-unsafe @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
+raw @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy_v2 ctx ) }
 
 unsafe @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
@@ -300,15 +300,15 @@ unsafe @ cuda_compile_cubin s src s name i cc → ( Vec u ) {
 }
 
 // ── module / function ─────────────────────────────────────────────
-unsafe @ cuda_module_load * u ptx → i {
+raw @ cuda_module_load * u ptx → i {
     : ~ i module 0
     ? != # i ( cuModuleLoadData module ptx ) 0 { ^ 0 } {}
     ^ module
 }
 
-unsafe @ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
+raw @ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
-unsafe @ cuda_function i module s name → i {
+raw @ cuda_function i module s name → i {
     : ~ i fn 0
     ? != # i ( cuModuleGetFunction fn module name ) 0 { ^ 0 } {}
     ^ fn
@@ -321,13 +321,13 @@ unsafe @ cuda_malloc i bytes → i {
     ^ dptr
 }
 
-unsafe @ cuda_free sink i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
+raw @ cuda_free sink i dptr → i { ^ # i ( cuMemFree_v2 dptr ) }
 
-unsafe @ cuda_htod i dptr * u host i bytes → i { ^ # i ( cuMemcpyHtoD_v2 dptr host bytes ) }
+raw @ cuda_htod i dptr * u host i bytes → i { ^ # i ( cuMemcpyHtoD_v2 dptr host bytes ) }
 
-unsafe @ cuda_dtoh * u host i dptr i bytes → i { ^ # i ( cuMemcpyDtoH_v2 host dptr bytes ) }
+raw @ cuda_dtoh * u host i dptr i bytes → i { ^ # i ( cuMemcpyDtoH_v2 host dptr bytes ) }
 
-unsafe @ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src bytes ) }
+raw @ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src bytes ) }
 
 // Page-locked (pinned) host memory: DMA-able, so an HtoD from it is a
 // straight PCIe transfer with no driver-internal staging copy, and an
@@ -348,9 +348,9 @@ unsafe @ cuda_host_register * u p i bytes → i { ^ # i ( cuMemHostRegister_v2 p
 
 unsafe @ cuda_host_unregister * u p → i { ^ # i ( cuMemHostUnregister p ) }
 
-unsafe @ cuda_htod_async i dptr * u host i bytes i stream → i { ^ # i ( cuMemcpyHtoDAsync_v2 dptr host bytes stream ) }
+raw @ cuda_htod_async i dptr * u host i bytes i stream → i { ^ # i ( cuMemcpyHtoDAsync_v2 dptr host bytes stream ) }
 
-unsafe @ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) }
+raw @ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) }
 
 // ── launch ────────────────────────────────────────────────────────
 // `params` is a void** array of pointers to the argument values (built
@@ -360,7 +360,7 @@ unsafe @ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) 
 // cuda_graph_begin points this at one, cuda_graph_end restores 0.
 : ~ i g_cuda_stream 0
 
-unsafe @ cuda_launch i func i grid i block * u params → i {
+raw @ cuda_launch i func i grid i block * u params → i {
     ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 g_cuda_stream params 0 )
 }
 
@@ -383,19 +383,19 @@ unsafe @ cuda_event_create → i {
     ^ ev
 }
 
-unsafe @ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream ) }
+raw @ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream ) }
 
-unsafe @ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
+raw @ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
 
 // Milliseconds between two recorded events, as the raw 32-bit float
 // pattern the driver writes — the caller widens it (bits_to_f32).
-unsafe @ cuda_event_elapsed_bits i start i end → i {
+raw @ cuda_event_elapsed_bits i start i end → i {
     : ~ f32 ms # f32 0.0
     ? != # i ( cuEventElapsedTime ms start end ) 0 { ^ 0 } {}
     ^ & ( f32_to_bits ms ) 4294967295
 }
 
-unsafe @ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
+raw @ cuda_event_free sink i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
 
 // ── CUDA Graphs: capture a launch sequence once, replay it as ONE call ──
 // The per-node replay engine's cost on small graphs is pure launch
@@ -446,13 +446,13 @@ unsafe @ cuda_graph_end → i {
 }
 
 // Launch the captured sequence and wait for it. 0 = ok.
-unsafe @ cuda_graph_launch i exec → i {
+raw @ cuda_graph_launch i exec → i {
     : i st ( __cuda_gstream )
     : i rc # i ( cuGraphLaunch exec st )
     ? == rc 0 { ^ # i ( cuStreamSynchronize st ) } {}
     ^ rc
 }
 
-unsafe @ cuda_graph_free sink i exec → v {
+raw @ cuda_graph_free sink i exec → v {
     ? != exec 0 { : i _d # i ( cuGraphExecDestroy exec ) } {}
 }

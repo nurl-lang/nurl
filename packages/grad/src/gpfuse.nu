@@ -26,11 +26,16 @@
 // (type, intrinsics, libm) — kernel names carry a per-plan id, so
 // gpukit's name-keyed cache never collides across programs or dtypes.
 //
-// ABI: one pointer-table argument. The plan uploads every node's val-
-// buffer address into an i64 table once; a kernel reads
-//   const T* v<k> = (const T*)(unsigned long long)vt[<k>];
-// which keeps every generated kernel's signature identical:
-//   (const long long* vt, long long B)
+// SAFETY: the passes below write plain CUDA C, reaching node k's value as
+// `v<k>` and its gradient as `g<k>` through a table of addresses. That text
+// is never launched: __gpf_kernels rewrites every kernel into gpukit's
+// checked subset first — `v12[i]` becomes LD(v12, i), `g7[i] = x;` becomes
+// ST(g7, i, x);, each v<k> / g<k> a binding of node k's buffer, the early
+// `return` guards an enclosing `if` (a block with SYNC() may not leave
+// early), every single-statement if / for / while body braced — and the
+// launches are recorded (gk_record_dev) once and replayed. A kernel the
+// checker refuses fails the plan; none can reach memory outside the
+// buffers it is bound to.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -44,6 +49,14 @@ $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `stdlib/std/arc.nu`
 
+: GpfKern {
+    String name
+    String body  // the checked body
+    ( Vec i ) vids  // v<k> bindings: node k's value
+    ( Vec i ) gids  // g<k> bindings: node k's gradient
+    b hasb  // takes the row count as `B`
+}
+
 : GpPlan {
     b ok
     i kid  // unique plan id baked into kernel names
@@ -54,10 +67,10 @@ $ `stdlib/std/arc.nu`
     ( Vec String ) bnames  // bwd row-kernel per segment (empty = per-node)
     ( Vec String ) pnames  // bwd param-kernel per segment (empty = none)
     ( Vec i ) pgrid  // param-kernel grid blocks per segment
-    GkBuf vtab  // i64 table: node id → val-buffer device address
-    GkBuf gtab  // i64 table: node id → grad-buffer device address (0 = none)
-    GkBuf ftab  // i64 pairs (grad ptr, n) — the one-launch zero fill
-    i fcnt  // pair count in ftab
+    ( Vec GpfKern ) ks  // every generated kernel, as a checked body
+    ( Vec GkLaunch ) frec  // fused forward launches, recorded on the first forward
+    ( Vec GkLaunch ) brec  // fused backward launches, recorded on the first backward
+    ( Vec String ) fills  // the gradient zero-fill kernels (one block per gradient)
     String fillk  // fill kernel name
     ( Vec i ) ssegs  // serial-space (lo, hi) ranges — the scalar tail
     ( Vec String ) snames  // serial fwd kernel per serial segment
@@ -285,7 +298,7 @@ $ `stdlib/std/arc.nu`
 // table. ok=F (with everything freed safe) when nothing fuses.
 @ gpfuse_plan inout GProg pg → GpPlan {
     : ~ GpPlan pl @ GpPlan { F g_gpm_next 0 ( vec_new [i] ) ( string_new ) ( vec_new [String] ) ( vec_new [String] )
-        ( vec_new [String] ) ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) 0 ( string_new )
+        ( vec_new [String] ) ( vec_new [i] ) ( vec_new [GpfKern] ) ( vec_new [GkLaunch] ) ( vec_new [GkLaunch] ) ( vec_new [String] ) ( string_new )
         ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) }
     = g_gpm_next + g_gpm_next 1
     ? . pg ok {} { ^ pl }
@@ -413,7 +426,7 @@ $ `stdlib/std/arc.nu`
     ( string_push_str . pl fillk ( nurl_str_int . pl kid ) )
     ( string_push_str . pl fillk ? == . pg dtype 1 `f` `d` )
     ( string_push_str . pl fillk `_fill` )
-    ( _gpf_emit_fill ( string_data . pl fillk ) . pl src )
+    ( _gpf_emit_fills pg pl )
 
     // dtype adjustment: the same substitution pass the stock kernels use
     ? == . pg dtype 1 {
@@ -425,65 +438,29 @@ $ `stdlib/std/arc.nu`
         = x ( _str_replace_all ( string_data x ) `log(` `logf(` )
         = x ( _str_replace_all ( string_data x ) `sqrt(` `sqrtf(` )
         = x ( _str_replace_all ( string_data x ) `double` `float` )
-        // a field of the plan's heap state: the old source goes by hand
-        // before the new one is stored over it
-        ( string_free . pl src )
         = . pl src x
     } {}
-    // pointer table: node id → val dptr
-    : ( Vec i ) tv ( vec_new [i] )
-    = k 0
-    ~ < k nn {
-        : GpNode nd ( _gp_node pg k )
-        : GkBuf vb . nd val
-        ( vec_push [i] tv . vb dptr )
-        = k + k 1
-    }
-    = . pl vtab ( gk_dbuf_new . pg kit ( vec_len [i] tv ) GK_I64 )
-    : ~ b up ( gk_buf_ok . pl vtab )
-    = up & up ( gk_dbuf_upload_i . pg kit . pl vtab tv )
-    // grad-pointer table + the (ptr, n) fill pairs
-    : ( Vec i ) tg ( vec_new [i] )
-    : ( Vec i ) tf2 ( vec_new [i] )
-    = k 0
-    ~ < k nn {
-        : GpNode nd ( _gp_node pg k )
-        : GkBuf gb2 . nd grad
-        ? ( gk_buf_ok gb2 ) {
-            ( vec_push [i] tg . gb2 dptr )
-            ( vec_push [i] tf2 . gb2 dptr )
-            ( vec_push [i] tf2 . gb2 n )
-        } { ( vec_push [i] tg 0 ) }
-        = k + k 1
-    }
-    = . pl gtab ( gk_dbuf_new . pg kit ( vec_len [i] tg ) GK_I64 )
-    = up & up ( gk_buf_ok . pl gtab )
-    = up & up ( gk_dbuf_upload_i . pg kit . pl gtab tg )
-    ? > ( vec_len [i] tf2 ) 0 {
-        = . pl ftab ( gk_dbuf_new . pg kit ( vec_len [i] tf2 ) GK_I64 )
-        = up & up ( gk_buf_ok . pl ftab )
-        = up & up ( gk_dbuf_upload_i . pg kit . pl ftab tf2 )
-        = . pl fcnt / ( vec_len [i] tf2 ) 2
-    } {}
+    // every kernel into the checked subset (nothing is launched from the
+    // C text itself)
+    = . pl ks ( __gpf_kernels ( string_data . pl src ) )
+    : ~ b up > ( vec_len [GpfKern] . pl ks ) 0
     ? up { = . pl ok T } {}
     ^ pl
 }
 
 // Launches only (no sync policy) — shared by the direct path and the
 // CUDA-graph capture.
-unsafe @ _gpfuse_fwd_launches inout GProg pg inout GpPlan pl → b {
+@ _gpfuse_fwd_launches inout GProg pg inout GpPlan pl → b {
     : i nn ( vec_len [GpNode] . pg nodes )
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ b r T
     : ~ i k 0
     : ~ i si 0
+    : ~ i ri 0
     ~ & < k nn r {
         ? & < si nseg == k ( _ti . pl segs * si 2 ) {
             : s nm ?? ( vec_get [String] . pl knames si ) { T x → ( string_data x ) F → `` }
-            : ( Vec i ) a ( vec_new [i] )
-            ( vec_push [i] a ( gk_arg_dev . pl vtab ) )
-            ( vec_push [i] a ( gpu_arg_i64 . pl rows ) )
-            = r ( gk_run_dev . pg kit ( string_data . pl src ) nm . pl rows 256 a )
+            = r ( _gpf_run pg . pl ks . pl frec ri nm . pl rows . pl rows 256 )
             = k + ( _ti . pl segs + * si 2 1 ) 1
             = si + si 1
         } {
@@ -496,10 +473,7 @@ unsafe @ _gpfuse_fwd_launches inout GProg pg inout GpPlan pl → b {
             }
             ? >= ssi 0 {
                 : s sn2 ?? ( vec_get [String] . pl snames ssi ) { T x → ( string_data x ) F → `` }
-                : ( Vec i ) a3 ( vec_new [i] )
-                ( vec_push [i] a3 ( gk_arg_dev . pl vtab ) )
-                ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
-                = r ( gk_run_dev . pg kit ( string_data . pl src ) sn2 1 256 a3 )
+                = r ( _gpf_run pg . pl ks . pl frec ri sn2 . pl rows 1 256 )
                 = k + ( _ti . pl ssegs + * ssi 2 1 ) 1
             } {
                 = r ( _gp_fwd_node pg k )
@@ -1025,41 +999,310 @@ unsafe @ _gpfuse_fwd_launches inout GProg pg inout GpPlan pl → b {
     ^ maxn
 }
 
-// The one-launch gradient zero fill over an (ptr, n) pair table.
-@ _gpf_emit_fill s kname String o → v {
-    ( string_push_str o `extern "C" __global__ void ` )
-    ( string_push_str o kname )
-    ( string_push_str o `(const long long* ft, long long nb)\n{\n` )
-    ( string_push_str o `    long long j = blockIdx.x;\n    if (j >= nb) return;\n` )
-    ( string_push_str o `    double* p = (double*)(unsigned long long)ft[2 * j];\n` )
-    ( string_push_str o `    long long n = ft[2 * j + 1];\n` )
-    ( string_push_str o `    for (long long t = threadIdx.x; t < n; t += blockDim.x) p[t] = 0.0;\n` )
-    ( string_push_str o `}\n` )
+// The gradient zero fill: one block per gradient buffer, in kernels of
+// at most 64 gradients each (named fillk_<n>, listed in pl.fills).
+@ _gpf_emit_fills inout GProg pg inout GpPlan pl → v {
+    : i nn ( vec_len [GpNode] . pg nodes )
+    : ~ ( Vec i ) gs ( vec_new [i] )
+    : ~ i k 0
+    ~ < k nn {
+        : GpNode nd ( _gp_node pg k )
+        ? ( gk_buf_ok . nd grad ) { ( vec_push [i] gs k ) } {}
+        = k + k 1
+    }
+    : i ng ( vec_len [i] gs )
+    : ~ i c0 0
+    ~ < c0 ng {
+        : i c1 ? > + c0 64 ng ng + c0 64
+        : ~ String nm ( string_from ( string_data . pl fillk ) )
+        ( string_push_char nm 95 ) ( string_push_int nm / c0 64 )
+        ( string_push_str . pl src `extern "C" __global__ void ` )
+        ( string_push_str . pl src ( string_data nm ) )
+        ( string_push_str . pl src `(const long long* vt, const long long* gt)\n{\n` )
+        = k c0
+        ~ < k c1 { ( _gpf_gdecl . pl src ( _ti gs k ) ) = k + k 1 }
+        = k c0
+        ~ < k c1 {
+            : GpNode nd ( _gp_node pg ( _ti gs k ) )
+            ( string_push_str . pl src `    if (blockIdx.x == ` ) ( string_push_int . pl src - k c0 )
+            ( string_push_str . pl src `) { for (long long t = threadIdx.x; t < ` ) ( string_push_int . pl src . nd n )
+            ( string_push_str . pl src `; t += blockDim.x) ` ) ( _gpf_g . pl src ( _ti gs k ) ) ( string_push_str . pl src `[t] = 0.0; }\n` )
+            = k + k 1
+        }
+        ( string_push_str . pl src `}\n` )
+        ( vec_push [String] . pl fills nm )
+        = c0 c1
+    }
+}
+
+// ── the generated source, into checked kernels ───────────────────────
+
+@ __gpf_dig i c → b { ^ & >= c 48 <= c 57 }
+
+@ __gpf_idc i c → b { ^ | | & >= c 97 <= c 122 & >= c 65 <= c 90 | == c 95 ( __gpf_dig c ) }
+
+// The closer matching the opener at `open` — over ( ) [ ] { }.
+@ __gpf_match ( Slice u ) t i open i hi → i {
+    : ~ i d 0
+    : ~ i k open
+    ~ < k hi {
+        : i c ( slice_byte t k )
+        ? | | == c 40 == c 91 == c 123 { = d + d 1 } {}
+        ? | | == c 41 == c 93 == c 125 { = d - d 1 ? == d 0 { ^ k } {} } {}
+        = k + k 1
+    }
+    ^ hi
+}
+
+// The `;` ending the statement or expression from `lo`, outside brackets.
+@ __gpf_semi ( Slice u ) t i lo i hi → i {
+    : ~ i d 0
+    : ~ i k lo
+    ~ < k hi {
+        : i c ( slice_byte t k )
+        ? | | == c 40 == c 91 == c 123 { = d + d 1 } {}
+        ? | | == c 41 == c 93 == c 125 { = d - d 1 } {}
+        ? & == d 0 == c 59 { ^ k } {}
+        = k + k 1
+    }
+    ^ hi
+}
+
+// Is the word at `k` (an identifier start) exactly `w`?
+@ __gpf_word ( Slice u ) t i k i hi s w → b {
+    : ( Slice u ) wv ( slice_of_str w )
+    : i n ( slice_len [u] wv )
+    ? > + k n hi { ^ F } {}
+    ? > k 0 { ? ( __gpf_idc ( slice_byte t - k 1 ) ) { ^ F } {} } {}
+    ? ( slice_bytes_eq ( slice_window [u] t k n ) wv ) {} { ^ F }
+    ? < + k n hi { ? ( __gpf_idc ( slice_byte t + k n ) ) { ^ F } {} } {}
+    ^ T
+}
+
+// t[lo, hi) with every buffer access v<k>[i] / g<k>[i] a checked load
+// LD(v<k>, i), and every store `v<k>[i] = x;` a checked store ST(v<k>, i, x);
+@ __gpf_ldst ( Slice u ) t i lo i hi inout String o → v {
+    : ~ i k lo
+    ~ < k hi {
+        : i c ( slice_byte t k )
+        : ~ b done F
+        ? & | == c 118 == c 103 | == k 0 ! ( __gpf_idc ( slice_byte t - k 1 ) ) {
+            : ~ i e + k 1
+            ~ & < e hi ( __gpf_dig ( slice_byte t e ) ) { = e + e 1 }
+            ? & & > e + k 1 < e hi == ( slice_byte t e ) 91 {
+                : i cl ( __gpf_match t e hi )
+                : ~ i j + cl 1
+                ~ & < j hi == ( slice_byte t j ) 32 { = j + j 1 }
+                ? & & < + j 1 hi == ( slice_byte t j ) 61 != ( slice_byte t + j 1 ) 61 {
+                    : ~ i r0 + j 1
+                    ~ & < r0 hi == ( slice_byte t r0 ) 32 { = r0 + r0 1 }
+                    : i sc ( __gpf_semi t r0 hi )
+                    ( string_push_str o `ST(` ) ( string_push_window o t k - e k ) ( string_push_str o `, ` )
+                    ( __gpf_ldst t + e 1 cl o ) ( string_push_str o `, ` ) ( __gpf_ldst t r0 sc o ) ( string_push_char o 41 )
+                    = k sc
+                } {
+                    ( string_push_str o `LD(` ) ( string_push_window o t k - e k ) ( string_push_str o `, ` )
+                    ( __gpf_ldst t + e 1 cl o ) ( string_push_char o 41 )
+                    = k + cl 1
+                }
+                = done T
+            } {}
+        } {}
+        ? done {} {
+            ( string_push_char o c )
+            = k + k 1
+        }
+    }
+}
+
+// t[lo, hi) with every single-statement if / for / while / else body in
+// braces (a checked kernel with SYNC() needs them to see its blocks).
+@ __gpf_brace ( Slice u ) t i lo i hi inout String o → v {
+    : ~ i k lo
+    ~ < k hi {
+        : b ctl | | ( __gpf_word t k hi `if` ) ( __gpf_word t k hi `for` ) ( __gpf_word t k hi `while` )
+        ? ctl {
+            : ~ i p k
+            ~ & < p hi != ( slice_byte t p ) 40 { = p + p 1 }
+            : i cl ( __gpf_match t p hi )
+            ( string_push_window o t k - + cl 1 k )
+            = k ( __gpf_body t + cl 1 hi o )
+            continue
+        } {}
+        ? ( __gpf_word t k hi `else` ) {
+            ( string_push_str o `else` )
+            : ~ i p + k 4
+            ~ & < p hi == ( slice_byte t p ) 32 { = p + p 1 }
+            ? ( __gpf_word t p hi `if` ) { ( string_push_char o 32 ) = k p continue } {}
+            = k ( __gpf_body t + k 4 hi o )
+            continue
+        } {}
+        ( string_push_char o ( slice_byte t k ) )
+        = k + k 1
+    }
+}
+
+// The body statement at `k` braced; where it ends.
+@ __gpf_body ( Slice u ) t i k i hi inout String o → i {
+    : ~ i p k
+    ~ & < p hi | == ( slice_byte t p ) 32 == ( slice_byte t p ) 10 { = p + p 1 }
+    ? & < p hi == ( slice_byte t p ) 123 {
+        : i cl ( __gpf_match t p hi )
+        ( string_push_str o ` {` )
+        ( __gpf_brace t + p 1 cl o )
+        ( string_push_char o 125 )
+        ^ + cl 1
+    } {}
+    : i sc ( __gpf_semi t p hi )
+    ( string_push_str o ` { ` )
+    ( __gpf_brace t p + sc 1 o )
+    ( string_push_str o ` }` )
+    ^ + sc 1
+}
+
+// Every kernel of the generated source as a checked kernel: its name, its
+// body in the subset, and the node buffers it binds.
+@ __gpf_kernels s src → ( Vec GpfKern ) {
+    : ~ ( Vec GpfKern ) out ( vec_new [GpfKern] )
+    : ( Slice u ) t ( slice_of_str src )
+    : i n ( slice_len [u] t )
+    : ( Slice u ) pre ( slice_of_str `extern "C" __global__ void ` )
+    : i pl ( slice_len [u] pre )
+    : ~ i k 0
+    ~ < + k pl n {
+        ? ( slice_bytes_eq ( slice_window [u] t k pl ) pre ) {} { = k + k 1 continue }
+        : i n0 + k pl
+        : ~ i p n0
+        ~ & < p n != ( slice_byte t p ) 40 { = p + p 1 }
+        : ~ String name ( string_new )
+        ( string_push_window name t n0 - p n0 )
+        : i pc ( __gpf_match t p n )
+        : ~ String params ( string_new )
+        ( string_push_window params t + p 1 - - pc p 1 )
+        : ~ i ob + pc 1
+        ~ & < ob n != ( slice_byte t ob ) 123 { = ob + ob 1 }
+        : i cb ( __gpf_match t ob n )
+        // the body, line by line: table declarations become bindings, the
+        // early-return guards an enclosing `if`, CUDA's coordinates ours
+        : ~ ( Vec i ) vids ( vec_new [i] )
+        : ~ ( Vec i ) gids ( vec_new [i] )
+        : ~ String b1 ( string_new )
+        : ~ i wraps 0
+        : ~ i q + ob 1
+        ~ < q cb {
+            : ~ i e q
+            ~ & < e cb != ( slice_byte t e ) 10 { = e + e 1 }
+            : ~ String ln ( string_new )
+            ( string_push_window ln t q - e q )
+            : s l ( string_data ln )
+            : i vt ( nurl_str_find l `(unsigned long long)vt[` )
+            : i gt ( nurl_str_find l `(unsigned long long)gt[` )
+            ? | >= vt 0 >= gt 0 {
+                : i at + ? >= vt 0 vt gt 23
+                : ( Slice u ) lv ( slice_of_str l )
+                : ~ i m at
+                : ~ i id 0
+                ~ & < m ( slice_len [u] lv ) ( __gpf_dig ( slice_byte lv m ) ) { = id + * id 10 - ( slice_byte lv m ) 48 = m + m 1 }
+                ? >= vt 0 { ( vec_push [i] vids id ) } { ( vec_push [i] gids id ) }
+            } {
+                ? != 0 ( nurl_str_eq l `    long long s = blockIdx.x;` ) {
+                    ( string_push_str b1 `    long long s = bid;\n` )
+                } {
+                    ? != 0 ( nurl_str_eq l `    if (s >= B) return;` ) {
+                        ( string_push_str b1 `    if (s < B) {\n` ) = wraps + wraps 1
+                    } {
+                        ? != 0 ( nurl_str_eq l `    if (blockIdx.x != 0) return;` ) {
+                            ( string_push_str b1 `    if (bid == 0) {\n` ) = wraps + wraps 1
+                        } {
+                            ( string_push_str b1 l ) ( string_push_char b1 10 )
+                        }
+                    }
+                }
+            }
+            = q + e 1
+        }
+        ~ > wraps 0 { ( string_push_str b1 `    }\n` ) = wraps - wraps 1 }
+        : ~ String b2 ( _str_replace_all ( string_data b1 ) `blockIdx.x` `bid` )
+        = b2 ( _str_replace_all ( string_data b2 ) `threadIdx.x` `tid` )
+        = b2 ( _str_replace_all ( string_data b2 ) `blockDim.x` `bdim` )
+        = b2 ( _str_replace_all ( string_data b2 ) `gridDim.x` `nblocks` )
+        = b2 ( _str_replace_all ( string_data b2 ) `__syncthreads()` `SYNC()` )
+        : ~ String b3 ( string_new )
+        : ( Slice u ) t2 ( slice_of_str ( string_data b2 ) )
+        ( __gpf_ldst t2 0 ( slice_len [u] t2 ) b3 )
+        : ~ String b4 ( string_new )
+        : ( Slice u ) t3 ( slice_of_str ( string_data b3 ) )
+        ( __gpf_brace t3 0 ( slice_len [u] t3 ) b4 )
+        : b hasb >= ( nurl_str_find ( string_data params ) `long long B` ) 0
+        ( vec_push [GpfKern] out @ GpfKern { name b4 vids gids hasb } )
+        = k + cb 1
+    }
+    ^ out
+}
+
+// Launch generated kernel `kname` — recorded into `rs` the first time
+// (slot `ri`), replayed after it. `rows` is B.
+@ _gpf_run inout GProg pg ( Vec GpfKern ) ks inout ( Vec GkLaunch ) rs inout i ri s kname i rows i nb i blk → b {
+    : i at ri
+    = ri + ri 1
+    ? < at ( vec_len [GkLaunch] rs ) { ^ ( gk_replay ( vec_at [GkLaunch] rs at ) ) } {}
+    : ~ i w -1
+    : ~ i q 0
+    ~ & < q ( vec_len [GpfKern] ks ) < w 0 {
+        ? != 0 ( nurl_str_eq ( string_data . ( vec_at [GpfKern] ks q ) name ) kname ) { = w q } {}
+        = q + q 1
+    }
+    ? < w 0 { ( _gp_fail pg `gpfuse: a generated kernel is missing` ) ^ F } {}
+    : GpfKern kn ( vec_at [GpfKern] ks w )
+    : ~ GkCall c ( gk_call_new )
+    : ~ i j 0
+    ~ < j ( vec_len [i] . kn vids ) {
+        : i id ( _ti . kn vids j )
+        : ~ String bn ( string_from `v` )
+        ( string_push_int bn id )
+        ( gk_call_dev c ( string_data bn ) . ( _gp_node pg id ) val )
+        = j + j 1
+    }
+    = j 0
+    ~ < j ( vec_len [i] . kn gids ) {
+        : i id ( _ti . kn gids j )
+        : ~ String bn ( string_from `g` )
+        ( string_push_int bn id )
+        ( gk_call_dev c ( string_data bn ) . ( _gp_node pg id ) grad )
+        = j + j 1
+    }
+    ? . kn hasb { ( gk_call_i64 c `B` rows ) } {}
+    : GkLaunch l ( gk_record_dev . pg kit c kname ( string_data . kn body ) ? < nb 0 ( vec_len [i] . kn gids ) nb blk )
+    ? ( gk_launch_ok l ) {} {
+        : ~ String why ( string_from `gpfuse kernel ` )
+        ( string_push_str why kname ) ( string_push_str why `: ` ) ( string_push_str why ( gk_checked_error c ) )
+        ( _gp_fail pg ( string_data why ) )
+        ^ F
+    }
+    : b r ( gk_replay l )
+    ( vec_push [GkLaunch] rs l )
+    ^ r
 }
 
 // Fused backward: one zero-fill launch, the seed, then the reverse walk
 // with row-space + param-space kernels standing in for fused segments.
-unsafe @ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
+@ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
     : ~ b r T
-    ? > . pl fcnt 0 {
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . pl ftab ) )
-        ( vec_push [i] a ( gpu_arg_i64 . pl fcnt ) )
-        = r ( gk_run_dev . pg kit ( string_data . pl src ) ( string_data . pl fillk ) . pl fcnt 256 a )
-    } {
-        : i n2 ( vec_len [GpNode] . pg nodes )
-        : ~ i q 0
-        ~ & < q n2 r {
-            : GpNode nd ( _gp_node pg q )
-            : GkBuf gb2 . nd grad
-            ? ( gk_buf_ok gb2 ) { = r ( _gp_fill_buf pg gb2 0.0 ) } {}
-            = q + q 1
-        }
+    : ~ i ri 0
+    // every gradient zeroed — one block per gradient — then the seed
+    : ~ i fq 0
+    ~ & r < fq ( vec_len [String] . pl fills ) {
+        = r ( _gpf_run pg . pl ks . pl brec ri ( string_data ( vec_at [String] . pl fills fq ) ) . pl rows -1 256 )
+        = fq + fq 1
     }
     ? r {
         : GpNode lo2 ( _gp_node pg . pg loss )
         : GkBuf lg . lo2 grad
-        ? ( gk_buf_ok lg ) { = r ( _gp_fill_buf pg lg 1.0 ) } {}
+        ? ( gk_buf_ok lg ) {
+            : i at ri
+            = ri + ri 1
+            ? < at ( vec_len [GkLaunch] . pl brec ) { = r ( gk_replay ( vec_at [GkLaunch] . pl brec at ) ) } { = r ( _gp_fill_rec pg . pl brec lg 1.0 ) }
+        } {}
     } {}
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ i k . pg loss
@@ -1075,17 +1318,10 @@ unsafe @ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
         }
         ? >= si 0 {
             : s bn2 ?? ( vec_get [String] . pl bnames si ) { T x → ( string_data x ) F → `` }
-            : ( Vec i ) a ( vec_new [i] )
-            ( vec_push [i] a ( gk_arg_dev . pl vtab ) )
-            ( vec_push [i] a ( gk_arg_dev . pl gtab ) )
-            ( vec_push [i] a ( gpu_arg_i64 . pl rows ) )
-            = r ( gk_run_dev . pg kit ( string_data . pl src ) bn2 . pl rows 256 a )
+            = r ( _gpf_run pg . pl ks . pl brec ri bn2 . pl rows . pl rows 256 )
             : s pn ?? ( vec_get [String] . pl pnames si ) { T x → ( string_data x ) F → `` }
             ? & r > ( nurl_str_len pn ) 0 {
-                : ( Vec i ) a2 ( vec_new [i] )
-                ( vec_push [i] a2 ( gk_arg_dev . pl vtab ) )
-                ( vec_push [i] a2 ( gk_arg_dev . pl gtab ) )
-                = r ( gk_run_dev . pg kit ( string_data . pl src ) pn ( _ti . pl pgrid si ) 256 a2 )
+                = r ( _gpf_run pg . pl ks . pl brec ri pn . pl rows ( _ti . pl pgrid si ) 256 )
             } {}
             = k - ( _ti . pl segs * si 2 ) 1
         } {
@@ -1101,11 +1337,7 @@ unsafe @ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
             }
             ? >= ssi 0 {
                 : s sb2 ?? ( vec_get [String] . pl sbnames ssi ) { T x → ( string_data x ) F → `` }
-                : ( Vec i ) a3 ( vec_new [i] )
-                ( vec_push [i] a3 ( gk_arg_dev . pl vtab ) )
-                ( vec_push [i] a3 ( gk_arg_dev . pl gtab ) )
-                ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
-                = r ( gk_run_dev . pg kit ( string_data . pl src ) sb2 1 256 a3 )
+                = r ( _gpf_run pg . pl ks . pl brec ri sb2 . pl rows 1 256 )
                 = k - ( _ti . pl ssegs * ssi 2 ) 1
             } {
                 = r ( _gp_bwd_node pg k )
@@ -1540,7 +1772,7 @@ unsafe @ _gpfuse_bwd_launches inout GProg pg inout GpPlan pl → b {
 
 @ _gpfuse_nullplan → GpPlan {
     ^ @ GpPlan { F 0 0 ( vec_new [i] ) ( string_new ) ( vec_new [String] ) ( vec_new [String] )
-        ( vec_new [String] ) ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) 0 ( string_new )
+        ( vec_new [String] ) ( vec_new [i] ) ( vec_new [GpfKern] ) ( vec_new [GkLaunch] ) ( vec_new [GkLaunch] ) ( vec_new [String] ) ( string_new )
         ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) }
 }
 

@@ -513,7 +513,7 @@ $ `src/service.nu`
     ( check . c2 authed `identity: same directory again` )
     : AgCaller c3 ( ag_caller_local_from st `claude-agora` `/elsewhere/agora` 2002 )
     ( check ! . c3 authed `identity: another directory with the same basename is refused` )
-    : String why ( string_from ( ag_local_refusal ) )
+    : String why ( ag_local_refusal )
     ( check ( string_contains why `/somewhere/agora` ) `identity: and the refusal names the owner` )
     : AgCaller c4 ( ag_caller_local_from st `claude-agora` `` 2003 )
     ( check . c4 authed `identity: an explicit name (no origin) is never refused` )

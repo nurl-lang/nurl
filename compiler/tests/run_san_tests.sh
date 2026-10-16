@@ -137,6 +137,7 @@ LINK_LIBS="-lm -lpthread $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_L
 
 . "$SCRIPT_DIR/test_harness.sh"
 WORKDIR=$(create_test_workdir "$ROOT_DIR/build/tests-san") || exit 2
+hold_test_workdir "$WORKDIR"
 printf 'Artifacts: %s\n' "$WORKDIR"
 LOGDIR="$WORKDIR/logs"
 mkdir -p "$WORKDIR" "$LOGDIR"

@@ -216,7 +216,6 @@ raw @ __gpu_res Gpu g i kind i h → ?GpuRes {
                 T n → { = ord n }
                 F _ → {}
             }
-            ( string_free v )
             ^ ord
         }
         F → {}
@@ -334,7 +333,6 @@ unsafe @ gpu_name Gpu g → s {
                 } {}
                 = k + k 1
             }
-            ( string_free t )
             ^ * val 1024
         }
     }
@@ -380,7 +378,7 @@ unsafe @ gpu_mem_total Gpu g → i {
 // have no such state and answer T. Idempotent and cheap — call it at the
 // top of any work item that may run on a thread the device was not
 // opened on.
-@ gpu_bind_thread Gpu g → b {
+unsafe @ gpu_bind_thread Gpu g → b {
     ? != __gpu_backend 0 { ^ T } {}
     ^ ( cuda_ctx_bind . g ctx )
 }
@@ -405,14 +403,14 @@ unsafe @ gpu_timer_none → GpuTimer { ^ @ GpuTimer { 0 ( __gpu_nores ) } }
 
 @ gpu_timer_ok GpuTimer t → b { ^ != . t ev 0 }
 
-@ gpu_timer_mark Gpu g GpuTimer t → v {
+unsafe @ gpu_timer_mark Gpu g GpuTimer t → v {
     ? | != __gpu_backend 0 == . t ev 0 { ^ } {}
     : i _r ( cuda_event_record . t ev )
 }
 
 // Nanoseconds between two marks. Blocks until the end event has
 // completed on the device, so it is a measurement point, not free.
-@ gpu_timer_ns Gpu g GpuTimer start GpuTimer end → i {
+unsafe @ gpu_timer_ns Gpu g GpuTimer start GpuTimer end → i {
     ? | | != __gpu_backend 0 == . start ev 0 == . end ev 0 { ^ 0 } {}
     : i _s ( cuda_event_sync . end ev )
     : i bits ( cuda_event_elapsed_bits . start ev . end ev )
@@ -448,7 +446,7 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
 
 @ gpu_graph_ok GpuGraph x → b { ^ != . x exec 0 }
 
-@ gpu_graph_launch Gpu g GpuGraph x → i {
+unsafe @ gpu_graph_launch Gpu g GpuGraph x → i {
     ? | != __gpu_backend 0 == . x exec 0 { ^ 1 } {}
     ^ ( cuda_graph_launch . x exec )
 }
@@ -489,7 +487,6 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
     ?? ( env_get `XDG_CACHE_HOME` ) {
         T v → {
             : String p ( path_join ( string_data v ) `nurl-gpu` )
-            ( string_free v )
             ^ p
         }
         F → {}
@@ -497,8 +494,6 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
     : String home ( env_var_or `HOME` `.` )
     : String c ( path_join ( string_data home ) `.cache` )
     : String p ( path_join ( string_data c ) `nurl-gpu` )
-    ( string_free home )
-    ( string_free c )
     ^ p
 }
 
@@ -506,7 +501,6 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
     ?? ( env_get `NURL_GPU_CACHE` ) {
         T v → {
             : b off ? ( nurl_str_eq ( string_data v ) `off` ) T F
-            ( string_free v )
             ^ off
         }
         F → { ^ F }
@@ -529,17 +523,12 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
     : String keyed ( string_from prefix )
     ( string_push_str keyed src )
     : ( Vec u ) sb ( bytes_from_str ( string_data keyed ) )
-    ( string_free keyed )
     : String hex ( blake3_hex sb )
-    ( vec_free [u] sb )
     : String nm ( string_from prefix )
     ( string_push_char nm 45 )
     ( string_push_str nm ( string_data hex ) )
     ( string_push_str nm ext )
-    ( string_free hex )
     : String p ( path_join ( string_data dir ) ( string_data nm ) )
-    ( string_free dir )
-    ( string_free nm )
     ^ p
 }
 
@@ -549,7 +538,6 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
 @ __gpu_cache_store s path ( Vec u ) data → v {
     : String dir ( __gpu_cache_dir )
     : !v IoErr _mk ( dir_create_all ( string_data dir ) )
-    ( string_free dir )
     : String tmp ( string_from path )
     ( string_push_char tmp 46 )
     ( string_push_int tmp ( getpid ) )
@@ -561,7 +549,6 @@ unsafe @ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
         }
         F _ → { ( file_delete ( string_data tmp ) ) }
     }
-    ( string_free tmp )
 }
 
 raw @ gpu_compile Gpu g s src s name → GpuKernel {
@@ -599,16 +586,13 @@ raw @ gpu_compile Gpu g s src s name → GpuKernel {
     ? ( __gpu_cache_off ) {} {
         : String ctag ( __gpu_cuda_tag g )
         : String ccp ( __gpu_cache_path src ( string_data ctag ) `.cubin` )
-        ( string_free ctag )
         ?? ( read_file_bytes ( string_data ccp ) ) {
             T cbb → {
                 = mod ( cuda_module_load ( vec_data [u] cbb ) )
-                ( vec_free [u] cbb )
                 ? != mod 0 { = cached T } {}
             }
             F _ → {}
         }
-        ( string_free ccp )
     }
     ? cached {} {
         // compile straight to a device-specific cubin (no JIT at load);
@@ -628,18 +612,15 @@ raw @ gpu_compile Gpu g s src s name → GpuKernel {
     ? | cached ( __gpu_cache_off ) {} {
         : String tag ( __gpu_cuda_tag g )
         : String cp ( __gpu_cache_path src ( string_data tag ) `.ptx` )
-        ( string_free tag )
         ?? ( read_file_bytes ( string_data cp ) ) {
             T ptxb → {
                 // read_file_bytes gives exactly the stored bytes; the
                 // NUL terminator was stored with them
                 = mod ( cuda_module_load ( vec_data [u] ptxb ) )
-                ( vec_free [u] ptxb )
                 ? != mod 0 { = cached T } {}
             }
             F _ → {}
         }
-        ( string_free cp )
     }
     ? cached {} {
         : ( Vec u ) ptx ( cuda_compile src name )
@@ -1166,10 +1147,6 @@ raw @ __gpu_upload_batch_in ( Vec GpuCopy ) items → i {
     ? == rc 0 { = rc ( cuda_stream_sync 0 ) } {}
     ( cuda_event_free eva )
     ( cuda_event_free evb )
-    ( vec_free [i] sb )
-    ( vec_free [i] sh )
-    ( vec_free [i] sn )
-    ( vec_free [i] sd )
     ^ rc
 }
 

@@ -186,6 +186,16 @@ partials. Attention runs in two parallel passes instead of one thread per
 head. Together: **249 tok/s for Qwen2.5-0.5B Q4_K_M on an RTX 4090**, up
 from 62.
 
+Every kernel is a [gpukit](../gpukit) **checked kernel**: it reaches its
+buffers only through bounds-checked loads and stores, so nurllama holds no
+pointer and has no `unsafe` code. The weights are byte buffers read with
+16- and 32-bit word loads, and a block or a row is a window checked once,
+so the checks inside a loop fold away. The outputs are bit-identical to
+the raw CUDA-C kernels they replaced, and decode is faster: Qwen3-14B
+Q4_K_M 56.7 → 50.7 ms a token, Qwen3-0.6B Q8_0 3.81 → 3.63 ms. A
+forward pass is recorded once per call shape and replayed with the new
+position.
+
 **No GPU?** `NURL_GPU=cpu` runs the portable kernels on the host through
 OpenMP and produces byte-identical output — the CUDA-only variants are a
 dispatch choice, never a behaviour change.
@@ -370,7 +380,8 @@ Not by trusting itself:
 ## Built on
 
 [`gguf`](../gguf) — the container and its dequantisation — and
-[`gpu`](../gpu) — CUDA/NVRTC, or the same kernels on the CPU.
+[`gpukit`](../gpukit) over [`gpu`](../gpu) — CUDA/NVRTC, or the same
+kernels on the CPU.
 
 ## License
 

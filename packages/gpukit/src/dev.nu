@@ -72,17 +72,97 @@ unsafe @ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } 
 // valid however long the view lives.
 unsafe @ gk_buf_view GkBuf b i off i n → GkBuf {
     ? | | < off 0 < n 0 > n - . b n off { ^ ( gk_buf_none . b dtype ) } {}
-    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
+    ^ @ GkBuf { + . b dptr * off ( _gk_esz . b dtype ) n . b dtype ( __gk_mem_share . b mem ) }
 }
 
 // `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
 // that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
 // block like gk_buf_view; none when the bytes are not inside b.
 unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
-    : i have ( _gk_p2 . b n ( __gk_esz . b dtype ) )
-    : i want ( _gk_p2 n ( __gk_esz dtype ) )
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
+    : i want ( _gk_p2 n ( _gk_esz dtype ) )
     ? | | | < boff 0 < want 0 < have 0 > want - have boff { ^ ( gk_buf_none dtype ) } {}
     ^ @ GkBuf { + . b dptr boff n dtype ( __gk_mem_share . b mem ) }
+}
+
+// ── 16-bit float buffers (GkHBuf) ─────────────────────────────────────
+
+unsafe @ gk_hbuf_none → GkHBuf { ^ @ GkHBuf { 0 0 F ( __gk_nomem ) } }
+
+@ gk_hbuf_ok GkHBuf h → b { ^ != . h dptr 0 }
+
+@ gk_hbuf_len GkHBuf h → i { ^ . h n }
+
+// `n` 16-bit floats at BYTE offset `boff` into `b` (f16, or bf16 when `bf`):
+// a view holding `b`'s block, none when the 2n bytes are not inside b or
+// boff is odd. How a model carves its half weights out of one allocation.
+unsafe @ gk_hbuf_of GkBuf b i boff i n b bf → GkHBuf {
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
+    : i want ( _gk_p2 n 2 )
+    ? | | | < boff 0 < want 1 < have 0 > want - have boff { ^ ( gk_hbuf_none ) } {}
+    ? | != 0 % boff 2 ! ( gk_buf_ok b ) { ^ ( gk_hbuf_none ) } {}
+    ^ @ GkHBuf { + . b dptr boff n bf ( __gk_mem_share . b mem ) }
+}
+
+// A new buffer of `n` 16-bit floats (contents undefined until uploaded).
+@ gk_hbuf_new GpuKit kit i n b bf → GkHBuf {
+    ? < n 1 { ^ ( gk_hbuf_none ) } {}
+    : GkBuf b ( gk_dbuf_new kit / + n 1 2 GK_F32 )
+    ^ ( gk_hbuf_of b 0 n bf )
+}
+
+// Upload `n` halves from a checked view of their bytes (2n of them, little
+// endian, as a checkpoint stores them): F unless `src` holds that many.
+@ gk_hbuf_upload_bytes GpuKit kit GkHBuf h ( Slice u ) src → b {
+    ? ( gk_hbuf_ok h ) {} { ^ F }
+    ? < ( slice_len [u] src ) * . h n 2 { ^ F } {}
+    ^ ( __gk_hupload_view h src )
+}
+
+unsafe @ __gk_hupload_view GkHBuf h ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . h dptr * . h n 2 ) ( slice_data [u] src ) ) 0
+}
+
+// ── byte buffers (GkBBuf) ───────────────────────────────────────────
+
+// Another owner of the same view (what a call binding holds, so the caller
+// keeps its own).
+unsafe @ _gk_hbuf_share GkHBuf h → GkHBuf { ^ @ GkHBuf { . h dptr . h n . h bf ( __gk_mem_share . h mem ) } }
+
+unsafe @ _gk_bbuf_share GkBBuf q → GkBBuf { ^ @ GkBBuf { . q dptr . q n ( __gk_mem_share . q mem ) } }
+
+unsafe @ gk_bbuf_none → GkBBuf { ^ @ GkBBuf { 0 0 ( __gk_nomem ) } }
+
+@ gk_bbuf_ok GkBBuf q → b { ^ != . q dptr 0 }
+
+@ gk_bbuf_len GkBBuf q → i { ^ . q n }
+
+// `n` bytes at byte offset `boff` into `b`: a view holding `b`'s block, none
+// unless the bytes are inside b, boff is a multiple of 4 and n is at least
+// 4 (so every word a kernel can name lies inside the view).
+unsafe @ gk_bbuf_of GkBuf b i boff i n → GkBBuf {
+    : i have ( _gk_p2 . b n ( _gk_esz . b dtype ) )
+    ? | | | < boff 0 < n 4 < have 0 > n - have boff { ^ ( gk_bbuf_none ) } {}
+    ? | != 0 % boff 4 ! ( gk_buf_ok b ) { ^ ( gk_bbuf_none ) } {}
+    ^ @ GkBBuf { + . b dptr boff n ( __gk_mem_share . b mem ) }
+}
+
+// A new buffer of `n` bytes (contents undefined until uploaded).
+@ gk_bbuf_new GpuKit kit i n → GkBBuf {
+    ? < n 4 { ^ ( gk_bbuf_none ) } {}
+    : GkBuf b ( gk_dbuf_new kit / + n 3 4 GK_F32 )
+    ^ ( gk_bbuf_of b 0 n )
+}
+
+// Upload exactly the buffer's bytes from a checked view of them.
+@ gk_bbuf_upload_bytes GpuKit kit GkBBuf q ( Slice u ) src → b {
+    ? ( gk_bbuf_ok q ) {} { ^ F }
+    ? != ( slice_len [u] src ) . q n { ^ F } {}
+    ^ ( __gk_bupload_view q src )
+}
+
+unsafe @ __gk_bupload_view GkBBuf q ( Slice u ) src → b {
+    ^ == ( gpu_upload ( gpu_buffer_view . q dptr . q n ) ( slice_data [u] src ) ) 0
 }
 
 // A buffer over device memory something else owns (another package's
@@ -91,7 +171,7 @@ unsafe @ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
 // stays alive for as long as the GkBuf is used.
 raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
 
-@ __gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
+@ _gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
 
 @ _gk_tname i dtype → s {
     ? == dtype GK_F32 { ^ `float` } {}
@@ -122,17 +202,21 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 
 // Bytes per element. Needed by anyone addressing a sub-range of a buffer
 // (the device pointer is byte-addressed), which is why it is public
-// rather than the file-private __gk_esz it wraps.
-@ gk_buf_esz GkBuf b → i { ^ ( __gk_esz . b dtype ) }
+// rather than the file-private _gk_esz it wraps.
+@ gk_buf_esz GkBuf b → i { ^ ( _gk_esz . b dtype ) }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 @ gk_dbuf_new GpuKit h i n i dtype → GkBuf {
     ? & ( _gk_ok h ) > n 0 {} { ^ ( gk_buf_none dtype ) }
     ? ( _gk_census h ) { ^ ( __gk_census_buf h n dtype ) } {}
+    // (The byte count is the checked product: n * 8 wraps for an n near
+    // 2^61, and a buffer of 8 bytes would then claim 2^61 elements to
+    // every check that trusts its length.)
+    : i bytes ( _gk_p2 n ( _gk_esz dtype ) )
+    ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
     : GkInfo kit ( arc_get [GkInfo] . h info )
     ( _gk_pool_default kit )
-    : i bytes * n ( __gk_esz dtype )
     : ~ GkState st ( locked_take [GkState] . h st )
     : i dptr ( __gk_alloc_in st kit bytes )
     ( locked_restore [GkState] . h st st )
@@ -146,7 +230,7 @@ raw @ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk
 // memory that exists (a CPU kernel sees zeros, CUDA reports an invalid
 // address), never at a made-up one.
 unsafe @ __gk_census_buf GpuKit h i n i dtype → GkBuf {
-    : i bytes ( _gk_p2 n ( __gk_esz dtype ) )
+    : i bytes ( _gk_p2 n ( _gk_esz dtype ) )
     ? < bytes 1 { ^ ( gk_buf_none dtype ) } {}
     : ( Vec u ) host ( vec_zeroed [u] bytes )
     : i dptr # i ( vec_data [u] host )
@@ -185,18 +269,21 @@ unsafe @ __gk_owned_buf GpuKit h i dptr i n i dtype → GkBuf {
 // An f32 buffer `b` filled from (`up`) or read into an f64 Vec through a
 // staging f64 buffer and one cast kernel. F when the staging buffer or the
 // kernel is not to be had (the caller takes the host path).
-unsafe @ __gk_f32_dev GpuKit kit GkBuf b ( Vec f ) host b up → b {
+@ __gk_f32_dev GpuKit kit GkBuf b ( Vec f ) host b up → b {
     : i n . b n
     : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
     ? ( gk_buf_ok stg ) {} { ^ F }
-    : ( Vec i ) a ( vec_new [i] )
+    // (the store converts: to float rounding to nearest, to double exactly)
+    : ~ GkCall c ( gk_call_new )
     ? up {
         ? ( gk_dbuf_upload kit stg host ) {} { ^ F }
-        ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
-        ^ ( gk_run_dev kit `extern "C" __global__ void gk_d2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }` `gk_d2f` ( gk_grid n 256 ) 256 a )
+        ( gk_call_dev_in c `x` stg )
+        ( gk_call_dev c `y` b )
+        ^ ( gk_run_checked_dev kit c `gk_d2f` `ST(y, gid, LD(x, gid));` ( gk_grid n 256 ) 256 )
     } {}
-    ( vec_push [i] a ( gk_arg_dev b ) ) ( vec_push [i] a ( gk_arg_dev stg ) ) ( vec_push [i] a ( gpu_arg_i64 n ) )
-    ? ( gk_run_dev kit `extern "C" __global__ void gk_f2d(const float* in, double* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (double)in[i]; }` `gk_f2d` ( gk_grid n 256 ) 256 a ) {} { ^ F }
+    ( gk_call_dev_in c `x` b )
+    ( gk_call_dev c `y` stg )
+    ? ( gk_run_checked_dev kit c `gk_f2d` `ST(y, gid, LD(x, gid));` ( gk_grid n 256 ) 256 ) {} { ^ F }
     ^ ( gk_dbuf_download kit stg host )
 }
 
@@ -209,7 +296,7 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     : i m ( vec_len [f] src )
-    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( _gk_esz . b dtype ) )
     ? & == . b dtype GK_F64 >= m n {
         ^ == ( gpu_upload gb # *u ( vec_data [f] src ) ) 0
     } {}
@@ -221,7 +308,7 @@ unsafe @ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
         ? ( __gk_f32_dev kit b src T ) { ^ T } {}
     } {}
     // stage-convert on the host, then one upload
-    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : GpuHost stage ( gpu_host_alloc * n ( _gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
     : ~ i k 0
     ~ < k n {
@@ -241,7 +328,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     ? >= ( vec_len [f] dst ) n {} { ^ F }
-    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( _gk_esz . b dtype ) )
     ? == . b dtype GK_F64 {
         ^ == ( gpu_download # *u ( vec_data [f] dst ) gb ) 0
     } {}
@@ -249,7 +336,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? & & == . b dtype GK_F32 >= n 4096 ! ( _gk_census kit ) {
         ? ( __gk_f32_dev kit b dst F ) { ^ T } {}
     } {}
-    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : GpuHost stage ( gpu_host_alloc * n ( _gk_esz . b dtype ) )
     : *u sp ( gpu_host_ptr stage )
     : i rc ( gpu_download sp gb )
     ? == rc 0 {
@@ -279,7 +366,7 @@ unsafe @ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
 // that has them as a checked view uploads with gk_dbuf_upload_bytes.
 raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
-    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) src ) 0
 }
 
 // The same from a checked view of the bytes (a tensor's bytes in a mapped
@@ -287,7 +374,7 @@ raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
 // b.n elements. Safe, and as fast — one memcpy to the device.
 @ gk_dbuf_upload_bytes GpuKit kit GkBuf b ( Slice u ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
-    ? < ( slice_len [u] src ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ? < ( slice_len [u] src ) * . b n ( _gk_esz . b dtype ) { ^ F } {}
     ^ ( __gk_upload_view b src )
 }
 
@@ -300,29 +387,33 @@ raw @ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
 // back afterwards — for a one-off load; a caller sending batch after
 // batch keeps it.
 unsafe @ gk_dbuf_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs b release → b {
+    ^ ( gk_upload_batch kit dsts srcs ( vec_new [GkHBuf] ) ( vec_new [( Slice u )] ) release )
+}
+
+// The same batch with 16-bit float buffers among the destinations — a
+// model whose matrices stay half on the device and whose norms do not:
+// hsrcs[k] holds exactly hdsts[k]'s 2n bytes. One pass for both.
+unsafe @ gk_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) srcs ( Vec GkHBuf ) hdsts ( Vec ( Slice u ) ) hsrcs b release → b {
     ? ( _gk_ok kit ) {} { ^ F }
     : i n ( vec_len [GkBuf] dsts )
     ? == n ( vec_len [( Slice u )] srcs ) {} { ^ F }
+    : i nh ( vec_len [GkHBuf] hdsts )
+    ? == nh ( vec_len [( Slice u )] hsrcs ) {} { ^ F }
     : ~ ( Vec GpuCopy ) q ( vec_new [GpuCopy] )
     : ~ i k 0
     ~ < k n {
-        : ~ b fit F
-        ?? ( vec_get [GkBuf] dsts k ) {
-            T d → {
-                ?? ( vec_get [( Slice u )] srcs k ) {
-                    T sv → {
-                        : i bytes ( _gk_p2 . d n ( __gk_esz . d dtype ) )
-                        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) bytes {
-                            ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) bytes } )
-                            = fit T
-                        } {}
-                    }
-                    F → {}
-                }
-            }
-            F → {}
-        }
-        ? fit {} { ^ F }
+        : GkBuf d ( vec_at [GkBuf] dsts k )
+        : ( Slice u ) sv ( vec_at [( Slice u )] srcs k )
+        ? & ( gk_buf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n ( _gk_esz . d dtype ) ) {} { ^ F }
+        ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) ( slice_len [u] sv ) } )
+        = k + k 1
+    }
+    = k 0
+    ~ < k nh {
+        : GkHBuf d ( vec_at [GkHBuf] hdsts k )
+        : ( Slice u ) sv ( vec_at [( Slice u )] hsrcs k )
+        ? & ( gk_hbuf_ok d ) == ( slice_len [u] sv ) ( _gk_p2 . d n 2 ) {} { ^ F }
+        ( vec_push [GpuCopy] q @ GpuCopy { . d dptr # i ( slice_data [u] sv ) ( slice_len [u] sv ) } )
         = k + k 1
     }
     ? ( _gk_census kit ) { ^ T } {}
@@ -333,20 +424,35 @@ unsafe @ gk_dbuf_upload_batch GpuKit kit ( Vec GkBuf ) dsts ( Vec ( Slice u ) ) 
 
 // (`src` holds the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_upload_view GkBuf b ( Slice u ) src → b {
-    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) ( slice_data [u] src ) ) 0
 }
 
 // Device → a checked view of host bytes: F unless `dst` has room for the
 // buffer's b.n elements. The download counterpart of gk_dbuf_upload_bytes.
 @ gk_dbuf_download_bytes GpuKit kit GkBuf b ( Slice u ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
-    ? < ( slice_len [u] dst ) * . b n ( __gk_esz . b dtype ) { ^ F } {}
+    ? < ( slice_len [u] dst ) * . b n ( _gk_esz . b dtype ) { ^ F } {}
     ^ ( __gk_download_view b dst )
 }
 
 // (`dst` has room for the buffer's bytes: checked by the caller above.)
 unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
-    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) ) 0
+    ^ == ( gpu_download ( slice_data [u] dst ) ( gpu_buffer_view . b dptr * . b n ( _gk_esz . b dtype ) ) ) 0
+}
+
+// Device → page-locked host memory (a GpuHost from gpu_host_alloc): all of
+// the buffer's bytes into the front of `h`. F unless `h` has room for them.
+// A view of the buffer downloads part of it.
+@ gk_dbuf_download_host GpuKit kit GkBuf b GpuHost h → b {
+    ? ( gk_buf_ok b ) {} { ^ F }
+    : i bytes ( _gk_p2 . b n ( _gk_esz . b dtype ) )
+    ? | < bytes 1 > bytes ( gpu_host_bytes h ) { ^ F } {}
+    ^ ( __gk_download_host b h bytes )
+}
+
+// (`h` holds at least `bytes`, the buffer's own size: checked above.)
+unsafe @ __gk_download_host GkBuf b GpuHost h i bytes → b {
+    ^ == ( gpu_download ( gpu_host_ptr h ) ( gpu_buffer_view . b dptr bytes ) ) 0
 }
 
 // Device → device: all of `src` into the front of `dst`. F unless both are
@@ -359,7 +465,7 @@ unsafe @ __gk_download_view GkBuf b ( Slice u ) dst → b {
 
 // (Both live, one dtype, `dst` large enough: checked by the caller above.)
 unsafe @ __gk_copy_in GkBuf dst GkBuf src → b {
-    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( __gk_esz . src dtype ) ) . src dptr ) 0
+    ^ == ( gpu_dtod ( gpu_buffer_view . dst dptr * . src n ( _gk_esz . src dtype ) ) . src dptr ) 0
 }
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
@@ -400,9 +506,18 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
 // launches can turn this off, launch away, and gk_sync once at the end —
 // the CUDA stream serialises kernels, and downloads synchronise
 // implicitly; the CPU backend runs launches synchronously either way.
+// gk_autosync switches it for every kit of the process; gk_async for one
+// kit, which is what a library holding its own kit wants — it does not
+// change how anyone else's launches behave.
 : ~ b g_gk_autosync T
 
 @ gk_autosync b on → v { = g_gk_autosync on }
+
+@ gk_async GpuKit h b on → v {
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    = . kit async on
+    ( locked_restore [GkState] . h st kit )
+}
 
 @ gk_sync GpuKit kit → b {
     ? ( _gk_census kit ) { ^ T } {}
@@ -541,15 +656,53 @@ unsafe @ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
     }
 }
 
+// Launch kernel `name` of `src` over raw argument words. The caller vouches
+// that the words fit the kernel. The kit compiles a kernel the first time
+// its NAME is launched and keys its cache by that name: one name is one
+// kernel, and a second source under a name already launched runs the first.
 raw @ gk_run_dev GpuKit h s src s name i grid i block ( Vec i ) args → b {
     ? ( _gk_ok h ) {} { ^ F }
     : GkInfo inf ( arc_get [GkInfo] . h info )
     : ~ GkState kit ( locked_take [GkState] . h st )
     : b ok ( __gk_launch_in kit inf src name grid block args )
+    : b wait & g_gk_autosync ! . kit async
     ( locked_restore [GkState] . h st kit )
     ? ok {} { ^ F }
     ? . inf census { ^ T } {}
-    ? g_gk_autosync { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ? wait { ^ == ( gpu_sync . inf gpu ) 0 } {}
+    ^ T
+}
+
+// The cache slot of kernel `name` (compiled from `src` on first use), -1
+// when it does not compile. A kit's cache only grows, so the slot stays
+// this kernel's for as long as the kit lives.
+unsafe @ _gk_slot_of GpuKit h s src s name → i {
+    ? ( _gk_ok h ) {} { ^ -1 }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    : i slot ( _gk_kernel_slot kit inf src name )
+    ( locked_restore [GkState] . h st kit )
+    ^ slot
+}
+
+// gk_run_dev with the kernel's slot already known (gk_replay): no name
+// lookup. The caller vouches that `slot` is a slot of this kit's cache and
+// `args` fit the kernel in it.
+raw @ _gk_run_slot GpuKit h i slot i grid i block ( Vec i ) args → b {
+    ? ( _gk_ok h ) {} { ^ F }
+    : GkInfo inf ( arc_get [GkInfo] . h info )
+    ? . inf census { ^ T } {}
+    : ~ GkState kit ( locked_take [GkState] . h st )
+    ? g_gk_prof { ( gpu_timer_mark . inf gpu . kit ev0 ) } {}
+    : i rc ( _gk_slot_launch kit slot grid block args )
+    ? & g_gk_prof == rc 0 {
+        ( gpu_timer_mark . inf gpu . kit ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . inf gpu . kit ev0 . kit ev1 ) )
+    } {}
+    : b wait & g_gk_autosync ! . kit async
+    ( locked_restore [GkState] . h st kit )
+    ? == rc 0 {} { ^ F }
+    ? wait { ^ == ( gpu_sync . inf gpu ) 0 } {}
     ^ T
 }
 
@@ -683,14 +836,14 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
         : i dv ? < k pad { 1 } { ( _gk_vi odims - k pad ) }
         : i av ? < k pad { 0 } { ( _gk_vi astr - k pad ) }
         : i bv ? < k pad { 0 } { ( _gk_vi bstr - k pad ) }
-        ( __gkd_dim_arg c `d` k dv ) ( __gkd_dim_arg c `A` k av ) ( __gkd_dim_arg c `B` k bv )
+        ( _gkd_dim_arg c `d` k dv ) ( _gkd_dim_arg c `A` k av ) ( _gkd_dim_arg c `B` k bv )
         = k + k 1
     }
     ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
 }
 
 // Bind scalar `<p><k>` (d0, A3, …) to `v`.
-@ __gkd_dim_arg inout GkCall c s p i k i v → v {
+@ _gkd_dim_arg inout GkCall c s p i k i v → v {
     : ~ String nm ( string_from p )
     ( string_push_int nm k )
     ( gk_call_i64 c ( string_data nm ) v )
@@ -750,7 +903,7 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
 
 // ── Matmul: C[M×N] = A[M×K]·B[K×N], row-major, sequential-k accumulate ─
 
-// Rows / columns of C one CPU-backend thread owns. See __gkd_mm_tiled.
+// Rows / columns of C one CPU-backend thread owns. See _gk_tile_body.
 : i GKD_RT 8
 : i GKD_CT 32
 
@@ -777,86 +930,11 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
     ^ s
 }
 
-// Register-tiled matmul body for the CPU backend.
-//
-// One thread per output element is right on a GPU, where thousands of
-// threads hide the strided read of B. On the CPU it is the wrong shape
-// by more than an order of magnitude: `B[t*N+col]` walks a column, so
-// every iteration misses cache, and a scalar accumulator gives the
-// vectoriser nothing. Here one thread owns an 8x32 block of C, keeps its
-// accumulators in registers, and reads B along a ROW — 32 contiguous
-// elements, reused by all 8 rows of the tile. Measured on a 6-core
-// i7-5930K at 512x1024x1024 f64: 1.7 -> 42 GFLOP/s.
-//
-// Per output element the sum still runs t = 0..K ascending with the same
-// arithmetic, so every value is bit-identical to the per-element kernel
-// and to a naive sequential host matmul. Only the visit order changes.
-//
-// CPU-only on purpose: 256 accumulators per thread is far past a CUDA
-// thread's register budget and would spill to local memory.
-@ __gkd_mm_tiled s tn i dtype → String {
-    : String s ( string_from `enum{RT=8,CT=32};` )
-    ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
-    ( string_push_str s `long long rb=(idx/ncb)*RT,cb=(idx%ncb)*CT;` )
-    ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
-    ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
-    ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-    : String mac ( _gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
-    // The full-tile path is spelled out separately so the trip counts are
-    // compile-time constants and the inner loop vectorises; the ragged
-    // edge takes the general path.
-    ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
-    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
-    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
-    ( string_push_str s ( string_data mac ) )
-    ( string_push_str s `}}}else{for(long long t=0;t<K;t++){const ` )
-    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<rlim;r++){` )
-    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
-    ( string_push_str s ( string_data mac ) )
-    ( string_push_str s `}}}` )
-    ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)C[(rb+r)*N+cb+c]=acc[r][c];}` )
-    ^ s
-}
+// The CPU backend's register-tiled body (8x32 per thread, B read along
+// a row) is kernels.nu's _gk_tile_body, shared with gk_matmul_f.
 
-// The register-tiled body with a GEMM epilogue: alpha, beta and an
-// optional per-column bias. Kept separate from __gkd_mm_tiled rather
-// than parameterised, because the inner loop is what has to stay simple
-// enough to vectorise and the epilogue runs once per output.
-//
-// Wants B as [K,N], i.e. transb=0. That is the layout the tiling exists
-// for — `B+t*N+cb` is 32 contiguous elements reused by all 8 rows of the
-// tile. Staging a transb=1 weight into it at CALL time was measured and
-// is a LOSS: the transpose is a full memory round trip over a cold
-// weight that is then used once, and the model came out 2.4x slower even
-// though an isolated benchmark said 1.5x faster (the benchmark kept the
-// weight in L3 across repeats). Transpose at load time instead.
-@ _gkd_gemm_tiled s tn i dtype → String {
-    : String s ( string_from `enum{RT=8,CT=32};` )
-    ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
-    ( string_push_str s `long long rb=(idx/ncb)*RT,cb=(idx%ncb)*CT;` )
-    ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
-    ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
-    ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-    : String mac ( _gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
-    ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
-    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
-    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
-    ( string_push_str s ( string_data mac ) )
-    ( string_push_str s `}}}else{for(long long t=0;t<K;t++){const ` )
-    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<rlim;r++){` )
-    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
-    ( string_push_str s ( string_data mac ) )
-    ( string_push_str s `}}}` )
-    ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++){` )
-    ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[cb+c]:0;` )
-    ( string_push_str s `Y[(rb+r)*N+cb+c]=alpha*acc[r][c]+beta*bias;}}` )
-    ^ s
-}
-
-// Shared-memory tiled matmul body for the CUDA backend — the body behind
-// gkd_gemm and gkd_bmm both.
+// The shared-memory tiled matmul for the CUDA backend — the body behind
+// gkd_gemm and gkd_bmm both (_gkd_smem_cbody).
 //
 // One thread per output element (the shape this file shipped with) is
 // bandwidth-bound: every MAC costs a fresh global load of B, so a 4090
@@ -905,134 +983,256 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
 // shared-reads-per-MAC ratio (12 per 32 against 8 per 16), which is the
 // bound the 64x64 tile runs into on Ada. Same staging, same ascending-k
 // accumulation, so the value is still bit-identical to the per-element
-// kernel — only the blocking changes.
-@ _gkd_smem_body s tn i dtype i transb i batched i big → String {
-    // 16-byte shared loads on f32. Two things at once: `Bs[kk][tc*4+j]`
-    // read one float at a time makes threads tc and tc+8 hit the same
-    // bank (4 floats apart, 32 banks) on EVERY read of the inner loop,
-    // and one LDS per float is three extra instructions per four FMAs.
-    // A float4 read is one conflict-free 16-byte access. It needs the
-    // shared rows 16-byte aligned, hence the +4 pad rather than the +1
-    // that only separates banks.
+// kernel — only the blocking changes. (On f32 the shared rows are read
+// as 16-byte groups, LD4: one conflict-free load instead of four
+// bank-conflicting ones, which needs the rows 16-byte aligned — hence
+// a pad of 4 rather than the 1 that only separates banks.)
+
+// Bind `b` as an input of `c`: read-only (restrict, and the read-only
+// cache) unless it overlaps `out`, the buffer the kernel writes — an op
+// called in place reads through a writable binding, as before.
+@ _gkd_in inout GkCall c s name GkBuf b GkBuf out → v {
+    : i e1 * . b n ( _gk_esz . b dtype )
+    : i e2 * . out n ( _gk_esz . out dtype )
+    ? & < . b dptr + . out dptr e2 < . out dptr + . b dptr e1 { ( gk_call_dev c name b ) } { ( gk_call_dev_in c name b ) }
+}
+
+// ── Checked matmul bodies (device buffers) ───────────────────────────
+
+// alpha / beta as the element type: a checked scalar is a double, and an
+// f32 GEMM's epilogue rounds in float.
+@ _gkd_ab i dtype s nm → String {
+    : ~ String s ( string_from ? == dtype GK_F32 `((float)` `(` )
+    ( string_push_str s nm ) ( string_push_char s 41 )
+    ^ s
+}
+
+// The CUDA shared-memory tile, checked (see the notes above for the
+// design and the measurements: a block owns a 64x64 or 128x64 tile of Y,
+// stages 16-wide slices of A and B into shared memory, each thread keeps
+// a 4x4 or 8x4 register block). The tiles are SHARED arrays — an f32 one
+// read four at a time with LD4, a 16-byte shared load — and every index
+// into them and into the register block is made of `tid`, loop counters
+// and constants, so its check folds. The staging loads are checked
+// against their buffers. Each output still sums t = 0..K-1 ascending,
+// out-of-range slots adding exact zeros: bit-identical to the raw tile.
+//
+// Bindings A, B, Y (and Cb, the bias, for the GEMM); scalars M, N, K,
+// and alpha, beta, hasB (GEMM) or as, bs (batched: per-batch strides,
+// 0 broadcasting).
+@ _gkd_smem_cbody s tn i dtype b transb b batched b big → String {
     : b vec4 == dtype GK_F32
-    : String s ( string_from ? != big 0
-    `enum{BM=128,BN=64,BK=16,TM=8,TN=4,NT=256};`
-    `enum{BM=64,BN=64,BK=16,TM=4,TN=4,NT=256};` )
-    // __align__(16) is not decoration: the float4 reads below are only
-    // defined if the array base is 16-byte aligned, and a __shared__
-    // array is only guaranteed its element's alignment.
-    ( string_push_str s ? vec4 `__shared__ __align__(16) ` `__shared__ ` )
-    ( string_push_str s tn )
-    ( string_push_str s ? vec4 ` As[BK][BM+4];__shared__ __align__(16) ` ` As[BK][BM+1];__shared__ ` )
-    ( string_push_str s tn )
-    ( string_push_str s ? vec4 ` Bs[BK][BN+4];` ` Bs[BK][BN+1];` )
-    ( string_push_str s `long long nbx=(N+BN-1)/BN;` )
-    ? != batched 0 {
-        ( string_push_str s `long long nby=(M+BM-1)/BM,tpb=nbx*nby;` )
-        ( string_push_str s `long long bi=blockIdx.x/tpb,tile=blockIdx.x%tpb;` )
-        ( string_push_str s `long long rb=(tile/nbx)*BM,cb=(tile%nbx)*BN;` )
-        ( string_push_str s `const ` ) ( string_push_str s tn )
-        ( string_push_str s `* A=Ab+bi*as;const ` )
-        ( string_push_str s tn ) ( string_push_str s `* B=Bb+bi*bs;` )
+    : i bm ? big 128 64
+    : i tm ? big 8 4
+    : i pad ? vec4 4 1
+    : ~ String s ( string_new )
+    ( string_push_str s ? vec4 `SHARED_F(As, ` `SHARED_D(As, ` ) ( string_push_int s * 16 + bm pad ) ( string_push_str s `);
+` )
+    ( string_push_str s ? vec4 `SHARED_F(Bs, ` `SHARED_D(Bs, ` ) ( string_push_int s * 16 + 64 pad ) ( string_push_str s `);
+` )
+    ( string_push_str s ? vec4 `LOCAL_F(acc, ` `LOCAL_D(acc, ` ) ( string_push_int s * tm 4 ) ( string_push_str s `);
+` )
+    : ~ String sb ( string_new )
+    ( string_push_str sb `const int BM = ` ) ( string_push_int sb bm ) ( string_push_str sb `, BN = 64, BK = 16, TM = ` ) ( string_push_int sb tm )
+    ( string_push_str sb `, TN = 4, NT = 256, PA = ` ) ( string_push_int sb + bm pad ) ( string_push_str sb `, PB = ` ) ( string_push_int sb + 64 pad ) ( string_push_str sb `;
+long long nbx = (N + BN - 1) / BN;
+` )
+    ? batched {
+        ( string_push_str sb `long long nby = (M + BM - 1) / BM, tpb = nbx * nby;
+long long bi = bid / tpb, tile = bid % tpb;
+long long rb = (tile / nbx) * BM, cb = (tile % nbx) * BN;
+long long ao = bi * as, bo = bi * bs;
+` )
     } {
-        ( string_push_str s `long long rb=(blockIdx.x/nbx)*BM,cb=(blockIdx.x%nbx)*BN;` )
+        ( string_push_str sb `long long rb = (bid / nbx) * BM, cb = (bid % nbx) * BN;
+long long ao = 0, bo = 0;
+` )
     }
-    ( string_push_str s `int tx=threadIdx.x,tr=tx/(BN/TN),tc=tx%(BN/TN);` )
-    ( string_push_str s tn ) ( string_push_str s ` acc[TM][TN];` )
-    ( string_push_str s `for(int i=0;i<TM;i++)for(int j=0;j<TN;j++)acc[i][j]=0;` )
-    ( string_push_str s `for(long long k0=0;k0<K;k0+=BK){` )
-    // stage A[BM,BK] — 4 elements per thread, k contiguous within a row
-    ( string_push_str s `for(int l=0;l<BM*BK/NT;l++){int id=l*NT+tx;` )
-    ( string_push_str s `int ar=id/BK,ak=id%BK;long long gr=rb+ar,gk=k0+ak;` )
-    ( string_push_str s `As[ak][ar]=(gr<M&&gk<K)?A[gr*K+gk]:(` )
-    ( string_push_str s tn ) ( string_push_str s `)0;}` )
-    // stage B[BK,BN]
-    ( string_push_str s `for(int l=0;l<BK*BN/NT;l++){int id=l*NT+tx;` )
-    ? != transb 0 {
-        ( string_push_str s `int bn=id/BK,bk=id%BK;long long gk=k0+bk,gc=cb+bn;` )
-        ( string_push_str s `Bs[bk][bn]=(gk<K&&gc<N)?B[gc*K+gk]:(` )
-    } {
-        ( string_push_str s `int bk=id/BN,bn=id%BN;long long gk=k0+bk,gc=cb+bn;` )
-        ( string_push_str s `Bs[bk][bn]=(gk<K&&gc<N)?B[gk*N+gc]:(` )
+    ( string_push_str sb `int tr = tid / (BN / TN), tc = tid % (BN / TN);
+for (long long k0 = 0; k0 < K; k0 += BK) {
+    for (int l = 0; l < BM * BK / NT; l++) {
+        int id = l * NT + tid; int ar = id / BK, ak = id % BK; long long gr = rb + ar, gk = k0 + ak;
+        ST(As, ak * PA + ar, (gr < M && gk < K) ? LD(A, ao + gr * K + gk) : 0);
     }
-    ( string_push_str s tn ) ( string_push_str s `)0;}` )
-    ( string_push_str s `__syncthreads();` )
-    ( string_push_str s `for(int kk=0;kk<BK;kk++){` )
-    ? & vec4 != big 0 {
-        // TM=8 is two float4 reads; tr*TM is 32-byte aligned so both are
-        // 16-byte aligned loads.
-        ( string_push_str s `float4 av4=*(const float4*)&As[kk][tr*TM];` )
-        ( string_push_str s `float4 av4b=*(const float4*)&As[kk][tr*TM+4];` )
-        ( string_push_str s `float4 bv4=*(const float4*)&Bs[kk][tc*TN];` )
-        ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w,av4b.x,av4b.y,av4b.z,av4b.w};` )
-        ( string_push_str s `float bv[TN]={bv4.x,bv4.y,bv4.z,bv4.w};` )
+    for (int l = 0; l < BK * BN / NT; l++) {
+        int id = l * NT + tid;
+` )
+    ? transb {
+        ( string_push_str sb `        int bn = id / BK, bk = id % BK; long long gk = k0 + bk, gc = cb + bn;
+        ST(Bs, bk * PB + bn, (gk < K && gc < N) ? LD(B, bo + gc * K + gk) : 0);
+` )
     } {
-        ? vec4 {
-            ( string_push_str s `float4 av4=*(const float4*)&As[kk][tr*TM];` )
-            ( string_push_str s `float4 bv4=*(const float4*)&Bs[kk][tc*TN];` )
-            ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w};` )
-            ( string_push_str s `float bv[TN]={bv4.x,bv4.y,bv4.z,bv4.w};` )
-        } {
-            ( string_push_str s tn ) ( string_push_str s ` av[TM];` )
-            ( string_push_str s tn ) ( string_push_str s ` bv[TN];` )
-            ( string_push_str s `for(int i=0;i<TM;i++)av[i]=As[kk][tr*TM+i];` )
-            ( string_push_str s `for(int j=0;j<TN;j++)bv[j]=Bs[kk][tc*TN+j];` )
+        ( string_push_str sb `        int bk = id / BN, bn = id % BN; long long gk = k0 + bk, gc = cb + bn;
+        ST(Bs, bk * PB + bn, (gk < K && gc < N) ? LD(B, bo + gk * N + gc) : 0);
+` )
+    }
+    ( string_push_str sb `    }
+    SYNC();
+    for (int kk = 0; kk < BK; kk++) {
+` )
+    ? vec4 {
+        ( string_push_str sb `        float a0, a1, a2, a3, b0, b1, b2, b3;
+        LD4(As, kk * PA + tr * TM, a0, a1, a2, a3);
+` )
+        ? big {
+            ( string_push_str sb `        float a4, a5, a6, a7;
+        LD4(As, kk * PA + tr * TM + 4, a4, a5, a6, a7);
+` )
+        } {}
+        ( string_push_str sb `        LD4(Bs, kk * PB + tc * TN, b0, b1, b2, b3);
+` )
+    } {
+        : ~ i q 0
+        ~ < q tm {
+            ( string_push_str sb `        double a` ) ( string_push_int sb q ) ( string_push_str sb ` = LD(As, kk * PA + tr * TM + ` ) ( string_push_int sb q ) ( string_push_str sb `);
+` )
+            = q + q 1
         }
+        ( string_push_str sb `        double b0 = LD(Bs, kk * PB + tc * TN), b1 = LD(Bs, kk * PB + tc * TN + 1), b2 = LD(Bs, kk * PB + tc * TN + 2), b3 = LD(Bs, kk * PB + tc * TN + 3);
+` )
     }
-    ( string_push_str s `for(int i=0;i<TM;i++)` )
-    ( string_push_str s `for(int j=0;j<TN;j++)` )
-    : String mac ( _gkd_mac dtype `acc[i][j]` `av[i]` `bv[j]` )
-    ( string_push_str s ( string_data mac ) )
-    ( string_push_str s `}__syncthreads();}` )
-    ( string_push_str s `for(int i=0;i<TM;i++){long long gr=rb+tr*TM+i;if(gr<M)` )
-    ( string_push_str s `for(int j=0;j<TN;j++){long long gc=cb+tc*TN+j;if(gc<N){` )
-    ? != batched 0 {
-        ( string_push_str s `Y[(bi*M+gr)*N+gc]=acc[i][j];}}}}` )
+    // (the register block's multiply-adds written out, i then j, as the
+    // raw tile's loops ran them)
+    : ~ i i 0
+    ~ < i tm {
+        : ~ i j 0
+        ~ < j 4 {
+            : ~ String ix ( string_new ) ( string_push_int ix + * i 4 j )
+            : ~ String av ( string_from `a` ) ( string_push_int av i )
+            : ~ String bv ( string_from `b` ) ( string_push_int bv j )
+            ( string_push_str sb `        ` )
+            ( string_push_str sb ( string_data ( _gk_cmac dtype ( string_data ix ) ( string_data av ) ( string_data bv ) ) ) )
+            ( string_push_str sb `
+` )
+            = j + j 1
+        }
+        = i + i 1
+    }
+    // (a row of the block's tile of Y as a window, past N outside it: a
+    // store's own check is the edge test, and the row's stores are at
+    // constant offsets from one base)
+    ( string_push_str sb `    }
+    SYNC();
+}
+long long cols = N - cb < BN ? N - cb : BN;
+for (int i = 0; i < TM; i++) {
+    long long gr = rb + tr * TM + i;
+    if (gr < M) {
+` )
+    ( string_push_str sb ? batched `        WIN(yr, Y, (bi * M + gr) * N + cb, cols);
+` `        WIN(yr, Y, gr * N + cb, cols);
+` )
+    ( string_push_str sb `        for (int j = 0; j < TN; j++) {
+` )
+    ? batched {
+        ( string_push_str sb `            ST(yr, tc * TN + j, LD(acc, i * TN + j));
+` )
     } {
-        ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[gc]:(` )
-        ( string_push_str s tn ) ( string_push_str s `)0;` )
-        ( string_push_str s `Y[gr*N+gc]=alpha*acc[i][j]+beta*bias;}}}}` )
+        // (alpha·acc rounded on its own, beta·bias fused into the add —
+        // the raw kernel's compile chose that, and naming it keeps the
+        // code around it from changing which product fuses)
+        ( string_push_str sb `            long long gc = cb + tc * TN + j;
+            ` ) ( string_push_str sb tn ) ( string_push_str sb ` bias = hasB != 0 ? LD(Cb, gc) : 0;
+            ST(yr, tc * TN + j, ` ) ( string_push_str sb ? == dtype GK_F32 `__fmul_rn(` `__dmul_rn(` ) ( string_push_str sb ( string_data ( _gkd_ab dtype `alpha` ) ) )
+        ( string_push_str sb `, LD(acc, i * TN + j)) + ` ) ( string_push_str sb ( string_data ( _gkd_ab dtype `beta` ) ) ) ( string_push_str sb ` * bias);
+` )
+    }
+    ( string_push_str sb `        }
+    }
+}` )
+    ( string_push_str s ( string_data sb ) )
+    ^ s
+}
+
+// The GEMV on CUDA, checked: a block per output, its threads staging
+// the two operand chunks coalesced into shared memory, and one thread's
+// single ascending sum over them (see gkd_gemm).
+@ _gkd_gemv_cbody s tn i dtype b transb → String {
+    : ~ String s ( string_from ? == dtype GK_F32 `SHARED_F(sa, 1024);
+SHARED_F(sb, 1024);
+` `SHARED_D(sa, 1024);
+SHARED_D(sb, 1024);
+` )
+    ( string_push_str s `if (bid < M * N) {
+    long long r = bid / N, c = bid % N;
+    ` ) ( string_push_str s tn ) ( string_push_str s ` acc = 0;
+    for (long long k0 = 0; k0 < K; k0 += 1024) {
+        long long cnt = K - k0 < 1024 ? K - k0 : 1024;
+        for (long long j = tid; j < cnt; j += bdim) {
+            ST(sa, j, LD(A, r * K + k0 + j));
+            ST(sb, j, ` ) ( string_push_str s ? transb `LD(B, c * K + k0 + j)` `LD(B, (k0 + j) * N + c)` ) ( string_push_str s `);
+        }
+        SYNC();
+        // (a whole chunk to a constant bound: its shared reads' checks fold)
+        if (tid == 0) {
+            if (cnt == 1024) {
+                for (int j = 0; j < 1024; j++) { ` ) ( string_push_str s ( string_data ( _gkd_mac dtype `acc` `LD(sa, j)` `LD(sb, j)` ) ) ) ( string_push_str s ` }
+            } else {
+                for (long long j = 0; j < cnt; j++) { ` ) ( string_push_str s ( string_data ( _gkd_mac dtype `acc` `LD(sa, j)` `LD(sb, j)` ) ) ) ( string_push_str s ` }
+            }
+        }
+        SYNC();
+    }
+    if (tid == 0) {
+        ` ) ( string_push_str s tn ) ( string_push_str s ` bias = hasB != 0 ? LD(Cb, c) : 0;
+        ST(Y, bid, ` ) ( string_push_str s ( string_data ( _gkd_ab dtype `alpha` ) ) ) ( string_push_str s ` * acc + ` ) ( string_push_str s ( string_data ( _gkd_ab dtype `beta` ) ) ) ( string_push_str s ` * bias);
+    }
+}` )
+    ^ s
+}
+
+// One thread per output, checked: A's row and B's column as windows (a
+// column of B is strided unless B is transposed). `mac` T: the sum is
+// spelled as _gkd_mac spells it (gkd_matmul, gkd_bmm); F: a plain
+// `acc += a * b`, which CUDA may fuse — the GEMM's per-element kernel
+// always did. `gemm`: the alpha/beta/bias epilogue; `batched`: offsets
+// per batch (as, bs), `nb` batches.
+@ _gkd_elem_cbody s tn i dtype b transb b gemm b batched b mac → String {
+    : ~ String s ( string_new )
+    ( string_push_str s ? batched `if (gid < nb * M * N) {
+    long long c = gid % N, t = gid / N, r = t % M, bi = t / M;
+    long long ao = bi * as, bo = bi * bs;
+` `if (gid < M * N) {
+    long long r = gid / N, c = gid % N;
+    long long ao = 0, bo = 0;
+` )
+    ( string_push_str s `    WIN(ar, A, ao + r * K, K);
+    ` ) ( string_push_str s ? transb `WIN(bc, B, bo + c * K, K);` `WINS(bc, B, bo + c, K, N);` )
+    ( string_push_str s `
+    ` ) ( string_push_str s tn ) ( string_push_str s ` acc = 0;
+    if (LEN(ar) == K && LEN(bc) == K) {
+        for (long long k = 0; k < K; k++) { ` )
+    ? mac { ( string_push_str s ( string_data ( _gkd_mac dtype `acc` `LD(ar, k)` `LD(bc, k)` ) ) ) } { ( string_push_str s `acc += LD(ar, k) * LD(bc, k);` ) }
+    ( string_push_str s ` }
+    }
+` )
+    ? gemm {
+        ( string_push_str s `    ` ) ( string_push_str s tn ) ( string_push_str s ` bias = hasB != 0 ? LD(Cb, c) : 0;
+    ST(Y, gid, ` ) ( string_push_str s ( string_data ( _gkd_ab dtype `alpha` ) ) ) ( string_push_str s ` * acc + ` ) ( string_push_str s ( string_data ( _gkd_ab dtype `beta` ) ) ) ( string_push_str s ` * bias);
+}` )
+    } {
+        ( string_push_str s `    ST(Y, gid, acc);
+}` )
     }
     ^ s
 }
 
-unsafe @ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
+@ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? & & == . a n ( _gk_p2 m k ) == . b n ( _gk_p2 k n ) == . c n ( _gk_p2 m n ) {} { ^ F }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : s tn ( _gk_tname . c dtype )
-    : String kname ( string_from ( _gk_pfx . c dtype ) )
+    : i dt . c dtype
+    : String kname ( string_from ( _gk_pfx dt ) )
     ( string_push_str kname ? on_cpu `matmul_tiled` `matmul` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, ` )
-    ( string_push_str src tn ) ( string_push_str src `* C, long long M, long long K, long long N){` )
-    ? on_cpu {
-        : String body ( __gkd_mm_tiled tn . c dtype )
-        ( string_push_str src ( string_data body ) )
-    } {
-        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-        ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
-        ( string_push_str src tn ) ( string_push_str src ` s=0;` )
-        : String mac ( _gkd_mac . c dtype `s` `A[r*K+t]` `B[t*N+cx]` )
-        ( string_push_str src `for(long long t=0;t<K;t++)` )
-        ( string_push_str src ( string_data mac ) )
-        ( string_push_str src `C[idx]=s;}}` )
-    }
+    : ~ GkCall cl ( gk_call_new )
+    ( _gkd_in cl `A` a c ) ( _gkd_in cl `B` b c ) ( gk_call_dev cl `Y` c )
+    ( gk_call_i64 cl `M` m ) ( gk_call_i64 cl `K` k ) ( gk_call_i64 cl `N` n )
     : i total ? on_cpu
     * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT )
     * m n
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gk_arg_dev c ) )
-    ( vec_push [i] args ( gpu_arg_i64 m ) )
-    ( vec_push [i] args ( gpu_arg_i64 k ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ^ r
+    ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) `` \ → String { ^ ? on_cpu ( _gk_tile_body tn dt F F ) ( _gkd_elem_cbody tn dt F F F T ) } ( gk_grid total 256 ) 256 )
 }
 
 // ── Batched matmul: Y[b,M,N] = A[b,M,K]·B[b,K,N] ──────────────────────
@@ -1040,7 +1240,7 @@ unsafe @ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
 // 0 broadcasts its single matrix across the whole batch. Accumulation is
 // sequential over K in the element type, exactly like gkd_matmul.
 
-unsafe @ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
+@ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . y dtype GK_I64 {} { ^ F }
@@ -1052,82 +1252,27 @@ unsafe @ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatc
     : i bstep ? != bbatch 0 { * kk n } { 0 }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     // The attention matmuls a transformer runs are exactly the shapes the
-    // shared-memory tile exists for; see _gkd_smem_body. Same threshold as
+    // shared-memory tile exists for; see _gkd_smem_cbody. Same threshold as
     // gkd_gemm: a 64x64 tile has to be worth filling.
     : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
     : b smem & & & on_cuda >= m 16 >= n 32 >= kk 16
     : s tn ( _gk_tname . y dtype )
-    : String kname ( string_from ( _gk_pfx . y dtype ) )
+    : i dt . y dtype
+    : String kname ( string_from ( _gk_pfx dt ) )
     ( string_push_str kname ? smem `bmm_smem` ? on_cpu `bmm_tiled` `bmm` )
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn )
-    ( string_push_str src ? smem `* Ab, const ` `* A, const ` )
-    ( string_push_str src tn ) ( string_push_str src ? smem `* Bb, ` `* B, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, long long as, long long bs, long long total){` )
+    : ~ GkCall cl ( gk_call_new )
+    ( _gkd_in cl `A` a y ) ( _gkd_in cl `B` b y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `M` m ) ( gk_call_i64 cl `N` n ) ( gk_call_i64 cl `K` kk )
+    ( gk_call_i64 cl `as` astep ) ( gk_call_i64 cl `bs` bstep ) ( gk_call_i64 cl `nb` batch )
+    // the smem body maps ONE BLOCK to a 64x64 tile of one batch item, so
+    // its launch is a block count, not a thread count
     ? smem {
-        ( string_push_str src `(void)total;` )
-        : String body ( _gkd_smem_body tn . y dtype 0 1 0 )
-        ( string_push_str src ( string_data body ) )
-    } {
-        ? on_cpu {
-            // Same register tile as gkd_matmul, with the batch folded into the
-            // thread index; per output element the K sum is unchanged, so the
-            // values are bit-identical to the per-element form.
-            ( string_push_str src `enum{RT=8,CT=32};` )
-            ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-            ( string_push_str src `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;` )
-            ( string_push_str src `if(idx>=total)return;` )
-            ( string_push_str src `long long tile=idx%(nrb*ncb),bi=idx/(nrb*ncb);` )
-            ( string_push_str src `long long rb=(tile/ncb)*RT,cb=(tile%ncb)*CT;` )
-            ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
-            ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+bi*as;const ` )
-            ( string_push_str src tn ) ( string_push_str src `* bb=B+bi*bs;` )
-            ( string_push_str src tn ) ( string_push_str src ` acc[RT][CT];` )
-            ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-            : String mac ( _gkd_mac . y dtype `acc[r][c]` `av` `Bt[c]` )
-            ( string_push_str src `if(rlim==RT&&clim==CT){for(long long k=0;k<K;k++){const ` )
-            ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<RT;r++){` )
-            ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<CT;c++)` )
-            ( string_push_str src ( string_data mac ) )
-            ( string_push_str src `}}}else{for(long long k=0;k<K;k++){const ` )
-            ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<rlim;r++){` )
-            ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<clim;c++)` )
-            ( string_push_str src ( string_data mac ) )
-            ( string_push_str src `}}}` )
-            ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)Y[(bi*M+rb+r)*N+cb+c]=acc[r][c];}` )
-        } {
-            ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
-            ( string_push_str src `long long c=idx%N;long long t=idx/N;long long r=t%M;long long b=t/M;` )
-            ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
-            ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
-            ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-            : String mac ( _gkd_mac . y dtype `acc` `a[r*K+k]` `bb[k*N+c]` )
-            ( string_push_str src `for(long long k=0;k<K;k++)` )
-            ( string_push_str src ( string_data mac ) )
-            ( string_push_str src `Y[idx]=acc;}` )
-        }
-    }
+        ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) `` \ → String { ^ ( _gkd_smem_cbody tn dt F T F ) } * batch * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN ) 256 )
+    } {}
     : i total ? on_cpu
     * batch * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT )
     * * batch m n
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev a ) )
-    ( vec_push [i] args ( gk_arg_dev b ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 m ) )
-    ( vec_push [i] args ( gpu_arg_i64 n ) )
-    ( vec_push [i] args ( gpu_arg_i64 kk ) )
-    ( vec_push [i] args ( gpu_arg_i64 astep ) )
-    ( vec_push [i] args ( gpu_arg_i64 bstep ) )
-    ( vec_push [i] args ( gpu_arg_i64 total ) )
-    // the smem body maps ONE BLOCK to a 64x64 tile of one batch item, so
-    // its launch is a block count, not a thread count
-    : i grid ? smem
-    * batch * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN )
-    ( gk_grid total 256 )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
-    ^ r
+    ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) `` \ → String { ^ ? on_cpu ( _gk_tile_body tn dt T F ) ( _gkd_elem_cbody tn dt F F T T ) } ( gk_grid total 256 ) 256 )
 }
 
 // ── Gather / Scatter along an axis ────────────────────────────────────
