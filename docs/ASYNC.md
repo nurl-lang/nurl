@@ -149,9 +149,11 @@ itself.
   `yield` inside long computations keeps latency flat.
 - **Crossing fibers follows the same ownership rules as threads.** A
   `spawn` closure moves its owned captures (naming one again is an error)
-  and takes its own share of each `Channel` / `Mutex` / `Arc`
-  ([`MEMORY.md` §6.2](MEMORY.md)); shared mutable state belongs behind one
-  of those handles (see [Operational caveats](#operational-caveats)).
+  and takes its own share of each `Channel` / `Mutex` / `Arc` / `Locked`
+  ([`MEMORY.md` §6.2](MEMORY.md)); state fibers change lives in a
+  `( Locked T )` or goes through a `Channel`, and an `Arc` shares a value
+  nobody changes ([`MEMORY.md` §6.5](MEMORY.md); see
+  [Operational caveats](#operational-caveats)).
 
 ## 5. Platform support
 
@@ -235,8 +237,8 @@ source-level traps.
 - **A spawned closure moves what it captures.** A `: ~` by-reference
   capture may not reach a `spawn` closure, as for `thread_spawn` (see
   [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable state across fibers
-  use a share handle (`Mutex` + `Vec[i]`, `Arc`, a `Channel`) rather than a
-  stack struct.
+  use a `( Locked T )` (e.g. `( Locked ( Vec i ) )`) or a `Channel` rather
+  than a stack struct — an `Arc` is for a value nobody changes.
 
 ### Implementation notes (runtime maintainers)
 

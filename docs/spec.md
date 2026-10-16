@@ -155,8 +155,8 @@ declaration is one of:
 | Form | Decl kind |
 |---|---|
 | `$ "path" IDENT?` | import |
-| `('pub')? & "lib" @ name params → type` | FFI |
-| `('pub')? @ name [T]? params → type { body }` | function |
+| `('pub')? ('unsafe')? & "lib" @ name params → ('sink')? type` | FFI (`unsafe` = only `unsafe` code may call it, §3.3d) |
+| `('pub')? (prefix)* @ name [T]? params → type { body }` | function (prefixes `simd`, `inline`, `unsafe`, `raw`; §3.3b–§3.3e) |
 | `('pub')? ('raw')? : Name [T]? { fields }` | struct (`raw` seals it, §3.3e) |
 | `('pub')? : \| Name { variants }` | enum |
 | `('pub')? : type IDENT value` | const / global |
@@ -442,7 +442,10 @@ A function or method declaration may carry a leading `unsafe` prefix
   `virtio_*` / `virtq_*` functions take a device or ring address as an
   `i`, and any number reaches any memory through them; a driver marks the
   functions that do it `unsafe`;
-- read or write a mutable global that owns something (§3.4), or take a
+- read or write a mutable global that owns something, or one of a struct
+  or an option, which no atomic covers (§3.4); hand a mutable `s` global a
+  string to own (in safe code it holds literals, and text that changes at
+  run time lives in a `( Locked String )` set at start); or take a
   global's address with `mem_addr`.
 
 A string (`s`) in safe code is therefore NUL-terminated or null: nothing
@@ -1141,8 +1144,8 @@ struct of them.
 
 Writing a marker impl **overrides** the derivation for that type and stops the
 walk there. `% Send T { }` / `% Sync T { }` assert safety the compiler cannot
-see (`Mutex` is `{ Cell c }` and is nonetheless what makes contents shareable —
-`stdlib/std/thread.nu` marks it); `% NotSend T { }` / `% NotSync T { }` assert
+see (`Mutex` is a handle over raw pthread memory and is nonetheless what makes
+contents shareable — `stdlib/std/thread.nu` marks it); `% NotSend T { }` / `% NotSync T { }` assert
 danger it cannot see (an FFI handle is an `s`, and `s` is Send). A negative
 marker outranks a positive one on the same type. These impls are NURL's
 spelling of Rust's `unsafe impl`: assertions, not proofs. See
@@ -1724,8 +1727,11 @@ A function parameter may carry a leading convention marker (§7.2):
   not use the argument binding afterwards. Compiler-managed enum owners
   and user Drop-trait values transfer their drop obligation, and so do
   raw owned strings: `sink s` is how a function that takes a string over
-  declares it, as `string_adopt` does, and nothing drops one in the
-  callee, which must take it over itself (§7.2). Transfer for owned
+  declares it, as `string_adopt` does. In safe code a declared `sink s`
+  is the callee's own string, released on every way out unless it moves
+  on (returned, handed to another `sink`, adopted as a `String`), and its
+  caller hands over its own string or a copy (§7.2); `unsafe` code and
+  the standard library manage a raw `sink s` by hand. Transfer for owned
   slices and tracked struct fields remains unsupported.
 
 #### Auto-inferred `sink` (v2.1, 2026-05-25)
@@ -1913,12 +1919,12 @@ conventions:
   binding is marked moved. The ABI is by value. Ownership transfers before
   the call; the callee drops a `String`, `Vec`, owning struct, handle
   enum, library handle or `Drop` value on exit unless it returns or
-  transfers it onward. A raw owned `s` is handed over too, but nothing
-  drops it on exit: unless the callee takes it over (`string_adopt`
-  makes it a `String`; `unsafe` code may free it by hand), it leaks, and
-  the compiler does not report that
-  ([`docs/LIMITATIONS.md`](LIMITATIONS.md)). (An owned slice cannot be
-  passed to a `sink` yet.)
+  transfers it onward. A raw `s` is handed over too: in safe code the
+  callee releases it on exit unless it moves it on, and the caller hands
+  over its own string — which leaves the binding — or a copy of anything
+  else ([`docs/MEMORY.md`](MEMORY.md) §1); in `unsafe` code and the
+  standard library a raw `sink s` is managed by hand. (An owned slice
+  cannot be passed to a `sink` yet.)
 
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a

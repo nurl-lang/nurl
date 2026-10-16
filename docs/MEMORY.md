@@ -718,15 +718,15 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 0.71.0 named one exception: a `Slice` built from a `Vec` was not tracked
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
-Since then three of the 0.72.0 review's holes are closed too: an owner
-moved by one argument of a call and read by another (§2.1), and a
-keyword-argument call to a forward function that consumes its argument.
 
 **No open holes.** The 0.72.0 release review found 37 safe programs the
 compiler accepted and that leaked, freed memory they did not own or read
 freed memory, and converting the packages' handles to `Arc` found ten
 more; all are closed, each a probe CI now holds (h142–h194):
 
+- an owner moved by one argument of a call and read by another (§2.1),
+  and a keyword-argument call to a forward function that consumes its
+  argument;
 - a raw string handed to `string_adopt` or a `sink s` parameter: only a
   declared `sink` takes a raw string over, its callee releases it, and a
   caller hands over its own string or a copy (§1);
@@ -738,7 +738,7 @@ more; all are closed, each a probe CI now holds (h142–h194):
   alias of one, a field of an `inout` struct — or into a field of a
   struct that outlives the binding viewed: rejected;
 - `mem_forget`, `mem_take`, `mem_put_back` and the `rcbox` primitives in
-  safe code: `unsafe` only, as §3.3d says;
+  safe code: `unsafe` only, as spec §3.3d says;
 - a destructor that panicked (it ran twice), reassigned a field of its
   receiver (the old value leaked) or handed its receiver to a disposer
   (its fields leaked), and a closure defined inside a `% Drop` impl (it
@@ -989,6 +989,24 @@ functions) before they launch. onnx's tensors also carry the engine and
 run they came from: a tensor of an earlier run, whose device memory
 rt_reset released, is refused rather than read.
 
+Taking `unsafe` out of the rest of the packages found the last of them
+(h257–h273), closed the same way: a binding read out of a field and
+stored back moves when it owns the value (h257); a file's bytes are lent
+as a checked view held to its `MappedFile` (h258), and a `ZipArchive`
+owns or shares the bytes it reads (h260); a join nothing takes owns
+nothing (h259); a temporary argument is dropped after the call whether
+the result is an option, a result with an enum error, or a value that
+cannot be copied (h261, h265), and a field read out of a call's result
+leaves the rest of it to be dropped (h266); a field that cannot be copied
+moves whole out of a struct literal (h264); an option taken out of a
+`Locked` empties its slot (h267); a number, a pointer or a struct is
+never passed where another of them is declared (h262, h268, h269); a
+payload or a forwarded call result handed back lends the parameter it
+came from (h270, h271); and module globals do not race — a global set at
+start holds only a type that synchronises itself (h263), a struct or
+option global is `unsafe`-only (h272), and safe code may not hand an
+`s` global a string to own (h273; §1). No hole is known.
+
 The rules that carry it:
 
 - **An owned value moves.** Storing it into an aggregate, an Option or a
@@ -1053,7 +1071,8 @@ refine: report it at https://github.com/nurl-lang/nurl/issues.
 The guarantee rests on a surface that is trusted rather than checked:
 
 - **`unsafe` functions.** Each one vouches that it is memory-safe and
-  leak-free for every caller. `nurlc --unsafe-report` lists those a
+  leak-free for every caller. A `raw` function (spec §3.3e) vouches for
+  nothing itself: each `unsafe` caller vouches for its call. `nurlc --unsafe-report` lists those a
   program contains outside the standard library, which is the whole
   surface a reviewer of that program has to trust.
 - **The standard library and the runtime.** Their raw code, the `Rc`
@@ -1412,8 +1431,8 @@ are dropped, moved and copied by the same rules:
 
 | Call | Meaning |
 |---|---|
-| `( mem_take x )` | `x`, read out of a container by hand, owns that value from here on (`vec_pop`, `vec_remove`) |
-| `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it |
+| `( mem_take x )` | `x`, read out of a container by hand, owns that value from here on (`vec_pop`, `vec_remove`); `unsafe` only |
+| `( mem_put_back x )` | the next store of `x` through a pointer writes back a value read from that slot; the container keeps owning it; `unsafe` only |
 | `( mem_dup x )` | an owned copy: deep for an owning value, the value itself otherwise |
 | `( mem_forget x )` | gives up `x`'s value without releasing it; `unsafe` only |
 | `( mem_replace [T] place x )` | `x` goes into `place` (a mutable binding, a field of one, or a field through a pointer) and what `place` held comes back, owned; nothing is dropped or copied (stdlib/core/mem.nu, `unsafe`) |

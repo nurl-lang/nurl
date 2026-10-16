@@ -222,6 +222,7 @@ Each step keeps every gate green: `./build.sh`, `tools/tree_sweep.sh`
 
 ## Out of scope here (tracked in improvements_for_v1.md)
 
-Lock-held-by-path proofs for shared `Arc` mutation, fiber handle
-lifetime, unsupported-async platforms — concurrency and runtime items, not
+Fiber handle lifetime, unsupported-async platforms (shared `Arc`
+mutation, once listed here, was closed in 0.73.0 another way: an `Arc`'s
+payload is frozen and changing state is a `Locked`, h212/h213) — concurrency and runtime items, not
 the single-threaded memory holes this branch closes.
