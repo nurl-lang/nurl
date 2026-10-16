@@ -64,9 +64,12 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # Every exclusion must hold (see ci.yml's `code` step).
+          predicate-quantifier: 'every'
           filters: |
             code:
               - '!webdocs/**'
+              - '!formal/**'
 
   macos:
     needs: changes
