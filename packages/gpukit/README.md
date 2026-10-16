@@ -268,6 +268,16 @@ The check folds for a signed counter compared to `LEN`, so count with an
 `long long` one). Inside `if (LEN(w) == 32) { … }` a constant bound
 works too. `WIN2(w, buf, off, rows, stride, cols);` is the 2-D form
 (`LD2(w, r, c)`, `ROWS(w)`, `COLS(w)`): a tile of a matrix, checked once.
+`WIN3(w, buf, off, planes, pstride, rows, stride, cols);` is the 3-D one
+(`LD3(w, p, r, c)`, `PLANES(w)`): an NCHW feature map, say. Each index is
+checked against its own extent, so each check folds against whatever
+bounds that index alone — a loop counter, a `continue` past the padding —
+where one flattened index would need the compiler to reason about a sum.
 nurllama's RMSNorm, attention and quantised matvecs are written this
 way, on both backends: within 4 % of their raw originals, or faster.
+
+A kernel compiled per shape can go further: `gk_call_exact c` builds it
+for its buffers' lengths (each a constant in the source and part of the
+cache key; other lengths build another kernel), so with the dimensions
+constant too every window is checked at compile time.
 

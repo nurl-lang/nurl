@@ -42,10 +42,11 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ? & < . b dptr + . out dptr e2 < . out dptr + . b dptr e1 { ( gk_call_dev c name b ) } { ( gk_call_dev_in c name b ) }
 }
 
-// The counter type of a loop to `n`: an int when n fits one (the compiler
-// unrolls an int loop further, and a window's check folds against it),
-// else a long long — a counter that could wrap is never an int.
-@ __gkd_ctr i n → s { ? <= n 2147483647 { ^ `int` } {} ^ `long long` }
+// The counter type of a loop to `n`: an int when n — plus a stride of up
+// to 65536 past it, as a loop striding by the block takes — fits one (the
+// compiler unrolls an int loop further, and a window's check folds
+// against it), else a long long. A counter that could wrap is never an int.
+@ __gkd_ctr i n → s { ? <= n 2147418112 { ^ `int` } {} ^ `long long` }
 
 // `x` as the element type's C scalar: a checked kernel's f64 scalar,
 // cast to float for an f32 op exactly as a float parameter was.
@@ -53,6 +54,12 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : ~ String o ( string_from `((` )
     ( string_push_str o ( _gk_tname dtype ) ) ( string_push_str o `)` ) ( string_push_str o nm ) ( string_push_str o `)` )
     ^ o
+}
+
+// (the same, the body made by `mk` only the first time `tag` is seen:
+// see gk_run_checked_dev_tagged)
+@ __gkd_run_t GpuKit kit inout GkCall c String kname String tag ( @ String ) mk i total → b {
+    ^ ( gk_run_checked_dev_tagged kit c ( string_data kname ) ( string_data tag ) mk ( gk_grid total 256 ) 256 )
 }
 
 @ __gkd_run GpuKit kit inout GkCall c String kname String body i total → b {
@@ -210,6 +217,160 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
 // X[Cin,H,W] * W[Cout,Cin,kh,kw] (+ bias[Cout] when hasb) → Y[Cout,OH,OW].
 // Out-of-range taps are skipped (zero padding); ph/pw are the begin pads.
 
+// conv2d's CUDA body: the shape in the source (see gkd_conv2d).
+@ __gkd_conv2d_cuda s tn s lc i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → String {
+    // Sixteen outputs per thread: four along the output row, four output
+    // channels deep — the weight fetched once for the four, four
+    // independent chains. The input row a tap row needs (the four
+    // outputs' taps overlap: 3*sw + kw values) is loaded once into a
+    // local and every tap reads it from there.
+    //
+    // The twelve dimensions go in as constants, so the tap loops unroll
+    // and every tap reads a fixed slot (each geometry compiles once; the
+    // on-disk cache makes that once per machine), and the kernel is built
+    // for its buffers' exact lengths. The input is a 3-D window (Cin
+    // planes of H rows of W), the weights another (Cout of Cin of kh*kw):
+    // each index is checked against its own extent — the channel against
+    // its loop, the row against the padding test, the column against the
+    // row's — so no load carries a check.
+    //
+    // Each output still sums ic, then r, then s, ascending, over exactly
+    // the taps it summed before — bit-identical.
+    : i nx + * 3 sw kw
+    : b rowl <= nx 16
+    : b one & == kh 1 == kw 1
+    // (32-bit counters where they fit: NVRTC keeps a 64-bit one in two
+    // registers)
+    : s ict ( __gkd_ctr cin )
+    : s ity ( __gkd_ctr + + * oh sh kh h )
+    : ~ String body ( string_new )
+    ( string_push_str body lc ) ( string_push_str body `acc, 16);
+` )
+    ( string_push_str body lc )
+    ? rowl {
+        ( string_push_str body `xr, ` ) ( string_push_int body nx ) ( string_push_str body `);
+` )
+    } { ( string_push_str body `xv, 4);
+` ) }
+    ? one {
+        ? rowl { ( string_push_str body lc ) ( string_push_str body `xv, 4);
+` ) } {}
+        ( string_push_str body lc ) ( string_push_str body `xu, 4);
+` )
+    } {}
+    : ~ ( Vec String ) dn ( vec_new [String] )
+    ( vec_push [String] dn ( string_from `Cin` ) ) ( vec_push [String] dn ( string_from `H` ) ) ( vec_push [String] dn ( string_from `W` ) )
+    ( vec_push [String] dn ( string_from `Cout` ) ) ( vec_push [String] dn ( string_from `kh` ) ) ( vec_push [String] dn ( string_from `kw` ) )
+    ( vec_push [String] dn ( string_from `OH` ) ) ( vec_push [String] dn ( string_from `OW` ) ) ( vec_push [String] dn ( string_from `ph` ) )
+    ( vec_push [String] dn ( string_from `pw` ) ) ( vec_push [String] dn ( string_from `sh` ) ) ( vec_push [String] dn ( string_from `sw` ) )
+    : ~ ( Vec i ) dv ( vec_new [i] )
+    ( vec_push [i] dv cin ) ( vec_push [i] dv h ) ( vec_push [i] dv wd ) ( vec_push [i] dv cout ) ( vec_push [i] dv kh ) ( vec_push [i] dv kw )
+    ( vec_push [i] dv oh ) ( vec_push [i] dv ow ) ( vec_push [i] dv ph ) ( vec_push [i] dv pw ) ( vec_push [i] dv sh ) ( vec_push [i] dv sw )
+    : ~ i q 0
+    ~ < q 12 {
+        ( string_push_str body `const long long ` ) ( string_push_str body ( string_data ( vec_at [String] dn q ) ) ) ( string_push_str body ` = ` )
+        ( string_push_int body ( vec_at [i] dv q ) ) ( string_push_str body `;
+` )
+        = q + q 1
+    }
+    ( string_push_str body `long long nwb = (OW + 3) / 4, ncb = (Cout + 3) / 4;
+if (gid < ncb * OH * nwb) {
+    long long wb = gid % nwb, oh = (gid / nwb) % OH, ocb = gid / (nwb * OH);
+    long long ow0 = wb * 4, oc0 = ocb * 4;
+    for (int c = 0; c < 4; c++) {
+        ` ) ( string_push_str body tn )
+    ( string_push_str body ? != hasb 0 ` b0 = (oc0 + c < Cout) ? LD(B, oc0 + c) : 0;` ` b0 = 0;` )
+    ( string_push_str body `
+        for (int t = 0; t < 4; t++) { ST(acc, c * 4 + t, b0); }
+    }
+    long long j0 = ow0 * sw - pw;
+    WIN3(xa, X, 0, Cin, H * W, H, W, W);
+    WIN3(wa, Wt, 0, Cout, Cin * kh * kw, Cin, kh * kw, kh * kw);
+    if (PLANES(xa) == Cin && ROWS(xa) == H && COLS(xa) == W && PLANES(wa) == Cout && ROWS(wa) == Cin && COLS(wa) == kh * kw) {
+` )
+    ? one {
+        // 1x1: two input channels a step, both rows loaded before either
+        // is used (twice the loads in flight; each output still sums
+        // its channels in order)
+        ( string_push_str body `        long long ih = oh * sh - ph;
+        if (ih >= 0 && ih < H) {
+            ` ) ( string_push_str body ict ) ( string_push_str body ` ic = 0;
+            if (j0 >= 0 && j0 + 3 * sw < W) {
+                for (; ic + 1 < Cin; ic += 2) {
+                    for (int t = 0; t < 4; t++) { ST(xv, t, LD3(xa, ic, ih, j0 + t * sw)); ST(xu, t, LD3(xa, ic + 1, ih, j0 + t * sw)); }
+                    for (int c = 0; c < 4; c++) {
+                        if (oc0 + c < Cout) {
+                            ` ) ( string_push_str body tn ) ( string_push_str body ` wv = LD3(wa, oc0 + c, ic, 0);
+                            ` ) ( string_push_str body tn ) ( string_push_str body ` wu = LD3(wa, oc0 + c, ic + 1, 0);
+                            for (int t = 0; t < 4; t++) { ST(acc, c * 4 + t, LD(acc, c * 4 + t) + LD(xv, t) * wv); }
+                            for (int t = 0; t < 4; t++) { ST(acc, c * 4 + t, LD(acc, c * 4 + t) + LD(xu, t) * wu); }
+                        }
+                    }
+                }
+            }
+            for (; ic < Cin; ++ic) {
+                for (int t = 0; t < 4; t++) { long long iw = j0 + t * sw; ST(xv, t, (iw >= 0 && iw < W) ? LD3(xa, ic, ih, iw) : 0); }
+                for (int c = 0; c < 4; c++) {
+                    if (oc0 + c < Cout) {
+                        ` ) ( string_push_str body tn ) ( string_push_str body ` wv = LD3(wa, oc0 + c, ic, 0);
+                        for (int t = 0; t < 4; t++) { ST(acc, c * 4 + t, LD(acc, c * 4 + t) + LD(xv, t) * wv); }
+                    }
+                }
+            }
+        }
+    }
+` )
+    } {
+        ( string_push_str body `        for (` ) ( string_push_str body ict ) ( string_push_str body ` ic = 0; ic < Cin; ++ic) {
+            for (` ) ( string_push_str body ity ) ( string_push_str body ` r = 0; r < kh; ++r) {
+                ` ) ( string_push_str body ity ) ( string_push_str body ` ih = (` ) ( string_push_str body ity ) ( string_push_str body `)(oh * sh - ph + r);
+                if (ih < 0 || ih >= H) { continue; }
+` )
+        ? rowl {
+            ( string_push_str body `                if (j0 >= 0 && j0 + ` ) ( string_push_int body - nx 1 ) ( string_push_str body ` < W) {
+                    for (int j = 0; j < ` ) ( string_push_int body nx ) ( string_push_str body `; j++) { ST(xr, j, LD3(xa, ic, ih, j0 + j)); }
+                } else {
+                    for (int j = 0; j < ` ) ( string_push_int body nx ) ( string_push_str body `; j++) { long long iw = j0 + j; ST(xr, j, (iw >= 0 && iw < W) ? LD3(xa, ic, ih, iw) : 0); }
+                }
+                for (int s = 0; s < kw; s++) {
+` )
+        } {
+            ( string_push_str body `                for (long long s = 0; s < kw; s++) {
+                    long long i0 = j0 + s;
+                    if (i0 >= 0 && i0 + 3 * sw < W) {
+                        for (int t = 0; t < 4; t++) { ST(xv, t, LD3(xa, ic, ih, i0 + t * sw)); }
+                    } else {
+                        for (int t = 0; t < 4; t++) { long long iw = i0 + t * sw; ST(xv, t, (iw >= 0 && iw < W) ? LD3(xa, ic, ih, iw) : 0); }
+                    }
+` )
+        }
+        ( string_push_str body `                    for (int c = 0; c < 4; c++) {
+                        if (oc0 + c < Cout) {
+                            ` ) ( string_push_str body tn ) ( string_push_str body ` wv = LD3(wa, oc0 + c, ic, r * kw + s);
+                            for (int t = 0; t < 4; t++) { ST(acc, c * 4 + t, LD(acc, c * 4 + t) + LD(` ) ( string_push_str body ? rowl `xr, s + t * sw` `xv, t` ) ( string_push_str body `) * wv); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+` )
+    }
+    ( string_push_str body `    for (int c = 0; c < 4; c++) {
+        long long oc = oc0 + c;
+        if (oc < Cout) {
+            WIN(yr, Y, (oc * OH + oh) * OW + ow0, OW - ow0 < 4 ? OW - ow0 : 4);
+            if (LEN(yr) == 4) {
+                for (int t = 0; t < 4; t++) { ST(yr, t, LD(acc, c * 4 + t)); }
+            } else {
+                for (int t = 0; t < LEN(yr); t++) { ST(yr, t, LD(acc, c * 4 + t)); }
+            }
+        }
+    }
+}` )
+    ^ body
+}
+
 @ gkd_conv2d GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) ( gk_buf_ok w ) {} { ^ F }
     ? & == . y dtype . x dtype == . x dtype . w dtype {} { ^ F }
@@ -221,124 +382,205 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
         ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
     } {}
     : s tn ( _gk_tname . y dtype )
-    // Shape-specialised, for the same reason gkd_perm is: the loop
-    // bounds and every stride here are kernel ARGUMENTS, so a 3x3 layer
-    // pays a 64-bit multiply-add chain per tap to compute an address
-    // the compiler could have folded, and cannot unroll a nine-tap
-    // window it does not know is nine taps. The source is generated per
-    // call, so the twelve dimensions go in as literals. Each distinct
-    // layer geometry compiles once (and the on-disk kernel cache makes
-    // that once per machine); a model runs a handful.
-    : b lit ( nurl_str_eq ( gk_backend kit ) `cuda` )
+    : s lc ? == . y dtype GK_F32 `LOCAL_F(` `LOCAL_D(`
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `conv2d` )
-    ? lit {
-        ( string_push_char kname 95 ) ( string_push_int kname cin )
-        ( string_push_char kname 95 ) ( string_push_int kname h )
-        ( string_push_char kname 95 ) ( string_push_int kname wd )
-        ( string_push_char kname 95 ) ( string_push_int kname cout )
-        ( string_push_char kname 95 ) ( string_push_int kname kh )
-        ( string_push_char kname 95 ) ( string_push_int kname kw )
-        ( string_push_char kname 95 ) ( string_push_int kname oh )
-        ( string_push_char kname 95 ) ( string_push_int kname ow )
-        ( string_push_char kname 95 ) ( string_push_int kname ph )
-        ( string_push_char kname 95 ) ( string_push_int kname pw )
-        ( string_push_char kname 95 ) ( string_push_int kname sh )
-        ( string_push_char kname 95 ) ( string_push_int kname sw )
-        ( string_push_char kname 95 ) ( string_push_int kname hasb )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
+    : b cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
+    // (the host's binds a bias either way — the input standing in for an
+    // absent one — and reads it only when hasB says so: one kernel for
+    // both, as the static backend links one)
+    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ? cuda {} { ( __gkd_in cl `B` x y ) } }
+    ( gk_call_dev cl `Y` y )
+    ? cuda {
+        // (the shape is the kernel: it is the tag, and the body is made
+        // once per shape)
+        ( gk_call_exact cl )
+        : ~ String tag ( string_with_cap 96 )
+        ( string_push_int tag hasb )
+        : ~ i q 0
+        ~ < q 12 {
+            ( string_push_char tag 44 )
+            ( string_push_int tag ? == q 0 cin ? == q 1 h ? == q 2 wd ? == q 3 cout ? == q 4 kh ? == q 5 kw ? == q 6 oh ? == q 7 ow ? == q 8 ph ? == q 9 pw ? == q 10 sh sw )
+            = q + q 1
+        }
+        ^ ( __gkd_run_t kit cl kname tag \ → String { ^ ( __gkd_conv2d_cuda tn lc hasb cin h wd cout kh kw oh ow ph pw sh sw ) } * * ( _gkd_ceil cout 4 ) oh ( _gkd_ceil ow 4 ) )
     } {}
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_char src 40 )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* Wt, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, ` )
-    ( string_push_str src tn )
-    // the specialised body owns the dimension NAMES as enum constants,
-    // so the (now unused) runtime parameters take an underscore rather
-    // than redeclaring them in the same scope
-    ( string_push_str src ? lit
-    `* Y, long long Cin_, long long H_, long long W_, long long Cout_, long long kh_, long long kw_, long long OH_, long long OW_, long long ph_, long long pw_, long long sh_, long long sw_, long long hasB_){`
-    `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB){` )
-    // Sixteen outputs per thread: four along the output row, four
-    // output channels deep.
-    //
-    // With one thread per output element the loop body is one MAC
-    // wrapped in four 64-bit index multiplies and two bounds tests, so a
-    // 3x3 256->256 layer runs at ~2 TFLOP/s on a 4090 — the arithmetic
-    // is not the limit, the addressing is. Owning four neighbouring
-    // outputs amortises all of it: the weight is fetched once for the
-    // four, the row base is computed once, and the four accumulators are
-    // four independent FMA chains, which is also what fills the pipeline.
-    // The whole-tile case is spelled out separately so its inner loop
-    // has no bounds test at all.
-    //
-    // Each output still sums ic, then r, then s, ascending, over exactly
-    // the taps it summed before — bit-identical, on both backends.
-    ? lit {
-        ( string_push_str src `(void)Cin_;(void)H_;(void)W_;(void)Cout_;(void)kh_;(void)kw_;` )
-        ( string_push_str src `(void)OH_;(void)OW_;(void)ph_;(void)pw_;(void)sh_;(void)sw_;(void)hasB_;` )
-        ( string_push_str src `enum{Cin=` ) ( string_push_int src cin )
-        ( string_push_str src `,H=` ) ( string_push_int src h )
-        ( string_push_str src `,W=` ) ( string_push_int src wd )
-        ( string_push_str src `,Cout=` ) ( string_push_int src cout )
-        ( string_push_str src `,kh=` ) ( string_push_int src kh )
-        ( string_push_str src `,kw=` ) ( string_push_int src kw )
-        ( string_push_str src `,OH=` ) ( string_push_int src oh )
-        ( string_push_str src `,OW=` ) ( string_push_int src ow )
-        ( string_push_str src `,ph=` ) ( string_push_int src ph )
-        ( string_push_str src `,pw=` ) ( string_push_int src pw )
-        ( string_push_str src `,sh=` ) ( string_push_int src sh )
-        ( string_push_str src `,sw=` ) ( string_push_int src sw )
-        ( string_push_str src `,hasB=` ) ( string_push_int src hasb )
-        ( string_push_str src `};` )
-    } {}
-    ( string_push_str src `enum{TW=4,TC=4};` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `long long nwb=(OW+TW-1)/TW,ncb=(Cout+TC-1)/TC;` )
-    ( string_push_str src `long long total=ncb*OH*nwb;if(idx>=total)return;` )
-    ( string_push_str src `long long wb=idx%nwb,oh=(idx/nwb)%OH,ocb=idx/(nwb*OH);` )
-    ( string_push_str src `long long ow0=wb*TW,oc0=ocb*TC;` )
-    ( string_push_str src tn ) ( string_push_str src ` acc[TC][TW];` )
-    ( string_push_str src `for(int c=0;c<TC;c++){` )
-    ( string_push_str src tn ) ( string_push_str src ` b0=(hasB&&oc0+c<Cout)?B[oc0+c]:0;` )
-    ( string_push_str src `for(int t=0;t<TW;t++)acc[c][t]=b0;}` )
-    ( string_push_str src `for(long long ic=0;ic<Cin;++ic){const ` )
-    ( string_push_str src tn ) ( string_push_str src `* xp=X+ic*H*W;` )
-    ( string_push_str src `for(long long r=0;r<kh;++r){long long ih=oh*sh-ph+r;if(ih<0||ih>=H)continue;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* xr=xp+ih*W;` )
-    ( string_push_str src `for(long long s=0;s<kw;++s){long long i0=ow0*sw-pw+s;` )
-    ( string_push_str src tn ) ( string_push_str src ` xv[TW];` )
-    ( string_push_str src `if(i0>=0&&i0+(TW-1)*sw<W){for(int t=0;t<TW;t++)xv[t]=xr[i0+t*sw];}` )
-    ( string_push_str src `else{for(int t=0;t<TW;t++){long long iw=i0+t*sw;` )
-    ( string_push_str src `xv[t]=(iw>=0&&iw<W)?xr[iw]:0;}}` )
-    ( string_push_str src `for(int c=0;c<TC;c++){if(oc0+c<Cout){` )
-    ( string_push_str src tn ) ( string_push_str src ` wv=Wt[(((oc0+c)*Cin)+ic)*kh*kw+r*kw+s];` )
-    ( string_push_str src `for(int t=0;t<TW;t++)acc[c][t]+=xv[t]*wv;}}}}}` )
-    ( string_push_str src `for(int c=0;c<TC;c++){long long oc=oc0+c;if(oc<Cout)` )
-    ( string_push_str src `for(int t=0;t<TW;t++){long long ox=ow0+t;` )
-    ( string_push_str src `if(ox<OW)Y[(oc*OH+oh)*OW+ox]=acc[c][t];}}}` )
-    : i bd ? != hasb 0 { ( gk_arg_dev bias ) } { 0 }
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev w ) )
-    ( vec_push [i] args bd )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 cin ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 cout ) )
-    ( vec_push [i] args ( gpu_arg_i64 kh ) )
-    ( vec_push [i] args ( gpu_arg_i64 kw ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 ph ) )
-    ( vec_push [i] args ( gpu_arg_i64 pw ) )
-    ( vec_push [i] args ( gpu_arg_i64 sh ) )
-    ( vec_push [i] args ( gpu_arg_i64 sw ) )
-    ( vec_push [i] args ( gpu_arg_i64 hasb ) )
-    ^ ( __gkd_launch kit src kname
-    ( gk_grid * * ( _gkd_ceil cout 4 ) oh ( _gkd_ceil ow 4 ) 256 ) args )
+    // The host's (the CPU and static backends): one source for every
+    // shape — the static backend links one kernel, so the shape is in
+    // the arguments — and a path per kind of layer, picked here and
+    // passed in. Each thread owns four output channels and a run of
+    // sixteen columns (fewer for a stride-2 layer, below), so a tap's work is a
+    // vector multiply-add the host compiler can see: the input row's
+    // span is copied once per tap row into a local, zero where it pads,
+    // and every tap reads consecutive slots of it. A 1x1 layer opens its
+    // windows once per thread. Anything else (a stride above 2, a tap
+    // row wider than sixteen) takes the four-wide per-tap form.
+    : i mode ? & & == kh 1 == kw 1 == sw 1 0 ? & == sw 1 <= kw 16 1 ? & == sw 2 <= kw 16 2 3
+    // (stride 2: sixteen columns while there are few input channels to
+    // share a run's overhead, else eight)
+    : i tw ? < mode 2 16 ? == mode 2 ? >= cin 8 8 16 4
+    ( gk_call_i64 cl `Cin` cin ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `Cout` cout ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
+    ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw )
+    ( gk_call_i64 cl `mode` mode ) ( gk_call_i64 cl `tw` tw ) ( gk_call_i64 cl `hasB` hasb )
+    ^ ( __gkd_run_t kit cl kname ( string_from `h` ) \ → String { ^ ( __gkd_conv2d_host tn lc ) } * * ( _gkd_ceil cout 4 ) oh ( _gkd_ceil ow tw ) )
+}
+
+// conv2d's host body (see gkd_conv2d): one for every shape.
+@ __gkd_conv2d_host s tn s lc → String {
+    : ~ String body ( string_new )
+    ( string_push_str body lc ) ( string_push_str body `acc, 64);
+` )
+    ( string_push_str body lc ) ( string_push_str body `xp, 32);
+` )
+    ( string_push_str body lc ) ( string_push_str body `xe, 24);
+` )
+    ( string_push_str body lc ) ( string_push_str body `xo, 24);
+` )
+    ( string_push_str body lc ) ( string_push_str body `xv, 16);
+` )
+    : String t1 ( string_replace ( string_from `long long nwb = (OW + tw - 1) / tw, ncb = (Cout + 3) / 4;
+if (gid < ncb * OH * nwb) {
+    long long wb = gid % nwb, oh = (gid / nwb) % OH, ocb = gid / (nwb * OH);
+    long long ow0 = wb * tw, oc0 = ocb * 4;
+    for (int c = 0; c < 4; c++) {
+        @T@ b0 = (oc0 + c < Cout) ? @BIAS@ : 0;
+        for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, b0); }
+    }
+    long long j0 = ow0 * sw - pw;
+    long long nc = Cout - oc0 < 4 ? Cout - oc0 : 4;
+    WIN3(xa, X, 0, Cin, H * W, H, W, W);
+    if (PLANES(xa) == Cin && ROWS(xa) == H && COLS(xa) == W) {
+        if (mode == 0 && kh == 1 && kw == 1 && sw == 1) {
+            // 1x1: the four channels' weights and the sixteen columns'
+            // inputs are windows over every input channel, opened once
+            long long ih = oh * sh - ph;
+            WIN2(w1, Wt, oc0 * Cin, nc, Cin, Cin);
+            if (ih >= 0 && ih < H && COLS(w1) == Cin) {
+                if (j0 >= 0 && j0 + 15 < W) {
+                    WIN2(x1, X, ih * W + j0, Cin, H * W, 16);
+                    if (ROWS(x1) == Cin && COLS(x1) == 16) {
+                        for (long long ic = 0; ic < Cin; ++ic) {
+                            for (int c = 0; c < 4; c++) {
+                                if (c < ROWS(w1)) {
+                                    @T@ wv = LD2(w1, c, ic);
+                                    for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD2(x1, ic, t) * wv); }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (long long ic = 0; ic < Cin; ++ic) {
+                        for (int t = 0; t < 16; t++) { long long iw = j0 + t; ST(xv, t, (iw >= 0 && iw < W) ? LD3(xa, ic, ih, iw) : 0); }
+                        for (int c = 0; c < 4; c++) {
+                            if (c < ROWS(w1)) {
+                                @T@ wv = LD2(w1, c, ic);
+                                for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xv, t) * wv); }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (mode == 1 || mode == 2) {
+            // The span of input columns a tap row's outputs cover, and the
+            // part of it inside the row: copied once per tap row into a
+            // local whose other slots keep their zeros (the padding).
+            long long nx = (tw - 1) * sw + kw;
+            long long jlo = j0 < 0 ? -j0 : 0;
+            long long jhi = W - j0 < nx ? W - j0 : nx;
+            for (long long ic = 0; ic < Cin && jlo < jhi; ++ic) {
+                for (long long r = 0; r < kh; ++r) {
+                    long long ih = oh * sh - ph + r;
+                    if (ih < 0 || ih >= H) { continue; }
+                    WIN2(wr, Wt, (oc0 * Cin + ic) * kh * kw + r * kw, nc, Cin * kh * kw, kw);
+                    WIN(xs, X, (ic * H + ih) * W + j0 + jlo, jhi - jlo);
+                    if (COLS(wr) != kw) { continue; }
+                    if (mode == 1 && sw == 1 && kw <= 16) {
+                        // unit stride: a tap reads sixteen consecutive slots
+                        for (int j = 0; j < LEN(xs); j++) { ST(xp, jlo + j, LD(xs, j)); }
+                        for (long long s = 0; s < kw; ++s) {
+                            for (int c = 0; c < 4; c++) {
+                                if (c < ROWS(wr)) {
+                                    @T@ wv = LD2(wr, c, s);
+                                    for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xp, s + t) * wv); }
+                                }
+                            }
+                        }
+                    } else if (mode == 2 && sw == 2 && kw <= 16) {
+                        // stride 2: the row as its even and odd columns, so
+                        // a tap again reads consecutive slots
+                        for (int j = 0; j < LEN(xs); j++) {
+                            long long q = jlo + j;
+                            if ((q & 1) == 0) { ST(xe, q >> 1, LD(xs, j)); } else { ST(xo, q >> 1, LD(xs, j)); }
+                        }
+                        for (long long s = 0; s < kw; ++s) {
+                            for (int c = 0; c < 4; c++) {
+                                if (c < ROWS(wr)) {
+                                    @T@ wv = LD2(wr, c, s);
+                                    if (tw == 8) {
+                                        if ((s & 1) == 0) {
+                                            for (int t = 0; t < 8; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xe, (s >> 1) + t) * wv); }
+                                        } else {
+                                            for (int t = 0; t < 8; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xo, (s >> 1) + t) * wv); }
+                                        }
+                                    } else {
+                                        if ((s & 1) == 0) {
+                                            for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xe, (s >> 1) + t) * wv); }
+                                        } else {
+                                            for (int t = 0; t < 16; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xo, (s >> 1) + t) * wv); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // anything else: four outputs, one tap at a time
+            for (long long ic = 0; ic < Cin; ++ic) {
+                for (long long r = 0; r < kh; ++r) {
+                    long long ih = oh * sh - ph + r;
+                    if (ih < 0 || ih >= H) { continue; }
+                    WIN2(wg, Wt, (oc0 * Cin + ic) * kh * kw + r * kw, nc, Cin * kh * kw, kw);
+                    if (COLS(wg) != kw) { continue; }
+                    for (long long s = 0; s < kw; ++s) {
+                        long long i0 = j0 + s;
+                        if (i0 >= 0 && i0 + 3 * sw < W) {
+                            for (int t = 0; t < 4; t++) { ST(xv, t, LD3(xa, ic, ih, i0 + t * sw)); }
+                        } else {
+                            for (int t = 0; t < 4; t++) { long long iw = i0 + t * sw; ST(xv, t, (iw >= 0 && iw < W) ? LD3(xa, ic, ih, iw) : 0); }
+                        }
+                        for (int c = 0; c < 4; c++) {
+                            if (c < ROWS(wg)) {
+                                @T@ wv = LD2(wg, c, s);
+                                for (int t = 0; t < 4; t++) { ST(acc, c * 16 + t, LD(acc, c * 16 + t) + LD(xv, t) * wv); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // (an output row's outputs as a window: plain stores where all are
+    // there — a check per store keeps the host compiler from holding
+    // the sums in registers)
+    for (int c = 0; c < 4; c++) {
+        long long oc = oc0 + c;
+        if (oc < Cout) {
+            WIN(yr, Y, (oc * OH + oh) * OW + ow0, OW - ow0 < tw ? OW - ow0 : tw);
+            if (LEN(yr) == 16) {
+                for (int t = 0; t < 16; t++) { ST(yr, t, LD(acc, c * 16 + t)); }
+            } else {
+                for (int t = 0; t < LEN(yr); t++) { ST(yr, t, LD(acc, c * 16 + t)); }
+            }
+        }
+    }
+}` ) `@T@` tn )
+    : String t2 ( string_replace t1 `@BIAS@` `(hasB != 0 ? LD(B, oc0 + c) : 0)` )
+    ( string_push_str body ( string_data t2 ) )
+    ^ body
 }
 
 // ── 2-D DILATED convolution, NCHW, batch 1, group 1 ──────────────────
@@ -362,46 +604,42 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     } {}
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `conv2d_dil` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* Wt, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, ` )
-    ( string_push_str src tn )
-    ( string_push_str src `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long dh, long long dw, long long hasB){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=Cout*OH*OW)return;` )
-    ( string_push_str src `long long ox=idx%OW, oy=(idx/OW)%OH, oc=idx/(OW*OH);` )
-    ( string_push_str src `double acc=hasB?(double)B[oc]:0.0;` )
-    ( string_push_str src `for(long long ic=0;ic<Cin;ic++){` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* xp=X+ic*H*W;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* wp=Wt+(oc*Cin+ic)*kh*kw;` )
-    ( string_push_str src `for(long long r=0;r<kh;r++){` )
-    ( string_push_str src `long long iy=oy*sh-ph+r*dh; if(iy<0||iy>=H)continue;` )
-    ( string_push_str src `for(long long s=0;s<kw;s++){` )
-    ( string_push_str src `long long ix=ox*sw-pw+s*dw; if(ix<0||ix>=W)continue;` )
-    ( string_push_str src `acc+=(double)xp[iy*W+ix]*(double)wp[r*kw+s];}}}` )
-    ( string_push_str src `Y[idx]=(` ) ( string_push_str src tn ) ( string_push_str src `)acc;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev w ) )
-    ( vec_push [i] args ? != hasb 0 ( gk_arg_dev bias ) ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 cin ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 cout ) )
-    ( vec_push [i] args ( gpu_arg_i64 kh ) )
-    ( vec_push [i] args ( gpu_arg_i64 kw ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 ph ) )
-    ( vec_push [i] args ( gpu_arg_i64 pw ) )
-    ( vec_push [i] args ( gpu_arg_i64 sh ) )
-    ( vec_push [i] args ( gpu_arg_i64 sw ) )
-    ( vec_push [i] args ( gpu_arg_i64 dh ) )
-    ( vec_push [i] args ( gpu_arg_i64 dw ) )
-    ( vec_push [i] args ( gpu_arg_i64 hasb ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * * cout oh ow 256 ) args )
+    ( string_push_str kname `conv2d_dil` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
+    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ( __gkd_in cl `B` x y ) }
+    ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `Cin` cin ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `Cout` cout ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
+    ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw )
+    ( gk_call_i64 cl `dh` dh ) ( gk_call_i64 cl `dw` dw ) ( gk_call_i64 cl `hasB` hasb )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String { ^ ( __gkd_conv2d_dil_body tn ) } * * cout oh ow )
+}
+
+// (the input a 3-D window, the output channel's weights another — one
+// each per thread, every index checked against its own extent: the
+// channel against its loop, a tap's row and column against the padding
+// tests)
+@ __gkd_conv2d_dil_body s tn → String {
+    : ~ String body ( string_from `if (gid < Cout * OH * OW) {
+    long long ox = gid % OW, oy = (gid / OW) % OH, oc = gid / (OW * OH);
+    double acc = hasB != 0 ? (double)LD(B, oc) : 0.0;` )
+    ( string_push_str body `
+    WIN3(xa, X, 0, Cin, H * W, H, W, W);
+    WIN3(wk, Wt, oc * Cin * kh * kw, Cin, kh * kw, kh, kw, kw);
+    if (PLANES(xa) == Cin && ROWS(xa) == H && COLS(xa) == W && PLANES(wk) == Cin && ROWS(wk) == kh && COLS(wk) == kw) {
+        for (long long ic = 0; ic < Cin; ic++) {
+            for (long long r = 0; r < kh; r++) {
+                long long iy = oy * sh - ph + r * dh; if (iy < 0 || iy >= H) { continue; }
+                for (long long s = 0; s < kw; s++) {
+                    long long ix = ox * sw - pw + s * dw; if (ix < 0 || ix >= W) { continue; }
+                    acc += (double)LD3(xa, ic, iy, ix) * (double)LD3(wk, ic, r, s);
+                }
+            }
+        }
+    }
+    ST(Y, gid, (` ) ( string_push_str body tn ) ( string_push_str body `)acc);
+}` )
+    ^ body
 }
 
 // ── 2-D transposed convolution (deconv), NCHW, batch 1, group 1 ──────
@@ -438,47 +676,66 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     // its time in this kernel's general body.
     : b exact & & == ph 0 == pw 0 & == sh kh == sw kw
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname ? exact `convt2d_up` `convt2d` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* Wt, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `long long total=Cout*OH*OW;if(idx>=total)return;` )
-    ( string_push_str src `long long ox=idx%OW,oy=(idx/OW)%OH,oc=idx/(OW*OH);` )
-    ( string_push_str src tn ) ( string_push_str src ` acc=hasB?B[oc]:0;` )
+    ( string_push_str kname ? exact `convt2d_up` `convt2d` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( __gkd_in cl `Wt` w y )
+    ? != hasb 0 { ( __gkd_in cl `B` bias y ) } { ( __gkd_in cl `B` x y ) }
+    ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `Cin` cin ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `Cout` cout ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
+    ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw ) ( gk_call_i64 cl `hasB` hasb )
+    : s ict ( __gkd_ctr cin )
+    : b cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
+    : ~ String tag ( string_from ? cuda `g` `h` )
+    ( string_push_str tag ict )
+    ^ ( __gkd_run_t kit cl kname tag \ → String { ^ ( __gkd_convt2d_body tn exact ict cuda ) } * * cout oh ow )
+}
+
+@ __gkd_convt2d_body s tn b exact s ict b cuda → String {
+    : ~ String body ( string_from `if (gid < Cout * OH * OW) {
+    long long ox = gid % OW, oy = (gid / OW) % OH, oc = gid / (OW * OH);
+    ` )
+    ( string_push_str body tn ) ( string_push_str body ` acc = hasB != 0 ? LD(B, oc) : 0;` )
     ? exact {
-        ( string_push_str src `long long iy=oy/sh,ky=oy-iy*sh,ix=ox/sw,kx=ox-ix*sw;` )
-        ( string_push_str src `if(iy<H&&ix<W){for(long long ic=0;ic<Cin;++ic)` )
-        ( string_push_str src `acc+=X[ic*H*W+iy*W+ix]*Wt[(((ic*Cout)+oc)*kh+ky)*kw+kx];}` )
+        // (the input column and the weights for this output pixel are
+        // strided windows: the Cin loop's checks fold)
+        ( string_push_str body `
+    long long iy = oy / sh, ky = oy - iy * sh, ix = ox / sw, kx = ox - ix * sw;
+    if (iy < H && ix < W) {
+        WINS(xc, X, iy * W + ix, Cin, H * W);
+        WINS(wc, Wt, (oc * kh + ky) * kw + kx, Cin, Cout * kh * kw);
+        if (LEN(xc) == Cin && LEN(wc) == Cin) {
+            for (` ) ( string_push_str body ict ) ( string_push_str body ` ic = 0; ic < Cin; ++ic) { acc += LD(xc, ic) * LD(wc, ic); }
+        }
+    }` )
+    } ? cuda {
+        // (on CUDA the loads' own clamps: the GPU hides them, and the
+        // windows' bookkeeping costs it more than they save)
+        ( string_push_str body `
+    for (long long ic = 0; ic < Cin; ++ic) {
+        long long xp = ic * H * W;
+        for (long long ky = 0; ky < kh; ++ky) { long long ty = oy + ph - ky; if (ty % sh != 0) { continue; } long long iy = ty / sh; if (iy < 0 || iy >= H) { continue; }
+            for (long long kx = 0; kx < kw; ++kx) { long long tx = ox + pw - kx; if (tx % sw != 0) { continue; } long long ix = tx / sw; if (ix < 0 || ix >= W) { continue; }
+                acc += LD(X, xp + iy * W + ix) * LD(Wt, (((ic * Cout) + oc) * kh + ky) * kw + kx); } }
+    }` )
     } {
-        ( string_push_str src `for(long long ic=0;ic<Cin;++ic){const ` )
-        ( string_push_str src tn ) ( string_push_str src `* xp=X+ic*H*W;` )
-        ( string_push_str src `for(long long ky=0;ky<kh;++ky){long long ty=oy+ph-ky;if(ty%sh!=0)continue;long long iy=ty/sh;if(iy<0||iy>=H)continue;` )
-        ( string_push_str src `for(long long kx=0;kx<kw;++kx){long long tx=ox+pw-kx;if(tx%sw!=0)continue;long long ix=tx/sw;if(ix<0||ix>=W)continue;` )
-        ( string_push_str src `acc+=xp[iy*W+ix]*Wt[(((ic*Cout)+oc)*kh+ky)*kw+kx];}}}` )
+        // (the input a 3-D window and this output channel's weights
+        // another — [Cin][kh][kw], Cout*kh*kw apart — so a tap's indices
+        // fold against the divisibility and range tests before it)
+        ( string_push_str body `
+    WIN3(xa, X, 0, Cin, H * W, H, W, W);
+    WIN3(wt, Wt, oc * kh * kw, Cin, Cout * kh * kw, kh, kw, kw);
+    if (PLANES(xa) == Cin && ROWS(xa) == H && COLS(xa) == W && PLANES(wt) == Cin && ROWS(wt) == kh && COLS(wt) == kw) {
+        for (long long ic = 0; ic < Cin; ++ic) {
+            for (long long ky = 0; ky < kh; ++ky) { long long ty = oy + ph - ky; if (ty % sh != 0) { continue; } long long iy = ty / sh; if (iy < 0 || iy >= H) { continue; }
+                for (long long kx = 0; kx < kw; ++kx) { long long tx = ox + pw - kx; if (tx % sw != 0) { continue; } long long ix = tx / sw; if (ix < 0 || ix >= W) { continue; }
+                    acc += LD3(xa, ic, iy, ix) * LD3(wt, ic, ky, kx); } }
+        }
+    }` )
     }
-    ( string_push_str src `Y[(oc*OH+oy)*OW+ox]=acc;}` )
-    : i bd ? != hasb 0 { ( gk_arg_dev bias ) } { 0 }
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev w ) )
-    ( vec_push [i] args bd )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 cin ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 cout ) )
-    ( vec_push [i] args ( gpu_arg_i64 kh ) )
-    ( vec_push [i] args ( gpu_arg_i64 kw ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 ph ) )
-    ( vec_push [i] args ( gpu_arg_i64 pw ) )
-    ( vec_push [i] args ( gpu_arg_i64 sh ) )
-    ( vec_push [i] args ( gpu_arg_i64 sw ) )
-    ( vec_push [i] args ( gpu_arg_i64 hasb ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * * cout oh ow 256 ) args )
+    ( string_push_str body `
+    ST(Y, (oc * OH + oy) * OW + ox, acc);
+}` )
+    ^ body
 }
 
 // ── 2-D max pool, NCHW; padding taps are ignored (−inf) ──────────────
@@ -491,34 +748,26 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ? & == . x n ( _gk_p3 c h wd ) == . y n ( _gk_p3 c oh ow ) {} { ^ F }
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `maxpool2d` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long C, long long H, long long W, long long kh, long long kw, long long OH, long long OW, long long sh, long long sw, long long ph, long long pw){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `long long total=C*OH*OW;if(idx>=total)return;` )
-    ( string_push_str src `long long ow=idx%OW,oh=(idx/OW)%OH,c=idx/(OW*OH);const ` )
-    ( string_push_str src tn ) ( string_push_str src `* xp=X+c*H*W;` )
-    ( string_push_str src tn ) ( string_push_str src ` m=` )
-    ( string_push_str src ( __gkd_neg . y dtype ) )
-    ( string_push_str src `;for(long long r=0;r<kh;++r){long long ih=oh*sh-ph+r;if(ih<0||ih>=H)continue;` )
-    ( string_push_str src `for(long long s=0;s<kw;++s){long long iw=ow*sw-pw+s;if(iw<0||iw>=W)continue;` )
-    ( string_push_str src tn ) ( string_push_str src ` v=xp[ih*W+iw];if(v>m)m=v;}}` )
-    ( string_push_str src `Y[(c*OH+oh)*OW+ow]=m;}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 c ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 kh ) )
-    ( vec_push [i] args ( gpu_arg_i64 kw ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 sh ) )
-    ( vec_push [i] args ( gpu_arg_i64 sw ) )
-    ( vec_push [i] args ( gpu_arg_i64 ph ) )
-    ( vec_push [i] args ( gpu_arg_i64 pw ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * * c oh ow 256 ) args )
+    ( string_push_str kname `maxpool2d` )
+    : i dty . y dtype
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `kh` kh ) ( gk_call_i64 cl `kw` kw )
+    ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw ) ( gk_call_i64 cl `ph` ph ) ( gk_call_i64 cl `pw` pw )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : ~ String body ( string_from `if (gid < C * OH * OW) {
+    long long ow = gid % OW, oh = (gid / OW) % OH, c = gid / (OW * OH);
+    long long xp = c * H * W;
+    ` )
+        ( string_push_str body tn ) ( string_push_str body ` m = ` ) ( string_push_str body ( __gkd_neg dty ) )
+        ( string_push_str body `;
+    for (long long r = 0; r < kh; ++r) { long long ih = oh * sh - ph + r; if (ih < 0 || ih >= H) { continue; }
+        for (long long s = 0; s < kw; ++s) { long long iw = ow * sw - pw + s; if (iw < 0 || iw >= W) { continue; }
+            ` ) ( string_push_str body tn ) ( string_push_str body ` v = LD(X, xp + ih * W + iw); if (v > m) { m = v; } } }
+    ST(Y, (c * OH + oh) * OW + ow, m);
+}` )
+        ^ body
+    } * * c oh ow )
 }
 
 // ── BatchNormalization (inference), per channel over C×HW ────────────
@@ -535,13 +784,16 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `bnorm` )
-    : ~ String body ( string_from `if (gid < C * HW) { long long c = gid / HW; ST(Y, gid, LD(sc, c) * (LD(X, gid) - LD(mean, c)) / sqrt` )
-    ( string_push_str body ( __gkd_sfx . y dtype ) ) ( string_push_str body `(LD(var, c) + ` )
-    ( string_push_str body ( string_data ( __gkd_scal . y dtype `eps` ) ) ) ( string_push_str body `) + LD(B, c)); }` )
+    : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( __gkd_in cl `sc` sc y ) ( __gkd_in cl `B` bb y ) ( __gkd_in cl `mean` mean y ) ( __gkd_in cl `var` var y )
     ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `HW` hw ) ( gk_call_f64 cl `eps` eps )
-    ^ ( __gkd_run kit cl kname body * c hw )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : ~ String body ( string_from `if (gid < C * HW) { long long c = gid / HW; ST(Y, gid, LD(sc, c) * (LD(X, gid) - LD(mean, c)) / sqrt` )
+        ( string_push_str body ( __gkd_sfx dty ) ) ( string_push_str body `(LD(var, c) + ` )
+        ( string_push_str body ( string_data ( __gkd_scal dty `eps` ) ) ) ( string_push_str body `) + LD(B, c)); }` )
+        ^ body
+    } * c hw )
 }
 
 // ── LeakyRelu / Clip / Erf (elementwise with scalar params) ──────────
@@ -553,12 +805,15 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `lrelu` )
-    : ~ String body ( string_from `if (gid < n) { ` )
-    ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v >= 0 ? v : ` )
-    ( string_push_str body ( string_data ( __gkd_scal . y dtype `alpha` ) ) ) ( string_push_str body ` * v); }` )
+    : i dt . y dtype
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `alpha` alpha )
-    ^ ( __gkd_run kit cl kname body n )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : ~ String body ( string_from `if (gid < n) { ` )
+        ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v >= 0 ? v : ` )
+        ( string_push_str body ( string_data ( __gkd_scal dt `alpha` ) ) ) ( string_push_str body ` * v); }` )
+        ^ body
+    } n )
 }
 
 @ gkd_clip GpuKit kit GkBuf y GkBuf x f lo f hi → b {
@@ -570,13 +825,16 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     ( string_push_str kname `clip` )
     : String lo2 ( __gkd_scal . y dtype `lo` )
     : String hi2 ( __gkd_scal . y dtype `hi` )
-    : ~ String body ( string_from `if (gid < n) { ` )
-    ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v < ` ) ( string_push_str body ( string_data lo2 ) )
-    ( string_push_str body ` ? ` ) ( string_push_str body ( string_data lo2 ) ) ( string_push_str body ` : (v > ` ) ( string_push_str body ( string_data hi2 ) )
-    ( string_push_str body ` ? ` ) ( string_push_str body ( string_data hi2 ) ) ( string_push_str body ` : v)); }` )
+    : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `n` n ) ( gk_call_f64 cl `lo` lo ) ( gk_call_f64 cl `hi` hi )
-    ^ ( __gkd_run kit cl kname body n )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : ~ String body ( string_from `if (gid < n) { ` )
+        ( string_push_str body tn ) ( string_push_str body ` v = LD(X, gid); ST(Y, gid, v < ` ) ( string_push_str body ( string_data lo2 ) )
+        ( string_push_str body ` ? ` ) ( string_push_str body ( string_data lo2 ) ) ( string_push_str body ` : (v > ` ) ( string_push_str body ( string_data hi2 ) )
+        ( string_push_str body ` ? ` ) ( string_push_str body ( string_data hi2 ) ) ( string_push_str body ` : v)); }` )
+        ^ body
+    } n )
 }
 
 @ gkd_erf GpuKit kit GkBuf y GkBuf x → b {
@@ -617,49 +875,55 @@ unsafe @ __gkd_launch GpuKit kit sink String src sink String kname i grid sink (
     : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
     : b rowwise & on_cuda >= ax 128
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname ? rowwise `lnormrow` `lnorm` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* sc, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* bi, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long outer, long long ax, ` )
-    ( string_push_str src tn ) ( string_push_str src ` eps){` )
+    ( string_push_str kname ? rowwise `lnormrow` `lnorm` )
+    : s ct ( __gkd_ctr ax )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( __gkd_in cl `sc` sc y ) ( __gkd_in cl `bi` bi y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax ) ( gk_call_f64 cl `eps` eps )
+    : i dty . y dtype
+    : String tag ( string_from ct )
+    ? rowwise { ^ ( gk_run_checked_dev_tagged kit cl ( string_data kname ) ( string_data tag ) \ → String { ^ ( __gkd_lnorm_body tn sfx ct dty rowwise ) } outer 256 ) } {}
+    ^ ( __gkd_run_t kit cl kname tag \ → String { ^ ( __gkd_lnorm_body tn sfx ct dty rowwise ) } outer )
+}
+
+@ __gkd_lnorm_body s tn s sfx s ct i dty b rowwise → String {
+    : String ev ( __gkd_scal dty `eps` )
+    : ~ String sums ( string_new )
+    ( string_push_str sums tn ) ( string_push_str sums ` m = 0; for (` ) ( string_push_str sums ct ) ( string_push_str sums ` j = 0; j < LEN(p); j++) { m += LD(p, j); } m /= ax;
+    ` ) ( string_push_str sums tn ) ( string_push_str sums ` v = 0; for (` ) ( string_push_str sums ct ) ( string_push_str sums ` j = 0; j < LEN(p); j++) { ` )
+    ( string_push_str sums tn ) ( string_push_str sums ` d = LD(p, j) - m; v += d * d; } v /= ax;
+    ` )
+    : ~ String body ( string_new )
     ? rowwise {
-        ( string_push_str src `long long o=blockIdx.x;if(o>=outer)return;const ` )
-        ( string_push_str src tn ) ( string_push_str src `* p=X+o*ax;` )
-        ( string_push_str src `__shared__ ` ) ( string_push_str src tn )
-        ( string_push_str src ` st[2];if(threadIdx.x==0){` )
-        ( string_push_str src tn ) ( string_push_str src ` m=0;for(long long j=0;j<ax;j++)m+=p[j];m/=ax;` )
-        ( string_push_str src tn ) ( string_push_str src ` v=0;for(long long j=0;j<ax;j++){` )
-        ( string_push_str src tn ) ( string_push_str src ` d=p[j]-m;v+=d*d;}v/=ax;` )
-        ( string_push_str src `st[0]=m;st[1]=1/sqrt` )
-        ( string_push_str src sfx )
-        ( string_push_str src `(v+eps);}__syncthreads();` )
-        ( string_push_str src tn ) ( string_push_str src ` m=st[0],inv=st[1];` )
-        ( string_push_str src tn ) ( string_push_str src `* q=Y+o*ax;` )
-        ( string_push_str src `for(long long j=threadIdx.x;j<ax;j+=blockDim.x)` )
-        ( string_push_str src `q[j]=(p[j]-m)*inv*sc[j]+bi[j];}` )
-    } {
-        ( string_push_str src `long long o=blockIdx.x*blockDim.x+threadIdx.x;` )
-        ( string_push_str src `if(o>=outer)return;const ` )
-        ( string_push_str src tn ) ( string_push_str src `* p=X+o*ax;` )
-        ( string_push_str src tn ) ( string_push_str src ` m=0;for(long long j=0;j<ax;j++)m+=p[j];m/=ax;` )
-        ( string_push_str src tn ) ( string_push_str src ` v=0;for(long long j=0;j<ax;j++){` )
-        ( string_push_str src tn ) ( string_push_str src ` d=p[j]-m;v+=d*d;}v/=ax;` )
-        ( string_push_str src tn ) ( string_push_str src ` inv=1/sqrt` )
-        ( string_push_str src sfx )
-        ( string_push_str src `(v+eps);` )
-        ( string_push_str src tn ) ( string_push_str src `* q=Y+o*ax;` )
-        ( string_push_str src `for(long long j=0;j<ax;j++)q[j]=(p[j]-m)*inv*sc[j]+bi[j];}` )
+        ( string_push_str body ? == dty GK_F32 `SHARED_F(st, 2);` `SHARED_D(st, 2);` )
+        ( string_push_str body `
+if (bid < outer) {
+    WIN(p, X, bid * ax, ax);
+    WIN(q, Y, bid * ax, ax);
+    if (tid == 0) {
+    ` ) ( string_push_str body ( string_data sums ) )
+        ( string_push_str body `ST(st, 0, m); ST(st, 1, 1 / sqrt` ) ( string_push_str body sfx ) ( string_push_str body `(v + ` ) ( string_push_str body ( string_data ev ) ) ( string_push_str body `));
     }
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev sc ) )
-    ( vec_push [i] args ( gk_arg_dev bi ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ( vec_push [i] args ( _gk_scal . y dtype eps ) )
-    ^ ( __gkd_launch kit src kname ? rowwise outer ( gk_grid outer 256 ) args )
+    SYNC();
+    ` ) ( string_push_str body tn ) ( string_push_str body ` m = LD(st, 0), inv = LD(st, 1);
+    for (` ) ( string_push_str body ct ) ( string_push_str body ` j = tid; j < LEN(p) && j < LEN(q); j += bdim) { ST(q, j, (LD(p, j) - m) * inv * LD(sc, j) + LD(bi, j)); }
+}` )
+    } {
+        // (the rewrite as one loop of one exit with every window whole —
+        // a loop the host compiler vectorises, as it did the raw kernel's)
+        ( string_push_str body `if (gid < outer) {
+    WIN(p, X, gid * ax, ax);
+    WIN(q, Y, gid * ax, ax);
+    WIN(sw, sc, 0, ax);
+    WIN(bw, bi, 0, ax);
+    ` ) ( string_push_str body ( string_data sums ) )
+        ( string_push_str body tn ) ( string_push_str body ` inv = 1 / sqrt` ) ( string_push_str body sfx ) ( string_push_str body `(v + ` ) ( string_push_str body ( string_data ev ) ) ( string_push_str body `);
+    if (LEN(q) == ax && LEN(sw) == ax && LEN(bw) == ax && LEN(p) == ax) {
+        for (` ) ( string_push_str body ct ) ( string_push_str body ` j = 0; j < ax; j++) { ST(q, j, (LD(p, j) - m) * inv * LD(sw, j) + LD(bw, j)); }
+    }
+}` )
+    }
+    ^ body
 }
 
 // ── Softmax along an interior axis, viewed as (outer, ax, inner) ─────
@@ -1096,31 +1360,30 @@ i batch i heads i n i nkv i hd f scale → b {
     : s tn ( _gk_tname . y dtype )
     : s sfx ( __gkd_sfx . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `softmaxax` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long outer, long long ax, long long inner){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=outer*inner)return;` )
-    ( string_push_str src `long long io=idx/inner,ii=idx%inner;` )
-    ( string_push_str src `long long base=io*ax*inner+ii;` )
-    ( string_push_str src tn ) ( string_push_str src ` m=` )
-    ( string_push_str src ( __gkd_neg . y dtype ) )
-    ( string_push_str src `;for(long long a=0;a<ax;a++){` )
-    ( string_push_str src tn ) ( string_push_str src ` v=X[base+a*inner];if(v>m)m=v;}` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;` )
-    ( string_push_str src `for(long long a=0;a<ax;a++){s+=exp` )
-    ( string_push_str src sfx )
-    ( string_push_str src `(X[base+a*inner]-m);}` )
-    ( string_push_str src `for(long long a=0;a<ax;a++){Y[base+a*inner]=exp` )
-    ( string_push_str src sfx )
-    ( string_push_str src `(X[base+a*inner]-m)/s;}}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * outer inner 256 ) args )
+    ( string_push_str kname `softmaxax` )
+    : s ct ( __gkd_ctr ax )
+    : i dty . y dtype
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax ) ( gk_call_i64 cl `inner` inner )
+    ^ ( __gkd_run_t kit cl kname ( string_from ct ) \ → String {
+        : ~ String body ( string_from `if (gid < outer * inner) {
+    long long io = gid / inner, ii = gid % inner;
+    long long base = io * ax * inner + ii;
+    WINS(xc, X, base, ax, inner);
+    WINS(yc, Y, base, ax, inner);
+    ` )
+        ( string_push_str body tn ) ( string_push_str body ` m = ` ) ( string_push_str body ( __gkd_neg dty ) )
+        ( string_push_str body `;
+    for (` ) ( string_push_str body ct ) ( string_push_str body ` a = 0; a < LEN(xc); a++) { ` ) ( string_push_str body tn )
+        ( string_push_str body ` v = LD(xc, a); if (v > m) { m = v; } }
+    ` ) ( string_push_str body tn ) ( string_push_str body ` s = 0;
+    for (` ) ( string_push_str body ct ) ( string_push_str body ` a = 0; a < LEN(xc); a++) { s += exp` ) ( string_push_str body sfx )
+        ( string_push_str body `(LD(xc, a) - m); }
+    for (` ) ( string_push_str body ct ) ( string_push_str body ` a = 0; a < LEN(xc) && a < LEN(yc); a++) { ST(yc, a, exp` ) ( string_push_str body sfx )
+        ( string_push_str body `(LD(xc, a) - m) / s); }
+}` )
+        ^ body
+    } * outer inner )
 }
 
 // ── Axis data movement (any element type) ────────────────────────────
@@ -1133,26 +1396,19 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & & > outer 0 > src_ax 0 > inner 0 {} { ^ F }
     ? & >= off 0 <= + off src_ax dst_ax {} { ^ F }
     ? & == . src n ( _gk_p3 outer src_ax inner ) == . dst n ( _gk_p3 outer dst_ax inner ) {} { ^ F }
-    : s tn ( _gk_tname . dst dtype )
     : String kname ( __gkd_name . dst dtype )
-    : String src2 ( __gkd_head kname `copyax` )
-    ( string_push_str src2 `const ` ) ( string_push_str src2 tn ) ( string_push_str src2 `* S, ` )
-    ( string_push_str src2 tn ) ( string_push_str src2 `* D, long long outer, long long src_ax, long long inner, long long dst_ax, long long off){` )
-    ( string_push_str src2 `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src2 `if(idx>=outer*src_ax*inner)return;` )
-    ( string_push_str src2 `long long ii=idx%inner;long long t=idx/inner;` )
-    ( string_push_str src2 `long long a=t%src_ax;long long o=t/src_ax;` )
-    ( string_push_str src2 `D[(o*dst_ax+(off+a))*inner+ii]=S[idx];}` )
-    : i total * * outer src_ax inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev src ) )
-    ( vec_push [i] args ( gk_arg_dev dst ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 src_ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 dst_ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 off ) )
-    ^ ( __gkd_launch kit src2 kname ( gk_grid total 256 ) args )
+    ( string_push_str kname `copyax` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
+    ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `src_ax` src_ax ) ( gk_call_i64 cl `inner` inner ) ( gk_call_i64 cl `dst_ax` dst_ax ) ( gk_call_i64 cl `off` off )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : String body ( string_from `if (gid < outer * src_ax * inner) {
+    long long ii = gid % inner; long long t = gid / inner;
+    long long a = t % src_ax; long long o = t / src_ax;
+    ST(D, (o * dst_ax + (off + a)) * inner + ii, LD(S, gid));
+}` )
+        ^ body
+    } * * outer src_ax inner )
 }
 
 // Extract a contiguous axis slice into a fresh tensor: viewing src as
@@ -1163,26 +1419,19 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & & > outer 0 > sz 0 > inner 0 {} { ^ F }
     ? & >= soff 0 <= + soff sz src_ax {} { ^ F }
     ? & == . src n ( _gk_p3 outer src_ax inner ) == . dst n ( _gk_p3 outer sz inner ) {} { ^ F }
-    : s tn ( _gk_tname . dst dtype )
     : String kname ( __gkd_name . dst dtype )
-    : String src2 ( __gkd_head kname `sliceax` )
-    ( string_push_str src2 `const ` ) ( string_push_str src2 tn ) ( string_push_str src2 `* S, ` )
-    ( string_push_str src2 tn ) ( string_push_str src2 `* D, long long outer, long long sz, long long inner, long long src_ax, long long soff){` )
-    ( string_push_str src2 `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src2 `if(idx>=outer*sz*inner)return;` )
-    ( string_push_str src2 `long long ii=idx%inner;long long t=idx/inner;` )
-    ( string_push_str src2 `long long a=t%sz;long long o=t/sz;` )
-    ( string_push_str src2 `D[idx]=S[(o*src_ax+(soff+a))*inner+ii];}` )
-    : i total * * outer sz inner
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev src ) )
-    ( vec_push [i] args ( gk_arg_dev dst ) )
-    ( vec_push [i] args ( gpu_arg_i64 outer ) )
-    ( vec_push [i] args ( gpu_arg_i64 sz ) )
-    ( vec_push [i] args ( gpu_arg_i64 inner ) )
-    ( vec_push [i] args ( gpu_arg_i64 src_ax ) )
-    ( vec_push [i] args ( gpu_arg_i64 soff ) )
-    ^ ( __gkd_launch kit src2 kname ( gk_grid total 256 ) args )
+    ( string_push_str kname `sliceax` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `S` src dst ) ( gk_call_dev cl `D` dst )
+    ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `sz` sz ) ( gk_call_i64 cl `inner` inner ) ( gk_call_i64 cl `src_ax` src_ax ) ( gk_call_i64 cl `soff` soff )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : String body ( string_from `if (gid < outer * sz * inner) {
+    long long ii = gid % inner; long long t = gid / inner;
+    long long a = t % sz; long long o = t / sz;
+    ST(D, gid, LD(S, (o * src_ax + (soff + a)) * inner + ii));
+}` )
+        ^ body
+    } * * outer sz inner )
 }
 
 // General N-D (≤6) transpose: output axis k reads input axis perm[k].
@@ -1245,46 +1494,29 @@ i batch i heads i n i nkv i hd f scale → b {
             = q + q 1
         }
     } {}
-    : String src ( string_from `extern "C" __global__ void ` )
-    ( string_push_str src ( string_data kname ) )
-    ( string_push_char src 40 )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long d0,long long d1,long long d2,long long d3,long long d4,long long d5,long long p0,long long p1,long long p2,long long p3,long long p4,long long p5){` )
+    : ~ String body ( string_new )
     ? lit {
-        ( string_push_str src `(void)d0;(void)d1;(void)d2;(void)d3;(void)d4;(void)d5;` )
-        ( string_push_str src `(void)p0;(void)p1;(void)p2;(void)p3;(void)p4;(void)p5;` )
-        ( string_push_str src `enum{` )
+        // the dims and the permutation as literals: the divisions become
+        // multiply-shifts and every intermediate a register
         : ~ i q 0
         ~ < q 6 {
-            ( string_push_str src ? == q 0 `D0=` `,D` )
-            ? > q 0 { ( string_push_int src q ) ( string_push_char src 61 ) } {}
-            ( string_push_int src ? < q nd { ( _gk_vi dims q ) } { 1 } )
+            ( string_push_str body `long long O` ) ( string_push_int body q ) ( string_push_str body ` = ` )
+            ( string_push_int body ? < q nd { ( _gk_vi dims ( _gk_vi perm q ) ) } { 1 } )
+            ( string_push_str body `; ` )
             = q + q 1
         }
-        ( string_push_str src `};` )
-        // output extents, in output-axis order
-        : ~ i q 0
+        ( string_push_str body `
+if (gid < O0 * O1 * O2 * O3 * O4 * O5) {
+    long long t = gid;
+    long long c5 = t % O5; t /= O5; long long c4 = t % O4; t /= O4;
+    long long c3 = t % O3; t /= O3; long long c2 = t % O2; t /= O2;
+    long long c1 = t % O1; long long c0 = t / O1;
+    long long si = ` )
+        // ((((c_a0*D1+c_a1)*D2+c_a2)*D3+c_a3)*D4+c_a4)*D5+c_a5, c_aq the
+        // output coordinate of the axis that permutes to input axis q
+        ( string_push_str body `((((` )
+        = q 0
         ~ < q 6 {
-            ( string_push_str src ? == q 0 `enum{O0=D` `,O` )
-            ? > q 0 { ( string_push_int src q ) ( string_push_str src `=D` ) } {}
-            ( string_push_int src ? < q nd { ( _gk_vi perm q ) } { q } )
-            = q + q 1
-        }
-        ( string_push_str src `};` )
-        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-        ( string_push_str src `if(idx>=(long long)O0*O1*O2*O3*O4*O5)return;` )
-        ( string_push_str src `long long t=idx;` )
-        ( string_push_str src `long long c5=t%O5;t/=O5;long long c4=t%O4;t/=O4;` )
-        ( string_push_str src `long long c3=t%O3;t/=O3;long long c2=t%O2;t/=O2;` )
-        ( string_push_str src `long long c1=t%O1;long long c0=t/O1;` )
-        // in-axis order is a compile-time permutation of c0..c5
-        // ((((c_a0*D1+c_a1)*D2+c_a2)*D3+c_a3)*D4+c_a4)*D5+c_a5, where
-        // c_aq is the output coordinate of the axis that permutes to
-        // input axis q — four opening parens for six axes.
-        ( string_push_str src `long long si=((((` )
-        : ~ i q 0
-        ~ < q 6 {
-            // which output axis maps to input axis q
             : ~ i which 0
             : ~ i j2 0
             ~ < j2 6 {
@@ -1292,43 +1524,48 @@ i batch i heads i n i nkv i hd f scale → b {
                 ? == pv q { = which j2 } {}
                 = j2 + j2 1
             }
-            ? > q 0 { ( string_push_str src `*D` ) ( string_push_int src q ) ( string_push_char src 43 ) } {}
-            ( string_push_str src `c` ) ( string_push_int src which )
-            ? & > q 0 < q 5 { ( string_push_char src 41 ) } {}
+            ? > q 0 {
+                ( string_push_str body ` * ` ) ( string_push_int body ? < q nd { ( _gk_vi dims q ) } { 1 } ) ( string_push_str body ` + ` )
+            } {}
+            ( string_push_str body `c` ) ( string_push_int body which )
+            ? & > q 0 < q 5 { ( string_push_char body 41 ) } {}
             = q + q 1
         }
-        ( string_push_str src `;Y[idx]=X[si];}` )
+        ( string_push_str body `;
+    ST(Y, gid, LD(X, si));
+}` )
     } {
-        ( string_push_str src `long long D[6]={d0,d1,d2,d3,d4,d5};` )
-        ( string_push_str src `long long P[6]={p0,p1,p2,p3,p4,p5};` )
-        ( string_push_str src `long long O[6];for(int i=0;i<6;i++)O[i]=D[P[i]];` )
-        ( string_push_str src `long long tot=O[0]*O[1]*O[2]*O[3]*O[4]*O[5];` )
-        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-        ( string_push_str src `if(idx>=tot)return;` )
-        ( string_push_str src `long long oc[6];long long t=idx;` )
-        ( string_push_str src `for(int i=5;i>=0;i--){oc[i]=t%O[i];t/=O[i];}` )
-        ( string_push_str src `long long in[6];for(int i=0;i<6;i++)in[P[i]]=oc[i];` )
-        ( string_push_str src `long long si=((((in[0]*d1+in[1])*d2+in[2])*d3+in[3])*d4+in[4])*d5+in[5];` )
-        ( string_push_str src `Y[idx]=X[si];}` )
+        ( string_push_str body `LOCAL_L(D, 6);
+LOCAL_L(P, 6);
+LOCAL_L(O, 6);
+LOCAL_L(oc, 6);
+LOCAL_L(inn, 6);
+ST(D, 0, d0); ST(D, 1, d1); ST(D, 2, d2); ST(D, 3, d3); ST(D, 4, d4); ST(D, 5, d5);
+ST(P, 0, p0); ST(P, 1, p1); ST(P, 2, p2); ST(P, 3, p3); ST(P, 4, p4); ST(P, 5, p5);
+for (int i = 0; i < 6; i++) { ST(O, i, LD(D, LD(P, i))); }
+long long tot = LD(O, 0) * LD(O, 1) * LD(O, 2) * LD(O, 3) * LD(O, 4) * LD(O, 5);
+if (gid < tot) {
+    long long t = gid;
+    for (int i = 5; i >= 0; i--) { ST(oc, i, t % LD(O, i)); t /= LD(O, i); }
+    for (int i = 0; i < 6; i++) { ST(inn, LD(P, i), LD(oc, i)); }
+    long long si = ((((LD(inn, 0) * d1 + LD(inn, 1)) * d2 + LD(inn, 2)) * d3 + LD(inn, 3)) * d4 + LD(inn, 4)) * d5 + LD(inn, 5);
+    ST(Y, gid, LD(X, si));
+}` )
     }
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    // input dims padded to 6 with trailing 1s
-    = k 0
-    ~ < k 6 {
-        : i dv ? < k nd { ( _gk_vi dims k ) } { 1 }
-        ( vec_push [i] args ( gpu_arg_i64 dv ) )
-        = k + k 1
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ? lit {} {
+        // input dims padded to 6 with trailing 1s, perm with the identity
+        = k 0
+        ~ < k 6 {
+            ( _gkd_dim_arg cl `d` k ? < k nd { ( _gk_vi dims k ) } { 1 } )
+            ( _gkd_dim_arg cl `p` k ? < k nd { ( _gk_vi perm k ) } { k } )
+            = k + k 1
+        }
+        // (the generic body is one text: launched by tag, not rebuilt)
+        ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String { ^ ( string_from ( string_data body ) ) } total )
     }
-    // perm padded with identity on the tail
-    = k 0
-    ~ < k 6 {
-        : i pv ? < k nd { ( _gk_vi perm k ) } { k }
-        ( vec_push [i] args ( gpu_arg_i64 pv ) )
-        = k + k 1
-    }
-    ^ ( __gkd_launch kit src kname ( gk_grid total 256 ) args )
+    ^ ( __gkd_run kit cl kname body total )
 }
 
 // Nearest-neighbour upsample by integer factors (NCHW):
@@ -1356,36 +1593,31 @@ i batch i heads i n i nkv i hd f scale → b {
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname ? != align 0 `ac` `` )
-    : String src ( __gkd_head kname `resizebilin` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long C, long long H, long long W, long long OH, long long OW, long long align){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=C*OH*OW)return;` )
-    ( string_push_str src `long long ox=idx%OW,oy=(idx/OW)%OH,c=idx/(OW*OH);` )
-    ( string_push_str src `double fy,fx;` )
-    ( string_push_str src `if(align){fy=(OH>1)?((double)oy*(double)(H-1)/(double)(OH-1)):0.0;` )
-    ( string_push_str src `fx=(OW>1)?((double)ox*(double)(W-1)/(double)(OW-1)):0.0;}` )
-    ( string_push_str src `else{fy=((double)oy+0.5)*(double)H/(double)OH-0.5;if(fy<0)fy=0;` )
-    ( string_push_str src `fx=((double)ox+0.5)*(double)W/(double)OW-0.5;if(fx<0)fx=0;}` )
-    ( string_push_str src `long long y0=(long long)fy; if(y0>H-1)y0=H-1; long long y1=(y0+1<H)?(y0+1):(H-1);` )
-    ( string_push_str src `long long x0=(long long)fx; if(x0>W-1)x0=W-1; long long x1=(x0+1<W)?(x0+1):(W-1);` )
-    ( string_push_str src `double wy=fy-(double)y0, wx=fx-(double)x0;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* p=X+c*H*W;` )
-    ( string_push_str src `double v00=(double)p[y0*W+x0],v01=(double)p[y0*W+x1];` )
-    ( string_push_str src `double v10=(double)p[y1*W+x0],v11=(double)p[y1*W+x1];` )
-    ( string_push_str src `double top=v00+(v01-v00)*wx, bot=v10+(v11-v10)*wx;` )
-    ( string_push_str src `Y[idx]=(` ) ( string_push_str src tn )
-    ( string_push_str src `)(top+(bot-top)*wy);}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 c ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 align ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * * c oh ow 256 ) args )
+    ( string_push_str kname `resizebilin` )
+    : i dty . y dtype
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `align` align )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : ~ String body ( string_from `if (gid < C * OH * OW) {
+    long long ox = gid % OW, oy = (gid / OW) % OH, c = gid / (OW * OH);
+    double fy, fx;
+    if (align) { fy = (OH > 1) ? ((double)oy * (double)(H - 1) / (double)(OH - 1)) : 0.0;
+        fx = (OW > 1) ? ((double)ox * (double)(W - 1) / (double)(OW - 1)) : 0.0; }
+    else { fy = ((double)oy + 0.5) * (double)H / (double)OH - 0.5; if (fy < 0) { fy = 0; }
+        fx = ((double)ox + 0.5) * (double)W / (double)OW - 0.5; if (fx < 0) { fx = 0; } }
+    long long y0 = (long long)fy; if (y0 > H - 1) { y0 = H - 1; } long long y1 = (y0 + 1 < H) ? (y0 + 1) : (H - 1);
+    long long x0 = (long long)fx; if (x0 > W - 1) { x0 = W - 1; } long long x1 = (x0 + 1 < W) ? (x0 + 1) : (W - 1);
+    double wy = fy - (double)y0, wx = fx - (double)x0;
+    long long p = c * H * W;
+    double v00 = (double)LD(X, p + y0 * W + x0), v01 = (double)LD(X, p + y0 * W + x1);
+    double v10 = (double)LD(X, p + y1 * W + x0), v11 = (double)LD(X, p + y1 * W + x1);
+    double top = v00 + (v01 - v00) * wx, bot = v10 + (v11 - v10) * wx;
+    ST(Y, gid, (` )
+        ( string_push_str body tn ) ( string_push_str body `)(top + (bot - top) * wy));
+}` )
+        ^ body
+    } * * c oh ow )
 }
 
 @ gkd_resize_nn GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i sh i sw → b {
@@ -1395,26 +1627,18 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & > sh 0 > sw 0 {} { ^ F }
     ? & <= oh ( _gk_p2 h sh ) <= ow ( _gk_p2 wd sw ) {} { ^ F }
     ? & == . x n ( _gk_p3 c h wd ) == . y n ( _gk_p3 c oh ow ) {} { ^ F }
-    : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `resizenn` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long C, long long H, long long W, long long OH, long long OW, long long sh, long long sw){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=C*OH*OW)return;` )
-    ( string_push_str src `long long ox=idx%OW,oy=(idx/OW)%OH,c=idx/(OW*OH);` )
-    ( string_push_str src `Y[idx]=X[(c*H+oy/sh)*W+ox/sw];}` )
-    : ( Vec i ) args ( vec_new [i] )
-    ( vec_push [i] args ( gk_arg_dev x ) )
-    ( vec_push [i] args ( gk_arg_dev y ) )
-    ( vec_push [i] args ( gpu_arg_i64 c ) )
-    ( vec_push [i] args ( gpu_arg_i64 h ) )
-    ( vec_push [i] args ( gpu_arg_i64 wd ) )
-    ( vec_push [i] args ( gpu_arg_i64 oh ) )
-    ( vec_push [i] args ( gpu_arg_i64 ow ) )
-    ( vec_push [i] args ( gpu_arg_i64 sh ) )
-    ( vec_push [i] args ( gpu_arg_i64 sw ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * * c oh ow 256 ) args )
+    ( string_push_str kname `resizenn` )
+    : ~ GkCall cl ( gk_call_new )
+    ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y )
+    ( gk_call_i64 cl `C` c ) ( gk_call_i64 cl `H` h ) ( gk_call_i64 cl `W` wd ) ( gk_call_i64 cl `OH` oh ) ( gk_call_i64 cl `OW` ow ) ( gk_call_i64 cl `sh` sh ) ( gk_call_i64 cl `sw` sw )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : String body ( string_from `if (gid < C * OH * OW) {
+    long long ox = gid % OW, oy = (gid / OW) % OH, c = gid / (OW * OH);
+    ST(Y, gid, LD(X, (c * H + oy / sh) * W + ox / sw));
+}` )
+        ^ body
+    } * * c oh ow )
 }
 
 // Expand the last axis: input (outer,1) → (outer,rep), Y[o,r] = X[o].
@@ -1425,10 +1649,12 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & == . x n outer == . y n ( _gk_p2 outer rep ) {} { ^ F }
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `expandl` )
-    : String body ( string_from `if (gid < outer * rep) { ST(Y, gid, LD(X, gid / rep)); }` )
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `rep` rep )
-    ^ ( __gkd_run kit cl kname body * outer rep )
+    ^ ( __gkd_run_t kit cl kname ( string_new ) \ → String {
+        : String body ( string_from `if (gid < outer * rep) { ST(Y, gid, LD(X, gid / rep)); }` )
+        ^ body
+    } * outer rep )
 }
 
 // ── Reductions / index selection ─────────────────────────────────────
@@ -1442,13 +1668,16 @@ i batch i heads i n i nkv i hd f scale → b {
     : s tn ( _gk_tname . y dtype )
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `rl2` )
-    : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); ` )
-    ( string_push_str body tn ) ( string_push_str body ` s = 0; for (` ) ( string_push_str body ( __gkd_ctr ax ) )
-    ( string_push_str body ` a = 0; a < LEN(p); a++) { s += LD(p, a) * LD(p, a); } ST(Y, gid, sqrt` )
-    ( string_push_str body ( __gkd_sfx . y dtype ) ) ( string_push_str body `(s)); }` )
+    : i dty . y dtype
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
-    ^ ( __gkd_run kit cl kname body outer )
+    ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr ax ) ) \ → String {
+        : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); ` )
+        ( string_push_str body tn ) ( string_push_str body ` s = 0; for (` ) ( string_push_str body ( __gkd_ctr ax ) )
+        ( string_push_str body ` a = 0; a < LEN(p); a++) { s += LD(p, a) * LD(p, a); } ST(Y, gid, sqrt` )
+        ( string_push_str body ( __gkd_sfx dty ) ) ( string_push_str body `(s)); }` )
+        ^ body
+    } outer )
 }
 
 // ArgMax along the last axis: input (outer, ax) in any element type →
@@ -1460,12 +1689,15 @@ i batch i heads i n i nkv i hd f scale → b {
     : s tn ( _gk_tname . x dtype )
     : String kname ( __gkd_name . x dtype )
     ( string_push_str kname `argmax` )
-    : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); long long bi = 0; ` )
-    ( string_push_str body tn ) ( string_push_str body ` bv = LD(p, 0); for (` ) ( string_push_str body ( __gkd_ctr ax ) )
-    ( string_push_str body ` j = 1; j < LEN(p); j++) { if (LD(p, j) > bv) { bv = LD(p, j); bi = j; } } ST(Y, gid, bi); }` )
+    : i dtx . x dtype
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `X` x y ) ( gk_call_dev cl `Y` y ) ( gk_call_i64 cl `outer` outer ) ( gk_call_i64 cl `ax` ax )
-    ^ ( __gkd_run kit cl kname body outer )
+    ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr ax ) ) \ → String {
+        : ~ String body ( string_from `if (gid < outer) { WIN(p, X, gid * ax, ax); long long bi = 0; ` )
+        ( string_push_str body tn ) ( string_push_str body ` bv = LD(p, 0); for (` ) ( string_push_str body ( __gkd_ctr ax ) )
+        ( string_push_str body ` j = 1; j < LEN(p); j++) { if (LD(p, j) > bv) { bv = LD(p, j); bi = j; } } ST(Y, gid, bi); }` )
+        ^ body
+    } outer )
 }
 
 // EOS read-out (CLIP): given per-row token ids `tok` [B,L] (GK_I64) and
@@ -1478,13 +1710,15 @@ i batch i heads i n i nkv i hd f scale → b {
     ? & & == . data n ( _gk_p3 bsz l d ) == . y n ( _gk_p2 bsz d ) >= . tok n ( _gk_p2 bsz l ) {} { ^ F }
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `eosg` )
-    : ~ String body ( string_from `if (gid < B * D) { long long d = gid % D; long long b = gid / D; WIN(t, tok, b * L, L); long long pos = 0; long long mx = LD(t, 0); for (` )
-    ( string_push_str body ( __gkd_ctr l ) )
-    ( string_push_str body ` j = 1; j < LEN(t); j++) { if (LD(t, j) > mx) { mx = LD(t, j); pos = j; } } ST(Y, gid, LD(data, (b * L + pos) * D + d)); }` )
     : ~ GkCall cl ( gk_call_new )
     ( __gkd_in cl `data` data y ) ( __gkd_in cl `tok` tok y ) ( gk_call_dev cl `Y` y )
     ( gk_call_i64 cl `B` bsz ) ( gk_call_i64 cl `L` l ) ( gk_call_i64 cl `D` d )
-    ^ ( __gkd_run kit cl kname body * bsz d )
+    ^ ( __gkd_run_t kit cl kname ( string_from ( __gkd_ctr l ) ) \ → String {
+        : ~ String body ( string_from `if (gid < B * D) { long long d = gid % D; long long b = gid / D; WIN(t, tok, b * L, L); long long pos = 0; long long mx = LD(t, 0); for (` )
+        ( string_push_str body ( __gkd_ctr l ) )
+        ( string_push_str body ` j = 1; j < LEN(t); j++) { if (LD(t, j) > mx) { mx = LD(t, j); pos = j; } } ST(Y, gid, LD(data, (b * L + pos) * D + d)); }` )
+        ^ body
+    } * bsz d )
 }
 
 // ── Rotary position embedding over 2 and 3 axes ───────────────────
@@ -1511,7 +1745,12 @@ i heads i n i dim → b {
     ? & & == . x dtype GK_F32 == . rows dtype GK_I64 == . cols dtype GK_I64 {} { ^ F }
     ? & & >= . rows n n >= . cols n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
-    : String body ( string_from `long long half = dim / 2, quarter = half / 2;
+    : ~ GkCall cl ( gk_call_new )
+    ( gk_call_dev cl `X` x ) ( __gkd_in cl `rows` rows x ) ( __gkd_in cl `cols` cols x ) ( __gkd_in cl `cosT` cosb x ) ( __gkd_in cl `sinT` sinb x )
+    ( gk_call_i64 cl `heads` heads ) ( gk_call_i64 cl `n` n ) ( gk_call_i64 cl `dim` dim ) ( gk_call_i64 cl `tl` tl )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_run_t kit cl ( string_from `gkd_rope2d` ) ( string_new ) \ → String {
+        : String body ( string_from `long long half = dim / 2, quarter = half / 2;
 long long tot = heads * n * quarter * 2;
 if (gid < tot) {
     long long j = gid % quarter; long long r = gid / quarter;
@@ -1526,11 +1765,8 @@ if (gid < tot) {
         ST(X, base + j + quarter, x2 * LD(cosT, tbl + j + quarter) + x1 * LD(sinT, tbl + j + quarter));
     }
 }` )
-    : ~ GkCall cl ( gk_call_new )
-    ( gk_call_dev cl `X` x ) ( __gkd_in cl `rows` rows x ) ( __gkd_in cl `cols` cols x ) ( __gkd_in cl `cosT` cosb x ) ( __gkd_in cl `sinT` sinb x )
-    ( gk_call_i64 cl `heads` heads ) ( gk_call_i64 cl `n` n ) ( gk_call_i64 cl `dim` dim ) ( gk_call_i64 cl `tl` tl )
-    : i tot * heads * n / dim 2
-    ^ ( __gkd_run kit cl ( string_from `gkd_rope2d` ) body tot )
+        ^ body
+    } tot )
 }
 
 @ gkd_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
@@ -1543,7 +1779,12 @@ i heads i n i dim i nt i nh → b {
     ? & & == . x dtype GK_F32 == . fr dtype GK_I64 & == . rw dtype GK_I64 == . cl dtype GK_I64 {} { ^ F }
     ? & & >= . fr n n >= . rw n n & >= . cl n n & == . cosb dtype GK_F32 == . sinb dtype GK_F32 {} { ^ F }
     : i tl ? < . cosb n . sinb n . cosb n . sinb n
-    : String body ( string_from `long long width = dim / 2;
+    : ~ GkCall cl2 ( gk_call_new )
+    ( gk_call_dev cl2 `X` x ) ( __gkd_in cl2 `fr` fr x ) ( __gkd_in cl2 `rw` rw x ) ( __gkd_in cl2 `cl` cl x ) ( __gkd_in cl2 `cosT` cosb x ) ( __gkd_in cl2 `sinT` sinb x )
+    ( gk_call_i64 cl2 `heads` heads ) ( gk_call_i64 cl2 `n` n ) ( gk_call_i64 cl2 `dim` dim ) ( gk_call_i64 cl2 `nt` nt ) ( gk_call_i64 cl2 `nh` nh ) ( gk_call_i64 cl2 `tl` tl )
+    : i tot * heads * n / dim 2
+    ^ ( __gkd_run_t kit cl2 ( string_from `gkd_rope3d` ) ( string_new ) \ → String {
+        : String body ( string_from `long long width = dim / 2;
 long long tot = heads * n * width;
 if (gid < tot) {
     long long j = gid % width; long long r = gid / width;
@@ -1557,9 +1798,6 @@ if (gid < tot) {
         ST(X, base, x1 * c - x2 * s); ST(X, base + 1, x1 * s + x2 * c);
     }
 }` )
-    : ~ GkCall cl2 ( gk_call_new )
-    ( gk_call_dev cl2 `X` x ) ( __gkd_in cl2 `fr` fr x ) ( __gkd_in cl2 `rw` rw x ) ( __gkd_in cl2 `cl` cl x ) ( __gkd_in cl2 `cosT` cosb x ) ( __gkd_in cl2 `sinT` sinb x )
-    ( gk_call_i64 cl2 `heads` heads ) ( gk_call_i64 cl2 `n` n ) ( gk_call_i64 cl2 `dim` dim ) ( gk_call_i64 cl2 `nt` nt ) ( gk_call_i64 cl2 `nh` nh ) ( gk_call_i64 cl2 `tl` tl )
-    : i tot * heads * n / dim 2
-    ^ ( __gkd_run kit cl2 ( string_from `gkd_rope3d` ) body tot )
+        ^ body
+    } tot )
 }

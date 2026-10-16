@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.3] — 2026-10-16
+
+- **The static backend's conv2d is gpukit's own kernel again, and faster.** `kernels_static.c` carried a hand-written C conv2d in place of the generated one, because gpukit's conv2d left a CPU vectoriser nothing unit-stride. gpukit 0.11.12's host conv2d is written for the vectoriser, and its generic translation runs tinyyolov2 on the native static backend in 1.65 s per frame against the override's 2.17 s. It is bit-identical to the CPU and CUDA backends, which the override was not (it skipped the padding taps the kernel adds as zeros). The override mechanism is gone with it: every static kernel is now generated from the census. Needs gpukit ^0.11.12.
+
 ## [0.12.2] — 2026-10-15
 
 - `rt_kernel_census` allocates its buffers with `gk_dbuf_new` on the census kit (gpukit 0.11.2), so `__cz_f` and `__cz_i` no longer need `unsafe`. onnx now has no `unsafe` code. The census and static-backend tests give the same results.

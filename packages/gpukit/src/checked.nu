@@ -67,10 +67,11 @@ $ `devbuf.nu`
     ( Vec GkHBuf ) hb  // 16-bit float buffers (gk_call_half_in): read where they live
     ( Vec GkBBuf ) qb  // byte buffers (gk_call_bytes_in): read where they live
     String err  // why gk_run_checked refused the kernel ("" when it did not)
+    b exact  // gk_call_exact: the kernel is built for the buffers' lengths
 }
 
 @ gk_call_new → GkCall {
-    ^ @ GkCall { ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [( Vec f )] ) ( vec_new [( Vec i )] ) ( vec_new [( Slice f )] ) ( vec_new [( Slice i )] ) ( vec_new [GkBuf] ) ( vec_new [GkHBuf] ) ( vec_new [GkBBuf] ) ( string_new ) }
+    ^ @ GkCall { ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [( Vec f )] ) ( vec_new [( Vec i )] ) ( vec_new [( Slice f )] ) ( vec_new [( Slice i )] ) ( vec_new [GkBuf] ) ( vec_new [GkHBuf] ) ( vec_new [GkBBuf] ) ( string_new ) F }
 }
 
 @ __gkc_add inout GkCall c s name i kind i slot → v {
@@ -164,6 +165,14 @@ $ `devbuf.nu`
     ( __gkc_add c name 9 ( vec_len [GkBuf] . c db ) )
     ( vec_push [GkBuf] . c db ( gk_buf_view b 0 . b n ) )
 }
+
+// Build the kernel for its device buffers' lengths (gk_run_checked_dev):
+// each is a constant in the kernel's source and part of the key it is
+// cached under — buffers of other lengths build another kernel. For a
+// kernel whose dimensions are constants too (one compiled per shape):
+// then a window, or a load whose index the loops bound, is seen to be in
+// range at compile time, and its check folds away.
+@ gk_call_exact inout GkCall c → v { = . c exact T }
 
 // Give scalar `name` a new value — one call launched again and again. F
 // when the call has no such scalar.
@@ -332,7 +341,7 @@ $ `devbuf.nu`
 
 // The math a body may call.
 @ __gkc_callable s w → b {
-    ? ( __gkc_word_in `LD ST if for while switch return sizeof min max abs fabs fabsf sqrt sqrtf rsqrt rsqrtf exp expf exp2 exp2f expm1 log logf log2 log2f log1p log1pf log10 sin sinf cos cosf tan tanf tanh tanhf sinh cosh atan atanf atan2 atan2f asin acos pow powf fmin fminf fmax fmaxf floor floorf ceil ceilf round roundf trunc truncf fmod fmodf erf erff erfc erfcf isnan isinf isfinite copysign copysignf __dadd_rn __dsub_rn __dmul_rn __ddiv_rn __fadd_rn __fsub_rn __fmul_rn __fdiv_rn __fsqrt_rn __dsqrt_rn SYNC SHARED_D SHARED_F SHARED_L SHFL_DOWN SHFL_XOR LOCAL_D LOCAL_F LOCAL_L LD16 LD32 LD4 F16 BF16 WIN WINS LEN WIN2 LD2 ST2 ROWS COLS` w ) { ^ T } {}
+    ? ( __gkc_word_in `LD ST if for while switch return sizeof min max abs fabs fabsf sqrt sqrtf rsqrt rsqrtf exp expf exp2 exp2f expm1 log logf log2 log2f log1p log1pf log10 sin sinf cos cosf tan tanf tanh tanhf sinh cosh atan atanf atan2 atan2f asin acos pow powf fmin fminf fmax fmaxf floor floorf ceil ceilf round roundf trunc truncf fmod fmodf erf erff erfc erfcf isnan isinf isfinite copysign copysignf __dadd_rn __dsub_rn __dmul_rn __ddiv_rn __fadd_rn __fsub_rn __fmul_rn __fdiv_rn __fsqrt_rn __dsqrt_rn SYNC SHARED_D SHARED_F SHARED_L SHFL_DOWN SHFL_XOR LOCAL_D LOCAL_F LOCAL_L LD16 LD32 LD4 F16 BF16 WIN WINS LEN WIN2 LD2 ST2 ROWS COLS WIN3 LD3 ST3 PLANES` w ) { ^ T } {}
     ^ ( __gkc_type w )
 }
 
@@ -381,7 +390,7 @@ $ `devbuf.nu`
 // Is `body` inside the subset? `bufs` lists the buffer names LD / ST may
 // take (outputs also in `outs`, byte buffers — LD16 / LD32 — in `wbufs`,
 // the f32 buffers LD4 may read in `f4bufs`).
-@ __gkc_check s body s bufs s outs s wbufs s f4bufs s w2 inout ( Vec i ) inits → String {
+@ __gkc_check s body s bufs s outs s wbufs s f4bufs s w2 s w3 inout ( Vec i ) inits → String {
     : ( Slice u ) b ( slice_of_str body )
     : i n ( slice_len [u] b )
     : ~ i k 0
@@ -441,11 +450,16 @@ $ `devbuf.nu`
             } {}
             ? > want_buf 0 {
                 ? ! ( __gkc_word_in bufs ws ) { ^ ( __gkc_why `LD / ST takes a buffer of this call` ws ) } {}
-                // a 2-D window is read with LD2 / ST2, and only one is
+                // a 2-D window is read with LD2 / ST2, a 3-D one with LD3 /
+                // ST3, and only they are
                 : b two | == want_buf 5 == want_buf 6
+                : b three | == want_buf 7 == want_buf 8
                 ? & two ! ( __gkc_word_in w2 ws ) { ^ ( __gkc_why `LD2 / ST2 take a 2-D window (WIN2)` ws ) } {}
                 ? & ! two ( __gkc_word_in w2 ws ) { ^ ( __gkc_why `a 2-D window is read with LD2 / ST2` ws ) } {}
+                ? & three ! ( __gkc_word_in w3 ws ) { ^ ( __gkc_why `LD3 / ST3 take a 3-D window (WIN3)` ws ) } {}
+                ? & ! three ( __gkc_word_in w3 ws ) { ^ ( __gkc_why `a 3-D window is read with LD3 / ST3` ws ) } {}
                 ? & == want_buf 6 ! ( __gkc_word_in outs ws ) { ^ ( __gkc_why `ST2 into a window of a buffer that is not an output` ws ) } {}
+                ? & == want_buf 8 ! ( __gkc_word_in outs ws ) { ^ ( __gkc_why `ST3 into a window of a buffer that is not an output` ws ) } {}
                 ? & == want_buf 2 ! ( __gkc_word_in outs ws ) { ^ ( __gkc_why `ST into a buffer that is not an output` ws ) } {}
                 ? & == want_buf 3 ! ( __gkc_word_in wbufs ws ) { ^ ( __gkc_why `LD16 / LD32 read a byte buffer (gk_call_bytes_in)` ws ) } {}
                 ? & == want_buf 4 ! ( __gkc_word_in f4bufs ws ) { ^ ( __gkc_why `LD4 reads an f32 device buffer that starts 16-byte aligned and holds at least 4 elements` ws ) } {}
@@ -462,6 +476,8 @@ $ `devbuf.nu`
                 ? ( __gkc_eq ws `LD4` ) { = want_buf 4 } {}
                 ? ( __gkc_eq ws `LD2` ) { = want_buf 5 } {}
                 ? ( __gkc_eq ws `ST2` ) { = want_buf 6 } {}
+                ? ( __gkc_eq ws `LD3` ) { = want_buf 7 } {}
+                ? ( __gkc_eq ws `ST3` ) { = want_buf 8 } {}
             } {}
             = prev ? ( __gkc_type ws ) 2 ? ( __gkc_word_in `return` ws ) 0 1
             continue
@@ -637,13 +653,22 @@ static __device__ inline void __gk_stu8_32(unsigned char* p, long long n, long l
 #define __GK_WI(i, l) ([&]() { long long __gk_k = (long long)(i); return (__gk_k >= 0 && __gk_k < (l)) ? __gk_k : 0LL; }())
 #define __GK_WST(p, o, l, s, i, v) ([&]() { long long __gk_k = (long long)(i); auto __gk_v = (v); if (__gk_k >= 0 && __gk_k < (l)) (p)[(o) + __gk_k * (s)] = __gk_v; }())
 #define __GK_WST2(p, o, nr, s, nc, r, c, v) ([&]() { long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); auto __gk_v = (v); if (__gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_r * (s) + __gk_c] = __gk_v; }())
+#define __GK_WST3(p, o, np, ps, nr, s, nc, q, r, c, v) ([&]() { long long __gk_q = (long long)(q); long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); auto __gk_v = (v); if (__gk_q >= 0 && __gk_q < (np) && __gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_q * (ps) + __gk_r * (s) + __gk_c] = __gk_v; }())
 #else
 // (C — the static backend's translation: GNU statement expressions, which
 // gcc, clang and zig take; the same single evaluation, inline)
 #define __GK_WI(i, l) ({ long long __gk_k = (long long)(i); (__gk_k >= 0 && __gk_k < (l)) ? __gk_k : 0LL; })
 #define __GK_WST(p, o, l, s, i, v) ({ long long __gk_k = (long long)(i); __typeof__(v) __gk_v = (v); if (__gk_k >= 0 && __gk_k < (l)) (p)[(o) + __gk_k * (s)] = __gk_v; })
 #define __GK_WST2(p, o, nr, s, nc, r, c, v) ({ long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); __typeof__(v) __gk_v = (v); if (__gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_r * (s) + __gk_c] = __gk_v; })
+#define __GK_WST3(p, o, np, ps, nr, s, nc, q, r, c, v) ({ long long __gk_q = (long long)(q); long long __gk_r = (long long)(r); long long __gk_c = (long long)(c); __typeof__(v) __gk_v = (v); if (__gk_q >= 0 && __gk_q < (np) && __gk_r >= 0 && __gk_r < (nr) && __gk_c >= 0 && __gk_c < (nc)) (p)[(o) + __gk_q * (ps) + __gk_r * (s) + __gk_c] = __gk_v; })
 #endif
+// A window's fit: do a steps of s go past b (a, b >= 0, s >= 1)? A
+// multiply while both factors are below 2^31 (the product cannot
+// overflow), the division only past that: a window opened inside a loop
+// is then a handful of instructions, not a 64-bit divide.
+#define __GK_PAST(a, s, b) ((((unsigned long long)(a) | (unsigned long long)(s)) >> 31) == 0 ? (unsigned long long)(a) * (unsigned long long)(s) > (unsigned long long)(b) : (unsigned long long)(a) > (unsigned long long)(b) / (unsigned long long)(s))
+// (a 3-D window's: do a1 steps of s1 and a2 of s2 together go past b)
+#define __GK_PAST2(a1, s1, a2, s2, b) ((((unsigned long long)(a1) | (unsigned long long)(s1) | (unsigned long long)(a2) | (unsigned long long)(s2)) >> 31) == 0 ? (unsigned long long)(a1) * (unsigned long long)(s1) + (unsigned long long)(a2) * (unsigned long long)(s2) > (unsigned long long)(b) : (__GK_PAST((a2), (s2), (b)) || __GK_PAST((a1), (s1), (unsigned long long)(b) - (unsigned long long)(a2) * (unsigned long long)(s2))))
 #ifdef __CUDACC__
 static __device__ inline unsigned int __gk_ldu8(const unsigned char* p, long long n, long long i) { return p[(unsigned long long)i < (unsigned long long)n ? i : n - 1]; }
 static __device__ inline unsigned int __gk_ldu16(const unsigned char* p, long long n, long long i) { unsigned long long w = (unsigned long long)i >> 1, m = (unsigned long long)n >> 1; return ((const unsigned short*)p)[w < m ? w : m - 1]; }
@@ -678,6 +703,10 @@ static __device__ inline unsigned int __gk_ldu32_32(const unsigned char* p, long
 #define COLS(w) __gk_wc_##w
 #define LD2(w, r, c) __GK_LD2_##w(r, c)
 #define ST2(w, r, c, v) __GK_ST2_##w(r, c, v)
+#define WIN3(w, b, off, np, ps, nr, st, nc) long long __gk_wo_##w = (long long)(off); long long __gk_wp_##w = (long long)(np); long long __gk_wq_##w = (long long)(ps); long long __gk_wr_##w = (long long)(nr); long long __gk_ws_##w = (long long)(st); long long __gk_wc_##w = (long long)(nc); __GK_WCHK3_##b(__gk_wo_##w, __gk_wp_##w, __gk_wq_##w, __gk_wr_##w, __gk_ws_##w, __gk_wc_##w)
+#define PLANES(w) __gk_wp_##w
+#define LD3(w, q, r, c) __GK_LD3_##w(q, r, c)
+#define ST3(w, q, r, c, v) __GK_ST3_##w(q, r, c, v)
 #define F16(h) __gk_h2f((unsigned short)(h))
 #ifdef __CUDACC__
 #define __GK_LD4N(p, n, i, a0, a1, a2, a3) do { float4 __gk_v = ((const float4*)(p))[min((unsigned)((i) >> 2), ((unsigned)(n) >> 2) - 1u)]; (a0) = __gk_v.x; (a1) = __gk_v.y; (a2) = __gk_v.z; (a3) = __gk_v.w; } while (0)
@@ -869,7 +898,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
         = . c err ( __gkc_add_locals toks lcn lct lcz bufs outs )
         ? > ( string_len . c err ) 0 { ^ F } {}
         : ~ ( Vec i ) inits ( vec_new [i] )
-        = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) `` `` `` inits )
+        = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) `` `` `` `` inits )
         ? > ( string_len . c err ) 0 { ^ F } {}
         ? ( __gkc_coop toks ) { = . c err ( __gkc_why `SYNC(), SHARED_* and SHFL_* need a block launch (gk_run_checked_dev)` `` ) ^ F } {}
         ? < idx 0 { = idx ( __gkc_reserve ( string_data key ) kname ) } {}
@@ -1343,7 +1372,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
     : ~ i k 0
     ~ < k n {
         : s w ( __gkc_ti t k )
-        ? | | ( __gkc_eq w `WIN` ) ( __gkc_eq w `WINS` ) ( __gkc_eq w `WIN2` ) {
+        ? | | | ( __gkc_eq w `WIN` ) ( __gkc_eq w `WINS` ) ( __gkc_eq w `WIN2` ) ( __gkc_eq w `WIN3` ) {
             : s pv ( __gkc_ti t - k 1 )
             ? | | == k 0 ( __gkc_eq pv `;` ) | ( __gkc_eq pv `{` ) ( __gkc_eq pv `}` ) {} { ^ ( __gkc_why `a window is declared as a statement` w ) }
             : i cl ( __gkc_close t + k 1 )
@@ -1352,14 +1381,14 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
             : s bf ( __gkc_ti t + k 4 )
             ? & & ( __gkc_eq ( __gkc_ti t + k 1 ) `(` ) ( __gkc_eq ( __gkc_ti t + k 3 ) `,` ) ( __gkc_eq ( __gkc_ti t + k 5 ) `,` ) {} { ^ ( __gkc_why `WIN(name, buffer, offset, length);` w ) }
             ? ( __gkc_name_ok nm ) {} { ^ ( __gkc_why `window name` nm ) }
-            ? ( __gkc_word_in `LD ST LD16 LD32 LD4 WIN WINS LEN SYNC WIN2 LD2 ST2 ROWS COLS` nm ) { ^ ( __gkc_why `window name` nm ) } {}
+            ? ( __gkc_word_in `LD ST LD16 LD32 LD4 WIN WINS LEN SYNC WIN2 LD2 ST2 ROWS COLS WIN3 LD3 ST3 PLANES` nm ) { ^ ( __gkc_why `window name` nm ) } {}
             ? ( __gkc_word_in taken nm ) { ^ ( __gkc_why `a window named like a binding or an array` nm ) } {}
             : ~ i j 0
             ~ < j ( vec_len [String] names ) { ? ( __gkc_eq ( string_data ( vec_at [String] names j ) ) nm ) { ^ ( __gkc_why `window declared twice` nm ) } {} = j + j 1 }
             ? ( __gkc_word_in devs bf ) {} { ^ ( __gkc_why `a window looks into a device or byte buffer of this call` bf ) }
             ( vec_push [String] names ( string_from nm ) )
             ( vec_push [String] bufs ( string_from bf ) )
-            ( vec_push [i] dims ? ( __gkc_eq w `WIN2` ) 2 1 )
+            ( vec_push [i] dims ? ( __gkc_eq w `WIN2` ) 2 ? ( __gkc_eq w `WIN3` ) 3 1 )
         } {}
         = k + k 1
     }
@@ -1372,7 +1401,7 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
     : ~ String o ( string_new )
     : ~ i k 0
     ~ < k ( vec_len [String] t ) {
-        ? & | | ( __gkc_eq ( __gkc_ti t k ) `WIN` ) ( __gkc_eq ( __gkc_ti t k ) `WINS` ) ( __gkc_eq ( __gkc_ti t k ) `WIN2` ) ( __gkc_eq ( __gkc_ti t + k 1 ) `(` ) {
+        ? & | | | ( __gkc_eq ( __gkc_ti t k ) `WIN` ) ( __gkc_eq ( __gkc_ti t k ) `WINS` ) ( __gkc_eq ( __gkc_ti t k ) `WIN2` ) ( __gkc_eq ( __gkc_ti t k ) `WIN3` ) ( __gkc_eq ( __gkc_ti t + k 1 ) `(` ) {
             ( string_push_char o 32 ) ( string_push_str o ( __gkc_ti t + k 2 ) )
         } {}
         = k + k 1
@@ -1527,9 +1556,10 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
         : s nm ( string_data ( vec_at [String] . c names k ) )
         : ~ b used F
         : ~ b used2 F
+        : ~ b used3 F
         : ~ i j 0
         ~ < j ( vec_len [String] wb ) {
-            ? ( __gkc_eq ( string_data ( vec_at [String] wb j ) ) nm ) { ? == 2 ( vec_at [i] wd j ) { = used2 T } { = used T } } {}
+            ? ( __gkc_eq ( string_data ( vec_at [String] wb j ) ) nm ) { ? == 2 ( vec_at [i] wd j ) { = used2 T } ? == 3 ( vec_at [i] wd j ) { = used3 T } { = used T } } {}
             = j + j 1
         }
         : i kw ( vec_at [i] . c kinds k )
@@ -1543,22 +1573,45 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
             // (the buffer has an element 0: a launch refuses empty buffers).
             ( string_push_str src `#undef __GK_WCHK_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_WCHK_` ) ( string_push_str src nm )
             ( string_push_str src `(o, l, s) if ((o) < 0 || (l) <= 0 || (s) < 1 || (o) >= __gk_n` ) ( string_push_int src k )
-            ( string_push_str src ` || (unsigned long long)((l) - 1) > (unsigned long long)((__gk_n` ) ( string_push_int src k )
-            ( string_push_str src ` - 1 - (o)) / (s))) { (o) = 0; (l) = 0; }\n` )
+            ( string_push_str src ` || __GK_PAST((l) - 1, (s), __gk_n` ) ( string_push_int src k )
+            ( string_push_str src ` - 1 - (o))) { (o) = 0; (l) = 0; }\n` )
         } {}
         ? used2 {
             // A 2-D window: rows of `nc` elements, `s` apart. The last
             // element, o + (nr - 1)·s + nc - 1, is inside the buffer.
             ( string_push_str src `#undef __GK_WCHK2_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_WCHK2_` ) ( string_push_str src nm )
             ( string_push_str src `(o, nr, s, nc) if ((o) < 0 || (nr) <= 0 || (nc) <= 0 || (s) < 1 || (o) >= __gk_n` ) ( string_push_int src k )
-            ( string_push_str src ` || (nc) - 1 > __gk_n` ) ( string_push_int src k ) ( string_push_str src ` - 1 - (o) || (unsigned long long)((nr) - 1) > (unsigned long long)((__gk_n` ) ( string_push_int src k )
-            ( string_push_str src ` - (o) - (nc)) / (s))) { (o) = 0; (nr) = 0; (nc) = 0; }\n` )
+            ( string_push_str src ` || (nc) - 1 > __gk_n` ) ( string_push_int src k ) ( string_push_str src ` - 1 - (o) || __GK_PAST((nr) - 1, (s), __gk_n` ) ( string_push_int src k )
+            ( string_push_str src ` - (o) - (nc))) { (o) = 0; (nr) = 0; (nc) = 0; }\n` )
+        } {}
+        ? used3 {
+            // A 3-D window: `np` planes `ps` apart, each `nr` rows of `nc`
+            // elements `s` apart. The last element, o + (np - 1)·ps +
+            // (nr - 1)·s + nc - 1, is inside the buffer.
+            ( string_push_str src `#undef __GK_WCHK3_` ) ( string_push_str src nm ) ( string_push_str src `\n#define __GK_WCHK3_` ) ( string_push_str src nm )
+            ( string_push_str src `(o, np, ps, nr, s, nc) if ((o) < 0 || (np) <= 0 || (nr) <= 0 || (nc) <= 0 || (ps) < 1 || (s) < 1 || (o) >= __gk_n` ) ( string_push_int src k )
+            ( string_push_str src ` || (nc) - 1 > __gk_n` ) ( string_push_int src k ) ( string_push_str src ` - 1 - (o) || __GK_PAST2((np) - 1, (ps), (nr) - 1, (s), __gk_n` ) ( string_push_int src k )
+            ( string_push_str src ` - (o) - (nc))) { (o) = 0; (np) = 0; (nr) = 0; (nc) = 0; }\n` )
         } {}
         = j 0
         ~ < j ( vec_len [String] wb ) {
             ? ( __gkc_eq ( string_data ( vec_at [String] wb j ) ) nm ) {
                 : s w ( string_data ( vec_at [String] wn j ) )
-                ? == 2 ( vec_at [i] wd j ) {
+                ? == 3 ( vec_at [i] wd j ) {
+                    ( string_push_str src `#undef __GK_LD3_` ) ( string_push_str src w ) ( string_push_str src `\n#define __GK_LD3_` ) ( string_push_str src w )
+                    ( string_push_str src ? bytes `(q, r, c) ((unsigned int)__gk_p` `(q, r, c) (` ) ( string_push_str src cv ) ( string_push_str src ? bytes `` `__gk_p` ) ( string_push_int src k ) ( string_push_str src `[__gk_wo_` ) ( string_push_str src w )
+                    ( string_push_str src ` + __GK_WI((q), __gk_wp_` ) ( string_push_str src w ) ( string_push_str src `) * __gk_wq_` ) ( string_push_str src w )
+                    ( string_push_str src ` + __GK_WI((r), __gk_wr_` ) ( string_push_str src w ) ( string_push_str src `) * __gk_ws_` ) ( string_push_str src w )
+                    ( string_push_str src ` + __GK_WI((c), __gk_wc_` ) ( string_push_str src w ) ( string_push_str src ? == kw 12 `)]))\n` `)])\n` )
+                    ? wrt {
+                        ( string_push_str src `#undef __GK_ST3_` ) ( string_push_str src w ) ( string_push_str src `\n#define __GK_ST3_` ) ( string_push_str src w )
+                        ( string_push_str src `(q, r, c, v) __GK_WST3(__gk_p` ) ( string_push_int src k )
+                        ( string_push_str src `, __gk_wo_` ) ( string_push_str src w ) ( string_push_str src `, __gk_wp_` ) ( string_push_str src w )
+                        ( string_push_str src `, __gk_wq_` ) ( string_push_str src w ) ( string_push_str src `, __gk_wr_` ) ( string_push_str src w )
+                        ( string_push_str src `, __gk_ws_` ) ( string_push_str src w ) ( string_push_str src `, __gk_wc_` ) ( string_push_str src w )
+                        ( string_push_str src ? == kw 14 `, (q), (r), (c), (unsigned int)(v))\n` `, (q), (r), (c), (v))\n` )
+                    } {}
+                } ? == 2 ( vec_at [i] wd j ) {
                     ( string_push_str src `#undef __GK_LD2_` ) ( string_push_str src w ) ( string_push_str src `\n#define __GK_LD2_` ) ( string_push_str src w )
                     ( string_push_str src ? bytes `(r, c) ((unsigned int)__gk_p` `(r, c) (` ) ( string_push_str src cv ) ( string_push_str src ? bytes `` `__gk_p` ) ( string_push_int src k ) ( string_push_str src `[__gk_wo_` ) ( string_push_str src w )
                     ( string_push_str src ` + __GK_WI((r), __gk_wr_` ) ( string_push_str src w ) ( string_push_str src `) * __gk_ws_` ) ( string_push_str src w )
@@ -1592,6 +1645,13 @@ unsafe @ gk_run_checked GpuKit kit inout GkCall c s kname s body i nthreads i bl
 
 // The source of a block launch: the checked accessors of every device
 // buffer and shared array, then the kernel around `body`.
+// A buffer's length parameter: its own name, or (gk_call_exact) a spare
+// one while the kernel's prologue holds the length as a constant.
+@ __gkc_nparam inout String src i k b exact → v {
+    ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
+    ? exact { ( string_push_char src 95 ) } {}
+}
+
 @ __gkc_source_dev GkCall c s ent s body ( Vec String ) shn ( Vec i ) sht ( Vec i ) shz b coop b narrow ( Vec String ) lcn ( Vec i ) lct ( Vec i ) lcz i block ( Vec String ) wn ( Vec String ) wb ( Vec i ) wd → String {
     : ~ String src ( string_from ( __gkc_header ) )
     ? coop {
@@ -1703,16 +1763,16 @@ static inline int __gk_shfl_xor(int v, int m) { __shared__ int __gk_x[1024]; int
             // loads past the stores.)
             ? == kd 8 { ( string_push_str src `const ` ) } {}
             ( string_push_str src ( __gkc_dty . ( __gkc_dbuf c k ) dtype ) ) ( string_push_str src ? == kd 8 `* __restrict__ __gk_p` `* __gk_p` ) ( string_push_int src k )
-            ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
+            ( __gkc_nparam src k . c exact )
         } ? == kd 12 {
             ( string_push_str src `const unsigned short* __restrict__ __gk_p` ) ( string_push_int src k )
-            ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
+            ( __gkc_nparam src k . c exact )
         } ? == kd 13 {
             ( string_push_str src `const unsigned char* __restrict__ __gk_p` ) ( string_push_int src k )
-            ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
+            ( __gkc_nparam src k . c exact )
         } ? == kd 14 {
             ( string_push_str src `unsigned char* __gk_p` ) ( string_push_int src k )
-            ( string_push_str src `, long long __gk_n` ) ( string_push_int src k )
+            ( __gkc_nparam src k . c exact )
         } {
             ( string_push_str src ? == kd 4 `long long ` `double ` ) ( string_push_str src ( string_data ( vec_at [String] . c names k ) ) )
         }
@@ -1732,7 +1792,26 @@ __GK_ASSUME(threadIdx.x < ` )
     ( string_push_str src `u);
 long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
 (void)tid; (void)bid; (void)bdim; (void)nblocks; (void)gid; (void)nthreads; (void)__gk_end;
-{
+` )
+    // (gk_call_exact: the lengths the kernel is built for — the key holds
+    // them, so these are the buffers' own)
+    ? . c exact {
+        = k 0
+        ~ < k nb {
+            : i kd ( vec_at [i] . c kinds k )
+            : ~ i ln -1
+            ? | == kd 8 == kd 9 { = ln . ( __gkc_dbuf c k ) n } {}
+            ? == kd 12 { = ln . ( __gkc_hbuf c k ) n } {}
+            ? | == kd 13 == kd 14 { = ln . ( __gkc_bbuf c k ) n } {}
+            ? >= ln 0 {
+                ( string_push_str src `const long long __gk_n` ) ( string_push_int src k ) ( string_push_str src ` = ` ) ( string_push_int src ln )
+                ( string_push_str src `LL; (void)__gk_n` ) ( string_push_int src k ) ( string_push_str src `_;
+` )
+            } {}
+            = k + k 1
+        }
+    } {}
+    ( string_push_str src `{
 ` )
     ( string_push_str src body )
     ( string_push_str src `
@@ -1752,12 +1831,23 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
 // name, bindings and body); none (an empty source, gk_checked_error c says
 // why) when it is refused.
 @ __gkc_dev_build GpuKit kit inout GkCall c s kname s body i nblocks i block → ( Arc GkcBuilt ) {
+    ^ ( __gkc_dev_build_g kit c kname body F \ → String { ^ ( string_from body ) } nblocks block )
+}
+
+// The build behind both: the key holds `ident` — the body itself, or
+// (tagged) the caller's tag for it — and `mk` makes the body on a miss.
+@ __gkc_dev_build_g GpuKit kit inout GkCall c s kname s ident b tagged ( @ String ) mk i nblocks i block → ( Arc GkcBuilt ) {
     = . c err ( string_new )
     ? | | < nblocks 0 < block 1 > block 1024 { = . c err ( __gkc_why `launch shape (0 or more blocks of 1 to 1024 threads)` `` ) ^ ( __gkc_none ) } {}
     : i nb ( vec_len [String] . c names )
-    : ~ String key ( string_from `D` )
+    // (sized once: the key is built on every launch)
+    : ~ String key ( string_with_cap + + ( nurl_str_len kname ) ( nurl_str_len ident ) + 32 * nb 24 )
+    ( string_push_char key 68 )
     ( string_push_str key kname )
-    : b ld4 >= ( nurl_str_find body `LD4` ) 0
+    // (a tagged body is not seen before the lookup, so it reads no LD4 —
+    // the one thing a buffer's alignment, which then joins the key,
+    // changes)
+    : b ld4 & ! tagged >= ( nurl_str_find ident `LD4` ) 0
     : ~ i k 0
     ~ < k nb {
         : s nm ( string_data ( vec_at [String] . c names k ) )
@@ -1790,24 +1880,31 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
         } {}
         = k + k 1
     }
-    : ~ ( Vec i ) lens ( vec_new [i] )
+    // narrow: every buffer holds 1 to 2^32 − 1 elements (no list built:
+    // this runs on every launch)
+    : ~ b narrow T
     = k 0
     ~ < k nb {
         : i kd ( vec_at [i] . c kinds k )
-        ? | == kd 8 == kd 9 { ( vec_push [i] lens . ( __gkc_dbuf c k ) n ) } {}
-        ? == kd 12 { ( vec_push [i] lens . ( __gkc_hbuf c k ) n ) } {}
-        ? | == kd 13 == kd 14 { ( vec_push [i] lens . ( __gkc_bbuf c k ) n ) } {}
+        : ~ i ln 1
+        ? | == kd 8 == kd 9 { = ln . ( __gkc_dbuf c k ) n } {}
+        ? == kd 12 { = ln . ( __gkc_hbuf c k ) n } {}
+        ? | == kd 13 == kd 14 { = ln . ( __gkc_bbuf c k ) n } {}
+        ? | == ln 0 > ln 4294967295 { = narrow F } {}
+        ? . c exact { ( string_push_char key 4 ) ( string_push_int key ln ) } {}
         = k + k 1
     }
-    : b narrow ( __gkc_narrow lens )
     ( string_push_char key ? narrow 110 119 )
     ( string_push_char key 3 ) ( string_push_int key block )
-    ( string_push_char key 2 ) ( string_push_str key body )
+    ( string_push_char key ? tagged 5 2 ) ( string_push_str key ident )
     : ~ i idx -1
     : ~ ( Arc GkcBuilt ) hit ( __gkc_lookup ( string_data key ) idx )
     ? == 0 ( string_len . ( arc_get [GkcBuilt] hit ) src ) {
         // (Checked once: the key holds the name, so a hit had it checked.)
         ? ( __gkc_name_ok kname ) {} { = . c err ( __gkc_why `kernel name` kname ) ^ ( __gkc_none ) }
+        : String bstr ( mk )
+        : s body ( string_data bstr )
+        ? & tagged >= ( nurl_str_find body `LD4` ) 0 { = . c err ( __gkc_why `a kernel launched by tag reads no LD4` `` ) ^ ( __gkc_none ) } {}
         : ( Vec String ) toks ( __gkc_toks body )
         : ~ ( Vec String ) shn ( vec_new [String] )
         : ~ ( Vec i ) sht ( vec_new [i] )
@@ -1864,12 +1961,14 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
         }
         : ~ ( Vec i ) inits ( vec_new [i] )
         : ~ String w2s ( string_new )
+        : ~ String w3s ( string_new )
         = k 0
         ~ < k ( vec_len [String] wn ) {
             ? == 2 ( vec_at [i] wd k ) { ( string_push_char w2s 32 ) ( string_push_str w2s ( string_data ( vec_at [String] wn k ) ) ) } {}
+            ? == 3 ( vec_at [i] wd k ) { ( string_push_char w3s 32 ) ( string_push_str w3s ( string_data ( vec_at [String] wn k ) ) ) } {}
             = k + k 1
         }
-        = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) ( string_data wbufs ) ( string_data f4bufs ) ( string_data w2s ) inits )
+        = . c err ( __gkc_check body ( string_data bufs ) ( string_data outs ) ( string_data wbufs ) ( string_data f4bufs ) ( string_data w2s ) ( string_data w3s ) inits )
         ? > ( string_len . c err ) 0 { ^ ( __gkc_none ) } {}
         : b coop ( __gkc_coop toks )
         ? coop {
@@ -1916,6 +2015,26 @@ long long gid = bid * bdim + tid; long long nthreads = nblocks * bdim;
 
 unsafe @ gk_run_checked_dev GpuKit kit inout GkCall c s kname s body i nblocks i block → b {
     : ( Arc GkcBuilt ) hit ( __gkc_dev_build kit c kname body nblocks block )
+    : GkcBuilt hb ( arc_get [GkcBuilt] hit )
+    ? == 0 ( string_len . hb src ) { ^ F } {}
+    : ( Vec i ) args ( __gkc_dev_args c )
+    ? == nblocks 0 { ^ T } {}
+    ^ ( gk_run_dev kit ( string_data . hb src ) ( string_data . hb ename ) nblocks block args )
+}
+
+// gk_run_checked_dev with the body made only when it is not cached yet:
+// the cache entry is keyed by `tag` — with the bindings, their kinds and
+// (gk_call_exact) lengths and the block size, as always — in place of the
+// body, and `mk` makes the body the first time that key is seen. A
+// wrapper that generates a kernel per shape passes the shape as the tag
+// and builds the source once rather than on every launch (with the body
+// in the key, a conv2d launch copied and hashed four kilobytes of it).
+//
+// The tag must determine the body: a second body under the same tag runs
+// as the first. Memory safety does not rest on it — whatever runs was
+// checked against these very bindings. A tagged body reads no LD4.
+unsafe @ gk_run_checked_dev_tagged GpuKit kit inout GkCall c s kname s tag ( @ String ) mk i nblocks i block → b {
+    : ( Arc GkcBuilt ) hit ( __gkc_dev_build_g kit c kname tag T mk nblocks block )
     : GkcBuilt hb ( arc_get [GkcBuilt] hit )
     ? == 0 ( string_len . hb src ) { ^ F } {}
     : ( Vec i ) args ( __gkc_dev_args c )

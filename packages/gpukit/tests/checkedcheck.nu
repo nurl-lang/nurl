@@ -685,6 +685,117 @@ ST(o, 0, (double)a);` 1 32 )
     ? | bad1 bad2 { ( nurl_print `FAIL a store into a read 2-D window or LD on one was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read 2-D window and LD on one\n` ) }
 }
 
+// 3-D windows (WIN3 / LD3 / ST3 / PLANES), exact lengths (gk_call_exact)
+// and launches by tag (gk_run_checked_dev_tagged)
+: ~ i g_mk 0
+
+@ w3run GpuKit kit → v {
+    : ~ ( Vec f ) xs ( vec_new [f] )
+    : ~ i k 0
+    ~ < k 60 { ( vec_push [f] xs # f k ) = k + k 1 }
+    : GkBuf x ( gk_dbuf_new kit 60 GK_F64 )
+    : b _u ( gk_dbuf_upload kit x xs )
+    : GkBuf o ( gk_dbuf_new kit 8 GK_F64 )
+    : b _z ( gk_dbuf_upload kit o ( vec_zeroed [f] 8 ) )
+    : GkBuf o3 ( gk_dbuf_new kit 16 GK_F64 )
+    : b _z3 ( gk_dbuf_upload kit o3 ( vec_zeroed [f] 16 ) )
+    : ~ GkCall c ( gk_call_new )
+    ( gk_call_dev_in c `x` x ) ( gk_call_dev c `o` o ) ( gk_call_dev c `o3` o3 )
+    : b ran ( gk_run_checked_dev kit c `win3` `if (gid == 0) {
+    WIN3(m, x, 0, 3, 20, 4, 5, 5);
+    double s = 0.0;
+    for (int p = 0; p < PLANES(m); p++) { for (int r = 0; r < ROWS(m); r++) { for (int q = 0; q < COLS(m); q++) { s += LD3(m, p, r, q); } } }
+    ST(o, 0, s);
+    ST(o, 1, (double)(PLANES(m) * 100 + ROWS(m) * 10 + COLS(m)));
+    WIN3(t, x, 7, 2, 30, 2, 10, 3);
+    double u = 0.0;
+    for (int p = 0; p < 2; p++) { for (int r = 0; r < 2; r++) { for (int q = 0; q < 3; q++) { u += LD3(t, p, r, q); } } }
+    ST(o, 2, u);
+    WIN3(bad, x, 40, 3, 10, 2, 5, 5);
+    ST(o, 3, (double)(PLANES(bad) * 100 + ROWS(bad) * 10 + COLS(bad)));
+    WIN3(edge, x, 40, 2, 15, 2, 4, 1);
+    ST(o, 4, (double)(PLANES(edge) * 100 + ROWS(edge) * 10 + COLS(edge)) + LD3(edge, 1, 1, 0));
+    WIN3(ow, o3, 0, 2, 8, 2, 3, 2);
+    for (int p = 0; p < 3; p++) { for (int r = 0; r < 3; r++) { for (int q = 0; q < 3; q++) { ST3(ow, p, r, q, (double)(1000 + p * 100 + r * 10 + q)); } } }
+}` 1 32 )
+    : ~ ( Vec f ) g ( vec_zeroed [f] 8 )
+    : b _d ( gk_dbuf_download kit o g )
+    : ~ ( Vec f ) g3 ( vec_zeroed [f] 16 )
+    : b _d3 ( gk_dbuf_download kit o3 g3 )
+    // 0..59 as 3 planes of 4 rows of 5: 1770, shape 345. Planes 30 apart,
+    // rows 10 apart, 3 columns from 7: 7..9 17..19 37..39 47..49 = 336. A
+    // window past element 59 is empty; one ending on it (40 + 15 + 4)
+    // fits: shape 221 plus element 59. ST3 writes o3 at p*8 + r*3 + q for
+    // p, r, q below 2 only.
+    : b vals & & == ( vec_at [f] g 0 ) 1770.0 == ( vec_at [f] g 1 ) 345.0 & & == ( vec_at [f] g 2 ) 336.0 == ( vec_at [f] g 3 ) 0.0 == ( vec_at [f] g 4 ) 280.0
+    : b st1 & & == ( vec_at [f] g3 0 ) 1000.0 == ( vec_at [f] g3 1 ) 1001.0 & == ( vec_at [f] g3 3 ) 1010.0 == ( vec_at [f] g3 4 ) 1011.0
+    : b st2 & & == ( vec_at [f] g3 8 ) 1100.0 == ( vec_at [f] g3 12 ) 1111.0 & == ( vec_at [f] g3 2 ) 0.0 == ( vec_at [f] g3 15 ) 0.0
+    : b sts & st1 st2
+    ? & & ran vals sts {
+        ( nurl_print `ok   3-D windows read and write their planes, rows and columns; one outside its buffer is empty\n` )
+    } {
+        ( nurl_print `FAIL 3-D windows: ` ) ( nurl_print ( gk_checked_error c ) )
+        : ~ String vs ( string_new )
+        : ~ i r 0
+        ~ < r 8 { ( string_push_str vs ` ` ) ( string_push_float vs ( vec_at [f] g r ) ) = r + r 1 }
+        ( nurl_print ( string_data vs ) ) ( nurl_print `\n` ) = g_fail + g_fail 1
+    }
+    : ~ GkCall c2 ( gk_call_new )
+    ( gk_call_dev_in c2 `x` x ) ( gk_call_dev c2 `o` o )
+    : b bad1 ( gk_run_checked_dev kit c2 `w3st` `WIN3(m, x, 0, 2, 20, 2, 5, 2); ST3(m, 0, 0, 0, 1.0);` 1 32 )
+    : b bad2 ( gk_run_checked_dev kit c2 `w3ld` `WIN3(m, x, 0, 2, 20, 2, 5, 2); ST(o, 0, LD(m, 0));` 1 32 )
+    : b bad3 ( gk_run_checked_dev kit c2 `w3ld2` `WIN2(m, x, 0, 2, 5, 2); ST(o, 0, LD3(m, 0, 0, 0));` 1 32 )
+    ? | | bad1 bad2 bad3 { ( nurl_print `FAIL a store into a read 3-D window, LD on one or LD3 on a 2-D one was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses a store into a read 3-D window, LD on one and LD3 on a 2-D one\n` ) }
+
+    // exact lengths: the same body over two lengths builds two kernels,
+    // each summing its own buffer whole
+    : GkBuf x2 ( gk_dbuf_new kit 24 GK_F64 )
+    : b _u2 ( gk_dbuf_upload kit x2 ( vec_zeroed [f] 24 ) )
+    : ~ i ex 0
+    : ~ i which 0
+    ~ < which 2 {
+        : ~ GkCall ce ( gk_call_new )
+        ? == which 0 { ( gk_call_dev_in ce `x` x ) } { ( gk_call_dev_in ce `x` x2 ) }
+        ( gk_call_dev ce `o` o ) ( gk_call_exact ce )
+        : ~ String eb ( string_from `if (gid == 0) { WIN(w, x, 0, ` )
+        ( string_push_str eb ? == which 0 `60` `24` )
+        ( string_push_str eb `); double s = 0.0; for (int j = 0; j < LEN(w); j++) { s += LD(w, j); } ST(o, 5, s); }` )
+        : b ok ( gk_run_checked_dev kit ce `exsum` ( string_data eb ) 1 32 )
+        : ~ ( Vec f ) ge ( vec_zeroed [f] 8 )
+        : b _de ( gk_dbuf_download kit o ge )
+        ? & ok == ( vec_at [f] ge 5 ) ? == which 0 1770.0 0.0 { = ex + ex 1 } {}
+        = which + which 1
+    }
+    ? == ex 2 { ( nurl_print `ok   exact-length kernels over two lengths each read their own buffer\n` ) } { ( nurl_print `FAIL exact-length kernels\n` ) = g_fail + g_fail 1 }
+
+    // by tag: the body is made once per tag, launch after launch
+    = g_mk 0
+    : ~ i tg 0
+    : ~ i rep 0
+    ~ < rep 3 {
+        : ~ GkCall ct ( gk_call_new )
+        ( gk_call_dev_in ct `x` x ) ( gk_call_dev ct `o` o )
+        : b ok ( gk_run_checked_dev_tagged kit ct `tagged` `t1` \ → String {
+            = g_mk + g_mk 1
+            ^ ( string_from `if (gid == 0) { ST(o, 6, LD(x, 3) + LD(x, 4)); }` )
+        } 1 32 )
+        ? ok { = tg + tg 1 } {}
+        = rep + rep 1
+    }
+    : ~ GkCall ct2 ( gk_call_new )
+    ( gk_call_dev_in ct2 `x` x ) ( gk_call_dev ct2 `o` o )
+    : b ok2 ( gk_run_checked_dev_tagged kit ct2 `tagged` `t2` \ → String {
+        = g_mk + g_mk 1
+        ^ ( string_from `if (gid == 0) { ST(o, 7, LD(x, 5) * 2.0); }` )
+    } 1 32 )
+    : ~ ( Vec f ) gt ( vec_zeroed [f] 8 )
+    : b _dt ( gk_dbuf_download kit o gt )
+    ? & & == tg 3 ok2 & & == g_mk 2 == ( vec_at [f] gt 6 ) 7.0 == ( vec_at [f] gt 7 ) 10.0 { ( nurl_print `ok   a tagged kernel's body is made once per tag\n` ) } { ( nurl_print `FAIL tagged launches (bodies made: ` ) ( nurl_print_int g_mk ) ( nurl_print `)\n` ) = g_fail + g_fail 1 }
+    : ~ GkCall ct3 ( gk_call_new )
+    ( gk_call_dev_in ct3 `x` x ) ( gk_call_dev ct3 `o` o )
+    ? ( gk_run_checked_dev_tagged kit ct3 `tagged4` `t` \ → String { ^ ( string_from `float a, b, c, d; LD4(x, 0, a, b, c, d); ST(o, 0, a);` ) } 1 32 ) { ( nurl_print `FAIL a tagged kernel reading LD4 was launched\n` ) = g_fail + g_fail 1 } { ( nurl_print `ok   refuses LD4 in a tagged kernel\n` ) }
+}
+
 @ main → i {
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
@@ -700,6 +811,7 @@ ST(o, 0, (double)a);` 1 32 )
     ( v4run kit )
     ( wrun kit )
     ( w2run kit )
+    ( w3run kit )
     ? == g_fail 0 { ( nurl_print `checked: all passed\n` ) } { ( nurl_print `checked: FAILURES\n` ) }
     ^ 0
 }

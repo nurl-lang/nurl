@@ -111,8 +111,7 @@ $ `stdlib/core/slice.nu`
 }
 
 // The parameter list a census kernel was recorded with: `(…)` right after
-// its entry name in the source — the same text static_kernels.nu checks
-// an override's `sig` against.
+// its entry name in the source.
 @ census_sig s name s src → String {
     : String head ( string_from name )
     ( string_push_str head `(` )

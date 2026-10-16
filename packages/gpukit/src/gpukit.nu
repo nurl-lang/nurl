@@ -39,6 +39,7 @@
 // device outlives its memory whichever order the owners go in. Nothing is
 // released by hand; `gk_close` is an optional early release of one owner.
 
+$ `stdlib/std/hashmap.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
@@ -112,6 +113,7 @@ $ `deps/gpu/src/gpu.nu`
 // code that could ask for it again.
 : GkState {
     ( Vec GkKernelEntry ) cache
+    ( HashMap String i ) cix  // an entry name → its cache slot
     ( Vec i ) kcalls  // per cache slot: launches, counted only while gk_prof_on
     ( Vec i ) kns  // per cache slot: device time in those launches (CUDA events)
     ( Vec String ) csrc  // census only: each cache slot's kernel source
@@ -155,7 +157,7 @@ $ `deps/gpu/src/gpu.nu`
 @ __gk_col ( Vec i ) v i k → i { ^ ( vec_at [i] v k ) }
 
 @ __gk_state → GkState {
-    ^ @ GkState { ( vec_new [GkKernelEntry] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
+    ^ @ GkState { ( vec_new [GkKernelEntry] ) ( map_new [String i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [String] )
         ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
         ( gpu_timer_none ) ( gpu_timer_none ) F }
 }
@@ -548,23 +550,20 @@ unsafe @ gk_f32 f v → GkArg {
 //
 // (unsafe: the source is compiled — gpu_compile is raw — and every caller
 // launches what it compiles only over buffers it has checked.)
+@ __gk_hname s x → i { ^ ( hash_string x ) }
+
+// (a launch finds its kernel by a hash of the entry name, not a scan of
+// every kernel the kit has built)
 unsafe @ _gk_kernel_slot inout GkState kit GkInfo inf s src s name → i {
     : i n ( vec_len [GkKernelEntry] . kit cache )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → {
-                ? == 1 ( nurl_str_eq ( string_data . e name ) name ) { ^ k } {}
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
+    : i hit ?? ( map_get_with [String i s] . kit cix name \ s x → i { ^ ( __gk_hname x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } ) { T v → v F → -1 }
+    ? >= hit 0 { ^ hit } {}
     ? . inf census {
         ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) ( gpu_kernel_none ) } )
         ( vec_push [i] . kit kcalls 0 )
         ( vec_push [i] . kit kns 0 )
         ( vec_push [String] . kit csrc ( string_from src ) )
+        : ?i _o ( map_set [String i] . kit cix ( string_from name ) n \ String x → i { ^ ( __gk_hname ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
         ^ n
     } {}
     : GpuKernel kn ( gpu_compile . inf gpu src name )
@@ -572,6 +571,7 @@ unsafe @ _gk_kernel_slot inout GkState kit GkInfo inf s src s name → i {
     ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) kn } )
     ( vec_push [i] . kit kcalls 0 )
     ( vec_push [i] . kit kns 0 )
+    : ?i _o2 ( map_set [String i] . kit cix ( string_from name ) n \ String x → i { ^ ( __gk_hname ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
     ^ n
 }
 

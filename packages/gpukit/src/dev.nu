@@ -833,14 +833,14 @@ raw @ __gk_launch_in inout GkState kit GkInfo inf s src s name i grid i block ( 
         : i dv ? < k pad { 1 } { ( _gk_vi odims - k pad ) }
         : i av ? < k pad { 0 } { ( _gk_vi astr - k pad ) }
         : i bv ? < k pad { 0 } { ( _gk_vi bstr - k pad ) }
-        ( __gkd_dim_arg c `d` k dv ) ( __gkd_dim_arg c `A` k av ) ( __gkd_dim_arg c `B` k bv )
+        ( _gkd_dim_arg c `d` k dv ) ( _gkd_dim_arg c `A` k av ) ( _gkd_dim_arg c `B` k bv )
         = k + k 1
     }
     ^ ( gk_run_checked_dev kit c ( string_data kname ) ( string_data body ) ( gk_grid total 256 ) 256 )
 }
 
 // Bind scalar `<p><k>` (d0, A3, …) to `v`.
-@ __gkd_dim_arg inout GkCall c s p i k i v → v {
+@ _gkd_dim_arg inout GkCall c s p i k i v → v {
     : ~ String nm ( string_from p )
     ( string_push_int nm k )
     ( gk_call_i64 c ( string_data nm ) v )
