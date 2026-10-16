@@ -34,7 +34,9 @@ formal/
   README.md        this file
   CLAIM.md         the theorem in words, its scope per phase, and the trusted base
   RULES.md         every ownership rule of docs/MEMORY.md → its formal rule and status
-  corpus/map.tsv   every hole probe → the formal rule that rejects it, or its phase
+  corpus/map.tsv   every hole probe → the formal rule that rejects it, or its phase,
+                   and nurlc's verdict (rejected, or compiles and runs clean
+                   under ASan/LSan: `tools/fuzz/holes/check.sh` finds 0 holes)
   check.sh         builds the proof and checks it has no sorry and no new axiom
   lean-toolchain, lakefile.toml, A1.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
