@@ -65,7 +65,7 @@ theorem dataAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs
   ⟨o, T, ho, hs, t, c, es, hn⟩
 
 /-- Every borrowed parameter reaches memory inside a frozen owner's tree. -/
-theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → RootNode m p n →
       ∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T := by
@@ -86,7 +86,13 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m 
       simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.map_append, List.mem_append, List.mem_map]
       exact Or.inl ⟨dep, hd, rfl⟩
     have hF := hanch p E hp hm dep.root hdv
-    obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive dep.root hdv
+    have hnint : E.ty ≠ .int := by
+      intro h; rw [h] at hok; obtain ⟨k, hk⟩ := hok; subst hk
+      obtain ⟨own, val⟩ := sl
+      simp only at hv hsl'
+      subst hv; subst hsl'
+      rcases hrn with h1 | ⟨c, h1, _⟩ | ⟨d, o, l, h1, _⟩ <;> rw [hsl] at h1 <;> simp at h1
+    obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive hnint dep.root hdv
     rcases hr with hown | ⟨c, hc, hn⟩ | ⟨d, o, l, hc, hn⟩
     · exact ⟨dep.root, n0, hF, hown, hs⟩
     all_goals
@@ -139,7 +145,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m 
 
 /-- A root whose slot is unchanged, at a point where every slot that changes
     is outside the frozen owners, reaches the same memory. -/
-theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r) : RootKeep m m' r := by

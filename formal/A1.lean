@@ -6,3 +6,6 @@ import A1.Basic
 import A1.Ctx
 import A1.Stability
 import A1.Heap
+import A1.Values
+import A1.Frame
+import A1.Rhs

@@ -88,8 +88,7 @@ theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E
     obtain ⟨v, hv, hok⟩ := hbor hos a
     exact ⟨v, hv, by rw [ht]; exact hok.mono (hp hos) hh⟩
 
-theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
-    (hw : Weaker Γ Γ') : Inv m Γ' F s where
+theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
@@ -97,8 +96,6 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     exact ⟨sl, hsl, by rw [hwe.1]; exact hok, hslot.weaker hwe⟩
   heap := hi.heap
   nvSt := hi.nvSt
-  nvS := hi.nvS
-  nvF := hi.nvF
   noInout v E' b hv := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.2.1]; exact hi.noInout v E b hE
@@ -111,6 +108,12 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
     rw [hwe.2.2.1 hm']; exact hi.rootbLt p E hE hm'
+
+theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+    (hw : Weaker Γ Γ') : Inv m Γ' F s where
+  toMInv := hi.toMInv.weaker hw
+  nvS := hi.nvS
+  nvF := hi.nvF
   anch p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm

@@ -97,19 +97,22 @@ def Stmt.spine : Stmt → List Var
   | .frozen _ s => s.spine
   | _ => []
 
-/-- The invariant of a configuration running `s` in context `Γ`, with `F`
-    lent out. -/
-structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop where
+/-- What memory and context guarantee, whatever is running. -/
+structure MInv (m : Mem) (Γ : Ctx) : Prop where
   dom       : ∀ v, (Γ v).isSome = (m.st v).isSome
   slot      : ∀ v E, Γ v = some E → ∃ sl, m.st v = some sl ∧ E.ty.ok = true ∧ SlotOK m E sl
   heap      : HeapOK m
   nvSt      : ∀ v, (m.st v).isSome → v < m.nv
-  nvS       : ∀ v ∈ s.vars, v < m.nv
-  nvF       : ∀ v ∈ F, v < m.nv
   noInout   : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   wf        : CtxWF Γ
   rootbLive : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   rootbLt   : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r < p
+
+/-- The invariant of a configuration running `s` in context `Γ`, with `F`
+    lent out. -/
+structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
+  nvS       : ∀ v ∈ s.vars, v < m.nv
+  nvF       : ∀ v ∈ F, v < m.nv
   anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∈ F
 
 end A1

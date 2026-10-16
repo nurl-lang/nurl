@@ -116,9 +116,10 @@ def EntryWeaker (E E' : Entry) : Prop :=
   (E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧
     E.held ⊆ E'.held)
 
-/-- A context's live entries depend only on roots it has. -/
+/-- A context's live entries depend only on roots it has.  (An integer's
+    dependencies say nothing: it holds no memory.) -/
 def CtxWF (Γ : Ctx) : Prop :=
-  ∀ v E, Γ v = some E → E.live = true → ∀ r ∈ roots E.vdeps,
+  ∀ v E, Γ v = some E → E.live = true → E.ty ≠ .int → ∀ r ∈ roots E.vdeps,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
 
 def Weaker (Γ Γ' : Ctx) : Prop :=
@@ -178,7 +179,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .vec t → ExprT Γ i →
       RhsT Γ F (.at y i) (elemE y E t) Γ
   | view {y : Var} {E : Entry} {t : Ty} :
-      Γ y = some E → E.live = true → E.ty = .vec t →
+      Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
