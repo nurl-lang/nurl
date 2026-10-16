@@ -1,0 +1,122 @@
+import A1.Basic
+
+/-! A1 — facts about contexts and about validity. -/
+
+namespace A1
+
+theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
+  refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩⟩
+
+theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
+    EntryWeaker E1 E3 := by
+  obtain ⟨t1, m1, r1, l1⟩ := h1
+  obtain ⟨t2, m2, r2, l2⟩ := h2
+  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_⟩
+  · have e12 := r1 h; subst e12; exact r2 h
+  · obtain ⟨a2, p2, h2'⟩ := l2 h
+    obtain ⟨a1, p1, h1'⟩ := l1 a2
+    refine ⟨a1, fun ho => ?_, h1'.trans h2'⟩
+    have ho2 : E2.mode.ownSlot = false := by rw [m1]; exact ho
+    exact (p1 ho).trans (p2 ho2)
+
+theorem Weaker.refl {Γ : Ctx} (h : CtxWF Γ) : Weaker Γ Γ := by
+  refine ⟨fun v => ⟨Iff.rfl, fun E E' h1 h2 => ?_⟩, h⟩
+  rw [h1] at h2; cases h2; exact EntryWeaker.refl E
+
+theorem Weaker.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Weaker Γ1 Γ2) (h2 : Weaker Γ2 Γ3) : Weaker Γ1 Γ3 := by
+  refine ⟨fun v => ⟨(h1.1 v).1.trans (h2.1 v).1, fun E E' e1 e3 => ?_⟩, h2.2⟩
+  cases e2 : Γ2 v with
+  | none => exact absurd e2 (by rw [← (h1.1 v).1, e1]; simp)
+  | some E2 => exact ((h1.1 v).2 E E2 e1 e2).trans ((h2.1 v).2 E2 E' e2 e3)
+
+theorem Weaker.wf {Γ Γ' : Ctx} (h : Weaker Γ Γ') : CtxWF Γ' := h.2
+
+theorem Weaker.get {Γ Γ' : Ctx} (h : Weaker Γ Γ') {v : Var} {E : Entry} (hv : Γ v = some E) :
+    ∃ E', Γ' v = some E' ∧ EntryWeaker E E' := by
+  cases e : Γ' v with
+  | none => exact absurd ((h.1 v).1.mpr e) (by rw [hv]; simp)
+  | some E' => exact ⟨E', rfl, (h.1 v).2 E E' hv e⟩
+
+theorem Weaker.get' {Γ Γ' : Ctx} (h : Weaker Γ Γ') {v : Var} {E' : Entry} (hv : Γ' v = some E') :
+    ∃ E, Γ v = some E ∧ EntryWeaker E E' := by
+  cases e : Γ v with
+  | none => exact absurd ((h.1 v).1.mp e) (by rw [hv]; simp)
+  | some E => exact ⟨E, rfl, (h.1 v).2 E E' e hv⟩
+
+theorem Weaker.isSome {Γ Γ' : Ctx} (h : Weaker Γ Γ') (v : Var) : (Γ v).isSome = (Γ' v).isSome := by
+  have := (h.1 v).1
+  cases e : Γ v <;> cases e' : Γ' v <;> simp_all
+
+/-! ### Validity is monotone in what a value may depend on. -/
+
+theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆ H')
+    (h : ViewsOK m τ T H) : ViewsOK m τ T H' := by
+  intro s v hv
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
+  exact ⟨d, o, l, rfl, dep, hs hd, ha⟩
+
+theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (hs : H ⊆ H')
+    (h : HrefAt m dep c t H) : HrefAt m dep c t H' := by
+  obtain ⟨n0, d, es, hr, hk, hw, hv⟩ := h
+  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs⟩
+
+theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
+    (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := by
+  cases τ with
+  | int => exact h
+  | vec t =>
+    obtain ⟨c, rfl, dep, hd, ha⟩ := h
+    exact ⟨c, rfl, dep, hp hd, ha.mono hs⟩
+  | slice t =>
+    obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h
+    exact ⟨d, o, l, rfl, dep, hp hd, ha⟩
+
+theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
+    (h : SlotOK m E sl) : SlotOK m E' sl := by
+  obtain ⟨ht, hm, hr, hl⟩ := hw
+  obtain ⟨ho, hown, hbor⟩ := h
+  refine ⟨by rw [hm]; exact ho, fun hos => ?_, fun hos => ?_⟩
+  · rw [hm] at hos
+    obtain ⟨hvec, hwf, hlive⟩ := hown hos
+    refine ⟨by rw [ht]; exact hvec, fun T hT => by rw [ht]; exact hwf T hT, fun hl' => ?_⟩
+    obtain ⟨a, _, hh⟩ := hl hl'
+    obtain ⟨T, hT, hv⟩ := hlive a
+    exact ⟨T, hT, by rw [ht]; exact hv.mono hh⟩
+  · rw [hm] at hos
+    intro hl'
+    obtain ⟨a, hp, hh⟩ := hl hl'
+    obtain ⟨v, hv, hok⟩ := hbor hos a
+    exact ⟨v, hv, by rw [ht]; exact hok.mono (hp hos) hh⟩
+
+theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+    (hw : Weaker Γ Γ') : Inv m Γ' F s where
+  dom v := by rw [← hw.isSome v]; exact hi.dom v
+  slot v E' hv := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hE
+    exact ⟨sl, hsl, by rw [hwe.1]; exact hok, hslot.weaker hwe⟩
+  heap := hi.heap
+  nvSt := hi.nvSt
+  nvS := hi.nvS
+  nvF := hi.nvF
+  noInout v E' b hv := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    rw [hwe.2.1]; exact hi.noInout v E b hE
+  wf := hw.wf
+  rootbLive p E' hp hm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
+    rw [hwe.2.2.1 hm']; exact hi.rootbLive p E hE hm'
+  rootbLt p E' hp hm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
+    rw [hwe.2.2.1 hm']; exact hi.rootbLt p E hE hm'
+  anch p E' hp hm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
+    rw [hwe.2.2.1 hm']; exact hi.anch p E hE hm'
+
+theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
+    Weaker Γ Γ := Weaker.refl hi.wf
+
+end A1

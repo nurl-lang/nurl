@@ -1,0 +1,5 @@
+name = "NurlFormal"
+defaultTargets = ["A1"]
+
+[[lean_lib]]
+name = "A1"
