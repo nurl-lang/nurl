@@ -18,6 +18,12 @@ named `Box__@__i64__i64`, and a list of callbacks had to be a Vec of
 one-field structs. Four holes in the memory guarantee were found on the
 way and are closed (h281–h284).
 
+Modelling closures for the mechanized proof of the memory model
+(`formal/`, phase A2) found seven safe programs the compiler accepted and
+that read freed memory under ASan (h274–h280), one family: a closure that
+changes a binding it captured, run where something else holds a view of
+it. They are rejected now (*Fixed*), and no hole is known.
+
 ### Added
 
 - **Closure types and trait objects as type arguments.** A type with no
@@ -37,6 +43,12 @@ way and are closed (h281–h284).
   Vec of closures and a `vec_get` payload are lent at no cost; `vec_at`
   and `rc_get` hand back a copy (a closure result is always its caller's).
 - `( mem_dup f )` of a closure is a copy that owns its environment.
+- **`ws_serve_messages_deflate_with_context`** and its
+  `ws_client_*` mirror (stdlib/ext/websocket.nu): the read loop gives its
+  handler the deflate context beside each message, so a handler that
+  replies compressed uses the context the loop reads with instead of
+  capturing it — the same context reached twice, which the closure rule
+  below rejects. examples/ws_deflate_echo.nu uses it.
 
 ### Fixed
 
@@ -53,6 +65,24 @@ way and are closed (h281–h284).
   Such a closure is now a borrow of what it was read out of; using it
   after that owner died, was given a new value, had a field replaced or
   had its elements dropped is a compile error.
+- **A closure that changes what it captured is a route to it at every
+  call** (docs/MEMORY.md §2.11). Handed to a call, or called itself, a
+  closure whose body may move a capture's buffer or drop its elements may
+  not meet another argument that reaches that capture — the binding, a
+  borrow or a view of it, or another closure that captured it: inside the
+  callee the two were unrelated names, and growing the `Vec` through the
+  closure left the other dangling (h274: a closure holding a view of its
+  capture beside one growing it; h275: a `Vec` passed `in` beside a
+  closure growing it; h276: the closure called with the grower; h277: an
+  element borrow beside a closure clearing its `Vec`). Decided at the
+  borrow walk with the final summaries (`clox` rows, bck_clo_route_check),
+  like the exclusive call of two arguments.
+- **A closure that runs a closure it captured does what that one does**
+  (h278, h280): a view of what the inner closure grows ends where the
+  outer one runs. Before, the inner closure's effect was dropped because
+  it concerned a binding the outer one reached only through it.
+- **A closure whose body changes a capture may not also hold a view of
+  it** (h279), checked where the literal is made.
 
 ## [0.73.0] — 2026-10-16
 
