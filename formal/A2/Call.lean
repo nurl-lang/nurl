@@ -873,7 +873,7 @@ theorem frame_nomove (h : CallH P Γ F x fn args base) {y : Var}
 theorem frame_src (h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
     (hy : (callS Γ F fn args base x).Φ y = some E) (hl : E.live = true) :
     ∃ E0, Γ y = some E0 ∧ E0.live = true ∧ E.ty = E0.ty ∧ E.mode = E0.mode ∧
-      ((E.ty ≠ .int ∨ E.mode = .rootb) → E.vdeps = E0.vdeps) := by
+      ((E.ty ≠ .int ∨ E.mode = .rootb) → E.vdeps = E0.vdeps ∧ E.held = E0.held) := by
   obtain ⟨hout, E1, h1, rfl⟩ := h.frame_some hy
   rw [clean_live] at hl
   have hyx : y ≠ x := by
@@ -886,7 +886,7 @@ theorem frame_src (h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
   refine ⟨E0, h0, (hsv hl2').1, by rw [clean_ty, ht2, ht0], by rw [clean_mode, hm2, hm0], fun hn => ?_⟩
   rw [clean_ty, clean_mode] at hn
   rw [clean_id hn hl]
-  unfold Entry.vdeps; rw [hm2, hp2, hh2, hm0, hp0, hh0]
+  exact ⟨by unfold Entry.vdeps; rw [hm2, hp2, hh2, hm0, hp0, hh0], by rw [hh2, hh0]⟩
 
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
@@ -1093,7 +1093,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
   Φnamed y E hy hl hn d hd b t hk := by
     obtain ⟨E0, h0, hl0, ht, hm, hvd⟩ := h.frame_src hy hl
     have hn0 : E0.ty ≠ .int ∨ E0.mode = .rootb := by rwa [← ht, ← hm]
-    rw [hvd hn] at hd
+    rw [(hvd hn).1] at hd
     obtain ⟨Er, hEr, htr, hor, hcr, hhv⟩ := h.names y E0 h0 hl0 hn0 d hd b t hk
     by_cases hρ : ∃ v, callRen fn.params args base v = d.root
     · obtain ⟨v, hv⟩ := hρ
@@ -1726,7 +1726,7 @@ theorem canon_rbq (h : CallH P Γ F x fn args base) (Δa : Ctx) :
   · rw [hc] at hp
     have hl := h.sOK.Φrb p E hp hm
     obtain ⟨E0, h0, hl0, _, hm0, hvd⟩ := h.frame_src hp hl
-    rw [hvd (Or.inr hm)] at hd
+    rw [(hvd (Or.inr hm)).1] at hd
     obtain ⟨Er, hEr, _⟩ := h.wf p E0 h0 hl0 (Or.inr (by rw [← hm0]; exact hm)) d.root
       (List.mem_map_of_mem hd)
     exact ⟨h.domlt _ _ hEr, by rw [hEr]; rfl⟩

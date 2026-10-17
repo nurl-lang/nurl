@@ -88,7 +88,7 @@ theorem frz (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
   intro v hv
   refine h.st_other hb (h.untouched_lt (h.Flt v hv) (fun e => h.xF (e ▸ hv)) fun k t hk he => ?_)
   have hkl := lt_of_get hk
-  obtain ⟨_, _, _, _, hmv⟩ := h.arg k hkl
+  obtain ⟨_, _, _, _, hmv, _⟩ := h.arg k hkl
   rw [get_of hk] at hmv
   exact (hmv rfl).1 (he ▸ hv)
 
@@ -174,10 +174,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by
-  have hdt : DomTy Γ (callPost Γ fn args) := callPostAux_domTy _ _ _ _ (fun a ha => by
-    obtain ⟨i, hi, rfl⟩ := mem_args ha
-    obtain ⟨Ea, hEa, _⟩ := h.arg i (h.len ▸ hi)
-    exact ⟨Ea, hEa⟩) (DomTy.refl Γ)
+  have hdt : DomTy Γ (callPost Γ fn args) := h.postdt
   have hspine : ∀ v, v ∈ (callStmt fn args m.nv x k).spine → v = x ∨ m.nv ≤ v := by
     intro v hv
     rw [callStmt_spine, h.body_spine, List.append_nil] at hv
@@ -339,7 +336,7 @@ theorem callProgress {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {a
     (fun k k' a hkk ⟨t, hk⟩ ha ha' => by
       have hkl := (List.getElem?_eq_some_iff.mp hk).1
       have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp ha').1
-      obtain ⟨_, _, _, _, hmv⟩ := hargs k hkl
+      obtain ⟨_, _, _, _, hmv, _⟩ := hargs k hkl
       have hp := (List.getElem?_eq_some_iff.mp hk).2
       have := ((hmv (by rw [hp]; rfl)).2.2 k' (hlen ▸ hk'l) (by omega)).1
       exact this (by simp [List.getD, ha, ha']))
@@ -352,7 +349,11 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     (hc : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args)) (hi : Inv m Γ F (.letcall x f args k)) :
     CallH P Γ F x fn args m.nv := by
   obtain ⟨hw1, hdm, hE⟩ := CallT.wf hP hc hi.wf
-  obtain ⟨fn', hf', hlen, hargs, _, _⟩ := hc
+  have hdt := CallT.domTy hc
+  obtain ⟨hn1, hEn, _⟩ := CallT.names hP hc hi.names
+  have hx1 : callPost Γ fn args x = none := by
+    have := hdm.1 x; rw [hx] at this; cases h' : callPost Γ fn args x <;> simp_all
+  obtain ⟨fn', hf', hlen, hargs, hnf, _⟩ := hc
   rw [hf] at hf'; cases hf'
   exact {
     prog := hP
@@ -370,20 +371,24 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     anch := fun p E hp hm => hi.anch p E hp hm (by simp [Stmt.spine])
     postwf := hw1
     postdm := hdm
-    reswf := hE }
+    reswf := hE
+    nfree := hnf
+    names := hi.names
+    postdt := hdt
+    resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) hEn }
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
-  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hi hst
+  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst
   cases hst with
   | letcall hf hmx hb =>
     rename_i m1 fn
-    obtain ⟨fn', hf', hlen, hargs, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf', hlen, hargs, hnf, rfl, rfl⟩ := hc
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
-      ⟨fn, hf, hlen, hargs, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
     have h := callH_of hP hf hx hxF hc' hi
-    exact ⟨_, h.typed hk hkT, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
+    exact ⟨_, h.typed hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
 
 
 /-! ### `recover`: a call of a function without parameters, in a `recover` frame -/
@@ -401,25 +406,27 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
       rcases List.mem_append.mp hv with hv | hv
       · exact h.Flt v hv
       · exact hG v hv
-    anch := fun p E hp' hm r hr => List.mem_append_left _ (h.anch p E hp' hm r hr) }
+    anch := fun p E hp' hm => (h.anch p E hp' hm).mono fun _ hv => List.mem_append_left _ hv
+    nfree := fun d hd => by simp [mutNames, argNames] at hd }
 
 /-- The `recover` case of preservation. -/
 theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
-  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hi hst
+  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst
   cases hst with
   | letrec hf' _ hmx =>
     rename_i fn'
     rw [hf] at hf'; cases hf'
-    obtain ⟨fn', hf'', hlen, hargs, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf'', hlen, hargs, hnf, rfl, rfl⟩ := hc
     rw [hf] at hf''; cases hf''
-    have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) := ⟨fn, hf, hlen, hargs, rfl, rfl⟩
+    have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) :=
+      ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
-      hi.respine rfl (fun v hv => hi.nvS v (by simpa [Stmt.vars] using hv)) trivial
+      hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial
     have h := callH_of hP hf hx hxF hc' hi'
     have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
     have hI := h.inv hi' hb
     have hkeep := h.keep (f := f) (k := k)
-    have hpost : callPost Γ fn [] = Γ := by unfold callPost; rw [hp]; rfl
+    have hpost : callPost Γ fn [] = Γ := by unfold callPost; rw [hp]; simp [mutNames, argNames]; rfl
     -- what the frame returns to
     let m0 := m.set x ⟨fn.resOwn, none⟩
     let G := (List.range m0.nv).filter (· ≠ x)
@@ -438,7 +445,12 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
         tyok := by rw [hEty]; rfl
         wf := fun h0 => absurd hEty h0
         valOwn := fun h0 => by rw [hEc] at h0; cases h0
-        valBor := fun _ => by rw [hEty]; exact .int }
+        valBor := fun _ => by rw [hEty]; exact .int
+        names := fun hn => by rcases hn with hn | hn
+                              · exact absurd hEty hn
+                              · rw [hEc] at hn; cases hn
+        held := NamesIn.nil _ rfl
+        pkgs := PkgsOK.leaf (fun e hc => by cases hc) (fun _ _ _ _ _ he => by cases he) }
     have hM1 := hi.toMInv.add hx hxlt hout
     have hM : MInv (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) :=
       hM1.of_st (by funext v; by_cases hv : v = x <;> simp [m0, hv])
@@ -446,8 +458,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           have : (m0.set x ⟨false, some (.int 1)⟩) = ((m.set x ⟨false, none⟩).set x ⟨false, some (.int 1)⟩) := by
             simp [m0, ho]
           rw [this]; exact hh) (Nat.le_refl _)
-    have hanchΔ : ∀ p E, setE Γ x (callRes Γ fn []) p = some E → E.mode = .rootb →
-        ∀ r ∈ roots E.vdeps, r ∈ F := by
+    have hanchΔ : RootbAnch (setE Γ x (callRes Γ fn [])) F := by
       intro p Ep hp' hm
       by_cases hpx : p = x
       · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm
@@ -481,15 +492,14 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
         (setE Γ x (callRes Γ fn [])) :=
       StmtT.catchR hxF hIn hM hanchΔ hKO
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
-      (StmtT.seq hk hcatch hkT), ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
+      (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
-      have hx' := hI.nvS x (by simp [callStmt, Stmt.vars])
       rcases hv with rfl | (rfl | hv) | hv
-      · exact hx'
-      · exact hx'
-      · exact hI.nvS v (by simp [callStmt, Stmt.vars, hv])
-      · exact hI.nvS v (by simp [callStmt, Stmt.vars, hv])
+      · simp [callStmt, Stmt.vars]
+      · simp [callStmt, Stmt.vars]
+      · simp [callStmt, Stmt.vars, hv]
+      · simp [callStmt, Stmt.vars, hv]
     · have hvr : v ≠ m.nv + fn.params.length := fun e => hv (by rw [hsp]; simp [e])
       simp [callMem, upd_ne _ _ hvr]
     · rw [hsp]; simp [hrne]
