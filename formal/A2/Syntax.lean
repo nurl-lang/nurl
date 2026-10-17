@@ -25,6 +25,8 @@ inductive Ty where
   | slice (t : Ty)
   | prod (a b : Ty)   -- a struct value: its fields, nested in pairs (inline, no allocation)
   | sum (a b : Ty)    -- an enum value: one of two payloads, tagged (inline); `Option t` is `sum int t`
+  | fn (a r : Ty)     -- a closure or a trait object: code with an environment it owns, called with a
+                      -- borrowed `a`, returning `r`; the environment's type is not part of the type
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -35,6 +37,7 @@ def Ty.holdsView : Ty → Bool
   | .slice _ => true
   | .prod a b => a.holdsView || b.holdsView
   | .sum a b => a.holdsView || b.holdsView
+  | .fn _ _ => true     -- what the environment holds is not part of the type
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -45,6 +48,7 @@ def Ty.ok : Ty → Bool
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
+  | .fn a r => a.ok && r.ok
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -52,6 +56,7 @@ def Ty.owning : Ty → Bool
   | .vec _ => true
   | .prod _ _ => true
   | .sum _ _ => true
+  | .fn _ _ => true
   | _ => false
 
 /-- How a borrow reaches the memory of the binding it depends on.
@@ -142,6 +147,8 @@ inductive Rhs where
   | getr (y : Var)
   | takel (y : Var)            -- a match by value: the payload moves out, the enum is consumed
   | taker (y : Var)
+  | pack (f : Nat) (te a r : Ty) (y : Var)   -- a closure literal or `dyn`: code `f` with the
+                                            -- environment `y` (of type `te`) moved in
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -154,6 +161,8 @@ inductive Val where
   | pair (v w : Val)                              -- a struct value, inline
   | inl (v : Val)                                 -- an enum value, inline
   | inr (v : Val)
+  | pkg (f : Nat) (te a r : Ty) (env : Val)   -- a package: code `f`, its environment (of the
+                                               -- ghost type `te`) inline, and its signature
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end

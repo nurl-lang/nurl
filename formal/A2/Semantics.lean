@@ -34,6 +34,7 @@ inductive Sub : Val → Val → Prop
   | snd {v a b : Val} : Sub v b → Sub v (.pair a b)
   | inl {v a : Val} : Sub v a → Sub v (.inl a)
   | inr {v a : Val} : Sub v a → Sub v (.inr a)
+  | pkg {v e : Val} {f : Nat} {te a r : Ty} : Sub v e → Sub v (.pkg f te a r e)
 
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
@@ -55,6 +56,7 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | pair {a a1 a2 : Nat → Bool} {v w : Val} : Frees a v a1 → Frees a1 w a2 → Frees a (.pair v w) a2
   | inl {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inl v) a1
   | inr {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inr v) a1
+  | pkg {a a1 : Nat → Bool} {f : Nat} {te s r : Ty} {v : Val} : Frees a v a1 → Frees a (.pkg f te s r v) a1
 inductive FreesL : (Nat → Bool) → List Val → (Nat → Bool) → Prop
   | nil {a : Nat → Bool} : FreesL a [] a
   | cons {a a1 a2 : Nat → Bool} {e : Val} {es : List Val} :
@@ -94,6 +96,7 @@ def lendOf : Val → Val
   | .pair v w => .pair (lendOf v) (lendOf w)
   | .inl v => .inl (lendOf v)
   | .inr v => .inr (lendOf v)
+  | .pkg f te a r v => .pkg f te a r (lendOf v)
   | v => v
 
 /-- Does moving this value move an owned tree (a `Vec` or a struct)? -/
@@ -102,6 +105,7 @@ def Val.owns : Val → Bool
   | .pair .. => true
   | .inl .. => true
   | .inr .. => true
+  | .pkg .. => true
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -171,6 +175,8 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       m.st y = some ⟨true, some (.inr v)⟩ → EvalR m (.taker y) (.ok v v.owns (m.set y ⟨true, none⟩))
   | takerP {y : Var} {v : Val} :
       m.st y = some ⟨true, some (.inl v)⟩ → EvalR m (.taker y) .panic
+  | pack {f : Nat} {te a r : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → EvalR m (.pack f te a r y) (.ok (.pkg f te a r v) true m1)
 
 /-! ### Calls
 
@@ -206,6 +212,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .getr y => .getr (ρ y)
   | .takel y => .takel (ρ y)
   | .taker y => .taker (ρ y)
+  | .pack f te a r y => .pack f te a r (ρ y)
 
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip

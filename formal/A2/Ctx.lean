@@ -73,6 +73,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | pair _ _ ihx ihy => intro P' H' hp hs; exact .pair (ihx (app hp hs) hs) (ihy (app hp hs) hs)
   | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
+  | pkg _ ih => intro P' H' hp hs; exact .pkg (ih (app hp hs) hs)
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs

@@ -533,6 +533,12 @@ theorem elemE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
     · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
       exact derive_lift h hab hy .inner
     · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
+  | fn a r =>
+    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
+      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
+      exact derive_lift h hab hy .inner
+    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
 
 theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     (t : Ty) (x : Var) : EntryWeaker (popE (S.ρ y) (S.liftE y Ey) t) (S.liftE x (popE y Ey t)) := by
@@ -546,6 +552,10 @@ theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γ
       (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
     simp only [popE, liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
   | sum a b =>
+    refine EntryWeaker.mk' (by simp [popE, liftE]) (by simp [popE, liftE, liftMode])
+      (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
+    simp only [popE, liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
+  | fn a r =>
     refine EntryWeaker.mk' (by simp [popE, liftE]) (by simp [popE, liftE, liftMode])
       (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
     simp only [popE, liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
@@ -612,6 +622,10 @@ theorem compE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
       (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
     simp only [compE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
   | sum a b =>
+    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
+      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
+  | fn a r =>
     refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
       (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
     simp only [compE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
@@ -804,6 +818,16 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     rw [← hty1] at hp1
     refine ⟨_, RhsT.inr hc1 (by rw [liftE_live]; exact hly) hp1 ha, fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; simp [hty1]) (by simp [liftE, liftMode]) (by simp)
+      (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
+    simp only [liftE, reduceCtorEq, ↓reduceIte]
+    exact hD1
+  | @pack f te a r y Ey Γa1 D hy hly hte hpa ha hr =>
+    have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    obtain ⟨D1, hp1, hD1⟩ := pushArg_ren h hab hy hpa
+    have hty1 := liftE_ty' h hab hy
+    refine ⟨_, RhsT.pack hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hte) hp1 ha hr,
+      fun x => ?_⟩
+    refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
     simp only [liftE, reduceCtorEq, ↓reduceIte]
     exact hD1
@@ -1136,6 +1160,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | pair hy _ hpa1 hz _ hpa2 _ => exact PushArg.absOK hz hpa2 (PushArg.absOK hy hpa1 hab)
   | inl hy _ hpa _ => exact PushArg.absOK hy hpa hab
   | inr hy _ hpa _ => exact PushArg.absOK hy hpa hab
+  | pack hy _ _ hpa _ _ => exact PushArg.absOK hy hpa hab
   | @takel y Ey _ _ hy _ hm _ _ => exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp)
   | @taker y Ey _ _ hy _ hm _ _ => exact (hab.kill _ _ _).setE' hab hy rfl rfl (by rw [hm]; simp)
   | _ => exact hab
@@ -1158,6 +1183,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | @snd _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
   | inl => exact ⟨Or.inl rfl, rfl⟩
   | inr => exact ⟨Or.inl rfl, rfl⟩
+  | pack => exact ⟨Or.inl rfl, rfl⟩
   | @getl _ _ a => cases a <;> exact ⟨Or.inr rfl, rfl⟩
   | @getr _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
   | @takel _ _ a => cases a <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩

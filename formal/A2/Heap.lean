@@ -19,6 +19,7 @@ theorem Frees.other {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
     rw [Frees.other h2 hi.2, Frees.other h1 hi.1]
   | .inl h1 => exact Frees.other h1 (by simpa using hi)
   | .inr h1 => exact Frees.other h1 (by simpa using hi)
+  | .pkg h1 => exact Frees.other h1 (by simpa using hi)
 theorem FreesL.other {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, i ∉ idsL es → a' i = a i := by
   intro i hi
@@ -79,6 +80,10 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
     intro a hn ha
     obtain ⟨a1, h1⟩ := ih a (by simpa using hn) (fun i hi => ha i (by simpa using hi))
     exact ⟨a1, Frees.inr h1⟩
+  | pkg _ ih =>
+    intro a hn ha
+    obtain ⟨a1, h1⟩ := ih a (by simpa using hn) (fun i hi => ha i (by simpa using hi))
+    exact ⟨a1, Frees.pkg h1⟩
 
 /-! ### Owned slots after an update -/
 
@@ -162,5 +167,6 @@ theorem ViewIn.sub {τ T s v} (h : ViewIn τ T s v) : Sub v T := by
   | snd _ ih => exact Sub.snd ih
   | inl _ ih => exact Sub.inl ih
   | inr _ ih => exact Sub.inr ih
+  | pkg _ ih => exact Sub.pkg ih
 
 end A2
