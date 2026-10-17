@@ -291,7 +291,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
-  | panic {Γ : Ctx} {F : List Var} : StmtT P Γ F .panic Γ
+  | panic {Γ Δ : Ctx} {F : List Var} :
+      -- a panic never ends normally: what follows it may assume any context
+      -- with the same bindings, modes and types, borrowed parameters as they were
+      CtxWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
+      (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+        (E0.mode = .rootb → E = E0)) →
+      StmtT P Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
