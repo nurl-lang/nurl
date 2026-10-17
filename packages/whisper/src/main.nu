@@ -32,6 +32,8 @@ $ `src/ggml.nu`
 $ `src/model.nu`
 $ `src/run.nu`
 $ `src/serve.nu`
+$ `src/silero.nu`
+$ `src/stream.nu`
 
 // Resolve the model argument to a local path — an existing directory or ggml
 // file is used as is, a Hugging Face ref is fetched into ~/.nurl/models via
@@ -165,6 +167,175 @@ $ `src/serve.nu`
     ^ rc
 }
 
+@ __wcli_t f secs → String {
+    : String o ( string_new )
+    : i ms # i * secs 1000.0
+    ( string_push_int o / ms 1000 )
+    ( string_push_char o 46 )
+    : i frac % ms 1000
+    ? < frac 100 { ( string_push_char o 48 ) } {}
+    ? < frac 10 { ( string_push_char o 48 ) } {}
+    ( string_push_int o frac )
+    ^ o
+}
+
+// `whisper vad <audio.wav>`: the streaming endpointer over a file, as the
+// WebSocket would run it — what it heard and when it would have acted, on the
+// stream's clock. No model is loaded; drafts and finals are only named.
+// The endpointer the WebSocket used before Silero (packages/audio's
+// VadStream), in the same output format — the baseline.
+@ __wh_vad_legacy s wavpath → i {
+    ?? ( wav_read wavpath ) {
+        T aw → {
+            : ( Vec f ) x ( wh_wav16 aw )
+            : VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
+            : String out ( string_new )
+            : ~ i off 0
+            : i n ( vec_len [f] x )
+            ~ < off n {
+                : ~ i take 320
+                ? > + off take n { = take - n off } {}
+                : ( Vec f ) piece ( vec_with_cap [f] take )
+                : ~ i k 0
+                ~ < k take {
+                    ( vec_push [f] piece ( vec_at [f] x + off k ) )
+                    = k + k 1
+                }
+                ( vad_stream_push vs piece )
+                = off + off take
+                ~ ( vad_stream_poll vs ) {
+                    : VadSeg g ( vad_stream_seg vs )
+                    : ( Vec f ) _a ( vad_stream_take vs )
+                    ( string_push_str out `final   ` )
+                    ( string_push_str out ( string_data ( __wcli_t / # f . g start 16000.0 ) ) )
+                    ( string_push_char out 45 )
+                    ( string_push_str out ( string_data ( __wcli_t / # f . g end 16000.0 ) ) )
+                    ( string_push_str out ` at ` )
+                    ( string_push_str out ( string_data ( __wcli_t / # f off 16000.0 ) ) )
+                    ( string_push_char out 10 )
+                }
+            }
+            ? ( vad_stream_flush vs ) {
+                : VadSeg g ( vad_stream_seg vs )
+                ( string_push_str out `final   ` )
+                ( string_push_str out ( string_data ( __wcli_t / # f . g start 16000.0 ) ) )
+                ( string_push_char out 45 )
+                ( string_push_str out ( string_data ( __wcli_t / # f . g end 16000.0 ) ) )
+                ( string_push_str out ` at ` )
+                ( string_push_str out ( string_data ( __wcli_t / # f n 16000.0 ) ) )
+                ( string_push_char out 10 )
+            } {}
+            ( nurl_print ( string_data out ) )
+            ^ 0
+        }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }
+    }
+}
+
+@ __wh_vad_cli ArgParser p s wavpath → i {
+    ? ( args_present p `legacy` ) { ^ ( __wh_vad_legacy wavpath ) } {}
+    : ~ ? Silero net @ ?Silero { F }
+    ? ! ( args_present p `energy` ) {
+        : ~ String vp ( args_value_or p `vad-model` `` )
+        ? == ( string_len vp ) 0 { = vp ( silero_default_path ) } {}
+        ? == ( string_len vp ) 0 {
+            ( nurl_eprintln `whisper: no Silero weights found (vad/silero_vad_v5.safetensors) — falling back to the energy detector` )
+        } {
+            ?? ( silero_open ( string_data vp ) ) {
+                T n → { = net @ ?Silero { T n } }
+                F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }
+            }
+        }
+    } {}
+    : ~ WssCfg cfg ( wss_default_cfg )
+    = . cfg partials ( args_present p `partials` )
+    = . cfg levels T
+    = . cfg events T
+    : String sp ( args_value_or p `pause` `` )
+    ?? ( string_to_int sp ) {
+        T v → {
+            = . cfg pause_ms v
+            = . cfg adaptive F
+        }
+        F _ → {}
+    }
+    ?? ( wav_read wavpath ) {
+        T aw → {
+            : ( Vec f ) x ( wh_wav16 aw )
+            : ~ WsStream ws ( ws_stream_new net cfg )
+            : String out ( string_new )
+            : ~ i off 0
+            : i n ( vec_len [f] x )
+            : ~ b fed_all F
+            ~ ! fed_all {
+                // 20 ms at a time, the way a microphone delivers it
+                : ~ i take 320
+                ? > + off take n { = take - n off } {}
+                : ( Vec f ) piece ( vec_with_cap [f] take )
+                : ~ i k 0
+                ~ < k take {
+                    ( vec_push [f] piece ( vec_at [f] x + off k ) )
+                    = k + k 1
+                }
+                ( ws_stream_feed ws piece )
+                = off + off take
+                ? >= off n {
+                    = fed_all T
+                    : b _e ( ws_stream_end ws )
+                } {}
+                : ~ b more T
+                ~ more {
+                    : i act ( ws_stream_next ws )
+                    ? == act WSS_NONE { = more F } {
+                        : f t0 / # f . ws act_from 16000.0
+                        : f t1 / # f . ws act_to 16000.0
+                        ? == act WSS_START {
+                            ( string_push_str out `start   ` )
+                            ( string_push_str out ( string_data ( __wcli_t t1 ) ) )
+                        } {}
+                        ? == act WSS_PARTIAL {
+                            ( string_push_str out `draft   ` )
+                            ( string_push_str out ( string_data ( __wcli_t t0 ) ) )
+                            ( string_push_char out 45 )
+                            ( string_push_str out ( string_data ( __wcli_t t1 ) ) )
+                            ( string_push_str out ? . ws act_full ` full` ` short` )
+                            ( string_push_str out ` quiet=` )
+                            ( string_push_int out . ws act_pause_ms )
+                        } {}
+                        ? == act WSS_FINAL {
+                            ( string_push_str out `final   ` )
+                            ( string_push_str out ( string_data ( __wcli_t t0 ) ) )
+                            ( string_push_char out 45 )
+                            ( string_push_str out ( string_data ( __wcli_t t1 ) ) )
+                            ( string_push_str out ` at ` )
+                            ( string_push_str out ( string_data ( __wcli_t / # f . ws pos 16000.0 ) ) )
+                            ? . ws act_reuse { ( string_push_str out ` reuse` ) } {}
+                        } {}
+                        ? == act WSS_LEVEL {
+                            ( string_push_str out `level   ` )
+                            ( string_push_str out ( string_data ( __wcli_t / # f . ws pos 16000.0 ) ) )
+                            ( string_push_str out ` noise=` )
+                            ( string_push_int out # i . ws noise_db )
+                            ( string_push_str out ` speech=` )
+                            ( string_push_int out # i . ws speech_db )
+                            ( string_push_str out ` pnoise=` )
+                            ( string_push_int out # i * 100.0 . ws p_noise )
+                            ( string_push_str out `% on=` )
+                            ( string_push_int out # i * 100.0 . ws th_on )
+                            ( string_push_str out `% pause=` )
+                            ( string_push_int out . ws eou_ms )
+                        } {}
+                        ( string_push_char out 10 )
+                    }
+                }
+            }
+            ( nurl_print ( string_data out ) )
+            ^ 0
+        }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }
+    }
+}
+
 @ main → i {
     : ArgParser p ( args_new `whisper` `Speech recognition in pure NURL (encoder stage).` )
     ( args_opt p `output` 111 `FILE` `write the encoder states here (f32 LE)` )
@@ -179,6 +350,11 @@ $ `src/serve.nu`
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
+    ( args_opt p `vad-model` 0 `FILE` `serve/vad: the Silero VAD weights (default: vad/silero_vad_v5.safetensors beside the install)` )
+    ( args_flag p `energy` 0 `serve/vad: the energy detector instead of Silero` )
+    ( args_flag p `legacy` 0 `vad: the pre-Silero streaming VAD, for comparison` )
+    ( args_flag p `partials` 0 `vad: also name the drafts a streaming client would get` )
+    ( args_opt p `pause` 0 `MS` `vad: a fixed closing pause instead of the adaptive one` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -197,6 +373,11 @@ $ `src/serve.nu`
     : ( Vec String ) pos ( args_positionals p )
     : ~ s cmd0 ``
     ?? ( vec_get [String] pos 0 ) { T c → { = cmd0 ( string_data c ) } F → {} }
+    ? ( nurl_str_eq cmd0 `vad` ) {
+        : ~ s vw ``
+        ?? ( vec_get [String] pos 1 ) { T c → { = vw ( string_data c ) } F → {} }
+        ^ ( __wh_vad_cli p vw )
+    } {}
     ? ( nurl_str_eq cmd0 `serve` ) {
         : ~ s dir ``
         ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
@@ -278,7 +459,8 @@ $ `src/serve.nu`
         ? & == ( string_len token ) 0 & != 0 ( nurl_str_len ( string_data host ) ) == 0 ( nurl_str_eq ( string_data host ) `127.0.0.1` ) {
             ( nurl_eprintln `whisper: WARNING — serving on a non-loopback address with NO token; anyone who can reach this port can use the model. Pass --token or set WHISPER_TOKEN.` )
         } {}
-        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) unload_s )
+        : String vmodel ( args_value_or p `vad-model` `` )
+        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) unload_s ( string_data vmodel ) ( args_present p `energy` ) )
         ^ rc
     } {}
     ? < ( args_positional_count p ) 3 {

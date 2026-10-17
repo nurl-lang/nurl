@@ -157,8 +157,7 @@ $ `src/mp3.nu`
                 : ( Vec f ) mono ( wav_mono w )
                 : ( Vec f ) at16 ( resample mono . w rate 16000 )
                 // whisper always feeds its encoder exactly 30 s
-                : ( Vec f ) fixed ( pad_or_trim at16 480000 )
-                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
+                : ( Vec f ) mel ( log_mel_whisper_padded at16 480000 400 160 nmel 16000 )
                 : String o ( args_value_or p `output` `mel.f32` )
                 = rc ( __write_f32 ( string_data o ) mel )
                 : String m ( string_from `mel — ` )

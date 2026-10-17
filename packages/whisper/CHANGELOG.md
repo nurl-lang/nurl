@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.4.1] — 2026-10-17
+
+### Fixed
+
+- **One open WebSocket stream was the whole server.** `whisper serve` ran a single worker thread (since it was added), and a worker is pinned to its connection for the connection's life — so while one microphone was streaming, `/health`, `/inference`, the test page and every other stream waited until it closed. 3.4.0's drafts made it visible: a stream reading aloud kept that one thread busy transcribing. The server now has 8 workers; `/health` answers at once while streams are open, and two streams at once both get their transcripts.
+- The model is one engine (one encoder output, one KV cache), so transcriptions still run one at a time, now explicitly: a GPU lock held for a whole transcription, with the device context bound to the thread that runs it. A final waits its turn; a draft that finds the GPU busy is skipped, never queued.
+- A stream's periodic drafts take at most half the GPU's time (after one that took D ms, the next waits until the stream is 2·D further on), and every transcription's tokens are capped by its audio's length — whisper looping on noise stops at what the seconds could hold, not at 200 tokens.
+
+## [3.4.0] — 2026-10-17
+
+The WebSocket stream decides where an utterance ends with a voice detector instead of a loudness threshold, learns how long the speaker pauses, and has the transcript ready when the pause closes. Measured in real time over the socket (large-v3, RTX 4090; eight spoken answers, time from the end of speech to the final):
+
+| room | 3.3.0 | 3.4.0, `pause_ms:300` |
+|---|---|---|
+| quiet | ~930 ms | 73–306 ms |
+| a television talking 12 dB below the player | 1–6.7 s; the TV's sentence came back as an answer | 185–406 ms, every answer right |
+| music 10 dB below | all eight answers as one, after 26 s | 168–324 ms |
+
+A client that sends no configuration gets 363–703 ms in the quiet room with no change on its side.
+
+### Added
+
+- **Silero VAD v5 in NURL** (`src/silero.nu`): the 16 kHz network on the CPU, 0.4 ms per 32 ms chunk, checked against onnxruntime on the original ONNX file (max |Δp| 5·10⁻⁶) and, in the suite, against a numpy reading of the same weights (`tests/silero_ref.py`). The weights are `vad/silero_vad_v5.safetensors` (MIT, `vad/LICENSE-silero-vad`; `tests/silero_export.py` makes them from the ONNX file), installed beside the binary. `--vad-model FILE` points elsewhere, `--energy` uses the energy detector.
+- **The streaming endpointer** (`src/stream.nu`), every 32 ms: Silero's p(speech); the noise floor from the last 10 s of non-speech; the speaker's own level (90th percentile of the last 20 s of voice); Silero's thresholds raised above what it says on the room's own noise; a near-field gate (10 dB below the speaker's level is someone else — a television, a sibling, the game's sound — and neither opens an utterance nor holds one open); a closing pause learned from the speaker's gaps between words (1.3 × p90 + 150 ms within 300…1000 ms, starting at 400), counting a close followed quickly by more speech as a gap; an utterance past 28 s closes at its best recent gap rather than mid-word.
+- **The final is made during the pause**: when the speaker goes quiet the utterance is transcribed with the full context while the pause runs; if nothing more is said, that is the final (`proc_ms` 0).
+- WebSocket configuration (any time, any subset): `partials`, `partial_ms`, `pause_ms`, `adaptive`, `min_pause_ms`, `max_pause_ms`, `threshold`, `near_db`, `max_utt_ms`, `events`, `levels`, `vad`; commands `{"cmd":"end"}` and `{"cmd":"reset"}`. Drafts are `{"type":"partial","seg","text","stable","t0","t1","pause_ms"}` — `stable` is the prefix two drafts in a row agreed on — and run the encoder over the audio plus 5 s (at least 10 s), about half the cost of the full window. Finals carry `type`, `seg`, `speech_t0`/`speech_t1` (where the voice itself began and ended) and `proc_ms`.
+- `whisper vad <audio.wav> [--partials] [--pause MS] [--legacy]`: the endpointer over a file, on the stream's clock, without a model.
+- The test page has a mode selector (adaptive / 300 ms answers / drafts), shows drafts forming and the room's levels.
+
+### Changed
+
+- The log-mel is computed only where the audio is (packages/audio 0.9.0's `log_mel_whisper_padded`, bit-identical): a short utterance's mel went from ~117 ms to ~10 ms, so a two-second answer takes 174 ms where it took 282 on large-v3. Every transcript is the same.
+- The encoder, the cross-attention K/V and the decoder's cross-attention run over however many positions the spectrogram has (`wh_run_seg` takes a context; `0` is the full 1500). The full window records the same plans as before.
+- Requires audio 0.9.0.
+
 ## [3.3.0] — 2026-10-16
 
 The engine runs on packages/gpukit's checked kernels and has no `unsafe` and no `raw` function left (9 `unsafe` and 13 `raw` in 3.2.1). Every kernel reaches device memory only through bounds-checked loads and stores over the buffers its launcher binds, and every device buffer is a `GkBuf` (a `GkHBuf` for a matrix kept in the checkpoint's own halves) instead of an integer address. A decode step past the KV cache's end, which used to write past it, now stores nothing.

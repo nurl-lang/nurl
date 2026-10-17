@@ -168,10 +168,11 @@ $ `stdlib/std/arc.nu`
     GkBuf enc_out  // 1500 × d_model — what the decoder attends to
     // the recorded launches (kernels.nu): checked and bound once, replayed
     ( Vec GkLaunch ) enc_plan  // the encoder, for enc_frames mel frames
-    i enc_frames
+    i enc_frames  // = 2 × the positions the encoder and cross-attention run over
     ( Vec GkLaunch ) cross_plan  // the decoder's cross-attention K and V
     ( Vec GkLaunch ) dec_plan  // one decoder step
     ( Vec i ) dec_at  // per decoder layer: its KV-cache writes and self-attention
+    ( Vec i ) dec_xat  // per decoder layer: its cross-attention
     i dec_embed  // the token's and the position's embedding rows
     ( Vec GkLaunch ) am_plan  // the argmax
 }
@@ -849,7 +850,7 @@ $ `stdlib/std/arc.nu`
         ( wk_w_none ) ( gk_buf_none GK_F32 ) ( vec_new [WhDec] ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) F
         ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
-        ( vec_new [GkLaunch] ) 0 ( vec_new [GkLaunch] ) ( vec_new [GkLaunch] ) ( vec_new [i] ) 0 ( vec_new [GkLaunch] ) } )
+        ( vec_new [GkLaunch] ) 0 ( vec_new [GkLaunch] ) ( vec_new [GkLaunch] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [GkLaunch] ) } )
 }
 
 // Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
@@ -1022,13 +1023,17 @@ $ `stdlib/std/arc.nu`
 
 // ── the recorded launches ───────────────────────────────────────────
 
-// The encoder over a spectrogram of `nframe` frames, recorded.
+// The encoder over a spectrogram of `nframe` frames, recorded: nframe / 2
+// positions (the stride-2 conv), the first nframe / 2 rows of the positional
+// embedding. 3000 frames is the 30 s the model was trained on; fewer is the
+// shortened context (wh_encode_ctx) that a two-second partial result runs
+// over instead of 28 s of padding.
 @ __wh_enc_plan inout WhisperImpl w i nframe → b {
     : ~ ( Vec GkLaunch ) p ( vec_new [GkLaunch] )
     : GpuKit kit . w kit
     : b wp . w warp
     : i dm . w d_model
-    : i nc . w n_ctx_enc
+    : i nc / nframe 2
     : f eps 0.00001
     : f qscale / 1.0 ( sqrt # f . w head_dim )
     : GkBuf none ( gk_buf_none GK_F32 )
@@ -1068,6 +1073,44 @@ $ `stdlib/std/arc.nu`
 // Every plan but the encoder's (which is rerecorded if a spectrogram of
 // another length comes): cross-attention's K and V, one decoder step, the
 // argmax.
+// Cross-attention's K and V come from the ENCODER, and the encoder does not
+// change while a clip is being transcribed: computed ONCE per clip
+// (wh_prepare_cross), not once per generated token — over the `nc` positions
+// the encoder last ran over.
+@ __wh_cross_plan inout WhisperImpl w i nc → b {
+    : GpuKit kit . w kit
+    : b wp . w warp
+    : i dm . w d_model
+    : GkBuf none ( gk_buf_none GK_F32 )
+    : ~ b ok T
+    : ~ ( Vec GkLaunch ) cp ( vec_new [GkLaunch] )
+    : ~ i L 0
+    ~ & ok < L . w n_dec_layer {
+        : WhDec d ( vec_at [WhDec] . w dec L )
+        = ok & ok ( wk_matvec kit wp . d xwk . w enc_out none . d xk dm dm nc cp )
+        = ok & ok ( wk_matvec kit wp . d xwv . w enc_out . d xbv . d xv dm dm nc cp )
+        = L + L 1
+    }
+    = . w cross_plan cp
+    ^ ok
+}
+
+// The encoder, cross-attention's K/V and the decoder's cross-attention, over
+// `nframe` mel frames (nframe / 2 positions): re-recorded only when the
+// length changes — recording binds buffers, it compiles nothing.
+@ __wh_ctx_plans inout WhisperImpl w i nframe → b {
+    : i nc / nframe 2
+    : ~ b ok ( __wh_enc_plan w nframe )
+    = ok & ok ( __wh_cross_plan w nc )
+    : ~ i L 0
+    ~ & ok < L ( vec_len [i] . w dec_xat ) {
+        = ok & ok ( wk_attn_keys . w dec_plan ( vec_at [i] . w dec_xat L ) . w warp . w d_head . w d_head_dim 1 nc 0 )
+        = L + L 1
+    }
+    = . w enc_frames ? ok nframe 0
+    ^ ok
+}
+
 @ __wh_plans inout WhisperImpl w → b {
     : ~ b ok ( __wh_enc_plan w * 2 . w n_ctx_enc )
     : GpuKit kit . w kit
@@ -1079,19 +1122,8 @@ $ `stdlib/std/arc.nu`
     : f eps 0.00001
     : f qscale / 1.0 ( sqrt # f hd )
     : GkBuf none ( gk_buf_none GK_F32 )
-
-    // Cross-attention's K and V come from the ENCODER, and the encoder does
-    // not change while a clip is being transcribed: computed ONCE per clip
-    // (wh_prepare_cross), not once per generated token.
-    : ~ ( Vec GkLaunch ) cp ( vec_new [GkLaunch] )
+    = ok & ok ( __wh_cross_plan w nc )
     : ~ i L 0
-    ~ & ok < L . w n_dec_layer {
-        : WhDec d ( vec_at [WhDec] . w dec L )
-        = ok & ok ( wk_matvec kit wp . d xwk . w enc_out none . d xk dm dm nc cp )
-        = ok & ok ( wk_matvec kit wp . d xwv . w enc_out . d xbv . d xv dm dm nc cp )
-        = L + L 1
-    }
-    = . w cross_plan cp
 
     // One decoder step, recorded for token 0 at position 0: each step gives
     // the token's row, the position's row and KV-cache row, and the number
@@ -1103,6 +1135,7 @@ $ `stdlib/std/arc.nu`
     // are written straight into their row of the cache.
     : ~ ( Vec GkLaunch ) dp ( vec_new [GkLaunch] )
     : ~ ( Vec i ) at ( vec_new [i] )
+    : ~ ( Vec i ) xat ( vec_new [i] )
     = . w dec_embed ( vec_len [GkLaunch] dp )
     = ok & ok ( wk_embed kit . w tok_embd . w dec_pos . w dx_d 0 0 dm dp )
     = L 0
@@ -1120,6 +1153,7 @@ $ `stdlib/std/arc.nu`
         // ── cross-attention into the encoder's 1500 states ──
         = ok & ok ( wk_layernorm kit wp . w dx_d . w dtmp_d . d lnx_w . d lnx_b . w dxn_d dm eps 1 dp )
         = ok & ok ( wk_matvec kit wp . d xwq . w dxn_d . d xbq . w dq_d dm dm 1 dp )
+        ( vec_push [i] xat ( vec_len [GkLaunch] dp ) )
         = ok & ok ( wk_attn kit wp . w dq_d . d xk . d xv . w dsc_d . w dao_d nh hd 1 nc qscale 0 dp )
         = ok & ok ( wk_matvec kit wp . d xwo . w dao_d . d xbo . w dtmp_d dm dm 1 dp )
         // ── feed-forward ──
@@ -1133,6 +1167,7 @@ $ `stdlib/std/arc.nu`
     = ok & ok ( wk_matvec kit wp . w tok_embd . w dxn_d none . w logits_d . w n_vocab dm 1 dp )
     = . w dec_plan dp
     = . w dec_at at
+    = . w dec_xat xat
 
     : ~ ( Vec GkLaunch ) ap ( vec_new [GkLaunch] )
     = ok & ok ( wk_argmax kit . w logits_d . w n_vocab . w argmax_d ap )
@@ -1156,10 +1191,11 @@ $ `stdlib/std/arc.nu`
 @ __wh_encode_in inout WhisperImpl w ( Vec f ) mel → v {
     : i n ( vec_len [f] mel )
     : i nframe / n . w n_mels
-    // more frames than the encoder's buffers hold: there is no such input
-    ? | < nframe 1 > n ( gk_buf_len . w mel_d ) { ^ } {}
+    // more frames than the encoder's buffers hold, or an odd count (the
+    // stride-2 conv halves it): there is no such input
+    ? | | < nframe 2 > n ( gk_buf_len . w mel_d ) != 0 % nframe 2 { ^ } {}
     ? != nframe . w enc_frames {
-        ? ( __wh_enc_plan w nframe ) {} { ^ }
+        ? ( __wh_ctx_plans w nframe ) {} { ^ }
     } {}
     ? ( gk_dbuf_upload . w kit ( gk_buf_view . w mel_d 0 n ) mel ) {} { ^ }
     : b _r ( wk_run . w enc_plan )
