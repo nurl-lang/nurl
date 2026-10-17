@@ -17,6 +17,7 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
   alloc o T hT i hi := by
     obtain ⟨p, hp⟩ := hsrc o T hT
     rw [ha, hn]; exact hh.alloc p T hp i hi
+  self o T hT := by obtain ⟨p, hp⟩ := hsrc o T hT; exact hh.self p T hp
 
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/
@@ -36,8 +37,8 @@ theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : Slo
   · rename_i hc
     obtain ⟨ho, hown, hbor⟩ := h
     refine ⟨ho, fun hos => ?_, fun hos hl => ?_⟩
-    · obtain ⟨⟨t, ht⟩, hw, hv⟩ := hown hos
-      refine ⟨⟨t, ht⟩, hw, fun hl => ?_⟩
+    · obtain ⟨ht, hw, hv⟩ := hown hos
+      refine ⟨ht, hw, fun hl => ?_⟩
       rcases hc.2 with hi | hd
       · rw [hi] at ht; cases ht
       · simp only at hl; rw [hd] at hl; cases hl
@@ -373,8 +374,8 @@ theorem slot_ownArg (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
   obtain ⟨T, hT, hw, hv⟩ := hi.own_val hEa hl (by rw [hm]; rfl)
   have hn : Ea.ty ≠ .int := by
     obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
-    obtain ⟨⟨t, ht⟩, _⟩ := hown (by rw [hm]; rfl)
-    rw [ht]; simp
+    obtain ⟨ht, _⟩ := hown (by rw [hm]; rfl)
+    intro h0; rw [h0] at ht; cases ht
   refine ⟨T, hT, hw, ((hv.mono (h.held_R hj hEa hn)).keep fun dep hd => (h.keep_R hi hb dep hd).1)⟩
 
 /-- The value an `in` parameter is bound to is valid through what its entry says. -/
@@ -387,13 +388,17 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
   obtain ⟨Ea, hEa, hae⟩ := h.argE_eq hkl
   obtain ⟨_, h1, hl, hok, _⟩ := h.arg k hkl
   rw [hEa] at h1; cases h1
+  rw [get_of hk] at hok
+  have hnp : Ea.ty.isProd = false := by rw [hok.1]; exact hok.2
   -- the value, valid in the store before
   have hm0 : ∃ v, (m.st (args.getD k 0)).bind lendSlot = some v ∧
       ValOK m Ea.ty v (derive (args.getD k 0) Ea .self) Ea.held := by
     rcases hi.mode_cases hEa with hm | hm | hm
     · obtain ⟨T, hT, hw, _⟩ := hi.own_val hEa hl (by rw [hm]; rfl)
       obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
-      obtain ⟨⟨t', ht'⟩, _⟩ := hown (by rw [hm]; rfl)
+      obtain ⟨hown', _⟩ := hown (by rw [hm]; rfl)
+      obtain ⟨t', ht'⟩ : ∃ t', Ea.ty = .vec t' := by
+        cases hte : Ea.ty <;> simp_all [Ty.owning, Ty.isProd]
       rw [ht'] at hw
       cases hw with
       | @node _ c d es _ =>
@@ -402,7 +407,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr he
         exact ⟨_, by rw [hT]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
-      have hr := RhsT.copyRoot (F := F) hEa hl hm
+      have hr := RhsT.copyRoot (F := F) hEa hl hm hnp
       obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
       exact ⟨v, by rw [hv]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
@@ -434,12 +439,13 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     · have hk' := h.rootKeep hi hb (hu _ (derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd)
         |>.imp id (fun h' => h'.2)))
       exact ⟨hk'.vkeep, hk'.hkeep⟩
-    · exact (h.rootKeep hi hb (hu _ (Or.inr (held_vdeps (List.mem_map_of_mem hd))))).vkeep
+    · have hk' := h.rootKeep hi hb (hu _ (Or.inr (held_vdeps (List.mem_map_of_mem hd))))
+      exact ⟨hk'.vkeep, hk'.hkeep⟩
 
 end CallH
 
 theorem slot_empty {m : Mem} {E : Entry} {o : Bool} (ho : o = E.mode.ownSlot) (hl : E.live = false)
-    (hv : E.mode.ownSlot = true → ∃ t, E.ty = .vec t) : SlotOK m E ⟨o, none⟩ := by
+    (hv : E.mode.ownSlot = true → E.ty.owning = true) : SlotOK m E ⟨o, none⟩ := by
   refine ⟨ho, fun hos => ⟨hv hos, fun T hT => ?_, fun hl' => ?_⟩, fun _ hl' => ?_⟩
   · cases hT
   · rw [hl] at hl'; cases hl'
@@ -463,7 +469,7 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     obtain ⟨_, h1', _, hok, _⟩ := h.arg k hkl
     rw [hEa] at h1'; cases h1'
     rw [get_of hk] at hok
-    obtain ⟨hty, hm, s, hs⟩ := hok
+    obtain ⟨hty, hm, hs⟩ := hok
     have hpost := callPostAux_at fn.params args 0 k Γ (getD_of (h.len ▸ hkl)) (fun k' hk' he => by
       have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp he).1
       have hge : args.getD k' 0 = args.getD k 0 := by simp [List.getD, he]
@@ -474,7 +480,7 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     refine ⟨_, h.st_sinkArg hb hk, by rw [clean_ty, ht1]; exact hi.tyok hEa, slot_empty ?_ ?_ ?_⟩
     · rw [clean_mode, hm1, hm]; rfl
     · rw [clean_live]; exact hl
-    · intro _; rw [clean_ty, ht1, hty, hs]; exact ⟨s, rfl⟩
+    · intro _; rw [clean_ty, ht1, hty]; exact hs
   · have hu := h.frame_untouched hy hyx (fun k t hk he => hs ⟨k, t, hk, he⟩)
     have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
       intro pa hpa hm he
@@ -517,14 +523,20 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       have := hits_false_dep hsk hn dep hd0 he.symm
       cases dep.kind <;> simp [Eff.kills] at this
 
-theorem resTy_vec (h : CallH P Γ F x fn args m.nv) (ho : (resMode fn).ownSlot = true) : ∃ t, fn.resTy = .vec t := by
+theorem resTy_vec (h : CallH P Γ F x fn args m.nv) (ho : (resMode fn).ownSlot = true) : fn.resTy.owning = true := by
   obtain ⟨_, _, _, _, hv, _⟩ := h.fnok
   exact hv (by rw [← resMode_ownSlot]; exact ho)
 
 theorem param_ok (h : CallH P Γ F x fn args m.nv) {k : Nat} {p : PMode × Ty} (hk : fn.params[k]? = some p) :
-    p.2.ok = true ∧ (p.1 ≠ .inp → ∃ s, p.2 = .vec s) := by
+    p.2.ok = true ∧ (p.1 ≠ .inp → p.2.owning = true) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
-  exact hpar p (List.mem_of_getElem? hk)
+  obtain ⟨hok, _, hsink, hio⟩ := hpar p (List.mem_of_getElem? hk)
+  refine ⟨hok, fun hne => ?_⟩
+  obtain ⟨pm, t⟩ := p
+  cases pm with
+  | inp => exact absurd rfl hne
+  | sink => exact hsink rfl
+  | inout b => obtain ⟨s, hs⟩ := hio b rfl; simp only at hs; rw [hs]; rfl
 
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}

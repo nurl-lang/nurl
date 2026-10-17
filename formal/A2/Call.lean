@@ -49,11 +49,19 @@ theorem DomTy.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : DomTy Γ Γ' := by
   obtain ⟨E0, h0, hw0⟩ := hw.get' h
   exact ⟨E0, h0, hw0.2.1, hw0.1⟩
 
+theorem PushArg.domTy {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
+    (hy : Γ y = some Ey) (hp : PushArg Γ F y Ey t D Γ1) : DomTy Γ Γ1 := by
+  cases hp with
+  | move _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
+  | int => exact DomTy.refl Γ
+  | slice _ => exact DomTy.refl Γ
+
 theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
     DomTy Γ Γ1 := by
   cases hr with
   | @moveOwn y Ey hy _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | pop _ _ _ _ _ => exact (DomTy.refl Γ).kill _ _ _
+  | pair hy _ hpa1 hz _ hpa2 _ => exact (PushArg.domTy hy hpa1).trans (PushArg.domTy hz hpa2)
   | _ => exact DomTy.refl Γ
 
 theorem callPostAux_domTy {Γ0 : Ctx} {fn : Fn} {args : List Var} :
@@ -85,13 +93,6 @@ theorem CallT.domTy {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
   obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi)
   exact ⟨Ea, hEa⟩
 
-theorem PushArg.domTy {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
-    (hy : Γ y = some Ey) (hp : PushArg Γ F y Ey t D Γ1) : DomTy Γ Γ1 := by
-  cases hp with
-  | move _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
-  | int => exact DomTy.refl Γ
-  | slice _ => exact DomTy.refl Γ
-
 theorem DomTy.exitScope_fresh {Γ Γ1 Δ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
     (h1 : DomTy Γ Γ1) (h2 : DomTy (A2.setE Γ1 x E) Δ) : DomTy Γ (A2.exitScope x Δ) := by
   refine ⟨fun y => ?_, fun y E' hy => ?_⟩
@@ -118,6 +119,14 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | letv hks hx _ hr _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
+  | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ ih =>
+    intro _
+    have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
+    have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
+    have h1 : DomTy Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+      ((DomTy.refl Γ).kill .replace false y).setE ⟨E, hy, rfl, rfl⟩
+    refine DomTy.exitScope_fresh hx h1 (DomTy.exitScope_fresh ?_ (DomTy.refl _) (ih hks))
+    simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
   | panic => exact fun _ => DomTy.refl _
   | catchR => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
@@ -969,8 +978,8 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         show t = (callPe Γ fn.params args v).ty
         unfold callPe; rw [hget]; simp only [hae]
         split
-        · rename_i hi; rw [← hok, hi]
-        · exact hok.symm
+        · rename_i hi; rw [← hok.1, hi]
+        · exact hok.1.symm
       | sink => simp [paramE] at hm
       | inout b => simp [paramE] at hm
     · split at hv
@@ -988,8 +997,8 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
       cases pm with
       | inout b' =>
         simp only [paramE, Mode.inout.injEq] at hm; subst hm
-        obtain ⟨_, hvec⟩ := hpar _ hmem
-        obtain ⟨s, rfl⟩ := hvec (by simp)
+        obtain ⟨_, _, _, hvec⟩ := hpar _ hmem
+        obtain ⟨s, rfl⟩ := hvec b' rfl
         exact ⟨s, rfl, by simp [callS, bndOf, hget, Ty.elem]⟩
       | inp => simp [paramE] at hm
       | sink => simp [paramE] at hm

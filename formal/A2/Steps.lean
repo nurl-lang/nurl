@@ -349,7 +349,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     (pu1 : Pushed m1 Γ1 a v Dy) (post2 : RhsPost m1 m2 Γ1 Γ2 F) (pu2 : Pushed m2 Γ2 b w Dz)
     (hz : Γ1 z = some Ez) (hlz : Ez.live = true) (hbz : Ez.ty = b)
     (hpa2 : PushArg Γ1 F z Ez b Dz Γ2) (htk2 : TakeVal m1 z w m2)
-    (hzd : Ez.mode = .own → z ∉ roots Dy) (hok : a.ok = true ∧ b.ok = true) :
+    (hzd : Ez.mode.ownSlot = true → z ∉ roots Dy) (hok : a.ok = true ∧ b.ok = true) :
     RhsOut m2 Γ2 ⟨.prod a b, .own, true, [], Dy ++ Dz⟩ (.pair v w) true := by
   -- an owned slot holds a value of an owning type
   have own_ty : ∀ {x : Val}, m1.st z = some ⟨true, some x⟩ → b.owning = true := by
@@ -387,7 +387,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
   have hvkeep : ∀ dep ∈ Dy, VKeep m1 m2 dep := by
     intro dep hd
     rcases hcase with ⟨hzF, hm, _, rfl⟩ | ⟨_, rfl⟩
-    · have hne : dep.root ≠ z := fun h => hzd hm (h ▸ List.mem_map_of_mem hd)
+    · have hne : dep.root ≠ z := fun h => hzd (by rw [hm]; rfl) (h ▸ List.mem_map_of_mem hd)
       exact (keep_notx hi1 hanch1 hzF (fun o ho => by simp [upd_ne _ _ ho])
         (pu1.root dep.root (List.mem_map_of_mem hd)) hne).1
     · exact fun _ _ _ _ h => h
@@ -514,10 +514,10 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post2, pu2⟩ := push_take post1.inv hanch1 hz hlz rfl hpa2 htk2
       exact ⟨post1.trans post2, out_pair post1.inv hanch1 pu1 post2 pu2 hz hlz rfl hpa2 htk2 hzd
         ⟨hi.tyok hy, post1.inv.tyok hz⟩⟩
-  | fst hy hl hty =>
+  | fst hy hl hty _ =>
     cases he with
     | fst hv => exact ⟨RhsPost.same hi, out_fst hi hy hl hty hv⟩
-  | snd hy hl hty =>
+  | snd hy hl hty _ =>
     cases he with
     | snd hv => exact ⟨RhsPost.same hi, out_snd hi hy hl hty hv⟩
 

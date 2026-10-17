@@ -222,12 +222,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | pair {y z : Var} {Ey Ez : Entry} {Γ1 Γ2 : Ctx} {Dy Dz : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
-      (Ez.mode = .own → z ∉ roots Dy) →
+      (Ez.mode.ownSlot = true → z ∉ roots Dy) →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.snd y) (projE y E b) Γ
 
 /-! ### Calls -/
 
