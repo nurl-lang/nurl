@@ -18,7 +18,7 @@ theorem sum_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
     rw [ht] at hok; rw [hm]
-    rcases hok with ⟨x, rfl, _⟩ | ⟨x, rfl, _⟩
+    rcases valOK_sum.mp hok with ⟨x, rfl, _⟩ | ⟨x, rfl, _⟩
     · exact ⟨_, Or.inl hv⟩
     · exact ⟨_, Or.inr hv⟩
 
@@ -37,7 +37,7 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
         rw [ht] at h'; cases h'
     obtain ⟨v, hv, hok⟩ := hi.bor_val hx hl hos
     rw [ht] at hok
-    obtain ⟨n, rfl⟩ := hok
+    obtain ⟨n, rfl⟩ := valOK_int.mp hok
     exact ⟨n, Eval.var hv⟩
   | add _ _ iha ihb =>
     obtain ⟨p, hp⟩ := iha; obtain ⟨q, hq⟩ := ihb; exact ⟨_, Eval.add hp hq⟩
@@ -93,7 +93,7 @@ theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (h
     exact ⟨_, _, _, hT⟩
   all_goals
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
-    rw [ht] at hok; obtain ⟨x, z, rfl, _⟩ := hok
+    rw [ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
     exact ⟨_, _, _, hv⟩
 
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)

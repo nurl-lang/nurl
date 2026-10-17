@@ -180,7 +180,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           · obtain ⟨ht, _⟩ := hown hos
             rw [hint] at ht; cases ht
           · obtain ⟨w, hw, hok'⟩ := hbor hos hl'
-            exact ⟨w, hw, by rw [hint] at hok' ⊢; exact hok'⟩
+            exact ⟨w, hw, by rw [hint] at hok' ⊢; obtain ⟨n, rfl⟩ := valOK_int.mp hok'; exact .int⟩
         · refine hslot.keep fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb

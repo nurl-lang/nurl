@@ -249,7 +249,7 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     | bor hv =>
       rw [hw] at hv; cases hv
       rw [hty] at hok
-      obtain ⟨n, rfl⟩ := hok
+      obtain ⟨n, rfl⟩ := valOK_int.mp hok
       exact ⟨RhsPost.same hi, Pushed.mk WFv.int (fun _ _ h => (by cases h)) (by simp) (by simp)
         (by simp) (by simp [roots]) (selfFree_int n)⟩
   | slice hm =>
@@ -269,7 +269,7 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
           rw [hder, ← hty]; exact (out_copyBor hi hy hl h hv).valBor h
         · rw [← hty]
           exact (out_borrowWhole hi hy hl (Or.inl hnown) (Or.inl hv) (Or.inl h)).valBor rfl
-      obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hok
+      obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := valOK_slice.mp hok
       have hnint : Ey.ty ≠ .int := by rw [hty]; simp
       refine ⟨RhsPost.same hi, Pushed.mk WFv.view (fun s' v' hin => ?_) (by simp) (by simp)
         (by simp) ?_ (selfFree_view d o l)⟩
@@ -458,7 +458,8 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
   | @view s d o l =>
     refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ => wf_append hwfH hwfH, fun h => (by cases h), fun _ => ?_⟩
     obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hvsT s _ (hvin s _ ViewIn.here)
-    exact ⟨d', o', l', hv, dep, hd, ha⟩
+    cases hv
+    exact .view ⟨dep, hd, ha⟩
   | @node u c d es hes =>
     refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
       compE] using hr), fun _ => ⟨rfl, WFv.node hes, fun s v h => hvsT s v (hvin s v h),
@@ -616,7 +617,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       · rw [hty] at hw hvs; cases hw with
         | inl ha => exact ⟨ha, fun s x hin => hvs s x (ViewIn.inl hin)⟩
       · rw [hty] at h
-        rcases h with ⟨x, hx, h⟩ | ⟨x, hx, _⟩ <;> cases hx
+        rcases valOK_sum.mp h with ⟨x, hx, h⟩ | ⟨x, hx, _⟩ <;> cases hx
         exact h
   | getr hy hl hty =>
     cases he with
@@ -628,7 +629,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       · rw [hty] at hw hvs; cases hw with
         | inr hb => exact ⟨hb, fun s x hin => hvs s x (ViewIn.inr hin)⟩
       · rw [hty] at h
-        rcases h with ⟨x, hx, _⟩ | ⟨x, hx, h⟩ <;> cases hx
+        rcases valOK_sum.mp h with ⟨x, hx, _⟩ | ⟨x, hx, h⟩ <;> cases hx
         exact h
   | takel hy hl hm hty hyF =>
     cases he with
@@ -712,7 +713,7 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
       refine ⟨v, rfl, ?_⟩
       show ValOK m' E.ty v E.path E.held
       by_cases hint : E.ty = .int
-      · have := out.valBor hE; rw [hint] at this ⊢; exact this
+      · have := out.valBor hE; rw [hint] at this ⊢; obtain ⟨n, rfl⟩ := valOK_int.mp this; exact .int
       · refine (out.valBor hE).keep (fun dep hd' => hkeepE hint dep ?_) (fun dep hd' => hkeepE hint dep ?_)
         · simp [Entry.vdeps, hE, Mode.ownSlot, hd']
         · simp [Entry.vdeps, hE, Mode.ownSlot, hd']
@@ -1117,37 +1118,30 @@ theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
     {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H) :
     ValOK (m.remove p) τ v (reroot p (Ep.path ++ Ep.held) P) (reroot p (Ep.path ++ Ep.held) H) := by
-  induction τ generalizing v P H with
-  | int => exact hv
-  | prod a b iha ihb =>
-    obtain ⟨x, y, rfl, hx, hy⟩ := hv
-    have happ : reroot p (Ep.path ++ Ep.held) (P ++ H) = reroot p (Ep.path ++ Ep.held) P ++ reroot p (Ep.path ++ Ep.held) H := by
-      simp [reroot, List.flatMap_append]
-    refine ⟨x, y, rfl, ?_, ?_⟩
-    · have := iha hx; rwa [happ] at this
-    · have := ihb hy; rwa [happ] at this
-  | sum a b iha ihb =>
-    have happ : reroot p (Ep.path ++ Ep.held) (P ++ H) = reroot p (Ep.path ++ Ep.held) P ++ reroot p (Ep.path ++ Ep.held) H := by
-      simp [reroot, List.flatMap_append]
-    rcases hv with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · refine Or.inl ⟨x, rfl, ?_⟩
-      have := iha hx; rwa [happ] at this
-    · refine Or.inr ⟨x, rfl, ?_⟩
-      have := ihb hx; rwa [happ] at this
-  | slice t =>
-    obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv
+  have happ : ∀ P H : List Dep, reroot p (Ep.path ++ Ep.held) (P ++ H) =
+      reroot p (Ep.path ++ Ep.held) P ++ reroot p (Ep.path ++ Ep.held) H := by
+    intro P H; simp [reroot, List.flatMap_append]
+  induction hv with
+  | int => exact .int
+  | pair _ _ ihx ihy =>
+    have hx := ihx; have hy := ihy
+    rw [happ] at hx hy; exact .pair hx hy
+  | inl _ ih => have hx := ih; rw [happ] at hx; exact .inl hx
+  | inr _ ih => have hx := ih; rw [happ] at hx; exact .inr hx
+  | view h =>
+    obtain ⟨dep, hd, ha⟩ := h
     obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hlt hd ha
-    exact ⟨d, o, l, rfl, dep', hd', ha'⟩
-  | vec t =>
-    obtain ⟨c, rfl, dep, hd, n0, d, es, hr, hl, hw, hvs⟩ := hv
+    exact .view ⟨dep', hd', ha'⟩
+  | @href t c P H h =>
+    obtain ⟨dep, hd, n0, d, es, hr, hl, hw, hvs⟩ := h
     have hvs' := reroot_views hh hp hok hlt hvs
     by_cases hrp : dep.root = p
     · obtain ⟨r, k⟩ := dep
       simp only at hrp hr hl; subst hrp
       obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
-      exact ⟨c, rfl, ⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hd', n1, d, es,
+      exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hd', n1, d, es,
         rootKeep_rmbor hp (hlt d' hd') n1 hr1, lands_comp' hl1 hl, hw, hvs'⟩
-    · exact ⟨c, rfl, dep, mem_reroot_of_ne hd hrp, n0, d, es, rootKeep_rmbor hp hrp n0 hr, hl, hw, hvs'⟩
+    · exact .href ⟨dep, mem_reroot_of_ne hd hrp, n0, d, es, rootKeep_rmbor hp hrp n0 hr, hl, hw, hvs'⟩
 
 end rbind
 

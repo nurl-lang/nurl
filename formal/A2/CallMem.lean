@@ -49,7 +49,7 @@ theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : Slo
         refine ⟨v, hv, ?_⟩
         simp only
         rw [hi] at hok ⊢
-        exact hok
+        exact hok.int_any
       · rw [hd] at hl; cases hl
   · exact h
 
@@ -421,7 +421,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
   split
   · rename_i hn
     rw [hn] at hok0
-    exact hok0
+    exact hok0.int_any
   · rename_i hn
     -- every root it is valid through is untouched by the call
     have hu : ∀ r, (r = args.getD k 0 ∧ Ea.mode.isRoot = true) ∨ r ∈ roots Ea.vdeps →

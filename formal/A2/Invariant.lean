@@ -85,13 +85,61 @@ def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
   ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
     WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H
 
-/-- A borrowed value of type `τ`, depending on `P` and holding `H`. -/
-def ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
-  | .int, v, _, _ => ∃ n, v = .int n
-  | .vec t, v, P, H => ∃ c, v = .href c ∧ ∃ dep ∈ P, HrefAt m dep c t H
-  | .slice t, v, P, _ => ∃ d o l, v = .view d o l ∧ ∃ dep ∈ P, ViewAt m dep d o l t
-  | .prod a b, v, P, H => ∃ x y, v = .pair x y ∧ ValOK m a x (P ++ H) H ∧ ValOK m b y (P ++ H) H
-  | .sum a b, v, P, H => (∃ x, v = .inl x ∧ ValOK m a x (P ++ H) H) ∨ (∃ x, v = .inr x ∧ ValOK m b x (P ++ H) H)
+/-- A borrowed value of type `τ`, depending on `P` and holding `H`.  The parts
+    of a borrowed struct are valid through what it depends on or holds. -/
+inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
+  | int {n : Nat} {P H : List Dep} : ValOK m .int (.int n) P H
+  | href {t : Ty} {c : Nat} {P H : List Dep} :
+      (∃ dep ∈ P, HrefAt m dep c t H) → ValOK m (.vec t) (.href c) P H
+  | view {t : Ty} {d o l : Nat} {P H : List Dep} :
+      (∃ dep ∈ P, ViewAt m dep d o l t) → ValOK m (.slice t) (.view d o l) P H
+  | pair {a b : Ty} {x y : Val} {P H : List Dep} :
+      ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
+  | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
+  | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
+
+section ValOK
+variable {m : Mem} {v : Val} {P H : List Dep}
+
+theorem valOK_int : ValOK m .int v P H ↔ ∃ n, v = .int n := by
+  constructor
+  · intro h; cases h; exact ⟨_, rfl⟩
+  · rintro ⟨n, rfl⟩; exact .int
+
+theorem valOK_vec {t : Ty} : ValOK m (.vec t) v P H ↔ ∃ c, v = .href c ∧ ∃ dep ∈ P, HrefAt m dep c t H := by
+  constructor
+  · intro h; cases h with | href h => exact ⟨_, rfl, h⟩
+  · rintro ⟨c, rfl, h⟩; exact .href h
+
+theorem valOK_slice {t : Ty} :
+    ValOK m (.slice t) v P H ↔ ∃ d o l, v = .view d o l ∧ ∃ dep ∈ P, ViewAt m dep d o l t := by
+  constructor
+  · intro h; cases h with | view h => exact ⟨_, _, _, rfl, h⟩
+  · rintro ⟨d, o, l, rfl, h⟩; exact .view h
+
+theorem valOK_prod {a b : Ty} :
+    ValOK m (.prod a b) v P H ↔ ∃ x y, v = .pair x y ∧ ValOK m a x (P ++ H) H ∧ ValOK m b y (P ++ H) H := by
+  constructor
+  · intro h; cases h with | pair hx hy => exact ⟨_, _, rfl, hx, hy⟩
+  · rintro ⟨x, y, rfl, hx, hy⟩; exact .pair hx hy
+
+theorem valOK_sum {a b : Ty} :
+    ValOK m (.sum a b) v P H ↔
+      (∃ x, v = .inl x ∧ ValOK m a x (P ++ H) H) ∨ (∃ x, v = .inr x ∧ ValOK m b x (P ++ H) H) := by
+  constructor
+  · intro h
+    cases h with
+    | inl hx => exact Or.inl ⟨_, rfl, hx⟩
+    | inr hx => exact Or.inr ⟨_, rfl, hx⟩
+  · rintro (⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩)
+    · exact .inl hx
+    · exact .inr hx
+
+/-- An integer depends on nothing. -/
+theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : ValOK m' .int v P' H' := by
+  cases h; exact .int
+
+end ValOK
 
 mutual
 def Val.ids : Val → List Nat
