@@ -1,4 +1,4 @@
-import A2.Steps
+import A2.Panic
 
 /-! A2 — facts about the typing rules themselves. -/
 
@@ -175,5 +175,81 @@ theorem Weaker.exitRoot {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (p : Var) (D : List 
       · exact hroot _ (hw.2 v E0 hE hl hn _ (List.mem_map_of_mem hd0)) hne
       · obtain ⟨hne, hex⟩ := hD d' hd'
         exact hroot _ hex hne
+
+
+/-! ### The invariant of what runs inside a run-time form -/
+
+theorem catchOK_src {m : Mem} {s : Stmt} (h : s.src = true) : CatchOK m s := by
+  induction s with
+  | seq a b iha _ => simp only [Stmt.src, Bool.and_eq_true] at h; exact iha h.1
+  | _ => simp_all [Stmt.src, CatchOK]
+
+theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m Γ F (.seq a b)) :
+    Inv m Γ F a :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := hi.nvF
+    anch := hi.anch
+    spineNd := hi.spineNd
+    spineDom := hi.spineDom
+    catchOK := hi.catchOK
+    cover := hi.cover }
+
+theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry}
+    (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F k :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := hi.nvF
+    anch := fun p E hp hm hps => hi.anch p E hp hm (by
+      simp only [Stmt.spine, List.mem_cons, not_or]
+      refine ⟨fun h => ?_, hps⟩
+      subst h; rw [hx] at hp; cases hp; exact hnrb hm)
+    spineNd := by
+      have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
+    spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
+    catchOK := hi.catchOK
+    cover := hi.cover }
+
+theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
+    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : ∀ r ∈ roots Ep.vdeps, r ∈ F) :
+    Inv m Γ F k :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := hi.nvF
+    anch := fun q E hq hmq hqs => by
+      by_cases hqp : q = p
+      · subst hqp; rw [hp] at hq; cases hq; exact hroots
+      · exact hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])
+    spineNd := by
+      have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
+    spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
+    catchOK := hi.catchOK
+    cover := hi.cover }
+
+theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k)) :
+    Inv m Γ (F ++ z) k :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := fun v hv => by
+      rcases List.mem_append.mp hv with hv | hv
+      · exact hi.nvF v hv
+      · exact hi.nvS v (by simp [Stmt.vars, hv])
+    anch := fun p E hp hm hps r hr => List.mem_append_left _ (hi.anch p E hp hm hps r hr)
+    spineNd := hi.spineNd
+    spineDom := hi.spineDom
+    catchOK := hi.catchOK
+    cover := hi.cover }
+
+theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (.ok v o m1))
+    {x : Var} (hx : m.st x = none) : m1.st x = none := by
+  cases he with
+  | new => exact hx
+  | @moveOwn y _ hy =>
+    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
+    simp [Mem.set, upd_ne _ _ this, hx]
+  | @pop y _ _ _ _ _ hy _ _ =>
+    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
+    simp [Mem.set, upd_ne _ _ this, hx]
+  | _ => exact hx
 
 end A2

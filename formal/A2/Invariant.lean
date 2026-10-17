@@ -99,7 +99,21 @@ def Stmt.spine : Stmt → List Var
   | .scope x s => x :: s.spine
   | .rbind p s => p :: s.spine
   | .frozen _ s => s.spine
+  | .catchR _ _ s => s.spine
   | _ => []
+
+/-- Nothing leaks: every live address is in a tree some binding owns. -/
+def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
+
+/-- A `recover` frame returns to its caller's store: every binding outside
+    the frames it has opened (and its result `x`) is as the caller left it. -/
+def CatchOK (m : Mem) : Stmt → Prop
+  | .seq a _ => CatchOK m a
+  | .scope _ s => CatchOK m s
+  | .rbind _ s => CatchOK m s
+  | .frozen _ s => CatchOK m s
+  | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧ m0.nv ≤ m.nv ∧ CatchOK m s
+  | _ => True
 
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
@@ -120,5 +134,93 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
   anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∈ F
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
+  catchOK   : CatchOK m s
+  cover     : Covers m
+
+/-! ### Typing of statements
+
+Here, after the invariant, because the run-time form of a `recover` frame
+is typed by the store it will return to. -/
+
+/-- The bindings outside `sp` are those of `Δ`, with their modes and types,
+    and a borrowed parameter's entry unchanged. -/
+def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
+  (∀ v E, Γ v = some E → v ∉ sp →
+    ∃ E', Δ v = some E' ∧ E'.mode = E.mode ∧ E'.ty = E.ty ∧ (E.mode = .rootb → E' = E)) ∧
+  (∀ v E', Δ v = some E' → v ∉ sp ∧ ∃ E, Γ v = some E)
+
+inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
+  | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
+  | seq {Γ Γ1 Δ : Ctx} {F : List Var} {a b : Stmt} :
+      b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
+  | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
+      s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
+      StmtT P Γ F (.letv x r s) (exitScope x Δ)
+  | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
+      {E : Entry} :
+      s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
+      StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+  | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ →
+      StmtT P Γ F (.scope x s) (exitScope x Δ)
+  | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
+      Γ p = some E → E.mode = .rootb → E.live = true → (∀ r ∈ roots E.vdeps, r ∈ F) → p ∉ F →
+      StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p E.path Δ)
+  | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
+      StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
+  | assign {Γ Γ1 : Ctx} {F : List Var} {x : Var} {r : Rhs} {Ex E : Entry} :
+      Γ x = some Ex → x ∉ F →
+      (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
+        Ex.mode = .bor ∧ E.mode = .bor) →
+      RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome →
+      StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
+  | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
+      a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
+      StmtT P Γ F (.ite c a b) Δ
+  | while {Γ : Ctx} {F : List Var} {c : Expr} {s : Stmt} :
+      s.src = true → ExprT Γ c → StmtT P Γ F s Γ → StmtT P Γ F (.while c s) Γ
+  | push {Γ Γ1 : Ctx} {F : List Var} {x y : Var} {Ex Ey Ex1 : Entry} {t : Ty} {D : List Dep} :
+      Γ x = some Ex → Ex.live = true → Ex.ty = .vec t → canDo Ex.mode .realloc → x ∉ F →
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
+      PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
+      Γ1 x = some Ex1 → Ex1.live = true →
+      StmtT P Γ F (.push x y)
+        (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D })
+  | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
+      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F →
+      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
+  | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
+      Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
+  | panic {Γ : Ctx} {F : List Var} : StmtT P Γ F .panic Γ
+  | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
+      s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
+      fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
+      StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+  | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
+      StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
+      MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
+      (∀ p E, Δ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F) →
+      KeepOut Γ Δ s.spine →
+      StmtT P Γ F (.catchR x m0 s) Δ
+
+/-- A function is well-typed when its body is, from its own view of the
+    parameters, and ends as its summary says: the result is set and borrows
+    and holds only what `lends` and `rholds` name, every `inout` parameter
+    is set again and holds only what `outHolds` names. -/
+def FnOK (P : Prog) (fn : Fn) : Prop :=
+  fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
+  fn.resTy.ok = true ∧ (fn.resOwn = true → ∃ s, fn.resTy = .vec s) ∧
+  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 ≠ .inp → ∃ s, pt.2 = .vec s)) ∧
+  (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧
+  (∀ o ∈ fn.outHolds, lendable fn o.2.1) ∧
+  ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
+    (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
+      Er.mode = resMode fn ∧
+      (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
+      (∀ d ∈ Er.held, (d.root, d.kind) ∈ fn.rholds)) ∧
+    (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b →
+      ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds)
+
+def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
 end A2

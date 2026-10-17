@@ -78,25 +78,29 @@ theorem Inv.leafAnch {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m 
 theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hm : MInv m' Γ') (hnv : m.nv ≤ m'.nv) (hvars : ∀ v ∈ s'.vars, v < m'.nv)
     (hanch : ∀ p E, Γ' p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
-    (hs' : s'.spine = []) : Inv m' Γ' F s' :=
+    (hs' : s'.spine = []) (hc : Covers m') (hck : CatchOK m' s') : Inv m' Γ' F s' :=
   { toMInv := hm
     nvS := hvars
     nvF := fun v hv => Nat.lt_of_lt_of_le (hi.nvF v hv) hnv
     anch := fun p E hp hmd _ => hanch p E hp hmd
     spineNd := by rw [hs']; exact List.nodup_nil
-    spineDom := by rw [hs']; simp }
+    spineDom := by rw [hs']; simp
+    catchOK := hck
+    cover := hc }
 
 theorem vars_sub {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {s' : Stmt}
     (h : ∀ v ∈ s'.vars, v ∈ s.vars) : ∀ v ∈ s'.vars, v < m.nv := fun v hv => hi.nvS v (h v hv)
 
 theorem Inv.respine {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {s' : Stmt}
-    (hsp : s'.spine = s.spine) (hv : ∀ v ∈ s'.vars, v < m.nv) : Inv m Γ F s' :=
+    (hsp : s'.spine = s.spine) (hv : ∀ v ∈ s'.vars, v < m.nv) (hck : CatchOK m s') : Inv m Γ F s' :=
   { toMInv := hi.toMInv
     nvS := hv
     nvF := hi.nvF
     anch := fun p E hp hm hs => hi.anch p E hp hm (by rw [← hsp]; exact hs)
     spineNd := by rw [hsp]; exact hi.spineNd
-    spineDom := by rw [hsp]; exact hi.spineDom }
+    spineDom := by rw [hsp]; exact hi.spineDom
+    catchOK := hck
+    cover := hi.cover }
 
 /-- The call case, proven separately (`Call.lean`). -/
 def CallCase (P : Prog) : Prop :=
@@ -139,10 +143,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         · exact hb
         · exact hb.weakenIn hw
       · exact hi.respine (by rw [src_spine hbsrc]; rfl) (fun v hv => hi.nvS v (by simp [Stmt.vars, hv]))
+          (catchOK_src hbsrc)
     | seqL hst' =>
-      obtain ⟨Γ', ht', hi', hnv, hk⟩ := iha (hi.respine rfl (fun v hv => hi.nvS v (by
-        simp [Stmt.vars, hv]))) hst'
-      refine ⟨Γ', StmtT.seq hbsrc ht' hb, hi'.respine rfl (fun v hv => ?_), hnv, hk⟩
+      obtain ⟨Γ', ht', hi', hnv, hk⟩ := iha hi.seqIn hst'
+      refine ⟨Γ', StmtT.seq hbsrc ht' hb, hi'.respine rfl (fun v hv => ?_) hi'.catchOK, hnv, hk⟩
       simp only [Stmt.vars, List.mem_append] at hv
       rcases hv with hv | hv
       · exact hi'.nvS v hv
@@ -163,7 +167,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs, ?_, by simp [post.nv], ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
-          (by simp [Stmt.spine, hsp, setE])
+          (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
+          (covers_take (covers_evalR hi.cover he) (fun T h => by
+            unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
         · simp only [Mem.set_nv, post.nv]
           simp only [Stmt.vars, List.mem_cons] at hv
           rcases hv with rfl | hv
@@ -195,23 +201,24 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
       have hanch := hi.leafAnch rfl
       have post := step_assign hi.toMInv hanch hx hxF hmodes hr hty hxd he hsl hd
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
-        (post.rel.anch hanch) rfl, by rw [post.nv]; simp, post.rel.keep rfl rfl⟩
+        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial, by rw [post.nv]; simp, post.rel.keep rfl rfl⟩
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hi hst
     cases hst with
     | iteT _ _ =>
       exact ⟨_, ha, hi.respine (by rw [src_spine hsa]; rfl) (fun v hv => hi.nvS v (by
-        simp [Stmt.vars, hv])), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa)⟩
+        simp [Stmt.vars, hv])) (catchOK_src hsa), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa)⟩
     | iteF _ =>
       exact ⟨_, hb, hi.respine (by rw [src_spine hsb]; rfl) (fun v hv => hi.nvS v (by
-        simp [Stmt.vars, hv])), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb)⟩
+        simp [Stmt.vars, hv])) (catchOK_src hsb), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb)⟩
   | «while» hsrc hc hs _ =>
     intro m m' s' hi hst
     cases hst with
     | «while» =>
       refine ⟨_, StmtT.ite (by simp [Stmt.src, hsrc]) rfl hc
         (StmtT.seq (by simp [Stmt.src, hsrc]) hs (StmtT.while hsrc hc hs)) StmtT.skip,
-        hi.respine rfl (fun v hv => hi.nvS v ?_), Nat.le_refl _, (CtxRel.refl _).keep rfl rfl⟩
+        hi.respine rfl (fun v hv => hi.nvS v ?_) (catchOK_src (by simp [Stmt.src, hsrc])), Nat.le_refl _,
+        (CtxRel.refl _).keep rfl rfl⟩
       simp only [Stmt.vars, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
       grind
   | @push Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 =>
@@ -222,11 +229,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
       push_take hi.toMInv hanch hy hly htyy hpa htk
     have fin : ∀ {m1 m' : Mem} {v : Val}, TakeVal m y v m1 →
         MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D }) →
-        m'.nv = m1.nv →
+        m'.nv = m1.nv → Covers m' →
         ∃ Γ', StmtT P Γ' F .skip (setE (kill .realloc t.holdsView x Γ1) x
             { Ex1 with held := Ex1.held ++ D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
           Keep Γ Γ' (.push x y) .skip := by
-      intro m1 m' v htk hinv hnv
+      intro m1 m' v htk hinv hnv hcov
       obtain ⟨post, _⟩ := hgo htk
       have hanch1 := post.rel.anch hanch
       obtain ⟨E0, h0, hm0, ht0⟩ := post.rel.mode x Ex1 hx1
@@ -237,7 +244,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
             (by rw [killE_mode]) (by rw [killE_ty]) (by
               rw [killE_mode, hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp)))
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
-        (by simp [Stmt.vars]) (hrel.anch hanch) rfl, by rw [hnv, post.nv]; exact Nat.le_refl _,
+        (by simp [Stmt.vars]) (hrel.anch hanch) rfl hcov trivial, by rw [hnv, post.nv]; exact Nat.le_refl _,
         hrel.keep rfl rfl⟩
     have prep : ∀ {m1 : Mem} {v : Val}, TakeVal m y v m1 →
         Pushed m1 Γ1 t v D ∧ MInv m1 Γ1 ∧ canDo Ex1.mode .realloc ∧ Ex1.ty = .vec t ∧
@@ -251,11 +258,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
     | push htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp hxD
-        (Or.inl ⟨rfl, rfl, rfl⟩)) rfl
+        (Or.inl ⟨rfl, rfl, rfl⟩)) rfl (covers_push (covers_takeVal hi.cover htk) hT)
     | pushRealloc htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp hxD
-        (Or.inr ⟨rfl, rfl, rfl⟩)) rfl
+        (Or.inr ⟨rfl, rfl, rfl⟩)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
   | @free Γ F x E t hx hl hm hty hxF =>
     intro m m' s' hi hst
     cases hst with
@@ -266,7 +273,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         (CtxRel.kill hanch hxF .replace false).trans
         (CtxRel.setE (x := x) (Ex := killE .replace false x E) (by simp [A2.kill, hx])
           (by rw [killE_mode]) (by rw [killE_ty]) (by rw [killE_mode, hm]; simp))
-      exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anch hanch) rfl,
+      exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anch hanch) rfl
+        (covers_free hi.cover ht hf) trivial,
         by simp, hrel.keep rfl rfl⟩
   | @scope Γ Δ1 F x k hxE hxF hs ihs =>
     intro m m' s' hi hst
@@ -289,7 +297,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl, by simp, ?_, ?_⟩
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl
+        (covers_remove hi.cover hsl hd) trivial, by simp, ?_, ?_⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf (Or.inr (hw.exitScope x))
@@ -307,17 +316,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
     | scopeIn hst' =>
-      have hi0 : Inv m Γ F k :=
-        { toMInv := hi.toMInv
-          nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
-          nvF := hi.nvF
-          anch := fun p E hp hm hps => hi.anch p E hp hm (by
-            simp only [Stmt.spine, List.mem_cons, not_or]
-            refine ⟨fun h => ?_, hps⟩
-            subst h; rw [hx] at hp; cases hp; exact hnrb hm)
-          spineNd := by
-            have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
-          spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv]) }
+      have hi0 : Inv m Γ F k := hi.scopeIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk⟩ := ihs hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scope ⟨Ex', hx', by rw [hm']; exact hnrb⟩ hxF ht', ?_, hnv, ?_, ?_⟩
@@ -335,7 +334,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
             simp only [Stmt.spine, List.mem_cons] at hv
             rcases hv with rfl | hv
             · exact ⟨Ex', hx'⟩
-            · exact hi'.spineDom v hv }
+            · exact hi'.spineDom v hv
+          catchOK := hi'.catchOK
+          cover := hi'.cover }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -367,8 +368,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvp, E, rfl, rfl⟩
       have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
-      refine ⟨exitRoot p Ep.path Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl,
-        by simp, ?_, ?_⟩
+      refine ⟨exitRoot p Ep.path Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl
+        (covers_remove_bor hi.cover hsl) trivial, by simp, ?_, ?_⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · refine StmtT.skip.weakenOut hinv.wf (Or.inr (hw.exitRoot p Ep.path fun d hd => ?_))
@@ -395,14 +396,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
         obtain ⟨hvp, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvp], E, hE⟩
     | rbindIn hst' =>
-      have hi0 : Inv m Γ F k :=
-        { toMInv := hi.toMInv
-          nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
-          nvF := hi.nvF
-          anch := hanchk
-          spineNd := by
-            have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
-          spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv]) }
+      have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
       obtain ⟨Γ', ht', hi', hnv, hk⟩ := ihs hi0 hst'
       obtain ⟨hpsp', Ep', hp', _, _, hrb⟩ := hk.1 p Ep hp hpsp
       have hEp : Ep' = Ep := hrb hm
@@ -422,7 +416,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
             simp only [Stmt.spine, List.mem_cons] at hv
             rcases hv with rfl | hv
             · exact ⟨Ep', hp'⟩
-            · exact hi'.spineDom v hv }
+            · exact hi'.spineDom v hv
+          catchOK := hi'.catchOK
+          cover := hi'.cover }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -435,22 +431,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
     intro m m' s' hi hst
     cases hst with
     | frozenSkip =>
-      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]), Nat.le_refl _,
+      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial, Nat.le_refl _,
         (CtxRel.refl Γ).keep rfl rfl⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf (Or.inr hw)
     | frozenIn hst' =>
-      have hi0 : Inv m Γ (F ++ z) k :=
-        { toMInv := hi.toMInv
-          nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
-          nvF := fun v hv => by
-            rcases List.mem_append.mp hv with hv | hv
-            · exact hi.nvF v hv
-            · exact hi.nvS v (by simp [Stmt.vars, hv])
-          anch := fun p E hp hm hps r hr => List.mem_append_left _ (hi.anch p E hp hm hps r hr)
-          spineNd := hi.spineNd
-          spineDom := hi.spineDom }
+      have hi0 : Inv m Γ (F ++ z) k := hi.frozenIn
       obtain ⟨Γ', ht', hi', hnv, hk⟩ := ihs hi0 hst'
       refine ⟨Γ', StmtT.frozen ht', ?_, hnv, hk⟩
       exact
@@ -469,6 +456,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) {Γ : Ctx} {F : List Var} {s : 
             rw [hrb hm0]
             exact hi.anch p E0 h0 hm0 hps0
           spineNd := hi'.spineNd
-          spineDom := hi'.spineDom }
+          spineDom := hi'.spineDom
+          catchOK := hi'.catchOK
+          cover := hi'.cover }
 
 end A2
