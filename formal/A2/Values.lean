@@ -61,20 +61,6 @@ theorem viewAt_iff {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} :
     · exact Or.inl ⟨h1, h2⟩
     · exact Or.inr ⟨h1, h2⟩
 
-theorem Lands.sub {k : Kind} {n n0 : Val} (h : Lands k n n0) : Sub n n0 := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩
-  · exact Sub.refl _
-  · exact Sub.refl _
-  · exact hb.sub
-
-/-- Every node a root reaches is inside some owned tree. -/
-theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
-    ∃ o T, OwnedAt m o T ∧ Sub n T := by
-  rcases h with h | ⟨c, _, o, T, hT, hs, _⟩ | ⟨d, _, _, _, o, T, hT, hs, _⟩
-  · exact ⟨r, n, h, Sub.refl _⟩
-  · exact ⟨o, T, hT, hs⟩
-  · exact ⟨o, T, hT, hs⟩
-
 /-- The `Vec` node a live binding of type `vec t` names, with the
     dependency of its own that reaches it (for a root: the binding itself). -/
 theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
@@ -93,7 +79,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
       rename_i c d es
       have ha := hi.heap.alloc y _ hT
       refine ⟨c, d, es, ⟨(ha c (by simp)).1, (ha d (by simp)).1, Or.inl hT⟩, WFv.node hes, hv,
-        fun _ => Or.inl hT, fun h => by rw [hm] at h; cases h⟩
+        fun _ => Or.inl ⟨_, hT, Top.refl _⟩, fun h => by rw [hm] at h; cases h⟩
   all_goals
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
@@ -106,7 +92,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     have ha := hi.heap.alloc o T hoT
     refine ⟨c, d, es, ⟨(ha c ((hsub.trans hsT).ids c (by simp))).1,
       (ha d ((hsub.trans hsT).ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
-      fun _ => Or.inr (Or.inl ⟨c, hv, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩⟩
+      fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩⟩
 
 /-- The buffer a live slice binding views. -/
 theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
@@ -132,7 +118,7 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     have hda : DataAt m d (.node t c d es) := ⟨o', T, hoT, hsub.trans hsT, t, c, es, rfl⟩
     have ha := hi.heap.alloc o' T hoT
     exact ⟨d, o, l, c, es, hv, hda, (ha d ((hsub.trans hsT).ids d (by simp))).1, hlen, hw,
-      fun _ => Or.inr (Or.inr ⟨d, o, l, hv, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
+      fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
 
 theorem lands_comp' {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :
     Lands (comp kp k) N n1 := lands_comp hp hk

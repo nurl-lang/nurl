@@ -46,13 +46,6 @@ def Ty.ok : Ty → Bool
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
 
-/-- A struct or an enum: a value with parts, borrowed as a bundle of the
-    parts' handles. -/
-def Ty.isAgg : Ty → Bool
-  | .prod _ _ => true
-  | .sum _ _ => true
-  | _ => false
-
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
 def Ty.owning : Ty → Bool

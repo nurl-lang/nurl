@@ -73,6 +73,8 @@ def comp : Kind → Kind → Kind
 def rootKind (t : Ty) (k : Kind) : Kind :=
   match t, k with
   | .slice _, .self => .view
+  | .prod _ _, .self => .view
+  | .sum _ _, .self => .view
   | _, k => k
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
@@ -166,7 +168,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
     owned struct depends on its owner, what is inside a borrowed one on
     what that borrows. -/
 def projDeps (y : Var) (E : Entry) : List Dep :=
-  if E.mode.ownSlot then [⟨y, .inner⟩] else E.path
+  if E.mode.ownSlot then [⟨y, .inner⟩] else if E.mode = .rootb then [⟨y, .view⟩] else E.path
 
 /-- A field read: an integer is copied, anything else is lent (a stored view
     is copied with what it depends on). -/
@@ -204,7 +206,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held⟩
         (setE (kill .replace false y Γ) y { E with live := false })
   | copyRoot {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .rootb → E.ty.isAgg = false →
+      Γ y = some E → E.live = true → E.mode = .rootb →
       RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held⟩ Γ
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor → RhsT Γ F (.var y) E Γ
@@ -229,9 +231,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.fst y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.snd y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
       RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D⟩ Γ1
@@ -239,9 +241,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
       RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D⟩ Γ1
   | getl {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → E.mode ≠ .rootb → RhsT Γ F (.getl y) (projE y E a) Γ
+      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
   | getr {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty = .sum a b → E.mode ≠ .rootb → RhsT Γ F (.getr y) (projE y E b) Γ
+      Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
       RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false })
@@ -304,7 +306,7 @@ def PMode.moves : PMode → Bool
   | _ => true
 
 def paramOK : PMode → Ty → Entry → Prop
-  | .inp, t, E => E.ty = t ∧ t.isAgg = false
+  | .inp, t, E => E.ty = t
   | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ t.owning = true
   | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ ∃ s, t = .vec s
 

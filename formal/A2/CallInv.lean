@@ -324,17 +324,9 @@ theorem callProgress {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {a
       obtain ⟨pm, t⟩ := p
       refine ⟨fun hm => ?_, fun hm => ?_⟩
       · simp only at hm; subst hm
-        obtain ⟨hte, hnp⟩ := hok
         rcases hi.mode_cases hEa with hmo | hmo | hmo
-        · obtain ⟨T, hT, hw, _⟩ := hi.own_val hEa hl (by rw [hmo]; rfl)
-          obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
-          obtain ⟨hown', _⟩ := hown (by rw [hmo]; rfl)
-          obtain ⟨t', ht'⟩ : ∃ t', Ea.ty = .vec t' := by
-            simp only at hte; rw [hte] at hown' ⊢
-            cases t <;> simp_all [Ty.owning, Ty.isAgg]
-          rw [ht'] at hw
-          cases hw with
-          | node _ => exact ⟨_, by rw [hT]; rfl⟩
+        · obtain ⟨T, hT, _, _⟩ := hi.own_val hEa hl (by rw [hmo]; rfl)
+          exact ⟨_, by rw [hT]; rfl⟩
         · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hmo]; rfl)
           exact ⟨v, by rw [hv]; rfl⟩
         · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hmo]; rfl)

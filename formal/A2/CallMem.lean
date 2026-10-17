@@ -24,12 +24,13 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
 theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T) {r : Var}
     (hr : m'.st r = m.st r) : RootKeep m m' r := by
   intro n hn
-  rcases hn with hn | ⟨c, hc, o, T, hT, hs, hnode⟩ | ⟨d, o', l, hc, o, T, hT, hs, hdata⟩
-  · exact Or.inl (by rw [hr]; exact hn)
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ |
+      ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
+  · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
   · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inl ⟨c, by rw [hr]; exact hc, o2, T, h2, hs, hnode⟩)
+    exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, o2, T, h2, hs, hnode⟩)
   · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inr ⟨d, o', l, by rw [hr]; exact hc, o2, T, h2, hs, hdata⟩)
+    exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, o2, T, h2, hs, hdata⟩)
 
 theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : SlotOK m E.clean sl := by
   unfold Entry.clean
@@ -389,25 +390,22 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
   obtain ⟨_, h1, hl, hok, _⟩ := h.arg k hkl
   rw [hEa] at h1; cases h1
   rw [get_of hk] at hok
-  have hnp : Ea.ty.isAgg = false := by rw [hok.1]; exact hok.2
   -- the value, valid in the store before
   have hm0 : ∃ v, (m.st (args.getD k 0)).bind lendSlot = some v ∧
       ValOK m Ea.ty v (derive (args.getD k 0) Ea .self) Ea.held := by
     rcases hi.mode_cases hEa with hm | hm | hm
-    · obtain ⟨T, hT, hw, _⟩ := hi.own_val hEa hl (by rw [hm]; rfl)
+    · obtain ⟨T, hT, hw, hvs⟩ := hi.own_val hEa hl (by rw [hm]; rfl)
       obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
       obtain ⟨hown', _⟩ := hown (by rw [hm]; rfl)
-      obtain ⟨t', ht'⟩ : ∃ t', Ea.ty = .vec t' := by
-        cases hte : Ea.ty <;> simp_all [Ty.owning, Ty.isAgg]
-      rw [ht'] at hw
-      cases hw with
-      | @node _ c d es _ =>
-        have hr := RhsT.borrow (F := F) hEa hl ht'
-        have he := EvalR.borrowOwn hT
-        obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr he
-        exact ⟨_, by rw [hT]; rfl, hout.valBor rfl⟩
+      refine ⟨lendOf T, by rw [hT]; rfl, ?_⟩
+      have hd : derive (args.getD k 0) Ea .self = [⟨args.getD k 0, rootKind Ea.ty .self⟩] := by
+        simp [derive, hm, Mode.isRoot]
+      rw [hd]
+      refine lend_valOK' hw (fun t c d es ht => ⟨_, List.mem_singleton_self _, _,
+        Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (fun s hs => ?_)
+      rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
-      have hr := RhsT.copyRoot (F := F) hEa hl hm hnp
+      have hr := RhsT.copyRoot (F := F) hEa hl hm
       obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
       exact ⟨v, by rw [hv]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
@@ -530,7 +528,7 @@ theorem resTy_vec (h : CallH P Γ F x fn args m.nv) (ho : (resMode fn).ownSlot =
 theorem param_ok (h : CallH P Γ F x fn args m.nv) {k : Nat} {p : PMode × Ty} (hk : fn.params[k]? = some p) :
     p.2.ok = true ∧ (p.1 ≠ .inp → p.2.owning = true) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
-  obtain ⟨hok, _, hsink, hio⟩ := hpar p (List.mem_of_getElem? hk)
+  obtain ⟨hok, hsink, hio⟩ := hpar p (List.mem_of_getElem? hk)
   refine ⟨hok, fun hne => ?_⟩
   obtain ⟨pm, t⟩ := p
   cases pm with

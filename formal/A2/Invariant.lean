@@ -49,11 +49,21 @@ inductive Child : Val → Val → Prop
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
 
-/-- The node a root's slot reaches: its own tree, or what its borrow names. -/
+/-- `n` is `v` or one of its parts through struct fields and enum payloads
+    (never through a `Vec`'s elements): what a binding holds directly. -/
+inductive Top : Val → Val → Prop
+  | refl (v : Val) : Top v v
+  | fst {n a b : Val} : Top n a → Top n (.pair a b)
+  | snd {n a b : Val} : Top n b → Top n (.pair a b)
+  | inl {n a : Val} : Top n a → Top n (.inl a)
+  | inr {n a : Val} : Top n a → Top n (.inr a)
+
+/-- A node a root's slot reaches directly: one at the top of its own tree, or
+    one a handle it holds names (a borrowed struct is a bundle of handles). -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
-  m.st r = some ⟨true, some n⟩ ∨
-  (∃ c, m.st r = some ⟨false, some (.href c)⟩ ∧ NodeAt m c n) ∨
-  (∃ d o l, m.st r = some ⟨false, some (.view d o l)⟩ ∧ DataAt m d n)
+  (∃ T, m.st r = some ⟨true, some T⟩ ∧ Top n T) ∨
+  (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
+  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n)
 
 /-- The view `(d, o, l)` of element type `t` is valid through `dep`. -/
 def ViewAt (m : Mem) (dep : Dep) (d o l : Nat) (t : Ty) : Prop :=
@@ -193,7 +203,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → (∀ r ∈ roots E.vdeps, r ∈ F) → p ∉ F →
-      StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p E.path Δ)
+      StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
       StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
   | assign {Γ Γ1 : Ctx} {F : List Var} {x : Var} {r : Rhs} {Ex E : Entry} :
@@ -244,7 +254,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
 def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
-  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 = .inp → pt.2.isAgg = false) ∧
+  (∀ pt ∈ fn.params, pt.2.ok = true ∧
     (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → ∃ s, pt.2 = .vec s)) ∧
   (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1) ∧

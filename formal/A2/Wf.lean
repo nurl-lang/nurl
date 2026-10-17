@@ -192,7 +192,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
-  | @copyRoot y Ey hy hl hm _ =>
+  | @copyRoot y Ey hy hl hm =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inr hm
     rw [bor_vdeps _ rfl]
@@ -260,7 +260,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         rw [hEr] at h0; cases h0
         exact ⟨E2, h2', by rw [hm0]; exact hro⟩
       · exact hr2 r hr
-  | @fst y Ey a b hy hl ht _ =>
+  | @fst y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
@@ -273,8 +273,11 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
-  | @snd y Ey a b hy hl ht _ =>
+    · split
+      · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
+        exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
+      · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
+  | @snd y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
@@ -287,7 +290,10 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
+    · split
+      · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
+        exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
+      · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
 
   | @inl y b Ey Γ1 D hy hly hpa _ =>
     obtain ⟨hw1, hd1, hm1, hr1⟩ := hpa.wf h hy hly rfl
@@ -295,7 +301,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @inr a y Ey Γ1 D hy hly hpa _ =>
     obtain ⟨hw1, hd1, hm1, hr1⟩ := hpa.wf h hy hly rfl
     exact ⟨hw1, hd1, hm1, fun _ _ r hr => hr1 r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)⟩
-  | @getl y Ey a b hy hl ht _ =>
+  | @getl y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
@@ -308,8 +314,11 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
-  | @getr y Ey a b hy hl ht _ =>
+    · split
+      · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
+        exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
+      · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
+  | @getr y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
@@ -322,7 +331,10 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
+    · split
+      · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
+        exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
+      · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
   | @takel y Ey a b hy hl hm hty _ =>
     have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false }) :=
       (h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
@@ -720,7 +732,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro r hr E h
     have hrp : r ≠ p := fun e => hpF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
-    exact ⟨rerootE p Ep.path E2, by simp [A2.exitRoot, upd_ne _ _ hrp, h2], by simp [rerootE, hm2]⟩
+    exact ⟨rerootE p (Ep.path ++ Ep.held) E2, by simp [A2.exitRoot, upd_ne _ _ hrp, h2], by simp [rerootE, hm2]⟩
   | frozen _ ih => exact fun r hr E h => ih r (List.mem_append_left _ hr) E h
   | @assign Γ Γ1 F x r0 Ex E0 _ hxF _ hrh _ _ _ =>
     intro r hr E h
@@ -791,11 +803,10 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
   | @rbind Γ Δ F p k E hp hm hl hroots hpF hk ih =>
     intro h
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
-    refine (ih h).exitRoot p E.path fun d hd => ?_
+    refine (ih h).exitRoot p (E.path ++ E.held) fun d hd => ?_
     have hdv : d.root ∈ roots E.vdeps := by
-      simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.map_append,
-        List.mem_append, List.mem_map]
-      exact Or.inl ⟨d, hd, rfl⟩
+      simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+      exact ⟨d, hd, rfl⟩
     have hF := hroots d.root hdv
     refine ⟨fun e => hpF (e ▸ hF), ?_⟩
     obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
