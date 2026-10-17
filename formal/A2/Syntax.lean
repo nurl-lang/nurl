@@ -60,25 +60,6 @@ def Ty.owning : Ty → Bool
   | .fn _ => true
   | _ => false
 
-/-- How a borrow reaches the memory of the binding it depends on.
-
-  * `self`  — the binding's own handle (a cursor, a borrowed argument);
-  * `inner` — something strictly inside its elements (`vec_at` of a
-              `Vec` of `Vec`s, and every borrow taken from that);
-  * `view`  — its own element buffer (`slice_from_vec`, `string_data`). -/
-inductive Kind where
-  | self
-  | inner
-  | view
-deriving DecidableEq, Repr
-
-/-- A dependency: the value is valid only while `root` is not changed in a
-    way that ends borrows of this kind. -/
-structure Dep where
-  root : Var
-  kind : Kind
-deriving DecidableEq, Repr
-
 /-- What an operation does to a container, ordered by what it ends.
 
   * `none`    — reads it;
@@ -104,6 +85,39 @@ def Eff.le (a b : Eff) : Prop := a.rank ≤ b.rank
 
 instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ ≤ _))
 
+/-- How a borrow reaches the memory of the binding it depends on.
+
+  * `self`  — the binding's own handle (a cursor, a borrowed argument);
+  * `inner` — something strictly inside its elements (`vec_at` of a
+              `Vec` of `Vec`s, and every borrow taken from that);
+  * `view`  — its own element buffer (`slice_from_vec`, `string_data`);
+  * `name b t` — the binding itself, by name: a closure that captured it,
+              as a binding of type `t`, and reads it (`b = none`) or
+              changes it, at most by `b`, each time it runs.  It reaches no
+              memory of its own. -/
+inductive Kind where
+  | self
+  | inner
+  | view
+  | name (b : Eff) (t : Ty)
+deriving DecidableEq, Repr
+
+def Kind.isName : Kind → Bool
+  | .name _ _ => true
+  | _ => false
+
+/-- What a dependency by name lets the closure holding it do to its binding. -/
+def Kind.bound : Kind → Eff
+  | .name b _ => b
+  | _ => .none
+
+/-- A dependency: the value is valid only while `root` is not changed in a
+    way that ends borrows of this kind. -/
+structure Dep where
+  root : Var
+  kind : Kind
+deriving DecidableEq, Repr
+
 /-- Does effect `e` on a container of element type with `hv` (holds views)
     end a borrow of kind `k`?  A container that holds views and gains or
     loses elements also ends borrows of its whole handle: what such a
@@ -115,8 +129,9 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .realloc, .inner => false
   | .realloc, .self => hv
   | .drop, .self => hv
-  | .drop, _ => true
   | .replace, _ => true
+  | _, .name _ _ => false
+  | .drop, _ => true
 
 /-- Integer expressions.  They read but never move. -/
 inductive Expr where
@@ -128,6 +143,20 @@ inductive Expr where
   | slen (x : Var)   -- `slice_len`
   | isl (x : Var)    -- an enum's tag: 1 for the first variant
 deriving DecidableEq, Repr
+
+/-- Parameter conventions (§1).  An `inout` parameter carries the most the
+    function may do to it — its summary. -/
+inductive PMode where
+  | inp
+  | inout (b : Eff)
+  | sink
+deriving DecidableEq, Repr
+
+/-- What a parameter lets the callee do to its argument: nothing, or what
+    an `inout` bound allows (a `sink` takes it, which is not a change). -/
+def PMode.bound : PMode → Eff
+  | .inout b => b
+  | _ => .none
 
 /-- Right-hand sides of a binding or an assignment. -/
 inductive Rhs where
@@ -148,9 +177,11 @@ inductive Rhs where
   | getr (y : Var)
   | takel (y : Var)            -- a match by value: the payload moves out, the enum is consumed
   | taker (y : Var)
-  | pack (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var)  -- a closure literal or `dyn`: the
-                                            -- methods' code `fs`, the environment `y` (of type `te`)
-                                            -- moved in, the interfaces `ms`
+  | pack (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var) (cs : List (Var × PMode × Ty))
+                                            -- a closure literal or `dyn`: the methods' code `fs`,
+                                            -- the environment `y` (of type `te`) moved in, the
+                                            -- interfaces `ms`, and the bindings it captures by
+                                            -- name: read (`inp`) or changed (`inout b`)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -163,9 +194,10 @@ inductive Val where
   | pair (v w : Val)                              -- a struct value, inline
   | inl (v : Val)                                 -- an enum value, inline
   | inr (v : Val)
-  | pkg (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val)  -- a package: its methods' code,
-                                               -- its environment (of the ghost type `te`) inline,
-                                               -- and its interfaces
+  | pkg (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val) (cs : List (Var × PMode × Ty))
+                                               -- a package: its methods' code, its environment
+                                               -- (of the ghost type `te`) inline, its interfaces,
+                                               -- and the bindings it captured by name
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -213,13 +245,6 @@ inductive Stmt where
   | callc (x c : Var) (j : Nat) (zs : List Var) (body : Stmt)  -- `: x ( m c zs… )`: a call of
                                                           -- method `j` of the package `c`
 
-/-- Parameter conventions (§1).  An `inout` parameter carries the most the
-    function may do to it — its summary. -/
-inductive PMode where
-  | inp
-  | inout (b : Eff)
-  | sink
-deriving DecidableEq, Repr
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is
     variable `n`, and every variable of its body is below `nvars`.

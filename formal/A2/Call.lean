@@ -223,7 +223,7 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
   wf      : CtxWF Γ
   noInout : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   rbLive  : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
-  anch    : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F
+  anch    : RootbAnch Γ F
   postwf  : CtxWF (callPost Γ fn args)
   postdm  : DomMode Γ (callPost Γ fn args)
   reswf   : ∀ r ∈ roots (callRes Γ fn args).vdeps, ∃ Er, callPost Γ fn args r = some Er ∧ Er.mode.isRoot = true
@@ -1384,9 +1384,9 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
   simp only [rrE, liftE_eq _ hrb, hErm, RSetup.liftMode_resMode]
   refine ⟨hErl, by first | rfl | trivial, hErt, fun ho => ?_, ?_⟩
   · simp only [ho, Bool.false_eq_true, ↓reduceIte]
-    exact h.lift_sub (fun d0 hd0 => ⟨hlends _ (hErp d0 hd0), hl _ (hErp d0 hd0)⟩)
+    exact h.lift_sub (fun d0 hd0 => ⟨(hlends _ (hErp d0 hd0)).1, hl _ (hErp d0 hd0)⟩)
       (fun d hd => List.mem_append_right _ hd)
-  · exact h.lift_sub (fun d0 hd0 => ⟨hrholds _ (hErh d0 hd0), hr _ (hErh d0 hd0)⟩)
+  · exact h.lift_sub (fun d0 hd0 => ⟨(hrholds _ (hErh d0 hd0)).1, hr _ (hErh d0 hd0)⟩)
       (fun d hd => List.mem_append_right _ hd)
 
 /-- An `inout` argument, where the exits leave it. -/
@@ -1406,14 +1406,14 @@ theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Ef
     intro d0 hd0
     have hh : d0 ∈ Ei.held := by
       unfold Entry.vdeps at hd0; rw [hEim] at hd0; simpa [Mode.ownSlot] using hd0
-    exact houts _ (hEih d0 hh)
+    exact (houts _ (hEih d0 hh)).1
   refine ⟨exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink hrb hvd), ?_⟩
   · rw [← hρ]; exact (RSetup.canon_ρ h.sOK _ i).trans (by rw [hEi]; rfl)
   · have hlt := h.argLt hil
     rw [he] at hlt
     exact absurd hlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
   · simp only [rrE, liftE_eq _ hrb]
-    refine h.lift_sub (fun d0 hd0 => ⟨houts _ (hEih d0 hd0), fun d hd => ?_⟩)
+    refine h.lift_sub (fun d0 hd0 => ⟨(houts _ (hEih d0 hd0)).1, fun d hd => ?_⟩)
       (fun d hd => List.mem_append_right _ hd)
     refine List.mem_append_left _ (List.mem_append_right _ ?_)
     unfold outHeld
@@ -1783,8 +1783,8 @@ theorem typedIn (h : CallH P Γ F x fn args base) :
     rcases List.mem_append.mp hd0 with hd | hd
     · split at hd
       · cases hd
-      · exact hlends _ (hErp d0 hd)
-    · exact hrholds _ (hErh d0 hd)
+      · exact (hlends _ (hErp d0 hd)).1
+    · exact (hrholds _ (hErh d0 hd)).1
   obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh
   refine h.typedIn_of hren (h.res_at hEr hErm hErv) hl' hm' ht' ?_
     (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hio Γ3 hΓ3)

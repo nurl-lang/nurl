@@ -34,7 +34,8 @@ inductive Sub : Val → Val → Prop
   | snd {v a b : Val} : Sub v b → Sub v (.pair a b)
   | inl {v a : Val} : Sub v a → Sub v (.inl a)
   | inr {v a : Val} : Sub v a → Sub v (.inr a)
-  | pkg {v e : Val} {fs : List Nat} {te : Ty} {ms : List Nat} : Sub v e → Sub v (.pkg fs te ms e)
+  | pkg {v e : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
+      Sub v e → Sub v (.pkg fs te ms e cs)
 
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
@@ -56,8 +57,9 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | pair {a a1 a2 : Nat → Bool} {v w : Val} : Frees a v a1 → Frees a1 w a2 → Frees a (.pair v w) a2
   | inl {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inl v) a1
   | inr {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inr v) a1
-  | pkg {a a1 : Nat → Bool} {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} :
-      Frees a v a1 → Frees a (.pkg fs te ms v) a1
+  | pkg {a a1 : Nat → Bool} {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val}
+      {cs : List (Var × PMode × Ty)} :
+      Frees a v a1 → Frees a (.pkg fs te ms v cs) a1
 inductive FreesL : (Nat → Bool) → List Val → (Nat → Bool) → Prop
   | nil {a : Nat → Bool} : FreesL a [] a
   | cons {a a1 a2 : Nat → Bool} {e : Val} {es : List Val} :
@@ -97,8 +99,32 @@ def lendOf : Val → Val
   | .pair v w => .pair (lendOf v) (lendOf w)
   | .inl v => .inl (lendOf v)
   | .inr v => .inr (lendOf v)
-  | .pkg fs te ms v => .pkg fs te ms (lendOf v)
+  | .pkg fs te ms v cs => .pkg fs te ms (lendOf v) cs
   | v => v
+
+mutual
+/-- The bindings captured by name anywhere in a value, with how each is
+    captured and its type. -/
+def Val.names : Val → List (Var × PMode × Ty)
+  | .node _ _ _ es => namesL es
+  | .pair v w => v.names ++ w.names
+  | .inl v => v.names
+  | .inr v => v.names
+  | .pkg _ _ _ v cs => cs ++ v.names
+  | _ => []
+def namesL : List Val → List (Var × PMode × Ty)
+  | [] => []
+  | e :: es => e.names ++ namesL es
+end
+
+/-- The bindings the closures in binding `a`'s value may change. -/
+def slotMut (m : Mem) (a : Var) : List Var :=
+  match m.st a with
+  | some ⟨_, some v⟩ => (v.names.filter (fun c => c.2.1.bound != .none)).map (·.1)
+  | _ => []
+
+/-- ... in the arguments of a call. -/
+def argsMut (m : Mem) (args : List Var) : List Var := args.flatMap (slotMut m)
 
 /-- Does moving this value move an owned tree (a `Vec` or a struct)? -/
 def Val.owns : Val → Bool
@@ -176,8 +202,9 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       m.st y = some ⟨true, some (.inr v)⟩ → EvalR m (.taker y) (.ok v v.owns (m.set y ⟨true, none⟩))
   | takerP {y : Var} {v : Val} :
       m.st y = some ⟨true, some (.inl v)⟩ → EvalR m (.taker y) .panic
-  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {v : Val} {m1 : Mem} :
-      TakeVal m y v m1 → EvalR m (.pack fs te ms y) (.ok (.pkg fs te ms v) true m1)
+  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {v : Val}
+      {m1 : Mem} :
+      TakeVal m y v m1 → EvalR m (.pack fs te ms y cs) (.ok (.pkg fs te ms v cs) true m1)
 
 /-! ### Calls
 
@@ -213,7 +240,7 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .getr y => .getr (ρ y)
   | .takel y => .takel (ρ y)
   | .taker y => .taker (ρ y)
-  | .pack fs te ms y => .pack fs te ms (ρ y)
+  | .pack fs te ms y cs => .pack fs te ms (ρ y) (cs.map (fun c => (ρ c.1, c.2)))
 
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip
@@ -280,19 +307,20 @@ def wrapParams : List (PMode × Ty) → Nat → Nat → Stmt → Stmt
   | (.inout _, _) :: ps, base, i, s => wrapParams ps base (i + 1) s
 
 /-- The inside of a call: the result slot `r = base + n` is bound, the body
-    runs with every caller binding but the `inout` arguments lent out
-    (`frozen`), and the result moves to the caller's binding `x`. -/
-def callIn (fn : Fn) (args : List Var) (base : Nat) (x : Var) : Stmt :=
+    runs with every caller binding lent out (`frozen`) but the `inout`
+    arguments and the bindings `nm` the closures handed to it may change,
+    and the result moves to the caller's binding `x`. -/
+def callIn (fn : Fn) (args : List Var) (base : Nat) (x : Var) (nm : List Var) : Stmt :=
   let n := fn.params.length
   let r := base + n
   let ρ := callRen fn.params args base
-  let z := (List.range base).filter (fun v => !(inoutArgs fn.params args).contains v)
+  let z := (List.range base).filter (fun v => !(inoutArgs fn.params args).contains v && !nm.contains v)
   .scope r (.seq (.frozen z (wrapParams fn.params base 0 (fn.body.rename ρ))) (.assign x (.var r)))
 
 /-- What a call becomes: `x` is bound for the continuation `k`, after the
     call's inside. -/
-def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stmt :=
-  .scope x (.seq (callIn fn args base x) k)
+def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (nm : List Var) (k : Stmt) : Stmt :=
+  .scope x (.seq (callIn fn args base x nm) k)
 
 /-- What `recover f` becomes: a call of `f`, which takes no parameters and
     returns an integer, inside a `recover` frame that remembers the caller's
@@ -300,7 +328,7 @@ def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stm
     what it owns, as the allocation journal does (§7.2) — and `x` says the
     call failed. -/
 def recStmt (fn : Fn) (base : Nat) (x : Var) (m0 : Mem) (k : Stmt) : Stmt :=
-  .scope x (.seq (.catchR x m0 (callIn fn [] base x)) k)
+  .scope x (.seq (.catchR x m0 (callIn fn [] base x [])) k)
 
 /-- The arguments a call moves or changes (its `sink` and `inout` ones). -/
 def movedArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
@@ -309,9 +337,10 @@ def movedArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
       | _ => true)).map (fun i => args.getD i 0)
 
 /-- What a call through a package holds still: every caller binding but the
-    result's and the arguments it moves or changes. -/
-def heldFor (ps : List (PMode × Ty)) (args : List Var) (base x : Nat) : List Var :=
-  (List.range base).filter (fun v => v != x && !(movedArgs ps args).contains v)
+    result's, the arguments it moves or changes, and the bindings `nm` the
+    closures handed to it may change. -/
+def heldFor (ps : List (PMode × Ty)) (args : List Var) (base x : Nat) (nm : List Var) : List Var :=
+  (List.range base).filter (fun v => v != x && !(movedArgs ps args).contains v && !nm.contains v)
 
 /-- Opening a package for a call: its environment, lent, is bound to the
     first fresh variable. -/
@@ -340,7 +369,7 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.letcall x f args s)
         (.ok ({ (m'.set x ⟨fn.resOwn, none⟩).set (m.nv + fn.params.length) ⟨fn.resOwn, none⟩
                 with nv := m.nv + fn.nvars })
-             (callStmt fn args m.nv x s))
+             (callStmt fn args m.nv x (argsMut m args) s))
   | scopeSkip {m : Mem} {x : Var} {sl : Slot} {a' : Nat → Bool} :
       m.st x = some sl → DropSlot m.alloc sl a' →
       Step P m (.scope x .skip) (.ok ({ m with alloc := a' }.remove x) .skip)
@@ -400,14 +429,17 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
         (.ok (((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).set z ⟨w.owns, some w⟩)
           (.scope x (.scope z s)))
   | callc {m m1 : Mem} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {o : Bool} {fs : List Nat}
-      {te : Ty} {ms : List Nat} {env : Val} {f : Nat} {fn : Fn} :
-      m.st c = some ⟨o, some (.pkg fs te ms env)⟩ → fs[j]? = some f → P[f]? = some fn →
-      m.st x = none → BindParams (envMem m env) fn.params (m.nv :: zs) (m.nv + 1) 0 m1 →
+      {te : Ty} {ms : List Nat} {env : Val} {cs : List (Var × PMode × Ty)} {f : Nat} {fn : Fn} :
+      m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ → fs[j]? = some f → P[f]? = some fn →
+      m.st x = none →
+      BindParams (envMem m env) fn.params (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) 0 m1 →
       Step P m (.callc x c j zs k)
         (.ok ({ (m1.set x ⟨fn.resOwn, none⟩).set (m.nv + 1 + fn.params.length) ⟨fn.resOwn, none⟩
                 with nv := m.nv + 1 + fn.nvars })
-             (.scope x (.seq (.frozen (heldFor fn.params (m.nv :: zs) m.nv x)
-               (.rbind m.nv (callIn fn (m.nv :: zs) (m.nv + 1) x))) k)))
+             (.scope x (.seq (.frozen (heldFor fn.params (m.nv :: zs ++ cs.map (·.1)) m.nv x
+                 (argsMut (envMem m env) (m.nv :: zs ++ cs.map (·.1))))
+               (.rbind m.nv (callIn fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x
+                 (argsMut (envMem m env) (m.nv :: zs ++ cs.map (·.1)))))) k)))
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)

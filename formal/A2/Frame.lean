@@ -50,6 +50,32 @@ theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).live = (E.live && !hits e hv x E) := by
   unfold killE; split <;> simp_all
 
+theorem comp_name {a k : Kind} {b : Eff} {t : Ty} (h : comp a k = .name b t) (hk : k.isName = false) :
+    a = .name b t := by
+  cases a <;> cases k <;> simp_all [comp, Kind.isName]
+
+/-- What entries hold by name stays bound with its type and mode when some
+    of them end. -/
+theorem NameOK.kill {Γ : Ctx} {E : Entry} (h : NameOK Γ E) (e : Eff) (hv : Bool) (x : Var) :
+    NameOK (kill e hv x Γ) (killE e hv x E) := by
+  intro d hd b t hk
+  rw [NameOK, killE_vdeps] at *
+  obtain ⟨Er, hEr, ht, ho, hc⟩ := h d hd b t hk
+  exact ⟨killE e hv x Er, by simp only [A2.kill, hEr, Option.map_some], by rw [killE_ty]; exact ht,
+    by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+
+theorem NameWF.kill {Γ : Ctx} (h : NameWF Γ) (e : Eff) (hv : Bool) (x : Var) :
+    NameWF (kill e hv x Γ) := by
+  intro v E' hv' hl hn
+  simp only [A2.kill] at hv'
+  cases hE : Γ v with
+  | none => rw [hE] at hv'; cases hv'
+  | some E =>
+    rw [hE] at hv'; cases hv'
+    rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+    rw [killE_ty, killE_mode] at hn
+    exact (h v E hE hl.1 hn).kill e hv x
+
 /-- A live entry after `kill` was not hit: each dependency on `x` is of a
     kind the effect does not end. -/
 theorem killE_live_dep {e : Eff} {hv : Bool} {x : Var} {E : Entry}
@@ -99,11 +125,27 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
   | some Ex' => ∃ sl, m'.st x = some sl ∧ Ex'.ty.ok = true ∧ SlotOK m' Ex' sl ∧
       Ex'.mode = Ex.mode ∧
       (Ex'.live = true → Ex'.ty ≠ .int → ∀ r ∈ roots Ex'.vdeps,
-        (r = x ∧ Ex'.mode.isRoot = true) ∨ (r ≠ x ∧ ∃ Er, Γ0 r = some Er ∧ Er.mode.isRoot = true))
+        (r = x ∧ Ex'.mode.isRoot = true) ∨ (r ≠ x ∧ ∃ Er, Γ0 r = some Er ∧ Er.mode.isRoot = true)) ∧
+      Ex'.ty = Ex.ty ∧
+      (Ex'.live = true → (Ex'.ty ≠ .int ∨ Ex'.mode = .rootb) → NameOK (upd Γ0 x (some Ex')) Ex') ∧
+      (Ex'.live = true → ∀ T, sl.val = some T → NamesIn T Ex'.held) ∧
+      (∀ T, sl.val = some T → PkgsOK T)
+
+/-- An integer holds no closure, so captures nothing by name. -/
+theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
+    (hint : E.ty = .int) (hl : E.live = true) (hT : sl.val = some T) : T.names = [] := by
+  cases ho : E.mode.ownSlot
+  · obtain ⟨v, hv, hok⟩ := h.2.2 ho hl
+    rw [hint] at hok; obtain ⟨n, rfl⟩ := valOK_int.mp hok
+    rw [hT] at hv; cases hv; rfl
+  · have := (h.2.1 ho).1; rw [hint] at this; simp [Ty.owning] at this
 
 theorem killE_rootb {Γ : Ctx} {F : List Var}
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
-    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool) {v : Var} {E : Entry} (hE : Γ v = some E)
+    (hanch : RootbAnch Γ F)
+    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    {v : Var} {E : Entry} (hE : Γ v = some E)
     (hrb : E.mode = .rootb) : killE e hv x E = E := by
   unfold killE
   have : hits e hv x E = false := by
@@ -111,15 +153,28 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
     simp only [Bool.and_eq_false_iff, bne_eq_false_iff_eq, List.any_eq_false, Bool.and_eq_true,
       beq_iff_eq, not_and, Bool.not_eq_true]
     refine Or.inr fun dep hd hr => ?_
-    exact absurd (hr ▸ hanch v E hE hrb dep.root (List.mem_map_of_mem hd)) hxF
+    by_cases hb : dep.kind.bound = .none
+    · exact absurd (hr ▸ hanch v E hE hrb dep hd hb) hxF
+    · cases hk : e.kills hv dep.kind
+      · rfl
+      · exact absurd hr (hmn v E hE hrb dep hd hb hk)
   rw [this]; rfl
+
+/-- An effect other than `replace` ends nothing held by name. -/
+theorem hmn_of_ne_replace {Γ : Ctx} {e : Eff} (hv : Bool) (he : e ≠ .replace) (x : Var) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x := by
+  intro _ _ _ _ ⟨r, k⟩ _ hb hk
+  cases k <;> cases e <;> simp_all [Kind.bound, Eff.kills]
 
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/
 theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
-    {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) (hxr : Ex.mode ≠ .rootb)
-    {e : Eff} {hv : Bool}
+    (hanch : RootbAnch Γ F)
+    {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    (hxr : Ex.mode ≠ .rootb)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
@@ -184,7 +239,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · refine hslot.keep fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb
-        · rw [killE_rootb hanch hxF e hv hE hrb] at hdead
+        · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead
           rw [hi.rootbLive v E hE hrb] at hdead; cases hdead
         · have hw : EntryWeaker E (killE e hv x E) :=
             ⟨killE_ty .., killE_mode .., fun h => absurd h hrb, fun h => by rw [hdead] at h; cases h⟩
@@ -207,7 +262,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
-      obtain ⟨_, _, _, _, hm', hwf⟩ := hox
+      obtain ⟨_, _, _, _, hm', hwf, _⟩ := hox
       have hnint' : E'.ty ≠ .int := by
         rcases hnint with h | h
         · exact h
@@ -231,7 +286,9 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           · have := (killE_live_dep hl (Or.inl hnint)).2 dep hd rfl
             rw [hrem rfl] at this
             cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
-          · exact hxF (hanch v E hE hrb _ (List.mem_map_of_mem hd))
+          · by_cases hb : dep.kind.bound = .none
+            · exact hxF (hanch v E hE hrb dep hd hb)
+            · exact hmn v E hE hrb dep hd hb (by rw [hrem rfl]; cases dep.kind <;> rfl) rfl
         | some Ex' =>
           obtain ⟨_, _, _, _, hm, _⟩ := hox
           rw [hx] at hEr; cases hEr
@@ -246,7 +303,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hE hm]
       exact hi.rootbLive p E hE hm
   · intro p E' hp' hm
     by_cases hpx : p = x
@@ -256,7 +313,52 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hE hm]
       exact hi.rootbLt p E hE hm
+  · intro v E' hv' hl hn
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, _, _, _, hnm, _⟩ := hox
+      exact hnm hl hn
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_ty, killE_mode] at hn
+      have hl' := killE_live_dep hl hn
+      intro d hd b t hk
+      rw [killE_vdeps] at hd
+      obtain ⟨Er, hEr, ht, ho, hc⟩ := hi.names v E hE hl'.1 hn d hd b t hk
+      by_cases hdx : d.root = x
+      · have hkx := hl'.2 d hd hdx
+        rw [hdx, hx] at hEr; cases hEr
+        cases ox with
+        | none => rw [hrem rfl, hk] at hkx; cases hkx
+        | some Ex' =>
+          obtain ⟨_, _, _, _, hm', _, hty', _⟩ := hox
+          exact ⟨Ex', by rw [hdx]; simp, by rw [hty']; exact ht, by rw [hm']; exact ho,
+            by rw [hm']; exact hc⟩
+      · exact ⟨killE e hv x Er, by rw [upd_ne _ _ hdx]; unfold kill; rw [hEr]; rfl,
+          by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+  · intro v E' sl T hv' hl hsl hT
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, hin, _⟩ := hox
+      rw [hsl'] at hsl; cases hsl
+      exact hin hl T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      have hlE : E.live = true := by
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl; exact hl.1
+      rw [hst v hvx] at hsl
+      rw [killE_held]; exact hi.held v E sl T hE hlE hsl hT
+  · intro v sl T hsl hT
+    by_cases hvx : v = x
+    · subst hvx
+      cases ox with
+      | none => rw [show m'.st v = none from hox] at hsl; cases hsl
+      | some Ex' =>
+        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk⟩ := hox
+        rw [hsl'] at hsl; cases hsl
+        exact hpk T hT
+    · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
 
 end A2

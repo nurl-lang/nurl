@@ -13,8 +13,8 @@ theorem StmtT.weakenIn {P : Prog} {Γ Γ0 Δ : Ctx} {F : List Var} {s : Stmt} (h
     (h : StmtT P Γ0 F s Δ) : StmtT P Γ F s Δ := StmtT.sub hw h (Or.inl rfl)
 
 theorem StmtT.weakenOut {P : Prog} {Γ Δ0 Δ : Ctx} {F : List Var} {s : Stmt} (hwf : CtxWF Γ)
-    (h : StmtT P Γ F s Δ0) (hw : Δ0 = Δ ∨ Weaker Δ0 Δ) : StmtT P Γ F s Δ :=
-  StmtT.sub (Weaker.refl hwf) h hw
+    (hnw : NameWF Γ) (h : StmtT P Γ F s Δ0) (hw : Δ0 = Δ ∨ Weaker Δ0 Δ) : StmtT P Γ F s Δ :=
+  StmtT.sub (Weaker.refl hwf hnw) h hw
 
 theorem weakerEq_trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Γ1 = Γ2 ∨ Weaker Γ1 Γ2) (h2 : Γ2 = Γ3 ∨ Weaker Γ2 Γ3) :
     Γ1 = Γ3 ∨ Weaker Γ1 Γ3 := by
@@ -85,7 +85,7 @@ theorem CtxWF.kill {Γ : Ctx} (h : CtxWF Γ) (e : Eff) (hv : Bool) (x : Var) : C
 
 theorem Weaker.kill {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (e : Eff) (hv : Bool) (x : Var) :
     Weaker (kill e hv x Γ) (kill e hv x Γ') := by
-  refine ⟨fun v => ⟨?_, fun E E' h1 h2 => ?_⟩, hw.wf.kill e hv x⟩
+  refine ⟨fun v => ⟨?_, fun E E' h1 h2 => ?_⟩, hw.wf.kill e hv x, hw.names.kill e hv x⟩
   · simp only [A2.kill, Option.map_eq_none_iff]; exact (hw.1 v).1
   · simp only [A2.kill] at h1 h2
     cases hE : Γ v with
@@ -97,17 +97,37 @@ theorem Weaker.kill {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (e : Eff) (hv : Bool) (x
         rw [hE] at h1; rw [hE'] at h2; cases h1; cases h2
         exact killE_weaker ((hw.1 v).2 E0 E0' hE hE')
 
+/-- At the end of `x`'s scope, what held `x` by name has ended. -/
+theorem NameWF.exitScope {Γ : Ctx} (h : NameWF Γ) (x : Var) : NameWF (exitScope x Γ) := by
+  intro v E' hv' hl hn
+  have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
+  simp only [A2.exitScope, upd_ne _ _ hvx, A2.kill] at hv'
+  cases hE : Γ v with
+  | none => rw [hE] at hv'; cases hv'
+  | some E =>
+    rw [hE] at hv'; cases hv'
+    have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by rw [killE_ty, killE_mode] at hn; exact hn
+    have hl' := killE_live_dep hl hn'
+    intro d hd b t hk
+    rw [killE_vdeps] at hd
+    obtain ⟨Er, hEr, ht, ho, hc⟩ := h v E hE hl'.1 hn' d hd b t hk
+    have hdx : d.root ≠ x := fun e => by
+      have := hl'.2 d hd e
+      rw [hk] at this; cases this
+    exact ⟨killE .replace false x Er, by simp [A2.exitScope, upd_ne _ _ hdx, A2.kill, hEr],
+      by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+
 theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) :
     Weaker (exitScope x Γ) (exitScope x Γ') := by
   have hk := hw.kill .replace false x
-  refine ⟨fun v => ?_, ?_⟩
+  refine ⟨fun v => ?_, ?_, hw.names.exitScope x⟩
   · by_cases hvx : v = x
     · subst hvx; simp [A2.exitScope]
     · simp only [A2.exitScope, upd_ne _ _ hvx]; exact hk.1 v
   · intro v E hv' hl hn r hr
     have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
     simp only [A2.exitScope, upd_ne _ _ hvx] at hv'
-    obtain ⟨Er, hEr, hro⟩ := hk.2 v E hv' hl hn r hr
+    obtain ⟨Er, hEr, hro⟩ := hk.2.1 v E hv' hl hn r hr
     have hrx : r ≠ x := by
       intro hrx; subst hrx
       obtain ⟨E0, hE0, _, _⟩ := kill_cmode hv'
@@ -141,10 +161,34 @@ theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 
-theorem Weaker.exitRoot {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (p : Var) (D : List Dep)
+theorem CtxWF.exitRoot {Γ' : Ctx} (h : CtxWF Γ') (p : Var) (D : List Dep)
     (hD : ∀ d ∈ D, d.root ≠ p ∧ ∃ Er, Γ' d.root = some Er ∧ Er.mode.isRoot = true) :
+    CtxWF (exitRoot p D Γ') := by
+  intro v E hv' hl hn r hr
+  have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
+  simp only [A2.exitRoot, upd_ne _ _ hvp] at hv'
+  cases hE : Γ' v with
+  | none => rw [hE] at hv'; cases hv'
+  | some E0 =>
+    rw [hE] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
+    have hroot : ∀ r, (∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) → r ≠ p →
+        ∃ Er, A2.exitRoot p D Γ' r = some Er ∧ Er.mode.isRoot = true := by
+      intro r ⟨Er, hEr, hro⟩ hrp
+      exact ⟨rerootE p D Er, by simp [A2.exitRoot, upd_ne _ _ hrp, hEr], hro⟩
+    rw [vdeps_reroot] at hr
+    obtain ⟨dep, hd, rfl⟩ := List.mem_map.mp hr
+    rcases mem_reroot hd with ⟨hd0, hne⟩ | ⟨k, d', _, hd', rfl⟩
+    · exact hroot _ (h v E0 hE hl hn _ (List.mem_map_of_mem hd0)) hne
+    · obtain ⟨hne, hex⟩ := hD d' hd'
+      exact hroot _ hex hne
+
+theorem Weaker.exitRoot {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (p : Var) (D : List Dep)
+    (hD : ∀ d ∈ D, d.root ≠ p ∧ ∃ Er, Γ' d.root = some Er ∧ Er.mode.isRoot = true)
+    (hp : ∀ Ep, Γ' p = some Ep → Ep.mode.ownSlot = false)
+    (hDn : DepsNamed Γ' D) :
     Weaker (exitRoot p D Γ) (exitRoot p D Γ') := by
-  refine ⟨fun v => ⟨?_, fun E E' h1 h2 => ?_⟩, ?_⟩
+  refine ⟨fun v => ⟨?_, fun E E' h1 h2 => ?_⟩, hw.wf.exitRoot p D hD,
+    hw.names.exitRoot p D hp (fun d hd => (hD d hd).1) hDn⟩
   · by_cases hvp : v = p
     · subst hvp; simp [A2.exitRoot]
     · simp only [A2.exitRoot, upd_ne _ _ hvp, Option.map_eq_none_iff]; exact (hw.1 v).1
@@ -158,23 +202,6 @@ theorem Weaker.exitRoot {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (p : Var) (D : List 
       | some E0' =>
         rw [hE] at h1; rw [hE'] at h2; cases h1; cases h2
         exact rerootE_weaker ((hw.1 v).2 E0 E0' hE hE')
-  · intro v E hv' hl hn r hr
-    have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
-    simp only [A2.exitRoot, upd_ne _ _ hvp] at hv'
-    cases hE : Γ' v with
-    | none => rw [hE] at hv'; cases hv'
-    | some E0 =>
-      rw [hE] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
-      have hroot : ∀ r, (∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) → r ≠ p →
-          ∃ Er, A2.exitRoot p D Γ' r = some Er ∧ Er.mode.isRoot = true := by
-        intro r ⟨Er, hEr, hro⟩ hrp
-        exact ⟨rerootE p D Er, by simp [A2.exitRoot, upd_ne _ _ hrp, hEr], hro⟩
-      rw [vdeps_reroot] at hr
-      obtain ⟨dep, hd, rfl⟩ := List.mem_map.mp hr
-      rcases mem_reroot hd with ⟨hd0, hne⟩ | ⟨k, d', _, hd', rfl⟩
-      · exact hroot _ (hw.2 v E0 hE hl hn _ (List.mem_map_of_mem hd0)) hne
-      · obtain ⟨hne, hex⟩ := hD d' hd'
-        exact hroot _ hex hne
 
 
 /-! ### The invariant of what runs inside a run-time form -/
@@ -189,7 +216,8 @@ theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m �
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
-    anch := hi.anch
+    anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => h)
+      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
@@ -200,10 +228,11 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
-    anch := fun p E hp hm hps => hi.anch p E hp hm (by
+    anch := fun p E hp hm hps => (hi.anch p E hp hm (by
       simp only [Stmt.spine, List.mem_cons, not_or]
       refine ⟨fun h => ?_, hps⟩
-      subst h; rw [hx] at hp; cases hp; exact hnrb hm)
+      subst h; rw [hx] at hp; cases hp; exact hnrb hm)).mono (fun _ h => h)
+      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
@@ -211,7 +240,7 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
     cover := hi.cover }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
-    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : ∀ r ∈ roots Ep.vdeps, r ∈ F) :
+    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F k.vars) :
     Inv m Γ F k :=
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
@@ -219,7 +248,8 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
     anch := fun q E hq hmq hqs => by
       by_cases hqp : q = p
       · subst hqp; rw [hp] at hq; cases hq; exact hroots
-      · exact hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])
+      · exact (hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])).mono (fun _ h => h)
+          (fun v hv => by simp [Stmt.vars, hv])
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
@@ -234,7 +264,8 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z : List Var} {k : Stmt} (hi : Inv 
       rcases List.mem_append.mp hv with hv | hv
       · exact hi.nvF v hv
       · exact hi.nvS v (by simp [Stmt.vars, hv])
-    anch := fun p E hp hm hps r hr => List.mem_append_left _ (hi.anch p E hp hm hps r hr)
+    anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
+      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
@@ -273,7 +304,8 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
       · exact hi.nvF v hv
       · simp only [List.mem_filter, List.mem_range] at hv
         exact Nat.lt_of_lt_of_le hv.1 hi.catchOK.2.2.1
-    anch := fun p E hp hm hps r hr => List.mem_append_left _ (hi.anch p E hp hm hps r hr)
+    anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
+      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK.2.2.2

@@ -26,7 +26,8 @@ inductive WFv : Ty → Val → Prop
   | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
   | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} : WFv te v → WFv (.fn ms) (.pkg fs te ms v)
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
+      WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -37,8 +38,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
   | inl {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.sum a b) (.inl x) s v
   | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {s : Ty} {v : Val} :
-      ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x) s v
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
+      {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
 
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
@@ -48,7 +49,8 @@ inductive Child : Val → Val → Prop
   | snd {v w : Val} : Child w (.pair v w)
   | inl {v : Val} : Child v (.inl v)
   | inr {v : Val} : Child v (.inr v)
-  | pkg {v : Val} {fs : List Nat} {te : Ty} {ms : List Nat} : Child v (.pkg fs te ms v)
+  | pkg {v : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
+      Child v (.pkg fs te ms v cs)
 
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
@@ -61,7 +63,8 @@ inductive Top : Val → Val → Prop
   | snd {n a b : Val} : Top n b → Top n (.pair a b)
   | inl {n a : Val} : Top n a → Top n (.inl a)
   | inr {n a : Val} : Top n a → Top n (.inr a)
-  | pkg {n a : Val} {fs : List Nat} {te : Ty} {ms : List Nat} : Top n a → Top n (.pkg fs te ms a)
+  | pkg {n a : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
+      Top n a → Top n (.pkg fs te ms a cs)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles). -/
@@ -85,10 +88,23 @@ def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
 def Lands (k : Kind) (n n0 : Val) : Prop :=
   k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
 
+/-- What a value captured by name (the closures in it) is held, by name,
+    in `H`. -/
+def NamesIn (T : Val) (H : List Dep) : Prop :=
+  ∀ c ∈ T.names, (⟨c.1, .name c.2.1.bound c.2.2⟩ : Dep) ∈ H
+
+/-- A closure's captures by name are distinct, each read or changed, and
+    one captured again inside its environment is only read, by both. -/
+def PkgsOK (T : Val) : Prop :=
+  ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T →
+    (cs.map (·.1)).Nodup ∧ (∀ c ∈ cs, c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none) ∧
+    ∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp
+
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
   ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
-    WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H
+    WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
+    NamesIn (.node t c d es) H
 
 /-- A borrowed value of type `τ`, depending on `P` and holding `H`.  The parts
     of a borrowed struct are valid through what it depends on or holds. -/
@@ -102,8 +118,9 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
   | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {P H : List Dep} :
-      ValOK m te x (P ++ H) H → ValOK m (.fn ms) (.pkg fs te ms x) P H
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
+      {P H : List Dep} :
+      ValOK m te x (P ++ H) H → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -143,10 +160,10 @@ theorem valOK_sum {a b : Ty} :
     · exact .inr hx
 
 theorem valOK_fn {ms : List Nat} :
-    ValOK m (.fn ms) v P H ↔ ∃ fs te x, v = .pkg fs te ms x ∧ ValOK m te x (P ++ H) H := by
+    ValOK m (.fn ms) v P H ↔ ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ H) H := by
   constructor
-  · intro h; cases h with | pkg hx => exact ⟨_, _, _, rfl, hx⟩
-  · rintro ⟨f, te, x, rfl, hx⟩; exact .pkg hx
+  · intro h; cases h with | pkg hx => exact ⟨_, _, _, _, rfl, hx⟩
+  · rintro ⟨f, te, x, cs, rfl, hx⟩; exact .pkg hx
 
 /-- An integer depends on nothing. -/
 theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : ValOK m' .int v P' H' := by
@@ -160,7 +177,7 @@ def Val.ids : Val → List Nat
   | .pair v w => v.ids ++ w.ids
   | .inl v => v.ids
   | .inr v => v.ids
-  | .pkg _ _ _ v => v.ids
+  | .pkg _ _ _ v _ => v.ids
   | _ => []
 def idsL : List Val → List Nat
   | [] => []
@@ -215,6 +232,38 @@ def CatchOK (m : Mem) : Stmt → Prop
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
   | _ => True
 
+/-- A borrowed parameter is anchored: what it borrows from, and what the
+    closures it holds only read, are lent out (`F`) for as long as it is
+    bound; what those closures may change is named by nothing that runs
+    meanwhile (`vs`). -/
+def Anchored (E : Entry) (F vs : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, (d.kind.bound = .none → d.root ∈ F) ∧ (d.kind.bound ≠ .none → d.root ∉ vs)
+
+/-- The borrowed parameters' anchors: what a `rootb` binding reads from
+    memory is lent out (in `F`) for as long as it lives. -/
+def RootbAnch (Γ : Ctx) (F : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F
+
+/-- No `rootb` binding holds a binding of `vs` by a name its closure may
+    change. -/
+def RootbNames (Γ : Ctx) (vs : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ∉ vs
+
+theorem Anchored.mono {E : Entry} {F F' vs vs' : List Var} (h : Anchored E F vs)
+    (hF : ∀ v ∈ F, v ∈ F') (hv : ∀ v ∈ vs', v ∈ vs) : Anchored E F' vs' :=
+  fun d hd => ⟨fun hb => hF _ ((h d hd).1 hb), fun hb hm => (h d hd).2 hb (hv _ hm)⟩
+
+theorem RootbNames.ne {Γ : Ctx} {vs : List Var} (h : RootbNames Γ vs) {y : Var} (hy : y ∈ vs) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y :=
+  fun p E hp hm d hd hb e => h p E hp hm d hd hb (e ▸ hy)
+
+theorem RootbNames.nil (Γ : Ctx) : RootbNames Γ [] := fun _ _ _ _ _ _ _ h => by cases h
+
+theorem RootbNames.mono {Γ : Ctx} {vs ws : List Var} (h : RootbNames Γ vs) (hs : ∀ v ∈ ws, v ∈ vs) :
+    RootbNames Γ ws :=
+  fun p E hp hm d hd hb hw => h p E hp hm d hd hb (hs _ hw)
+
+
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
   dom       : ∀ v, (Γ v).isSome = (m.st v).isSome
@@ -225,13 +274,17 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   wf        : CtxWF Γ
   rootbLive : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   rootbLt   : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r < p
+  names     : NameWF Γ
+  held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
+                NamesIn T E.held
+  pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
 structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
   nvS       : ∀ v ∈ s.vars, v < m.nv
   nvF       : ∀ v ∈ F, v < m.nv
-  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∈ F
+  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → Anchored E F s.vars
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
@@ -264,7 +317,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
-      Γ p = some E → E.mode = .rootb → E.live = true → (∀ r ∈ roots E.vdeps, r ∈ F) → p ∉ F →
+      Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F s.vars → p ∉ F →
       StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
       StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
@@ -317,7 +370,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
-      (∀ p E, Δ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F) →
+      (RootbAnch Δ F) →
       KeepOut Γ Δ s.spine →
       StmtT P Γ F (.catchR x m0 s) Δ
 
@@ -330,8 +383,9 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
   (∀ pt ∈ fn.params, pt.2.ok = true ∧
     (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → ∃ s, pt.2 = .vec s)) ∧
-  (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧
-  (∀ o ∈ fn.outHolds, lendable fn o.2.1) ∧
+  (∀ jk ∈ fn.lends, lendable fn jk.1 ∧ jk.2.isName = false) ∧
+  (∀ jk ∈ fn.rholds, lendable fn jk.1 ∧ jk.2.isName = false) ∧
+  (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
@@ -349,21 +403,22 @@ def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
     the interface's other parameters as the interface does; it returns what
     the interface returns, and lends, holds and stores no more than the
     interface says. -/
-def Implements (P : Prog) (f : Nat) (te : Ty) (σ : Nat) : Prop :=
-  ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧ fn.params = (.inp, te) :: sig.params.tail ∧
+def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Prop :=
+  ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
+    fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
     fn.outHolds ⊆ sig.outHolds
 
 /-- A package's code implements its interfaces, method by method. -/
-def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) : Prop :=
-  fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te σ
+def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
+  fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te cs σ
 
 /-- Every package in memory names code that implements its interfaces. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
-  ∀ x o V fs te ms e, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e) V → CodeOK P fs te ms
+  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V → CodeOK P fs te ms cs
 
 def Rhs.codeOK (P : Prog) : Rhs → Prop
-  | .pack fs te ms _ => CodeOK P fs te ms
+  | .pack fs te ms _ cs => CodeOK P fs te ms cs
   | _ => True
 
 /-- Every package a statement makes names code of its signature (a closure

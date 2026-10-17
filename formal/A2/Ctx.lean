@@ -19,8 +19,8 @@ theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : Entr
     have ho2 : E2.mode.ownSlot = false := by rw [m1]; exact ho
     exact (p1 ho).trans (p2 ho2)
 
-theorem Weaker.refl {Γ : Ctx} (h : CtxWF Γ) : Weaker Γ Γ := by
-  refine ⟨fun v => ⟨Iff.rfl, fun E E' h1 h2 => ?_⟩, h⟩
+theorem Weaker.refl {Γ : Ctx} (h : CtxWF Γ) (hn : NameWF Γ) : Weaker Γ Γ := by
+  refine ⟨fun v => ⟨Iff.rfl, fun E E' h1 h2 => ?_⟩, h, hn⟩
   rw [h1] at h2; cases h2; exact EntryWeaker.refl E
 
 theorem Weaker.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Weaker Γ1 Γ2) (h2 : Weaker Γ2 Γ3) : Weaker Γ1 Γ3 := by
@@ -29,7 +29,9 @@ theorem Weaker.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Weaker Γ1 Γ2) (h2 : Weaker Γ2 
   | none => exact absurd e2 (by rw [← (h1.1 v).1, e1]; simp)
   | some E2 => exact ((h1.1 v).2 E E2 e1 e2).trans ((h2.1 v).2 E2 E' e2 e3)
 
-theorem Weaker.wf {Γ Γ' : Ctx} (h : Weaker Γ Γ') : CtxWF Γ' := h.2
+theorem Weaker.wf {Γ Γ' : Ctx} (h : Weaker Γ Γ') : CtxWF Γ' := h.2.1
+
+theorem Weaker.names {Γ Γ' : Ctx} (h : Weaker Γ Γ') : NameWF Γ' := h.2.2
 
 theorem Weaker.get {Γ Γ' : Ctx} (h : Weaker Γ Γ') {v : Var} {E : Entry} (hv : Γ v = some E) :
     ∃ E', Γ' v = some E' ∧ EntryWeaker E E' := by
@@ -55,10 +57,13 @@ theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
   exact ⟨d, o, l, rfl, dep, hs hd, ha⟩
 
+theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H') : NamesIn T H' :=
+  fun c hc => hs (h c hc)
+
 theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (hs : H ⊆ H')
     (h : HrefAt m dep c t H) : HrefAt m dep c t H' := by
-  obtain ⟨n0, d, es, hr, hk, hw, hv⟩ := h
-  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs⟩
+  obtain ⟨n0, d, es, hr, hk, hw, hv, hn⟩ := h
+  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs⟩
 
 theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
     ∀ {P' H' : List Dep}, P ⊆ P' → H ⊆ H' → ValOK m τ v P' H' := by
@@ -95,6 +100,7 @@ theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E
     obtain ⟨v, hv, hok⟩ := hbor hos a
     exact ⟨v, hv, by rw [ht]; exact hok.mono (hp hos) hh⟩
 
+
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
@@ -115,6 +121,12 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
     rw [hwe.2.2.1 hm']; exact hi.rootbLt p E hE hm'
+  names := hw.names
+  held v E' sl T hv hl hsl hT := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    obtain ⟨hl0, _, hh⟩ := hwe.2.2.2 hl
+    exact (hi.held v E sl T hE hl0 hsl hT).mono hh
+  pkgs := hi.pkgs
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where
@@ -134,6 +146,6 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   cover := hi.cover
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
-    Weaker Γ Γ := Weaker.refl hi.wf
+    Weaker Γ Γ := Weaker.refl hi.wf hi.names
 
 end A2

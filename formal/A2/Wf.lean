@@ -69,12 +69,6 @@ theorem CtxWF.exitScope {Γ : Ctx} (h : CtxWF Γ) (x : Var) : CtxWF (exitScope x
     rw [this] at hl; cases hl.2
   exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hrx, hEr], hro⟩
 
-theorem CtxWF.exitRoot {Γ : Ctx} (h : CtxWF Γ) (p : Var) (D : List Dep)
-    (hD : ∀ d ∈ D, d.root ≠ p ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true) :
-    CtxWF (exitRoot p D Γ) := by
-  have := (Weaker.refl h).exitRoot p D hD
-  exact this.wf
-
 theorem derive_roots {Γ : Ctx} (h : CtxWF Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
     (hl : Ey.live = true) (hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb) (k : Kind) :
     ∀ r ∈ roots (derive y Ey k), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
@@ -548,7 +542,7 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     intro i r hr
     simp only [outHeld, roots, List.mem_map, List.mem_flatMap, List.mem_filter] at hr
     obtain ⟨d, ⟨o, ⟨ho, _⟩, hd⟩, rfl⟩ := hr
-    obtain ⟨hj, _⟩ := houts o ho
+    obtain ⟨⟨hj, _⟩, _⟩ := houts o ho
     exact hargDeps _ hj d.root (List.mem_map_of_mem hd)
   have hpost := callPostAux_wf (fn := fn) (args := args) hheld hout fn.params args 0 Γ
     (fun a ha => by
@@ -580,9 +574,9 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     simp only [roots, List.map_append, List.mem_append] at hr ⊢
     split at hr <;> simp at hr <;> grind
   rcases key with h' | h' | h'
-  · exact hlist _ hlends r h'
+  · exact hlist _ (fun jk h => (hlends jk h).1) r h'
   · exact hheld r h'
-  · exact hlist _ hrholds r h'
+  · exact hlist _ (fun jk h => (hrholds jk h).1) r h'
 
 end A2
 

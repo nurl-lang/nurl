@@ -97,7 +97,7 @@ theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (h
     exact ⟨_, _, _, hv⟩
 
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
+    (hanch : RootbAnch Γ F)
     (hr : RhsT Γ F r E Γ1) : ∃ res, EvalR m r res := by
   cases hr with
   | expr he =>

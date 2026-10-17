@@ -67,6 +67,8 @@ def comp : Kind → Kind → Kind
   | .self, k => k
   | k, .self => k
   | .view, .view => .view
+  | .name b t, _ => .name b t
+  | _, .name b t => .name b t
   | _, _ => .inner
 
 /-- The handle of a borrowed slice parameter is a view. -/
@@ -125,13 +127,27 @@ def CtxWF (Γ : Ctx) : Prop :=
   ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
 
-def Weaker (Γ Γ' : Ctx) : Prop :=
-  (∀ v, (Γ v = none ↔ Γ' v = none) ∧
-    ∀ E E', Γ v = some E → Γ' v = some E' → EntryWeaker E E') ∧ CtxWF Γ'
-
 /-- May a binding in this mode undergo effect `e`? -/
 def canDo (m : Mode) (e : Eff) : Prop :=
   m = .own ∨ ∃ b, m = .inout b ∧ e.le b
+
+/-- What `D` holds by name names bindings that are still bound, of the
+    type the capturing closure's code expects (one that holds no views: a
+    binding that holds views is captured by handle), that own their slot,
+    and that allow what the closure may do to them. -/
+def DepsNamed (Γ : Ctx) (D : List Dep) : Prop :=
+  ∀ d ∈ D, ∀ b t, d.kind = .name b t →
+    ∃ Er, Γ d.root = some Er ∧ Er.ty = t ∧ Er.mode.ownSlot = true ∧
+      (b = .none ∨ canDo Er.mode b) ∧ t.holdsView = false
+
+def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
+
+def NameWF (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ E
+
+def Weaker (Γ Γ' : Ctx) : Prop :=
+  (∀ v, (Γ v = none ↔ Γ' v = none) ∧
+    ∀ E E', Γ v = some E → Γ' v = some E' → EntryWeaker E E') ∧ CtxWF Γ' ∧ NameWF Γ'
 
 def intE : Entry := ⟨.int, .bor, true, [], []⟩
 
@@ -201,6 +217,32 @@ inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List 
       (E.mode = .bor ∨ E.mode = .rootb) →
       PushArg Γ F y E (.slice s) (derive y E .self ++ E.held) Γ
 
+def argE (Γ : Ctx) (a : Var) : Entry := (Γ a).getD intE
+
+/-- What a closure literal's captures by name add to what it holds: each
+    binding, by name.  (What such a binding holds needs no tracking: it
+    holds no views, and it is read only through its own slot.) -/
+def capDeps (cs : List (Var × PMode × Ty)) : List Dep :=
+  cs.map (fun c => ⟨c.1, .name c.2.1.bound c.2.2⟩)
+
+/-- A closure literal's captures by name: distinct live bindings that own
+    their slot (a borrowed parameter is captured by handle instead: it
+    stays as it is for its whole scope), of the recorded types, each read
+    (`inp`) or changed (`inout b`), of a type that holds no views.  One it
+    only reads is at most read by name by what its environment holds.  One
+    it may change is owned (or an `inout` parameter that allows `b`), not
+    lent out, a `Vec` whose elements hold no views, changed at most by
+    dropping elements, and reached from nothing else the closure holds
+    (§2.11). -/
+def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × Ty)) : Prop :=
+  (cs.map (·.1)).Nodup ∧
+  ∀ c ∈ cs, ∃ Ev, Γ c.1 = some Ev ∧ Ev.live = true ∧ Ev.ty = c.2.2 ∧ Ev.mode.ownSlot = true ∧
+    c.2.2.holdsView = false ∧
+    (c.2.1 = .inp ∧ (∀ d ∈ D, d.root = c.1 → d.kind.isName = true → d.kind.bound = .none) ∨
+      ∃ b s, c.2.1 = .inout b ∧ b ≠ .none ∧ b ≠ .replace ∧ canDo Ev.mode b ∧ c.1 ∉ F ∧
+       c.2.2 = .vec s ∧ s.holdsView = false ∧ (∀ d ∈ D, d.root ≠ c.1) ∧
+       ∀ c' ∈ cs, ∀ d ∈ (argE Γ c'.1).held, d.root ≠ c.1)
+
 inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
   | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], []⟩ Γ
@@ -253,13 +295,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | taker {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
-  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
-      Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 →
-      RhsT Γ F (.pack fs te ms y) ⟨.fn ms, .own, true, [], D⟩ Γ1
+  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
+      {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
+      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs⟩ Γ1
 
 /-! ### Calls -/
-
-def argE (Γ : Ctx) (a : Var) : Entry := (Γ a).getD intE
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -271,16 +312,33 @@ def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
 def allKinds (rs : List Var) : List Dep :=
   rs.flatMap (fun r => [⟨r, .self⟩, ⟨r, .inner⟩, ⟨r, .view⟩])
 
-/-- What the arguments hold views of, in every way a callee may come to
-    depend on it.  An integer holds nothing. -/
+
+/-- The dependencies on memory among `ds`, and those by name. -/
+def memDeps (ds : List Dep) : List Dep := ds.filter (fun d => !d.kind.isName)
+def nameDeps (ds : List Dep) : List Dep := ds.filter (fun d => d.kind.isName)
+
+/-- What the arguments hold by name: the bindings the closures among them
+    (or inside them) read or change each time they run.  An integer holds
+    nothing. -/
+def argNames (Γ : Ctx) (args : List Var) : List Dep :=
+  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else nameDeps (argE Γ a).held)
+
+/-- ... those a closure may change. -/
+def mutNames (Γ : Ctx) (args : List Var) : List Dep :=
+  (argNames Γ args).filter (fun d => d.kind.bound != .none)
+
+/-- What the arguments hold: views, in every way a callee may come to depend
+    on them, and closures, by name. -/
 def heldOfArgs (Γ : Ctx) (args : List Var) : List Dep :=
-  allKinds (args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (argE Γ a).held))
+  allKinds (args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held))) ++
+    argNames Γ args
 
 def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 
 /-- The roots what a package's environment depends on: the package (or what
     it borrows from), and what it holds. -/
-def recvRoots (c : Var) (Ec : Entry) : List Var := roots (derive c Ec .self) ++ roots Ec.held
+def recvRoots (c : Var) (Ec : Entry) : List Var :=
+  roots (memDeps (derive c Ec .self)) ++ roots (memDeps Ec.held)
 
 /-- What a call through a package returns: what its interface says, and, as
     the method may lend part of the receiver, anything the package reaches. -/
@@ -309,12 +367,25 @@ def callPostAux (Γ0 : Ctx) (fn : Fn) (args : List Var) :
   | (.inout b, t) :: ps, a :: as, i, Γ =>
       callPostAux Γ0 fn args ps as (i + 1)
         (setE (kill b t.elem.holdsView a Γ) a
-          { argE Γ0 a with held := (argE Γ0 a).held ++ outHeld Γ0 fn args i ++ heldOfArgs Γ0 args })
+          { argE Γ0 a with held := if t.holdsView then
+              (argE Γ0 a).held ++ outHeld Γ0 fn args i ++ heldOfArgs Γ0 args else (argE Γ0 a).held })
   | (.inp, _) :: ps, _ :: as, i, Γ => callPostAux Γ0 fn args ps as (i + 1) Γ
   | _, _, _, Γ => Γ
 
+/-- Running the closures handed to a call ends what their changes end. -/
+def killNames (ds : List Dep) (Γ : Ctx) : Ctx :=
+  ds.foldr (fun d Γ => kill d.kind.bound true d.root Γ) Γ
+
 def callPost (Γ : Ctx) (fn : Fn) (args : List Var) : Ctx :=
-  callPostAux Γ fn args fn.params args 0 Γ
+  killNames (mutNames Γ args) (callPostAux Γ fn args fn.params args 0 Γ)
+
+/-- A binding a closure handed to a call may change is changed by the call:
+    it is not lent out, not passed beside the closure, and reached from no
+    argument but by name. -/
+def NamesFree (Γ : Ctx) (F : List Var) (args : List Var) : Prop :=
+  ∀ d ∈ mutNames Γ args, d.root ∉ F ∧ d.root ∉ args ∧
+    ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
+      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.isName = true
 
 def PMode.moves : PMode → Bool
   | .inp => false
@@ -337,7 +408,7 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
           args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
           ∀ j < fn.params.length, j ≠ i →
             args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps)) ∧
-    E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
+    NamesFree Γ F args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
 
 /-! ### Statements -/
 
@@ -409,7 +480,7 @@ def Rhs.vars : Rhs → List Var
   | .getr y => [y]
   | .takel y => [y]
   | .taker y => [y]
-  | .pack _ _ _ y => [y]
+  | .pack _ _ _ y cs => y :: cs.map (·.1)
 
 def Stmt.vars : Stmt → List Var
   | .skip => []
