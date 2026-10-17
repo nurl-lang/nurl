@@ -80,8 +80,8 @@ theorem wrapSpine_nodup : ∀ (ps : List (PMode × Ty)) (base i : Nat), (wrapSpi
     | sink => exact List.nodup_cons.mpr ⟨hnot, ih base (i + 1)⟩
 
 
-theorem callIn_spine (fn : Fn) (args : List Var) (base : Nat) (x : Var) (nm : List Var) :
-    (callIn fn args base x nm).spine =
+theorem callIn_spine (fn : Fn) (args : List Var) (base : Nat) (x : Var) :
+    (callIn fn args base x).spine =
       (base + fn.params.length) :: (wrapSpine fn.params base 0 ++
         (fn.body.rename (callRen fn.params args base)).spine) := by
   simp [callIn, Stmt.spine, spine_wrap]

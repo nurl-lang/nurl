@@ -253,14 +253,14 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
     catchOK := hi.catchOK
     cover := hi.cover }
 
-theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k)) :
-    Inv m Γ (F ++ z) k :=
+theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))
+    (hz : ∀ v ∈ z', v ∈ z) : Inv m Γ (F ++ z') k :=
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := fun v hv => by
       rcases List.mem_append.mp hv with hv | hv
       · exact hi.nvF v hv
-      · exact hi.nvS v (by simp [Stmt.vars, hv])
+      · exact hi.nvS v (by simp [Stmt.vars, hz v hv])
     anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
     spineNd := hi.spineNd
     spineDom := hi.spineDom
@@ -286,7 +286,7 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     rcases hv with rfl | hv
     · exact hpF
     · exact ih v hv
-  | frozen _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | _ => intro v hv; simp [Stmt.spine] at hv
 

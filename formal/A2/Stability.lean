@@ -384,6 +384,45 @@ theorem no_names {t : Ty} {T : Val} (hw : WFv (.vec t) T) (ht : t.holdsView = fa
   intro c hc
   rw [hw.names_nil (by simpa [Ty.holdsView] using ht)] at hc; cases hc
 
+@[simp] theorem ownHeld_false (t : Ty) (H : List Dep) : ownHeld false t H = H := by simp [ownHeld]
+
+theorem ownHeld_sub (o : Bool) (t : Ty) (H : List Dep) : ownHeld o t H ⊆ H := by
+  unfold ownHeld; split
+  · intro d hd; cases hd
+  · exact List.Subset.refl _
+
+theorem ownHeld_mono {t t' : Ty} (h : t.holdsView = true → t'.holdsView = true) (H : List Dep) :
+    ownHeld true t H ⊆ ownHeld true t' H := by
+  unfold ownHeld
+  cases h1 : t.holdsView <;> cases h2 : t'.holdsView <;> simp_all
+
+theorem ownHeld_roots {o : Bool} {t : Ty} {H : List Dep} {r : Var} (h : r ∈ roots (ownHeld o t H)) :
+    r ∈ roots H := List.map_subset _ (ownHeld_sub o t H) h
+
+theorem ownHeld_views (o : Bool) {t : Ty} (h : t.holdsView = true) (H : List Dep) : ownHeld o t H = H := by
+  simp [ownHeld, h]
+
+/-- Only a type that holds views has a view inside its values. -/
+theorem viewIn_holds {t : Ty} {T : Val} {s : Ty} {v : Val} (h : ViewIn t T s v) : t.holdsView = true := by
+  induction h <;> simp_all [Ty.holdsView]
+
+theorem ViewsOK.ownHeld {m : Mem} {t : Ty} {T : Val} {H : List Dep} (o : Bool) (h : ViewsOK m t T H) :
+    ViewsOK m t T (ownHeld o t H) := by
+  unfold A2.ownHeld; split
+  · rename_i hc
+    intro s v hv
+    have := viewIn_holds hv
+    simp_all
+  · exact h
+
+theorem NamesIn.ownHeld {t : Ty} {T : Val} {H : List Dep} (hw : WFv t T) (o : Bool) (h : NamesIn T H) :
+    NamesIn T (A2.ownHeld o t H) := by
+  unfold A2.ownHeld; split
+  · rename_i hc
+    simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hc
+    intro c hc'; rw [hw.names_nil hc.2] at hc'; cases hc'
+  · exact h
+
 /-- Growing (`vec_push`): what is below the root stays below it. -/
 theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind} (hk : k ≠ .view) :

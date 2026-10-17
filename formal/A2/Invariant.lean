@@ -305,8 +305,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F s Δ →
       (∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true) →
       StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
-  | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
-      StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
+  | frozen {Γ Δ : Ctx} {F z z' : List Var} {s : Stmt} :
+      -- `z` bounds what is lent: the typing lends a part of it
+      StmtT P Γ (F ++ z') s Δ → (∀ v ∈ z', v ∈ z) → StmtT P Γ F (.frozen z s) Δ
   | assign {Γ Γ1 : Ctx} {F : List Var} {x : Var} {r : Rhs} {Ex E : Entry} :
       Γ x = some Ex → x ∉ F →
       (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
@@ -333,7 +334,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | panic {Γ Δ : Ctx} {F : List Var} :
       -- a panic never ends normally: what follows it may assume any context
       -- with the same bindings, modes and types, borrowed parameters as they were
-      CtxWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
+      CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.mode = .rootb → E = E0)) →
       StmtT P Γ F .panic Δ
@@ -364,7 +365,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows
     and holds only what `lends` and `rholds` name, every `inout` parameter
-    is set again and holds only what `outHolds` names. -/
+    is set again and holds only what `outHolds` names (an owned result or
+    an `inout` parameter whose type holds no views holds nothing). -/
 def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
@@ -377,9 +379,11 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
       (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
-      (∀ d ∈ Er.held, (d.root, d.kind) ∈ fn.rholds)) ∧
+      (∀ d ∈ Er.held, (d.root, d.kind) ∈ fn.rholds) ∧
+      (fn.resOwn = true → fn.resTy.holdsView = false → Er.held = [])) ∧
     (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b →
-      ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds)
+      ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ (∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) ∧
+        (fn.params[i].2.holdsView = false → Ei.held = []))
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 

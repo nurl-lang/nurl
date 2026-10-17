@@ -256,9 +256,9 @@ theorem progress {P : Prog}
         have hps : p ∉ k.spine := by
           have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
         exact Or.inr ⟨_, Step.rbindP hr (by rw [hout p hps]; exact hpb)⟩
-  | frozen _ ih =>
+  | frozen _ hz ih =>
     intro m hcd hi
-    rcases ih hcd hi.frozenIn with h | ⟨r, hr⟩
+    rcases ih hcd (hi.frozenIn hz) with h | ⟨r, hr⟩
     · subst h; exact Or.inr ⟨_, Step.frozenSkip⟩
     · cases r with
       | ok m' k' => exact Or.inr ⟨_, Step.frozenIn hr⟩

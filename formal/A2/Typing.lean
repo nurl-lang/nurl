@@ -138,7 +138,7 @@ def canDo (m : Mode) (e : Eff) : Prop :=
 def DepsNamed (Γ : Ctx) (D : List Dep) : Prop :=
   ∀ d ∈ D, ∀ b t, d.kind = .name b t →
     ∃ Er, Γ d.root = some Er ∧ Er.ty = t ∧ Er.mode.ownSlot = true ∧
-      (b = .none ∨ canDo Er.mode b) ∧ t.holdsView = false
+      (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false
 
 def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
 
@@ -202,11 +202,15 @@ def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held⟩
 
+/-- What an owned value holds: nothing, if its type holds no views (no view
+    and no closure lies inside it, so what it was made from says nothing). -/
+def ownHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep := if o && !t.holdsView then [] else H
+
 /-- A field moved out of a struct that is taken apart. -/
 def compE (E : Entry) : Ty → Entry
   | .int => intE
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
-  | t => ⟨t, .own, true, [], E.held⟩
+  | t => ⟨t, .own, true, [], ownHeld true t E.held⟩
 
 /-- The element type of a `Vec`. -/
 def Ty.elem : Ty → Ty
@@ -328,7 +332,7 @@ def nameDeps (ds : List Dep) : List Dep := ds.filter (fun d => d.kind.isName)
     (or inside them) read or change each time they run.  An integer holds
     nothing. -/
 def argNames (Γ : Ctx) (args : List Var) : List Dep :=
-  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else nameDeps (argE Γ a).held)
+  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else nameDeps (argE Γ a).vdeps)
 
 /-- ... those a closure may change. -/
 def mutNames (Γ : Ctx) (args : List Var) : List Dep :=
@@ -350,14 +354,15 @@ def recvRoots (c : Var) (Ec : Entry) : List Var :=
 /-- What a call through a package returns: what its interface says, and, as
     the method may lend part of the receiver, anything the package reaches. -/
 def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
-  { E with path := E.path ++ allKinds (recvRoots c Ec), held := E.held ++ allKinds (recvRoots c Ec) }
+  { E with path := E.path ++ allKinds (recvRoots c Ec),
+           held := ownHeld E.mode.ownSlot E.ty (E.held ++ allKinds (recvRoots c Ec)) }
 
 /-- The call's result: it borrows what the summary says it borrows, and
     may hold whatever the arguments held. -/
 def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
   ⟨fn.resTy, resMode fn, true,
    fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args,
-   fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args⟩
+   ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args)⟩
 
 /-- What `inout` parameter `i` holds views of after the call. -/
 def outHeld (Γ : Ctx) (fn : Fn) (args : List Var) (i : Nat) : List Dep :=
@@ -379,20 +384,24 @@ def callPostAux (Γ0 : Ctx) (fn : Fn) (args : List Var) :
   | (.inp, _) :: ps, _ :: as, i, Γ => callPostAux Γ0 fn args ps as (i + 1) Γ
   | _, _, _, Γ => Γ
 
-/-- Running the closures handed to a call ends what their changes end. -/
+/-- Running the closures handed to a call ends what their changes end (a
+    binding changed by name holds no views). -/
 def killNames (ds : List Dep) (Γ : Ctx) : Ctx :=
-  ds.foldr (fun d Γ => kill d.kind.bound true d.root Γ) Γ
+  ds.foldr (fun d Γ => kill d.kind.bound false d.root Γ) Γ
 
 def callPost (Γ : Ctx) (fn : Fn) (args : List Var) : Ctx :=
   killNames (mutNames Γ args) (callPostAux Γ fn args fn.params args 0 Γ)
 
 /-- A binding a closure handed to a call may change is changed by the call:
-    it is not lent out, not passed beside the closure, and reached from no
-    argument but by name. -/
+    it allows the change, is a `Vec` whose elements hold no views, is not
+    lent out, not passed beside the closure, and reached from no argument
+    but by a closure that may change it (§2.11: not a view, a borrow, nor a
+    closure that reads it). -/
 def NamesFree (Γ : Ctx) (F : List Var) (args : List Var) : Prop :=
-  ∀ d ∈ mutNames Γ args, d.root ∉ F ∧ d.root ∉ args ∧
+  ∀ d ∈ mutNames Γ args, canDo (argE Γ d.root).mode d.kind.bound ∧
+    (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧ d.root ∉ args ∧
     ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
-      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.isName = true
+      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound ≠ .none
 
 def PMode.moves : PMode → Bool
   | .inp => false

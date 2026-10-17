@@ -524,6 +524,10 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
     have := hout.names (Or.inl hτ); simpa [NameOK, Entry.vdeps, Mode.ownSlot] using this
   have hnx : NamesIn x E.held := hout.held.sub (names_sub hsub)
   have hpx : PkgsOK x := hout.pkgs.sub hsub
+  have hnx' : NamesIn x (ownHeld true t E.held) := NamesIn.ownHeld hwx true hnx
+  have hH' : DepsNamed Γ (ownHeld true t E.held) := hH.sub (ownHeld_sub true t E.held)
+  have hwfH' : ∀ r ∈ roots (ownHeld true t E.held), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true :=
+    fun r hr => hwfH r (ownHeld_roots hr)
   cases hwx with
   | int => exact intE_out _
   | @view s d o l =>
@@ -533,30 +537,30 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
     cases hv
     exact .view ⟨dep, hd, ha⟩
   | @node u c d es hes =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.node hes, fun s v h => hvsT s v (hvin s v h),
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.node hes, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH, hnx, hpx⟩
+      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH', hnx', hpx⟩
   | @pair a b v w hwa hwb =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.pair hwa hwb, fun s v h => hvsT s v (hvin s v h),
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.pair hwa hwb, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH, hnx, hpx⟩
+      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH', hnx', hpx⟩
   | @inl a b v hwa =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.inl hwa, fun s v h => hvsT s v (hvin s v h),
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.inl hwa, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH, hnx, hpx⟩
+      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH', hnx', hpx⟩
   | @inr a b v hwb =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.inr hwb, fun s v h => hvsT s v (hvin s v h),
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.inr hwb, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH, hnx, hpx⟩
+      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH', hnx', hpx⟩
   | pkg hwb =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.pkg hwb, fun s v h => hvsT s v (hvin s v h),
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH' r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.pkg hwb, ViewsOK.ownHeld true (fun s v h => hvsT s v (hvin s v h)),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH, hnx, hpx⟩
+      hsf.sub hsub⟩, (fun h => by cases h), fun _ => own_named hH', hnx', hpx⟩
 
 /-- An enum value: its payload, taken from its binding, owned by the enum. -/
 theorem ViewIn.inl_inv {a b s : Ty} {v x : Val} (h : ViewIn (.sum a b) (.inl v) s x) : ViewIn a v s x := by
@@ -642,9 +646,9 @@ theorem CapsOK.named {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var ×
   obtain ⟨rfl, rfl⟩ := hk
   obtain ⟨Ev, hEv, _, ht, ho, hhv, hmode⟩ := h.2 c hc
   refine ⟨Ev, hEv, ht, ho, ?_, hhv⟩
-  rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, _, _, hcan, _⟩
+  rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, _, hbr, hcan, _⟩
   · exact Or.inl (by rw [hinp]; rfl)
-  · exact Or.inr (by rw [hb]; exact hcan)
+  · exact Or.inr (by rw [hb]; exact ⟨hbr, hcan⟩)
 
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)

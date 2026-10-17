@@ -643,7 +643,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.2 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
-  | @frozen Γ Δ F z k hs ihs =>
+  | @frozen Γ Δ F z z' k hs hz ihs =>
     intro m m' s' hcd hi hst
     cases hst with
     | frozenSkip =>
@@ -653,9 +653,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
     | frozenIn hst' =>
-      have hi0 : Inv m Γ (F ++ z) k := hi.frozenIn
+      have hi0 : Inv m Γ (F ++ z') k := hi.frozenIn hz
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
-      refine ⟨Γ', StmtT.frozen ht', ?_, hnv, hk, fun v hv => hfz v (List.mem_append_left _ hv)⟩
+      refine ⟨Γ', StmtT.frozen ht' hz, ?_, hnv, hk, fun v hv => hfz v (List.mem_append_left _ hv)⟩
       exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
