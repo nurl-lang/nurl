@@ -231,9 +231,9 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; rw [panic_none hp v h] at hx; cases hx
     · simp [upd_ne _ _ hvx, panic_none hp v h] at h'
-  | @callc _ x _ _ _ _ _ _ _ _ env fn _ _ _ hb =>
+  | @callc _ x _ _ _ _ _ _ _ _ env _ fn _ _ _ _ hb =>
     cases hr; intro v h h'
-    rw [Stmt.spine, Stmt.spine, Stmt.spine, callIn_spine]
+    simp only [Stmt.spine, callIn_spine]
     by_cases hvx : v = x
     · subst hvx; simp
     by_cases hve : v = m.nv

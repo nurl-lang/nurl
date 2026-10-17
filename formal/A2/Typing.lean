@@ -75,7 +75,7 @@ def rootKind (t : Ty) (k : Kind) : Kind :=
   | .slice _, .self => .view
   | .prod _ _, .self => .view
   | .sum _ _, .self => .view
-  | .fn _ _, .self => .view
+  | .fn _, .self => .view
   | _, k => k
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
@@ -156,7 +156,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held⟩
   | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held⟩
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held⟩
-  | .fn a r => ⟨.fn a r, .bor, true, derive y E .inner, E.held⟩
+  | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -164,7 +164,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .own, true, [], E.held⟩
   | .prod a b => ⟨.prod a b, .own, true, [], E.held⟩
   | .sum a b => ⟨.sum a b, .own, true, [], E.held⟩
-  | .fn a r => ⟨.fn a r, .own, true, [], E.held⟩
+  | .fn ms => ⟨.fn ms, .own, true, [], E.held⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -253,9 +253,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | taker {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
-  | pack {f : Nat} {te a r : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
-      Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → a.ok = true →
-      r.ok = true → RhsT Γ F (.pack f te a r y) ⟨.fn a r, .own, true, [], D⟩ Γ1
+  | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 →
+      RhsT Γ F (.pack fs te ms y) ⟨.fn ms, .own, true, [], D⟩ Γ1
 
 /-! ### Calls -/
 
@@ -278,18 +278,14 @@ def heldOfArgs (Γ : Ctx) (args : List Var) : List Dep :=
 
 def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 
-/-- Every dependency of every kind a borrow of `y` may have. -/
-def deriveAll (y : Var) (E : Entry) : List Dep :=
-  derive y E .self ++ derive y E .inner ++ derive y E .view
+/-- The roots what a package's environment depends on: the package (or what
+    it borrows from), and what it holds. -/
+def recvRoots (c : Var) (Ec : Entry) : List Var := roots (derive c Ec .self) ++ roots Ec.held
 
-/-- What a call through a package returns, whatever code it holds: a
-    result of type `r` that borrows, if it does, only from the argument `z`
-    (never from what the package captured), and may hold whatever the
-    package and the argument hold.  An owning result is the caller's. -/
-def cloRes (Ec : Entry) (z : Var) (Ez : Entry) (r : Ty) : Entry :=
-  let D := (if Ez.ty = .int then [] else deriveAll z Ez) ++
-    allKinds (roots Ec.held ++ (if Ez.ty = .int then [] else roots Ez.held))
-  ⟨r, if r.owning then .own else .bor, true, D, D⟩
+/-- What a call through a package returns: what its interface says, and, as
+    the method may lend part of the receiver, anything the package reaches. -/
+def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
+  { E with path := E.path ++ allKinds (recvRoots c Ec), held := E.held ++ allKinds (recvRoots c Ec) }
 
 /-- The call's result: it borrows what the summary says it borrows, and
     may hold whatever the arguments held. -/
@@ -365,7 +361,7 @@ def Stmt.src : Stmt → Bool
   | .letrec _ _ s => s.src
   | .catchR _ _ _ => false
   | .unpair _ _ _ s => s.src
-  | .callc _ _ _ s => s.src
+  | .callc _ _ _ _ s => s.src
 
 /-! ### Functions -/
 
@@ -413,7 +409,7 @@ def Rhs.vars : Rhs → List Var
   | .getr y => [y]
   | .takel y => [y]
   | .taker y => [y]
-  | .pack _ _ _ _ y => [y]
+  | .pack _ _ _ y => [y]
 
 def Stmt.vars : Stmt → List Var
   | .skip => []
@@ -432,7 +428,7 @@ def Stmt.vars : Stmt → List Var
   | .letrec x _ s => x :: s.vars
   | .catchR x _ s => x :: s.vars
   | .unpair y x z s => y :: x :: z :: s.vars
-  | .callc x c z s => x :: c :: z :: s.vars
+  | .callc x c _ zs s => x :: c :: zs ++ s.vars
 
 
 

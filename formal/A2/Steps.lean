@@ -641,11 +641,11 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
         (fun s x h => ViewIn.inr_inv h) (hi.tyok hy)⟩
-  | @pack f te a r y Ey Γ1 D hy hly hte hpa ha hr =>
+  | @pack fs te ms y Ey Γ1 D hy hly hte hpa =>
     cases he with
     | pack htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly hte hpa htk
-      exact ⟨post, out_wrap pu (by simp [Ty.ok, ha, hr]) rfl (WFv.pkg pu.wf)
+      exact ⟨post, out_wrap pu rfl rfl (WFv.pkg pu.wf)
         (fun s x h => by cases h with | pkg h => exact h) (fun e h => by cases h; rfl) (by simp)
         (fun _ _ _ h => by cases h) (fun _ _ _ _ h => by cases h)⟩
   | getl hy hl hty =>

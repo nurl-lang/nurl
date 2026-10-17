@@ -127,13 +127,14 @@ def RecCase (P : Prog) : Prop :=
 /-- The case of a call through a package, proven with the call case
     (`Closure.lean`).  It reads which code the package holds from memory. -/
 def CloCase (P : Prog) : Prop :=
-  ∀ {Γ : Ctx} {F : List Var} {x c z : Var} {k : Stmt} {Ec Ez : Entry} {a r : Ty} {Δ : Ctx}
-    {m m' : Mem} {s' : Stmt},
-    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.live = true → Ec.ty = .fn a r →
-    Γ z = some Ez → Ez.live = true → Ez.ty = a → StmtT P (setE Γ x (cloRes Ec z Ez r)) F k Δ →
-    MemCodes P m → Inv m Γ F (.callc x c z k) → Step P m (.callc x c z k) (.ok m' s') →
+  ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {Ec E : Entry}
+    {ms : List Nat} {σ : Nat} {sig : Fn} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
+    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
+    P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
+    CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
+    MemCodes P m → Inv m Γ F (.callc x c j zs k) → Step P m (.callc x c j zs k) (.ok m' s') →
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callc x c z k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.callc x c j zs k) s' ∧ Frz F m m'
 
 theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : Keep Γ0 Γ' s s') :
     Keep Γ Γ' s s' := by
@@ -634,9 +635,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | letrec hsrc hx hxF hf hp hty ho hc hs _ =>
     intro m m' s' hcd hi hst
     exact hrec hsrc hx hxF hf hp hty ho hc hs hi hst
-  | callc hk hx hxF hc hlc htc hz hlz htz hkT _ =>
+  | callc hk hx hxF hc htc hj hσ hhd hout hcT hkT _ =>
     intro m m' s' hcd hi hst
-    exact hclo hk hx hxF hc hlc htc hz hlz htz hkT hcd hi hst
+    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hkT hcd hi hst
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO ih =>
     intro m m' s' hcd hi hst
     obtain ⟨hfr, hxs, hnv0, hck⟩ := hi.catchOK

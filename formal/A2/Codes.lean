@@ -11,38 +11,38 @@ namespace A2
 
 /-- Every package inside `v` names code of its signature. -/
 def PkgOK (P : Prog) (v : Val) : Prop :=
-  ∀ f te a r e, Sub (.pkg f te a r e) v → CodeOK P f te a r
+  ∀ fs te ms e, Sub (.pkg fs te ms e) v → CodeOK P fs te ms
 
 theorem memCodes_iff {P : Prog} {m : Mem} :
     MemCodes P m ↔ ∀ x o V, m.st x = some ⟨o, some V⟩ → PkgOK P V :=
-  ⟨fun h x o V hx f te a r e hs => h x o V f te a r e hx hs,
-   fun h x o V f te a r e hx hs => h x o V hx f te a r e hs⟩
+  ⟨fun h x o V hx fs te ms e hs => h x o V fs te ms e hx hs,
+   fun h x o V fs te ms e hx hs => h x o V hx fs te ms e hs⟩
 
 theorem PkgOK.sub {P : Prog} {u v : Val} (h : PkgOK P v) (hs : Sub u v) : PkgOK P u :=
-  fun f te a r e hp => h f te a r e (hp.trans hs)
+  fun fs te ms e hp => h fs te ms e (hp.trans hs)
 
-theorem pkgOK_leaf {P : Prog} {v : Val} (hv : ∀ f te a r e, v ≠ .pkg f te a r e)
+theorem pkgOK_leaf {P : Prog} {v : Val} (hv : ∀ fs te ms e, v ≠ .pkg fs te ms e)
     (hc : ∀ e, ¬ Child e v) : PkgOK P v := by
-  intro f te a r e hs
+  intro fs te ms e hs
   rcases hs.cases' with h | ⟨e', hc', _⟩
-  · exact absurd h.symm (hv f te a r e)
+  · exact absurd h.symm (hv fs te ms e)
   · exact absurd hc' (hc e')
 
 theorem pkgOK_int (P : Prog) (n : Nat) : PkgOK P (.int n) :=
-  pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  pkgOK_leaf (fun _ _ _ _ h => by cases h) (fun _ h => by cases h)
 theorem pkgOK_href (P : Prog) (c : Nat) : PkgOK P (.href c) :=
-  pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  pkgOK_leaf (fun _ _ _ _ h => by cases h) (fun _ h => by cases h)
 theorem pkgOK_view (P : Prog) (d o l : Nat) : PkgOK P (.view d o l) :=
-  pkgOK_leaf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  pkgOK_leaf (fun _ _ _ _ h => by cases h) (fun _ h => by cases h)
 
 /-- A value built from parts: its packages are theirs, and its own. -/
 theorem pkgOK_of_children {P : Prog} {v : Val}
-    (hself : ∀ f te a r e, v = .pkg f te a r e → CodeOK P f te a r)
+    (hself : ∀ fs te ms e, v = .pkg fs te ms e → CodeOK P fs te ms)
     (hc : ∀ e, Child e v → PkgOK P e) : PkgOK P v := by
-  intro f te a r e hs
+  intro fs te ms e hs
   rcases hs.cases' with h | ⟨e', hc', hs'⟩
-  · exact hself f te a r e h.symm
-  · exact hc e' hc' f te a r e hs'
+  · exact hself fs te ms e h.symm
+  · exact hc e' hc' fs te ms e hs'
 
 theorem PkgOK.child {P : Prog} {e v : Val} (h : PkgOK P v) (hc : Child e v) : PkgOK P e :=
   h.sub (hc.sub (Sub.refl _))
@@ -54,21 +54,21 @@ theorem pkgOK_lend {P : Prog} : ∀ {v : Val}, PkgOK P v → PkgOK P (lendOf v)
   | .view _ _ _, h => h
   | .node _ c _ _, _ => pkgOK_href P c
   | .pair v w, h => by
-    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    refine pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | fst => exact pkgOK_lend (h.child Child.fst)
     | snd => exact pkgOK_lend (h.child Child.snd)
   | .inl v, h => by
-    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    refine pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | inl => exact pkgOK_lend (h.child Child.inl)
   | .inr v, h => by
-    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    refine pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | inr => exact pkgOK_lend (h.child Child.inr)
-  | .pkg f te a r v, h => by
-    refine pkgOK_of_children (fun f' te' a' r' e he => ?_) (fun e hc => ?_)
-    · cases he; exact h f te a r v (Sub.refl _)
+  | .pkg fs te ms v, h => by
+    refine pkgOK_of_children (fun fs' te' ms' e he => ?_) (fun e hc => ?_)
+    · cases he; exact h fs te ms v (Sub.refl _)
     · cases hc with
       | pkg => exact pkgOK_lend (h.child Child.pkg)
 
@@ -122,7 +122,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   cases he with
   | expr _ => exact ⟨pkgOK_int P _, h⟩
   | new =>
-    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), h.of_st rfl⟩
+    refine ⟨pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_), h.of_st rfl⟩
     cases hc with | elem he => simp at he
   | moveOwn hv => exact ⟨h.slot hv, h.set (fun _ e => by cases e)⟩
   | copy hv => exact ⟨h.slot hv, h⟩
@@ -135,12 +135,12 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
     have hT := h.slot hv
     refine ⟨pkgOK_elem hT (by simp), h.set (fun V e => ?_)⟩
     cases e
-    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    refine pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with | elem he => exact pkgOK_elem hT (by simp [he])
   | pair h1 h2 =>
     obtain ⟨hv, hm1⟩ := h1.codes h
     obtain ⟨hw, hm2⟩ := h2.codes hm1
-    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), hm2⟩
+    refine ⟨pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_), hm2⟩
     cases hc with
     | fst => exact hv
     | snd => exact hw
@@ -148,11 +148,11 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | snd hv => exact ⟨pkgOK_lend ((h.slot hv).child Child.snd), h⟩
   | inl h1 =>
     obtain ⟨hv, hm1⟩ := h1.codes h
-    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), hm1⟩
+    refine ⟨pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_), hm1⟩
     cases hc with | inl => exact hv
   | inr h1 =>
     obtain ⟨hv, hm1⟩ := h1.codes h
-    refine ⟨pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_), hm1⟩
+    refine ⟨pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_), hm1⟩
     cases hc with | inr => exact hv
   | getl hv => exact ⟨pkgOK_lend ((h.slot hv).child Child.inl), h⟩
   | getr hv => exact ⟨pkgOK_lend ((h.slot hv).child Child.inr), h⟩
@@ -160,7 +160,7 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | taker hv => exact ⟨(h.slot hv).child Child.inr, h.set (fun _ e => by cases e)⟩
   | pack h1 =>
     obtain ⟨hv, hm1⟩ := h1.codes h
-    refine ⟨pkgOK_of_children (fun f te a r e he => ?_) (fun e hc => ?_), hm1⟩
+    refine ⟨pkgOK_of_children (fun fs te ms e he => ?_) (fun e hc => ?_), hm1⟩
     · cases he; exact hr
     · cases hc with | pkg => exact hv
 
@@ -190,7 +190,7 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | assign x r => simp only [Stmt.rename, Stmt.codesOK, Rhs.codeOK_rename]
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
-  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ ih => simp only [Stmt.rename, Stmt.codesOK, ih]
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih => simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
 theorem wrapParams_codes {P : Prog} {s : Stmt} (hs : s.codesOK P) :
@@ -280,7 +280,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     have hT := hm1.slot hx
     refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
     cases e
-    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    refine pkgOK_of_children (fun _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | elem he =>
       rcases List.mem_append.mp he with he | he
@@ -301,7 +301,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     have hT := hm.slot hy
     exact ⟨((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.fst)).set
       (fun V e => by cases e; exact hT.child Child.snd), hs⟩
-  | callc hslot hf _ hb =>
+  | callc hslot _ hf _ hb =>
     intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hslot
     have hme : MemCodes P (envMem _ _) :=
