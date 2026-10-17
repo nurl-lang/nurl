@@ -708,6 +708,50 @@ theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : 
   have hw3 := hw2.add hz2 (hcomp _ b hheld2)
   exact hw3
 
+theorem held_vdeps' {E : Entry} {r : Var} (h : r ∈ roots E.held) : r ∈ roots E.vdeps := by
+  simp only [roots, Entry.vdeps, List.map_append, List.mem_append]; exact Or.inr h
+
+theorem allKinds_root {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root ∈ rs := by
+  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
+  obtain ⟨r, hr, hd⟩ := h
+  rcases hd with rfl | rfl | rfl <;> exact hr
+
+/-- What a call through a package returns depends only on roots the
+    context has. -/
+theorem cloRes_roots {Γ : Ctx} (h : CtxWF Γ) {c z : Var} {Ec Ez : Entry} {a r : Ty}
+    (hc : Γ c = some Ec) (hlc : Ec.live = true) (htc : Ec.ty = .fn a r) (hz : Γ z = some Ez)
+    (hlz : Ez.live = true) (rt : Ty) :
+    ∀ q ∈ roots (cloRes Ec z Ez rt).vdeps, ∃ Er, Γ q = some Er ∧ Er.mode.isRoot = true := by
+  have hD : ∀ q ∈ roots ((if Ez.ty = .int then [] else deriveAll z Ez) ++
+      allKinds (roots Ec.held ++ (if Ez.ty = .int then [] else roots Ez.held))),
+      ∃ Er, Γ q = some Er ∧ Er.mode.isRoot = true := by
+    intro q hq
+    simp only [roots, List.map_append, List.mem_append] at hq
+    rcases hq with hq | hq
+    · split at hq
+      · simp at hq
+      · rename_i hn
+        simp only [deriveAll, List.map_append, List.mem_append] at hq
+        rcases hq with (hq | hq) | hq <;>
+          exact derive_roots h hz hlz (Or.inl hn) _ q hq
+    · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hq
+      have hr := allKinds_root hd
+      rcases List.mem_append.mp hr with hr | hr
+      · exact h c Ec hc hlc (Or.inl (by rw [htc]; simp)) _ (held_vdeps' hr)
+      · split at hr
+        · simp at hr
+        · rename_i hn; exact h z Ez hz hlz (Or.inl hn) _ (held_vdeps' hr)
+  intro q hq
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hq
+  apply hD
+  apply List.mem_map_of_mem
+  unfold Entry.vdeps at hd
+  rcases List.mem_append.mp hd with hd | hd
+  · split at hd
+    · simp at hd
+    · exact hd
+  · exact hd
+
 /-- A frozen binding stays bound, with its mode, through any derivation. -/
 theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P Γ F s Δ) : ∀ r ∈ F, ∀ E, Γ r = some E → ∃ E', Δ r = some E' ∧ E'.mode = E.mode := by
@@ -736,6 +780,12 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
+    exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
+      by rw [killE_mode, hm2]⟩
+  | @callc Γ Δ F x c z k Ec Ez a rt _ hx hxF _ _ _ _ _ _ _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E2, h2, hm2⟩ := ih r hr E (by simp [A2.setE, upd_ne _ _ hrx, h])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2]⟩
   | @rbind Γ Δ F p k Ep _ _ _ _ hpF _ ih =>
@@ -810,6 +860,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
   | scope _ _ _ ih => exact fun h => (ih h).exitScope _
+  | @callc Γ Δ F x c z k Ec Ez a rt _ hx _ hc hlc htc hz hlz _ _ ih =>
+    exact fun h => (ih (h.add hx (fun _ _ => cloRes_roots h hc hlc htc hz hlz rt))).exitScope x
   | @rbind Γ Δ F p k E hp hm hl hroots hpF hk ih =>
     intro h
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl

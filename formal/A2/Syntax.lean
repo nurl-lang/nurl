@@ -207,6 +207,8 @@ inductive Stmt where
   | catchR (x : Var) (m0 : Mem) (body : Stmt)             -- run time: a `recover` frame; `m0`
                                                           -- is the caller's store (a ghost)
   | unpair (y x z : Var) (body : Stmt)                    -- a struct moved apart into its fields
+  | callc (x c z : Var) (body : Stmt)                     -- `: x ( c z )`: a call through the
+                                                          -- package `c` (a closure or a `dyn`)
 
 /-- Parameter conventions (§1).  An `inout` parameter carries the most the
     function may do to it — its summary. -/

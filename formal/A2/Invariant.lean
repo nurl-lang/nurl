@@ -302,6 +302,11 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
         (compE E b)) F s Δ →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
+  | callc {Γ Δ : Ctx} {F : List Var} {x c z : Var} {k : Stmt} {Ec Ez : Entry} {a r : Ty} :
+      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.live = true → Ec.ty = .fn a r →
+      Γ z = some Ez → Ez.live = true → Ez.ty = a →
+      StmtT P (setE Γ x (cloRes Ec z Ez r)) F k Δ →
+      StmtT P Γ F (.callc x c z k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -329,5 +334,42 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
       ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds)
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
+
+/-! ### Packages name code of their signature -/
+
+/-- The code a package names takes its environment and one argument, both
+    borrowed, and returns the package's result type; what it returns borrows,
+    if it does, only from the argument. -/
+def CodeOK (P : Prog) (f : Nat) (te a r : Ty) : Prop :=
+  ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, te), (.inp, a)] ∧ fn.resTy = r ∧
+    fn.resOwn = r.owning ∧ (∀ jk ∈ fn.lends, jk.1 = 1) ∧ (∀ jk ∈ fn.rholds, jk.1 = 1)
+
+/-- Every package in memory names code of its signature. -/
+def MemCodes (P : Prog) (m : Mem) : Prop :=
+  ∀ x o V f te a r e, m.st x = some ⟨o, some V⟩ → Sub (.pkg f te a r e) V → CodeOK P f te a r
+
+def Rhs.codeOK (P : Prog) : Rhs → Prop
+  | .pack f te a r _ => CodeOK P f te a r
+  | _ => True
+
+/-- Every package a statement makes names code of its signature (a closure
+    literal's body is its code, checked with it). -/
+def Stmt.codesOK (P : Prog) : Stmt → Prop
+  | .seq a b => a.codesOK P ∧ b.codesOK P
+  | .letv _ r s => r.codeOK P ∧ s.codesOK P
+  | .letcall _ _ _ s => s.codesOK P
+  | .assign _ r => r.codeOK P
+  | .ite _ a b => a.codesOK P ∧ b.codesOK P
+  | .while _ s => s.codesOK P
+  | .scope _ s => s.codesOK P
+  | .rbind _ s => s.codesOK P
+  | .frozen _ s => s.codesOK P
+  | .letrec _ _ s => s.codesOK P
+  | .catchR _ _ s => s.codesOK P
+  | .unpair _ _ _ s => s.codesOK P
+  | .callc _ _ _ s => s.codesOK P
+  | _ => True
+
+def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P
 
 end A2

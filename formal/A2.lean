@@ -22,4 +22,6 @@ import A2.Call
 import A2.Bind
 import A2.CallMem
 import A2.CallInv
+import A2.Closure
+import A2.Codes
 import A2.Soundness

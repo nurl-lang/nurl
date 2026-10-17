@@ -231,6 +231,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .letrec x f s => .letrec (ρ x) f (s.rename ρ)
   | .catchR x m0 s => .catchR (ρ x) m0 (s.rename ρ)
   | .unpair y x z s => .unpair (ρ y) (ρ x) (ρ z) (s.rename ρ)
+  | .callc x c z s => .callc (ρ x) (ρ c) (ρ z) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -299,6 +300,11 @@ def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stm
     call failed. -/
 def recStmt (fn : Fn) (base : Nat) (x : Var) (m0 : Mem) (k : Stmt) : Stmt :=
   .scope x (.seq (.catchR x m0 (callIn fn [] base x)) k)
+
+/-- Opening a package for a call: its environment, lent, is bound to the
+    first fresh variable. -/
+def envMem (m : Mem) (env : Val) : Mem :=
+  { m.set m.nv ⟨false, some (lendOf env)⟩ with nv := m.nv + 1 }
 
 /-- A step's outcome: a configuration, or a panic — with the store the
     unwinding left. -/
@@ -381,6 +387,14 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.unpair y x z s)
         (.ok (((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).set z ⟨w.owns, some w⟩)
           (.scope x (.scope z s)))
+  | callc {m m1 : Mem} {x c z : Var} {k : Stmt} {o : Bool} {f : Nat} {te a r : Ty} {env : Val}
+      {fn : Fn} :
+      m.st c = some ⟨o, some (.pkg f te a r env)⟩ → P[f]? = some fn → m.st x = none →
+      BindParams (envMem m env) fn.params [m.nv, z] (m.nv + 1) 0 m1 →
+      Step P m (.callc x c z k)
+        (.ok ({ (m1.set x ⟨fn.resOwn, none⟩).set (m.nv + 1 + fn.params.length) ⟨fn.resOwn, none⟩
+                with nv := m.nv + 1 + fn.nvars })
+             (.scope x (.seq (.scope m.nv (callIn fn [m.nv, z] (m.nv + 1) x)) k)))
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
