@@ -1,0 +1,168 @@
+/-
+  A2 — the core calculus of NURL's ownership model: syntax.
+
+  The calculus keeps exactly what docs/MEMORY.md §1–§2 reason about in
+  single-threaded code without panics: owned `Vec`s whose buffers move when
+  they grow (§2.10), moves and drop flags (§2.1, §7.6), borrows and views
+  (§2.2, §2.10, §6.2), and the three parameter conventions `in`, `inout`
+  and `sink` (§1).  A `String` is a `Vec` of bytes and `string_data` is a
+  view of it, so strings need no constructs of their own.
+-/
+
+namespace A2
+
+/-- Variables (bindings).  A function's own variables are renamed apart
+    from its caller's when it is called (`Semantics.lean`). -/
+abbrev Var := Nat
+
+/-- Types.  `vec t` is an owned, growable buffer of `t` (a `Vec`, or a
+    `String` when `t` is a byte).  `slice t` is a view of such a buffer
+    (`slice_from_vec`, `string_data`, a raw `s` that does not own its
+    text). -/
+inductive Ty where
+  | int
+  | vec (t : Ty)
+  | slice (t : Ty)
+deriving DecidableEq, Repr
+
+/-- Does a value of this type hold views (so that storing one into a
+    container makes the container depend on what is viewed)? -/
+def Ty.holdsView : Ty → Bool
+  | .int => false
+  | .vec t => t.holdsView
+  | .slice _ => true
+
+/-- A2 types: a view's element type holds no views of its own (a view of a
+    container of views is left to A2, with the other aggregates that
+    carry views). -/
+def Ty.ok : Ty → Bool
+  | .int => true
+  | .vec t => t.ok
+  | .slice t => t.ok && !t.holdsView
+
+/-- How a borrow reaches the memory of the binding it depends on.
+
+  * `self`  — the binding's own handle (a cursor, a borrowed argument);
+  * `inner` — something strictly inside its elements (`vec_at` of a
+              `Vec` of `Vec`s, and every borrow taken from that);
+  * `view`  — its own element buffer (`slice_from_vec`, `string_data`). -/
+inductive Kind where
+  | self
+  | inner
+  | view
+deriving DecidableEq, Repr
+
+/-- A dependency: the value is valid only while `root` is not changed in a
+    way that ends borrows of this kind. -/
+structure Dep where
+  root : Var
+  kind : Kind
+deriving DecidableEq, Repr
+
+/-- What an operation does to a container, ordered by what it ends.
+
+  * `none`    — reads it;
+  * `realloc` — may move its buffer (`vec_push`): ends views;
+  * `drop`    — may drop elements (`vec_pop`): ends views and borrows of
+                elements;
+  * `replace` — releases or replaces it (a move, `vec_free`, `=`, the end
+                of its scope): ends everything. -/
+inductive Eff where
+  | none
+  | realloc
+  | drop
+  | replace
+deriving DecidableEq, Repr
+
+def Eff.rank : Eff → Nat
+  | .none => 0
+  | .realloc => 1
+  | .drop => 2
+  | .replace => 3
+
+def Eff.le (a b : Eff) : Prop := a.rank ≤ b.rank
+
+instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ ≤ _))
+
+/-- Does effect `e` on a container of element type with `hv` (holds views)
+    end a borrow of kind `k`?  A container that holds views and gains or
+    loses elements also ends borrows of its whole handle: what such a
+    borrow may read out of it has changed (§2.10). -/
+def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
+  match e, k with
+  | .none, _ => false
+  | .realloc, .view => true
+  | .realloc, .inner => false
+  | .realloc, .self => hv
+  | .drop, .self => hv
+  | .drop, _ => true
+  | .replace, _ => true
+
+/-- Integer expressions.  They read but never move. -/
+inductive Expr where
+  | lit (n : Nat)
+  | var (x : Var)
+  | add (a b : Expr)
+  | lt (a b : Expr)
+  | len (x : Var)    -- `vec_len`
+  | slen (x : Var)   -- `slice_len`
+deriving DecidableEq, Repr
+
+/-- Right-hand sides of a binding or an assignment. -/
+inductive Rhs where
+  | expr (e : Expr)
+  | new (t : Ty)               -- `vec_new [t]`
+  | var (y : Var)              -- an owner moves, anything else is copied
+  | borrow (y : Var)           -- a cursor `: ~ cur y` / a borrowed argument
+  | at (y : Var) (i : Expr)    -- `vec_at`: bounds-checked, lends the element
+  | view (y : Var)             -- `slice_from_vec` / `string_data`
+  | sat (y : Var) (i : Expr)   -- `slice_at`: bounds-checked
+  | pop (y : Var)              -- `vec_pop`: the element moves out
+deriving DecidableEq, Repr
+
+/-- Statements.  The last three are run-time forms: they appear when a
+    binding is made or a function is called, never in source. -/
+inductive Stmt where
+  | skip
+  | seq (a b : Stmt)
+  | letv (x : Var) (r : Rhs) (body : Stmt)                -- `: x r` scoped over `body`
+  | letcall (x : Var) (f : Nat) (args : List Var) (body : Stmt)
+  | assign (x : Var) (r : Rhs)                            -- `= x r`
+  | ite (c : Expr) (a b : Stmt)
+  | while (c : Expr) (body : Stmt)
+  | push (x y : Var)                                      -- `vec_push x y`
+  | free (x : Var)                                        -- `vec_free x`
+  | scope (x : Var) (body : Stmt)                         -- run time: `x` is bound
+  | rbind (p : Var) (body : Stmt)                         -- run time: `in` parameter `p`
+  | frozen (z : List Var) (body : Stmt)                   -- run time: `z` is lent out
+deriving Repr
+
+/-- Parameter conventions (§1).  An `inout` parameter carries the most the
+    function may do to it — its summary. -/
+inductive PMode where
+  | inp
+  | inout (b : Eff)
+  | sink
+deriving DecidableEq, Repr
+
+/-- A function.  Its parameters are variables `0 … n-1`, its result slot is
+    variable `n`, and every variable of its body is below `nvars`.
+
+    The summary says what a caller may rely on: which parameters the
+    result borrows from (`lends`) and holds views of (`rholds`), and what
+    each `inout` parameter holds views of afterwards (`outHolds`), as pairs
+    (parameter index, kind). -/
+structure Fn where
+  params   : List (PMode × Ty)
+  resTy    : Ty
+  resOwn   : Bool
+  lends    : List (Nat × Kind)
+  rholds   : List (Nat × Kind)
+  outHolds : List (Nat × Nat × Kind)
+  body     : Stmt
+  nvars    : Nat
+deriving Repr
+
+abbrev Prog := List Fn
+
+end A2
