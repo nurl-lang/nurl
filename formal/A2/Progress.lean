@@ -106,7 +106,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | moveOwn hy hl hm _ =>
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.moveOwn hT⟩
-  | copyRoot hy hl hm _ =>
+  | copyRoot hy hl hm =>
     obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.copy hv⟩
   | copyBor hy hl hm =>
@@ -149,10 +149,10 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨post1, _⟩ := push_take hi hanch hy hly rfl hpa1 htk1
     obtain ⟨w, m2, htk2⟩ := takeVal_exists post1.inv hz hlz
     exact ⟨_, EvalR.pair htk1 htk2⟩
-  | fst hy hl ht _ =>
+  | fst hy hl ht =>
     obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
     exact ⟨_, EvalR.fst hv⟩
-  | snd hy hl ht _ =>
+  | snd hy hl ht =>
     obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
     exact ⟨_, EvalR.snd hv⟩
   | inl hy hly _ _ =>
@@ -161,11 +161,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | inr hy hly _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.inr htk⟩
-  | getl hy hl ht _ =>
+  | getl hy hl ht =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
     · exact ⟨_, EvalR.getl hv⟩
     · exact ⟨_, EvalR.getlP hv⟩
-  | getr hy hl ht _ =>
+  | getr hy hl ht =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
     · exact ⟨_, EvalR.getrP hv⟩
     · exact ⟨_, EvalR.getr hv⟩

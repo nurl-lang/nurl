@@ -11,13 +11,12 @@ theorem viewAt_not_self {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨tru
     (hsf : SelfFree T) {τ s : Ty} {d o l : Nat} (hin : ViewIn τ T s (.view d o l)) {k : Kind}
     (ha : ViewAt m ⟨x, k⟩ d o l s) : False := by
   obtain ⟨n0, c, es, hr, hk, _, _⟩ := ha
-  have := rootNode_own hT hr
-  subst this
+  have ht := rootNode_own hT hr
   have hs : Sub (.node s c d es) n0 := by
     rcases hk with ⟨_, h⟩ | ⟨_, h⟩
     · rw [h]; exact Sub.refl _
     · exact h.sub
-  exact hsf d o l hin.sub s c es hs
+  exact hsf d o l hin.sub s c es (hs.trans ht.sub)
 
 /-- The views stored in an owned tree stay valid when only that tree's owner
     changes, if the others they depend on keep their memory. -/

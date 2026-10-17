@@ -518,8 +518,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       have hanch : ∀ q E, Γ q = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F :=
         fun q E hq hmq => hanchk q E hq hmq (by simp [Stmt.spine])
       have hinv := step_rbindExit hi.toMInv hanch hp hm hpF
-      have hrel : ∀ v E', exitRoot p Ep.path Γ v = some E' → v ≠ p ∧ ∃ E, Γ v = some E ∧
-          E' = rerootE p Ep.path E := by
+      have hrel : ∀ v E', exitRoot p (Ep.path ++ Ep.held) Γ v = some E' → v ≠ p ∧ ∃ E, Γ v = some E ∧
+          E' = rerootE p (Ep.path ++ Ep.held) E := by
         intro v E' h
         have hvp : v ≠ p := fun e => by subst e; simp [exitRoot] at h
         simp only [exitRoot, upd_ne _ _ hvp] at h
@@ -527,16 +527,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvp, E, rfl, rfl⟩
       have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
-      refine ⟨exitRoot p Ep.path Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl
+      refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_ rfl
         (covers_remove_bor hi.cover hsl) trivial, by simp, ⟨?_, ?_⟩,
         fun w hw => by simp [upd_ne _ _ (show w ≠ p from fun e => hpF (e ▸ hw))]⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
-        · refine StmtT.skip.weakenOut hinv.wf (Or.inr (hw.exitRoot p Ep.path fun d hd => ?_))
+        · refine StmtT.skip.weakenOut hinv.wf (Or.inr (hw.exitRoot p (Ep.path ++ Ep.held) fun d hd => ?_))
           have hdv : d.root ∈ roots Ep.vdeps := by
-            simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.map_append,
-              List.mem_append, List.mem_map]
-            exact Or.inl ⟨d, hd, rfl⟩
+            simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+            exact ⟨d, hd, rfl⟩
           refine ⟨fun h => ?_, ?_⟩
           · have := hi.rootbLt p Ep hp hm d.root hdv; rw [h] at this; exact Nat.lt_irrefl _ this
           · obtain ⟨Er, hEr, hro⟩ := hi.wf p Ep hp hl (Or.inr hm) d.root hdv
@@ -549,7 +548,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         exact hanch q E hE hmq'
       · intro v E hv hvs
         have hvp : v ≠ p := fun e => hvs (by simp [Stmt.spine, e])
-        refine ⟨by simp [Stmt.spine], rerootE p Ep.path E, ?_, rfl, rfl, fun hrb => ?_⟩
+        refine ⟨by simp [Stmt.spine], rerootE p (Ep.path ++ Ep.held) E, ?_, rfl, rfl, fun hrb => ?_⟩
         · simp [exitRoot, upd_ne _ _ hvp, hv]
         · exact rerootE_rootb hanch hpF _ hv hrb
       · intro v E' hv _

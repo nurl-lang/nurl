@@ -238,9 +238,9 @@ def inoutArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
       | some (.inout _, _) => true
       | _ => false)).map (fun i => args.getD i 0)
 
-/-- A borrowed argument: an owner lends its handle, a borrow is copied. -/
+/-- A borrowed argument: an owner lends its handles, a borrow is copied. -/
 def lendSlot : Slot → Option Val
-  | ⟨true, some (.node _ c _ _)⟩ => some (.href c)
+  | ⟨true, some v⟩ => some (lendOf v)
   | ⟨false, some v⟩ => some v
   | _ => none
 
