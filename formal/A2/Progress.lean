@@ -103,7 +103,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | expr he =>
     obtain ⟨n, hn⟩ := eval_exists hi he; exact ⟨_, EvalR.expr hn⟩
   | new _ => exact ⟨_, EvalR.new⟩
-  | moveOwn hy hl hm _ =>
+  | moveOwn hy hl hm _ _ =>
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.moveOwn hT⟩
   | copyRoot hy hl hm =>
@@ -161,7 +161,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | inr hy hly _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.inr htk⟩
-  | pack hy hly _ _ =>
+  | pack hy hly _ _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
@@ -172,11 +172,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
     · exact ⟨_, EvalR.getrP hv⟩
     · exact ⟨_, EvalR.getr hv⟩
-  | takel hy hl hm ht _ =>
+  | takel hy hl hm ht _ _ =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takel hv⟩
     · exact ⟨_, EvalR.takelP hv⟩
-  | taker hy hl hm ht _ =>
+  | taker hy hl hm ht _ _ =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
@@ -203,7 +203,7 @@ theorem progress {P : Prog}
     · cases r with
       | ok m' a' => exact Or.inr ⟨_, Step.seqL hr⟩
       | panic => exact Or.inr ⟨_, Step.seqP hr⟩
-  | @letv Γ Γ1 Δ F x r k E _ hx _ hr _ _ =>
+  | @letv Γ Γ1 Δ F x r k E _ hx _ hr _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -211,10 +211,10 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr ⟨_, Step.letvP hres⟩
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ =>
+  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ =>
     intro m hcd hi
     exact Or.inr (hcall (k := k) hx hc hi.toMInv)
-  | @scope Γ Δ1 F x k hxE _ _ ih =>
+  | @scope Γ Δ1 F x k hxE _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeIn hx hnrb
@@ -241,7 +241,7 @@ theorem progress {P : Prog}
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
         exact Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
-  | @rbind Γ Δ1 F p k Ep hp hm hl hroots _ _ ih =>
+  | @rbind Γ Δ1 F p k Ep hp hm hl hroots _ _ _ ih =>
     intro m hcd hi
     have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
     obtain ⟨w, hpb⟩ : ∃ w, m.st p = some ⟨false, w⟩ := by
@@ -263,7 +263,7 @@ theorem progress {P : Prog}
     · cases r with
       | ok m' k' => exact Or.inr ⟨_, Step.frozenIn hr⟩
       | panic => exact Or.inr ⟨_, Step.frozenP hr⟩
-  | @assign Γ Γ1 F x r Ex E hx _ _ hr _ _ _ =>
+  | @assign Γ Γ1 F x r Ex E hx _ _ hr _ _ _ _ =>
     intro m hcd hi
     obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
     cases res with
@@ -303,19 +303,19 @@ theorem progress {P : Prog}
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
-  | @free Γ F x E t hx hl hm hty _ =>
+  | @free Γ F x E t hx hl hm hty _ _ =>
     intro m hcd hi
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)
     obtain ⟨a', ha⟩ := frees_owned hi.heap hT hwf
     exact Or.inr ⟨_, Step.free hT ha⟩
 
   | panic => exact fun _ _ => Or.inr ⟨_, Step.panic⟩
-  | @letrec Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ =>
+  | @letrec Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     exact Or.inr ⟨_, Step.letrec hf hp hmx⟩
-  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ =>
+  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ _ =>
     intro m hcd hi
     exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO ih =>
@@ -332,7 +332,7 @@ theorem progress {P : Prog}
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
         exact Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
 
-  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ =>
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ =>
     intro m hcd hi
     obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)

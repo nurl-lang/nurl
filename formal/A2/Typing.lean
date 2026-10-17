@@ -149,6 +149,13 @@ def Weaker (Γ Γ' : Ctx) : Prop :=
   (∀ v, (Γ v = none ↔ Γ' v = none) ∧
     ∀ E E', Γ v = some E → Γ' v = some E' → EntryWeaker E E') ∧ CtxWF Γ' ∧ NameWF Γ'
 
+/-- `x` is not pinned: no borrowed parameter holds a closure that may
+    change `x` by name.  A rule that replaces `x` (moves it, assigns it,
+    frees it, ends its scope) requires it: such a closure would otherwise
+    keep changing a binding that is gone. -/
+def NoPin (Γ : Ctx) (x : Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ x
+
 def intE : Entry := ⟨.int, .bor, true, [], []⟩
 
 inductive ExprT (Γ : Ctx) : Expr → Prop
@@ -210,7 +217,7 @@ def Ty.elem : Ty → Ty
     copied with what it depends on (`D`, which the container then holds). -/
 inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List Dep → Ctx → Prop
   | move {t : Ty} :
-      t.owning = true → E.mode = .own → y ∉ F →
+      t.owning = true → E.mode = .own → y ∉ F → NoPin Γ y →
       PushArg Γ F y E t E.held (setE (kill .replace false y Γ) y { E with live := false })
   | int : PushArg Γ F y E .int [] Γ
   | slice {s : Ty} :
@@ -247,7 +254,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
   | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], []⟩ Γ
   | moveOwn {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .own → y ∉ F →
+      Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y →
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held⟩
         (setE (kill .replace false y Γ) y { E with live := false })
   | copyRoot {y : Var} {E : Entry} :
@@ -290,10 +297,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | getr {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
+      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
       RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false })
   | taker {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
+      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
       {Γ1 : Ctx} {D : List Dep} :
@@ -407,7 +414,8 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
         (fn.params[i].1.moves = true →
           args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
           ∀ j < fn.params.length, j ≠ i →
-            args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps)) ∧
+            args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
+        (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))) ∧
     NamesFree Γ F args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
 
 /-! ### Statements -/

@@ -160,6 +160,11 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
   rw [this]; rfl
 
+theorem NoPin.kills {Γ : Ctx} {x : Var} (h : NoPin Γ x) (e : Eff) (hv : Bool) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x :=
+  fun p E hp hm d hd hb _ => h p E hp hm d hd hb
+
 /-- An effect other than `replace` ends nothing held by name. -/
 theorem hmn_of_ne_replace {Γ : Ctx} {e : Eff} (hv : Bool) (he : e ≠ .replace) (x : Var) :
     ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →

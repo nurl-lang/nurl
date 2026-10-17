@@ -234,34 +234,18 @@ def CatchOK (m : Mem) : Stmt → Prop
 
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
-    bound; what those closures may change is named by nothing that runs
-    meanwhile (`vs`). -/
-def Anchored (E : Entry) (F vs : List Var) : Prop :=
-  ∀ d ∈ E.vdeps, (d.kind.bound = .none → d.root ∈ F) ∧ (d.kind.bound ≠ .none → d.root ∉ vs)
+    bound.  (What those closures may change is pinned: no rule replaces it,
+    `NoPin`.) -/
+def Anchored (E : Entry) (F : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F
 
-/-- The borrowed parameters' anchors: what a `rootb` binding reads from
-    memory is lent out (in `F`) for as long as it lives. -/
+/-- The borrowed parameters' anchors. -/
 def RootbAnch (Γ : Ctx) (F : List Var) : Prop :=
-  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F
+  ∀ p E, Γ p = some E → E.mode = .rootb → Anchored E F
 
-/-- No `rootb` binding holds a binding of `vs` by a name its closure may
-    change. -/
-def RootbNames (Γ : Ctx) (vs : List Var) : Prop :=
-  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ∉ vs
-
-theorem Anchored.mono {E : Entry} {F F' vs vs' : List Var} (h : Anchored E F vs)
-    (hF : ∀ v ∈ F, v ∈ F') (hv : ∀ v ∈ vs', v ∈ vs) : Anchored E F' vs' :=
-  fun d hd => ⟨fun hb => hF _ ((h d hd).1 hb), fun hb hm => (h d hd).2 hb (hv _ hm)⟩
-
-theorem RootbNames.ne {Γ : Ctx} {vs : List Var} (h : RootbNames Γ vs) {y : Var} (hy : y ∈ vs) :
-    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y :=
-  fun p E hp hm d hd hb e => h p E hp hm d hd hb (e ▸ hy)
-
-theorem RootbNames.nil (Γ : Ctx) : RootbNames Γ [] := fun _ _ _ _ _ _ _ h => by cases h
-
-theorem RootbNames.mono {Γ : Ctx} {vs ws : List Var} (h : RootbNames Γ vs) (hs : ∀ v ∈ ws, v ∈ vs) :
-    RootbNames Γ ws :=
-  fun p E hp hm d hd hb hw => h p E hp hm d hd hb (hs _ hw)
+theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀ v ∈ F, v ∈ F') :
+    Anchored E F' :=
+  fun d hd hb => hF _ (h d hd hb)
 
 
 /-- What memory and context guarantee, whatever is running. -/
@@ -284,7 +268,7 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
 structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
   nvS       : ∀ v ∈ s.vars, v < m.nv
   nvF       : ∀ v ∈ F, v < m.nv
-  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → Anchored E F s.vars
+  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → Anchored E F
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
@@ -308,24 +292,26 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      StmtT P Γ F (.letv x r s) (exitScope x Δ)
+      NoPin Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      NoPin Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ →
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → NoPin Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
-      Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F s.vars → p ∉ F →
-      StmtT P Γ F s Δ → StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
+      Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
+      StmtT P Γ F s Δ →
+      (∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true) →
+      StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z : List Var} {s : Stmt} :
       StmtT P Γ (F ++ z) s Δ → StmtT P Γ F (.frozen z s) Δ
   | assign {Γ Γ1 : Ctx} {F : List Var} {x : Var} {r : Rhs} {Ex E : Entry} :
       Γ x = some Ex → x ∉ F →
       (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
         Ex.mode = .bor ∧ E.mode = .bor) →
-      RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome →
+      RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome → NoPin Γ x →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
       a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
@@ -340,7 +326,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
-      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F →
+      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → NoPin Γ x →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
@@ -354,19 +340,20 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+      NoPin Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
   | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
       s.src = true → Γ y = some E → E.live = true → E.mode = .own → E.ty = .prod a b → y ∉ F →
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
         (compE E b)) F s Δ →
+      NoPin Γ y → NoPin Δ z → NoPin (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
       k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
       P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
       CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      NoPin Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →

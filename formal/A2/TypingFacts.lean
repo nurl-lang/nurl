@@ -216,8 +216,7 @@ theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m �
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
-    anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => h)
-      (fun v hv => by simp [Stmt.vars, hv])
+    anch := hi.anch
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
@@ -228,11 +227,10 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
-    anch := fun p E hp hm hps => (hi.anch p E hp hm (by
+    anch := fun p E hp hm hps => hi.anch p E hp hm (by
       simp only [Stmt.spine, List.mem_cons, not_or]
       refine ⟨fun h => ?_, hps⟩
-      subst h; rw [hx] at hp; cases hp; exact hnrb hm)).mono (fun _ h => h)
-      (fun v hv => by simp [Stmt.vars, hv])
+      subst h; rw [hx] at hp; cases hp; exact hnrb hm)
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
@@ -240,7 +238,7 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
     cover := hi.cover }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
-    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F k.vars) :
+    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F) :
     Inv m Γ F k :=
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
@@ -248,8 +246,7 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
     anch := fun q E hq hmq hqs => by
       by_cases hqp : q = p
       · subst hqp; rw [hp] at hq; cases hq; exact hroots
-      · exact (hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])).mono (fun _ h => h)
-          (fun v hv => by simp [Stmt.vars, hv])
+      · exact hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
@@ -265,7 +262,6 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z : List Var} {k : Stmt} (hi : Inv 
       · exact hi.nvF v hv
       · exact hi.nvS v (by simp [Stmt.vars, hv])
     anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
-      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
@@ -278,13 +274,13 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   induction ht with
   | seq _ _ _ iha _ => exact iha
   | sub _ _ _ ih => exact ih
-  | scope _ hxF _ ih =>
+  | scope _ hxF _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
     · exact hxF
     · exact ih v hv
-  | rbind _ _ _ _ hpF _ ih =>
+  | rbind _ _ _ _ hpF _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
@@ -305,7 +301,6 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
       · simp only [List.mem_filter, List.mem_range] at hv
         exact Nat.lt_of_lt_of_le hv.1 hi.catchOK.2.2.1
     anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
-      (fun v hv => by simp [Stmt.vars, hv])
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK.2.2.2
