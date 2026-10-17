@@ -117,6 +117,9 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro hs; simp only [Stmt.src, Bool.and_eq_true] at hs; exact (iha hs.1).trans (ihb hs.2)
   | letv hks hx _ hr _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
+  | letrec hks hx _ _ _ _ _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
+  | panic => exact fun _ => DomTy.refl _
+  | catchR => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
@@ -1108,9 +1111,9 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
     exact ⟨⟨_, hc hne, by simp [RSetup.liftE, paramE, liftMode]⟩, hF hne⟩
   | inout b => trivial
 
-/-- The call's expansion is well-typed, given what its parameters' exits
+/-- The inside of the call is well-typed, given what its parameters' exits
     leave (`hfin`). -/
-theorem typed_of (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.src = true)
+theorem typedIn_of (h : CallH P Γ F x fn args base)
     {Δa : Ctx} (hbody : StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) (F ++ zOf fn args base)
       (fn.body.rename (callRen fn.params args base)) ((callS Γ F fn args base x).canon Δa))
     {Er' : Entry}
@@ -1125,9 +1128,9 @@ theorem typed_of (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k
            else exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
           x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held⟩ : Entry) with mode := resMode fn }
              else { Er' with mode := resMode fn })) →
-      Weaker (exitScope (base + fn.params.length) Γ3) (setE (callPost Γ fn args) x (callRes Γ fn args)))
-    (hkT : StmtT P (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) :
-    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callStmt fn args base x k) (exitScope x Δ) := by
+      Weaker (exitScope (base + fn.params.length) Γ3) (setE (callPost Γ fn args) x (callRes Γ fn args))) :
+    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callIn fn args base x)
+      (setE (callPost Γ fn args) x (callRes Γ fn args)) := by
   have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody fn.params 0 h.wrapCond
   have hfz := StmtT.frozen (z := zOf fn args base) hwrap
   generalize hΓb : exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) = Γb
@@ -1172,9 +1175,7 @@ theorem typed_of (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k
       show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ _) = _
       rw [RSetup.canon_ρ h.sOK, sigCtx_res]; rfl, by
       rw [RSetup.liftE_mode _ (resMode_ne' fn), RSetup.liftMode_resMode]; exact resMode_ne' fn⟩) hrF hseq
-  have hw := hfin _ rfl
-  have hsq := StmtT.seq hk hscr (StmtT.weakenIn hw hkT)
-  exact StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF hsq
+  exact StmtT.weakenOut (RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)) hscr (Or.inr (hfin _ rfl))
 
 end CallH
 
@@ -1736,10 +1737,10 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     refine ⟨by simp, fun E E' hE hE' => ?_⟩
     cases hE; cases hE'; exact hw
 
-/-- The call's expansion is well-typed where the call was. -/
-theorem typed (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.src = true)
-    (hkT : StmtT P (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) :
-    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callStmt fn args base x k) (exitScope x Δ) := by
+/-- The inside of the call is well-typed where the call was. -/
+theorem typedIn (h : CallH P Γ F x fn args base) :
+    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callIn fn args base x)
+      (setE (callPost Γ fn args) x (callRes Γ fn args)) := by
   obtain ⟨hsrc, _, _, _, _, _, hlends, hrholds, _, Δa, hbody, ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh⟩, hio⟩ :=
     h.fnok
   obtain ⟨hren, _⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn)
@@ -1753,8 +1754,8 @@ theorem typed (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.sr
       · exact hlends _ (hErp d0 hd)
     · exact hrholds _ (hErh d0 hd)
   obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh
-  refine h.typed_of hk hren (h.res_at hEr hErm hErv) hl' hm' ht' ?_
-    (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hio Γ3 hΓ3) hkT
+  refine h.typedIn_of hren (h.res_at hEr hErm hErv) hl' hm' ht' ?_
+    (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hio Γ3 hΓ3)
   intro hx
   obtain ⟨d, hd, hdx⟩ := List.mem_map.mp hx
   have hdom : (Γ d.root).isSome := by
@@ -1767,6 +1768,12 @@ theorem typed (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.sr
         exact (hp' (by simpa using ho) d hd).1
     · exact (hh' d hd).1
   exact (h.dom_ne hdom).1 hdx
+
+/-- The call's expansion is well-typed where the call was. -/
+theorem typed (h : CallH P Γ F x fn args base) {k : Stmt} {Δ : Ctx} (hk : k.src = true)
+    (hkT : StmtT P (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) :
+    StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callStmt fn args base x k) (exitScope x Δ) :=
+  StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF (StmtT.seq hk h.typedIn hkT)
 
 end CallH
 
