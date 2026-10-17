@@ -56,6 +56,8 @@ theorem mem_idsL_iff {es : List Val} {i : Nat} : i ∈ idsL es ↔ ∃ e ∈ es,
   | cons x xs ih => simp [ih]
 
 @[simp] theorem ids_pair (v w : Val) : (Val.pair v w).ids = v.ids ++ w.ids := by simp [Val.ids]
+@[simp] theorem ids_inl (v : Val) : (Val.inl v).ids = v.ids := by simp [Val.ids]
+@[simp] theorem ids_inr (v : Val) : (Val.inr v).ids = v.ids := by simp [Val.ids]
 
 theorem Child.ids {e t : Val} (h : Child e t) : ∀ i ∈ e.ids, i ∈ t.ids := by
   intro i hi
@@ -63,12 +65,16 @@ theorem Child.ids {e t : Val} (h : Child e t) : ∀ i ∈ e.ids, i ∈ t.ids := 
   | elem he => simp only [ids_node, List.mem_cons]; exact Or.inr (Or.inr (mem_idsL he hi))
   | fst => simp [hi]
   | snd => simp [hi]
+  | inl => simpa using hi
+  | inr => simpa using hi
 
 theorem Child.sub {e t n : Val} (h : Child e t) (hs : Sub n e) : Sub n t := by
   cases h with
   | elem he => exact Sub.child he hs
   | fst => exact Sub.fst hs
   | snd => exact Sub.snd hs
+  | inl => exact Sub.inl hs
+  | inr => exact Sub.inr hs
 
 theorem Sub.cases' {v t : Val} (h : Sub v t) : v = t ∨ ∃ e, Child e t ∧ Sub v e := by
   cases h with
@@ -76,6 +82,8 @@ theorem Sub.cases' {v t : Val} (h : Sub v t) : v = t ∨ ∃ e, Child e t ∧ Su
   | child he hs => exact Or.inr ⟨_, Child.elem he, hs⟩
   | fst hs => exact Or.inr ⟨_, Child.fst, hs⟩
   | snd hs => exact Or.inr ⟨_, Child.snd, hs⟩
+  | inl hs => exact Or.inr ⟨_, Child.inl, hs⟩
+  | inr hs => exact Or.inr ⟨_, Child.inr, hs⟩
 
 theorem Sub.ids {a b : Val} (h : Sub a b) : ∀ i ∈ a.ids, i ∈ b.ids := by
   induction h with
@@ -83,6 +91,8 @@ theorem Sub.ids {a b : Val} (h : Sub a b) : ∀ i ∈ a.ids, i ∈ b.ids := by
   | child he _ ih => exact fun i hi => (Child.elem he).ids i (ih i hi)
   | fst _ ih => exact fun i hi => Child.fst.ids i (ih i hi)
   | snd _ ih => exact fun i hi => Child.snd.ids i (ih i hi)
+  | inl _ ih => exact fun i hi => Child.inl.ids i (ih i hi)
+  | inr _ ih => exact fun i hi => Child.inr.ids i (ih i hi)
 
 theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
   induction h2 with
@@ -90,6 +100,8 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
   | child he _ ih => exact Sub.child he ih
   | fst _ ih => exact Sub.fst ih
   | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
 
 theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
   obtain ⟨e, hc, hs⟩ := h
@@ -105,6 +117,8 @@ theorem Sub.of_below_sub {a b c : Val} (h1 : Below a b) (h2 : Sub b c) : Below a
   | child he _ ih => exact ⟨_, Child.elem he, ih.sub⟩
   | fst _ ih => exact ⟨_, Child.fst, ih.sub⟩
   | snd _ ih => exact ⟨_, Child.snd, ih.sub⟩
+  | inl _ ih => exact ⟨_, Child.inl, ih.sub⟩
+  | inr _ ih => exact ⟨_, Child.inr, ih.sub⟩
 
 theorem nodup_idsL_same {es : List Val} (hn : (idsL es).Nodup) {e1 e2 : Val}
     (h1 : e1 ∈ es) (h2 : e2 ∈ es) {i : Nat} (hi1 : i ∈ e1.ids) (hi2 : i ∈ e2.ids) : e1 = e2 := by
@@ -134,6 +148,8 @@ theorem Child.nodup {e t : Val} (h : Child e t) (hn : t.ids.Nodup) : e.ids.Nodup
   | elem he => simp only [ids_node, List.nodup_cons] at hn; exact nodup_of_mem_idsL hn.2.2 he
   | fst => simp only [ids_pair, List.nodup_append] at hn; exact hn.1
   | snd => simp only [ids_pair, List.nodup_append] at hn; exact hn.2.1
+  | inl => simpa using hn
+  | inr => simpa using hn
 
 /-- Two parts of a tree with distinct addresses that share an address are
     the same part. -/
@@ -157,6 +173,8 @@ theorem Child.same {e1 e2 t : Val} (h1 : Child e1 t) (h2 : Child e2 t) (hn : t.i
       simp only [ids_pair, List.nodup_append] at hn
       exact absurd rfl (hn.2.2 i hi2 i hi1)
     | snd => rfl
+  | inl => cases h2; rfl
+  | inr => cases h2; rfl
 
 /-- The head addresses of a node: its control block and its buffer. -/
 def Val.head : Val → List Nat
@@ -178,6 +196,8 @@ theorem head_not_below {t : Val} (hn : t.ids.Nodup) {e : Val} (hc : Child e t) {
     · exact hn.2.1 hin
   | fst => simp [Val.head] at hi1
   | snd => simp [Val.head] at hi1
+  | inl => simp [Val.head] at hi1
+  | inr => simp [Val.head] at hi1
 
 /-- In a tree whose addresses are distinct, two subtrees sharing a head
     address are the same subtree. -/
@@ -201,6 +221,8 @@ theorem sub_unique {t n1 n2 : Val} (hn : t.ids.Nodup) (h1 : Sub n1 t) (h2 : Sub 
   | child he hs ih => exact step (Child.elem he) hs hn (fun hn' h2' hi2' => ih hn' h2' hi2') h2 hi2
   | fst hs ih => exact step Child.fst hs hn (fun hn' h2' hi2' => ih hn' h2' hi2') h2 hi2
   | snd hs ih => exact step Child.snd hs hn (fun hn' h2' hi2' => ih hn' h2' hi2') h2 hi2
+  | inl hs ih => exact step Child.inl hs hn (fun hn' h2' hi2' => ih hn' h2' hi2') h2 hi2
+  | inr hs ih => exact step Child.inr hs hn (fun hn' h2' hi2' => ih hn' h2' hi2') h2 hi2
 
 /-- Two owned subtrees sharing a head address are the same, wherever they
     are owned. -/

@@ -331,7 +331,7 @@ theorem callProgress {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {a
           obtain ⟨hown', _⟩ := hown (by rw [hmo]; rfl)
           obtain ⟨t', ht'⟩ : ∃ t', Ea.ty = .vec t' := by
             simp only at hte; rw [hte] at hown' ⊢
-            cases t <;> simp_all [Ty.owning, Ty.isProd]
+            cases t <;> simp_all [Ty.owning, Ty.isAgg]
           rw [ht'] at hw
           cases hw with
           | node _ => exact ⟨_, by rw [hT]; rfl⟩

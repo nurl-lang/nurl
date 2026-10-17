@@ -24,6 +24,7 @@ inductive Ty where
   | vec (t : Ty)
   | slice (t : Ty)
   | prod (a b : Ty)   -- a struct value: its fields, nested in pairs (inline, no allocation)
+  | sum (a b : Ty)    -- an enum value: one of two payloads, tagged (inline); `Option t` is `sum int t`
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -33,6 +34,7 @@ def Ty.holdsView : Ty → Bool
   | .vec t => t.holdsView
   | .slice _ => true
   | .prod a b => a.holdsView || b.holdsView
+  | .sum a b => a.holdsView || b.holdsView
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -42,9 +44,13 @@ def Ty.ok : Ty → Bool
   | .vec t => t.ok
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
+  | .sum a b => a.ok && b.ok
 
-def Ty.isProd : Ty → Bool
+/-- A struct or an enum: a value with parts, borrowed as a bundle of the
+    parts' handles. -/
+def Ty.isAgg : Ty → Bool
   | .prod _ _ => true
+  | .sum _ _ => true
   | _ => false
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
@@ -52,6 +58,7 @@ def Ty.isProd : Ty → Bool
 def Ty.owning : Ty → Bool
   | .vec _ => true
   | .prod _ _ => true
+  | .sum _ _ => true
   | _ => false
 
 /-- How a borrow reaches the memory of the binding it depends on.
@@ -120,6 +127,7 @@ inductive Expr where
   | lt (a b : Expr)
   | len (x : Var)    -- `vec_len`
   | slen (x : Var)   -- `slice_len`
+  | isl (x : Var)    -- an enum's tag: 1 for the first variant
 deriving DecidableEq, Repr
 
 /-- Right-hand sides of a binding or an assignment. -/
@@ -135,6 +143,12 @@ inductive Rhs where
   | pair (y z : Var)           -- a struct literal: owners move in, the rest is copied
   | fst (y : Var)              -- a field read: lends what the field holds
   | snd (y : Var)
+  | inl (y : Var) (b : Ty)     -- an enum's first variant, its payload taken from `y`
+  | inr (a : Ty) (y : Var)
+  | getl (y : Var)             -- a match on a borrowed or owned enum: lends the payload
+  | getr (y : Var)
+  | takel (y : Var)            -- a match by value: the payload moves out, the enum is consumed
+  | taker (y : Var)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -145,6 +159,8 @@ inductive Val where
   | href (c : Nat)
   | view (d off len : Nat)
   | pair (v w : Val)                              -- a struct value, inline
+  | inl (v : Val)                                 -- an enum value, inline
+  | inr (v : Val)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end

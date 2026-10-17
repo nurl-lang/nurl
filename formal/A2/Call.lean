@@ -62,6 +62,10 @@ theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | @moveOwn y Ey hy _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | pop _ _ _ _ _ => exact (DomTy.refl Γ).kill _ _ _
   | pair hy _ hpa1 hz _ hpa2 _ => exact (PushArg.domTy hy hpa1).trans (PushArg.domTy hz hpa2)
+  | inl hy _ hpa _ => exact PushArg.domTy hy hpa
+  | inr hy _ hpa _ => exact PushArg.domTy hy hpa
+  | @takel y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
+  | @taker y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | _ => exact DomTy.refl Γ
 
 theorem callPostAux_domTy {Γ0 : Ctx} {fn : Fn} {args : List Var} :

@@ -32,6 +32,8 @@ inductive Sub : Val → Val → Prop
       e ∈ es → Sub v e → Sub v (.node t c d es)
   | fst {v a b : Val} : Sub v a → Sub v (.pair a b)
   | snd {v a b : Val} : Sub v b → Sub v (.pair a b)
+  | inl {v a : Val} : Sub v a → Sub v (.inl a)
+  | inr {v a : Val} : Sub v a → Sub v (.inr a)
 
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
@@ -51,6 +53,8 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
       FreesL (upd (upd a c false) d false) es a' →
       Frees a (.node t c d es) a'
   | pair {a a1 a2 : Nat → Bool} {v w : Val} : Frees a v a1 → Frees a1 w a2 → Frees a (.pair v w) a2
+  | inl {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inl v) a1
+  | inr {a a1 : Nat → Bool} {v : Val} : Frees a v a1 → Frees a (.inr v) a1
 inductive FreesL : (Nat → Bool) → List Val → (Nat → Bool) → Prop
   | nil {a : Nat → Bool} : FreesL a [] a
   | cons {a a1 a2 : Nat → Bool} {e : Val} {es : List Val} :
@@ -80,18 +84,24 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
       VecOf m x t c d es → Eval m (.len x) es.length
   | slen {x : Var} {d o l : Nat} :
       m.st x = some ⟨false, some (.view d o l)⟩ → Eval m (.slen x) l
+  | isl {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inl v)⟩ → Eval m (.isl x) 1
+  | isr {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inr v)⟩ → Eval m (.isl x) 0
 
 /-- An element read out of a buffer: an element `Vec` is lent, as `href`;
     a struct is copied with what it holds lent. -/
 def lendOf : Val → Val
   | .node _ c _ _ => .href c
   | .pair v w => .pair (lendOf v) (lendOf w)
+  | .inl v => .inl (lendOf v)
+  | .inr v => .inr (lendOf v)
   | v => v
 
 /-- Does moving this value move an owned tree (a `Vec` or a struct)? -/
 def Val.owns : Val → Bool
   | .node .. => true
   | .pair .. => true
+  | .inl .. => true
+  | .inr .. => true
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -141,6 +151,26 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       m.st y = some ⟨o, some (.pair v w)⟩ → EvalR m (.fst y) (.ok (lendOf v) false m)
   | snd {y : Var} {o : Bool} {v w : Val} :
       m.st y = some ⟨o, some (.pair v w)⟩ → EvalR m (.snd y) (.ok (lendOf w) false m)
+  | inl {y : Var} {b : Ty} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → EvalR m (.inl y b) (.ok (.inl v) true m1)
+  | inr {a : Ty} {y : Var} {v : Val} {m1 : Mem} :
+      TakeVal m y v m1 → EvalR m (.inr a y) (.ok (.inr v) true m1)
+  | getl {y : Var} {o : Bool} {v : Val} :
+      m.st y = some ⟨o, some (.inl v)⟩ → EvalR m (.getl y) (.ok (lendOf v) false m)
+  | getlP {y : Var} {o : Bool} {v : Val} :
+      m.st y = some ⟨o, some (.inr v)⟩ → EvalR m (.getl y) .panic
+  | getr {y : Var} {o : Bool} {v : Val} :
+      m.st y = some ⟨o, some (.inr v)⟩ → EvalR m (.getr y) (.ok (lendOf v) false m)
+  | getrP {y : Var} {o : Bool} {v : Val} :
+      m.st y = some ⟨o, some (.inl v)⟩ → EvalR m (.getr y) .panic
+  | takel {y : Var} {v : Val} :
+      m.st y = some ⟨true, some (.inl v)⟩ → EvalR m (.takel y) (.ok v v.owns (m.set y ⟨true, none⟩))
+  | takelP {y : Var} {v : Val} :
+      m.st y = some ⟨true, some (.inr v)⟩ → EvalR m (.takel y) .panic
+  | taker {y : Var} {v : Val} :
+      m.st y = some ⟨true, some (.inr v)⟩ → EvalR m (.taker y) (.ok v v.owns (m.set y ⟨true, none⟩))
+  | takerP {y : Var} {v : Val} :
+      m.st y = some ⟨true, some (.inl v)⟩ → EvalR m (.taker y) .panic
 
 /-! ### Calls
 
@@ -156,6 +186,7 @@ def Expr.rename (ρ : Var → Var) : Expr → Expr
   | .lt a b => .lt (a.rename ρ) (b.rename ρ)
   | .len x => .len (ρ x)
   | .slen x => .slen (ρ x)
+  | .isl x => .isl (ρ x)
 
 def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .expr e => .expr (e.rename ρ)
@@ -169,6 +200,12 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .pair y z => .pair (ρ y) (ρ z)
   | .fst y => .fst (ρ y)
   | .snd y => .snd (ρ y)
+  | .inl y b => .inl (ρ y) b
+  | .inr a y => .inr a (ρ y)
+  | .getl y => .getl (ρ y)
+  | .getr y => .getr (ρ y)
+  | .takel y => .takel (ρ y)
+  | .taker y => .taker (ρ y)
 
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip

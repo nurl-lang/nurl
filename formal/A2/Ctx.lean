@@ -75,6 +75,12 @@ theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P 
     have hph : P ++ H ⊆ P' ++ H' := List.append_subset.mpr
       ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
     exact ⟨x, y, rfl, iha hph hs hx, ihb hph hs hy⟩
+  | sum a b iha ihb =>
+    have hph : P ++ H ⊆ P' ++ H' := List.append_subset.mpr
+      ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
+    rcases h with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
+    · exact Or.inl ⟨x, rfl, iha hph hs hx⟩
+    · exact Or.inr ⟨x, rfl, ihb hph hs hx⟩
 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
     (h : SlotOK m E sl) : SlotOK m E' sl := by

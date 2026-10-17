@@ -389,7 +389,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
   obtain ⟨_, h1, hl, hok, _⟩ := h.arg k hkl
   rw [hEa] at h1; cases h1
   rw [get_of hk] at hok
-  have hnp : Ea.ty.isProd = false := by rw [hok.1]; exact hok.2
+  have hnp : Ea.ty.isAgg = false := by rw [hok.1]; exact hok.2
   -- the value, valid in the store before
   have hm0 : ∃ v, (m.st (args.getD k 0)).bind lendSlot = some v ∧
       ValOK m Ea.ty v (derive (args.getD k 0) Ea .self) Ea.held := by
@@ -398,7 +398,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       obtain ⟨sl, hsl, _, _, hown, _⟩ := hi.slot _ Ea hEa
       obtain ⟨hown', _⟩ := hown (by rw [hm]; rfl)
       obtain ⟨t', ht'⟩ : ∃ t', Ea.ty = .vec t' := by
-        cases hte : Ea.ty <;> simp_all [Ty.owning, Ty.isProd]
+        cases hte : Ea.ty <;> simp_all [Ty.owning, Ty.isAgg]
       rw [ht'] at hw
       cases hw with
       | @node _ c d es _ =>
