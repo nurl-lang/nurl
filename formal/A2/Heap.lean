@@ -14,6 +14,9 @@ theorem Frees.other {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   | .node _ _ hl =>
     simp only [ids_node, List.mem_cons, not_or] at hi
     rw [FreesL.other hl hi.2.2, upd_ne _ _ hi.2.1, upd_ne _ _ hi.1]
+  | .pair h1 h2 =>
+    simp only [ids_pair, List.mem_append, not_or] at hi
+    rw [Frees.other h2 hi.2, Frees.other h1 hi.1]
 theorem FreesL.other {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, i ∉ idsL es → a' i = a i := by
   intro i hi
@@ -58,6 +61,14 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
       have h2 : i ≠ d := fun h => hn.2.1 (h ▸ hi)
       rw [upd_ne _ _ h2, upd_ne _ _ h1]; exact ha i (by simp [hi]))
     exact ⟨a', Frees.node hc hd h⟩
+  | pair _ _ ihv ihw =>
+    intro a hn ha
+    simp only [ids_pair, List.nodup_append] at hn
+    obtain ⟨a1, h1⟩ := ihv a hn.1 (fun i hi => ha i (by simp [hi]))
+    obtain ⟨a2, h2⟩ := ihw a1 hn.2.1 (fun i hi => by
+      have hne : i ∉ _ := fun h => hn.2.2 i h i hi rfl
+      rw [h1.other hne]; exact ha i (by simp [hi]))
+    exact ⟨a2, Frees.pair h1 h2⟩
 
 /-! ### Owned slots after an update -/
 
@@ -93,12 +104,13 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
     have hni : i ∉ T.ids := fun h => hh.disj o x U T hox hU' hx i hi h
     obtain ⟨ha, hlt⟩ := hh.alloc o U hU' i hi
     exact ⟨by rw [halloc i hni]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
+  self o U hU := hh.self o U (hown o U hU).2
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     (hown : ∀ o U, OwnedAt m' o U → (o = x ∧ U = T) ∨ (o ≠ x ∧ OwnedAt m o U))
     (hnx : ∀ U, ¬ OwnedAt m x U)
-    (hT : T.ids.Nodup) (hTa : ∀ i ∈ T.ids, m'.alloc i = true ∧ i < m'.nid)
+    (hT : T.ids.Nodup) (hTs : SelfFree T) (hTa : ∀ i ∈ T.ids, m'.alloc i = true ∧ i < m'.nid)
     (hTd : ∀ o U, OwnedAt m o U → ∀ i ∈ T.ids, i ∉ U.ids)
     (halloc : ∀ o U, OwnedAt m o U → ∀ i ∈ U.ids, m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid) :
     HeapOK m' where
@@ -117,5 +129,26 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     · exact hTa i hi
     · obtain ⟨ha, hlt⟩ := hh.alloc o U h i hi
       exact ⟨by rw [halloc o U h i hi]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
+  self o U hU := by
+    rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
+    · exact hTs
+    · exact hh.self o U h
+
+/-! ### Trees that do not view themselves -/
+
+theorem SelfFree.sub {T U : Val} (h : SelfFree T) (hs : Sub U T) : SelfFree U :=
+  fun d o l hv u c es hn => h d o l (hv.trans hs) u c es (hn.trans hs)
+
+theorem selfFree_int (n : Nat) : SelfFree (.int n) := fun _ _ _ h => by cases h
+
+theorem selfFree_view (d o l : Nat) : SelfFree (.view d o l) :=
+  fun _ _ _ _ _ _ _ h => by cases h
+
+theorem ViewIn.sub {τ T s v} (h : ViewIn τ T s v) : Sub v T := by
+  induction h with
+  | here => exact Sub.refl _
+  | child he _ ih => exact Sub.child he ih
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
 
 end A2

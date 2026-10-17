@@ -62,7 +62,7 @@ theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := by
-  cases τ with
+  induction τ generalizing v P P' H H' with
   | int => exact h
   | vec t =>
     obtain ⟨c, rfl, dep, hd, ha⟩ := h
@@ -70,6 +70,11 @@ theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P 
   | slice t =>
     obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h
     exact ⟨d, o, l, rfl, dep, hp hd, ha⟩
+  | prod a b iha ihb =>
+    obtain ⟨x, y, rfl, hx, hy⟩ := h
+    have hph : P ++ H ⊆ P' ++ H' := List.append_subset.mpr
+      ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
+    exact ⟨x, y, rfl, iha hph hs hx, ihb hph hs hy⟩
 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
     (h : SlotOK m E sl) : SlotOK m E' sl := by

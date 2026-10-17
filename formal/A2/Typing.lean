@@ -149,16 +149,48 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
   | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held⟩
+  | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held⟩
 
-/-- An element moved out of `y` by `vec_pop`: an element `Vec` is owned. -/
+/-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
+    owned. -/
 def popE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .own, true, [], E.held⟩
+  | .prod a b => ⟨.prod a b, .own, true, [], E.held⟩
   | t => elemE y E t
+
+/-- What a field of the struct `y` (entry `E`) lends: what is inside an
+    owned struct depends on its owner, what is inside a borrowed one on
+    what that borrows. -/
+def projDeps (y : Var) (E : Entry) : List Dep :=
+  if E.mode.ownSlot then [⟨y, .inner⟩] else E.path
+
+/-- A field read: an integer is copied, anything else is lent (a stored view
+    is copied with what it depends on). -/
+def projE (y : Var) (E : Entry) : Ty → Entry
+  | .int => intE
+  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held⟩
+
+/-- A field moved out of a struct that is taken apart. -/
+def compE (E : Entry) : Ty → Entry
+  | .int => intE
+  | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
+  | t => ⟨t, .own, true, [], E.held⟩
 
 /-- The element type of a `Vec`. -/
 def Ty.elem : Ty → Ty
   | .vec t => t
   | t => t
+
+/-- Handing `y` to `vec_push`: an element `Vec` moves, anything else is
+    copied with what it depends on (`D`, which the container then holds). -/
+inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List Dep → Ctx → Prop
+  | move {t : Ty} :
+      t.owning = true → E.mode = .own → y ∉ F →
+      PushArg Γ F y E t E.held (setE (kill .replace false y Γ) y { E with live := false })
+  | int : PushArg Γ F y E .int [] Γ
+  | slice {s : Ty} :
+      (E.mode = .bor ∨ E.mode = .rootb) →
+      PushArg Γ F y E (.slice s) (derive y E .self ++ E.held) Γ
 
 inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
@@ -168,7 +200,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held⟩
         (setE (kill .replace false y Γ) y { E with live := false })
   | copyRoot {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .rootb →
+      Γ y = some E → E.live = true → E.mode = .rootb → E.ty.isProd = false →
       RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held⟩ Γ
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor → RhsT Γ F (.var y) E Γ
@@ -187,17 +219,15 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | pop {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
       RhsT Γ F (.pop y) (popE y E t) (kill .drop t.holdsView y Γ)
-
-/-- Handing `y` to `vec_push`: an element `Vec` moves, anything else is
-    copied with what it depends on (`D`, which the container then holds). -/
-inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List Dep → Ctx → Prop
-  | move {s : Ty} :
-      E.mode = .own → y ∉ F →
-      PushArg Γ F y E (.vec s) E.held (setE (kill .replace false y Γ) y { E with live := false })
-  | int : PushArg Γ F y E .int [] Γ
-  | slice {s : Ty} :
-      (E.mode = .bor ∨ E.mode = .rootb) →
-      PushArg Γ F y E (.slice s) (derive y E .self ++ E.held) Γ
+  | pair {y z : Var} {Ey Ez : Entry} {Γ1 Γ2 : Ctx} {Dy Dz : List Dep} :
+      Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
+      Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
+      (Ez.mode = .own → z ∉ roots Dy) →
+      RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz⟩ Γ2
+  | fst {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
+  | snd {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
 
 /-! ### Calls -/
 
@@ -254,8 +284,8 @@ def PMode.moves : PMode → Bool
   | _ => true
 
 def paramOK : PMode → Ty → Entry → Prop
-  | .inp, t, E => E.ty = t
-  | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ ∃ s, t = .vec s
+  | .inp, t, E => E.ty = t ∧ t.isProd = false
+  | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ t.owning = true
   | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ ∃ s, t = .vec s
 
 /-- A call, checked against the callee's summary.  Each argument is live
@@ -293,6 +323,7 @@ def Stmt.src : Stmt → Bool
   | .panic => true
   | .letrec _ _ s => s.src
   | .catchR _ _ _ => false
+  | .unpair _ _ _ s => s.src
 
 /-! ### Functions -/
 
@@ -330,6 +361,9 @@ def Rhs.vars : Rhs → List Var
   | .view y => [y]
   | .sat y i => y :: i.vars
   | .pop y => [y]
+  | .pair y z => [y, z]
+  | .fst y => [y]
+  | .snd y => [y]
 
 def Stmt.vars : Stmt → List Var
   | .skip => []
@@ -347,6 +381,7 @@ def Stmt.vars : Stmt → List Var
   | .panic => []
   | .letrec x _ s => x :: s.vars
   | .catchR x _ s => x :: s.vars
+  | .unpair y x z s => y :: x :: z :: s.vars
 
 
 

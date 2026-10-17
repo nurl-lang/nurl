@@ -23,6 +23,7 @@ inductive Ty where
   | int
   | vec (t : Ty)
   | slice (t : Ty)
+  | prod (a b : Ty)   -- a struct value: its fields, nested in pairs (inline, no allocation)
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -31,6 +32,7 @@ def Ty.holdsView : Ty → Bool
   | .int => false
   | .vec t => t.holdsView
   | .slice _ => true
+  | .prod a b => a.holdsView || b.holdsView
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -39,6 +41,18 @@ def Ty.ok : Ty → Bool
   | .int => true
   | .vec t => t.ok
   | .slice t => t.ok && !t.holdsView
+  | .prod a b => a.ok && b.ok
+
+def Ty.isProd : Ty → Bool
+  | .prod _ _ => true
+  | _ => false
+
+/-- A type whose values own what they hold: a `Vec` or a struct.  Its
+    binding is an owner (or borrows one). -/
+def Ty.owning : Ty → Bool
+  | .vec _ => true
+  | .prod _ _ => true
+  | _ => false
 
 /-- How a borrow reaches the memory of the binding it depends on.
 
@@ -118,6 +132,9 @@ inductive Rhs where
   | view (y : Var)             -- `slice_from_vec` / `string_data`
   | sat (y : Var) (i : Expr)   -- `slice_at`: bounds-checked
   | pop (y : Var)              -- `vec_pop`: the element moves out
+  | pair (y z : Var)           -- a struct literal: owners move in, the rest is copied
+  | fst (y : Var)              -- a field read: lends what the field holds
+  | snd (y : Var)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -127,6 +144,7 @@ inductive Val where
   | node (t : Ty) (c d : Nat) (es : List Val)   -- `t`: the element type (ghost)
   | href (c : Nat)
   | view (d off len : Nat)
+  | pair (v w : Val)                              -- a struct value, inline
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -170,6 +188,7 @@ inductive Stmt where
   | letrec (x : Var) (f : Nat) (body : Stmt)              -- `: !v PanicInfo x ( recover f )`
   | catchR (x : Var) (m0 : Mem) (body : Stmt)             -- run time: a `recover` frame; `m0`
                                                           -- is the caller's store (a ghost)
+  | unpair (y x z : Var) (body : Stmt)                    -- a struct moved apart into its fields
 
 /-- Parameter conventions (§1).  An `inout` parameter carries the most the
     function may do to it — its summary. -/

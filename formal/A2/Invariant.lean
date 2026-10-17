@@ -23,16 +23,25 @@ inductive WFv : Ty → Val → Prop
   | view {t : Ty} {d o l : Nat} : WFv (.slice t) (.view d o l)
   | node {t : Ty} {c d : Nat} {es : List Val} :
       (∀ e ∈ es, WFv t e) → WFv (.vec t) (.node t c d es)
+  | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
   | here {s : Ty} {d o l : Nat} : ViewIn (.slice s) (.view d o l) s (.view d o l)
   | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {s : Ty} {v : Val} :
       e ∈ es → ViewIn t e s v → ViewIn (.vec t) (.node t' c d es) s v
+  | fst {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.prod a b) (.pair x y) s v
+  | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
+
+/-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
+    of a struct. -/
+inductive Child : Val → Val → Prop
+  | elem {e : Val} {ty : Ty} {c d : Nat} {es : List Val} : e ∈ es → Child e (.node ty c d es)
+  | fst {v w : Val} : Child v (.pair v w)
+  | snd {v w : Val} : Child w (.pair v w)
 
 /-- `n` lies strictly inside `t`. -/
-def Below (n t : Val) : Prop :=
-  ∃ ty c d es e, t = .node ty c d es ∧ e ∈ es ∧ Sub n e
+def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
 
 /-- The node a root's slot reaches: its own tree, or what its borrow names. -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
@@ -65,10 +74,12 @@ def ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | .int, v, _, _ => ∃ n, v = .int n
   | .vec t, v, P, H => ∃ c, v = .href c ∧ ∃ dep ∈ P, HrefAt m dep c t H
   | .slice t, v, P, _ => ∃ d o l, v = .view d o l ∧ ∃ dep ∈ P, ViewAt m dep d o l t
+  | .prod a b, v, P, H => ∃ x y, v = .pair x y ∧ ValOK m a x (P ++ H) H ∧ ValOK m b y (P ++ H) H
 
 mutual
 def Val.ids : Val → List Nat
   | .node _ c d es => c :: d :: idsL es
+  | .pair v w => v.ids ++ w.ids
   | _ => []
 def idsL : List Val → List Nat
   | [] => []
@@ -77,17 +88,24 @@ end
 
 def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some t⟩
 
-/-- One owner per allocation, and every owned address is live. -/
+/-- No view stored in a tree points into that same tree's buffers (a struct
+    never views its own field). -/
+def SelfFree (T : Val) : Prop :=
+  ∀ d o l, Sub (.view d o l) T → ∀ u c es, ¬ Sub (.node u c d es) T
+
+/-- One owner per allocation, every owned address is live, and no owned tree
+    views itself. -/
 structure HeapOK (m : Mem) : Prop where
   nodup : ∀ x t, OwnedAt m x t → t.ids.Nodup
   disj  : ∀ x y t u, x ≠ y → OwnedAt m x t → OwnedAt m y u → ∀ i ∈ t.ids, i ∉ u.ids
   alloc : ∀ x t, OwnedAt m x t → ∀ i ∈ t.ids, m.alloc i = true ∧ i < m.nid
+  self  : ∀ x t, OwnedAt m x t → SelfFree t
 
 /-- A binding's slot agrees with its entry. -/
 def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
   sl.own = E.mode.ownSlot ∧
   (E.mode.ownSlot = true →
-    (∃ t, E.ty = .vec t) ∧ (∀ T, sl.val = some T → WFv E.ty T) ∧
+    E.ty.owning = true ∧ (∀ T, sl.val = some T → WFv E.ty T) ∧
     (E.live = true → ∃ T, sl.val = some T ∧ ViewsOK m E.ty T E.held)) ∧
   (E.mode.ownSlot = false →
     (E.live = true → ∃ v, sl.val = some v ∧ ValOK m E.ty v E.path E.held))
@@ -197,6 +215,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+  | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
+      s.src = true → Γ y = some E → E.live = true → E.mode = .own → E.ty = .prod a b → y ∉ F →
+      Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
+      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
+        (compE E b)) F s Δ →
+      StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -210,8 +234,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
     is set again and holds only what `outHolds` names. -/
 def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
-  fn.resTy.ok = true ∧ (fn.resOwn = true → ∃ s, fn.resTy = .vec s) ∧
-  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 ≠ .inp → ∃ s, pt.2 = .vec s)) ∧
+  fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
+  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 = .inp → pt.2.isProd = false) ∧
+    (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → ∃ s, pt.2 = .vec s)) ∧
   (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
