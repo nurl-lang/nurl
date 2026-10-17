@@ -41,9 +41,11 @@ $ `stdlib/ext/websocket.nu`
                         ? ( ws_deflate_active dctx ) {
                             // Compressed session: echo each message back
                             // compressed, preserving its text/binary opcode.
-                            : !v WsErr sr ( ws_serve_messages_deflate dctx conn wlim
-                            \ WsMessage msg → !v WsErr {
-                                ^ ( _ws_send_message_deflate dctx conn . msg opcode . msg payload F )
+                            // (The handler is given the context the loop reads
+                            // with: capturing dctx too would reach it twice.)
+                            : !v WsErr sr ( ws_serve_messages_deflate_with_context dctx conn wlim
+                            \ WsMessage msg WsDeflate dc → !v WsErr {
+                                ^ ( _ws_send_message_deflate dc conn . msg opcode . msg payload F )
                             } )
                             ?? sr { T _ → {} F _ → {} }
                         } {
