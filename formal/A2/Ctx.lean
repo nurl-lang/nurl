@@ -123,6 +123,8 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     obtain ⟨E, hE⟩ := hi.spineDom v hv
     obtain ⟨E', hE', _⟩ := hw.get hE
     exact ⟨E', hE'⟩
+  catchOK := hi.catchOK
+  cover := hi.cover
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf

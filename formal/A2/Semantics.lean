@@ -25,34 +25,6 @@ import A2.Syntax
 
 namespace A2
 
-inductive Val where
-  | int (n : Nat)
-  | node (t : Ty) (c d : Nat) (es : List Val)   -- `t`: the element type (ghost)
-  | href (c : Nat)
-  | view (d off len : Nat)
-deriving Repr, Inhabited
-
-/-- A binding's storage: whether it owns its value (it is dropped at the end
-    of the scope), and the value, if it holds one (the drop flag). -/
-structure Slot where
-  own : Bool
-  val : Option Val
-
-structure Mem where
-  alloc : Nat → Bool
-  nid   : Nat                 -- next fresh address
-  nv    : Nat                 -- next fresh variable
-  st    : Var → Option Slot
-
-def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
-  fun i => if i = k then v else f i
-
-def Mem.set (m : Mem) (x : Var) (s : Slot) : Mem :=
-  { m with st := upd m.st x (some s) }
-
-def Mem.remove (m : Mem) (x : Var) : Mem :=
-  { m with st := upd m.st x none }
-
 /-- `v` occurs in tree `t` (reflexively). -/
 inductive Sub : Val → Val → Prop
   | refl (v : Val) : Sub v v
@@ -196,6 +168,9 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .scope x s => .scope (ρ x) (s.rename ρ)
   | .rbind p s => .rbind (ρ p) (s.rename ρ)
   | .frozen z s => .frozen (z.map ρ) (s.rename ρ)
+  | .panic => .panic
+  | .letrec x f s => .letrec (ρ x) f (s.rename ρ)
+  | .catchR x m0 s => .catchR (ρ x) m0 (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -255,20 +230,35 @@ def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stm
                     (.assign x (.var r))))
     k)
 
+/-- What `recover f` becomes: the callee, which takes no parameters and
+    returns an integer, runs inside a `recover` frame that remembers the
+    caller's store `m0`.  On a panic, the frames inside are unwound — each
+    scope drops what it owns, as the allocation journal does (§7.2) — and
+    `x` says the call failed. -/
+def recStmt (fn : Fn) (base : Nat) (x : Var) (m0 : Mem) (k : Stmt) : Stmt :=
+  let r := base
+  let z := List.range base
+  .scope x (.seq
+    (.catchR x m0 (.scope r (.seq (.frozen z (fn.body.rename (fun v => base + v)))
+                                  (.assign x (.var r)))))
+    k)
+
+/-- A step's outcome: a configuration, or a panic — with the store the
+    unwinding left. -/
 inductive Res where
   | ok (m : Mem) (s : Stmt)
-  | panic
+  | panic (m : Mem)
 
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
   | seqL {m m' : Mem} {a a' b : Stmt} :
       Step P m a (.ok m' a') → Step P m (.seq a b) (.ok m' (.seq a' b))
-  | seqP {m : Mem} {a b : Stmt} : Step P m a .panic → Step P m (.seq a b) .panic
+  | seqP {m m' : Mem} {a b : Stmt} : Step P m a (.panic m') → Step P m (.seq a b) (.panic m')
   | letv {m m' : Mem} {x : Var} {r : Rhs} {s : Stmt} {v : Val} {o : Bool} :
       m.st x = none → EvalR m r (.ok v o m') →
       Step P m (.letv x r s) (.ok (m'.set x ⟨o, some v⟩) (.scope x s))
   | letvP {m : Mem} {x : Var} {r : Rhs} {s : Stmt} :
-      EvalR m r .panic → Step P m (.letv x r s) .panic
+      EvalR m r .panic → Step P m (.letv x r s) (.panic m)
   | letcall {m m' : Mem} {x : Var} {f : Nat} {args : List Var} {s : Stmt} {fn : Fn} :
       P[f]? = some fn → m.st x = none →
       BindParams m fn.params args m.nv 0 m' →
@@ -281,21 +271,25 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.scope x .skip) (.ok ({ m with alloc := a' }.remove x) .skip)
   | scopeIn {m m' : Mem} {x : Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.scope x s) (.ok m' (.scope x s'))
-  | scopeP {m : Mem} {x : Var} {s : Stmt} : Step P m s .panic → Step P m (.scope x s) .panic
-  | rbindSkip {m : Mem} {p : Var} {sl : Slot} :
-      m.st p = some sl → Step P m (.rbind p .skip) (.ok (m.remove p) .skip)
+  | scopeP {m m1 : Mem} {x : Var} {s : Stmt} {sl : Slot} {a' : Nat → Bool} :
+      Step P m s (.panic m1) → m1.st x = some sl → DropSlot m1.alloc sl a' →
+      Step P m (.scope x s) (.panic ({ m1 with alloc := a' }.remove x))
+  | rbindSkip {m : Mem} {p : Var} {w : Option Val} :
+      m.st p = some ⟨false, w⟩ → Step P m (.rbind p .skip) (.ok (m.remove p) .skip)
   | rbindIn {m m' : Mem} {p : Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.rbind p s) (.ok m' (.rbind p s'))
-  | rbindP {m : Mem} {p : Var} {s : Stmt} : Step P m s .panic → Step P m (.rbind p s) .panic
+  | rbindP {m m1 : Mem} {p : Var} {s : Stmt} {w : Option Val} :
+      Step P m s (.panic m1) → m1.st p = some ⟨false, w⟩ → Step P m (.rbind p s) (.panic (m1.remove p))
   | frozenSkip {m : Mem} {z : List Var} : Step P m (.frozen z .skip) (.ok m .skip)
   | frozenIn {m m' : Mem} {z : List Var} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.frozen z s) (.ok m' (.frozen z s'))
-  | frozenP {m : Mem} {z : List Var} {s : Stmt} : Step P m s .panic → Step P m (.frozen z s) .panic
+  | frozenP {m m1 : Mem} {z : List Var} {s : Stmt} :
+      Step P m s (.panic m1) → Step P m (.frozen z s) (.panic m1)
   | assign {m m1 : Mem} {x : Var} {r : Rhs} {v : Val} {o : Bool} {sl : Slot} {a' : Nat → Bool} :
       (m.st x).isSome → EvalR m r (.ok v o m1) → m1.st x = some sl → DropSlot m1.alloc sl a' →
       Step P m (.assign x r) (.ok ({ m1 with alloc := a' }.set x ⟨o, some v⟩) .skip)
   | assignP {m : Mem} {x : Var} {r : Rhs} :
-      EvalR m r .panic → Step P m (.assign x r) .panic
+      EvalR m r .panic → Step P m (.assign x r) (.panic m)
   | iteT {m : Mem} {c : Expr} {a b : Stmt} {n : Nat} :
       Eval m c n → n ≠ 0 → Step P m (.ite c a b) (.ok m a)
   | iteF {m : Mem} {c : Expr} {a b : Stmt} :
@@ -315,13 +309,24 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)
+  | panic {m : Mem} : Step P m .panic (.panic m)
+  | letrec {m : Mem} {x : Var} {f : Nat} {s : Stmt} {fn : Fn} :
+      P[f]? = some fn → fn.params = [] → m.st x = none →
+      Step P m (.letrec x f s)
+        (.ok ({ (m.set x ⟨false, none⟩).set m.nv ⟨fn.resOwn, none⟩ with nv := m.nv + fn.nvars })
+             (recStmt fn m.nv x (m.set x ⟨false, none⟩) s))
+  | catchIn {m m' : Mem} {x : Var} {m0 : Mem} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.catchR x m0 s) (.ok m' (.catchR x m0 s'))
+  | catchSkip {m : Mem} {x : Var} {m0 : Mem} : Step P m (.catchR x m0 .skip) (.ok m .skip)
+  | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
+      Step P m s (.panic m1) → Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
 
 /-- Reachability. -/
 inductive Steps (P : Prog) : Mem → Stmt → Res → Prop
   | refl {m : Mem} {s : Stmt} : Steps P m s (.ok m s)
   | step {m m' : Mem} {s s' : Stmt} {r : Res} :
       Step P m s (.ok m' s') → Steps P m' s' r → Steps P m s r
-  | panic {m : Mem} {s : Stmt} : Step P m s .panic → Steps P m s .panic
+  | panic {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Steps P m s (.panic m')
 
 /-- A configuration that is neither finished nor able to step: the program
     is about to touch memory it may not. -/

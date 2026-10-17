@@ -120,8 +120,39 @@ inductive Rhs where
   | pop (y : Var)              -- `vec_pop`: the element moves out
 deriving DecidableEq, Repr
 
-/-- Statements.  The last three are run-time forms: they appear when a
-    binding is made or a function is called, never in source. -/
+/-! ### Memory (here because a run-time form records a snapshot of it) -/
+
+inductive Val where
+  | int (n : Nat)
+  | node (t : Ty) (c d : Nat) (es : List Val)   -- `t`: the element type (ghost)
+  | href (c : Nat)
+  | view (d off len : Nat)
+deriving Repr, Inhabited
+
+/-- A binding's storage: whether it owns its value (it is dropped at the end
+    of the scope), and the value, if it holds one (the drop flag). -/
+structure Slot where
+  own : Bool
+  val : Option Val
+
+structure Mem where
+  alloc : Nat → Bool
+  nid   : Nat                 -- next fresh address
+  nv    : Nat                 -- next fresh variable
+  st    : Var → Option Slot
+
+def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
+  fun i => if i = k then v else f i
+
+def Mem.set (m : Mem) (x : Var) (s : Slot) : Mem :=
+  { m with st := upd m.st x (some s) }
+
+def Mem.remove (m : Mem) (x : Var) : Mem :=
+  { m with st := upd m.st x none }
+
+/-- Statements.  `scope`, `rbind`, `frozen` and `catchR` are run-time forms:
+    they appear when a binding is made or a function is called, never in
+    source. -/
 inductive Stmt where
   | skip
   | seq (a b : Stmt)
@@ -135,7 +166,10 @@ inductive Stmt where
   | scope (x : Var) (body : Stmt)                         -- run time: `x` is bound
   | rbind (p : Var) (body : Stmt)                         -- run time: `in` parameter `p`
   | frozen (z : List Var) (body : Stmt)                   -- run time: `z` is lent out
-deriving Repr
+  | panic                                                 -- `( panic … )`
+  | letrec (x : Var) (f : Nat) (body : Stmt)              -- `: !v PanicInfo x ( recover f )`
+  | catchR (x : Var) (m0 : Mem) (body : Stmt)             -- run time: a `recover` frame; `m0`
+                                                          -- is the caller's store (a ghost)
 
 /-- Parameter conventions (§1).  An `inout` parameter carries the most the
     function may do to it — its summary. -/
@@ -161,7 +195,6 @@ structure Fn where
   outHolds : List (Nat × Nat × Kind)
   body     : Stmt
   nvars    : Nat
-deriving Repr
 
 abbrev Prog := List Fn
 
