@@ -32,16 +32,23 @@ theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : H
   exact ⟨n0, d, es, h n0 hr, hk, hw, hv.keep hH⟩
 
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
-    (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep)
+    (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
     (h : ValOK m τ v P H) : ValOK m' τ v P H := by
-  cases τ with
+  induction τ generalizing v P with
   | int => exact h
   | vec t =>
     obtain ⟨c, rfl, dep, hd, ha⟩ := h
-    exact ⟨c, rfl, dep, hd, (hp dep hd).2 c t H hh ha⟩
+    exact ⟨c, rfl, dep, hd, (hp dep hd).2 c t H (fun h hh' => (hh h hh').1) ha⟩
   | slice t =>
     obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h
     exact ⟨d, o, l, rfl, dep, hd, (hp dep hd).1 d o l t ha⟩
+  | prod a b iha ihb =>
+    obtain ⟨x, y, rfl, hx, hy⟩ := h
+    have hph : ∀ dep ∈ P ++ H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+      rcases List.mem_append.mp hd with hd | hd
+      · exact hp dep hd
+      · exact hh dep hd
+    exact ⟨x, y, rfl, iha hph hx, ihb hph hy⟩
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -49,6 +56,8 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   induction h with
   | here => rfl
   | child _ _ ih => simpa [Ty.holdsView] using ih
+  | fst _ ih => simp [Ty.holdsView, ih]
+  | snd _ ih => simp [Ty.holdsView, ih]
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by
@@ -114,6 +123,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     cases hty : E.ty with
     | int => rw [hty] at hok; simp [ValOK] at hok
     | slice t => rw [hty] at hok; simp [ValOK] at hok
+    | prod a b => rw [hty] at hok; simp [ValOK] at hok
     | vec t =>
       rw [hty] at hok
       obtain ⟨c', hc', dep, hd, n0, d, es, hr, hk, _, _⟩ := hok
@@ -131,6 +141,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     cases hty : E.ty with
     | int => rw [hty] at hok; simp [ValOK] at hok
     | vec t => rw [hty] at hok; simp [ValOK] at hok
+    | prod a b => rw [hty] at hok; simp [ValOK] at hok
     | slice t =>
       rw [hty] at hok
       obtain ⟨d', o', l', hv', dep, hd, n0, c, es, hr, hk, _, _⟩ := hok
@@ -193,9 +204,10 @@ theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   subst this
   rcases hkk with ⟨hv, _⟩ | ⟨hki, hb⟩
   · exact absurd hv hk
-  · obtain ⟨ty, c1, d1, es1, e, heq, he, hs⟩ := hb
-    cases heq
-    exact ⟨_, c', es2, Or.inl hev.after, Or.inr ⟨hki, _, _, d', es', e, rfl, hpre e he, hs⟩, hl, hw⟩
+  · obtain ⟨e, hc, hs⟩ := hb
+    cases hc with
+    | elem he =>
+      exact ⟨_, c', es2, Or.inl hev.after, Or.inr ⟨hki, e, Child.elem (hpre e he), hs⟩, hl, hw⟩
 
 theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind}
@@ -207,10 +219,11 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   · cases heq
     exact ⟨_, d', es', Or.inl hev.after, Or.inl ⟨hs, rfl⟩, hev.wf, no_views (hk hs) _ _ _⟩
   · exact absurd hvw hkv
-  · obtain ⟨ty, c1, d1, es1, e, heq, he, hs⟩ := hb
-    cases heq
-    exact ⟨_, d2, es2, Or.inl hev.after, Or.inr (Or.inr ⟨hin, _, _, d', es', e, rfl, hpre e he, hs⟩),
-      hw, hv.keep hH⟩
+  · obtain ⟨e, hc, hs⟩ := hb
+    cases hc with
+    | elem he =>
+      exact ⟨_, d2, es2, Or.inl hev.after, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩),
+        hw, hv.keep hH⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/

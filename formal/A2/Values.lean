@@ -119,8 +119,8 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
   rcases hi.mode_cases hy with hm | hm | hm
   · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
     obtain ⟨sl, _, _, _, hown, _⟩ := hi.slot y E hy
-    obtain ⟨⟨t', ht'⟩, _⟩ := hown hos
-    rw [ht] at ht'; cases ht'
+    obtain ⟨hty, _⟩ := hown hos
+    rw [ht] at hty; simp [Ty.owning] at hty
   all_goals
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos

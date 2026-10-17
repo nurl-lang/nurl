@@ -5,71 +5,24 @@ an ending way stays valid. -/
 
 namespace A2
 
-def Ty.size : Ty → Nat
-  | .int => 1
-  | .vec t => t.size + 1
-  | .slice t => t.size + 1
-
-inductive ViewSpine : Ty → Ty → Prop
-  | here {s : Ty} : ViewSpine (.slice s) s
-  | vec {t s : Ty} : ViewSpine t s → ViewSpine (.vec t) s
-
-inductive NodeSpine : Ty → Ty → Prop
-  | here {u : Ty} : NodeSpine (.vec u) u
-  | vec {t u : Ty} : NodeSpine t u → NodeSpine (.vec t) u
-
-theorem ViewIn.spine {τ T s v} (h : ViewIn τ T s v) : ViewSpine τ s := by
-  induction h with
-  | here => exact ViewSpine.here
-  | child _ _ ih => exact ViewSpine.vec ih
-
-theorem ViewSpine.size_lt {τ s} (h : ViewSpine τ s) : s.size < τ.size := by
-  induction h with
-  | here => simp [Ty.size]
-  | vec _ ih => simp [Ty.size]; omega
-
-theorem sub_spine {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : Nat} {es : List Val}
-    (hs : Sub (.node u c d es) T) : NodeSpine τ u := by
-  induction hw generalizing u c d es with
-  | int => cases hs
-  | view => cases hs
-  | node hes ih =>
-    rcases hs.cases' with h | ⟨ty, c', d', es', e, heq, he, hs'⟩
-    · cases h; exact NodeSpine.here
-    · cases heq; exact NodeSpine.vec (ih e he hs')
-
-theorem spine_combine {τ u s : Ty} (hn : NodeSpine τ u) (hv : ViewSpine τ s) : ViewSpine u s := by
-  induction hn with
-  | here => cases hv with | vec h => exact h
-  | vec _ ih => cases hv with | vec h => exact ih h
-
-/-- A view stored in a tree never points into that same tree. -/
-theorem view_not_inside {τ : Ty} {T : Val} (hw : WFv τ T) {s : Ty} {v : Val} (hin : ViewIn τ T s v)
-    {u : Ty} {c d : Nat} {es : List Val} (hs : Sub (.node u c d es) T)
-    (hwn : WFv (.vec s) (.node u c d es)) : False := by
-  have hu : u = s := by cases hwn; rfl
-  subst hu
-  have := (spine_combine (sub_spine hw hs) hin.spine).size_lt
-  omega
-
-/-- So a view stored in an owned tree is not valid through that tree's
-    owner. -/
-theorem viewAt_not_self {m : Mem} {x : Var} {τ : Ty} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
-    (hw : WFv τ T) {s : Ty} {v : Val} (hin : ViewIn τ T s v) {k : Kind} {d o l : Nat}
+/-- A view stored in an owned tree is not valid through that tree's owner:
+    no tree views itself. -/
+theorem viewAt_not_self {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨true, some T⟩)
+    (hsf : SelfFree T) {τ s : Ty} {d o l : Nat} (hin : ViewIn τ T s (.view d o l)) {k : Kind}
     (ha : ViewAt m ⟨x, k⟩ d o l s) : False := by
-  obtain ⟨n0, c, es, hr, hk, _, hwn⟩ := ha
+  obtain ⟨n0, c, es, hr, hk, _, _⟩ := ha
   have := rootNode_own hT hr
   subst this
   have hs : Sub (.node s c d es) n0 := by
     rcases hk with ⟨_, h⟩ | ⟨_, h⟩
     · rw [h]; exact Sub.refl _
     · exact h.sub
-  exact view_not_inside hw hin hs hwn
+  exact hsf d o l hin.sub s c es hs
 
 /-- The views stored in an owned tree stay valid when only that tree's owner
     changes, if the others they depend on keep their memory. -/
 theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
-    (hT : m.st x = some ⟨true, some T⟩) (hw : WFv τ T) {τ' : Ty} {H : List Dep}
+    (hT : m.st x = some ⟨true, some T⟩) (hsf : SelfFree T) {τ' : Ty} {H : List Dep}
     (hsub : ∀ s v, ViewIn τ' U s v → ViewIn τ T s v)
     (hk : ∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) (hv : ViewsOK m τ T H) :
     ViewsOK m' τ' U H := by
@@ -79,7 +32,7 @@ theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
   intro heq
   obtain ⟨r, k⟩ := dep
   simp only at heq; subst heq
-  exact viewAt_not_self hT hw (hsub s _ hin) ha
+  exact viewAt_not_self hT hsf (hsub s _ hin) ha
 
 /-! ### The general frame lemma -/
 
@@ -137,7 +90,7 @@ theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     refine ⟨T, hT, hv.keep fun dep hd => (hk dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
-    refine ⟨v, hv, hok.keep (fun dep hd => hk dep ?_) (fun dep hd => (hk dep ?_).1)⟩
+    refine ⟨v, hv, hok.keep (fun dep hd => hk dep ?_) (fun dep hd => hk dep ?_)⟩
     · simp [Entry.vdeps, hos, hd]
     · simp [Entry.vdeps, hos, hd]
 
@@ -225,7 +178,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         by_cases hint : E.ty = .int
         · obtain ⟨ho, hown, hbor⟩ := hslot
           refine ⟨ho, fun hos => ?_, fun hos hl' => ?_⟩
-          · obtain ⟨⟨t, ht⟩, _⟩ := hown hos
+          · obtain ⟨ht, _⟩ := hown hos
             rw [hint] at ht; cases ht
           · obtain ⟨w, hw, hok'⟩ := hbor hos hl'
             exact ⟨w, hw, by rw [hint] at hok' ⊢; exact hok'⟩

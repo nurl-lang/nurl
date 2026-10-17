@@ -30,6 +30,8 @@ inductive Sub : Val → Val → Prop
   | refl (v : Val) : Sub v v
   | child {v e : Val} {t : Ty} {c d : Nat} {es : List Val} :
       e ∈ es → Sub v e → Sub v (.node t c d es)
+  | fst {v a b : Val} : Sub v a → Sub v (.pair a b)
+  | snd {v a b : Val} : Sub v b → Sub v (.pair a b)
 
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
@@ -48,6 +50,7 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
       Frees a (.node t c d es) a'
+  | pair {a a1 a2 : Nat → Bool} {v w : Val} : Frees a v a1 → Frees a1 w a2 → Frees a (.pair v w) a2
 inductive FreesL : (Nat → Bool) → List Val → (Nat → Bool) → Prop
   | nil {a : Nat → Bool} : FreesL a [] a
   | cons {a a1 a2 : Nat → Bool} {e : Val} {es : List Val} :
@@ -78,15 +81,24 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
   | slen {x : Var} {d o l : Nat} :
       m.st x = some ⟨false, some (.view d o l)⟩ → Eval m (.slen x) l
 
-/-- An element read out of a buffer: an element `Vec` is lent, as `href`. -/
+/-- An element read out of a buffer: an element `Vec` is lent, as `href`;
+    a struct is copied with what it holds lent. -/
 def lendOf : Val → Val
   | .node _ c _ _ => .href c
+  | .pair v w => .pair (lendOf v) (lendOf w)
   | v => v
 
-/-- Does moving this element out move an owned tree? -/
-def Val.isNode : Val → Bool
+/-- Does moving this value move an owned tree (a `Vec` or a struct)? -/
+def Val.owns : Val → Bool
   | .node .. => true
+  | .pair .. => true
   | _ => false
+
+/-- Handing a value on: an owner gives up its value, anything else is
+    copied. -/
+inductive TakeVal (m : Mem) : Var → Val → Mem → Prop
+  | own {y : Var} {v : Val} : m.st y = some ⟨true, some v⟩ → TakeVal m y v (m.set y ⟨true, none⟩)
+  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → TakeVal m y v m
 
 inductive RRes where
   | ok (v : Val) (own : Bool) (m : Mem)
@@ -120,15 +132,15 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       m.st y = some ⟨false, some (.view d o l)⟩ → Eval m i n → l ≤ n → EvalR m (.sat y i) .panic
   | pop {y : Var} {t : Ty} {c d : Nat} {es : List Val} {e : Val} :
       m.st y = some ⟨true, some (.node t c d (es ++ [e]))⟩ → m.alloc c = true → m.alloc d = true →
-      EvalR m (.pop y) (.ok e e.isNode (m.set y ⟨true, some (.node t c d es)⟩))
+      EvalR m (.pop y) (.ok e e.owns (m.set y ⟨true, some (.node t c d es)⟩))
   | popEmpty {y : Var} {t : Ty} {c d : Nat} :
       m.st y = some ⟨true, some (.node t c d [])⟩ → EvalR m (.pop y) .panic
-
-/-- Handing a value on: an owner gives up its value, anything else is
-    copied. -/
-inductive TakeVal (m : Mem) : Var → Val → Mem → Prop
-  | own {y : Var} {v : Val} : m.st y = some ⟨true, some v⟩ → TakeVal m y v (m.set y ⟨true, none⟩)
-  | bor {y : Var} {v : Val} : m.st y = some ⟨false, some v⟩ → TakeVal m y v m
+  | pair {y z : Var} {v w : Val} {m1 m2 : Mem} :
+      TakeVal m y v m1 → TakeVal m1 z w m2 → EvalR m (.pair y z) (.ok (.pair v w) true m2)
+  | fst {y : Var} {o : Bool} {v w : Val} :
+      m.st y = some ⟨o, some (.pair v w)⟩ → EvalR m (.fst y) (.ok (lendOf v) false m)
+  | snd {y : Var} {o : Bool} {v w : Val} :
+      m.st y = some ⟨o, some (.pair v w)⟩ → EvalR m (.snd y) (.ok (lendOf w) false m)
 
 /-! ### Calls
 
@@ -154,6 +166,9 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .view y => .view (ρ y)
   | .sat y i => .sat (ρ y) (i.rename ρ)
   | .pop y => .pop (ρ y)
+  | .pair y z => .pair (ρ y) (ρ z)
+  | .fst y => .fst (ρ y)
+  | .snd y => .snd (ρ y)
 
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip
@@ -171,6 +186,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .panic => .panic
   | .letrec x f s => .letrec (ρ x) f (s.rename ρ)
   | .catchR x m0 s => .catchR (ρ x) m0 (s.rename ρ)
+  | .unpair y x z s => .unpair (ρ y) (ρ x) (ρ z) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -316,6 +332,11 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | catchIn {m m' : Mem} {x : Var} {m0 : Mem} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.catchR x m0 s) (.ok m' (.catchR x m0 s'))
   | catchSkip {m : Mem} {x : Var} {m0 : Mem} : Step P m (.catchR x m0 .skip) (.ok m .skip)
+  | unpair {m : Mem} {y x z : Var} {s : Stmt} {v w : Val} :
+      m.st y = some ⟨true, some (.pair v w)⟩ → m.st x = none → m.st z = none → x ≠ z →
+      Step P m (.unpair y x z s)
+        (.ok (((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).set z ⟨w.owns, some w⟩)
+          (.scope x (.scope z s)))
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
