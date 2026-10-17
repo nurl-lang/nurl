@@ -50,6 +50,16 @@ theorem mem_wrapSpine_of : ∀ {ps : List (PMode × Ty)} {base i k : Nat} {p : P
       | inp => exact List.mem_cons_of_mem _ this
       | sink => exact List.mem_cons_of_mem _ this
 
+theorem catchOK_wrap {m : Mem} (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base i : Nat),
+    CatchOK m (wrapParams ps base i s) = CatchOK m s := by
+  intro ps
+  induction ps with
+  | nil => intro base i; rfl
+  | cons p ps ih =>
+    intro base i
+    obtain ⟨pm, t⟩ := p
+    cases pm <;> simp [wrapParams, CatchOK, ih]
+
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {m : Mem}
 
@@ -58,10 +68,36 @@ theorem body_spine (h : CallH P Γ F x fn args m.nv) :
   obtain ⟨hsrc, _⟩ := h.fnok
   exact src_spine (by rw [RSetup.src_rename]; exact hsrc)
 
+theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) : Covers (callMem m m1 fn x) := by
+  intro i hia
+  have hal : (callMem m m1 fn x).alloc = m.alloc := (h.bind hb).1
+  rw [hal] at hia
+  obtain ⟨o, T, hT, hiT⟩ := hc i hia
+  obtain ⟨o', hT'⟩ := h.own_dst hi hb hT
+  exact ⟨o', T, hT', hiT⟩
+
+theorem catchOK (h : CallH P Γ F x fn args m.nv) (m' : Mem) (k : Stmt) :
+    CatchOK m' (callStmt fn args m.nv x k) := by
+  show CatchOK m' (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
+  rw [catchOK_wrap]
+  exact catchOK_src (by rw [RSetup.src_rename]; exact h.fnok.1)
+
+theorem frz (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) : Frz F m (callMem m m1 fn x) := by
+  intro v hv
+  refine h.st_other hb (h.untouched_lt (h.Flt v hv) (fun e => h.xF (e ▸ hv)) fun k t hk he => ?_)
+  have hkl := lt_of_get hk
+  obtain ⟨_, _, _, _, hmv⟩ := h.arg k hkl
+  rw [get_of hk] at hmv
+  exact (hmv rfl).1 (he ▸ hv)
+
 theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m Γ F (.letcall x f args k))
     {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1) :
     Inv (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) F (callStmt fn args m.nv x k) where
   toMInv := h.minv hi.toMInv hb
+  catchOK := h.catchOK _ k
+  cover := h.covers hi.toMInv hi.cover hb
   nvS v hv := by
     obtain ⟨_, hnv, hvars, _⟩ := h.fnok
     show v < m.nv + fn.nvars
@@ -350,6 +386,115 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
       ⟨fn, hf, hlen, hargs, rfl, rfl⟩
     have h := callH_of hP hf hx hxF hc' hi
-    exact ⟨_, h.typed hk hkT, h.inv hi hb, Nat.le_add_right _ _, h.keep⟩
+    exact ⟨_, h.typed hk hkT, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
+
+
+/-! ### `recover`: a call of a function without parameters, in a `recover` frame -/
+
+theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {base : Nat}
+    (h : CallH P Γ F x fn [] base) (hp : fn.params = []) (G : List Var) (hG : ∀ v ∈ G, v < base)
+    (hxG : x ∉ G) : CallH P Γ (F ++ G) x fn [] base :=
+  { h with
+    arg := fun i hi => absurd hi (by simp [hp])
+    xF := fun hm => by
+      rcases List.mem_append.mp hm with hm | hm
+      · exact h.xF hm
+      · exact hxG hm
+    Flt := fun v hv => by
+      rcases List.mem_append.mp hv with hv | hv
+      · exact h.Flt v hv
+      · exact hG v hv
+    anch := fun p E hp' hm r hr => List.mem_append_left _ (h.anch p E hp' hm r hr) }
+
+/-- The `recover` case of preservation. -/
+theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
+  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hi hst
+  cases hst with
+  | letrec hf' _ hmx =>
+    rename_i fn'
+    rw [hf] at hf'; cases hf'
+    obtain ⟨fn', hf'', hlen, hargs, rfl, rfl⟩ := hc
+    rw [hf] at hf''; cases hf''
+    have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) := ⟨fn, hf, hlen, hargs, rfl, rfl⟩
+    have hi' : Inv m Γ F (.letcall x f [] k) :=
+      hi.respine rfl (fun v hv => hi.nvS v (by simpa [Stmt.vars] using hv)) trivial
+    have h := callH_of hP hf hx hxF hc' hi'
+    have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
+    have hI := h.inv hi' hb
+    have hkeep := h.keep (f := f) (k := k)
+    have hpost : callPost Γ fn [] = Γ := by unfold callPost; rw [hp]; rfl
+    -- what the frame returns to
+    let m0 := m.set x ⟨fn.resOwn, none⟩
+    let G := (List.range m0.nv).filter (· ≠ x)
+    have h' := h.widen hp G (fun v hv => (List.mem_range.mp (List.mem_filter.mp hv).1))
+      (fun hm => by simp [G] at hm)
+    have hIn := h'.typedIn
+    rw [hpost] at hIn hkT
+    have hxlt : x < m.nv := h.xlt
+    have hrne : x ≠ m.nv + fn.params.length := fun e => by have := vlt hxlt; have := veq e; omega
+    have hEc : (callRes Γ fn []).mode = .bor := by simp [callRes, resMode, ho]
+    have hEty : (callRes Γ fn []).ty = .int := by simp [callRes, hty]
+    have hout : RhsOut m Γ (callRes Γ fn []) (.int 1) false :=
+      { own := by rw [hEc]; rfl
+        mode := Or.inr hEc
+        live := rfl
+        tyok := by rw [hEty]; rfl
+        wf := fun h0 => absurd hEty h0
+        valOwn := fun h0 => by rw [hEc] at h0; cases h0
+        valBor := fun _ => by rw [hEty]; exact ⟨1, rfl⟩ }
+    have hM1 := hi.toMInv.add hx hxlt hout
+    have hM : MInv (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) :=
+      hM1.of_st (by funext v; by_cases hv : v = x <;> simp [m0, hv])
+        (hi.heap.set_bor x _ |>.set_bor x _ |> fun hh => by
+          have : (m0.set x ⟨false, some (.int 1)⟩) = ((m.set x ⟨false, none⟩).set x ⟨false, some (.int 1)⟩) := by
+            simp [m0, ho]
+          rw [this]; exact hh) (Nat.le_refl _)
+    have hanchΔ : ∀ p E, setE Γ x (callRes Γ fn []) p = some E → E.mode = .rootb →
+        ∀ r ∈ roots E.vdeps, r ∈ F := by
+      intro p Ep hp' hm
+      by_cases hpx : p = x
+      · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm
+      · simp only [setE, upd_ne _ _ hpx] at hp'
+        exact hi.anch p Ep hp' hm (by simp [Stmt.spine])
+    have hsp : (callIn fn [] m.nv x).spine = [m.nv + fn.params.length] := by
+      rw [callIn_spine, h.body_spine]; simp [hp, wrapSpine]
+    have hKO : KeepOut ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))
+        (callIn fn [] m.nv x).spine := by
+      refine ⟨fun v Ev hv hvs => ?_, fun v Ev hv => ?_⟩
+      · by_cases hvx : v = x
+        · subst hvx
+          rw [h.canon_x] at hv; cases hv
+          refine ⟨callRes Γ fn [], by simp [setE], by simp [callX, callRes], by simp [callX, callRes], fun hr => ?_⟩
+          exact absurd hr (resMode_ne' fn)
+        · have hvs' : v ∉ (callStmt fn [] m.nv x k).spine := by
+            simp only [callStmt, Stmt.spine, List.mem_cons, not_or]; exact ⟨hvx, hvs⟩
+          obtain ⟨_, E0, h0⟩ := hkeep.2 v Ev hv hvs'
+          obtain ⟨_, E1, h1, hm1, ht1, hrb1⟩ := hkeep.1 v E0 h0 (by simp [Stmt.spine])
+          rw [hv] at h1; cases h1
+          refine ⟨E0, by simp [setE, upd_ne _ _ hvx, h0], hm1.symm, ht1.symm, fun hr => ?_⟩
+          exact (hrb1 (hm1 ▸ hr)).symm
+      · by_cases hvx : v = x
+        · subst hvx
+          refine ⟨by rw [hsp]; simp [hrne], _, h.canon_x _⟩
+        · simp only [setE, upd_ne _ _ hvx] at hv
+          obtain ⟨hvs, E1, h1, _⟩ := hkeep.1 v Ev hv (by simp [Stmt.spine])
+          refine ⟨fun hm => hvs ?_, E1, h1⟩
+          simp only [callStmt, Stmt.spine, List.mem_cons]; exact Or.inr hm
+    have hcatch : StmtT P ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
+        (setE Γ x (callRes Γ fn [])) :=
+      StmtT.catchR hxF hIn hM hanchΔ hKO
+    refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
+      (StmtT.seq hk hcatch hkT), ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
+    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩
+    · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
+      have hx' := hI.nvS x (by simp [callStmt, Stmt.vars])
+      rcases hv with rfl | (rfl | hv) | hv
+      · exact hx'
+      · exact hx'
+      · exact hI.nvS v (by simp [callStmt, Stmt.vars, hv])
+      · exact hI.nvS v (by simp [callStmt, Stmt.vars, hv])
+    · have hvr : v ≠ m.nv + fn.params.length := fun e => hv (by rw [hsp]; simp [e])
+      simp [callMem, upd_ne _ _ hvr]
+    · rw [hsp]; simp [hrne]
 
 end A2

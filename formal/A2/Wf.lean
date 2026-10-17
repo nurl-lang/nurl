@@ -508,6 +508,18 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     exact ⟨killE .replace false x E, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h], by rw [killE_mode]⟩
+  | panic => exact fun r _ E h => ⟨E, h, rfl⟩
+  | @letrec Γ Γ1 Δ F x f k E0 fn _ hx hxF _ _ _ _ hc _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E1, h1, hm1⟩ := hc.domMode.get h
+    obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
+    exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
+      by rw [killE_mode, hm2, hm1]⟩
+  | catchR _ hs _ _ hKO _ =>
+    intro r hr E h
+    obtain ⟨E', h', hm', _⟩ := hKO.1 r E h (fun hsp => hs.spine_F r hsp (List.mem_append_left _ hr))
+    exact ⟨E', h', hm'⟩
   | sub hw _ ho ih =>
     intro r hr E h
     obtain ⟨E0, h0, hw0⟩ := hw.get h
@@ -622,6 +634,13 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     intro h
     exact (h.kill .replace false x).setE ⟨killE .replace false x E, by simp [A2.kill, hx],
       fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
+  | panic => exact id
+  | @letrec Γ Γ1 Δ F x f k E fn _ hx _ _ _ _ _ hc _ ih =>
+    intro h
+    obtain ⟨hw1, hdm, hE⟩ := hc.wf hP h
+    have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
+    exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
+  | catchR _ _ hM _ _ _ => exact fun _ => hM.wf
   | sub hw _ ho _ =>
     intro _
     rcases ho with rfl | ho

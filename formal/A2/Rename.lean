@@ -1104,6 +1104,24 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
+  | panic => exact fun _ hab _ => ⟨StmtT.panic, hab⟩
+  | @letrec Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk ih =>
+    intro _ hab hw
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc
+    obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
+    obtain ⟨hw1, hdm, hE⟩ := hc.wf hP hw
+    have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
+    have hwx := hw1.add hx1 (fun _ _ => hE)
+    have habx := hab.add hab1 hx hmo
+    obtain ⟨tk, abk⟩ := ih hks habx hwx
+    have hbx := hab.fresh hx
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habx hwx
+    rw [canon_setE h] at hwc tk
+    exact StmtT.letrec (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hf hp
+      hty ho hc' (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc⟩ tk)
+  | catchR => intro hs; simp [Stmt.src] at hs
   | @assign Γ Γ1 F x r Ex E hx hxF hmodes hr hty hxd hsome =>
     intro _ hab hw
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
