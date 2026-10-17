@@ -64,7 +64,7 @@ theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   | pair hy _ hpa1 hz _ hpa2 _ => exact (PushArg.domTy hy hpa1).trans (PushArg.domTy hz hpa2)
   | inl hy _ hpa _ => exact PushArg.domTy hy hpa
   | inr hy _ hpa _ => exact PushArg.domTy hy hpa
-  | pack hy _ _ hpa _ _ => exact PushArg.domTy hy hpa
+  | pack hy _ _ hpa => exact PushArg.domTy hy hpa
   | @takel y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | @taker y Ey _ _ hy _ _ _ _ => exact ((DomTy.refl Γ).kill .replace false y).setE ⟨Ey, hy, rfl, rfl⟩
   | _ => exact DomTy.refl Γ
@@ -124,7 +124,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | letv hks hx _ hr _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
-  | callc hks hx _ _ _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx (DomTy.refl _) (ih hks)
+  | callc hks hx _ _ _ _ _ _ _ hcT _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
   | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ ih =>
     intro _
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx

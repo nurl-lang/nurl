@@ -25,8 +25,9 @@ inductive Ty where
   | slice (t : Ty)
   | prod (a b : Ty)   -- a struct value: its fields, nested in pairs (inline, no allocation)
   | sum (a b : Ty)    -- an enum value: one of two payloads, tagged (inline); `Option t` is `sum int t`
-  | fn (a r : Ty)     -- a closure or a trait object: code with an environment it owns, called with a
-                      -- borrowed `a`, returning `r`; the environment's type is not part of the type
+  | fn (ms : List Nat) -- a closure or a trait object: code with an environment it owns; method `j`
+                        -- has the interface `ms[j]` (a function of the program whose first parameter
+                        -- is the receiver); the environment's type is not part of the type
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -37,7 +38,7 @@ def Ty.holdsView : Ty → Bool
   | .slice _ => true
   | .prod a b => a.holdsView || b.holdsView
   | .sum a b => a.holdsView || b.holdsView
-  | .fn _ _ => true     -- what the environment holds is not part of the type
+  | .fn _ => true     -- what the environment holds is not part of the type
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -48,7 +49,7 @@ def Ty.ok : Ty → Bool
   | .slice t => t.ok && !t.holdsView
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
-  | .fn a r => a.ok && r.ok
+  | .fn _ => true
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -56,7 +57,7 @@ def Ty.owning : Ty → Bool
   | .vec _ => true
   | .prod _ _ => true
   | .sum _ _ => true
-  | .fn _ _ => true
+  | .fn _ => true
   | _ => false
 
 /-- How a borrow reaches the memory of the binding it depends on.
@@ -147,8 +148,9 @@ inductive Rhs where
   | getr (y : Var)
   | takel (y : Var)            -- a match by value: the payload moves out, the enum is consumed
   | taker (y : Var)
-  | pack (f : Nat) (te a r : Ty) (y : Var)   -- a closure literal or `dyn`: code `f` with the
-                                            -- environment `y` (of type `te`) moved in
+  | pack (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var)  -- a closure literal or `dyn`: the
+                                            -- methods' code `fs`, the environment `y` (of type `te`)
+                                            -- moved in, the interfaces `ms`
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -161,8 +163,9 @@ inductive Val where
   | pair (v w : Val)                              -- a struct value, inline
   | inl (v : Val)                                 -- an enum value, inline
   | inr (v : Val)
-  | pkg (f : Nat) (te a r : Ty) (env : Val)   -- a package: code `f`, its environment (of the
-                                               -- ghost type `te`) inline, and its signature
+  | pkg (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val)  -- a package: its methods' code,
+                                               -- its environment (of the ghost type `te`) inline,
+                                               -- and its interfaces
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end
@@ -207,8 +210,8 @@ inductive Stmt where
   | catchR (x : Var) (m0 : Mem) (body : Stmt)             -- run time: a `recover` frame; `m0`
                                                           -- is the caller's store (a ghost)
   | unpair (y x z : Var) (body : Stmt)                    -- a struct moved apart into its fields
-  | callc (x c z : Var) (body : Stmt)                     -- `: x ( c z )`: a call through the
-                                                          -- package `c` (a closure or a `dyn`)
+  | callc (x c : Var) (j : Nat) (zs : List Var) (body : Stmt)  -- `: x ( m c zs… )`: a call of
+                                                          -- method `j` of the package `c`
 
 /-- Parameter conventions (§1).  An `inout` parameter carries the most the
     function may do to it — its summary. -/

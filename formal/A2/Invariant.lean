@@ -26,7 +26,7 @@ inductive WFv : Ty → Val → Prop
   | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
   | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
-  | pkg {f : Nat} {te a r : Ty} {v : Val} : WFv te v → WFv (.fn a r) (.pkg f te a r v)
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} : WFv te v → WFv (.fn ms) (.pkg fs te ms v)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -37,8 +37,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
   | inl {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.sum a b) (.inl x) s v
   | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
-  | pkg {f : Nat} {te a r : Ty} {x : Val} {s : Ty} {v : Val} :
-      ViewIn te x s v → ViewIn (.fn a r) (.pkg f te a r x) s v
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {s : Ty} {v : Val} :
+      ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x) s v
 
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
@@ -48,7 +48,7 @@ inductive Child : Val → Val → Prop
   | snd {v w : Val} : Child w (.pair v w)
   | inl {v : Val} : Child v (.inl v)
   | inr {v : Val} : Child v (.inr v)
-  | pkg {v : Val} {f : Nat} {te a r : Ty} : Child v (.pkg f te a r v)
+  | pkg {v : Val} {fs : List Nat} {te : Ty} {ms : List Nat} : Child v (.pkg fs te ms v)
 
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
@@ -61,7 +61,7 @@ inductive Top : Val → Val → Prop
   | snd {n a b : Val} : Top n b → Top n (.pair a b)
   | inl {n a : Val} : Top n a → Top n (.inl a)
   | inr {n a : Val} : Top n a → Top n (.inr a)
-  | pkg {n a : Val} {f : Nat} {te s r : Ty} : Top n a → Top n (.pkg f te s r a)
+  | pkg {n a : Val} {fs : List Nat} {te : Ty} {ms : List Nat} : Top n a → Top n (.pkg fs te ms a)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles). -/
@@ -102,8 +102,8 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
   | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
-  | pkg {f : Nat} {te a r : Ty} {x : Val} {P H : List Dep} :
-      ValOK m te x (P ++ H) H → ValOK m (.fn a r) (.pkg f te a r x) P H
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {P H : List Dep} :
+      ValOK m te x (P ++ H) H → ValOK m (.fn ms) (.pkg fs te ms x) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -142,8 +142,8 @@ theorem valOK_sum {a b : Ty} :
     · exact .inl hx
     · exact .inr hx
 
-theorem valOK_fn {a r : Ty} :
-    ValOK m (.fn a r) v P H ↔ ∃ f te x, v = .pkg f te a r x ∧ ValOK m te x (P ++ H) H := by
+theorem valOK_fn {ms : List Nat} :
+    ValOK m (.fn ms) v P H ↔ ∃ fs te x, v = .pkg fs te ms x ∧ ValOK m te x (P ++ H) H := by
   constructor
   · intro h; cases h with | pkg hx => exact ⟨_, _, _, rfl, hx⟩
   · rintro ⟨f, te, x, rfl, hx⟩; exact .pkg hx
@@ -160,7 +160,7 @@ def Val.ids : Val → List Nat
   | .pair v w => v.ids ++ w.ids
   | .inl v => v.ids
   | .inr v => v.ids
-  | .pkg _ _ _ _ v => v.ids
+  | .pkg _ _ _ v => v.ids
   | _ => []
 def idsL : List Val → List Nat
   | [] => []
@@ -308,11 +308,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
         (compE E b)) F s Δ →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
-  | callc {Γ Δ : Ctx} {F : List Var} {x c z : Var} {k : Stmt} {Ec Ez : Entry} {a r : Ty} :
-      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.live = true → Ec.ty = .fn a r →
-      Γ z = some Ez → Ez.live = true → Ez.ty = a →
-      StmtT P (setE Γ x (cloRes Ec z Ez r)) F k Δ →
-      StmtT P Γ F (.callc x c z k) (exitScope x Δ)
+  | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
+      {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
+      k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
+      P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
+      CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
+      StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -343,19 +344,26 @@ def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
 /-! ### Packages name code of their signature -/
 
-/-- The code a package names takes its environment and one argument, both
-    borrowed, and returns the package's result type; what it returns borrows,
-    if it does, only from the argument. -/
-def CodeOK (P : Prog) (f : Nat) (te a r : Ty) : Prop :=
-  ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, te), (.inp, a)] ∧ fn.resTy = r ∧
-    fn.resOwn = r.owning ∧ (∀ jk ∈ fn.lends, jk.1 = 1) ∧ (∀ jk ∈ fn.rholds, jk.1 = 1)
+/-- Code `f`, on an environment of type `te`, implements the interface `σ`:
+    it takes the environment where the interface takes the receiver, and
+    the interface's other parameters as the interface does; it returns what
+    the interface returns, and lends, holds and stores no more than the
+    interface says. -/
+def Implements (P : Prog) (f : Nat) (te : Ty) (σ : Nat) : Prop :=
+  ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧ fn.params = (.inp, te) :: sig.params.tail ∧
+    fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
+    fn.outHolds ⊆ sig.outHolds
 
-/-- Every package in memory names code of its signature. -/
+/-- A package's code implements its interfaces, method by method. -/
+def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) : Prop :=
+  fs.length = ms.length ∧ ∀ (j f σ : Nat), fs[j]? = some f → ms[j]? = some σ → Implements P f te σ
+
+/-- Every package in memory names code that implements its interfaces. -/
 def MemCodes (P : Prog) (m : Mem) : Prop :=
-  ∀ x o V f te a r e, m.st x = some ⟨o, some V⟩ → Sub (.pkg f te a r e) V → CodeOK P f te a r
+  ∀ x o V fs te ms e, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e) V → CodeOK P fs te ms
 
 def Rhs.codeOK (P : Prog) : Rhs → Prop
-  | .pack f te a r _ => CodeOK P f te a r
+  | .pack fs te ms _ => CodeOK P fs te ms
   | _ => True
 
 /-- Every package a statement makes names code of its signature (a closure
@@ -373,7 +381,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .letrec _ _ s => s.codesOK P
   | .catchR _ _ s => s.codesOK P
   | .unpair _ _ _ s => s.codesOK P
-  | .callc _ _ _ s => s.codesOK P
+  | .callc _ _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

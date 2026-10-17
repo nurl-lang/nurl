@@ -27,7 +27,7 @@ theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt
     (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
     s = .skip ∨ ∃ r, Step P m s r :=
   progress (fun hx hc hi => callProgress hx hc hi)
-    (fun hx hc hlc htc hz hlz htz hcd hi => cloProgress hP hx hc hlc htc hz hlz htz hcd hi) ht hcd hi
+    (fun hx _ hc htc hj hσ hhd hcT hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hcd hi) ht hcd hi
 
 /-- Every binding is bound by a run-time scope the statement is inside of:
     the program's own top level binds nothing else. -/
@@ -117,7 +117,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
 
 theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by cases h
 
-theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) := fun _ _ _ _ _ _ _ _ h => by
+theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) := fun _ _ _ _ _ _ _ h => by
   cases h
 
 /-- The memory model of stage A2 is sound: a well-typed program, run from

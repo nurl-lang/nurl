@@ -58,7 +58,7 @@ theorem mem_idsL_iff {es : List Val} {i : Nat} : i ∈ idsL es ↔ ∃ e ∈ es,
 @[simp] theorem ids_pair (v w : Val) : (Val.pair v w).ids = v.ids ++ w.ids := by simp [Val.ids]
 @[simp] theorem ids_inl (v : Val) : (Val.inl v).ids = v.ids := by simp [Val.ids]
 @[simp] theorem ids_inr (v : Val) : (Val.inr v).ids = v.ids := by simp [Val.ids]
-@[simp] theorem ids_pkg (f : Nat) (te a r : Ty) (v : Val) : (Val.pkg f te a r v).ids = v.ids := by
+@[simp] theorem ids_pkg (fs : List Nat) (te : Ty) (ms : List Nat) (v : Val) : (Val.pkg fs te ms v).ids = v.ids := by
   simp [Val.ids]
 
 theorem Child.ids {e t : Val} (h : Child e t) : ∀ i ∈ e.ids, i ∈ t.ids := by

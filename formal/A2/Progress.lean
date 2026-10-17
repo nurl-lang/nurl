@@ -161,7 +161,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | inr hy hly _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.inr htk⟩
-  | pack hy hly _ _ _ _ =>
+  | pack hy hly _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
@@ -186,9 +186,11 @@ theorem progress {P : Prog}
     (hcall : ∀ {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {k : Stmt}
       {E : Entry} {Γ1 : Ctx} {m : Mem}, Γ x = none → CallT P Γ F f args E Γ1 → MInv m Γ →
       ∃ r, Step P m (.letcall x f args k) r)
-    (hclo : ∀ {Γ : Ctx} {x c z : Var} {k : Stmt} {Ec Ez : Entry} {a r : Ty} {m : Mem},
-      Γ x = none → Γ c = some Ec → Ec.live = true → Ec.ty = .fn a r → Γ z = some Ez →
-      Ez.live = true → Ez.ty = a → MemCodes P m → MInv m Γ → ∃ r, Step P m (.callc x c z k) r)
+    (hclo : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
+      {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} {m : Mem},
+      Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ → P[σ]? = some sig →
+      sig.params.head? = some (.inp, .fn ms) → CallT P Γ F σ (c :: zs) E Γ1 → MemCodes P m →
+      Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ ∃ r, Step P m s r := by
   induction ht with
@@ -313,9 +315,9 @@ theorem progress {P : Prog}
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     exact Or.inr ⟨_, Step.letrec hf hp hmx⟩
-  | callc _ hx _ hc hlc htc hz hlz htz _ _ =>
+  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ =>
     intro m hcd hi
-    exact Or.inr (hclo hx hc hlc htc hz hlz htz hcd hi.toMInv)
+    exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO ih =>
     intro m hcd hi
     rcases ih hcd hi.catchIn with rfl | ⟨r, hr⟩
