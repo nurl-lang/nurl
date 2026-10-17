@@ -5,6 +5,23 @@ panics, which is a defined way to stop). -/
 
 namespace A2
 
+/-- A live enum binding holds an enum. -/
+theorem sum_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (ht : E.ty = .sum a b) :
+    ∃ v, (m.st y = some ⟨E.mode.ownSlot, some (.inl v)⟩) ∨ (m.st y = some ⟨E.mode.ownSlot, some (.inr v)⟩) := by
+  rcases hi.mode_cases hy with hm | hm | hm
+  · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    rw [ht] at hw; rw [hm]
+    cases hw with
+    | inl _ => exact ⟨_, Or.inl hT⟩
+    | inr _ => exact ⟨_, Or.inr hT⟩
+  all_goals
+    obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    rw [ht] at hok; rw [hm]
+    rcases hok with ⟨x, rfl, _⟩ | ⟨x, rfl, _⟩
+    · exact ⟨_, Or.inl hv⟩
+    · exact ⟨_, Or.inr hv⟩
+
 theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT Γ e) :
     ∃ n, Eval m e n := by
   induction he with
@@ -32,6 +49,10 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
   | slen hx hl ht =>
     obtain ⟨d, o, l, _, _, hs, _⟩ := hi.slice_node hx hl ht
     exact ⟨_, Eval.slen hs⟩
+  | isl hx hl ht =>
+    obtain ⟨v, hv | hv⟩ := sum_slot hi hx hl ht
+    · exact ⟨_, Eval.isl hv⟩
+    · exact ⟨_, Eval.isr hv⟩
 
 theorem frees_owned {m : Mem} (hh : HeapOK m) {x : Var} {τ : Ty} {t : Val}
     (hx : m.st x = some ⟨true, some t⟩) (hw : WFv τ t) : ∃ a', Frees m.alloc t a' :=
@@ -134,6 +155,28 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | snd hy hl ht _ =>
     obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
     exact ⟨_, EvalR.snd hv⟩
+  | inl hy hly _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    exact ⟨_, EvalR.inl htk⟩
+  | inr hy hly _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    exact ⟨_, EvalR.inr htk⟩
+  | getl hy hl ht _ =>
+    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    · exact ⟨_, EvalR.getl hv⟩
+    · exact ⟨_, EvalR.getlP hv⟩
+  | getr hy hl ht _ =>
+    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
+    · exact ⟨_, EvalR.getrP hv⟩
+    · exact ⟨_, EvalR.getr hv⟩
+  | takel hy hl hm ht _ =>
+    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
+    · exact ⟨_, EvalR.takel hv⟩
+    · exact ⟨_, EvalR.takelP hv⟩
+  | taker hy hl hm ht _ =>
+    obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht <;> rw [hm] at hv
+    · exact ⟨_, EvalR.takerP hv⟩
+    · exact ⟨_, EvalR.taker hv⟩
 
 /-- Progress for every statement but a call, given the call case. -/
 theorem progress {P : Prog}

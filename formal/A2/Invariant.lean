@@ -24,6 +24,8 @@ inductive WFv : Ty → Val → Prop
   | node {t : Ty} {c d : Nat} {es : List Val} :
       (∀ e ∈ es, WFv t e) → WFv (.vec t) (.node t c d es)
   | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
+  | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
+  | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -32,6 +34,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
       e ∈ es → ViewIn t e s v → ViewIn (.vec t) (.node t' c d es) s v
   | fst {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.prod a b) (.pair x y) s v
   | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
+  | inl {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.sum a b) (.inl x) s v
+  | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
 
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
@@ -39,6 +43,8 @@ inductive Child : Val → Val → Prop
   | elem {e : Val} {ty : Ty} {c d : Nat} {es : List Val} : e ∈ es → Child e (.node ty c d es)
   | fst {v w : Val} : Child v (.pair v w)
   | snd {v w : Val} : Child w (.pair v w)
+  | inl {v : Val} : Child v (.inl v)
+  | inr {v : Val} : Child v (.inr v)
 
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
@@ -75,11 +81,14 @@ def ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | .vec t, v, P, H => ∃ c, v = .href c ∧ ∃ dep ∈ P, HrefAt m dep c t H
   | .slice t, v, P, _ => ∃ d o l, v = .view d o l ∧ ∃ dep ∈ P, ViewAt m dep d o l t
   | .prod a b, v, P, H => ∃ x y, v = .pair x y ∧ ValOK m a x (P ++ H) H ∧ ValOK m b y (P ++ H) H
+  | .sum a b, v, P, H => (∃ x, v = .inl x ∧ ValOK m a x (P ++ H) H) ∨ (∃ x, v = .inr x ∧ ValOK m b x (P ++ H) H)
 
 mutual
 def Val.ids : Val → List Nat
   | .node _ c d es => c :: d :: idsL es
   | .pair v w => v.ids ++ w.ids
+  | .inl v => v.ids
+  | .inr v => v.ids
   | _ => []
 def idsL : List Val → List Nat
   | [] => []
@@ -235,7 +244,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
 def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
-  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 = .inp → pt.2.isProd = false) ∧
+  (∀ pt ∈ fn.params, pt.2.ok = true ∧ (pt.1 = .inp → pt.2.isAgg = false) ∧
     (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → ∃ s, pt.2 = .vec s)) ∧
   (∀ jk ∈ fn.lends, lendable fn jk.1) ∧ (∀ jk ∈ fn.rholds, lendable fn jk.1) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1) ∧

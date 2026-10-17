@@ -49,6 +49,14 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hp dep hd
       · exact hh dep hd
     exact ⟨x, y, rfl, iha hph hx, ihb hph hy⟩
+  | sum a b iha ihb =>
+    have hph : ∀ dep ∈ P ++ H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+      rcases List.mem_append.mp hd with hd | hd
+      · exact hp dep hd
+      · exact hh dep hd
+    rcases h with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
+    · exact Or.inl ⟨x, rfl, iha hph hx⟩
+    · exact Or.inr ⟨x, rfl, ihb hph hx⟩
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -58,6 +66,8 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   | child _ _ ih => simpa [Ty.holdsView] using ih
   | fst _ ih => simp [Ty.holdsView, ih]
   | snd _ ih => simp [Ty.holdsView, ih]
+  | inl _ ih => simp [Ty.holdsView, ih]
+  | inr _ ih => simp [Ty.holdsView, ih]
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by
@@ -124,6 +134,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     | int => rw [hty] at hok; simp [ValOK] at hok
     | slice t => rw [hty] at hok; simp [ValOK] at hok
     | prod a b => rw [hty] at hok; simp [ValOK] at hok
+    | sum a b => rw [hty] at hok; simp [ValOK] at hok
     | vec t =>
       rw [hty] at hok
       obtain ⟨c', hc', dep, hd, n0, d, es, hr, hk, _, _⟩ := hok
@@ -142,6 +153,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     | int => rw [hty] at hok; simp [ValOK] at hok
     | vec t => rw [hty] at hok; simp [ValOK] at hok
     | prod a b => rw [hty] at hok; simp [ValOK] at hok
+    | sum a b => rw [hty] at hok; simp [ValOK] at hok
     | slice t =>
       rw [hty] at hok
       obtain ⟨d', o', l', hv', dep, hd, n0, c, es, hr, hk, _, _⟩ := hok

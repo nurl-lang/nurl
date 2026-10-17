@@ -138,31 +138,6 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
 
 /-! ### Taking a struct apart -/
 
-/-- A field of a struct in flight, handed to the binding that takes it. -/
-theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
-    (hout : RhsOut m Γ ⟨τ, .own, true, [], E.held⟩ T true) (hτ : τ ≠ .int) (hwx : WFv t x)
-    (hsub : Sub x T) (hvin : ∀ s v, ViewIn t x s v → ViewIn τ T s v) (hids : List.Sublist x.ids T.ids)
-    (htok : t.ok = true) : RhsOut m Γ (compE E t) x x.owns := by
-  obtain ⟨_, _, hvsT, hnd, hal, hdis, hsf⟩ := hout.valOwn rfl
-  have hwfH : ∀ r ∈ roots E.held, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := fun r hr =>
-    hout.wf hτ r (by simpa [Entry.vdeps, Mode.ownSlot] using hr)
-  cases hwx with
-  | int => exact intE_out _
-  | @view s d o l =>
-    refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ => wf_append hwfH hwfH, fun h => (by cases h), fun _ => ?_⟩
-    obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hvsT s _ (hvin s _ ViewIn.here)
-    exact ⟨d', o', l', hv, dep, hd, ha⟩
-  | @node u c d es hes =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.node hes, fun s v h => hvsT s v (hvin s v h),
-      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, fun h => (by cases h)⟩
-  | @pair a b v w hwa hwb =>
-    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
-      compE] using hr), fun _ => ⟨rfl, WFv.pair hwa hwb, fun s v h => hvsT s v (hvin s v h),
-      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
-      hsf.sub hsub⟩, fun h => (by cases h)⟩
-
 /-- What a right-hand side hands over stays valid when a fresh binding takes
     another value beside it. -/
 theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout : RhsOut m Γ E2 w o2)

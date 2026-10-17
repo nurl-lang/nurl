@@ -141,6 +141,8 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
       Γ x = some E → E.live = true → E.ty = .vec t → ExprT Γ (.len x)
   | slen {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.ty = .slice t → ExprT Γ (.slen x)
+  | isl {x : Var} {E : Entry} {a b : Ty} :
+      Γ x = some E → E.live = true → E.ty = .sum a b → ExprT Γ (.isl x)
 
 /-- An element read out of `y` (entry `E`), of type `t`: an integer is
     copied, a stored view is copied with what it depends on, an element
@@ -150,12 +152,14 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
   | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held⟩
   | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held⟩
+  | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
 def popE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .own, true, [], E.held⟩
   | .prod a b => ⟨.prod a b, .own, true, [], E.held⟩
+  | .sum a b => ⟨.sum a b, .own, true, [], E.held⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -200,7 +204,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held⟩
         (setE (kill .replace false y Γ) y { E with live := false })
   | copyRoot {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .rootb → E.ty.isProd = false →
+      Γ y = some E → E.live = true → E.mode = .rootb → E.ty.isAgg = false →
       RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held⟩ Γ
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor → RhsT Γ F (.var y) E Γ
@@ -228,6 +232,22 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty = .prod a b → E.mode ≠ .rootb → RhsT Γ F (.snd y) (projE y E b) Γ
+  | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
+      RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D⟩ Γ1
+  | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
+      RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D⟩ Γ1
+  | getl {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.ty = .sum a b → E.mode ≠ .rootb → RhsT Γ F (.getl y) (projE y E a) Γ
+  | getr {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.ty = .sum a b → E.mode ≠ .rootb → RhsT Γ F (.getr y) (projE y E b) Γ
+  | takel {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
+      RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false })
+  | taker {y : Var} {E : Entry} {a b : Ty} :
+      Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
+      RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
 
 /-! ### Calls -/
 
@@ -284,7 +304,7 @@ def PMode.moves : PMode → Bool
   | _ => true
 
 def paramOK : PMode → Ty → Entry → Prop
-  | .inp, t, E => E.ty = t ∧ t.isProd = false
+  | .inp, t, E => E.ty = t ∧ t.isAgg = false
   | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ t.owning = true
   | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ ∃ s, t = .vec s
 
@@ -351,6 +371,7 @@ def Expr.vars : Expr → List Var
   | .lt a b => a.vars ++ b.vars
   | .len x => [x]
   | .slen x => [x]
+  | .isl x => [x]
 
 def Rhs.vars : Rhs → List Var
   | .expr e => e.vars
@@ -364,6 +385,12 @@ def Rhs.vars : Rhs → List Var
   | .pair y z => [y, z]
   | .fst y => [y]
   | .snd y => [y]
+  | .inl y _ => [y]
+  | .inr _ y => [y]
+  | .getl y => [y]
+  | .getr y => [y]
+  | .takel y => [y]
+  | .taker y => [y]
 
 def Stmt.vars : Stmt → List Var
   | .skip => []

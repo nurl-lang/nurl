@@ -207,7 +207,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     (hy : Γ y = some E) (hl : E.live = true) (hnown : E.mode.ownSlot = false ∨ ∃ t, E.ty = .vec t)
     (hv : m.st y = some ⟨false, some v⟩ ∨
       ∃ t c d es, m.st y = some ⟨true, some (.node t c d es)⟩ ∧ v = .href c)
-    (hroot : E.mode = .rootb ∨ (E.mode = .own ∧ ∃ t, E.ty = .vec t)) (hnp : E.ty.isProd = false) :
+    (hroot : E.mode = .rootb ∨ (E.mode = .own ∧ ∃ t, E.ty = .vec t)) (hnp : E.ty.isAgg = false) :
     RhsOut m Γ ⟨E.ty, .bor, true, derive y E .self, E.held⟩ v false where
   own := rfl
   mode := Or.inr rfl
@@ -249,6 +249,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
       exact derive_viewAt (hroot' ·) (fun h => by rw [h] at hisroot; cases hisroot)
         (by decide) (by rw [hty]; rfl) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hlen hw
     | prod a b => rw [hty] at hnp; cases hnp
+    | sum a b => rw [hty] at hnp; cases hnp
 
 /-- A value stored in memory, lent out: every node inside it is reached
     through `P`, every view it stores is valid through `H`. -/
@@ -280,6 +281,18 @@ theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) 
       (fun s x hin => hvs s x (ViewIn.snd hin)) (fun s _ => ?_)⟩
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.fst hin))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.snd hin))
+  | @inl a b v _ ihv =>
+    intro P hn hvs _
+    refine Or.inl ⟨_, rfl, ihv (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inl hin))
+      (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inl hin)))⟩
+    obtain ⟨dep, hd, rest⟩ := hn t c d es (Sub.inl hs)
+    exact ⟨dep, List.mem_append_left _ hd, rest⟩
+  | @inr a b v _ ihv =>
+    intro P hn hvs _
+    refine Or.inr ⟨_, rfl, ihv (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inr hin))
+      (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inr hin)))⟩
+    obtain ⟨dep, hd, rest⟩ := hn t c d es (Sub.inr hs)
+    exact ⟨dep, List.mem_append_left _ hd, rest⟩
 
 /-- What a borrowed struct holds is already lent: lending it again changes
     nothing. -/
@@ -291,6 +304,10 @@ theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m �
   | prod a b iha ihb =>
     obtain ⟨x, y, rfl, hx, hy⟩ := h
     simp [lendOf, iha hx, ihb hy]
+  | sum a b iha ihb =>
+    rcases h with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
+    · simp [lendOf, iha hx]
+    · simp [lendOf, ihb hx]
 
 theorem elemE_mode (y : Var) (E : Entry) (t : Ty) : (elemE y E t).mode = .bor := by
   cases t <;> rfl
@@ -309,6 +326,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | vec s => exact this
     | slice s => exact this
     | prod a b => exact this
+    | sum a b => exact this
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -317,6 +335,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | slice s => exact wf_append (wf_held (E := E) hi hy hl hnint) (wf_held (E := E) hi hy hl hnint)
     | vec s => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | prod a b => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | sum a b => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor⟩ := hi.vec_node hy hl hty
@@ -343,6 +362,13 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
       refine lend_valOK hwe (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
           Lands dep.kind (.node (.prod a b) c d es) n0 := fun h => hbor (by
+        cases hm : E.mode <;> simp_all [Mode.isRoot])
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+        (by rw [hty]; rfl)
+    | sum a b =>
+      refine lend_valOK hwe (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (fun s h => by cases h)
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
+          Lands dep.kind (.node (.sum a b) c d es) n0 := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
       exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
         (by rw [hty]; rfl)
@@ -388,6 +414,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | vec s => exact this.1
     | slice s => simp [Ty.holdsView] at this
     | prod a b => exact this.1
+    | sum a b => exact this.1
   wf hn' := by
     rw [bor_vdeps _ (elemE_mode ..)]
     have hnint : E.ty ≠ .int := by rw [hty]; simp
@@ -396,6 +423,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | slice s => exact wf_append (wf_held (E := E) hi hy hl hnint) (wf_held (E := E) hi hy hl hnint)
     | vec s => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
     | prod a b => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
+    | sum a b => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
     obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, hroot, hbor⟩ := hi.slice_node hy hl hty
@@ -425,6 +453,16 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
           Lands dep.kind (.node (.prod a b) c d es) n0 := fun h => by
+        have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
+        obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
+        exact ⟨dep, hd, n0, hr, hla⟩
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+        (by rw [hty]; rfl)
+    | sum a b =>
+      refine lend_valOK hwe (fun t' c' d' es' hs => ?_)
+        (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _) (fun s h => by cases h)
+      have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
+          Lands dep.kind (.node (.sum a b) c d es) n0 := fun h => by
         have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
         obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
         exact ⟨dep, hd, n0, hr, hla⟩
@@ -785,6 +823,22 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have hok := hi.tyok hy; rw [hty] at hok
         show RhsOut _ _ ⟨.prod a b, .own, true, [], E.held⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.pair hwa hwb, ?_, ?_,
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, fun h => by cases h⟩
+        · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact hnT.sublist hsube
+        · exact fun i hi' => hi.heap.alloc y _ hT i (hsube.subset hi')
+        · intro x U hU i hi' hiU
+          rcases hown1 x U hU with ⟨_, rfl⟩ | ⟨hxy, h⟩
+          · exact hsep i hi' hiU
+          · exact hi.heap.disj y x _ U (Ne.symm hxy) hT h i (hsube.subset hi') hiU
+    | sum a b =>
+      have hsumwf := hwe
+      cases hwe with
+      | inl _ | inr _ =>
+        have hok := hi.tyok hy; rw [hty] at hok
+        show RhsOut _ _ ⟨.sum a b, .own, true, [], E.held⟩ _ true
+        refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, fun h => by cases h⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF

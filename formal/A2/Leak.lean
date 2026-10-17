@@ -21,6 +21,8 @@ theorem Frees.le {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
       · subst hc; simp [upd] at this
       · rwa [upd_ne _ _ hc] at this
   | .pair h1 h2 => exact Frees.le h1 (Frees.le h2 hi)
+  | .inl h1 => exact Frees.le h1 hi
+  | .inr h1 => exact Frees.le h1 hi
 theorem FreesL.le {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, a' i = true → a i = true := by
   intro i hi
@@ -57,6 +59,8 @@ theorem Frees.freed {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
       | false => rfl
       | true => have := Frees.le h2 h'; rw [Frees.freed h1 hi] at this; cases this
     · exact Frees.freed h2 hi
+  | .inl h1 => exact Frees.freed h1 (by simpa using hi)
+  | .inr h1 => exact Frees.freed h1 (by simpa using hi)
 theorem FreesL.freed {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, i ∈ idsL es → a' i = false := by
   intro i hi
@@ -182,6 +186,23 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · exact Or.inr ⟨rfl, by simp [hiU]⟩
   | fst _ => exact Or.inl (hc i hi)
   | snd _ => exact Or.inl (hc i hi)
+  | inl h1 | inr h1 =>
+    rw [h1.alloc] at hi
+    obtain ⟨o', U, hU, hiU⟩ := hc i hi
+    rcases h1.owned hU with hU1 | ⟨_, rfl⟩
+    · exact Or.inl ⟨o', U, hU1, hiU⟩
+    · exact Or.inr ⟨rfl, by simpa using hiU⟩
+  | getl _ | getr _ => exact Or.inl (hc i hi)
+  | @takel y v hy | @taker y v hy =>
+    obtain ⟨o', U, hU, hiU⟩ := hc i hi
+    by_cases hoy : o' = y
+    · subst hoy; unfold OwnedAt at hU; rw [hy] at hU; cases hU
+      have hv : v.owns = true := by
+        cases h : v.owns
+        · simp only [ids_inl, ids_inr] at hiU; rw [ids_nonNode h] at hiU; simp at hiU
+        · rfl
+      exact Or.inr ⟨hv, by simpa using hiU⟩
+    · exact Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩
 
 /-- The binding that takes the value in flight owns it. -/
 theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : Var}
