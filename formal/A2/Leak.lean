@@ -20,6 +20,7 @@ theorem Frees.le {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
       by_cases hc : i = c
       · subst hc; simp [upd] at this
       · rwa [upd_ne _ _ hc] at this
+  | .pair h1 h2 => exact Frees.le h1 (Frees.le h2 hi)
 theorem FreesL.le {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, a' i = true → a i = true := by
   intro i hi
@@ -49,6 +50,13 @@ theorem Frees.freed {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
       | false => rfl
       | true => have := FreesL.le hl h'; simp [upd] at this
     · exact FreesL.freed hl hi
+  | .pair h1 h2 =>
+    simp only [ids_pair, List.mem_append] at hi
+    rcases hi with hi | hi
+    · cases h' : a' i with
+      | false => rfl
+      | true => have := Frees.le h2 h'; rw [Frees.freed h1 hi] at this; cases this
+    · exact Frees.freed h2 hi
 theorem FreesL.freed {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') :
     ∀ {i : Nat}, i ∈ idsL es → a' i = false := by
   intro i hi
@@ -65,8 +73,21 @@ end
 
 /-! ### What each change of memory does to `Covers` -/
 
-theorem ids_nonNode {v : Val} (h : v.isNode = false) : v.ids = [] := by
-  cases v <;> simp_all [Val.isNode]
+theorem ids_nonNode {v : Val} (h : v.owns = false) : v.ids = [] := by
+  cases v <;> simp_all [Val.owns]
+
+theorem TakeVal.alloc {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) : m1.alloc = m.alloc := by
+  cases ht <;> rfl
+
+/-- Taking a value out of a binding: every other tree stays owned. -/
+theorem TakeVal.owned {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) {o : Var} {U : Val}
+    (hU : OwnedAt m o U) : OwnedAt m1 o U ∨ (o = y ∧ U = v) := by
+  cases ht with
+  | own hy =>
+    by_cases hoy : o = y
+    · subst hoy; unfold OwnedAt at hU; rw [hy] at hU; cases hU; exact Or.inr ⟨rfl, rfl⟩
+    · exact Or.inl (ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩))
+  | bor _ => exact Or.inl hU
 
 /-- Dropping a slot releases its tree; every other live address keeps its owner. -/
 theorem covers_drop {m : Mem} (hc : Covers m) {x : Var} {sl : Slot} (hx : m.st x = some sl)
@@ -147,10 +168,20 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
       · exact Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩
       · exact Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩
       · exact Or.inl ⟨o', _, ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩), by simp [h]⟩
-      · cases hn : v.isNode
+      · cases hn : v.owns
         · rw [ids_nonNode hn] at h; cases h
         · exact Or.inr ⟨rfl, h⟩
     · exact Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩
+  | pair h1 h2 =>
+    rw [h2.alloc, h1.alloc] at hi
+    obtain ⟨o', U, hU, hiU⟩ := hc i hi
+    rcases h1.owned hU with hU1 | ⟨_, rfl⟩
+    · rcases h2.owned hU1 with hU2 | ⟨_, rfl⟩
+      · exact Or.inl ⟨o', U, hU2, hiU⟩
+      · exact Or.inr ⟨rfl, by simp [hiU]⟩
+    · exact Or.inr ⟨rfl, by simp [hiU]⟩
+  | fst _ => exact Or.inl (hc i hi)
+  | snd _ => exact Or.inl (hc i hi)
 
 /-- The binding that takes the value in flight owns it. -/
 theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : Var}

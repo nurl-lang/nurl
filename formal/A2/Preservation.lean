@@ -135,6 +135,170 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
     obtain ⟨E, hE, _⟩ := hw.get' h0
     exact ⟨hs', E, hE⟩
 
+
+/-! ### Taking a struct apart -/
+
+/-- A field of a struct in flight, handed to the binding that takes it. -/
+theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
+    (hout : RhsOut m Γ ⟨τ, .own, true, [], E.held⟩ T true) (hτ : τ ≠ .int) (hwx : WFv t x)
+    (hsub : Sub x T) (hvin : ∀ s v, ViewIn t x s v → ViewIn τ T s v) (hids : List.Sublist x.ids T.ids)
+    (htok : t.ok = true) : RhsOut m Γ (compE E t) x x.owns := by
+  obtain ⟨_, _, hvsT, hnd, hal, hdis, hsf⟩ := hout.valOwn rfl
+  have hwfH : ∀ r ∈ roots E.held, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := fun r hr =>
+    hout.wf hτ r (by simpa [Entry.vdeps, Mode.ownSlot] using hr)
+  cases hwx with
+  | int => exact intE_out _
+  | @view s d o l =>
+    refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ => wf_append hwfH hwfH, fun h => (by cases h), fun _ => ?_⟩
+    obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hvsT s _ (hvin s _ ViewIn.here)
+    exact ⟨d', o', l', hv, dep, hd, ha⟩
+  | @node u c d es hes =>
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.node hes, fun s v h => hvsT s v (hvin s v h),
+      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
+      hsf.sub hsub⟩, fun h => (by cases h)⟩
+  | @pair a b v w hwa hwb =>
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.pair hwa hwb, fun s v h => hvsT s v (hvin s v h),
+      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
+      hsf.sub hsub⟩, fun h => (by cases h)⟩
+
+/-- What a right-hand side hands over stays valid when a fresh binding takes
+    another value beside it. -/
+theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout : RhsOut m Γ E2 w o2)
+    {x : Var} (hx : Γ x = none) (hmx : m.st x = none) {E1 : Entry} {v : Val} {o1 : Bool}
+    (hdisj : ∀ i ∈ w.ids, i ∉ v.ids) : RhsOut (m.set x ⟨o1, some v⟩) (setE Γ x E1) E2 w o2 := by
+  have hext : ∀ o', m.st o' ≠ none → (m.set x ⟨o1, some v⟩).st o' = m.st o' := by
+    intro o' ho'
+    have : o' ≠ x := fun h => ho' (h ▸ hmx)
+    simp [upd_ne _ _ this]
+  have hk : ∀ dep : Dep, VKeep m (m.set x ⟨o1, some v⟩) dep ∧ HKeep m (m.set x ⟨o1, some v⟩) dep :=
+    fun dep => ⟨(rootKeep_ext hext dep.root).vkeep, (rootKeep_ext hext dep.root).hkeep⟩
+  refine ⟨hout.own, hout.mode, hout.live, hout.tyok, fun hn r hr => ?_, fun hm => ?_, fun hm => ?_⟩
+  · obtain ⟨Er, hEr, hro⟩ := hout.wf hn r hr
+    have hrx : r ≠ x := fun h => by rw [h, hx] at hEr; cases hEr
+    exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
+  · obtain ⟨ho, hw, hvs, hnd, hal, hdis, hsf⟩ := hout.valOwn hm
+    refine ⟨ho, hw, hvs.keep fun dep _ => (hk dep).1, hnd, hal, fun o U hU i hi => ?_, hsf⟩
+    rcases ownedAt_set.mp hU with ⟨_, h⟩ | ⟨_, h⟩
+    · cases h; exact hdisj i hi
+    · exact hdis o U h i hi
+  · exact (hout.valBor hm).keep (fun dep _ => hk dep) (fun dep _ => hk dep)
+
+theorem compE_mode_ne (E : Entry) (t : Ty) : (compE E t).mode ≠ .rootb := by
+  cases t <;> simp [compE, intE]
+
+/-- `unpair`: the struct moves apart into its fields. -/
+theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty}
+    (hsrc : s.src = true) (hy : Γ y = some E) (hl : E.live = true) (hm : E.mode = .own)
+    (hty : E.ty = .prod a b) (hyF : y ∉ F) (hx : Γ x = none) (hz : Γ z = none) (hxz : x ≠ z)
+    (hxF : x ∉ F) (hzF : z ∉ F)
+    (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
+      (compE E b)) F s Δ)
+    {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s')) :
+    ∃ Γ', StmtT P Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
+      Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
+  cases hst with
+  | unpair hvy hmx hmz hxz' =>
+    rename_i v w
+    have hanch := hi.leafAnch rfl
+    obtain ⟨post, out⟩ := rhs_move hi.toMInv hanch hy hl hm hyF hvy
+    have hxy : x ≠ y := fun h => by rw [h, hy] at hx; cases hx
+    have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
+    have hx1 : setE (kill .replace false y Γ) y { E with live := false } x = none := by
+      simp [setE, upd_ne _ _ hxy, kill, hx]
+    have hz1 : setE (kill .replace false y Γ) y { E with live := false } z = none := by
+      simp [setE, upd_ne _ _ hzy, kill, hz]
+    have hτ : E.ty ≠ .int := by rw [hty]; simp
+    obtain ⟨_, hwT, _, hnd, _, _, _⟩ := out.valOwn rfl
+    rw [hty] at hwT
+    cases hwT with
+    | pair hwa hwb =>
+    have hok := hi.tyok hy; rw [hty] at hok
+    simp only [Ty.ok, Bool.and_eq_true] at hok
+    have outx := out_part out hτ hwa (Sub.fst (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.fst h)
+      (by simp only [ids_pair]; exact List.sublist_append_left _ _) hok.1
+    have outz := out_part out hτ hwb (Sub.snd (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.snd h)
+      (by simp only [ids_pair]; exact List.sublist_append_right _ _) hok.2
+    have hvars : ∀ u ∈ (Stmt.unpair y x z s).vars, u < m.nv := hi.nvS
+    have hxn : x < (m.set y ⟨true, none⟩).nv := by simpa using hvars x (by simp [Stmt.vars])
+    have hzn : z < ((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).nv := by
+      simpa using hvars z (by simp [Stmt.vars])
+    have hi2 := post.inv.add hx1 hxn outx
+    have hmz1 : (m.set y ⟨true, none⟩).st z = none := by simp [upd_ne _ _ hzy, hmz]
+    have hdisj : ∀ i ∈ w.ids, i ∉ v.ids := by
+      simp only [ids_pair, List.nodup_append] at hnd
+      exact fun i hi hi' => hnd.2.2 i hi' i hi rfl
+    have hmx1 : (m.set y ⟨true, none⟩).st x = none := by simp [upd_ne _ _ hxy, hmx]
+    have outz' := outz.add (E1 := compE E a) (o1 := v.owns) hx1 hmx1 hdisj
+    have hz2 : setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a) z = none := by
+      simp [setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, kill, hz]
+    have hi3 := hi2.add hz2 hzn outz'
+    have hrel := post.rel
+    have hanch1 := hrel.anch hanch
+    refine ⟨_, StmtT.scope ⟨compE E a, by simp [setE, upd_ne _ _ hxz], compE_mode_ne E a⟩ hxF
+      (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs), ?_, by simp, ?_, ?_⟩
+    · refine Inv.mk hi3 (fun u hu => ?_) (fun u hu => ?_) (fun p Ep hp hmp _ => ?_) ?_ ?_
+        (show CatchOK _ s from catchOK_src hsrc) ?_
+      · simp only [Stmt.vars, List.mem_cons] at hu
+        simp only [Mem.set_nv]
+        rcases hu with rfl | rfl | hu
+        · exact hvars _ (by simp [Stmt.vars])
+        · exact hvars _ (by simp [Stmt.vars])
+        · exact hvars u (by simp [Stmt.vars, hu])
+      · simp only [Mem.set_nv]; exact hi.nvF u hu
+      · by_cases hpz : p = z
+        · subst hpz; simp [setE] at hp; subst hp; exact absurd hmp (compE_mode_ne E b)
+        by_cases hpx : p = x
+        · subst hpx; simp [setE, upd_ne _ _ hxz] at hp; subst hp; exact absurd hmp (compE_mode_ne E a)
+        simp only [setE, upd_ne _ _ hpz, upd_ne _ _ hpx] at hp
+        exact hanch1 p Ep hp hmp
+      · simp [Stmt.spine, src_spine hsrc, hxz]
+      · intro u hu
+        simp only [Stmt.spine, src_spine hsrc, List.mem_cons, List.not_mem_nil, or_false] at hu
+        rcases hu with rfl | rfl
+        · exact ⟨compE E a, by simp [setE, upd_ne _ _ hxz]⟩
+        · exact ⟨compE E b, by simp [setE]⟩
+      · intro i hia
+        simp only [Mem.set_alloc] at hia
+        obtain ⟨o, U, hU, hiU⟩ := hi.cover i hia
+        by_cases hoy : o = y
+        · subst hoy
+          unfold OwnedAt at hU; rw [hvy] at hU; cases hU
+          simp only [ids_pair, List.mem_append] at hiU
+          rcases hiU with hiv | hiw
+          · have hv : v.owns = true := by
+              cases h : v.owns
+              · rw [ids_nonNode h] at hiv; cases hiv
+              · rfl
+            exact ⟨x, v, by unfold OwnedAt; simp [upd_ne _ _ hxz, hv], hiv⟩
+          · have hw : w.owns = true := by
+              cases h : w.owns
+              · rw [ids_nonNode h] at hiw; cases hiw
+              · rfl
+            exact ⟨z, w, by unfold OwnedAt; simp [hw], hiw⟩
+        · have hox : o ≠ x := fun h => by subst h; unfold OwnedAt at hU; rw [hmx] at hU; cases hU
+          have hoz : o ≠ z := fun h => by subst h; unfold OwnedAt at hU; rw [hmz] at hU; cases hU
+          exact ⟨o, U, by unfold OwnedAt at hU ⊢; simp [upd_ne _ _ hox, upd_ne _ _ hoz, upd_ne _ _ hoy, hU],
+            hiU⟩
+    · refine ⟨fun u Eu hu _ => ?_, fun u Eu hu hus => ?_⟩
+      · have hux : u ≠ x := fun h => by rw [h, hx] at hu; cases hu
+        have huz : u ≠ z := fun h => by rw [h, hz] at hu; cases hu
+        refine ⟨by simp [Stmt.spine, src_spine hsrc, hux, huz], ?_⟩
+        have hk := hrel.keep (s := .skip) (s' := .skip) rfl rfl
+        obtain ⟨_, E', h', hm', ht', hrb'⟩ := hk.1 u Eu hu (by simp [Stmt.spine])
+        exact ⟨E', by simp [setE, upd_ne _ _ hux, upd_ne _ _ huz]; exact h', hm', ht', hrb'⟩
+      · have hux : u ≠ x := fun h => hus (by simp [Stmt.spine, h])
+        have huz : u ≠ z := fun h => hus (by simp [Stmt.spine, h])
+        simp only [setE, upd_ne _ _ hux, upd_ne _ _ huz] at hu
+        obtain ⟨E0, h0, _⟩ := hrel.mode u Eu hu
+        exact ⟨by simp [Stmt.spine], E0, h0⟩
+    · intro u hu
+      have huy : u ≠ y := fun h => hyF (h ▸ hu)
+      have hux : u ≠ x := fun h => hxF (h ▸ hu)
+      have huz : u ≠ z := fun h => hzF (h ▸ hu)
+      simp [upd_ne _ _ huy, upd_ne _ _ hux, upd_ne _ _ huz]
+
 /-- Preservation: every step of a well-typed configuration, given the call
     case. -/
 theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
@@ -585,5 +749,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
+
+  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs _ =>
+    intro m m' s' hi hst
+    exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hi hst
 
 end A2

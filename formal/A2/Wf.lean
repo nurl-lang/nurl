@@ -75,6 +75,60 @@ theorem CtxWF.exitRoot {Γ : Ctx} (h : CtxWF Γ) (p : Var) (D : List Dep)
   have := (Weaker.refl h).exitRoot p D hD
   exact this.wf
 
+theorem derive_roots {Γ : Ctx} (h : CtxWF Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
+    (hl : Ey.live = true) (hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb) (k : Kind) :
+    ∀ r ∈ roots (derive y Ey k), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
+  intro r hr
+  unfold derive at hr
+  cases hrt : Ey.mode.isRoot with
+  | true =>
+    simp only [hrt, ↓reduceIte, roots, List.map_cons, List.map_nil, List.mem_singleton] at hr
+    subst hr; exact ⟨Ey, hy, hrt⟩
+  | false =>
+    simp only [hrt, Bool.false_eq_true, ↓reduceIte, roots, List.map_map, List.mem_map,
+      Function.comp] at hr
+    obtain ⟨dep, hd, rfl⟩ := hr
+    have hos : Ey.mode.ownSlot = false := by
+      cases hm : Ey.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+    exact h y Ey hy hl hn dep.root (by simp [roots, Entry.vdeps, hos, List.mem_map_of_mem hd])
+
+/-- What `vec_push` or a struct literal takes from `y`, and what the value
+    then holds, depend on roots the context has. -/
+theorem PushArg.wf {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
+    (hpa : PushArg Γ F y Ey t D Γ1) (h : CtxWF Γ) (hy : Γ y = some Ey) (hl : Ey.live = true)
+    (hty : Ey.ty = t) : CtxWF Γ1 ∧ (∀ x, (Γ1 x).isSome = (Γ x).isSome) ∧
+      (∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode) ∧
+      ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
+  have same : ∀ x E1, Γ x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode :=
+    fun x E1 h => ⟨E1, h, rfl⟩
+  cases hpa with
+  | move ho hm _ =>
+    have hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (fun h' => by rw [hty] at h'; rw [h'] at ho; cases ho)
+    refine ⟨(h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
+      fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl'), fun x => ?_,
+      fun x E1 h1 => ?_, fun r hr => ?_⟩
+    · by_cases hxy : x = y
+      · subst hxy; simp [A2.setE, hy]
+      · simp only [A2.setE, upd_ne _ _ hxy]; exact kill_dom ..
+    · by_cases hxy : x = y
+      · subst hxy; simp only [A2.setE, upd_same, Option.some.injEq] at h1; subst h1; exact ⟨Ey, hy, rfl⟩
+      · simp only [A2.setE, upd_ne _ _ hxy] at h1
+        obtain ⟨E0, h0, hm0, _⟩ := kill_cmode h1; exact ⟨E0, h0, hm0⟩
+    · obtain ⟨Er, hEr, hro⟩ := h y Ey hy hl hn r (by
+        simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hr ⊢; exact Or.inr hr)
+      by_cases hry : r = y
+      · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
+        exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
+  | int => exact ⟨h, fun _ => rfl, same, fun r hr => by simp [roots] at hr⟩
+  | slice hm =>
+    refine ⟨h, fun _ => rfl, same, ?_⟩
+    have hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
+    refine wf_append (derive_roots h hy hl hn _) ?_
+    intro r hr
+    exact h y Ey hy hl hn r (by
+      simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hr ⊢; exact Or.inr hr)
+
 /-- What a right-hand side produces depends on roots the context has. -/
 theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1)
     (h : CtxWF Γ) : CtxWF Γ1 ∧ (∀ x, (Γ1 x).isSome = (Γ x).isSome) ∧
@@ -138,7 +192,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
-  | @copyRoot y Ey hy hl hm =>
+  | @copyRoot y Ey hy hl hm _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inr hm
     rw [bor_vdeps _ rfl]
@@ -158,6 +212,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | int => simp [elemE, intE] at hn
     | slice s => exact app _ _ (hheld y Ey hy hl hn') (hheld y Ey hy hl hn')
     | vec s => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
+    | prod a b => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
   | @view y Ey t hy hl ht _ =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
@@ -171,6 +226,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | int => simp [elemE, intE] at hn
     | slice s => exact app _ _ (hheld y Ey hy hl hn') (hheld y Ey hy hl hn')
     | vec s => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
+    | prod a b => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
   | @pop y Ey t hy hl ht _ _ =>
     have hwf := h.kill .drop t.holdsView y
     refine ⟨hwf, fun x => kill_dom .., fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -181,8 +237,54 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         | int => simp [popE, elemE, intE] at hn
         | slice s => simpa [popE, elemE, roots, Entry.vdeps, Mode.ownSlot] using hr
         | vec s => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
+        | prod a b => simpa [popE, roots, Entry.vdeps, Mode.ownSlot] using hr
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       exact kill_root hEr hro
+  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 _ =>
+    obtain ⟨hw1, hd1, hm1, hr1⟩ := hpa1.wf h hy hly rfl
+    obtain ⟨hw2, hd2, hm2, hr2⟩ := hpa2.wf hw1 hz hlz rfl
+    refine ⟨hw2, fun x => (hd2 x).trans (hd1 x), fun x E1 h1 => ?_, fun _ _ r hr => ?_⟩
+    · obtain ⟨E2, h2', hm2'⟩ := hm2 x E1 h1
+      obtain ⟨E0, h0, hm0⟩ := hm1 x E2 h2'
+      exact ⟨E0, h0, hm2'.trans hm0⟩
+    · simp only [roots, Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append, List.map_append,
+        List.mem_append] at hr
+      rcases hr with hr | hr
+      · obtain ⟨Er, hEr, hro⟩ := hr1 r hr
+        have hdr := hd2 r; rw [hEr] at hdr
+        obtain ⟨E2, h2'⟩ := Option.isSome_iff_exists.mp hdr
+        obtain ⟨E0, h0, hm0⟩ := hm2 r E2 h2'
+        rw [hEr] at h0; cases h0
+        exact ⟨E2, h2', by rw [hm0]; exact hro⟩
+      · exact hr2 r hr
+  | @fst y Ey a b hy hl ht _ =>
+    refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+      cases a with
+      | int => simp [projE, intE] at hn
+      | _ => rfl
+    rw [hpe]
+    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    unfold projDeps; split
+    · rename_i hos; intro r hr; simp [roots] at hr; subst hr
+      exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
+    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
+  | @snd y Ey a b hy hl ht _ =>
+    refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+      cases b with
+      | int => simp [projE, intE] at hn
+      | _ => rfl
+    rw [hpe]
+    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    unfold projDeps; split
+    · rename_i hos; intro r hr; simp [roots] at hr; subst hr
+      exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
+    · rename_i hos; exact hpath y Ey hy hl hn' (by simpa using hos)
 
 end A2
 
@@ -284,23 +386,6 @@ theorem callPostAux_wf {Γ0 : Ctx} {fn : Fn} {args : List Var}
 end A2
 
 namespace A2
-
-theorem derive_roots {Γ : Ctx} (h : CtxWF Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
-    (hl : Ey.live = true) (hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb) (k : Kind) :
-    ∀ r ∈ roots (derive y Ey k), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
-  intro r hr
-  unfold derive at hr
-  cases hrt : Ey.mode.isRoot with
-  | true =>
-    simp only [hrt, ↓reduceIte, roots, List.map_cons, List.map_nil, List.mem_singleton] at hr
-    subst hr; exact ⟨Ey, hy, hrt⟩
-  | false =>
-    simp only [hrt, Bool.false_eq_true, ↓reduceIte, roots, List.map_map, List.mem_map,
-      Function.comp] at hr
-    obtain ⟨dep, hd, rfl⟩ := hr
-    have hos : Ey.mode.ownSlot = false := by
-      cases hm : Ey.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
-    exact h y Ey hy hl hn dep.root (by simp [roots, Entry.vdeps, hos, List.mem_map_of_mem hd])
 
 theorem roots_allKinds {rs : List Var} {r : Var} (h : r ∈ roots (allKinds rs)) : r ∈ rs := by
   simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons, List.mem_singleton,
@@ -404,14 +489,6 @@ theorem DomMode.get {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {r : Var} {E : Entry} (h
   | none => rw [hE] at this; cases this
   | some E' => obtain ⟨E0, h0, hm⟩ := h.2 r E' hE; rw [hr] at h0; cases h0; exact ⟨E', rfl, hm⟩
 
-theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
-    DomMode Γ Γ1 := by
-  cases hr with
-  | @moveOwn y Ey hy _ _ _ =>
-    exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
-  | pop _ _ _ _ _ => exact (DomMode.refl Γ).kill _ _ _
-  | _ => exact DomMode.refl Γ
-
 theorem callPostAux_domMode {Γ0 : Ctx} {fn : Fn} {args : List Var} :
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),
       (∀ a ∈ as, ∃ E0, Γ0 a = some E0) → DomMode Γ0 Γ →
@@ -448,11 +525,67 @@ theorem PushArg.domMode {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t 
   | int => exact DomMode.refl Γ
   | slice _ => exact DomMode.refl Γ
 
+theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
+    DomMode Γ Γ1 := by
+  cases hr with
+  | @moveOwn y Ey hy _ _ _ =>
+    exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
+  | pop _ _ _ _ _ => exact (DomMode.refl Γ).kill _ _ _
+  | pair hy _ hpa1 hz _ hpa2 _ => exact (hpa1.domMode hy).trans (hpa2.domMode hz)
+  | _ => exact DomMode.refl Γ
+
 theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var} (hrx : r ≠ x)
     {E : Entry} (hr : Γ0 r = some E) : ∃ E', exitScope x Γ r = some E' ∧ E'.mode = E.mode := by
   obtain ⟨E', h', hm⟩ := h.get hr
   exact ⟨killE .replace false x E', by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h'],
     by rw [killE_mode, hm]⟩
+
+/-- Taking a struct apart keeps the context well-formed. -/
+theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : Ty} (hy : Γ y = some E)
+    (hl : E.live = true) (hm : E.mode = .own) (hty : E.ty = .prod a b) (hx : Γ x = none) (hz : Γ z = none)
+    (hxz : x ≠ z) :
+    CtxWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a))
+      z (compE E b)) := by
+  have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
+  have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
+  have hw1 : CtxWF (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+    (h.kill .replace false y).setE ⟨killE .replace false y E, by simp [A2.kill, hy],
+      fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
+  have hheld : ∀ r ∈ roots E.held, ∃ Er, A2.setE (A2.kill .replace false y Γ) y
+      { E with live := false } r = some Er ∧ Er.mode.isRoot = true := by
+    intro r hr
+    have hn : E.ty ≠ .int ∨ E.mode = .rootb := Or.inl (by rw [hty]; simp)
+    obtain ⟨Er, hEr, hro⟩ := h y E hy hl hn r (by
+      simpa [roots, Entry.vdeps, hm, Mode.ownSlot] using hr)
+    by_cases hry : r = y
+    · subst hry; exact ⟨{ E with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+    · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
+      exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
+  have hcomp : ∀ (Γ' : Ctx) (t : Ty), (∀ r ∈ roots E.held, ∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) →
+      (compE E t).live = true → ((compE E t).ty ≠ .int ∨ (compE E t).mode = .rootb) →
+      ∀ r ∈ roots (compE E t).vdeps, ∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true := by
+    intro Γ' t hH _ hn r hr
+    cases t with
+    | int => simp [compE, intE] at hn
+    | slice s =>
+      simp only [compE, Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, roots,
+        List.map_append, List.mem_append] at hr
+      rcases hr with hr | hr <;> exact hH r hr
+    | vec s => exact hH r (by simpa [compE, roots, Entry.vdeps, Mode.ownSlot] using hr)
+    | prod a b => exact hH r (by simpa [compE, roots, Entry.vdeps, Mode.ownSlot] using hr)
+  have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false } x = none := by
+    simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
+  have hw2 := hw1.add hx1 (hcomp _ a hheld)
+  have hz2 : A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a) z
+      = none := by simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
+  have hheld2 : ∀ r ∈ roots E.held, ∃ Er, A2.setE (A2.setE (A2.kill .replace false y Γ) y
+      { E with live := false }) x (compE E a) r = some Er ∧ Er.mode.isRoot = true := by
+    intro r hr
+    obtain ⟨Er, hEr, hro⟩ := hheld r hr
+    have hrx : r ≠ x := fun e => by rw [e, hx1] at hEr; cases hEr
+    exact ⟨Er, by simp [A2.setE, upd_ne _ _ hrx]; exact hEr, hro⟩
+  have hw3 := hw2.add hz2 (hcomp _ b hheld2)
+  exact hw3
 
 /-- A frozen binding stays bound, with its mode, through any derivation. -/
 theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
@@ -520,6 +653,16 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro r hr E h
     obtain ⟨E', h', hm', _⟩ := hKO.1 r E h (fun hsp => hs.spine_F r hsp (List.mem_append_left _ hr))
     exact ⟨E', h', hm'⟩
+  | @unpair Γ Δ F y x z k E0 a b _ hy _ _ _ hyF _ _ _ hxF hzF _ ih =>
+    intro r hr E h
+    have hry : r ≠ y := fun e => hyF (e ▸ hr)
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    have hrz : r ≠ z := fun e => hzF (e ▸ hr)
+    obtain ⟨E2, h2, hm2⟩ := ih r hr (killE .replace false y E)
+      (by simp [A2.setE, upd_ne _ _ hrz, upd_ne _ _ hrx, upd_ne _ _ hry, A2.kill, h])
+    exact ⟨killE .replace false x (killE .replace false z E2),
+      by simp [A2.exitScope, upd_ne _ _ hrx, upd_ne _ _ hrz, A2.kill, h2],
+      by rw [killE_mode, killE_mode, hm2, killE_mode]⟩
   | sub hw _ ho ih =>
     intro r hr E h
     obtain ⟨E0, h0, hw0⟩ := hw.get h
@@ -589,14 +732,15 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     -- the context after taking the value, the entry of `x` in it, and what `D` depends on
     have pre : CtxWF Γ1 ∧ Ex1.ty = Ex.ty ∧ ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
       cases hpa with
-      | @move s hm hyF =>
+      | @move s ho hm hyF =>
         have hxy : x ≠ y := fun e => hyx e.symm
         simp only [A2.setE, upd_ne _ _ hxy, A2.kill, hx, Option.map_some, Option.some.injEq] at hx1
         subst hx1
         refine ⟨(h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
           fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl'), killE_ty .., ?_⟩
         intro r hr
-        have hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [htyy]; simp)
+        have hn : Ey.ty ≠ .int ∨ Ey.mode = .rootb :=
+          Or.inl (fun h' => by rw [htyy] at h'; rw [h'] at ho; cases ho)
         exact hdm.root (h y Ey hy hly hn r (by
           simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hr ⊢; exact Or.inr hr))
       | int => exact ⟨h, by rw [hx] at hx1; cases hx1; rfl, fun r hr => by simp [roots] at hr⟩
@@ -641,6 +785,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
   | catchR _ _ hM _ _ _ => exact fun _ => hM.wf
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ ih =>
+    exact fun h => ((ih (h.unpair hy hl hm hty hx hz hxz)).exitScope z).exitScope x
   | sub hw _ ho _ =>
     intro _
     rcases ho with rfl | ho

@@ -16,7 +16,7 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
       | false => rfl
       | true =>
         obtain ⟨_, _, _, _, hown, _⟩ := hi.slot x E hx
-        obtain ⟨⟨t, h'⟩, _⟩ := hown h
+        obtain ⟨h', _⟩ := hown h
         rw [ht] at h'; cases h'
     obtain ⟨v, hv, hok⟩ := hi.bor_val hx hl hos
     rw [ht] at hok
@@ -52,7 +52,31 @@ theorem dropSlot_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Ent
       obtain ⟨a', ha⟩ := frees_owned hi.heap hsl (hwf t rfl)
       exact ⟨_, a', hsl, DropSlot.owned ha⟩
 
+/-- A live binding has a value to hand on. -/
+theorem takeVal_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) : ∃ v m1, TakeVal m y v m1 := by
+  rcases hi.mode_cases hy with hm | hm | hm
+  · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    exact ⟨T, _, TakeVal.own hT⟩
+  all_goals
+    obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    exact ⟨v, m, TakeVal.bor hv⟩
+
+/-- A live struct binding holds a struct. -/
+theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {a b : Ty} (ht : E.ty = .prod a b) :
+    ∃ o v w, m.st y = some ⟨o, some (.pair v w)⟩ := by
+  rcases hi.mode_cases hy with hm | hm | hm
+  · obtain ⟨T, hT, hw, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    rw [ht] at hw; cases hw
+    exact ⟨_, _, _, hT⟩
+  all_goals
+    obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
+    rw [ht] at hok; obtain ⟨x, z, rfl, _⟩ := hok
+    exact ⟨_, _, _, hv⟩
+
 theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
+    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F)
     (hr : RhsT Γ F r E Γ1) : ∃ res, EvalR m r res := by
   cases hr with
   | expr he =>
@@ -61,7 +85,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | moveOwn hy hl hm _ =>
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.moveOwn hT⟩
-  | copyRoot hy hl hm =>
+  | copyRoot hy hl hm _ =>
     obtain ⟨v, hv, _⟩ := hi.bor_val hy hl (by rw [hm]; rfl)
     exact ⟨_, EvalR.copy hv⟩
   | copyBor hy hl hm =>
@@ -99,6 +123,17 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       · rw [List.concat_eq_append] at h; exact ⟨_, EvalR.pop h hac had⟩
     · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
       rw [hT] at h; cases h
+  | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz _ _ =>
+    obtain ⟨v, m1, htk1⟩ := takeVal_exists hi hy hly
+    obtain ⟨post1, _⟩ := push_take hi hanch hy hly rfl hpa1 htk1
+    obtain ⟨w, m2, htk2⟩ := takeVal_exists post1.inv hz hlz
+    exact ⟨_, EvalR.pair htk1 htk2⟩
+  | fst hy hl ht _ =>
+    obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
+    exact ⟨_, EvalR.fst hv⟩
+  | snd hy hl ht _ =>
+    obtain ⟨o, v, w, hv⟩ := pair_slot hi hy hl ht
+    exact ⟨_, EvalR.snd hv⟩
 
 /-- Progress for every statement but a call, given the call case. -/
 theorem progress {P : Prog}
@@ -121,7 +156,7 @@ theorem progress {P : Prog}
     intro m hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv hr
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
     cases res with
     | ok v o m1 => exact Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr ⟨_, Step.letvP hres⟩
@@ -179,7 +214,7 @@ theorem progress {P : Prog}
       | panic => exact Or.inr ⟨_, Step.frozenP hr⟩
   | @assign Γ Γ1 F x r Ex E hx _ _ hr _ _ _ =>
     intro m hi
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv hr
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
     cases res with
     | panic => exact Or.inr ⟨_, Step.assignP hres⟩
     | ok v o m1 =>
@@ -242,5 +277,16 @@ theorem progress {P : Prog}
           have := hM.dom x; simp at this; exact Option.isSome_iff_exists.mp this
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
         exact Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
+
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ =>
+    intro m hi
+    obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
+    obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    rw [hT] at hv; cases hv
+    have hmx : m.st x = none := by
+      have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
+    have hmz : m.st z = none := by
+      have := hi.dom z; rw [hz] at this; cases h : m.st z <;> simp_all
+    exact Or.inr ⟨_, Step.unpair hT hmx hmz hxz⟩
 
 end A2

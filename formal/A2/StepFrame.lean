@@ -156,6 +156,7 @@ theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (
   | @pop y _ _ _ _ _ hy _ _ =>
     have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
     simp [Mem.set, upd_ne _ _ this, hx]
+  | pair h1 h2 => exact takeVal_none h2 (takeVal_none h1 hx)
   | _ => exact hx
 
 /-- A step binds only what the scopes it opens bind. -/
@@ -213,6 +214,14 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; rw [h] at hx; cases hx
     · simp [upd_ne _ _ hvx, h] at h'
+  | @unpair y x z _ _ _ hy _ _ _ =>
+    cases hr; intro v h h'
+    by_cases hvx : v = x
+    · subst hvx; simp [Stmt.spine]
+    by_cases hvz : v = z
+    · subst hvz; simp [Stmt.spine]
+    have hvy : v ≠ y := fun e => by subst e; rw [h] at hy; cases hy
+    simp [upd_ne _ _ hvx, upd_ne _ _ hvz, upd_ne _ _ hvy, h] at h'
   | @catchP _ x _ _ hp hx =>
     cases hr; intro v h h'
     by_cases hvx : v = x
