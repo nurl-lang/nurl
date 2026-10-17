@@ -1,7 +1,8 @@
 # The claim
 
-> **Status: under construction.** This is the statement the proof is
-> working towards, not one it has reached.
+> **Status: A1 is proven** (`A1.memory_safe`, [`README.md`](README.md));
+> A2, A3 and B–D are the statement the proof is working towards, not one
+> it has reached.
 
 ## Statement
 
@@ -19,9 +20,16 @@ the LLVM / C11 memory model rather than redefining it.
 
 ## What each phase proves
 
-- **A1** — the theorem for the core calculus: a well-typed core program
-  never gets stuck on a freed or out-of-bounds access, and typing is
-  preserved by every step.
+- **A1** *(proven)* — the theorem for the core calculus: a well-typed core
+  program never gets stuck on a freed or out-of-bounds access, and typing
+  is preserved by every step. In Lean: `A1.soundness` (from any
+  configuration satisfying the invariant) and `A1.memory_safe` (from the
+  empty store), resting on `propext`, `Classical.choice` and `Quot.sound`
+  only. The calculus has owned `Vec` trees, moves and drop flags, `sink`,
+  `inout` with a bound on what the callee may do, borrows and views,
+  reallocation, element drop, reassignment and release, and calls checked
+  against function summaries; a `String` is a `Vec` of bytes. Structs,
+  closures, enums and the rest of the language are A2.
 - **A2** — the theorem for the full single-threaded language, including
   panics, and leak freedom: when a program ends, normally or by panic,
   nothing it allocated is still live, `Rc` cycles included.

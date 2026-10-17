@@ -1,0 +1,29 @@
+name: formal
+
+# The mechanized proof of the memory model (formal/). Builds every Lean
+# module and checks the proof is complete: no `sorry`, no new axioms.
+# Nothing in nurlc is compiled from formal/, so this runs only when it
+# changes.
+
+on:
+  push:
+    paths: ['formal/**', '.github/workflows/formal.yml']
+  pull_request:
+    paths: ['formal/**', '.github/workflows/formal.yml']
+  workflow_dispatch:
+
+jobs:
+  proof:
+    name: A1 proof builds, sorry-free
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan (toolchain from formal/lean-toolchain)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Build and check
+        working-directory: formal
+        run: ./check.sh
