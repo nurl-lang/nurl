@@ -1,4 +1,4 @@
-import A2.Panic
+import A2.StepFrame
 
 /-! A2 — facts about the typing rules themselves. -/
 
@@ -240,16 +240,53 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z : List Var} {k : Stmt} (hi : Inv 
     catchOK := hi.catchOK
     cover := hi.cover }
 
-theorem evalR_none {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he : EvalR m r (.ok v o m1))
-    {x : Var} (hx : m.st x = none) : m1.st x = none := by
-  cases he with
-  | new => exact hx
-  | @moveOwn y _ hy =>
-    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
-    simp [Mem.set, upd_ne _ _ this, hx]
-  | @pop y _ _ _ _ _ hy _ _ =>
-    have : x ≠ y := fun e => by subst e; rw [hx] at hy; cases hy
-    simp [Mem.set, upd_ne _ _ this, hx]
-  | _ => exact hx
+
+/-- A run-time scope never binds what is lent out. -/
+theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
+    ∀ v ∈ s.spine, v ∉ F := by
+  induction ht with
+  | seq _ _ _ iha _ => exact iha
+  | sub _ _ _ ih => exact ih
+  | scope _ hxF _ ih =>
+    intro v hv
+    simp only [Stmt.spine, List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact hxF
+    · exact ih v hv
+  | rbind _ _ _ _ hpF _ ih =>
+    intro v hv
+    simp only [Stmt.spine, List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact hpF
+    · exact ih v hv
+  | frozen _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | _ => intro v hv; simp [Stmt.spine] at hv
+
+
+theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k : Stmt}
+    (hi : Inv m Γ F (.catchR x m0 k)) : Inv m Γ (F ++ (List.range m0.nv).filter (· ≠ x)) k :=
+  { toMInv := hi.toMInv
+    nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
+    nvF := fun v hv => by
+      rcases List.mem_append.mp hv with hv | hv
+      · exact hi.nvF v hv
+      · simp only [List.mem_filter, List.mem_range] at hv
+        exact Nat.lt_of_lt_of_le hv.1 hi.catchOK.2.2.1
+    anch := fun p E hp hm hps r hr => List.mem_append_left _ (hi.anch p E hp hm hps r hr)
+    spineNd := hi.spineNd
+    spineDom := hi.spineDom
+    catchOK := hi.catchOK.2.2.2
+    cover := hi.cover }
+
+theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
+    HeapOK (m.set x ⟨false, w⟩) := by
+  have hown : ∀ o U, OwnedAt (m.set x ⟨false, w⟩) o U → OwnedAt m o U := fun o U h => by
+    rcases ownedAt_set.mp h with ⟨_, h⟩ | ⟨_, h⟩
+    · cases h
+    · exact h
+  exact ⟨fun o U h => hh.nodup o U (hown o U h),
+    fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1) (hown o2 U2 h2),
+    fun o U h => hh.alloc o U (hown o U h)⟩
 
 end A2

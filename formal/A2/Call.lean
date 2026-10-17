@@ -11,10 +11,6 @@ parameters' exits leave. -/
 
 namespace A2
 
-/-- `omega` reads facts about `Nat`; these restate facts about variables. -/
-theorem vlt {a b : Var} (h : a < b) : @LT.lt Nat _ a b := h
-theorem veq {a b : Var} (h : a = b) : @Eq Nat a b := h
-
 /-! ### A source statement keeps the domain, modes and types -/
 
 def DomTy (Γ0 Γ : Ctx) : Prop :=

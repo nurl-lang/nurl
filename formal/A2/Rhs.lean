@@ -87,7 +87,7 @@ theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : Ro
   rw [h]; exact hn
 
 theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
-    (hnv : m'.nv = m.nv) : MInv m' Γ where
+    (hnv : m.nv ≤ m'.nv) : MInv m' Γ where
   dom v := by rw [h]; exact hi.dom v
   slot v E hv := by
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
@@ -95,7 +95,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
     have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn
     exact ⟨hk.vkeep, hk.hkeep⟩
   heap := hh
-  nvSt v hv := by rw [hnv]; rw [h] at hv; exact hi.nvSt v hv
+  nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
   noInout := hi.noInout
   wf := hi.wf
   rootbLive := hi.rootbLive
@@ -382,7 +382,7 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
       alloc := fun o U hU i hi' => by
         obtain ⟨ha, hlt⟩ := hi.heap.alloc o U hU i hi'
         exact ⟨by rw [hold o U hU i hi']; exact ha, by show i < m.nid + 2; omega⟩ }
-  refine ⟨⟨hi.of_st rfl hheap rfl, rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
+  refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
     fun _ => ⟨⟨t, rfl⟩, WFv.node (fun e he => by simp at he), fun s v hin => ?_, ?_, ?_, ?_⟩,
