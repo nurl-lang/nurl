@@ -1342,6 +1342,50 @@ theorem allowed_replace (hab : S.AbsOK Γa) {x : Var} {Ex : Entry} (hx : Γa x =
 theorem src_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).src = s.src := by
   induction s <;> simp_all [Stmt.rename, Stmt.src]
 
+/-- A context with the same bindings, modes and types, and the same
+    borrowed parameters, as one the call set up. -/
+theorem AbsOK.of_same {Γa Δa : Ctx} (hab : S.AbsOK Γa) (hdom : ∀ v, (Γa v).isSome = (Δa v).isSome)
+    (hm : ∀ v E, Δa v = some E → ∃ E0, Γa v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+      (E0.mode = .rootb → E = E0)) : S.AbsOK Δa := by
+  refine ⟨fun v E hv hrb => ?_, fun v E b hv hio => ?_, fun v bh hb => ?_⟩
+  · obtain ⟨E0, h0, hm0, _, he⟩ := hm v E hv
+    rw [he (hm0 ▸ hrb)] at hrb ⊢
+    exact hab.1 v E0 h0 hrb
+  · obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv
+    rw [ht0]; exact hab.2.1 v E0 b h0 (hm0 ▸ hio)
+  · obtain ⟨E0, h0, hm0⟩ := hab.2.2 v bh hb
+    have hs := hdom v; rw [h0] at hs
+    obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hs.symm
+    obtain ⟨E1, h1, hm1, _⟩ := hm v E hE
+    rw [h0] at h1; cases h1
+    exact ⟨E, hE, by rw [hm1, hm0]⟩
+
+theorem canon_same (h : S.OK) {Γa Δa : Ctx} (hab : S.AbsOK Γa)
+    (hdom : ∀ v, (Γa v).isSome = (Δa v).isSome)
+    (hm : ∀ v E, Δa v = some E → ∃ E0, Γa v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+      (E0.mode = .rootb → E = E0)) :
+    (∀ y, (S.canon Γa y).isSome = (S.canon Δa y).isSome) ∧
+    (∀ y E, S.canon Δa y = some E → ∃ E0, S.canon Γa y = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+      (E0.mode = .rootb → E = E0)) := by
+  have habΔ := hab.of_same hdom hm
+  refine ⟨fun y => ?_, fun y E hy => ?_⟩
+  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc, canon_ρ h]; have := hdom v; cases h1 : Γa v <;> cases h2 : Δa v <;> simp_all
+    · rw [hc, canon_frame Δa hyf]
+  · rcases canon_cases h Δa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+      obtain ⟨E0, h0, hm0, ht0, hrb⟩ := hm v E1 h1
+      refine ⟨S.liftE v E0, by rw [canon_ρ h, h0]; rfl, ?_, ?_, fun hr => ?_⟩
+      · by_cases hrb0 : E0.mode = .rootb
+        · rw [hrb hrb0]
+        · have hrb1 : E1.mode ≠ .rootb := by rw [hm0]; exact hrb0
+          rw [liftE_mode v hrb1, liftE_mode v hrb0, hm0]
+      · rw [liftE_ty' h habΔ h1, liftE_ty' h hab h0, ht0]
+      · rw [hrb ((liftE_rootb h).mp hr)]
+    · rw [hc] at hy
+      exact ⟨E, by rw [canon_frame Γa hyf]; exact hy, rfl, rfl, fun _ => rfl⟩
+
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
     those contexts. -/
@@ -1410,7 +1454,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
-  | panic => exact fun _ hab _ => ⟨StmtT.panic, hab⟩
+  | panic hwf hdom hm =>
+    intro _ hab _
+    have habΔ := hab.of_same hdom hm
+    obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
+    exact ⟨StmtT.panic (canon_wf h habΔ hwf) hdom' hm', habΔ⟩
   | @letrec Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk ih =>
     intro _ hab hw
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc

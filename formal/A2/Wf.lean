@@ -812,7 +812,13 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     exact ⟨killE .replace false x E, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h], by rw [killE_mode]⟩
-  | panic => exact fun r _ E h => ⟨E, h, rfl⟩
+  | @panic Γ Δ F _ hdom hmode =>
+    intro r _ E h
+    have hs := hdom r; rw [h] at hs
+    obtain ⟨E', hE'⟩ := Option.isSome_iff_exists.mp hs.symm
+    obtain ⟨E0, h0, hm, _⟩ := hmode r E' hE'
+    rw [h] at h0; cases h0
+    exact ⟨E', hE', hm⟩
   | @letrec Γ Γ1 Δ F x f k E0 fn _ hx hxF _ _ _ _ hc _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -950,7 +956,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     intro h
     exact (h.kill .replace false x).setE ⟨killE .replace false x E, by simp [A2.kill, hx],
       fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
-  | panic => exact id
+  | panic hwf _ _ => exact fun _ => hwf
   | @letrec Γ Γ1 Δ F x f k E fn _ hx _ _ _ _ _ hc _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP h

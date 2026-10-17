@@ -133,7 +133,9 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
       ((DomTy.refl Γ).kill .replace false y).setE ⟨E, hy, rfl, rfl⟩
     refine DomTy.exitScope_fresh hx h1 (DomTy.exitScope_fresh ?_ (DomTy.refl _) (ih hks))
     simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
-  | panic => exact fun _ => DomTy.refl _
+  | panic _ hdom hm =>
+    exact fun _ => ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩
   | catchR => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
