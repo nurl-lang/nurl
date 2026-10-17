@@ -60,27 +60,22 @@ theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (
   obtain ⟨n0, d, es, hr, hk, hw, hv⟩ := h
   exact ⟨n0, d, es, hr, hk, hw, hv.mono hs⟩
 
+theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ {P' H' : List Dep}, P ⊆ P' → H ⊆ H' → ValOK m τ v P' H' := by
+  have app : ∀ {P H P' H' : List Dep}, P ⊆ P' → H ⊆ H' → P ++ H ⊆ P' ++ H' := fun hp hs =>
+    List.append_subset.mpr ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
+  induction h with
+  | int => intro _ _ _ _; exact .int
+  | href h =>
+    intro P' H' hp hs; obtain ⟨dep, hd, ha⟩ := h; exact .href ⟨dep, hp hd, ha.mono hs⟩
+  | view h =>
+    intro P' H' hp hs; obtain ⟨dep, hd, ha⟩ := h; exact .view ⟨dep, hp hd, ha⟩
+  | pair _ _ ihx ihy => intro P' H' hp hs; exact .pair (ihx (app hp hs) hs) (ihy (app hp hs) hs)
+  | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
+  | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
+
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
-    (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := by
-  induction τ generalizing v P P' H H' with
-  | int => exact h
-  | vec t =>
-    obtain ⟨c, rfl, dep, hd, ha⟩ := h
-    exact ⟨c, rfl, dep, hp hd, ha.mono hs⟩
-  | slice t =>
-    obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h
-    exact ⟨d, o, l, rfl, dep, hp hd, ha⟩
-  | prod a b iha ihb =>
-    obtain ⟨x, y, rfl, hx, hy⟩ := h
-    have hph : P ++ H ⊆ P' ++ H' := List.append_subset.mpr
-      ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
-    exact ⟨x, y, rfl, iha hph hs hx, ihb hph hs hy⟩
-  | sum a b iha ihb =>
-    have hph : P ++ H ⊆ P' ++ H' := List.append_subset.mpr
-      ⟨fun _ h => List.mem_append_left _ (hp h), fun _ h => List.mem_append_right _ (hs h)⟩
-    rcases h with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · exact Or.inl ⟨x, rfl, iha hph hs hx⟩
-    · exact Or.inr ⟨x, rfl, ihb hph hs hx⟩
+    (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
     (h : SlotOK m E sl) : SlotOK m E' sl := by

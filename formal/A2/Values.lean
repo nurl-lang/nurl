@@ -84,7 +84,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
-    obtain ⟨c, rfl, dep, hd, hh⟩ := hok
+    obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
     obtain ⟨n0, d, es, hr, hla, hw, hvs⟩ := hh
     obtain ⟨o, T, hoT, hsT⟩ := hr.owned
     have hsub : Sub (.node t c d es) n0 := hla.sub
@@ -111,7 +111,7 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
-    obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := hok
+    obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := valOK_slice.mp hok
     obtain ⟨n0, c, es, hr, hk, hla, hlen, hw⟩ := viewAt_iff.mp hh
     obtain ⟨o', T, hoT, hsT⟩ := hr.owned
     have hsub : Sub (.node t c d es) n0 := hla.sub

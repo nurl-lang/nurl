@@ -438,7 +438,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
         tyok := by rw [hEty]; rfl
         wf := fun h0 => absurd hEty h0
         valOwn := fun h0 => by rw [hEc] at h0; cases h0
-        valBor := fun _ => by rw [hEty]; exact ⟨1, rfl⟩ }
+        valBor := fun _ => by rw [hEty]; exact .int }
     have hM1 := hi.toMInv.add hx hxlt hout
     have hM : MInv (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) :=
       hM1.of_st (by funext v; by_cases hv : v = x <;> simp [m0, hv])

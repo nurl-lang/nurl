@@ -34,29 +34,32 @@ theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : H
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
     (h : ValOK m τ v P H) : ValOK m' τ v P H := by
-  induction τ generalizing v P with
-  | int => exact h
-  | vec t =>
-    obtain ⟨c, rfl, dep, hd, ha⟩ := h
-    exact ⟨c, rfl, dep, hd, (hp dep hd).2 c t H (fun h hh' => (hh h hh').1) ha⟩
-  | slice t =>
-    obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h
-    exact ⟨d, o, l, rfl, dep, hd, (hp dep hd).1 d o l t ha⟩
-  | prod a b iha ihb =>
-    obtain ⟨x, y, rfl, hx, hy⟩ := h
-    have hph : ∀ dep ∈ P ++ H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+  induction h with
+  | int => exact .int
+  | href h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .href ⟨dep, hd, (hp dep hd).2 _ _ _ (fun h hh' => (hh h hh').1) ha⟩
+  | view h =>
+    obtain ⟨dep, hd, ha⟩ := h
+    exact .view ⟨dep, hd, (hp dep hd).1 _ _ _ _ ha⟩
+  | pair _ _ ihx ihy =>
+    have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
       · exact hp dep hd
       · exact hh dep hd
-    exact ⟨x, y, rfl, iha hph hx, ihb hph hy⟩
-  | sum a b iha ihb =>
-    have hph : ∀ dep ∈ P ++ H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+    exact .pair (ihx hph hh) (ihy hph hh)
+  | inl _ ih =>
+    have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
       · exact hp dep hd
       · exact hh dep hd
-    rcases h with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · exact Or.inl ⟨x, rfl, iha hph hx⟩
-    · exact Or.inr ⟨x, rfl, ihb hph hx⟩
+    exact .inl (ih hph hh)
+  | inr _ ih =>
+    have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+      rcases List.mem_append.mp hd with hd | hd
+      · exact hp dep hd
+      · exact hh dep hd
+    exact .inr (ih hph hh)
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -125,55 +128,40 @@ theorem append_assoc_sub {P H : List Dep} : (P ++ H) ++ H ⊆ P ++ H := by
 
 /-- A `Vec` handle inside a borrowed value reaches its node through one of
     the value's dependencies. -/
-theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m c n) :
-    ∀ {τ : Ty} {w : Val} {P H : List Dep}, ValOK m τ w P H → Top (.href c) w →
-      ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0 := by
-  intro τ
-  induction τ with
-  | int => intro w P H hok ht; obtain ⟨_, rfl⟩ := hok; cases ht
-  | slice t => intro w P H hok ht; obtain ⟨_, _, _, rfl, _⟩ := hok; cases ht
-  | vec t =>
-    intro w P H hok ht
-    obtain ⟨c', rfl, dep, hd, n1, d, es, hr1, hl, _, _⟩ := hok
+theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m c n)
+    {τ : Ty} {w : Val} {P H : List Dep} (hok : ValOK m τ w P H) (ht : Top (.href c) w) :
+    ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0 := by
+  induction hok with
+  | int => cases ht
+  | view _ => cases ht
+  | @href t c' P H h =>
+    obtain ⟨dep, hd, n1, d, es, hr1, hl, _, _⟩ := h
     cases ht
     obtain ⟨o, T, hoT, hsT⟩ := hr1.owned
     have := nodeAt_unique hh hn ⟨o, T, hoT, hl.sub.trans hsT, t, d, es, rfl⟩
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hl⟩
-  | prod a b iha ihb =>
-    intro w P H hok ht
-    obtain ⟨x, y, rfl, hx, hy⟩ := hok
+  | pair _ _ ihx ihy =>
     cases ht with
-    | fst ht =>
-      obtain ⟨dep, hd, rest⟩ := iha hx ht
-      exact ⟨dep, append_assoc_sub hd, rest⟩
-    | snd ht =>
-      obtain ⟨dep, hd, rest⟩ := ihb hy ht
-      exact ⟨dep, append_assoc_sub hd, rest⟩
-  | sum a b iha ihb =>
-    intro w P H hok ht
-    rcases hok with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · cases ht with
-      | inl ht =>
-        obtain ⟨dep, hd, rest⟩ := iha hx ht
-        exact ⟨dep, append_assoc_sub hd, rest⟩
-    · cases ht with
-      | inr ht =>
-        obtain ⟨dep, hd, rest⟩ := ihb hx ht
-        exact ⟨dep, append_assoc_sub hd, rest⟩
+    | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+    | snd ht => obtain ⟨dep, hd, rest⟩ := ihy ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inl _ ih =>
+    cases ht with
+    | inl ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inr _ ih =>
+    cases ht with
+    | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
-theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataAt m d n) :
-    ∀ {τ : Ty} {w : Val} {P H : List Dep}, ValOK m τ w P H → Top (.view d o l) w →
-      ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧ Lands dep.kind n n0 := by
-  intro τ
-  induction τ with
-  | int => intro w P H hok ht; obtain ⟨_, rfl⟩ := hok; cases ht
-  | vec t => intro w P H hok ht; obtain ⟨_, rfl, _⟩ := hok; cases ht
-  | slice t =>
-    intro w P H hok ht
-    obtain ⟨d', o', l', rfl, dep, hd, n1, c, es, hr1, hk, _, _⟩ := hok
+theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataAt m d n)
+    {τ : Ty} {w : Val} {P H : List Dep} (hok : ValOK m τ w P H) (ht : Top (.view d o l) w) :
+    ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧ Lands dep.kind n n0 := by
+  induction hok with
+  | int => cases ht
+  | href _ => cases ht
+  | @view t d' o' l' P H h =>
+    obtain ⟨dep, hd, n1, c, es, hr1, hk, _, _⟩ := h
     cases ht
     have hl' : Lands dep.kind (.node t c d es) n1 := by
       rcases hk with ⟨h1, h2⟩ | ⟨h1, h2⟩
@@ -184,64 +172,52 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
     have := dataAt_unique hh hn ⟨o2, T, hoT, hl'.sub.trans hsT, t, c, es, rfl⟩
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hks, hl'⟩
-  | prod a b iha ihb =>
-    intro w P H hok ht
-    obtain ⟨x, y, rfl, hx, hy⟩ := hok
+  | pair _ _ ihx ihy =>
     cases ht with
-    | fst ht =>
-      obtain ⟨dep, hd, rest⟩ := iha hx ht
-      exact ⟨dep, append_assoc_sub hd, rest⟩
-    | snd ht =>
-      obtain ⟨dep, hd, rest⟩ := ihb hy ht
-      exact ⟨dep, append_assoc_sub hd, rest⟩
-  | sum a b iha ihb =>
-    intro w P H hok ht
-    rcases hok with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · cases ht with
-      | inl ht =>
-        obtain ⟨dep, hd, rest⟩ := iha hx ht
-        exact ⟨dep, append_assoc_sub hd, rest⟩
-    · cases ht with
-      | inr ht =>
-        obtain ⟨dep, hd, rest⟩ := ihb hx ht
-        exact ⟨dep, append_assoc_sub hd, rest⟩
+    | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+    | snd ht => obtain ⟨dep, hd, rest⟩ := ihy ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inl _ ih =>
+    cases ht with
+    | inl ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | inr _ ih =>
+    cases ht with
+    | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
 
 /-- A value held at the top of a borrowed slot `y` is valid through `y`
     itself: every handle in it is one `y` holds. -/
-theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, some T⟩) :
-    ∀ {τ : Ty} {w : Val} {P H Q : List Dep}, ValOK m τ w P H → Top w T → ⟨y, .view⟩ ∈ Q →
-      ValOK m τ w Q H := by
-  intro τ
-  induction τ with
-  | int => intro w P H Q hok _ _; exact hok
-  | vec t =>
-    intro w P H Q hok ht hq
-    obtain ⟨c, rfl, dep, hd, n1, d, es, hr1, hl, hw, hv⟩ := hok
+theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, some T⟩)
+    {τ : Ty} {w : Val} {P H : List Dep} (hok : ValOK m τ w P H) :
+    ∀ {Q : List Dep}, Top w T → ⟨y, .view⟩ ∈ Q → ValOK m τ w Q H := by
+  induction hok with
+  | int => intro _ _ _; exact .int
+  | @href t c P H h =>
+    intro Q ht hq
+    obtain ⟨dep, hd, n1, d, es, hr1, hl, hw, hv⟩ := h
     obtain ⟨o, T', hoT, hsT⟩ := hr1.owned
-    exact ⟨c, rfl, _, hq, _, d, es,
+    exact .href ⟨_, hq, _, d, es,
       Or.inr (Or.inl ⟨T, c, hy, ht, o, T', hoT, hl.sub.trans hsT, t, d, es, rfl⟩),
       Or.inr (Or.inl ⟨rfl, rfl⟩), hw, hv⟩
-  | slice t =>
-    intro w P H Q hok ht hq
-    obtain ⟨d, o, l, rfl, dep, hd, n1, c, es, hr1, hk, hlen, hw⟩ := hok
+  | @view t d o l P H h =>
+    intro Q ht hq
+    obtain ⟨dep, hd, n1, c, es, hr1, hk, hlen, hw⟩ := h
     have hsub : Sub (.node t c d es) n1 := by
       rcases hk with ⟨_, h⟩ | ⟨_, h⟩
       · rw [h]; exact Sub.refl _
       · exact h.sub
     obtain ⟨o2, T', hoT, hsT⟩ := hr1.owned
-    exact ⟨d, o, l, rfl, _, hq, _, c, es,
+    exact .view ⟨_, hq, _, c, es,
       Or.inr (Or.inr ⟨T, d, o, l, hy, ht, o2, T', hoT, hsub.trans hsT, t, c, es, rfl⟩),
       Or.inl ⟨rfl, rfl⟩, hlen, hw⟩
-  | prod a b iha ihb =>
-    intro w P H Q hok ht hq
-    obtain ⟨x, z, rfl, hx, hz⟩ := hok
-    exact ⟨x, z, rfl, iha hx (Top.trans (Top.fst (Top.refl _)) ht) (List.mem_append_left _ hq),
-      ihb hz (Top.trans (Top.snd (Top.refl _)) ht) (List.mem_append_left _ hq)⟩
-  | sum a b iha ihb =>
-    intro w P H Q hok ht hq
-    rcases hok with ⟨x, rfl, hx⟩ | ⟨x, rfl, hx⟩
-    · exact Or.inl ⟨x, rfl, iha hx (Top.trans (Top.inl (Top.refl _)) ht) (List.mem_append_left _ hq)⟩
-    · exact Or.inr ⟨x, rfl, ihb hx (Top.trans (Top.inr (Top.refl _)) ht) (List.mem_append_left _ hq)⟩
+  | pair _ _ ihx ihy =>
+    intro Q ht hq
+    exact .pair (ihx (Top.trans (Top.fst (Top.refl _)) ht) (List.mem_append_left _ hq))
+      (ihy (Top.trans (Top.snd (Top.refl _)) ht) (List.mem_append_left _ hq))
+  | inl _ ih =>
+    intro Q ht hq
+    exact .inl (ih (Top.trans (Top.inl (Top.refl _)) ht) (List.mem_append_left _ hq))
+  | inr _ ih =>
+    intro Q ht hq
+    exact .inr (ih (Top.trans (Top.inr (Top.refl _)) ht) (List.mem_append_left _ hq))
 
 /-- What a borrowed slot reaches, it reaches through the dependencies of the
     value it holds. -/
