@@ -134,16 +134,17 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
       subst hp
       rcases hout.mode with h | h <;> rw [h] at hm <;> cases hm
     · simp only [setE, upd_ne _ _ hpx] at hp; exact hi.rootbLt p Ep hp hm
-  · have hΓ : ∀ r Er, Γ r = some Er → ∃ Er', setE Γ x E r = some Er' ∧ Er'.ty = Er.ty ∧ Er'.mode = Er.mode :=
-      fun r Er hEr => ⟨Er, by simp [setE, upd_ne _ _ (hroot r Er hEr), hEr], rfl, rfl⟩
+  · have hΓ : ∀ r Er, Γ r = some Er → Er.live = true → Er.held = [] → Er.mode.ownSlot = true →
+        ∃ Er', setE Γ x E r = some Er' ∧ Er'.live = true ∧ Er'.held = [] ∧ Er'.ty = Er.ty ∧ Er'.mode = Er.mode :=
+      fun r Er hEr hl hh _ => ⟨Er, by simp [setE, upd_ne _ _ (hroot r Er hEr), hEr], hl, hh, rfl, rfl⟩
     intro w Ew hw hl hn
     by_cases hwx : w = x
     · subst hwx
       simp only [setE, upd_same, Option.some.injEq] at hw
       subst hw
-      exact (hout.names hn).transport hΓ (List.Subset.refl _)
+      exact (hout.names hn).transport (fun r Er _ => hΓ r Er) (List.Subset.refl _)
     · simp only [setE, upd_ne _ _ hwx] at hw
-      exact (hi.names w Ew hw hl hn).transport hΓ (List.Subset.refl _)
+      exact (hi.names w Ew hw hl hn).transport (fun r Er _ => hΓ r Er) (List.Subset.refl _)
   · intro w Ew sl T hw hl hsl hT
     by_cases hwx : w = x
     · subst hwx
@@ -246,6 +247,12 @@ structure Pushed (m1 : Mem) (Γ1 : Ctx) (t : Ty) (v : Val) (D : List Dep) : Prop
   pk   : PkgsOK v
   nok  : DepsNamed Γ1 D
 
+/-- What an element of a type that holds no views holds is nothing. -/
+theorem Pushed.ownHeld {m1 : Mem} {Γ1 : Ctx} {t : Ty} {v : Val} {D : List Dep} (h : Pushed m1 Γ1 t v D) :
+    Pushed m1 Γ1 t v (ownHeld true t D) :=
+  ⟨h.wf, h.vs.ownHeld true, h.nd, h.al, h.dis, fun r hr => h.root r (ownHeld_roots hr), h.sf,
+    h.nin.ownHeld h.wf true, h.pk, fun d hd => h.nok d (ownHeld_sub _ _ _ hd)⟩
+
 /-- Taking the value `vec_push` stores: an element `Vec` moves out of its
     binding, anything else is copied. -/
 theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -343,12 +350,19 @@ theorem RhsPost.fwd {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (h : RhsPost m m1
   rw [hr] at h0; cases h0
   exact ⟨E1, h1, ht, hm⟩
 
-theorem DepsNamed.post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {D : List Dep} (hd : DepsNamed Γ D)
-    (h : RhsPost m m1 Γ Γ1 F) : DepsNamed Γ1 D := by
-  intro d hdD b t hk
-  obtain ⟨Er, hEr, ht, ho, hc⟩ := hd d hdD b t hk
-  obtain ⟨E1, h1, ht1, hm1⟩ := h.fwd hEr
-  exact ⟨E1, h1, by rw [ht1, ht], by rw [hm1]; exact ho, by rw [hm1]; exact hc⟩
+/-- What `D` holds by name stays so past an argument taken from `z`, when it
+    names no `z` that moves. -/
+theorem DepsNamed.pushArg {Γ Γ1 : Ctx} {F : List Var} {D : List Dep} (hd : DepsNamed Γ D)
+    {z : Var} {Ez : Entry} {b : Ty} {Dz : List Dep} (hpa : PushArg Γ F z Ez b Dz Γ1)
+    (hzd : Ez.mode.ownSlot = true → z ∉ roots D) : DepsNamed Γ1 D := by
+  cases hpa with
+  | int => exact hd
+  | slice => exact hd
+  | move _ hm _ _ =>
+    intro d hdD b t hk
+    obtain ⟨Er, hEr, hl, hh, ht, ho, hc⟩ := hd d hdD b t hk
+    have hne : d.root ≠ z := fun h => hzd (by rw [hm]; rfl) (h ▸ List.mem_map_of_mem hdD)
+    exact ⟨Er, by simp [setE, upd_ne _ _ hne, kill, hEr, killE_nil (root_vdeps ho hh)], hl, hh, ht, ho, hc⟩
 
 /-- A stored view is a `ViewIn` of its tree. -/
 theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub (.view d o l) T) :
@@ -462,7 +476,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     exact ⟨d, o, l, rfl, dep, hd, hvkeep dep hd d o l s ha⟩
   refine ⟨rfl, Or.inl rfl, rfl, by simp [Ty.ok, hok.1, hok.2], fun _ r hr => ?_, fun _ => ⟨rfl,
     WFv.pair pu1.wf pu2.wf, ?_, ?_, ?_, ?_, ?_⟩, (fun h => by cases h),
-    fun _ => own_named ((pu1.nok.post post2).append pu2.nok), ?_, ?_⟩
+    fun _ => own_named ((pu1.nok.pushArg hpa2 hzd).append pu2.nok), ?_, ?_⟩
   · simp only [Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append] at hr
     exact wf_append (fun r hr => post2.root (pu1.root r hr)) pu2.root r hr
   · intro s x hin
@@ -644,8 +658,8 @@ theorem CapsOK.named {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var ×
   obtain ⟨c, hc, rfl⟩ := capDeps_mem hd
   simp only [Kind.name.injEq] at hk
   obtain ⟨rfl, rfl⟩ := hk
-  obtain ⟨Ev, hEv, _, ht, ho, hhv, hmode⟩ := h.2 c hc
-  refine ⟨Ev, hEv, ht, ho, ?_, hhv⟩
+  obtain ⟨Ev, hEv, hl, hh, ht, ho, hhv, hmode⟩ := h.2 c hc
+  refine ⟨Ev, hEv, hl, hh, ht, ho, ?_, hhv⟩
   rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, _, hbr, hcan, _⟩
   · exact Or.inl (by rw [hinp]; rfl)
   · exact Or.inr (by rw [hb]; exact ⟨hbr, hcan⟩)
@@ -760,7 +774,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
         · exact pu.root r hr
         · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
           obtain ⟨c, hc, rfl⟩ := capDeps_mem hd
-          obtain ⟨Ev, hEv, _, _, ho, _⟩ := hcaps.2 c hc
+          obtain ⟨Ev, hEv, _, _, _, ho, _⟩ := hcaps.2 c hc
           exact ⟨Ev, hEv, by cases hm : Ev.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
       · intro c hc
         simp only [Val.names, List.mem_append] at hc
@@ -771,11 +785,11 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
         rcases hs.cases' with h | ⟨e0, hc, hs'⟩
         · cases h
           refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_⟩
-          · obtain ⟨_, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
+          · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
             rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, hbn, _⟩
             · exact Or.inl hinp
             · exact Or.inr ⟨b, hb, hbn⟩
-          · obtain ⟨_, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
+          · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
             have hd : (⟨c'.1, .name c'.2.1.bound c'.2.2⟩ : Dep) ∈ D := pu.nin c' hc'
             rcases hmode with ⟨hinp, hrd⟩ | ⟨b, s, _, _, _, _, _, _, _, hnD, _⟩
             · have hb := hrd _ hd hcc.symm rfl
@@ -900,7 +914,7 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
   have hinv : MInv m' (setE (kill .replace false x Γ1) x { E with mode := Ex.mode }) := by
     refine post.inv.change hanch1 hx1 hxF
       (hpin1.kills _ _) hnrb hst hheap rfl
-      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp)
+      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
     refine ⟨⟨o, some v⟩, by simp [m'], out.tyok, hslot, hm1.symm, fun hl hn r hr' => Or.inr ?_,
       by rw [ht1]; exact hty, fun _ hn => ?_, fun _ T hT => ?_, fun T hT => ?_⟩
     · rw [vdeps_mode hos] at hr'
@@ -910,12 +924,11 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         rcases hn with h | h
         · exact h
         · exact absurd (hm1.trans h) hnrb
-      refine (out.names (Or.inl hnint)).transport (fun r Er hr => ?_)
+      refine (out.names (Or.inl hnint)).transport (fun r Er hrE hr hl' hh' ho' => ?_)
         (by rw [vdeps_mode hos]; exact List.Subset.refl _)
       by_cases hrx : r = x
-      · subst hrx; rw [hx1] at hr; cases hr
-        exact ⟨{ E with mode := Ex.mode }, by simp [setE], by rw [ht1]; exact hty, hm1.symm⟩
-      · exact ⟨killE .replace false x Er, by simp [setE, upd_ne _ _ hrx, kill, hr], killE_ty .., killE_mode ..⟩
+      · rw [vdeps_mode hos] at hrE; exact absurd (hrx ▸ hrE) hxd
+      · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
     · cases hT; exact out.held
     · cases hT; exact out.pkgs
   refine ⟨hinv, post.nv, post.nid, fun y => ?_, fun y hy => ?_, fun p Ep hp hpm => ?_, fun y => ?_,
@@ -959,7 +972,7 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   refine hi.change hanch hx hxF (hpin.kills _ _)
     (by rw [hm]; simp) (fun o ho => by simp [upd_ne _ _ ho])
     (hi.heap.release ht (DropSlot.owned hf) ⟨true, none⟩ (fun _ T hT => by cases hT)) rfl
-    (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp)
+    (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
   have hs : SlotOK ({ m with alloc := a' }.set x ⟨true, none⟩) { E with live := false } ⟨true, none⟩ :=
     ⟨by simp [hos], fun _ => ⟨hvec, fun T h => (by cases h), fun h => (by simp at h)⟩,
       fun h => (by simp [hos] at h)⟩
@@ -990,6 +1003,7 @@ theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     MInv ({ m with alloc := a' }.remove x) (exitScope x Γ) :=
   hi.change hanch hx hxF (hpin.kills _ _) hnrb (fun o ho => by simp [upd_ne _ _ ho]) (hi.heap.remove hsl hd) rfl
     (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) (fun _ => rfl)
+    (fun _ _ h => by cases h)
 
 /-- Growing a tree by one element, its buffer moving or not. -/
 theorem HeapOK.grow {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es : List Val}
@@ -1133,7 +1147,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hxF : x ∉ F) {t : Ty} (hty : Ex.ty = .vec t)
     {t' : Ty} {c d : Nat} {es : List Val} (hT : m1.st x = some ⟨true, some (.node t' c d es)⟩)
     {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D) (hxD : x ∉ roots D)
-    {d' : Nat} {A' : Nat → Bool} {N' : Nat}
+    (hD : t.holdsView = false → D = []) {d' : Nat} {A' : Nat → Bool} {N' : Nat}
     (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
       (d' = m1.nid ∧ A' = upd (upd m1.alloc d false) m1.nid true ∧ N' = m1.nid + 1)) :
     MInv ({ m1 with alloc := A', nid := N' }.set x ⟨true, some (.node t' c d' (es ++ [v]))⟩)
@@ -1207,6 +1221,10 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       · exact hp.sf _ o0 l0 h u c0 es0 hs'
   refine hi.change hanch hx hxF (fun _ _ _ _ ⟨r, k⟩ _ hb hk => by cases k <;> simp_all [Kind.bound, Eff.kills])
     (by rw [hm]; simp) hst (hi.heap.grow hT hp.nd hp.al hp.dis hre hsfn) rfl ?_ ?_ (by simp)
+    (fun _ Ex' hx' hl0 hh0 hhv => by
+      simp only [Option.some.injEq] at hx'; subst hx'
+      rw [hty] at hhv
+      exact ⟨hl0, by simp [hh0, hD hhv]⟩)
   · intro k hk
     have hev : Evolve m1 m' x t' c d d' es (es ++ [v]) := ⟨hT, by simp [m'], hwT'⟩
     have hpre : ∀ e ∈ es, e ∈ es ++ [v] := fun e he => List.mem_append_left _ he
@@ -1247,7 +1265,8 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         · obtain ⟨Er, hEr, hro⟩ := hp.root r hr
           exact kill_root hEr hro
     · have hN := hi.names x Ex hx hl (Or.inl (by rw [hty]; simp))
-      refine NameOK.transport (Γ := Γ1) (E := { Ex with held := Ex.held ++ D }) ?_ (fun r Er hr => ?_)
+      refine NameOK.transport (Γ := Γ1) (E := { Ex with held := Ex.held ++ D }) ?_
+        (fun r Er hrE hr hl' hh' ho' => ?_)
         (List.Subset.refl _)
       · intro d hd
         simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, List.mem_append] at hd
@@ -1256,9 +1275,10 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         · exact hp.nok d hd
       · by_cases hrx : r = x
         · subst hrx; rw [hx] at hr; cases hr
-          exact ⟨{ Ex with held := Ex.held ++ D }, by simp [setE], rfl, rfl⟩
-        · exact ⟨killE .realloc t'.holdsView x Er, by simp [setE, upd_ne _ _ hrx, kill, hr],
-            killE_ty .., killE_mode ..⟩
+          simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, hh', roots, List.map_append,
+            List.mem_append, List.map_nil, List.not_mem_nil, false_or] at hrE
+          exact absurd hrE hxD
+        · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
     · simp only [Option.some.injEq] at hT; subst hT
       intro c hc
       simp only [Val.names, namesL_append, List.mem_append] at hc
@@ -1327,7 +1347,7 @@ theorem DepsNamed.not_root {Γ : Ctx} {D : List Dep} (h : DepsNamed Γ D) {p : V
   intro d hd hk e
   obtain ⟨b, t, hkd⟩ : ∃ b t, d.kind = .name b t := by
     cases hdk : d.kind <;> simp_all [Kind.isName]
-  obtain ⟨Er, hEr, _, ho, _⟩ := h d hd b t hkd
+  obtain ⟨Er, hEr, _, _, _, ho, _⟩ := h d hd b t hkd
   rw [e] at hEr; rw [hp _ hEr] at ho; cases ho
 
 section rbind
@@ -1425,11 +1445,11 @@ theorem NameWF.exitRoot {Γ : Ctx} (h : NameWF Γ) (p : Var) (D : List Dep)
     intro d hd b t hk
     rw [vdeps_reroot] at hd
     rcases mem_reroot hd with ⟨hd0, hne⟩ | ⟨k, d', hk0, hd', rfl⟩
-    · obtain ⟨Er, hEr, ht, ho, hc⟩ := hNE d hd0 b t hk
-      exact ⟨_, lift _ _ hEr hne, ht, ho, hc⟩
+    · obtain ⟨Er, hEr, hl, hh, ht, ho, hc⟩ := hNE d hd0 b t hk
+      exact ⟨_, lift _ _ hEr hne, hl, by simp [rerootE, hh, reroot], ht, ho, hc⟩
     · cases hkn : k.isName
-      · obtain ⟨Er, hEr, ht, ho, hc⟩ := hDn d' hd' b t (comp_name hk hkn)
-        exact ⟨_, lift _ _ hEr (hD d' hd'), ht, ho, hc⟩
+      · obtain ⟨Er, hEr, hl, hh, ht, ho, hc⟩ := hDn d' hd' b t (comp_name hk hkn)
+        exact ⟨_, lift _ _ hEr (hD d' hd'), hl, by simp [rerootE, hh, reroot], ht, ho, hc⟩
       · exact absurd rfl (hNE.not_root hp _ hk0 hkn)
 
 /-- A borrowed parameter that does not depend on `p` is untouched by `p`'s

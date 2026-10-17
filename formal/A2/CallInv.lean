@@ -364,6 +364,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     xF := hxF
     xlt := hi.nvS x (by simp [Stmt.vars])
     domlt := fun v E hv => hi.nvSt v (by rw [← hi.dom, hv]; rfl)
+    noio := hi.noInout
     Flt := hi.nvF
     wf := hi.wf
     noInout := hi.noInout
@@ -375,7 +376,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     nfree := hnf
     names := hi.names
     postdt := hdt
-    resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) hEn }
+    resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn }
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by

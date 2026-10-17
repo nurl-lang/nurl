@@ -325,7 +325,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
       Γ1 x = some Ex1 → Ex1.live = true →
       StmtT P Γ F (.push x y)
-        (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D })
+        (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → NoPin Γ x →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
@@ -333,10 +333,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
   | panic {Γ Δ : Ctx} {F : List Var} :
       -- a panic never ends normally: what follows it may assume any context
-      -- with the same bindings, modes and types, borrowed parameters as they were
+      -- with the same bindings, modes and types, fixed entries as they were
       CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
-        (E0.mode = .rootb → E = E0)) →
+        (E0.fixed → E = E0)) →
       StmtT P Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →

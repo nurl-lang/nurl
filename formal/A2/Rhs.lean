@@ -300,14 +300,15 @@ theorem projDeps_named {Γ : Ctx} {y : Var} {E : Entry} (h : NameOK Γ E) : Deps
     · rename_i ho _; exact h.path (by simpa using ho)
 
 /-- What an entry holds by name stays so in a context whose bindings keep
-    their types and modes. -/
+    their types and modes, and those that are live and hold nothing stay so. -/
 theorem NameOK.transport {Γ Γ' : Ctx} {E E' : Entry} (h : NameOK Γ E)
-    (hΓ : ∀ r Er, Γ r = some Er → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty ∧ Er'.mode = Er.mode)
+    (hΓ : ∀ r Er, r ∈ roots E'.vdeps → Γ r = some Er → Er.live = true → Er.held = [] →
+      Er.mode.ownSlot = true → ∃ Er', Γ' r = some Er' ∧ Er'.live = true ∧ Er'.held = [] ∧ Er'.ty = Er.ty ∧ Er'.mode = Er.mode)
     (hs : E'.vdeps ⊆ E.vdeps) : NameOK Γ' E' := by
   intro d hd b t hk
-  obtain ⟨Er, hEr, ht, ho, hc⟩ := h d (hs hd) b t hk
-  obtain ⟨Er', hEr', ht', hm'⟩ := hΓ _ _ hEr
-  exact ⟨Er', hEr', by rw [ht', ht], by rw [hm']; exact ho, by rw [hm']; exact hc⟩
+  obtain ⟨Er, hEr, hl, hh, ht, ho, hc⟩ := h d (hs hd) b t hk
+  obtain ⟨Er', hEr', hl', hh', ht', hm'⟩ := hΓ _ _ (List.mem_map_of_mem hd) hEr hl hh ho
+  exact ⟨Er', hEr', hl', hh', by rw [ht', ht], by rw [hm']; exact ho, by rw [hm']; exact hc⟩
 
 theorem names_child {x T : Val} (h : Child x T) : ∀ c ∈ x.names, c ∈ T.names := by
   intro c hc
@@ -1004,7 +1005,7 @@ theorem rhs_move {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have hinv : MInv (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false }) := by
     refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb)
       (by rw [hm]; simp) hst hheap rfl
-      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp)
+      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h⟩
@@ -1031,13 +1032,14 @@ theorem rhs_move {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   · have hnint' : E.ty ≠ .int := fun h => by rw [h] at hvec; cases hvec
     refine ⟨rfl, Or.inl rfl, rfl, hi.tyok (E := E) hy, fun hn r hr => ?_, fun _ => ⟨hvec, hwT, ?_, ?_, ?_, ?_,
       hi.heap.self y v hT⟩, (fun h => by cases h),
-      fun _ => (hi.names y E hy hl (Or.inl hnint')).transport (fun r Er hr => ?_)
+      fun _ => (hi.names y E hy hl (Or.inl hnint')).transport (fun r Er hrE hr hl' hh' ho' => ?_)
         (fun _ hd => List.mem_append_right _ hd),
       hi.held y E _ v hy hl hT rfl, hi.pkgs y _ v hT rfl⟩
     rotate_left 5
     · by_cases hry : r = y
-      · subst hry; rw [hy] at hr; cases hr; exact ⟨{ E with live := false }, by simp [setE], rfl, rfl⟩
-      · exact ⟨killE .replace false y Er, by simp [setE, upd_ne _ _ hry, kill, hr], killE_ty .., killE_mode ..⟩
+      · subst hry; rw [hy] at hr; cases hr
+        simp [Entry.vdeps, roots, hh'] at hrE
+      · exact ⟨Er, by simp [setE, upd_ne _ _ hry, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
     · have hr' : r ∈ roots E.held := by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr
       obtain ⟨Er, hEr, hroot⟩ := wf_held hi hy hl hn r hr'
       by_cases hry : r = y
@@ -1172,6 +1174,9 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have hinv : MInv m1 (kill .drop t'.holdsView y Γ) := by
     rw [kill_eq_upd hy]
     refine hi.change hanch hy hyF popMn (by rw [hm]; simp) hst hheap rfl ?_ ?_ (by simp)
+      (fun _ Ex' hx' hl0 hh0 _ => by
+        simp only [Option.some.injEq] at hx'; subst hx'
+        rw [killE_nil (root_vdeps (by rw [hm]; rfl) hh0)]; exact ⟨hl0, hh0⟩)
     · intro k hk
       by_cases hn : ∃ b t, k = .name b t
       · obtain ⟨b, t, rfl⟩ := hn; exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩

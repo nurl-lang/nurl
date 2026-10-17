@@ -59,7 +59,7 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
   have hw' := hw
   obtain ⟨ht, hm, hr, hlv⟩ := hw
   refine ⟨by rw [killE_ty, killE_ty, ht], by rw [killE_mode, killE_mode, hm], fun h => ?_, fun h => ?_⟩
-  · rw [killE_mode] at h; rw [hr h]
+  · unfold Entry.fixed at h; rw [killE_mode, killE_ty] at h; rw [hr h]
   · rw [killE_live] at h
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
     obtain ⟨hl', hnh⟩ := h
@@ -110,12 +110,12 @@ theorem NameWF.exitScope {Γ : Ctx} (h : NameWF Γ) (x : Var) : NameWF (exitScop
     have hl' := killE_live_dep hl hn'
     intro d hd b t hk
     rw [killE_vdeps] at hd
-    obtain ⟨Er, hEr, ht, ho, hc⟩ := h v E hE hl'.1 hn' d hd b t hk
+    obtain ⟨Er, hEr, hlr, hh, ht, ho, hc⟩ := h v E hE hl'.1 hn' d hd b t hk
     have hdx : d.root ≠ x := fun e => by
       have := hl'.2 d hd e
       rw [hk] at this; cases this
-    exact ⟨killE .replace false x Er, by simp [A2.exitScope, upd_ne _ _ hdx, A2.kill, hEr],
-      by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+    exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hdx, A2.kill, hEr, killE_nil (root_vdeps ho hh)],
+      hlr, hh, ht, ho, hc⟩
 
 theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) :
     Weaker (exitScope x Γ) (exitScope x Γ') := by

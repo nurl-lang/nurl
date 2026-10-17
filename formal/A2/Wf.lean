@@ -995,7 +995,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       · obtain ⟨Er, hEr, hro⟩ := hw1 x Ex1 hx1 hl1 (Or.inl hnint) r (by
           simp [roots, Entry.vdeps, hos, hr])
         exact kill_root hEr hro
-      · obtain ⟨Er, hEr, hro⟩ := hD r hr
+      · obtain ⟨Er, hEr, hro⟩ := hD r (ownHeld_roots hr)
         exact kill_root hEr hro
   | @free Γ F x E t hx hl hm hty hxF _ =>
     intro h

@@ -54,15 +54,22 @@ theorem comp_name {a k : Kind} {b : Eff} {t : Ty} (h : comp a k = .name b t) (hk
     a = .name b t := by
   cases a <;> cases k <;> simp_all [comp, Kind.isName]
 
+/-- A binding that owns its slot and holds nothing depends on nothing. -/
+theorem root_vdeps {E : Entry} (ho : E.mode.ownSlot = true) (hh : E.held = []) : E.vdeps = [] := by
+  simp [Entry.vdeps, ho, hh]
+
+/-- ... and no change ends it. -/
+theorem killE_nil {E : Entry} (h : E.vdeps = []) (e : Eff) (hv : Bool) (x : Var) : killE e hv x E = E := by
+  unfold killE hits; simp [h]
+
 /-- What entries hold by name stays bound with its type and mode when some
     of them end. -/
 theorem NameOK.kill {Γ : Ctx} {E : Entry} (h : NameOK Γ E) (e : Eff) (hv : Bool) (x : Var) :
     NameOK (kill e hv x Γ) (killE e hv x E) := by
   intro d hd b t hk
   rw [NameOK, killE_vdeps] at *
-  obtain ⟨Er, hEr, ht, ho, hc⟩ := h d hd b t hk
-  exact ⟨killE e hv x Er, by simp only [A2.kill, hEr, Option.map_some], by rw [killE_ty]; exact ht,
-    by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+  obtain ⟨Er, hEr, hl, hh, ht, ho, hc⟩ := h d hd b t hk
+  exact ⟨Er, by simp only [A2.kill, hEr, Option.map_some, killE_nil (root_vdeps ho hh)], hl, hh, ht, ho, hc⟩
 
 theorem NameWF.kill {Γ : Ctx} (h : NameWF Γ) (e : Eff) (hv : Bool) (x : Var) :
     NameWF (kill e hv x Γ) := by
@@ -183,7 +190,9 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
-    (hrem : ox = none → e = .replace) :
+    (hrem : ox = none → e = .replace)
+    (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
+      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = []) :
     MInv m' (upd (kill e hv x Γ) x ox) := by
   have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
       ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep := by
@@ -246,9 +255,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         by_cases hrb : E.mode = .rootb
         · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead
           rw [hi.rootbLive v E hE hrb] at hdead; cases hdead
-        · have hw : EntryWeaker E (killE e hv x E) :=
-            ⟨killE_ty .., killE_mode .., fun h => absurd h hrb, fun h => by rw [hdead] at h; cases h⟩
-          exact (hslot.weaker hw).dead hdead
+        · exact (hslot.weaker' (killE_ty ..) (killE_mode ..) (fun h => by rw [hdead] at h; cases h)).dead hdead
   · exact hheap
   · intro v hv'
     rw [hnv]
@@ -331,17 +338,20 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       have hl' := killE_live_dep hl hn
       intro d hd b t hk
       rw [killE_vdeps] at hd
-      obtain ⟨Er, hEr, ht, ho, hc⟩ := hi.names v E hE hl'.1 hn d hd b t hk
+      obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc⟩ := hi.names v E hE hl'.1 hn d hd b t hk
       by_cases hdx : d.root = x
       · have hkx := hl'.2 d hd hdx
         rw [hdx, hx] at hEr; cases hEr
+        have hre : e ≠ .replace := fun h => by rw [h, hk] at hkx; cases hkx
         cases ox with
-        | none => rw [hrem rfl, hk] at hkx; cases hkx
+        | none => exact absurd (hrem rfl) hre
         | some Ex' =>
           obtain ⟨_, _, _, _, hm', _, hty', _⟩ := hox
-          exact ⟨Ex', by rw [hdx]; simp, by rw [hty']; exact ht, by rw [hm']; exact ho,
+          obtain ⟨hl'', hh''⟩ := hnew hre Ex' rfl hlr hhr (by rw [← ht] at hc; exact hc.2)
+          exact ⟨Ex', by rw [hdx]; simp, hl'', hh'', by rw [hty']; exact ht, by rw [hm']; exact ho,
             by rw [hm']; exact hc⟩
       · exact ⟨killE e hv x Er, by rw [upd_ne _ _ hdx]; unfold kill; rw [hEr]; rfl,
+          by rw [killE_nil (root_vdeps ho hhr)]; exact hlr, by rw [killE_nil (root_vdeps ho hhr)]; exact hhr,
           by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
   · intro v E' sl T hv' hl hsl hT
     by_cases hvx : v = x

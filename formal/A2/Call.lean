@@ -263,6 +263,7 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
   xF      : x ∉ F
   xlt     : x < base
   domlt   : ∀ v E, Γ v = some E → v < base
+  noio    : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   Flt     : ∀ v ∈ F, v < base
   wf      : CtxWF Γ
   noInout : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
@@ -653,7 +654,7 @@ theorem argNames_bound (h : CallH P Γ F x fn args base) {d : Dep} (hd : d ∈ a
   obtain ⟨r, k⟩ := d
   cases k with
   | name b t =>
-    obtain ⟨_, _, _, _, hc, _⟩ := h.argNames_named hd _ (List.mem_singleton_self _) b t rfl
+    obtain ⟨_, _, _, _, _, _, hc, _⟩ := h.argNames_named hd _ (List.mem_singleton_self _) b t rfl
     rcases hc with hc | ⟨hc, _⟩
     · exact absurd hc hb
     · exact hc
@@ -680,13 +681,6 @@ theorem frame_ty (h : CallH P Γ F x fn args base) {r : Var} {Er : Entry} (hr : 
     rw [hr] at h0; cases h0
     rw [h.frame_of hout (h.post_ne_x h1), h1]
     exact ⟨E1.clean, rfl, by rw [clean_ty, ht], by rw [clean_mode, hm]⟩
-
-theorem N_named (h : CallH P Γ F x fn args base) :
-    DepsNamed (callS Γ F fn args base x).Φ (argNames Γ args) := by
-  intro d hd b t hk
-  obtain ⟨Er, hEr, ht, ho, hc, hhv⟩ := h.argNames_named hd d (List.mem_singleton_self _) b t hk
-  obtain ⟨E, hE, hte, hme⟩ := h.frame_ty hEr (h.argNames_root hd).1
-  exact ⟨E, hE, by rw [hte, ht], by rw [hme]; exact ho, by rw [hme]; exact hc, hhv⟩
 
 /-- What an `in` parameter depends on: its argument's own handle, or what
     the argument depends on. -/
@@ -830,6 +824,45 @@ theorem post_rootb (h : CallH P Γ F x fn args base) {p : Var} {Ep : Entry} (hp 
     · exact RSetup.kills_isName hbr _ (bound_isName hb0))
   rw [hno] at hh; cases hh
 
+theorem killNames_nil {Γ : Ctx} {p : Var} {E : Entry} (hp : Γ p = some E) (hv : E.vdeps = []) :
+    ∀ ds, killNames ds Γ p = some E
+  | [] => hp
+  | d :: ds => by
+    change (A2.kill _ _ _ (A2.killNames ds Γ)) p = some E
+    simp only [A2.kill, killNames_nil hp hv ds, Option.map_some, killE_nil hv]
+
+/-- A binding that may be held by name and that the call does not move is
+    as it was. -/
+theorem post_named (h : CallH P Γ F x fn args base) {p : Var} {Ep : Entry} (hp : Γ p = some Ep)
+    (hn : Ep.named) (hnm : ∀ k (hk : k < fn.params.length), fn.params[k].1.moves = true → args.getD k 0 ≠ p) :
+    callPost Γ fn args p = some Ep := by
+  have haux : callPostAux Γ fn args fn.params args 0 Γ p = some Ep := by
+    refine callPostAux_rootb fn.params args 0 Γ (fun pa hpa hm => ⟨?_, fun d hd => ?_⟩) hp
+    · obtain ⟨k, hk, _, rfl⟩ := RSetup.mem_zip_getD hpa
+      exact hnm k hk hm
+    · rw [hn.vdeps] at hd; cases hd
+  exact killNames_nil haux hn.vdeps _
+
+theorem N_named (h : CallH P Γ F x fn args base) :
+    DepsNamed (callS Γ F fn args base x).Φ (argNames Γ args) := by
+  intro d hd b t hk
+  obtain ⟨Er, hEr, hl, hh, ht, ho, hc, hhv⟩ := h.argNames_named hd d (List.mem_singleton_self _) b t hk
+  -- no argument the call moves is it: every argument depends on it
+  have hnm : ∀ k (hk : k < fn.params.length), fn.params[k].1.moves = true → args.getD k 0 ≠ d.root := by
+    intro k hk hm he
+    obtain ⟨j, hj, Ea, hEa, _, _, hdv, _⟩ := h.argNames_mem hd
+    obtain ⟨Ek, hEk, _, _, hmv, _⟩ := h.arg k hk
+    obtain ⟨_, hnr, hdist⟩ := hmv hm
+    have hr : d.root ∈ roots Ea.vdeps := List.mem_map_of_mem hdv
+    by_cases hjk : j = k
+    · subst hjk; rw [hEa] at hEk; cases hEk; exact hnr (he ▸ hr)
+    · have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+      exact (hdist j hj hjk).2 (by rw [hae, he]; exact hr)
+  have hpost := h.post_named hEr ⟨hl, hh, ho, by rw [ht]; exact hhv⟩ hnm
+  refine ⟨Er.clean, by rw [h.frame_of (h.argNames_root hd).1 (h.post_ne_x hpost), hpost]; rfl,
+    by rw [clean_live]; exact hl, by unfold Entry.clean; split <;> simp [hh],
+    by rw [clean_ty, ht], by rw [clean_mode]; exact ho, by rw [clean_mode]; exact hc, hhv⟩
+
 theorem post_live_rootb (h : CallH P Γ F x fn args base) {y : Var} {E1 : Entry}
     (hy : callPost Γ fn args y = some E1) (hrb : E1.mode = .rootb) : E1.live = true := by
   obtain ⟨E0, h0, hm⟩ := h.postdm.2 y E1 hy
@@ -887,6 +920,60 @@ theorem frame_src (h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
   rw [clean_ty, clean_mode] at hn
   rw [clean_id hn hl]
   exact ⟨by unfold Entry.vdeps; rw [hm2, hp2, hh2, hm0, hp0, hh0], by rw [hh2, hh0]⟩
+
+/-- What the frame depends on in the callee is an `inout` argument, whose
+    bound ends none of it. -/
+theorem frame_sat (h : CallH P Γ F x fn args base) :
+    ∀ y E, (callS Γ F fn args base x).Φ y = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+      ∀ d ∈ E.vdeps, ∀ v, (callS Γ F fn args base x).ρ v = d.root →
+        ∃ b hv, (callS Γ F fn args base x).bnd v = some (b, hv) ∧ b.kills hv d.kind = false := by
+  intro y E hy hl hn d hd v hv
+  obtain ⟨hout, E1, h1, rfl⟩ := h.frame_some hy
+  rw [clean_live] at hl
+  have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+  rw [clean_id hn1 hl] at hd
+  have hyx : y ≠ x := by
+    intro e; subst e; simp only [setE, upd_same, Option.some.injEq] at h1; subst h1; cases hl
+  simp only [setE, upd_ne _ _ hyx] at h1
+  -- the root lies in the caller's context, so it is an `inout` argument
+  obtain ⟨Er, hEr, _⟩ := h.postwf y E1 h1 hl hn1 d.root (List.mem_map_of_mem hd)
+  obtain ⟨b, t, hvp, hav⟩ := h.ren_dom hv (h.post_lt hEr)
+  refine ⟨b, t.elem.holdsView, by simp [callS, bndOf, hvp], ?_⟩
+  obtain ⟨E2, h2, ht2, hm2, hp2, hh2, hl2⟩ := killNames_get _ h1
+  -- `y` is no moving argument: an `inout` one is renamed, a `sink` one is dead
+  have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
+    intro pa hpa hm hpy
+    obtain ⟨k, hk, hka, rfl⟩ := RSetup.mem_zip_getD hpa
+    simp only at hm hpy
+    have hget : fn.params[k]? = some fn.params[k] := List.getElem?_eq_getElem hk
+    generalize hp : fn.params[k] = p at hm hget
+    obtain ⟨pm, t'⟩ := p
+    cases pm with
+    | inp => cases hm
+    | inout b' =>
+      exact hout k (by
+        rcases callRen_cases fn.params args base k with ⟨_, _, _, hr⟩ | ⟨hk', _⟩
+        · exact hr.trans hpy
+        · exact absurd hget (hk' b' t'))
+    | sink =>
+      have hak : args[k]? = some y := by rw [← hpy]; simp [List.getD, hka]
+      have hu : ∀ k', k' ≠ k → args[k']? ≠ some y := by
+        intro k' hk' he
+        have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp he).1
+        have hge : args.getD k' 0 = args.getD k 0 := by
+          rw [hpy]; simp [List.getD, he]
+        exact hk' (h.moving hk (h.len ▸ hk'l) (by rw [hp]; rfl) hge)
+      have := callPostAux_at fn.params args 0 k Γ hak hu hget rfl E2 h2
+      simp only [postEnt] at this
+      exact absurd (this.2.2.2.2 (hl2 hl).1) (by simp)
+  obtain ⟨E0, h0, ht0, hm0, hp0, hh0, hsv⟩ := callPostAux_frame fn.params args 0 Γ hmv E2 h2
+  rw [← ht2] at ht0; rw [← hm2] at hm0; rw [← hp2] at hp0; rw [← hh2] at hh0
+  replace hl := (hl2 hl).1
+  have hs := ((hsv hl).2 ((.inout b, t), args.getD v 0)
+    (mem_zip_of hvp (h.len ▸ lt_of_get hvp))).2 b rfl
+  have hn0 : E0.ty ≠ .int ∨ E0.mode = .rootb := by rwa [← ht0, ← hm0]
+  have hd0 : d ∈ E0.vdeps := by unfold Entry.vdeps at hd ⊢; rwa [← hm0, ← hp0, ← hh0]
+  exact hits_false_dep hs hn0 d hd0 hav.symm
 
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
@@ -947,53 +1034,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
           · exact hgen hrv
         · exact hgen (held_vdeps hr)
     · simp [roots, Entry.vdeps, Mode.ownSlot] at hr
-  Φsat y E hy hl hn d hd v hv := by
-    obtain ⟨hout, E1, h1, rfl⟩ := h.frame_some hy
-    rw [clean_live] at hl
-    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
-    rw [clean_id hn1 hl] at hd
-    have hyx : y ≠ x := by
-      intro e; subst e; simp only [setE, upd_same, Option.some.injEq] at h1; subst h1; cases hl
-    simp only [setE, upd_ne _ _ hyx] at h1
-    -- the root lies in the caller's context, so it is an `inout` argument
-    obtain ⟨Er, hEr, _⟩ := h.postwf y E1 h1 hl hn1 d.root (List.mem_map_of_mem hd)
-    obtain ⟨b, t, hvp, hav⟩ := h.ren_dom hv (h.post_lt hEr)
-    refine ⟨b, t.elem.holdsView, by simp [callS, bndOf, hvp], ?_⟩
-    obtain ⟨E2, h2, ht2, hm2, hp2, hh2, hl2⟩ := killNames_get _ h1
-    -- `y` is no moving argument: an `inout` one is renamed, a `sink` one is dead
-    have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
-      intro pa hpa hm hpy
-      obtain ⟨k, hk, hka, rfl⟩ := RSetup.mem_zip_getD hpa
-      simp only at hm hpy
-      have hget : fn.params[k]? = some fn.params[k] := List.getElem?_eq_getElem hk
-      generalize hp : fn.params[k] = p at hm hget
-      obtain ⟨pm, t'⟩ := p
-      cases pm with
-      | inp => cases hm
-      | inout b' =>
-        exact hout k (by
-          rcases callRen_cases fn.params args base k with ⟨_, _, _, hr⟩ | ⟨hk', _⟩
-          · exact hr.trans hpy
-          · exact absurd hget (hk' b' t'))
-      | sink =>
-        have hak : args[k]? = some y := by rw [← hpy]; simp [List.getD, hka]
-        have hu : ∀ k', k' ≠ k → args[k']? ≠ some y := by
-          intro k' hk' he
-          have hk'l : k' < args.length := (List.getElem?_eq_some_iff.mp he).1
-          have hge : args.getD k' 0 = args.getD k 0 := by
-            rw [hpy]; simp [List.getD, he]
-          exact hk' (h.moving hk (h.len ▸ hk'l) (by rw [hp]; rfl) hge)
-        have := callPostAux_at fn.params args 0 k Γ hak hu hget rfl E2 h2
-        simp only [postEnt] at this
-        exact absurd (this.2.2.2.2 (hl2 hl).1) (by simp)
-    obtain ⟨E0, h0, ht0, hm0, hp0, hh0, hsv⟩ := callPostAux_frame fn.params args 0 Γ hmv E2 h2
-    rw [← ht2] at ht0; rw [← hm2] at hm0; rw [← hp2] at hp0; rw [← hh2] at hh0
-    replace hl := (hl2 hl).1
-    have hs := ((hsv hl).2 ((.inout b, t), args.getD v 0)
-      (mem_zip_of hvp (h.len ▸ lt_of_get hvp))).2 b rfl
-    have hn0 : E0.ty ≠ .int ∨ E0.mode = .rootb := by rwa [← ht0, ← hm0]
-    have hd0 : d ∈ E0.vdeps := by unfold Entry.vdeps at hd ⊢; rwa [← hm0, ← hp0, ← hh0]
-    exact hits_false_dep hs hn0 d hd0 hav.symm
+  Φsat := h.frame_sat
   Φwf y E hy hl hn r hr hout := by
     obtain ⟨_, E1, h1, rfl⟩ := h.frame_some hy
     rw [clean_live] at hl
@@ -1091,27 +1132,46 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     simp only [setE, upd_ne _ _ hyx] at h1
     rw [clean_live]; exact h.post_live_rootb h1 hm
   Φnamed y E hy hl hn d hd b t hk := by
-    obtain ⟨E0, h0, hl0, ht, hm, hvd⟩ := h.frame_src hy hl
-    have hn0 : E0.ty ≠ .int ∨ E0.mode = .rootb := by rwa [← ht, ← hm]
-    rw [(hvd hn).1] at hd
-    obtain ⟨Er, hEr, htr, hor, hcr, hhv⟩ := h.names y E0 h0 hl0 hn0 d hd b t hk
+    have hsat := h.frame_sat y E hy hl hn d hd
+    obtain ⟨hout, E1, h1, rfl⟩ := h.frame_some hy
+    rw [clean_live] at hl
+    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+    rw [clean_id hn1 hl] at hd
+    have hyx : y ≠ x := by
+      intro e; subst e; simp only [setE, upd_same, Option.some.injEq] at h1; subst h1; cases hl
+    have h1' : callPost Γ fn args y = some E1 := by simpa [setE, upd_ne _ _ hyx] using h1
+    -- after the call, what `y` holds by name is bound, live and holds nothing
+    obtain ⟨Er0, hEr0, _⟩ := h.postwf y E1 h1' hl hn1 d.root (List.mem_map_of_mem hd)
+    have hrx : d.root ≠ x := h.post_ne_x hEr0
+    obtain ⟨Er, hEr, hlr, hhr, htr, hor, hcr, hhv⟩ :=
+      h.resnames y E1 (by simp [setE, upd_ne _ _ hyx, h1']) hl hn1 d hd b t hk
+    simp only [setE, upd_ne _ _ hrx] at hEr
     by_cases hρ : ∃ v, callRen fn.params args base v = d.root
     · obtain ⟨v, hv⟩ := hρ
-      obtain ⟨b', t', hvp, hav⟩ := h.ren_dom hv (h.domlt _ _ hEr)
-      refine Or.inl ⟨v, (b', t'.elem.holdsView), hv, by simp [callS, bndOf, hvp], ?_, ?_, hhv⟩
+      obtain ⟨b', t', hvp, hav⟩ := h.ren_dom hv (h.post_lt hEr)
+      have hbe : (callS Γ F fn args base x).bnd v = some (b', t'.elem.holdsView) := by
+        simp [callS, bndOf, hvp]
+      obtain ⟨b'', hv'', hbnd, hkill⟩ := hsat v hv
+      rw [hbe] at hbnd
+      simp only [Option.some.injEq, Prod.mk.injEq] at hbnd
+      obtain ⟨rfl, rfl⟩ := hbnd
+      have hbr : b' ≠ .replace := fun e => by rw [e, hk] at hkill; simp [Eff.kills] at hkill
+      refine Or.inl ⟨v, (b', t'.elem.holdsView), hv, hbe, ?_, ?_, hbr, hhv⟩
       · show ((fn.params[v]?).map (·.2)).getD .int = t
         rw [hvp]; simp only [Option.map_some, Option.getD_some]
         obtain ⟨Ea, hEa, _, hok, _⟩ := h.arg v (lt_of_get hvp)
-        rw [hav, hEr] at hEa; cases hEa
         rw [get_of hvp] at hok
         obtain ⟨hty, _⟩ := hok
-        exact (show Er.ty = t' from hty).symm.trans htr
+        obtain ⟨E0, h0, _, ht0⟩ := h.postdt.2 _ Er hEr
+        rw [hav, h0] at hEa; cases hEa
+        exact hty.symm.trans (ht0.symm.trans htr)
       · rcases hcr with hcr | ⟨hcr, _⟩
         · rw [hcr]; exact fun e => by cases e
         · exact hcr
-    · have hout : ∀ v, callRen fn.params args base v ≠ d.root := fun v hv => hρ ⟨v, hv⟩
-      obtain ⟨E', hE', hte, hme⟩ := h.frame_ty hEr hout
-      exact Or.inr ⟨hout, E', hE', by rw [hte, htr], by rw [hme]; exact hor, by rw [hme]; exact hcr, hhv⟩
+    · have hout' : ∀ v, callRen fn.params args base v ≠ d.root := fun v hv => hρ ⟨v, hv⟩
+      exact Or.inr ⟨hout', Er.clean, by rw [h.frame_of hout' hrx, hEr]; rfl,
+        by rw [clean_live]; exact hlr, by unfold Entry.clean; split <;> simp [hhr],
+        by rw [clean_ty]; exact htr, by rw [clean_mode]; exact hor, by rw [clean_mode]; exact hcr, hhv⟩
 
 end CallH
 
@@ -2108,7 +2168,11 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     · rw [exits_at h.pe_lt fn.params 0 _ hc hyk (fun d hd => by rw [hce, hv0] at hd; cases hd)]
     · rw [hrr, hv0]; intro d hd; cases hd
     · rw [hrr]
-      exact ⟨rfl, rfl, fun hm => absurd hm hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
+      refine ⟨rfl, rfl, fun hf => ?_, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
+      rcases hf with hf | ⟨b, hb, _⟩
+      · exact absurd hf hcl.1
+      · obtain ⟨E0, h0, hm0, _⟩ := h.postdt.2 y E1 h1
+        exact absurd (hm0 ▸ hb : E0.mode = .inout b) (h.noio y E0 b h0)
   · have hce : E1.clean = E1 := by unfold Entry.clean; rw [if_neg hcl]
     have hl : E1.live = true := by
       by_cases hrb : E1.mode = .rootb
@@ -2142,7 +2206,11 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     · rw [hce, hvd]; exact fun d hd => (hroots d hd).1
     · rw [hce]
       refine ⟨rfl, rfl, fun hrb => ?_, fun _ => ⟨hl, fun ho => ?_, ?_⟩⟩
-      · have hrb' : E1.mode = .rootb := hrb
+      · have hrb' : E1.mode = .rootb := by
+          rcases hrb with hrb | ⟨b, hb, _⟩
+          · exact hrb
+          · obtain ⟨E0, h0, hm0, _⟩ := h.postdt.2 y E1 h1
+            exact absurd (hm0 ▸ hb : E0.mode = .inout b) (h.noio y E0 b h0)
         have ho : E1.mode.ownSlot = false := by rw [hrb']; rfl
         show E1 = { E1 with path := _, held := _ }
         rw [hpath ho, hheld]
@@ -2266,9 +2334,11 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
       rw [killE_nohit (fun d hd => (h.dom_ne (hv d hd)).2)]
       cases ho : fn.resOwn
       · have hos : (resMode fn).ownSlot = false := by simp [resMode, ho, Mode.ownSlot]
-        exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes]) (resMode_ne' fn)
+        exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
+          (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes, hl']) (fun _ d hd => (hp' hos d hd).2) (fun d hd => (hh' d hd).2)
-      · exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes]) (resMode_ne' fn)
+      · exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
+          (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes]) (fun _ d hd => by simp at hd) (fun d hd => (hh' d hd).2)
     rw [hother y hyx hyr, hT y hyx]
     have hnone : Γb y = none → callPost Γ fn args y = none →

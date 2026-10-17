@@ -83,9 +83,9 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
 
-theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
+theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
+    (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)
     (h : SlotOK m E sl) : SlotOK m E' sl := by
-  obtain ⟨ht, hm, hr, hl⟩ := hw
   obtain ⟨ho, hown, hbor⟩ := h
   refine ⟨by rw [hm]; exact ho, fun hos => ?_, fun hos => ?_⟩
   · rw [hm] at hos
@@ -100,6 +100,9 @@ theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E
     obtain ⟨v, hv, hok⟩ := hbor hos a
     exact ⟨v, hv, by rw [ht]; exact hok.mono (hp hos) hh⟩
 
+
+theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
+    (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.2.1 hw.2.2.2
 
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
@@ -116,11 +119,11 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 hm']; exact hi.rootbLive p E hE hm'
+    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLive p E hE hm'
   rootbLt p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 hm']; exact hi.rootbLt p E hE hm'
+    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLt p E hE hm'
   names := hw.names
   held v E' sl T hv hl hsl hT := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
@@ -136,7 +139,7 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   anch p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 hm']; exact hi.anch p E hE hm'
+    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.anch p E hE hm'
   spineNd := hi.spineNd
   spineDom v hv := by
     obtain ⟨E, hE⟩ := hi.spineDom v hv

@@ -112,12 +112,22 @@ def rerootE (p : Var) (D : List Dep) (E : Entry) : Entry :=
 def exitRoot (p : Var) (D : List Dep) (Γ : Ctx) : Ctx :=
   upd (fun v => (Γ v).map (rerootE p D)) p none
 
+/-- An entry that stays as it is for the whole scope of its binding: a
+    borrowed parameter, or an `inout` one that holds no views and is never
+    replaced (nothing the body may do to it changes what it depends on, and
+    it lives as long as the call). -/
+def Entry.fixed (E : Entry) : Prop :=
+  E.mode = .rootb ∨ ∃ b, E.mode = .inout b ∧ b ≠ .replace ∧ E.ty.holdsView = false
+
+@[simp] theorem Entry.fixed_def (E : Entry) :
+    E.fixed ↔ (E.mode = .rootb ∨ ∃ b, E.mode = .inout b ∧ b ≠ .replace ∧ E.ty.holdsView = false) := Iff.rfl
+
 /-- `E'` says no more than `E`: it may be dead where `E` is live, and depend
-    on more.  A borrowed parameter's entry is fixed; an owner's `path` says
-    nothing (an owner is reached through its own slot). -/
+    on more.  A fixed entry stays as it is; an owner's `path` says nothing
+    (an owner is reached through its own slot). -/
 def EntryWeaker (E E' : Entry) : Prop :=
   E'.ty = E.ty ∧ E'.mode = E.mode ∧
-  (E.mode = .rootb → E' = E) ∧
+  (E.fixed → E' = E) ∧
   (E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧
     E.held ⊆ E'.held)
 
@@ -131,13 +141,16 @@ def CtxWF (Γ : Ctx) : Prop :=
 def canDo (m : Mode) (e : Eff) : Prop :=
   m = .own ∨ ∃ b, m = .inout b ∧ e.le b
 
-/-- What `D` holds by name names bindings that are still bound, of the
+/-- What `D` holds by name names bindings that are still bound and live
+    (a binding replaced, moved or gone ends what holds it by name), of the
     type the capturing closure's code expects (one that holds no views: a
     binding that holds views is captured by handle), that own their slot,
-    and that allow what the closure may do to them. -/
+    and that allow what the closure may do to them.  Such a binding holds
+    nothing (its type holds no views), so no change to another binding
+    ends it. -/
 def DepsNamed (Γ : Ctx) (D : List Dep) : Prop :=
   ∀ d ∈ D, ∀ b t, d.kind = .name b t →
-    ∃ Er, Γ d.root = some Er ∧ Er.ty = t ∧ Er.mode.ownSlot = true ∧
+    ∃ Er, Γ d.root = some Er ∧ Er.live = true ∧ Er.held = [] ∧ Er.ty = t ∧ Er.mode.ownSlot = true ∧
       (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false
 
 def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
@@ -247,7 +260,7 @@ def capDeps (cs : List (Var × PMode × Ty)) : List Dep :=
     (§2.11). -/
 def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × Ty)) : Prop :=
   (cs.map (·.1)).Nodup ∧
-  ∀ c ∈ cs, ∃ Ev, Γ c.1 = some Ev ∧ Ev.live = true ∧ Ev.ty = c.2.2 ∧ Ev.mode.ownSlot = true ∧
+  ∀ c ∈ cs, ∃ Ev, Γ c.1 = some Ev ∧ Ev.live = true ∧ Ev.held = [] ∧ Ev.ty = c.2.2 ∧ Ev.mode.ownSlot = true ∧
     c.2.2.holdsView = false ∧
     (c.2.1 = .inp ∧ (∀ d ∈ D, d.root = c.1 → d.kind.isName = true → d.kind.bound = .none) ∨
       ∃ b s, c.2.1 = .inout b ∧ b ≠ .none ∧ b ≠ .replace ∧ canDo Ev.mode b ∧ c.1 ∉ F ∧

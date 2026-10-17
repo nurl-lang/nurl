@@ -152,7 +152,7 @@ theorem Keep.anchOut {Γ Γ' : Ctx} {s s' : Stmt} {F : List Var} (hk : Keep Γ �
 theorem NoPin.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : NoPin Γ' x) : NoPin Γ x := by
   intro p E hp hm
   obtain ⟨E', h', hwe⟩ := hw.get hp
-  rw [hwe.2.2.1 hm] at h'
+  rw [hwe.2.2.1 (Or.inl hm)] at h'
   exact h p E h' hm
 
 theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : Keep Γ0 Γ' s s') :
@@ -161,7 +161,7 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
   · obtain ⟨E0, h0, hw0⟩ := hw.get hv
     obtain ⟨hs', E', h', hm, hty, hrb⟩ := h.1 v E0 h0 hs
     refine ⟨hs', E', h', hm.trans hw0.2.1, hty.trans hw0.1, fun hr => ?_⟩
-    rw [hrb (hw0.2.1 ▸ hr), hw0.2.2.1 hr]
+    rw [hrb (hw0.2.1 ▸ hr), hw0.2.2.1 (Or.inl hr)]
   · obtain ⟨hs', E0, h0⟩ := h.2 v E' hv hs
     obtain ⟨E, hE, _⟩ := hw.get' h0
     exact ⟨hs', E, hE⟩
@@ -181,9 +181,9 @@ theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout
   have hk : ∀ dep : Dep, VKeep m (m.set x ⟨o1, some v⟩) dep ∧ HKeep m (m.set x ⟨o1, some v⟩) dep :=
     fun dep => ⟨(rootKeep_ext hext dep.root).vkeep, (rootKeep_ext hext dep.root).hkeep⟩
   refine ⟨hout.own, hout.mode, hout.live, hout.tyok, fun hn r hr => ?_, fun hm => ?_, fun hm => ?_,
-    fun hn => (hout.names hn).transport (fun r Er hr => ⟨Er, by
+    fun hn => (hout.names hn).transport (fun r Er _ hr hl hh _ => ⟨Er, by
       have hrx : r ≠ x := fun h => by rw [h, hx] at hr; cases hr
-      simp [setE, upd_ne _ _ hrx, hr], rfl, rfl⟩) (List.Subset.refl _), hout.held, hout.pkgs⟩
+      simp [setE, upd_ne _ _ hrx, hr], hl, hh, rfl, rfl⟩) (List.Subset.refl _), hout.held, hout.pkgs⟩
   · obtain ⟨Er, hEr, hro⟩ := hout.wf hn r hr
     have hrx : r ≠ x := fun h => by rw [h, hx] at hEr; cases hEr
     exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
@@ -421,17 +421,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         RhsPost m m1 Γ Γ1 F ∧ Pushed m1 Γ1 t v D := fun htk =>
       push_take hi.toMInv hanch hy hly htyy hpa htk
     have fin : ∀ {m1 m' : Mem} {v : Val}, TakeVal m y v m1 →
-        MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D }) →
+        MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
         m'.nv = m1.nv → Covers m' → (∀ v, v ≠ x → m'.st v = m1.st v) →
         ∃ Γ', StmtT P Γ' F .skip (setE (kill .realloc t.holdsView x Γ1) x
-            { Ex1 with held := Ex1.held ++ D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
+            { Ex1 with held := Ex1.held ++ ownHeld true t D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
           Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' := by
       intro m1 m' v htk hinv hnv hcov hst1
       obtain ⟨post, _⟩ := hgo htk
       have hanch1 := post.rel.anch hanch
       obtain ⟨E0, h0, hm0, ht0⟩ := post.rel.mode x Ex1 hx1
       rw [hx] at h0; cases h0
-      have hrel : CtxRel Γ (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ D }) :=
+      have hrel : CtxRel Γ (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) :=
         post.rel.trans ((CtxRel.kill hanch1 hxF .realloc t.holdsView
           (hmn_of_ne_replace _ (by decide) x)).trans
           (CtxRel.setE (x := x) (Ex := killE .realloc t.holdsView x Ex1) (by simp [A2.kill, hx1])
@@ -452,12 +452,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     cases hst with
     | push htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
-      exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp hxD
+      exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
+        (fun h => by simp [ownHeld, h])
         (Or.inl ⟨rfl, rfl, rfl⟩)) rfl (covers_push (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
     | pushRealloc htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
-      exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp hxD
+      exact fin htk (push_grow hinv1 hanch1 hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
+        (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
   | @free Γ F x E t hx hl hm hty hxF hpin =>
@@ -585,11 +587,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             (fun d hd => ?_) (fun Ep' h => ?_) (fun d hd b t hk => ?_)))
           rotate_left
           · obtain ⟨E1, h1, hw1⟩ := hw.get hp
-            rw [h] at h1; cases h1; rw [hw1.2.2.1 hm, hm]; rfl
-          · have hN := hi.names p Ep hp hl (Or.inr hm)
-            obtain ⟨Er, hEr, ht, ho, hc⟩ := hN d (by simp [Entry.vdeps, hos]; exact List.mem_append.mp hd) b t hk
-            obtain ⟨Er', hEr', hw'⟩ := hw.get hEr
-            exact ⟨Er', hEr', by rw [hw'.1]; exact ht, by rw [hw'.2.1]; exact ho, by rw [hw'.2.1]; exact hc⟩
+            rw [h] at h1; cases h1; rw [hw1.2.2.1 (Or.inl hm), hm]; rfl
+          · -- `p` is as it was in the weaker context, which names what it holds
+            obtain ⟨E1, h1, hw1⟩ := hw.get hp
+            rw [hw1.2.2.1 (Or.inl hm)] at h1
+            exact hw.2.2 p Ep h1 hl (Or.inr hm) d
+              (by simp [Entry.vdeps, hos]; exact List.mem_append.mp hd) b t hk
           have hdv : d.root ∈ roots Ep.vdeps := by
             simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
             exact ⟨d, hd, rfl⟩
