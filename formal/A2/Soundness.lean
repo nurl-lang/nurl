@@ -1,11 +1,14 @@
-import A2.CallInv
+import A2.Codes
 
 /-! A2 — soundness: a well-typed program never reaches a configuration that
 is about to touch memory it may not.  Every step checks allocation and
 bounds, so a stuck configuration is exactly a memory error (use after free,
 a dangling borrow or view, a double free); a failed bounds check or an
 explicit `panic` unwinds, dropping what every scope it leaves owns, and a
-`recover` frame catches it.
+`recover` frame catches it.  A call through a closure or a trait object runs
+the code the package names, which is code of the package's signature: every
+package is made from a closure literal or a `dyn` the program checked
+(`ProgCodes`, `Stmt.codesOK`).
 
 And nothing leaks: when the program ends, normally or by a panic no frame
 caught, every allocation has been freed. -/
@@ -14,15 +17,17 @@ namespace A2
 
 /-- Preservation, with the call and `recover` cases discharged. -/
 theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F s) (hst : Step P m s (.ok m' s')) :
-    ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' := by
-  obtain ⟨Γ', ht', hi', _, hk, _⟩ := preserve (callCase hP) (recCase hP) ht hi hst
+    (ht : StmtT P Γ F s Δ) {m m' : Mem} {s' : Stmt} (hcd : MemCodes P m) (hi : Inv m Γ F s)
+    (hst : Step P m s (.ok m' s')) : ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' := by
+  obtain ⟨Γ', ht', hi', _, hk, _⟩ := preserve (callCase hP) (recCase hP) (cloCase hP) ht hcd hi hst
   exact ⟨Γ', ht', hi', hk⟩
 
-/-- Progress, with the call case discharged. -/
-theorem progress' {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ)
-    {m : Mem} (hi : Inv m Γ F s) : s = .skip ∨ ∃ r, Step P m s r :=
-  progress (fun hx hc hi => callProgress hx hc hi) ht hi
+/-- Progress, with the call cases discharged. -/
+theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
+    s = .skip ∨ ∃ r, Step P m s r :=
+  progress (fun hx hc hi => callProgress hx hc hi)
+    (fun hx hc hlc htc hz hlz htz hcd hi => cloProgress hP hx hc hlc htc hz hlz htz hcd hi) ht hcd hi
 
 /-- Every binding is bound by a run-time scope the statement is inside of:
     the program's own top level binds nothing else. -/
@@ -37,28 +42,32 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
     exact absurd (hc v (by rw [hE]; rfl)) hns0
 
 /-- Every configuration a well-typed one reaches is well-typed. -/
-theorem reach_ok {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) {m : Mem} (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
-    (hs : Steps P m s (.ok m' s')) : ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' := by
+theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps P m s (.ok m' s')) :
+    ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
   generalize hr : (Res.ok m' s') = r at hs
   induction hs generalizing Γ with
-  | refl => cases hr; exact ⟨Γ, ht, hi, hc⟩
+  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
   | step hst _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hi hst
-    exact ih ht' hi' (hc.step hk) hr
+    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
+    exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
 /-- A panic no frame catches leaves an empty store with nothing allocated
     that nobody owns. -/
-theorem reach_panic {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) {m : Mem} (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem}
+theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem}
     (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' := by
   generalize hr : Res.panic m' = r at hs
   induction hs generalizing Γ with
   | refl => cases hr
   | step hst _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hi hst
-    exact ih ht' hi' (hc.step hk) hr
+    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
+    exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr
     obtain ⟨hout, hin, _, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
@@ -74,12 +83,13 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
 
 /-- Type soundness: from a well-typed configuration, every reachable
     configuration is finished or can step. -/
-theorem soundness {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) {m : Mem} (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
+theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
     (hs : Steps P m s (.ok m' s')) : ¬ Stuck P m' s' := by
-  obtain ⟨Γ', ht', hi', _⟩ := reach_ok hP ht hi hc hs
+  obtain ⟨Γ', ht', hi', _, hcd', _⟩ := reach_ok hP hPc ht hcd hsc hi hc hs
   rintro ⟨hne, hno⟩
-  rcases progress' ht' hi' with h | ⟨r, hr'⟩
+  rcases progress' hP ht' hcd' hi' with h | ⟨r, hr'⟩
   · exact hne h
   · exact hno r hr'
 
@@ -107,19 +117,25 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
 
 theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by cases h
 
+theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) := fun _ _ _ _ _ _ _ _ h => by
+  cases h
+
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/
-theorem memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv)
+theorem memory_safe {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
+    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
-  soundness hP ht (inv_empty hs hv) (closed_empty s) hr
+  soundness hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
 
 /-- Nothing leaks: when a well-typed program finishes, every allocation it
     made has been freed. -/
-theorem no_leak_end {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv)
+theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
+    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.ok m' .skip)) : ∀ i, m'.alloc i = false := by
-  obtain ⟨Γ', _, hi', hc'⟩ := reach_ok hP ht (inv_empty hs hv) (closed_empty s) hr
+  obtain ⟨Γ', _, hi', hc', _⟩ :=
+    reach_ok hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
   intro i
   cases ha : m'.alloc i with
   | false => rfl
@@ -132,10 +148,12 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
 
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding
     has freed every allocation too. -/
-theorem no_leak_panic {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv)
+theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
+    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.panic m')) : ∀ i, m'.alloc i = false := by
-  obtain ⟨hnone, hcov⟩ := reach_panic hP ht (inv_empty hs hv) (closed_empty s) hr
+  obtain ⟨hnone, hcov⟩ :=
+    reach_panic hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
   intro i
   cases ha : m'.alloc i with
   | false => rfl

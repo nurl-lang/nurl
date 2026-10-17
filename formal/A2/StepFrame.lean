@@ -231,6 +231,19 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     by_cases hvx : v = x
     · subst hvx; rw [panic_none hp v h] at hx; cases hx
     · simp [upd_ne _ _ hvx, panic_none hp v h] at h'
+  | @callc _ x _ _ _ _ _ _ _ _ env fn _ _ _ hb =>
+    cases hr; intro v h h'
+    rw [Stmt.spine, Stmt.spine, Stmt.spine, callIn_spine]
+    by_cases hvx : v = x
+    · subst hvx; simp
+    by_cases hve : v = m.nv
+    · subst hve; simp
+    by_cases hvr : v = m.nv + 1 + fn.params.length
+    · subst hvr; simp
+    simp only [Mem.set_st, upd_ne _ _ hvr, upd_ne _ _ hvx] at h'
+    have h0 : (envMem m env).st v = none := by simp [envMem, Mem.set, upd_ne _ _ hve, h]
+    exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _
+      (List.mem_append_left _ (bind_new hb v h0 h'))))
   | _ => cases hr
 
 /-- A step unbinds the scopes it leaves. -/

@@ -278,6 +278,19 @@ def heldOfArgs (Γ : Ctx) (args : List Var) : List Dep :=
 
 def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 
+/-- Every dependency of every kind a borrow of `y` may have. -/
+def deriveAll (y : Var) (E : Entry) : List Dep :=
+  derive y E .self ++ derive y E .inner ++ derive y E .view
+
+/-- What a call through a package returns, whatever code it holds: a
+    result of type `r` that borrows, if it does, only from the argument `z`
+    (never from what the package captured), and may hold whatever the
+    package and the argument hold.  An owning result is the caller's. -/
+def cloRes (Ec : Entry) (z : Var) (Ez : Entry) (r : Ty) : Entry :=
+  let D := (if Ez.ty = .int then [] else deriveAll z Ez) ++
+    allKinds (roots Ec.held ++ (if Ez.ty = .int then [] else roots Ez.held))
+  ⟨r, if r.owning then .own else .bor, true, D, D⟩
+
 /-- The call's result: it borrows what the summary says it borrows, and
     may hold whatever the arguments held. -/
 def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
@@ -352,6 +365,7 @@ def Stmt.src : Stmt → Bool
   | .letrec _ _ s => s.src
   | .catchR _ _ _ => false
   | .unpair _ _ _ s => s.src
+  | .callc _ _ _ s => s.src
 
 /-! ### Functions -/
 
@@ -418,6 +432,7 @@ def Stmt.vars : Stmt → List Var
   | .letrec x _ s => x :: s.vars
   | .catchR x _ s => x :: s.vars
   | .unpair y x z s => y :: x :: z :: s.vars
+  | .callc x c z s => x :: c :: z :: s.vars
 
 
 

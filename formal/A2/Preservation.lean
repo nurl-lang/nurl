@@ -124,6 +124,17 @@ def RecCase (P : Prog) : Prop :=
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.letrec x f k) s' ∧ Frz F m m'
 
+/-- The case of a call through a package, proven with the call case
+    (`Closure.lean`).  It reads which code the package holds from memory. -/
+def CloCase (P : Prog) : Prop :=
+  ∀ {Γ : Ctx} {F : List Var} {x c z : Var} {k : Stmt} {Ec Ez : Entry} {a r : Ty} {Δ : Ctx}
+    {m m' : Mem} {s' : Stmt},
+    k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.live = true → Ec.ty = .fn a r →
+    Γ z = some Ez → Ez.live = true → Ez.ty = a → StmtT P (setE Γ x (cloRes Ec z Ez r)) F k Δ →
+    MemCodes P m → Inv m Γ F (.callc x c z k) → Step P m (.callc x c z k) (.ok m' s') →
+    ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
+      Keep Γ Γ' (.callc x c z k) s' ∧ Frz F m m'
+
 theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : Keep Γ0 Γ' s s') :
     Keep Γ Γ' s s' := by
   refine ⟨fun v E hv hs => ?_, fun v E' hv hs => ?_⟩
@@ -276,18 +287,18 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
 
 /-- Preservation: every step of a well-typed configuration, given the call
     case. -/
-theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
+theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
-    ∀ {m m' : Mem} {s' : Stmt}, Inv m Γ F s → Step P m s (.ok m' s') →
+    ∀ {m m' : Mem} {s' : Stmt}, MemCodes P m → Inv m Γ F s → Step P m s (.ok m' s') →
       ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧ Keep Γ Γ' s s' ∧ Frz F m m' := by
   induction ht with
-  | skip => intro m m' s' _ hst; cases hst
+  | skip => intro m m' s' _ _ hst; cases hst
   | sub hw _ ho ih =>
-    intro m m' s' hi hst
-    obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih (hi.weaker hw) hst
+    intro m m' s' hcd hi hst
+    obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hcd (hi.weaker hw) hst
     exact ⟨Γ', ht'.weakenOut hi'.wf ho, hi', hnv, hk.weaker hw, hfz⟩
   | seq hbsrc ha hb iha ihb =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | seqSkip =>
       refine ⟨_, ?_, ?_, Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hbsrc), fun _ _ => rfl⟩
@@ -297,14 +308,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       · exact hi.respine (by rw [src_spine hbsrc]; rfl) (fun v hv => hi.nvS v (by simp [Stmt.vars, hv]))
           (catchOK_src hbsrc)
     | seqL hst' =>
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := iha hi.seqIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := iha hcd hi.seqIn hst'
       refine ⟨Γ', StmtT.seq hbsrc ht' hb, hi'.respine rfl (fun v hv => ?_) hi'.catchOK, hnv, hk, hfz⟩
       simp only [Stmt.vars, List.mem_append] at hv
       rcases hv with hv | hv
       · exact hi'.nvS v hv
       · exact Nat.lt_of_lt_of_le (hi.nvS v (by simp [Stmt.vars, hv])) hnv
   | @letv Γ Γ1 Δ F x r k E hsrc hx hxF hr hs _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | letv hmx he =>
       rename_i m1 v o
@@ -347,10 +358,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
   | letcall hsrc hx hxF hc hs _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     exact hcall hsrc hx hxF hc hs hi hst
   | assign hx hxF hmodes hr hty hxd _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | assign _ he hsl hd =>
       have hanch := hi.leafAnch rfl
@@ -359,7 +370,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
   | ite hsa hsb _ ha hb _ _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | iteT _ _ =>
       exact ⟨_, ha, hi.respine (by rw [src_spine hsa]; rfl) (fun v hv => hi.nvS v (by
@@ -368,7 +379,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       exact ⟨_, hb, hi.respine (by rw [src_spine hsb]; rfl) (fun v hv => hi.nvS v (by
         simp [Stmt.vars, hv])) (catchOK_src hsb), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb), fun _ _ => rfl⟩
   | «while» hsrc hc hs _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | «while» =>
       refine ⟨_, StmtT.ite (by simp [Stmt.src, hsrc]) rfl hc
@@ -378,7 +389,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       simp only [Stmt.vars, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
       grind
   | @push Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
     have hgo : ∀ {m1 : Mem} {v : Val}, TakeVal m y v m1 →
         RhsPost m m1 Γ Γ1 F ∧ Pushed m1 Γ1 t v D := fun htk =>
@@ -422,7 +433,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         (Or.inr ⟨rfl, rfl, rfl⟩)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
   | @free Γ F x E t hx hl hm hty hxF =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | free ht hf =>
       have hanch := hi.leafAnch rfl
@@ -435,7 +446,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         (covers_free hi.cover ht hf) trivial,
         by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
   | @scope Γ Δ1 F x k hxE hxF hs ihs =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     obtain ⟨Ex, hx, hnrb⟩ := hxE
     have hxsp : x ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
@@ -476,7 +487,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
     | scopeIn hst' =>
       have hi0 : Inv m Γ F k := hi.scopeIn hx hnrb
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scope ⟨Ex', hx', by rw [hm']; exact hnrb⟩ hxF ht', ?_, hnv, ⟨?_, ?_⟩, hfz⟩
       · exact
@@ -505,7 +516,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         obtain ⟨hvs', rest⟩ := hk.2 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @rbind Γ Δ1 F p k Ep hp hm hl hroots hpF hs ihs =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     have hpsp : p ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     have hanchk : ∀ q E, Γ q = some E → E.mode = .rootb → q ∉ k.spine → ∀ r ∈ roots E.vdeps, r ∈ F := by
@@ -556,7 +567,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         exact ⟨by simp [Stmt.spine, hvp], E, hE⟩
     | rbindIn hst' =>
       have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
       obtain ⟨hpsp', Ep', hp', _, _, hrb⟩ := hk.1 p Ep hp hpsp
       have hEp : Ep' = Ep := hrb hm
       subst hEp
@@ -587,7 +598,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
         obtain ⟨hvs', rest⟩ := hk.2 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @frozen Γ Δ F z k hs ihs =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     cases hst with
     | frozenSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial, Nat.le_refl _,
@@ -597,7 +608,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       · exact StmtT.skip.weakenOut hi.wf (Or.inr hw)
     | frozenIn hst' =>
       have hi0 : Inv m Γ (F ++ z) k := hi.frozenIn
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
       refine ⟨Γ', StmtT.frozen ht', ?_, hnv, hk, fun v hv => hfz v (List.mem_append_left _ hv)⟩
       exact
         { toMInv := hi'.toMInv
@@ -619,12 +630,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
           catchOK := hi'.catchOK
           cover := hi'.cover }
 
-  | panic => intro m m' s' _ hst; cases hst
+  | panic => intro m m' s' _ _ hst; cases hst
   | letrec hsrc hx hxF hf hp hty ho hc hs _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     exact hrec hsrc hx hxF hf hp hty ho hc hs hi hst
+  | callc hk hx hxF hc hlc htc hz hlz htz hkT _ =>
+    intro m m' s' hcd hi hst
+    exact hclo hk hx hxF hc hlc htc hz hlz htz hkT hcd hi hst
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO ih =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     obtain ⟨hfr, hxs, hnv0, hck⟩ := hi.catchOK
     have hlo : ∀ v, v ≠ x → v ∉ F ++ (List.range m0.nv).filter (· ≠ x) → m0.st v = none := by
       intro v hvx hvF
@@ -639,7 +653,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
     cases hst with
     | catchIn hst' =>
       rename_i s'
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hi.catchIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hcd hi.catchIn hst'
       have hKO' : KeepOut Γ' Δ s'.spine := by
         refine ⟨fun v E' hv hvs => ?_, fun v E' hv => ?_⟩
         · obtain ⟨hvs0, E0, h0⟩ := hk.2 v E' hv hvs
@@ -725,7 +739,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) {Γ : Ctx} {
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
   | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs _ =>
-    intro m m' s' hi hst
+    intro m m' s' hcd hi hst
     exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hi hst
 
 end A2
