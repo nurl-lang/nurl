@@ -26,6 +26,7 @@ inductive WFv : Ty → Val → Prop
   | pair {a b : Ty} {v w : Val} : WFv a v → WFv b w → WFv (.prod a b) (.pair v w)
   | inl {a b : Ty} {v : Val} : WFv a v → WFv (.sum a b) (.inl v)
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
+  | pkg {f : Nat} {te a r : Ty} {v : Val} : WFv te v → WFv (.fn a r) (.pkg f te a r v)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -36,6 +37,8 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | snd {a b : Ty} {x y : Val} {s : Ty} {v : Val} : ViewIn b y s v → ViewIn (.prod a b) (.pair x y) s v
   | inl {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn a x s v → ViewIn (.sum a b) (.inl x) s v
   | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
+  | pkg {f : Nat} {te a r : Ty} {x : Val} {s : Ty} {v : Val} :
+      ViewIn te x s v → ViewIn (.fn a r) (.pkg f te a r x) s v
 
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
@@ -45,6 +48,7 @@ inductive Child : Val → Val → Prop
   | snd {v w : Val} : Child w (.pair v w)
   | inl {v : Val} : Child v (.inl v)
   | inr {v : Val} : Child v (.inr v)
+  | pkg {v : Val} {f : Nat} {te a r : Ty} : Child v (.pkg f te a r v)
 
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
@@ -57,6 +61,7 @@ inductive Top : Val → Val → Prop
   | snd {n a b : Val} : Top n b → Top n (.pair a b)
   | inl {n a : Val} : Top n a → Top n (.inl a)
   | inr {n a : Val} : Top n a → Top n (.inr a)
+  | pkg {n a : Val} {f : Nat} {te s r : Ty} : Top n a → Top n (.pkg f te s r a)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles). -/
@@ -97,6 +102,8 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
   | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
+  | pkg {f : Nat} {te a r : Ty} {x : Val} {P H : List Dep} :
+      ValOK m te x (P ++ H) H → ValOK m (.fn a r) (.pkg f te a r x) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -135,6 +142,12 @@ theorem valOK_sum {a b : Ty} :
     · exact .inl hx
     · exact .inr hx
 
+theorem valOK_fn {a r : Ty} :
+    ValOK m (.fn a r) v P H ↔ ∃ f te x, v = .pkg f te a r x ∧ ValOK m te x (P ++ H) H := by
+  constructor
+  · intro h; cases h with | pkg hx => exact ⟨_, _, _, rfl, hx⟩
+  · rintro ⟨f, te, x, rfl, hx⟩; exact .pkg hx
+
 /-- An integer depends on nothing. -/
 theorem ValOK.int_any {m' : Mem} {P' H' : List Dep} (h : ValOK m .int v P H) : ValOK m' .int v P' H' := by
   cases h; exact .int
@@ -147,6 +160,7 @@ def Val.ids : Val → List Nat
   | .pair v w => v.ids ++ w.ids
   | .inl v => v.ids
   | .inr v => v.ids
+  | .pkg _ _ _ _ v => v.ids
   | _ => []
 def idsL : List Val → List Nat
   | [] => []

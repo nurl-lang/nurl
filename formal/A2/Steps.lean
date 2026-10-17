@@ -327,6 +327,11 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
     · cases h
     · cases hc with
       | inr => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.inr h⟩
+  | pkg _ ih =>
+    rcases hs.cases' with h | ⟨e, hc, hs'⟩
+    · cases h
+    · cases hc with
+      | pkg => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.pkg h⟩
 
 /-- A valid view points into a buffer some owner holds. -/
 theorem ViewAt.owned {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
@@ -480,6 +485,11 @@ theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
       compE] using hr), fun _ => ⟨rfl, WFv.inr hwb, fun s v h => hvsT s v (hvin s v h),
       hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
       hsf.sub hsub⟩, fun h => (by cases h)⟩
+  | pkg hwb =>
+    refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => hwfH r (by simpa [Entry.vdeps, Mode.ownSlot,
+      compE] using hr), fun _ => ⟨rfl, WFv.pkg hwb, fun s v h => hvsT s v (hvin s v h),
+      hnd.sublist hids, fun i hi => hal i (hids.subset hi), fun o U hU i hi => hdis o U hU i (hids.subset hi),
+      hsf.sub hsub⟩, fun h => (by cases h)⟩
 
 /-- An enum value: its payload, taken from its binding, owned by the enum. -/
 theorem ViewIn.inl_inv {a b s : Ty} {v x : Val} (h : ViewIn (.sum a b) (.inl v) s x) : ViewIn a v s x := by
@@ -487,6 +497,30 @@ theorem ViewIn.inl_inv {a b s : Ty} {v x : Val} (h : ViewIn (.sum a b) (.inl v) 
 
 theorem ViewIn.inr_inv {a b s : Ty} {v x : Val} (h : ViewIn (.sum a b) (.inr v) s x) : ViewIn b v s x := by
   cases h with | inr h => exact h
+
+/-- A value wrapped around one taken from its binding (an enum's payload, a
+    package's environment), owned by what wraps it. -/
+theorem out_wrap {m1 : Mem} {Γ1 : Ctx} {a : Ty} {D : List Dep} {v : Val} (pu : Pushed m1 Γ1 a v D)
+    {w : Val} {τ : Ty} (htok : τ.ok = true) (hown : τ.owning = true) (hwτ : WFv τ w)
+    (hvin' : ∀ s x, ViewIn τ w s x → ViewIn a v s x) (hchild : ∀ e, Child e w → e = v)
+    (hids : w.ids = v.ids) (hnv : ∀ d o l, w ≠ .view d o l) (hnn : ∀ u c d es, w ≠ .node u c d es) :
+    RhsOut m1 Γ1 ⟨τ, .own, true, [], D⟩ w true := by
+  have hsub : ∀ {n : Val}, Sub n w → n = w ∨ Sub n v := by
+    intro n hn
+    rcases hn.cases' with h | ⟨e, hc, hs⟩
+    · exact Or.inl h
+    · rw [hchild e hc] at hs; exact Or.inr hs
+  refine ⟨rfl, Or.inl rfl, rfl, htok, fun _ r hr => ?_,
+    fun _ => ⟨hown, hwτ, fun s x hin => pu.vs s x (hvin' s x hin), by
+      rw [hids]; exact pu.nd, fun i hi => pu.al i (hids ▸ hi), fun o U hU i hi => pu.dis o U hU i (hids ▸ hi),
+      fun d o l hv u c es hn => ?_⟩, fun h => (by cases h)⟩
+  · simp only [Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append] at hr
+    exact pu.root r hr
+  · rcases hsub hv with h | hv'
+    · exact absurd h.symm (hnv d o l)
+    rcases hsub hn with h | hn'
+    · exact absurd h.symm (hnn u c d es)
+    exact pu.sf d o l hv' u c es hn'
 
 theorem out_inj {m1 : Mem} {Γ1 : Ctx} {a t : Ty} {D : List Dep} {v : Val} (pu : Pushed m1 Γ1 a v D)
     (ht : t.ok = true) {w : Val} (hwv : w = .inl v ∨ w = .inr v) {τ : Ty} (hτ : τ = .sum a t ∨ τ = .sum t a)
@@ -607,6 +641,13 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
         (fun s x h => ViewIn.inr_inv h) (hi.tyok hy)⟩
+  | @pack f te a r y Ey Γ1 D hy hly hte hpa ha hr =>
+    cases he with
+    | pack htk =>
+      obtain ⟨post, pu⟩ := push_take hi hanch hy hly hte hpa htk
+      exact ⟨post, out_wrap pu (by simp [Ty.ok, ha, hr]) rfl (WFv.pkg pu.wf)
+        (fun s x h => by cases h with | pkg h => exact h) (fun e h => by cases h; rfl) (by simp)
+        (fun _ _ _ h => by cases h) (fun _ _ _ _ h => by cases h)⟩
   | getl hy hl hty =>
     cases he with
     | getl hv =>
@@ -1128,6 +1169,7 @@ theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     rw [happ] at hx hy; exact .pair hx hy
   | inl _ ih => have hx := ih; rw [happ] at hx; exact .inl hx
   | inr _ ih => have hx := ih; rw [happ] at hx; exact .inr hx
+  | pkg _ ih => have hx := ih; rw [happ] at hx; exact .pkg hx
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hlt hd ha

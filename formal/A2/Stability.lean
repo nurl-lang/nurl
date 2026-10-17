@@ -60,6 +60,12 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hp dep hd
       · exact hh dep hd
     exact .inr (ih hph hh)
+  | pkg _ ih =>
+    have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+      rcases List.mem_append.mp hd with hd | hd
+      · exact hp dep hd
+      · exact hh dep hd
+    exact .pkg (ih hph hh)
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -71,6 +77,7 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   | snd _ ih => simp [Ty.holdsView, ih]
   | inl _ ih => simp [Ty.holdsView, ih]
   | inr _ ih => simp [Ty.holdsView, ih]
+  | pkg _ ih => simp [Ty.holdsView, ih]
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by
@@ -99,6 +106,7 @@ theorem Top.sub {n v : Val} (h : Top n v) : Sub n v := by
   | snd _ ih => exact Sub.snd ih
   | inl _ ih => exact Sub.inl ih
   | inr _ ih => exact Sub.inr ih
+  | pkg _ ih => exact Sub.pkg ih
 
 theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   induction h2 with
@@ -107,6 +115,7 @@ theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   | snd _ ih => exact Top.snd ih
   | inl _ ih => exact Top.inl ih
   | inr _ ih => exact Top.inr ih
+  | pkg _ ih => exact Top.pkg ih
 
 theorem Top.node {n : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Top n (.node t c d es)) :
     n = .node t c d es := by
@@ -151,6 +160,9 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | inr _ ih =>
     cases ht with
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | pkg _ ih =>
+    cases ht with
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
@@ -182,6 +194,9 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   | inr _ ih =>
     cases ht with
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+  | pkg _ ih =>
+    cases ht with
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
 
 /-- A value held at the top of a borrowed slot `y` is valid through `y`
     itself: every handle in it is one `y` holds. -/
@@ -218,6 +233,9 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | inr _ ih =>
     intro Q ht hq
     exact .inr (ih (Top.trans (Top.inr (Top.refl _)) ht) (List.mem_append_left _ hq))
+  | pkg _ ih =>
+    intro Q ht hq
+    exact .pkg (ih (Top.trans (Top.pkg (Top.refl _)) ht) (List.mem_append_left _ hq))
 
 /-- What a borrowed slot reaches, it reaches through the dependencies of the
     value it holds. -/

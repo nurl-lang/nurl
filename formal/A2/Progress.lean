@@ -161,6 +161,9 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
   | inr hy hly _ _ =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
     exact ⟨_, EvalR.inr htk⟩
+  | pack hy hly _ _ _ _ =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    exact ⟨_, EvalR.pack htk⟩
   | getl hy hl ht =>
     obtain ⟨v, hv | hv⟩ := sum_slot hi hy hl ht
     · exact ⟨_, EvalR.getl hv⟩

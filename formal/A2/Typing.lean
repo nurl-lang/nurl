@@ -75,6 +75,7 @@ def rootKind (t : Ty) (k : Kind) : Kind :=
   | .slice _, .self => .view
   | .prod _ _, .self => .view
   | .sum _ _, .self => .view
+  | .fn _ _, .self => .view
   | _, k => k
 
 /-- What a value borrowed from `y` (whose entry is `E`) in way `k` depends
@@ -155,6 +156,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held⟩
   | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held⟩
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held⟩
+  | .fn a r => ⟨.fn a r, .bor, true, derive y E .inner, E.held⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -162,6 +164,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .vec s => ⟨.vec s, .own, true, [], E.held⟩
   | .prod a b => ⟨.prod a b, .own, true, [], E.held⟩
   | .sum a b => ⟨.sum a b, .own, true, [], E.held⟩
+  | .fn a r => ⟨.fn a r, .own, true, [], E.held⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -250,6 +253,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | taker {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
+  | pack {f : Nat} {te a r : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → a.ok = true →
+      r.ok = true → RhsT Γ F (.pack f te a r y) ⟨.fn a r, .own, true, [], D⟩ Γ1
 
 /-! ### Calls -/
 
@@ -393,6 +399,7 @@ def Rhs.vars : Rhs → List Var
   | .getr y => [y]
   | .takel y => [y]
   | .taker y => [y]
+  | .pack _ _ _ _ y => [y]
 
 def Stmt.vars : Stmt → List Var
   | .skip => []
