@@ -12,6 +12,7 @@ import A2.Rhs
 import A2.Steps
 import A2.Leak
 import A2.Panic
+import A2.StepFrame
 import A2.TypingFacts
 import A2.Preservation
 import A2.Progress

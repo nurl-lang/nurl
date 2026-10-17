@@ -14,86 +14,17 @@ theorem Rhs.vars_rename (ρ : Var → Var) (r : Rhs) : (r.rename ρ).vars = r.va
 theorem Stmt.vars_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).vars = s.vars.map ρ := by
   induction s <;> simp_all [Stmt.rename, Stmt.vars, Rhs.vars_rename, Expr.vars_rename]
 
-/-- The scopes the parameters open, outermost first. -/
-def wrapSpine : List (PMode × Ty) → Nat → Nat → List Var
-  | [], _, _ => []
-  | (.inout _, _) :: ps, base, i => wrapSpine ps base (i + 1)
-  | _ :: ps, base, i => (base + i) :: wrapSpine ps base (i + 1)
-
-theorem spine_wrap (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base i : Nat),
-    (wrapParams ps base i s).spine = wrapSpine ps base i ++ s.spine := by
-  intro ps
-  induction ps with
-  | nil => intro base i; rfl
-  | cons p ps ih =>
-    intro base i
-    obtain ⟨pm, t⟩ := p
-    cases pm <;> simp [wrapParams, wrapSpine, Stmt.spine, ih]
-
-theorem vars_wrap (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base i : Nat),
-    (wrapParams ps base i s).vars = wrapSpine ps base i ++ s.vars := by
-  intro ps
-  induction ps with
-  | nil => intro base i; rfl
-  | cons p ps ih =>
-    intro base i
-    obtain ⟨pm, t⟩ := p
-    cases pm <;> simp [wrapParams, wrapSpine, Stmt.vars, ih]
-
-theorem mem_wrapSpine : ∀ {ps : List (PMode × Ty)} {base i : Nat} {v : Var}, v ∈ wrapSpine ps base i →
-    ∃ k p, ps[k]? = some p ∧ (∀ b, p.1 ≠ .inout b) ∧ v = base + i + k := by
-  intro ps
-  induction ps with
-  | nil => intro base i v h; simp [wrapSpine] at h
-  | cons p ps ih =>
-    intro base i v h
-    obtain ⟨pm, t⟩ := p
-    have shift : ∀ {v}, v ∈ wrapSpine ps base (i + 1) →
-        ∃ k p, ((pm, t) :: ps)[k]? = some p ∧ (∀ b, p.1 ≠ .inout b) ∧ v = base + i + k := by
-      intro v hv
-      obtain ⟨k, p, hk, hp, rfl⟩ := ih hv
-      refine ⟨k + 1, p, by simpa using hk, hp, ?_⟩
-      show base + (i + 1) + k = base + i + (k + 1); omega
-    cases pm with
-    | inout b => exact shift h
-    | inp =>
-      simp only [wrapSpine, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact ⟨0, (.inp, t), by simp, fun b h => (by cases h), rfl⟩
-      · exact shift h
-    | sink =>
-      simp only [wrapSpine, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact ⟨0, (.sink, t), by simp, fun b h => (by cases h), rfl⟩
-      · exact shift h
-
-theorem wrapSpine_nodup : ∀ (ps : List (PMode × Ty)) (base i : Nat), (wrapSpine ps base i).Nodup := by
-  intro ps
-  induction ps with
-  | nil => intro base i; simp [wrapSpine]
-  | cons p ps ih =>
-    intro base i
-    obtain ⟨pm, t⟩ := p
-    have hnot : base + i ∉ wrapSpine ps base (i + 1) := by
-      intro hm
-      obtain ⟨k, _, _, _, he⟩ := mem_wrapSpine hm
-      have := veq he; omega
-    cases pm with
-    | inout b => exact ih base (i + 1)
-    | inp => exact List.nodup_cons.mpr ⟨hnot, ih base (i + 1)⟩
-    | sink => exact List.nodup_cons.mpr ⟨hnot, ih base (i + 1)⟩
-
 theorem callStmt_spine (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) :
     (callStmt fn args base x k).spine =
       x :: (base + fn.params.length) :: (wrapSpine fn.params base 0 ++
         (fn.body.rename (callRen fn.params args base)).spine) := by
-  simp [callStmt, Stmt.spine, spine_wrap]
+  simp [callStmt, callIn, Stmt.spine, spine_wrap]
 
 theorem callStmt_vars (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) :
     (callStmt fn args base x k).vars =
       x :: ((base + fn.params.length) :: (zOf fn args base ++ (wrapSpine fn.params base 0 ++
         fn.body.vars.map (callRen fn.params args base))) ++ [x, base + fn.params.length]) ++ k.vars := by
-  simp [callStmt, Stmt.vars, Rhs.vars, vars_wrap, Stmt.vars_rename, zOf]
+  simp [callStmt, callIn, Stmt.vars, Rhs.vars, vars_wrap, Stmt.vars_rename, zOf]
 
 theorem mem_wrapSpine_of : ∀ {ps : List (PMode × Ty)} {base i k : Nat} {p : PMode × Ty},
     ps[k]? = some p → (∀ b, p.1 ≠ .inout b) → base + i + k ∈ wrapSpine ps base i := by

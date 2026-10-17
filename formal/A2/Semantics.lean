@@ -217,31 +217,28 @@ def wrapParams : List (PMode × Ty) → Nat → Nat → Stmt → Stmt
   | (.sink, _) :: ps, base, i, s => .scope (base + i) (wrapParams ps base (i + 1) s)
   | (.inout _, _) :: ps, base, i, s => wrapParams ps base (i + 1) s
 
-/-- What a call becomes: the result slot `r = base + n` and the caller's
-    binding `x` are bound, the body runs with every caller binding but the
-    `inout` arguments lent out (`frozen`), and the result moves to `x`. -/
-def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stmt :=
+/-- The inside of a call: the result slot `r = base + n` is bound, the body
+    runs with every caller binding but the `inout` arguments lent out
+    (`frozen`), and the result moves to the caller's binding `x`. -/
+def callIn (fn : Fn) (args : List Var) (base : Nat) (x : Var) : Stmt :=
   let n := fn.params.length
   let r := base + n
   let ρ := callRen fn.params args base
   let z := (List.range base).filter (fun v => !(inoutArgs fn.params args).contains v)
-  .scope x (.seq
-    (.scope r (.seq (.frozen z (wrapParams fn.params base 0 (fn.body.rename ρ)))
-                    (.assign x (.var r))))
-    k)
+  .scope r (.seq (.frozen z (wrapParams fn.params base 0 (fn.body.rename ρ))) (.assign x (.var r)))
 
-/-- What `recover f` becomes: the callee, which takes no parameters and
-    returns an integer, runs inside a `recover` frame that remembers the
-    caller's store `m0`.  On a panic, the frames inside are unwound — each
-    scope drops what it owns, as the allocation journal does (§7.2) — and
-    `x` says the call failed. -/
+/-- What a call becomes: `x` is bound for the continuation `k`, after the
+    call's inside. -/
+def callStmt (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) : Stmt :=
+  .scope x (.seq (callIn fn args base x) k)
+
+/-- What `recover f` becomes: a call of `f`, which takes no parameters and
+    returns an integer, inside a `recover` frame that remembers the caller's
+    store `m0`.  On a panic, the frames inside are unwound — each scope drops
+    what it owns, as the allocation journal does (§7.2) — and `x` says the
+    call failed. -/
 def recStmt (fn : Fn) (base : Nat) (x : Var) (m0 : Mem) (k : Stmt) : Stmt :=
-  let r := base
-  let z := List.range base
-  .scope x (.seq
-    (.catchR x m0 (.scope r (.seq (.frozen z (fn.body.rename (fun v => base + v)))
-                                  (.assign x (.var r)))))
-    k)
+  .scope x (.seq (.catchR x m0 (callIn fn [] base x)) k)
 
 /-- A step's outcome: a configuration, or a panic — with the store the
     unwinding left. -/
@@ -313,13 +310,15 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | letrec {m : Mem} {x : Var} {f : Nat} {s : Stmt} {fn : Fn} :
       P[f]? = some fn → fn.params = [] → m.st x = none →
       Step P m (.letrec x f s)
-        (.ok ({ (m.set x ⟨false, none⟩).set m.nv ⟨fn.resOwn, none⟩ with nv := m.nv + fn.nvars })
-             (recStmt fn m.nv x (m.set x ⟨false, none⟩) s))
+        (.ok ({ (m.set x ⟨fn.resOwn, none⟩).set (m.nv + fn.params.length) ⟨fn.resOwn, none⟩
+                with nv := m.nv + fn.nvars })
+             (recStmt fn m.nv x (m.set x ⟨fn.resOwn, none⟩) s))
   | catchIn {m m' : Mem} {x : Var} {m0 : Mem} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.catchR x m0 s) (.ok m' (.catchR x m0 s'))
   | catchSkip {m : Mem} {x : Var} {m0 : Mem} : Step P m (.catchR x m0 .skip) (.ok m .skip)
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
-      Step P m s (.panic m1) → Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
+      Step P m s (.panic m1) → (m1.st x).isSome →
+      Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
 
 /-- Reachability. -/
 inductive Steps (P : Prog) : Mem → Stmt → Res → Prop

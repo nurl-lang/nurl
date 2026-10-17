@@ -112,7 +112,8 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .scope _ s => CatchOK m s
   | .rbind _ s => CatchOK m s
   | .frozen _ s => CatchOK m s
-  | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧ m0.nv ≤ m.nv ∧ CatchOK m s
+  | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
+      x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
   | _ => True
 
 /-- What memory and context guarantee, whatever is running. -/
@@ -197,7 +198,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       StmtT P Γ F (.letrec x f s) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
-      StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
+      x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
       (∀ p E, Δ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∈ F) →
       KeepOut Γ Δ s.spine →
