@@ -726,10 +726,11 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No open holes.** The 0.72.0 release review found 37 safe programs the
-compiler accepted and that leaked, freed memory they did not own or read
-freed memory, and converting the packages' handles to `Arc` found ten
-more; all are closed, each a probe CI now holds (h142–h194):
+**No open holes.** The 0.72.0 and 0.73.0 release reviews found safe programs
+the compiler accepted and that leaked, freed memory they did not own or read
+freed memory, and converting the packages' handles to `Arc` and removing
+gratuitous `unsafe` across `packages/` found the rest; all are closed, each a
+probe CI now holds (h142–h273):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1186,6 +1187,13 @@ with `arc_new`.
 The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
+- **Mechanized soundness proof (Lean 4).** The core ownership calculus
+  (`formal/`, `lake build`) is mechanically proven sound in Lean 4 with zero
+  `sorry` (`A1.memory_safe` in `formal/Formal/Soundness.lean`: well-typed
+  programs never get stuck on use-after-free, double-free, dangling borrows/views,
+  or leak live allocations at exit), and `formal/corpus/map.tsv` maps every
+  regression probe (`h01–h273`) to its formal judgment clause. See
+  [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
   under the sanitizers (`tools/fuzz/holes/check.sh`, in CI: no probe may

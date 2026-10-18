@@ -42,13 +42,19 @@ POST /build_wasm
 Content-Type: application/json
 
 {
-  "source": "@ main → i32 { ^ ( + 1 2 ) }",
+  "source": "@ main → i { ^ + 1 2 }",
   "filename": "main.nu",
   "emit_ll": false,
   "opt": "-O2"
 }
 ```
 Returns: base64-encoded wasm bytecode and compilation logs.
+
+**Type & borrow check / format**
+```bash
+POST /check          # fast parse, type check, borrow check, and lint diagnostics
+POST /fmt            # canonical source formatting via nurlfmt
+```
 
 **Linux (x86_64 ELF)**
 ```bash
@@ -83,6 +89,18 @@ Supported targets:
 - `macos-x64`, `macos-arm64` (Mach-O, Apple Silicon native)
 
 Canvas, audio, and HTTP are unsupported on these targets.
+
+**Bootable Unikernel (`x86_64` PVH / `AArch64` QEMU `virt`)**
+```bash
+POST /build_unikernel
+
+{
+  "source": "@ main → i { ( nurl_print `hello from guest\\n` ) ^ 0 }",
+  "arch": "x86_64",
+  "boot": true
+}
+```
+Builds a freestanding unikernel image (`x86_64` or `aarch64`), optionally baking in files via `files` and booting it under QEMU (`boot: true`) to return guest serial output.
 
 ### Resources & Examples
 - `GET /examples` - list all bundled examples
@@ -123,9 +141,12 @@ Add to `claude_desktop_config.json`:
 ### Available Tools & Resources
 
 **Tools:**
-- `nurl_build_*` - compile to native (Linux, Windows, macOS) or WebAssembly
-- `nurl_list_*` - browse examples, stdlib, and tests
-- `nurl_read_*` - fetch examples, stdlib, tests, grammar, README, roadmap, and gotchas
+- `nurl_check` - fast parse, type check, and borrow check with actionable repair hints
+- `nurl_eval` - compile and run a snippet or expression and return stdout/stderr
+- `nurl_fmt` - format `.nu` source code with `nurlfmt`
+- `nurl_build_*` - compile to native (`Linux`, `Windows`, `macOS`), WebAssembly (`nurl_build_wasm`), cross-targets (`nurl_build_target`), or bootable Unikernel (`nurl_build_unikernel`)
+- `nurl_api` / `nurl_grep` / `nurl_docs` - search stdlib function signatures, grep across stdlib/examples/docs, and query topic guides
+- `nurl_list_*` / `nurl_read_*` - browse and read examples, stdlib modules, tests, grammar, README, roadmap, and gotchas
 
 **Resources** (`nurl://` URIs):
 - `nurl://grammar` - language grammar
@@ -139,8 +160,6 @@ Add to `claude_desktop_config.json`:
 
 ## Self-Hosting `nurlapi` [#selfhosting]
 
-
-TODO: add environment variables, port configuration, docker image from ghcr, etc...
 ### Docker
 ```bash
 # From repository root
@@ -157,11 +176,20 @@ docker run --rm -p 8000:8000 nurl-api:dev
 ./nurlapi/nurlapi   # listens on 0.0.0.0:8000
 ```
 
-### Podman quadlet?
+### Environment variables
 
-...
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` / `NURL_PORT` | `8000` | HTTP listen port |
+| `NURLAPI_WORKERS` | `8` | HTTP server worker thread/fiber count |
+| `NURL_ALLOW_RUN` | `0` | Enable native host code execution endpoints (`1` to allow) |
+| `NURLAPI_RATE_LIMIT` | `60` | Per-IP requests per minute on build endpoints |
+| `NURL_API_URL` | `http://localhost:8000` | Public base URL advertised in download links and MCP |
+| `NURLC_PATH` | `/opt/nurl/build/nurlc` | Path to the `nurlc` compiler binary |
+| `NURL_WORK_ROOT` | `/opt/nurl` | Working directory for temporary build artifacts |
+| `NURL_DOWNLOAD_TTL_SEC` | `3600` | Seconds before compiled download artifacts expire |
 
-See [`nurlapi/README.md`](https://github.com/nurl-lang/nurl/tree/main/nurlapi) for environment variables and configuration.
+See [`nurlapi/README.md`](https://github.com/nurl-lang/nurl/tree/main/nurlapi) for full container and deployment details.
 
 ## Compiler-in-WebAssembly
 

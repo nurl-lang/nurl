@@ -134,6 +134,9 @@ if echo "$PAGE" | grep -qF "<script>alert"; then echo "  xss: LEAKED"; fail=1; e
 # link to the per-version file listing.
 echo "$PAGE" | grep -qE '· [0-9]{4}-[0-9]{2}-[0-9]{2}' && echo "  publish date: OK" || { echo "  publish date: MISSING"; fail=1; }
 check_page '/packages/foo/1.0.0/files'      "files link"
+check_page '/favicon.svg'                   "favicon link"
+FAV=$(curl -sf "${REG}favicon.svg" || true)
+echo "$FAV" | grep -qF '<svg' && echo "  /favicon.svg serves SVG: OK" || { echo "  /favicon.svg: MISSING"; fail=1; }
 
 say "files page lists the tarball"
 FPAGE=$(curl -sf "${REG}packages/foo/1.0.0/files" || true)

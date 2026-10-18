@@ -144,9 +144,11 @@ the handshake, the record layer and full certificate verification from scratch
 in NURL, with **no FFI beyond the
 libc TCP socket**. It negotiates ChaCha20-Poly1305 / AES-128-GCM over
 X25519 or NIST P-256, verifies the chain against the system trust store by
-default, and runs on a host with nothing installed. `tls_attach_verify`
-upgrades an already-connected socket and verifies it the same way, which
-is what STARTTLS-style protocols need; plain `tls_attach` does not verify.
+default, and runs on a host with nothing installed. `tcp_starttls` upgrades an
+already-connected `TcpConn` in safe code and verifies it the same way, which is
+what STARTTLS-style protocols need (`tls_accept_conn` accepts on a `TcpConn`;
+the low-level raw-descriptor `tls_attach*` and `tls_accept*` helpers are `raw`
+for `unsafe` callers).
 
 **Post-quantum.** Key exchange prefers X25519MLKEM768 (hybrid ML-KEM-768)
 on both the client and the server, falling back to X25519 / P-256 for a

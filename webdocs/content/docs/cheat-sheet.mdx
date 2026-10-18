@@ -17,6 +17,7 @@ A condensed reference. Each section links to the full page it comes from.
 | `b` | boolean |
 | `s` | C string (`i8*`) |
 | `i8 i16 i32 i64` / `u16 u32 u64` / `f32` | sized integers / float |
+| `v128` / `v256` | 128-bit (`4×i32`) / 256-bit (`8×i32`) SIMD vectors |
 | `*T` | raw pointer |
 | `?T` | option |
 | `!T E` | result |
@@ -38,7 +39,7 @@ A condensed reference. Each section links to the full page it comes from.
 ## Functions and calls
 
 ```nu
-@ add i a i b → i { ^ + a b }     // declare
+@ add i a i b → i { ^ + a b }     // declare (prefixes: pub, inline, simd, unsafe, raw)
 ( add 1 2 )                        // call — always parenthesized
 : (@ i i) sq \ i x → i { * x x }  // closure literal
 ```
@@ -68,13 +69,15 @@ Binary operators take exactly 2 operands — chain with `& a & b c` for
 ? cond then else                  // ternary
 ~ cond { body }                   // while
 ~ item collection { body }        // foreach
+break   continue                  // loop exit / next iteration
+; { cleanup }                     // defer (LIFO at scope exit)
 ?? expr { Variant x → ... _ → ... }   // match, exhaustive
 ```
 
 ## Structs and enums
 
 ```nu
-: Point { i x  i y }
+: Point { i x  i y }                  // prefix with `raw :` to seal fields
 @ Point { 1 2 }                       // construct
 . p x                                 // field access
 
@@ -85,7 +88,7 @@ Binary operators take exactly 2 operands — chain with `& a & b c` for
 ## Error handling
 
 ```nu
-@ ?T { T v }   @ ?T { F 0 }        // Option: Some / None
+@ ?T { T v }   @ ?T { F }          // Option: Some / None (`@ ?T { F 0 }` also accepted)
 @ !T E { T v }  @ !T E { F e }     // Result: Ok / Err
 : x \ ( might_fail )                // try-propagate, returns early on failure
 ( opt_expect o `msg` )  ( res_expect r `msg` )   // unwrap or panic
@@ -96,11 +99,9 @@ Binary operators take exactly 2 operands — chain with `& a & b c` for
 - A `:` binding owns a fresh allocation. The compiler frees it
   automatically at scope exit.
 - `inout` mutates the caller's value. `sink` takes ownership.
-- `String`, `Vec`, owning structs, containers, closure environments and
-  the `Channel` / `Mutex` / `Cond` / `File` handles are dropped
-  automatically. Free by hand only raw `nurl_alloc` memory (inside an
-  `unsafe` function) and OS resources such as sockets.
-- Use `Arc` (not `Rc`) for anything shared across threads.
+- `String`, `Vec`, owning structs, containers, closure environments, and
+  all stdlib handles (including `TcpConn`, `UdpSocket`, `UnixConn`, `TlsStream`, `File`, `Channel`, `Mutex`, `Cond`, `ProcChild`, `Sqlite`) auto-drop when their last owner leaves scope. Only raw `nurl_alloc` memory inside an `unsafe` function is freed by hand.
+- Use `Arc` (read-only) or `Locked [T]` (mutable) — never `Rc` — for anything shared across threads.
 
 ## Common stdlib entry points
 

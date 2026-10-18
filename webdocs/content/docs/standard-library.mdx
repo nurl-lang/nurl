@@ -5,13 +5,16 @@ icon: Library
 ---
 
 The standard library is plain `.nu` source. You pull it in with `$`-imports.
-No separate package step is necessary. It has three layers:
+No separate package step is necessary. It spans six layers (236 modules total):
 
 | Layer | Path | Contents |
 |---|---|---|
-| `core` | `stdlib/core/` | Built into every program's assumptions: strings, vectors, Option/Result, memory helpers |
-| `std` | `stdlib/std/` | The general-purpose standard library: collections, I/O, time, threads, crypto primitives |
-| `ext` | `stdlib/ext/` | Higher-level, optional modules: HTTP, JSON, package management, MCP |
+| `core` | `stdlib/core/` | Built into every program's assumptions: strings, vectors, Option/Result, slices, memory helpers |
+| `std` | `stdlib/std/` | The general-purpose standard library: collections, I/O, time, threads, TLS 1.3, QUIC, post-quantum and classical crypto |
+| `ext` | `stdlib/ext/` | Higher-level modules: HTTP/1.1, HTTP/2, HTTP/3, JSON, Protobuf, Zstandard, SQLite, PostgreSQL, package management, MCP |
+| `net` | `stdlib/net/` | Sans-I/O protocol engines (TCP, UDP, DNS, DHCP, ARP, IPv4, Ethernet) and encrypted peer-to-peer transport |
+| `dist` | `stdlib/dist/` | Distributed systems primitives: gossip, SWIM membership, Raft, CRDTs |
+| `hal` | `stdlib/hal/` | Hardware abstraction layer: volatile MMIO and bare-metal microcontroller drivers |
 
 Every module is plain-text and readable. The fastest way to see a module's
 exact function signatures: use `nurl_read_stdlib` (via the
@@ -25,7 +28,7 @@ under `stdlib/` directly.
 | `string.nu` | the managed `String` type and its operations |
 | `vec.nu` | `Vec[T]`, a growable array |
 | `option.nu` / `result.nu` | combinators for `?T` and `!T E` — see [Error handling](./error-handling) |
-| `slice.nu` | slice helpers |
+| `slice.nu` | first-class tracked slice views (`slice_from_vec`, `slice_window`, `slice_of_str`) |
 | `mem.nu` | low-level allocation helpers |
 | `box.nu` / `cell.nu` / `pair.nu` | small owned-value wrappers |
 | `char.nu` | character classification |
@@ -41,17 +44,18 @@ bump-allocated batches, and `arc.nu` / `rc.nu` for shared ownership
 (`Arc` is thread-safe, `Rc` is single-threaded — see
 [Concurrency](./concurrency)).
 
-## Numbers and encoding
+## Numbers, SIMD, and encoding
 
-`int.nu`, `float.nu`, `floatbits.nu`, `bigint.nu`, `decimal.nu`, `fft.nu`
-for numeric work; `encode.nu` and `utf8.nu` for text encoding; `fmt.nu`
-for formatted output.
+`int.nu`, `float.nu`, `floatbits.nu`, `bigint.nu`, `decimal.nu`, `fft.nu`,
+and `simd.nu` (`v128` / `v256` vector operations) for numeric work; `encode.nu`,
+`utf8.nu`, and `unicat.nu` (Unicode general categories and case folding) for text
+encoding; `fmt.nu` for formatted output.
 
 ## I/O and the operating system
 
-`fs.nu` (filesystem), `bufio.nu` (buffered I/O), `path.nu`, `process.nu`,
-`args.nu`, `env.nu` (`ext/`), `signal.nu`, `term.nu`, `progress.nu`,
-`fswatch.nu`.
+`fs.nu` (filesystem), `mmap.nu` (`file_map` read-only memory-mapped file views),
+`bufio.nu` (buffered I/O), `path.nu`, `process.nu`, `args.nu`, `env.nu` (`ext/`),
+`signal.nu`, `term.nu`, `progress.nu`, `fswatch.nu`.
 
 ## Time and concurrency
 
@@ -61,25 +65,32 @@ for formatted output.
 ## Networking
 
 `net.nu`, `dns.nu`, `udp.nu`, `unixsock.nu`, `url.nu`, `tls.nu`,
-`tls_server.nu`, `tls_verify.nu` in `std/`; the HTTP/1.1 and HTTP/2 stack
-(`http.nu`, `http_server.nu`, `http_router.nu`, `http_middleware.nu`,
-`http2_*.nu`, and more), `websocket.nu`, `mqtt.nu` in `ext/`. See
+`tls_server.nu`, `tls_verify.nu`, and the pure-NURL QUIC stack (`quic.nu`,
+`quic_pkt.nu`, `quic_crypto.nu`, `quic_conn.nu`, `quic_loss.nu`, `quic_tls.nu`)
+in `std/`; the HTTP/1.1, HTTP/2, and HTTP/3 stack (`http.nu`, `http_server.nu`,
+`http_router.nu`, `http_middleware.nu`, `http2_*.nu`, `http3_client.nu`,
+`http3_server.nu`, `http3_frame.nu`, `http3_qpack.nu`, and more),
+`websocket.nu`, `mqtt.nu` in `ext/`. See
 [Networking](./networking) for a guided tour.
 
 ## Cryptography
 
-`aes_gcm.nu`, `chacha20poly1305.nu`, `ecdsa_p256.nu`, `ed25519.nu`,
-`x25519.nu`, the `hash_*.nu` family (SHA-1/2, MD5, BLAKE2b, BLAKE3),
-`hkdf.nu`, `pbkdf2.nu`, `scrypt.nu`, `rsa.nu`, `minisign.nu`,
-`subtle.nu` (constant-time comparisons), `x509.nu` / `x509_gen.nu` in
-`std/`; `crypto.nu`, `jwt.nu`, `http_jwt.nu` in `ext/`. See
-[Cryptography](./cryptography).
+Post-quantum primitives `mlkem.nu` (FIPS 203 ML-KEM-512/768/1024),
+`mldsa.nu` (FIPS 204 ML-DSA-44/65/87), and `slhdsa.nu` (FIPS 205 SLH-DSA-SHAKE);
+classical primitives `aes_gcm.nu`, `chacha20poly1305.nu`, `ecdsa_p256.nu`,
+`ed25519.nu`, `x25519.nu`, `rsa.nu`; the `hash_*.nu` family (`hash_sha256.nu`,
+`hash_sha512.nu`, `hash_sha3.nu` for FIPS 202 SHA3/SHAKE, `hash_blake2b.nu`,
+`hash_blake3.nu`, `hash_sha1.nu`, `hash_md5.nu`); `hkdf.nu`, `pbkdf2.nu`,
+`scrypt.nu`, `minisign.nu`, `subtle.nu` (constant-time comparisons),
+`x509.nu` / `x509_gen.nu`, `csr.nu` (PKCS#10), `pkey.nu` (encrypted PKCS#8 v2),
+and `ssh.nu` / `ssh_ed25519.nu` in `std/`; `crypto.nu`, `jwt.nu`, `http_jwt.nu`
+in `ext/`. See [Cryptography](./cryptography).
 
 ## Data formats and serialization
 
 `json.nu`, `msgpack.nu`, `cbor.nu`, `protobuf.nu`, `toml.nu`, `yaml.nu`, `xml.nu`,
 `csv.nu`, `serde.nu` (a `Serialize` trait), `zip.nu`, `tar.nu`,
-`compress.nu`, `deflate.nu`.
+`compress.nu`, `deflate.nu`, and `zstd.nu` (pure-NURL RFC 8878 Zstandard compressor and decompressor).
 
 `protobuf.nu` provides checked Protocol Buffers wire readers and writers for
 all scalar types, borrowed byte/submessage views, UTF-8 strings, packed fields

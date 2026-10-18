@@ -171,18 +171,18 @@ both from `main`:
 
 ## Compile and run
 
-Compile and run the program to make it read its own source code and count.
+Compile and run the program to make it read its own source code and count:
 ```bash
-./build/nurlc wc.nu > /tmp/wc.ll
-clang /tmp/wc.ll stdlib/runtime.native.o -lm -lpthread -o /tmp/wc
-/tmp/wc wc.nu 
+nurl wc.nu          # or ./nurl.sh wc.nu in a source checkout
+./wc wc.nu
 ```
 
-Or, if you built from source, the one-step wrapper:
+Or run the two compiler stages manually:
 
 ```bash
-./nurl.sh wc.nu
-./wc wc.nu
+nurlc wc.nu > /tmp/wc.ll
+clang /tmp/wc.ll ~/.nurl/lib/runtime.native.o -lm -lpthread -o /tmp/wc
+/tmp/wc wc.nu
 ```
 
 See [Compiling and running](./compiling-and-running) for what each stage

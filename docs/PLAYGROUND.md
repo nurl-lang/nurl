@@ -45,7 +45,6 @@ and serves a public **MCP endpoint** at `/mcp`.
   the guest console + exit status). The reply carries the artifact plus
   ready-to-paste QEMU commands. The same build is exposed to agents as
   MCP tool `nurl_build_unikernel`.
-  **Target** dropdown is built from this).
 - `GET /download/{build_id}/{filename}` — stream a build artifact
   produced by a `/build*` endpoint. Artifacts expire automatically
   (TTL sweep, default 1 h).

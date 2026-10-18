@@ -14,13 +14,14 @@ under `stdlib/std/`.
 
 | Area | Modules | Notes |
 |---|---|---|
-| Hashes | `hash_sha256`, `hash_sha512`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1 and MD5 are for legacy interop only, never for signatures |
+| Post-Quantum | `mlkem` (FIPS 203 ML-KEM-512/768/1024), `mldsa` (FIPS 204 ML-DSA-44/65/87), `slhdsa` (FIPS 205 SLH-DSA-SHAKE) | pure-NURL lattice and stateless hash-based KEM and signatures |
+| Hashes & XOF | `hash_sha256`, `hash_sha512`, `hash_sha3` (FIPS 202 SHA3-224/256/384/512, SHAKE128/256), `hash_blake2b`, `hash_blake3`, `hash_sha1`, `hash_md5` | SHA-1 and MD5 are for legacy interop only, never for signatures |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | |
-| AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
-| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384) | `p256_field` is a dedicated constant-time field implementation for the P-256 secret path |
+| AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the TLS 1.3 and QUIC record ciphers |
+| Classical ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `minisign` | `p256_field` is a dedicated constant-time field implementation for the P-256 secret path |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on the `bigint` module |
-| X.509 | `x509`, `tls_verify` | DER parsing plus chain, hostname, and policy verification |
-| TLS | `tls` (client, 1.3 with 1.2 fallback), `tls_server` (1.3) | |
+| X.509, PKCS & SSH | `x509`, `x509_gen`, `csr` (PKCS#10), `pkey` (encrypted PKCS#8 v2), `tls_verify`, `ssh`, `ssh_ed25519` | DER/PEM parsing, cert/CSR generation, chain/hostname/policy verification, and SSH keys/wire protocol |
+| TLS & QUIC | `tls` (client 1.3 with hybrid `X25519MLKEM768` by default, 1.2 fallback), `tls_server` (1.3), `quic_crypto`, `quic_tls` | supports both classical and ML-DSA certificates |
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*) | `rng` is explicitly **not** cryptographic — simulations only |
 | Constant-time compare | `subtle` | length-independent secret comparison |
 
@@ -35,7 +36,7 @@ non-cryptographic PRNG. The crypto and TLS code never uses it.
 
 ## Correctness
 
-Every primitive has a known-answer test that runs on every build. 
+Every primitive has a known-answer test that runs on every build, backed by **770+ Project Wycheproof vectors** and **NIST ACVP** test suites (including FIPS 203 ML-KEM, FIPS 204 ML-DSA, FIPS 205 SLH-DSA, and FIPS 202 SHA-3).
 Interoperability tests check the stack against OpenSSL, curl,
 browsers, and the `badssl.com` negative test suite. ECDSA signing uses a
 deterministic nonce (RFC 6979), so a signature is reproducible and never

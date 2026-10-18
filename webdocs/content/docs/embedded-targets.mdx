@@ -1,19 +1,36 @@
 ---
-title: Embedded targets
-description: Bare-metal NURL on microcontrollers, starting with ESP32.
+title: Unikernels and embedded targets
+description: Freestanding Unikernels (x86_64, AArch64, RISC-V64) and bare-metal microcontrollers (ESP32, RISC-V).
 icon: Microchip
 ---
 
-NURL compiles to LLVM IR with no target triple baked in. This makes it
-reachable on bare-metal targets. It reaches them the same way it reaches
-any cross-compile target. Hand the IR to the right backend. `stdlib/hal/`
-holds the hardware-facing layer this needs.
+NURL compiles to target-agnostic LLVM IR or C, making it straightforward to run without a host operating system — either as a bootable **Unikernel** appliance or directly on bare-metal microcontrollers.
+
+## Unikernels (`x86_64`, `AArch64`, `RISC-V64`)
+
+[`unikernel/`](https://github.com/nurl-lang/nurl/tree/main/unikernel) turns an ordinary `.nu` program into a self-contained, bootable kernel image with no Linux kernel or host userland underneath:
+
+```bash
+./unikernel/build.sh app.nu                        # x86_64 PVH ELF (QEMU / KVM / Firecracker)
+./unikernel/build.sh --arch aarch64 app.nu         # ARM64 QEMU virt image
+./unikernel/build.sh --arch riscv64 app.nu         # RISC-V64 QEMU virt image
+./unikernel/build.sh --iso app.nu                  # bootable BIOS + UEFI hybrid .iso
+```
+
+What is inside the unikernel target:
+
+- **`nolibc` + `runtime_bare.c`** — a freestanding C library (including a from-scratch `libm` and `malloc`), cooperative fiber scheduler, and hardware entropy driver (`RDRAND` / `RNDR` / VirtIO-RNG).
+- **Sub-5 ms boot** — enters directly via the PVH ELF note (`x86_64`) or `virt` boot stub (`AArch64` / `RISC-V64`), with optional SMP multi-vCPU wake (`APIC` / `PSCI` / `SBI HSM`).
+- **VirtIO-Net + sans-IO network stack** — `unikernel/net/sockets.nu` implements the standard NURL socket ABI (`tcp_*`, `udp_*`, `dns_*`, TLS 1.3, HTTP/1.1, HTTP/2, MCP) in pure NURL over `stdlib/net/` and `unikernel/drivers/virtionet.nu`.
+- **VirtIO-Blk + FAT12/16/32 & initfs** — read/write persistent block storage (`unikernel/drivers/virtioblk.nu`, `stdlib/fs/fat32.nu`) plus baked-in read-only filesystems.
+
+See [`unikernel/README.md`](https://github.com/nurl-lang/nurl/blob/main/unikernel/README.md) for QEMU, Firecracker, and Kubernetes (`unikernel/k8s/`) deployment guides.
 
 ## Memory-mapped I/O
 
 [`stdlib/hal/mmio.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/hal/mmio.nu)
-You use this primitive to build every register-level driver. It reads or
-writes a 32-bit word at a fixed physical address.
+provides the register-level primitives used to build hardware drivers. Each primitive reads or
+writes a 32-bit word at a fixed physical address:
 
 ```nu
 ( mmio_read32  i addr )          → i    // load  *(u32*)addr
@@ -22,11 +39,7 @@ writes a 32-bit word at a fixed physical address.
 ( mmio_clear32 i addr i32 mask ) → v    // *(u32*)addr &= ~mask
 ```
 
-These compile to LLVM's `load volatile` / `store volatile`. The optimizer
-never hoists, reorders, or coalesces an MMIO access. A spin on a device
-status register is correct at any optimization level. It is pure IR with
-no runtime call. It works on a freestanding target with no OS underneath
-it.
+Because arbitrary physical addresses bypass memory safety, `mmio_*` functions are declared `raw` and must be called from an `unsafe @` driver function. They compile to LLVM's `load volatile` / `store volatile`, so the optimizer never hoists, reorders, or coalesces an MMIO access.
 
 ## ESP32
 

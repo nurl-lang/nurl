@@ -20,12 +20,13 @@ same backend Rust and Swift use.
 
 ## Script compiling
 
-If you built NURL from source, `./nurl.sh` (or `nurl.bat`) drives
-both stages for you:
+Whether you installed the prebuilt toolchain (`nurl`) or built from source (`./nurl.sh` / `nurl.bat`), the wrapper drives both stages for you:
 
 ```bash
-./nurl.sh hello.nu              # → ./hello
-./nurl.sh hello.nu myprogram    # → ./myprogram
+nurl hello.nu                   # → ./hello
+nurl hello.nu myprogram         # → ./myprogram
+nurl --run hello.nu             # compile and run immediately
+./nurl.sh hello.nu              # repo-root equivalent in a source checkout
 ```
 
 Useful flags (put them *before* the source file):
@@ -33,7 +34,15 @@ Useful flags (put them *before* the source file):
 | Flag | Effect |
 |---|---|
 | `-O0` … `-O3` | Optimization level passed to `clang` (default `-O2`) |
-| `-g`, `--debug` | Include debug info |
+| `-g`, `--debug` | Emit DWARF debug info (`#line` directives mapping back to `.nu` lines) |
+| `--check` | Fast parse, type check, and borrow check without LLVM IR codegen |
+| `--lint` | Report unused bindings/functions, shadowed locals, and redundant frees |
+| `--unsafe-report` | Audit every `unsafe` function and raw pointer/FFI operation |
+| `--split` | Emit multi-file C shards and compile them across CPU cores in parallel |
+| `--sanitize` | Compile and link with AddressSanitizer, UBSan, and LeakSanitizer |
+| `--coverage` | Instrument line/branch coverage for `nurl-cov` |
+| `--static` | Produce a statically linked binary |
+| `--target=<triple>` | Cross-compile for the given target triple |
 | `--emit-ir` | Stop after stage 1 — just produce the `.ll` file, do not link |
 | `--emit-asm` | Emit native assembly (`.s`), skip linking |
 
@@ -82,8 +91,7 @@ plain `clang` link rejects it with *"file format not recognized"*.
 
 ## If you installed the prebuilt toolchain
 
-The prebuilt `curl | sh` installer gives you `nurlc`, `nurlpkg`, and
-`nurlfmt`, but not the `nurl.sh` convenience wrapper or a local runtime. See [Installation from source](./install.mdx#option-b--build-from-source).
+The prebuilt installer (`curl | sh` or `install.ps1`) places `nurl`, `nurlc`, `nurlpkg`, `nurlfmt`, `stdlib/`, and `lib/runtime.native.o` in `$NURL_HOME` (`~/.nurl`), so you can compile and run `.nu` files directly with `nurl hello.nu` or `nurl --run hello.nu` without building from source.
 
 ## Compiling to WebAssembly
 

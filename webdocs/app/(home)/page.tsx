@@ -25,7 +25,7 @@ const features = [
   {
     icon: ShieldCheck,
     title: 'Single-owner memory',
-    description: 'Values drop at scope exit. Borrow checking rejects use-after-move, double-free aliases, and escaping captures.',
+    description: 'Values auto-drop at scope exit. Borrow checking, an explicit unsafe/raw boundary, and a mechanized Lean 4 proof (formal/) guarantee memory safety.',
   },
   {
     icon: GitBranch,
@@ -248,8 +248,8 @@ export default function HomePage() {
         <h2 className="mt-2 text-3xl font-bold tracking-tight">{releaseFacts[2][0]} modules, included with the toolchain</h2>
         <p className="mt-4 max-w-3xl text-fd-muted-foreground">The standard library is plain NURL source: core types, general-purpose modules, and optional higher-level integrations.</p>
         <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <article className="rounded-xl border p-5"><h3 className="font-semibold">Network</h3><p className="mt-2 text-sm text-fd-muted-foreground">TCP, UDP, TLS, HTTP/1.1, HTTP/2, WebSocket, MQTT, SMTP, and peer-to-peer networking.</p></article>
-          <article className="rounded-xl border p-5"><h3 className="font-semibold">Data</h3><p className="mt-2 text-sm text-fd-muted-foreground">JSON, TOML, YAML, XML, MessagePack, CBOR, CSV, PostgreSQL, and SQLite.</p></article>
+          <article className="rounded-xl border p-5"><h3 className="font-semibold">Network</h3><p className="mt-2 text-sm text-fd-muted-foreground">TCP, UDP, Post-Quantum TLS 1.3, QUIC, HTTP/1.1, HTTP/2, HTTP/3, WebSocket, MQTT, SMTP, and peer-to-peer networking.</p></article>
+          <article className="rounded-xl border p-5"><h3 className="font-semibold">Data</h3><p className="mt-2 text-sm text-fd-muted-foreground">JSON, Protobuf, Zstandard, TOML, YAML, XML, MessagePack, CBOR, CSV, PostgreSQL, and SQLite.</p></article>
           <article className="rounded-xl border p-5"><h3 className="font-semibold">Concurrency</h3><p className="mt-2 text-sm text-fd-muted-foreground">Threads, mutexes, channels, atomics, and a stackful M:N async runtime.</p></article>
           <article className="rounded-xl border p-5"><h3 className="font-semibold">Core</h3><p className="mt-2 text-sm text-fd-muted-foreground">Collections, arbitrary-precision numbers, regex, crypto, compression, UUIDs, paths, and processes.</p></article>
           <article className="rounded-xl border p-5"><h3 className="font-semibold">AI and MCP</h3><p className="mt-2 text-sm text-fd-muted-foreground">Anthropic API support plus MCP clients, servers, sessions, and registries.</p></article>
@@ -301,6 +301,7 @@ nurlpkg publish`}</code></pre><ExternalLink href="https://reg.nurl-lang.org">Bro
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Documentation</h3><p className="mt-2 text-sm text-fd-muted-foreground">Guides and language reference for installing, writing, and running NURL.</p><Link href="/docs" className="font-medium text-fd-primary hover:underline">Read the docs →</Link></article>
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">README</h3><p className="mt-2 text-sm text-fd-muted-foreground">A repository overview of the language, runtime, and build pipeline.</p><ExternalLink href={`${repoUrl}#readme`}>Open README →</ExternalLink></article>
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Formal grammar</h3><p className="mt-2 text-sm text-fd-muted-foreground">The versioned EBNF grammar and historical snapshots.</p><ExternalLink href={`${repoUrl}/tree/main/spec`}>Open grammar →</ExternalLink></article>
+            <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Formal proof</h3><p className="mt-2 text-sm text-fd-muted-foreground">Lean 4 mechanized soundness proof of the core memory model.</p><ExternalLink href={`${repoUrl}/tree/main/formal`}>Open proof →</ExternalLink></article>
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Changelog</h3><p className="mt-2 text-sm text-fd-muted-foreground">A release-by-release record of changes.</p><ExternalLink href={`${repoUrl}/blob/main/CHANGELOG.md`}>Read changelog →</ExternalLink></article>
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Roadmap</h3><p className="mt-2 text-sm text-fd-muted-foreground">Current work and plans toward 1.0.</p><ExternalLink href={`${repoUrl}/blob/main/ROADMAP.md`}>Read roadmap →</ExternalLink></article>
             <article className="rounded-xl border bg-fd-card p-5"><h3 className="font-semibold">Package registry</h3><p className="mt-2 text-sm text-fd-muted-foreground">Browse packages, source, and generated API documentation.</p><ExternalLink href="https://reg.nurl-lang.org">Open registry →</ExternalLink></article>

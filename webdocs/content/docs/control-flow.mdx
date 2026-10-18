@@ -75,6 +75,35 @@ The loop body may not mutate `collection` itself. The borrow checker rejects
 push, remove, clear, and similar calls on it. See
 [Memory and ownership](./memory-and-ownership).
 
+### Break and continue
+
+`break` exits the innermost `~` loop immediately. `continue` jumps to the next iteration (advancing the index in a foreach loop). Both run scope-exit drops and `;` defers for bindings created inside the loop body up to that point:
+
+```nu
+~ n nums {
+    ? < n 0 { continue } {}
+    ? == n 99 { break } {}
+    ( nurl_println_int n )
+}
+```
+
+## Defer: `;`
+
+```nu
+; { cleanup_body }
+```
+
+`;` schedules a block to run when the enclosing lexical scope exits — whether by reaching the closing `}`, returning via `^`, propagating an error via `\`, or exiting a loop with `break` / `continue`. Multiple `;` statements in the same scope run in reverse (LIFO) order, and only defers whose `;` statement was actually reached at runtime execute.
+
+```nu
+@ process_item → !i s {
+    ( acquire_trace_span )
+    ; { ( release_trace_span ) }
+    : i v \ ( step_that_may_fail )
+    ^ @ !i s { T v }
+}
+```
+
 ## Binary operators
 
 Arithmetic, comparison, shift, and logical operators are all strictly
@@ -86,9 +115,7 @@ write one operator per pair, n−1 operators for n values:
 | | a b c d      // a || b || c || d
 ```
 
-The compiler warns on the common mistake of writing an n-ary chain as flat
-arguments to `?`. The extra values silently become the `?`'s then/else
-operands. They do not become more operands to `&`.
+The compiler rejects the common mistake of writing a flat n-ary chain inside `?` (where extra values would otherwise become the `?`'s then/else operands) as a **compile error by default** (demoted to a warning only with `--no-strict-arity`).
 
 ## Match: `??`
 

@@ -96,6 +96,18 @@ nwasm run program.wasm
 It links with a bundled `zig cc`. `wasmbuilder --doctor` diagnoses a local
 setup.
 
+## Compiler analysis, debugging, and coverage
+
+The compiler and wrapper ship built-in static analysis, source-level debugging, sanitizers, coverage, and doc generation:
+
+- **Fast check (`--check`)** — `nurlc --check file.nu` runs parsing, type checking, and borrow checking without emitting LLVM IR.
+- **Linter (`--lint`)** — `nurlc --lint file.nu` warns on unused bindings and functions, shadowed locals, and redundant explicit frees (`[redundant-free]`).
+- **Unsafe audit (`--unsafe-report`)** — `nurlc --unsafe-report file.nu` prints a structured audit of every `unsafe` function and every raw pointer/FFI operation inside it.
+- **Source-level debugging (`-g` / `--debug`)** — `nurl -g -O0 file.nu` emits `#line` directives mapping back to `.nu` files and lines so `gdb` and `lldb` can set breakpoints and inspect stack frames by `.nu` line number.
+- **Sanitizers (`--sanitize`)** — `nurl --sanitize file.nu` compiles and links with AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer.
+- **Coverage (`--coverage` & `nurl-cov`)** — `nurl --coverage file.nu` instruments line and branch counters; `tools/nurl-cov/` aggregates runs into human-readable or LCOV reports.
+- **Documentation (`nurldoc`)** — `stdlib/ext/nurldoc.nu` extracts `///` doc comments and public signatures into Markdown or HTML API docs.
+
 ## Next
 
 - [Formatting](./formatting) — the rules `nurlfmt` enforces.

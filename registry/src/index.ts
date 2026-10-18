@@ -551,7 +551,7 @@ const PAGE_STYLE =
   `.site-head{display:flex;align-items:center;gap:.6rem;` +
     `margin:-1rem 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid #e5e5e5}` +
   `.site-head .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#1a1a1a}` +
-  `.site-head .badge{display:inline-flex;background:#0f1115;border-radius:9px;padding:5px;` +
+  `.site-head .badge{display:inline-flex;border-radius:8px;overflow:hidden;` +
     `box-shadow:0 2px 10px rgba(20,184,166,.25)}` +
   `.site-head .badge img{display:block}` +
   `.site-head .wm{font-size:1.1rem;font-weight:600;letter-spacing:.01em}` +
@@ -562,13 +562,21 @@ const PAGE_STYLE =
   `.files{border-collapse:collapse;width:100%}` +
   `.files td{border-bottom:1px solid #eee;padding:.25rem .5rem}`;
 
-// Branded header injected on every registry page. The mark is served from
-// the main site (nurl-lang.org) and sits on a dark chip so the neon reads
-// against the light page.
+// Same icon as nurlapi/static/favicon.svg — served directly at /favicon.svg
+// so the registry header badge and tab icon work standalone without external
+// cross-origin image dependencies.
+const FAVICON_SVG =
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640">\n` +
+  `  <rect width="640" height="640" rx="128" fill="#1e1e2e"/>\n` +
+  `  <path fill="#14b8a6" d="m 441.2201,305.6673 -0.1953,120.9121 0.3457,69.8593 h -91.7441 v -131.0937 l -126.041,98.5351 -38.5391,-49.2988 80.961,-63.291 h -190.5254 l -0.012,120.9453 c 0,51.1151 41.1409,92.2685 92.2559,92.2735 l 304.5078,0.029 c 51.1151,0 92.2705,-41.1409 92.2754,-92.2559 v -14.0371 z"/>\n` +
+  `  <path fill="#14b8a6" d="m 167.7729,75.4675 c -51.1151,0 -92.2685,41.1408 -92.2735,92.2559 l -0.012,120.9921 h 190.5137 l -80.957,-63.289 38.5371,-49.2989 126.041,98.5333 v -131.0938 h 91.7441 l 123.1563,152.4121 0.012,-128.209 c 0,-51.115 -41.1428,-92.2685 -92.2578,-92.2734 z"/>\n` +
+  `</svg>\n`;
+
+// Branded header injected on every registry page.
 const SITE_HEAD =
   `<div class="site-head">` +
     `<a class="brand" href="/">` +
-      `<span class="badge"><img src="https://nurl-lang.org/img/logo-sm.png" width="30" height="30" alt="NURL"></span>` +
+      `<span class="badge"><img src="/favicon.svg" width="32" height="32" alt="NURL"></span>` +
       `<span class="wm">NURL <b>registry</b></span>` +
     `</a>` +
     `<span class="spacer"></span>` +
@@ -579,7 +587,7 @@ function htmlPage(title: string, bodyHtml: string, status = 200): Response {
   return new Response(
     `<!doctype html><meta charset=utf-8><title>${title}</title>` +
       `<meta name=viewport content="width=device-width,initial-scale=1">` +
-      `<link rel="icon" href="https://nurl-lang.org/favicon.svg">` +
+      `<link rel="icon" type="image/svg+xml" href="/favicon.svg">` +
       `<style>${PAGE_STYLE}</style>` +
       `<body>${SITE_HEAD}${bodyHtml}</body>`,
     { status, headers: { "content-type": "text/html; charset=utf-8" } },
@@ -987,6 +995,14 @@ export default {
 
     if (req.method === "GET") {
       if (path === "/") return handleCatalog(url, env);
+      if (path === "/favicon.svg" || path === "/favicon.ico") {
+        return new Response(FAVICON_SVG, {
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "public, max-age=86400",
+          },
+        });
+      }
       if (path === "/robots.txt") {
         return new Response("User-agent: *\nAllow: /\n", {
           headers: { "content-type": "text/plain; charset=utf-8" },

@@ -40,6 +40,20 @@ copy. Writes to it do not reach the caller. To mutate the caller's
 struct, the parameter needs the `inout` convention. See
 [Memory and ownership](./memory-and-ownership).
 
+### Encapsulated structs: `raw : Name`
+
+Prefixing a struct declaration with `raw` seals its invariants to the defining module's `unsafe` / `raw` boundary:
+
+```nu
+raw : Vec [T] {
+    *T data
+    i len
+    i cap
+}
+```
+
+Safe callers can hold, pass, and auto-drop a `raw` struct, but direct field reads (`. v data`), field writes (`= . v len 99`), and struct literal construction (`@ Vec { ... }`) are restricted to `unsafe` and `raw` functions. Standard library containers and OS handles use `raw :` so safe code cannot forge pointers or corrupt lengths.
+
 ## Enums
 
 ```nu
@@ -125,6 +139,12 @@ override it inherits that body, specialized to the implementing type.
 
 You can use at most one impl block per `(method, type)` pair.
 Implementing the same method for the same type twice causes a compile error.
+
+Built-in lifecycle and marker traits hook into the compiler's ownership and concurrency checks:
+- `Drop` (`@ drop T self → v`) — runs automatically when an owned value leaves scope.
+- `Copy` — marks an owning type as implicitly deep-cloneable on copy.
+- `Send` / `NotSend` — controls whether a type may cross a `thread_spawn` boundary (`Rc` implements `NotSend`).
+- `Resource` — marks an linear/affine handle that must be consumed rather than silently dropped.
 
 ### Supertraits
 
