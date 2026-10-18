@@ -280,7 +280,7 @@ platform-specific shims.
   `term` (POSIX termios, ANSI), `sysinfo` (`uname` fields, host name,
   processor count).
 - **std/crypto & encoding** — **Post-Quantum Cryptography**: `mlkem` (ML-KEM-512/768/1024, FIPS 203),
-  `mldsa` (ML-DSA-44/65/87 & HashML-DSA, FIPS 204), `slhdsa` (SLH-DSA, FIPS 205, SHAKE & SHA-2 families),
+  `mldsa` (ML-DSA-44/65/87 & HashML-DSA, FIPS 204), `slhdsa` (SLH-DSA, FIPS 205, SHAKE family),
   `hash_sha3` (SHA-3 & SHAKE128/256, FIPS 202). **Classical & symmetric**: `x25519`, `ed25519`,
   `ecdsa_p256` (P-256 + P-384 constant-time), `rsa` (PKCS#1 v1.5 + PSS), `aes_gcm`, `chacha20poly1305`,
   `hash` (SHA-1/224/256/384/512, SHA-512/224, SHA-512/256, MD5, HMAC), `hash_blake3`, `hash_xxh64` (XXH64),

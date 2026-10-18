@@ -85,28 +85,28 @@ a `sink` yet; the compiler rejects it rather than risk two owners.
 
 ## What you still free by hand
 
-The compiler drops `String`, `Vec`, owning structs, library handles
-(`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`), handle enums
-(`Json`, `TomlValue`) and closure environments, wherever they are kept.
-`string_free` / `vec_free` remain as an optional early release, and
-`--lint` flags one that sits where the drop would happen anyway
-(`[redundant-free]`). A hand-written free of a closure environment is a
-compile error.
+In safe NURL, **nothing is released by hand**. The compiler automatically drops `String`, `Vec`, owning structs, collections (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`), recursive enums (`Json`, `TomlValue`), closure environments, and **all 87 standard-library handle types** — including `TcpConn`, `TcpListener`, `TlsStream`, `UdpSocket`, `UnixConn`, `UnixListener`, `File`, `Channel`, `Mutex`, `Cond`, `ProcChild`, `FsWatch`, and `Sqlite`. Every OS and container handle wraps `( Shared T )` or `Arc` and closes or releases automatically when its last owner goes out of scope.
 
-What stays manual is what the compiler does not own:
+Explicit `_close` and `_free` helpers (`string_free`, `vec_free`, `file_close`, `tcp_close_conn`, `udp_close`, `chan_free`, etc.) remain only as an optional early release before the end of a scope, and `--lint` flags any call that sits right where scope-exit drop would happen anyway (`[redundant-free]`).
 
-- raw memory from `nurl_alloc` behind a `*T` pointer, in an `unsafe`
-  function (release with `nurl_free`), and a value handed over for good
-  with `( mem_forget x )`;
-- operating-system resources that have no owning handle, such as UDP and
-  Unix-domain sockets (`udp_close`, `unix_close_conn`). A `TcpConn`, a
-  `TcpListener` and an `FsWatch` close with their last owner
-  (`tcp_close_conn` and `fswatch_close` close one early).
+Only raw memory inside `unsafe` functions is managed by hand:
 
-`Channel`, `Mutex`, `Cond`, `File` and `ProcChild` are not on this list:
-each is a handle whose last copy releases it, and `chan_free`,
-`mutex_free`, `cond_free`, `file_close` and `proc_free` remain as an
-optional early release.
+- raw allocations from `nurl_alloc` behind a `*T` pointer inside an `unsafe` function (release with `nurl_free`);
+- values explicitly surrendered inside an `unsafe` function via `( mem_forget x )`.
+
+## Views are values
+
+A `Slice` (`slice_from_vec`, `slice_window`, `slice_of_str`, `string_bytes`, `file_map`) is a first-class, non-owning view (`ptr + len`). Views are ordinary values: you can bind them, pass them to functions, store them inside structs, `Option`, or `Vec`, and return them from functions whose first parameter owns the backing storage.
+
+The borrow checker tracks the backing owner for every view and prevents mutating, growing, or dropping the owner while any view derived from it is still live:
+
+```nu
+: ( Vec i ) v ( vec_new [i] )
+( vec_push [i] v 10 )
+: ( Slice i ) view ( slice_from_vec [i] v )
+// ( vec_push [i] v 20 )   // compile error: cannot mutate v while view is live
+( nurl_println_int ( slice_get [i] view 0 ) )
+```
 
 ## The borrow checker
 
@@ -140,27 +140,17 @@ What it checks, briefly:
   loop body and reading it again on the next iteration. This catches the
   same problem as a free-inside-a-loop double-free in C.
 
-<Callout type="info" title="This is diagnostic, not Rust's ownership system">
-The checker is a pass over an already-memory-safe base. Auto-drop never
-double-frees on its own. The checker is conservative. It rejects a program
-it cannot prove safe, and the error names a change that satisfies the
-rule. Together, the two layers guarantee that every program the compiler
-accepts, outside the bodies of `unsafe` functions, is memory-safe and
-leak-free (`docs/MEMORY.md` §6.2). No hole is known: each one found has a
-probe in `tools/fuzz/holes/` that CI holds.
-Raw `*T` pointers, pointer casts, raw memory and foreign (FFI) calls are
-the escape hatch, and only an `unsafe` function can use them. The full
-soundness contract is in
-[`docs/MEMORY.md` §6](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
+<Callout type="info" title="Soundness boundary and mechanized Lean 4 proof">
+Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 273 regression probes in `tools/fuzz/holes/` (`h01`–`h273`), and the core ownership and borrow calculus has a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (`A1.memory_safe`, zero `sorry` axioms). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
 </Callout>
 
 ## Threads and shared state
 
-Sending a value across a thread boundary follows the same ownership rules.
-The compiler rejects an `Rc` (non-atomic reference count) captured by a
-`thread_spawn` closure. Two threads racing on its count is undefined
-behavior. Use `Arc` (atomic reference count) for any handle a thread needs
-to share.
+Sending a value across a thread boundary follows the same ownership rules:
+
+- The compiler checks `Send` / `NotSend` bounds on everything captured by a `thread_spawn` closure and rejects non-atomic handles like `Rc`.
+- `Arc` (`stdlib/std/arc.nu`) provides atomic reference counting for shared read-only payloads (`arc_get` returns an immutable view).
+- Mutable state shared across threads lives in `Locked [T]` (`locked_new`, `locked_with` in `stdlib/std/thread.nu`), which pairs an atomic reference count with a mutex so concurrent accesses are serialized safely.
 
 ## Reading NURL's compiler errors
 
@@ -174,5 +164,4 @@ diagnostics point at most often.
 
 - [Common pitfalls](./common-pitfalls) — the practical cases worth knowing up front.
 - [Concurrency](./concurrency) — threads, fibers, and channels.
-- For the exact rule-by-rule semantics and the soundness contract, see
-  [`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
+- For the exact rule-by-rule semantics, see [`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md) and the mechanized Lean 4 formalization in [`formal/README.md`](https://github.com/nurl-lang/nurl/blob/main/formal/README.md).

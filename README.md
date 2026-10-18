@@ -14,8 +14,8 @@ NURL takes a few design positions that are uncommon together:
 
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
-- **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
-- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): every hole found so far is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/), and nothing is released by hand.
+- **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers in `unsafe` code inherit LLVM semantics — spec §4.2, §6.1; out-of-range shifts are rejected at compile time or panic at runtime.)
+- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): the core memory model (`A1.memory_safe`) is mechanically proven sound in Lean 4 ([`formal/`](formal/)), every hole found across the tree (`h01–h273`) is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/), and nothing is released by hand.
 - **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. The messages do the work a gotchas document used to, and CI fails a change that adds a diagnostic no test makes the compiler print (`tools/check_diag_coverage.sh`).
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
@@ -82,7 +82,7 @@ Prebuilt `nurlc` / `nurlpkg` / `nurlfmt` binaries, one command — no clang, no
 build:
 
 ```bash
-# Linux / FreeBSD  (macOS: build from source — see Building)
+# Linux / FreeBSD / macOS
 curl -fsSL https://nurl-lang.org/install.sh | sh
 ```
 
@@ -164,11 +164,12 @@ use after move, a borrow or view read after its source ended, escaping
 closure captures, iterator invalidation and unsynchronised sharing between
 threads as hard compile errors, without ever changing generated code: every
 program accepted without an `unsafe` function of its own is memory-safe
-and leak-free (`docs/MEMORY.md` §6.2; every hole found so far is closed). The
+and leak-free (`docs/MEMORY.md` §6.2; `A1.memory_safe` is mechanically proven
+in Lean 4 under [`formal/`](formal/), and every hole found so far is closed). The
 one remaining source-level trap, the
 n-ary `&`/`|` foot-gun, is a hard error by default; `--no-strict-arity`
 demotes it to a warning for trees that need to keep building.
-Full model, the guarantee and its trusted base: [`docs/MEMORY.md`](docs/MEMORY.md).
+Full model, the guarantee and its trusted base: [`docs/MEMORY.md`](docs/MEMORY.md) and [`formal/README.md`](formal/README.md).
 
 The type system is strong, static, inferred, algebraic (sum types `|`,
 product types via structs), with no subtyping and no implicit conversions.
@@ -226,6 +227,7 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Tooling — editor / LSP / formatter / package manager | [`docs/TOOLING.md`](docs/TOOLING.md) |
 | Canonical source format (`nurlfmt`) | [`docs/FORMAT.md`](docs/FORMAT.md) |
 | Memory model & borrow checker | [`docs/MEMORY.md`](docs/MEMORY.md) |
+| Mechanized soundness proof (Lean 4) | [`formal/README.md`](formal/README.md) |
 | Async runtime (fibers) | [`docs/ASYNC.md`](docs/ASYNC.md) |
 | Networking & MQTT client | [`docs/NETWORKING.md`](docs/NETWORKING.md) |
 | Cryptography & TLS (pure-NURL, no OpenSSL) | [`docs/CRYPTO.md`](docs/CRYPTO.md) |
@@ -256,14 +258,17 @@ nurl/
 │   └── tests/             — .nu test programs + snapshot runner + golden baseline
 ├── stdlib/
 │   ├── runtime.c           — C runtime (I/O, string helpers, FFI surface)
-│   ├── core/ std/ ext/     — the NURL standard library
+│   ├── core/ std/ ext/ net/ dist/ hal/ — the NURL standard library (236 modules)
 │   └── runtime.o, …      — runtime objects (build outputs of build.sh)
+├── formal/                 — Lean 4 mechanized soundness proof (A1.memory_safe)
+├── packages/               — first-party packages published to reg.nurl-lang.org
 ├── examples/               — curated .nu programs (see examples/README.md)
 ├── nurlapi/                — NURL-native container: compiler-as-a-service + playground + MCP
 ├── unikernel/              — bootable unikernel images (x86_64 / AArch64 / RISC-V64)
 ├── tooling/vscode-nurl/    — editor extension (syntax + LSP client)
-├── tools/                  — nurl-lsp, nurlfmt, nurlpkg build scripts
+├── tools/                  — nurl-lsp, nurlfmt, nurlpkg build scripts & verification gates
 ├── docs/                   — topic documentation (see the table above)
+├── webdocs/                — nurl-lang.org documentation site (Fumadocs + Next.js)
 ├── bench/                  — reproducible benchmark suite
 ├── build.sh / build.bat    — full bootstrap + test-suite driver
 └── nurl.sh  / nurl.bat     — compile a .nu file

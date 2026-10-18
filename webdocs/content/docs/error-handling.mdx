@@ -15,7 +15,7 @@ type. It uses one of two built-in types.
 
 ```nu
 @ ?T { T payload }   // Some
-@ ?T { F 0 }          // None (the second value is ignored on the None tag)
+@ ?T { F }           // None (`@ ?T { F 0 }` is also accepted)
 ```
 
 Match it with `??`, using `T` / `F` as the tag pattern:
@@ -100,8 +100,9 @@ and turns a panic inside it into an `Err`, from
 ?? r {
     T _ → { /* resp holds risky_handler's return value */ }
     F p → { /* resp still holds the 500 default; p.msg has the reason */
-            ( panic_info_free p ) }
+            ( nurl_eprint ( string_data . p msg ) ) }
 }
+// PanicInfo is owned by r and freed automatically when r leaves scope
 ```
 
 <Callout type="warn" title="Panics are a crash-mitigation tool, not a routine error path">

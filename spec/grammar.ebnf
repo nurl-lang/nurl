@@ -473,9 +473,9 @@ expr = literal
    '<<' and '>>' are integer-only:
      - i64 / i32 →  LLVM `shl` (left) / `ashr` (arithmetic right)
      - any other operand type is a compile error.
-   The shift count is an i64 by convention; only the low 6 bits matter
-   for i64 operands. Behaviour for negative or out-of-range counts
-   matches LLVM's `shl`/`ashr` (poison for >= bitwidth).
+   The shift count is an i64 by convention. Constant shift counts < 0
+   or >= bitwidth are rejected at compile time; dynamic out-of-range
+   shift counts abort at runtime via `__nurl_panic("shift amount out of range")`.
 
    '^^' (XOR) maps directly to LLVM `xor`:
      - integer operands →  bitwise XOR
@@ -507,11 +507,12 @@ expr = literal
        & a & b & c d        — (a && b && c && d)
        | | | a b c d        — (a || b || c || d)
 
-   The compiler warns on the most common foot-gun shape — `? & a b c d
-   { ... } { ... }` — where the bare `c`/`d` were consumed as the
-   ternary's then/else and the `{ ... }` blocks became side-effect
-   statements. Other contexts (function args, while conditions) still
-   need user awareness — count operands left-to-right.
+   The compiler rejects the most common foot-gun shape — `? & a b c d
+   { ... } { ... }` — as a hard error by default (`--no-strict-arity`
+   demotes it to a warning), where the bare `c`/`d` would otherwise be
+   consumed as the ternary's then/else and the `{ ... }` blocks become
+   side-effect statements. Other contexts (function args, while conditions)
+   still need user awareness — count operands left-to-right.
 
    '||' and '&&' (the two-char forms) are an alternative spelling for
    the bool-only short-circuit cases of '|' / '&'. They are strict

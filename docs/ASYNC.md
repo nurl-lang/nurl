@@ -160,19 +160,22 @@ itself.
 Fibers need pthreads, `mmap`, and a stackful context switch. The switch
 has two backends:
 
-- **`stdlib/runtime_ctx.c`** — NURL's own, in x86_64 SysV asm. It
+- **`stdlib/runtime_ctx.c`** — NURL's own inline-assembly switch on all three
+  64-bit ISAs (`x86_64` SysV, `AArch64` AAPCS64, and `RISC-V64` LP64D). It
   depends on the instruction set alone, so it needs no libc support at
-  all, and it does not pay `swapcontext`'s `sigprocmask` syscall: 8 M
-  yields through the scheduler take 0.38 s against ucontext's 6.90 s,
-  with `sys` time going from 2.1 s to zero.
-- **`ucontext`** (`getcontext`/`makecontext`/`swapcontext`) — everywhere
-  else, on the libcs that ship a working one.
+  all (including musl, macOS ARM64 where Apple's `ucontext` is broken, and
+  freestanding unikernels), and it does not pay `swapcontext`'s `sigprocmask`
+  syscall: 8 M yields through the scheduler take 0.38 s against ucontext's
+  6.90 s, with `sys` time going from 2.1 s to zero.
+- **`ucontext`** (`getcontext`/`makecontext`/`swapcontext`) — fallback on
+  other POSIX architectures whose libcs ship a working one.
 
 | Platform | Fibers |
 |---|---|
-| Linux x86_64 (glibc **or musl**) | ✔ own switch |
-| macOS x86_64 | ✔ own switch |
-| Linux/macOS arm64, FreeBSD / NetBSD / DragonFly | ✔ ucontext |
+| Linux x86_64 / arm64 / riscv64 (glibc **or musl**) | ✔ own asm switch (`runtime_ctx.c`) |
+| macOS x86_64 / arm64 | ✔ own asm switch (`runtime_ctx.c`) |
+| FreeBSD / NetBSD / DragonFly (x86_64 / arm64) | ✔ own asm switch (`runtime_ctx.c`, `ucontext` fallback on other ISAs) |
+| Unikernel (x86_64 / arm64 / riscv64) | ✔ own asm switch (`runtime_bare.c`) |
 | OpenBSD | stubbed (removed `swapcontext`) |
 | Windows, WASI | stubbed |
 

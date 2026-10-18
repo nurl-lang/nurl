@@ -10,9 +10,11 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**No open soundness holes.** Every safe program the 0.72.0 release review
-found accepted and faulting is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) ([`MEMORY.md` §6.2](MEMORY.md)).
+**No open soundness holes.** Every safe program found accepted and faulting
+across the 0.72.0 and 0.73.0 reviews is closed, and held by a probe in
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h273`, [`MEMORY.md` §6.2](MEMORY.md));
+the core ownership model (`A1.memory_safe`) is mechanically proven sound in
+Lean 4 ([`formal/`](../formal/)).
 
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
 vs `^^`) are documented in the [Grammar](#grammar) section below; the
@@ -40,12 +42,12 @@ closure-capture and `: ~` closure-borrow-escape rules live in
 Safe code is held to the ownership rules, data races included
 ([`MEMORY.md` §6.2](MEMORY.md)). What is trusted rather than checked —
 marker assertions — is listed in
-[`MEMORY.md` §3 and §6.4](MEMORY.md); read those before relying on a
+[`MEMORY.md` §3, §6.4, and §6.5](MEMORY.md); read those before relying on a
 thread-safety expectation the rules do not state.
 
 | Limitation | Workaround |
 |---|---|
-| `Send` / `Sync` are **derived from a type's structure, not proved**. The compiler knows two unsafe leaves — `Rc` (non-atomic refcount) and `Cell` (raw unsynchronised byte buffer) — and propagates them through struct fields, enum payloads, generic arguments, aggregates and closure captures. It knows nothing about an FFI handle: no C pointer is a leaf, however it is spelled — `*u` (as the sqlite declarations take a `sqlite3*`), `s` (as the stdio pass-throughs still carry a `FILE*`) or an integer — so a struct holding a `sqlite3*` or a `FILE*` derives as Send and crosses without a word. Binding a C library takes `unsafe` functions, and marking its handle types is part of what their author vouches for | Mark the type: `% NotSend Db { }` (or `% NotSync`) from `stdlib/core/marker.nu`. It propagates exactly like a built-in leaf — a struct holding it, a `( Vec Db )`, a closure capturing one are all rejected at the boundary. `stdlib/ext/sqlite` marks its own `Database` and `Statement` this way, so that one is handled; every other binding that wraps a C handle still has to say so itself |
+| `Send` / `Sync` are **derived from a type's structure, not proved**. The compiler knows two unsafe leaves — `Rc` (non-atomic refcount) and `Cell` (raw unsynchronised byte buffer) — and propagates them through struct fields, enum payloads, generic arguments, aggregates and closure captures. It knows nothing about an FFI handle: no C pointer is a leaf, however it is spelled — `*u` (as the sqlite declarations take a `sqlite3*`), `s` (as the `raw` stdio pass-throughs `file_raw` / `file_from_raw` carry a `FILE*`) or an integer — so a struct holding a `sqlite3*` or a `FILE*` derives as Send and crosses without a word. Binding a C library takes `unsafe` functions, and marking its handle types is part of what their author vouches for | Mark the type: `% NotSend Db { }` (or `% NotSync`) from `stdlib/core/marker.nu`. It propagates exactly like a built-in leaf — a struct holding it, a `( Vec Db )`, a closure capturing one are all rejected at the boundary. `stdlib/ext/sqlite` marks its own `Database` and `Statement` this way, so that one is handled; every other binding that wraps a C handle still has to say so itself |
 | The derivation is also **conservative in the other direction**: a type that is thread-safe by construction but structurally suspect is rejected — one that holds a `Cell` but synchronises access to it itself | Assert it: `% Send T { }` / `% Sync T { }`. An explicit marker stops the walk at that type — nothing inside is examined, because you have taken responsibility for it. This is NURL's spelling of Rust's `unsafe impl`, and a negative marker outranks a positive one on the same type |
 | `Send` answers "may this value **move** to another thread", never "is this program race-free". `( Vec i )` and `s` are Send **and** Sync — correctly, because sharing one read-only is ordinary code — so two threads *mutating* one is not caught by this check | It is caught by the move rule: a thread closure moves its captures, so only share handles (`Channel`, `Mutex`, `Arc`, `Locked`) are used on both sides ([`MEMORY.md` §6.5](MEMORY.md)); a mutation through a shared `Arc` is the next row |
 | Changing the **contents** of an `Arc` is rejected in safe code — on every thread, the one that made it included, and whatever lock is held. `Arc` makes the refcount atomic, not the payload: every clone reads it without a lock, and `arc_get` over a `Vec`/`String` hands back a handle aliasing the one buffer. A call that hands an `arc_get` result (or a field of one) to anything that changes it — a container mutator, a `String`'s or a map's, a helper, at any depth — is a compile error, and `arc_set` is for `unsafe` code only | Build the value first and `arc_new` it whole; put state threads share and change in a `Locked [T]` (`stdlib/std/thread.nu`: `locked_with` / `locked_set` hold its own lock, so the lock that guards the data is the one its type names); keep state one thread changes in an `Rc`; or give each thread its own copy and merge after `thread_join` |

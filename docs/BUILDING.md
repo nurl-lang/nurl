@@ -7,10 +7,11 @@ suite uses PowerShell 7. Clone the repo and run `./build.sh` (or `build.bat`
 on Windows). The committed `compiler/nurlc_lastgood.ll` snapshot boots the
 self-hosted chain.
 
-Optional stdlib features pull in their own pkg-config libraries at link
-time (`libpq-dev`, `libsqlite3-dev`, `libssl`, `libcurl`, `libz`, …); each
-degrades with a clear diagnostic when absent. See
-[`LIMITATIONS.md`](LIMITATIONS.md).
+Optional stdlib features (`sqlite3`, `X11`, `asound`, `opus`, `cuda`, `nvrtc`,
+`sdl2`) pull in their own system libraries at link time only when a program
+imports them; each degrades with a clear diagnostic when absent (TLS, QUIC,
+HTTP/1–3, Postgres, deflate, and Zstandard are pure NURL with no C library
+dependency).
 
 ## Prerequisites
 
@@ -564,12 +565,15 @@ one that touches both code and either of them runs everything.
 | Job / step | What it checks |
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
+| soundness hole probes | `tools/fuzz/holes/check.sh` — all `h01–h273` soundness probes are rejected or run clean under sanitizers |
+| formal soundness proof (Lean 4) | `lake build` in `formal/` — checks the mechanized proof of `A1.memory_safe` with zero `sorry` |
+| diagnostic coverage & anchor gates | `tools/check_diag_coverage.sh` and `tools/check_diag_anchor.sh` — every compiler diagnostic is exercised by a test and points at the right token |
 | self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |
 | self-compile leak gate | `tools/leakgate.sh` — `nurlc compiler/nurlc.nu` must leak nothing under LSan; runs when `compiler/nurlc.nu` changes |
-| examples corpus frontend gate | every program under `examples/` compiles (`tools/check_examples.sh`) |
-| stdlib symbol-collision gate | no two stdlib helpers mangle to the same symbol (`tools/check_stdlib_symbols.sh`) |
+| examples & package gates | every program under `examples/` compiles (`tools/check_examples.sh`); package imports and versions are consistent (`tools/check_package_imports.sh`, `tools/check_package_version_strings.sh`) |
+| stdlib symbol & builtins doc gates | `tools/check_stdlib_symbols.sh` and `tools/check_builtins_doc.sh` |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
-| HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
+| HTTP leak + HTTP/2 & HTTP/3 conformance | `tools/leakcheck/run.sh`, `tools/h2spec_gate.sh` (h2spec), and `tools/h3spec_gate.sh` (49/49 h3spec over QUIC) |
 | AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan (CI: targeted controls in one job, the corpus in two parallel shards via `NURL_SAN_SHARD=i/n`) |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
 | unikernel: the corpus with no libc | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |

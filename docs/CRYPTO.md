@@ -23,23 +23,23 @@ does **not** promise.
 
 ## 1. What's implemented
 
-All sources live in `stdlib/std/`.
+Sources live in `stdlib/std/` (with JWT and SSH protocol helpers in `stdlib/ext/`).
 
 | Area | Module(s) | Notes |
 |---|---|---|
-| Hashes | `hash_sha256` (SHA-224/256), `hash_sha512` (SHA-384/512, SHA-512/224, SHA-512/256), `hash_sha3`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
+| Hashes | `hash_sha256` (SHA-224/256), `hash_sha512` (SHA-384/512, SHA-512/224, SHA-512/256), `hash_sha3`, `hash_blake2b`, `hash_blake3`, `hash_sha1`, `hash_md5` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
 | XOF | `hash_sha3` (SHAKE128/256) | extendable output, incremental squeeze; ML-KEM is built on it |
 | Post-quantum KEM | `mlkem` (ML-KEM-512/768/1024, FIPS 203) | checked byte-for-byte against NIST's ACVP vectors |
 | Post-quantum signature | `mldsa` (ML-DSA-44/65/87, FIPS 204) | pure, external-mu and HashML-DSA; all 615 ACVP cases |
 | Post-quantum signature, hash-based | `slhdsa` (SLH-DSA, FIPS 205, SHAKE family) | six parameter sets; security rests only on the hash |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
-| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519 ladder over a five-limb radix-2^51 field (curve25519-donna-c64); `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
+| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field`, `minisign` | TweetNaCl-derived 25519 ladder over a five-limb radix-2^51 field (curve25519-donna-c64); `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path; `minisign` verifies Ed25519 + BLAKE2b release/package signatures |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify`, `x509_gen`, `csr`, `pkey` | DER parser + chain/host/policy verification; generates self-signed P-256 and ML-DSA certificates; PKCS#10 requests; PEM private-key loading (SEC1 / PKCS#8 P-256, RSA, ML-DSA). `tls_verify` anchors to the system bundle, or to `$SSL_CERT_FILE` when set — which **replaces** the bundle rather than adding to it, matching OpenSSL, and fails closed with "no trust anchor" if the path is unreadable |
 | CSR | `csr` | PKCS#10 (RFC 2986) parser, generator (ECDSA P-256, Ed25519), self-signature verifier (ECDSA P-256, Ed25519, RSA, ML-DSA), and CA certificate issuance |
-| JWT | `ext/jwt`, `ext/http_jwt` | HS256, EdDSA (Ed25519), ES256 (ECDSA P-256 + SHA-256, RFC 7518 §3.1), HTTP bearer-auth middleware |
+| JWT & SSH | `ext/jwt`, `ext/http_jwt`, `ssh`, `ext/ssh_ed25519` | HS256, EdDSA (Ed25519), ES256 (ECDSA P-256 + SHA-256, RFC 7518 §3.1), HTTP bearer-auth middleware, OpenSSH key/signature handling |
 | TLS | `tls` (client, 1.3 + 1.2 fallback), `tls_server` (1.3) | record layer, key schedule, handshake; the client offers `X25519MLKEM768` first |
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*, **not** crypto) | |
 | Constant-time | `subtle` | length-independent secret comparison |
@@ -290,7 +290,7 @@ be **sound, not a hardware-grade side-channel-free implementation**:
 
 An external audit, a fixed-limb RSA field (removing the last operand-time
 dependence), and statistical timing measurement (dudect-style) remain open
-work — see `TODO.md`.
+work — see [`ROADMAP.md`](../ROADMAP.md).
 
 ---
 

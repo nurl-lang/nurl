@@ -174,10 +174,10 @@ A `$ "path"` declaration inline-compiles the `.nu` file at `path` into
 the current module. The path is resolved relative to the compiler's
 current working directory, **not** relative to the importing file.
 
-The same path is imported **at most once** per compilation. Dedup is
-keyed on the path string after normalising a leading `./`. Symlink-
-equivalent paths still collide as separate imports (path canonicalisation
-is roadmap, not yet implemented).
+The same path is imported **at most once** per compilation. Dedup keys on
+the `realpath(3)`-canonical file path (falling back to the normalised path
+string when `realpath` fails), so the same file reached through different
+symlink chains compiles only once.
 
 Without an alias, all top-level names from the imported file land in the
 global namespace unchanged:
@@ -473,8 +473,9 @@ way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6.2 — every hole found so far, 0.71.0's `Slice` one
-and the 37 the 0.72.0 review found among them, is closed and held by a
+(docs/MEMORY.md §6.2 — the core memory model `A1.memory_safe` is
+mechanically proven sound in Lean 4 under `formal/`, and every hole found
+across the 0.71.0–0.73.0 reviews, `h01–h273`, is closed and held by a
 probe in `tools/fuzz/holes/`).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
@@ -1478,9 +1479,11 @@ For an n-ary chain write n-1 operators:
 | | | a b c d        // a || b || c || d
 ```
 
-The compiler warns on the canonical foot-gun
-`? & a b c d { ... } { ... }` (the bare `c`/`d` are consumed as the
-ternary's then/else, the `{ ... }` blocks become statements).
+The compiler rejects the canonical foot-gun
+`? & a b c d { ... } { ... }` (where the bare `c`/`d` would otherwise be
+consumed as the ternary's then/else and the `{ ... }` blocks become
+statements) as a hard error by default; `--no-strict-arity` demotes it to
+a warning.
 
 #### Unary (1 operand)
 
@@ -2138,7 +2141,7 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Twelve rules are enforced. The semantic level is summarised here; for
+Thirteen rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
@@ -2311,16 +2314,27 @@ binding that owns its buffer holds a view of it, and is rejected like
 any view that outlives its source. A parameter that takes a string over
 is declared `sink` ([`docs/MEMORY.md` §2.13](MEMORY.md)).
 
-### 9.13 What is NOT checked
+### 9.13 Frozen `Arc` payloads and thread sharing
 
-The body of an `unsafe` function (§3.3d): raw pointers, pointer casts,
-the raw-memory primitives and foreign calls are its author's to get
-right. Everything else is held to the rules above — every program
-accepted without an `unsafe` function of its own is memory-safe and
-leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)); every hole found so far
-is closed and held by a probe in `tools/fuzz/holes/`. The pre-production
-hardening closed the exception 0.71.0 named: a `Slice`
-built from a `Vec` (`slice_from_vec`, `slice_sub`, protobuf's
+An `Arc` freezes its payload once constructed: `arc_get` returns a read-only
+borrow, any call that could mutate the payload or a field of it is rejected in
+safe code, and `arc_set` is `raw` (`unsafe`-only). Mutable state shared across
+threads lives in a `Locked [T]` (`locked_new`, `locked_with`), and thread/fiber
+spawns enforce structural `Send` / `NotSend` bounds on captures
+([`docs/MEMORY.md` §6.5](MEMORY.md)).
+
+### 9.14 What is NOT checked
+
+The body of an `unsafe` (§3.3d) or `raw` (§3.3e) function: raw pointers,
+pointer casts, the raw-memory primitives and foreign calls are its author's
+(or, for `raw`, its `unsafe` caller's) to get right. Everything else is held
+to the rules above — every program accepted without an `unsafe` function of
+its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
+the core ownership model (`A1.memory_safe`) is mechanically proven sound in
+Lean 4 ([`formal/`](../formal/)), and every hole found across the reviews
+(`h01–h273`) is closed and held by a probe in `tools/fuzz/holes/`.
+The pre-production hardening closed the exception 0.71.0 named: a `Slice`
+built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
 freed or may reallocate ([`docs/MEMORY.md` §2.10](MEMORY.md)).
 

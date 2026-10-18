@@ -73,6 +73,8 @@ A `-` with space on either side is the binary minus operator.
 | `i8` `i16` `i32` `i64` | signed sized integers |
 | `u16` `u32` `u64` | unsigned sized integers |
 | `f32` | 32-bit float |
+| `v128` | 128-bit SIMD vector (`4×i32`) |
+| `v256` | 256-bit SIMD vector (`8×i32`) |
 
 There are no implicit conversions. A width or sign change needs an explicit
 cast with `#` (see below).
@@ -82,7 +84,7 @@ cast with `#` (see below).
 is a separate, managed, length-tracked type. They are not interchangeable —
 convert with `string_data` (`String → s`) or `string_from` (`s → String`).
 
-## Variables: `:` and `=`
+## Variables and globals: `:` and `=`
 
 `:` declares a new binding. Bindings are immutable by default; `~` makes one
 mutable. You can write the type explicitly, or leave it for the compiler to
@@ -94,6 +96,17 @@ infer from the right-hand side.
 : String s ( string_new )    // named type
 : total ( add 1 2 )          // inferred
 ```
+
+At top level, `:` declares a module-wide global variable:
+
+```nu
+: i MAX 100
+: i LIMIT * MAX 4            // compile-time constant folding in global initializers
+: ~ i counter 0              // mutable global
+: ( Locked State ) g ( locked_new [State] @ State { 0 } )   // call-initialized owning global
+```
+
+Inside a package build, `( pkg_version )` evaluates to the `version` string from `nurl.toml` (or `"0.0.0"` outside a package).
 
 `=` reassigns an existing mutable binding, or writes into a struct field,
 array slot, or slice element:
@@ -108,7 +121,7 @@ Reassigning an immutable binding is a compile-time error.
 ## Functions
 
 ```nu
-@ name param* → return_type { body }
+modifier* @ name param* → return_type { body }
 ```
 
 Parameters are `type IDENT`, separated by whitespace, with no commas. `^`
@@ -131,6 +144,34 @@ exit code or `v` (exits `0`).
 Calls always use parentheses, with the function name first: `( add 1 2 )`.
 A bare identifier is a name lookup, never a call — writing `add 1 2` without
 parentheses is a compile error that names the missing parens.
+
+### Default parameters and named arguments
+
+Parameters may declare a compile-time default with `= expr`. Callers can omit trailing defaulted parameters or pass arguments by name (`name: value`) in any order after positional arguments:
+
+```nu
+@ connect s host i port = 80 b tls = F → i {
+    ^ ? tls + port 363 port
+}
+
+( connect `example.com` )                 // port = 80, tls = F
+( connect `example.com` tls: T )          // port = 80, tls = T
+( connect `example.com` tls: T port: 443 )
+```
+
+### Function modifiers and visibility
+
+Functions can be prefixed with one or more modifiers:
+
+| Modifier | Meaning |
+|---|---|
+| `pub` | Exported as part of the module's public surface (`nurldoc`, lint roots) |
+| `inline` | Hint to inline across call sites |
+| `simd` | Enable vectorization hints (`vectorize(enable)`) on loops inside the body |
+| `unsafe` | May dereference raw `*T` pointers, cast pointers, call `extern` C functions, and call `raw` functions |
+| `raw` | Low-level stdlib primitive that wraps raw pointers/FFI — callable only from `unsafe` or `raw` functions |
+
+Functions whose name begins with `__` (such as `@ __helper i x → i`) are **file-private**: the compiler scopes them to the defining `.nu` file so two modules can define `__helper` without colliding.
 
 <Accordions>
   <Accordion title="Full worked example">

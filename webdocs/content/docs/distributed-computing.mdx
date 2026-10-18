@@ -52,9 +52,9 @@ calls three functions, with no knowledge of NAT, relays, endpoints, or
 roaming:
 
 ```nu
-transport_send(t, peer_pubkey, payload)        // unicast
-transport_broadcast(t, group_id, payload)      // broadcast to a group
-transport_recv(t, max) → ?TransportMsg{src, payload}
+( transport_send t peer_pubkey payload )        // unicast
+( transport_broadcast t group_id payload )      // broadcast to a group
+( transport_recv t max )                        // → ?TransportMsg
 ```
 
 Underneath, each peer uses a direct encrypted path when one is reachable.

@@ -8,14 +8,13 @@ import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
 
 You can get NURL in two ways: install a prebuilt toolchain, or build it from the source code.
 
-## Option A — Prebuilt toolchain (Linux / FreeBSD / Windows)
+## Option A — Prebuilt toolchain (Linux / macOS / FreeBSD / Windows)
 
-This gives you `nurlc` (compiler), `nurlpkg` (package manager), and
-`nurlfmt` (source formatter) on your `PATH`.
+Prebuilt archives ship for **Linux (`x86_64`, `aarch64`), macOS (`ARM64`, `x86_64`), FreeBSD (`x86_64`), and Windows (`x86_64`)**. Installing gives you `nurl` (the one-step build and run wrapper), `nurlc` (compiler), `nurlpkg` (package manager), and `nurlfmt` (source formatter) on your `PATH`, plus `stdlib/` and `lib/runtime.native.o` (and on Windows, a bundled `zig cc` + `runtime.mingw.o`).
 
 ### One-command install
 
-Linux / FreeBSD
+Linux / macOS / FreeBSD
 
 ```bash
 curl -fsSL https://nurl-lang.org/install.sh | sh
@@ -56,18 +55,14 @@ its minisign signature when `minisign` is on your `PATH`; a mismatch aborts
 before anything is unpacked.
 
 <Accordions>
-  <Accordion title="Why is there no prebuilt path for macOS?">
-     NURL's CI now builds and tests on **Linux and FreeBSD** only. NURL
-     supports macOS, but has no CI coverage or prebuilt toolchain for
-     *running on* macOS yet. You must build from source on macOS
-     for now.
+  <Accordion title="What is tested in CI and included in the release archive?">
+     CI builds, bootstraps, and tests **Linux x86_64**, **FreeBSD 14.2 x86_64**, **Windows x86_64**, **macOS ARM64**, and **Unikernels (x86_64, AArch64, RISC-V64)** on every change. Each prebuilt archive includes `nurl`, `nurlc`, `nurlpkg`, `nurlfmt`, `stdlib/`, and `lib/runtime.native.o` (plus bundled `zig cc` and `runtime.mingw.o` on Windows) so you can compile `.nu` files directly out of the box.
   </Accordion>
 </Accordions>
 
 ## Option B — Build from source
 
-You need this for macOS. We also recommend this if you want to compile your
-own `.nu` files right away.
+Build from source if you are hacking on the compiler or standard library, or targeting a platform without a prebuilt archive (such as Alpine/musl).
 
 ### Prerequisites
 
