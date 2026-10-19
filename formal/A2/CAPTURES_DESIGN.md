@@ -98,29 +98,77 @@ closure captured by reference (`bck_opaque_param_run`). The proof fragment
 (I) below is the formal counterpart — what justifies admitting the safe
 higher-order programs this conservative rule still rejects.
 
-Covering (I) in the proof needs the call model to follow the writer into the
-callee:
+### What (I) needs in the proof, and why it is one coordinated change
 
-1. **Frozen set.** `heldFor` freezes every caller root below the base that
-   the call does not move, including `v`. But the callee runs `g`, which
-   changes `v`. The frozen set must leave out the roots of the call's
-   `mutNames`. It is a ghost annotation, so this costs no run time.
-2. **Kill at entry.** A caller binding that views `v` (a slice, say) is
-   ended by the call's `killNames`. Today that happens only after the call,
-   while the frame invariant still treats the binding as live during the
-   callee's run. The frame the callee runs under (`callS`) should apply the
-   call's name kills at entry.
-3. **Lift the parameter's names.** In the callee, a closure parameter is a
-   borrowed parameter (`paramE`) with no dependencies. The runtime context
-   (`canon`) gives it the argument's dependencies, including the writer
-   name on `v`. Then the lifted inner `callc` of `g` checks `NamesFree` on
-   `v` against the lifted frozen set (1), and kills nothing new in the
-   frame (2). `RSetup.OK` must carry by-name dependencies with bound
-   `≠ .none` for borrowed parameters, so the `rbind` premise above becomes
-   a rerooting of the writer names at the parameter's exit.
-4. **Transitivity.** With 1–3 in place, `NoWriters` and the writer-free
-   `pack` and `rbind` premises can be dropped. A callee can then hand `g`
-   on, or capture it, under the same `NamesFree`.
+In (II) the only call-side restriction is `NoWriters`: a writer closure is
+never a call argument. Dropping it means the arguments' names `N` (and so
+the frozen set `A = allKinds R ++ N` that `liftE` appends to every lifted
+callee binding) may contain writers. Most of the renaming lemma survives
+that as is: a writer's target `r` is a caller binding no callee binding
+reaches in memory (`N_mut`: `r ∉ R`), a name is ended only by `replace`
+(`kills_isName`), so the extra kills the renamed call makes are quiet on the
+callee's lifted bindings and, by `N_mut`, on the frame. Two things do not
+survive, and both were found by the build, not by reading:
 
-Each step strictly enlarges the typing. None changes generated code: nurlc
-already compiles (I).
+- **The `pack` premise does not commute with renaming.** `liftE` broadcasts
+  `A` into every view-holding owned binding, so a closure made inside a
+  callee that received a writer argument is lifted holding that writer —
+  and the writer-free `pack` premise cannot be re-proven for it. Narrowing
+  the broadcast to memory and readers is *unsound*: a call's result holds
+  what its arguments hold by name (`heldOfArgs ⊇ argNames`), so when a
+  closure parameter is passed on, the result legitimately holds its writer,
+  which only the full broadcast can supply (the abstract callee context has
+  no names on its parameters). Tried and reverted here (`Am` in
+  `Rename.lean`): it breaks exactly the pass-on result and every element or
+  copy derived from a receiver. The way out is to *drop* the `pack` premise:
+  a closure whose environment holds a writer is treated as writing it —
+  its `held` carries the name, so running it (`callc`) kills the target.
+  That is h278 for free. By-name capture of a writer stays impossible
+  (`CapsOK` needs `held = []`). It needs `PkgsOK`'s fourth conjunct dropped
+  and `ValOK.pkg` to validate the environment through every dependency that
+  is not one of the package's *own* `inout` captures (not through `readers`
+  only), so `envE` keeps nested writers while still never reaching an own
+  capture (`envE_cap_out`), and `reroot_valOK` carries that filter.
+
+- **The formal h285.** Inside a closure's code, its captures are `inout`
+  parameters and a closure parameter `h` is a borrowed `fn` with no names in
+  the abstract context. The abstract `callc h` kills nothing, while the
+  renamed one (with `h ↦ pe h`, the actual closure) kills the views of `h`'s
+  targets, among them this code's own `inout` parameters when the caller
+  re-enters it: a live abstract view of one survives where the renamed view
+  is dead, and `PW` fails — the renaming lemma is false for the h285
+  program, which the abstract typing accepts. A "no live view of an `inout`
+  parameter at an opaque call" premise does not commute with renaming
+  either (in `canon` the callee's `inout` parameters are owned and the
+  `inout` entries are the caller's). What commutes is to make the abstract
+  context *say* what an opaque closure may write: a closure-typed borrowed
+  parameter carries, in `sigCtx`, a symbolic writer name for each view-free
+  `inout` parameter of the function — then the abstract `callc h` and any
+  call `h` is passed to kill those views and check `NamesFree` on them (so
+  h285's code is rejected, and passing an `inout` parameter beside `h` is
+  rejected, as nurlc does), and the lift replaces the symbolic names by the
+  actual ones (`pe h`). The abstract kills a superset of what the renamed
+  call kills, which is the direction `PW` allows. This needs `AbsOK`'s
+  "a borrowed parameter holds nothing" to become "holds only names"
+  (`hits_lift` still holds: a name is never hit), `sigCtx_names` for the
+  symbolic names (an `inout` parameter owns its slot and allows its own
+  bound), and `FnOK` to exclude view-holding `inout` parameters from the
+  symbolic set (no closure can capture one `inout`: `CapsOK`).
+
+With both in place the moves-condition of `CallT` may admit an `inout`
+argument reached *by name* from another argument (memory reach stays
+forbidden, a `sink` is reached by nothing), which `open_pkg` needs when a
+`callc` argument names the package's own capture; the relaxation tried
+earlier was unsound only because the abstract code could still hold a view
+across the opaque call — the symbolic names close that. `NoWriters`,
+`N_noW`, the `rbind` writer-free premise (already done) and the `pack`
+premise then all go, and `canon_quiet` / `namesFree_lift` discharge from
+`N_mut` and `kills_isName`.
+
+None of it changes generated code: nurlc already compiles (I). It is one
+coordinated change across `Typing` (`sigCtx`, `CallT`, `pack`),
+`Invariant` (`PkgsOK`, `ValOK.pkg`), `Rename` (`AbsOK`, `RSetup.OK`),
+`Call`/`CallInv`, `Closure` (`envE`, `open_pkg`), `Steps`/`Stability`
+(`reroot_valOK`) and the threading through `Preservation`/`Progress`; the
+pieces are mutually dependent, so it lands green or not at all. Everything
+above is the state at the `green-ii` tag.
