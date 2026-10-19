@@ -659,7 +659,7 @@ theorem CapsOK.named {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var ×
   simp only [Kind.name.injEq] at hk
   obtain ⟨rfl, rfl⟩ := hk
   obtain ⟨Ev, hEv, hl, hh, ht, ho, hhv, hmode⟩ := h.2 c hc
-  refine ⟨Ev, hEv, hl, hh, ht, ho, ?_, hhv⟩
+  refine ⟨Ev, hEv, hl, hh, ht, by rw [ho]; rfl, ?_, hhv⟩
   rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, _, hbr, hcan, _⟩
   · exact Or.inl (by rw [hinp]; rfl)
   · exact Or.inr (by rw [hb]; exact ⟨hbr, hcan⟩)

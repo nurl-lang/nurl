@@ -260,7 +260,7 @@ def capDeps (cs : List (Var × PMode × Ty)) : List Dep :=
     (§2.11). -/
 def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × Ty)) : Prop :=
   (cs.map (·.1)).Nodup ∧
-  ∀ c ∈ cs, ∃ Ev, Γ c.1 = some Ev ∧ Ev.live = true ∧ Ev.held = [] ∧ Ev.ty = c.2.2 ∧ Ev.mode.ownSlot = true ∧
+  ∀ c ∈ cs, ∃ Ev, Γ c.1 = some Ev ∧ Ev.live = true ∧ Ev.held = [] ∧ Ev.ty = c.2.2 ∧ Ev.mode = .own ∧
     c.2.2.holdsView = false ∧
     (c.2.1 = .inp ∧ (∀ d ∈ D, d.root = c.1 → d.kind.isName = true → d.kind.bound = .none) ∨
       ∃ b s, c.2.1 = .inout b ∧ b ≠ .none ∧ b ≠ .replace ∧ canDo Ev.mode b ∧ c.1 ∉ F ∧
