@@ -254,9 +254,12 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
               (fn.params[i].1.moves = true →
                 args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
                 ∀ j < fn.params.length, j ≠ i →
-                  args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
+                  args.getD j 0 ≠ args.getD i 0 ∧
+                  args.getD i 0 ∉ roots (memDeps (argE Γ (args.getD j 0)).vdeps) ∧
+                  (fn.params[i].1 = .sink →
+                    args.getD i 0 ∉ roots (nameDeps (argE Γ (args.getD j 0)).vdeps))) ∧
               (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))
-  nfree   : NamesFree Γ F args
+  nfree   : NamesFree Γ F fn.params args
   names   : NameWF Γ
   postdt  : DomTy Γ (callPost Γ fn args)
   resnames : NameWF (setE (callPost Γ fn args) x (callRes Γ fn args))
@@ -302,16 +305,34 @@ theorem moving (h : CallH P Γ F x fn args base) {i j : Nat} (hi : i < fn.params
   obtain ⟨_, _, _, _, hmv, _⟩ := h.arg i hi
   exact ((hmv hm).2.2 j hj hne).1 he
 
-/-- ... nor reached from any argument. -/
-theorem moving_root (h : CallH P Γ F x fn args base) {i j : Nat} (hi : i < fn.params.length)
+/-- ... nor reached by memory from any argument.  (By name it may be reached
+    only from a `sink` — see `sink_root` — since a by-name reach to an `inout`
+    argument survives the call.) -/
+theorem moving_root_mem (h : CallH P Γ F x fn args base) {i j : Nat} (hi : i < fn.params.length)
     (hj : j < fn.params.length) (hm : fn.params[i].1.moves = true) :
-    args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps := by
+    args.getD i 0 ∉ roots (memDeps (argE Γ (args.getD j 0)).vdeps) := by
   obtain ⟨Ea, hEa, _, _, hmv, _⟩ := h.arg i hi
   by_cases hji : j = i
   · subst hji
-    have : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
-    rw [this]; exact (hmv hm).2.1
-  · exact ((hmv hm).2.2 j hj hji).2
+    have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+    rw [hae]; exact fun hr => (hmv hm).2.1 (roots_memDeps hr)
+  · exact ((hmv hm).2.2 j hj hji).2.1
+
+/-- The argument of a `sink` parameter, which the call frees, is reached from
+    no argument by any route. -/
+theorem sink_root (h : CallH P Γ F x fn args base) {i j : Nat} (hi : i < fn.params.length)
+    (hj : j < fn.params.length) (hm : fn.params[i].1 = .sink) :
+    args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps := by
+  have hmoves : fn.params[i].1.moves = true := by rw [hm]; rfl
+  obtain ⟨Ea, hEa, _, _, hmv, _⟩ := h.arg i hi
+  intro hr
+  by_cases hji : j = i
+  · subst hji
+    have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+    rw [hae] at hr; exact (hmv hmoves).2.1 hr
+  · rcases mem_roots_split hr with hmem | hname
+    · exact ((hmv hmoves).2.2 j hj hji).2.1 hmem
+    · exact ((hmv hmoves).2.2 j hj hji).2.2 hm hname
 
 end CallH
 

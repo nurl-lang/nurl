@@ -341,6 +341,14 @@ def allKinds (rs : List Var) : List Dep :=
 def memDeps (ds : List Dep) : List Dep := ds.filter (fun d => !d.kind.isName)
 def nameDeps (ds : List Dep) : List Dep := ds.filter (fun d => d.kind.isName)
 
+/-- A root is reached either by memory or by name. -/
+theorem mem_roots_split {ds : List Dep} {r : Var} (h : r ∈ roots ds) :
+    r ∈ roots (memDeps ds) ∨ r ∈ roots (nameDeps ds) := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+  cases hn : d.kind.isName
+  · exact Or.inl (List.mem_map_of_mem (l := memDeps ds) (List.mem_filter.mpr ⟨hd, by simp [hn]⟩))
+  · exact Or.inr (List.mem_map_of_mem (l := nameDeps ds) (List.mem_filter.mpr ⟨hd, by simp [hn]⟩))
+
 /-- What the arguments hold by name: the bindings the closures among them
     (or inside them) read or change each time they run.  An integer holds
     nothing. -/
@@ -405,14 +413,50 @@ def killNames (ds : List Dep) (Γ : Ctx) : Ctx :=
 def callPost (Γ : Ctx) (fn : Fn) (args : List Var) : Ctx :=
   killNames (mutNames Γ args) (callPostAux Γ fn args fn.params args 0 Γ)
 
+/-- A binding mutated by name among the arguments, if it is itself an
+    argument, is passed only by `inout` (a by-address writer): a direct `inp`
+    (a borrowed view) or `sink` (freed) slot beside the by-name writer would be
+    the unsafe route-aliasing §2.11 forbids, but two by-address writers are
+    safe (each access re-reads the binding). -/
+def nonInoutArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
+  ((List.range ps.length).filter (fun i => match ps[i]? with
+      | some (.inout _, _) => false
+      | _ => true)).map (fun i => args.getD i 0)
+
+def inoutOnly (ps : List (PMode × Ty)) (args : List Var) (r : Var) : Prop :=
+  r ∉ nonInoutArgs ps args
+
+theorem mem_nonInoutArgs {ps : List (PMode × Ty)} {args : List Var} {a : Var}
+    (h : a ∈ nonInoutArgs ps args) : ∃ i p, ps[i]? = some p ∧ (∀ b, p.1 ≠ .inout b) ∧ a = args.getD i 0 := by
+  unfold nonInoutArgs at h
+  obtain ⟨i, hi, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hir, hm⟩ := List.mem_filter.mp hi
+  have hil := List.mem_range.mp hir
+  refine ⟨i, ps[i], List.getElem?_eq_getElem hil, fun b he => ?_, rfl⟩
+  rw [List.getElem?_eq_getElem hil] at hm
+  revert hm he; generalize ps[i] = p; obtain ⟨pm, t⟩ := p
+  intro hm he; simp only at he; subst he; simp at hm
+
+theorem mem_nonInoutArgs_of {ps : List (PMode × Ty)} {args : List Var} {i : Nat} {p : PMode × Ty}
+    (hp : ps[i]? = some p) (hm : ∀ b, p.1 ≠ .inout b) : args.getD i 0 ∈ nonInoutArgs ps args := by
+  unfold nonInoutArgs
+  have hil := (List.getElem?_eq_some_iff.mp hp).1
+  refine List.mem_map.mpr ⟨i, List.mem_filter.mpr ⟨List.mem_range.mpr hil, ?_⟩, rfl⟩
+  rw [hp]
+  obtain ⟨pm, t⟩ := p
+  cases pm with
+  | inout b => exact absurd rfl (hm b)
+  | _ => rfl
+
 /-- A binding a closure handed to a call may change is changed by the call:
     it allows the change, is a `Vec` whose elements hold no views, is not
-    lent out, not passed beside the closure, and reached from no argument
-    but by a closure that may change it (§2.11: not a view, a borrow, nor a
-    closure that reads it). -/
-def NamesFree (Γ : Ctx) (F : List Var) (args : List Var) : Prop :=
+    lent out, passed beside the closure only by `inout`, and reached from no
+    argument but by a closure that may change it (§2.11: not a view, a borrow,
+    nor a closure that reads it). -/
+def NamesFree (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List Var) : Prop :=
   ∀ d ∈ mutNames Γ args, canDo (argE Γ d.root).mode d.kind.bound ∧
-    (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧ d.root ∉ args ∧
+    (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧
+    inoutOnly ps args d.root ∧
     ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
       ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound ≠ .none
 
@@ -436,9 +480,12 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
         (fn.params[i].1.moves = true →
           args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
           ∀ j < fn.params.length, j ≠ i →
-            args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
+            args.getD j 0 ≠ args.getD i 0 ∧
+            args.getD i 0 ∉ roots (memDeps (argE Γ (args.getD j 0)).vdeps) ∧
+            (fn.params[i].1 = .sink →
+              args.getD i 0 ∉ roots (nameDeps (argE Γ (args.getD j 0)).vdeps))) ∧
         (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))) ∧
-    NamesFree Γ F args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
+    NamesFree Γ F fn.params args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
 
 /-! ### Statements -/
 

@@ -1571,11 +1571,21 @@ theorem PW.killNames {Γ Γ' : Ctx} (hp : PW Γ Γ') : ∀ ds, PW (A2.killNames 
   | _ :: ds => show PW (A2.kill _ _ _ (A2.killNames ds Γ)) (A2.kill _ _ _ (A2.killNames ds Γ')) from
       (PW.killNames hp ds).kill _ _ _
 
+/-- A non-`inout` argument of the renamed call is the rename of a non-`inout`
+    argument of the original. -/
+theorem mem_nonInoutArgs_map (h : S.OK) {ps : List (PMode × Ty)} {args : List Var}
+    (hlen : args.length = ps.length) {a : Var} (ha : a ∈ nonInoutArgs ps (args.map S.ρ)) :
+    ∃ a0, a0 ∈ nonInoutArgs ps args ∧ a = S.ρ a0 := by
+  obtain ⟨i, p, hp, hni, rfl⟩ := mem_nonInoutArgs ha
+  have hil : i < ps.length := (List.getElem?_eq_some_iff.mp hp).1
+  exact ⟨args.getD i 0, mem_nonInoutArgs_of hp hni, getD_map (hlen ▸ hil) S.ρ⟩
+
 /-- What a closure handed to a call may change is changed by the call, where
     the call places it. -/
-theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {args : List Var}
-    (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hnf : NamesFree Γa Fa args) :
-    NamesFree (S.canon Γa) S.Fc (args.map S.ρ) := by
+theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List (PMode × Ty)}
+    {args : List Var} (hlen : args.length = ps.length)
+    (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hnf : NamesFree Γa Fa ps args) :
+    NamesFree (S.canon Γa) S.Fc ps (args.map S.ρ) := by
   intro d hd
   rcases mem_mutNames_canon h hab hargs hd with hd | ⟨hN, hb⟩
   case inr =>
@@ -1585,7 +1595,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {args : Li
     have hae : argE (S.canon Γa) d.root = Er := by unfold argE; rw [canon_frame _ hout, hEr]; rfl
     refine ⟨by rw [hae]; exact hcan, ⟨s, by rw [hae]; exact hts, hsv⟩, hFc, fun hm => ?_,
       fun a' ha' _ d' hd' hr' => ?_⟩
-    · obtain ⟨a, _, he⟩ := List.mem_map.mp hm; exact hout a he
+    · obtain ⟨a, _, he⟩ := mem_nonInoutArgs_map h hlen hm; exact hout a he.symm
     · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
       obtain ⟨Ea, hEa⟩ := hargs a ha
       rw [argE_canon h hEa] at hd'
@@ -1614,7 +1624,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {args : Li
     rw [argE_canon h hE0, liftE_mode _ hrb0]; exact canDo_lift hcan
   · show (argE (S.canon Γa) (S.ρ d0.root)).ty = _
     rw [argE_canon h hE0, liftE_ty _ hrb0]; exact hts
-  · obtain ⟨a, ha, he⟩ := List.mem_map.mp hm
+  · obtain ⟨a, ha, he⟩ := mem_nonInoutArgs_map h hlen hm
     exact hna (h.inj _ _ he ▸ ha)
   · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
     obtain ⟨Ea, hEa⟩ := hargs a ha
@@ -1903,6 +1913,38 @@ theorem roots_liftE_ρ (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entry} (h
       exact this ▸ List.mem_map_of_mem hd0
     · exact A_out h ha a hdr.symm
 
+/-- The memory (resp. by-name) part of the moves-condition transfers under
+    renaming, so the caller sees the same memory (resp. name) separation. -/
+theorem roots_liftE_ρ_mem (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entry} (hE : Γa v = some E)
+    (hn : a ∉ roots (memDeps E.vdeps)) : S.ρ a ∉ roots (memDeps (S.liftE v E).vdeps) := by
+  intro hr
+  obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
+  obtain ⟨hdv, hdk⟩ := List.mem_filter.mp hd
+  by_cases hrb : E.mode = .rootb
+  · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
+    rw [hvd] at hdv
+    exact (h.pe_out v _ (List.mem_map_of_mem hdv)).1 a hdr.symm
+  · rcases liftE_vdeps_cases hrb hdv with ⟨d0, hd0, rfl⟩ | ha
+    · apply hn
+      have he : d0.root = a := h.inj _ _ hdr
+      exact he ▸ List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdk⟩)
+    · exact A_out h ha a hdr.symm
+
+theorem roots_liftE_ρ_name (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entry} (hE : Γa v = some E)
+    (hn : a ∉ roots (nameDeps E.vdeps)) : S.ρ a ∉ roots (nameDeps (S.liftE v E).vdeps) := by
+  intro hr
+  obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
+  obtain ⟨hdv, hdk⟩ := List.mem_filter.mp hd
+  by_cases hrb : E.mode = .rootb
+  · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
+    rw [hvd] at hdv
+    exact (h.pe_out v _ (List.mem_map_of_mem hdv)).1 a hdr.symm
+  · rcases liftE_vdeps_cases hrb hdv with ⟨d0, hd0, rfl⟩ | ha
+    · apply hn
+      have he : d0.root = a := h.inj _ _ hdr
+      exact he ▸ List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdk⟩)
+    · exact A_out h ha a hdr.symm
+
 theorem paramOK_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
     {pm : PMode} {t : Ty} (hp : paramOK pm t E) : paramOK pm t (S.liftE v E) := by
   cases pm with
@@ -1988,7 +2030,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
       rw [hae] at hcan hts
       have := allowed_canDo hab hE hts hcan
       rwa [hsv] at this
-  refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hnf, rfl, rfl⟩, ?_,
+  refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hlen hexA hnf, rfl, rfl⟩, ?_,
     callRes_lift h hab hlr hex⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
@@ -1998,12 +2040,13 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
     · obtain ⟨hF, hroot, hoth⟩ := hmv hm
       refine ⟨h.Fcout _, roots_liftE_ρ h hab hEa hroot, fun j hj hji => ?_⟩
       have hja : j < args.length := hlen ▸ hj
-      obtain ⟨hne, hnr⟩ := hoth j hj hji
+      obtain ⟨hne, hmem, hname⟩ := hoth j hj hji
       obtain ⟨Ej, hEj⟩ := hex j hja
       rw [getD_map hja, argE_canon h hEj]
       have hae : argE Γa (args.getD j 0) = Ej := by unfold argE; rw [hEj]; rfl
-      rw [hae] at hnr
-      exact ⟨fun e => hne (h.inj _ _ e), roots_liftE_ρ h hab hEj hnr⟩
+      rw [hae] at hmem hname
+      refine ⟨fun e => hne (h.inj _ _ e), roots_liftE_ρ_mem h hab hEj hmem, fun hsink => ?_⟩
+      exact roots_liftE_ρ_name h hab hEj (hname hsink)
     · refine NoPin.lift h hab fun bh hb => ?_
       obtain ⟨E, hE, hmE, _⟩ := hab.2.2 _ bh hb
       rw [hEa] at hE; cases hE

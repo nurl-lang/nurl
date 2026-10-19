@@ -337,6 +337,26 @@ theorem mem_movedArgs_of {ps : List (PMode × Ty)} {args : List Var} {i : Nat} {
   | inp => exact absurd rfl hm
   | _ => rfl
 
+theorem mem_sinkArgs {ps : List (PMode × Ty)} {args : List Var} {a : Var} (h : a ∈ sinkArgs ps args) :
+    ∃ i p, ps[i]? = some p ∧ p.1 = .sink ∧ a = args.getD i 0 := by
+  unfold sinkArgs at h
+  obtain ⟨i, hi, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hir, hm⟩ := List.mem_filter.mp hi
+  have hil := List.mem_range.mp hir
+  refine ⟨i, ps[i], List.getElem?_eq_getElem hil, ?_, rfl⟩
+  rw [List.getElem?_eq_getElem hil] at hm
+  revert hm; generalize ps[i] = p; obtain ⟨pm, t⟩ := p
+  cases pm <;> intro hm <;> simp_all
+
+theorem mem_sinkArgs_of {ps : List (PMode × Ty)} {args : List Var} {i : Nat} {p : PMode × Ty}
+    (hp : ps[i]? = some p) (hm : p.1 = .sink) : args.getD i 0 ∈ sinkArgs ps args := by
+  unfold sinkArgs
+  have hil := (List.getElem?_eq_some_iff.mp hp).1
+  refine List.mem_map.mpr ⟨i, List.mem_filter.mpr ⟨List.mem_range.mpr hil, ?_⟩, rfl⟩
+  rw [hp]
+  obtain ⟨pm, t⟩ := p
+  cases pm <;> simp_all
+
 theorem mem_zip_idx {α β : Type} {ps : List α} {as : List β} {p : α} {a : β} (h : (p, a) ∈ ps.zip as) :
     ∃ k, ∃ (h1 : k < ps.length) (h2 : k < as.length), ps[k] = p ∧ as[k] = a := by
   obtain ⟨k, hk, he⟩ := List.getElem_of_mem h
@@ -520,20 +540,23 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     refine DepsNamed.flatMap fun o ho => ?_
     obtain ⟨⟨hj, _⟩, hk⟩ := houts o (List.mem_filter.mp ho).1
     exact hdeps _ hj hk
-  -- what the call moves, no argument depends on
-  let S := movedArgs fn.params args
+  -- what the call frees, no argument depends on (an `inout` argument, which
+  -- survives, may be named across the call, so only `sink` arguments count)
+  let S := sinkArgs fn.params args
   have hfree : ∀ j < fn.params.length, ∀ r ∈ roots (argE Γ (args.getD j 0)).vdeps, r ∉ S := by
     intro j hj r hr hS
-    obtain ⟨i, p, hp, hpm, rfl⟩ := mem_movedArgs hS
+    obtain ⟨i, p, hp, hpm, rfl⟩ := mem_sinkArgs hS
     have hil := (List.getElem?_eq_some_iff.mp hp).1
     have hget := (List.getElem?_eq_some_iff.mp hp).2
     obtain ⟨Ea, hEa, _, _, hmv, _⟩ := hargs i hil
-    have hmoves : fn.params[i].1.moves = true := by
-      rw [hget]; obtain ⟨pm, t⟩ := p; cases pm <;> simp_all [PMode.moves]
+    have hsink : fn.params[i].1 = .sink := by rw [hget]; exact hpm
+    have hmoves : fn.params[i].1.moves = true := by rw [hsink]; rfl
     obtain ⟨_, hnr, hdist⟩ := hmv hmoves
     by_cases hji : j = i
     · subst hji; unfold argE at hr; rw [hEa] at hr; exact hnr hr
-    · exact (hdist j hj hji).2 hr
+    · rcases mem_roots_split hr with hmem | hname
+      · exact ((hdist j hj hji).2.1) hmem
+      · exact ((hdist j hj hji).2.2 hsink) hname
   have hfreeA : ∀ a ∈ args, ∀ r ∈ roots (argE Γ a).vdeps, r ∉ S := by
     intro a ha r hr
     obtain ⟨j, hj, rfl⟩ := mem_args ha
@@ -566,7 +589,7 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
         · exact h.1
         · exact h.1
       · rw [← hak']
-        exact mem_movedArgs_of (List.getElem?_eq_getElem hk1) (by rw [hpk, hs]; decide))
+        exact mem_sinkArgs_of (List.getElem?_eq_getElem hk1) (by rw [hpk]; exact hs))
     (fun _ h => by cases h) (Keeps.refl Γ [])
     (fun v E hv hl hn' => ⟨hn v E hv hl hn', fun _ _ _ h => by cases h⟩)
   have hk : Keeps Γ (callPost Γ fn args) Y := hkY.killNames _
