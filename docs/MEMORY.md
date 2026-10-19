@@ -574,6 +574,11 @@ owner depend on the captures: releasing a capture while the owner may
 still run the closure is an error. Loading a closure value, and dropping
 the closure's own environment at the end of its scope, is not a use.
 
+The mechanized proof (`formal/A2`, [`RULES.md`](../formal/RULES.md))
+covers this rule, with one difference on the conservative side: the
+calculus admits, beside a closure that changes a binding, another closure
+that changes it the same way; the compiler rejects any other route to it.
+
 ### 2.12 A stored value belongs to its owner
 
 A value stored into an owner (an aggregate literal, a container through
@@ -1226,12 +1231,17 @@ with `arc_new`.
 The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
-- **Mechanized soundness proof (Lean 4).** The core ownership calculus
-  (`formal/`, `lake build`) is mechanically proven sound in Lean 4 with zero
-  `sorry` (`A1.memory_safe` in `formal/Formal/Soundness.lean`: well-typed
-  programs never get stuck on use-after-free, double-free, dangling borrows/views,
-  or leak live allocations at exit), and `formal/corpus/map.tsv` maps every
-  regression probe (`h01–h273`) to its formal judgment clause. See
+- **Mechanized soundness proof (Lean 4).** The ownership calculus
+  (`formal/`, `./check.sh`) is mechanically proven sound in Lean 4 with
+  zero `sorry`, on Lean's standard axioms only: `A2.memory_safe` and
+  `A2.no_leak_end` in `formal/A2/Soundness.lean` — well-typed programs
+  never get stuck on a use after free, a double free, a dangling borrow or
+  view or an out-of-bounds access, and leak nothing at exit, on the panic
+  path too. The calculus covers owned values, moves and drop flags,
+  borrows and views, `inout` with its bounds, structs and enums, closures
+  and trait objects with their captures (§2.11), panics and the drop
+  journal; `formal/corpus/map.tsv` maps every regression probe
+  (`h01–h285`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

@@ -30,6 +30,17 @@ parameter a closure that re-enters and grows the capture — running a
 running a *parameter* carried none. They are rejected now (*Fixed*), and no
 hole is known.
 
+The mechanized proof of the memory model now covers phase A2
+(`formal/`, `./check.sh`: no `sorry`, Lean's standard axioms only):
+structs and enums with field-precise paths, closures and trait objects
+with their captures — by handle, and by name including a closure that
+changes a capture and is handed to a call, captured or held by a borrowed
+binding — panics with unwinding and `recover`, the drop journal, and leak
+freedom (`A2.memory_safe`, `A2.no_leak_end`). `formal/README.md`,
+`formal/RULES.md` and `formal/A2/CAPTURES_DESIGN.md` record what each
+rule of `docs/MEMORY.md` is in the calculus, and what A2 does not model
+yet.
+
 ### Added
 
 - **Closure types and trait objects as type arguments.** A type with no

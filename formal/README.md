@@ -1,8 +1,8 @@
 # formal — a mechanized proof of NURL's memory model
 
-> **Status: A1 is proven** (Lean 4, no `sorry`, only Lean's standard
-> axioms — `./check.sh`). The later phases are not. Until a phase below is
-> marked done, the part of the guarantee in
+> **Status: A1 and A2 are proven** (Lean 4, no `sorry`, only Lean's
+> standard axioms — `./check.sh`). The later phases are not. Until a phase
+> below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
 > compiler's tests (§6.6), not on a proof; and until phase C, the proof is
 > about the rules, not about nurlc's implementation of them.
@@ -21,7 +21,7 @@ the implementation (B–D) follow once the rules have stopped moving.
 | Phase | Scope | Status |
 |---|---|---|
 | **A1** | Core calculus: owned values, moves and drop flags, borrows and views, a `Vec` that reallocates (§2.10), `inout`, `sink`. Single-threaded, no panics. Soundness: progress and preservation. | **done** |
-| **A2** | A1 plus structs and their fields, closures, generics, traits and `dyn`, enum and option payloads, panics and the drop journal — and **leak freedom**. | planned |
+| **A2** | A1 plus structs and their fields, enum and option payloads, closures and trait objects (packages: code on an environment, called through an interface) with captures by handle and by name, panics with unwinding and `recover`, the drop journal — and **leak freedom**. Generics add nothing to the memory model (a template is instantiated before it is checked). | **done** — see below for what A2 does not model yet |
 | **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, channels, M:N fibers. Data-race freedom against the LLVM / C11 memory model. | planned |
 | **B** | The standard library's `unsafe` base proven to meet the semantic types it is given: `Vec`, `String`, `HashMap`, `Rc` and the cycle collector, `Arc`, channels. | later |
 | **C** | nurlc implements the rules: the compiler emits a certificate for each accepted program and a small verified checker validates it. | later |
@@ -38,8 +38,9 @@ formal/
                    and nurlc's verdict (rejected, or compiles and runs clean
                    under ASan/LSan: `tools/fuzz/holes/check.sh` finds 0 holes)
   check.sh         builds the proof and checks it has no sorry and no new axiom
-  lean-toolchain, lakefile.toml, A1.lean, Check.lean
+  lean-toolchain, lakefile.toml, A1.lean, A2.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
+  A2/              the A2 proof, same layout, plus the modules below
 ```
 
 ### A1 — the modules
@@ -62,6 +63,28 @@ empty context, run from the empty store, never reaches a stuck
 configuration — every reachable one has finished or can step (a failed
 bounds check steps to a panic, a safe stop).
 
+### A2 — what it adds
+
+The same modules under `A2/`, extended, and:
+
+| Module | Contents |
+|---|---|
+| `Syntax`, `Semantics`, `Typing` | structs as pairs and enums as sums with field-precise paths (`projE`, `compE`); packages (`Val.pkg`: code, an environment it owns, the captures it holds by name) for closures and trait objects, built by `pack` (`CapsOK`) and called through an interface (`callc`, `Implements`); panics unwind to the nearest `recover` (`catchR`, `letrec`) through the drop journal |
+| `Panic`, `Leak` | the panic path keeps the invariant; `no_leak_end`: when a program ends, normally or by panic, nothing it allocated is still live |
+| `StepFrame`, `NameWf` | the invariant through the frames a panic unwinds; what contexts hold by name stays valid |
+| `Closure` | a call through a package, opened: the environment bound as a borrowed parameter, the captures as `inout` arguments of their own; the context after the opened call says no less than after the call through the package |
+| `Codes` | packages name code of their signature, through every step |
+| `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
+
+The theorems, `A2.memory_safe`, `A2.soundness` and `A2.no_leak_end`.
+
+What A2 does not model yet, each a planned refinement of the calculus
+rather than a gap in what it proves: in-place mutation of a struct field
+and `inout` of every owning type (only `Vec` is passed `inout`); values
+owned or not per call (a trait method's result, a raw string that may be
+fresh); `Rc` and its cycle collector, which are the standard library's
+`unsafe` base (phase B).
+
 ## How it relates to the rest of the repository
 
 - [`docs/MEMORY.md`](../docs/MEMORY.md) stays the readable specification.
@@ -69,7 +92,8 @@ bounds check steps to a panic, a safe stop).
   as it is formalized.
 - [`tools/fuzz/holes/`](../tools/fuzz/holes/) is the corpus the rules are
   checked against: every probe must be rejected by a named formal rule
-  (`corpus/map.tsv`).
+  (`corpus/map.tsv`; the A2 rows name the section of `docs/MEMORY.md`
+  whose rule rejects them, as `RULES.md` maps sections to rules).
 - Nothing here is compiled into nurlc or the standard library. Changes
   that touch only `formal/` do not run the compiler CI jobs (see
   `.github/workflows/ci.yml`, `macos-tests.yml`, `windows-tests.yml`).
