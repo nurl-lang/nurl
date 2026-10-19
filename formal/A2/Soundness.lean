@@ -27,7 +27,7 @@ theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt
     (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
     s = .skip ∨ ∃ r, Step P m s r :=
   progress (fun hx hc hi => callProgress hx hc hi)
-    (fun hx _ hc htc hj hσ hhd hcT hnw hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnw hcd hi) ht hcd hi
+    (fun hx _ hc htc hj hσ hhd hcT hnz hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnz hcd hi) ht hcd hi
 
 /-- Every binding is bound by a run-time scope the statement is inside of:
     the program's own top level binds nothing else. -/

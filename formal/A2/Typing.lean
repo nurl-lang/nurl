@@ -322,9 +322,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
       {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
-      -- what the environment holds changes nothing by name: a closure that may
-      -- change a binding by name is called where it is, not captured (A2-6a)
-      (∀ d ∈ D, d.kind.bound = .none) →
+      -- (a closure the environment holds that may change a binding by name:
+      -- running this package changes it, its name is among what it holds)
       RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs⟩ Γ1
 
 /-! ### Calls -/
@@ -384,10 +383,70 @@ theorem reroot_readers {p : Var} {D H : List Dep} (hD : ∀ d ∈ D, d.kind.boun
     exact comp_bound_none (hD d' hd') hb0
   · simp only [List.mem_singleton] at hdd; rw [hdd]; exact hb0
 
-/-- The arguments hold no closure that may change a binding by name.  A
-    closure with by-name mutable captures is called where it is, not handed
-    to a call (A2-6a): inside a callee the call setup could not tell which of
-    its values reach such a capture. -/
+/-- A package's own writer captures: what its code may change by name, and
+    what it is handed as `inout` arguments of their own when it is called. -/
+def capRootsW (cs : List (Var × PMode × Ty)) : List Var :=
+  (cs.filter (fun c => c.2.1 != .inp)).map (·.1)
+
+/-- The package's own change of a capture, by name. -/
+def ownWriter (cs : List (Var × PMode × Ty)) (d : Dep) : Bool :=
+  d.kind.bound != .none && (capRootsW cs).contains d.root
+
+/-- What a package's environment is valid through: everything the package
+    holds but its own writer captures' names (those are its arguments of
+    their own when it is called).  A closure the environment holds that may
+    change some other binding by name stays: running the package changes it
+    (A2-6a (I)).  Memory it reaches at one of its own captures stays too, as
+    in (II) for `readers`: such a package ends when it runs. -/
+def envDeps (cs : List (Var × PMode × Ty)) (H : List Dep) : List Dep :=
+  H.filter (fun d => !ownWriter cs d)
+
+theorem mem_envDeps {cs : List (Var × PMode × Ty)} {H : List Dep} {d : Dep} :
+    d ∈ envDeps cs H ↔ d ∈ H ∧ ownWriter cs d = false := by
+  simp [envDeps]
+
+theorem envDeps_sub (cs : List (Var × PMode × Ty)) (H : List Dep) : envDeps cs H ⊆ H :=
+  fun _ hd => (mem_envDeps.mp hd).1
+
+theorem envDeps_mono {cs : List (Var × PMode × Ty)} {H H' : List Dep} (h : H ⊆ H') :
+    envDeps cs H ⊆ envDeps cs H' := fun _ hd =>
+  mem_envDeps.mpr ⟨h (mem_envDeps.mp hd).1, (mem_envDeps.mp hd).2⟩
+
+theorem ownWriter_of_bound {cs : List (Var × PMode × Ty)} {d : Dep} (hb : d.kind.bound = .none) :
+    ownWriter cs d = false := by simp [ownWriter, hb]
+
+/-- What only reads is among what the environment is valid through. -/
+theorem readers_sub_envDeps (cs : List (Var × PMode × Ty)) (H : List Dep) : readers H ⊆ envDeps cs H :=
+  fun _ hd => mem_envDeps.mpr ⟨(mem_readers.mp hd).1, ownWriter_of_bound (mem_readers.mp hd).2⟩
+
+theorem mem_envDeps_of_mem {cs : List (Var × PMode × Ty)} {H : List Dep} {d : Dep} (hd : d ∈ H)
+    (hb : d.kind.bound = .none) : d ∈ envDeps cs H :=
+  mem_envDeps.mpr ⟨hd, ownWriter_of_bound hb⟩
+
+/-- Rerooting keeps what the environment is valid through: what the exiting
+    parameter held by name is no change of one of the package's own
+    captures, and the package reached the parameter not by name. -/
+theorem reroot_envDeps {p : Var} {D H : List Dep} {cs : List (Var × PMode × Ty)}
+    (hD : ∀ d ∈ D, ownWriter cs d = false) (hH : ∀ d ∈ H, d.root = p → d.kind.bound = .none) :
+    reroot p D (envDeps cs H) ⊆ envDeps cs (reroot p D H) := by
+  intro d hd
+  unfold reroot at hd
+  obtain ⟨d0, hd0, hdd⟩ := List.mem_flatMap.mp hd
+  obtain ⟨hd0H, hb0⟩ := mem_envDeps.mp hd0
+  refine mem_envDeps.mpr ⟨List.mem_flatMap.mpr ⟨d0, hd0H, hdd⟩, ?_⟩
+  split at hdd
+  · rename_i hp0
+    obtain ⟨d', hd', rfl⟩ := List.mem_map.mp hdd
+    have hb' := hD d' hd'
+    have h0 := hH d0 hd0H hp0
+    simp only [ownWriter, Bool.and_eq_false_iff, bne_eq_false_iff_eq] at hb' ⊢
+    rcases hb' with hb' | hb'
+    · left; exact comp_bound_none hb' h0
+    · right; exact hb'
+  · simp only [List.mem_singleton] at hdd; rw [hdd]; exact hb0
+
+/-- The arguments hold no closure that may change a binding by name.  (Kept
+    for the closure call's own arguments, A2-6a (I): nurlc's route rule.) -/
 def NoWriters (Γ : Ctx) (args : List Var) : Prop :=
   ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
     ∀ d ∈ (argE Γ a).vdeps, d.kind.bound = .none
@@ -457,14 +516,18 @@ def callPost (Γ : Ctx) (fn : Fn) (args : List Var) : Ctx :=
 
 /-- A binding a closure handed to a call may change is changed by the call:
     it allows the change, is a `Vec` whose elements hold no views, is not
-    lent out, not passed beside the closure, and reached from no argument
-    but by a closure that may change it (§2.11: not a view, a borrow, nor a
-    closure that reads it). -/
-def NamesFree (Γ : Ctx) (F : List Var) (args : List Var) : Prop :=
+    lent out, not passed beside the closure but as an `inout` argument of
+    that very bound (the callee's code is checked against the change), and
+    reached from no argument but by a closure that may change it the same
+    way (§2.11: not a view, a borrow, nor a closure that reads it; the
+    callee tells no two of them apart). -/
+def NamesFree (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List Var) : Prop :=
   ∀ d ∈ mutNames Γ args, canDo (argE Γ d.root).mode d.kind.bound ∧
-    (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧ d.root ∉ args ∧
+    (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧
+    (d.root ∉ args ∨ ∃ (i : Nat) (t : Ty), args[i]? = some d.root ∧
+      ps[i]? = some (PMode.inout d.kind.bound, t)) ∧
     ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
-      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound ≠ .none
+      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound = d.kind.bound
 
 def PMode.moves : PMode → Bool
   | .inp => false
@@ -483,12 +546,24 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
   ∃ fn, P[f]? = some fn ∧ args.length = fn.params.length ∧
     (∀ i (h : i < fn.params.length), ∃ Ea, Γ (args.getD i 0) = some Ea ∧ Ea.live = true ∧
         paramOK fn.params[i].1 fn.params[i].2 Ea ∧
+        -- an argument moved or changed is reached by no other argument in
+        -- memory; a `sink` by nothing at all; an `inout` argument only by a
+        -- name of the parameter's own bound: a closure that changes it as
+        -- the callee's own code may (the callee may run it, and its code is
+        -- checked against that: §2.11, A2-6a (I))
         (fn.params[i].1.moves = true →
-          args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
+          args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots (memDeps Ea.vdeps) ∧
+          (fn.params[i].1 = .sink → args.getD i 0 ∉ roots Ea.vdeps) ∧
+          (∀ b, fn.params[i].1 = .inout b → ∀ d ∈ Ea.vdeps,
+            d.root = args.getD i 0 → d.kind.bound = b ∧ b ≠ .none) ∧
           ∀ j < fn.params.length, j ≠ i →
-            args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
+            args.getD j 0 ≠ args.getD i 0 ∧
+            args.getD i 0 ∉ roots (memDeps (argE Γ (args.getD j 0)).vdeps) ∧
+            (fn.params[i].1 = .sink → args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
+            (∀ b, fn.params[i].1 = .inout b → ∀ d ∈ (argE Γ (args.getD j 0)).vdeps,
+              d.root = args.getD i 0 → d.kind.bound = b ∧ b ≠ .none)) ∧
         (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))) ∧
-    NamesFree Γ F args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
+    NamesFree Γ F fn.params args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
 
 /-! ### Statements -/
 
@@ -516,15 +591,94 @@ def Stmt.src : Stmt → Bool
 
 /-! ### Functions -/
 
-def paramE : PMode × Ty → Entry
-  | (.inp, t) => ⟨t, .rootb, true, [], []⟩
-  | (.inout b, t) => ⟨t, .inout b, true, [], []⟩
-  | (.sink, t) => ⟨t, .own, true, [], []⟩
+/-- What a closure a function is handed may change by name, as far as the
+    function can tell: any of its own view-free `inout` parameters (a
+    closure captures a binding `inout` only when it holds no views,
+    `CapsOK`; the caller may hand it one of them captured).  A closure-typed
+    borrowed parameter holds them all by name, so running it, or handing it
+    on, ends their views and is checked against them (A2-6a (I), the h285
+    rule in the calculus); the call replaces these symbolic names by the
+    closure's own. -/
+def symNames (ps : List (PMode × Ty)) : List Dep :=
+  (List.range ps.length).filterMap fun i =>
+    match (ps[i]? : Option (PMode × Ty)) with
+    | some (PMode.inout b, t) =>
+      if t.holdsView = false ∧ b ≠ .none ∧ b ≠ .replace then some ⟨i, Kind.name b t⟩ else none
+    | _ => none
+
+theorem mem_symNames {ps : List (PMode × Ty)} {w : Var} {b : Eff} {t : Ty} :
+    (⟨w, .name b t⟩ : Dep) ∈ symNames ps ↔
+      ps[w]? = some (.inout b, t) ∧ t.holdsView = false ∧ b ≠ .none ∧ b ≠ .replace := by
+  unfold symNames
+  simp only [List.mem_filterMap, List.mem_range]
+  constructor
+  · rintro ⟨i, hi, hf⟩
+    split at hf
+    · rename_i b' t' hp
+      split at hf
+      · simp only [Option.some.injEq, Dep.mk.injEq, Kind.name.injEq] at hf
+        obtain ⟨rfl, rfl, rfl⟩ := hf
+        exact ⟨hp, by assumption⟩
+      · cases hf
+    · cases hf
+  · rintro ⟨hp, hc⟩
+    refine ⟨w, (List.getElem?_eq_some_iff.mp hp).1, ?_⟩
+    rw [hp]; simp [hc]
+
+theorem mem_symNames' {ps : List (PMode × Ty)} {d : Dep} (hd : d ∈ symNames ps) :
+    ∃ w b t, d = ⟨w, .name b t⟩ ∧ ps[w]? = some (.inout b, t) ∧ t.holdsView = false ∧
+      b ≠ .none ∧ b ≠ .replace := by
+  unfold symNames at hd
+  simp only [List.mem_filterMap, List.mem_range] at hd
+  obtain ⟨i, _, hf⟩ := hd
+  split at hf
+  · rename_i b t hp
+    split at hf
+    · simp only [Option.some.injEq] at hf; subst hf
+      exact ⟨i, b, t, rfl, hp, by assumption⟩
+    · cases hf
+  · cases hf
+
+theorem elem_holdsView (t : Ty) : t.elem.holdsView = t.holdsView := by
+  cases t <;> rfl
+
+/-- May a value of this type hold a closure (and so hold bindings by name)? -/
+def Ty.hasFn : Ty → Bool
+  | .int => false
+  | .vec t => t.hasFn
+  | .slice t => t.hasFn
+  | .prod a b => a.hasFn || b.hasFn
+  | .sum a b => a.hasFn || b.hasFn
+  | .fn _ => true
+
+theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
+  induction t with
+  | int => cases h
+  | vec t ih => exact ih h
+  | slice _ _ => rfl
+  | prod a b iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_true] at h
+    simp only [Ty.holdsView, Bool.or_eq_true]
+    exact h.imp iha ihb
+  | sum a b iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_true] at h
+    simp only [Ty.holdsView, Bool.or_eq_true]
+    exact h.imp iha ihb
+  | fn _ => rfl
+
+/-- A parameter's entry: a borrowed one depends on nothing the callee can
+    see; every parameter whose type may hold a closure holds the symbolic
+    names (what it was handed may change any `inout` parameter). -/
+def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
+  | (.inp, t) => ⟨t, .rootb, true, [], if t.hasFn then symNames ps else []⟩
+  | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else []⟩
+  | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else []⟩
 
 /-- The callee's own view of its parameters: they depend on nothing it can
-    see.  The result slot starts empty. -/
+    see, but a closure it is handed, which may change its `inout`
+    parameters.  The result slot starts empty. -/
 def sigCtx (fn : Fn) : Ctx := fun v =>
-  if h : v < fn.params.length then some (paramE fn.params[v])
+  if h : v < fn.params.length then some (paramE fn.params fn.params[v])
   else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], []⟩
   else none
 

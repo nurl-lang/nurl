@@ -98,10 +98,7 @@ def NamesIn (T : Val) (H : List Dep) : Prop :=
 def PkgsOK (T : Val) : Prop :=
   ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T →
     (cs.map (·.1)).Nodup ∧ (∀ c ∈ cs, c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none) ∧
-    (∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp) ∧
-    -- what the environment holds only reads by name: a closure that may change
-    -- a binding by name is never captured (A2-6a)
-    ∀ c' ∈ e.names, c'.2.1 = .inp
+    (∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp)
 
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
@@ -122,10 +119,12 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
   | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
   -- a package's environment is valid through what the package depends on and
-  -- holds but its closures' changes by name: its own captures are no part of it
+  -- holds but its own writer captures, which are no part of it (they are its
+  -- arguments of their own when it is called); a closure it holds that may
+  -- change some other binding by name is part of it
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
-      ValOK m te x (P ++ readers H) (readers H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
+      ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -166,7 +165,7 @@ theorem valOK_sum {a b : Ty} :
 
 theorem valOK_fn {ms : List Nat} :
     ValOK m (.fn ms) v P H ↔
-      ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ readers H) (readers H) := by
+      ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ envDeps cs H) (envDeps cs H) := by
   constructor
   · intro h; cases h with | pkg hx => exact ⟨_, _, _, _, rfl, hx⟩
   · rintro ⟨f, te, x, cs, rfl, hx⟩; exact .pkg hx
@@ -302,7 +301,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → NoWriters Γ args → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      NoPin Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → NoPin Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
@@ -361,8 +360,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
       k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
       P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
-      CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      NoPin Δ x → NoWriters Γ zs → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      CallT P Γ F σ (c :: zs) E Γ1 →
+      -- no argument is a binding the package may change by name (it is
+      -- handed to the code as an `inout` argument of its own)
+      (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
+      StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
+      NoPin Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →

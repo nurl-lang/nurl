@@ -231,9 +231,8 @@ theorem PkgsOK.lendOf {T : Val} (h : PkgsOK T) : PkgsOK (lendOf T) := by
   | pkg fs0 te0 ms0 e0 cs0 =>
     simp only [A2.lendOf, Val.pkg.injEq] at hw
     obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := hw
-    obtain ⟨hnd, hmd, hdis, henv⟩ := h _ _ _ _ _ h0
-    exact ⟨hnd, hmd, fun c hc c' hc' => hdis c hc c' (names_lendOf e0 c' hc'),
-      fun c' hc' => henv c' (names_lendOf e0 c' hc')⟩
+    obtain ⟨hnd, hmd, hdis⟩ := h _ _ _ _ _ h0
+    exact ⟨hnd, hmd, fun c hc c' hc' => hdis c hc c' (names_lendOf e0 c' hc')⟩
   | _ => simp [A2.lendOf] at hw
 
 /-- A value with no closure inside. -/
@@ -629,12 +628,22 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
     exact ⟨dep, List.mem_append_left _ hd, rest⟩
   | @pkg fs te ms v cs _ ihv =>
     intro hpk P hn hvs hnm _
-    -- the environment only reads by name, so what it holds is among `readers H`
-    have hrd : ∀ c' ∈ v.names, c'.2.1 = .inp := (hpk fs te ms v cs (Sub.refl _)).2.2.2
-    have hvr : ViewsOK m te v (readers H) := ViewsOK.readers (fun s x hin => hvs s x (ViewIn.pkg hin))
+    -- what the environment holds by name is no change of one of this
+    -- package's own captures (one captured again inside is only read)
+    have hdis := (hpk fs te ms v cs (Sub.refl _)).2.2
+    have hvr : ViewsOK m te v (envDeps cs H) :=
+      ViewsOK.mono (readers_sub_envDeps cs H) (ViewsOK.readers (fun s x hin => hvs s x (ViewIn.pkg hin)))
+    have hown : ∀ c' ∈ v.names, ownWriter cs (⟨c'.1, .name c'.2.1.bound c'.2.2⟩ : Dep) = false := by
+      intro c' hc'
+      simp only [ownWriter, Bool.and_eq_false_iff, bne_eq_false_iff_eq, Kind.bound]
+      by_cases hin : c'.1 ∈ capRootsW cs
+      · left
+        simp only [capRootsW, List.mem_map, List.mem_filter, bne_iff_ne, ne_eq] at hin
+        obtain ⟨c, ⟨hc, hcn⟩, hcc⟩ := hin
+        rw [(hdis c hc c' hc' hcc).2]; rfl
+      · right; simpa [List.contains_iff_mem] using hin
     refine .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => ?_) hvr
-      (fun c' hc' => mem_readers.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'),
-        by simp [hrd c' hc', PMode.bound, Kind.bound]⟩)
+      (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
     obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.pkg hs)
     exact ⟨dep, List.mem_append_left _ hd, rest⟩

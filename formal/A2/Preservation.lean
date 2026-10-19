@@ -111,7 +111,7 @@ def CallCase (P : Prog) : Prop :=
   ∀ {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {k : Stmt} {E : Entry}
     {Γ1 Δ : Ctx} {m m' : Mem} {s' : Stmt},
     k.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F k Δ →
-    NoPin Δ x → NoWriters Γ args → Inv m Γ F (.letcall x f args k) → Step P m (.letcall x f args k) (.ok m' s') →
+    NoPin Δ x → Inv m Γ F (.letcall x f args k) → Step P m (.letcall x f args k) (.ok m' s') →
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.letcall x f args k) s' ∧ Frz F m m'
 
@@ -132,8 +132,9 @@ def CloCase (P : Prog) : Prop :=
     {ms : List Nat} {σ : Nat} {sig : Fn} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
     k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
     P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
-    CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-    NoPin Δ x → NoWriters Γ zs → MemCodes P m → Inv m Γ F (.callc x c j zs k) →
+    CallT P Γ F σ (c :: zs) E Γ1 → (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
+    StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
+    NoPin Δ x → MemCodes P m → Inv m Γ F (.callc x c j zs k) →
     Step P m (.callc x c j zs k) (.ok m' s') →
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callc x c j zs k) s' ∧ Frz F m m'
@@ -384,9 +385,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | letcall hsrc hx hxF hc hs hpx hnw _ =>
+  | letcall hsrc hx hxF hc hs hpx _ =>
     intro m m' s' hcd hi hst
-    exact hcall hsrc hx hxF hc hs hpx hnw hi hst
+    exact hcall hsrc hx hxF hc hs hpx hi hst
   | assign hx hxF hmodes hr hty hxd _ hpin =>
     intro m m' s' hcd hi hst
     cases hst with
@@ -685,9 +686,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | letrec hsrc hx hxF hf hp hty ho hc hs hpx _ =>
     intro m m' s' hcd hi hst
     exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst
-  | callc hk hx hxF hc htc hj hσ hhd hout hcT hkT hpx hnw _ =>
+  | callc hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx _ =>
     intro m m' s' hcd hi hst
-    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hkT hpx hnw hcd hi hst
+    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO ih =>
     intro m m' s' hcd hi hst
     obtain ⟨hfr, hxs, hnv0, hck⟩ := hi.catchOK

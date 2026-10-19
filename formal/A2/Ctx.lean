@@ -57,6 +57,15 @@ theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
   exact ⟨d, o, l, rfl, dep, hs hd, ha⟩
 
+/-- A view is valid through a dependency on memory. -/
+theorem ViewsOK.memDeps {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
+    ViewsOK m τ T (A2.memDeps H) := by
+  intro s v hv
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
+  refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
+  obtain ⟨_, _, _, _, hk, _⟩ := ha
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+
 /-- A view is valid only through a dependency that ends views, never through
     a name: what a value's views need, it needs of `readers`. -/
 theorem ViewsOK.readers {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
@@ -89,7 +98,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
   | pkg _ ih =>
-    intro P' H' hp hs; exact .pkg (ih (app hp (readers_mono hs)) (readers_mono hs))
+    intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs))
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs

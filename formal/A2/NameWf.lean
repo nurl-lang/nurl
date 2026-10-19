@@ -326,6 +326,36 @@ theorem mem_movedArgs {ps : List (PMode × Ty)} {args : List Var} {a : Var} (h :
   intro hm he
   simp only at he; subst he; simp at hm
 
+/-- The arguments a call ends (its `sink` ones): a binding handed over
+    `inout` is live again after the call, so a name on it stays valid. -/
+def sunkArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
+  ((List.range ps.length).filter (fun i => match ps[i]? with
+      | some (.sink, _) => true
+      | _ => false)).map (fun i => args.getD i 0)
+
+theorem mem_sunkArgs {ps : List (PMode × Ty)} {args : List Var} {a : Var} (h : a ∈ sunkArgs ps args) :
+    ∃ i p, ps[i]? = some p ∧ p.1 = .sink ∧ a = args.getD i 0 := by
+  unfold sunkArgs at h
+  obtain ⟨i, hi, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hir, hm⟩ := List.mem_filter.mp hi
+  have hil := List.mem_range.mp hir
+  refine ⟨i, ps[i], List.getElem?_eq_getElem hil, ?_, rfl⟩
+  rw [List.getElem?_eq_getElem hil] at hm
+  revert hm
+  generalize ps[i] = p
+  obtain ⟨pm, t⟩ := p
+  intro hm
+  cases pm <;> simp_all
+
+theorem mem_sunkArgs_of {ps : List (PMode × Ty)} {args : List Var} {i : Nat} {p : PMode × Ty}
+    (hp : ps[i]? = some p) (hm : p.1 = .sink) : args.getD i 0 ∈ sunkArgs ps args := by
+  unfold sunkArgs
+  have hil := (List.getElem?_eq_some_iff.mp hp).1
+  refine List.mem_map.mpr ⟨i, List.mem_filter.mpr ⟨List.mem_range.mpr hil, ?_⟩, rfl⟩
+  rw [hp]
+  obtain ⟨pm, t⟩ := p
+  simp only at hm; subst hm; rfl
+
 theorem mem_movedArgs_of {ps : List (PMode × Ty)} {args : List Var} {i : Nat} {p : PMode × Ty}
     (hp : ps[i]? = some p) (hm : p.1 ≠ .inp) : args.getD i 0 ∈ movedArgs ps args := by
   unfold movedArgs
@@ -520,20 +550,20 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     refine DepsNamed.flatMap fun o ho => ?_
     obtain ⟨⟨hj, _⟩, hk⟩ := houts o (List.mem_filter.mp ho).1
     exact hdeps _ hj hk
-  -- what the call moves, no argument depends on
-  let S := movedArgs fn.params args
+  -- what the call ends, no argument depends on
+  let S := sunkArgs fn.params args
   have hfree : ∀ j < fn.params.length, ∀ r ∈ roots (argE Γ (args.getD j 0)).vdeps, r ∉ S := by
     intro j hj r hr hS
-    obtain ⟨i, p, hp, hpm, rfl⟩ := mem_movedArgs hS
+    obtain ⟨i, p, hp, hpm, rfl⟩ := mem_sunkArgs hS
     have hil := (List.getElem?_eq_some_iff.mp hp).1
     have hget := (List.getElem?_eq_some_iff.mp hp).2
     obtain ⟨Ea, hEa, _, _, hmv, _⟩ := hargs i hil
-    have hmoves : fn.params[i].1.moves = true := by
-      rw [hget]; obtain ⟨pm, t⟩ := p; cases pm <;> simp_all [PMode.moves]
-    obtain ⟨_, hnr, hdist⟩ := hmv hmoves
+    have hsink : fn.params[i].1 = .sink := by rw [hget]; exact hpm
+    have hmoves : fn.params[i].1.moves = true := by rw [hsink]; rfl
+    obtain ⟨_, _, hns, _, hdist⟩ := hmv hmoves
     by_cases hji : j = i
-    · subst hji; unfold argE at hr; rw [hEa] at hr; exact hnr hr
-    · exact (hdist j hj hji).2 hr
+    · subst hji; unfold argE at hr; rw [hEa] at hr; exact hns hsink hr
+    · exact (hdist j hj hji).2.2.1 hsink hr
   have hfreeA : ∀ a ∈ args, ∀ r ∈ roots (argE Γ a).vdeps, r ∉ S := by
     intro a ha r hr
     obtain ⟨j, hj, rfl⟩ := mem_args ha
@@ -566,7 +596,7 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
         · exact h.1
         · exact h.1
       · rw [← hak']
-        exact mem_movedArgs_of (List.getElem?_eq_getElem hk1) (by rw [hpk, hs]; decide))
+        exact mem_sunkArgs_of (List.getElem?_eq_getElem hk1) (by rw [hpk, hs]))
     (fun _ h => by cases h) (Keeps.refl Γ [])
     (fun v E hv hl hn' => ⟨hn v E hv hl hn', fun _ _ _ h => by cases h⟩)
   have hk : Keeps Γ (callPost Γ fn args) Y := hkY.killNames _
@@ -687,7 +717,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @letcall Γ Γ1 Δ F x f args k E hks hx _ hc _ _ _ ih =>
+  | @letcall Γ Γ1 Δ F x f args k E hks hx _ hc _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by

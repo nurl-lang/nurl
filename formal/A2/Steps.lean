@@ -760,7 +760,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk 
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
         (fun s x h => ViewIn.inr_inv h) (hi.tyok hy)⟩
-  | @pack fs te ms y cs Ey Γ1 D hy hly hte hpa hcaps hnw =>
+  | @pack fs te ms y cs Ey Γ1 D hy hly hte hpa hcaps =>
     cases he with
     | pack htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly hte hpa htk 
@@ -784,13 +784,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       · intro fs' te' ms' e' cs' hs
         rcases hs.cases' with h | ⟨e0, hc, hs'⟩
         · cases h
-          refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_, fun c' hc' => ?_⟩
-          rotate_left 2
-          · -- what the environment holds is held in `D`, which changes nothing by name
-            have hb := hnw _ (pu.nin c' hc')
-            rcases pu.pk.mode hc' with h | ⟨b', hb', hbn'⟩
-            · exact h
-            · simp only [Kind.bound] at hb; rw [hb'] at hb; exact absurd hb hbn'
+          refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_⟩
           · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
             rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, hbn, _⟩
             · exact Or.inl hinp
@@ -1417,19 +1411,26 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
   | inr _ ih => intro D hDs hDm hlt hnp; have hx := ih hDs hDm hlt hnp; rw [happ] at hx; exact .inr hx
   | @pkg fs te ms x cs P0 H0 _ ih =>
     intro D hDs hDm hlt hnp
-    have hDr : readers D ⊆ Ep.path ++ Ep.held := fun d hd => hDs (readers_sub _ hd)
-    have hDrm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ readers D := by
+    -- the environment is rerooted through what the parameter held but a
+    -- change of one of this package's own captures; the parameter was not
+    -- held by name, so what it held keeps its bound
+    have hDr : envDeps cs D ⊆ Ep.path ++ Ep.held := fun d hd => hDs (envDeps_sub _ _ hd)
+    have hDrm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ envDeps cs D := by
       intro d hd hn
-      refine mem_readers.mpr ⟨hDm d hd hn, ?_⟩
+      refine mem_envDeps_of_mem (hDm d hd hn) ?_
       obtain ⟨r, k⟩ := d; cases k <;> simp_all [Kind.isName, Kind.bound]
-    have hx := ih hDr hDrm (fun d hd => hlt d (readers_sub _ hd))
-      (fun d hd hn => hnp d (readers_sub _ hd) hn)
+    have hx := ih hDr hDrm (fun d hd => hlt d (envDeps_sub _ _ hd))
+      (fun d hd hn => hnp d (envDeps_sub _ _ hd) hn)
     rw [happ] at hx
-    have hr : reroot p (readers D) (readers H0) ⊆ readers (reroot p D H0) :=
-      (reroot_readers (p := p) (H := H0) (fun d hd => (mem_readers.mp hd).2)).trans
-        (readers_mono (reroot_sub (readers_sub _)))
+    have hH0 : ∀ d ∈ H0, d.root = p → d.kind.bound = .none := by
+      intro d hd hdp
+      have := hnp d hd
+      obtain ⟨r, k⟩ := d; cases k <;> simp_all [Kind.isName, Kind.bound]
+    have hr : reroot p (envDeps cs D) (envDeps cs H0) ⊆ envDeps cs (reroot p D H0) :=
+      (reroot_envDeps (p := p) (H := H0) (fun d hd => (mem_envDeps.mp hd).2) hH0).trans
+        (envDeps_mono (reroot_sub (envDeps_sub _ _)))
     exact .pkg (hx.mono (List.append_subset.mpr ⟨fun _ h => List.mem_append_left _
-      (reroot_sub (readers_sub _) h), fun _ h => List.mem_append_right _ (hr h)⟩) hr)
+      (reroot_sub (envDeps_sub _ _) h), fun _ h => List.mem_append_right _ (hr h)⟩) hr)
   | view h =>
     intro D hDs hDm hlt _
     obtain ⟨dep, hd, ha⟩ := h

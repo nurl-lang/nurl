@@ -69,9 +69,9 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hp dep hd
       · exact hh dep hd
     exact .inr (ih hph hh)
-  | pkg _ ih =>
-    have hr : ∀ dep ∈ readers _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => hh dep (readers_sub _ hd)
-    have hph : ∀ dep ∈ _ ++ readers _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+  | @pkg fs te ms x cs P H _ ih =>
+    have hr : ∀ dep ∈ envDeps cs H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => hh dep (envDeps_sub _ _ hd)
+    have hph : ∀ dep ∈ P ++ envDeps cs H, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
       · exact hp dep hd
       · exact hr dep hd
@@ -153,6 +153,15 @@ theorem append_readers_sub {P H : List Dep} : (P ++ readers H) ++ readers H ⊆ 
   · exact Or.inr (readers_sub _ hd)
   · exact Or.inr (readers_sub _ hd)
 
+theorem append_envDeps_sub {cs : List (Var × PMode × Ty)} {P H : List Dep} :
+    (P ++ envDeps cs H) ++ envDeps cs H ⊆ P ++ H := by
+  intro d hd
+  simp only [List.mem_append] at hd ⊢
+  rcases hd with (hd | hd) | hd
+  · exact Or.inl hd
+  · exact Or.inr (envDeps_sub _ _ hd)
+  · exact Or.inr (envDeps_sub _ _ hd)
+
 /-- A `Vec` handle inside a borrowed value reaches its node through one of
     the value's dependencies. -/
 theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m c n)
@@ -180,7 +189,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
   | pkg _ ih =>
     cases ht with
-    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_readers_sub hd, rest⟩
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
@@ -214,7 +223,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
   | pkg _ ih =>
     cases ht with
-    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_readers_sub hd, rest⟩
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_envDeps_sub hd, rest⟩
 
 /-- A value held at the top of a borrowed slot `y` is valid through `y`
     itself: every handle in it is one `y` holds. -/
@@ -373,6 +382,65 @@ theorem namesL_nil {es : List Val} (h : ∀ e ∈ es, e.names = []) : namesL es 
   | cons e es ih =>
     simp only [namesL, h e (List.mem_cons_self ..), ih fun x hx => h x (List.mem_cons_of_mem _ hx),
       List.append_nil]
+
+/-- A value of a type that holds no closure holds nothing by name. -/
+theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = false) : v.names = [] := by
+  induction h with
+  | int => rfl
+  | view => rfl
+  | node _ ih => exact namesL_nil fun e he => ih e he ht
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht
+    simp [Val.names, iha ht.1, ihb ht.2]
+  | inl _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht; exact ih ht.1
+  | inr _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht; exact ih ht.2
+  | pkg => cases ht
+
+/-- A value of a type that holds no closure is valid through its
+    dependencies on memory alone: it holds nothing by name, and its handles
+    and views land through memory. -/
+theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H)
+    (hf : τ.hasFn = false) : ValOK m τ v (A2.memDeps P) (A2.memDeps H) := by
+  have app : ∀ (P H : List Dep), A2.memDeps (P ++ H) = A2.memDeps P ++ A2.memDeps H := fun _ _ =>
+    List.filter_append _ _
+  induction h with
+  | int => exact .int
+  | @href t c P H h =>
+    obtain ⟨dep, hd, n0, d, es, hr, hk, hw', hv, hn⟩ := h
+    have hkm : (!dep.kind.isName) = true := by
+      rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+    refine .href ⟨dep, List.mem_filter.mpr ⟨hd, hkm⟩, n0, d, es, hr, hk, hw', hv.memDeps, ?_⟩
+    intro c' hc'
+    rw [hw'.names_nil_fn hf] at hc'; cases hc'
+  | view h =>
+    obtain ⟨dep, hd, n0, c', es', hr, hk, hol, hw''⟩ := h
+    refine .view ⟨dep, List.mem_filter.mpr ⟨hd, ?_⟩, n0, c', es', hr, hk, hol, hw''⟩
+    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  | pair _ _ ihx ihy =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    have hx := ihx hf.1; have hy := ihy hf.2
+    rw [app] at hx hy; exact .pair hx hy
+  | inl _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    have hx := ih hf.1; rw [app] at hx; exact .inl hx
+  | inr _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    have hx := ih hf.2; rw [app] at hx; exact .inr hx
+  | pkg => cases hf
+
+/-- A borrowed value of a type that holds no closure holds nothing by name. -/
+theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H)
+    (hf : τ.hasFn = false) : v.names = [] := by
+  induction h with
+  | int => rfl
+  | href => rfl
+  | view => rfl
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    simp [Val.names, iha hf.1, ihb hf.2]
+  | inl _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf; exact ih hf.1
+  | inr _ ih => simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf; exact ih hf.2
+  | pkg => cases hf
 
 /-- A value whose type holds no views holds no closure, so captures nothing
     by name. -/
