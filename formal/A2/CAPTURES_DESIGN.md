@@ -85,3 +85,26 @@ is sound.
 4. `weaker_open`: the opened call and the package call kill the *same*
    capture roots (via `envE_names`), so relate the two `killNames` with the
    order-independent `killAll`/`canon_quiet` machinery already in `Rename`.
+
+## Scope note (measured, not yet mechanized)
+
+The moves-condition refinement is correct but its ripple is **wide**, because
+admitting a by-name reach to an `inout` moved argument changes a core frame
+invariant: a by-name dependency root may now legitimately *be* an `inout`
+moved argument (it survives the call, so naming it stays valid). Concretely
+these all shift from "no moved arg is reached at all" to "no moved arg is
+reached *by memory*, and a `sink` is reached by nothing":
+
+- `Call.moving_root` → memory-only; add `Call.sink_root` (full) for sinks.
+- `Call.notRen_root`, `Call.frame_root`, `frame_sat`, `argNames_root`,
+  `sOK.N_out`/`Rroot`, and `NameWf.CallT.names`'s `movedArgs` exclusion must
+  split into memory (all moved args) vs by-name (sinks only, via `sinkArgs`).
+- `Rename` needs `roots_liftE_ρ_mem` / `roots_liftE_ρ_name` (memory/name
+  variants of `roots_liftE_ρ`) — drafted and type-checked in isolation.
+
+Done in a focused pass this is routine (every step is Lean-checked, so no
+unsound shortcut is possible), but it touches the whole frame/naming layer of
+`Call.lean`; it was reverted here to keep the tree green through `CallInv`
+rather than commit a half-applied refinement. The `NameWf`/`Rename` pieces
+(`sinkArgs`, `mem_sinkArgs`, `roots_liftE_ρ_mem`, `roots_liftE_ρ_name`, the
+`CallT.names` sink-split) were proven and are the template for the rest.
