@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+27
+52
+-23
+30
+no closure
+26
+27
+28

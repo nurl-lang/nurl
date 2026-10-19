@@ -988,13 +988,21 @@ against source that was never written. The stdlib names its type variables
 in a body that never spells a boolean. The compiler names the collision in
 the diagnostic when an instantiation of a `[T]` / `[F]` template fails.
 
-Type arguments at call sites may be *compound types*, not just base
-identifiers: a base IDENT (type keyword or named type), a pointer / option
-(`*T`, `?T`, `??T`), or a nested generic / closure application
-(`( Pair K V )`, `( @ R P* )`). For example `( id [*Point] p )` and
-`( box [( Pair i s )] x )` are both accepted; each argument's lowered type
-is mangled into the call name. The one shape not accepted as a type argument
-is a bare anonymous slice (`[T`) — wrap it in a named struct.
+Type arguments at call sites and in type applications may be *compound
+types*, not just base identifiers: a base IDENT (type keyword or named
+type), a pointer / option (`*T`, `?T`, `??T`), a nested generic or closure
+type (`( Pair K V )`, `( @ R P* )`), or a trait object (`%Trait`). For
+example `( id [*Point] p )`, `( box [( Pair i s )] x )`,
+`( vec_new [( @ i i )] )`, `( Vec %Show )` and `( Rc ?( @ v ) )` are all
+accepted; each argument's lowered type is mangled into the call name. A
+type with no one-word spelling of its own is mangled — and substituted
+into the template — as its *slug*: a closure as `fn<N>` followed by
+`_<len>_<slug>` for its return type and each parameter in turn
+(`( @ i i )` → `fn1_3_i64_3_i64`, `( @ v )` → `fn0_4_void`), a trait
+object as `dyn_<Trait>`. The lengths make the slug a prefix code, so it
+reads back to exactly the type it was made from. The one shape not
+accepted as a type argument is a bare anonymous slice (`[T`) — wrap it in
+a named struct.
 
 A type parameter may carry one or more **trait bounds** via `: Trait`,
 written `[A: Ord]`, `[K: Hash V]`, or `[A: Ord: Show]`. A bound is

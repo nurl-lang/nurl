@@ -260,3 +260,7 @@ h272_struct_global_torn_between_threads	§6.5	A3	mutable struct global written/r
 h273_string_global_freed_under_reader	§6.5	A3	string global reassigned (old freed) while another thread reads it	rejected
 stdlib/h178_trusted_by_path_substring	§6.4	B	any path containing /stdlib/ compiled as trusted stdlib, checks off	rejected
 stdlib/h260_zip_archive_outlives_its_bytes	§6.4	B	stdlib ZipArchive kept bare pointer into caller's Vec; Vec freed first	runs-clean
+h281_returned_option_of_closure	§7.5	A2	option of a capturing closure handed back; the frame freed the env the option carried	runs-clean
+h282_struct_field_option_of_closure	§7.5	A2	struct literal handed back with an option of a closure in a field; env freed by the frame	runs-clean
+h283_closure_borrowed_from_field	§2.11	A2	closure read out of a struct field, field replaced (old env dropped), closure called	rejected
+h284_returned_result_of_closure	§7.5	A2	result of a capturing closure handed back; the frame freed the env the result carried	runs-clean

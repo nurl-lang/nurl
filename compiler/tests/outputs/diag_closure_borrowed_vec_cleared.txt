@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_borrowed_vec_cleared.nu:12: error: 'g' borrows from 'fs', which ended at line 12 — a field of it was replaced. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'g' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup g ).
+    ?? ( vec_get [( @ i i )] fs 0 ) { T g → { ( vec_clear [( @ i i )] fs ) ( nurl_println_int ( g 1 ) ) } F → {} }
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

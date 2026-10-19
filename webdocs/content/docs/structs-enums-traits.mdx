@@ -102,6 +102,20 @@ compiled, monomorphic copy:
 ( id [s] `hi` )    // instantiates id for s, a separate copy
 ```
 
+A type argument can be any type, a closure type or a trait object
+included — a list of callbacks is a `( Vec ( @ v i ) )`:
+
+```nu
+: ( Vec ( @ v i ) ) subs ( vec_new [( @ v i )] )
+( vec_push [( @ v i )] subs \ i n → v { ( nurl_println_int n ) } )
+~ h subs { ( h 42 ) }
+
+: ( Vec %Show ) shapes ( vec_new [%Show] )
+```
+
+The container owns each closure's environment and drops it with the
+element, as a struct owns a closure field.
+
 A type parameter can require an implementation of a trait with `: Trait`:
 
 ```nu

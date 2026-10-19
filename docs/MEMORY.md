@@ -1307,6 +1307,8 @@ which drops it:
 | a function result | the caller |
 | a struct field | the struct, with its other fields; copying the struct copies the environment |
 | a slice of closures | the slice, element by element |
+| a container whose element type is a closure (`( Vec ( @ i i ) )`, a map's values, an `Rc`, a generic struct's field) | the container, element by element; copying the container copies each environment |
+| an option or a result of a closure | the option, when its tag says the closure is there; copying the option copies the environment |
 | another closure's captures | that closure's environment (nested environments form a tree) |
 | a `?` / `??` join | whatever consumes the join |
 | a fiber, a thread, a signal handler, a sqlite authorizer | the runtime, which keeps its own copy |
@@ -1335,14 +1337,30 @@ environment (§6.2); share handles are captured as a share of their own.
 **A closure stored into a struct or a slice owns what it captured.** A
 closure made in a function views the `String`s, `Vec`s and handles it
 captures: the function still owns them and drops them at its end. Stored
-into a struct field (a literal's or by `=`, through a pointer too) or a
-slice of closures, the closure may outlive that function, so the stored
+into a struct field (a literal's or by `=`, through a pointer too), a
+slice of closures, an option or a container's element, the closure may
+outlive that function, so the stored
 environment copies in what it only viewed: `nurl_closure_adopt` (a
 literal's environment, in place) and `nurl_closure_own_copy` (a binding's,
 in a copy) switch it to a second descriptor, `own`, whose `drop` and
 `clone` cover those captures too (h195). The descriptor is
 `{ size, drop, clone, trace, own, adopt }`; `own` and `adopt` are null for
 an environment that already owns everything it captured.
+
+**A closure read out of an owner borrows from it.** A closure binding
+that does not own its environment — read out of a struct's field
+(`: ( @ i i ) g . s f`), an option's payload (`T g →`), a container's
+element (a `vec_get` payload, a foreach element) — is a borrow of that
+owner, as a `String` read out of it is: the owner dying, given a new
+value, a field of it replaced or its elements dropped ends the binding,
+and calling it afterwards is a compile error (h283). `( mem_dup g )` is a
+copy that owns its environment. Accessors that hand a closure back as a
+result (`vec_at`, `rc_get`) hand back such a copy — a closure result is
+always its caller's own — while a foreach element and a `vec_get` payload
+are lent, at no cost. A closure type as a generic type argument is
+written as a type anywhere else is (`( Vec ( @ i i ) )`,
+`( vec_new [( @ i i )] )`); in mangled names it is its slug,
+`fn1_3_i64_3_i64` (docs/spec.md §4.8).
 
 **Closure parameters are always borrowed.** A call through a closure value
 cannot see what the body does with its arguments, so the contract is
