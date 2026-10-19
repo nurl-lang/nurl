@@ -211,7 +211,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr ⟨_, Step.letvP hres⟩
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ =>
+  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ _ =>
     intro m hcd hi
     exact Or.inr (hcall (k := k) hx hc hi.toMInv)
   | @scope Γ Δ1 F x k hxE _ _ _ ih =>
@@ -315,7 +315,7 @@ theorem progress {P : Prog}
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     exact Or.inr ⟨_, Step.letrec hf hp hmx⟩
-  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ _ =>
+  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ _ _ =>
     intro m hcd hi
     exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO ih =>

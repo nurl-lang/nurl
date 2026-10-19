@@ -322,6 +322,9 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
       {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
+      -- what the environment holds changes nothing by name: a closure that may
+      -- change a binding by name is called where it is, not captured (A2-6a)
+      (∀ d ∈ D, d.kind.bound = .none) →
       RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs⟩ Γ1
 
 /-! ### Calls -/
@@ -350,6 +353,13 @@ def argNames (Γ : Ctx) (args : List Var) : List Dep :=
 /-- ... those a closure may change. -/
 def mutNames (Γ : Ctx) (args : List Var) : List Dep :=
   (argNames Γ args).filter (fun d => d.kind.bound != .none)
+
+/-- The arguments hold no closure that may change a binding by name.  A
+    closure with by-name mutable captures is called where it is, not handed
+    to a call (A2-6a): inside a callee the call setup could not tell which of
+    its values reach such a capture. -/
+def NoWriters (Γ : Ctx) (args : List Var) : Prop :=
+  ∀ d ∈ argNames Γ args, d.kind.bound = .none
 
 /-- What the arguments hold: views, in every way a callee may come to depend
     on them, and closures, by name. -/

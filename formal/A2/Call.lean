@@ -150,9 +150,9 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | seq _ _ _ iha ihb =>
     intro hs; simp only [Stmt.src, Bool.and_eq_true] at hs; exact (iha hs.1).trans (ihb hs.2)
   | letv hks hx _ hr _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
-  | letcall hks hx _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
+  | letcall hks hx _ hc _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
-  | callc hks hx _ _ _ _ _ _ _ hcT _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
+  | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
   | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ ih =>
     intro _
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
@@ -257,6 +257,7 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
                   args.getD j 0 ≠ args.getD i 0 ∧ args.getD i 0 ∉ roots (argE Γ (args.getD j 0)).vdeps) ∧
               (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))
   nfree   : NamesFree Γ F args
+  noW     : NoWriters Γ args
   names   : NameWF Γ
   postdt  : DomTy Γ (callPost Γ fn args)
   resnames : NameWF (setE (callPost Γ fn args) x (callRes Γ fn args))
@@ -1087,6 +1088,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     obtain ⟨hout, Er, hEr, hro⟩ := h.argNames_root hd
     exact ⟨hout, h.frame_root hEr hro hout⟩
   N_named := h.N_named
+  N_noW := h.noW
   N_mut d hd hb := by
     change d ∈ argNames Γ args at hd
     have hdm : d ∈ mutNames Γ args := List.mem_filter.mpr ⟨hd, by simpa using hb⟩

@@ -803,7 +803,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @letcall Γ Γ1 Δ F x f args k E0 _ hx hxF hc _ _ ih =>
+  | @letcall Γ Γ1 Δ F x f args k E0 _ hx hxF hc _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hc.domMode.get h
@@ -816,7 +816,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2]⟩
-  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hcT.domMode.get h
@@ -895,13 +895,13 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h
     have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 hE)).exitScope x
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ ih =>
+  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
   | scope _ _ _ _ ih => exact fun h => (ih h).exitScope _
-  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all

@@ -687,7 +687,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @letcall Γ Γ1 Δ F x f args k E hks hx _ hc _ _ ih =>
+  | @letcall Γ Γ1 Δ F x f args k E hks hx _ hc _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by
@@ -699,7 +699,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hc.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx _ hc htc _ _ _ _ hcT _ _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx _ hc htc _ _ _ _ hcT _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, hk⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by

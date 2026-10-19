@@ -99,6 +99,9 @@ structure RSetup.OK (S : RSetup) : Prop where
                ((∀ v, S.ρ v ≠ d.root) ∧ ∃ Er, S.Φ d.root = some Er ∧ Er.live = true ∧ Er.held = [] ∧
                   Er.ty = t ∧
                   Er.mode.ownSlot = true ∧ (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false)
+  -- the arguments change nothing by name (a closure that may is called where
+  -- it is, never handed to a call), so neither does anything lifted with `A`
+  N_noW  : ∀ d ∈ S.N, d.kind.bound = .none
 
 /-- The callee's own contexts, as the call sets them up: a borrowed
     parameter depends on nothing it can see, and an `inout` parameter carries
@@ -420,6 +423,24 @@ theorem allKinds_notName {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.k
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, _, hd⟩ := h
   rcases hd with rfl | rfl | rfl <;> rfl
+
+/-- What the arguments held changes nothing by name. -/
+theorem A_noW (h : S.OK) {d : Dep} (hd : d ∈ S.A) : d.kind.bound = .none := by
+  rcases mem_A.mp hd with hd | hd
+  · simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd
+    obtain ⟨r, _, hd⟩ := hd
+    rcases hd with rfl | rfl | rfl <;> rfl
+  · exact h.N_noW d hd
+
+/-- Renamed dependencies, beside what the arguments held, change nothing by
+    name when the originals change nothing. -/
+theorem noW_lift (h : S.OK) {D D1 : List Dep} (hD : D1 ⊆ rds S.ρ D ++ S.A)
+    (hw : ∀ d ∈ D, d.kind.bound = .none) : ∀ d ∈ D1, d.kind.bound = .none := by
+  intro d hd
+  rcases List.mem_append.mp (hD hd) with hd | hd
+  · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
+    exact hw d0 hd0
+  · exact A_noW h hd
 
 /-- The caller's view of a callee context keeps what is held by name valid. -/
 theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S.canon Γa) := by
@@ -1136,12 +1157,12 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     simp only [liftE, reduceCtorEq, ↓reduceIte]
     exact fun d hd => append_sub (List.Subset.refl _)
       (ownHeld_mono (fun h => by simp [Ty.holdsView, h]) _) (hD1o rfl hd)
-  | @pack fs te ms y cs Ey Γa1 D hy hly hte hpa hcaps =>
+  | @pack fs te ms y cs Ey Γa1 D hy hly hte hpa hcaps hnw =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa
     have hty1 := liftE_ty' h hab hy
     refine ⟨_, RhsT.pack hc1 (by rw [liftE_live]; exact hly) (by rw [hty1]; exact hte) hp1
-      (CapsOK.lift h (PushArg.absOK hy hpa hab) hcaps hD1), fun x => ?_⟩
+      (CapsOK.lift h (PushArg.absOK hy hpa hab) hcaps hD1) (noW_lift h hD1 hnw), fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]) (by simp [liftE, liftMode]) (by simp)
       (by simp [liftE]) (fun h' => by simp [Mode.ownSlot] at h') ?_
     simp only [liftE, reduceCtorEq, ↓reduceIte]
@@ -1290,6 +1311,15 @@ theorem ren_mem_liftE (hab : S.AbsOK Γa) {a : Var} {Ea : Entry} (hEa : Γa a = 
   · rw [vdeps_rootb_nil hab hEa hrb] at hd0; cases hd0
   · exact (mem_liftE_vdeps hrb).mpr (Or.inl ⟨d0, hd0, rfl⟩)
 
+/-- Every argument of a well-typed call is bound. -/
+theorem CallT.args_some {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
+    (hc : CallT P Γ F f args E Γ1) : ∀ a ∈ args, ∃ Ea, Γ a = some Ea := by
+  obtain ⟨fn, _, hlen, hargs, _⟩ := hc
+  intro a ha
+  obtain ⟨i, hi, rfl⟩ := mem_args ha
+  obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi)
+  exact ⟨Ea, hEa⟩
+
 /-- What a closure handed to a call in the callee may change, where the call
     places it: what it may change in the callee, or what the arguments'
     closures may. -/
@@ -1313,6 +1343,22 @@ theorem mem_mutNames_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
       simp only [argNames, List.mem_flatMap]
       exact ⟨a, ha, by rw [hae, if_neg hn]; exact List.mem_filter.mpr ⟨hd0, hdn⟩⟩
     · exact Or.inr ⟨hN, by simpa using hb⟩
+
+/-- Arguments that change nothing by name still change nothing where the call
+    places them: neither the renamed bindings nor what the arguments held. -/
+theorem noWriters_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
+    (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hw : NoWriters Γa args) :
+    NoWriters (S.canon Γa) (args.map S.ρ) := by
+  intro d hd
+  by_cases hb : d.kind.bound = .none
+  · exact hb
+  · exfalso
+    have hdm : d ∈ mutNames (S.canon Γa) (args.map S.ρ) := List.mem_filter.mpr ⟨hd, by simpa using hb⟩
+    rcases mem_mutNames_canon h hab hargs hdm with hd' | ⟨hN, _⟩
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd'
+      obtain ⟨hd0a, hb0⟩ := List.mem_filter.mp hd0
+      simp [hw d0 hd0a] at hb0
+    · exact hb (h.N_noW d hN)
 
 theorem mutNames_canon_sub (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) :
@@ -2194,7 +2240,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letv (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hk _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hk _ hnw ih =>
     intro _ hab hw hn
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
@@ -2219,7 +2265,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc) hj hσ hhd hout hc'
       (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lift h hab hc hmo x (hE' x)), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
-  | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk _ ih =>
+      (noWriters_lift h hab (fun a ha => CallT.args_some hcT a (List.mem_cons_of_mem _ ha)) hnw)
+  | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk _ hnw ih =>
     intro _ hab hw hn
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
@@ -2239,6 +2286,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letcall (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hc'
       (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
+      (noWriters_lift h hab (CallT.args_some hc) hnw)
   | scope => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs

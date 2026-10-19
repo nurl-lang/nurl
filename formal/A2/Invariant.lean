@@ -296,7 +296,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      NoPin Δ x → NoWriters Γ args → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → NoPin Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
@@ -354,7 +354,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ →
       P[σ]? = some sig → sig.params.head? = some (.inp, .fn ms) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
       CallT P Γ F σ (c :: zs) E Γ1 → StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      NoPin Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      NoPin Δ x → NoWriters Γ zs → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →

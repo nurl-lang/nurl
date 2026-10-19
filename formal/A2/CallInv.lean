@@ -346,7 +346,8 @@ theorem callProgress {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {a
 /-- What a well-typed call in a configuration satisfying the invariant gives. -/
 theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var}
     {k : Stmt} {m : Mem} {fn : Fn} (hf : P[f]? = some fn) (hx : Γ x = none) (hxF : x ∉ F)
-    (hc : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args)) (hi : Inv m Γ F (.letcall x f args k)) :
+    (hc : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args)) (hnw : NoWriters Γ args)
+    (hi : Inv m Γ F (.letcall x f args k)) :
     CallH P Γ F x fn args m.nv := by
   obtain ⟨hw1, hdm, hE⟩ := CallT.wf hP hc hi.wf
   have hdt := CallT.domTy hc
@@ -374,13 +375,14 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     postdm := hdm
     reswf := hE
     nfree := hnf
+    noW := hnw
     names := hi.names
     postdt := hdt
     resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn }
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
-  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst
+  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hnw hi hst
   cases hst with
   | letcall hf hmx hb =>
     rename_i m1 fn
@@ -388,7 +390,7 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
       ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
-    have h := callH_of hP hf hx hxF hc' hi
+    have h := callH_of hP hf hx hxF hc' hnw hi
     exact ⟨_, h.typed hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
 
 
@@ -423,7 +425,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
       hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial
-    have h := callH_of hP hf hx hxF hc' hi'
+    have h := callH_of hP hf hx hxF hc' (fun d hd => by simp [argNames] at hd) hi'
     have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
     have hI := h.inv hi' hb
     have hkeep := h.keep (f := f) (k := k)
