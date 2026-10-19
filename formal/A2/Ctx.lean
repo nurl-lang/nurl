@@ -94,6 +94,33 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
 
+/-- What a value's handles need of what it depends on is views, never names:
+    keeping only what changes nothing by name keeps it valid. -/
+theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ {P' : List Dep}, (∀ d ∈ P, d.kind.bound = .none → d ∈ P') → ValOK m τ v P' H := by
+  have app : ∀ {P P' X : List Dep}, (∀ d ∈ P, d.kind.bound = .none → d ∈ P') →
+      ∀ d ∈ P ++ X, d.kind.bound = .none → d ∈ P' ++ X := fun hp d hd hb => by
+    rcases List.mem_append.mp hd with hd | hd
+    · exact List.mem_append_left _ (hp d hd hb)
+    · exact List.mem_append_right _ hd
+  induction h with
+  | int => intro _ _; exact .int
+  | href h =>
+    intro P' hp
+    obtain ⟨dep, hd, n0, d, es, hr, hk, hrest⟩ := h
+    refine .href ⟨dep, hp dep hd ?_, n0, d, es, hr, hk, hrest⟩
+    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+  | view h =>
+    intro P' hp
+    obtain ⟨dep, hd, ha⟩ := h
+    refine .view ⟨dep, hp dep hd ?_, ha⟩
+    obtain ⟨_, _, _, _, hk, _⟩ := ha
+    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+  | pair _ _ ihx ihy => intro P' hp; exact .pair (ihx (app hp)) (ihy (app hp))
+  | inl _ ih => intro P' hp; exact .inl (ih (app hp))
+  | inr _ ih => intro P' hp; exact .inr (ih (app hp))
+  | pkg _ ih => intro P' hp; exact .pkg (ih (app hp))
+
 theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
     (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)
     (h : SlotOK m E sl) : SlotOK m E' sl := by

@@ -1349,16 +1349,24 @@ theorem mem_mutNames_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
 theorem noWriters_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hw : NoWriters Γa args) :
     NoWriters (S.canon Γa) (args.map S.ρ) := by
-  intro d hd
-  by_cases hb : d.kind.bound = .none
-  · exact hb
-  · exfalso
-    have hdm : d ∈ mutNames (S.canon Γa) (args.map S.ρ) := List.mem_filter.mpr ⟨hd, by simpa using hb⟩
-    rcases mem_mutNames_canon h hab hargs hdm with hd' | ⟨hN, _⟩
-    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd'
-      obtain ⟨hd0a, hb0⟩ := List.mem_filter.mp hd0
-      simp [hw d0 hd0a] at hb0
-    · exact hb (h.N_noW d hN)
+  intro a ha hty d hd
+  obtain ⟨a0, ha0, rfl⟩ := List.mem_map.mp ha
+  obtain ⟨Ea, hEa⟩ := hargs a0 ha0
+  rw [argE_canon h hEa] at hty hd
+  cases hn : d.kind.isName
+  · cases hk : d.kind <;> simp_all [Kind.bound, Kind.isName]
+  by_cases hrb : Ea.mode = .rootb
+  · have hvd : (S.liftE a0 Ea).vdeps = (S.pe a0).vdeps := by simp [liftE, hrb, Entry.vdeps]
+    rw [hvd] at hd
+    exact h.N_noW d (h.pe_names a0 d hd hn)
+  · rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | hA
+    · have hae : argE Γa a0 = Ea := by unfold argE; rw [hEa]; rfl
+      have hty0 : Ea.ty ≠ .int ∨ Ea.mode = .rootb := by
+        rcases hty with h' | h'
+        · rw [liftE_ty _ hrb] at h'; exact Or.inl h'
+        · rw [liftE_mode _ hrb] at h'; exact absurd (liftMode_rootb.mp h') hrb
+      exact hw a0 ha0 (by rw [hae]; exact hty0) d0 (by rw [hae]; exact hd0)
+    · exact A_noW h hA
 
 theorem mutNames_canon_sub (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) :

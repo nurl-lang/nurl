@@ -1088,7 +1088,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     obtain ⟨hout, Er, hEr, hro⟩ := h.argNames_root hd
     exact ⟨hout, h.frame_root hEr hro hout⟩
   N_named := h.N_named
-  N_noW := h.noW
+  N_noW := h.noW.names
   N_mut d hd hb := by
     change d ∈ argNames Γ args at hd
     have hdm : d ∈ mutNames Γ args := List.mem_filter.mpr ⟨hd, by simpa using hb⟩

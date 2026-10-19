@@ -425,7 +425,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
       hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial
-    have h := callH_of hP hf hx hxF hc' (fun d hd => by simp [argNames] at hd) hi'
+    have h := callH_of hP hf hx hxF hc' (fun a ha => by cases ha) hi'
     have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
     have hI := h.inv hi' hb
     have hkeep := h.keep (f := f) (k := k)

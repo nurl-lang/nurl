@@ -389,7 +389,17 @@ theorem reroot_readers {p : Var} {D H : List Dep} (hD : ∀ d ∈ D, d.kind.boun
     to a call (A2-6a): inside a callee the call setup could not tell which of
     its values reach such a capture. -/
 def NoWriters (Γ : Ctx) (args : List Var) : Prop :=
-  ∀ d ∈ argNames Γ args, d.kind.bound = .none
+  ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
+    ∀ d ∈ (argE Γ a).vdeps, d.kind.bound = .none
+
+theorem NoWriters.names {Γ : Ctx} {args : List Var} (h : NoWriters Γ args) :
+    ∀ d ∈ argNames Γ args, d.kind.bound = .none := by
+  intro d hd
+  simp only [argNames, List.mem_flatMap] at hd
+  obtain ⟨a, ha, hda⟩ := hd
+  split at hda
+  · simp at hda
+  · rename_i hn; exact h a ha (Or.inl hn) d (List.mem_filter.mp hda).1
 
 /-- What the arguments hold: views, in every way a callee may come to depend
     on them, and closures, by name. -/
