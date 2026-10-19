@@ -427,7 +427,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       have hd : derive (args.getD k 0) Ea .self = [⟨args.getD k 0, rootKind Ea.ty .self⟩] := by
         simp [derive, hm, Mode.isRoot]
       rw [hd]
-      refine lend_valOK' hw (fun t c d es ht => ⟨_, List.mem_singleton_self _, _,
+      refine lend_valOK' hw (hi.pkgs _ _ T hT rfl) (fun t c d es ht => ⟨_, List.mem_singleton_self _, _,
         Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl) (fun s hs => ?_)
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)

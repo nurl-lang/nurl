@@ -57,6 +57,16 @@ theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
   exact ⟨d, o, l, rfl, dep, hs hd, ha⟩
 
+/-- A view is valid only through a dependency that ends views, never through
+    a name: what a value's views need, it needs of `readers`. -/
+theorem ViewsOK.readers {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
+    ViewsOK m τ T (readers H) := by
+  intro s v hv
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
+  refine ⟨d, o, l, rfl, dep, mem_readers.mpr ⟨hd, ?_⟩, ha⟩
+  obtain ⟨n0, c, es, _, hk, _⟩ := ha
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+
 theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H') : NamesIn T H' :=
   fun c hc => hs (h c hc)
 
@@ -78,7 +88,8 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | pair _ _ ihx ihy => intro P' H' hp hs; exact .pair (ihx (app hp hs) hs) (ihy (app hp hs) hs)
   | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
-  | pkg _ ih => intro P' H' hp hs; exact .pkg (ih (app hp hs) hs)
+  | pkg _ ih =>
+    intro P' H' hp hs; exact .pkg (ih (app hp (readers_mono hs)) (readers_mono hs))
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs

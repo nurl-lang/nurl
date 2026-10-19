@@ -70,11 +70,12 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
       · exact hh dep hd
     exact .inr (ih hph hh)
   | pkg _ ih =>
-    have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
+    have hr : ∀ dep ∈ readers _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => hh dep (readers_sub _ hd)
+    have hph : ∀ dep ∈ _ ++ readers _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
       · exact hp dep hd
-      · exact hh dep hd
-    exact .pkg (ih hph hh)
+      · exact hr dep hd
+    exact .pkg (ih hph hr)
 
 /-! ### Borrowed parameters reach only frozen owners -/
 
@@ -144,6 +145,14 @@ theorem append_assoc_sub {P H : List Dep} : (P ++ H) ++ H ⊆ P ++ H := by
   · exact hd
   · exact List.mem_append_right _ hd
 
+theorem append_readers_sub {P H : List Dep} : (P ++ readers H) ++ readers H ⊆ P ++ H := by
+  intro d hd
+  simp only [List.mem_append] at hd ⊢
+  rcases hd with (hd | hd) | hd
+  · exact Or.inl hd
+  · exact Or.inr (readers_sub _ hd)
+  · exact Or.inr (readers_sub _ hd)
+
 /-- A `Vec` handle inside a borrowed value reaches its node through one of
     the value's dependencies. -/
 theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m c n)
@@ -171,7 +180,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
   | pkg _ ih =>
     cases ht with
-    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_readers_sub hd, rest⟩
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
@@ -205,7 +214,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
     | inr ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
   | pkg _ ih =>
     cases ht with
-    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_assoc_sub hd, rest⟩
+    | pkg ht => obtain ⟨dep, hd, rest⟩ := ih ht; exact ⟨dep, append_readers_sub hd, rest⟩
 
 /-- A value held at the top of a borrowed slot `y` is valid through `y`
     itself: every handle in it is one `y` holds. -/

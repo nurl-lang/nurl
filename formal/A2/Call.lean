@@ -1305,8 +1305,7 @@ theorem exitsP_rblt {base : Nat} {pe : Var → Entry} {Q : Var → Prop}
 
 theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var → Entry} {s : Stmt}
     {Δ : Ctx} (hs : StmtT P Γ Fc s Δ) (hpe : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.root < base)
-    (hΔn : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.kind.bound ≠ .none →
-      ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true)
+    (hpw : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.kind.bound = .none)
     (hΔrb : RbQ (· < base) Δ) :
     ∀ (ps : List (PMode × Ty)) (i : Nat), (∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe (i + k) p) →
       StmtT P Γ Fc (wrapParams ps base i s) (exitsP ps base i pe Δ) := by
@@ -1325,18 +1324,8 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
       obtain ⟨E, hE, hm, hl, hr, hF, hp⟩ := h0
       have hvd : E.vdeps = (pe i).path ++ (pe i).held := by
         rw [← hp]; simp [Entry.vdeps, hm, Mode.ownSlot]
-      have := StmtT.rbind (P := P) hE hm hl hr hF (ih (i + 1) hc') (fun d hd hb => by
-        rw [hvd] at hd
-        have hlt := hpe i d hd
-        refine ⟨fun e => by have := vlt hlt; have := veq e; omega, ?_⟩
-        obtain ⟨Er, hEr, hro⟩ := hΔn i d hd hb
-        have hmo := exitsP_mode (pe := pe) ps (i + 1) Δ hlt
-        rw [hEr] at hmo
-        cases h1 : exitsP ps base (i + 1) pe Δ d.root with
-        | none => rw [h1] at hmo; cases hmo
-        | some E1 =>
-          rw [h1] at hmo; simp only [Option.map_some, Option.some.injEq] at hmo
-          exact ⟨E1, rfl, by rw [hmo]; exact hro⟩)
+      have := StmtT.rbind (P := P) hE hm hl hr hF (ih (i + 1) hc') (fun d hd => by
+        rw [hvd] at hd; exact hpw i d hd)
       rw [hp] at this; exact this
     | sink =>
       obtain ⟨hE, hF⟩ := h0
@@ -1823,14 +1812,14 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       Weaker (exitScope (base + fn.params.length) Γ3) (setE (callPost Γ fn args) x (callRes Γ fn args))) :
     StmtT P ((callS Γ F fn args base x).canon (sigCtx fn)) F (callIn fn args base x)
       (setE (callPost Γ fn args) x (callRes Γ fn args)) := by
-  have hΔn : ∀ j, ∀ d ∈ (callPe Γ fn.params args j).path ++ (callPe Γ fn.params args j).held,
-      d.kind.bound ≠ .none → ∃ Er, (callS Γ F fn args base x).canon Δa d.root = some Er ∧
-        Er.mode.isRoot = true := by
-    intro j d hd _
-    obtain ⟨hout, Er, hEr, hro⟩ := h.sOK.pe_out j d.root
-      (List.mem_map_of_mem (show d ∈ (callPe Γ fn.params args j).vdeps by rw [pe_vd]; exact hd))
-    exact ⟨Er, by rw [RSetup.canon_frame Δa hout]; exact hEr, hro⟩
-  have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hΔn
+  have hpw : ∀ j, ∀ d ∈ (callPe Γ fn.params args j).path ++ (callPe Γ fn.params args j).held,
+      d.kind.bound = .none := by
+    intro j d hd
+    have hdv : d ∈ (callPe Γ fn.params args j).vdeps := by rw [pe_vd]; exact hd
+    cases hn : d.kind.isName
+    · obtain ⟨r, k⟩ := d; cases k <;> simp_all [Kind.isName, Kind.bound]
+    · exact h.sOK.N_noW d (h.sOK.pe_names j d hdv hn)
+  have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw
     (fun p E hp hm d hd => (h.canon_rbq Δa p E hp hm d hd).1) fn.params 0 h.wrapCond
   have hfz := StmtT.frozen (z := zOf fn args base) hwrap zN_sub
   have hQb := exitsP_rblt (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _

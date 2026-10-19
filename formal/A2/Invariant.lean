@@ -98,7 +98,10 @@ def NamesIn (T : Val) (H : List Dep) : Prop :=
 def PkgsOK (T : Val) : Prop :=
   ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T →
     (cs.map (·.1)).Nodup ∧ (∀ c ∈ cs, c.2.1 = .inp ∨ ∃ b, c.2.1 = .inout b ∧ b ≠ .none) ∧
-    ∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp
+    (∀ c ∈ cs, ∀ c' ∈ e.names, c.1 = c'.1 → c.2.1 = .inp ∧ c'.2.1 = .inp) ∧
+    -- what the environment holds only reads by name: a closure that may change
+    -- a binding by name is never captured (A2-6a)
+    ∀ c' ∈ e.names, c'.2.1 = .inp
 
 /-- The borrowed `Vec` `c` of element type `t` is valid through `dep`. -/
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
@@ -118,9 +121,11 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
   | inr {a b : Ty} {x : Val} {P H : List Dep} : ValOK m b x (P ++ H) H → ValOK m (.sum a b) (.inr x) P H
+  -- a package's environment is valid through what the package depends on and
+  -- holds but its closures' changes by name: its own captures are no part of it
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
-      ValOK m te x (P ++ H) H → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
+      ValOK m te x (P ++ readers H) (readers H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -160,7 +165,8 @@ theorem valOK_sum {a b : Ty} :
     · exact .inr hx
 
 theorem valOK_fn {ms : List Nat} :
-    ValOK m (.fn ms) v P H ↔ ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ H) H := by
+    ValOK m (.fn ms) v P H ↔
+      ∃ fs te x cs, v = .pkg fs te ms x cs ∧ ValOK m te x (P ++ readers H) (readers H) := by
   constructor
   · intro h; cases h with | pkg hx => exact ⟨_, _, _, _, rfl, hx⟩
   · rintro ⟨f, te, x, cs, rfl, hx⟩; exact .pkg hx
@@ -303,7 +309,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
       StmtT P Γ F s Δ →
-      (∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true) →
+      -- a borrowed binding changes nothing by name (A2-6a: no such closure is handed on)
+      (∀ d ∈ E.vdeps, d.kind.bound = .none) →
       StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z z' : List Var} {s : Stmt} :
       -- `z` bounds what is lent: the typing lends a part of it

@@ -354,6 +354,36 @@ def argNames (Γ : Ctx) (args : List Var) : List Dep :=
 def mutNames (Γ : Ctx) (args : List Var) : List Dep :=
   (argNames Γ args).filter (fun d => d.kind.bound != .none)
 
+/-- What a list of dependencies holds but by a name that may change its
+    binding: views, and names that only read. -/
+def readers (H : List Dep) : List Dep := H.filter (fun d => d.kind.bound == .none)
+
+theorem mem_readers {H : List Dep} {d : Dep} : d ∈ readers H ↔ d ∈ H ∧ d.kind.bound = .none := by
+  simp [readers]
+
+theorem readers_sub (H : List Dep) : readers H ⊆ H := fun _ hd => (mem_readers.mp hd).1
+
+theorem readers_mono {H H' : List Dep} (h : H ⊆ H') : readers H ⊆ readers H' := fun _ hd =>
+  mem_readers.mpr ⟨h (mem_readers.mp hd).1, (mem_readers.mp hd).2⟩
+
+theorem comp_bound_none {k k' : Kind} (h1 : k.bound = .none) (h2 : k'.bound = .none) :
+    (comp k k').bound = .none := by
+  cases k <;> cases k' <;> simp_all [comp, Kind.bound]
+
+/-- Dropping a borrowed binding that changes nothing by name keeps what only
+    reads among what only reads. -/
+theorem reroot_readers {p : Var} {D H : List Dep} (hD : ∀ d ∈ D, d.kind.bound = .none) :
+    reroot p D (readers H) ⊆ readers (reroot p D H) := by
+  intro d hd
+  unfold reroot at hd
+  obtain ⟨d0, hd0, hdd⟩ := List.mem_flatMap.mp hd
+  obtain ⟨hd0H, hb0⟩ := mem_readers.mp hd0
+  refine mem_readers.mpr ⟨List.mem_flatMap.mpr ⟨d0, hd0H, hdd⟩, ?_⟩
+  split at hdd
+  · obtain ⟨d', hd', rfl⟩ := List.mem_map.mp hdd
+    exact comp_bound_none (hD d' hd') hb0
+  · simp only [List.mem_singleton] at hdd; rw [hdd]; exact hb0
+
 /-- The arguments hold no closure that may change a binding by name.  A
     closure with by-name mutable captures is called where it is, not handed
     to a call (A2-6a): inside a callee the call setup could not tell which of

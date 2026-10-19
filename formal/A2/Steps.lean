@@ -760,7 +760,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly rfl hpa htk 
       exact ⟨post, out_inj pu ha (Or.inr rfl) (Or.inr rfl) (WFv.inr pu.wf) (fun s x h => ViewIn.inr h)
         (fun s x h => ViewIn.inr_inv h) (hi.tyok hy)⟩
-  | @pack fs te ms y cs Ey Γ1 D hy hly hte hpa hcaps =>
+  | @pack fs te ms y cs Ey Γ1 D hy hly hte hpa hcaps hnw =>
     cases he with
     | pack htk =>
       obtain ⟨post, pu⟩ := push_take hi hanch hy hly hte hpa htk 
@@ -784,7 +784,13 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       · intro fs' te' ms' e' cs' hs
         rcases hs.cases' with h | ⟨e0, hc, hs'⟩
         · cases h
-          refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_⟩
+          refine ⟨hcaps.1, fun c hc => ?_, fun c hc c' hc' hcc => ?_, fun c' hc' => ?_⟩
+          rotate_left 2
+          · -- what the environment holds is held in `D`, which changes nothing by name
+            have hb := hnw _ (pu.nin c' hc')
+            rcases pu.pk.mode hc' with h | ⟨b', hb', hbn'⟩
+            · exact h
+            · simp only [Kind.bound] at hb; rw [hb'] at hb; exact absurd hb hbn'
           · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcaps.2 c hc
             rcases hmode with ⟨hinp, _⟩ | ⟨b, s, hb, hbn, _⟩
             · exact Or.inl hinp
@@ -1379,6 +1385,7 @@ theorem reroot_views (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
 
 theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
+    (hpw : ∀ d ∈ Ep.path ++ Ep.held, d.kind.bound = .none)
     {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H)
     (hnp : ∀ d ∈ H, d.kind.isName = true → d.root ≠ p) :
     ValOK (m.remove p) τ v (reroot p (Ep.path ++ Ep.held) P) (reroot p (Ep.path ++ Ep.held) H) := by
@@ -1392,7 +1399,12 @@ theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     rw [happ] at hx hy; exact .pair hx hy
   | inl _ ih => have hx := ih hnp; rw [happ] at hx; exact .inl hx
   | inr _ ih => have hx := ih hnp; rw [happ] at hx; exact .inr hx
-  | pkg _ ih => have hx := ih hnp; rw [happ] at hx; exact .pkg hx
+  | @pkg fs te ms x cs P0 H0 _ ih =>
+    have hx := ih (fun d hd hn => hnp d (readers_sub _ hd) hn)
+    rw [happ] at hx
+    have hr := reroot_readers (p := p) (H := H0) hpw
+    exact .pkg (hx.mono (List.append_subset.mpr ⟨List.subset_append_left _ _,
+      fun _ h => List.mem_append_right _ (hr h)⟩) hr)
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hlt hd ha
@@ -1473,7 +1485,8 @@ theorem rerootE_rootb {Γ : Ctx} {F : List Var}
 /-- The end of a borrowed parameter's scope. -/
 theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
-    {p : Var} {Ep : Entry} (hp : Γ p = some Ep) (hm : Ep.mode = .rootb) (hpF : p ∉ F) :
+    {p : Var} {Ep : Entry} (hp : Γ p = some Ep) (hm : Ep.mode = .rootb) (hpF : p ∉ F)
+    (hpw : ∀ d ∈ Ep.path ++ Ep.held, d.kind.bound = .none) :
     MInv (m.remove p) (exitRoot p (Ep.path ++ Ep.held) Γ) := by
   have hlive := hi.rootbLive p Ep hp hm
   have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
@@ -1529,7 +1542,7 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             · exact Or.inr h'
             · exact absurd ⟨h, h'⟩ hint
           · exact Or.inl h
-        exact reroot_valOK hi.heap hw hok hlt hv fun d hd => hnpE v E hE hl hn d
+        exact reroot_valOK hi.heap hw hok hlt hpw hv fun d hd => hnpE v E hE hl hn d
           (List.mem_append_right _ hd)
   · exact hi.heap.remove hw DropSlot.borrowed
   · intro v hv
