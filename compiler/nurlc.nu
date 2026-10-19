@@ -27633,17 +27633,19 @@ unsafe @ bck_sx_split s args → s {
     }
 }
 
-// Is a source-expression part a bare binding id?
-@ bck_sx_is_id s e → b {
+// Is a source-expression part a bare binding id (digits only)? Walked
+// through a pointer: nurl_str_get would re-measure `e` on every byte.
+unsafe @ bck_sx_is_id s e → b {
     : i n ( nurl_str_len e )
     ? == 0 n { ^ F } {}
+    : *u e_p # *u e
     : ~ i i 0
     ~ < i n {
-        : i c ( nurl_str_get e i )
+        : i c ( nurl_str_at e_p n i )
         ? | < c 48 > c 57 { ^ F } {}
         = i + i 1
     }
-    T
+    ^ T
 }
 
 // The number of lines of `s` (bck_sx_split's parts).
