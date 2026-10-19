@@ -1,0 +1,87 @@
+# A2-6a — by-name closure captures: design state
+
+Status: the memory-safety invariant has been strengthened for captures and
+builds green through `A2.CallInv` (the whole call machinery). `A2.Closure`
+(the closure/`dyn` *package-call* preservation) is the remaining file.
+
+## What is settled and proven (green through `CallInv`)
+
+1. **A binding held by name is live and holds nothing.** `DepsNamed` now
+   requires, for every by-name dep `⟨r, .name b t⟩`, that `Γ r` is live,
+   owns its slot, has `held = []`, type `t` with `t.holdsView = false`, and
+   allows `b` (`b = .none ∨ b ≠ .replace ∧ canDo`). Consequence: no change to
+   another binding can dangle a named binding, and moving/replacing/freeing a
+   binding ends everything that names it. Threaded through
+   `Frame → Rhs → Steps → TypingFacts → Preservation → Wf → NameWf →
+   Rename → Call → CallMem → CallInv`.
+
+2. **`ownHeld`**: an owned value of a view-free type holds nothing, so a
+   view-free vector `push`/`inout` adds nothing to track.
+
+3. **`Entry.fixed`** = borrowed param, or a view-free non-`replace` `inout`
+   param. `EntryWeaker` preserves fixed entries (live/held/own-slot path);
+   `AbsOK` carries "a fixed `inout` param holds nothing".
+
+4. **nurlc already closes the aliasing holes.** Probes (`c(c)`, `h(use,grow)`,
+   `f(use grow)`, `use grow`) are all rejected by nurlc with the §2.11
+   route-aliasing error. The distinction nurlc enforces, and that the formal
+   `NamesFree` mirrors, is **reader-vs-writer**: a binding mutated by name may
+   be *written* by name from several arguments (safe — every access re-reads
+   the binding, so a realloc is seen), but may not be *read by handle* (a
+   view) beside such a writer (the view goes stale). `NamesFree`'s last
+   clause `d'.kind.bound ≠ .none` is exactly this.
+
+## The one real design decision for `Closure.lean`
+
+The opened (implementation) call binds the captures as trailing
+`inp`/`inout` arguments: `args = m.nv :: zs ++ cs.map (·.1)`,
+`fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2)` (from
+`Implements`/`pkg_code`). The environment receiver `envE` genuinely *names*
+its captures (the package's `Ec.held` carries `capDeps cs`, and by-handle
+captured closures carry names too — so `envE` cannot simply drop names).
+
+Therefore a mutated (`inout`) capture passed as an argument is *reached by
+name* by the receiver argument. `CallT`'s current moves-condition
+
+```
+args[i] ∉ roots (argE Γ args[j]).vdeps        -- blanket: memory OR name
+```
+
+rejects this. The **correct refinement** (sound, and less conservative — it
+even admits valid programs the blanket rule rejects) is to police only the
+aliasing that is actually unsafe:
+
+```
+args[i] ∉ roots (memDeps (argE Γ args[j]).vdeps)                 -- always
+∧ (fn.params[i].1 = .sink →
+     args[i] ∉ roots (nameDeps (argE Γ args[j]).vdeps))          -- sink only
+```
+
+Rationale:
+- **memory reach** (view/inner/self) to any moved arg is always unsafe
+  (stale handle on move/realloc) — forbid always;
+- **by-name reach** to an `inout` arg is safe (the binding survives; a
+  realloc is seen through the name) — allow, and let `NamesFree` govern it
+  (writers-only, no reader-beside-writer);
+- **by-name reach** to a `sink` arg is unsafe (the binding is freed) — forbid.
+  (`NamesFree`'s `d.root ∉ args` already catches *write*-names to a direct
+  arg; the explicit `sink` clause catches *read*-names.)
+
+In a proof assistant this cannot introduce a hole: it only compiles once it
+is sound.
+
+### Remaining mechanization (in order)
+1. Apply the moves-condition refinement to `CallT` (Typing) and `CallH.arg`
+   (Call), then repair `CallT.names`/`CallH` naming lemmas: a by-name dep may
+   now point to an `inout` moved arg (which survives), so the `movedArgs`
+   exclusion (`hfree`) must be split into sink (fully excluded) vs inout
+   (name-reachable, still valid because live).
+2. `open_pkg`: build the opened `CallT` over `m.nv :: zs ++ cs.map (·.1)`;
+   per-capture `paramOK` and moves/`NamesFree` come from `pkg_caps`
+   (live/own/view-free/`canDo`) + `PkgsOK` (nodup, no capture reached from
+   another) + `FnOK` (an `inout` param is a `.vec`).
+3. `cloProgress`/`cloCase`: the `BindParams` step already binds
+   `m.nv :: zs ++ cs.map (·.1)`; align the `callStmt`/frame reasoning.
+4. `weaker_open`: the opened call and the package call kill the *same*
+   capture roots (via `envE_names`), so relate the two `killNames` with the
+   order-independent `killAll`/`canon_quiet` machinery already in `Rename`.
