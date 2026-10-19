@@ -90,22 +90,16 @@ structure RSetup.OK (S : RSetup) : Prop where
   -- what the arguments hold by name: frame bindings, of the frame's
   -- view; what may change them is not lent, ended in the frame already, and
   -- reached from a borrowed parameter only by name
-  pe_names : ∀ v, ∀ d ∈ (S.pe v).vdeps, d.kind.isName = true → d ∈ S.N
+  -- a borrowed parameter's by-name dependency on a frame binding is an
+  -- argument name (`N`); one on an `inout` argument it is handed beside (the
+  -- receiver naming its captures) is tracked by `pe_named`/`pe_out`, not `N`
+  pe_names : ∀ v, ∀ d ∈ (S.pe v).vdeps, d.kind.isName = true → (∀ w, S.ρ w ≠ d.root) → d ∈ S.N
   N_name : ∀ d ∈ S.N, d.kind.isName = true
-  -- a by-name argument dependency points to a frame root (not renamed), or to
-  -- an `inout` argument the call renames (a by-address writer that survives, §2.11)
-  N_out  : ∀ d ∈ S.N, ((∀ w, S.ρ w ≠ d.root) ∧ ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true)
-             ∨ (∃ u bh, S.ρ u = d.root ∧ S.bnd u = some bh)
-  N_named : ∀ d ∈ S.N, ∀ b t, d.kind = .name b t →
-               (∃ u bh, S.ρ u = d.root ∧ S.bnd u = some bh ∧ S.pty u = t ∧ b ≠ .replace ∧
-                  bh.1 ≠ .replace ∧ t.holdsView = false) ∨
-               ((∀ v', S.ρ v' ≠ d.root) ∧ ∃ Er, S.Φ d.root = some Er ∧ Er.live = true ∧ Er.held = [] ∧
-                  Er.ty = t ∧ Er.mode.ownSlot = true ∧ (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧
-                  t.holdsView = false)
+  N_out  : ∀ d ∈ S.N, (∀ w, S.ρ w ≠ d.root) ∧ ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true
+  N_named : DepsNamed S.Φ S.N
   N_mut  : ∀ d ∈ S.N, d.kind.bound ≠ .none → d.root ∉ S.Fc ∧ d.root ∉ S.R ∧
-             (((∀ w, S.ρ w ≠ d.root) ∧ ∃ Er, S.Φ d.root = some Er ∧ canDo Er.mode d.kind.bound ∧
-                 ∃ s, Er.ty = .vec s ∧ s.holdsView = false) ∨
-               (∃ u b, S.ρ u = d.root ∧ S.bnd u = some (b, false) ∧ d.kind.bound.le b)) ∧
+             (∃ Er, S.Φ d.root = some Er ∧ canDo Er.mode d.kind.bound ∧
+               ∃ s, Er.ty = .vec s ∧ s.holdsView = false) ∧
              (∀ v, ∀ d' ∈ (S.pe v).vdeps, d'.root = d.root → d'.kind.bound ≠ .none) ∧
              (∀ d' ∈ S.N, d'.root = d.root → d'.kind.bound ≠ .none) ∧
              (∀ y E, S.Φ y = some E → E.live = true → hits d.kind.bound false d.root E = false)
@@ -168,23 +162,21 @@ theorem mem_allKinds {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root 
 
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ allKinds S.R ∨ d ∈ S.N := List.mem_append
 
-/-- What the arguments held lies outside the callee at a root of the frame,
-    or is an `inout` argument the call renames (which survives). -/
-theorem A_out (h : S.OK) {d : Dep} (hd : d ∈ S.A) :
-    (∀ w, S.ρ w ≠ d.root) ∨ (∃ u bh, S.ρ u = d.root ∧ S.bnd u = some bh) := by
+/-- What the arguments held lies outside the callee, at roots of the frame. -/
+theorem A_out (h : S.OK) {d : Dep} (hd : d ∈ S.A) : ∀ w, S.ρ w ≠ d.root := by
   rcases mem_A.mp hd with hd | hd
-  · exact Or.inl (h.Rout _ (mem_allKinds hd))
-  · exact (h.N_out d hd).imp (·.1) id
+  · exact h.Rout _ (mem_allKinds hd)
+  · exact (h.N_out d hd).1
 
 theorem A_mem (h : S.OK) {d : Dep} (hd : d ∈ S.A) (hn : (!d.kind.isName) = true) : d ∈ allKinds S.R := by
   rcases mem_A.mp hd with hd | hd
   · exact hd
   · rw [h.N_name d hd] at hn; cases hn
 
-/-- A memory dependency the arguments held is never a renamed argument: it lies
-    at a root of the frame. -/
-theorem A_mem_out (h : S.OK) {d : Dep} (hd : d ∈ S.A) (hn : (!d.kind.isName) = true) :
-    ∀ w, S.ρ w ≠ d.root := h.Rout _ (mem_allKinds (A_mem h hd hn))
+theorem A_root (h : S.OK) {d : Dep} (hd : d ∈ S.A) : ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true := by
+  rcases mem_A.mp hd with hd | hd
+  · exact h.Rroot _ (mem_allKinds hd)
+  · exact (h.N_out d hd).2
 
 theorem liftMode_ownSlot (m : Mode) : (liftMode m).ownSlot = m.ownSlot := by cases m <;> rfl
 theorem liftMode_isRoot (m : Mode) : (liftMode m).isRoot = m.isRoot := by cases m <;> rfl
@@ -284,18 +276,6 @@ theorem pe_name_free (h : S.OK) {v : Var} {d : Dep} (hd : d ∈ (S.pe v).vdeps)
     exact allowed_name_free hal (hxu ▸ hbnd) hbr hname
   · exact absurd (hout x hr) id
 
-theorem N_name_free (h : S.OK) {d : Dep} (hd : d ∈ S.N)
-    {e : Eff} {hv : Bool} {x : Var} (hal : Allowed S e hv x) (hr : S.ρ x = d.root) :
-    e.kills hv d.kind = false := by
-  have hname := h.N_name d hd
-  obtain ⟨r, k⟩ := d
-  obtain ⟨b, t, rfl⟩ : ∃ b t, k = .name b t := by
-    cases k <;> simp_all [Kind.isName]
-  rcases h.N_named _ hd b t rfl with ⟨u, bh, hu, hbnd, _, _, hbr, _⟩ | ⟨hout, _⟩
-  · have hxu : x = u := h.inj x u (hr.trans hu.symm)
-    exact allowed_name_free hal (hxu ▸ hbnd) hbr hname
-  · exact absurd (hout x hr) id
-
 /-- Hitting a lifted entry is hitting the entry it lifts (for an effect the
     callee is allowed to apply to the binding). -/
 theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
@@ -322,9 +302,7 @@ theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa
     · rintro ⟨d, hd, hr, hk⟩
       rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
       · exact ⟨d0, hd0, h.inj _ _ hr, hk⟩
-      · rcases mem_A.mp ha with haR | haN
-        · exact absurd (h.Rout _ (mem_allKinds haR) x hr.symm) id
-        · rw [N_name_free h haN hal hr.symm] at hk; cases hk
+      · exact absurd hr.symm (A_out h ha x)
     · rintro ⟨d0, hd0, hr, hk⟩
       exact ⟨d0.ren S.ρ, (mem_liftE_vdeps hrb).mpr (Or.inl ⟨d0, hd0, rfl⟩), by simp [Dep.ren, hr], hk⟩
 
@@ -459,17 +437,10 @@ theorem canon_frameRoot (h : S.OK) {r : Var} (hr : ∀ v, S.ρ v ≠ r)
     ∃ E', S.canon Γa r = some E' ∧ E'.mode.isRoot = true := by
   rw [canon_frame _ hr]; exact hex
 
-/-- A dependency the arguments held is a root of the frame, or the renamed
-    `inout` argument (whose caller-view mode, after lifting, is `own`). -/
-theorem A_canon_root (h : S.OK) (hab : S.AbsOK Γa) {d : Dep} (hd : d ∈ S.A) :
-    ∃ E', S.canon Γa d.root = some E' ∧ E'.mode.isRoot = true := by
-  rcases mem_A.mp hd with hR | hN
-  · exact canon_frameRoot h (h.Rout _ (mem_allKinds hR)) (h.Rroot _ (mem_allKinds hR))
-  · rcases h.N_out d hN with ⟨hout, hex⟩ | ⟨u, bh, hu, hb⟩
-    · exact canon_frameRoot h hout hex
-    · obtain ⟨E0, hE0, hm0, _⟩ := hab.2.2 u bh hb
-      have hrb : E0.mode ≠ .rootb := by rw [hm0]; simp
-      exact ⟨S.liftE u E0, by rw [← hu, canon_ρ h, hE0]; rfl, by rw [liftE_mode u hrb, hm0]; rfl⟩
+/-- A dependency the arguments held is a root of the frame. -/
+theorem A_canon_root (h : S.OK) {d : Dep} (hd : d ∈ S.A) :
+    ∃ E', S.canon Γa d.root = some E' ∧ E'.mode.isRoot = true :=
+  canon_frameRoot h (A_out h hd) (A_root h hd)
 
 /-- A root a borrowed parameter depends on is a root of the frame, or a renamed
     `inout` argument. -/
@@ -503,7 +474,7 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
         rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
         · obtain ⟨Er, hEr, hro⟩ := hw v E hE hl hn' d0.root (List.mem_map_of_mem hd0)
           exact canon_root h hEr hro
-        · exact A_canon_root h hab ha
+        · exact A_canon_root h ha
   · rw [hc] at hy
     by_cases hrr : ∃ v, S.ρ v = r
     · obtain ⟨v, rfl⟩ := hrr
@@ -559,17 +530,8 @@ theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S
           · exact Or.inr ⟨hbr, Or.inl (by rw [liftE_mode _ hrb']; cases hm : Er.mode <;> simp_all [liftMode, Mode.ownSlot])⟩
         · rcases mem_A.mp ha with ha | ha
           · have := allKinds_notName ha; rw [hk] at this; cases this
-          · rcases h.N_named d ha b t hk with ⟨u, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
-                ⟨hout, Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩
-            · obtain ⟨Ev, hEv, hmv, htv, hfx⟩ := hab.2.2 u bh hb
-              have hrb' : Ev.mode ≠ .rootb := by rw [hmv]; simp
-              have hvv : Ev.ty.holdsView = false := by rw [htv, hpt]; exact hhv
-              obtain ⟨hlv, hhv'⟩ := hfx (Or.inr ⟨bh.1, hmv, hbh, hvv⟩)
-              refine ⟨S.liftE u Ev, by rw [← hρ, canon_ρ h, hEv]; rfl, by rw [liftE_live]; exact hlv,
-                liftE_held_named hrb' (by rw [hmv]; rfl) hhv' hvv, by rw [liftE_ty _ hrb', htv, hpt],
-                by rw [liftE_mode _ hrb', hmv]; rfl, Or.inr ⟨hbr, ?_⟩, hhv⟩
-              rw [liftE_mode _ hrb', hmv]; exact Or.inl rfl
-            · exact ⟨Er, by rw [canon_frame _ hout]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
+          · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named d ha b t hk
+            exact ⟨Er, by rw [canon_frame _ (h.N_out d ha).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
   · rw [hc] at hy
     rcases h.Φnamed y E' hy hl hnn d hd b t hk with ⟨v, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
         ⟨hout, Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩
@@ -1061,15 +1023,12 @@ theorem CapsOK.lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {D D1 : List 
   -- a capture binding is owning, so it is no `inout` parameter; a renamed
   -- capture dependency therefore comes from the original captures, never from
   -- the arguments' held
-  have hroot1 : ∀ d ∈ D1, ∀ v, d.root = S.ρ v →
-      (∃ d0 ∈ D, d0.root = v ∧ d.kind = d0.kind) ∨ (∃ bh, S.bnd v = some bh) := by
+  have hroot1 : ∀ d ∈ D1, ∀ v, d.root = S.ρ v → ∃ d0 ∈ D, d0.root = v ∧ d.kind = d0.kind := by
     intro d hd v hv
     rcases List.mem_append.mp (hD hd) with hd' | hd'
     · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd'
-      exact Or.inl ⟨d0, hd0, h.inj _ _ hv, rfl⟩
-    · rcases A_out h hd' with hout | ⟨u, bh, hu, hbnd⟩
-      · exact absurd hv.symm (hout v)
-      · exact Or.inr ⟨bh, h.inj v u (hv.symm.trans hu.symm) ▸ hbnd⟩
+      exact ⟨d0, hd0, h.inj _ _ hv, rfl⟩
+    · exact absurd hv.symm (A_out h hd' v)
   have hargE : ∀ c ∈ cs, ∀ Ev, Γa c.1 = some Ev → Ev.mode.ownSlot = true →
       argE (S.canon Γa) (S.ρ c.1) = S.liftE c.1 Ev := by
     intro c _ Ev hEv _
@@ -1082,20 +1041,17 @@ theorem CapsOK.lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {D D1 : List 
     obtain ⟨Ev, hEv, hl, hh, ht, ho, hhv, hmode⟩ := hc.2 c hc1
     have hrb : Ev.mode ≠ .rootb := by rw [ho]; simp
     have hos : Ev.mode.ownSlot = true := by rw [ho]; rfl
-    have hbnd0 : S.bnd c.1 = none := bnd_none_of_own hab hEv ho
     refine ⟨S.liftE c.1 Ev, by rw [canon_ρ h, hEv]; rfl, by rw [liftE_live]; exact hl,
       liftE_held_named hrb hos hh (by rw [ht]; exact hhv),
       by rw [liftE_ty _ hrb]; exact ht, by rw [liftE_mode _ hrb, ho]; rfl, hhv, ?_⟩
     rcases hmode with ⟨hinp, hrd⟩ | ⟨b, s, hb, hbn, hbr, hcan, hcF, hts, hsv, hnD, hnc⟩
     · refine Or.inl ⟨hinp, fun d hd hdr hn => ?_⟩
-      rcases hroot1 d hd c.1 hdr with ⟨d0, hd0, hr0, hk0⟩ | ⟨bh, hbnd⟩
-      · rw [hk0]; exact hrd d0 hd0 hr0 (hk0 ▸ hn)
-      · rw [hbnd0] at hbnd; cases hbnd
+      obtain ⟨d0, hd0, hr0, hk0⟩ := hroot1 d hd c.1 hdr
+      rw [hk0]; exact hrd d0 hd0 hr0 (hk0 ▸ hn)
     · refine Or.inr ⟨b, s, hb, hbn, hbr, by rw [liftE_mode _ hrb]; exact canDo_lift hcan, h.Fcout _, hts,
         hsv, fun d hd hdr => ?_, fun c'' hc'' d hd hdr => ?_⟩
-      · rcases hroot1 d hd c.1 hdr with ⟨d0, hd0, hr0, _⟩ | ⟨bh, hbnd⟩
-        · exact hnD d0 hd0 hr0
-        · rw [hbnd0] at hbnd; cases hbnd
+      · obtain ⟨d0, hd0, hr0, _⟩ := hroot1 d hd c.1 hdr
+        exact hnD d0 hd0 hr0
       · obtain ⟨c2, hc2, rfl⟩ := List.mem_map.mp hc''
         obtain ⟨Ev2, hEv2, _, _, _, ho2, _⟩ := hc.2 c2 hc2
         have hrb2 : Ev2.mode ≠ .rootb := by rw [ho2]; simp
@@ -1106,10 +1062,7 @@ theorem CapsOK.lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {D D1 : List 
         · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd'
           have hae : argE Γa c2.1 = Ev2 := by unfold argE; rw [hEv2]; rfl
           exact hnc c2 hc2 d0 (by rw [hae]; exact hd0) (h.inj _ _ hdr)
-        · rcases A_out h (ownHeld_sub _ _ _ hd') with hout | ⟨u, bh, hu, hbnd⟩
-          · exact hout c.1 hdr.symm
-          · have hcu : c.1 = u := h.inj c.1 u (hdr.symm.trans hu.symm)
-            rw [hcu] at hbnd0; rw [hbnd] at hbnd0; cases hbnd0
+        · exact A_out h (ownHeld_sub _ _ _ hd') c.1 hdr.symm
 
 theorem app_lift {a b a0 b0 X : List Dep} (ha : a ⊆ rds S.ρ a0 ++ X)
     (hb : b ⊆ rds S.ρ b0 ++ X) : a ++ b ⊆ rds S.ρ (a0 ++ b0) ++ X := by
@@ -1247,16 +1200,12 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         by_cases hrb : Ez.mode = .rootb
         · rw [(liftE_rootb h).mpr hrb] at hos; cases hos
         · rw [liftE_mode z hrb] at hos; cases hm : Ez.mode <;> simp_all [liftMode, Mode.ownSlot]
-      have hbndz : S.bnd z = none := bnd_none_pushArg hab1 hz hpa2
       obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
       rcases List.mem_append.mp (hD1 hd) with h1 | h1
       · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
         have : d0.root = z := h.inj _ _ hdr
         exact hzd hos' (this ▸ List.mem_map_of_mem hd0)
-      · rcases A_out h h1 with hout | ⟨u, bh, hu, hbnd⟩
-        · exact hout z hdr.symm
-        · have hzu : z = u := h.inj z u (hdr.symm.trans hu.symm)
-          rw [hzu] at hbndz; rw [hbnd] at hbndz; cases hbndz
+      · exact A_out h h1 z hdr.symm
     refine ⟨_, RhsT.pair hc1 (by rw [liftE_live]; exact hly) hp1 hc2 (by rw [liftE_live]; exact hlz) hp2 hzd',
       fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; simp [hty1, hty2]) (by simp [liftE, liftMode]) (by simp)
@@ -1436,15 +1385,21 @@ theorem vdeps_rootb_nil (hab : S.AbsOK Γa) {a : Var} {Ea : Entry} (hEa : Γa a 
 /-- What a lifted binding holds by name: what the binding it lifts does, or
     what the arguments do. -/
 theorem names_liftE (h : S.OK) {a : Var} {Ea : Entry} {d : Dep} (hd : d ∈ (S.liftE a Ea).vdeps)
-    (hn : d.kind.isName = true) : (∃ d0 ∈ Ea.vdeps, d = d0.ren S.ρ) ∨ d ∈ S.N := by
+    (hn : d.kind.isName = true) :
+    (∃ d0 ∈ Ea.vdeps, d = d0.ren S.ρ) ∨ d ∈ S.N ∨ (∃ w, S.ρ w = d.root) := by
   by_cases hrb : Ea.mode = .rootb
   · have hvd : (S.liftE a Ea).vdeps = (S.pe a).vdeps := by simp [liftE, hrb, Entry.vdeps]
-    rw [hvd] at hd; exact Or.inr (h.pe_names a d hd hn)
+    rw [hvd] at hd
+    by_cases hfr : ∀ w, S.ρ w ≠ d.root
+    · exact Or.inr (Or.inl (h.pe_names a d hd hn hfr))
+    · rcases Classical.not_forall.mp hfr with ⟨w, hw⟩
+      exact Or.inr (Or.inr ⟨w, Classical.not_not.mp hw⟩)
   · rcases liftE_vdeps_cases hrb hd with h1 | h1
     · exact Or.inl h1
-    · rcases mem_A.mp h1 with h2 | h2
+    · refine Or.inr (Or.inl ?_)
+      rcases mem_A.mp h1 with h2 | h2
       · rw [allKinds_notName h2] at hn; cases hn
-      · exact Or.inr h2
+      · exact h2
 
 theorem ren_mem_liftE (hab : S.AbsOK Γa) {a : Var} {Ea : Entry} (hEa : Γa a = some Ea) {d0 : Dep}
     (hd0 : d0 ∈ Ea.vdeps) : d0.ren S.ρ ∈ (S.liftE a Ea).vdeps := by
@@ -1458,7 +1413,7 @@ theorem ren_mem_liftE (hab : S.AbsOK Γa) {a : Var} {Ea : Entry} (hEa : Γa a = 
 theorem mem_mutNames_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) {d : Dep}
     (hd : d ∈ mutNames (S.canon Γa) (args.map S.ρ)) :
-    d ∈ rds S.ρ (mutNames Γa args) ∨ (d ∈ S.N ∧ d.kind.bound ≠ .none) := by
+    d ∈ rds S.ρ (mutNames Γa args) ∨ (d ∈ S.N ∧ d.kind.bound ≠ .none) ∨ (∃ w, S.ρ w = d.root) := by
   unfold mutNames at hd ⊢
   obtain ⟨hd, hb⟩ := List.mem_filter.mp hd
   simp only [argNames, List.flatMap_map, List.mem_flatMap] at hd
@@ -1470,11 +1425,12 @@ theorem mem_mutNames_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
   · simp at hda
   · rename_i hn
     obtain ⟨hdv, hdn⟩ := List.mem_filter.mp hda
-    rcases names_liftE h hdv hdn with ⟨d0, hd0, rfl⟩ | hN
+    rcases names_liftE h hdv hdn with ⟨d0, hd0, rfl⟩ | hN | hw
     · refine Or.inl (mem_rds.mpr ⟨d0, List.mem_filter.mpr ⟨?_, hb⟩, rfl⟩)
       simp only [argNames, List.mem_flatMap]
       exact ⟨a, ha, by rw [hae, if_neg hn]; exact List.mem_filter.mpr ⟨hd0, hdn⟩⟩
-    · exact Or.inr ⟨hN, by simpa using hb⟩
+    · exact Or.inr (Or.inl ⟨hN, by simpa using hb⟩)
+    · exact Or.inr (Or.inr hw)
 
 theorem mutNames_canon_sub (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) :
@@ -1523,11 +1479,10 @@ theorem N_bound (h : S.OK) {d : Dep} (hd : d ∈ S.N) (hb : d.kind.bound ≠ .no
   obtain ⟨r, k⟩ := d
   cases k with
   | name b t =>
-    rcases h.N_named _ hd b t rfl with ⟨_, _, _, _, _, hbr, _⟩ | ⟨_, _, _, _, _, _, _, hc, _⟩
-    · exact hbr
-    · rcases hc with hc | ⟨hc, _⟩
-      · exact absurd hc hb
-      · exact hc
+    obtain ⟨_, _, _, _, _, _, hc, _⟩ := h.N_named _ hd b t rfl
+    rcases hc with hc | ⟨hc, _⟩
+    · exact absurd hc hb
+    · exact hc
   | _ => simp [Kind.isName] at hn
 
 /-- What the arguments' closures may change ends nothing the call can see:
@@ -2077,7 +2032,7 @@ theorem roots_liftE_ρ_mem (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entry
     · apply hn
       have he : d0.root = a := h.inj _ _ hdr
       exact he ▸ List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdk⟩)
-    · exact A_mem_out h ha (by simpa using hdk) a hdr.symm
+    · exact A_out h ha a hdr.symm
 
 /-- The by-name part of the moves-condition transfers under renaming, for an
     argument that carries no bound (a `sink`/`own` one, which is no renamed
@@ -2099,10 +2054,7 @@ theorem roots_liftE_ρ_name (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entr
     · apply hn
       have he : d0.root = a := h.inj _ _ hdr
       exact he ▸ List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdk⟩)
-    · rcases A_out h ha with hout | ⟨u, bh, hu, hb⟩
-      · exact hout a hdr.symm
-      · have hau : a = u := h.inj a u (hdr.symm.trans hu.symm)
-        rw [hau] at hbnd; rw [hb] at hbnd; cases hbnd
+    · exact A_out h ha a hdr.symm
 
 theorem paramOK_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
     {pm : PMode} {t : Ty} (hp : paramOK pm t E) : paramOK pm t (S.liftE v E) := by
@@ -2293,25 +2245,13 @@ theorem bnd_none_of_fresh (hab : S.AbsOK Γa) {a : Var} (hx : Γa a = none) : S.
   | some bh => obtain ⟨E', hE', _⟩ := hab.2.2 a bh hbnd; rw [hx] at hE'; cases hE'
 
 theorem roots_lift_ρ (h : S.OK) {a : Var} {D : List Dep} {L : List Dep}
-    (hbnd : ∀ bh, S.bnd a = some bh → bh.1 = .replace)
     (hD : D ⊆ rds S.ρ L ++ S.A) (hn : a ∉ roots L) : S.ρ a ∉ roots D := by
   intro hr
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
   rcases List.mem_append.mp (hD hd) with h1 | h1
   · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
     exact hn (h.inj _ _ hdr ▸ List.mem_map_of_mem hd0)
-  · by_cases hname : d.kind.isName = true
-    · have hdN : d ∈ S.N := by
-        rcases mem_A.mp h1 with hR | hN
-        · rw [allKinds_notName hR] at hname; cases hname
-        · exact hN
-      obtain ⟨r, k⟩ := d
-      obtain ⟨b, t, rfl⟩ : ∃ b t, k = .name b t := by cases k <;> simp_all [Kind.isName]
-      rcases h.N_named _ hdN b t rfl with ⟨u, bh, hu, hbb, _, _, hbr, _⟩ | ⟨hout, _⟩
-      · have hau : a = u := h.inj a u (hdr.symm.trans hu.symm)
-        exact hbr (hbnd bh (by rw [hau]; exact hbb))
-      · exact hout a hdr.symm
-    · exact A_mem_out h h1 (by simpa using hname) a hdr.symm
+  · exact A_out h h1 a hdr.symm
 
 theorem liftE_vdeps_sub {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     (S.liftE v E).vdeps ⊆ rds S.ρ E.vdeps ++ S.A := by
@@ -2532,8 +2472,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       hr' (by rw [hty', liftE_ty x hrbx, hty]) (by
         have hsub : E'.vdeps ⊆ rds S.ρ E.vdeps ++ S.A :=
           fun d hd => liftE_vdeps_sub hrbE (vdeps_sub hw' (by rw [liftE_live]; exact hlive) hd)
-        exact roots_lift_ρ h (bnd_replace hab hx (by
-          rcases hmodes with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩ <;> simp [h1])) hsub hxd)
+        exact roots_lift_ρ h hsub hxd)
       (by rw [canon_ρ h]; simpa using hsome)
       (NoPin.lift h hab (bnd_replace hab hx (by
         rcases hmodes with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩
