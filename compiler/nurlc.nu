@@ -15498,6 +15498,13 @@ unsafe @ gen_call i lex i syms i cg → s {
         ` — the '...' makes the TAIL optional, never the parameters ahead of it, and the callee reads those from ABI registers this call never set.` ) ) }
     {}
     ( expect lex TT_RPAREN )
+    // A closure body calling an opaque closure parameter (h285): it may
+    // re-enter this closure and grow what the closure captured, so views of
+    // its by-reference captures end here. (Outside a closure body
+    // g_clo_caps_now is empty and this is a no-op.)
+    ? & & __callee_shadowed != 0 ( nurl_str_len g_clo_caps_now ) != 0 ( nurl_sym_len2 syms fname `__cloparam` )
+    { ( bck_opaque_param_run syms ( nurl_lex_line lex ) ) }
+    {}
     // Escape analysis (docs/MEMORY.md §2.8): the call result is a stack
     // reference exactly when the callee RETURNS one of its parameters
     // (callee_ret_param) and the argument at that position was itself a
@@ -23404,6 +23411,27 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
     }
 }
 
+// A closure body that calls an opaque closure parameter: the parameter's
+// captures are the caller's to choose, so running it may re-enter this
+// closure and move the buffer of anything the closure captured by
+// reference. Each such capture's views end at the call, exactly as at a
+// call that runs a growing closure whose captures are known (h280, h285).
+// Replayed through the pendeff path (bck_closure_effects_run) with a
+// sentinel callee `@opaqueclo` the borrow walk ends views for.
+@ bck_opaque_param_run i syms i line → v {
+    ? | == g_borrowck 0 == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
+    : ~ s effs ``
+    : ~ s rest ( nurl_str_cat g_clo_caps_now `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms c ) ) ) {
+            : s e ( nurl_str_cat3 c `:` `@opaqueclo:0` )
+            = effs ? == 0 ( nurl_str_len effs ) ( nurl_str_cat e `` ) ( nurl_str_cat3 effs ` ` e )
+        } {}
+    }
+    ? != 0 ( nurl_str_len effs ) { ( bck_closure_effects_run effs line ) } {}
+}
+
 unsafe @ bck_note_closure_caps i syms s name i line → v {
     ? == g_borrowck 0 { ^ v } {}
     // What running it does to its captures (bck_closure_effects_run).
@@ -28204,12 +28232,20 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             ? | | | == kc 9 == kc 12 == kc 13 == kc 32 {
                 // (`pendeff`: a closure that runs here does it.)
                 : s pw0 ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
-                ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` `` ) = eonly T } {
-                    // …or move its buffer: the views of it end (a borrowed
-                    // element handle still points where it did).
-                    ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                        = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
-                    } {}
+                ? ( seq ( bck_field rec 5 ) `@opaqueclo` ) {
+                    // An opaque closure parameter called inside a closure
+                    // body (h285): its captures are the caller's, so running
+                    // it may re-enter this closure and grow what it captured.
+                    // Its views end here, as at a known growing closure (h280).
+                    = out ( bck_view_end out sid ( bck_field_int rec 3 ) `a closure parameter called here may move or free its buffer — its captures are the caller's, so running it may re-enter this closure and grow what the closure captured. Read the view before this call, or take a copy that owns its data (mem_dup, string_from, slice_to_vec).` )
+                } {
+                    ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` `` ) = eonly T } {
+                        // …or move its buffer: the views of it end (a borrowed
+                        // element handle still points where it did).
+                        ? ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+                            = out ( bck_view_end out sid ( bck_field_int rec 3 ) ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` `` ) )
+                        } {}
+                    }
                 }
             } {}
         } {}

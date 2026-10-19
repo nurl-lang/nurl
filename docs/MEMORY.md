@@ -739,15 +739,11 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One open hole** (`tools/fuzz/holes/open/h285`): a closure holding a view
-of a `Vec` it captured across a call to one of its own closure parameters,
-which the caller hands a closure that re-enters and grows the `Vec`
-(detailed under the closure rules below, with its fix). Every other safe
-program the 0.72.0 and 0.73.0 release reviews found accepted and that
-leaked, freed memory it did not own or read freed memory — and converting
-the packages' handles to `Arc` and removing gratuitous `unsafe` across
-`packages/` found the rest — is closed, each a probe CI now holds
-(h142–h273):
+**No open holes.** The 0.72.0 and 0.73.0 release reviews found safe programs
+the compiler accepted and that leaked, freed memory they did not own or read
+freed memory, and converting the packages' handles to `Arc` and removing
+gratuitous `unsafe` across `packages/` found the rest; all are closed, each a
+probe CI now holds (h142–h285):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1043,18 +1039,16 @@ closure that captured both a `Vec` and a view of it, growing the one and
 reading the other (h279). They are closed by the exclusive-call rule
 below, extended to closures.
 
-One hole of this family is **open** (`tools/fuzz/holes/open/h285`): a
-closure that holds a view of a `Vec` it captured across a call to one of
-its own closure *parameters*, where the caller hands that parameter a
-closure which re-enters and grows the `Vec`. Running a captured closure
+Modelling the *handing* of such closures to calls then found an eighth
+(h285): a closure holding a view of a `Vec` it captured across a call to
+one of its own closure *parameters*, where the caller hands that parameter
+a closure that re-enters and grows the `Vec`. Running a *captured* closure
 carries its effect onto the enclosing closure (h278), but running a
-*parameter* carries none — a parameter's captures are the caller's to
-choose. The sound fix (identified, additive — it ends more views, never
-admits more programs): a call to an opaque closure value inside a closure
-body may move the buffer of every by-reference capture of that closure, so
-views of them end there, exactly as at a call that runs a growing closure
-whose captures are known (h280). Until it lands, this one closure shape is
-the §6.2 exception.
+*parameter* carried none — a parameter's captures are the caller's to
+choose. It is closed the same way, additively: a call to an opaque closure
+parameter inside a closure body ends the views of every binding that
+closure captured by reference, exactly as a call that runs a growing
+closure whose captures are known does (h280). No hole is known.
 
 The rules that carry it:
 

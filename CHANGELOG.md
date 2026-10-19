@@ -19,10 +19,16 @@ one-field structs. Four holes in the memory guarantee were found on the
 way and are closed (h281–h284).
 
 Modelling closures for the mechanized proof of the memory model
-(`formal/`, phase A2) found seven safe programs the compiler accepted and
-that read freed memory under ASan (h274–h280), one family: a closure that
-changes a binding it captured, run where something else holds a view of
-it. They are rejected now (*Fixed*), and no hole is known.
+(`formal/`, phase A2) found eight safe programs the compiler accepted and
+that read freed memory under ASan (h274–h280, h285), one family: a closure
+that changes a binding it captured, run where something else holds a view
+of it. Seven were a closure handed to a call, or captured, beside what it
+changes; the eighth (h285) was a closure holding a view of a capture across
+a call to one of its own closure *parameters*, where the caller hands that
+parameter a closure that re-enters and grows the capture — running a
+*captured* closure carried its effect onto the enclosing closure, but
+running a *parameter* carried none. They are rejected now (*Fixed*), and no
+hole is known.
 
 ### Added
 

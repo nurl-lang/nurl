@@ -10,14 +10,9 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**One open soundness hole** (`tools/fuzz/holes/open/h285`): a closure
-holding a view of a `Vec` it captured across a call to one of its own
-closure parameters, which the caller hands a closure that re-enters and
-grows the `Vec`. Found modelling closures for the mechanized proof; its fix
-is identified ([`MEMORY.md` §6.2](MEMORY.md)) and to land under the fuzz
-harness. Every other safe program found accepted and faulting across the
-0.72.0 and 0.73.0 reviews is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h284`, [`MEMORY.md` §6.2](MEMORY.md));
+**No open soundness holes.** Every safe program found accepted and faulting
+across the 0.72.0 and 0.73.0 reviews is closed, and held by a probe in
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h285`, [`MEMORY.md` §6.2](MEMORY.md));
 the core ownership model (`A1.memory_safe`) is mechanically proven sound in
 Lean 4 ([`formal/`](../formal/)).
 
