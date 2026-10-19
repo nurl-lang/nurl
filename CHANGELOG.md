@@ -112,7 +112,10 @@ yet.
   as `vec_at` hands an element back), or a call whose callee is compiled
   later and whose answer is not in yet (`__cs_opaque`,
   `bck_opaque_param_run`). Additive: it ends more borrows, admits no
-  program it did not.
+  program it did not. A verdict-only change: the compiler before and
+  after it emits byte-identical LLVM IR for every benchmark, example and
+  compiler test (1478 programs), the benchmark binaries are byte-identical,
+  and compiling `compiler/nurlc.nu` takes the same time (within noise).
 
 ## [0.73.0] — 2026-10-16
 
