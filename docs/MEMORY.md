@@ -276,7 +276,10 @@ The rules' core — owned `Vec` trees, moves and drop flags, `sink`,
 `inout`, borrows and views, reallocation, and calls checked against
 function summaries — is proven sound in Lean
 ([`formal/`](../formal/README.md), phase A1): a well-typed core program
-never touches freed or out-of-bounds memory. [`formal/RULES.md`](../formal/RULES.md)
+never touches freed or out-of-bounds memory. Phase A2 adds structs and
+enums, closures and trait objects with their captures, panics with
+unwinding and `recover`, the drop journal, and leak freedom
+(`A2.memory_safe`, `A2.no_leak_end`). [`formal/RULES.md`](../formal/RULES.md)
 gives the formal rule for each rule below.
 
 ### 2.1 Moves — use after move
@@ -706,6 +709,8 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Stale view after reallocation, wherever the view was put | §2.10 |
 | A container changed by a call while a view of it is another argument | §2.4 |
 | A closure run that changes a capture with live views | §2.11 |
+| A closure that changes a capture, beside another route to it in one call | §2.11 |
+| A closure read out of an owner, called after the owner changed | §7.5 |
 | A borrowed part of a temporary that cannot be copied | §6.2 |
 | Releasing a value a closure still holds | §2.11 |
 | Borrow used after its owner moved, ended, or was reassigned | §6.2 |
@@ -750,9 +755,10 @@ are now values (§2.10), tracked through every place one can be put.
 
 **No open holes.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
-freed memory, and converting the packages' handles to `Arc` and removing
-gratuitous `unsafe` across `packages/` found the rest; all are closed, each a
-probe CI now holds (h142–h287):
+freed memory; converting the packages' handles to `Arc`, removing
+gratuitous `unsafe` across `packages/`, modelling closures for the
+mechanized proof and making closure types generic arguments found more;
+all are closed, each a probe CI now holds (h142–h287):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1019,7 +1025,7 @@ functions) before they launch. onnx's tensors also carry the engine and
 run they came from: a tensor of an earlier run, whose device memory
 rt_reset released, is refused rather than read.
 
-Taking `unsafe` out of the rest of the packages found the last of them
+Taking `unsafe` out of the rest of the packages found seventeen more
 (h257–h273), closed the same way: a binding read out of a field and
 stored back moves when it owns the value (h257); a file's bytes are lent
 as a checked view held to its `MappedFile` (h258), and a `ZipArchive`
@@ -1063,7 +1069,16 @@ parameter, or a closure a parameter holds, a field, an element, a closure
 a call handed back: one whose captures nobody at the call knows — ends
 the views of every binding that closure captured by reference, exactly as
 a call that runs a growing closure whose captures are known does (h280).
-No hole is known.
+
+Making closure types and trait objects generic type arguments found four
+(h281–h284): an option or a result of a capturing closure owned nothing,
+so handing one back — from a binding, in a struct field, or as
+`!( @ i i ) E` — returned an environment the frame had just freed
+(h281, h282, h284); and a closure read out of a struct's field did not
+own its environment and was tracked only by its captures, so replacing
+the field and calling the closure called freed memory (h283). An option
+or result of a closure owns its environment now, and a closure read out
+of an owner borrows it (§7.5). No hole is known.
 
 The rules that carry it:
 
@@ -1393,8 +1408,8 @@ keeps a `nurl_closure_clone` and releases that with `nurl_closure_drop`.
 A closure run by a thread or fiber moves the bindings it captures into its
 environment (§6.2); share handles are captured as a share of their own.
 
-**A closure stored into a struct or a slice owns what it captured.** A
-closure made in a function views the `String`s, `Vec`s and handles it
+**A closure stored into a struct, a slice, a container or an option owns
+what it captured.** A closure made in a function views the `String`s, `Vec`s and handles it
 captures: the function still owns them and drops them at its end. Stored
 into a struct field (a literal's or by `=`, through a pointer too), a
 slice of closures, an option or a container's element, the closure may

@@ -133,7 +133,7 @@ What it checks, briefly:
   also have an alias from another plain argument in the same call. The
   same holds for any container the callee may change, `inout` or not: it
   cannot also reach the call through another argument, as the same
-  binding or as a view or borrow of it.
+  binding, as a view or borrow of it, or as a closure that changes it.
 - **Iterator invalidation** — you cannot mutate a foreach loop's collection
   from inside the loop body.
 - **Loop-carried moves** — the checker rejects consuming a binding inside a
@@ -141,7 +141,7 @@ What it checks, briefly:
   same problem as a free-inside-a-loop double-free in C.
 
 <Callout type="info" title="Soundness boundary and mechanized Lean 4 proof">
-Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 273 regression probes in `tools/fuzz/holes/` (`h01`–`h273`), and the core ownership and borrow calculus has a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (`A1.memory_safe`, zero `sorry` axioms). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
+Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 275 regression probes in `tools/fuzz/holes/` (`h01`–`h287`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
 </Callout>
 
 ## Threads and shared state

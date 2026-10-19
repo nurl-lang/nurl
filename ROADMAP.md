@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-16 · Current release: **0.73.0** · Language: **Grammar
+_Last reviewed: 2026-10-19 · Current release: **0.74.0** · Language: **Grammar
 v2.9** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -23,7 +23,7 @@ What is solid today:
 
 - **Language (Grammar v2.9).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
-  types), pattern matching with **match guards**, **or-patterns**, and
+  types, closure types and trait objects), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
   folding** (`const_eval_int`), a full numeric type set (`i` = i64 and
   `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
@@ -177,7 +177,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   `inout`/`sink` signature registration.
 - Generics: monomorphised generic structs and functions (signedness-aware
   monomorphs, including behind `*`/`?` prefixes), generic nesting
-  (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
+  (`Channel[A]`, `Vec[Thread]`), generics over `?T` / `!T E`, and closure
+  types and trait objects as type arguments (`( Vec ( @ v i ) )`,
+  `( HashMap i ( @ i i ) )`, `( Vec %Show )`, 0.74.0).
 - Memory model v1.0 (0.67.0): `String`, `Vec`, owning structs, closure
   environments, handle enums (`Json`, `TomlValue`) and library handles
   (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`) are dropped by
@@ -200,7 +202,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
-  is known — every one found, through probe h273, is closed) — `Rc` cycles
+  is known — every one found, through probe h287, is closed; the rules for
+  single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
+  0.74.0) — `Rc` cycles
   are collected by a cycle
   collector, `Weak` and `ArcWeak` exist, and a cycle of thread-shared
   handles is a compile error. Model, guarantee and trusted base:
@@ -550,6 +554,18 @@ new language features.
   In safe code only a declared `sink` takes a raw string over and its
   callee releases it — a caller hands over its own string or a copy — so
   nothing is released by hand.
+- [x] **Close the holes found since** — h180–h273 while closing the 0.72.0
+  review's (0.73.0), and h274–h287 (0.74.0): ten found by modelling
+  closures for the proof below — a closure that changes a capture, run
+  where something else holds a view of it — and four by making closure
+  types generic arguments (an option or result of a closure that owned
+  nothing, a closure read out of a field). No hole is known.
+- [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
+  phases A1 (the core calculus) and A2 (structs, enums, closures and trait
+  objects, panics, the drop journal, leak freedom) are proven in Lean 4
+  as of 0.74.0 (`A2.memory_safe`, `A2.no_leak_end`). Open: A3 (threads,
+  data-race freedom), B (the standard library's `unsafe` base), C (nurlc
+  implements the rules, by certificate) and D (code generation).
 
 ### Evidence for the "LLM-native" thesis
 

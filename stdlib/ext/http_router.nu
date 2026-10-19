@@ -73,9 +73,9 @@
 //     `vec_data + *Route` direct-pointer access for the zero-copy
 //     borrow, mirroring the convention from `http_request.nu`'s
 //     `header_get`.
-//   * Route-level middleware (per-route filter chain) would need a
-//     `Vec[Middleware]` of closure-handle-shaped structs, which the
-//     current generic instantiator handles awkwardly. The handler-level
+//   * Route-level middleware (per-route filter chain) is not here; a
+//     `( Vec ( @ … ) )` of middleware closures would hold one (closure
+//     types are type arguments since 0.74.0). The handler-level
 //     `with_*` combinators are the v1 substitute — caller composes
 //     middleware around the handler closure they pass to the server.
 

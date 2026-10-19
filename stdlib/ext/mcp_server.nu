@@ -136,7 +136,7 @@ $ `stdlib/ext/http_response.nu`
 // that at the declaration now; before it did, the failure was a link
 // error on macOS-arm64 and Windows while x86-64 Linux built clean.
 
-// A pre-dispatch hook for tasks/*, boxed so it can live in a Vec.
+// A pre-dispatch hook for tasks/*, a one-closure struct (see below).
 : McpTaskHook {
     ( @ v ) f
 }
@@ -383,8 +383,8 @@ $ `stdlib/ext/http_response.nu`
     // Called before any tasks/* method is dispatched — the hook a
     // server needs when its task state is only current after it polls
     // something (swarm-mcp advances its cluster here). Empty Vec = no
-    // hook. Wrapped in a struct because a closure is not spellable as
-    // a generic type argument.
+    // hook. A struct because closures were not type arguments before
+    // 0.74.0; a `( Vec ( @ v ) )` would do now, the struct stays API.
     ( Vec McpTaskHook ) __task_hook
 }
 

@@ -11,10 +11,11 @@ limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
 **No open soundness holes.** Every safe program found accepted and faulting
-across the 0.72.0 and 0.73.0 reviews is closed, and held by a probe in
+is closed, and held by a probe in
 [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h287`, [`MEMORY.md` §6.2](MEMORY.md));
-the core ownership model (`A1.memory_safe`) is mechanically proven sound in
-Lean 4 ([`formal/`](../formal/)).
+the ownership rules of the single-threaded language (`A2.memory_safe`,
+`A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
+([`formal/`](../formal/)).
 
 The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
 vs `^^`) are documented in the [Grammar](#grammar) section below; the
@@ -69,6 +70,7 @@ thread-safety expectation the rules do not state.
 | A generic that copies its `T` (`box_clone`, anything built on `mem_dup`) cannot be instantiated with a value that cannot be copied; the error points at the copy inside the generic, not at the call (h235) | Move the value instead, or give the type a clone |
 | A match arm cannot hand an enum's payload that cannot be copied to a `sink` or an owner: the enum keeps it (h231) | Match on the enum to read the payload; to take it out, give the enum a variant constructor that hands it back from a function that takes the enum as `sink` |
 | A match cannot hand a payload it only borrows that cannot be copied — of an option a struct field keeps — to the binding it initialises (h227) | Read the payload in the arm, or take the option out of the struct first |
+| A closure whose body changes a capture (grows, clears or replaces it) cannot be handed to a call, or called, beside another argument that reaches that capture — the binding, a borrow or view of it, or another closure that captured it — and cannot itself hold a view of that capture (h274–h280) | Hand the callee what it needs as a parameter instead of capturing it, as `ws_serve_messages_deflate_with_context` gives its handler the deflate context ([`MEMORY.md` §2.11](MEMORY.md)) |
 | Closures capture by value (snapshot at construction) by default. The `: ~` mutable-struct byref capture path (`stdlib/std/panic.nu` recover-with-typed-result) shares the caller's alloca — see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule | Use `: ~ MultiFieldStruct` for shared-mutation closures; for value semantics keep the binding immutable |
 | A parameter may not be named `r` followed only by digits (`r0`, `r12`, …) — a by-value parameter keeps its source name as its LLVM SSA register, and nurlc's temporaries are `%r0`, `%r1`, … in the same namespace | Rename it (`r0` → `r_0`, or something that says what it holds). Locals are unaffected — the code generator names those |
 | A `sink` parameter owns and drops what it is given — a `String`, `Vec`, owning struct, handle enum, library handle, `Drop` value or a raw `s` (docs/MEMORY.md §1, §7.6). An **owned slice**, or a struct whose literal gave it one, is still **rejected at the call site**: its auto-drop obligation is not transferred | Pass an owned slice as an ordinary parameter and let the caller's scope drop it, or use a `Vec` |
