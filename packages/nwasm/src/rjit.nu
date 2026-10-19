@@ -1446,6 +1446,14 @@ $ `stdlib/core/vec.nu`
             : i wv ( vec_at [i] . c uweb o )
             ? >= wv 0 {
                 ( rj_ext c wv * 2 r )
+                // ADDBRIFC writes dst before it compares against rhs
+                // (rj_e_addbr), so rhs must still hold at the write: a
+                // web ending at the read would let dst take its register
+                // and the compare test dst against itself. A rhs of
+                // dst's own slot is the value just written (its web).
+                ? & & | == op 38 == op 177 == - o u0 2 != ( vec_at [i] . c uslot o ) ( vec_at [i] . c dslot ( vec_at [i] . c doff r ) ) {
+                    ( rj_ext c wv + * 2 r 1 )
+                } {}
                 ( rj_addwt c wv dw )
                 ( vec_put [i] . c wuse wv + ( vec_at [i] . c wuse wv ) 1 )
                 ( rj_vote c wv ( rj_ucls op - o u0 ) dw )

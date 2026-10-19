@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.1.3] — 2026-10-20
+
+- **Tier 8 could compare an add-compare-branch's sum against itself.** `ADDBRIFC` (`dst = s1 + s2; branch on dst cmp rhs`) writes `dst` before it reads `rhs`, but the allocator ended `rhs`'s live range at the read, so when that read was `rhs`'s last, `dst` could take its register: `lea rsi, [rdx+7]; cmp rsi, rsi`. The `rhs` web now lives to the write. Found by the wasm benchmark's correctness gate: x25519 compiled by NURL 0.73.0 printed a wrong checksum under nwasm (3.1.2, and 2.4.2 as well) — the bounds-checked little-endian u64 read over a `( Vec u )` lost its top byte. The interpreter and tier 7 were right; `NURL_NWASM_GUARD=0` avoided it only because tier 8 runs on guard-page memory alone. `tests/semantics_test.nu` holds the function (tests/wat/addbr_rhs.wat; fails before the fix). All 20 wasm benchmarks pass the gate, and a 300-module differential fuzz is clean.
+
 ## [3.1.2] — 2026-10-16
 
 - The CLI reads an exported function's parameter and result types through `module_func_sig`, a safe accessor that returns the `FuncType` (copied) or F. Its `__param_ty` / `__result_ty_at` / `__result_count` took an opaque type pointer and stayed `unsafe`; they take the `?FuncType` now. The opaque-pointer `module_func_type`, which nothing else called, is gone (the interpreter keeps its internal `_module_func_type`). `unsafe` functions: main.nu 3 → 0, module.nu 3 → 2. Invoke mode prints the same results.
