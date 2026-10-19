@@ -568,7 +568,11 @@ WebSocket deflate loop gives its handler the context it reads with
 (`ws_serve_messages_deflate_with_context`). A closure that runs a
 closure it captured does what that one does (h278), and a closure whose
 body changes a capture may not also hold a view or a borrow of it
-(h279). A closure
+(h279). Inside a closure body, running a closure the caller chose — a
+closure parameter, or a closure a parameter holds in a field or an
+element — ends the views of every binding the closure captured by
+reference: its captures are not known here, so it may re-enter this
+closure and grow what it captured (h285–h287). A closure
 stored into a struct, or handed to a function that keeps it, makes that
 owner depend on the captures: releasing a capture while the owner may
 still run the closure is an error. Loading a closure value, and dropping
@@ -748,7 +752,7 @@ are now values (§2.10), tracked through every place one can be put.
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory, and converting the packages' handles to `Arc` and removing
 gratuitous `unsafe` across `packages/` found the rest; all are closed, each a
-probe CI now holds (h142–h285):
+probe CI now holds (h142–h287):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1050,10 +1054,16 @@ one of its own closure *parameters*, where the caller hands that parameter
 a closure that re-enters and grows the `Vec`. Running a *captured* closure
 carries its effect onto the enclosing closure (h278), but running a
 *parameter* carried none — a parameter's captures are the caller's to
-choose. It is closed the same way, additively: a call to an opaque closure
-parameter inside a closure body ends the views of every binding that
-closure captured by reference, exactly as a call that runs a growing
-closure whose captures are known does (h280). No hole is known.
+choose. Checking the compiler against the finished calculus found the same
+with the closure behind what a parameter holds: a struct field (h286) and
+a `Vec` element (h287), where the closure read out of the parameter was
+taken to hold nothing. All three are closed the same way, additively:
+inside a closure body, a call to an *opaque* closure — a closure
+parameter, or a closure a parameter holds, a field, an element, a closure
+a call handed back: one whose captures nobody at the call knows — ends
+the views of every binding that closure captured by reference, exactly as
+a call that runs a growing closure whose captures are known does (h280).
+No hole is known.
 
 The rules that carry it:
 
@@ -1241,7 +1251,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h285`) to the rule that rejects it. See
+  (`h01–h287`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

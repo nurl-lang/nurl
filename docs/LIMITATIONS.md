@@ -12,7 +12,7 @@ limitations — they live with each module (the `stdlib/**` file headers and
 
 **No open soundness holes.** Every safe program found accepted and faulting
 across the 0.72.0 and 0.73.0 reviews is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h285`, [`MEMORY.md` §6.2](MEMORY.md));
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h287`, [`MEMORY.md` §6.2](MEMORY.md));
 the core ownership model (`A1.memory_safe`) is mechanically proven sound in
 Lean 4 ([`formal/`](../formal/)).
 

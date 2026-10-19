@@ -93,10 +93,18 @@ closed and gated as `tools/fuzz/holes/h285`: a closure holding a view of a
 where the caller hands that parameter a closure that re-enters the closure
 and grows the `Vec` (ASan: heap-use-after-free). nurlc carried the effect of
 running a *captured* closure (h278) but not of running a *parameter*, whose
-captures are the caller's to choose. Closed additively: a call to an opaque
-closure parameter inside a closure body ends the views of every binding the
-closure captured by reference (`bck_opaque_param_run`). Its formal
-counterpart is the symbolic names below.
+captures are the caller's to choose. Checking nurlc against the proven
+design below found the same hole with the closure behind what a parameter
+holds — a struct field (`h286`), a `Vec` element (`h287`, where `vec_at`
+hands the element back through a raw pointer, which nurlc's capture-set walk
+did not follow, and a generic's answer is not in before its first use).
+Closed additively: inside a closure body, a call to an opaque closure — a
+parameter, or a closure a parameter holds: one whose capture set has an atom
+nobody at the call knows (`__cs_opaque`) — ends the views of every binding
+the closure captured by reference (`bck_opaque_param_run`). Its formal
+counterpart is the symbolic names below, which `paramE` gives every
+parameter whose type may hold a closure (`hasFn`), not only closure-typed
+ones — exactly the cases h286 and h287 are.
 
 ### The design, as proven
 

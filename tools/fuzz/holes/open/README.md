@@ -1,12 +1,13 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent was `h285` (a closure holding
-a view of a `Vec` it captured across a call to one of its own closure
-*parameters*, which the caller hands a closure that re-enters and grows the
-`Vec`), found modelling closures for the mechanized proof (`formal/`, phase
-A2) and closed by ending the views of a closure's by-reference captures at a
-call to an opaque closure parameter.
+gate in the parent directory. The most recent were `h285`–`h287` (a closure
+holding a view of a `Vec` it captured across a call to a closure its caller
+chose — one of its own closure *parameters*, or a closure a parameter holds
+in a struct field or a `Vec` element — which re-enters and grows the `Vec`),
+found modelling closures for the mechanized proof (`formal/`, phase A2) and
+checking the compiler against its calculus, and closed by ending the views
+of a closure's by-reference captures at a call to an opaque closure.
 
 A probe here is **safe code** (no `unsafe` function of its own, no raw
 memory or FFI of its own) that the compiler still **accepts** and that then

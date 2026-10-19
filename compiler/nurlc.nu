@@ -15498,11 +15498,16 @@ unsafe @ gen_call i lex i syms i cg → s {
         ` — the '...' makes the TAIL optional, never the parameters ahead of it, and the callee reads those from ABI registers this call never set.` ) ) }
     {}
     ( expect lex TT_RPAREN )
-    // A closure body calling an opaque closure parameter (h285): it may
-    // re-enter this closure and grow what the closure captured, so views of
-    // its by-reference captures end here. (Outside a closure body
-    // g_clo_caps_now is empty and this is a no-op.)
-    ? & & __callee_shadowed != 0 ( nurl_str_len g_clo_caps_now ) != 0 ( nurl_sym_len2 syms fname `__cloparam` )
+    // A closure body calling an opaque closure (h285–h287): a parameter, or
+    // a closure a parameter holds — a field, an element, what a call handed
+    // back — whose captures are the caller's to choose. It may re-enter this
+    // closure and grow what the closure captured, so views of its
+    // by-reference captures end here. Opaque: the callee's capture set
+    // (`__clocs`, what its binding learned) has an atom nobody here knows
+    // (`?`, `?pK`). (Outside a closure body g_clo_caps_now is empty and this
+    // is a no-op.)
+    ? & & __callee_shadowed != 0 ( nurl_str_len g_clo_caps_now )
+    | != 0 ( nurl_sym_len2 syms fname `__cloparam` ) ( __cs_opaque ( __clo_cs_ident syms fname ) )
     { ( bck_opaque_param_run syms ( nurl_lex_line lex ) ) }
     {}
     // Escape analysis (docs/MEMORY.md §2.8): the call result is a stack
@@ -23416,8 +23421,11 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
 // closure and move the buffer of anything the closure captured by
 // reference. Each such capture's views end at the call, exactly as at a
 // call that runs a growing closure whose captures are known (h280, h285).
-// Replayed through the pendeff path (bck_closure_effects_run) with a
-// sentinel callee `@opaqueclo` the borrow walk ends views for.
+// The same for a closure a parameter holds — a struct field (h286), an
+// element (h287), a closure a call handed back: its captures are no better
+// known (__cs_opaque). Replayed through the pendeff path
+// (bck_closure_effects_run) with a sentinel callee `@opaqueclo` the borrow
+// walk ends views for.
 @ bck_opaque_param_run i syms i line → v {
     ? | == g_borrowck 0 == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : ~ s effs ``
@@ -28233,11 +28241,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // (`pendeff`: a closure that runs here does it.)
                 : s pw0 ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
                 ? ( seq ( bck_field rec 5 ) `@opaqueclo` ) {
-                    // An opaque closure parameter called inside a closure
-                    // body (h285): its captures are the caller's, so running
+                    // An opaque closure called inside a closure body — a
+                    // parameter (h285), or a closure a parameter holds
+                    // (h286, h287): its captures are the caller's, so running
                     // it may re-enter this closure and grow what it captured.
                     // Its views end here, as at a known growing closure (h280).
-                    = out ( bck_view_end out sid ( bck_field_int rec 3 ) `a closure parameter called here may move or free its buffer — its captures are the caller's, so running it may re-enter this closure and grow what the closure captured. Read the view before this call, or take a copy that owns its data (mem_dup, string_from, slice_to_vec).` )
+                    = out ( bck_view_end out sid ( bck_field_int rec 3 ) `a closure called here may move or free its buffer — a closure parameter, or a closure a parameter holds: its captures are the caller's, so running it may re-enter this closure and grow what the closure captured. Read the view before this call, or take a copy that owns its data (mem_dup, string_from, slice_to_vec).` )
                 } {
                     ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` `` ) = eonly T } {
                         // …or move its buffer: the views of it end (a borrowed
@@ -46975,6 +46984,40 @@ unsafe @ __cc_mangle s ty → s {
     ^ ( nurl_str_cat `?` `` )
 }
 
+// Does a CS hold closures nobody here knows the captures of — a parameter's
+// (`?pK`, `?P<fn>#K`), or anybody's (`?`)? Running such a closure inside a
+// closure body may re-enter it (bck_opaque_param_run). A closure a call
+// hands back whose callee is compiled later (`@N`) holds what that callee's
+// answer says, read when it is in — until then anybody's.
+@ __cs_opaque s cs → b { ^ ( __cs_opaque_d cs 0 ) }
+
+@ __cs_opaque_d s cs i depth → b {
+    ? > depth 8 { ^ T } {}
+    : ~ s r ( nurl_str_cat cs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        : i c0 ? == 0 ( nurl_str_len u ) 0 ( nurl_str_get u 0 )
+        ? == c0 63 { ^ T } {}
+        ? == c0 64 {
+            : s id ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 )
+            : s ce ( nurl_sym_get g_pending_impl ( nurl_str_cat `cccall#` id ) )
+            : s args ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `cccall#` id `#args` ) )
+            : ~ s rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` ( str_first_word ce ) ) )
+            ? == 0 ( nurl_str_len rc ) { = rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` ( str_first_word ( str_skip_word ce ) ) ) ) } {}
+            ? == 0 ( nurl_str_len rc ) { ^ T } {}
+            ~ != 0 ( nurl_str_len rc ) {
+                : s w ( __bar_first rc ) = rc ( __bar_rest rc )
+                ? ( seq w `.` ) {} {
+                    : s e ? & > ( nurl_str_len w ) 2 ( seq ( nurl_str_slice w 0 2 ) `?p` )
+                    ( __semi_nth args ( nurl_str_to_int ( nurl_str_slice w 2 - ( nurl_str_len w ) 2 ) ) ) ( nurl_str_cat w `` )
+                    ? ( __cs_opaque_d e + depth 1 ) { ^ T } {}
+                }
+            }
+        } {}
+    }
+    ^ F
+}
+
 // The CS of a closure literal capturing `caps` (names in the scope that
 // builds it, at `line`).
 @ __clo_cs_caps i syms s caps i line → s {
@@ -47066,10 +47109,17 @@ unsafe @ __char_swap s x i from s to → s {
         ^ ( __clo_cs_type ty syms )
     } {}
     ? == tt TT_AT { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_agg_cs__` ) `` ) } {}
-    // A field: no more than the binding it is read from can hold.
+    // A field: no more than the binding it is read from can hold — unless
+    // that binding is a raw pointer (unsafe code: an element of a buffer),
+    // which says nothing of what its target holds: anybody's.
     ? == tt TT_DOT {
         : s root ( nurl_sym_get syms `__last_member_root__` )
-        ? != 0 ( nurl_str_len root ) { ^ ( __cc_untag ( __clo_cs_ident syms root ) ) } {}
+        ? != 0 ( nurl_str_len root ) {
+            : s rty ( nurl_sym_get syms root )
+            : i rn ( nurl_str_len rty )
+            ? & & > rn 0 == ( nurl_str_get rty - rn 1 ) 42 ( __ts_may_hold_closures ty syms ) { ^ ( __bar_add ( __clo_cs_type ty syms ) `?` ) } {}
+            ^ ( __cc_untag ( __clo_cs_ident syms root ) )
+        } {}
         ^ ( nurl_str_cat `?` `` )
     } {}
     // An element, a join: what closures it holds is not followed.

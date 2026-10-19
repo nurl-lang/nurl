@@ -19,16 +19,17 @@ one-field structs. Four holes in the memory guarantee were found on the
 way and are closed (h281–h284).
 
 Modelling closures for the mechanized proof of the memory model
-(`formal/`, phase A2) found eight safe programs the compiler accepted and
-that read freed memory under ASan (h274–h280, h285), one family: a closure
-that changes a binding it captured, run where something else holds a view
-of it. Seven were a closure handed to a call, or captured, beside what it
-changes; the eighth (h285) was a closure holding a view of a capture across
-a call to one of its own closure *parameters*, where the caller hands that
-parameter a closure that re-enters and grows the capture — running a
-*captured* closure carried its effect onto the enclosing closure, but
-running a *parameter* carried none. They are rejected now (*Fixed*), and no
-hole is known.
+(`formal/`, phase A2) found ten safe programs the compiler accepted and
+that read freed memory under ASan (h274–h280, h285–h287), one family: a
+closure that changes a binding it captured, run where something else holds
+a view of it. Seven were a closure handed to a call, or captured, beside
+what it changes; the last three were a closure holding a view of a capture
+across a call to a closure its caller chose — one of its own closure
+*parameters* (h285), or a closure a parameter holds in a struct field
+(h286) or a `Vec` element (h287) — that re-enters and grows the capture:
+running a *captured* closure carried its effect onto the enclosing
+closure, but running one the caller supplied carried none. They are
+rejected now (*Fixed*), and no hole is known.
 
 The mechanized proof of the memory model now covers phase A2
 (`formal/`, `./check.sh`: no `sorry`, Lean's standard axioms only):
@@ -100,6 +101,18 @@ yet.
   it concerned a binding the outer one reached only through it.
 - **A closure whose body changes a capture may not also hold a view of
   it** (h279), checked where the literal is made.
+- **Inside a closure body, running a closure the caller chose ends the
+  views of what the closure captured by reference** (h285–h287): a
+  closure parameter, or a closure a parameter holds — a struct field, a
+  `Vec` element, a closure a call handed back — has captures the caller
+  picked, so running it may re-enter this closure and grow what it
+  captured; its views end at the call, as at a known growing closure.
+  Opaque is a closure whose capture set has an atom nobody at the call
+  knows: a parameter's, anybody's (a closure read through a raw pointer,
+  as `vec_at` hands an element back), or a call whose callee is compiled
+  later and whose answer is not in yet (`__cs_opaque`,
+  `bck_opaque_param_run`). Additive: it ends more borrows, admits no
+  program it did not.
 
 ## [0.73.0] — 2026-10-16
 
