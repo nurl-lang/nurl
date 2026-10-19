@@ -189,8 +189,8 @@ theorem progress {P : Prog}
     (hclo : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} {m : Mem},
       Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty = .fn ms → ms[j]? = some σ → P[σ]? = some sig →
-      sig.params.head? = some (.inp, .fn ms) → CallT P Γ F σ (c :: zs) E Γ1 → MemCodes P m →
-      Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
+      sig.params.head? = some (.inp, .fn ms) → CallT P Γ F σ (c :: zs) E Γ1 → NoWriters Γ zs →
+      MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ ∃ r, Step P m s r := by
   induction ht with
@@ -315,9 +315,9 @@ theorem progress {P : Prog}
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     exact Or.inr ⟨_, Step.letrec hf hp hmx⟩
-  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ _ _ =>
+  | callc _ hx hxF hc htc hj hσ hhd _ hcT _ _ hnw _ =>
     intro m hcd hi
-    exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hcd hi)
+    exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnw hcd hi)
   | @catchR Γ Δ F x m0 s _ _ hM _ hKO ih =>
     intro m hcd hi
     rcases ih hcd hi.catchIn with rfl | ⟨r, hr⟩
