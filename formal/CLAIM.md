@@ -1,8 +1,8 @@
 # The claim
 
-> **Status: A1 is proven** (`A1.memory_safe`, [`README.md`](README.md));
-> A2, A3 and B–D are the statement the proof is working towards, not one
-> it has reached.
+> **Status: A1 and A2 are proven** (`A1.memory_safe`, `A2.memory_safe`,
+> `A2.no_leak_end`, [`README.md`](README.md)); A3 and B–D are the
+> statement the proof is working towards, not one it has reached.
 
 ## Statement
 
@@ -30,9 +30,15 @@ the LLVM / C11 memory model rather than redefining it.
   reallocation, element drop, reassignment and release, and calls checked
   against function summaries; a `String` is a `Vec` of bytes. Structs,
   closures, enums and the rest of the language are A2.
-- **A2** — the theorem for the full single-threaded language, including
-  panics, and leak freedom: when a program ends, normally or by panic,
-  nothing it allocated is still live, `Rc` cycles included.
+- **A2** *(proven)* — the theorem for the single-threaded language as the
+  calculus models it, including panics, and leak freedom: when a program
+  ends, normally or by panic, nothing it allocated is still live. In Lean:
+  `A2.soundness`, `A2.memory_safe` and `A2.no_leak_end`, on the standard
+  axioms only. The calculus adds to A1 structs and enums with field-precise
+  paths, closures and trait objects as packages with captures by handle
+  and by name, panics with unwinding and `recover`, and the drop journal.
+  `Rc` cycles are the standard library's (B); see `README.md` for the
+  refinements of the calculus still planned.
 - **A3** — the theorem with threads: a well-typed program has no data
   race.
 - **B** — the `unsafe` base of the standard library is semantically

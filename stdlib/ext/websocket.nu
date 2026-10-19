@@ -1721,6 +1721,8 @@ $ `stdlib/ext/compress.nu`
 //       ( ws_send_binary_deflate WsDeflate TcpConn ( Vec u ) )   → ! v WsErr
 //       ( ws_read_message_deflate WsDeflate TcpConn WsLimits )   → ! WsMessage WsErr
 //       ( ws_serve_messages_deflate WsDeflate TcpConn WsLimits h)→ ! v WsErr
+//       ( ws_serve_messages_deflate_with_context
+//                       WsDeflate TcpConn WsLimits h2)          → ! v WsErr
 //       ( ws_perform_handshake_deflate TcpConn HttpRequest
 //                       ?String sub WsDeflateConfig policy )     → !WsDeflate WsErr
 //     Client-side messaging (masked):
@@ -1728,6 +1730,12 @@ $ `stdlib/ext/compress.nu`
 //       ( ws_client_send_binary_deflate WsDeflate TcpConn ( Vec u ) ) → ! v WsErr
 //       ( ws_client_read_message_deflate WsDeflate TcpConn WsLimits ) → ! WsMessage WsErr
 //       ( ws_client_serve_messages_deflate WsDeflate TcpConn WsLimits h) → ! v WsErr
+//       ( ws_client_serve_messages_deflate_with_context
+//                       WsDeflate TcpConn WsLimits h2)                → ! v WsErr
+//     (`h2` takes the context beside each message: a handler that replies
+//     compressed uses the one the loop reads with, instead of capturing it
+//     — a closure that changes what another argument of the same call
+//     reaches is rejected, docs/MEMORY.md §2.11.)
 //       ( ws_connect_deflate s url ?String sub WsDeflateConfig )      → ! WsDeflateConn WsErr
 
 : WsDeflateConfig {
@@ -2122,8 +2130,58 @@ $ `stdlib/ext/compress.nu`
     ^ ( __ws_serve_messages_deflate d conn lim handler F )
 }
 
+// The read loop, its handler given the context beside each message — to
+// send a compressed reply with the context the loop reads with (a handler
+// capturing that context is the same context reached twice).
+@ __ws_serve_messages_deflate_with WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage WsDeflate ) handler b client → !v WsErr {
+    : ~ b done F
+    : ~ b clean_close F
+    : ~ WsErr last WsOther
+    ~ ! done {
+        : !WsMessage WsErr mr ? client
+        ( ws_client_read_message_deflate d conn lim )
+        ( ws_read_message_deflate d conn lim )
+        ?? mr {
+            T msg → {
+                : !v WsErr hr ( handler msg d )
+                ?? hr {
+                    T _ → {}
+                    F he → { = last he = done T }
+                }
+            }
+            F we → {
+                = last we
+                = done T
+                ?? we {
+                    WsClosedByPeer → { = clean_close T }
+                    _ → {}
+                }
+            }
+        }
+    }
+    // Close frames are never compressed (RFC 7692 §6).
+    : i code ? clean_close 1000 ( __ws_err_to_close last )
+    : !v WsErr _cr ? client
+    ( ws_client_send_close conn code `` )
+    ( ws_send_close conn code `` )
+    ?? _cr { T _ → {} F _ → {} }
+    ? clean_close {
+        ^ @ !v WsErr { T 0 }
+    } {
+        ^ @ !v WsErr { F last }
+    }
+}
+
+@ ws_serve_messages_deflate_with_context WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage WsDeflate ) handler → !v WsErr {
+    ^ ( __ws_serve_messages_deflate_with d conn lim handler F )
+}
+
 @ ws_client_serve_messages_deflate WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage ) handler → !v WsErr {
     ^ ( __ws_serve_messages_deflate d conn lim handler T )
+}
+
+@ ws_client_serve_messages_deflate_with_context WsDeflate d TcpConn conn WsLimits lim ( @ !v WsErr WsMessage WsDeflate ) handler → !v WsErr {
+    ^ ( __ws_serve_messages_deflate_with d conn lim handler T )
 }
 
 // ── Server handshake convenience ──────────────────────────────────────

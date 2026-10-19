@@ -260,7 +260,17 @@ h272_struct_global_torn_between_threads	§6.5	A3	mutable struct global written/r
 h273_string_global_freed_under_reader	§6.5	A3	string global reassigned (old freed) while another thread reads it	rejected
 stdlib/h178_trusted_by_path_substring	§6.4	B	any path containing /stdlib/ compiled as trusted stdlib, checks off	rejected
 stdlib/h260_zip_archive_outlives_its_bytes	§6.4	B	stdlib ZipArchive kept bare pointer into caller's Vec; Vec freed first	runs-clean
+h274_closure_view_beside_growing_closure	§2.11	A2	closure holding a view of its capture handed to a call beside a closure growing it	rejected
+h275_in_param_beside_growing_closure	§2.11	A2	Vec passed `in` beside a closure growing it	rejected
+h276_closure_called_with_growing_closure	§2.11	A2	closure holding a view of its capture called with the closure that grows it	rejected
+h277_borrow_beside_clearing_closure	§2.11	A2	element borrow passed beside a closure clearing its Vec	rejected
+h278_nested_closure_effect_lost	§2.11	A2	closure runs a captured closure that grows a Vec; the outer closure's view of it read after	rejected
+h279_closure_grows_capture_it_views	§2.11	A2	closure captured a Vec and a view of it, grows the one and reads the other	rejected
+h280_nested_growing_closure_beside_vec	§2.11	A2	closure that runs a growing captured closure handed to a call beside the Vec	rejected
 h281_returned_option_of_closure	§7.5	A2	option of a capturing closure handed back; the frame freed the env the option carried	runs-clean
 h282_struct_field_option_of_closure	§7.5	A2	struct literal handed back with an option of a closure in a field; env freed by the frame	runs-clean
 h283_closure_borrowed_from_field	§2.11	A2	closure read out of a struct field, field replaced (old env dropped), closure called	rejected
 h284_returned_result_of_closure	§7.5	A2	result of a capturing closure handed back; the frame freed the env the result carried	runs-clean
+h285_view_of_capture_across_opaque_closure_param	§2.11	A2	closure holds a view of a captured Vec across a call to its closure parameter, which re-enters and grows it	rejected
+h286_view_of_capture_across_closure_in_struct_param	§2.11	A2	h285 with the closure run a field of a struct parameter	rejected
+h287_view_of_capture_across_closure_in_vec_param	§2.11	A2	h285 with the closure run an element of a Vec parameter (vec_at)	rejected

@@ -18,6 +18,30 @@ named `Box__@__i64__i64`, and a list of callbacks had to be a Vec of
 one-field structs. Four holes in the memory guarantee were found on the
 way and are closed (h281–h284).
 
+Modelling closures for the mechanized proof of the memory model
+(`formal/`, phase A2) found ten safe programs the compiler accepted and
+that read freed memory under ASan (h274–h280, h285–h287), one family: a
+closure that changes a binding it captured, run where something else holds
+a view of it. Seven were a closure handed to a call, or captured, beside
+what it changes; the last three were a closure holding a view of a capture
+across a call to a closure its caller chose — one of its own closure
+*parameters* (h285), or a closure a parameter holds in a struct field
+(h286) or a `Vec` element (h287) — that re-enters and grows the capture:
+running a *captured* closure carried its effect onto the enclosing
+closure, but running one the caller supplied carried none. They are
+rejected now (*Fixed*), and no hole is known.
+
+The mechanized proof of the memory model now covers phase A2
+(`formal/`, `./check.sh`: no `sorry`, Lean's standard axioms only):
+structs and enums with field-precise paths, closures and trait objects
+with their captures — by handle, and by name including a closure that
+changes a capture and is handed to a call, captured or held by a borrowed
+binding — panics with unwinding and `recover`, the drop journal, and leak
+freedom (`A2.memory_safe`, `A2.no_leak_end`). `formal/README.md`,
+`formal/RULES.md` and `formal/A2/CAPTURES_DESIGN.md` record what each
+rule of `docs/MEMORY.md` is in the calculus, and what A2 does not model
+yet.
+
 ### Added
 
 - **Closure types and trait objects as type arguments.** A type with no
@@ -37,6 +61,12 @@ way and are closed (h281–h284).
   Vec of closures and a `vec_get` payload are lent at no cost; `vec_at`
   and `rc_get` hand back a copy (a closure result is always its caller's).
 - `( mem_dup f )` of a closure is a copy that owns its environment.
+- **`ws_serve_messages_deflate_with_context`** and its
+  `ws_client_*` mirror (stdlib/ext/websocket.nu): the read loop gives its
+  handler the deflate context beside each message, so a handler that
+  replies compressed uses the context the loop reads with instead of
+  capturing it — the same context reached twice, which the closure rule
+  below rejects. examples/ws_deflate_echo.nu uses it.
 
 ### Fixed
 
@@ -53,6 +83,39 @@ way and are closed (h281–h284).
   Such a closure is now a borrow of what it was read out of; using it
   after that owner died, was given a new value, had a field replaced or
   had its elements dropped is a compile error.
+- **A closure that changes what it captured is a route to it at every
+  call** (docs/MEMORY.md §2.11). Handed to a call, or called itself, a
+  closure whose body may move a capture's buffer or drop its elements may
+  not meet another argument that reaches that capture — the binding, a
+  borrow or a view of it, or another closure that captured it: inside the
+  callee the two were unrelated names, and growing the `Vec` through the
+  closure left the other dangling (h274: a closure holding a view of its
+  capture beside one growing it; h275: a `Vec` passed `in` beside a
+  closure growing it; h276: the closure called with the grower; h277: an
+  element borrow beside a closure clearing its `Vec`). Decided at the
+  borrow walk with the final summaries (`clox` rows, bck_clo_route_check),
+  like the exclusive call of two arguments.
+- **A closure that runs a closure it captured does what that one does**
+  (h278, h280): a view of what the inner closure grows ends where the
+  outer one runs. Before, the inner closure's effect was dropped because
+  it concerned a binding the outer one reached only through it.
+- **A closure whose body changes a capture may not also hold a view of
+  it** (h279), checked where the literal is made.
+- **Inside a closure body, running a closure the caller chose ends the
+  views of what the closure captured by reference** (h285–h287): a
+  closure parameter, or a closure a parameter holds — a struct field, a
+  `Vec` element, a closure a call handed back — has captures the caller
+  picked, so running it may re-enter this closure and grow what it
+  captured; its views end at the call, as at a known growing closure.
+  Opaque is a closure whose capture set has an atom nobody at the call
+  knows: a parameter's, anybody's (a closure read through a raw pointer,
+  as `vec_at` hands an element back), or a call whose callee is compiled
+  later and whose answer is not in yet (`__cs_opaque`,
+  `bck_opaque_param_run`). Additive: it ends more borrows, admits no
+  program it did not. A verdict-only change: the compiler before and
+  after it emits byte-identical LLVM IR for every benchmark, example and
+  compiler test (1478 programs), the benchmark binaries are byte-identical,
+  and compiling `compiler/nurlc.nu` takes the same time (within noise).
 
 ## [0.73.0] — 2026-10-16
 

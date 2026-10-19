@@ -555,11 +555,33 @@ a mutation inside the body as much as a read. Running a closure is also
 what its body does to its captures: one that changes, reallocates or
 drops elements of a capture ends the views and borrows of that capture at
 the call — made directly, or by a callee the closure is handed to.
-Capturing an already-released value is rejected at the closure literal. A closure
+Capturing an already-released value is rejected at the closure literal.
+
+A closure that changes a capture this way is a second route to it, so
+the exclusive-call rule (§2.4) covers it. Handed to a call — or called
+itself — it may not meet another argument that reaches that capture:
+the binding itself, a borrow or a view of it, or another closure that
+captured it. Inside the callee the two would be unrelated names, and the
+change through the closure would leave the other dangling (h274–h277,
+h280). Hand the callee what it needs as a parameter instead — the
+WebSocket deflate loop gives its handler the context it reads with
+(`ws_serve_messages_deflate_with_context`). A closure that runs a
+closure it captured does what that one does (h278), and a closure whose
+body changes a capture may not also hold a view or a borrow of it
+(h279). Inside a closure body, running a closure the caller chose — a
+closure parameter, or a closure a parameter holds in a field or an
+element — ends the views of every binding the closure captured by
+reference: its captures are not known here, so it may re-enter this
+closure and grow what it captured (h285–h287). A closure
 stored into a struct, or handed to a function that keeps it, makes that
 owner depend on the captures: releasing a capture while the owner may
 still run the closure is an error. Loading a closure value, and dropping
 the closure's own environment at the end of its scope, is not a use.
+
+The mechanized proof (`formal/A2`, [`RULES.md`](../formal/RULES.md))
+covers this rule, with one difference on the conservative side: the
+calculus admits, beside a closure that changes a binding, another closure
+that changes it the same way; the compiler rejects any other route to it.
 
 ### 2.12 A stored value belongs to its owner
 
@@ -730,7 +752,7 @@ are now values (§2.10), tracked through every place one can be put.
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory, and converting the packages' handles to `Arc` and removing
 gratuitous `unsafe` across `packages/` found the rest; all are closed, each a
-probe CI now holds (h142–h273):
+probe CI now holds (h142–h287):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1013,7 +1035,35 @@ payload or a forwarded call result handed back lends the parameter it
 came from (h270, h271); and module globals do not race — a global set at
 start holds only a type that synchronises itself (h263), a struct or
 option global is `unsafe`-only (h272), and safe code may not hand an
-`s` global a string to own (h273; §1). No hole is known.
+`s` global a string to own (h273; §1).
+
+Modelling closures for the mechanized proof (`formal/`, phase A2) found
+seven more (h274–h280), all of one family: a closure that changes a
+binding it captured, run where something else holds a view of that
+binding. A closure handed to a call beside the binding itself, a borrow
+of one of its elements, or another closure that captured it (h274–h277,
+h280) — inside the callee the two are unrelated names; a closure that
+runs a captured closure did not carry what that one does (h278); and a
+closure that captured both a `Vec` and a view of it, growing the one and
+reading the other (h279). They are closed by the exclusive-call rule
+below, extended to closures.
+
+Modelling the *handing* of such closures to calls then found an eighth
+(h285): a closure holding a view of a `Vec` it captured across a call to
+one of its own closure *parameters*, where the caller hands that parameter
+a closure that re-enters and grows the `Vec`. Running a *captured* closure
+carries its effect onto the enclosing closure (h278), but running a
+*parameter* carried none — a parameter's captures are the caller's to
+choose. Checking the compiler against the finished calculus found the same
+with the closure behind what a parameter holds: a struct field (h286) and
+a `Vec` element (h287), where the closure read out of the parameter was
+taken to hold nothing. All three are closed the same way, additively:
+inside a closure body, a call to an *opaque* closure — a closure
+parameter, or a closure a parameter holds, a field, an element, a closure
+a call handed back: one whose captures nobody at the call knows — ends
+the views of every binding that closure captured by reference, exactly as
+a call that runs a growing closure whose captures are known does (h280).
+No hole is known.
 
 The rules that carry it:
 
@@ -1038,7 +1088,11 @@ The rules that carry it:
 - **Running a closure is what its body does.** A closure that changes,
   reallocates or drops elements of a capture ends the views and borrows of
   that capture where it runs — called directly, or handed to a callee that
-  may run it (§2.11).
+  may run it (§2.11) — and one that runs a closure it captured does what
+  that one does. Such a closure is a route to the capture: no other
+  argument of a call it is handed to (or of the call of it) may reach the
+  capture — the binding, a view or a borrow of it, a closure that captured
+  it — and it may not itself hold a view of what it changes.
 - **A part of a temporary is a copy.** An element borrowed out of a call's
   fresh result (`( vec_get [String] ( mk ) 0 )`) is copied before the
   temporary is dropped; one that cannot be copied is an error naming the
@@ -1187,12 +1241,17 @@ with `arc_new`.
 The guarantee is a property of the rules. The compiler's implementation
 of them is tested continuously:
 
-- **Mechanized soundness proof (Lean 4).** The core ownership calculus
-  (`formal/`, `lake build`) is mechanically proven sound in Lean 4 with zero
-  `sorry` (`A1.memory_safe` in `formal/Formal/Soundness.lean`: well-typed
-  programs never get stuck on use-after-free, double-free, dangling borrows/views,
-  or leak live allocations at exit), and `formal/corpus/map.tsv` maps every
-  regression probe (`h01–h273`) to its formal judgment clause. See
+- **Mechanized soundness proof (Lean 4).** The ownership calculus
+  (`formal/`, `./check.sh`) is mechanically proven sound in Lean 4 with
+  zero `sorry`, on Lean's standard axioms only: `A2.memory_safe` and
+  `A2.no_leak_end` in `formal/A2/Soundness.lean` — well-typed programs
+  never get stuck on a use after free, a double free, a dangling borrow or
+  view or an out-of-bounds access, and leak nothing at exit, on the panic
+  path too. The calculus covers owned values, moves and drop flags,
+  borrows and views, `inout` with its bounds, structs and enums, closures
+  and trait objects with their captures (§2.11), panics and the drop
+  journal; `formal/corpus/map.tsv` maps every regression probe
+  (`h01–h287`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
