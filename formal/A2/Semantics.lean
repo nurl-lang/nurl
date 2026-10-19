@@ -328,14 +328,6 @@ def movedArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
       | some (.inp, _) => false
       | _ => true)).map (fun i => args.getD i 0)
 
-/-- The arguments a call frees: those at a `sink` slot.  Unlike `movedArgs`
-    (which also holds `inout` arguments), a binding named across the call stays
-    valid unless it is freed, so only these invalidate names. -/
-def sinkArgs (ps : List (PMode × Ty)) (args : List Var) : List Var :=
-  ((List.range ps.length).filter (fun i => match ps[i]? with
-      | some (.sink, _) => true
-      | _ => false)).map (fun i => args.getD i 0)
-
 /-- What a call through a package holds still (at most): every caller
     binding but the result's and the arguments it moves or changes. -/
 def heldFor (ps : List (PMode × Ty)) (args : List Var) (base x : Nat) : List Var :=
