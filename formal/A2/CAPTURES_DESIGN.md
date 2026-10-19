@@ -108,3 +108,32 @@ unsound shortcut is possible), but it touches the whole frame/naming layer of
 rather than commit a half-applied refinement. The `NameWf`/`Rename` pieces
 (`sinkArgs`, `mem_sinkArgs`, `roots_liftE_ρ_mem`, `roots_liftE_ρ_name`, the
 `CallT.names` sink-split) were proven and are the template for the rest.
+
+## Why cs-as-arguments is the faithful model (checked against nurlc)
+
+nurlc (`compiler/nurlc.nu`) compiles a closure as a `{fn-ptr, env-ptr}`
+struct; a by-name / `inout` capture is **the caller's binding passed by
+address, held in the env** (see nurlc.nu:720, 765, 4706, 6807). In the
+formal big-step/substitution semantics the equivalent of "dereference the
+captured binding's address at call time" is exactly binding that binding's
+current value as a parameter — i.e. the step's `m.nv :: zs ++ cs.map (·.1)`.
+So the opened call genuinely passes the captures as trailing args, the
+receiver (env) genuinely names them, and the `CallT` moves-condition
+refinement (memory-aliasing always, by-name only for `sink`) is the correct
+and necessary design — there is no env-only shortcut.
+
+## The one structural consequence left to mechanize: `RSetup.N_out`
+
+At the opened call the captures are **both** direct arguments (`ρ`-images:
+callee params) **and** by-name roots of the receiver. So the frame
+invariant `RSetup.OK.N_out` — "every `N` (by-name) root is not a `ρ`-image
+and lives in the frame `Φ`" — no longer holds as stated: a by-name root may
+be an `inout` moved argument, which is a callee parameter. `N_out` must be
+generalized to a disjunction (a by-name root is either a frame binding, as
+now, or an `inout` argument the call renames), and `canon_names` / `Φnamed`
+/ `sOK` updated to match. This is the deepest remaining edit; everything
+else (`open_pkg` building the extended `CallT`, `cloCase` aligning the
+`BindParams` step, `weaker_open`'s equal-kill `killNames`) builds on it.
+This is the point to resume from — the invariant change is the keystone, and
+the `sinkArgs` / `roots_liftE_ρ_mem` / `roots_liftE_ρ_name` / `moving_root`-
+`sink_root` lemmas are already worked out as its scaffolding.
