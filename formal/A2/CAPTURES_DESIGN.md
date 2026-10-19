@@ -165,6 +165,18 @@ across the opaque call — the symbolic names close that. `NoWriters`,
 premise then all go, and `canon_quiet` / `namesFree_lift` discharge from
 `N_mut` and `kills_isName`.
 
+Two smaller units were tried and ruled out, so the next attempt need not:
+keeping `NoWriters` on `callc` arguments only (nurlc's writer-beside-writer
+rejection, which would spare the moves-condition relaxation) cannot be
+re-established under renaming for the same broadcast reason; and a
+symbolic "holds closure `h`" reader name on closure parameters, with
+`mutNames` following a name on a closure-typed binding one level into that
+binding's writers (h278 in the calculus), would remove the name broadcast
+altogether (`A := allKinds R`) and so the coupling — but it needs
+`DepsNamed` to admit a borrowed closure as a named target and has no sound
+marker for a container of closures (`holdsView`). The symbolic `inout`
+sibling names above are the version that survives.
+
 None of it changes generated code: nurlc already compiles (I). It is one
 coordinated change across `Typing` (`sigCtx`, `CallT`, `pack`),
 `Invariant` (`PkgsOK`, `ValOK.pkg`), `Rename` (`AbsOK`, `RSetup.OK`),
