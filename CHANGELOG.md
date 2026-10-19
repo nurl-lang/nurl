@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.74.0] — 2026-10-19
 
 A closure type and a trait object are generic type arguments like any
 other type: `( Vec ( @ v i ) )`, `( vec_new [( @ i i )] )`,
@@ -31,16 +31,21 @@ running a *captured* closure carried its effect onto the enclosing
 closure, but running one the caller supplied carried none. They are
 rejected now (*Fixed*), and no hole is known.
 
-The mechanized proof of the memory model now covers phase A2
-(`formal/`, `./check.sh`: no `sorry`, Lean's standard axioms only):
-structs and enums with field-precise paths, closures and trait objects
-with their captures — by handle, and by name including a closure that
-changes a capture and is handed to a call, captured or held by a borrowed
-binding — panics with unwinding and `recover`, the drop journal, and leak
-freedom (`A2.memory_safe`, `A2.no_leak_end`). `formal/README.md`,
-`formal/RULES.md` and `formal/A2/CAPTURES_DESIGN.md` record what each
-rule of `docs/MEMORY.md` is in the calculus, and what A2 does not model
-yet.
+The mechanized proof of the memory model, which 0.73.0 started with
+nothing proven, has its first two phases done (`formal/`, `./check.sh`:
+no `sorry`, Lean's standard axioms only). Phase A1 is the core calculus —
+owned values, moves and drop flags, borrows and views, a `Vec` that
+reallocates, `inout` and `sink` — sound by progress and preservation
+(`A1.memory_safe`). Phase A2 adds structs and enums with field-precise
+paths, closures and trait objects with their captures — by handle, and
+by name including a closure that changes a capture and is handed to a
+call, captured or held by a borrowed binding — panics with unwinding and
+`recover`, the drop journal, and leak freedom (`A2.memory_safe`,
+`A2.no_leak_end`). It proves the rules of the single-threaded language,
+not yet nurlc's implementation of them (phase C) or threads (A3).
+`formal/README.md`, `formal/RULES.md` and `formal/A2/CAPTURES_DESIGN.md`
+record what each rule of `docs/MEMORY.md` is in the calculus, and what A2
+does not model yet.
 
 ### Added
 
@@ -67,6 +72,37 @@ yet.
   replies compressed uses the context the loop reads with instead of
   capturing it — the same context reached twice, which the closure rule
   below rejects. examples/ws_deflate_echo.nu uses it.
+- **`formal/`: phases A1 and A2 proven** (Lean 4, core library only).
+  `A1/` is the core calculus and its soundness (`A1.memory_safe`: a
+  program whose functions check against their summaries never reaches a
+  stuck configuration), including the call case — a callee's body, typed
+  once against its own view of its parameters, is typed where a call
+  places it (`Rename`). `A2/` extends every module and adds the panic
+  path (`Panic`), leak freedom at the end of a program, normal or by
+  panic (`Leak`, `A2.no_leak_end`), and calls through a closure or trait
+  object (`Closure`). `formal/check.sh` builds the proof and fails on a
+  `sorry` or a new axiom; `formal/corpus/map.tsv` names, for every hole
+  probe, the formal rule that rejects it, and `formal/RULES.md` each rule
+  of docs/MEMORY.md.
+
+### Changed
+
+- **CI: every `deps/<x>` import a package ships must be declared in its
+  manifest.** `tools/check_package_imports.sh` applies the registry
+  publish gate's rule on every change: a packaged source (`src/**` or a
+  `*.nu` in the package root) that imports `deps/<x>/…` needs `<x>` in
+  that package's `[dependencies]`. `deps/` is a local artefact, so an
+  undeclared dependency compiled in the repo and failed for every registry
+  install — objdet 0.4.4 imported `deps/gpu` without declaring it, passed
+  CI, and was stopped only by `nurlpkg publish` during the 0.73.0 package
+  sweep. `tools/tests/test_package_imports.py` holds the rules (10 cases).
+- **The docs follow 0.73.0 and grammar v2.9.** nurl-lang.org/docs and the
+  repository docs (spec, MEMORY, LIMITATIONS, ASYNC, BUILDING, CRYPTO,
+  NETWORKING) described several things as they were before 0.73.0 —
+  among them that an out-of-range shift count is poison (a constant one
+  is rejected, a dynamic one panics) and that the `? & a b c d` arity
+  trap is a warning (it is an error unless `--no-strict-arity`). The
+  registry serves its `favicon.svg`.
 
 ### Fixed
 
@@ -116,6 +152,28 @@ yet.
   after it emits byte-identical LLVM IR for every benchmark, example and
   compiler test (1478 programs), the benchmark binaries are byte-identical,
   and compiling `compiler/nurlc.nu` takes the same time (within noise).
+
+### Packages
+
+Published to the registry after 0.73.0:
+
+- **whisper 3.4.0: the WebSocket stream ends an utterance on a voice
+  detector, not a loudness threshold.** Silero VAD v5 runs in NURL on the
+  CPU (0.4 ms per 32 ms chunk, within 5·10⁻⁶ of onnxruntime; the weights
+  install beside the binary), and the endpointer learns the room's noise
+  floor, the speaker's level and the speaker's own pauses, ignores voices
+  well below the speaker's (a television), and makes the final during the
+  pause. End of speech to final on large-v3: ~930 ms → 73–306 ms in a
+  quiet room; with a television 12 dB below, 1–6.7 s with wrong text →
+  185–406 ms with every answer right. Drafts with a stable prefix, a
+  per-stream configuration and `whisper vad <audio.wav>` are new.
+- **whisper 3.4.1:** `whisper serve` ran one worker thread, so one open
+  WebSocket stream held up `/health`, `/inference` and every other stream
+  until it closed. It runs 8 workers; transcriptions take a GPU lock one at
+  a time, and a draft that finds the GPU busy is skipped.
+- **audio 0.9.0:** `log_mel_whisper_padded` computes whisper's log-mel
+  only over the frames that see audio, bit-identical to padding first (a
+  2-second clip: ~117 ms → ~10 ms).
 
 ## [0.73.0] — 2026-10-16
 

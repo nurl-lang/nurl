@@ -629,11 +629,12 @@ block_expr = '{' stmt* '}' ;
 (* ( fn [generic_arg+]? arg* )  — function call; optional [generic_arg+]
    for generic instantiation. A type argument is a `generic_arg` (see
    generic_inst, below): a base IDENT (type keyword or named type), a
-   pointer / option (`* T`, `? T`, `?? T`), or a nested generic / closure
-   application (`( Name … )`, `( @ R P* )`). The compiler monomorphises by
-   mangling each argument's lowered type into the call name. The one shape
-   NOT accepted as a call type-argument is a bare anonymous slice / opt / res
-   literal type (`[ T`); name it via a struct if needed.
+   pointer / option (`* T`, `? T`, `?? T`), a nested generic / closure
+   application (`( Name … )`, `( @ R P* )`), or a trait object (`% Trait`).
+   The compiler monomorphises by mangling each argument's lowered type into
+   the call name. The one shape NOT accepted as a call type-argument is a
+   bare anonymous slice / opt / res literal type (`[ T`); name it via a
+   struct if needed.
    Example:  ( add 3 4 )              ( nurl_print `hello\n` )
    Example:  ( id [i] 42 )            — monomorphise generic id with T=i
    Example:  ( alloc [Point] 16 )     — Point is a struct name
@@ -864,11 +865,12 @@ fn_type      = '(' '@' type type* ')' ;
    a generic struct; each following `generic_arg` is a TYPE, monomorphised by
    name mangling. Arguments MAY be compound — a nested generic application
    (`( Vec ( Pair K V ) )`), a pointer (`* T`), an option (`? T` / `?? T`),
-   or a closure / fn type (`( @ R P* )`) — and recurse through `type`. A
-   compound arg is mangled into a single ident-shaped word so nesting
-   composes deterministically. The one type shape the monomorphiser does NOT
-   accept as an argument is a bare anonymous slice (`[ T`); wrap it in a
-   named struct if you need a slice-of-generic.
+   a closure / fn type (`( @ R P* )`) or a trait object (`% Trait`) — and
+   recurse through `type`. A compound arg is mangled into a single
+   ident-shaped word so nesting composes deterministically. The one type
+   shape the monomorphiser does NOT accept as an argument is a bare
+   anonymous slice (`[ T`); wrap it in a named struct if you need a
+   slice-of-generic.
 
    `generic_arg` is the shared argument grammar for BOTH the type-position
    form here AND the function call-site `[ … ]` form (see call_expr).
@@ -886,7 +888,7 @@ fn_type      = '(' '@' type type* ')' ;
    type { i64, %V }`), and too many mangles the DEFINITION from the
    declared parameters while every reference carries all of them, so the
    reference names a type nothing defines. *)
-generic_arg  = IDENT | ptr_type | opt_type | generic_inst | fn_type ;
+generic_arg  = IDENT | ptr_type | opt_type | generic_inst | fn_type | dyn_type ;
 generic_inst = '(' IDENT generic_arg+ ')' ;
 
 

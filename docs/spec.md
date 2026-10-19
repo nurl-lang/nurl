@@ -473,10 +473,10 @@ way the standard library vouches for its own raw code. Calling an
 `unsafe` function needs no marking. The rest of the program is held to
 the ownership rules (docs/MEMORY.md §6), and **every program accepted
 without an `unsafe` function of its own is memory-safe and leak-free**
-(docs/MEMORY.md §6.2 — the core memory model `A1.memory_safe` is
-mechanically proven sound in Lean 4 under `formal/`, and every hole found
-across the 0.71.0–0.73.0 reviews, `h01–h273`, is closed and held by a
-probe in `tools/fuzz/holes/`).
+(docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
+language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
+sound in Lean 4 under `formal/`, and every hole found so far,
+`h01–h287`, is closed and held by a probe in `tools/fuzz/holes/`).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -2021,9 +2021,10 @@ after the function name:
 ```
 
 Type arguments at call sites may be compound types — a base identifier
-(type keyword or named type), a pointer / option (`*T`, `?T`, `??T`), or a
-nested generic / closure application (`( Pair K V )`, `( @ R P* )`); only a
-bare anonymous slice (`[T`) is excluded. Each distinct argument list
+(type keyword or named type), a pointer / option (`*T`, `?T`, `??T`), a
+nested generic / closure application (`( Pair K V )`, `( @ R P* )`), or a
+trait object (`%Trait`, §4.8); only a bare anonymous slice (`[T`) is
+excluded. Each distinct argument list
 materialises one mangled monomorphic copy. The body is stored as source
 text at the declaration and re-parsed per instantiation.
 
@@ -2084,10 +2085,14 @@ responsibility belongs to the auto-drop machinery.
 ### 8.4 Closure environments
 
 A closure's heap environment is **not** reference-counted. It is owned
-wherever the closure is kept — a binding, a struct field, a slice,
-another closure's captures, a spawned thread — and dropped by that
-owner; a returned closure's env belongs to the caller, and a borrowed
-one stored into an owner is copied. Freeing an env by hand is a compile
+wherever the closure is kept — a binding, a struct field, a slice, a
+container's element, an option or a result, another closure's captures,
+a spawned thread — and dropped by that owner; a returned closure's env
+belongs to the caller, and a borrowed one stored into an owner is copied.
+A closure read out of a field, an option's payload or a container's
+element borrows that owner: calling it after the owner died, was given a
+new value or had the field replaced or its elements dropped is a compile
+error. Freeing an env by hand is a compile
 error. See [`docs/MEMORY.md` §7.5](MEMORY.md).
 
 A closure may *capture by pointer* a mutable (`: ~`) multi-field struct
@@ -2279,6 +2284,17 @@ that capture (§9.11) at the call — made directly, or by handing the
 closure to a function that may run it
 ([`docs/MEMORY.md` §2.11](MEMORY.md)).
 
+A closure that changes a capture this way is a second route to it, under
+the exclusive-call rule of §9.4: handed to a call, or called itself, it
+MUST NOT meet another argument that reaches that capture — the binding,
+a borrow or a view of it, or another closure that captured it. A closure
+that runs a closure it captured does what that one does, and a closure
+whose body changes a capture MUST NOT also hold a view or a borrow of it.
+Inside a closure body, running a closure the caller chose — a closure
+parameter, or a closure a parameter holds in a field or an element — ends
+the views of every binding the enclosing closure captured by reference,
+since that closure may re-enter it and grow what it captured.
+
 Merely *loading* a closure value is not a use of its captures — that is
 how a closure's heap environment is reclaimed once it is dead, which
 legitimately happens after the captured handles are freed. A closure kept
@@ -2338,9 +2354,10 @@ pointer casts, the raw-memory primitives and foreign calls are its author's
 (or, for `raw`, its `unsafe` caller's) to get right. Everything else is held
 to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
-the core ownership model (`A1.memory_safe`) is mechanically proven sound in
-Lean 4 ([`formal/`](../formal/)), and every hole found across the reviews
-(`h01–h273`) is closed and held by a probe in `tools/fuzz/holes/`.
+the ownership rules of the single-threaded language (`A2.memory_safe`,
+`A2.no_leak_end`) are mechanically proven sound in Lean 4
+([`formal/`](../formal/)), and every hole found so far (`h01–h287`) is
+closed and held by a probe in `tools/fuzz/holes/`.
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
