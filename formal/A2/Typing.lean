@@ -478,7 +478,9 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
     (∀ i (h : i < fn.params.length), ∃ Ea, Γ (args.getD i 0) = some Ea ∧ Ea.live = true ∧
         paramOK fn.params[i].1 fn.params[i].2 Ea ∧
         (fn.params[i].1.moves = true →
-          args.getD i 0 ∉ F ∧ args.getD i 0 ∉ roots Ea.vdeps ∧
+          args.getD i 0 ∉ F ∧
+          (args.getD i 0 ∉ roots (memDeps Ea.vdeps) ∧
+            (fn.params[i].1 = .sink → args.getD i 0 ∉ roots (nameDeps Ea.vdeps))) ∧
           ∀ j < fn.params.length, j ≠ i →
             args.getD j 0 ≠ args.getD i 0 ∧
             args.getD i 0 ∉ roots (memDeps (argE Γ (args.getD j 0)).vdeps) ∧

@@ -137,3 +137,53 @@ else (`open_pkg` building the extended `CallT`, `cloCase` aligning the
 This is the point to resume from — the invariant change is the keystone, and
 the `sinkArgs` / `roots_liftE_ρ_mem` / `roots_liftE_ρ_name` / `moving_root`-
 `sink_root` lemmas are already worked out as its scaffolding.
+
+## Implementation state (this session)
+
+The frame-core generalization is **substantially implemented** and builds green
+through `A2.NameWf`; `A2.Rename` is ~90% converted. What is DONE and correct:
+
+- **Typing**: `CallT` moves-condition split — memory-reach forbidden to any
+  moved arg (always), by-name reach forbidden only to a `sink`; the self-clause
+  split the same way. `NamesFree` gains `inoutOnly ps args r` (`r ∉ nonInoutArgs`:
+  a by-name-mutated binding, if an argument, sits only at `inout` slots). Helpers
+  `mem_roots_split`, `nonInoutArgs` + `mem_nonInoutArgs(_of)`. GREEN.
+- **NameWf**: `sinkArgs` + `mem_sinkArgs(_of)`; `CallT.names` reproven with
+  `S := sinkArgs` (an inout arg survives, so only a sink frees a named binding).
+  GREEN.
+- **Call**: `moving_root` split into `moving_root_mem` + `sink_root`. (Rest of
+  Call.lean — the `callS.OK` construction providing the generalized fields — NOT
+  yet done.)
+- **Rename**: `RSetup.OK` generalized — `pe_out`, `pe_named`, `N_out`, `N_named`,
+  `N_mut` each gained the inout-argument disjunct (mirroring the pre-existing
+  `Φnamed`); new field `pe_mem_out` (a borrowed param's memory deps are
+  frame-rooted). **The crux `hits_lift` is SOLVED**: it now takes an `Allowed`
+  hypothesis, and `allowed_name_free` shows a name is ended only by `replace`,
+  which `Allowed` excludes on a non-`replace` inout param — so the extra
+  name-deps a lifted receiver carries (its captures, pointing to inout args)
+  never spuriously kill. `killE_lift`/`canon_kill` thread `Allowed`. `A_out`
+  returns the disjunction; `A_canon_root`/`pe_canon_root` resolve the inout case
+  via `liftMode (.inout _) = .own` (a root). `canon_wf`, `canon_names`,
+  `roots_liftE_ρ_mem/name`, `mem_nonInoutArgs_map`, `namesFree_lift` (now takes
+  `ps`+`hlen`) done.
+
+### Current frontier (the remaining Rename red)
+
+1. `CapsOK.lift`'s `hroot1`: a captured binding may itself be an `inout`
+   parameter of the enclosing function (CapsOK only forces `ownSlot = true`,
+   which `inout` satisfies), so a renamed-argument dependency on a capture is
+   genuinely possible; `hroot1` now returns the frame-or-inout disjunction and
+   its two use sites (the inp- and inout-capture branches) need the inout case
+   worked through — this is the capture-on-inout-param interaction.
+2. `canon_quiet` (the `(N_out …).1` at the by-name-mutation kill check),
+   `N_bound`, and `namesFree_lift`'s `N_mut`-disjunction destructure, plus the
+   `roots_liftE_ρ` family's `A_out` sites — all mechanical disjunction handling
+   following the patterns already established above.
+
+### After Rename
+
+`Call.callS.OK` must *provide* the generalized `pe_*`/`N_*` fields (for the
+generic call via `argNames_root`, now returning the disjunction; for the opened
+call the receiver names its captures → the inout disjunct). Then
+`open_pkg`/`cloCase`/`weaker_open` thread the captures, then `Codes`,
+`Soundness`. All conceptually resolved; substantial mechanical work remains.

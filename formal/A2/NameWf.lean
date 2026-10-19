@@ -553,7 +553,10 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     have hmoves : fn.params[i].1.moves = true := by rw [hsink]; rfl
     obtain ⟨_, hnr, hdist⟩ := hmv hmoves
     by_cases hji : j = i
-    · subst hji; unfold argE at hr; rw [hEa] at hr; exact hnr hr
+    · subst hji; unfold argE at hr; rw [hEa] at hr
+      rcases mem_roots_split hr with hmem | hname
+      · exact hnr.1 hmem
+      · exact (hnr.2 hsink) hname
     · rcases mem_roots_split hr with hmem | hname
       · exact ((hdist j hj hji).2.1) hmem
       · exact ((hdist j hj hji).2.2 hsink) hname
