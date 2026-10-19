@@ -6,6 +6,54 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A closure type and a trait object are generic type arguments like any
+other type: `( Vec ( @ v i ) )`, `( vec_new [( @ i i )] )`,
+`( HashMap i ( @ i i ) )`, `( Rc ( @ v ) )`,
+`( Vec %Show )`. The spec has said so since generics landed; in fact
+`( vec_new [( @ i i )] )` was refused with "declares 1 type parameter(s)
+but this call supplies 6", `( Box ( @ i i ) )` instantiated a struct
+named `Box__@__i64__i64`, and a list of callbacks had to be a Vec of
+one-field structs. Four holes in the memory guarantee were found on the
+way and are closed (h281–h284).
+
+### Added
+
+- **Closure types and trait objects as type arguments.** A type with no
+  one-word spelling travels through a template as its *slug*: a closure
+  as `fn<N>` followed by `_<len>_<slug>` for its return type and each
+  parameter (`( @ i i )` → `fn1_3_i64_3_i64`), a trait object as
+  `dyn_<Trait>`. The lengths make it a prefix code, so the slug reads back
+  to exactly the type it was made from — parts that are closures, options,
+  inout parameters, slices, results or structs with underscores in their
+  names included (docs/spec.md §4.8). It is a spelling only: the value is
+  the same `{ fn, env }` pair, so no generated code changes.
+- **A container owns its closures' environments**, as a struct owns a
+  closure field (docs/MEMORY.md §7.5): a literal's or a call's env moves
+  in, a binding's is copied, dropping or clearing the container releases
+  each, copying it copies each, and the cycle collector traces and
+  releases an `Rc` of a closure that captured that `Rc`. A foreach over a
+  Vec of closures and a `vec_get` payload are lent at no cost; `vec_at`
+  and `rc_get` hand back a copy (a closure result is always its caller's).
+- `( mem_dup f )` of a closure is a copy that owns its environment.
+
+### Fixed
+
+- **h281, h282, h284:** an option or a result of a capturing closure
+  owned nothing, so handing one back — `^ o` after
+  `: ?( @ i i ) o @ ?( @ i i ) { T f }`, in a struct field, or as
+  `!( @ i i ) E` — returned an environment the frame had just freed (a
+  crash in safe code). An option or result of a closure now owns the
+  environment and is dropped and copied through its twin like `?String`.
+- **h283:** a closure read out of a struct's field (or an option's
+  payload, or a container's element) did not own its environment, and the
+  borrow checker tracked closure bindings only by their captures, so
+  replacing the field and then calling the closure called freed memory.
+  Such a closure is now a borrow of what it was read out of; using it
+  after that owner died, was given a new value, had a field replaced or
+  had its elements dropped is a compile error.
+
 ## [0.73.0] — 2026-10-16
 
 No hole in the memory guarantee is known. The 37 that 0.72.0 shipped as
