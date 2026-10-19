@@ -84,8 +84,19 @@ nurlc accepts this program; fragment (II) rejects it:
 
 nurlc's §2.11 route rule (h274–h280) only forbids *another argument* that
 reaches `v` beside the growing closure, and passing `v` `inout` beside a
-closure that captures it. Covering (I) needs the call model to follow the
-writer into the callee:
+closure that captures it.
+
+Probing (I) in nurlc turned up a memory-safety hole of this family, tracked
+as `tools/fuzz/holes/open/h285`: a closure holding a view of a `Vec` it
+captured across a call to one of its own closure *parameters*, where the
+caller hands that parameter a closure that re-enters the closure and grows
+the `Vec` (ASan: heap-use-after-free). nurlc carries the effect of running a
+*captured* closure (h278) but not of running a *parameter*, whose captures
+are the caller's to choose. Its fix is additive and identified (a call to an
+opaque closure value may move its enclosing closure's by-reference captures'
+buffers); the proof of (I) below is what justifies it.
+
+Covering (I) needs the call model to follow the writer into the callee:
 
 1. **Frozen set.** `heldFor` freezes every caller root below the base that
    the call does not move, including `v`. But the callee runs `g`, which

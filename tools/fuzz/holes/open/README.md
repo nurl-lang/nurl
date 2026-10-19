@@ -1,7 +1,17 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory.
+**One** (`h285_view_of_capture_across_opaque_closure_param.nu`): a closure
+holds a view of a `Vec` it captured across a call to one of its own closure
+*parameters*; the caller hands that parameter a closure that re-enters the
+closure and grows the `Vec`, so the view is read after the buffer moved.
+Found while modelling closures for the mechanized proof (`formal/`, phase
+A2), the same family as h274–h280. nurlc carries the effect of running a
+*captured* closure (h278) but not of running a *parameter*, whose captures
+are the caller's to choose. The fix is identified in the probe's header and
+in [`MEMORY.md` §6.2](../../../../docs/MEMORY.md) (additive: a call to an
+opaque closure value may move its enclosing closure's by-reference
+captures' buffers); it belongs in the borrow walk's effect machinery and is
+to land under this fuzz harness.
 
 A probe here is **safe code** (no `unsafe` function of its own, no raw
 memory or FFI of its own) that the compiler still **accepts** and that then
