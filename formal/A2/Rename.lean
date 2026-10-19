@@ -499,7 +499,7 @@ theorem AbsOK.weaker {Γa Γa' : Ctx} (hab : S.AbsOK Γa) (hw : Weaker Γa Γa')
   · obtain ⟨E, hE, hm, ht, hfx⟩ := hab.2.2 v bh hb
     obtain ⟨E', hE', hwe⟩ := hw.get hE
     refine ⟨E', hE', by rw [hwe.2.1]; exact hm, by rw [hwe.1]; exact ht, fun hf => ?_⟩
-    have hf0 : E.fixed := by unfold Entry.fixed at hf ⊢; rw [hwe.2.1, hwe.1] at hf; exact hf
+    have hf0 : E.fixed := by simp only [Entry.fixed_def] at hf ⊢; rw [hwe.2.1, hwe.1] at hf; exact hf
     rw [hwe.2.2.1 hf0]; exact hfx hf0
 
 theorem AbsOK.kill {Γa : Ctx} (hab : S.AbsOK Γa) (e : Eff) (hv : Bool) (x : Var) :

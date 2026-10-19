@@ -181,6 +181,29 @@ theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} 
   rw [hσ] at hσ'; cases hσ'
   exact ⟨fs[j], fn, hfs, hf, h⟩
 
+theorem memDeps_mono {a b : List Dep} (h : a ⊆ b) : memDeps a ⊆ memDeps b :=
+  fun d hd => List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
+
+theorem roots_subset {a b : List Dep} (h : a ⊆ b) : roots a ⊆ roots b := List.map_subset _ h
+
+/-- What the opened environment holds by name, the package holds by name. -/
+theorem envE_names {c : Var} {Ec : Entry} {te : Ty} {d : Dep}
+    (hd : d ∈ nameDeps (envE c Ec te).vdeps) : d ∈ nameDeps Ec.vdeps := by
+  simp only [nameDeps, List.mem_filter] at hd ⊢
+  refine ⟨?_, hd.2⟩
+  simp only [envE, Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd
+  rcases hd.1 with (hdd | hh) | hh
+  · by_cases hr : Ec.mode.isRoot
+    · unfold derive at hdd; rw [if_pos hr] at hdd
+      simp only [List.mem_singleton] at hdd; subst hdd
+      exact absurd hd.2 (by cases Ec.ty <;> simp [rootKind, Kind.isName])
+    · rw [derive_bor_self (by simpa using hr)] at hdd
+      have hos : Ec.mode.ownSlot = false := by
+        cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+      unfold Entry.vdeps; rw [hos]; exact List.mem_append_left _ hdd
+  · unfold Entry.vdeps; exact List.mem_append_right _ hh
+  · unfold Entry.vdeps; exact List.mem_append_right _ hh
+
 /-- The roots the opened environment depends on: the package, or what it
     depends on. -/
 theorem envE_roots {c : Var} {Ec : Entry} {te : Ty} {r : Var} (hr : r ∈ roots (envE c Ec te).vdeps) :
@@ -398,6 +421,56 @@ theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
 
 /-! ### After the opened call -/
 
+/-- A call leaves no binding `inout` if none was. -/
+theorem kill_noInout {Γ : Ctx} (hni : ∀ v E b, Γ v = some E → E.mode ≠ .inout b) (e : Eff) (hv : Bool)
+    (x : Var) : ∀ v E b, A2.kill e hv x Γ v = some E → E.mode ≠ .inout b := by
+  intro v E b hv'
+  simp only [A2.kill] at hv'
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv'
+  rw [killE_mode]; exact hni v E0 b h0
+
+theorem killNames_noInout {Γ : Ctx} (hni : ∀ v E b, Γ v = some E → E.mode ≠ .inout b) :
+    ∀ ds, ∀ v E b, killNames ds Γ v = some E → E.mode ≠ .inout b
+  | [] => hni
+  | _ :: ds => kill_noInout (killNames_noInout hni ds) _ _ _
+
+theorem callPostAux_noInout {Γ0 : Ctx} {fn : Fn} {args : List Var}
+    (hni0 : ∀ v E b, Γ0 v = some E → E.mode ≠ .inout b) :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),
+      (∀ v E b, Γ v = some E → E.mode ≠ .inout b) →
+      ∀ v E b, callPostAux Γ0 fn args ps as i Γ v = some E → E.mode ≠ .inout b := by
+  intro ps
+  induction ps with
+  | nil => intro as i Γ hni; cases as <;> exact hni
+  | cons p ps ih =>
+    intro as i Γ hni
+    obtain ⟨pm, t⟩ := p
+    cases as with
+    | nil => cases pm <;> exact hni
+    | cons a as =>
+      have hargn : ∀ b, (argE Γ0 a).mode ≠ .inout b := by
+        intro b; unfold argE
+        cases h : Γ0 a with
+        | none => simp [intE]
+        | some E0 => simp only [Option.getD_some]; exact hni0 a E0 b h
+      cases pm with
+      | inp => exact ih as (i + 1) Γ hni
+      | sink =>
+        refine ih as (i + 1) _ (fun v E b hv => ?_)
+        by_cases hva : v = a
+        · subst hva; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hargn b
+        · simp only [A2.setE, upd_ne _ _ hva] at hv; exact kill_noInout hni _ _ _ v E b hv
+      | inout b' =>
+        refine ih as (i + 1) _ (fun v E b hv => ?_)
+        by_cases hva : v = a
+        · subst hva; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hargn b
+        · simp only [A2.setE, upd_ne _ _ hva] at hv; exact kill_noInout hni _ _ _ v E b hv
+
+theorem callPost_noInout {Γ : Ctx} (hni : ∀ v E b, Γ v = some E → E.mode ≠ .inout b)
+    (fn : Fn) (args : List Var) : ∀ v E b, callPost Γ fn args v = some E → E.mode ≠ .inout b :=
+  fun v E b => killNames_noInout
+    (callPostAux_noInout (Γ0 := Γ) (fn := fn) (args := args) hni fn.params args 0 Γ hni) _ v E b
+
 /-- Outside the environment `e`, the bindings after the opened call say no
     less than those after the call through the package, and depend on no `e`. -/
 def PostRel (e : Var) (Γd Γs : Ctx) : Prop :=
@@ -564,20 +637,20 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
     intro a ha
     obtain ⟨k, hk, rfl⟩ := List.getElem_of_mem ha
     have := hzs k; rwa [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hk, Option.getD_some] at this
-  -- the roots, argument by argument
+  -- the memory roots, argument by argument
   have hR : ∀ r ∈ (e :: zs).flatMap (fun a => if (argE (setE (cleanC Γ) e (envE c Ec te)) a).ty = .int then []
-      else roots (argE (setE (cleanC Γ) e (envE c Ec te)) a).held),
-      r ∈ (c :: zs).flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (argE Γ a).held) ∧ r ≠ e := by
+      else roots (memDeps (argE (setE (cleanC Γ) e (envE c Ec te)) a).held)),
+      r ∈ (c :: zs).flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held)) ∧ r ≠ e := by
     intro r hr
     simp only [List.flatMap_cons, List.mem_append] at hr
     rcases hr with hr | hr
     · rw [hE] at hr
       split at hr
       · simp at hr
-      · have hr' : r ∈ roots Ec.held := by simpa [envE] using hr
+      · have hr' : r ∈ roots (memDeps Ec.held) := by simpa [envE] using hr
         refine ⟨by simp only [List.flatMap_cons, List.mem_append, hEc, htc, ↓reduceIte]; exact Or.inl hr', ?_⟩
         intro hre
-        obtain ⟨Er, hEr, _⟩ := hw c Ec hc hlc (Or.inl htc) r (held_vdeps hr')
+        obtain ⟨Er, hEr, _⟩ := hw c Ec hc hlc (Or.inl htc) r (held_vdeps (roots_memDeps hr'))
         rw [hre, he] at hEr; cases hEr
     · obtain ⟨a, ha, hra⟩ := List.mem_flatMap.mp hr
       rw [argE_open (hzs' a ha), clean_ty] at hra
@@ -585,25 +658,65 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
       · simp at hra
       · rename_i hnt
         refine ⟨List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, by
-          simp only [hnt, ↓reduceIte]; exact List.map_subset _ (clean_held_sub _) hra⟩), ?_⟩
+          simp only [hnt, ↓reduceIte]
+          exact roots_subset (memDeps_mono (clean_held_sub _)) hra⟩), ?_⟩
         intro hre
         obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hra
-        exact argE_noE hw hrl hni he a d (by unfold Entry.vdeps; exact List.mem_append_right _ hd) (hdr.trans hre)
+        exact argE_noE hw hrl hni he a d
+          (by unfold Entry.vdeps; exact List.mem_append_right _ (List.mem_filter.mp hd).1) (hdr.trans hre)
+  -- what the arguments hold by name
+  have hN : ∀ d ∈ argNames (setE (cleanC Γ) e (envE c Ec te)) (e :: zs),
+      d ∈ argNames Γ (c :: zs) ∧ d.root ≠ e := by
+    intro d hd
+    simp only [argNames, List.flatMap_cons, List.mem_append] at hd
+    rcases hd with hd | hd
+    · -- the receiver's by-name holds: the package's captures
+      rw [hE] at hd
+      split at hd
+      · simp at hd
+      · have hdh : d ∈ nameDeps Ec.vdeps := envE_names hd
+        refine ⟨?_, ?_⟩
+        · simp only [argNames, List.flatMap_cons, List.mem_append]
+          refine Or.inl ?_
+          simp only [hEc, htc, Ne, reduceCtorEq, not_false_eq_true, ↓reduceIte]; exact hdh
+        · intro hre
+          obtain ⟨Er, hEr, _⟩ := hw c Ec hc hlc (Or.inl htc) d.root
+            (List.mem_map_of_mem (f := Dep.root) (List.mem_filter.mp hdh).1)
+          rw [hre, he] at hEr; cases hEr
+    · obtain ⟨a, ha, hda⟩ := List.mem_flatMap.mp hd
+      rw [argE_open (hzs' a ha), clean_ty] at hda
+      refine ⟨?_, ?_⟩
+      · simp only [argNames, List.flatMap_cons, List.mem_append]
+        refine Or.inr (List.mem_flatMap.mpr ⟨a, ha, ?_⟩)
+        split at hda
+        · simp at hda
+        · rename_i hnt; rw [if_neg hnt]
+          simp only [nameDeps, List.mem_filter] at hda ⊢
+          exact ⟨clean_vdeps_sub _ hda.1, hda.2⟩
+      · split at hda
+        · simp at hda
+        · exact argE_noE hw hrl hni he a d (List.mem_filter.mp hda).1
   unfold heldOfArgs
   refine ⟨fun d hd => ?_, fun d hd => ?_⟩
-  · rw [RSetup.mem_allKinds_iff] at hd ⊢; exact (hR _ hd).1
-  · rw [RSetup.mem_allKinds_iff] at hd; exact (hR _ hd).2
+  · rcases List.mem_append.mp hd with hd | hd
+    · rw [RSetup.mem_allKinds_iff] at hd
+      exact List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨(hR _ hd.1).1, hd.2⟩)
+    · exact List.mem_append_right _ (hN d hd).1
+  · rcases List.mem_append.mp hd with hd | hd
+    · rw [RSetup.mem_allKinds_iff] at hd; exact (hR _ hd.1).2
+    · exact (hN d hd).2
 
 theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true)
     (hni : ∀ v E b, Γ v = some E → E.mode ≠ .inout b)
     (he : Γ e = none) (hzs : ∀ k, zs.getD k 0 ≠ e) (hc : Γ c = some Ec) (hlc : Ec.live = true)
-    (htc : Ec.ty ≠ .int) {L L' : List (Nat × Kind)} (hL : L ⊆ L') :
+    (htc : Ec.ty ≠ .int) {L L' : List (Nat × Kind)} (hL : L ⊆ L')
+    (hLn : ∀ jk ∈ L, jk.2.isName = false) :
     reroot e ((envE c Ec te).path ++ (envE c Ec te).held)
         (L.flatMap (argDeps (setE (cleanC Γ) e (envE c Ec te)) (e :: zs)) ++
           heldOfArgs (setE (cleanC Γ) e (envE c Ec te)) (e :: zs)) ⊆
       (L'.flatMap (argDeps Γ (c :: zs)) ++ heldOfArgs Γ (c :: zs)) ++ allKinds (recvRoots c Ec) := by
   intro d hd
-  rcases mem_reroot hd with ⟨hd, hne⟩ | ⟨k, d', _, hd', rfl⟩
+  rcases mem_reroot hd with ⟨hd, hne⟩ | ⟨k, d', hek, hd', rfl⟩
   · refine List.mem_append_left _ ?_
     rcases List.mem_append.mp hd with hd | hd
     · obtain ⟨jk, hjk, hdj⟩ := List.mem_flatMap.mp hd
@@ -612,14 +725,65 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
       · exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨jk, hL hjk,
           (argDeps_open hw hrl hni he hzs hj).1 hdj⟩)
     · exact List.mem_append_right _ ((heldOfArgs_open hw hrl hni he hzs hc hlc htc).1 hd)
-  · refine List.mem_append_right _ (RSetup.mem_allKinds_iff.mpr ?_)
+  · -- the replaced dep had root `e`, so its kind is a memory kind
+    have hkn : k.isName = false := by
+      rcases List.mem_append.mp hek with hke | hke
+      · obtain ⟨jk, hjk, hkj⟩ := List.mem_flatMap.mp hke
+        by_cases hj0 : jk.1 = 0
+        · unfold argDeps at hkj
+          have hE : argE (setE (cleanC Γ) e (envE c Ec te)) ((e :: zs).getD jk.1 0) = envE c Ec te := by
+            rw [hj0]; simp [argE, setE]
+          rw [hE] at hkj
+          split at hkj
+          · simp at hkj
+          · unfold derive at hkj
+            rw [if_pos (by simp [envE, Mode.isRoot])] at hkj
+            simp only [List.mem_singleton, Dep.mk.injEq] at hkj
+            rw [hkj.2, rootKind_isName]; exact hLn jk hjk
+        · exact absurd rfl ((argDeps_open hw hrl hni he hzs hj0).2 ⟨e, k⟩ hkj)
+      · exact absurd ((heldOfArgs_open hw hrl hni he hzs hc hlc htc).2 _ hke) (by simp)
     simp only [envE, List.mem_append] at hd'
-    show d'.root ∈ recvRoots c Ec
-    unfold recvRoots
-    rcases hd' with (hd' | hd') | hd'
-    · exact List.mem_append_left _ (List.mem_map_of_mem (f := Dep.root) hd')
-    · exact List.mem_append_right _ (List.mem_map_of_mem (f := Dep.root) hd')
-    · exact List.mem_append_right _ (List.mem_map_of_mem (f := Dep.root) hd')
+    by_cases hnm : d'.kind.isName = true
+    · -- a captured name, reproduced as is: it is `c`'s by-name hold
+      have hcomp : comp d'.kind k = d'.kind := by
+        obtain ⟨b, t, hk⟩ : ∃ b t, d'.kind = .name b t := by
+          cases hdk : d'.kind <;> simp_all [Kind.isName]
+        rw [hk]; cases k <;> rfl
+      rw [hcomp]
+      have hdEc : d' ∈ Ec.vdeps := by
+        rcases hd' with (hd' | hd') | hd'
+        · -- in derive c Ec .self; a name there lies in Ec.path
+          by_cases hr : Ec.mode.isRoot
+          · unfold derive at hd'; rw [if_pos hr] at hd'
+            simp only [List.mem_singleton] at hd'; subst hd'
+            exact absurd hnm (by cases Ec.ty <;> simp [rootKind, Kind.isName])
+          · rw [derive_bor_self (by simpa using hr)] at hd'
+            have hos : Ec.mode.ownSlot = false := by
+              cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+            unfold Entry.vdeps; rw [hos]; exact List.mem_append_left _ hd'
+        · exact (by unfold Entry.vdeps; exact List.mem_append_right _ hd')
+        · exact (by unfold Entry.vdeps; exact List.mem_append_right _ hd')
+      refine List.mem_append_left _ (List.mem_append_right _ (List.mem_append_right _ ?_))
+      simp only [argNames, List.flatMap_cons, List.mem_append]
+      refine Or.inl ?_
+      have hci : argE Γ c = Ec := by simp [argE, hc]
+      simp only [hci, htc, Ne, reduceCtorEq, not_false_eq_true, ↓reduceIte, nameDeps, List.mem_filter]
+      exact ⟨hdEc, hnm⟩
+    · refine List.mem_append_right _ (RSetup.mem_allKinds_iff.mpr
+        ⟨?_, by
+          have hd'n : d'.kind.isName = false := by simpa using hnm
+          cases hdk : d'.kind <;> cases hkk : k <;>
+            simp_all [comp, Kind.isName, hkn]⟩)
+      show d'.root ∈ recvRoots c Ec
+      unfold recvRoots
+      have hd'm : d' ∈ memDeps (derive c Ec .self) ∨ d' ∈ memDeps Ec.held := by
+        rcases hd' with (hd' | hd') | hd'
+        · exact Or.inl (List.mem_filter.mpr ⟨hd', by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩)
+        · exact Or.inr (List.mem_filter.mpr ⟨hd', by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩)
+        · exact Or.inr (List.mem_filter.mpr ⟨hd', by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩)
+      rcases hd'm with h | h
+      · exact List.mem_append_left _ (List.mem_map_of_mem (f := Dep.root) h)
+      · exact List.mem_append_right _ (List.mem_map_of_mem (f := Dep.root) h)
 
 /-- Rerooting an `ownHeld` stays inside the `ownHeld` of a bound for it. -/
 theorem reroot_ownHeld {p : Var} {D : List Dep} {o : Bool} {t : Ty} {L X R : List Dep}
@@ -644,7 +808,8 @@ theorem res_open {fn sig : Fn} (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E →
     (hni : ∀ v E b, Γ v = some E → E.mode ≠ .inout b)
     (he : Γ e = none) (hzs : ∀ k, zs.getD k 0 ≠ e) (hc : Γ c = some Ec) (hlc : Ec.live = true)
     (htc : Ec.ty ≠ .int) (hty : fn.resTy = sig.resTy) (hown : fn.resOwn = sig.resOwn)
-    (hl : fn.lends ⊆ sig.lends) (hr : fn.rholds ⊆ sig.rholds) :
+    (hl : fn.lends ⊆ sig.lends) (hr : fn.rholds ⊆ sig.rholds)
+    (hln : ∀ jk ∈ fn.lends, jk.2.isName = false) (hrn : ∀ jk ∈ fn.rholds, jk.2.isName = false) :
     EntryWeaker (rerootE e ((envE c Ec te).path ++ (envE c Ec te).held)
         (callRes (setE (cleanC Γ) e (envE c Ec te)) fn (e :: zs)))
       (recvRes c Ec (callRes Γ sig (c :: zs))) := by
@@ -652,14 +817,17 @@ theorem res_open {fn sig : Fn} (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E →
     (by simp [recvRes, rerootE, callRes, resMode, hown]) (rerootE_callRes_not_fixed _ _ _)
     (by simp [recvRes, rerootE, callRes]) (fun _ => ?_) ?_
   · show reroot e _ (callRes (setE (cleanC Γ) e (envE c Ec te)) fn (e :: zs)).path ⊆ _
-    exact deps_open hw hrl hni he hzs hc hlc htc hl
+    exact deps_open hw hrl hni he hzs hc hlc htc hl hln
   · show reroot e _ (ownHeld fn.resOwn fn.resTy _) ⊆
-        ownHeld (resMode (callRes Γ sig (c :: zs)).mode).ownSlot _ _
-    rw [show (resMode (callRes Γ sig (c :: zs)).mode).ownSlot = fn.resOwn by
-          simp only [callRes]; rw [resMode]; cases fn.resOwn <;> rfl,
+        ownHeld (callRes Γ sig (c :: zs)).mode.ownSlot _ _
+    rw [show (callRes Γ sig (c :: zs)).mode.ownSlot = fn.resOwn by
+          simp only [callRes, resMode, hown]; cases sig.resOwn <;> rfl,
       show (callRes Γ sig (c :: zs)).ty = fn.resTy by simp [callRes, hty]]
+    rw [show (callRes Γ sig (c :: zs)).held
+          = ownHeld fn.resOwn fn.resTy (sig.rholds.flatMap (argDeps Γ (c :: zs)) ++ heldOfArgs Γ (c :: zs))
+          by simp [callRes, hty, hown]]
     refine reroot_ownHeld ?_
-    refine (deps_open hw hrl hni he hzs hc hlc htc hr).trans ?_
+    refine (deps_open hw hrl hni he hzs hc hlc htc hr hrn).trans ?_
     intro d hd
     simp only [callRes, List.append_assoc] at hd ⊢
     rcases List.mem_append.mp hd with h1 | h1
@@ -671,7 +839,8 @@ end opened
 /-- A binding on no `p` is untouched by `p`'s rerooting, but for an owner's
     `path`, which says nothing. -/
 theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E E')
-    (hne : ∀ d ∈ E.vdeps, d.root ≠ p) : EntryWeaker (rerootE p D E) E' := by
+    (hio : ∀ b, E.mode ≠ .inout b) (hne : ∀ d ∈ E.vdeps, d.root ≠ p) :
+    EntryWeaker (rerootE p D E) E' := by
   have hh : reroot p D E.held = E.held :=
     reroot_id fun d hd => hne d (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
   have hp : E.mode.ownSlot = false → reroot p D E.path = E.path := fun ho =>
@@ -681,12 +850,11 @@ theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E 
   · have hf : E.fixed := by simp only [Entry.fixed_def] at h ⊢; rw [rerootE] at h; exact h
     have := hrb hf
     rw [this]; unfold rerootE
-    rcases hf with h' | ⟨b, h', _⟩
-    · rw [hh, hp (by rw [h']; rfl)]
-    · rw [hh]
-      have ho : E.mode.ownSlot = true := by rw [h']; rfl
-      congr 1; apply reroot_id
-      intro d hd; exact hne d (by unfold Entry.vdeps; rw [ho]; exact List.mem_append_left _ hd)
+    have hrbm : E.mode = .rootb := by
+      rcases hf with h' | ⟨b, h', _⟩
+      · exact h'
+      · exact absurd h' (hio b)
+    rw [hh, hp (by rw [hrbm]; rfl)]
   · obtain ⟨hl1, hp1, hh1⟩ := hl h'
     refine ⟨hl1, fun ho => ?_, ?_⟩
     · show reroot p D E.path ⊆ E'.path
@@ -704,6 +872,7 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
     (hps : fn.params = (.inp, te) :: rest) (hsp : sig.params = (.inp, t0) :: rest)
     (hty : fn.resTy = sig.resTy) (hown : fn.resOwn = sig.resOwn)
     (hl : fn.lends ⊆ sig.lends) (hr : fn.rholds ⊆ sig.rholds) (ho : fn.outHolds ⊆ sig.outHolds)
+    (hln : ∀ jk ∈ fn.lends, jk.2.isName = false) (hrn : ∀ jk ∈ fn.rholds, jk.2.isName = false)
     (hnz : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0)
     (hrb : ∀ p a, (p, a) ∈ rest.zip zs → p.1 ≠ .inp → (argE Γ a).mode ≠ .rootb)
     (hse : callPost Γ sig (c :: zs) e = none)
@@ -732,7 +901,13 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
     (A := e :: zs) (C := c :: zs) (outHeld_open hw hrl hni he hzs ho hnz · |> fun h _ => h)
     (heldOfArgs_open hw hrl hni he hzs hc hlc htc) rest zs 1 _ _ (Nat.le_refl _)
     (fun a ha => ⟨hzs' a ha, argE_open (hzs' a ha), by rw [argE_open (hzs' a ha)]; exact argE_noE hw hrl hni he a⟩)
-    hrb h0
+    (fun p a hz hp hf => by
+      rcases hf with hrb' | ⟨b, hb, _⟩
+      · exact hrb p a hz hp hrb'
+      · unfold argE at hb
+        cases hca : Γ a with
+        | none => rw [hca] at hb; simp [intE] at hb
+        | some E0 => rw [hca] at hb; exact hni a E0 b hca hb) h0
   rw [← hd, ← hs] at hR
   refine ⟨fun v => ?_, hwf⟩
   by_cases hve : v = e
@@ -748,13 +923,14 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
       simp only [exitRoot, setE, upd_ne _ _ hve, upd_same, Option.map_some]
       refine ⟨by simp, fun Ed Es h1 h2 => ?_⟩
       cases h1; cases h2
-      exact res_open hw hrl hni he hzs hc hlc htc hty hown hl hr
+      exact res_open hw hrl hni he hzs hc hlc htc hty hown hl hr hln hrn
     · simp only [exitRoot, setE, upd_ne _ _ hve, upd_ne _ _ hvx]
       obtain ⟨hn, hwk⟩ := hR v hve
       refine ⟨by rw [Option.map_eq_none_iff]; exact hn, fun Ed Es h1 h2 => ?_⟩
       obtain ⟨Ed0, hd0, rfl⟩ := Option.map_eq_some_iff.mp h1
       obtain ⟨hw', hne⟩ := hwk Ed0 Es hd0 h2
-      exact rerootE_noE hw' hne
+      refine rerootE_noE hw' (fun b hb => ?_) hne
+      exact callPost_noInout hni sig (c :: zs) v Es b h2 (hw'.2.1 ▸ hb)
 
 /-- Opening a package for a call: the environment bound to `e` as a borrowed
     parameter, and the call of the code on it and the arguments, well-typed. -/
