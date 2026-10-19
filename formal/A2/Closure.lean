@@ -2054,7 +2054,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hIn := h.typedIn
     have hrbT := StmtT.rbind (P := P) hΓ'e rfl rfl
       (fun d hd _ => List.mem_append_right _ (hZ d.root (List.mem_map_of_mem hd))) hFe' hIn
-      (fun d hd => by simp only [Ee] at hd; rw [envE_vdeps] at hd; exact (mem_envE_deps hd).2)
+      (fun d hd hb => by simp only [Ee] at hd; rw [envE_vdeps] at hd; exact absurd (mem_envE_deps hd).2 hb)
     have hT := StmtT.scope (P := P) ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ hxF
       (StmtT.seq hk (StmtT.frozen hrbT (fun v hv => hv)) (hkT.weakenIn hW)) hpx
     -- where the call's scopes are

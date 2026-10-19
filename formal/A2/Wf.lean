@@ -924,7 +924,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
       obtain ⟨E', h', hm'⟩ := hk.keepF d.root hF Er hEr
       exact ⟨E', h', by rw [hm']; exact hro⟩
-    · exact absurd (hrr d hdv') hb
+    · exact hrr d hdv' hb
   | frozen _ _ ih => exact ih
   | @assign Γ Γ1 F x r Ex E hx _ hmodes hr _ hxd _ _ =>
     intro h

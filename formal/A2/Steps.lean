@@ -1359,68 +1359,103 @@ theorem DepsNamed.not_root {Γ : Ctx} {D : List Dep} (h : DepsNamed Γ D) {p : V
 section rbind
 variable {m : Mem} {p : Var} {Ep : Entry} {w : Val}
 
-/-- What depended on `p` in way `k` now depends on what `p` borrowed. -/
+theorem reroot_sub {D D' ds : List Dep} (h : D ⊆ D') : reroot p D ds ⊆ reroot p D' ds := by
+  intro d hd
+  rcases mem_reroot hd with ⟨hd0, hne⟩ | ⟨k, d', hk, hd', rfl⟩
+  · exact mem_reroot_of_ne hd0 hne
+  · exact mem_reroot_of_eq hk (h hd')
+
+theorem lands_notName {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.isName = false := by
+  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+
+/-- What depended on `p` in way `k` now depends on what `p` borrowed: of it,
+    what `p` reaches in memory (`D`) is enough. -/
 theorem reroot_vkeep (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
-    (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {D : List Dep} (hDs : D ⊆ Ep.path ++ Ep.held)
+    (hDm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ D) (hlt : ∀ d' ∈ D, d'.root ≠ p)
     {ds : List Dep} {dep : Dep} (hd : dep ∈ ds) {d o l : Nat} {s : Ty}
-    (ha : ViewAt m dep d o l s) : ∃ dep' ∈ reroot p (Ep.path ++ Ep.held) ds, ViewAt (m.remove p) dep' d o l s := by
+    (ha : ViewAt m dep d o l s) : ∃ dep' ∈ reroot p D ds, ViewAt (m.remove p) dep' d o l s := by
   obtain ⟨n0, c, es, hr, hk, hl, hlen, hw⟩ := viewAt_iff.mp ha
   by_cases hrp : dep.root = p
   · obtain ⟨r, k⟩ := dep
     simp only at hrp hr hk hl; subst hrp
     obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
-    refine ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hd', viewAt_iff.mpr ⟨n1, c, es,
-      rootKeep_rmbor hp (hlt d' hd') n1 hr1, comp_ne_self hk, lands_comp' hl1 hl, hlen, hw⟩⟩
+    have hdD := hDm d' hd' (lands_notName hl1)
+    refine ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, viewAt_iff.mpr ⟨n1, c, es,
+      rootKeep_rmbor hp (hlt d' hdD) n1 hr1, comp_ne_self hk, lands_comp' hl1 hl, hlen, hw⟩⟩
   · exact ⟨dep, mem_reroot_of_ne hd hrp, viewAt_iff.mpr ⟨n0, c, es, rootKeep_rmbor hp hrp n0 hr, hk,
       hl, hlen, hw⟩⟩
 
 theorem reroot_views (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
-    (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {D : List Dep} (hDs : D ⊆ Ep.path ++ Ep.held)
+    (hDm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ D) (hlt : ∀ d' ∈ D, d'.root ≠ p)
     {τ : Ty} {T : Val} {H : List Dep} (hv : ViewsOK m τ T H) :
-    ViewsOK (m.remove p) τ T (reroot p (Ep.path ++ Ep.held) H) := by
+    ViewsOK (m.remove p) τ T (reroot p D H) := by
   intro s v hin
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v hin
-  obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hlt hd ha
+  obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hDs hDm hlt hd ha
   exact ⟨d, o, l, rfl, dep', hd', ha'⟩
 
-theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
-    (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
-    (hpw : ∀ d ∈ Ep.path ++ Ep.held, d.kind.bound = .none)
-    {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H)
-    (hnp : ∀ d ∈ H, d.kind.isName = true → d.root ≠ p) :
-    ValOK (m.remove p) τ v (reroot p (Ep.path ++ Ep.held) P) (reroot p (Ep.path ++ Ep.held) H) := by
-  have happ : ∀ P H : List Dep, reroot p (Ep.path ++ Ep.held) (P ++ H) =
-      reroot p (Ep.path ++ Ep.held) P ++ reroot p (Ep.path ++ Ep.held) H := by
-    intro P H; simp [reroot, List.flatMap_append]
+/-- A value valid before `p`'s scope ends is valid after, through what `p`
+    borrowed.  A closure's environment, valid through what only reads, stays
+    so: it is rerooted through what `p` reaches only reading, which keeps
+    everything `p` reaches in memory. -/
+theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H) :
+    ∀ {D : List Dep}, D ⊆ Ep.path ++ Ep.held → (∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ D) →
+      (∀ d' ∈ D, d'.root ≠ p) → (∀ d ∈ H, d.kind.isName = true → d.root ≠ p) →
+      ValOK (m.remove p) τ v (reroot p D P) (reroot p D H) := by
+  have happ : ∀ (D P H : List Dep), reroot p D (P ++ H) = reroot p D P ++ reroot p D H := by
+    intro D P H; simp [reroot, List.flatMap_append]
   induction hv with
-  | int => exact .int
+  | int => intro _ _ _ _ _; exact .int
   | pair _ _ ihx ihy =>
-    have hx := ihx hnp; have hy := ihy hnp
+    intro D hDs hDm hlt hnp
+    have hx := ihx hDs hDm hlt hnp; have hy := ihy hDs hDm hlt hnp
     rw [happ] at hx hy; exact .pair hx hy
-  | inl _ ih => have hx := ih hnp; rw [happ] at hx; exact .inl hx
-  | inr _ ih => have hx := ih hnp; rw [happ] at hx; exact .inr hx
+  | inl _ ih => intro D hDs hDm hlt hnp; have hx := ih hDs hDm hlt hnp; rw [happ] at hx; exact .inl hx
+  | inr _ ih => intro D hDs hDm hlt hnp; have hx := ih hDs hDm hlt hnp; rw [happ] at hx; exact .inr hx
   | @pkg fs te ms x cs P0 H0 _ ih =>
-    have hx := ih (fun d hd hn => hnp d (readers_sub _ hd) hn)
+    intro D hDs hDm hlt hnp
+    have hDr : readers D ⊆ Ep.path ++ Ep.held := fun d hd => hDs (readers_sub _ hd)
+    have hDrm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ readers D := by
+      intro d hd hn
+      refine mem_readers.mpr ⟨hDm d hd hn, ?_⟩
+      obtain ⟨r, k⟩ := d; cases k <;> simp_all [Kind.isName, Kind.bound]
+    have hx := ih hDr hDrm (fun d hd => hlt d (readers_sub _ hd))
+      (fun d hd hn => hnp d (readers_sub _ hd) hn)
     rw [happ] at hx
-    have hr := reroot_readers (p := p) (H := H0) hpw
-    exact .pkg (hx.mono (List.append_subset.mpr ⟨List.subset_append_left _ _,
-      fun _ h => List.mem_append_right _ (hr h)⟩) hr)
+    have hr : reroot p (readers D) (readers H0) ⊆ readers (reroot p D H0) :=
+      (reroot_readers (p := p) (H := H0) (fun d hd => (mem_readers.mp hd).2)).trans
+        (readers_mono (reroot_sub (readers_sub _)))
+    exact .pkg (hx.mono (List.append_subset.mpr ⟨fun _ h => List.mem_append_left _
+      (reroot_sub (readers_sub _) h), fun _ h => List.mem_append_right _ (hr h)⟩) hr)
   | view h =>
+    intro D hDs hDm hlt _
     obtain ⟨dep, hd, ha⟩ := h
-    obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hlt hd ha
+    obtain ⟨dep', hd', ha'⟩ := reroot_vkeep hh hp hok hDs hDm hlt hd ha
     exact .view ⟨dep', hd', ha'⟩
   | @href t c P H h =>
+    intro D hDs hDm hlt hnp
     obtain ⟨dep, hd, n0, d, es, hr, hl, hw, hvs, hns⟩ := h
-    have hvs' := reroot_views hh hp hok hlt hvs
-    have hns' := hns.reroot (Ep.path ++ Ep.held) hnp
+    have hvs' := reroot_views hh hp hok hDs hDm hlt hvs
+    have hns' := hns.reroot D hnp
     by_cases hrp : dep.root = p
     · obtain ⟨r, k⟩ := dep
       simp only at hrp hr hl; subst hrp
       obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
-      exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hd', n1, d, es,
-        rootKeep_rmbor hp (hlt d' hd') n1 hr1, lands_comp' hl1 hl, hw, hvs', hns'⟩
+      have hdD := hDm d' hd' (lands_notName hl1)
+      exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, n1, d, es,
+        rootKeep_rmbor hp (hlt d' hdD) n1 hr1, lands_comp' hl1 hl, hw, hvs', hns'⟩
     · exact .href ⟨dep, mem_reroot_of_ne hd hrp, n0, d, es, rootKeep_rmbor hp hrp n0 hr, hl, hw, hvs',
         hns'⟩
+
+theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
+    {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H)
+    (hnp : ∀ d ∈ H, d.kind.isName = true → d.root ≠ p) :
+    ValOK (m.remove p) τ v (reroot p (Ep.path ++ Ep.held) P) (reroot p (Ep.path ++ Ep.held) H) :=
+  reroot_valOK_gen hh hp hok hv (List.Subset.refl _) (fun d hd _ => hd) hlt hnp
 
 end rbind
 
@@ -1485,8 +1520,7 @@ theorem rerootE_rootb {Γ : Ctx} {F : List Var}
 /-- The end of a borrowed parameter's scope. -/
 theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
-    {p : Var} {Ep : Entry} (hp : Γ p = some Ep) (hm : Ep.mode = .rootb) (hpF : p ∉ F)
-    (hpw : ∀ d ∈ Ep.path ++ Ep.held, d.kind.bound = .none) :
+    {p : Var} {Ep : Entry} (hp : Γ p = some Ep) (hm : Ep.mode = .rootb) (hpF : p ∉ F) :
     MInv (m.remove p) (exitRoot p (Ep.path ++ Ep.held) Γ) := by
   have hlive := hi.rootbLive p Ep hp hm
   have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
@@ -1530,7 +1564,7 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · obtain ⟨h1, h2, h3⟩ := hown hos'
       exact ⟨h1, h2, fun hl => by
         obtain ⟨T, hT, hv⟩ := h3 hl
-        exact ⟨T, hT, reroot_views hi.heap hw hok hlt hv⟩⟩
+        exact ⟨T, hT, reroot_views hi.heap hw hok (List.Subset.refl _) (fun d hd _ => hd) hlt hv⟩⟩
     · obtain ⟨u, hu, hv⟩ := hbor hos' hl
       refine ⟨u, hu, ?_⟩
       by_cases hint : E.ty = .int ∧ E.mode ≠ .rootb
@@ -1542,7 +1576,7 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             · exact Or.inr h'
             · exact absurd ⟨h, h'⟩ hint
           · exact Or.inl h
-        exact reroot_valOK hi.heap hw hok hlt hpw hv fun d hd => hnpE v E hE hl hn d
+        exact reroot_valOK hi.heap hw hok hlt hv fun d hd => hnpE v E hE hl hn d
           (List.mem_append_right _ hd)
   · exact hi.heap.remove hw DropSlot.borrowed
   · intro v hv

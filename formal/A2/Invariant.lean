@@ -309,8 +309,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
       StmtT P Γ F s Δ →
-      -- a borrowed binding changes nothing by name (A2-6a: no such closure is handed on)
-      (∀ d ∈ E.vdeps, d.kind.bound = .none) →
+      -- what the borrowed binding may change by name is not lent, but stays
+      -- bound for its scope: it is the caller's
+      (∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true) →
       StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z z' : List Var} {s : Stmt} :
       -- `z` bounds what is lent: the typing lends a part of it

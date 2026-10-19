@@ -1324,8 +1324,8 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
       obtain ⟨E, hE, hm, hl, hr, hF, hp⟩ := h0
       have hvd : E.vdeps = (pe i).path ++ (pe i).held := by
         rw [← hp]; simp [Entry.vdeps, hm, Mode.ownSlot]
-      have := StmtT.rbind (P := P) hE hm hl hr hF (ih (i + 1) hc') (fun d hd => by
-        rw [hvd] at hd; exact hpw i d hd)
+      have := StmtT.rbind (P := P) hE hm hl hr hF (ih (i + 1) hc') (fun d hd hb => by
+        rw [hvd] at hd; exact absurd (hpw i d hd) hb)
       rw [hp] at this; exact this
     | sink =>
       obtain ⟨hE, hF⟩ := h0

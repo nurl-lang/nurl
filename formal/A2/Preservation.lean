@@ -571,7 +571,6 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         fun q E hq hmq => hanchk q E hq hmq (by simp [Stmt.spine])
       have hos' : Ep.mode.ownSlot = false := by rw [hm]; rfl
       have hinv := step_rbindExit hi.toMInv hanch hp hm hpF
-        (fun d hd => hrr d (by simp only [Entry.vdeps, hos', Bool.false_eq_true, ↓reduceIte]; exact hd))
       have hrel : ∀ v E', exitRoot p (Ep.path ++ Ep.held) Γ v = some E' → v ≠ p ∧ ∃ E, Γ v = some E ∧
           E' = rerootE p (Ep.path ++ Ep.held) E := by
         intro v E' h
