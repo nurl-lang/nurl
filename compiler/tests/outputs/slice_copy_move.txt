@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+copied: 5
+1 2 3 4 5 
+1 2 1 2 3 4 5 8 
+1 2 3 4 5 8 5 8 
+copied: 2
+ada ada bob ada bob 
+crc equal: 1
+crc chain: 1

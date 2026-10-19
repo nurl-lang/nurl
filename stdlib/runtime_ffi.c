@@ -4686,6 +4686,54 @@ int nurl_pthread_create_owned(void *t, void *fn, void *env) {
     return rc;
 }
 
+/* ── §19b  Reader-writer lock (stdlib/std/rwlock.nu) ───────────────
+ *
+ * Many readers or one writer. A shared release and an exclusive release
+ * are separate calls because a Win32 SRWLOCK must be told which one it
+ * is letting go (pthread_rwlock_unlock works it out itself). The lock is
+ * a block of nurl_rwlock_size() zeroed bytes the NURL side allocates.
+ *
+ *   POSIX, mingw (winpthreads)   pthread_rwlock_t
+ *   MSVC-target clang             SRWLOCK (the pthread shim's own type)
+ *   WASI                          the mutex shim: readers exclude each
+ *                                 other too — correct, with no read
+ *                                 concurrency, as wasi-libc has no rwlock
+ *
+ * _tryrdlock / _trywrlock take the lock when they can without waiting:
+ * 1 taken, 0 not (WASI: always taken — one thread, nobody else holds it).
+ */
+#if defined(__wasi__)
+long long nurl_rwlock_size(void)   { return 16; }
+void nurl_rwlock_init(void *l)     { pthread_mutex_init(l, NULL); }
+void nurl_rwlock_rdlock(void *l)   { pthread_mutex_lock(l); }
+void nurl_rwlock_wrlock(void *l)   { pthread_mutex_lock(l); }
+void nurl_rwlock_rdunlock(void *l) { pthread_mutex_unlock(l); }
+void nurl_rwlock_wrunlock(void *l) { pthread_mutex_unlock(l); }
+void nurl_rwlock_destroy(void *l)  { pthread_mutex_destroy(l); }
+long long nurl_rwlock_tryrdlock(void *l) { pthread_mutex_lock(l); return 1; }
+long long nurl_rwlock_trywrlock(void *l) { pthread_mutex_lock(l); return 1; }
+#elif defined(_WIN32) && defined(NURL_WIN32_PTHREAD_SHIM)
+long long nurl_rwlock_size(void)   { return (long long)sizeof(SRWLOCK); }
+void nurl_rwlock_init(void *l)     { InitializeSRWLock((SRWLOCK *)l); }
+void nurl_rwlock_rdlock(void *l)   { AcquireSRWLockShared((SRWLOCK *)l); }
+void nurl_rwlock_wrlock(void *l)   { AcquireSRWLockExclusive((SRWLOCK *)l); }
+void nurl_rwlock_rdunlock(void *l) { ReleaseSRWLockShared((SRWLOCK *)l); }
+void nurl_rwlock_wrunlock(void *l) { ReleaseSRWLockExclusive((SRWLOCK *)l); }
+void nurl_rwlock_destroy(void *l)  { (void)l; }
+long long nurl_rwlock_tryrdlock(void *l) { return TryAcquireSRWLockShared((SRWLOCK *)l) ? 1 : 0; }
+long long nurl_rwlock_trywrlock(void *l) { return TryAcquireSRWLockExclusive((SRWLOCK *)l) ? 1 : 0; }
+#else
+long long nurl_rwlock_size(void)   { return (long long)sizeof(pthread_rwlock_t); }
+void nurl_rwlock_init(void *l)     { pthread_rwlock_init((pthread_rwlock_t *)l, NULL); }
+void nurl_rwlock_rdlock(void *l)   { pthread_rwlock_rdlock((pthread_rwlock_t *)l); }
+void nurl_rwlock_wrlock(void *l)   { pthread_rwlock_wrlock((pthread_rwlock_t *)l); }
+void nurl_rwlock_rdunlock(void *l) { pthread_rwlock_unlock((pthread_rwlock_t *)l); }
+void nurl_rwlock_wrunlock(void *l) { pthread_rwlock_unlock((pthread_rwlock_t *)l); }
+void nurl_rwlock_destroy(void *l)  { pthread_rwlock_destroy((pthread_rwlock_t *)l); }
+long long nurl_rwlock_tryrdlock(void *l) { return pthread_rwlock_tryrdlock((pthread_rwlock_t *)l) == 0; }
+long long nurl_rwlock_trywrlock(void *l) { return pthread_rwlock_trywrlock((pthread_rwlock_t *)l) == 0; }
+#endif
+
 /* ── §21  Signal handling — generic + legacy shutdown bridge ──── */
 /*
  * Two layers in one place:

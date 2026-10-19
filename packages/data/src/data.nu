@@ -41,6 +41,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/pfile.nu`
 
 @ __data_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -93,15 +94,16 @@ $ `stdlib/std/thread.nu`
 : i __NDF_HDR 28
 
 : NdfStreamImpl {
-    File f
+    // Read at offsets (pread): a DataLoader's copies on several threads
+    // read rows of one stream at once, and a stream with one position
+    // (seek, then read) would move it under another thread's read. The
+    // last owner of the handle closes the file.
+    PFile f
     i n
     i d
     i l
     i data_off
 }
-
-// The open file is the stream's one raw resource: its last owner closes it.
-% Drop NdfStreamImpl { @ drop NdfStreamImpl st → v { ( file_close . st f ) } }
 
 : NdfStream { ( Arc NdfStreamImpl ) a }
 
@@ -134,13 +136,13 @@ $ `stdlib/std/thread.nu`
 }
 
 @ ndf_open s path → !NdfStream String {
-    : !File IoErr fr ( file_open path )
+    : !PFile IoErr fr ( pfile_open path PFILE_READ )
     ?? fr {
         F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } }
         T fh → {
             // (An early return below lets go of `fh`, and its drop closes
             // the file.)
-            : !( Vec u ) IoErr hr ( file_read_at fh 0 __NDF_HDR )
+            : !( Vec u ) IoErr hr ( pfile_read_vec_at fh 0 __NDF_HDR )
             ?? hr {
                 T hb → {
                     ? >= ( vec_len [u] hb ) __NDF_HDR {} {
@@ -196,7 +198,7 @@ $ `stdlib/std/thread.nu`
 @ __ndf_read_row NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
     : i rowf + . st d . st l
     : i off + . st data_off * idx * rowf 8
-    : !( Vec u ) IoErr rr ( file_read_at . st f off * rowf 8 )
+    : !( Vec u ) IoErr rr ( pfile_read_vec_at . st f off * rowf 8 )
     ?? rr {
         T b → {
             ? >= ( vec_len [u] b ) * rowf 8 {} { ^ F }

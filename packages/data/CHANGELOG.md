@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.6] — 2026-10-20
+
+Requires NURL 0.75.0 (`stdlib/std/pfile.nu`).
+
+### Fixed
+
+- **A streamed dataset read on several threads could read the wrong row.** An `NdfStream` kept a C stream (`File`) and read a row with `file_read_at` — a seek, then a read — and a DataLoader's copies on several threads read rows of one stream at once, so one thread's seek could land between another's seek and its read. The stream is a `PFile` now: every row is read at its own offset (pread), with no position to share. NURL 0.75.0 rejects the old form: the stream lives in an `Arc`, whose payload is frozen, and a read through a C stream changes it (the compiler now counts what a foreign function writes through a pointer).
+
 ## [0.2.5] — 2026-10-14
 
 Requires NURL 0.73.0.

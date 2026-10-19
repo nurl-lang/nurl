@@ -274,3 +274,5 @@ h284_returned_result_of_closure	§7.5	A2	result of a capturing closure handed ba
 h285_view_of_capture_across_opaque_closure_param	§2.11	A2	closure holds a view of a captured Vec across a call to its closure parameter, which re-enters and grows it	rejected
 h286_view_of_capture_across_closure_in_struct_param	§2.11	A2	h285 with the closure run a field of a struct parameter	rejected
 h287_view_of_capture_across_closure_in_vec_param	§2.11	A2	h285 with the closure run an element of a Vec parameter (vec_at)	rejected
+h288_arc_payload_lent_through_a_struct	§6.5	A3	helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read	rejected
+h289_foreign_write_into_a_frozen_view	§6.5	A3	unsafe helper preads into a slice it is handed; caller hands it a view of an Arc payload	rejected

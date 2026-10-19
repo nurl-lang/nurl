@@ -224,6 +224,56 @@ inline @ slice_byte ( Slice u ) s i idx → i {
     ^ out
 }
 
+// Copy the first min(len dst, len src) elements of `src` over `dst`; the
+// count comes back. An element that owns something is copied deep
+// (`mem_dup`) and the one it replaces is dropped; anything else is copied
+// as is (one memmove, from LLVM). `dst` and `src` are two views: copying
+// within ONE buffer — a page's records slid together — is slice_move,
+// which takes the one view (two views of one buffer, one of them written,
+// are not handed to a call together, docs/MEMORY.md §2.4).
+@ slice_copy [A] ( Slice A ) dst ( Slice A ) src → i {
+    : i n ? < . dst len . src len . dst len . src len
+    : *A d . dst data
+    : *A s . src data
+    : ~ i k 0
+    ~ < k n {
+        : A old . d k
+        ( mem_take old )
+        = . d k ( mem_dup . s k )
+        = k + k 1
+    }
+    ^ n
+}
+
+// Move `n` elements of `s` from index `from` to index `to`, the two runs
+// may overlap (memmove), panicking when either run is out of range. What
+// was at the destination is dropped; the source run keeps a copy (a deep
+// one for elements that own something).
+@ slice_move [A] ( Slice A ) s i from i to i n → v {
+    : i len . s len
+    ? | | < n 0 > # u64 + from n # u64 len > # u64 + to n # u64 len { ( __slice_index_panic + ? > from to from to n len ) } {}
+    : *A p . s data
+    ? > to from {
+        : ~ i k - n 1
+        ~ >= k 0 {
+            : A old . p + to k
+            ( mem_take old )
+            = . p + to k ( mem_dup . p + from k )
+            = k - k 1
+        }
+    } {
+        ? < to from {
+            : ~ i k 0
+            ~ < k n {
+                : A old . p + to k
+                ( mem_take old )
+                = . p + to k ( mem_dup . p + from k )
+                = k + k 1
+            }
+        } {}
+    }
+}
+
 // ── Little-endian words in a byte view ───────────────────────────────
 // The u16 / u32 / u64 at byte `off`, and stores of one: a single bounds
 // check for the whole word (panicking, like slice_at, when it does not

@@ -117,7 +117,7 @@ $ `stdlib/core/cell.nu`
 
 // execvp(3): replace the process image. Returns -1 (and sets errno)
 // only on failure — on success it does not return.
-& `c` @ execvp s file *u argv → i32
+& `c` @ execvp s file in *u argv → i32
 
 // _exit(2): immediate process termination, no atexit handlers.
 & `c` @ _exit i32 status → v
@@ -171,7 +171,7 @@ $ `stdlib/core/cell.nu`
 // is an int.
 & `c` @ read i32 fd *u buf i n → i
 
-& `c` @ write i32 fd *u buf i n → i
+& `c` @ write i32 fd in *u buf i n → i
 
 // Buffered binary read from stdin (NURL runtime `fread(stdin)`). Shares
 // nurl_read_line's stdio buffer so framed stdio protocols (LSP/DAP) can
@@ -202,7 +202,7 @@ $ `stdlib/core/cell.nu`
 // using it) to have the kernel map every page in one pass instead of
 // one fault at a time. Returns the mapping pointer or `MAP_FAILED`
 // ((void*)-1) on failure.
-& `c` @ mmap *u addr i length i32 prot i32 flags i32 fd i offset → *u
+& `c` @ mmap in *u addr i length i32 prot i32 flags i32 fd i offset → *u
 
 // munmap(2): release a previous mmap.
 & `c` @ munmap *u addr i length → i32
@@ -211,7 +211,7 @@ $ `stdlib/core/cell.nu`
 // `MADV_WILLNEED` via posix_const; -1 where the platform lacks one).
 // Best-effort, no observable side effect on the data itself; ignore
 // the return.
-& `c` @ madvise *u addr i length i32 advice → i32
+& `c` @ madvise in *u addr i length i32 advice → i32
 
 // ── Directory iteration ───────────────────────────────────────────
 //
@@ -223,7 +223,7 @@ $ `stdlib/core/cell.nu`
 // per platform (Linux glibc = 19, macOS = 21) and porting that
 // offset table into NURL buys nothing.
 
-& `c` @ opendir s path → *u
+& `c` @ opendir nocapture s path → *u
 
 & `c` @ readdir *u dirp → *u
 

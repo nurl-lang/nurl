@@ -1,0 +1,21 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+load:      5
+add old:   5
+after add: 8
+sub old:   8
+swap old:  6
+cas hit:   1
+cas miss:  0
+value:     7
+max old:   7
+max kept:  7
+max old 2: 7
+max raised:42
+stored:    -1
+via copy:  10
+threads sum: 200000
+threads cas: 20000
+threads max: 3996

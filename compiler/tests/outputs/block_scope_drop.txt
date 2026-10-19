@@ -1,0 +1,36 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1. a bare block
+  in block
+  drop a
+  after block
+2. nested
+  inner
+  drop c
+  between
+  drop b
+3. left by return
+  drop outer
+  drop inner
+1
+4. fall through
+  block end
+  drop inner
+  after block
+  drop outer
+0
+5. loop with break / continue
+  drop d
+  body
+  drop d
+  drop d
+6. moved out of a block
+  drop placeholder
+  after block (made moved out)
+  got it
+7. value position keeps its value
+5
+end
+  drop made

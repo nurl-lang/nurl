@@ -29,7 +29,7 @@ $ `stdlib/core/vec.nu`
 
 & `libc` @ nurl_blk_read i lba *u buf i nsec → i
 
-& `libc` @ nurl_blk_write i lba *u buf i nsec → i
+& `libc` @ nurl_blk_write i lba in *u buf i nsec → i
 
 & `libc` @ nurl_blk_flush → i
 

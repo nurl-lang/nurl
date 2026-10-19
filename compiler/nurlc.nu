@@ -1677,6 +1677,13 @@ unsafe @ agg_field_count i syms s ot → i {
 // Whether any callee takes an Arc (`arcp##`, §6.5), and whether the
 // function being compiled has handled one (gen_call's `arcx` rows).
 : ~ i g_arcp_any 0
+// Whether any callee takes a `% Frozen` handle (`frzp##`): what it lends
+// is frozen as an Arc's payload is, and reported as the handle's.
+: ~ i g_frzp_any 0
+// Whether the program declares any `% Frozen` impl (gen_call asks only then).
+: ~ i g_frozen_impls 0
+// __ty_lend_frozen's answers, per lowered type (`0` / `1` / `2`).
+: ~ i g_frz_memo 0
 : ~ i g_fn_arcseen 0
 // At the borrow walk: whether the value of the source expression being
 // evaluated is a view of an Arc's payload — -1 not, else the id of the
@@ -14073,8 +14080,29 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (An Arc whose payload can reach it back hands out a copy.)
             ? ( __lty_base_is at `Arc` ) {
                 = g_fn_arcseen 1
-                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx ) } {}
-            } {}
+                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx F F ) } {}
+            } {
+                // A `% Frozen` handle lends what it guards the same way: a
+                // read guard's value is shared with every other reader
+                // (stdlib/core/marker.nu).
+                ? & != 0 g_frozen_impls ( __lty_frozen at ) {
+                    = g_fn_arcseen 1
+                    ( __arcp_note call_name arg_idx T F )
+                } {
+                    // …and so does a value that HOLDS one — a struct with
+                    // an Arc field, an option or a Vec of read guards:
+                    // what a callee lends out of it may be the payload
+                    // (h288: a helper over a struct holding an Arc).
+                    // (Only a named type or an aggregate can hold one: a
+                    // number, a flag or a string answers at its first byte.)
+                    : i __fk0 ( nurl_str_get at 0 )
+                    : i __fk ? | == __fk0 37 == __fk0 123 ( __ty_lend_frozen syms ( nurl_llty at ) 0 ) 0
+                    ? > __fk 0 {
+                        = g_fn_arcseen 1
+                        ( __arcp_note call_name arg_idx == __fk 2 T )
+                    } {}
+                }
+            }
             ? & != 0 g_fn_arcseen != __sx_c0 1 {
                 ? ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) {
                     = __arc_sync ? == 0 ( nurl_str_len __arc_sync ) ( nurl_str_int arg_idx ) ( nurl_str_cat3 __arc_sync `,` ( nurl_str_int arg_idx ) )
@@ -14128,6 +14156,11 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : s __rda ( nurl_sym_tail g_bck `reads` __rd0 )
                 = __cargreads ( nurl_str_cat4 __cargreads ( nurl_str_int arg_idx ) `=` ( nurl_str_cat ( bck_swap_char __rda 32 44 ) `;` ) )
                 ( __rpg_edge syms __rda call_name arg_idx )
+                // A foreign function writes through a pointer parameter
+                // not declared `in` (gen_ffi_decl's `__ffi_writes`).
+                ? != 0 ( nurl_sym_len2 syms call_name `__ffi_writes` ) {
+                    ? ( str_contains_word ( nurl_sym_get2 syms call_name `__ffi_writes` ) ( nurl_str_int arg_idx ) ) { ( __rpg_write syms __rda `m` ) } {}
+                } {}
                 ? == arg_idx 0 {
                     : s __me_base ( bck_generic_base call_name )
                     ? ( __raw_writer __me_base ) { ( __rpg_write syms __rda `m` ) } {}
@@ -20008,6 +20041,27 @@ unsafe @ __blk_leave b val → v {
     = g_clo_body_ret F
     : i __sx_bme ( __sx_enter )
     ( __blk_enter blk_val )
+    // A bare `{ … }` statement whose value nothing takes is a scope of its
+    // own (docs/MEMORY.md §1, "Where values are dropped"): what it binds
+    // is dropped at its `}`, as a loop body's or an arm's is — not when
+    // the function returns. A guard is the value that shows the
+    // difference: its lock has to go where the block ends.
+    : b __blk_scope & & ! blk_is_arm blk_is_stmt ! blk_val
+    : ~ s old_strs_bb ``
+    : ~ s old_structs_bb ( nurl_str_cat `` `` )
+    : ~ s old_user_bb ( nurl_str_cat `` `` )
+    : ~ s old_slices_bb ``
+    : ~ s old_closure_bb ``
+    ? __blk_scope {
+        = old_closure_bb ( nurl_sym_get syms `__owned_closure_envs__` )
+        ? != 0 g_auto_drop_strings {
+            = old_strs_bb ( nurl_sym_get syms `__owned_strings__` )
+            = old_structs_bb ( nurl_sym_get syms `__owned_struct_fields__` )
+            = old_user_bb ( nurl_sym_get syms `__user_drops__` )
+            ? != 0 g_fn_slice_decls { = old_slices_bb ( nurl_sym_get syms `__slice_decls__` ) } {}
+            ( nurl_sym_push syms )
+        } {}
+    } {}
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
@@ -20048,6 +20102,18 @@ unsafe @ __blk_leave b val → v {
         = any T
     }
     ? & blk_val != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
+    ? __blk_scope {
+        ? == g_did_ret 0 {
+            ? != 0 g_auto_drop_strings {
+                ( mem_drop_new_strings syms cg old_strs_bb )
+                ( mem_drop_new_struct_fields syms cg old_structs_bb )
+                ( mem_drop_new_user_drops syms cg old_user_bb )
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_bb ) } {}
+            } {}
+            ( mem_drop_new_closure_envs syms cg old_closure_bb )
+        } {}
+        ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+    } {}
     ( __blk_leave blk_val )
     // Closing-edge/implicit-return instructions must not inherit the
     // last sibling arm's source line: that overcounts its GCOV hits.
@@ -24349,10 +24415,110 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // elements) — the receiver is always the first value argument.
 // A callee that takes an Arc at `idx` (§6.5): what it lends through that
 // parameter is a view of the payload (bck_sx_ev). Noted at each call.
-@ __arcp_note s call_name i idx → v {
+@ __arcp_note s call_name i idx b frozen b held → v {
     : s key ( nurl_str_cat `arcp##` call_name )
     : s ks ( nurl_str_int idx )
     ? ! ( nurl_sym_has_word g_pending_impl key ks ) { ( nurl_sym_append_word g_pending_impl key ks ) = g_arcp_any 1 } {}
+    ? frozen {
+        : s fkey ( nurl_str_cat `frzp##` call_name )
+        ? ! ( nurl_sym_has_word g_pending_impl fkey ks ) { ( nurl_sym_append_word g_pending_impl fkey ks ) = g_frzp_any 1 } {}
+    } {}
+    // (Held: the argument is not the handle but a value holding one — a
+    // struct with an Arc field — which the diagnostic says.)
+    ? held {
+        : s hkey ( nurl_str_cat `frzh##` call_name )
+        ? ! ( nurl_sym_has_word g_pending_impl hkey ks ) { ( nurl_sym_append_word g_pending_impl hkey ks ) = g_frzp_any 1 } {}
+    } {}
+}
+
+// Is `lty` a handle marked `% Frozen` (its own monomorph, its generic
+// base, or that base with its `%`)?
+@ __lty_frozen s lty → b {
+    : s ll ( nurl_llty lty )
+    ^ ( __thr_marked `Frozen##` ll ( __lty_base_name ll ) )
+}
+
+// Does a value of type `lty` lend frozen views? 1: it is, or holds, an
+// Arc (one whose payload cannot reach it back — such an Arc hands out
+// copies); 2: a `% Frozen` handle (a read guard); 0: neither. Held means
+// through a struct's field, an enum's payload, an option or a result, or
+// a generic argument (a Vec of them) — but not through a handle that
+// synchronises what it holds (`% Sync`: a Locked, an RwLocked, a Mutex,
+// a Channel), whose contents are changed through its own operations.
+// Memoised per type: gen_call asks for every argument.
+unsafe @ __ty_lend_frozen i syms s lty i depth → i {
+    : i n ( nurl_str_len lty )
+    ? | > depth 10 == n 0 { ^ 0 } {}
+    ? == 0 g_frz_memo { = g_frz_memo ( nurl_sym_new ) } {}
+    : s memo ( nurl_sym_get g_frz_memo lty )
+    ? != 0 ( nurl_str_len memo ) { ^ - ( nurl_str_get memo 0 ) 48 } {}
+    // (A provisional `0` stops a type that holds itself.)
+    ( nurl_sym_def g_frz_memo lty `0` )
+    : i r ( __ty_lend_frozen_walk syms lty depth )
+    ( nurl_sym_def g_frz_memo lty ? == r 0 `0` ? == r 1 `1` `2` )
+    ^ r
+}
+
+unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
+    : s bn ( __lty_base_name lty )
+    ? ( seq bn `Arc` ) { ^ ? ( __ts_cyclic lty syms ) 0 1 } {}
+    ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ 2 } {}
+    ? ( __thr_marked `Sync##` lty bn ) { ^ 0 } {}
+    : s args ( __thr_peel lty )
+    ? != 0 ( nurl_str_len args ) {
+        : i ra ( __ty_lend_frozen syms args + depth 1 )
+        ? > ra 0 { ^ ra } {}
+    } {}
+    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    ? != 0 ( nurl_str_len fc ) {
+        : i nf ( nurl_str_to_int fc )
+        : ~ i fi 0
+        ~ < fi nf {
+            : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            : i rf ( __ty_lend_frozen syms ( nurl_llty ft ) + depth 1 )
+            ? > rf 0 { ^ rf } {}
+            = fi + fi 1
+        }
+    } {}
+    : s vl ( nurl_sym_get2 syms bn `__variants` )
+    ? != 0 ( nurl_str_len vl ) {
+        : ~ s rest ( nurl_str_cat vl `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s vname ( str_first_word rest )
+            : s pc ( nurl_sym_get2 syms vname `__paycount` )
+            ? != 0 ( nurl_str_len pc ) {
+                : i pn ( nurl_str_to_int pc )
+                : ~ i pi 0
+                ~ < pi pn {
+                    : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                    : i rp ( __ty_lend_frozen syms ( nurl_llty pt ) + depth 1 )
+                    ? > rp 0 { ^ rp } {}
+                    = pi + pi 1
+                }
+            } {}
+            = rest ( str_skip_word rest )
+        }
+    } {}
+    ? == ( nurl_str_get lty 0 ) 123 {
+        : i afc ( agg_field_count syms lty )
+        : ~ i ai 0
+        ~ & >= afc 0 < ai afc {
+            : i ragg ( __ty_lend_frozen syms ( compound_field_type lty ai ) + depth 1 )
+            ? > ragg 0 { ^ ragg } {}
+            = ai + ai 1
+        }
+    } {}
+    ^ 0
+}
+
+// The view the walk just traced to a payload (g_sxe_arc) was lent by a
+// `% Frozen` handle's callee `cal` at `idx`: remember it of the root, so
+// a change to it is reported as the handle's (resolve_arc_mut).
+@ __frz_mark s cal s idx → v {
+    ? & != 0 g_frzp_any >= g_sxe_arc 0 {
+        ? ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` cal ) idx ) { ( nurl_sym_set g_bck ( bck_bkey `fz_` ( nurl_str_int g_sxe_arc ) ) `1` ) } {}
+        ? ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` cal ) idx ) { ( nurl_sym_set g_bck ( bck_bkey `fh_` ( nurl_str_int g_sxe_arc ) ) `1` ) } {}
+    } {}
 }
 
 // The Arc a payload view was lent from (§6.5): the root of the first of
@@ -24368,6 +24534,13 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 @ __arc_frozen_msg s what → s {
     ^ ( nurl_str_cat3 `this call ` what
     ` to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.` )
+}
+
+// …and for what a `% Frozen` handle lends (stdlib/core/marker.nu): a read
+// guard's value, which every other reader holds at the same time.
+@ __frozen_lend_msg s what → s {
+    ^ ( nurl_str_cat3 `this call ` what
+    ` to change, but it is frozen: its type is marked '% Frozen' (a read guard is), so other threads may be reading the same value at the same time without a lock, and changing it races them. Change it through a handle that holds the value exclusively — take a write guard (rw_write in stdlib/std/rwlock.nu) or use locked_update on a Locked — or copy what you need with mem_dup and change the copy.` )
 }
 
 // A call that may be handed a view of an Arc's payload (§6.5): walked as
@@ -24407,6 +24580,10 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
             : s srcs ( bck_sx_arg_sources st aj )
             ? != g_sxe_arc -1 {
                 : s an ? >= g_sxe_arc 0 ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int g_sxe_arc ) ) ) ( nurl_str_cat `-` `` )
+                // (`F`: lent by a `% Frozen` handle, `A`: an Arc's payload.)
+                : b __kz & >= g_sxe_arc 0 != 0 ( nurl_sym_len g_bck ( bck_bkey `fz_` ( nurl_str_int g_sxe_arc ) ) )
+                : b __kh & >= g_sxe_arc 0 != 0 ( nurl_sym_len g_bck ( bck_bkey `fh_` ( nurl_str_int g_sxe_arc ) ) )
+                : s kind ? __kz ? __kh `FH` `F` ? __kh `AH` `A`
                 : s key ( nurl_str_cat4 `armutk##` file ( nurl_str_cat3 `:` ( nurl_str_int line ) `:` ) ( nurl_str_cat3 cal `:` js ) )
                 ? == 0 ( nurl_sym_len g_pending_impl key ) {
                     ( nurl_sym_def g_pending_impl key `1` )
@@ -24414,7 +24591,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
                     ( nurl_sym_def g_pending_impl `armut_n` ( nurl_str_int + n 1 ) )
                     ( nurl_sym_def g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int n ) )
                     ( nurl_str_cat4 ( nurl_str_cat4 cal ` ` ( bck_generic_base cal ) ` ` )
-                    ( nurl_str_cat4 js ` ` an ` ` )
+                    ( nurl_str_cat4 js ` ` an ( nurl_str_cat3 ` ` kind ` ` ) )
                     ( nurl_str_int line ) ( nurl_str_cat ` ` file ) ) )
                 } {}
             } {}
@@ -24439,11 +24616,17 @@ unsafe @ resolve_arc_mut → v {
         : s fn ( str_first_word r ) = r ( str_skip_word r )
         : s k ( str_first_word r ) = r ( str_skip_word r )
         : s arc ( str_first_word r ) = r ( str_skip_word r )
+        : s kind ( str_first_word r ) = r ( str_skip_word r )
         : s ln ( str_first_word r ) = r ( str_skip_word r )
         : s file ( str_first_word r )
         ? | | ( str_contains_word ( nurl_sym_get g_fn_mutates cn ) k ) ( str_contains_word ( nurl_sym_get g_fn_mutates fn ) k ) & ( seq k `0` ) ( bck_is_container_mutator fn ) {
-            : s whose ? ( seq arc `-` ) ( nurl_str_cat `the contents of an Arc` `` ) ( nurl_str_cat3 `the contents of Arc '` arc `'` )
-            ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' ` whose ) ) )
+            ? == ( nurl_str_get kind 0 ) 70 {
+                : s fwhose ? ( seq arc `-` ) ( nurl_str_cat `what a frozen handle lends` `` ) ? ( seq kind `FH` ) ( nurl_str_cat3 `what a frozen handle '` arc `' holds lends` ) ( nurl_str_cat3 `what '` arc `' lends` )
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( __frozen_lend_msg ( nurl_str_cat4 `hands '` fn `' ` fwhose ) ) )
+            } {
+                : s whose ? ( seq arc `-` ) ( nurl_str_cat `the contents of an Arc` `` ) ? ( seq kind `AH` ) ( nurl_str_cat3 `the payload of an Arc '` arc `' holds` ) ( nurl_str_cat3 `the contents of Arc '` arc `'` )
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' ` whose ) ) )
+            }
         } {}
         = j + j 1
     }
@@ -26684,7 +26867,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s __lj ( bck_sx_ev st e ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
                 // (What a callee lends through an Arc parameter is a view
                 // of the payload, §6.5.)
-                ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) } {}
+                ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) ( __frz_mark w js ) } {}
                 = out ( __word_union out __lj )
             } {
                 // An argument the callee stores (escapes): a view it is, or
@@ -27156,7 +27339,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             ( nurl_sym_set g_bck `plend_line` ( bck_field rec 3 ) )
                             // (Lent through an Arc parameter: a view of the
                             // payload, §6.5.)
-                            ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plarc` pe ) } {}
+                            ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) {
+                                ( nurl_sym_append_word g_bck `plarc` pe )
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plfrz` pe ) } {}
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plfrh` pe ) } {}
+                            } {}
                         } {
                             = st ( bck_st_set st pvid
                             ( bck_alias_step ( bck_st_get st pvid ) ) )
@@ -27241,7 +27428,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s fcal ( bck_field rec 5 )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
-                    ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                    ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) {
+                        ( nurl_sym_append_word g_bck `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                    } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
                 = p + p 1
                 = done T
@@ -27958,9 +28149,17 @@ unsafe @ bck_sx_is_id s e → b {
     : s pl ( nurl_sym_get g_bck `plend` )
     ( nurl_sym_set g_bck `plend` `` )
     : ~ s plarc ``
+    : ~ s plfrz ``
+    : ~ s plfrh ``
     ? != 0 g_arcp_any {
         = plarc ( nurl_str_cat ( nurl_sym_get g_bck `plarc` ) `` )
         ? != 0 ( nurl_str_len plarc ) { ( nurl_sym_set g_bck `plarc` `` ) } {}
+        ? != 0 g_frzp_any {
+            = plfrz ( nurl_str_cat ( nurl_sym_get g_bck `plfrz` ) `` )
+            ? != 0 ( nurl_str_len plfrz ) { ( nurl_sym_set g_bck `plfrz` `` ) } {}
+            = plfrh ( nurl_str_cat ( nurl_sym_get g_bck `plfrh` ) `` )
+            ? != 0 ( nurl_str_len plfrh ) { ( nurl_sym_set g_bck `plfrh` `` ) } {}
+        } {}
     } {}
     ? ! ( seq line ( nurl_sym_get g_bck `plend_line` ) ) { ^ st } {}
     // An argument the call consumed went INTO the result (a value passed
@@ -27989,7 +28188,15 @@ unsafe @ bck_sx_is_id s e → b {
         // (Lent through an Arc parameter, or a borrow of a payload lending
         // on: the binding is a view of the payload, §6.5.)
         ? & != 0 ( nurl_str_len plarc ) == g_sxe_arc -1 {
-            ? ( str_contains_word plarc ( nurl_str_cat3 w `:` wc ) ) { = g_sxe_arc wr } {}
+            ? ( str_contains_word plarc ( nurl_str_cat3 w `:` wc ) ) {
+                = g_sxe_arc wr
+                ? & != 0 ( nurl_str_len plfrz ) ( str_contains_word plfrz ( nurl_str_cat3 w `:` wc ) ) {
+                    ( nurl_sym_set g_bck ( bck_bkey `fz_` ( nurl_str_int wr ) ) `1` )
+                } {}
+                ? & != 0 ( nurl_str_len plfrh ) ( str_contains_word plfrh ( nurl_str_cat3 w `:` wc ) ) {
+                    ( nurl_sym_set g_bck ( bck_bkey `fh_` ( nurl_str_int wr ) ) `1` )
+                } {}
+            } {}
         } {}
         ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
             : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int wr ) ) )
@@ -44879,6 +45086,18 @@ unsafe @ __ffi_param_count s pt → i {
     // from the import's declared type and wasm-ld replaces the callee with
     // an `unreachable` stub. Coercing at the call site fixes both targets.
     : ~ s ptypes ``
+    // The pointer (`*T`) parameters the C function may write through: all
+    // of them but those declared `in` (it only reads there) or `sync` (it
+    // changes what is there only atomically or under the object's own
+    // lock — a counter, a mutex — which no other thread can race). A write
+    // is a change to whatever storage the pointer came from — a
+    // parameter's buffer, a view a read guard lends — exactly as a raw
+    // store through it is in NURL code (the provenance graph,
+    // resolve_raw_provenance).
+    : ~ s __ff_writes ``
+    // …and the parameters declared `nocapture`: the result holds nothing
+    // of them (`opendir`'s path), so it is not derived from them.
+    : ~ s __ff_nocap ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -44922,6 +45141,23 @@ unsafe @ __ffi_param_count s pt → i {
             // hand around the call.
             : b __ff_io & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` )
             ? __ff_io { ( nurl_lex_advance lex ) } {}
+            // `in *T x`: the C function only reads through the pointer;
+            // `sync *T x`: it changes what is there only atomically or under
+            // its own lock; `nocapture`: its result holds nothing of x.
+            : ~ b __ff_in F
+            : ~ b __ff_more ! __ff_io
+            ~ & __ff_more ( is_ident_tok ( nurl_lex_type lex ) ) {
+                : s __ffm ( nurl_lex_val lex )
+                ? | ( seq __ffm `in` ) ( seq __ffm `sync` ) { = __ff_in T ( nurl_lex_advance lex ) } {
+                    ? ( seq __ffm `nocapture` ) {
+                        = __ff_nocap ? == 0 ( nurl_str_len __ff_nocap ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nocap ` ` ( nurl_str_int pct ) )
+                        ( nurl_lex_advance lex )
+                    } { = __ff_more F }
+                }
+            }
+            ? & ! __ff_in & ! __ff_io == ( nurl_lex_type lex ) TT_STAR {
+                = __ff_writes ? == 0 ( nurl_str_len __ff_writes ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_writes ` ` ( nurl_str_int pct ) )
+            } {}
             : s lt0 ( parse_type lex )
             ( check_type_known lex syms lt0 `an FFI parameter type` __ff_line __ff_col )
             : s lt ? __ff_io ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
@@ -44975,6 +45211,8 @@ unsafe @ __ffi_param_count s pt → i {
     ? != 0 g_pending_unsafe { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_raw` ) `1` ) = g_pending_unsafe 0 } {}
     // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
+    ? != 0 ( nurl_str_len __ff_writes ) { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_writes` ) __ff_writes ) } {}
+    ? != 0 ( nurl_str_len __ff_nocap ) { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_nocapture` ) __ff_nocap ) } {}
     // emit_header already emits `declare` lines for a small set of libc
     // symbols (malloc, free, puts, printf). If the user FFI-declares any of
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
@@ -52438,6 +52676,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
         // Park a supertrait obligation: after every impl in the program is
         // registered, each supertrait of `tname` must also be implemented for
         // this type. Recorded unconditionally (the trait's supers may not be
@@ -54334,6 +54573,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 { ( nurl_lex_advance lex ) }
                                 { : b __sio & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` )
                                     ? __sio { ( nurl_lex_advance lex ) } {}
+                                    // (`in` / `sync` / `nocapture`: gen_ffi_decl's markers.)
+                                    ~ & ! __sio & ( is_ident_tok ( nurl_lex_type lex ) ) | | ( seq ( nurl_lex_val lex ) `in` ) ( seq ( nurl_lex_val lex ) `sync` ) ( seq ( nurl_lex_val lex ) `nocapture` ) { ( nurl_lex_advance lex ) }
                                     : s lt0 ( parse_type lex )
                                     : s lt ? __sio ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
                                     ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}

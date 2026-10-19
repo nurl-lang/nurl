@@ -18,6 +18,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/slice.nu`
 
 : | DeflateErr {
     DeflateBadBlock
@@ -109,9 +110,19 @@ $ `stdlib/std/bytes.nu`
 // produce identical output for every input; std/deflate's own tests and
 // tools/crc32_gate.sh check that against an independent implementation.
 @ crc32_update i crc0 ( Vec u ) data → i {
+    ^ ( __crc32_run crc0 ( vec_data [u] data ) ( vec_len [u] data ) )
+}
+
+// The same over a byte view (a page in a buffer pool, a window of a
+// larger buffer), with nothing copied.
+@ crc32_update_slice i crc0 ( Slice u ) data → i {
+    ^ ( __crc32_run crc0 ( slice_data [u] data ) ( slice_len [u] data ) )
+}
+
+@ crc32_slice ( Slice u ) data → i { ^ ( __crc32_run 0 ( slice_data [u] data ) ( slice_len [u] data ) ) }
+
+@ __crc32_run i crc0 * u d i n → i {
     : ~ i crc ^^ crc0 4294967295  // crc ^ 0xFFFFFFFF
-    : i n ( vec_len [u] data )
-    : *u d ( vec_data [u] data )
     : ~ i i 0
     ? >= n 64 {
         : ( Vec u32 ) tab ( __crc32_tab8 )

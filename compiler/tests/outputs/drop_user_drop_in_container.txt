@@ -2,9 +2,9 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-done
 drop vec
 drop vec-vec
 drop box
 drop option
 drop enum
+done

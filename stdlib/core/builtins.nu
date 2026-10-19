@@ -282,7 +282,7 @@
 & `c` @ nurl_closure_drop *u env → v
 
 // (Raw memory: only an `unsafe` function may call it.)
-& `c` @ nurl_closure_clone *u env → *u
+& `c` @ nurl_closure_clone in *u env → *u
 
 // Copy a NUL-terminated string onto a fresh block from the same
 // freelist cache — strdup, but recyclable by nurl_free. The copy is an

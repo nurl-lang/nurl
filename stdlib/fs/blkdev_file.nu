@@ -30,7 +30,7 @@ $ `stdlib/hal/blockdev.nu`
 
 & `c` @ nurl_pread i32 fd *u buf i n i off → i
 
-& `c` @ nurl_pwrite i32 fd *u buf i n i off → i
+& `c` @ nurl_pwrite i32 fd in *u buf i n i off → i
 
 & `c` @ nurl_fd_sync i32 fd → i
 

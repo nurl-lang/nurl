@@ -39,7 +39,7 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 & `c` @ tcgetattr i32 fd *u buf → i32
 
-& `c` @ tcsetattr i32 fd i32 act *u buf → i32
+& `c` @ tcsetattr i32 fd i32 act in *u buf → i32
 
 & `c` @ cfmakeraw *u buf → v
 

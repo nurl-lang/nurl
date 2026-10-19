@@ -4,11 +4,11 @@ EXIT 0
 OUTPUT
 Start main
 Inside simple block
+Dropping id: 1
 Inside then-arm
 Dropping id: 2
 Escaping from then-arm
 About to return from get_dropper
 End main
-Dropping id: 1
 Dropping id: 3
 Dropping id: 4

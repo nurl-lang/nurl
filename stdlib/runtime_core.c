@@ -2451,11 +2451,34 @@ long long nurl_file_sync(void *h) {
  * with a seek, which is why `_lseeki64` appears in a function whose
  * whole point is not seeking — the emulation is confined to the branch
  * that needs it. */
+#ifdef _WIN32
+/* Windows has no pread/pwrite, and seek-then-read is not positional: two
+ * threads sharing a descriptor would move one file pointer under each
+ * other. ReadFile / WriteFile with an OVERLAPPED offset read and write at
+ * that offset in one call, on a handle opened for synchronous I/O as the
+ * CRT's are, so threads sharing the descriptor never see each other's
+ * position. One call moves at most 2 GiB; the callers loop. */
+static OVERLAPPED nurl__ov_at(long long off) {
+    OVERLAPPED ov;
+    memset(&ov, 0, sizeof ov);
+    ov.Offset = (DWORD)((unsigned long long)off & 0xffffffffULL);
+    ov.OffsetHigh = (DWORD)((unsigned long long)off >> 32);
+    return ov;
+}
+#endif
+
 long long nurl_pread(int fd, void *buf, long long n, long long off) {
     if (!buf || n < 0 || off < 0) return -1;
 #ifdef _WIN32
-    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
-    return (long long)_read(fd, buf, (unsigned int)n);
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    OVERLAPPED ov = nurl__ov_at(off);
+    DWORD want = n > 0x7fffffffLL ? 0x7fffffff : (DWORD)n;
+    DWORD got = 0;
+    if (!ReadFile(h, buf, want, &got, &ov)) {
+        return GetLastError() == ERROR_HANDLE_EOF ? 0 : -1;
+    }
+    return (long long)got;
 #elif defined(__wasi__)
     if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
     return (long long)read(fd, buf, (size_t)n);
@@ -2467,8 +2490,13 @@ long long nurl_pread(int fd, void *buf, long long n, long long off) {
 long long nurl_pwrite(int fd, const void *buf, long long n, long long off) {
     if (!buf || n < 0 || off < 0) return -1;
 #ifdef _WIN32
-    if (_lseeki64(fd, (__int64)off, SEEK_SET) < 0) return -1;
-    return (long long)_write(fd, buf, (unsigned int)n);
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    OVERLAPPED ov = nurl__ov_at(off);
+    DWORD want = n > 0x7fffffffLL ? 0x7fffffff : (DWORD)n;
+    DWORD put = 0;
+    if (!WriteFile(h, buf, want, &put, &ov)) return -1;
+    return (long long)put;
 #elif defined(__wasi__)
     if (lseek(fd, (off_t)off, SEEK_SET) < 0) return -1;
     return (long long)write(fd, buf, (size_t)n);
@@ -2487,6 +2515,37 @@ long long nurl_fd_sync(int fd) {
     return 0;
 #else
     return fsync(fd) == 0 ? 0 : -1;
+#endif
+}
+
+/* fsync without the metadata a reader does not need to find the data
+ * again (the modification time): fdatasync where the platform has it —
+ * one device round trip instead of two for a file whose size did not
+ * change, which is what a write-ahead log's commit waits on. Elsewhere it
+ * is nurl_fd_sync. */
+long long nurl_fd_datasync(int fd) {
+#if defined(__linux__) && !defined(__wasi__)
+    return fdatasync(fd) == 0 ? 0 : -1;
+#else
+    return nurl_fd_sync(fd);
+#endif
+}
+
+/* Cut the file behind `fd` to `len` bytes (or extend it with zeros):
+ * nurl_file_truncate for an open descriptor. */
+long long nurl_fd_truncate(int fd, long long len) {
+    if (len < 0) return -1;
+#ifdef _WIN32
+    /* (Win32 for the reason nurl_file_truncate gives; by handle
+     * information rather than SetFilePointerEx + SetEndOfFile, which would
+     * move the file pointer threads sharing the descriptor rely on.) */
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    FILE_END_OF_FILE_INFO eof;
+    eof.EndOfFile.QuadPart = (LONGLONG)len;
+    return SetFileInformationByHandle(h, FileEndOfFileInfo, &eof, sizeof eof) ? 0 : -1;
+#else
+    return ftruncate(fd, (off_t)len) == 0 ? 0 : -1;
 #endif
 }
 
@@ -4611,6 +4670,68 @@ long long nurl_atomic_i64_load(void *p) {
     long long v;
     __atomic_load((long long*)p, &v, __ATOMIC_SEQ_CST);
     return v;
+#endif
+}
+
+/* The read-modify-write half of stdlib/std/atomic.nu's `Atomic`: a counter
+ * any number of threads change at once (transaction ids, log sequence
+ * numbers, pin counts). All SEQ_CST. _fetch_add, _swap and _fetch_max
+ * return the value BEFORE the operation; _cas returns the value it found,
+ * which equals `expect` exactly when it stored `desired`. */
+void nurl_atomic_i64_store(void *p, long long v) {
+    if (!p) return;
+#ifdef _WIN32
+    (void)InterlockedExchange64((volatile LONG64*)p, (LONG64)v);
+#else
+    __atomic_store_n((long long*)p, v, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_fetch_add(void *p, long long d) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)p, (LONG64)d);
+#else
+    return __atomic_fetch_add((long long*)p, d, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_swap(void *p, long long v) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedExchange64((volatile LONG64*)p, (LONG64)v);
+#else
+    return __atomic_exchange_n((long long*)p, v, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_atomic_i64_cas(void *p, long long expect, long long desired) {
+    if (!p) return 0;
+#ifdef _WIN32
+    return (long long)InterlockedCompareExchange64((volatile LONG64*)p, (LONG64)desired, (LONG64)expect);
+#else
+    __atomic_compare_exchange_n((long long*)p, &expect, desired, 0,
+                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return expect;   /* unchanged on success; what was there on failure */
+#endif
+}
+
+long long nurl_atomic_i64_fetch_max(void *p, long long v) {
+    if (!p) return 0;
+#ifdef _WIN32
+    LONG64 cur = InterlockedCompareExchange64((volatile LONG64*)p, 0, 0);
+    while (cur < v) {
+        LONG64 seen = InterlockedCompareExchange64((volatile LONG64*)p, (LONG64)v, cur);
+        if (seen == cur) break;
+        cur = seen;
+    }
+    return (long long)cur;
+#else
+    long long cur = __atomic_load_n((long long*)p, __ATOMIC_SEQ_CST);
+    while (cur < v &&
+           !__atomic_compare_exchange_n((long long*)p, &cur, v, 0,
+                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {}
+    return cur;
 #endif
 }
 

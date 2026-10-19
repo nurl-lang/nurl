@@ -34,13 +34,13 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ socket i32 domain i32 type i32 proto → i32
 
-& `c` @ bind i32 fd *u addr i32 len → i32
+& `c` @ bind i32 fd in *u addr i32 len → i32
 
 & `c` @ listen i32 fd i32 backlog → i32
 
 & `c` @ accept i32 fd *u addr *u addrlen → i32
 
-& `c` @ connect i32 fd *u addr i32 len → i32
+& `c` @ connect i32 fd in *u addr i32 len → i32
 
 // The two descriptors socketpair(2) writes (`int sv[2]`).
 : __FdPair { i32 a i32 b }

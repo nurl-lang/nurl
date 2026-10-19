@@ -137,7 +137,7 @@ unsafe & `c` @ nurl_udp_send_addr i handle *u buf i n *u addr → i
 
 & `c` @ nurl_udp_addr_resolve s host i port *u addr_out → i
 
-& `c` @ nurl_udp_addr_format *u addr → sink s
+& `c` @ nurl_udp_addr_format in *u addr → sink s
 
 unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 

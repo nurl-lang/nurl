@@ -12,11 +12,11 @@
 // translation unit, so every fiber primitive lives here exactly
 // once and is reached through `$`-import.
 
-& `c` @ nurl_fiber_spawn *u fn *u env → i
+& `c` @ nurl_fiber_spawn in *u fn in *u env → i
 
-& `c` @ nurl_fiber_spawn_owned *u fn *u env → i
+& `c` @ nurl_fiber_spawn_owned in *u fn in *u env → i
 
-& `c` @ nurl_fiber_spawn_joinable *u fn *u env → i
+& `c` @ nurl_fiber_spawn_joinable in *u fn in *u env → i
 
 unsafe & `c` @ nurl_fiber_join i fiber → v
 

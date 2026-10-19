@@ -107,9 +107,9 @@ $ `stdlib/core/box.nu`
 
 & `sqlite3` @ sqlite3_bind_int64 *u stmt i idx i value → i
 
-& `sqlite3` @ sqlite3_bind_text *u stmt i idx *u value i n *u destructor → i
+& `sqlite3` @ sqlite3_bind_text *u stmt i idx in *u value i n in *u destructor → i
 
-& `sqlite3` @ sqlite3_bind_blob *u stmt i idx *u value i n *u destructor → i
+& `sqlite3` @ sqlite3_bind_blob *u stmt i idx in *u value i n in *u destructor → i
 
 & `sqlite3` @ sqlite3_bind_null *u stmt i idx → i
 

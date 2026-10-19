@@ -93,21 +93,21 @@ $ `stdlib/core/rcbox.nu`
 // a held mutex) or an OOM the caller can't recover from. thread_spawn
 // IS error-checking because pthread_create's EAGAIN ("would exceed
 // thread cap") is a real recoverable condition.
-& `c` @ pthread_mutex_init *u m *u attr → i32
+& `c` @ pthread_mutex_init *u m in *u attr → i32
 
-& `c` @ pthread_mutex_lock *u m → i32
+& `c` @ pthread_mutex_lock sync *u m → i32
 
-& `c` @ pthread_mutex_unlock *u m → i32
+& `c` @ pthread_mutex_unlock sync *u m → i32
 
 & `c` @ pthread_mutex_destroy *u m → i32
 
-& `c` @ pthread_cond_init *u cv *u attr → i32
+& `c` @ pthread_cond_init *u cv in *u attr → i32
 
-& `c` @ pthread_cond_wait *u cv *u m → i32
+& `c` @ pthread_cond_wait sync *u cv sync *u m → i32
 
-& `c` @ pthread_cond_signal *u cv → i32
+& `c` @ pthread_cond_signal sync *u cv → i32
 
-& `c` @ pthread_cond_broadcast *u cv → i32
+& `c` @ pthread_cond_broadcast sync *u cv → i32
 
 & `c` @ pthread_cond_destroy *u cv → i32
 
@@ -116,7 +116,7 @@ $ `stdlib/core/rcbox.nu`
 // return is discarded at the OS layer because the runtime trampolines
 // below always pass NULL for the join's value pointer. ABI-compatible
 // on every System V target (x86_64 / aarch64 / riscv64).
-& `c` @ pthread_create *u t *u attr *u start *u arg → i32
+& `c` @ pthread_create *u t in *u attr in *u start in *u arg → i32
 
 // pthread_t is by-value and 16-byte struct on winpthreads — NURL has
 // no struct-by-value FFI. These two trampolines (runtime.c §19) take
@@ -128,7 +128,7 @@ $ `stdlib/core/rcbox.nu`
 // pthread_create through a trampoline that runs the body on its own copy
 // of the closure env and drops the copy once the body returns
 // (runtime_ffi.c §19). What thread_spawn is made of.
-& `c` @ nurl_pthread_create_owned *u t *u start *u env → i32
+& `c` @ nurl_pthread_create_owned *u t in *u start in *u env → i32
 
 // ── ThreadErr ─────────────────────────────────────────────────────
 
@@ -314,9 +314,9 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Shared pthread objects ────────────────────────────────────────
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+& `c` @ nurl_atomic_i64_inc sync *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_atomic_i64_dec_fetch sync *u p → i
 
 // A zeroed block the size of the native object `native`.
 @ __sync_block s native → RawBlock {

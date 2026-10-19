@@ -1,4 +1,4 @@
-// stdlib/core/marker.nu — Send / Sync, the thread-safety marker traits, and Resource.
+// stdlib/core/marker.nu — Send / Sync, the thread-safety marker traits, Frozen and Resource.
 //
 // Two questions a thread boundary asks about a type, and nothing else:
 //
@@ -101,6 +101,23 @@ pub %NotSend [T] {}
 
 // Two threads must never reach one `T` at the same time.
 pub %NotSync [T] {}
+
+// Frozen — what a value of `T` lends is read-only. A function that takes
+// a `T` and hands back something it holds (an accessor) lends a view of
+// it, and no call may change that view or anything reached through it:
+// not a container mutator, not `slice_put`, not a helper of the program's
+// that does, at any depth (docs/MEMORY.md §6.5). An `Arc` is frozen by
+// construction — its payload is read by every thread holding a clone
+// without a lock. Mark a handle of your own the same way when what it
+// lends is shared with other threads reading at the same time: a read
+// guard of a reader-writer lock (stdlib/std/rwlock.nu) is the shape —
+//
+//     % Frozen RGuard { }
+//
+// Like Send and Sync it is an assertion about the type, not code: the
+// compiler follows every view the handle lends and rejects a change to
+// one where it is made.
+pub %Frozen [T] {}
 
 // Resource — a type whose drop is observable outside the program: it
 // closes a file descriptor, a socket, a database connection, reaps a child
