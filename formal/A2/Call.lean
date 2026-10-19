@@ -189,8 +189,9 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
 
 /-- The dependencies of an integer, or of a dead binding, say nothing; the
     call forgets them. -/
-def Entry.clean (E : Entry) : Entry :=
-  if E.mode ≠ .rootb ∧ (E.ty = .int ∨ E.live = false) then { E with path := [], held := [] } else E
+noncomputable def Entry.clean (E : Entry) : Entry :=
+  open Classical in
+  if ¬ E.fixed ∧ (E.ty = .int ∨ E.live = false) then { E with path := [], held := [] } else E
 
 /-- The roots of what the arguments hold views of. -/
 def callR (Γ : Ctx) (args : List Var) : List Var :=
@@ -471,12 +472,22 @@ theorem mem_inoutArgs {ps : List (PMode × Ty)} {args : List Var} {v : Nat} {b :
 theorem resMode_ne' (fn : Fn) : resMode fn ≠ .rootb := by unfold resMode; split <;> simp
 theorem resMode_inout (fn : Fn) (b : Eff) : resMode fn ≠ .inout b := by unfold resMode; split <;> simp
 
+theorem clean_fixed_iff (E : Entry) : E.clean.fixed ↔ E.fixed := by
+  unfold Entry.clean; split <;> simp [Entry.fixed_def]
+theorem fixed_setLive (E : Entry) (b : Bool) : ({E with live := b} : Entry).fixed ↔ E.fixed := by
+  simp [Entry.fixed_def]
+theorem fixed_setHeld (E : Entry) (H : List Dep) : ({E with held := H} : Entry).fixed ↔ E.fixed := by
+  simp [Entry.fixed_def]
 theorem clean_mode (E : Entry) : E.clean.mode = E.mode := by unfold Entry.clean; split <;> rfl
 theorem clean_ty (E : Entry) : E.clean.ty = E.ty := by unfold Entry.clean; split <;> rfl
 theorem clean_live (E : Entry) : E.clean.live = E.live := by unfold Entry.clean; split <;> rfl
+theorem clean_fixed {E : Entry} (h : E.fixed) : E.clean = E := by
+  unfold Entry.clean; rw [if_neg (fun hc => hc.1 h)]
 theorem clean_id {E : Entry} (h : E.ty ≠ .int ∨ E.mode = .rootb) (hl : E.live = true) : E.clean = E := by
   unfold Entry.clean; rw [if_neg]; rintro ⟨h1, h2 | h2⟩
-  · rcases h with h | h <;> contradiction
+  · rcases h with h | h
+    · exact h h2
+    · exact h1 (Or.inl h)
   · rw [hl] at h2; cases h2
 
 theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
@@ -620,7 +631,8 @@ theorem hits_clean {e : Eff} {hv : Bool} {r : Var} {E : Entry} (hl : E.live = tr
   · rename_i hc
     obtain ⟨hrb, hc⟩ := hc
     rcases hc with hi | hd
-    · have hb : (E.mode == Mode.rootb) = false := by simpa using hrb
+    · have hb : (E.mode == Mode.rootb) = false := by
+        simp only [beq_eq_false_iff_ne, ne_eq]; exact fun e => hrb (Or.inl e)
       simp [hits, hi, hb]
     · rw [hl] at hd; cases hd
   · rfl
@@ -2158,7 +2170,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     intro k p _ _ he
     rw [he] at hylt
     exact absurd hylt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
-  by_cases hcl : E1.mode ≠ .rootb ∧ (E1.ty = .int ∨ E1.live = false)
+  by_cases hcl : ¬ E1.fixed ∧ (E1.ty = .int ∨ E1.live = false)
   · have hce : E1.clean = { E1 with path := [], held := [] } := by unfold Entry.clean; rw [if_pos hcl]
     have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
       rw [hce]; simp [rrE, rrL_nil]
@@ -2168,22 +2180,26 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     · rw [exits_at h.pe_lt fn.params 0 _ hc hyk (fun d hd => by rw [hce, hv0] at hd; cases hd)]
     · rw [hrr, hv0]; intro d hd; cases hd
     · rw [hrr]
-      refine ⟨rfl, rfl, fun hf => ?_, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
-      rcases hf with hf | ⟨b, hb, _⟩
-      · exact absurd hf hcl.1
-      · obtain ⟨E0, h0, hm0, _⟩ := h.postdt.2 y E1 h1
-        exact absurd (hm0 ▸ hb : E0.mode = .inout b) (h.noio y E0 b h0)
+      exact ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
   · have hce : E1.clean = E1 := by unfold Entry.clean; rw [if_neg hcl]
     have hl : E1.live = true := by
-      by_cases hrb : E1.mode = .rootb
-      · exact h.post_live_rootb h1 hrb
+      by_cases hrb : E1.fixed
+      · exact h.post_live_rootb h1 (by
+          rcases hrb with hrb | ⟨b, hb, _⟩
+          · exact hrb
+          · obtain ⟨E0, h0, hm0, _⟩ := h.postdt.2 y E1 h1
+            exact absurd (hm0 ▸ hb : E0.mode = .inout b) (h.noio y E0 b h0))
       · cases hlv : E1.live
         · exact absurd ⟨hrb, Or.inr hlv⟩ hcl
         · rfl
     have hn : E1.ty ≠ .int ∨ E1.mode = .rootb := by
       by_cases hrb : E1.mode = .rootb
       · exact Or.inr hrb
-      · exact Or.inl fun ht => hcl ⟨hrb, Or.inl ht⟩
+      · exact Or.inl fun ht => hcl ⟨fun hf => by
+          rcases hf with hf | ⟨b, hb, _⟩
+          · exact hrb hf
+          · obtain ⟨E0, h0, hm0, _⟩ := h.postdt.2 y E1 h1
+            exact absurd (hm0 ▸ hb : E0.mode = .inout b) (h.noio y E0 b h0), Or.inl ht⟩
     have hroots : ∀ d ∈ E1.vdeps, (Γ d.root).isSome ∧ d.root < base + 0 := by
       intro d hd
       obtain ⟨Er, hEr, _⟩ := h.postwf y E1 h1 hl hn d.root (List.mem_map_of_mem hd)

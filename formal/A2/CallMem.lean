@@ -531,16 +531,22 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     split at hd
     · simp [Entry.vdeps] at hd
     · rename_i hcl
+      have hrootb : E1.fixed → E1.mode = .rootb := by
+        rintro hf
+        rcases hf with hf | ⟨b, hb, _⟩
+        · exact hf
+        · obtain ⟨E0', h0', hm0', _⟩ := h.postdt.2 y E1 h1
+          exact absurd (hm0' ▸ hb : E0'.mode = .inout b) (h.noio y E0' b h0')
       have hl : E1.live = true := by
-        by_cases hrb : E1.mode = .rootb
-        · exact h.post_live_rootb h1 hrb
+        by_cases hrb : E1.fixed
+        · exact h.post_live_rootb h1 (hrootb hrb)
         · cases hlv : E1.live
           · exact absurd ⟨hrb, Or.inr hlv⟩ hcl
           · rfl
       have hn : E0.ty ≠ .int ∨ E0.mode = .rootb := by
         by_cases hrb : E1.mode = .rootb
         · exact Or.inr (by rw [← hm0]; exact hrb)
-        · exact Or.inl fun ht => hcl ⟨hrb, Or.inl (by rw [ht0]; exact ht)⟩
+        · exact Or.inl fun ht => hcl ⟨fun hf => hrb (hrootb hf), Or.inl (by rw [ht0]; exact ht)⟩
       have hd0 : dep ∈ E0.vdeps := by unfold Entry.vdeps at hd ⊢; rwa [← hm0, ← hp0, ← hh0]
       obtain ⟨Er, hEr, _⟩ := hi.wf y E0 h0 (hsv (hl2 hl).1).1 hn dep.root (List.mem_map_of_mem hd0)
       refine (fun hk => ⟨hk.vkeep, hk.hkeep⟩) (h.rootKeep hi hb ?_)
