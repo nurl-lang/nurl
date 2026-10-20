@@ -1957,10 +1957,12 @@ two names for one value. `locked_update` and `locked_apply`
 value where it lives, without moving it out and back. So are `vec_update`
 and `vec_apply` (stdlib/core/vec.nu): they run one on a Vec's element in
 place, the Vec passed `inout` so that a closure able to grow or shrink it
-under that element is rejected. A closure captures a scalar by value: an
-assignment to one inside it changes the closure's copy (the compiler warns),
-so a result comes back as the closure's return value (`vec_apply`,
-`locked_apply`) or through an `inout` parameter.
+under that element is rejected. A closure captures a scalar it only reads
+by value; a `: ~` number or flag it assigns, by pointer (§8.4), so a callback
+can count or set a flag in its caller's binding — and, holding a pointer
+into that frame, cannot outlive it (§9.3). A result can also come back as
+the closure's return value (`vec_apply`, `locked_apply`) or through an
+`inout` parameter.
 
 A foreign (`&`) declaration may mark a parameter `inout` too: the C
 function takes a pointer to a `T` it writes a result through, and the
@@ -2095,10 +2097,13 @@ new value or had the field replaced or its elements dropped is a compile
 error. Freeing an env by hand is a compile
 error. See [`docs/MEMORY.md` §7.5](MEMORY.md).
 
-A closure may *capture by pointer* a mutable (`: ~`) multi-field struct
-binding (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule):
-the env block stores the caller's alloca pointer rather than a value
-snapshot, so writes through the closure reach the caller's binding. A
+A closure *captures by pointer* a mutable (`: ~`) multi-field struct
+binding, and a mutable number or flag (an integer, float or `b` binding)
+that its body assigns (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the
+lifetime rule): the env block stores the caller's alloca pointer rather
+than a value snapshot, so writes through the closure reach the caller's
+binding — `( vec_each v \ i x → v { = n + n 1 } )` counts into `n`.
+One that only reads a scalar takes a snapshot of it, as before. A
 by-pointer capture borrows the caller's stack frame and MUST NOT
 out-live it. The borrow checker rejects an escaping by-ref capture
 (returning the closure, pushing it into a longer-lived container,
@@ -2181,8 +2186,8 @@ that owns its buffer is the exception: `: s b a` makes `b` a view of
 
 ### 9.3 Escape analysis
 
-A closure capturing a `: ~`-mutable multi-field struct binding by
-pointer (see §8.4) is a *stack reference*. Returning it, pushing it
+A closure capturing a binding by pointer (a `: ~` multi-field struct, or
+a `: ~` number or flag it assigns — see §8.4) is a *stack reference*. Returning it, pushing it
 into a longer-lived container, spawning a thread that holds it, or
 assigning it into a longer-lived binding is rejected. The escape rule
 also covers an aggregate (struct) literal that holds such a closure,

@@ -276,3 +276,7 @@ h286_view_of_capture_across_closure_in_struct_param	§2.11	A2	h285 with the clos
 h287_view_of_capture_across_closure_in_vec_param	§2.11	A2	h285 with the closure run an element of a Vec parameter (vec_at)	rejected
 h288_arc_payload_lent_through_a_struct	§6.5	A3	helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read	rejected
 h289_foreign_write_into_a_frozen_view	§6.5	A3	unsafe helper preads into a slice it is handed; caller hands it a view of an Arc payload	rejected
+h290_move_only_handle_in_a_struct_never_dropped	§7.6	A2	struct holding a lock guard (no share/clone hook) was dropped by nobody: lock held, block leaked	runs-clean
+h291_unjournaled_drop_skipped_by_a_panic	§7.2	A2	panic past a struct holding a lock guard (or a Drop impl defined later): its drop was never journaled — lock held, leak, Drop not run	runs-clean
+h292_argument_temporary_leaked_by_a_panic	§7.2	A2	a String / Vec made in an argument, the callee panics: the drop after the call was skipped and the journal did not know the temporary — leak	runs-clean
+h293_thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean

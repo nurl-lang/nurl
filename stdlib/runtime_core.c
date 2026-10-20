@@ -4961,6 +4961,14 @@ static __thread NurlPanicFrame *nurl__panic_top = NULL;
  * out on nurl_panic_last_msg read, freed by the next recover. */
 static __thread char *nurl__panic_last_msg = NULL;
 
+/* A thread that ends lets go of the message its last panic left: nothing
+ * can read it any more (nurl_panic_last_msg reads this thread's). */
+static void nurl__panic_thread_exit(void) {
+    if (nurl__panic_top) return;
+    nurl_free(nurl__panic_last_msg);
+    nurl__panic_last_msg = NULL;
+}
+
 /* ── Recovery state belongs to the fiber, not the thread ─────────────
  * The recover-frame chain and the panic journal are thread-locals, but a
  * recover extent is entered by a fiber, and fibers interleave on a
@@ -5179,6 +5187,8 @@ NURL_TLS_FN long long nurl_recover_lean(void *fn_ptr, void *env_ptr) {
 }
 
 NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
+
+static void nurl__panic_thread_exit(void) {}
 
 NURL_TLS_FN void nurl_panic(const char *msg) {
     fprintf(stderr, "nurl panic (wasi: no recover): %s\n",

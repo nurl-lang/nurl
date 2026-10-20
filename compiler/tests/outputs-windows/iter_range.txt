@@ -8,6 +8,6 @@ OUTPUT
 step2=[0,2,4,6,8]
 down=[10,9,8,7,6,5,4,3,2,1]
 step0_len=0
-range_each_sum_1_to_10=0
+range_each_sum_1_to_10=55
 sum_of_squares_1..5=55
 done

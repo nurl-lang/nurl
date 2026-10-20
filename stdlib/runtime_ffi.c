@@ -4671,6 +4671,7 @@ static void nurl__thr_owned_tramp(void *p) {
     if (b.env) nurl_closure_drop(b.env);
     nurl_cc_context_end();   /* the thread's refcount cycles, if any */
     nurl__journal_thread_exit();
+    nurl__panic_thread_exit();
 }
 
 /* The thread runs on its OWN copy of the closure env and drops it when the

@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+count 4
+sum 18
+saw 4
+first multiple of 5 at 2
+mean 2.5
+i32 sum 10
+ran clean 2
+nested 18
+snapshot 3

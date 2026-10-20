@@ -39,6 +39,11 @@
 //   ( locked_set     [T] l x )             → v   replace the value under the lock
 //   ( locked_take    [T] l )               → T   check the value out to change it
 //   ( locked_restore [T] l x )             → v   check it back in
+//   ( locked_update  [T] l f )             → v   f changes the value in place
+//   ( locked_apply   [T R] l f )           → R   …and hands back a result
+//   ( locked_await   [T R] l f )           → R   f runs on the value each time
+//                                               it changes, until it hands back
+//                                               a result (a monitor: wait until)
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
 //   ( cond_signal    Cond c )              → v
@@ -431,6 +436,8 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     ( f . p val )
+    // (A thread in locked_await looks again at the changed value.)
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 
@@ -440,8 +447,36 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     : R r ( f . p val )
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
     ^ r
+}
+
+// A monitor's wait: run `f` on the value IN PLACE with the lock held — and
+// again each time another thread changes the value (locked_update,
+// locked_apply, locked_set, locked_restore) — until it hands back a
+// result, which is returned once the lock is let go. Between two runs the
+// lock is not held, so the thread waits without stopping the ones that
+// will change what it is waiting for. `f` may change the value too (to
+// register itself, say); a run that changes it and hands back nothing
+// wakes the other waiters before this one sleeps.
+//
+//   ( locked_await [Queue Job] q \ inout Queue x → ?Job { ^ ( queue_pop x ) } )
+@ locked_await [A R] ( Locked A ) l ( @ ?R inout A ) f → R {
+    : ~ * ( LockedImpl A ) p ( shared_ptr [( LockedImpl A )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ T {
+        ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+        : ?R r ( f . p val )
+        ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
+        ? . r 0 {
+            ( mutex_unlock . p mu )
+            ^ . r 1
+        } {}
+        = . p waiters + . p waiters 1
+        ( cond_wait . p cv . p mu )
+        = . p waiters - . p waiters 1
+    }
 }
 
 // A copy of the value, taken under the lock.
@@ -460,6 +495,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     = . p val x
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 

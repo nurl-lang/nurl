@@ -372,8 +372,9 @@ So two live names can never both own one buffer.
 
 ### 2.3 Stack references must not escape
 
-A closure that captures a `: ~` mutable multi-field struct captures it by
-pointer into the enclosing frame. Such a value is a *stack reference* and
+A closure that captures a `: ~` mutable multi-field struct, or a `: ~`
+number or flag that it assigns, captures it by pointer into the enclosing
+frame (a callback can count into its caller's binding). Such a value is a *stack reference* and
 must not outlive that frame. The checker tracks the scope depth a stack
 reference points into, through bindings, assignments, field stores,
 aggregate and closure literals, and `?` / `??` joins. An escape is an
@@ -390,8 +391,10 @@ error: returning a value that references a stack binding by pointer
          (move the captured data to a heap-backed handle)
 ```
 
-Closures that capture by value (an immutable `:` capture, a single-handle
-struct) never escape this way.
+Closures that capture by value (an immutable `:` capture, a scalar the
+closure only reads, a single-handle struct) never escape this way. A
+counter that must outlive the frame, or be shared with a thread, is an
+`Atomic` or a `Locked` (std/atomic.nu, std/thread.nu).
 
 ### 2.4 Exclusive access for `inout` arguments
 
