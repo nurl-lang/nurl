@@ -109,7 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   container against ~5 ms for the local search. Both servers now keep
   the registry's answers for ten minutes (`msearch_cache_init`, called
   from main): a repeated `nurl_api` query 1.4 s → 50 ms, `nurl_grep`
-  0.7 s → 28 ms, and `module=` after a package index is free.
+  0.7 s → 28 ms, and `module=` after a package index is free. A query's
+  terms are looked up at once, a thread each, so a first (uncached)
+  query waits one round trip instead of one per term: 1.7 s → 0.85 s.
 - **Docs search is twice as fast** (6.7 → 3.3 ms over a corpus 12 %
   larger): whole-word matching finds candidates with `strstr` instead of
   comparing byte by byte at every offset; the same matcher ranks

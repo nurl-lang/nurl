@@ -44,6 +44,8 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/arc.nu`
+$ `stdlib/std/par.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
@@ -130,6 +132,43 @@ $ `stdlib/core/slice.nu`
         }
         F _ → { ^ @ ?( Vec u ) { F } }
     }
+}
+
+// <regbase>/api/v1/search?q=<term>
+@ __ms_search_url s regbase s term → String {
+    : String url ( string_with_cap 128 )
+    ( string_push_str url regbase )
+    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
+    ( string_push_str url `api/v1/search?q=` )
+    : String enc ( url_percent_encode term )
+    ( string_push_str url ( string_data enc ) )
+    ^ url
+}
+
+// Warm the cache with the registry's answer for each of the first `max`
+// terms that has at least `minlen` bytes — the terms the caller then looks
+// up, one by one — fetched at once, on a thread each,
+// so a query that looks several terms up waits one round trip (most of
+// it the TLS handshake) instead of one per term. The callers then read
+// every answer from the cache in order, exactly as before. Without the
+// cache (msearch_cache_init not called) there is nowhere to put the
+// answers, and this does nothing.
+@ __ms_reg_prefetch s regbase ( Vec String ) terms i max i minlen → v {
+    ? ! g_ms_cache_on { ^ } {}
+    : ( Vec String ) urls ( vec_new [String] )
+    : i tn ( vec_len [String] terms )
+    : ~ i k 0
+    ~ & < k tn < k max {
+        : s term ( string_data ( vec_at [String] terms k ) )
+        ? >= ( nurl_str_len term ) minlen { ( vec_push [String] urls ( __ms_search_url regbase term ) ) } {}
+        = k + k 1
+    }
+    : i n ( vec_len [String] urls )
+    ? < n 2 { ^ } {}
+    : ( Arc ( Vec String ) ) shared ( arc_new [( Vec String )] urls )
+    : ( Vec b ) _got ( par_map_index [b] n n \ i j → b {
+        ^ ?? ( __ms_reg_get ( string_data ( vec_at [String] ( arc_get [( Vec String )] shared ) j ) ) ) { T _ → T F → F }
+    } )
 }
 
 // The registry to search: $NURL_REGISTRY, else the public default.
@@ -379,6 +418,7 @@ $ `stdlib/core/slice.nu`
 // Registry search per term (≤ 3 terms), de-duplicated by package name.
 // Returns the number of packages listed.
 @ __ms_api_fallback_packages s regbase ( Vec String ) terms String out → i {
+    ( __ms_reg_prefetch regbase terms 3 1 )
     : ( Vec String ) seen ( vec_new [String] )
     : ~ i shown 0
     : i tn ( vec_len [String] terms )
@@ -476,6 +516,7 @@ $ `stdlib/core/slice.nu`
 // matched. "http" returns 385 declarations; the fact that a package
 // named http exists (and what it IS) must not drown under them.
 @ __ms_api_exact_pkg_note s regbase ( Vec String ) terms String out → v {
+    ( __ms_reg_prefetch regbase terms 2 2 )
     : i tn ( vec_len [String] terms )
     : ~ i tk 0
     ~ & < tk tn < tk 2 {
