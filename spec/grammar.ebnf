@@ -611,9 +611,15 @@ try_expr = '\\' expr ;
 
    Disambiguation from try_expr uses the first 1–3 tokens after '\':
      1. '→'                                        →  closure, zero params
-     2. TYPE_KW | '*' | '?' | '[' | '!'            →  closure, param types
-     3. '(' '@'                                    →  closure, fn-type param
-     4. IDENT IDENT '→'                            →  closure, one named param
+     2. 'inout'                                    →  closure, inout param
+     3. TYPE_KW | '*' | '?' | '[' | '!' | TypeName →  closure, param types
+     4. '(' followed by '@', TYPE_KW, '*', '?', '??', '[', '!', '|' or a
+        TypeName                                   →  closure, parenthesised
+                                                      param type
+     5. IDENT IDENT '→'                            →  closure, one named param
+   TypeName is a declared struct or enum, a generic instance, 'Vec', or a
+   generic struct's own name (`\ ( Slice u ) s → …`): none of these can be
+   called, so none begins a `\ ( call )` try-expression.
    Any other form is parsed as try_expr.
 
    Zero parameters:   \ → type { body }

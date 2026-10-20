@@ -394,7 +394,7 @@ file on a host — which is how the layers above are developed and
 fuzzed where `mkfs.vfat` is. `stdlib/fs/fat.nu` and `fatfs.nu` are the
 filesystem, and `boot/vfs.c` is what makes it invisible: `nl_open`,
 `read`, `write`, `lseek`, `unlink`, `rename`, `mkdir`, `truncate`,
-`fsync`, `access` and `getdents64` ask the baked-in archive first and
+`ftruncate`, `fsync`, `access` and `getdents64` ask the baked-in archive first and
 the disk second, so a program that already reads and writes files keeps
 working with nothing added to it. `demos/disk.nu` contains no
 disk-aware call at all.

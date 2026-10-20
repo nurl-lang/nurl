@@ -39,13 +39,17 @@ inside the callee, you do not change the caller's value. Declare the
 parameter `inout` to change the caller's value. See
 [Memory and ownership](./memory-and-ownership#parameter-conventions).
 
-## Closures capture by value by default
+## A closure that changes a capture cannot leave its frame
 
-A closure snapshots its captured variables when you create it.
-Later changes to the outer variable do not show inside the closure.
-Use the mutable-struct-by-reference form to see later changes. See
+A closure snapshots what it only reads when you create it: later changes
+to the outer variable do not show inside the closure. A `: ~` binding the
+closure assigns, or hands to an `inout` parameter, it captures by
+reference instead, so the write lands in the caller's binding — and such
+a closure cannot be returned, stored in a container or handed to a
+thread. State a closure changes after its frame is gone belongs in an
+`Atomic`, a `Locked` or an `Rc`. See
 [Memory and ownership](./memory-and-ownership) and
-[`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
+[`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md) §2.3.
 
 ## `Rc` cannot cross a thread boundary
 

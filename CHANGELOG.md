@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.75.0] — 2026-10-20
 
 Threads are in the memory model. A multi-threaded relational database
 written in safe NURL (`packages/nurldb`: a buffer pool, a write-ahead log
@@ -70,6 +70,27 @@ over a field.
   the write silently, or worse (h298); the "assignment is discarded when
   the closure returns" warning is gone with it. A capture taken by value
   is as mutable as its binding.
+
+### Changed
+
+- **The proof of the memory model can be browsed.**
+  nurl-lang.org/docs/formal-verification holds an interactive explorer of
+  `formal/`: a step-by-step simulator of the compile-time context and the
+  store for small programs (a `vec_push` killing a `Slice` view, a panic
+  unwinding through the drop journal), the theorem and module dependency
+  graphs, every Lean declaration with its dependencies, and the hole
+  corpus with the formal rule that rejects each probe.
+  `formal/BLUEPRINT.md` is the same architecture as Mermaid graphs for
+  GitHub. `webdocs/scripts/gen-formal-data.mjs` reads both out of the
+  Lean sources, `formal/RULES.md` and `formal/corpus/map.tsv`: the
+  explorer's data on every site build, the blueprint with `--blueprint`.
+- **The docs follow grammar v2.10.** The spec still said v2.9, and
+  MEMORY §7.5, LIMITATIONS and nurl-lang.org/docs still described a
+  closure assigning a capture as a copy whose write is discarded. The `\` closure-or-try
+  lookahead (spec §6.4, grammar.ebnf) lists every closure start the parser
+  takes; the concurrency, standard-library, control-flow and trait pages
+  cover `Atomic`, `RwLocked`, `PFile`, `% Frozen`, `locked_await` and a
+  foreach over a field; and the hole counts read 286 probes, h01–h298.
 
 ### Fixed
 
@@ -141,6 +162,17 @@ over a field.
   SIGKILL mid-flight whose every acknowledged commit survives.
 - data 0.2.6: a streamed dataset read on several threads reads each row at
   its own offset (`PFile`); the frozen check found the shared C stream.
+
+Published to the registry after 0.74.0:
+
+- **nwasm 3.1.3:** tier 8 could compare an add-compare-branch's sum
+  against itself — the allocator ended the compared operand's live range
+  at its read, before the sum was written, so the sum could take its
+  register (`lea rsi, [rdx+7]; cmp rsi, rsi`). The wasm benchmark's
+  correctness gate found it: x25519 printed a wrong checksum under nwasm
+  (3.1.2 and 2.4.2 alike), a bounds-checked little-endian u64 read losing
+  its top byte. Not a toolchain fault: the module is byte-identical under
+  0.74.0.
 
 ## [0.74.0] — 2026-10-19
 

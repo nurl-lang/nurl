@@ -30,5 +30,5 @@ trait objects, panics and the drop journal; threads are A3.
 | §2.11, §7.5 | Closures hold their captures | A2 | `RhsT.pack` (`CapsOK`: captures by handle are depended on, by name held, each read or changed within its bound); `StmtT.callc` (the call through a package: `CallT` on the code with the captures as `inout` arguments of their own, `NamesFree` — a binding a closure may change is changed by the call and reached from no argument but by a closure that changes it the same way — and no argument is such a binding); `sigCtx` / `symNames` (a closure a callee is handed may change the callee's `inout` parameters); `ValOK.pkg` / `envDeps` (the environment); `A2/CAPTURES_DESIGN.md` | done |
 | §7.2, §7.3 | Panics and the drop journal | A2 | the panic steps unwind to `StmtT.catchR` (`recover`: `StmtT.letrec`, `recStmt`) through the journal, dropping what each scope owns (`A2/Panic.lean`); `no_leak_end` (`A2/Leak.lean`) | done |
 | §7.7 | Reference-count cycles | B | `Rc` and its collector are the standard library's `unsafe` base | not started |
-| §6.5 | Threads: `Send`, `Sync`, `Arc`, `Mutex`, `Locked`, channels | A3 | — | not started |
+| §6.5 | Threads: `Send`, `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and `% Frozen`, `Atomic`, `PFile`, channels | A3 | — | not started |
 | §3, §6.4 | `unsafe` boundary and the trusted base | B | — | not started |

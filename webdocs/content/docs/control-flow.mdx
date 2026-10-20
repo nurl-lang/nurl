@@ -71,8 +71,15 @@ cannot reassign it.
 }
 ```
 
+A foreach can walk a struct's field directly (grammar v2.10):
+
+```nu
+~ x . bag items { ( puts ( nurl_str_int x ) ) }
+```
+
 The loop body may not mutate `collection` itself. The borrow checker rejects
-push, remove, clear, and similar calls on it. See
+push, remove, clear, and similar calls on it — by path, so a loop over
+`. s a` may still change `. s b`. See
 [Memory and ownership](./memory-and-ownership).
 
 ### Break and continue

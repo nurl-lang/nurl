@@ -32391,11 +32391,10 @@ unsafe @ __replaces_note i syms s name → v {
     ( nurl_sym_def syms `__last_field_obj__` obj_name )
     // Silent-snapshot footgun, PARAMETER edition. A struct parameter is
     // passed by value: the callee gets its own copy, so `= . p field v`
-    // lands in that copy and the caller never sees the write. This is
-    // the same violation gen_assign already warns about one context
-    // over (a binding captured by value into a closure — the write is
-    // discarded when the closure returns), and it is equally invisible
-    // without a diagnostic: the store compiles, runs, and does nothing.
+    // lands in that copy and the caller never sees the write. (Its
+    // closure twin — a captured binding assigned in the body — is gone:
+    // such a binding is captured by pointer, h298.) Without a diagnostic
+    // it is invisible: the store compiles, runs, and does nothing.
     //
     // It is easy to believe otherwise, because a struct whose fields
     // are HANDLES (String, Vec, Json) does propagate mutations made

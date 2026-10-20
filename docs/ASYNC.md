@@ -149,10 +149,10 @@ itself.
   `yield` inside long computations keeps latency flat.
 - **Crossing fibers follows the same ownership rules as threads.** A
   `spawn` closure moves its owned captures (naming one again is an error)
-  and takes its own share of each `Channel` / `Mutex` / `Arc` / `Locked`
-  ([`MEMORY.md` §6.2](MEMORY.md)); state fibers change lives in a
-  `( Locked T )` or goes through a `Channel`, and an `Arc` shares a value
-  nobody changes ([`MEMORY.md` §6.5](MEMORY.md); see
+  and takes its own share of each `Channel` / `Mutex` / `Arc` / `Locked` /
+  `RwLocked` / `Atomic` ([`MEMORY.md` §6.2](MEMORY.md)); state fibers
+  change lives in a `( Locked T )`, an `( RwLocked T )` or an `Atomic`, or
+  goes through a `Channel`, and an `Arc` shares a value nobody changes ([`MEMORY.md` §6.5](MEMORY.md); see
   [Operational caveats](#operational-caveats)).
 
 ## 5. Platform support

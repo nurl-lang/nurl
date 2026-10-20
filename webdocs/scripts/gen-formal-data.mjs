@@ -962,7 +962,7 @@ console.log(
 if (process.argv.includes('--blueprint')) {
   const md = `# Visual Blueprint of the Lean 4 Soundness Proof (\`formal/\`)
 
-> **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable 286-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
+> **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable ${stats.holesCount}-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** \`${stats.leanToolchain}\` (zero external dependencies; standard axioms \`propext\`, \`Classical.choice\`, \`Quot.sound\` only; \`0\` \`sorry\`s)
 * **Phase A2 (Full Single-Threaded Calculus + Leak Freedom):** **${stats.a2.modules} modules**, **${stats.a2.lines.toLocaleString('en-US')} lines of Lean 4**, **${stats.a2.theorems} theorems**, **${stats.a2.totalDecls} total declarations**
