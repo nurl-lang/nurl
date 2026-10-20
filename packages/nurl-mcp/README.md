@@ -49,13 +49,14 @@ For any other client, configure an MCP server whose `command` is
 | Tool | Arguments | Does |
 |---|---|---|
 | `nurl_build` | `source` *or* `path` | Compile with the local toolchain; report success or compiler diagnostics. Does not run the program. |
+| `nurl_build_project` | `source` *or* `files`, `deps`, `entry?` | Compile a program that USES registry packages: the given files plus a synthesized `nurl.toml` with `deps` (`{"nn": "^0.1.1"}`), resolved by `nurlpkg install` (signature- and checksum-verified), then `nurl <entry>`. A dependency is imported as ``$ `deps/<name>/src/<module>.nu` ``. Nothing is executed; the binary and its `.ll` are returned as paths. |
 | `nurl_build_wasm` | `source` *or* `path`, optional `out` | Compile to a **wasm32-wasi module**, fully locally (wasmbuilder package — no build service). `out` = output path; a `path` input defaults to `<input>.wasm`; inline `source` without `out` keeps the module + its `.ll` at a temp path and returns JSON with `wasm_path` / `ll_path` (no inline base64). |
 | `nurl_run` | `source` *or* `path` | Compile **and** run; return the program's exit code, stdout, and stderr. |
 | `nurl_check` | `source` *or* `path` | Front-end only — type-check + borrow-check, no binary. Fast. |
 | `nurl_fmt` | `source` *or* `path` | Format to canonical form (`nurlfmt`); return the formatted source. |
-| `nurl_list_stdlib` | — | List the `.nu` modules in the installed stdlib (`$NURL_STDLIB`). |
-| `nurl_read_stdlib` | `name` | Read one stdlib module by path relative to the stdlib root (e.g. `core/string.nu`). |
-| `nurl_api` | `module` \| `package` \| `query` | A module's API surface via nurldoc (signatures + doc comments + type definitions, no bodies — `ext/csv.nu` is 63 KB, its surface 11 KB), or an AND-term search over every module's declarations. A query no single declaration satisfies is re-run as a **whole-word OR ranked by coverage** — `string builder append` still lands on `string_push_bytes`, `vec_push new string_new` on `string_new` and `vec_push` — and only if that finds nothing does the reply widen to the package registry; an exact package-name term is footnoted regardless. |
+| `nurl_list_stdlib` | — | List the `.nu` modules in the installed stdlib as `{name, path, bytes}` JSON, paths relative to the stdlib root (`$NURL_STDLIB/stdlib`, or `$NURL_STDLIB` itself when it is the stdlib directory). |
+| `nurl_read_stdlib` | `name` | Read one stdlib module by path relative to the stdlib root (`core/string.nu`; the import spelling `stdlib/core/string.nu` works too). |
+| `nurl_api` | `module` \| `package` (+ `module`, `version`) \| `query` | `package=` opens with the package's module index (each module's surface size and opening line); a package too large for one reply answers with the index alone — pass `module='txn'` or `'txn,db'` beside it for those surfaces whole (an unknown module is a tool error listing the real ones). Otherwise: a module's API surface via nurldoc (signatures + doc comments + type definitions, no bodies — `ext/csv.nu` is 63 KB, its surface 11 KB), or an AND-term search over every module's declarations. A query no single declaration satisfies is re-run as a **whole-word OR ranked by coverage** — `string builder append` still lands on `string_push_bytes`, `vec_push new string_new` on `string_new` and `vec_push` — and only if that finds nothing does the reply widen to the package registry; an exact package-name term is footnoted regardless. |
 | `nurl_grep` | `pattern`, `where?`, `word?` | Case-insensitive search over the installed stdlib (`path:line:` hits, word-boundary matches ranked first) and the registry's package names + descriptions — "is there a package for X" from any MCP-only editor. |
 | `nurl_docs` | `name?`, `section?`, `outline?`, `query?`, `offset?` | The shipped `docs/` tree — the questions the API surface cannot answer: `MEMORY.md` (who frees what, and when), `CRYPTO.md`, `ASYNC.md`, `PLATFORMS.md`, `spec.md`, `dev/COMPILER_INTERNALS.md`, … No `name` lists everything with its size and title. `query='string_free manually managed handles'` searches every **section** of every document and returns the best few with their `section=` keys. `name=X outline=true` is that document's heading map; `name=X section='7.4'` (a number, or words from the heading) is one section — 3 KB instead of MEMORY.md's 44 KB, and the only way to read a slice of `spec.md`, which is past the 48 KB per-call cap. `name=X` alone still returns the whole document, paged with `offset`. `formal/` — the mechanized memory-safety proof (`formal/CLAIM.md`, `formal/RULES.md`, the probe table `formal/corpus/map.tsv`, whose rows `name=… query=h274` returns) — is part of the corpus; `name=` with `query=` searches one document. Served from `$NURL_DOCS`, else `$NURL_STDLIB/docs` — `install-toolchain.sh` puts it there, `formal/` included. |
 
@@ -128,7 +129,7 @@ cannot leak how many leading bytes matched.
 
 ## Status
 
-v0.13.2 — stdio + token-authenticated HTTP transport, both served through
+v0.14.0 — stdio + token-authenticated HTTP transport, both served through
 `stdlib/ext/mcp_server.nu`, so the dual-era handshake (`server/discover`, the
 protocol version gate, `_meta` serverInfo) and per-handler panic isolation come
 from one implementation shared with the rest of the tree. Not yet bundled with

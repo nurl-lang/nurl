@@ -507,13 +507,13 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     symlinks, aliases, and both router and direct-dispatch paths without leaking
     content in errors.
 
-- [ ] **P0 — Contain every untrusted compile job.** Caller filenames are joined
-  into job paths without canonical containment, `opt` reaches Clang, imports can
-  address parent/absolute host paths, and subprocesses inherit a shared working
-  directory/cache/environment (`nurlapi/main.nu`).
-  - Generate server-side names or accept strict basenames only; canonicalize and
-    contain every input/output/import, reject symlink escapes, and make `opt` a
-    fixed enum.
+- [ ] **P0 — Contain every untrusted compile job.** Caller filenames are one
+  plain file name since 0.76.0 (else 400) and the source reaches nurlc on stdin,
+  but `opt` reaches Clang, imports can address parent/absolute host paths, and
+  subprocesses inherit a shared working directory/cache/environment
+  (`nurlapi/main.nu`).
+  - ~~Accept strict basenames only~~ (done, 0.76.0); canonicalize and contain
+    every output/import, reject symlink escapes, and make `opt` a fixed enum.
   - Give each job a private workspace/cache and an allowlisted environment;
     expose only its source and a read-only stdlib/toolchain.
   - Run compiler/linker/emulator processes with no network, no secrets, no new

@@ -45,6 +45,7 @@ Useful flags (put them *before* the source file):
 | `--target=<triple>` | Cross-compile for the given target triple |
 | `--emit-ir` | Stop after stage 1 — just produce the `.ll` file, do not link |
 | `--emit-asm` | Emit native assembly (`.s`), skip linking |
+| `--stdin NAME` | Read the source from stdin; diagnostics and the default output name use `NAME` (no file needs to exist) |
 
 <Accordions>
   <Accordion title="Why does -O0 matter for debugging?">

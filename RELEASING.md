@@ -55,6 +55,9 @@ described in prose somewhere that no test covers:
   actively wrong, and the `docs/` tree ships **inside the toolchain
   archive** (the nurl-mcp `nurl_docs` tool serves it), so a stale
   sentence is installed on every user's machine.
+- `formal/*.md` and `formal/corpus/map.tsv` — shipped as `docs/formal/`
+  and served by `nurl_docs` the same way; their hand-typed probe and
+  rule counts go stale with every closed hole.
 
 ### 3. Branch and PR
 
@@ -111,8 +114,9 @@ for a dry run that builds the artifacts without publishing.
 
 An archive is just the `~/.nurl` layout (`bin/`, `build/`, `stdlib/`,
 `docs/`, `nurl.{sh,bat}`, `env`) with shims that resolve their own
-location, so it works wherever it is unpacked. `docs/` is the prose tree
-the nurl-mcp `nurl_docs` tool serves, so an installed toolchain answers
+location, so it works wherever it is unpacked. `docs/` (with the proof's
+prose and probe table as `docs/formal/`) is the prose tree the nurl-mcp
+`nurl_docs` tool serves, so an installed toolchain answers
 questions about ownership, crypto and platforms without the network.
 
 ## Runtime dependencies (dynamic linking)

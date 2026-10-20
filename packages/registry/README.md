@@ -39,7 +39,8 @@ Write path (Bearer token):
 | `POST /api/v1/yank` · `/unyank` | owner-only; flips the version's yanked flag (the resolver then skips it) |
 | `POST /api/v1/revoke` | deletes the presented token |
 
-Plus `GET /api/v1/search?q=` and `GET /api/v1/stats` (JSON), and a
+Plus `GET /api/v1/search?q=`, `GET /api/v1/catalog` (every package in
+search's shape, name order, unlimited) and `GET /api/v1/stats` (JSON), and a
 server-rendered UI: `/` (catalog + search), `/packages/<name>` (owner,
 repository from the tarball's manifest, install snippet, versions with
 their publish dates, dependencies, and the README rendered straight out
@@ -86,7 +87,7 @@ Environment: `REG_TOKEN_PEPPER`, `REG_BASE_URL`, `GITHUB_CLIENT_ID`,
 
 * `nurlpkg test` runs `tests/wire.nu` — the full protocol driven through
   `router_handle` with **no socket**: publish → index → tarball → yank →
-  search → stats → revoke, ownership and validation rejections, README
+  search → catalog → stats → revoke, ownership and validation rejections, README
   rendering and asset extraction. ASan/LSan-clean.
 * `./test-e2e.sh` is the end-to-end proof: it builds the server, installs
   the toolchain into a throwaway prefix, `nurlpkg publish`es the in-tree

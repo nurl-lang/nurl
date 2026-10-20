@@ -51,6 +51,9 @@ and serves a public **MCP endpoint** at `/mcp`.
 - `GET /examples`, `GET /examples/{name}` — list / fetch bundled examples.
 - `GET /grammar` — current grammar rendered as HTML (from `spec/grammar.ebnf`).
 - `GET /readme` — this project's README rendered as HTML.
+- `GET /formal/{file}` — the mechanized proof's prose and probe table
+  (`CLAIM.md`, `RULES.md`, `BLUEPRINT.md`, `README.md`,
+  `corpus/map.tsv`), where the docs' `../formal/` links land.
 - `GET /openapi.json` — OpenAPI 3.1 schema; `GET /docs` — Swagger UI.
 
 The endpoint set is authoritative in `GET /openapi.json` (Swagger UI at
@@ -83,7 +86,8 @@ environment variables.
 
 ## Pipeline inside the container
 
-1. `nurlc <file.nu>` → LLVM IR on stdout.
+1. `nurlc --stdin <filename>` (the source on stdin, no file written) → LLVM
+   IR on stdout.
 2. The API rewrites the IR to match the `wasm32-wasi` ABI (renames `@main` →
    `@__main_argc_argv`, injects the target triple, inserts i32/i64 shims for
    `malloc`/`puts` to match libc signatures).
@@ -133,7 +137,10 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   examples, stdlib, tests), and *read* (examples, stdlib, tests, grammar,
   readme, roadmap).
 - **Search** — `nurl_api` (a module's or a registry package's API surface,
-  or a term search over every stdlib declaration) and `nurl_grep` (ranked
+  or a term search over every stdlib declaration; `package=` opens with the
+  package's module index — each module's size and opening sentence — and
+  `module='txn'` or `'txn,db'` beside it renders those surfaces whole, so a
+  package larger than one reply is never cut mid-module) and `nurl_grep` (ranked
   substring search across stdlib, examples, tests and the registry).
   A `nurl_api` query no single declaration satisfies is re-run as a
   whole-word OR ranked by coverage, so a concept-shaped query — the kind a
@@ -155,7 +162,8 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   (`probe=… rule=… phase=… nurlc=rejected`). `name=` with `query=`
   searches that one document.
 - **`nurl_read_roadmap`** — ROADMAP.md by heading, the same way:
-  `outline=true`, `section='memory & safety'`, `query=`.
+  `outline=true`, `section='memory & safety'`, `query=`; no argument still
+  returns the whole file, `offset=` pages it.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,
   `nurl://readme`, `nurl://stdlib/<path>`, `nurl://example/<name>`, …) for
   clients that prefer resource semantics.
@@ -188,12 +196,16 @@ stage in order (nurlc, then the C toolchain and linker), sent once;
 `nurlc_returncode` / `clang_returncode` say which stage failed.
 `nurlc_errors` is nurlc's part of it parsed — one
 `{file, line, col, severity, message}` per diagnostic, for every class:
-front-end and lint (`col` is the caret column) and the borrow checker
-(`col` is `null`: it runs after the lexer has moved on and reports the
-line). `file` is the `filename` you sent (default `main.nu`) — nurlc
+front-end, lint and the borrow checker (`col` is the caret column; a
+borrow-checker error anchors at its statement's first character). `col`
+is `null` only for the few checks that know just a line. A diagnostic
+whose cure is one line to add — a missing `$` import — also carries
+`fix`: ``{"insert_line": 1, "text": "$ `stdlib/core/vec.nu`"}``. `file`
+is the `filename` you sent (default `main.nu`) — nurlc
 reads the source under that name, so no server path appears anywhere in
 a result. `filename` is therefore one plain file name
-(`[A-Za-z0-9._-]`, at most 64 bytes); a path is refused with a 400.
+(`[A-Za-z0-9._-]`, 1–64 bytes, not starting with `.` or `-`); a path is
+refused with a 400.
 
 **Running what you built.** `nurl_build_native` takes `run=true` to
 execute the program and return its exit code, stdout and stderr in the

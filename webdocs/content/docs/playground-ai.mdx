@@ -50,11 +50,13 @@ Content-Type: application/json
 ```
 Returns: base64-encoded wasm bytecode and compilation logs.
 
-**Type & borrow check / format**
-```bash
-POST /check          # fast parse, type check, borrow check, and lint diagnostics
-POST /fmt            # canonical source formatting via nurlfmt
-```
+**Diagnostics**
+
+Every build endpoint answers with `stderr` (the whole log, each stage in
+order) and `nurlc_errors`: one `{file, line, col, severity, message}`
+per compiler diagnostic — front end, lint and borrow checker alike —
+named by the `filename` you sent, plus a `fix` (`insert_line`, `text`)
+when the cure is one import line to add.
 
 **Linux (x86_64 ELF)**
 ```bash
@@ -141,12 +143,11 @@ Add to `claude_desktop_config.json`:
 ### Available Tools & Resources
 
 **Tools:**
-- `nurl_check` - fast parse, type check, and borrow check with actionable repair hints
-- `nurl_eval` - compile and run a snippet or expression and return stdout/stderr
-- `nurl_fmt` - format `.nu` source code with `nurlfmt`
-- `nurl_build_*` - compile to native (`Linux`, `Windows`, `macOS`), WebAssembly (`nurl_build_wasm`), cross-targets (`nurl_build_target`), or bootable Unikernel (`nurl_build_unikernel`)
-- `nurl_api` / `nurl_grep` / `nurl_docs` - search stdlib function signatures, grep across stdlib/examples/docs, and query topic guides
-- `nurl_list_*` / `nurl_read_*` - browse and read examples, stdlib modules, tests, grammar, README, roadmap, and gotchas
+- `nurl_build_*` - compile to native (`nurl_build_native`, with `run=true` to execute it; `nurl_build_windows`, `nurl_build_macos`), WebAssembly (`nurl_build_wasm`), cross-targets (`nurl_build_target`), or a bootable unikernel (`nurl_build_unikernel`); every result carries the located `nurlc_errors`
+- `nurl_api` / `nurl_grep` - a stdlib module's or a registry package's API surface (`package=` opens with its module index, `module=` picks modules), declaration search, and ranked search across stdlib, examples, tests and the registry
+- `nurl_docs` - the `docs/` tree and `formal/` (the memory-safety proof and its probe table), by section, outline or query
+- `nurl_list_*` / `nurl_read_*` - browse and read examples, stdlib modules, tests, grammar, README, and the roadmap (by heading: `outline`, `section`, `query`)
+- `nurl_changelog` - the release notes
 
 **Resources** (`nurl://` URIs):
 - `nurl://grammar` - language grammar

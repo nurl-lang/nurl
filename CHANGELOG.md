@@ -6,7 +6,18 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.76.0] — 2026-10-20
+
+The toolchain, read by an agent. Every compiler error a tool parses now
+has the `file:line:col:` shape — borrow-checker errors included — and
+names the caller's file rather than a temp path. Messages spell NURL
+types (`?i`, `( Vec i )`, not `{ i1, i64 }` or `Vec__i64`), a missing
+import ends with the exact line to add, and the prefix-arity trap is
+reported at the binding that swallowed the next line. An index past the
+end panics once, naming the line that indexed. The MCP servers serve the
+mechanized proof (`formal/`), read the roadmap by heading, open a
+package with its module index, and answer registry searches from a warm
+catalog instead of a round trip per term.
 
 ### Added
 
@@ -47,12 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source is no longer written to disk before compiling. The unikernel
   build passes the name through (`build_unikernel.sh --name`).
 - **`nurlc_errors` carries every class of diagnostic.** Borrow-checker
-  errors (`file:line:`, no column — the pass runs after the lexer has
-  moved on) were dropped by a parser that only matched `file:line:col:`,
-  so a build failing on a use after move answered `nurlc_errors: []`.
-  Each entry now has a `severity` (`error` / `warning` / `note`) and a
-  `col` that is `null` rather than guessed; the unikernel build answers
-  with the same array.
+  errors (then `file:line:`, no column) were dropped by a parser that
+  only matched `file:line:col:`, so a build failing on a use after move
+  answered `nurlc_errors: []`. Each entry now has a `severity` (`error` /
+  `warning` / `note`) and a `col` — `null` rather than guessed where
+  nurlc gives none (borrow-checker errors now carry one, below); the
+  unikernel build answers with the same array.
 - **The playground's MCP builds reach the playground.** The build tools
   POST to the server's own endpoints at `NURL_MCP_LOOPBACK_URL`, whose
   default was a fixed `http://127.0.0.1:8000`: a server on another port
@@ -154,6 +165,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP: a build the server refuses (bad flag, bad filename) is a tool
   error (`isError`), not a result that reads like a build; the
   `nurl_build_native` schema marks `source` required.
+- **ext/mcp_search.nu signatures** (the MCP servers' shared engine):
+  `msearch_api_package regbase name version module` returns
+  `!String String` (the error side is an unknown module, naming the
+  ones that exist), and `msearch_docs_query` takes `only`, one document
+  to search (empty: the whole corpus). `msearch_docs_tool` /
+  `msearch_file_tool` are the one entry point for outline / section /
+  query / read. A server built on the old shapes needs those call sites
+  updated; nurl-mcp 0.14.0 is.
+- CI builds nurl-mcp from the checkout and drives it over stdio
+  (`packages/nurl-mcp/tests/stdio_test.sh`), and runs the playground
+  server against the checkout's toolchain (`nurlapi/e2e_local.sh
+  --native-only`: native builds, the diagnostics contract, the MCP
+  surface); the Windows job builds piped source with `nurl.bat --stdin`.
+
+### Packages
+
+- **nurl-mcp 0.14.0** (requires 0.76.0): inline `source` goes to the
+  toolchain on stdin under `filename`, so `nurl_check` / `nurl_build` /
+  `nurl_run` / `nurl_build_wasm` errors read `main.nu:6:12`; the
+  formal/ docs, roadmap-by-heading, `module=` and the warm registry
+  catalog above; stdlib names (`core/vec.nu`) resolve on an installed
+  toolchain, where `$NURL_STDLIB` is the prefix that holds `stdlib/`.
+- wasmbuilder 0.3.7: `wb_build_source` hands the source to nurlc on
+  stdin under its file name (swarm-mcp's kernel errors no longer name
+  `/tmp/wasmbuild-*.d/`); new `wb_build_text` compiles text held in
+  memory to a caller's path.
+- swarm-mcp 0.31.2: a failed fallback wasm build quotes the build
+  service's `stderr`, the one log it now sends.
+- registry 0.4.6: serves `GET /api/v1/catalog`, as the production Worker
+  does.
 
 ## [0.75.0] — 2026-10-20
 

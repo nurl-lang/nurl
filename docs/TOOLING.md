@@ -260,6 +260,9 @@ wasm32-wasi (`nurl_build_wasm`), and read the installed stdlib. Stdio by
 default (`claude mcp add nurl -- nurl-mcp`); `--http` adds a
 token-authenticated network transport with code execution gated behind
 `--allow-run`, and `--read-only` strips everything but the analysis tools.
+Inline source reaches the toolchain on stdin (`nurl --stdin NAME`), so
+diagnostics name the caller's file; nurl-mcp 0.14.0 therefore needs
+toolchain 0.76.0 or newer.
 
 ## WebAssembly (`wasmbuilder` + `nwasm`)
 

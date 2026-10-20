@@ -27,7 +27,7 @@
   - **Browser playground** at `/` — Monaco editor, examples dropdown, build+run in-page via
   [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).
   - **MCP server** at `/mcp` (Streamable HTTP) — tools, resources, prompts for Claude Desktop, Cursor, Windsurf, Zed.
-  - **Bundled assets**: stdlib, examples, compiler test suite, EBNF grammar, README, ROADMAP.
+  - **Bundled assets**: stdlib, examples, compiler test suite, EBNF grammar, README, ROADMAP, `docs/`, and `formal/` (the proof's prose + probe table, also served at `/formal/*`).
   - **OpenAPI 3.1** at `/openapi.json`, Swagger UI at `/docs`.
 
   ## Quick start
