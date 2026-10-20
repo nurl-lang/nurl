@@ -42,7 +42,7 @@
           "name": "storage.modifier.nurl"
         },
         {
-          "match": "(?<![A-Za-z0-9_])(inout|sink|in)(?![A-Za-z0-9_])",
+          "match": "(?<![A-Za-z0-9_])(inout|sink|in|sync|nocapture)(?![A-Za-z0-9_])",
           "name": "storage.modifier.param.nurl"
         },
         {

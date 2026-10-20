@@ -1265,8 +1265,8 @@ handle). A negative marker outranks a positive one on the same type.
 
 **Shared mutation.** A closure run on another thread moves its captures,
 so the spawner cannot keep using a plain `Vec` a worker was handed. Only
-share handles (`Channel`, `Mutex`, `Arc`, `Locked`) are used on both
-sides.
+share handles (`Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
+`PFile`) are used on both sides.
 
 *An `Arc`'s payload is frozen once made.* `Arc` makes the reference
 count atomic, not the data: every thread holding a clone reads the
@@ -1523,9 +1523,10 @@ element to its hook and then drops the container as `*_free` does. A hook
 is for teardown the element type does not do itself (counting, logging,
 closing a foreign handle), never for releasing what the container owns.
 
-A `String` or `Vec` captured by value is a snapshot the body may modify
-locally: an assignment to it is discarded when the closure returns (the
-compiler warns), and the assigned value is dropped then.
+A `: ~` binding the body assigns, or hands to an `inout` parameter, is
+captured by pointer (§2.3): the assignment replaces the caller's value and
+drops the old one, and the closure cannot leave the frame. Any other
+capture is taken by value, as mutable as its binding.
 
 ### 7.6 Drop flags, handles and copies
 

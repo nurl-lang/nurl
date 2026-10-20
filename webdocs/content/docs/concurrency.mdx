@@ -14,7 +14,7 @@ The same borrow-checker rules cover both to share state safely.
 
 [`stdlib/std/thread.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/thread.nu)
 wraps libpthread directly: `thread_spawn`, mutexes, condition variables,
-and semaphores.
+semaphores, and `Locked [T]` for state threads share and change.
 
 ```nu
 ( thread_spawn ( @ v ) f )     → !Thread ThreadErr
@@ -34,6 +34,43 @@ share and mutate lives in a `( Locked T )` (`stdlib/std/thread.nu`), which pairs
 : ( Locked i ) shared ( locked_new [i] 0 )
 : !Thread ThreadErr t ( thread_spawn \ → v {
     ( locked_with [i] shared \ inout i val → v { = val + val 1 } )
+} )
+( thread_join ( res_unwrap t ) )
+```
+
+`locked_await` waits on a `Locked` value until a closure run on it says it
+is done (a monitor's wait): the lock is let go between runs, and
+`locked_update`, `locked_apply` and `locked_set` wake the waiters.
+
+### Atomics, reader-writer locks, positional files
+
+Three more shared handles cover what a mutex round trip serves badly.
+Every copy of one is the same object, so a thread closure captures it
+and the last copy releases it:
+
+- **`Atomic`** ([`stdlib/std/atomic.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/atomic.nu))
+  — a word changed only by atomic instructions: `atomic_load`,
+  `atomic_store`, `atomic_add`, `atomic_swap`, `atomic_cas`, `atomic_max`.
+- **`RwLocked [T]`** ([`stdlib/std/rwlock.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/rwlock.nu))
+  — many readers or one writer. A read guard (`rw_read`) lends a
+  *frozen* view — handing it to anything that would change it is a
+  compile error — and a write guard (`rw_write`) a changeable one; both
+  are released by their drop, through a panic too. A thread may take a
+  second read guard of a lock it already reads; asking for one it holds
+  for writing panics instead of waiting for itself.
+- **`PFile`** ([`stdlib/std/pfile.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/pfile.nu))
+  — a file read and written at offsets (`pfile_read_at`,
+  `pfile_write_at` into and out of slices) by any number of threads
+  without a shared position; `pfile_datasync` is a write-ahead log's
+  commit barrier.
+
+```nu
+: Atomic hits ( atomic_new 0 )
+: ( RwLocked ( Vec i ) ) table ( rw_new [( Vec i )] ( vec_new [i] ) )
+( rw_update [( Vec i )] table \ inout ( Vec i ) v → v { ( vec_push [i] v 42 ) } )
+: !Thread ThreadErr t ( thread_spawn \ → v {
+    : ( RGuard ( Vec i ) ) g ( rw_read [( Vec i )] table )
+    ( atomic_add hits ( vec_len [i] ( rguard_get [( Vec i )] g ) ) )
 } )
 ( thread_join ( res_unwrap t ) )
 ```

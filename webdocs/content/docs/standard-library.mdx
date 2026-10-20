@@ -5,7 +5,7 @@ icon: Library
 ---
 
 The standard library is plain `.nu` source. You pull it in with `$`-imports.
-No separate package step is necessary. It spans six layers (236 modules total):
+No separate package step is necessary. It spans six layers (239 modules total):
 
 | Layer | Path | Contents |
 |---|---|---|
@@ -53,13 +53,15 @@ encoding; `fmt.nu` for formatted output.
 
 ## I/O and the operating system
 
-`fs.nu` (filesystem), `mmap.nu` (`file_map` read-only memory-mapped file views),
+`fs.nu` (filesystem), `pfile.nu` (`PFile`: positional reads and writes shared
+by threads), `mmap.nu` (`file_map` read-only memory-mapped file views),
 `bufio.nu` (buffered I/O), `path.nu`, `process.nu`, `args.nu`, `env.nu` (`ext/`),
 `signal.nu`, `term.nu`, `progress.nu`, `fswatch.nu`.
 
 ## Time and concurrency
 
-`time.nu`, `thread.nu`, `channel.nu`, `async.nu`, `async_ffi.nu` — see
+`time.nu`, `thread.nu` (incl. `Locked [T]`), `atomic.nu` (`Atomic`),
+`rwlock.nu` (`RwLocked [T]`), `channel.nu`, `async.nu`, `async_ffi.nu` — see
 [Concurrency](./concurrency) for the full picture.
 
 ## Networking

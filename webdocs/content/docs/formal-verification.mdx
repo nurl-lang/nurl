@@ -21,7 +21,7 @@ The mechanization is organized into phases:
 |---|---|---|---|
 | **A1** | Core single-threaded calculus: owned `Vec` trees (a `String` is a `Vec` of bytes), moves and drop flags, `in` / `inout` / `sink`, borrows and `Slice` views, buffer reallocation (`Eff.realloc`), element drop (`Eff.drop`), function summaries (`CallT`, `FnOK`). | `A1.soundness`, `A1.memory_safe` | **Proven** (22 modules, 9,571 lines, 449 theorems) |
 | **A2** | Full single-threaded calculus: A1 + inline structs (`Ty.prod`) and enums/options (`Ty.sum`) with field-precise paths, closures and trait objects as packages (`Val.pkg`, `Rhs.pack`, `Stmt.callc`) with captures by handle and by name (`Kind.name`), panics with unwinding and `recover` (`Stmt.catchR`), the drop journal, and **complete leak freedom**. | `A2.soundness`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` | **Proven** (28 modules, 20,693 lines, 920 theorems) |
-| **A3** | Concurrency: `Send` / `Sync`, `Arc`, `Mutex`, `Locked [T]`, channels, M:N fibers — data-race freedom against the LLVM / C11 memory model. | — | Planned |
+| **A3** | Concurrency: `Send` / `Sync`, `Arc`, `Mutex`, `Locked [T]`, `RwLocked [T]` and `% Frozen`, `Atomic`, channels, M:N fibers — data-race freedom against the LLVM / C11 memory model. | — | Planned |
 | **B** | Semantic soundness of the standard library's `unsafe` foundation (`Vec`, `String`, `HashMap`, `Rc` + cycle collector, `Arc`, channels). | — | Planned |
 | **C** | Compiler verification: `nurlc` emits proof certificates for accepted programs, checked by a small verified validator. | — | Planned |
 | **D** | Codegen translation validation: drop insertion, drop flags, and the panic drop journal preserve the formal operational semantics. | — | Planned |

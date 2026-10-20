@@ -85,7 +85,7 @@ a `sink` yet; the compiler rejects it rather than risk two owners.
 
 ## What you still free by hand
 
-In safe NURL, **nothing is released by hand**. The compiler automatically drops `String`, `Vec`, owning structs, collections (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`), recursive enums (`Json`, `TomlValue`), closure environments, and **all 87 standard-library handle types** — including `TcpConn`, `TcpListener`, `TlsStream`, `UdpSocket`, `UnixConn`, `UnixListener`, `File`, `Channel`, `Mutex`, `Cond`, `ProcChild`, `FsWatch`, and `Sqlite`. Every OS and container handle wraps `( Shared T )` or `Arc` and closes or releases automatically when its last owner goes out of scope.
+In safe NURL, **nothing is released by hand**. The compiler automatically drops `String`, `Vec`, owning structs, collections (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`), recursive enums (`Json`, `TomlValue`), closure environments, and **every standard-library handle type** — including `TcpConn`, `TcpListener`, `TlsStream`, `UdpSocket`, `UnixConn`, `UnixListener`, `File`, `PFile`, `Channel`, `Mutex`, `Cond`, `Atomic`, `RwLocked`, `ProcChild`, `FsWatch`, and `Sqlite`. Every OS and container handle wraps `( Shared T )` or `Arc` and closes or releases automatically when its last owner goes out of scope.
 
 Explicit `_close` and `_free` helpers (`string_free`, `vec_free`, `file_close`, `tcp_close_conn`, `udp_close`, `chan_free`, etc.) remain only as an optional early release before the end of a scope, and `--lint` flags any call that sits right where scope-exit drop would happen anyway (`[redundant-free]`).
 
@@ -128,7 +128,8 @@ What it checks, briefly:
 - **Alias / double-free** — the checker treats an immutable copy of an owned
   binding as a move, not a second owner.
 - **Escaping closures** — you cannot return, store, or send a closure to a
-  thread if it captures a mutable struct by reference.
+  thread if it captures by reference: a `: ~` binding it assigns or hands
+  to an `inout` parameter, or a `: ~` multi-field struct.
 - **Exclusive access at a call site** — a binding you pass `inout` cannot
   also have an alias from another plain argument in the same call. The
   same holds for any container the callee may change, `inout` or not: it
@@ -141,7 +142,7 @@ What it checks, briefly:
   same problem as a free-inside-a-loop double-free in C.
 
 <Callout type="info" title="Soundness boundary and mechanized Lean 4 proof">
-Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 275 regression probes in `tools/fuzz/holes/` (`h01`–`h287`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
+Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 286 regression probes in `tools/fuzz/holes/` (`h01`–`h298`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
 </Callout>
 
 ## Threads and shared state
@@ -150,7 +151,8 @@ Sending a value across a thread boundary follows the same ownership rules:
 
 - The compiler checks `Send` / `NotSend` bounds on everything captured by a `thread_spawn` closure and rejects non-atomic handles like `Rc`.
 - `Arc` (`stdlib/std/arc.nu`) provides atomic reference counting for shared read-only payloads (`arc_get` returns an immutable view).
-- Mutable state shared across threads lives in `Locked [T]` (`locked_new`, `locked_with` in `stdlib/std/thread.nu`), which pairs an atomic reference count with a mutex so concurrent accesses are serialized safely.
+- Mutable state shared across threads lives in `Locked [T]` (`locked_new`, `locked_with` in `stdlib/std/thread.nu`), which pairs an atomic reference count with a mutex so concurrent accesses are serialized safely; `locked_await` waits until a condition on it holds.
+- State many threads read at once lives in `RwLocked [T]` (`stdlib/std/rwlock.nu`): any number of read guards, which lend frozen (read-only) views, or one write guard. A single word threads count or bump is an `Atomic` (`stdlib/std/atomic.nu`), and a file many threads read and write at offsets is a `PFile` (`stdlib/std/pfile.nu`).
 
 ## Reading NURL's compiler errors
 

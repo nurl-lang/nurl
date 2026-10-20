@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-19 · Current release: **0.74.0** · Language: **Grammar
+_Last reviewed: 2026-10-20 · Current release: **0.75.0** · Language: **Grammar
 v2.10** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -103,7 +103,11 @@ What is solid today:
   made and state threads change lives in a `Locked [T]` whose own lock its
   operations hold, so data races are inside the guarantee with no lock
   counted; marker assertions are the trusted part
-  ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.58.0 the Linux I/O path has no reactor thread:
+  ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.75.0 threads
+  share an `Atomic` word, an `RwLocked [T]` whose read guards many
+  threads hold at once and lend frozen (`% Frozen`) views, and a `PFile`
+  read and written at offsets; `locked_await` waits on a `Locked` value
+  until a condition holds. Since 0.58.0 the Linux I/O path has no reactor thread:
   an **idle worker becomes the poller** and blocks in `epoll_wait`
   itself, so a ready fiber resumes on that worker with no queue hop, no
   cross-thread wake and no migration (the Go netpoller / tokio driver
@@ -203,7 +207,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
-  is known — every one found, through probe h287, is closed; the rules for
+  is known — every one found, through probe h298, is closed; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -277,7 +281,8 @@ platform-specific shims.
   `ordmap`, `btree`, `lru`, `bitset`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
   `bigint` (arbitrary-precision integers), `decimal` (exact fixed-point).
 - **std/runtime services** — `async`, `thread` (incl. `Locked [T]`,
-  shared state threads change), `par` (`par_map_index`), `channel`, `arc`,
+  shared state threads change, and `locked_await`), `atomic` (`Atomic`),
+  `rwlock` (`RwLocked [T]`, frozen read guards), `par` (`par_map_index`), `channel`, `arc`,
   `rc`, `arena`, `mmap` (a read-only file mapping lent as a checked
   view), `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
   `log` (text + JSON), `time` (incl. local time via the platform's zone,
@@ -294,7 +299,8 @@ platform-specific shims.
 - **std/compression** — `zstd` (pure-NURL RFC 8878 Zstandard decompressor & compressor up to level 19 optimal parser, no libzstd), `deflate` (RFC 1951 + table-driven CRC-32).
 - **std/IO & net** — `fs` (incl. streaming, `stat`/`lstat`/`fstat` + `statvfs`,
   glob matching, `readlink`, `file_sync`, `dir_sync`,
-  `file_truncate`, `set_permissions`, `set_times`), `path` (typed),
+  `file_truncate`, `set_permissions`, `set_times`), `pfile` (positional
+  reads and writes shared by threads), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
   `protobuf` (checked Protocol Buffers wire readers/writers,
@@ -325,7 +331,8 @@ platform-specific shims.
   an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
-  packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
+  packages `psql` and `redis` (pure NURL — no libpq, no hiredis), and
+  `nurldb` is a multi-threaded relational database in safe NURL.
 - **ext/AI & agents** — `mcp` (+ `server` — the one server framework, on
   which every MCP server in the tree is built since 0.60.0, with its wire
   frozen by `compiler/tests/mcp_server_contract.nu`; `client`, `http`,
@@ -481,7 +488,8 @@ platform-specific shims.
   resource-server guard in pure NURL), PKI (`pki-server` — a private CA
   with a classical *or* post-quantum signing key), database clients
   (`psql`, `redis`
-  — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
+  — pure NURL), a relational database (`nurldb` — SQL, MVCC, a write-ahead
+  log and B+tree indexes, multi-threaded, no `unsafe` function), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
   `nurl-mcp`).
   Installed tools carry runtime data via the manifest's `[install] assets`
   mechanism (staged into `<prefix>/share/<name>/`).
@@ -556,11 +564,14 @@ new language features.
   callee releases it — a caller hands over its own string or a copy — so
   nothing is released by hand.
 - [x] **Close the holes found since** — h180–h273 while closing the 0.72.0
-  review's (0.73.0), and h274–h287 (0.74.0): ten found by modelling
+  review's (0.73.0), h274–h287 (0.74.0): ten found by modelling
   closures for the proof below — a closure that changes a capture, run
   where something else holds a view of it — and four by making closure
   types generic arguments (an option or result of a closure that owned
-  nothing, a closure read out of a field). No hole is known.
+  nothing, a closure read out of a field); and h288–h298 (0.75.0), found
+  building a multi-threaded database (`nurldb`): frozen views, guards in
+  structs and argument temporaries on the panic path, closures replaced
+  through `inout`. No hole is known.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

@@ -158,6 +158,8 @@ Built-in lifecycle and marker traits hook into the compiler's ownership and conc
 - `Drop` (`@ drop T self → v`) — runs automatically when an owned value leaves scope.
 - `Copy` — marks an owning type as implicitly deep-cloneable on copy.
 - `Send` / `NotSend` — controls whether a type may cross a `thread_spawn` boundary (`Rc` implements `NotSend`).
+- `Sync` / `NotSync` — controls whether two threads may reach one value at the same time.
+- `Frozen` — what a value of the type lends is read-only (an `RwLocked` read guard).
 - `Resource` — marks an linear/affine handle that must be consumed rather than silently dropped.
 
 ### Supertraits

@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.9. This document is the
+**Status:** language specification, grammar v2.10. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -98,6 +98,9 @@ and remain valid identifier characters elsewhere:
 - `in` `inout` `sink` — at the start of a function parameter; control
   the parameter passing convention (§7.2). `inout` is additionally
   banned as a parameter name.
+- `in` `sync` `nocapture` — at the start of a foreign (`&`) function's
+  pointer or string parameter; say what the C function does with the
+  argument (§7.2).
 
 ### 2.5 Literals
 
@@ -1127,7 +1130,7 @@ emitted. Defaults therefore preserve the same calling and ownership
 conventions as methods written in the impl.
 
 **Marker traits — `Send` / `Sync`.** A trait with no methods carries no
-behaviour; an impl of one is a pure *assertion about the type*. Four such
+behaviour; an impl of one is a pure *assertion about the type*. Five such
 markers are declared in `stdlib/core/marker.nu` and given meaning by the
 compiler:
 
@@ -1632,10 +1635,15 @@ at the next 1–3 tokens:
 | Lookahead | Form |
 |---|---|
 | `→` | closure, zero params |
-| `TYPE_KW` / `*` / `?` / `[` / `!` | closure, leading param type |
-| `(` `@` | closure, fn-type param |
+| `inout` | closure, `inout` first param |
+| `TYPE_KW` / `*` / `?` / `[` / `!` / a type name | closure, leading param type |
+| `(` then `@`, `TYPE_KW`, `*`, `?`, `??`, `[`, `!`, `\|` or a type name | closure, parenthesised param type |
 | `IDENT IDENT →` | closure, single named param |
 | anything else | try-propagate |
+
+A type name is a declared struct or enum, a generic instance, `Vec`, or a
+generic struct's own name (`\ ( Slice u ) s → …`). None of them can be
+called, so none of them starts a `\ ( call )` try-expression.
 
 ```
 : (@ i i) sq \ i x → i { * x x }     // closure
@@ -2477,16 +2485,17 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.9** (the `raw` caller-vouched
-prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
+This document corresponds to **grammar v2.10** (foreign-parameter markers
+`in` / `sync` / `nocapture`, §7.2, and a foreach over a field, §5.4; v2.9
+the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
 `v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4
 `break` / `continue`; v2.3 dynamic trait objects). The authoritative grammar lives in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.9 conformant" if it accepts every program the EBNF
+A compiler is "v2.10 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.9 portable" if it relies
+the semantics defined here. A program is "v2.10 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.
