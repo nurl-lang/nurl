@@ -755,67 +755,10 @@ version = "0.0.0"
     ? == ( string_len dd ) 0 {
         ^ ( mcp_tool_result_error `neither NURL_DOCS nor NURL_STDLIB is set — run via the installed toolchain shims, or export NURL_DOCS to a docs/ directory` )
     } {}
-
-    // query= — search every SECTION of every document. The answer to
-    // "who frees a String?" is one section, not the 44 KB file it lives in.
-    ? & == ( nurl_str_len name ) 0 > ( nurl_str_len query ) 0 {
-        : ( Vec i ) hits ( vec_new [i] )
-        ( vec_push [i] hits 0 )
-        : String text ( msearch_docs_query ( string_data dd ) query hits )
-        : Json r ( mcp_tool_result_text ( string_data text ) )
-        ^ r
-    } {}
-
-    ? == ( nurl_str_len name ) 0 {
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : Json r ( mcp_tool_result_text ( string_data listing ) )
-        ^ r
-    } {}
-
-    // name= + outline=true — the heading map, so a section can be picked
-    // without reading the document to find one.
-    ? outline {
-        : String o ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o ) 0 {
-            : Json r ( mcp_tool_result_text ( string_data o ) )
-            ^ r
-        } {}
-    } {}
-
-    // name= + section= — one section. A miss answers with the outline.
-    ? > ( nurl_str_len section ) 0 {
-        : String sec ( msearch_docs_section ( string_data dd ) name section )
-        ? > ( string_len sec ) 0 {
-            : Json r ( mcp_tool_result_text ( string_data sec ) )
-            ^ r
-        } {}
-        : String o2 ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o2 ) 0 {
-            : String msg ( string_with_cap + ( string_len o2 ) 128 )
-            ( string_push_str msg `no section matches '` )
-            ( string_push_str msg section )
-            ( string_push_str msg `'. ` )
-            ( string_push_str msg ( string_data o2 ) )
-            : Json e ( mcp_tool_result_error ( string_data msg ) )
-            ^ e
-        } {}
-    } {}
-
-    : String text ( msearch_docs_read ( string_data dd ) name offset )
-    ? == ( string_len text ) 0 {
-        // Unknown name → reply with what DOES exist, so the model's next
-        // call is the right one instead of another guess.
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : String msg ( string_with_cap + ( string_len listing ) 128 )
-        ( string_push_str msg `no document matches '` )
-        ( string_push_str msg name )
-        ( string_push_str msg `'. ` )
-        ( string_push_str msg ( string_data listing ) )
-        : Json e ( mcp_tool_result_error ( string_data msg ) )
-        ^ e
-    } {}
-    : Json r ( mcp_tool_result_text ( string_data text ) )
-    ^ r
+    ?? ( msearch_docs_tool ( string_data dd ) name section query outline offset ) {
+        T text → { ^ ( mcp_tool_result_text ( string_data text ) ) }
+        F why → { ^ ( mcp_tool_result_error ( string_data why ) ) }
+    }
 }
 
 @ nm_tool_api Json args → Json {
@@ -951,10 +894,10 @@ version = "0.0.0"
 
 @ nm_schema_docs → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` F )
+    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive), or the mechanized proof's: 'formal/CLAIM.md' (what is proved), 'formal/RULES.md' (formal rule ↔ compiler rule), 'formal/corpus/map.tsv' (hole probe → formal rule/phase → nurlc verdict; with query= it returns the matching rows). Omit to list every document.` F )
     ( mcp_schema_prop sc `section` `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` F )
     ( mcp_schema_prop sc `outline` `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` F )
-    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` F )
+    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. With 'name': search that one document — the rows of a table (formal/corpus/map.tsv query='h274').` F )
     ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` F )
     ^ sc
 }
@@ -1061,7 +1004,7 @@ version = "0.0.0"
     ( nm_schema_name ) T F T F
     \ Json a → Json { ^ ( nm_tool_read_stdlib a ) } )
     ( mcp_server_add_tool_full srv `nurl_docs`
-    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers — plus formal/, the mechanized memory-safety proof (CLAIM.md, RULES.md, and the probe table corpus/map.tsv). Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline=/query= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
     ( nm_schema_docs ) T F T F
     \ Json a → Json { ^ ( nm_tool_docs a ) } )
     ( mcp_server_add_tool_full srv `nurl_api`
@@ -1177,6 +1120,9 @@ version = "0.0.0"
     // Built after the policy globals are set: which tools exist is a
     // function of --read-only / --allow-run, and the server is
     // registration-frozen once it starts answering.
+    // Registry answers (nurl_api's package footer, nurl_grep packages,
+    // package=) are kept ten minutes — made here, before --http's workers.
+    ( msearch_cache_init )
     : McpServer srv ( nm_server )
 
     : ~ i rc 0

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurl_str_find_from`** (core/string.nu): the first match at or after
+  a byte offset, as an index into the whole string — the find-every-match
+  loop without stepping a raw pointer into the haystack.
+
 ### Fixed
 
 - **Playground build results name the caller's file, not the server's
@@ -36,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`nurl_docs` serves `formal/`** — the mechanized proof the docs cite
+  as `../formal/`: `formal/CLAIM.md`, `formal/RULES.md`, `BLUEPRINT.md`,
+  `README.md`, and the probe table `formal/corpus/map.tsv`, whose rows a
+  query returns as `probe=… rule=… phase=… nurlc=…`. `name=` with
+  `query=` now searches that one document (it was ignored). The installed
+  toolchain ships them as `docs/formal/`, the playground image as
+  `/opt/nurl/formal` (and serves `/formal/*`, where the docs' links land).
+- **`nurl_read_roadmap` reads by heading** — `outline`, `section`, `query`
+  — with the same engine as `nurl_docs`, instead of 43 KB on every call.
+  ROADMAP.md's "What is solid today" bullets are `###` sections, so
+  `section='memory & safety'` is 2 KB. Both servers' `nurl_docs` now run
+  one shared implementation (`msearch_docs_tool`).
 - **`nurl_api package=` opens with the package's module index** — each
   module's surface size and opening sentence — and `module=` (one, or
   several as `txn,db`) renders surfaces whole. A package larger than one
@@ -44,6 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovery code were past the cut, invisible. An unknown module is a tool
   error that lists the package's modules. Both MCP servers (playground and
   nurl-mcp).
+- **The MCP search tools stop waiting on the registry.** Every
+  `nurl_api` query looked each term up in the package registry (the
+  exact-name footer), `nurl_grep` searched it, `package=` fetched a
+  tarball — an HTTPS round trip each, 0.7 s apiece from a cloud
+  container against ~5 ms for the local search. Both servers now keep
+  the registry's answers for ten minutes (`msearch_cache_init`, called
+  from main): a repeated `nurl_api` query 1.4 s → 50 ms, `nurl_grep`
+  0.7 s → 28 ms, and `module=` after a package index is free.
+- **Docs search is twice as fast** (6.7 → 3.3 ms over a corpus 12 %
+  larger): whole-word matching finds candidates with `strstr` instead of
+  comparing byte by byte at every offset; the same matcher ranks
+  `nurl_api`'s OR pass. Resolving a document's name no longer measures
+  every file's size.
 - **A build result sends its log once.** `stderr` is the whole log, every
   stage in order; the per-stage copies beside it (`nurlc_stderr`,
   `clang_stderr`, `clang_stdout`) are gone — every failed build cost an

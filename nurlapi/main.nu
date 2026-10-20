@@ -2925,6 +2925,10 @@ i clang_rc s build_stdout s build_stderr → v {
 
 @ h_bench_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `bench/` ) }
 
+// formal/: the proof's prose and probe table (the image carries no Lean
+// sources). docs/MEMORY.md links ../formal/RULES.md; this is where it lands.
+@ h_formal_file HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_subdir params `formal/` ) }
+
 // ── Doc passthrough — README.md / grammar.ebnf ────────────────────
 
 @ h_readme HttpRequest req Params params → HttpResponse {
@@ -4731,78 +4735,42 @@ unsafe @ __uk_exit_code s log → i {
     : b outline ( __mcp_args_get_bool `outline` args F )
     : i offset ( __mcp_args_get_int `offset` args 0 )
     : String dd ( get_docs_dir )
+    ?? ( msearch_docs_tool ( string_data dd ) name section query outline offset ) {
+        T text → { ^ ( __mcp_result_text ( string_data text ) ) }
+        F why → { ^ ( __mcp_result_error ( string_data why ) ) }
+    }
+}
 
-    // query= — search every SECTION of every document. This is the
-    // answer to "who frees a String?": one section, not the 44 KB file
-    // that happens to contain it.
-    ? & == ( nurl_str_len name ) 0 > ( nurl_str_len query ) 0 {
-        : ( Vec i ) hits ( vec_new [i] )
-        ( vec_push [i] hits 0 )
-        : String text ( msearch_docs_query ( string_data dd ) query hits )
-        : Json r ( __mcp_result_text ( string_data text ) )
-        ^ r
-    } {}
+// ── nurl_read_roadmap — ROADMAP.md by heading ──────────────────────
+//
+// ROADMAP.md is ~43 KB; returned whole on every call, "is X planned?"
+// cost the entire file. The same outline/section/query engine as
+// nurl_docs: no arguments still returns the whole file.
+@ __mcp_tool_roadmap Json args → Json {
+    : String fp ( get_roadmap_path )
+    ?? ( msearch_file_tool ( string_data fp ) `ROADMAP.md`
+    ( __mcp_args_get `section` args `` ) ( __mcp_args_get `query` args `` )
+    ( __mcp_args_get_bool `outline` args F ) ( __mcp_args_get_int `offset` args 0 ) ) {
+        T text → { ^ ( __mcp_result_text ( string_data text ) ) }
+        F why → { ^ ( __mcp_result_error ( string_data why ) ) }
+    }
+}
 
-    ? == ( nurl_str_len name ) 0 {
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : Json r ( __mcp_result_text ( string_data listing ) )
-        ^ r
-    } {}
-
-    // name= + outline=true — the heading map, so a model can pick a
-    // section instead of paging a whole document to find one.
-    ? outline {
-        : String o ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o ) 0 {
-            : Json r ( __mcp_result_text ( string_data o ) )
-            ^ r
-        } {}
-    } {}
-
-    // name= + section= — one section, bounded by the next heading of
-    // the same or higher level. A miss answers with the outline, so the
-    // next call is informed rather than another guess.
-    ? > ( nurl_str_len section ) 0 {
-        : String sec ( msearch_docs_section ( string_data dd ) name section )
-        ? > ( string_len sec ) 0 {
-            : Json r ( __mcp_result_text ( string_data sec ) )
-            ^ r
-        } {}
-        : String o ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o ) 0 {
-            : String msg ( string_with_cap + ( string_len o ) 128 )
-            ( string_push_str msg `no section matches '` )
-            ( string_push_str msg section )
-            ( string_push_str msg `'. ` )
-            ( string_push_str msg ( string_data o ) )
-            : Json e ( __mcp_result_error ( string_data msg ) )
-            ^ e
-        } {}
-    } {}
-
-    : String text ( msearch_docs_read ( string_data dd ) name offset )
-    ? == ( string_len text ) 0 {
-        // Unknown name → answer with what DOES exist rather than a bare
-        // error, so the model's next call is the right one.
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : String msg ( string_with_cap + ( string_len listing ) 128 )
-        ( string_push_str msg `no document matches '` )
-        ( string_push_str msg name )
-        ( string_push_str msg `'. ` )
-        ( string_push_str msg ( string_data listing ) )
-        : Json e ( __mcp_result_error ( string_data msg ) )
-        ^ e
-    } {}
-    : Json result ( __mcp_result_text ( string_data text ) )
-    ^ result
+@ __mcp_schema_roadmap → Json {
+    : Json sc ( mcp_schema_obj )
+    ( mcp_schema_prop sc `outline` `boolean` `Return the heading map (section titles + byte sizes) instead of the text — the cheap first call.` F )
+    ( mcp_schema_prop sc `section` `string` `Return ONE section — by heading words ('memory & safety', 'toward 1.0', 'non-goals') or number. A miss replies with the outline.` F )
+    ( mcp_schema_prop sc `query` `string` `Search the roadmap's sections (whole words, ranked; heading hits outrank body hits) and return the best with their section= keys — e.g. 'unikernel arm64'.` F )
+    ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging the whole file (no other argument).` F )
+    ^ sc
 }
 
 @ __mcp_schema_docs → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` F )
+    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive), or the mechanized proof's: 'formal/CLAIM.md' (what is proved), 'formal/RULES.md' (formal rule ↔ compiler rule), 'formal/corpus/map.tsv' (hole probe → formal rule/phase → nurlc verdict; with query= it returns the matching rows). Omit to list every document.` F )
     ( mcp_schema_prop sc `section` `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` F )
     ( mcp_schema_prop sc `outline` `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` F )
-    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` F )
+    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. With 'name': search that one document — the rows of a table (formal/corpus/map.tsv query='h274').` F )
     ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` F )
     ^ sc
 }
@@ -5098,11 +5066,11 @@ unsafe @ __uk_exit_code s log → i {
     ( __mcp_schema_empty ) T F T F
     \ Json a → Json { ^ ( __mcp_read_owned_path ( get_readme_path ) ) } )
     ( mcp_server_add_tool_full srv `nurl_read_roadmap`
-    `Return ROADMAP.md verbatim — current development plan + ship log.`
-    ( __mcp_schema_empty ) T F T F
-    \ Json a → Json { ^ ( __mcp_read_owned_path ( get_roadmap_path ) ) } )
+    `ROADMAP.md — where NURL stands and where it is going (~43 KB). outline=true is the heading map; section= one section ('memory & safety', 'toward 1.0'); query= searches its sections. No arguments returns the whole file.`
+    ( __mcp_schema_roadmap ) T F T F
+    \ Json a → Json { ^ ( __mcp_tool_roadmap a ) } )
     ( mcp_server_add_tool_full srv `nurl_docs`
-    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers — plus formal/, the mechanized memory-safety proof (CLAIM.md, RULES.md, and the probe table corpus/map.tsv). Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline=/query= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
     ( __mcp_schema_docs ) T F T F
     \ Json a → Json { ^ ( __mcp_tool_docs a ) } )
     ( mcp_server_add_tool_full srv `nurl_changelog`
@@ -5326,6 +5294,10 @@ unsafe @ gate_free → v {
         }
     }
 
+    // Registry answers (nurl_api's package footer, nurl_grep packages,
+    // package=) are kept ten minutes — made here, before any worker runs.
+    ( msearch_cache_init )
+
     : i port ( get_port )
     : Router r ( router_new )
     ? T {
@@ -5352,6 +5324,7 @@ unsafe @ gate_free → v {
             ( router_get r `/docs/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_docs_file req params ) } )
             ( router_get r `/spec/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_spec_file req params ) } )
             ( router_get r `/bench/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_bench_file req params ) } )
+            ( router_get r `/formal/*path` \ HttpRequest req Params params → HttpResponse { ^ ( h_formal_file req params ) } )
             ( router_get r `/README.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `README.md` ) } )
             ( router_get r `/ROADMAP.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `ROADMAP.md` ) } )
             ( router_get r `/CHANGELOG.md` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_repo_doc `CHANGELOG.md` ) } )

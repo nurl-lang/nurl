@@ -148,7 +148,14 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   `name=X section='7.4'` is one section — a few KB rather than MEMORY.md's
   ~50 KB, and the only way to read part of `spec.md`, which exceeds the
   per-call cap. `name=` alone still returns the whole document, `offset=`
-  pages it.
+  pages it. `formal/` — the mechanized memory-safety proof the docs cite
+  — is part of the corpus: `formal/CLAIM.md` (what is proved),
+  `formal/RULES.md` (each formal rule ↔ the compiler rule), and the probe
+  table `formal/corpus/map.tsv`, whose rows `name=… query=h274` returns
+  (`probe=… rule=… phase=… nurlc=rejected`). `name=` with `query=`
+  searches that one document.
+- **`nurl_read_roadmap`** — ROADMAP.md by heading, the same way:
+  `outline=true`, `section='memory & safety'`, `query=`.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,
   `nurl://readme`, `nurl://stdlib/<path>`, `nurl://example/<name>`, …) for
   clients that prefer resource semantics.

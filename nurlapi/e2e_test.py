@@ -536,6 +536,32 @@ def t_tools_call_docs(c: Client) -> None:
     assert_true("unknown name lists what exists", "document(s) under docs/" in _tool_text(env))
 
 
+    # formal/ — the mechanized proof the docs cite as ../formal/ — is part
+    # of the corpus: listed, readable by that very link, and its probe
+    # table answers row queries.
+    env = _tool_call(c, "nurl_docs", {})
+    text = _tool_text(env)
+    assert_true("listing names formal/RULES.md", "formal/RULES.md" in text)
+    assert_true("listing names the probe table", "formal/corpus/map.tsv" in text)
+    env = _tool_call(c, "nurl_docs", {"name": "../formal/CLAIM.md"})
+    assert_true("the docs' own link resolves", not env.get("result", {}).get("isError")
+                and "formal/CLAIM.md" in _tool_text(env), _tool_text(env)[:200])
+    env = _tool_call(c, "nurl_docs", {"name": "formal/corpus/map.tsv", "query": "h274"})
+    text = _tool_text(env)
+    assert_true("table query returns the probe row", "probe=h274_" in text and "nurlc=" in text, text[:300])
+
+    # nurl_read_roadmap reads by heading like nurl_docs.
+    env = _tool_call(c, "nurl_read_roadmap", {"outline": True})
+    text = _tool_text(env)
+    assert_true("roadmap outline is small", 0 < len(text) < 4000, f"{len(text)} bytes")
+    assert_true("roadmap outline lists Memory & safety", "Memory & safety" in text)
+    env = _tool_call(c, "nurl_read_roadmap", {"section": "memory & safety"})
+    text = _tool_text(env)
+    assert_true("roadmap section is one section", "› Memory & safety" in text and len(text) < 8000, f"{len(text)} bytes")
+    env = _tool_call(c, "nurl_read_roadmap", {"section": "zzz-no-such"})
+    assert_true("roadmap section miss is an error with the outline",
+                bool(env.get("result", {}).get("isError")) and "Toward 1.0" in _tool_text(env))
+
 def t_tools_call_api(c: Client) -> None:
     print("\n[MCP] tools/call nurl_api (module / query / errors)")
 

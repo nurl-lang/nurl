@@ -258,6 +258,11 @@ COPY --from=builder /src/CONTRIBUTING.md         /opt/nurl/CONTRIBUTING.md
 # Whole docs/ tree so every topic doc the README links to renders
 # instead of 404ing; bench/ for the benchmark pages.
 COPY --from=builder /src/docs                    /opt/nurl/docs
+# The mechanized proof's prose and probe table — the docs link them as
+# ../formal/, and nurl_docs serves them as formal/<file>. Not the Lean
+# sources.
+COPY --from=builder /src/formal/*.md             /opt/nurl/formal/
+COPY --from=builder /src/formal/corpus/map.tsv   /opt/nurl/formal/corpus/map.tsv
 COPY --from=builder /src/bench                   /opt/nurl/bench
 COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
 COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE

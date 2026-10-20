@@ -16,9 +16,18 @@
 //     word-boundary RANKING (boundary-clean lines first, in-word tail
 //     labeled; word=T drops the tail), plus registry name+description
 //     search
-//   * msearch_docs_list / msearch_docs_resolve / msearch_docs_read —
-//     the docs/ prose tree (MEMORY.md, CRYPTO.md, …): what exists, and
-//     one document by a forgiving name
+//   * msearch_api_package — a published package's module index, or
+//     the surfaces of the modules asked for
+//   * msearch_docs_tool  — nurl_docs: the docs/ prose tree (MEMORY.md,
+//     CRYPTO.md, …) and formal/ (the mechanized proof + its probe
+//     table) — the index, one document by a forgiving name, its
+//     outline, one section, a search of every section or of one
+//     document (a table's rows); msearch_docs_list / _resolve / _read /
+//     _outline / _section / _query are its pieces
+//   * msearch_file_tool  — the same outline/section/query/page reading
+//     of one file (ROADMAP.md)
+//   * msearch_cache_init — keep the registry's answers for ten minutes
+//     (call once from main, before serving)
 //   * msearch_walk_nu_files / msearch_walk_md_files — recursive
 //     listers ({name,path,bytes} into a Json array), shared by the
 //     corpus walkers and list tools
@@ -33,6 +42,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/time.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
@@ -41,6 +52,85 @@ $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/nurldoc.nu`
 $ `stdlib/core/slice.nu`
+
+// ── Registry responses, cached ───────────────────────────────────────
+//
+// Every nurl_api query looks its terms up in the registry (the exact-name
+// footer, the 0-hit widening), nurl_grep searches its names, and package=
+// fetches a tarball: one HTTPS round trip each — measured at 0.7 s apiece
+// from a cloud container, against 5 ms for the whole local search, so a
+// two-term query spent 1.5 s waiting on the network. A package is read in
+// two steps (its index, then module=), and agents ask about the same names
+// again. So a server keeps the registry's 200 answers for ten minutes.
+// msearch_cache_init turns that on; call it once from main before any
+// request is served — the table and its lock are made while the process
+// is single-threaded, as std/net's TLS listener table is. Without it every
+// lookup goes to the network, as before.
+: MsCached { String url ( Vec u ) body i at }
+
+: ~ ( Vec MsCached ) g_ms_cache 0
+: ~ Mutex g_ms_cache_mu 0
+: ~ b g_ms_cache_on F
+
+@ msearch_cache_init → v {
+    ? g_ms_cache_on { ^ } {}
+    = g_ms_cache ( vec_new [MsCached] )
+    = g_ms_cache_mu ( mutex_new )
+    = g_ms_cache_on T
+}
+
+@ __ms_cache_ttl_ms → i { ^ 600000 }
+
+// At most this many answers are kept; the oldest goes first.
+@ __ms_cache_cap → i { ^ 256 }
+
+// The body of a 200 answer to GET `url`, from the cache while it is fresh.
+// None for any other answer or a failed request (neither is cached).
+@ __ms_reg_get s url → ?( Vec u ) {
+    : i now ( now_ms )
+    ? g_ms_cache_on {
+        ( mutex_lock g_ms_cache_mu )
+        : i n ( vec_len [MsCached] g_ms_cache )
+        : ~ i k 0
+        : ~ i hit - 0 1
+        ~ & < k n < hit 0 {
+            : MsCached e ( vec_at [MsCached] g_ms_cache k )
+            ? & != 0 ( nurl_str_eq ( string_data . e url ) url ) < - now . e at ( __ms_cache_ttl_ms ) { = hit k } {}
+            = k + k 1
+        }
+        ? >= hit 0 {
+            : MsCached e2 ( vec_at [MsCached] g_ms_cache hit )
+            : ( Vec u ) copy ( vec_clone [u] . e2 body )
+            ( mutex_unlock g_ms_cache_mu )
+            ^ @ ?( Vec u ) { T copy }
+        } {}
+        ( mutex_unlock g_ms_cache_mu )
+    } {}
+    : !Response HttpErr r ( http_get url )
+    ?? r {
+        T resp → {
+            ? != ( http_status resp ) 200 { ^ @ ?( Vec u ) { F } } {}
+            : ( Vec u ) body ( http_body_bytes resp )
+            ? g_ms_cache_on {
+                ( mutex_lock g_ms_cache_mu )
+                // Drop what has gone stale (and this url's stale copy),
+                // then the oldest while the table is full.
+                : ~ i j 0
+                ~ < j ( vec_len [MsCached] g_ms_cache ) {
+                    : MsCached old ( vec_at [MsCached] g_ms_cache j )
+                    ? | >= - now . old at ( __ms_cache_ttl_ms ) != 0 ( nurl_str_eq ( string_data . old url ) url ) {
+                        ( vec_remove [MsCached] g_ms_cache j )
+                    } { = j + j 1 }
+                }
+                ? >= ( vec_len [MsCached] g_ms_cache ) ( __ms_cache_cap ) { ( vec_remove [MsCached] g_ms_cache 0 ) } {}
+                ( vec_push [MsCached] g_ms_cache @ MsCached { ( string_from url ) ( vec_clone [u] body ) now } )
+                ( mutex_unlock g_ms_cache_mu )
+            } {}
+            ^ @ ?( Vec u ) { T body }
+        }
+        F _ → { ^ @ ?( Vec u ) { F } }
+    }
+}
 
 // The registry to search: $NURL_REGISTRY, else the public default.
 
@@ -82,6 +172,12 @@ $ `stdlib/core/slice.nu`
 // a globally sorted output (top-level "foo.nu" comes before subdir
 // "g/bar.nu" iff "foo.nu" < "g" lexicographically).
 @ __ms_walk_ext Json arr s root_dir s rel_prefix s ext → v {
+    ( __ms_walk_ext_sized arr root_dir rel_prefix ext T )
+}
+
+// …with `sized` F: names only, no `bytes` — a file's size costs an open,
+// a seek and a close, and a caller resolving a name needs none of them.
+@ __ms_walk_ext_sized Json arr s root_dir s rel_prefix s ext b sized → v {
     : String full ( __ms_join_or_root root_dir rel_prefix )
     : !( Vec String ) IoErr dr ( dir_list ( string_data full ) )
     ?? dr {
@@ -96,7 +192,13 @@ $ `stdlib/core/slice.nu`
                     T name → {
                         : String child_rel ( __ms_join_or_root rel_prefix ( string_data name ) )
                         : String child_full ( path_join ( string_data full ) ( string_data name ) )
-                        ? ( string_ends_with name ext ) {
+                        ? & ( string_ends_with name ext ) ! sized {
+                            : Json o0 ( json_obj_new )
+                            ( json_obj_set o0 `name` ( json_str_lit ( string_data child_rel ) ) )
+                            ( json_obj_set o0 `path` ( json_str_lit ( string_data child_rel ) ) )
+                            ( json_arr_push arr o0 )
+                        } {}
+                        ? & ( string_ends_with name ext ) sized {
                             : !i IoErr sz ( file_size ( string_data child_full ) )
                             ?? sz {
                                 T bytes → {
@@ -108,10 +210,11 @@ $ `stdlib/core/slice.nu`
                                 }
                                 F _ → {}
                             }
-                        } {
+                        } {}
+                        ? ! ( string_ends_with name ext ) {
                             // Try to recurse — if it's a directory, dir_list succeeds.
-                            ( __ms_walk_ext arr root_dir ( string_data child_rel ) ext )
-                        }
+                            ( __ms_walk_ext_sized arr root_dir ( string_data child_rel ) ext sized )
+                        } {}
                     }
                     F _ → {}
                 }
@@ -290,10 +393,10 @@ $ `stdlib/core/slice.nu`
                     ( string_push_str url `api/v1/search?q=` )
                     : String enc ( url_percent_encode ( string_data t ) )
                     ( string_push_str url ( string_data enc ) )
-                    : !Response HttpErr r ( http_get ( string_data url ) )
-                    ?? r {
-                        T resp → {
-                            ?? ( json_parse ( http_body_str resp ) ) {
+                    ?? ( __ms_reg_get ( string_data url ) ) {
+                        T resp_bytes → {
+                            : String resp_body ( bytes_to_str resp_bytes )
+                            ?? ( json_parse ( string_data resp_body ) ) {
                                 T root → {
                                     ?? ( json_obj_get root `results` ) {
                                         T arr → {
@@ -385,10 +488,10 @@ $ `stdlib/core/slice.nu`
                     ( string_push_str url `api/v1/search?q=` )
                     : String enc ( url_percent_encode ( string_data t ) )
                     ( string_push_str url ( string_data enc ) )
-                    : !Response HttpErr r ( http_get ( string_data url ) )
-                    ?? r {
-                        T resp → {
-                            ?? ( json_parse ( http_body_str resp ) ) {
+                    ?? ( __ms_reg_get ( string_data url ) ) {
+                        T resp_bytes → {
+                            : String resp_body ( bytes_to_str resp_bytes )
+                            ?? ( json_parse ( string_data resp_body ) ) {
                                 T root → {
                                     ?? ( json_obj_get root `results` ) {
                                         T arr → {
@@ -499,10 +602,10 @@ $ `stdlib/core/slice.nu`
     ( string_push_str url `api/v1/search?q=` )
     : String enc ( url_percent_encode pattern )
     ( string_push_str url ( string_data enc ) )
-    : !Response HttpErr r ( http_get ( string_data url ) )
-    ?? r {
-        T resp → {
-            : s body ( http_body_str resp )
+    ?? ( __ms_reg_get ( string_data url ) ) {
+        T resp_bytes → {
+            : String resp_body ( bytes_to_str resp_bytes )
+            : s body ( string_data resp_body )
             ?? ( json_parse body ) {
                 T root → {
                     ?? ( json_obj_get root `results` ) {
@@ -788,23 +891,19 @@ $ `stdlib/core/slice.nu`
     : i n ( nurl_str_len hay )
     : i m ( nurl_str_len pat )
     ? | == m 0 > m n { ^ 0 } {}
+    : ( Slice u ) hv ( slice_of_str hay )
     : ~ i cnt 0
     : ~ i k 0
+    // libc's strstr finds each candidate; only the boundary test is ours.
     ~ <= k - n m {
-        : ~ b hit T
-        : ~ i j 0
-        ~ & hit < j m {
-            ? != ( nurl_str_at hay n + k j ) ( nurl_str_at pat m j ) { = hit F } {}
-            = j + j 1
-        }
-        ? hit {
-            : ~ b lb T
-            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_at hay n - k 1 ) ) } {}
-            : ~ b rb T
-            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_at hay n + k m ) ) } {}
-            ? & lb rb { = cnt + cnt 1 } {}
-        } {}
-        = k + k 1
+        : i at ( nurl_str_find_from hay k pat )
+        ? < at 0 { ^ cnt } {}
+        : ~ b lb T
+        ? > at 0 { = lb ! ( __ms_grep_alpha ( slice_byte hv - at 1 ) ) } {}
+        : ~ b rb T
+        ? < + at m n { = rb ! ( __ms_grep_alpha ( slice_byte hv + at m ) ) } {}
+        ? & lb rb { = cnt + cnt 1 } {}
+        = k + at 1
     }
     ^ cnt
 }
@@ -1382,10 +1481,10 @@ $ `stdlib/core/slice.nu`
     ( string_push_str u name )
     ( string_push_str u `.json` )
     : ~ String out ( string_new )
-    : !Response HttpErr r ( http_get ( string_data u ) )
-    ?? r {
-        T resp → {
-            ?? ( json_parse ( http_body_str resp ) ) {
+    ?? ( __ms_reg_get ( string_data u ) ) {
+        T resp_bytes → {
+            : String resp_body ( bytes_to_str resp_bytes )
+            ?? ( json_parse ( string_data resp_body ) ) {
                 T root → {
                     ?? ( json_obj_get root `versions` ) {
                         T arr → {
@@ -1424,11 +1523,8 @@ $ `stdlib/core/slice.nu`
 // name. F when the tarball cannot be fetched or read.
 @ __ms_package_surfaces s regbase s name s version ( Vec String ) names ( Vec String ) mds → b {
     : String url ( __ms_tarball_url regbase name version )
-    : !Response HttpErr r ( http_get ( string_data url ) )
-    ?? r {
-        T resp → {
-            ? != ( http_status resp ) 200 { ^ F } {}
-            : ( Vec u ) gz ( http_body_bytes resp )
+    ?? ( __ms_reg_get ( string_data url ) ) {
+        T gz → {
             ?? ( gzip_decompress gz ) {
                 T raw → {
                     ?? ( tar_parse raw ) {
@@ -1695,6 +1791,167 @@ $ `stdlib/core/slice.nu`
 // expose the tree as one tool: no `name` lists what exists, a `name`
 // returns that document verbatim.
 
+// formal/ — the mechanized proof's own prose (CLAIM.md: what is proved;
+// RULES.md: which compiler rule each formal rule is; BLUEPRINT.md,
+// README.md) and its probe table (corpus/map.tsv: each hole probe → the
+// formal rule and phase that rejects it → nurlc's verdict). The corpus
+// serves it as `formal/<file>`. The docs cite it (`../formal/RULES.md`);
+// an agent that cannot read it cannot check the memory-safety claim
+// those docs point it at. It is found inside the docs tree (an installed
+// toolchain ships it as $PREFIX/docs/formal) or beside it (a checkout,
+// and the playground image's /opt/nurl/formal).
+@ __ms_formal_dir s docs_dir → String {
+    : String inside ( path_join docs_dir `formal` )
+    : String probe ( path_join ( string_data inside ) `CLAIM.md` )
+    ? ( file_exists ( string_data probe ) ) { ^ inside } {}
+    : ~ String d ( string_from docs_dir )
+    ~ & > ( string_len d ) 1 ( string_ends_with d `/` ) {
+        : String c ( string_substr d 0 - ( string_len d ) 1 )
+        = d c
+    }
+    : String parent ( path_dirname ( string_data d ) )
+    ^ ( path_join ( string_data parent ) `formal` )
+}
+
+// One corpus entry, {path, bytes}, when `fp` is a readable file.
+@ __ms_docs_push_file Json arr s rel s fp b sized → v {
+    ? ! sized {
+        ? ( file_exists fp ) {
+            : Json o0 ( json_obj_new )
+            ( json_obj_set o0 `name` ( json_str_lit rel ) )
+            ( json_obj_set o0 `path` ( json_str_lit rel ) )
+            ( json_arr_push arr o0 )
+        } {}
+        ^
+    } {}
+    : !i IoErr sz ( file_size fp )
+    ?? sz {
+        T bytes → {
+            : Json o ( json_obj_new )
+            ( json_obj_set o `name` ( json_str_lit rel ) )
+            ( json_obj_set o `path` ( json_str_lit rel ) )
+            ( json_obj_set o `bytes` ( json_int bytes ) )
+            ( json_arr_push arr o )
+        }
+        F _ → {}
+    }
+}
+
+// Every document of the corpus, {path, bytes} with `path` relative to it:
+// docs/**/*.md, then formal/*.md and the probe table. formal/ is listed,
+// not walked — in a checkout its subdirectories are the Lean sources and,
+// once built, the Lean package cache with READMEs of its own.
+@ __ms_docs_files Json arr s docs_dir b sized → v {
+    // docs/**/*.md, less a formal/ shipped inside the tree — that is
+    // listed below, with its table, like the one beside it.
+    : Json walked ( json_arr_new )
+    ( __ms_walk_ext_sized walked docs_dir `` `.md` sized )
+    : i nw ( json_arr_len walked )
+    : ~ i w 0
+    ~ < w nw {
+        ?? ( json_arr_get walked w ) {
+            T fo → {
+                : ~ b keep T
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { = keep == 0 ( nurl_str_starts ( json_str_data pj ) `formal/` ) }
+                    F _ → {}
+                }
+                ? keep { ( json_arr_push arr ( json_clone fo ) ) } {}
+            }
+            F _ → {}
+        }
+        = w + w 1
+    }
+    : String fd ( __ms_formal_dir docs_dir )
+    : !( Vec String ) IoErr dr ( dir_list ( string_data fd ) )
+    ?? dr {
+        T entries → {
+            ( sort_by [String] entries \ String a String b → i {
+                ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) )
+            } )
+            : i n ( vec_len [String] entries )
+            : ~ i k 0
+            ~ < k n {
+                : s nm ( string_data ( vec_at [String] entries k ) )
+                ? != 0 ( nurl_str_ends nm `.md` ) {
+                    : String rel ( string_from `formal/` )
+                    ( string_push_str rel nm )
+                    : String fp ( path_join ( string_data fd ) nm )
+                    ( __ms_docs_push_file arr ( string_data rel ) ( string_data fp ) sized )
+                } {}
+                = k + k 1
+            }
+            : String tsv ( path_join ( string_data fd ) `corpus/map.tsv` )
+            ( __ms_docs_push_file arr `formal/corpus/map.tsv` ( string_data tsv ) sized )
+        }
+        F _ → {}
+    }
+}
+
+// The file behind a corpus path.
+@ __ms_doc_path s docs_dir s rel → String {
+    ? != 0 ( nurl_str_starts rel `formal/` ) {
+        : String fd ( __ms_formal_dir docs_dir )
+        ^ ( path_join ( string_data fd ) ( nurl_str_slice rel 7 - ( nurl_str_len rel ) 7 ) )
+    } {}
+    ^ ( path_join docs_dir rel )
+}
+
+// A corpus path as the reader knows it: `docs/MEMORY.md`, `formal/RULES.md`.
+@ __ms_push_doc_name String out s rel → v {
+    ? == 0 ( nurl_str_starts rel `formal/` ) { ( string_push_str out `docs/` ) } {}
+    ( string_push_str out rel )
+}
+
+// A table's rows as hits of `terms`: each data row scored like a section
+// and rendered as `column=value` pairs, so a row reads without its header.
+// `need_all`: a row counts only when it holds every term — in a search
+// across the whole corpus, where 260 one-line rows that each mention
+// "string" or "frees" would otherwise crowd out the prose that answers
+// the question, while a row named by its probe id still comes first.
+// Returns how many rows matched.
+@ __ms_query_rows String src s rel ( Vec String ) terms ( Vec i ) stats ( Vec i ) scores ( Vec String ) texts i topk b need_all → i {
+    : i usable ( __ms_or_usable_terms terms )
+    : s p ( string_data src )
+    : ( Slice u ) pv ( slice_of_str p )
+    : i n ( nurl_str_len p )
+    : ~ i k 0
+    ~ & < k n != ( slice_byte pv k ) 10 { = k + k 1 }
+    : ( Vec String ) cols ( string_split ( string_from ( nurl_str_slice p 0 k ) ) `\t` )
+    : i nc ( vec_len [String] cols )
+    : ~ i matched 0
+    ~ < k n {
+        : i ls + k 1
+        : ~ i le ls
+        ~ & < le n != ( slice_byte pv le ) 10 { = le + le 1 }
+        ? > le ls {
+            : String row ( string_from ( nurl_str_slice p ls - le ls ) )
+            : String row_lc ( string_to_lower row )
+            : i sc ( __ms_or_score2 ( string_data row_lc ) ( string_data row_lc ) terms stats )
+            ? & > sc 0 | ! need_all >= ( vec_at [i] stats 0 ) usable {
+                = matched + matched 1
+                : ( Vec String ) cells ( string_split row `\t` )
+                : String snip ( string_with_cap 320 )
+                ( string_push_str snip rel )
+                ( string_push_str snip ` ›` )
+                : ~ i c 0
+                ~ < c ( vec_len [String] cells ) {
+                    ( string_push_char snip 32 )
+                    ? < c nc {
+                        ( string_push_str snip ( string_data ( vec_at [String] cols c ) ) )
+                        ( string_push_char snip 61 )
+                    } {}
+                    ( string_push_str snip ( string_data ( vec_at [String] cells c ) ) )
+                    = c + c 1
+                }
+                ( __ms_topk_push scores texts topk sc ( string_data snip ) )
+            } {}
+        } {}
+        = k le
+    }
+    ^ matched
+}
+
 // Byte budget for one document. spec.md (63 KB) and MEMORY.md (45 KB)
 // are the outliers; the rest fit whole. `offset` pages past the cut.
 @ __ms_docs_cap → i { ^ 49152 }
@@ -1732,6 +1989,12 @@ $ `stdlib/core/slice.nu`
 // callers compare case-insensitively. "" when `name` escapes the tree.
 @ __ms_docs_norm s name → String {
     : ~ String w ( __ms_lc name )
+    // The docs link the proof as `../formal/RULES.md`; that is its name
+    // here too.
+    ? ( string_starts_with w `../formal/` ) {
+        : String c0 ( string_substr w 3 - ( string_len w ) 3 )
+        = w c0
+    } {}
     ? >= ( nurl_str_find ( string_data w ) `..` ) 0 {
         ^ ( string_new )
     } {}
@@ -1771,10 +2034,18 @@ $ `stdlib/core/slice.nu`
         : String cut ( string_substr rl_stem 0 - ( string_len rl_stem ) 3 )
         = rl_stem cut
     } {}
+    ? ( string_ends_with rl_stem `.tsv` ) {
+        : String cut1 ( string_substr rl_stem 0 - ( string_len rl_stem ) 4 )
+        = rl_stem cut1
+    } {}
     : ~ String base_stem ( string_from ( string_data base ) )
     ? ( string_ends_with base_stem `.md` ) {
         : String cut2 ( string_substr base_stem 0 - ( string_len base_stem ) 3 )
         = base_stem cut2
+    } {}
+    ? ( string_ends_with base_stem `.tsv` ) {
+        : String cut3 ( string_substr base_stem 0 - ( string_len base_stem ) 4 )
+        = base_stem cut3
     } {}
     : ~ i rank 0
     ? != 0 ( nurl_str_eq ( string_data rl ) want ) { = rank 1 } {}
@@ -1793,7 +2064,7 @@ $ `stdlib/core/slice.nu`
         ^ best
     } {}
     : Json files ( json_arr_new )
-    ( msearch_walk_md_files files docs_dir `` )
+    ( __ms_docs_files files docs_dir F )
     : i nf ( json_arr_len files )
     : ~ i best_rank 0
     : ~ i k 0
@@ -1825,11 +2096,11 @@ $ `stdlib/core/slice.nu`
 // every document under docs_dir with its size and title.
 @ msearch_docs_list s docs_dir → String {
     : Json files ( json_arr_new )
-    ( msearch_walk_md_files files docs_dir `` )
+    ( __ms_docs_files files docs_dir T )
     : i nf ( json_arr_len files )
     : String out ( string_with_cap 2048 )
     ( string_push_int out nf )
-    ( string_push_str out ` document(s) under docs/ — pass 'name' to read one (e.g. name='MEMORY.md').\n\n` )
+    ( string_push_str out ` document(s) under docs/ and formal/ (the mechanized proof) — pass 'name' to read one (e.g. name='MEMORY.md', name='formal/RULES.md').\n\n` )
     : ~ i k 0
     ~ < k nf {
         ?? ( json_arr_get files k ) {
@@ -1853,12 +2124,15 @@ $ `stdlib/core/slice.nu`
                         }
                         F _ → {}
                     }
-                    : String fp ( path_join docs_dir rel )
+                    : String fp ( __ms_doc_path docs_dir rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
                             : String t ( __ms_docs_title src )
+                            ? != 0 ( nurl_str_ends rel `.tsv` ) {
+                                ( string_push_str out ` — table, one row per hole probe; name=<it> query=<terms> returns the matching rows` )
+                            } {}
                             ? > ( string_len t ) 0 {
                                 ( string_push_str out ` — ` )
                                 ( string_push_str out ( string_data t ) )
@@ -2005,125 +2279,261 @@ $ `stdlib/core/slice.nu`
     ^ hit
 }
 
+// ── One document's text, by heading ──────────────────────────────────
+//
+// Every reading of a document — its outline, one section, a search of
+// its sections, a page of it — works on its text and the name it is
+// shown by (`disp`), never on where it came from, so the docs corpus and
+// a single file (ROADMAP.md, nurl_read_roadmap) answer the same way.
+
+// A corpus path as the reader knows it: `docs/MEMORY.md`, `formal/RULES.md`.
+@ __ms_doc_disp s rel → String {
+    : String out ( string_with_cap + ( nurl_str_len rel ) 8 )
+    ( __ms_push_doc_name out rel )
+    ^ out
+}
+
+// The text of a corpus document, None when it cannot be read.
+@ __ms_doc_src s docs_dir s rel → ?String {
+    : String fp ( __ms_doc_path docs_dir rel )
+    ?? ( read_file_bytes ( string_data fp ) ) {
+        T bytes → { ^ @ ?String { T ( bytes_to_str bytes ) } }
+        F _ → { ^ @ ?String { F } }
+    }
+}
+
+// The heading map of `src`: each heading at its level with its
+// section's size, so a caller picks a section= without reading.
+@ __ms_outline_src s disp String src → String {
+    : String out ( string_with_cap 2048 )
+    : ( Vec i ) starts ( vec_new [i] )
+    : ( Vec i ) levels ( vec_new [i] )
+    : ( Vec String ) titles ( vec_new [String] )
+    ( __ms_doc_headings src starts levels titles )
+    : i nh ( vec_len [i] starts )
+    ( string_push_str out disp )
+    ( string_push_str out ` — ` )
+    ( string_push_int out ( string_len src ) )
+    ( string_push_str out ` bytes, ` )
+    ( string_push_int out nh )
+    ( string_push_str out ` sections. Ask for one with section='<number or words>'.\n\n` )
+    : ~ i k 0
+    ~ < k nh {
+        : i lvl ?? ( vec_get [i] levels k ) { T v → v F _ → 1 }
+        : ~ i pad 1
+        ~ < pad lvl { ( string_push_str out `  ` ) = pad + pad 1 }
+        ( string_push_str out `- ` )
+        ?? ( vec_get [String] titles k ) {
+            T t → ( string_push_str out ( string_data t ) )
+            F _ → {}
+        }
+        : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
+        : i e0 ( __ms_section_end starts levels k ( string_len src ) )
+        ( string_push_str out `  (` )
+        ( string_push_int out - e0 s0 )
+        ( string_push_str out ` B)\n` )
+        = k + k 1
+    }
+    ^ out
+}
+
+// One section of `src` — the first heading `section` matches, to the
+// next heading of the same or a higher level — or "" when none matches.
+@ __ms_section_src s disp String src s section → String {
+    : String out ( string_with_cap 4096 )
+    : ( Vec i ) starts ( vec_new [i] )
+    : ( Vec i ) levels ( vec_new [i] )
+    : ( Vec String ) titles ( vec_new [String] )
+    ( __ms_doc_headings src starts levels titles )
+    : i nh ( vec_len [i] starts )
+    : ~ i found -1
+    : ~ i k 0
+    ~ & < k nh < found 0 {
+        ?? ( vec_get [String] titles k ) {
+            T t → { ? ( __ms_section_matches t section ) { = found k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? < found 0 { ^ out } {}
+    : i s0 ?? ( vec_get [i] starts found ) { T v → v F _ → 0 }
+    : i e0 ( __ms_section_end starts levels found ( string_len src ) )
+    ( string_push_str out disp )
+    ( string_push_str out ` › ` )
+    ?? ( vec_get [String] titles found ) {
+        T t → ( string_push_str out ( string_data t ) )
+        F _ → {}
+    }
+    ( string_push_str out `\n\n` )
+    : i want - e0 s0
+    : i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
+    : String slice ( string_substr src s0 keep )
+    ( string_push_str out ( string_data slice ) )
+    ? > want keep {
+        ( string_push_str out `\n… section truncated — read the whole file with offset=` )
+        ( string_push_int out + s0 keep )
+        ( string_push_char out 10 )
+    } {}
+    ^ out
+}
+
+// `src` from byte `offset`, capped; the reply says where to continue.
+@ __ms_read_src s disp String src i offset → String {
+    : String out ( string_with_cap 4096 )
+    : i n ( string_len src )
+    : ~ i from ? < offset 0 0 offset
+    ? > from n { = from n } {}
+    : i left - n from
+    : i keep ? > left ( __ms_docs_cap ) ( __ms_docs_cap ) left
+    ( string_push_str out disp )
+    ? > from 0 {
+        ( string_push_str out ` [bytes ` )
+        ( string_push_int out from )
+        ( string_push_str out `–` )
+        ( string_push_int out + from keep )
+        ( string_push_str out ` of ` )
+        ( string_push_int out n )
+        ( string_push_char out 93 )
+    } {}
+    ( string_push_char out 10 )
+    ( string_push_char out 10 )
+    : String slice ( string_substr src from keep )
+    ( string_push_str out ( string_data slice ) )
+    ? > left keep {
+        ( string_push_str out `\n… truncated at ` )
+        ( string_push_int out + from keep )
+        ( string_push_str out ` of ` )
+        ( string_push_int out n )
+        ( string_push_str out ` bytes — continue with offset=` )
+        ( string_push_int out + from keep )
+        ( string_push_char out 10 )
+    } {}
+    ^ out
+}
+
+// Score every section of `src` (every row, for a table) against `terms`
+// into the shared top-k; returns how many matched. `need_all`: see
+// __ms_query_rows.
+@ __ms_query_src String src s disp b table b need_all ( Vec String ) terms ( Vec i ) stats ( Vec i ) scores ( Vec String ) texts i topk → i {
+    ? table { ^ ( __ms_query_rows src disp terms stats scores texts topk need_all ) } {}
+    : ~ i matched 0
+    : ( Vec i ) starts ( vec_new [i] )
+    : ( Vec i ) levels ( vec_new [i] )
+    : ( Vec String ) titles ( vec_new [String] )
+    ( __ms_doc_headings src starts levels titles )
+    : i nh ( vec_len [i] starts )
+    : ~ i k 0
+    ~ < k nh {
+        : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
+        : i e0 ( __ms_section_end_flat starts k ( string_len src ) )
+        : String body ( string_substr src s0 - e0 s0 )
+        : String body_lc ( string_to_lower body )
+        : String sig ( string_with_cap 128 )
+        ( string_push_str sig disp )
+        ( string_push_char sig 32 )
+        ?? ( vec_get [String] titles k ) {
+            T t → ( string_push_str sig ( string_data t ) )
+            F _ → {}
+        }
+        : String sig_lc ( string_to_lower sig )
+        : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data body_lc ) terms stats )
+        ? > sc 0 {
+            = matched + matched 1
+            : String snip ( string_with_cap 1200 )
+            ( string_push_str snip disp )
+            ( string_push_str snip ` › ` )
+            ?? ( vec_get [String] titles k ) {
+                T t → ( string_push_str snip ( string_data t ) )
+                F _ → {}
+            }
+            ( string_push_str snip `  [section=` )
+            ?? ( vec_get [String] titles k ) {
+                T t → ( __ms_push_section_key snip t )
+                F _ → {}
+            }
+            ( string_push_str snip `]\n` )
+            : i bn ( string_len body )
+            : i keep ? > bn 900 ( __mcp_utf8_cut ( string_data body ) 900 ) bn
+            : String head ( string_substr body 0 keep )
+            ( string_push_str snip ( string_data head ) )
+            ? > bn keep { ( string_push_str snip `\n…` ) } {}
+            ( __ms_topk_push scores texts topk sc ( string_data snip ) )
+        } {}
+        = k + k 1
+    }
+    ^ matched
+}
+
+// The reply for a set of scored hits: the count, then the best.
+@ __ms_query_reply s what s query i matched ( Vec String ) texts b sections → String {
+    : String out ( string_with_cap 4096 )
+    : i shown ( vec_len [String] texts )
+    ( string_push_int out matched )
+    ( string_push_char out 32 )
+    ( string_push_str out what )
+    ( string_push_str out ` match '` )
+    ( string_push_str out query )
+    ( string_push_str out `'` )
+    ? > matched shown {
+        ( string_push_str out `; the ` )
+        ( string_push_int out shown )
+        ( string_push_str out ` best follow` )
+    } {}
+    ? sections { ( string_push_str out `. Read a whole one with section=.\n\n` ) } { ( string_push_str out `.\n\n` ) }
+    : ~ i j 0
+    ~ < j shown {
+        ( string_push_str out ( string_data ( vec_at [String] texts j ) ) )
+        ( string_push_str out `\n\n` )
+        = j + j 1
+    }
+    ? == matched 0 {
+        ( string_push_str out `Nothing matched — terms are whole words. outline=true lists the headings; with no arguments the index.\n` )
+    } {}
+    ^ out
+}
+
 // The heading list of one document — what a model reads to find out
 // which section to ask for, at a fraction of the document's bytes.
 @ msearch_docs_outline s docs_dir s name → String {
     : String rel ( msearch_docs_resolve docs_dir name )
-    : String out ( string_with_cap 2048 )
-    ? == ( string_len rel ) 0 {
-        ^ out
-    } {}
-    : String fp ( path_join docs_dir ( string_data rel ) )
-    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ?? rd {
-        T bytes → {
-            : String src ( bytes_to_str bytes )
-            : ( Vec i ) starts ( vec_new [i] )
-            : ( Vec i ) levels ( vec_new [i] )
-            : ( Vec String ) titles ( vec_new [String] )
-            ( __ms_doc_headings src starts levels titles )
-            : i nh ( vec_len [i] starts )
-            ( string_push_str out `docs/` )
-            ( string_push_str out ( string_data rel ) )
-            ( string_push_str out ` — ` )
-            ( string_push_int out ( string_len src ) )
-            ( string_push_str out ` bytes, ` )
-            ( string_push_int out nh )
-            ( string_push_str out ` sections. Ask for one with section='<number or words>'.\n\n` )
-            : ~ i k 0
-            ~ < k nh {
-                : i lvl ?? ( vec_get [i] levels k ) { T v → v F _ → 1 }
-                : ~ i pad 1
-                ~ < pad lvl { ( string_push_str out `  ` ) = pad + pad 1 }
-                ( string_push_str out `- ` )
-                ?? ( vec_get [String] titles k ) {
-                    T t → ( string_push_str out ( string_data t ) )
-                    F _ → {}
-                }
-                : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
-                : i e0 ( __ms_section_end starts levels k ( string_len src ) )
-                ( string_push_str out `  (` )
-                ( string_push_int out - e0 s0 )
-                ( string_push_str out ` B)\n` )
-                = k + k 1
-            }
-        }
-        F _ → {}
+    ? == ( string_len rel ) 0 { ^ ( string_new ) } {}
+    : String disp ( __ms_doc_disp ( string_data rel ) )
+    ?? ( __ms_doc_src docs_dir ( string_data rel ) ) {
+        T src → { ^ ( __ms_outline_src ( string_data disp ) src ) }
+        F → { ^ ( string_new ) }
     }
-    ^ out
 }
 
 // One named section of one document, "" when the document or the
 // section is not found. On a miss the caller shows the outline.
 @ msearch_docs_section s docs_dir s name s section → String {
     : String rel ( msearch_docs_resolve docs_dir name )
-    : String out ( string_with_cap 4096 )
-    ? == ( string_len rel ) 0 {
-        ^ out
-    } {}
-    : String fp ( path_join docs_dir ( string_data rel ) )
-    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ?? rd {
-        T bytes → {
-            : String src ( bytes_to_str bytes )
-            : ( Vec i ) starts ( vec_new [i] )
-            : ( Vec i ) levels ( vec_new [i] )
-            : ( Vec String ) titles ( vec_new [String] )
-            ( __ms_doc_headings src starts levels titles )
-            : i nh ( vec_len [i] starts )
-            : ~ i found -1
-            : ~ i k 0
-            ~ < k nh {
-                ? < found 0 {
-                    ?? ( vec_get [String] titles k ) {
-                        T t → { ? ( __ms_section_matches t section ) { = found k } {} }
-                        F _ → {}
-                    }
-                } {}
-                = k + k 1
-            }
-            ? >= found 0 {
-                : i s0 ?? ( vec_get [i] starts found ) { T v → v F _ → 0 }
-                : i e0 ( __ms_section_end starts levels found ( string_len src ) )
-                ( string_push_str out `docs/` )
-                ( string_push_str out ( string_data rel ) )
-                ( string_push_str out ` › ` )
-                ?? ( vec_get [String] titles found ) {
-                    T t → ( string_push_str out ( string_data t ) )
-                    F _ → {}
-                }
-                ( string_push_str out `\n\n` )
-                : i want - e0 s0
-                : i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
-                : String slice ( string_substr src s0 keep )
-                ( string_push_str out ( string_data slice ) )
-                ? > want keep {
-                    ( string_push_str out `\n… section truncated — read the whole file with offset=` )
-                    ( string_push_int out + s0 keep )
-                    ( string_push_char out 10 )
-                } {}
-            } {}
-        }
-        F _ → {}
+    ? == ( string_len rel ) 0 { ^ ( string_new ) } {}
+    : String disp ( __ms_doc_disp ( string_data rel ) )
+    ?? ( __ms_doc_src docs_dir ( string_data rel ) ) {
+        T src → { ^ ( __ms_section_src ( string_data disp ) src section ) }
+        F → { ^ ( string_new ) }
     }
-    ^ out
 }
 
-// Search every section of every document. Terms are matched as whole
-// words and ranked by coverage — the same scorer nurl_api's OR pass
-// uses, with the heading as the "signature" haystack, so a section
-// titled "Move checking" outranks one that merely mentions moves.
-// Returns the reply text; `hits` (≥1 element) receives the count.
-@ msearch_docs_query s docs_dir s query ( Vec i ) hits → String {
+// Search every section of every document — or, with `only` (a corpus
+// path), of that one document, every row when it is a table. Terms are
+// matched as whole words and ranked by coverage — the same scorer
+// nurl_api's OR pass uses, with the heading as the "signature" haystack,
+// so a section titled "Move checking" outranks one that merely mentions
+// moves. Returns the reply text; `hits` (≥1 element) receives the count.
+@ msearch_docs_query s docs_dir s query s only ( Vec i ) hits → String {
     : String q_lc ( __ms_lc query )
     : ( Vec String ) terms ( string_split q_lc ` ` )
     : ( Vec i ) scores ( vec_new [i] )
     : ( Vec String ) texts ( vec_new [String] )
     : ( Vec i ) stats ( vec_new [i] )
     ( vec_push [i] stats 0 )
+    // One document searched answers with more of it.
+    : i topk ? > ( nurl_str_len only ) 0 20 6
     : ~ i matched 0
     : Json files ( json_arr_new )
-    ( msearch_walk_md_files files docs_dir `` )
+    ( __ms_docs_files files docs_dir F )
     : i nf ( json_arr_len files )
     : ~ i fi 0
     ~ < fi nf {
@@ -2134,63 +2544,13 @@ $ `stdlib/core/slice.nu`
                     T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
                     F _ → {}
                 }
-                ? > ( nurl_str_len rel ) 0 {
-                    : String fp ( path_join docs_dir rel )
-                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ?? rd {
-                        T bytes → {
-                            : String src ( bytes_to_str bytes )
-                            : ( Vec i ) starts ( vec_new [i] )
-                            : ( Vec i ) levels ( vec_new [i] )
-                            : ( Vec String ) titles ( vec_new [String] )
-                            ( __ms_doc_headings src starts levels titles )
-                            : i nh ( vec_len [i] starts )
-                            : ~ i k 0
-                            ~ < k nh {
-                                : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
-                                : i e0 ( __ms_section_end_flat starts k ( string_len src ) )
-                                : String body ( string_substr src s0 - e0 s0 )
-                                : String body_lc ( string_to_lower body )
-                                : String sig ( string_with_cap 128 )
-                                ( string_push_str sig rel )
-                                ( string_push_char sig 32 )
-                                ?? ( vec_get [String] titles k ) {
-                                    T t → ( string_push_str sig ( string_data t ) )
-                                    F _ → {}
-                                }
-                                : String sig_lc ( string_to_lower sig )
-                                : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data body_lc ) terms stats )
-                                ? > sc 0 {
-                                    = matched + matched 1
-                                    : String snip ( string_with_cap 1200 )
-                                    ( string_push_str snip `docs/` )
-                                    ( string_push_str snip rel )
-                                    ( string_push_str snip ` › ` )
-                                    ?? ( vec_get [String] titles k ) {
-                                        T t → ( string_push_str snip ( string_data t ) )
-                                        F _ → {}
-                                    }
-                                    ( string_push_str snip `  [section=` )
-                                    ?? ( vec_get [String] titles k ) {
-                                        T t → ( __ms_push_section_key snip t )
-                                        F _ → {}
-                                    }
-                                    ( string_push_str snip `]\n` )
-                                    : i bn ( string_len body )
-                                    : i keep ? > bn 900 900 bn
-                                    : s braw ( string_data body )
-                                    : ~ i j 0
-                                    ~ < j keep {
-                                        ( string_push_char snip ( nurl_str_at braw bn j ) )
-                                        = j + j 1
-                                    }
-                                    ? > bn keep { ( string_push_str snip `\n…` ) } {}
-                                    ( __ms_topk_push scores texts 6 sc ( string_data snip ) )
-                                } {}
-                                = k + k 1
-                            }
+                ? & > ( nurl_str_len rel ) 0 | == 0 ( nurl_str_len only ) != 0 ( nurl_str_eq rel only ) {
+                    ?? ( __ms_doc_src docs_dir rel ) {
+                        T src → {
+                            : String disp ( __ms_doc_disp rel )
+                            = matched + matched ( __ms_query_src src ( string_data disp ) != 0 ( nurl_str_ends rel `.tsv` ) == 0 ( nurl_str_len only ) terms stats scores texts topk )
                         }
-                        F _ → {}
+                        F → {}
                     }
                 } {}
             }
@@ -2198,34 +2558,9 @@ $ `stdlib/core/slice.nu`
         }
         = fi + fi 1
     }
-    : String out ( string_with_cap 4096 )
-    : i shown ( vec_len [String] texts )
-    ( string_push_int out matched )
-    ( string_push_str out ` documentation section(s) match '` )
-    ( string_push_str out query )
-    ( string_push_str out `'` )
-    ? > matched shown {
-        ( string_push_str out `; the ` )
-        ( string_push_int out shown )
-        ( string_push_str out ` best follow` )
-    } {}
-    ( string_push_str out `. Read a whole one with name= and section=.\n\n` )
-    : ~ i j 0
-    ~ < j shown {
-        ?? ( vec_get [String] texts j ) {
-            T t → {
-                ( string_push_str out ( string_data t ) )
-                ( string_push_str out `\n\n` )
-            }
-            F _ → {}
-        }
-        = j + j 1
-    }
-    ? == matched 0 {
-        ( string_push_str out `Nothing matched — terms are whole words. Call nurl_docs with no arguments for the index, or name=<doc> alone for that document's outline.\n` )
-    } {}
     ( vec_set [i] hits 0 matched )
-    ^ out
+    : b rows != 0 ( nurl_str_ends only `.tsv` )
+    ^ ( __ms_query_reply ? rows `row(s)` `documentation section(s)` query matched texts ! rows )
 }
 
 // The shortest unambiguous way to name a section back to the tool: its
@@ -2245,54 +2580,110 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// One document, from byte `offset`, capped. "" when `name` resolves to
+// nothing — the caller turns that into an error listing what exists.
 @ msearch_docs_read s docs_dir s name i offset → String {
     : String rel ( msearch_docs_resolve docs_dir name )
-    ? == ( string_len rel ) 0 {
-        ^ ( string_new )
-    } {}
-    : String fp ( path_join docs_dir ( string_data rel ) )
-    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    : String out ( string_with_cap 4096 )
-    ?? rd {
-        T bytes → {
-            : String src ( bytes_to_str bytes )
-            : i n ( string_len src )
-            : ~ i from ? < offset 0 0 offset
-            ? > from n { = from n } {}
-            : i left - n from
-            : i keep ? > left ( __ms_docs_cap ) ( __ms_docs_cap ) left
-            ( string_push_str out `docs/` )
-            ( string_push_str out ( string_data rel ) )
-            ? > from 0 {
-                ( string_push_str out ` [bytes ` )
-                ( string_push_int out from )
-                ( string_push_str out `–` )
-                ( string_push_int out + from keep )
-                ( string_push_str out ` of ` )
-                ( string_push_int out n )
-                ( string_push_char out 93 )
-            } {}
-            ( string_push_char out 10 )
-            ( string_push_char out 10 )
-            : String slice ( string_substr src from keep )
-            ( string_push_str out ( string_data slice ) )
-            ? > left keep {
-                ( string_push_str out `\n… truncated at ` )
-                ( string_push_int out + from keep )
-                ( string_push_str out ` of ` )
-                ( string_push_int out n )
-                ( string_push_str out ` bytes — continue with offset=` )
-                ( string_push_int out + from keep )
-                ( string_push_char out 10 )
-            } {}
-        }
-        F _ → {
-            ( string_push_str out `docs/` )
-            ( string_push_str out ( string_data rel ) )
-            ( string_push_str out ` could not be read.\n` )
+    ? == ( string_len rel ) 0 { ^ ( string_new ) } {}
+    : String disp ( __ms_doc_disp ( string_data rel ) )
+    ?? ( __ms_doc_src docs_dir ( string_data rel ) ) {
+        T src → { ^ ( __ms_read_src ( string_data disp ) src offset ) }
+        F → {
+            ( string_push_str disp ` could not be read.\n` )
+            ^ disp
         }
     }
-    ^ out
+}
+
+// ── The tools ────────────────────────────────────────────────────────
+//
+// Both MCP servers (the playground, nurl-mcp) answer nurl_docs from here,
+// and the playground answers nurl_read_roadmap from msearch_file_tool:
+// one engine, so the arguments mean the same thing everywhere.
+// Ok = the reply; Err = a tool error whose text says what to call next.
+
+// A miss names what exists: the outline, so the next call is informed
+// rather than another guess.
+@ __ms_section_miss s section String outline → String {
+    : String msg ( string_with_cap + ( string_len outline ) 128 )
+    ( string_push_str msg `no section matches '` )
+    ( string_push_str msg section )
+    ( string_push_str msg `'. ` )
+    ( string_push_str msg ( string_data outline ) )
+    ^ msg
+}
+
+// nurl_docs. No `name`: `query` searches every section of every document,
+// else the index. `name`: `outline` its heading map, `section` one
+// section, `query` its sections (a table's rows), else the document
+// paged by `offset`.
+@ msearch_docs_tool s docs_dir s name s section s query b outline i offset → !String String {
+    ? == ( nurl_str_len name ) 0 {
+        ? > ( nurl_str_len query ) 0 {
+            : ( Vec i ) hits ( vec_new [i] )
+            ( vec_push [i] hits 0 )
+            ^ @ !String String { T ( msearch_docs_query docs_dir query `` hits ) }
+        } {}
+        ^ @ !String String { T ( msearch_docs_list docs_dir ) }
+    } {}
+    : String rel ( msearch_docs_resolve docs_dir name )
+    ? == ( string_len rel ) 0 {
+        : String listing ( msearch_docs_list docs_dir )
+        : String msg ( string_with_cap + ( string_len listing ) 128 )
+        ( string_push_str msg `no document matches '` )
+        ( string_push_str msg name )
+        ( string_push_str msg `'. ` )
+        ( string_push_str msg ( string_data listing ) )
+        ^ @ !String String { F msg }
+    } {}
+    ? > ( nurl_str_len query ) 0 {
+        : ( Vec i ) hits1 ( vec_new [i] )
+        ( vec_push [i] hits1 0 )
+        ^ @ !String String { T ( msearch_docs_query docs_dir query ( string_data rel ) hits1 ) }
+    } {}
+    : String disp ( __ms_doc_disp ( string_data rel ) )
+    ?? ( __ms_doc_src docs_dir ( string_data rel ) ) {
+        T src → { ^ ( __ms_file_reply ( string_data disp ) src section query outline offset ) }
+        F → {
+            ( string_push_str disp ` could not be read` )
+            ^ @ !String String { F disp }
+        }
+    }
+}
+
+// The section/outline/page reply for one text, shared by both tools.
+@ __ms_file_reply s disp String src s section s query b outline i offset → !String String {
+    ? > ( nurl_str_len query ) 0 {
+        : ( Vec String ) terms ( string_split ( __ms_lc query ) ` ` )
+        : ( Vec i ) scores ( vec_new [i] )
+        : ( Vec String ) texts ( vec_new [String] )
+        : ( Vec i ) stats ( vec_new [i] )
+        ( vec_push [i] stats 0 )
+        : i m ( __ms_query_src src disp F F terms stats scores texts 20 )
+        : String what ( string_from `section(s) of ` )
+        ( string_push_str what disp )
+        ^ @ !String String { T ( __ms_query_reply ( string_data what ) query m texts T ) }
+    } {}
+    ? outline { ^ @ !String String { T ( __ms_outline_src disp src ) } } {}
+    ? > ( nurl_str_len section ) 0 {
+        : String sec ( __ms_section_src disp src section )
+        ? > ( string_len sec ) 0 { ^ @ !String String { T sec } } {}
+        ^ @ !String String { F ( __ms_section_miss section ( __ms_outline_src disp src ) ) }
+    } {}
+    ^ @ !String String { T ( __ms_read_src disp src offset ) }
+}
+
+// One file read by heading — `outline`, `section`, `query` (its
+// sections), else the text paged by `offset` — shown as `disp`.
+@ msearch_file_tool s path s disp s section s query b outline i offset → !String String {
+    ?? ( read_file_bytes path ) {
+        T bytes → { ^ ( __ms_file_reply disp ( bytes_to_str bytes ) section query outline offset ) }
+        F _ → {
+            : String msg ( string_from disp )
+            ( string_push_str msg ` could not be read` )
+            ^ @ !String String { F msg }
+        }
+    }
 }
 
 // basename after the last '/'
