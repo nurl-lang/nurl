@@ -1,9 +1,12 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_view_returned_through_call.nu:12: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+compiler/tests/borrow_view_returned_through_call.nu:12:1: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
 @ back_vec → ( Vec s ) { : s x ( nurl_str_cat `ab` `cd` ) ^ ( wrapv x ) }
-compiler/tests/borrow_view_returned_through_call.nu:14: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+^
+compiler/tests/borrow_view_returned_through_call.nu:14:1: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
 @ back_bound → ( Vec s ) { : s x ( nurl_str_cat `ab` `cd` ) : ( Vec s ) w ( wrapv x ) ^ w }
-compiler/tests/borrow_view_returned_through_call.nu:16: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+^
+compiler/tests/borrow_view_returned_through_call.nu:16:1: error: this returns a view of 'x' (an address into its storage), and 'x' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
 @ back_clo → ( @ i ) { : s x ( nurl_str_cat `ab` `cd` ) ^ ( mkc x ) }
+^
 error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

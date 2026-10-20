@@ -459,6 +459,12 @@ jobs:
         # with a caret past the end of the line it echoes.
         run: ./tools/check_diag_anchor.sh
 
+      - name: diagnostic type-spelling gate (NURL types, not LLVM's)
+        # A message that interpolated a type's lowering told the reader
+        # '{ i1, i64 }' where they wrote '?i', 'i64*' for '*i', '%Fruit'
+        # for 'Fruit'. Reads the committed goldens' error/warning lines.
+        run: ./tools/check_diag_nurl_types.sh
+
       - name: metamorphic diagnostic-coverage gate
         # The same semantic situation, written N ways, must get the same
         # verdict from the checker. Every August 2026 borrow-checker fix

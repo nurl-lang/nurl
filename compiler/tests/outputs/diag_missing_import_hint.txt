@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_missing_import_hint.nu:8:17: error: unknown generic type '( Vec … )' — no generic struct of that name is defined or imported here, so the type cannot be sized. It is defined in stdlib/core/vec.nu — add this line at the top of the file:  $ `stdlib/core/vec.nu`
+    : ( Vec i ) v ( vec_new [i] )
+                ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

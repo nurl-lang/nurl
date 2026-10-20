@@ -763,8 +763,8 @@ def t_tools_call_build(c: Client) -> None:
 
 
 def t_diagnostics_contract(c: Client) -> None:
-    # Every class of nurlc diagnostic lands in nurlc_errors — front-end
-    # (file:line:col), borrow checker (file:line, col null), lint warnings —
+    # Every class of nurlc diagnostic lands in nurlc_errors — front-end,
+    # borrow checker (anchored at its statement), lint warnings —
     # named by the caller's filename, never the server's build directory,
     # and the log is sent once (no per-stage copies beside `stderr`).
     print("\n[MCP] diagnostics contract (nurlc_errors, logical filename)")
@@ -773,7 +773,7 @@ def t_diagnostics_contract(c: Client) -> None:
         ("borrow checker", "uam.nu",
          "$ `stdlib/core/vec.nu`\n@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n"
          "    : ( @ i ) f \\ → i { ^ ( vec_len [i] v ) }\n    ( vec_free [i] v )\n"
-         "    ( nurl_println_int ( f ) )\n    ^ 0\n}\n", "", 6, False),
+         "    ( nurl_println_int ( f ) )\n    ^ 0\n}\n", "", 6, True),
         ("lint", "lint.nu", "@ main → i {\n    : i unused 3\n    ^ 0\n}\n", "--lint", 2, True),
     ]
     for label, fname, src, flags, line, has_col in cases:
@@ -800,6 +800,16 @@ def t_diagnostics_contract(c: Client) -> None:
         assert_true(f"{label}: log names no server path", log.startswith(fname + ":"), log[:120])
         for dup in ("nurlc_stderr", "clang_stderr", "clang_stdout"):
             assert_true(f"{label}: no duplicate '{dup}'", dup not in j, f"keys={list(j)}")
+
+    # A missing import names its exact line, and nurlc_errors hands it over
+    # as an edit.
+    text = _tool_text(_tool_call(c, "nurl_build_native", {"source": "@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n    ^ 0\n}\n"}))
+    try:
+        fix = (json.loads(text).get("nurlc_errors") or [{}])[0].get("fix") or {}
+    except json.JSONDecodeError:
+        fix = {}
+    assert_eq("missing import: fix text", fix.get("text"), "$ `stdlib/core/vec.nu`")
+    assert_eq("missing import: fix line", fix.get("insert_line"), 1)
 
     # The filename is a file name, not a path: it was joined to the build
     # directory unchecked, so '../' wrote outside it.
@@ -1031,7 +1041,8 @@ def t_build_wasm_libc_shims(c: Client) -> None:
     # shim wrapping wasm32's i32 `rand` has to return i64 as well. When it
     # didn't, doomfire / sand / starfield built fine and then died with
     # "runtime error: unreachable" on their first ( rand ).
-    src = "& `libc` @ rand → i\n\n@ main → i {\n  : i r ( rand )\n  ^ % r 7\n}\n"
+    # A foreign function is called from an `unsafe` one (0.71.0 onward).
+    src = "& `libc` @ rand → i\n\nunsafe @ main → i {\n  : i r ( rand )\n  ^ % r 7\n}\n"
     status, _, raw = c.post(
         "/build_wasm",
         {"source": src, "filename": "randshim.nu", "emit_ll": True},

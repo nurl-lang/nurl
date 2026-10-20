@@ -1,5 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_assign_join_view.nu:18: error: 'w' borrows from 'kb', which ended at line 17 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'w' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup w ).
+compiler/tests/borrow_assign_join_view.nu:18:5: error: 'w' borrows from 'kb', which ended at line 17 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'w' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup w ).
     ^ ( slice_len [u] w )
+    ^
 error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

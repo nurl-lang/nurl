@@ -247,6 +247,119 @@ unsafe @ __diag_lit s text → s {
     ^ buf
 }
 
+// ── Where a missing name lives ───────────────────────────────────────
+//
+// "Missing a '$' import?" names the cure without the one fact the reader
+// needs to apply it: which file. The stdlib is on disk beside the
+// compiler, so the file can be found — and is, but only on the way to a
+// fatal "not defined" diagnostic: a program that compiles never pays for
+// the scan. The answer is the exact line to add, `$ `stdlib/core/vec.nu``,
+// so a reader (or a model) applies it without knowing import syntax.
+
+// Does `text` hold a line that starts with `needle` (after only
+// declaration prefixes — `pub`, `unsafe`, … — when `prefixed`), followed
+// by a space, `[` or the line's end? `@ vec_new` matches
+// `pub @ vec_new [A] → …`; `: Vec` matches `: Vec [A] {`.
+unsafe @ __home_line s text s needle b prefixed → b {
+    : i nl ( nurl_str_len needle )
+    : i tn ( nurl_str_len text )
+    : *u tp # *u text
+    : ~ i off 0
+    ~ < off tn {
+        : i f ( nurl_str_find # s + # i text off needle )
+        ? < f 0 { ^ F } {}
+        : i at + off f
+        : i after + at nl
+        : i ac ? < after tn ( nurl_str_at tp tn after ) 10
+        ? | | == ac 32 == ac 91 == ac 10 {
+            : ~ i ls at
+            : ~ b clean T
+            ~ & clean & > ls 0 != ( nurl_str_at tp tn - ls 1 ) 10 {
+                : i c ( nurl_str_at tp tn - ls 1 )
+                ? | ! prefixed ! | == c 32 & >= c 97 <= c 122 { = clean F } {}
+                = ls - ls 1
+            }
+            ? clean { ^ T } {}
+        } {}
+        = off + at 1
+    }
+    ^ F
+}
+
+// Does module text `src` define `name` at top level — a function, or
+// (is_type) a struct or an enum?
+unsafe @ __home_defines s src s name b is_type → b {
+    ? is_type {
+        ^ | ( __home_line src ( nurl_str_cat `: ` name ) F ) ( __home_line src ( nurl_str_cat `: | ` name ) F )
+    } {}
+    ^ ( __home_line src ( nurl_str_cat `@ ` name ) T )
+}
+
+// The stdlib module (`stdlib/core/vec.nu`) that defines `name` at top
+// level, or "" when none does or the stdlib is not found. Searched in
+// dependency order — core, std, ext, then the rest — so the most basic
+// home wins.
+unsafe @ __stdlib_home_of s name b is_type → s {
+    : ~ s root `stdlib`
+    ? == ( nurl_file_exists `stdlib/core/vec.nu` ) 1 {} {
+        : s env ( getenv `NURL_STDLIB` )
+        ? == # i env 0 { ^ `` } {}
+        = root ( nurl_str_cat env `/stdlib` )
+    }
+    : s dirs `core std ext net dist fs hal`
+    : ~ i dpos 0
+    : i dn ( nurl_str_len dirs )
+    : *u dp # *u dirs
+    ~ < dpos dn {
+        : ~ i de dpos
+        ~ & < de dn != ( nurl_str_at dp dn de ) 32 { = de + de 1 }
+        : s sub ( nurl_str_slice dirs dpos - de dpos )
+        : s full ( nurl_str_cat3 root `/` sub )
+        : i h ( nurl_dir_list_open full )
+        ? != h 0 {
+            : ~ s best ``
+            : ~ b more T
+            ~ more {
+                : s ent ( nurl_dir_list_next h )
+                ? == # i ent 0 { = more F } {
+                    : i en ( nurl_str_len ent )
+                    ? & > en 3 != 0 ( nurl_str_ends ent `.nu` ) {
+                        : s src ( nurl_read_file ( nurl_str_cat3 full `/` ent ) )
+                        ? & != # i src 0 ( __home_defines src name is_type ) {
+                            // Directory order is the filesystem's: keep the
+                            // first by name so the answer is stable.
+                            ? | == 0 ( nurl_str_len best ) < ( nurl_str_cmp ent best ) 0 { = best ( nurl_str_cat ent `` ) } {}
+                        } {}
+                    } {}
+                }
+            }
+            ( nurl_dir_list_close h )
+            ? != 0 ( nurl_str_len best ) { ^ ( nurl_str_cat4 `stdlib/` sub `/` best ) } {}
+        } {}
+        = dpos + de 1
+    }
+    ^ ``
+}
+
+// The end of "call to generic function 'f…" when no template exists: the
+// exact import line when the stdlib defines it, else the general cure.
+unsafe @ __generic_home_tail s fname → s {
+    : s hint ( __import_hint fname F )
+    ? != 0 ( nurl_str_len hint ) {
+        ^ ( nurl_str_cat `' but no generic of that name is defined in this file or any '$'-imported file.` hint )
+    } {}
+    ^ `' but no generic of that name is defined in this file or any '$'-imported file — add the '$' import for the file that defines it`
+}
+
+// The cure for a missing `name`: ` It is defined in <file> — add this line
+// at the top of the file:  $ `<file>`` — or "" when the stdlib does not
+// define it.
+unsafe @ __import_hint s name b is_type → s {
+    : s home ( __stdlib_home_of name is_type )
+    ? == 0 ( nurl_str_len home ) { ^ `` } {}
+    ^ ( nurl_str_cat4 ` It is defined in ` home ` — add this line at the top of the file:  $ ` ( __diag_lit home ) )
+}
+
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
 // stored "file:line" location, not a live lexer — so no column, caret, or
 // source-line echo, but the same parseable "loc: msg" prefix. Used by the
@@ -1511,6 +1624,15 @@ unsafe @ agg_field_count i syms s ot → i {
 // the head of gen_closure_expr.
 : ~ i g_clo_detach 0
 : ~ i g_loop_serial 0
+// The binding whose initialiser is being generated (name, and where its
+// `:` statement starts), "" outside one. A use of that same name inside
+// its own initialiser, on a LATER line, is the prefix-arity trap: an
+// operator there was one operand short and swallowed the next statement
+// — which then names the binding it was meant to follow. Reported at
+// the binding, as that, instead of "undefined identifier" at the use.
+: ~ s g_open_bind_name ``
+: ~ i g_open_bind_line 0
+: ~ i g_open_bind_col 0
 : ~ s g_clo_bind_name ``
 
 // Set by a `:` binding just before registering its value: the binding
@@ -3925,7 +4047,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
         ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
         {}
         // A named aggregate returned where a SCALAR is declared —
@@ -5733,7 +5855,15 @@ unsafe @ gen_ident i lex i syms i cg → s {
         // diagnostic" claim true end-to-end.
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
         == 0 ( nurl_sym_len2 syms name `__param` )
-        { : s __sugg ( __suggest_ident syms name )
+        {  // The name of the binding this initialiser belongs to, used on a
+            // later line: an operator was one operand short and swallowed
+            // the statement that follows. Blame the binding.
+            ? & != 0 ( nurl_str_eq name g_open_bind_name ) > __id_line g_open_bind_line
+            { ( die_pos lex g_open_bind_line g_open_bind_col ( nurl_str_cat ( nurl_str_cat4
+                `the initialiser of '` name `' is one operand short and swallowed the statement on line ` ( nurl_str_int __id_line ) )
+                ( nurl_str_cat3 ` (which uses '` name `' — not yet bound while its own initialiser is still open). Every NURL operator has fixed arity and no closing bracket, so a missing operand consumes whatever follows: count the operands of each operator in this line.` ) ) ) }
+            {}
+            : s __sugg ( __suggest_ident syms name )
             // `true` / `false` are not near-misses of anything, so the
             // suggester has nothing to offer and the generic message
             // ("no binding, parameter, constant, ... is in scope") sends
@@ -5908,6 +6038,37 @@ unsafe @ gen_ident i lex i syms i cg → s {
     `add`
 }
 
+// An option operand most often comes from a `_get` that has a non-option
+// twin: `vec_get` answers `?i`, `vec_at` the element itself, bounds-
+// checked. Read on the way to the aggregate-operand error only — the
+// statement's own text names the call, so no operator pays to remember
+// its operands' callees. "" when no call in the line has such a twin.
+unsafe @ __agg_twin_hint i lex i syms s aty → s {
+    ? == 0 ( nurl_str_starts aty `{ i1, ` ) { ^ `` } {}
+    // The statement's line: the lexer has moved on by the time the
+    // operands are typed (die_stmt reports this same line).
+    : s line ( nurl_lex_line_text_at lex g_stmt_line )
+    : i n ( nurl_str_len line )
+    : *u lp # *u line
+    : ~ i k 0
+    ~ < + k 2 n {
+        ? & == ( nurl_str_at lp n k ) 40 == ( nurl_str_at lp n + k 1 ) 32 {
+            : ~ i e + k 2
+            ~ & < e n | | | & >= ( nurl_str_at lp n e ) 97 <= ( nurl_str_at lp n e ) 122 & >= ( nurl_str_at lp n e ) 48 <= ( nurl_str_at lp n e ) 57 == ( nurl_str_at lp n e ) 95 & >= ( nurl_str_at lp n e ) 65 <= ( nurl_str_at lp n e ) 90 { = e + e 1 }
+            : s nm ( nurl_str_slice line + k 2 - e + k 2 )
+            ? & > ( nurl_str_len nm ) 4 != 0 ( nurl_str_ends nm `_get` ) {
+                : s twin ( nurl_str_cat ( nurl_str_slice nm 0 - ( nurl_str_len nm ) 4 ) `_at` )
+                ? | != 0 ( nurl_sym_len2 g_generic_syms twin `__tparams` ) != 0 ( nurl_sym_len2 syms twin `__arity` ) {
+                    ^ ( nurl_str_cat ( nurl_str_cat4 ` '` nm `' returns '` ( llvm_to_nurl aty ) )
+                    ( nurl_str_cat4 `'; '` twin `' returns the element itself, bounds-checked (it panics past the end) — use it, or destructure the option with '??'.` `` ) )
+                } {}
+            } {}
+            = k e
+        } { = k + k 1 }
+    }
+    ^ ``
+}
+
 @ gen_binary i lex i syms i cg → s {
     : i tt ( nurl_lex_type lex )
     // Handle logical vs bitwise & and | operators
@@ -6056,7 +6217,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
                 { = __eot ( nurl_str_cat ( llvm_to_nurl lt ) `` ) }
                 ( die lex ( nurl_str_cat ( nurl_str_cat4
                 `'==' between enum '` __een
-                `' and a value of type '` __eot )
+                `' and a value of type '` ( llvm_to_nurl __eot ) )
                 `' — an enum is a closed set of named variants, and no number converts into one implicitly. Compare against a variant by name ('== c Red'), match with '?? c { … }', or read the tag intentionally with '# i x'.` ) ) } }
     }
     {}
@@ -6128,10 +6289,12 @@ unsafe @ gen_ident i lex i syms i cg → s {
     : b l_agg & ! lp | == ( nurl_str_get ( nurl_llty lt ) 0 ) 123 == ( nurl_str_get ( nurl_llty lt ) 0 ) 37
     : b r_agg & ! rp | == ( nurl_str_get ( nurl_llty rt ) 0 ) 123 == ( nurl_str_get ( nurl_llty rt ) 0 ) 37
     ? | l_agg r_agg
-    { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+    { : s __twin ( __agg_twin_hint lex syms ? l_agg lt rt )
+        ( die_stmt lex ( nurl_str_cat3 ( nurl_str_cat4
         `operator applied to an aggregate operand: left is '` ( llvm_to_nurl lt )
         `', right is '` ( llvm_to_nurl rt ) )
-        `' — an option/result/slice/struct value has no arithmetic or ordering; destructure with '??' (or read a field with '. value field') and combine the payload. If the aggregate is a whole '??'/'?' expression you meant as the NEXT statement, this operator is one operand short and swallowed it: every NURL operator has fixed arity and no closing bracket, so count the operands.` ) ) }
+        `' — an option/result/slice/struct value has no arithmetic or ordering; destructure with '??' (or read a field with '. value field') and combine the payload.`
+        ? != 0 ( nurl_str_len __twin ) __twin ` If the aggregate is a whole '??'/'?' expression you meant as the NEXT statement, this operator is one operand short and swallowed it: every NURL operator has fixed arity and no closing bracket, so count the operands.` ) ) }
     {}
     // Bool (i1) vs non-bool. NURL has no implicit bool↔int conversion, so an
     // operator with exactly one i1 operand emitted e.g. `icmp slt i1 %f, %n`
@@ -12495,19 +12658,19 @@ unsafe @ __has_pct_token s ll s name → b {
     { ? ( __arg_ptr_depth_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
         {}
         ? ( __arg_str_cstr_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
         {}
         ? ( __arg_named_struct_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — wrong named type passed by value. Structs and enums are both NOMINAL: two of them are different types even when their fields or tags line up, and no conversion is implied. The call would reinterpret this value as the declared type's fields.` ) ) }
         {}
         // A pointer where a struct is passed by value, or a struct where a
@@ -12517,19 +12680,19 @@ unsafe @ __has_pct_token s ll s name → b {
         ? & ! ( __arg_str_cstr_mismatch at pllvm ) | & ( is_ptr_ty at ) ( __is_named_agg pllvm ) & ( __is_named_agg at ) ( is_ptr_ty pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — a pointer is not a struct value, nor a struct a pointer: the callee would read the address as the struct's fields (or the struct's first field as the address). Pass a value of the declared type — a slice of a Vec is ( slice_from_vec [T] v ), a window of one ( slice_window [T] s from n ).` ) ) }
         {}
         ? ( __arg_named_ptr_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — different named types; a pointer to one struct is not a pointer to another, and the callee would read this object's bytes as the declared type's fields` ) ) }
         {}
         ? ( __arg_ptr_scalar_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
             `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
         {} }
     {}
@@ -12556,7 +12719,7 @@ unsafe @ __has_pct_token s ll s name → b {
     ! ( seq ( __strip_spaces __aa_at ) ( __strip_spaces __aa_pt ) )
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+        ( nurl_str_cat4 `': value of type '` ( llvm_to_nurl at ) `' passed where parameter expects '` ( llvm_to_nurl pllvm ) )
         `' — an option/result/slice/closure aggregate is exactly its own type: nothing converts into or out of it implicitly, and emitting the call anyway would hand the callee reinterpreted bytes. Unwrap the value first ('?? v { … }', or propagate a result with the propagation suffix), or fix the declaration.` ) ) }
     {}
 }
@@ -14446,12 +14609,12 @@ unsafe @ gen_call i lex i syms i cg → s {
         // call time. Die — the result is silent UB otherwise.
         ? & == arg_idx 0 ( seq fname `nurl_str_len` )
         { ? ( seq at `%String` )
-            { ( die lex `nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values.` ) }
+            { ( die lex `nurl_str_len expects 's' (a raw C string), got a 'String'. Use 'string_len' for String values.` ) }
             {} }
         {}
         ? & == arg_idx 0 ( seq fname `string_len` )
         { ? ( seq ( nurl_llty at ) `i8*` )
-            { ( die lex `string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.` ) }
+            { ( die lex `string_len expects a 'String', got 's' (a raw C string). Use 'nurl_str_len' for raw C strings.` ) }
             {} }
         {}
         // General pointer-vs-value argument check. For a non-generic @-fn
@@ -15284,7 +15447,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                             ? ! ( seq ( __strip_spaces ( nurl_llty at ) ) ( __strip_spaces __iowant ) )
                             { ( die lex ( nurl_str_cat3
                                 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                                ( nurl_str_cat4 `' is passed 'inout' as '` ( nurl_llty at ) `' but the parameter is declared '` __psrc )
+                                ( nurl_str_cat4 `' is passed 'inout' as '` ( __l2n_pointee ( nurl_llty at ) ) `' but the parameter is declared '` __psrc )
                                 `' — an 'inout' argument is passed by address, so the binding's type must match the declared parameter type exactly (no width or float coercion is possible through a pointer; the callee would write its own type's bytes into the caller's differently-typed slot). Declare the binding with the parameter's type, or change the parameter.` ) ) }
                             {}
                         } {}
@@ -15520,10 +15683,11 @@ unsafe @ gen_call i lex i syms i cg → s {
     // the call site instead of leaking the clang error.
     ? & != 0 ( nurl_sym_len2 syms fname `__needs_stdlib` )
     == 0 ( nurl_sym_len2 syms fname `__arity` )
-    { ( die lex ( nurl_str_cat3
+    { : s __home ( nurl_sym_get2 syms fname `__needs_stdlib` )
+        ( die lex ( nurl_str_cat3
         ( nurl_str_cat3 `'` fname `' is defined in ` )
-        ( nurl_sym_get2 syms fname `__needs_stdlib` )
-        ` (a pure-NURL stdlib helper, not a runtime builtin) — add a '$' import of that file to use it.` ) ) }
+        __home
+        ( nurl_str_cat ` (a pure-NURL stdlib helper, not a runtime builtin) — add this line at the top of the file:  $ ` ( __diag_lit __home ) ) ) ) }
     {}
     ? & & & == 0 ( nurl_sym_len syms call_name )
     ! __callee_shadowed
@@ -15556,6 +15720,14 @@ unsafe @ gen_call i lex i syms i cg → s {
                 `'nurl_print_bool' was removed — print the words yourself: ( nurl_println ? x `
                 __arms
                 ` ). One behaviour per name: 'nurl_println' takes a string, and the bool has no printed form the compiler gets to choose.` ) ) }
+            {}
+            // Defined in a stdlib module this program does not import: the
+            // cure is that import, named exactly — ahead of any near-miss
+            // spelling, which would point at the wrong function.
+            : s __hint ( __import_hint fname F )
+            ? != 0 ( nurl_str_len __hint )
+            { ( die lex ( nurl_str_cat3 `call to unknown function '` fname
+                ( nurl_str_cat `' — it is not defined in this file or any '$'-imported file processed so far.` __hint ) ) ) }
             {}
             : s __sugg ( __suggest_ident syms fname )
             ? != 0 ( nurl_str_len __sugg )
@@ -26750,21 +26922,38 @@ unsafe @ bck_match_close i idx s openk s closek → i {
 // ── Phase 1: the use-after-move rule ──────────────────────────────
 
 // Render one borrow-checker error in the front-end's diagnostic shape:
-//   file:line: error: <msg>
+//   file:line:col: error: <msg>
 //       <source line text>
+//       <caret>
 // Borrow checks fire after parsing has moved past the offending token,
-// so only file+line are known: the source line is re-read from disk and
-// echoed, but no caret is drawn — a guessed column would lie. Shared by
-// every borrow-checker emitter so the format can't drift from `die`'s.
-@ bck_emit_error s file i line s msg → v {
-    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
-    ( nurl_str_cat `: error: ` msg ) ) )
+// and their records carry the line, not the token: so the column is the
+// STATEMENT's — its first non-blank character — the same anchor
+// die_stmt uses for a check that fires after its operands were read. It
+// is where the statement the message describes begins, never a guess at
+// a token inside it; and it gives every diagnostic the `file:line:col:`
+// shape a tool parses (nurlapi's nurlc_errors used to see none of these).
+// The source line is re-read from disk. Shared by every borrow-checker
+// emitter so the format can't drift from `die`'s.
+unsafe @ bck_emit_error s file i line s msg → v {
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
     // exit — no manual frees here (they would double-free).
     : s src ( compiler_read_source file )
+    : ~ s lt ``
+    : ~ i col 0
     ? != 0 ( nurl_str_len src ) {
-        : s lt ( __src_line_text src ( nurl_str_len src ) line )
-        ? != 0 ( nurl_str_len lt ) { ( nurl_eprintln lt ) } {}
+        = lt ( __src_line_text src ( nurl_str_len src ) line )
+        : i ln ( nurl_str_len lt )
+        : *u lp # *u lt
+        : ~ i k 0
+        ~ & < k ln | == ( nurl_str_at lp ln k ) 32 == ( nurl_str_at lp ln k ) 9 { = k + k 1 }
+        ? < k ln { = col + k 1 } {}
+    } {}
+    : s loc ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
+    ( nurl_eprintln ( nurl_str_cat3 ? > col 0 ( nurl_str_cat3 loc `:` ( nurl_str_int col ) ) loc
+    `: error: ` msg ) )
+    ? > col 0 {
+        ( nurl_eprintln lt )
+        ( nurl_eprintln ( nurl_diag_caret col ) )
     } {}
     = g_bck_errors + g_bck_errors 1
 }
@@ -30322,6 +30511,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_sym_len syms ( nurl_lex_val lex ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
+        : i __ob_line g_stmt_line
+        : i __ob_col g_stmt_col
         ( __warn_if_shadows_param lex syms name )
         ( lint_note_bind lex name )
         ( nurl_lex_advance lex )
@@ -30373,7 +30564,16 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : i __sxmp0 g_member_path_on
         = g_member_path_on ? & != 0 g_srcx_on == bck_rhs_tt TT_DOT 1 g_member_path_on
         = g_last_alloc_reg ``
+        : s __obn0 g_open_bind_name
+        : i __obl0 g_open_bind_line
+        : i __obc0 g_open_bind_col
+        = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
+        = g_open_bind_line __ob_line
+        = g_open_bind_col __ob_col
         : ~ s val ( gen_expr lex syms cg )
+        = g_open_bind_name __obn0
+        = g_open_bind_line __obl0
+        = g_open_bind_col __obc0
         = g_member_path_on __sxmp0
         // (What the right-hand side's value came from: a view binding's
         // sources, decided in the walk.)
@@ -30624,6 +30824,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : s let_res_nurl ( nurl_sym_get g_res_type_syms `__last_res_nurl__` )
         ? ( is_ident_tok ( nurl_lex_type lex ) )
         { : s name ( nurl_lex_val lex )
+            : i __ob_line g_stmt_line
+            : i __ob_col g_stmt_col
             ( __warn_if_shadows_param lex syms name )
             ( lint_note_bind lex name )
             ( nurl_lex_advance lex )
@@ -30700,7 +30902,16 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // A block computing a number or a flag (`: i n { … }`) is a scope
             // of its own: what it binds goes at its `}` (gen_block_expr).
             = g_blk_scalar_let ? == bck_rhs_tt TT_LBRACE ? ( __plain_scalar_lty ( nurl_llty ptype ) ) 1 0 0
+            : s __obn0 g_open_bind_name
+            : i __obl0 g_open_bind_line
+            : i __obc0 g_open_bind_col
+            = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
+            = g_open_bind_line __ob_line
+            = g_open_bind_col __ob_col
             : ~ s val ( gen_expr lex syms cg )
+            = g_open_bind_name __obn0
+            = g_open_bind_line __obl0
+            = g_open_bind_col __obc0
             = g_member_path_on __sxmp0
             // (What the right-hand side's value came from: a view binding's
             // sources, decided in the walk.)
@@ -31161,7 +31372,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // pointer coercions stay legal and are not flagged.
         ? ( __store_type_clash __asn_rt vt )
         { ( die_stmt lex ( nurl_str_cat
-            ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
+            ( nurl_str_cat4 `cannot assign a value of type '` ( llvm_to_nurl __asn_rt ) `' to '` name )
             ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
         {}
         // Borrow checker: record this assignment, then the move it
@@ -32480,7 +32691,7 @@ unsafe @ __replaces_note i syms s name → v {
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_ty )
-            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_ty ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl elem_ty ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc0 ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s rhsc ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt )
@@ -32520,7 +32731,7 @@ unsafe @ __replaces_note i syms s name → v {
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_ty )
-            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_ty ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl elem_ty ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc0 ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s rhsc ( mem_elem_store_val syms cg elem_ty rhsc0 __es_tt )
@@ -32559,7 +32770,7 @@ unsafe @ __replaces_note i syms s name → v {
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_type )
-            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_type ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl elem_type ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc0 ( coerce_store_val lex rhs __fs_rt elem_type syms cg )
             : s rhsc ( mem_elem_store_val syms cg elem_type rhsc0 __es_tt )
@@ -32635,7 +32846,7 @@ unsafe @ __replaces_note i syms s name → v {
                         // self-compile); a tracked local frees at scope exit.
                         : s __fs_rt ( nurl_get_last_type )
                         ? ( __store_type_clash __fs_rt st )
-                        { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+                        { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl st ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                         {}
                         : s rhsc0 ( coerce_store_val lex rhs __fs_rt st syms cg )
                         : s rhsc ( mem_elem_store_val syms cg st rhsc0 __es_tt )
@@ -32667,7 +32878,7 @@ unsafe @ __replaces_note i syms s name → v {
                             : s rhs ( gen_field_rhs lex syms cg )
                             ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                             { ( die lex ( nurl_str_cat ( nurl_str_cat4
-                                `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                                `cannot store a value of type '` ( llvm_to_nurl ( nurl_get_last_type ) ) `' into field '` fname )
                                 ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
                             {}
                             // Width-coerce the RHS to the field type (trunc /
@@ -32757,7 +32968,7 @@ unsafe @ __replaces_note i syms s name → v {
                                 // self-compile); a tracked local frees at scope exit.
                                 : s __fs_rt ( nurl_get_last_type )
                                 ? ( __store_type_clash __fs_rt st )
-                                { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+                                { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl st ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                                 {}
                                 : s rhsc0 ( coerce_store_val lex rhs __fs_rt st syms cg )
                                 : s rhsc ( mem_elem_store_val syms cg st rhsc0 __es_tt )
@@ -32794,7 +33005,7 @@ unsafe @ __replaces_note i syms s name → v {
                     // self-compile); a tracked local frees at scope exit.
                     : s __fs_rt ( nurl_get_last_type )
                     ? ( __store_type_clash __fs_rt st )
-                    { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
+                    { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` ( llvm_to_nurl __fs_rt ) `' into an element of type '` ( llvm_to_nurl st ) ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                     {}
                     : s rhsc0 ( coerce_store_val lex rhs __fs_rt st syms cg )
                     : s rhsc ( mem_elem_store_val syms cg st rhsc0 __es_tt )
@@ -32866,7 +33077,7 @@ unsafe @ __replaces_note i syms s name → v {
                 : s __fs_guard ? == __fs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_guard__` ) ``
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
-                    `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
+                    `cannot store a value of type '` ( llvm_to_nurl ( nurl_get_last_type ) ) `' into field '` fname )
                     ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
                 {}
                 // Width-coerce the RHS to the field type (trunc /
@@ -33565,7 +33776,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
         ( __cast_f0_leaf syms sname_c )
         : s f0path ? != 0 ( nurl_str_len is_enum_c ) `0` ( __cast_f0_path syms sname_c )
         ? == 0 ( nurl_str_len f0t )
-        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` st `' to an integer — '# i expr' converts numbers and pointers, not this type. There are no implicit conversions in NURL.` ) ) }
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` ( llvm_to_nurl st ) `' to an integer — '# i expr' converts numbers and pointers, not this type. There are no implicit conversions in NURL.` ) ) }
         {}
         : s xv ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print xv )
@@ -33579,7 +33790,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
             ( nurl_set_last_type dt ) ^ res
         } {}
         ? & & ! f0_is_fp ! f0_is_ptr == f0iw 0
-        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` st `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
+        { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3 `cannot cast '` ( llvm_to_nurl st ) `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
         {}
         : s norm ? & ! f0_is_ptr == f0iw 64 xv ( nurl_cg_reg cg )
         ? f0_is_ptr
@@ -33750,7 +33961,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
                         ^ res
                     }
                     { ( die_pos lex __cast_line __cast_col ( nurl_str_cat3
-                        `cannot cast '` st
+                        `cannot cast '` ( llvm_to_nurl st )
                         `' to a pointer — that type's first field is not a pointer, so there is no address to read out of it. Handle types like ( Vec u ) carry a pointer as field 0 and CAN be read this way.` ) ) }
                 }
                 {}
@@ -33859,7 +34070,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
                         ? & > stlen 0 & | == ( nurl_str_get st 0 ) 123 == ( nurl_str_get st 0 ) 91
                         ! ( seq st dt )
                         { ( die_pos lex __cast_line __cast_col ( nurl_str_cat ( nurl_str_cat3
-                            `cannot cast '` st ( nurl_str_cat3 `' to '` dt `'` ) )
+                            `cannot cast '` ( llvm_to_nurl st ) ( nurl_str_cat3 `' to '` ( llvm_to_nurl dt ) `'` ) )
                             ` — the operand is an aggregate (option / result / slice), not a scalar. Unwrap it first: '?? expr { T x → … F _ → … }'.` ) ) }
                         {}
                         // Integer-width conversion (iN → iM).  Sub-cases:
@@ -35098,7 +35309,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     ? | | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip __slag
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
-                        ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
+                        ( nurl_str_cat4 `' expects type '` ( llvm_to_nurl __sldft ) `' but the value has type '` ( llvm_to_nurl fty ) )
                         __slcure ) ) }
                     {}
                 }
@@ -35943,7 +36154,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         & agg_is_res >= idx 2
         { ( die lex ( nurl_str_cat ( nurl_str_cat3
             `too many values in this aggregate literal: value ` ( nurl_str_int + idx 1 ) ` has no slot — ` )
-            ( nurl_str_cat3 `an option is a tag and one payload ('@ ?i { T 7 }'), a result a tag and one payload ('@ !i E { F e }'). If the payload looks right, a prefix operator inside it has one operand too many and the surplus spilled here: count the operands (fixed arity, no closing bracket). The aggregate shape is '` ( nurl_llty agg_ty ) `'.` ) ) ) }
+            ( nurl_str_cat3 `an option is a tag and one payload ('@ ?i { T 7 }'), a result a tag and one payload ('@ !i E { F e }'). If the payload looks right, a prefix operator inside it has one operand too many and the surplus spilled here: count the operands (fixed arity, no closing bracket). The aggregate shape is '` ( llvm_to_nurl ( nurl_llty agg_ty ) ) `'.` ) ) ) }
         {}
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
@@ -36235,6 +36446,110 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     r1
 }
 
+// The top-level fields of an LLVM literal struct type `{ a, b, … }`, as
+// a `\t`-separated list (commas inside nested braces are not splits).
+unsafe @ __l2n_fields s lt → s {
+    : i n ( nurl_str_len lt )
+    : *u lv # *u lt
+    : ~ s out ``
+    : ~ i depth 0
+    : ~ i st 2
+    : ~ i k 1
+    ~ < k n {
+        : i c ( nurl_str_at lv n k )
+        ? == c 123 { = depth + depth 1 } {}
+        ? & == c 125 > depth 0 { = depth - depth 1 } {
+            ? | & == c 44 == depth 0 & == c 125 == depth 0 {
+                : ~ i e k
+                ~ & > e st == ( nurl_str_at lv n - e 1 ) 32 { = e - e 1 }
+                : s f ( nurl_str_slice lt st - e st )
+                = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat f `` ) ( nurl_str_cat3 out `\t` f )
+                = st + k 2
+            } {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+// `{ i1, T }` → `?T`, `{ i1, T, E }` → `!T E`, `{ T*, i64 }` → `[T`;
+// "" for any other literal struct.
+@ __l2n_agg s lt → s {
+    : s fs ( __l2n_fields lt )
+    : i t1 ( nurl_str_find fs `\t` )
+    ? < t1 0 { ^ `` } {}
+    : s f0 ( nurl_str_slice fs 0 t1 )
+    : s rest ( nurl_str_slice fs + t1 1 - ( nurl_str_len fs ) + t1 1 )
+    : i t2 ( nurl_str_find rest `\t` )
+    ? & < t2 0 & ( seq rest `i64` ) & > ( nurl_str_len f0 ) 1 == ( nurl_str_get f0 - ( nurl_str_len f0 ) 1 ) 42
+    { ^ ( nurl_str_cat `[` ( llvm_to_nurl ( nurl_str_slice f0 0 - ( nurl_str_len f0 ) 1 ) ) ) }
+    {}
+    ? ! ( seq f0 `i1` ) { ^ `` } {}
+    ? < t2 0 { ^ ( nurl_str_cat `?` ( llvm_to_nurl rest ) ) } {}
+    : s f2 ( nurl_str_slice rest + t2 1 - ( nurl_str_len rest ) + t2 1 )
+    ? >= ( nurl_str_find f2 `\t` ) 0 { ^ `` } {}
+    ^ ( nurl_str_cat4 `!` ( llvm_to_nurl ( nurl_str_slice rest 0 t2 ) ) ` ` ( llvm_to_nurl f2 ) )
+}
+
+// A named type: `Vec__u` → `( Vec u )` when `Vec` is a generic struct
+// (its instantiations are mangled `Name__arg__arg`), else the name.
+unsafe @ __l2n_named s nm → s {
+    : i us ( nurl_str_find nm `__` )
+    ? & > us 0 != 0 g_generic_struct_syms {
+        : s base ( nurl_str_slice nm 0 us )
+        ? != 0 ( nurl_sym_len2 g_generic_struct_syms base `__stparams` ) {
+            : s args ( nurl_str_slice nm + us 2 - ( nurl_str_len nm ) + us 2 )
+            : *u av # *u args
+            : ~ s sp ``
+            : i an ( nurl_str_len args )
+            : ~ i k 0
+            : ~ i st 0
+            ~ <= k an {
+                : ~ b cut == k an
+                ? & ! cut < + k 1 an {
+                    = cut & == ( nurl_str_at av an k ) 95 == ( nurl_str_at av an + k 1 ) 95
+                } {}
+                ? cut {
+                    // Each argument is mangled in its lowered spelling
+                    // (`i64`, `str` for a raw string).
+                    : s a1 ( nurl_str_slice args st - k st )
+                    = sp ( nurl_str_cat3 sp ` ` ? ( seq a1 `str` ) `s` ( llvm_to_nurl a1 ) )
+                    = st + k 2
+                    = k + k 2
+                } { = k + k 1 }
+            }
+            ^ ( nurl_str_cat4 `( ` base sp ` )` )
+        } {}
+    } {}
+    ^ ( nurl_str_cat nm `` )
+}
+
+// The NURL type an `inout` argument's address points at: the binding's
+// own type (`i64*` → `i`).
+@ __l2n_pointee s pt → s {
+    : i n ( nurl_str_len pt )
+    ? & > n 1 == ( nurl_str_get pt - n 1 ) 42 { ^ ( llvm_to_nurl ( nurl_str_slice pt 0 - n 1 ) ) } {}
+    ^ ( llvm_to_nurl pt )
+}
+
+// A `;`-separated list of LLVM types, each as NURL spells it.
+unsafe @ __l2n_list s lst → s {
+    : i n ( nurl_str_len lst )
+    : *u lv # *u lst
+    : ~ s out ``
+    : ~ i st 0
+    : ~ i k 0
+    ~ <= k n {
+        ? | == k n == ( nurl_str_at lv n k ) 59 {
+            : s one ( llvm_to_nurl ( nurl_str_slice lst st - k st ) )
+            = out ? == st 0 ( nurl_str_cat one `` ) ( nurl_str_cat3 out `;` one )
+            = st + k 1
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 // llvm_to_nurl: map LLVM type string to NURL type keyword for error messages.
 @ llvm_to_nurl s lt → s {
     ? ( seq lt `i64` ) ^ ( nurl_str_cat `i` `` )
@@ -36251,16 +36566,25 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     ? ( seq lt `u16` ) ^ ( nurl_str_cat `u16` `` )
     ? ( seq lt `u32` ) ^ ( nurl_str_cat `u32` `` )
     ? ( seq lt `u64` ) ^ ( nurl_str_cat `u64` `` )
-    ? ( seq lt `float` ) ^ ( nurl_str_cat `f32` `` )
-    // struct/enum: strip leading '%'
-    ? == ( nurl_str_get lt 0 ) 37
-    { ^ ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) }
-    {}
+    ? ( seq lt `float` ) { ^ ( nurl_str_cat `f32` `` ) } {}
     // pointer: `i64*` reads back as `*i`, `%Foo*` as `*Foo` (`i8*` → `s`
     // matched above). Recursion peels one star per level (`i64**` → `**i`).
     : i __l2n_n ( nurl_str_len lt )
     ? & > __l2n_n 1 == ( nurl_str_get lt - __l2n_n 1 ) 42
     { ^ ( nurl_str_cat `*` ( llvm_to_nurl ( nurl_str_slice lt 0 - __l2n_n 1 ) ) ) }
+    {}
+    // struct/enum: strip leading '%' — and spell a generic instance the
+    // way the source does: `%Vec__u` is `( Vec u )`.
+    ? == ( nurl_str_get lt 0 ) 37
+    { ^ ( __l2n_named ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) ) }
+    {}
+    // The aggregate shapes a diagnostic would otherwise print raw: an
+    // option `{ i1, T }` is `?T`, a result `{ i1, T, E }` is `!T E`, a
+    // slice `{ T*, i64 }` is `[T`. (`{ i1, i64 }` meant nothing to a
+    // reader who wrote `vec_get`.)
+    ? == ( nurl_str_get lt 0 ) 123
+    { : s __agg ( __l2n_agg lt )
+        ? != 0 ( nurl_str_len __agg ) { ^ __agg } {} }
     {}
     ( nurl_str_cat lt `` )
 }
@@ -36519,7 +36843,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
         ( die_stmt lex ( nurl_str_cat ( nurl_str_cat3
-        `the expression produces no value to bind or assign, but a '` to_ty `' was required. A call returning 'v', an assignment, or a block that is empty or whose last statement yields nothing, all produce no value — bind the result of an expression that produces one.` ) vr ) ) }
+        `the expression produces no value to bind or assign, but a '` ( llvm_to_nurl to_ty ) `' was required. A call returning 'v', an assignment, or a block that is empty or whose last statement yields nothing, all produce no value — bind the result of an expression that produces one.` ) vr ) ) }
     {}
     // No coercion above bridged from_ty → to_ty. If they are a never-valid
     // mix — a float and a non-float, or a pointer/string stored into a
@@ -36625,7 +36949,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
         ? | | | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr csv_store_clash csv_agg_ptr
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
+            `value of type '` ( llvm_to_nurl from_ty ) `' cannot initialise / assign a binding of type '` ( llvm_to_nurl to_ty ) )
             __csv_cure ) ) }
         {}
     }
@@ -42641,9 +42965,12 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
                             : s sv ( nurl_sym_get syms name )
                             ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                             {}
-                            { ( die_pos lex tline tcol ( nurl_str_cat
+                            { : s __hint ( __import_hint name T )
+                                ( die_pos lex tline tcol ( nurl_str_cat
                                 ( nurl_str_cat3 `unknown type '` name `' in ` )
-                                ( nurl_str_cat ctx ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
+                                ( nurl_str_cat ctx ? != 0 ( nurl_str_len __hint )
+                                ( nurl_str_cat ` — no struct or enum with this name is declared here.` __hint )
+                                ` — no struct or enum with this name is declared (a typo, or a missing '$' import?)` ) ) ) } } } }
                 {} }
             = i j
         }
@@ -42668,8 +42995,10 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     == 0 ( nurl_sym_len2 g_generic_struct_syms sname `__stparams` )
     { : s done_chk ( nurl_str_cat sname ( nurl_str_cat mangle_sfx `__done` ) )
         ? == 0 ( nurl_sym_len g_struct_inst_syms done_chk )
-        { ( die lex ( nurl_str_cat3 `unknown generic type '( ` ( nurl_str_cat sname ` … )` )
-            `' — no generic struct of that name is defined or imported here, so the type cannot be sized. Missing a '$' import (stdlib/core/vec.nu for Vec)?` ) ) }
+        { : s __hint ( __import_hint sname T )
+            ( die lex ( nurl_str_cat3 `unknown generic type '( ` ( nurl_str_cat sname ` … )` )
+            ( nurl_str_cat `' — no generic struct of that name is defined or imported here, so the type cannot be sized.`
+            ? != 0 ( nurl_str_len __hint ) __hint ` Missing a '$' import?` ) ) ) }
         {}
     }
     {}
@@ -42830,7 +43159,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
         ( nurl_str_cat4 caller_file `:` ( nurl_str_int caller_line ) `:` )
         ( nurl_str_cat ( nurl_str_int caller_col ) `: error: call to generic function '` )
         fname
-        `' but no generic of that name is defined in this file or any '$'-imported file — add the '$' import for the file that defines it` ) )
+        ( __generic_home_tail fname ) ) )
         ( __diag_abort )
     } {}
     : s ret_ty ( compute_generic_ret_ty fname type_args )
@@ -50545,8 +50874,8 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         ( nurl_str_cat4 caller_file `:` caller_line __cc_sfx )
         `error: `
         ( nurl_eprintln ( nurl_str_cat3 loc
-        ( nurl_str_cat3 `call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
-        ` — add the '$' import for the file that defines it` ) )
+        ( nurl_str_cat `call to generic function '` fname )
+        ( __generic_home_tail fname ) ) )
         ( __diag_abort )
     }
     {}
@@ -53561,16 +53890,16 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
         ( nurl_str_cat3 ` parameter(s), but the trait declares ` want_ar ` — an impl must have the signature the trait declares, because every call site is type-checked against the declaration and a 'dyn' object dispatches through it.` ) ) ) }
     {}
     ? & != 0 ( nurl_str_len tparam ) ! ( seq want_recv got_recv )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` takes a receiver of type '` got_recv )
-        ( nurl_str_cat3 `', but the trait declares '` want_recv `' for this Self. An impl must have the signature the trait declares.` ) ) ) }
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` takes a receiver of type '` ( llvm_to_nurl got_recv ) )
+        ( nurl_str_cat3 `', but the trait declares '` ( llvm_to_nurl want_recv ) `' for this Self. An impl must have the signature the trait declares.` ) ) ) }
     {}
     ? ! ( seq want_pt got_pt )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` has non-receiver parameter types '` got_pt )
-        ( nurl_str_cat3 `', but the trait declares '` want_pt `' (';'-separated, lowered). An impl must have the signature the trait declares, because every call site is type-checked against the declaration.` ) ) ) }
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` has non-receiver parameter types '` ( __l2n_list got_pt ) )
+        ( nurl_str_cat3 `', but the trait declares '` ( __l2n_list want_pt ) `' (';'-separated). An impl must have the signature the trait declares, because every call site is type-checked against the declaration.` ) ) ) }
     {}
     ? ! ( seq want_ret got_ret )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` returns '` got_ret )
-        ( nurl_str_cat3 `', but the trait declares '` want_ret `'. A 'dyn' object calls through a vtable built from the DECLARATION, so a disagreeing return type reaches the caller as the declared type with no conversion and no diagnostic.` ) ) ) }
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 where ` returns '` ( llvm_to_nurl got_ret ) )
+        ( nurl_str_cat3 `', but the trait declares '` ( llvm_to_nurl want_ret ) `'. A 'dyn' object calls through a vtable built from the DECLARATION, so a disagreeing return type reaches the caller as the declared type with no conversion and no diagnostic.` ) ) ) }
     {}
 }
 
@@ -54159,7 +54488,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         }
         ? != 0 ( nurl_str_len vlent ) {
             ? vclone { = val ( mem_emit_cloneif cg ct val vlent ) }
-            { ( die_pos lex vline vcol ( nurl_str_cat4 `'( dyn ` tname ( nurl_str_cat3 ` … )' boxes a borrowed value of type '` ct `', which owns heap memory and has no copy: the box would free what its real owner still holds. ` )
+            { ( die_pos lex vline vcol ( nurl_str_cat4 `'( dyn ` tname ( nurl_str_cat3 ` … )' boxes a borrowed value of type '` ( llvm_to_nurl ct ) `', which owns heap memory and has no copy: the box would free what its real owner still holds. ` )
                 `Box a value this function owns — bind it with ':' first, or take the parameter as 'sink'.` ) ) }
         } {}
     } {}
@@ -58909,6 +59238,7 @@ unsafe @ main → i {
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )
     ( nurl_sym_def g_fn_noreturn `nurl_panic` `1` )
+    ( nurl_sym_def g_fn_noreturn `nurl_panic_index` `1` )
     = g_loop_break_used ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0

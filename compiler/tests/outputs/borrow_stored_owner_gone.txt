@@ -1,21 +1,30 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_stored_owner_gone.nu:40: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 39 by keep (it was stored in 't'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+compiler/tests/borrow_stored_owner_gone.nu:40:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 39 by keep (it was stored in 't'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:47: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 46 by keep (in a literal it was handed). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:47:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 46 by keep (in a literal it was handed). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:56: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 55 by assigning 't' a new value (it was stored in 't'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:56:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 55 by assigning 't' a new value (it was stored in 't'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + ( peek t ) ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:65: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 64 by keep (it was stored in 's'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:65:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 64 by keep (it was stored in 's'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:74: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 73 by keep_outer (it was stored in 't' in 'o'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:74:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 73 by keep_outer (it was stored in 't' in 'o'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:83: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 82 by keep (it was stored in 'u'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:83:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 82 by keep (it was stored in 'u'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:91: error: 'a' is read here, but its value was moved into 'u' at line 89. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'u' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:91:5: error: 'a' is read here, but its value was moved into 'u' at line 89. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'u' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
     : i m ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:99: error: 'a' is read here, but its value was moved into 't' at line 98. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 't' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:99:5: error: 'a' is read here, but its value was moved into 't' at line 98. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 't' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
     ^ + ( peek t ) ( vec_len [i] a )
-compiler/tests/borrow_stored_owner_gone.nu:115: error: 'a' is read here, but its value was moved into 't' at line 112. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 't' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    ^
+compiler/tests/borrow_stored_owner_gone.nu:115:5: error: 'a' is read here, but its value was moved into 't' at line 112. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 't' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
     ^ + ( vec_len [Hold] hs ) ( vec_len [i] a )
+    ^
 error: compilation aborted — 9 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

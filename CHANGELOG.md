@@ -46,6 +46,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaces (and the registry's package docs) carried full source for every
   impl: nurldb's exec.nu surface was 17.7 KB, now 8.8 KB.
 
+- **A missing import names its line.** "unknown generic type '( Vec … )'
+  … Missing a '$' import (stdlib/core/vec.nu for Vec)?" — and its
+  unknown-function, unknown-type and generic-function siblings — now
+  find the stdlib module that defines the name and end with the exact
+  line to add: `It is defined in stdlib/core/vec.nu — add this line at
+  the top of the file:  $ `stdlib/core/vec.nu``. The stdlib is scanned
+  only on the way to the fatal error (≤ 8 ms), so a program that
+  compiles never pays for it. The playground's `nurlc_errors` entry
+  carries it as an edit: `"fix": {"insert_line": 1, "text": "$ `…`"}`.
+- **Diagnostics speak NURL types.** `llvm_to_nurl` spells an option
+  `?i` (not `{ i1, i64 }`), a result `!T E`, a slice `[T`, a pointer
+  `*i` (it printed `Node*` for `%Node*`), a generic instance `( Vec i )`
+  (not `Vec__i64`); thirty message sites that interpolated the lowered
+  type as is now go through it. An option operand that came from a `_get`
+  with a non-option twin names it: "'vec_get' returns '?i'; 'vec_at'
+  returns the element itself, bounds-checked". New gate
+  `tools/check_diag_nurl_types.sh` (CI) keeps lowered types out of the
+  diagnostic goldens.
+- **The prefix-arity trap is reported at its cause.** `: i b + a` one
+  operand short swallows the next line, `( nurl_println_int b )`, which
+  used to read "use of undefined identifier 'b'" at the use. Now: "the
+  initialiser of 'b' is one operand short and swallowed the statement on
+  line 4", anchored at the binding.
+- **Borrow-checker errors have a column** — the statement's first
+  character, the anchor `die_stmt` uses — and a caret under the echoed
+  line, so every nurlc error has the `file:line:col:` shape a tool
+  parses.
+- **An index past the end panics once.** `vec_at` / `slice_at` printed
+  "index out of bounds: the index is 5 but the length is 2" and then
+  panicked with a bare "index out of bounds", so the console (all a
+  unikernel run shows) said it twice and a recover frame saw only the
+  bare half. The detail is now the panic message itself
+  (`nurl_panic_index` in the runtime, noreturn).
+
 ### Changed
 
 - **`nurl_docs` serves `formal/`** — the mechanized proof the docs cite

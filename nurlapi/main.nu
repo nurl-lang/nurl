@@ -625,15 +625,17 @@ unsafe @ rl_allow s key i limit → b {
 }
 
 // Parse nurlc's stderr into a Json array of structured diagnostics,
-// `{ "file", "line", "col", "severity", "message" }`, one per line of
+// `{ "file", "line", "col", "severity", "message" }` — plus `fix`
+// `{ "insert_line", "text" }` when the cure is one line to add (a missing
+// `$` import) — one per line of
 // either shape nurlc writes:
 //
-//   file:line:col: severity: message   the front-end and the lint, which
-//                                      know the token they stopped on
-//   file:line: severity: message       the borrow checker and the deferred
-//                                      checks, which run after the lexer
-//                                      has moved on: `col` is null, never
-//                                      a guess
+//   file:line:col: severity: message   the front end, the lint and the
+//                                      borrow checker (anchored at the
+//                                      statement it describes)
+//   file:line: severity: message       the deferred checks that know only
+//                                      a line (die_at): `col` is null,
+//                                      never a guess
 //
 // Leading blanks are skipped (the unikernel build indents the compiler's
 // output under its own header). Source echoes, carets and the unlocated
@@ -715,7 +717,19 @@ unsafe @ rl_allow s key i limit → b {
     ( json_obj_set o `line` ( json_int line ) )
     ? < col 0 { ( json_obj_set o `col` ( json_null ) ) } { ( json_obj_set o `col` ( json_int col ) ) }
     ( json_obj_set o `severity` ( json_str_lit sev ) )
-    ( json_obj_set o `message` ( json_str_lit ( nurl_str_slice blob m - eol m ) ) )
+    : s msg ( nurl_str_slice blob m - eol m )
+    ( json_obj_set o `message` ( json_str_lit msg ) )
+    // A missing import names its cure as the exact line to add; hand it
+    // over as an edit too, so a client applies it without parsing prose.
+    : s cue `add this line at the top of the file:  `
+    : i fx ( nurl_str_find msg cue )
+    ? >= fx 0 {
+        : i from + fx ( nurl_str_len cue )
+        : Json fix ( json_obj_new )
+        ( json_obj_set fix `insert_line` ( json_int 1 ) )
+        ( json_obj_set fix `text` ( json_str_lit ( nurl_str_slice msg from - ( nurl_str_len msg ) from ) ) )
+        ( json_obj_set o `fix` fix )
+    } {}
     ( json_arr_push arr o )
 }
 
