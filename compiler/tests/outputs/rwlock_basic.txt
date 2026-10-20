@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cell 3:    2
+version:   2
+2nd read:  1
+try write: 0
+free write:1
+read in w: 0
+copy len:  8
+new len:   4
+updated:   42
+panicked:  1
+freed w:   1
+freed r:   1
+torn pages: 0
+reads:      8000
+a cell 63:  8000
+b version:  8000

@@ -274,3 +274,14 @@ h284_returned_result_of_closure	§7.5	A2	result of a capturing closure handed ba
 h285_view_of_capture_across_opaque_closure_param	§2.11	A2	closure holds a view of a captured Vec across a call to its closure parameter, which re-enters and grows it	rejected
 h286_view_of_capture_across_closure_in_struct_param	§2.11	A2	h285 with the closure run a field of a struct parameter	rejected
 h287_view_of_capture_across_closure_in_vec_param	§2.11	A2	h285 with the closure run an element of a Vec parameter (vec_at)	rejected
+h288_arc_payload_lent_through_a_struct	§6.5	A3	helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read	rejected
+h289_foreign_write_into_a_frozen_view	§6.5	A3	unsafe helper preads into a slice it is handed; caller hands it a view of an Arc payload	rejected
+h290_move_only_handle_in_a_struct_never_dropped	§7.6	A2	struct holding a lock guard (no share/clone hook) was dropped by nobody: lock held, block leaked	runs-clean
+h291_unjournaled_drop_skipped_by_a_panic	§7.2	A2	panic past a struct holding a lock guard (or a Drop impl defined later): its drop was never journaled — lock held, leak, Drop not run	runs-clean
+h292_argument_temporary_leaked_by_a_panic	§7.2	A2	a String / Vec made in an argument, the callee panics: the drop after the call was skipped and the journal did not know the temporary — leak	runs-clean
+h293_thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean
+h294_parked_drop_registration_never_forgotten	§7.2	A2	a value whose journal thunk is parked for module end was registered but never forgotten: a later panic dropped it from a returned frame	runs-clean
+h295_param_copy_passed_inout_releases_callers_field	§2.12	A2	a ': ~' copy of a parameter shares its fields; passed inout, the callee replaced a field and released the caller's (UAF)	rejected
+h296_arm_payload_returned_registration_kept	§7.2	A2	a ?? arm handing its handle payload out as the match value left its journal registration: a later panic read a dead frame's flag	runs-clean
+h297_inout_closure_param_replaced	§7.4	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
+h298_closure_inout_capture_replaced	§2.4	A2	a closure handing a captured : ~ String to an inout parameter took it by value; the callee replaced the copy and released the caller's buffer (UAF)	runs-clean

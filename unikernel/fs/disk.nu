@@ -170,6 +170,8 @@ unsafe @ nurl_disk_write i h * u buf i n → i { ^ ( fatfs_write_raw h buf n ) }
     ^ ( fatfs_truncate path len )
 }
 
+@ nurl_disk_ftruncate i h i len → i { ^ ( fatfs_ftruncate h len ) }
+
 // ── directory reading ───────────────────────────────────────────────
 //
 // `getdents64` in the guest is built out of these two: a handle opened

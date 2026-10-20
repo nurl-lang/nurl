@@ -160,7 +160,7 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
 // It shares stdout's stdio buffer and tty-flush rule with the ordinary
 // prints, so mixing the two never reorders output (unlike a raw write(2)
 // on fd 1, which would need an explicit ( flush ) first).
-& `c` @ nurl_print_bytes *u p i n → v
+& `c` @ nurl_print_bytes in *u p i n → v
 
 @ write_bytes ( Vec u ) v → v {
     : i n ( vec_len [u] v )

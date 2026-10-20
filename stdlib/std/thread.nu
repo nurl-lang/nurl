@@ -39,6 +39,11 @@
 //   ( locked_set     [T] l x )             → v   replace the value under the lock
 //   ( locked_take    [T] l )               → T   check the value out to change it
 //   ( locked_restore [T] l x )             → v   check it back in
+//   ( locked_update  [T] l f )             → v   f changes the value in place
+//   ( locked_apply   [T R] l f )           → R   …and hands back a result
+//   ( locked_await   [T R] l f )           → R   f runs on the value each time
+//                                               it changes, until it hands back
+//                                               a result (a monitor: wait until)
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
 //   ( cond_signal    Cond c )              → v
@@ -93,21 +98,21 @@ $ `stdlib/core/rcbox.nu`
 // a held mutex) or an OOM the caller can't recover from. thread_spawn
 // IS error-checking because pthread_create's EAGAIN ("would exceed
 // thread cap") is a real recoverable condition.
-& `c` @ pthread_mutex_init *u m *u attr → i32
+& `c` @ pthread_mutex_init *u m in *u attr → i32
 
-& `c` @ pthread_mutex_lock *u m → i32
+& `c` @ pthread_mutex_lock sync *u m → i32
 
-& `c` @ pthread_mutex_unlock *u m → i32
+& `c` @ pthread_mutex_unlock sync *u m → i32
 
 & `c` @ pthread_mutex_destroy *u m → i32
 
-& `c` @ pthread_cond_init *u cv *u attr → i32
+& `c` @ pthread_cond_init *u cv in *u attr → i32
 
-& `c` @ pthread_cond_wait *u cv *u m → i32
+& `c` @ pthread_cond_wait sync *u cv sync *u m → i32
 
-& `c` @ pthread_cond_signal *u cv → i32
+& `c` @ pthread_cond_signal sync *u cv → i32
 
-& `c` @ pthread_cond_broadcast *u cv → i32
+& `c` @ pthread_cond_broadcast sync *u cv → i32
 
 & `c` @ pthread_cond_destroy *u cv → i32
 
@@ -116,7 +121,7 @@ $ `stdlib/core/rcbox.nu`
 // return is discarded at the OS layer because the runtime trampolines
 // below always pass NULL for the join's value pointer. ABI-compatible
 // on every System V target (x86_64 / aarch64 / riscv64).
-& `c` @ pthread_create *u t *u attr *u start *u arg → i32
+& `c` @ pthread_create *u t in *u attr in *u start in *u arg → i32
 
 // pthread_t is by-value and 16-byte struct on winpthreads — NURL has
 // no struct-by-value FFI. These two trampolines (runtime.c §19) take
@@ -128,7 +133,7 @@ $ `stdlib/core/rcbox.nu`
 // pthread_create through a trampoline that runs the body on its own copy
 // of the closure env and drops the copy once the body returns
 // (runtime_ffi.c §19). What thread_spawn is made of.
-& `c` @ nurl_pthread_create_owned *u t *u start *u env → i32
+& `c` @ nurl_pthread_create_owned *u t in *u start in *u env → i32
 
 // ── ThreadErr ─────────────────────────────────────────────────────
 
@@ -314,9 +319,9 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Shared pthread objects ────────────────────────────────────────
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+& `c` @ nurl_atomic_i64_inc sync *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_atomic_i64_dec_fetch sync *u p → i
 
 // A zeroed block the size of the native object `native`.
 @ __sync_block s native → RawBlock {
@@ -431,6 +436,8 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     ( f . p val )
+    // (A thread in locked_await looks again at the changed value.)
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 
@@ -440,8 +447,36 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     : R r ( f . p val )
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
     ^ r
+}
+
+// A monitor's wait: run `f` on the value IN PLACE with the lock held — and
+// again each time another thread changes the value (locked_update,
+// locked_apply, locked_set, locked_restore) — until it hands back a
+// result, which is returned once the lock is let go. Between two runs the
+// lock is not held, so the thread waits without stopping the ones that
+// will change what it is waiting for. `f` may change the value too (to
+// register itself, say); a run that changes it and hands back nothing
+// wakes the other waiters before this one sleeps.
+//
+//   ( locked_await [Queue Job] q \ inout Queue x → ?Job { ^ ( queue_pop x ) } )
+@ locked_await [A R] ( Locked A ) l ( @ ?R inout A ) f → R {
+    : ~ * ( LockedImpl A ) p ( shared_ptr [( LockedImpl A )] . l ctl )
+    ( mutex_lock . p mu )
+    ~ T {
+        ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
+        : ?R r ( f . p val )
+        ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
+        ? . r 0 {
+            ( mutex_unlock . p mu )
+            ^ . r 1
+        } {}
+        = . p waiters + . p waiters 1
+        ( cond_wait . p cv . p mu )
+        = . p waiters - . p waiters 1
+    }
 }
 
 // A copy of the value, taken under the lock.
@@ -460,6 +495,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_lock . p mu )
     ~ . p taken { = . p waiters + . p waiters 1 ( cond_wait . p cv . p mu ) = . p waiters - . p waiters 1 }
     = . p val x
+    ? > . p waiters 0 { ( cond_broadcast . p cv ) } {}
     ( mutex_unlock . p mu )
 }
 

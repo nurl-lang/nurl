@@ -31,9 +31,9 @@
 
 // The owner count: one more (the old count back), one fewer (1 when the
 // caller was the last owner). A count of 1 skips the locked RMW.
-& `c` @ nurl_rc_share *u p → i
+& `c` @ nurl_rc_share sync *u p → i
 
-& `c` @ nurl_rc_release *u p → i
+& `c` @ nurl_rc_release sync *u p → i
 
 : RcBox [T] {
     i owners

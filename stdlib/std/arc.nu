@@ -78,13 +78,13 @@
 //   nurl_atomic_i64_inc(p)       → old value (fetch-add 1)
 //   nurl_atomic_i64_dec_fetch(p) → NEW value (sub-fetch 1)
 //   nurl_atomic_i64_load(p)      → current value (acquire-load)
-& `c` @ nurl_atomic_i64_inc *u p → i
+& `c` @ nurl_atomic_i64_inc sync *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_atomic_i64_dec_fetch sync *u p → i
 
-& `c` @ nurl_atomic_i64_load *u p → i
+& `c` @ nurl_atomic_i64_load in *u p → i
 
-& `c` @ nurl_atomic_i64_inc_if_live *u p → i
+& `c` @ nurl_atomic_i64_inc_if_live sync *u p → i
 
 // The counts as the rcbox handles keep theirs (runtime_core.c): an owner
 // that finds itself the only one — strong count 1 and no Weak — skips the
@@ -92,11 +92,11 @@
 // is 1 for the last strong owner and 2 for the only owner of a block no
 // Weak names (the block is then its to free). nurl_rc_release on the weak
 // count: 1 for the last holder of the block.
-& `c` @ nurl_arc_share *u p → i
+& `c` @ nurl_arc_share sync *u p → i
 
-& `c` @ nurl_arc_release *u p → i
+& `c` @ nurl_arc_release sync *u p → i
 
-& `c` @ nurl_rc_release *u p → i
+& `c` @ nurl_rc_release sync *u p → i
 
 // [ count ][ weak ][ value ]. `weak` counts the Weak handles plus one held
 // by the strong handles together: the last strong handle drops the value

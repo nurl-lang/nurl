@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_inout_immutable_capture.nu:13:44: error: inout argument 'n' must be a mutable ': ~' binding — the callee mutates it in place
+    ( vec_each [i] xs \ i x → v { ( bump n ) } )
+                                           ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

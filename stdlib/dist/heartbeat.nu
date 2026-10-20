@@ -24,9 +24,9 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/std/arc.nu`
 
-& `c` @ nurl_atomic_i64_load *u p → i
+& `c` @ nurl_atomic_i64_load in *u p → i
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+& `c` @ nurl_atomic_i64_inc sync *u p → i
 
 @ __hb_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )

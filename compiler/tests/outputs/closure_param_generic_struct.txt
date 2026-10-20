@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+window bytes: 15
+locked: 42
+pair: 5

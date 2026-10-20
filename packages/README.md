@@ -178,6 +178,29 @@ the one block it needs, so a table larger than RAM is an ordinary table.
 Leak-clean under ASan/LSan across every path. See
 [`lsmdb/README.md`](lsmdb/README.md) for the file format and the guarantees.
 
+## `nurldb/` — a multi-threaded relational database (installable program **and** library)
+
+SQL over B+tree-indexed tables in safe NURL — no `unsafe` function — and
+multi-threaded throughout: a buffer pool of reader-writer-latched frames
+with atomic pins, a write-ahead log whose one flusher thread commits many
+transactions per `fdatasync`, snapshot-isolation transactions with a lock
+manager and deadlock detection, B+trees with latch crabbing, crash
+recovery with full-page images, an aggregate over a table scan run on four
+threads, and a TCP server with a thread per connection.
+
+```
+nurlpkg install nurldb
+nurldb ./data -c "CREATE TABLE t (id INT PRIMARY KEY, name TEXT);
+                  INSERT INTO t VALUES (1, 'ada'); SELECT * FROM t"
+nurldb serve ./data 5433       # one thread per connection
+nurldb bench ./bench 8 5       # transfers from 8 sessions for 5 s
+```
+
+A test kills a four-thread writer with SIGKILL mid-flight, twice, and
+finds every acknowledged commit and no half of one. See
+[`nurldb/README.md`](nurldb/README.md) for the SQL, the layers and what
+building it changed in the language.
+
 ## `pqc/` — post-quantum cryptography, and whether the web is ready (installable program)
 
 Both halves of the migration over

@@ -35,7 +35,7 @@ $ `stdlib/std/arc.nu`
 
 & `c` @ inotify_init1 i32 flags → i32
 
-& `c` @ inotify_add_watch i32 fd s path u32 mask → i32
+& `c` @ inotify_add_watch i32 fd in s path u32 mask → i32
 
 & `c` @ inotify_rm_watch i32 fd i32 wd → i32
 

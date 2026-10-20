@@ -1,13 +1,14 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent were `h285`–`h287` (a closure
-holding a view of a `Vec` it captured across a call to a closure its caller
-chose — one of its own closure *parameters*, or a closure a parameter holds
-in a struct field or a `Vec` element — which re-enters and grows the `Vec`),
-found modelling closures for the mechanized proof (`formal/`, phase A2) and
-checking the compiler against its calculus, and closed by ending the views
-of a closure's by-reference captures at a call to an opaque closure.
+gate in the parent directory. The most recent were `h288`–`h298`, found
+building a multi-threaded database (`packages/nurldb`): a helper lending an
+`Arc`'s payload unfrozen through a struct, a foreign write into a frozen
+view, a lock guard held in a struct never released, drops a panic skipped
+or kept registered, a temporary or a thread's message a panic leaked, and a
+parameter's copy passed `inout` to a function that replaces one of its
+fields, and a closure replaced through an `inout` parameter or handed a
+captured binding to one.
 
 A probe here is **safe code** (no `unsafe` function of its own, no raw
 memory or FFI of its own) that the compiler still **accepts** and that then

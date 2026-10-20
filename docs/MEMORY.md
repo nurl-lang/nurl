@@ -372,8 +372,11 @@ So two live names can never both own one buffer.
 
 ### 2.3 Stack references must not escape
 
-A closure that captures a `: ~` mutable multi-field struct captures it by
-pointer into the enclosing frame. Such a value is a *stack reference* and
+A closure that captures a `: ~` mutable multi-field struct, or any `: ~`
+binding that it assigns or hands to an `inout` parameter (h298), captures
+it by pointer into the enclosing frame
+(a callback can count into its caller's binding; `recover \ → v { = out
+( f ) }` hands a result out). Such a value is a *stack reference* and
 must not outlive that frame. The checker tracks the scope depth a stack
 reference points into, through bindings, assignments, field stores,
 aggregate and closure literals, and `?` / `??` joins. An escape is an
@@ -390,8 +393,10 @@ error: returning a value that references a stack binding by pointer
          (move the captured data to a heap-backed handle)
 ```
 
-Closures that capture by value (an immutable `:` capture, a single-handle
-struct) never escape this way.
+Closures that capture by value (an immutable `:` capture, a binding the
+closure only reads) never escape this way. A
+counter that must outlive the frame, or be shared with a thread, is an
+`Atomic` or a `Locked` (std/atomic.nu, std/thread.nu).
 
 ### 2.4 Exclusive access for `inout` arguments
 
@@ -406,6 +411,14 @@ its call. Passing the same binding again in the same call, as another
 
 Reads of the binding inside other arguments (`( grow v ( vec_len v ) )`)
 are evaluated before the call runs and are allowed.
+
+A `: ~` copy of a parameter (`: ~ T c p`) shares p's fields — it owns
+none of them. It may be changed in place, and a field assigned in this
+function leaves the old value to p's owner; but it may not be passed
+`inout` to a function that replaces an owned field of what it is handed
+(directly or through a function it calls): the callee would release p's
+field, which the caller still owns (h295). `: ~ T c ( mem_dup p )` is a
+copy of its own.
 
 The same holds for any argument a callee may change, `inout` or not —
 what its summary says it mutates, reallocates or drops elements of: that
@@ -758,7 +771,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h287):
+all are closed, each a probe CI now holds (h142–h298):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1078,7 +1091,25 @@ so handing one back — from a binding, in a struct field, or as
 own its environment and was tracked only by its captures, so replacing
 the field and calling the closure called freed memory (h283). An option
 or result of a closure owns its environment now, and a closure read out
-of an owner borrows it (§7.5). No hole is known.
+of an owner borrows it (§7.5).
+
+Writing a multi-threaded database in safe code (`packages/nurldb`) found
+eleven (h288–h298). Shared state: a helper taking a struct that holds an
+`Arc` lent its payload unfrozen (h288), and a foreign function writing
+through an unmarked `*T` was no change to anything (h289; §6.5). Guards: a
+struct holding a lock guard had no drop (h290), and a panic skipped the
+drop of a struct whose destructor is written at module end (h291), or
+left it registered after it was dropped (h294). The panic journal: a
+temporary made in a call's argument leaked when the callee panicked
+(h292), a thread kept its last panic message (h293), and a `??` arm
+handing its payload out kept the payload registered (h296). Parameters: a
+`: ~` copy of a parameter passed `inout` to a function that replaces one
+of its fields released the caller's (h295; §2.4). Closures: a closure
+replaced through an `inout` parameter was taken for the callee's own —
+its new environment freed on return, the old one leaked (h297; §7.5) —
+and a closure handing a captured binding to an `inout` parameter took the
+binding by value, so a String the callee replaced was released under the
+caller (h298; §2.3). No hole is known.
 
 The rules that carry it:
 
@@ -1183,6 +1214,22 @@ ideas that are genuinely analogous, but the mechanics differ:
   (`mem::forget`, `Rc` cycles); in NURL `mem_forget` is `unsafe` and `Rc`
   cycles are collected.
 
+**Shared mutable state.** Three handles carry it between threads, each
+`Send` and `Sync`: a `Locked T` (one thread at a time; `locked_await`
+waits on it until a closure says it is done), an `RwLocked T` (many
+readers or one writer) and an `Atomic` (one word, changed only with atomic
+instructions). A read guard is `% Frozen`: what it lends — the value, a
+`Slice` of a `Vec` in it — is read-only, checked as an `Arc`'s payload is
+(§9.13 of the spec), and a struct holding one is frozen in the same way.
+A holder — a thread, or a fiber, which may move between threads — may
+read a lock it already reads (the second guard is counted, so it never
+waits behind a writer queued for the first); asking for one it holds for
+writing, or to write one it reads, panics rather than wait for itself.
+A `PFile` reads and writes at an offset, with no shared file position, so
+threads share one too. A guard is a value like any other: dropped at the
+end of its scope (a bare block, a block that computes a number, a loop
+body), by the unwind of a panic, or when the struct holding it is.
+
 **Send and Sync.** `Send` ("may move to another thread") and `Sync` ("may
 be reached from two threads at once") are marker traits
 (`stdlib/core/marker.nu`) that the compiler derives structurally over a
@@ -1266,7 +1313,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h287`) to the rule that rejects it. See
+  (`h01–h298`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1312,6 +1359,11 @@ journal** instead:
 - A value released normally, or moved out of the extent (assigned into a
   binding the caller owns), is removed from the journal, so the journal
   never releases something twice or releases what the caller now owns.
+- A String / Vec / struct made by a call right in an argument is recorded
+  while the callee runs (it is the caller's until the call returns); a
+  value whose destructor is written at module end (a struct holding a
+  guard) is recorded and forgotten like any other; a value a `??` arm
+  hands out as the match's value leaves the journal with its scope.
 - On a panic, the values still recorded since the target frame's mark are
   released before the jump, while their frames are still valid.
 
@@ -1420,6 +1472,16 @@ in a copy) switch it to a second descriptor, `own`, whose `drop` and
 `clone` cover those captures too (h195). The descriptor is
 `{ size, drop, clone, trace, own, adopt }`; `own` and `adopt` are null for
 an environment that already owns everything it captured.
+
+**A closure binding reached through a pointer is such a place too.** An
+`inout` closure parameter, and a closure binding another closure captured
+by pointer, own their environment: a closure assigned there is made owned
+(a literal's or a call's environment moves in, anything else is copied),
+and the environment it replaces is released. The caller hands one over
+owned — a binding that only borrows its closure is copied first — and
+owns what the place holds afterwards, a panic in the callee included: a
+closure binding's owner slot is a flag, and the environment dropped is
+always the one its value holds (h297).
 
 **A closure read out of an owner borrows from it.** A closure binding
 that does not own its environment — read out of a struct's field

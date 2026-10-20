@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+size:        15
+read:        15
+byte 4 (h):  104
+gap byte:    0
+byte 14 (w): 119
+short read:  5
+exact eof:   1
+after cut:   3
+thread errors: 0
+final size:    131072
+wrong blocks:  0

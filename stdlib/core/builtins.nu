@@ -166,13 +166,13 @@
 // Read an entire file into an owned NUL-terminated string.
 // EXITS THE PROCESS on open failure — use std/fs.nu's read_file for a
 // Result instead.
-& `c` @ nurl_read_file s path → s
+& `c` @ nurl_read_file in s path → s
 
 // Directory listing, one entry per call: open returns a handle (0 on
 // failure), next returns the entry name — a copy the caller owns — or
 // null when done, close frees. Prefer std/fs.nu's dir_list (Vec of
 // names, Result-typed).
-& `c` @ nurl_dir_list_open s path → i
+& `c` @ nurl_dir_list_open in s path → i
 
 // (A runtime handle: only an `unsafe` function may call it.)
 & `c` @ nurl_dir_list_next i handle → sink s
@@ -182,7 +182,7 @@
 
 // libc stdio pass-throughs (FILE* carried as `s`).
 // (Raw memory: only an `unsafe` function may call it.)
-& `c` @ fopen s path s mode → s
+& `c` @ fopen in s path in s mode → s
 
 // (Raw memory: only an `unsafe` function may call it.)
 & `c` @ fclose s handle → i32
@@ -208,7 +208,7 @@
 // (Raw memory: only an `unsafe` function may call it.)
 & `c` @ ftell s handle → i
 
-& `c` @ access s path i32 mode → i32
+& `c` @ access in s path i32 mode → i32
 
 // ── Process, arguments, environment ────────────────────────────────
 // stdlib/std/args.nu parses flags on top of these.
@@ -231,7 +231,7 @@
 
 // libc: environment variable value, or null. stdlib/ext/env.nu wraps
 // this with defaults (env_var_or).
-& `c` @ getenv s name → s
+& `c` @ getenv in s name → s
 
 // libc: canonical absolute path (symlinks/.. resolved); null on
 // failure. Pass null (`# *u 0`) as `resolved` to get a malloc'd result.
@@ -282,7 +282,7 @@
 & `c` @ nurl_closure_drop *u env → v
 
 // (Raw memory: only an `unsafe` function may call it.)
-& `c` @ nurl_closure_clone *u env → *u
+& `c` @ nurl_closure_clone in *u env → *u
 
 // Copy a NUL-terminated string onto a fresh block from the same
 // freelist cache — strdup, but recyclable by nurl_free. The copy is an

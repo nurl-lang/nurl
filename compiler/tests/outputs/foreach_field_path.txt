@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+total 8
+letters 9
+extra 3
+nested 15

@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.9 — complete language specification
+   Grammar v2.10 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -65,7 +65,8 @@ decl = import_decl                 (*  $                             *)
      ;
 
 (* A function declaration may carry any of these prefixes, in any order
-   (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9).
+   (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9; FFI
+   parameter markers and a foreach over a field v2.10).
    `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`
    and on a foreign declaration (`unsafe & …`: only `unsafe` code may call
    it) — on any other decl each is a diagnostic, not a silent
@@ -163,9 +164,21 @@ import_decl = '$' STR IDENT? ;
    Example:  & `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
    A result marked `sink` (a raw string only) is a string the C function
    allocated and hands over: the caller's binding owns it.
-   Example:  & `c` @ strdup s src → sink s *)
+   Example:  & `c` @ strdup s src → sink s
+   Pointer and string parameters may say what the C function does with
+   them (grammar v2.10). Unmarked, a `*T` is one it may write through, and
+   either may be kept or freed by it:
+     in         it only reads, during the call: it keeps nothing of the
+                argument and frees nothing (a temporary handed there is
+                released after the call; a frozen view may be passed)
+     sync       it changes what is there only atomically or under a lock
+                of its own (an atomic word, a mutex)
+     nocapture  its result holds nothing of the argument
+   Example:  & `c` @ remove in s path → i32
+   Example:  & `c` @ nurl_atomic_i64_load in *u p → i *)
 ffi_decl   = '&' STR '@' IDENT ffi_param* ( '...' )? '→' 'sink'? type ;
-ffi_param  = 'inout'? type IDENT? ;
+ffi_param  = 'inout'? ffi_mark* type IDENT? ;
+ffi_mark   = 'in' | 'sync' | 'nocapture' ;
 
 
 (* [T], [K V] — type variable list for generic declarations.
@@ -420,6 +433,7 @@ defer_stmt = ';' block ;
 
 (* ~ at statement position is speculatively parsed, in this order:
      1. '~' IDENT IDENT …   →  foreach_stmt           (3-token lookahead)
+        '~' IDENT '.' …     →  foreach_stmt           (over a field)
      2. '~' expr '{'         →  loop_stmt (while)
      3. otherwise            →  complement_expr used as a statement
    The grammar reflects this as a single tilde_stmt alternative whose
@@ -432,10 +446,13 @@ loop_stmt    = '~' expr block ;
 
 (* ~ IDENT expr { body }
    For-each loop: iterates over a slice, binding each element to IDENT.
-   Disambiguation from while: two consecutive IDENTs after '~' → for-each.
+   Disambiguation from while: an IDENT after '~' followed by another IDENT,
+   or by a member path ('.'), → for-each (a while condition is one
+   expression, never a name followed by another).
    The iterated expression must have slice type  [T (compiles to { T*, i64 }).
    Example:  ~ val nums { = total + total val }
-   Example:  ~ w words { ( nurl_print w ) } *)
+   Example:  ~ w words { ( nurl_print w ) }
+   Example:  ~ it . bag items { ( show it ) } *)
 foreach_stmt = '~' IDENT expr block ;
 
 

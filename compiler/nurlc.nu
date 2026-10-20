@@ -1486,6 +1486,18 @@ unsafe @ agg_field_count i syms s ot → i {
 // body clears where it moves the value out; the env's drop releases what
 // was not taken (h239).
 : ~ s g_nc_own_caps ``
+// The `: ~` scalars the closure being built assigns (simple_capture_analysis
+// finds them; __gen_closure_expr publishes them for its own build): those
+// are captured by reference (__is_capture_byref), so the write lands on
+// the binding — a counter in a callback counts.
+: ~ s g_clo_assigned ``
+// A `~ x xs` loop's element binding is waiting for its body's block row
+// (`pending_fevar` in g_bck names it).
+: ~ i g_bck_fevar 0
+// The `:` binding the next block initialises is a number or a flag
+// (gen_let_or_struct → gen_block_expr, consumed at the block's `{`).
+: ~ i g_blk_scalar_let 0
+: ~ s g_clo_scan_assigned ``
 // …and, for one that a thread or a fiber will run, the captures it takes
 // over from bindings the function no longer uses (gen_closure_expr).
 : ~ s g_env_moved ``
@@ -1677,6 +1689,13 @@ unsafe @ agg_field_count i syms s ot → i {
 // Whether any callee takes an Arc (`arcp##`, §6.5), and whether the
 // function being compiled has handled one (gen_call's `arcx` rows).
 : ~ i g_arcp_any 0
+// Whether any callee takes a `% Frozen` handle (`frzp##`): what it lends
+// is frozen as an Arc's payload is, and reported as the handle's.
+: ~ i g_frzp_any 0
+// Whether the program declares any `% Frozen` impl (gen_call asks only then).
+: ~ i g_frozen_impls 0
+// __ty_lend_frozen's answers, per lowered type (`0` / `1` / `2`).
+: ~ i g_frz_memo 0
 : ~ i g_fn_arcseen 0
 // At the borrow walk: whether the value of the source expression being
 // evaluated is a view of an Arc's payload — -1 not, else the id of the
@@ -1713,6 +1732,16 @@ unsafe @ agg_field_count i syms s ot → i {
 // the same way, closed by the same module-end fixpoint.
 : ~ i g_fn_reallocs 0
 : ~ s g_fn_reallocs_witness ``
+// `g_fn_replaces[fname]`: the `inout` parameters an owned field of which
+// (or the whole value) the function may replace — releasing what was
+// there. Built like the mutation summary; its call edges (`fn|k|callee|j`:
+// parameter k handed on as `inout` argument j) are closed at module end,
+// and the calls that hand a `: ~` copy of a parameter in `inout`
+// (g_repl_checks) are judged against it then (h295).
+: ~ i g_fn_replaces 0
+: ~ s g_fn_replaces_witness ``
+: ~ s g_repl_edges ``
+: ~ s g_repl_checks ``
 // The calls that hand a parameter on (f's parameter k is the callee's
 // argument j) are mutation edges of the provenance store (g_rpg_edge),
 // closed into g_fn_mutates at module end (resolve_mutation_summaries).
@@ -1735,9 +1764,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // noreturn inference more conservative, never wrong). Reset by gen_fn.
 : ~ i g_fn_ret_count 0
 
-// `g_loop_break_used[exit_label]` is `1` when a `break` targeting that
-// loop's exit label was compiled. Exit labels are globally unique (cg
-// label counter), so one flat map serves every loop. Consumed by
+// `g_loop_break_used[serial]` is `1` when a `break` targeting the loop
+// numbered `serial` (g_loop_serial, which never restarts) was compiled.
+// Keyed by the serial, not by the loop's exit label: the label counter
+// restarts with every function (nurl_cg_reset), so a `break` in one
+// function marked a same-numbered label in another, whose `~ T` loop
+// then counted as one that could exit. Consumed by
 // gen_loop: a literal-true loop whose exit label no break targets never
 // reaches it — the label is terminated with `unreachable` and the loop
 // counts as a returning tail. Allocated in main().
@@ -7028,22 +7060,26 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
-        // `c|env`: a closure literal's env (null when the callee kept it).
-        ? ( nurl_str_starts reg `c|` ) {
-            ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
+        // `j|slot`: a temporary's journal registration ends.
+        ? ( nurl_str_starts reg `j|` ) {
+            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
         } {
-            // `h|cond|type|value`: a handle temporary (gen_call).
-            ? ( nurl_str_starts reg `h|` ) {
-                : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
-                : i b1 ( nurl_str_find w `|` )
-                : s c ( nurl_str_slice w 0 b1 )
-                = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
-                : i b2 ( nurl_str_find w `|` )
-                : s ty ( nurl_str_slice w 0 b2 )
-                : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
-                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
-                ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-            } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) } }
+            // `c|env`: a closure literal's env (null when the callee kept it).
+            ? ( nurl_str_starts reg `c|` ) {
+                ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
+            } {
+                // `h|cond|type|value`: a handle temporary (gen_call).
+                ? ( nurl_str_starts reg `h|` ) {
+                    : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+                    : i b1 ( nurl_str_find w `|` )
+                    : s c ( nurl_str_slice w 0 b1 )
+                    = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+                    : i b2 ( nurl_str_find w `|` )
+                    : s ty ( nurl_str_slice w 0 b2 )
+                    : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
+                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) } } }
     }
 }
 
@@ -13748,6 +13784,25 @@ unsafe @ gen_call i lex i syms i cg → s {
         // binding's backing pointer (`__ptr`) typed `<T>*`; emit no
         // value load. Everything else is the ordinary by-value path.
         : b is_inout_arg ( str_contains_word callee_inout ( nurl_str_int arg_idx ) )
+        // An `inout` argument rooted at a parameter of this function: an
+        // edge of the replacement summary, closed at module end — and one
+        // rooted at a `: ~` copy of a parameter, judged then (h295).
+        : s __bc_name ? ! is_inout_arg `` ? ( is_ident_tok bck_arg_tt ) bck_arg_val ? & == bck_arg_tt TT_DOT ( is_ident_tok ( nurl_lex_peek_type lex ) ) ( nurl_lex_peek_val lex ) ``
+        ? != 0 ( nurl_str_len __bc_name ) {
+            ? ( seq ( nurl_sym_get2 syms __bc_name `__inout` ) `1` ) {
+                : i __rk ( nurl_sym_word_index syms `__fn_param_names__` __bc_name )
+                ? >= __rk 0 {
+                    = g_repl_edges ( nurl_str_cat3 g_repl_edges ` ` ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_sym_get syms `__fn_self_name__` ) `|` ( nurl_str_int __rk ) ) `|` call_name ( nurl_str_cat `|` ( nurl_str_int arg_idx ) ) ) )
+                } {}
+            } {}
+            ? & != 0 ( nurl_sym_len2 syms __bc_name `__bcopy` ) ( __type_needs_drop ( nurl_sym_get syms __bc_name ) g_root_syms ) {
+                = g_repl_checks ( nurl_str_cat3 g_repl_checks ` ` ( nurl_str_cat4
+                ( nurl_str_cat4 call_name `|` ( nurl_str_int arg_idx ) `|` )
+                ( nurl_str_cat4 __bc_name `|` ( nurl_sym_get2 syms __bc_name `__bcopy` ) `|` )
+                ( nurl_str_cat4 ( nurl_str_int ( nurl_lex_line lex ) ) `|` ( nurl_lex_filename lex ) `|` )
+                fname ) )
+            } {}
+        } {}
         ? & != 0 g_borrowck | ( is_ident_tok bck_arg_tt ) & is_inout_arg == bck_arg_tt TT_DOT {
             // `. c fds` passed inout: the value reached is `c`'s
             : ~ s __ioa_name ( nurl_str_cat bck_arg_val `` )
@@ -13823,16 +13878,25 @@ unsafe @ gen_call i lex i syms i cg → s {
             { = p5_inout_seen ? == 0 ( nurl_str_len p5_inout_seen )
                 bck_arg_root ( nurl_str_cat3 p5_inout_seen ` ` bck_arg_root ) }
             {}
+        }
+        {}
+        // Iterator invalidation, in every mode: an argument that names a
+        // container a `~` loop around it iterates — the container itself,
+        // or a field of the struct it belongs to (`~ x . obj items`).
+        // (Only inside a loop that iterates something — the common case
+        // pays one lookup.)
+        : b fe_any ? == g_borrowck 0 F ? == 0 ( nurl_sym_len g_bck `iter_containers` ) F & != 0 ( nurl_str_len bck_arg_root ) | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
+        ? fe_any {
             // Iterator invalidation: if this argument names a
             // container currently being iterated by an enclosing `~`
             // foreach, and the call mutates it — the receiver (arg 0)
             // of a stdlib container mutator, or any `inout` argument
             // — the loop's borrowed cursor would be invalidated. Uses
-            // bck_arg_root so strict mode also catches
-            // `( fn inout . obj field )` inside a `~ x : obj { ... }`
-            // loop.
-            : b fe_iterated ( str_contains_word
-            ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
+            // bck_arg_root, so `( vec_push . obj items … )` inside a
+            // `~ x . obj items { … }` loop is caught.
+            // A field iterated (`obj.items`) conflicts with the struct passed
+            // whole and with that field, not with another field of it.
+            : b fe_iterated ( __iter_conflict ( nurl_sym_get g_bck `iter_containers` ) ? == bck_arg_tt TT_DOT ( __member_path lex ) ( nurl_str_cat bck_arg_root `` ) )
             : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
             // …or the callee is a HELPER whose summary says it mutates
             // the container handed to this parameter. Passing an
@@ -13865,8 +13929,8 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ( nurl_str_cat4 ` ` ( nurl_str_int bck_arg_line ) ` `
                 ( nurl_lex_filename lex ) ) )
                 ( __park_append g_pending_escape `i` __im_rec ) }
-            {} }
-        {}
+            {}
+        } {}
         ? & & ( __thr_is_detach fname ) == arg_idx 0 == bck_arg_tt TT_BACKSLASH { = g_clo_detach 1 } {}
         : i __sx_n0 g_sx_n
         // (What this function's parameters were read as values before the
@@ -13918,6 +13982,40 @@ unsafe @ gen_call i lex i syms i cg → s {
                 // binding holds (a moved value or an ended borrow is no
                 // more usable by address than by value).
                 ( bck_note_read bck_arg_val )
+                // A closure binding handed over by address is a place that
+                // owns its env (h297): one the binding only borrows is
+                // copied first, so the callee may release it when it
+                // assigns over it; the binding owns whatever the place
+                // holds after the call (its slot says owned, and the env
+                // dropped is the value's — mem_clo_slot_env), a panic in
+                // the callee included.
+                : s __io_cslot ( nurl_sym_get2 syms bck_arg_val `__envown` )
+                ? & != 0 ( nurl_str_len __io_cslot ) ( __is_closure_ty ity ) {
+                    : s __io_cll ( nurl_llty ity )
+                    : s __io_co ( nurl_cg_reg cg )
+                    : s __io_cv ( nurl_cg_reg cg )
+                    : s __io_ce ( nurl_cg_reg cg )
+                    : s __io_cn ( nurl_cg_reg cg )
+                    : s __io_cv2 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_co ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __io_cslot ) ( nurl_print `\n` )
+                    ( nurl_print `  ` ) ( nurl_print __io_cv ) ( nurl_print ` = load ` ) ( nurl_print __io_cll ) ( nurl_print `, ` )
+                    ( nurl_print __io_cll ) ( nurl_print `* ` ) ( nurl_print iptr ) ( nurl_print `\n` )
+                    ( nurl_print `  ` ) ( nurl_print __io_ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print __io_cll )
+                    ( nurl_print ` ` ) ( nurl_print __io_cv ) ( nurl_print `, 1\n` )
+                    ( nurl_print `  ` ) ( nurl_print __io_cn ) ( nurl_print ` = call i8* @nurl_closure_own(i8* ` ) ( nurl_print __io_ce )
+                    ( nurl_print `, i8* ` ) ( nurl_print __io_co ) ( nurl_print `)\n` )
+                    ( nurl_print `  ` ) ( nurl_print __io_cv2 ) ( nurl_print ` = insertvalue ` ) ( nurl_print __io_cll )
+                    ( nurl_print ` ` ) ( nurl_print __io_cv ) ( nurl_print `, i8* ` ) ( nurl_print __io_cn ) ( nurl_print `, 1\n` )
+                    ( nurl_print `  store ` ) ( nurl_print __io_cll ) ( nurl_print ` ` ) ( nurl_print __io_cv2 ) ( nurl_print `, ` )
+                    ( nurl_print __io_cll ) ( nurl_print `* ` ) ( nurl_print iptr ) ( nurl_print `\n` )
+                    // The binding owns what the place holds from here on —
+                    // a capture-less closure's null env too, which the
+                    // callee may replace with one: the slot is set to the
+                    // place's own address, a flag that is never null.
+                    ( nurl_print `  store ptr ` ) ( nurl_print iptr ) ( nurl_print `, ptr ` ) ( nurl_print __io_cslot ) ( nurl_print `\n` )
+                    // (A place's slot is its caller's: never this frame's drop.)
+                    ? == 0 ( nurl_sym_len2 syms bck_arg_val `__clo_place` ) { ( mem_own_closure_add syms bck_arg_val ) } {}
+                } {}
                 = av iptr
                 = at ( nurl_str_cat ity `*` )
                 = arg_sx ( nurl_str_cat bck_arg_val `` )
@@ -14073,8 +14171,29 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (An Arc whose payload can reach it back hands out a copy.)
             ? ( __lty_base_is at `Arc` ) {
                 = g_fn_arcseen 1
-                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx ) } {}
-            } {}
+                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx F F ) } {}
+            } {
+                // A `% Frozen` handle lends what it guards the same way: a
+                // read guard's value is shared with every other reader
+                // (stdlib/core/marker.nu).
+                ? & != 0 g_frozen_impls ( __lty_frozen at ) {
+                    = g_fn_arcseen 1
+                    ( __arcp_note call_name arg_idx T F )
+                } {
+                    // …and so does a value that HOLDS one — a struct with
+                    // an Arc field, an option or a Vec of read guards:
+                    // what a callee lends out of it may be the payload
+                    // (h288: a helper over a struct holding an Arc).
+                    // (Only a named type or an aggregate can hold one: a
+                    // number, a flag or a string answers at its first byte.)
+                    : i __fk0 ( nurl_str_get at 0 )
+                    : i __fk ? | == __fk0 37 == __fk0 123 ( __ty_lend_frozen syms ( nurl_llty at ) 0 ) 0
+                    ? > __fk 0 {
+                        = g_fn_arcseen 1
+                        ( __arcp_note call_name arg_idx == __fk 2 T )
+                    } {}
+                }
+            }
             ? & != 0 g_fn_arcseen != __sx_c0 1 {
                 ? ( __thr_marked `Sync##` ( nurl_llty at ) ( __lty_base_name ( nurl_llty at ) ) ) {
                     = __arc_sync ? == 0 ( nurl_str_len __arc_sync ) ( nurl_str_int arg_idx ) ( nurl_str_cat3 __arc_sync `,` ( nurl_str_int arg_idx ) )
@@ -14128,6 +14247,11 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : s __rda ( nurl_sym_tail g_bck `reads` __rd0 )
                 = __cargreads ( nurl_str_cat4 __cargreads ( nurl_str_int arg_idx ) `=` ( nurl_str_cat ( bck_swap_char __rda 32 44 ) `;` ) )
                 ( __rpg_edge syms __rda call_name arg_idx )
+                // A foreign function writes through a pointer parameter
+                // not declared `in` (gen_ffi_decl's `__ffi_writes`).
+                ? != 0 ( nurl_sym_len2 syms call_name `__ffi_writes` ) {
+                    ? ( str_contains_word ( nurl_sym_get2 syms call_name `__ffi_writes` ) ( nurl_str_int arg_idx ) ) { ( __rpg_write syms __rda `m` ) } {}
+                } {}
                 ? == arg_idx 0 {
                     : s __me_base ( bck_generic_base call_name )
                     ? ( __raw_writer __me_base ) { ( __rpg_write syms __rda `m` ) } {}
@@ -14663,10 +14787,11 @@ unsafe @ gen_call i lex i syms i cg → s {
         // (An option / result that owns nothing — `?i` — is a plain value:
         // handing it to a sink copies it, and the binding stays usable.)
         // (…and so is a closure binding: the `sink` closure parameter gets a
-        // copy of its env, gen_call above.)
+        // copy of its env, gen_call above — and a number or a flag, a
+        // generic `sink T` instantiated at one: `( locked_new [i] n )`.)
         : b __sink_plain_wrap | & != 0 ( nurl_str_starts at `{ i1, ` ) == 0 ( nurl_str_len ( __wrap_twin at ) ) ( __is_closure_ty at )
-        ? & & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-        ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
+        : b __sink_bare & & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
+        ? & __sink_bare ! ? __sink_bare ( __plain_scalar_lty at ) F
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
             ? & ! ( __is_autodrop_enum at syms ) | ( nurl_sym_has_word syms `__owned_slices__` bck_arg_val )
             ( nurl_sym_has_word syms `__owned_struct_fields__` sink_ptr )
@@ -14907,8 +15032,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         // A borrowed String / Vec handed to a parameter its callee keeps
         // (vec_push's element): the callee gets a copy (docs/MEMORY.md
         // §7.6). A declared `sink` is an explicit release: left alone.
-        ? & & summary_callee != 0 ( nurl_str_len arg_lent )
-        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+        // (Not a raw pointer: what it points at is not its to copy — a
+        // generic `*A` over Vec elements asked for `clone_Vec__T*`.)
+        ? ? ! summary_callee F ? == 0 ( nurl_str_len arg_lent ) F & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) != ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42 {
             = av ( mem_emit_cloneif_k cg at av ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
@@ -16360,6 +16486,19 @@ unsafe @ __ty_no_address s ty0 i depth → b {
                 ( mem_emit_gated_drop_when cg ptr vt ? ( seq sf `-` ) `` sf ? ( seq lv `-` ) `` lv hown )
             } }
         {}
+        // Consumed, and nothing to drop here (the value may be one of
+        // them): their scope still ends, so their journal registrations
+        // do — a later panic in the extent would read the flag of a frame
+        // that has returned.
+        ? & ! drop == 0 ( nurl_str_len hown )
+        { : ~ s frest ( nurl_sym_get g_fn_escapes ukey )
+            ~ != 0 ( nurl_str_len frest ) {
+                : s ptr ( str_first_word frest ) = frest ( str_skip_word frest )
+                : s vt ( str_first_word frest ) = frest ( str_skip_word frest )
+                = frest ( str_skip_word ( str_skip_word frest ) )
+                ( mem_journal_forget_userdrop cg ptr vt )
+            } }
+        {}
         ? drop
         { : ~ s urest ( nurl_sym_get g_fn_escapes ukey )
             ~ != 0 ( nurl_str_len urest ) {
@@ -17006,8 +17145,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // `{ ... }` blocks then run as side-effect statements. An error by
     // default (--no-strict-arity demotes it to a warning): as a warning
     // the program compiled with wrong conditional logic and nothing
-    // downstream could tell.
-    ? & == g_cond_depth 0 == ( nurl_lex_type lex ) TT_LBRACE
+    // downstream could tell. (Both arms braced: nothing was consumed
+    // bare, and the `{` opens a block statement of its own — one that
+    // drops what it declares at its `}`.)
+    ? & & == g_cond_depth 0 == ( nurl_lex_type lex ) TT_LBRACE ! & == t_tt0 TT_LBRACE == e_tt0 TT_LBRACE
     { ? != 0 g_strict_arity
         { ( die_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). If this shape is intentional, --no-strict-arity demotes it to a warning.` ) }
         { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) } }
@@ -19191,13 +19332,53 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
 }
 
+// The member path at the lexer's position as a dotted name (`. . a b c` →
+// `a.b.c`), read ahead and put back.
+@ __member_path i lex → s {
+    : i here ( nurl_lex_cur_start lex )
+    : ~ i dots 0
+    ~ == ( nurl_lex_type lex ) TT_DOT { ( nurl_lex_advance lex ) = dots + dots 1 }
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ i k 0
+    ~ & <= k dots ( is_ident_tok ( nurl_lex_type lex ) ) {
+        = out ? == k 0 ( nurl_str_cat ( nurl_lex_val lex ) `` ) ( nurl_str_cat3 out `.` ( nurl_lex_val lex ) )
+        ( nurl_lex_advance lex )
+        = k + k 1
+    }
+    ( nurl_lex_set_pos lex here )
+    ^ out
+}
+
+// Does a value at `path` (a binding, or `a.b` a field of one) overlap a
+// container a loop iterates (`conts`: names and dotted fields)? Either is
+// a prefix of the other, at a `.`.
+@ __iter_conflict s conts s path → b {
+    ? == 0 ( nurl_str_len path ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat conts `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __path_prefix c path ) { ^ T } {}
+        ? ( __path_prefix path c ) { ^ T } {}
+    }
+    ^ F
+}
+
+@ __path_prefix s a s b → b {
+    : i n ( nurl_str_len a )
+    ? > n ( nurl_str_len b ) { ^ F } {}
+    ? == 0 ( nurl_str_eq a ( nurl_str_slice b 0 n ) ) { ^ F } {}
+    ^ | == n ( nurl_str_len b ) == ( nurl_str_get b n ) 46
+}
+
 @ gen_foreach i lex i syms i cg → s {
     : s var_name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     // Snapshot the iterated container's name (when it is a bare
     // binding) before gen_expr consumes the token, so the loop body
-    // can be checked for mutation of it.
-    : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    // can be checked for mutation of it. For a field (`~ x . obj items`),
+    // its path (`obj.items`): the struct handed on whole, or that field,
+    // is refused in the body; another field of it is not.
+    : s fe_cont ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ? == ( nurl_lex_type lex ) TT_DOT ( __member_path lex ) ``
     : s slice_val ( gen_expr lex syms cg )
     : s slice_ty ( nurl_get_last_type )
     // The element's signedness rides the element TYPE (A1): a slice
@@ -19333,6 +19514,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print ( nurl_llty ptr_ty ) ) ( nurl_print ` ` ) ( nurl_print elem_ptr ) ( nurl_print `\n` )
     // The element's slot in the container: consuming the element empties
     // it (gen_call), so the container's own drop does not free it again.
+    // The loop's own: restored at its exit, so a later binding of the name
+    // (a `??` arm's `T h`) does not empty this loop's last slot.
+    : s fe_eslot_saved ( nurl_str_cat ( nurl_sym_get2 syms var_name `__eslot` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) gep )
     // Scope foreach body (see gen_cond / gen_loop).
     : ~ s old_strs_fe ``
@@ -19378,6 +19562,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // duration — bck_iter_enter records it so gen_call rejects any
     // mutation of it inside the body; restored after the body.
     ( bck_set_block_kind `foreach` )
+    // (…and its element binding, declared in the body's frame: a binding
+    // of its own, whatever an earlier one of that name went through.)
+    ? & != g_borrowck 0 == g_bck_rec_off 0 { ( nurl_sym_set g_bck `pending_fevar` var_name ) = g_bck_fevar 1 } {}
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
     ( bck_iter_exit fe_iter_saved )
@@ -19419,6 +19606,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat le `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` le )
+    ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_set_last_type `void` )
     // The exit path is LIVE, whatever the body did. gen_loop says so at
     // its own exit label — "a loop that CAN exit resets did_ret: its
@@ -19467,7 +19655,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     {}
     // Record that this loop's exit label is a real branch target — an
     // infinite loop with a `break` DOES reach its exit (see gen_loop).
-    ? is_break { ( nurl_sym_def g_loop_break_used target `1` ) } {}
+    ? is_break { ( nurl_sym_def g_loop_break_used ( nurl_sym_get syms `__loop_depth__` ) `1` ) } {}
     // Borrow checker: the jump ends this path. Its state reaches the
     // loop's exit (`brk`) or the next iteration (`cnt`), never the
     // statement after it — the `ret` rule for a loop (bck_loop).
@@ -19516,8 +19704,15 @@ unsafe @ gen_match i lex i syms i cg → s {
 
 @ gen_loop i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    // For-each: ~ IDENT(var) IDENT(slice) { body }
-    ? & == ( nurl_lex_type lex ) TT_IDENT == ( nurl_lex_peek_type lex ) TT_IDENT
+    // For-each: ~ IDENT(var) IDENT(slice) { body }, or a field the
+    // values are in: ~ IDENT . obj field { body }. (A while condition is
+    // one expression: a name followed by another name, or by a member
+    // path, is never one.)
+    // (A single-letter name lexes as a type keyword — `b`, `s`, `v` — and
+    // is a name in either place.)
+    : i fe_t0 ( nurl_lex_type lex )
+    : i fe_pk ( nurl_lex_peek_type lex )
+    ? & | == fe_t0 TT_IDENT == fe_t0 TT_TYPE_KW | | == fe_pk TT_IDENT == fe_pk TT_TYPE_KW == fe_pk TT_DOT
     { ^ ( gen_foreach lex syms cg ) }
     {}
 
@@ -19598,6 +19793,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
         = g_loop_serial + g_loop_serial 1
         ( nurl_sym_def syms `__loop_depth__` ( nurl_str_int g_loop_serial ) )
+        : s __lp_serial ( nurl_str_int g_loop_serial )
         : s old_bc_sdepth ( __loop_sdepth_enter syms )
         = g_loop_nest + g_loop_nest 1
         ( nurl_sym_def syms `__loop_snap_strs__` old_strs_lp )
@@ -19641,7 +19837,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // `ret i64 undef` here, and would now be asked for a value it
         // provably never needs). A loop that CAN exit resets did_ret:
         // its exit path is live even when the body returned somewhere.
-        ? & __lp_true == 0 ( nurl_sym_len g_loop_break_used le )
+        ? & __lp_true == 0 ( nurl_sym_len g_loop_break_used __lp_serial )
         { ( emit_call_term `unreachable` )
             = g_did_ret 1 }
         { = g_did_ret 0 }
@@ -20008,6 +20204,32 @@ unsafe @ __blk_leave b val → v {
     = g_clo_body_ret F
     : i __sx_bme ( __sx_enter )
     ( __blk_enter blk_val )
+    // A bare `{ … }` statement whose value nothing takes is a scope of its
+    // own (docs/MEMORY.md §1, "Where values are dropped"): what it binds
+    // is dropped at its `}`, as a loop body's or an arm's is — not when
+    // the function returns. A guard is the value that shows the
+    // difference: its lock has to go where the block ends.
+    // …and so is a block whose value is a number or a flag bound by a
+    // `:` (`: i root { : PageWrite w ( … ) ( page_write_pid w ) }`): the
+    // value is a scalar, which cannot point into what the block bound.
+    : b __blk_scalar_val & & blk_val ! blk_is_arm != 0 g_blk_scalar_let
+    = g_blk_scalar_let 0
+    : b __blk_scope | & & ! blk_is_arm blk_is_stmt ! blk_val __blk_scalar_val
+    : ~ s old_strs_bb ``
+    : ~ s old_structs_bb ( nurl_str_cat `` `` )
+    : ~ s old_user_bb ( nurl_str_cat `` `` )
+    : ~ s old_slices_bb ``
+    : ~ s old_closure_bb ``
+    ? __blk_scope {
+        = old_closure_bb ( nurl_sym_get syms `__owned_closure_envs__` )
+        ? != 0 g_auto_drop_strings {
+            = old_strs_bb ( nurl_sym_get syms `__owned_strings__` )
+            = old_structs_bb ( nurl_sym_get syms `__owned_struct_fields__` )
+            = old_user_bb ( nurl_sym_get syms `__user_drops__` )
+            ? != 0 g_fn_slice_decls { = old_slices_bb ( nurl_sym_get syms `__slice_decls__` ) } {}
+            ( nurl_sym_push syms )
+        } {}
+    } {}
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
@@ -20048,6 +20270,26 @@ unsafe @ __blk_leave b val → v {
         = any T
     }
     ? & blk_val != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
+    ? __blk_scope {
+        ? == g_did_ret 0 {
+            ? != 0 g_auto_drop_strings {
+                ( mem_drop_new_strings syms cg old_strs_bb )
+                ( mem_drop_new_struct_fields syms cg old_structs_bb )
+                ( mem_drop_new_user_drops syms cg old_user_bb )
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_bb ) } {}
+            } {}
+            ( mem_drop_new_closure_envs syms cg old_closure_bb )
+        } {}
+        // The block that is current at its `}` is the enclosing code's
+        // current block too: a `?` / `~` inside it recorded its last label
+        // in the scope popped here, and a `??` around it named the arm's
+        // first block in its phi (a select in an arm: invalid IR).
+        ? != 0 g_auto_drop_strings {
+            : s __blk_lbl ( nurl_sym_get syms `__cur_lbl__` )
+            ( nurl_sym_pop syms )
+            ( nurl_sym_def syms `__cur_lbl__` __blk_lbl )
+        } {}
+    } {}
     ( __blk_leave blk_val )
     // Closing-edge/implicit-return instructions must not inherit the
     // last sibling arm's source line: that overcounts its GCOV hits.
@@ -21770,6 +22012,9 @@ unsafe @ mem_path_to_indices s path → s {
             : s __tnk ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
             : ~ s __tc ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __tc ) ( nurl_print ` = and i1 ` ) ( nurl_print __tro ) ( nurl_print `, ` ) ( nurl_print __tnk ) ( nurl_print `\n` )
+            // (Journaled while the call runs: the caller's until it returns.)
+            : s __tj ? ( __is_handle_ty at ) ( mem_journal_push_temp cg at av __tc ) ``
+            ? != 0 ( nurl_str_len __tj ) { = owned ? == 0 ( nurl_str_len owned ) __tj ( nurl_str_cat3 owned ` ` __tj ) } {}
             // A callee that lends this argument back — to a caller that
             // owns it. Per call: handed back whole (`^ p`, `^ @ ?T { T p
             // }`), the result IS this temporary and it moves into the
@@ -22421,13 +22666,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ? | == 0 g_auto_drop_strings ! ( __is_handle_ty vt ) { ^ v } {}
     : s live ( nurl_sym_get2 syms ptr `__live` )
     ? == 0 ( nurl_str_len live ) { ^ v } {}
-    : s m ( __drop_mangle vt )
-    : s key ( nurl_str_cat `hjdrop##` m )
-    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
-        ( nurl_sym_def g_impl_name_syms key `1` )
-        ( __park_append g_impl_name_syms `__pending_hjdrops__` vt )
-    } {}
-    : ~ s fnv ( nurl_str_cat `@__jdrop_` m )
+    : ~ s fnv ( __hjdrop_fn vt )
     : s sf ( nurl_sym_get2 syms ptr `__sinkflag` )
     ? != 0 ( nurl_str_len sf ) {
         : s c ( nurl_cg_reg cg )
@@ -22439,6 +22678,38 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     } {}
     ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` )
     ( nurl_print live ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
+}
+
+// The journal thunk that drops a handle of type `vt` from its slot
+// (`@__jdrop_<mangle>`), emitted at module end.
+@ __hjdrop_fn s vt → s {
+    : s m ( __drop_mangle vt )
+    : s key ( nurl_str_cat `hjdrop##` m )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_hjdrops__` vt )
+    } {}
+    ^ ( nurl_str_cat `@__jdrop_` m )
+}
+
+// A handle temporary `av` made for an argument is the caller's while the
+// later arguments and the callee run (`own`: whether it is — the callee
+// neither sinks nor keeps it): either may panic before the drop after the
+// call. Its slot is journaled for that window; the returned word
+// (`j|slot`) ends the registration once the call returns
+// (mem_drop_arg_temps). Elided with the bindings' registrations where no
+// panic can reach (__jrnl_elide).
+@ mem_journal_push_temp i cg s at s av s own → s {
+    : s lt ( nurl_llty at )
+    : s js ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca ` ) ( nurl_print lt ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
+    : s jf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print jf ) ( nurl_print ` = alloca i1\n` )
+    ( nurl_print `  store i1 ` ) ( nurl_print own ) ( nurl_print `, ptr ` ) ( nurl_print jf ) ( nurl_print `\n` )
+    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr ` )
+    ( nurl_print jf ) ( nurl_print `, ptr ` ) ( nurl_print ( __hjdrop_fn at ) ) ( nurl_print `)\n` )
+    ^ ( nurl_str_cat `j|` js )
 }
 
 // Emit a `void(i8*)` journal-drop thunk for an owned value of LLVM type
@@ -22532,6 +22803,12 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // back a closure somebody else owns, and a literal
 // with no captures has no env at all. Every `:` closure binding gets one,
 // so the drop never has to guess.
+//
+// The slot is a flag that holds an env pointer: non-null when the binding
+// owns the env its VALUE holds. A closure may be replaced where the slot is
+// not in sight — through an `inout` parameter, which owns what it holds
+// (h297) — so what is dropped is the value's env, never the pointer the
+// slot was last given.
 @ mem_clo_slot_new i syms i cg s name s owner → v {
     : s slot ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
@@ -22540,16 +22817,15 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_sym_def syms ( nurl_str_cat name `__envown` ) slot )
 }
 
-// The env a closure binding `name` owns, as a fresh register: its slot's
-// content, or — for a binding without one (a parameter rebound with `=`)
-// — the env field of its current value.
+// The env a closure binding `name` owns, as a fresh register: its value's
+// env when its slot says the binding owns it (null otherwise), or — for a
+// binding without a slot (a parameter rebound with `=`) — the env field of
+// its current value.
 @ mem_clo_owner_of i syms i cg s name → s {
     : s slot ( nurl_sym_get2 syms name `__envown` )
     : s r ( nurl_cg_reg cg )
     ? != 0 ( nurl_str_len slot )
-    { ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load i8*, i8** ` )
-        ( nurl_print slot ) ( nurl_print `\n` )
-        ^ r }
+    { ^ ( mem_clo_slot_env syms cg name slot ) }
     {}
     : s ty ( nurl_llty ( nurl_sym_get syms name ) )
     : s cv ( nurl_cg_reg cg )
@@ -22558,6 +22834,30 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_print ( nurl_sym_get2 syms name `__ptr` ) ) ( nurl_print `\n` )
     ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty )
     ( nurl_print ` ` ) ( nurl_print cv ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
+// The env binding `name` owns under its slot `slot`: its value's env, or
+// null when the slot says it owns none.
+@ mem_clo_slot_env i syms i cg s name s slot → s {
+    : s ty ( nurl_llty ( nurl_sym_get syms name ) )
+    : s o ( nurl_cg_reg cg )
+    : s cv ( nurl_cg_reg cg )
+    : s e ( nurl_cg_reg cg )
+    : s nz ( nurl_cg_reg cg )
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    // (A `sink` closure parameter has a slot and no alloca: its value is
+    // the parameter itself.)
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    : s val ? == 0 ( nurl_str_len ptr ) ( nurl_str_cat `%` name ) ( nurl_str_cat cv `` )
+    ? != 0 ( nurl_str_len ptr ) {
+        ( nurl_print `  ` ) ( nurl_print cv ) ( nurl_print ` = load ` ) ( nurl_print ty ) ( nurl_print `, ` ) ( nurl_print ty ) ( nurl_print `* ` )
+        ( nurl_print ptr ) ( nurl_print `\n` )
+    } {}
+    ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    ( nurl_print `  ` ) ( nurl_print nz ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print o ) ( nurl_print `, null\n` )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = select i1 ` ) ( nurl_print nz ) ( nurl_print `, i8* ` ) ( nurl_print e ) ( nurl_print `, i8* null\n` )
     ^ r
 }
 
@@ -22614,9 +22914,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 @ mem_emit_closure_env_drop i syms i cg s name → v {
     : s slot ( nurl_sym_get2 syms name `__envown` )
     ? != 0 ( nurl_str_len slot )
-    { : s ev ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print ev ) ( nurl_print ` = load i8*, i8** ` )
-        ( nurl_print slot ) ( nurl_print `\n` )
+    { : s ev ( mem_clo_slot_env syms cg name slot )
         ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ev ) ( nurl_print `)` )
         ( emit_dbg_eol )
         ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
@@ -23067,13 +23365,24 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // A handle enum moves like a String (sinks, stores, cursors), none of
     // which forget a journal entry: it is journaled like one — not at all.
     ? ( __is_handle_enum vt ) { ^ v } {}
+    // A handle (a library handle's binding, a lock guard) is journaled with
+    // its drop flag by mem_journal_push_handle: once is all.
+    ? ( __is_handle_ty vt ) { ^ v } {}
     : s impl_mangle ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
     ? == 0 ( nurl_str_len impl_mangle ) { ^ v } {}
-    // Only journal when the `__jdrop_<mangle>` thunk has been emitted
-    // (gate against a forward-defined impl whose thunk isn't out yet —
-    // skipping just means that value isn't reclaimed on panic, never a
-    // dangling reference to a missing thunk).
-    ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` impl_mangle ) { ^ v } {}
+    // A thunk not out yet — an impl further down, or the drop the compiler
+    // writes field by field for a struct that cannot be copied, which is
+    // registered the first time one is owned — is emitted at module end
+    // (__pending_ujdrops__). Skipping the push instead left the value to
+    // nobody on a panic: a struct holding a lock guard kept its lock and
+    // leaked it (h291).
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` impl_mangle ) {
+        : s ukey ( nurl_str_cat `ujdrop##` impl_mangle )
+        ? == 0 ( nurl_sym_len g_impl_name_syms ukey ) {
+            ( nurl_sym_def g_impl_name_syms ukey `1` )
+            ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
+        } {}
+    } {}
     : s cond ( mem_drop_cond syms cg ptr )
     : s bc ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print bc )
@@ -23115,7 +23424,13 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
         ^ v
     } {}
-    ? | == 0 ( nurl_str_len fm ) == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` fm ) { ^ v } {}
+    // (…the thunk out already, or parked for module end: the push went
+    // ahead either way, h291 — and so must the forget, or a later panic in
+    // the extent drops a value from a frame that has returned.)
+    ? == 0 ( nurl_str_len fm ) { ^ v } {}
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` fm ) {
+        ? == 0 ( nurl_sym_len2 g_impl_name_syms `ujdrop##` fm ) { ^ v } {}
+    } {}
     : s bc ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print bc )
     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
@@ -23161,17 +23476,33 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // inside it releases the fields the receiver still holds (a field released
 // by hand was emptied in the slot), and every way out of the destructor —
 // its glue, or the value given up whole — ends the registration. Functions
+// The drop glue of `% Drop` type `ty` (its fields, after its destructor),
+// written at module end — and the drops of the library handles among
+// those fields instantiated now, while generic instances are still being
+// collected: a guard held only in a field had no drop to call
+// (`WGuard_drop__Fr` undefined).
+@ __glue_request s ty → v {
+    : s key ( nurl_str_cat `glue##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms key `1` )
+    ( __park_append g_impl_name_syms `__pending_glue__` ty )
+    : s gm ( __drop_mangle ty )
+    : s gfc ( nurl_sym_get2 g_root_syms gm `__field_count` )
+    : i gn ? != 0 ( nurl_str_len gfc ) ( nurl_str_to_int gfc ) 0
+    : ~ i gi 0
+    ~ < gi gn {
+        ( __libh_walk ( nurl_sym_get g_root_syms ( nurl_str_cat3 gm `__idx_` ( nurl_str_cat ( nurl_str_int gi ) `__type` ) ) ) g_root_syms )
+        = gi + gi 1
+    }
+}
+
 // no panic can reach, or that never run inside a recover extent, lose both
 // calls (__jrnl_elide).
 @ mem_journal_push_glue i syms i cg → v {
     ? | == 0 ( nurl_str_len g_drop_glue_ty ) != 0 g_bck_closure_depth { ^ v } {}
     : s ptr ( nurl_sym_get2 syms ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) `__ptr` )
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
-    : s key ( nurl_str_cat `glue##` g_drop_glue_ty )
-    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
-        ( nurl_sym_def g_impl_name_syms key `1` )
-        ( __park_append g_impl_name_syms `__pending_glue__` g_drop_glue_ty )
-    } {}
+    ( __glue_request g_drop_glue_ty )
     ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr )
     ( nurl_print `, ptr null, ptr @__jglue_` ) ( nurl_print ( __drop_mangle g_drop_glue_ty ) ) ( nurl_print `)\n` )
     ( nurl_sym_def syms `__glue_journaled__` ptr )
@@ -23201,11 +23532,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_glue__` ( __drop_mangle g_drop_glue_ty ) ) ) )
     ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print r ) ( nurl_print `)` ) ( emit_dbg_eol )
-    : s key ( nurl_str_cat `glue##` g_drop_glue_ty )
-    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
-        ( nurl_sym_def g_impl_name_syms key `1` )
-        ( __park_append g_impl_name_syms `__pending_glue__` g_drop_glue_ty )
-    } {}
+    ( __glue_request g_drop_glue_ty )
 }
 
 @ mem_drop_new_user_drops i syms i cg s old_list → v {
@@ -23331,6 +23658,10 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_sym_set g_bck `stmts` `` )
         ( nurl_sym_set g_bck `reads` `` )
         ( nurl_sym_set g_bck `pending_kind` `` )
+        ( nurl_sym_set g_bck `pending_fevar` `` )
+        = g_bck_fevar 0
+        // (A loop a failed declaration never closed iterates nothing here.)
+        ( nurl_sym_set g_bck `iter_containers` `` )
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
         = g_bck_rcty ``
@@ -24349,10 +24680,110 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 // elements) — the receiver is always the first value argument.
 // A callee that takes an Arc at `idx` (§6.5): what it lends through that
 // parameter is a view of the payload (bck_sx_ev). Noted at each call.
-@ __arcp_note s call_name i idx → v {
+@ __arcp_note s call_name i idx b frozen b held → v {
     : s key ( nurl_str_cat `arcp##` call_name )
     : s ks ( nurl_str_int idx )
     ? ! ( nurl_sym_has_word g_pending_impl key ks ) { ( nurl_sym_append_word g_pending_impl key ks ) = g_arcp_any 1 } {}
+    ? frozen {
+        : s fkey ( nurl_str_cat `frzp##` call_name )
+        ? ! ( nurl_sym_has_word g_pending_impl fkey ks ) { ( nurl_sym_append_word g_pending_impl fkey ks ) = g_frzp_any 1 } {}
+    } {}
+    // (Held: the argument is not the handle but a value holding one — a
+    // struct with an Arc field — which the diagnostic says.)
+    ? held {
+        : s hkey ( nurl_str_cat `frzh##` call_name )
+        ? ! ( nurl_sym_has_word g_pending_impl hkey ks ) { ( nurl_sym_append_word g_pending_impl hkey ks ) = g_frzp_any 1 } {}
+    } {}
+}
+
+// Is `lty` a handle marked `% Frozen` (its own monomorph, its generic
+// base, or that base with its `%`)?
+@ __lty_frozen s lty → b {
+    : s ll ( nurl_llty lty )
+    ^ ( __thr_marked `Frozen##` ll ( __lty_base_name ll ) )
+}
+
+// Does a value of type `lty` lend frozen views? 1: it is, or holds, an
+// Arc (one whose payload cannot reach it back — such an Arc hands out
+// copies); 2: a `% Frozen` handle (a read guard); 0: neither. Held means
+// through a struct's field, an enum's payload, an option or a result, or
+// a generic argument (a Vec of them) — but not through a handle that
+// synchronises what it holds (`% Sync`: a Locked, an RwLocked, a Mutex,
+// a Channel), whose contents are changed through its own operations.
+// Memoised per type: gen_call asks for every argument.
+unsafe @ __ty_lend_frozen i syms s lty i depth → i {
+    : i n ( nurl_str_len lty )
+    ? | > depth 10 == n 0 { ^ 0 } {}
+    ? == 0 g_frz_memo { = g_frz_memo ( nurl_sym_new ) } {}
+    : s memo ( nurl_sym_get g_frz_memo lty )
+    ? != 0 ( nurl_str_len memo ) { ^ - ( nurl_str_get memo 0 ) 48 } {}
+    // (A provisional `0` stops a type that holds itself.)
+    ( nurl_sym_def g_frz_memo lty `0` )
+    : i r ( __ty_lend_frozen_walk syms lty depth )
+    ( nurl_sym_def g_frz_memo lty ? == r 0 `0` ? == r 1 `1` `2` )
+    ^ r
+}
+
+unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
+    : s bn ( __lty_base_name lty )
+    ? ( seq bn `Arc` ) { ^ ? ( __ts_cyclic lty syms ) 0 1 } {}
+    ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ 2 } {}
+    ? ( __thr_marked `Sync##` lty bn ) { ^ 0 } {}
+    : s args ( __thr_peel lty )
+    ? != 0 ( nurl_str_len args ) {
+        : i ra ( __ty_lend_frozen syms args + depth 1 )
+        ? > ra 0 { ^ ra } {}
+    } {}
+    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    ? != 0 ( nurl_str_len fc ) {
+        : i nf ( nurl_str_to_int fc )
+        : ~ i fi 0
+        ~ < fi nf {
+            : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            : i rf ( __ty_lend_frozen syms ( nurl_llty ft ) + depth 1 )
+            ? > rf 0 { ^ rf } {}
+            = fi + fi 1
+        }
+    } {}
+    : s vl ( nurl_sym_get2 syms bn `__variants` )
+    ? != 0 ( nurl_str_len vl ) {
+        : ~ s rest ( nurl_str_cat vl `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s vname ( str_first_word rest )
+            : s pc ( nurl_sym_get2 syms vname `__paycount` )
+            ? != 0 ( nurl_str_len pc ) {
+                : i pn ( nurl_str_to_int pc )
+                : ~ i pi 0
+                ~ < pi pn {
+                    : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                    : i rp ( __ty_lend_frozen syms ( nurl_llty pt ) + depth 1 )
+                    ? > rp 0 { ^ rp } {}
+                    = pi + pi 1
+                }
+            } {}
+            = rest ( str_skip_word rest )
+        }
+    } {}
+    ? == ( nurl_str_get lty 0 ) 123 {
+        : i afc ( agg_field_count syms lty )
+        : ~ i ai 0
+        ~ & >= afc 0 < ai afc {
+            : i ragg ( __ty_lend_frozen syms ( compound_field_type lty ai ) + depth 1 )
+            ? > ragg 0 { ^ ragg } {}
+            = ai + ai 1
+        }
+    } {}
+    ^ 0
+}
+
+// The view the walk just traced to a payload (g_sxe_arc) was lent by a
+// `% Frozen` handle's callee `cal` at `idx`: remember it of the root, so
+// a change to it is reported as the handle's (resolve_arc_mut).
+@ __frz_mark s cal s idx → v {
+    ? & != 0 g_frzp_any >= g_sxe_arc 0 {
+        ? ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` cal ) idx ) { ( nurl_sym_set g_bck ( bck_bkey `fz_` ( nurl_str_int g_sxe_arc ) ) `1` ) } {}
+        ? ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` cal ) idx ) { ( nurl_sym_set g_bck ( bck_bkey `fh_` ( nurl_str_int g_sxe_arc ) ) `1` ) } {}
+    } {}
 }
 
 // The Arc a payload view was lent from (§6.5): the root of the first of
@@ -24368,6 +24799,13 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 @ __arc_frozen_msg s what → s {
     ^ ( nurl_str_cat3 `this call ` what
     ` to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.` )
+}
+
+// …and for what a `% Frozen` handle lends (stdlib/core/marker.nu): a read
+// guard's value, which every other reader holds at the same time.
+@ __frozen_lend_msg s what → s {
+    ^ ( nurl_str_cat3 `this call ` what
+    ` to change, but it is frozen: its type is marked '% Frozen' (a read guard is), so other threads may be reading the same value at the same time without a lock, and changing it races them. Change it through a handle that holds the value exclusively — take a write guard (rw_write in stdlib/std/rwlock.nu) or use locked_update on a Locked — or copy what you need with mem_dup and change the copy.` )
 }
 
 // A call that may be handed a view of an Arc's payload (§6.5): walked as
@@ -24407,6 +24845,10 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
             : s srcs ( bck_sx_arg_sources st aj )
             ? != g_sxe_arc -1 {
                 : s an ? >= g_sxe_arc 0 ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int g_sxe_arc ) ) ) ( nurl_str_cat `-` `` )
+                // (`F`: lent by a `% Frozen` handle, `A`: an Arc's payload.)
+                : b __kz & >= g_sxe_arc 0 != 0 ( nurl_sym_len g_bck ( bck_bkey `fz_` ( nurl_str_int g_sxe_arc ) ) )
+                : b __kh & >= g_sxe_arc 0 != 0 ( nurl_sym_len g_bck ( bck_bkey `fh_` ( nurl_str_int g_sxe_arc ) ) )
+                : s kind ? __kz ? __kh `FH` `F` ? __kh `AH` `A`
                 : s key ( nurl_str_cat4 `armutk##` file ( nurl_str_cat3 `:` ( nurl_str_int line ) `:` ) ( nurl_str_cat3 cal `:` js ) )
                 ? == 0 ( nurl_sym_len g_pending_impl key ) {
                     ( nurl_sym_def g_pending_impl key `1` )
@@ -24414,7 +24856,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
                     ( nurl_sym_def g_pending_impl `armut_n` ( nurl_str_int + n 1 ) )
                     ( nurl_sym_def g_pending_impl ( nurl_str_cat `armut#` ( nurl_str_int n ) )
                     ( nurl_str_cat4 ( nurl_str_cat4 cal ` ` ( bck_generic_base cal ) ` ` )
-                    ( nurl_str_cat4 js ` ` an ` ` )
+                    ( nurl_str_cat4 js ` ` an ( nurl_str_cat3 ` ` kind ` ` ) )
                     ( nurl_str_int line ) ( nurl_str_cat ` ` file ) ) )
                 } {}
             } {}
@@ -24439,11 +24881,17 @@ unsafe @ resolve_arc_mut → v {
         : s fn ( str_first_word r ) = r ( str_skip_word r )
         : s k ( str_first_word r ) = r ( str_skip_word r )
         : s arc ( str_first_word r ) = r ( str_skip_word r )
+        : s kind ( str_first_word r ) = r ( str_skip_word r )
         : s ln ( str_first_word r ) = r ( str_skip_word r )
         : s file ( str_first_word r )
         ? | | ( str_contains_word ( nurl_sym_get g_fn_mutates cn ) k ) ( str_contains_word ( nurl_sym_get g_fn_mutates fn ) k ) & ( seq k `0` ) ( bck_is_container_mutator fn ) {
-            : s whose ? ( seq arc `-` ) ( nurl_str_cat `the contents of an Arc` `` ) ( nurl_str_cat3 `the contents of Arc '` arc `'` )
-            ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' ` whose ) ) )
+            ? == ( nurl_str_get kind 0 ) 70 {
+                : s fwhose ? ( seq arc `-` ) ( nurl_str_cat `what a frozen handle lends` `` ) ? ( seq kind `FH` ) ( nurl_str_cat3 `what a frozen handle '` arc `' holds lends` ) ( nurl_str_cat3 `what '` arc `' lends` )
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( __frozen_lend_msg ( nurl_str_cat4 `hands '` fn `' ` fwhose ) ) )
+            } {
+                : s whose ? ( seq arc `-` ) ( nurl_str_cat `the contents of an Arc` `` ) ? ( seq kind `AH` ) ( nurl_str_cat3 `the payload of an Arc '` arc `' holds` ) ( nurl_str_cat3 `the contents of Arc '` arc `'` )
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( __arc_frozen_msg ( nurl_str_cat4 `hands '` fn `' ` whose ) ) )
+            }
         } {}
         = j + j 1
     }
@@ -24610,7 +25058,13 @@ unsafe @ __ty_holds_view s ty i depth → b {
         // A `: ~` copy (the cursor idiom) or a copy of a parameter: a
         // borrow of it.
         ? & & & ( bck_sound ) ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt ) | is_mut is_param
-        { ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        {  // (A mutable copy of a parameter owns none of the value's fields:
+            // it may not go 'inout' — gen_call — where a callee replacing a
+            // field would release what the caller of this function owns.)
+            ? & is_mut | is_param != 0 ( nurl_sym_len2 syms rhs_val `__bcopy` ) {
+                ( nurl_sym_def syms ( nurl_str_cat dest `__bcopy` ) ? is_param rhs_val ( nurl_sym_get2 syms rhs_val `__bcopy` ) )
+            } {}
+            ? & != g_borrowck 0 == g_bck_rec_off 0 {
                 : s saved ( nurl_sym_get g_bck `reads` )
                 ( nurl_sym_set g_bck `reads` rhs_val )
                 ( bck_record `borrow` dest line )
@@ -25221,6 +25675,11 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
         line )
         ( nurl_sym_set g_bck `pending_kind` `` )
         = g_bck_depth + g_bck_depth 1
+        ? != 0 g_bck_fevar {
+            ( bck_record `fevar` ( nurl_sym_get g_bck `pending_fevar` ) line )
+            ( nurl_sym_set g_bck `pending_fevar` `` )
+            = g_bck_fevar 0
+        } {}
     } {}
 }
 
@@ -25697,7 +26156,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 97 { ^ ? ( seq k `assign` ) 3 ? ( seq k `arcx` ) 33 0 } {}
     ? == c 109 { ^ ? ( seq k `move` ) 4 ? ( seq k `maybemove` ) 5 ? ( seq k `maybealias` ) 6 ? ( seq k `match` ) 27 ? ( seq k `match-arm-edge` ) 29 0 } {}
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
-    ? == c 102 { ^ ? ( seq k `fieldset` ) 8 0 } {}
+    ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 0 } {}
     ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
@@ -26075,7 +26534,7 @@ unsafe @ bck_sx_ids s sx → s {
     } {}
     : b __pend | | | | | | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `pendtake` ) ( seq kind `pendeff` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `pendfield` ) ( seq kind `xfer` ) ( seq kind `maybealias` ) ( seq kind `cdep` ) ( seq kind `cmove` )
     : b __named | | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` ) ( seq kind `maybemove` ) ( seq kind `fieldset` ) __pend
-    : s w2 ? ( seq kind `let` ) ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
+    : s w2 ? | ( seq kind `let` ) ( seq kind `fevar` ) ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
     : s five ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
@@ -26684,7 +27143,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s __lj ( bck_sx_ev st e ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
                 // (What a callee lends through an Arc parameter is a view
                 // of the payload, §6.5.)
-                ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) } {}
+                ? & & != 0 g_arcp_any == g_sxe_arc -1 ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` w ) js ) { = g_sxe_arc ( __sxe_arc_id __lj ) ( __frz_mark w js ) } {}
                 = out ( __word_union out __lj )
             } {
                 // An argument the callee stores (escapes): a view it is, or
@@ -26692,7 +27151,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // a container or a closure it builds (`wrapv a` returning a
                 // ( Vec s ) holding `a`). Only views count: a value that owns
                 // its data is moved or copied into wherever it goes.
-                ? | ( nurl_sym_has_word g_fn_escapes w js ) ( nurl_sym_has_word g_fn_ret_param w js ) {
+                // (A result that can hold no view at all — `( Vec u )` built
+                // from a view's bytes — carries none of the argument's.)
+                : b __esc | ( nurl_sym_has_word g_fn_escapes w js ) ( nurl_sym_has_word g_fn_ret_param w js )
+                : b __rt_views ? ! __esc F ? == 0 ( nurl_sym_len g_root_syms w ) T ( __ty_holds_view ( nurl_llty ( nurl_sym_get g_root_syms w ) ) 0 )
+                ? & __esc __rt_views {
                     : b __sv g_sxe_vonly
                     = g_sxe_vonly T
                     = out ( __word_union out ( bck_sx_ev st e T ) )
@@ -26903,6 +27366,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
+                // (A join or a block with no call of its own: the line's other calls
+                // lend to its arms, not to it — as for a `let`.)
+                ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( nurl_sym_set g_bck `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
                 // A global outlives every binding of this function.
@@ -27156,7 +27622,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             ( nurl_sym_set g_bck `plend_line` ( bck_field rec 3 ) )
                             // (Lent through an Arc parameter: a view of the
                             // payload, §6.5.)
-                            ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plarc` pe ) } {}
+                            ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) {
+                                ( nurl_sym_append_word g_bck `plarc` pe )
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plfrz` pe ) } {}
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` pcal ) paix ) { ( nurl_sym_append_word g_bck `plfrh` pe ) } {}
+                            } {}
                         } {
                             = st ( bck_st_set st pvid
                             ( bck_alias_step ( bck_st_get st pvid ) ) )
@@ -27241,7 +27711,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s fcal ( bck_field rec 5 )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
-                    ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                    ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) {
+                        ( nurl_sym_append_word g_bck `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                    } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
                 = p + p 1
                 = done T
@@ -27287,6 +27761,21 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = g_bck_sc_n - g_bck_sc_n 1
                 }
                 = p + eb 1
+                = done T
+            } {}
+            ? & ! done == kc 35 {
+                // A `~ x xs` loop's element binding, bound afresh each
+                // iteration: lent from the container, tracked by nothing
+                // an earlier binding of its name went through.
+                : i fid ( bck_field_int rec 1 )
+                ( bck_partner_unlink fid )
+                = st ( bck_st_set st fid BCK_UNINIT )
+                ( nurl_sym_set g_bck ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `kc_` ( bck_field rec 1 ) ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) `` )
+                ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
+                = p + p 1
                 = done T
             } {}
             // stray end-marker — reads already checked above
@@ -27958,9 +28447,17 @@ unsafe @ bck_sx_is_id s e → b {
     : s pl ( nurl_sym_get g_bck `plend` )
     ( nurl_sym_set g_bck `plend` `` )
     : ~ s plarc ``
+    : ~ s plfrz ``
+    : ~ s plfrh ``
     ? != 0 g_arcp_any {
         = plarc ( nurl_str_cat ( nurl_sym_get g_bck `plarc` ) `` )
         ? != 0 ( nurl_str_len plarc ) { ( nurl_sym_set g_bck `plarc` `` ) } {}
+        ? != 0 g_frzp_any {
+            = plfrz ( nurl_str_cat ( nurl_sym_get g_bck `plfrz` ) `` )
+            ? != 0 ( nurl_str_len plfrz ) { ( nurl_sym_set g_bck `plfrz` `` ) } {}
+            = plfrh ( nurl_str_cat ( nurl_sym_get g_bck `plfrh` ) `` )
+            ? != 0 ( nurl_str_len plfrh ) { ( nurl_sym_set g_bck `plfrh` `` ) } {}
+        } {}
     } {}
     ? ! ( seq line ( nurl_sym_get g_bck `plend_line` ) ) { ^ st } {}
     // An argument the call consumed went INTO the result (a value passed
@@ -27989,7 +28486,15 @@ unsafe @ bck_sx_is_id s e → b {
         // (Lent through an Arc parameter, or a borrow of a payload lending
         // on: the binding is a view of the payload, §6.5.)
         ? & != 0 ( nurl_str_len plarc ) == g_sxe_arc -1 {
-            ? ( str_contains_word plarc ( nurl_str_cat3 w `:` wc ) ) { = g_sxe_arc wr } {}
+            ? ( str_contains_word plarc ( nurl_str_cat3 w `:` wc ) ) {
+                = g_sxe_arc wr
+                ? & != 0 ( nurl_str_len plfrz ) ( str_contains_word plfrz ( nurl_str_cat3 w `:` wc ) ) {
+                    ( nurl_sym_set g_bck ( bck_bkey `fz_` ( nurl_str_int wr ) ) `1` )
+                } {}
+                ? & != 0 ( nurl_str_len plfrh ) ( str_contains_word plfrh ( nurl_str_cat3 w `:` wc ) ) {
+                    ( nurl_sym_set g_bck ( bck_bkey `fh_` ( nurl_str_int wr ) ) `1` )
+                } {}
+            } {}
         } {}
         ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
             : s ab ( nurl_sym_get g_bck ( bck_bkey `ab_` ( nurl_str_int wr ) ) )
@@ -30192,6 +30697,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : i __sxmp0 g_member_path_on
             = g_member_path_on ? & != 0 g_srcx_on == bck_rhs_tt TT_DOT 1 g_member_path_on
             = g_last_alloc_reg ``
+            // A block computing a number or a flag (`: i n { … }`) is a scope
+            // of its own: what it binds goes at its `}` (gen_block_expr).
+            = g_blk_scalar_let ? == bck_rhs_tt TT_LBRACE ? ( __plain_scalar_lty ( nurl_llty ptype ) ) 1 0 0
             : ~ s val ( gen_expr lex syms cg )
             = g_member_path_on __sxmp0
             // (What the right-hand side's value came from: a view binding's
@@ -30480,22 +30988,6 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? & & ( bck_sound ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( seq ( nurl_llty vt ) `i8*` ) {
             ( die lex ( nurl_str_cat3 `cannot give the inout string parameter '` name `' a new value: the caller's string may be one it owns or one it only borrows, so the value replaced here could be neither freed safely nor kept without a leak. Return the new string instead (@ f s p → s { ^ … }), or take a String ('inout String p' and string_push… / string_clear), which owns its buffer.` ) )
         } {}
-        // Silent-snapshot footgun: assigning to a binding the enclosing
-        // closure captured BY VALUE. The write lands on a fresh per-invocation
-        // local copy — it neither persists across calls (each invocation
-        // re-snapshots the captured value) nor reaches the original binding.
-        // The closure-counter `: ~ i n  ^ \ → i { = n + n 1  ^ n }` returns
-        // 1,1,1 instead of 1,2,3 because of this. By design, scalars (and
-        // single-field handles) capture by value; only a `: ~` MULTI-FIELD
-        // struct captures by reference — and that shared form is a stack
-        // reference that cannot escape its frame. So there is no escaping
-        // mutable-state closure: surface the dead store instead of emitting it
-        // silently. Non-fatal (the read/scratch use within one call is valid).
-        ? != 0 ( nurl_sym_len2 syms name `__captured_byval` )
-        { ( warn lex ( nurl_str_cat3
-            `assignment to '` name
-            `' is discarded when the closure returns — it was captured by value (a snapshot), so writes do not persist across invocations or reach the captured binding. For shared mutable state use a ': ~' multi-field struct captured by reference (which cannot escape the defining frame); an escaping mutable-state closure is not supported.` ) ) }
-        {}
         // Phase 2B reassignment-drop: if the LHS is an owned i8* binding and
         // the RHS is a fresh allocating call, free the old value before
         // overwriting. We gate on RHS being a fresh owned-call (not an alias
@@ -30606,27 +31098,58 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (Whether the new value owns its env at all, for the borrow walk.)
         : b __asn_clo_owned | | | == bck_rhs_tt TT_BACKSLASH != 0 ( nurl_str_len __asn_env ) __asn_move_env != 0 ( nurl_str_len __asn_tmp )
         : b __asn_call_env & != 0 ( nurl_str_len __asn_slot ) != 0 ( nurl_str_len __asn_tmp )
-        ? | | != 0 ( nurl_str_len __asn_env ) __asn_move_env __asn_call_env
-        { : s __asn_owner ? != 0 ( nurl_str_len __asn_env ) __asn_env
-            ? __asn_call_env __asn_tmp
-            ? != 0 ( nurl_str_len __asn_slot ) ( mem_clo_owner_of syms cg bck_rhs_val ) ``
-            ? ( nurl_sym_has_word syms `__owned_closure_envs__` name )
-            { ( mem_emit_closure_env_drop syms cg name ) }
-            {}
-            ? __asn_move_env { ( mem_clo_release_source syms bck_rhs_val ) } {}
-            ? != 0 ( nurl_str_len __asn_slot )
-            { ( nurl_print `  store i8* ` ) ( nurl_print __asn_owner ) ( nurl_print `, i8** ` )
-                ( nurl_print __asn_slot ) ( nurl_print `\n` ) }
-            {}
-            ( mem_own_closure_add syms name ) }
-        {  // Any other closure value (a parameter, a field, a non-owning
-            // call) is not this binding's to free: release what it owned
-            // and clear the slot.
-            ? & != 0 ( nurl_str_len __asn_slot ) ( __is_closure_ty vt )
-            { ? ( nurl_sym_has_word syms `__owned_closure_envs__` name )
-                { ( mem_emit_closure_env_drop syms cg name ) ( mem_own_closure_remove syms name ) }
+        // A closure binding reached through a pointer — an `inout`
+        // parameter, a binding a closure captured by pointer — is a place
+        // that owns its env, as a struct field is (§7.4): the value stored
+        // is made owned (a literal's or a call's env moves in, anything
+        // else is copied), and the env it replaces is released — through
+        // the binding's owner slot when the place has one (the caller's,
+        // reached through the env), or the old value's own. Taken for a
+        // local, the new env was dropped when this function returned and
+        // the old one leaked (h297).
+        : b __asn_place & ( __is_closure_ty vt ) | != 0 ( nurl_sym_len2 syms name `__clo_place` ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` )
+        : ~ s __asn_place_val ``
+        ? & __asn_place != 0 ( nurl_str_len ptr ) {
+            = __asn_place_val ( mem_clo_into_store syms cg vt val bck_rhs_tt )
+            ? != 0 ( nurl_str_len __asn_slot ) {
+                ( mem_emit_closure_env_drop syms cg name )
+                : s __pl_e ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __pl_e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
+                ( nurl_print ` ` ) ( nurl_print __asn_place_val ) ( nurl_print `, 1\n` )
+                ( nurl_print `  store i8* ` ) ( nurl_print __pl_e ) ( nurl_print `, i8** ` ) ( nurl_print __asn_slot ) ( nurl_print `\n` )
+            } {
+                : s __pl_ov ( nurl_cg_reg cg )
+                : s __pl_oe ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __pl_ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                ( nurl_print `  ` ) ( nurl_print __pl_oe ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
+                ( nurl_print ` ` ) ( nurl_print __pl_ov ) ( nurl_print `, 1\n` )
+                ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __pl_oe ) ( nurl_print `)` ) ( emit_dbg_eol )
+            }
+        } {}
+        ? __asn_place {} {
+            ? | | != 0 ( nurl_str_len __asn_env ) __asn_move_env __asn_call_env
+            { : s __asn_owner ? != 0 ( nurl_str_len __asn_env ) __asn_env
+                ? __asn_call_env __asn_tmp
+                ? != 0 ( nurl_str_len __asn_slot ) ( mem_clo_owner_of syms cg bck_rhs_val ) ``
+                ? ( nurl_sym_has_word syms `__owned_closure_envs__` name )
+                { ( mem_emit_closure_env_drop syms cg name ) }
+                {}
+                ? __asn_move_env { ( mem_clo_release_source syms bck_rhs_val ) } {}
+                ? != 0 ( nurl_str_len __asn_slot )
+                { ( nurl_print `  store i8* ` ) ( nurl_print __asn_owner ) ( nurl_print `, i8** ` )
+                    ( nurl_print __asn_slot ) ( nurl_print `\n` ) }
+                {}
+                ( mem_own_closure_add syms name ) }
+            {  // Any other closure value (a parameter, a field, a non-owning
+                // call) is not this binding's to free: release what it owned
+                // and clear the slot.
+                ? & != 0 ( nurl_str_len __asn_slot ) ( __is_closure_ty vt )
+                { ? ( nurl_sym_has_word syms `__owned_closure_envs__` name )
+                    { ( mem_emit_closure_env_drop syms cg name ) ( mem_own_closure_remove syms name ) }
+                    {} }
                 {} }
-            {} }
+        }
         ( __clo_tmp_set `` )
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
@@ -31017,6 +31540,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
         { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
         : ~ s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
+        ? != 0 ( nurl_str_len __asn_place_val ) { = store_val __asn_place_val } {}
         ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
         // A struct binding that owns fields, overwritten by a value that
         // brings the SAME owned fields (a constructor call, a literal):
@@ -31031,6 +31555,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the new one by the `:` binding's rule. A borrowed right-hand side
         // might alias the old value, so the old value is left alone then.
         : s __ud_ptr ( mem_udrop_ptr_of syms name )
+        // (An `inout` parameter that owns something given a new value: h295.)
+        ? ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) {
+            ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note syms name ) } {}
+        } {}
         // An `inout` parameter is the caller's binding (§2.4): a fresh value
         // assigned over it replaces the caller's, which is dropped. A call
         // that may hand back that same value (a lend) leaves it alone.
@@ -31833,6 +32361,17 @@ unsafe @ gen_assign i lex i syms i cg → s {
     ( nurl_print `  br label %out\nout:\n  ret void\n}\n` )
 }
 
+// This function replaces something `name` owns, and `name` is one of its
+// `inout` parameters: note which (g_fn_replaces).
+unsafe @ __replaces_note i syms s name → v {
+    ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ v } {}
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` name )
+    ? < k 0 { ^ v } {}
+    : s w ( nurl_str_int k )
+    ? ( str_contains_word g_fn_replaces_witness w ) { ^ v } {}
+    = g_fn_replaces_witness ? == 0 ( nurl_str_len g_fn_replaces_witness ) ( nurl_str_cat w `` ) ( nurl_str_cat3 g_fn_replaces_witness ` ` w )
+}
+
 @ gen_field_store i lex i syms i cg → s {
     : i bck_line g_stmt_line
     ( nurl_lex_advance lex )  // consume '.'
@@ -32150,6 +32689,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
                             // binding's own storage, written as `= . o f v` is —
                             // what it replaces is dropped and its borrows end.
                             : s __nl_root ? nested ( nurl_sym_get syms `__last_nested_root__` ) ``
+                            // (An owned field of an `inout` parameter replaced: h295.)
+                            : s __rp_root ? != 0 ( nurl_str_len __nl_root ) __nl_root obj_name
+                            ? ( seq ( nurl_sym_get2 syms __rp_root `__inout` ) `1` ) {
+                                ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms __rp_root ) } {}
+                            } {}
                             ? & != 0 ( nurl_str_len __nl_root ) ( __type_needs_drop ftype syms ) {
                                 ( bck_stash_fieldset ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) __fs_l0 )
                                 ? ( bck_sound ) { ( __ptr_kill __nl_root __fs_l0 ) } {}
@@ -32336,6 +32880,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_store syms cg ftype rhsc0 __fs_tt )
                 ( nurl_str_cat rhsc0 `` )
                 ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v1 __fs_l1 ) } {}
+                // (An owned field of an `inout` parameter replaced: h295.)
+                ? ( seq ( nurl_sym_get2 syms obj_name `__inout` ) `1` ) {
+                    ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name ) } {}
+                } {}
                 ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
@@ -35759,7 +36307,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // `__is_type`; `Vec` is the one pure builtin generic with no `:` def, so
     // it is named explicitly. None of these is ever a call target, so this
     // never misreads a `\ ( call )` try-expression.
-    : b t2_is_type & == t2 TT_IDENT | != 0 ( nurl_str_len t2m ) ( seq t2v `Vec` )
+    // (…and a generic struct's own name — `( Slice u )`, `( Locked i )`,
+    // `( Arc T )` — whose template has no `__is_type` until an instance
+    // is made.)
+    : b t2_gen ? | != t2 TT_IDENT == 0 g_generic_struct_syms F != 0 ( nurl_sym_len2 g_generic_struct_syms t2v `__stparams` )
+    : b t2_is_type & == t2 TT_IDENT | | != 0 ( nurl_str_len t2m ) ( seq t2v `Vec` ) t2_gen
     : b lparen_type & == t1 TT_LPAREN | | | | | | | | == t2 TT_AT == t2 TT_TYPE_KW == t2 TT_STAR == t2 TT_QUEST == t2 TT_QUESTQUEST == t2 TT_LBRACK == t2 TT_BANG == t2 TT_PIPE t2_is_type
     // `\ inout T name …` — an inout first parameter (__clo_inout_ty).
     : b t1_inout & == t1 TT_IDENT ( seq t1v `inout` )
@@ -36217,6 +36769,10 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     ? == 0 ( nurl_str_len mut ) { ^ F } {}
     : s vt ( nurl_sym_get syms var )
     ? == 0 ( nurl_str_len vt ) { ^ F } {}
+    // A binding the closure assigns: a snapshot would drop the write, so
+    // the closure holds the binding's address instead — and, like any
+    // capture by reference, may not outlive its frame (§2.3).
+    ? ? == 0 ( nurl_str_len g_clo_assigned ) F ( str_contains_word g_clo_assigned var ) { ^ T } {}
     ? != ( nurl_str_get vt 0 ) 37 { ^ F } {}
     : s tname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
     : s vlist ( nurl_sym_get2 syms tname `__variants` )
@@ -36224,6 +36780,18 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     : s f1 ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
     ? == 0 ( nurl_str_len f1 ) { ^ F } {}
     ^ T
+}
+
+// The LLVM types of the plain scalars — integers, floats and flags, values
+// that own nothing: a closure captures one it assigns by reference, and
+// handing one to a `sink` parameter copies it.
+@ __plain_scalar_lty s lt → b {
+    : i n ( nurl_str_len lt )
+    ? | < n 2 > n 6 { ^ F } {}
+    : i c ( nurl_str_get lt 0 )
+    ? == c 105 { ^ ? ( seq lt `i64` ) T ? ( seq lt `i1` ) T ? ( seq lt `i32` ) T ? ( seq lt `i8` ) T ( seq lt `i16` ) } {}
+    ? == c 100 { ^ ( seq lt `double` ) } {}
+    ^ & == c 102 ( seq lt `float` )
 }
 
 // The captures that cannot be copied which carry their binding's drop flag
@@ -36270,6 +36838,23 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     ^ out
 }
 
+// The by-pointer captures of a closure binding with an owner slot
+// (mem_clo_slot_new): the env carries the slot's address too, so a closure
+// the body assigns over the binding releases the env the binding owned and
+// leaves the binding owning the new one — the caller's slot, which the
+// body could not reach (h297).
+@ __byref_slot_vars s captured_vars i syms → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s vars ( nurl_str_cat captured_vars `` )
+    ~ != 0 ( nurl_str_len vars ) {
+        : s v ( str_first_word vars ) = vars ( str_skip_word vars )
+        ? & != 0 ( nurl_sym_len2 syms v `__envown` ) ( __is_closure_ty ( nurl_sym_get syms v ) ) {
+            ? ( __is_capture_byref v syms ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v ) } {}
+        } {}
+    }
+    ^ out
+}
+
 @ gen_env_struct_type s struct_name s captured_vars i syms → s {
     ? == 0 ( count_words captured_vars )
     { ^ ( nurl_str_cat `` `` ) }  // No captures
@@ -36304,6 +36889,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = ty ( nurl_str_cat ty `, i1` )
     }
     ? != 0 ( nurl_str_len g_nc_own_caps ) { = ty ( nurl_str_cat ty `, i8*` ) } {}
+    // …then one `i8**` per by-pointer closure capture's owner slot.
+    : ~ s svs ( __byref_slot_vars captured_vars syms )
+    ~ != 0 ( nurl_str_len svs ) {
+        = svs ( str_skip_word svs )
+        = ty ( nurl_str_cat ty `, i8**` )
+    }
     = ty ( nurl_str_cat ty ` }` )
     ty
 }
@@ -36668,7 +37259,23 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
         ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
         ( nurl_print `  store i8* ` ) ( nurl_print env_ptr ) ( nurl_print `, i8** ` ) ( nurl_print sp ) ( nurl_print `\n` )
+        = field_idx + field_idx 1
     } {}
+    // The owner slots of the by-pointer closure captures: the binding owns
+    // what the closure assigns over it, so its drop at the end of the
+    // scope is due whatever it held when the closure was made.
+    : ~ s svs ( __byref_slot_vars captured_vars syms )
+    ~ != 0 ( nurl_str_len svs ) {
+        : s sv ( str_first_word svs ) = svs ( str_skip_word svs )
+        : s ssp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ssp ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
+        ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
+        ( nurl_print `  store i8** ` ) ( nurl_print ( nurl_sym_get2 syms sv `__envown` ) ) ( nurl_print `, i8*** ` ) ( nurl_print ssp ) ( nurl_print `\n` )
+        // (A place's slot — a closure body's capture — is its caller's.)
+        ? == 0 ( nurl_sym_len2 syms sv `__clo_place` ) { ( mem_own_closure_add syms sv ) } {}
+        = field_idx + field_idx 1
+    }
 
     env_ptr
 }
@@ -37242,6 +37849,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : b clo_in_arg ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
+    : s __cla_saved ( nurl_str_cat g_clo_assigned `` )
     = g_clo_detach 0
     : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
     = g_clo_bind_name ``
@@ -37307,6 +37915,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
+    = g_clo_assigned ( nurl_str_cat g_clo_scan_assigned `` )
     // A closure bound to a name the rest of the function only calls stays
     // in this frame: it reaches its captures' drop flags there (h236).
     // Any other — handed back, to a thread or a fiber, to a callee, stored —
@@ -37734,15 +38343,13 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                 ( nurl_print `* ` ) ( nurl_print cap_ptr ) ( nurl_print `\n` )
                 ( nurl_sym_def body_syms cap_name cap_type )
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__ptr` ) cap_ptr )
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) `1` )
-                // Mark this as a BY-VALUE capture (a snapshot into a fresh
-                // per-invocation local). The body may still read/scratch it,
-                // but an assignment is discarded when the closure returns and
-                // never reaches the captured binding — gen_assign warns on
-                // that silent dead store (the counter-closure footgun). This
-                // is distinct from `__captured_byref` (a shared caller-frame
-                // alloca, whose writes DO persist but which cannot escape).
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byval` ) `1` )
+                // A BY-VALUE capture is a snapshot the body only reads: a
+                // binding the closure assigns or hands to an `inout`
+                // parameter is captured by pointer (__is_capture_byref), so
+                // the snapshot is as mutable as the binding it copies — an
+                // immutable one cannot reach an `inout` parameter here
+                // either.
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__mutable` ) ? != 0 ( nurl_sym_len2 syms cap_name `__mutable` ) `1` `` )
                 ( __clo_cap_home body_syms cap_ptr )
                 // The snapshot borrows the env's value; one assigned over it
                 // is this invocation's own and is dropped when it returns
@@ -37810,6 +38417,43 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__fsrc` ) `` )
             = cap_idx + cap_idx 1
         }
+        ? != 0 ( nurl_str_len g_nc_own_caps ) { = cap_idx + cap_idx 1 } {}
+        // A closure capture: its owner slot is the caller's, reached through
+        // the env when it is captured by pointer (__byref_slot_vars) — the
+        // body releases what the binding owned when it assigns over it, and
+        // the binding owns the new one. A capture by value has none here
+        // (the env owns its copy): the outer binding's slot is a register
+        // of another function.
+        : ~ s svs ( __byref_slot_vars captured_vars syms )
+        : ~ s ccs ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len ccs ) {
+            : s cv ( str_first_word ccs ) = ccs ( str_skip_word ccs )
+            ? ( __is_closure_ty ( nurl_sym_get syms cv ) ) {
+                ? ( str_contains_word svs cv ) {} {
+                    ( nurl_sym_def body_syms ( nurl_str_cat cv `__envown` ) `` )
+                    // (Captured by pointer with no slot: the binding is
+                    // itself a place — an `inout` parameter — that owns
+                    // its env.)
+                    ? ( __is_capture_byref cv syms ) {
+                        ? | != 0 ( nurl_sym_len2 syms cv `__clo_place` ) ( seq ( nurl_sym_get2 syms cv `__inout` ) `1` ) {
+                            ( nurl_sym_def body_syms ( nurl_str_cat cv `__clo_place` ) `1` )
+                        } {}
+                    } {}
+                }
+            } {}
+        }
+        ~ != 0 ( nurl_str_len svs ) {
+            : s sv ( str_first_word svs ) = svs ( str_skip_word svs )
+            : s sgep ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sgep ) ( nurl_print ` = getelementptr ` ) ( nurl_print env_struct_name )
+            ( nurl_print `, ` ) ( nurl_print env_struct_name ) ( nurl_print `* ` ) ( nurl_print typed_env )
+            ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int cap_idx ) ) ( nurl_print `\n` )
+            : s sptr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sptr ) ( nurl_print ` = load i8**, i8*** ` ) ( nurl_print sgep ) ( nurl_print `\n` )
+            ( nurl_sym_def body_syms ( nurl_str_cat sv `__envown` ) sptr )
+            ( nurl_sym_def body_syms ( nurl_str_cat sv `__clo_place` ) `1` )
+            = cap_idx + cap_idx 1
+        }
     }
     {}
 
@@ -37830,6 +38474,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_fn_mutates_witness ``
     : s __cl_realloc_saved ( nurl_str_cat g_fn_reallocs_witness `` )
     = g_fn_reallocs_witness ``
+    : s __cl_repl_saved ( nurl_str_cat g_fn_replaces_witness `` )
+    = g_fn_replaces_witness ``
     : s __cl_consumed_saved ( nurl_str_cat g_closure_consumed `` )
     = g_closure_consumed ``
     // …and what the body does to its captures (__clo_effect_note): this
@@ -38055,6 +38701,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_mutates_witness __cl_mut_saved
     = g_fn_reallocs_witness __cl_realloc_saved
+    = g_fn_replaces_witness __cl_repl_saved
     // Replay what the body consumed against what it CAPTURED: a
     // consumed capture is a handle this closure may free, so the
     // enclosing binding is maybe-moved from here on. MAYBE, because the
@@ -38379,6 +39026,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
 
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
+    = g_clo_assigned __cla_saved
     result2
 }
 
@@ -38439,8 +39087,74 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
 // ── Simple Capture Analysis ─────────────────────────────────────
 // Returns a space-separated string of captured variable names
 
-@ simple_capture_analysis i lex i outer_syms s closure_params → s {
+// The outer `: ~` bindings a call in a closure body hands to an `inout`
+// parameter (`( bump n )`, `( swap f 3 )`): the callee changes them as an
+// assignment would, so they are captured by pointer too. Taken by value,
+// the write landed on the closure's copy — lost for a number, and for a
+// value the callee replaced (a String given a new one, a closure) the
+// caller's binding was left holding what the callee had freed (h298).
+// Called at the `(`; the lexer is left where it was. Arguments are
+// counted while each before an inout position is one token or one
+// bracketed group; past an operator the positions are unknown, and every
+// binding named directly in the call is taken.
+unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    ? ! ( is_ident_tok ( nurl_lex_peek_type lex ) ) { ^ out } {}
+    : s fname ( nurl_lex_peek_val lex )
+    : ~ s idx ( nurl_sym_get g_fn_inout fname )
+    ? == 0 ( nurl_str_len idx ) { = idx ( __clo_inout_idx ( nurl_sym_get outer_syms fname ) ) } {}
+    ? == 0 ( nurl_str_len idx ) { ^ out } {}
+    : i save ( nurl_lex_cur_start lex )
+    ( nurl_lex_advance lex ) ( nurl_lex_advance lex )
+    ? == ( nurl_lex_type lex ) TT_LBRACK { ( skip_balanced_bracks lex ) } {}
+    : ~ i k 0
+    : ~ b exact T
+    : ~ i last 0
+    : ~ s rest ( nurl_str_cat idx `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i ix ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? > ix last { = last ix } {}
+    }
+    ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
+        : i t ( nurl_lex_type lex )
+        : b at_io | ! exact ( str_contains_word idx ( nurl_str_int k ) )
+        ? | == t TT_IDENT == t TT_TYPE_KW {
+            : s w ( nurl_lex_val lex )
+            ? & at_io & != 0 ( nurl_sym_len2 outer_syms w `__ptr` ) != 0 ( nurl_sym_len2 outer_syms w `__mutable` ) {
+                ? ! ( str_contains_word closure_params w ) {
+                    ? ! ( str_contains_word out w ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
+                } {}
+            } {}
+            ( nurl_lex_advance lex )
+        } {
+            ? == t TT_LPAREN { ( skip_balanced_parens lex ) } {
+                ? == t TT_LBRACK { ( skip_balanced_bracks lex ) } {
+                    ? == t TT_LBRACE { ( skip_balanced lex ) } {
+                        // A field target (`. s items`) changes its root.
+                        ? & == t TT_DOT at_io {
+                            ~ == ( nurl_lex_type lex ) TT_DOT { ( nurl_lex_advance lex ) }
+                            : s w2 ( nurl_lex_val lex )
+                            ? & & ( is_ident_tok ( nurl_lex_type lex ) ) != 0 ( nurl_sym_len2 outer_syms w2 `__ptr` ) != 0 ( nurl_sym_len2 outer_syms w2 `__mutable` ) {
+                                ? ! ( str_contains_word out w2 ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w2 `` ) ( nurl_str_cat3 out ` ` w2 ) } {}
+                            } {}
+                        } {}
+                        ? | | | == t TT_INT == t TT_STR == t TT_BOOL == t TT_FLOAT {} { = exact F }
+                        ( nurl_lex_advance lex )
+                    }
+                }
+            }
+        }
+        = k + k 1
+        ? & exact > k last { ( nurl_lex_set_pos lex save ) ^ out } {}
+    }
+    ( nurl_lex_set_pos lex save )
+    ^ out
+}
+
+unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
+    // (The outer locals the body assigns: g_clo_scan_assigned.)
+    : ~ s assigned ( nurl_str_cat `` `` )
     : ~ i captured_count 0
     // Anchor for the unclosed-brace diagnostic below: the opening '{'.
     : i sca_open_line ( nurl_lex_line lex )
@@ -38495,6 +39209,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                             // invalid IR (use of undefined value).
                             : b is_clo_param_t ( str_contains closure_params target_var )
                             ? ! is_clo_param_t {
+                                ? ! ( str_contains_word assigned target_var ) {
+                                    = assigned ( nurl_str_cat3 assigned ` ` target_var )
+                                } {}
                                 ? ! ( str_contains captured_vars target_var ) {
                                     = captured_vars ? == 0 captured_count
                                     target_var
@@ -38508,6 +39225,14 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                     {}
                 }
                 {
+                    // A binding handed to an `inout` parameter is changed.
+                    ? == tt TT_LPAREN {
+                        : ~ s ios ( __clo_scan_inout_call lex outer_syms closure_params )
+                        ~ != 0 ( nurl_str_len ios ) {
+                            : s iv ( str_first_word ios ) = ios ( str_skip_word ios )
+                            ? ! ( str_contains_word assigned iv ) { = assigned ( nurl_str_cat3 assigned ` ` iv ) } {}
+                        }
+                    } {}
                     // Capture identifier if it is an outer local/param and not a closure param
                     ? | == tt TT_IDENT == tt TT_TYPE_KW
                     {
@@ -38544,6 +39269,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         { ( nurl_lex_advance lex ) }
     }
     // Lexer is now positioned after closing brace
+    = g_clo_scan_assigned assigned
     captured_vars
 }
 
@@ -40768,6 +41494,60 @@ unsafe @ resolve_mutation_summaries → v {
     }
 }
 
+// The replacement summary closed over its call edges, then every `inout`
+// call that handed a `: ~` copy of a parameter (or a field of one) to a
+// parameter its callee may replace a field of: refused (h295).
+unsafe @ resolve_replaces → v {
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        : ~ s rest ( nurl_str_cat g_repl_edges `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+            : i b1 ( nurl_str_find e `|` )
+            : s fn ( nurl_str_slice e 0 b1 )
+            : s r1 ( nurl_str_slice e + b1 1 - - ( nurl_str_len e ) b1 1 )
+            : i b2 ( nurl_str_find r1 `|` )
+            : s k ( nurl_str_slice r1 0 b2 )
+            : s r2 ( nurl_str_slice r1 + b2 1 - - ( nurl_str_len r1 ) b2 1 )
+            : i b3 ( nurl_str_find r2 `|` )
+            : s callee ( nurl_str_slice r2 0 b3 )
+            : s j ( nurl_str_slice r2 + b3 1 - - ( nurl_str_len r2 ) b3 1 )
+            ? & ( str_contains_word ( nurl_sym_get g_fn_replaces callee ) j ) ! ( str_contains_word ( nurl_sym_get g_fn_replaces fn ) k ) {
+                : s cur ( nurl_sym_get g_fn_replaces fn )
+                ( nurl_sym_def g_fn_replaces fn ? == 0 ( nurl_str_len cur ) ( nurl_str_cat k `` ) ( nurl_str_cat3 cur ` ` k ) )
+                = changed T
+            } {}
+        }
+    }
+    : ~ s rest ( nurl_str_cat g_repl_checks `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i b1 ( nurl_str_find c `|` )
+        : s callee ( nurl_str_slice c 0 b1 )
+        : s r1 ( nurl_str_slice c + b1 1 - - ( nurl_str_len c ) b1 1 )
+        : i b2 ( nurl_str_find r1 `|` )
+        : s j ( nurl_str_slice r1 0 b2 )
+        : s r2 ( nurl_str_slice r1 + b2 1 - - ( nurl_str_len r1 ) b2 1 )
+        : i b3 ( nurl_str_find r2 `|` )
+        : s name ( nurl_str_slice r2 0 b3 )
+        : s r3 ( nurl_str_slice r2 + b3 1 - - ( nurl_str_len r2 ) b3 1 )
+        : i b4 ( nurl_str_find r3 `|` )
+        : s src ( nurl_str_slice r3 0 b4 )
+        : s r4 ( nurl_str_slice r3 + b4 1 - - ( nurl_str_len r3 ) b4 1 )
+        : i b5 ( nurl_str_find r4 `|` )
+        : s line ( nurl_str_slice r4 0 b5 )
+        : s r5 ( nurl_str_slice r4 + b5 1 - - ( nurl_str_len r4 ) b5 1 )
+        : i b6 ( nurl_str_find r5 `|` )
+        : s file ( nurl_str_slice r5 0 b6 )
+        : s shown ( nurl_str_slice r5 + b6 1 - - ( nurl_str_len r5 ) b6 1 )
+        ? ( str_contains_word ( nurl_sym_get g_fn_replaces callee ) j ) {
+            ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat ( nurl_str_cat4 `'` name `' is a copy of the parameter '` ( nurl_str_cat4 src `', and '` shown `' replaces a field of what it is handed 'inout' — ` ) )
+            `releasing what the caller of this function owns (the copy shares those fields, it does not own them). Make it a copy of its own: ': ~ T name ( mem_dup param )', or take the parameter itself as 'inout'.` ) )
+        } {}
+    }
+}
+
 @ resolve_pending_iter_mut → v {
     ? == g_borrowck 0 { ^ } {}
     : ~ s rest ( nurl_sym_get g_pending_escape `i` )
@@ -40855,6 +41635,7 @@ unsafe @ resolve_mutation_summaries → v {
     ? == g_borrowck 0 {} {
         ( resolve_pending_ret_escapes )
         ( resolve_pending_iter_mut )
+        ( resolve_replaces )
         ( resolve_pending_stale )
         ( resolve_pending_owner_gone )
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
@@ -43049,6 +43830,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // this body mutates — and which buffers it may move or release.
     = g_fn_mutates_witness ``
     = g_fn_reallocs_witness ``
+    = g_fn_replaces_witness ``
     = g_fn_arcseen 0
     = g_fn_ret_count 0
     ( nurl_sym_def syms `__origin_return__` ( nurl_str_int ( origin_function fname ) ) )
@@ -43265,6 +44047,9 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     {}
     ? != 0 ( nurl_str_len g_fn_reallocs_witness )
     { ( nurl_sym_def g_fn_reallocs fname g_fn_reallocs_witness ) }
+    {}
+    ? != 0 ( nurl_str_len g_fn_replaces_witness )
+    { ( nurl_sym_def g_fn_replaces fname g_fn_replaces_witness ) }
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
@@ -44104,11 +44889,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
                 ( mem_udrop_flag_set syms cg pptr own )
             } {
                 ( nurl_sym_def syms ( nurl_str_cat pptr `__dsel` ) dflag )
-                : s gkey ( nurl_str_cat `glue##` rty )
-                ? == 0 ( nurl_sym_len g_impl_name_syms gkey ) {
-                    ( nurl_sym_def g_impl_name_syms gkey `1` )
-                    ( __park_append g_impl_name_syms `__pending_glue__` rty )
-                } {}
+                ( __glue_request rty )
                 ( mem_udrop_flag_set syms cg pptr pc )
             }
             ( mem_journal_push_userdrop syms cg pptr rty )
@@ -44879,6 +45660,21 @@ unsafe @ __ffi_param_count s pt → i {
     // from the import's declared type and wasm-ld replaces the callee with
     // an `unreachable` stub. Coercing at the call site fixes both targets.
     : ~ s ptypes ``
+    // The pointer (`*T`) parameters the C function may write through: all
+    // of them but those declared `in` (it only reads there) or `sync` (it
+    // changes what is there only atomically or under the object's own
+    // lock — a counter, a mutex — which no other thread can race). A write
+    // is a change to whatever storage the pointer came from — a
+    // parameter's buffer, a view a read guard lends — exactly as a raw
+    // store through it is in NURL code (the provenance graph,
+    // resolve_raw_provenance).
+    : ~ s __ff_writes ``
+    // …and the parameters declared `nocapture`: the result holds nothing
+    // of them (`opendir`'s path), so it is not derived from them.
+    : ~ s __ff_nocap ``
+    // …and those declared `in`: borrowed for the call — read, neither kept
+    // nor freed — so a temporary handed there is the caller's to release.
+    : ~ s __ff_nofree ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -44922,6 +45718,29 @@ unsafe @ __ffi_param_count s pt → i {
             // hand around the call.
             : b __ff_io & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` )
             ? __ff_io { ( nurl_lex_advance lex ) } {}
+            // `in *T x` / `in s x`: the C function only reads through the
+            // pointer, during the call — it keeps nothing of it and frees
+            // nothing; `sync *T x`: it changes what is there only atomically
+            // or under its own lock; `nocapture`: its result holds nothing
+            // of x.
+            : ~ b __ff_in F
+            : ~ b __ff_more ! __ff_io
+            ~ & __ff_more ( is_ident_tok ( nurl_lex_type lex ) ) {
+                : s __ffm ( nurl_lex_val lex )
+                ? ( seq __ffm `in` ) {
+                    = __ff_nocap ? == 0 ( nurl_str_len __ff_nocap ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nocap ` ` ( nurl_str_int pct ) )
+                    = __ff_nofree ? == 0 ( nurl_str_len __ff_nofree ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nofree ` ` ( nurl_str_int pct ) )
+                } {}
+                ? | ( seq __ffm `in` ) ( seq __ffm `sync` ) { = __ff_in T ( nurl_lex_advance lex ) } {
+                    ? ( seq __ffm `nocapture` ) {
+                        = __ff_nocap ? == 0 ( nurl_str_len __ff_nocap ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nocap ` ` ( nurl_str_int pct ) )
+                        ( nurl_lex_advance lex )
+                    } { = __ff_more F }
+                }
+            }
+            ? & ! __ff_in & ! __ff_io == ( nurl_lex_type lex ) TT_STAR {
+                = __ff_writes ? == 0 ( nurl_str_len __ff_writes ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_writes ` ` ( nurl_str_int pct ) )
+            } {}
             : s lt0 ( parse_type lex )
             ( check_type_known lex syms lt0 `an FFI parameter type` __ff_line __ff_col )
             : s lt ? __ff_io ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
@@ -44975,6 +45794,9 @@ unsafe @ __ffi_param_count s pt → i {
     ? != 0 g_pending_unsafe { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_raw` ) `1` ) = g_pending_unsafe 0 } {}
     // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
+    ? != 0 ( nurl_str_len __ff_writes ) { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_writes` ) __ff_writes ) } {}
+    ? != 0 ( nurl_str_len __ff_nocap ) { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_nocapture` ) __ff_nocap ) } {}
+    ? != 0 ( nurl_str_len __ff_nofree ) { ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_nofree` ) __ff_nofree ) } {}
     // emit_header already emits `declare` lines for a small set of libc
     // symbols (malloc, free, puts, printf). If the user FFI-declares any of
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
@@ -45618,10 +46440,21 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ^ ( __clone_supported ty g_root_syms )
 }
 
+// A library handle that cannot be copied: no share hook, and no clone
+// hook that copies every type argument it owns (a lock guard — one lock,
+// one owner; a Box of a value with its own `% Drop`). It is dropped by
+// whoever owns it and moved, never copied.
+@ __is_moveonly_libh s ty → b {
+    ? ! ( __is_libh ty ) { ^ F } {}
+    ^ ! ( __libh_clone_ok ty g_root_syms )
+}
+
 // A struct none of whose parts can be copied as a handle because one of
-// its fields is (or holds) a value with its own `% Drop`.
+// its fields is (or holds) a value with its own `% Drop`, or a library
+// handle that cannot be copied (h290: a struct holding a lock guard was
+// dropped by nobody, and the lock stayed held).
 @ __needs_synth_drop s ty → b {
-    ? | | == 0 g_user_drop_seen == 0 g_root_syms == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? | == 0 g_root_syms == 0 ( nurl_str_len ty ) { ^ F } {}
     ? | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? | ( __is_libh ty ) ( __has_user_drop ty ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
@@ -45632,7 +46465,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) { ^ T } {}
+        ? | | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) ( __is_moveonly_libh ft ) { ^ T } {}
         ? ( __needs_synth_drop ft ) { ^ T } {}
         // …or holds one inside a Vec, a Box, an option or an enum payload:
         // that container cannot be copied either, so the struct holding it
@@ -45651,7 +46484,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
 @ __holds_user_drop s ty i depth → b {
     ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
-    ? | ( __has_user_drop ty ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) { ^ T } {}
+    ? | | ( __has_user_drop ty ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) ( __is_moveonly_libh ty ) { ^ T } {}
     ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
         ^ ( __holds_user_drop ( __vec_elem_llvm ty ) + depth 1 )
     } {}
@@ -46415,6 +47248,13 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ~ != 0 ( nurl_str_len hrest ) {
         : s hv ( str_first_word hrest ) = hrest ( str_skip_word hrest )
         ( emit_jdrop_thunk ( nurl_llty hv ) ( __drop_mangle hv ) )
+    }
+    // …and of values with a typed drop journaled before their thunk was
+    // out (mem_journal_push_userdrop); one emitted since is not repeated.
+    : ~ s urest ( nurl_sym_get g_impl_name_syms `__pending_ujdrops__` )
+    ~ != 0 ( nurl_str_len urest ) {
+        : s uv ( str_first_word urest ) = urest ( str_skip_word urest )
+        ( emit_jdrop_thunk ( nurl_llty uv ) ( nurl_sym_get2 g_impl_name_syms `drop##` uv ) )
     }
     ( emit_pending_cc syms )
     ( emit_pending_dropifs )
@@ -51940,6 +52780,19 @@ unsafe @ __canon_import_key s path → s {
     }
 }
 
+// skip_balanced_bracks: consume a '[ ... ]' group (type arguments, a
+// slice literal), nesting included.
+@ skip_balanced_bracks i lex → v {
+    : ~ i depth 0
+    ~ != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACK { = depth + depth 1 } {}
+        ? == tt TT_RBRACK { = depth - depth 1 } {}
+        ( nurl_lex_advance lex )
+        ? <= depth 0 { ^ } {}
+    }
+}
+
 // skip_balanced_parens: consume a '( ... )' group, nesting included. The
 // brace version below is the same walk over '{' / '}'.
 @ skip_balanced_parens i lex → v {
@@ -52438,6 +53291,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
         // Park a supertrait obligation: after every impl in the program is
         // registered, each supertrait of `tname` must also be implemented for
         // this type. Recorded unconditionally (the trait's supers may not be
@@ -54334,6 +55188,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                                 { ( nurl_lex_advance lex ) }
                                 { : b __sio & ( is_ident_tok ( nurl_lex_type lex ) ) ( seq ( nurl_lex_val lex ) `inout` )
                                     ? __sio { ( nurl_lex_advance lex ) } {}
+                                    // (`in` / `sync` / `nocapture`: gen_ffi_decl's markers.)
+                                    ~ & ! __sio & ( is_ident_tok ( nurl_lex_type lex ) ) | | ( seq ( nurl_lex_val lex ) `in` ) ( seq ( nurl_lex_val lex ) `sync` ) ( seq ( nurl_lex_val lex ) `nocapture` ) { ( nurl_lex_advance lex ) }
                                     : s lt0 ( parse_type lex )
                                     : s lt ? __sio ( nurl_str_cat lt0 `*` ) ( nurl_str_cat lt0 `` )
                                     ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
@@ -55147,6 +56003,8 @@ unsafe @ __fold_byte i p → i {
 // A runtime / external function that can start a panic on this thread.
 unsafe @ __mp_runtime_panics s nm i p i le → b {
     ? ( seq nm `nurl_panic` ) { ^ T } {}
+    // An RwLocked taken by a thread that already holds it for writing.
+    ? != 0 ( nurl_str_starts nm `nurl_rwlock_` ) { ^ | ( seq nm `nurl_rwlock_rdlock` ) ( seq nm `nurl_rwlock_wrlock` ) } {}
     // Drop / clone walks that call a thunk; with no thunk they cannot.
     ? | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` ) {
         ^ < ( nurl_memmem_range # s + g_dce_mod p - le p `, ptr null,` 11 ) 0
@@ -58047,6 +58905,7 @@ unsafe @ main → i {
     = g_origin_returns ( nurl_sym_new )
     = g_fn_ret_alias ( nurl_sym_new )
     = g_fn_mutates ( nurl_sym_new )
+    = g_fn_replaces ( nurl_sym_new )
     = g_fn_reallocs ( nurl_sym_new )
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )

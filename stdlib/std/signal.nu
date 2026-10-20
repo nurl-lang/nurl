@@ -91,7 +91,7 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
 
 // ── FFI declarations ────────────────────────────────────────────
 
-& `c` @ nurl_signal_register i sig *u fn *u env → i
+& `c` @ nurl_signal_register i sig in *u fn in *u env → i
 
 & `c` @ nurl_signal_unregister i sig → v
 

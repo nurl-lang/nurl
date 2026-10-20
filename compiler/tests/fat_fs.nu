@@ -193,6 +193,19 @@ unsafe @ run_layout s tag i sectors i want_type → v {
     ( ckn ( fatfs_truncate `/big.bin` 4096 ) 0 `truncate a big file down` )
     ( ckn ( fatfs_stat_size `/big.bin` ) 4096 `shrunk size` )
     ( ck ( check_pattern `/big.bin` 4096 ) `what is left is still right` )
+    // …and through an open handle, which keeps its own size and chain.
+    ( ckn ( write_pattern `/cut.bin` 9000 ) 9000 `a file to cut while open` )
+    : i th ( fatfs_open `/cut.bin` ( fo_rdwr ) )
+    ( ckn ( fatfs_ftruncate th 1000 ) 0 `ftruncate down` )
+    ( ckn ( fatfs_size th ) 1000 `the handle sees the cut` )
+    ( ckn ( fatfs_ftruncate th 3000 ) 0 `ftruncate up` )
+    ( ckn ( fatfs_close th ) 0 `close after ftruncate` )
+    ( ckn ( fatfs_stat_size `/cut.bin` ) 3000 `the entry has the handle's size` )
+    ( ck ( check_pattern `/cut.bin` 1000 ) `the kept bytes are still right` )
+    : i ro ( fatfs_open `/cut.bin` 0 )
+    ( ckn ( fatfs_ftruncate ro 10 ) ( fe_badf ) `ftruncate needs a handle open for writing` )
+    : i _ro ( fatfs_close ro )
+    ( ckn ( fatfs_unlink `/cut.bin` ) 0 `unlink the cut file` )
 
     // ── rename ──
     ( ckn ( fatfs_rename `/hello.txt` `/greeting.txt` ) 0 `rename` )

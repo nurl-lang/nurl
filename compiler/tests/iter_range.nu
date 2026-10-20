@@ -55,10 +55,8 @@ $ `stdlib/core/option.nu`
     ( nurl_print `range_each_sum_1_to_10=` )
     ( nurl_print ( nurl_str_int sum ) )
     ( nurl_print `\n` )
-    // Note: closure captures by value — sum stays 0 in main's scope.
-    // The closure mutated its own copy. Use vec_fold for the accumulator
-    // pattern (verified in set_generic.nu); demonstrated here so the
-    // limitation is visible.
+    // The closure assigns `sum`, so it captures it by pointer: the
+    // additions land on main's binding (55).
 
     // Functional pipeline: (range 1 6) → square via vec_map → sum via vec_fold
     : ( Vec i ) r ( range 1 6 )

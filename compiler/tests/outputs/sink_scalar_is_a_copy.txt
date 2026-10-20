@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+after eat: 9
+locked: 8
+flag kept
+start: 14
