@@ -155,6 +155,17 @@ jobs:
             $out = & "$dir\s.exe"
             if ($LASTEXITCODE -ne 0) { throw "$mode : the built program failed" }
             if ($out -ne "ok") { throw "$mode : unexpected output: $out" }
+            # `--stdin NAME`: the same program piped in, known as NAME —
+            # how nurl-mcp builds inline source without a temp file.
+            Remove-Item "$dir\p.exe" -ErrorAction SilentlyContinue
+            & cmd /c "type `"$dir\s.nu`" | call nurl.bat --stdin piped.nu `"$dir\p`""
+            if ($LASTEXITCODE -ne 0) { throw "$mode : nurl.bat --stdin failed" }
+            $out = & "$dir\p.exe"
+            if ($out -ne "ok") { throw "$mode : --stdin build: unexpected output: $out" }
+            # …and its diagnostics name NAME, not a path.
+            Set-Content -Path "$dir\bad.txt" -Value '@ main → i { ^ + 1 }' -Encoding utf8NoBOM
+            $err = & cmd /c "type `"$dir\bad.txt`" | call nurl.bat --stdin bad.nu `"$dir\b`" 2>&1"
+            if (-not (($err -join "`n") -match "bad\.nu:1:")) { throw "$mode : --stdin diagnostics do not name bad.nu: $err" }
             Write-Host "$mode OK"
           }
 
