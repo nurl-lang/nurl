@@ -37,6 +37,12 @@
 // the guard goes, which is what makes hand-over-hand locking safe — take
 // the next guard, then let the previous one go. A guard is released by
 // the thread that took it, so it never crosses a thread (`% NotSend`).
+//
+// A second read guard of a lock its holder (a thread, or a fiber) already
+// reads is counted, not taken again, so a reader never queues behind a
+// writer that waits for it — on every platform, whichever side its lock
+// favours. Asking for a lock the holder already has for writing, or
+// asking to write one it reads, would wait for itself: that panics.
 // The handle itself is shared: capture it, store it, send it; every copy
 // is the same lock and the same value, and the last one releases both.
 //

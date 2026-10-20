@@ -1221,6 +1221,10 @@ readers or one writer) and an `Atomic` (one word, changed only with atomic
 instructions). A read guard is `% Frozen`: what it lends — the value, a
 `Slice` of a `Vec` in it — is read-only, checked as an `Arc`'s payload is
 (§9.13 of the spec), and a struct holding one is frozen in the same way.
+A holder — a thread, or a fiber, which may move between threads — may
+read a lock it already reads (the second guard is counted, so it never
+waits behind a writer queued for the first); asking for one it holds for
+writing, or to write one it reads, panics rather than wait for itself.
 A `PFile` reads and writes at an offset, with no shared file position, so
 threads share one too. A guard is a value like any other: dropped at the
 end of its scope (a bare block, a block that computes a number, a loop

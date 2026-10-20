@@ -3,4 +3,8 @@ LINK OK
 EXIT 0
 OUTPUT
 nurl: cannot take an RwLocked for reading: this thread already holds it for writing (it would wait for itself)
+nurl: cannot take an RwLocked for writing: this thread already holds it for reading (it would wait for itself)
 taken again
+read again while a writer waits: 5
+the writer still waits: 1
+then it writes: 1

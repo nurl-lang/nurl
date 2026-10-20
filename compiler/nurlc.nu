@@ -20280,7 +20280,15 @@ unsafe @ __blk_leave b val → v {
             } {}
             ( mem_drop_new_closure_envs syms cg old_closure_bb )
         } {}
-        ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
+        // The block that is current at its `}` is the enclosing code's
+        // current block too: a `?` / `~` inside it recorded its last label
+        // in the scope popped here, and a `??` around it named the arm's
+        // first block in its phi (a select in an arm: invalid IR).
+        ? != 0 g_auto_drop_strings {
+            : s __blk_lbl ( nurl_sym_get syms `__cur_lbl__` )
+            ( nurl_sym_pop syms )
+            ( nurl_sym_def syms `__cur_lbl__` __blk_lbl )
+        } {}
     } {}
     ( __blk_leave blk_val )
     // Closing-edge/implicit-return instructions must not inherit the

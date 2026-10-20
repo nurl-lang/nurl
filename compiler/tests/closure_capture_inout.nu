@@ -4,6 +4,7 @@
 // String it grows or replaces, a struct field it is given, an argument
 // past an operator expression. A binding the call only reads stays a
 // snapshot, so a closure that runs on another thread may still read it.
+// requires: live
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

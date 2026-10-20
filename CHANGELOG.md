@@ -28,17 +28,25 @@ over a field.
 - **std/rwlock.nu: `RwLocked [A]`** — many readers or one writer. A read
   guard (`RGuard`, `% Frozen`) lends a read-only view, a write guard
   (`WGuard`) a changeable one; try variants for a caller that must not
-  wait; guards are released by their drop, through a panic too. A thread
-  that asks for a lock it already holds for writing panics instead of
-  waiting for itself (POSIX, SRWLOCK on Windows and the WASI shim alike);
-  a failed lock call panics instead of carrying on unlocked.
+  wait; guards are released by their drop, through a panic too. A holder
+  (a thread, or a fiber that may resume on another thread) may take a
+  second read guard of a lock it already reads — counted, so it never
+  queues behind a writer waiting for the first, whichever side the
+  platform's lock favours (SRWLOCK and FreeBSD's favour writers, glibc's
+  readers); asking for a lock it holds for writing, or to write one it
+  reads, panics instead of waiting for itself, on every platform; a
+  failed lock call panics instead of carrying on unlocked.
 - **`% Frozen`** (core/marker.nu): what a value of the type lends is
   read-only, checked as an `Arc`'s payload is; a struct holding an `Arc` or
   a frozen value lends frozen views too.
 - **std/pfile.nu: `PFile`** — a file read and written at offsets (pread /
   pwrite into and out of slices), shared by any number of threads. On
   Windows positional I/O is ReadFile/WriteFile with an OVERLAPPED offset
-  instead of seek-then-read, which raced between threads.
+  instead of seek-then-read, which raced between threads. Its
+  `fdatasync` and `ftruncate` exist on the freestanding targets too:
+  nolibc's Linux syscalls, and in the unikernel guest a FAT truncation
+  through the open handle (`fatfs_ftruncate`, which keeps the handle's
+  size and chain; one truncated by path would write its old size back).
 - **std/thread.nu: `locked_await`** — wait on a `Locked` value until a
   closure says it is done; `locked_update` / `locked_apply` / `locked_set`
   wake its waiters.

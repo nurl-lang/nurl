@@ -120,7 +120,9 @@ void nl_exit_group(int code) {
 #define SYS_mprotect_  10
 #define SYS_getrandom_ 318
 #define SYS_fsync_     74
+#define SYS_fdatasync_ 75
 #define SYS_truncate_  76
+#define SYS_ftruncate_ 77
 #define SYS_pread64_   17
 #define SYS_pwrite64_  18
 
@@ -224,6 +226,12 @@ long sysconf(int name) {
  * update) and every caller stays put. */
 int   fsync(int fd)                                 { return (int)nl_ret(nl_syscall6(SYS_fsync_, fd, 0, 0, 0, 0, 0)); }
 int   truncate(const char *p, long long len)        { return (int)nl_ret(nl_syscall6(SYS_truncate_, (long)p, (long)len, 0, 0, 0, 0)); }
+/* …and their per-descriptor forms, which a file shared by offset (PFile:
+ * a write-ahead log, a data file) needs: fdatasync(2) skips the metadata
+ * a reader does not need to find the data, ftruncate(2) cuts the file
+ * an open descriptor names. */
+int   fdatasync(int fd)                             { return (int)nl_ret(nl_syscall6(SYS_fdatasync_, fd, 0, 0, 0, 0, 0)); }
+int   ftruncate(int fd, long long len)              { return (int)nl_ret(nl_syscall6(SYS_ftruncate_, fd, (long)len, 0, 0, 0, 0)); }
 int   mprotect(void *p, unsigned long len, int prot) { return (int)nl_ret(nl_syscall6(SYS_mprotect_, (long)p, (long)len, prot, 0, 0, 0)); }
 /* The kernel's own CSPRNG. runtime_bare.c's nurl_rand_fill is the only
  * caller and it treats any failure as fatal, so nothing here needs a

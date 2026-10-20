@@ -2377,9 +2377,10 @@ holds an `Arc` or a frozen value. Mutable state shared across threads lives in
 a `Locked [T]` (`locked_new`, `locked_update`, `locked_await`), an
 `RwLocked [T]` taken for writing (`rw_write`, `wguard_get`), or an `Atomic`
 (std/atomic.nu); thread/fiber spawns enforce structural `Send` / `NotSend`
-bounds on captures ([`docs/MEMORY.md` §6.5](MEMORY.md)). A thread that asks
-for an `RwLocked` it already holds for writing panics instead of waiting for
-itself.
+bounds on captures ([`docs/MEMORY.md` §6.5](MEMORY.md)). A thread (or a
+fiber) may take a second read guard of an `RwLocked` it already reads; one
+that asks for a lock it already holds for writing, or to write one it reads,
+panics instead of waiting for itself.
 
 ### 9.14 What is NOT checked
 

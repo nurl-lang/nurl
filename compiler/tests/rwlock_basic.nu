@@ -10,6 +10,7 @@
 // exactly the number of writes. Hand-over-hand: a reader takes the next
 // page's guard before letting the previous one go. A panic while guards
 // are held releases them on the way to recover.
+// requires: live
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

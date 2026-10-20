@@ -79,6 +79,7 @@ __attribute__((weak)) long long nurl_disk_rename(const char *a, const char *b);
 __attribute__((weak)) long long nurl_disk_mkdir(const char *path);
 __attribute__((weak)) long long nurl_disk_rmdir(const char *path);
 __attribute__((weak)) long long nurl_disk_truncate(const char *path, long long len);
+__attribute__((weak)) long long nurl_disk_ftruncate(long long h, long long len);
 __attribute__((weak)) long long nurl_disk_opendir(const char *path);
 __attribute__((weak)) long long nurl_disk_readdir_name(long long h, char *buf, long long cap);
 __attribute__((weak)) long long nurl_disk_dirent_is_dir(void);
@@ -662,6 +663,19 @@ int truncate(const char *p0, long long len) {
 int fsync(int fd) { return fs_fsync_fd(fd); }
 
 int fdatasync(int fd) { return fs_fsync_fd(fd); }
+
+/* truncate(2) through a descriptor, which `stdlib/runtime_core.c`'s
+ * nurl_fd_truncate calls (a PFile cut to a length). Through the handle,
+ * not its path: the open handle keeps the file's size and chain, and one
+ * truncated behind its back would write its old size back. The archive
+ * is read-only, as it is to truncate(2). */
+int ftruncate(int fd, long long len) {
+    if (len < 0) { nl_errno_slot = 22; return -1; }
+    if (disk_is_fd(fd) && nurl_disk_ftruncate)
+        return posix_ret(nurl_disk_ftruncate(fd - VFS_DISK_FD_BASE, len));
+    nl_errno_slot = ifs_is_fd(fd) ? 30 /* EROFS */ : 9 /* EBADF */;
+    return -1;
+}
 
 /* Everything every open handle has written, on the medium. Called at
  * shutdown so a guest that is stopped cleanly does not lose the writes

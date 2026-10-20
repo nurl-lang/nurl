@@ -7,6 +7,7 @@
 // handle: each writes its own 64 blocks of 512 bytes at interleaved
 // offsets and reads every block back — no thread's position can move
 // another's — and the whole file is checked from a fifth handle.
+// requires: live
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

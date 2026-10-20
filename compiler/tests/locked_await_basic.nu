@@ -8,6 +8,7 @@
 // nothing does not hold the lock while it sleeps: the producer gets in.
 // Also: a loop `~ T` that only returns (no break) in one function next to
 // a function whose loop breaks — the infinite-loop verdict is per loop.
+// requires: live
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`

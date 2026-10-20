@@ -1665,23 +1665,62 @@ $ `stdlib/core/slice.nu`
     } {}
 
     // Shrinking: keep the clusters the new length needs, free the rest.
+    : i nf ( __chain_cut v . e first_clus len )
+    ? < nf 0 { ^ ( fe_io ) } {}
+    ? == nf 0 {
+        ? ! ( __ent_set_first v . e lba . e off 0 ) { ^ ( fe_io ) } {}
+    } {}
+    ? ! ( __ent_set_size v . e lba . e off len ) { ^ ( fe_io ) } {}
+    ^ 0
+}
+
+// The chain from `first` cut to the clusters `len` bytes need, the rest
+// freed: the first cluster left (0 when none is), or -1 on an I/O error.
+@ __chain_cut * FatVol v i first i len → i {
+    ? <= first 0 { ^ 0 } {}
+    : i cbytes ( fat_cluster_bytes )
     : i keep / + len - cbytes 1 cbytes
     ? == keep 0 {
-        ? > . e first_clus 0 {
-            ? ! ( fat_free_chain v . e first_clus ) { ^ ( fe_io ) } {}
-        } {}
-        ? ! ( __ent_set_first v . e lba . e off 0 ) { ^ ( fe_io ) } {}
+        ? ! ( fat_free_chain v first ) { ^ -1 } {}
+        ^ 0
+    } {}
+    : i tail ( fat_walk_chain v first - keep 1 )
+    ? <= tail 0 { ^ -1 } {}
+    : i rest ( fat_next_clus v tail )
+    ? < rest 0 { ^ -1 } {}
+    ? ! ( fat_set_entry v tail ( fat_eoc_mark . v ftype ) ) { ^ -1 } {}
+    ? > rest 0 {
+        ? ! ( fat_free_chain v rest ) { ^ -1 } {}
+    } {}
+    ^ first
+}
+
+// `fatfs_truncate` through an open handle (ftruncate): the handle's own
+// size, chain and cursor follow the cut, and the entry catches up at its
+// next fsync or close — truncated by path under an open handle, the
+// handle would write its old size back.
+@ fatfs_ftruncate i h i len → i {
+    ? ! ( fat_mounted ) { ^ ( fe_io ) } {}
+    : *FatVol v ( fat_vol )
+    : *FatFile f ( __file h )
+    ? == # i f 0 { ^ ( fe_badf ) } {}
+    ? . f isdir { ^ ( fe_isdir ) } {}
+    ? ! . f writable { ^ ( fe_badf ) } {}
+    ? ! . v rw { ^ ( fe_rofs ) } {}
+    ? < len 0 { ^ ( fe_inval ) } {}
+    ? == len . f size { ^ 0 } {}
+    ? > len . f size {
+        // Growing writes the zeros, as a write past the end would.
+        ? ! ( __zero_fill v f . f size len ) { ^ ( fe_nospc ) } {}
     } {
-        : i tail ( fat_walk_chain v . e first_clus - keep 1 )
-        ? <= tail 0 { ^ ( fe_io ) } {}
-        : i rest ( fat_next_clus v tail )
-        ? < rest 0 { ^ ( fe_io ) } {}
-        ? ! ( fat_set_entry v tail ( fat_eoc_mark . v ftype ) ) { ^ ( fe_io ) } {}
-        ? > rest 0 {
-            ? ! ( fat_free_chain v rest ) { ^ ( fe_io ) } {}
-        } {}
+        : i nf ( __chain_cut v . f first len )
+        ? < nf 0 { ^ ( fe_io ) } {}
+        = . f first nf
+        = . f cur_clus 0
+        = . f cur_idx 0
     }
-    ? ! ( __ent_set_size v . e lba . e off len ) { ^ ( fe_io ) } {}
+    = . f size len
+    = . f meta_dirty T
     ^ 0
 }
 

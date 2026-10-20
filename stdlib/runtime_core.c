@@ -4947,6 +4947,32 @@ const char* nurl_dirent_name(const void *de) {
  * Frames live on the recover() caller's C stack so jmp_buf stays valid.
  * A panic with no frame on top falls through to fprintf+abort. */
 
+/* ── Who holds an RwLocked (runtime_ffi.c §19b) ──────────────────────
+ * The locks a holder has for reading, and its identity: the address of
+ * this record. A holder is a thread, or a fiber — which may resume on
+ * another worker, so its record travels with it (NurlRecoverCtx.rwh,
+ * swapped around every switch like the journal). A thread's record is a
+ * thread-local of its own, with no heap behind it unless it holds more
+ * than NURL_RW_INLINE locks at once; a fiber's is allocated on its first
+ * lock and freed when it ends. */
+#define NURL_RW_INLINE 8
+typedef struct { void *l; long long c; } NurlRwHeldEnt;
+typedef struct NurlRwHolder {
+    int            n, cap;               /* entries held; capacity of `more` */
+    NurlRwHeldEnt  in[NURL_RW_INLINE];
+    NurlRwHeldEnt *more;                 /* entries past the inline ones */
+} NurlRwHolder;
+static __thread NurlRwHolder nurl__rw_thread_rec;
+static __thread NurlRwHolder *nurl__rw_holder = NULL;
+static int nurl__rw_in_fiber(void);      /* runtime_ffi.c, after the scheduler */
+static void nurl__rw_holder_free(void *p) {
+    NurlRwHolder *h = (NurlRwHolder *)p;
+    if (!h) return;
+    free(h->more);
+    if (h != &nurl__rw_thread_rec) free(h);
+    else memset(h, 0, sizeof *h);
+}
+
 #ifndef __wasi__
 
 typedef struct NurlPanicFrame {
@@ -4967,6 +4993,8 @@ static void nurl__panic_thread_exit(void) {
     if (nurl__panic_top) return;
     nurl_free(nurl__panic_last_msg);
     nurl__panic_last_msg = NULL;
+    nurl__rw_holder_free(&nurl__rw_thread_rec);
+    nurl__rw_holder = NULL;
 }
 
 /* ── Recovery state belongs to the fiber, not the thread ─────────────
@@ -4994,6 +5022,7 @@ typedef struct NurlRecoverCtx {
     NurlPanicFrame   *panic_top;
     char             *last_msg;
     void             *cc;          /* the context's cycle collector (nurl__cc) */
+    NurlRwHolder     *rwh;         /* the RwLocked locks it holds (nurl__rw_holder) */
 } NurlRecoverCtx;
 /* runtime_ffi.c reserves NURL_RCTX_WORDS pointers per fiber for it. */
 #define NURL_RCTX_WORDS 14
@@ -5017,6 +5046,7 @@ NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
     NURL__RCTX_XCHG(last_msg, nurl__panic_last_msg);
     NURL__RCTX_XCHG(cc, nurl__cc);
     NURL__RCTX_XCHG(cc_batch, nurl__cc_batch);
+    NURL__RCTX_XCHG(rwh, nurl__rw_holder);
 }
 #undef NURL__RCTX_XCHG
 
@@ -5026,6 +5056,7 @@ void nurl__rctx_release(void *ctx) {
     NurlRecoverCtx *c = (NurlRecoverCtx *)ctx;
     free(c->jrnl); free(c->buckets); free(c->jslot);
     if (c->last_msg) nurl_free(c->last_msg);
+    nurl__rw_holder_free(c->rwh);
     memset(c, 0, sizeof *c);
 }
 
@@ -5188,7 +5219,7 @@ NURL_TLS_FN long long nurl_recover_lean(void *fn_ptr, void *env_ptr) {
 
 NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
 
-static void nurl__panic_thread_exit(void) {}
+static void nurl__panic_thread_exit(void) { nurl__rw_holder_free(&nurl__rw_thread_rec); nurl__rw_holder = NULL; }
 
 NURL_TLS_FN void nurl_panic(const char *msg) {
     fprintf(stderr, "nurl panic (wasi: no recover): %s\n",

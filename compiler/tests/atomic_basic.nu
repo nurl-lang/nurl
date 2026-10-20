@@ -7,6 +7,7 @@
 // cas-loop increment must lose no update, and a fetch-max race must end
 // at the largest value any thread offered. A plain `i` shared this way
 // would lose updates; a Locked would take a mutex per add.
+// requires: live
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
