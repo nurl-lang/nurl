@@ -59,6 +59,9 @@ for name in "${names[@]}"; do
     want_out=$(sed -n '/^OUTPUT$/,$p' "$golden" | tail -n +2)
     got_out=$(boot "$OUTDIR/$name.elf" -t 120 2>&1)
     got_exit=$?
+    # The repo root is stripped, as every runner does: an index panic
+    # names its caller's file as compiled.
+    got_out=${got_out//"$ROOT/"/}
     if [ "$got_out" = "$want_out" ] && [ "$got_exit" = "$want_exit" ]; then
         echo "PASS $name"
     else

@@ -149,7 +149,9 @@ one() {
     # is entirely the harness's.
     ( cd "$work" && timeout -k 5s 60s "./$name" > "$work/out.raw" 2>&1 )
     got_exit=$?
-    got_out=$(sed 's/\r$//' "$work/out.raw")
+    # …and strip the repo root, as both hosted runners do: an index panic
+    # names its caller's file as compiled (absolute here).
+    got_out=$(sed -e 's/\r$//' -e "s|$ROOT/||g" "$work/out.raw")
     if [ "$got_exit" = "$want_exit" ] && [ "$got_out" = "$want_out" ]; then
         echo "PASS $name"
     else
