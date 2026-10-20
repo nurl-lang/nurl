@@ -19,9 +19,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`nurl_str_find_from`** (core/string.nu): the first match at or after
   a byte offset, as an index into the whole string — the find-every-match
   loop without stepping a raw pointer into the haystack.
+- **Registry searches need no round trip.** The registry serves its whole
+  catalog at `GET /api/v1/catalog` (name, latest version, description,
+  symbol index — the fields a search matches), and the playground and
+  nurl-mcp keep it warm on a thread of their own
+  (`msearch_registry_warm`, ext/mcp_search.nu): fetched at startup and
+  every five minutes while searches run. `nurl_api` / `nurl_grep`
+  registry lookups match against it exactly as `/api/v1/search` does —
+  differentially checked against the Worker's own answers on 287 terms,
+  every field equal — so a cold query takes 2 ms instead of a round
+  trip per query (1.6 s from a cloud container). Against a registry
+  without the endpoint, searches go to `/api/v1/search` as before.
 
 ### Fixed
 
+- **Registry search no longer fails on a long query.** `/api/v1/search`
+  (and the catalog page's search) built a LIKE pattern `%q%`, which D1
+  caps at 50 bytes: every query of 49+ characters answered 500 "LIKE or
+  GLOB pattern too complex". The match is now `instr` over the
+  lower-cased fields — the same ASCII-case-insensitive literal match,
+  with no escaping and no length limit; on every query LIKE could answer
+  the results are identical.
 - **Playground build results name the caller's file, not the server's
   build directory.** nurlc reads the request's source on stdin under its
   logical `filename` (`nurlc --stdin main.nu`), so every diagnostic reads

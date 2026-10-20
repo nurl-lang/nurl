@@ -257,6 +257,17 @@ Hello *there*.
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"name":"demo"` ) `search matches by description` )
     }
+    {
+        // The whole catalog, in search's shape — what a client keeps to
+        // answer searches without a round trip per term.
+        : HttpRequest req ( mk_req `GET` `/api/v1/catalog` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 200 `catalog 200` )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `"results":[` ) `catalog has results` )
+        ( check ( string_contains b `"name":"demo"` ) `catalog lists demo` )
+        ( check ( string_contains b `widget frobnicator` ) `catalog carries description` )
+    }
     // ── description fallback: manifest without description → README pitch ──
     {
         : ( Vec u ) gz2 ( mk_tarball_nodesc )

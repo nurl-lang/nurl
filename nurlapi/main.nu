@@ -5320,6 +5320,9 @@ unsafe @ gate_free → v {
     // Registry answers (nurl_api's package footer, nurl_grep packages,
     // package=) are kept ten minutes — made here, before any worker runs.
     ( msearch_cache_init )
+    // …and the registry's catalog is kept warm on a thread of its own, so
+    // a registry search needs no round trip.
+    ( msearch_registry_warm ( string_data ( msearch_default_registry ) ) )
 
     : i port ( get_port )
     : Router r ( router_new )

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.6] — 2026-10-20
+
+### Added
+
+- **`GET /api/v1/catalog`** — every package as `/api/v1/search` returns
+  them (name, latest version, description), in name order, unlimited. A
+  client that holds it answers its own searches with no round trip per
+  term (the production Worker serves the same route, with its symbol
+  index).
+
 ## [0.4.5] — 2026-10-10
 
 Requires NURL 0.72.0 (`slice_of_str`). Loops that walked a string with

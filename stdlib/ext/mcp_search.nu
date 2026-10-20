@@ -73,10 +73,20 @@ $ `stdlib/core/slice.nu`
 : ~ ( Vec MsCached ) g_ms_cache 0
 : ~ Mutex g_ms_cache_mu 0
 : ~ b g_ms_cache_on F
+// The registry's catalog (msearch_registry_warm, below): one package,
+// its fields as /api/v1/search returns them plus their lower-cased
+// copies, which a search matches against.
+: MsPkg { String name String version b has_version String desc String syms String lname String ldesc String lsyms }
+: MsCatalog { String url ( Vec MsPkg ) pkgs i at }
+// At most one entry, under g_ms_cache_mu.
+: ~ ( Vec MsCatalog ) g_ms_cat 0
+// Whether a registry search ran since the catalog was last fetched.
+: ~ b g_ms_cat_used F
 
 @ msearch_cache_init → v {
     ? g_ms_cache_on { ^ } {}
     = g_ms_cache ( vec_new [MsCached] )
+    = g_ms_cat ( vec_new [MsCatalog] )
     = g_ms_cache_mu ( mutex_new )
     = g_ms_cache_on T
 }
@@ -145,6 +155,235 @@ $ `stdlib/core/slice.nu`
     ^ url
 }
 
+// ── The registry catalog, kept warm ──────────────────────────────────
+//
+// Even fetched at once, a query's per-term searches cost a cold query one
+// round trip (0.85 s, most of it the TLS handshake) before it could
+// answer. The registry's whole catalog is small (name, latest version,
+// description: ~65 packages), and /api/v1/search is a substring match
+// over exactly that — so a server holding the catalog answers every
+// search itself, with no round trip at all. msearch_registry_warm fetches
+// it on a thread of its own at startup and every few minutes after, so
+// no request ever waits on it. Until it has arrived — or against a
+// registry without /api/v1/catalog (registry < 0.4.6) — searches go to
+// /api/v1/search as before. The catalog is g_ms_cat (above), under the
+// cache's lock.
+
+// <regbase>/api/v1/catalog
+@ __ms_catalog_url s regbase → String {
+    : String url ( string_with_cap 128 )
+    ( string_push_str url regbase )
+    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
+    ( string_push_str url `api/v1/catalog` )
+    ^ url
+}
+
+// The catalog's age limit: twice the refresh period, so one failed
+// refresh does not drop it.
+@ __ms_cat_ttl_ms → i { ^ 600000 }
+
+@ __ms_cat_refresh_ms → i { ^ 300000 }
+
+// Is `regbase`'s catalog held, and fresh? (Under the lock.)
+@ __ms_cat_fresh_locked s url i now → b {
+    ? != ( vec_len [MsCatalog] g_ms_cat ) 1 { ^ F } {}
+    : MsCatalog e ( vec_at [MsCatalog] g_ms_cat 0 )
+    ^ & != 0 ( nurl_str_eq ( string_data . e url ) url ) < - now . e at ( __ms_cat_ttl_ms )
+}
+
+@ __ms_cat_held s regbase → b {
+    ? ! g_ms_cache_on { ^ F } {}
+    : String url ( __ms_catalog_url regbase )
+    ( mutex_lock g_ms_cache_mu )
+    : b held ( __ms_cat_fresh_locked ( string_data url ) ( now_ms ) )
+    ( mutex_unlock g_ms_cache_mu )
+    ^ held
+}
+
+// A JSON string field of `o`, "" when it is missing or not a string.
+@ __ms_json_str Json o s key → String {
+    ?? ( json_obj_get o key ) {
+        T j → { ? ( json_is_str j ) { ^ ( string_from ( json_as_str j ) ) } {} }
+        F _ → {}
+    }
+    ^ ( string_new )
+}
+
+// The catalog answer's packages, parsed once per fetch.
+@ __ms_cat_parse ( Vec u ) body → ( Vec MsPkg ) {
+    : ( Vec MsPkg ) pkgs ( vec_new [MsPkg] )
+    ?? ( json_parse_bytes body ) {
+        T root → {
+            ?? ( json_obj_get root `results` ) {
+                T arr → {
+                    : i n ( json_arr_len arr )
+                    : ~ i k 0
+                    ~ < k n {
+                        ?? ( json_arr_get arr k ) {
+                            T o → {
+                                : String name ( __ms_json_str o `name` )
+                                : String version ( __ms_json_str o `version` )
+                                : b has_version ?? ( json_obj_get o `version` ) { T vj → ( json_is_str vj ) F _ → F }
+                                : String desc ( __ms_json_str o `description` )
+                                : String syms ( __ms_json_str o `symbols` )
+                                : String lname ( __ms_lc ( string_data name ) )
+                                : String ldesc ( __ms_lc ( string_data desc ) )
+                                : String lsyms ( __ms_lc ( string_data syms ) )
+                                ( vec_push [MsPkg] pkgs @ MsPkg { name version has_version desc syms lname ldesc lsyms } )
+                            }
+                            F _ → {}
+                        }
+                        = k + k 1
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ^ pkgs
+}
+
+// Fetch the catalog and keep it (a failed fetch keeps the one held).
+@ __ms_cat_fetch s regbase → v {
+    : String url ( __ms_catalog_url regbase )
+    : !Response HttpErr r ( http_get ( string_data url ) )
+    ?? r {
+        T resp → {
+            ? != ( http_status resp ) 200 { ^ } {}
+            : ( Vec MsPkg ) pkgs ( __ms_cat_parse ( http_body_bytes resp ) )
+            ( mutex_lock g_ms_cache_mu )
+            ? > ( vec_len [MsCatalog] g_ms_cat ) 0 { ( vec_remove [MsCatalog] g_ms_cat 0 ) } {}
+            ( vec_push [MsCatalog] g_ms_cat @ MsCatalog { url pkgs ( now_ms ) } )
+            ( mutex_unlock g_ms_cache_mu )
+        }
+        F _ → {}
+    }
+}
+
+// Keep `regbase`'s catalog warm for the life of the process: fetched now,
+// on a detached thread, and every five minutes after while it is in use
+// (a search ran since the last fetch) — an idle server asks the registry
+// for nothing, and its first search after the catalog has aged out goes
+// to /api/v1/search and wakes the refresh. Needs msearch_cache_init first
+// (it does nothing without it, or with no registry).
+@ msearch_registry_warm s regbase → v {
+    ? | ! g_ms_cache_on == 0 ( nurl_str_len regbase ) { ^ } {}
+    : String base ( string_from regbase )
+    : ( @ v ) body \ → v {
+        ( __ms_cat_fetch ( string_data base ) )
+        ~ T {
+            ( sleep_ms ( __ms_cat_refresh_ms ) )
+            ( mutex_lock g_ms_cache_mu )
+            : b used g_ms_cat_used
+            = g_ms_cat_used F
+            ( mutex_unlock g_ms_cache_mu )
+            ? used { ( __ms_cat_fetch ( string_data base ) ) } {}
+        }
+    }
+    ?? ( thread_spawn_owned body ) {
+        T th → { ( thread_detach th ) }
+        F _ → {}
+    }
+}
+
+// The registry's form of a search term: lower-cased and cut to 64 UTF-16
+// units (`q.toLowerCase().slice(0, 64)`). A term's non-ASCII capitals are
+// the one difference: they stay as they are here.
+@ __ms_cat_query s term → String {
+    : String lc ( __ms_lc term )
+    : i n ( string_len lc )
+    : ~ i units 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( string_get lc k )
+        // A lead byte starts a character: 4-byte ones take two units.
+        : i w ? < c 128 1 ? >= c 240 2 ? >= c 192 1 0
+        ? > + units w 64 { ^ ( string_substr lc 0 k ) } {}
+        = units + units w
+        = k + k 1
+    }
+    ^ lc
+}
+
+// /api/v1/search answered from the catalog — the registry's own match
+// (registry/src/index.ts handleSearch): the term, literally (`%`, `_` and
+// `\` escaped), in the name, the description or the symbol index,
+// ASCII-case-insensitively; in name order; at most 50 rows; each with
+// the symbols the term occurs in (at most 12). Under the lock.
+@ __ms_cat_search_locked s term → ( Vec u ) {
+    : String q ( __ms_cat_query term )
+    : s qs ( string_data q )
+    : Json rows ( json_arr_new )
+    : MsCatalog cat ( vec_at [MsCatalog] g_ms_cat 0 )
+    : i n ( vec_len [MsPkg] . cat pkgs )
+    : ~ i k 0
+    : ~ i kept 0
+    ~ & < k n < kept 50 {
+        : MsPkg pk ( vec_at [MsPkg] . cat pkgs k )
+        ? | | ( __ms_has_sub ( string_data . pk lname ) qs ) ( __ms_has_sub ( string_data . pk ldesc ) qs ) ( __ms_has_sub ( string_data . pk lsyms ) qs ) {
+            : Json row ( json_obj_new )
+            : b _a ( json_obj_set row `name` ( json_str_lit ( string_data . pk name ) ) )
+            : b _b ( json_obj_set row `version` ? . pk has_version ( json_str_lit ( string_data . pk version ) ) ( json_null ) )
+            : b _c ( json_obj_set row `description` ( json_str_lit ( string_data . pk desc ) ) )
+            : Json ms ( json_arr_new )
+            ? > ( string_len q ) 0 {
+                // symbols.split(/\s+/), the ones whose lower case holds q.
+                : i sn ( string_len . pk syms )
+                : ~ i a 0
+                : ~ i got 0
+                ~ & <= a sn < got 12 {
+                    : ~ i b a
+                    ~ & < b sn ! ( __ms_is_ws ( string_get . pk syms b ) ) { = b + b 1 }
+                    // [a, b) is one symbol ("" at a leading run of space).
+                    : String one ( string_substr . pk lsyms a - b a )
+                    ? >= ( nurl_str_find ( string_data one ) qs ) 0 {
+                        : b _m ( json_arr_push ms ( json_str_lit ( string_data ( string_substr . pk syms a - b a ) ) ) )
+                        = got + got 1
+                    } {}
+                    ? >= b sn { = a + sn 1 } {
+                        ~ & < b sn ( __ms_is_ws ( string_get . pk syms b ) ) { = b + b 1 }
+                        = a b
+                    }
+                }
+            } {}
+            : b _d ( json_obj_set row `matched_symbols` ms )
+            : b _p ( json_arr_push rows row )
+            = kept + kept 1
+        } {}
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    : b _s ( json_obj_set out `results` rows )
+    : String txt ( json_stringify out )
+    ^ ( bytes_from_str ( string_data txt ) )
+}
+
+@ __ms_is_ws i c → b { ^ | | | | == c 32 == c 9 == c 10 == c 13 | == c 11 == c 12 }
+
+// Does `hay` contain `needle` (both already lower-case)?
+@ __ms_has_sub s hay s needle → b {
+    ^ >= ( nurl_str_find hay needle ) 0
+}
+
+// The body of the registry's /api/v1/search answer for `term`: from the
+// catalog when it is held, else from the registry (through the cache).
+@ __ms_reg_search s regbase s term → ?( Vec u ) {
+    ? g_ms_cache_on {
+        : String curl ( __ms_catalog_url regbase )
+        ( mutex_lock g_ms_cache_mu )
+        = g_ms_cat_used T
+        ? ( __ms_cat_fresh_locked ( string_data curl ) ( now_ms ) ) {
+            : ( Vec u ) body ( __ms_cat_search_locked term )
+            ( mutex_unlock g_ms_cache_mu )
+            ^ @ ?( Vec u ) { T body }
+        } {}
+        ( mutex_unlock g_ms_cache_mu )
+    } {}
+    : String url ( __ms_search_url regbase term )
+    ^ ( __ms_reg_get ( string_data url ) )
+}
+
 // Warm the cache with the registry's answer for each of the first `max`
 // terms that has at least `minlen` bytes — the terms the caller then looks
 // up, one by one — fetched at once, on a thread each,
@@ -155,6 +394,7 @@ $ `stdlib/core/slice.nu`
 // answers, and this does nothing.
 @ __ms_reg_prefetch s regbase ( Vec String ) terms i max i minlen → v {
     ? ! g_ms_cache_on { ^ } {}
+    ? ( __ms_cat_held regbase ) { ^ } {}
     : ( Vec String ) urls ( vec_new [String] )
     : i tn ( vec_len [String] terms )
     : ~ i k 0
@@ -427,13 +667,7 @@ $ `stdlib/core/slice.nu`
         ?? ( vec_get [String] terms tk ) {
             T t → {
                 ? > ( string_len t ) 0 {
-                    : String url ( string_with_cap 128 )
-                    ( string_push_str url regbase )
-                    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
-                    ( string_push_str url `api/v1/search?q=` )
-                    : String enc ( url_percent_encode ( string_data t ) )
-                    ( string_push_str url ( string_data enc ) )
-                    ?? ( __ms_reg_get ( string_data url ) ) {
+                    ?? ( __ms_reg_search regbase ( string_data t ) ) {
                         T resp_bytes → {
                             : String resp_body ( bytes_to_str resp_bytes )
                             ?? ( json_parse ( string_data resp_body ) ) {
@@ -523,13 +757,7 @@ $ `stdlib/core/slice.nu`
         ?? ( vec_get [String] terms tk ) {
             T t → {
                 ? >= ( string_len t ) 2 {
-                    : String url ( string_with_cap 128 )
-                    ( string_push_str url regbase )
-                    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
-                    ( string_push_str url `api/v1/search?q=` )
-                    : String enc ( url_percent_encode ( string_data t ) )
-                    ( string_push_str url ( string_data enc ) )
-                    ?? ( __ms_reg_get ( string_data url ) ) {
+                    ?? ( __ms_reg_search regbase ( string_data t ) ) {
                         T resp_bytes → {
                             : String resp_body ( bytes_to_str resp_bytes )
                             ?? ( json_parse ( string_data resp_body ) ) {
@@ -637,13 +865,7 @@ $ `stdlib/core/slice.nu`
 
 // Registry package search: /api/v1/search matches name + description.
 @ __ms_grep_packages s regbase s pattern String out → v {
-    : String url ( string_with_cap 128 )
-    ( string_push_str url regbase )
-    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
-    ( string_push_str url `api/v1/search?q=` )
-    : String enc ( url_percent_encode pattern )
-    ( string_push_str url ( string_data enc ) )
-    ?? ( __ms_reg_get ( string_data url ) ) {
+    ?? ( __ms_reg_search regbase pattern ) {
         T resp_bytes → {
             : String resp_body ( bytes_to_str resp_bytes )
             : s body ( string_data resp_body )

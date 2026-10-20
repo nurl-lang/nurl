@@ -24,6 +24,12 @@ Requires NURL 0.76.0 (`nurl --stdin NAME`).
   (`stdlib/core/string.nu`). `nurl_list_stdlib` answers the playground's
   `{name, path, bytes}` JSON with those same relative paths, walked
   in-process instead of shelling out to `find`.
+- **Registry lookups answer from a warm catalog.** The registry's
+  catalog (`/api/v1/catalog`) is fetched on a thread of its own at
+  startup and refreshed every five minutes while searches run (an idle
+  server asks for nothing), and `nurl_api` / `nurl_grep` match against it
+  exactly as `/api/v1/search` does: no round trip per query. A registry
+  without the endpoint is searched as before.
 - **`nurl_check` is the front end only** (`nurlc --check`): the same
   type and borrow checks, without generating and discarding the IR.
 - **`nurl_api package=`** opens with the package's module index (each

@@ -10,6 +10,7 @@
 //   POST /api/v1/yank | /api/v1/unyank          owner-only version flag
 //   POST /api/v1/revoke                         delete the presented token
 //   GET  /api/v1/search?q= · /api/v1/stats      JSON
+//   GET  /api/v1/catalog                        JSON: every package, search's shape
 //   GET  / · /packages/<name> · /files/<n>/<v>/<path>   HTML catalog + assets
 //   GET  /login · /auth/callback                GitHub OAuth (config-gated)
 //
@@ -441,6 +442,26 @@ $ `stdlib/core/slice.nu`
             : b _a ( json_obj_set out `results` results )
             : HttpResponse r ( response_new 200 )
             ( response_set_body_json r out )
+            ^ r
+        }
+    }
+}
+
+// GET /api/v1/catalog — every package as search returns them (name, latest
+// version, description), in name order. A client that holds this answers
+// its own searches with no round trip per term: the playground's
+// nurl_api / nurl_grep keep it warm instead of asking /search per term
+// (stdlib ext/mcp_search.nu). The same SELECT as search, unlimited.
+@ __reg_h_catalog_json HttpRequest req Params p → HttpResponse {
+    ?? ( reg_db_open g_reg_dbpath ) {
+        F _ → ^ ( __reg_err 500 `db_unavailable` )
+        T db → {
+            : Json results ( reg_db_catalog_json db `` -1 )
+            : Json out ( json_obj_new )
+            : b _a ( json_obj_set out `results` results )
+            : HttpResponse r ( response_new 200 )
+            ( response_set_body_json r out )
+            ( response_set_header r `Cache-Control` `public, max-age=60` )
             ^ r
         }
     }
@@ -982,6 +1003,7 @@ $ `stdlib/core/slice.nu`
     ( router_get r `/files/:name/:version/*rest` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_file req p ) } )
     ( router_get r `/api/v1/search` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_search req p ) } )
     ( router_get r `/api/v1/stats` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_stats req p ) } )
+    ( router_get r `/api/v1/catalog` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_catalog_json req p ) } )
     ( router_post r `/api/v1/publish` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_publish req p ) } )
     ( router_post r `/api/v1/yank` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_yank_on req p ) } )
     ( router_post r `/api/v1/unyank` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_yank_off req p ) } )
