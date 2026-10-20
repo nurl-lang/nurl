@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_missing_import_hint_struct.nu:4:8: error: unknown type 'HashMap' in a parameter type — no struct or enum with this name is declared here. It is defined in stdlib/std/hashmap.nu — add this line at the top of the file:  $ `stdlib/std/hashmap.nu`
+@ size HashMap m → i { ^ 0 }
+       ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

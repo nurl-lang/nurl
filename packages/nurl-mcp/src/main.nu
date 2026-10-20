@@ -59,7 +59,7 @@ $ `stdlib/core/slice.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.13.2` }
+@ nm_version → s { ^ `0.14.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -74,24 +74,13 @@ $ `stdlib/core/slice.nu`
 
 // ── Temp-file plumbing ──────────────────────────────────────────────
 //
-// Inline `source` is written to a unique temp .nu so the file-oriented
-// compiler can read it. `nm_input_temp` records whether the resolved path is
-// such a temp (so we delete it afterward) vs. a user-supplied `path` (left
-// untouched). Single-threaded stdio server ⇒ the global is race-free.
+// Inline `source` goes to the toolchain on stdin, known by `filename`
+// (default main.nu): `nurlc --stdin`, `nurl --stdin`, wb_build_text. Its
+// diagnostics then read `main.nu:6:12` — the caller's name, not the path
+// of a temp file the caller never saw — and nothing is written to disk
+// for it. Only build outputs get temp paths (nm_tmp_path).
 
 : ~ i nm_seq 0
-
-// A resolved input path is a temp we own iff it sits under the
-// "<tmpdir>/nurl-mcp-" prefix nm_tmp_path mints. Path-based (not a shared
-// mutable flag) so it stays correct if requests are ever served on
-// concurrent fibers.
-@ nm_is_temp s path → b {
-    : String dir ( env_var_or `TMPDIR` `/tmp` )
-    : String pref ( string_from ( string_data dir ) )
-    ( string_push_str pref `/nurl-mcp-` )
-    : b r ? != ( nurl_str_starts path ( string_data pref ) ) 0 T F
-    ^ r
-}
 
 @ nm_tmp_path s suffix → String {
     : String dir ( env_var_or `TMPDIR` `/tmp` )
@@ -123,28 +112,41 @@ $ `stdlib/core/slice.nu`
     ( nm_unlink ( string_data ll ) )
 }
 
-// Resolve a tool's input to a .nu file path (owned String) the compiler can
-// read. Prefers an explicit `path`; otherwise writes inline `source` to a
-// temp file. Returns None when neither argument is present.
-@ nm_input_path Json args → ?String {
-    : ?Json pj ( json_obj_get args `path` )
-    ?? pj {
-        T pv → { ^ @ ?String { T ( string_from ( json_str_data pv ) ) } }
+// A tool's program: a `path` on the host, or inline `source` (`piped`),
+// known by `path` — the `filename` argument, default main.nu.
+: NmInput { String path String source b piped }
+
+// The program a tool's arguments name; None when neither `path` nor
+// `source` is present.
+@ nm_input Json args → ?NmInput {
+    ?? ( json_obj_get args `path` ) {
+        T pv → { ^ @ ?NmInput { T @ NmInput { ( string_from ( json_str_data pv ) ) ( string_new ) F } } }
         F → {}
     }
-    : ?Json sj ( json_obj_get args `source` )
-    ?? sj {
+    ?? ( json_obj_get args `source` ) {
         T sv → {
-            : String tmp ( nm_tmp_path `.nu` )
-            : !v IoErr wr ( write_file ( string_data tmp ) ( json_str_data sv ) )
-            ?? wr {
-                T → { ^ @ ?String { T tmp } }
-                F e → { ^ @ ?String { F } }
+            : ~ String name ( string_from `main.nu` )
+            ?? ( json_obj_get args `filename` ) {
+                T fv → { ? > ( nurl_str_len ( json_str_data fv ) ) 0 { = name ( string_from ( json_str_data fv ) ) } {} }
+                F → {}
             }
+            ^ @ ?NmInput { T @ NmInput { name ( string_from ( json_str_data sv ) ) T } }
         }
         F → {}
     }
-    ^ @ ?String { F }
+    ^ @ ?NmInput { F }
+}
+
+// Run `cmd` on a program: `pre` (a flag, or ""), then the program —
+// `--stdin <name>` with the source piped in, or its path — then `post`
+// (the output path, or "").
+@ nm_run_on s cmd s pre NmInput prog s post → !Output ProcessErr {
+    : ( Vec s ) a ( vec_new [s] )
+    ? > ( nurl_str_len pre ) 0 { ( vec_push [s] a pre ) } {}
+    ? . prog piped { ( vec_push [s] a `--stdin` ) } {}
+    ( vec_push [s] a ( string_data . prog path ) )
+    ? > ( nurl_str_len post ) 0 { ( vec_push [s] a post ) } {}
+    ^ ( process_run cmd a ? . prog piped ( string_data . prog source ) `` )
 }
 
 // ── Result-shaping helpers ──────────────────────────────────────────
@@ -186,11 +188,10 @@ $ `stdlib/core/slice.nu`
 // ── Tool: nurl_check (front-end type + borrow check, no binary) ──────
 
 @ nm_tool_check Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
-            : !Output ProcessErr r ( process_run1 `nurlc` ( string_data p ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+    ?? ( nm_input args ) {
+        T prog → {
+            // --check: the front end and the borrow checker, no IR.
+            : !Output ProcessErr r ( nm_run_on `nurlc` `--check` prog `` )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
@@ -211,12 +212,10 @@ $ `stdlib/core/slice.nu`
 // ── Tool: nurl_build (compile to a binary, do not run) ──────────────
 
 @ nm_tool_build Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
+    ?? ( nm_input args ) {
+        T prog → {
             : String outp ( nm_tmp_path `-bin` )
-            : !Output ProcessErr r ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+            : !Output ProcessErr r ( nm_run_on `nurl` `` prog ( string_data outp ) )
             ( nm_unlink_artifacts ( string_data outp ) )
             ?? r {
                 T o → {
@@ -452,10 +451,10 @@ version = "0.0.0"
 //                                     which would land verbatim in the
 //                                     calling model's context)
 @ nm_tool_build_wasm Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
-            : b was_inline ( nm_is_temp ( string_data p ) )
+    ?? ( nm_input args ) {
+        T prog → {
+            : b was_inline . prog piped
+            : s p ( string_data . prog path )
 
             : ~ String outp ( string_new )
             : ?Json oj ( json_obj_get args `out` )
@@ -466,7 +465,7 @@ version = "0.0.0"
                     = tmp_out T
                     = outp ( nm_tmp_path `.wasm` )
                 } {
-                    = outp ( string_from ( string_data p ) )
+                    = outp ( string_from p )
                     ? ( string_ends_with outp `.nu` ) {
                         : String t ( string_substr outp 0 - ( string_len outp ) 3 )
                         = outp t
@@ -481,8 +480,9 @@ version = "0.0.0"
             // Inline-source builds keep the rewritten .ll next to the
             // module so the result can point at both files.
             ? tmp_out { = . wopts keep_ll T } {}
-            : !v String r ( wb_build_file ( string_data p ) ( string_data outp ) wopts )
-            ? was_inline { ( nm_unlink ( string_data p ) ) } {}
+            : !v String r ? was_inline
+            ( wb_build_text ( string_data . prog source ) p ( string_data outp ) wopts )
+            ( wb_build_file p ( string_data outp ) wopts )
             ?? r {
                 T _ → {
                     : !i IoErr szr ( file_size ( string_data outp ) )
@@ -542,12 +542,10 @@ version = "0.0.0"
 }
 
 @ nm_tool_run Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
+    ?? ( nm_input args ) {
+        T prog → {
             : String outp ( nm_tmp_path `-bin` )
-            : !Output ProcessErr br ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+            : !Output ProcessErr br ( nm_run_on `nurl` `` prog ( string_data outp ) )
             ?? br {
                 T bo → {
                     ? ! ( output_success bo ) {
@@ -624,24 +622,17 @@ version = "0.0.0"
 // ── Tool: nurl_list_stdlib ──────────────────────────────────────────
 
 @ nm_tool_list_stdlib Json args → Json {
-    : String root ( env_var_or `NURL_STDLIB` `` )
+    : String root ( nm_stdlib_root )
     ? == ( string_len root ) 0 {
         ^ ( mcp_tool_result_error `NURL_STDLIB is not set — run via the installed toolchain shims, or export it manually` )
     } {}
-    : !Output ProcessErr r ( process_run3 `find` ( string_data root ) `-name` `*.nu` )
-    ?? r {
-        T o → {
-            ? ( output_success o ) {
-                : Json j ( mcp_tool_result_text ( output_stdout o ) )
-                ^ j
-            } {
-                : Json j ( nm_fail_from_output `listing failed` o T )
-                ^ j
-            }
-        }
-        F e → { ^ ( nm_proc_err e ) }
-    }
-    ^ ( mcp_tool_result_error `internal` )
+    // {name, path, bytes} per module, path relative to the stdlib root —
+    // the names nurl_read_stdlib and nurl_api module= take; the same
+    // listing the playground gives. Walked in-process (no `find`).
+    : Json arr ( json_arr_new )
+    ( msearch_walk_nu_files arr ( string_data root ) `` )
+    : String body ( json_stringify arr )
+    ^ ( mcp_tool_result_text ( string_data body ) )
 }
 
 // ── Tool: nurl_read_stdlib ──────────────────────────────────────────
@@ -662,32 +653,32 @@ version = "0.0.0"
     : ?Json nj ( json_obj_get args `name` )
     ?? nj {
         T nv → {
-            : s name ( json_str_data nv )
+            : ~ s name ( json_str_data nv )
             ? ( nm_has_dotdot name ) {
                 ^ ( mcp_tool_result_error `invalid name: must not contain ".."` )
             } {}
-            : String root ( env_var_or `NURL_STDLIB` `` )
+            : String root ( nm_stdlib_root )
             ? == ( string_len root ) 0 {
                 ^ ( mcp_tool_result_error `NURL_STDLIB is not set` )
             } {}
-            : String full ( string_with_cap 160 )
-            ? != ( nurl_str_starts name `/` ) 0 {
-                ( string_push_str full name )
-            } {
-                ( string_push_str full ( string_data root ) )
-                ( string_push_str full `/` )
-                ( string_push_str full name )
-            }
-            ? == ( nurl_str_starts ( string_data full ) ( string_data root ) ) 0 {
-                ^ ( mcp_tool_result_error `path escapes the stdlib root` )
+            // `stdlib/core/string.nu` (the import spelling) names the same
+            // module as `core/string.nu` (the listing's).
+            : ~ String rel ( string_from name )
+            ? ( string_starts_with rel `stdlib/` ) {
+                : String cut ( string_substr rel 7 - ( string_len rel ) 7 )
+                = rel cut
             } {}
+            ? ( string_starts_with rel `/` ) {
+                ^ ( mcp_tool_result_error `'name' is a path under the stdlib root (e.g. core/string.nu), not an absolute path` )
+            } {}
+            : String full ( path_join ( string_data root ) ( string_data rel ) )
             : !String IoErr rd ( read_file ( string_data full ) )
             ?? rd {
                 T contents → {
                     : Json j ( mcp_tool_result_text ( string_data contents ) )
                     ^ j
                 }
-                F e → { ^ ( mcp_tool_result_error `could not read that stdlib file` ) }
+                F e → { ^ ( mcp_tool_result_error `no such stdlib module — 'name' is a path from nurl_list_stdlib, e.g. core/string.nu` ) }
             }
         }
         F → {}
@@ -705,8 +696,25 @@ version = "0.0.0"
 // just the matching blocks. The registry search rides along: "is there
 // a package for X" works from any editor with only MCP tools.
 
-@ nm_stdlib_root → String {
+// $NURL_STDLIB is the toolchain prefix the shims export — the directory
+// that HOLDS stdlib/ (the compiler resolves `$ `stdlib/…`` against it) —
+// or, set by hand, the stdlib directory itself. Every tool here names a
+// module the way nurl_list_stdlib lists it and the playground does,
+// relative to the stdlib directory (`core/vec.nu`), so that is the root
+// they share. It was the prefix: `module='core/vec.nu'` and
+// `nurl_read_stdlib name='core/string.nu'` — the README's own examples —
+// were "not found" on every installed toolchain.
+@ nm_prefix → String {
     ^ ( env_var_or `NURL_STDLIB` `` )
+}
+
+@ nm_stdlib_root → String {
+    : String pre ( nm_prefix )
+    ? == ( string_len pre ) 0 { ^ pre } {}
+    : String sub ( path_join ( string_data pre ) `stdlib` )
+    : String probe ( path_join ( string_data sub ) `core/vec.nu` )
+    ? ( file_exists ( string_data probe ) ) { ^ sub } {}
+    ^ pre
 }
 
 // ── Tool: nurl_docs (shared engine: stdlib/ext/mcp_search) ──────────
@@ -719,7 +727,7 @@ version = "0.0.0"
 @ nm_docs_root → String {
     : String explicit ( env_var_or `NURL_DOCS` `` )
     ? > ( string_len explicit ) 0 { ^ explicit } {}
-    : String root ( nm_stdlib_root )
+    : String root ( nm_prefix )
     ? == ( string_len root ) 0 { ^ root } {}
     : String d ( path_join ( string_data root ) `docs` )
     ^ d
@@ -755,67 +763,10 @@ version = "0.0.0"
     ? == ( string_len dd ) 0 {
         ^ ( mcp_tool_result_error `neither NURL_DOCS nor NURL_STDLIB is set — run via the installed toolchain shims, or export NURL_DOCS to a docs/ directory` )
     } {}
-
-    // query= — search every SECTION of every document. The answer to
-    // "who frees a String?" is one section, not the 44 KB file it lives in.
-    ? & == ( nurl_str_len name ) 0 > ( nurl_str_len query ) 0 {
-        : ( Vec i ) hits ( vec_new [i] )
-        ( vec_push [i] hits 0 )
-        : String text ( msearch_docs_query ( string_data dd ) query hits )
-        : Json r ( mcp_tool_result_text ( string_data text ) )
-        ^ r
-    } {}
-
-    ? == ( nurl_str_len name ) 0 {
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : Json r ( mcp_tool_result_text ( string_data listing ) )
-        ^ r
-    } {}
-
-    // name= + outline=true — the heading map, so a section can be picked
-    // without reading the document to find one.
-    ? outline {
-        : String o ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o ) 0 {
-            : Json r ( mcp_tool_result_text ( string_data o ) )
-            ^ r
-        } {}
-    } {}
-
-    // name= + section= — one section. A miss answers with the outline.
-    ? > ( nurl_str_len section ) 0 {
-        : String sec ( msearch_docs_section ( string_data dd ) name section )
-        ? > ( string_len sec ) 0 {
-            : Json r ( mcp_tool_result_text ( string_data sec ) )
-            ^ r
-        } {}
-        : String o2 ( msearch_docs_outline ( string_data dd ) name )
-        ? > ( string_len o2 ) 0 {
-            : String msg ( string_with_cap + ( string_len o2 ) 128 )
-            ( string_push_str msg `no section matches '` )
-            ( string_push_str msg section )
-            ( string_push_str msg `'. ` )
-            ( string_push_str msg ( string_data o2 ) )
-            : Json e ( mcp_tool_result_error ( string_data msg ) )
-            ^ e
-        } {}
-    } {}
-
-    : String text ( msearch_docs_read ( string_data dd ) name offset )
-    ? == ( string_len text ) 0 {
-        // Unknown name → reply with what DOES exist, so the model's next
-        // call is the right one instead of another guess.
-        : String listing ( msearch_docs_list ( string_data dd ) )
-        : String msg ( string_with_cap + ( string_len listing ) 128 )
-        ( string_push_str msg `no document matches '` )
-        ( string_push_str msg name )
-        ( string_push_str msg `'. ` )
-        ( string_push_str msg ( string_data listing ) )
-        : Json e ( mcp_tool_result_error ( string_data msg ) )
-        ^ e
-    } {}
-    : Json r ( mcp_tool_result_text ( string_data text ) )
-    ^ r
+    ?? ( msearch_docs_tool ( string_data dd ) name section query outline offset ) {
+        T text → { ^ ( mcp_tool_result_text ( string_data text ) ) }
+        F why → { ^ ( mcp_tool_result_error ( string_data why ) ) }
+    }
 }
 
 @ nm_tool_api Json args → Json {
@@ -847,28 +798,27 @@ version = "0.0.0"
     // and rendered with the same nurldoc engine as the stdlib module path.
     ? > ( nurl_str_len package ) 0 {
         : String rb0 ( msearch_default_registry )
-        : String md0 ( msearch_api_package ( string_data rb0 ) package version )
-        ? == ( string_len md0 ) 0 {
-            ^ ( mcp_tool_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
-        } {}
-        // Prepend the import + build recipe: the module headings below are
-        // '# <module>.nu'; a program imports one and compiles via
-        // nurl_build_project. This is the bridge from reading the API to a
-        // working build.
-        : String hint ( string_from `To USE this package: add it under nurl_build_project deps ({"` )
-        ( string_push_str hint package )
-        ( string_push_str hint `": "^<version>"}), then import a module below as  $ ` )
-        ( string_push_char hint 96 )
-        ( string_push_str hint `deps/` )
-        ( string_push_str hint package )
-        ( string_push_str hint `/src/<MODULE>` )
-        ( string_push_char hint 96 )
-        ( string_push_str hint `  (e.g. the '# nn.nu' module → deps/` )
-        ( string_push_str hint package )
-        ( string_push_str hint `/src/nn.nu).\n\n` )
-        ( string_push_str hint ( string_data md0 ) )
-        : Json r0 ( mcp_tool_result_text ( string_data hint ) )
-        ^ r0
+        ?? ( msearch_api_package ( string_data rb0 ) package version module ) {
+            T md0 → {
+                // Prepend the import + build recipe: the module headings below
+                // are '# <module>.nu'; a program imports one and compiles via
+                // nurl_build_project. This is the bridge from reading the API
+                // to a working build.
+                : String hint ( string_from `To USE this package: add it under nurl_build_project deps ({"` )
+                ( string_push_str hint package )
+                ( string_push_str hint `": "^<version>"}), then import a module as  $ ` )
+                ( string_push_char hint 96 )
+                ( string_push_str hint `deps/` )
+                ( string_push_str hint package )
+                ( string_push_str hint `/src/<MODULE>` )
+                ( string_push_char hint 96 )
+                ( string_push_str hint `.\n\n` )
+                ( string_push_str hint ( string_data md0 ) )
+                : Json r0 ( mcp_tool_result_text ( string_data hint ) )
+                ^ r0
+            }
+            F why → { ^ ( mcp_tool_result_error ( string_data why ) ) }
+        }
     } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( nm_has_dotdot module ) {
@@ -935,8 +885,8 @@ version = "0.0.0"
 
 @ nm_schema_api → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` F )
-    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` F )
+    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'. With 'package': which of the package's modules to render — 'txn', or several as 'txn,db' (the package reply's index lists them).` F )
+    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'. The reply opens with the package's module index (each module's surface size and opening line); a package too large for one reply answers with the index alone — then pass 'module'.` F )
     ( mcp_schema_prop sc `version` `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` F )
     ( mcp_schema_prop sc `query` `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then the package registry. Ignored when 'module' or 'package' is set.` F )
     ^ sc
@@ -952,10 +902,10 @@ version = "0.0.0"
 
 @ nm_schema_docs → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive). Omit to list every document.` F )
+    ( mcp_schema_prop sc `name` `string` `Which document, e.g. 'MEMORY.md', 'dev/COMPILER_INTERNALS.md' ('docs/' prefix and '.md' optional, case-insensitive), or the mechanized proof's: 'formal/CLAIM.md' (what is proved), 'formal/RULES.md' (formal rule ↔ compiler rule), 'formal/corpus/map.tsv' (hole probe → formal rule/phase → nurlc verdict; with query= it returns the matching rows). Omit to list every document.` F )
     ( mcp_schema_prop sc `section` `string` `Return ONE section of 'name' — by number ('7.4'; '2' includes its 2.x subsections) or by heading words ('move checking'). The cheap way to answer a specific question; a miss replies with the outline.` F )
     ( mcp_schema_prop sc `outline` `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` F )
-    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. Ignored when 'name' is set.` F )
+    ( mcp_schema_prop sc `query` `string` `Search every section of every document (whole-word, ranked, heading hits outrank body hits); returns the best few with their 'section=' keys. Use when you know the question but not the document. With 'name': search that one document — the rows of a table (formal/corpus/map.tsv query='h274').` F )
     ( mcp_schema_prop sc `offset` `integer` `Byte offset for paging (default 0; replies cap at 48 KB and print the next offset). Prefer 'section' or 'query'.` F )
     ^ sc
 }
@@ -964,6 +914,7 @@ version = "0.0.0"
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `source` `string` `Inline NURL source. Provide this OR "path".` F )
     ( mcp_schema_prop sc `path` `string` `Path to a .nu file on the host. Provide this OR "source".` F )
+    ( mcp_schema_prop sc `filename` `string` `With "source": the name its diagnostics give it (main.nu:6:12: …), default main.nu. Imports resolve as for a file of that name in the server's working directory.` F )
     ^ sc
 }
 
@@ -1054,7 +1005,7 @@ version = "0.0.0"
     ( nm_schema_src_path ) F F T F
     \ Json a → Json { ^ ( nm_tool_fmt a ) } )
     ( mcp_server_add_tool_full srv `nurl_list_stdlib`
-    `List the .nu modules in the installed standard library (under $NURL_STDLIB).`
+    `List the .nu modules in the installed standard library: a JSON array of {name, path, bytes}, paths relative to the stdlib root (core/vec.nu) — the names nurl_read_stdlib and nurl_api module= take.`
     ( nm_schema_empty ) T F T F
     \ Json a → Json { ^ ( nm_tool_list_stdlib a ) } )
     ( mcp_server_add_tool_full srv `nurl_read_stdlib`
@@ -1062,7 +1013,7 @@ version = "0.0.0"
     ( nm_schema_name ) T F T F
     \ Json a → Json { ^ ( nm_tool_read_stdlib a ) } )
     ( mcp_server_add_tool_full srv `nurl_docs`
-    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers. Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
+    `Search and read the shipped docs/ prose — MEMORY.md (ownership: who frees what), CRYPTO.md, ASYNC.md, spec.md (the full language reference), and ten more: the behaviour questions no API surface answers — plus formal/, the mechanized memory-safety proof (CLAIM.md, RULES.md, and the probe table corpus/map.tsv). Read this before guessing at memory, crypto, or platform behaviour. No arguments lists the documents; query= finds the sections that answer a question; name= with section=/outline=/query= reads pieces. Prefer query/section — whole documents run 40–60 KB.`
     ( nm_schema_docs ) T F T F
     \ Json a → Json { ^ ( nm_tool_docs a ) } )
     ( mcp_server_add_tool_full srv `nurl_api`
@@ -1178,6 +1129,12 @@ version = "0.0.0"
     // Built after the policy globals are set: which tools exist is a
     // function of --read-only / --allow-run, and the server is
     // registration-frozen once it starts answering.
+    // Registry answers (nurl_api's package footer, nurl_grep packages,
+    // package=) are kept ten minutes — made here, before --http's workers.
+    ( msearch_cache_init )
+    // …and the registry's catalog is kept warm on a thread of its own, so
+    // a registry search needs no round trip.
+    ( msearch_registry_warm ( string_data ( msearch_default_registry ) ) )
     : McpServer srv ( nm_server )
 
     : ~ i rc 0

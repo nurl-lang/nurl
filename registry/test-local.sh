@@ -69,7 +69,7 @@ for i in $(seq 1 60); do curl -sf "$REG" >/dev/null 2>&1 && break; sleep 0.5; do
 
 mkdir -p "$WORK/foo/src"
 printf '[package]\nname = "foo"\nversion = "1.0.0"\ndescription = "a demonstration frobnicator for e2e"\n' > "$WORK/foo/nurl.toml"
-printf '@ answer -> i { ^ 42 }\n' > "$WORK/foo/src/lib.nu"
+printf '@ answer → i { ^ 42 }\n' > "$WORK/foo/src/lib.nu"
 # A README that exercises the renderer: heading, code, table, link, and a
 # script-injection attempt that must be neutralised.
 cat > "$WORK/foo/README.md" <<'MD'
@@ -107,6 +107,9 @@ SEARCH=$(curl -sf "${REG%/}/api/v1/search?q=frobnicator" || true)
 echo "$SEARCH" | grep -q '"name":"foo"' && echo "  description match: OK" || { echo "  description match: MISSING"; fail=1; }
 echo "$SEARCH" | grep -q 'demonstration frobnicator' && echo "  description returned: OK" || { echo "  description returned: MISSING"; fail=1; }
 curl -sf "$REG" | grep -q 'demonstration frobnicator' && echo "  catalog shows description: OK" || { echo "  catalog description: MISSING"; fail=1; }
+CAT=$(curl -sf "${REG%/}/api/v1/catalog" || true)
+echo "$CAT" | grep -q '"name":"foo"' && echo "  /api/v1/catalog lists foo: OK" || { echo "  /api/v1/catalog: MISSING foo: $CAT"; fail=1; }
+echo "$CAT" | grep -q '"symbols":' && echo "  /api/v1/catalog carries symbols: OK" || { echo "  /api/v1/catalog symbols: MISSING"; fail=1; }
 
 say "update moves a stale requirement to the newest version"
 mkdir -p "$WORK/upd"

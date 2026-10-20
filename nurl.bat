@@ -54,6 +54,7 @@ set "EMIT_ASM=0"
 set "DEBUG_INFO=0"
 set "CLI_OPT="
 set "NURLC_DIAG="
+set "STDIN_NAME="
 
 REM -- version / upgrade: whole-toolchain commands, no source file --
 REM `nurl upgrade` is the canonical name for a toolchain upgrade (it is
@@ -93,13 +94,18 @@ REM expansion is still off here (see the setlocal at the top), so the
 REM substring test has to use %%-expansion, on its own line.
 set "NURLC_ARG=%~1"
 if /i "%NURLC_ARG:~0,7%"=="--keep=" ( set "NURLC_DIAG=%NURLC_DIAG% %NURLC_ARG%" & shift & goto parse_flags )
+REM `--stdin NAME`: the program arrives on stdin and nurlc knows it as NAME
+REM (its diagnostics read NAME:6:12, not a temp file's path). The one
+REM positional argument left, if any, is the output.
+if /i "%~1"=="--stdin" ( set "STDIN_NAME=%~2" & shift & shift & goto parse_flags )
+if defined STDIN_NAME goto stdin_names
 
 if "%~1"=="" (
     echo Usage: nurl.bat [flags] ^<file.nu^> [output_name]
     echo.
     echo  Flags: --emit-ir ^| --emit-asm ^| -O0..-O3 ^| -g ^| --debug
     echo         --no-borrowck ^| --strict-borrowck ^| --strict-arity ^| --no-strict-arity
-    echo         --no-dce ^| --keep=a,b
+    echo         --no-dce ^| --keep=a,b ^| --stdin NAME ^(source on stdin, known as NAME^)
     echo.
     echo  Compiles a NURL source file to a native Windows executable.
     echo.
@@ -132,11 +138,24 @@ REM beside the source rather than a caller's path.
 if "%~2"=="" for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
 if "%~2"=="" for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
 if "%~2"=="" for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
+goto names_done
+
+:stdin_names
+set "SRCFILE=%STDIN_NAME%"
+if "%~1"=="" (
+    for %%I in ("%STDIN_NAME%") do set "OUTBASE=%%~dpnI"
+) else (
+    set "OUTBASE=%~f1"
+)
+for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
+for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
+
+:names_done
 REM Values inserted through delayed expansion are not parsed as command
 REM operators and their embedded ! characters are not expanded again.
 setlocal EnableDelayedExpansion
 if not defined NURL_STDLIB set "NURL_STDLIB=!SCRIPTDIR!"
-if not exist "!SRCFILE!" (
+if not defined STDIN_NAME if not exist "!SRCFILE!" (
     echo ERROR: Source file not found: !SRCFILE!
     exit /b 1
 )
@@ -246,7 +265,11 @@ if "!EMIT_IR!"=="1" (
 )
 set "NURLC_G="
 if "!DEBUG_INFO!"=="1" set "NURLC_G=--g"
-"!NURLC!" !NURLC_G!!NURLC_DIAG! "!SRCFILE!" > "!LLFILE!"
+if defined STDIN_NAME (
+    "!NURLC!" !NURLC_G!!NURLC_DIAG! --stdin "!SRCFILE!" > "!LLFILE!"
+) else (
+    "!NURLC!" !NURLC_G!!NURLC_DIAG! "!SRCFILE!" > "!LLFILE!"
+)
 if !errorlevel! neq 0 (
     if exist "!LLFILE!" del "!LLFILE!"
     echo ERROR: NURL compilation failed

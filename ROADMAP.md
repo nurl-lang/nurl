@@ -19,127 +19,150 @@ self-hosted compiler written in NURL, and an LLVM backend. The compiler
 bootstraps to a **byte-identical fixed point** on its own source (stage1 ≡
 stage2). The only build dependency is clang / LLVM 15+.
 
-What is solid today:
-
-- **Language (Grammar v2.10).** Sum types (`|`) and product types (structs),
-  generics over structs and functions (incl. generics over option/result
-  types, closure types and trait objects), pattern matching with **match guards**, **or-patterns**, and
-  **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
-  folding** (`const_eval_int`), a full numeric type set (`i` = i64 and
-  `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
-  and `f32`), tail-call optimization, and
-  **variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
-  language also spells the shapes a fast numeric kernel is written in:
-  **`v128`**, a first-class by-value SIMD vector type over ~31
-  `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON, and to
-  wasm `simd128` where the module is built with it (a scalarised loop
-  otherwise), with no CPUID probe and no fallback path, and **wide
-  arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
-  `nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
-  recognises. 0.46.0 adds the two that need a *runtime* decision:
-  **`v256`** (64-, 32- and 16-bit lanes) and the **`simd` declaration
-  prefix** (grammar v2.6, §3.3b) — nurlc emits one clone of the function
-  per instruction-set tier and dispatches on CPUID once per process, so a
-  kernel written once runs AVX2 where it exists and baseline where it does
-  not, with no `#ifdef` and no separate build. 0.49.0 adds the second
-  declaration prefix, **`inline`** (grammar v2.7, §3.3c): LLVM's
-  `alwaysinline`, for the case where the cost model is structurally wrong
-  — a helper whose arguments are constants at every call site, scored on
-  its whole body, called from a caller large enough to push the decision
-  the other way. 0.71.0 adds the third, **`unsafe`** (grammar v2.8,
-  §3.3d): the only functions whose body may touch raw memory. 0.73.0 adds
-  **`raw`** (grammar v2.9, §3.3e): a function whose soundness rests on its
-  caller, callable only from `unsafe` code, and a struct whose fields carry
-  such an invariant. The grammar
-  decision
-  for prefix-arity (no grouping delimiter) is formally locked, and since
-  0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
-  by default** (`--no-strict-arity` demotes it to a warning) — the shape
-  compiled to working, wrong code before.
-- **Memory & safety.** Single-owner memory with compiler-inserted auto-drop at
-  scope exit — no tracing GC, no hidden boxing. The **ownership rules are
-  always on** (`--strict-borrowck` adds audit checks) and reject
-  use-after-move, alias double-free, escaping closure captures,
-  interprocedural/return escape, loop-carried double-frees, a release
-  after storing into an owner, and iterator invalidation as hard errors without changing generated code.
-  Since 0.71.0 every program accepted without an `unsafe` function of its
-  own is **memory-safe and leak-free** ([`docs/MEMORY.md`](docs/MEMORY.md)
-  §6.2; 0.72.0 closed 0.71.0's one hole, a `Slice` of a `Vec` — views are
-  values — and the 37 its review found are closed since, each a probe in
-  `tools/fuzz/holes/` CI holds); `Rc` cycles are collected
-  and thread-shared cycles are rejected at compile time.
-  Since 0.44.0 **no rule depends on definition order**: every check that
-  consults a per-function summary parks what it cannot answer and
-  resolves it after the module, so where a helper is written can no
-  longer change a verdict. Since 0.53.0 the coverage is measured from the
-  other direction: an **inverse-oracle fuzzer**
-  ([`tools/fuzz/genreject.py`](tools/fuzz/genreject.py)) writes one
-  ownership violation into every context the language offers and demands
-  the diagnostic that violation deserves, not merely a failed compile. Its
-  first sweep found the two contexts where a *definite* double free still
-  compiled clean and segfaulted at run time — a `??` arm and a closure
-  body, the latter because the checker was switched off wholesale inside
-  one — and both are now analysed. Since 0.55.0 a closure body's two
-  exits agree: one that falls off its end reclaims what it bound, where
-  only one that returned through `^` did, and `--no-borrowck` is a flag
-  the corpus runs rather than one nothing had ever exercised. 0.57.0
-  closed the other direction across that same boundary: the checker knew
-  what a closure body *frees*, but nothing tied a handle the enclosing
-  frame freed to a later call of a closure holding it, so every spelling
-  of that use-after-free compiled clean. **Invoking a closure is now a
-  read of everything it captured.**
-- **Concurrency.** A stackful M:N work-stealing async runtime with **no
-  `async`/`await` colouring** — ordinary code runs unchanged under the
-  scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`
-  channel **select**. Since 0.43.0, **`Send` / `Sync`** marker traits
-  ([`stdlib/core/marker.nu`](stdlib/core/marker.nu)) are *derived* over a
-  type's whole graph and checked wherever a value crosses a thread
-  boundary — `thread_spawn`, `spawn`, `chan_send`, and an `Arc`'s payload
-  — so an `Rc` or a `Cell` reaching a worker is a compile error however
-  it is spelled, and `% NotSend` / `% Send` mark the cases a structural
-  derivation cannot see either way. Since 0.71.0 a thread closure moves
-  its captures and only share handles (`Channel`, `Mutex`, `Arc`,
-  `Locked`) cross threads; since 0.73.0 an `Arc`'s payload is frozen once
-  made and state threads change lives in a `Locked [T]` whose own lock its
-  operations hold, so data races are inside the guarantee with no lock
-  counted; marker assertions are the trusted part
-  ([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.75.0 threads
-  share an `Atomic` word, an `RwLocked [T]` whose read guards many
-  threads hold at once and lend frozen (`% Frozen`) views, and a `PFile`
-  read and written at offsets; `locked_await` waits on a `Locked` value
-  until a condition holds. Since 0.58.0 the Linux I/O path has no reactor thread:
-  an **idle worker becomes the poller** and blocks in `epoll_wait`
-  itself, so a ready fiber resumes on that worker with no queue hop, no
-  cross-thread wake and no migration (the Go netpoller / tokio driver
-  shape). Sockets register once per fd lifetime, edge-triggered, and
-  readiness that arrives while the fiber computes is banked so the next
-  wait skips the park entirely. The surplus a saturated poller cannot
-  keep spills into a **fair global FIFO** taken in batches, which is
-  what keeps the tail flat under load; non-Linux POSIX keeps the
-  portable `poll(2)` reactor. The contract — a wait may only follow an
-  `EAGAIN` — is in [`docs/ASYNC.md`](docs/ASYNC.md).
-- **Standard library.** A broad pure-NURL stdlib (see the inventory below)
-  spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
-  stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
-- **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-tested:
-  bootstrap fixed point + the Windows golden corpus on every push and PR,
-  plus a Linux-side mingw-w64 cross-link gate, since the Windows runner's
-  two toolchains are both UCRT and the cross one is not),
-  macOS ARM64 (CI-tested on Apple Silicon: bootstrap fixed point + the
-  full corpus against the same goldens as Linux, on every push and PR;
-  needs Homebrew LLVM, no prebuilt toolchain) and macOS x86_64
-  (cross-compiled Mach-O, no CI), `wasm32-wasi`, static Linux ARM64 / RISC-V64
-  (musl), and **bootable unikernel images** — a NURL program as its own
-  kernel on x86_64, AArch64 and RISC-V64, no host OS and no libc.
-  Tier definitions: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
-- **Tooling.** `nurlc` (compiler), `nurlfmt` (canonical formatter), `nurl-lsp`
-  (language server), `nurlpkg` (package manager + test/bench runner), `nurldoc`
-  (API-doc generator), `tools/repl`, DWARF debug info (`--g`), a
-  VS Code extension, and `nurlapi` — a compiler-as-a-service container that
-  powers the public playground and MCP endpoint.
-
 The path to **1.0** is hardening, documentation precision, and external
 validation rather than new language surface — see *Toward 1.0* below.
+
+What is solid today:
+
+### Language (Grammar v2.10)
+
+Sum types (`|`) and product types (structs),
+generics over structs and functions (incl. generics over option/result
+types, closure types and trait objects), pattern matching with **match guards**, **or-patterns**, and
+**N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
+folding** (`const_eval_int`), a full numeric type set (`i` = i64 and
+`u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
+and `f32`), tail-call optimization, and
+**variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
+language also spells the shapes a fast numeric kernel is written in:
+**`v128`**, a first-class by-value SIMD vector type over ~31
+`nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON, and to
+wasm `simd128` where the module is built with it (a scalarised loop
+otherwise), with no CPUID probe and no fallback path, and **wide
+arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
+`nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
+recognises. 0.46.0 adds the two that need a *runtime* decision:
+**`v256`** (64-, 32- and 16-bit lanes) and the **`simd` declaration
+prefix** (grammar v2.6, §3.3b) — nurlc emits one clone of the function
+per instruction-set tier and dispatches on CPUID once per process, so a
+kernel written once runs AVX2 where it exists and baseline where it does
+not, with no `#ifdef` and no separate build. 0.49.0 adds the second
+declaration prefix, **`inline`** (grammar v2.7, §3.3c): LLVM's
+`alwaysinline`, for the case where the cost model is structurally wrong
+— a helper whose arguments are constants at every call site, scored on
+its whole body, called from a caller large enough to push the decision
+the other way. 0.71.0 adds the third, **`unsafe`** (grammar v2.8,
+§3.3d): the only functions whose body may touch raw memory. 0.73.0 adds
+**`raw`** (grammar v2.9, §3.3e): a function whose soundness rests on its
+caller, callable only from `unsafe` code, and a struct whose fields carry
+such an invariant. The grammar
+decision
+for prefix-arity (no grouping delimiter) is formally locked, and since
+0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
+by default** (`--no-strict-arity` demotes it to a warning) — the shape
+compiled to working, wrong code before.
+
+### Memory & safety
+
+Single-owner memory with compiler-inserted auto-drop at
+scope exit — no tracing GC, no hidden boxing. The **ownership rules are
+always on** (`--strict-borrowck` adds audit checks) and reject
+use-after-move, alias double-free, escaping closure captures,
+interprocedural/return escape, loop-carried double-frees, a release
+after storing into an owner, and iterator invalidation as hard errors without changing generated code.
+
+Since 0.71.0 every program accepted without an `unsafe` function of its
+own is **memory-safe and leak-free** ([`docs/MEMORY.md`](docs/MEMORY.md)
+§6.2; 0.72.0 closed 0.71.0's one hole, a `Slice` of a `Vec` — views are
+values — and the 37 its review found are closed since, each a probe in
+`tools/fuzz/holes/` CI holds); `Rc` cycles are collected
+and thread-shared cycles are rejected at compile time.
+
+Since 0.44.0 **no rule depends on definition order**: every check that
+consults a per-function summary parks what it cannot answer and
+resolves it after the module, so where a helper is written can no
+longer change a verdict.
+
+Since 0.53.0 the coverage is measured from the
+other direction: an **inverse-oracle fuzzer**
+([`tools/fuzz/genreject.py`](tools/fuzz/genreject.py)) writes one
+ownership violation into every context the language offers and demands
+the diagnostic that violation deserves, not merely a failed compile. Its
+first sweep found the two contexts where a *definite* double free still
+compiled clean and segfaulted at run time — a `??` arm and a closure
+body, the latter because the checker was switched off wholesale inside
+one — and both are now analysed.
+
+Since 0.55.0 a closure body's two
+exits agree: one that falls off its end reclaims what it bound, where
+only one that returned through `^` did, and `--no-borrowck` is a flag
+the corpus runs rather than one nothing had ever exercised. 0.57.0
+closed the other direction across that same boundary: the checker knew
+what a closure body *frees*, but nothing tied a handle the enclosing
+frame freed to a later call of a closure holding it, so every spelling
+of that use-after-free compiled clean. **Invoking a closure is now a
+read of everything it captured.**
+
+### Concurrency
+
+A stackful M:N work-stealing async runtime with **no
+`async`/`await` colouring** — ordinary code runs unchanged under the
+scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`
+channel **select**. Since 0.43.0, **`Send` / `Sync`** marker traits
+([`stdlib/core/marker.nu`](stdlib/core/marker.nu)) are *derived* over a
+type's whole graph and checked wherever a value crosses a thread
+boundary — `thread_spawn`, `spawn`, `chan_send`, and an `Arc`'s payload
+— so an `Rc` or a `Cell` reaching a worker is a compile error however
+it is spelled, and `% NotSend` / `% Send` mark the cases a structural
+derivation cannot see either way. Since 0.71.0 a thread closure moves
+its captures and only share handles (`Channel`, `Mutex`, `Arc`,
+`Locked`) cross threads; since 0.73.0 an `Arc`'s payload is frozen once
+made and state threads change lives in a `Locked [T]` whose own lock its
+operations hold, so data races are inside the guarantee with no lock
+counted; marker assertions are the trusted part
+([`docs/MEMORY.md`](docs/MEMORY.md) §3, §6.5). Since 0.75.0 threads
+share an `Atomic` word, an `RwLocked [T]` whose read guards many
+threads hold at once and lend frozen (`% Frozen`) views, and a `PFile`
+read and written at offsets; `locked_await` waits on a `Locked` value
+until a condition holds. Since 0.58.0 the Linux I/O path has no reactor thread:
+an **idle worker becomes the poller** and blocks in `epoll_wait`
+itself, so a ready fiber resumes on that worker with no queue hop, no
+cross-thread wake and no migration (the Go netpoller / tokio driver
+shape). Sockets register once per fd lifetime, edge-triggered, and
+readiness that arrives while the fiber computes is banked so the next
+wait skips the park entirely. The surplus a saturated poller cannot
+keep spills into a **fair global FIFO** taken in batches, which is
+what keeps the tail flat under load; non-Linux POSIX keeps the
+portable `poll(2)` reactor. The contract — a wait may only follow an
+`EAGAIN` — is in [`docs/ASYNC.md`](docs/ASYNC.md).
+
+### Standard library
+
+A broad pure-NURL stdlib (see the inventory below)
+spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
+stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
+
+### Targets
+
+Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-tested:
+bootstrap fixed point + the Windows golden corpus on every push and PR,
+plus a Linux-side mingw-w64 cross-link gate, since the Windows runner's
+two toolchains are both UCRT and the cross one is not),
+macOS ARM64 (CI-tested on Apple Silicon: bootstrap fixed point + the
+full corpus against the same goldens as Linux, on every push and PR;
+needs Homebrew LLVM, no prebuilt toolchain) and macOS x86_64
+(cross-compiled Mach-O, no CI), `wasm32-wasi`, static Linux ARM64 / RISC-V64
+(musl), and **bootable unikernel images** — a NURL program as its own
+kernel on x86_64, AArch64 and RISC-V64, no host OS and no libc.
+Tier definitions: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+
+### Tooling
+
+`nurlc` (compiler), `nurlfmt` (canonical formatter), `nurl-lsp`
+(language server), `nurlpkg` (package manager + test/bench runner), `nurldoc`
+(API-doc generator), `tools/repl`, DWARF debug info (`--g`), a
+VS Code extension, and `nurlapi` — a compiler-as-a-service container that
+powers the public playground and MCP endpoint.
 
 ---
 

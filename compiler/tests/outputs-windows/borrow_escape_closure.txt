@@ -1,7 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_escape_closure.nu:24: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+compiler/tests/borrow_escape_closure.nu:24:5: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ bump
-compiler/tests/borrow_escape_closure.nu:30: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^
+compiler/tests/borrow_escape_closure.nu:30:5: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ \ → v { = . c n + . c n 1 }
+    ^
 error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

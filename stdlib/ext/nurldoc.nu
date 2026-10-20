@@ -16,7 +16,8 @@
 //   : Name { … } / : ~ Name …    structs + mutable globals
 //   : | Name { … }               enums
 //   : TYPE name …                constants
-//   % Trait … / % Trait ( T )    trait decls + impls
+//   % Trait … / % Trait ( T )    trait decls + impls (method signatures
+//                                only — an impl's bodies are not API)
 //
 // The renderer is pure (text → text); the `nurldoc` CLI tool walks a
 // directory with fs_glob and writes one `.md` per module on top of it.
@@ -187,6 +188,13 @@ $ `stdlib/core/vec.nu`
     // lines; its doc prose is stashed and emitted after the fence closes.
     : ~ b in_type F
     : ~ String type_prose ( string_with_cap 64 )
+    // The open block is a trait or an impl (`% …{`): its methods are
+    // API, their bodies are not. Lines directly inside it are kept with
+    // anything from their first `{` on cut off — a method's signature,
+    // a trait's own signatures whole — and deeper lines (the bodies) are
+    // dropped, so an impl renders like a list of `@` signatures instead
+    // of the source of every method.
+    : ~ b in_impl F
 
     ~ < pos n {
         // line bounds [ls, le); advance pos past the newline
@@ -231,6 +239,7 @@ $ `stdlib/core/vec.nu`
                             ? type_block {
                                 // Open the fenced full definition; prose waits.
                                 = in_type T
+                                = in_impl == ( __nd_decl_char content sp le ) 37
                                 ( string_clear type_prose )
                                 ? > pending_n 0 {
                                     ( string_push_str type_prose ( string_data pending ) )
@@ -255,9 +264,16 @@ $ `stdlib/core/vec.nu`
             }
         } {
             ? in_type {
-                : ~ i j ls
-                ~ < j le { ( string_push_char body ( nurl_str_at content n j ) ) = j + j 1 }
-                ( string_push_char body 10 )
+                ? in_impl {
+                    ? == depth 1 {
+                        ( __nd_push_signature body content ls le ! is_comment )
+                        ( string_push_char body 10 )
+                    } {}
+                } {
+                    : ~ i j ls
+                    ~ < j le { ( string_push_char body ( nurl_str_at content n j ) ) = j + j 1 }
+                    ( string_push_char body 10 )
+                }
             } {}
         }
 
@@ -270,6 +286,7 @@ $ `stdlib/core/vec.nu`
                 ( string_push_char body 10 )
             } {}
             = in_type F
+            = in_impl F
         } {}
         = pos ? < le n + le 1 le
     }

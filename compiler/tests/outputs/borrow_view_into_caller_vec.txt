@@ -1,9 +1,12 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_view_into_caller_vec.nu:10: error: 'v' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'v'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
+compiler/tests/borrow_view_into_caller_vec.nu:10:5: error: 'v' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'v'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
     ( vec_push [s] v x )
-compiler/tests/borrow_view_into_caller_vec.nu:16: error: 'w' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'w'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
+    ^
+compiler/tests/borrow_view_into_caller_vec.nu:16:5: error: 'w' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'w'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
     ( vec_push [s] w x )
-compiler/tests/borrow_view_into_caller_vec.nu:19: error: 'v' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'v'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
+    ^
+compiler/tests/borrow_view_into_caller_vec.nu:19:1: error: 'v' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of 'x', which is released when this function returns (or its scope ends): the caller would read freed memory through 'v'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take 'x' as a parameter so the caller owns what is viewed.
 @ add_sink ( Vec s ) v sink s x → v { ( vec_push [s] v x ) }
+^
 error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

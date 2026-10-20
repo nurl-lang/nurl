@@ -124,6 +124,17 @@ $ `stdlib/core/char.nu`
     ^ - # i p # i haystack
 }
 
+// The first `needle` at or after byte `from` of `haystack`, as an index
+// into `haystack`; -1 when there is none, or `from` is outside
+// [0, len]. The scan-every-match loop (`= from + at 1`) a caller would
+// otherwise write by stepping a raw pointer into the haystack.
+@ nurl_str_find_from s haystack i from s needle → i {
+    ? | < from 0 > from ( strlen haystack ) { ^ -1 } {}
+    : s p # s ( strstr # s + # i haystack from needle )
+    ? == # i p 0 { ^ -1 } {}
+    ^ - # i p # i haystack
+}
+
 @ nurl_str_ends s str s suffix → i {
     : i slen ( strlen str )
     : i plen ( strlen suffix )

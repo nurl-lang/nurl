@@ -607,13 +607,21 @@ const LATEST_SUBQUERY =
   `(SELECT v.version FROM versions v WHERE v.name = p.name AND v.yanked = 0
       ORDER BY v.published_at DESC LIMIT 1)`;
 
+// A package matches a (lower-cased) query that occurs, literally, in its
+// name, description or symbol index, ASCII-case-insensitively: SQLite's
+// lower() folds exactly the letters LIKE's matching folds. instr, not
+// LIKE: a LIKE pattern is capped at 50 bytes, so `%q%` made every query
+// of 49+ characters fail with "LIKE or GLOB pattern too complex" (a 500),
+// and `%` `_` `\` needed escaping. An empty query matches every package.
+const MATCH_Q =
+  `(instr(lower(p.name), ?1) > 0 OR instr(lower(p.description), ?1) > 0 OR instr(lower(p.symbols), ?1) > 0)`;
+
 async function handleCatalog(url: URL, env: Env): Promise<Response> {
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
-  const like = q ? `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%` : "%";
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
-       FROM packages p WHERE p.name LIKE ?1 ESCAPE '\\' OR p.description LIKE ?1 ESCAPE '\\' OR p.symbols LIKE ?1 ESCAPE '\\' ORDER BY p.name LIMIT 200`,
-  ).bind(like).all<CatalogRow>();
+       FROM packages p WHERE ${MATCH_Q} ORDER BY p.name LIMIT 200`,
+  ).bind(q).all<CatalogRow>();
   const items = rows.results ?? [];
   const list = items.length
     ? `<ul>${items.map((p) =>
@@ -805,11 +813,10 @@ async function handleSearch(req: Request, url: URL, env: Env): Promise<Response>
     return json({ error: "rate_limited" }, 429, { "retry-after": "60" });
   }
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
-  const like = q ? `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%` : "%";
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description, p.symbols AS symbols
-       FROM packages p WHERE p.name LIKE ?1 ESCAPE '\\' OR p.description LIKE ?1 ESCAPE '\\' OR p.symbols LIKE ?1 ESCAPE '\\' ORDER BY p.name LIMIT 50`,
-  ).bind(like).all<CatalogRow>();
+       FROM packages p WHERE ${MATCH_Q} ORDER BY p.name LIMIT 50`,
+  ).bind(q).all<CatalogRow>();
   return json({
     results: (rows.results ?? []).map((r) => {
       // Which of this package's symbols the query hit — so a caller that
@@ -821,6 +828,31 @@ async function handleSearch(req: Request, url: URL, env: Env): Promise<Response>
       return { name: r.name, version: r.latest, description: r.description ?? "", matched_symbols: matched };
     }),
   });
+}
+
+// GET /api/v1/catalog — every package with the fields a search matches
+// (name, description, the src/*.nu symbol index) and the latest version,
+// in name order. A client that holds this answers /api/v1/search itself
+// with no round trip per term: the playground's nurl_api / nurl_grep keep
+// it warm and match exactly as handleSearch does (stdlib/ext/mcp_search.nu
+// __ms_cat_search_locked). ~65 packages, symbols capped at 8000 chars each.
+async function handleCatalogJson(req: Request, env: Env): Promise<Response> {
+  if (!(await rateLimit(env, `catalog:${clientIp(req)}`, rlNum(env.RL_SEARCH_PER_MIN, 120), 60_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "60" });
+  }
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description, p.symbols AS symbols
+       FROM packages p ORDER BY p.name`,
+  ).all<CatalogRow>();
+  return json(
+    {
+      results: (rows.results ?? []).map((r) => ({
+        name: r.name, version: r.latest, description: r.description ?? "", symbols: r.symbols ?? "",
+      })),
+    },
+    200,
+    { "cache-control": "public, max-age=60" },
+  );
 }
 
 // Public counts — powers the "registry packages" figure on nurl-lang.org
@@ -1011,6 +1043,7 @@ export default {
       if (path === "/login") return handleLogin(env);
       if (path === "/auth/callback") return handleCallback(req, env);
       if (path === "/api/v1/search") return handleSearch(req, url, env);
+      if (path === "/api/v1/catalog") return handleCatalogJson(req, env);
       if (path === "/api/v1/stats") return handleStats(env);
       if (path.startsWith("/packages/")) {
         const rest = decodeURIComponent(path.slice("/packages/".length));

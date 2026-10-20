@@ -6,6 +6,155 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`nurl --stdin NAME`** (nurl.sh, nurl.bat): the program arrives on
+  stdin and nurlc knows it as NAME (`nurlc --stdin NAME`), so a tool that
+  holds source in memory builds it without writing a temp file, and its
+  diagnostics read `NAME:6:12` rather than that file's path. nurl-mcp
+  0.14.0 builds and runs inline source this way; wasmbuilder 0.3.7's
+  `wb_build_source` / new `wb_build_text` do the same for wasm.
+- **`nurl_str_find_from`** (core/string.nu): the first match at or after
+  a byte offset, as an index into the whole string — the find-every-match
+  loop without stepping a raw pointer into the haystack.
+- **Registry searches need no round trip.** The registry serves its whole
+  catalog at `GET /api/v1/catalog` (name, latest version, description,
+  symbol index — the fields a search matches), and the playground and
+  nurl-mcp keep it warm on a thread of their own
+  (`msearch_registry_warm`, ext/mcp_search.nu): fetched at startup and
+  every five minutes while searches run. `nurl_api` / `nurl_grep`
+  registry lookups match against it exactly as `/api/v1/search` does —
+  differentially checked against the Worker's own answers on 287 terms,
+  every field equal — so a cold query takes 2 ms instead of a round
+  trip per query (1.6 s from a cloud container). Against a registry
+  without the endpoint, searches go to `/api/v1/search` as before.
+
+### Fixed
+
+- **Registry search no longer fails on a long query.** `/api/v1/search`
+  (and the catalog page's search) built a LIKE pattern `%q%`, which D1
+  caps at 50 bytes: every query of 49+ characters answered 500 "LIKE or
+  GLOB pattern too complex". The match is now `instr` over the
+  lower-cased fields — the same ASCII-case-insensitive literal match,
+  with no escaping and no length limit; on every query LIKE could answer
+  the results are identical.
+- **Playground build results name the caller's file, not the server's
+  build directory.** nurlc reads the request's source on stdin under its
+  logical `filename` (`nurlc --stdin main.nu`), so every diagnostic reads
+  `main.nu:6:…` — in `stderr` and in `nurlc_errors` alike — and the
+  source is no longer written to disk before compiling. The unikernel
+  build passes the name through (`build_unikernel.sh --name`).
+- **`nurlc_errors` carries every class of diagnostic.** Borrow-checker
+  errors (`file:line:`, no column — the pass runs after the lexer has
+  moved on) were dropped by a parser that only matched `file:line:col:`,
+  so a build failing on a use after move answered `nurlc_errors: []`.
+  Each entry now has a `severity` (`error` / `warning` / `note`) and a
+  `col` that is `null` rather than guessed; the unikernel build answers
+  with the same array.
+- **The playground's MCP builds reach the playground.** The build tools
+  POST to the server's own endpoints at `NURL_MCP_LOOPBACK_URL`, whose
+  default was a fixed `http://127.0.0.1:8000`: a server on another port
+  (`NURL_PORT`) sent every MCP build to whatever answered on 8000. The
+  default is now the port it listens on.
+- **A build request's `filename` could write outside its build
+  directory.** It was joined to the directory unchecked, so
+  `"filename": "../../x.nu"` wrote the source, its IR and the binary
+  wherever the path led. It is now one plain file name
+  (`[A-Za-z0-9._-]`, 1–64 bytes, not starting with `.` or `-`), else 400.
+
+- **nurldoc renders an impl's methods as signatures.** A `% Trait Type {
+  … }` block was copied whole, method bodies included, so `nurl_api`
+  surfaces (and the registry's package docs) carried full source for every
+  impl: nurldb's exec.nu surface was 17.7 KB, now 8.8 KB.
+
+- **A missing import names its line.** "unknown generic type '( Vec … )'
+  … Missing a '$' import (stdlib/core/vec.nu for Vec)?" — and its
+  unknown-function, unknown-type and generic-function siblings — now
+  find the stdlib module that defines the name and end with the exact
+  line to add: `It is defined in stdlib/core/vec.nu — add this line at
+  the top of the file:  $ `stdlib/core/vec.nu``. The stdlib is scanned
+  only on the way to the fatal error (≤ 8 ms), so a program that
+  compiles never pays for it. The playground's `nurlc_errors` entry
+  carries it as an edit: `"fix": {"insert_line": 1, "text": "$ `…`"}`.
+- **Diagnostics speak NURL types.** `llvm_to_nurl` spells an option
+  `?i` (not `{ i1, i64 }`), a result `!T E`, a slice `[T`, a pointer
+  `*i` (it printed `Node*` for `%Node*`), a generic instance `( Vec i )`
+  (not `Vec__i64`); thirty message sites that interpolated the lowered
+  type as is now go through it. An option operand that came from a `_get`
+  with a non-option twin names it: "'vec_get' returns '?i'; 'vec_at'
+  returns the element itself, bounds-checked". New gate
+  `tools/check_diag_nurl_types.sh` (CI) keeps lowered types out of the
+  diagnostic goldens.
+- **The prefix-arity trap is reported at its cause.** `: i b + a` one
+  operand short swallows the next line, `( nurl_println_int b )`, which
+  used to read "use of undefined identifier 'b'" at the use. Now: "the
+  initialiser of 'b' is one operand short and swallowed the statement on
+  line 4", anchored at the binding.
+- **Borrow-checker errors have a column** — the statement's first
+  character, the anchor `die_stmt` uses — and a caret under the echoed
+  line, so every nurlc error has the `file:line:col:` shape a tool
+  parses.
+- **An index past the end panics once.** `vec_at` / `slice_at` printed
+  "index out of bounds: the index is 5 but the length is 2" and then
+  panicked with a bare "index out of bounds", so the console (all a
+  unikernel run shows) said it twice and a recover frame saw only the
+  bare half. The detail is now the panic message itself
+  (`nurl_panic_index` in the runtime, noreturn).
+- **…and names the line that indexed.** `( vec_at [T] v i )`,
+  `vec_put`, `slice_at` and `slice_put` calls compile to `_loc` twins that
+  carry the caller's `file:line:col` as a constant: "index out of bounds
+  at main.nu:5:7: the index is 5 but the length is 2" — the only trace a
+  unikernel console has. Inlined, the location costs nothing until the
+  check fails (a 400M-access loop runs the same instruction count).
+
+### Changed
+
+- **`nurl_docs` serves `formal/`** — the mechanized proof the docs cite
+  as `../formal/`: `formal/CLAIM.md`, `formal/RULES.md`, `BLUEPRINT.md`,
+  `README.md`, and the probe table `formal/corpus/map.tsv`, whose rows a
+  query returns as `probe=… rule=… phase=… nurlc=…`. `name=` with
+  `query=` now searches that one document (it was ignored). The installed
+  toolchain ships them as `docs/formal/`, the playground image as
+  `/opt/nurl/formal` (and serves `/formal/*`, where the docs' links land).
+- **`nurl_read_roadmap` reads by heading** — `outline`, `section`, `query`
+  — with the same engine as `nurl_docs`, instead of 43 KB on every call.
+  ROADMAP.md's "What is solid today" bullets are `###` sections, so
+  `section='memory & safety'` is 2 KB. Both servers' `nurl_docs` now run
+  one shared implementation (`msearch_docs_tool`).
+- **`nurl_api package=` opens with the package's module index** — each
+  module's surface size and opening sentence — and `module=` (one, or
+  several as `txn,db`) renders surfaces whole. A package larger than one
+  reply answers with the index alone instead of being cut wherever the
+  cap fell: nurldb's surface is ~60 KB, and txn.nu, db.nu, sql.nu and the
+  recovery code were past the cut, invisible. An unknown module is a tool
+  error that lists the package's modules. Both MCP servers (playground and
+  nurl-mcp).
+- **The MCP search tools stop waiting on the registry.** Every
+  `nurl_api` query looked each term up in the package registry (the
+  exact-name footer), `nurl_grep` searched it, `package=` fetched a
+  tarball — an HTTPS round trip each, 0.7 s apiece from a cloud
+  container against ~5 ms for the local search. Both servers now keep
+  the registry's answers for ten minutes (`msearch_cache_init`, called
+  from main): a repeated `nurl_api` query 1.4 s → 50 ms, `nurl_grep`
+  0.7 s → 28 ms, and `module=` after a package index is free. A query's
+  terms are looked up at once, a thread each, so a first (uncached)
+  query waits one round trip instead of one per term: 1.7 s → 0.85 s.
+- **Docs search is twice as fast** (6.7 → 3.3 ms over a corpus 12 %
+  larger): whole-word matching finds candidates with `strstr` instead of
+  comparing byte by byte at every offset; the same matcher ranks
+  `nurl_api`'s OR pass. Resolving a document's name no longer measures
+  every file's size.
+- **A build result sends its log once.** `stderr` is the whole log, every
+  stage in order; the per-stage copies beside it (`nurlc_stderr`,
+  `clang_stderr`, `clang_stdout`) are gone — every failed build cost an
+  agent twice the tokens. `nurlc_returncode` / `clang_returncode` still
+  say which stage failed.
+- MCP: a build the server refuses (bad flag, bad filename) is a tool
+  error (`isError`), not a result that reads like a build; the
+  `nurl_build_native` schema marks `source` required.
+
 ## [0.75.0] — 2026-10-20
 
 Threads are in the memory model. A multi-threaded relational database

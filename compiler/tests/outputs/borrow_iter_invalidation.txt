@@ -1,7 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_iter_invalidation.nu:27: error: cannot mutate 'xs' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body
+compiler/tests/borrow_iter_invalidation.nu:27:9: error: cannot mutate 'xs' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body
         ( vec_push [i] xs x )
-compiler/tests/borrow_iter_invalidation.nu:32: error: cannot mutate 'xs' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body
+        ^
+compiler/tests/borrow_iter_invalidation.nu:32:9: error: cannot mutate 'xs' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body
         : b _ok ( vec_set [i] xs 0 x2 )
+        ^
 error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

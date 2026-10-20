@@ -148,7 +148,14 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   `name=X section='7.4'` is one section — a few KB rather than MEMORY.md's
   ~50 KB, and the only way to read part of `spec.md`, which exceeds the
   per-call cap. `name=` alone still returns the whole document, `offset=`
-  pages it.
+  pages it. `formal/` — the mechanized memory-safety proof the docs cite
+  — is part of the corpus: `formal/CLAIM.md` (what is proved),
+  `formal/RULES.md` (each formal rule ↔ the compiler rule), and the probe
+  table `formal/corpus/map.tsv`, whose rows `name=… query=h274` returns
+  (`probe=… rule=… phase=… nurlc=rejected`). `name=` with `query=`
+  searches that one document.
+- **`nurl_read_roadmap`** — ROADMAP.md by heading, the same way:
+  `outline=true`, `section='memory & safety'`, `query=`.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,
   `nurl://readme`, `nurl://stdlib/<path>`, `nurl://example/<name>`, …) for
   clients that prefer resource semantics.
@@ -169,11 +176,24 @@ a space-separated string of nurlc flags from a fixed allow-list:
 | `--no-strict-arity` | accept the n-ary `&` / `\|` spellings |
 | `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions |
 
-`--lint`'s findings arrive in `nurlc_stderr` of an ordinary successful
-build, so a lint run is a normal build you read the stderr of. It is an
+`--lint`'s findings arrive in `stderr` and `nurlc_errors` of an ordinary
+successful build, so a lint run is a normal build you read the
+diagnostics of. It is an
 allow-list rather than a passthrough because nurlc also takes `--keep=`
 and `--split-out=`, which name paths inside the container; anything not
 on the list is a 400 naming what is, never a silently dropped flag.
+
+**Reading a build result.** `stderr` is the build's whole log, every
+stage in order (nurlc, then the C toolchain and linker), sent once;
+`nurlc_returncode` / `clang_returncode` say which stage failed.
+`nurlc_errors` is nurlc's part of it parsed — one
+`{file, line, col, severity, message}` per diagnostic, for every class:
+front-end and lint (`col` is the caret column) and the borrow checker
+(`col` is `null`: it runs after the lexer has moved on and reports the
+line). `file` is the `filename` you sent (default `main.nu`) — nurlc
+reads the source under that name, so no server path appears anywhere in
+a result. `filename` is therefore one plain file name
+(`[A-Za-z0-9._-]`, at most 64 bytes); a path is refused with a 400.
 
 **Running what you built.** `nurl_build_native` takes `run=true` to
 execute the program and return its exit code, stdout and stderr in the

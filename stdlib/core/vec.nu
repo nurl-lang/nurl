@@ -383,13 +383,21 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     ^ @ ?A { T x }
 }
 
+// One panic carrying the whole story — "index out of bounds: the index is
+// 5 but the length is 2" — printed once, and what a recover frame sees
+// (runtime_core.c; noreturn, so the check stays a loop exit).
+& `c` @ nurl_panic_index i idx i len in s what in s at → v
+
 // Never returns: defined ahead of its callers so they are compiled knowing
 // that (the noreturn registry), and the optimiser can treat the check as a
 // loop exit.
 @ __vec_index_panic i idx i len → v {
-    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
-    ( nurl_eprint ` but the length is ` ) ( nurl_eprintln_int len )
-    ( nurl_panic `index out of bounds` )
+    ( nurl_panic_index idx len `length` `` )
+}
+
+// …naming the caller's location, `at` ("file:line:col").
+@ __vec_index_panic_at i idx i len s at → v {
+    ( nurl_panic_index idx len `length` at )
 }
 
 // The element at `idx` — the indexing a loop over a Vec wants, with no
@@ -397,13 +405,21 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 // loop) and a panic naming the index and the length when it fails. Like
 // vec_get's payload, an owning element comes back as a borrow of the Vec.
 @ vec_at [A] ( Vec A ) v i idx → A {
+    ^ ( vec_at_loc [A] v idx `` )
+}
+
+// What every `( vec_at [T] v i )` call compiles to: vec_at, with the
+// CALLER's location — "main.nu:7:24", passed by nurlc as a constant — so
+// an index past the end names the line that asked for it ("" names none).
+// Inlined, the constant costs nothing until the check fails.
+@ vec_at_loc [A] ( Vec A ) v i idx s at → A {
     // Both loads ahead of the check: on every path through the function,
     // so the optimiser can lift them, and the check with them, out of a
     // loop.
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic_at idx len at ) } {}
     ^ . data idx
 }
 
@@ -411,10 +427,15 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 // when `idx` is out of range — vec_set's bounds check without the `b` to
 // thread through when an out-of-range index is a bug, not a case.
 @ vec_put [A] ( Vec A ) v i idx A x → v {
+    ( vec_put_loc [A] v idx x `` )
+}
+
+// What every `( vec_put [T] v i x )` call compiles to (see vec_at_loc).
+@ vec_put_loc [A] ( Vec A ) v i idx A x s at → v {
     : s ctl . v ctl
     : *A data # *A ( nurl_vctl_data ctl )
     : i len ( __vec_len_raw ctl )
-    ? >= # u64 idx # u64 len { ( __vec_index_panic idx len ) } {}
+    ? >= # u64 idx # u64 len { ( __vec_index_panic_at idx len at ) } {}
     : A old . data idx
     ( mem_take old )
     = . data idx x

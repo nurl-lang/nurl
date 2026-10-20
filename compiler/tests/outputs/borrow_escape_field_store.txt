@@ -1,7 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_escape_field_store.nu:26: error: storing into a field of 'box' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits
+compiler/tests/borrow_escape_field_store.nu:26:9: error: storing into a field of 'box' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits
         = . box cb f
-compiler/tests/borrow_escape_field_store.nu:39: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+        ^
+compiler/tests/borrow_escape_field_store.nu:39:5: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ box
+    ^
 error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

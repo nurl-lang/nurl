@@ -2,6 +2,26 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.7] — 2026-10-20
+
+### Changed
+
+- **`wb_build_source` diagnostics name the caller's file.** The source
+  is handed to nurlc on stdin under the given filename (`nurlc --stdin
+  kernel.nu`) instead of being written into the temp workspace first, so
+  a compile error reads `kernel.nu:3:9: …` rather than
+  `/tmp/wasmbuild-XXXX.d/kernel.nu:3:9: …` — the text swarm-mcp and
+  nurl-mcp hand back to a model — and one file write and delete per
+  build are gone. `wb_build_file` is unchanged.
+
+### Added
+
+- **`wb_build_text source name out_wasm opts`** — compile source text
+  held in memory to a `.wasm` at a path of the caller's choosing (with
+  `keep_ll`, its `.ll` beside it), the text known as `name` in
+  diagnostics. What nurl-mcp's inline-source wasm build uses instead of
+  writing a temp `.nu`.
+
 ## [0.3.6] — 2026-10-14
 
 Requires NURL 0.73.0.

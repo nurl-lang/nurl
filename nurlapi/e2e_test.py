@@ -536,6 +536,32 @@ def t_tools_call_docs(c: Client) -> None:
     assert_true("unknown name lists what exists", "document(s) under docs/" in _tool_text(env))
 
 
+    # formal/ — the mechanized proof the docs cite as ../formal/ — is part
+    # of the corpus: listed, readable by that very link, and its probe
+    # table answers row queries.
+    env = _tool_call(c, "nurl_docs", {})
+    text = _tool_text(env)
+    assert_true("listing names formal/RULES.md", "formal/RULES.md" in text)
+    assert_true("listing names the probe table", "formal/corpus/map.tsv" in text)
+    env = _tool_call(c, "nurl_docs", {"name": "../formal/CLAIM.md"})
+    assert_true("the docs' own link resolves", not env.get("result", {}).get("isError")
+                and "formal/CLAIM.md" in _tool_text(env), _tool_text(env)[:200])
+    env = _tool_call(c, "nurl_docs", {"name": "formal/corpus/map.tsv", "query": "h274"})
+    text = _tool_text(env)
+    assert_true("table query returns the probe row", "probe=h274_" in text and "nurlc=" in text, text[:300])
+
+    # nurl_read_roadmap reads by heading like nurl_docs.
+    env = _tool_call(c, "nurl_read_roadmap", {"outline": True})
+    text = _tool_text(env)
+    assert_true("roadmap outline is small", 0 < len(text) < 4000, f"{len(text)} bytes")
+    assert_true("roadmap outline lists Memory & safety", "Memory & safety" in text)
+    env = _tool_call(c, "nurl_read_roadmap", {"section": "memory & safety"})
+    text = _tool_text(env)
+    assert_true("roadmap section is one section", "› Memory & safety" in text and len(text) < 8000, f"{len(text)} bytes")
+    env = _tool_call(c, "nurl_read_roadmap", {"section": "zzz-no-such"})
+    assert_true("roadmap section miss is an error with the outline",
+                bool(env.get("result", {}).get("isError")) and "Toward 1.0" in _tool_text(env))
+
 def t_tools_call_api(c: Client) -> None:
     print("\n[MCP] tools/call nurl_api (module / query / errors)")
 
@@ -599,6 +625,25 @@ def t_tools_call_api(c: Client) -> None:
     env = _tool_call(c, "nurl_api", {"query": "zzzqqq wwwxxx"})
     text = _tool_text(env)
     assert_true("dead query still widens", "widened the search" in text)
+
+    # package=: a package larger than one reply answers with its module
+    # index (every module named, none cut mid-surface), and module= picks
+    # surfaces whole. An impl renders its method signatures, never their
+    # bodies (needs network to reg.nurl-lang.org).
+    env = _tool_call(c, "nurl_api", {"package": "nurldb"})
+    text = _tool_text(env)
+    for m in ("btree.nu", "db.nu", "sql.nu", "txn.nu", "wal.nu"):
+        assert_true(f"package index lists {m}", f"  {m}  " in text, text[:300])
+    assert_true("oversized package answers with the index", "past the reply cap" in text)
+    env = _tool_call(c, "nurl_api", {"package": "nurldb", "module": "exec, txn"})
+    text = _tool_text(env)
+    assert_true("module= renders exec.nu", "# exec.nu" in text)
+    assert_true("module= renders txn.nu", "# txn.nu" in text)
+    assert_true("impl methods are signatures only",
+                "@ next inout SeqScan s → ?( Vec Value )\n}" in text, text[:200])
+    env = _tool_call(c, "nurl_api", {"package": "nurldb", "module": "nope"})
+    assert_true("unknown package module errors", bool(env.get("result", {}).get("isError")))
+    assert_true("the error lists the modules", "txn.nu" in _tool_text(env))
 
     # Errors: unknown module, and neither argument.
     env = _tool_call(c, "nurl_api", {"module": "ext/zzz-nope.nu"})
@@ -715,6 +760,63 @@ def t_tools_call_build(c: Client) -> None:
         assert_true("download body looks like ELF", body[:4] == b"\x7fELF", f"prefix={body[:4]!r}")
     else:
         bad("build artifact present", f"no token/url in {j}")
+
+
+def t_diagnostics_contract(c: Client) -> None:
+    # Every class of nurlc diagnostic lands in nurlc_errors — front-end,
+    # borrow checker (anchored at its statement), lint warnings —
+    # named by the caller's filename, never the server's build directory,
+    # and the log is sent once (no per-stage copies beside `stderr`).
+    print("\n[MCP] diagnostics contract (nurlc_errors, logical filename)")
+    cases = [
+        ("front-end", "fe.nu", "@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n    ^ 0\n}\n", "", 2, True),
+        ("borrow checker", "uam.nu",
+         "$ `stdlib/core/vec.nu`\n@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n"
+         "    : ( @ i ) f \\ → i { ^ ( vec_len [i] v ) }\n    ( vec_free [i] v )\n"
+         "    ( nurl_println_int ( f ) )\n    ^ 0\n}\n", "", 6, True),
+        ("lint", "lint.nu", "@ main → i {\n    : i unused 3\n    ^ 0\n}\n", "--lint", 2, True),
+    ]
+    for label, fname, src, flags, line, has_col in cases:
+        args = {"source": src, "filename": fname}
+        if flags:
+            args["flags"] = flags
+        text = _tool_text(_tool_call(c, "nurl_build_native", args))
+        try:
+            j = json.loads(text)
+        except json.JSONDecodeError:
+            bad(f"{label}: result is JSON", text[:200])
+            continue
+        errs = j.get("nurlc_errors") or []
+        assert_true(f"{label}: ≥1 nurlc_errors entry", len(errs) >= 1, (j.get("stderr") or "")[:300])
+        if not errs:
+            continue
+        e = errs[0]
+        assert_eq(f"{label}: file is the logical filename", e.get("file"), fname)
+        assert_eq(f"{label}: line", e.get("line"), line)
+        assert_true(f"{label}: col {'set' if has_col else 'null'}",
+                    (isinstance(e.get("col"), int)) if has_col else e.get("col") is None, repr(e.get("col")))
+        assert_true(f"{label}: severity", e.get("severity") in ("error", "warning"), repr(e.get("severity")))
+        log = j.get("stderr") or ""
+        assert_true(f"{label}: log names no server path", log.startswith(fname + ":"), log[:120])
+        for dup in ("nurlc_stderr", "clang_stderr", "clang_stdout"):
+            assert_true(f"{label}: no duplicate '{dup}'", dup not in j, f"keys={list(j)}")
+
+    # A missing import names its exact line, and nurlc_errors hands it over
+    # as an edit.
+    text = _tool_text(_tool_call(c, "nurl_build_native", {"source": "@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n    ^ 0\n}\n"}))
+    try:
+        fix = (json.loads(text).get("nurlc_errors") or [{}])[0].get("fix") or {}
+    except json.JSONDecodeError:
+        fix = {}
+    assert_eq("missing import: fix text", fix.get("text"), "$ `stdlib/core/vec.nu`")
+    assert_eq("missing import: fix line", fix.get("insert_line"), 1)
+
+    # The filename is a file name, not a path: it was joined to the build
+    # directory unchecked, so '../' wrote outside it.
+    status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "filename": "../../escape.nu"})
+    assert_eq("traversing filename rejected", status, 400)
+    env = _tool_call(c, "nurl_build_native", {"source": "@ main → i { ^ 0 }\n", "filename": "a/b.nu"})
+    assert_true("MCP: refused build is isError", env.get("result", {}).get("isError") is True, str(env)[:200])
 
 
 def t_resources(c: Client) -> None:
@@ -939,7 +1041,8 @@ def t_build_wasm_libc_shims(c: Client) -> None:
     # shim wrapping wasm32's i32 `rand` has to return i64 as well. When it
     # didn't, doomfire / sand / starfield built fine and then died with
     # "runtime error: unreachable" on their first ( rand ).
-    src = "& `libc` @ rand → i\n\n@ main → i {\n  : i r ( rand )\n  ^ % r 7\n}\n"
+    # A foreign function is called from an `unsafe` one (0.71.0 onward).
+    src = "& `libc` @ rand → i\n\nunsafe @ main → i {\n  : i r ( rand )\n  ^ % r 7\n}\n"
     status, _, raw = c.post(
         "/build_wasm",
         {"source": src, "filename": "randshim.nu", "emit_ll": True},
@@ -1232,6 +1335,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--quick", action="store_true", help="skip the slow build test")
+    ap.add_argument("--native-only", action="store_true",
+                    help="run the native build + diagnostics contract, skip wasm/unikernel (no wasi-sdk/qemu needed)")
     args = ap.parse_args()
 
     c = Client(args.base)
@@ -1255,8 +1360,13 @@ def main() -> int:
     t_tools_call_grep(c)
     t_tools_call_traversal(c)
     t_tools_call_unknown(c)
-    if not args.quick:
+    if args.native_only:
         t_tools_call_build(c)
+        t_diagnostics_contract(c)
+        print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
+    elif not args.quick:
+        t_tools_call_build(c)
+        t_diagnostics_contract(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_vararg_libc(c)

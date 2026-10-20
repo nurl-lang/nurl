@@ -1,5 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_strict_field_alias.nu:32: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call — exclusive access is violated
+compiler/tests/borrow_strict_field_alias.nu:32:5: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call — exclusive access is violated
     ( swap_field_and_self c . c n )
+    ^
 error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

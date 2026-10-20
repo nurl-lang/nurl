@@ -76,6 +76,12 @@ cp -a "$ROOT/stdlib/." "$PREFIX/stdlib/"
 # signatures. Text only; a few hundred KB.
 mkdir -p "$PREFIX/docs"
 cp -a "$ROOT/docs/." "$PREFIX/docs/"
+# …and the mechanized proof's prose + probe table, which the docs cite as
+# ../formal/: nurl_docs serves them as formal/<file>. Inside docs/ so an
+# upgrade, which replaces docs/ wholesale, carries them too.
+mkdir -p "$PREFIX/docs/formal/corpus"
+cp -a "$ROOT"/formal/*.md "$PREFIX/docs/formal/"
+cp -a "$ROOT/formal/corpus/map.tsv" "$PREFIX/docs/formal/corpus/"
 
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"

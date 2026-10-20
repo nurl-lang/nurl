@@ -6,6 +6,4 @@ OUTPUT
 100
 0
 index out of bounds: the index is 11 but the slice length is 10
-index out of bounds
 index out of bounds: the index is 1 but the slice length is 10
-index out of bounds

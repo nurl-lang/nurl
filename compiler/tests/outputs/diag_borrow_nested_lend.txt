@@ -1,9 +1,12 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_borrow_nested_lend.nu:15: error: 'inner' borrows from 'top', which ended at line 14 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
+compiler/tests/diag_borrow_nested_lend.nu:15:5: error: 'inner' borrows from 'top', which ended at line 14 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
     ^ ( vec_len [i] inner )
-compiler/tests/diag_borrow_nested_lend.nu:21: error: 'inner' borrows from 'top', which ended at line 21 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
+    ^
+compiler/tests/diag_borrow_nested_lend.nu:21:9: error: 'inner' borrows from 'top', which ended at line 21 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
         T inner → { ( vec_free [( Vec ( Vec i ) )] top ) ^ ( vec_len [i] inner ) }
-compiler/tests/diag_borrow_nested_lend.nu:31: error: 'inner' borrows from 'mid', which ended at line 30 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
+        ^
+compiler/tests/diag_borrow_nested_lend.nu:31:5: error: 'inner' borrows from 'mid', which ended at line 30 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'inner' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup inner ).
     ^ ( vec_len [i] inner )
+    ^
 error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

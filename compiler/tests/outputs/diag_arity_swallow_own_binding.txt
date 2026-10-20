@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arity_swallow_own_binding.nu:8:5: error: the initialiser of 'b' is one operand short and swallowed the statement on line 9 (which uses 'b' — not yet bound while its own initialiser is still open). Every NURL operator has fixed arity and no closing bracket, so a missing operand consumes whatever follows: count the operands of each operator in this line.
+    : i b + a
+    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

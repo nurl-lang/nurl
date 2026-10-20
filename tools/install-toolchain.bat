@@ -76,6 +76,10 @@ xcopy /e /i /y /q "!ROOT!\stdlib" "!PREFIX!\stdlib" >nul
 REM Documentation tree - what the nurl-mcp nurl_docs tool serves
 REM (!NURL_STDLIB!\docs, i.e. right here). Text only, a few hundred KB.
 xcopy /e /i /y /q "!ROOT!\docs" "!PREFIX!\docs" >nul
+REM ...and the mechanized proof's prose + probe table (nurl_docs formal/).
+if not exist "!PREFIX!\docs\formal\corpus" mkdir "!PREFIX!\docs\formal\corpus"
+copy /y "!ROOT!\formal\*.md" "!PREFIX!\docs\formal\" >nul
+copy /y "!ROOT!\formal\corpus\map.tsv" "!PREFIX!\docs\formal\corpus\" >nul
 
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "!ROOT!\nurl.bat" "!PREFIX!\nurl.bat" >nul

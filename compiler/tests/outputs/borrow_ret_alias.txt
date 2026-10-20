@@ -1,7 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_ret_alias.nu:51: error: 'c2' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup c2 ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
+compiler/tests/borrow_ret_alias.nu:51:5: error: 'c2' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup c2 ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
     ( vec_free [i] c2 )
-compiler/tests/borrow_ret_alias.nu:57: error: 'c3' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup c3 ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
+    ^
+compiler/tests/borrow_ret_alias.nu:57:5: error: 'c3' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup c3 ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
     ( vec_free [i] c3 )
+    ^
 error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -32,6 +32,10 @@
 #                              reporting it as never executed.
 #    --keep=a,b                Forwarded to nurlc: keep these functions
 #                              even when nothing in the module calls them.
+#    --stdin NAME              Read the source from stdin; diagnostics and
+#                              the default output name use NAME (a file
+#                              need not exist). For tools that hold the
+#                              program in memory.
 #    -g | --debug              Pass -g to clang (DWARF line tables)
 #    --coverage                Line-coverage instrumentation (implies -g):
 #                              gcov-style -fprofile-arcs -ftest-coverage over
@@ -179,6 +183,7 @@ CLI_OPT=""
 # through the driver, the omission did not look like a missing flag — it
 # looked like a suspiciously good score.
 NURLC_DIAG=""
+STDIN_NAME=""
 
 while [ $# -gt 0 ]; do
     case "${1:-}" in
@@ -193,16 +198,27 @@ while [ $# -gt 0 ]; do
         --no-borrowck|--strict-borrowck|--strict-arity|--no-strict-arity|--no-dce)
                                NURLC_DIAG="$NURLC_DIAG $1"; shift ;;
         --keep=*)              NURLC_DIAG="$NURLC_DIAG $1"; shift ;;
+        # The program on stdin, known as NAME (forwarded as nurlc's
+        # --stdin NAME): its diagnostics read NAME:6:12, not the path of a
+        # temp file a tool had to write first. Imports resolve as for a
+        # file named NAME in the working directory.
+        --stdin)               STDIN_NAME="${2:-}"; shift 2 ;;
         *) break ;;
     esac
 done
+
+if [ -n "$STDIN_NAME" ]; then
+    # No positional source: the name stands in for it, and an optional
+    # positional argument is the output.
+    set -- "$STDIN_NAME" "$@"
+fi
 
 if [ $# -eq 0 ]; then
     echo "Usage: $0 [flags] <file.nu> [output_name]" >&2
     echo "" >&2
     echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug | --coverage" >&2
     echo "         --no-borrowck | --strict-borrowck | --strict-arity | --no-strict-arity" >&2
-    echo "         --no-dce | --keep=a,b" >&2
+    echo "         --no-dce | --keep=a,b | --stdin NAME (source on stdin, known as NAME)" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
@@ -214,7 +230,7 @@ if [ $# -eq 0 ]; then
 fi
 
 SRCFILE="$1"
-if [ ! -f "$SRCFILE" ]; then
+if [ -z "$STDIN_NAME" ] && [ ! -f "$SRCFILE" ]; then
     echo "ERROR: Source file not found: $SRCFILE" >&2
     exit 1
 fi
@@ -378,7 +394,11 @@ if [ "$SPLIT_N" -gt 0 ]; then
     # linking a stale one in would resurrect the code it holds.
     rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
 fi
-"$NURLC" "$@" "$SRCFILE" > "$LLFILE"
+if [ -n "$STDIN_NAME" ]; then
+    "$NURLC" "$@" --stdin "$SRCFILE" > "$LLFILE"
+else
+    "$NURLC" "$@" "$SRCFILE" > "$LLFILE"
+fi
 
 # `--split=N` is a ceiling, and nurlc holds the policy: it writes no
 # parts at all for a module too small for two of them to be worth it

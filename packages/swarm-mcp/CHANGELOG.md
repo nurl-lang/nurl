@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.31.2] — 2026-10-20
+
+### Changed
+
+- A failed fallback wasm build quotes the build service's `stderr` — its
+  whole log, nurlc then wasi-clang — instead of `clang_stderr`. The
+  playground no longer sends per-stage copies beside the one log, and
+  `stderr` is what both old and new services carry.
+
 ## [0.31.1] — 2026-10-15
 
 ### Changed

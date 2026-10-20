@@ -3,8 +3,9 @@
 // comment above a decl → description, signature trimmed at `{`, FFI / `:`
 // const / struct / enum decls, that `:` locals inside a function body
 // (brace depth > 0) are NOT picked up, that `__`-private (file-scoped)
-// functions are omitted, and that a multi-line type declaration renders
-// its full field list in a fenced code block.
+// functions are omitted, that a multi-line type declaration renders
+// its full field list in a fenced code block, and that an impl block
+// renders its method signatures only — never their bodies.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/nurldoc.nu`
@@ -47,6 +48,16 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str src ` @ getpid → i\n` )
     ( string_push_str src `\n` )
     ( string_push_str src `: i MAX 100\n` )  // const, no doc
+    ( string_push_str src `\n` )
+    ( string_push_str src `// Rects compare by area.\n` )
+    ( string_push_str src `% Eq Rect {\n` )
+    ( string_push_str src `    // Same area.\n` )
+    ( string_push_str src `    @ eq Rect a Rect b → b {\n` )
+    ( string_push_str src `        : i x * . a w . a h\n` )  // body — must NOT render
+    ( string_push_str src `        ^ == x * . b w . b h\n` )
+    ( string_push_str src `    }\n` )
+    ( string_push_str src `    @ ne Rect a Rect b → b { ^ ! ( eq a b ) }\n` )
+    ( string_push_str src `}\n` )
 
     : String md ( nurldoc_render ( string_data src ) `demo` )
     ( nurl_print ( string_data md ) )

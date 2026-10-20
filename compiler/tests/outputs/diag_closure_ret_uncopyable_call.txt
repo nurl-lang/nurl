@@ -1,5 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_closure_ret_uncopyable_call.nu:17: error: a closure hands its result to its caller as the caller's own, but 'vec_at' may lend what it hands back, and a 'Res' cannot be copied — the value would be released by its owner and by the closure's caller. Hand back a value the body makes, or one a call hands over.
+compiler/tests/diag_closure_ret_uncopyable_call.nu:17:5: error: a closure hands its result to its caller as the caller's own, but 'vec_at' may lend what it hands back, and a 'Res' cannot be copied — the value would be released by its owner and by the closure's caller. Hand back a value the body makes, or one a call hands over.
     : ( @ Res ) f \ → Res { ( vec_at [Res] rs 0 ) }
+    ^
 error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

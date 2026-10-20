@@ -1,7 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_nested_join_alias.nu:31: error: use of possibly-moved value 'a' — its handle is one of the values a '??' selected between at line 29; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+compiler/tests/borrow_nested_join_alias.nu:31:5: error: use of possibly-moved value 'a' — its handle is one of the values a '??' selected between at line 29; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ( vec_free [i] a )
-compiler/tests/borrow_nested_join_alias.nu:42: error: use of possibly-moved value 'a' — its handle is one of the values a '??' selected between at line 40; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+    ^
+compiler/tests/borrow_nested_join_alias.nu:42:5: error: use of possibly-moved value 'a' — its handle is one of the values a '??' selected between at line 40; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ( vec_free [i] a )
+    ^
 error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

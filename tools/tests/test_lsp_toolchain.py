@@ -242,7 +242,8 @@ class ToolchainTest(unittest.TestCase):
         diags, _ = self.session(text)
         moved = next(d for d in diags[0] if "use of moved value 'v'" in d['message'])
         self.assertEqual(moved['range']['start']['line'], 10)
-        self.assertEqual(moved['range']['start']['character'], 0)
+        # The statement's first character (borrowck errors carry a column).
+        self.assertEqual(moved['range']['start']['character'], 4)
         self.assertNotIn('compiler failed:', moved['message'])
 
     def test_diagnostic_columns_count_utf16(self):

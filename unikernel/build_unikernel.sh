@@ -56,6 +56,11 @@ FSDIR=""
 # should not pay for — and because a machine that was not given a disk
 # and a machine that was told to ignore one should behave identically.
 DISK=""
+# The name the compiler's diagnostics give the program (--name). Default:
+# its path. A build service that stages the source in a scratch directory
+# passes the caller's own file name, so an error reads `main.nu:6:` rather
+# than naming the scratch directory.
+NAME=""
 OUTDIR="${NURL_UNIKERNEL_OUT:-$ROOT/build/unikernel}"
 
 while [ $# -gt 0 ]; do
@@ -64,11 +69,12 @@ while [ $# -gt 0 ]; do
         --fs) FSDIR="$2"; shift 2 ;;
         --disk) DISK=1; shift ;;
         --out-dir) OUTDIR="$2"; shift 2 ;;
+        --name) NAME="$2"; shift 2 ;;
         *)  SRC="$1"; shift ;;
     esac
 done
 [ -n "$SRC" ] || {
-    echo "usage: build_unikernel.sh prog.nu [-o out.elf] [--fs dir] [--disk] [--out-dir dir]" >&2
+    echo "usage: build_unikernel.sh prog.nu [-o out.elf] [--fs dir] [--disk] [--out-dir dir] [--name file.nu]" >&2
     exit 2
 }
 [ -x "$ROOT/build/nurlc" ] || {
@@ -170,7 +176,7 @@ want_key="CC=$CC KFLAGS=$(echo $KFLAGS)"
 NURL_NETDEV="$ROOT/unikernel/net/netdev_virtio.nu" \
     NURL_DISK="$DISK" \
     NURL_BLKDEV="$ROOT/unikernel/fs/blkdev_virtio.nu" \
-    "$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
+    "$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR" ${NAME:+"$NAME"}
 # compile_nu.sh leaves a hosted-flavoured object; recompile the IR with
 # the kernel flags. `zig cc` drops -O for .ll inputs (#644) and plain
 # clang needs the target flags spelled out for IR input too.
