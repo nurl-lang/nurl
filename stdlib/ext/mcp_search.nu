@@ -1419,72 +1419,271 @@ $ `stdlib/core/slice.nu`
     ^ out
 }
 
+// The src/*.nu members of a published package's tarball: each module's
+// basename into `names`, its rendered surface into `mds`, both sorted by
+// name. F when the tarball cannot be fetched or read.
+@ __ms_package_surfaces s regbase s name s version ( Vec String ) names ( Vec String ) mds → b {
+    : String url ( __ms_tarball_url regbase name version )
+    : !Response HttpErr r ( http_get ( string_data url ) )
+    ?? r {
+        T resp → {
+            ? != ( http_status resp ) 200 { ^ F } {}
+            : ( Vec u ) gz ( http_body_bytes resp )
+            ?? ( gzip_decompress gz ) {
+                T raw → {
+                    ?? ( tar_parse raw ) {
+                        T ents → {
+                            : ( Vec String ) srcs ( vec_new [String] )
+                            : ( Vec String ) bases ( vec_new [String] )
+                            : i n ( vec_len [TarEntry] ents )
+                            : ~ i k 0
+                            ~ < k n {
+                                ?? ( vec_get [TarEntry] ents k ) {
+                                    T e → {
+                                        ? == . e typeflag 48 {
+                                            : ~ String pnorm ( string_from ( string_data . e path ) )
+                                            ? ( string_starts_with pnorm `./` ) {
+                                                : String c2 ( string_substr pnorm 2 - ( string_len pnorm ) 2 )
+                                                = pnorm c2
+                                            } {}
+                                            ? & ( string_starts_with pnorm `src/` ) ( string_ends_with pnorm `.nu` ) {
+                                                ( vec_push [String] bases ( __ms_basename ( string_data pnorm ) ) )
+                                                ( vec_push [String] srcs ( bytes_to_str . e data ) )
+                                            } {}
+                                        } {}
+                                    }
+                                    F → {}
+                                }
+                                = k + k 1
+                            }
+                            // Name order, so the index reads like a listing.
+                            : i m ( vec_len [String] bases )
+                            : ( Vec i ) order ( vec_new [i] )
+                            : ~ i a 0
+                            ~ < a m {
+                                : ~ i at ( vec_len [i] order )
+                                ~ & > at 0 > ( nurl_str_cmp ( string_data ( vec_at [String] bases ( vec_at [i] order - at 1 ) ) ) ( string_data ( vec_at [String] bases a ) ) ) 0 { = at - at 1 }
+                                ( vec_insert [i] order at a )
+                                = a + a 1
+                            }
+                            : ~ i q 0
+                            ~ < q m {
+                                : i ix ( vec_at [i] order q )
+                                : s base ( string_data ( vec_at [String] bases ix ) )
+                                ( vec_push [String] names ( string_from base ) )
+                                ( vec_push [String] mds ( nurldoc_render ( string_data ( vec_at [String] srcs ix ) ) base ) )
+                                = q + q 1
+                            }
+                            ^ T
+                        }
+                        F → { ^ F }
+                    }
+                }
+                F → { ^ F }
+            }
+        }
+        F → { ^ F }
+    }
+}
+
+// `want` as a module basename: `txn`, `txn.nu` and `src/txn.nu` all name
+// txn.nu.
+@ __ms_module_base s want → String {
+    : ~ String w ( string_from want )
+    ? ( string_starts_with w `src/` ) { : String t ( string_substr w 4 - ( string_len w ) 4 ) = w t } {}
+    ? ( string_ends_with w `.nu` ) {} { ( string_push_str w `.nu` ) }
+    ^ w
+}
+
+// The opening sentence of a rendered surface's module header — its first
+// paragraph joined onto one line and cut at the first full stop, or at
+// `cap` bytes — without a leading `path/to/x.nu — ` the index already
+// shows. "" when the module has no header.
+@ __ms_surface_gist String md i cap → String {
+    : s p ( string_data md )
+    : ( Slice u ) pv ( slice_of_str p )
+    : i n ( nurl_str_len p )
+    : String para ( string_with_cap 160 )
+    : ~ i k 0
+    ~ & < k n != ( slice_byte pv k ) 10 { = k + k 1 }  // past `# <title>`
+    : ~ b started F
+    : ~ b done F
+    ~ & < k n ! done {
+        : i ls + k 1
+        : ~ i le ls
+        ~ & < le n != ( slice_byte pv le ) 10 { = le + le 1 }
+        ? == le ls {
+            ? started { = done T } {}
+        } {
+            ? == ( slice_byte pv ls ) 35 { = done T } {
+                ? started { ( string_push_char para 32 ) } {}
+                ( string_push_str para ( nurl_str_slice p ls - le ls ) )
+                = started T
+                ? > ( string_len para ) * cap 2 { = done T } {}
+            }
+        }
+        = k le
+    }
+    : s g ( string_data para )
+    : i gn ( nurl_str_len g )
+    : ( Slice u ) gv ( slice_of_str g )
+    // `packages/x/src/y.nu — the y` → `the y`
+    : ~ i from 0
+    : i dash ( nurl_str_find g ` — ` )
+    ? > dash 3 {
+        ? != 0 ( nurl_str_ends ( nurl_str_slice g 0 dash ) `.nu` ) { = from + dash 5 } {}
+    } {}
+    // the first full stop that ends a sentence
+    : ~ i end gn
+    : ~ i j from
+    ~ < j gn {
+        ? & == ( slice_byte gv j ) 46 | == + j 1 gn == ( slice_byte gv + j 1 ) 32 { = end + j 1 = j gn } {}
+        = j + j 1
+    }
+    : i room - end from
+    : i keep ? > room cap ( __mcp_utf8_cut ( nurl_str_slice g from room ) cap ) room
+    : String out ( string_from ( nurl_str_slice g from ? < keep room keep room ) )
+    ? < keep room { ( string_push_str out `…` ) } {}
+    ^ out
+}
+
+// `n` bytes as "6.3 KB".
+@ __ms_push_kb String out i n → v {
+    : i t / + * n 10 512 1024
+    ( string_push_int out / t 10 )
+    ( string_push_char out 46 )
+    ( string_push_int out % t 10 )
+    ( string_push_str out ` KB` )
+}
+
 // The API surface (nurldoc over every src/*.nu) of a PUBLISHED package,
 // streamed from its registry tarball — the ecosystem counterpart of
-// msearch_api_module. `version` "" resolves to the latest. "" on failure.
-@ msearch_api_package s regbase s name s version → String {
+// msearch_api_module. `version` "" resolves to the latest.
+//
+// A package's whole surface can be several times the reply cap (nurldb's
+// is ~60 KB), and cutting it wherever the cap fell left the modules after
+// the cut — txn.nu, db.nu, sql.nu — invisible. So the reply opens with
+// the module index (each module's surface size and opening line), and
+// `module` picks: `module` "" → the index, then every surface when they
+// fit in one reply together, else the index alone; `module` names one or
+// more modules (comma- or space-separated; `txn`, `txn.nu`, `src/txn.nu`)
+// → those surfaces, whole. Err = why there is nothing to show.
+@ msearch_api_package s regbase s name s version s module → !String String {
     : ~ String ver ( string_from version )
     ? == ( string_len ver ) 0 {
         = ver ( __ms_latest_version regbase name )
     } {}
-    ? == ( string_len ver ) 0 { ^ ( string_new ) } {}
-    : String url ( __ms_tarball_url regbase name ( string_data ver ) )
-    : ~ String md ( string_new )
-    : !Response HttpErr r ( http_get ( string_data url ) )
-    ?? r {
-        T resp → {
-            ? == ( http_status resp ) 200 {
-                : ( Vec u ) gz ( http_body_bytes resp )
-                ?? ( gzip_decompress gz ) {
-                    T raw → {
-                        ?? ( tar_parse raw ) {
-                            T ents → {
-                                : String hdr ( string_with_cap 64 )
-                                ( string_push_str hdr name )
-                                ( string_push_char hdr 32 )
-                                ( string_push_str hdr ( string_data ver ) )
-                                ( string_push_str hdr ` — package API surface (published src/*.nu)\n` )
-                                ( string_push_str md ( string_data hdr ) )
-                                : i n ( vec_len [TarEntry] ents )
-                                : ~ i k 0
-                                ~ < k n {
-                                    ?? ( vec_get [TarEntry] ents k ) {
-                                        T e → {
-                                            ? == . e typeflag 48 {
-                                                : ~ String pnorm ( string_from ( string_data . e path ) )
-                                                ? ( string_starts_with pnorm `./` ) {
-                                                    : String c2 ( string_substr pnorm 2 - ( string_len pnorm ) 2 )
-                                                    = pnorm c2
-                                                } {}
-                                                ? & ( string_starts_with pnorm `src/` ) ( string_ends_with pnorm `.nu` ) {
-                                                    : String content ( bytes_to_str . e data )
-                                                    : String base ( __ms_basename ( string_data pnorm ) )
-                                                    : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
-                                                    ( string_push_str md `\n---\n\n` )
-                                                    ( string_push_str md ( string_data one ) )
-                                                } {}
-                                            } {}
-                                        }
-                                        F → {}
-                                    }
-                                    = k + k 1
-                                }
-                            }
-                            F → {}
-                        }
-                    }
-                    F → {}
+    ? == ( string_len ver ) 0 {
+        ^ @ !String String { F ( string_from `package not found — check the name (see nurl_grep where='packages')` ) }
+    } {}
+    : ( Vec String ) names ( vec_new [String] )
+    : ( Vec String ) mds ( vec_new [String] )
+    ? ! ( __ms_package_surfaces regbase name ( string_data ver ) names mds ) {
+        ^ @ !String String { F ( string_from `package or version not found in the registry — 'version' defaults to the latest` ) }
+    } {}
+    : i m ( vec_len [String] names )
+    ? == m 0 {
+        ^ @ !String String { F ( string_from `the package has no src/*.nu modules` ) }
+    } {}
+    : i cap ( __ms_api_out_cap )
+    : String md ( string_with_cap cap )
+    ( string_push_str md name )
+    ( string_push_char md 32 )
+    ( string_push_str md ( string_data ver ) )
+    ( string_push_str md ` — package API surface (published src/*.nu)\n` )
+
+    // Explicit modules: their surfaces, whole, in the order asked.
+    ? > ( nurl_str_len module ) 0 {
+        : ( Slice u ) mv ( slice_of_str module )
+        : i mn ( nurl_str_len module )
+        : String missing ( string_new )
+        : ~ i shown 0
+        : ~ i k 0
+        ~ < k mn {
+            ~ & < k mn | == ( slice_byte mv k ) 44 == ( slice_byte mv k ) 32 { = k + k 1 }
+            : i st k
+            ~ & < k mn & != ( slice_byte mv k ) 44 != ( slice_byte mv k ) 32 { = k + k 1 }
+            ? > k st {
+                : String want ( __ms_module_base ( nurl_str_slice module st - k st ) )
+                : ~ i hit - 0 1
+                : ~ i j 0
+                ~ < j m {
+                    ? != 0 ( nurl_str_eq ( string_data ( vec_at [String] names j ) ) ( string_data want ) ) { = hit j } {}
+                    = j + j 1
+                }
+                ? < hit 0 {
+                    ? > ( string_len missing ) 0 { ( string_push_str missing `, ` ) } {}
+                    ( string_push_str missing ( string_data want ) )
+                } {
+                    ( string_push_str md `\n---\n\n` )
+                    ( string_push_str md ( string_data ( vec_at [String] mds hit ) ) )
+                    = shown + shown 1
                 }
             } {}
         }
-        F → {}
-    }
-    ? > ( string_len md ) ( __ms_api_out_cap ) {
-        : String cut ( string_substr md 0 ( __mcp_utf8_cut ( string_data md ) ( __ms_api_out_cap ) ) )
-        ( string_push_str cut `\n… truncated — fetch the tarball for the full source.\n` )
-        ^ cut
+        ? > ( string_len missing ) 0 {
+            : String all ( string_new )
+            : ~ i j 0
+            ~ < j m {
+                ? > j 0 { ( string_push_str all `, ` ) } {}
+                ( string_push_str all ( string_data ( vec_at [String] names j ) ) )
+                = j + j 1
+            }
+            ? == shown 0 {
+                : String e ( string_from `no module ` )
+                ( string_push_str e ( string_data missing ) )
+                ( string_push_str e ` in ` )
+                ( string_push_str e name )
+                ( string_push_str e ` — its modules: ` )
+                ( string_push_str e ( string_data all ) )
+                ^ @ !String String { F e }
+            } {}
+            ( string_push_str md `\n(not in this package: ` )
+            ( string_push_str md ( string_data missing ) )
+            ( string_push_str md ` — its modules: ` )
+            ( string_push_str md ( string_data all ) )
+            ( string_push_str md `)\n` )
+        } {}
+        ? > ( string_len md ) cap {
+            : String cut ( string_substr md 0 ( __mcp_utf8_cut ( string_data md ) cap ) )
+            ( string_push_str cut `\n… truncated at the reply cap — ask for fewer modules at a time.\n` )
+            ^ @ !String String { T cut }
+        } {}
+        ^ @ !String String { T md }
     } {}
-    ^ md
+
+    // No module: the index first.
+    : ~ i total 0
+    ( string_push_str md `\nModules (surface size — opening line). Read one with module=<name>; several with module='a,b':\n` )
+    : ~ i j 0
+    ~ < j m {
+        : String one ( vec_at [String] mds j )
+        = total + total ( string_len one )
+        ( string_push_str md `  ` )
+        ( string_push_str md ( string_data ( vec_at [String] names j ) ) )
+        ( string_push_str md `  ` )
+        ( __ms_push_kb md ( string_len one ) )
+        : String gist ( __ms_surface_gist one 100 )
+        ? > ( string_len gist ) 0 {
+            ( string_push_str md ` — ` )
+            ( string_push_str md ( string_data gist ) )
+        } {}
+        ( string_push_char md 10 )
+        = j + j 1
+    }
+    ? > + ( string_len md ) total cap {
+        ( string_push_str md `\nThe whole surface is ` )
+        ( __ms_push_kb md total )
+        ( string_push_str md `, past the reply cap — pick the modules you need.\n` )
+        ^ @ !String String { T md }
+    } {}
+    : ~ i q 0
+    ~ < q m {
+        ( string_push_str md `\n---\n\n` )
+        ( string_push_str md ( string_data ( vec_at [String] mds q ) ) )
+        = q + q 1
+    }
+    ^ @ !String String { T md }
 }
 
 // ── Documentation corpus (item: nurl_docs) ─────────────────────────

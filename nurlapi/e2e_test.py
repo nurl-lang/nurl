@@ -600,6 +600,25 @@ def t_tools_call_api(c: Client) -> None:
     text = _tool_text(env)
     assert_true("dead query still widens", "widened the search" in text)
 
+    # package=: a package larger than one reply answers with its module
+    # index (every module named, none cut mid-surface), and module= picks
+    # surfaces whole. An impl renders its method signatures, never their
+    # bodies (needs network to reg.nurl-lang.org).
+    env = _tool_call(c, "nurl_api", {"package": "nurldb"})
+    text = _tool_text(env)
+    for m in ("btree.nu", "db.nu", "sql.nu", "txn.nu", "wal.nu"):
+        assert_true(f"package index lists {m}", f"  {m}  " in text, text[:300])
+    assert_true("oversized package answers with the index", "past the reply cap" in text)
+    env = _tool_call(c, "nurl_api", {"package": "nurldb", "module": "exec, txn"})
+    text = _tool_text(env)
+    assert_true("module= renders exec.nu", "# exec.nu" in text)
+    assert_true("module= renders txn.nu", "# txn.nu" in text)
+    assert_true("impl methods are signatures only",
+                "@ next inout SeqScan s → ?( Vec Value )\n}" in text, text[:200])
+    env = _tool_call(c, "nurl_api", {"package": "nurldb", "module": "nope"})
+    assert_true("unknown package module errors", bool(env.get("result", {}).get("isError")))
+    assert_true("the error lists the modules", "txn.nu" in _tool_text(env))
+
     # Errors: unknown module, and neither argument.
     env = _tool_call(c, "nurl_api", {"module": "ext/zzz-nope.nu"})
     assert_true("unknown module errors", bool(env.get("result", {}).get("isError")))

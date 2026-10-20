@@ -29,8 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wherever the path led. It is now one plain file name
   (`[A-Za-z0-9._-]`, 1–64 bytes, not starting with `.` or `-`), else 400.
 
+- **nurldoc renders an impl's methods as signatures.** A `% Trait Type {
+  … }` block was copied whole, method bodies included, so `nurl_api`
+  surfaces (and the registry's package docs) carried full source for every
+  impl: nurldb's exec.nu surface was 17.7 KB, now 8.8 KB.
+
 ### Changed
 
+- **`nurl_api package=` opens with the package's module index** — each
+  module's surface size and opening sentence — and `module=` (one, or
+  several as `txn,db`) renders surfaces whole. A package larger than one
+  reply answers with the index alone instead of being cut wherever the
+  cap fell: nurldb's surface is ~60 KB, and txn.nu, db.nu, sql.nu and the
+  recovery code were past the cut, invisible. An unknown module is a tool
+  error that lists the package's modules. Both MCP servers (playground and
+  nurl-mcp).
 - **A build result sends its log once.** `stderr` is the whole log, every
   stage in order; the per-stage copies beside it (`nurlc_stderr`,
   `clang_stderr`, `clang_stdout`) are gone — every failed build cost an

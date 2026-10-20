@@ -847,28 +847,27 @@ version = "0.0.0"
     // and rendered with the same nurldoc engine as the stdlib module path.
     ? > ( nurl_str_len package ) 0 {
         : String rb0 ( msearch_default_registry )
-        : String md0 ( msearch_api_package ( string_data rb0 ) package version )
-        ? == ( string_len md0 ) 0 {
-            ^ ( mcp_tool_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
-        } {}
-        // Prepend the import + build recipe: the module headings below are
-        // '# <module>.nu'; a program imports one and compiles via
-        // nurl_build_project. This is the bridge from reading the API to a
-        // working build.
-        : String hint ( string_from `To USE this package: add it under nurl_build_project deps ({"` )
-        ( string_push_str hint package )
-        ( string_push_str hint `": "^<version>"}), then import a module below as  $ ` )
-        ( string_push_char hint 96 )
-        ( string_push_str hint `deps/` )
-        ( string_push_str hint package )
-        ( string_push_str hint `/src/<MODULE>` )
-        ( string_push_char hint 96 )
-        ( string_push_str hint `  (e.g. the '# nn.nu' module → deps/` )
-        ( string_push_str hint package )
-        ( string_push_str hint `/src/nn.nu).\n\n` )
-        ( string_push_str hint ( string_data md0 ) )
-        : Json r0 ( mcp_tool_result_text ( string_data hint ) )
-        ^ r0
+        ?? ( msearch_api_package ( string_data rb0 ) package version module ) {
+            T md0 → {
+                // Prepend the import + build recipe: the module headings below
+                // are '# <module>.nu'; a program imports one and compiles via
+                // nurl_build_project. This is the bridge from reading the API
+                // to a working build.
+                : String hint ( string_from `To USE this package: add it under nurl_build_project deps ({"` )
+                ( string_push_str hint package )
+                ( string_push_str hint `": "^<version>"}), then import a module as  $ ` )
+                ( string_push_char hint 96 )
+                ( string_push_str hint `deps/` )
+                ( string_push_str hint package )
+                ( string_push_str hint `/src/<MODULE>` )
+                ( string_push_char hint 96 )
+                ( string_push_str hint `.\n\n` )
+                ( string_push_str hint ( string_data md0 ) )
+                : Json r0 ( mcp_tool_result_text ( string_data hint ) )
+                ^ r0
+            }
+            F why → { ^ ( mcp_tool_result_error ( string_data why ) ) }
+        }
     } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( nm_has_dotdot module ) {
@@ -935,8 +934,8 @@ version = "0.0.0"
 
 @ nm_schema_api → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` F )
-    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'.` F )
+    ( mcp_schema_prop sc `module` `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'. With 'package': which of the package's modules to render — 'txn', or several as 'txn,db' (the package reply's index lists them).` F )
+    ( mcp_schema_prop sc `package` `string` `A published registry package's API surface, rendered from its tarball — the step after a registry hit, since package symbol names are not otherwise searchable. E.g. 'nn'. The reply opens with the package's module index (each module's surface size and opening line); a package too large for one reply answers with the index alone — then pass 'module'.` F )
     ( mcp_schema_prop sc `version` `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` F )
     ( mcp_schema_prop sc `query` `string` `Declaration search: space- or comma-separated terms, ALL must occur (case-insensitive) in signature + doc comment + module path. Keep one call to ONE concept (2–4 related terms, e.g. 'string lowercase'). Zero-hit fallbacks run in order: a term that exactly names a module ('csv', 'csv.nu', 'ext/csv.nu') returns that whole surface — never cut mid-module, and the reply ends by listing any term it did not search; then a whole-word OR ranked by coverage; then the package registry. Ignored when 'module' or 'package' is set.` F )
     ^ sc

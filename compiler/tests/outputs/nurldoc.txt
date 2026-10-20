@@ -37,3 +37,16 @@ Process id.
 
 ### `: i MAX 100`
 
+### `% Eq Rect`
+
+```nurl
+% Eq Rect {
+    // Same area.
+    @ eq Rect a Rect b → b
+    @ ne Rect a Rect b → b
+}
+```
+
+Rects compare by area.
+
+
