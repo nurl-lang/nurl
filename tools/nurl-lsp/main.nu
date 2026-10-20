@@ -216,7 +216,7 @@ unsafe @ __position_at_byte s text i at → Json {
 }
 
 // A source byte column is clamped at the end of its line, then converted
-// to UTF-16. Missing columns (borrow diagnostics) underline the whole line.
+// to UTF-16. A diagnostic with no column underlines the whole line.
 @ __diagnostic_range s content i ln i cn → Json {
     : ( Slice u ) content_v ( slice_of_str content )
     : i n ( nurl_str_len content )

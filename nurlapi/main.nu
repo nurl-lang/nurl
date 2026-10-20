@@ -4175,8 +4175,8 @@ unsafe @ __uk_exit_code s log → i {
 // ── Loopback HTTP for the 5 build tools ────────────────────────────
 //
 // Each build tool builds a {source, filename, [target]} body, POSTs
-// it to its own HTTP endpoint on `NURL_MCP_LOOPBACK_URL` (default
-// http://127.0.0.1:8000) and returns the response body verbatim as
+// it to its own HTTP endpoint on `NURL_MCP_LOOPBACK_URL` (default:
+// this server's own port, get_mcp_loopback_url) and returns the response body verbatim as
 // the tool result. Goes through the SAME handler the HTTP API
 // uses — one canonical implementation, two interfaces. Each call
 // crosses the worker-pool boundary (MCP request thread + /build
