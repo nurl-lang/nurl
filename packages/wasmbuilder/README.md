@@ -151,6 +151,11 @@ $ `deps/wasmbuilder/src/build.nu`
 `wb_build_file nu_path out_wasm opts → !v String` is the file-to-file
 variant the CLI wraps; it also handles multi-file programs (imports
 resolve exactly as a native `nurl` build would).
+`wb_build_text source name out_wasm opts → !v String` compiles source
+text to a path of your choosing (`keep_ll` leaves the `.ll` beside it).
+Both text entry points hand the source to nurlc on stdin under `name`,
+so its diagnostics read `kernel.nu:3:9: …` — never a temp path — and no
+source file is written.
 
 ## Environment
 

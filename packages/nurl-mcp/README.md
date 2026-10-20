@@ -60,8 +60,13 @@ For any other client, configure an MCP server whose `command` is
 | `nurl_docs` | `name?`, `section?`, `outline?`, `query?`, `offset?` | The shipped `docs/` tree — the questions the API surface cannot answer: `MEMORY.md` (who frees what, and when), `CRYPTO.md`, `ASYNC.md`, `PLATFORMS.md`, `spec.md`, `dev/COMPILER_INTERNALS.md`, … No `name` lists everything with its size and title. `query='string_free manually managed handles'` searches every **section** of every document and returns the best few with their `section=` keys. `name=X outline=true` is that document's heading map; `name=X section='7.4'` (a number, or words from the heading) is one section — 3 KB instead of MEMORY.md's 44 KB, and the only way to read a slice of `spec.md`, which is past the 48 KB per-call cap. `name=X` alone still returns the whole document, paged with `offset`. `formal/` — the mechanized memory-safety proof (`formal/CLAIM.md`, `formal/RULES.md`, the probe table `formal/corpus/map.tsv`, whose rows `name=… query=h274` returns) — is part of the corpus; `name=` with `query=` searches one document. Served from `$NURL_DOCS`, else `$NURL_STDLIB/docs` — `install-toolchain.sh` puts it there, `formal/` included. |
 
 `source` is inline NURL; `path` is a `.nu` file on the host. Inline source is
-written to a unique temp file that is deleted after the call (build artifacts
-too — the server leaves nothing behind).
+handed to the toolchain on stdin under `filename` (default `main.nu`) — never
+written to disk — so its diagnostics read `main.nu:6:12: …`, the caller's own
+name, not a temp path. `nurl_check` runs only the front end and the borrow
+checker (`nurlc --check`), no IR. Build outputs go to temp paths that are
+deleted after the call (the server leaves nothing behind); inline
+`nurl_build_wasm` keeps its module and `.ll` and returns their paths.
+Requires NURL 0.76.0 (`nurl --stdin`).
 
 ## Transports
 

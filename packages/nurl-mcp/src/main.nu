@@ -59,7 +59,7 @@ $ `stdlib/core/slice.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.13.2` }
+@ nm_version → s { ^ `0.14.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -74,24 +74,13 @@ $ `stdlib/core/slice.nu`
 
 // ── Temp-file plumbing ──────────────────────────────────────────────
 //
-// Inline `source` is written to a unique temp .nu so the file-oriented
-// compiler can read it. `nm_input_temp` records whether the resolved path is
-// such a temp (so we delete it afterward) vs. a user-supplied `path` (left
-// untouched). Single-threaded stdio server ⇒ the global is race-free.
+// Inline `source` goes to the toolchain on stdin, known by `filename`
+// (default main.nu): `nurlc --stdin`, `nurl --stdin`, wb_build_text. Its
+// diagnostics then read `main.nu:6:12` — the caller's name, not the path
+// of a temp file the caller never saw — and nothing is written to disk
+// for it. Only build outputs get temp paths (nm_tmp_path).
 
 : ~ i nm_seq 0
-
-// A resolved input path is a temp we own iff it sits under the
-// "<tmpdir>/nurl-mcp-" prefix nm_tmp_path mints. Path-based (not a shared
-// mutable flag) so it stays correct if requests are ever served on
-// concurrent fibers.
-@ nm_is_temp s path → b {
-    : String dir ( env_var_or `TMPDIR` `/tmp` )
-    : String pref ( string_from ( string_data dir ) )
-    ( string_push_str pref `/nurl-mcp-` )
-    : b r ? != ( nurl_str_starts path ( string_data pref ) ) 0 T F
-    ^ r
-}
 
 @ nm_tmp_path s suffix → String {
     : String dir ( env_var_or `TMPDIR` `/tmp` )
@@ -123,28 +112,41 @@ $ `stdlib/core/slice.nu`
     ( nm_unlink ( string_data ll ) )
 }
 
-// Resolve a tool's input to a .nu file path (owned String) the compiler can
-// read. Prefers an explicit `path`; otherwise writes inline `source` to a
-// temp file. Returns None when neither argument is present.
-@ nm_input_path Json args → ?String {
-    : ?Json pj ( json_obj_get args `path` )
-    ?? pj {
-        T pv → { ^ @ ?String { T ( string_from ( json_str_data pv ) ) } }
+// A tool's program: a `path` on the host, or inline `source` (`piped`),
+// known by `path` — the `filename` argument, default main.nu.
+: NmInput { String path String source b piped }
+
+// The program a tool's arguments name; None when neither `path` nor
+// `source` is present.
+@ nm_input Json args → ?NmInput {
+    ?? ( json_obj_get args `path` ) {
+        T pv → { ^ @ ?NmInput { T @ NmInput { ( string_from ( json_str_data pv ) ) ( string_new ) F } } }
         F → {}
     }
-    : ?Json sj ( json_obj_get args `source` )
-    ?? sj {
+    ?? ( json_obj_get args `source` ) {
         T sv → {
-            : String tmp ( nm_tmp_path `.nu` )
-            : !v IoErr wr ( write_file ( string_data tmp ) ( json_str_data sv ) )
-            ?? wr {
-                T → { ^ @ ?String { T tmp } }
-                F e → { ^ @ ?String { F } }
+            : ~ String name ( string_from `main.nu` )
+            ?? ( json_obj_get args `filename` ) {
+                T fv → { ? > ( nurl_str_len ( json_str_data fv ) ) 0 { = name ( string_from ( json_str_data fv ) ) } {} }
+                F → {}
             }
+            ^ @ ?NmInput { T @ NmInput { name ( string_from ( json_str_data sv ) ) T } }
         }
         F → {}
     }
-    ^ @ ?String { F }
+    ^ @ ?NmInput { F }
+}
+
+// Run `cmd` on a program: `pre` (a flag, or ""), then the program —
+// `--stdin <name>` with the source piped in, or its path — then `post`
+// (the output path, or "").
+@ nm_run_on s cmd s pre NmInput prog s post → !Output ProcessErr {
+    : ( Vec s ) a ( vec_new [s] )
+    ? > ( nurl_str_len pre ) 0 { ( vec_push [s] a pre ) } {}
+    ? . prog piped { ( vec_push [s] a `--stdin` ) } {}
+    ( vec_push [s] a ( string_data . prog path ) )
+    ? > ( nurl_str_len post ) 0 { ( vec_push [s] a post ) } {}
+    ^ ( process_run cmd a ? . prog piped ( string_data . prog source ) `` )
 }
 
 // ── Result-shaping helpers ──────────────────────────────────────────
@@ -186,11 +188,10 @@ $ `stdlib/core/slice.nu`
 // ── Tool: nurl_check (front-end type + borrow check, no binary) ──────
 
 @ nm_tool_check Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
-            : !Output ProcessErr r ( process_run1 `nurlc` ( string_data p ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+    ?? ( nm_input args ) {
+        T prog → {
+            // --check: the front end and the borrow checker, no IR.
+            : !Output ProcessErr r ( nm_run_on `nurlc` `--check` prog `` )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
@@ -211,12 +212,10 @@ $ `stdlib/core/slice.nu`
 // ── Tool: nurl_build (compile to a binary, do not run) ──────────────
 
 @ nm_tool_build Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
+    ?? ( nm_input args ) {
+        T prog → {
             : String outp ( nm_tmp_path `-bin` )
-            : !Output ProcessErr r ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+            : !Output ProcessErr r ( nm_run_on `nurl` `` prog ( string_data outp ) )
             ( nm_unlink_artifacts ( string_data outp ) )
             ?? r {
                 T o → {
@@ -452,10 +451,10 @@ version = "0.0.0"
 //                                     which would land verbatim in the
 //                                     calling model's context)
 @ nm_tool_build_wasm Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
-            : b was_inline ( nm_is_temp ( string_data p ) )
+    ?? ( nm_input args ) {
+        T prog → {
+            : b was_inline . prog piped
+            : s p ( string_data . prog path )
 
             : ~ String outp ( string_new )
             : ?Json oj ( json_obj_get args `out` )
@@ -466,7 +465,7 @@ version = "0.0.0"
                     = tmp_out T
                     = outp ( nm_tmp_path `.wasm` )
                 } {
-                    = outp ( string_from ( string_data p ) )
+                    = outp ( string_from p )
                     ? ( string_ends_with outp `.nu` ) {
                         : String t ( string_substr outp 0 - ( string_len outp ) 3 )
                         = outp t
@@ -481,8 +480,9 @@ version = "0.0.0"
             // Inline-source builds keep the rewritten .ll next to the
             // module so the result can point at both files.
             ? tmp_out { = . wopts keep_ll T } {}
-            : !v String r ( wb_build_file ( string_data p ) ( string_data outp ) wopts )
-            ? was_inline { ( nm_unlink ( string_data p ) ) } {}
+            : !v String r ? was_inline
+            ( wb_build_text ( string_data . prog source ) p ( string_data outp ) wopts )
+            ( wb_build_file p ( string_data outp ) wopts )
             ?? r {
                 T _ → {
                     : !i IoErr szr ( file_size ( string_data outp ) )
@@ -542,12 +542,10 @@ version = "0.0.0"
 }
 
 @ nm_tool_run Json args → Json {
-    : ?String po ( nm_input_path args )
-    ?? po {
-        T p → {
+    ?? ( nm_input args ) {
+        T prog → {
             : String outp ( nm_tmp_path `-bin` )
-            : !Output ProcessErr br ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
-            ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
+            : !Output ProcessErr br ( nm_run_on `nurl` `` prog ( string_data outp ) )
             ?? br {
                 T bo → {
                     ? ! ( output_success bo ) {
@@ -906,6 +904,7 @@ version = "0.0.0"
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `source` `string` `Inline NURL source. Provide this OR "path".` F )
     ( mcp_schema_prop sc `path` `string` `Path to a .nu file on the host. Provide this OR "source".` F )
+    ( mcp_schema_prop sc `filename` `string` `With "source": the name its diagnostics give it (main.nu:6:12: …), default main.nu. Imports resolve as for a file of that name in the server's working directory.` F )
     ^ sc
 }
 

@@ -125,17 +125,22 @@ $ `stdlib/core/slice.nu`
 // for skipping native FFI sentinel gates); a pre-0.10.8 nurlc rejects the
 // flag with "cannot open '--ffi-host-imports'", in which case we rerun
 // without it rather than fail.
-@ __wb_run_nurlc s nurlc s nu_path b host_imports → !String String {
+//
+// `source` non-empty: nurlc reads it on stdin and knows it as `nu_path`
+// (`--stdin <name>`) — no file needed, and the diagnostics name the
+// caller's file rather than a temp workspace.
+@ __wb_run_nurlc s nurlc s nu_path s source b host_imports → !String String {
     : ~ b with_flag host_imports
     : ~ i attempt 0
     ~ < attempt 2 {
         : ( Vec s ) args ( vec_new [s] )
+        ? > ( nurl_str_len source ) 0 { ( vec_push [s] args `--stdin` ) } {}
         ( vec_push [s] args nu_path )
         // no x86-64-v3 clone of a `simd` function: wasm32 is not x86-64
         // (nurl.sh passes the same flag for every non-x86-64 target)
         ( vec_push [s] args `--no-cpu-dispatch` )
         ? with_flag { ( vec_push [s] args `--ffi-host-imports` ) } {}
-        : !Output ProcessErr r ( process_run nurlc args `` )
+        : !Output ProcessErr r ( process_run nurlc args source )
         ?? r {
             T o → {
                 ? ( output_success o ) {
@@ -180,13 +185,28 @@ $ `stdlib/core/slice.nu`
         ( string_push_str msg nu_path )
         ^ @ !v String { F msg }
     }
+    ^ ( __wb_build nu_path `` out_wasm opts )
+}
+
+// Compile NURL source text to `out_wasm`, the text known as `name`: nurlc
+// reads it on stdin, so its diagnostics say `name:6:12` and no source file
+// is written. Imports resolve as for a file `name` in the working
+// directory. For a tool that holds the program in memory (nurl-mcp).
+@ wb_build_text s source s name s out_wasm WbOpts opts → !v String {
+    ? == 0 ( nurl_str_len source ) { ^ @ !v String { F ( string_from `empty source` ) } } {}
+    ^ ( __wb_build ? == 0 ( nurl_str_len name ) `main.nu` name source out_wasm opts )
+}
+
+// `source` non-empty: the program is that text, known as `nu_path`
+// (which need not exist); else the file at `nu_path`.
+@ __wb_build s nu_path s source s out_wasm WbOpts opts → !v String {
 
     // 1. nurlc → IR
     : !String String nr ( wb_find_nurlc )
     : ~ String nurlc ( string_new )
     ?? nr { T p → { = nurlc p } F e → { ^ @ !v String { F e } } }
     ( __wb_say . opts quiet `wasmbuilder: nurlc → LLVM IR` )
-    : !String String irr ( __wb_run_nurlc ( string_data nurlc ) nu_path . opts host_imports )
+    : !String String irr ( __wb_run_nurlc ( string_data nurlc ) nu_path source . opts host_imports )
     : ~ String ir ( string_new )
     ?? irr { T i → { = ir i } F e → { ^ @ !v String { F e } } }
 
@@ -420,8 +440,7 @@ $ `stdlib/core/slice.nu`
         } }
 
     : ~ String fname ( string_from ? == 0 ( nurl_str_len filename ) `main.nu` filename )
-    : String nu_path ( path_join ( string_data work ) ( string_data fname ) )
-    : ~ String out_name ( string_from ( string_data fname ) )
+    : ~ String out_name ( path_basename ( string_data fname ) )
     ? ( string_ends_with out_name `.nu` ) {
         : String t ( string_substr out_name 0 - ( string_len out_name ) 3 )
         = out_name t
@@ -429,20 +448,15 @@ $ `stdlib/core/slice.nu`
     ( string_push_str out_name `.wasm` )
     : String out_path ( path_join ( string_data work ) ( string_data out_name ) )
 
-    : !v IoErr wr ( write_file ( string_data nu_path ) source )
-    ?? wr { T _ → {} F _ → {
-            ^ @ !( Vec u ) String { F ( string_from `could not write the temp source` ) }
-        } }
-
-    : !v String br ( wb_build_file ( string_data nu_path ) ( string_data out_path ) opts )
+    // nurlc reads the source on stdin, known as `fname` — the name its
+    // diagnostics give, not the temp workspace (which holds the output).
+    : !v String br ( __wb_build ( string_data fname ) source ( string_data out_path ) opts )
     ?? br { T _ → {} F e → {
-            ( file_delete ( string_data nu_path ) )
             ( dir_remove ( string_data work ) )
             ^ @ !( Vec u ) String { F e }
         } }
 
     : !( Vec u ) IoErr rr ( read_file_bytes ( string_data out_path ) )
-    ( file_delete ( string_data nu_path ) )
     ( file_delete ( string_data out_path ) )
     ( dir_remove ( string_data work ) )
     ?? rr {

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurl --stdin NAME`** (nurl.sh, nurl.bat): the program arrives on
+  stdin and nurlc knows it as NAME (`nurlc --stdin NAME`), so a tool that
+  holds source in memory builds it without writing a temp file, and its
+  diagnostics read `NAME:6:12` rather than that file's path. nurl-mcp
+  0.14.0 builds and runs inline source this way; wasmbuilder 0.3.7's
+  `wb_build_source` / new `wb_build_text` do the same for wasm.
 - **`nurl_str_find_from`** (core/string.nu): the first match at or after
   a byte offset, as an index into the whole string — the find-every-match
   loop without stepping a raw pointer into the haystack.
