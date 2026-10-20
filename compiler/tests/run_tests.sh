@@ -254,6 +254,10 @@ run_one() {
             if [[ -n "$werr" && -s "$werr" ]]; then
                 strip_root "$werr"; echo "WARNINGS" >> "$act"; append_capped "$act" "$werr"
             fi
+            # Runtime output too: an index panic names its caller's
+            # file (as compiled — absolute here), and the Windows runner
+            # strips the same prefix from its output.
+            strip_root "$out"
             { echo "LINK OK"; printf 'EXIT %d\n' "$code"; echo "OUTPUT"; } >> "$act"
             append_capped "$act" "$out"
         fi

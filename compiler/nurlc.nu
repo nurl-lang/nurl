@@ -13364,6 +13364,7 @@ unsafe @ gen_call i lex i syms i cg → s {
     // The call's own line — the lexer has moved past `)` by the time a
     // use of a closure binding is noted (bck_note_closure_caps).
     : i __call_line ( nurl_lex_line lex )
+    : i __call_col ( nurl_lex_col lex )
     // This call's number as a source-expression producer (__sx_enter).
     : i __sx_me ( __sx_enter )
     ? != 0 g_rawlit_n { = g_member_obj 0 } {}
@@ -13516,6 +13517,8 @@ unsafe @ gen_call i lex i syms i cg → s {
     // Generic instantiation: ( fname [T1 T2...] args... )
     : ~ s call_name ( nurl_str_cat fname `` )
     : ~ s call_targs ``
+    // The `_loc` twin this call is emitted as, "" for none (below).
+    : ~ s __loc_cn ``
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )  // consume '['
         : ~ s type_args ``
@@ -13613,6 +13616,28 @@ unsafe @ gen_call i lex i syms i cg → s {
         // … )` reads the signedness off the return type itself.
         = call_name mangled
         ( nurl_sym_def g_fn_link_sources mangled `1` )
+        // `vec_at` / `vec_put` / `slice_at` / `slice_put` are emitted as
+        // their `_loc` twin, which takes the CALLER's location for its
+        // out-of-bounds panic (stdlib vec_at_loc): "index out of bounds at main.nu:7:24: …"
+        // instead of a panic that names no line — on a unikernel console,
+        // the only trace there is. Every analysis still sees `call_name`
+        // (the bodies are the same); only the emitted call changes, and
+        // the location is a constant the inlined check reads only once
+        // it has failed.
+        ? & ( str_contains_word `vec_at vec_put slice_at slice_put` fname )
+        != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat fname `_loc` ) `__tparams` )
+        { : s __tw ( nurl_str_cat fname `_loc` )
+            : s __twm ( nurl_str_cat __tw mangle_sfx )
+            : s __twk ( nurl_str_cat `__inst_` __twm )
+            ? == 0 ( nurl_str_len ( nurl_sym_get g_generic_syms __twk ) )
+            { ( defer_instantiation lex __tw __twm type_args syms )
+                ( nurl_sym_def g_generic_syms __twk `1` ) }
+            { ? == 0 ( nurl_str_len ( nurl_sym_get syms __twm ) )
+                { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args ) ) }
+                {} }
+            ( nurl_sym_def g_fn_link_sources __twm `1` )
+            = __loc_cn __twm }
+        {}
     }
     {}
     : ~ s argstr ``
@@ -16314,11 +16339,19 @@ unsafe @ gen_call i lex i syms i cg → s {
             // reads garbage from a float promoted at such a call site.
             : s va_sig ? is_variadic ( nurl_sym_get2 syms fname `__variadic_sig` ) ``
             : b has_va_sig != 0 ( nurl_str_len va_sig )
+            // A `_loc` twin (above) is called with the caller's
+            // "file:line:col" as its last argument.
+            : b __has_loc != 0 ( nurl_str_len __loc_cn )
+            : s __loc_arg ? __has_loc
+            ( nurl_str_cat `, i8* ` ( emit_deferred_cstr cg ( nurl_str_cat4 ( nurl_lex_filename lex ) `:`
+            ( nurl_str_int __call_line ) ( nurl_str_cat `:` ( nurl_str_int __call_col ) ) ) ) )
+            ``
+            : s __emit_fn ( llvm_call_fn ? __has_loc __loc_cn call_name )
             ? ( seq rlt `void` )
             { ( nurl_print `  call void ` )
                 ? has_va_sig { ( nurl_print `(` ) ( nurl_print va_sig ) ( nurl_print `) ` ) } {}
-                ( nurl_print `@` ) ( nurl_print ( llvm_call_fn call_name ) )
-                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ( nurl_print `@` ) ( nurl_print __emit_fn )
+                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print __loc_arg ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
                 ( nurl_str_cat `undef` `` )
@@ -16328,8 +16361,8 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ( nurl_print ` = ` ) ( nurl_print tail_kw )
                 ( nurl_print `call ` ) ( nurl_print ( nurl_llty rlt ) )
                 ? has_va_sig { ( nurl_print ` (` ) ( nurl_print va_sig ) ( nurl_print `)` ) } {}
-                ( nurl_print ` @` ) ( nurl_print ( llvm_call_fn call_name ) )
-                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
+                ( nurl_print ` @` ) ( nurl_print __emit_fn )
+                ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print __loc_arg ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ? ( __is_alloc_call call_name ) {
                     = g_last_alloc_reg ( nurl_str_cat res `` )
                     = g_last_alloc_size ? ( str_contains_word `nurl_alloc nurl_malloc malloc` call_name ) ( str_skip_word argstr ) ``

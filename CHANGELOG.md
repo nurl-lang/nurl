@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unikernel run shows) said it twice and a recover frame saw only the
   bare half. The detail is now the panic message itself
   (`nurl_panic_index` in the runtime, noreturn).
+- **…and names the line that indexed.** `( vec_at [T] v i )`,
+  `vec_put`, `slice_at` and `slice_put` calls compile to `_loc` twins that
+  carry the caller's `file:line:col` as a constant: "index out of bounds
+  at main.nu:5:7: the index is 5 but the length is 2" — the only trace a
+  unikernel console has. Inlined, the location costs nothing until the
+  check fails (a 400M-access loop runs the same instruction count).
 
 ### Changed
 

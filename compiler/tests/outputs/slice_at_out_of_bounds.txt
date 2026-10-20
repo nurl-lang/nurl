@@ -3,5 +3,5 @@ LINK OK
 EXIT 0
 OUTPUT
 7
-index out of bounds: the index is -1 but the slice length is 1
-index out of bounds: the index is 1 but the slice length is 1
+index out of bounds at compiler/tests/slice_at_out_of_bounds.nu:13:62: the index is -1 but the slice length is 1
+index out of bounds at compiler/tests/slice_at_out_of_bounds.nu:15:43: the index is 1 but the slice length is 1

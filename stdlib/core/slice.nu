@@ -121,7 +121,12 @@ $ `stdlib/core/vec.nu`
 // Never returns: defined ahead of its callers so they are compiled knowing
 // that, and the optimiser can treat the check as a loop exit.
 @ __slice_index_panic i idx i len → v {
-    ( nurl_panic_index idx len `slice length` )
+    ( nurl_panic_index idx len `slice length` `` )
+}
+
+// …naming the caller's location, `at` ("file:line:col").
+@ __slice_index_panic_at i idx i len s at → v {
+    ( nurl_panic_index idx len `slice length` at )
 }
 
 // The element at `idx`, panicking like vec_at when it is out of range;
@@ -131,8 +136,14 @@ $ `stdlib/core/vec.nu`
 // vectorises as raw pointer code does — vec_at / vec_put re-read them
 // from each Vec's control block past every store.
 @ slice_at [A] ( Slice A ) s i idx → A {
+    ^ ( slice_at_loc [A] s idx `` )
+}
+
+// What every `( slice_at [T] s i )` call compiles to: slice_at with the
+// caller's location (see vec_at_loc).
+@ slice_at_loc [A] ( Slice A ) s i idx s at → A {
     : i n . s len
-    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
+    ? >= # u64 idx # u64 n { ( __slice_index_panic_at idx n at ) } {}
     : *A p . s data
     ^ . p idx
 }
@@ -141,8 +152,13 @@ $ `stdlib/core/vec.nu`
 // it replaces), panicking when `idx` is out of range — vec_put through a
 // view. The view's length is fixed, so a store never moves the storage.
 @ slice_put [A] ( Slice A ) s i idx A x → v {
+    ( slice_put_loc [A] s idx x `` )
+}
+
+// What every `( slice_put [T] s i x )` call compiles to (see vec_at_loc).
+@ slice_put_loc [A] ( Slice A ) s i idx A x s at → v {
     : i n . s len
-    ? >= # u64 idx # u64 n { ( __slice_index_panic idx n ) } {}
+    ? >= # u64 idx # u64 n { ( __slice_index_panic_at idx n at ) } {}
     : *A p . s data
     : A old . p idx
     ( mem_take old )
