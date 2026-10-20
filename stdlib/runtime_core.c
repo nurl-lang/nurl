@@ -843,6 +843,42 @@ const char* nurl_str_int(long long n) {
     return r;
 }
 
+void nurl_panic(const char *msg);
+
+/* Append the decimal form of n at *pp (no NUL), within [*pp, lim). */
+static void nurl__put_dec(char **pp, char *lim, long long n) {
+    char d[24];
+    char *e = d + sizeof d, *q = e;
+    unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n
+                                 : (unsigned long long)n;
+    do { *--q = (char)('0' + (u % 10ULL)); u /= 10ULL; } while (u);
+    if (n < 0) *--q = '-';
+    while (q < e && *pp < lim) *(*pp)++ = *q++;
+}
+
+static void nurl__put_str(char **pp, char *lim, const char *s) {
+    while (*s && *pp < lim) *(*pp)++ = *s++;
+}
+
+/* An index past the end, as ONE panic whose message carries the detail:
+ * "index out of bounds: the index is 5 but the length is 2". The stdlib
+ * used to print that line itself and then panic with a bare "index out
+ * of bounds", so the console showed the failure twice — and a recover
+ * frame saw only the bare half. `what` names the bound ("length",
+ * "slice length"). Digits by hand: the no-libc runtime has no snprintf. */
+void nurl_panic_index(long long idx, long long len, const char *what) {
+    char buf[128];
+    char *p = buf, *lim = buf + sizeof buf - 1;
+    nurl__put_str(&p, lim, "index out of bounds: the index is ");
+    nurl__put_dec(&p, lim, idx);
+    nurl__put_str(&p, lim, " but the ");
+    nurl__put_str(&p, lim, what && *what ? what : "length");
+    nurl__put_str(&p, lim, " is ");
+    nurl__put_dec(&p, lim, len);
+    *p = '\0';
+    nurl_panic(buf);
+}
+
 /* ── §2b  Shortest round-trip decimal for a double ───────────────
  *
  * `nurl_str_float` must print text that parses back to the same double,

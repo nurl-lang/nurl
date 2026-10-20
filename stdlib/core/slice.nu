@@ -121,9 +121,7 @@ $ `stdlib/core/vec.nu`
 // Never returns: defined ahead of its callers so they are compiled knowing
 // that, and the optimiser can treat the check as a loop exit.
 @ __slice_index_panic i idx i len → v {
-    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
-    ( nurl_eprint ` but the slice length is ` ) ( nurl_eprintln_int len )
-    ( nurl_panic `index out of bounds` )
+    ( nurl_panic_index idx len `slice length` )
 }
 
 // The element at `idx`, panicking like vec_at when it is out of range;

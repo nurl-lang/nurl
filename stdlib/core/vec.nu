@@ -383,13 +383,16 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     ^ @ ?A { T x }
 }
 
+// One panic carrying the whole story — "index out of bounds: the index is
+// 5 but the length is 2" — printed once, and what a recover frame sees
+// (runtime_core.c; noreturn, so the check stays a loop exit).
+& `c` @ nurl_panic_index i idx i len in s what → v
+
 // Never returns: defined ahead of its callers so they are compiled knowing
 // that (the noreturn registry), and the optimiser can treat the check as a
 // loop exit.
 @ __vec_index_panic i idx i len → v {
-    ( nurl_eprint `index out of bounds: the index is ` ) ( nurl_eprint_int idx )
-    ( nurl_eprint ` but the length is ` ) ( nurl_eprintln_int len )
-    ( nurl_panic `index out of bounds` )
+    ( nurl_panic_index idx len `length` )
 }
 
 // The element at `idx` — the indexing a loop over a Vec wants, with no
