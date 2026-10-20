@@ -717,6 +717,53 @@ def t_tools_call_build(c: Client) -> None:
         bad("build artifact present", f"no token/url in {j}")
 
 
+def t_diagnostics_contract(c: Client) -> None:
+    # Every class of nurlc diagnostic lands in nurlc_errors — front-end
+    # (file:line:col), borrow checker (file:line, col null), lint warnings —
+    # named by the caller's filename, never the server's build directory,
+    # and the log is sent once (no per-stage copies beside `stderr`).
+    print("\n[MCP] diagnostics contract (nurlc_errors, logical filename)")
+    cases = [
+        ("front-end", "fe.nu", "@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n    ^ 0\n}\n", "", 2, True),
+        ("borrow checker", "uam.nu",
+         "$ `stdlib/core/vec.nu`\n@ main → i {\n    : ( Vec i ) v ( vec_new [i] )\n"
+         "    : ( @ i ) f \\ → i { ^ ( vec_len [i] v ) }\n    ( vec_free [i] v )\n"
+         "    ( nurl_println_int ( f ) )\n    ^ 0\n}\n", "", 6, False),
+        ("lint", "lint.nu", "@ main → i {\n    : i unused 3\n    ^ 0\n}\n", "--lint", 2, True),
+    ]
+    for label, fname, src, flags, line, has_col in cases:
+        args = {"source": src, "filename": fname}
+        if flags:
+            args["flags"] = flags
+        text = _tool_text(_tool_call(c, "nurl_build_native", args))
+        try:
+            j = json.loads(text)
+        except json.JSONDecodeError:
+            bad(f"{label}: result is JSON", text[:200])
+            continue
+        errs = j.get("nurlc_errors") or []
+        assert_true(f"{label}: ≥1 nurlc_errors entry", len(errs) >= 1, (j.get("stderr") or "")[:300])
+        if not errs:
+            continue
+        e = errs[0]
+        assert_eq(f"{label}: file is the logical filename", e.get("file"), fname)
+        assert_eq(f"{label}: line", e.get("line"), line)
+        assert_true(f"{label}: col {'set' if has_col else 'null'}",
+                    (isinstance(e.get("col"), int)) if has_col else e.get("col") is None, repr(e.get("col")))
+        assert_true(f"{label}: severity", e.get("severity") in ("error", "warning"), repr(e.get("severity")))
+        log = j.get("stderr") or ""
+        assert_true(f"{label}: log names no server path", log.startswith(fname + ":"), log[:120])
+        for dup in ("nurlc_stderr", "clang_stderr", "clang_stdout"):
+            assert_true(f"{label}: no duplicate '{dup}'", dup not in j, f"keys={list(j)}")
+
+    # The filename is a file name, not a path: it was joined to the build
+    # directory unchecked, so '../' wrote outside it.
+    status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "filename": "../../escape.nu"})
+    assert_eq("traversing filename rejected", status, 400)
+    env = _tool_call(c, "nurl_build_native", {"source": "@ main → i { ^ 0 }\n", "filename": "a/b.nu"})
+    assert_true("MCP: refused build is isError", env.get("result", {}).get("isError") is True, str(env)[:200])
+
+
 def t_resources(c: Client) -> None:
     print("\n[MCP] resources/list + resources/read")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 4, "method": "resources/list"})
@@ -1257,6 +1304,7 @@ def main() -> int:
     t_tools_call_unknown(c)
     if not args.quick:
         t_tools_call_build(c)
+        t_diagnostics_contract(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_vararg_libc(c)

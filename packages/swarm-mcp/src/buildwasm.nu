@@ -179,7 +179,9 @@ $ `deps/wasmbuilder/src/build.nu`
     ? == ( string_len msg ) 0 { = msg ( string_from `wasm build failed` ) } {}
     : ?Json ne ( json_obj_get j `nurlc_errors` )
     ?? ne { T v → { ( string_push_str msg ` ` ) ( string_push_str msg ( string_data ( json_stringify v ) ) ) } F → {} }
-    : String cs ( __json_field j `clang_stderr` )
+    // `stderr` is the build service's whole log (nurlc, then wasi-clang);
+    // older services also sent a per-stage `clang_stderr` copy of its tail.
+    : String cs ( __json_field j `stderr` )
     ? > ( string_len cs ) 0 { ( string_push_str msg ` ` ) ( string_push_str msg ( string_data cs ) ) } {}
     ^ msg
 }

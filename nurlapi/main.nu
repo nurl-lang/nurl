@@ -264,8 +264,11 @@ $ `stdlib/core/slice.nu`
 // compile-gate permit forever. -k 5: SIGKILL 5s after the soft TERM.
 // Falls back to a plain run where timeout(1) doesn't exist (bare local
 // dev outside the container).
-@ run_tool s path ( Vec s ) args → !Output ProcessErr {
-    ? ! ( file_exists `/usr/bin/timeout` ) { ^ ( process_run path args `` ) } {}
+@ run_tool s path ( Vec s ) args → !Output ProcessErr { ^ ( run_tool_in path args `` ) }
+
+// run_tool with `stdin` piped to the tool.
+@ run_tool_in s path ( Vec s ) args s stdin → !Output ProcessErr {
+    ? ! ( file_exists `/usr/bin/timeout` ) { ^ ( process_run path args stdin ) } {}
     : String secs ( env_var_or `NURL_COMPILE_TIMEOUT_SECS` `120` )
     : ( Vec s ) targs ( vec_new [s] )
     ( vec_push [s] targs `-k` )
@@ -275,8 +278,52 @@ $ `stdlib/core/slice.nu`
     : i n ( vec_len [s] args )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] targs a ) F → {} } = k + k 1 }
-    : !Output ProcessErr r ( process_run `/usr/bin/timeout` targs `` )
+    : !Output ProcessErr r ( process_run `/usr/bin/timeout` targs stdin )
     ^ r
+}
+
+// The nurlc command line for a request's source: the caller's allow-listed
+// flags, then `--stdin <filename>`. nurlc reads the program from its stdin
+// (run_nurlc) and knows it by the request's logical filename, so every
+// diagnostic reads `main.nu:6:…` — the name the caller sent — and never
+// the build directory it would otherwise have been written into. Nothing
+// to write before compiling, nothing to rewrite after.
+@ nurlc_stdin_args s filename s flags → ( Vec s ) {
+    : ( Vec s ) args ( vec_new [s] )
+    ( push_nurlc_flags args flags )
+    ( vec_push [s] args `--stdin` )
+    ( vec_push [s] args filename )
+    ^ args
+}
+
+@ run_nurlc ( Vec s ) args s source → !Output ProcessErr {
+    : String nurlc ( get_nurlc_path )
+    ^ ( run_tool_in ( string_data nurlc ) args source )
+}
+
+// A request's `filename` names files in its build directory (the .ll, the
+// binary) and is the name its diagnostics carry, so it is one plain file
+// name: 1–64 bytes of [A-Za-z0-9._-], not starting with '.' or '-'. It was
+// joined to the build directory unchecked, so `../../x.nu` wrote the
+// source, its IR and the binary outside it.
+@ build_filename_ok s f → b {
+    : ( Slice u ) fv ( slice_of_str f )
+    : i n ( nurl_str_len f )
+    ? | < n 1 > n 64 { ^ F } {}
+    : i c0 ( slice_byte fv 0 )
+    ? | == c0 46 == c0 45 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte fv k )
+        : b ok | | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 46 | == c 95 == c 45
+        ? ! ok { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+@ bad_filename_response → HttpResponse {
+    ^ ( response_text 400 `{"error":"filename must be one plain file name: 1-64 bytes of [A-Za-z0-9._-], not starting with '.' or '-' (e.g. main.nu). It is the name diagnostics report and the stem of the built artifacts."}\n` )
 }
 
 // Explicit cap on build request bodies (source or wasm IR). The HTTP
@@ -577,90 +624,110 @@ unsafe @ rl_allow s key i limit → b {
     ^ out
 }
 
-// Parse nurlc stderr blob into a Json array of
-// `{ "file": str, "line": int, "col": int, "message": str }` entries.
-// Each line that matches `file:line:col: message` becomes one entry;
-// non-matching lines are ignored (so debug prints + warnings don't
-// pollute the structured diagnostics).
+// Parse nurlc's stderr into a Json array of structured diagnostics,
+// `{ "file", "line", "col", "severity", "message" }`, one per line of
+// either shape nurlc writes:
+//
+//   file:line:col: severity: message   the front-end and the lint, which
+//                                      know the token they stopped on
+//   file:line: severity: message       the borrow checker and the deferred
+//                                      checks, which run after the lexer
+//                                      has moved on: `col` is null, never
+//                                      a guess
+//
+// Leading blanks are skipped (the unikernel build indents the compiler's
+// output under its own header). Source echoes, carets and the unlocated
+// summary lines ("error: aborting …") match neither shape. Every class of
+// diagnostic lands here, so `nurlc_errors: []` beside status=error can
+// only mean a failure that is not the program's (a crashed tool), never
+// an error the parser did not recognise.
 @ parse_nurlc_diagnostics s blob → Json {
-    : ( Slice u ) blob_v ( slice_of_str blob )
+    : ( Slice u ) bv ( slice_of_str blob )
     : Json arr ( json_arr_new )
     : i n ( nurl_str_len blob )
-    ? <= n 0 { ^ arr } {}
-
-    : ~ i lo 0  // line start
-    : ~ i k 0  // cursor
-    ~ <= k n {
-        : b at_end | == k n == ( slice_byte blob_v k ) 10
-        ? at_end {
-            // Process [lo, k) as one line.
-            ? > k lo {
-                // Find first three ':' positions.
-                : ~ i c1 - 0 1
-                : ~ i c2 - 0 1
-                : ~ i c3 - 0 1
-                : ~ i j lo
-                ~ < j k {
-                    ? == ( slice_byte blob_v j ) 58 {
-                        ? < c1 0 { = c1 j } {
-                            ? < c2 0 { = c2 j } {
-                                ? < c3 0 { = c3 j } {}
-                            }
-                        }
-                    } {}
-                    = j + j 1
-                }
-                ? & & & >= c1 0 >= c2 0 >= c3 0 < c3 k {
-                    // file = blob[lo..c1], line = parse(blob[c1+1..c2]),
-                    // col = parse(blob[c2+1..c3]), msg = blob[c3+2..k] (skip ": ")
-                    : s file_s ( nurl_str_slice blob lo - c1 lo )
-                    : s line_s ( nurl_str_slice blob + c1 1 - c2 + c1 1 )
-                    : ( Slice u ) line_s_v ( slice_of_str line_s )
-                    : s col_s ( nurl_str_slice blob + c2 1 - c3 + c2 1 )
-                    : ( Slice u ) col_s_v ( slice_of_str col_s )
-                    // Skip leading whitespace after the third colon.
-                    : ~ i ms + c3 1
-                    ~ & < ms k == ( slice_byte blob_v ms ) 32 { = ms + ms 1 }
-                    : s msg_s ( nurl_str_slice blob ms - k ms )
-                    // Validate line+col are digit-only.
-                    : ~ b digits_only T
-                    : ~ i lp 0
-                    ~ < lp ( nurl_str_len line_s ) {
-                        : i ch ( slice_byte line_s_v lp )
-                        ? | < ch 48 > ch 57 { = digits_only F } {}
-                        = lp + lp 1
-                    }
-                    : ~ i cp 0
-                    ~ < cp ( nurl_str_len col_s ) {
-                        : i ch ( slice_byte col_s_v cp )
-                        ? | < ch 48 > ch 57 { = digits_only F } {}
-                        = cp + cp 1
-                    }
-                    ? & digits_only > ( nurl_str_len file_s ) 0 {
-                        : i line_n ( nurl_str_to_int line_s )
-                        : i col_n ( nurl_str_to_int col_s )
-                        : Json o ( json_obj_new )
-                        ( json_obj_set o `file` ( json_str_lit file_s ) )
-                        ( json_obj_set o `line` ( json_int line_n ) )
-                        ( json_obj_set o `col` ( json_int col_n ) )
-                        ( json_obj_set o `message` ( json_str_lit msg_s ) )
-                        ( json_arr_push arr o )
-                    } {}
-                    // file_s/line_s/col_s/msg_s are nurl_str_slice results —
-                    // already on the compiler's auto-drop list. Explicit
-                    // nurl_free here would be a double-free.
-                } {}
-            } {}
-            = lo + k 1
-        } {}
-        = k + k 1
+    : ~ i lo 0
+    ~ < lo n {
+        : ~ i eol lo
+        ~ & < eol n != ( slice_byte bv eol ) 10 { = eol + eol 1 }
+        ( __diag_push_line arr blob bv lo eol )
+        = lo + eol 1
     }
     ^ arr
 }
 
-// Stamp the shared BuildResponse fields onto `res`. Mirrors api/'s
-// BuildResponse exactly so the playground's renderer works unchanged.
-// Caller owns `res` and `combined_*` (which are NOT freed here).
+// The first ':' in [a, b), or -1.
+@ __diag_colon ( Slice u ) bv i a i b → i {
+    : ~ i k a
+    ~ < k b {
+        ? == ( slice_byte bv k ) 58 { ^ k } {}
+        = k + k 1
+    }
+    ^ - 0 1
+}
+
+// The decimal number spelled by [a, b), or -1 when the span is empty or
+// holds anything but digits.
+@ __diag_uint ( Slice u ) bv i a i b → i {
+    ? >= a b { ^ - 0 1 } {}
+    : ~ i v 0
+    : ~ i k a
+    ~ < k b {
+        : i c ( slice_byte bv k )
+        ? | < c 48 > c 57 { ^ - 0 1 } {}
+        = v + * v 10 - c 48
+        = k + k 1
+    }
+    ^ v
+}
+
+// The first byte at or after `k` in [k, b) that is not a blank.
+@ __diag_skip_blank ( Slice u ) bv i k i b → i {
+    : ~ i j k
+    ~ & < j b | == ( slice_byte bv j ) 32 == ( slice_byte bv j ) 9 { = j + j 1 }
+    ^ j
+}
+
+// Line [lo, eol) of `blob` as one diagnostic, appended to `arr` when it
+// has one of the two located shapes.
+@ __diag_push_line Json arr s blob ( Slice u ) bv i lo i eol → v {
+    : i a ( __diag_skip_blank bv lo eol )
+    : i c1 ( __diag_colon bv a eol )
+    ? <= c1 a { ^ } {}
+    : i c2 ( __diag_colon bv + c1 1 eol )
+    ? < c2 0 { ^ } {}
+    : i line ( __diag_uint bv + c1 1 c2 )
+    ? < line 1 { ^ } {}
+    : ~ i col - 0 1
+    : ~ i rest + c2 1
+    : i c3 ( __diag_colon bv rest eol )
+    ? > c3 0 {
+        : i cv ( __diag_uint bv rest c3 )
+        ? > cv 0 { = col cv = rest + c3 1 } {}
+    } {}
+    = rest ( __diag_skip_blank bv rest eol )
+    : i c4 ( __diag_colon bv rest eol )
+    ? < c4 0 { ^ } {}
+    : s sev ( nurl_str_slice blob rest - c4 rest )
+    ? ! | | != 0 ( nurl_str_eq sev `error` ) != 0 ( nurl_str_eq sev `warning` ) != 0 ( nurl_str_eq sev `note` ) { ^ } {}
+    : i m ( __diag_skip_blank bv + c4 1 eol )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `file` ( json_str_lit ( nurl_str_slice blob a - c1 a ) ) )
+    ( json_obj_set o `line` ( json_int line ) )
+    ? < col 0 { ( json_obj_set o `col` ( json_null ) ) } { ( json_obj_set o `col` ( json_int col ) ) }
+    ( json_obj_set o `severity` ( json_str_lit sev ) )
+    ( json_obj_set o `message` ( json_str_lit ( nurl_str_slice blob m - eol m ) ) )
+    ( json_arr_push arr o )
+}
+
+// Stamp the shared BuildResponse fields onto `res`. Caller owns `res`.
+//
+// Every byte of compiler output appears ONCE: `stderr` is the build's
+// whole log, every stage in order (nurlc, then the C/link toolchain), and
+// `nurlc_errors` is nurlc's part of it parsed. Which stage failed is
+// `nurlc_returncode` / `clang_returncode`. The per-stage copies this
+// response used to carry beside the combined log (`nurlc_stderr`,
+// `clang_stderr`, `clang_stdout`) doubled what an agent pays for every
+// failed build and said nothing the log does not.
 //
 // `ll_artifact` / `binary_artifact` are emitted as `null` here so every
 // response has the same key set; success paths overwrite them via
@@ -668,24 +735,20 @@ unsafe @ rl_allow s key i limit → b {
 @ stamp_build_response Json res s status s message s filename
 b uses_canvas
 i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes
-i clang_rc s clang_stdout s clang_stderr
-s combined_stdout s combined_stderr → v {
+i clang_rc s build_stdout s build_stderr → v {
     ( json_obj_set res `status` ( json_str_lit status ) )
     ( json_obj_set res `message` ( json_str_lit message ) )
     ( json_obj_set res `filename` ( json_str_lit filename ) )
     ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
     ( json_obj_set res `nurlc_returncode` ( json_int nurlc_rc ) )
     ( json_obj_set res `nurlc_stdout_bytes` ( json_int nurlc_stdout_bytes ) )
-    ( json_obj_set res `nurlc_stderr` ( json_str_or_null nurlc_stderr ) )
     // clang_rc == -1 is the "clang never ran" sentinel — emit null to match
     // api/'s `clang_returncode: int | None` shape.
     ? == clang_rc - 0 1
     { ( json_obj_set res `clang_returncode` ( json_null ) ) }
     { ( json_obj_set res `clang_returncode` ( json_int clang_rc ) ) }
-    ( json_obj_set res `clang_stdout` ( json_str_or_null clang_stdout ) )
-    ( json_obj_set res `clang_stderr` ( json_str_or_null clang_stderr ) )
-    ( json_obj_set res `stdout` ( json_str_lit combined_stdout ) )
-    ( json_obj_set res `stderr` ( json_str_lit combined_stderr ) )
+    ( json_obj_set res `stdout` ( json_str_or_null build_stdout ) )
+    ( json_obj_set res `stderr` ( json_str_or_null build_stderr ) )
     ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics nurlc_stderr ) )
     ( json_obj_set res `ll_artifact` ( json_null ) )
     ( json_obj_set res `binary_artifact` ( json_null ) )
@@ -724,13 +787,11 @@ s combined_stdout s combined_stderr → v {
 // explicit string_free / json_free for `combined`, `res`, `body`
 // here (the compiler emits both, double-freeing).
 @ nurlc_failure_response s filename i nurlc_rc s nurlc_stderr i nurlc_stdout_bytes → HttpResponse {
-    : String combined ( combine_stderr nurlc_stderr `` )
     : Json res ( json_obj_new )
     ( stamp_build_response res
     `error` `nurlc failed` filename F
     nurlc_rc nurlc_stderr nurlc_stdout_bytes
-    - 0 1 `` ``
-    `` ( string_data combined ) )
+    - 0 1 `` nurlc_stderr )
     : String body ( json_stringify res )
     : HttpResponse hr ( response_text 200 ( string_data body ) )
     ( response_set_header hr `Content-Type` `application/json` )
@@ -761,7 +822,7 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str msg ` build — only the Native (Linux) target can link it. Switch to the Native target to build and run this example.` )
     : Json res ( json_obj_new )
     ( stamp_build_response res `error` ( string_data msg ) filename F
-    0 `` 0 - 0 1 `` `` `` ( string_data msg ) )
+    0 `` 0 - 0 1 `` `` )
     : String body ( json_stringify res )
     : HttpResponse hr ( response_text 200 ( string_data body ) )
     ( response_set_header hr `Content-Type` `application/json` )
@@ -786,6 +847,7 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
@@ -802,8 +864,6 @@ s combined_stdout s combined_stderr → v {
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
             ?? dr {
                 T _ → {
-                    : String nu_path ( path_join ( string_data build_dir ) filename )
-                    ( write_file ( string_data nu_path ) source )
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
@@ -812,8 +872,8 @@ s combined_stdout s combined_stderr → v {
 
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
+                    : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
+                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
 
                     ?? nurlc_res {
                         T n_out → {
@@ -847,8 +907,7 @@ s combined_stdout s combined_stderr → v {
                                         ? == c_rc 0 `compiled nurl → native binary` `build failed (see stderr)`
                                         filename uses_canvas
                                         n_rc n_se n_so_bytes
-                                        c_rc c_so c_se
-                                        c_so ( string_data combined_stderr ) )
+                                        c_rc c_so ( string_data combined_stderr ) )
 
                                         ? == c_rc 0 {
                                             : !i IoErr ll_sz ( file_size ( string_data ll_path ) )
@@ -909,6 +968,7 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             // Native-only dependency (e.g. libpq) → no wasm build; report
             // cleanly instead of dumping the wasm-ld undefined-symbol wall.
             : s __wasm_nodep ( native_only_dep source )
@@ -944,8 +1004,6 @@ s combined_stdout s combined_stderr → v {
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
             ?? dr {
                 T _ → {
-                    : String nu_path ( path_join ( string_data build_dir ) filename )
-                    ( write_file ( string_data nu_path ) source )
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
@@ -983,8 +1041,8 @@ s combined_stdout s combined_stderr → v {
                         // left on, every marked function draws one "not a
                         // recognized feature for this target" line per
                         // feature.
-                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
-                        : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
+                        : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
+                        : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
                         ?? nurlc_res {
                             T n_out → {
                                 = n_rc ( output_exit_code n_out )
@@ -1108,16 +1166,12 @@ s combined_stdout s combined_stderr → v {
                             ( json_obj_set res `wasm_base64` ( json_null ) )
                             ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
                             ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                            ( json_obj_set res `nurlc_stderr` ( json_str_or_null n_se ) )
                             ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics n_se ) )
                             ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                            ( json_obj_set res `clang_stderr` ( json_str_or_null c_se ) )
-                            // Unified `stderr` mirrors stamp_build_response; the
-                            // playground's BUILD FAILED renderer only looks at this
-                            // field + nurlc_stderr, so omitting it (as the original
-                            // code did) silently swallowed wasi-clang errors like
-                            // "undefined symbol: canvas_open".
-                            ( json_obj_set res `stderr` ( json_str_lit ( string_data combined_stderr ) ) )
+                            // One log, every stage (nurlc, wasi-clang, wasm-opt),
+                            // as stamp_build_response writes it — no per-stage
+                            // copies beside it.
+                            ( json_obj_set res `stderr` ( json_str_or_null ( string_data combined_stderr ) ) )
                             ( json_obj_set res `llvm_ir` ? & ! links_only | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
                             ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
                             ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
@@ -1179,6 +1233,7 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             // Native-only dependency (e.g. libpq) → no Windows cross-build;
             // report cleanly instead of the mingw undefined-reference wall.
             : s __win_nodep ( native_only_dep source )
@@ -1199,15 +1254,13 @@ s combined_stdout s combined_stderr → v {
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
             ?? dr {
                 T _ → {
-                    : String nu_path ( path_join ( string_data build_dir ) filename )
-                    ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
+                    : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
+                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1332,8 +1385,7 @@ s combined_stdout s combined_stderr → v {
                                                 ? ok `compiled nurl → windows .exe` `build failed (see stderr)`
                                                 filename F
                                                 n_rc n_se n_so_bytes
-                                                final_rc c_so c_se
-                                                c_so ( string_data combined_stderr ) )
+                                                final_rc c_so ( string_data combined_stderr ) )
 
                                                 ? ok {
                                                     : !i IoErr bn_sz ( file_size ( string_data bin_path ) )
@@ -1368,6 +1420,7 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
@@ -1382,14 +1435,12 @@ s combined_stdout s combined_stderr → v {
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
             ?? dr {
                 T _ → {
-                    : String nu_path ( path_join ( string_data build_dir ) filename )
-                    ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
+                    : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
+                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1414,8 +1465,7 @@ s combined_stdout s combined_stderr → v {
                                         ? == z_rc 0 `compiled nurl → macOS Mach-O` `build failed (see stderr)`
                                         filename F
                                         n_rc n_se n_so_bytes
-                                        z_rc z_so z_se
-                                        z_so ( string_data combined_stderr ) )
+                                        z_rc z_so ( string_data combined_stderr ) )
 
                                         ? == z_rc 0 {
                                             : !i IoErr bn_sz ( file_size ( string_data bin_path ) )
@@ -3438,6 +3488,7 @@ s combined_stdout s combined_stderr → v {
             : s source ( get_common_json root `source` `` )
             : s target ( get_common_json root `target` `` )
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s triple ( __zig_triple_for target )
@@ -3460,17 +3511,15 @@ s combined_stdout s combined_stderr → v {
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
             ?? dr {
                 T _ → {
-                    : String nu_path ( path_join ( string_data build_dir ) filename )
-                    ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : String rt_o ( get_runtime_target_o target )
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
+                    : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
                     ? ! ( __zig_is_x86_64 target ) { ( vec_push [s] nurlc_args `--no-cpu-dispatch` ) } {}
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -3502,8 +3551,7 @@ s combined_stdout s combined_stderr → v {
                                         ? == z_rc 0 `compiled nurl → zig target` `build failed (see stderr)`
                                         filename F
                                         n_rc n_se n_so_bytes
-                                        z_rc z_so z_se
-                                        z_so ( string_data combined_stderr ) )
+                                        z_rc z_so ( string_data combined_stderr ) )
                                         // Target-specific extras retained on top of the
                                         // shared shape (api/ uses BuildResponse without
                                         // them; harmless additions for inspection).
@@ -3786,6 +3834,7 @@ unsafe @ __uk_exit_code s log → i {
             : s source ( get_common_json root `source` `` )
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
+            ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s uargs ( get_common_json root `args` `` )
             // Which machine. x86_64 stays the default: it is what every
             // caller written before this field asked for, and a silent
@@ -3857,6 +3906,8 @@ unsafe @ __uk_exit_code s log → i {
                     ( vec_push [s] targs ( string_data nu_path ) )
                     ( vec_push [s] targs `--out-dir` )
                     ( vec_push [s] targs ( string_data build_dir ) )
+                    ( vec_push [s] targs `--name` )
+                    ( vec_push [s] targs filename )
                     ? fs_used {
                         ( vec_push [s] targs `--fs` )
                         ( vec_push [s] targs ( string_data fs_dir ) )
@@ -3878,6 +3929,10 @@ unsafe @ __uk_exit_code s log → i {
                             ( json_obj_set res `arch` ( json_str_lit arch ) )
                             ( json_obj_set res `script_returncode` ( json_int t_rc ) )
                             ( json_obj_set res `stderr` ( json_str_lit ( output_stderr t_out ) ) )
+                            // The script's log carries nurlc's diagnostics (indented
+                            // under its own header); the same structured view
+                            // every other build tool answers with.
+                            ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics ( output_stderr t_out ) ) )
                             ? == t_rc 0 {
                                 ? want_boot {
                                     ( json_obj_set res `boot_result`
@@ -4027,7 +4082,7 @@ unsafe @ __uk_exit_code s log → i {
 @ __mcp_schema_source_filename → Json {
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
-    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `filename` `string` `The name diagnostics give the program (main.nu:6:12: …) and the stem of the built artifacts: one plain file name, [A-Za-z0-9._-]. Default main.nu.` F )
     ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
 }
@@ -4043,7 +4098,7 @@ unsafe @ __uk_exit_code s log → i {
     ( json_arr_push __target_vals ( json_str_lit `macos-x64` ) )
     ( json_arr_push __target_vals ( json_str_lit `macos-arm64` ) )
     ( mcp_schema_prop_enum sc `target` `string` `Cross-compile target id` __target_vals T )
-    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `filename` `string` `The name diagnostics give the program (main.nu:6:12: …) and the stem of the built artifacts: one plain file name, [A-Za-z0-9._-]. Default main.nu.` F )
     ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
 }
@@ -4111,6 +4166,10 @@ unsafe @ __uk_exit_code s log → i {
     ?? r {
         T resp → {
             : s text ( http_body_str resp )
+            // A refused request (bad flag, bad filename, oversized body)
+            // is a tool error, not a result the model should read as a
+            // build that happened.
+            ? >= ( http_status resp ) 400 { ^ ( __mcp_result_error text ) } {}
             : Json result ( __mcp_result_text text )
             ^ result
         }
@@ -4147,8 +4206,8 @@ unsafe @ __uk_exit_code s log → i {
 // The native build tool's schema, with the opt-in `run`.
 @ __mcp_schema_build_native → Json {
     : Json sc ( mcp_schema_obj )
-    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` F )
-    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
+    ( mcp_schema_prop sc `filename` `string` `The name diagnostics give the program (main.nu:6:12: …) and the stem of the built artifacts: one plain file name, [A-Za-z0-9._-]. Default main.nu.` F )
     ( mcp_schema_prop sc `run` `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` F )
     ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
@@ -4157,7 +4216,7 @@ unsafe @ __uk_exit_code s log → i {
 @ __mcp_schema_build_unikernel → Json {
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
-    ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
+    ( mcp_schema_prop sc `filename` `string` `The name diagnostics give the program (main.nu:6:12: …) and the stem of the built artifacts: one plain file name, [A-Za-z0-9._-]. Default main.nu.` F )
     ( mcp_schema_prop sc `args` `string` `The guest program's argv, passed on the kernel command line as args="…"` F )
     ( mcp_schema_prop sc `files` `object` `Optional read-only filesystem baked into the image: {"relative/path": "<base64>"} — no absolute paths, no ".." segments` F )
     ( mcp_schema_prop sc `boot` `boolean` `Boot the built image in the server (TCG, no network, ~20 s cap) and return the guest console. Default true — the boot log is the point of the tool.` F )

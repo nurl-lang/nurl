@@ -6,6 +6,40 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Playground build results name the caller's file, not the server's
+  build directory.** nurlc reads the request's source on stdin under its
+  logical `filename` (`nurlc --stdin main.nu`), so every diagnostic reads
+  `main.nu:6:…` — in `stderr` and in `nurlc_errors` alike — and the
+  source is no longer written to disk before compiling. The unikernel
+  build passes the name through (`build_unikernel.sh --name`).
+- **`nurlc_errors` carries every class of diagnostic.** Borrow-checker
+  errors (`file:line:`, no column — the pass runs after the lexer has
+  moved on) were dropped by a parser that only matched `file:line:col:`,
+  so a build failing on a use after move answered `nurlc_errors: []`.
+  Each entry now has a `severity` (`error` / `warning` / `note`) and a
+  `col` that is `null` rather than guessed; the unikernel build answers
+  with the same array.
+- **A build request's `filename` could write outside its build
+  directory.** It was joined to the directory unchecked, so
+  `"filename": "../../x.nu"` wrote the source, its IR and the binary
+  wherever the path led. It is now one plain file name
+  (`[A-Za-z0-9._-]`, 1–64 bytes, not starting with `.` or `-`), else 400.
+
+### Changed
+
+- **A build result sends its log once.** `stderr` is the whole log, every
+  stage in order; the per-stage copies beside it (`nurlc_stderr`,
+  `clang_stderr`, `clang_stdout`) are gone — every failed build cost an
+  agent twice the tokens. `nurlc_returncode` / `clang_returncode` still
+  say which stage failed.
+- MCP: a build the server refuses (bad flag, bad filename) is a tool
+  error (`isError`), not a result that reads like a build; the
+  `nurl_build_native` schema marks `source` required.
+
 ## [0.75.0] — 2026-10-20
 
 Threads are in the memory model. A multi-threaded relational database

@@ -5,7 +5,11 @@
 #  the program actually needs it, and the disk layer when the build
 #  asked for one.
 #
-#  Usage:  compile_nu.sh <src.nu> <out.ll> <workdir>
+#  Usage:  compile_nu.sh <src.nu> <out.ll> <workdir> [name]
+#
+#  `name`, when given, is the name nurlc's diagnostics give the program
+#  (it reads the source on stdin under that name) — for a caller that
+#  staged the source in a scratch directory the reader never saw.
 #
 #  A hosted program gets its sockets from stdlib/runtime_ffi.c, which is
 #  the one file a freestanding target cannot have. unikernel/net/
@@ -75,7 +79,7 @@ fail() { # fail <exit-code> <errfile> <what>
     exit "$1"
 }
 
-SRC="$1"; OUT_LL="$2"; WORK="$3"
+SRC="$1"; OUT_LL="$2"; WORK="$3"; NAME="${4:-}"
 # Absolute, before anything cds anywhere: the workdir below is chosen
 # per source, and a relative path stops meaning the same thing the
 # moment it changes.
@@ -113,7 +117,11 @@ case "$($CC -dumpmachine 2>/dev/null)" in
     *) NURLC_CPU="--no-cpu-dispatch" ;;
 esac
 
-"$ROOT/build/nurlc" $NURLC_CPU "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
+if [ -n "$NAME" ]; then
+    "$ROOT/build/nurlc" $NURLC_CPU --stdin "$NAME" < "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
+else
+    "$ROOT/build/nurlc" $NURLC_CPU "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
+fi
 $CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
 
 # What does the socket shim define? Its own `@ nurl_*` definitions, read

@@ -169,11 +169,24 @@ a space-separated string of nurlc flags from a fixed allow-list:
 | `--no-strict-arity` | accept the n-ary `&` / `\|` spellings |
 | `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions |
 
-`--lint`'s findings arrive in `nurlc_stderr` of an ordinary successful
-build, so a lint run is a normal build you read the stderr of. It is an
+`--lint`'s findings arrive in `stderr` and `nurlc_errors` of an ordinary
+successful build, so a lint run is a normal build you read the
+diagnostics of. It is an
 allow-list rather than a passthrough because nurlc also takes `--keep=`
 and `--split-out=`, which name paths inside the container; anything not
 on the list is a 400 naming what is, never a silently dropped flag.
+
+**Reading a build result.** `stderr` is the build's whole log, every
+stage in order (nurlc, then the C toolchain and linker), sent once;
+`nurlc_returncode` / `clang_returncode` say which stage failed.
+`nurlc_errors` is nurlc's part of it parsed — one
+`{file, line, col, severity, message}` per diagnostic, for every class:
+front-end and lint (`col` is the caret column) and the borrow checker
+(`col` is `null`: it runs after the lexer has moved on and reports the
+line). `file` is the `filename` you sent (default `main.nu`) — nurlc
+reads the source under that name, so no server path appears anywhere in
+a result. `filename` is therefore one plain file name
+(`[A-Za-z0-9._-]`, at most 64 bytes); a path is refused with a 400.
 
 **Running what you built.** `nurl_build_native` takes `run=true` to
 execute the program and return its exit code, stdout and stderr in the
