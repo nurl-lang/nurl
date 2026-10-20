@@ -383,8 +383,14 @@ def t_tools_call_changelog(c: Client) -> None:
     # Index mode: no arguments → release index with entry counts.
     env = _tool_call(c, "nurl_changelog", {})
     text = _tool_text(env)
-    assert_true("index lists releases", "releases," in text and "[Unreleased]" in text)
+    # The newest heading is [Unreleased] between releases and the version
+    # itself right after one (a release renames it), so take whichever
+    # heads the index rather than assume either.
+    heads = re.findall(r"^\[([^\]]+)\]", text, re.M)
+    assert_true("index lists releases", "releases," in text and len(heads) > 1
+                and any(re.fullmatch(r"\d+\.\d+\.\d+", h) for h in heads))
     assert_true("index shows entry counts", " entries" in text)
+    newest = heads[0] if heads else "Unreleased"
 
     # Query mode: every release heading carries a date, so 'compiler'
     # is a safe always-matching term; entries come back with provenance.
@@ -397,9 +403,9 @@ def t_tools_call_changelog(c: Client) -> None:
     assert_true("limit caps emitted entries", text.count("\n\n[") <= 2)
 
     # Release filter alone returns that release's entries.
-    env = _tool_call(c, "nurl_changelog", {"release": "Unreleased", "limit": 1})
+    env = _tool_call(c, "nurl_changelog", {"release": newest, "limit": 1})
     text = _tool_text(env)
-    assert_true("release filter scopes to heading", "in release 'Unreleased'" in text)
+    assert_true("release filter scopes to heading", f"in release '{newest}'" in text)
 
     # No-match path gives actionable guidance instead of silence.
     env = _tool_call(c, "nurl_changelog", {"query": "zzz-no-such-term-zzz"})
