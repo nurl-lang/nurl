@@ -1335,6 +1335,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--quick", action="store_true", help="skip the slow build test")
+    ap.add_argument("--native-only", action="store_true",
+                    help="run the native build + diagnostics contract, skip wasm/unikernel (no wasi-sdk/qemu needed)")
     args = ap.parse_args()
 
     c = Client(args.base)
@@ -1358,7 +1360,11 @@ def main() -> int:
     t_tools_call_grep(c)
     t_tools_call_traversal(c)
     t_tools_call_unknown(c)
-    if not args.quick:
+    if args.native_only:
+        t_tools_call_build(c)
+        t_diagnostics_contract(c)
+        print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
+    elif not args.quick:
         t_tools_call_build(c)
         t_diagnostics_contract(c)
         t_tools_call_build_wasm(c)

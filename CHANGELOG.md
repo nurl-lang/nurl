@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each entry now has a `severity` (`error` / `warning` / `note`) and a
   `col` that is `null` rather than guessed; the unikernel build answers
   with the same array.
+- **The playground's MCP builds reach the playground.** The build tools
+  POST to the server's own endpoints at `NURL_MCP_LOOPBACK_URL`, whose
+  default was a fixed `http://127.0.0.1:8000`: a server on another port
+  (`NURL_PORT`) sent every MCP build to whatever answered on 8000. The
+  default is now the port it listens on.
 - **A build request's `filename` could write outside its build
   directory.** It was joined to the directory unchecked, so
   `"filename": "../../x.nu"` wrote the source, its IR and the binary

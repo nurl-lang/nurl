@@ -15,6 +15,15 @@ Requires NURL 0.76.0 (`nurl --stdin NAME`).
   `main.nu:6:12: …` instead of `/tmp/nurl-mcp-<pid>-<n>.nu:6:12: …` — a
   path the agent never wrote and cannot use — and no temp `.nu` is
   written and deleted per call.
+- **Stdlib names resolve on an installed toolchain.** `$NURL_STDLIB` is
+  the prefix that holds `stdlib/`, but `nurl_api module=`,
+  `nurl_read_stdlib` and `nurl_grep` used it as the stdlib directory:
+  `module='core/vec.nu'` and `name='core/string.nu'` — the README's own
+  examples — were "not found". The stdlib root is now `$NURL_STDLIB/stdlib`
+  when it exists; `nurl_read_stdlib` also takes the import spelling
+  (`stdlib/core/string.nu`). `nurl_list_stdlib` answers the playground's
+  `{name, path, bytes}` JSON with those same relative paths, walked
+  in-process instead of shelling out to `find`.
 - **`nurl_check` is the front end only** (`nurlc --check`): the same
   type and borrow checks, without generating and discarding the IR.
 - **`nurl_api package=`** opens with the package's module index (each

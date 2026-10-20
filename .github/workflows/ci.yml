@@ -465,6 +465,22 @@ jobs:
         # for 'Fruit'. Reads the committed goldens' error/warning lines.
         run: ./tools/check_diag_nurl_types.sh
 
+      - name: nurl-mcp over stdio (inline source, formal/ docs, stdlib root)
+        # The local MCP server as an agent drives it: inline source is
+        # named by its `filename` in every diagnostic (never a temp path),
+        # check/build/run/fmt work on it, nurl_docs serves formal/ and its
+        # probe table, stdlib names resolve, nothing is left in $TMPDIR.
+        run: ./packages/nurl-mcp/tests/stdio_test.sh
+
+      - name: playground MCP end to end (native builds)
+        # nurlapi built from this checkout, run against the repo's own
+        # compiler/stdlib/docs, and driven over REST and /mcp: the
+        # diagnostics contract (every class lands in nurlc_errors, named
+        # by the caller's filename), traversal refusal, nurl_api package
+        # index, nurl_docs formal/, roadmap sections. Wasm and unikernel
+        # builds are covered by the image (they need wasi-sdk and qemu).
+        run: ./nurlapi/e2e_local.sh
+
       - name: metamorphic diagnostic-coverage gate
         # The same semantic situation, written N ways, must get the same
         # verdict from the checker. Every August 2026 borrow-checker fix

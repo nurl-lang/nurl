@@ -207,7 +207,16 @@ $ `stdlib/core/slice.nu`
 
 @ get_notice_path → String { ^ ( env_var_or `NURL_NOTICE_PATH` `/opt/nurl/NOTICE` ) }
 
-@ get_mcp_loopback_url → String { ^ ( env_var_or `NURL_MCP_LOOPBACK_URL` `http://127.0.0.1:8000` ) }
+// The MCP build tools POST to this server's own HTTP endpoints. Default:
+// the port it listens on — a fixed :8000 sent every build of a server on
+// another port (NURL_PORT) to whatever answered on 8000, or nowhere.
+@ get_mcp_loopback_url → String {
+    : String explicit ( env_var_or `NURL_MCP_LOOPBACK_URL` `` )
+    ? > ( string_len explicit ) 0 { ^ explicit } {}
+    : String u ( string_from `http://127.0.0.1:` )
+    ( string_push_int u ( get_port ) )
+    ^ u
+}
 // Listen port — NURL_PORT overrides the 8000 default (handy for local dev when
 // another instance already holds 8000, and for the WS relay smoke tests).
 @ get_port → i {

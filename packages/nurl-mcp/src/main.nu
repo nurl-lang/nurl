@@ -622,24 +622,17 @@ version = "0.0.0"
 // ── Tool: nurl_list_stdlib ──────────────────────────────────────────
 
 @ nm_tool_list_stdlib Json args → Json {
-    : String root ( env_var_or `NURL_STDLIB` `` )
+    : String root ( nm_stdlib_root )
     ? == ( string_len root ) 0 {
         ^ ( mcp_tool_result_error `NURL_STDLIB is not set — run via the installed toolchain shims, or export it manually` )
     } {}
-    : !Output ProcessErr r ( process_run3 `find` ( string_data root ) `-name` `*.nu` )
-    ?? r {
-        T o → {
-            ? ( output_success o ) {
-                : Json j ( mcp_tool_result_text ( output_stdout o ) )
-                ^ j
-            } {
-                : Json j ( nm_fail_from_output `listing failed` o T )
-                ^ j
-            }
-        }
-        F e → { ^ ( nm_proc_err e ) }
-    }
-    ^ ( mcp_tool_result_error `internal` )
+    // {name, path, bytes} per module, path relative to the stdlib root —
+    // the names nurl_read_stdlib and nurl_api module= take; the same
+    // listing the playground gives. Walked in-process (no `find`).
+    : Json arr ( json_arr_new )
+    ( msearch_walk_nu_files arr ( string_data root ) `` )
+    : String body ( json_stringify arr )
+    ^ ( mcp_tool_result_text ( string_data body ) )
 }
 
 // ── Tool: nurl_read_stdlib ──────────────────────────────────────────
@@ -660,32 +653,32 @@ version = "0.0.0"
     : ?Json nj ( json_obj_get args `name` )
     ?? nj {
         T nv → {
-            : s name ( json_str_data nv )
+            : ~ s name ( json_str_data nv )
             ? ( nm_has_dotdot name ) {
                 ^ ( mcp_tool_result_error `invalid name: must not contain ".."` )
             } {}
-            : String root ( env_var_or `NURL_STDLIB` `` )
+            : String root ( nm_stdlib_root )
             ? == ( string_len root ) 0 {
                 ^ ( mcp_tool_result_error `NURL_STDLIB is not set` )
             } {}
-            : String full ( string_with_cap 160 )
-            ? != ( nurl_str_starts name `/` ) 0 {
-                ( string_push_str full name )
-            } {
-                ( string_push_str full ( string_data root ) )
-                ( string_push_str full `/` )
-                ( string_push_str full name )
-            }
-            ? == ( nurl_str_starts ( string_data full ) ( string_data root ) ) 0 {
-                ^ ( mcp_tool_result_error `path escapes the stdlib root` )
+            // `stdlib/core/string.nu` (the import spelling) names the same
+            // module as `core/string.nu` (the listing's).
+            : ~ String rel ( string_from name )
+            ? ( string_starts_with rel `stdlib/` ) {
+                : String cut ( string_substr rel 7 - ( string_len rel ) 7 )
+                = rel cut
             } {}
+            ? ( string_starts_with rel `/` ) {
+                ^ ( mcp_tool_result_error `'name' is a path under the stdlib root (e.g. core/string.nu), not an absolute path` )
+            } {}
+            : String full ( path_join ( string_data root ) ( string_data rel ) )
             : !String IoErr rd ( read_file ( string_data full ) )
             ?? rd {
                 T contents → {
                     : Json j ( mcp_tool_result_text ( string_data contents ) )
                     ^ j
                 }
-                F e → { ^ ( mcp_tool_result_error `could not read that stdlib file` ) }
+                F e → { ^ ( mcp_tool_result_error `no such stdlib module — 'name' is a path from nurl_list_stdlib, e.g. core/string.nu` ) }
             }
         }
         F → {}
@@ -703,8 +696,25 @@ version = "0.0.0"
 // just the matching blocks. The registry search rides along: "is there
 // a package for X" works from any editor with only MCP tools.
 
-@ nm_stdlib_root → String {
+// $NURL_STDLIB is the toolchain prefix the shims export — the directory
+// that HOLDS stdlib/ (the compiler resolves `$ `stdlib/…`` against it) —
+// or, set by hand, the stdlib directory itself. Every tool here names a
+// module the way nurl_list_stdlib lists it and the playground does,
+// relative to the stdlib directory (`core/vec.nu`), so that is the root
+// they share. It was the prefix: `module='core/vec.nu'` and
+// `nurl_read_stdlib name='core/string.nu'` — the README's own examples —
+// were "not found" on every installed toolchain.
+@ nm_prefix → String {
     ^ ( env_var_or `NURL_STDLIB` `` )
+}
+
+@ nm_stdlib_root → String {
+    : String pre ( nm_prefix )
+    ? == ( string_len pre ) 0 { ^ pre } {}
+    : String sub ( path_join ( string_data pre ) `stdlib` )
+    : String probe ( path_join ( string_data sub ) `core/vec.nu` )
+    ? ( file_exists ( string_data probe ) ) { ^ sub } {}
+    ^ pre
 }
 
 // ── Tool: nurl_docs (shared engine: stdlib/ext/mcp_search) ──────────
@@ -717,7 +727,7 @@ version = "0.0.0"
 @ nm_docs_root → String {
     : String explicit ( env_var_or `NURL_DOCS` `` )
     ? > ( string_len explicit ) 0 { ^ explicit } {}
-    : String root ( nm_stdlib_root )
+    : String root ( nm_prefix )
     ? == ( string_len root ) 0 { ^ root } {}
     : String d ( path_join ( string_data root ) `docs` )
     ^ d
@@ -995,7 +1005,7 @@ version = "0.0.0"
     ( nm_schema_src_path ) F F T F
     \ Json a → Json { ^ ( nm_tool_fmt a ) } )
     ( mcp_server_add_tool_full srv `nurl_list_stdlib`
-    `List the .nu modules in the installed standard library (under $NURL_STDLIB).`
+    `List the .nu modules in the installed standard library: a JSON array of {name, path, bytes}, paths relative to the stdlib root (core/vec.nu) — the names nurl_read_stdlib and nurl_api module= take.`
     ( nm_schema_empty ) T F T F
     \ Json a → Json { ^ ( nm_tool_list_stdlib a ) } )
     ( mcp_server_add_tool_full srv `nurl_read_stdlib`
