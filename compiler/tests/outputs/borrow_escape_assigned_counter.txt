@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_escape_assigned_counter.nu:14: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ \ → i { = n + n 1 ^ n }
+compiler/tests/borrow_escape_assigned_counter.nu:19: error: passing a value that references a stack binding by pointer to 'thread_spawn' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+    : !Thread ThreadErr r ( thread_spawn \ → v { = n + n 1 } )
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

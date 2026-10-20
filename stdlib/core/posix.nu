@@ -187,7 +187,7 @@ $ `stdlib/core/cell.nu`
 // (typical caller passes 0). Returns the new fd or -1 with errno.
 // open(2) is likewise `int open(const char *, int, ...)`; `mode` is the
 // variadic argument. Same ABI reasoning as fcntl above.
-& `c` @ open s path i32 flags ... → i32
+& `c` @ open in s path i32 flags ... → i32
 
 // lseek(2): reposition the read/write head. `whence` is 0 (SET) /
 // 1 (CUR) / 2 (END) — universal POSIX values. Returns the new
@@ -223,7 +223,7 @@ $ `stdlib/core/cell.nu`
 // per platform (Linux glibc = 19, macOS = 21) and porting that
 // offset table into NURL buys nothing.
 
-& `c` @ opendir nocapture s path → *u
+& `c` @ opendir in s path → *u
 
 & `c` @ readdir *u dirp → *u
 

@@ -565,7 +565,7 @@ one that touches both code and either of them runs everything.
 | Job / step | What it checks |
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
-| soundness hole probes | `tools/fuzz/holes/check.sh` — all `h01–h287` soundness probes are rejected or run clean under sanitizers |
+| soundness hole probes | `tools/fuzz/holes/check.sh` — all `h01–h298` soundness probes are rejected or run clean under sanitizers |
 | formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1 and A2 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`) and fails on a `sorry` or an axiom beyond Lean's standard ones |
 | diagnostic coverage & anchor gates | `tools/check_diag_coverage.sh` and `tools/check_diag_anchor.sh` — every compiler diagnostic is exercised by a test and points at the right token |
 | self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |

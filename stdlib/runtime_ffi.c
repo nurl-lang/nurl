@@ -4703,31 +4703,55 @@ int nurl_pthread_create_owned(void *t, void *fn, void *env) {
  * _tryrdlock / _trywrlock take the lock when they can without waiting:
  * 1 taken, 0 not (WASI: always taken — one thread, nobody else holds it).
  */
+/* A thread asking for a lock it already holds for writing would wait for
+ * itself. pthreads says so (EDEADLK) instead of waiting; an SRWLOCK and the
+ * WASI mutex shim would just wait, so they remember their writer. Either
+ * way it is a panic: a caller that went on as if it held the lock would
+ * release it twice, and the guards the unwind drops let go of what the
+ * thread does hold. */
+static void nurl__rwlock_failed(const char *how, int rc) {
+    char msg[160];
+    snprintf(msg, sizeof msg, "nurl: cannot take an RwLocked for %s: %s", how,
+             rc == EDEADLK ? "this thread already holds it for writing (it would wait for itself)"
+                           : strerror(rc));
+    nurl_panic(msg);
+}
 #if defined(__wasi__)
-long long nurl_rwlock_size(void)   { return 16; }
-void nurl_rwlock_init(void *l)     { pthread_mutex_init(l, NULL); }
-void nurl_rwlock_rdlock(void *l)   { pthread_mutex_lock(l); }
-void nurl_rwlock_wrlock(void *l)   { pthread_mutex_lock(l); }
-void nurl_rwlock_rdunlock(void *l) { pthread_mutex_unlock(l); }
-void nurl_rwlock_wrunlock(void *l) { pthread_mutex_unlock(l); }
-void nurl_rwlock_destroy(void *l)  { pthread_mutex_destroy(l); }
-long long nurl_rwlock_tryrdlock(void *l) { pthread_mutex_lock(l); return 1; }
-long long nurl_rwlock_trywrlock(void *l) { pthread_mutex_lock(l); return 1; }
+typedef struct { pthread_mutex_t m; void *owner; } NurlRwShim;
+/* A thread's identity: the address of a thread-local of its own. */
+static __thread char nurl__rw_me;
+long long nurl_rwlock_size(void)   { return (long long)sizeof(NurlRwShim); }
+void nurl_rwlock_init(void *l)     { NurlRwShim *r = l; pthread_mutex_init(&r->m, NULL); r->owner = NULL; }
+static int nurl__rw_mine(NurlRwShim *r) { return r->owner == (void *)&nurl__rw_me; }
+static void nurl__rw_take(NurlRwShim *r) { pthread_mutex_lock(&r->m); r->owner = (void *)&nurl__rw_me; }
+void nurl_rwlock_rdlock(void *l)   { if (nurl__rw_mine(l)) nurl__rwlock_failed("reading", EDEADLK); nurl__rw_take(l); }
+void nurl_rwlock_wrlock(void *l)   { if (nurl__rw_mine(l)) nurl__rwlock_failed("writing", EDEADLK); nurl__rw_take(l); }
+void nurl_rwlock_rdunlock(void *l) { NurlRwShim *r = l; r->owner = NULL; pthread_mutex_unlock(&r->m); }
+void nurl_rwlock_wrunlock(void *l) { NurlRwShim *r = l; r->owner = NULL; pthread_mutex_unlock(&r->m); }
+void nurl_rwlock_destroy(void *l)  { pthread_mutex_destroy(&((NurlRwShim *)l)->m); }
+long long nurl_rwlock_tryrdlock(void *l) { if (nurl__rw_mine(l)) return 0; nurl__rw_take(l); return 1; }
+long long nurl_rwlock_trywrlock(void *l) { if (nurl__rw_mine(l)) return 0; nurl__rw_take(l); return 1; }
 #elif defined(_WIN32) && defined(NURL_WIN32_PTHREAD_SHIM)
-long long nurl_rwlock_size(void)   { return (long long)sizeof(SRWLOCK); }
-void nurl_rwlock_init(void *l)     { InitializeSRWLock((SRWLOCK *)l); }
-void nurl_rwlock_rdlock(void *l)   { AcquireSRWLockShared((SRWLOCK *)l); }
-void nurl_rwlock_wrlock(void *l)   { AcquireSRWLockExclusive((SRWLOCK *)l); }
-void nurl_rwlock_rdunlock(void *l) { ReleaseSRWLockShared((SRWLOCK *)l); }
-void nurl_rwlock_wrunlock(void *l) { ReleaseSRWLockExclusive((SRWLOCK *)l); }
+typedef struct { SRWLOCK l; volatile DWORD writer; } NurlRwWin;
+long long nurl_rwlock_size(void)   { return (long long)sizeof(NurlRwWin); }
+void nurl_rwlock_init(void *l)     { NurlRwWin *r = l; InitializeSRWLock(&r->l); r->writer = 0; }
+void nurl_rwlock_rdlock(void *l)   { NurlRwWin *r = l; if (r->writer == GetCurrentThreadId()) nurl__rwlock_failed("reading", EDEADLK); AcquireSRWLockShared(&r->l); }
+void nurl_rwlock_wrlock(void *l)   { NurlRwWin *r = l; if (r->writer == GetCurrentThreadId()) nurl__rwlock_failed("writing", EDEADLK); AcquireSRWLockExclusive(&r->l); r->writer = GetCurrentThreadId(); }
+void nurl_rwlock_rdunlock(void *l) { ReleaseSRWLockShared(&((NurlRwWin *)l)->l); }
+void nurl_rwlock_wrunlock(void *l) { NurlRwWin *r = l; r->writer = 0; ReleaseSRWLockExclusive(&r->l); }
 void nurl_rwlock_destroy(void *l)  { (void)l; }
-long long nurl_rwlock_tryrdlock(void *l) { return TryAcquireSRWLockShared((SRWLOCK *)l) ? 1 : 0; }
-long long nurl_rwlock_trywrlock(void *l) { return TryAcquireSRWLockExclusive((SRWLOCK *)l) ? 1 : 0; }
+long long nurl_rwlock_tryrdlock(void *l) { NurlRwWin *r = l; if (r->writer == GetCurrentThreadId()) return 0; return TryAcquireSRWLockShared(&r->l) ? 1 : 0; }
+long long nurl_rwlock_trywrlock(void *l) {
+    NurlRwWin *r = l;
+    if (r->writer == GetCurrentThreadId() || !TryAcquireSRWLockExclusive(&r->l)) return 0;
+    r->writer = GetCurrentThreadId();
+    return 1;
+}
 #else
 long long nurl_rwlock_size(void)   { return (long long)sizeof(pthread_rwlock_t); }
 void nurl_rwlock_init(void *l)     { pthread_rwlock_init((pthread_rwlock_t *)l, NULL); }
-void nurl_rwlock_rdlock(void *l)   { pthread_rwlock_rdlock((pthread_rwlock_t *)l); }
-void nurl_rwlock_wrlock(void *l)   { pthread_rwlock_wrlock((pthread_rwlock_t *)l); }
+void nurl_rwlock_rdlock(void *l)   { int rc = pthread_rwlock_rdlock((pthread_rwlock_t *)l); if (rc) nurl__rwlock_failed("reading", rc); }
+void nurl_rwlock_wrlock(void *l)   { int rc = pthread_rwlock_wrlock((pthread_rwlock_t *)l); if (rc) nurl__rwlock_failed("writing", rc); }
 void nurl_rwlock_rdunlock(void *l) { pthread_rwlock_unlock((pthread_rwlock_t *)l); }
 void nurl_rwlock_wrunlock(void *l) { pthread_rwlock_unlock((pthread_rwlock_t *)l); }
 void nurl_rwlock_destroy(void *l)  { pthread_rwlock_destroy((pthread_rwlock_t *)l); }

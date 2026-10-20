@@ -6,6 +6,134 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Threads are in the memory model. A multi-threaded relational database
+written in safe NURL (`packages/nurldb`: a buffer pool, a write-ahead log
+with group commit, MVCC with a lock manager and deadlock detection, B+tree
+indexes with latch crabbing, crash recovery, SQL, a TCP server — no
+`unsafe` function) needed what the standard library did not have: an
+atomic word, a reader-writer lock whose read guards many threads hold at
+once, a file read and written at offsets by many threads. Building it
+found eleven holes in the memory guarantee (h288–h298) and a dozen places
+where the language refused, or mis-compiled, what it should take; each is
+fixed where it lives. Grammar v2.10: FFI parameter markers and a foreach
+over a field.
+
+### Added
+
+- **std/atomic.nu: `Atomic`** — a shared word changed only with atomic
+  instructions (load, store, fetch-add/sub, swap, compare-and-swap,
+  fetch-max); `Send` and `Sync`.
+- **std/rwlock.nu: `RwLocked [A]`** — many readers or one writer. A read
+  guard (`RGuard`, `% Frozen`) lends a read-only view, a write guard
+  (`WGuard`) a changeable one; try variants for a caller that must not
+  wait; guards are released by their drop, through a panic too. A thread
+  that asks for a lock it already holds for writing panics instead of
+  waiting for itself (POSIX, SRWLOCK on Windows and the WASI shim alike);
+  a failed lock call panics instead of carrying on unlocked.
+- **`% Frozen`** (core/marker.nu): what a value of the type lends is
+  read-only, checked as an `Arc`'s payload is; a struct holding an `Arc` or
+  a frozen value lends frozen views too.
+- **std/pfile.nu: `PFile`** — a file read and written at offsets (pread /
+  pwrite into and out of slices), shared by any number of threads. On
+  Windows positional I/O is ReadFile/WriteFile with an OVERLAPPED offset
+  instead of seek-then-read, which raced between threads.
+- **std/thread.nu: `locked_await`** — wait on a `Locked` value until a
+  closure says it is done; `locked_update` / `locked_apply` / `locked_set`
+  wake its waiters.
+- core/slice.nu `slice_copy` and `slice_move`; std/deflate.nu
+  `crc32_slice` / `crc32_update_slice` over a view.
+- **FFI parameter markers** (grammar v2.10): `in` — the C function only
+  reads the argument during the call, keeping and freeing nothing, so a
+  temporary handed there is released after the call and a frozen view may
+  be passed; `sync` — it changes what is there only atomically or under a
+  lock of its own; `nocapture` — its result holds nothing of it. The
+  standard library's path parameters are `in` (`file_delete ( nurl_str_cat
+  dir `/data` )` leaked the path).
+- **A foreach over a field**: `~ x . s items { … }` (grammar v2.10).
+  Changing the container a loop walks is refused by path: a loop over
+  `. s a` may change `. s b`.
+- **A closure that assigns a `: ~` binding, or hands it to an `inout`
+  parameter, captures it by reference**, so a callback counts into, bumps
+  or replaces its caller's binding — a closure binding included; such a
+  closure cannot escape its frame (the stack-reference rules refuse
+  returning it or handing it to a thread). The old capture by copy dropped
+  the write silently, or worse (h298); the "assignment is discarded when
+  the closure returns" warning is gone with it. A capture taken by value
+  is as mutable as its binding.
+
+### Fixed
+
+- **h288**: a helper taking a struct that holds an `Arc` lent the payload
+  unfrozen.
+- **h289**: a foreign function writing through a `*T` parameter was no
+  change to anything; an unmarked `*T` is a write now, so a frozen view
+  handed to it is refused.
+- **h290**: a struct holding a move-only library handle (a lock guard) had
+  no drop: the guard was never released.
+- **h291**: a panic past a struct holding a guard, or past a `% Drop` impl
+  written below its first use, skipped the drop.
+- **h292**: a String / Vec made in a call's argument leaked when the
+  callee panicked.
+- **h293**: a thread that ended kept its last panic message.
+- **h294**: a value whose drop registration was written at module end
+  stayed registered after it was dropped; a later panic released it again.
+- **h295**: a `: ~` copy of a parameter passed `inout` to a function that
+  replaces an owned field of it released the caller's field. Refused now,
+  by a summary of which functions replace a field of what they are handed
+  (directly or through a call).
+- **h296**: a value a `??` arm hands out as the match's value stayed
+  registered for the arm's unwind.
+- **h297**: a closure handed to an `inout` parameter and replaced there
+  was taken for the callee's own: the new environment was freed when the
+  callee returned, the old one leaked, and the caller ran freed memory. A
+  closure binding reached through a pointer is now a place that owns its
+  environment, as a struct field is (docs/MEMORY.md §7.5); a closure
+  binding's owner slot is a flag, and what is dropped is the environment
+  its value holds — right after a callee replaced it, a panic included.
+- **h298**: a closure handing a captured `: ~` String to an `inout`
+  parameter took it by value; the callee replaced the copy and released
+  the buffer the caller's binding still held. (A number's write was
+  lost.)
+- A closure assigning a captured closure binding emitted invalid IR (a
+  register of the enclosing function).
+- A bare `{ … }` drops what it binds at its `}`, and a block that computes
+  a number (`: i n { … }`) drops at its end too: a guard bound there held
+  its lock until the function returned.
+- A struct of a generic type holding a guard (`( Pin WGuard )`) had no
+  drop function emitted (undefined `WGuard_drop__Fr`).
+- `= x ? c ( fresh ) ( fresh )` was taken for a borrow of whatever `x`
+  joined last.
+- Handing a number or a flag to a `sink` parameter copies it
+  (`( locked_new [i] n )` twice in one literal was "released by field 2").
+- A `~ x xs` loop's element is a binding of its own for the borrow checker:
+  an earlier `x` that was moved no longer makes every use in the body a
+  use after move, and its slot no longer outlives the loop (invalid IR).
+- `? c { … } { … }` followed by a block statement is not an arity error
+  when both arms are braced.
+- `\ ( Slice u ) s → …`: a closure's first parameter may be of a generic
+  struct type.
+- `sort_by` over a `Vec` of raw pointers emitted a clone call that does
+  not exist (invalid IR).
+- A loop's break is tracked by the loop, so a `~ T` loop that only returns
+  is not taken for one that breaks.
+
+### Packages
+
+- **nurldb 0.1.0** (new): a relational database in safe NURL,
+  multi-threaded throughout — 8 KiB checksummed pages; a buffer pool of
+  reader-writer-latched frames with atomic pins and clock eviction that
+  keeps the WAL rule; a log with group commit (one flusher thread, ~4
+  commits per `fdatasync` from eight sessions); snapshot isolation with a
+  lock manager, FIFO waits and deadlock detection; B+tree indexes with
+  latch crabbing; recovery with torn-tail cut, redo and full-page images;
+  SQL with joins, aggregation run on four threads, EXPLAIN; a TCP server
+  with a thread per connection. 151 tests, among them a child killed with
+  SIGKILL mid-flight whose every acknowledged commit survives.
+- data 0.2.6: a streamed dataset read on several threads reads each row at
+  its own offset (`PFile`); the frozen check found the shared C stream.
+
 ## [0.74.0] — 2026-10-19
 
 A closure type and a trait object are generic type arguments like any

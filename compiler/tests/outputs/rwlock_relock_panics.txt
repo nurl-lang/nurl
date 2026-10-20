@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+nurl: cannot take an RwLocked for reading: this thread already holds it for writing (it would wait for itself)
+taken again

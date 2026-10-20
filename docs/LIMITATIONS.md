@@ -12,7 +12,7 @@ limitations — they live with each module (the `stdlib/**` file headers and
 
 **No open soundness holes.** Every safe program found accepted and faulting
 is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h287`, [`MEMORY.md` §6.2](MEMORY.md));
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h298`, [`MEMORY.md` §6.2](MEMORY.md));
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).

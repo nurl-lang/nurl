@@ -8,7 +8,7 @@ Anything marked done here has a regression test in
 point.
 
 _Last reviewed: 2026-10-19 · Current release: **0.74.0** · Language: **Grammar
-v2.9** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+v2.10** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.9).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.10).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types, closure types and trait objects), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
@@ -149,7 +149,7 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.9** (snapshots through v2.2 in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.10** (snapshots through v2.2 in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
@@ -157,7 +157,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   SIMD lane type (v2.5); the **`simd` CPU-dispatch prefix** on `@`
   declarations (v2.6); the **`inline` always-inline prefix** (v2.7); the
   **`unsafe` raw-memory prefix** (v2.8); the **`raw` caller-vouched
-  prefix** (v2.9); and locked the prefix-arity
+  prefix** (v2.9); **FFI parameter markers** (`in`, `sync`, `nocapture`)
+  and a foreach over a field (v2.10); and locked the prefix-arity
   grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the

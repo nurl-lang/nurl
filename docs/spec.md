@@ -476,7 +476,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h287`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h298`, is closed and held by a probe in `tools/fuzz/holes/`).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -1136,6 +1136,7 @@ compiler:
 % Sync [T] { }      // two threads may reach ONE T at the same time
 % NotSend [T] { }   // T must never cross a thread boundary
 % NotSync [T] { }   // two threads must never reach one T at once
+% Frozen [T] { }    // what a T lends is read-only (an RwLocked read guard)
 ```
 
 Unlike every other trait, `Send` and `Sync` are **derived, not implemented**.
@@ -1334,13 +1335,14 @@ Semantics (v2.3, 2026-08-03):
 The `~` token at statement position is *speculatively* parsed in this
 order:
 
-1. `~ IDENT IDENT …` — foreach
+1. `~ IDENT IDENT …` or `~ IDENT . …` — foreach
 2. `~ expr {` — while loop
 3. otherwise — complement expression used for its side effects
 
 ```
 ~ cond { body }              // while
 ~ x xs { ( puts x ) }        // foreach (xs must have slice type)
+~ x . bag items { … }        // foreach over a field
 ```
 
 In a foreach, the element binding is a *borrow* from the iterated
@@ -1957,10 +1959,11 @@ two names for one value. `locked_update` and `locked_apply`
 value where it lives, without moving it out and back. So are `vec_update`
 and `vec_apply` (stdlib/core/vec.nu): they run one on a Vec's element in
 place, the Vec passed `inout` so that a closure able to grow or shrink it
-under that element is rejected. A closure captures a scalar it only reads
-by value; a `: ~` number or flag it assigns, by pointer (§8.4), so a callback
-can count or set a flag in its caller's binding — and, holding a pointer
-into that frame, cannot outlive it (§9.3). A result can also come back as
+under that element is rejected. A closure captures a binding it only reads
+by value; a `: ~` binding it assigns or hands to an `inout` parameter, by
+pointer (§8.4), so a callback
+can count, set a flag or hand a result out into its caller's binding —
+and, holding a pointer into that frame, cannot outlive it (§9.3). A result can also come back as
 the closure's return value (`vec_apply`, `locked_apply`) or through an
 `inout` parameter.
 
@@ -1978,6 +1981,19 @@ allocated for the result.
 
 The parameter may be a struct too (`inout Timespec ts`): the C function
 fills the caller's local in place.
+
+A pointer or string parameter may say what the C function does with it
+(grammar v2.10): `in` — it only reads, during the call (it keeps and frees
+nothing: a temporary handed there is released after the call, and a frozen
+view may be passed); `sync` — it changes what is there only atomically or
+under a lock of its own; `nocapture` — its result holds nothing of it.
+Unmarked, a `*T` is taken to be written through, and either kind may be
+kept or freed.
+
+```
+& `c` @ remove in s path → i32
+: !v IoErr r ( file_delete ( nurl_str_cat dir `/data` ) )   // the path is released
+```
 
 A foreign function that returns a string it allocated, for the caller to
 release, declares its result `sink s`: the binding the result lands in
@@ -2098,12 +2114,16 @@ error. Freeing an env by hand is a compile
 error. See [`docs/MEMORY.md` §7.5](MEMORY.md).
 
 A closure *captures by pointer* a mutable (`: ~`) multi-field struct
-binding, and a mutable number or flag (an integer, float or `b` binding)
-that its body assigns (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the
-lifetime rule): the env block stores the caller's alloca pointer rather
-than a value snapshot, so writes through the closure reach the caller's
-binding — `( vec_each v \ i x → v { = n + n 1 } )` counts into `n`.
-One that only reads a scalar takes a snapshot of it, as before. A
+binding, and any other mutable binding its body assigns or hands to an
+`inout` parameter (see
+[`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule): the env block
+stores the caller's alloca pointer rather than a value snapshot, so writes
+through the closure reach the caller's binding — `( vec_each v \ i x → v
+{ = n + n 1 } )` counts into `n`, and `recover \ → v { = out ( f ) }`
+hands `f`'s result out. A value assigned that way replaces the binding's,
+which is dropped. One that only reads a binding takes a snapshot of it, as
+immutable as the binding (an immutable one cannot reach an `inout`
+parameter through it either). A
 by-pointer capture borrows the caller's stack frame and MUST NOT
 out-live it. The borrow checker rejects an escaping by-ref capture
 (returning the closure, pushing it into a longer-lived container,
@@ -2187,7 +2207,7 @@ that owns its buffer is the exception: `: s b a` makes `b` a view of
 ### 9.3 Escape analysis
 
 A closure capturing a binding by pointer (a `: ~` multi-field struct, or
-a `: ~` number or flag it assigns — see §8.4) is a *stack reference*. Returning it, pushing it
+a `: ~` binding it assigns or hands to an `inout` parameter — see §8.4) is a *stack reference*. Returning it, pushing it
 into a longer-lived container, spawning a thread that holds it, or
 assigning it into a longer-lived binding is rejected. The escape rule
 also covers an aggregate (struct) literal that holds such a closure,
@@ -2236,7 +2256,10 @@ stdlib container mutator on its receiver arg 0
 (`vec_push` / `vec_insert` / `vec_remove` / `vec_pop` / `vec_clear` /
 `vec_set` / `vec_set_len` / `vec_reserve` / `vec_shrink_to_fit` /
 `vec_extend` / `vec_free` / `vec_free_with` / `vec_swap` /
-`vec_reverse`) or as an `inout` argument — is rejected.
+`vec_reverse`) or as an `inout` argument — is rejected. A loop over a
+field (`~ x . obj items`) borrows that field: mutating `obj.items`, or
+handing `obj` on whole that way, is rejected in the body; another field
+of `obj` is not.
 
 Index-based mutation loops (`~ i k 0 ...`) borrow nothing and stay
 legal.
@@ -2347,10 +2370,16 @@ is declared `sink` ([`docs/MEMORY.md` §2.13](MEMORY.md)).
 
 An `Arc` freezes its payload once constructed: `arc_get` returns a read-only
 borrow, any call that could mutate the payload or a field of it is rejected in
-safe code, and `arc_set` is `raw` (`unsafe`-only). Mutable state shared across
-threads lives in a `Locked [T]` (`locked_new`, `locked_with`), and thread/fiber
-spawns enforce structural `Send` / `NotSend` bounds on captures
-([`docs/MEMORY.md` §6.5](MEMORY.md)).
+safe code, and `arc_set` is `raw` (`unsafe`-only). The same holds for whatever
+a type marked `% Frozen` lends — an `RwLocked` read guard's value
+(`rguard_get`), so many readers may hold it at once — and for a struct that
+holds an `Arc` or a frozen value. Mutable state shared across threads lives in
+a `Locked [T]` (`locked_new`, `locked_update`, `locked_await`), an
+`RwLocked [T]` taken for writing (`rw_write`, `wguard_get`), or an `Atomic`
+(std/atomic.nu); thread/fiber spawns enforce structural `Send` / `NotSend`
+bounds on captures ([`docs/MEMORY.md` §6.5](MEMORY.md)). A thread that asks
+for an `RwLocked` it already holds for writing panics instead of waiting for
+itself.
 
 ### 9.14 What is NOT checked
 
@@ -2361,7 +2390,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h287`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h298`) is
 closed and held by a probe in `tools/fuzz/holes/`.
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's

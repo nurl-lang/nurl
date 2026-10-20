@@ -1,10 +1,13 @@
-// closure_snapshot_assign_released.nu — a value assigned over a by-value
-// capture inside a closure is released when the closure returns.
+// closure_snapshot_assign_released.nu — a value a closure assigns over a
+// captured String / Vec replaces the binding's, and the one it replaces
+// is released.
 //
-// A String / Vec captured by value is a snapshot: the body may scratch it,
-// and the write is discarded on return (the compiler warns). The snapshot
-// borrows the env's value, but a fresh value assigned over it had no owner
-// and leaked on every call.
+// A closure that assigns a `: ~` binding captures it by reference: the
+// write reaches the binding (it used to land on a per-call snapshot and
+// vanish, with only a warning). The value replaced — the binding's own,
+// or the one an earlier call assigned — is dropped by the assignment, so
+// fifty rounds of two calls each leave the live allocation count where it
+// was.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -27,7 +30,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
     }
     : i a ( scratch )
     : i b ( scratch )
-    // The captured bindings themselves are untouched.
+    // The bindings hold what the second call assigned.
     ^ + + a b + ( vec_len [u] got ) ( string_len name )
 }
 

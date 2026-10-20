@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+bumped 3
+grown xxx
+replaced new
+field 3 new
+past an operator 60
+thread 5

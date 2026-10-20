@@ -207,7 +207,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v IoErr { F e }
 }
 
-& `c` @ chmod s path i32 mode → i32
+& `c` @ chmod in s path i32 mode → i32
 
 // POSIX chmod(2). `mode` is the permission word as a plain integer, so
 // the familiar octal literals are written out in decimal: 0o600 = 384,
@@ -251,15 +251,15 @@ $ `stdlib/core/rcbox.nu`
 // value: Windows has no st_blocks and no user database, and the
 // unikernel has neither plus no nanosecond timestamps.
 
-& `c` @ nurl_stat_into s path inout FileStat out → i
+& `c` @ nurl_stat_into in s path inout FileStat out → i
 
-& `c` @ nurl_lstat_into s path inout FileStat out → i
+& `c` @ nurl_lstat_into in s path inout FileStat out → i
 
 & `c` @ nurl_fstat_into i fd inout FileStat out → i
 
 & `c` @ nurl_stat_kind i mode → i
 
-& `c` @ nurl_utimes_set s path i atime i ansec i mtime i mnsec i follow → i
+& `c` @ nurl_utimes_set in s path i atime i ansec i mtime i mnsec i follow → i
 
 & `c` @ nurl_user_name i uid → sink s
 
@@ -342,7 +342,7 @@ $ `stdlib/core/rcbox.nu`
 // an unanswerable question are different, and a caller that treats the
 // second as the first refuses to write for no reason.
 
-& `c` @ nurl_statfs_into s path inout FsStat out → i
+& `c` @ nurl_statfs_into in s path inout FsStat out → i
 
 : FsStat {
     i bsize  // preferred I/O size
@@ -446,7 +446,7 @@ $ `stdlib/core/rcbox.nu`
 // Windows is NOT supported here; CreateSymbolicLinkW needs a privilege
 // (`SeCreateSymbolicLinkPrivilege`) most accounts lack — Win32 users
 // of nurlpkg should fall back to copying.
-& `c` @ symlink s target s linkpath → i32
+& `c` @ symlink in s target in s linkpath → i32
 
 & `c` @ nurl_hard_link s target s linkpath → i32
 
@@ -476,7 +476,7 @@ $ `stdlib/core/rcbox.nu`
 // POSIX readlink(2) — writes the symlink's target into `buf` (NOT
 // NUL-terminated) and returns the byte count, or -1 with errno set
 // (EINVAL when `path` is not a symlink). `bufsiz` caps the write.
-& `c` @ readlink s path *u buf i bufsiz → i
+& `c` @ readlink in s path *u buf i bufsiz → i
 
 // Read the target a symbolic link points to, as an owned String.
 // Returns IoErr {Other} when `path` is not a symlink (errno = EINVAL),
@@ -692,17 +692,17 @@ unsafe @ __fd_write_all i fd ( Vec u ) v → i {
 // errno set. Used for non-directory entries during recursive removal —
 // nurl_file_del discards its return code, and file_delete's stat-based
 // existence probe would mis-report a dangling symlink as NotFound.
-& `c` @ unlink s path → i32
+& `c` @ unlink in s path → i32
 
 // Runtime filesystem helpers (resolved from runtime.o; libc is always
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
-& `c` @ nurl_path_type s path → i
+& `c` @ nurl_path_type in s path → i
 
 // The same classification FOLLOWING symlinks (stat, not lstat), so a link
 // to a directory answers 2 and can be descended. glob(3) resolves links in
 // intermediate path components, so the glob helpers below use this one;
 // dir_remove_all deliberately keeps the unlinked answer above.
-& `c` @ nurl_path_type_follow s path → i
+& `c` @ nurl_path_type_follow in s path → i
 
 // ── nurl_file_* via libc stdio ─────────────────────────────────────
 // fopen / fclose / fputs / fwrite / fputc / fread / feof come from
@@ -752,11 +752,11 @@ unsafe @ __fd_write_all i fd ( Vec u ) v → i {
 // uses F_OK (0) for "does this path exist at all". `mkdir` mode is
 // 0755 (decimal 493).
 
-& `c` @ remove s path → i32
+& `c` @ remove in s path → i32
 
-& `c` @ mkdir s path i32 mode → i32
+& `c` @ mkdir in s path i32 mode → i32
 
-& `c` @ rmdir s path → i32
+& `c` @ rmdir in s path → i32
 
 @ nurl_file_exists s path → i {
     ? == # i path 0 { ^ 0 } {}

@@ -47,7 +47,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ socketpair i32 domain i32 type i32 proto inout __FdPair sv → i32
 
-& `c` @ unlink s path → i32
+& `c` @ unlink in s path → i32
 
 : | UnixErr {
     UnixSocket  // socket() failed (or AF_UNIX unsupported on this OS)

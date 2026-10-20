@@ -1,7 +1,7 @@
 // should_warn_byval_param_field_store.nu — assigning to a FIELD of a
 // by-value struct parameter is a silent lost write.
 //
-// The parameter-context sibling of should_warn_byval_capture_assign:
+// The parameter-context sibling of the closure-capture dead-store warning:
 // the same violation ("this write goes nowhere"), one context over. A
 // struct parameter arrives by value, so `= . p field v` lands in the
 // callee's own copy and the caller never sees it. Value semantics are
