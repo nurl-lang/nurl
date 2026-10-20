@@ -168,6 +168,9 @@ jobs:
             if (-not (($err -join "`n") -match "bad\.nu:1:")) { throw "$mode : --stdin diagnostics do not name bad.nu: $err" }
             Write-Host "$mode OK"
           }
+          # The bad.nu build above fails on purpose; its exit code must not
+          # become the step's.
+          exit 0
 
       - name: Build package manager for native process and installed-driver regressions
         if: ${{ !inputs.update_goldens }}
