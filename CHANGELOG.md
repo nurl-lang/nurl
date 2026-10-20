@@ -6,6 +6,63 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A closure no longer outlives what it reads (h299–h302, h304–h309).**
+  Probing `map_iter`'s doc comment ("do NOT free the map until iteration
+  is finished") found that the borrow checker did not tie a closure to
+  what it captured:
+  - **h299**: a closure a call hands back over an argument it captured
+    without taking it over (`: f ( mkc x )`) stayed usable after the
+    caller released `x`. Which parameters a returned closure lends
+    (`retclo`) was known, but only to reject returning it past them; it is
+    a source of the call's result now, so `f` holds a view of `x`.
+  - **h300, h301**: the same through the standard library —
+    `iter_from_vec` after its Vec was released, and `map_iter` after its
+    map was. `map_iter` captured a raw pointer to the map's control
+    block, which no summary could see; it captures the map and reads the
+    block on each call.
+  - **h302**: a returned closure over a parameter that owns memory but is
+    not a handle (an option of a String) was not recorded as lending it.
+  - **h304, h305**: a view a nested call lends, stored by the callee
+    (`( wrapv ( string_data x ) )`), was not a view of `x` in the result,
+    and an iterator chain over a temporary source (`( iter_map (
+    iter_from_vec v ) f )`) held nothing of `v`: a `sink` parameter the
+    returned closure takes over (`retcap`) now carries what its argument
+    reaches.
+  - **h306, h307**: a closure literal holds a copy of a handle it
+    captures by value (a `: ~` Vec or String it only reads); giving the
+    binding a new value — with `=`, or through an `inout` callee that
+    replaces it — released what the copy pointed at. A handle captured by
+    value is a dependency of the closure now: the closure ends when the
+    value does — released, given a new value, a field of it replaced —
+    not when it grows or its elements change (it reads them through the
+    handle when it runs). `borrow_closure_capture_use_after_free` had
+    this shape as a control (freed, rebound, called): ASan says it read
+    the freed Vec; it is a positive now.
+  - **h308, h309**: h307 for a closure a call returned, over a Vec, and
+    over a struct one of whose fields the callee replaces.
+  A closure stored into an owner (a container, a struct field) copies in
+  what it holds a handle of, as before: storing one is no dependency.
+- **h303: `map_keys` / `map_values` over owned keys leaked them and
+  emptied the map's slots.** An element read through a pointer and handed
+  to `vec_push` was both copied (the callee keeps it) and moved out of its
+  slot (the callee consumes it): the original leaked, and the map was
+  left holding empty keys. A callee that keeps a copy no longer also
+  empties the slot, as for a struct field.
+
+### Changed
+
+- Standard-library doc comments that still described the rules from
+  before the memory guarantee describe what the checker enforces:
+  `map_iter`, `map_keys`, `map_values` (std/hashmap.nu), `iter_from_vec`,
+  `iter_repeat`, `iter_zip` and the source-mutation note (std/iter.nu),
+  and the note on iterator pairs (core/pair.nu) — the pairs and vectors
+  these hand out own their elements, and an iterator's source must
+  outlive it (changing it in between is fine).
+
 ## [0.76.0] — 2026-10-20
 
 The toolchain, read by an agent. Every compiler error a tool parses now

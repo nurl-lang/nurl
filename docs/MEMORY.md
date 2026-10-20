@@ -594,6 +594,20 @@ owner depend on the captures: releasing a capture while the owner may
 still run the closure is an error. Loading a closure value, and dropping
 the closure's own environment at the end of its scope, is not a use.
 
+A closure holds a copy of the handle of a value it captures by value —
+and so does one a call returns over an argument it captured without
+taking it over (`: f ( mkc x )`, an iterator from `iter_from_vec` or
+`map_iter`), or through a combinator that took such a closure over
+(`( iter_map ( iter_from_vec v ) g )`). It reads through that copy when
+it runs, so it ends when the value does: the binding released, given a
+new value — with `=`, or by a callee that may replace the `inout`
+argument or an owned field of it — or a field of it replaced. The value
+growing, or its elements set, removed or cleared, does not end it; the
+closure reads what the value holds then (h299–h309). Returning such a
+closure past the value is rejected as returning any view is. A closure
+stored into an owner — a container, a struct field — copies in what it
+holds a handle of, so the owner does not depend on that.
+
 The mechanized proof (`formal/A2`, [`RULES.md`](../formal/RULES.md))
 covers this rule, with one difference on the conservative side: the
 calculus admits, beside a closure that changes a binding, another closure
@@ -771,7 +785,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h298):
+all are closed, each a probe CI now holds (h142–h309):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1109,7 +1123,23 @@ replaced through an `inout` parameter was taken for the callee's own —
 its new environment freed on return, the old one leaked (h297; §7.5) —
 and a closure handing a captured binding to an `inout` parameter took the
 binding by value, so a String the callee replaced was released under the
-caller (h298; §2.3). No hole is known.
+caller (h298; §2.3).
+
+Probing what the standard library's doc comments still asked of callers
+(`map_iter`: "do NOT free the map until iteration is finished") found
+eleven more (h299–h309), all closures that outlived what they read. A
+closure a call returns over an argument it captured stayed usable after
+the caller released the argument — in user code (h299) and in the
+library's iterators (h300, and h301, where `map_iter` captured a raw
+pointer the checker could not see); an option-of-String parameter was
+not recorded as captured at all (h302); a nested call's view, stored by
+the callee, and an iterator chain over a temporary source held nothing
+of what they read (h304, h305); and a closure holding a copy of a handle
+it captured by value outlived the handle when the binding was given a
+new value — directly (h306) or by an `inout` callee replacing it or a
+field of it (h307–h309). `map_keys` over owned keys copied each key and
+emptied its slot too, leaking the key and corrupting the map (h303;
+§7.6). No hole is known.
 
 The rules that carry it:
 
@@ -1313,7 +1343,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h298`) to the rule that rejects it. See
+  (`h01–h309`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

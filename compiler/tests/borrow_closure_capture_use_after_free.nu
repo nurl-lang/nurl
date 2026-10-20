@@ -20,11 +20,12 @@
 // POSITIVEs below, one per spelling: read, mutate, free-then-capture,
 // invoke through a helper that only calls its parameter, free through a
 // `sink` parameter, a closure captured by another closure, and the `=`
-// rebinding form.
+// rebinding form — and a container freed and rebound to a fresh handle
+// before the second call: the closure's copy is still the old handle
+// (h306; this was a control until ASan said otherwise).
 //
-// CONTROLs: the same programs with the free AFTER the last use; a container
-// rebound to a fresh handle before the second call; an inline `vec_each`
-// callback; and — the shape that decides the rule — the closure's own env
+// CONTROLs: the same programs with the free AFTER the last use; an inline
+// `vec_each` callback; and — the shape that decides the rule — the closure's own env
 // being dropped at the end of its scope, after what it captured was freed
 // (docs/MEMORY.md §7.4). That drop is not a use of the captures, and nor is
 // a mere VALUE load of a closure: reading either as one would reject correct
@@ -47,7 +48,8 @@ $ `stdlib/core/string.nu`
     : i n1 ( ca )
     ( vec_free [i] a )
 
-    // Rebound to a fresh handle before the second call.
+    // Rebound to a fresh handle before the second call: `cb` holds a copy
+    // of the handle `vec_free` released, not the binding — rejected (h306).
     : ~ ( Vec i ) b ( vec_new [i] )
     : ( @ i ) cb \ → i { ^ ( vec_len [i] b ) }
     : i n2 ( cb )

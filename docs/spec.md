@@ -479,7 +479,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h298`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h309`, is closed and held by a probe in `tools/fuzz/holes/`).
 `nurlc --unsafe-report` lists the `unsafe` functions a program
 contains outside the standard library — the whole surface a reviewer has
 to trust.
@@ -2399,7 +2399,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h298`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h309`) is
 closed and held by a probe in `tools/fuzz/holes/`.
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's

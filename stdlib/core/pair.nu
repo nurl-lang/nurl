@@ -16,13 +16,10 @@
 //   ( pair_free_with [A B] p look_a look_b ) → v  early release; each hook
 //                                                 is lent its field first
 //
-// CONSTRUCTORS THAT RETURN A PAIR (e.g. iter_zip, iter_enumerate,
-// map_iter) PRESERVE THEIR SOURCE'S OWNERSHIP:  the Pair fields are
-// aliases of source elements unless the caller explicitly clones.
-// In iterator pipelines that materialise via iter_collect, the
-// resulting ( Vec ( Pair A B ) ) borrows the upstream sources — do
-// NOT drop the upstream Vec/HashMap and the collected Vec
-// independently when A or B is owned.
+// A Pair an iterator yields (iter_zip, iter_enumerate, map_iter) owns its
+// fields: an element that owns memory is copied into it (docs/MEMORY.md
+// §7.6), so a ( Vec ( Pair A B ) ) collected from one and the sources it
+// came from are dropped independently.
 
 : Pair [A B] { A first B second }
 

@@ -285,3 +285,14 @@ h295_param_copy_passed_inout_releases_callers_field	§2.12	A2	a ': ~' copy of a 
 h296_arm_payload_returned_registration_kept	§7.2	A2	a ?? arm handing its handle payload out as the match value left its journal registration: a later panic read a dead frame's flag	runs-clean
 h297_inout_closure_param_replaced	§7.4	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
 h298_closure_inout_capture_replaced	§2.4	A2	a closure handing a captured : ~ String to an inout parameter took it by value; the callee replaced the copy and released the caller's buffer (UAF)	runs-clean
+h299_closure_from_a_call_outlives_its_argument	§2.11	A2	a closure a call returned over an argument it captured without taking it over (retclo) stayed usable after the caller released the argument (UAF)	rejected
+h300_vec_iterator_outlives_its_vec	§2.11	A2	h299 through iter_from_vec: the iterator called after its Vec was released	rejected
+h301_map_iterator_outlives_its_map	§2.11	A2	map_iter captured a raw pointer to the map's control block: called after the map was released (UAF)	rejected
+h302_option_captured_by_a_returned_closure	§2.11	A2	a returned closure over an option-of-String parameter was not recorded as lending it; the caller gave the option a new value, then called the closure	rejected
+h303_map_keys_of_owned_keys	§7.6	A2	map_keys over String keys: a key read through the slot pointer was both copied into the Vec and emptied from its slot — leak, and the map lost the key	runs-clean
+h304_nested_lend_stored_by_the_callee	§2.10	A2	a view a nested call lends (string_data x), stored by the callee in what it returns, was not a view of x in the result	rejected
+h305_iterator_chain_over_a_temporary	§2.11	A2	iter_map over a temporary iter_from_vec: the sink combinator's result held nothing of the Vec (retcap)	rejected
+h306_closure_literal_capture_given_a_new_value	§2.11	A2	a closure literal holds a copy of a captured : ~ Vec's handle; the binding given a new value released it, then the closure ran (UAF)	rejected
+h307_closure_literal_capture_replaced_through_inout	§2.11	A2	h306 through an inout callee replacing the captured String	rejected
+h308_returned_closure_argument_replaced_through_inout	§2.11	A2	h307 for a closure a call returned over a Vec it captured	rejected
+h309_returned_closure_struct_field_replaced_through_inout	§2.11	A2	h308 for a struct whose Vec field the inout callee replaces	rejected

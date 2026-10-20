@@ -87,9 +87,12 @@
 //   // Nothing to free: the chain is a temporary of the iter_sum_i call
 //   // and is dropped, envs and cursors alike, when that call returns.
 //
-// SOURCE-MUTATION CAVEAT: an iterator borrows its source. Mutating the
-// source (e.g. vec_push during iteration) is undefined — same rule as
-// Rust's `iter()`. The captured length / pointer may go stale.
+// An iterator borrows its source: it holds a copy of the source's handle
+// and reads through it when called. Releasing the source or giving it a
+// new value (`=`, or an `inout` callee replacing it) while the iterator is
+// still used — or returning the iterator past its source — is rejected
+// (h300, h305, h306). Changing it (vec_push, vec_set, vec_clear) is not:
+// the iterator reads the source as it is when called.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
@@ -182,9 +185,10 @@ $ `stdlib/core/cell.nu`
     }
 }
 
-// Constructor — borrowing iterator over a Vec[A]. Lends the Vec handle
-// and captures its length at construction time; do not mutate the Vec
-// while iterating. The Vec itself is NOT freed by the iterator.
+// Constructor — borrowing iterator over a Vec[A]. Captures the Vec and
+// its length at construction time: elements pushed after it are not
+// yielded, and it ends early at a Vec shortened since. The Vec itself is
+// NOT freed by the iterator.
 // Cursor: the next index.
 @ iter_from_vec [A] ( Vec A ) v → ( @ ?A i ) {
     : Cell st ( cell_zero 8 )
@@ -199,8 +203,9 @@ $ `stdlib/core/cell.nu`
     }
 }
 
-// Constructor — repeat a single value n times. Trivial element types
-// only (i, f, b, raw s, slice) — owned types like String would alias.
+// Constructor — repeat a single value n times. Each element is a copy
+// the caller owns (a String deep, docs/MEMORY.md §7.6); the iterator
+// borrows `x`, which must outlive it.
 // Cursor: how many have been yielded.
 @ iter_repeat [A] A x i n → ( @ ?A i ) {
     : Cell st ( cell_zero 8 )
@@ -299,9 +304,9 @@ $ `stdlib/core/cell.nu`
 // Combinator — pair-wise zip. Yields ( Pair A B ) until either source
 // exhausts. No state of its own; cmd=1 ends BOTH inputs.
 //
-// MEMORY: the resulting Pair fields are aliases of the upstream
-// elements — do NOT iter_collect a Pair-of-owned-types pipeline and
-// then drop both the upstream sources and the collected Vec.
+// Each Pair owns its fields (an element that owns memory is copied into
+// it, docs/MEMORY.md §7.6): a collected Vec of them and the upstream
+// sources are dropped independently.
 @ iter_zip [A B] sink ( @ ?A i ) a sink ( @ ?B i ) b → ( @ ?( Pair A B ) i ) {
     ^ \ i cmd → ?( Pair A B ) {
         ? == cmd 1 {
