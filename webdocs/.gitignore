@@ -3,6 +3,7 @@
 
 # generated content
 .source
+/public/formal-decls.json
 
 # test & build
 /coverage

@@ -3,7 +3,8 @@
   "version": "0.0.6",
   "private": true,
   "scripts": {
-    "prebuild": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1 && node ../tools/gen-contributors.mjs && bash ../tools/gen-site-facts.sh && node ../tools/gen-bench-table.mjs",
+    "prebuild": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1 && node ../tools/gen-contributors.mjs && bash ../tools/gen-site-facts.sh && node ../tools/gen-bench-table.mjs && node scripts/gen-formal-data.mjs",
+    "predev": "node scripts/gen-formal-data.mjs",
     "build": "next build",
     "dev": "next dev",
     "start": "next start",

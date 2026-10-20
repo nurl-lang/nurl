@@ -13,6 +13,19 @@ and leak-free, data races and the panic path included — proven as a
 theorem about the ownership rules, with the compiler's verdicts tied to
 that theorem.
 
+* **Visual Blueprint (GitHub):** [`BLUEPRINT.md`](BLUEPRINT.md) — Mermaid proof architecture, theorem dependency graph, `Eff.kills` invalidation lattice, and module index.
+* **Interactive Explorer (`nurl-lang.org`):** [`nurl-lang.org/docs/formal-verification`](https://nurl-lang.org/docs/formal-verification) — interactive step-by-step memory & borrow-checker simulator, clickable theorem/module dependency graph, 286-hole soundness corpus explorer, and full Lean 4 proof browser.
+
+```mermaid
+flowchart LR
+  Check["Compile-Time Check<br/>ProgOK P ∧ StmtT P ∅ [] s Δ"] --> Init["Empty Store<br/>emptyMem nv (Inv)"]
+  Init --> StepOk["Normal Steps<br/>Preservation + Progress"]
+  Init --> StepPanic["Panic Unwinding<br/>panic_unwind + Covers"]
+  StepOk --> Safe["A2.memory_safe<br/>¬ Stuck P m' s'"]
+  StepOk --> LeakOk["A2.no_leak_end<br/>∀ i, m'.alloc i = false"]
+  StepPanic --> LeakPanic["A2.no_leak_panic<br/>∀ i, m'.alloc i = false"]
+```
+
 ## Phases
 
 The first round proves the rules themselves (A1–A3). The trusted base and
@@ -32,6 +45,7 @@ the implementation (B–D) follow once the rules have stopped moving.
 ```
 formal/
   README.md        this file
+  BLUEPRINT.md     visual architecture, Mermaid theorem/module graphs, and Eff.kills lattice
   CLAIM.md         the theorem in words, its scope per phase, and the trusted base
   RULES.md         every ownership rule of docs/MEMORY.md → its formal rule and status
   corpus/map.tsv   every hole probe → the formal rule that rejects it, or its phase,

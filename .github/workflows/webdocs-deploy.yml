@@ -24,6 +24,7 @@ on:
     tags: ['v*']
     paths:
       - 'webdocs/**'
+      - 'formal/**'
       - 'bench/results/latest.json'
       - 'CHANGELOG.md'
       - 'tools/get-nurl.sh'
