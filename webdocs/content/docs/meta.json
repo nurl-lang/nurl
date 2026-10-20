@@ -11,6 +11,7 @@
     "control-flow",
     "structs-enums-traits",
     "memory-and-ownership",
+    "formal-verification",
     "error-handling",
     "concurrency",
     "common-pitfalls",

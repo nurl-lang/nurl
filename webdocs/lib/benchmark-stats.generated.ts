@@ -2,10 +2,10 @@
 export const benchmarkStats = {
   "benchmarks": 20,
   "languages": 5,
-  "generated": "2026-10-16",
-  "commit": "5d0e0ab",
-  "commitUrl": "https://github.com/nurl-lang/nurl/commit/5d0e0ab4bf4fd6cc069ee65ce478036ac5aa75e3",
-  "runUrl": "https://github.com/nurl-lang/nurl/actions/runs/38907656879",
+  "generated": "2026-10-20",
+  "commit": "df213fb",
+  "commitUrl": "https://github.com/nurl-lang/nurl/commit/df213fb80d7791da9e873413c2851a28b7880018",
+  "runUrl": "https://github.com/nurl-lang/nurl/actions/runs/39376136764",
   "host": "GitHub Actions ubuntu-latest runner",
   "columns": [
     {
@@ -37,8 +37,8 @@ export const benchmarkStats = {
         "39 ms",
         "39 ms",
         "39 ms",
-        "1,908 ms",
-        "5,088 ms"
+        "1,893 ms",
+        "5,046 ms"
       ],
       "nurlWins": false
     },
@@ -48,9 +48,9 @@ export const benchmarkStats = {
       "values": [
         "56 ms",
         "56 ms",
-        "56 ms",
-        "161 ms",
-        "4,448 ms"
+        "57 ms",
+        "164 ms",
+        "4,367 ms"
       ],
       "nurlWins": false
     },
@@ -60,9 +60,9 @@ export const benchmarkStats = {
       "values": [
         "42 ms",
         "42 ms",
-        "42 ms",
-        "64 ms",
-        "6,429 ms"
+        "43 ms",
+        "68 ms",
+        "6,572 ms"
       ],
       "nurlWins": false
     },
@@ -71,10 +71,10 @@ export const benchmarkStats = {
       "blurb": "20M binned increments",
       "values": [
         "39 ms",
-        "40 ms",
         "41 ms",
-        "64 ms",
-        "6,179 ms"
+        "41 ms",
+        "69 ms",
+        "6,120 ms"
       ],
       "nurlWins": true
     },
@@ -85,8 +85,8 @@ export const benchmarkStats = {
         "22 ms",
         "22 ms",
         "22 ms",
-        "64 ms",
-        "4,623 ms"
+        "69 ms",
+        "4,438 ms"
       ],
       "nurlWins": false
     },
@@ -94,11 +94,11 @@ export const benchmarkStats = {
       "name": "binary_search",
       "blurb": "5M lower-bound searches",
       "values": [
-        "39 ms",
+        "40 ms",
         "38 ms",
         "41 ms",
-        "106 ms",
-        "6,075 ms"
+        "109 ms",
+        "5,844 ms"
       ],
       "nurlWins": false
     },
@@ -107,10 +107,10 @@ export const benchmarkStats = {
       "blurb": "2M 8-element bubble sorts",
       "values": [
         "27 ms",
-        "26 ms",
         "27 ms",
-        "196 ms",
-        "12,267 ms"
+        "27 ms",
+        "201 ms",
+        "14,586 ms"
       ],
       "nurlWins": false
     },
@@ -121,8 +121,8 @@ export const benchmarkStats = {
         "15 ms",
         "18 ms",
         "18 ms",
-        "2,838 ms",
-        "7,508 ms"
+        "2,890 ms",
+        "7,662 ms"
       ],
       "nurlWins": true
     },
@@ -130,11 +130,11 @@ export const benchmarkStats = {
       "name": "hash_join",
       "blurb": "5M hash-table probes",
       "values": [
-        "26 ms",
-        "28 ms",
+        "27 ms",
         "29 ms",
-        "3,428 ms",
-        "8,597 ms"
+        "30 ms",
+        "3,450 ms",
+        "8,228 ms"
       ],
       "nurlWins": true
     },
@@ -142,11 +142,11 @@ export const benchmarkStats = {
       "name": "sieve",
       "blurb": "Sieve of Eratosthenes to 10M",
       "values": [
-        "18 ms",
-        "18 ms",
-        "18 ms",
-        "65 ms",
-        "3,224 ms"
+        "24 ms",
+        "23 ms",
+        "23 ms",
+        "75 ms",
+        "3,212 ms"
       ],
       "nurlWins": false
     },
@@ -157,8 +157,8 @@ export const benchmarkStats = {
         "25 ms",
         "30 ms",
         "30 ms",
-        "130 ms",
-        "1,359 ms"
+        "133 ms",
+        "1,342 ms"
       ],
       "nurlWins": true
     },
@@ -167,22 +167,22 @@ export const benchmarkStats = {
       "blurb": "Longest Collatz chain below 100k",
       "values": [
         "12 ms",
-        "12 ms",
-        "12 ms",
-        "48 ms",
-        "751 ms"
+        "13 ms",
+        "13 ms",
+        "52 ms",
+        "745 ms"
       ],
-      "nurlWins": false
+      "nurlWins": true
     },
     {
       "name": "matmul",
       "blurb": "256x256 integer matrix product",
       "values": [
-        "33 ms",
-        "33 ms",
         "34 ms",
-        "75 ms",
-        "3,203 ms"
+        "34 ms",
+        "34 ms",
+        "79 ms",
+        "3,178 ms"
       ],
       "nurlWins": false
     },
@@ -190,11 +190,11 @@ export const benchmarkStats = {
       "name": "json_parse",
       "blurb": "20 parses of a 64 KB document",
       "values": [
-        "8.3 ms",
-        "8.5 ms",
+        "8.6 ms",
+        "8.8 ms",
         "12 ms",
-        "34 ms",
-        "39 ms"
+        "39 ms",
+        "40 ms"
       ],
       "nurlWins": true
     },
@@ -204,18 +204,18 @@ export const benchmarkStats = {
       "values": [
         "25 ms",
         "40 ms",
-        "25 ms",
-        "98 ms",
-        "3,104 ms"
+        "26 ms",
+        "104 ms",
+        "3,177 ms"
       ],
-      "nurlWins": false
+      "nurlWins": true
     },
     {
       "name": "chacha20",
       "blurb": "ChaCha20 over 16 MiB (RFC 8439)",
       "values": [
         "7.6 ms",
-        "42 ms",
+        "41 ms",
         "34 ms",
         "n/a",
         "n/a"
@@ -226,7 +226,7 @@ export const benchmarkStats = {
       "name": "poly1305",
       "blurb": "Poly1305 MACs over 64 MiB (RFC 8439)",
       "values": [
-        "23 ms",
+        "24 ms",
         "32 ms",
         "21 ms",
         "n/a",
@@ -250,9 +250,9 @@ export const benchmarkStats = {
       "name": "sha512",
       "blurb": "SHA-512 over 16 MiB (FIPS 180-4)",
       "values": [
-        "47 ms",
+        "48 ms",
+        "51 ms",
         "50 ms",
-        "49 ms",
         "n/a",
         "n/a"
       ],
@@ -262,9 +262,9 @@ export const benchmarkStats = {
       "name": "x25519",
       "blurb": "1000 chained X25519 scalar mults (RFC 7748)",
       "values": [
-        "44 ms",
-        "48 ms",
+        "45 ms",
         "49 ms",
+        "50 ms",
         "n/a",
         "n/a"
       ],
