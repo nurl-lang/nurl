@@ -1499,14 +1499,12 @@ typedef int nurl_sockfd_t;
 #    if defined(__linux__)
 /* Closing a socket silently drops its epoll registration and orphans
  * its netpoller state (ready bits, parked waiters) — route every
- * socket close through the netpoller so waiters wake and the per-fd
- * slot is reset before the fd number can be reused. Defined in §25. */
-extern void nurl__np_on_close(int fd);
-static inline int nurl__close_sock_hooked(int fd) {
-    nurl__np_on_close(fd);
-    return close(fd);
-}
-#      define nurl_close_sock(fd) nurl__close_sock_hooked(fd)
+ * socket close through the netpoller, which resets the per-fd slot and
+ * closes the fd as one step under its lock, so waiters wake and no
+ * registration can slip in before the fd number is reused. Defined in
+ * §25. */
+extern int nurl__np_close(int fd);
+#      define nurl_close_sock(fd) nurl__np_close(fd)
 #    else
 #      define nurl_close_sock(fd) close(fd)
 #    endif
@@ -6995,13 +6993,24 @@ void nurl__reactor_shutdown(void) {
     if (nurl__np.started) nurl__np_poke();
 }
 
-/* Socket-close hook (see nurl_close_sock): wake every waiter parked on
- * this fd — with the registration about to vanish no event can — and
- * reset the slot so a REUSED fd number starts clean (a stale ready bit
- * or `registered` flag on a recycled fd would satisfy or starve the
- * next connection's first wait). */
-void nurl__np_on_close(int fd) {
-    if (!nurl__np.started) return;
+/* Socket close (see nurl_close_sock): wake every waiter parked on this
+ * fd — with the registration about to vanish no event can — reset the
+ * slot so a REUSED fd number starts clean (a stale ready bit or
+ * `registered` flag on a recycled fd would satisfy or starve the next
+ * connection's first wait), and close the fd.
+ *
+ * The reset and the close(2) are ONE step under the lock. Reset first
+ * and close after unlocking, and a fiber on another worker can park on
+ * the still-open fd in between: its activation re-registers (EPOLL_CTL_ADD
+ * answers EEXIST, the fd is still in the set) and sets `registered`
+ * again, then close drops the kernel registration. The slot outlives
+ * the fd claiming it is registered, and the next socket to get that fd
+ * number is never added to the epoll set — its first park never wakes.
+ * Observed: server_stop closing a listener from another thread while
+ * its accept fiber re-parked left the next listener's accept fiber
+ * asleep forever. */
+int nurl__np_close(int fd) {
+    if (!nurl__np.started) return close(fd);
     NurlReactorWait *batch = NULL;
     pthread_mutex_lock(&nurl__np.lock);
     NurlNpFd *s = nurl__np_slot(fd, 0);
@@ -7020,6 +7029,7 @@ void nurl__np_on_close(int fd) {
             w = n;
         }
     }
+    int rc = close(fd);
     pthread_mutex_unlock(&nurl__np.lock);
     while (batch) {
         NurlReactorWait *n = batch->wake_next;
@@ -7036,6 +7046,7 @@ void nurl__np_on_close(int fd) {
         }
         batch = n;
     }
+    return rc;
 }
 
 void nurl__reactor_cleanup(void) {

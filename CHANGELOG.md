@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fiber could sleep forever on a socket that reused a closed one's
+  fd number.** Closing a socket reset its netpoller slot and then
+  closed the fd outside the netpoller lock; a fiber parking on the
+  still-open fd in between re-marked the slot registered, and close(2)
+  then dropped the kernel registration. The next socket handed that fd
+  number was never added to the epoll set, so its first park never
+  woke. Seen as `server_stop` on one listener, from another thread,
+  leaving the next listener's accept fiber asleep (the new
+  `http_keepalive_cap_modes` test hung in 8 of 30 runs on a loaded
+  machine, 0 of 60 after). The reset and the close are now one step
+  under the lock.
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to
