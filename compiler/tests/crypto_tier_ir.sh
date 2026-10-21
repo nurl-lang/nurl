@@ -483,7 +483,7 @@ for w in v256:2:encrypt2:round2:encrypt2x:nurl__vaes_gate v512:3:encrypt4:round4
             "$CLANG" -O2 -flto -Wno-override-module "$WORK/$ty.ll" "$ROOT/stdlib/runtime.o" \
                 -o "$WORK/$ty" -lm -lpthread 2>/dev/null; then
         n=$(objdump -d "$WORK/$ty" 2>/dev/null |
-            awk -v f="$fn" '$0 ~ "^[0-9a-f]+ <[^>]*\\." f "[a-z0-9_]*\\.vabi>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc[a-z]* .*%$reg")
+            awk -v f="$fn" '$0 ~ "^[0-9a-f]+ <[^>]*\\." f "[a-z0-9_]*\\.vabi>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc[a-z]*[[:space:]].*%$reg")
         if [ "$n" -gt 0 ]; then ok "$fn.vabi lowers to VAESENC on $reg" "$n"
         else bad "$fn.vabi lowers to VAESENC on $reg" "none"; fi
         env_off=NURL_CPU_VAES; [ "$lvl" = 3 ] && env_off=NURL_CPU_VAES512
@@ -531,7 +531,7 @@ if "$NURLC" "$SCRIPT_DIR/aes_gcm_hw_agree.nu" > "$WORK/gcm.ll" 2>/dev/null &&
     for k in "vaes_run:ymm" "vaes512_run:zmm"; do
         fnk=${k%%:*}; reg=${k##*:}
         n=$(objdump -d "$WORK/gcm" 2>/dev/null |
-            awk -v f="$fnk" '$0 ~ "^[0-9a-f]+ <[^>]*__gcm_" f "[a-z0-9_]*>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc .*%$reg")
+            awk -v f="$fnk" '$0 ~ "^[0-9a-f]+ <[^>]*__gcm_" f "[a-z0-9_]*>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc[[:space:]].*%$reg")
         if [ "$n" -gt 0 ]; then ok "__gcm_$fnk: VAESENC on $reg" "$n"
         else bad "__gcm_$fnk: VAESENC on $reg" "none"; fi
     done
