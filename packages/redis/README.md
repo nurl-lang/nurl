@@ -108,7 +108,10 @@ subscribers reached). To receive, `redis_subscribe` / `redis_psubscribe` a
 channel or pattern, then loop on `redis_next_message`, which blocks until the
 next frame arrives:
 
-```nurl
+<!-- doctest-file-prelude
+$ `deps/redis/src/redis.nu`
+-->
+```nurl params="RedisConn c"
 ?? ( redis_subscribe c `news` ) { T _ → {} F _ → {} }
 : ~ b go T
 ~ go {
@@ -141,13 +144,13 @@ optional string): check `redis_str_is_nil`, read `redis_str_val`. The
 Anything not covered by a helper goes through `redis_command`, which returns
 the raw reply tree:
 
-```nurl
+```nurl params="RedisConn c"
 : ( Vec String ) a ( redis_args )
 ( redis_arg a `SET` ) ( redis_arg a `k` ) ( redis_arg a `v` )
 ( redis_arg a `EX` ) ( redis_arg_i a 60 )
 ?? ( redis_command c a ) {
-    T rep → { /* walk with resp_node_* */ }
-    F e   → { /* RedisServerError text is ( redis_last_error c ) */ }
+    T rep → {}   // walk with resp_node_*
+    F e   → {}   // RedisServerError text is ( redis_last_error c )
 }
 ```
 

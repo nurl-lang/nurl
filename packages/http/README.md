@@ -56,6 +56,10 @@ impersonated. Public CAs do not issue ML-DSA certificates yet; mint a
 self-signed one with `x509_selfsigned_mldsa` (`std/x509_gen.nu`) or run
 the [pki-server](../pki-server) package as a private CA.
 
+<!-- doctest-file-prelude
+$ `deps/http/src/http.nu`
+: HttpApp a ( http_app_new )
+-->
 ```nurl
 ( http_app_set_pq_cert a `certs/mldsa65.pem` `certs/mldsa65.key` )   // optional
 ^ ( http_app_listen_tls a `0.0.0.0` 443 `certs/fullchain.pem` `certs/privkey.pem` )
@@ -96,6 +100,11 @@ actually served, and is the seam for anything the built-in layers do not
 do — a concurrency gate in front of an expensive route, a per-IP budget,
 an auth check:
 
+<!-- doctest-prelude
+$ `stdlib/std/thread.nu`
+@ is_heavy HttpRequest req → b { ^ F }
+: Semaphore gate ( sem_new 4 )
+-->
 ```nurl
 ( http_app_use a \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
     ^ \ HttpRequest req → HttpResponse {
@@ -140,7 +149,11 @@ A server that already builds a `Router` (e.g. to keep every route testable
 without a socket) drops onto the facade with one seam:
 
 ```nurl
-@ my_service_router → Router { ... router_post r `/x` h ... ^ r }
+@ my_service_router → Router {
+    : Router r ( router_new )
+    ( router_post r `/x` \ HttpRequest req Params p → HttpResponse { ^ ( response_text 200 `x` ) } )
+    ^ r
+}
 
 @ my_serve s host i port → i {
     : HttpApp a ( http_app_new )

@@ -35,7 +35,7 @@ the round-trip.
 
 ## Library
 
-```nurl
+```nurl params="i token"
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 

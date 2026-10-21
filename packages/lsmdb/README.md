@@ -158,7 +158,7 @@ values round-trip byte for byte.
 ## Library
 
 ```nurl
-$ `lsmdb.nu`
+$ `deps/lsmdb/src/lsmdb.nu`
 
 : !Lsm String opened ( lsm_open `/var/db/things` )
 ?? opened {

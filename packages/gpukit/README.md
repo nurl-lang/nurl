@@ -11,22 +11,28 @@ of that dance for each kernel. `gpukit` is that glue, as a facade.
 
 Hand-marshalled (the pattern in onnx / anomaly today):
 
-```nurl
-: GpuBuffer b_x   ( gpu_alloc g (* n 8) )
-: GpuBuffer b_out ( gpu_alloc g (* n 8) )
-( gpu_upload b_x (# *u (vec_data [f] xs)) )
+<!-- doctest-prelude
+$ `deps/gpu/src/gpu.nu`
+-->
+```nurl unsafe params="Gpu g GpuKernel k i n ( Vec f ) xs ( Vec f ) out"
+: GpuBuffer b_x   ( gpu_alloc g * n 8 )
+: GpuBuffer b_out ( gpu_alloc g * n 8 )
+( gpu_upload b_x # *u ( vec_data [f] xs ) )
 : (Vec i) args ( vec_new [i] )
 ( vec_push [i] args (gpu_arg_buffer b_x) )
 ( vec_push [i] args (gpu_arg_i64 n) )
 ( vec_push [i] args (gpu_arg_buffer b_out) )
 ( gpu_launch k (gpu_grid n 256) 256 args )
 ( gpu_sync g )
-( gpu_download (# *u (vec_data [f] out)) b_out )
+( gpu_download # *u ( vec_data [f] out ) b_out )
 ```
 
 With gpukit:
 
-```nurl
+<!-- doctest-file-prelude
+$ `deps/gpukit/src/kernels.nu`
+-->
+```nurl unsafe params="GpuKit kit s src i n ( Vec f ) xs ( Vec f ) out"
 : (Vec GkArg) call ( vec_new [GkArg] )
 ( vec_push [GkArg] call ( gk_in_f  xs ) )
 ( vec_push [GkArg] call ( gk_i64   n  ) )
@@ -42,7 +48,7 @@ syncs and downloads outputs; the device buffers go with the call.
 
 For the common cases you don't write a kernel at all:
 
-```nurl
+```nurl params="( Vec f ) out ( Vec f ) a ( Vec f ) b ( Vec f ) x ( Vec f ) c i m i k i n"
 : GpuKit kit ( gk_open 0 )
 ( gk_add_f kit out a b )                 // out = a + b   (also sub/mul/div)
 ( gk_map_f kit `relu` out x `x>0.0?x:0.0` )   // out[i] = f(x)

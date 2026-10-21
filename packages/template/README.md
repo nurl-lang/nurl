@@ -19,13 +19,13 @@ a directory loader and a small CLI ship alongside it.
 
 ## Rendering
 
-```nurl
+```nurl params="Json ctx"
 $ `deps/template/src/template.nu`
 
-: Json ctx ...                            // e.g. ( json_parse src ) or built up
+// ctx: e.g. ( json_parse src ), or built up
 ?? ( tpl_render `Hi {{ name }}!` ctx ) {
-    T html → { ... }
-    F err  → { ... }   // "template error at line L, col C: …"
+    T html → {}
+    F err  → {}   // "template error at line L, col C: …"
 }
 ```
 

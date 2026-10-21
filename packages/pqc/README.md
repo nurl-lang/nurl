@@ -169,12 +169,14 @@ session survives *either* primitive being broken — you are never worse
 off than plain X25519.
 
 ```nurl
-: !*TlsConn TlsErr r ( tls_connect `cloudflare.com` 443 `cloudflare.com` )
+$ `stdlib/std/tls.nu`
+
+: !TlsConn TlsErr r ( tls_connect `cloudflare.com` 443 `cloudflare.com` )
 ?? r {
     T c → {
-        ? ( tls_is_post_quantum c ) { ... } {}
+        ? ( tls_is_post_quantum c ) {} {}   // T: X25519MLKEM768 was negotiated
     }
-    F e → { ... }
+    F e → {}
 }
 ```
 

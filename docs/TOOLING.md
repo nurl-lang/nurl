@@ -57,6 +57,54 @@ Round-trip acceptance — every shipped `.nu` file round-trips
 byte-for-byte: `fmt(fmt(x)) == fmt(x)` AND `nurlc(fmt(x)) == nurlc(x)`,
 enforced by `compiler/tests/nurlfmt_idempotent.sh`.
 
+## Documentation examples
+
+Every ```` ```nurl ```` block in `docs/*.md`, `docs/stdlib/*.md`,
+`README.md` and the package READMEs is compiled by
+`tools/check_doc_examples.sh` (a CI gate). Readers and agents copy these
+blocks verbatim, so an example that does not build — a missing import,
+an API that has since changed — is a bug in the docs.
+
+```bash
+./tools/check_doc_examples.sh                  # everything (needs build/nurlc)
+./tools/check_doc_examples.sh docs/MEMORY.md   # one file
+./tools/check_doc_examples.sh -v docs/spec.md  # also print failing blocks as compiled
+```
+
+Each block becomes a compilation unit run through `nurlc --check` (the
+full frontend, no IR written), all blocks in parallel; a failure is
+reported as `file.md:line`, with the compiler's diagnostics mapped back
+to the Markdown line they came from. A block that defines `@ main` is
+compiled as written. A fragment keeps its declarations (and the globals
+between them) at the top level, and its statements become the body of
+`@ main → i`. **Nothing is imported for you**: a block names its own
+`$` imports, so what a reader copies resolves.
+
+The fence's info string says what the block is:
+
+| Fence | Meaning |
+|---|---|
+| ```` ```nurl ```` | must compile |
+| ```` ```nurl expect-error="TEXT" ```` | must be rejected, and every error in it must contain one of the TEXTs (repeatable) — the documented diagnostic is pinned, so a reworded message fails the doc that quotes it |
+| ```` ```nurl expect-warning="TEXT" ```` | must compile and warn with TEXT |
+| ```` ```nurl flags="--strict-borrowck" ```` | extra `nurlc` flags |
+| ```` ```nurl params="T a U b" ```` | the statements are the body of a function taking these parameters — the snippet's free names, of any type, with nothing to construct |
+| ```` ```nurl unsafe ```` | the wrapper function is `unsafe` (raw pointers, FFI) |
+| ```` ```nurl continue ```` | the previous `nurl` block of the file is prepended (a walk-through split by prose) |
+| ```` ```nurl ignore="REASON" ```` | not compiled; the reason is required |
+
+Context the prose has already introduced goes in an HTML comment, which
+renders as nothing: `<!-- doctest-prelude … -->` on the lines right
+before a fence is prepended to that block, and `<!-- doctest-file-prelude
+… -->` anywhere in a file to every fragment of the file (a package
+README's import and the handle its snippets share). `$ deps/<pkg>/…`
+imports resolve to the in-tree package, as they would once installed.
+
+In `docs/` and `README.md` an untagged fence is an error — output and
+diagrams are `text`, shell sessions `sh` — so a NURL example cannot opt
+out by omission. `docs/dev/` (working notes that quote historical,
+since-fixed programs) is not checked.
+
 ## Language Server (`nurl-lsp`)
 
 `./tools/nurl-lsp/build.sh` produces `build/nurl-lsp` — a stdio JSON-RPC
