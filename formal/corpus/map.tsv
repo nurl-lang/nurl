@@ -296,3 +296,4 @@ h306_closure_literal_capture_given_a_new_value	§2.11	A2	a closure literal holds
 h307_closure_literal_capture_replaced_through_inout	§2.11	A2	h306 through an inout callee replacing the captured String	rejected
 h308_returned_closure_argument_replaced_through_inout	§2.11	A2	h307 for a closure a call returned over a Vec it captured	rejected
 h309_returned_closure_struct_field_replaced_through_inout	§2.11	A2	h308 for a struct whose Vec field the inout callee replaces	rejected
+h310_closure_bound_then_returned_over_a_local	§2.11	A2	a closure literal over a local Vec bound and returned by name held only a copy of the handle; the frame released the Vec, the caller ran the closure (UAF)	rejected

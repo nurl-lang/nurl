@@ -28355,8 +28355,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     // closure or a literal written in the return hands nothing it holds
     // over — mark `e`.)
     = g_sxe_handover hand
-    : s srcs ? deps ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int sx ) ) ) ) ) ( __src_plain0 ( bck_sx_sources st sx -1 ) )
+    : s rroot ? deps ( nurl_str_int ( bck_path_root ( nurl_str_to_int sx ) ) ) ``
+    : s raw ? deps ( nurl_sym_get g_bck ( bck_bkey `vds_` rroot ) ) ( bck_sx_sources st sx -1 )
     = g_sxe_handover F
+    // (The ones reached only through a copy of their handle — a closure
+    // that captured them, `~id`.)
+    : s hnd ? deps ( nurl_sym_get g_bck ( bck_bkey `vdh_` rroot ) ) ( __src_handle raw )
+    : s srcs ? deps ( nurl_str_cat raw `` ) ( __src_plain0 raw )
     ? ( seq srcs `*` ) { ^ } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -28364,7 +28369,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         : i r ( bck_local_source st ( nurl_str_to_int w ) )
         ? >= r 0 {
             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
-            ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a view of '` nm `' (an address into its storage), and '` ( nurl_str_cat3 nm `' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.` `` ) ) )
+            ? ( str_contains_word hnd w ) {
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a closure that holds a copy of the handle of '` nm `', and '` ( nurl_str_cat3 nm `' is released when the function returns, so running the closure would read freed memory (h310). A closure literal written in the return itself ('^ \\ … { … }') takes over what it captures — return that instead of a closure bound first — or keep '` ( nurl_str_cat nm `' alive in a caller that outlives the closure.` ) ) ) )
+            } {
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a view of '` nm `' (an address into its storage), and '` ( nurl_str_cat3 nm `' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.` `` ) ) )
+            }
             ^
         } {}
     }

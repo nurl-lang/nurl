@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A closure no longer outlives what it reads (h299–h302, h304–h309).**
+- **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to
   what it captured:
@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the freed Vec; it is a positive now.
   - **h308, h309**: h307 for a closure a call returned, over a Vec, and
     over a struct one of whose fields the callee replaces.
+  - **h310**: a closure literal over a local Vec, bound and returned by
+    name (`: f \ … ^ f`), held only a copy of the handle; the function
+    released the Vec on its way out. Rejected now, with the cure in the
+    message: a closure literal written in the return (`^ \ …`) takes
+    over what it captures. The metamorph control
+    `closure-over-heap-handle` had the bound form — ASan says it read the
+    freed Vec — and is the literal form now.
   A closure stored into an owner (a container, a struct field) copies in
   what it holds a handle of, as before: storing one is no dependency.
 - **h303: `map_keys` / `map_values` over owned keys leaked them and
