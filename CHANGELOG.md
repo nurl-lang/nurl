@@ -120,6 +120,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A NURL program under valgrind reported twelve invalid reads before its
+  own.** The allocator cache probes, once at start-up, whether glibc's
+  chunk header can stand in for `malloc_usable_size`, by reading the word
+  before a few fresh blocks. Under valgrind, whose malloc has no such
+  header, every read was an "Invalid read of size 8" in `nurl__sc_init`
+  (the probe then failed and the library query was used, correctly). The
+  probe now asks first — valgrind's RUNNING_ON_VALGRIND client request,
+  inlined for x86-64 and AArch64, a no-op on bare metal — and skips the
+  read under any valgrind tool.
+
 - **The last diagnostics without a file are located (agora #70).** Three
   checks printed `cycle collection: error: …`, `thread-shared cycle:
   error: …` and `in function f: error: …`, with no file, line, column,
