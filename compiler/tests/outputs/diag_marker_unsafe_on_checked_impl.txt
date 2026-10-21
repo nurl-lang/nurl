@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_marker_unsafe_on_checked_impl.nu:12:20: error: 'unsafe' on an impl of '% NotSend': only a '% Send' or '% Sync' assertion is something the compiler takes on trust (it stops checking the type's fields). Every other impl is checked — its methods are ordinary code, and '% NotSend', '% NotSync', '% Frozen' and '% Resource' only add checks. Remove the 'unsafe'.
+unsafe %NotSend Db {}
+                   ^

@@ -7,7 +7,9 @@
 //
 // Both are marker traits: no methods, no runtime representation, no
 // dispatch. A `% Send T { }` block is not code — it is an assertion,
-// NURL's spelling of Rust's `unsafe impl Send for T`.
+// NURL's spelling of Rust's `unsafe impl Send for T`, and outside the
+// standard library it is written that way: `unsafe % Send T { }`
+// (docs/MEMORY.md §3; `nurlc --unsafe-report` lists it).
 //
 // You rarely write either. The compiler DERIVES both structurally over
 // a type's whole graph — struct fields, enum payloads, generic
@@ -47,7 +49,9 @@
 //     % Sync Mutex { }        // and `% Send Mutex { }`
 //
 // An explicit impl STOPS the walk at that type: nothing inside is
-// examined, because you have taken responsibility for it.
+// examined, because you have taken responsibility for it. That is why a
+// program's own positive marker is `unsafe % Send T { }` /
+// `unsafe % Sync T { }`: without the prefix it is an error.
 //
 // **The compiler is too optimistic.** A type that derives clean but
 // wraps thread-hostile state the compiler cannot see — an FFI handle.
@@ -63,7 +67,8 @@
 //
 // A negative marker always wins over a positive one on the same type —
 // if both are written, the type is rejected. That is the safe direction
-// for a contradiction to resolve in.
+// for a contradiction to resolve in. A negative marker only adds checks,
+// so it is ordinary safe code: no `unsafe`.
 //
 // ── As a bound ─────────────────────────────────────────────────────
 //
@@ -114,9 +119,11 @@ pub %NotSync [T] {}
 //
 //     % Frozen RGuard { }
 //
-// Like Send and Sync it is an assertion about the type, not code: the
-// compiler follows every view the handle lends and rejects a change to
-// one where it is made.
+// Unlike Send and Sync it only adds checks: the compiler follows every
+// view the handle lends and rejects a change to one where it is made, so
+// a safe module may mark a type of its own (no `unsafe`). What is trusted
+// is the other direction — a handle of the standard library's that lends
+// shared data and is NOT marked would lend it mutable.
 pub %Frozen [T] {}
 
 // Resource — a type whose drop is observable outside the program: it

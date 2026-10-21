@@ -17,8 +17,8 @@
 //                  `i8*`; demoting either would demote both, and
 //                  read-only sharing is ordinary correct code
 //   Channel i      a thread-safe queue whose ELEMENT is Send
-//   Wrapper        an Rc behind an explicit `% Send` assertion — the
-//                  escape hatch, which must actually open
+//   Wrapper        an Rc behind an explicit `unsafe % Send` assertion —
+//                  the escape hatch, which must actually open
 //   [T: Send]      the bound, satisfied by derivation for `i`
 // requires: live
 
@@ -32,10 +32,11 @@ $ `stdlib/core/marker.nu`
 
 // An Rc is not Send — unless its owner says otherwise. This is NURL's
 // `unsafe impl`: the assertion stops the walk at `Wrapper`, and nothing
-// inside is examined again.
+// inside is examined again (so outside the standard library it is
+// written `unsafe`, and `nurlc --unsafe-report` lists it).
 : Wrapper { ( Rc i ) r }
 
-% Send Wrapper {}
+unsafe %Send Wrapper {}
 
 @ ship [T : Send] T v → i { ^ 1 }
 

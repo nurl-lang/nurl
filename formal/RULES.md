@@ -32,3 +32,15 @@ trait objects, panics and the drop journal; threads are A3.
 | §7.7 | Reference-count cycles | B | `Rc` and its collector are the standard library's `unsafe` base | not started |
 | §6.5 | Threads: `Send`, `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and `% Frozen`, `Atomic`, `PFile`, channels | A3 | — | not started |
 | §3, §6.4 | `unsafe` boundary and the trusted base | B | — | not started |
+
+## Changes to MEMORY.md and what they do to the proof
+
+Every change to the rules of `docs/MEMORY.md` is recorded here with its
+effect on the formal rules: whether it touches a rule that is proven
+(**done** above), and whether it **extends** the calculus (a new rule, or
+a rule made to reject more: every existing proof still holds) or
+**breaks** a proof (a rule made to accept more, which reopens its lemmas).
+
+| Change | MEMORY.md | Touches a proven rule? | Effect |
+|---|---|---|---|
+| A positive `% Send` / `% Sync` outside the standard library is `unsafe % Send T { }`; `% NotSend`, `% NotSync`, `% Frozen` and `% Resource` stay safe (they only add checks); the `in` / `sync` / `nocapture` claims and the standard library's own markers are in the trusted base, and `--unsafe-report` lists the program's | §3, §6.4, §6.5 | no: threads are A3 and the trusted base is B, neither started | extension: safe code is rejected more. A1 and A2 have no markers and no threads, so no lemma moves; A3 takes an `unsafe % Send` / `unsafe % Sync` as a hypothesis of the base, as B takes an `unsafe` body |

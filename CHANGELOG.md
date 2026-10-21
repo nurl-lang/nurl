@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A positive thread-safety marker is `unsafe` outside the standard
+  library (h317; grammar v2.11).** `% Send T { }` and `% Sync T { }` stop
+  the Send/Sync derivation at `T` and turn off the frozen-view check
+  through a `Sync` type, so a safe module that asserted `% Send` over an
+  `Rc` raced its count from two threads (AddressSanitizer:
+  heap-use-after-free). A program writes them `unsafe % Send T { }` /
+  `unsafe % Sync T { }`; without the prefix they are an error. `% NotSend`,
+  `% NotSync`, `% Frozen` and `% Resource` only add checks and stay safe
+  code (h316 settles that a program's own `% Frozen` over a `Cell` cannot
+  reach two threads); `unsafe` on them, on any other impl or on a trait
+  declaration is an error rather than a prefix that leaked onto the next
+  foreign declaration.
+- **`nurlc --unsafe-report` lists the whole trusted surface.** Beside the
+  program's `unsafe` functions it lists its `unsafe % Send` /
+  `unsafe % Sync` assertions and the `in` / `sync` / `nocapture` claims of
+  its foreign declarations, one `file:line` each, and no longer lists the
+  standard library's own `unsafe` functions (the trust test was asked of
+  `file:line` rather than the file). Checked by
+  `compiler/tests/unsafe_report.sh`. docs/MEMORY.md §3 / §6.4 and
+  formal/CLAIM.md's trusted base name `% Frozen` and the foreign claims.
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to

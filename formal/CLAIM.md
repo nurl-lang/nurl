@@ -56,7 +56,17 @@ Even when every phase is done, these remain trusted rather than proven
 
 - the proof assistant's kernel;
 - `unsafe` functions outside the standard library — each vouches for
-  itself, and `nurlc --unsafe-report` lists them;
-- marker assertions (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
-  `% Resource`) on types whose safety the compiler cannot see;
+  itself;
+- `unsafe % Send` / `unsafe % Sync` assertions outside the standard
+  library, on types whose safety the compiler cannot see (a positive
+  marker stops the derivation; every other marker only adds checks, so a
+  safe module may write it — `docs/MEMORY.md` §3);
+- the `in`, `sync` and `nocapture` claims of foreign declarations outside
+  the standard library (`sync` is a data-race claim about C code);
+- `nurlc --unsafe-report` lists all three, one `file:line` each;
+- until B: the standard library's own marker assertions and foreign
+  claims, in both directions — each `% Send` / `% Sync` it writes, and each
+  `% NotSend`, `% NotSync` and `% Frozen` it must not leave out
+  (`% Frozen RGuard {}` in `stdlib/std/rwlock.nu`: what a read guard lends
+  is read-only);
 - the C runtime, LLVM, the linker and the operating system.
