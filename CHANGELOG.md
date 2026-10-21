@@ -120,6 +120,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A futex round trip per request at moderate concurrency** (agora
+  t49). When the netpoller's batch left one fiber beside the one it runs
+  directly, it woke an idle worker for it — but stealing takes half of a
+  queue of two or more, and the poller role stays on the polling core,
+  so the woken worker found nothing and went back to sleep: a futex
+  wake, a futex wait and two context switches per request at c=10. A
+  peer is now woken only for a stealable surplus. 6 workers, c=10:
+  futex calls per request 1.24 → 0.63, context switches 0.46 → 0.23,
+  server CPU 26.8 → 24.3 µs/request (−9 %), throughput and p99 equal or
+  better; c=50 and c=200 unchanged. Profiled first, as the task asked:
+  mutex lock/unlock is ~1 % of server CPU at c=50..200 with no futex
+  contention on the netpoller lock to speak of — the idle-worker wake
+  path was the cost, not the lock. The netpoller's design comment no
+  longer describes EPOLLONESHOT re-arming or a lease-release wake.
+
 - **A lightly loaded server spun 80–250 µs of CPU on every I/O wait**
   (agora t52). With at most four live fibers, a fiber about to park
   first probed its fd with a fixed 256 poll(2) calls — worth it when the

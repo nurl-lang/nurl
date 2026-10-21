@@ -6482,17 +6482,20 @@ long long nurl_fiber_sleep_ms(long long ms);
  * Now an IDLE WORKER becomes the poller (the Go netpoller / tokio
  * driver shape): it takes the poll lease and blocks in epoll_wait
  * itself. A ready fiber is resumed DIRECTLY on that worker — no queue,
- * no second wake, same core, warm cache. Surplus ready fibers go to
- * the global queue and recruit peers; releasing the lease with work in
- * hand also wakes one peer so the poller role is never vacant while
- * connections are live. Registrations are per-fd and PERSISTENT
- * (EPOLLONESHOT, re-armed with EPOLL_CTL_MOD), so the per-event cost
- * no longer scales with the number of parked connections; the wake
- * pipe is an eventfd; deadlines live in a min-heap.
+ * no second wake, same core, warm cache. Of the surplus, the oldest
+ * few go to this worker's own queue and the rest to the global queue,
+ * which recruits peers (nurl__np_hand_out); the lease itself stays
+ * sticky — no replacement-poller wake when it is released, a peer that
+ * goes idle takes it. Registrations are per-fd and PERSISTENT — one
+ * EPOLL_CTL_ADD with EPOLLIN|EPOLLOUT|EPOLLET, never re-armed (see
+ * nurl__np_slot) — so the per-event cost does not scale with the
+ * number of parked connections; the wake pipe is an eventfd; deadlines
+ * live in a min-heap.
  *
  * Waiters on one fd chain (a read fiber and a write fiber may park on
- * the same socket); the armed mask is the chain's union, and an event
- * wakes the matching waiters and re-arms the remainder. A closed or
+ * the same socket); an edge wakes the waiters whose direction it
+ * carries, and a direction nobody waits on is banked in the slot's
+ * ready bits for the next wait's fast path. A closed or
  * unpollable fd cannot deliver an epoll event (close silently drops
  * the registration), so every close/shutdown path that could strand a
  * parked waiter calls nurl__reactor_wake_if_started(), which sets a
@@ -6812,8 +6815,15 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
         nurl__np.freelist = recycle;
         pthread_mutex_unlock(&nurl__np.lock);
     }
+    /* A peer is worth waking for kept fibers only when it can steal
+     * some: stealing takes half of a queue of two or more. One kept
+     * fiber runs here right after `direct` — the poller role stays on
+     * this core (no replacement-poller wake, see the lease release) —
+     * and waking a peer for it was a futex wake, a futex wait and two
+     * context switches per request at c=10 for a peer that found
+     * nothing and went back to sleep. */
     if (spilled > 0)      nurl__wake_n(spilled);
-    else if (kept > 0)    nurl__wake_one();
+    else if (kept >= 2)   nurl__wake_one();
     return direct;
 }
 
