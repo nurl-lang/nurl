@@ -404,6 +404,19 @@ jobs:
           ./tools/check_package_imports.sh
           python3 tools/tests/test_package_imports.py
 
+      - name: package entry points compile (as an installed consumer compiles them)
+        # Nothing compiled packages/ on a PR, so a compiler that grew
+        # stricter (the frozen-Arc and closure-capture rules) broke
+        # lingbot-map, map-anything, onnx, yoloe, objdet and benchmark
+        # with nothing red. Every src/main.nu and src/<name>.nu goes
+        # through `nurlc --check` from a scratch deps/ layout, in
+        # parallel (~1.5 min); an entry needing an optional native
+        # library this build lacks is skipped. The controls prove the
+        # entry selection and the verdicts.
+        run: |
+          python3 tools/check_package_entries.py
+          python3 tools/tests/test_package_entries.py
+
       - name: a package's --version matches its manifest
         # `cli_new prog about VERSION` takes the version as a string
         # literal; nothing derives it from nurl.toml, so the two drift
