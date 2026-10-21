@@ -317,6 +317,14 @@ jobs:
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
 
+      - name: errno is re-derived on every access (fiber migration)
+        # A fiber resumes on any worker thread; errno's `const` accessor
+        # lets the optimiser reuse one thread's errno address across a
+        # park. The runtime routes every access through a volatile
+        # function pointer; this compiles it to IR and requires that no
+        # other function calls __errno_location directly.
+        run: ./tools/check_errno_fiber_safe.sh
+
       - name: nolibc covers every libc symbol the runtime core calls
         # unikernel/nolibc/ exists to supply exactly the libc surface of
         # stdlib/runtime_core.c — a hand-synced pair, and this repo's

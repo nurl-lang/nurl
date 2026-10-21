@@ -1817,7 +1817,9 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
  * a program that resolves nothing never owns one. Off a fiber with no
  * deadline getaddrinfo runs on the caller, as before. Every outbound
  * lookup in this file goes through nurl__resolve: tcp_connect,
- * udp_connect, udp_send_to, udp_addr_resolve, dns_resolve(_port).
+ * udp_connect, udp_send_to, udp_addr_resolve, dns_resolve(_port); the
+ * reverse one (dns_reverse's getnameinfo) through nurl__reverse, the
+ * same pool with a job kind.
  *
  * FIBER MIGRATION. A parked fiber may resume on another worker thread,
  * and errno is a thread-local whose address the compiler treats as
@@ -1825,7 +1827,9 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
  * (nurl_tcp_connect_ms, nurl__resolve) never read errno themselves:
  * every errno read happens in a noinline helper that does not park
  * (nurl__connect_start / nurl__connect_finish) and comes back as a
- * plain value. */
+ * plain value. (runtime_core.c now re-derives errno's address on every
+ * access anyway — tools/check_errno_fiber_safe.sh — so this is the
+ * belt to that brace.) */
 
 #define NURL_RESOLVE_TIMEOUT (-100000)  /* nurl__resolve: deadline passed */
 
@@ -1853,8 +1857,15 @@ static int nurl__poll_ms(long long left) {
 #  define NURL_DNS_MAX_THREADS 8
 #  define NURL_DNS_IDLE_S      30
 
+/* One lookup for the pool: a forward getaddrinfo, or a reverse
+ * getnameinfo (`reverse`, reading sa/salen and writing `name`). */
 typedef struct NurlDnsJob {
     struct NurlDnsJob *next;
+    int                reverse;
+    struct sockaddr_storage sa;
+    socklen_t          salen;
+    int                niflags;
+    char               name[NI_MAXHOST];
     char              *host;
     char               port[16];
     int                noport;     /* service NULL, not "" */
@@ -1908,7 +1919,10 @@ static void *nurl__dns_thread(void *arg) {
         pthread_mutex_unlock(&nurl__dns.lock);
 
         struct addrinfo *res = NULL;
-        int rc = getaddrinfo(j->host, j->noport ? NULL : j->port, &j->hints, &res);
+        int rc = j->reverse
+            ? getnameinfo((struct sockaddr*)&j->sa, j->salen, j->name,
+                          sizeof j->name, NULL, 0, j->niflags)
+            : getaddrinfo(j->host, j->noport ? NULL : j->port, &j->hints, &res);
 
         pthread_mutex_lock(&nurl__dns.lock);
         j->rc   = rc;
@@ -1989,6 +2003,33 @@ static int nurl__dns_signal_fds(NurlDnsJob *j) {
 #  endif
     return 0;
 }
+
+/* Run `j` on the pool and wait for it — parked on the netpoller on a
+ * fiber, in poll(2) off one. 0: done, the result is in `j` and the
+ * caller frees it. -1: could not offload (no thread, no fd); the caller
+ * frees `j` and does the lookup inline. NURL_RESOLVE_TIMEOUT: the
+ * deadline passed and `j` now belongs to the resolver thread. */
+static int nurl__dns_offload(NurlDnsJob *j, int on_fiber, long long deadline) {
+    if (nurl__dns_signal_fds(j) != 0 || nurl__dns_submit(j) != 0) return -1;
+    /* A wake is only a hint (spurious, or the deadline) — `done` under
+     * the lock is the truth. */
+    for (;;) {
+        pthread_mutex_lock(&nurl__dns.lock);
+        int done = j->done;
+        if (!done && nurl__conn_left_ms(deadline) == 0) {
+            j->abandoned = 1;              /* the resolver thread frees it */
+            pthread_mutex_unlock(&nurl__dns.lock);
+            return NURL_RESOLVE_TIMEOUT;
+        }
+        pthread_mutex_unlock(&nurl__dns.lock);
+        if (done) return 0;
+        long long left = nurl__conn_left_ms(deadline);
+        if (!on_fiber || nurl_reactor_wait_read(j->rfd, left) < 0) {
+            struct pollfd pf = { .fd = j->rfd, .events = POLLIN, .revents = 0 };
+            poll(&pf, 1, nurl__poll_ms(left));
+        }
+    }
+}
 #endif /* !_WIN32 */
 
 /* getaddrinfo that does not hold a fiber's worker. `deadline` is an
@@ -2017,28 +2058,11 @@ static int nurl__resolve(const char *host, const char *port,
     j->hints = *hints;
     j->noport = !port;
     snprintf(j->port, sizeof j->port, "%s", port ? port : "");
-    if (!j->host || nurl__dns_signal_fds(j) != 0 || nurl__dns_submit(j) != 0) {
+    int st = j->host ? nurl__dns_offload(j, on_fiber, deadline) : -1;
+    if (st == NURL_RESOLVE_TIMEOUT) return st;
+    if (st != 0) {
         nurl__dns_job_free(j);
         return getaddrinfo(host, port, hints, res);
-    }
-
-    /* A wake is only a hint (spurious, or the deadline) — `done` under
-     * the lock is the truth. */
-    for (;;) {
-        pthread_mutex_lock(&nurl__dns.lock);
-        int done = j->done;
-        if (!done && nurl__conn_left_ms(deadline) == 0) {
-            j->abandoned = 1;              /* the resolver thread frees it */
-            pthread_mutex_unlock(&nurl__dns.lock);
-            return NURL_RESOLVE_TIMEOUT;
-        }
-        pthread_mutex_unlock(&nurl__dns.lock);
-        if (done) break;
-        long long left = nurl__conn_left_ms(deadline);
-        if (!on_fiber || nurl_reactor_wait_read(j->rfd, left) < 0) {
-            struct pollfd pf = { .fd = j->rfd, .events = POLLIN, .revents = 0 };
-            poll(&pf, 1, nurl__poll_ms(left));
-        }
     }
     int rc = j->rc;
     *res = j->res;
@@ -2051,6 +2075,35 @@ static int nurl__resolve(const char *host, const char *port,
     (void)deadline;
     return getaddrinfo(host, port, hints, res);
 #endif
+}
+
+/* getnameinfo that does not hold a fiber's worker: the reverse twin
+ * of nurl__resolve (no deadline — dns_reverse has none). Returns
+ * getnameinfo's code; `out` gets the name. */
+__attribute__((noinline))
+static int nurl__reverse(const struct sockaddr *sa, socklen_t salen,
+                         char *out, size_t cap, int flags) {
+#ifndef _WIN32
+    int on_fiber = nurl_fiber_current() != 0;
+    if (on_fiber && salen <= (socklen_t)sizeof(struct sockaddr_storage)) {
+        NurlDnsJob *j = (NurlDnsJob*)calloc(1, sizeof *j);
+        if (j) {
+            j->rfd = j->wfd = -1;
+            j->reverse = 1;
+            memcpy(&j->sa, sa, salen);
+            j->salen = salen;
+            j->niflags = flags;
+            if (nurl__dns_offload(j, 1, -1) == 0) {
+                int rc = j->rc;
+                if (rc == 0) snprintf(out, cap, "%s", j->name);
+                nurl__dns_job_free(j);
+                return rc;
+            }
+            nurl__dns_job_free(j);
+        }
+    }
+#endif
+    return getnameinfo(sa, salen, out, (socklen_t)cap, NULL, 0, flags);
 }
 
 /* Open a socket for `ai` and start connecting. Returns 0 connected,
@@ -4259,7 +4312,7 @@ long long nurl_udp_setsockopt_int(long long handle, long long level,
     return 0;
 }
 
-char *nurl_dns_reverse(const char *ip) {
+NURL_TLS_FN char *nurl_dns_reverse(const char *ip) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) return strdup("");
 #endif
@@ -4271,9 +4324,8 @@ char *nurl_dns_reverse(const char *ip) {
     /* Port doesn't matter for PTR — getnameinfo wants a non-zero sockaddr
      * to know the family + bytes. */
     char host[NI_MAXHOST] = {0};
-    if (getnameinfo((struct sockaddr*)&sa, salen,
-                    host, sizeof(host), NULL, 0,
-                    NI_NAMEREQD) != 0) return strdup("");
+    if (nurl__reverse((struct sockaddr*)&sa, salen, host, sizeof(host),
+                      NI_NAMEREQD) != 0) return strdup("");
     return strdup(host);
 }
 

@@ -41,6 +41,8 @@ $ `stdlib/std/tls_verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
+& `c` @ nurl_monotonic_ns → i
+
 // Fiber/reactor primitives (nurl_fiber_current, nurl_reactor_wait_*,
 // nurl_tcp_get_fd / _timeout_ms / _set_nonblock). FFI-only module, so
 // this import keeps tls.nu free of any stdlib/std/net.nu dependency —
@@ -174,6 +176,8 @@ $ `stdlib/core/slice.nu`
     i tk_age_add  // its ticket_age_add
     i tk_lifetime  // its ticket_lifetime, seconds
     i tk_received_ms  // wall clock (ms) when it arrived
+    i hs_deadline_ns  // absolute monotonic ns bounding the handshake's
+    // reads and writes (tls_attach_full_until); 0 = none
 }
 
 // The socket is the one raw part: a connection nobody tls_close'd is
@@ -389,6 +393,18 @@ $ `stdlib/core/slice.nu`
 @ __fill inout TlsConnImpl c i n → !i TlsErr {
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
+    // A handshake under a deadline: every read gets what is left of it
+    // as its timeout — SO_RCVTIMEO on a thread, the reactor deadline on
+    // a fiber (both read nurl_tcp_set_timeout) — so the handshake as a
+    // whole, not each read, is bounded.
+    // Rounded UP, plus the 1 ms the reactor's millisecond clock can
+    // fire early by: a read that times out has really reached the
+    // deadline, which is how the caller tells a timeout from a failure.
+    ? > . c hs_deadline_ns 0 {
+        : i left_ns - . c hs_deadline_ns ( nurl_monotonic_ns )
+        ? <= left_ns 0 { ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
+        ( nurl_tcp_set_timeout raw + / + left_ns 999999 1000000 1 )
+    } {}
     ? & on_fiber == . c read_nowait 0 { ( nurl_tcp_set_nonblock raw 1 ) } {}
     ~ < ( vec_len [u] . c rxbuf ) n {
         // Read straight into rxbuf's spare capacity — the previous
@@ -1972,19 +1988,47 @@ $ `stdlib/core/slice.nu`
 // EncryptedExtensions, checked to be one we offered) is stored in
 // `c.alpn_sel`.
 @ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !TlsConn TlsErr {
+    ^ ( __tls_handshake_until raw server_name alpn sess 0 )
+}
+
+// __tls_handshake bounded by `deadline_ns` (absolute nurl_monotonic_ns;
+// 0 = none). Without one, each read waits up to 20 s — an unresponsive
+// peer fails the handshake instead of blocking the client for ever.
+// With one, the reads and writes share it: each read's timeout is what
+// is left, the writes carry it as their write deadline, and a passed
+// deadline fails the handshake (TlsRead / TlsWrite; the caller, who
+// knows the deadline, reports it as a timeout). The 20 s read timeout
+// is what the established connection keeps either way.
+@ __tls_handshake_until i raw s server_name s alpn ( Vec u ) sess i deadline_ns → !TlsConn TlsErr {
     // The connection owns the socket from here, on every path: a connect
     // that failed is closed with it (it used to be left open).
     : TlsConn c__h ( _tls_conn_new raw )
     ? != ( nurl_tcp_err_kind raw ) 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
-    // Read timeout so an unresponsive/dead peer fails the handshake
-    // cleanly instead of blocking the client forever.
-    ( nurl_tcp_set_timeout raw 20000 )
     : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ? > deadline_ns 0 {
+        = . c hs_deadline_ns deadline_ns
+        ( nurl_tcp_set_write_deadline raw deadline_ns )
+    } {
+        ( nurl_tcp_set_timeout raw 20000 )
+    }
     // The handshake machine goes with this scope, on every path out of it.
     : CliHs hs__h ( _cli_hs_new server_name alpn sess )
     : ~ * CliHsImpl hs ( __CliHs_ptr hs__h )
     : !v TlsErr r ( __cli_connect . c 0 . hs 0 )
-    ^ ?? r { T _ → @ !TlsConn TlsErr { T c__h } F e → @ !TlsConn TlsErr { F e } }
+    ?? r {
+        T _ → {
+            // The established connection keeps no handshake deadline. (A
+            // failed handshake has already closed the socket — touching
+            // `raw` then would be a use after free.)
+            ? > deadline_ns 0 {
+                = . c hs_deadline_ns 0
+                ( nurl_tcp_set_write_deadline raw 0 )
+                ( nurl_tcp_set_timeout raw 20000 )
+            } {}
+            ^ @ !TlsConn TlsErr { T c__h }
+        }
+        F e → ^ @ !TlsConn TlsErr { F e }
+    }
 }
 
 // The record layer around the machine: ClientHello out, the server's
@@ -2252,7 +2296,14 @@ $ `stdlib/core/slice.nu`
 // blank somewhere; an HTTP client that wants to resume a session on the
 // same connection it negotiates HTTP/2 over needs all of them at once.
 @ tls_attach_full i raw s server_name s alpn ( Vec u ) sess i verify → !TlsConn TlsErr {
-    : !TlsConn TlsErr r ( __tls_handshake raw server_name alpn sess )
+    ^ ( tls_attach_full_until raw server_name alpn sess verify 0 )
+}
+
+// tls_attach_full with the whole handshake bounded by `deadline_ns`, an
+// absolute nurl_monotonic_ns (std/time.nu's monotonic_ns); 0 = none,
+// which is tls_attach_full. A deadline that passes fails the handshake.
+@ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( __tls_handshake_until raw server_name alpn sess deadline_ns )
     ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
     ^ r
 }

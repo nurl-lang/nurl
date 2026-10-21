@@ -2,7 +2,9 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-dns_resolve_loopback=5
+dns_resolve_loopback_every_time=yes
 yielder_ran_during_lookups=yes
+dns_reverse_named_every_time=yes
+yielder_ran_during_reverse=yes
 localhost_connects=5
 numeric=connected
