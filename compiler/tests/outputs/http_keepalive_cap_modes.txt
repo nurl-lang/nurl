@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+thread_default answered=1000 close_at=1000
+fiber_default answered=1005 close_at=0
+fiber_cap3 answered=3 close_at=3
+fiber_unlimited answered=1005 close_at=0

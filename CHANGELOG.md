@@ -101,6 +101,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   these hand out own their elements, and an iterator's source must
   outlive it (changing it in between is fine).
 
+- **The HTTP server no longer caps keep-alive on a fiber (agora #48).**
+  A connection served by `server_run_async` holds a fiber, not a worker
+  thread, so the default per-connection request cap is gone there: the
+  connection lives until the peer closes it, a `Connection: close`, or
+  the idle timeout. Before, every keep-alive client was told to close
+  after 1000 requests and had to reconnect, and the server re-accepted
+  and spawned a new fiber. `server_run` and `server_run_pool` keep the
+  1000 cap. New `server_keepalive_auto` (the default every constructor
+  without an explicit cap now stores) and `server_keepalive_unlimited`
+  values for `max_keepalive_requests`; an explicit cap still applies in
+  every mode.
+
+### Packages
+
+- http 0.7.7: an unset `http_app_max_keepalive` follows the serving
+  mode — no cap under `http_app_async`, 1000 for the thread servers.
+
 ## [0.76.0] — 2026-10-20
 
 The toolchain, read by an agent. Every compiler error a tool parses now
