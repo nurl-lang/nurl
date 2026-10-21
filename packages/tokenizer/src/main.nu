@@ -15,8 +15,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/std/bytes.nu`
-$ `src/tokenizer.nu`
-$ `src/hf.nu`
+$ `tokenizer.nu`
+$ `hf.nu`
 
 @ __print_ids ( Vec i ) ids → v {
     : ~ i k 0

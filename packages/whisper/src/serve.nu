@@ -41,9 +41,9 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/http/src/http.nu`
-$ `src/run.nu`
-$ `src/silero.nu`
-$ `src/stream.nu`
+$ `run.nu`
+$ `silero.nu`
+$ `stream.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/option.nu`
 

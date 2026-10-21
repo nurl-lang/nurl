@@ -102,8 +102,10 @@ decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' | 'raw' ;
 
 (* $ `path` IDENT?
    Inline-compiles the .nu file at `path` into the current module. The
-   path is resolved relative to the compiler's current working directory,
-   NOT relative to the importing file. A path without a `.nu` extension
+   path is tried relative to the importing file's directory, then the
+   compiler's current working directory, then $NURL_STDLIB — so a
+   package's sibling module is `name.nu`, found in its own checkout and
+   under a consumer's deps/<pkg>/ alike. A path without a `.nu` extension
    is first tried as written, then with `.nu` appended — so
    `stdlib/core/string` and `stdlib/core/string.nu` name the same file.
    The same `path` is imported at most once per compilation

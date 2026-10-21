@@ -51,13 +51,13 @@ $ `stdlib/std/random.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/sort.nu`
-$ `src/orgfiles.nu`
-$ `src/store.nu`
-$ `src/dynamic.nu`
-$ `src/authz.nu`
-$ `src/wfs.nu`
-$ `src/httpsrc.nu`
-$ `src/imptime.nu`
+$ `orgfiles.nu`
+$ `store.nu`
+$ `dynamic.nu`
+$ `authz.nu`
+$ `wfs.nu`
+$ `httpsrc.nu`
+$ `imptime.nu`
 $ `stdlib/core/slice.nu`
 
 : i SRC_ID_LEN 12

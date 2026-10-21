@@ -19,10 +19,10 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `stdlib/ext/json.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
-$ `src/autoenc.nu`
-$ `src/forecast.nu`
+$ `prep.nu`
+$ `model.nu`
+$ `autoenc.nu`
+$ `forecast.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `stdlib/core/slice.nu`
 

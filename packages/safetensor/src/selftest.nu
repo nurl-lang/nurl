@@ -13,7 +13,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `src/safetensor.nu`
+$ `safetensor.nu`
 $ `stdlib/core/slice.nu`
 
 : ~ i __st_pass 0

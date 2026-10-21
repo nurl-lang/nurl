@@ -13,8 +13,8 @@ $ `stdlib/std/args.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `src/safetensor.nu`
-$ `src/selftest.nu`
+$ `safetensor.nu`
+$ `selftest.nu`
 
 @ __shape_str StTensor t → String {
     : String s ( string_from `[` )

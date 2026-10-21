@@ -37,11 +37,11 @@ $ `stdlib/std/float.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
-$ `src/dino.nu`
-$ `src/rope.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
+$ `dino.nu`
+$ `rope.nu`
 
 : i AG_DIM 1024
 : i AG_HEADS 16

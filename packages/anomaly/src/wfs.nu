@@ -50,7 +50,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/xml.nu`
 $ `stdlib/ext/http_request.nu`
 $ `deps/http-client/src/http_client.nu`
-$ `src/imptime.nu`
+$ `imptime.nu`
 
 // A fetch that takes longer than this has hung; an answer bigger than
 // this is not a time window a source should ask for at once.

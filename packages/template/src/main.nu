@@ -16,8 +16,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/ext/json.nu`
-$ `src/template.nu`
-$ `src/loader.nu`
+$ `template.nu`
+$ `loader.nu`
 
 @ main → i {
     : ArgParser p ( args_new `template` `render a template against a JSON context` )

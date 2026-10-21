@@ -23,7 +23,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
-$ `src/rope.nu`
+$ `rope.nu`
 
 : f BK_EPS 0.000001  // norm1 / norm2: DINOv2's partial(LayerNorm, eps=1e-6)
 

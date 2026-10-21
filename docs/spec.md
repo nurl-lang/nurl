@@ -174,8 +174,14 @@ returns `v`.)
 ### 3.2 `$`-imports
 
 A `$ "path"` declaration inline-compiles the `.nu` file at `path` into
-the current module. The path is resolved relative to the compiler's
-current working directory, **not** relative to the importing file.
+the current module. The path is tried relative to the **importing
+file's** directory first, then the compiler's current working directory,
+then `$NURL_STDLIB`; a path without the `.nu` suffix is retried with it
+after all three miss. A package's source therefore imports a sibling as
+`name.nu` — which resolves whether the package is built from its own
+root or installed under a consumer's `deps/<pkg>/` — never as
+`src/name.nu`, which only the package root's working directory finds
+(`tools/check_package_imports.sh` refuses it).
 
 The same path is imported **at most once** per compilation. Dedup keys on
 the `realpath(3)`-canonical file path (falling back to the normalised path

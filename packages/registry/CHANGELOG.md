@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.7] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/registry/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.4.6] — 2026-10-20
 
 ### Added

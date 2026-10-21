@@ -31,11 +31,11 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `stdlib/ext/http_cli.nu`
 $ `deps/http/src/http.nu`
-$ `src/db.nu`
-$ `src/auth.nu`
-$ `src/store.nu`
-$ `src/extract.nu`
-$ `src/pages.nu`
+$ `db.nu`
+$ `auth.nu`
+$ `store.nu`
+$ `extract.nu`
+$ `pages.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Configuration (set once, before serving) ──────────────────────────

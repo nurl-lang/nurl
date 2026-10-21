@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.10] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/iforest/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.1.9] — 2026-10-15
 
 ### Added

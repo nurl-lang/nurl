@@ -43,7 +43,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/rng.nu`
-$ `src/score.nu`
+$ `score.nu`
 $ `deps/mlp/src/mlp.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`

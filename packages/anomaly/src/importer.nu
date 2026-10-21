@@ -28,7 +28,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
-$ `src/imptime.nu`
+$ `imptime.nu`
 $ `stdlib/core/slice.nu`
 
 // A file bigger than this is refused before it is parsed. Generous enough

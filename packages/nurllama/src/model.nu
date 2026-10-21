@@ -60,8 +60,8 @@ $ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
-$ `src/kernels.nu`
-$ `src/tokenizer.nu`
+$ `kernels.nu`
+$ `tokenizer.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/core/slice.nu`
 

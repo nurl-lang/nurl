@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports "type 'p' … declared LATER" either. `: P 5` with `P` a struct
   — the one shape the rule cannot read as inferred — says why `P` was
   taken as the type.
+- **Sixteen packages are installable as dependencies again (agora #60).**
+  Their `src/` modules imported siblings as `src/<name>.nu`, which nurlc
+  finds only through the working directory — the package root in every
+  in-repo build, the consumer's root once the package sits under
+  `deps/<pkg>/`. anomaly (0.36.5, whose README documents
+  `` $ `deps/anomaly/src/dynamic.nu` ``), arima, audio, benchmark, chart,
+  hub, iforest, lingbot-map, map-anything, md2html, nurllama, registry,
+  safetensor, template, tokenizer and whisper import them relative to
+  the importing file now, with a patch release each.
+  `tools/check_package_imports.sh` gains the rule: every import of a
+  packaged source that is not `stdlib/…`, `deps/…` or `packages/…` must
+  exist beside the importer. Spec §3.2 described the lookup as
+  working-directory-only; it is importer first, then the working
+  directory, then `$NURL_STDLIB`.
 - **Deferred diagnostics carry a column, the echoed line and a caret
   (agora #61).** A missing supertrait impl printed `file:2: error: …`
   with nothing under it, unlike every other diagnostic; so did the
