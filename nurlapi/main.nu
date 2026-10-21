@@ -164,6 +164,34 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// `opt` is pushed straight into clang/zig argv, so it is a literal from a
+// closed set — never caller text. A raw string here let
+// `--ld-path=<file>` make the driver execute an arbitrary binary as the
+// linker: pre-auth RCE on every build endpoint.
+@ opt_literal s o → s {
+    ? != 0 ( nurl_str_eq o `-O0` ) { ^ `-O0` } {}
+    ? != 0 ( nurl_str_eq o `-O1` ) { ^ `-O1` } {}
+    ? != 0 ( nurl_str_eq o `-O2` ) { ^ `-O2` } {}
+    ? != 0 ( nurl_str_eq o `-O3` ) { ^ `-O3` } {}
+    ? != 0 ( nurl_str_eq o `-Os` ) { ^ `-Os` } {}
+    ? != 0 ( nurl_str_eq o `-Oz` ) { ^ `-Oz` } {}
+    ^ ``
+}
+
+// The 400 for an `opt` that is not on the list.
+@ bad_opt_response s bad → HttpResponse {
+    : String m ( string_with_cap 160 )
+    ( string_push_str m `unsupported opt '` )
+    ( string_push_str m bad )
+    ( string_push_str m `' — opt accepts only: -O0 -O1 -O2 -O3 -Os -Oz` )
+    : Json e ( json_obj_new )
+    ( json_obj_set e `error` ( json_str_lit ( string_data m ) ) )
+    : String body ( json_stringify e )
+    : HttpResponse hr ( response_text 400 ( string_data body ) )
+    ( response_set_header hr `Content-Type` `application/json` )
+    ^ hr
+}
+
 // The 400 for a flag that is not on the list. Built through the JSON
 // writer rather than string-pasted, because `bad` is caller bytes.
 @ bad_flag_response String bad → HttpResponse {
@@ -872,6 +900,8 @@ i clang_rc s build_stdout s build_stderr → v {
             : s filename ( get_common_json root `filename` `main.nu` )
             ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
+            : s opt_lit ( opt_literal opt )
+            ? == ( nurl_str_len opt_lit ) 0 { ^ ( bad_opt_response opt ) } {}
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
             // that quietly did not do what was asked.
@@ -904,7 +934,7 @@ i clang_rc s build_stdout s build_stderr → v {
                             ? ( output_success n_out ) {
                                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
                                 : ( Vec s ) clang_args ( vec_new [s] )
-                                ( vec_push [s] clang_args opt )
+                                ( vec_push [s] clang_args opt_lit )
                                 ( vec_push [s] clang_args `-Wno-override-module` )
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 : String runtime_o ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.native.o` )
@@ -1020,6 +1050,8 @@ i clang_rc s build_stdout s build_stderr → v {
             // .wasm but cuts compile time roughly in half. Caller can still
             // explicitly request `-O2` or `-Oz` via the JSON `opt` field.
             : s opt ( get_common_json root `opt` `-O1` )
+            : s opt_lit ( opt_literal opt )
+            ? == ( nurl_str_len opt_lit ) 0 { ^ ( bad_opt_response opt ) } {}
 
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -1102,7 +1134,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) } F _ → {} }
 
                     : ( Vec s ) clang_args ( vec_new [s] )
-                    ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` )
+                    ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt_lit ) ( vec_push [s] clang_args `-Wno-override-module` )
                     // Keep dead-code elimination off: NURL closures take function
                     // addresses (→ wasm function-table indices). --gc-sections
                     // prunes/renumbers the table so a stored call_indirect index no
@@ -1272,6 +1304,8 @@ i clang_rc s build_stdout s build_stderr → v {
             {
                 ^ ( bad_flag_response __badf ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
+            : s opt_lit ( opt_literal opt )
+            ? == ( nurl_str_len opt_lit ) 0 { ^ ( bad_opt_response opt ) } {}
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
@@ -1298,7 +1332,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 : String obj_path ( path_join ( string_data build_dir ) `main.o` )
 
                                 : ( Vec s ) clang_args ( vec_new [s] )
-                                ( vec_push [s] clang_args opt )
+                                ( vec_push [s] clang_args opt_lit )
                                 ( vec_push [s] clang_args `-Wno-override-module` )
                                 ( vec_push [s] clang_args `--target=x86_64-w64-mingw32` )
                                 // Emit one section per function/datum so the linker's
@@ -1321,7 +1355,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                         // gcc — if the compile failed it still gets called but
                                         // exits with its own (informative) error.
                                         : ( Vec s ) link_args ( vec_new [s] )
-                                        ( vec_push [s] link_args opt )
+                                        ( vec_push [s] link_args opt_lit )
                                         // -s strips the COFF symbol table + DWARF debug
                                         // sections, which are the bulk of an unstripped mingw
                                         // binary (~halves the .exe on its own). --gc-sections
@@ -1445,6 +1479,8 @@ i clang_rc s build_stdout s build_stderr → v {
             : s filename ( get_common_json root `filename` `main.nu` )
             ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
+            : s opt_lit ( opt_literal opt )
+            ? == ( nurl_str_len opt_lit ) 0 { ^ ( bad_opt_response opt ) } {}
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
             // that quietly did not do what was asked.
@@ -1470,7 +1506,7 @@ i clang_rc s build_stdout s build_stderr → v {
                             ? ( output_success n_out ) {
                                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
                                 : ( Vec s ) zig_args ( vec_new [s] )
-                                ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt )
+                                ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt_lit )
                                 ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data ( get_runtime_mac_o ) ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
                                 : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
@@ -3517,6 +3553,8 @@ i clang_rc s build_stdout s build_stderr → v {
             : s filename ( get_common_json root `filename` `main.nu` )
             ? ! ( build_filename_ok filename ) { ^ ( bad_filename_response ) } {}
             : s opt ( get_common_json root `opt` `-O2` )
+            : s opt_lit ( opt_literal opt )
+            ? == ( nurl_str_len opt_lit ) 0 { ^ ( bad_opt_response opt ) } {}
             ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s triple ( __zig_triple_for target )
             ? == ( nurl_str_len triple ) 0 {
@@ -3555,7 +3593,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 : ( Vec s ) zig_args ( vec_new [s] )
                                 ( vec_push [s] zig_args `cc` )
                                 ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args triple )
-                                ( vec_push [s] zig_args opt )
+                                ( vec_push [s] zig_args opt_lit )
                                 ( vec_push [s] zig_args `-Wno-override-module` )
                                 ? is_static { ( vec_push [s] zig_args `-static` ) } {}
                                 ( vec_push [s] zig_args ( string_data ll_path ) )

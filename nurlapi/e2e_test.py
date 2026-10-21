@@ -821,6 +821,10 @@ def t_diagnostics_contract(c: Client) -> None:
     # directory unchecked, so '../' wrote outside it.
     status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "filename": "../../escape.nu"})
     assert_eq("traversing filename rejected", status, 400)
+    # `opt` is a literal from a closed set, not a clang argv slot:
+    # `--ld-path=<file>` made clang execute that file as the linker.
+    status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "opt": "--ld-path=/bin/true"})
+    assert_eq("arbitrary opt rejected", status, 400)
     env = _tool_call(c, "nurl_build_native", {"source": "@ main → i { ^ 0 }\n", "filename": "a/b.nu"})
     assert_true("MCP: refused build is isError", env.get("result", {}).get("isError") is True, str(env)[:200])
 
