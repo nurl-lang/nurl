@@ -6979,6 +6979,7 @@ long long nurl_fiber_worker_id(void) { return -1; }
 void      nurl_fiber_park_with_mutex(long long mutex_h) { (void)mutex_h; }
 void      nurl_fiber_unpark(long long fiber) { (void)fiber; }
 void      nurl_runtime_init(long long worker_count) { (void)worker_count; }
+long long nurl_runtime_worker_count(void) { return 1; }
 void      nurl_runtime_run(void) {}
 void      nurl_runtime_shutdown(void) {}
 
