@@ -35,7 +35,9 @@
 //   ( server_new_with_timeout    listener handler i idle_ms )                      → HttpServer
 //   ( server_new_full            listener handler i idle_ms i max_keepalive_reqs ) → HttpServer
 //   ( server_default_idle_timeout_ms )       → i      30000 ms
-//   ( server_default_max_keepalive_requests ) → i     1000
+//   ( server_default_max_keepalive_requests ) → i     1000 (thread-blocking modes)
+//   ( server_keepalive_auto )                 → i     -2   per-mode default
+//   ( server_keepalive_unlimited )            → i     -1   no reuse cap
 //   ( server_run_once HttpServer s )                     → ! v NetErr
 //   ( server_run      HttpServer s )                     → ! v NetErr
 //   ( server_run_pool HttpServer s i n_workers )         → ! v NetErr
@@ -70,9 +72,15 @@
 //   * HTTP/1.0  → close (we do not honour `Connection: keep-alive`
 //     opt-in for HTTP/1.0; clients that need keep-alive must speak
 //     HTTP/1.1).
-//   * After `max_keepalive_requests` reuses on one connection
-//     (default 1000), the server forces close — a defence-in-depth
-//     cap against a single client monopolising a worker.
+//   * After `max_keepalive_requests` reuses on one connection the
+//     server forces close — a defence-in-depth cap against a single
+//     client monopolising a worker. The default (`server_keepalive_auto`)
+//     depends on the concurrency model: 1000 under server_run /
+//     server_run_pool, where a connection holds a whole worker thread,
+//     and no cap under server_run_async, where it holds only a fiber —
+//     there the idle timeout below is the bound, and a cap would only
+//     force the client to reconnect (and the server to re-accept and
+//     re-spawn a fiber) every N requests.
 //   * The per-conn idle timeout (`tcp_set_timeout`, default 30 s)
 //     applies to EVERY recv on the connection — including the wait
 //     for the next request between calls. So a connection that
@@ -120,7 +128,10 @@ $ `stdlib/core/slice.nu`
 //
 // Six knobs at v2.1+:
 //   * idle_timeout_ms          — per-conn recv deadline. 0 = OS default.
-//   * max_keepalive_requests   — per-conn request reuse cap. 0 = no keep-alive.
+//   * max_keepalive_requests   — per-conn request reuse cap. 0 = no keep-alive,
+//                                server_keepalive_unlimited (-1) = no cap,
+//                                server_keepalive_auto (-2) = the per-mode
+//                                default (see server_keepalive_auto).
 //   * limits                   — head / header-count / body byte caps
 //                                (consulted by parse_request_head_with /
 //                                 _finish_body's body-byte loop).
@@ -232,13 +243,34 @@ $ `stdlib/core/slice.nu`
 // canned 400 / closes the connection). Pass 0 to disable.
 @ server_default_idle_timeout_ms → i { ^ 30000 }
 
-// Default cap on keep-alive request reuse per connection. After this
-// many requests on a single conn, the server forces `Connection:
-// close` and drops the conn. Defence-in-depth — a single misbehaving
-// client cannot monopolise one worker forever. Pass 0 to disable
-// keep-alive entirely (every connection serves exactly one request,
-// matching pre-Phase-5.4 behaviour).
+// Default cap on keep-alive request reuse per connection in the
+// thread-blocking modes (server_run, server_run_pool). After this many
+// requests on a single conn, the server forces `Connection: close` and
+// drops the conn. Defence-in-depth — a single misbehaving client cannot
+// monopolise one worker thread forever. Pass 0 to disable keep-alive
+// entirely (every connection serves exactly one request, matching
+// pre-Phase-5.4 behaviour).
 @ server_default_max_keepalive_requests → i { ^ 1000 }
+
+// `max_keepalive_requests` value for "no reuse cap": the connection
+// lives until the peer closes it, a request or response says
+// `Connection: close`, or the idle timeout fires.
+@ server_keepalive_unlimited → i { ^ -1 }
+
+// `max_keepalive_requests` value for "the default of whichever model
+// serves the connection" — what every constructor without an explicit
+// cap stores. Resolved per connection: on a fiber (server_run_async) a
+// connection costs a fiber, not a worker, so it is uncapped and the idle
+// timeout bounds it; on a thread it is server_default_max_keepalive_requests.
+@ server_keepalive_auto → i { ^ -2 }
+
+// The cap a connection is served under: `auto` resolved for the calling
+// context (fiber → unlimited, thread → 1000); every other value as given.
+@ __keepalive_cap i configured → i {
+    ? != configured ( server_keepalive_auto ) { ^ configured } {}
+    ? != ( nurl_fiber_current ) 0 { ^ ( server_keepalive_unlimited ) } {}
+    ^ ( server_default_max_keepalive_requests )
+}
 
 // Per-request total timeout default. 0 = disabled (matches pre-Phase-8
 // behaviour; the per-conn idle timeout still bounds slow reads).
@@ -247,7 +279,7 @@ $ `stdlib/core/slice.nu`
 @ server_new TcpListener listener ( @ HttpResponse HttpRequest ) handler → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler
         ( server_default_idle_timeout_ms )
-        ( server_default_max_keepalive_requests )
+        ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
         @ ?DosState { F } } )
@@ -255,7 +287,7 @@ $ `stdlib/core/slice.nu`
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms
-        ( server_default_max_keepalive_requests )
+        ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
         @ ?DosState { F } } )
@@ -285,7 +317,7 @@ $ `stdlib/core/slice.nu`
     . dos_limits max_conns_per_ip )
     ^ ( __srv_new @ HttpServerImpl { listener handler
         ( server_default_idle_timeout_ms )
-        ( server_default_max_keepalive_requests )
+        ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
         @ ?DosState { T st } } )
@@ -822,7 +854,8 @@ $ `stdlib/core/slice.nu`
 //   * `_finish_body` fails. We write a 400, then close.
 //   * The request OR response carries `Connection: close`. We write
 //     the response (forcing `Connection: close`), then close.
-//   * `n_served` reaches `max_keepalive_requests`. Same as the
+//   * `n_served` reaches `max_keepalive_requests` (resolved through
+//     __keepalive_cap; never on an uncapped connection). Same as the
 //     close-after-response path — the cap is defence-in-depth, not
 //     a polished policy.
 //   * Any `__write_response` returns Err. We close.
@@ -832,7 +865,7 @@ $ `stdlib/core/slice.nu`
 // they all just mean "this connection is done, accept the next one".
 
 @ _serve_keepalive_loop HttpServer s TcpConn conn → v {
-    : i max_req . ( __srv s ) max_keepalive_requests
+    : i max_req ( __keepalive_cap . ( __srv s ) max_keepalive_requests )
     : HttpLimits lim . ( __srv s ) limits
     : i body_max . lim body_default_max
     : i req_timeout_ms . ( __srv s ) request_total_timeout_ms
@@ -974,7 +1007,9 @@ $ `stdlib/core/slice.nu`
                         } {}
                         : b resp_close ( __response_says_close final_resp )
                         = n_served + n_served 1
-                        : b at_cap ? > max_req 0 >= n_served max_req T
+                        // max_req > 0: a cap; 0: no keep-alive (close
+                        // after this one); < 0: uncapped.
+                        : b at_cap ? > max_req 0 >= n_served max_req == max_req 0
                         : b should_close | | | req_close resp_close at_cap timed_out
                         : !v NetErr wr ( __write_response conn final_resp should_close wire )
                         ( request_recycle req spare )

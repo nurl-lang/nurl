@@ -105,7 +105,7 @@ $ `stdlib/core/marker.nu`
 : PkMemberTable { ( Shared PkMemberTableImpl ) ctl }
 
 // Every copy is the same table, changed in place with no lock: a copy
-// moved to another thread while another stays here would race it (h318).
+// moved to another thread while another stays here would race it (h319).
 // What a thread may have is pktable_liveness.
 % NotSend PkMemberTable {}
 

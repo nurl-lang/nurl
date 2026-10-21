@@ -58,7 +58,7 @@ $ `stdlib/std/arc.nu`
     String webroot  // directory served for unmatched GET/HEAD when has_static
     i body_max  // request body byte cap; -1 → stdlib default (10 MiB)
     i head_max  // request head byte cap; -1 → stdlib default (8 KiB)
-    i max_keepalive  // per-conn request reuse cap; -1 → server default (0 = close after one)
+    i max_keepalive  // per-conn request reuse cap; -1 → per-mode default (0 = close after one)
     i req_timeout_ms  // per-request wall-clock budget; -1 → server default (0 = disabled)
     i http3  // 1 → a TLS listener also serves HTTP/3 on the same port over UDP (default)
     String pq_cert  // optional second identity for TLS listeners: ML-DSA chain PEM ("" = none)
@@ -216,6 +216,10 @@ $ `stdlib/std/arc.nu`
 }
 
 // Per-connection keep-alive request cap (0 = close after one request).
+// Unset, the cap depends on how the app serves: 1000 for the thread
+// servers (single-threaded and http_app_workers), where a connection
+// holds a whole worker; none for http_app_async, where it holds only a
+// fiber and the idle timeout (http_app_idle_ms) is the bound.
 @ http_app_max_keepalive HttpApp a__h i n → v {
     : ~ HttpAppImpl a ( rc_take [HttpAppImpl] . a__h a )
     = . a max_keepalive n
@@ -479,7 +483,7 @@ $ `stdlib/std/arc.nu`
         }
     } {}
     : ~ i ka . a max_keepalive
-    ? < ka 0 { = ka ( server_default_max_keepalive_requests ) } {}
+    ? < ka 0 { = ka ( server_keepalive_auto ) } {}
     : ~ i rt . a req_timeout_ms
     ? < rt 0 { = rt ( server_default_request_total_timeout_ms ) } {}
     : HttpServer srv ( server_new_complete listener base . a idle_ms ka ( __httpapp_limits a ) rt )

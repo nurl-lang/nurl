@@ -32,13 +32,16 @@ A **ref** is a Hugging Face shorthand or a URL:
 The one call a consumer wants is `hub_get` — hand it whatever the user typed
 and get back a usable local path:
 
-```nurl
+```nurl params="s user_arg"
 $ `deps/hub/src/hub.nu`
 
 // a local path passes straight through; an HF ref is fetched (a bare
 // org/repo → a directory, a ref with a file → that file's path)
 : !String String m ( hub_get user_arg )
-?? m { T path → { /* open ( string_data path ) — a dir for embed/whisper, a file for gguf */ } F e → { /* … */ } }
+?? m {
+    T path → {}   // open ( string_data path ) — a dir for embed/whisper, a file for gguf
+    F e → {}      // …
+}
 ```
 
 So `embed serve BAAI/bge-m3`, `embed serve ./my-model`, and

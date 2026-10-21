@@ -1259,6 +1259,9 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
  *                                              → 16.
  *   tcp_connect(host, port)                 → CONN handle (IPv4 or IPv6
  *                                              via getaddrinfo).
+ *   tcp_connect_ms(host, port, ms)          → same, one deadline over
+ *                                              lookup + handshake (ms<=0
+ *                                              none); fiber-aware — §18-r.
  *   tcp_accept(listener)                    → fresh CONN; eager peer cap.
  *   tcp_read (h, buf, n) → >0 bytes / 0 EOF / <0 err  (sets h->err_kind)
  *   tcp_write(h, buf, n) → total bytes or -1
@@ -1494,19 +1497,22 @@ typedef SOCKET nurl_sockfd_t;
 #    include <unistd.h>
 #    include <fcntl.h>
 #    include <sys/time.h>
+#    include <poll.h>              /* connect deadline off a fiber */
+#    include <pthread.h>           /* §18-r resolver threads */
+#    if defined(__linux__)
+#      include <sys/eventfd.h>     /* §18-r resolver completion signal */
+#    endif
 typedef int nurl_sockfd_t;
 #    define NURL_INVALID_SOCK (-1)
 #    if defined(__linux__)
 /* Closing a socket silently drops its epoll registration and orphans
  * its netpoller state (ready bits, parked waiters) — route every
- * socket close through the netpoller so waiters wake and the per-fd
- * slot is reset before the fd number can be reused. Defined in §25. */
-extern void nurl__np_on_close(int fd);
-static inline int nurl__close_sock_hooked(int fd) {
-    nurl__np_on_close(fd);
-    return close(fd);
-}
-#      define nurl_close_sock(fd) nurl__close_sock_hooked(fd)
+ * socket close through the netpoller, which resets the per-fd slot and
+ * closes the fd as one step under its lock, so waiters wake and no
+ * registration can slip in before the fd number is reused. Defined in
+ * §25. */
+extern int nurl__np_close(int fd);
+#      define nurl_close_sock(fd) nurl__np_close(fd)
 #    else
 #      define nurl_close_sock(fd) close(fd)
 #    endif
@@ -1772,10 +1778,386 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     return (long long)(uintptr_t)h;
 }
 
-/* Client-side connect — getaddrinfo for host (DNS or IPv4/IPv6 literal)
- * + socket + connect. Returned CONN handle consumes read/write/close
- * identically to an accept()ed conn. */
-long long nurl_tcp_connect(const char *host, long long port) {
+/* ── §18-r  Outbound name resolution and connect, fiber-aware ───────
+ *
+ * A fiber that blocks in the kernel blocks its whole M:N worker and
+ * every fiber queued behind it. Reads and writes have long parked on
+ * the netpoller instead; the two outbound calls — getaddrinfo and
+ * connect(2) — did not, so one slow DNS answer or one SYN into a black
+ * hole stalled a worker for the resolver's or the kernel's full
+ * timeout (minutes, for an unanswered SYN).
+ *
+ * CONNECT. On a fiber the socket is opened non-blocking; connect(2)
+ * answers EINPROGRESS and the fiber parks for writability — a pending
+ * connection turns writable exactly when it is established or fails —
+ * then SO_ERROR says which. Off a fiber with no timeout nothing
+ * changes: one blocking connect(2) per address, as before. A connect
+ * timeout is one absolute deadline over the whole call, resolution
+ * included: on a fiber it rides the netpoller's timer heap, off a
+ * fiber it is a poll(2) (select() on Winsock). Every address the
+ * resolver returns is tried in order until one connects (sequential
+ * fallback); a deadline that passes ends the call, since it budgets
+ * the whole connect, not each address. The connected socket comes back
+ * BLOCKING whichever path made it — what the plain path returns —
+ * because raw callers (std/tls.nu's __fill, ext/http_pure.nu) issue
+ * plain nurl_tcp_read on it; the async wrappers ask for O_NONBLOCK
+ * themselves, through the memo.
+ *
+ * RESOLUTION. A numeric literal never reaches a resolver: getaddrinfo
+ * with AI_NUMERICHOST answers it in-process. A name, on a fiber or
+ * under a deadline, goes to a small pool of resolver threads running
+ * the real getaddrinfo — /etc/hosts, nsswitch and resolv.conf mean
+ * exactly what they meant before — while the fiber parks on the job's
+ * completion eventfd (a pipe off Linux) through the ordinary netpoller:
+ * the runtime's existing cross-thread wake, with the timer heap's
+ * deadline for free. A waiter whose deadline passes abandons the job,
+ * and the resolver thread frees it when getaddrinfo returns
+ * (getaddrinfo cannot be cancelled). The pool grows on demand to
+ * NURL_DNS_MAX_THREADS and a thread idle for NURL_DNS_IDLE_S exits, so
+ * a program that resolves nothing never owns one. Off a fiber with no
+ * deadline getaddrinfo runs on the caller, as before. Every outbound
+ * lookup in this file goes through nurl__resolve: tcp_connect,
+ * udp_connect, udp_send_to, udp_addr_resolve, dns_resolve(_port).
+ *
+ * FIBER MIGRATION. A parked fiber may resume on another worker thread,
+ * and errno is a thread-local whose address the compiler treats as
+ * constant within a function. So the functions that park
+ * (nurl_tcp_connect_ms, nurl__resolve) never read errno themselves:
+ * every errno read happens in a noinline helper that does not park
+ * (nurl__connect_start / nurl__connect_finish) and comes back as a
+ * plain value. */
+
+#define NURL_RESOLVE_TIMEOUT (-100000)  /* nurl__resolve: deadline passed */
+
+extern long long nurl_monotonic_ns(void);
+long long nurl_fiber_current(void);
+long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
+long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
+
+static long long nurl__conn_now_ms(void) {
+    return nurl_monotonic_ns() / 1000000LL;
+}
+
+/* Milliseconds left until `deadline` (-1 = none → -1), never below 0. */
+static long long nurl__conn_left_ms(long long deadline) {
+    if (deadline < 0) return -1;
+    long long left = deadline - nurl__conn_now_ms();
+    return left > 0 ? left : 0;
+}
+
+#ifndef _WIN32
+static int nurl__poll_ms(long long left) {
+    return left < 0 ? -1 : (int)(left > 0x7fffffff ? 0x7fffffff : left);
+}
+
+#  define NURL_DNS_MAX_THREADS 8
+#  define NURL_DNS_IDLE_S      30
+
+typedef struct NurlDnsJob {
+    struct NurlDnsJob *next;
+    char              *host;
+    char               port[16];
+    int                noport;     /* service NULL, not "" */
+    struct addrinfo    hints;
+    struct addrinfo   *res;
+    int                rc;
+    int                done;       /* nurl__dns.lock */
+    int                abandoned;  /* nurl__dns.lock: the waiter gave up */
+    int                rfd, wfd;   /* completion signal; rfd == wfd: eventfd */
+} NurlDnsJob;
+
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  cv;
+    NurlDnsJob     *head, *tail;
+    int             queued, threads, idle;
+} nurl__dns = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,
+                NULL, NULL, 0, 0, 0 };
+
+static void nurl__dns_job_free(NurlDnsJob *j) {
+    if (j->res) freeaddrinfo(j->res);
+    /* Through the close hook: the waiter may have parked on rfd, and the
+     * fd number must not reach its next owner with netpoller state. */
+    if (j->rfd >= 0) nurl_close_sock(j->rfd);
+    if (j->wfd >= 0 && j->wfd != j->rfd) nurl_close_sock(j->wfd);
+    free(j->host);
+    free(j);
+}
+
+static void *nurl__dns_thread(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&nurl__dns.lock);
+    for (;;) {
+        while (!nurl__dns.head) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += NURL_DNS_IDLE_S;
+            nurl__dns.idle++;
+            int rc = pthread_cond_timedwait(&nurl__dns.cv, &nurl__dns.lock, &ts);
+            nurl__dns.idle--;
+            if (rc == ETIMEDOUT && !nurl__dns.head) {
+                nurl__dns.threads--;
+                pthread_mutex_unlock(&nurl__dns.lock);
+                return NULL;
+            }
+        }
+        NurlDnsJob *j = nurl__dns.head;
+        nurl__dns.head = j->next;
+        if (!nurl__dns.head) nurl__dns.tail = NULL;
+        nurl__dns.queued--;
+        pthread_mutex_unlock(&nurl__dns.lock);
+
+        struct addrinfo *res = NULL;
+        int rc = getaddrinfo(j->host, j->noport ? NULL : j->port, &j->hints, &res);
+
+        pthread_mutex_lock(&nurl__dns.lock);
+        j->rc   = rc;
+        j->res  = res;
+        j->done = 1;
+        if (j->abandoned) {
+            pthread_mutex_unlock(&nurl__dns.lock);
+            nurl__dns_job_free(j);
+            pthread_mutex_lock(&nurl__dns.lock);
+        } else {
+            /* Signal under the lock: once `done` is visible the waiter
+             * may free the job and close wfd, so the write lands first.
+             * Non-blocking, and never more than one signal deep. */
+            unsigned long long one = 1;
+            ssize_t w = write(j->wfd, &one, j->wfd == j->rfd ? sizeof one : 1);
+            (void)w;
+        }
+    }
+}
+
+/* A forked child inherits the queue but none of the threads: start it
+ * from empty, or its first lookup would wait for ever. */
+static void nurl__dns_atfork_child(void) {
+    pthread_mutex_init(&nurl__dns.lock, NULL);
+    pthread_cond_init(&nurl__dns.cv, NULL);
+    nurl__dns.head = nurl__dns.tail = NULL;
+    nurl__dns.queued = nurl__dns.threads = nurl__dns.idle = 0;
+}
+
+/* Queue `j`, growing the pool when every thread is busy. 0 on success;
+ * -1 when no thread exists to run it (creation failed, pool empty) —
+ * the caller resolves inline instead. */
+static int nurl__dns_submit(NurlDnsJob *j) {
+    static int atfork_done;
+    pthread_mutex_lock(&nurl__dns.lock);
+    if (!atfork_done) {
+        atfork_done = 1;
+        pthread_atfork(NULL, NULL, nurl__dns_atfork_child);
+    }
+    if (nurl__dns.queued + 1 > nurl__dns.idle &&
+        nurl__dns.threads < NURL_DNS_MAX_THREADS) {
+        pthread_attr_t at;
+        pthread_t tid;
+        pthread_attr_init(&at);
+        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&tid, &at, nurl__dns_thread, NULL) == 0)
+            nurl__dns.threads++;
+        pthread_attr_destroy(&at);
+    }
+    if (nurl__dns.threads == 0) {
+        pthread_mutex_unlock(&nurl__dns.lock);
+        return -1;
+    }
+    j->next = NULL;
+    if (nurl__dns.tail) nurl__dns.tail->next = j;
+    else                nurl__dns.head = j;
+    nurl__dns.tail = j;
+    nurl__dns.queued++;
+    pthread_cond_signal(&nurl__dns.cv);
+    pthread_mutex_unlock(&nurl__dns.lock);
+    return 0;
+}
+
+static int nurl__dns_signal_fds(NurlDnsJob *j) {
+#  if defined(__linux__)
+    int fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (fd < 0) return -1;
+    j->rfd = j->wfd = fd;
+#  else
+    int p[2];
+    if (pipe(p) != 0) return -1;
+    for (int i = 0; i < 2; i++) {
+        fcntl(p[i], F_SETFD, FD_CLOEXEC);
+        fcntl(p[i], F_SETFL, fcntl(p[i], F_GETFL, 0) | O_NONBLOCK);
+    }
+    j->rfd = p[0];
+    j->wfd = p[1];
+#  endif
+    return 0;
+}
+#endif /* !_WIN32 */
+
+/* getaddrinfo that does not hold a fiber's worker. `deadline` is an
+ * absolute nurl__conn_now_ms (-1 = none). Returns getaddrinfo's code,
+ * or NURL_RESOLVE_TIMEOUT when the deadline passed first. */
+__attribute__((noinline))
+static int nurl__resolve(const char *host, const char *port,
+                         const struct addrinfo *hints,
+                         struct addrinfo **res, long long deadline) {
+    *res = NULL;
+#ifndef _WIN32
+    int on_fiber = nurl_fiber_current() != 0;
+    if (!on_fiber && deadline < 0) return getaddrinfo(host, port, hints, res);
+
+    /* Numeric fast path: answered in-process, no resolver, no thread. A
+     * name fails it (EAI_NONAME) and goes to the pool. */
+    struct addrinfo nh = *hints;
+    nh.ai_flags |= AI_NUMERICHOST;
+    if (getaddrinfo(host, port, &nh, res) == 0) return 0;
+    *res = NULL;
+
+    NurlDnsJob *j = (NurlDnsJob*)calloc(1, sizeof *j);
+    if (!j) return getaddrinfo(host, port, hints, res);
+    j->rfd = j->wfd = -1;
+    j->host = strdup(host);
+    j->hints = *hints;
+    j->noport = !port;
+    snprintf(j->port, sizeof j->port, "%s", port ? port : "");
+    if (!j->host || nurl__dns_signal_fds(j) != 0 || nurl__dns_submit(j) != 0) {
+        nurl__dns_job_free(j);
+        return getaddrinfo(host, port, hints, res);
+    }
+
+    /* A wake is only a hint (spurious, or the deadline) — `done` under
+     * the lock is the truth. */
+    for (;;) {
+        pthread_mutex_lock(&nurl__dns.lock);
+        int done = j->done;
+        if (!done && nurl__conn_left_ms(deadline) == 0) {
+            j->abandoned = 1;              /* the resolver thread frees it */
+            pthread_mutex_unlock(&nurl__dns.lock);
+            return NURL_RESOLVE_TIMEOUT;
+        }
+        pthread_mutex_unlock(&nurl__dns.lock);
+        if (done) break;
+        long long left = nurl__conn_left_ms(deadline);
+        if (!on_fiber || nurl_reactor_wait_read(j->rfd, left) < 0) {
+            struct pollfd pf = { .fd = j->rfd, .events = POLLIN, .revents = 0 };
+            poll(&pf, 1, nurl__poll_ms(left));
+        }
+    }
+    int rc = j->rc;
+    *res = j->res;
+    j->res = NULL;
+    nurl__dns_job_free(j);
+    return rc;
+#else
+    /* Winsock: no fibers to protect, and no cancellable lookup — the
+     * connect deadline below still bounds the connect itself. */
+    (void)deadline;
+    return getaddrinfo(host, port, hints, res);
+#endif
+}
+
+/* Open a socket for `ai` and start connecting. Returns 0 connected,
+ * 1 in progress (only when `nb` asked for a non-blocking socket), or a
+ * positive errno / WSA code; *out holds the socket on 0 and 1. Never
+ * parks — see FIBER MIGRATION above. */
+__attribute__((noinline))
+static int nurl__connect_start(const struct addrinfo *ai, int nb,
+                               nurl_sockfd_t *out) {
+    int type = ai->ai_socktype;
+#if defined(SOCK_NONBLOCK) && !defined(_WIN32)
+    if (nb) type |= SOCK_NONBLOCK;
+#endif
+    nurl_sockfd_t fd = socket(ai->ai_family, type, ai->ai_protocol);
+    if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim())
+        fd = socket(ai->ai_family, type, ai->ai_protocol);
+    if (fd == NURL_INVALID_SOCK) {
+#ifdef _WIN32
+        int we = WSAGetLastError();
+        return we ? we : WSAEMFILE;
+#else
+        return errno ? errno : EMFILE;
+#endif
+    }
+    if (nb) {
+#if defined(_WIN32)
+        u_long on = 1;
+        ioctlsocket(fd, FIONBIO, &on);
+#elif !defined(SOCK_NONBLOCK)
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+#endif
+    }
+    if (connect(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
+        *out = fd;
+        return 0;
+    }
+#ifdef _WIN32
+    int e = WSAGetLastError();
+    if (nb && (e == WSAEWOULDBLOCK || e == WSAEINPROGRESS)) {
+        *out = fd;
+        return 1;
+    }
+    if (!e) e = WSAECONNREFUSED;
+#else
+    int e = errno;
+    /* EINTR on a non-blocking connect: the handshake carries on in the
+     * kernel — wait for it like EINPROGRESS. */
+    if (nb && (e == EINPROGRESS || e == EINTR)) {
+        *out = fd;
+        return 1;
+    }
+    if (!e) e = ECONNREFUSED;
+#endif
+    nurl_close_sock(fd);
+    return e;
+}
+
+/* The wait for a pending connect on `fd` ended: 0 established, -1 not
+ * settled yet (a spurious wake — wait again), else the error code. */
+__attribute__((noinline))
+static int nurl__connect_finish(nurl_sockfd_t fd) {
+    int soerr = 0;
+#ifdef _WIN32
+    int len = (int)sizeof soerr;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&soerr, &len) != 0) {
+        int we = WSAGetLastError();
+        return we ? we : WSAENOTCONN;
+    }
+    return soerr;
+#else
+    socklen_t len = (socklen_t)sizeof soerr;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len) != 0)
+        return errno ? errno : ENOTCONN;
+    if (soerr) return soerr;
+    struct sockaddr_storage ss;
+    socklen_t sl = (socklen_t)sizeof ss;
+    return getpeername(fd, (struct sockaddr*)&ss, &sl) == 0 ? 0 : -1;
+#endif
+}
+
+/* Wait off a fiber for a pending connect: 1 woke, 0 deadline. */
+static int nurl__connect_poll(nurl_sockfd_t fd, long long left) {
+#ifdef _WIN32
+    fd_set wfds, efds;
+    FD_ZERO(&wfds); FD_ZERO(&efds);
+    FD_SET(fd, &wfds); FD_SET(fd, &efds);
+    struct timeval tv, *tvp = NULL;
+    if (left >= 0) {
+        tv.tv_sec  = (long)(left / 1000);
+        tv.tv_usec = (long)((left % 1000) * 1000);
+        tvp = &tv;
+    }
+    return select(0, NULL, &wfds, &efds, tvp) > 0 ? 1 : 0;
+#else
+    struct pollfd pf = { .fd = fd, .events = POLLOUT, .revents = 0 };
+    /* -1 (EINTR) counts as a wake: SO_ERROR / getpeername settle it. */
+    return poll(&pf, 1, nurl__poll_ms(left)) != 0 ? 1 : 0;
+#endif
+}
+
+/* Client-side connect with an optional deadline: resolve `host` (DNS
+ * name or IPv4/IPv6 literal), then try each address in order until one
+ * connects. timeout_ms <= 0 = no deadline. The returned CONN handle
+ * consumes read/write/close identically to an accept()ed conn; a
+ * deadline that passes reports NURL_NET_ERR_TIMEOUT. */
+NURL_TLS_FN long long nurl_tcp_connect_ms(const char *host, long long port,
+                                          long long timeout_ms) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
         NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
@@ -1790,6 +2172,8 @@ long long nurl_tcp_connect(const char *host, long long port) {
         h->err_kind = NURL_NET_ERR_OTHER;
         return (long long)(uintptr_t)h;
     }
+    long long deadline = timeout_ms > 0 ? nurl__conn_now_ms() + timeout_ms : -1;
+    int on_fiber = nurl_fiber_current() != 0;
 
     char portstr[16];
     snprintf(portstr, sizeof(portstr), "%ld", (long)port);
@@ -1798,34 +2182,73 @@ long long nurl_tcp_connect(const char *host, long long port) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;   /* IPv4 or IPv6 */
     hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
-        h->err_kind = NURL_NET_ERR_OTHER;
+    int grc = nurl__resolve(host, portstr, &hints, &res, deadline);
+    if (grc != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        h->err_kind = grc == NURL_RESOLVE_TIMEOUT ? NURL_NET_ERR_TIMEOUT
+                                                  : NURL_NET_ERR_OTHER;
         return (long long)(uintptr_t)h;
     }
 
+    /* Non-blocking only where something must wait without blocking: a
+     * fiber, or a deadline. */
+    int nb = on_fiber || deadline >= 0;
     nurl_sockfd_t fd = NURL_INVALID_SOCK;
+    int err = 0;
     for (ai = res; ai; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd == NURL_INVALID_SOCK) continue;
-        if (connect(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) break;
-        nurl_close_sock(fd);
-        fd = NURL_INVALID_SOCK;
+        nurl_sockfd_t cfd = NURL_INVALID_SOCK;
+        int st = nurl__connect_start(ai, nb, &cfd);
+        if (st == 1) {
+            /* In progress: park (fiber) or poll (thread) for writability
+             * until established, failed, or out of time. */
+            for (;;) {
+                long long left = nurl__conn_left_ms(deadline);
+                int woke = 0;
+                if (left != 0) {
+                    long long r = on_fiber
+                        ? nurl_reactor_wait_write((long long)cfd, left) : -1;
+                    woke = r < 0 ? nurl__connect_poll(cfd, left) : (int)r;
+                }
+                if (!woke) { st = -2; break; }        /* deadline */
+                st = nurl__connect_finish(cfd);
+                if (st != -1) break;                  /* settled */
+            }
+            if (st != 0) nurl_close_sock(cfd);
+        }
+        if (st == 0) { fd = cfd; break; }
+        err = st;
+        if (st == -2) break;                          /* budget spent */
     }
     freeaddrinfo(res);
 
     if (fd == NURL_INVALID_SOCK) {
 #ifdef _WIN32
-        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_OTHER);
+        h->err_kind = err == -2 ? NURL_NET_ERR_TIMEOUT
+                                : nurl__net_map_wsa(err, NURL_NET_ERR_OTHER);
 #else
-        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_OTHER);
+        h->err_kind = err == -2 ? NURL_NET_ERR_TIMEOUT
+                                : nurl__net_map_errno(err, NURL_NET_ERR_OTHER);
 #endif
         return (long long)(uintptr_t)h;
     }
-
+    if (nb) {
+        /* Hand back the blocking socket the plain path returns (see the
+         * section comment); h->nonblock = 0 agrees with the kernel. */
+#ifdef _WIN32
+        u_long off = 0;
+        ioctlsocket(fd, FIONBIO, &off);
+#else
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+#endif
+    }
     h->fd       = fd;
     h->err_kind = NURL_NET_ERR_OK;
     return (long long)(uintptr_t)h;
+}
+
+long long nurl_tcp_connect(const char *host, long long port) {
+    return nurl_tcp_connect_ms(host, port, 0);
 }
 
 long long nurl_tcp_accept(long long listener) {
@@ -2934,7 +3357,7 @@ long long nurl_udp_bind(const char *host, long long port) {
     return (long long)(uintptr_t)h;
 }
 
-long long nurl_udp_connect(long long handle,
+NURL_TLS_FN long long nurl_udp_connect(long long handle,
                            const char *host, long long port) {
     NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -2952,7 +3375,8 @@ long long nurl_udp_connect(long long handle,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+    if (nurl__resolve(host, portstr, &hints, &res, -1) != 0 || !res) {
+        if (res) freeaddrinfo(res);
         h->err_kind = NURL_NET_ERR_OTHER;
         return -1;
     }
@@ -2975,7 +3399,7 @@ long long nurl_udp_connect(long long handle,
     return 0;
 }
 
-long long nurl_udp_send_to(long long handle, const char *buf, long long n,
+NURL_TLS_FN long long nurl_udp_send_to(long long handle, const char *buf, long long n,
                            const char *host, long long port) {
     NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -2994,7 +3418,8 @@ long long nurl_udp_send_to(long long handle, const char *buf, long long n,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+    if (nurl__resolve(host, portstr, &hints, &res, -1) != 0 || !res) {
+        if (res) freeaddrinfo(res);
         h->err_kind = NURL_NET_ERR_WRITE;
         return -1;
     }
@@ -3504,7 +3929,7 @@ static int nurl__dns_seen(const char *buf, size_t len, const char *line) {
     return 0;
 }
 
-char *nurl_dns_resolve(const char *host) {
+NURL_TLS_FN char *nurl_dns_resolve(const char *host) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) return strdup("");
 #endif
@@ -3513,7 +3938,10 @@ char *nurl_dns_resolve(const char *host) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;   /* dedupe across DGRAM+STREAM duplicates */
-    if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) return strdup("");
+    if (nurl__resolve(host, NULL, &hints, &res, -1) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return strdup("");
+    }
 
     char  *buf = NULL;
     size_t len = 0, cap = 0;
@@ -3535,7 +3963,7 @@ char *nurl_dns_resolve(const char *host) {
     return buf ? buf : strdup("");
 }
 
-char *nurl_dns_resolve_port(const char *host, long long port) {
+NURL_TLS_FN char *nurl_dns_resolve_port(const char *host, long long port) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) return strdup("");
 #endif
@@ -3546,7 +3974,10 @@ char *nurl_dns_resolve_port(const char *host, long long port) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return strdup("");
+    if (nurl__resolve(host, portstr, &hints, &res, -1) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return strdup("");
+    }
 
     char *buf = NULL;
     size_t len = 0, cap = 0;
@@ -3767,7 +4198,7 @@ long long nurl_udp_send_addr(long long handle, const char *buf, long long n,
 /* host:port → NurlUdpAddr. Numeric literals never touch a resolver;
  * names do (one getaddrinfo per call — the point is to call this once
  * per peer, not per packet). 0 on success, -1 otherwise. */
-long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out) {
+NURL_TLS_FN long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out) {
     if (!addr_out) return -1;
     memset(addr_out, 0, NURL_UDP_ADDR_LEN);
     if (!host || !*host || port < 0 || port > 65535) return -1;
@@ -3780,7 +4211,10 @@ long long nurl_udp_addr_resolve(const char *host, long long port, char *addr_out
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
+    if (nurl__resolve(host, portstr, &hints, &res, -1) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return -1;
+    }
     int rc = nurl__udp_addr_from_sa(res->ai_addr, (socklen_t)res->ai_addrlen,
                                     (unsigned char*)addr_out);
     freeaddrinfo(res);
@@ -3947,6 +4381,13 @@ long long nurl_tcp_listen_tls(const char *host, long long port, long long backlo
     return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
 long long nurl_tcp_connect(const char *host, long long port) {
+    return nurl__ni_tcp_connect(host ? host : "", port);
+}
+/* The bridge has no deadline argument: a wasm guest is one thread, the
+ * host's connect is the host's business. The timeout is accepted and
+ * ignored rather than refused, so portable code links. */
+long long nurl_tcp_connect_ms(const char *host, long long port, long long ms) {
+    (void)ms;
     return nurl__ni_tcp_connect(host ? host : "", port);
 }
 long long nurl_tcp_accept(long long listener) { return nurl__ni_tcp_accept(listener); }
@@ -4228,6 +4669,9 @@ long long nurl_udp_setsockopt_int(long long h, long long level, long long opt, l
  * host that could answer them. */
 long long nurl_tcp_connect(const char *host, long long port) {
     (void)host; (void)port; return 0;
+}
+long long nurl_tcp_connect_ms(const char *host, long long port, long long ms) {
+    (void)host; (void)port; (void)ms; return 0;
 }
 long long nurl_tcp_timeout_ms(long long h) { (void)h; return 0; }
 void nurl_tcp_set_write_deadline(long long h, long long ns) { (void)h; (void)ns; }
@@ -6079,18 +6523,36 @@ static void       nurl__np_poke_if_sleeping(void);
 static NurlFiber *nurl__worker_next(NurlWorker *w) {
     for (;;) {
         if (nurl__sched.shutdown) return NULL;
+        unsigned tick = ++w->tick;
+        if (__builtin_expect((tick & 15u) == 0, 0)) {
+            /* Starvation guard: every 128th pass looks at the netpoller
+             * and the global queue BEFORE the local queue. A local queue
+             * that never empties — one fiber yielding in a loop is enough
+             * — used to keep this worker from ever reaching either, so
+             * every I/O and timer wake due on it, and every fiber
+             * unparked onto the global queue (channel, mutex and
+             * DNS-resolver wakes), waited for as long as that fiber kept
+             * yielding: on one worker, for ever. */
+            int guard = (tick & 127u) == 0;
+#if defined(__linux__)
+            /* Cadence poll: drain the epoll instance every 16th dispatch
+             * even while queued work exists. Without this a saturated
+             * pool lives in feast-famine cycles — nobody polls until the
+             * global queue exhausts, then the whole pool stalls on one
+             * big poll. */
+            if (guard || __atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) == 0) {
+                NurlFiber *nf = nurl__np_poll_nowait(w);
+                if (nf) return nf;
+            }
+#endif
+            if (guard &&
+                __atomic_load_n(&nurl__sched.global_len, __ATOMIC_RELAXED) > 0) {
+                NurlFiber *gf = nurl__rq_take_global_batch(w);
+                if (gf) return gf;
+            }
+        }
         NurlFiber *f = nurl__rq_pop_local(w);
         if (f) return f;
-#if defined(__linux__)
-        /* Cadence poll: drain the epoll instance every 16th dispatch
-         * even while queued work exists. Without this a saturated pool
-         * lives in feast-famine cycles — nobody polls until the global
-         * queue exhausts, then the whole pool stalls on one big poll. */
-        if ((++w->tick & 15u) == 0) {
-            NurlFiber *nf = nurl__np_poll_nowait(w);
-            if (nf) return nf;
-        }
-#endif
         f = nurl__rq_take_global_batch(w);
         if (f) return f;
 #if defined(__linux__)
@@ -6995,13 +7457,24 @@ void nurl__reactor_shutdown(void) {
     if (nurl__np.started) nurl__np_poke();
 }
 
-/* Socket-close hook (see nurl_close_sock): wake every waiter parked on
- * this fd — with the registration about to vanish no event can — and
- * reset the slot so a REUSED fd number starts clean (a stale ready bit
- * or `registered` flag on a recycled fd would satisfy or starve the
- * next connection's first wait). */
-void nurl__np_on_close(int fd) {
-    if (!nurl__np.started) return;
+/* Socket close (see nurl_close_sock): wake every waiter parked on this
+ * fd — with the registration about to vanish no event can — reset the
+ * slot so a REUSED fd number starts clean (a stale ready bit or
+ * `registered` flag on a recycled fd would satisfy or starve the next
+ * connection's first wait), and close the fd.
+ *
+ * The reset and the close(2) are ONE step under the lock. Reset first
+ * and close after unlocking, and a fiber on another worker can park on
+ * the still-open fd in between: its activation re-registers (EPOLL_CTL_ADD
+ * answers EEXIST, the fd is still in the set) and sets `registered`
+ * again, then close drops the kernel registration. The slot outlives
+ * the fd claiming it is registered, and the next socket to get that fd
+ * number is never added to the epoll set — its first park never wakes.
+ * Observed: server_stop closing a listener from another thread while
+ * its accept fiber re-parked left the next listener's accept fiber
+ * asleep forever. */
+int nurl__np_close(int fd) {
+    if (!nurl__np.started) return close(fd);
     NurlReactorWait *batch = NULL;
     pthread_mutex_lock(&nurl__np.lock);
     NurlNpFd *s = nurl__np_slot(fd, 0);
@@ -7020,6 +7493,7 @@ void nurl__np_on_close(int fd) {
             w = n;
         }
     }
+    int rc = close(fd);
     pthread_mutex_unlock(&nurl__np.lock);
     while (batch) {
         NurlReactorWait *n = batch->wake_next;
@@ -7036,6 +7510,7 @@ void nurl__np_on_close(int fd) {
         }
         batch = n;
     }
+    return rc;
 }
 
 void nurl__reactor_cleanup(void) {

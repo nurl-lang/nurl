@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+dns_resolve_loopback=5
+yielder_ran_during_lookups=yes
+localhost_connects=5
+numeric=connected

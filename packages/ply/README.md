@@ -20,10 +20,10 @@ $ `deps/ply/src/ply.nu`
 ?? ( ply_create `cloud.ply` 0 `my-tool 1.0` ) {   // 0 = binary, 1 = ascii
     T w → {
         ( ply_vertex w 0.0 1.0 2.0  255 128 0 )   // x y z  r g b
-        ...
-        ? ( ply_finish w ) {} { /* the file cannot be trusted */ }
+        // … one call per point
+        ? ( ply_finish w ) {} {}   // F: the file cannot be trusted
     }
-    F e → { ... }
+    F e → {}
 }
 ```
 
@@ -61,7 +61,7 @@ Details that matter more than they look:
 ```nurl
 $ `deps/ply/src/view.nu`
 
-( vw_serve `cloud.ply` `127.0.0.1` 8080 `` 0 )   // serves until killed
+( vw_serve `cloud.ply` `127.0.0.1` 8080 `` 0 0 )   // serves until killed; last 1 = https
 ```
 
 ## Tests

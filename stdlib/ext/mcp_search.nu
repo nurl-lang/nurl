@@ -2637,7 +2637,9 @@ $ `stdlib/core/slice.nu`
     }
     ( string_push_str out `\n\n` )
     : i want - e0 s0
-    : i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
+    : ~ i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
+    // A cut section ends on a character boundary (see __ms_read_src).
+    ? > want keep { = keep - ( __mcp_utf8_cut ( string_data src ) + s0 keep ) s0 } {}
     : String slice ( string_substr src s0 keep )
     ( string_push_str out ( string_data slice ) )
     ? > want keep {
@@ -2654,8 +2656,17 @@ $ `stdlib/core/slice.nu`
     : i n ( string_len src )
     : ~ i from ? < offset 0 0 offset
     ? > from n { = from n } {}
+    // Both ends of a page on a character boundary. A byte offset falls
+    // where it falls: the docs are full of `—` and `≥`, and a page that
+    // began or ended inside one was invalid UTF-8, which a JSON client
+    // rejects whole (spec.md, offset=49152, once an edit moved the cap
+    // into an em dash). The start snaps back to the character it is in,
+    // and the end back too, so the `offset=` printed below is where the
+    // next page starts and nothing is lost or read twice.
+    ? < from n { = from ( __mcp_utf8_cut ( string_data src ) from ) } {}
     : i left - n from
-    : i keep ? > left ( __ms_docs_cap ) ( __ms_docs_cap ) left
+    : ~ i keep ? > left ( __ms_docs_cap ) ( __ms_docs_cap ) left
+    ? > left keep { = keep - ( __mcp_utf8_cut ( string_data src ) + from keep ) from } {}
     ( string_push_str out disp )
     ? > from 0 {
         ( string_push_str out ` [bytes ` )

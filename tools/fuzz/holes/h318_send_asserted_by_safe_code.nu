@@ -1,4 +1,4 @@
-// H317: a safe module asserted `% Send` on a struct holding an Rc and sent it to a thread, which cloned and dropped the Rc while main did the same: two threads on one non-atomic count.
+// H318: a safe module asserted `% Send` on a struct holding an Rc and sent it to a thread, which cloned and dropped the Rc while main did the same: two threads on one non-atomic count.
 // Closed: a positive marker stops the derivation at the type, so outside the standard library it is an unchecked promise and is written `unsafe % Send Wrapper {}` (grammar v2.11, docs/MEMORY.md §3); `% Send` alone is an error, and `nurlc --unsafe-report` lists the `unsafe` one.
 // v0.76.0: accepted; the count drifted under the race and the Rc was freed while both threads still held it (AddressSanitizer: heap-use-after-free, or a double free).
 $ `stdlib/std/rc.nu`

@@ -88,6 +88,12 @@ classical primitives `aes_gcm.nu`, `chacha20poly1305.nu`, `ecdsa_p256.nu`,
 and `ssh.nu` / `ssh_ed25519.nu` in `std/`; `crypto.nu`, `jwt.nu`, `http_jwt.nu`
 in `ext/`. See [Cryptography](./cryptography).
 
+`aes_gcm.nu` runs on the language's hardware crypto tier where the CPU has
+AES-NI and PCLMULQDQ (`nurl_v128_aesenc`, `nurl_v128_clmul_*`; ~3 GB/s, on par
+with the same kernel in C intrinsics) and on a constant-time bitsliced cipher
+everywhere else; TLS picks AES-128-GCM on such a CPU and ChaCha20-Poly1305
+otherwise.
+
 ## Data formats and serialization
 
 `json.nu`, `msgpack.nu`, `cbor.nu`, `protobuf.nu`, `toml.nu`, `yaml.nu`, `xml.nu`,

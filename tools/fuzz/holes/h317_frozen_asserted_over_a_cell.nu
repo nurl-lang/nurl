@@ -1,5 +1,5 @@
-// H316: may a safe module write `% Frozen` on a struct of its own that holds a Cell (interior mutability), share it in an RwLocked and write the Cell from two threads through read guards? (A question, task #21, not a hole found: settled by this probe.)
-// Closed: `% Frozen` only adds checks — what a frozen value lends is read-only — so safe code may write it; it does not make the Cell Sync. A read guard is `% Frozen` itself (stdlib/std/rwlock.nu), and `cell_write_u8` changes what it is handed, so the write through either guard is rejected where it is made; an Arc of the struct is rejected the same way (its payload is frozen), and `% Sync` over the Cell needs `unsafe` (h317, docs/MEMORY.md §3).
+// H317: may a safe module write `% Frozen` on a struct of its own that holds a Cell (interior mutability), share it in an RwLocked and write the Cell from two threads through read guards? (A question, task #21, not a hole found: settled by this probe.)
+// Closed: `% Frozen` only adds checks — what a frozen value lends is read-only — so safe code may write it; it does not make the Cell Sync. A read guard is `% Frozen` itself (stdlib/std/rwlock.nu), and `cell_write_u8` changes what it is handed, so the write through either guard is rejected where it is made; an Arc of the struct is rejected the same way (its payload is frozen), and `% Sync` over the Cell needs `unsafe` (h318, docs/MEMORY.md §3).
 // v0.76.0: rejected (the frozen-view check); kept so a change to how markers stop the walk cannot let it through.
 $ `stdlib/core/cell.nu`
 $ `stdlib/core/marker.nu`

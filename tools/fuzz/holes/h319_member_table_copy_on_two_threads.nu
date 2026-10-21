@@ -1,4 +1,4 @@
-// H318: two copies of one PkMemberTable (a struct field and a binding read out of it), one moved to a thread: both threads grew the member Vec in place, with no lock. dist/heartbeat.nu's thread held a table the same way, under a mutex the caller had to remember to take around its own changes.
+// H319: two copies of one PkMemberTable (a struct field and a binding read out of it), one moved to a thread: both threads grew the member Vec in place, with no lock. dist/heartbeat.nu's thread held a table the same way, under a mutex the caller had to remember to take around its own changes.
 // Closed: PkMemberTable is `% NotSend` (every copy is one table, changed in place); a thread that announces the node alive holds pktable_liveness — a copy of the self pubkey and the table's incarnation Atomic — and heartbeat_start takes no table and no mutex into its thread.
 // v0.76.0: accepted; glibc aborted with "realloc(): invalid old size" (heap corruption).
 $ `stdlib/core/string.nu`

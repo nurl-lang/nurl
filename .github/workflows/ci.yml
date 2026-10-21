@@ -297,6 +297,18 @@ jobs:
         # linking or running anything.
         run: ./tools/check_examples.sh
 
+      - name: documentation examples compile
+        # Every ```nurl block in docs/*.md, docs/stdlib/*.md, README.md
+        # and the package READMEs, wrapped into a program and run through
+        # `nurlc --check`; a block annotated expect-error must be rejected
+        # with that diagnostic, so the docs and the messages they quote
+        # cannot drift apart. MEMORY.md §2.11 had sat uncompilable (no vec
+        # import) because nothing compiled it. The controls prove the
+        # wrapping and the annotations.
+        run: |
+          ./tools/check_doc_examples.sh
+          python3 tools/tests/test_doc_examples.py
+
       - name: stdlib symbol-collision gate
         # NURL's flat namespace makes two stdlib modules that define the
         # same top-level @ name collide when a program imports both (link
