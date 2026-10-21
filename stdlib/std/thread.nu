@@ -46,6 +46,9 @@
 //                                               a result (a monitor: wait until)
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
+//   ( cond_wait_ms   Cond c Mutex m i ms ) → b   …at most ms milliseconds
+//                                               (ms < 0: no bound); F when
+//                                               the time ran out
 //   ( cond_signal    Cond c )              → v
 //   ( cond_broadcast Cond c )              → v
 //   ( cond_free      Cond c )              → v   (early release; optional)
@@ -115,6 +118,11 @@ $ `stdlib/core/rcbox.nu`
 & `c` @ pthread_cond_broadcast sync *u cv → i32
 
 & `c` @ pthread_cond_destroy *u cv → i32
+
+// pthread_cond_timedwait over a relative bound in milliseconds (the
+// absolute struct timespec deadline is laid out on the C side,
+// runtime_ffi.c §19). 1 signalled (or spuriously woken), 0 timed out.
+& `c` @ nurl_cond_wait_ms sync *u cv sync *u m i ms → i32
 
 // pthread_create's start_routine signature is `void *(*)(void *)`.
 // NURL closures compile to `void(*)(void *env)` — same arg shape; the
@@ -541,6 +549,11 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ cond_wait Cond c Mutex m → v { ( pthread_cond_wait ( __cond_obj c ) ( __mutex_obj m ) ) }
+
+// cond_wait for at most `ms` milliseconds (ms < 0: no bound). F when the
+// time ran out, T when signalled — or woken spuriously, as cond_wait may
+// be: the caller loops on its predicate and its own deadline either way.
+@ cond_wait_ms Cond c Mutex m i ms → b { ^ != 0 ( nurl_cond_wait_ms ( __cond_obj c ) ( __mutex_obj m ) ms ) }
 
 @ cond_signal Cond c → v { ( pthread_cond_signal ( __cond_obj c ) ) }
 

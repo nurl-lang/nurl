@@ -8404,6 +8404,8 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ( nurl_eprintln ( nurl_str_cat4 `  body_done=` ( nurl_sym_get2 syms f `__body_done` ) ` ret_owned=` ( nurl_sym_get2 syms f `__ret_owned` ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ret_borrow=` ( nurl_sym_get2 syms f `__ret_borrow` ) ` mutates=` ( nurl_sym_get g_fn_mutates f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ptypes_src=` ( nurl_sym_get2 syms f `__ptypes_src` ) ` raw0=` ? ( __fn_param_raw syms f 0 ) `1` `0` ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  retlend=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` f ) ) ` retpart=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` f ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  retread=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retread##` f ) ) ` retvia=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) ) ) )
 }
 
 @ mem_emit_arg_flags i syms → v {
@@ -13635,7 +13637,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def g_generic_syms gkey `1` ) }
         { : s already ( nurl_sym_get syms mangled )
             ? == 0 ( nurl_str_len already )
-            { : s rt ( compute_generic_ret_ty fname type_args )
+            { : s rt ( compute_generic_ret_ty fname type_args syms )
                 ( nurl_sym_def syms mangled rt ) }
             {} }
         : s mont ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
@@ -13665,7 +13667,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             { ( defer_instantiation lex __tw __twm type_args syms )
                 ( nurl_sym_def g_generic_syms __twk `1` ) }
             { ? == 0 ( nurl_str_len ( nurl_sym_get syms __twm ) )
-                { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args ) ) }
+                { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args syms ) ) }
                 {} }
             ( nurl_sym_def g_fn_link_sources __twm `1` )
             = __loc_cn __twm }
@@ -43139,7 +43141,7 @@ unsafe @ __nl_pad i n → s {
 
 // compute_generic_ret_ty: determine return type of a generic instantiation
 // without emitting IR. type_args: space-separated raw NURL type tokens.
-@ compute_generic_ret_ty s fname s type_args → s {
+@ compute_generic_ret_ty s fname s type_args i syms → s {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     : ~ s subst_src ( nurl_str_cat gsrc `` )
@@ -43161,11 +43163,66 @@ unsafe @ __nl_pad i n → s {
     : ~ s ret_ty ( nurl_str_cat `i64` `` )
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
+        ( __inst_ret_structs subst_src syms )
         = ret_ty ( parse_type lex2 )
     }
     {}
     ( nurl_lex_free lex2 )
     ret_ty
+}
+
+// The generic structs a generic function's return type applies (`!( G
+// String ) E`), known by name now: a call site reads the instance's
+// result type before the instance's body is compiled — the first place
+// those structs would otherwise come into being — and every question it
+// asked of the type (is it a library handle? does it own?) was answered
+// for a type nobody had defined: the caller took a handle it owned for a
+// plain value and never dropped it. What makes an instance a library
+// handle is its identity (`libhs##` / `libhta##`, a flat table), so that
+// is recorded here; its layout comes with its first instantiation at
+// the top level, as before (a struct instantiated inside a function body
+// would be scoped to it).
+unsafe @ __inst_ret_structs s src i syms → v {
+    : i lx ( nurl_lex_new src `<generic_ret>` )
+    ~ & != ( nurl_lex_type lx ) TT_ARROW != ( nurl_lex_type lx ) TT_EOF { ( nurl_lex_advance lx ) }
+    ? == ( nurl_lex_type lx ) TT_ARROW { ( nurl_lex_advance lx ) } {}
+    ~ & != ( nurl_lex_type lx ) TT_LBRACE != ( nurl_lex_type lx ) TT_EOF {
+        ? & == ( nurl_lex_type lx ) TT_LPAREN ( is_ident_tok ( nurl_lex_peek_type lx ) ) {
+            : s _m ( __ret_struct_identity lx syms )
+        } { ( nurl_lex_advance lx ) }
+    }
+    ( nurl_lex_free lx )
+}
+
+// `( Name T… )` at `lex` (on its `(`): consumed, its mangle returned, and
+// — when Name is a generic struct with no abstract argument — its
+// identity recorded the way ensure_struct_instantiated records it.
+unsafe @ __ret_struct_identity i lex i syms → s {
+    ( nurl_lex_advance lex )  // '('
+    : s sname ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    ( nurl_lex_advance lex )
+    : ~ s ta_list ``
+    : ~ s mangle_sfx ``
+    : ~ b abstract F
+    ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
+        : ~ s w ``
+        ? & == ( nurl_lex_type lex ) TT_LPAREN ( is_ident_tok ( nurl_lex_peek_type lex ) ) {
+            = w ( __ret_struct_identity lex syms )
+        } { = w ( __scan_ta_word lex syms ) }
+        ? ( is_abstract_tparam syms w ) { = abstract T } {}
+        = ta_list ? == 0 ( nurl_str_len ta_list ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ta_list ` ` w )
+        = mangle_sfx ( nurl_str_cat3 mangle_sfx `__` ( mangle_src_word w ) )
+    }
+    ? == ( nurl_lex_type lex ) TT_RPAREN { ( nurl_lex_advance lex ) } {}
+    : s mangled ( nurl_str_cat sname mangle_sfx )
+    ? & ! abstract != 0 ( nurl_sym_len2 g_generic_struct_syms sname `__stparams` ) {
+        ? == 0 ( nurl_sym_len2 g_impl_name_syms `libhs##%` mangled ) {
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhs##%` mangled ) sname )
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhta##%` mangled ) ta_list )
+            ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
+        } {}
+    } {}
+    ^ mangled
 }
 
 // ── Generic struct instantiation ───────────────────────────────────
@@ -43375,6 +43432,19 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     ` — every parameter is substituted by position, so a different count leaves a parameter unsubstituted in the emitted type (or mangles a reference to a type nothing defines). Write one type argument per declared parameter.` ) ) )
 }
 
+// A type's memoised answers (__nc_drop_ty, __libh_plain_is,
+// bck_bind_class), forgotten when the type comes to exist: a generic
+// instance's name can be asked about before it is instantiated — a call
+// of a generic function whose result is `!( G String ) E`, emitted before
+// the instance — and the answers given then were for a type nobody had
+// defined (no fields, no drop hook): a library handle taken for a plain
+// view, which made its owners lend it and never drop it.
+@ __ty_memo_forget s ty → v {
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `ncd##` ty ) `` )
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) `` )
+    ? != 0 g_bcls_memo { ( nurl_sym_def g_bcls_memo ty `-1` ) } {}
+}
+
 unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     : s tparams ( nurl_sym_get2 g_generic_struct_syms sname `__stparams` )
     ? != 0 ( nurl_str_len tparams ) {
@@ -43413,6 +43483,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
             : s done_key ( nurl_str_cat mangled `__done` )
             ? == 0 ( nurl_sym_len g_struct_inst_syms done_key ) {
                 ( nurl_sym_def g_struct_inst_syms done_key `1` )
+                ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
                 // Substitute tparam → type-arg in the raw body source.
                 : s body ( nurl_sym_get2 g_generic_struct_syms sname `__sbody` )
                 : ~ s subst ( nurl_str_cat body `` )
@@ -43508,7 +43579,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
         ( __generic_home_tail fname ) ) )
         ( __diag_abort )
     } {}
-    : s ret_ty ( compute_generic_ret_ty fname type_args )
+    : s ret_ty ( compute_generic_ret_ty fname type_args syms )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
     : i n ( nurl_str_to_int cnt_s )

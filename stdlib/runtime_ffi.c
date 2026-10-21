@@ -4266,6 +4266,24 @@ void nurl_pthread_detach_ptr(pthread_t *t) {
     if (t) pthread_detach(*t);
 }
 
+/* cond_wait_ms (stdlib/std/thread.nu): pthread_cond_timedwait takes an
+ * absolute CLOCK_REALTIME deadline in a struct timespec, which NURL's
+ * FFI would have to lay out per platform. 1 = signalled (or a spurious
+ * wake — the caller re-checks its predicate either way), 0 = timed out.
+ * The condvars are made with default attributes, whose clock is
+ * CLOCK_REALTIME on every POSIX libc; a wall-clock step moves the
+ * deadline with it, which a caller that loops on its own monotonic
+ * deadline absorbs. */
+int nurl_cond_wait_ms(void *cv, void *m, long long ms) {
+    if (ms < 0) return pthread_cond_wait((pthread_cond_t *)cv, (pthread_mutex_t *)m) == 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += (time_t)(ms / 1000);
+    ts.tv_nsec += (long)((ms % 1000) * 1000000L);
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
+    return pthread_cond_timedwait((pthread_cond_t *)cv, (pthread_mutex_t *)m, &ts) != ETIMEDOUT;
+}
+
 #elif defined(__wasm_atomics__)  /* WASI + the threads proposal */
 /*
  * wasi-threads, guest side. wasi-libc ships no pthread implementation
@@ -4459,6 +4477,18 @@ int pthread_cond_signal(void *cp) {
     return 0;
 }
 
+/* The bounded wait: the same futex sleep with a timeout in ns. */
+int nurl_cond_wait_ms(void *cp, void *mp, long long ms) {
+    _Atomic int32_t *c = (_Atomic int32_t*)cp;
+    if (!c) return 0;
+    int32_t seq = atomic_load(c);
+    pthread_mutex_unlock(mp);
+    int r = __builtin_wasm_memory_atomic_wait32((int32_t*)c, seq,
+                                                ms < 0 ? -1 : ms * 1000000LL);
+    pthread_mutex_lock(mp);
+    return r != 2;   /* 2 = timed out */
+}
+
 int pthread_cond_broadcast(void *cp) {
     _Atomic int32_t *c = (_Atomic int32_t*)cp;
     if (!c) return 0;
@@ -4636,6 +4666,8 @@ int pthread_mutex_unlock(void *m)          { (void)m; return 0; }
 int pthread_mutex_destroy(void *m)         { (void)m; return 0; }
 int pthread_cond_init(void *c, void *a)    { (void)c; (void)a; return 0; }
 int pthread_cond_wait(void *c, void *m)    { (void)c; (void)m; return 0; }
+/* One thread: nothing can signal, so a bounded wait is over at once. */
+int nurl_cond_wait_ms(void *c, void *m, long long ms) { (void)c; (void)m; (void)ms; return 0; }
 int pthread_cond_signal(void *c)           { (void)c; return 0; }
 int pthread_cond_broadcast(void *c)        { (void)c; return 0; }
 int pthread_cond_destroy(void *c)          { (void)c; return 0; }
@@ -5348,6 +5380,13 @@ typedef struct NurlFiber {
     /* Pending reactor wait — activated by worker after swap-out so the
      * reactor never matches a not-yet-suspended fiber. */
     struct NurlReactorWait *pending_reactor_wait;
+    /* The wait entry of a nurl_fiber_park_with_mutex_ms park, for
+     * nurl_fiber_wake to find and claim — NULL once it is claimed: by the
+     * wake, or by its deadline firing. Read and cleared only under the
+     * reactor's lock; set by the parking fiber before its mutex is
+     * released, so a waker (which must hold that mutex to find the
+     * fiber) never sees a stale value. */
+    struct NurlReactorWait *timed_park;
     /* This fiber's recover-frame chain and panic journal, exchanged with
      * the worker thread's around every switch (nurl__rctx_swap in
      * runtime_core.c, which asserts the size). Zero = no extent open. */
@@ -6435,6 +6474,13 @@ typedef struct NurlReactorWait {
     int                     heap_idx;    /* -1 = not in timer heap */
     struct NurlReactorWait *free_next;
     struct NurlReactorWait *wake_next;   /* transient wake batch */
+    /* A nurl_fiber_park_with_mutex_ms park (fd = -1): the fiber's
+     * timed_park points here until a wake or the deadline claims it.
+     * park_state: 0 registered, not yet activated; 1 activated (in the
+     * heap when it has a deadline); 2 woken before its activation —
+     * the activation then wakes it at once. Lock held for both. */
+    int                     mutex_park;
+    int                     park_state;
 } NurlReactorWait;
 
 /* Per-fd netpoller slot. `ready` accumulates edge-triggered readiness
@@ -6613,6 +6659,9 @@ static NurlReactorWait *nurl__np_expire_locked(long long now,
         NurlReactorWait *w = nurl__np.heap[0];
         nurl__np_heap_remove(w);
         if (w->fd >= 0) nurl__np_chain_remove(w);
+        /* A timed mutex park is the deadline's now: a later wake finds
+         * nothing to claim and leaves the fiber alone. */
+        if (w->mutex_park && w->fiber) w->fiber->timed_park = NULL;
         w->result = 0;
         w->wake_next = batch;
         batch = w;
@@ -6871,6 +6920,12 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
             wt->fd_next = s->chain;
             s->chain = wt;
         }
+    } else if (wt->mutex_park) {
+        /* Woken between the mutex release and this activation: wake it
+         * now. Otherwise it is armed, and a wake from here on takes it
+         * out of the heap itself. */
+        if (wt->park_state == 2) verdict = 1;
+        else wt->park_state = 1;
     }
     if (verdict < 0 && dl >= 0) nurl__np_heap_push(wt);
     if (verdict >= 0) {
@@ -6947,6 +7002,8 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->heap_idx = -1;
     wt->free_next = NULL;
     wt->wake_next = NULL;
+    wt->mutex_park = 0;
+    wt->park_state = 0;
 
     NurlFiber *cur = w->current;
     cur->pending_unlock = NULL;
@@ -6974,6 +7031,83 @@ NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
     return 0;
+}
+
+/* Park the current fiber on a mutex its caller holds, as
+ * nurl_fiber_park_with_mutex does, but until nurl_fiber_wake() or
+ * `timeout_ms` (< 0 = no deadline): 1 woken, 0 the deadline passed,
+ * -1 not on a fiber (the mutex is then still held: wait on a condvar).
+ *
+ * The mutex is released after the swap-out (pending_unlock) and the
+ * entry activated after that (pending_reactor_wait), in that order, by
+ * the worker loop. A wake and the deadline race for the entry under the
+ * netpoller lock: whichever takes `timed_park` first decides, so the
+ * fiber is made runnable exactly once — a plain unpark racing a timer
+ * would run it twice. A waker that lost the race (the wake answers 0)
+ * has lost nothing: the fiber relocks the mutex and looks again at what
+ * it waited for. */
+NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long timeout_ms) {
+    NurlWorker *w = nurl__tls_worker;
+    if (!w || !w->current) return -1;
+    nurl__np_start_if_needed();
+    if (!nurl__np.started) return -1;
+    pthread_mutex_lock(&nurl__np.lock);
+    NurlReactorWait *wt = nurl__np.freelist;
+    if (wt) nurl__np.freelist = wt->free_next;
+    pthread_mutex_unlock(&nurl__np.lock);
+    if (!wt) {
+        wt = (NurlReactorWait*)calloc(1, sizeof *wt);
+        if (!wt) return -1;
+    }
+    NurlFiber *cur = w->current;
+    wt->fd = -1;
+    wt->events = 0;
+    wt->deadline_ms = (timeout_ms < 0) ? -1
+                    : nurl__now_ms_internal() + timeout_ms;
+    wt->fiber = cur;
+    wt->result = 0;
+    wt->fd_next = NULL;
+    wt->heap_idx = -1;
+    wt->free_next = NULL;
+    wt->wake_next = NULL;
+    wt->mutex_park = 1;
+    wt->park_state = 0;
+    cur->timed_park = wt;
+    cur->pending_unlock = (pthread_mutex_t *)(uintptr_t)mutex_h;
+    cur->pending_reactor_wait = wt;
+    cur->state = NF_PARKED;
+    nurl__swap_to_loop(cur, w);
+    return cur->last_park_result;
+}
+
+/* Wake a fiber parked in nurl_fiber_park_with_mutex_ms — the caller
+ * holds the mutex it parked on (that is how it found the fiber). 1: the
+ * fiber was waiting and is woken (result 1); 0: its deadline claimed it
+ * first, and it is already on its way back. */
+long long nurl_fiber_wake(long long fiber_h) {
+    NurlFiber *f = (NurlFiber*)(uintptr_t)fiber_h;
+    if (!f) return 0;
+    pthread_mutex_lock(&nurl__np.lock);
+    NurlReactorWait *wt = f->timed_park;
+    if (!wt) {
+        pthread_mutex_unlock(&nurl__np.lock);
+        return 0;
+    }
+    f->timed_park = NULL;
+    if (wt->park_state == 0) {
+        /* Not activated yet: the activation wakes it (verdict 1). */
+        wt->park_state = 2;
+        pthread_mutex_unlock(&nurl__np.lock);
+        return 1;
+    }
+    nurl__np_heap_remove(wt);
+    wt->fiber = NULL;
+    wt->free_next = nurl__np.freelist;
+    nurl__np.freelist = wt;
+    pthread_mutex_unlock(&nurl__np.lock);
+    f->last_park_result = 1;
+    nurl_fiber_unpark((long long)(uintptr_t)f);
+    return 1;
 }
 
 void nurl__reactor_wake_if_started(void) {
@@ -7086,6 +7220,11 @@ typedef struct NurlReactorWait {
                                           * inactive entries are skipped to
                                           * close the park/unpark race. */
     struct NurlReactorWait *next;
+    /* A nurl_fiber_park_with_mutex_ms park (fd = -1), as in the Linux
+     * backend: park_state 0 registered, 1 activated, 2 woken before its
+     * activation. Lock held for both. */
+    int                     mutex_park;
+    int                     park_state;
 } NurlReactorWait;
 
 typedef struct NurlReactor {
@@ -7213,6 +7352,9 @@ static void *nurl__reactor_loop(void *arg) {
             }
             if (!wake && w->deadline_ms >= 0 && now >= w->deadline_ms) {
                 wake = 1; result = 0;
+                /* The deadline claims a timed mutex park: a later
+                 * nurl_fiber_wake finds nothing to wake. */
+                if (w->mutex_park && w->fiber) w->fiber->timed_park = NULL;
             }
             if (wake) {
                 w->result = result;
@@ -7285,9 +7427,28 @@ static void nurl__reactor_start_if_needed(void) {
  * completes; only then is it safe for the reactor to match. */
 void nurl__reactor_activate(NurlReactorWait *w) {
     if (!w) return;
+    NurlFiber *woken = NULL;
     pthread_mutex_lock(&nurl__reactor.lock);
-    w->active = 1;
+    if (w->mutex_park && w->park_state == 2) {
+        /* Woken between the mutex release and this activation: take the
+         * entry back out of the list and wake the fiber now. */
+        NurlReactorWait **pp = &nurl__reactor.waits;
+        while (*pp && *pp != w) pp = &(*pp)->next;
+        if (*pp) *pp = w->next;
+        woken = w->fiber;
+        w->fiber = NULL;
+        w->next = nurl__reactor.freelist;
+        nurl__reactor.freelist = w;
+    } else {
+        w->active = 1;
+        w->park_state = 1;
+    }
     pthread_mutex_unlock(&nurl__reactor.lock);
+    if (woken) {
+        woken->last_park_result = 1;
+        nurl_fiber_unpark((long long)(uintptr_t)woken);
+        return;
+    }
     nurl__reactor_wake();
 }
 
@@ -7361,6 +7522,8 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->fiber = w->current;
     wt->result = 0;
     wt->active = 0;
+    wt->mutex_park = 0;
+    wt->park_state = 0;
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     pthread_mutex_unlock(&nurl__reactor.lock);
@@ -7393,6 +7556,71 @@ NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
     return 0;
+}
+
+/* nurl_fiber_park_with_mutex_ms / nurl_fiber_wake — the contract the
+ * Linux backend documents, over this backend's wait list: the entry is
+ * inactive until the worker loop activates it, after the mutex release. */
+NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long timeout_ms) {
+    NurlWorker *w = nurl__tls_worker;
+    if (!w || !w->current) return -1;
+    nurl__reactor_start_if_needed();
+    if (!nurl__reactor.started) return -1;
+    pthread_mutex_lock(&nurl__reactor.lock);
+    NurlReactorWait *wt = nurl__reactor.freelist;
+    if (wt) nurl__reactor.freelist = wt->next;
+    else {
+        pthread_mutex_unlock(&nurl__reactor.lock);
+        wt = (NurlReactorWait*)calloc(1, sizeof(NurlReactorWait));
+        if (!wt) return -1;
+        pthread_mutex_lock(&nurl__reactor.lock);
+    }
+    NurlFiber *cur = w->current;
+    wt->fd = -1;
+    wt->events = 0;
+    wt->deadline_ms = (timeout_ms < 0) ? -1 :
+                      (nurl__now_ms_internal() + timeout_ms);
+    wt->fiber = cur;
+    wt->result = 0;
+    wt->active = 0;
+    wt->mutex_park = 1;
+    wt->park_state = 0;
+    wt->next = nurl__reactor.waits;
+    nurl__reactor.waits = wt;
+    cur->timed_park = wt;
+    pthread_mutex_unlock(&nurl__reactor.lock);
+    cur->pending_unlock = (pthread_mutex_t *)(uintptr_t)mutex_h;
+    cur->pending_reactor_wait = wt;
+    cur->state = NF_PARKED;
+    nurl__swap_to_loop(cur, w);
+    return cur->last_park_result;
+}
+
+long long nurl_fiber_wake(long long fiber_h) {
+    NurlFiber *f = (NurlFiber*)(uintptr_t)fiber_h;
+    if (!f) return 0;
+    pthread_mutex_lock(&nurl__reactor.lock);
+    NurlReactorWait *wt = f->timed_park;
+    if (!wt) {
+        pthread_mutex_unlock(&nurl__reactor.lock);
+        return 0;
+    }
+    f->timed_park = NULL;
+    if (wt->park_state == 0) {
+        wt->park_state = 2;
+        pthread_mutex_unlock(&nurl__reactor.lock);
+        return 1;
+    }
+    NurlReactorWait **pp = &nurl__reactor.waits;
+    while (*pp && *pp != wt) pp = &(*pp)->next;
+    if (*pp) *pp = wt->next;
+    wt->fiber = NULL;
+    wt->next = nurl__reactor.freelist;
+    nurl__reactor.freelist = wt;
+    pthread_mutex_unlock(&nurl__reactor.lock);
+    f->last_park_result = 1;
+    nurl_fiber_unpark((long long)(uintptr_t)f);
+    return 1;
 }
 
 void nurl__reactor_shutdown(void) {
@@ -7435,5 +7663,10 @@ NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     /* WASI/Windows fall-through; real sleep awaits port. */
     (void)ms; return 0;
 }
+/* No fiber to park: the caller waits on its condvar instead. */
+NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long timeout_ms) {
+    (void)mutex_h; (void)timeout_ms; return -1;
+}
+long long nurl_fiber_wake(long long fiber_h) { (void)fiber_h; return 0; }
 
 #endif

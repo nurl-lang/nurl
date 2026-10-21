@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+threads: served 16000
+threads: at most 3 at once 1
+threads: at most 3 made 1
+threads: none lent now 0
+thread wait: PoolTimeout
+thread wait: waited its bound 1
+fibers: served 12800
+fibers: at most 3 at once 1
+fibers: at most 3 made 1
+fiber wait: timed out 1
+fiber wait: served after the return 1
+racing waits: all returned 96
+racing waits: nobody left waiting 0
+mixed: served 3200
+mixed: at most 2 at once 1
