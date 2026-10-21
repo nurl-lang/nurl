@@ -4830,12 +4830,21 @@ void nurl_pthread_detach_ptr(pthread_t *t) {
  * deadline absorbs. */
 int nurl_cond_wait_ms(void *cv, void *m, long long ms) {
     if (ms < 0) return pthread_cond_wait((pthread_cond_t *)cv, (pthread_mutex_t *)m) == 0;
+#  ifdef NURL_WIN32_PTHREAD_SHIM
+    /* The shim's condvar is a Win32 CONDITION_VARIABLE over an SRW lock,
+     * whose wait already takes a relative timeout in ms (INFINITE is
+     * reserved, so clamp just below it). */
+    DWORD w = ms >= (long long)INFINITE ? INFINITE - 1 : (DWORD)ms;
+    if (SleepConditionVariableSRW((pthread_cond_t *)cv, (pthread_mutex_t *)m, w, 0)) return 1;
+    return GetLastError() != ERROR_TIMEOUT;
+#  else
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += (time_t)(ms / 1000);
     ts.tv_nsec += (long)((ms % 1000) * 1000000L);
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
     return pthread_cond_timedwait((pthread_cond_t *)cv, (pthread_mutex_t *)m, &ts) != ETIMEDOUT;
+#  endif
 }
 
 #elif defined(__wasm_atomics__)  /* WASI + the threads proposal */
