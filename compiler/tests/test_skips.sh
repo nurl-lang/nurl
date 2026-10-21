@@ -31,6 +31,12 @@
 #     internet    contacts a third-party host over the public network.
 #                 OFF by default; NURL_HTTP_TESTS=1 or NURL_NET_TESTS=1
 #                 turns it on.
+#     cpu-aes     runs the hardware crypto tier (nurl_v128_aes*,
+#                 nurl_v128_clmul_*; docs/spec.md §3.3b): an x86-64 CPU
+#                 with AES-NI and PCLMULQDQ. Without it the program takes
+#                 its software path or panics at the tier's gate, and the
+#                 golden — written on such a CPU — cannot match.
+#                 NURL_CPU_AES=0 turns it off, as it does in the runtime.
 #     <anything>  the name of an external command that must be on
 #     else        $PATH (curl, python3, openssl, bash …).
 #
@@ -164,6 +170,7 @@ is_skipped() {
     local tok
     for tok in $(test_requires "$name"); do
         case "$tok" in
+            cpu-aes)  host_has_cpu_aes || { echo skip; return; } ;;
             live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
             fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
             internet) [[ "$ENABLE_INTERNET_TESTS" == "1" ]] || { echo skip; return; } ;;
@@ -176,8 +183,23 @@ is_skipped() {
     done
 }
 
+# The `cpu-aes` requirement: x86-64 with AES-NI and PCLMULQDQ, the
+# feature bits nurl_cpu_x86_aes tests (its x86-64-v2 bits come with
+# every AES-NI CPU). Where /proc/cpuinfo is not there to ask (FreeBSD,
+# macOS on Intel) an x86-64 host is taken to have it — every one this
+# project's CI runs on does, and the test itself prints which path ran.
+host_has_cpu_aes() {
+    case "$(uname -m)" in x86_64|amd64) ;; *) return 1 ;; esac
+    [[ "${NURL_CPU_AES:-1}" == "0" ]] && return 1
+    if [[ -r /proc/cpuinfo ]]; then
+        grep -qw aes /proc/cpuinfo && grep -qw pclmulqdq /proc/cpuinfo
+        return
+    fi
+    return 0
+}
+
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
-export -f is_skipped test_requires test_mode
+export -f is_skipped test_requires test_mode host_has_cpu_aes
 export NURL_TESTS_DIR NURL_TESTS_ROOT \
        ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

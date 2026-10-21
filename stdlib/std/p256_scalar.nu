@@ -23,6 +23,7 @@
 //   ( p256n_mulmod_be a b )   → a·b mod n
 //   ( p256n_addmod_be a b )   → (a+b) mod n
 //   ( p256n_inv_be a )        → a⁻¹ mod n   (a ≠ 0)
+//   ( p256n_in_range_be k )   → 1 ≤ k < n   (constant-time)
 
 $ `stdlib/core/vec.nu`
 
@@ -355,6 +356,25 @@ $ `stdlib/core/vec.nu`
     ( __sn_condsub s # u64 . sp 0 # u64 . sp 1 # u64 . sp 2 # u64 . sp 3 cy )
     : ( Vec u ) o ( __sn_to_be s )
     ^ o
+}
+
+// Is the 32-byte big-endian `k` in [1, n−1] — RFC 6979's test of a
+// nonce candidate? Constant-time: a subtract-with-borrow chain against
+// n and an OR-fold for zero, no early exit on a secret byte.
+@ p256n_in_range_be ( Vec u ) k → b {
+    : ( Vec i ) v ( __sn_from_be_raw k )
+    : *i q ( vec_data [i] v )
+    : u64 w0 # u64 . q 0
+    : u64 w1 # u64 . q 1
+    : u64 w2 # u64 . q 2
+    : u64 w3 # u64 . q 3
+    : ~ u64 bb ( nurl_subb_hi w0 0xf3b9cac2fc632551 0 )
+    = bb ( nurl_subb_hi w1 0xbce6faada7179e84 bb )
+    = bb ( nurl_subb_hi w2 0xffffffffffffffff bb )
+    = bb ( nurl_subb_hi w3 0xffffffff00000000 bb )
+    // a borrow out of the top word means k < n
+    : u64 nz | | | w0 w1 w2 w3
+    ^ & != bb 0 != nz 0
 }
 
 // n − 2, big-endian.

@@ -6,6 +6,9 @@
 //                       ( Vec u ) msg )   → ( Vec u )   32-byte HMAC
 //   ( sha256_init ) → Sha256, sha256_update / _final / _snapshot — the
 //   streaming core below; the handle releases itself.
+//   ( hmac_sha256_key ( Vec u ) key )   → HmacSha256  a prepared key
+//   ( hmac_sha256_mac HmacSha256 k
+//                     ( Vec u ) msg )   → ( Vec u )   32-byte HMAC
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
@@ -379,6 +382,65 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     ( sha256_update h pad )
     ( sha256_update h inner )
     ^ ( sha256_final h )
+}
+
+// ── A prepared HMAC-SHA-256 key ────────────────────────────────────
+// Every HMAC under one key starts the same way: the inner hash absorbs
+// K0 ^ ipad and the outer one K0 ^ opad, one compression each, before
+// a byte of the message. A key that MACs more than once — RFC 6979's
+// nonce generator, an HKDF-Expand of several blocks — keeps the two
+// states those leave behind (`mid`: inner words 0..7, outer 8..15) and
+// starts every MAC from them: two compressions saved per MAC, and no K0
+// block built again. One hasher is reused for every MAC.
+: HmacSha256 { Sha256 h ( Vec u32 ) mid }
+
+@ hmac_sha256_key ( Vec u ) key → HmacSha256 {
+    : ( Vec u ) pad ( vec_zeroed [u] 64 )
+    : *u pp ( vec_data [u] pad )
+    : i klen ( vec_len [u] key )
+    ? > klen 64 {
+        : ( Vec u ) khash ( sha256_pure key )
+        ( nurl_memcpy # s pp # s ( vec_data [u] khash ) 32 )
+    } {
+        ? > klen 0 { ( nurl_memcpy # s pp # s ( vec_data [u] key ) klen ) } {}
+    }
+    : ( Vec u32 ) mid ( vec_zeroed [u32] 16 )
+    : *u32 mp0 ( vec_data [u32] mid )
+    : ~ i xi 0
+    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 54 = xi + xi 1 }
+    : Sha256 h ( sha256_init )
+    : *Sha256Impl hi ( __Sha256_ptr h )
+    : *u32 sp ( vec_data [u32] . hi w )
+    : *u32 kp . hi k
+    : *u32 mp # *u32 + # i sp 64
+    ( __sha256_transform sp pp kp mp )
+    ( nurl_memcpy # s mp0 # s sp 32 )
+    = xi 0
+    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 106 = xi + xi 1 }
+    ( __sha256_restart h )
+    ( __sha256_transform sp pp kp mp )
+    ( nurl_memcpy # s + # i mp0 32 # s sp 32 )
+    ^ @ HmacSha256 { h mid }
+}
+
+// The hasher resumed from the midstate at `ms` (8 words): one 64-byte
+// block already absorbed.
+@ __hmac_resume Sha256 h__h * u32 ms → v {
+    : *Sha256Impl h ( __Sha256_ptr h__h )
+    ( nurl_memcpy # s ( vec_data [u32] . h w ) # s ms 32 )
+    = . h blen 0
+    = . h total 64
+}
+
+// HMAC(key, msg) under a prepared key.
+@ hmac_sha256_mac HmacSha256 k ( Vec u ) msg → ( Vec u ) {
+    : *u32 ms ( vec_data [u32] . k mid )
+    ( __hmac_resume . k h ms )
+    ( sha256_update . k h msg )
+    : ( Vec u ) inner ( sha256_final . k h )
+    ( __hmac_resume . k h # *u32 + # i ms 32 )
+    ( sha256_update . k h inner )
+    ^ ( sha256_final . k h )
 }
 
 // ── SHA-224 (FIPS 180-4 §6.2) ──────────────────────────────────────

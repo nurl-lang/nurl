@@ -8,7 +8,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The TLS record layer seals and opens in place** (agora t44, part of
+  t37). A record used to cost about ten allocations and three or four
+  copies each way: the body sliced out of the receive buffer, a nonce,
+  an AAD, a Poly1305 input concatenating AAD and ciphertext, a new
+  plaintext, an append to the application buffer and two more slices on
+  the way out; writing, an inner-plaintext Vec, the sealed copy and a
+  growing record — and on AES-GCM a full key schedule (round keys and
+  eight GHASH powers) per record. Now:
+  - `aes_gcm_seal_in` / `aes_gcm_open_in` and
+    `chacha20poly1305_seal_in` / `chacha20poly1305_open_in` seal or open
+    `buf[data_at, …)` where it lies, the AAD `buf[aad_at, data_at)`, the
+    nonce the connection's iv with the sequence number XORed in (RFC 8446
+    §5.3, RFC 9001 §5.3); the tag is appended, or checked and the range
+    zeroed on a mismatch. Poly1305 is fed from the AAD and ciphertext
+    where they lie (no MAC buffer); the scratch is the buffer's spare
+    capacity. `compiler/tests/aead_in_place.nu` holds them to the Vec
+    APIs over 0–300 bytes, both suites, the AES key on its hardware AND
+    software paths, with foreign bytes around every record.
+  - A connection keeps its AES-GCM keys prepared per traffic secret
+    (`s_gk` / `c_gk`, rebuilt on KeyUpdate), seals each outgoing record
+    in a reused per-connection `txbuf` (64 KB batches, one write each),
+    and opens each incoming record inside its receive buffer, copying the
+    plaintext once — into the caller's buffer through the new
+    `tls_read_into` / `tls_server_read_into`, which `tcp_read_into` and
+    `tcp_try_read_into` now use.
+  - Steady-state record I/O allocates nothing:
+    `compiler/tests/tls_record_inplace.nu` seals and opens 100 records
+    between two connection states and counts zero allocations, for both
+    suites.
+- **`hmac_sha256_key` / `hmac_sha256_mac`: a prepared HMAC-SHA-256 key**
+  (std/hash_sha256.nu). The inner and outer midstates are computed once;
+  each MAC then costs two compressions fewer and builds no K0 block.
+
+- **AES-GCM on short messages: one GHASH reduction for AAD, data and
+  length, J0 encrypted alongside the tail** (agora t58, part of t37). A
+  TLS record of an API response is short, so its latency is per request.
+  The hardware path used to encrypt E_K(J0) and each tail block as its
+  own ten-round chain and reduce GHASH once per block, each reduction
+  waiting on the one before. Now J0 and the tail's counter blocks go
+  through the cipher in ONE interleaved pass (the narrowest of 1/2/4/8
+  blocks that holds them — a block nobody uses still occupies the AES
+  unit), placed after the eight-block steps so it overlaps their last
+  fold; and GHASH outside the stitched loop runs in groups of up to
+  eight blocks with unreduced lo/hi/middle sums and ONE reduction per
+  group (`__ghw_take`) — with no eight-block step, the AAD, the data and
+  the length block of a record up to 96 bytes are a single group.
+  Opening now folds each eight-block step's own input (the ciphertext
+  is there before the cipher runs), which also makes in-place opening
+  valid. i7-5930K, prepared key, cycles per seal: 16 B 360 → 295, 96 B
+  621 → 395, 256 B 644 → 599; ns: 16 B 94 → 79, 64 B 131 → 96, 96 B
+  161 → 103. `aes_gcm_hw_agree.nu` adds AAD past eight blocks before
+  every message shape.
+- **`nurl_v128_ldn` / `nurl_v128_stn`: partial-block load and store**
+  (docs/spec.md §4.1b). The first `n` bytes (0–16) zero-padded, and
+  their store, without touching a byte past `n`: two overlapping 8-, 4-
+  or 1-byte accesses, one branch per size class, no loop and no
+  `memcpy` call — which on the SysV ABI spilled every live vector
+  register around it (the GHASH sums, for a 5-byte TLS AAD block).
+  `compiler/tests/simd_partial.nu` checks every length 0–20 from an
+  allocation of exactly `n` bytes (an over-read is an ASan report) and
+  between sentinel bytes.
+
+- **The hardware crypto tier: AES and carry-less-multiply primitives in
+  the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
+  t37). `nurl_v128_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`,
+  `_aesimc` and `nurl_v128_clmul_ll/_hl/_lh/_hh` (PCLMULQDQ's immediate
+  as four primitives), the portable `nurl_v128_bswap128`, and
+  `nurl_cpu_has_aes` (docs/spec.md §4.1b). They are not baseline
+  anywhere, so nurlc keeps the contract rather than the program:
+  - a function whose body uses one is compiled for x86-64-v2 + AES-NI +
+    PCLMULQDQ and gated at entry on the runtime's CPUID answer
+    (`nurl_cpu_x86_aes`) — a CPU without the tier gets a recoverable
+    panic, not SIGILL; the gate is a `readnone` call the optimiser
+    merges and hoists out of loops;
+  - such a function is never `alwaysinline` (LLVM would inline it into a
+    baseline caller): an `inline @` or v128 signature becomes
+    `inlinehint`, plus an ungated `alwaysinline` copy `@f.tier` that
+    every tier function's own calls go to — helpers inline
+    unconditionally inside the tier, and stay gated calls outside it;
+  - a `simd @` function that uses a primitive, or calls a function that
+    does, gets tier clones: `.base` compiled for the tier and gated,
+    `.x86v3` with `+aes,+pclmul`, picked only when the CPU has both. A
+    marked function's clones now depend on its callees, which a lazily
+    compiled library generates after it, so marked functions and tier
+    functions are emitted at the end of the module;
+  - under `--no-cpu-dispatch` the primitives are panicking stubs and
+    `nurl_cpu_has_aes` is false.
+  `std/aes_gcm.nu` builds a HARDWARE key where the CPU has the tier:
+  round keys from an `aesenclast` key schedule, and GHASH in the
+  reflected domain with a two-PCLMULQDQ Montgomery reduction — for
+  T = A'·G, R' = T1 ^ W ^ clmul(W.hi, q) with W = T0 ^ swap(clmul(T0.lo,
+  q)), q = 0xC2…00 being y^121 + y^126 + y^127, the inverse of the
+  reciprocal polynomial mod y^128 minus one; the one-bit shift and the
+  y^-128 are folded into the key (G = y·H' mod P*). The kernel encrypts
+  eight blocks while folding the previous eight into GHASH (one block of
+  the fold per AES round, one reduction per batch). On an i7-5930K
+  (Haswell): AES-128-GCM seal **2.9–3.2 GB/s** over 16 KB – 1 MB, from
+  ~0.11 GB/s bitsliced; 1.21 cycles/byte against **1.22 for the same
+  algorithm in C intrinsics built by the same clang** — and OpenSSL's
+  hand-scheduled assembly at 1.07. A 32-byte message seals in 101 ns
+  with a prepared key (289 ns with the per-record key the TLS one-shot
+  API still builds), ChaCha20-Poly1305 in 634.
+  `compiler/tests/aes_gcm_hw_agree.nu` holds the hardware path to the
+  software one over every length 0–300 with 0–37 bytes of AAD and both
+  key sizes; `simd_crypto.nu` checks each primitive against FIPS-197
+  C.1 and hand-worked products, through a plain helper, a `simd` clone
+  and a closure.
+
 ### Fixed
+
+- **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
+  are truncated as verify truncates them** (agora t47). The private key
+  and digest went through `bigint_from_bytes_be` / `bigint_rem` /
+  `bigint_to_bytes_be` and every RFC 6979 candidate through two BigInt
+  comparisons; now every scalar is a fixed 32 bytes on the GF(n) field
+  (a constant-time `p256n_in_range_be` replaces the comparisons) and each
+  RFC 6979 HMAC key is prepared once for the MACs made under it. The
+  digest is now bits2int — its leftmost 256 bits (FIPS 186-5 §6.4.1) —
+  where signing used to reduce the WHOLE digest mod n: a SHA-384 or
+  SHA-512 digest signed with P-256 produced a signature that
+  `ecdsa_p256_verify` (and every other implementation) rejects.
+  `ecdsa_p256_sign.nu` adds RFC 6979's SHA-256 "test" vector, SHA-224/
+  384/512 digests verified by OpenSSL, and RFC 4231 HMAC cases on the
+  prepared key.
+
+- **A crypto-tier helper written as a wrapper inlined its callees'
+  gates into the kernel** (nurlc). A function joined the tier only when
+  its own body used a primitive, so an inline-wanting helper that only
+  CALLED tier helpers (`__ghw_take` calling `__ghw_acc1` and
+  `__ghw_finish`) stayed baseline: inlined into a tier body it brought
+  a gated call per callee — four CPUID gate checks in the AES-GCM kernel,
+  and the reason helpers had to be merged by hand so each used a
+  primitive directly. Such a wrapper now gets a `.tier` copy too
+  (`__tier_wrappers`, a fixed point over wrappers of wrappers) whose
+  calls go to the `.tier` copies, and tier bodies call it; the original
+  stays as it was for baseline callers. `crypto_tier_ir.sh` checks the
+  copy and that the `simd` clones call it.
+
+- **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
+  A page (and a cut section) was sliced at a byte offset, so one that
+  ended inside a `—` was invalid UTF-8 and a JSON client rejected the
+  whole reply — docs/spec.md's second page did, once an edit moved the
+  48 KB cap into an em dash. Both ends now snap back to the character
+  they fall in (the `__mcp_utf8_cut` the registry descriptions already
+  used), and the printed `offset=` is where the next page starts.
+
+- **A call returning a SIMD vector no longer leaks its temporary argument
+  (h316).** `: v128 x ( lanes ( mk ) )` left the Vec `mk` made alive for
+  ever: a `v128` / `v256` result was taken for one that could point into
+  a temporary (like `( string_data ( mk ) )`), so the temporary's drop
+  waited for the result's consumer — and a binding is none. A vector is
+  lanes of numbers; every question about what a value can point into now
+  says so (`__is_vec_num_ty`). Found by the sanitizer corpus on the
+  crypto tier's own test.
 
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
@@ -121,6 +276,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `poll(2)`. `tcp_connect` keeps its signature (no deadline).
 
 ### Changed
+
+- **TLS picks AES-128-GCM on a CPU with AES-NI** — the server when the
+  client offers it, the client by listing it first; ChaCha20-Poly1305
+  otherwise, as OpenSSL and rustls do. It was ChaCha unconditionally,
+  correctly, while AES-GCM was the slower suite on every NURL host.
+- **A native nurlc on a non-x86-64 host starts with CPU dispatch off**
+  (its IR is compiled for the host clang runs on, and x86 intrinsics in
+  an AArch64 module are a codegen error, not the warnings the `simd`
+  clones' feature strings were); `--cpu-dispatch` turns it on for an
+  x86-64 target built there. A wasm nurlc keeps the native default — its
+  output must match the native compiler's byte for byte (wasmc_gate).
+- **`NURL_CPU_V3=0` and `NURL_CPU_AES=0`** take a CPU-dispatch answer
+  away (never grant one), so one machine runs every clone and fallback;
+  a test declares `// requires: cpu-aes` when its golden needs the tier.
 
 - Standard-library doc comments no longer tell callers to free what they
   own or warn them off what the checker already rejects: about fifty

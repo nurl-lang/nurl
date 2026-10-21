@@ -354,7 +354,23 @@ Three consequences worth knowing:
   function once. nurlc emits no `target triple`, so it cannot tell that a
   module is bound for AArch64 or wasm; anything building for a non-x86-64
   target must pass this flag, and `nurl.sh`, the unikernel scripts and the
-  build API all do.
+  build API all do. The prefix also starts off when nurlc runs natively
+  on a non-x86-64 host (its IR is compiled for the host clang runs on),
+  and `--cpu-dispatch` turns it back on for an x86-64 target built there;
+  a wasm nurlc keeps the native default.
+- **A marked function that uses the hardware crypto tier** (§4.1b,
+  the `nurl_v128_aes*` / `nurl_v128_clmul_*`
+  primitives) — or calls a function that does — cannot have a baseline
+  clone: the instructions do not exist there. Its `.base` is compiled
+  for the tier (x86-64-v2 + AES-NI + PCLMULQDQ) and gated on it, and its
+  `.x86v3` gains `+aes,+pclmul`; the dispatcher picks the wide clone only
+  when the CPU has both v3 and the tier. Which clones a marked function
+  gets therefore depends on its callees, and a library function is
+  compiled only once something refers to it — after its caller — so
+  nurlc emits every marked function at the end of the module, when the
+  set of tier functions is complete. The test is one call deep on
+  purpose: a marked function that only reaches the tier through some
+  ordinary function keeps its baseline clone.
 
 **Both clones are tested, not just the one this CPU picks.** A
 behavioural test can only ever run the clone the dispatcher selects, so
@@ -810,6 +826,7 @@ call site:
 | Group | Primitives |
 |---|---|
 | load / store | `nurl_v128_ld(*u) → v128`, `nurl_v128_st(*u, v128)` — unaligned |
+| partial load / store | `nurl_v128_ldn(*u, n) → v128` — the first `n` bytes (0–16), zero-padded; `nurl_v128_stn(*u, n, v128)` — the first `n` bytes of the vector. Neither touches a byte past `n` (two overlapping 8-, 4- or 1-byte accesses, no loop, no `memcpy` call) — a message's short last block |
 | construct | `nurl_v128_zero`, `_set32(a b c d)`, `_set64(a b)`, `_bcast32(x)`, `_bcast8(x)` |
 | extract | `nurl_v128_get32(v, i) → u64`, `_get64(v, i) → u64` |
 | bitwise | `nurl_v128_xor`, `_and`, `_or`, `_andnot` |
@@ -819,6 +836,7 @@ call site:
 | lane interleave | `nurl_v128_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — zip the low or high halves of two vectors at 32- or 64-bit granularity; four of them transpose a 4×4 block of 32-bit words |
 | byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` — 16-bit bitmask |
 | case folding | `nurl_v128_lower8(v)` — ASCII `A`–`Z` only |
+| byte order | `nurl_v128_bswap128(v)` — reverse the sixteen bytes (GHASH's and every big-endian counter's block order) |
 
 Lane indices are masked into range and shift counts are masked to the
 lane width, so no primitive has undefined behaviour on an input the
@@ -832,6 +850,54 @@ builds the scanners the rest of the stdlib uses on exactly that pattern
 (`simd_index_byte`, `simd_index_crlf`, `simd_index_head_end`,
 `simd_index_ows_end`, `simd_bytes_eq`, `simd_bytes_eq_ci`,
 `simd_xor_into`).
+
+**The hardware crypto tier** — AES rounds and carry-less
+multiplication, the instructions every fast AES-GCM is built from and
+the ones no shift tree stands in for:
+
+| Primitive | Value (Intel's semantics) |
+|---|---|
+| `nurl_v128_aesenc(a, k)` | one AES round: MixColumns(SubBytes(ShiftRows(a))) ^ k |
+| `nurl_v128_aesenclast(a, k)` | the last round, without MixColumns |
+| `nurl_v128_aesdec(a, k)`, `_aesdeclast(a, k)` | the equivalent inverse rounds |
+| `nurl_v128_aesimc(a)` | InvMixColumns — encryption round keys into decryption ones |
+| `nurl_v128_clmul_ll/_hl/_lh/_hh(a, b)` | 128-bit carry-less product of a's low or high 64 bits and b's (PCLMULQDQ's immediate, spelled as four primitives because an instruction immediate must be a literal) |
+| `nurl_cpu_has_aes() → b` | does this CPU have the tier |
+
+Unlike the rest of the `v128` layer these are not baseline anywhere:
+an x86-64 CPU without AES-NI is still a legal target. So they come
+with a contract nurlc enforces rather than one the program has to keep:
+
+- A function whose body uses one is compiled for the **crypto tier** —
+  x86-64-v2 plus AES-NI and PCLMULQDQ — and its entry is **gated** on
+  the runtime's CPUID answer: on a CPU without the tier the call panics
+  (recoverably, like any panic) before the first AES instruction could
+  raise SIGILL. The gate is a `readnone` call and a branch; in a helper
+  inlined into a loop the optimiser merges every copy and hoists it.
+- A tier function is never `alwaysinline` — LLVM would inline it into a
+  caller compiled without the tier. A v128 signature or `inline @`
+  becomes `inlinehint`, and such a function also gets an ungated
+  `alwaysinline` copy (`@f.tier`, `linkonce_odr`) that every tier
+  function's own calls are pointed at: inside the tier helpers inline
+  unconditionally, outside it a call stays a gated call.
+- A `simd @` function that uses a tier primitive, or calls a function
+  that does, has its clones built for the tier (§3.3b).
+- A program chooses its path **before** calling into the tier:
+  `nurl_cpu_has_aes()` is the question, and a function that uses a
+  primitive requires the tier however it is reached. A function that
+  only *calls* a tier function stays baseline (the tier does not
+  propagate up the call graph), so `? ( nurl_cpu_has_aes ) { hw } { sw }`
+  in ordinary code is the shape a software fallback takes.
+- Under `--no-cpu-dispatch` (any non-x86-64 target) there is no tier:
+  `nurl_cpu_has_aes` is a constant false and each primitive is a stub
+  that panics if reached anyway.
+
+`stdlib/std/aes_gcm.nu` is written on them: AES-128/256-GCM at ~3 GB/s
+on a 2014 Haswell (eight-block CTR stitched with the previous batch's
+GHASH, reflected-domain Montgomery reduction), against ~113 MB/s for
+the bitsliced software cipher it keeps for CPUs without the tier — and
+on par with the same algorithm written in C intrinsics and compiled by
+the same clang.
 
 **Scalar bit primitives** ship alongside, for the operations every ISA
 has an instruction for and the language previously had to spell as a

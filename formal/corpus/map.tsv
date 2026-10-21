@@ -302,3 +302,4 @@ h312_lend_returned_through_a_ternary	§7.6	A2	h311 through a ? ternary	rejected
 h313_lru_get_value_released	§7.6	A2	h311 through lru_get: releasing the cached value freed what the cache held	rejected
 h314_lru_value_read_after_eviction	§2.10	A2	a value lru_get lent, read after an lru_put that evicted it	rejected
 h315_first_arm_statement_reads_what_the_scrutinee_ended	§2.10	A2	a match scrutinee call's effects were recorded after the first arm statement, which read a borrow the call had ended	rejected
+h316_vector_result_keeps_its_temporary	§7.1	A2	a call returning a v128 was taken for a possible view of its temporary argument; the temporary's drop waited for a consumer, and a binding is none (leak)	runs-clean

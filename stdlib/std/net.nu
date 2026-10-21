@@ -1076,16 +1076,19 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
 @ tcp_read_into TcpConn c ( Vec u ) buf i max → !i NetErr {
     ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
     ? != ( __conn_tlsptr c ) 0 {
-        // TLS: the record layer necessarily materialises decrypted
-        // bytes in their own Vec; append and release it.
-        : !( Vec u ) NetErr r ( __tls_read_net c max )
+        // TLS: records are opened in place in the connection's record
+        // buffer and the plaintext copied once, straight into `buf`.
+        : TlsConn tc # TlsConn ( __conn_tlsptr c )
+        : !i TlsErr r ? == . ( __tci c ) kind 2 ( tls_server_read_into tc buf max ) ( tls_read_into tc buf max )
         ?? r {
-            T v → {
-                : i n ( vec_len [u] v )
-                ( vec_extend [u] buf v )
+            T n → {
+                ? == n 0 { ^ @ !i NetErr { F # NetErr NetClosed } } {}
                 ^ @ !i NetErr { T n }
             }
-            F e → ^ @ !i NetErr { F e }
+            F e → {
+                : NetErr ne ?? e { TlsClosed → # NetErr NetClosed _ → # NetErr NetRead }
+                ^ @ !i NetErr { F ne }
+            }
         }
     } {}
     : s rp # s . ( __tci c ) raw
@@ -1212,12 +1215,10 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
         : *TlsConnImpl state ( _tls_ptr conn )
         : i previous . state read_nowait
         = . state read_nowait 1
-        : !( Vec u ) TlsErr result ? == . ( __tci c ) kind 2 ( tls_server_read conn max ) ( tls_read conn max )
+        : !i TlsErr result ? == . ( __tci c ) kind 2 ( tls_server_read_into conn bytes max ) ( tls_read_into conn bytes max )
         = . state read_nowait previous
         ?? result {
-            T decoded → {
-                : i count ( vec_len [u] decoded )
-                ( vec_extend [u] bytes decoded )
+            T count → {
                 ? == count 0 { ^ @ !i NetErr { F NetClosed } } {}
                 ^ @ !i NetErr { T count }
             }

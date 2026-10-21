@@ -42,7 +42,9 @@ ok() { note "$1" "ok ($2)"; }
 MARKED='__sum|scale_into|dot|sum_tripled|tri'
 
 cd "$ROOT" || exit 2
-"$NURLC" "$SRC" > "$WORK/on.ll" 2> "$WORK/on.err" || {
+# --cpu-dispatch: these are IR checks of the prefix itself, so they ask
+# for it explicitly — on a non-x86-64 host nurlc starts with it off.
+"$NURLC" --cpu-dispatch "$SRC" > "$WORK/on.ll" 2> "$WORK/on.err" || {
     echo "simd_dispatch_ir: nurlc failed"; cat "$WORK/on.err"; exit 1; }
 "$NURLC" --no-cpu-dispatch "$SRC" > "$WORK/off.ll" 2> "$WORK/off.err" || {
     echo "simd_dispatch_ir: nurlc --no-cpu-dispatch failed"; cat "$WORK/off.err"; exit 1; }
@@ -108,7 +110,7 @@ else
 fi
 
 # ── 4. --g suppresses cloning (a DISubprogram binds to one function) ─
-"$NURLC" --g "$SRC" > "$WORK/g.ll" 2>/dev/null
+"$NURLC" --cpu-dispatch --g "$SRC" > "$WORK/g.ll" 2>/dev/null
 n_g=$(grep -cE "^define .*(\.base|\.x86v3)\(" "$WORK/g.ll")
 if [ "$n_g" -eq 0 ]; then
     ok "--g suppresses cloning" "0 clones"
@@ -118,7 +120,7 @@ fi
 
 # ── 5. A marked module is not partitioned ───────────────────────────
 rm -f "$WORK"/sp.*.ll
-"$NURLC" --split=8 --split-out="$WORK/sp" "$SRC" > /dev/null 2>&1
+"$NURLC" --cpu-dispatch --split=8 --split-out="$WORK/sp" "$SRC" > /dev/null 2>&1
 n_parts=$(ls "$WORK"/sp.*.ll 2>/dev/null | wc -l)
 if [ "$n_parts" -eq 0 ]; then
     ok "marked module declines to split" "0 parts"
