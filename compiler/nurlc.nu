@@ -44529,21 +44529,51 @@ unsafe @ emit_hoisted s funcdef → v {
 // body. emit_hoisted hoists the allocas above it, so the entry block
 // still opens with them.
 //
-// Never `alwaysinline`, which LLVM honours even into a caller compiled
-// WITHOUT the tier — the AES instruction then lands in a baseline
-// function and instruction selection fails (or, worse, a v2 one runs on
-// a CPU without it). A vector signature asks for it (gen_fn_decl's
-// __fn_vecsig), and so may `inline @`; both become `inlinehint`. The
-// inliner then merges the helper into every caller that has the tier —
-// a `simd` clone, another crypto function — and leaves a gated call in
-// any other. A v128 crosses that call in an XMM register under every
-// feature set; a v256 does not, and crosses it by pointer (emit_vabi).
+// A function header (`define … {`, no body) with `alwaysinline` and
+// `inlinehint` removed and `noinline` put right after its parameter list
+// — for a function that must stay a call (a gated tier entry, a `simd`
+// clone its dispatcher picks at run time).
+unsafe @ __ir_hdr_noinline s hdr0 → s {
+    : ~ s h ( __ir_cut_all hdr0 ` alwaysinline` )
+    = h ( __ir_cut_all h ` inlinehint` )
+    = h ( __ir_cut_all h ` noinline` )
+    // The parameter list closes at the header's last `)`: what follows is
+    // attribute keywords, `"key"="value"` strings and `!dbg !N`.
+    : i hl ( strlen h )
+    : *u hp # *u h
+    : ~ i pc - hl 1
+    ~ & >= pc 0 != ( nurl_str_at hp hl pc ) 41 { = pc - pc 1 }
+    ? < pc 0 { ^ h } {}
+    ^ ( nurl_str_cat3 ( nurl_str_slice h 0 + pc 1 ) ` noinline` ( nurl_str_slice h + pc 1 - hl + pc 1 ) )
+}
+
+// `h` with every occurrence of `pat` removed.
+unsafe @ __ir_cut_all s h0 s pat → s {
+    : ~ s h ( nurl_str_cat h0 `` )
+    : i pl ( strlen pat )
+    : ~ i at ( nurl_str_find h pat )
+    ~ >= at 0 {
+        = h ( nurl_str_cat ( nurl_str_slice h 0 at ) ( nurl_str_slice h + at pl - - ( strlen h ) at pl ) )
+        = at ( nurl_str_find h pat )
+    }
+    ^ h
+}
+
+// `noinline`, whatever the source asked (`inline @`, or a vector
+// signature's alwaysinline from gen_fn_decl's __fn_vecsig): a caller
+// that has the tier calls the `.tier` copy (__ir_tier_calls), so this
+// gated original is only ever called from OUTSIDE the tier, where
+// merging it is wrong. LLVM refuses that on its own only when it can see
+// the caller lacks the features — a toolchain that optimises the module
+// for the build host's CPU and then generates code for the baseline
+// (zig cc's ThinLTO) inlined it into a baseline function, and
+// instruction selection failed on the AES there. A v128 crosses the call
+// in an XMM register under every feature set; a v256 does not, and
+// crosses it by pointer (emit_vabi).
 @ __crypto_fn_ir s fn_ir b gate i lvl → s {
     : i ei ( nurl_str_find fn_ir `\nentry:\n` )
     ? < ei 0 { ^ ( nurl_str_cat fn_ir `` ) } {}
-    : s hdr0 ( nurl_str_slice fn_ir 0 ei )
-    : i ai ( nurl_str_find hdr0 `) alwaysinline` )
-    : s hdr ? >= ai 0 ( nurl_str_cat3 ( nurl_str_slice hdr0 0 + ai 1 ) ` inlinehint` ( nurl_str_slice hdr0 + ai 14 - ei + ai 14 ) ) ( nurl_str_cat hdr0 `` )
+    : s hdr ( __ir_hdr_noinline ( nurl_str_slice fn_ir 0 ei ) )
     : i hl ( strlen hdr )
     : i di ( nurl_str_find hdr ` !dbg ` )
     // Without an attachment the header ends ` {`.
@@ -44630,7 +44660,10 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // v3 and the tier, so a v3 machine without AES-NI (a VM that masks
     // it) falls to the gated base rather than to SIGILL.
 
-    : s base_attrs ? == crypto 1 ( __crypto_tier_attrs 1 ) ``
+    // Both clones stay calls: the dispatcher picks one at run time, and
+    // a clone compiled for more than the baseline must never be merged
+    // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
+    : s base_attrs ? == crypto 1 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs 1 ) ) ``
     : s base_body ? == crypto 1 ( nurl_str_cat `\nentry:\n  call void @nurl__aes_gate()` ( nurl_str_slice body 7 - ( strlen body ) 7 ) ) ( nurl_str_cat body `` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
@@ -44639,7 +44672,7 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     : s wide_feat ? == crypto 1 `,+aes,+pclmul` ``
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 cparams
-    `) "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
+    `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_w body ) )
 
     // The dispatcher. `params` doubles as the argument list: it is
@@ -58259,6 +58292,7 @@ unsafe @ llvm_linkage_init → v {
 // not a `: ~ s` global: a mutable string global owns its buffer, and
 // this one is owned by dce_emit_module's caller.
 : ~ i g_dce_mod 0
+: ~ i g_dce_mod_len 0  // its length: no probe reads past the end
 : ~ i g_dce_start 0  // i64[n]: byte offset of each `define`
 : ~ i g_dce_end 0  // i64[n]: byte offset just past its closing `}`
 : ~ i g_dce_live 0  // i64[n]: 1 once reached
@@ -58489,6 +58523,7 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_y 0
 
 unsafe @ __fold_at i p s lit i n → b {
+    ? > + p n g_dce_mod_len { ^ F } {}
     ^ == 0 # i ( memcmp # s + g_dce_mod p lit n )
 }
 
@@ -60359,6 +60394,7 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     : i g_dce_keep_n ( nurl_str_len g_dce_keep )
     : *u g_dce_keep_p # *u g_dce_keep
     = g_dce_mod # i mod
+    = g_dce_mod_len mlen
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
     ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}

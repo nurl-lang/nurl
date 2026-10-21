@@ -80,7 +80,7 @@ a64_checks() {
     local hdr body
     hdr=$(grep -E '^define .*@__nurl_fn\.next_key[a-z0-9_]*\(' "$WORK/a64.ll" | head -1)
     body=$(awk -v h="$hdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/a64.ll")
-    case "$hdr" in *inlinehint*"$A64"*) ok "aarch64: next_key compiled for the tier" "+neon,+aes, inlinehint" ;;
+    case "$hdr" in *noinline*"$A64"*) ok "aarch64: next_key compiled for the tier" "+neon,+aes, noinline" ;;
         *) bad "aarch64: next_key compiled for the tier" "header: ${hdr:0:120}" ;; esac
     if printf '%s\n' "$body" | grep -q 'call void @nurl__aes_gate()' &&
             grep -A3 '^define linkonce_odr void @nurl__aes_gate()' "$WORK/a64.ll" | grep -q '@nurl_cpu_arm_aes()'; then
@@ -234,9 +234,14 @@ for fn in next_key decrypt; do
     if [ -z "$hdr" ]; then bad "$fn: defined" "no define"; continue; fi
     case "$hdr" in *"$TIER"*) ok "$fn: compiled for the tier" "x86-64-v2 +aes +pclmul" ;;
         *) bad "$fn: compiled for the tier" "header: ${hdr:0:120}" ;; esac
-    case "$hdr" in *alwaysinline*) bad "$fn: not alwaysinline" "it is" ;;
-        *inlinehint*) ok "$fn: not alwaysinline" "inlinehint" ;;
-        *) bad "$fn: not alwaysinline" "no inlinehint either" ;; esac
+    # A gated entry is only called from outside the tier (callers inside
+    # it take the `.tier` copy), so it must stay a call: noinline, never
+    # alwaysinline or inlinehint — a toolchain that optimises for the host
+    # CPU and generates code for the baseline (zig cc's ThinLTO) merged it
+    # into a baseline caller, and instruction selection failed.
+    case "$hdr" in *alwaysinline*|*inlinehint*) bad "$fn: stays a call" "inlinable: ${hdr:0:120}" ;;
+        *noinline*) ok "$fn: stays a call" "noinline" ;;
+        *) bad "$fn: stays a call" "no noinline" ;; esac
     body=$(awk -v h="$hdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/on.ll")
     if printf '%s\n' "$body" | grep -q 'call void @nurl__aes_gate()'; then
         ok "$fn: entry gated" "nurl__aes_gate"
@@ -313,6 +318,10 @@ case "$bhdr" in *"$TIER"*) ok "encrypt.base: compiled for the tier" "x86-64-v2 +
     *) bad "encrypt.base: compiled for the tier" "header: ${bhdr:0:120}" ;; esac
 case "$whdr" in *'"target-cpu"="x86-64-v3"'*'+aes,+pclmul"'*) ok "encrypt.x86v3: v3 plus AES" "+aes,+pclmul" ;;
     *) bad "encrypt.x86v3: v3 plus AES" "header: ${whdr:0:140}" ;; esac
+for h in base:"$bhdr" x86v3:"$whdr"; do
+    case "${h#*:}" in *noinline*) ok "encrypt.${h%%:*}: stays a call from the dispatcher" "noinline" ;;
+        *) bad "encrypt.${h%%:*}: stays a call from the dispatcher" "no noinline" ;; esac
+done
 bbody=$(awk -v h="$bhdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/on.ll")
 if printf '%s\n' "$bbody" | grep -q 'call void @nurl__aes_gate()'; then
     ok "encrypt.base: gated" "nurl__aes_gate"
