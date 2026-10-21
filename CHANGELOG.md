@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AES-GCM on short messages: one GHASH reduction for AAD, data and
+  length, J0 encrypted alongside the tail** (agora t58, part of t37). A
+  TLS record of an API response is short, so its latency is per request.
+  The hardware path used to encrypt E_K(J0) and each tail block as its
+  own ten-round chain and reduce GHASH once per block, each reduction
+  waiting on the one before. Now J0 and the tail's counter blocks go
+  through the cipher in ONE interleaved pass (the narrowest of 1/2/4/8
+  blocks that holds them — a block nobody uses still occupies the AES
+  unit), placed after the eight-block steps so it overlaps their last
+  fold; and GHASH outside the stitched loop runs in groups of up to
+  eight blocks with unreduced lo/hi/middle sums and ONE reduction per
+  group (`__ghw_take`) — with no eight-block step, the AAD, the data and
+  the length block of a record up to 96 bytes are a single group.
+  Opening now folds each eight-block step's own input (the ciphertext
+  is there before the cipher runs), which also makes in-place opening
+  valid. i7-5930K, prepared key, cycles per seal: 16 B 360 → 295, 96 B
+  621 → 395, 256 B 644 → 599; ns: 16 B 94 → 79, 64 B 131 → 96, 96 B
+  161 → 103. `aes_gcm_hw_agree.nu` adds AAD past eight blocks before
+  every message shape.
+- **`nurl_v128_ldn` / `nurl_v128_stn`: partial-block load and store**
+  (docs/spec.md §4.1b). The first `n` bytes (0–16) zero-padded, and
+  their store, without touching a byte past `n`: two overlapping 8-, 4-
+  or 1-byte accesses, one branch per size class, no loop and no
+  `memcpy` call — which on the SysV ABI spilled every live vector
+  register around it (the GHASH sums, for a 5-byte TLS AAD block).
+  `compiler/tests/simd_partial.nu` checks every length 0–20 from an
+  allocation of exactly `n` bytes (an over-read is an ASan report) and
+  between sentinel bytes.
+
 - **The hardware crypto tier: AES and carry-less-multiply primitives in
   the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
   t37). `nurl_v128_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`,
@@ -57,6 +86,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a closure.
 
 ### Fixed
+
+- **A crypto-tier helper written as a wrapper inlined its callees'
+  gates into the kernel** (nurlc). A function joined the tier only when
+  its own body used a primitive, so an inline-wanting helper that only
+  CALLED tier helpers (`__ghw_take` calling `__ghw_acc1` and
+  `__ghw_finish`) stayed baseline: inlined into a tier body it brought
+  a gated call per callee — four CPUID gate checks in the AES-GCM kernel,
+  and the reason helpers had to be merged by hand so each used a
+  primitive directly. Such a wrapper now gets a `.tier` copy too
+  (`__tier_wrappers`, a fixed point over wrappers of wrappers) whose
+  calls go to the `.tier` copies, and tier bodies call it; the original
+  stays as it was for baseline callers. `crypto_tier_ir.sh` checks the
+  copy and that the `simd` clones call it.
 
 - **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
   A page (and a cut section) was sliced at a byte offset, so one that

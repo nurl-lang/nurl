@@ -98,6 +98,28 @@ for clone in base x86v3; do
         bad "encrypt.$clone calls aes_round.tier" "it calls something else"
     fi
 done
+# `two_rounds` wraps aes_round without a primitive of its own: it gets a
+# `.tier` copy too, calling aes_round's, and the clones call that copy.
+whdr=$(grep -E "^define linkonce_odr .*@__nurl_fn\.two_rounds[a-z0-9_]*\.tier\(" "$WORK/on.ll" | head -1)
+if [ -n "$whdr" ]; then
+    case "$whdr" in *alwaysinline*"$TIER"*) ok "two_rounds.tier: wrapper copy, tier attributes" "linkonce_odr" ;;
+        *) bad "two_rounds.tier: wrapper copy, tier attributes" "header: ${whdr:0:120}" ;; esac
+    wbody=$(awk -v h="$whdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/on.ll")
+    n=$(printf '%s\n' "$wbody" | grep -cE '@__nurl_fn\.aes_round[a-z0-9_]*\.tier\(')
+    if [ "$n" -eq 2 ]; then ok "two_rounds.tier calls aes_round.tier" "$n calls"
+    else bad "two_rounds.tier calls aes_round.tier" "$n of 2 calls"; fi
+else
+    bad "two_rounds.tier: exists" "no linkonce_odr .tier define"
+fi
+for clone in base x86v3; do
+    chdr=$(grep -E "^define .*@__nurl_fn\.encrypt[a-z0-9_]*\.${clone}\(" "$WORK/on.ll" | head -1)
+    cbody=$(awk -v h="$chdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/on.ll")
+    if printf '%s\n' "$cbody" | grep -qE '@__nurl_fn\.two_rounds[a-z0-9_]*\.tier\('; then
+        ok "encrypt.$clone calls two_rounds.tier" "wrapper inlined ungated"
+    else
+        bad "encrypt.$clone calls two_rounds.tier" "it calls something else"
+    fi
+done
 # `schedule` calls next_key but uses no primitive itself: it stays
 # baseline and must call the GATED original, never the copy.
 shdr=$(grep -E "^define .*@__nurl_fn\.schedule[a-z0-9_]*\(" "$WORK/on.ll" | head -1)

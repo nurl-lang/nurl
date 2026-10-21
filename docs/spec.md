@@ -791,6 +791,7 @@ call site:
 | Group | Primitives |
 |---|---|
 | load / store | `nurl_v128_ld(*u) → v128`, `nurl_v128_st(*u, v128)` — unaligned |
+| partial load / store | `nurl_v128_ldn(*u, n) → v128` — the first `n` bytes (0–16), zero-padded; `nurl_v128_stn(*u, n, v128)` — the first `n` bytes of the vector. Neither touches a byte past `n` (two overlapping 8-, 4- or 1-byte accesses, no loop, no `memcpy` call) — a message's short last block |
 | construct | `nurl_v128_zero`, `_set32(a b c d)`, `_set64(a b)`, `_bcast32(x)`, `_bcast8(x)` |
 | extract | `nurl_v128_get32(v, i) → u64`, `_get64(v, i) → u64` |
 | bitwise | `nurl_v128_xor`, `_and`, `_or`, `_andnot` |

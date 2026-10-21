@@ -2843,6 +2843,11 @@ unsafe @ note_unsafe_fn s pos s name → v {
 : ~ i g_crypto_defer 0
 : ~ i g_crypto_defer_n 0
 : ~ i g_crypto_inl 0
+// Inline-wanting functions that use no crypto primitive themselves, by
+// emission order (emit_fn_ir): the candidates flush_simd_deferred gives
+// a `.tier` copy when they call into the tier (__tier_wrappers).
+: ~ i g_inl_wrap 0
+: ~ i g_inl_wrap_n 0
 
 // Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3
 // (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the function once.
@@ -7401,13 +7406,23 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // temporary drop independently of the LLVM return type. Sink, retention and
 // unverified-call facts apply per position, including named arguments.
 // `{ i1, T }` / `{ i1, T, E }` whose parts are all numbers or flags.
+// A SIMD vector (`v128` / `v256`, spelled either way): lanes of
+// numbers, never an address — as much a number as an `i64` is to every
+// question below about what a value can point into. Left out, a v128
+// result was taken for a possible view of a temporary argument, its
+// drop deferred to a consumer a binding never is, and the temporary
+// leaked (`: v128 x ( ld ( mk ) )`).
+@ __is_vec_num_ty s ty → b {
+    ^ | | | ( seq ty `<4 x i32>` ) ( seq ty `<4 x i64>` ) ( seq ty `v128` ) ( seq ty `v256` )
+}
+
 @ __wrap_of_numbers s ty → b {
     ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
     : s a ( __wrap_part ty 0 )
     : s b ( __wrap_part ty 1 )
     ? == 0 ( nurl_str_len a ) { ^ F } {}
-    : b an | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` )
-    : b bn | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` )
+    : b an | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_vec_num_ty a )
+    : b bn | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_vec_num_ty b )
     ^ & an bn
 }
 
@@ -12819,7 +12834,7 @@ unsafe @ __has_pct_token s ll s name → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
@@ -16696,7 +16711,7 @@ unsafe @ __ty_no_address s ty0 i depth → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
@@ -22208,7 +22223,7 @@ unsafe @ mem_path_to_indices s path → s {
     // ( mk ) 0 )` cannot hand back a pointer into the temporary — deferred
     // for a consumer that never came, the Vec leaked.)
     : b __scalar_ret | | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` ) ( __wrap_of_numbers __crt )
-    | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
+    | | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` ) ( __is_vec_num_ty __crt )
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings
@@ -51670,6 +51685,141 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  store <4 x i32> %v, i8* %p, align 1` )
     ( emit `  ret void` )
     ( emit `}` )
+    // The first `n` bytes at `p` (0..16; past 16, 16), zero-padded, and
+    // their store: a message's short last block without reading or
+    // writing a byte past it — and without a memcpy call, which on the
+    // SysV ABI spills every live vector register around it. Two
+    // overlapping loads (stores) of the widest size that fits — 8, 4 or
+    // 1 byte, the middle byte a third for 1..3 — OR the overlap from
+    // identical bytes, so there is one branch per size class and no
+    // loop. `n` is a length, not a secret: the branches are on it.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_ldn(i8* %p, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ln.c8 = icmp sge i64 %n, 8` )
+    ( emit `  br i1 %ln.c8, label %ln.b8, label %ln.s8` )
+    ( emit `ln.b8:` )
+    ( emit `  %ln.c16 = icmp sge i64 %n, 16` )
+    ( emit `  br i1 %ln.c16, label %ln.full, label %ln.part` )
+    ( emit `ln.full:` )
+    ( emit `  %ln.fv = load <4 x i32>, i8* %p, align 1` )
+    ( emit `  ret <4 x i32> %ln.fv` )
+    ( emit `ln.part:` )
+    ( emit `  %ln.lo = load i64, i8* %p, align 1` )
+    ( emit `  %ln.e = getelementptr i8, i8* %p, i64 %n` )
+    ( emit `  %ln.hp = getelementptr i8, i8* %ln.e, i64 -8` )
+    ( emit `  %ln.hw = load i64, i8* %ln.hp, align 1` )
+    // bytes [n-8, n) loaded; [8, n) wanted at the bottom of the high lane
+    ( emit `  %ln.n8 = shl i64 %n, 3` )
+    ( emit `  %ln.sh = sub i64 128, %ln.n8` )
+    ( emit `  %ln.hs = lshr i64 %ln.hw, %ln.sh` )
+    ( emit `  %ln.c9 = icmp sgt i64 %n, 8` )
+    ( emit `  %ln.hi = select i1 %ln.c9, i64 %ln.hs, i64 0` )
+    ( emit `  %ln.v0 = insertelement <2 x i64> undef, i64 %ln.lo, i32 0` )
+    ( emit `  %ln.v1 = insertelement <2 x i64> %ln.v0, i64 %ln.hi, i32 1` )
+    ( emit `  %ln.pv = bitcast <2 x i64> %ln.v1 to <4 x i32>` )
+    ( emit `  ret <4 x i32> %ln.pv` )
+    ( emit `ln.s8:` )
+    ( emit `  %ln.c4 = icmp sge i64 %n, 4` )
+    ( emit `  br i1 %ln.c4, label %ln.b4, label %ln.s4` )
+    ( emit `ln.b4:` )
+    ( emit `  %ln.a32 = load i32, i8* %p, align 1` )
+    ( emit `  %ln.e4 = getelementptr i8, i8* %p, i64 %n` )
+    ( emit `  %ln.bp = getelementptr i8, i8* %ln.e4, i64 -4` )
+    ( emit `  %ln.b32 = load i32, i8* %ln.bp, align 1` )
+    ( emit `  %ln.a64 = zext i32 %ln.a32 to i64` )
+    ( emit `  %ln.b64 = zext i32 %ln.b32 to i64` )
+    ( emit `  %ln.n4 = shl i64 %n, 3` )
+    ( emit `  %ln.s4s = sub i64 %ln.n4, 32` )
+    ( emit `  %ln.bs = shl i64 %ln.b64, %ln.s4s` )
+    ( emit `  %ln.w4 = or i64 %ln.a64, %ln.bs` )
+    ( emit `  br label %ln.small` )
+    ( emit `ln.s4:` )
+    ( emit `  %ln.c1 = icmp sge i64 %n, 1` )
+    ( emit `  br i1 %ln.c1, label %ln.b1, label %ln.small` )
+    ( emit `ln.b1:` )
+    ( emit `  %ln.x8 = load i8, i8* %p, align 1` )
+    ( emit `  %ln.m = lshr i64 %n, 1` )
+    ( emit `  %ln.mp = getelementptr i8, i8* %p, i64 %ln.m` )
+    ( emit `  %ln.y8 = load i8, i8* %ln.mp, align 1` )
+    ( emit `  %ln.l1 = add i64 %n, -1` )
+    ( emit `  %ln.lp = getelementptr i8, i8* %p, i64 %ln.l1` )
+    ( emit `  %ln.z8 = load i8, i8* %ln.lp, align 1` )
+    ( emit `  %ln.x = zext i8 %ln.x8 to i64` )
+    ( emit `  %ln.y = zext i8 %ln.y8 to i64` )
+    ( emit `  %ln.z = zext i8 %ln.z8 to i64` )
+    ( emit `  %ln.ms = shl i64 %ln.m, 3` )
+    ( emit `  %ln.ys = shl i64 %ln.y, %ln.ms` )
+    ( emit `  %ln.ls = shl i64 %ln.l1, 3` )
+    ( emit `  %ln.zs = shl i64 %ln.z, %ln.ls` )
+    ( emit `  %ln.xy = or i64 %ln.x, %ln.ys` )
+    ( emit `  %ln.w1 = or i64 %ln.xy, %ln.zs` )
+    ( emit `  br label %ln.small` )
+    ( emit `ln.small:` )
+    ( emit `  %ln.w = phi i64 [ %ln.w4, %ln.b4 ], [ %ln.w1, %ln.b1 ], [ 0, %ln.s4 ]` )
+    ( emit `  %ln.sv = insertelement <2 x i64> zeroinitializer, i64 %ln.w, i32 0` )
+    ( emit `  %ln.sr = bitcast <2 x i64> %ln.sv to <4 x i32>` )
+    ( emit `  ret <4 x i32> %ln.sr` )
+    ( emit `}` )
+    ( emit `define linkonce_odr void @nurl_v128_stn(i8* %p, i64 %n, <4 x i32> %v) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sn.q = bitcast <4 x i32> %v to <2 x i64>` )
+    ( emit `  %sn.lo = extractelement <2 x i64> %sn.q, i32 0` )
+    ( emit `  %sn.hi = extractelement <2 x i64> %sn.q, i32 1` )
+    ( emit `  %sn.c8 = icmp sge i64 %n, 8` )
+    ( emit `  br i1 %sn.c8, label %sn.b8, label %sn.s8` )
+    ( emit `sn.b8:` )
+    ( emit `  %sn.c16 = icmp sge i64 %n, 16` )
+    ( emit `  br i1 %sn.c16, label %sn.full, label %sn.part` )
+    ( emit `sn.full:` )
+    ( emit `  store <4 x i32> %v, i8* %p, align 1` )
+    ( emit `  ret void` )
+    ( emit `sn.part:` )
+    ( emit `  store i64 %sn.lo, i8* %p, align 1` )
+    // bytes [n-8, n) of the block: the 128-bit value shifted right by
+    // 8·(n-8), a funnel shift of hi:lo
+    ( emit `  %sn.n8 = shl i64 %n, 3` )
+    ( emit `  %sn.s8s = sub i64 %sn.n8, 64` )
+    ( emit `  %sn.hw = call i64 @llvm.fshr.i64(i64 %sn.hi, i64 %sn.lo, i64 %sn.s8s)` )
+    ( emit `  %sn.e = getelementptr i8, i8* %p, i64 %n` )
+    ( emit `  %sn.hp = getelementptr i8, i8* %sn.e, i64 -8` )
+    ( emit `  store i64 %sn.hw, i8* %sn.hp, align 1` )
+    ( emit `  ret void` )
+    ( emit `sn.s8:` )
+    ( emit `  %sn.c4 = icmp sge i64 %n, 4` )
+    ( emit `  br i1 %sn.c4, label %sn.b4, label %sn.s4` )
+    ( emit `sn.b4:` )
+    ( emit `  %sn.a32 = trunc i64 %sn.lo to i32` )
+    ( emit `  store i32 %sn.a32, i8* %p, align 1` )
+    ( emit `  %sn.n4 = shl i64 %n, 3` )
+    ( emit `  %sn.s4s = sub i64 %sn.n4, 32` )
+    ( emit `  %sn.bw = lshr i64 %sn.lo, %sn.s4s` )
+    ( emit `  %sn.b32 = trunc i64 %sn.bw to i32` )
+    ( emit `  %sn.e4 = getelementptr i8, i8* %p, i64 %n` )
+    ( emit `  %sn.bp = getelementptr i8, i8* %sn.e4, i64 -4` )
+    ( emit `  store i32 %sn.b32, i8* %sn.bp, align 1` )
+    ( emit `  ret void` )
+    ( emit `sn.s4:` )
+    ( emit `  %sn.c1 = icmp sge i64 %n, 1` )
+    ( emit `  br i1 %sn.c1, label %sn.b1, label %sn.none` )
+    ( emit `sn.b1:` )
+    ( emit `  %sn.x8 = trunc i64 %sn.lo to i8` )
+    ( emit `  store i8 %sn.x8, i8* %p, align 1` )
+    ( emit `  %sn.m = lshr i64 %n, 1` )
+    ( emit `  %sn.ms = shl i64 %sn.m, 3` )
+    ( emit `  %sn.yw = lshr i64 %sn.lo, %sn.ms` )
+    ( emit `  %sn.y8 = trunc i64 %sn.yw to i8` )
+    ( emit `  %sn.mp = getelementptr i8, i8* %p, i64 %sn.m` )
+    ( emit `  store i8 %sn.y8, i8* %sn.mp, align 1` )
+    ( emit `  %sn.l1 = add i64 %n, -1` )
+    ( emit `  %sn.ls = shl i64 %sn.l1, 3` )
+    ( emit `  %sn.zw = lshr i64 %sn.lo, %sn.ls` )
+    ( emit `  %sn.z8 = trunc i64 %sn.zw to i8` )
+    ( emit `  %sn.lp = getelementptr i8, i8* %p, i64 %sn.l1` )
+    ( emit `  store i8 %sn.z8, i8* %sn.lp, align 1` )
+    ( emit `  ret void` )
+    ( emit `sn.none:` )
+    ( emit `  ret void` )
+    ( emit `}` )
     ( emit `define linkonce_odr <4 x i32> @nurl_v128_zero() alwaysinline {` )
     ( emit `entry:` )
     ( emit `  ret <4 x i32> zeroinitializer` )
@@ -52366,6 +52516,26 @@ unsafe @ __rt_decl_ptypes s region → s {
     ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
 }
 
+// (The two helpers below hand back strings, so they sit above every
+// caller: a string-returning helper defined below its caller has no
+// ownership summary there, and the caller leaks what it returns.)
+// A function's IR up to its body: the `define` line.
+@ __ir_header s ir → s {
+    : i ei ( nurl_str_find ir `\nentry:\n` )
+    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
+    ^ ( nurl_str_slice ir 0 ei )
+}
+
+// The IR name a `define` line declares: `@NAME(`.
+@ __ir_fn_name s ir → s {
+    : i at ( nurl_str_find ir `@` )
+    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s tail ( nurl_str_slice ir + at 1 - ( strlen ir ) + at 1 )
+    : i lp ( nurl_str_find tail `(` )
+    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice tail 0 lp )
+}
+
 // A crypto-tier function's IR: the tier attributes on its define line
 // (before a `!dbg` attachment, which must come last) and, when `gate`,
 // the CPUID gate as the first instruction of its body. emit_hoisted
@@ -52413,14 +52583,16 @@ unsafe @ __rt_decl_ptypes s region → s {
         {}
         ( nurl_sym_def g_crypto_defer ( nurl_str_int g_crypto_defer_n ) ir )
         = g_crypto_defer_n + g_crypto_defer_n 1 }
-    { ( emit_hoisted ir ) }
-}
-
-// A function's IR up to its body: the `define` line.
-@ __ir_header s ir → s {
-    : i ei ( nurl_str_find ir `\nentry:\n` )
-    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
-    ^ ( nurl_str_slice ir 0 ei )
+    { ( emit_hoisted ir )
+        // An inline-wanting function may still wrap tier functions: kept
+        // so flush_simd_deferred can give it a `.tier` copy if it does.
+        ? & != g_cpu_dispatch 0 == g_dbg_enabled 0 {
+            : i ei ( nurl_str_find ir `\nentry:\n` )
+            ? & > ei 0 >= ( nurl_memmem_range ir ei `) alwaysinline` 14 ) 0
+            { ( nurl_sym_def g_inl_wrap ( nurl_str_int g_inl_wrap_n ) ir )
+                = g_inl_wrap_n + g_inl_wrap_n 1 }
+            {}
+        } {} }
 }
 
 // `ir` with every call in its BODY to a crypto function that wants
@@ -52477,19 +52649,12 @@ unsafe @ __ir_tier_calls s ir → s {
     ^ ( nurl_str_cat4 ( nurl_str_cat h1 h2 ) ( __crypto_tier_attrs ) ` {\nentry:\n` rest )
 }
 
-// The IR name a `define` line declares: `@NAME(`.
-@ __ir_fn_name s ir → s {
-    : i at ( nurl_str_find ir `@` )
-    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : s tail ( nurl_str_slice ir + at 1 - ( strlen ir ) + at 1 )
-    : i lp ( nurl_str_find tail `(` )
-    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
-    ^ ( nurl_str_slice tail 0 lp )
-}
-
 // Does this IR call a function of g_crypto_fns — `@NAME(` with NAME in
 // the set?
-unsafe @ __ir_calls_crypto s ir → b {
+@ __ir_calls_crypto s ir → b { ^ ( __ir_calls_any ir g_crypto_fns ) }
+
+// Does this IR call a function of `set` — `@NAME(` with NAME in it?
+unsafe @ __ir_calls_any s ir i set → b {
     : i n ( strlen ir )
     : *u p # *u ir
     : ~ i k 0
@@ -52501,11 +52666,45 @@ unsafe @ __ir_calls_crypto s ir → b {
         ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
         ? & & > e st < e n == 40 # i . p e {
             : s nm ( nurl_str_slice ir st - e st )
-            ? != 0 ( nurl_sym_len g_crypto_fns nm ) { ^ T } {}
+            ? != 0 ( nurl_sym_len set nm ) { ^ T } {}
         } {}
         = k e
     }
     ^ F
+}
+
+// The inline-wanting functions that wrap the tier without using a
+// crypto primitive themselves — calling an inline-wanting tier function,
+// directly or through another such wrapper (a fixed point) — join
+// g_crypto_inl, and each gets a `.tier` copy. Inlined into a tier body
+// as it is, such a wrapper brings the gate of every tier function it
+// calls along: a gate check per call, in what is usually a hot loop.
+// Its copy calls the `.tier` copies instead, so the whole chain inlines
+// ungated into the caller's — gated or dispatched — tier code. The
+// original stays as it was for baseline callers, gates and all.
+@ __tier_wrappers → v {
+    : ~ b grew T
+    ~ grew {
+        = grew F
+        : ~ i w 0
+        ~ < w g_inl_wrap_n {
+            : s ir ( nurl_sym_get g_inl_wrap ( nurl_str_int w ) )
+            : s nm ( __ir_fn_name ir )
+            ? & == 0 ( nurl_sym_len g_crypto_inl nm ) ( __ir_calls_any ir g_crypto_inl ) {
+                ( nurl_sym_def g_crypto_inl nm `1` )
+                = grew T
+            } {}
+            = w + w 1
+        }
+    }
+    : ~ i c 0
+    ~ < c g_inl_wrap_n {
+        : s ir ( nurl_sym_get g_inl_wrap ( nurl_str_int c ) )
+        ? != 0 ( nurl_sym_len g_crypto_inl ( __ir_fn_name ir ) ) {
+            ( emit_hoisted ( __crypto_tier_copy ( __ir_tier_calls ir ) ) )
+        } {}
+        = c + c 1
+    }
 }
 
 // A `simd` function waits for the end of the module: whether it joins
@@ -52531,6 +52730,10 @@ unsafe @ __ir_calls_crypto s ir → b {
 // software path that asks nurl_cpu_has_aes before it calls the
 // hardware one is never gated on the tier itself.
 @ flush_simd_deferred → v {
+    // Wrappers first: the tier bodies below point their calls at the
+    // `.tier` copies of every member of g_crypto_inl.
+    ? > g_crypto_defer_n 0 { ( __tier_wrappers ) } {}
+    = g_inl_wrap_n 0
     // The crypto-tier functions: each gated, its inline-wanting calls
     // pointed at `.tier` copies, and a copy of its own if it wants
     // inlining itself.
@@ -52567,6 +52770,8 @@ unsafe @ __ir_calls_crypto s ir → b {
 @ register_simd_syms i syms → v {
     ( nurl_sym_def syms `nurl_v128_ld` `v128` )
     ( nurl_sym_def syms `nurl_v128_st` `void` )
+    ( nurl_sym_def syms `nurl_v128_ldn` `v128` )
+    ( nurl_sym_def syms `nurl_v128_stn` `void` )
     ( nurl_sym_def syms `nurl_v128_zero` `v128` )
     ( nurl_sym_def syms `nurl_v128_set32` `v128` )
     ( nurl_sym_def syms `nurl_v128_set64` `v128` )
@@ -59994,6 +60199,8 @@ unsafe @ main → i {
     = g_crypto_defer ( nurl_sym_new )
     = g_crypto_defer_n 0
     = g_crypto_inl ( nurl_sym_new )
+    = g_inl_wrap ( nurl_sym_new )
+    = g_inl_wrap_n 0
     = g_simd_defer ( nurl_sym_new )
     = g_simd_defer_n 0
     = g_closure_types ( nurl_sym_new )
