@@ -340,6 +340,10 @@ def main(argv):
     run = [b for b in blocks if "ignore" not in b.attrs]
     ignored = len(blocks) - len(run)
     tmpdir = tempfile.mkdtemp(prefix="nurl-doctest-src-")
+    # The examples belong to a package of their own, so `( pkg_version )`
+    # (spec §6.5) has a manifest to read.
+    with open(os.path.join(tmpdir, "nurl.toml"), "w") as f:
+        f.write('[package]\nname = "doctest"\nversion = "0.0.0"\n')
     cwd = make_cwd()
     failures = []
     try:

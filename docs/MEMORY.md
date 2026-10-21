@@ -94,6 +94,12 @@ keeps it (a `sink` parameter, or a parameter the callee stores into an
 aggregate or container) or hands it back, in which case it leaves with
 the result:
 
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+: Resp { i status }
+@ takes String s → i { ^ ( string_len s ) }
+: Resp resp @ Resp { 200 }
+-->
 ```nurl
 ( nurl_eprint ( nurl_str_int . resp status ) )   // released after the call
 : i n ( takes ( string_from `x` ) )              // likewise
@@ -105,6 +111,8 @@ A release call on an owned binding is allowed and moves the value: the
 binding is consumed and its drop does not run again.
 
 ```nurl
+$ `stdlib/core/string.nu`
+
 : String s ( string_from `x` )
 : i n ( string_len s )
 ( string_free s )      // redundant: s is dropped right here anyway
@@ -134,6 +142,9 @@ nothing to use yet, so a global that is filled on first use keeps a flag
 beside it:
 
 ```nurl
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+
 : ~ ( Vec String ) g_names 0
 : ~ b g_names_made F
 
@@ -198,6 +209,7 @@ released twice. Reassigning an `inout` raw string (`s`) is an error, because the
 callee cannot know whether the caller's old string is owned.
 
 ```nurl
+: Counter { i n i max }
 @ bump inout Counter c → v { = . c n + . c n 1 }
 : ~ Counter c @ Counter { 0 10 }
 ( bump c )                       // c.n is now 1 in the caller
@@ -208,6 +220,8 @@ on (returns it, stores it, passes it to another `sink`). Using the
 caller's binding afterwards is a use-after-move.
 
 ```nurl
+$ `stdlib/core/vec.nu`
+
 @ give_away sink ( Vec i ) g → v {}   // g is dropped here, by the callee
 : ( Vec i ) xs ( vec_new [i] )
 ( give_away xs )                       // xs is consumed
@@ -218,8 +232,11 @@ one. If the body consumes it (releases it, stores it in an owner, passes
 it to another `sink` position) or returns it, the parameter is a `sink`
 for every caller:
 
-```nurl
+```nurl expect-error="use of moved value 'xs'"
+$ `stdlib/core/vec.nu`
+
 @ dispose ( Vec i ) xs → v { ( vec_free [i] xs ) }   // param 0 is a sink
+: ( Vec i ) xs ( vec_new [i] )
 ( dispose xs ) ( dispose xs )                          // use-after-move at the second call
 ```
 
@@ -295,7 +312,7 @@ An owned value moves out of a binding when it is:
 
 Reading the binding afterwards is an error:
 
-```
+```text
 error: use of moved value 'v' - it was consumed at line N
 ```
 
@@ -305,7 +322,7 @@ A value moved on only **some** paths is *maybe-moved*. Reading it is an
 error too, because on the path that moved it the read touches released
 memory:
 
-```
+```text
 error: use of possibly-moved value 'x' — it was consumed on only some
        paths, at line N
 ```
@@ -328,7 +345,7 @@ all after an earlier argument released it as it ran (`( g ( eat s )
 ( string_len s ) )`). A plain scalar computed from it before the callee
 takes it is fine: `( take s + ( string_len s ) 1 )`.
 
-```
+```text
 error: 'm' is moved by argument 1 of 'f' and also used by argument 2
 ```
 
@@ -341,7 +358,7 @@ Inside an `unsafe` function, `nurl_free` on a binding the compiler already
 drops (an owned string, slice, `Drop` value or owning struct) would free
 it twice, and is an error:
 
-```
+```text
 error: 'piece' is auto-dropped at the end of its scope, so freeing it
        here frees it twice - delete this call
 ```
@@ -387,7 +404,7 @@ error when a stack reference reaches:
   (`thread_spawn`),
 - an assignment into a binding of a longer-lived scope.
 
-```
+```text
 error: returning a value that references a stack binding by pointer
          - it dangles after this function returns
          (move the captured data to a heap-backed handle)
@@ -404,7 +421,12 @@ An `inout` argument is an exclusive mutable borrow for the duration of
 its call. Passing the same binding again in the same call, as another
 `inout` or as an ordinary argument, is an error:
 
-```
+<!-- doctest-prelude
+: Counter { i n i max }
+@ swap_counters inout Counter a inout Counter b → v { : i t . a n = . a n . b n = . b n t }
+: ~ Counter c @ Counter { 3 10 }
+-->
+```nurl expect-error="'c' is both mutably borrowed"
 ( swap_counters c c )    // error: 'c' is both mutably borrowed
                          //        and aliased by another argument
 ```
@@ -434,9 +456,13 @@ message names both arguments; take a copy, or split the call.
 A foreach loop `~ x xs { … }` borrows `xs` for its body. Mutating `xs`
 inside the body is an error:
 
-```
-~ x xs { ( vec_push xs x ) }   // error: cannot mutate 'xs'
-                               //        while iterating over it
+<!-- doctest-prelude
+$ `stdlib/core/vec.nu`
+: ~ ( Vec i ) xs ( vec_new [i] )
+-->
+```nurl expect-error="cannot mutate 'xs'"
+~ x xs { ( vec_push [i] xs x ) }   // error: cannot mutate 'xs'
+                                   //        while iterating over it
 ```
 
 This covers the stdlib mutators (`vec_push`, `vec_insert`, `vec_remove`,
@@ -452,8 +478,11 @@ A loop body runs more than once. A binding that existed before the loop
 and is consumed in the body, without being rebound before the next
 iteration, is moved when the next iteration reads it:
 
-```
+```nurl expect-error="use of moved value 'xs'"
+$ `stdlib/core/vec.nu`
+
 : ( Vec i ) xs ( vec_new [i] )
+: ~ i k 0
 ~ < k 3 { ( vec_free [i] xs ) = k + k 1 }   // error: use of moved value 'xs'
 ```
 
@@ -468,8 +497,13 @@ makes that parameter *escaping*. Passing a stack reference (§2.3) to an
 escaping parameter is an error, as is passing it on to another function's
 escaping parameter, at any depth:
 
-```
+<!-- doctest-prelude
+$ `stdlib/std/thread.nu`
+: Counter { i n i max }
+-->
+```nurl expect-error="references a stack binding"
 @ detach ( @ v ) cb → v { ( thread_spawn cb ) }   // param 0 escapes
+: ~ Counter c @ Counter { 0 10 }
 : ( @ v ) f \ → v { = . c n + . c n 1 }          // captures a `: ~` struct by pointer
 ( detach f )   // error: passing a value that references a stack binding
                //        by pointer to 'detach' - it escapes …
@@ -486,11 +520,17 @@ A function that returns one of its parameters hands a stack reference
 straight back. The result of such a call carries the reference, so the
 rules of §2.3 and §2.7 apply to it:
 
-```
+<!-- doctest-prelude
+: Counter { i n i max }
+-->
+```nurl expect-error="references a stack binding"
 @ id ( @ v ) cb → ( @ v ) { ^ cb }
-: ( @ v ) f \ → v { = . c n + . c n 1 }
-^ ( id f )                  // error: returning a value that references
+@ make → ( @ v ) {
+    : ~ Counter c @ Counter { 0 10 }
+    : ( @ v ) f \ → v { = . c n + . c n 1 }
+    ^ ( id f )              // error: returning a value that references
                             //        a stack binding by pointer …
+}
 ```
 
 A parameter can leave through a struct field (at any depth), a closure's
@@ -519,12 +559,16 @@ the container's buffer. A view ends when its source is mutated in a way
 that may reallocate (`vec_push`, `vec_extend`, `vec_reserve`, …) or is
 released, moved or reassigned. Reading a view after that is an error:
 
-```
+```nurl expect-error="'p' borrows from 't', which ended"
+$ `stdlib/core/string.nu`
+
 : ~ String t ( string_from `a heap string` )
 : s p ( string_data t )
 ( string_push_str t `, grown` ) // may reallocate
-( nurl_println p )              // error: pointer 'p' borrowed from 't' is
-                                //        stale: 't' was mutated on line N
+( nurl_println p )              // error: 'p' borrows from 't', which ended
+                                //        at line N — it was passed to
+                                //        'string_push_str', which may move
+                                //        or free its buffer
 ```
 
 Fetch the view again after the mutation. A view stays a view wherever it
@@ -557,12 +601,14 @@ Invoking a closure reads all of its captures, so releasing a capture
 through its original name and then invoking the closure is a use after
 move:
 
-```
+```nurl expect-error="use of moved value 'v'" expect-error="closure 'f' still holds 'v'"
+$ `stdlib/core/vec.nu`
+
 : ( Vec i ) v ( vec_new [i] )
 : ( @ i ) f \ → i { ^ ( vec_len [i] v ) }
 ( vec_free [i] v )
 ( nurl_println_int ( f ) )     // error: use of moved value 'v' …
-                               //        the closure 'f' still holds 'v'
+                               //        The closure 'f' still holds 'v'
 ```
 
 This holds for a direct call, for a call through a function that invokes
@@ -619,7 +665,7 @@ A value stored into an owner (an aggregate literal, a container through
 `vec_push` or `map_set`, a function that keeps its parameter) belongs to
 that owner. Releasing it again through the original name is an error:
 
-```
+```text
 error: 's' is consumed here, but its value was stored into an owner at line N …
 ```
 
@@ -637,9 +683,23 @@ over (`nurl_str_cat`, `nurl_str_int`, `nurl_read_file`, …) — cannot be
 stored there, nor handed to a parameter that keeps it (`vec_push [s]`,
 `map_set`):
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+: Rec { s name i n }
+: s a `a`
+: s b `b`
+-->
+```nurl expect-error="owned by nothing"
 : Rec r @ Rec { ( nurl_str_cat a b ) 1 }   // error: a fresh string stored
                                            // here is owned by nothing
+```
+<!-- doctest-prelude
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+: i k 7
+: ~ ( Vec s ) names ( vec_new [s] )
+-->
+```nurl expect-error="handed to 'vec_push'"
 ( vec_push [s] names ( nurl_str_int k ) )  // error: … handed to 'vec_push',
                                            // which keeps it
 ```
@@ -1701,11 +1761,16 @@ code. Which one is decided by what the state does:
 | changed, shared between threads (a cache, a connection pool) | `( Locked Impl )` | `locked_get` copies it | `locked_take` … `locked_restore` |
 | read on every request, changed rarely (keys, a policy) | `( Locked ( Arc Impl ) )` | `locked_get` shares the snapshot | take it, `arc_new` a changed copy, restore |
 
-```
+<!-- doctest-prelude
+$ `stdlib/std/rc.nu`
+: CacheImpl { i hits }
+@ __cache_put inout CacheImpl c s key s val → v { = . c hits + . c hits 1 }
+-->
+```nurl
 : Cache { ( Rc CacheImpl ) a }
 @ Cache_share Cache h → Cache { ^ @ Cache { ( rc_clone [CacheImpl] . h a ) } }
 @ Cache_drop sink Cache h → v {}
-@ cache_new → Cache { ^ @ Cache { ( rc_new [CacheImpl] @ CacheImpl { … } ) } }
+@ cache_new → Cache { ^ @ Cache { ( rc_new [CacheImpl] @ CacheImpl { 0 } ) } }
 
 @ cache_hits Cache h → i { ^ . ( rc_get [CacheImpl] . h a ) hits }
 
@@ -1738,6 +1803,15 @@ over from the caller.
 `*S`, drops what `f` held, as every other `=` drops what it overwrites:
 an `unsafe` setter over a handle's state is the store alone.
 
+<!-- doctest-prelude
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+$ `stdlib/core/rcbox.nu`
+: MetaImpl { ( Vec String ) feats }
+: Meta { ( Shared MetaImpl ) ctl }
+@ Meta_drop sink Meta h → v {}
+unsafe @ _Meta_ptr Meta h → *MetaImpl { ^ ( shared_ptr [MetaImpl] . h ctl ) }
+-->
 ```nurl
 unsafe @ meta_set_feats Meta h ( Vec String ) feats → v {
     : *MetaImpl m ( _Meta_ptr h )

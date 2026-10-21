@@ -8,7 +8,7 @@ The defining property is **no function colouring** — there is no
 Ordinary code runs unchanged inside a fiber; blocking I/O calls become
 cooperative automatically when invoked from fiber context.
 
-```
+```nurl
 $ `stdlib/std/async.nu`
 
 @ main → i {
@@ -197,7 +197,7 @@ fiber's stack the caller was handed a handle to nothing. Measured on a
 printed the count of the eleven as though that were the answer, and
 exited 0. Both runtimes now print
 
-```
+```text
 nurl: cannot create a fiber — out of memory for its stack (11 live)
 ```
 
