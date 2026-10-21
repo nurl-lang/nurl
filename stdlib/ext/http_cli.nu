@@ -11,9 +11,8 @@
 // It exposes exactly the subset of ext/http.nu's surface that nurlpkg
 // (ext/pkg_fetch.nu + ext/pkg_publish.nu) consumes, with identical type
 // and function names so those modules import this instead of ext/http.nu
-// with no other change. A file must NOT import both this module and
-// ext/http.nu (the `HttpcResp` / `HttpcErr` names would collide in NURL's
-// flat namespace) — nurlpkg's graph imports only this one.
+// with no other change (ext/http.nu defines none of these names, so the
+// two can be imported together); nurlpkg's graph imports only this one.
 //
 // API (drop-in subset):
 //   ( httpc_get          s url )                                  → !HttpcResp HttpcErr
@@ -44,9 +43,8 @@ $ `stdlib/core/slice.nu`
 
 // HttpcResp carries the status, the true body length `blen`, and the body
 // bytes with one extra trailing NUL (so httpc_body_str can hand back a
-// NUL-terminated `s` view). The wrapper owns `body`; callers MUST call
-// `httpc_resp_free` exactly once on the Ok path (NURL does not auto-drop
-// struct fields), matching ext/http.nu's manual ownership model.
+// NUL-terminated `s` view). The wrapper owns `body` and is dropped with
+// it by its owner (`httpc_resp_free` releases it early).
 // The shared declaration lives in http_cli_types.nu.
 
 // ── Temp directory ──────────────────────────────────────────────────
@@ -92,7 +90,7 @@ $ `stdlib/core/slice.nu`
 
 // Split a "Name: Value\r\n"… headers blob into `-H <segment>` argument
 // pairs. Each segment is a fresh owned String pushed onto `hold` (which
-// the caller frees after the spawn) and its data pointer onto `a`.
+// the caller keeps until after the spawn) and its data pointer onto `a`.
 @ __httpc_push_headers s blob ( Vec s ) a ( Vec String ) hold → v {
     : i n ( nurl_str_len blob )
     : ~ i start 0

@@ -46,17 +46,15 @@
 //   * `parse_request_head` BORROWS its input buffer. On the Ok arm it
 //     yields a `ParsedHeadOk { HttpRequest head, i consumed }` whose
 //     `head` is OWNED (Strings + `( Vec Header )` headers are all
-//     fresh allocations) — the caller must call `request_free` on the
-//     `head` field exactly once. The Err arms carry NO live
-//     allocation; just drop the `HttpReqErr` enum value.
+//     fresh allocations) and dropped by its owner (`request_free`
+//     releases it early). The Err arms carry NO live allocation.
 //   * `parse_url` returns an OWNED `UrlSplit` whose `path` and `query`
 //     are independent owned strings. Free both with `string_free`,
 //     or use `url_split_free` for the cascade.
-//   * `parse_query` returns an OWNED `( Vec QueryPair )`. Use
-//     `query_pairs_free` for the cascade-free.
-//   * `percent_*` return OWNED String — caller frees.
-//   * `header_get` returns an OWNED String inside the Some arm; free
-//     it on the Some path.
+//   * `parse_query` returns an owned `( Vec QueryPair )`, dropped with
+//     its pairs by its owner.
+//   * `percent_*` return an owned String (the caller's).
+//   * `header_get` returns an owned String inside the Some arm.
 //   * `read_body` reads from the socket into a fresh OWNED `( Vec u )`.
 //     Caller frees with `( vec_free [u] body )`.
 //

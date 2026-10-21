@@ -1,7 +1,9 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent were `h299`–`h310`: closures
+gate in the parent directory. The most recent were `h311`–`h315` — lends
+returned through a join (`lru_get`) and a match's scrutinee taking effect
+late — and before them `h299`–`h310`: closures
 that outlived what they read (a closure a call returned over its argument,
 the standard library's iterators, a by-value capture whose binding was
 given a new value or replaced through `inout`) and `map_keys` leaking owned

@@ -21,9 +21,8 @@
 // stores them in-place via vec_push/vec_remove. For ownership-sensitive
 // payloads, the sender hands ownership over on `chan_send`; if the
 // channel is later closed and `chan_recv` returns None after drain, no
-// items remain pending. The send-into-closed branch (chan_send returns
-// F) is the one place a caller-owned value isn't taken — the caller
-// must free it themselves on F.
+// items remain pending. Sending into a closed channel (chan_send
+// returns F) drops the value: nothing leaks.
 //
 // A channel is a THREAD BOUNDARY, so `A` must be `Send`
 // (stdlib/core/marker.nu): whatever `chan_send` accepts, some other
@@ -169,8 +168,7 @@ $ `stdlib/core/box.nu`
 // ── Send / receive ─────────────────────────────────────────────────
 
 // Push v onto the back of the queue. Returns F if the channel is
-// already closed (caller's v is silently dropped; if it carried a heap
-// pointer the caller must release it themselves on the F branch).
+// already closed (v is then dropped).
 // Wakes one parked receiver — a fiber (via unpark) or a pthread
 // (via cond_signal) — depending on which arrived first.
 @ chan_send [A] ( Channel A ) ch A v → b {

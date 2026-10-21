@@ -413,7 +413,7 @@ $ `stdlib/core/rcbox.nu`
 // Frame and send an already-built layer-4 datagram. Routing, ARP and
 // the Ethernet/IPv4 headers live here and nowhere else, so TCP and UDP
 // resolve their next hop by the same code and a fix to it fixes both.
-// `dg` is BORROWED — the caller built it and the caller frees it.
+// `dg` is BORROWED — the caller built it and still owns it.
 //
 // On a cache miss this emits an ARP request and answers `tx_arp_pending`
 // rather than queueing the datagram. Keeping the queue outside means

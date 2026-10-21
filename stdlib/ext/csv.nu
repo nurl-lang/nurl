@@ -564,7 +564,7 @@ $ `stdlib/core/rcbox.nu`
     ^ . fcp + * cell_idx 2 1
 }
 
-// Owned String copy of (row, col). One per call; caller frees.
+// Owned String copy of (row, col), one per call (the caller's).
 @ csv_table_get CSVTable t__h i row i col → ?String { ^ ( __csv_get ( __CSVTable_ptr t__h ) row col ) }
 
 @ __csv_get * CSVTableImpl t i row i col → ?String {

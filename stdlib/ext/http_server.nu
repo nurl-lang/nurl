@@ -58,10 +58,10 @@
 //     "infrastructure failed".
 //   * Per-request: malformed requests trigger a stock 4xx response
 //     and the connection is closed; the listener loop survives.
-//   * The handler receives an HttpRequest BORROWED. It must NOT free
-//     fields of the request — the server frees the whole request
-//     after the handler returns. The handler's returned HttpResponse
-//     is OWNED by the server, freed after serialise+write.
+//   * The handler is lent the HttpRequest (releasing it or its fields
+//     there is rejected); the server drops it after the handler
+//     returns. The handler's returned HttpResponse is the server's,
+//     dropped after serialise+write.
 //
 // Keep-alive policy (Phase 5.4):
 //
@@ -175,8 +175,9 @@ $ `stdlib/core/slice.nu`
 // returns T it has TAKEN OVER the connection (e.g. performed the
 // WebSocket 101 handshake and run the frame loop to completion,
 // synchronously, on this worker); the loop then ends and the server
-// closes the now-finished connection as usual — the hook must NOT close
-// it itself. Returning F means "not mine", and the request falls through
+// closes the now-finished connection as usual — the hook need not close
+// it (doing so is harmless: a TcpConn closes once). Returning F means
+// "not mine", and the request falls through
 // to the normal handler. Process-global (one server per process here);
 // default unset = behaviour-neutral.
 : __WsUpgrade { ( @ b TcpConn HttpRequest ) fn }
@@ -195,7 +196,7 @@ $ `stdlib/core/slice.nu`
 // response yourself — response_begin_chunked / response_write_chunk /
 // response_end_chunked on the TcpConn — and the loop ends so the
 // server closes the finished connection (a streamed response is the
-// connection's last; do NOT close the conn in the hook). Return F for
+// connection's last; the hook leaves the conn open). Return F for
 // "not mine" and the request falls through to the router untouched.
 // Process-global like the upgrade hook; default unset = neutral.
 : __StreamHook { ( @ b TcpConn HttpRequest ) fn }

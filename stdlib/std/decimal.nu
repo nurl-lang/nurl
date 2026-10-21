@@ -13,9 +13,9 @@
 // **half-to-even** (banker's rounding), the IEEE 754 / financial default
 // that avoids the upward bias of round-half-up.
 //
-// Ownership: a Decimal owns its BigInt coefficient — `dec_free` it (or
-// the values it was built from). Every operation returns a fresh owned
-// Decimal; inputs are borrowed and untouched.
+// Ownership: a Decimal owns its BigInt coefficient and is dropped by its
+// owner (`dec_free` releases it early). Every operation returns a fresh
+// owned Decimal; inputs are borrowed and untouched.
 //
 //   ( dec_from_i n )                  → Decimal          n × 10^0
 //   ( dec_from_string s )             → !Decimal ParseErr "-12.340", ".5", "42"

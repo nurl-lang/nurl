@@ -7,7 +7,7 @@
 //
 // All path inputs are raw `s` (i8*) — pass a literal directly, or use
 // `( string_data s )` to feed an owned `String`'s buffer. Returned
-// Strings are owned (caller frees / lets auto-drop run).
+// Strings are the caller's own (dropped at scope exit).
 //
 //   ( path_join a b )       → String  drops a trailing sep on `a`, leading sep on `b`
 //   ( path_basename p )     → String  segment after the last separator
@@ -48,9 +48,9 @@
 // None rather than an error code — for a missing path, probe first with
 // fs.nu's file_exists when the distinction matters.
 //
-// A Path owns its String: free it with path_free or let auto-drop run
-// at scope exit. The typed functions never consume their arguments —
-// each returns a fresh Path — so the caller frees every Path it holds.
+// A Path owns its String and is dropped by its owner (path_free releases
+// it early). The typed functions never consume their arguments — each
+// returns a fresh Path the caller owns.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -420,9 +420,8 @@ $ `stdlib/core/vec.nu`
 // ── Typed Path ──────────────────────────────────────────────────────
 //
 // Path wraps an owned String. The typed functions below never mutate or
-// consume their Path arguments — each produces a fresh Path — so a
-// caller frees every Path it holds (path_free, or auto-drop at scope
-// exit). path_str hands back a borrow of the inner buffer for interop
+// consume their Path arguments — each produces a fresh Path the caller
+// owns (dropped at scope exit). path_str hands back a borrow of the inner buffer for interop
 // with the `s`-based layer and with fs.nu.
 
 : Path { String inner }

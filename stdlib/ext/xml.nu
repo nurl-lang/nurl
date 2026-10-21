@@ -20,7 +20,7 @@
 //   ( xml_text_value x )         → ? String       text-node content (owned)
 //   ( xml_attr x name )          → ? String       attribute value (owned)
 //   ( xml_child_count x )        → i
-//   ( xml_child_at x i )         → ? Xml          BORROW — do not free
+//   ( xml_child_at x i )         → ? Xml          lent by the tree
 //   ( xml_find x tag )           → ? Xml          first element child w/ tag (BORROW)
 //   ( xml_inner_text x )         → String         concatenated descendant text
 //   ( xml_set_attr x name val )  → v              set/replace (builder)
@@ -31,9 +31,9 @@
 //   ( xml_err_name e )           → s
 //
 // Ownership: the tree owns its Strings / child nodes; xml_free cascades.
-// Accessors that return ? Xml hand back a BORROW into the tree (do not
-// free); accessors that return ? String / String return owned copies the
-// caller frees.
+// Accessors that return ? Xml lend a node of the tree (releasing one is
+// rejected); accessors that return ? String / String return owned
+// copies.
 //
 // Node representation: a tagged struct with a `kind` discriminator
 // (text nodes leave the element fields empty and vice-versa). This was
@@ -296,7 +296,7 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_len [Xml] . x children )
 }
 
-// BORROW: the returned Xml aliases the tree — do not free it.
+// Lent: the returned Xml is a node of the tree (releasing it is rejected).
 @ xml_child_at Xml x i idx → ?Xml {
     ^ ( vec_get [Xml] . x children idx )
 }

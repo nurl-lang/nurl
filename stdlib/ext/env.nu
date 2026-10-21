@@ -1,7 +1,7 @@
 // stdlib/ext/env.nu — process environment + argv + cwd
 //
-// CLI tooling primitives. Each owned String must be freed by the caller
-// (auto-drop runs at scope exit, vec_free_with for env_args_list).
+// CLI tooling primitives. Each String (and env_args_list's Vec) returned
+// is the caller's own, dropped at scope exit.
 //
 //   ( env_args_count )       → i              like argc
 //   ( env_arg i )            → String         argv[i]; empty when out of range

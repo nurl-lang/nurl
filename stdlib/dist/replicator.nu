@@ -130,9 +130,6 @@ $ `stdlib/dist/ring.nu`
     : i n ( __rc_u16 buf off )
     : ~ i k 0
     ~ < k n {
-        // NB: locals must NOT shadow OrTag field names — on the field-STORE
-        // path a local int var of a field's name is (intentionally) read as
-        // an array index, not a field (see core/vec.nu's `= . data idx x`).
         : i ev ( __rc_u64 buf off )
         : i rv ( __rc_u64 buf off )
         : i sv ( __rc_u64 buf off )

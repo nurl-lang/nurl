@@ -593,9 +593,9 @@ $ `stdlib/core/rcbox.nu`
 // verbatim — these are the right primitives for images, archives, msgpack
 // and any other non-text payload. For UTF-8 text use read_file/write_file.
 //
-// Memory model: read_file_bytes returns an OWNED Vec[u]; the caller must
-// call `( vec_free [u] v )`. The
-// buffer has a spare NUL terminator while Vec length retains every input byte.
+// Memory model: read_file_bytes returns an owned Vec[u], dropped by its
+// owner. The buffer has a spare NUL terminator while Vec length retains
+// every input byte.
 // write_file_bytes BORROWS its byte buffer.
 
 // Buffered stdio bridge: retries interrupted reads, distinguishes I/O errors

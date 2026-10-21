@@ -132,9 +132,8 @@ $ `stdlib/ext/msgpack.nu`
     }
 }
 
-// Returns a fresh `String` borrowed from the JStr payload's text. The
-// JStr stays in the source Json tree; caller owns the returned String
-// and must `string_free` it.
+// Returns a fresh `String` copied from the JStr payload's text. The
+// JStr stays in the source Json tree; the caller owns the returned String.
 @ from_json_string Json j → !String ParseErr {
     ^ ?? j {
         JStr s → @ !String ParseErr { T ( string_from ( string_data s ) ) }
@@ -142,9 +141,8 @@ $ `stdlib/ext/msgpack.nu`
     }
 }
 
-// Raw-pointer flavour for callers that want an `s` (i8*) borrow into
-// the JStr payload without copying. The pointer lifetime matches the
-// source Json tree — do NOT free it.
+// Raw-string flavour for callers that want an `s` view of the JStr
+// payload without copying: valid while the source Json tree is.
 @ from_json_str_borrow Json j → !s ParseErr {
     ^ ?? j {
         JStr s → @ !s ParseErr { T ( string_data s ) }

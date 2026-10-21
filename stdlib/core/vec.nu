@@ -18,12 +18,9 @@
 //   word 2: cap
 //
 // Ownership:
-//   vec_new / vec_with_cap → owned Vec, caller must vec_free when done.
-//   For trivial element types (i, f, b) use `vec_free`. For owned
-//   element types (String, nested Vec, HashMap) use `vec_free_with`
-//   passing a per-element drop closure — `vec_free_with` walks the
-//   live range [0..len) calling drop_fn before releasing the buffer,
-//   closing the Vec[String]-leak trap that the bare `vec_free` leaves.
+//   vec_new / vec_with_cap → an owned Vec, dropped with its elements by
+//   its owner at scope exit (docs/MEMORY.md §7.6). `vec_free` releases it
+//   early; `vec_free_with` lends each element to a closure first.
 //
 // The type-var name is `A` (not `T`) because the boolean literal `T`
 // collides with whole-identifier substitution at monomorphisation time.
@@ -632,11 +629,6 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 // Fresh Vec[i] pre-filled with [lo, lo+1, ..., hi-1]. hi <= lo is a
 // fresh empty Vec[i]. Single allocation, no per-element grow. Useful
 // when sorting an index permutation.
-//
-// NOTE: defined AFTER vec_with_cap / vec_data / vec_set_len because
-// the compiler resolves call-site return types via top-down scan; a
-// forward reference here corrupts return-type specialization (the
-// callee is treated as i64-returning and downstream stores then mismatch).
 @ vec_iota i lo i hi → ( Vec i ) {
     : i n ? > hi lo - hi lo 0
     : ( Vec i ) v ( vec_with_cap [i] n )

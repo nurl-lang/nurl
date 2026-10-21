@@ -40,8 +40,8 @@
 //                                          MCP transport reserves
 //                                          stdout for JSON-RPC).
 //
-// JSON-RPC envelopes (all return owned Json — call `json_free` after
-// you've sent them, or pass to `mcp_send_message` which consumes):
+// JSON-RPC envelopes (each returns an owned Json — dropped by its owner,
+// or handed to `mcp_send_message`, which takes it):
 //   ( mcp_response_result Json id Json result )      → Json
 //   ( mcp_response_error  Json id i code s message ) → Json
 //   ( mcp_notification    s method Json params )     → Json
@@ -533,9 +533,9 @@ $ `stdlib/ext/json.nu`
     ^ tool
 }
 
-// CONSUMES the Vec[Json]: every element is moved into the wrapped
-// JArr. After this call the caller must not vec_free the input — the
-// Json envelope owns it.
+// Every element of `tools` is moved into the wrapped JArr: the Json
+// envelope owns them, and dropping `tools` afterwards releases nothing
+// twice.
 @ mcp_tools_list_result ( Vec Json ) tools → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [Json] tools )

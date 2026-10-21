@@ -29,7 +29,7 @@
 //   ( args_value_or p long default )   → String     value or a default (owned)
 //   ( args_values p `include` )        → ( Vec String )  every occurrence
 //   ( args_positional_count p )        → i
-//   ( args_positionals p )             → ( Vec String )  BORROW — do not free
+//   ( args_positionals p )             → ( Vec String )  lent by the parser
 //   ( args_has_error p )               → b
 //   ( args_error p )                   → s   borrowed message ("" when ok)
 //   ( args_usage p )                   → String   generated --help text
@@ -365,8 +365,8 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_len [String] . p positionals )
 }
 
-// BORROW: the returned Vec is owned by the parser; iterate it with
-// vec_get [String] + string_data, but do NOT free it (args_free does).
+// Lent: the returned Vec is the parser's (releasing it is rejected); it
+// goes with the parser.
 @ args_positionals ArgParser p → ( Vec String ) {
     ^ . p positionals
 }

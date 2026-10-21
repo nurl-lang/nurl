@@ -52,9 +52,8 @@
 //     HttpResponse. The handler closure receives BORROWED HttpRequest
 //     and BORROWED Params (the router frees Params after the handler
 //     returns).
-//   * `params_get` returns an OWNED String in the Some arm; caller frees.
-//     The None arm carries a freshly-empty String — also free it (mirrors
-//     `header_get`).
+//   * `params_get` returns an owned String in the Some arm (the caller's,
+//     dropped at scope exit; mirrors `header_get`).
 //   * `with_*` combinators capture the inner closure by value and return
 //     a fresh closure handle. The caller owns the resulting closure
 //     identically to a hand-written one — no extra cleanup.
@@ -213,8 +212,8 @@ $ `stdlib/core/rcbox.nu`
 //   literal   byte-exact compare against the path segment
 //
 // Returns T on full match (and `params` is populated), F otherwise. On
-// a F return, `params` may have been partially populated; the caller
-// must free + reallocate it before trying the next route.
+// a F return, `params` may have been partially populated: each route
+// tries with a fresh Params (dropped at the end of its attempt).
 @ __match_pattern s pattern s path Params params → b {
     : i pn ( nurl_str_len pattern )
     : i sn ( nurl_str_len path )
