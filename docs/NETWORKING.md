@@ -203,7 +203,11 @@ on a TLS connection whose write side the kernel seals it is sendfile(2) —
 the bytes never enter the process — and otherwise it reads 64 KB slices
 into one reused buffer and writes them through the record layer. (The
 runtime blocks the SIGPIPE sendfile would raise on a closed peer; every
-other socket write passes `MSG_NOSIGNAL`.)
+other socket write passes `MSG_NOSIGNAL`. A kTLS socket can also flush
+queued records later — in `close()`, after the peer has gone — where no
+call can mask the signal, so a process that installs kTLS sets SIGPIPE to
+ignored unless the program has its own handler; write errors then come
+back as EPIPE, as they already do on every socket write.)
 
 **Measured — why it is opt-in.** i7-5930K (Haswell), Linux 7.0, the
 kernel's AES-GCM being `gcm-aesni-avx`, server pinned to 6 cores, server

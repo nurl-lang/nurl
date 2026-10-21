@@ -2589,6 +2589,22 @@ long long nurl_ktls_set(long long handle, long long dir, long long cipher,
         return -1;
     }
     if (rc != 0) return -1;
+    /* A kTLS socket flushes pending records outside the call that queued
+     * them — in close(), say, after the peer has gone — with that call's
+     * flags, which for sendfile carry no MSG_NOSIGNAL: the SIGPIPE it
+     * raises then lands where no call can mask it, and its default action
+     * ends the process. A process that hands TLS to the kernel therefore
+     * ignores SIGPIPE (write errors come back as EPIPE, as on every
+     * socket write here) — unless the program installed its own handler. */
+    static volatile int sigpipe_set = 0;
+    if (!sigpipe_set) {
+        struct sigaction sa;
+        if (sigaction(SIGPIPE, NULL, &sa) == 0 && sa.sa_handler == SIG_DFL) {
+            sa.sa_handler = SIG_IGN;
+            (void)sigaction(SIGPIPE, &sa, NULL);
+        }
+        sigpipe_set = 1;
+    }
     if (dir == 2) {
         /* TLS 1.3 records from a peer that does not pad decrypt straight
          * into the reader's buffer; a padded one is re-read, not lost. */
@@ -2703,9 +2719,9 @@ long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long 
     ssize_t wn;
     /* sendfile has no MSG_NOSIGNAL: a peer that has gone raises SIGPIPE,
      * whose default action ends the process — every other write here
-     * passes MSG_NOSIGNAL. Block it for the call, and consume the one
-     * this call raised (only if none was pending before, so another
-     * cause's signal is left alone). */
+     * passes MSG_NOSIGNAL. Block it for the call, and consume one the
+     * call raised (only if none was pending before, so another cause's
+     * signal is left alone). */
     sigset_t pipe_set, old_mask, pending;
     sigemptyset(&pipe_set);
     sigaddset(&pipe_set, SIGPIPE);
@@ -2717,9 +2733,15 @@ long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long 
         wn = sendfile(h->fd, (int)fd, &o, (size_t)(n > 0x7ffff000 ? 0x7ffff000 : n));
     } while (wn < 0 && errno == EINTR);
     int saved = errno;
-    if (wn < 0 && saved == EPIPE && !had_pipe) {
-        struct timespec zero = { 0, 0 };
-        while (sigtimedwait(&pipe_set, NULL, &zero) < 0 && errno == EINTR) {}
+    /* Whatever the return: on a kTLS socket the signal can be raised by
+     * a call that still reports bytes sent. */
+    if (!had_pipe) {
+        sigemptyset(&pending);
+        sigpending(&pending);
+        if (sigismember(&pending, SIGPIPE)) {
+            struct timespec zero = { 0, 0 };
+            while (sigtimedwait(&pipe_set, NULL, &zero) < 0 && errno == EINTR) {}
+        }
     }
     pthread_sigmask(SIG_SETMASK, &old_mask, NULL);
     errno = saved;
