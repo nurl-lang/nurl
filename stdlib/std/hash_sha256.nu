@@ -23,7 +23,7 @@ $ `stdlib/std/bytes.nu`
 // each paid for that. This routine runs 64 times per 64-byte block, on
 // every transcript hash, every HKDF expansion and every HMAC of the TLS
 // handshake.
-@ __sha256_rotr u32 x i c → u32 {
+inline @ __sha256_rotr u32 x i c → u32 {
     ^ # u32 ( nurl_rotr32 # u64 x # u64 c )
 }
 
@@ -89,7 +89,7 @@ $ `stdlib/std/bytes.nu`
 // schedule in registers too, the transform was 10 KB of code, slower than
 // this, and every program that hashes compiled a third of a second longer.
 
-@ __sha256_be32 * u p i o → u32 {
+inline @ __sha256_be32 * u p i o → u32 {
     ^ | | | << # u32 . p o # u32 24 << # u32 . p + o 1 # u32 16
     << # u32 . p + o 2 # u32 8 # u32 . p + o 3
 }
@@ -106,7 +106,7 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = h + t1 + s0 mj
 }
 
-@ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
+simd @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
     : ~ i wi 0
     ~ < wi 16 {
         = . mp wi ( __sha256_be32 bp * wi 4 )
@@ -347,41 +347,111 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
 }
 
 @ hmac_sha256_pure ( Vec u ) key ( Vec u ) msg → ( Vec u ) {
+    // Allocate one scratch buffer for state (8), schedule (64), and block (32 words = 128 B).
+    : ( Vec u32 ) w ( vec_with_cap [u32] 120 )
+    : b _l ( vec_set_len [u32] w 120 )
+    : *u32 sp ( vec_data [u32] w )
+    : *u32 kp ( vec_data [u32] ( __sha256_k_shared ) )
+    : *u32 mp # *u32 + # i sp 32
+    : *u blk # *u + # i sp 288
+    : *u opad_blk # *u + # i sp 416
+
     // K0: the key, hashed down first when longer than a block, then
-    // zero-padded to 64 bytes.
-    : ( Vec u ) pad ( vec_with_cap [u] 64 )
-    : b _l ( vec_set_len [u] pad 64 )
-    : *u pp ( vec_data [u] pad )
-    ( nurl_memset # s pp 0 64 )
+    // zero-padded to 64 bytes inside `blk` (bytes 0..63).
+    ( nurl_memset # s blk 0 64 )
     : i klen ( vec_len [u] key )
     ? > klen 64 {
         : ( Vec u ) khash ( sha256_pure key )
-        ( nurl_memcpy # s pp # s ( vec_data [u] khash ) 32 )
+        ( nurl_memcpy # s blk # s ( vec_data [u] khash ) 32 )
     } {
-        ? > klen 0 { ( nurl_memcpy # s pp # s ( vec_data [u] key ) klen ) } {}
+        ? > klen 0 { ( nurl_memcpy # s blk # s ( vec_data [u] key ) klen ) } {}
+    }
+
+    : ~ i xi 0
+    ~ < xi 64 {
+        : i kb # i . blk xi
+        = . opad_blk xi # u ^^ kb 92
+        = . blk xi # u ^^ kb 54
+        = xi + xi 1
     }
 
     // inner = SHA-256((K0 ^ ipad) ‖ msg)
-    : ~ i xi 0
-    ~ < xi 64 {
-        = . pp xi # u ^^ # i . pp xi 54
-        = xi + xi 1
-    }
-    : Sha256 h ( sha256_init )
-    ( sha256_update h pad )
-    ( sha256_update h msg )
-    : ( Vec u ) inner ( sha256_final h )
+    = . sp 0 # u32 1779033703
+    = . sp 1 # u32 3144134277
+    = . sp 2 # u32 1013904242
+    = . sp 3 # u32 2773480762
+    = . sp 4 # u32 1359893119
+    = . sp 5 # u32 2600822924
+    = . sp 6 # u32 528734635
+    = . sp 7 # u32 1541459225
+    ( __sha256_transform sp blk kp mp )
 
-    // outer = SHA-256((K0 ^ opad) ‖ inner); ipad ^ opad = 0x36 ^ 0x5c = 0x6a
-    = xi 0
-    ~ < xi 64 {
-        = . pp xi # u ^^ # i . pp xi 106
-        = xi + xi 1
+    : i mlen ( vec_len [u] msg )
+    : *u dp ( vec_data [u] msg )
+    : ~ i off 0
+    ~ <= + off 64 mlen {
+        ( __sha256_transform sp # *u + # i dp off kp mp )
+        = off + off 64
     }
-    ( __sha256_restart h )
-    ( sha256_update h pad )
-    ( sha256_update h inner )
-    ^ ( sha256_final h )
+    : i rem - mlen off
+    ? > rem 0 { ( nurl_memcpy # s blk # s + # i dp off rem ) } {}
+    = . blk rem # u 128
+    : i end ? <= + rem 1 56 64 128
+    : ~ i zi + rem 1
+    ~ < zi - end 8 { = . blk zi # u 0 = zi + zi 1 }
+    : i bitlen * + 64 mlen 8
+    : ~ i bi 0
+    ~ < bi 8 { = . blk - - end 1 bi # u & >> bitlen * bi 8 255 = bi + bi 1 }
+    ( __sha256_transform sp blk kp mp )
+    ? == end 128 { ( __sha256_transform sp # *u + # i blk 64 kp mp ) } {}
+
+    // Save inner digest (8 words) in locals, then run outer = SHA-256((K0 ^ opad) ‖ inner).
+    : u32 in0 . sp 0
+    : u32 in1 . sp 1
+    : u32 in2 . sp 2
+    : u32 in3 . sp 3
+    : u32 in4 . sp 4
+    : u32 in5 . sp 5
+    : u32 in6 . sp 6
+    : u32 in7 . sp 7
+
+    = . sp 0 # u32 1779033703
+    = . sp 1 # u32 3144134277
+    = . sp 2 # u32 1013904242
+    = . sp 3 # u32 2773480762
+    = . sp 4 # u32 1359893119
+    = . sp 5 # u32 2600822924
+    = . sp 6 # u32 528734635
+    = . sp 7 # u32 1541459225
+    ( __sha256_transform sp opad_blk kp mp )
+
+    // Final outer block: 32-byte inner digest + 0x80 + zeros + 64-bit length (96*8 = 768).
+    = . blk 0 # u & >> # i in0 24 255 = . blk 1 # u & >> # i in0 16 255 = . blk 2 # u & >> # i in0 8 255 = . blk 3 # u & # i in0 255
+    = . blk 4 # u & >> # i in1 24 255 = . blk 5 # u & >> # i in1 16 255 = . blk 6 # u & >> # i in1 8 255 = . blk 7 # u & # i in1 255
+    = . blk 8 # u & >> # i in2 24 255 = . blk 9 # u & >> # i in2 16 255 = . blk 10 # u & >> # i in2 8 255 = . blk 11 # u & # i in2 255
+    = . blk 12 # u & >> # i in3 24 255 = . blk 13 # u & >> # i in3 16 255 = . blk 14 # u & >> # i in3 8 255 = . blk 15 # u & # i in3 255
+    = . blk 16 # u & >> # i in4 24 255 = . blk 17 # u & >> # i in4 16 255 = . blk 18 # u & >> # i in4 8 255 = . blk 19 # u & # i in4 255
+    = . blk 20 # u & >> # i in5 24 255 = . blk 21 # u & >> # i in5 16 255 = . blk 22 # u & >> # i in5 8 255 = . blk 23 # u & # i in5 255
+    = . blk 24 # u & >> # i in6 24 255 = . blk 25 # u & >> # i in6 16 255 = . blk 26 # u & >> # i in6 8 255 = . blk 27 # u & # i in6 255
+    = . blk 28 # u & >> # i in7 24 255 = . blk 29 # u & >> # i in7 16 255 = . blk 30 # u & >> # i in7 8 255 = . blk 31 # u & # i in7 255
+    ( nurl_memset # s + # i blk 32 0 32 )
+    = . blk 32 # u 128
+    = . blk 62 # u 3
+    ( __sha256_transform sp blk kp mp )
+
+    : ( Vec u ) out ( vec_with_cap [u] 32 )
+    : b _lo ( vec_set_len [u] out 32 )
+    : *u op ( vec_data [u] out )
+    : ~ i si 0
+    ~ < si 8 {
+        : i siv # i . sp si
+        = . op * si 4 # u & >> siv 24 255
+        = . op + * si 4 1 # u & >> siv 16 255
+        = . op + * si 4 2 # u & >> siv 8 255
+        = . op + * si 4 3 # u & siv 255
+        = si + si 1
+    }
+    ^ out
 }
 
 // ── A prepared HMAC-SHA-256 key ────────────────────────────────────
@@ -395,8 +465,13 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
 : HmacSha256 { Sha256 h ( Vec u32 ) mid }
 
 @ hmac_sha256_key ( Vec u ) key → HmacSha256 {
-    : ( Vec u ) pad ( vec_zeroed [u] 64 )
-    : *u pp ( vec_data [u] pad )
+    : Sha256 h ( sha256_init )
+    : *Sha256Impl hi ( __Sha256_ptr h )
+    : *u32 sp ( vec_data [u32] . hi w )
+    : *u32 kp . hi k
+    : *u32 mp # *u32 + # i sp 64
+    : *u pp # *u + # i sp 320
+    ( nurl_memset # s pp 0 64 )
     : i klen ( vec_len [u] key )
     ? > klen 64 {
         : ( Vec u ) khash ( sha256_pure key )
@@ -404,15 +479,11 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     } {
         ? > klen 0 { ( nurl_memcpy # s pp # s ( vec_data [u] key ) klen ) } {}
     }
-    : ( Vec u32 ) mid ( vec_zeroed [u32] 16 )
+    : ( Vec u32 ) mid ( vec_with_cap [u32] 16 )
+    : b _lm ( vec_set_len [u32] mid 16 )
     : *u32 mp0 ( vec_data [u32] mid )
     : ~ i xi 0
     ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 54 = xi + xi 1 }
-    : Sha256 h ( sha256_init )
-    : *Sha256Impl hi ( __Sha256_ptr h )
-    : *u32 sp ( vec_data [u32] . hi w )
-    : *u32 kp . hi k
-    : *u32 mp # *u32 + # i sp 64
     ( __sha256_transform sp pp kp mp )
     ( nurl_memcpy # s mp0 # s sp 32 )
     = xi 0
