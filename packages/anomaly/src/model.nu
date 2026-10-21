@@ -20,7 +20,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
-$ `src/prep.nu`
+$ `prep.nu`
 $ `deps/iforest/src/iforest.nu`
 
 // The reference's fixed random_state: a given training set always yields a

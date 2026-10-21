@@ -40,7 +40,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/args.nu`
-$ `src/chart.nu`
+$ `chart.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Input parsing ─────────────────────────────────────────────────────

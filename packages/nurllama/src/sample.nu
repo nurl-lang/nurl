@@ -10,7 +10,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/std/float.nu`  // exp
 $ `deps/gpu/src/gpu.nu`
-$ `src/model.nu`
+$ `model.nu`
 
 @ sample_greedy Llm m → i {
     : i n ( llm_n_vocab m )

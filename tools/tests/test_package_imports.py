@@ -108,6 +108,25 @@ class PackageImportsTest(unittest.TestCase):
             'src/main.nu': '$ `packages/app/src/x.nu`\n$ `deps/gpu/src/gpu.nu`\n'})
         self.assert_refuses("'packages/…' path", "'gpu' is not in packages/app/nurl.toml")
 
+    def test_sibling_through_src_prefix_is_refused(self):
+        # anomaly 0.x: src/dynamic.nu imported `src/store.nu`, which only
+        # the package root's cwd resolves — not deps/anomaly/ in a consumer.
+        self.package('anomaly', deps=[], files={
+            'src/store.nu': '@ f → i { ^ 0 }\n',
+            'src/dynamic.nu': '$ `stdlib/core/vec.nu`\n$ `src/store.nu`\n'})
+        self.assert_refuses('packages/anomaly/src/dynamic.nu:2:', 'not `src/name.nu`')
+
+    def test_sibling_relative_to_the_importer_passes(self):
+        self.package('app', deps=[], files={
+            'lib.nu': '$ `src/a.nu`\n',            # root: src/ IS beside it
+            'src/a.nu': '$ `b.nu`\n$ `sub/c`\n',  # the `.nu` retry counts
+            'src/b.nu': '', 'src/sub/c.nu': '$ `../b.nu`\n'})
+        self.assert_passes()
+
+    def test_unresolvable_import_in_tests_is_not_checked(self):
+        self.package('app', deps=[], files={'tests/t.nu': '$ `src/a.nu`\n', 'src/a.nu': ''})
+        self.assert_passes()
+
     def test_unreadable_manifest_fails_loudly(self):
         base = self.package('app', deps=None, files={'src/main.nu': '$ `deps/gpu/src/gpu.nu`\n'})
         (base / 'nurl.toml').write_text('[package\nname = \n')

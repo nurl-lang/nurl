@@ -44,7 +44,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
-$ `src/prep.nu`
+$ `prep.nu`
 $ `deps/arima/src/arima.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/par.nu`

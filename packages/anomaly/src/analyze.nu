@@ -32,13 +32,13 @@ $ `stdlib/std/random.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/json.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
-$ `src/score.nu`
-$ `src/store.nu`
-$ `src/dynamic.nu`
-$ `src/importer.nu`
-$ `src/orgfiles.nu`
+$ `prep.nu`
+$ `model.nu`
+$ `score.nu`
+$ `store.nu`
+$ `dynamic.nu`
+$ `importer.nu`
+$ `orgfiles.nu`
 
 : f ANA_TARGET_RATE 0.01
 : i ANA_MIN_ROWS 10

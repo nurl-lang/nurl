@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.5] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/md2html/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.1.4] — 2026-10-10
 
 Requires NURL 0.72.0 (`slice_of_str`). Rendering is linear in the

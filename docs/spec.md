@@ -174,8 +174,14 @@ returns `v`.)
 ### 3.2 `$`-imports
 
 A `$ "path"` declaration inline-compiles the `.nu` file at `path` into
-the current module. The path is resolved relative to the compiler's
-current working directory, **not** relative to the importing file.
+the current module. The path is tried relative to the **importing
+file's** directory first, then the compiler's current working directory,
+then `$NURL_STDLIB`; a path without the `.nu` suffix is retried with it
+after all three miss. A package's source therefore imports a sibling as
+`name.nu` — which resolves whether the package is built from its own
+root or installed under a consumer's `deps/<pkg>/` — never as
+`src/name.nu`, which only the package root's working directory finds
+(`tools/check_package_imports.sh` refuses it).
 
 The same path is imported **at most once** per compilation. Dedup keys on
 the `realpath(3)`-canonical file path (falling back to the normalised path
@@ -1370,7 +1376,8 @@ Binds `IDENT` to the value of `expr`. The optional `~` prefix marks the
 binding mutable (default immutable). The type annotation is optional
 when inferable from the right-hand side; an identifier that names a
 registered type is taken as the type annotation, otherwise the
-plain-IDENT form is type-inferred.
+plain-IDENT form is type-inferred. A name already bound as a *value* is
+not a type, so the inferred form rebinds it.
 
 <!-- doctest-prelude
 $ `stdlib/core/string.nu`
@@ -1380,7 +1387,7 @@ $ `stdlib/core/string.nu`
 : i n 0                          // explicit type
 : ~ i x 0                        // mutable
 : String s ( string_new )        // named type
-: sum ( add 1 2 )                // inferred
+: n ( add 1 2 )                  // inferred (rebinds n)
 ```
 
 A binding whose RHS is a fresh heap allocation becomes the *owner* of
@@ -2618,6 +2625,11 @@ Every diagnostic carries:
 - A message naming the offending construct and pointing at a cure.
 - The source line text.
 - A caret line pointing at the column.
+
+A check that runs once the whole program has been read — a missing
+supertrait impl, a closure that would cross to another thread — has the
+same shape: the position was recorded when the construct was scanned, and
+the line is re-read from the source being compiled.
 
 Example:
 

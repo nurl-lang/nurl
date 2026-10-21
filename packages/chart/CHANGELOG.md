@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.7] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/chart/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.1.6] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

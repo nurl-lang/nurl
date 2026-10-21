@@ -35,18 +35,18 @@ $ `deps/image/src/image.nu`
 $ `deps/ply/src/ply.nu`
 $ `deps/ply/src/view.nu`
 $ `deps/video/src/video.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
-$ `src/interp.nu`
-$ `src/patchembed.nu`
-$ `src/dino.nu`
-$ `src/infoshare.nu`
-$ `src/dpthead.nu`
-$ `src/heads.nu`
-$ `src/geom.nu`
-$ `src/preproc.nu`
-$ `src/sky.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
+$ `interp.nu`
+$ `patchembed.nu`
+$ `dino.nu`
+$ `infoshare.nu`
+$ `dpthead.nu`
+$ `heads.nu`
+$ `geom.nu`
+$ `preproc.nu`
+$ `sky.nu`
 $ `stdlib/core/slice.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`

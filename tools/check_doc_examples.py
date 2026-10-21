@@ -107,8 +107,12 @@ DECL = re.compile(
 )
 IMPORT = re.compile(r"^\$\s")
 MAIN = re.compile(r"^(?:pub\s+)?(?:unsafe\s+)?@\s+main\b")
-# `file:line:col: error: …`; a few whole-program checks print no column.
-LOC = re.compile(r"^(.*?):(\d+)(:\d+)?: (error|warning): (.*)$")
+# `file:line:col: error: …` — every diagnostic that names a file names a
+# column too, deferred whole-program checks included (die_file_pos re-reads
+# the line). `file:line: error: …` is the shape they used to print: it is
+# reported, never mapped, so a regression to it fails the block.
+LOC = re.compile(r"^(.*?):(\d+)(:\d+): (error|warning): (.*)$")
+NO_COL = re.compile(r"^(.*?\.nu):(\d+): (error|warning): (.*)$")
 
 NO_SENTINEL = "is required but no build-time sentinel"
 KNOWN_ATTRS = {"expect-error", "expect-warning", "flags", "continue", "ignore", "unsafe", "params"}
@@ -317,12 +321,17 @@ def check(block, nurlc, tmpdir, cwd):
             diags.append((m.group(4), m.group(5), "elsewhere"))
             mapped.append(raw)
         else:
+            n = NO_COL.match(raw)
+            if n:
+                diags.append((n.group(3), n.group(4), "no-column"))
             mapped.append(raw)
     return proc.returncode, diags, mapped, pairs, time.monotonic() - t0
 
 
 def judge(block, rc, diags):
     """None when the block behaved as annotated, else the reason."""
+    if any(origin == "no-column" for _, _, origin in diags):
+        return "a diagnostic without a column ('file:line: …') — every located diagnostic prints file:line:col"
     errors = [d for d in diags if d[0] == "error"]
     if block.expect_errors:
         if rc == 0:

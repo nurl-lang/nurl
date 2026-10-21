@@ -17,10 +17,10 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/uuid.nu`
-$ `src/config.nu`
-$ `src/store.nu`
-$ `src/api.nu`
-$ `src/convert.nu`
+$ `config.nu`
+$ `store.nu`
+$ `api.nu`
+$ `convert.nu`
 
 : ModelEntry {
     String value

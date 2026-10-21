@@ -27,7 +27,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/env.nu`
-$ `src/service.nu`
+$ `service.nu`
 
 @ __reg_env_or s name s fallback → String {
     : ?String ev ( env_get name )

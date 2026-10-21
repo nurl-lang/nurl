@@ -361,13 +361,49 @@ unsafe @ __import_hint s name b is_type → s {
 }
 
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
-// stored "file:line" location, not a live lexer — so no column, caret, or
-// source-line echo, but the same parseable "loc: msg" prefix. Used by the
-// supertrait-obligation sweep, which runs after every impl in the program has
-// been registered and so cannot point at a single lexer position.
+// stored location string, not a live lexer — so no column, caret, or
+// source-line echo, but the same parseable "loc: msg" prefix. A check that
+// can keep the position it is about uses die_file_pos instead.
 @ die_at s loc s msg → v {
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
+}
+
+// die_file_pos: die_pos for a deferred check whose lexer is gone — the
+// position was recorded when the construct was scanned, and the line is
+// re-read from the source snapshot the compilation used (the one
+// compiler_read_source hands every reader of that file), so the echo is
+// the text that was parsed. The supertrait-obligation sweep is the user:
+// it runs once every impl in the program is registered, long after the
+// impl's own file was lexed, and used to print `file:line: error: …` with
+// no column, echo or caret — the one diagnostic of that shape a reader
+// (or a tool parsing `file:line:col:`) met. The thread-crossing checks,
+// whose records keep only a line, pass col 0: the column is then the
+// line's first non-blank character — the STATEMENT's start, the anchor
+// die_stmt and bck_emit_error use when the token itself is not kept.
+@ die_file_pos s file i line i col s msg → v {
+    : s src ( compiler_read_source file )
+    : s lt ? != 0 ( nurl_str_len src ) ( __src_line_text src ( nurl_str_len src ) line ) ``
+    : ~ i c col
+    ? <= c 0 {
+        : i ln ( nurl_str_len lt )
+        : ~ i k 0
+        ~ & < k ln | == ( nurl_str_get lt k ) 32 == ( nurl_str_get lt k ) 9 { = k + k 1 }
+        = c + k 1
+    } {}
+    : s loc ( nurl_str_cat4 file `:` ( nurl_str_int line ) ( nurl_str_cat `:` ( nurl_str_int c ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
+    ? != 0 ( nurl_str_len lt ) {
+        ( nurl_eprintln lt )
+        ( nurl_eprintln ( nurl_diag_caret c ) )
+    } {}
+    ( __diag_abort )
+}
+
+// The same for a position kept as a record "<file> <line> <col>".
+@ die_file_rec s rec s msg → v {
+    : s r1 ( str_skip_word rec )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) ) msg )
 }
 
 // Soft diagnostic — same format as `die` but does not exit. Used for
@@ -1369,7 +1405,7 @@ unsafe @ agg_field_count i syms s ot → i {
 // kept (never freed) at those call sites — a borrow of this global
 // needs no freeing at all.
 : ~ s g_dyn_dtout ``
-: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
+: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file> <line> <col> "
 //   record per impl block, verified after scan_fn_sigs once every impl across
 //   the program (incl. imports) is registered: a supertrait of an implemented
 //   trait must itself be implemented for that same type (T: Sub ⇒ T: Super).
@@ -30829,6 +30865,23 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ^ ``
 }
 
+// Does `name` name a TYPE in scope — the question a binding's first word
+// asks (§5.1)? The symbol table holds values and types alike, so being
+// in it decides nothing: a struct or enum maps to `%Name` (the pre-scan
+// and gen_struct_decl/gen_enum_decl), a closure/trait-object slug or a
+// generic instance carries `__is_type`, and a generic template's bare
+// name — not a type, but it must reach parse_type's "used without type
+// arguments" diagnostic — is in g_generic_struct_syms. A value is never
+// any of those: a local, parameter or global maps to ITS type, which is
+// `%Other` for a struct value and never `%` + its own name.
+@ __names_type i syms s name → b {
+    : s sv ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_len sv ) { ^ F } {}
+    ? & == ( nurl_str_get sv 0 ) 37 ( seq ( nurl_str_slice sv 1 - ( nurl_str_len sv ) 1 ) name ) { ^ T } {}
+    ? != 0 ( nurl_sym_len2 syms name `__is_type` ) { ^ T } {}
+    ^ & != 0 g_generic_struct_syms != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
+}
+
 unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
@@ -30857,8 +30910,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // happens (see __ptr_kill / the use-site warning in gen_ident), so the
     // blanket warning — which fired on correct code and pushed callers to
     // launder pointers through i64 — is gone.
-    // Check if first token could be a type name by looking it up in symbol table
-    ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_sym_len syms ( nurl_lex_val lex ) )
+    // A plain IDENT opens the annotated form only when it NAMES A TYPE
+    // (§5.1: "an identifier that names a registered type is taken as the
+    // type annotation, otherwise the plain-IDENT form is type-inferred").
+    // The test used to be "is the name in the symbol table at all", and
+    // the table holds values too: `: i n 0` then `: n 5` read the in-scope
+    // VALUE n as a type and died "unknown type 'n' in a binding type" —
+    // while `: i n 5`, the same rebinding spelled out, compiled.
+    ? & == ( nurl_lex_type lex ) TT_IDENT ! ( __names_type syms ( nurl_lex_val lex ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
         : i __ob_line g_stmt_line
@@ -31158,6 +31217,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
         : i __bt_line ( nurl_lex_line lex )
         : i __bt_col ( nurl_lex_col lex )
+        // A bare IDENT here named a type (__names_type): kept for the
+        // "expected a binding name" report, where it is the whole story.
+        : s __bt_word ? == ( nurl_lex_type lex ) TT_IDENT ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
         : s ptype ( parse_type lex )
         // A binding's type went unchecked while parameter, field, return
         // and FFI types were all validated — so `: Foo x 0` against an
@@ -31496,9 +31558,15 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { ( die lex `expected variable name in let — 'inline' is a reserved keyword (the always-inline prefix on function declarations) and cannot name a binding` ) }
                     { ? == ( nurl_lex_type lex ) TT_BOOL
                         { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                        { ( die lex ( nurl_str_cat3
+                        {  // `: P 5` with P a struct: the one shape §5.1 cannot
+                            // read as inferred, because the first word NAMES A
+                            // TYPE and so is the annotation. Say that, not only
+                            // the general form — the writer meant P as a name.
+                            : s __tyw ? == 0 ( nurl_str_len __bt_word ) ``
+                            ( nurl_str_cat3 ` Here '` __bt_word `' names a type in scope, so it is read as the binding's TYPE — an identifier that names a registered type is the annotation (spec §5.1), never the inferred form's name. A binding cannot take a type's name: pick another one.` )
+                            ( die lex ( nurl_str_cat4
                             `expected a binding name, found ` ( tok_here lex )
-                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } } }
+                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` __tyw ) ) } } } } }
     }
 }
 
@@ -45674,7 +45742,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // The initialiser: a function of no arguments returning the type.
         : s frt ( nurl_sym_get g_root_syms fn )
         ? | | == 0 ( nurl_sym_len2 g_root_syms fn `__arity` ) != 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms fn `__arity` ) ) ! ( seq ( nurl_llty frt ) ll ) {
-            ( die_at ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g ( nurl_str_cat4 `' is set at start by '` ? < ( nurl_str_find fn `__fp` ) 0 fn ( nurl_str_slice fn 0 ( nurl_str_find fn `__fp` ) ) `', which must be a function of no arguments returning '` ( __zty_show ll ) ) `'.` ) )
+            ( die_file_rec ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g ( nurl_str_cat4 `' is set at start by '` ? < ( nurl_str_find fn `__fp` ) 0 fn ( nurl_str_slice fn 0 ( nurl_str_find fn `__fp` ) ) `', which must be a function of no arguments returning '` ( __zty_show ll ) ) `'.` ) )
         } {}
         ( nurl_print `  %_gi` ) ( nurl_print n ) ( nurl_print ` = call ` ) ( nurl_print ll )
         ( nurl_print ` @` ) ( nurl_print ( llvm_call_fn fn ) ) ( nurl_print `()\n` )
@@ -46132,7 +46200,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
             ( nurl_sym_def syms cname lt )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
             ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal` ) __gi_call )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal_at` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int __cv_line ) ) )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal_at` ) ( nurl_str_cat4 ( nurl_lex_filename lex ) ` ` ( nurl_str_int __cv_line ) ( nurl_str_cat ` ` ( nurl_str_int __cv_col ) ) ) )
             = g_init_globals ( nurl_str_cat4 g_init_globals cname ( nurl_str_cat3 ` ` __gi_call ` ` ) ( nurl_str_cat __gi_ll `;` ) )
         }
         ? == tt TT_FLOAT
@@ -49005,7 +49073,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                 // resolve_send_checks.)
                 ? | & > ( nurl_str_len u ) 2 | ( seq ( nurl_str_slice u 0 2 ) `?p` ) ( seq ( nurl_str_slice u 0 2 ) `?P` ) == ( nurl_str_get u 0 ) 33 {} {
                     ? ( seq u `?` ) {
-                        ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
+                        ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
                         `' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a Vec element, a join of two values, or a call through a closure value. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.` ) ) }
                     {
                         // A value-type atom (`=N`): only a queue holding a
@@ -49023,7 +49091,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                             // capture atoms, checked as such.)
                             : b reach ? vt ( __ts_reaches_handles cu oo syms ) | ( seq cu `*` ) ( __ts_reaches cu oo syms )
                             ? | qself | ( seq uu oo ) & != 0 ( nurl_str_len cu ) reach {
-                                ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat ( nurl_str_cat4 `this stores a value into '` ( llvm_to_nurl oo ) `' (a handle shared across threads) that holds — directly or through a closure's captures — '` ( llvm_to_nurl uu ) )
+                                ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat ( nurl_str_cat4 `this stores a value into '` ( llvm_to_nurl oo ) `' (a handle shared across threads) that holds — directly or through a closure's captures — '` ( llvm_to_nurl uu ) )
                                 `', which leads back to it: a cycle of counts that nothing frees, since thread-shared handles are not collected (docs/MEMORY.md §7.7). Point back without owning: an ArcWeak, a raw back-pointer the owner outlives (stdlib/ext/http3_server.nu), or pass the handle in as an argument instead of capturing it.` ) ) }
                             {}
                         }
@@ -49259,11 +49327,11 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : i p2 ( nurl_str_find a2 `@` )
             : s bl ( nurl_str_slice a2 0 p2 )
             : s reason ( nurl_str_slice a2 + p2 1 - - ( nurl_str_len a2 ) p2 1 )
-            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat4 ( nurl_str_cat3 how `, but the closure built on line ` bl )
+            ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat4 ( nurl_str_cat3 how `, but the closure built on line ` bl )
             ( nurl_str_cat3 ` captures '` nm `', which is not Send: ` ) ( __thr_explain reason ) `` ) )
         } {}
         ? ( seq u `?` ) {
-            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat how `, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.` ) )
+            ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat how `, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.` ) )
         } {}
     }
 }
@@ -54515,6 +54583,10 @@ unsafe @ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_
 // checks and default registration until every trait declaration is known.
 unsafe @ scan_impl_decl i lex i syms → v {
     : i impl_pos ( nurl_lex_cur_start lex )
+    // The `%` that opens the declaration: where a deferred supertrait
+    // obligation is reported (verify_super_obligations).
+    : i impl_line ( nurl_lex_line lex )
+    : i impl_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // skip trait name
@@ -54597,10 +54669,10 @@ unsafe @ scan_impl_decl i lex i syms → v {
         // registered, each supertrait of `tname` must also be implemented for
         // this type. Recorded unconditionally (the trait's supers may not be
         // parsed yet); the deferred pass skips impls whose trait has none.
-        : s spos ( nurl_str_cat ( nurl_lex_filename lex )
-        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
-        // Four space-separated fields per record (none contains a space):
-        // "<Sub> <impl_llvm> <nurl_type> <file:line> ".
+        : s spos ( nurl_str_cat4 ( nurl_lex_filename lex ) ` ` ( nurl_str_int impl_line )
+        ( nurl_str_cat ` ` ( nurl_str_int impl_col ) ) )
+        // Six space-separated fields per record (none contains a space):
+        // "<Sub> <impl_llvm> <nurl_type> <file> <line> <col> ".
         = g_super_obligations ( nurl_str_cat g_super_obligations
         ( nurl_str_cat tname ( nurl_str_cat ` `
         ( nurl_str_cat impl_llvm ( nurl_str_cat ` `
@@ -54924,7 +54996,11 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
         = rest ( str_skip_word rest )
         : s nty ( str_first_word rest )
         = rest ( str_skip_word rest )
-        : s pos ( str_first_word rest )
+        : s file ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i line ( nurl_str_to_int ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        : i col ( nurl_str_to_int ( str_first_word rest ) )
         = rest ( str_skip_word rest )
         // Each supertrait of `sub` must be implemented for `llvm`.
         : ~ s sup_rest ( nurl_sym_get2 g_trait_syms sub `__supers` )
@@ -54933,11 +55009,13 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
             = sup_rest ( str_skip_word sup_rest )
             ? == 0 ( nurl_sym_len g_trait_syms
             ( nurl_str_cat3 sup `##` llvm ) )
-            { ( die_at pos ( nurl_str_cat
+            { ( die_file_pos file line col ( nurl_str_cat
                 ( nurl_str_cat3 `type '` nty `' implements trait '` )
                 ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
                 ( nurl_str_cat3 `' — every '` sub
-                ( nurl_str_cat3 `' type must also implement '` sup `'` ) ) ) ) ) }
+                ( nurl_str_cat3 `' type must also implement '` sup
+                ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
+                ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
             {}
         }
     }

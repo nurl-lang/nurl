@@ -165,6 +165,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so (`__is_vec_num_ty`). Found by the sanitizer corpus on the
   crypto tier's own test.
 
+- **An inferred binding can rebind a name already in scope (agora #59).**
+  `: i n 0` then `: n 5` failed with "unknown type 'n' in a binding
+  type": the parser took the annotated form `: TYPE NAME EXPR` whenever
+  the first word was in the symbol table at all, and the table holds
+  values as well as types. Only a word that names a type (a struct,
+  enum, generic template or type slug) opens the annotated form now, as
+  spec §5.1 says; a struct value rebound as `: p @ P { … }` no longer
+  reports "type 'p' … declared LATER" either. `: P 5` with `P` a struct
+  — the one shape the rule cannot read as inferred — says why `P` was
+  taken as the type.
+- **Sixteen packages are installable as dependencies again (agora #60).**
+  Their `src/` modules imported siblings as `src/<name>.nu`, which nurlc
+  finds only through the working directory — the package root in every
+  in-repo build, the consumer's root once the package sits under
+  `deps/<pkg>/`. anomaly (0.36.5, whose README documents
+  `` $ `deps/anomaly/src/dynamic.nu` ``), arima, audio, benchmark, chart,
+  hub, iforest, lingbot-map, map-anything, md2html, nurllama, registry,
+  safetensor, template, tokenizer and whisper import them relative to
+  the importing file now, with a patch release each.
+  `tools/check_package_imports.sh` gains the rule: every import of a
+  packaged source that is not `stdlib/…`, `deps/…` or `packages/…` must
+  exist beside the importer. Spec §3.2 described the lookup as
+  working-directory-only; it is importer first, then the working
+  directory, then `$NURL_STDLIB`.
+- **Deferred diagnostics carry a column, the echoed line and a caret
+  (agora #61).** A missing supertrait impl printed `file:2: error: …`
+  with nothing under it, unlike every other diagnostic; so did the
+  thread-crossing checks (a closure handed to another thread, a value
+  stored into a thread-shared handle) and a start-time global's
+  initialiser arity. Each records the construct's position when it is
+  scanned and re-reads the line when it reports, anchored at the impl's
+  `%`, the global's name or the statement's start; the supertrait
+  message also names the impl to add. The doc-example gate no longer
+  accepts the column-less form.
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
   closed the fd outside the netpoller lock; a fiber parking on the

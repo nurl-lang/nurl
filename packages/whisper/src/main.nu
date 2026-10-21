@@ -28,12 +28,12 @@ $ `deps/hub/src/store.nu`
 $ `deps/hub/src/hf.nu`
 $ `deps/hub/src/pull.nu`
 $ `deps/hub/src/hub.nu`
-$ `src/ggml.nu`
-$ `src/model.nu`
-$ `src/run.nu`
-$ `src/serve.nu`
-$ `src/silero.nu`
-$ `src/stream.nu`
+$ `ggml.nu`
+$ `model.nu`
+$ `run.nu`
+$ `serve.nu`
+$ `silero.nu`
+$ `stream.nu`
 
 // Resolve the model argument to a local path — an existing directory or ggml
 // file is used as is, a Hugging Face ref is fetched into ~/.nurl/models via

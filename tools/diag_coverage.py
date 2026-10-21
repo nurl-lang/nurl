@@ -34,7 +34,7 @@ from collections import Counter
 
 # Every emitter that puts a diagnostic in front of the user. die_if_void
 # is not listed: it wraps `die` and its text is scanned at that site.
-EMITTERS = ("die", "die_at", "die_stmt", "die_pos", "warn")
+EMITTERS = ("die", "die_at", "die_stmt", "die_pos", "die_file_pos", "die_file_rec", "warn")
 
 # A fingerprint has to be long enough not to collide with ordinary prose
 # in some other message. 18 characters is past the point where two
