@@ -100,7 +100,10 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 # API across the parameter seams: all three ML-KEM levels, all three
 # ML-DSA levels, the x4 sponge either side of both rates, and ChaCha20
 # across its one-, two-, four- and eight-block kernels' seams.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree)
+# AES-GCM's hardware kernels (the crypto tier) are driven by its NIST
+# vectors: the `on` leg runs them, the `off` leg has no tier and takes
+# the software cipher — and both must print the same answers.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the
@@ -148,12 +151,16 @@ build_leg() {  # build_leg <test> <leg: on|off>
         -lm -lpthread $DL_LIB 2> "$WORK/$name.$leg.lerr" || return 1
 }
 
-# ymm instructions inside the bodies of the .x86v3 symbols only. The
-# baseline build has no such symbols, so its count is 0 by construction
-# — which is why the whole-binary count is checked for it instead.
+# What only a wide clone can contain, counted inside the bodies of the
+# .x86v3 symbols: ymm registers, and the crypto tier's AES and
+# carry-less-multiply instructions (an AES kernel is all xmm, and its
+# `off` leg has no tier at all). The baseline build has no such
+# symbols, so its count is 0 by construction — which is why the
+# whole-binary count is checked for it instead.
+WIDE_RE='ymm|aesenc|aesdec|pclmul'
 ymm_in_wide() {
     objdump -d "$1" 2>/dev/null |
-        awk '/^[0-9a-f]+ <[^>]*\.x86v3>:/{p=1} /^$/{p=0} p' | grep -c 'ymm'
+        awk '/^[0-9a-f]+ <[^>]*\.x86v3>:/{p=1} /^$/{p=0} p' | grep -cE "$WIDE_RE"
 }
 
 have_objdump=1
@@ -191,7 +198,7 @@ for name in "${DRIVERS[@]}"; do
     # target triple and clang's default x86-64 has no AVX.
     if (( have_objdump )); then
         w=$(ymm_in_wide "$WORK/$name.on")
-        b=$(objdump -d "$WORK/$name.off" 2>/dev/null | grep -c 'ymm')
+        b=$(objdump -d "$WORK/$name.off" 2>/dev/null | grep -cE "$WIDE_RE")
         n_clone=$(grep -cE '^define .*\.x86v3\(' "$WORK/$name.on.ll")
         n_off=$(grep -cE '^define .*(\.base|\.x86v3)\(' "$WORK/$name.off.ll")
         if (( w > 0 && b == 0 && n_clone > 0 && n_off == 0 )); then
@@ -233,7 +240,7 @@ done
 # the stem and let the suffix be whatever privacy produced — the same
 # rule simd_dispatch_ir.sh applies.
 mapfile -t MARKED < <(
-    grep -rhE '^[[:space:]]*(pub[[:space:]]+)?simd[[:space:]]+(pub[[:space:]]+)?@' stdlib/ |
+    grep -rhE '^[[:space:]]*((pub|unsafe|inline)[[:space:]]+)*simd[[:space:]]+((pub|unsafe|inline)[[:space:]]+)*@' stdlib/ |
         sed -E 's/.*@[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' | sort -u
 )
 if (( ${#MARKED[@]} == 0 )); then

@@ -2827,6 +2827,22 @@ unsafe @ note_unsafe_fn s pos s name → v {
 // dispatcher, both clones and everything they reach — in ONE part: see
 // __sp_pin_simd.
 : ~ s g_simd_fns ``
+// Functions whose own IR uses a hardware crypto primitive, by IR name
+// (emit_fn_ir) — what a deferred `simd` function's calls are checked
+// against when flush_simd_deferred decides its tier.
+: ~ i g_crypto_fns 0
+// `simd` functions held back until the module is complete
+// (defer_multiversion): `<k>.ir` / `.n` / `.r` / `.p` → the pieces
+// emit_multiversion takes.
+: ~ i g_simd_defer 0
+: ~ i g_simd_defer_n 0
+// Crypto-tier functions held back the same way (emit_fn_ir), and the
+// ones among them that ask to be inlined (`inline @`, or a v128
+// signature): those get a `.tier` copy (__crypto_tier_copy), and every
+// crypto-tier body calls the copy (__ir_tier_calls).
+: ~ i g_crypto_defer 0
+: ~ i g_crypto_defer_n 0
+: ~ i g_crypto_inl 0
 
 // Which wider ISA the `simd` prefix dispatches to. 1 = x86-64-v3
 // (AVX2 + BMI2 + FMA), 0 = no dispatch, emit the function once.
@@ -7385,13 +7401,23 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // temporary drop independently of the LLVM return type. Sink, retention and
 // unverified-call facts apply per position, including named arguments.
 // `{ i1, T }` / `{ i1, T, E }` whose parts are all numbers or flags.
+// A SIMD vector (`v128` / `v256`, spelled either way): lanes of
+// numbers, never an address — as much a number as an `i64` is to every
+// question below about what a value can point into. Left out, a v128
+// result was taken for a possible view of a temporary argument, its
+// drop deferred to a consumer a binding never is, and the temporary
+// leaked (`: v128 x ( ld ( mk ) )`).
+@ __is_vec_num_ty s ty → b {
+    ^ | | | ( seq ty `<4 x i32>` ) ( seq ty `<4 x i64>` ) ( seq ty `v128` ) ( seq ty `v256` )
+}
+
 @ __wrap_of_numbers s ty → b {
     ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
     : s a ( __wrap_part ty 0 )
     : s b ( __wrap_part ty 1 )
     ? == 0 ( nurl_str_len a ) { ^ F } {}
-    : b an | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` )
-    : b bn | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` )
+    : b an | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_vec_num_ty a )
+    : b bn | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_vec_num_ty b )
     ^ & an bn
 }
 
@@ -12803,7 +12829,7 @@ unsafe @ __has_pct_token s ll s name → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
@@ -16680,7 +16706,7 @@ unsafe @ __ty_no_address s ty0 i depth → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
@@ -22192,7 +22218,7 @@ unsafe @ mem_path_to_indices s path → s {
     // ( mk ) 0 )` cannot hand back a pointer into the temporary — deferred
     // for a consumer that never came, the Vec leaked.)
     : b __scalar_ret | | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` ) ( __wrap_of_numbers __crt )
-    | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
+    | | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` ) ( __is_vec_num_ty __crt )
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings
@@ -43775,7 +43801,7 @@ unsafe @ __ha_is_ret s line → b {
 // the clone. They keep calling `@f`, i.e. they re-enter through the
 // dispatcher — one correctly-predicted branch per recursion, against
 // the alternative of rewriting call sites inside IR text.
-unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
+unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params b crypto → v {
     // Everything from "\nentry:\n" onwards is the body, verbatim. The
     // header is rebuilt rather than patched: the caller still holds the
     // three pieces it was printed from, so there is nothing to parse.
@@ -43784,14 +43810,24 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
     : s body ( nurl_str_slice fn_ir bi - ( strlen fn_ir ) bi )
     : b is_void ( seq ret_ll `void` )
     = g_simd_fns ? == 0 ( nurl_str_len g_simd_fns ) ( nurl_str_cat lname `` ) ( nurl_str_cat3 g_simd_fns ` ` lname )
+    // A `crypto` body (flush_simd_deferred: it uses a hardware crypto
+    // primitive, or calls a function that does) cannot have a baseline
+    // clone: the instruction does not exist there. Its `.base` is
+    // compiled for the crypto tier instead and gated on it, and its
+    // `.x86v3` gains AES and PCLMUL — picked only when the CPU has both
+    // v3 and the tier, so a v3 machine without AES-NI (a VM that masks
+    // it) falls to the gated base rather than to SIGILL.
 
+    : s base_attrs ? crypto ( __crypto_tier_attrs ) ``
+    : s base_body ? crypto ( nurl_str_cat `\nentry:\n  call void @nurl__aes_gate()` ( nurl_str_slice body 7 - ( strlen body ) 7 ) ) ( nurl_str_cat body `` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
-    ( nurl_str_cat3 lname `.base(` ( nurl_str_cat params `) {` ) ) )
-    ( emit_hoisted ( nurl_str_cat hdr_b body ) )
+    ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 params `)` base_attrs ` {` ) ) )
+    ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
 
+    : s wide_feat ? crypto `,+aes,+pclmul` ``
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` ret_ll ` @` )
-    ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat params
-    `) "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave" {` ) ) )
+    ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 params
+    `) "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_w body ) )
 
     // The dispatcher. `params` doubles as the argument list: it is
@@ -43800,7 +43836,11 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
     ( nurl_print `define ` ) ( nurl_print ret_ll )
     ( nurl_print ` @` ) ( nurl_print lname )
     ( nurl_print `(` ) ( nurl_print params ) ( nurl_print `) {\nentry:\n` )
-    ( nurl_print `  %__mv = call i32 @nurl_cpu_x86_v3()\n` )
+    ? crypto
+    { ( nurl_print `  %__mv3 = call i32 @nurl_cpu_x86_v3()\n` )
+        ( nurl_print `  %__mva = call i32 @nurl_cpu_x86_aes()\n` )
+        ( nurl_print `  %__mv = and i32 %__mv3, %__mva\n` ) }
+    { ( nurl_print `  %__mv = call i32 @nurl_cpu_x86_v3()\n` ) }
     ( nurl_print `  %__mvc = icmp ne i32 %__mv, 0\n` )
     ( nurl_print `  br i1 %__mvc, label %__mv_wide, label %__mv_base\n` )
     ( nurl_print `__mv_wide:\n` )
@@ -43830,7 +43870,7 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
     ~ < idx g_func_count {
         : s funcdef ( nurl_sym_get defs_syms ( nurl_str_int idx ) )
         ? != 0 ( nurl_str_len funcdef )
-        { ( emit_hoisted funcdef ) }
+        { ( emit_fn_ir funcdef ) }
         {}
         = idx + idx 1
     }
@@ -43865,6 +43905,8 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params → v {
 : ~ i g_lazy_trace 0  // NURL_LAZY_TRACE: report a late compile (a gap in lazy_reach)
 
 & `c` @ nurl_print_buf_len → i
+// Does CPU dispatch start on (runtime_core.c)? See main.
+& `c` @ nurl_cpu_dispatch_default → i
 
 & `c` @ nurl_print_buf_at i off → i
 
@@ -44954,8 +44996,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // clones would produce invalid metadata, and a debug build has no
     // use for the speed (the same reason --split and --g are exclusive).
     ? & & != __fn_simd 0 != g_cpu_dispatch 0 == g_dbg_enabled 0
-    { ( emit_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str ) }
-    { ( emit_hoisted __fn_ir ) }
+    { ( defer_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str ) }
+    { ( emit_fn_ir __fn_ir ) }
     // Clear DWARF state — subsequent module-scope code (string globals,
     // closure defs, the next function's metadata) must not inherit
     // this function's DILocation, or its calls would attach `!dbg !N`
@@ -51840,6 +51882,18 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  %z4.r = shufflevector <4 x i32> %a, <4 x i32> %b, <4 x i32> <i32 2, i32 3, i32 6, i32 7>` )
     ( emit `  ret <4 x i32> %z4.r` )
     ( emit `}` )
+    // Reverse the sixteen bytes. The byte-order flip of a whole block:
+    // GHASH reads its blocks big-endian, and so does every counter mode
+    // that keeps its counter in the last four bytes. A literal shuffle
+    // mask, so it is portable: `pshufb` where SSSE3 is on, a shift-and-
+    // shuffle sequence on baseline SSE2, `rev64` + `ext` on AArch64.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_bswap128(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vw.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %vw.s = shufflevector <16 x i8> %vw.a, <16 x i8> undef, <16 x i32> <i32 15, i32 14, i32 13, i32 12, i32 11, i32 10, i32 9, i32 8, i32 7, i32 6, i32 5, i32 4, i32 3, i32 2, i32 1, i32 0>` )
+    ( emit `  %vw.r = bitcast <16 x i8> %vw.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vw.r` )
+    ( emit `}` )
     // ── byte compare → bitmask ────────────────────────────────────
     // The whole point of a vector byte scan: sixteen comparisons in one
     // instruction, their results read out as a 16-bit integer whose bit
@@ -52210,6 +52264,315 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `}` )
 }
 
+// ── The hardware crypto tier ─────────────────────────────────────────
+//
+// AES rounds and carry-less multiplication, as v128 primitives — the
+// instructions every fast AES-GCM is built from, and the ones no shift
+// tree can stand in for: a bitsliced AES and a software GHASH ran this
+// stdlib's AES-128-GCM at ~113 MB/s where AES-NI + PCLMULQDQ run it at
+// gigabytes. Unlike the rest of the v128 layer these are NOT baseline
+// anywhere — x86-64 has had AES-NI since 2010, but an x86-64 CPU without
+// it is still a legal target — so they come with a contract:
+//
+//   * A function whose body uses one is compiled for the CRYPTO TIER,
+//     x86-64-v2 + AES-NI + PCLMULQDQ (__crypto_fn_ir), and its entry is
+//     gated on the runtime's CPUID answer (`nurl__aes_gate`): on a CPU
+//     without the tier the call panics before the first AES instruction
+//     could raise SIGILL. The gate is a `readnone` call and a branch, so
+//     in a helper inlined into a loop the optimiser merges every copy
+//     into one and hoists it out.
+//   * A `simd @` function that uses one gets its clones for the tier:
+//     `.x86v3` with AES and PCLMUL added to its features (picked when
+//     the CPU has both v3 and the tier) and `.base` compiled for the
+//     tier and gated (emit_multiversion). Callers keep calling `f`.
+//   * `nurl_cpu_has_aes` is what a program asks before choosing a
+//     hardware path, and what lets it keep a software one.
+//   * Under --no-cpu-dispatch nurlc does not know the target is x86, so
+//     there is no tier: `nurl_cpu_has_aes` is false and each primitive
+//     is a stub that panics if a program reaches it anyway.
+//
+// The semantics are Intel's: `aesenc a k` = MixColumns(SubBytes(
+// ShiftRows(a))) ^ k, `aesenclast` without the MixColumns, `aesdec` /
+// `aesdeclast` the equivalent inverse rounds, `aesimc` InvMixColumns
+// (for turning encryption round keys into decryption ones).
+// `clmul_XY a b` is the 128-bit carry-less product of a's X half and
+// b's Y half, `l` the low 64 bits and `h` the high — PCLMULQDQ's
+// immediate spelled as four primitives, because an instruction
+// immediate must be a literal and a primitive's argument cannot be
+// required to be one.
+@ __emit_crypto_prim s name i nargs s call → v {
+    : s sig ? == nargs 1 `(<4 x i32> %a)` `(<4 x i32> %a, <4 x i32> %b)`
+    ? != g_cpu_dispatch 0
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+aes,+pclmul" {` ) )
+        ( emit `entry:` )
+        ( emit `  %ca.a = bitcast <4 x i32> %a to <2 x i64>` )
+        ? == nargs 2 { ( emit `  %ca.b = bitcast <4 x i32> %b to <2 x i64>` ) } {}
+        ( emit ( nurl_str_cat `  %ca.r = call <2 x i64> ` call ) )
+        ( emit `  %ca.o = bitcast <2 x i64> %ca.r to <4 x i32>` )
+        ( emit `  ret <4 x i32> %ca.o` )
+        ( emit `}` ) }
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline {` ) )
+        ( emit `entry:` )
+        ( emit `  call void @nurl_cpu_aes_missing()` )
+        ( emit `  unreachable` )
+        ( emit `}` ) }
+}
+
+@ emit_crypto_preamble → v {
+    ( emit `declare void @nurl_cpu_aes_missing() noreturn cold` )
+    ? != g_cpu_dispatch 0
+    {  // `readnone`: the runtime answers the same value on every call
+        // (a cache written once), so the optimiser may merge and hoist
+        // the calls — which is what makes the gate cost nothing in a
+        // loop.
+        ( emit `declare i32 @nurl_cpu_x86_aes() readnone nounwind willreturn` )
+        ( emit `declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)` )
+        ( emit `declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)` )
+        ( emit `declare <2 x i64> @llvm.x86.aesni.aesdec(<2 x i64>, <2 x i64>)` )
+        ( emit `declare <2 x i64> @llvm.x86.aesni.aesdeclast(<2 x i64>, <2 x i64>)` )
+        ( emit `declare <2 x i64> @llvm.x86.aesni.aesimc(<2 x i64>)` )
+        ( emit `declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)` )
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_aes() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %ch.a = call i32 @nurl_cpu_x86_aes()` )
+        ( emit `  %ch.b = icmp ne i32 %ch.a, 0` )
+        ( emit `  ret i1 %ch.b` )
+        ( emit `}` )
+        // The entry gate of every crypto-tier function (see above).
+        ( emit `define linkonce_odr void @nurl__aes_gate() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %cg.a = call i32 @nurl_cpu_x86_aes()` )
+        ( emit `  %cg.b = icmp ne i32 %cg.a, 0` )
+        ( emit `  br i1 %cg.b, label %cg.ok, label %cg.no` )
+        ( emit `cg.no:` )
+        ( emit `  call void @nurl_cpu_aes_missing()` )
+        ( emit `  unreachable` )
+        ( emit `cg.ok:` )
+        ( emit `  ret void` )
+        ( emit `}` ) }
+    { ( emit `define linkonce_odr i1 @nurl_cpu_has_aes() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  ret i1 false` )
+        ( emit `}` ) }
+    ( __emit_crypto_prim `nurl_v128_aesenc` 2 `@llvm.x86.aesni.aesenc(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+    ( __emit_crypto_prim `nurl_v128_aesenclast` 2 `@llvm.x86.aesni.aesenclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+    ( __emit_crypto_prim `nurl_v128_aesdec` 2 `@llvm.x86.aesni.aesdec(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+    ( __emit_crypto_prim `nurl_v128_aesdeclast` 2 `@llvm.x86.aesni.aesdeclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+    ( __emit_crypto_prim `nurl_v128_aesimc` 1 `@llvm.x86.aesni.aesimc(<2 x i64> %ca.a)` )
+    ( __emit_crypto_prim `nurl_v128_clmul_ll` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 0)` )
+    ( __emit_crypto_prim `nurl_v128_clmul_hl` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 1)` )
+    ( __emit_crypto_prim `nurl_v128_clmul_lh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 16)` )
+    ( __emit_crypto_prim `nurl_v128_clmul_hh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 17)` )
+}
+
+// Does this function's IR call a hardware crypto primitive?
+@ __ir_uses_crypto s ir → b {
+    ^ | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0
+}
+
+// The crypto tier's function attributes: x86-64-v2 plus AES-NI and
+// PCLMULQDQ — exactly what nurl_cpu_x86_aes tests.
+@ __crypto_tier_attrs → s {
+    ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
+}
+
+// (The two helpers below hand back strings, so they sit above every
+// caller: a string-returning helper defined below its caller has no
+// ownership summary there, and the caller leaks what it returns.)
+// A function's IR up to its body: the `define` line.
+@ __ir_header s ir → s {
+    : i ei ( nurl_str_find ir `\nentry:\n` )
+    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
+    ^ ( nurl_str_slice ir 0 ei )
+}
+
+// The IR name a `define` line declares: `@NAME(`.
+@ __ir_fn_name s ir → s {
+    : i at ( nurl_str_find ir `@` )
+    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s tail ( nurl_str_slice ir + at 1 - ( strlen ir ) + at 1 )
+    : i lp ( nurl_str_find tail `(` )
+    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice tail 0 lp )
+}
+
+// A crypto-tier function's IR: the tier attributes on its define line
+// (before a `!dbg` attachment, which must come last) and, when `gate`,
+// the CPUID gate as the first instruction of its body. emit_hoisted
+// hoists the allocas above it, so the entry block still opens with
+// them.
+//
+// Never `alwaysinline`, which LLVM honours even into a caller compiled
+// WITHOUT the tier — the AES instruction then lands in a baseline
+// function and instruction selection fails (or, worse, a v2 one runs on
+// a CPU without it). A v128 signature asks for it (gen_fn_decl's
+// __fn_vecsig), and so may `inline @`; both become `inlinehint`. The
+// inliner then merges the helper into every caller that has the tier —
+// a `simd` clone, another crypto function — and leaves a gated call in
+// any other. A v128 crosses that call in an XMM register under every
+// feature set, so the ABI concern behind __fn_vecsig does not arise.
+@ __crypto_fn_ir s fn_ir b gate → s {
+    : i ei ( nurl_str_find fn_ir `\nentry:\n` )
+    ? < ei 0 { ^ ( nurl_str_cat fn_ir `` ) } {}
+    : s hdr0 ( nurl_str_slice fn_ir 0 ei )
+    : i ai ( nurl_str_find hdr0 `) alwaysinline` )
+    : s hdr ? >= ai 0 ( nurl_str_cat3 ( nurl_str_slice hdr0 0 + ai 1 ) ` inlinehint` ( nurl_str_slice hdr0 + ai 14 - ei + ai 14 ) ) ( nurl_str_cat hdr0 `` )
+    : i hl ( strlen hdr )
+    : i di ( nurl_str_find hdr ` !dbg ` )
+    // Without an attachment the header ends ` {`.
+    : i at ? >= di 0 di - hl 2
+    : s head ( nurl_str_cat3 ( nurl_str_slice hdr 0 at ) ( __crypto_tier_attrs ) ( nurl_str_slice hdr at - hl at ) )
+    : s rest ( nurl_str_slice fn_ir + ei 8 - ( strlen fn_ir ) + ei 8 )
+    : s gl ? gate `  call void @nurl__aes_gate()\n` ``
+    ^ ( nurl_str_cat4 head `\nentry:\n` gl rest )
+}
+
+// Emit one function's IR with its allocas hoisted. One whose body uses
+// a hardware crypto primitive is compiled for the crypto tier, and held
+// back to the end of the module (flush_simd_deferred) with the `simd`
+// functions: which of its calls can be inlined depends on functions not
+// generated yet.
+@ emit_fn_ir s ir → v {
+    ? & != g_cpu_dispatch 0 ( __ir_uses_crypto ir )
+    { : s nm ( __ir_fn_name ir )
+        ( nurl_sym_def g_crypto_fns nm `1` )
+        : s hdr ( __ir_header ir )
+        : i ai ( nurl_str_find hdr `) alwaysinline` )
+        ? & == g_dbg_enabled 0 >= ai 0
+        { ( nurl_sym_def g_crypto_inl nm `1` ) }
+        {}
+        ( nurl_sym_def g_crypto_defer ( nurl_str_int g_crypto_defer_n ) ir )
+        = g_crypto_defer_n + g_crypto_defer_n 1 }
+    { ( emit_hoisted ir ) }
+}
+
+// `ir` with every call in its BODY to a crypto function that wants
+// inlining (g_crypto_inl) pointed at that function's `.tier` copy.
+// Only a crypto-tier body may call one: the copy is ungated and
+// `alwaysinline`, and the caller's own gate — or its dispatcher — is
+// what makes running it safe.
+unsafe @ __ir_tier_calls s ir → s {
+    : i n ( strlen ir )
+    : i ei ( nurl_str_find ir `\nentry:\n` )
+    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
+    : *u p # *u ir
+    : ~ s out ``
+    : ~ i done 0
+    : ~ i k ei
+    ~ < k n {
+        : i rel ( nurl_memmem_range # s + # i p k - n k `@` 1 )
+        ? < rel 0 { = k n continue } {}
+        : i st + + k rel 1
+        : ~ i e st
+        ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
+        ? & & > e st < e n == 40 # i . p e {
+            : s nm ( nurl_str_slice ir st - e st )
+            ? != 0 ( nurl_sym_len g_crypto_inl nm ) {
+                = out ( nurl_str_cat3 out ( nurl_str_slice ir done - e done ) `.tier` )
+                = done e
+            } {}
+        } {}
+        = k e
+    }
+    ^ ( nurl_str_cat out ( nurl_str_slice ir done - n done ) )
+}
+
+// The `.tier` copy of an inline-wanting crypto function: the same body
+// under `@NAME.tier`, `alwaysinline`, compiled for the tier and NOT
+// gated, as `linkonce_odr` — it goes wherever it is called and is gone
+// once it has been inlined everywhere. The gated original stays for
+// callers outside the tier.
+@ __crypto_tier_copy s ir → s {
+    : i ei ( nurl_str_find ir `\nentry:\n` )
+    : s hdr ( nurl_str_slice ir 0 ei )
+    : s nm ( __ir_fn_name ir )
+    : s pat ( nurl_str_cat3 `@` nm `(` )
+    : i at ( nurl_str_find hdr pat )
+    : i hl ( strlen hdr )
+    // `define ` + linkage: keep one the original already has.
+    : s after ( nurl_str_slice hdr 7 - hl 7 )
+    : b linked | | != 0 ( nurl_str_starts after `linkonce` ) != 0 ( nurl_str_starts after `internal` ) | != 0 ( nurl_str_starts after `private` ) != 0 ( nurl_str_starts after `weak` )
+    : s lk ? linked `` `linkonce_odr `
+    : i past + at ( strlen pat )
+    : s h1 ( nurl_str_cat4 `define ` lk ( nurl_str_slice hdr 7 - at 7 ) ( nurl_str_cat3 `@` nm `.tier(` ) )
+    : s h2 ( nurl_str_slice hdr past - - hl 2 past )
+    : s rest ( nurl_str_slice ir + ei 8 - ( strlen ir ) + ei 8 )
+    ^ ( nurl_str_cat4 ( nurl_str_cat h1 h2 ) ( __crypto_tier_attrs ) ` {\nentry:\n` rest )
+}
+
+// Does this IR call a function of g_crypto_fns — `@NAME(` with NAME in
+// the set?
+unsafe @ __ir_calls_crypto s ir → b {
+    : i n ( strlen ir )
+    : *u p # *u ir
+    : ~ i k 0
+    ~ < k n {
+        : i rel ( nurl_memmem_range # s + # i p k - n k ` @` 2 )
+        ? < rel 0 { ^ F } {}
+        : i st + + k rel 2
+        : ~ i e st
+        ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
+        ? & & > e st < e n == 40 # i . p e {
+            : s nm ( nurl_str_slice ir st - e st )
+            ? != 0 ( nurl_sym_len g_crypto_fns nm ) { ^ T } {}
+        } {}
+        = k e
+    }
+    ^ F
+}
+
+// A `simd` function waits for the end of the module: whether it joins
+// the crypto tier depends on what it calls, and its callees — a library
+// file's functions above all, compiled only once something refers to
+// them — are generated after it. flush_simd_deferred emits it then.
+@ defer_multiversion s fn_ir s lname s ret_ll s params → v {
+    : s k ( nurl_str_int g_simd_defer_n )
+    ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.ir` ) fn_ir )
+    ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.n` ) lname )
+    ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.r` ) ret_ll )
+    ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.p` ) params )
+    = g_simd_defer_n + g_simd_defer_n 1
+}
+
+// Every function is generated: emit the held-back `simd` functions. One
+// joins the crypto tier when its body uses a crypto primitive or calls
+// a function whose body does — the second so that the helpers a kernel
+// is written with inline into its clones (a helper compiled for the
+// tier inlines only into a caller compiled for it). The test is
+// deliberately one call deep: a `simd` function that merely reaches the
+// tier through some ordinary function keeps its baseline clone, so a
+// software path that asks nurl_cpu_has_aes before it calls the
+// hardware one is never gated on the tier itself.
+@ flush_simd_deferred → v {
+    // The crypto-tier functions: each gated, its inline-wanting calls
+    // pointed at `.tier` copies, and a copy of its own if it wants
+    // inlining itself.
+    : ~ i c 0
+    ~ < c g_crypto_defer_n {
+        : s ir ( __ir_tier_calls ( nurl_sym_get g_crypto_defer ( nurl_str_int c ) ) )
+        : s gated ( __crypto_fn_ir ir T )
+        ( emit_hoisted gated )
+        : s nm ( __ir_fn_name ir )
+        ? != 0 ( nurl_sym_len g_crypto_inl nm ) {
+            : s copy ( __crypto_tier_copy ir )
+            ( emit_hoisted copy )
+        } {}
+        = c + c 1
+    }
+    = g_crypto_defer_n 0
+    : ~ i i 0
+    ~ < i g_simd_defer_n {
+        : s k ( nurl_str_int i )
+        : s ir0 ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.ir` ) )
+        : b crypto | ( __ir_uses_crypto ir0 ) ( __ir_calls_crypto ir0 )
+        : s ir ? crypto ( __ir_tier_calls ir0 ) ( nurl_str_cat ir0 `` )
+        ( emit_multiversion ir ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.n` ) )
+        ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.r` ) ) ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.p` ) ) crypto )
+        = i + i 1
+    }
+    = g_simd_defer_n 0
+}
+
 // Register the SIMD + wide-arithmetic primitives in the symbol table,
 // so gen_call knows each one's return type. Kept next to
 // emit_simd_preamble: the two tables must stay in step, exactly as
@@ -52246,6 +52609,17 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
+    ( nurl_sym_def syms `nurl_v128_bswap128` `v128` )
+    ( nurl_sym_def syms `nurl_v128_aesenc` `v128` )
+    ( nurl_sym_def syms `nurl_v128_aesenclast` `v128` )
+    ( nurl_sym_def syms `nurl_v128_aesdec` `v128` )
+    ( nurl_sym_def syms `nurl_v128_aesdeclast` `v128` )
+    ( nurl_sym_def syms `nurl_v128_aesimc` `v128` )
+    ( nurl_sym_def syms `nurl_v128_clmul_ll` `v128` )
+    ( nurl_sym_def syms `nurl_v128_clmul_hl` `v128` )
+    ( nurl_sym_def syms `nurl_v128_clmul_lh` `v128` )
+    ( nurl_sym_def syms `nurl_v128_clmul_hh` `v128` )
+    ( nurl_sym_def syms `nurl_cpu_has_aes` `i1` )
     ( nurl_sym_def syms `nurl_v256_zero` `v256` )
     ( nurl_sym_def syms `nurl_v256_ld` `v256` )
     ( nurl_sym_def syms `nurl_v256_st` `void` )
@@ -52718,6 +53092,7 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  ret i64 %mv.r` )
     ( emit `}` )
     ( emit_simd_preamble )
+    ( emit_crypto_preamble )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i8* @nurl_vec_clone(i8*, ptr, i64) "nurl.raw"="1"` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
@@ -59278,6 +59653,11 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      set, and nurlc emits no target triple, so anything\n` )
     ( nurl_print `                      building for another architecture must pass this\n` )
     ( nurl_print `                      (nurl.sh does it for every non-x86-64 target).\n` )
+    ( nurl_print `                      Also off by default when nurlc runs natively on\n` )
+    ( nurl_print `                      a non-x86-64 host; the hardware crypto tier\n` )
+    ( nurl_print `                      (nurl_v128_aes*, nurl_v128_clmul_*) follows it.\n` )
+    ( nurl_print `  --cpu-dispatch      turn the prefix and the crypto tier on, for an\n` )
+    ( nurl_print `                      x86-64 target built on another host.\n` )
     ( nurl_print `  --split=N           ALSO write the module as up to N independent ones,\n` )
     ( nurl_print `                      so N clang processes can lower them at once (stdout\n` )
     ( nurl_print `                      still carries the whole module either way)\n` )
@@ -59471,10 +59851,20 @@ unsafe @ main → i {
     : ~ b check_only F
     : ~ b options_done F
     : ~ i path_count 0
+    // nurlc emits no target triple, so a native nurlc's IR is compiled
+    // for the host clang runs on — in practice its own. The `simd` clones
+    // and the hardware crypto tier are x86-64 feature sets: on an AArch64
+    // or RISC-V host they start off, as if --no-cpu-dispatch were given
+    // (x86 intrinsics in an AArch64 module are a codegen error, not a
+    // warning), and --cpu-dispatch turns them back on for an x86-64
+    // target built there. A wasm nurlc keeps the native default
+    // (nurl_cpu_dispatch_default, runtime_core.c).
+    ? == 0 ( nurl_cpu_dispatch_default ) { = g_cpu_dispatch 0 } {}
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
         ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}
         ? ( seq a `--` ) { = options_done T = ai + ai 1 continue } {}
+        ? ( seq a `--cpu-dispatch` ) { = g_cpu_dispatch 1 = ai + ai 1 continue } {}
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
@@ -59544,7 +59934,7 @@ unsafe @ main → i {
         = ai + ai 1
     }
     ? | != path_count 1 == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ^ 1 }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ^ 1 }
     {}
     ? & != 0 ( nurl_str_len g_coverage_notes ) == 0 ( nurl_str_len g_coverage_prefix ) {
         ( nurl_eprintln `nurlc: --coverage-notes requires --coverage=PREFIX` ) ^ 2
@@ -59613,6 +60003,12 @@ unsafe @ main → i {
     = g_trait_pending ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )
+    = g_crypto_fns ( nurl_sym_new )
+    = g_crypto_defer ( nurl_sym_new )
+    = g_crypto_defer_n 0
+    = g_crypto_inl ( nurl_sym_new )
+    = g_simd_defer ( nurl_sym_new )
+    = g_simd_defer_n 0
     = g_closure_types ( nurl_sym_new )
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
@@ -59676,6 +60072,7 @@ unsafe @ main → i {
         // buffered IR without copying, indexing, printing or splitting it.
         ( nurl_print_buf_unwind )
     } {
+        ( flush_simd_deferred )
         : s __mod ( nurl_print_buf_stop )
         ? != g_dbg_enabled 0 { ( nurl_print_buf_start ) } {}
         ? != 0 ( nurl_str_len g_coverage_prefix ) {

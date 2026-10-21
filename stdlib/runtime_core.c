@@ -3749,8 +3749,21 @@ long long nurl_umulhi(long long a, long long b) {
  * that links against nolibc on a freestanding target, which has neither
  * — and the MSVC linker has neither either, so the first version of
  * this broke the unikernel symbol gate and the Windows build at once.
- * Four instructions inline owe nobody anything. */
+ * Four instructions inline owe nobody anything.
+ *
+ * The same probe answers the crypto tier (nurl_cpu_x86_aes below):
+ * x86-64-v2 plus AES-NI and PCLMULQDQ, the feature set nurlc compiles
+ * every function that uses a hardware crypto primitive with.
+ *
+ * Two environment variables can only ever take an answer AWAY, never
+ * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0
+ * and NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes. They exist so
+ * one machine can run every clone and every fallback a marked function
+ * has — the baseline clone, the AES clone without AVX2, the software
+ * path a program takes on a CPU with no AES-NI at all — rather than
+ * only the one its own CPUID picks. */
 static int nurl__cpu_v3 = -1;
+static int nurl__cpu_aes = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -3770,7 +3783,21 @@ static unsigned long long nurl__xcr0(void) {
     return ((unsigned long long)hi << 32) | lo;
 }
 
-static void nurl__cpu_detect(void) {
+/* x86-64-v2 (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B — the
+ * leaf-1 ECX bits 0, 9, 19, 20, 23, 13) plus AES-NI (25) and PCLMULQDQ
+ * (1). All of it is SSE-state, which every x86-64 OS saves, so unlike
+ * the v3 answer there is no XCR0 promise to check. */
+static int nurl__cpu_aes_detect(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 1) return 0;
+    nurl__cpuid(1, 0, r);
+    const unsigned need = (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) |
+                          (1u << 19) | (1u << 20) | (1u << 23) | (1u << 25);
+    return (r[2] & need) == need;
+}
+
+static void nurl__cpu_v3_detect(void) {
     unsigned r[4];
     nurl__cpuid(0, 0, r);
     if (r[0] < 7) { nurl__cpu_v3 = 0; return; }
@@ -3794,9 +3821,22 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_v3 = ((ebx7 & (1u << 5)) && (ebx7 & (1u << 8))) ? 1 : 0;
 }
 
+static int nurl__cpu_env_off(const char *name) {
+    const char *e = getenv(name);
+    return e && e[0] == '0' && e[1] == '\0';
+}
+
+static void nurl__cpu_detect(void) {
+    nurl__cpu_v3_detect();
+    int aes = nurl__cpu_aes_detect();
+    if (nurl__cpu_env_off("NURL_CPU_V3")) nurl__cpu_v3 = 0;
+    if (nurl__cpu_env_off("NURL_CPU_AES")) aes = 0;
+    nurl__cpu_aes = aes;
+}
+
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; }
 
 #endif
 
@@ -3809,6 +3849,47 @@ __attribute__((constructor)) static void nurl__cpu_ctor(void) {
 int nurl_cpu_x86_v3(void) {
     if (nurl__cpu_v3 < 0) nurl__cpu_detect();
     return nurl__cpu_v3;
+}
+
+/* Does this CPU have the crypto tier — x86-64-v2 + AES-NI + PCLMULQDQ?
+ *
+ * The predicate behind the hardware crypto primitives (nurl_v128_aes*,
+ * nurl_v128_clmul_*): nurlc compiles every function that uses one with
+ * exactly this feature set, gates each such function's entry on this
+ * answer, and lets a `simd` function's dispatcher pick its AES clones
+ * with it. nurlc declares it `readnone`: it always returns the same
+ * value, so the optimiser may merge and hoist the gate — the cache
+ * write on a first, lazy call is invisible to the module. */
+int nurl_cpu_x86_aes(void) {
+    if (nurl__cpu_aes < 0) nurl__cpu_detect();
+    return nurl__cpu_aes;
+}
+
+/* The gate's failure path: a function compiled for the crypto tier was
+ * entered on a CPU without it. A panic rather than the SIGILL the first
+ * AES instruction would raise — and recoverable like any other. A
+ * program that wants a software path asks nurl_cpu_has_aes first. */
+void nurl_cpu_aes_missing(void) {
+    nurl_panic("this function needs AES-NI and PCLMULQDQ (x86-64-v2 + AES), "
+               "which this CPU lacks; check nurl_cpu_has_aes before calling it");
+    abort();
+}
+
+/* Should nurlc start with CPU dispatch on? nurlc asks it of itself: it
+ * emits no target triple, so the IR a NATIVE nurlc writes is compiled
+ * for the host clang runs on — in practice its own — and both the `simd`
+ * clones and the hardware crypto tier are x86-64 feature sets, which on
+ * an AArch64 or RISC-V host must start switched off (an x86 intrinsic in
+ * an AArch64 module is a codegen error). A wasm nurlc is not compiling
+ * for the machine it runs on at all — its output goes wherever the
+ * native compiler's would, and must match it byte for byte
+ * (unikernel/tests/wasmc_gate.sh) — so it keeps the native default. */
+long long nurl_cpu_dispatch_default(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 /* 1 when a NURL v128 lowers to real 128-bit vector registers — SSE2 on

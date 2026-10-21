@@ -384,6 +384,10 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
             switch ($tok) {
                 'live'     { if ($EnableLive     -ne '1') { $skip = $true } }
                 'fibers'   { if ($EnableFibers   -ne '1') { $skip = $true } }
+                # The hardware crypto tier (AES-NI + PCLMULQDQ): every
+                # x64 Windows host this runs on has it; NURL_CPU_AES=0
+                # turns it off here as it does in the runtime.
+                'cpu-aes'  { if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -or $env:NURL_CPU_AES -eq '0') { $skip = $true } }
                 'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
                 # Anything else names an external command the test shells
                 # out to. Absent tool → skip, so a stripped host degrades
