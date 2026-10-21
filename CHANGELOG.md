@@ -120,6 +120,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closure capturing a struct with a `% Drop` field, handed to a call,
+  no longer cuts the function off (#67).** The env's drop asked for the
+  struct's field-by-field drop, and the compiler printed that `define` in
+  the middle of the function it was writing: the module held the function
+  up to the capture and nothing after it (nurlc exited 0; clang rejected
+  the IR). The drop is queued for module end. Test:
+  `closure_capture_drop_field_handed_on.nu`.
 - **A positive thread-safety marker is `unsafe` outside the standard
   library (h318; grammar v2.11).** `% Send T { }` and `% Sync T { }` stop
   the Send/Sync derivation at `T` and turn off the frozen-view check

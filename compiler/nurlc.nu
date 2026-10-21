@@ -37733,7 +37733,12 @@ unsafe @ __l2n_list s lst → s {
             : s ht ( nurl_llty ovt )
             : s hm ( __drop_mangle ovt )
             ( __handle_drop_ensure ovt )
-            ( gen_drop_for_type ovt syms )
+            // Its drop graph is emitted at module end: this runs while a
+            // function's body is being written, and a `define` printed here
+            // landed inside it — the rest of the function was cut off (a
+            // struct with a `% Drop` field captured by a closure that a call
+            // was handed: the module had no more of `main`).
+            ( queue_drop_for_type ovt )
             : s k ( nurl_str_cat `o` ( nurl_str_int ofi ) )
             : s vfi ( nurl_str_int ( __word_pos captured_vars ov ) )
             : s fg ( nurl_str_cat4 `  %f` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` ( nurl_str_int ofi ) `\n` ) ) )
