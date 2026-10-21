@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.17.7] — 2026-10-21
+
+### Fixed
+
+- **Uploading from a frozen buffer was refused.** The foreign declarations that only READ host
+  memory — `cuMemcpyHtoD_v2` / `cuMemcpyHtoDAsync_v2`'s source, `wgpu_upload`'s host buffer,
+  `nurl_peek_i32` / `nurl_peek_f32`'s base — did not say so, and an unmarked `*u` is taken to be
+  written through. So `gpu_upload`, and every upload built on it (gpukit's
+  `gk_dbuf_upload_bytes`), counted as changing its host argument, and the borrow checker
+  refused an upload from an Arc's payload — a mapped checkpoint's tensor bytes — as a write to
+  frozen memory: lingbot-map and map-anything stopped compiling. They are marked `in` now.
+- `gpu_host_fill_f32 n fill`: `n` f32 cells, written by `fill` before the buffer becomes a
+  `GpuHost`. A GpuHost's memory is the payload of the Arc its copies share, so writing through
+  `gpu_host_f32`'s view of one is refused as a change to frozen memory; this builds the value
+  first and wraps it whole.
+
 ## [0.17.6] — 2026-10-16
 
 - **Fixed: every WebGPU build failed at run time** ("no WGSL kernel named gk32_gemm_tiled__gk…") since gpukit's kernels became checked kernels. The WGSL set (`web/kernels_wgsl.js`) still held the raw kernels' names and parameter lists. Its entries are now keyed by a checked kernel's base name (the entry name without its `__gk<16 hex>` suffix; on a fixed kernel set a base name is one kernel), their `sig` is the checked parameter list — each buffer as `__gk_p<k>` and its length `__gk_n<k>`, then the scalars, then `__gk_end` — and a new `names` field gives each buffer's WGSL name, the binding the kernel's source reads it by. `const T* __restrict__` and `double` (a scalar's bits, rounded to f32) marshal; `resolve(name)` finds an entry. onnx's `tests/wgsl_census_test.nu` checks names, signatures and base-name uniqueness against the census, and tiny.onnx, tinyyolov2 (bit for bit) and yoloe-v8s-seg run on WebGPU against the native output.

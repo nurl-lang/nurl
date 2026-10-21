@@ -22,7 +22,7 @@ $ `deps/onnx/src/runtime.nu`
 $ `image.nu`
 $ `decode.nu`
 
-& `c` @ nurl_peek_f32 *u base i idx → f
+& `c` @ nurl_peek_f32 in *u base i idx → f
 
 @ p s m → v { ( nurl_print m ) }
 

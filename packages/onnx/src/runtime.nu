@@ -1247,11 +1247,14 @@ $ `stdlib/std/floatbits.nu`
 // Download a tensor into a fresh host buffer — a GpuHost, released with
 // its last owner (`gpu_host_get_f32` / `gpu_host_f32` read it). The tensor
 // owns its device block, so one from an earlier run reads what that run
-// computed; one with no buffer comes back empty.
+// computed; one with no buffer comes back empty. The bytes go straight
+// into the pinned block (gk_dbuf_download_host): a GpuHost's memory is
+// owned through an Arc, so writing it through a `( Slice u )` view of the
+// payload is a change to frozen memory, which the borrow checker refuses.
 @ rt_download Engine h RTensor t → GpuHost {
     : i n ? ( gk_buf_ok . t buf ) * ( gk_buf_len . t buf ) ( gk_buf_esz . t buf ) 0
     : GpuHost host ( gpu_host_alloc n )
-    ? > n 0 { : b _ok ( gk_dbuf_download_bytes . h kit . t buf ( gpu_host_u8 host ) ) } {}
+    ? > n 0 { : b _ok ( gk_dbuf_download_host . h kit . t buf host ) } {}
     ^ host
 }
 

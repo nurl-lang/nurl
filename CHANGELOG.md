@@ -120,6 +120,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Seven packages compile again (agora #69).** The borrow checker's
+  frozen-Arc and closure-capture rules refused lingbot-map, map-anything,
+  onnx (and through it yoloe, yoloe-demo, objdet) and benchmark, with
+  nothing in CI compiling packages to notice. Fixed where each is wrong:
+  - gpu 0.17.7: the foreign functions that only read host memory
+    (`cuMemcpyHtoD*`'s source, `wgpu_upload`'s, `nurl_peek_*`'s base) are
+    declared `in *u`. Unmarked, a `*u` is written through, so every upload
+    counted as changing its source and an upload from a mapped checkpoint
+    (an Arc's payload) was a "write to frozen memory".
+  - A GpuHost's memory is an Arc's payload, so filling one through
+    `gpu_host_f32`'s view is a genuine write to shared memory: gpu's new
+    `gpu_host_fill_f32` fills the cells before the buffer is wrapped
+    (yoloe, objdet), and onnx's `rt_download` downloads straight into the
+    buffer (`gk_dbuf_download_host`).
+  - benchmark takes the view of the Vec `sort_by` changes inside the timed
+    closure, not beside it.
+
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key
   and digest went through `bigint_from_bytes_be` / `bigint_rem` /

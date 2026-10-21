@@ -54,7 +54,7 @@ $ `image.nu`
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
-& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_peek_i32 in *u base i idx → i32
 
 // Pointers (Display*, GC, XImage*) carried as i64; w/h the frame size. The
 // pixel buffer the XImage points at is the window's own Vec.

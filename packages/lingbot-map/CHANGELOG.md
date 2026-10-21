@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.3] — 2026-10-21
+
+### Fixed
+
+- Requires gpukit 0.11.13 (gpu 0.17.7): loading the checkpoint uploads tensor bytes
+  straight from the mapped file, which the borrow checker refused as a write to an Arc's
+  payload until gpu declared its upload path read-only. Compiles again.
+
 ## [0.12.2] — 2026-10-21
 
 ### Fixed

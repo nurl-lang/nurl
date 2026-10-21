@@ -60,7 +60,7 @@ $ `stdlib/std/floatbits.nu`
 
 & `cuda` @ cuMemFree_v2 i dptr → i32
 
-& `cuda` @ cuMemcpyHtoD_v2 i dst *u src i n → i32
+& `cuda` @ cuMemcpyHtoD_v2 i dst in *u src i n → i32
 
 & `cuda` @ cuMemcpyDtoH_v2 *u dst i src i n → i32
 
@@ -74,7 +74,7 @@ $ `stdlib/std/floatbits.nu`
 
 & `cuda` @ cuMemHostUnregister *u p → i32
 
-& `cuda` @ cuMemcpyHtoDAsync_v2 i dst *u src i n i stream → i32
+& `cuda` @ cuMemcpyHtoDAsync_v2 i dst in *u src i n i stream → i32
 
 & `cuda` @ cuStreamSynchronize i stream → i32
 
@@ -136,14 +136,14 @@ $ `stdlib/std/floatbits.nu`
 // ── typed 4-byte buffer accessors (runtime.c, always linked) ──────
 // f32 / i32 arrays are the native GPU element layout; the stock 8-byte
 // nurl_peek/poke can't address them at their natural stride.
-& `c` @ nurl_peek_f32 *u base i idx → f
+& `c` @ nurl_peek_f32 in *u base i idx → f
 
 & `c` @ nurl_poke_f32 *u base i idx f val → v
 // nurl_peek_i32 returns a C `int` and nurl_poke_i32 takes a C `int` value —
 // both 32-bit. Declaring them with i64 (`i`) worked on LP64 native (the ABI
 // register ignores the high bits) but is a hard signature mismatch on wasm,
 // where wasm-ld then replaces the caller with an `unreachable` stub.
-& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_peek_i32 in *u base i idx → i32
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 

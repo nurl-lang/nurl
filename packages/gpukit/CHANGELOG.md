@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.13] — 2026-10-21
+
+### Fixed
+
+- Requires gpu 0.17.7: `gk_dbuf_upload_bytes` from an Arc's payload (a mapped checkpoint's
+  bytes) compiles again — gpu's upload path declares that it only reads its host argument.
+
 ## [0.11.12] — 2026-10-16
 
 - **A record's scalars and block count can change between replays.** `gk_launch_set_i64 rec name x` and `gk_launch_set_f64` give a recorded launch's scalar a new value, and `gk_launch_set_blocks rec n` its block count. A decoder records its step once and replays it with the step's position, where every scalar change used to mean a fresh checked launch. Only scalars can be set: a buffer's words are not names a record answers to, and any scalar value is safe because every index the kernel forms from it is still checked against the buffers the record holds.
