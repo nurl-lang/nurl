@@ -1,5 +1,7 @@
 COMPILE FAIL
 ERRORS
-in function main: error: a borrowed 'Res' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+compiler/tests/diag_match_lent_uncopyable_payload_out.nu:16:34: error: a borrowed 'Res' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+    : Res q ?? . h o { T r → { r } F _ → { @ Res { ( vec_new [i] ) } } }
+                                 ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

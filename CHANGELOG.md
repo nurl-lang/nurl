@@ -120,6 +120,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The last diagnostics without a file are located (agora #70).** Three
+  checks printed `cycle collection: error: …`, `thread-shared cycle:
+  error: …` and `in function f: error: …`, with no file, line, column,
+  echoed line or caret. A library handle with a `_drop` and no `_trace`
+  is reported at its `_drop`'s declaration; `arc_set` / `arc_ptr` on an
+  Arc that can close a cycle at the check in the instantiated template,
+  with the instantiation and its call site in the bracketed context; a
+  borrowed value that cannot be copied at the statement that would copy
+  it — also when the decision is made at module end (a callee's store
+  flag), from the position parked with it.
+
 - **Seven packages compile again (agora #69).** The borrow checker's
   frozen-Arc and closure-capture rules refused lingbot-map, map-anything,
   onnx (and through it yoloe, yoloe-demo, objdet) and benchmark, with
