@@ -1825,7 +1825,9 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
  * (nurl_tcp_connect_ms, nurl__resolve) never read errno themselves:
  * every errno read happens in a noinline helper that does not park
  * (nurl__connect_start / nurl__connect_finish) and comes back as a
- * plain value. */
+ * plain value. (runtime_core.c now re-derives errno's address on every
+ * access anyway — tools/check_errno_fiber_safe.sh — so this is the
+ * belt to that brace.) */
 
 #define NURL_RESOLVE_TIMEOUT (-100000)  /* nurl__resolve: deadline passed */
 

@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **errno can no longer be read on the wrong thread after a fiber park.**
+  errno is a thread-local behind a `const` accessor, so the optimiser may
+  compute its address once per function and reuse it; with the runtime
+  inlined into NURL code that parks (read → EAGAIN → park → read), a
+  fiber resumed on another worker would read the old thread's errno.
+  Not observed in today's binaries (a scan of every corpus binary found
+  no function that both computes errno's address and parks before using
+  it), but nothing guaranteed it. Every errno access in the runtime now
+  goes through a volatile function pointer the optimiser cannot merge or
+  hoist; `tools/check_errno_fiber_safe.sh` (CI) fails if a direct
+  accessor call reappears.
+
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
   closed the fd outside the netpoller lock; a fiber parking on the

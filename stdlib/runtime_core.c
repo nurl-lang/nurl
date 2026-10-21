@@ -61,6 +61,26 @@
 #include <stddef.h>
 #include <sys/stat.h>
 #include <errno.h>
+/* errno, re-derived on every access. errno is a thread-local, and libc
+ * declares its accessor `const` (glibc/musl `__errno_location`, Apple and
+ * FreeBSD `__error`), so the compiler may compute its address once per
+ * function — hoisted out of a loop, merged across calls. A fiber can
+ * suspend on one worker thread and resume on another, and the runtime is
+ * LTO bitcode inlined into NURL code that parks (tcp_read_chunk_async:
+ * read → EAGAIN → park → read again): the reused address then reads the
+ * OLD thread's errno, an EAGAIN misread as a dead socket or the other way
+ * round. Every errno access in this translation unit therefore calls
+ * through a volatile function pointer — an indirect call the optimiser
+ * can neither merge nor hoist, so the address is computed on the thread
+ * the access runs on. Error paths only, so the extra load is free;
+ * tools/check_errno_fiber_safe.sh checks no direct accessor call is left.
+ * No fibers on Windows or WASI, and both spell errno differently. */
+#if !defined(_WIN32) && !defined(__wasi__)
+static int *nurl__errno_addr(void) { return &errno; }
+static int *(*volatile nurl__errno_fn)(void) = nurl__errno_addr;
+#  undef errno
+#  define errno (*nurl__errno_fn())
+#endif
 #include <math.h>
 #include <time.h>
 #ifndef __wasi__
