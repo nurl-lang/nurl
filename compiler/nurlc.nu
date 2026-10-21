@@ -381,14 +381,15 @@ unsafe @ __import_hint s name b is_type → s {
 // whose records keep only a line, pass col 0: the column is then the
 // line's first non-blank character — the STATEMENT's start, the anchor
 // die_stmt and bck_emit_error use when the token itself is not kept.
-@ die_file_pos s file i line i col s msg → v {
+unsafe @ die_file_pos s file i line i col s msg → v {
     : s src ( compiler_read_source file )
     : s lt ? != 0 ( nurl_str_len src ) ( __src_line_text src ( nurl_str_len src ) line ) ``
     : ~ i c col
     ? <= c 0 {
         : i ln ( nurl_str_len lt )
+        : *u lp # *u lt
         : ~ i k 0
-        ~ & < k ln | == ( nurl_str_get lt k ) 32 == ( nurl_str_get lt k ) 9 { = k + k 1 }
+        ~ & < k ln | == ( nurl_str_at lp ln k ) 32 == ( nurl_str_at lp ln k ) 9 { = k + k 1 }
         = c + k 1
     } {}
     : s loc ( nurl_str_cat4 file `:` ( nurl_str_int line ) ( nurl_str_cat `:` ( nurl_str_int c ) ) )
@@ -50523,11 +50524,13 @@ u` ) ( nurl_print q ) ( nurl_print `:
 // (g_fn_pos_syms, "file:line", the generic's under `<name>__g`), the
 // column that line's first non-blank. `what` stands in for a location
 // only when the function was never declared in source.
-@ __die_at_fn s fname s what s msg → v {
+unsafe @ __die_at_fn s fname s what s msg → v {
     : ~ s pos ( nurl_sym_get g_fn_pos_syms fname )
     ? == 0 ( nurl_str_len pos ) { = pos ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat fname `__g` ) ) } {}
-    : ~ i k - ( nurl_str_len pos ) 1
-    ~ & >= k 0 != ( nurl_str_get pos k ) 58 { = k - k 1 }
+    : i pn ( nurl_str_len pos )
+    : *u pp # *u pos
+    : ~ i k - pn 1
+    ~ & >= k 0 != ( nurl_str_at pp pn k ) 58 { = k - k 1 }
     ? < k 1 { ( die_at what msg ) ^ } {}
     ( die_file_pos ( nurl_str_slice pos 0 k ) ( nurl_str_to_int ( nurl_str_slice pos + k 1 - - ( nurl_str_len pos ) k 1 ) ) 0 msg )
 }
