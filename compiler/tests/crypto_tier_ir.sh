@@ -23,6 +23,11 @@
 #  (emit_vabi). Last, AES-GCM's wide kernels must exist as VAES machine
 #  code and agree with the software oracle with each tier taken away.
 #
+#  First, on every host, the AArch64 lowering of the AES tier (section
+#  A): its IR and machine code, and — natively on an AArch64 host, or
+#  under qemu-aarch64 where there is one — simd_crypto, aes_gcm_hw_agree
+#  and aes_gcm_vectors against the goldens the x86 lowering is held to.
+#
 #  Every assertion greps for a POSITIVE marker and counts it.
 #
 #  Exit 0 iff every assertion holds.
@@ -37,13 +42,6 @@ SRC="$SCRIPT_DIR/simd_crypto.nu"
 [ -x "$NURLC" ] || { echo "crypto_tier_ir: $NURLC not found — run ./build.sh" >&2; exit 2; }
 [ -f "$SRC" ] || { echo "crypto_tier_ir: $SRC missing" >&2; exit 2; }
 
-# The tier is an x86-64 feature set; elsewhere nurlc starts with it off
-# and there is nothing to check but the stubs — skip loudly.
-case "$(uname -m)" in
-    x86_64|amd64) ;;
-    *) echo "crypto_tier_ir: skipped — $(uname -m) has no crypto tier"; exit 0 ;;
-esac
-
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fails=0
@@ -52,7 +50,176 @@ note() { printf '  %-56s %s\n' "$1" "$2"; }
 bad() { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 ok() { note "$1" "ok ($2)"; }
 
+CLANG="${CLANG:-clang}"
+HOST_ARCH="$(uname -m)"
 cd "$ROOT" || exit 2
+
+# ── A. The AArch64 lowering (any host) ──────────────────────────────
+# `--target=aarch64`: the same primitives on the ARMv8 Cryptographic
+# Extension — AESE / AESD with a zero key then AESMC / AESIMC and the
+# round key XORed after (Intel's round order), PMULL / PMULL2 on the
+# selected halves — under the same contract: a tier function compiled
+# with `+aes` and gated on nurl_cpu_arm_aes, its `.tier` copy what other
+# tier code calls, a `simd` function that reaches the tier emitted once
+# for it (there are no x86 clones on AArch64). Checked in the IR and the
+# machine code on every host; run natively on an AArch64 one, and under
+# qemu-aarch64 on an x86-64 one that has it and an aarch64 sysroot —
+# against the same goldens the x86 lowering is held to.
+a64_checks() {
+    local A64='"target-features"="+neon,+aes"'
+    "$NURLC" --target=aarch64 "$SRC" > "$WORK/a64.ll" 2> "$WORK/a64.err" || {
+        bad "aarch64: simd_crypto compiles" "$(head -2 "$WORK/a64.err")"; return; }
+    local n_x86
+    n_x86=$(grep -c 'llvm\.x86\.' "$WORK/a64.ll")
+    if [ "$n_x86" -eq 0 ] && grep -q 'llvm\.aarch64\.crypto\.aese' "$WORK/a64.ll" &&
+            grep -q 'llvm\.aarch64\.neon\.pmull64' "$WORK/a64.ll"; then
+        ok "aarch64: AESE / PMULL intrinsics, no x86 ones" "0 llvm.x86"
+    else
+        bad "aarch64: AESE / PMULL intrinsics, no x86 ones" "$n_x86 llvm.x86"
+    fi
+    local hdr body
+    hdr=$(grep -E '^define .*@__nurl_fn\.next_key[a-z0-9_]*\(' "$WORK/a64.ll" | head -1)
+    body=$(awk -v h="$hdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/a64.ll")
+    case "$hdr" in *inlinehint*"$A64"*) ok "aarch64: next_key compiled for the tier" "+neon,+aes, inlinehint" ;;
+        *) bad "aarch64: next_key compiled for the tier" "header: ${hdr:0:120}" ;; esac
+    if printf '%s\n' "$body" | grep -q 'call void @nurl__aes_gate()' &&
+            grep -A3 '^define linkonce_odr void @nurl__aes_gate()' "$WORK/a64.ll" | grep -q '@nurl_cpu_arm_aes()'; then
+        ok "aarch64: gated on nurl_cpu_arm_aes" "nurl__aes_gate"
+    else
+        bad "aarch64: gated on nurl_cpu_arm_aes" "no gate, or the gate asks something else"
+    fi
+    local n_cl ehdr ebody
+    n_cl=$(grep -cE '^define .*@__nurl_fn\.encrypt[a-z0-9_]*\.(base|x86v3)\(' "$WORK/a64.ll")
+    ehdr=$(grep -E '^define .*@__nurl_fn\.encrypt[a-z0-9_]*\(' "$WORK/a64.ll" | head -1)
+    ebody=$(awk -v h="$ehdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/a64.ll")
+    if [ "$n_cl" -eq 0 ] && case "$ehdr" in *"$A64"*) true ;; *) false ;; esac &&
+            printf '%s\n' "$ebody" | grep -qE '@__nurl_fn\.aes_round[a-z0-9_]*\.tier\(' &&
+            printf '%s\n' "$ebody" | grep -q 'call void @nurl__aes_gate()'; then
+        ok "aarch64: simd encrypt is one gated tier body" "calls aes_round.tier"
+    else
+        bad "aarch64: simd encrypt is one gated tier body" "clones=$n_cl header: ${ehdr:0:100}"
+    fi
+    # (Unreferenced preamble functions are dropped: ask for all of it.)
+    "$NURLC" --target=aarch64 --no-dce "$SRC" > "$WORK/a64.all.ll" 2>/dev/null
+    if grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_vaes()' "$WORK/a64.all.ll" | grep -q 'ret i1 false' &&
+            grep -A3 '^define linkonce_odr <4 x i64> @nurl_v256_aesenc(' "$WORK/a64.all.ll" | grep -q 'call void @nurl_cpu_vaes_missing()'; then
+        ok "aarch64: no VAES tier" "has_vaes false, v256 primitives stubs"
+    else
+        bad "aarch64: no VAES tier" "nurl_cpu_has_vaes or nurl_v256_aesenc is not the stub"
+    fi
+    # Machine code. The round key must have moved into the AESE (LLVM
+    # folds `aese(x ^ k, 0)`): the ARM-shaped sequence, not one EOR a
+    # round beside a zero-keyed AESE.
+    local cross=""
+    case "$HOST_ARCH" in aarch64|arm64) ;; *) cross="--target=aarch64-linux-gnu" ;; esac
+    local OBJDUMP=""
+    if command -v llvm-objdump >/dev/null 2>&1; then OBJDUMP=llvm-objdump
+    elif [ -z "$cross" ] && command -v objdump >/dev/null 2>&1; then OBJDUMP=objdump; fi
+    # shellcheck disable=SC2086
+    if [ -n "$OBJDUMP" ] && "$CLANG" $cross -O2 -Wno-override-module -c "$WORK/a64.ll" -o "$WORK/a64.o" 2>"$WORK/a64.cerr"; then
+        local dis n_aese n_mc n_eor n_pm
+        dis=$("$OBJDUMP" -d "$WORK/a64.o" 2>/dev/null |
+            awk '/^[0-9a-f]+ <[^>]*encrypt[a-z0-9_]*>:/{p=1} /^$/{p=0} p')
+        n_aese=$(printf '%s\n' "$dis" | grep -cE '\baese\b')
+        n_mc=$(printf '%s\n' "$dis" | grep -cE '\baesmc\b')
+        n_eor=$(printf '%s\n' "$dis" | grep -cE '\beor\b')
+        if [ "$n_aese" -gt 0 ] && [ "$n_mc" -gt 0 ] && [ "$n_eor" -lt "$n_aese" ]; then
+            ok "aarch64: encrypt lowers to AESE + AESMC, keys folded" "$n_aese aese, $n_mc aesmc, $n_eor eor"
+        else
+            bad "aarch64: encrypt lowers to AESE + AESMC, keys folded" "$n_aese aese, $n_mc aesmc, $n_eor eor"
+        fi
+        n_pm=$("$OBJDUMP" -d "$WORK/a64.o" 2>/dev/null | grep -cE '\bpmull2?\b')
+        if [ "$n_pm" -gt 0 ]; then ok "aarch64: the products lower to PMULL" "$n_pm"
+        else bad "aarch64: the products lower to PMULL" "none"; fi
+    else
+        note "aarch64 machine-code checks" "skipped (no aarch64-capable clang / objdump)"
+    fi
+    # Run it: natively, or under qemu-aarch64.
+    local runner="" link_ok=0 qemu=""
+    case "$HOST_ARCH" in
+        aarch64|arm64)
+            if "$CLANG" -O2 -flto -Wno-override-module "$WORK/a64.ll" "$ROOT/stdlib/runtime.o" \
+                    -o "$WORK/a64" -lm -lpthread 2>/dev/null; then link_ok=1; fi ;;
+        *)
+            for q in qemu-aarch64-static qemu-aarch64; do
+                command -v "$q" >/dev/null 2>&1 && { qemu="$q"; break; }
+            done
+            local sys="${NURL_A64_SYSROOT:-/usr/aarch64-linux-gnu}"
+            if [ -n "$qemu" ] && [ -d "$sys/lib" ] && command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 &&
+                    "$CLANG" --target=aarch64-linux-gnu --sysroot="$sys" -O2 -c "$ROOT/stdlib/runtime.c" \
+                        -o "$WORK/rt64.o" 2>/dev/null; then
+                runner="$qemu -cpu max -L $sys"
+                a64_link() {  # a64_link <ll> <out>
+                    "$CLANG" --target=aarch64-linux-gnu -O2 -Wno-override-module -c "$1" -o "$1.o" 2>/dev/null &&
+                        aarch64-linux-gnu-gcc "$1.o" "$WORK/rt64.o" -o "$2" -lm -lpthread -ldl 2>/dev/null
+                }
+                a64_link "$WORK/a64.ll" "$WORK/a64" && link_ok=1
+            fi ;;
+    esac
+    if [ "$link_ok" -ne 1 ]; then
+        note "aarch64 runtime checks" "skipped (not an AArch64 host, and no qemu-aarch64 + aarch64 sysroot)"
+        return
+    fi
+    local want got rc
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/simd_crypto.txt" | tail -n +2)
+    # shellcheck disable=SC2086
+    got=$($runner "$WORK/a64" 2>&1)
+    if [ "$got" = "$want" ]; then ok "aarch64: simd_crypto agrees with the x86 golden" "${runner:+under qemu-aarch64}${runner:-natively}"
+    else bad "aarch64: simd_crypto agrees with the x86 golden" "${got:0:80}"; fi
+    # shellcheck disable=SC2086
+    got=$(NURL_CPU_AES=0 $runner "$WORK/a64" 2>&1); rc=$?
+    if [ "$rc" -eq 1 ] && [ "$got" = "no crypto tier on this CPU" ]; then
+        ok "aarch64 NURL_CPU_AES=0: nurl_cpu_has_aes answers false" "software branch"
+    else bad "aarch64 NURL_CPU_AES=0: nurl_cpu_has_aes answers false" "exit $rc: ${got:0:80}"; fi
+    # And a program that does not ask reaches the gate: a panic naming
+    # the ARM extension, not SIGILL.
+    sed 's/^    ? ! ( nurl_cpu_has_aes ).*$//' "$SRC" > "$WORK/a64gate.nu"
+    if "$NURLC" --target=aarch64 "$WORK/a64gate.nu" > "$WORK/a64gate.ll" 2>/dev/null &&
+            if [ -n "$runner" ]; then a64_link "$WORK/a64gate.ll" "$WORK/a64gate"
+            else "$CLANG" -O2 -flto -Wno-override-module "$WORK/a64gate.ll" "$ROOT/stdlib/runtime.o" \
+                    -o "$WORK/a64gate" -lm -lpthread 2>/dev/null; fi; then
+        # shellcheck disable=SC2086
+        got=$(NURL_CPU_AES=0 $runner "$WORK/a64gate" 2>&1); rc=$?
+        if [ "$rc" -ne 0 ] && printf '%s' "$got" | grep -q 'ARMv8 Cryptographic Extension'; then
+            ok "aarch64 NURL_CPU_AES=0: an unasked call panics at the gate" "exit $rc"
+        else bad "aarch64 NURL_CPU_AES=0: an unasked call panics at the gate" "exit $rc: ${got:0:80}"; fi
+    else
+        bad "aarch64 NURL_CPU_AES=0: an unasked call panics at the gate" "could not build the probe"
+    fi
+    # AES-GCM's eight-block kernel on the ARM instructions, against the
+    # software oracle and the NIST vectors — the goldens x86 is held to.
+    local t
+    for t in aes_gcm_hw_agree aes_gcm_vectors; do
+        if "$NURLC" --target=aarch64 "$SCRIPT_DIR/$t.nu" > "$WORK/$t.ll" 2>/dev/null &&
+                if [ -n "$runner" ]; then a64_link "$WORK/$t.ll" "$WORK/$t"
+                else "$CLANG" -O2 -flto -Wno-override-module "$WORK/$t.ll" "$ROOT/stdlib/runtime.o" \
+                        -o "$WORK/$t" -lm -lpthread 2>/dev/null; fi; then
+            want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/$t.txt" | tail -n +2)
+            # shellcheck disable=SC2086
+            got=$(cd "$SCRIPT_DIR" && $runner "$WORK/$t" 2>&1)
+            if [ "$got" = "$want" ]; then ok "aarch64: $t agrees with its golden" "hardware path"
+            else bad "aarch64: $t agrees with its golden" "${got:0:80}"; fi
+        else
+            bad "aarch64: $t builds" "nurlc or the link failed"
+        fi
+    done
+}
+a64_checks
+
+# The x86 tiers are x86-64 feature sets: on any other host the rest has
+# nothing to run — the AArch64 checks above were the ones for it.
+case "$HOST_ARCH" in
+    x86_64|amd64) ;;
+    *)
+        echo ""
+        if [ "$fails" -eq 0 ]; then
+            echo "crypto_tier_ir: AArch64 assertions passed ($HOST_ARCH host: no x86 tiers to check)"
+            exit 0
+        fi
+        echo "crypto_tier_ir: $fails assertion(s) FAILED"
+        exit 1 ;;
+esac
+
 "$NURLC" "$SRC" > "$WORK/on.ll" 2> "$WORK/on.err" || {
     echo "crypto_tier_ir: nurlc failed"; cat "$WORK/on.err"; exit 1; }
 "$NURLC" --no-cpu-dispatch "$SRC" > "$WORK/off.ll" 2> "$WORK/off.err" || {

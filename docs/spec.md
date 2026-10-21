@@ -343,11 +343,13 @@ Three consequences worth knowing:
 - **`--no-cpu-dispatch` turns the prefix off**, emitting each marked
   function once. nurlc emits no `target triple`, so it cannot tell that a
   module is bound for AArch64 or wasm; anything building for a non-x86-64
-  target must pass this flag, and `nurl.sh`, the unikernel scripts and the
-  build API all do. The prefix also starts off when nurlc runs natively
-  on a non-x86-64 host (its IR is compiled for the host clang runs on),
-  and `--cpu-dispatch` turns it back on for an x86-64 target built there;
-  a wasm nurlc keeps the native default.
+  target must say so — `--target=aarch64` (the prefix off, the crypto
+  tier on the ARMv8 Cryptographic Extension, §4.1b) or this flag — and
+  `nurl.sh`, the unikernel scripts and the build API all do. The prefix
+  also starts off when nurlc runs natively on a non-x86-64 host (its IR
+  is compiled for the host clang runs on; an AArch64 host is
+  `--target=aarch64`), and `--cpu-dispatch` turns it back on for an
+  x86-64 target built there; a wasm nurlc keeps the native default.
 - **A marked function that uses the hardware crypto tier** (§4.1b,
   the `nurl_v128_aes*` / `nurl_v128_clmul_*`
   primitives) — or calls a function that does — cannot have a baseline
@@ -863,7 +865,23 @@ with a contract nurlc enforces rather than one the program has to keep:
   only *calls* a tier function stays baseline (the tier does not
   propagate up the call graph), so `? ( nurl_cpu_has_aes ) { hw } { sw }`
   in ordinary code is the shape a software fallback takes.
-- Under `--no-cpu-dispatch` (any non-x86-64 target) there is no tier:
+- **On AArch64** (`--target=aarch64`, and the default of a nurlc running
+  on an AArch64 host) the same primitives lower to the ARMv8
+  Cryptographic Extension: the tier is `+aes` (AESE / AESD / AESMC /
+  AESIMC and PMULL / PMULL2), asked of the OS (`getauxval` HWCAP_AES and
+  HWCAP_PMULL on Linux, `hw.optional.arm.FEAT_AES` on macOS — every
+  Apple Silicon and Graviton CPU has it) or of `ID_AA64ISAR0_EL1` on a
+  freestanding target. ARM splits a round differently from Intel — AESE
+  is the key XOR then SubBytes and ShiftRows, AESMC the MixColumns — so
+  `aesenc a k` is `AESMC(AESE(a, 0)) ^ k`, `aesenclast` drops the AESMC,
+  and the inverse rounds are AESD / AESIMC the same way; inlined into a
+  chain of rounds each `^ k` folds into the next AESE's key, which is
+  the native ARM sequence. There are no `simd` clones on AArch64; a
+  `simd @` function that reaches the tier is emitted once, for it. The
+  wide tiers are x86-only: their primitives are stubs there and
+  `nurl_cpu_has_vaes` is false.
+- Under `--no-cpu-dispatch` (any other target: RISC-V, wasm, a
+  freestanding build that names none) there is no tier:
   `nurl_cpu_has_aes` is a constant false and each primitive is a stub
   that panics if reached anyway.
 

@@ -735,9 +735,11 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Hardware path: AES-NI + PCLMULQDQ ────────────────────────────
 // Everything above is the software cipher, kept for CPUs without the
-// crypto tier (nurl_cpu_has_aes F: pre-2010 x86, every non-x86 build).
-// Where the CPU has AES-NI and PCLMULQDQ the same AEAD runs on the
-// language's crypto primitives instead — one AESENC per round per block,
+// crypto tier (nurl_cpu_has_aes F: pre-2010 x86, an AArch64 core without
+// the Cryptographic Extension, RISC-V). Where the CPU has AES-NI and
+// PCLMULQDQ — or AES and PMULL on AArch64, which nurlc lowers the same
+// primitives to — the same AEAD runs on the language's crypto
+// primitives instead — one AES round instruction per round per block,
 // three carry-less multiplies per GHASH block — and is constant-time by
 // construction: neither instruction has a data-dependent timing.
 //

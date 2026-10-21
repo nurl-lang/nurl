@@ -32,10 +32,12 @@
 #                 OFF by default; NURL_HTTP_TESTS=1 or NURL_NET_TESTS=1
 #                 turns it on.
 #     cpu-aes     runs the hardware crypto tier (nurl_v128_aes*,
-#                 nurl_v128_clmul_*; docs/spec.md §3.3b): an x86-64 CPU
-#                 with AES-NI and PCLMULQDQ. Without it the program takes
-#                 its software path or panics at the tier's gate, and the
-#                 golden — written on such a CPU — cannot match.
+#                 nurl_v128_clmul_*; docs/spec.md §4.1b): an x86-64 CPU
+#                 with AES-NI and PCLMULQDQ, or an AArch64 one with the
+#                 ARMv8 Cryptographic Extension's AES and PMULL (every
+#                 Apple Silicon and Graviton CPU). Without it the program
+#                 takes its software path or panics at the tier's gate,
+#                 and the golden — written on such a CPU — cannot match.
 #                 NURL_CPU_AES=0 turns it off, as it does in the runtime.
 #     cpu-vaes    runs the VAES tier (nurl_v256_aes*, nurl_v256_clmul_*):
 #                 x86-64-v3 with VAES and VPCLMULQDQ (Ice Lake / Zen 3
@@ -195,17 +197,34 @@ is_skipped() {
 
 # The `cpu-aes` requirement: x86-64 with AES-NI and PCLMULQDQ, the
 # feature bits nurl_cpu_x86_aes tests (its x86-64-v2 bits come with
-# every AES-NI CPU). Where /proc/cpuinfo is not there to ask (FreeBSD,
-# macOS on Intel) an x86-64 host is taken to have it — every one this
-# project's CI runs on does, and the test itself prints which path ran.
+# every AES-NI CPU), or AArch64 with AES and PMULL, what nurl_cpu_arm_aes
+# tests (/proc/cpuinfo's `Features: … aes pmull …`). Where /proc/cpuinfo
+# is not there to ask (FreeBSD, macOS) the host is taken to have it — an
+# x86-64 one this project's CI runs on does, every Apple Silicon Mac
+# does (hw.optional.arm.FEAT_AES says so where macOS has the key), and
+# the test itself prints which path ran.
 host_has_cpu_aes() {
-    case "$(uname -m)" in x86_64|amd64) ;; *) return 1 ;; esac
     [[ "${NURL_CPU_AES:-1}" == "0" ]] && return 1
-    if [[ -r /proc/cpuinfo ]]; then
-        grep -qw aes /proc/cpuinfo && grep -qw pclmulqdq /proc/cpuinfo
-        return
-    fi
-    return 0
+    case "$(uname -m)" in
+        x86_64|amd64)
+            if [[ -r /proc/cpuinfo ]]; then
+                grep -qw aes /proc/cpuinfo && grep -qw pclmulqdq /proc/cpuinfo
+                return
+            fi
+            return 0 ;;
+        aarch64|arm64)
+            if [[ -r /proc/cpuinfo ]]; then
+                grep -m1 '^Features' /proc/cpuinfo | grep -qw aes &&
+                    grep -m1 '^Features' /proc/cpuinfo | grep -qw pmull
+                return
+            fi
+            if [[ "$(uname -s)" == Darwin ]]; then
+                [[ "$(sysctl -n hw.optional.arm.FEAT_AES 2>/dev/null || echo 1)" == 1 ]]
+                return
+            fi
+            return 0 ;;
+    esac
+    return 1
 }
 
 # The CPU flags the host reports, lower-case and space-separated: Linux

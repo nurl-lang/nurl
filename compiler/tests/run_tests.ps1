@@ -386,7 +386,8 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 'fibers'   { if ($EnableFibers   -ne '1') { $skip = $true } }
                 # The hardware crypto tier (AES-NI + PCLMULQDQ): every
                 # x64 Windows host this runs on has it; NURL_CPU_AES=0
-                # turns it off here as it does in the runtime.
+                # turns it off here as it does in the runtime. (Windows on
+                # ARM builds no AArch64 crypto tier: skipped there.)
                 'cpu-aes'  { if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -or $env:NURL_CPU_AES -eq '0') { $skip = $true } }
                 # The VAES tiers are on few x64 hosts, and Windows has no
                 # flag list to ask without a probe: skipped here.

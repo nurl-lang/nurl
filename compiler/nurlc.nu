@@ -2861,6 +2861,16 @@ unsafe @ note_unsafe_fn s pos s name → v {
 // feature per marked function.
 : ~ i g_cpu_dispatch 1
 
+// Which hardware crypto tiers the module is built for: 1 x86-64 (AES-NI
+// + PCLMULQDQ, and the VAES ones), 2 AArch64 (the ARMv8 Cryptographic
+// Extension's AESE / AESD / AESMC / AESIMC and PMULL, behind the same
+// nurl_v128_aes* / nurl_v128_clmul_* primitives), 0 none — every
+// primitive a panicking stub, nurl_cpu_has_aes a constant false. The
+// native default is the host's architecture (nurl_host_arch); `--target=`
+// names another, `--no-cpu-dispatch` means 0 and `--cpu-dispatch` 1, as
+// they turn g_cpu_dispatch (x86-only by construction) off and on.
+: ~ i g_crypto_target 1
+
 // Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary
 // builds — and the compiler's own bootstrap, which never passes
 // `--lint` — emit byte-identical IR and stay at their fixed point.
@@ -43798,6 +43808,9 @@ unsafe @ __ha_is_ret s line → b {
 // The attributes a function of tier `lvl` is compiled with: exactly
 // what nurl_cpu_x86_aes / nurl_cpu_x86_vaes test.
 @ __crypto_tier_attrs i lvl → s {
+    // AArch64's one tier: NEON is baseline, `aes` adds AESE/AESD/AESMC/
+    // AESIMC and PMULL (FEAT_AES + FEAT_PMULL; nurl_cpu_arm_aes).
+    ? == g_crypto_target 2 { ^ ` "target-features"="+neon,+aes"` } {}
     ? == lvl 3 { ^ ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
     ? == lvl 2 { ^ ` "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
     ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
@@ -44127,6 +44140,14 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     ? < bi 0 { ( emit_hoisted fn_ir ) ^ v } {}
     : s body0 ( nurl_str_slice fn_ir bi - ( strlen fn_ir ) bi )
     = g_simd_fns ? == 0 ( nurl_str_len g_simd_fns ) ( nurl_str_cat lname `` ) ( nurl_str_cat3 g_simd_fns ` ` lname )
+    // No x86 dispatch (an AArch64 module, the only kind deferred without
+    // it): one body, compiled for the crypto tier and gated when it uses
+    // or calls into it, as it is otherwise. The AArch64 vector ABI does
+    // not change with `+aes`, so a wide signature crosses as it stands.
+    ? == g_cpu_dispatch 0 {
+        ? > crypto 0 { : s gated ( __crypto_fn_ir fn_ir T crypto ) ( emit_hoisted gated ) } { ( emit_hoisted fn_ir ) }
+        ^ v
+    } {}
     // A body of the VAES tier (crypto 2: it uses a v256 crypto
     // primitive, or calls a function that does) has nothing to choose
     // between: the tier is x86-64-v3 and more, so the wide clone is the
@@ -44257,6 +44278,9 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
 & `c` @ nurl_print_buf_len → i
 // Does CPU dispatch start on (runtime_core.c)? See main.
 & `c` @ nurl_cpu_dispatch_default → i
+// The architecture a native nurlc builds for (runtime_core.c): 1
+// x86-64, 2 AArch64, 0 other.
+& `c` @ nurl_host_arch → i
 
 & `c` @ nurl_print_buf_at i off → i
 
@@ -45345,7 +45369,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // a !DISubprogram may be attached to exactly one function, so the
     // clones would produce invalid metadata, and a debug build has no
     // use for the speed (the same reason --split and --g are exclusive).
-    ? & & != __fn_simd 0 != g_cpu_dispatch 0 == g_dbg_enabled 0
+    // On AArch64 there are no clones, but a marked function still joins
+    // the crypto tier through what it calls (flush_simd_deferred), so it
+    // waits for the end of the module there too.
+    ? & & != __fn_simd 0 | != g_cpu_dispatch 0 == g_crypto_target 2 == g_dbg_enabled 0
     { ( defer_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str ) }
     { ( emit_fn_ir __fn_ir ) }
     // Clear DWARF state — subsequent module-scope code (string globals,
@@ -52771,7 +52798,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // required to be one.
 @ __emit_crypto_prim s name i nargs s call → v {
     : s sig ? == nargs 1 `(<4 x i32> %a)` `(<4 x i32> %a, <4 x i32> %b)`
-    ? != g_cpu_dispatch 0
+    ? == g_crypto_target 1
     { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+aes,+pclmul" {` ) )
         ( emit `entry:` )
         ( emit `  %ca.a = bitcast <4 x i32> %a to <2 x i64>` )
@@ -52787,6 +52814,62 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `}` ) }
 }
 
+// The AES tier's primitives on AArch64. ARM splits a round differently
+// from Intel: AESE is AddRoundKey, then SubBytes and ShiftRows; AESMC is
+// MixColumns, alone. Intel's AESENC is ShiftRows, SubBytes, MixColumns,
+// then the key. So with a zero key:
+//
+//     aesenc a k     = AESMC(AESE(a, 0)) ^ k
+//     aesenclast a k = AESE(a, 0) ^ k
+//     aesdec a k     = AESIMC(AESD(a, 0)) ^ k
+//     aesdeclast a k = AESD(a, 0) ^ k
+//     aesimc a       = AESIMC(a)
+//
+// (SubBytes and ShiftRows commute — one substitutes bytes, the other
+// moves them.) No ARM-shaped rewrite of a kernel is needed for speed:
+// inlined into a chain of rounds, each round's `^ k` meets the next
+// AESE's zero key, and LLVM folds `aese(x ^ k, 0)` into `aese(x, k)` —
+// so the eight-block AES-GCM kernel lowers to the ARM sequence, one
+// AESE + AESMC pair a round (the pair a core fuses) with the key inside
+// the AESE, and one EOR for the last key. `clmul_XY` is PMULL on the
+// selected 64-bit halves; the two high halves are PMULL2.
+@ __emit_crypto_prim_a64 s name s sig s body → v {
+    ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+neon,+aes" {` ) )
+    ( emit `entry:` )
+    ( emit body )
+    ( emit `}` )
+}
+
+@ __emit_crypto_prims_a64 → v {
+    : s s2 `(<4 x i32> %a, <4 x i32> %b)`
+    : s s1 `(<4 x i32> %a)`
+    : s da `  %ca.a = bitcast <4 x i32> %a to <16 x i8>\n`
+    : s dk `  %ca.o = bitcast <16 x i8> %ca.r to <4 x i32>\n  %ca.x = xor <4 x i32> %ca.o, %b\n  ret <4 x i32> %ca.x`
+    ( __emit_crypto_prim_a64 `nurl_v128_aesenc` s2 ( nurl_str_cat3 da `  %ca.e = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %ca.a, <16 x i8> zeroinitializer)\n  %ca.r = call <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8> %ca.e)\n` dk ) )
+    ( __emit_crypto_prim_a64 `nurl_v128_aesenclast` s2 ( nurl_str_cat3 da `  %ca.r = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %ca.a, <16 x i8> zeroinitializer)\n` dk ) )
+    ( __emit_crypto_prim_a64 `nurl_v128_aesdec` s2 ( nurl_str_cat3 da `  %ca.e = call <16 x i8> @llvm.aarch64.crypto.aesd(<16 x i8> %ca.a, <16 x i8> zeroinitializer)\n  %ca.r = call <16 x i8> @llvm.aarch64.crypto.aesimc(<16 x i8> %ca.e)\n` dk ) )
+    ( __emit_crypto_prim_a64 `nurl_v128_aesdeclast` s2 ( nurl_str_cat3 da `  %ca.r = call <16 x i8> @llvm.aarch64.crypto.aesd(<16 x i8> %ca.a, <16 x i8> zeroinitializer)\n` dk ) )
+    ( __emit_crypto_prim_a64 `nurl_v128_aesimc` s1 ( nurl_str_cat da `  %ca.r = call <16 x i8> @llvm.aarch64.crypto.aesimc(<16 x i8> %ca.a)\n  %ca.o = bitcast <16 x i8> %ca.r to <4 x i32>\n  ret <4 x i32> %ca.o` ) )
+    ( __emit_clmul_a64 `nurl_v128_clmul_ll` `0` `0` )
+    ( __emit_clmul_a64 `nurl_v128_clmul_hl` `1` `0` )
+    ( __emit_clmul_a64 `nurl_v128_clmul_lh` `0` `1` )
+    ( __emit_clmul_a64 `nurl_v128_clmul_hh` `1` `1` )
+}
+
+// clmul_XY on AArch64: PMULL of a's half `x` and b's half `y`.
+@ __emit_clmul_a64 s name s x s y → v {
+    ( emit ( nurl_str_cat3 `define linkonce_odr <4 x i32> @` name `(<4 x i32> %a, <4 x i32> %b) alwaysinline "target-features"="+neon,+aes" {` ) )
+    ( emit `entry:` )
+    ( emit `  %ca.a = bitcast <4 x i32> %a to <2 x i64>` )
+    ( emit `  %ca.b = bitcast <4 x i32> %b to <2 x i64>` )
+    ( emit ( nurl_str_cat `  %ca.x = extractelement <2 x i64> %ca.a, i32 ` x ) )
+    ( emit ( nurl_str_cat `  %ca.y = extractelement <2 x i64> %ca.b, i32 ` y ) )
+    ( emit `  %ca.p = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %ca.x, i64 %ca.y)` )
+    ( emit `  %ca.o = bitcast <16 x i8> %ca.p to <4 x i32>` )
+    ( emit `  ret <4 x i32> %ca.o` )
+    ( emit `}` )
+}
+
 // The VAES tier's primitives: the same rounds and products on both
 // 128-bit lanes of a v256 at once — VAES and VPCLMULQDQ on a ymm
 // register, two AES blocks per instruction. `clmul_XY` selects the
@@ -52794,7 +52877,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // one. The intrinsics take `<4 x i64>`, the v256 carrier, as they are.
 @ __emit_crypto_prim256 s name i nargs s call → v {
     : s sig ? == nargs 1 `(<4 x i64> %a)` `(<4 x i64> %a, <4 x i64> %b)`
-    ? != g_cpu_dispatch 0
+    ? == g_crypto_target 1
     { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i64> @` name sig ` alwaysinline "target-features"="+avx,+avx2,+aes,+pclmul,+vaes,+vpclmulqdq" {` ) )
         ( emit `entry:` )
         ( emit ( nurl_str_cat `  %cw.r = call <4 x i64> ` call ) )
@@ -52813,7 +52896,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // and would otherwise split each into two ymm operations.
 @ __emit_crypto_prim512 s name i nargs s call → v {
     : s sig ? == nargs 1 `(<8 x i64> %a)` `(<8 x i64> %a, <8 x i64> %b)`
-    ? != g_cpu_dispatch 0
+    ? == g_crypto_target 1
     { ( emit ( nurl_str_cat4 `define linkonce_odr <8 x i64> @` name sig ` alwaysinline "min-legal-vector-width"="512" "target-features"="+avx512f,+avx512vl,+avx512bw,+aes,+pclmul,+vaes,+vpclmulqdq" {` ) )
         ( emit `entry:` )
         ( emit ( nurl_str_cat `  %cz.r = call <8 x i64> ` call ) )
@@ -52852,7 +52935,7 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `declare void @nurl_cpu_aes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes512_missing() noreturn cold` )
-    ? != g_cpu_dispatch 0
+    ? == g_crypto_target 1
     {  // `readnone`: the runtime answers the same value on every call
         // (a cache written once), so the optimiser may merge and hoist
         // the calls — which is what makes the gate cost nothing in a
@@ -52879,10 +52962,24 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( __emit_crypto_probe `nurl_cpu_has_aes` `nurl__aes_gate` `nurl_cpu_x86_aes` `nurl_cpu_aes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes` `nurl__vaes_gate` `nurl_cpu_x86_vaes` `nurl_cpu_vaes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` ) }
-    { ( emit `define linkonce_odr i1 @nurl_cpu_has_aes() alwaysinline {` )
-        ( emit `entry:` )
-        ( emit `  ret i1 false` )
-        ( emit `}` )
+    {}
+    ? == g_crypto_target 2
+    { ( emit `declare i32 @nurl_cpu_arm_aes() readnone nounwind willreturn` )
+        ( emit `declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)` )
+        ( emit `declare <16 x i8> @llvm.aarch64.crypto.aesd(<16 x i8>, <16 x i8>)` )
+        ( emit `declare <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8>)` )
+        ( emit `declare <16 x i8> @llvm.aarch64.crypto.aesimc(<16 x i8>)` )
+        ( emit `declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)` )
+        ( __emit_crypto_probe `nurl_cpu_has_aes` `nurl__aes_gate` `nurl_cpu_arm_aes` `nurl_cpu_aes_missing` )
+        ( __emit_crypto_prims_a64 ) }
+    {}
+    ? != g_crypto_target 1
+    { ? == g_crypto_target 0 {
+            ( emit `define linkonce_odr i1 @nurl_cpu_has_aes() alwaysinline {` )
+            ( emit `entry:` )
+            ( emit `  ret i1 false` )
+            ( emit `}` )
+        } {}
         ( emit `define linkonce_odr i1 @nurl_cpu_has_vaes() alwaysinline {` )
         ( emit `entry:` )
         ( emit `  ret i1 false` )
@@ -52891,15 +52988,18 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `entry:` )
         ( emit `  ret i1 false` )
         ( emit `}` ) }
-    ( __emit_crypto_prim `nurl_v128_aesenc` 2 `@llvm.x86.aesni.aesenc(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
-    ( __emit_crypto_prim `nurl_v128_aesenclast` 2 `@llvm.x86.aesni.aesenclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
-    ( __emit_crypto_prim `nurl_v128_aesdec` 2 `@llvm.x86.aesni.aesdec(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
-    ( __emit_crypto_prim `nurl_v128_aesdeclast` 2 `@llvm.x86.aesni.aesdeclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
-    ( __emit_crypto_prim `nurl_v128_aesimc` 1 `@llvm.x86.aesni.aesimc(<2 x i64> %ca.a)` )
-    ( __emit_crypto_prim `nurl_v128_clmul_ll` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 0)` )
-    ( __emit_crypto_prim `nurl_v128_clmul_hl` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 1)` )
-    ( __emit_crypto_prim `nurl_v128_clmul_lh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 16)` )
-    ( __emit_crypto_prim `nurl_v128_clmul_hh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 17)` )
+    {}
+    ? != g_crypto_target 2 {
+        ( __emit_crypto_prim `nurl_v128_aesenc` 2 `@llvm.x86.aesni.aesenc(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+        ( __emit_crypto_prim `nurl_v128_aesenclast` 2 `@llvm.x86.aesni.aesenclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+        ( __emit_crypto_prim `nurl_v128_aesdec` 2 `@llvm.x86.aesni.aesdec(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+        ( __emit_crypto_prim `nurl_v128_aesdeclast` 2 `@llvm.x86.aesni.aesdeclast(<2 x i64> %ca.a, <2 x i64> %ca.b)` )
+        ( __emit_crypto_prim `nurl_v128_aesimc` 1 `@llvm.x86.aesni.aesimc(<2 x i64> %ca.a)` )
+        ( __emit_crypto_prim `nurl_v128_clmul_ll` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 0)` )
+        ( __emit_crypto_prim `nurl_v128_clmul_hl` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 1)` )
+        ( __emit_crypto_prim `nurl_v128_clmul_lh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 16)` )
+        ( __emit_crypto_prim `nurl_v128_clmul_hh` 2 `@llvm.x86.pclmulqdq(<2 x i64> %ca.a, <2 x i64> %ca.b, i8 17)` )
+    } {}
     ( __emit_crypto_prim256 `nurl_v256_aesenc` 2 `@llvm.x86.aesni.aesenc.256(<4 x i64> %a, <4 x i64> %b)` )
     ( __emit_crypto_prim256 `nurl_v256_aesenclast` 2 `@llvm.x86.aesni.aesenclast.256(<4 x i64> %a, <4 x i64> %b)` )
     ( __emit_crypto_prim256 `nurl_v256_aesdec` 2 `@llvm.x86.aesni.aesdec.256(<4 x i64> %a, <4 x i64> %b)` )
@@ -52922,8 +53022,9 @@ unsafe @ __rt_decl_ptypes s region → s {
 // itself: 3 for a v512 crypto primitive, 2 for a v256 one, 1 for a v128
 // one, 0 for none.
 @ __ir_crypto_level s ir → i {
-    ? | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ 3 } {}
-    ? | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ 2 } {}
+    // (On AArch64 the wide primitives are stubs, so only v128 ones count.)
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ 3 } {}
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ 2 } {}
     ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ 1 } {}
     ^ 0
 }
@@ -52934,7 +53035,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // functions: which of its calls can be inlined depends on functions not
 // generated yet.
 @ emit_fn_ir s ir → v {
-    : i lvl ? != g_cpu_dispatch 0 ( __ir_crypto_level ir ) 0
+    : i lvl ? != g_crypto_target 0 ( __ir_crypto_level ir ) 0
     ? > lvl 0
     { : s nm ( __ir_fn_name ir )
         : s ls ( nurl_str_int lvl )
@@ -60205,10 +60306,17 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      building for another architecture must pass this\n` )
     ( nurl_print `                      (nurl.sh does it for every non-x86-64 target).\n` )
     ( nurl_print `                      Also off by default when nurlc runs natively on\n` )
-    ( nurl_print `                      a non-x86-64 host; the hardware crypto tier\n` )
-    ( nurl_print `                      (nurl_v128_aes*, nurl_v128_clmul_*) follows it.\n` )
+    ( nurl_print `                      a non-x86-64 host. The hardware crypto tiers\n` )
+    ( nurl_print `                      (nurl_v128_aes*, nurl_v128_clmul_*, the v256 /\n` )
+    ( nurl_print `                      v512 ones) are off with it: stubs that panic.\n` )
     ( nurl_print `  --cpu-dispatch      turn the prefix and the crypto tier on, for an\n` )
     ( nurl_print `                      x86-64 target built on another host.\n` )
+    ( nurl_print `  --target=ARCH       the architecture the IR is for, when it is not this\n` )
+    ( nurl_print `                      host's: x86_64 (as --cpu-dispatch), aarch64 / arm64\n` )
+    ( nurl_print `                      (no 'simd' clones; the crypto tier on the ARMv8\n` )
+    ( nurl_print `                      Cryptographic Extension), anything else (as\n` )
+    ( nurl_print `                      --no-cpu-dispatch). A triple's first word counts:\n` )
+    ( nurl_print `                      --target=aarch64-linux-gnu, --target=arm64-apple-macos.\n` )
     ( nurl_print `  --split=N           ALSO write the module as up to N independent ones,\n` )
     ( nurl_print `                      so N clang processes can lower them at once (stdout\n` )
     ( nurl_print `                      still carries the whole module either way)\n` )
@@ -60387,6 +60495,17 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     ^
 }
 
+// `--target=`'s argument as g_crypto_target counts it: 1 x86-64, 2
+// AArch64, 0 anything else. An architecture or a whole triple — only the
+// first word (up to a `-`) is read.
+@ __target_arch s t → i {
+    : i dash ( nurl_str_find t `-` )
+    : s arch ? >= dash 0 ( nurl_str_slice t 0 dash ) ( nurl_str_cat t `` )
+    ? | ( seq arch `x86_64` ) ( seq arch `amd64` ) { ^ 1 } {}
+    ? | ( seq arch `aarch64` ) ( seq arch `arm64` ) { ^ 2 } {}
+    ^ 0
+}
+
 unsafe @ main → i {
     : ~ i compile_error 0
     // CLI: `nurlc [--g] [--no-borrowck] <file.nu>`. Optional flags in
@@ -60404,18 +60523,26 @@ unsafe @ main → i {
     : ~ i path_count 0
     // nurlc emits no target triple, so a native nurlc's IR is compiled
     // for the host clang runs on — in practice its own. The `simd` clones
-    // and the hardware crypto tier are x86-64 feature sets: on an AArch64
-    // or RISC-V host they start off, as if --no-cpu-dispatch were given
-    // (x86 intrinsics in an AArch64 module are a codegen error, not a
-    // warning), and --cpu-dispatch turns them back on for an x86-64
-    // target built there. A wasm nurlc keeps the native default
-    // (nurl_cpu_dispatch_default, runtime_core.c).
-    ? == 0 ( nurl_cpu_dispatch_default ) { = g_cpu_dispatch 0 } {}
+    // and the x86 crypto tiers are x86-64 feature sets: elsewhere they
+    // start off (x86 intrinsics in an AArch64 module are a codegen error,
+    // not a warning); on an AArch64 host the crypto primitives lower to
+    // the ARMv8 Cryptographic Extension instead. `--target=` names the
+    // architecture of a cross build, `--cpu-dispatch` x86-64. A wasm
+    // nurlc keeps the native default (nurl_host_arch, runtime_core.c).
+    : i __host_arch ( nurl_host_arch )
+    ? == __host_arch 0 { = g_cpu_dispatch 0 = g_crypto_target 0 } {}
+    ? == __host_arch 2 { = g_cpu_dispatch 0 = g_crypto_target 2 } {}
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
         ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}
         ? ( seq a `--` ) { = options_done T = ai + ai 1 continue } {}
-        ? ( seq a `--cpu-dispatch` ) { = g_cpu_dispatch 1 = ai + ai 1 continue } {}
+        ? ( seq a `--cpu-dispatch` ) { = g_cpu_dispatch 1 = g_crypto_target 1 = ai + ai 1 continue } {}
+        ? != 0 ( nurl_str_starts a `--target=` ) {
+            : i ta ( __target_arch ( nurl_str_slice a 9 - ( nurl_str_len a ) 9 ) )
+            = g_cpu_dispatch ? == ta 1 1 0
+            = g_crypto_target ta
+            = ai + ai 1 continue
+        } {}
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
@@ -60465,7 +60592,7 @@ unsafe @ main → i {
                                                 { ? ( seq a `--ffi-host-imports` )
                                                     { = g_ffi_host_imports 1 }
                                                     { ? ( seq a `--no-cpu-dispatch` )
-                                                        { = g_cpu_dispatch 0 }
+                                                        { = g_cpu_dispatch 0 = g_crypto_target 0 }
                                                         { ? ( seq a `--no-dce` )
                                                             { = g_dce 0 }
                                                             { ? != 0 ( nurl_str_starts a `--keep=` )
@@ -60485,7 +60612,7 @@ unsafe @ main → i {
         = ai + ai 1
     }
     ? | != path_count 1 == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ^ 1 }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch | --target=ARCH] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ^ 1 }
     {}
     ? & != 0 ( nurl_str_len g_coverage_notes ) == 0 ( nurl_str_len g_coverage_prefix ) {
         ( nurl_eprintln `nurlc: --coverage-notes requires --coverage=PREFIX` ) ^ 2

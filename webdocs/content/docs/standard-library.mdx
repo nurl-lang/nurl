@@ -89,8 +89,9 @@ and `ssh.nu` / `ssh_ed25519.nu` in `std/`; `crypto.nu`, `jwt.nu`, `http_jwt.nu`
 in `ext/`. See [Cryptography](./cryptography).
 
 `aes_gcm.nu` runs on the language's hardware crypto tier where the CPU has
-AES-NI and PCLMULQDQ (`nurl_v128_aesenc`, `nurl_v128_clmul_*`; ~3 GB/s, on par
-with the same kernel in C intrinsics), on its VAES tiers where the CPU has
+AES-NI and PCLMULQDQ, or AES and PMULL on AArch64 (`nurl_v128_aesenc`,
+`nurl_v128_clmul_*`; ~3 GB/s on a Haswell, on par with the same kernel in C
+intrinsics), on its VAES tiers where the CPU has
 VAES and VPCLMULQDQ (`nurl_v256_*` on ymm, `nurl_v512_*` on zmm under
 AVX-512: two and four blocks per instruction, ~8–11 GB/s on a Sapphire
 Rapids) and on a constant-time bitsliced cipher everywhere else; TLS picks

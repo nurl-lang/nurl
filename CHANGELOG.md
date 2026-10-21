@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AArch64 crypto tier: AES-GCM on the ARMv8 Cryptographic Extension**
+  (agora t57). nurlc now knows when it emits for AArch64 — `--target=ARCH`
+  (`aarch64`/`arm64`, `x86_64`, or anything else; a triple's first word
+  counts), and the native default of a nurlc on an AArch64 host
+  (`nurl_host_arch`). There the `nurl_v128_aes*` / `nurl_v128_clmul_*`
+  primitives lower to AESE / AESD / AESMC / AESIMC and PMULL / PMULL2
+  (`aesenc a k` = `AESMC(AESE(a, 0)) ^ k`, …; inlined, each round key
+  folds into the next AESE, the native ARM sequence), functions using
+  them are compiled with `+neon,+aes` and gated on `nurl_cpu_arm_aes`
+  (getauxval HWCAP_AES|HWCAP_PMULL on Linux, `hw.optional.arm.FEAT_AES`
+  on macOS, ID_AA64ISAR0_EL1 when freestanding; `NURL_CPU_AES=0`), and a
+  `simd @` function reaching the tier is one gated body. So
+  `nurl_cpu_has_aes` is true on Apple Silicon and Graviton, and
+  `std/aes_gcm.nu` and TLS take the hardware path there instead of the
+  ~113 MB/s bitsliced cipher. nurl.sh, the build API's arm64 targets and
+  the unikernel's arm64 build pass `--target=aarch64`. The `cpu-aes` test
+  requirement now holds on AArch64 (Linux `Features: aes pmull`, macOS),
+  so the macOS ARM64 CI runs `simd_crypto` and `aes_gcm_hw_agree`;
+  `crypto_tier_ir.sh` checks the AArch64 IR and machine code on every
+  host and runs `simd_crypto`, `aes_gcm_hw_agree` and `aes_gcm_vectors`
+  natively or under qemu-aarch64 (here: `-cpu max`, all three match the
+  x86 goldens, 2214 cases).
+
 - **VAES crypto tiers: AES-GCM on ymm and zmm, two and four blocks per
   instruction** (agora t56). Two tiers above the AES one (docs/spec.md
   §4.1b): the **VAES tier** — `nurl_v256_aesenc`, `_aesenclast`,

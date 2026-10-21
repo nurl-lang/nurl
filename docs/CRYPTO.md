@@ -189,7 +189,8 @@ follow-up. Hardening (timing/cache axis):
 - **AES-GCM where the CPU has AES instructions, ChaCha20-Poly1305
   elsewhere** — which is what TLS negotiates. Both are constant-time. On a
   CPU with the hardware crypto tier (docs/spec.md §4.1b) AES-GCM runs on
-  AES-NI and PCLMULQDQ (~3 GB/s on a Haswell), and on VAES / VPCLMULQDQ
+  AES-NI and PCLMULQDQ (~3 GB/s on a Haswell) — or AES and PMULL on
+  AArch64 (Apple Silicon, Graviton) — and on VAES / VPCLMULQDQ
   where those exist (ymm, or zmm under AVX-512: ~8–11 GB/s on a Sapphire
   Rapids, measured on 16 KB records with a prepared key), against
   ChaCha20-Poly1305's ~1.1–1.4 GB/s. Without the tier AES-GCM falls back

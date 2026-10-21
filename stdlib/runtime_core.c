@@ -3879,6 +3879,72 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_vaes512 = vaes512;
 }
 
+#elif defined(__aarch64__) || defined(_M_ARM64)
+
+/* AArch64: the crypto tier is the ARMv8 Cryptographic Extension's AES
+ * half — AESE / AESD / AESMC / AESIMC and PMULL / PMULL2 (FEAT_AES +
+ * FEAT_PMULL) — which nurlc lowers the same nurl_v128_aes* /
+ * nurl_v128_clmul_* primitives to. Optional in the architecture (a
+ * Cortex-A72 without the crypto licence lacks it: the Raspberry Pi 4),
+ * present on every Apple Silicon and Graviton CPU. Asked of the OS where
+ * there is one — user code may not read the ID registers itself on
+ * macOS — and of ID_AA64ISAR0_EL1 directly on a freestanding target
+ * (EL1 may read it; Linux also emulates the read at EL0). The x86 tiers
+ * answer 0. */
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(_WIN32)
+/* kernel32's, declared rather than <windows.h> pulled in mid-file. */
+__declspec(dllimport) int __stdcall IsProcessorFeaturePresent(unsigned long feature);
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+#include <sys/auxv.h>
+#elif defined(__FreeBSD__)
+#include <sys/auxv.h>
+#endif
+
+static int nurl__cpu_arm_aes_detect(void) {
+#if defined(__APPLE__)
+    int aes = 0, pmull = 0;
+    size_t n = sizeof aes;
+    /* macOS 12 and later name the features; before that the keys are
+     * absent, and every Apple Silicon CPU has both. */
+    if (sysctlbyname("hw.optional.arm.FEAT_AES", &aes, &n, 0, 0) != 0) return 1;
+    n = sizeof pmull;
+    if (sysctlbyname("hw.optional.arm.FEAT_PMULL", &pmull, &n, 0, 0) != 0) return aes != 0;
+    return aes != 0 && pmull != 0;
+#elif defined(_WIN32)
+    /* PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE: AES, PMULL, SHA1, SHA2. */
+    return IsProcessorFeaturePresent(30) != 0;
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+    /* HWCAP_AES (bit 3) and HWCAP_PMULL (bit 4). */
+    unsigned long hw = getauxval(AT_HWCAP);
+    return (hw & (1ul << 3)) && (hw & (1ul << 4));
+#elif defined(__FreeBSD__)
+    unsigned long hw = 0;
+    if (elf_aux_info(AT_HWCAP, &hw, sizeof hw) != 0) return 0;
+    return (hw & (1ul << 3)) && (hw & (1ul << 4));
+#elif defined(__GNUC__) || defined(__clang__)
+    /* ID_AA64ISAR0_EL1.AES, bits 7:4: 1 = AES, 2 = AES and PMULL. */
+    unsigned long long isar0;
+    __asm__ __volatile__("mrs %0, ID_AA64ISAR0_EL1" : "=r"(isar0));
+    return ((isar0 >> 4) & 0xf) >= 2;
+#else
+    return 0;
+#endif
+}
+
+static int nurl__cpu_env_off(const char *name) {
+    const char *e = getenv(name);
+    return e && e[0] == '0' && e[1] == '\0';
+}
+
+static void nurl__cpu_detect(void) {
+    nurl__cpu_v3 = 0;
+    nurl__cpu_vaes = 0;
+    nurl__cpu_vaes512 = 0;
+    nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
+}
+
 #else
 
 static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; }
@@ -3906,6 +3972,15 @@ int nurl_cpu_x86_v3(void) {
  * value, so the optimiser may merge and hoist the gate — the cache
  * write on a first, lazy call is invisible to the module. */
 int nurl_cpu_x86_aes(void) {
+    if (nurl__cpu_aes < 0) nurl__cpu_detect();
+    return nurl__cpu_aes;
+}
+
+/* Does this CPU have the AArch64 crypto tier — FEAT_AES and FEAT_PMULL
+ * (above)? The gate and nurl_cpu_has_aes of a module nurlc built for
+ * AArch64 ask this, as an x86-64 module's ask nurl_cpu_x86_aes; the
+ * same cache answers both, so NURL_CPU_AES=0 takes either away. */
+int nurl_cpu_arm_aes(void) {
     if (nurl__cpu_aes < 0) nurl__cpu_detect();
     return nurl__cpu_aes;
 }
@@ -3951,8 +4026,13 @@ void nurl_cpu_vaes_missing(void) {
  * AES instruction would raise — and recoverable like any other. A
  * program that wants a software path asks nurl_cpu_has_aes first. */
 void nurl_cpu_aes_missing(void) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    nurl_panic("this function needs the ARMv8 Cryptographic Extension (AES and PMULL), "
+               "which this CPU lacks; check nurl_cpu_has_aes before calling it");
+#else
     nurl_panic("this function needs AES-NI and PCLMULQDQ (x86-64-v2 + AES), "
                "which this CPU lacks; check nurl_cpu_has_aes before calling it");
+#endif
     abort();
 }
 
@@ -3968,6 +4048,25 @@ void nurl_cpu_aes_missing(void) {
 long long nurl_cpu_dispatch_default(void) {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
     return 1;
+#else
+    return 0;
+#endif
+}
+
+/* The architecture a NATIVE nurlc's output is compiled for by default —
+ * its own (nurlc emits no target triple, so clang picks the host): 1
+ * x86-64, 2 AArch64, 0 anything else. It decides which CPU-specific code
+ * nurlc may emit without being told (`--target=` overrides): the `simd`
+ * clones and the x86 crypto tiers on 1, the AArch64 crypto tier on 2,
+ * neither on 0. A wasm nurlc answers 1, the native default, for the
+ * reason nurl_cpu_dispatch_default gives. (That one is what nurlc asked
+ * before it knew AArch64 had a tier; the committed bootstrap snapshot of
+ * an older compiler still calls it.) */
+long long nurl_host_arch(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
+    return 1;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return 2;
 #else
     return 0;
 #endif
