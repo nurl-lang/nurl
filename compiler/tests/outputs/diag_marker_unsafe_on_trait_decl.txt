@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_marker_unsafe_on_trait_decl.nu:7:16: error: 'unsafe' on the declaration of trait '% Shape': a trait declaration asserts nothing. 'unsafe' belongs on an impl that asserts what the compiler cannot check — 'unsafe % Send Type { }' or 'unsafe % Sync Type { }'.
+unsafe % Shape {
+               ^
