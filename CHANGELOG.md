@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `compiler/tests/tls_record_inplace.nu` seals and opens 100 records
     between two connection states and counts zero allocations, for both
     suites.
+- **`hmac_sha256_key` / `hmac_sha256_mac`: a prepared HMAC-SHA-256 key**
+  (std/hash_sha256.nu). The inner and outer midstates are computed once;
+  each MAC then costs two compressions fewer and builds no K0 block.
+
 - **AES-GCM on short messages: one GHASH reduction for AAD, data and
   length, J0 encrypted alongside the tail** (agora t58, part of t37). A
   TLS record of an API response is short, so its latency is per request.
@@ -115,6 +119,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a closure.
 
 ### Fixed
+
+- **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
+  are truncated as verify truncates them** (agora t47). The private key
+  and digest went through `bigint_from_bytes_be` / `bigint_rem` /
+  `bigint_to_bytes_be` and every RFC 6979 candidate through two BigInt
+  comparisons; now every scalar is a fixed 32 bytes on the GF(n) field
+  (a constant-time `p256n_in_range_be` replaces the comparisons) and each
+  RFC 6979 HMAC key is prepared once for the MACs made under it. The
+  digest is now bits2int — its leftmost 256 bits (FIPS 186-5 §6.4.1) —
+  where signing used to reduce the WHOLE digest mod n: a SHA-384 or
+  SHA-512 digest signed with P-256 produced a signature that
+  `ecdsa_p256_verify` (and every other implementation) rejects.
+  `ecdsa_p256_sign.nu` adds RFC 6979's SHA-256 "test" vector, SHA-224/
+  384/512 digests verified by OpenSSL, and RFC 4231 HMAC cases on the
+  prepared key.
 
 - **A crypto-tier helper written as a wrapper inlined its callees'
   gates into the kernel** (nurlc). A function joined the tier only when
