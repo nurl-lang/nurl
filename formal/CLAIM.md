@@ -39,7 +39,8 @@ the LLVM / C11 memory model rather than redefining it.
   `A2.soundness`, `A2.memory_safe` and `A2.no_leak_end`, on the standard
   axioms only. The calculus adds to A1 structs and enums with field-precise
   paths, closures and trait objects as packages with captures by handle
-  and by name, panics with unwinding and `recover`, and the drop journal.
+  and by name, `inout` of every owning type and a field replaced in place,
+  panics with unwinding and `recover`, and the drop journal.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
 - **A3** — the theorem with threads: a well-typed program has no data

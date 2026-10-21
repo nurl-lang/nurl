@@ -201,7 +201,7 @@ theorem compE_mode_ne (E : Entry) (t : Ty) : (compE E t).mode ≠ .rootb := by
 
 /-- `unpair`: the struct moves apart into its fields. -/
 theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty}
-    (hsrc : s.src = true) (hy : Γ y = some E) (hl : E.live = true) (hm : E.mode = .own)
+    (hsrc : s.src = true) (hy : Γ y = some E) (hl : E.live = true) (hm : canDo E.mode .replace)
     (hty : E.ty = .prod a b) (hyF : y ∉ F) (hx : Γ x = none) (hz : Γ z = none) (hxz : x ≠ z)
     (hxF : x ∉ F) (hzF : z ∉ F)
     (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
@@ -213,7 +213,8 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
   | unpair hvy hmx hmz hxz' =>
     rename_i v w
     have hanch := hi.leafAnch rfl
-    obtain ⟨post, out⟩ := rhs_move hi.toMInv hanch hy hl hm hyF hpy hvy
+    have hos : E.mode.ownSlot = true := by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl
+    obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hpy hvy
     have hxy : x ≠ y := fun h => by rw [h, hy] at hx; cases hx
     have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
     have hx1 : setE (kill .replace false y Γ) y { E with live := false } x = none := by

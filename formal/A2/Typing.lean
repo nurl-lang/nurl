@@ -141,6 +141,18 @@ def CtxWF (Γ : Ctx) : Prop :=
 def canDo (m : Mode) (e : Eff) : Prop :=
   m = .own ∨ ∃ b, m = .inout b ∧ e.le b
 
+/-- A binding that may undergo an effect owns its slot. -/
+theorem canDo.ownSlot {m : Mode} {e : Eff} (h : canDo m e) : m.ownSlot = true := by
+  rcases h with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl
+
+theorem canDo_replace_cases {m : Mode} (h : canDo m .replace) : m = .own ∨ m = .inout .replace := by
+  rcases h with h | ⟨b, h, hle⟩
+  · exact Or.inl h
+  · right; rw [h]; cases b <;> simp_all [Eff.le, Eff.rank]
+
+theorem Mode.isRoot_of_ownSlot {m : Mode} (h : m.ownSlot = true) : m.isRoot = true := by
+  cases m <;> simp_all [Mode.ownSlot, Mode.isRoot]
+
 /-- What `D` holds by name names bindings that are still bound and live
     (a binding replaced, moved or gone ends what holds it by name), of the
     type the capturing closure's code expects (one that holds no views: a
@@ -536,7 +548,7 @@ def PMode.moves : PMode → Bool
 def paramOK : PMode → Ty → Entry → Prop
   | .inp, t, E => E.ty = t
   | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ t.owning = true
-  | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ ∃ s, t = .vec s
+  | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ t.owning = true
 
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
@@ -685,6 +697,24 @@ def sigCtx (fn : Fn) : Ctx := fun v =>
 /-- A summary pair names a parameter the caller still has after the call. -/
 def lendable (fn : Fn) (j : Nat) : Prop :=
   ∃ h : j < fn.params.length, fn.params[j].1 = .inp ∨ ∃ b, fn.params[j].1 = .inout b
+
+/-- An `inout` argument is the binding that owns the value — an owner, or
+    an `inout` parameter of the caller's — of any owning type (a `Vec`, a
+    struct, an enum, a closure).  A borrow of it, or a second name for a
+    parameter (`: ~ c p`, a borrow in the calculus), is never passed: the
+    callee may replace what is there (h295: a copy of a parameter passed
+    `inout` to a function that replaced one of its fields). -/
+theorem paramOK_inout {b : Eff} {t : Ty} {E : Entry} (h : paramOK (.inout b) t E) :
+    (E.mode = .own ∨ ∃ b', E.mode = .inout b' ∧ b.le b') ∧ t.owning = true := by
+  obtain ⟨_, hc, ho⟩ := h
+  exact ⟨hc, ho⟩
+
+/-- A summary pair names a kind its parameter's type can carry: what depends
+    on an `inout` parameter that has no handle of its own (a struct, an enum,
+    a closure: its value is inline) depends on it inside, never on a handle
+    (`derive` makes a `.self` dependency on such a root a view). -/
+def kindFits (fn : Fn) (j : Nat) (k : Kind) : Prop :=
+  ∀ b t, fn.params[j]? = some (.inout b, t) → rootKind t k = k
 
 /-- Every variable a statement names (binders included). -/
 def Expr.vars : Expr → List Var

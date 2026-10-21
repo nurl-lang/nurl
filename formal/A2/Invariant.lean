@@ -350,7 +350,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
       NoPin Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
   | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
-      s.src = true → Γ y = some E → E.live = true → E.mode = .own → E.ty = .prod a b → y ∉ F →
+      -- (an `inout` struct that may be replaced is taken apart too: a field
+      -- replaced in place is the struct taken apart and assigned again)
+      s.src = true → Γ y = some E → E.live = true → canDo E.mode .replace → E.ty = .prod a b → y ∉ F →
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
         (compE E b)) F s Δ →
@@ -382,10 +384,11 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
   (∀ pt ∈ fn.params, pt.2.ok = true ∧
-    (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → ∃ s, pt.2 = .vec s)) ∧
+    (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → pt.2.owning = true)) ∧
   (∀ jk ∈ fn.lends, lendable fn jk.1 ∧ jk.2.isName = false) ∧
   (∀ jk ∈ fn.rholds, lendable fn jk.1 ∧ jk.2.isName = false) ∧
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
+  (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧

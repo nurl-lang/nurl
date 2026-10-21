@@ -92,12 +92,27 @@ The same modules under `A2/`, extended, and:
 
 The theorems, `A2.memory_safe`, `A2.soundness` and `A2.no_leak_end`.
 
+An `inout` parameter may have any owning type — a `Vec`, a struct, an
+enum, a closure (`paramOK`, `FnOK`) — and a field of a struct is replaced
+in place: the struct is taken apart (`unpair`, which takes an `inout`
+struct its bound lets the callee replace, as well as an owner) and
+assigned again, so the replacement ends every borrow of the struct, not
+only of the field — conservative, as the calculus is elsewhere. A summary
+pair on an `inout` parameter with no handle of its own (a struct, an
+enum, a closure) names a kind inside it (`kindFits`: `derive` makes a
+handle dependency on such a root a view). These are where the 0.75.0
+holes h295 (a parameter's copy passed `inout` to a function replacing one
+of its fields: a copy is a borrow, never an `inout` argument,
+`paramOK_inout`) and h297 (a closure replaced through an `inout`
+parameter: `assign` to an `inout .replace` closure, whose slot is the
+caller's) sit.
+
 What A2 does not model yet, each a planned refinement of the calculus
-rather than a gap in what it proves: in-place mutation of a struct field
-and `inout` of every owning type (only `Vec` is passed `inout`); values
-owned or not per call (a trait method's result, a raw string that may be
-fresh); `Rc` and its cycle collector, which are the standard library's
-`unsafe` base (phase B).
+rather than a gap in what it proves: values owned or not per call (a
+trait method's result, a raw string that may be fresh); a destructor
+written by the program (`% Drop`), whose drop runs code and may panic
+(`CLAIM.md`); `Rc` and its cycle collector, which are the standard
+library's `unsafe` base (phase B).
 
 ## How it relates to the rest of the repository
 

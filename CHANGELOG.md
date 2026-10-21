@@ -51,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one copy moved to a thread while another stays races the state
   (`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`,
   docs/MEMORY.md §6.2).
+- **formal: `inout` of every owning type, and a field replaced in place
+  (A2).** The calculus passed only a `Vec` `inout`; a struct, an enum and
+  a closure are passed `inout` now, and a field is replaced in place as the
+  struct taken apart and assigned again (`unpair` takes an `inout` struct
+  its bound lets the callee replace). That is where h295 and h297 sit: a
+  copy of a parameter is a borrow and never an `inout` argument
+  (`paramOK_inout`), and a closure replaced through `inout` is an `assign`
+  to the caller's slot. `A2.memory_safe`, `A2.soundness` and
+  `A2.no_leak_end` are re-proven (`formal/check.sh`, Lean 4.35.0, standard
+  axioms only); formal/README.md, RULES.md and corpus/map.tsv follow.
 - **A double panic no longer leaks, nor leaves the thread draining.** A
   destructor that panicked while a panic's journal drained replaced the
   first panic's message (leaking it) and longjmp'd past the drain's

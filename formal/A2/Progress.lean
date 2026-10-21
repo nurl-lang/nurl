@@ -336,7 +336,7 @@ theorem progress {P : Prog}
   | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ =>
     intro m hcd hi
     obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
-    obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hm]; rfl)
+    obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)
     rw [hT] at hv; cases hv
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all

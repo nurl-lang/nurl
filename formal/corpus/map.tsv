@@ -281,9 +281,9 @@ h291_unjournaled_drop_skipped_by_a_panic	§7.2	A2	panic past a struct holding a 
 h292_argument_temporary_leaked_by_a_panic	§7.2	A2	a String / Vec made in an argument, the callee panics: the drop after the call was skipped and the journal did not know the temporary — leak	runs-clean
 h293_thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean
 h294_parked_drop_registration_never_forgotten	§7.2	A2	a value whose journal thunk is parked for module end was registered but never forgotten: a later panic dropped it from a returned frame	runs-clean
-h295_param_copy_passed_inout_releases_callers_field	§2.12	A2	a ': ~' copy of a parameter shares its fields; passed inout, the callee replaced a field and released the caller's (UAF)	rejected
+h295_param_copy_passed_inout_releases_callers_field	paramOK_inout	A2	a ': ~' copy of a parameter shares its fields; passed inout, the callee replaced a field and released the caller's (UAF)	rejected
 h296_arm_payload_returned_registration_kept	§7.2	A2	a ?? arm handing its handle payload out as the match value left its journal registration: a later panic read a dead frame's flag	runs-clean
-h297_inout_closure_param_replaced	§7.4	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
+h297_inout_closure_param_replaced	StmtT.assign	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
 h298_closure_inout_capture_replaced	§2.4	A2	a closure handing a captured : ~ String to an inout parameter took it by value; the callee replaced the copy and released the caller's buffer (UAF)	runs-clean
 h299_closure_from_a_call_outlives_its_argument	§2.11	A2	a closure a call returned over an argument it captured without taking it over (retclo) stayed usable after the caller released the argument (UAF)	rejected
 h300_vec_iterator_outlives_its_vec	§2.11	A2	h299 through iter_from_vec: the iterator called after its Vec was released	rejected
