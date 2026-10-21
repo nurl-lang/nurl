@@ -138,6 +138,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tcp_connect_tls_timeout host port sni verify alpn sess ms`**
+  (`std/net.nu`) and **`tls_attach_full_until`** (`std/tls.nu`): one
+  deadline over the whole TLS connect — name lookup, TCP handshake and
+  TLS handshake — reporting `NetTimeout` wherever it runs out. The
+  handshake's reads take what is left of the deadline as their timeout
+  (the reactor deadline on a fiber, `SO_RCVTIMEO` on a thread) and its
+  writes carry it as their write deadline, instead of the fixed 20 s per
+  read that bounded every client handshake before. Existing signatures
+  are unchanged; `tcp_connect_tls_full` is the deadline-free case.
+
 - **`tcp_connect_timeout host port ms`** (`std/net.nu`): `tcp_connect`
   with one deadline over the name lookup and the TCP handshake,
   reporting `NetTimeout` — on a fiber a netpoller deadline, off one a

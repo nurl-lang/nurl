@@ -82,6 +82,14 @@ one() {
         net_connect_fiber_timeout|net_resolve_fiber)
             echo "SKIP $name (pins host-kernel connect and resolver threads)"; return 0 ;;
     esac
+    # A deadline against a peer that never answers: the NURL socket layer
+    # sees that nothing can ever make the wait succeed (loopback only, no
+    # runnable coroutine) and fails it AT ONCE — by design, see
+    # unikernel/net/sockets.nu — so there is no deadline left to measure.
+    case "$name" in
+        tls_connect_deadline)
+            echo "SKIP $name (silent peer: the loopback stack fails the wait at once)"; return 0 ;;
+    esac
     # Only run a test whose golden says what running it should DO. Ask
     # the GOLDEN, not the name: run_san_tests.sh settled that rule
     # already — "should_fail_*, diag_*, borrow_*, and whatever
