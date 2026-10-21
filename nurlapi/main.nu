@@ -259,6 +259,13 @@ $ `stdlib/core/slice.nu`
 
 @ drop_str String s → v {}
 
+// A caller-supplied relative path: non-empty, no `..` segment, not
+// absolute. `path_join` returns an absolute second argument verbatim, so
+// checking only `..` let `/examples//etc/passwd` read any file on the host.
+@ __user_rel_ok s rel → b {
+    ^ & & > ( nurl_str_len rel ) 0 ! ( _has_dotdot_segment rel ) ! ( path_is_absolute rel )
+}
+
 // ── M11 hardening: tool timeouts, per-IP rate limit, output GC ────────
 //
 // The playground is an unauthenticated public compile farm; these keep a
@@ -1587,6 +1594,9 @@ i clang_rc s build_stdout s build_stderr → v {
     ( nurl_print `\n` )
     : ?String name_opt ( params_get params `name` )
     ?? name_opt { T name → {
+            ? ! ( __user_rel_ok ( string_data name ) ) {
+                ^ ( response_text 403 `{"error":"forbidden"}\n` )
+            } {}
             // A `.md` (e.g. examples/README.md) renders as HTML; `.nu` source
             // stays JSON for the playground's examples dropdown / wasm runner.
             : i nlen ( string_len name )
@@ -2074,7 +2084,7 @@ i clang_rc s build_stdout s build_stderr → v {
     ?? bid_opt { T bid → {
             ?? fname_opt { T fname → {
                     // Path-traversal defence — refuse `..` in either segment.
-                    ? | ( _has_dotdot_segment ( string_data bid ) ) ( _has_dotdot_segment ( string_data fname ) ) {
+                    ? | ! ( __user_rel_ok ( string_data bid ) ) ! ( __user_rel_ok ( string_data fname ) ) {
                         ^ ( response_text 403 `forbidden\n` )
                     } {}
                     : String out_dir_base ( get_output_dir )
@@ -2114,6 +2124,9 @@ i clang_rc s build_stdout s build_stderr → v {
     ( nurl_print `[srv] GET /examples/` )
     ( nurl_print ( string_data name ) )
     ( nurl_print `\n` )
+    ? ! ( __user_rel_ok ( string_data name ) ) {
+        ^ ( response_text 403 `{"error":"forbidden"}\n` )
+    } {}
     : String edir ( get_examples_dir )
     : String fpath ( path_join ( string_data edir ) ( string_data name ) )
     : !String IoErr cr ( read_file ( string_data fpath ) )
@@ -2140,7 +2153,7 @@ i clang_rc s build_stdout s build_stderr → v {
     ( nurl_print `/` )
     ( nurl_print ( string_data filename ) )
     ( nurl_print `\n` )
-    ? | ( _has_dotdot_segment ( string_data build_id ) ) ( _has_dotdot_segment ( string_data filename ) ) {
+    ? | ! ( __user_rel_ok ( string_data build_id ) ) ! ( __user_rel_ok ( string_data filename ) ) {
         ^ ( response_text 403 `forbidden\n` )
     } {}
     : String out_dir_base ( get_output_dir )
@@ -2163,7 +2176,7 @@ i clang_rc s build_stdout s build_stderr → v {
 }
 
 @ h_static_for HttpRequest req String tail → HttpResponse {
-    ? ( _has_dotdot_segment ( string_data tail ) ) {
+    ? ! ( __user_rel_ok ( string_data tail ) ) {
         ^ ( response_text 403 `forbidden\n` )
     } {}
     : String full ( path_join `static` ( string_data tail ) )
@@ -2291,7 +2304,7 @@ i clang_rc s build_stdout s build_stderr → v {
     : ?String tail_opt ( params_get params `path` )
     ?? tail_opt {
         T tail → {
-            ? ( _has_dotdot_segment ( string_data tail ) ) {
+            ? ! ( __user_rel_ok ( string_data tail ) ) {
                 ^ ( response_text 403 `forbidden\n` )
             } {}
             : String sdir ( get_static_dir )
@@ -2911,7 +2924,7 @@ i clang_rc s build_stdout s build_stderr → v {
 // finds inside a rendered README/doc resolve to a live, rendered target
 // instead of a 404. Path traversal is rejected.
 @ __serve_repo_doc s rel → HttpResponse {
-    ? ( _has_dotdot_segment rel ) { ^ ( response_text 403 `forbidden\n` ) } {}
+    ? ! ( __user_rel_ok rel ) { ^ ( response_text 403 `forbidden\n` ) } {}
     : String root ( get_work_root )
     : String fp ( path_join ( string_data root ) rel )
     : i rn ( nurl_str_len rel )
@@ -3271,7 +3284,7 @@ i clang_rc s build_stdout s build_stderr → v {
 // api/'s StdlibContent / TestContent (the viewer pages fetch JSON).
 // Refuses `..` segments.
 @ __serve_module_json HttpRequest req String dir s name → HttpResponse {
-    ? ( _has_dotdot_segment name ) {
+    ? ! ( __user_rel_ok name ) {
         ^ ( response_text 403 `{"error":"forbidden"}` )
     } {}
     : String fpath ( path_join ( string_data dir ) name )
@@ -3390,7 +3403,7 @@ i clang_rc s build_stdout s build_stderr → v {
     ?? tail_opt {
         T tail → {
             ( nurl_print `[srv] GET /stdlib-docs/` ) ( nurl_print ( string_data tail ) ) ( nurl_print `\n` )
-            ? ( _has_dotdot_segment ( string_data tail ) ) {
+            ? ! ( __user_rel_ok ( string_data tail ) ) {
                 ^ ( response_text 403 `forbidden\n` )
             } {}
             : i tn ( string_len tail )
@@ -4721,7 +4734,7 @@ unsafe @ __uk_exit_code s log → i {
         }
     } {}
     ? > ( nurl_str_len module ) 0 {
-        ? ( _has_dotdot_segment module ) { ^ ( __mcp_result_error `bad 'module'` ) } {}
+        ? ! ( __user_rel_ok module ) { ^ ( __mcp_result_error `bad 'module'` ) } {}
         : String sd ( get_stdlib_dir )
         : String md ( msearch_api_module ( string_data sd ) module )
         ? == ( string_len md ) 0 {
@@ -4870,7 +4883,7 @@ unsafe @ __uk_exit_code s log → i {
 // directory traversal — the same defensive shape h_static* uses.
 @ __mcp_read_under String dir Json args → Json {
     : s rel ( __mcp_args_get `name` args `` )
-    ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
+    ? ! ( __user_rel_ok rel ) {
         ^ ( __mcp_result_error `bad or missing 'name'` )
     } {}
     : String fp ( path_join ( string_data dir ) rel )
@@ -4923,7 +4936,7 @@ unsafe @ __uk_exit_code s log → i {
         T v → { = rel ( json_as_str v ) }
         F _ → {}
     }
-    ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
+    ? ! ( __user_rel_ok rel ) {
         ^ ( json_null )
     } {}
     : String fp ( path_join ( string_data dir ) rel )

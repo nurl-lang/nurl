@@ -707,6 +707,18 @@ def t_tools_call_traversal(c: Client) -> None:
         "traversal flagged as error (isError or no etc/passwd content)",
         bool(res.get("isError")) or ("root:" not in text),
     )
+    # Absolute paths are not workspace paths either: path_join returns an
+    # absolute second argument verbatim, so these used to read any file.
+    env = _tool_call(c, "nurl_read_example", {"name": "/etc/passwd"})
+    assert_true(
+        "absolute MCP name flagged as error",
+        bool(res.get("isError")) or ("root:" not in _tool_text(env)),
+    )
+    for path in ("/examples//etc/passwd", "/stdlib//etc/passwd",
+                 "/tests//etc/passwd", "/static//etc/passwd"):
+        status, _, body = c.get(path)
+        assert_true(f"absolute path refused {path}", status in (403, 404),
+                    f"HTTP {status}: {body[:80]!r}")
 
 
 def t_tools_call_unknown(c: Client) -> None:
