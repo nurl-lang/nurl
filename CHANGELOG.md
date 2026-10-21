@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An inferred binding can rebind a name already in scope (agora #59).**
+  `: i n 0` then `: n 5` failed with "unknown type 'n' in a binding
+  type": the parser took the annotated form `: TYPE NAME EXPR` whenever
+  the first word was in the symbol table at all, and the table holds
+  values as well as types. Only a word that names a type (a struct,
+  enum, generic template or type slug) opens the annotated form now, as
+  spec §5.1 says; a struct value rebound as `: p @ P { … }` no longer
+  reports "type 'p' … declared LATER" either. `: P 5` with `P` a struct
+  — the one shape the rule cannot read as inferred — says why `P` was
+  taken as the type.
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
   closed the fd outside the netpoller lock; a fiber parking on the

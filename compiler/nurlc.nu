@@ -30798,6 +30798,23 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ^ ``
 }
 
+// Does `name` name a TYPE in scope — the question a binding's first word
+// asks (§5.1)? The symbol table holds values and types alike, so being
+// in it decides nothing: a struct or enum maps to `%Name` (the pre-scan
+// and gen_struct_decl/gen_enum_decl), a closure/trait-object slug or a
+// generic instance carries `__is_type`, and a generic template's bare
+// name — not a type, but it must reach parse_type's "used without type
+// arguments" diagnostic — is in g_generic_struct_syms. A value is never
+// any of those: a local, parameter or global maps to ITS type, which is
+// `%Other` for a struct value and never `%` + its own name.
+@ __names_type i syms s name → b {
+    : s sv ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_len sv ) { ^ F } {}
+    ? & == ( nurl_str_get sv 0 ) 37 ( seq ( nurl_str_slice sv 1 - ( nurl_str_len sv ) 1 ) name ) { ^ T } {}
+    ? != 0 ( nurl_sym_len2 syms name `__is_type` ) { ^ T } {}
+    ^ & != 0 g_generic_struct_syms != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
+}
+
 unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
@@ -30826,8 +30843,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // happens (see __ptr_kill / the use-site warning in gen_ident), so the
     // blanket warning — which fired on correct code and pushed callers to
     // launder pointers through i64 — is gone.
-    // Check if first token could be a type name by looking it up in symbol table
-    ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_sym_len syms ( nurl_lex_val lex ) )
+    // A plain IDENT opens the annotated form only when it NAMES A TYPE
+    // (§5.1: "an identifier that names a registered type is taken as the
+    // type annotation, otherwise the plain-IDENT form is type-inferred").
+    // The test used to be "is the name in the symbol table at all", and
+    // the table holds values too: `: i n 0` then `: n 5` read the in-scope
+    // VALUE n as a type and died "unknown type 'n' in a binding type" —
+    // while `: i n 5`, the same rebinding spelled out, compiled.
+    ? & == ( nurl_lex_type lex ) TT_IDENT ! ( __names_type syms ( nurl_lex_val lex ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
         : i __ob_line g_stmt_line
@@ -31127,6 +31150,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
         : i __bt_line ( nurl_lex_line lex )
         : i __bt_col ( nurl_lex_col lex )
+        // A bare IDENT here named a type (__names_type): kept for the
+        // "expected a binding name" report, where it is the whole story.
+        : s __bt_word ? == ( nurl_lex_type lex ) TT_IDENT ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
         : s ptype ( parse_type lex )
         // A binding's type went unchecked while parameter, field, return
         // and FFI types were all validated — so `: Foo x 0` against an
@@ -31465,9 +31491,15 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { ( die lex `expected variable name in let — 'inline' is a reserved keyword (the always-inline prefix on function declarations) and cannot name a binding` ) }
                     { ? == ( nurl_lex_type lex ) TT_BOOL
                         { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                        { ( die lex ( nurl_str_cat3
+                        {  // `: P 5` with P a struct: the one shape §5.1 cannot
+                            // read as inferred, because the first word NAMES A
+                            // TYPE and so is the annotation. Say that, not only
+                            // the general form — the writer meant P as a name.
+                            : s __tyw ? == 0 ( nurl_str_len __bt_word ) ``
+                            ( nurl_str_cat3 ` Here '` __bt_word `' names a type in scope, so it is read as the binding's TYPE — an identifier that names a registered type is the annotation (spec §5.1), never the inferred form's name. A binding cannot take a type's name: pick another one.` )
+                            ( die lex ( nurl_str_cat4
                             `expected a binding name, found ` ( tok_here lex )
-                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } } }
+                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` __tyw ) ) } } } } }
     }
 }
 

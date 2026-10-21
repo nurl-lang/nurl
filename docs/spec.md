@@ -1304,7 +1304,8 @@ Binds `IDENT` to the value of `expr`. The optional `~` prefix marks the
 binding mutable (default immutable). The type annotation is optional
 when inferable from the right-hand side; an identifier that names a
 registered type is taken as the type annotation, otherwise the
-plain-IDENT form is type-inferred.
+plain-IDENT form is type-inferred. A name already bound as a *value* is
+not a type, so the inferred form rebinds it.
 
 <!-- doctest-prelude
 $ `stdlib/core/string.nu`
@@ -1314,7 +1315,7 @@ $ `stdlib/core/string.nu`
 : i n 0                          // explicit type
 : ~ i x 0                        // mutable
 : String s ( string_new )        // named type
-: sum ( add 1 2 )                // inferred
+: n ( add 1 2 )                  // inferred (rebinds n)
 ```
 
 A binding whose RHS is a fresh heap allocation becomes the *owner* of

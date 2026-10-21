@@ -396,7 +396,9 @@ jump_stmt = 'break' | 'continue' ;
    Optional ~ prefix makes the variable mutable (default immutable).
    Type annotation is optional when inferable from the expression.
    An IDENT that is already registered as a named type is taken as the
-   type annotation; otherwise the plain-IDENT form is type-inferred.
+   type annotation; otherwise the plain-IDENT form is type-inferred —
+   including an IDENT already bound as a VALUE, which the inferred form
+   rebinds (`: i n 0` then `: n 5`).
    Example:  : i n 0            — immutable, explicit type
    Example:  : ~ i x 0          — mutable, explicit type
    Example:  : String s ( string_new )    — explicit named type
