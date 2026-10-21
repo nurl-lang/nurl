@@ -16,7 +16,20 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
 - **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
   handshake with SNI; the `verify` flag turns on peer-certificate chain +
   host-name verification against the system trust store — the primitive
-  behind any outbound TLS application).
+  behind any outbound TLS application). `tcp_connect_timeout host port ms`
+  bounds the whole connect — name lookup and TCP handshake — and reports
+  `NetTimeout` once `ms` passes; pair it with `tcp_starttls` for a bounded
+  TLS connect. Every address a name resolves to is tried in order until
+  one connects. **On a fiber neither step holds the worker**: a name is
+  resolved by the system `getaddrinfo` (so `/etc/hosts`, nsswitch and
+  `resolv.conf` apply as ever) on a small runtime resolver pool while the
+  fiber parks on the netpoller, and the handshake is a non-blocking
+  `connect` parked for writability — the other fibers on that worker keep
+  running through a slow DNS answer or a SYN into a black hole. A numeric
+  address never reaches the resolver. Off a fiber a connect blocks the
+  thread as it always has (the timeout then uses `poll`). A failed TCP
+  connect under `tcp_connect_tls*` reports its own error (`NetTimeout`,
+  `NetOther`, …) rather than `NetTlsHandshake`.
 - **UDP** (`stdlib/std/udp.nu`) — `udp_bind` (dual-stack wildcard),
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /
@@ -36,7 +49,11 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   String) NetErr` lists A/AAAA literals in the kernel's preferred order;
   `dns_resolve_port host port` formats each entry as `"ip:port"` (IPv4) or
   `"[ip]:port"` (IPv6, RFC 3986) ready for `tcp_connect` / `udp_connect`;
-  `dns_reverse ip → ? String` runs `NI_NAMEREQD`.
+  `dns_reverse ip → ? String` runs `NI_NAMEREQD`. On a fiber the forward
+  lookups (and the ones inside `udp_connect`, `udp_send_to` and
+  `udp_addr_resolve`) run on the runtime's resolver threads with the
+  fiber parked, as for `tcp_connect`; `dns_reverse` still runs on the
+  caller.
 
 TCP writes can share an absolute operation budget with
 `tcp_set_write_deadline(conn, monotonic_ns)`. Zero clears it, and
