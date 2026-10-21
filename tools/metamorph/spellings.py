@@ -1939,17 +1939,19 @@ CLASSES = [
                 prelude="",
                 extra=": Inner { i x }\n: Outer { Inner it }\n"
                       + "@ mk2 i a → Outer { ^ @ Outer { @ Inner { a } } }\n"),
-            # A closure over a HEAP handle is not a stack reference: the
-            # Vec control block outlives the frame, so returning the
-            # closure is the documented cure, not the disease (§4).
+            # A closure over a HEAP handle is not a stack reference:
+            # returned as the literal itself, its environment takes over
+            # the Vec it captured, so returning it is the documented cure,
+            # not the disease (§4). (Bound first and returned by name, it
+            # held only a copy of the handle, which the frame released:
+            # h310 — this control was that shape until ASan said so.)
             "closure-over-heap-handle": prog(
                 "    : ( @ v ) g ( caller )\n"
                 "    ( g )",
                 prelude=PRELUDE_VEC,
                 extra="@ caller → ( @ v ) {\n"
                       "    : ( Vec i ) xs ( vec_new [i] )\n"
-                      "    : ( @ v ) f \\ → v { ( vec_push [i] xs 1 ) }\n"
-                      "    ^ f\n}\n"),
+                      "    ^ \\ → v { ( vec_push [i] xs 1 ) }\n}\n"),
             # §2.10 control. A forward-defined callee that does NOT
             # mutate must stay silent — the provisional kill behind the
             # order-independence fix is a parked QUESTION, and answering

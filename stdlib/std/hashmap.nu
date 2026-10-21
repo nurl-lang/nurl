@@ -51,12 +51,12 @@
 //   ( map_clone      [K V] m )                  → ( HashMap K V )  owns copies of every entry
 //   ( map_clone_with [K V] m clone_k clone_v )  → ( HashMap K V )  deep copy
 //
-// map_keys / map_values walk occupied slots and bitwise-copy keys/values
-// into a fresh Vec. Trivial element types only — for owned keys/values
-// (e.g. HashMap[String i]) the result aliases the map's storage; iterate
-// with map_each and clone each key explicitly instead. To duplicate a
-// whole owned-key/value map use `map_clone_with` with per-key/value
-// clone closures.
+// map_keys / map_values / map_iter hand out copies the caller owns: a key
+// or value that owns memory (a String) is copied deep (docs/MEMORY.md
+// §7.6), so the result and the map are dropped independently. map_iter's
+// iterator borrows the map itself: the map must outlive it (the checker
+// rejects anything else). To duplicate a
+// whole map use `map_clone`, or `map_clone_with` for custom copies.
 //
 // Stock hash + eq:
 //   ( hash_string s )      → i        djb2-style hash over bytes
@@ -499,9 +499,8 @@ $ `stdlib/core/box.nu`
     ^ acc
 }
 
-// Bitwise-copy occupied keys into a fresh Vec[K]. Order is host-defined
-// (depends on probe layout). Trivial K only — for owned-key maps the
-// result aliases the map; clone keys yourself via map_each.
+// The occupied keys, copied into a fresh Vec[K] (an owned key deep, §7.6).
+// Order is host-defined (depends on probe layout).
 @ map_keys [K V] ( HashMap K V ) m → ( Vec K ) {
     : *MapCtl c ( box_ptr [MapCtl] . m ctl )
     : i cap . c cap
@@ -521,26 +520,27 @@ $ `stdlib/core/box.nu`
     ^ out
 }
 
-// Lazy iterator over occupied (key, value) pairs. The iterator BORROWS
-// the map — do not mutate the map while iterating, and do NOT free the
-// map until iteration is finished. cmd=1 only releases the iterator's
-// own state (the closure releases it anyway); the caller still owns the
-// map.
+// Lazy iterator over occupied (key, value) pairs. The iterator borrows
+// the map: it holds a copy of the handle and reads the slots through it
+// when called, so releasing the map or giving it a new value while the
+// iterator is still used, or returning the iterator past the map, is
+// rejected (h301). A map changed between calls (map_set, map_remove) is
+// walked on its current slots: after a resize an entry may be skipped or
+// met twice. cmd=1 only releases the iterator's own state (the closure
+// releases it anyway); the caller still owns the map.
 //
-// Element type is ( Pair K V ). The Pair fields are bitwise-copies of
-// the slot contents, so the same trivial-only caveat as map_keys /
-// map_values applies: for owned-key / owned-value maps the resulting
-// Pair fields alias the map's storage. Use map_each + a manual Vec
-// build with explicit clones if you need owned copies.
+// Element type is ( Pair K V ), each Pair its own: a key or value that
+// owns memory is copied into it (docs/MEMORY.md §7.6), so dropping or
+// keeping a Pair leaves the map as it was.
 //
 // State: the slot index the walk has reached, in a Box the closure owns
 // (released with it).
 @ map_iter [K V] ( HashMap K V ) m → ( @ ?( Pair K V ) i ) {
     : ( Box i ) st ( box_new [i] 0 )
-    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
-    : i cap . c cap
     ^ \ i cmd → ?( Pair K V ) {
         ? == cmd 1 { ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 } } {}
+        : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+        : i cap . c cap
         ? == cap 0 { ^ @ ?( Pair K V ) { F # ( Pair K V ) 0 } } {}
         : *K keys # *K ( raw_block_ptr . c keys )
         : *V vals # *V ( raw_block_ptr . c vals )
@@ -562,7 +562,7 @@ $ `stdlib/core/box.nu`
     }
 }
 
-// Bitwise-copy occupied values into a fresh Vec[V]. Same caveat as map_keys.
+// The occupied values, copied into a fresh Vec[V] (as map_keys).
 @ map_values [K V] ( HashMap K V ) m → ( Vec V ) {
     : *MapCtl c ( box_ptr [MapCtl] . m ctl )
     : i cap . c cap

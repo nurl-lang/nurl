@@ -1,7 +1,11 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent were `h288`–`h298`, found
+gate in the parent directory. The most recent were `h299`–`h310`: closures
+that outlived what they read (a closure a call returned over its argument,
+the standard library's iterators, a by-value capture whose binding was
+given a new value or replaced through `inout`) and `map_keys` leaking owned
+keys. Before them, `h288`–`h298`, found
 building a multi-threaded database (`packages/nurldb`): a helper lending an
 `Arc`'s payload unfrozen through a struct, a foreign write into a frozen
 view, a lock guard held in a struct never released, drops a panic skipped
