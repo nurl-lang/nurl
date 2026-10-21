@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The hardware crypto tier: AES and carry-less-multiply primitives in
+  the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
+  t37). `nurl_v128_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`,
+  `_aesimc` and `nurl_v128_clmul_ll/_hl/_lh/_hh` (PCLMULQDQ's immediate
+  as four primitives), the portable `nurl_v128_bswap128`, and
+  `nurl_cpu_has_aes` (docs/spec.md §4.1b). They are not baseline
+  anywhere, so nurlc keeps the contract rather than the program:
+  - a function whose body uses one is compiled for x86-64-v2 + AES-NI +
+    PCLMULQDQ and gated at entry on the runtime's CPUID answer
+    (`nurl_cpu_x86_aes`) — a CPU without the tier gets a recoverable
+    panic, not SIGILL; the gate is a `readnone` call the optimiser
+    merges and hoists out of loops;
+  - such a function is never `alwaysinline` (LLVM would inline it into a
+    baseline caller): an `inline @` or v128 signature becomes
+    `inlinehint`, plus an ungated `alwaysinline` copy `@f.tier` that
+    every tier function's own calls go to — helpers inline
+    unconditionally inside the tier, and stay gated calls outside it;
+  - a `simd @` function that uses a primitive, or calls a function that
+    does, gets tier clones: `.base` compiled for the tier and gated,
+    `.x86v3` with `+aes,+pclmul`, picked only when the CPU has both. A
+    marked function's clones now depend on its callees, which a lazily
+    compiled library generates after it, so marked functions and tier
+    functions are emitted at the end of the module;
+  - under `--no-cpu-dispatch` the primitives are panicking stubs and
+    `nurl_cpu_has_aes` is false.
+  `std/aes_gcm.nu` builds a HARDWARE key where the CPU has the tier:
+  round keys from an `aesenclast` key schedule, and GHASH in the
+  reflected domain with a two-PCLMULQDQ Montgomery reduction — for
+  T = A'·G, R' = T1 ^ W ^ clmul(W.hi, q) with W = T0 ^ swap(clmul(T0.lo,
+  q)), q = 0xC2…00 being y^121 + y^126 + y^127, the inverse of the
+  reciprocal polynomial mod y^128 minus one; the one-bit shift and the
+  y^-128 are folded into the key (G = y·H' mod P*). The kernel encrypts
+  eight blocks while folding the previous eight into GHASH (one block of
+  the fold per AES round, one reduction per batch). On an i7-5930K
+  (Haswell): AES-128-GCM seal **2.9–3.2 GB/s** over 16 KB – 1 MB, from
+  ~0.11 GB/s bitsliced; 1.21 cycles/byte against **1.22 for the same
+  algorithm in C intrinsics built by the same clang** — and OpenSSL's
+  hand-scheduled assembly at 1.07. A 32-byte message seals in 101 ns
+  with a prepared key (289 ns with the per-record key the TLS one-shot
+  API still builds), ChaCha20-Poly1305 in 634.
+  `compiler/tests/aes_gcm_hw_agree.nu` holds the hardware path to the
+  software one over every length 0–300 with 0–37 bytes of AAD and both
+  key sizes; `simd_crypto.nu` checks each primitive against FIPS-197
+  C.1 and hand-worked products, through a plain helper, a `simd` clone
+  and a closure.
+
 ### Fixed
 
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
@@ -81,6 +129,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empties the slot, as for a struct field.
 
 ### Changed
+
+- **TLS picks AES-128-GCM on a CPU with AES-NI** — the server when the
+  client offers it, the client by listing it first; ChaCha20-Poly1305
+  otherwise, as OpenSSL and rustls do. It was ChaCha unconditionally,
+  correctly, while AES-GCM was the slower suite on every NURL host.
+- **nurlc starts with CPU dispatch off on a non-x86-64 host** (its IR is
+  compiled for the host clang runs on, and x86 intrinsics in an AArch64
+  module are a codegen error, not the warnings the `simd` clones' feature
+  strings were); `--cpu-dispatch` turns it on for an x86-64 target built
+  there.
+- **`NURL_CPU_V3=0` and `NURL_CPU_AES=0`** take a CPU-dispatch answer
+  away (never grant one), so one machine runs every clone and fallback;
+  a test declares `// requires: cpu-aes` when its golden needs the tier.
 
 - Standard-library doc comments no longer tell callers to free what they
   own or warn them off what the checker already rejects: about fifty

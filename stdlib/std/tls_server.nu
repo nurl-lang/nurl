@@ -831,31 +831,33 @@ $ `stdlib/core/rcbox.nu`
     : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
     : i cslen ( _rdint ch p1 2 )
-    // Choose the cipher: ChaCha20-Poly1305 (0x1303) when the client
-    // offers it, AES-128-GCM (0x1301) otherwise.
+    // Choose the cipher. AES-128-GCM (0x1301) when the CPU has AES-NI
+    // and PCLMULQDQ (nurl_cpu_has_aes) and the client offers it;
+    // otherwise ChaCha20-Poly1305 (0x1303) when offered; otherwise
+    // AES-128-GCM — TLS_AES_128_GCM_SHA256 is the one suite RFC 8446
+    // requires every implementation to have, so every client offers it.
     //
-    // The preference used to be the other way round, and since
-    // TLS_AES_128_GCM_SHA256 is the one suite RFC 8446 requires every
-    // implementation to have, EVERY client offered it and EVERY
-    // connection this server accepted got it — back when AES-GCM ran at
-    // 0.5 MB/s against ChaCha's 390, that single line cost a ~700x
-    // slowdown on everything this server sent.
-    //
-    // `std/aes_gcm.nu` is bitsliced now and the gap is 3x, not 700x
-    // (16 KB records via `bench/crypto_hotpath.nu`: AES-128-GCM
-    // ~113 MB/s, ChaCha20-Poly1305 ~370). ChaCha still wins, and still
-    // should: NURL has no AES-NI path on any target, and a software-only
-    // TLS stack preferring ChaCha is what OpenSSL itself does when the
-    // CPU has no AES instructions. The two suites are equally strong.
-    : ~ i suite 0
+    // That order is what OpenSSL and rustls pick, for the same reason:
+    // with AES instructions AES-GCM is the faster suite, without them
+    // ChaCha is. It used to be ChaCha unconditionally here — back when
+    // AES-GCM ran at 0.5 MB/s, then bitsliced at ~113 MB/s against
+    // ChaCha's ~370, NURL having no AES-NI path. With the crypto tier
+    // (std/aes_gcm.nu's hardware path) AES-128-GCM seals a 16 KB record
+    // at ~3 GB/s against ChaCha's ~1.4, and a 32-byte one in a third
+    // of the time even when the key is expanded per record. The two
+    // suites are equally strong.
+    : b hw_aes ( nurl_cpu_has_aes )
+    : ~ b off_aes F
+    : ~ b off_cc F
     : ~ i ci 0
     ~ < ci cslen {
         : i s2 ( _rdint ch + + p1 2 ci 2 )
-        ? == s2 4867 { = suite 4867 } {}
-        ? & == s2 4865 == suite 0 { = suite 4865 } {}
+        ? == s2 4865 { = off_aes T } {}
+        ? == s2 4867 { = off_cc T } {}
         = ci + ci 2
     }
-    ? == suite 0 { = suite 4867 } {}
+    : ~ i suite 4867
+    ? & hw_aes off_aes { = suite 4865 } { ? off_cc { = suite 4867 } { ? off_aes { = suite 4865 } {} } }
     = . h cipher ? == suite 4865 1 0
     : i p2 + + p1 2 cslen
     : i complen ( _t_bget ch p2 )

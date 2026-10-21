@@ -607,26 +607,33 @@ $ `stdlib/core/slice.nu`
     ( _tls_cat body random )  // 32-byte random
     ( vec_push [u] body # u ( vec_len [u] sessid ) )  // legacy_session_id (empty for QUIC)
     ( _tls_cat body sessid )
-    // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303) +
-    // TLS_AES_128_GCM_SHA256 (0x1301) — both use the SHA-256 key
-    // schedule, so either keeps the rest of the handshake unchanged.
-    // ChaCha is listed FIRST on purpose: measured on one core over
-    // 16 KB records, ChaCha20-Poly1305 seals at ~370 MB/s and
-    // AES-128-GCM — bitsliced, so constant-time without AES
-    // instructions — at ~113. Both are now fast enough that a download
-    // is not bounded by the record layer, but ChaCha is still the
-    // better of the two on a host with no AES hardware, which is every
-    // host NURL has a code path for. Servers honouring client
-    // preference (Cloudflare et al.) pick ChaCha; AES-only peers still
-    // get 0x1301 from the same list.
-    // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.
+    // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) and
+    // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
+    // schedule, so either keeps the rest of the handshake unchanged —
+    // the faster one for THIS CPU first: AES-GCM where it has AES-NI
+    // and PCLMULQDQ (nurl_cpu_has_aes; std/aes_gcm.nu's hardware path,
+    // ~3 GB/s over 16 KB records against ChaCha's ~1.4), ChaCha where
+    // it does not (the bitsliced AES runs at ~113 MB/s). Servers
+    // honouring client preference (Cloudflare et al.) pick the first;
+    // AES-only peers get 0x1301 from the same list either way.
+    // 1.3 suites first, then the TLS 1.2 ECDHE suites in the same order.
+    : b hw_aes ( nurl_cpu_has_aes )
     ( _tls_u16 body 12 )
-    ( _tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
-    ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
-    ( _tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
-    ( _tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
-    ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
-    ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    ? hw_aes {
+        ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
+        ( _tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
+        ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+        ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+        ( _tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
+        ( _tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
+    } {
+        ( _tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
+        ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
+        ( _tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
+        ( _tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
+        ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+        ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    }
     // compression methods
     ( vec_push [u] body # u 1 )
     ( vec_push [u] body # u 0 )
