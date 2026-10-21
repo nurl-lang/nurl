@@ -23,7 +23,7 @@
 //   ( string_new )             → String      empty
 //   ( string_from raw )        → String      copy of raw i8*
 //   ( string_len s )           → i           byte length
-//   ( string_data s )          → s           borrowed i8* (null-terminated); do NOT free
+//   ( string_data s )          → s           a view of s's bytes (null-terminated), valid while s is unchanged
 //   ( string_get s idx )       → i           byte at index (0 out of range)
 //   ( string_push_char s c )   → v           append one byte
 //   ( string_push_str s raw )  → v           append raw i8*
@@ -401,8 +401,8 @@ $ `stdlib/core/char.nu`
 
 // Take ownership of an already-malloc'd, NUL-terminated buffer and
 // wrap it as a String WITHOUT copying. The caller must NOT touch
-// `raw` after the call — the returned String now owns the buffer
-// and will `nurl_free` it on `string_free`.
+// `raw` after the call — the returned String now owns the buffer and
+// releases it with itself. (`raw` is a raw pointer: unsafe callers only.)
 //
 // `raw_cap` is the actual malloc'd size (bytes), typically
 // `nurl_str_len raw + 1` for a freshly-read file buffer. Must be
@@ -550,7 +550,8 @@ $ `stdlib/core/char.nu`
 //   … = . w k # u byte …                   // k in [0, n)
 //   ( string_commit out n )                // len += n, NUL re-sealed
 //
-// CONTRACT — the returned pointer is valid only until the next
+// CONTRACT (for `unsafe` callers — the result is a raw pointer, which
+// safe code cannot take) — the returned pointer is valid only until the next
 // operation that can grow the buffer. Between `string_reserve_at` and
 // `string_commit`, do NOT call any other mutator on `str` (push_char,
 // push_str, push_bytes, clear, …) and do NOT write past index n-1: a

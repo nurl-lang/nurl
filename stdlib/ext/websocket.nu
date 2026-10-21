@@ -70,9 +70,9 @@
 // on protocol error it sends an outbound close with the appropriate
 // code + reason, then closes the TCP connection.
 //
-// Memory model: WsFrame and WsMessage payloads are OWNED Vec[u] — callers
-// must `vec_free [u]` after use. The `ws_serve_messages` handler receives
-// a borrowed WsMessage; the loop frees it after the handler returns.
+// Memory model: WsFrame and WsMessage payloads are owned Vec[u], dropped
+// by their owner. The `ws_serve_messages` handler is lent a WsMessage;
+// the loop drops it after the handler returns.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -530,8 +530,8 @@ $ `stdlib/ext/compress.nu`
 }
 
 // Read a single WebSocket frame from `conn`, enforcing all RFC 6455
-// §5 framing rules. Returns an OWNED WsFrame; caller frees the payload
-// via ws_frame_free.
+// §5 framing rules. Returns an owned WsFrame (the caller's; ws_frame_free
+// releases it early).
 //
 // Validation performed (in order):
 //   1. Reserved bits RSV1-3 (byte 0 bits 4-6) MUST be 0.
@@ -908,7 +908,8 @@ $ `stdlib/ext/compress.nu`
 //     is the UTF-8 reason. Reason validity is NOT enforced here —
 //     callers that care should run ws_validate_utf8 separately.
 //
-// Returns an OWNED WsCloseInfo; caller frees via ws_close_info_free.
+// Returns an owned WsCloseInfo (the caller's; ws_close_info_free
+// releases it early).
 @ ws_parse_close ( Vec u ) payload → WsCloseInfo {
     : i n ( vec_len [u] payload )
     ? == n 0 {
@@ -1166,7 +1167,7 @@ $ `stdlib/ext/compress.nu`
 //     close. Return Ok (peer-initiated close is a normal lifecycle event).
 //   * Reader returns other Err: send mapped close code + close. Return Err.
 //
-// The handler is BORROWED a WsMessage; the loop frees it after the
+// The handler is lent a WsMessage; the loop drops it after the
 // handler returns regardless of outcome. Handler-side writes go through
 // the shared `conn` via the convenience writers — interleaving with the
 // read loop is safe because the loop reads-then-dispatches sequentially.

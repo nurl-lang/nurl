@@ -85,7 +85,7 @@
 //   ( mcp_task_status tp )          → i
 //   ( mcp_task_tool tp )            → s     borrowed
 //   ( mcp_task_method tp )          → s     borrowed
-//   ( mcp_task_args tp )            → Json  BORROWED — do not free
+//   ( mcp_task_args tp )            → Json  lent by the task
 //   ( mcp_task_link tp )            → i
 //   ( mcp_task_set_link tp v )      → v
 //   ( mcp_task_cancel_requested tp ) → b    cooperative cancel signal

@@ -21,9 +21,9 @@
 // Fixed-width identities are values, not buffers.
 //
 // OWNERSHIP: everything in this module is a scalar except `ipv4_str`
-// and `mac_str`, which return a `String` — a manually-managed handle
-// (docs/MEMORY.md §7.4). The caller frees it with `string_free`. Both
-// are diagnostic helpers; nothing on the packet hot path allocates.
+// and `mac_str`, which return a `String` the caller owns (dropped at
+// scope exit). Both are diagnostic helpers; nothing on the packet hot
+// path allocates.
 //
 // CHECKSUM
 //

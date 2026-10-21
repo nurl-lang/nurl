@@ -22,10 +22,11 @@
 //   ( lru_free_with[V] c drop )           → v        drop:(@ v V) each value
 //
 // The cache OWNS a private copy of each key (duplicated on insert) and
-// each value handed to `lru_put`. `lru_get`/`lru_peek` return a BORROW
-// of the stored value — do not free it, and treat it as invalid after a
-// later `lru_put` that may evict it. For owned value types use
-// `lru_free_with` to drop each value on teardown.
+// each value handed to `lru_put`, and drops them with its last owner.
+// `lru_get` / `lru_peek` lend the stored value: releasing it is rejected,
+// and a later `lru_put` or `lru_remove` (which may evict it) ends it
+// (h313, h314). `lru_free_with` lends each value to a closure before the
+// cache goes.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

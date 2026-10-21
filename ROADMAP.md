@@ -230,7 +230,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
-  is known — every one found, through probe h310, is closed; the rules for
+  is known — every one found, through probe h315, is closed; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -594,11 +594,12 @@ new language features.
   nothing, a closure read out of a field); and h288–h298 (0.75.0), found
   building a multi-threaded database (`nurldb`): frozen views, guards in
   structs and argument temporaries on the panic path, closures replaced
-  through `inout`; and h299–h310 (after 0.76.0), found probing what the
+  through `inout`; and h299–h315 (after 0.76.0), found probing what the
   library's doc comments still asked of callers: closures that outlived
   what they read — a closure a call returned over its argument, the
   library's iterators, a by-value capture whose binding was given a new
-  value. No hole is known.
+  value — and lends returned through a join (`lru_get`), h311–h315. No
+  hole is known.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

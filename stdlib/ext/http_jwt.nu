@@ -16,8 +16,8 @@
 //   ( with_jwt_hs256 secret inner )  → ( @ HttpResponse HttpRequest )
 //       inner : ( @ HttpResponse HttpRequest Json )
 //       Verify with the shared HS256 secret; on success call
-//       `( inner req claims )`. `claims` is BORROWED — the middleware
-//       owns and frees it after the handler returns.
+//       `( inner req claims )`. `claims` is lent to the handler — the
+//       middleware owns it and drops it after the handler returns.
 //
 //   ( with_jwt_eddsa pubkey inner ) → ( @ HttpResponse HttpRequest )
 //       inner : ( @ HttpResponse HttpRequest Json )

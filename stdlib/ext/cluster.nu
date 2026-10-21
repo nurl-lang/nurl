@@ -29,8 +29,8 @@
 //   ( registry_free Registry r )                      → v
 //   ( registry_register Registry r s name handler )   → v
 //        handler :: ( @ !Json ClusterErr Json )
-//        — receives a BORROWED args Json (do NOT free it), returns an
-//          OWNED Json on success or a ClusterErr on failure.
+//        — is lent the args Json, returns an owned Json on success or
+//          a ClusterErr on failure.
 //   ( registry_count Registry r )                     → i
 //   ( rpc_dispatch Registry r Json req )              → Json
 //        — pure: maps a request envelope to an owned response envelope.
@@ -45,8 +45,8 @@
 //
 //   ( node_new s host i port )                        → Node
 //   ( call_remote Node n s fn_id Json args )          → !Json ClusterErr
-//        — MOVE: consumes `args`. Ok arm is a fresh owned Json the
-//          caller frees with json_free. Uses retry_default.
+//        — MOVE: consumes `args`. Ok arm is a fresh owned Json (the
+//          caller's). Uses retry_default.
 //   ( call_remote_with Node n s fn_id Json args RetryPolicy pol )
 //                                                      → !Json ClusterErr
 //        — as above with an explicit backoff/retry policy.

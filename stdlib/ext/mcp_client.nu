@@ -51,8 +51,8 @@
 //
 //   * `mcp_client_new` COPIES `endpoint` into an owned String. The
 //     resulting handle is heap-light (one String + two ints).
-//   * `params` / `args` are CONSUMED by the call — caller must NOT
-//     re-use them after handing over. Pass `json_clone` if needed.
+//   * `params` / `args` are CONSUMED by the call (using them after is
+//     rejected). Pass `json_clone` to keep one.
 //   * `mcp_call` returns the full JSON-RPC response object on success
 //     (caller probes `.result`/`.error` itself). Helpers like
 //     `mcp_tools_list` extract the `.result.tools` array as a fresh

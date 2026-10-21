@@ -2379,11 +2379,19 @@ $ `stdlib/core/slice.nu`
                     // Pad to a column so the sizes line up.
                     : ~ i pad ( nurl_str_len rel )
                     ~ < pad 30 { ( string_push_char out 32 ) = pad + pad 1 }
+                    // (Under a KB in bytes, else rounded: a 429-byte guide
+                    // read "0 KB", taken for an empty file.)
                     ?? ( json_obj_get fo `bytes` ) {
                         T bj → {
+                            : i nb ( json_as_int bj )
                             ( string_push_char out 32 )
-                            ( string_push_int out / ( json_as_int bj ) 1024 )
-                            ( string_push_str out ` KB` )
+                            ? < nb 1024 {
+                                ( string_push_int out nb )
+                                ( string_push_str out ` B` )
+                            } {
+                                ( string_push_int out / + nb 512 1024 )
+                                ( string_push_str out ` KB` )
+                            }
                         }
                         F _ → {}
                     }

@@ -65,8 +65,8 @@
 //   * `udp_peer_addr` returns a BORROWED view into the handle (the
 //     address of the last `recv_from` / `connect` peer). Copy via
 //     `string_from` if a long-lived String is needed.
-//   * `udp_local_addr` returns an OWNED String (caller frees via
-//     `string_free`) — computed fresh from `getsockname` each call.
+//   * `udp_local_addr` returns an owned String (the caller's) — computed
+//     fresh from `getsockname` each call.
 //
 // Multicast `iface` argument:
 //

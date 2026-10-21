@@ -1224,8 +1224,8 @@ $ `stdlib/core/vec.nu`
 // ── Iteration & object key listing ──────────────────────────────────
 //
 // `json_arr_each` walks JArr elements in order, calling `f` on each.
-// `json_obj_each` walks JObj key-value pairs, calling `f` with the raw
-// key (borrowed `i8*`, do NOT free) and the JSON value. Both are
+// `json_obj_each` walks JObj key-value pairs, calling `f` with the key
+// (an `s` view, valid during the call) and the JSON value. Both are
 // no-ops on a non-matching variant — they don't fail, they just don't
 // iterate anything.
 //
@@ -1289,10 +1289,10 @@ $ `stdlib/core/vec.nu`
 // rebind / no Json* needed; the user passes `j` by value, the handle
 // inside reaches the same heap, and changes are visible at the call
 // site. CONSUMES `elem` / `val` (and the key copy, when set creates a
-// new entry): the caller must not `json_free` them after the call.
+// new entry): using them after the call is rejected.
 //
 // Both operations return T on success, F when `j` is the wrong variant
-// (the value is then NOT consumed — caller still owns it).
+// (the value is then dropped).
 
 @ json_arr_push Json j Json elem → b {
     ^ ?? j {
@@ -1563,8 +1563,8 @@ $ `stdlib/core/vec.nu`
 // Empty path → returns `j` itself (wrapped Some). Returns None at the
 // first missing segment, type mismatch, or out-of-range index.
 //
-// The returned Json is BORROWED from inside `j` — do not free it
-// independently. Free `j` when done.
+// The returned Json is lent from inside `j` (releasing it is rejected);
+// it goes with `j`.
 
 @ __js_seg_is_int s seg → b {
     : i n ( nurl_str_len seg )

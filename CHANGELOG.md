@@ -53,6 +53,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     freed Vec — and is the literal form now.
   A closure stored into an owner (a container, a struct field) copies in
   what it holds a handle of, as before: storing one is no dependency.
+- **A lend returned through a join is the function's (h311–h314).**
+  Probing the standard library's doc comments (agora t30) found
+  `lru_get`'s "do not free it, and treat it as invalid after a later
+  `lru_put`" unenforced: a function returning a call's lend through a
+  `??` arm (`T s → ( vec_get v s )`) or a `?` ternary was not summarised
+  as lending, so its caller took the payload for its own — released it
+  (the container's element) or read it after an eviction. A join's
+  lending arms now record the calls they end in, and returning the join
+  records what those calls lend (h311, h312; `lru_get` / `lru_peek`:
+  h313, h314). A payload of an option a call answers per run is handed
+  to a consumer as a copy on the runs it was lent.
+- **h315: a match's scrutinee call took effect after the arm's first
+  statement.** What the call does to its arguments was recorded with the
+  arm's first statement, so that statement could read a borrow the call
+  had already ended (v0.76.0 accepted it and read the cleared String).
+  The call's effects now precede the arms; the same order stops a call
+  from ending the borrow of the payload it just lent (`?? ( lru_get c k )
+  { T v → { … v … } }`, and any function that lends an argument while
+  changing what it holds). `toml_parse` returns on a failed table
+  descent instead of flagging it, which the new order made visible.
 - **h303: `map_keys` / `map_values` over owned keys leaked them and
   emptied the map's slots.** An element read through a pointer and handed
   to `vec_push` was both copied (the callee keeps it) and moved out of its
@@ -62,6 +82,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Standard-library doc comments no longer tell callers to free what they
+  own or warn them off what the checker already rejects: about fifty
+  across core, std, net and ext (`vec`, `string`, `fs`, `path`,
+  `decimal`, `channel`, `lru`, `udp`, `args`, `inet`, `json`, `xml`,
+  `serde`, `csv`, `env`, `mcp*`, `http_*`, `websocket`, `cluster`,
+  `dchannel`) now say who owns and drops a value, what is lent and what
+  the checker refuses (agora t30). The `vec_iota` note on forward
+  references and the replicator's field-shadowing note described
+  limitations that no longer exist; `http_cli`'s "do not import both"
+  no longer applied. `nurl_docs` lists a guide under 1 KB in bytes
+  instead of "0 KB".
 - Standard-library doc comments that still described the rules from
   before the memory guarantee describe what the checker enforces:
   `map_iter`, `map_keys`, `map_values` (std/hashmap.nu), `iter_from_vec`,

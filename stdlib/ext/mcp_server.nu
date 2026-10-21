@@ -113,8 +113,8 @@
 //   a top-level handler is wrapped at the registration site:
 //   `\ Json a → Json { ^ ( my_tool a ) }`. That wrapper captures
 //   nothing and lives as long as the program.
-//   `mcp_server_dispatch` / `_envelope` return an OWNED Json; the
-//   caller frees it with json_free (the transports here already do).
+//   `mcp_server_dispatch` / `_envelope` return an owned Json (the
+//   caller's).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -168,8 +168,8 @@ $ `stdlib/ext/http_response.nu`
 @ mcp_call_request McpCall c → Json { ^ . c __req }
 
 // The caller context the HOST attached to this dispatch (see
-// `mcp_server_dispatch_as`), or JSON null. BORROWED — do not free, do
-// not keep past the handler's return. This is where a tool learns the
+// `mcp_server_dispatch_as`), or JSON null. Lent for the handler's call
+// (releasing it is rejected; keep a copy to keep it). This is where a tool learns the
 // authenticated principal behind the request: the transport resolved
 // the credential, the server threaded it through, and no client
 // argument can forge it.

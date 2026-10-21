@@ -711,9 +711,12 @@ $ `stdlib/std/float.nu`
             ? == c 91 {
                 : HeaderResult hr ( __t_parse_header src n pos )
                 ? . hr ok {
+                    // (A failed descent ends the parse here: `current`, a
+                    // cursor into `root`, is not used after a call that may
+                    // have changed what `root` holds.)
                     ?? ( __t_descend root . hr path . hr as_array ) {
                         T table → = current table
-                        F error → { = err T = ek error }
+                        F error → { ^ @ !TomlValue TomlErr { F error } }
                     }
                 } { = err T = ek # TomlErr TomlSyntax }
                 // Both branches own hr.path, even the empty failure payload.

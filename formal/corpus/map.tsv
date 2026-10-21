@@ -297,3 +297,8 @@ h307_closure_literal_capture_replaced_through_inout	§2.11	A2	h306 through an in
 h308_returned_closure_argument_replaced_through_inout	§2.11	A2	h307 for a closure a call returned over a Vec it captured	rejected
 h309_returned_closure_struct_field_replaced_through_inout	§2.11	A2	h308 for a struct whose Vec field the inout callee replaces	rejected
 h310_closure_bound_then_returned_over_a_local	§2.11	A2	a closure literal over a local Vec bound and returned by name held only a copy of the handle; the frame released the Vec, the caller ran the closure (UAF)	rejected
+h311_lend_returned_through_a_match_arm	§7.6	A2	a function returning a call's lend through a ?? arm was not summarised as lending; the caller released the payload — the Vec's own element (UAF)	rejected
+h312_lend_returned_through_a_ternary	§7.6	A2	h311 through a ? ternary	rejected
+h313_lru_get_value_released	§7.6	A2	h311 through lru_get: releasing the cached value freed what the cache held	rejected
+h314_lru_value_read_after_eviction	§2.10	A2	a value lru_get lent, read after an lru_put that evicted it	rejected
+h315_first_arm_statement_reads_what_the_scrutinee_ended	§2.10	A2	a match scrutinee call's effects were recorded after the first arm statement, which read a borrow the call had ended	rejected

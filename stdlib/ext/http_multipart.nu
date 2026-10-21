@@ -36,8 +36,8 @@
 // Memory model:
 //
 //   * `parse_multipart_form` BORROWS both the body Vec and the boundary
-//     literal. It returns an OWNED `Vec[MultipartPart]` — caller frees
-//     with `multipart_parts_free`.
+//     literal. It returns an owned `Vec[MultipartPart]`, dropped with its
+//     parts by its owner (`multipart_parts_free` releases it early).
 //   * `request_multipart_parts` does the convenience work: parses the
 //     `Content-Type` header, extracts the boundary parameter, and
 //     dispatches into `parse_multipart_form`. Returns Some(parts) when

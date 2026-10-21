@@ -25,8 +25,8 @@
 // JSON, the channel carries three closures fixing A's (de)serialization
 // and ownership, supplied once at open:
 //
-//   enc  :: ( @ Json A )   — BORROW A, return an owned JSON snapshot
-//                            (must NOT free A; the channel frees it)
+//   enc  :: ( @ Json A )   — is lent A, returns an owned JSON snapshot
+//                            (the channel keeps and drops A)
 //   dec  :: ( @ A Json )   — BORROW a JSON value, return a fresh owned A
 //   drop :: ( @ v A )      — release an A (no-op for scalars)
 //
@@ -445,7 +445,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Result of one recv RPC. `tag`: 0 empty, 1 closed, 2 ok, 3 transport
 // error. `val` is a fresh owned A — the real value when tag==2, otherwise
-// a placeholder the caller must drop.
+// a placeholder — dropped with the RecvOut.
 : RecvOut [A] {
     i tag
     A val

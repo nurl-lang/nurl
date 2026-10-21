@@ -785,7 +785,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h310):
+all are closed, each a probe CI now holds (h142–h315):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1127,7 +1127,7 @@ caller (h298; §2.3).
 
 Probing what the standard library's doc comments still asked of callers
 (`map_iter`: "do NOT free the map until iteration is finished") found
-twelve more (h299–h310), all closures that outlived what they read. A
+seventeen more (h299–h315), most of them closures that outlived what they read. A
 closure a call returns over an argument it captured stayed usable after
 the caller released the argument — in user code (h299) and in the
 library's iterators (h300, and h301, where `map_iter` captured a raw
@@ -1139,7 +1139,11 @@ it captured by value outlived the handle when the binding was given a
 new value — directly (h306) or by an `inout` callee replacing it or a
 field of it (h307–h309), or when it was bound and returned by name past
 the frame that released the value (h310; a closure literal written in the
-return takes its captures over). `map_keys` over owned keys copied each key and
+return takes its captures over). Lends returned through a join were not
+the function's (h311–h314: `lru_get`'s cached value released or read
+after an eviction), and a match's scrutinee call took effect after the
+arm's first statement, which could read a borrow it had ended (h315).
+`map_keys` over owned keys copied each key and
 emptied its slot too, leaking the key and corrupting the map (h303;
 §7.6). No hole is known.
 
@@ -1345,7 +1349,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h310`) to the rule that rejects it. See
+  (`h01–h315`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1625,7 +1629,9 @@ are dropped, moved and copied by the same rules:
   Where a copy would be needed (stored into an owner, handed to a keeping
   callee), compilation stops with an error naming the type.
 - **Joins.** A `?` / `??` yielding an owning value hands its binding what
-  the chosen arm owned; an arm that yields an outer binding lends it.
+  the chosen arm owned; an arm that yields an outer binding lends it, and
+  an arm that ends in a lending call lends what that call does — returned
+  from a function, the function lends it (h311).
 - **Returns.** A returned binding that does not own what it holds is
   copied on the way out, so the caller always owns the result.
 
