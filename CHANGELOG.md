@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fiber could sleep forever on a socket that reused a closed one's
+  fd number.** Closing a socket reset its netpoller slot and then
+  closed the fd outside the netpoller lock; a fiber parking on the
+  still-open fd in between re-marked the slot registered, and close(2)
+  then dropped the kernel registration. The next socket handed that fd
+  number was never added to the epoll set, so its first park never
+  woke. Seen as `server_stop` on one listener, from another thread,
+  leaving the next listener's accept fiber asleep (the new
+  `http_keepalive_cap_modes` test hung in 8 of 30 runs on a loaded
+  machine, 0 of 60 after). The reset and the close are now one step
+  under the lock.
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to
@@ -100,6 +111,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the note on iterator pairs (core/pair.nu) — the pairs and vectors
   these hand out own their elements, and an iterator's source must
   outlive it (changing it in between is fine).
+
+- **The HTTP server no longer caps keep-alive on a fiber (agora #48).**
+  A connection served by `server_run_async` holds a fiber, not a worker
+  thread, so the default per-connection request cap is gone there: the
+  connection lives until the peer closes it, a `Connection: close`, or
+  the idle timeout. Before, every keep-alive client was told to close
+  after 1000 requests and had to reconnect, and the server re-accepted
+  and spawned a new fiber. `server_run` and `server_run_pool` keep the
+  1000 cap. New `server_keepalive_auto` (the default every constructor
+  without an explicit cap now stores) and `server_keepalive_unlimited`
+  values for `max_keepalive_requests`; an explicit cap still applies in
+  every mode.
+
+### Packages
+
+- http 0.7.7: an unset `http_app_max_keepalive` follows the serving
+  mode — no cap under `http_app_async`, 1000 for the thread servers.
 
 ## [0.76.0] — 2026-10-20
 
