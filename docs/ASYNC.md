@@ -108,6 +108,13 @@ middleware are plain functions that work identically under
 resume on the next send/recv; from a plain thread the same calls use the
 per-channel condvar. One `Channel[A]` type serves both worlds.
 
+**Pools are fiber-aware too** (`stdlib/std/pool.nu`): a checkout that
+finds every resource lent parks the fiber with a deadline
+(`nurl_fiber_park_with_mutex_ms`), and a returned resource wakes it with
+`nurl_fiber_wake` — the two race for the wait entry under the reactor
+lock, so a wake that loses to the deadline does nothing and the fiber
+runs once. A thread on the same pool waits on its condvar.
+
 **`server_run_async`** (`stdlib/ext/http_server.nu`) drives the HTTP
 server on fibers: an accept fiber spawns one fiber per connection. It
 returns when the listener closes and the fiber pool drains. Since 0.46.0

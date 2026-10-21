@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.5.0] — 2026-10-21
+
+Requires NURL 0.77.0 (`stdlib/std/pool.nu`, and the compiler fix that
+drops a library handle a generic function hands back in a result).
+
+### Added
+
+- **The extended query protocol.** `pg_query_params conn sql params`
+  binds `$1 … $n` to typed `PgVal` parameters (`PgInt`, `PgFloat`,
+  `PgBool`, `PgText`, `PgBytes`, `PgTimestamp`, `PgDate`, `PgNull`) —
+  never interpolated into the SQL. The server infers every parameter's
+  type (Parse + Describe) and each value goes the way its type takes it:
+  binary where exact, its text form otherwise.
+- **Binary results** for int2/4/8, oid, float4/8, bool, uuid, date, time,
+  timestamp/timestamptz and bytea, and **typed accessors** answering `?T`
+  (F for NULL): `pg_row_i`, `pg_row_f`, `pg_row_b`, `pg_row_s`,
+  `pg_row_bytes`, `pg_row_ts`, `pg_row_date`, `pg_row_view`,
+  `pg_row_is_null`, plus `pg_result_col_type`, `pg_result_col_index`,
+  `pg_result_tag`, `pg_result_affected`.
+- **A per-connection prepared-statement cache** keyed by SQL text:
+  bounded (64, `pg_conn_set_stmt_cache`; 0 = unnamed statements), least
+  recently used closed on the server; a statement gone stale (26000 /
+  0A000) is prepared again and rerun outside a transaction.
+- **`pg_pool_new` / `pg_pool_get`** — a connection pool over
+  `stdlib/std/pool.nu`, shared by fibers and threads; a connection that
+  lost its stream is dropped, one left in a transaction rolled back
+  (`pg_conn_reset`).
+- `pg_conn_sqlstate`, `pg_conn_ok`, `pg_conn_txn_status`,
+  `pg_conn_stmt_count`; `PgErr` gains `PgInsecureAuth`, `PgPoolTimeout`,
+  `PgPoolClosed`.
+- `src/pgwire.nu`: the protocol as a message codec with no socket and no
+  lock (encoders, framing, a collector folding one request's answer), the
+  layer a pipelining connection reuses.
+- Tests: `tests/wire_test.nu` (77 codec checks, no server),
+  `tests/live_test.nu` (69 checks against a server, gated on
+  `PSQL_TEST_PORT`), `tests/live_smoke.sh` (starts a throwaway cluster).
+
+### Changed
+
+- **`sslmode=prefer` no longer hands a password to a server reached by
+  falling back from TLS** unless through SCRAM: a cleartext or MD5
+  request there is refused with `PgInsecureAuth` (`disable` sends it).
+  The CLI reads `$PGSSLMODE`; the README says to use `verify-full`.
+- Results are one byte buffer per result plus an (offset, length) span
+  per cell, filled with one copy per row, instead of a `String` per
+  cell; messages are framed in place instead of copying the rest of the
+  receive buffer per message. A 200 000-row query through the CLI
+  retires 1.22 G instructions instead of 2.69 G in plaintext and 1.31 G
+  instead of 1.64 G over TLS (callgrind).
+- A script's result is its last statement's rows (rows of earlier
+  statements were mixed in under the last one's columns).
+- A connection used by a fiber and then by a thread (a pooled one) works:
+  a thread's request puts the socket back into blocking mode.
+
 ## [0.4.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

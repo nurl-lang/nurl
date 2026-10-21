@@ -915,7 +915,16 @@ $ `stdlib/std/thread.nu`
     : i fd . ( __tci c ) raw
     : !TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
     ?? r {
-        F _ → ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        F _ → {
+            // A failed handshake (or a certificate refused) closed the
+            // socket with the TLS state that took it over: the conn
+            // holds a closed handle now, which its drop must not close
+            // a second time (a use-after-free of the runtime's record).
+            : *TcpConnImpl p ( __tci c )
+            = . p owns F
+            = . p raw 0
+            ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        }
         T tc → {
             ( __starttls_register fd ( _tls_word tc ) )
             ^ @ !v NetErr { T 0 }

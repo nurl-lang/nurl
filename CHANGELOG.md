@@ -8,7 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`stdlib/std/pool.nu` — a bounded pool of reusable resources**
+  (database connections, sessions). `pool_new [A E] make check cfg
+  timeout_err closed_err`: a factory closure, a check run on every
+  resource coming back, `PoolCfg { min max wait_ms idle_ms }`. A checkout
+  (`pool_get`, `pool_get_ms`) is a guard, `( Pooled A E )`, whose drop
+  gives the resource back — at the end of its scope, with its struct, in
+  a panic's unwind; `pool_discard` drops it instead. When all `max` are
+  lent a fiber parks and a thread waits on the pool's condvar, both
+  bounded by the deadline. `pool_fill`, `pool_evict_idle`, `pool_close`,
+  counts. Pinned by `pool_basic` and `pool_concurrent` (threads, fibers,
+  both on one pool, deadlines racing returns; ASan clean). psql 0.5.0's
+  `pg_pool_new` is built on it.
+- **A timed fiber park a waker can race safely**:
+  `nurl_fiber_park_with_mutex_ms` / `nurl_fiber_wake` (epoll and poll(2)
+  backends, the unikernel runtime). A plain unpark racing the park's
+  timer would make the fiber runnable twice; here the wake and the
+  deadline claim the wait entry under the reactor lock, and the loser
+  does nothing. `cond_wait_ms` (std/thread.nu) is the thread side.
+
 ### Fixed
+
+- **A library handle a generic function handed back inside a result was
+  never dropped** when nothing but generic code named its instance
+  (`?? ( get [String] mk ) { T g → … }` with `get → !( G A ) E`): the
+  caller computed the instance's result type before the instance (and so
+  the `( G String )` struct) existed, took the handle for a plain value,
+  and the arm binding leaked with everything the handle held. The
+  instance's identity is recorded when the result type is computed, and
+  type answers memoised before an instance existed are forgotten when it
+  appears (`generic_handle_result_drop`).
+- **`tcp_starttls` closed a socket twice when the handshake failed** (a
+  refused certificate under verify): the TLS state had closed it, and
+  the TcpConn's drop closed it again — a use-after-free of the runtime's
+  socket record (ASan, psql's verify-full test).
 
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
