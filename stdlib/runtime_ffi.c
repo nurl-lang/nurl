@@ -1908,6 +1908,16 @@ static struct {
 } nurl__dns = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,
                 NULL, NULL, 0, 0, 0 };
 
+/* Test hook (compiler/tests/net_resolve_fiber.nu): every pool lookup
+ * first sleeps this many ms. A real lookup answered from /etc/hosts is
+ * often finished before its fiber looks — the woken resolver thread can
+ * preempt the submitting worker on a busy machine — so without it a
+ * test cannot show other fibers running while one waits. 0 = off. */
+static int nurl__dns_test_delay;
+void nurl_dns_test_delay_ms(long long ms) {
+    __atomic_store_n(&nurl__dns_test_delay, (int)(ms > 0 ? ms : 0), __ATOMIC_RELAXED);
+}
+
 static void nurl__dns_job_free(NurlDnsJob *j) {
     if (j->res) freeaddrinfo(j->res);
     /* Through the close hook: the waiter may have parked on rfd, and the
@@ -1941,6 +1951,11 @@ static void *nurl__dns_thread(void *arg) {
         nurl__dns.queued--;
         pthread_mutex_unlock(&nurl__dns.lock);
 
+        int delay = __atomic_load_n(&nurl__dns_test_delay, __ATOMIC_RELAXED);
+        if (delay > 0) {
+            struct timespec dt = { delay / 1000, (long)(delay % 1000) * 1000000L };
+            nanosleep(&dt, NULL);
+        }
         struct addrinfo *res = NULL;
         int rc = j->reverse
             ? getnameinfo((struct sockaddr*)&j->sa, j->salen, j->name,

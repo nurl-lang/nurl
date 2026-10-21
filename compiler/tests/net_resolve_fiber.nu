@@ -4,12 +4,13 @@
 // getaddrinfo, so it goes to the runtime's resolver threads) while a
 // second fiber yields in a loop, counting. The resolving fiber parks
 // until its lookup completes, so the yielder can run during the
-// lookups; had getaddrinfo run on the worker, it never could. A warm
-// resolver thread can answer /etc/hosts before the fiber gets round to
-// parking (the netpoller's fast path then skips the park — nothing was
-// blocked, but nothing interleaved either), so each kind of lookup is
-// repeated until the yielder is seen to run — at least 5 times, at most
-// 200. On the blocking implementation it is never seen.
+// lookups; had getaddrinfo run on the worker, it never could. An
+// /etc/hosts answer is often finished before its fiber looks (on a busy
+// machine the woken resolver thread can preempt the submitting worker),
+// which proves nothing either way, so the runtime's test hook makes
+// every pool lookup take 20 ms first: the fiber then always waits, and
+// the yielder must run meanwhile. On the blocking implementation it
+// never does.
 //
 // dns_reverse (getnameinfo, 127.0.0.1 → its /etc/hosts name) the same.
 //
@@ -25,6 +26,10 @@ $ `stdlib/std/async.nu`
 $ `stdlib/std/dns.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/time.nu`
+
+& `c` @ nurl_dns_test_delay_ms i ms → v
+
+unsafe @ __slow_lookups i ms → v { ( nurl_dns_test_delay_ms ms ) }
 
 : ~ i yields 0
 : ~ i stop 0
@@ -63,6 +68,7 @@ $ `stdlib/std/time.nu`
 
 @ main → i {
     ( runtime_init 1 )
+    ( __slow_lookups 20 )
     : TcpListener l ?? ( tcp_listen `127.0.0.1` 0 ) { T x → x F _ → { ^ 1 } }
     : i port ( __port l )
 
@@ -77,7 +83,7 @@ $ `stdlib/std/time.nu`
         : ~ i found 0
         : ~ i during 0
         : ~ i k 0
-        ~ & < k 200 | < k 5 == during 0 {
+        ~ < k 5 {
             : i y0 yields
             ?? ( dns_resolve `localhost` ) {
                 T ips → ? ( __has_loopback ips ) { = found + found 1 } {}
@@ -93,7 +99,7 @@ $ `stdlib/std/time.nu`
         : ~ i named 0
         = during 0
         = k 0
-        ~ & < k 200 | < k 5 == during 0 {
+        ~ < k 5 {
             : i y1 yields
             ?? ( dns_reverse `127.0.0.1` ) {
                 T name → ? > ( string_len name ) 0 { = named + named 1 } {}
