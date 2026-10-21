@@ -3875,13 +3875,17 @@ void nurl_cpu_aes_missing(void) {
     abort();
 }
 
-/* 1 when this binary was built for x86-64. nurlc asks it of itself: it
- * emits no target triple, so the IR it writes is compiled for the host
- * clang runs on — in practice nurlc's own — and both the `simd` clones
- * and the hardware crypto tier are x86-64 feature sets, which on any
- * other host must start switched off. */
-long long nurl_host_x86_64(void) {
-#if defined(__x86_64__) || defined(_M_X64)
+/* Should nurlc start with CPU dispatch on? nurlc asks it of itself: it
+ * emits no target triple, so the IR a NATIVE nurlc writes is compiled
+ * for the host clang runs on — in practice its own — and both the `simd`
+ * clones and the hardware crypto tier are x86-64 feature sets, which on
+ * an AArch64 or RISC-V host must start switched off (an x86 intrinsic in
+ * an AArch64 module is a codegen error). A wasm nurlc is not compiling
+ * for the machine it runs on at all — its output goes wherever the
+ * native compiler's would, and must match it byte for byte
+ * (unikernel/tests/wasmc_gate.sh) — so it keeps the native default. */
+long long nurl_cpu_dispatch_default(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
     return 1;
 #else
     return 0;

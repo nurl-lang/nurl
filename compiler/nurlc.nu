@@ -7401,13 +7401,23 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // temporary drop independently of the LLVM return type. Sink, retention and
 // unverified-call facts apply per position, including named arguments.
 // `{ i1, T }` / `{ i1, T, E }` whose parts are all numbers or flags.
+// A SIMD vector (`v128` / `v256`, spelled either way): lanes of
+// numbers, never an address — as much a number as an `i64` is to every
+// question below about what a value can point into. Left out, a v128
+// result was taken for a possible view of a temporary argument, its
+// drop deferred to a consumer a binding never is, and the temporary
+// leaked (`: v128 x ( ld ( mk ) )`).
+@ __is_vec_num_ty s ty → b {
+    ^ | | | ( seq ty `<4 x i32>` ) ( seq ty `<4 x i64>` ) ( seq ty `v128` ) ( seq ty `v256` )
+}
+
 @ __wrap_of_numbers s ty → b {
     ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
     : s a ( __wrap_part ty 0 )
     : s b ( __wrap_part ty 1 )
     ? == 0 ( nurl_str_len a ) { ^ F } {}
-    : b an | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` )
-    : b bn | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` )
+    : b an | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_vec_num_ty a )
+    : b bn | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_vec_num_ty b )
     ^ & an bn
 }
 
@@ -12819,7 +12829,7 @@ unsafe @ __has_pct_token s ll s name → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __wrap_part ty 0 )
         : s b ( __wrap_part ty 1 )
@@ -16696,7 +16706,7 @@ unsafe @ __ty_no_address s ty0 i depth → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? | | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) ( __is_vec_num_ty ty ) { ^ T } {}
     ? ( seq ty `%String` ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
@@ -22208,7 +22218,7 @@ unsafe @ mem_path_to_indices s path → s {
     // ( mk ) 0 )` cannot hand back a pointer into the temporary — deferred
     // for a consumer that never came, the Vec leaked.)
     : b __scalar_ret | | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` ) ( __wrap_of_numbers __crt )
-    | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
+    | | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` ) ( __is_vec_num_ty __crt )
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings
@@ -43895,8 +43905,8 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params b crypto → v {
 : ~ i g_lazy_trace 0  // NURL_LAZY_TRACE: report a late compile (a gap in lazy_reach)
 
 & `c` @ nurl_print_buf_len → i
-// Was nurlc itself built for x86-64 (runtime_core.c)? See main.
-& `c` @ nurl_host_x86_64 → i
+// Does CPU dispatch start on (runtime_core.c)? See main.
+& `c` @ nurl_cpu_dispatch_default → i
 
 & `c` @ nurl_print_buf_at i off → i
 
@@ -52366,6 +52376,26 @@ unsafe @ __rt_decl_ptypes s region → s {
     ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
 }
 
+// (The two helpers below hand back strings, so they sit above every
+// caller: a string-returning helper defined below its caller has no
+// ownership summary there, and the caller leaks what it returns.)
+// A function's IR up to its body: the `define` line.
+@ __ir_header s ir → s {
+    : i ei ( nurl_str_find ir `\nentry:\n` )
+    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
+    ^ ( nurl_str_slice ir 0 ei )
+}
+
+// The IR name a `define` line declares: `@NAME(`.
+@ __ir_fn_name s ir → s {
+    : i at ( nurl_str_find ir `@` )
+    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s tail ( nurl_str_slice ir + at 1 - ( strlen ir ) + at 1 )
+    : i lp ( nurl_str_find tail `(` )
+    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice tail 0 lp )
+}
+
 // A crypto-tier function's IR: the tier attributes on its define line
 // (before a `!dbg` attachment, which must come last) and, when `gate`,
 // the CPUID gate as the first instruction of its body. emit_hoisted
@@ -52406,19 +52436,14 @@ unsafe @ __rt_decl_ptypes s region → s {
     ? & != g_cpu_dispatch 0 ( __ir_uses_crypto ir )
     { : s nm ( __ir_fn_name ir )
         ( nurl_sym_def g_crypto_fns nm `1` )
-        ? & == g_dbg_enabled 0 >= ( nurl_str_find ( __ir_header ir ) `) alwaysinline` ) 0
+        : s hdr ( __ir_header ir )
+        : i ai ( nurl_str_find hdr `) alwaysinline` )
+        ? & == g_dbg_enabled 0 >= ai 0
         { ( nurl_sym_def g_crypto_inl nm `1` ) }
         {}
         ( nurl_sym_def g_crypto_defer ( nurl_str_int g_crypto_defer_n ) ir )
         = g_crypto_defer_n + g_crypto_defer_n 1 }
     { ( emit_hoisted ir ) }
-}
-
-// A function's IR up to its body: the `define` line.
-@ __ir_header s ir → s {
-    : i ei ( nurl_str_find ir `\nentry:\n` )
-    ? < ei 0 { ^ ( nurl_str_cat ir `` ) } {}
-    ^ ( nurl_str_slice ir 0 ei )
 }
 
 // `ir` with every call in its BODY to a crypto function that wants
@@ -52475,16 +52500,6 @@ unsafe @ __ir_tier_calls s ir → s {
     ^ ( nurl_str_cat4 ( nurl_str_cat h1 h2 ) ( __crypto_tier_attrs ) ` {\nentry:\n` rest )
 }
 
-// The IR name a `define` line declares: `@NAME(`.
-@ __ir_fn_name s ir → s {
-    : i at ( nurl_str_find ir `@` )
-    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : s tail ( nurl_str_slice ir + at 1 - ( strlen ir ) + at 1 )
-    : i lp ( nurl_str_find tail `(` )
-    ? < lp 0 { ^ ( nurl_str_cat `` `` ) } {}
-    ^ ( nurl_str_slice tail 0 lp )
-}
-
 // Does this IR call a function of g_crypto_fns — `@NAME(` with NAME in
 // the set?
 unsafe @ __ir_calls_crypto s ir → b {
@@ -52535,8 +52550,13 @@ unsafe @ __ir_calls_crypto s ir → b {
     : ~ i c 0
     ~ < c g_crypto_defer_n {
         : s ir ( __ir_tier_calls ( nurl_sym_get g_crypto_defer ( nurl_str_int c ) ) )
-        ( emit_hoisted ( __crypto_fn_ir ir T ) )
-        ? != 0 ( nurl_sym_len g_crypto_inl ( __ir_fn_name ir ) ) { ( emit_hoisted ( __crypto_tier_copy ir ) ) } {}
+        : s gated ( __crypto_fn_ir ir T )
+        ( emit_hoisted gated )
+        : s nm ( __ir_fn_name ir )
+        ? != 0 ( nurl_sym_len g_crypto_inl nm ) {
+            : s copy ( __crypto_tier_copy ir )
+            ( emit_hoisted copy )
+        } {}
         = c + c 1
     }
     = g_crypto_defer_n 0
@@ -59633,8 +59653,8 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      set, and nurlc emits no target triple, so anything\n` )
     ( nurl_print `                      building for another architecture must pass this\n` )
     ( nurl_print `                      (nurl.sh does it for every non-x86-64 target).\n` )
-    ( nurl_print `                      Also off by default when nurlc itself runs on a\n` )
-    ( nurl_print `                      non-x86-64 host; the hardware crypto tier\n` )
+    ( nurl_print `                      Also off by default when nurlc runs natively on\n` )
+    ( nurl_print `                      a non-x86-64 host; the hardware crypto tier\n` )
     ( nurl_print `                      (nurl_v128_aes*, nurl_v128_clmul_*) follows it.\n` )
     ( nurl_print `  --cpu-dispatch      turn the prefix and the crypto tier on, for an\n` )
     ( nurl_print `                      x86-64 target built on another host.\n` )
@@ -59831,13 +59851,15 @@ unsafe @ main → i {
     : ~ b check_only F
     : ~ b options_done F
     : ~ i path_count 0
-    // nurlc emits no target triple, so its IR is compiled for the host
-    // clang runs on — in practice nurlc's own. The `simd` clones and the
-    // hardware crypto tier are x86-64 feature sets: on any other host
-    // they start off, as if --no-cpu-dispatch were given (x86 intrinsics
-    // in an AArch64 module are a codegen error, not a warning), and
-    // --cpu-dispatch turns them back on for an x86-64 target built there.
-    ? == 0 ( nurl_host_x86_64 ) { = g_cpu_dispatch 0 } {}
+    // nurlc emits no target triple, so a native nurlc's IR is compiled
+    // for the host clang runs on — in practice its own. The `simd` clones
+    // and the hardware crypto tier are x86-64 feature sets: on an AArch64
+    // or RISC-V host they start off, as if --no-cpu-dispatch were given
+    // (x86 intrinsics in an AArch64 module are a codegen error, not a
+    // warning), and --cpu-dispatch turns them back on for an x86-64
+    // target built there. A wasm nurlc keeps the native default
+    // (nurl_cpu_dispatch_default, runtime_core.c).
+    ? == 0 ( nurl_cpu_dispatch_default ) { = g_cpu_dispatch 0 } {}
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
         ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}

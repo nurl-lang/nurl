@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A call returning a SIMD vector no longer leaks its temporary argument
+  (h316).** `: v128 x ( lanes ( mk ) )` left the Vec `mk` made alive for
+  ever: a `v128` / `v256` result was taken for one that could point into
+  a temporary (like `( string_data ( mk ) )`), so the temporary's drop
+  waited for the result's consumer — and a binding is none. A vector is
+  lanes of numbers; every question about what a value can point into now
+  says so (`__is_vec_num_ty`). Found by the sanitizer corpus on the
+  crypto tier's own test.
+
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to
@@ -134,11 +143,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client offers it, the client by listing it first; ChaCha20-Poly1305
   otherwise, as OpenSSL and rustls do. It was ChaCha unconditionally,
   correctly, while AES-GCM was the slower suite on every NURL host.
-- **nurlc starts with CPU dispatch off on a non-x86-64 host** (its IR is
-  compiled for the host clang runs on, and x86 intrinsics in an AArch64
-  module are a codegen error, not the warnings the `simd` clones' feature
-  strings were); `--cpu-dispatch` turns it on for an x86-64 target built
-  there.
+- **A native nurlc on a non-x86-64 host starts with CPU dispatch off**
+  (its IR is compiled for the host clang runs on, and x86 intrinsics in
+  an AArch64 module are a codegen error, not the warnings the `simd`
+  clones' feature strings were); `--cpu-dispatch` turns it on for an
+  x86-64 target built there. A wasm nurlc keeps the native default — its
+  output must match the native compiler's byte for byte (wasmc_gate).
 - **`NURL_CPU_V3=0` and `NURL_CPU_AES=0`** take a CPU-dispatch answer
   away (never grant one), so one machine runs every clone and fallback;
   a test declares `// requires: cpu-aes` when its golden needs the tier.

@@ -307371,7 +307371,7 @@ loop_exit_3:
 
 declare i64 @nurl_print_buf_len()
 
-declare i64 @nurl_host_x86_64()
+declare i64 @nurl_cpu_dispatch_default()
 
 declare i64 @nurl_print_buf_at(i64)
 
@@ -367605,8 +367605,13 @@ entry:
   store i8* null, i8** %r9
   %r14 = alloca i8*
   store i8* null, i8** %r14
-  %r24 = alloca i8*
-  store i8* null, i8** %r24
+  %r22 = alloca i8*
+  store i8* null, i8** %r22
+  %r26 = alloca i8*
+  store i8* null, i8** %r26
+  %r31 = alloca i8*
+  store i8* null, i8** %r31
+  %r38 = alloca i64
   %r0 = load atomic i64, i64* @g_cpu_dispatch monotonic, align 8
   %r1 = icmp ne i64 %r0, 0
   br i1 %r1, label %and_right_1, label %and_end_2
@@ -367633,47 +367638,57 @@ then_3:
   %r17 = load i8*, i8** %r5
   %r19 = getelementptr [2 x i8], [2 x i8]* @.str.18058, i64 0, i64 0
   call void @__nurl_fn.nurl_sym_def(i64 %r15, i8* %r16, i8* %r19)
-  %r21 = load atomic i64, i64* @g_dbg_enabled monotonic, align 8
-  %r22 = icmp eq i64 %r21, 0
-  br i1 %r22, label %and_right_6, label %and_end_7
+  %r21 = call i8* @__nurl_fn.__ir_header__fp1(i8* %ir)
+  %r23 = call i64 @nurl_ret_owned_get()
+  %r24 = icmp ne i64 %r23, 0
+  %r25 = select i1 %r24, i8* %r21, i8* null
+  store i8* %r25, i8** %r22
+  %r30 = load i8*, i8** %r26
+  call void @nurl_free(i8* %r30)
+  %r28 = load i8*, i8** %r22
+  store i8* %r28, i8** %r26
+  call void @nurl_journal_push(i8* %r28)
+  store i8* %r21, i8** %r31
+  %r32 = load i8*, i8** %r31
+  %r33 = load i8*, i8** %r22
+  %r35 = getelementptr [15 x i8], [15 x i8]* @.str.18059, i64 0, i64 0
+  %r37 = call i64 @__nurl_fn.nurl_str_find(i8* %r32, i8* %r35)
+  store i64 %r37, i64* %r38
+  %r39 = load atomic i64, i64* @g_dbg_enabled monotonic, align 8
+  %r40 = icmp eq i64 %r39, 0
+  br i1 %r40, label %and_right_6, label %and_end_7
 and_right_6:
-  %r23 = call i8* @__nurl_fn.__ir_header__fp1(i8* %ir)
-  %r25 = call i64 @nurl_ret_owned_get()
-  %r26 = icmp ne i64 %r25, 0
-  %r27 = select i1 %r26, i8* %r23, i8* null
-  store i8* %r27, i8** %r24
-  %r28 = load i8*, i8** %r24
-;                                       
-  %r32 = getelementptr [15 x i8], [15 x i8]* @.str.18059, i64 0, i64 0
-  %r34 = call i64 @__nurl_fn.nurl_str_find(i8* %r23, i8* %r32)
-  call void @nurl_free(i8* null)
-  %r35 = icmp sge i64 %r34, 0
+  %r41 = load i64, i64* %r38
+  %r42 = icmp sge i64 %r41, 0
   br label %and_end_7
 and_end_7:
-  %r36 = phi i1 [ 0, %then_3 ], [ %r35, %and_right_6 ]
-  br i1 %r36, label %then_8, label %else_9
+  %r43 = phi i1 [ 0, %then_3 ], [ %r42, %and_right_6 ]
+  br i1 %r43, label %then_8, label %else_9
 then_8:
-  %r37 = load atomic i64, i64* @g_crypto_inl monotonic, align 8
-  %r38 = load i8*, i8** %r14
-  %r39 = load i8*, i8** %r5
-  %r41 = getelementptr [2 x i8], [2 x i8]* @.str.18060, i64 0, i64 0
-  call void @__nurl_fn.nurl_sym_def(i64 %r37, i8* %r38, i8* %r41)
+  %r44 = load atomic i64, i64* @g_crypto_inl monotonic, align 8
+  %r45 = load i8*, i8** %r14
+  %r46 = load i8*, i8** %r5
+  %r48 = getelementptr [2 x i8], [2 x i8]* @.str.18060, i64 0, i64 0
+  call void @__nurl_fn.nurl_sym_def(i64 %r44, i8* %r45, i8* %r48)
   br label %end_10
 else_9:
   br label %end_10
 end_10:
-  %r43 = load atomic i64, i64* @g_crypto_defer monotonic, align 8
-  %r44 = load atomic i64, i64* @g_crypto_defer_n monotonic, align 8
-  %r45 = call i8* @nurl_str_int(i64 %r44)
-  call void @nurl_journal_push(i8* %r45)
-  call void @__nurl_fn.nurl_sym_def(i64 %r43, i8* %r45, i8* %ir)
-  call void @nurl_free(i8* %r45)
-  %r49 = load atomic i64, i64* @g_crypto_defer_n monotonic, align 8
-  %r50 = add i64 %r49, 1
-  store atomic i64 %r50, i64* @g_crypto_defer_n monotonic, align 8
-  %r51 = load i8*, i8** %r9
-  call void @nurl_free(i8* %r51)
+  %r50 = load atomic i64, i64* @g_crypto_defer monotonic, align 8
+  %r51 = load atomic i64, i64* @g_crypto_defer_n monotonic, align 8
+  %r52 = call i8* @nurl_str_int(i64 %r51)
+  call void @nurl_journal_push(i8* %r52)
+  call void @__nurl_fn.nurl_sym_def(i64 %r50, i8* %r52, i8* %ir)
+  call void @nurl_free(i8* %r52)
+  %r56 = load atomic i64, i64* @g_crypto_defer_n monotonic, align 8
+  %r57 = add i64 %r56, 1
+  store atomic i64 %r57, i64* @g_crypto_defer_n monotonic, align 8
+  %r58 = load i8*, i8** %r9
+  call void @nurl_free(i8* %r58)
   store i8* null, i8** %r9
+  %r59 = load i8*, i8** %r26
+  call void @nurl_free(i8* %r59)
+  store i8* null, i8** %r26
   br label %end_5
 else_4:
   call void @__nurl_fn.emit_hoisted(i8* %ir)
@@ -368596,38 +368611,47 @@ entry:
   store i8* null, i8** %r57
   %r61 = alloca i8*
   store i8* null, i8** %r61
-  %r81 = alloca i64
-  %r87 = alloca i8*
-  store i8* null, i8** %r87
-  %r97 = alloca i8*
-  store i8* null, i8** %r97
-  %r118 = alloca i8*
-  store i8* null, i8** %r118
-  %r122 = alloca i8*
-  store i8* null, i8** %r122
-  %r127 = alloca i8*
-  store i8* null, i8** %r127
-  %r135 = alloca i1
-  %r148 = alloca i8*
-  store i8* null, i8** %r148
-  %r159 = alloca i8*
-  store i8* null, i8** %r159
-  %r180 = alloca i8*
-  store i8* null, i8** %r180
-  %r196 = alloca i8*
-  store i8* null, i8** %r196
-  %r217 = alloca i8*
-  store i8* null, i8** %r217
-  %r233 = alloca i8*
-  store i8* null, i8** %r233
-  %r254 = alloca i8*
-  store i8* null, i8** %r254
-  %__jf = alloca [4 x ptr]
-  store [4 x ptr] zeroinitializer, ptr %__jf
-  store ptr inttoptr (i64 3 to ptr), ptr %__jf
-  %__jf1 = getelementptr inbounds [4 x ptr], ptr %__jf, i64 0, i64 1
-  %__jf2 = getelementptr inbounds [4 x ptr], ptr %__jf, i64 0, i64 2
-  %__jf3 = getelementptr inbounds [4 x ptr], ptr %__jf, i64 0, i64 3
+  %r65 = alloca i8*
+  store i8* null, i8** %r65
+  %r70 = alloca i8*
+  store i8* null, i8** %r70
+  %r78 = alloca i8*
+  store i8* null, i8** %r78
+  %r87 = alloca i64
+  %r93 = alloca i8*
+  store i8* null, i8** %r93
+  %r103 = alloca i8*
+  store i8* null, i8** %r103
+  %r124 = alloca i8*
+  store i8* null, i8** %r124
+  %r128 = alloca i8*
+  store i8* null, i8** %r128
+  %r133 = alloca i8*
+  store i8* null, i8** %r133
+  %r141 = alloca i1
+  %r154 = alloca i8*
+  store i8* null, i8** %r154
+  %r165 = alloca i8*
+  store i8* null, i8** %r165
+  %r186 = alloca i8*
+  store i8* null, i8** %r186
+  %r202 = alloca i8*
+  store i8* null, i8** %r202
+  %r223 = alloca i8*
+  store i8* null, i8** %r223
+  %r239 = alloca i8*
+  store i8* null, i8** %r239
+  %r260 = alloca i8*
+  store i8* null, i8** %r260
+  %__jf = alloca [7 x ptr]
+  store [7 x ptr] zeroinitializer, ptr %__jf
+  store ptr inttoptr (i64 6 to ptr), ptr %__jf
+  %__jf1 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 1
+  %__jf2 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 2
+  %__jf3 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 3
+  %__jf4 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 4
+  %__jf5 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 5
+  %__jf6 = getelementptr inbounds [7 x ptr], ptr %__jf, i64 0, i64 6
 ;                                                                               
   store i64 0, i64* %r0
   br label %loop_check_1
@@ -368674,211 +368698,232 @@ loop_body_2:
   %r63 = load i8*, i8** %r61
   call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1226, ptr %r61, i8* %r63)
   %r64 = call i8* @__nurl_fn.__crypto_fn_ir__fp1(i8* %r63, i1 1)
-;                                       
-  call void @__nurl_fn.emit_hoisted(i8* %r64)
-  call void @nurl_free(i8* %r64)
-  %r67 = load atomic i64, i64* @g_crypto_inl monotonic, align 8
+  %r66 = load i8*, i8** %r65
+  call void @nurl_free(i8* %r66)
+  store i8* %r64, i8** %r65
+  store ptr %r65, ptr %__jf2
+  %r67 = load i8*, i8** %r65
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1086, ptr %r65, i8* %r67)
+  call void @__nurl_fn.emit_hoisted(i8* %r67)
   %r68 = load i8*, i8** %r61
   call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1227, ptr %r61, i8* %r68)
   %r69 = call i8* @__nurl_fn.__ir_fn_name__fp1(i8* %r68)
-;                                       
-  %r72 = call i64 @__nurl_fn.nurl_sym_len(i64 %r67, i8* %r69)
-  call void @nurl_free(i8* %r69)
-  %r73 = icmp ne i64 0, %r72
-  br i1 %r73, label %then_4, label %else_5
+  %r71 = load i8*, i8** %r70
+  call void @nurl_free(i8* %r71)
+  store i8* %r69, i8** %r70
+  store ptr %r70, ptr %__jf3
+  %r72 = load atomic i64, i64* @g_crypto_inl monotonic, align 8
+  %r73 = load i8*, i8** %r70
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.61, ptr %r70, i8* %r73)
+  %r74 = call i64 @__nurl_fn.nurl_sym_len(i64 %r72, i8* %r73)
+  %r75 = icmp ne i64 0, %r74
+  br i1 %r75, label %then_4, label %else_5
 then_4:
-  %r74 = load i8*, i8** %r61
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1228, ptr %r61, i8* %r74)
-  %r75 = call i8* @__nurl_fn.__crypto_tier_copy__fp1(i8* %r74)
-;                                       
-  call void @__nurl_fn.emit_hoisted(i8* %r75)
-  call void @nurl_free(i8* %r75)
+  %r76 = load i8*, i8** %r61
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1228, ptr %r61, i8* %r76)
+  %r77 = call i8* @__nurl_fn.__crypto_tier_copy__fp1(i8* %r76)
+  %r79 = load i8*, i8** %r78
+  call void @nurl_free(i8* %r79)
+  store i8* %r77, i8** %r78
+  store ptr %r78, ptr %__jf4
+  %r80 = load i8*, i8** %r78
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1086, ptr %r78, i8* %r80)
+  call void @__nurl_fn.emit_hoisted(i8* %r80)
+  %r81 = load i8*, i8** %r78
+  call void @nurl_free(i8* %r81)
+  store i8* null, i8** %r78
   br label %end_6
 else_5:
   br label %end_6
 end_6:
-  %r78 = load i64, i64* %r0
-  %r79 = add i64 %r78, 1
-  store i64 %r79, i64* %r0
-  %r80 = load i8*, i8** %r61
-  call void @nurl_free(i8* %r80)
+  %r82 = load i64, i64* %r0
+  %r83 = add i64 %r82, 1
+  store i64 %r83, i64* %r0
+  %r84 = load i8*, i8** %r61
+  call void @nurl_free(i8* %r84)
   store i8* null, i8** %r61
+  %r85 = load i8*, i8** %r65
+  call void @nurl_free(i8* %r85)
+  store i8* null, i8** %r65
+  %r86 = load i8*, i8** %r70
+  call void @nurl_free(i8* %r86)
+  store i8* null, i8** %r70
   br label %loop_check_1
 loop_exit_3:
   store atomic i64 0, i64* @g_crypto_defer_n monotonic, align 8
-  store i64 0, i64* %r81
+  store i64 0, i64* %r87
   br label %loop_check_7
 loop_check_7:
-  %r82 = load i64, i64* %r81
-  %r83 = load atomic i64, i64* @g_simd_defer_n monotonic, align 8
-  %r84 = icmp slt i64 %r82, %r83
-  br i1 %r84, label %loop_body_8, label %loop_exit_9
+  %r88 = load i64, i64* %r87
+  %r89 = load atomic i64, i64* @g_simd_defer_n monotonic, align 8
+  %r90 = icmp slt i64 %r88, %r89
+  br i1 %r90, label %loop_body_8, label %loop_exit_9
 loop_body_8:
-  %r85 = load i64, i64* %r81
-  %r86 = call i8* @nurl_str_int(i64 %r85)
-  %r88 = load i8*, i8** %r87
-  call void @nurl_free(i8* %r88)
-  store i8* %r86, i8** %r87
-  store ptr %r87, ptr %__jf2
-  %r89 = load atomic i64, i64* @g_simd_defer monotonic, align 8
-  %r90 = load i8*, i8** %r87
-  %r91 = getelementptr [4 x i8], [4 x i8]* @.str.18092, i64 0, i64 0
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r87, i8* %r90)
-  %r93 = call i8* @__nurl_fn.nurl_str_cat(i8* %r90, i8* %r91)
-;                                       
-  %r96 = call i8* @__nurl_fn.nurl_sym_get(i64 %r89, i8* %r93)
-  store i8* null, i8** %r97
-  %r104 = load i8*, i8** %r97
-  %r105 = icmp eq i8* %r104, null
-  %r106 = icmp eq i8* %r96, %r93
-  %r107 = icmp ne i8* %r93, null
-  %r109 = and i1 %r106, %r107
-  %r112 = xor i1 %r106, 1
-  store i8* %r104, i8** %r97
-  %r120 = load i8*, i8** %r118
-  call void @nurl_free(i8* %r120)
-  store i8* null, i8** %r118
-  call void @nurl_free(i8* null)
-  call void @nurl_free(i8* %r93)
-  %r126 = load i8*, i8** %r122
-  call void @nurl_free(i8* %r126)
-  %r124 = load i8*, i8** %r97
-  store i8* %r124, i8** %r122
+  %r91 = load i64, i64* %r87
+  %r92 = call i8* @nurl_str_int(i64 %r91)
+  %r94 = load i8*, i8** %r93
+  call void @nurl_free(i8* %r94)
+  store i8* %r92, i8** %r93
+  store ptr %r93, ptr %__jf5
+  %r95 = load atomic i64, i64* @g_simd_defer monotonic, align 8
+  %r96 = load i8*, i8** %r93
+  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.18092, i64 0, i64 0
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r93, i8* %r96)
+  %r99 = call i8* @__nurl_fn.nurl_str_cat(i8* %r96, i8* %r97)
 ;                                        
-  store i8* %r96, i8** %r127
-  %r128 = load i8*, i8** %r127
-  %r129 = call i1 @__nurl_fn.__ir_uses_crypto__fp1(i8* %r128)
-  br i1 %r129, label %or_end_11, label %or_right_10
+  %r102 = call i8* @__nurl_fn.nurl_sym_get(i64 %r95, i8* %r99)
+  store i8* null, i8** %r103
+  %r110 = load i8*, i8** %r103
+  %r111 = icmp eq i8* %r110, null
+  %r112 = icmp eq i8* %r102, %r99
+  %r113 = icmp ne i8* %r99, null
+  %r115 = and i1 %r112, %r113
+  %r118 = xor i1 %r112, 1
+  store i8* %r110, i8** %r103
+  %r126 = load i8*, i8** %r124
+  call void @nurl_free(i8* %r126)
+  store i8* null, i8** %r124
+  call void @nurl_free(i8* null)
+  call void @nurl_free(i8* %r99)
+  %r132 = load i8*, i8** %r128
+  call void @nurl_free(i8* %r132)
+  %r130 = load i8*, i8** %r103
+  store i8* %r130, i8** %r128
+;                                        
+  store i8* %r102, i8** %r133
+  %r134 = load i8*, i8** %r133
+  %r135 = call i1 @__nurl_fn.__ir_uses_crypto__fp1(i8* %r134)
+  br i1 %r135, label %or_end_11, label %or_right_10
 or_right_10:
-  %r130 = load i8*, i8** %r127
-  %r131 = load i8*, i8** %r97
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1225, ptr %r122, i8* %r130)
-  %r133 = call i1 @__nurl_fn.__ir_calls_crypto__fp1(i8* %r130)
+  %r136 = load i8*, i8** %r133
+  %r137 = load i8*, i8** %r103
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1225, ptr %r128, i8* %r136)
+  %r139 = call i1 @__nurl_fn.__ir_calls_crypto__fp1(i8* %r136)
   br label %or_end_11
 or_end_11:
-  %r134 = phi i1 [ 1, %loop_body_8 ], [ %r133, %or_right_10 ]
-  store i1 %r134, i1* %r135
-  %r136 = load i1, i1* %r135
-  br i1 %r136, label %then_12, label %else_13
+  %r140 = phi i1 [ 1, %loop_body_8 ], [ %r139, %or_right_10 ]
+  store i1 %r140, i1* %r141
+  %r142 = load i1, i1* %r141
+  br i1 %r142, label %then_12, label %else_13
 then_12:
-  %r137 = load i8*, i8** %r127
-  %r138 = load i8*, i8** %r97
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1224, ptr %r122, i8* %r137)
-  %r140 = call i8* @__nurl_fn.__ir_tier_calls__fp1(i8* %r137)
+  %r143 = load i8*, i8** %r133
+  %r144 = load i8*, i8** %r103
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1224, ptr %r128, i8* %r143)
+  %r146 = call i8* @__nurl_fn.__ir_tier_calls__fp1(i8* %r143)
   br label %end_14
 else_13:
-  %r141 = load i8*, i8** %r127
-  %r142 = load i8*, i8** %r97
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r122, i8* %r141)
-  %r144 = getelementptr [1 x i8], [1 x i8]* @.str.18093, i64 0, i64 0
-  %r146 = call i8* @__nurl_fn.nurl_str_cat(i8* %r141, i8* %r144)
+  %r147 = load i8*, i8** %r133
+  %r148 = load i8*, i8** %r103
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r128, i8* %r147)
+  %r150 = getelementptr [1 x i8], [1 x i8]* @.str.18093, i64 0, i64 0
+  %r152 = call i8* @__nurl_fn.nurl_str_cat(i8* %r147, i8* %r150)
   br label %end_14
 end_14:
-  %r147 = phi i8* [ %r140, %then_12 ], [ %r146, %else_13 ]
-  %r149 = load i8*, i8** %r148
-  call void @nurl_free(i8* %r149)
-  store i8* %r147, i8** %r148
-  store ptr %r148, ptr %__jf3
-  %r150 = load i8*, i8** %r148
-  %r151 = load atomic i64, i64* @g_simd_defer monotonic, align 8
-  %r152 = load i8*, i8** %r87
-  %r153 = getelementptr [3 x i8], [3 x i8]* @.str.18094, i64 0, i64 0
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r87, i8* %r152)
-  %r155 = call i8* @__nurl_fn.nurl_str_cat(i8* %r152, i8* %r153)
-;                                        
-  %r158 = call i8* @__nurl_fn.nurl_sym_get(i64 %r151, i8* %r155)
-  store i8* null, i8** %r159
-  %r166 = load i8*, i8** %r159
-  %r167 = icmp eq i8* %r166, null
-  %r168 = icmp eq i8* %r158, %r155
-  %r169 = icmp ne i8* %r155, null
-  %r171 = and i1 %r168, %r169
-  %r174 = xor i1 %r168, 1
-  store i8* %r166, i8** %r159
-  %r182 = load i8*, i8** %r180
-  call void @nurl_free(i8* %r182)
-  store i8* null, i8** %r180
-  call void @nurl_free(i8* null)
+  %r153 = phi i8* [ %r146, %then_12 ], [ %r152, %else_13 ]
+  %r155 = load i8*, i8** %r154
   call void @nurl_free(i8* %r155)
-  %r184 = load i8*, i8** %r159
+  store i8* %r153, i8** %r154
+  store ptr %r154, ptr %__jf6
+  %r156 = load i8*, i8** %r154
+  %r157 = load atomic i64, i64* @g_simd_defer monotonic, align 8
+  %r158 = load i8*, i8** %r93
+  %r159 = getelementptr [3 x i8], [3 x i8]* @.str.18094, i64 0, i64 0
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r93, i8* %r158)
+  %r161 = call i8* @__nurl_fn.nurl_str_cat(i8* %r158, i8* %r159)
 ;                                        
-  %r188 = load atomic i64, i64* @g_simd_defer monotonic, align 8
-  %r189 = load i8*, i8** %r87
-  %r190 = getelementptr [3 x i8], [3 x i8]* @.str.18095, i64 0, i64 0
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r87, i8* %r189)
-  %r192 = call i8* @__nurl_fn.nurl_str_cat(i8* %r189, i8* %r190)
-;                                        
-  %r195 = call i8* @__nurl_fn.nurl_sym_get(i64 %r188, i8* %r192)
-  store i8* null, i8** %r196
-  %r203 = load i8*, i8** %r196
-  %r204 = icmp eq i8* %r203, null
-  %r205 = icmp eq i8* %r195, %r192
-  %r206 = icmp ne i8* %r192, null
-  %r208 = and i1 %r205, %r206
-  %r211 = xor i1 %r205, 1
-  store i8* %r203, i8** %r196
-  %r219 = load i8*, i8** %r217
-  call void @nurl_free(i8* %r219)
-  store i8* null, i8** %r217
+  %r164 = call i8* @__nurl_fn.nurl_sym_get(i64 %r157, i8* %r161)
+  store i8* null, i8** %r165
+  %r172 = load i8*, i8** %r165
+  %r173 = icmp eq i8* %r172, null
+  %r174 = icmp eq i8* %r164, %r161
+  %r175 = icmp ne i8* %r161, null
+  %r177 = and i1 %r174, %r175
+  %r180 = xor i1 %r174, 1
+  store i8* %r172, i8** %r165
+  %r188 = load i8*, i8** %r186
+  call void @nurl_free(i8* %r188)
+  store i8* null, i8** %r186
   call void @nurl_free(i8* null)
-  call void @nurl_free(i8* %r192)
-  %r221 = load i8*, i8** %r196
+  call void @nurl_free(i8* %r161)
+  %r190 = load i8*, i8** %r165
 ;                                        
-  %r225 = load atomic i64, i64* @g_simd_defer monotonic, align 8
-  %r226 = load i8*, i8** %r87
-  %r227 = getelementptr [3 x i8], [3 x i8]* @.str.18096, i64 0, i64 0
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r87, i8* %r226)
-  %r229 = call i8* @__nurl_fn.nurl_str_cat(i8* %r226, i8* %r227)
+  %r194 = load atomic i64, i64* @g_simd_defer monotonic, align 8
+  %r195 = load i8*, i8** %r93
+  %r196 = getelementptr [3 x i8], [3 x i8]* @.str.18095, i64 0, i64 0
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r93, i8* %r195)
+  %r198 = call i8* @__nurl_fn.nurl_str_cat(i8* %r195, i8* %r196)
 ;                                        
-  %r232 = call i8* @__nurl_fn.nurl_sym_get(i64 %r225, i8* %r229)
-  store i8* null, i8** %r233
-  %r240 = load i8*, i8** %r233
-  %r241 = icmp eq i8* %r240, null
-  %r242 = icmp eq i8* %r232, %r229
-  %r243 = icmp ne i8* %r229, null
-  %r245 = and i1 %r242, %r243
-  %r248 = xor i1 %r242, 1
-  store i8* %r240, i8** %r233
-  %r256 = load i8*, i8** %r254
-  call void @nurl_free(i8* %r256)
-  store i8* null, i8** %r254
+  %r201 = call i8* @__nurl_fn.nurl_sym_get(i64 %r194, i8* %r198)
+  store i8* null, i8** %r202
+  %r209 = load i8*, i8** %r202
+  %r210 = icmp eq i8* %r209, null
+  %r211 = icmp eq i8* %r201, %r198
+  %r212 = icmp ne i8* %r198, null
+  %r214 = and i1 %r211, %r212
+  %r217 = xor i1 %r211, 1
+  store i8* %r209, i8** %r202
+  %r225 = load i8*, i8** %r223
+  call void @nurl_free(i8* %r225)
+  store i8* null, i8** %r223
   call void @nurl_free(i8* null)
-  call void @nurl_free(i8* %r229)
-  %r258 = load i8*, i8** %r233
+  call void @nurl_free(i8* %r198)
+  %r227 = load i8*, i8** %r202
 ;                                        
-  %r262 = load i1, i1* %r135
-  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1089, ptr %r148, i8* %r150)
-  call void @__nurl_fn.emit_multiversion(i8* %r150, i8* %r158, i8* %r195, i8* %r232, i1 %r262)
-  call void @nurl_free(i8* %r184)
-  call void @nurl_free(i8* %r221)
-  call void @nurl_free(i8* %r258)
-  %r263 = load i64, i64* %r81
-  %r264 = add i64 %r263, 1
-  store i64 %r264, i64* %r81
-  %r265 = load i8*, i8** %r87
-  call void @nurl_free(i8* %r265)
-  store i8* null, i8** %r87
-  %r266 = load i8*, i8** %r122
-  call void @nurl_free(i8* %r266)
-  store i8* null, i8** %r122
-  %r267 = load i8*, i8** %r148
-  call void @nurl_free(i8* %r267)
-  store i8* null, i8** %r148
+  %r231 = load atomic i64, i64* @g_simd_defer monotonic, align 8
+  %r232 = load i8*, i8** %r93
+  %r233 = getelementptr [3 x i8], [3 x i8]* @.str.18096, i64 0, i64 0
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.2, ptr %r93, i8* %r232)
+  %r235 = call i8* @__nurl_fn.nurl_str_cat(i8* %r232, i8* %r233)
+;                                        
+  %r238 = call i8* @__nurl_fn.nurl_sym_get(i64 %r231, i8* %r235)
+  store i8* null, i8** %r239
+  %r246 = load i8*, i8** %r239
+  %r247 = icmp eq i8* %r246, null
+  %r248 = icmp eq i8* %r238, %r235
+  %r249 = icmp ne i8* %r235, null
+  %r251 = and i1 %r248, %r249
+  %r254 = xor i1 %r248, 1
+  store i8* %r246, i8** %r239
+  %r262 = load i8*, i8** %r260
+  call void @nurl_free(i8* %r262)
+  store i8* null, i8** %r260
+  call void @nurl_free(i8* null)
+  call void @nurl_free(i8* %r235)
+  %r264 = load i8*, i8** %r239
+;                                        
+  %r268 = load i1, i1* %r141
+  call void @__nurl_argxfen(ptr @.__nurl_argtransfer.1089, ptr %r154, i8* %r156)
+  call void @__nurl_fn.emit_multiversion(i8* %r156, i8* %r164, i8* %r201, i8* %r238, i1 %r268)
+  call void @nurl_free(i8* %r190)
+  call void @nurl_free(i8* %r227)
+  call void @nurl_free(i8* %r264)
+  %r269 = load i64, i64* %r87
+  %r270 = add i64 %r269, 1
+  store i64 %r270, i64* %r87
+  %r271 = load i8*, i8** %r93
+  call void @nurl_free(i8* %r271)
+  store i8* null, i8** %r93
+  %r272 = load i8*, i8** %r128
+  call void @nurl_free(i8* %r272)
+  store i8* null, i8** %r128
+  %r273 = load i8*, i8** %r154
+  call void @nurl_free(i8* %r273)
+  store i8* null, i8** %r154
   br label %loop_check_7
 loop_exit_9:
   store atomic i64 0, i64* @g_simd_defer_n monotonic, align 8
-  %r268 = load i8*, i8** %r31
-  call void @nurl_free(i8* %r268)
-  %r269 = load i8*, i8** %r57
-  call void @nurl_free(i8* %r269)
-  %r270 = load i8*, i8** %r118
-  call void @nurl_free(i8* %r270)
-  %r271 = load i8*, i8** %r180
-  call void @nurl_free(i8* %r271)
-  %r272 = load i8*, i8** %r217
-  call void @nurl_free(i8* %r272)
-  %r273 = load i8*, i8** %r254
-  call void @nurl_free(i8* %r273)
+  %r274 = load i8*, i8** %r31
+  call void @nurl_free(i8* %r274)
+  %r275 = load i8*, i8** %r57
+  call void @nurl_free(i8* %r275)
+  %r276 = load i8*, i8** %r124
+  call void @nurl_free(i8* %r276)
+  %r277 = load i8*, i8** %r186
+  call void @nurl_free(i8* %r277)
+  %r278 = load i8*, i8** %r223
+  call void @nurl_free(i8* %r278)
+  %r279 = load i8*, i8** %r260
+  call void @nurl_free(i8* %r279)
 ;                                               
   ret void
 }
@@ -404961,7 +405006,7 @@ entry:
   call void @nurl_print(i8* %r26)
   %r27 = getelementptr [71 x i8], [71 x i8]* @.str.20083, i64 0, i64 0
   call void @nurl_print(i8* %r27)
-  %r28 = getelementptr [65 x i8], [65 x i8]* @.str.20084, i64 0, i64 0
+  %r28 = getelementptr [67 x i8], [67 x i8]* @.str.20084, i64 0, i64 0
   call void @nurl_print(i8* %r28)
   %r29 = getelementptr [71 x i8], [71 x i8]* @.str.20085, i64 0, i64 0
   call void @nurl_print(i8* %r29)
@@ -405017,8 +405062,8 @@ entry:
 @.str.20080 = private unnamed_addr constant [74 x i8] c"                      set, and nurlc emits no target triple, so anything\0A\00"
 @.str.20081 = private unnamed_addr constant [72 x i8] c"                      building for another architecture must pass this\0A\00"
 @.str.20082 = private unnamed_addr constant [70 x i8] c"                      (nurl.sh does it for every non-x86-64 target).\0A\00"
-@.str.20083 = private unnamed_addr constant [71 x i8] c"                      Also off by default when nurlc itself runs on a\0A\00"
-@.str.20084 = private unnamed_addr constant [65 x i8] c"                      non-x86-64 host; the hardware crypto tier\0A\00"
+@.str.20083 = private unnamed_addr constant [71 x i8] c"                      Also off by default when nurlc runs natively on\0A\00"
+@.str.20084 = private unnamed_addr constant [67 x i8] c"                      a non-x86-64 host; the hardware crypto tier\0A\00"
 @.str.20085 = private unnamed_addr constant [71 x i8] c"                      (nurl_v128_aes*, nurl_v128_clmul_*) follows it.\0A\00"
 @.str.20086 = private unnamed_addr constant [70 x i8] c"  --cpu-dispatch      turn the prefix and the crypto tier on, for an\0A\00"
 @.str.20087 = private unnamed_addr constant [60 x i8] c"                      x86-64 target built on another host.\0A\00"
@@ -405474,7 +405519,7 @@ entry:
   store i1 0, i1* %r8
   store i1 0, i1* %r9
   store i64 0, i64* %r10
-  %r11 = call i64 @nurl_host_x86_64()
+  %r11 = call i64 @nurl_cpu_dispatch_default()
   %r12 = icmp eq i64 0, %r11
   br i1 %r12, label %then_1, label %else_2
 then_1:
@@ -407885,7 +407930,7 @@ x:
 @.__nurl_argdrop.304 = private constant i1 true
 @.__nurl_argdrop.305 = private constant i1 true
 @.__nurl_argdrop.306 = private constant i1 true
-@.__nurl_argdrop.307 = private constant i1 false
+@.__nurl_argdrop.307 = private constant i1 true
 @.__nurl_argdrop.308 = private constant i1 true
 @.__nurl_argdrop.309 = private constant i1 true
 @.__nurl_argdrop.310 = private constant i1 true
@@ -407902,7 +407947,6 @@ x:
 @.__nurl_argdrop.321 = private constant i1 true
 @.__nurl_argdrop.322 = private constant i1 true
 @.__nurl_argdrop.323 = private constant i1 true
-@.__nurl_argdrop.324 = private constant i1 true
 @.__nurl_lendone.0 = private constant i1 false
 @.__nurl_lendpart.1 = private constant i1 false
 @.__nurl_lendone.2 = private constant i1 false
@@ -410633,3 +410677,4 @@ x:
 @.__nurl_guard.1144 = private constant i1 true
 @.__nurl_guard.1145 = private constant i1 true
 @.__nurl_guard.1146 = private constant i1 true
+@.__nurl_guard.1147 = private constant i1 true

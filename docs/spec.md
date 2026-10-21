@@ -343,9 +343,10 @@ Three consequences worth knowing:
   function once. nurlc emits no `target triple`, so it cannot tell that a
   module is bound for AArch64 or wasm; anything building for a non-x86-64
   target must pass this flag, and `nurl.sh`, the unikernel scripts and the
-  build API all do. The prefix also starts off when nurlc itself runs on
-  a non-x86-64 host (its IR is compiled for the host clang runs on), and
-  `--cpu-dispatch` turns it back on for an x86-64 target built there.
+  build API all do. The prefix also starts off when nurlc runs natively
+  on a non-x86-64 host (its IR is compiled for the host clang runs on),
+  and `--cpu-dispatch` turns it back on for an x86-64 target built there;
+  a wasm nurlc keeps the native default.
 - **A marked function that uses the hardware crypto tier** (§4.1b,
   the `nurl_v128_aes*` / `nurl_v128_clmul_*`
   primitives) — or calls a function that does — cannot have a baseline

@@ -43895,8 +43895,8 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params b crypto → v {
 : ~ i g_lazy_trace 0  // NURL_LAZY_TRACE: report a late compile (a gap in lazy_reach)
 
 & `c` @ nurl_print_buf_len → i
-// Was nurlc itself built for x86-64 (runtime_core.c)? See main.
-& `c` @ nurl_host_x86_64 → i
+// Does CPU dispatch start on (runtime_core.c)? See main.
+& `c` @ nurl_cpu_dispatch_default → i
 
 & `c` @ nurl_print_buf_at i off → i
 
@@ -52406,7 +52406,9 @@ unsafe @ __rt_decl_ptypes s region → s {
     ? & != g_cpu_dispatch 0 ( __ir_uses_crypto ir )
     { : s nm ( __ir_fn_name ir )
         ( nurl_sym_def g_crypto_fns nm `1` )
-        ? & == g_dbg_enabled 0 >= ( nurl_str_find ( __ir_header ir ) `) alwaysinline` ) 0
+        : s hdr ( __ir_header ir )
+        : i ai ( nurl_str_find hdr `) alwaysinline` )
+        ? & == g_dbg_enabled 0 >= ai 0
         { ( nurl_sym_def g_crypto_inl nm `1` ) }
         {}
         ( nurl_sym_def g_crypto_defer ( nurl_str_int g_crypto_defer_n ) ir )
@@ -52535,8 +52537,13 @@ unsafe @ __ir_calls_crypto s ir → b {
     : ~ i c 0
     ~ < c g_crypto_defer_n {
         : s ir ( __ir_tier_calls ( nurl_sym_get g_crypto_defer ( nurl_str_int c ) ) )
-        ( emit_hoisted ( __crypto_fn_ir ir T ) )
-        ? != 0 ( nurl_sym_len g_crypto_inl ( __ir_fn_name ir ) ) { ( emit_hoisted ( __crypto_tier_copy ir ) ) } {}
+        : s gated ( __crypto_fn_ir ir T )
+        ( emit_hoisted gated )
+        : s nm ( __ir_fn_name ir )
+        ? != 0 ( nurl_sym_len g_crypto_inl nm ) {
+            : s copy ( __crypto_tier_copy ir )
+            ( emit_hoisted copy )
+        } {}
         = c + c 1
     }
     = g_crypto_defer_n 0
@@ -59633,8 +59640,8 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      set, and nurlc emits no target triple, so anything\n` )
     ( nurl_print `                      building for another architecture must pass this\n` )
     ( nurl_print `                      (nurl.sh does it for every non-x86-64 target).\n` )
-    ( nurl_print `                      Also off by default when nurlc itself runs on a\n` )
-    ( nurl_print `                      non-x86-64 host; the hardware crypto tier\n` )
+    ( nurl_print `                      Also off by default when nurlc runs natively on\n` )
+    ( nurl_print `                      a non-x86-64 host; the hardware crypto tier\n` )
     ( nurl_print `                      (nurl_v128_aes*, nurl_v128_clmul_*) follows it.\n` )
     ( nurl_print `  --cpu-dispatch      turn the prefix and the crypto tier on, for an\n` )
     ( nurl_print `                      x86-64 target built on another host.\n` )
@@ -59831,13 +59838,15 @@ unsafe @ main → i {
     : ~ b check_only F
     : ~ b options_done F
     : ~ i path_count 0
-    // nurlc emits no target triple, so its IR is compiled for the host
-    // clang runs on — in practice nurlc's own. The `simd` clones and the
-    // hardware crypto tier are x86-64 feature sets: on any other host
-    // they start off, as if --no-cpu-dispatch were given (x86 intrinsics
-    // in an AArch64 module are a codegen error, not a warning), and
-    // --cpu-dispatch turns them back on for an x86-64 target built there.
-    ? == 0 ( nurl_host_x86_64 ) { = g_cpu_dispatch 0 } {}
+    // nurlc emits no target triple, so a native nurlc's IR is compiled
+    // for the host clang runs on — in practice its own. The `simd` clones
+    // and the hardware crypto tier are x86-64 feature sets: on an AArch64
+    // or RISC-V host they start off, as if --no-cpu-dispatch were given
+    // (x86 intrinsics in an AArch64 module are a codegen error, not a
+    // warning), and --cpu-dispatch turns them back on for an x86-64
+    // target built there. A wasm nurlc keeps the native default
+    // (nurl_cpu_dispatch_default, runtime_core.c).
+    ? == 0 ( nurl_cpu_dispatch_default ) { = g_cpu_dispatch 0 } {}
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
         ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}
