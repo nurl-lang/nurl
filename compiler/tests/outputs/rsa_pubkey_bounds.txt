@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+e=65537 valid: T
+e=65537 other digest: F
+e=600 bits: F
+e=1, sig=EM: F
+e=1, sig=EM (pss): F
+e=65536 (even): F
+e=2^32+1: F
