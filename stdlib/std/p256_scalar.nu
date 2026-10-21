@@ -377,82 +377,241 @@ $ `stdlib/core/vec.nu`
     ^ & != bb 0 != nz 0
 }
 
-// n − 2, big-endian.
-@ __sn_nm2_be → ( Vec u ) {
-    : ( Vec u ) v ( vec_with_cap [u] 32 )
-    : b _l ( vec_set_len [u] v 32 )
-    : *u q ( vec_data [u] v )
-    = . q 0 # u 0xff = . q 1 # u 0xff = . q 2 # u 0xff = . q 3 # u 0xff
-    = . q 4 # u 0x00 = . q 5 # u 0x00 = . q 6 # u 0x00 = . q 7 # u 0x00
-    = . q 8 # u 0xff = . q 9 # u 0xff = . q 10 # u 0xff = . q 11 # u 0xff
-    = . q 12 # u 0xff = . q 13 # u 0xff = . q 14 # u 0xff = . q 15 # u 0xff
-    = . q 16 # u 0xbc = . q 17 # u 0xe6 = . q 18 # u 0xfa = . q 19 # u 0xad
-    = . q 20 # u 0xa7 = . q 21 # u 0x17 = . q 22 # u 0x9e = . q 23 # u 0x84
-    = . q 24 # u 0xf3 = . q 25 # u 0xb9 = . q 26 # u 0xca = . q 27 # u 0xc2
-    = . q 28 # u 0xfc = . q 29 # u 0x63 = . q 30 # u 0x25 = . q 31 # u 0x4f
-    ^ v
+inline @ __sn_condsub_u64 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 w0 u64 w1 u64 w2 u64 w3 u64 w4 → v {
+    : u64 d0 ( nurl_subb_lo w0 0xf3b9cac2fc632551 0 )
+    : ~ u64 bb ( nurl_subb_hi w0 0xf3b9cac2fc632551 0 )
+    : u64 d1 ( nurl_subb_lo w1 0xbce6faada7179e84 bb )
+    = bb ( nurl_subb_hi w1 0xbce6faada7179e84 bb )
+    : u64 d2 ( nurl_subb_lo w2 0xffffffffffffffff bb )
+    = bb ( nurl_subb_hi w2 0xffffffffffffffff bb )
+    : u64 d3 ( nurl_subb_lo w3 0xffffffff00000000 bb )
+    = bb ( nurl_subb_hi w3 0xffffffff00000000 bb )
+    : i topb - # i w4 # i bb
+    : u64 mask ? < topb 0 0 0xffffffffffffffff
+    : u64 imask ^^ mask 0xffffffffffffffff
+    = o0 | & mask d0 & imask w0
+    = o1 | & mask d1 & imask w1
+    = o2 | & mask d2 & imask w2
+    = o3 | & mask d3 & imask w3
 }
 
-// Flat 15-entry window table: entry k (1-based) at [ (k−1)·4, (k−1)·4+4 ).
-@ __sn_tbl_put ( Vec i ) tbl i k ( Vec i ) v → v {
-    : *i tp ( vec_data [i] tbl )
-    : *i vp ( vec_data [i] v )
-    : i base * - k 1 4
-    = . tp + base 0 . vp 0
-    = . tp + base 1 . vp 1
-    = . tp + base 2 . vp 2
-    = . tp + base 3 . vp 3
+inline @ __sn_mul_u64 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
+    : ~ u64 t5 0
+    : ~ u64 m 0
+    : ~ u64 cr 0
+    // ── round 0: t += a·b0, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b0 t0 0 )
+    = t0 ( nurl_mac_lo a0 b0 t0 0 )
+    : u64 q01 ( nurl_mac_lo a1 b0 t1 cr )
+    = cr ( nurl_mac_hi a1 b0 t1 cr )
+    = t1 q01
+    : u64 q02 ( nurl_mac_lo a2 b0 t2 cr )
+    = cr ( nurl_mac_hi a2 b0 t2 cr )
+    = t2 q02
+    : u64 q03 ( nurl_mac_lo a3 b0 t3 cr )
+    = cr ( nurl_mac_hi a3 b0 t3 cr )
+    = t3 q03
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = m * t0 0xccd1c8aaee00bc4f
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w01 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w01
+    : u64 w02 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w02
+    : u64 w03 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w03
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 1: t += a·b1, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b1 t0 0 )
+    = t0 ( nurl_mac_lo a0 b1 t0 0 )
+    : u64 q11 ( nurl_mac_lo a1 b1 t1 cr )
+    = cr ( nurl_mac_hi a1 b1 t1 cr )
+    = t1 q11
+    : u64 q12 ( nurl_mac_lo a2 b1 t2 cr )
+    = cr ( nurl_mac_hi a2 b1 t2 cr )
+    = t2 q12
+    : u64 q13 ( nurl_mac_lo a3 b1 t3 cr )
+    = cr ( nurl_mac_hi a3 b1 t3 cr )
+    = t3 q13
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = m * t0 0xccd1c8aaee00bc4f
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w11 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w11
+    : u64 w12 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w12
+    : u64 w13 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w13
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 2: t += a·b2, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b2 t0 0 )
+    = t0 ( nurl_mac_lo a0 b2 t0 0 )
+    : u64 q21 ( nurl_mac_lo a1 b2 t1 cr )
+    = cr ( nurl_mac_hi a1 b2 t1 cr )
+    = t1 q21
+    : u64 q22 ( nurl_mac_lo a2 b2 t2 cr )
+    = cr ( nurl_mac_hi a2 b2 t2 cr )
+    = t2 q22
+    : u64 q23 ( nurl_mac_lo a3 b2 t3 cr )
+    = cr ( nurl_mac_hi a3 b2 t3 cr )
+    = t3 q23
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = m * t0 0xccd1c8aaee00bc4f
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w21 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w21
+    : u64 w22 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w22
+    : u64 w23 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w23
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 3: t += a·b3, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b3 t0 0 )
+    = t0 ( nurl_mac_lo a0 b3 t0 0 )
+    : u64 q31 ( nurl_mac_lo a1 b3 t1 cr )
+    = cr ( nurl_mac_hi a1 b3 t1 cr )
+    = t1 q31
+    : u64 q32 ( nurl_mac_lo a2 b3 t2 cr )
+    = cr ( nurl_mac_hi a2 b3 t2 cr )
+    = t2 q32
+    : u64 q33 ( nurl_mac_lo a3 b3 t3 cr )
+    = cr ( nurl_mac_hi a3 b3 t3 cr )
+    = t3 q33
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = m * t0 0xccd1c8aaee00bc4f
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w31 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w31
+    : u64 w32 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w32
+    : u64 w33 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w33
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    ( __sn_condsub_u64 o0 o1 o2 o3 t1 t2 t3 t4 t5 )
 }
 
-@ __sn_tbl_cp ( Vec i ) dst ( Vec i ) tbl i k → v {
-    : *i tp ( vec_data [i] tbl )
-    : *i dp ( vec_data [i] dst )
-    : i base * - k 1 4
-    = . dp 0 . tp + base 0
-    = . dp 1 . tp + base 1
-    = . dp 2 . tp + base 2
-    = . dp 3 . tp + base 3
+@ __sn_sqn inout u64 x0 inout u64 x1 inout u64 x2 inout u64 x3 i count → v {
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ i k 0
+    ~ < k count {
+        ( __sn_mul_u64 t0 t1 t2 t3 x0 x1 x2 x3 x0 x1 x2 x3 )
+        = x0 t0 = x1 t1 = x2 t2 = x3 t3
+        = k + k 1
+    }
 }
 
-// a^-1 mod n, Fermat: a^(n-2) with a fixed 4-bit window, MSB→LSB.
-// The exponent n−2 is a PUBLIC curve constant, so the schedule — and
-// every branch below, which reads only that constant — is identical for
-// all inputs; the data stays in branch-free Montgomery arithmetic. The
-// old bit-at-a-time ladder cost 256 squarings + ~170 multiplies plus two
-// 4-limb copies per bit; the window costs 14 (table) + 252 squarings +
-// one multiply per non-zero nibble (~59) and no per-bit copies.
+// a^-1 mod n, Fermat: a^(n-2) with a fixed 4-bit window on scalar u64 limbs.
 @ p256n_inv_be ( Vec u ) a → ( Vec u ) {
     : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
     : ( Vec i ) am ( __sn_to_mont av )
-    : ( Vec u ) e ( __sn_nm2_be )
-    // tbl[k] = a^k (Montgomery), k = 1..15
-    : ( Vec i ) tbl ( vec_with_cap [i] 60 )
-    : b _l ( vec_set_len [i] tbl 60 )
-    : ( Vec i ) w ( __sn_mag4 )
-    ( __sn_cp w am )
-    ( __sn_tbl_put tbl 1 w )
-    : ~ i k 2
-    ~ <= k 15 {
-        ( __sn_mul w w am )
-        ( __sn_tbl_put tbl k w )
+    : *i amp ( vec_data [i] am )
+    : u64 a1_0 # u64 . amp 0
+    : u64 a1_1 # u64 . amp 1
+    : u64 a1_2 # u64 . amp 2
+    : u64 a1_3 # u64 . amp 3
+
+    // tbl[k] = a^k (Montgomery), k = 1..15 in a flat 60-u64 buffer
+    : ( Vec u64 ) tbl ( vec_with_cap [u64] 60 )
+    : b _l ( vec_set_len [u64] tbl 60 )
+    : *u64 tp ( vec_data [u64] tbl )
+    = . tp 0 a1_0 = . tp 1 a1_1 = . tp 2 a1_2 = . tp 3 a1_3
+    : ~ u64 w0 a1_0
+    : ~ u64 w1 a1_1
+    : ~ u64 w2 a1_2
+    : ~ u64 w3 a1_3
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ i k 1
+    ~ < k 15 {
+        ( __sn_mul_u64 t0 t1 t2 t3 w0 w1 w2 w3 a1_0 a1_1 a1_2 a1_3 )
+        = w0 t0 = w1 t1 = w2 t2 = w3 t3
+        : i base * k 4
+        = . tp base w0 = . tp + base 1 w1 = . tp + base 2 w2 = . tp + base 3 w3
         = k + k 1
     }
-    // first nibble of n−2 is 0xf; then 63 windows of 4 squarings + mul
-    : ( Vec i ) r ( __sn_mag4 )
-    ( __sn_tbl_cp r tbl 15 )
-    : ~ i wi 1
-    ~ < wi 64 {
-        ( __sn_mul r r r ) ( __sn_mul r r r )
-        ( __sn_mul r r r ) ( __sn_mul r r r )
-        : i byte # i ?? ( vec_get [u] e / wi 2 ) { T x → # i x F _ → 0 }
-        : i nib ? == % wi 2 0 >> byte 4 & byte 15
-        ? > nib 0 {
-            ( __sn_tbl_cp w tbl nib )
-            ( __sn_mul r r w )
-        } {}
-        = wi + wi 1
+
+    // n - 2 = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f
+    // Top 32 bits (8 nibbles): 0xffffffff -> start with a^15, then 7*(4S + M(a^15)) = a^(2^32 - 1)
+    : ~ u64 r0 w0
+    : ~ u64 r1 w1
+    : ~ u64 r2 w2
+    : ~ u64 r3 w3
+    : ~ i i 0
+    ~ < i 7 {
+        ( __sn_sqn r0 r1 r2 r3 4 )
+        ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 w0 w1 w2 w3 )
+        = r0 t0 = r1 t1 = r2 t2 = r3 t3
+        = i + i 1
     }
-    : ( Vec i ) out ( __sn_from_mont r )
-    : ( Vec u ) o ( __sn_to_be out )
-    ^ o
+    // Next 32 bits: 0x00000000 -> 32 squarings
+    ( __sn_sqn r0 r1 r2 r3 32 )
+    // Next 64 bits: 0xffffffffffffffff -> 16*(4S + M(a^15))
+    = i 0
+    ~ < i 16 {
+        ( __sn_sqn r0 r1 r2 r3 4 )
+        ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 w0 w1 w2 w3 )
+        = r0 t0 = r1 t1 = r2 t2 = r3 t3
+        = i + i 1
+    }
+    // Remaining 128 bits of n - 2: two 64-bit words
+    : u64 e1 0xbce6faada7179e84
+    : u64 e0 0xf3b9cac2fc63254f
+    = i 15
+    ~ >= i 0 {
+        ( __sn_sqn r0 r1 r2 r3 4 )
+        : i nib # i & >> e1 # u64 * i 4 15
+        : i base * - nib 1 4
+        ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 . tp base . tp + base 1 . tp + base 2 . tp + base 3 )
+        = r0 t0 = r1 t1 = r2 t2 = r3 t3
+        = i - i 1
+    }
+    = i 15
+    ~ >= i 0 {
+        ( __sn_sqn r0 r1 r2 r3 4 )
+        : i nib # i & >> e0 # u64 * i 4 15
+        : i base * - nib 1 4
+        ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 . tp base . tp + base 1 . tp + base 2 . tp + base 3 )
+        = r0 t0 = r1 t1 = r2 t2 = r3 t3
+        = i - i 1
+    }
+
+    // Convert from Montgomery: multiply by 1
+    ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 1 0 0 0 )
+    : ( Vec i ) out ( __sn_mag4 )
+    : *i op ( vec_data [i] out )
+    = . op 0 # i t0 = . op 1 # i t1 = . op 2 # i t2 = . op 3 # i t3
+    ^ ( __sn_to_be out )
 }
