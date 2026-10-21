@@ -9,6 +9,8 @@
 //   ( tcp_listen          s host i port )                   → ! TcpListener NetErr
 //   ( tcp_listen_with_backlog s host i port i backlog )     → ! TcpListener NetErr
 //   ( tcp_accept          TcpListener l )                   → ! TcpConn NetErr
+//   ( tcp_connect         s host i port )                   → ! TcpConn NetErr
+//   ( tcp_connect_timeout s host i port i ms )              → ! TcpConn NetErr
 //   ( tcp_read_chunk      TcpConn c i max )                 → ! ( Vec u ) NetErr
 //   ( tcp_write_all       TcpConn c ( Vec u ) bytes )       → ! v NetErr
 //   ( tcp_write_all2      TcpConn c ( Vec u ) head ( Vec u ) body ) → ! v NetErr
@@ -66,8 +68,9 @@
 //                       identity is not ML-DSA
 //   NetTlsHandshake 12  pure TLS handshake failed — server side on accept
 //                       (tls_server.nu) or client side in tcp_connect_tls*
-//                       / tcp_starttls (tls.nu; a failed TCP connect there
-//                       is reported as this too)
+//                       / tcp_starttls (tls.nu). A TCP connect that fails
+//                       under tcp_connect_tls* reports its own error
+//                       (NetTimeout, NetOther, …), not this
 //
 // Platform notes:
 //
@@ -575,27 +578,57 @@ $ `stdlib/std/thread.nu`
     ^ ( tls_cv_scheme # TlsConn tp )
 }
 
+& `c` @ nurl_tcp_connect_ms s host i port i ms → i
+
+// The runtime half of every client connect: a connected runtime handle,
+// or the transport's own NetErr (the failed handle already closed).
+//
+// Context-aware like the reads: on a fiber, neither the name lookup nor
+// the TCP handshake holds the worker — a name resolves on a runtime
+// resolver thread and the handshake waits on the netpoller, while the
+// other fibers on that worker keep running. A numeric address never
+// reaches a resolver. Every address the name resolves to is tried in
+// order until one connects. Off a fiber the call blocks the thread, as
+// it always has. `ms` > 0 bounds the whole call — lookup and handshake
+// — and reports NetTimeout once it passes; 0 waits as long as the
+// resolver and the kernel do (an unanswered SYN: minutes).
+@ __tcp_connect_raw s host i port i ms → !i NetErr {
+    : i raw ( nurl_tcp_connect_ms host port ? > ms 0 ms 0 )
+    ? == raw 0 { ^ @ !i NetErr { F # NetErr NetOther } } {}
+    : i ek ( nurl_tcp_err_kind raw )
+    ? != ek 0 {
+        ( nurl_tcp_close raw )
+        ^ @ !i NetErr { F ( _net_err_of ek ) }
+    } {}
+    ^ @ !i NetErr { T raw }
+}
+
 // Open a plain (unencrypted) TCP client connection. Returns a
 // polymorphic TcpConn (kind 0) usable with the same tcp_read/tcp_write
 // family as accepted connections. For an encrypted connection use
-// tcp_connect_tls below.
+// tcp_connect_tls below. No deadline of its own: see
+// tcp_connect_timeout.
 @ tcp_connect s host i port → !TcpConn NetErr {
-    : i craw ( nurl_tcp_connect host port )
-    ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
-    : i ek ( nurl_tcp_err_kind craw )
-    ? != ek 0 {
-        ( nurl_tcp_close craw )
-        ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
-    } {}
-    ^ @ !TcpConn NetErr { T ( tcp_conn_adopt craw ) }
+    ^ ( tcp_connect_timeout host port 0 )
+}
+
+// tcp_connect, giving up after `ms` milliseconds with NetTimeout. The
+// budget covers the name lookup and the TCP handshake together, and is
+// honoured on a fiber (a netpoller deadline — the worker keeps running
+// other fibers meanwhile) and off one (poll(2)) alike. ms <= 0 = no
+// deadline. For TLS, connect with this and upgrade with tcp_starttls.
+@ tcp_connect_timeout s host i port i ms → !TcpConn NetErr {
+    ?? ( __tcp_connect_raw host port ms ) {
+        F e → ^ @ !TcpConn NetErr { F e }
+        T raw → ^ @ !TcpConn NetErr { T ( tcp_conn_adopt raw ) }
+    }
 }
 
 // Open a verified (or, with verify = 0, encrypted-only) pure-TLS client
 // connection. Returns a polymorphic TcpConn (kind 1) whose reads/writes
 // dispatch to the pure client stack.
 @ tcp_connect_tls s host i port s server_name i verify → !TcpConn NetErr {
-    : i raw ( nurl_tcp_connect host port )
-    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : i raw ?? ( __tcp_connect_raw host port 0 ) { F e → ^ @ !TcpConn NetErr { F e } T r → r }
     : !TlsConn TlsErr r ? != verify 0 ( tls_attach_verify raw server_name ) ( tls_attach raw server_name )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
@@ -610,8 +643,7 @@ $ `stdlib/std/thread.nu`
 // AND the ALPN handshake runs; on TLS 1.2 servers the pure stack does
 // not parse ALPN, so callers requiring h2 should check.
 @ tcp_connect_tls_alpn s host i port s server_name i verify s alpn → !TcpConn NetErr {
-    : i raw ( nurl_tcp_connect host port )
-    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : i raw ?? ( __tcp_connect_raw host port 0 ) { F e → ^ @ !TcpConn NetErr { F e } T r → r }
     : !TlsConn TlsErr r ? != verify 0 ( tls_attach_alpn_verify raw server_name alpn ) ( tls_attach_alpn raw server_name alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
@@ -625,8 +657,7 @@ $ `stdlib/std/thread.nu`
 // one call — what an HTTP client that pools connections needs, since the
 // one-knob variants each leave one of the three out.
 @ tcp_connect_tls_full s host i port s server_name i verify s alpn ( Vec u ) sess → !TcpConn NetErr {
-    : i raw ( nurl_tcp_connect host port )
-    ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
+    : i raw ?? ( __tcp_connect_raw host port 0 ) { F e → ^ @ !TcpConn NetErr { F e } T r → r }
     : !TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
@@ -1045,16 +1076,19 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
 @ tcp_read_into TcpConn c ( Vec u ) buf i max → !i NetErr {
     ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
     ? != ( __conn_tlsptr c ) 0 {
-        // TLS: the record layer necessarily materialises decrypted
-        // bytes in their own Vec; append and release it.
-        : !( Vec u ) NetErr r ( __tls_read_net c max )
+        // TLS: records are opened in place in the connection's record
+        // buffer and the plaintext copied once, straight into `buf`.
+        : TlsConn tc # TlsConn ( __conn_tlsptr c )
+        : !i TlsErr r ? == . ( __tci c ) kind 2 ( tls_server_read_into tc buf max ) ( tls_read_into tc buf max )
         ?? r {
-            T v → {
-                : i n ( vec_len [u] v )
-                ( vec_extend [u] buf v )
+            T n → {
+                ? == n 0 { ^ @ !i NetErr { F # NetErr NetClosed } } {}
                 ^ @ !i NetErr { T n }
             }
-            F e → ^ @ !i NetErr { F e }
+            F e → {
+                : NetErr ne ?? e { TlsClosed → # NetErr NetClosed _ → # NetErr NetRead }
+                ^ @ !i NetErr { F ne }
+            }
         }
     } {}
     : s rp # s . ( __tci c ) raw
@@ -1181,12 +1215,10 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
         : *TlsConnImpl state ( _tls_ptr conn )
         : i previous . state read_nowait
         = . state read_nowait 1
-        : !( Vec u ) TlsErr result ? == . ( __tci c ) kind 2 ( tls_server_read conn max ) ( tls_read conn max )
+        : !i TlsErr result ? == . ( __tci c ) kind 2 ( tls_server_read_into conn bytes max ) ( tls_read_into conn bytes max )
         = . state read_nowait previous
         ?? result {
-            T decoded → {
-                : i count ( vec_len [u] decoded )
-                ( vec_extend [u] bytes decoded )
+            T count → {
                 ? == count 0 { ^ @ !i NetErr { F NetClosed } } {}
                 ^ @ !i NetErr { T count }
             }

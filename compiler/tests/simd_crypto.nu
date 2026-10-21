@@ -71,11 +71,23 @@ unsafe @ schedule ( Vec u ) key → ( Vec u ) {
 // gets an inline copy (`aes_round.tier`) that tier callers use.
 @ aes_round v128 b v128 k → v128 { ^ ( nurl_v128_aesenc b k ) }
 
+// Two rounds through aes_round: a wrapper with a v128 signature that
+// uses no primitive itself. It still gets a `.tier` copy, calling
+// aes_round's, so a tier body that calls it inlines both ungated —
+// without it the wrapper stays baseline and brings aes_round's gate
+// along into every call site.
+@ two_rounds v128 b v128 k1 v128 k2 → v128 { ^ ( aes_round ( aes_round b k1 ) k2 ) }
+
 // Encrypt one block: a `simd @` function, so it is cloned for the tier.
+// Rounds 1..8 in pairs through the wrapper, round 9 directly.
 unsafe simd @ encrypt * u rk v128 pt → v128 {
     : ~ v128 b ( nurl_v128_xor pt ( nurl_v128_ld # s rk ) )
     : ~ i r 1
-    ~ < r 10 { = b ( aes_round b ( nurl_v128_ld # s + # i rk * r 16 ) ) = r + r 1 }
+    ~ < r 9 {
+        = b ( two_rounds b ( nurl_v128_ld # s + # i rk * r 16 ) ( nurl_v128_ld # s + # i rk * + r 1 16 ) )
+        = r + r 2
+    }
+    = b ( aes_round b ( nurl_v128_ld # s + # i rk 144 ) )
     ^ ( nurl_v128_aesenclast b ( nurl_v128_ld # s + # i rk 160 ) )
 }
 

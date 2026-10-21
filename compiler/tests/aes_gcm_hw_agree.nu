@@ -22,6 +22,12 @@
 // key's by each hardware one, and a flipped tag bit must fail on every
 // key.
 //
+// Every kernel also runs with AAD past eight blocks (its GHASH run
+// reduces in several groups) before message shapes up to 1100 bytes,
+// and in place (aes_gcm_seal_in / aes_gcm_open_in, the TLS record
+// layer's path: `op` is `inp`) at every length, against the software
+// key's answer.
+//
 // requires: cpu-aes
 //
 // On a CPU without the crypto tier every key is software and the test
@@ -82,6 +88,34 @@ $ `stdlib/std/aes_gcm.nu`
         ( nurl_print ` n ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pt ) ) ) ( nurl_print `\n` )
         = fails + fails 1
     } {}
+    // In place, as the TLS record layer seals and opens: `aad ‖ pt` in
+    // one buffer becomes `aad ‖ ct ‖ tag` where it lies, and back.
+    : i alen ( vec_len [u] aad )
+    : ( Vec u ) buf ( fill 0 0 )
+    ( bytes_extend_bytes buf aad )
+    ( bytes_extend_bytes buf pt )
+    : ( Vec u ) want ( fill 0 0 )
+    ( bytes_extend_bytes want aad )
+    ( bytes_extend_bytes want ref )
+    ? ! & ( aes_gcm_seal_in hw nonce 0 buf 0 alen ) ( same buf want ) {
+        ( nurl_print `seal_in differs: tier ` ) ( nurl_print ( nurl_str_int tier ) )
+        ( nurl_print ` n ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pt ) ) ) ( nurl_print `\n` )
+        = fails + fails 1
+    } {}
+    ? ( aes_gcm_open_in hw nonce 0 want 0 alen ( vec_len [u] want ) ) {
+        : ~ i k 0
+        : ~ b eq T
+        ~ < k ( vec_len [u] pt ) { ? != ( vec_at [u] want + alen k ) ( vec_at [u] pt k ) { = eq F } {} = k + k 1 }
+        ? ! eq {
+            ( nurl_print `open_in differs: tier ` ) ( nurl_print ( nurl_str_int tier ) )
+            ( nurl_print ` n ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pt ) ) ) ( nurl_print `\n` )
+            = fails + fails 1
+        } {}
+    } {
+        ( nurl_print `open_in refused: tier ` ) ( nurl_print ( nurl_str_int tier ) )
+        ( nurl_print ` n ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pt ) ) ) ( nurl_print `\n` )
+        = fails + fails 1
+    }
     // Flip one tag bit: the key must refuse it.
     : ( Vec u ) bad ( fill 0 0 )
     ( bytes_extend_bytes bad c )
@@ -147,6 +181,18 @@ $ `stdlib/std/aes_gcm.nu`
             = fails + fails ( check_one sw k1 k2 k3 ( big_len b ) 13 # u64 + 3000 b )
             = cases + cases 1
             = b + b 1
+        }
+        // Long AAD — past eight blocks, so its GHASH run reduces in
+        // several groups — before every message shape.
+        : ~ i ln 0
+        ~ <= ln 1100 {
+            : ~ i alen 100
+            ~ <= alen 420 {
+                = fails + fails ( check_one sw k1 k2 k3 ln alen # u64 + 177 + ln alen )
+                = cases + cases 1
+                = alen + alen 29
+            }
+            = ln + ln 37
         }
         // One raw block (QUIC header protection) on every key.
         : ( Vec u ) blk ( fill 16 # u64 31337 )

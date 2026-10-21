@@ -136,15 +136,15 @@ Other packages depend on wasmbuilder to compile wasm **in-process** — no
 subprocess orchestration, no HTTP build API. This is how swarm-mcp
 compiles compute kernels and how nurl-mcp exposes a local build-wasm tool:
 
-```nurl
+```nurl params="s kernel_src"
 $ `deps/wasmbuilder/src/build.nu`
 
 : ~ WbOpts opts ( wb_opts_default )
 = . opts quiet T
 : !( Vec u ) String r ( wb_build_source kernel_src `kernel.nu` opts )
 ?? r {
-    T wasm_bytes → { … ship to workers … }
-    F err → { … structured error, nurlc diagnostics included … }
+    T wasm_bytes → {}   // … ship to workers …
+    F err → {}   // … structured error, nurlc diagnostics included …
 }
 ```
 

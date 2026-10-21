@@ -100,7 +100,11 @@ enough — we'll iterate on the design in the issue thread.
   thin overview that links to topic docs under [`docs/`](docs/); update
   the relevant one (`docs/spec.md`, `docs/LIMITATIONS.md`,
   `docs/NETWORKING.md`, …) or the EBNF grammar in `spec/`, and add a
-  `CHANGELOG.md` entry, as appropriate.
+  `CHANGELOG.md` entry, as appropriate. The code in the docs is
+  compiled: every ```` ```nurl ```` block must build (or be rejected with
+  the diagnostic it is annotated with), and in `docs/` every fence names
+  its language. Run `./tools/check_doc_examples.sh` — the annotations
+  are in [`docs/TOOLING.md`](docs/TOOLING.md#documentation-examples).
 - **Keep commit messages descriptive.** A one-line subject is fine
   for small fixes; multi-line bodies are welcome for larger changes
   that warrant context.

@@ -42,6 +42,7 @@
 //       a classical leaf plus an ML-DSA leaf; the client's
 //       signature_algorithms picks which one it is shown
 //   ( tls_server_read  TlsConn c i max )       → !( Vec u ) TlsErr
+//   ( tls_server_read_into TlsConn c dst max ) → !i TlsErr  (appended to dst; 0 at EOF)
 //   ( tls_server_write TlsConn c ( Vec u ) )   → !v TlsErr
 //   ( tls_server_close TlsConn c )             → v   close_notify + close the socket
 //
@@ -254,24 +255,7 @@ $ `stdlib/core/rcbox.nu`
 // send() through this; __srv_send_enc below wraps it for the callers
 // that do want an immediate write (application data, alerts).
 @ __srv_enc_rec_to inout TlsConnImpl c ( Vec u ) out i content_type ( Vec u ) content → v {
-    : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( _tls_cat inner content )
-    ( __srv_seal_inner_to c out content_type inner )
-}
-
-// Same record, plaintext taken as bytes [lo, hi) of `head`‖`body` — the
-// inner plaintext is assembled straight from the two buffers (one copy,
-// exactly what the single-buffer path pays), so tls_server_write2 does
-// not cut an intermediate slice per record.
-@ __srv_enc_rec_pair_to inout TlsConnImpl c ( Vec u ) out i content_type ( Vec u ) head ( Vec u ) body i lo i hi → v {
-    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
-    ( __srv_seal_inner_to c out content_type inner )
-}
-
-// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
-// one TLS 1.3 record under the server write keys, appended to `out`.
-@ __srv_seal_inner_to inout TlsConnImpl c ( Vec u ) out i content_type ( Vec u ) inner → v {
-    ( _tls_seal_direction_to c out 0 content_type inner )
+    ( _tls_rec_range_to c out 0 content_type content 0 ( vec_len [u] content ) )
 }
 
 // Append one PLAINTEXT record (rtype, body) to `out` — the unencrypted
@@ -284,27 +268,19 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_cat out body )
 }
 
-// Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq).
+// Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq),
+// sealed in place in the connection's txbuf.
 @ __srv_send_enc inout TlsConnImpl c i content_type ( Vec u ) content → !v TlsErr {
-    : ( Vec u ) rec ( vec_new [u] )
-    ( __srv_enc_rec_to c rec content_type content )
-    : b w ( _tls_sock_write . c fd rec )
-    ? ! w { = . c closed 1 } {}
-    ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
+    : ( Vec u ) buf ( _tls_tx_take c )
+    ( __srv_enc_rec_to c buf content_type content )
+    : !v TlsErr r ( _tls_tx_flush c buf )
+    ( _tls_tx_put c buf )
+    ^ r
 }
 
 // AEAD-decrypt one record body under the CLIENT write keys (c_key/c_iv/c_seq).
 @ __srv_decrypt inout TlsConnImpl c ( Vec u ) body → ?( Vec u ) {
-    : i blen ( vec_len [u] body )
-    : ( Vec u ) aad ( vec_with_cap [u] 5 )
-    ( vec_push [u] aad # u 23 )
-    ( vec_push [u] aad # u 3 )
-    ( vec_push [u] aad # u 3 )
-    ( _tls_u16 aad blen )
-    : ( Vec u ) nonce ( _nonce . c c_iv . c c_seq )
-    : ?( Vec u ) pt ( _aead_open . c cipher . c c_key nonce aad body )
-    = . c c_seq + . c c_seq 1
-    ^ pt
+    ^ ( _tls_open_body c 1 body )
 }
 
 // Pull the next complete handshake message from the client. Plaintext
@@ -831,8 +807,9 @@ $ `stdlib/core/rcbox.nu`
     : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
     : i cslen ( _rdint ch p1 2 )
-    // Choose the cipher. AES-128-GCM (0x1301) when the CPU has AES-NI
-    // and PCLMULQDQ (nurl_cpu_has_aes) and the client offers it;
+    // Choose the cipher. AES-128-GCM (0x1301) when the CPU has the
+    // hardware crypto tier — AES-NI and PCLMULQDQ, or AES and PMULL on
+    // AArch64 (nurl_cpu_has_aes) — and the client offers it;
     // otherwise ChaCha20-Poly1305 (0x1303) when offered; otherwise
     // AES-128-GCM — TLS_AES_128_GCM_SHA256 is the one suite RFC 8446
     // requires every implementation to have, so every client offers it.
@@ -841,10 +818,11 @@ $ `stdlib/core/rcbox.nu`
     // with AES instructions AES-GCM is the faster suite, without them
     // ChaCha is. It used to be ChaCha unconditionally here — back when
     // AES-GCM ran at 0.5 MB/s, then bitsliced at ~113 MB/s against
-    // ChaCha's ~370, NURL having no AES-NI path. With the crypto tier
-    // (std/aes_gcm.nu's hardware path) AES-128-GCM seals a 16 KB record
-    // at ~3 GB/s against ChaCha's ~1.4, and a 32-byte one in a third
-    // of the time even when the key is expanded per record. The two
+    // ChaCha's ~370, NURL having no AES instruction path. With the
+    // crypto tier (std/aes_gcm.nu's hardware path) AES-128-GCM seals a
+    // 16 KB record at ~3 GB/s on a Haswell (~9–12 on VAES) against
+    // ChaCha's ~1.4, and a 32-byte one in a third of the time even when
+    // the key is expanded per record. The two
     // suites are equally strong.
     : b hw_aes ( nurl_cpu_has_aes )
     : ~ b off_aes F
@@ -1364,18 +1342,7 @@ $ `stdlib/core/rcbox.nu`
 @ _tls_server_write_in inout TlsConnImpl c ( Vec u ) data → !v TlsErr {
     ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
-    : i n ( vec_len [u] data )
-    ? <= n 16384 { ^ ( __srv_send_enc c 23 data ) } {}
-    : ~ i off 0
-    ~ < off n {
-        : ~ i hi + off 16384
-        ? > hi n { = hi n } {}
-        : ( Vec u ) part ( bytes_slice data off hi )
-        : !v TlsErr w ( __srv_send_enc c 23 part )
-        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
-        = off hi
-    }
-    ^ @ !v TlsErr { T 0 }
+    ^ ( _tls_write_records c 0 data data ( vec_len [u] data ) T )
 }
 
 // Server-direction counterpart of tls_prepare_write; no socket I/O.
@@ -1395,8 +1362,7 @@ $ `stdlib/core/rcbox.nu`
     : i size ( vec_len [u] data )
     ~ < offset size {
         : i end ? < - size offset 16384 size + offset 16384
-        : ( Vec u ) part ( bytes_slice data offset end )
-        ( __srv_enc_rec_to c wire 23 part )
+        ( _tls_rec_range_to c wire 0 23 data offset end )
         = offset end
     }
     ^ @ !( Vec u ) TlsErr { T wire }
@@ -1421,7 +1387,7 @@ $ `stdlib/core/rcbox.nu`
     ~ < off n {
         : ~ i hi + off 16384
         ? > hi n { = hi n } {}
-        ( __srv_enc_rec_pair_to c out 23 head body off hi )
+        ( _tls_rec_pair_to c out 0 23 head body off hi )
         = off hi
     }
     ^ @ !v TlsErr { T 0 }
@@ -1440,18 +1406,7 @@ $ `stdlib/core/rcbox.nu`
 @ _tls_server_write2_in inout TlsConnImpl c ( Vec u ) head ( Vec u ) body → !v TlsErr {
     ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
-    : i n + ( vec_len [u] head ) ( vec_len [u] body )
-    : ~ i off 0
-    ~ < off n {
-        : ~ i hi + off 16384
-        ? > hi n { = hi n } {}
-        : ( Vec u ) rec ( vec_new [u] )
-        ( __srv_enc_rec_pair_to c rec 23 head body off hi )
-        : b w ( _tls_sock_write . c fd rec )
-        ? w {} { = . c closed 1 ^ @ !v TlsErr { F # TlsErr TlsWrite } }
-        = off hi
-    }
-    ^ @ !v TlsErr { T 0 }
+    ^ ( _tls_write_records c 0 head body + ( vec_len [u] head ) ( vec_len [u] body ) F )
 }
 
 // Server-side close. The close_notify alert must go out under the
@@ -1487,56 +1442,15 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ _tls_server_read_in inout TlsConnImpl c i max → !( Vec u ) TlsErr {
-    ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
-        ? != . c fatal_alert 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
-        ? != . c update_pending 0 {
-            ? != . c read_nowait 0 { ^ @ !( Vec u ) TlsErr { F TlsRead } } {}
-            ?? ( _tls_flush_control c 0 ) { T _ → {} F error → { ^ @ !( Vec u ) TlsErr { F error } } }
-        } {}
-        : !TlsRecord TlsErr rr ( _read_record c )
-        ?? rr {
-            F e → {
-                ^ ?? e {
-                    TlsClosed → { = . c closed 1 @ !( Vec u ) TlsErr { T ( vec_new [u] ) } }
-                    _ → @ !( Vec u ) TlsErr { F e }
-                }
-            }
-            T rec → {
-                ? == . rec rtype 20 {
-                } {
-                    ?? ( __srv_decrypt c . rec body ) {
-                        T inner → {
-                            : i ct ( _inner_type inner )
-                            ? == ct 23 {
-                                ? != ( vec_len [u] . c hsbuf ) 0 {
-                                    : !v TlsErr failed ( _tls_post_fail c 1 10 )
-                                    ?? failed { T _ → {} F _ → {} }
-                                    ^ @ !( Vec u ) TlsErr { F TlsProtocol }
-                                } {}
-                                ( _tls_cat . c appbuf inner )
-                            } {
-                                ? == ct 21 { = . c closed 1 } {}
-                                ? == ct 22 {
-                                    ?? ( _tls_post_hs c inner 1 ) {
-                                        T _ → {}
-                                        F error → { ^ @ !( Vec u ) TlsErr { F error } }
-                                    }
-                                } {}
-                            }
-                        }
-                        F _ → {
-                            ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    : i avail ( vec_len [u] . c appbuf )
-    ? == avail 0 { ^ @ !( Vec u ) TlsErr { T ( vec_new [u] ) } } {}
-    : i take ? < max avail max avail
-    : ( Vec u ) out ( bytes_slice . c appbuf 0 take )
-    : ( Vec u ) rest ( bytes_slice . c appbuf take avail )
-    = . c appbuf rest
-    ^ @ !( Vec u ) TlsErr { T out }
+    : ( Vec u ) out ( vec_new [u] )
+    : !i TlsErr r ( _tls_read_into_in c 1 out max )
+    ?? r { T _ → ^ @ !( Vec u ) TlsErr { T out } F e → ^ @ !( Vec u ) TlsErr { F e } }
+}
+
+// Server-side tls_read_into: up to `max` decrypted application bytes
+// appended to `dst`, Ok(n), 0 on clean EOF; the plaintext is copied once,
+// from the record buffer into `dst`.
+@ tls_server_read_into TlsConn c__h ( Vec u ) dst i max → !i TlsErr {
+    : ~ * TlsConnImpl c ( _tls_ptr c__h )
+    ^ ( _tls_read_into_in . c 0 1 dst max )
 }

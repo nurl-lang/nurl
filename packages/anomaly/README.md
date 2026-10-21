@@ -1374,7 +1374,7 @@ picked on startup.
 
 ## Library
 
-```nurl
+```nurl ignore="src/dynamic.nu imports its siblings as src/…, which resolves only from the package root — not under deps/anomaly/ (reported)"
 $ `deps/anomaly/src/dynamic.nu`
 
 : Store st ( store_open `/var/lib/anomaly` )

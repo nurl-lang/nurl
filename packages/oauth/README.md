@@ -11,12 +11,15 @@ SHA-2 that decide whether a token is real are `std/rsa.nu`,
 ```nurl
 $ `deps/oauth/src/oauth.nu`
 ```
+<!-- doctest-file-prelude
+$ `deps/oauth/src/oauth.nu`
+-->
 
 ## The two halves
 
 **Get a token** — the authorization-code flow with PKCE:
 
-```nurl
+```nurl params="s query"
 ?? ( oidc_provider_discover `https://accounts.example.com` ) {
     T p → {
         : OauthConfig cfg ( oauth_config_new `my-client` `http://127.0.0.1:8765/callback` `openid profile email` )
@@ -30,8 +33,8 @@ $ `deps/oauth/src/oauth.nu`
         ?? ( oauth_callback_code query ( string_data state ) ) {
             T code → {
                 ?? ( oauth_exchange_code p cfg ( string_data code ) ( string_data . pk verifier ) ) {
-                    T ts → { /* ( token_set_id_token ts ) */ }
-                    F e → { /* ( oauth_err_name e ), ( oidc_provider_last_error p ) */ }
+                    T ts → {}   // ( token_set_id_token ts )
+                    F e → {}    // ( oauth_err_name e ), ( oidc_provider_last_error p )
                 }
             }
             F e → {}
@@ -43,7 +46,7 @@ $ `deps/oauth/src/oauth.nu`
 
 **Believe a token** — and turn it into a person:
 
-```nurl
+```nurl params="OidcProvider p TokenSet ts String nonce"
 : OidcPolicy pol ( oidc_policy_new `https://accounts.example.com` `my-client` )
 ( oidc_policy_set_nonce pol ( string_data nonce ) )
 
@@ -53,13 +56,15 @@ $ `deps/oauth/src/oauth.nu`
         ( nurl_println ( string_data . id email ) )     // "jane@example.com"
         : String groups ( oidc_identity_claim id `tenant` )   // anything else
     }
-    F e → { /* ( oauth_err_name e ) + ( oidc_provider_last_error p ) says why */ }
+    F e → {}   // ( oauth_err_name e ) + ( oidc_provider_last_error p ) says why
 }
 ```
 
 **Guard an API** with the tokens it hands out:
 
-```nurl
+```nurl params="TcpListener listener OidcProvider p OidcPolicy pol"
+$ `stdlib/ext/http_server.nu`
+
 : HttpServer srv ( server_new listener
     ( with_oidc_scope p pol `read:things`
         \ HttpRequest req OidcIdentity id → HttpResponse {

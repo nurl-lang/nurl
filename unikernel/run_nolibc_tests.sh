@@ -72,6 +72,16 @@ one() {
         http2_client_duplex|http2_client_streaming)
             echo "SKIP $name (needs preemptive threads over host TCP)"; return 0 ;;
     esac
+    # What these two pin is the HOSTED runtime's way of not blocking a
+    # worker: a connect parked on the host kernel's handshake (the black
+    # hole is Linux dropping SYNs to a full accept queue) and getaddrinfo
+    # on a resolver thread (`localhost` from /etc/hosts). The NURL socket
+    # layer has neither a host kernel nor threads to resolve on — its
+    # loopback connect and its lookup run in-process by design.
+    case "$name" in
+        net_connect_fiber_timeout|net_resolve_fiber)
+            echo "SKIP $name (pins host-kernel connect and resolver threads)"; return 0 ;;
+    esac
     # Only run a test whose golden says what running it should DO. Ask
     # the GOLDEN, not the name: run_san_tests.sh settled that rule
     # already — "should_fail_*, diag_*, borrow_*, and whatever

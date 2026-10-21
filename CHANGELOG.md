@@ -68,6 +68,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   primitives lane by lane (FIPS-197 C.1 and the v128 primitives), and
   `crypto_tier_ir.sh` checks both tiers' IR, gates, stubs, machine code
   and runtime answers. Bootstrap snapshot refreshed (preamble changed).
+- **The TLS record layer seals and opens in place** (agora t44, part of
+  t37). A record used to cost about ten allocations and three or four
+  copies each way: the body sliced out of the receive buffer, a nonce,
+  an AAD, a Poly1305 input concatenating AAD and ciphertext, a new
+  plaintext, an append to the application buffer and two more slices on
+  the way out; writing, an inner-plaintext Vec, the sealed copy and a
+  growing record — and on AES-GCM a full key schedule (round keys and
+  eight GHASH powers) per record. Now:
+  - `aes_gcm_seal_in` / `aes_gcm_open_in` and
+    `chacha20poly1305_seal_in` / `chacha20poly1305_open_in` seal or open
+    `buf[data_at, …)` where it lies, the AAD `buf[aad_at, data_at)`, the
+    nonce the connection's iv with the sequence number XORed in (RFC 8446
+    §5.3, RFC 9001 §5.3); the tag is appended, or checked and the range
+    zeroed on a mismatch. Poly1305 is fed from the AAD and ciphertext
+    where they lie (no MAC buffer); the scratch is the buffer's spare
+    capacity. `compiler/tests/aead_in_place.nu` holds them to the Vec
+    APIs over 0–300 bytes, both suites, the AES key on its hardware AND
+    software paths, with foreign bytes around every record.
+  - A connection keeps its AES-GCM keys prepared per traffic secret
+    (`s_gk` / `c_gk`, rebuilt on KeyUpdate), seals each outgoing record
+    in a reused per-connection `txbuf` (64 KB batches, one write each),
+    and opens each incoming record inside its receive buffer, copying the
+    plaintext once — into the caller's buffer through the new
+    `tls_read_into` / `tls_server_read_into`, which `tcp_read_into` and
+    `tcp_try_read_into` now use.
+  - Steady-state record I/O allocates nothing:
+    `compiler/tests/tls_record_inplace.nu` seals and opens 100 records
+    between two connection states and counts zero allocations, for both
+    suites.
+- **`hmac_sha256_key` / `hmac_sha256_mac`: a prepared HMAC-SHA-256 key**
+  (std/hash_sha256.nu). The inner and outer midstates are computed once;
+  each MAC then costs two compressions fewer and builds no K0 block.
+
+- **AES-GCM on short messages: one GHASH reduction for AAD, data and
+  length, J0 encrypted alongside the tail** (agora t58, part of t37). A
+  TLS record of an API response is short, so its latency is per request.
+  The hardware path used to encrypt E_K(J0) and each tail block as its
+  own ten-round chain and reduce GHASH once per block, each reduction
+  waiting on the one before. Now J0 and the tail's counter blocks go
+  through the cipher in ONE interleaved pass (the narrowest of 1/2/4/8
+  blocks that holds them — a block nobody uses still occupies the AES
+  unit), placed after the eight-block steps so it overlaps their last
+  fold; and GHASH outside the stitched loop runs in groups of up to
+  eight blocks with unreduced lo/hi/middle sums and ONE reduction per
+  group (`__ghw_take`) — with no eight-block step, the AAD, the data and
+  the length block of a record up to 96 bytes are a single group.
+  Opening now folds each eight-block step's own input (the ciphertext
+  is there before the cipher runs), which also makes in-place opening
+  valid. i7-5930K, prepared key, cycles per seal: 16 B 360 → 295, 96 B
+  621 → 395, 256 B 644 → 599; ns: 16 B 94 → 79, 64 B 131 → 96, 96 B
+  161 → 103. `aes_gcm_hw_agree.nu` adds AAD past eight blocks before
+  every message shape.
+- **`nurl_v128_ldn` / `nurl_v128_stn`: partial-block load and store**
+  (docs/spec.md §4.1b). The first `n` bytes (0–16) zero-padded, and
+  their store, without touching a byte past `n`: two overlapping 8-, 4-
+  or 1-byte accesses, one branch per size class, no loop and no
+  `memcpy` call — which on the SysV ABI spilled every live vector
+  register around it (the GHASH sums, for a 5-byte TLS AAD block).
+  `compiler/tests/simd_partial.nu` checks every length 0–20 from an
+  allocation of exactly `n` bytes (an over-read is an ASan report) and
+  between sentinel bytes.
 
 - **The hardware crypto tier: AES and carry-less-multiply primitives in
   the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
@@ -125,8 +186,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right. The clones now take wide vectors (v256, v512) by pointer and
   the dispatcher spills them and is `alwaysinline`; a crypto-tier
   function with a wide signature crosses a call from outside its tier
-  the same way (`f.vabi` + a featureless `alwaysinline` `f`).
-  Regression test `simd_wide_abi.nu`.
+  the same way (`f.vabi` + a featureless `alwaysinline` `f`). A struct
+  holding a wide vector is treated as one (passed by value it is split
+  element by element), and an indirect call carrying one — a closure or
+  a trait-object method, called from a `simd` clone or a tier body — goes
+  through a featureless `noinline` thunk per signature that takes the
+  vectors by pointer (`__nurl_vcall.N`), since every address-taken
+  function is compiled without features. Regression test
+  `simd_wide_abi.nu` (v256 / v512 / struct / closure, both clones).
+- **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
+  are truncated as verify truncates them** (agora t47). The private key
+  and digest went through `bigint_from_bytes_be` / `bigint_rem` /
+  `bigint_to_bytes_be` and every RFC 6979 candidate through two BigInt
+  comparisons; now every scalar is a fixed 32 bytes on the GF(n) field
+  (a constant-time `p256n_in_range_be` replaces the comparisons) and each
+  RFC 6979 HMAC key is prepared once for the MACs made under it. The
+  digest is now bits2int — its leftmost 256 bits (FIPS 186-5 §6.4.1) —
+  where signing used to reduce the WHOLE digest mod n: a SHA-384 or
+  SHA-512 digest signed with P-256 produced a signature that
+  `ecdsa_p256_verify` (and every other implementation) rejects.
+  `ecdsa_p256_sign.nu` adds RFC 6979's SHA-256 "test" vector, SHA-224/
+  384/512 digests verified by OpenSSL, and RFC 4231 HMAC cases on the
+  prepared key.
+
+- **A crypto-tier helper written as a wrapper inlined its callees'
+  gates into the kernel** (nurlc). A function joined the tier only when
+  its own body used a primitive, so an inline-wanting helper that only
+  CALLED tier helpers (`__ghw_take` calling `__ghw_acc1` and
+  `__ghw_finish`) stayed baseline: inlined into a tier body it brought
+  a gated call per callee — four CPUID gate checks in the AES-GCM kernel,
+  and the reason helpers had to be merged by hand so each used a
+  primitive directly. Such a wrapper now gets a `.tier` copy too
+  (`__tier_wrappers`, a fixed point over wrappers of wrappers) whose
+  calls go to the `.tier` copies, and tier bodies call it; the original
+  stays as it was for baseline callers. `crypto_tier_ir.sh` checks the
+  copy and that the `simd` clones call it.
 
 - **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
   A page (and a cut section) was sliced at a byte offset, so one that
@@ -156,6 +250,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http_keepalive_cap_modes` test hung in 8 of 30 runs on a loaded
   machine, 0 of 60 after). The reset and the close are now one step
   under the lock.
+- **An outbound connect no longer blocks its fiber's worker.**
+  `nurl_tcp_connect` ran a blocking `getaddrinfo` and a blocking
+  `connect(2)` even on a fiber, so one slow DNS answer or one SYN into a
+  black hole stalled an M:N worker — and every fiber queued on it — for
+  the resolver's or the kernel's full timeout; psql, redis, the HTTP
+  clients and every `tcp_connect_tls*` caller inherited it. On a fiber
+  the connect is now non-blocking and parks for writability on the
+  netpoller, then reads `SO_ERROR`; a name is resolved by the system
+  `getaddrinfo` (`/etc/hosts`, nsswitch) on a small on-demand resolver
+  thread pool while the fiber parks on the job's eventfd; a numeric
+  address skips the resolver entirely. Every resolved address is still
+  tried in order. `udp_connect`, `udp_send_to`, `udp_addr_resolve` and
+  `dns_resolve(_port)` resolve the same way. Off a fiber nothing changes.
+- **`tcp_connect_tls*` reports a failed TCP connect as itself** —
+  `NetTimeout`, `NetOther`, … — instead of `NetTlsHandshake`, and closes
+  the failed socket.
+- **A fiber yielding in a loop no longer starves its worker's I/O.** The
+  scheduler looked at the netpoller and the global queue only once the
+  local queue was empty, which a yield loop never lets happen: on one
+  worker its timers, I/O wakes and unparked fibers waited for ever. Every
+  128th dispatch now looks at both first.
 
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
@@ -227,6 +342,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left holding empty keys. A callee that keeps a copy no longer also
   empties the slot, as for a struct field.
 
+### Added
+
+- **`tcp_connect_timeout host port ms`** (`std/net.nu`): `tcp_connect`
+  with one deadline over the name lookup and the TCP handshake,
+  reporting `NetTimeout` — on a fiber a netpoller deadline, off one a
+  `poll(2)`. `tcp_connect` keeps its signature (no deadline).
+
 ### Changed
 
 - **TLS picks AES-128-GCM on a CPU with AES-NI** — the server when the
@@ -294,6 +416,23 @@ catalog instead of a round trip per term.
 
 ### Added
 
+- **The documentation's code is compiled** (`tools/check_doc_examples.sh`,
+  a CI gate). Every ```` ```nurl ```` block in `docs/*.md`,
+  `docs/stdlib/*.md`, `README.md` and the package READMEs is wrapped into
+  a program and run through `nurlc --check`; a block annotated
+  `expect-error="…"` must be rejected with that diagnostic, so a reworded
+  message fails the doc that quotes it, and in `docs/` every fence names
+  its language. MEMORY.md §2.11's example had no `vec` import and died
+  before the use-after-move it was there to show; the first run fixed
+  that and ~40 more — operators called like functions (gpukit), `/* */`
+  comments NURL does not have (spec §6.10, oauth, hub, redis), FFI and
+  raw pointers in safe code (spec §3.1, §7.2), a `continue` that never
+  advanced its counter (spec §5.4.1), `m::alloc` without its type
+  argument, `vec_push` without `[T]` (MEMORY.md §2.5), a quoted
+  diagnostic the compiler no longer prints (§2.10), `vw_serve` and
+  `tls_connect` signatures that had changed under the README quoting
+  them (ply, pqc), `inout` arguments bound immutable (grad). See
+  docs/TOOLING.md#documentation-examples.
 - **`nurl --stdin NAME`** (nurl.sh, nurl.bat): the program arrives on
   stdin and nurlc knows it as NAME (`nurlc --stdin NAME`), so a tool that
   holds source in memory builds it without writing a temp file, and its

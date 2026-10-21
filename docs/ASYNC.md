@@ -8,7 +8,7 @@ The defining property is **no function colouring** — there is no
 Ordinary code runs unchanged inside a fiber; blocking I/O calls become
 cooperative automatically when invoked from fiber context.
 
-```
+```nurl
 $ `stdlib/std/async.nu`
 
 @ main → i {
@@ -131,6 +131,21 @@ fiber, so handshakes overlap instead of serialising one behind another
 handshake fails is now one failed connection; a plain-TCP probe against
 a TLS port used to take the whole accept loop down with it.
 
+**Outbound connects park too.** `tcp_connect` (and everything built on
+it: `tcp_connect_tls*`, the psql, redis and HTTP clients) used to run a
+blocking `getaddrinfo` and a blocking `connect(2)` even on a fiber, so a
+slow DNS answer or a SYN to an unreachable host stalled the whole
+worker and every fiber queued on it. On a fiber the socket is now
+non-blocking and the fiber parks for writability on the netpoller; a
+name is resolved by `getaddrinfo` on a small resolver thread pool
+(`stdlib/runtime_ffi.c` §18-r) and the fiber parks on the job's
+completion eventfd meanwhile. `tcp_connect_timeout` puts one deadline
+over both, on the netpoller's timer heap. The same pass fixed a
+scheduler starvation: a worker whose local queue never emptied — a
+fiber yielding in a loop — never looked at the netpoller or the global
+queue, so timer, I/O and unpark wakes on that worker waited for as long
+as it kept yielding; every 128th dispatch now looks at both first.
+
 `packages/http` exposes this as **`http_app_async n`** — fiber per
 connection, `n` worker pthreads, `0` meaning one per CPU the *process*
 may run on — the affinity mask (`taskset`, cpusets) capped by the
@@ -197,7 +212,7 @@ fiber's stack the caller was handed a handle to nothing. Measured on a
 printed the count of the eleven as though that were the answer, and
 exited 0. Both runtimes now print
 
-```
+```text
 nurl: cannot create a fiber — out of memory for its stack (11 live)
 ```
 

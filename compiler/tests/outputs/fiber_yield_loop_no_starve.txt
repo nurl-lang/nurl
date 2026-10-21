@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sleeper_woke=yes
+spinner_ran=yes

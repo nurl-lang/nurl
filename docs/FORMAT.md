@@ -146,19 +146,37 @@ line breaks but **re-indents the continuation to the surrounding
 block's indent level** — it does not bump them by an extra level
 for cascading-construct alignment.
 
+<!-- doctest-prelude
+@ a → v {}
+@ b → v {}
+@ c → v {}
+: b div3 T
+: b div5 F
+-->
 ```nurl
-// Before
-? & div3 div5 { a } ? div3 { b } { c }
+// Before (a cascade the user broke across lines and indented by hand)
+? & div3 div5
+        { ( a ) }
+    ? div3
+        { ( b ) }
+        { ( c ) }
 ```
 
+<!-- doctest-prelude
+@ a → v {}
+@ b → v {}
+@ c → v {}
+: b div3 T
+: b div5 F
+-->
 ```nurl
-// After (formatter keeps the user's three lines but indents all
-// three at the surrounding block's level — no cascading bump):
+// After (formatter keeps the user's line breaks but indents every
+// line at the surrounding block's level — no cascading bump):
 ? & div3 div5
-{ a }
+{ ( a ) }
 ? div3
-{ b }
-{ c }
+{ ( b ) }
+{ ( c ) }
 ```
 
 This is intentionally simple: indent is purely a function of brace
@@ -192,7 +210,7 @@ Comment placement is **preserved exactly** in two flavours:
   ```nurl
   // Boot-time setup. Plants index.html on first run.
   @ setup_public_dir → v {
-      ...
+      // …
   }
   ```
 
@@ -241,13 +259,15 @@ minus boundary).
 
 ```nurl
 // rough indentation, mixed widths, decorative columns
+:   Counter {  i n   i max }
 @ inc_counter Counter c → Counter {
-   = . c n   + . c n 1
-       ^ c
+   : ~ Counter r c
+   = . r n   + . r n 1
+       ^ r
 }
 
 @ main → i {
-  : Counter c @ Counter { 0 10 }
+  : ~ Counter c @ Counter { 0 10 }
   = c (inc_counter c)
 
 
@@ -260,13 +280,16 @@ minus boundary).
 
 ```nurl
 // rough indentation, mixed widths, decorative columns
+: Counter { i n i max }
+
 @ inc_counter Counter c → Counter {
-    = . c n + . c n 1
-    ^ c
+    : ~ Counter r c
+    = . r n + . r n 1
+    ^ r
 }
 
 @ main → i {
-    : Counter c @ Counter { 0 10 }
+    : ~ Counter c @ Counter { 0 10 }
     = c ( inc_counter c )
 
     = c ( inc_counter c )
@@ -284,7 +307,7 @@ statements inside `main` collapsed to one.
 
 ## CLI
 
-```
+```text
 nurlfmt [OPTIONS] [FILE...]
 
 Options:

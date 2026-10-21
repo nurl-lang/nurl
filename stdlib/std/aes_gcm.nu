@@ -24,6 +24,13 @@
 //   ( aes_block_encrypt k block16 )         → ( Vec u )  one raw AES block (header protection)
 //   ( aes_gcm_key_free k )                  → v          early release (optional)
 //
+// In place, the nonce the 12-byte iv with a 64-bit sequence number XORed
+// into its tail (TLS 1.3 / QUIC) — a record layer's form, no Vec per
+// record:
+//
+//   ( aes_gcm_seal_in k iv seq buf aad_at data_at )     → b  seal buf[data_at, len), append the tag
+//   ( aes_gcm_open_in k iv seq buf aad_at data_at end ) → b  open buf[data_at, end) (ct‖tag) in place
+//
 // An AesGcmKey is a library handle (docs/MEMORY.md §7.6): every copy is
 // the same prepared key, and the last owner releases it.
 //
@@ -893,29 +900,13 @@ unsafe simd @ __gcm_hw_init * u key i klen * u hk → v {
     }
 }
 
-// GHASH `len` bytes at `p` into `acc` a block at a time — the AAD and
-// the blocks the eight-block loop leaves over. A short last block is
-// zero-padded through the 16 bytes at `pad`. `g1x` is G_1's halves
-// XORed (the Karatsuba multiplicand), loaded once by the caller; the
-// multiply is spelled out rather than a __ghw_mul call so this helper is
-// itself a tier function (see __ghw_finish).
-unsafe @ __ghw_bytes v128 acc * u p i len v128 g1 v128 g1x * u pad → v128 {
-    : ~ v128 a acc
-    : ~ i off 0
-    : ~ i left len
-    ~ > left 0 {
-        : ~ v128 x ( nurl_v128_zero )
-        ? >= left 16 { = x ( nurl_v128_ld # s + # i p off ) } {
-            ( nurl_v128_st # s pad ( nurl_v128_zero ) )
-            ( nurl_memcpy # s pad # s + # i p off left )
-            = x ( nurl_v128_ld # s pad )
-        }
-        : v128 y ( nurl_v128_xor a ( nurl_v128_bswap128 x ) )
-        = a ( __ghw_finish ( nurl_v128_clmul_ll y g1 ) ( nurl_v128_clmul_hh y g1 ) ( nurl_v128_clmul_ll ( nurl_v128_xor y ( nurl_v128_rotlanes2 y ) ) g1x ) )
-        = off + off 16
-        = left - left 16
-    }
-    ^ a
+// The low `m` bytes (1..15) of a block set, the rest clear: what keeps
+// the keystream past a short last block out of its GHASH input.
+@ __lowmask i m → v128 {
+    : u64 one 1
+    : u64 lo ? >= m 8 # u64 -1 - << one # u64 * m 8 one
+    : u64 hi ? > m 8 - << one # u64 * - m 8 8 one # u64 0
+    ^ ( nurl_v128_set64 # i lo # i hi )
 }
 
 // Eight ciphertext blocks at `c` folded into `acc` with one reduction:
@@ -959,6 +950,33 @@ unsafe @ __ghw_fold8 v128 acc * u c * u gt → v128 {
     = md ( nurl_v128_xor md ( nurl_v128_clmul_ll ( nurl_v128_xor x ( nurl_v128_rotlanes2 x ) ) ( nurl_v128_ld # s + # i gt + 128 * j 16 ) ) )
 }
 
+// One block of a GHASH run that reduces once per group of up to eight
+// blocks instead of once per block: `x` (byte-swapped) times H^p,
+// summed unreduced into lo / hi / md, with the reduced accumulator XORed
+// into the group's first block and then cleared, so the group's later
+// blocks do not see it again. The block that brings `p` to 0 closes the
+// group — one reduction into `acc` — and opens the next one at
+// min(8, rem) blocks. `rem` counts the run's blocks still to come, this
+// one included, so the run's last block always closes a group.
+//
+// A run of AAD, a short message and the length block — at most eight
+// blocks for a TLS record of up to 96 bytes — is therefore ONE
+// multiply-sum and one reduction, where a block at a time chained a
+// reduction per block, each waiting on the one before.
+@ __ghw_take v128 x * u gt inout v128 acc inout v128 lo inout v128 hi inout v128 md inout i p inout i rem → v {
+    ( __ghw_acc1 ( nurl_v128_xor x acc ) gt - 8 p lo hi md )
+    = acc ( nurl_v128_zero )
+    = p - p 1
+    = rem - rem 1
+    ? == p 0 {
+        = acc ( __ghw_finish lo hi md )
+        = lo ( nurl_v128_zero )
+        = hi ( nurl_v128_zero )
+        = md ( nurl_v128_zero )
+        = p ? > rem 8 8 rem
+    } {}
+}
+
 // One AES round on eight blocks.
 @ __aes_round8 v128 k inout v128 b0 inout v128 b1 inout v128 b2 inout v128 b3 inout v128 b4 inout v128 b5 inout v128 b6 inout v128 b7 → v {
     = b0 ( nurl_v128_aesenc b0 k )
@@ -971,14 +989,86 @@ unsafe @ __ghw_fold8 v128 acc * u c * u gt → v128 {
     = b7 ( nurl_v128_aesenc b7 k )
 }
 
+// Two / four / eight blocks through the whole cipher together, in registers:
+// the blocks are independent, so their rounds overlap and the pass
+// costs about one block's latency (AESENC is a 4- to 7-cycle latency
+// at a throughput of one or two per cycle). Four when that is enough —
+// eight blocks of a 10-round cipher are 80 AESENCs, which on a
+// one-per-cycle core outlast the latency four of them hide behind.
+unsafe @ __aes_hw_enc2 * u rk i nr inout v128 b0 inout v128 b1 → v {
+    : v128 k0 ( nurl_v128_ld # s rk )
+    = b0 ( nurl_v128_xor b0 k0 )
+    = b1 ( nurl_v128_xor b1 k0 )
+    : ~ i r 1
+    ~ < r nr {
+        : v128 k ( nurl_v128_ld # s + # i rk * r 16 )
+        = b0 ( nurl_v128_aesenc b0 k )
+        = b1 ( nurl_v128_aesenc b1 k )
+        = r + r 1
+    }
+    : v128 kl ( nurl_v128_ld # s + # i rk * nr 16 )
+    = b0 ( nurl_v128_aesenclast b0 kl )
+    = b1 ( nurl_v128_aesenclast b1 kl )
+}
+
+unsafe @ __aes_hw_enc4 * u rk i nr inout v128 b0 inout v128 b1 inout v128 b2 inout v128 b3 → v {
+    : v128 k0 ( nurl_v128_ld # s rk )
+    = b0 ( nurl_v128_xor b0 k0 )
+    = b1 ( nurl_v128_xor b1 k0 )
+    = b2 ( nurl_v128_xor b2 k0 )
+    = b3 ( nurl_v128_xor b3 k0 )
+    : ~ i r 1
+    ~ < r nr {
+        : v128 k ( nurl_v128_ld # s + # i rk * r 16 )
+        = b0 ( nurl_v128_aesenc b0 k )
+        = b1 ( nurl_v128_aesenc b1 k )
+        = b2 ( nurl_v128_aesenc b2 k )
+        = b3 ( nurl_v128_aesenc b3 k )
+        = r + r 1
+    }
+    : v128 kl ( nurl_v128_ld # s + # i rk * nr 16 )
+    = b0 ( nurl_v128_aesenclast b0 kl )
+    = b1 ( nurl_v128_aesenclast b1 kl )
+    = b2 ( nurl_v128_aesenclast b2 kl )
+    = b3 ( nurl_v128_aesenclast b3 kl )
+}
+
+unsafe @ __aes_hw_enc8 * u rk i nr inout v128 b0 inout v128 b1 inout v128 b2 inout v128 b3 inout v128 b4 inout v128 b5 inout v128 b6 inout v128 b7 → v {
+    : v128 k0 ( nurl_v128_ld # s rk )
+    = b0 ( nurl_v128_xor b0 k0 )
+    = b1 ( nurl_v128_xor b1 k0 )
+    = b2 ( nurl_v128_xor b2 k0 )
+    = b3 ( nurl_v128_xor b3 k0 )
+    = b4 ( nurl_v128_xor b4 k0 )
+    = b5 ( nurl_v128_xor b5 k0 )
+    = b6 ( nurl_v128_xor b6 k0 )
+    = b7 ( nurl_v128_xor b7 k0 )
+    : ~ i r 1
+    ~ < r nr {
+        ( __aes_round8 ( nurl_v128_ld # s + # i rk * r 16 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+        = r + r 1
+    }
+    : v128 kl ( nurl_v128_ld # s + # i rk * nr 16 )
+    = b0 ( nurl_v128_aesenclast b0 kl )
+    = b1 ( nurl_v128_aesenclast b1 kl )
+    = b2 ( nurl_v128_aesenclast b2 kl )
+    = b3 ( nurl_v128_aesenclast b3 kl )
+    = b4 ( nurl_v128_aesenclast b4 kl )
+    = b5 ( nurl_v128_aesenclast b5 kl )
+    = b6 ( nurl_v128_aesenclast b6 kl )
+    = b7 ( nurl_v128_aesenclast b7 kl )
+}
+
 // The stitched loop body: eight CTR blocks (counters ctr .. ctr+7, from
 // `inp` into `op`) AND the GHASH fold of the eight ciphertext blocks at
-// `prev` — the batch before — into `acc`, the two interleaved round by
-// round. Each round of the cipher carries one block of the fold, so the
-// multiplier works while the AES unit does, instead of the fold waiting
-// behind a cipher whose output it needs: the fold reads the PREVIOUS
-// batch, which is already in memory. `prev` 0 means there is no batch
-// before (the first one), and `acc` comes back unchanged.
+// `prev` into `acc`, the two interleaved round by round. Each round of
+// the cipher carries one block of the fold, so the multiplier works
+// while the AES unit does, instead of the fold waiting behind a cipher
+// whose output it needs. Sealing, `prev` is the batch BEFORE — already
+// in memory — and 0 for the first batch, when `acc` comes back
+// unchanged. Opening, `prev` is this batch's own input: the ciphertext
+// is there before the cipher runs, and every load of it precedes the
+// stores, so `op` may be `inp` (an in-place open).
 unsafe @ __gcm_hw_stitch8 * u rk i nr i n0 i n1 i n2 i ctr * u inp * u op v128 acc * u prev * u gt → v128 {
     : v128 k0 ( nurl_v128_ld # s rk )
     : v128 cb ( __ctr_blk n0 n1 n2 ctr )
@@ -1059,53 +1149,140 @@ unsafe @ __gcm_hw_stitch8 * u rk i nr i n0 i n1 i n2 i ctr * u inp * u op v128 a
 
 // One AES-GCM pass on the hardware path: CTR over `n` bytes from `inp`
 // to `op`, and the tag over the ciphertext — `op` when sealing, `inp`
-// when opening — written to the 16 bytes at `tagp`. `pad` is 16 bytes
-// of scratch for a short block. Marked `simd`: on an AVX2 machine the
-// VEX-encoded clone runs, whose three-operand AESENC / PCLMULQDQ need
-// no register copies.
-unsafe simd @ __gcm_hw_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n * u op i sealing * u tagp * u pad → v {
+// when opening — written to the 16 bytes at `tagp`. `op` may be `inp`:
+// every block's ciphertext is read before its plaintext is written, so
+// a record can be sealed or opened where it lies. `ks` is 128 bytes of
+// scratch for the tail's keystream. Marked
+// `simd`: on an AVX2 machine the VEX-encoded clone runs, whose
+// three-operand AESENC / PCLMULQDQ need no register copies.
+//
+// The message is eight-block steps (the stitched loop) and a tail of 0
+// to 8 blocks. The tail's counter blocks go through the cipher in one
+// pass together with J0's — whose encryption masks the tag — so a short
+// message pays about one block's cipher latency, not one per block.
+// GHASH runs reduce once per eight blocks (__ghw_take): the AAD, and
+// either the tail and the length block after the steps or, with no
+// step, all three in one run — one reduction for a record up to 96
+// bytes behind a 5-byte TLS header.
+unsafe simd @ __gcm_hw_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n * u op i sealing * u tagp * u ks → v {
     : *u gt # *u + # i hk * 16 + nr 1
-    : v128 g1 ( nurl_v128_ld # s + # i gt 112 )
-    : v128 g1x ( nurl_v128_ld # s + # i gt 240 )
     : i n0 # i ( __ld32le nonce 0 )
     : i n1 # i ( __ld32le nonce 4 )
     : i n2 # i ( __ld32le nonce 8 )
-    // E_K(J0), J0 = nonce ‖ 1 — the tag's mask.
-    : v128 ej0 ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 1 ) )
-    : ~ v128 acc ( __ghw_bytes ( nurl_v128_zero ) aadp aadlen g1 g1x pad )
-    : *u ctp ? == sealing 1 op inp
-    // Eight blocks a step, each step folding the step before's
-    // ciphertext into GHASH while it encrypts its own; the last
-    // batch's fold is the one left over after the loop.
+    : i o8 & n -128
+    : i tctr + 2 / o8 16
+    : i tb / + - n o8 15 16
+    : v128 z ( nurl_v128_zero )
+
+    // The first GHASH run: the AAD — and with no eight-block step the
+    // tail and the length block too.
+    : ~ v128 acc z
+    : ~ v128 lo z
+    : ~ v128 hi z
+    : ~ v128 md z
+    : ~ i rem ? == o8 0 + + / + aadlen 15 16 tb 1 / + aadlen 15 16
+    : ~ i p ? > rem 8 8 rem
     : ~ i off 0
-    : ~ i ctr 2
-    ~ <= + off 128 n {
-        : *u prev ? > off 0 # *u + # i ctp - off 128 # *u 0
-        = acc ( __gcm_hw_stitch8 hk nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off acc prev gt )
-        = off + off 128
-        = ctr + ctr 8
+    ~ < off aadlen {
+        : v128 x ( nurl_v128_ldn # s + # i aadp off - aadlen off )
+        ( __ghw_take ( nurl_v128_bswap128 x ) gt acc lo hi md p rem )
+        = off + off 16
     }
-    ? > off 0 { = acc ( __ghw_fold8 acc # *u + # i ctp - off 128 gt ) } {}
-    // What is left, a block at a time; a short last block through `pad`.
-    : i o8 off
-    ~ < off n {
-        : v128 ks ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 ctr ) )
-        : i m ? < - n off 16 - n off 16
-        ? == m 16 {
-            ( nurl_v128_st # s + # i op off ( nurl_v128_xor ks ( nurl_v128_ld # s + # i inp off ) ) )
+
+    // Eight blocks a step. Sealing, each step folds the step before's
+    // ciphertext while it encrypts its own, and the last step's fold is
+    // left over after the loop; opening, each folds its own input. The
+    // AAD run has closed — `acc` reduced, the sums zero — and the sums
+    // are restarted after the loop rather than carried through it: the
+    // loop holds eight blocks, a key and three sums of its own in
+    // sixteen registers, with nothing to spare.
+    = off 0
+    ? > o8 0 {
+        : ~ i ctr 2
+        ~ < off o8 {
+            : *u prev ? == sealing 1 ? > off 0 # *u + # i op - off 128 # *u 0 # *u + # i inp off
+            = acc ( __gcm_hw_stitch8 hk nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off acc prev gt )
+            = off + off 128
+            = ctr + ctr 8
+        }
+        ? == sealing 1 { = acc ( __ghw_fold8 acc # *u + # i op - o8 128 gt ) } {}
+        = lo z
+        = hi z
+        = md z
+        = rem + tb 1
+        = p ? > rem 8 8 rem
+    } {}
+
+    // E_K(J0), J0 = nonce ‖ 1, and the tail's keystream to `ks` in the
+    // narrowest pass that holds both — J0 alone, two, four or eight
+    // blocks; a full eight-block tail leaves J0 a pass of its own. Never
+    // wider: a block the tail does not use still occupies the AES unit,
+    // which the eight-block steps keep saturated.
+    : ~ v128 ej0 ( __ctr_blk n0 n1 n2 1 )
+    : ~ v128 c0 ( __ctr_blk n0 n1 n2 tctr )
+    ? < tb 2 {
+        ? == tb 0 { = ej0 ( __aes_hw_enc1 hk nr ej0 ) } {
+            ( __aes_hw_enc2 hk nr ej0 c0 )
+            ( nurl_v128_st # s ks c0 )
+        }
+    } {
+        : ~ v128 c1 ( __ctr_blk n0 n1 n2 + tctr 1 )
+        : ~ v128 c2 ( __ctr_blk n0 n1 n2 + tctr 2 )
+        ? < tb 4 {
+            ( __aes_hw_enc4 hk nr ej0 c0 c1 c2 )
+            ( nurl_v128_st # s ks c0 )
+            ( nurl_v128_st # s + # i ks 16 c1 )
+            ( nurl_v128_st # s + # i ks 32 c2 )
         } {
-            ( nurl_v128_st # s pad ( nurl_v128_zero ) )
-            ( nurl_memcpy # s pad # s + # i inp off m )
-            ( nurl_v128_st # s pad ( nurl_v128_xor ks ( nurl_v128_ld # s pad ) ) )
-            ( nurl_memcpy # s + # i op off # s pad m )
+            : ~ v128 c3 ( __ctr_blk n0 n1 n2 + tctr 3 )
+            : ~ v128 c4 ( __ctr_blk n0 n1 n2 + tctr 4 )
+            : ~ v128 c5 ( __ctr_blk n0 n1 n2 + tctr 5 )
+            : ~ v128 c6 ( __ctr_blk n0 n1 n2 + tctr 6 )
+            ? < tb 8 {
+                ( __aes_hw_enc8 hk nr ej0 c0 c1 c2 c3 c4 c5 c6 )
+            } {
+                : ~ v128 c7 ( __ctr_blk n0 n1 n2 + tctr 7 )
+                ( __aes_hw_enc8 hk nr c0 c1 c2 c3 c4 c5 c6 c7 )
+                ( nurl_v128_st # s + # i ks 112 c7 )
+                = ej0 ( __aes_hw_enc1 hk nr ej0 )
+            }
+            ( nurl_v128_st # s ks c0 )
+            ( nurl_v128_st # s + # i ks 16 c1 )
+            ( nurl_v128_st # s + # i ks 32 c2 )
+            ( nurl_v128_st # s + # i ks 48 c3 )
+            ( nurl_v128_st # s + # i ks 64 c4 )
+            ( nurl_v128_st # s + # i ks 80 c5 )
+            ( nurl_v128_st # s + # i ks 96 c6 )
+        }
+    }
+
+    // The tail, a block at a time against `ks`; a short last block's
+    // GHASH input is the ciphertext's bytes only, the keystream past
+    // them masked off.
+    : ~ i j 0
+    ~ < off n {
+        : v128 k ( nurl_v128_ld # s + # i ks * j 16 )
+        : i m - n off
+        ? >= m 16 {
+            : v128 v ( nurl_v128_ld # s + # i inp off )
+            : v128 y ( nurl_v128_xor v k )
+            : v128 c ? == sealing 1 y v
+            ( __ghw_take ( nurl_v128_bswap128 c ) gt acc lo hi md p rem )
+            ( nurl_v128_st # s + # i op off y )
+        } {
+            : v128 v ( nurl_v128_ldn # s + # i inp off m )
+            : v128 y ( nurl_v128_xor v k )
+            : v128 c ? == sealing 1 ( nurl_v128_and y ( __lowmask m ) ) v
+            ( __ghw_take ( nurl_v128_bswap128 c ) gt acc lo hi md p rem )
+            ( nurl_v128_stn # s + # i op off m y )
         }
         = off + off 16
-        = ctr + ctr 1
+        = j + j 1
     }
-    = acc ( __ghw_bytes acc # *u + # i ctp o8 - n o8 g1 g1x pad )
     // The length block [len(AAD)·8]_64 ‖ [len(C)·8]_64, reflected: the two
-    // bit lengths as little-endian halves, C's in the low one.
-    = acc ( __ghw_mul ( nurl_v128_xor acc ( nurl_v128_set64 * n 8 * aadlen 8 ) ) g1 )
+    // bit lengths as little-endian halves, C's in the low one. It closes
+    // the last run, so `acc` is reduced after it.
+    ( __ghw_take ( nurl_v128_set64 * n 8 * aadlen 8 ) gt acc lo hi md p rem )
     ( nurl_v128_st # s tagp ( nurl_v128_xor ( nurl_v128_bswap128 acc ) ej0 ) )
 }
 
@@ -1340,8 +1517,11 @@ unsafe @ __gcm_vaes_stitch16 * u rk2 i nr i n0 i n1 i n2 i ctr inout v256 cb * u
 // GHASH folded into `acc` with one reduction — block j of the m left
 // times H^(m-j), so pair p starts at power entry 16 - m + 2p. A short
 // last pair goes through the 32 bytes at `pad`, zero-padded, which is
-// also what makes a missing second block of it contribute nothing.
-unsafe @ __gcm_vaes_tail * u rk2 i nr i n0 i n1 i n2 i ctr * u inp * u op * u ctp i rem v128 acc * u gp * u pad → v128 {
+// also what makes a missing second block of it contribute nothing. Each
+// pair's input is read before its output is written, so `op` may be
+// `inp`; the GHASH input is the ciphertext — the output when sealing,
+// with the keystream past a short pair's bytes cleared.
+unsafe @ __gcm_vaes_tail * u rk2 i nr i n0 i n1 i n2 i ctr * u inp * u op i sealing i rem v128 acc * u gp * u pad → v128 {
     : i m / + rem 15 16
     : v256 z ( nurl_v256_zero )
     : ~ v256 lo z
@@ -1357,27 +1537,52 @@ unsafe @ __gcm_vaes_tail * u rk2 i nr i n0 i n1 i n2 i ctr * u inp * u op * u ct
         ~ < r nr { = ks ( nurl_v256_aesenc ks ( nurl_v256_ld # s + # i rk2 * r 32 ) ) = r + r 1 }
         = ks ( nurl_v256_aesenclast ks ( nurl_v256_ld # s + # i rk2 * nr 32 ) )
         : i nb ? < - rem o 32 - rem o 32
-        ? == nb 32 {
-            ( nurl_v256_st # s + # i op o ( nurl_v256_xor ks ( nurl_v256_ld # s + # i inp o ) ) )
-        } {
+        : ~ v256 v z
+        ? == nb 32 { = v ( nurl_v256_ld # s + # i inp o ) } {
             ( nurl_v256_st # s pad z )
             ( nurl_memcpy # s pad # s + # i inp o nb )
-            ( nurl_v256_st # s pad ( nurl_v256_xor ks ( nurl_v256_ld # s pad ) ) )
-            ( nurl_memcpy # s + # i op o # s pad nb )
+            = v ( nurl_v256_ld # s pad )
         }
-        : ~ v256 c z
-        ? == nb 32 { = c ( nurl_v256_ld # s + # i ctp o ) } {
-            ( nurl_v256_st # s pad z )
-            ( nurl_memcpy # s pad # s + # i ctp o nb )
-            = c ( nurl_v256_ld # s pad )
-        }
+        : v256 y ( nurl_v256_xor v ks )
+        : ~ v256 c v
+        ? == sealing 1 {
+            ? == nb 32 { = c y } {
+                ( nurl_v256_st # s pad y )
+                ( nurl_memset # s + # i pad nb 0 - 32 nb )
+                = c ( nurl_v256_ld # s pad )
+            }
+        } {}
         : v256 x0 ( nurl_v256_bswap128 c )
         : v256 x ? == p 0 ( nurl_v256_xor x0 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ) x0
         : i e * 16 + - 16 m * p 2
         ( __ghw2_acc x # *u + # i gp e lo hi md )
+        ? == nb 32 { ( nurl_v256_st # s + # i op o y ) } {
+            ( nurl_v256_st # s pad y )
+            ( nurl_memcpy # s + # i op o # s pad nb )
+        }
         = p + p 1
     }
     ^ ( __ghw2_finish lo hi md )
+}
+
+// The AAD's GHASH for the wide kernels, from zero: blocks through
+// __ghw_take, one reduction per eight (a TLS record's 5- or 13-byte AAD
+// is one block, one reduction), a short last block zero-padded.
+unsafe @ __ghw_aad * u aadp i aadlen * u gt → v128 {
+    : v128 z ( nurl_v128_zero )
+    : ~ v128 acc z
+    : ~ v128 lo z
+    : ~ v128 hi z
+    : ~ v128 md z
+    : ~ i rem / + aadlen 15 16
+    : ~ i p ? > rem 8 8 rem
+    : ~ i off 0
+    ~ < off aadlen {
+        : v128 x ( nurl_v128_ldn # s + # i aadp off - aadlen off )
+        ( __ghw_take ( nurl_v128_bswap128 x ) gt acc lo hi md p rem )
+        = off + off 16
+    }
+    ^ acc
 }
 
 // One AES-GCM pass on the wide path: the contract of __gcm_hw_run, for
@@ -1389,28 +1594,28 @@ unsafe simd @ __gcm_vaes_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n
     : *u rk2 # *u + # i hk ( __gcm_vaes_at nr )
     : *u gp # *u + # i rk2 * 32 + nr 1
     : v128 g1 ( nurl_v128_ld # s + # i gt 112 )
-    : v128 g1x ( nurl_v128_ld # s + # i gt 240 )
     : i n0 # i ( __ld32le nonce 0 )
     : i n1 # i ( __ld32le nonce 4 )
     : i n2 # i ( __ld32le nonce 8 )
     : v128 ej0 ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 1 ) )
-    : ~ v128 acc ( __ghw_bytes ( nurl_v128_zero ) aadp aadlen g1 g1x pad )
-    : *u ctp ? == sealing 1 op inp
+    : ~ v128 acc ( __ghw_aad aadp aadlen gt )
     : ~ i off 0
     : ~ i ctr 2
     : ~ v256 cb ( __ctr2_blk n0 n1 n2 2 )
     ~ <= + off 256 n {
-        // The first step folds the input it is about to encrypt, for
-        // nothing: its answer is dropped (__gcm_vaes_stitch16).
-        : *u prev ? > off 0 # *u + # i ctp - off 256 # *u + # i inp off
+        // Sealing, a step folds the step before's ciphertext (the first
+        // one folds its own input for nothing, and its answer is
+        // dropped: __gcm_vaes_stitch16); opening, its own input, which
+        // every load reads before the stores — so `op` may be `inp`.
+        : *u prev ? & == sealing 1 > off 0 # *u + # i op - off 256 # *u + # i inp off
         : v128 a2 ( __gcm_vaes_stitch16 rk2 nr n0 n1 n2 ctr cb # *u + # i inp off # *u + # i op off acc prev gp )
-        = acc ? > off 0 a2 acc
+        = acc ? | == sealing 0 > off 0 a2 acc
         = off + off 256
         = ctr + ctr 16
     }
-    ? > off 0 { = acc ( __ghw_fold16 acc # *u + # i ctp - off 256 gp ) } {}
+    ? & == sealing 1 > off 0 { = acc ( __ghw_fold16 acc # *u + # i op - off 256 gp ) } {}
     ? < off n {
-        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off # *u + # i ctp off - n off acc gp pad )
+        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off sealing - n off acc gp pad )
     } {}
     = acc ( __ghw_mul ( nurl_v128_xor acc ( nurl_v128_set64 * n 8 * aadlen 8 ) ) g1 )
     ( nurl_v128_st # s tagp ( nurl_v128_xor ( nurl_v128_bswap128 acc ) ej0 ) )
@@ -1535,26 +1740,24 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     : *u rk2 # *u + # i hk ( __gcm_vaes_at nr )
     : *u gp # *u + # i rk2 * 32 + nr 1
     : v128 g1 ( nurl_v128_ld # s + # i gt 112 )
-    : v128 g1x ( nurl_v128_ld # s + # i gt 240 )
     : i n0 # i ( __ld32le nonce 0 )
     : i n1 # i ( __ld32le nonce 4 )
     : i n2 # i ( __ld32le nonce 8 )
     : v128 ej0 ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 1 ) )
-    : ~ v128 acc ( __ghw_bytes ( nurl_v128_zero ) aadp aadlen g1 g1x pad )
-    : *u ctp ? == sealing 1 op inp
+    : ~ v128 acc ( __ghw_aad aadp aadlen gt )
     : ~ i off 0
     : ~ i ctr 2
     : ~ v512 cb ( __ctr4_blk n0 n1 n2 2 )
     ~ <= + off 256 n {
-        : *u prev ? > off 0 # *u + # i ctp - off 256 # *u + # i inp off
+        : *u prev ? & == sealing 1 > off 0 # *u + # i op - off 256 # *u + # i inp off
         : v128 a2 ( __gcm_vaes512_stitch16 hk nr n0 n1 n2 ctr cb # *u + # i inp off # *u + # i op off acc prev gp )
-        = acc ? > off 0 a2 acc
+        = acc ? | == sealing 0 > off 0 a2 acc
         = off + off 256
         = ctr + ctr 16
     }
-    ? > off 0 { = acc ( __ghw_fold16 acc # *u + # i ctp - off 256 gp ) } {}
+    ? & == sealing 1 > off 0 { = acc ( __ghw_fold16 acc # *u + # i op - off 256 gp ) } {}
     ? < off n {
-        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off # *u + # i ctp off - n off acc gp pad )
+        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off sealing - n off acc gp pad )
     } {}
     = acc ( __ghw_mul ( nurl_v128_xor acc ( nurl_v128_set64 * n 8 * aadlen 8 ) ) g1 )
     ( nurl_v128_st # s tagp ( nurl_v128_xor ( nurl_v128_bswap128 acc ) ej0 ) )
@@ -1678,59 +1881,54 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     ^ out
 }
 
-// One CTR pass plus the tag. `input` is the data to transform (plaintext
-// when sealing, ciphertext when opening) and the returned Vec is the
-// other one; the tag over the CIPHERTEXT — `out` when sealing, `input`
-// when opening — is written to the 16 bytes at `tagp`.
+// One CTR pass plus the tag, on raw memory: `n` bytes from `inp` to `op`
+// — `op` may be `inp`, so a record can be sealed or opened where it lies
+// — under the 12-byte nonce at `np`, the tag over the CIPHERTEXT (`op`
+// when sealing, `inp` when opening) written to `scr` + 208.
 //
-// The first four-block call carries J0 = nonce ‖ 0x00000001 in slot 0
-// (its ciphertext masks the tag) and counters 2..4 in slots 1..3, so no
-// block of the core is wasted; every later call is four counters.
+// `scr` is __gcm_scratch bytes, 16-aligned, overlapping none of the
+// others: the software path's cipher words [0, 64), counter blocks
+// [64, 128), keystream [128, 192), E_K(J0) [192, 208), the tag
+// [208, 224) and the GHASH state and length block [224, 256); the
+// hardware path's tag [208, 224) and tail keystream [224, 352) (the wide
+// kernels' short-pair pad [224, 256)); and a
+// nonce the in-place callers build [352, 364).
 //
-// The per-call scratch is the returned Vec's spare capacity, 16-aligned
-// past room for the 16-byte tag a seal appends (so that append never
-// regrows the record): the cipher's 8 words [0, 64), the counter blocks
-// [64, 128), the keystream [128, 192), E_K(J0) [192, 208), the tag
-// [208, 224), and the GHASH state and length block [224, 256). One
-// allocation per call where there were eight.
-@ __gcm_scratch → i { ^ 256 }
+// The software path's first four-block call carries J0 = nonce ‖
+// 0x00000001 in slot 0 (its ciphertext masks the tag) and counters 2..4
+// in slots 1..3, so no block of the core is wasted; every later call is
+// four counters. Opening, the tag is taken before the CTR pass, while
+// `inp` still holds the ciphertext.
+@ __gcm_scratch → i { ^ 368 }
 
+// Where a call's scratch starts in a buffer whose data ends at `n`:
+// 16-aligned and past room for the 16-byte tag a seal appends, so that
+// append never regrows the buffer or lands on the scratch.
 @ __gcm_scr_at i n → i { ^ & + n 31 -16 }
 
-// The hardware path's __gcm_run: the same output layout — ciphertext
-// or plaintext, the tag at scratch offset 208 — from one __gcm_hw_run.
-@ __gcm_run_hw * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing → ( Vec u ) {
-    : ( Vec u ) out ( vec_with_cap [u] + ( __gcm_scr_at n ) ( __gcm_scratch ) )
-    : b _ol ( vec_set_len [u] out n )
-    : *u op ( vec_data [u] out )
-    : i scr + # i op ( __gcm_scr_at n )
-    // A wide kernel for a message of a sixteen-block step or more, on a
-    // key that has its state; the eight-block one otherwise. Their pad
-    // is the 32 bytes at 224.
-    : i nr . k nr
-    ? & >= n 256 >= . k tier 2 {
-        ? == . k tier 3 {
-            ( __gcm_vaes512_run ( vec_data [u] . k hkey ) nr ( vec_data [u] nonce ) ( vec_data [u] aad ) ( vec_len [u] aad ) inp n op sealing # *u + scr 208 # *u + scr 224 )
-        } {
-            ( __gcm_vaes_run ( vec_data [u] . k hkey ) nr ( vec_data [u] nonce ) ( vec_data [u] aad ) ( vec_len [u] aad ) inp n op sealing # *u + scr 208 # *u + scr 224 )
-        }
-        ^ out
+unsafe @ __gcm_core * AesGcmKeyImpl k * u np * u aadp i aadlen * u inp i n * u op i sealing * u scr → v {
+    ? > ( vec_len [u] . k hkey ) 0 {
+        : *u hk ( vec_data [u] . k hkey )
+        : *u tagp # *u + # i scr 208
+        : *u ks # *u + # i scr 224
+        // A wide kernel for a message of a sixteen-block step or more,
+        // on a key that has its state; the eight-block one otherwise.
+        ? & >= n 256 >= . k tier 2 {
+            ? == . k tier 3 {
+                ( __gcm_vaes512_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
+            } {
+                ( __gcm_vaes_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
+            }
+            ^ v
+        } {}
+        ( __gcm_hw_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
+        ^ v
     } {}
-    ( __gcm_hw_run ( vec_data [u] . k hkey ) nr ( vec_data [u] nonce ) ( vec_data [u] aad ) ( vec_len [u] aad ) inp n op sealing # *u + scr 208 # *u + scr 224 )
-    ^ out
-}
-
-@ __gcm_run * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing → ( Vec u ) {
-    ? > ( vec_len [u] . k hkey ) 0 { ^ ( __gcm_run_hw k nonce aad inp n sealing ) } {}
     : *u skp ( vec_data [u] . k skey )
     : s skey # s skp
     : i nr . k nr
-    : ( Vec u ) out ( vec_with_cap [u] + ( __gcm_scr_at n ) ( __gcm_scratch ) )
-    : b _ol ( vec_set_len [u] out n )
-    : *u op ( vec_data [u] out )
-    : s scr # s + # i op ( __gcm_scr_at n )
-    ( nurl_memset scr 0 ( __gcm_scratch ) )
-    : s q scr
+    ( nurl_memset # s scr 0 256 )
+    : s q # s scr
     : *u cb # *u + # i scr 64
     : *u kb # *u + # i scr 128
     : *u tagp # *u + # i scr 208
@@ -1739,8 +1937,7 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     // bytes change, so the nonce is written once and left alone.
     : ~ i bi 0
     ~ < bi 4 {
-        : ~ i nj 0
-        ~ < nj 12 { = . cb + * bi 16 nj # u ( __aes_bget nonce nj ) = nj + nj 1 }
+        ( nurl_memcpy # s + # i cb * bi 16 # s np 12 )
         = bi + bi 1
     }
 
@@ -1750,6 +1947,9 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     : *u ej0 # *u + # i scr 192
     : ~ i hi 0
     ~ < hi 16 { = . ej0 hi . kb hi = hi + hi 1 }
+    : *u hp # *u + # i skp ( __hsub_at nr )
+    : s gs # s + # i scr 224
+    ? == sealing 0 { ( __gcm_tag_raw hp ej0 aadp aadlen inp n tagp gs ) } {}
 
     : i lim0 ? < n 48 n 48
     : ~ i j 0
@@ -1771,9 +1971,16 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
         = off + off 64
         = ctr + ctr 4
     }
+    ? == sealing 1 { ( __gcm_tag_raw hp ej0 aadp aadlen op n tagp gs ) } {}
+}
 
-    : *u ctp ? == sealing 1 op inp
-    ( __gcm_tag_raw # *u + # i skp ( __hsub_at nr ) ej0 ( vec_data [u] aad ) ( vec_len [u] aad ) ctp n tagp # s + # i scr 224 )
+// One pass into a new Vec of `n` bytes, the call's scratch in its spare
+// capacity — one allocation per call.
+@ __gcm_run * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] + ( __gcm_scr_at n ) ( __gcm_scratch ) )
+    : b _ol ( vec_set_len [u] out n )
+    : *u op ( vec_data [u] out )
+    ( __gcm_core k ( vec_data [u] nonce ) ( vec_data [u] aad ) ( vec_len [u] aad ) inp n op sealing # *u + # i op ( __gcm_scr_at n ) )
     ^ out
 }
 
@@ -1790,6 +1997,14 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     ^ ct
 }
 
+// Constant-time comparison of the 16-byte tags at `a` and `b`.
+@ __tag16_eq * u a * u b → b {
+    : ~ i diff 0
+    : ~ i i 0
+    ~ < i 16 { = diff | diff ^^ # i . a i # i . b i = i + i 1 }
+    ^ == diff 0
+}
+
 // AES-GCM open under a prepared key: `ct_tag` is ciphertext followed by
 // its 16-byte tag. The tag is verified BEFORE the plaintext is handed
 // back, and the comparison is a constant-time OR-accumulate.
@@ -1801,11 +2016,70 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     : *u ctp ( vec_data [u] ct_tag )
     : ( Vec u ) pt ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ctp ctlen 0 )
     : *u tagp # *u + # i ( vec_data [u] pt ) + ( __gcm_scr_at ctlen ) 208
-    : ~ i diff 0
-    : ~ i i 0
-    ~ < i 16 { = diff | diff ^^ # i . tagp i # i . ctp + ctlen i = i + i 1 }
-    ? != diff 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    ? ! ( __tag16_eq tagp # *u + # i ctp ctlen ) { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T pt }
+}
+
+// ── In place, with a sequence-number nonce ─────────────────────────
+// What a record layer wants: the record sealed or opened where it lies
+// in its own buffer, no Vec per record, and the nonce derived from the
+// connection's static `iv` (12 bytes) and the record's sequence number —
+// the 64-bit `seq` big-endian, XORed into the iv's last 8 bytes (TLS 1.3,
+// RFC 8446 §5.3; QUIC, RFC 9001 §5.3). The scratch is the buffer's spare
+// capacity past its length, reserved here.
+
+// The nonce for (iv, seq) at `np`.
+@ __seq_nonce ( Vec u ) iv i seq * u np → v {
+    : *u ivp ( vec_data [u] iv )
+    : ~ i b 0
+    ~ < b 4 { = . np b . ivp b = b + b 1 }
+    ~ < b 12 {
+        = . np b # u ^^ # i . ivp b & >> seq * 8 - 11 b 255
+        = b + b 1
+    }
+}
+
+// Seal `buf[data_at, len)` in place, the AAD `buf[aad_at, data_at)`, and
+// append the 16-byte tag. F — and `buf` untouched — for a null key, an
+// iv that is not 12 bytes, offsets out of order, or a plaintext past
+// GCM's cap.
+@ aes_gcm_seal_in AesGcmKey k__h ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at → b {
+    : i len ( vec_len [u] buf )
+    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at > data_at len { ^ F } {}
+    : i n - len data_at
+    ? > n 68719476704 { ^ F } {}
+    : i at ( __gcm_scr_at len )
+    ( vec_reserve [u] buf + - at len ( __gcm_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u np # *u + # i scr 352
+    ( __seq_nonce iv seq np )
+    : *u dp # *u + # i base data_at
+    ( __gcm_core ( __AesGcmKey_ptr k__h ) np # *u + # i base aad_at - data_at aad_at dp n dp 1 scr )
+    ( bytes_extend_raw buf # s + # i scr 208 16 )
+    ^ T
+}
+
+// Open `buf[data_at, end)` — ciphertext, then its 16-byte tag — in
+// place: on T, `buf[data_at, end - 16)` is the plaintext; the AAD is
+// `buf[aad_at, data_at)` and bytes past `end` are left alone. On F (a
+// wrong tag, or the same argument errors as aes_gcm_seal_in) the range
+// is zeroed, never left as unauthenticated plaintext.
+@ aes_gcm_open_in AesGcmKey k__h ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at i end → b {
+    : i len ( vec_len [u] buf )
+    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | > + data_at 16 end > end len { ^ F } {}
+    : i n - - end data_at 16
+    : i at ( __gcm_scr_at len )
+    ( vec_reserve [u] buf + - at len ( __gcm_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u np # *u + # i scr 352
+    ( __seq_nonce iv seq np )
+    : *u dp # *u + # i base data_at
+    ( __gcm_core ( __AesGcmKey_ptr k__h ) np # *u + # i base aad_at - data_at aad_at dp n dp 0 scr )
+    ? ( __tag16_eq # *u + # i scr 208 # *u + # i dp n ) { ^ T } {}
+    ( nurl_memset # s dp 0 n )
+    ^ F
 }
 
 // One-shot seal/open: a context for this call only.

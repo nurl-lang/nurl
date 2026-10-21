@@ -21,6 +21,9 @@
 //   ( poly1305_mac otk msg )                  → ( Vec u )  16-byte tag
 //   ( aead_encrypt key nonce aad plaintext )  → ( Vec u )  ciphertext||tag
 //   ( aead_decrypt key nonce aad ct_and_tag ) → ?( Vec u ) None if forged
+//   ( chacha20poly1305_seal_in key iv seq buf aad_at data_at )     → b
+//   ( chacha20poly1305_open_in key iv seq buf aad_at data_at end ) → b
+//       in place, the nonce iv ⊕ seq (TLS 1.3 / QUIC): see below
 //
 //   key  = 32 bytes, nonce = 12 bytes, counter = i (block counter).
 
@@ -507,15 +510,20 @@ simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op 
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
     : ( Vec u ) out ( __xor_out n 128 )
     ? == n 0 { ^ out } {}
-    : *u dp # *u + # i ( vec_data [u] data ) doff
     : *u op ( vec_data [u] out )
+    ( __chacha20_xor_ptr key counter ( __ld32 nonce 0 ) ( __ld32 nonce 4 ) ( __ld32 nonce 8 ) # *u + # i ( vec_data [u] data ) doff op n # *u + # i op ( __xor_scratch_at n ) )
+    ^ out
+}
+
+// The vector kernels on raw memory: `n` bytes from `dp` to `op` XORed
+// with ChaCha20(key, counter, nonce words nn0..nn2). `op` may be `dp` —
+// every block is read before its output is written — so a record can be
+// encrypted where it lies. `ks` is 128 bytes of scratch overlapping
+// neither. Little-endian hosts only (the caller asks __le_words).
+unsafe @ __chacha20_xor_ptr ( Vec u ) key i counter i nn0 i nn1 i nn2 * u dp * u op i n * u ks → v {
     : v128 s0 ( nurl_v128_set32 1634760805 857760878 2036477234 1797285236 )
     : v128 s1 ( nurl_v128_set32 ( __ld32 key 0 ) ( __ld32 key 4 ) ( __ld32 key 8 ) ( __ld32 key 12 ) )
     : v128 s2 ( nurl_v128_set32 ( __ld32 key 16 ) ( __ld32 key 20 ) ( __ld32 key 24 ) ( __ld32 key 28 ) )
-    : i nn0 ( __ld32 nonce 0 )
-    : i nn1 ( __ld32 nonce 4 )
-    : i nn2 ( __ld32 nonce 8 )
-    : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
     // The wide passes while at least 256 bytes remain, then two blocks a
@@ -564,7 +572,6 @@ simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op 
         = ctr + ctr 1
         = off + off 64
     }
-    ^ out
 }
 
 // Scalar keystream path — the reference implementation, and what runs
@@ -968,6 +975,41 @@ inline @ __poly_block inout u64 h0 inout u64 h1 inout u64 h2 u64 t0 u64 t1 u64 p
     = h2 + & g2 3 ( nurl_addc_hi g1 k0 0 )
 }
 
+// `len` bytes at `p` into the accumulator as ⌈len/16⌉ blocks, a short
+// last one zero-padded to 16 and still carrying the 2^128 bit — the
+// AEAD's pad16 (RFC 8439 §2.8), so the MAC input is fed from where its
+// pieces lie instead of concatenated into a buffer of its own.
+unsafe @ __poly_feed16 inout u64 h0 inout u64 h1 inout u64 h2 * u p i len u64 kr0 u64 kr1 u64 ks1 → v {
+    : i full & len -16
+    : ~ i off 0
+    ~ < off full {
+        ( __poly_block h0 h1 h2 # u64 ( __ld64 p off ) # u64 ( __ld64 p + off 8 ) 1 kr0 kr1 ks1 )
+        = off + off 16
+    }
+    ? < off len {
+        : v128 t ( nurl_v128_ldn # s + # i p off - len off )
+        ( __poly_block h0 h1 h2 # u64 ( nurl_v128_get64 t 0 ) # u64 ( nurl_v128_get64 t 1 ) 1 kr0 kr1 ks1 )
+    } {}
+}
+
+// The tag: h mod p, plus s (the one-time key's second half, at `sp`),
+// mod 2^128 — 16 little-endian bytes to `out`.
+unsafe @ __poly_finish u64 h0 u64 h1 u64 h2 * u sp * u out → v {
+    // h mod p: h + 5 reaches 2^130 exactly when h ≥ p (h < 2p here), and
+    // then the low 128 bits of h + 5 are h − p's. Constant-time select.
+    : u64 g0 ( nurl_addc_lo h0 5 0 )
+    : u64 g1 ( nurl_addc_lo h1 0 ( nurl_addc_hi h0 5 0 ) )
+    : u64 g2 + h2 ( nurl_addc_hi h1 0 ( nurl_addc_hi h0 5 0 ) )
+    : u64 mask - 0 >> g2 2  // all ones when h ≥ p
+    : u64 f0 | & h0 ~ mask & g0 mask
+    : u64 f1 | & h1 ~ mask & g1 mask
+    : u64 st0 # u64 ( __ld64 sp 0 )
+    : u64 st1 # u64 ( __ld64 sp 8 )
+    : u64 w0 ( nurl_addc_lo f0 st0 0 )
+    : u64 w1 ( nurl_addc_lo f1 st1 ( nurl_addc_hi f0 st0 0 ) )
+    ( nurl_v128_st # s out ( nurl_v128_set64 # i w0 # i w1 ) )
+}
+
 // otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
 @ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
     : *u kp ( vec_data [u] otk )
@@ -1123,4 +1165,159 @@ inline @ __poly_block inout u64 h0 inout u64 h1 inout u64 h2 u64 t0 u64 t1 u64 p
     ? ! ok { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : ( Vec u ) pt ( chacha20_xor_range key 1 nonce ct_and_tag 0 ctlen )
     ^ @ ?( Vec u ) { T pt }
+}
+
+// ── In place, with a sequence-number nonce ─────────────────────────
+// The record layer's form (as aes_gcm_seal_in / aes_gcm_open_in): the
+// record sealed or opened where it lies in its own buffer, the nonce the
+// 12-byte `iv` with the 64-bit `seq` big-endian XORed into its last 8
+// bytes (RFC 8446 §5.3, RFC 9001 §5.3), the Poly1305 input fed from the
+// AAD and the ciphertext where they lie. The scratch — keystream, the
+// one-time key, the nonce and the tag — is the buffer's spare capacity
+// past its length, reserved here: 16-aligned past room for the tag.
+
+// Scratch layout from __xor_scratch_at len: keystream [0, 128), the
+// one-time key block [128, 192), the nonce [192, 204), the tag [208, 224).
+@ __ccp_scratch → i { ^ 224 }
+
+// The MAC of `aad` (at `ap`, `al` bytes) and the ciphertext (at `cp`,
+// `cl` bytes) under the one-time key at `kp`: pad16 pieces, then the two
+// little-endian lengths. Tag to `out`.
+unsafe @ __ccp_mac * u kp * u ap i al * u cp i cl * u out → v {
+    : u64 r0 & # u64 ( __ld64 kp 0 ) 0x0ffffffc0fffffff
+    : u64 r1 & # u64 ( __ld64 kp 8 ) 0x0ffffffc0ffffffc
+    : u64 s1 + r1 >> r1 2
+    : ~ u64 h0 0
+    : ~ u64 h1 0
+    : ~ u64 h2 0
+    ( __poly_feed16 h0 h1 h2 ap al r0 r1 s1 )
+    ( __poly_feed16 h0 h1 h2 cp cl r0 r1 s1 )
+    ( __poly_block h0 h1 h2 # u64 al # u64 cl 1 r0 r1 s1 )
+    ( __poly_finish h0 h1 h2 # *u + # i kp 16 out )
+}
+
+// The nonce for (iv, seq) at `np`; the one-time key block (counter 0) at
+// `kp`. F on a big-endian host, where the vector block kernel does not
+// apply — the caller takes the Vec path then.
+unsafe @ __ccp_setup ( Vec u ) key ( Vec u ) iv i seq * u np * u kp → b {
+    ? == 0 ( __le_words ) { ^ F } {}
+    : *u ivp ( vec_data [u] iv )
+    : ~ i b 0
+    ~ < b 4 { = . np b . ivp b = b + b 1 }
+    ~ < b 12 {
+        = . np b # u ^^ # i . ivp b & >> seq * 8 - 11 b 255
+        = b + b 1
+    }
+    : v128 s0 ( nurl_v128_set32 1634760805 857760878 2036477234 1797285236 )
+    : v128 s1 ( nurl_v128_set32 ( __ld32 key 0 ) ( __ld32 key 4 ) ( __ld32 key 8 ) ( __ld32 key 12 ) )
+    : v128 s2 ( nurl_v128_set32 ( __ld32 key 16 ) ( __ld32 key 20 ) ( __ld32 key 24 ) ( __ld32 key 28 ) )
+    ( __chacha20_block_v128 s0 s1 s2 ( nurl_v128_set32 0 # i ( __ld32le_p np 0 ) # i ( __ld32le_p np 4 ) # i ( __ld32le_p np 8 ) ) kp )
+    ^ T
+}
+
+// The (iv, seq) nonce as a Vec, for the big-endian fallback.
+@ __ccp_nonce_vec ( Vec u ) iv i seq → ( Vec u ) {
+    : ( Vec u ) n ( vec_zeroed [u] 12 )
+    : ~ i b 0
+    ~ < b 12 {
+        : i sb ? < b 4 0 & >> seq * 8 - 11 b 255
+        ( vec_put [u] n b # u ^^ ( __cc_bget iv b ) sb )
+        = b + b 1
+    }
+    ^ n
+}
+
+// Seal `buf[data_at, len)` in place, the AAD `buf[aad_at, data_at)`, and
+// append the 16-byte tag. F — and `buf` untouched — for a key that is
+// not 32 bytes, an iv that is not 12, offsets out of order, or a
+// plaintext past the 32-bit block counter.
+@ chacha20poly1305_seal_in ( Vec u ) key ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at → b {
+    : i len ( vec_len [u] buf )
+    ? | | != ( vec_len [u] key ) 32 != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at > data_at len { ^ F } {}
+    : i n - len data_at
+    ? > n 274877906880 { ^ F } {}
+    : i at ( __xor_scratch_at len )
+    ( vec_reserve [u] buf + - at len ( __ccp_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u kp # *u + # i scr 128
+    : *u np # *u + # i scr 192
+    : *u dp # *u + # i base data_at
+    ? ( __ccp_setup key iv seq np kp ) {
+        ( __chacha20_xor_ptr key 1 # i ( __ld32le_p np 0 ) # i ( __ld32le_p np 4 ) # i ( __ld32le_p np 8 ) dp dp n scr )
+        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 )
+        ( bytes_extend_raw_cc buf # *u + # i scr 208 16 )
+        ^ T
+    } {}
+    // Big-endian host: the Vec path, copied back.
+    : ( Vec u ) aad ( bytes_range_cc buf aad_at data_at )
+    : ( Vec u ) pt ( bytes_range_cc buf data_at len )
+    : ( Vec u ) sealed ( aead_encrypt key ( __ccp_nonce_vec iv seq ) aad pt )
+    : b _l ( vec_set_len [u] buf data_at )
+    ( bytes_extend_raw_cc buf ( vec_data [u] sealed ) ( vec_len [u] sealed ) )
+    ^ T
+}
+
+// Open `buf[data_at, end)` — ciphertext, then its 16-byte tag — in
+// place: the tag is checked over the ciphertext FIRST, and only then is
+// it decrypted, so on T `buf[data_at, end - 16)` is the plaintext. The
+// AAD is `buf[aad_at, data_at)`; bytes past `end` are left alone. On F
+// (a wrong tag, or the argument errors of chacha20poly1305_seal_in) the
+// range is zeroed.
+@ chacha20poly1305_open_in ( Vec u ) key ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at i end → b {
+    : i len ( vec_len [u] buf )
+    ? | | != ( vec_len [u] key ) 32 != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | > + data_at 16 end > end len { ^ F } {}
+    : i n - - end data_at 16
+    : i at ( __xor_scratch_at len )
+    ( vec_reserve [u] buf + - at len ( __ccp_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u kp # *u + # i scr 128
+    : *u np # *u + # i scr 192
+    : *u dp # *u + # i base data_at
+    ? ( __ccp_setup key iv seq np kp ) {
+        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 )
+        : ~ i diff 0
+        : ~ i k 0
+        ~ < k 16 { = diff | diff ^^ # i . scr + 208 k # i . dp + n k = k + k 1 }
+        ? == diff 0 {
+            ( __chacha20_xor_ptr key 1 # i ( __ld32le_p np 0 ) # i ( __ld32le_p np 4 ) # i ( __ld32le_p np 8 ) dp dp n scr )
+            ^ T
+        } {}
+        ( nurl_memset # s dp 0 n )
+        ^ F
+    } {}
+    // Big-endian host: the Vec path, copied back.
+    : ( Vec u ) aad ( bytes_range_cc buf aad_at data_at )
+    : ( Vec u ) ct ( bytes_range_cc buf data_at end )
+    ?? ( aead_decrypt key ( __ccp_nonce_vec iv seq ) aad ct ) {
+        T pt → {
+            ( nurl_memcpy # s + # i ( vec_data [u] buf ) data_at # s ( vec_data [u] pt ) n )
+            ^ T
+        }
+        F _ → {
+            ( nurl_memset # s + # i ( vec_data [u] buf ) data_at 0 n )
+            ^ F
+        }
+    }
+}
+
+// A little-endian u32 at `p + off`.
+@ __ld32le_p * u p i off → u64 {
+    ^ # u64 | | | # i . p off << # i . p + off 1 8 << # i . p + off 2 16 << # i . p + off 3 24
+}
+
+// `n` bytes from `src` appended to `v` (this file imports no bytes.nu).
+@ bytes_extend_raw_cc ( Vec u ) v * u src i n → v {
+    ( vec_reserve [u] v n )
+    : i len ( vec_len [u] v )
+    ( nurl_memcpy # s + # i ( vec_data [u] v ) len # s src n )
+    : b _l ( vec_set_len [u] v + len n )
+}
+
+// A copy of `v[lo, hi)`.
+@ bytes_range_cc ( Vec u ) v i lo i hi → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] - hi lo )
+    ( bytes_extend_raw_cc out # *u + # i ( vec_data [u] v ) lo - hi lo )
+    ^ out
 }

@@ -53,7 +53,7 @@ A plain identifier is `[A-Za-z_][A-Za-z0-9_]*`.
 Adjacent identifiers joined by `::` (no intervening whitespace) merge
 into a single identifier token with `__` substituted for `::`:
 
-```
+```text
 m::alloc             →   single IDENT `m__alloc`
 outer::inner::leaf   →   single IDENT `outer__inner__leaf`
 ```
@@ -186,7 +186,7 @@ symlink chains compiles only once.
 Without an alias, all top-level names from the imported file land in the
 global namespace unchanged:
 
-```
+```nurl
 $ `stdlib/core/string.nu`
 ```
 
@@ -197,9 +197,13 @@ cross-calls inside the imported file are rewritten to match. The
 renamed names are reached from the importer via `alias::name`, which
 the lexer fuses into the same single identifier:
 
-```
+```nurl
 $ `stdlib/core/mem.nu` m
-( m::alloc 16 )    // resolves to alias-rewritten `m__alloc`
+
+unsafe @ scratch → v {
+    : *u p ( m::alloc [u] 16 )    // resolves to alias-rewritten `m__alloc`
+    ( nurl_free # s p )
+}
 ```
 
 FFI declarations (`& "lib" @ name …`) and trait/impl methods are
@@ -260,7 +264,7 @@ legacy mode where every top-level name is globally callable.
 In strict mode, every unmarked `@`-function is private to its source
 file; a cross-file call is rejected with:
 
-```
+```text
 file:line:col: error: private function 'X' is not visible across files;
                        defined in 'Y'
 ```
@@ -293,9 +297,16 @@ compiler to emit that function twice — once for the baseline ISA and once
 for a wider one — and to pick between them at run time. `pub` and `simd`
 may appear in either order; `simd` is accepted on `@` declarations only.
 
-```
-simd @ poly_add * i32 r * i32 a * i32 b i n → v { … }
-pub simd @ mldsa_sign_mu i level … → ( Vec u ) { … }
+```nurl
+$ `stdlib/core/vec.nu`
+
+unsafe simd @ poly_add * i32 r * i32 a * i32 b i n → v {
+    : ~ i k 0
+    ~ < k n { = . r k + . a k . b k = k + k 1 }
+}
+pub simd @ mldsa_sign_mu i level ( Vec u ) mu → ( Vec u ) {
+    ^ ( vec_clone [u] mu )    // body elided
+}
 ```
 
 What nurlc emits for `simd @ f`:
@@ -397,8 +408,12 @@ LLVM's `alwaysinline` on the definition, which makes the inliner skip its
 cost model for that callee. `pub`, `simd` and `inline` are order-
 independent, and `inline` is accepted on `@` declarations only.
 
-```
-inline @ mem_load * Interp it i ea i n i signed → i { … }
+<!-- doctest-prelude
+: Interp { *u mem i size }
+@ __lshr64 i a i n → i { ^ ? == n 0 a & >> a n - << 1 - 64 n 1 }
+-->
+```nurl
+inline @ mem_load * Interp it i ea i n i signed → i { ^ 0 }    // body elided
 pub inline @ lane i v i k → i { ^ & ( __lshr64 v * k 8 ) 255 }
 ```
 
@@ -486,7 +501,10 @@ string at every string primitive (`nurl_println`, `strlen`,
 slice or a container is a view: a fresh one is stored as a `String`, or
 bound first and stored as a view of the binding (docs/MEMORY.md §2.13).
 
-```
+```nurl
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+
 // The rest of the program sees a safe function: it takes a String and
 // returns an owned Vec, and nothing raw escapes.
 unsafe @ bytes_of String s → ( Vec u8 ) {
@@ -525,7 +543,9 @@ only the caller knows — that an address is live device memory, that a
 count fits the buffer behind a pointer, that kernel source it compiles
 and runs is sound. Such a function is declared `raw`:
 
-```
+```nurl
+$ `stdlib/core/vec.nu`
+
 // requires: n <= vec_len v
 raw @ sum_first ( Vec i ) v i n → i {
     : *i p ( vec_data [i] v )
@@ -568,7 +588,7 @@ literals, using the operators `+ - * / << >> & | ^^` (not `%`, which
 collides with the trait/impl sigil). The expression is folded to a single
 value at compile time (`const_eval_int`):
 
-```
+```nurl
 : i SECS_PER_DAY * * 60 60 24            // 86400
 : i PAGE        << 1 12                  // 4096
 : i INT_MIN     - -9223372036854775807 1 // two's-complement min
@@ -601,7 +621,13 @@ fields drops what it replaces, and a read borrows (docs/MEMORY.md §1,
 Module globals). Every thread can reach it, so only an `unsafe` function
 (§3.3d) reads or writes it.
 
-```
+<!-- doctest-prelude
+: Model { ( Vec f ) weights }
+-->
+```nurl
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+
 : ~ ( Vec String ) g_names 0
 : ~ ?Model g_model 0          // F until a model is loaded
 unsafe @ model_drop → v { = g_model @ ?Model { F } }
@@ -615,7 +641,16 @@ type must synchronise itself — `( Locked T )`, `( Arc T )`,
 afterwards. A read borrows the handle; binding it, storing it or returning
 it clones the handle, so the global itself is never moved or dropped.
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/string.nu`
+: Registry { ( Vec String ) names }
+@ registry_new → Registry { ^ @ Registry { ( vec_new [String] ) } }
+@ registry_add inout Registry r s name → v { ( vec_push [String] . r names ( string_from name ) ) }
+-->
+```nurl
+$ `stdlib/std/thread.nu`
+
 @ make_registry → ( Locked Registry ) { ^ ( locked_new [Registry] ( registry_new ) ) }
 : ( Locked Registry ) g_registry ( make_registry )
 
@@ -804,6 +839,7 @@ call site:
 | Group | Primitives |
 |---|---|
 | load / store | `nurl_v128_ld(*u) → v128`, `nurl_v128_st(*u, v128)` — unaligned |
+| partial load / store | `nurl_v128_ldn(*u, n) → v128` — the first `n` bytes (0–16), zero-padded; `nurl_v128_stn(*u, n, v128)` — the first `n` bytes of the vector. Neither touches a byte past `n` (two overlapping 8-, 4- or 1-byte accesses, no loop, no `memcpy` call) — a message's short last block |
 | construct | `nurl_v128_zero`, `_set32(a b c d)`, `_set64(a b)`, `_bcast32(x)`, `_bcast8(x)` |
 | extract | `nurl_v128_get32(v, i) → u64`, `_get64(v, i) → u64` |
 | bitwise | `nurl_v128_xor`, `_and`, `_or`, `_andnot` |
@@ -921,8 +957,16 @@ body is emitted under `f.vabi` with each wide parameter as a pointer
 (and a wide result written through a leading one), and `f` itself
 keeps the language signature, has no features and is `alwaysinline`,
 so it inlines into every caller and spills the vectors to the caller's
-frame. A `simd` dispatcher with a wide signature does the same. The
-cost is a store and a load per vector per call, on functions that are
+frame. A `simd` dispatcher with a wide signature does the same. A
+struct holding a wide vector counts as one (an aggregate is passed
+element by element), and so does an ordinary function taking one, which
+is `alwaysinline` like any vector signature. An *indirect* call — a
+closure, a trait-object method — cannot be given a pointer form both
+sides know, so one carrying a wide vector is made from a featureless
+`noinline` thunk per signature (`__nurl_vcall.N`) that takes the wide
+arguments by pointer: every function whose address is taken is compiled
+without features, and the thunk calls it under the same ones. The cost
+is a store and a load per vector per call, on calls that are
 coarse-grained by construction. (A `v128` needs none of this: it is one
 xmm register under every x86-64 feature set.)
 
@@ -1110,7 +1154,10 @@ argument.
 A bare `@`-fn name is **not** a value. Using one in expression position
 (e.g. `: c x my_fn`) is a compile error; wrap it in a closure literal:
 
-```
+<!-- doctest-prelude
+@ my_fn i x → i { ^ * x x }
+-->
+```nurl
 : (@ i i) sq \ i x → i { ( my_fn x ) }
 ```
 
@@ -1141,7 +1188,7 @@ list `[T]`, `[K V]`, etc. Each distinct type-argument list used at a
 call or type-instantiation site materialises one mangled monomorphic
 copy:
 
-```
+```nurl
 @ id [T] T x → T { ^ x }
 ( id [i] 42 )       // → @id__i64
 ( id [s] `hi` )     // → @id__i8ptr
@@ -1184,7 +1231,7 @@ bound is an up-front guarantee and documentation rather than a dispatch
 mechanism. The bound disambiguates from a slice parameter by the colon —
 a slice type never contains one.
 
-```
+```nurl
 @ my_max [A: Ord] A x A y → A { ? > ( ord_cmp x y ) 0 x y }   // A must impl Ord
 ```
 
@@ -1208,15 +1255,19 @@ the user's call site (v2.1, 2026-05-25).
 A **trait** names a set of methods a type can implement; an **impl** supplies
 them for one type. Both use the `%` sigil:
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+: Point { i x i y }
+-->
+```nurl
 % Show [T] {                       // trait declaration; [T] is the Self type
     @ fmt T self → String          // required method (header only)
     @ println T self → v {         // default method (has a body)
-        ( puts ( fmt self ) )
+        ( puts ( string_data ( fmt self ) ) )
     }
 }
 % Show Point {                     // impl of Show for Point
-    @ fmt Point self → String { … }
+    @ fmt Point self → String { ^ ( string_from ( nurl_str_int . self x ) ) }
     // println is inherited from the default, specialised to Point
 }
 ```
@@ -1251,7 +1302,7 @@ guarantee, not a dispatch mechanism.
 
 **Supertraits.** A trait may require other traits with a `:` clause:
 
-```
+```nurl
 % Ord [T] : Eq { @ cmp T a T b → i }
 ```
 
@@ -1266,13 +1317,16 @@ the supertrait impl the check proves present.
 **Associated types.** A trait may declare per-impl type members; each impl binds
 them, and the trait's methods may name them:
 
-```
+<!-- doctest-prelude
+: IntBox { i v }
+-->
+```nurl
 % Boxed [T] {
     type Elem                       // associated type
     @ unwrap T self → Elem
     @ first  T self Elem d → Elem { ^ ( unwrap self ) }   // default names Elem
 }
-% Boxed IntBox { type Elem i  @ unwrap IntBox self → i { … } }   // Elem = i
+% Boxed IntBox { type Elem i  @ unwrap IntBox self → i { ^ . self v } }   // Elem = i
 ```
 
 In a default method the associated type is substituted to the impl's binding
@@ -1301,7 +1355,7 @@ behaviour; an impl of one is a pure *assertion about the type*. Five such
 markers are declared in `stdlib/core/marker.nu` and given meaning by the
 compiler:
 
-```
+```nurl
 % Send [T] { }      // a value of T may MOVE to another thread
 % Sync [T] { }      // two threads may reach ONE T at the same time
 % NotSend [T] { }   // T must never cross a thread boundary
@@ -1339,13 +1393,18 @@ can be handled uniformly (e.g. a heterogeneous collection). This is layered
 identity for concrete values — the runtime representation exists only for the
 `%Trait` object type.
 
-```
+<!-- doctest-prelude
+: Dog { i woof }
+: Robot { i beep }
+-->
+```nurl
 % Speaker [T] { @ speak T self i vol → i }
-% Speaker Dog   { @ speak Dog d   i vol → i { … } }
-% Speaker Robot { @ speak Robot r i vol → i { … } }
+% Speaker Dog   { @ speak Dog d   i vol → i { ^ * . d woof vol } }
+% Speaker Robot { @ speak Robot r i vol → i { ^ + . r beep vol } }
 
 @ announce %Speaker s i vol → i { ^ ( speak s vol ) }   // dispatches via vtable
 
+: Dog d @ Dog { 2 }
 : %Speaker sd ( dyn Speaker d )     // construct: box a Dog as a Speaker object
 ( announce sd 5 )                    // reaches Dog.speak with no static type known
 ```
@@ -1413,7 +1472,7 @@ A *block* is `{ stmt* }`. Each statement is one of:
 
 ### 5.1 Let `:`
 
-```
+```text
 : ~? type? IDENT expr
 ```
 
@@ -1423,11 +1482,15 @@ when inferable from the right-hand side; an identifier that names a
 registered type is taken as the type annotation, otherwise the
 plain-IDENT form is type-inferred.
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+@ add i a i b → i { ^ + a b }
+-->
+```nurl
 : i n 0                          // explicit type
 : ~ i x 0                        // mutable
 : String s ( string_new )        // named type
-: n ( add 1 2 )                  // inferred
+: sum ( add 1 2 )                // inferred
 ```
 
 A binding whose RHS is a fresh heap allocation becomes the *owner* of
@@ -1435,7 +1498,7 @@ that allocation (§8).
 
 ### 5.2 Set `=`
 
-```
+```text
 = IDENT expr
 = '.' expr ( IDENT | INT | expr ) expr
 ```
@@ -1469,7 +1532,7 @@ single-hop store.
 
 ### 5.3 Defer `;`
 
-```
+```text
 ; { body }
 ```
 
@@ -1509,7 +1572,7 @@ order:
 2. `~ expr {` — while loop
 3. otherwise — complement expression used for its side effects
 
-```
+```text
 ~ cond { body }              // while
 ~ x xs { ( puts x ) }        // foreach (xs must have slice type)
 ~ x . bag items { … }        // foreach over a field
@@ -1524,9 +1587,15 @@ borrow checker (§9.5).
 
 Loop control for the **innermost enclosing** `~` loop body:
 
-```
+<!-- doctest-prelude
+@ skip i k → b { ^ == % k 2 1 }
+@ done i k → b { ^ > k 7 }
+: i n 10
+-->
+```nurl
+: ~ i i 0
 ~ < i n {
-    ? ( skip i ) { continue } {}   // re-evaluate the loop condition
+    ? ( skip i ) { = i + i 1 continue } {}   // re-evaluate the loop condition
     ? ( done i ) { break    } {}   // leave the loop
     = i + i 1
 }
@@ -1559,7 +1628,7 @@ A statement may be any expression. The value is discarded.
 A bare identifier that names a known callable (an `@`-function, an FFI
 function, or a runtime builtin) is rejected at statement position with:
 
-```
+```text
 error: bare identifier 'name' as a statement has no effect — calls in
        NURL are written '( name args )', not 'name args'. Did you
        forget the parens?
@@ -1619,7 +1688,7 @@ instantiation `( Name A )`.
 
 #### Strictly binary (2 operands)
 
-```
+```text
 + - * / %       arithmetic (integer + float)
 < > <= >= == != comparison (yields b)
 << >>           integer shift
@@ -1654,9 +1723,15 @@ combined with a float literal widens to `f` (`fpext`, lossless).
 
 For an n-ary chain write n-1 operators:
 
-```
-& a & b & c d        // a && b && c && d
-| | | a b c d        // a || b || c || d
+<!-- doctest-prelude
+: b a T
+: b b T
+: b c F
+: b d T
+-->
+```nurl
+: b all & a & b & c d        // a && b && c && d
+: b any | | | a b c d        // a || b || c || d
 ```
 
 The compiler rejects the canonical foot-gun
@@ -1667,7 +1742,7 @@ a warning.
 
 #### Unary (1 operand)
 
-```
+```text
 ! expr     logical NOT
 ^ expr     return
 ~ expr     bitwise complement (xor -1) for integers; fneg for f
@@ -1677,9 +1752,12 @@ a warning.
 There are no unary arithmetic operators. To negate a value, use binary
 minus against a literal zero or bitwise complement of zero:
 
-```
-- 0 x        // unary negate: 0 - x
-~ 0          // -1, useful for bit-twiddling
+<!-- doctest-prelude
+: i x 5
+-->
+```nurl
+: i neg - 0 x        // unary negate: 0 - x
+: i ones ~ 0         // -1, useful for bit-twiddling
 ```
 
 Negative *literals* are directly supported at the lexer level: a `-`
@@ -1688,7 +1766,7 @@ negative INT or FLOAT token.
 
 #### Ternary
 
-```
+```text
 ? cond then else
 ```
 
@@ -1698,7 +1776,7 @@ to `void`, which the enclosing return/let then flags.
 
 #### Match
 
-```
+```text
 ?? expr { arm* }
 ```
 
@@ -1722,8 +1800,13 @@ A payload slot is one of:
 - `IDENT` — binds the payload at that position.
 - `INT` — compares equality with the payload value (literal constraint).
 
-```
-?? val {
+<!-- doctest-prelude
+: | Val { JNull  JNum i  KeyPress i i  Ok i  Other }
+@ key_event i c i m → s { ^ `key` }
+: Val val @ Val { KeyPress 65 0 }
+-->
+```nurl
+: s text ?? val {
     JNull        → `null`
     JNum n       → ( nurl_str_int n )
     KeyPress c m → ( key_event c m )    // 2-payload binding
@@ -1741,8 +1824,12 @@ exhaustiveness for its variant: a later catch-all (another arm for the
 variant, or `_`) is still required. Guards are not allowed on a `_`
 wildcard or an or-pattern.
 
-```
-?? msg {
+<!-- doctest-prelude
+: | Msg { Move i  Stop }
+: Msg msg @ Msg { Move 3 }
+-->
+```nurl
+: s dir ?? msg {
     Move n ? > n 0 → `forward`
     Move n         → `back-or-stay`    // catch-all for Move
     _              → `other`
@@ -1787,7 +1874,7 @@ Float operands are a compile error.
 When `b` is on the same line as `^` and is value-producing, the compiler
 emits the warning:
 
-```
+```text
 warning: '^' is the return operator; did you mean '^^' for XOR? (Two
          adjacent carets, no space between them)
 ```
@@ -1812,9 +1899,14 @@ A type name is a declared struct or enum, a generic instance, `Vec`, or a
 generic struct's own name (`\ ( Slice u ) s → …`). None of them can be
 called, so none of them starts a `\ ( call )` try-expression.
 
-```
-: (@ i i) sq \ i x → i { * x x }     // closure
-: n \ ( parse_int src )              // try-propagate Result
+```nurl
+$ `stdlib/std/int.nu`
+
+@ squared s src → !i ParseErr {
+    : (@ i i) sq \ i x → i { * x x }    // closure
+    : n \ ( int_parse src )             // try-propagate Result
+    ^ @ !i ParseErr { T ( sq n ) }
+}
 ```
 
 `\` propagation requires the **enclosing function** to return a
@@ -1841,7 +1933,7 @@ rule.
 
 ### 6.5 Function calls
 
-```
+```text
 ( fn [T+]? arg* )
 ```
 
@@ -1857,8 +1949,10 @@ without the parens.
 A trailing parameter may carry a **default value** — `= atom`, where
 `atom` is a single token (a literal, a const name, or `T` / `F`):
 
-```
-@ box s label i width = 10 s fill = `-` → v { ... }
+```nurl
+@ box s label i width = 10 s fill = `-` → v {
+    // …
+}
 ```
 
 A call may then **omit** defaulted trailing arguments, and may pass any
@@ -1866,7 +1960,7 @@ argument **by name** with an `IDENT:` label. Named arguments may appear
 in any order and follow any leading positional ones; omitted parameters
 fall back to their defaults:
 
-```
+```nurl continue
 ( box `a` )                    // width=10  fill=`-`
 ( box `b` 3 )                  // width=3   fill=`-`
 ( box label: `d` fill: `=` )   // named, reordered; width defaults
@@ -1932,13 +2026,16 @@ use-after-move error. Explicit signatures seed a fixed point of call effects
 across ordinary bodies and generic instances, including forward calls and
 all argument positions. Names and return types never imply consumption.
 
-```
+```nurl expect-error="use of moved value 's'"
+$ `stdlib/core/string.nu`
+
 @ take String s → v { ( string_free s ) }   // s auto-inferred sink
 
 @ main → i {
     : String s ( string_from `hi` )
     ( take s )                              // s is consumed
     ( nurl_print ( string_data s ) )         // error: use of moved value
+    ^ 0
 }
 ```
 
@@ -1950,7 +2047,9 @@ file — as a string literal (`s`). The compiler reads it when it reads the
 file, so the program carries the version its manifest names and the number
 is written in one place:
 
-```
+```nurl
+$ `deps/cli/src/cli.nu`
+
 : Cli c ( cli_new `tool` `what it does` ( pkg_version ) )
 : s TOOL_VERSION ( pkg_version )             // a top-level constant too
 ```
@@ -1963,7 +2062,7 @@ arguments is an ordinary call.
 
 ### 6.6 Member access `.`
 
-```
+```text
 . obj index
 ```
 
@@ -1982,7 +2081,7 @@ The compilation rule is chosen by the LLVM type of `obj`:
 
 ### 6.7 Cast `#`
 
-```
+```text
 # target_type expr
 ```
 
@@ -1990,11 +2089,18 @@ Explicit type coercion. Used for width changes, signed↔unsigned
 reinterpretation, pointer casts, and the canonical closure-field-extract
 pattern:
 
-```
-# i ( some_fn )                  // i64-truncate / widen
-# *Point ( nurl_alloc 16 )       // cast i8* to *Point
-# *u closure 0                   // extract fn ptr from closure
-# *u closure 1                   // extract env ptr from closure
+<!-- doctest-prelude
+: Point { i x i y }
+@ some_fn → i32 { ^ # i32 7 }
+-->
+```nurl
+unsafe @ casts ( @ v ) closure → v {
+    : i n # i ( some_fn )                   // i64-truncate / widen
+    : *Point p # *Point ( nurl_alloc 16 )   // cast i8* to *Point
+    : *u fp # *u closure 0                  // extract fn ptr from closure
+    : *u env # *u closure 1                 // extract env ptr from closure
+    ( nurl_free # s p )
+}
 ```
 
 Pointer casts (except the null `# *T 0`), closure fn / env extraction and
@@ -2023,7 +2129,7 @@ explicit comparison to produce a truth value.
 
 ### 6.8 Sizeof `Z`
 
-```
+```text
 Z type
 ```
 
@@ -2038,7 +2144,7 @@ single byte.
 
 ### 6.9 Aggregate / slice literals
 
-```
+```text
 @ type { expr* }            // aggregate / enum constructor
 [ type | expr* ]            // slice literal
 ```
@@ -2058,11 +2164,20 @@ parsed as a **Go-style channel select** (distinct from the `?? expr {`
 match of §6.1). It proceeds with the **first ready** channel arm, in
 source order (deterministic priority):
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+$ `stdlib/std/channel.nu`
+@ work i n → v {}
+@ handle String s → v {}
+@ quit → v {}
+: ( Channel i ) jobs ( chan_new [i] )
+: ( Channel String ) control ( chan_new [String] )
+-->
+```nurl
 ?? {
     [i]      jobs    → o { ?? o { T n → ( work n )  F → ( quit ) } }
     [String] control → o { ?? o { T s → ( handle s ) F → ( quit ) } }
-    _                → { /* nothing ready */ }
+    _                → {}    // nothing ready
 }
 ```
 
@@ -2079,7 +2194,7 @@ pins the construct.
 
 ### 7.1 Declaration
 
-```
+```text
 @ name [T]? param* → ret { body }
 ```
 
@@ -2147,11 +2262,15 @@ function takes a pointer to a `T` it writes a result through, and the
 argument is a mutable binding whose address is passed — nothing is
 allocated for the result.
 
-```
+```nurl
 & `libcuda` @ cuMemGetInfo_v2 inout i avail inout i total → i32
-: ~ i avail 0
-: ~ i total 0
-: i32 rc ( cuMemGetInfo_v2 avail total )
+
+unsafe @ gpu_free_bytes → i {
+    : ~ i avail 0
+    : ~ i total 0
+    : i32 rc ( cuMemGetInfo_v2 avail total )
+    ^ avail
+}
 ```
 
 The parameter may be a struct too (`inout Timespec ts`): the C function
@@ -2165,7 +2284,12 @@ under a lock of its own; `nocapture` — its result holds nothing of it.
 Unmarked, a `*T` is taken to be written through, and either kind may be
 kept or freed.
 
-```
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+$ `stdlib/std/fs.nu`
+: s dir `/tmp/app`
+-->
+```nurl
 & `c` @ remove in s path → i32
 : !v IoErr r ( file_delete ( nurl_str_cat dir `/data` ) )   // the path is released
 ```
@@ -2176,10 +2300,16 @@ owns it — it is released at scope exit, or handed on (`string_adopt`,
 another `sink` parameter), like any owned string — so nothing frees it by
 hand. Only a raw string `s` can be a `sink` result.
 
-```
+```nurl
+$ `stdlib/core/string.nu`
+
 & `c` @ strdup s src → sink s
-: s copy ( strdup `text` )      // released at scope exit
-: String owned ( string_adopt ( strdup `more` ) )
+
+unsafe @ copies → String {
+    : s copy ( strdup `text` )      // released at scope exit
+    : String owned ( string_adopt ( strdup `more` ) )
+    ^ owned
+}
 ```
 
 ### 7.3 Return ownership
@@ -2209,7 +2339,7 @@ targets).
 A generic function carries a `[T+]` type-parameter list immediately
 after the function name:
 
-```
+```nurl
 @ id [T] T x → T { ^ x }
 ```
 
@@ -2397,7 +2527,12 @@ A binding passed `inout` to a call MUST NOT be aliased by another
 `inout` or a plain by-value read). This is the "N readers XOR 1
 writer" rule scoped to a single call.
 
-```
+<!-- doctest-prelude
+: Counter { i n i max }
+@ swap_counters inout Counter a inout Counter b → v { : i t . a n = . a n . b n = . b n t }
+: ~ Counter c @ Counter { 3 10 }
+-->
+```nurl expect-error="'c' is both mutably borrowed"
 ( swap_counters c c )   // error: 'c' is both mutably borrowed and
                          //         aliased by another argument
 ```
@@ -2596,7 +2731,7 @@ Every diagnostic carries:
 
 Example:
 
-```
+```text
 foo.nu:6:3: error: bare identifier 'nurl_print' as a statement has no
                     effect — calls in NURL are written '( name args )',
                     not 'name args'. Did you forget the parens?

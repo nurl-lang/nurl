@@ -174,6 +174,9 @@ reported error leaves output bytes unchanged.
 start/end group tags; callers must pair them.
 
 ```nurl
+$ `stdlib/core/vec.nu`
+$ `stdlib/ext/protobuf.nu`
+
 @ encode_samples → !( Vec u ) ProtoError {
     : ( Vec u ) packed ( vec_new [u] )
     // These fixed small writes cannot fail the output-size limit.

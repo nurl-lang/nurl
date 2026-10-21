@@ -42,6 +42,10 @@ $ `deps/http-client/src/http_client.nu`
 
 ## Configuration
 
+<!-- doctest-file-prelude
+$ `deps/http-client/src/http_client.nu`
+: HttpClient c ( http_client_new )
+-->
 ```nurl
 : HttpClient c ( http_client_new )
 ( http_client_set_verify c F )          // pinned / self-signed / test servers
@@ -55,6 +59,13 @@ $ `deps/http-client/src/http_client.nu`
 
 ## Verbs
 
+<!-- doctest-prelude
+: s url `https://example.org/`
+: s method `GET`
+: s content_type `text/plain`
+: ( Vec u ) body ( vec_new [u] )
+: ( Vec Header ) headers ( vec_new [Header] )
+-->
 ```nurl
 ( http_client_get    c url )
 ( http_client_head   c url )
