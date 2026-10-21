@@ -36,7 +36,7 @@ $ `stdlib/core/marker.nu`
 // written `unsafe`, and `nurlc --unsafe-report` lists it).
 : Wrapper { ( Rc i ) r }
 
-unsafe %Send Wrapper {}
+unsafe % Send Wrapper {}
 
 @ ship [T : Send] T v → i { ^ 1 }
 

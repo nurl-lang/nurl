@@ -191,11 +191,15 @@ unsafe @ __pp_next_is_decl FmtToks ts i k i n → b {
                 //                 or a previous param name (`@ f %Pet p`); a
                 //                 top-level modulo const does not exist
                 //                 (const-folding excludes `%`), so it is exact.
+                //                 A declaration prefix is no such IDENT: after
+                //                 `pub` / `unsafe` the `%` opens a trait or an
+                //                 impl (`unsafe % Send T { }`, `pub % Ord [T]`).
                 // As a type sigil it glues to the trait name (`%Pet`, like
                 // `*T`/`?T`) and does NOT open a new top-level declaration.
+                : b prev_pfx | ( __pp_text_eq prev_text `pub` ) ( __pp_text_eq prev_text `unsafe` )
                 : b pct_type & ( __pp_text_eq text `%` )
                 | | ( __pp_text_eq prev_text `:` ) & ( __pp_text_eq prev_text `→` ) arrow_is_type
-                & & == prev_kind TT_FMT_IDENT == bd 0 == pd 0
+                & & & == prev_kind TT_FMT_IDENT == bd 0 == pd 0 ! prev_pfx
 
                 ? == kind TT_FMT_EOF {
                     // Ensure exactly one trailing newline at end of

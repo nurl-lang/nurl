@@ -12,11 +12,11 @@ $ `stdlib/core/marker.nu`
 
 : Wrapper { ( Rc i ) r }
 
-unsafe %Send Wrapper {}
+unsafe % Send Wrapper {}
 
 : Guarded { Cell c }
 
-unsafe %Sync Guarded {}
+unsafe % Sync Guarded {}
 
 % NotSend Guarded {}
 

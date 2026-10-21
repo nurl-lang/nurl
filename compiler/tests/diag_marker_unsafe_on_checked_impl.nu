@@ -9,6 +9,6 @@ $ `stdlib/core/marker.nu`
 
 : Db { s handle }
 
-unsafe %NotSend Db {}
+unsafe % NotSend Db {}
 
 @ main → i { ^ 0 }

@@ -120,6 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nurlfmt spaces a trait or impl after `pub` / `unsafe` (#68).** It took
+  the `%` after the prefix for a `%Trait` object type and glued it
+  (`unsafe %Send W {}`, `pub %Ord [T] {}`); it prints `unsafe % Send W {}`
+  now, as at the start of a line. stdlib/core/marker.nu and four tests
+  reformatted. Test: tools/tests/test_formatter.py.
 - **A closure capturing a struct with a `% Drop` field, handed to a call,
   no longer cuts the function off (#67).** The env's drop asked for the
   struct's field-by-field drop, and the compiler printed that `define` in

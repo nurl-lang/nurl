@@ -96,16 +96,16 @@
 // never invent: it is a sound lint, not a proof (`docs/MEMORY.md` §6.3).
 
 // A value of `T` may be moved to another thread.
-pub %Send [T] {}
+pub % Send [T] {}
 
 // Two threads may reach one value of `T` at the same time.
-pub %Sync [T] {}
+pub % Sync [T] {}
 
 // `T` must never cross a thread boundary, whatever its fields suggest.
-pub %NotSend [T] {}
+pub % NotSend [T] {}
 
 // Two threads must never reach one `T` at the same time.
-pub %NotSync [T] {}
+pub % NotSync [T] {}
 
 // Frozen — what a value of `T` lends is read-only. A function that takes
 // a `T` and hands back something it holds (an accessor) lends a view of
@@ -124,7 +124,7 @@ pub %NotSync [T] {}
 // a safe module may mark a type of its own (no `unsafe`). What is trusted
 // is the other direction — a handle of the standard library's that lends
 // shared data and is NOT marked would lend it mutable.
-pub %Frozen [T] {}
+pub % Frozen [T] {}
 
 // Resource — a type whose drop is observable outside the program: it
 // closes a file descriptor, a socket, a database connection, reaps a child
@@ -142,4 +142,4 @@ pub %Frozen [T] {}
 // Mark a type of your own the same way when its drop does something the
 // outside world sees (an FFI close, a flush to a socket). Freeing memory,
 // releasing a lock or a count is not that: a Mutex is not a Resource.
-pub %Resource [T] {}
+pub % Resource [T] {}
