@@ -2554,6 +2554,11 @@ Every diagnostic carries:
 - The source line text.
 - A caret line pointing at the column.
 
+A check that runs once the whole program has been read — a missing
+supertrait impl, a closure that would cross to another thread — has the
+same shape: the position was recorded when the construct was scanned, and
+the line is re-read from the source being compiled.
+
 Example:
 
 ```text

@@ -97,6 +97,21 @@ class ScanTest(unittest.TestCase):
         self.assertTrue(any('backtick' in p for p in problems))
 
 
+class JudgeTest(unittest.TestCase):
+    def test_a_diagnostic_without_a_column_fails_the_block(self):
+        # `file:line: error:` is the shape the deferred supertrait check
+        # used to print; it is never mapped onto the block, so even an
+        # error the annotation expects must not pass in that form.
+        blk = cde.Block('x.md', 1, 'expect-error="supertrait"', [], [], 0)
+        diags = [('error', "type 'i' … not its supertrait 'R'", 'no-column')]
+        self.assertIn('without a column', cde.judge(blk, 1, diags))
+
+    def test_the_column_is_required_to_map_a_diagnostic(self):
+        self.assertIsNone(cde.LOC.match('a.nu:3: error: x'))
+        self.assertIsNotNone(cde.NO_COL.match('a.nu:3: error: x'))
+        self.assertIsNotNone(cde.LOC.match('a.nu:3:7: error: x'))
+
+
 @unittest.skipUnless(NURLC.exists(), 'build/nurlc not built')
 class EndToEndTest(unittest.TestCase):
     def run_on(self, text):
@@ -144,6 +159,13 @@ class EndToEndTest(unittest.TestCase):
         r = self.run_on('```nurl ignore="grammar sketch"\n( nope )\n```\n')
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn('IGNORED 1', r.stdout)
+
+    def test_a_missing_supertrait_is_located_with_a_column(self):
+        r = self.run_on('```nurl expect-error="not its supertrait"\n'
+                        '% R [T] { @ r T s → i }\n'
+                        '% S [T] : R { @ s T s → i }\n'
+                        '% S i { @ s i x → i { ^ x } }\n```\n')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_continue_prepends_the_previous_block(self):
         r = self.run_on('```nurl\n@ twice i x → i { ^ * 2 x }\n```\n\n'

@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports "type 'p' … declared LATER" either. `: P 5` with `P` a struct
   — the one shape the rule cannot read as inferred — says why `P` was
   taken as the type.
+- **Deferred diagnostics carry a column, the echoed line and a caret
+  (agora #61).** A missing supertrait impl printed `file:2: error: …`
+  with nothing under it, unlike every other diagnostic; so did the
+  thread-crossing checks (a closure handed to another thread, a value
+  stored into a thread-shared handle) and a start-time global's
+  initialiser arity. Each records the construct's position when it is
+  scanned and re-reads the line when it reports, anchored at the impl's
+  `%`, the global's name or the statement's start; the supertrait
+  message also names the impl to add. The doc-example gate no longer
+  accepts the column-less form.
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
   closed the fd outside the netpoller lock; a fiber parking on the

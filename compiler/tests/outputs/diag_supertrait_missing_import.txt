@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_supertrait_missing_import_mod.nu:6:1: error: type 'Meter' implements trait 'Ord' but not its supertrait 'Eq' — every 'Ord' type must also implement 'Eq'. Add the impl beside this one: '% Eq Meter { … }', with the methods 'Eq' declares.
+% Ord Meter {
+^
