@@ -15,6 +15,11 @@
 //   ( tls_write conn bytes )                       → !v TlsErr
 //   ( tls_read conn max )                          → !( Vec u ) TlsErr  ([] at EOF)
 //   ( tls_read_into conn dst max )                 → !i TlsErr  (appended to dst; 0 at EOF)
+//   ( tls_key_update conn request_peer )           → !v TlsErr  KeyUpdate (RFC 8446 §4.6.3)
+//   ( tls_ktls conn )                              → i  record protection to the kernel
+//                                                     (1 write, 2 read, 3 both; Linux 6.14+)
+//   ( tls_ktls_default on )                        → v  every connection after its handshake
+//                                                     (or NURL_KTLS=1)
 //   ( tls_close conn )                             → v  close_notify + close the socket
 //
 // A TlsConn is a handle: every copy is the same connection, and its last
@@ -93,6 +98,40 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
+// `head` then `body` to the socket in one sendmsg per attempt
+// (nurl_tcp_write2), parking a fiber while the socket is full.
+@ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
+    : *u hp ( vec_data [u] head )
+    : *u bp ( vec_data [u] body )
+    : i hn ( vec_len [u] head )
+    : i bn ( vec_len [u] body )
+    : i n + hn bn
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
+    : ~ i off 0
+    ~ < off n {
+        : i wn ? < off hn ( nurl_tcp_write2 fd # *u + # i hp off - hn off bp bn ) ( nurl_tcp_write fd # s + # i bp - off hn - n off )
+        ? <= wn 0 {
+            : ~ b retry F
+            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 { = retry ( __tls_io_wait fd 1 ) } {}
+            ? retry {} { ^ F }
+        } { = off + off wn }
+    }
+    ^ T
+}
+
+& `c` @ nurl_ktls_supported → i
+
+& `c` @ nurl_ktls_set i conn i dir i cipher *u key *u iv i seq → i
+
+& `c` @ nurl_ktls_send i conn i rtype *u buf i n → i
+
+& `c` @ nurl_ktls_recv i conn *u buf i n i nowait → i
+
+& `c` @ nurl_ktls_rtype i conn → i
+
+unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
+
 : | TlsErr {
     TlsConnect
     TlsHandshake
@@ -143,6 +182,14 @@ $ `stdlib/core/slice.nu`
     // Outgoing records are built and sealed in place here, one write's
     // worth at a time; it keeps its capacity across writes.
     ( Vec u ) txbuf
+    // kTLS (opt-in, Linux): where each key direction's records are
+    // protected — 0 here, 1 by the kernel as TX, 2 by the kernel as RX —
+    // for the server's write keys (s_*) and the client's (c_*).
+    i ktls_s
+    i ktls_c
+    i ktls_want  // 1 once a handover was asked for: a read side that
+    // could not go yet (rxbuf held a record) goes when rxbuf drains
+    i server  // 1 on the accepting side
     ( Vec u ) s_secret  // retained TLS 1.3 traffic secrets for KeyUpdate
     ( Vec u ) c_secret
     i update_pending  // peer requested our next write-key generation
@@ -553,6 +600,7 @@ $ `stdlib/core/slice.nu`
         : b _al ( vec_set_len [u] . c appbuf - have take )
         ^ @ !i TlsErr { T take }
     } {}
+    ? != 0 ( _tls_ktls_of c peer ) { ^ ( _tls_ktls_read_into c peer dst max ) } {}
     ~ == . c closed 0 {
         ? != . c fatal_alert 0 { ^ @ !i TlsErr { F TlsProtocol } } {}
         ? != . c update_pending 0 {
@@ -607,6 +655,7 @@ $ `stdlib/core/slice.nu`
                             } {}
                             : i got ( __deliver c dst plen max )
                             ( __consume c rlen )
+                            ? & != . c ktls_want 0 == ( vec_len [u] . c rxbuf ) 0 { : i _m ( _tls_ktls_in c ) } {}
                             ? > got 0 { ^ @ !i TlsErr { T got } } {}
                         } {
                             : ( Vec u ) inner ( bytes_slice . c rxbuf 5 + 5 plen )
@@ -656,6 +705,10 @@ $ `stdlib/core/slice.nu`
 }
 
 @ _tls_seal_direction_to inout TlsConnImpl c ( Vec u ) out i dir i content_type ( Vec u ) inner → v {
+    ? != 0 ( _tls_ktls_of c dir ) {
+        ( _tls_rec_range_to c out dir content_type inner 0 ( vec_len [u] inner ) )
+        ^ v
+    } {}
     : i at ( _tls_rec_open out ( vec_len [u] inner ) )
     ( _tls_cat out inner )
     ( _tls_rec_close c out dir at content_type )
@@ -726,8 +779,15 @@ $ `stdlib/core/slice.nu`
 }
 
 // One record of `data[lo, hi)` (content type `ct`) appended to `out`
-// under direction `dir`'s keys.
+// under direction `dir`'s keys. With that direction in the kernel the
+// plaintext of application data is appended instead (the kernel seals
+// it on the way out), and any other content type is sent at once as a
+// record of its own (_tls_ktls_send).
 @ _tls_rec_range_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) data i lo i hi → v {
+    ? != 0 ( _tls_ktls_of c dir ) {
+        ? == ct 23 { ( bytes_extend_raw out # s + # i ( vec_data [u] data ) lo - hi lo ) } { : b _k ( _tls_ktls_send c ct # *u + # i ( vec_data [u] data ) lo - hi lo ) }
+        ^ v
+    } {}
     : i at ( _tls_rec_open out - hi lo )
     ( bytes_extend_raw out # s + # i ( vec_data [u] data ) lo - hi lo )
     ( _tls_rec_close c out dir at ct )
@@ -735,9 +795,188 @@ $ `stdlib/core/slice.nu`
 
 // One record of `head`‖`body`[lo, hi) appended to `out`.
 @ _tls_rec_pair_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) head ( Vec u ) body i lo i hi → v {
+    ? != 0 ( _tls_ktls_of c dir ) {
+        ? == ct 23 { ( _tls_pair_into out head body lo hi ) } {
+            : ( Vec u ) part ( vec_new [u] )
+            ( _tls_pair_into part head body lo hi )
+            : b _k ( _tls_ktls_send c ct ( vec_data [u] part ) ( vec_len [u] part ) )
+        }
+        ^ v
+    } {}
     : i at ( _tls_rec_open out - hi lo )
     ( _tls_pair_into out head body lo hi )
     ( _tls_rec_close c out dir at ct )
+}
+
+// ── kTLS (opt-in, Linux 6.14+) ─────────────────────────────────────
+// After the handshake the connection can hand its record protection to
+// the kernel (runtime: nurl_ktls_*): application data is then plain
+// write / recv on the socket — the kernel seals and opens the records,
+// and sendfile produces records too — while alerts and post-handshake
+// messages travel as records of their own type. It pays for bulk and
+// sendfile traffic; for small API responses the userspace record layer
+// is as fast (docs/NETWORKING.md), hence opt-in: NURL_KTLS=1 in the
+// environment, tls_ktls_default T, or tls_ktls on one connection.
+
+// Is key direction `dir` (0 the server's write keys, 1 the client's)
+// protected by the kernel? 0, or 1 (as TX) / 2 (as RX).
+@ _tls_ktls_of inout TlsConnImpl c i dir → i { ^ ? == dir 0 . c ktls_s . c ktls_c }
+
+// One record of content type `ct` through kernel TX, parking a fiber
+// while the socket is full; a short send continues as further records of
+// the same type (handshake messages may span records; an alert is two
+// bytes). F — and the connection closed — on a send that fails.
+unsafe @ _tls_ktls_send inout TlsConnImpl c i ct * u p i n → b {
+    : b on_fiber != ( nurl_fiber_current ) 0
+    : ~ i off 0
+    ~ < off n {
+        : i wn ( nurl_ktls_send . c fd ct # *u + # i p off - n off )
+        ? <= wn 0 {
+            : ~ b retry F
+            ? & on_fiber == ( nurl_tcp_err_kind . c fd ) 7 { = retry ( __tls_io_wait . c fd 1 ) } {}
+            ? retry {} { = . c closed 1 ^ F }
+        } { = off + off wn }
+    }
+    ^ T
+}
+
+// Process-wide default: -1 not read yet, 0 off, 1 on.
+: ~ i g_tls_ktls -1
+
+// Hand every TLS 1.3 connection to the kernel after its handshake (where
+// the kernel can take it), or stop doing so. Overrides NURL_KTLS.
+@ tls_ktls_default b on → v { = g_tls_ktls ? on 1 0 }
+
+@ __tls_ktls_wanted → b {
+    ? < g_tls_ktls 0 {
+        : s v ( getenv `NURL_KTLS` )
+        = g_tls_ktls 0
+        // `&` evaluates both sides: the null check guards on its own.
+        ? != # i v 0 { ? != 0 ( nurl_str_eq v `1` ) { = g_tls_ktls 1 } {} } {}
+    } {}
+    ^ == g_tls_ktls 1
+}
+
+// Give the connection's record protection to the kernel, each direction
+// that can go: its write side always, its read side only while rxbuf
+// holds nothing undecrypted (bytes of a record already read out of the
+// socket cannot be handed back). Returns what the kernel now protects:
+// 1 the write side, 2 the read side, 3 both, 0 neither (no ULP, an older
+// kernel, TLS 1.2, a closed connection — the record layer here stays).
+@ _tls_ktls_in inout TlsConnImpl c → i {
+    ? | | != . c version 13 != . c established 1 != . c closed 0 { ^ 0 } {}
+    = . c ktls_want 1
+    : i wdir ? == . c server 1 0 1
+    : i rdir - 1 wdir
+    : ~ i mask 0
+    ? == 0 ( _tls_ktls_of c wdir ) {
+        : i rc ? == wdir 0 ( nurl_ktls_set . c fd 1 . c cipher ( vec_data [u] . c s_key ) ( vec_data [u] . c s_iv ) . c s_seq ) ( nurl_ktls_set . c fd 1 . c cipher ( vec_data [u] . c c_key ) ( vec_data [u] . c c_iv ) . c c_seq )
+        ? == rc 0 { ? == wdir 0 { = . c ktls_s 1 } { = . c ktls_c 1 } } {}
+    } {}
+    ? & == 0 ( _tls_ktls_of c rdir ) == ( vec_len [u] . c rxbuf ) 0 {
+        : i rc ? == rdir 0 ( nurl_ktls_set . c fd 2 . c cipher ( vec_data [u] . c s_key ) ( vec_data [u] . c s_iv ) . c s_seq ) ( nurl_ktls_set . c fd 2 . c cipher ( vec_data [u] . c c_key ) ( vec_data [u] . c c_iv ) . c c_seq )
+        ? == rc 0 { ? == rdir 0 { = . c ktls_s 2 } { = . c ktls_c 2 } } {}
+    } {}
+    ? != 0 ( _tls_ktls_of c wdir ) { = mask | mask 1 } {}
+    ? != 0 ( _tls_ktls_of c rdir ) { = mask | mask 2 } {}
+    ^ mask
+}
+
+// Send a KeyUpdate (RFC 8446 §4.6.3) and move this end's writes to the
+// next key generation; with `request_peer` the peer is asked to do the
+// same for its writes (it answers on its next write). Under kTLS the
+// message goes out as a handshake record through the kernel and the
+// kernel takes the new key. TLS 1.3 only.
+@ tls_key_update TlsConn c__h b request_peer → !v TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_key_update_in . c 0 request_peer )
+}
+
+@ _tls_key_update_in inout TlsConnImpl c b request_peer → !v TlsErr {
+    ? | | != . c version 13 != . c established 1 != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
+    : i wdir ? == . c server 1 0 1
+    : ( Vec u ) msg ( vec_new [u] )
+    ( vec_push [u] msg # u 24 ) ( _u24 msg 1 )
+    ( vec_push [u] msg # u ? request_peer 1 0 )
+    : ( Vec u ) buf ( _tls_tx_take c )
+    ( _tls_seal_direction_to c buf wdir 22 msg )
+    : !v TlsErr r ( _tls_tx_flush c buf )
+    ( _tls_tx_put c buf )
+    ?? r { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+    ( _tls_rotate_keys c wdir )
+    ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Is this connection's write side sealed by the kernel — so that a
+// sendfile on its socket produces TLS records? Pending control records
+// (a KeyUpdate answer, an alert) go out first, since bytes written past
+// the record layer would otherwise overtake them. F for a connection
+// that seals its own records, or one that has failed.
+@ tls_ktls_tx_ready TlsConn c__h → b {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_ktls_tx_ready_in . c 0 )
+}
+
+@ _tls_ktls_tx_ready_in inout TlsConnImpl c → b {
+    : i wdir ? == . c server 1 0 1
+    ? | != 1 ( _tls_ktls_of c wdir ) != . c closed 0 { ^ F } {}
+    ?? ( _tls_flush_control c wdir ) { T _ → {} F _ → { ^ F } }
+    ^ == . c closed 0
+}
+
+// tls_ktls for one connection: 1 write side, 2 read side, 3 both, 0
+// neither — see _tls_ktls_in.
+@ tls_ktls TlsConn c__h → i {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_ktls_in . c 0 )
+}
+
+// The handshake's last step: the opt-in handover.
+@ _tls_ktls_auto inout TlsConnImpl c → v {
+    ? ( __tls_ktls_wanted ) { : i _m ( _tls_ktls_in c ) } {}
+}
+
+// _tls_read_into_in with the read side in the kernel: application data
+// straight from the socket into `dst`; an alert or a post-handshake
+// message arrives as a read of its own type and is handled as the
+// record layer handles it.
+unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → !i TlsErr {
+    : i raw . c fd
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? & on_fiber == . c read_nowait 0 { ( nurl_tcp_set_nonblock raw 1 ) } {}
+    ~ == . c closed 0 {
+        ? != . c fatal_alert 0 { ^ @ !i TlsErr { F TlsProtocol } } {}
+        ? != . c update_pending 0 {
+            ? != . c read_nowait 0 { ^ @ !i TlsErr { F TlsRead } } {}
+            ?? ( _tls_flush_control c - 1 peer ) { T _ → {} F error → { ^ @ !i TlsErr { F error } } }
+        } {}
+        ( vec_reserve [u] dst max )
+        : i len ( vec_len [u] dst )
+        : i got ( nurl_ktls_recv raw # *u + # i ( vec_data [u] dst ) len max . c read_nowait )
+        ? > got 0 {
+            : i rt ( nurl_ktls_rtype raw )
+            ? == rt 23 {
+                : b _l ( vec_set_len [u] dst + len got )
+                ^ @ !i TlsErr { T got }
+            } {}
+            : ( Vec u ) inner ( vec_with_cap [u] got )
+            ( bytes_extend_raw inner # s + # i ( vec_data [u] dst ) len got )
+            ? == rt 21 { = . c closed 1 } {
+                ? == rt 22 {
+                    ?? ( _tls_post_hs c inner peer ) { T _ → {} F error → { ^ @ !i TlsErr { F error } } }
+                } {
+                    : !v TlsErr _f ( _tls_post_fail c peer 10 )
+                    ^ @ !i TlsErr { F TlsProtocol }
+                }
+            }
+        } {
+            ? == got 0 { = . c closed 1 ^ @ !i TlsErr { T 0 } } {}
+            ? | != . c read_nowait 0 | ! on_fiber != ( nurl_tcp_err_kind raw ) 7 { ^ @ !i TlsErr { F TlsRead } } {}
+            ? ! ( __tls_io_wait raw 0 ) { ^ @ !i TlsErr { F TlsRead } } {}
+        }
+    }
+    ^ @ !i TlsErr { T 0 }
 }
 
 // The connection's write buffer, TAKEN for one write — an empty one left
@@ -1156,6 +1395,15 @@ $ `stdlib/core/slice.nu`
         = . c c_iv iv
         = . c c_seq 0
     }
+    // A direction the kernel protects takes the new generation too (a
+    // KeyUpdate): the socket cannot fall back to this record layer, so a
+    // key the kernel refuses ends the connection.
+    : i kd ? == dir 0 . c ktls_s . c ktls_c
+    ? != kd 0 {
+        ? != 0 ( nurl_ktls_set . c fd kd . c cipher ( vec_data [u] ? == dir 0 . c s_key . c c_key ) ( vec_data [u] ? == dir 0 . c s_iv . c c_iv ) 0 ) {
+            = . c closed 1
+        } {}
+    } {}
 }
 
 // The prepared AES-GCM key for a traffic key — null for ChaCha20, whose
@@ -2087,6 +2335,7 @@ $ `stdlib/core/slice.nu`
     = . c established 1
     = . c res_master . hs res_master
     = . hs res_master ( vec_new [u] )
+    ( _tls_ktls_auto c )
     ^ @ !v TlsErr { T 0 }
 }
 
@@ -2335,6 +2584,13 @@ $ `stdlib/core/slice.nu`
 // txbuf and written out every 64 KB — so a large write is a few
 // syscalls, and txbuf never holds more than one such batch.
 @ _tls_write_records inout TlsConnImpl c i dir ( Vec u ) head ( Vec u ) body i n b single → !v TlsErr {
+    ? != 0 ( _tls_ktls_of c dir ) {
+        // The kernel cuts and seals the records: the plaintext goes to
+        // the socket as it is, both buffers in one sendmsg.
+        : b written ? single ( _tls_sock_write . c fd head ) ( _tls_sock_write2 . c fd head body )
+        ? ! written { = . c closed 1 ^ @ !v TlsErr { F TlsWrite } } {}
+        ^ @ !v TlsErr { T 0 }
+    } {}
     : ( Vec u ) buf ( _tls_tx_take c )
     : ~ i off 0
     ~ < off n {

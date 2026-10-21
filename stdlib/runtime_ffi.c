@@ -1542,6 +1542,8 @@ typedef struct NurlTcp {
      * its own readiness wait, so accept() must do ONE non-blocking accept
      * and hand EAGAIN back rather than entering the blocking poll loop. */
     int           nonblock;
+    /* Content type of the record nurl_ktls_recv last read (kTLS RX). */
+    int           ktls_rtype;
     /* Reference count (atomic). Created at 1; nurl_tcp_close releases that
      * ref. server_run_async takes an extra ref so a concurrent close (e.g.
      * server_stop from another thread) defers the struct free until the
@@ -2503,6 +2505,242 @@ long long nurl_tcp_write2(long long handle, const char *b1, long long n1,
     }
     h->err_kind = NURL_NET_ERR_OK;
     return total;
+}
+
+/* ── kTLS: TLS 1.3 record protection handed to the kernel ──────────
+ * std/tls.nu runs the handshake itself, then (opt-in) gives each
+ * direction's traffic key to the socket: setsockopt(TCP_ULP, "tls") once,
+ * then SOL_TLS / TLS_TX or TLS_RX with the TLS 1.3 crypto_info. From then
+ * on application data is plain write()/recv() on the socket and the
+ * kernel seals and opens the records (sendfile included); a record of
+ * another content type goes out with a TLS_SET_RECORD_TYPE cmsg and
+ * comes in with TLS_GET_RECORD_TYPE (docs.kernel.org/networking/tls.html).
+ *
+ * KeyUpdate needs the kernel to take a new key in a direction that is
+ * already installed: Linux 6.14 and later (RX pauses with EKEYEXPIRED
+ * after the KeyUpdate record until the new key is set). Older kernels
+ * are refused here, so the connection keeps its userspace record layer
+ * instead of failing on its first KeyUpdate. */
+#if defined(__linux__)
+#include <linux/tls.h>
+#include <sys/utsname.h>
+#ifndef TCP_ULP
+#define TCP_ULP 31
+#endif
+#ifndef SOL_TLS
+#define SOL_TLS 282
+#endif
+
+/* 1 when this kernel can rekey an installed direction (>= 6.14). */
+long long nurl_ktls_supported(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    struct utsname u;
+    int ok = 0;
+    if (uname(&u) == 0) {
+        int maj = 0, min = 0;
+        if (sscanf(u.release, "%d.%d", &maj, &min) == 2)
+            ok = maj > 6 || (maj == 6 && min >= 14);
+    }
+    cached = ok;
+    return ok;
+}
+
+/* Install one direction: dir 1 = TX (records this end writes), 2 = RX.
+ * cipher 1 = AES-128-GCM (16-byte key), 0 = ChaCha20-Poly1305 (32);
+ * iv = the 12-byte static iv; seq = the next record's sequence number.
+ * The first call attaches the "tls" ULP. 0 on success, -1 when the kernel
+ * lacks the ULP (module not loaded and not loadable unprivileged) or the
+ * cipher — the caller keeps its userspace record layer then. */
+long long nurl_ktls_set(long long handle, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK || !key || !iv) return -1;
+    if (dir != 1 && dir != 2) return -1;
+    if (!nurl_ktls_supported()) return -1;
+    if (setsockopt(h->fd, SOL_TCP, TCP_ULP, "tls", 3) != 0 && errno != EEXIST)
+        return -1;
+    unsigned char rec_seq[8];
+    for (int i = 0; i < 8; i++) rec_seq[i] = (unsigned char)((unsigned long long)seq >> (56 - 8 * i));
+    int opt = dir == 1 ? TLS_TX : TLS_RX;
+    int rc;
+    if (cipher == 1) {
+        struct tls12_crypto_info_aes_gcm_128 ci;
+        memset(&ci, 0, sizeof ci);
+        ci.info.version = TLS_1_3_VERSION;
+        ci.info.cipher_type = TLS_CIPHER_AES_GCM_128;
+        memcpy(ci.salt, iv, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+        memcpy(ci.iv, iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE, TLS_CIPHER_AES_GCM_128_IV_SIZE);
+        memcpy(ci.key, key, TLS_CIPHER_AES_GCM_128_KEY_SIZE);
+        memcpy(ci.rec_seq, rec_seq, 8);
+        rc = setsockopt(h->fd, SOL_TLS, opt, &ci, sizeof ci);
+        explicit_bzero(&ci, sizeof ci);
+    } else if (cipher == 0) {
+        struct tls12_crypto_info_chacha20_poly1305 ci;
+        memset(&ci, 0, sizeof ci);
+        ci.info.version = TLS_1_3_VERSION;
+        ci.info.cipher_type = TLS_CIPHER_CHACHA20_POLY1305;
+        memcpy(ci.iv, iv, TLS_CIPHER_CHACHA20_POLY1305_IV_SIZE);
+        memcpy(ci.key, key, TLS_CIPHER_CHACHA20_POLY1305_KEY_SIZE);
+        memcpy(ci.rec_seq, rec_seq, 8);
+        rc = setsockopt(h->fd, SOL_TLS, opt, &ci, sizeof ci);
+        explicit_bzero(&ci, sizeof ci);
+    } else {
+        return -1;
+    }
+    if (rc != 0) return -1;
+    if (dir == 2) {
+        /* TLS 1.3 records from a peer that does not pad decrypt straight
+         * into the reader's buffer; a padded one is re-read, not lost. */
+        int one = 1;
+        (void)setsockopt(h->fd, SOL_TLS, TLS_RX_EXPECT_NO_PAD, &one, sizeof one);
+    }
+    return 0;
+}
+
+/* One record of content type `rtype` (an alert, a post-handshake
+ * message) through kTLS TX: sendmsg with a TLS_SET_RECORD_TYPE cmsg. The
+ * bytes sent, or -1 with err_kind set (EAGAIN → would-block). */
+long long nurl_ktls_send(long long handle, long long rtype, const char *buf, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n < 0 || (n > 0 && !buf)) { h->err_kind = NURL_NET_ERR_WRITE; return -1; }
+    char cbuf[CMSG_SPACE(sizeof(unsigned char))];
+    memset(cbuf, 0, sizeof cbuf);
+    struct iovec iov;
+    iov.iov_base = (void*)buf;
+    iov.iov_len  = (size_t)n;
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof cbuf;
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+    cm->cmsg_level = SOL_TLS;
+    cm->cmsg_type  = TLS_SET_RECORD_TYPE;
+    cm->cmsg_len   = CMSG_LEN(sizeof(unsigned char));
+    *CMSG_DATA(cm) = (unsigned char)rtype;
+    ssize_t wn;
+    do {
+        wn = sendmsg(h->fd, &msg,
+#  ifdef MSG_NOSIGNAL
+                     MSG_NOSIGNAL);
+#  else
+                     0);
+#  endif
+    } while (wn < 0 && errno == EINTR);
+    if (wn < 0) { h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE); return -1; }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)wn;
+}
+
+/* Read through kTLS RX: up to `n` plaintext bytes of ONE content type
+ * (the kernel never merges records of different types into one read);
+ * the type is nurl_ktls_rtype's afterwards. `nowait` makes this one
+ * call non-blocking whatever the socket's mode. 0 at EOF, -1 with
+ * err_kind set (EAGAIN → would-block). */
+long long nurl_ktls_recv(long long handle, const char *buf, long long n, long long nowait) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!buf) { h->err_kind = NURL_NET_ERR_READ; return -1; }
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
+    char cbuf[CMSG_SPACE(sizeof(unsigned char))];
+    struct iovec iov;
+    iov.iov_base = (void*)buf;
+    iov.iov_len  = (size_t)n;
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof cbuf;
+    ssize_t rd;
+    do {
+        rd = recvmsg(h->fd, &msg, nowait ? MSG_DONTWAIT : 0);
+    } while (rd < 0 && errno == EINTR);
+    if (rd < 0) { h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ); return -1; }
+    h->ktls_rtype = 23;
+    for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm))
+        if (cm->cmsg_level == SOL_TLS && cm->cmsg_type == TLS_GET_RECORD_TYPE)
+            h->ktls_rtype = *CMSG_DATA(cm);
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)rd;
+}
+#else
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long handle, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)handle; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long handle, long long rtype, const char *buf, long long n) {
+    (void)handle; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long handle, const char *buf, long long n, long long nowait) {
+    (void)handle; (void)buf; (void)n; (void)nowait; return -1;
+}
+#endif
+
+/* Up to `n` bytes of file descriptor `fd` from offset `off` to the
+ * connection, copied by the kernel from the page cache (sendfile(2)) —
+ * on a kTLS socket the kernel seals the records as it sends. One call,
+ * as far as the socket takes: the bytes sent (0 at the end of the
+ * file), -1 with err_kind set (EAGAIN → would-block), or -2 where this
+ * platform or this file cannot be sent this way — the caller reads and
+ * writes instead. */
+#if defined(__linux__)
+#include <sys/sendfile.h>
+long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!nurl__tcp_prepare_write(h)) return -1;
+    off_t o = (off_t)off;
+    ssize_t wn;
+    /* sendfile has no MSG_NOSIGNAL: a peer that has gone raises SIGPIPE,
+     * whose default action ends the process — every other write here
+     * passes MSG_NOSIGNAL. Block it for the call, and consume the one
+     * this call raised (only if none was pending before, so another
+     * cause's signal is left alone). */
+    sigset_t pipe_set, old_mask, pending;
+    sigemptyset(&pipe_set);
+    sigaddset(&pipe_set, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipe_set, &old_mask);
+    sigemptyset(&pending);
+    sigpending(&pending);
+    int had_pipe = sigismember(&pending, SIGPIPE);
+    do {
+        wn = sendfile(h->fd, (int)fd, &o, (size_t)(n > 0x7ffff000 ? 0x7ffff000 : n));
+    } while (wn < 0 && errno == EINTR);
+    int saved = errno;
+    if (wn < 0 && saved == EPIPE && !had_pipe) {
+        struct timespec zero = { 0, 0 };
+        while (sigtimedwait(&pipe_set, NULL, &zero) < 0 && errno == EINTR) {}
+    }
+    pthread_sigmask(SIG_SETMASK, &old_mask, NULL);
+    errno = saved;
+    if (wn < 0) {
+        if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP) return -2;
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)wn;
+}
+#else
+long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long long n) {
+    (void)handle; (void)fd; (void)off; (void)n; return -2;
+}
+#endif
+
+/* The content type of the record nurl_ktls_recv last read. */
+long long nurl_ktls_rtype(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    return h ? h->ktls_rtype : 0;
 }
 
 /* Async-runtime hooks — expose fd for reactor registration; toggle
@@ -3994,6 +4232,22 @@ long long nurl_tcp_write_nowait(long long h, const char *buf, long long n) { ret
 long long nurl_tcp_wait_io(long long h, long long events, long long ms) { return nurl__ni_tcp_wait_io(h, events, ms); }
 long long nurl_tcp_read_nowait(long long h, const char *buf, long long n) { return nurl__ni_tcp_read_nowait(h, buf, n); }
 long long nurl_tcp_get_fd(long long h)                { return nurl__ni_tcp_get_fd(h); }
+/* No kTLS here: std/tls.nu keeps its userspace record layer. */
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long h, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)h; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long h, long long rtype, const char *buf, long long n) {
+    (void)h; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long h, const char *buf, long long n, long long nowait) {
+    (void)h; (void)buf; (void)n; (void)nowait; return -1;
+}
+long long nurl_ktls_rtype(long long h) { (void)h; return 0; }
+long long nurl_tcp_sendfile(long long h, long long fd, long long off, long long n) {
+    (void)h; (void)fd; (void)off; (void)n; return -2;
+}
 void nurl_tcp_set_nonblock(long long h, long long on) { nurl__ni_tcp_set_nonblock(h, on); }
 void nurl_tcp_ref(long long h)                        { nurl__ni_tcp_ref(h); }
 void nurl_tcp_unref(long long h)                      { nurl__ni_tcp_unref(h); }
@@ -4162,6 +4416,22 @@ long long nurl_tcp_set_send_buffer(long long h, long long bytes) { (void)h; (voi
  * (which references these unconditionally — they just never fire under
  * WASI because the underlying tcp_listen/_accept returned 0). */
 long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
+/* No kTLS here: std/tls.nu keeps its userspace record layer. */
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long h, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)h; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long h, long long rtype, const char *buf, long long n) {
+    (void)h; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long h, const char *buf, long long n, long long nowait) {
+    (void)h; (void)buf; (void)n; (void)nowait; return -1;
+}
+long long nurl_ktls_rtype(long long h) { (void)h; return 0; }
+long long nurl_tcp_sendfile(long long h, long long fd, long long off, long long n) {
+    (void)h; (void)fd; (void)off; (void)n; return -2;
+}
 void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
 void nurl_tcp_ref(long long h)                         { (void)h; }
 void nurl_tcp_unref(long long h)                       { (void)h; }

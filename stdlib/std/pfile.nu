@@ -24,6 +24,8 @@
 //   ( pfile_write_at f src off )      → !v IoErr   all of src, or an error
 //   ( pfile_read_vec_at f off n )     → !( Vec u ) IoErr   a fresh Vec of
 //                                      up to n bytes
+//   ( pfile_read_vec_into f out off n ) → !i IoErr   up to n bytes appended
+//                                      to out (its spare capacity)
 //   ( pfile_size f )                  → !i IoErr
 //   ( pfile_set_len f n )             → !v IoErr   cut (or zero-extend)
 //   ( pfile_sync f )                  → !v IoErr   data and metadata on
@@ -89,6 +91,10 @@ $ `stdlib/std/fs.nu`
 
 @ __pfile_fd PFile f → i32 { ^ # i32 . ( shared_ptr [PFileImpl] . f ctl ) fd }
 
+// The descriptor, for the stdlib's own transport layer (std/net.nu's
+// tcp_sendfile hands it to sendfile(2)); the handle keeps it open.
+@ _pfile_fd PFile f → i { ^ # i ( __pfile_fd f ) }
+
 @ __pfile_err → IoErr { ^ ( _io_err_of_kind ( errno_kind ) ) }
 
 @ pfile_open s path i mode → !PFile IoErr {
@@ -145,6 +151,26 @@ unsafe @ pfile_write_at PFile f ( Slice u ) src i off → !v IoErr {
     : i got \ ( pfile_read_at f ( slice_from_vec [u] out ) off )
     : b _t ( vec_truncate [u] out got )
     ^ @ !( Vec u ) IoErr { T out }
+}
+
+// Up to `n` bytes at `off` appended to `out` — read straight into its
+// spare capacity, so a caller streaming a file through one buffer
+// allocates once. Ok(how many: fewer than `n` only at the end of the
+// file, 0 there).
+@ pfile_read_vec_into PFile f ( Vec u ) out i off i n → !i IoErr {
+    ? <= n 0 { ^ @ !i IoErr { T 0 } } {}
+    ( vec_reserve [u] out n )
+    : i len ( vec_len [u] out )
+    : *u p ( vec_data [u] out )
+    : ~ i got 0
+    ~ < got n {
+        : i r ( nurl_pread ( __pfile_fd f ) # *u + # i p + len got - n got + off got )
+        ? < r 0 { ^ @ !i IoErr { F ( __pfile_err ) } } {}
+        ? == r 0 { break } {}
+        = got + got r
+    }
+    : b _l ( vec_set_len [u] out + len got )
+    ^ @ !i IoErr { T got }
 }
 
 @ pfile_size PFile f → !i IoErr {
