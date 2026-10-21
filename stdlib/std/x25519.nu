@@ -745,7 +745,7 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 // TweetNaCl's ladder step for step, on the scalar-limb field above:
 // a, c are x2, z2 and b, d are x3, z3; t is scratch for a product whose
 // destination is also one of its operands.
-simd @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+@ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
     : u64 sw1 # u64 ( _ld64u scalar 8 )
     : u64 sw2 # u64 ( _ld64u scalar 16 )
@@ -1012,7 +1012,7 @@ simd @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
 
 // scalar·B via the comb → 32-byte little-endian Montgomery u (the X25519
 // public key). Constant-time; no per-call table build or Vec allocations.
-simd @ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
+@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
     : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
     : u64 sw1 # u64 ( _ld64u scalar 8 )
     : u64 sw2 # u64 ( _ld64u scalar 16 )

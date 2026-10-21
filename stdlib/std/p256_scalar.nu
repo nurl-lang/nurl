@@ -532,7 +532,7 @@ inline @ __sn_mul_u64 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0
 }
 
 // a^-1 mod n, Fermat: a^(n-2) with a fixed 4-bit window on scalar u64 limbs.
-simd @ p256n_inv_be ( Vec u ) a → ( Vec u ) {
+@ p256n_inv_be ( Vec u ) a → ( Vec u ) {
     : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
     : ( Vec i ) am ( __sn_to_mont av )
     : *i amp ( vec_data [i] am )

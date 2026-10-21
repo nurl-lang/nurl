@@ -106,7 +106,7 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = h + t1 + s0 mj
 }
 
-simd @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
+@ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
     : ~ i wi 0
     ~ < wi 16 {
         = . mp wi ( __sha256_be32 bp * wi 4 )
