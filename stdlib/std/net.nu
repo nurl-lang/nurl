@@ -956,6 +956,19 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
     ^ @ !v NetErr { T 0 }
 }
 
+unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
+
+// Shut the connection down — from any thread — without closing it: its
+// read side (a read blocked on it, on a thread or a fiber, returns EOF;
+// writes still go out), or with `both` its write side too (a blocked
+// write fails). The connection is still closed as usual by its owner.
+// The HTTP server's graceful drain ends idle keep-alive connections this
+// way. Windows always shuts both sides; a provider with no way to shut a
+// socket does nothing.
+@ tcp_conn_shutdown TcpConn c b both → v {
+    ( nurl_tcp_conn_shutdown ( __conn_fd c ) ? both 1 0 )
+}
+
 // Absolute monotonic nanoseconds; zero clears the write bound. Unlike
 // the idle timeout this survives partial writes and every TLS record.
 @ tcp_set_write_deadline TcpConn c i ns → v {

@@ -236,7 +236,10 @@ source-level traps.
   fire-and-forget shape) bumps the pending count; every fiber that runs to
   completion decrements it. A long-running accept fiber that never returns
   keeps `runtime_run` blocked forever — which is exactly what a server wants.
-  Call `server_stop` / `runtime_shutdown` to drain on demand.
+  Call `server_stop` / `runtime_shutdown` to stop on demand, or
+  `server_drain s deadline_ms` for a graceful stop that also closes idle
+  keep-alive connections (their fibers would otherwise wait out the idle
+  timeout) and bounds the wait for requests in flight.
 - **A spawned closure moves what it captures.** A `: ~` by-reference
   capture may not reach a `spawn` closure, as for `thread_spawn` (see
   [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable state across fibers

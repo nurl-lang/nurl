@@ -155,8 +155,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `string_push_bytes`, `string_push_str` and the NUL seal: a recycled
     String is refilled with one copy, no view binding or reserve call.
 
+### Added
+
+- **Graceful drain for the HTTP servers (agora #54).** `server_drain s
+  deadline_ms` stops accepting (the listener closes), closes idle
+  keep-alive connections at once, lets requests in flight finish with
+  `Connection: close` — HTTP/2 connections get GOAWAY(NO_ERROR) — and
+  waits up to the deadline before shutting the rest; T when everything
+  finished in time. Works for `server_run`, `server_run_pool` and
+  `server_run_async`. Also `server_drain_begin`, `server_shutdown`,
+  `server_draining`, `server_conn_count`, `h2_conn_serve_drain`,
+  `http3_server_drain` (GOAWAY on every HTTP/3 connection) and
+  `tcp_conn_shutdown` (std/net.nu: shut a connection from another thread
+  without closing it). ROADMAP listed "graceful shutdown" before there
+  was any: `server_stop` only closed the listener, so an idle keep-alive
+  client held a stopping server until its idle timeout. New test
+  `http_server_drain` (in-flight completes, idle closed, HTTP/2 GOAWAY,
+  new connections refused, deadline enforced; pool and fiber).
+
 ### Packages
 
+- http 0.7.8: SIGTERM / SIGINT drain the app (`http_app_drain_ms`,
+  default 10 s) instead of only closing the listener.
 - http 0.7.7: an unset `http_app_max_keepalive` follows the serving
   mode — no cap under `http_app_async`, 1000 for the thread servers.
 

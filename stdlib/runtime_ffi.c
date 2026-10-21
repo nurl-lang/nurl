@@ -2637,6 +2637,27 @@ void nurl_tcp_shutdown(long long handle) {
     nurl__reactor_wake_if_started();
 }
 
+/* Shut a CONNECTION down without closing its fd — its read side, or
+ * (`both`) both ways: the HTTP server's graceful drain (ext/http_server.nu)
+ * ends an idle keep-alive connection, or one past the drain deadline,
+ * from another thread. A thread blocked in recv on it returns EOF (and
+ * one in send an error, when `both`), a fiber parked on it wakes (the
+ * reactor sees the hang-up), and the fd itself is still released by its
+ * owner's nurl_tcp_close — closing it here would race a concurrent recv
+ * and fd reuse, as for the listener above. Winsock does not reliably wake
+ * a recv for a receive-only shutdown, so Windows always shuts both. */
+void nurl_tcp_conn_shutdown(long long handle, long long both) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+#ifdef _WIN32
+    (void)both;
+    shutdown(h->fd, SD_BOTH);
+#else
+    shutdown(h->fd, both ? SHUT_RDWR : SHUT_RD);
+#endif
+    nurl__reactor_wake_if_started();
+}
+
 long long nurl_tcp_err_kind(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     return h ? h->err_kind : NURL_NET_ERR_OTHER;
@@ -3970,6 +3991,8 @@ long long nurl_tcp_write2(long long h, const char *b1, long long n1,
 }
 void nurl_tcp_close(long long h)    { nurl__ni_tcp_close(h); }
 void nurl_tcp_shutdown(long long h) { nurl__ni_tcp_shutdown(h); }
+/* No host import shuts a connection: a drain falls back to its deadline. */
+void nurl_tcp_conn_shutdown(long long h, long long both) { (void)h; (void)both; }
 long long nurl_tcp_err_kind(long long h) { return nurl__ni_tcp_err_kind(h); }
 /* Borrowed, as on every other platform: valid until the next call. */
 const char *nurl_tcp_peer_addr(long long h) {
@@ -4151,6 +4174,7 @@ long long nurl_tcp_write2(long long h, const char *b1, long long n1,
 }
 void nurl_tcp_close(long long h) { (void)h; }
 void nurl_tcp_shutdown(long long h) { (void)h; }
+void nurl_tcp_conn_shutdown(long long h, long long both) { (void)h; (void)both; }
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
 char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }

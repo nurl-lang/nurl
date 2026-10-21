@@ -681,6 +681,14 @@ unsafe @ __wait i fd i for_write i timeout_ms → i {
 
 @ nurl_tcp_unref i handle → v { ( nurl_tcp_close handle ) }
 
+// A connection shut from another context (the HTTP server's drain): the
+// same shut as a listener's — both ways, whichever `both` asks — and the
+// same wake.
+@ nurl_tcp_conn_shutdown i handle i both → v {
+    ( sock_shutdown ( __tab ) handle )
+    ( __wake_ready )
+}
+
 @ nurl_tcp_shutdown i handle → v {
     ( sock_shutdown ( __tab ) handle )
     // A shut fd reports itself ready so a waiter wakes and finds the
