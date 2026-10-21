@@ -3,8 +3,15 @@
 // On ONE worker, a fiber resolves `localhost` (a name: /etc/hosts via
 // getaddrinfo, so it goes to the runtime's resolver threads) while a
 // second fiber yields in a loop, counting. The resolving fiber parks
-// until its lookup completes, so the yielder must have run during the
-// lookups; had getaddrinfo run on the worker, it could not have.
+// until its lookup completes, so the yielder can run during the
+// lookups; had getaddrinfo run on the worker, it never could. A warm
+// resolver thread can answer /etc/hosts before the fiber gets round to
+// parking (the netpoller's fast path then skips the park — nothing was
+// blocked, but nothing interleaved either), so each kind of lookup is
+// repeated until the yielder is seen to run — at least 5 times, at most
+// 200. On the blocking implementation it is never seen.
+//
+// dns_reverse (getnameinfo, 127.0.0.1 → its /etc/hosts name) the same.
 //
 // Then it connects to `localhost`, with a deadline. `localhost`
 // commonly resolves to ::1 first and the listener is on 127.0.0.1 only,
@@ -70,7 +77,7 @@ $ `stdlib/std/time.nu`
         : ~ i found 0
         : ~ i during 0
         : ~ i k 0
-        ~ < k 5 {
+        ~ & < k 200 | < k 5 == during 0 {
             : i y0 yields
             ?? ( dns_resolve `localhost` ) {
                 T ips → ? ( __has_loopback ips ) { = found + found 1 } {}
@@ -79,8 +86,24 @@ $ `stdlib/std/time.nu`
             = during + during - yields y0
             = k + k 1
         }
-        ( __say `dns_resolve_loopback=` ( nurl_str_int found ) )
+        ( __say `dns_resolve_loopback_every_time=` ? == found k `yes` `no` )
         ( __say `yielder_ran_during_lookups=` ? > during 0 `yes` `no` )
+
+        // The reverse lookup (getnameinfo) takes the same pool.
+        : ~ i named 0
+        = during 0
+        = k 0
+        ~ & < k 200 | < k 5 == during 0 {
+            : i y1 yields
+            ?? ( dns_reverse `127.0.0.1` ) {
+                T name → ? > ( string_len name ) 0 { = named + named 1 } {}
+                F → {}
+            }
+            = during + during - yields y1
+            = k + k 1
+        }
+        ( __say `dns_reverse_named_every_time=` ? == named k `yes` `no` )
+        ( __say `yielder_ran_during_reverse=` ? > during 0 `yes` `no` )
 
         : ~ i ok 0
         = k 0

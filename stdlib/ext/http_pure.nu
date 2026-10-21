@@ -205,6 +205,12 @@ $ `stdlib/core/mem.nu`
     } {}
     : i fd ( nurl_tcp_connect host port )
     ? <= fd 0 { ^ @ !HttpConn i { F 1 } } {}
+    // A failed connect still hands back a handle — carrying the error,
+    // with no socket. Reading it used to report "closed" one call later.
+    ? != ( nurl_tcp_err_kind fd ) 0 {
+        ( nurl_tcp_close fd )
+        ^ @ !HttpConn i { F 1 }
+    } {}
     ^ @ !HttpConn i { T ( __hp_conn_new 0 fd @ TlsConn { ( shared_null [TlsConnImpl] ) } skey ) }
 }
 
@@ -250,16 +256,11 @@ $ `stdlib/core/mem.nu`
             F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 2 6
         }
     } {}
+    // Context-aware (tls.nu's plaintext writer): on a fiber an EAGAIN
+    // parks on the reactor instead of blocking the worker.
     : i fd . c fd
-    : *u dp ( vec_data [u] data )
-    : i n ( vec_len [u] data )
-    : ~ i off 0
-    ~ < off n {
-        : i wn ( nurl_tcp_write fd # s + # i dp off - n off )
-        ? <= wn 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6 } {}
-        = off + off wn
-    }
-    ^ 0
+    ? ( _tls_sock_write fd data ) { ^ 0 } {}
+    ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6
 }
 
 // Read one chunk from the transport, appending to `acc`. Returns:
@@ -284,7 +285,18 @@ $ `stdlib/core/mem.nu`
     ( vec_reserve [u] acc 16384 )
     : i len ( vec_len [u] acc )
     : *u dp ( vec_data [u] acc )
-    : i n ( nurl_tcp_read fd # s + # i dp len 16384 )
+    // Context-aware, as tls.nu's record reader: on a fiber the socket is
+    // non-blocking and an EAGAIN parks on the reactor (honouring the
+    // hp_conn_set_timeout deadline) — a plain blocking read here held
+    // the worker, and every fiber queued on it, until the server spoke.
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
+    : ~ i n ( nurl_tcp_read fd # s + # i dp len 16384 )
+    ~ & on_fiber & < n 0 == ( nurl_tcp_err_kind fd ) 7 {
+        ? ( __tls_io_wait fd 0 ) {
+            = n ( nurl_tcp_read fd # s + # i dp len 16384 )
+        } { ^ -2 }
+    }
     ? < n 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 -2 -1 } {}
     ? == n 0 { ^ 0 } {}
     ( vec_set_len [u] acc + len n )

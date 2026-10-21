@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The last blocking network calls on a fiber.** `dns_reverse`'s
+  `getnameinfo` now runs on the runtime's resolver pool (a reverse job
+  kind) with the fiber parked, like every forward lookup. The pure HTTP
+  client's plaintext transport (`ext/http_pure.nu`: `hp_conn_read_some`,
+  `hp_conn_write`) issued plain blocking reads and writes, so a slow
+  server held the fiber's worker; on a fiber they now park on the
+  netpoller, honouring `hp_conn_set_timeout`. `hp_conn_open` reports a
+  failed TCP connect at once instead of one read later. A sweep of the
+  stdlib's remaining raw socket calls found every other one already
+  context-aware (udp.nu, net.nu, tls.nu) or wrapped in a TcpConn.
+
 - **errno can no longer be read on the wrong thread after a fiber park.**
   errno is a thread-local behind a `const` accessor, so the optimiser may
   compute its address once per function and reuse it; with the runtime

@@ -52,8 +52,8 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   `dns_reverse ip → ? String` runs `NI_NAMEREQD`. On a fiber the forward
   lookups (and the ones inside `udp_connect`, `udp_send_to` and
   `udp_addr_resolve`) run on the runtime's resolver threads with the
-  fiber parked, as for `tcp_connect`; `dns_reverse` still runs on the
-  caller.
+  fiber parked, as for `tcp_connect`; so does `dns_reverse`'s
+  `getnameinfo`.
 
 TCP writes can share an absolute operation budget with
 `tcp_set_write_deadline(conn, monotonic_ns)`. Zero clears it, and
