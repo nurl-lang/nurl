@@ -20,6 +20,11 @@
 //   multipart multipart/form-data; the first line is the boundary
 //   urlish    one text through url_parse, the query / form / percent
 //             decoders, cookie_parse and the permessage-deflate offer
+//   tlscert   a TLS Certificate message (what a server sends a client):
+//             byte 0 bit 0 picks the TLS 1.2 layout; the chain walk,
+//             x509 parse, name / validity / CA checks and signatures
+//   csr       a DER PKCS#10 request: csr_parse + csr_verify
+//   pem       PEM text: pem_to_der → x509_parse, csr_from_pem → csr_parse
 //
 // Over a loopback socket (the input is everything the peer sends, then
 // the peer half-closes and drains whatever comes back):
@@ -54,6 +59,9 @@ $ `stdlib/ext/toml.nu`
 $ `stdlib/ext/cbor.nu`
 $ `stdlib/ext/msgpack.nu`
 $ `stdlib/std/x509.nu`
+$ `stdlib/std/tls_verify.nu`
+$ `stdlib/std/csr.nu`
+$ `stdlib/std/pkey.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -178,6 +186,31 @@ unsafe @ __fz_pid → i { ^ # i ( getpid ) }
     : ( Vec MultipartPart ) parts ( parse_multipart_form body ( string_data boundary ) )
     : i _c ( multipart_count parts )
     : i _f ( multipart_find_first parts `file` )
+}
+
+@ __fz_tlscert ( Vec u ) b → v {
+    : i n ( vec_len [u] b )
+    ? == n 0 { ^ v } {}
+    : i is12 & ( __fz_byte b 0 ) 1
+    : ( Vec u ) msg ( bytes_slice b 1 n )
+    : i _rc ( tls_chain_verify msg is12 `localhost` )
+    : X509 _leaf ( tls_leaf_cert msg is12 )
+}
+
+@ __fz_csr ( Vec u ) b → v {
+    : Csr c ( csr_parse b )
+    : b _ok ( csr_verify c )
+}
+
+@ __fz_pem s src → v {
+    ?? ( pem_to_der src ) {
+        T der → {
+            : X509 _c ( x509_parse der )
+            ( __fz_csr der )
+        }
+        F _ → {}
+    }
+    ?? ( csr_from_pem src ) { T der → ( __fz_csr der ) F _ → {} }
 }
 
 @ __fz_urlish s src → v {
@@ -384,6 +417,8 @@ unsafe @ __fz_pid → i { ^ # i ( getpid ) }
     ? != 0 ( nurl_str_eq which `qpack` ) { ( __fz_qpack ( __fuzz_bytes path ) ) ^ 0 } {}
     ? != 0 ( nurl_str_eq which `h3frame` ) { ( __fz_h3frame ( __fuzz_bytes path ) ) ^ 0 } {}
     ? != 0 ( nurl_str_eq which `multipart` ) { ( __fz_multipart ( __fuzz_bytes path ) ) ^ 0 } {}
+    ? != 0 ( nurl_str_eq which `tlscert` ) { ( __fz_tlscert ( __fuzz_bytes path ) ) ^ 0 } {}
+    ? != 0 ( nurl_str_eq which `csr` ) { ( __fz_csr ( __fuzz_bytes path ) ) ^ 0 } {}
 
     // ── text formats (C-string; embedded NUL truncates, by contract) ─
     ? != 0 ( nurl_str_eq which `json` ) {
@@ -413,6 +448,11 @@ unsafe @ __fz_pid → i { ^ # i ( getpid ) }
     ? != 0 ( nurl_str_eq which `urlish` ) {
         : s src ( nurl_read_file path )
         ( __fz_urlish src )
+        ^ 0
+    } {}
+    ? != 0 ( nurl_str_eq which `pem` ) {
+        : s src ( nurl_read_file path )
+        ( __fz_pem src )
         ^ 0
     } {}
     ^ 2

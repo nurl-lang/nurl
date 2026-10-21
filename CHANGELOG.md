@@ -8,7 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The sanitizer parser fuzzer covers the network-facing parsers**
+  (agora t53). `tools/fuzz/parse_harness.nu` gains 16 targets beside the
+  data formats: HPACK, HTTP/2 frames, QPACK, HTTP/3 frames, multipart,
+  URL / query / form / cookie / permessage-deflate offers, the TLS
+  Certificate-message chain walk, CSR and PEM, and — over loopback, with
+  the input as the peer's byte stream — the HTTP/1.1 server loop, the
+  HTTP/2 server path, a pure-TLS listener's accept (records + ClientHello),
+  the TLS client handshake, the WebSocket reader (incl.
+  permessage-deflate), the HTTP/1.1 client and the MQTT client.
+  `fuzz_parsers.py` adds per-protocol generators that keep lengths and
+  varints consistent, structure-aware DER mutation, real captures under
+  `tools/fuzz/corpus/`, batched runs with per-input triage, a time budget
+  per target, and LeakSanitizer plus allocation / RSS caps. The weekly
+  `fuzz.yml` job runs the network targets by time (`net_parser_minutes`,
+  default 4 each) beside the data formats; `FUZZRESULTS.md` gets a
+  per-target table.
+
 ### Fixed
+
+- **The HTTP/1.1 client's chunked decoder read before its buffer on a
+  hostile chunk size** (`stdlib/ext/http_pure.nu`, found by the new
+  `http1resp` fuzz target). The size parser had no ceiling, so a 16–17
+  digit size wrapped to a negative length and the body copy moved the
+  read position 2^62 bytes back — a SEGV from one response. Sizes are now
+  1*HEXDIG under 2^48 with optional whitespace and extensions, anything
+  else fails the response; the CRLF after each chunk's data is checked;
+  chunk-size and trailer lines are capped at 8 KiB and the response head
+  at 256 KiB, so a server can no longer grow the receive buffer without
+  bound. (`http_client_chunked_strict`)
+- **RSA verification bounds the key it is handed** (`stdlib/std/rsa.nu`).
+  A certificate chain or CSR could carry any key: a 600-bit exponent made
+  one signature check take most of a second at 2048 bits (some 50× an
+  e = 65537 check, and the cost grows with the square of the modulus), and
+  e = 1 was accepted, under which the signature equal to the encoded
+  message verifies anything. `rsa_pkcs1_verify` and `rsa_pss_verify_sha256`
+  now refuse a modulus over 8192 bits and an exponent that is even or
+  outside 3 .. 2^32−1. (`rsa_pubkey_bounds`)
 
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration

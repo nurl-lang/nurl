@@ -100,6 +100,11 @@ TEXT_SEEDS = {
         b"permessage-deflate; server_max_window_bits",
         b"%" * 300 + b"=" + b"&" * 300,
     ],
+    "pem": [
+        b"-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n",
+        b"-----BEGIN CERTIFICATE REQUEST-----\n" + b"A" * 3000 + b"\n-----END CERTIFICATE REQUEST-----\n",
+        b"-----BEGIN X-----\n====\n",
+    ],
 }
 
 BINARY_SEEDS = {
@@ -194,25 +199,28 @@ BINARY_SEEDS = {
     ],
     "tls": [],
     "tlscli": [],
+    "csr": [b"\x30\x82\x01\x00\x30\x00", b"\x30" * 100],
+    "tlscert": [b"\x00\x0b\x00\x00\x09\x00\x00\x00\x05\x00\x00\x01\x00",
+                b"\x01\x0b\x00\x00\x06\x00\x00\x03\xff\xff\xff"],
 }
 
-# h2spec- / h3spec-style captures and real TLS hellos live on disk.
-CORPUS_DIRS = {"tls": ["tls"], "tlscli": ["tls"], "h2": ["h2"], "h2frame": ["h2"]}
+# Real captures live on disk: TLS hellos / a server flight (corpus/tls),
+# certificates and CSRs minted by OpenSSL (corpus/x509). (directory,
+# file-name prefix) per target.
+CORPUS_DIRS = {"tls": [("tls", "ch_")], "tlscli": [("tls", "sh_")],
+               "x509": [("x509", "cert_")], "csr": [("x509", "csr_")]}
 
 
 def load_corpus(fmt):
     out = []
-    for d in CORPUS_DIRS.get(fmt, [fmt]):
+    for d, prefix in CORPUS_DIRS.get(fmt, [(fmt, "")]):
         p = os.path.join(CORPUS, d)
         if not os.path.isdir(p):
             continue
         for name in sorted(os.listdir(p)):
-            if fmt == "tls" and not name.startswith("ch_"):
-                continue
-            if fmt == "tlscli" and not name.startswith("sh_"):
-                continue
-            with open(os.path.join(p, name), "rb") as fh:
-                out.append(fh.read())
+            if name.startswith(prefix):
+                with open(os.path.join(p, name), "rb") as fh:
+                    out.append(fh.read())
     return out
 
 
@@ -226,8 +234,7 @@ def u32(v): return struct.pack(">I", v & 0xFFFFFFFF)
 
 def pick_len(rng, actual):
     """Mostly the honest length; sometimes a lie."""
-    r = rng.random()
-    if r < 0.9:
+    if rng.random() > ODD / 3:
         return actual
     return max(0, rng.choice([0, 1, actual - 1, actual + 1, actual * 2, 0xFFFF, 0xFFFFFF, rng.randint(0, 70000)]))
 
@@ -242,7 +249,7 @@ def hpack_int(rng, value, prefix, flags):
     while value >= 128:
         out.append((value & 127) | 128)
         value >>= 7
-    if rng.random() < 0.05:
+    if rng.random() < ODD / 3:
         out += b"\x80" * rng.randint(1, 12)
     out.append(value)
     return bytes(out)
@@ -260,25 +267,34 @@ H2_VALUES = [b"GET", b"POST", b"/", b"/a?b=c", b"http", b"https", b"localhost", 
 
 def hpack_string(rng, s):
     if rng.random() < 0.25:
-        body = rng.choice(HUFF) if rng.random() < 0.6 else rng.randbytes(rng.randint(0, 12))
+        body = rng.choice(HUFF) if rng.random() > ODD else rng.randbytes(rng.randint(0, 12))
         return hpack_int(rng, pick_len(rng, len(body)), 7, 0x80) + body
     return hpack_int(rng, pick_len(rng, len(s)), 7, 0) + s
 
 
 def gen_hpack_block(rng, request=False):
     out = bytearray()
-    if rng.random() < 0.2:
+    if rng.random() < 0.15:
         out += hpack_int(rng, rng.choice([0, 64, 4096, 1 << 20, rng.randint(0, 9000)]), 5, 0x20)
     if request:
         out += b"\x82" if rng.random() < 0.8 else b"\x83"      # :method GET / POST
         out += b"\x86"                                          # :scheme http
-        out += b"\x84"                                          # :path /
+        out += b"\x84" if rng.random() < 0.7 else b"\x44" + hpack_string(rng, b"/a?b=c")  # :path
         out += b"\x41" + hpack_string(rng, b"localhost")        # :authority
-    for _ in range(rng.randint(0, 8)):
+    for _ in range(odd(rng, [0, 1, 2, 3], [5, 8, 40])):
+        if rng.random() > ODD:                                  # a well-formed regular field
+            r = rng.random()
+            if r < 0.3:
+                out += hpack_int(rng, rng.randint(15, 61), 7, 0x80)
+            else:
+                flags, prefix = rng.choice([(0x40, 6), (0x00, 4), (0x10, 4)])
+                out += hpack_int(rng, rng.choice([16, 19, 28, 31, 32, 58]), prefix, flags)
+                out += hpack_string(rng, rng.choice([b"*/*", b"gzip", b"a=b", b"text/plain", b"nurl/1"]))
+            continue
         r = rng.random()
-        if r < 0.3:                                             # indexed
-            out += hpack_int(rng, rng.choice([1, 2, 4, 8, 61, 62, 63, 70, rng.randint(0, 200)]), 7, 0x80)
-        elif r < 0.85:                                          # literal forms
+        if r < 0.3:                                             # indexed, odd index
+            out += hpack_int(rng, rng.choice([0, 1, 2, 4, 8, 61, 62, 63, 70, rng.randint(0, 200)]), 7, 0x80)
+        elif r < 0.85:                                          # literal forms, odd names / values
             flags, prefix = rng.choice([(0x40, 6), (0x00, 4), (0x10, 4)])
             if rng.random() < 0.5:
                 out += hpack_int(rng, rng.randint(1, 70), prefix, flags)
@@ -303,54 +319,56 @@ def h2_frame(rng, ftype, flags, sid, payload):
 
 def gen_h2_frames(rng, n):
     out = bytearray()
-    sid = 1
+    sid = -1
     for _ in range(n):
         r = rng.random()
-        if rng.random() < 0.3:
+        if r < 0.3 or sid < 0:                                  # HEADERS (+CONTINUATION)
             sid += 2
-        s = sid if rng.random() < 0.9 else rng.choice([0, 2, sid - 2, 0x7FFFFFFF, 0xFFFFFFFF])
-        if r < 0.25:                                            # HEADERS (+CONTINUATION)
+            s = sid if rng.random() > ODD else rng.choice([0, 2, max(sid - 2, 0), 0x7FFFFFFF, 0xFFFFFFFF])
             blk = gen_hpack_block(rng, True)
-            flags = rng.choice([0x5, 0x4, 0x1, 0x0, 0x25, 0x2d, 0x0c])
+            flags = odd(rng, [0x5, 0x5, 0x4], [0x1, 0x0, 0x25, 0x2d, 0x0c, 0x24])
             pre = b""
             if flags & 0x8:
                 pre += u8(rng.randint(0, 20))
             if flags & 0x20:
                 pre += u32(rng.choice([0, s, 0x80000000 | s])) + u8(rng.randint(0, 255))
             post = b"\x00" * (pre[0] if flags & 0x8 and pre and rng.random() < 0.7 else 0)
-            if not flags & 0x4 and rng.random() < 0.8:
-                cut = rng.randint(0, len(blk))
-                out += h2_frame(rng, 1, flags, s, pre + blk[:cut] + post)
-                for _ in range(rng.randint(1, 3)):
-                    out += h2_frame(rng, 9, 0, s, blk[cut:cut + rng.randint(0, 8)])
-                out += h2_frame(rng, 9, 4, s, blk[cut:])
+            if rng.random() < 0.25:                             # split across CONTINUATION
+                cuts = sorted(rng.randint(0, len(blk)) for _ in range(rng.randint(1, 3)))
+                pieces = [blk[a:b] for a, b in zip([0] + cuts, cuts + [len(blk)])]
+                out += h2_frame(rng, 1, flags & ~0x4, s, pre + pieces[0] + post)
+                for k, piece in enumerate(pieces[1:]):
+                    last = k == len(pieces) - 2
+                    out += h2_frame(rng, 9, 4 if last or rng.random() < ODD else 0, s, piece)
             else:
                 out += h2_frame(rng, 1, flags, s, pre + blk + post)
-        elif r < 0.4:                                           # DATA
+            continue
+        s = sid if rng.random() > ODD else rng.choice([0, 2, sid + 2, 0x7FFFFFFF, 0xFFFFFFFF])
+        if r < 0.5:                                             # DATA
             body = rng.randbytes(rng.randint(0, 64))
-            flags = rng.choice([0, 1, 8, 9])
+            flags = odd(rng, [0, 1], [8, 9])
             if flags & 8:
                 pad = rng.randint(0, 300)
                 body = u8(pad) + body + b"\x00" * min(pad, 40)
             out += h2_frame(rng, 0, flags, s, body)
-        elif r < 0.5:                                           # SETTINGS
-            p = b"".join(u16(rng.choice([1, 2, 3, 4, 5, 6, 8, 9, rng.randint(0, 0xFFFF)])) +
-                         u32(rng.choice([0, 1, 100, 16384, 16777215, 0x7FFFFFFF, 0xFFFFFFFF, rng.randint(0, 1 << 32)]))
+        elif r < 0.6:                                           # SETTINGS
+            p = b"".join(u16(odd(rng, [1, 3, 4, 5, 6], [2, 8, 9, rng.randint(0, 0xFFFF)])) +
+                         u32(odd(rng, [0, 100, 4096, 16384, 65535], [1, 16777215, 0x7FFFFFFF, 0xFFFFFFFF, rng.randint(0, 1 << 32)]))
                          for _ in range(rng.randint(0, 5)))
-            out += h2_frame(rng, 4, rng.choice([0, 0, 1]), rng.choice([0, 0, 0, 1]), p)
-        elif r < 0.6:                                           # WINDOW_UPDATE
-            out += h2_frame(rng, 8, 0, rng.choice([0, s]), u32(rng.choice([0, 1, 65535, 0x7FFFFFFF, 0xFFFFFFFF])))
-        elif r < 0.67:
-            out += h2_frame(rng, 6, rng.choice([0, 1]), rng.choice([0, 0, 1]), rng.randbytes(8))
-        elif r < 0.74:
+            out += h2_frame(rng, 4, odd(rng, [0, 1], [3]), odd(rng, [0], [1]), p)
+        elif r < 0.7:                                           # WINDOW_UPDATE
+            out += h2_frame(rng, 8, 0, rng.choice([0, s]), u32(odd(rng, [1, 65535, 1 << 20], [0, 0x7FFFFFFF, 0xFFFFFFFF])))
+        elif r < 0.77:
+            out += h2_frame(rng, 6, rng.choice([0, 1]), odd(rng, [0], [1]), rng.randbytes(odd(rng, [8], [0, 7, 9])))
+        elif r < 0.82:
             out += h2_frame(rng, 3, 0, s, u32(rng.randint(0, 14)))
-        elif r < 0.8:
-            out += h2_frame(rng, 7, 0, 0, u32(rng.randint(0, sid)) + u32(rng.randint(0, 14)) + rng.randbytes(rng.randint(0, 9)))
-        elif r < 0.86:
+        elif r < 0.87:
             out += h2_frame(rng, 2, 0, s, u32(rng.randint(0, sid + 2)) + u8(rng.randint(0, 255)))
         elif r < 0.9:
+            out += h2_frame(rng, 7, 0, 0, u32(rng.randint(0, sid)) + u32(rng.randint(0, 14)) + rng.randbytes(rng.randint(0, 9)))
+        elif r < 0.93:
             out += h2_frame(rng, 5, 4, s, u32(s + 1) + gen_hpack_block(rng, True))
-        elif r < 0.95:
+        elif r < 0.96:
             out += h2_frame(rng, 9, rng.choice([0, 4]), s, gen_hpack_block(rng))
         else:
             out += h2_frame(rng, rng.randint(10, 255), rng.randint(0, 255), s, rng.randbytes(rng.randint(0, 20)))
@@ -718,35 +736,54 @@ def gen_mqtt(rng):
 
 # ── HTTP/1.1 ─────────────────────────────────────────────────────────
 
-METHODS = [b"GET", b"POST", b"PUT", b"HEAD", b"OPTIONS", b"DELETE", b"CONNECT", b"PRI", b"get", b"G\x00T", b""]
-TARGETS_ = [b"/", b"/a/b?c=d&e=%41", b"*", b"http://h/x?y", b"//x", b"/%zz", b"/" + b"a" * 9000, b"/a b", b"?"]
-VERSIONS = [b"HTTP/1.1", b"HTTP/1.1", b"HTTP/1.0", b"HTTP/2.0", b"HTTP/1.10", b"http/1.1", b"HTTP/9", b""]
+# Each field is valid most of the time and odd now and then (`odd`), so a
+# message usually gets through the line parser to the framing and body
+# logic — a generator whose every message trips on the request line only
+# ever tests the request line.
+ODD = 0.12
+
+
+def odd(rng, ok, bad, p=ODD):
+    return rng.choice(bad) if rng.random() < p else rng.choice(ok)
+
+
+METHODS = ([b"GET", b"POST", b"PUT", b"HEAD", b"DELETE"],
+           [b"OPTIONS", b"CONNECT", b"PRI", b"get", b"G\x00T", b"", b"X" * 40])
+TARGETS_ = ([b"/", b"/a/b?c=d&e=%41", b"/x?k=v&k=w", b"/static/f.txt"],
+            [b"*", b"http://h/x?y", b"//x", b"/%zz", b"/" + b"a" * 9000, b"/a b", b"?", b"/\x00"])
+VERSIONS = ([b"HTTP/1.1", b"HTTP/1.1", b"HTTP/1.0"],
+            [b"HTTP/2.0", b"HTTP/1.10", b"http/1.1", b"HTTP/9", b"", b"HTTP/1.1 "])
 
 
 def http_headers(rng, body_kind):
     hs = []
-    if rng.random() < 0.9:
-        hs.append(b"Host: " + rng.choice([b"x", b"", b"a:1", b"x, y"]))
-    for _ in range(rng.randint(0, 6)):
-        hs.append(rng.choice([
-            b"Connection: " + rng.choice([b"close", b"keep-alive", b"Upgrade", b"close, te", b""]),
+    if rng.random() < 0.95:
+        hs.append(b"Host: " + odd(rng, [b"x", b"localhost:8080"], [b"", b"a:1", b"x, y"]))
+    for _ in range(rng.randint(0, 5)):
+        hs.append(odd(rng, [
+            b"Connection: " + rng.choice([b"close", b"keep-alive", b"keep-alive"]),
             b"Content-Type: " + rng.choice([b"text/plain", b"multipart/form-data; boundary=b",
                                              b"application/x-www-form-urlencoded"]),
-            b"Expect: 100-continue", b"Upgrade: " + rng.choice([b"websocket", b"h2c"]),
-            b"X-" + rng.randbytes(3).hex().encode() + b": " + rng.choice(TEXTS),
-            b"Cookie: a=b; c=d", b"Bad Header: v", b"NoColon", b": novalue", b" lead: ws",
-            b"X: a\r\n folded", b"X:" + b"v" * rng.choice([10, 8200, 70000]),
-            b"Range: bytes=0-1,-5", b"Authorization: Basic Zm9vOmJhcg==",
-        ]))
+            b"X-" + rng.randbytes(3).hex().encode() + b": " + rng.choice(TEXTS[:3]),
+            b"Cookie: a=b; c=d", b"Accept: */*", b"Range: bytes=0-1,-5",
+            b"Authorization: Basic Zm9vOmJhcg==", b"Expect: 100-continue",
+        ], [
+            b"Connection: " + rng.choice([b"Upgrade", b"close, te", b""]),
+            b"Upgrade: " + rng.choice([b"websocket", b"h2c"]),
+            b"Bad Header: v", b"NoColon", b": novalue", b" lead: ws",
+            b"X: a\r\n folded", b"X:" + b"v" * rng.choice([8200, 70000]),
+            b"X-" + rng.randbytes(2).hex().encode() + b": " + rng.choice(TEXTS),
+        ], 0.2))
     if body_kind == "cl":
-        hs.append(b"Content-Length: " + rng.choice([b"%d", b"%d", b"+%d", b"0x%x", b" %d ", b"%d, %d", b"-1",
-                                                     b"99999999999999999999"]).replace(b"%d", b"{n}").replace(b"%x", b"{n}"))
+        hs.append(b"Content-Length: " + odd(rng, [b"{n}"], [b"+{n}", b"0x{n}", b" {n} ", b"{n}, {n}", b"{n},{n}",
+                                                         b"-1", b"99999999999999999999", b""]))
     elif body_kind == "chunked":
-        hs.append(b"Transfer-Encoding: " + rng.choice([b"chunked", b"chunked", b"Chunked", b" chunked", b"gzip, chunked",
-                                                        b"chunked, gzip", b"chunked\x0b", b"identity"]))
-        if rng.random() < 0.1:
+        hs.append(b"Transfer-Encoding: " + odd(rng, [b"chunked", b"Chunked"],
+                                               [b" chunked", b"gzip, chunked", b"chunked, gzip", b"chunked\x0b",
+                                                b"identity", b"chunked, chunked"]))
+        if rng.random() < 0.08:
             hs.append(b"Content-Length: 3")
-    if rng.random() < 0.05:
+    if rng.random() < 0.03:
         hs = hs * rng.randint(20, 120)                   # header-count limit
     rng.shuffle(hs)
     return hs
@@ -756,13 +793,13 @@ def http_chunked_body(rng):
     out = bytearray()
     for _ in range(rng.randint(0, 4)):
         data = rng.randbytes(rng.randint(0, 40))
-        size = rng.choice([b"%x" % len(data), b"%X" % len(data), b"000%x" % len(data),
-                           b"%x;ext=v" % len(data), b"%x ;e" % len(data)])
-        if rng.random() < 0.05:
-            size = rng.choice([b"FFFFFFFFFFFFFFFF", b"10000000000000000", b"-1", b"", b"0x5", b"7fffffffffffffff"])
-        out += size + rng.choice([b"\r\n", b"\r\n", b"\n"]) + data + rng.choice([b"\r\n", b"\r\n", b"\r\n", b"X\r\n", b""])
-    out += b"0" + rng.choice([b"", b";x=y"]) + b"\r\n"
-    for _ in range(rng.choice([0, 0, 1, 2, 70])):
+        size = odd(rng, [b"%x" % len(data), b"%X" % len(data)],
+                   [b"000%x" % len(data), b"%x;ext=v" % len(data), b"%x ;e" % len(data),
+                    b"FFFFFFFFFFFFFFFF", b"10000000000000000", b"-1", b"", b"0x5", b"7fffffffffffffff",
+                    b"%x" % (len(data) + 1), b"C000000000000000"])
+        out += size + odd(rng, [b"\r\n"], [b"\n", b"\r"]) + data + odd(rng, [b"\r\n"], [b"X\r\n", b"", b"\n"])
+    out += b"0" + odd(rng, [b""], [b";x=y", b"0000"]) + b"\r\n"
+    for _ in range(odd(rng, [0, 0, 1], [2, 70])):
         out += b"Trailer-" + rng.randbytes(2).hex().encode() + b": v\r\n"
     if rng.random() < 0.95:
         out += b"\r\n"
@@ -773,23 +810,24 @@ def gen_http1(rng):
     out = bytearray()
     for _ in range(rng.randint(1, 4)):
         kind = rng.choice(["none", "none", "cl", "chunked"])
-        eol = b"\r\n" if rng.random() < 0.95 else b"\n"
-        line = rng.choice(METHODS) + b" " + rng.choice(TARGETS_) + b" " + rng.choice(VERSIONS)
-        if rng.random() < 0.05:
+        eol = odd(rng, [b"\r\n"], [b"\n"], 0.04)
+        line = odd(rng, *METHODS) + b" " + odd(rng, *TARGETS_) + b" " + odd(rng, *VERSIONS)
+        if rng.random() < 0.04:
             line = line.replace(b" ", rng.choice([b"  ", b"\t", b""]), 1)
         body = b""
         if kind == "cl":
             body = rng.randbytes(rng.randint(0, 64))
         elif kind == "chunked":
             body = http_chunked_body(rng)
-        hs = [h.replace(b"{n}", str(len(body) if rng.random() < 0.85 else rng.randint(0, 200)).encode()) for h in http_headers(rng, kind)]
+        n = str(len(body) if rng.random() < 0.9 else rng.randint(0, 200)).encode()
+        hs = [h.replace(b"{n}", n) for h in http_headers(rng, kind)]
         out += line + eol + eol.join(hs) + (eol if hs else b"") + eol + body
     return bytes(out)
 
 
 def gen_http1resp(rng):
     out = bytearray()
-    for _ in range(rng.choice([0, 0, 0, 1, 2])):         # interim 1xx responses
+    for _ in range(odd(rng, [0, 0, 1], [2, 40])):         # interim 1xx responses
         out += b"HTTP/1.1 " + rng.choice([b"100 Continue", b"103 Early Hints", b"101 Switching"]) + b"\r\n\r\n"
     kind = rng.choice(["none", "cl", "cl", "chunked", "eof"])
     body = b""
@@ -797,17 +835,18 @@ def gen_http1resp(rng):
         body = rng.randbytes(rng.randint(0, 64))
     elif kind == "chunked":
         body = http_chunked_body(rng)
-    status = rng.choice([b"200 OK", b"204 No Content", b"304 Not Modified", b"404 Not Found", b"200",
-                         b"999 X", b"-1 X", b"abc", b"20 short", b"200 " + b"r" * 9000])
-    hs = [h.replace(b"{n}", str(len(body) if rng.random() < 0.85 else rng.randint(0, 200)).encode())
-          for h in http_headers(rng, kind if kind != "eof" else "none") if not h.startswith(b"Host")]
+    status = odd(rng, [b"200 OK", b"200 OK", b"204 No Content", b"304 Not Modified", b"404 Not Found"],
+                 [b"200", b"999 X", b"-1 X", b"abc", b"20 short", b"200 " + b"r" * 9000])
+    n = str(len(body) if rng.random() < 0.9 else rng.randint(0, 200)).encode()
+    hs = [h.replace(b"{n}", n) for h in http_headers(rng, kind if kind != "eof" else "none")
+          if not h.startswith(b"Host")]
     if rng.random() < 0.3:
         hs.append(b"Set-Cookie: s=1; Path=/; HttpOnly")
     if rng.random() < 0.1:
         hs.append(b"Location: /elsewhere")
     if kind == "eof":
         hs.append(b"Connection: close")
-    ver = rng.choice([b"HTTP/1.1", b"HTTP/1.1", b"HTTP/1.0", b"HTTP/2", b"HTTX/1.1", b""])
+    ver = odd(rng, [b"HTTP/1.1", b"HTTP/1.1", b"HTTP/1.0"], [b"HTTP/2", b"HTTX/1.1", b""])
     out += ver + b" " + status + b"\r\n" + b"\r\n".join(hs) + (b"\r\n" if hs else b"") + b"\r\n" + body
     return bytes(out)
 
@@ -858,11 +897,151 @@ def gen_urlish(rng):
     return b"; ".join(params) + rng.choice([b"", b", permessage-deflate", b","])
 
 
+# ── DER (x509, CSR, the TLS Certificate message) ─────────────────────
+#
+# Structure-aware: parse the TLV tree, change ONE node (its bytes, its
+# tag, a length lie, a duplicate, a deletion, a big INTEGER), then
+# re-encode with every enclosing length recomputed — so the mutation
+# reaches the field parsers instead of failing the outermost length.
+
+DER_CONSTRUCTED = {0x30, 0x31, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8}
+
+
+def der_parse(b, off=0, end=None, depth=0):
+    end = len(b) if end is None else end
+    nodes = []
+    while off < end:
+        if end - off < 2:
+            return None
+        tag = b[off]
+        ln = b[off + 1]
+        p = off + 2
+        if ln & 0x80:
+            k = ln & 0x7F
+            if k == 0 or k > 4 or p + k > end:
+                return None
+            ln = int.from_bytes(b[p:p + k], "big")
+            p += k
+        if p + ln > end:
+            return None
+        body = b[p:p + ln]
+        kids = None
+        if depth < 12 and (tag in DER_CONSTRUCTED or tag == 0x04 or (tag == 0x03 and body[:1] == b"\x00")):
+            inner = body[1:] if tag == 0x03 else body
+            kids = der_parse(inner, 0, None, depth + 1) if inner else None
+            if tag not in DER_CONSTRUCTED and kids is not None and not kids:
+                kids = None
+        nodes.append([tag, body, kids])
+        off = p + ln
+    return nodes
+
+
+def der_len(rng, n):
+    if rng.random() < 0.03:
+        return rng.choice([b"\x80", b"\x84\xff\xff\xff\xff", b"\x81\x01", b"\x83" + n.to_bytes(3, "big")])
+    if n < 128:
+        return bytes([n])
+    k = (n.bit_length() + 7) // 8
+    return bytes([0x80 | k]) + n.to_bytes(k, "big")
+
+
+def der_encode(rng, nodes):
+    out = bytearray()
+    for tag, body, kids in nodes:
+        if kids is not None:
+            inner = der_encode(rng, kids)
+            body = (b"\x00" + inner) if tag == 0x03 else inner
+        out += bytes([tag]) + der_len(rng, len(body)) + body
+    return bytes(out)
+
+
+def der_walk(nodes, acc):
+    for n in nodes:
+        acc.append((nodes, n))
+        if n[2] is not None:
+            der_walk(n[2], acc)
+    return acc
+
+
+def der_mutate(data, rng):
+    tree = der_parse(data)
+    if not tree:
+        return mutate(data, rng)
+    for _ in range(rng.randint(1, 3)):
+        sites = der_walk(tree, [])
+        parent, node = rng.choice(sites)
+        op = rng.randint(0, 7)
+        if op == 0:
+            node[1], node[2] = mutate(node[1], rng), None
+        elif op == 1:
+            node[0] = rng.choice([0x02, 0x03, 0x04, 0x05, 0x06, 0x0C, 0x13, 0x17, 0x18, 0x30, 0x31, 0x80, 0xA0, 0xA3, rng.randint(0, 255)])
+        elif op == 2 and len(parent) < 64:
+            parent.insert(parent.index(node), [node[0], node[1], node[2]])
+        elif op == 3 and len(parent) > 1:
+            parent.remove(node)
+        elif op == 4:
+            node[1], node[2] = rng.choice([b"", b"\x00", b"\xff" * rng.randint(1, 600), b"\x00" * 40, rng.randbytes(rng.randint(1, 40))]), None
+        elif op == 5:
+            node[0], node[1], node[2] = 0x02, rng.choice([b"\x00", b"\x80", b"\x00\x80", b"\x7f" + b"\xff" * 600, b"\x01" + b"\x00" * 520]), None
+        elif op == 6:
+            node[0], node[1], node[2] = 0x06, rng.choice([bytes.fromhex("2a864886f70d010101"), bytes.fromhex("2a8648ce3d0201"),
+                                                          bytes.fromhex("2b6570"), bytes.fromhex("608648016503040311"), b"\xff" * 12, b""]), None
+        else:
+            node[0], node[1], node[2] = rng.choice([0x17, 0x18]), rng.choice([b"991231235959Z", b"500101000000Z", b"20991231235959Z",
+                                                                                b"0", b"9912312359", b"19700101000000+0100"]), None
+    return der_encode(rng, tree)
+
+
+def corpus_or(fmt, fallback):
+    c = load_corpus(fmt)
+    return c if c else fallback
+
+
+def gen_x509(rng):
+    return der_mutate(rng.choice(corpus_or("x509", BINARY_SEEDS["x509"])), rng)
+
+
+def gen_csr(rng):
+    return der_mutate(rng.choice(corpus_or("csr", [b"\x30\x00"])), rng)
+
+
+def gen_tlscert(rng):
+    certs = corpus_or("x509", BINARY_SEEDS["x509"])
+    is12 = rng.random() < 0.3
+    chain = [rng.choice(certs) for _ in range(rng.choice([1, 1, 2, 2, 3, 17]))]
+    chain = [der_mutate(c, rng) if rng.random() < 0.5 else c for c in chain]
+    lst = bytearray()
+    for c in chain:
+        lst += u24(pick_len(rng, len(c))) + c
+        if not is12:
+            ext = rng.choice([b"", b"", b"\x00\x05\x00\x01\x00", rng.randbytes(rng.randint(0, 9))])
+            lst += u16(pick_len(rng, len(ext))) + ext
+    body = (b"" if is12 else vec8(rng, rng.choice([b"", b"", rng.randbytes(rng.randint(1, 8))]))) + u24(pick_len(rng, len(lst))) + bytes(lst)
+    return bytes([1 if is12 else 0]) + u8(11) + u24(pick_len(rng, len(body))) + body
+
+
+def gen_pem(rng):
+    import base64
+    der = gen_csr(rng) if rng.random() < 0.3 else gen_x509(rng)
+    label = rng.choice([b"CERTIFICATE", b"CERTIFICATE REQUEST", b"NEW CERTIFICATE REQUEST", b"PRIVATE KEY", b"X"])
+    b64 = base64.b64encode(der)
+    if rng.random() < 0.2:
+        b64 = mutate(b64, rng)
+    width = rng.choice([64, 64, 76, 1, 0])
+    lines = [b64[i:i + width] for i in range(0, len(b64), width)] if width else [b64]
+    eol = rng.choice([b"\n", b"\r\n", b"\n\n"])
+    out = b"-----BEGIN " + label + b"-----" + eol + eol.join(lines) + eol
+    if rng.random() < 0.9:
+        out += b"-----END " + label + b"-----" + eol
+    return out
+
+
 GENERATORS = {
     "hpack": gen_hpack, "h2frame": gen_h2frame, "h2": gen_h2, "qpack": gen_qpack,
     "h3frame": gen_h3frame, "tls": gen_tls, "tlscli": gen_tlscli, "ws": gen_ws,
     "mqtt": gen_mqtt, "http1": gen_http1, "http1resp": gen_http1resp,
     "multipart": gen_multipart, "urlish": gen_urlish,
+    "x509": gen_x509, "csr": gen_csr, "tlscert": gen_tlscert, "pem": gen_pem,
 }
 
 # Inputs per harness run. Socket targets set up a connection per input;
@@ -959,7 +1138,12 @@ class Runner:
         """Run inputs for `fmt` until the iteration budget or the deadline."""
         bsz = self.args.batch or BATCH.get(fmt, DEFAULT_BATCH)
         it = 0
+        start = last_note = time.time()
         while (budget_iters is None or it < budget_iters) and (deadline is None or time.time() < deadline):
+            if deadline is not None and time.time() - last_note > 600:
+                last_note = time.time()
+                print(f"[{fmt}] … {stats['execs']} execs, {(last_note - start) / 60:.0f} min, "
+                      f"findings={stats['findings']}", flush=True)
             n = bsz if budget_iters is None else min(bsz, budget_iters - it)
             datas = [make_input(fmt, rng) for _ in range(n)]
             paths = []
