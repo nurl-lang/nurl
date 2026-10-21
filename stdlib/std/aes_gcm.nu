@@ -24,6 +24,13 @@
 //   ( aes_block_encrypt k block16 )         → ( Vec u )  one raw AES block (header protection)
 //   ( aes_gcm_key_free k )                  → v          early release (optional)
 //
+// In place, the nonce the 12-byte iv with a 64-bit sequence number XORed
+// into its tail (TLS 1.3 / QUIC) — a record layer's form, no Vec per
+// record:
+//
+//   ( aes_gcm_seal_in k iv seq buf aad_at data_at )     → b  seal buf[data_at, len), append the tag
+//   ( aes_gcm_open_in k iv seq buf aad_at data_at end ) → b  open buf[data_at, end) (ct‖tag) in place
+//
 // An AesGcmKey is a library handle (docs/MEMORY.md §7.6): every copy is
 // the same prepared key, and the last owner releases it.
 //
@@ -1497,6 +1504,68 @@ unsafe @ __gcm_core * AesGcmKeyImpl k * u np * u aadp i aadlen * u inp i n * u o
     : *u tagp # *u + # i ( vec_data [u] pt ) + ( __gcm_scr_at ctlen ) 208
     ? ! ( __tag16_eq tagp # *u + # i ctp ctlen ) { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T pt }
+}
+
+// ── In place, with a sequence-number nonce ─────────────────────────
+// What a record layer wants: the record sealed or opened where it lies
+// in its own buffer, no Vec per record, and the nonce derived from the
+// connection's static `iv` (12 bytes) and the record's sequence number —
+// the 64-bit `seq` big-endian, XORed into the iv's last 8 bytes (TLS 1.3,
+// RFC 8446 §5.3; QUIC, RFC 9001 §5.3). The scratch is the buffer's spare
+// capacity past its length, reserved here.
+
+// The nonce for (iv, seq) at `np`.
+@ __seq_nonce ( Vec u ) iv i seq * u np → v {
+    : *u ivp ( vec_data [u] iv )
+    : ~ i b 0
+    ~ < b 4 { = . np b . ivp b = b + b 1 }
+    ~ < b 12 {
+        = . np b # u ^^ # i . ivp b & >> seq * 8 - 11 b 255
+        = b + b 1
+    }
+}
+
+// Seal `buf[data_at, len)` in place, the AAD `buf[aad_at, data_at)`, and
+// append the 16-byte tag. F — and `buf` untouched — for a null key, an
+// iv that is not 12 bytes, offsets out of order, or a plaintext past
+// GCM's cap.
+@ aes_gcm_seal_in AesGcmKey k__h ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at → b {
+    : i len ( vec_len [u] buf )
+    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at > data_at len { ^ F } {}
+    : i n - len data_at
+    ? > n 68719476704 { ^ F } {}
+    : i at ( __gcm_scr_at len )
+    ( vec_reserve [u] buf + - at len ( __gcm_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u np # *u + # i scr 352
+    ( __seq_nonce iv seq np )
+    : *u dp # *u + # i base data_at
+    ( __gcm_core ( __AesGcmKey_ptr k__h ) np # *u + # i base aad_at - data_at aad_at dp n dp 1 scr )
+    ( bytes_extend_raw buf # s + # i scr 208 16 )
+    ^ T
+}
+
+// Open `buf[data_at, end)` — ciphertext, then its 16-byte tag — in
+// place: on T, `buf[data_at, end - 16)` is the plaintext; the AAD is
+// `buf[aad_at, data_at)` and bytes past `end` are left alone. On F (a
+// wrong tag, or the same argument errors as aes_gcm_seal_in) the range
+// is zeroed, never left as unauthenticated plaintext.
+@ aes_gcm_open_in AesGcmKey k__h ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at i end → b {
+    : i len ( vec_len [u] buf )
+    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | > + data_at 16 end > end len { ^ F } {}
+    : i n - - end data_at 16
+    : i at ( __gcm_scr_at len )
+    ( vec_reserve [u] buf + - at len ( __gcm_scratch ) )
+    : *u base ( vec_data [u] buf )
+    : *u scr # *u + # i base at
+    : *u np # *u + # i scr 352
+    ( __seq_nonce iv seq np )
+    : *u dp # *u + # i base data_at
+    ( __gcm_core ( __AesGcmKey_ptr k__h ) np # *u + # i base aad_at - data_at aad_at dp n dp 0 scr )
+    ? ( __tag16_eq # *u + # i scr 208 # *u + # i dp n ) { ^ T } {}
+    ( nurl_memset # s dp 0 n )
+    ^ F
 }
 
 // One-shot seal/open: a context for this call only.

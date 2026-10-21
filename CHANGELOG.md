@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The TLS record layer seals and opens in place** (agora t44, part of
+  t37). A record used to cost about ten allocations and three or four
+  copies each way: the body sliced out of the receive buffer, a nonce,
+  an AAD, a Poly1305 input concatenating AAD and ciphertext, a new
+  plaintext, an append to the application buffer and two more slices on
+  the way out; writing, an inner-plaintext Vec, the sealed copy and a
+  growing record — and on AES-GCM a full key schedule (round keys and
+  eight GHASH powers) per record. Now:
+  - `aes_gcm_seal_in` / `aes_gcm_open_in` and
+    `chacha20poly1305_seal_in` / `chacha20poly1305_open_in` seal or open
+    `buf[data_at, …)` where it lies, the AAD `buf[aad_at, data_at)`, the
+    nonce the connection's iv with the sequence number XORed in (RFC 8446
+    §5.3, RFC 9001 §5.3); the tag is appended, or checked and the range
+    zeroed on a mismatch. Poly1305 is fed from the AAD and ciphertext
+    where they lie (no MAC buffer); the scratch is the buffer's spare
+    capacity. `compiler/tests/aead_in_place.nu` holds them to the Vec
+    APIs over 0–300 bytes, both suites, the AES key on its hardware AND
+    software paths, with foreign bytes around every record.
+  - A connection keeps its AES-GCM keys prepared per traffic secret
+    (`s_gk` / `c_gk`, rebuilt on KeyUpdate), seals each outgoing record
+    in a reused per-connection `txbuf` (64 KB batches, one write each),
+    and opens each incoming record inside its receive buffer, copying the
+    plaintext once — into the caller's buffer through the new
+    `tls_read_into` / `tls_server_read_into`, which `tcp_read_into` and
+    `tcp_try_read_into` now use.
+  - Steady-state record I/O allocates nothing:
+    `compiler/tests/tls_record_inplace.nu` seals and opens 100 records
+    between two connection states and counts zero allocations, for both
+    suites.
 - **AES-GCM on short messages: one GHASH reduction for AAD, data and
   length, J0 encrypted alongside the tail** (agora t58, part of t37). A
   TLS record of an API response is short, so its latency is per request.

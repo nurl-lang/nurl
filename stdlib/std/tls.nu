@@ -14,6 +14,7 @@
 //   ( tls_connect_insecure host port server_name ) → !TlsConn TlsErr  (no cert check)
 //   ( tls_write conn bytes )                       → !v TlsErr
 //   ( tls_read conn max )                          → !( Vec u ) TlsErr  ([] at EOF)
+//   ( tls_read_into conn dst max )                 → !i TlsErr  (appended to dst; 0 at EOF)
 //   ( tls_close conn )                             → v  close_notify + close the socket
 //
 // A TlsConn is a handle: every copy is the same connection, and its last
@@ -135,6 +136,13 @@ $ `stdlib/core/slice.nu`
     ( Vec u ) s_iv
     ( Vec u ) c_key
     ( Vec u ) c_iv
+    // The AES-GCM keys of s_key / c_key, prepared once per traffic secret
+    // (round keys, GHASH powers) — null unless the suite is AES-GCM.
+    AesGcmKey s_gk
+    AesGcmKey c_gk
+    // Outgoing records are built and sealed in place here, one write's
+    // worth at a time; it keeps its capacity across writes.
+    ( Vec u ) txbuf
     ( Vec u ) s_secret  // retained TLS 1.3 traffic secrets for KeyUpdate
     ( Vec u ) c_secret
     i update_pending  // peer requested our next write-key generation
@@ -219,6 +227,7 @@ $ `stdlib/core/slice.nu`
     = . c s_iv ( vec_new [u] )
     = . c c_key ( vec_new [u] )
     = . c c_iv ( vec_new [u] )
+    = . c txbuf ( vec_new [u] )
     = . c s_seq 0
     = . c c_seq 0
     = . c enc_read 0
@@ -393,14 +402,20 @@ $ `stdlib/core/slice.nu`
         : s pbuf # s + # i p len
         : ~ i got ? != . c read_nowait 0 ( nurl_tcp_read_nowait raw pbuf 16384 ) ( nurl_tcp_read raw pbuf 16384 )
         : ~ b timed_out F
+        : ~ i at len
         ~ & == . c read_nowait 0 & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
             ? ( __tls_io_wait raw 0 ) {
-                = got ( nurl_tcp_read raw pbuf 16384 )
+                // Parked: another fiber holding this connection may have
+                // read into rxbuf meanwhile and moved it, so the place to
+                // read into is taken again, not the one from before.
+                ( vec_reserve [u] . c rxbuf 16384 )
+                = at ( vec_len [u] . c rxbuf )
+                = got ( nurl_tcp_read raw # s + # i ( vec_data [u] . c rxbuf ) at 16384 )
             } { = timed_out T }
         }
         ? < got 0 { ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
         ? == got 0 { ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
-        : b _ok ( vec_set_len [u] . c rxbuf + len got )
+        : b _ok ( vec_set_len [u] . c rxbuf + at got )
     }
     ^ @ !i TlsErr { T 1 }
 }
@@ -450,29 +465,174 @@ $ `stdlib/core/slice.nu`
     ^ n
 }
 
-// AEAD dispatch on the negotiated cipher suite.
-@ _aead_seal i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
-    ? == cipher 1 { ^ ( aes128_gcm_encrypt key nonce aad pt ) } {}
-    ^ ( aead_encrypt key nonce aad pt )
-}
-
-@ _aead_open i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ?( Vec u ) {
-    ? == cipher 1 { ^ ( aes128_gcm_decrypt key nonce aad ct ) } {}
-    ^ ( aead_decrypt key nonce aad ct )
-}
-
-// AEAD-decrypt one application_data record body (ct‖tag) → inner plaintext.
-@ __decrypt_record inout TlsConnImpl c ( Vec u ) body → ?( Vec u ) {
-    : i blen ( vec_len [u] body )
+// AEAD-open one record body (ct‖tag) — already a copy, on the
+// handshake's path — under the keys the peer writes with (`peer` 0: the
+// server's, a client connection's read side; 1: the client's) → the
+// inner plaintext. The application-data path opens in place instead
+// (__open_front).
+@ _tls_open_body inout TlsConnImpl c i peer ( Vec u ) body → ?( Vec u ) {
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( _tls_u16 aad blen )
-    : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
-    : ?( Vec u ) pt ( _aead_open . c cipher . c s_key nonce aad body )
-    = . c s_seq + . c s_seq 1
-    ^ pt
+    ( _tls_u16 aad ( vec_len [u] body ) )
+    ? == peer 0 {
+        : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
+        = . c s_seq + . c s_seq 1
+        ? == . c cipher 1 { ^ ( aes_gcm_open . c s_gk nonce aad body ) } {}
+        ^ ( aead_decrypt . c s_key nonce aad body )
+    } {}
+    : ( Vec u ) nonce ( _nonce . c c_iv . c c_seq )
+    = . c c_seq + . c c_seq 1
+    ? == . c cipher 1 { ^ ( aes_gcm_open . c c_gk nonce aad body ) } {}
+    ^ ( aead_decrypt . c c_key nonce aad body )
+}
+
+// AEAD-decrypt one record body under the server's keys → inner plaintext.
+@ __decrypt_record inout TlsConnImpl c ( Vec u ) body → ?( Vec u ) {
+    ^ ( _tls_open_body c 0 body )
+}
+
+// The next whole record in rxbuf, left at its front: Ok(its length on
+// the wire, header included). Nothing is copied out of it.
+@ __rec_front inout TlsConnImpl c → !i TlsErr {
+    : !i TlsErr h ( __fill c 5 )
+    ?? h { T _ → {} F e → { ^ @ !i TlsErr { F e } } }
+    : i len ( _rdint . c rxbuf 3 2 )
+    : !i TlsErr b ( __fill c + 5 len )
+    ?? b { T _ → {} F e → { ^ @ !i TlsErr { F e } } }
+    ^ @ !i TlsErr { T + 5 len }
+}
+
+// Open the TLS 1.3 record at the front of rxbuf (`rlen` bytes) in place,
+// under the keys `peer` writes with: its inner plaintext is then
+// rxbuf[5, 5 + plen), padding and type byte stripped (RFC 8446 §5.4).
+// Returns plen · 256 + the content type — type 0 for a record that is
+// all padding — or -1 for one that does not authenticate.
+@ __open_front inout TlsConnImpl c i peer i rlen → i {
+    : ~ b ok F
+    ? == peer 0 {
+        = ok ? == . c cipher 1 ( aes_gcm_open_in . c s_gk . c s_iv . c s_seq . c rxbuf 0 5 rlen ) ( chacha20poly1305_open_in . c s_key . c s_iv . c s_seq . c rxbuf 0 5 rlen )
+        = . c s_seq + . c s_seq 1
+    } {
+        = ok ? == . c cipher 1 ( aes_gcm_open_in . c c_gk . c c_iv . c c_seq . c rxbuf 0 5 rlen ) ( chacha20poly1305_open_in . c c_key . c c_iv . c c_seq . c rxbuf 0 5 rlen )
+        = . c c_seq + . c c_seq 1
+    }
+    ? ! ok { ^ -1 } {}
+    : *u p ( vec_data [u] . c rxbuf )
+    : ~ i k - rlen 17
+    ~ & >= k 5 == # i . p k 0 { = k - k 1 }
+    ? < k 5 { ^ 0 } {}
+    ^ + * - k 5 256 # i . p k
+}
+
+// `n` plaintext bytes at rxbuf[5 ..]: up to `room` of them appended to
+// `dst`, the rest to appbuf. Returns how many went to `dst`.
+@ __deliver inout TlsConnImpl c ( Vec u ) dst i n i room → i {
+    : i take ? < n room n room
+    : *u p ( vec_data [u] . c rxbuf )
+    ( bytes_extend_raw dst # s + # i p 5 take )
+    ? > n take { ( bytes_extend_raw . c appbuf # s + # i p + 5 take - n take ) } {}
+    ^ take
+}
+
+// Up to `max` decrypted application bytes appended to `dst`: Ok(how
+// many), 0 on clean EOF (close_notify). `peer` is who writes the records
+// read here (0 the server: a client connection; 1 the client). Records
+// are opened in place in rxbuf and the plaintext copied once, into
+// `dst`; only what does not fit waits in appbuf. Post-handshake messages
+// (tickets, key updates) are consumed transparently.
+@ _tls_read_into_in inout TlsConnImpl c i peer ( Vec u ) dst i max → !i TlsErr {
+    ? <= max 0 { ^ @ !i TlsErr { T 0 } } {}
+    : i have ( vec_len [u] . c appbuf )
+    ? > have 0 {
+        : i take ? < have max have max
+        : *u ap ( vec_data [u] . c appbuf )
+        ( bytes_extend_raw dst # s ap take )
+        ( nurl_memmove # s ap # s + # i ap take - have take )
+        : b _al ( vec_set_len [u] . c appbuf - have take )
+        ^ @ !i TlsErr { T take }
+    } {}
+    ~ == . c closed 0 {
+        ? != . c fatal_alert 0 { ^ @ !i TlsErr { F TlsProtocol } } {}
+        ? != . c update_pending 0 {
+            ? != . c read_nowait 0 { ^ @ !i TlsErr { F TlsRead } } {}
+            ?? ( _tls_flush_control c - 1 peer ) { T _ → {} F error → { ^ @ !i TlsErr { F error } } }
+        } {}
+        : !i TlsErr fr ( __rec_front c )
+        ?? fr {
+            F e → {
+                ?? e {
+                    TlsClosed → { = . c closed 1 ^ @ !i TlsErr { T 0 } }
+                    _ → { ^ @ !i TlsErr { F e } }
+                }
+            }
+            T rlen → {
+                : i rtype ( _t_bget . c rxbuf 0 )
+                ? == rtype 20 { ( __consume c rlen ) } {
+                    ? == . c version 12 {
+                        // TLS 1.2: the record type is the real content
+                        // type, and the explicit nonce rides in the body.
+                        : ( Vec u ) body ( bytes_slice . c rxbuf 5 rlen )
+                        ( __consume c rlen )
+                        ?? ( __decrypt_record_12 c rtype body ) {
+                            T inner → {
+                                ? == rtype 23 {
+                                    : i n ( vec_len [u] inner )
+                                    : i take ? < n max n max
+                                    ( bytes_extend_raw dst # s ( vec_data [u] inner ) take )
+                                    ? > n take { ( bytes_extend_raw . c appbuf # s + # i ( vec_data [u] inner ) take - n take ) } {}
+                                    ? > take 0 { ^ @ !i TlsErr { T take } } {}
+                                } {
+                                    // 21 alert: closed; 22 (post-handshake, e.g. tickets): ignored
+                                    ? == rtype 21 { = . c closed 1 } {}
+                                }
+                            }
+                            F _ → { ^ @ !i TlsErr { F # TlsErr TlsDecrypt } }
+                        }
+                    } {
+                        : i r ( __open_front c peer rlen )
+                        ? < r 0 {
+                            ( __consume c rlen )
+                            ^ @ !i TlsErr { F # TlsErr TlsDecrypt }
+                        } {}
+                        : i ct & r 255
+                        : i plen >> r 8
+                        ? == ct 23 {
+                            ? != ( vec_len [u] . c hsbuf ) 0 {
+                                ( __consume c rlen )
+                                : !v TlsErr failed ( _tls_post_fail c peer 10 )
+                                ?? failed { T _ → {} F _ → {} }
+                                ^ @ !i TlsErr { F TlsProtocol }
+                            } {}
+                            : i got ( __deliver c dst plen max )
+                            ( __consume c rlen )
+                            ? > got 0 { ^ @ !i TlsErr { T got } } {}
+                        } {
+                            : ( Vec u ) inner ( bytes_slice . c rxbuf 5 + 5 plen )
+                            ( __consume c rlen )
+                            ? == ct 21 { = . c closed 1 } {}
+                            ? == ct 22 {
+                                ?? ( _tls_post_hs c inner peer ) {
+                                    T _ → {}
+                                    F error → { ^ @ !i TlsErr { F error } }
+                                }
+                            } {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ^ @ !i TlsErr { T 0 }
+}
+
+// Up to `max` decrypted application bytes appended to `dst`: Ok(n), 0 on
+// clean EOF — the zero-copy form of tls_read: the plaintext is copied
+// once, from the record buffer into `dst`.
+@ tls_read_into TlsConn c__h ( Vec u ) dst i max → !i TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_read_into_in . c 0 0 dst max )
 }
 
 // Strip TLS 1.3 inner padding: trailing zeros then the real content type.
@@ -488,46 +648,122 @@ $ `stdlib/core/slice.nu`
 
 // Encrypt + send one record of `content` under the client keys.
 @ __send_encrypted inout TlsConnImpl c i content_type ( Vec u ) content → !v TlsErr {
-    : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( _tls_cat inner content )
-    ^ ( __send_inner_encrypted c content_type inner )
-}
-
-// Same record, plaintext = bytes [lo, hi) of `head`‖`body`, assembled
-// straight from the two buffers (tls_write2's per-record step).
-@ __send_encrypted_pair inout TlsConnImpl c i content_type ( Vec u ) head ( Vec u ) body i lo i hi → !v TlsErr {
-    : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
-    ^ ( __send_inner_encrypted c content_type inner )
-}
-
-// Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
-// one TLS 1.3 record under the client write keys and send it.
-@ _tls_seal_inner_to inout TlsConnImpl c ( Vec u ) out i content_type ( Vec u ) inner → v {
-    ( _tls_seal_direction_to c out 1 content_type inner )
+    : ( Vec u ) buf ( _tls_tx_take c )
+    ( _tls_rec_range_to c buf 1 content_type content 0 ( vec_len [u] content ) )
+    : !v TlsErr r ( _tls_tx_flush c buf )
+    ( _tls_tx_put c buf )
+    ^ r
 }
 
 @ _tls_seal_direction_to inout TlsConnImpl c ( Vec u ) out i dir i content_type ( Vec u ) inner → v {
-    ( vec_push [u] inner # u content_type )
-    : i total + ( vec_len [u] inner ) 16
-    : ( Vec u ) aad ( vec_with_cap [u] 5 )
-    ( vec_push [u] aad # u 23 )
-    ( vec_push [u] aad # u 3 )
-    ( vec_push [u] aad # u 3 )
-    ( _tls_u16 aad total )
-    : ( Vec u ) nonce ( _nonce ? == dir 0 . c s_iv . c c_iv ? == dir 0 . c s_seq . c c_seq )
-    : ( Vec u ) sealed ( _aead_seal . c cipher ? == dir 0 . c s_key . c c_key nonce aad inner )
+    : i at ( _tls_rec_open out ( vec_len [u] inner ) )
+    ( _tls_cat out inner )
+    ( _tls_rec_close c out dir at content_type )
+}
+
+// ── records built in place ─────────────────────────────────────────
+// A TLS 1.3 record is sealed where it is written: the header, then the
+// plaintext appended straight from wherever it lies, then the content
+// type byte, then the AEAD runs over that range of `out` and appends the
+// tag. No inner-plaintext Vec, no sealed copy, no nonce or AAD Vec — the
+// nonce is the direction's iv and sequence number, the AAD the header
+// itself (RFC 8446 §5.2) — and the AES-GCM key is the connection's
+// prepared one, not a key schedule per record.
+
+// Room past a record for the AEAD's scratch (aes_gcm.nu's __gcm_scratch,
+// chacha20poly1305.nu's __ccp_scratch) and its 16-byte alignment.
+@ _tls_rec_slack → i { ^ 400 }
+
+// Start a record at the end of `out` — its header, the length still 0 —
+// with room reserved for `n` plaintext bytes, the type byte, the tag and
+// the sealer's scratch: one growth at most. Returns where it starts.
+@ _tls_rec_open ( Vec u ) out i n → i {
+    : i at ( vec_len [u] out )
+    ( vec_reserve [u] out + + n 22 ( _tls_rec_slack ) )
     ( vec_push [u] out # u 23 )
     ( vec_push [u] out # u 3 )
     ( vec_push [u] out # u 3 )
-    ( _tls_u16 out total )
-    ( _tls_cat out sealed )
-    ? == dir 0 { = . c s_seq + . c s_seq 1 } { = . c c_seq + . c c_seq 1 }
+    ( vec_push [u] out # u 0 )
+    ( vec_push [u] out # u 0 )
+    ^ at
 }
 
-@ __send_inner_encrypted inout TlsConnImpl c i content_type ( Vec u ) inner → !v TlsErr {
-    : ( Vec u ) record ( vec_new [u] )
-    ( _tls_seal_inner_to c record content_type inner )
-    : b written ( _tls_sock_write . c fd record )
+// Finish the record started at `at`: the content type byte, the header's
+// length, and the seal under direction `dir`'s keys (0 = server write,
+// 1 = client write), which appends the tag.
+@ _tls_rec_close inout TlsConnImpl c ( Vec u ) out i dir i at i content_type → v {
+    ( vec_push [u] out # u content_type )
+    : i total + - ( vec_len [u] out ) + at 5 16
+    ( vec_put [u] out + at 3 # u >> total 8 )
+    ( vec_put [u] out + at 4 # u & total 255 )
+    ? == dir 0 {
+        : b _s ? == . c cipher 1 ( aes_gcm_seal_in . c s_gk . c s_iv . c s_seq out at + at 5 ) ( chacha20poly1305_seal_in . c s_key . c s_iv . c s_seq out at + at 5 )
+        = . c s_seq + . c s_seq 1
+    } {
+        : b _s ? == . c cipher 1 ( aes_gcm_seal_in . c c_gk . c c_iv . c c_seq out at + at 5 ) ( chacha20poly1305_seal_in . c c_key . c c_iv . c c_seq out at + at 5 )
+        = . c c_seq + . c c_seq 1
+    }
+}
+
+// Bytes [lo, hi) of the logical concatenation `head`‖`body` appended to
+// `out` — a record's plaintext cut from two buffers without joining them.
+@ _tls_pair_into ( Vec u ) out ( Vec u ) head ( Vec u ) body i lo i hi → v {
+    : i hn ( vec_len [u] head )
+    : i bn ( vec_len [u] body )
+    : ~ i a lo
+    : ~ i z hi
+    ? < a 0 { = a 0 } {}
+    ? > z + hn bn { = z + hn bn } {}
+    ? < z a { = z a } {}
+    ? < a hn {
+        : i h_hi ? < z hn z hn
+        ( bytes_extend_raw out # s + # i ( vec_data [u] head ) a - h_hi a )
+    } {}
+    ? > z hn {
+        : i b_lo ? > a hn - a hn 0
+        ( bytes_extend_raw out # s + # i ( vec_data [u] body ) b_lo - - z hn b_lo )
+    } {}
+}
+
+// One record of `data[lo, hi)` (content type `ct`) appended to `out`
+// under direction `dir`'s keys.
+@ _tls_rec_range_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) data i lo i hi → v {
+    : i at ( _tls_rec_open out - hi lo )
+    ( bytes_extend_raw out # s + # i ( vec_data [u] data ) lo - hi lo )
+    ( _tls_rec_close c out dir at ct )
+}
+
+// One record of `head`‖`body`[lo, hi) appended to `out`.
+@ _tls_rec_pair_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) head ( Vec u ) body i lo i hi → v {
+    : i at ( _tls_rec_open out - hi lo )
+    ( _tls_pair_into out head body lo hi )
+    ( _tls_rec_close c out dir at ct )
+}
+
+// The connection's write buffer, TAKEN for one write — an empty one left
+// in its place — and put back after it (_tls_tx_put). A write may park
+// on the socket with a pointer into the buffer; a second writer on the
+// same connection (two fibers holding copies of it) then builds into a
+// buffer of its own instead of growing the one being written. Their
+// records would still interleave — one connection takes one writer at a
+// time — but no write reads memory another has moved. In steady state the
+// same buffer goes round and nothing is allocated.
+@ _tls_tx_take inout TlsConnImpl c → ( Vec u ) {
+    : ( Vec u ) buf ( mem_replace [( Vec u )] . c txbuf ( vec_new [u] ) )
+    ( vec_clear [u] buf )
+    ^ buf
+}
+
+@ _tls_tx_put inout TlsConnImpl c sink ( Vec u ) buf → v {
+    ( vec_clear [u] buf )
+    = . c txbuf buf
+}
+
+// Write `buf` to the socket and empty it; a failure closes the
+// connection.
+@ _tls_tx_flush inout TlsConnImpl c ( Vec u ) buf → !v TlsErr {
+    : b written ( _tls_sock_write . c fd buf )
+    ( vec_clear [u] buf )
     ? ! written { = . c closed 1 } {}
     ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }
@@ -909,15 +1145,24 @@ $ `stdlib/core/slice.nu`
     : ( Vec u ) iv ( hkdf_expand_label secret `iv` emptyc 12 )
     ? == dir 0 {
         = . c s_secret retained
+        = . c s_gk ( __tls_gk . c cipher key )
         = . c s_key key
         = . c s_iv iv
         = . c s_seq 0
     } {
         = . c c_secret retained
+        = . c c_gk ( __tls_gk . c cipher key )
         = . c c_key key
         = . c c_iv iv
         = . c c_seq 0
     }
+}
+
+// The prepared AES-GCM key for a traffic key — null for ChaCha20, whose
+// key needs no schedule.
+@ __tls_gk i cipher ( Vec u ) key → AesGcmKey {
+    ? == cipher 1 { ^ ( aes_gcm_key_new key ) } {}
+    ^ ( aes_gcm_key_new ( vec_new [u] ) )
 }
 
 // ── PSK key schedule pieces (shared by client and server) ─────────
@@ -2070,20 +2315,39 @@ $ `stdlib/core/slice.nu`
     ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n ( vec_len [u] data )
-    ? <= n 16384 {
-        ? == . c version 12 { ^ ( __send_record_12 c 23 data ) } {}
-        ^ ( __send_encrypted c 23 data )
+    ? == . c version 12 {
+        ? <= n 16384 { ^ ( __send_record_12 c 23 data ) } {}
+        : ~ i off 0
+        ~ < off n {
+            : ~ i hi + off 16384
+            ? > hi n { = hi n } {}
+            : ( Vec u ) part ( bytes_slice data off hi )
+            ?? ( __send_record_12 c 23 part ) { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+            = off hi
+        }
+        ^ @ !v TlsErr { T 0 }
     } {}
+    ^ ( _tls_write_records c 1 data data n T )
+}
+
+// `head`‖`body`[0, n) (or `data` alone when `single`) as ≤16384-byte
+// application records under direction `dir`'s keys, sealed in place in
+// txbuf and written out every 64 KB — so a large write is a few
+// syscalls, and txbuf never holds more than one such batch.
+@ _tls_write_records inout TlsConnImpl c i dir ( Vec u ) head ( Vec u ) body i n b single → !v TlsErr {
+    : ( Vec u ) buf ( _tls_tx_take c )
     : ~ i off 0
     ~ < off n {
         : ~ i hi + off 16384
         ? > hi n { = hi n } {}
-        : ( Vec u ) part ( bytes_slice data off hi )
-        : ~ ! v TlsErr w @ !v TlsErr { T 0 }
-        ? == . c version 12 { = w ( __send_record_12 c 23 part ) } { = w ( __send_encrypted c 23 part ) }
-        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        ? single { ( _tls_rec_range_to c buf dir 23 head off hi ) } { ( _tls_rec_pair_to c buf dir 23 head body off hi ) }
         = off hi
+        ? | >= off n >= ( vec_len [u] buf ) 65536 {
+            : !v TlsErr r ( _tls_tx_flush c buf )
+            ?? r { T _ → {} F e → { ( _tls_tx_put c buf ) ^ @ !v TlsErr { F e } } }
+        } {}
     }
+    ( _tls_tx_put c buf )
     ^ @ !v TlsErr { T 0 }
 }
 
@@ -2133,10 +2397,10 @@ $ `stdlib/core/slice.nu`
     : i size ( vec_len [u] data )
     ~ < offset size {
         : i end ? < - size offset 16384 size + offset 16384
-        : ( Vec u ) part ( bytes_slice data offset end )
         ? == . c version 12 {
+            : ( Vec u ) part ( bytes_slice data offset end )
             ( _tls_record12_to c wire 23 part )
-        } { ( _tls_seal_inner_to c wire 23 part ) }
+        } { ( _tls_rec_range_to c wire 1 23 data offset end ) }
         = offset end
     }
     ^ @ !( Vec u ) TlsErr { T wire }
@@ -2158,10 +2422,10 @@ $ `stdlib/core/slice.nu`
     ~ < off n {
         : ~ i hi + off 16384
         ? > hi n { = hi n } {}
-        : ( Vec u ) part ( _tls_pair_slice head body off hi )
         ? == . c version 12 {
+            : ( Vec u ) part ( _tls_pair_slice head body off hi )
             ( _tls_record12_to c out 23 part )
-        } { ( _tls_seal_inner_to c out 23 part ) }
+        } { ( _tls_rec_pair_to c out 1 23 head body off hi ) }
         = off hi
     }
     ^ @ !v TlsErr { T 0 }
@@ -2181,19 +2445,18 @@ $ `stdlib/core/slice.nu`
     ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n + ( vec_len [u] head ) ( vec_len [u] body )
-    : ~ i off 0
-    ~ < off n {
-        : ~ i hi + off 16384
-        ? > hi n { = hi n } {}
-        : ~ ! v TlsErr w @ !v TlsErr { T 0 }
-        ? == . c version 12 {
+    ? == . c version 12 {
+        : ~ i off 0
+        ~ < off n {
+            : ~ i hi + off 16384
+            ? > hi n { = hi n } {}
             : ( Vec u ) part ( _tls_pair_slice head body off hi )
-            = w ( __send_record_12 c 23 part )
-        } { = w ( __send_encrypted_pair c 23 head body off hi ) }
-        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
-        = off hi
-    }
-    ^ @ !v TlsErr { T 0 }
+            ?? ( __send_record_12 c 23 part ) { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+            = off hi
+        }
+        ^ @ !v TlsErr { T 0 }
+    } {}
+    ^ ( _tls_write_records c 1 head body n F )
 }
 
 // Read up to `max` decrypted application bytes. Returns [] on clean EOF
@@ -2205,73 +2468,9 @@ $ `stdlib/core/slice.nu`
 }
 
 @ _tls_read_in inout TlsConnImpl c i max → !( Vec u ) TlsErr {
-    ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
-        ? != . c fatal_alert 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
-        ? != . c update_pending 0 {
-            ? != . c read_nowait 0 { ^ @ !( Vec u ) TlsErr { F TlsRead } } {}
-            ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !( Vec u ) TlsErr { F error } } }
-        } {}
-        : !TlsRecord TlsErr rr ( _read_record c )
-        ?? rr {
-            F e → {
-                ^ ?? e {
-                    TlsClosed → { = . c closed 1 @ !( Vec u ) TlsErr { T ( vec_new [u] ) } }
-                    _ → @ !( Vec u ) TlsErr { F e }
-                }
-            }
-            T rec → {
-                ? == . rec rtype 20 {
-                } {
-                    ? == . c version 12 {
-                        // TLS 1.2: the record type is the real content type.
-                        ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
-                            T inner → {
-                                ? == . rec rtype 23 { ( _tls_cat . c appbuf inner ) } {
-                                    ? == . rec rtype 21 { = . c closed 1 } {}
-                                    // type 22 (post-handshake, e.g. tickets): ignore
-                                }
-                            }
-                            F _ → {
-                                ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
-                            }
-                        }
-                    } {
-                        ?? ( __decrypt_record c . rec body ) {
-                            T inner → {
-                                : i ct ( _inner_type inner )
-                                ? == ct 23 {
-                                    ? != ( vec_len [u] . c hsbuf ) 0 {
-                                        : !v TlsErr failed ( _tls_post_fail c 0 10 )
-                                        ?? failed { T _ → {} F _ → {} }
-                                        ^ @ !( Vec u ) TlsErr { F TlsProtocol }
-                                    } {}
-                                    ( _tls_cat . c appbuf inner )
-                                } {
-                                    ? == ct 21 { = . c closed 1 } {}
-                                    ? == ct 22 {
-                                        ?? ( _tls_post_hs c inner 0 ) {
-                                            T _ → {}
-                                            F error → { ^ @ !( Vec u ) TlsErr { F error } }
-                                        }
-                                    } {}
-                                }
-                            }
-                            F _ → {
-                                ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    : i avail ( vec_len [u] . c appbuf )
-    ? == avail 0 { ^ @ !( Vec u ) TlsErr { T ( vec_new [u] ) } } {}
-    : i take ? < max avail max avail
-    : ( Vec u ) out ( bytes_slice . c appbuf 0 take )
-    : ( Vec u ) rest ( bytes_slice . c appbuf take avail )
-    = . c appbuf rest
-    ^ @ !( Vec u ) TlsErr { T out }
+    : ( Vec u ) out ( vec_new [u] )
+    : !i TlsErr r ( _tls_read_into_in c 0 out max )
+    ?? r { T _ → ^ @ !( Vec u ) TlsErr { T out } F e → ^ @ !( Vec u ) TlsErr { F e } }
 }
 
 // Say close_notify (best effort) and close the socket. Safe to repeat;
@@ -2366,7 +2565,7 @@ $ `stdlib/core/slice.nu`
     : ( Vec u ) body ( vec_new [u] )
     ? == . c cipher 1 {
         : ( Vec u ) nonce ( __nonce12_aes . c c_iv . c c_seq )
-        : ( Vec u ) sealed ( aes128_gcm_encrypt . c c_key nonce aad content )
+        : ( Vec u ) sealed ( aes_gcm_seal . c c_gk nonce aad content )
         // explicit nonce (= seq) is prepended on the wire
         : ~ i b 0
         ~ < b 8 { ( vec_push [u] body # u & >> . c c_seq * 8 - 7 b 255 ) = b + b 1 }
@@ -2404,7 +2603,7 @@ $ `stdlib/core/slice.nu`
         : ( Vec u ) ct ( bytes_slice body 8 ( vec_len [u] body ) )
         : i ptlen - ( vec_len [u] ct ) 16
         : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
-        : ?( Vec u ) r ( aes128_gcm_decrypt . c s_key nonce aad ct )
+        : ?( Vec u ) r ( aes_gcm_open . c s_gk nonce aad ct )
         r
     } {
         : ( Vec u ) nonce ( __nonce12_chacha . c s_iv . c s_seq )
@@ -2430,6 +2629,8 @@ $ `stdlib/core/slice.nu`
     : ( Vec u ) sk ( bytes_slice kb klen * 2 klen )
     : ( Vec u ) civ ( bytes_slice kb * 2 klen + * 2 klen ivlen )
     : ( Vec u ) siv ( bytes_slice kb + * 2 klen ivlen + * 2 klen * 2 ivlen )
+    = . c c_gk ( __tls_gk . c cipher ck )
+    = . c s_gk ( __tls_gk . c cipher sk )
     = . c c_key ck
     = . c s_key sk
     = . c c_iv civ
