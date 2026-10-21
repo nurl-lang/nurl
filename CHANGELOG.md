@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on plain TCP and on a kTLS-sealed TLS connection (bytes never enter the
   process), else through one reused 64 KB buffer and the record layer
   (`pfile_read_vec_into`, new); the runtime blocks the SIGPIPE sendfile
-  raises on a closed peer. Measured on Haswell / Linux 7.0
+  raises on a closed peer, and a process that installs kTLS ignores
+  SIGPIPE (unless it has its own handler) — a kTLS socket can flush queued
+  records in `close()` after the peer has gone, where no call can mask it. Measured on Haswell / Linux 7.0
   (`gcm-aesni-avx` in the kernel), server CPU µs per TLS response: 1 MB
   file C=10 — userspace from memory 1202, pread + seal 1255, kTLS +
   sendfile 1202, kTLS + write() 1720; 16 KB — 36 / 59 / 62 / 66. Hence
