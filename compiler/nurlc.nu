@@ -43433,12 +43433,9 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
 }
 
 // A type's memoised answers (__nc_drop_ty, __libh_plain_is,
-// bck_bind_class), forgotten when the type comes to exist: a generic
-// instance's name can be asked about before it is instantiated — a call
-// of a generic function whose result is `!( G String ) E`, emitted before
-// the instance — and the answers given then were for a type nobody had
-// defined (no fields, no drop hook): a library handle taken for a plain
-// view, which made its owners lend it and never drop it.
+// bck_bind_class), forgotten when a generic instance's identity is first
+// recorded ahead of its instantiation (__ret_struct_identity): an answer
+// given before that was for a type nobody had defined.
 @ __ty_memo_forget s ty → v {
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `ncd##` ty ) `` )
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) `` )
@@ -43483,7 +43480,6 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
             : s done_key ( nurl_str_cat mangled `__done` )
             ? == 0 ( nurl_sym_len g_struct_inst_syms done_key ) {
                 ( nurl_sym_def g_struct_inst_syms done_key `1` )
-                ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
                 // Substitute tparam → type-arg in the raw body source.
                 : s body ( nurl_sym_get2 g_generic_struct_syms sname `__sbody` )
                 : ~ s subst ( nurl_str_cat body `` )

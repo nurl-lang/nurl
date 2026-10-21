@@ -37,9 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller computed the instance's result type before the instance (and so
   the `( G String )` struct) existed, took the handle for a plain value,
   and the arm binding leaked with everything the handle held. The
-  instance's identity is recorded when the result type is computed, and
-  type answers memoised before an instance existed are forgotten when it
-  appears (`generic_handle_result_drop`).
+  instance's identity is recorded when the result type is computed
+  (`generic_handle_result_drop`).
 - **`tcp_starttls` closed a socket twice when the handshake failed** (a
   refused certificate under verify): the TLS state had closed it, and
   the TcpConn's drop closed it again — a use-after-free of the runtime's

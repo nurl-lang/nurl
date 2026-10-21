@@ -58,7 +58,7 @@ if [ -z "${PSQL_TEST_PORT:-}" ]; then
         -keyout "$cluster/data/server.key" -out "$cluster/data/server.crt" >/dev/null 2>&1
     as_pg chmod 600 "$cluster/data/server.key"
     as_pg sh -c "printf '%s\n' \"port = $port\" \"listen_addresses = '127.0.0.1'\" \"unix_socket_directories = '$cluster'\" 'ssl = on' 'fsync = off' >> '$cluster/data/postgresql.conf'"
-    as_pg "$PG_BIN/pg_ctl" -D "$cluster/data" -l "$cluster/log" -w start >/dev/null
+    as_pg "$PG_BIN/pg_ctl" -D "$cluster/data" -l "$cluster/log" -w start >/dev/null || { cat "$cluster/log" >&2; exit 1; }
     export PSQL_TEST_HOST=127.0.0.1 PSQL_TEST_PORT="$port" PSQL_TEST_USER=nurl PSQL_TEST_PASSWORD=secret PSQL_TEST_DB=postgres
     echo "[smoke] throwaway cluster on :$port ($PG_BIN)"
 fi

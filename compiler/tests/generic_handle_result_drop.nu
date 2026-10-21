@@ -6,8 +6,7 @@
 // instance existed, took it for a plain value, and never dropped it (the
 // arm binding of `?? ( get … ) { T g → … }` leaked, and with it what the
 // handle held). The instance's identity is now recorded when the call's
-// result type is computed (compute_generic_ret_ty), and type answers
-// memoised before then are forgotten when the instance appears.
+// result type is computed (compute_generic_ret_ty).
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
