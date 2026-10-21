@@ -47,9 +47,16 @@ FAMILY_DESC = {
         "diagnostic that violation deserves — a program that compiles, or "
         "one rejected for an unrelated reason, is the finding",
     "parser-mutational":
-        "`fuzz_parsers.py` — mutated inputs for the untrusted-input "
-        "parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against "
-        "an ASan+UBSan harness; any crash / OOB / UB / hang is a finding",
+        "`fuzz_parsers.py` — mutated seeds, real captures and generated "
+        "message streams for the untrusted-input parsers against an "
+        "ASan+UBSan+LSan harness: the data formats (x509/DER with "
+        "structure-aware TLV mutation, CSR, PEM, cbor, msgpack, json, yaml, "
+        "xml, toml) and the network-facing protocol stacks, driven over "
+        "loopback where the real code reads a socket (HTTP/1.1 server and "
+        "client, HTTP/2 + HPACK, HTTP/3 frames + QPACK, TLS records + "
+        "ClientHello / ServerHello / Certificate chain, WebSocket incl. "
+        "permessage-deflate, MQTT, multipart, URL / query / cookie); any "
+        "crash / OOB / UB / leak / oversized allocation / hang is a finding",
 }
 
 
@@ -101,7 +108,11 @@ def main():
     for r in runs:
         fam = r.get("family", "?")
         if fam.startswith("parser"):
-            cfg = f"iters={r.get('size')} rng-seed={r.get('seed_start')}"
+            tg = r.get("targets") or {}
+            if r.get("minutes"):
+                cfg = f"{r['minutes']:g} min × {len(tg)} targets, rng-seed={r.get('seed_start')}"
+            else:
+                cfg = f"iters={r.get('size')} rng-seed={r.get('seed_start')}"
             execs = r.get("size", 0)
         elif fam == "reject-inverse":
             cfg = (f"seeds {r.get('seed_start')}–"
@@ -117,6 +128,23 @@ def main():
         a(f"| `{fam}` | {cfg} | {execs} | {r.get('pass', 0)} | {bad} | "
           f"{r.get('san_runs', 0)} | {r.get('wasm_runs', 0)} |")
     a("")
+    # Per-target breakdown of the parser legs (summaries that carry one).
+    per = {}
+    for r in runs:
+        for t, v in (r.get("targets") or {}).items():
+            acc = per.setdefault(t, {"execs": 0, "minutes": 0.0, "findings": 0})
+            acc["execs"] += v.get("execs", 0)
+            acc["minutes"] += v.get("minutes", 0.0)
+            acc["findings"] += v.get("findings", 0)
+    if per:
+        a("Parser targets (all `parser-mutational` legs of this run):")
+        a("")
+        a("| target | executions | minutes | findings |")
+        a("|---|---:|---:|---:|")
+        for t in sorted(per):
+            v = per[t]
+            a(f"| `{t}` | {v['execs']} | {v['minutes']:.1f} | {v['findings']} |")
+        a("")
     a("## What each family probes")
     a("")
     for fam, desc in FAMILY_DESC.items():
@@ -160,7 +188,9 @@ def main():
     a("FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \\")
     a("    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs")
     a("FUZZ_GEN=reject tools/fuzz/fuzz.sh 1 400 0 3   # inverse oracle")
-    a("tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational")
+    a("tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational (all targets)")
+    a("FUZZ_FORMATS=http1,h2,tls FUZZ_MINUTES=10 FUZZ_JOBS=2 \\")
+    a("    tools/fuzz/fuzz_parsers.sh 1 0 8            # time-budgeted, per target")
     a("")
     a("# reproduce and shrink one seed by hand")
     a("python3 tools/fuzz/genprog.py 684 --selfcheck > bug.nu")

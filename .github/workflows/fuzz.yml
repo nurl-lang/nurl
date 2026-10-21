@@ -21,9 +21,13 @@ name: fuzz
 #      failure mode nothing else catches — the program compiles, runs, and
 #      corrupts the heap.
 #   3. mutational parser fuzzer (tools/fuzz/fuzz_parsers.sh): mutate seeds for
-#      the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml,
-#      toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a
-#      finding.
+#      the untrusted-input parsers against an ASan+UBSan+LSan harness; any
+#      crash / OOB / UB / leak / oversized allocation / hang is a finding.
+#      Two legs: the data formats (x509/DER, CSR, PEM, cbor, msgpack, json,
+#      yaml, xml, toml) by iteration count, and the network-facing protocol
+#      parsers (HTTP/1.1 server + client, HTTP/2 + HPACK, HTTP/3 frames +
+#      QPACK, TLS records / ClientHello / ServerHello / Certificate, WebSocket,
+#      MQTT, multipart, URL/query/cookie) with a time budget per target.
 # Any finding fails the run and uploads the reproducer inputs as artifacts.
 #
 # Findings are SHRUNK before they are filed: tools/fuzz/reduce.py deletes
@@ -54,8 +58,11 @@ on:
         description: 'structural differential: number of seeds'
         default: '600'
       parser_iters:
-        description: 'parser fuzzer: iterations per RNG seed'
+        description: 'parser fuzzer (data formats): iterations per RNG seed'
         default: '4000'
+      net_parser_minutes:
+        description: 'parser fuzzer (network protocols): minutes per target'
+        default: '4'
       # A weekly run that starts at seed 1 re-tests the same programs every
       # week. Moving the start walks the corpus into ground no run has
       # covered; keeping it pinned re-tests a range a finding came from.
@@ -94,7 +101,7 @@ permissions:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -195,12 +202,30 @@ jobs:
         if: success() || failure()
         # Two RNG seeds for a bit of breadth; each builds the harness once and
         # runs N mutated inputs. 8s per-input timeout catches hangs.
+        env:
+          FUZZ_FORMATS: x509,csr,pem,cbor,msgpack,json,yaml,xml,toml
         run: |
           iters="${{ github.event.inputs.parser_iters || '4000' }}"
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/parsers-1.json" \
             ./tools/fuzz/fuzz_parsers.sh 1 "$iters" 8
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/parsers-2.json" \
             ./tools/fuzz/fuzz_parsers.sh 2 "$iters" 8
+
+      - name: Network parser fuzzer (ASan + UBSan, time-budgeted)
+        if: success() || failure()
+        # The parsers a remote peer feeds: each target gets the same number
+        # of minutes (an iteration count would starve the socket targets,
+        # which run a loopback connection — a TLS handshake for `tls` — per
+        # input), four side by side on the runner's four cores. The RNG
+        # seed walks with the run number so each week covers new inputs; it
+        # is printed, and a finding reproduces from its saved input alone.
+        env:
+          MINUTES: ${{ github.event.inputs.net_parser_minutes || '4' }}
+          FUZZ_FORMATS: http1,h2,tls,tlscli,tlscert,ws,http1resp,mqtt,hpack,h2frame,qpack,h3frame,multipart,urlish
+        run: |
+          FUZZ_MINUTES="$MINUTES" FUZZ_JOBS=4 \
+          FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/parsers-net.json" \
+            ./tools/fuzz/fuzz_parsers.sh "${{ github.run_number }}" 0 8
 
       - name: Render FUZZRESULTS.md
         if: always()
