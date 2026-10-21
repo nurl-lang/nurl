@@ -9,6 +9,7 @@
 // That is deterministic and needs no route, unlike a non-routable
 // address — which answers ENETUNREACH at once on a host without a
 // default route and hangs on one with it.
+// (So the test runs on Linux only: test_skips.sh.)
 //
 //   1. Off a fiber: fill the queue — connect with a 200 ms deadline
 //      until one reports NetTimeout (tcp_connect_timeout's poll(2)

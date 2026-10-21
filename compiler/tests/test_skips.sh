@@ -175,6 +175,9 @@ is_skipped() {
         fswatch_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
         # setrlimit(RLIMIT_NOFILE) numbered as on Linux.
         fdlimit_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
+        # Its black hole is Linux dropping SYNs to a full accept queue;
+        # FreeBSD answers the same connect another way.
+        net_connect_fiber_timeout) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
     esac
 
     local tok

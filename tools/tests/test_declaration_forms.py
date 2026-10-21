@@ -370,7 +370,10 @@ IMPLS = [
     # misspelled subject it asserted it about nothing at all, silently —
     # and the type it was written to protect stayed Send.
     ("marker_known",      ": Db { s handle }\n% NotSend Db { }",              "compiles"),
-    ("marker_send_known", ": Db { s handle }\n% Send Db { }",                 "compiles"),
+    # A positive marker outside the standard library is an assertion the
+    # program vouches for: written `unsafe`, or rejected (h318).
+    ("marker_send_known", ": Db { s handle }\nunsafe % Send Db { }",          "compiles"),
+    ("marker_send_safe",  ": Db { s handle }\n% Send Db { }",                 "rejects"),
     ("marker_unknown",    ": Db { s handle }\n% NotSend Dbb { }",             "rejects"),
     ("marker_sync_unknown", ": Db { s handle }\n% Sync Nope { }",             "rejects"),
 ]
