@@ -807,8 +807,9 @@ $ `stdlib/core/rcbox.nu`
     : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
     : i cslen ( _rdint ch p1 2 )
-    // Choose the cipher. AES-128-GCM (0x1301) when the CPU has AES-NI
-    // and PCLMULQDQ (nurl_cpu_has_aes) and the client offers it;
+    // Choose the cipher. AES-128-GCM (0x1301) when the CPU has the
+    // hardware crypto tier — AES-NI and PCLMULQDQ, or AES and PMULL on
+    // AArch64 (nurl_cpu_has_aes) — and the client offers it;
     // otherwise ChaCha20-Poly1305 (0x1303) when offered; otherwise
     // AES-128-GCM — TLS_AES_128_GCM_SHA256 is the one suite RFC 8446
     // requires every implementation to have, so every client offers it.
@@ -817,10 +818,11 @@ $ `stdlib/core/rcbox.nu`
     // with AES instructions AES-GCM is the faster suite, without them
     // ChaCha is. It used to be ChaCha unconditionally here — back when
     // AES-GCM ran at 0.5 MB/s, then bitsliced at ~113 MB/s against
-    // ChaCha's ~370, NURL having no AES-NI path. With the crypto tier
-    // (std/aes_gcm.nu's hardware path) AES-128-GCM seals a 16 KB record
-    // at ~3 GB/s against ChaCha's ~1.4, and a 32-byte one in a third
-    // of the time even when the key is expanded per record. The two
+    // ChaCha's ~370, NURL having no AES instruction path. With the
+    // crypto tier (std/aes_gcm.nu's hardware path) AES-128-GCM seals a
+    // 16 KB record at ~3 GB/s on a Haswell (~9–12 on VAES) against
+    // ChaCha's ~1.4, and a 32-byte one in a third of the time even when
+    // the key is expanded per record. The two
     // suites are equally strong.
     : b hw_aes ( nurl_cpu_has_aes )
     : ~ b off_aes F

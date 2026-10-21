@@ -182,7 +182,7 @@ a space-separated string of nurlc flags from a fixed allow-list:
 | `--lint` | report unused symbols and imports, and release calls the compiler makes redundant (`[redundant-free]`, docs/MEMORY.md §1) |
 | `--strict-borrowck` | the stricter §2.4 argument rules |
 | `--no-strict-arity` | accept the n-ary `&` / `\|` spellings |
-| `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions |
+| `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions, no hardware crypto tier |
 
 `--lint`'s findings arrive in `stderr` and `nurlc_errors` of an ordinary
 successful build, so a lint run is a normal build you read the

@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.10. This document is the
+**Status:** language specification, grammar v2.11. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -77,6 +77,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `f32` | 32-bit float (v1.8) |
 | `TT_TYPE_KW` | `v128` | 128-bit SIMD vector (v2.5, §4.1b) |
 | `TT_TYPE_KW` | `v256` | 256-bit SIMD vector (v2.6, §4.1c) |
+| `TT_TYPE_KW` | `v512` | 512-bit SIMD vector (v2.11, §4.1d) |
 | `TT_SIMD` | `simd` | CPU-dispatch prefix on a function (v2.6, §3.3b) |
 | `TT_INLINE` | `inline` | always-inline prefix on a function (v2.7, §3.3c) |
 | `TT_UNSAFE` | `unsafe` | raw-memory prefix on a function (v2.8, §3.3d) |
@@ -359,11 +360,13 @@ Three consequences worth knowing:
 - **`--no-cpu-dispatch` turns the prefix off**, emitting each marked
   function once. nurlc emits no `target triple`, so it cannot tell that a
   module is bound for AArch64 or wasm; anything building for a non-x86-64
-  target must pass this flag, and `nurl.sh`, the unikernel scripts and the
-  build API all do. The prefix also starts off when nurlc runs natively
-  on a non-x86-64 host (its IR is compiled for the host clang runs on),
-  and `--cpu-dispatch` turns it back on for an x86-64 target built there;
-  a wasm nurlc keeps the native default.
+  target must say so — `--target=aarch64` (the prefix off, the crypto
+  tier on the ARMv8 Cryptographic Extension, §4.1b) or this flag — and
+  `nurl.sh`, the unikernel scripts and the build API all do. The prefix
+  also starts off when nurlc runs natively on a non-x86-64 host (its IR
+  is compiled for the host clang runs on; an AArch64 host is
+  `--target=aarch64`), and `--cpu-dispatch` turns it back on for an
+  x86-64 target built there; a wasm nurlc keeps the native default.
 - **A marked function that uses the hardware crypto tier** (§4.1b,
   the `nurl_v128_aes*` / `nurl_v128_clmul_*`
   primitives) — or calls a function that does — cannot have a baseline
@@ -376,7 +379,16 @@ Three consequences worth knowing:
   nurlc emits every marked function at the end of the module, when the
   set of tier functions is complete. The test is one call deep on
   purpose: a marked function that only reaches the tier through some
-  ordinary function keeps its baseline clone.
+  ordinary function keeps its baseline clone. One that reaches a VAES
+  tier (`nurl_v256_*` / `nurl_v512_*` crypto primitives) is emitted
+  once, for that tier and gated on it: the tier contains x86-64-v3, so
+  there is no second clone to choose.
+- **A marked function with a `v256` or `v512` in its signature** takes
+  it by pointer in its clones, and its dispatcher — which keeps the
+  signature, spills the vectors and is `alwaysinline` — never becomes a
+  call the vector crosses by value: a wide vector is one register under
+  AVX and two or four without, and the two sides of a call between
+  feature sets would disagree on which (§4.1b).
 
 **Both clones are tested, not just the one this CPU picks.** A
 behavioural test can only ever run the clone the dispatcher selects, so
@@ -681,6 +693,7 @@ explicit cast (`#`).
 | `f32` | `float` | 32-bit float (v1.8) |
 | `v128` | `<4 x i32>` | 128-bit SIMD vector (v2.5) — see §4.1b |
 | `v256` | `<4 x i64>` | 256-bit SIMD vector (v2.6) — see §4.1c |
+| `v512` | `<8 x i64>` | 512-bit SIMD vector (v2.11) — see §4.1d |
 
 The unsigned variants share LLVM types with their signed counterparts;
 the compiler tracks signedness in a side-channel and selects `udiv` /
@@ -894,16 +907,85 @@ with a contract nurlc enforces rather than one the program has to keep:
   only *calls* a tier function stays baseline (the tier does not
   propagate up the call graph), so `? ( nurl_cpu_has_aes ) { hw } { sw }`
   in ordinary code is the shape a software fallback takes.
-- Under `--no-cpu-dispatch` (any non-x86-64 target) there is no tier:
+- **On AArch64** (`--target=aarch64`, and the default of a nurlc running
+  on an AArch64 host) the same primitives lower to the ARMv8
+  Cryptographic Extension: the tier is `+aes` (AESE / AESD / AESMC /
+  AESIMC and PMULL / PMULL2), asked of the OS (`getauxval` HWCAP_AES and
+  HWCAP_PMULL on Linux, `hw.optional.arm.FEAT_AES` on macOS — every
+  Apple Silicon and Graviton CPU has it) or of `ID_AA64ISAR0_EL1` on a
+  freestanding target. ARM splits a round differently from Intel — AESE
+  is the key XOR then SubBytes and ShiftRows, AESMC the MixColumns — so
+  `aesenc a k` is `AESMC(AESE(a, 0)) ^ k`, `aesenclast` drops the AESMC,
+  and the inverse rounds are AESD / AESIMC the same way; inlined into a
+  chain of rounds each `^ k` folds into the next AESE's key, which is
+  the native ARM sequence. There are no `simd` clones on AArch64; a
+  `simd @` function that reaches the tier is emitted once, for it. The
+  wide tiers are x86-only: their primitives are stubs there and
+  `nurl_cpu_has_vaes` is false.
+- Under `--no-cpu-dispatch` (any other target: RISC-V, wasm, a
+  freestanding build that names none) there is no tier:
   `nurl_cpu_has_aes` is a constant false and each primitive is a stub
   that panics if reached anyway.
+
+**Two wider tiers** hold the same operations on the wider lane types,
+every 128-bit lane an independent block — VAES and VPCLMULQDQ, which
+Ice Lake / Zen 3 and later CPUs have:
+
+| Tier | Primitives | Feature set | Question |
+|---|---|---|---|
+| AES (1) | `nurl_v128_aes*`, `nurl_v128_clmul_*` | x86-64-v2 + AES-NI + PCLMULQDQ | `nurl_cpu_has_aes()` |
+| VAES (2) | `nurl_v256_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` | x86-64-v3 + AES + PCLMUL + VAES + VPCLMULQDQ | `nurl_cpu_has_vaes()` |
+| AVX-512 VAES (3) | the same as `nurl_v512_*` (§4.1d) | x86-64-v4 + the VAES tier's | `nurl_cpu_has_vaes512()` |
+
+`clmul_XY` picks the halves within each lane, as the `v128` form does
+within its one; there is no wide `aesimc` (the instruction has none —
+run the key schedule's InvMixColumns on `v128`). Each tier contains the
+ones before it, and the contract above holds tier by tier: a function
+is compiled for the highest tier whose primitive it uses and gated on
+it; a tier helper's `.tier` copy is what code of that tier or a higher
+one calls (never a lower one, which would put the instruction in a
+function compiled without it); a `simd @` function that reaches a VAES
+tier is emitted once, for that tier — it contains x86-64-v3, so there
+is no clone left to choose between. `NURL_CPU_VAES=0` and
+`NURL_CPU_VAES512=0` take a tier away at run time, as `NURL_CPU_AES=0`
+does.
+
+**A wide vector crosses a call by pointer when the two sides' features
+differ.** A `v256` travels in one ymm register where a function is
+compiled with AVX and in two xmm registers where it is not (a `v512`:
+one zmm, two ymm or four xmm), and LLVM does not reconcile a caller and
+a callee that disagree — the callee reads half a vector. An ordinary
+function with a vector signature is `alwaysinline`, so no call is left
+to disagree; the functions that must stay out of line under features of
+their own — a `simd` function's clones, a tier function called from
+outside its tier — take their wide vectors through memory instead: the
+body is emitted under `f.vabi` with each wide parameter as a pointer
+(and a wide result written through a leading one), and `f` itself
+keeps the language signature, has no features and is `alwaysinline`,
+so it inlines into every caller and spills the vectors to the caller's
+frame. A `simd` dispatcher with a wide signature does the same. A
+struct holding a wide vector counts as one (an aggregate is passed
+element by element), and so does an ordinary function taking one, which
+is `alwaysinline` like any vector signature. An *indirect* call — a
+closure, a trait-object method — cannot be given a pointer form both
+sides know, so one carrying a wide vector is made from a featureless
+`noinline` thunk per signature (`__nurl_vcall.N`) that takes the wide
+arguments by pointer: every function whose address is taken is compiled
+without features, and the thunk calls it under the same ones. The cost
+is a store and a load per vector per call, on calls that are
+coarse-grained by construction. (A `v128` needs none of this: it is one
+xmm register under every x86-64 feature set.)
 
 `stdlib/std/aes_gcm.nu` is written on them: AES-128/256-GCM at ~3 GB/s
 on a 2014 Haswell (eight-block CTR stitched with the previous batch's
 GHASH, reflected-domain Montgomery reduction), against ~113 MB/s for
 the bitsliced software cipher it keeps for CPUs without the tier — and
 on par with the same algorithm written in C intrinsics and compiled by
-the same clang.
+the same clang. Where the CPU has a VAES tier a message of 256 bytes or
+more runs a sixteen-block kernel on ymm (two blocks a register) or zmm
+(four): ~0.25 and ~0.19 reference cycles a byte on a Sapphire Rapids,
+against ~0.42 for the eight-block kernel there and ~0.16 for OpenSSL's
+AVX-512 assembly.
 
 **Scalar bit primitives** ship alongside, for the operations every ISA
 has an instruction for and the language previously had to spell as a
@@ -990,6 +1072,34 @@ words back in order.
 pattern-matches back into a single `vpmulhw`, rather than as an
 intrinsic — so the same source is one instruction on AVX2 and a correct
 scalarised sequence everywhere else.
+
+Between the widths, for code that works on two 128-bit blocks a
+register (the VAES tier, §4.1b): `nurl_v256_join128(lo, hi) → v256`,
+`nurl_v256_lo128(v) → v128`, `_hi128(v) → v128`, and
+`nurl_v256_bswap128(v)` — `nurl_v128_bswap128` within each half.
+
+### 4.1d `v512` — four 128-bit lanes (v2.11)
+
+`v512` is `<8 x i64>`: what an AVX-512 zmm register holds, and two ymm
+or four xmm registers anywhere else. It exists for the AVX-512 VAES
+tier (§4.1b) — four AES blocks per instruction — and has only what a
+block cipher in that shape needs; like `v256` it is correct on any
+target and fast only where the hardware is that wide.
+
+| Group | Primitives |
+|---|---|
+| load / store | `nurl_v512_ld(*u) → v512`, `nurl_v512_st(*u, v512)` — unaligned |
+| construct | `nurl_v512_zero`, `_bcast128(v128)` (a `v128` in every lane), `_join256(lo, hi)` |
+| extract | `nurl_v512_lo256(v) → v256`, `_hi256(v) → v256` |
+| bitwise | `nurl_v512_xor`, `_and`, `_or` |
+| lane arithmetic | `nurl_v512_add32`, `_add64` |
+| byte order | `nurl_v512_bswap128(v)` — the sixteen bytes of each lane reversed |
+| crypto (AVX-512 VAES tier) | `nurl_v512_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v512_clmul_ll/_hl/_lh/_hh` |
+
+A function using a `v512` crypto primitive is compiled for x86-64-v4
+with 512-bit vectors kept legal (`"min-legal-vector-width"="512"`;
+x86-64-v4 otherwise prefers 256-bit ones and splits each operation in
+two).
 
 ### 4.2 Pointer types
 
@@ -2689,7 +2799,8 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.10** (foreign-parameter markers
+This document corresponds to **grammar v2.11** (the `v512` lane type,
+§4.1d; v2.10 foreign-parameter markers
 `in` / `sync` / `nocapture`, §7.2, and a foreach over a field, §5.4; v2.9
 the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
 `v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4
@@ -2697,9 +2808,9 @@ the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.10 conformant" if it accepts every program the EBNF
+A compiler is "v2.11 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.10 portable" if it relies
+the semantics defined here. A program is "v2.11 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

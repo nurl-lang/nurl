@@ -3482,13 +3482,29 @@ i clang_rc s build_stdout s build_stderr → v {
 
 // Is this target x86-64? The `simd` prefix expands to an x86-64-v3
 // clone plus a CPUID dispatcher, and nurlc emits no target triple, so
-// anything aimed elsewhere has to pass --no-cpu-dispatch or clang
-// answers with one "not a recognized feature for this target" line per
-// feature per marked function.
+// anything aimed elsewhere has to say what it is — `--target=aarch64`,
+// whose crypto primitives lower to the ARMv8 Cryptographic Extension,
+// or --no-cpu-dispatch — or clang answers with one "not a recognized
+// feature for this target" line per feature per marked function.
 @ __zig_is_x86_64 s id → b {
     ? ( nurl_str_eq id `linux-x64-musl` ) { ^ T } {}
     ? ( nurl_str_eq id `macos-x64` ) { ^ T } {}
     ^ F
+}
+
+@ __zig_is_arm64 s id → b {
+    ? ( nurl_str_eq id `linux-arm64-musl` ) { ^ T } {}
+    ? ( nurl_str_eq id `linux-arm64-gnu` ) { ^ T } {}
+    ? ( nurl_str_eq id `macos-arm64` ) { ^ T } {}
+    ^ F
+}
+
+// The nurlc flag that names a cross target's architecture, or `` for
+// x86-64 (the nurlc here is an x86-64 one).
+@ __zig_cpu_flag s id → s {
+    ? ( __zig_is_x86_64 id ) { ^ `` } {}
+    ? ( __zig_is_arm64 id ) { ^ `--target=aarch64` } {}
+    ^ `--no-cpu-dispatch`
 }
 
 @ __zig_is_static s id → b {
@@ -3545,7 +3561,8 @@ i clang_rc s build_stdout s build_stderr → v {
                     : String rt_o ( get_runtime_target_o target )
 
                     : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
-                    ? ! ( __zig_is_x86_64 target ) { ( vec_push [s] nurlc_args `--no-cpu-dispatch` ) } {}
+                    : s cpu_flag ( __zig_cpu_flag target )
+                    ? > ( nurl_str_len cpu_flag ) 0 { ( vec_push [s] nurlc_args cpu_flag ) } {}
                     : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {

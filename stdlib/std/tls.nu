@@ -862,10 +862,12 @@ $ `stdlib/core/slice.nu`
     // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) and
     // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged —
-    // the faster one for THIS CPU first: AES-GCM where it has AES-NI
-    // and PCLMULQDQ (nurl_cpu_has_aes; std/aes_gcm.nu's hardware path,
-    // ~3 GB/s over 16 KB records against ChaCha's ~1.4), ChaCha where
-    // it does not (the bitsliced AES runs at ~113 MB/s). Servers
+    // the faster one for THIS CPU first: AES-GCM where it has the
+    // hardware crypto tier — AES-NI and PCLMULQDQ, or AES and PMULL on
+    // AArch64 (nurl_cpu_has_aes; std/aes_gcm.nu's hardware path, ~3 GB/s
+    // over 16 KB records on a Haswell and ~9–12 on VAES, against
+    // ChaCha's ~1.1–1.4) — ChaCha where it does not (the bitsliced AES
+    // runs at ~113 MB/s). Servers
     // honouring client preference (Cloudflare et al.) pick the first;
     // AES-only peers get 0x1301 from the same list either way.
     // 1.3 suites first, then the TLS 1.2 ECDHE suites in the same order.

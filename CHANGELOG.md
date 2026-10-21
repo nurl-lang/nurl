@@ -10,6 +10,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AArch64 crypto tier: AES-GCM on the ARMv8 Cryptographic Extension**
+  (agora t57). nurlc now knows when it emits for AArch64 — `--target=ARCH`
+  (`aarch64`/`arm64`, `x86_64`, or anything else; a triple's first word
+  counts), and the native default of a nurlc on an AArch64 host
+  (`nurl_host_arch`). There the `nurl_v128_aes*` / `nurl_v128_clmul_*`
+  primitives lower to AESE / AESD / AESMC / AESIMC and PMULL / PMULL2
+  (`aesenc a k` = `AESMC(AESE(a, 0)) ^ k`, …; inlined, each round key
+  folds into the next AESE, the native ARM sequence), functions using
+  them are compiled with `+neon,+aes` and gated on `nurl_cpu_arm_aes`
+  (getauxval HWCAP_AES|HWCAP_PMULL on Linux, `hw.optional.arm.FEAT_AES`
+  on macOS, ID_AA64ISAR0_EL1 when freestanding; `NURL_CPU_AES=0`), and a
+  `simd @` function reaching the tier is one gated body. So
+  `nurl_cpu_has_aes` is true on Apple Silicon and Graviton, and
+  `std/aes_gcm.nu` and TLS take the hardware path there instead of the
+  ~113 MB/s bitsliced cipher. nurl.sh, the build API's arm64 targets and
+  the unikernel's arm64 build pass `--target=aarch64`. The `cpu-aes` test
+  requirement now holds on AArch64 (Linux `Features: aes pmull`, macOS),
+  so the macOS ARM64 CI runs `simd_crypto` and `aes_gcm_hw_agree`;
+  `crypto_tier_ir.sh` checks the AArch64 IR and machine code on every
+  host and runs `simd_crypto`, `aes_gcm_hw_agree` and `aes_gcm_vectors`
+  natively or under qemu-aarch64 (here: `-cpu max`, all three match the
+  x86 goldens, 2214 cases).
+
+- **VAES crypto tiers: AES-GCM on ymm and zmm, two and four blocks per
+  instruction** (agora t56). Two tiers above the AES one (docs/spec.md
+  §4.1b): the **VAES tier** — `nurl_v256_aesenc`, `_aesenclast`,
+  `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` on x86-64-v3
+  + AES + PCLMUL + VAES + VPCLMULQDQ, asked with `nurl_cpu_has_vaes` —
+  and the **AVX-512 VAES tier**, the same on the new **`v512`** lane type
+  (`<8 x i64>`, grammar v2.11, §4.1d: ld/st, zero, xor/and/or,
+  add32/add64, bcast128, join256, lo256/hi256, bswap128) on x86-64-v4,
+  asked with `nurl_cpu_has_vaes512`. The tier contract holds per tier:
+  compiled for the highest tier a function's own primitives need and
+  gated on it (`nurl__vaes_gate`, `nurl__vaes512_gate`; runtime CPUID
+  incl. XCR0 ZMM state, `NURL_CPU_VAES=0` / `NURL_CPU_VAES512=0` take a
+  tier away); a `.tier` copy is called only from code of its tier or a
+  higher one; a `simd` function reaching a VAES tier is emitted once for
+  it. New v256 helpers `nurl_v256_join128`, `_lo128`, `_hi128`,
+  `_bswap128`. `std/aes_gcm.nu` gains a sixteen-block stitched kernel per
+  wide tier for messages of 256 bytes and more (the eight-block one keeps
+  shorter ones): schoolbook GHASH (four VPCLMULQDQ a block beat
+  Karatsuba's three plus a shuffle and an XOR on the AES ports, ~5% in a
+  C model), one Montgomery reduction per step, a branch-free fold
+  (LLVM had hoisted all of a conditional fold ahead of the rounds) and
+  counters carried by a byte add, a pair-at-a-time tail folded with one
+  reduction. Sapphire Rapids, 16 KB seal with a prepared key, best of 25
+  on a shared host: **zmm 11.8 GB/s (0.17 TSC cycles/byte), ymm 8.8
+  (0.23)**, the AES-NI kernel 5.1 (0.41); OpenSSL 3.0's AVX-512 assembly
+  12.3–13.8 (0.15–0.17), its AES-NI one 5.0. A C model of the two loops
+  agrees: zmm ~1.25× ymm here (VAESENC has the same block throughput at
+  both widths; zmm halves everything else), so the AVX-512 form earns
+  its tier. `_aes_gcm_key_tier key t` builds the key a CPU of tier `t`
+  would, and `aes_gcm_hw_agree.nu` now holds every kernel a machine has
+  to the software oracle over 0–1100 bytes plus 4–16 KB lengths
+  (2214 cases); `simd_crypto_v256.nu` / `simd_crypto_v512.nu` check the
+  primitives lane by lane (FIPS-197 C.1 and the v128 primitives), and
+  `crypto_tier_ir.sh` checks both tiers' IR, gates, stubs, machine code
+  and runtime answers. Bootstrap snapshot refreshed (preamble changed).
 - **The TLS record layer seals and opens in place** (agora t44, part of
   t37). A record used to cost about ten allocations and three or four
   copies each way: the body sliced out of the receive buffer, a nonce,
@@ -120,6 +178,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `v256` passed to or returned from a `simd @` function was wrong on
+  every AVX2 machine.** The x86-64-v3 clone takes a `<4 x i64>` in one
+  ymm register, the baseline dispatcher (and any caller without AVX)
+  passes it in two xmm registers, and LLVM does not reconcile them: a
+  clone summing two v256s a hundred times answered 301 where 101 was
+  right. The clones now take wide vectors (v256, v512) by pointer and
+  the dispatcher spills them and is `alwaysinline`; a crypto-tier
+  function with a wide signature crosses a call from outside its tier
+  the same way (`f.vabi` + a featureless `alwaysinline` `f`). A struct
+  holding a wide vector is treated as one (passed by value it is split
+  element by element), and an indirect call carrying one — a closure or
+  a trait-object method, called from a `simd` clone or a tier body — goes
+  through a featureless `noinline` thunk per signature that takes the
+  vectors by pointer (`__nurl_vcall.N`), since every address-taken
+  function is compiled without features. Regression test
+  `simd_wide_abi.nu` (v256 / v512 / struct / closure, both clones).
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key
   and digest went through `bigint_from_bytes_be` / `bigint_rem` /
