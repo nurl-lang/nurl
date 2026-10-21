@@ -1179,6 +1179,7 @@ $ `stdlib/core/rcbox.nu`
     ( _set_keys c 0 . hs s_ap )
     ( _set_keys c 1 . hs c_ap )
     = . c established 1
+    = . c server 1
 
     // A ticket for next time, first thing under the application keys —
     // only for a client that said it can resume (§4.2.9).
@@ -1187,6 +1188,7 @@ $ `stdlib/core/rcbox.nu`
     } {}
 
     ? == finok 0 { ( _tls_close_in c ) ^ @ !v TlsErr { F # TlsErr TlsHandshake } } {}
+    ( _tls_ktls_auto c )
     ^ @ !v TlsErr { T 0 }
 }
 
