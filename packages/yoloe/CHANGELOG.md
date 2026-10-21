@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.2] — 2026-10-21
+
+### Fixed
+
+- **`img_to_nchw_norm` did not compile** (and so neither did yoloe nor yoloe-demo): it filled a
+  `GpuHost` through `gpu_host_f32`'s view, a write to the payload of the Arc the buffer's copies
+  share. It fills the cells with `gpu_host_fill_f32`, before the buffer is a GpuHost; the values
+  are the same.
+- `nurl_peek_i32` / `nurl_peek_f32` are declared to read their base only (`in *u`).
+
 ## [0.8.1] — 2026-10-16
 
 - The terminal preview reads the terminal's size with stdlib's `term_width` / `term_height` instead of its own `unsafe` ioctl on stdout. It also honours `$COLUMNS` / `$LINES` off a tty now. `unsafe` functions: 8 → 7; the rest are the X11 window and the V4L2 camera, which talk to their kernels' ABIs through the FFI.

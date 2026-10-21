@@ -2,6 +2,13 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.22.2] — 2026-10-21
+
+### Fixed
+
+- Requires gpu 0.17.7 / gpukit 0.11.13: uploading a mapped model's tensor bytes was
+  refused as a write to an Arc's payload until gpu declared its upload path read-only.
+
 ## [0.22.1] — 2026-10-21
 
 ### Fixed

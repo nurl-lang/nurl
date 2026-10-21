@@ -5429,6 +5429,12 @@ unsafe @ gen_ret i lex i syms i cg → s {
 // advanced to the next statement).
 : ~ i g_stmt_col 0
 
+// g_stmt_lex — the lexer that statement came from, so a check deep in
+// codegen that has no lexer of its own (__nc_copy_die) still reports at
+// the statement, line echoed and caret placed. nurl_lex_free clears it
+// when that lexer goes, so it is never a freed handle.
+: ~ i g_stmt_lex 0
+
 // ── Redundant-free lint ────────────────────────────────────────────
 // `( string_free x )`, `( vec_free [T] x )`, … — a release function (one
 // `sink` parameter and an EMPTY body, so the call does nothing but drop
@@ -11440,6 +11446,7 @@ unsafe @ nurl_lex_new s src s filename → i {
 // left behind before this existed.
 unsafe @ nurl_lex_free sink i h → v {
     ? == h 0 { ^ } {}
+    ? == g_stmt_lex h { = g_stmt_lex 0 } {}
     : s p # s h
     : i previous ( nurl_peek p 37 )
     : i following ( nurl_peek p 38 )
@@ -30470,6 +30477,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // "unexpected token" diagnostic and for die_stmt (see g_stmt_line).
     = g_stmt_line bck_line
     = g_stmt_col ( nurl_lex_col lex )
+    = g_stmt_lex lex
     = g_stmt_bare_lit 0
     // Fresh-owned-slice provenance is a per-EXPRESSION signal, so reset it at
     // every statement boundary: after a block runs, the flag then reflects
@@ -49290,7 +49298,7 @@ unsafe @ __cc_mangle s ty → s {
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
     ? ( __ts_cyclic ty syms ) {
-        ( die_at `thread-shared cycle` ( nurl_str_cat ( nurl_str_cat4 `'` op `' on '` ( llvm_to_nurl ty ) )
+        ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat ( nurl_str_cat4 `thread-shared cycle: '` op `' on '` ( llvm_to_nurl ty ) )
         `': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a copy), and point back with an ArcWeak.` ) ) }
     {}
     ( nurl_set_last_type `void` )
@@ -50130,7 +50138,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     ? ( __is_libh ty ) {
         ? ! ( __libh_has_op ( __libh_base ty ) `trace` ) {
             : s __lb ( __libh_base ty )
-            ( die_at `cycle collection` ( nurl_str_cat4 ( nurl_str_cat3 `handle type '` __lb `' (here holding an Rc, or a closure) has a ` )
+            ( __die_at_fn ( nurl_str_cat __lb `_drop` ) `cycle collection` ( nurl_str_cat4 ( nurl_str_cat3 `handle type '` __lb `' (here holding an Rc, or a closure) has a ` )
             ( nurl_str_cat __lb `_drop but no ` ) ( nurl_str_cat __lb `_trace, so the cycle collector cannot see inside it and a cycle through it would never be freed. Define ` )
             ( nurl_str_cat __lb `_trace beside it — the handle and an 's vis' as parameters, handing ( mem_trace [T] x vis ) each value the handle holds, as stdlib/std/hashmap.nu HashMap_trace does (docs/MEMORY.md 7.7).` ) ) )
         } {}
@@ -50504,15 +50512,45 @@ u` ) ( nurl_print q ) ( nurl_print `:
         : s n ( str_first_word rest ) = rest ( str_skip_word rest )
         : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
         : s ty ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ( seq n number ) { ( __nc_copy_die fn ty ) } {}
+        : s pf ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pl ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pc ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq n number ) { ( __nc_copy_die_rec ( nurl_str_cat4 pf ` ` pl ( nurl_str_cat ` ` pc ) ) ty ) } {}
     }
+}
+
+// A deferred diagnostic about a function: reported at its declaration
+// (g_fn_pos_syms, "file:line", the generic's under `<name>__g`), the
+// column that line's first non-blank. `what` stands in for a location
+// only when the function was never declared in source.
+@ __die_at_fn s fname s what s msg → v {
+    : ~ s pos ( nurl_sym_get g_fn_pos_syms fname )
+    ? == 0 ( nurl_str_len pos ) { = pos ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat fname `__g` ) ) } {}
+    : ~ i k - ( nurl_str_len pos ) 1
+    ~ & >= k 0 != ( nurl_str_get pos k ) 58 { = k - k 1 }
+    ? < k 1 { ( die_at what msg ) ^ } {}
+    ( die_file_pos ( nurl_str_slice pos 0 k ) ( nurl_str_to_int ( nurl_str_slice pos + k 1 - - ( nurl_str_len pos ) k 1 ) ) 0 msg )
 }
 
 // A borrowed value that cannot be copied, where its owner would have to
 // part with a copy (one diagnostic, from every site that finds it).
-@ __nc_copy_die s fname s ty → v {
-    ( die_at ( nurl_str_cat `in function ` fname )
+// Reported at the statement being compiled (g_stmt_lex) — inline, or
+// from the position parked with a store flag decided at module end — with
+// the line re-read and a caret; it used to name only "in function f".
+@ __nc_copy_die s fname s ty → v { ( __nc_copy_die_rec ( __stmt_pos_rec fname ) ty ) }
+
+@ __nc_copy_die_rec s rec s ty → v {
+    : s r1 ( str_skip_word rec )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
     ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
+}
+
+// The current statement's position as a "<file> <line> <col>" record (for
+// die_file_pos, now or at module end). With no statement current — no
+// check reaches here that way — the function's name stands in for it.
+@ __stmt_pos_rec s fname → s {
+    ? == g_stmt_lex 0 { ^ ( nurl_str_cat3 `in-function:` fname ` 0 0` ) } {}
+    ^ ( nurl_str_cat4 ( nurl_lex_filename g_stmt_lex ) ` ` ( nurl_str_int g_stmt_line ) ( nurl_str_cat ` ` ( nurl_str_int g_stmt_col ) ) )
 }
 
 // Does a match's option stay with someone else — a field (of a parameter,
@@ -51203,8 +51241,10 @@ unsafe @ __clo_take_capture i syms s name → v {
     // owner dropped it a second time.
     ? & == 0 ( nurl_str_starts ty `{ i1, ` ) ! ( seq lent `0` ) {
         ? ( __nc_drop_ty ty ) {
+            // "<n> <fn> <ty> <file> <line> <col>": reported where it was handed.
+            : s __fsn ( nurl_sym_get g_root_syms `__fn_self_name__` )
             ( __park_append g_pending_impl `ncstores` ( nurl_str_cat4 ( nurl_str_slice kflag 15 - ( nurl_str_len kflag ) 15 ) ` `
-            ( nurl_sym_get g_root_syms `__fn_self_name__` ) ( nurl_str_cat ` ` ty ) ) )
+            __fsn ( nurl_str_cat4 ` ` ty ` ` ( __stmt_pos_rec __fsn ) ) ) )
             ^ val
         } {}
     } {}

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.4] — 2026-10-21
+
+### Fixed
+
+- Requires gpukit 0.11.13 and onnx 0.12.4: the checkpoint upload from the mapped file
+  and onnx's `rt_download` were refused as writes to an Arc's payload. Compiles again.
+
 ## [0.7.3] — 2026-10-21
 
 ### Fixed

@@ -2930,9 +2930,38 @@ static inline size_t nurl__sc_usable_fast(void *p) {
     }
     return malloc_usable_size(p);
 }
+/* Valgrind replaces malloc with its own, whose blocks have no glibc
+ * header — the word before one is a redzone, and the probe's read of it
+ * was an "Invalid read of size 8" in every program run under memcheck
+ * (twelve, one per probed size), noise in front of any real report. The
+ * probe then failed and the library query was used, as it should be, so
+ * nothing was wrong but the read itself. Ask first: the client request
+ * RUNNING_ON_VALGRIND (valgrind.h's own instruction sequence, inlined so
+ * the runtime needs no valgrind headers to build) answers non-zero under
+ * any valgrind tool and is a no-op rotate sequence on bare metal. */
+static int nurl__sc_on_valgrind(void) {
+    unsigned long args[6] = { 0x1001 /* VG_USERREQ__RUNNING_ON_VALGRIND */, 0, 0, 0, 0, 0 };
+    unsigned long res = 0;
+#  if defined(__x86_64__)
+    __asm__ volatile("rolq $3,  %%rdi ; rolq $13, %%rdi\n\t"
+                     "rolq $61, %%rdi ; rolq $51, %%rdi\n\t"
+                     "xchgq %%rbx,%%rbx"
+                     : "=d"(res) : "a"(&args[0]), "0"(0UL) : "cc", "memory");
+#  elif defined(__aarch64__)
+    __asm__ volatile("mov x3, %1\n\t"
+                     "mov x4, %2\n\t"
+                     "ror x12, x12, #3  ;  ror x12, x12, #13\n\t"
+                     "ror x12, x12, #51 ;  ror x12, x12, #61\n\t"
+                     "orr x10, x10, x10\n\t"
+                     "mov %0, x3"
+                     : "=r"(res) : "r"(0UL), "r"(&args[0]) : "cc", "memory", "x3", "x4");
+#  endif
+    return res != 0;
+}
 static void nurl__sc_probe_hdr(void) {
     static const size_t sizes[] = { 1, 8, 16, 24, 25, 40, 64, 100, 200, 500, 1000, 4000 };
     int ok = 1;
+    if (nurl__sc_on_valgrind()) { nurl__sc_hdr = 0; return; }
     for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
         void *p = malloc(sizes[i]);
         if (!p) { ok = 0; break; }

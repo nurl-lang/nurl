@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.10] — 2026-10-21
+
+### Fixed
+
+- **`csv sort 1M×8` did not compile.** The timed closure captured both the work Vec, which
+  `sort_by` changes, and a view of it taken outside, two names for what the sort moves, which
+  the borrow checker refuses. The view is taken inside the pass; the work is the same.
+
 ## [0.1.9] — 2026-10-21
 
 ### Fixed

@@ -1,5 +1,7 @@
 COMPILE FAIL
 ERRORS
-in function main: error: a borrowed 'Res' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+compiler/tests/diag_enum_uncopyable_payload_to_sink.nu:18:24: error: a borrowed 'Res' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+    ?? s { Has r → { ( eat r ) } Bare → {} }
+                       ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -266,6 +266,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vectors by pointer (`__nurl_vcall.N`), since every address-taken
   function is compiled without features. Regression test
   `simd_wide_abi.nu` (v256 / v512 / struct / closure, both clones).
+- **A NURL program under valgrind reported twelve invalid reads before its
+  own.** The allocator cache probes, once at start-up, whether glibc's
+  chunk header can stand in for `malloc_usable_size`, by reading the word
+  before a few fresh blocks. Under valgrind, whose malloc has no such
+  header, every read was an "Invalid read of size 8" in `nurl__sc_init`
+  (the probe then failed and the library query was used, correctly). The
+  probe now asks first — valgrind's RUNNING_ON_VALGRIND client request,
+  inlined for x86-64 and AArch64, a no-op on bare metal — and skips the
+  read under any valgrind tool.
+
+- **The last diagnostics without a file are located (agora #70).** Three
+  checks printed `cycle collection: error: …`, `thread-shared cycle:
+  error: …` and `in function f: error: …`, with no file, line, column,
+  echoed line or caret. A library handle with a `_drop` and no `_trace`
+  is reported at its `_drop`'s declaration; `arc_set` / `arc_ptr` on an
+  Arc that can close a cycle at the check in the instantiated template,
+  with the instantiation and its call site in the bracketed context; a
+  borrowed value that cannot be copied at the statement that would copy
+  it — also when the decision is made at module end (a callee's store
+  flag), from the position parked with it.
+
+- **Seven packages compile again (agora #69).** The borrow checker's
+  frozen-Arc and closure-capture rules refused lingbot-map, map-anything,
+  onnx (and through it yoloe, yoloe-demo, objdet) and benchmark, with
+  nothing in CI compiling packages to notice. Fixed where each is wrong:
+  - gpu 0.17.7: the foreign functions that only read host memory
+    (`cuMemcpyHtoD*`'s source, `wgpu_upload`'s, `nurl_peek_*`'s base) are
+    declared `in *u`. Unmarked, a `*u` is written through, so every upload
+    counted as changing its source and an upload from a mapped checkpoint
+    (an Arc's payload) was a "write to frozen memory".
+  - A GpuHost's memory is an Arc's payload, so filling one through
+    `gpu_host_f32`'s view is a genuine write to shared memory: gpu's new
+    `gpu_host_fill_f32` fills the cells before the buffer is wrapped
+    (yoloe, objdet), and onnx's `rt_download` downloads straight into the
+    buffer (`gk_dbuf_download_host`).
+  - benchmark takes the view of the Vec `sort_by` changes inside the timed
+    closure, not beside it.
+
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key
   and digest went through `bigint_from_bytes_be` / `bigint_rem` /

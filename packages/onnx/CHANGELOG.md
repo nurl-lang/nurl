@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.4] — 2026-10-21
+
+### Fixed
+
+- **`rt_download` did not compile.** It wrote the tensor into a fresh `GpuHost` through a
+  `( Slice u )` view of it (`gpu_host_u8`), a change to the payload of the Arc the buffer's
+  copies share, which the borrow checker refuses. It downloads with `gk_dbuf_download_host`,
+  straight into the buffer.
+
 ## [0.12.3] — 2026-10-16
 
 - WebGPU builds run again (with gpu 0.17.6, now required): `tests/wgsl_census_test.nu` matches the WGSL set to the census by a checked kernel's base name, requires base names to be unique, and checks each entry's buffer names against the bindings its census source reads. tiny.onnx, tinyyolov2 and yoloe-v8s-seg run on WebGPU (headless Chrome) and match the native backend.

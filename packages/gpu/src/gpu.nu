@@ -96,7 +96,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ wgpu_free i id → v
 
-& `c` @ wgpu_upload i id *u host i bytes → i
+& `c` @ wgpu_upload i id in *u host i bytes → i
 
 & `c` @ wgpu_download *u host i id i bytes → i
 
@@ -673,6 +673,21 @@ unsafe @ gpu_host_of_vec sink ( Vec u ) v → GpuHost {
     : i nb ( vec_len [u] v )
     : *u p ( vec_data [u] v )
     ^ @ GpuHost { p nb @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ ?GpuCtx { F } v } ) } } }
+}
+
+// `n` zeroed f32 cells, filled by `fill` BEFORE the buffer becomes a
+// GpuHost. A GpuHost's memory is the payload of the Arc its copies share,
+// so a write through gpu_host_f32's view of one is a change to a frozen
+// payload, which the borrow checker refuses (another copy may be reading
+// it on another thread). Here the view is of a Vec nothing else holds
+// yet: fill writes it, and the buffer is wrapped whole afterwards —
+// building the value before arc_new. A negative `n` is an empty buffer.
+unsafe @ gpu_host_fill_f32 i n ( @ v ( Slice f32 ) ) fill → GpuHost {
+    : i nb ? < n 0 0 * n 4
+    : ( Vec u ) buf ( vec_zeroed [u] nb )
+    : *u p ( vec_data [u] buf )
+    ( fill ( slice_from_raw [f32] # *f32 p / nb 4 ) )
+    ^ @ GpuHost { p nb @ ?GpuRes { T @ GpuRes { ( arc_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ ?GpuCtx { F } buf } ) } } }
 }
 
 // No buffer — the placeholder for "not allocated yet".
