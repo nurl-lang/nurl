@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.7] — 2026-10-21
+
+Requires the NURL with `server_keepalive_auto`.
+
+### Changed
+
+- An unset `http_app_max_keepalive` follows the serving mode: `http_app_async` serves a connection with no request cap (the idle timeout bounds it, since a connection holds only a fiber); the single-threaded and worker-pool servers keep the 1000-request cap.
+
 ## [0.7.6] — 2026-10-14
 
 Requires the NURL with `rc_take` / `rc_restore` and `http3_creds_ok`.
