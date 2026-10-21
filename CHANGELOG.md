@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
+  A page (and a cut section) was sliced at a byte offset, so one that
+  ended inside a `—` was invalid UTF-8 and a JSON client rejected the
+  whole reply — docs/spec.md's second page did, once an edit moved the
+  48 KB cap into an em dash. Both ends now snap back to the character
+  they fall in (the `__mcp_utf8_cut` the registry descriptions already
+  used), and the printed `offset=` is where the next page starts.
+
 - **A call returning a SIMD vector no longer leaks its temporary argument
   (h316).** `: v128 x ( lanes ( mk ) )` left the Vec `mk` made alive for
   ever: a `v128` / `v256` result was taken for one that could point into
