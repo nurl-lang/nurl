@@ -50,6 +50,9 @@ $ `stdlib/core/slice.nu`
 // carry `Authorization: Bearer <token>`.)
 : ~ i g_read_only 0
 : ~ i g_run_allowed 1
+// g_http : 1 ⇒ serving over HTTP. Callers are remote, so host paths and
+// output paths are restricted to safe workspace-relative names.
+: ~ i g_http 0
 
 // ── Version ─────────────────────────────────────────────────────────
 //
@@ -120,7 +123,11 @@ $ `stdlib/core/slice.nu`
 // `source` is present.
 @ nm_input Json args → ?NmInput {
     ?? ( json_obj_get args `path` ) {
-        T pv → { ^ @ ?NmInput { T @ NmInput { ( string_from ( json_str_data pv ) ) ( string_new ) F } } }
+        T pv → {
+            : s p ( json_str_data pv )
+            ? & != 0 g_http ! ( nm_safe_rel p ) { ^ @ ?NmInput { F } } {}
+            ^ @ ?NmInput { T @ NmInput { ( string_from p ) ( string_new ) F } }
+        }
         F → {}
     }
     ?? ( json_obj_get args `source` ) {
@@ -251,8 +258,19 @@ $ `stdlib/core/slice.nu`
 
 // Reject a workspace-relative path that escapes the workspace or is absolute.
 @ nm_safe_rel s p → b {
-    ? == ( nurl_str_len p ) 0 { ^ F } {}
-    ? == ( nurl_str_get p 0 ) 47 { ^ F } {}
+    : i n ( nurl_str_len p )
+    ? == n 0 { ^ F } {}
+    // `/…` is absolute, `-…` is a flag once the shell removes the quotes,
+    // `.…` is a hidden/`.`/`..` step — all refused up front.
+    : i c0 ( nurl_str_get p 0 )
+    ? | | == c0 47 == c0 45 == c0 46 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get p k )
+        : b ok | | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 == c 46 | == c 95 | == c 47 == c 45
+        ? ! ok { ^ F } {}
+        = k + k 1
+    }
     ^ ! ( nm_has_dotdot p )
 }
 
@@ -458,7 +476,13 @@ version = "0.0.0"
 
             : ~ String outp ( string_new )
             : ?Json oj ( json_obj_get args `out` )
-            ?? oj { T ov → { = outp ( string_from ( json_str_data ov ) ) } F → {} }
+            ?? oj { T ov → {
+                    : s os ( json_str_data ov )
+                    ? & & != 0 g_http != 0 ( nurl_str_len os ) ! ( nm_safe_rel os ) {
+                        ^ ( mcp_tool_result_error `bad 'out' — over HTTP it must be a safe relative path` )
+                    } {}
+                    = outp ( string_from os )
+                } F → {} }
             : ~ b tmp_out F
             ? == ( string_len outp ) 0 {
                 ? was_inline {
@@ -600,7 +624,11 @@ version = "0.0.0"
     : ?Json pj ( json_obj_get args `path` )
     ?? pj {
         T pv → {
-            : !Output ProcessErr r ( process_run1 `nurlfmt` ( json_str_data pv ) )
+            : s p ( json_str_data pv )
+            ? & != 0 g_http ! ( nm_safe_rel p ) {
+                ^ ( mcp_tool_result_error `bad 'path' — over HTTP it must be a safe relative path` )
+            } {}
+            : !Output ProcessErr r ( process_run1 `nurlfmt` p )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
@@ -1120,6 +1148,7 @@ version = "0.0.0"
     : i port ( nurl_str_to_int ( string_data ports ) )
 
     = g_read_only ? read_only 1 0
+    = g_http ? want_http 1 0
     ? want_http {
         = g_run_allowed ? & ! read_only allow_run 1 0
     } {
