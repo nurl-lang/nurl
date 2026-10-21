@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_let_type_name_as_binding.nu:13:9: error: expected a binding name, found '5'. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'. Here 'P' names a type in scope, so it is read as the binding's TYPE — an identifier that names a registered type is the annotation (spec §5.1), never the inferred form's name. A binding cannot take a type's name: pick another one.
+    : P 5
+        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

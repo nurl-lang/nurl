@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+silent_off_fiber=NetTimeout
+silent_off_fiber_on_time=yes
+echo=ping
+silent_fiber=NetTimeout
+silent_fiber_on_time=yes
+ticker_ran_during_handshake=yes

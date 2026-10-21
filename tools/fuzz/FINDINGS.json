@@ -2,6 +2,20 @@
   "_comment": "Curated log of real compiler/runtime bugs found by the fuzzers. Newest first. report.py renders this into FUZZRESULTS.md — keep entries short; the fix commit/PR carries the detail.",
   "findings": [
     {
+      "date": "2026-10-21",
+      "family": "parser-mutational",
+      "title": "HTTP/1.1 client (http_pure.nu): the chunk-size parser had no overflow ceiling — a 16/17-digit size wrapped i64 to a negative chunk_remaining and the body copy moved the read position 2^62 bytes back (SEGV on any build, from one response). It now takes 1*HEXDIG under a 2^48 ceiling plus BWS/extensions only, checks the CRLF after each chunk, and caps chunk-size/trailer lines (8 KiB) and the response head (256 KiB)",
+      "severity": "memory-safety",
+      "status": "fixed (http_client_chunked_strict); target http1resp, minutes into its first run"
+    },
+    {
+      "date": "2026-10-21",
+      "family": "parser-mutational",
+      "title": "RSA verify (rsa.nu) spent sig^e mod n on any key a peer sent: a 600-bit exponent made one certificate-chain or CSR signature check take most of a second at 2048 bits (~50x e = 65537) with nothing bounding the modulus either, and e = 1 was accepted, under which sig = EM verifies anything. Verify now refuses a modulus over 8192 bits and an exponent outside odd 3 .. 2^32-1",
+      "severity": "dos + forgery under a degenerate key",
+      "status": "fixed (rsa_pubkey_bounds); found chasing the csr target's low throughput"
+    },
+    {
       "date": "2026-09-14",
       "family": "reject-inverse",
       "title": "Borrow-checker blind spot: a definite double free inside a `;` defer body was accepted whenever the defer was written in a `?` arm, a `??` arm, a `~` body or a foreach body — the exit-state replay only walked a site whose synthetic arming flag was DEFINITELY set, and each of those four contexts weakens or drops it. Conditionally-armed bodies are now swept body-local, from an EMPTY state, like a `??` arm",

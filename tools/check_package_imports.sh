@@ -7,7 +7,10 @@
 #
 #   1. no package imports itself through a `packages/<name>/…` path;
 #   2. every `deps/<name>/…` a packaged source imports names a package
-#      declared in that package's [dependencies].
+#      declared in that package's [dependencies];
+#   3. every other import of a packaged source (not `stdlib/…`, `deps/…`
+#      or `packages/…`) names a file that exists relative to the
+#      IMPORTING file.
 #
 #  Inside this repo every build runs from the repo root, so
 #  `$ \`packages/torchpt/src/pickle.nu\`` resolves and every test
@@ -23,6 +26,15 @@
 #  which resolves relative to the importing file and is therefore
 #  correct in both layouts; a DEPENDENCY is imported through
 #  `deps/<pkg>/src/…`, which nurlpkg symlinks in both layouts too.
+#
+#  Rule 3 is the same trap one directory down. nurlc resolves an import
+#  relative to the importing file first, then the working directory
+#  (spec §3.2), so `$ \`src/store.nu\`` written in src/service.nu misses
+#  src/src/store.nu and finds the file through the cwd — which is the
+#  package root in every in-repo build, and the CONSUMER's root once the
+#  package is installed under deps/<pkg>/. Sixteen packages shipped that
+#  way (anomaly's documented `$ \`deps/anomaly/src/dynamic.nu\`` among
+#  them); a sibling is written `store.nu`, which resolves in both.
 #
 #  Rule 2 is the publish gate's (`nurlpkg publish` refuses "deps/<x>/… is
 #  imported, but '<x>' is missing from nurl.toml"), run on every change
@@ -57,6 +69,14 @@ artifacts = {'deps', 'build', 'target', 'node_modules', 'vendor', '.git', '.nurl
 packages = Path('packages')
 pattern = re.compile(rb'^\s*\$[ \t]*`packages/')
 dep_import = re.compile(rb'^[ \t]*\$[ \t]*`deps/([^/`\r\n]+)/')
+any_import = re.compile(rb'^[ \t]*\$[ \t]*`([^`\r\n]+)`')
+rooted = (b'stdlib/', b'deps/', b'packages/')
+
+
+def resolves_beside(path, target):
+    # The importer-relative tier of nurlc's lookup, with its `.nu` retry.
+    here = path.parent / os.fsdecode(target)
+    return here.exists() or here.with_name(here.name + '.nu').exists()
 
 
 def fail(message):
@@ -147,6 +167,7 @@ try:
         sources.append(path)
     hits = []
     undeclared = []
+    cwd_only = []
     manifests = {}
     for path in sources:
         ships = packaged(path)
@@ -156,6 +177,11 @@ try:
                 if pattern.match(line):
                     text = line.rstrip(b'\r\n').decode('utf-8', errors='replace')
                     hits.append(f'{path}:{line_number}: {text}')
+                other = any_import.match(line) if ships else None
+                if (other and not other.group(1).startswith(rooted)
+                        and not resolves_beside(path, other.group(1))):
+                    text = text or line.rstrip(b'\r\n').decode('utf-8', errors='replace')
+                    cwd_only.append(f'{path}:{line_number}: {text}')
                 dep = dep_import.match(line) if ships else None
                 if dep:
                     name = dep.group(1).decode('utf-8', errors='replace')
@@ -185,10 +211,23 @@ if undeclared:
         print('  ' + hit, file=sys.stderr)
     print('\nadd each one to [dependencies], with the version requirement the import needs.',
           file=sys.stderr)
-if hits or undeclared:
+if cwd_only:
+    if hits or undeclared:
+        print(file=sys.stderr)
+    print('packaged sources import a file that does not exist beside the importer:',
+          file=sys.stderr)
+    print('(nurlc then tries the working directory: the package root here, the consumer\'s',
+          file=sys.stderr)
+    print(' root once installed under deps/<pkg>/, where it is not found)\n', file=sys.stderr)
+    for hit in cwd_only:
+        print('  ' + hit, file=sys.stderr)
+    print("\nwrite the path relative to the importing file: a sibling in src/ is `name.nu`,"
+          " not `src/name.nu`.", file=sys.stderr)
+if hits or undeclared or cwd_only:
     raise SystemExit(1)
 
 count = len({path.parts[1] for path in sources if len(path.parts) > 2})
 print(f'package imports OK ({count} packages, {len(sources)} source files, '
-      "no 'packages/…' self-imports, every deps/ import declared)")
+      "no 'packages/…' self-imports, every deps/ import declared, "
+      'every sibling import relative to its importer)')
 PYTHON

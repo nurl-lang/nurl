@@ -67,13 +67,16 @@ explicit type annotation: `: i n 0` works as a type annotation on a
 differently-named variable. But a binding named `i` must have a different
 spelling.
 
-## Import paths are resolved from the working directory
+## Import paths: beside the importer first, then the working directory
 
-`$ "path"` resolves relative to the compiler's current working directory
-— not relative to the file that contains the `$`. Run `nurlc` from the
-project root, and write import paths as project-root-relative
-(`stdlib/foo.nu`). This way imports behave the same no matter which file
-imports them.
+`$ "path"` is tried relative to the file that contains the `$` first,
+then the compiler's current working directory, then `$NURL_STDLIB`.
+Stdlib imports (`stdlib/core/vec.nu`) resolve through the last two. A
+package's own modules import each other by their path from the
+importing file — `store.nu` from `src/service.nu`, not `src/store.nu`:
+the `src/` form only resolves while the working directory is the
+package root, so it breaks once the package is installed under a
+consumer's `deps/<pkg>/`.
 
 ## Next
 

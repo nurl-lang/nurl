@@ -20,7 +20,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/args.nu`
-$ `src/iforest.nu`
+$ `iforest.nu`
 
 // A parsed numeric matrix: `data` is row-major (rows*cols), owned by caller.
 : Dataset {

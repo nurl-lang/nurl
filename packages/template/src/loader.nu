@@ -11,7 +11,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
-$ `src/template.nu`
+$ `template.nu`
 
 @ tset_load_dir TplSet t s dir s ext → i {
     : String pat ( string_from dir )

@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+5
+five
+2
+3
+7
+8
+3

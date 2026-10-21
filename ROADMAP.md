@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-20 · Current release: **0.76.0** · Language: **Grammar
+_Last reviewed: 2026-10-21 · Current release: **0.76.0** · Language: **Grammar
 v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -185,7 +185,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   declarations (v2.6); the **`inline` always-inline prefix** (v2.7); the
   **`unsafe` raw-memory prefix** (v2.8); the **`raw` caller-vouched
   prefix** (v2.9); **FFI parameter markers** (`in`, `sync`, `nocapture`)
-  and a foreach over a field (v2.10); **`unsafe % Send` / `unsafe % Sync`** (v2.11); and locked the prefix-arity
+  and a foreach over a field (v2.10); **`unsafe % Send` / `unsafe % Sync`**
+  and the **`v512`** lane type of the AVX-512 VAES crypto tier (v2.11); and locked the prefix-arity
   grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the

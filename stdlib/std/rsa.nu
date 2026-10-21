@@ -47,6 +47,23 @@ $ `stdlib/std/hash_sha256.nu`
     ^ ok
 }
 
+// The public key a verify will spend sig^e mod n on — and both halves
+// come off the wire (a certificate chain a TLS server sends, a CSR a CA
+// is handed). The work grows with bits(e) · bits(n)^2, so an unbounded
+// key is a CPU-exhaustion lever: a 600-bit exponent took most of a second
+// per signature at 2048 bits (some 50x an e = 65537 check), and both the
+// exponent and the modulus are only as small as the sender likes (found
+// chasing the tools/fuzz `csr` target's throughput). Accept the keys
+// real PKIs issue: a modulus of at most 8192 bits (Go's crypto/tls cap)
+// and an odd exponent of 3 .. 2^32-1 (Go caps it at 2^31-1; CA/B
+// requires 65537-or-more and every deployed key is 65537 or 3).
+@ __rsa_pub_ok ( Vec u ) n ( Vec u ) e → b {
+    ? > ( __rsa_bitlen n ) 8192 { ^ F } {}
+    : i eb ( __rsa_bitlen e )
+    ? | < eb 2 > eb 32 { ^ F } {}
+    ^ == 1 & ( __rsa_bget e - ( vec_len [u] e ) 1 ) 1
+}
+
 // Recover the encoded message EM = sig^e mod n, padded to the modulus
 // length (k bytes).
 @ __rsa_em ( Vec u ) n ( Vec u ) e ( Vec u ) sig → ( Vec u ) {
@@ -77,6 +94,7 @@ $ `stdlib/std/hash_sha256.nu`
 @ rsa_pkcs1_verify ( Vec u ) n ( Vec u ) e ( Vec u ) sig ( Vec u ) di_prefix ( Vec u ) digest → b {
     : i k ( vec_len [u] n )
     ? < k 11 { ^ F } {}
+    ? ! ( __rsa_pub_ok n e ) { ^ F } {}
     ? ! ( __rsa_sig_inrange n sig ) { ^ F } {}
     : ( Vec u ) em ( __rsa_em n e sig )
     : i tlen + ( vec_len [u] di_prefix ) ( vec_len [u] digest )
@@ -161,6 +179,7 @@ $ `stdlib/std/hash_sha256.nu`
     : i embits - ( __rsa_bitlen n ) 1
     : i emlen / + embits 7 8
     ? < emlen + + hlen slen 2 { ^ F } {}
+    ? ! ( __rsa_pub_ok n e ) { ^ F } {}
     ? ! ( __rsa_sig_inrange n sig ) { ^ F } {}
     : ( Vec u ) emfull ( __rsa_em n e sig )
     // emfull is k bytes; EM is its low emLen bytes (right-aligned).

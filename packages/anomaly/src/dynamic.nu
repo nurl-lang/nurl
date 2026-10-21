@@ -33,12 +33,12 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/json.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
-$ `src/score.nu`
-$ `src/autoenc.nu`
-$ `src/forecast.nu`
-$ `src/store.nu`
+$ `prep.nu`
+$ `model.nu`
+$ `score.nu`
+$ `autoenc.nu`
+$ `forecast.nu`
+$ `store.nu`
 $ `stdlib/std/arc.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────

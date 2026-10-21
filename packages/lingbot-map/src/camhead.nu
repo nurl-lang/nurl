@@ -37,10 +37,10 @@ $ `stdlib/std/float.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
-$ `src/rope.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
+$ `rope.nu`
 
 : i CH_DIM 2048
 : i CH_HEADS 16

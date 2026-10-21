@@ -13,8 +13,8 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
-$ `src/report.nu`
-$ `src/suite.nu`
+$ `report.nu`
+$ `suite.nu`
 
 // the registry of benchmarks: name → thunk producing its row
 @ __bench_count → i { ^ 7 }

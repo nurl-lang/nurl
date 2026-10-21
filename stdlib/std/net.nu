@@ -11,6 +11,8 @@
 //   ( tcp_accept          TcpListener l )                   → ! TcpConn NetErr
 //   ( tcp_connect         s host i port )                   → ! TcpConn NetErr
 //   ( tcp_connect_timeout s host i port i ms )              → ! TcpConn NetErr
+//   ( tcp_connect_tls_timeout s host i port s sni i verify s alpn ( Vec u ) sess i ms )
+//                                                           → ! TcpConn NetErr
 //   ( tcp_read_chunk      TcpConn c i max )                 → ! ( Vec u ) NetErr
 //   ( tcp_write_all       TcpConn c ( Vec u ) bytes )       → ! v NetErr
 //   ( tcp_write_all2      TcpConn c ( Vec u ) head ( Vec u ) body ) → ! v NetErr
@@ -580,6 +582,8 @@ $ `stdlib/std/thread.nu`
 
 & `c` @ nurl_tcp_connect_ms s host i port i ms → i
 
+& `c` @ nurl_monotonic_ns → i
+
 // The runtime half of every client connect: a connected runtime handle,
 // or the transport's own NetErr (the failed handle already closed).
 //
@@ -616,7 +620,8 @@ $ `stdlib/std/thread.nu`
 // budget covers the name lookup and the TCP handshake together, and is
 // honoured on a fiber (a netpoller deadline — the worker keeps running
 // other fibers meanwhile) and off one (poll(2)) alike. ms <= 0 = no
-// deadline. For TLS, connect with this and upgrade with tcp_starttls.
+// deadline. For TLS with one deadline over both handshakes, see
+// tcp_connect_tls_timeout.
 @ tcp_connect_timeout s host i port i ms → !TcpConn NetErr {
     ?? ( __tcp_connect_raw host port ms ) {
         F e → ^ @ !TcpConn NetErr { F e }
@@ -657,10 +662,28 @@ $ `stdlib/std/thread.nu`
 // one call — what an HTTP client that pools connections needs, since the
 // one-knob variants each leave one of the three out.
 @ tcp_connect_tls_full s host i port s server_name i verify s alpn ( Vec u ) sess → !TcpConn NetErr {
-    : i raw ?? ( __tcp_connect_raw host port 0 ) { F e → ^ @ !TcpConn NetErr { F e } T r → r }
-    : !TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
+    ^ ( tcp_connect_tls_timeout host port server_name verify alpn sess 0 )
+}
+
+// tcp_connect_tls_full with ONE deadline, `ms` milliseconds, over the
+// whole connect: name lookup, TCP handshake and TLS handshake. Running
+// out reports NetTimeout, at whichever step it happens; ms <= 0 = no
+// deadline (each handshake read then waits up to 20 s, as in
+// tcp_connect_tls*). For the one-knob forms pass `` alpn and an empty
+// session: verify 1 `` ( vec_new [u] ) is tcp_connect_tls with a
+// deadline. On a fiber every wait parks; off one it is poll(2) and the
+// socket timeouts.
+@ tcp_connect_tls_timeout s host i port s server_name i verify s alpn ( Vec u ) sess i ms → !TcpConn NetErr {
+    : i deadline ? > ms 0 + ( nurl_monotonic_ns ) * ms 1000000 0
+    : i raw ?? ( __tcp_connect_raw host port ms ) { F e → ^ @ !TcpConn NetErr { F e } T r → r }
+    : !TlsConn TlsErr r ( tls_attach_full_until raw server_name alpn sess verify deadline )
     ?? r {
-        F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        F _ → {
+            ? & > deadline 0 >= ( nurl_monotonic_ns ) deadline {
+                ^ @ !TcpConn NetErr { F # NetErr NetTimeout }
+            } {}
+            ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+        }
         T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 1 ( _tls_word tc ) T ) }
     }
 }
@@ -946,7 +969,16 @@ $ `stdlib/std/thread.nu`
     : i fd . ( __tci c ) raw
     : !TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
     ?? r {
-        F _ → ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        F _ → {
+            // A failed handshake (or a certificate refused) closed the
+            // socket with the TLS state that took it over: the conn
+            // holds a closed handle now, which its drop must not close
+            // a second time (a use-after-free of the runtime's record).
+            : *TcpConnImpl p ( __tci c )
+            = . p owns F
+            = . p raw 0
+            ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        }
         T tc → {
             ( __starttls_register fd ( _tls_word tc ) )
             ^ @ !v NetErr { T 0 }

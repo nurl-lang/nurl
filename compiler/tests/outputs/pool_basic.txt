@@ -1,0 +1,40 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first 1
+again 1
+made 1
+live 1
+idle 1
+made 2
+  error ResTimeout
+third -1
+  error ResTimeout
+third-30ms -1
+waited-at-least-30 1
+live 2
+idle-after-block 2
+dropped 1
+live 1
+  error ResRefused
+refused -1
+live 1
+dropped-on-return 1
+live 0
+fill 1
+filled 1
+idle-before 3
+evicted 2
+idle-after 1
+dropped2 2
+  error ResClosed
+closed-get -1
+live-closed 1
+live-returned 0
+dropped2 3
+made2 3
+string conn-0
+string-idle 1
+string again conn-0
+string-made 1

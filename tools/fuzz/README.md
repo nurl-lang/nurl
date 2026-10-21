@@ -81,14 +81,74 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
    binary underneath it and a mutant can never be left in `compiler/tests/`.
 
 4. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
-   `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
-   (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
-   harness; a crash / out-of-bounds / UB / hang is a bug. Run it locally with
-   `./tools/fuzz/fuzz_parsers.sh [SEED] [ITERS] [TIMEOUT]` after `./build.sh`.
+   `parse_harness.nu`) — the untrusted-input parsers, data formats and
+   network protocols, against an ASan+UBSan+LSan harness; a crash /
+   out-of-bounds / UB / leak / oversized allocation / hang is a bug. See
+   [Parser fuzzer](#parser-fuzzer--targets-inputs-triage) below. Run it
+   locally with `./tools/fuzz/fuzz_parsers.sh [SEED] [ITERS] [TIMEOUT]`
+   after `./build.sh`.
 
 All are deterministic per seed, so a finding reproduces. Seed corpora live
 in-tree (`gen.py` / `genprog.py` generators; `fuzz_parsers.py`'s
-`TEXT_SEEDS`/`BINARY_SEEDS`).
+`TEXT_SEEDS`/`BINARY_SEEDS`, its protocol generators and `corpus/`).
+
+## Parser fuzzer — targets, inputs, triage
+
+Every file under `stdlib/` is trusted by path and uses raw memory freely,
+so a memory-safe program's remaining memory bugs live in the stdlib code
+that parses bytes somebody else chose. Those are the targets
+(`parse_harness <target> <file>...`):
+
+| target | what reads the input | how it gets there |
+|---|---|---|
+| `x509` `csr` `pem` | x509_parse; csr_parse + csr_verify; pem_to_der / csr_from_pem | bytes / text |
+| `cbor` `msgpack` `json` `yaml` `xml` `toml` | the decoders | bytes / text |
+| `hpack` | hpack_decode_block, twice against one dynamic table (byte 0 sets its size) | bytes |
+| `h2frame` | h2_parse_frame + DATA/HEADERS padding strip | bytes |
+| `qpack` | qpack_decode_section, encoder- and decoder-stream instructions | bytes |
+| `h3frame` | h3_frame_peek walk, SETTINGS, HEADERS → QPACK | bytes |
+| `multipart` | parse_multipart_form (first line = boundary) | bytes |
+| `urlish` | url_parse, url_query_decode, percent / form / query decoders, cookie_parse, ws_deflate_parse_extensions, the SSE frame parser | text |
+| `tlscert` | tls_chain_verify + tls_leaf_cert on a Certificate message (byte 0 bit 0 = TLS 1.2 layout) | bytes |
+| `http1` | the HTTP server's connection loop: request line, headers, Content-Length / chunked bodies, pipelining | loopback, client side |
+| `h2` | the same server on the HTTP/2 prior-knowledge path: preface sniff, frames, HPACK, CONTINUATION, flow control | loopback, client side |
+| `tls` | a pure-TLS listener's accept (records, ClientHello + extensions) and the server behind it | loopback, client side |
+| `tlscli` | the pure-TLS client handshake (ServerHello / HRR, records) | loopback, server side |
+| `ws` | WebSocket frame + message reader; byte 0 bit 0 = permessage-deflate, bit 1 = client side | loopback |
+| `http1resp` | the HTTP client: status line, headers, chunked / Content-Length / to-EOF bodies | loopback, server side |
+| `mqtt` | the MQTT client's packet reader, PUBLISH and property decoder | loopback, server side |
+
+The loopback targets run the real code path: one listener per harness run,
+one connection per input; a thread plays the peer, writes the input,
+half-closes and drains whatever comes back. Several inputs go to one
+harness run (amortising start-up, the listener and the TLS identity); a
+failing batch is re-run an input at a time to name the culprit, and saved
+whole (`*_batch/`) if only the batch reproduces.
+
+Inputs per target are a mix of (a) the static seeds, (b) real captures in
+`corpus/` — TLS ClientHellos from OpenSSL 3, Python `ssl` and the NURL
+client (with its ML-KEM share), a server flight, OpenSSL-minted EC / RSA /
+Ed25519 certificates and CSRs — and (c) a per-protocol generator that
+builds a *consistent* message stream (frame and record lengths, varints,
+HPACK/QPACK integers, TLS vectors, DER lengths) with adversarial field
+values: fragmented records, CONTINUATION splits, padding longer than the
+frame, size updates in the wrong place, duplicate extensions, overlong
+integers, deflate bombs, 64-bit WebSocket lengths, 5-byte MQTT varints,
+chunk sizes past 2^64. DER inputs are mutated structure-aware: one TLV node
+changes and every enclosing length is recomputed, so the mutation reaches
+the field parsers rather than the outermost length check. Everything then
+goes through 0–6 byte-level mutations.
+
+Allocation is capped (`--max-alloc-mb`, default 1024: an attacker-chosen
+length reaching the allocator is a finding) and so is RSS (`--rss-mb`).
+`--iters N` spreads N inputs over the targets; `--minutes M` gives each
+target M minutes (`--jobs J` side by side) — the weekly job runs the data
+formats by count and the network targets by time. To reproduce a finding:
+
+```bash
+NURL_SAN=1 ./nurl.sh -O1 tools/fuzz/parse_harness.nu /tmp/h
+/tmp/h http1resp tools/fuzz/failures/parse_http1resp_seed1_it2504.bin
+```
 
 ## Reducing a finding (`reduce.py`)
 
@@ -321,6 +381,28 @@ turned up three more, each fixed at the root with its own regression test:
 
 The last two were found by hand-probing the surface while writing the
 generators for it — which is the honest reason to write the generators.
+
+## Bugs found (2026-10-21, network parser targets)
+
+Two, both fixed at the source the same day (see `FINDINGS.json`):
+
+1. **HTTP/1.1 client chunk size wrapped i64** (`http1resp`, minutes into
+   its first run): `__hp_parse_chunk_size` in `stdlib/ext/http_pure.nu`
+   accumulated hex digits with no ceiling, so a 16–17-digit size became a
+   negative `chunk_remaining`, and the body copy moved the read position
+   2^62 bytes back — an ASan SEGV, and a crash on a plain build too, from
+   one response. Fixed with a 2^48 ceiling, strict size-line syntax, a
+   checked CRLF after the data, and caps on size / trailer lines and on
+   the response head (`http_client_chunked_strict`).
+2. **RSA verify did unbounded work on a peer's key**, found while chasing
+   the `csr` target's low throughput: nothing bounded the modulus or the
+   exponent a certificate chain or CSR carries, and the modpow cost grows
+   with bits(e) · bits(n)^2 — a 600-bit exponent took most of a second per
+   signature at 2048 bits, some 50× an `e = 65537` check, with nothing to
+   stop the modulus growing too. `e = 1` (sig = EM verifies anything)
+   was accepted as well. `stdlib/std/rsa.nu`
+   now refuses a modulus over 8192 bits and an exponent outside odd
+   3 .. 2^32−1 (`rsa_pubkey_bounds`).
 
 ## Scope / future
 

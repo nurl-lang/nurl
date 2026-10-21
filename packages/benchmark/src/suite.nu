@@ -15,7 +15,7 @@ $ `stdlib/std/utf8.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cbor.nu`
 $ `stdlib/ext/csv.nu`
-$ `src/report.nu`
+$ `report.nu`
 $ `stdlib/core/slice.nu`
 
 // ---- deterministic input generators (setup, never timed) --------------

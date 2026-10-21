@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+valid: ok 200 hello!0123456789
+wrapping size: err
+negative size: err
+huge size: err
+junk after size: err
+empty size: err
+size lies: err
+endless size line: err

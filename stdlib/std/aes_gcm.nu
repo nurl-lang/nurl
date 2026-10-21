@@ -742,9 +742,11 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Hardware path: AES-NI + PCLMULQDQ ────────────────────────────
 // Everything above is the software cipher, kept for CPUs without the
-// crypto tier (nurl_cpu_has_aes F: pre-2010 x86, every non-x86 build).
-// Where the CPU has AES-NI and PCLMULQDQ the same AEAD runs on the
-// language's crypto primitives instead — one AESENC per round per block,
+// crypto tier (nurl_cpu_has_aes F: pre-2010 x86, an AArch64 core without
+// the Cryptographic Extension, RISC-V). Where the CPU has AES-NI and
+// PCLMULQDQ — or AES and PMULL on AArch64, which nurlc lowers the same
+// primitives to — the same AEAD runs on the language's crypto
+// primitives instead — one AES round instruction per round per block,
 // three carry-less multiplies per GHASH block — and is constant-time by
 // construction: neither instruction has a data-dependent timing.
 //
@@ -1289,6 +1291,478 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
     ( nurl_v128_st # s outb ( __aes_hw_enc1 hk nr ( nurl_v128_ld # s inb ) ) )
 }
 
+// ── Wide hardware path: VAES + VPCLMULQDQ ────────────────────────
+// Where the CPU also has the VAES tier (nurl_cpu_has_vaes: Ice Lake and
+// later Intel, Zen 3 and later AMD) a message of at least one sixteen-
+// block batch runs here instead: the same AEAD, the same reflected
+// GHASH and the same Montgomery reduction as the eight-block kernel
+// above, on v256 — every AESENC and PCLMULQDQ does two blocks, one per
+// 128-bit lane. Sixteen blocks a step, eight ymm registers in flight:
+// one VAESENC every half cycle needs eight independent ones to cover
+// its latency, and two blocks a register is what makes eight registers
+// sixteen blocks. As above, each step folds the step before's ciphertext
+// into GHASH while it encrypts its own, one pair of blocks per round.
+//
+// Shorter messages, and the short records TLS sends most, keep the
+// eight-block kernel (__gcm_run_hw decides); the wide one's tail — fewer
+// than sixteen blocks after the last full step — is folded with one
+// reduction, block j of m times H^(m-j).
+//
+// GHASH multiplies schoolbook here — four products a block, the middle
+// one the sum of the two cross products — where the narrow kernel uses
+// Karatsuba's three: the third Karatsuba product needs a lane shuffle
+// and an XOR per block on the vector ports AES runs on, and a fourth
+// VPCLMULQDQ on its own port is the cheaper of the two (measured ~5% on
+// the bulk loop, Sapphire Rapids).
+//
+// Key layout: the wide state follows the narrow one in `hkey`, at
+// __gcm_vaes_at nr: each round key twice over (32·(nr+1) bytes, a ymm
+// operand as it stands), then the GHASH powers G_16 .. G_1 and three
+// zero entries (19·16 bytes) — so a 32-byte load at entry k is the pair
+// (H^(16-k), H^(15-k)) for a block pair whose first block wants
+// H^(16-k), and a 64-byte load the four powers of a zmm quadruple.
+
+// Where the wide state starts, and how long it is.
+@ __gcm_vaes_at i nr → i { ^ + * 16 + nr 1 256 }
+
+@ __gcm_vaes_len i nr → i { ^ + * 32 + nr 1 304 }
+
+// The wide state for the key whose narrow state __gcm_hw_init already
+// wrote at `hk`. `simd`, so the AES-tier helpers inline into its clones.
+unsafe simd @ __gcm_vaes_init * u hk i nr → v {
+    : *u w # *u + # i hk ( __gcm_vaes_at nr )
+    : ~ i r 0
+    ~ <= r nr {
+        : v128 k ( nurl_v128_ld # s + # i hk * r 16 )
+        ( nurl_v128_st # s + # i w * r 32 k )
+        ( nurl_v128_st # s + # i w + * r 32 16 k )
+        = r + r 1
+    }
+    : *u gp # *u + # i w * 32 + nr 1
+    : v128 h ( nurl_v128_bswap128 ( __aes_hw_enc1 hk nr ( nurl_v128_zero ) ) )
+    : v128 g1 ( __ghw_twist h )
+    : ~ v128 hp h
+    : ~ i k 1
+    ~ <= k 16 {
+        : v128 g ( __ghw_twist hp )
+        : i slot * 16 - 16 k
+        ( nurl_v128_st # s + # i gp slot g )
+        = hp ( __ghw_mul hp g1 )
+        = k + k 1
+    }
+}
+
+// One AES round on sixteen blocks, two per register.
+@ __aes_round16 v256 k inout v256 b0 inout v256 b1 inout v256 b2 inout v256 b3 inout v256 b4 inout v256 b5 inout v256 b6 inout v256 b7 → v {
+    = b0 ( nurl_v256_aesenc b0 k )
+    = b1 ( nurl_v256_aesenc b1 k )
+    = b2 ( nurl_v256_aesenc b2 k )
+    = b3 ( nurl_v256_aesenc b3 k )
+    = b4 ( nurl_v256_aesenc b4 k )
+    = b5 ( nurl_v256_aesenc b5 k )
+    = b6 ( nurl_v256_aesenc b6 k )
+    = b7 ( nurl_v256_aesenc b7 k )
+}
+
+// One block pair of a fold: x (byte-swapped; for the first pair, the
+// accumulator already in its low lane) times the power pair at `g`,
+// added to the unreduced lo / hi / middle.
+unsafe @ __ghw2_acc v256 x * u g inout v256 lo inout v256 hi inout v256 md → v {
+    : v256 gv ( nurl_v256_ld # s g )
+    = lo ( nurl_v256_xor lo ( nurl_v256_clmul_ll x gv ) )
+    = hi ( nurl_v256_xor hi ( nurl_v256_clmul_hh x gv ) )
+    = md ( nurl_v256_xor md ( nurl_v256_xor ( nurl_v256_clmul_lh x gv ) ( nurl_v256_clmul_hl x gv ) ) )
+}
+
+// The two lanes' sums added together and reduced: the lanes hold
+// blocks of one sum, so it is a sum of the halves, then — the middle
+// being the true one here, not Karatsuba's — __ghw_finish's
+// recombination and reduction — spelled out here, since a helper is
+// compiled for a tier only when it uses a primitive itself, and only a
+// tier helper inlines into the kernel without a gate of its own (see
+// __ghw_finish).
+@ __ghw2_finish v256 lo2 v256 hi2 v256 md2 → v128 {
+    : v128 lo ( nurl_v128_xor ( nurl_v256_lo128 lo2 ) ( nurl_v256_hi128 lo2 ) )
+    : v128 hi ( nurl_v128_xor ( nurl_v256_lo128 hi2 ) ( nurl_v256_hi128 hi2 ) )
+    : v128 md ( nurl_v128_xor ( nurl_v256_lo128 md2 ) ( nurl_v256_hi128 md2 ) )
+    : v128 z ( nurl_v128_zero )
+    : v128 t0 ( nurl_v128_xor lo ( nurl_v128_unpacklo64 z md ) )
+    : v128 t1 ( nurl_v128_xor hi ( nurl_v128_unpackhi64 md z ) )
+    : v128 q ( nurl_v128_set64 0xC200000000000000 0 )
+    : v128 w ( nurl_v128_xor t0 ( nurl_v128_rotlanes2 ( nurl_v128_clmul_ll t0 q ) ) )
+    ^ ( nurl_v128_xor ( nurl_v128_xor t1 w ) ( nurl_v128_clmul_hl w q ) )
+}
+
+// Counter pair (c+j, c+j+1) from pair (c, c+1)'s `cb` by a byte add on
+// both counters' low bytes — valid while they do not carry, which the
+// caller checks (__ctr_add, two lanes at once).
+@ __ctr2_add v256 cb i j → v256 {
+    : i d << j 56
+    ^ ( nurl_v256_add32 cb ( nurl_v256_set64 0 d 0 d ) )
+}
+
+// The counter pair (c, c+1), each the nonce words then the counter
+// big-endian.
+@ __ctr2_blk i n0 i n1 i n2 i c → v256 { ^ ( nurl_v256_join128 ( __ctr_blk n0 n1 n2 c ) ( __ctr_blk n0 n1 n2 + c 1 ) ) }
+
+// Sixteen ciphertext blocks at `c` folded into `acc` with one
+// reduction: pair j times the powers at entry 2j (H^(16-2j), H^(15-2j)).
+// The products are spelled out rather than __ghw2_acc calls, so this is
+// itself a tier function (see __ghw2_finish).
+unsafe @ __ghw_fold16 v128 acc * u c * u gp → v128 {
+    : v256 z ( nurl_v256_zero )
+    : ~ v256 lo z
+    : ~ v256 hi z
+    : ~ v256 md z
+    : ~ i j 0
+    ~ < j 8 {
+        : v256 x0 ( nurl_v256_bswap128 ( nurl_v256_ld # s + # i c * j 32 ) )
+        : v256 x ? == j 0 ( nurl_v256_xor x0 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ) x0
+        : v256 g ( nurl_v256_ld # s + # i gp * j 32 )
+        = lo ( nurl_v256_xor lo ( nurl_v256_clmul_ll x g ) )
+        = hi ( nurl_v256_xor hi ( nurl_v256_clmul_hh x g ) )
+        = md ( nurl_v256_xor md ( nurl_v256_xor ( nurl_v256_clmul_lh x g ) ( nurl_v256_clmul_hl x g ) ) )
+        = j + j 1
+    }
+    ^ ( __ghw2_finish lo hi md )
+}
+
+// The stitched loop body: sixteen CTR blocks (counters ctr .. ctr+15,
+// from `inp` into `op`) and the GHASH fold of the sixteen ciphertext
+// blocks at `prev` — the step before — into `acc`, interleaved round by
+// round as in __gcm_hw_stitch8: rounds 1..7 fold pairs 1..7, and pair
+// 0, the one carrying the accumulator, goes in round 8, so the step
+// before's reduction has seven rounds to finish first.
+//
+// Two things differ from the eight-block kernel, both for the vector
+// ports the AES rounds share (VPCLMULQDQ, the byte shuffles and the
+// lane inserts all want port 5). The fold is unconditional: the first
+// step folds whatever `prev` points at and the caller drops the answer
+// — a branch around each fold block splits the step into basic blocks
+// the instruction scheduler cannot interleave across, and LLVM grouped
+// all four products ahead of the first round. And the first counter
+// pair `cb` is carried from step to step by a byte add (inout), where
+// building it from the scalar counter costs two byte swaps and three
+// inserts a step; it is rebuilt only when its low byte would carry.
+unsafe @ __gcm_vaes_stitch16 * u rk2 i nr i n0 i n1 i n2 i ctr inout v256 cb * u inp * u op v128 acc * u prev * u gp → v128 {
+    : v256 k0 ( nurl_v256_ld # s rk2 )
+    : ~ v256 b0 cb
+    : ~ v256 b1 b0
+    : ~ v256 b2 b0
+    : ~ v256 b3 b0
+    : ~ v256 b4 b0
+    : ~ v256 b5 b0
+    : ~ v256 b6 b0
+    : ~ v256 b7 b0
+    ? <= & ctr 255 240 {
+        = b1 ( __ctr2_add b0 2 )
+        = b2 ( __ctr2_add b0 4 )
+        = b3 ( __ctr2_add b0 6 )
+        = b4 ( __ctr2_add b0 8 )
+        = b5 ( __ctr2_add b0 10 )
+        = b6 ( __ctr2_add b0 12 )
+        = b7 ( __ctr2_add b0 14 )
+    } {
+        = b1 ( __ctr2_blk n0 n1 n2 + ctr 2 )
+        = b2 ( __ctr2_blk n0 n1 n2 + ctr 4 )
+        = b3 ( __ctr2_blk n0 n1 n2 + ctr 6 )
+        = b4 ( __ctr2_blk n0 n1 n2 + ctr 8 )
+        = b5 ( __ctr2_blk n0 n1 n2 + ctr 10 )
+        = b6 ( __ctr2_blk n0 n1 n2 + ctr 12 )
+        = b7 ( __ctr2_blk n0 n1 n2 + ctr 14 )
+    }
+    = b0 ( nurl_v256_xor b0 k0 )
+    = b1 ( nurl_v256_xor b1 k0 )
+    = b2 ( nurl_v256_xor b2 k0 )
+    = b3 ( nurl_v256_xor b3 k0 )
+    = b4 ( nurl_v256_xor b4 k0 )
+    = b5 ( nurl_v256_xor b5 k0 )
+    = b6 ( nurl_v256_xor b6 k0 )
+    = b7 ( nurl_v256_xor b7 k0 )
+    = cb ? <= & ctr 255 236 ( __ctr2_add cb 16 ) ( __ctr2_blk n0 n1 n2 + ctr 16 )
+    : v256 z ( nurl_v256_zero )
+    : ~ v256 lo z
+    : ~ v256 hi z
+    : ~ v256 md z
+    : ~ i r 1
+    ~ < r 9 {
+        ( __aes_round16 ( nurl_v256_ld # s + # i rk2 * r 32 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+        : i j ? == r 8 0 r
+        : v256 x0 ( nurl_v256_bswap128 ( nurl_v256_ld # s + # i prev * j 32 ) )
+        : v256 x ? == j 0 ( nurl_v256_xor x0 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ) x0
+        ( __ghw2_acc x # *u + # i gp * j 32 lo hi md )
+        = r + r 1
+    }
+    ( __aes_round16 ( nurl_v256_ld # s + # i rk2 288 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+    ? == nr 14 {
+        ( __aes_round16 ( nurl_v256_ld # s + # i rk2 320 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+        ( __aes_round16 ( nurl_v256_ld # s + # i rk2 352 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+        ( __aes_round16 ( nurl_v256_ld # s + # i rk2 384 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+        ( __aes_round16 ( nurl_v256_ld # s + # i rk2 416 ) b0 b1 b2 b3 b4 b5 b6 b7 )
+    } {}
+    : v256 kl ( nurl_v256_ld # s + # i rk2 * nr 32 )
+    ( nurl_v256_st # s op ( nurl_v256_xor ( nurl_v256_aesenclast b0 kl ) ( nurl_v256_ld # s inp ) ) )
+    ( nurl_v256_st # s + # i op 32 ( nurl_v256_xor ( nurl_v256_aesenclast b1 kl ) ( nurl_v256_ld # s + # i inp 32 ) ) )
+    ( nurl_v256_st # s + # i op 64 ( nurl_v256_xor ( nurl_v256_aesenclast b2 kl ) ( nurl_v256_ld # s + # i inp 64 ) ) )
+    ( nurl_v256_st # s + # i op 96 ( nurl_v256_xor ( nurl_v256_aesenclast b3 kl ) ( nurl_v256_ld # s + # i inp 96 ) ) )
+    ( nurl_v256_st # s + # i op 128 ( nurl_v256_xor ( nurl_v256_aesenclast b4 kl ) ( nurl_v256_ld # s + # i inp 128 ) ) )
+    ( nurl_v256_st # s + # i op 160 ( nurl_v256_xor ( nurl_v256_aesenclast b5 kl ) ( nurl_v256_ld # s + # i inp 160 ) ) )
+    ( nurl_v256_st # s + # i op 192 ( nurl_v256_xor ( nurl_v256_aesenclast b6 kl ) ( nurl_v256_ld # s + # i inp 192 ) ) )
+    ( nurl_v256_st # s + # i op 224 ( nurl_v256_xor ( nurl_v256_aesenclast b7 kl ) ( nurl_v256_ld # s + # i inp 224 ) ) )
+    ^ ( __ghw2_finish lo hi md )
+}
+
+// The wide kernel's tail: the last `rem` bytes (1 to 255) from `inp`
+// to `op` from counter `ctr`, a pair of blocks at a time, and their
+// GHASH folded into `acc` with one reduction — block j of the m left
+// times H^(m-j), so pair p starts at power entry 16 - m + 2p. A short
+// last pair goes through the 32 bytes at `pad`, zero-padded, which is
+// also what makes a missing second block of it contribute nothing. Each
+// pair's input is read before its output is written, so `op` may be
+// `inp`; the GHASH input is the ciphertext — the output when sealing,
+// with the keystream past a short pair's bytes cleared.
+unsafe @ __gcm_vaes_tail * u rk2 i nr i n0 i n1 i n2 i ctr * u inp * u op i sealing i rem v128 acc * u gp * u pad → v128 {
+    : i m / + rem 15 16
+    : v256 z ( nurl_v256_zero )
+    : ~ v256 lo z
+    : ~ v256 hi z
+    : ~ v256 md z
+    : ~ i p 0
+    ~ < * p 32 rem {
+        : i o * p 32
+        // The pair through the cipher, spelled out so this is itself a
+        // tier function (see __ghw2_finish).
+        : ~ v256 ks ( nurl_v256_xor ( __ctr2_blk n0 n1 n2 + ctr * p 2 ) ( nurl_v256_ld # s rk2 ) )
+        : ~ i r 1
+        ~ < r nr { = ks ( nurl_v256_aesenc ks ( nurl_v256_ld # s + # i rk2 * r 32 ) ) = r + r 1 }
+        = ks ( nurl_v256_aesenclast ks ( nurl_v256_ld # s + # i rk2 * nr 32 ) )
+        : i nb ? < - rem o 32 - rem o 32
+        : ~ v256 v z
+        ? == nb 32 { = v ( nurl_v256_ld # s + # i inp o ) } {
+            ( nurl_v256_st # s pad z )
+            ( nurl_memcpy # s pad # s + # i inp o nb )
+            = v ( nurl_v256_ld # s pad )
+        }
+        : v256 y ( nurl_v256_xor v ks )
+        : ~ v256 c v
+        ? == sealing 1 {
+            ? == nb 32 { = c y } {
+                ( nurl_v256_st # s pad y )
+                ( nurl_memset # s + # i pad nb 0 - 32 nb )
+                = c ( nurl_v256_ld # s pad )
+            }
+        } {}
+        : v256 x0 ( nurl_v256_bswap128 c )
+        : v256 x ? == p 0 ( nurl_v256_xor x0 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ) x0
+        : i e * 16 + - 16 m * p 2
+        ( __ghw2_acc x # *u + # i gp e lo hi md )
+        ? == nb 32 { ( nurl_v256_st # s + # i op o y ) } {
+            ( nurl_v256_st # s pad y )
+            ( nurl_memcpy # s + # i op o # s pad nb )
+        }
+        = p + p 1
+    }
+    ^ ( __ghw2_finish lo hi md )
+}
+
+// The AAD's GHASH for the wide kernels, from zero: blocks through
+// __ghw_take, one reduction per eight (a TLS record's 5- or 13-byte AAD
+// is one block, one reduction), a short last block zero-padded.
+unsafe @ __ghw_aad * u aadp i aadlen * u gt → v128 {
+    : v128 z ( nurl_v128_zero )
+    : ~ v128 acc z
+    : ~ v128 lo z
+    : ~ v128 hi z
+    : ~ v128 md z
+    : ~ i rem / + aadlen 15 16
+    : ~ i p ? > rem 8 8 rem
+    : ~ i off 0
+    ~ < off aadlen {
+        : v128 x ( nurl_v128_ldn # s + # i aadp off - aadlen off )
+        ( __ghw_take ( nurl_v128_bswap128 x ) gt acc lo hi md p rem )
+        = off + off 16
+    }
+    ^ acc
+}
+
+// One AES-GCM pass on the wide path: the contract of __gcm_hw_run, for
+// a key with the wide state and a message of at least 256 bytes.
+// Marked `simd` so its helpers inline: it calls VAES-tier functions, so
+// it is compiled once, for that tier, and gated on it.
+unsafe simd @ __gcm_vaes_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n * u op i sealing * u tagp * u pad → v {
+    : *u gt # *u + # i hk * 16 + nr 1
+    : *u rk2 # *u + # i hk ( __gcm_vaes_at nr )
+    : *u gp # *u + # i rk2 * 32 + nr 1
+    : v128 g1 ( nurl_v128_ld # s + # i gt 112 )
+    : i n0 # i ( __ld32le nonce 0 )
+    : i n1 # i ( __ld32le nonce 4 )
+    : i n2 # i ( __ld32le nonce 8 )
+    : v128 ej0 ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 1 ) )
+    : ~ v128 acc ( __ghw_aad aadp aadlen gt )
+    : ~ i off 0
+    : ~ i ctr 2
+    : ~ v256 cb ( __ctr2_blk n0 n1 n2 2 )
+    ~ <= + off 256 n {
+        // Sealing, a step folds the step before's ciphertext (the first
+        // one folds its own input for nothing, and its answer is
+        // dropped: __gcm_vaes_stitch16); opening, its own input, which
+        // every load reads before the stores — so `op` may be `inp`.
+        : *u prev ? & == sealing 1 > off 0 # *u + # i op - off 256 # *u + # i inp off
+        : v128 a2 ( __gcm_vaes_stitch16 rk2 nr n0 n1 n2 ctr cb # *u + # i inp off # *u + # i op off acc prev gp )
+        = acc ? | == sealing 0 > off 0 a2 acc
+        = off + off 256
+        = ctr + ctr 16
+    }
+    ? & == sealing 1 > off 0 { = acc ( __ghw_fold16 acc # *u + # i op - off 256 gp ) } {}
+    ? < off n {
+        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off sealing - n off acc gp pad )
+    } {}
+    = acc ( __ghw_mul ( nurl_v128_xor acc ( nurl_v128_set64 * n 8 * aadlen 8 ) ) g1 )
+    ( nurl_v128_st # s tagp ( nurl_v128_xor ( nurl_v128_bswap128 acc ) ej0 ) )
+}
+
+// ── AVX-512 path: VAES + VPCLMULQDQ on zmm ──────────────────────
+// Where the CPU has the AVX-512 VAES tier (nurl_cpu_has_vaes512: Ice
+// Lake server, Sapphire Rapids, Zen 4 and later) the bulk loop runs on
+// v512 — four blocks a register, so the same sixteen-block step is four
+// registers, and every VPCLMULQDQ does four products. Not for more AES:
+// a zmm VAESENC issues on one port where a ymm one has two, so both do
+// four blocks a cycle. For everything else — half the instructions to
+// decode, half the products' issue slots, the XORs and shuffles that
+// share AES's vector ports — measured on Sapphire Rapids at ~1.25× the
+// ymm loop (and on par with OpenSSL's AVX-512 kernel), with the clock
+// effects of 512-bit code in the number. It uses the wide key state as
+// it is (round keys broadcast from the narrow schedule; the power
+// table's 64-byte rows), and the ymm kernel's fold and tail.
+
+// The two halves' sums of a quadruple fold added together, reduced as
+// __ghw2_finish does (spelled out for the same reason).
+@ __ghw4_finish v512 lo4 v512 hi4 v512 md4 → v128 {
+    : v256 l2 ( nurl_v256_xor ( nurl_v512_lo256 lo4 ) ( nurl_v512_hi256 lo4 ) )
+    : v256 h2 ( nurl_v256_xor ( nurl_v512_lo256 hi4 ) ( nurl_v512_hi256 hi4 ) )
+    : v256 m2 ( nurl_v256_xor ( nurl_v512_lo256 md4 ) ( nurl_v512_hi256 md4 ) )
+    : v128 lo ( nurl_v128_xor ( nurl_v256_lo128 l2 ) ( nurl_v256_hi128 l2 ) )
+    : v128 hi ( nurl_v128_xor ( nurl_v256_lo128 h2 ) ( nurl_v256_hi128 h2 ) )
+    : v128 md ( nurl_v128_xor ( nurl_v256_lo128 m2 ) ( nurl_v256_hi128 m2 ) )
+    : v128 z ( nurl_v128_zero )
+    : v128 t0 ( nurl_v128_xor lo ( nurl_v128_unpacklo64 z md ) )
+    : v128 t1 ( nurl_v128_xor hi ( nurl_v128_unpackhi64 md z ) )
+    : v128 q ( nurl_v128_set64 0xC200000000000000 0 )
+    : v128 w ( nurl_v128_xor t0 ( nurl_v128_rotlanes2 ( nurl_v128_clmul_ll t0 q ) ) )
+    ^ ( nurl_v128_xor ( nurl_v128_xor t1 w ) ( nurl_v128_clmul_hl w q ) )
+}
+
+// One AES round on sixteen blocks, four per register.
+@ __aes_round16x4 v512 k inout v512 b0 inout v512 b1 inout v512 b2 inout v512 b3 → v {
+    = b0 ( nurl_v512_aesenc b0 k )
+    = b1 ( nurl_v512_aesenc b1 k )
+    = b2 ( nurl_v512_aesenc b2 k )
+    = b3 ( nurl_v512_aesenc b3 k )
+}
+
+// One quadruple of a fold, as __ghw2_acc: blocks 4j .. 4j+3 times the
+// four powers at `g`.
+unsafe @ __ghw4_acc v512 x * u g inout v512 lo inout v512 hi inout v512 md → v {
+    : v512 gv ( nurl_v512_ld # s g )
+    = lo ( nurl_v512_xor lo ( nurl_v512_clmul_ll x gv ) )
+    = hi ( nurl_v512_xor hi ( nurl_v512_clmul_hh x gv ) )
+    = md ( nurl_v512_xor md ( nurl_v512_xor ( nurl_v512_clmul_lh x gv ) ( nurl_v512_clmul_hl x gv ) ) )
+}
+
+// Counter quadruple c+j .. c+j+3 from quadruple c's `cb` by a byte add,
+// valid while no low byte carries (__ctr2_add).
+@ __ctr4_add v512 cb i j → v512 { ^ ( nurl_v512_add32 cb ( nurl_v512_bcast128 ( nurl_v128_set32 0 0 0 << j 24 ) ) ) }
+
+// The counter quadruple (c .. c+3).
+@ __ctr4_blk i n0 i n1 i n2 i c → v512 { ^ ( nurl_v512_join256 ( __ctr2_blk n0 n1 n2 c ) ( __ctr2_blk n0 n1 n2 + c 2 ) ) }
+
+// __gcm_vaes_stitch16 on zmm, with its unconditional fold and carried
+// counters: sixteen CTR blocks and the fold of the step before's
+// sixteen, the fold's four quadruples in rounds 2, 4, 6 and — the one
+// carrying the accumulator — 8. The round keys come from the narrow
+// schedule at `rk`, broadcast to all four lanes.
+unsafe @ __gcm_vaes512_stitch16 * u rk i nr i n0 i n1 i n2 i ctr inout v512 cb * u inp * u op v128 acc * u prev * u gp → v128 {
+    : v512 k0 ( nurl_v512_bcast128 ( nurl_v128_ld # s rk ) )
+    : ~ v512 b0 cb
+    : ~ v512 b1 b0
+    : ~ v512 b2 b0
+    : ~ v512 b3 b0
+    ? <= & ctr 255 240 {
+        = b1 ( __ctr4_add b0 4 )
+        = b2 ( __ctr4_add b0 8 )
+        = b3 ( __ctr4_add b0 12 )
+    } {
+        = b1 ( __ctr4_blk n0 n1 n2 + ctr 4 )
+        = b2 ( __ctr4_blk n0 n1 n2 + ctr 8 )
+        = b3 ( __ctr4_blk n0 n1 n2 + ctr 12 )
+    }
+    = b0 ( nurl_v512_xor b0 k0 )
+    = b1 ( nurl_v512_xor b1 k0 )
+    = b2 ( nurl_v512_xor b2 k0 )
+    = b3 ( nurl_v512_xor b3 k0 )
+    = cb ? <= & ctr 255 236 ( __ctr4_add cb 16 ) ( __ctr4_blk n0 n1 n2 + ctr 16 )
+    : v512 z ( nurl_v512_zero )
+    : ~ v512 lo z
+    : ~ v512 hi z
+    : ~ v512 md z
+    : ~ i r 1
+    ~ < r 9 {
+        ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk * r 16 ) ) b0 b1 b2 b3 )
+        ? == 0 & r 1 {
+            : i j ? == r 8 0 / r 2
+            : v512 x0 ( nurl_v512_bswap128 ( nurl_v512_ld # s + # i prev * j 64 ) )
+            : v512 x ? == j 0 ( nurl_v512_xor x0 ( nurl_v512_join256 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ( nurl_v256_zero ) ) ) x0
+            ( __ghw4_acc x # *u + # i gp * j 64 lo hi md )
+        } {}
+        = r + r 1
+    }
+    // Round 9, then 10..13 for a 256-bit key, spelled out as in
+    // __gcm_hw_stitch8.
+    ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 144 ) ) b0 b1 b2 b3 )
+    ? == nr 14 {
+        ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 160 ) ) b0 b1 b2 b3 )
+        ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 176 ) ) b0 b1 b2 b3 )
+        ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 192 ) ) b0 b1 b2 b3 )
+        ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 208 ) ) b0 b1 b2 b3 )
+    } {}
+    : v512 kl ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk * nr 16 ) )
+    ( nurl_v512_st # s op ( nurl_v512_xor ( nurl_v512_aesenclast b0 kl ) ( nurl_v512_ld # s inp ) ) )
+    ( nurl_v512_st # s + # i op 64 ( nurl_v512_xor ( nurl_v512_aesenclast b1 kl ) ( nurl_v512_ld # s + # i inp 64 ) ) )
+    ( nurl_v512_st # s + # i op 128 ( nurl_v512_xor ( nurl_v512_aesenclast b2 kl ) ( nurl_v512_ld # s + # i inp 128 ) ) )
+    ( nurl_v512_st # s + # i op 192 ( nurl_v512_xor ( nurl_v512_aesenclast b3 kl ) ( nurl_v512_ld # s + # i inp 192 ) ) )
+    ^ ( __ghw4_finish lo hi md )
+}
+
+// One AES-GCM pass on the AVX-512 path: __gcm_vaes_run with the bulk
+// loop on zmm. `simd` for the reason that one is.
+unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n * u op i sealing * u tagp * u pad → v {
+    : *u gt # *u + # i hk * 16 + nr 1
+    : *u rk2 # *u + # i hk ( __gcm_vaes_at nr )
+    : *u gp # *u + # i rk2 * 32 + nr 1
+    : v128 g1 ( nurl_v128_ld # s + # i gt 112 )
+    : i n0 # i ( __ld32le nonce 0 )
+    : i n1 # i ( __ld32le nonce 4 )
+    : i n2 # i ( __ld32le nonce 8 )
+    : v128 ej0 ( __aes_hw_enc1 hk nr ( __ctr_blk n0 n1 n2 1 ) )
+    : ~ v128 acc ( __ghw_aad aadp aadlen gt )
+    : ~ i off 0
+    : ~ i ctr 2
+    : ~ v512 cb ( __ctr4_blk n0 n1 n2 2 )
+    ~ <= + off 256 n {
+        : *u prev ? & == sealing 1 > off 0 # *u + # i op - off 256 # *u + # i inp off
+        : v128 a2 ( __gcm_vaes512_stitch16 hk nr n0 n1 n2 ctr cb # *u + # i inp off # *u + # i op off acc prev gp )
+        = acc ? | == sealing 0 > off 0 a2 acc
+        = off + off 256
+        = ctr + ctr 16
+    }
+    ? & == sealing 1 > off 0 { = acc ( __ghw_fold16 acc # *u + # i op - off 256 gp ) } {}
+    ? < off n {
+        = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off sealing - n off acc gp pad )
+    } {}
+    = acc ( __ghw_mul ( nurl_v128_xor acc ( nurl_v128_set64 * n 8 * aadlen 8 ) ) g1 )
+    ( nurl_v128_st # s tagp ( nurl_v128_xor ( nurl_v128_bswap128 acc ) ej0 ) )
+}
+
 // ── Per-key context ──────────────────────────────────────────────
 // Everything that depends only on the key: the bitsliced round keys,
 // the round count, and the GHASH subkey H = E_K(0^128) (the last 16
@@ -1303,6 +1777,10 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
     // above) when the CPU has the crypto tier; empty otherwise — and
     // then `skey` is the software key, which a hardware key leaves empty.
     ( Vec u ) hkey
+    // Which kernel a long message runs on: 1 the eight-block AES-NI one,
+    // 2 the ymm VAES one, 3 the zmm one (the key then carries the wide
+    // state); 0 for a software key.
+    i tier
 }
 
 // A handle on the key state in an rcbox (stdlib/core/rcbox.nu): every
@@ -1322,13 +1800,35 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
 @ aes_gcm_key_new ( Vec u ) key → AesGcmKey {
     : i klen ( vec_len [u] key )
     ? & != klen 16 != klen 32 { ^ @ AesGcmKey { ( shared_null [AesGcmKeyImpl] ) } } {}
-    ? ( nurl_cpu_has_aes ) {
-        : i nr ( __aes_nr key )
-        : ( Vec u ) hk ( vec_zeroed [u] + * 16 + nr 1 256 )
-        ( __gcm_hw_init ( vec_data [u] key ) klen ( vec_data [u] hk ) )
-        ^ @ AesGcmKey { ( shared_new [AesGcmKeyImpl] @ AesGcmKeyImpl { ( vec_new [u] ) nr hk } ) }
-    } {}
-    ^ ( _aes_gcm_key_sw key )
+    ^ ( _aes_gcm_key_tier key 3 )
+}
+
+// The best crypto tier this CPU has: 3 AVX-512 VAES, 2 VAES, 1 AES-NI,
+// 0 none.
+@ __aes_cpu_tier → i {
+    ? ( nurl_cpu_has_vaes512 ) { ^ 3 } {}
+    ? ( nurl_cpu_has_vaes ) { ^ 2 } {}
+    ? ( nurl_cpu_has_aes ) { ^ 1 } {}
+    ^ 0
+}
+
+// The key aes_gcm_key_new builds on a CPU whose best crypto tier is
+// `tier` (0 software, 1 AES-NI, 2 VAES, 3 AVX-512 VAES) — or on this
+// one, where it has less. aes_gcm_key_new asks for the best; the tests
+// ask for each in turn, so one machine runs every kernel it can against
+// the software oracle (aes_gcm_hw_agree.nu).
+@ _aes_gcm_key_tier ( Vec u ) key i tier → AesGcmKey {
+    : i klen ( vec_len [u] key )
+    ? & != klen 16 != klen 32 { ^ @ AesGcmKey { ( shared_null [AesGcmKeyImpl] ) } } {}
+    : i have ( __aes_cpu_tier )
+    : i t ? < tier have tier have
+    ? == t 0 { ^ ( _aes_gcm_key_sw key ) } {}
+    : i nr ( __aes_nr key )
+    : i wlen ? >= t 2 ( __gcm_vaes_len nr ) 0
+    : ( Vec u ) hk ( vec_zeroed [u] + + * 16 + nr 1 256 wlen )
+    ( __gcm_hw_init ( vec_data [u] key ) klen ( vec_data [u] hk ) )
+    ? >= t 2 { ( __gcm_vaes_init ( vec_data [u] hk ) nr ) } {}
+    ^ @ AesGcmKey { ( shared_new [AesGcmKeyImpl] @ AesGcmKeyImpl { ( vec_new [u] ) nr hk t } ) }
 }
 
 // The software key (bitsliced cipher, software GHASH) whatever the CPU
@@ -1350,7 +1850,7 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
     : *u skp ( vec_data [u] skey )
     ( __aes_ct64_enc4 zb hb # s skp nr q )
     ( nurl_memcpy # s + # i skp ( __hsub_at nr ) # s hb 16 )
-    ^ @ AesGcmKey { ( shared_new [AesGcmKeyImpl] @ AesGcmKeyImpl { skey nr ( vec_new [u] ) } ) }
+    ^ @ AesGcmKey { ( shared_new [AesGcmKeyImpl] @ AesGcmKeyImpl { skey nr ( vec_new [u] ) 0 } ) }
 }
 
 // Let go of `k` now rather than at the end of its owner's scope.
@@ -1390,7 +1890,8 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
 // others: the software path's cipher words [0, 64), counter blocks
 // [64, 128), keystream [128, 192), E_K(J0) [192, 208), the tag
 // [208, 224) and the GHASH state and length block [224, 256); the
-// hardware path's tag [208, 224) and tail keystream [224, 352); and a
+// hardware path's tag [208, 224) and tail keystream [224, 352) (the wide
+// kernels' short-pair pad [224, 256)); and a
 // nonce the in-place callers build [352, 364).
 //
 // The software path's first four-block call carries J0 = nonce ‖
@@ -1407,7 +1908,20 @@ unsafe @ __aes_hw_block * u hk i nr * u inb * u outb → v {
 
 unsafe @ __gcm_core * AesGcmKeyImpl k * u np * u aadp i aadlen * u inp i n * u op i sealing * u scr → v {
     ? > ( vec_len [u] . k hkey ) 0 {
-        ( __gcm_hw_run ( vec_data [u] . k hkey ) . k nr np aadp aadlen inp n op sealing # *u + # i scr 208 # *u + # i scr 224 )
+        : *u hk ( vec_data [u] . k hkey )
+        : *u tagp # *u + # i scr 208
+        : *u ks # *u + # i scr 224
+        // A wide kernel for a message of a sixteen-block step or more,
+        // on a key that has its state; the eight-block one otherwise.
+        ? & >= n 256 >= . k tier 2 {
+            ? == . k tier 3 {
+                ( __gcm_vaes512_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
+            } {
+                ( __gcm_vaes_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
+            }
+            ^ v
+        } {}
+        ( __gcm_hw_run hk . k nr np aadp aadlen inp n op sealing tagp ks )
         ^ v
     } {}
     : *u skp ( vec_data [u] . k skey )

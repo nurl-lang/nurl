@@ -50,7 +50,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
-$ `src/config.nu`
+$ `config.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_auth.nu`
 $ `deps/oauth/src/oauth.nu`

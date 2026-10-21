@@ -15,7 +15,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
-$ `src/arima.nu`
+$ `arima.nu`
 
 @ usage → i {
     ( nurl_eprintln `usage: arima fit FILE --order p,d,q [--seasonal P,D,Q,s] [--mean] [--css] [--horizon h]` )

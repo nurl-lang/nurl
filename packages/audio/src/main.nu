@@ -14,11 +14,11 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
-$ `src/wav.nu`
-$ `src/mel.nu`
-$ `src/resample.nu`
-$ `src/vad.nu`
-$ `src/mp3.nu`
+$ `wav.nu`
+$ `mel.nu`
+$ `resample.nu`
+$ `vad.nu`
+$ `mp3.nu`
 
 @ __say String m → v {
     ( nurl_print ( string_data m ) )

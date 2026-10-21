@@ -31,7 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
-$ `src/arima.nu`
+$ `arima.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/checked.nu`

@@ -28,9 +28,9 @@ $ `stdlib/std/float.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
 
 : i PH_DIM 1536
 : i PH_HID 784  // 4 · 14²

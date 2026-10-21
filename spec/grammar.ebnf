@@ -67,7 +67,7 @@ decl = import_decl                 (*  $                             *)
 (* A function declaration may carry any of these prefixes, in any order
    (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9; FFI
    parameter markers and a foreach over a field v2.10; `unsafe` on a
-   `% Send` / `% Sync` impl v2.11).
+   `% Send` / `% Sync` impl and the `v512` type keyword v2.11).
    `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`,
    on a foreign declaration (`unsafe & …`: only `unsafe` code may call
    it) and on a `% Send` / `% Sync` impl (an assertion the compiler takes
@@ -105,8 +105,10 @@ decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' | 'raw' ;
 
 (* $ `path` IDENT?
    Inline-compiles the .nu file at `path` into the current module. The
-   path is resolved relative to the compiler's current working directory,
-   NOT relative to the importing file. A path without a `.nu` extension
+   path is tried relative to the importing file's directory, then the
+   compiler's current working directory, then $NURL_STDLIB — so a
+   package's sibling module is `name.nu`, found in its own checkout and
+   under a consumer's deps/<pkg>/ alike. A path without a `.nu` extension
    is first tried as written, then with `.nu` appended — so
    `stdlib/core/string` and `stdlib/core/string.nu` name the same file.
    The same `path` is imported at most once per compilation
@@ -407,7 +409,9 @@ jump_stmt = 'break' | 'continue' ;
    Optional ~ prefix makes the variable mutable (default immutable).
    Type annotation is optional when inferable from the expression.
    An IDENT that is already registered as a named type is taken as the
-   type annotation; otherwise the plain-IDENT form is type-inferred.
+   type annotation; otherwise the plain-IDENT form is type-inferred —
+   including an IDENT already bound as a VALUE, which the inferred form
+   rebinds (`: i n 0` then `: n 5`).
    Example:  : i n 0            — immutable, explicit type
    Example:  : ~ i x 0          — mutable, explicit type
    Example:  : String s ( string_new )    — explicit named type
@@ -859,6 +863,9 @@ base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
                         legalises `<4 x i64>` into whatever the machine has) but
                         fast only where AVX2 exists — pair it with the `simd`
                         prefix to get a wide clone and a baseline one. *)
+          | 'v512'  (*  512-bit SIMD vector →  <8 x i64>  (v2.11, docs/spec.md §4.1d)
+                        Four 128-bit lanes: the AVX-512 VAES tier's carrier.
+                        Same rules again; fast only under AVX-512. *)
           ;
 
 sized_type = 'i8' | 'i16' | 'i32' | 'u16' | 'u32' | 'u64' | 'f32' ;
@@ -989,6 +996,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      f32                     →  32-bit float              (TT_TYPE_KW)
      v128                    →  SIMD vector    (v2.5)     (TT_TYPE_KW)
      v256                    →  wide SIMD vec  (v2.6)     (TT_TYPE_KW)
+     v512                    →  wider SIMD vec (v2.11)    (TT_TYPE_KW)
      T F                     →  boolean literals          (TT_BOOL)
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)

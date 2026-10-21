@@ -18,8 +18,11 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   host-name verification against the system trust store — the primitive
   behind any outbound TLS application). `tcp_connect_timeout host port ms`
   bounds the whole connect — name lookup and TCP handshake — and reports
-  `NetTimeout` once `ms` passes; pair it with `tcp_starttls` for a bounded
-  TLS connect. Every address a name resolves to is tried in order until
+  `NetTimeout` once `ms` passes. `tcp_connect_tls_timeout host port sni
+  verify alpn sess ms` is the TLS form: one deadline over the lookup, the
+  TCP handshake and the TLS handshake (each handshake read waits for what
+  is left of it rather than a fixed 20 s), `NetTimeout` wherever it runs
+  out; `tls_attach_full_until` is the same for a socket already open. Every address a name resolves to is tried in order until
   one connects. **On a fiber neither step holds the worker**: a name is
   resolved by the system `getaddrinfo` (so `/etc/hosts`, nsswitch and
   `resolv.conf` apply as ever) on a small runtime resolver pool while the
@@ -52,8 +55,8 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   `dns_reverse ip → ? String` runs `NI_NAMEREQD`. On a fiber the forward
   lookups (and the ones inside `udp_connect`, `udp_send_to` and
   `udp_addr_resolve`) run on the runtime's resolver threads with the
-  fiber parked, as for `tcp_connect`; `dns_reverse` still runs on the
-  caller.
+  fiber parked, as for `tcp_connect`; so does `dns_reverse`'s
+  `getnameinfo`.
 
 TCP writes can share an absolute operation budget with
 `tcp_set_write_deadline(conn, monotonic_ns)`. Zero clears it, and
