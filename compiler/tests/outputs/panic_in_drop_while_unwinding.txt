@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop c
+drop b
+drop a
+recovered: the cause
+bytes: 1600000
+drop d
+recovered: a second, ordinary panic

@@ -178,6 +178,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nurlfmt spaces a trait or impl after `pub` / `unsafe` (#68).** It took
+  the `%` after the prefix for a `%Trait` object type and glued it
+  (`unsafe %Send W {}`, `pub %Ord [T] {}`); it prints `unsafe % Send W {}`
+  now, as at the start of a line. stdlib/core/marker.nu and four tests
+  reformatted. Test: tools/tests/test_formatter.py.
+- **A closure capturing a struct with a `% Drop` field, handed to a call,
+  no longer cuts the function off (#67).** The env's drop asked for the
+  struct's field-by-field drop, and the compiler printed that `define` in
+  the middle of the function it was writing: the module held the function
+  up to the capture and nothing after it (nurlc exited 0; clang rejected
+  the IR). The drop is queued for module end. Test:
+  `closure_capture_drop_field_handed_on.nu`.
+- **A positive thread-safety marker is `unsafe` outside the standard
+  library (h318; grammar v2.11).** `% Send T { }` and `% Sync T { }` stop
+  the Send/Sync derivation at `T` and turn off the frozen-view check
+  through a `Sync` type, so a safe module that asserted `% Send` over an
+  `Rc` raced its count from two threads (AddressSanitizer:
+  heap-use-after-free). A program writes them `unsafe % Send T { }` /
+  `unsafe % Sync T { }`; without the prefix they are an error. `% NotSend`,
+  `% NotSync`, `% Frozen` and `% Resource` only add checks and stay safe
+  code (h317 settles that a program's own `% Frozen` over a `Cell` cannot
+  reach two threads); `unsafe` on them, on any other impl or on a trait
+  declaration is an error rather than a prefix that leaked onto the next
+  foreign declaration.
+- **`nurlc --unsafe-report` lists the whole trusted surface.** Beside the
+  program's `unsafe` functions it lists its `unsafe % Send` /
+  `unsafe % Sync` assertions and the `in` / `sync` / `nocapture` claims of
+  its foreign declarations, one `file:line` each, and no longer lists the
+  standard library's own `unsafe` functions (the trust test was asked of
+  `file:line` rather than the file). Checked by
+  `compiler/tests/unsafe_report.sh`. docs/MEMORY.md §3 / §6.4 and
+  formal/CLAIM.md's trusted base name `% Frozen` and the foreign claims.
+- **dist/heartbeat's thread no longer reads the membership table under a
+  caller-supplied mutex (h319).** `heartbeat_start` handed its thread the
+  `PkMemberTable` and a `Mutex` the caller had to take around its own
+  changes; nothing made it, and two threads growing one table corrupted
+  the heap. The thread holds the node's liveness now
+  (`pktable_liveness`: a copy of the self pubkey and the table's
+  incarnation, which is an `Atomic`), `heartbeat_start PkMemberTable t
+  sink RelayClient rc ( Vec u ) group i interval_ms` takes no mutex, and
+  `PkMemberTable` is `% NotSend`. `heartbeat_payload_of` builds the same
+  payload from a `PkLiveness`; `pktable_refute` is one atomic max. The
+  stop flag is an `Atomic` instead of an `Arc` read with raw FFI.
+  Test: `dist_heartbeat_thread.nu`.
+- **`mqtt_listen` takes its client over (`sink`).** Its reader thread
+  changes the client's buffers and packet-id state with no lock; the doc
+  asked callers not to use the client meanwhile. Test:
+  `borrow_mqtt_listen_takes_client.nu`.
+- **Known open: a library handle's copies on two threads.** A field read
+  shares a library handle, and the Send derivation looks only at types:
+  one copy moved to a thread while another stays races the state
+  (`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`,
+  docs/MEMORY.md §6.2).
+- **formal: `inout` of every owning type, and a field replaced in place
+  (A2).** The calculus passed only a `Vec` `inout`; a struct, an enum and
+  a closure are passed `inout` now, and a field is replaced in place as the
+  struct taken apart and assigned again (`unpair` takes an `inout` struct
+  its bound lets the callee replace). That is where h295 and h297 sit: a
+  copy of a parameter is a borrow and never an `inout` argument
+  (`paramOK_inout`), and a closure replaced through `inout` is an `assign`
+  to the caller's slot. `A2.memory_safe`, `A2.soundness` and
+  `A2.no_leak_end` are re-proven (`formal/check.sh`, Lean 4.35.0, standard
+  axioms only); formal/README.md, RULES.md and corpus/map.tsv follow.
+- **A double panic no longer leaks, nor leaves the thread draining.** A
+  destructor that panicked while a panic's journal drained replaced the
+  first panic's message (leaking it) and longjmp'd past the drain's
+  epilogue, so the thread stayed in the drain's state for good: every later
+  free went through a record that only grew, and one of an address the
+  drain had freed and malloc reused was skipped. The `recover` frame that
+  catches it now ends the drains begun inside it, and keeps the first
+  message (the cause). formal/CLAIM.md states how the model treats it.
+  Test: `panic_in_drop_while_unwinding.nu`.
 - **A `v256` passed to or returned from a `simd @` function was wrong on
   every AVX2 machine.** The x86-64-v3 clone takes a `<4 x i64>` in one
   ymm register, the baseline dispatcher (and any caller without AVX)

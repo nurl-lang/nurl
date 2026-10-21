@@ -6,4 +6,4 @@
 // only the `@` arm ever cleared it, so the flag survived this file's
 // end and attached itself to the first `@` the scanner reached in the
 // IMPORTING file.
-pub %Ping [T] {}
+pub % Ping [T] {}

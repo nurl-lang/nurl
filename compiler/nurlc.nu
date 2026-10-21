@@ -2750,20 +2750,43 @@ unsafe @ emit_coverage_modules s module → b {
     ? | | == c0 37 == c0 123 == c0 91 { ^ `` } {}
     ^ `, !tbaa !94`
 }
-// `--unsafe-report`: the program's own `unsafe` functions (outside the
-// standard library), one `file:line name` per line — the surface a
-// reviewer has to trust.
+// `--unsafe-report`: what the program asks to be trusted (outside the
+// standard library), one `file:line what` per line — the surface a
+// reviewer has to trust: its `unsafe` functions, its `unsafe % Send` /
+// `unsafe % Sync` assertions, and the parameters of its foreign functions
+// marked `in` / `sync` / `nocapture` (claims about what C code does).
 // > 0 while an arm of a `?` whose condition folded to a constant is
 // generated: code that never runs, for this instance (gen_cond).
 : ~ i g_dead_arm 0
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
-unsafe @ note_unsafe_fn s pos s name → v {
-    ? ( bck_trusted_file pos ) { ^ v } {}
-    : s rec ( nurl_str_cat3 pos ` ` name )
+unsafe @ note_unsafe_fn s pos s name → v { ( note_unsafe_item pos name ) }
+
+// One line of the report, once: a file imported by several importers is
+// scanned once per importer. (`pos` is `file:line`; the standard library is
+// asked of the file — of `file:line` it never answered yes, and the report
+// listed the standard library's own unsafe functions.)
+unsafe @ note_unsafe_item s pos s what → v {
+    : i n ( nurl_str_len pos )
+    : *u pp # *u pos
+    : ~ i k - n 1
+    ~ & > k 0 & >= # i . pp k 48 <= # i . pp k 57 { = k - k 1 }
+    : i fl ? & > k 0 & < k - n 1 == # i . pp k 58 k n
+    ? ( bck_trusted_file ( nurl_str_slice pos 0 fl ) ) { ^ v } {}
+    : s rec ( nurl_str_cat3 pos ` ` what )
+    ? ( str_contains_line g_unsafe_list rec ) { ^ v } {}
     = g_unsafe_list ? == 0 ( nurl_str_len g_unsafe_list ) rec ( nurl_str_cat3 g_unsafe_list `\n` rec )
 }
+
+// Is `line` one of the `\n`-separated lines of `text`?
+@ str_contains_line s text s line → b {
+    : s wrapped ( nurl_str_cat3 `\n` text `\n` )
+    : s needle ( nurl_str_cat3 `\n` line `\n` )
+    ^ >= ( nurl_str_find wrapped needle ) 0
+}
+// 1 while scan_impl_decl reads an impl written `unsafe % Trait Type { }`.
+: ~ i g_impl_unsafe 0
 // 1 while the body of an `unsafe` function (or of a closure inside one) is
 // being compiled.
 : ~ i g_in_unsafe 0
@@ -11771,7 +11794,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
                     : b violated ? inverted ! lacks lacks
                     : s advice ? inverted
                     `That bound demands a type which must NOT cross a thread boundary, and this one may — mark it '% NotSend <Type> { }' / '% NotSync <Type> { }' if it genuinely must not (stdlib/core/marker.nu).`
-                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).`
+                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.`
                     ? violated
                     { : s q1 ( nurl_str_cat4 `type '` ta `' does not satisfy the bound ` ( nurl_str_cat3 tp `: ` bt ) )
                         : s q2 ( nurl_str_cat3 q1 ` on generic '` ( nurl_str_cat fname `'. ` ) )
@@ -37814,7 +37837,12 @@ unsafe @ __l2n_list s lst → s {
             : s ht ( nurl_llty ovt )
             : s hm ( __drop_mangle ovt )
             ( __handle_drop_ensure ovt )
-            ( gen_drop_for_type ovt syms )
+            // Its drop graph is emitted at module end: this runs while a
+            // function's body is being written, and a `define` printed here
+            // landed inside it — the rest of the function was cut off (a
+            // struct with a `% Drop` field captured by a closure that a call
+            // was handed: the module had no more of `main`).
+            ( queue_drop_for_type ovt )
             : s k ( nurl_str_cat `o` ( nurl_str_int ofi ) )
             : s vfi ( nurl_str_int ( __word_pos captured_vars ov ) )
             : s fg ( nurl_str_cat4 `  %f` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` ( nurl_str_int ofi ) `\n` ) ) )
@@ -38411,11 +38439,11 @@ unsafe @ __thr_peel s lty → s {
     ? ( seq kind `rc` )
     { ^ ( nurl_str_cat
         `it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. `
-        `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+        `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
     ? ( seq kind `cell` )
     { ^ ( nurl_str_cat
         `it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. `
-        `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with a '% Sync <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+        `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with an 'unsafe % Sync <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
     ? ( seq kind `notsend` )
     { ^ ( nurl_str_cat3
         `it reaches '` nm
@@ -47195,6 +47223,9 @@ unsafe @ __ffi_param_count s pt → i {
     // …and those declared `in`: borrowed for the call — read, neither kept
     // nor freed — so a temporary handed there is the caller's to release.
     : ~ s __ff_nofree ``
+    // `in path, sync p`: the claims the declaration makes about the C code,
+    // which --unsafe-report lists for a foreign function outside the stdlib.
+    : ~ s __ff_claims ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -47245,8 +47276,12 @@ unsafe @ __ffi_param_count s pt → i {
             // of x.
             : ~ b __ff_in F
             : ~ b __ff_more ! __ff_io
+            : ~ s __ff_pm ``
             ~ & __ff_more ( is_ident_tok ( nurl_lex_type lex ) ) {
                 : s __ffm ( nurl_lex_val lex )
+                ? | | ( seq __ffm `in` ) ( seq __ffm `sync` ) ( seq __ffm `nocapture` ) {
+                    = __ff_pm ? == 0 ( nurl_str_len __ff_pm ) ( nurl_str_cat __ffm `` ) ( nurl_str_cat3 __ff_pm ` ` __ffm )
+                } {}
                 ? ( seq __ffm `in` ) {
                     = __ff_nocap ? == 0 ( nurl_str_len __ff_nocap ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nocap ` ` ( nurl_str_int pct ) )
                     = __ff_nofree ? == 0 ( nurl_str_len __ff_nofree ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nofree ` ` ( nurl_str_int pct ) )
@@ -47269,6 +47304,11 @@ unsafe @ __ffi_param_count s pt → i {
                 ? ! ( str_contains_word __fio ( nurl_str_int pct ) ) {
                     ( nurl_sym_def g_fn_inout fname ? == 0 ( nurl_str_len __fio ) ( nurl_str_int pct ) ( nurl_str_cat3 __fio ` ` ( nurl_str_int pct ) ) )
                 } {}
+            } {}
+            ? != 0 ( nurl_str_len __ff_pm ) {
+                : s __ffpn ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ( nurl_str_cat `#` ( nurl_str_int pct ) )
+                : s __ffc ( nurl_str_cat3 __ff_pm ` ` __ffpn )
+                = __ff_claims ? == 0 ( nurl_str_len __ff_claims ) __ffc ( nurl_str_cat3 __ff_claims `, ` __ffc )
             } {}
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             // params_str is IR text (the `declare` line + variadic call
@@ -47307,6 +47347,13 @@ unsafe @ __ffi_param_count s pt → i {
     // …and where it was declared: one declared outside the stdlib is raw
     // memory to its callers (bck_check_raw_call).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_src` ) ( vis_current_src_file ) )
+    // A program's own `in` / `sync` / `nocapture` are taken on trust by the
+    // checks of every call (a frozen view handed to `in`, a temporary
+    // released after it): part of the surface a reviewer has to trust.
+    ? != 0 ( nurl_str_len __ff_claims ) {
+        ( note_unsafe_item ( nurl_str_cat3 ( vis_current_src_file ) `:` ( nurl_str_int __ffi_line ) )
+        ( nurl_str_cat4 `& ` fname `: ` __ff_claims ) )
+    } {}
     // `unsafe & …`: a foreign function that takes a runtime handle (an
     // address the runtime casts back to its struct) as a plain integer, so
     // any number a program makes up is an address it reads or frees. Raw
@@ -55582,11 +55629,39 @@ unsafe @ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_
     ? ! ( nurl_sym_has_word g_impl_trait_syms lk impl_llvm ) { ( __park_append g_impl_trait_syms lk impl_llvm ) } {}
 }
 
+// A positive thread-safety marker widens what the compiler accepts: `% Send
+// T { }` / `% Sync T { }` stop the derivation at T (nothing inside is looked
+// at), and a Sync type's contents are not frozen through it (§6.5). Asserted
+// wrongly, it lets safe code race an Rc's count or a Cell's bytes — so
+// outside the standard library it is spelled `unsafe % Send T { }`, as an
+// unchecked body is spelled `unsafe @`, and `--unsafe-report` lists it.
+// Every other marker only adds checks (`NotSend`, `NotSync`, `Frozen`) or
+// changes when a cycle is collected (`Resource`), so safe code may write
+// it, and `unsafe` on it (or on any other impl) says nothing: an error.
+unsafe @ __marker_impl_gate i lex s tname s impl_nurl b decl_unsafe → v {
+    : b positive | ( seq tname `Send` ) ( seq tname `Sync` )
+    ? & decl_unsafe ! positive {
+        ( die lex ( nurl_str_cat3 `'unsafe' on an impl of '% ` tname `': only a '% Send' or '% Sync' assertion is something the compiler takes on trust (it stops checking the type's fields). Every other impl is checked — its methods are ordinary code, and '% NotSend', '% NotSync', '% Frozen' and '% Resource' only add checks. Remove the 'unsafe'.` ) )
+    } {}
+    ? ! positive { ^ v } {}
+    ? ( bck_trusted_file ( nurl_lex_filename lex ) ) { ^ v } {}
+    : s pos ( nurl_str_cat ( nurl_lex_filename lex ) ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    ? ! decl_unsafe {
+        ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'% ` tname ` ` ) impl_nurl ( nurl_str_cat3 ` { }' asserts that '` impl_nurl `' is safe to ` )
+        ( nurl_str_cat3 ? ( seq tname `Send` ) `move to another thread` `reach from two threads at once`
+        `, and the compiler stops checking its fields there — an Rc or a Cell inside it, or an Arc's payload reached through it, is no longer seen. Wrong, it is a data race in safe code, so it is an unchecked promise: write it 'unsafe % `
+        ( nurl_str_cat4 tname ` ` impl_nurl ` { }' (docs/MEMORY.md §6.5; nurlc --unsafe-report lists it). If the type holds shared state, put it in a Locked or an RwLocked (stdlib/std/thread.nu, stdlib/std/rwlock.nu) instead, which the compiler checks.` ) ) ) )
+    } {}
+    ( note_unsafe_item pos ( nurl_str_cat4 `% ` tname ` ` impl_nurl ) )
+}
+
 // For trait_decl: stores default-method templates in g_trait_syms.
 // For impl_decl: register explicit method signatures, then defer contract
 // checks and default registration until every trait declaration is known.
 unsafe @ scan_impl_decl i lex i syms → v {
     : i impl_pos ( nurl_lex_cur_start lex )
+    : b decl_unsafe != 0 g_impl_unsafe
+    = g_impl_unsafe 0
     // The `%` that opens the declaration: where a deferred supertrait
     // obligation is reported (verify_super_obligations).
     : i impl_line ( nurl_lex_line lex )
@@ -55631,6 +55706,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
     // Disambiguate: '{' → trait_decl, else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {  // trait: remember its type param and scan for default methods
+        ? decl_unsafe { ( die lex ( nurl_str_cat3 `'unsafe' on the declaration of trait '% ` tname `': a trait declaration asserts nothing. 'unsafe' belongs on an impl that asserts what the compiler cannot check — 'unsafe % Send Type { }' or 'unsafe % Sync Type { }'.` ) ) } {}
         // Structs (`ty##`), enums and impls all guard against a second
         // declaration of the same name. Traits did not, and the hole is
         // not merely cosmetic: `% Speaker : Dog { @ speak … }` — a
@@ -55669,6 +55745,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
+        ( __marker_impl_gate lex tname impl_nurl decl_unsafe )
         // Park a supertrait obligation: after every impl in the program is
         // registered, each supertrait of `tname` must also be implemented for
         // this type. Recorded unconditionally (the trait's supers may not be
@@ -57607,7 +57684,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         {}
                     }
                     { ? == tt TT_PERCENT
-                        { ( __lazy_collect lex `__roots__` ) ( scan_impl_decl lex syms ) }
+                        { ( __lazy_collect lex `__roots__` ) = g_impl_unsafe ? decl_unsafe 1 0 ( scan_impl_decl lex syms ) }
                         { ( nurl_lex_advance lex ) }
                     }
                 } } }
@@ -57832,8 +57909,9 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     // it); only a foreign declaration (`unsafe & …`) reads the flag. A
     // function lazy compilation skips never reached gen_fn_decl's clear,
     // and its `unsafe` marked the next foreign function raw (fs.nu's
-    // `unlink`, after `unsafe @ __fd_write_all`).
-    ? == tt TT_AT { = g_pending_unsafe 0 } {}
+    // `unlink`, after `unsafe @ __fd_write_all`). An impl's (`unsafe % Send
+    // T { }`) was read by the scan pass (scan_impl_decl).
+    ? | == tt TT_AT == tt TT_PERCENT { = g_pending_unsafe 0 } {}
     // `simd` is meaningful only on a function. Anywhere else it is a
     // silent no-op that would leak onto the next `@` the parser reached
     // — the same cross-file bug `pub` had, so it gets the same fix:
@@ -61036,7 +61114,7 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      a redundant release call ([redundant-free])\n` )
     ( nurl_print `  --no-borrowck       deprecated: disable the borrow-checker pass (report a false positive as a bug instead)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
-    ( nurl_print `  --unsafe-report     list the program's own 'unsafe' functions (outside the stdlib) on stderr\n` )
+    ( nurl_print `  --unsafe-report     list what the program asks to be trusted (outside the stdlib) on stderr: unsafe functions, unsafe Send/Sync assertions, in/sync/nocapture FFI claims\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --keep=a,b          keep these functions even if nothing in the module calls them\n` )
@@ -61221,7 +61299,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // borrow-clean program leaves g_bck_errors at 0 and this is a
         // no-op.
         ? != 0 g_unsafe_report {
-            ? == 0 ( nurl_str_len g_unsafe_list ) { ( nurl_eprintln `unsafe: none — every function is held to the ownership rules` ) } {
+            ? == 0 ( nurl_str_len g_unsafe_list ) { ( nurl_eprintln `unsafe: none — every function and type is held to the ownership rules` ) } {
                 ( nurl_eprintln g_unsafe_list )
             }
         } {}

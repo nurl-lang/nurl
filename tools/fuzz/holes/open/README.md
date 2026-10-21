@@ -1,7 +1,15 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** Every probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent was `h316` — a call returning
+**One:** `library_handle_copy_on_two_threads.nu` — two copies of one
+library handle over a counted block (a field read out of a struct shares
+it), one moved to a thread and both changed: the Send derivation looks at
+types, not at which values alias (docs/MEMORY.md §6.2). Two instances of
+it are closed by hand and graduated: `h254` (SymTab, `% NotSync`) and
+`h319` (the membership table dist/heartbeat.nu's thread read,
+`% NotSend`).
+
+Every other probe this directory held is closed and graduated to the CI
+gate in the parent directory. The most recent were `h316` — a call returning
 a SIMD vector kept its temporary argument alive for a consumer a binding
 never is (leak) — and before it `h311`–`h315`: lends
 returned through a join (`lru_get`) and a match's scrutinee taking effect

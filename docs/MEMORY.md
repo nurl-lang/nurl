@@ -722,9 +722,29 @@ boundary:
 - **The body of an `unsafe` function.** Raw pointers, pointer casts, the
   raw-memory primitives and foreign calls are allowed only there, and the
   function's author vouches for it (spec §3.3d).
-- **Marker assertions.** `% Send`, `% Sync`, `% NotSend`, `% NotSync` and
-  `% Resource` are assertions about a type the compiler cannot verify
-  (§6.5, §7.7).
+- **Positive thread-safety assertions.** `% Send T { }` and `% Sync T { }`
+  stop the derivation at `T`: nothing inside is examined, and what a
+  `Sync` type holds is not frozen through it (§6.5). Asserted wrongly,
+  they let two threads race an `Rc`'s count or a `Cell`'s bytes, so
+  outside the standard library they are written `unsafe % Send T { }` /
+  `unsafe % Sync T { }` — an unchecked promise, spelled like an unchecked
+  body — and `nurlc --unsafe-report` lists them. Every other marker is
+  checked code and needs no `unsafe`: `% NotSend`, `% NotSync` and
+  `% Frozen` only add checks (a value that may not cross, may not be
+  shared, or lends only read-only views), and `% Resource` only changes
+  when a cycle is collected (§7.7). A safe module may write
+  `% Frozen T { }` on a type with a `Cell` inside: the compiler then
+  rejects more, never less — what a frozen `T` lends is read-only, and
+  the `Cell` still does not make `T` `Sync`, so it cannot reach two
+  threads through an `Arc` or a read guard either (`h317`).
+- **Foreign-function claims.** A foreign (`&`) declaration's `in`, `sync`
+  and `nocapture` (spec §7.2) say what the C code does with a pointer —
+  only reads it, changes it only atomically or under its own lock, keeps
+  nothing of it in its result — and every call's checks take them at
+  their word: a frozen view may be handed to `in` or `sync`, a temporary
+  is released after an `in` call. A foreign function is called only from
+  an `unsafe` function outside the standard library, and its claims are
+  listed by `--unsafe-report` beside it.
 - **Logical leaks.** A cache or map that a program keeps growing and never
   shrinks holds memory that is still reachable. That is program
   behaviour, not a leak the memory model can see.
@@ -840,12 +860,29 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No open holes.** The 0.72.0 and 0.73.0 release reviews found safe programs
+**One open hole: a library handle's copies on two threads.** A library
+handle over a counted block (§7.6) is copied by sharing — a field read
+out of a struct is another owner of the same state — and the Send
+derivation asks only of types, so a struct of a `Shared` field and Vecs is
+Send. One copy moved to a thread while another stays here is two threads
+changing one value in place with no lock: a `PNCounter` (dist/crdt.nu)
+grown from both is a heap-use-after-free under AddressSanitizer
+(`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`). It is
+the standard library's handles over unsynchronised state that reach it —
+not `Arc`, `Locked`, `RwLocked`, `Atomic`, `Channel`, `Mutex` or a
+`Thread`, which are asserted thread-safe, and not `SymTab` or
+`PkMemberTable`, which are marked `% NotSend` / `% NotSync` (h254, h319).
+The rule that closes it — a handle whose copies alias is Send only when
+it is asserted thread-safe, as Rust's `Arc<T>` is Send only for a `Sync`
+`T` — is open with its reach over those handles; until then a value that
+holds one moves to a thread with no copy kept.
+
+**Every other hole is closed.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h315):
+all are closed, each a probe CI now holds (h142–h319):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1205,7 +1242,11 @@ after an eviction), and a match's scrutinee call took effect after the
 arm's first statement, which could read a borrow it had ended (h315).
 `map_keys` over owned keys copied each key and
 emptied its slot too, leaking the key and corrupting the map (h303;
-§7.6). No hole is known.
+§7.6). A thread-safety marker asserted by safe code raced an `Rc`'s count
+(h318: a positive marker is `unsafe` now, §3), and the heartbeat thread
+of dist/heartbeat.nu grew a membership table the data plane grew too,
+under a lock nothing made the caller take (h319, §6.5). No other hole is
+known.
 
 The rules that carry it:
 
@@ -1276,16 +1317,30 @@ The guarantee rests on a surface that is trusted rather than checked:
 
 - **`unsafe` functions.** Each one vouches that it is memory-safe and
   leak-free for every caller. A `raw` function (spec §3.3e) vouches for
-  nothing itself: each `unsafe` caller vouches for its call. `nurlc --unsafe-report` lists those a
-  program contains outside the standard library, which is the whole
-  surface a reviewer of that program has to trust.
+  nothing itself: each `unsafe` caller vouches for its call.
+- **`unsafe % Send` / `unsafe % Sync` assertions** on types whose safety
+  the compiler cannot see (§3, §6.5).
+- **Foreign-function claims**: the `in`, `sync` and `nocapture` markers
+  on a foreign declaration's parameters (spec §7.2). `sync` is a
+  data-race claim about the C function: that it changes what it is
+  handed only atomically or under a lock of its own.
+- `nurlc --unsafe-report` lists all three as a program contains them
+  outside the standard library, one `file:line` each — the whole surface
+  a reviewer of that program has to trust.
 - **The standard library and the runtime.** Their raw code, the `Rc`
   cycle collector and the panic journal included, is the base every safe
   program stands on. A library function that trusts its caller's
   pointer or length (`slice_from_raw`, `vec_borrow_raw`, `vec_set_len`,
   `nurl_str_at`, …) is `unsafe` to call (§6.2).
-- **Marker assertions** (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
-  `% Resource`) on types whose safety the compiler cannot see.
+- **The standard library's marker assertions and foreign claims**, in
+  both directions: a `% Send` / `% Sync` it writes (`Mutex`, `Locked`,
+  `RwLocked`, `Channel`) is trusted as the program's is, and so is each
+  `% NotSend`, `% NotSync` and `% Frozen` it must not leave out — a read
+  guard not marked `% Frozen` (stdlib/std/rwlock.nu `% Frozen RGuard {}`)
+  would lend a value other threads read as a mutable one, and a
+  connection handle not marked `% NotSend` would cross threads. The same
+  holds for the `in` / `sync` / `nocapture` of its foreign declarations
+  (`nurl_rc_share sync *u p`: the count is changed with an atomic).
 - **The compiler itself.** A program accepted in violation of §6.2 is a
   compiler bug (§6.6).
 
@@ -1357,7 +1412,10 @@ The derivation can be wrong in two directions, and each has a marker:
 `% Send T { }` / `% Sync T { }` assert safety the compiler cannot see
 (`Mutex` is what makes its contents shareable), `% NotSend T { }` /
 `% NotSync T { }` assert danger it cannot see (a foreign connection
-handle). A negative marker outranks a positive one on the same type.
+handle). A negative marker outranks a positive one on the same type. A
+positive marker is taken on trust, so a program writes it
+`unsafe % Send T { }` (§3, §6.4); a negative one, like `% Frozen`, only
+adds checks and is safe code.
 
 **Shared mutation.** A closure run on another thread moves its captures,
 so the spawner cannot keep using a plain `Vec` a worker was handed. Only
@@ -1394,6 +1452,20 @@ the one its type names, so no lock is counted and none can be forgotten.
 State one thread changes is an `Rc`; a value built first is shared whole
 with `arc_new`.
 
+*A lock beside the data is not a lock on it.* A library handle whose
+state is changed in place with no lock of its own, handed to a thread
+together with a `Mutex` its caller is asked to take around its own
+changes, is a race the first caller that forgets writes: nothing ties the
+mutex to the state. `dist/heartbeat.nu` was that shape — its thread read
+the membership table under a caller-supplied mutex (h319). The thread
+holds only what it needs now, in values that synchronise themselves: the
+node's liveness (`pktable_liveness`: a copy of the self pubkey and the
+table's incarnation, an `Atomic` every copy of which is the same word),
+and the table is `% NotSend`. State a thread must change with its
+caller is a `Locked`; state it only reads, a copy or an `Atomic`;
+`mqtt_listen` takes its client over (`sink`), since its thread is the
+client's only user.
+
 ### 6.6 How the guarantee is checked
 
 The guarantee is a property of the rules. The compiler's implementation
@@ -1409,7 +1481,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h315`) to the rule that rejects it. See
+  (`h01–h319`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1462,6 +1534,11 @@ journal** instead:
   hands out as the match's value leaves the journal with its scope.
 - On a panic, the values still recorded since the target frame's mark are
   released before the jump, while their frames are still valid.
+- A destructor that panics while they are released (a double panic) is
+  caught by the same `recover`: each value leaves the journal before its
+  drop runs, the second panic releases what is still recorded, and the
+  `recover` reports the first panic's message, the cause. With no
+  `recover` frame, a panic ends the process before anything is released.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,

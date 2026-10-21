@@ -531,10 +531,23 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h315`, is closed and held by a probe in `tools/fuzz/holes/`).
-`nurlc --unsafe-report` lists the `unsafe` functions a program
-contains outside the standard library — the whole surface a reviewer has
-to trust.
+`h01–h319`, is closed and held by a probe in `tools/fuzz/holes/`; one
+is open — a library handle's copies changed on two threads, MEMORY.md
+§6.2).
+
+The same word marks the one assertion about a type the compiler takes on
+trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
+thread-safety derivation at `T` — nothing inside it is examined — so
+outside the standard library they are written `unsafe % Send T { }` /
+`unsafe % Sync T { }`; without the prefix they are an error. The markers
+that only add checks (`% NotSend`, `% NotSync`, `% Frozen`) and
+`% Resource` are ordinary safe code (docs/MEMORY.md §3).
+
+`nurlc --unsafe-report` lists what a program asks to be trusted outside
+the standard library — its `unsafe` functions, its `unsafe % Send` /
+`unsafe % Sync` assertions and the `in` / `sync` / `nocapture` claims of
+its foreign declarations (§7.2), one `file:line` each — the whole
+surface a reviewer has to trust.
 
 Ordinary code never needs it: `String`, `Vec`, `HashMap`, `Box` / `Rc` /
 `Arc`, channels and structs of them release themselves. `unsafe` is for
@@ -1387,8 +1400,10 @@ walk there. `% Send T { }` / `% Sync T { }` assert safety the compiler cannot
 see (`Mutex` is a handle over raw pthread memory and is nonetheless what makes
 contents shareable — `stdlib/std/thread.nu` marks it); `% NotSend T { }` / `% NotSync T { }` assert
 danger it cannot see (an FFI handle is an `s`, and `s` is Send). A negative
-marker outranks a positive one on the same type. These impls are NURL's
-spelling of Rust's `unsafe impl`: assertions, not proofs. See
+marker outranks a positive one on the same type. A positive impl is NURL's
+spelling of Rust's `unsafe impl` — an assertion, not a proof — and outside
+the standard library it is written so: `unsafe % Send T { }` (§3.3d). A
+negative one only adds checks and needs no prefix. See
 [`MEMORY.md` §6.5](MEMORY.md) for exactly what they do and do not guarantee.
 
 **Dynamic dispatch — `%Trait` trait objects (grammar v2.3).** Alongside the static path a trait
@@ -2708,8 +2723,9 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h315`) is
-closed and held by a probe in `tools/fuzz/holes/`.
+([`formal/`](../formal/)), and every hole found so far (`h01–h319`) is
+closed and held by a probe in `tools/fuzz/holes/` — but one, open: a
+library handle's copies changed on two threads (docs/MEMORY.md §6.2).
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is
@@ -2799,8 +2815,8 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.11** (the `v512` lane type,
-§4.1d; v2.10 foreign-parameter markers
+This document corresponds to **grammar v2.11** (`unsafe % Send` /
+`unsafe % Sync`, §3.3d, and the `v512` lane type, §4.1d; v2.10 foreign-parameter markers
 `in` / `sync` / `nocapture`, §7.2, and a foreach over a field, §5.4; v2.9
 the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
 `v256` lane type; v2.5 the `v128` SIMD lane type, §4.1b; v2.4

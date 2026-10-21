@@ -12,8 +12,12 @@
 //
 // The thread gossips the node's Alive self-fact (at its current incarnation,
 // so it also carries any refutation) to the group over its OWN relay
-// connection — never contending with the data-plane transport. The membership
-// table is shared with the data plane under the caller-provided Mutex.
+// connection — never contending with the data-plane transport. It never
+// touches the membership table, which stays the data plane's alone (its
+// state is changed in place, with no lock): it holds the node's liveness
+// (pktable_liveness, net/membership.nu) — a copy of the self pubkey and the
+// table's incarnation counter, an Atomic — so a refute on the data plane is
+// in the next heartbeat with no lock between the two threads.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -22,11 +26,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/net/membership.nu`
 $ `stdlib/net/relay.nu`
 $ `stdlib/core/rcbox.nu`
-$ `stdlib/std/arc.nu`
-
-& `c` @ nurl_atomic_i64_load in *u p → i
-
-& `c` @ nurl_atomic_i64_inc sync *u p → i
+$ `stdlib/std/atomic.nu`
 
 @ __hb_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -34,18 +34,25 @@ $ `stdlib/std/arc.nu`
     ^ o
 }
 
-// Build the encoded heartbeat payload: a gossip message carrying just this
-// node's Alive self-fact at its current incarnation. Pure.
-@ heartbeat_payload PkMemberTable t → ( Vec u ) {
+// The encoded heartbeat payload: a gossip message carrying just this node's
+// Alive self-fact at its current incarnation. Pure.
+@ __hb_payload_of PkMember self → ( Vec u ) {
     : ( Vec PkMember ) g ( vec_with_cap [PkMember] 1 )
-    ( vec_push [PkMember] g ( pktable_self_fact t ) )
+    ( vec_push [PkMember] g self )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
     ^ ( pkmsg_encode m )
 }
 
+@ heartbeat_payload PkMemberTable t → ( Vec u ) { ^ ( __hb_payload_of ( pktable_self_fact t ) ) }
+
+// The same payload from the node's liveness alone (pktable_liveness): what
+// the heartbeat thread sends, and the same bytes heartbeat_payload gives for
+// the table it was taken from.
+@ heartbeat_payload_of PkLiveness l → ( Vec u ) { ^ ( __hb_payload_of ( pk_liveness_fact l ) ) }
+
 : HeartbeatImpl {
     Thread thr
-    ( Arc i ) stop  // atomic flag: 0 = run, >0 = stop (the thread holds a share of its own)
+    Atomic stop  // 0 = run, 1 = stop (the thread holds a copy of its own)
     i live
 }
 
@@ -63,7 +70,7 @@ $ `stdlib/std/arc.nu`
 // Stop and join a thread still running.
 @ __hb_stop * HeartbeatImpl hb → v {
     ? == . hb live 1 {
-        : i _o ( nurl_atomic_i64_inc # *u ( arc_ptr [i] . hb stop ) )  // 0 → 1: stop after current sleep
+        ( atomic_store . hb stop 1 )  // stop after the current sleep
         ( thread_join . hb thr )
         = . hb live 0
     } {}
@@ -72,31 +79,32 @@ $ `stdlib/std/arc.nu`
 % Drop HeartbeatImpl {
     @ drop HeartbeatImpl hb → v {
         ? == . hb live 1 {
-            : i _o ( nurl_atomic_i64_inc # *u ( arc_ptr [i] . hb stop ) )
+            ( atomic_store . hb stop 1 )
             ( thread_join . hb thr )
         } {}
     }
 }
 
 // Start the heartbeat thread. It broadcasts the self-alive payload to `group`
-// every `interval_ms`, reading the table under `mtx` (the caller must hold the
-// SAME mtx around its own table mutations). `rc` is the heartbeat's own relay
-// connection. Returns a Heartbeat to stop later (its last owner stops it).
-@ heartbeat_start PkMemberTable t RelayClient rc ( Vec u ) group i interval_ms Mutex mtx → Heartbeat {
+// every `interval_ms`, at the incarnation the table `t` has then: the thread
+// takes the node's liveness from `t` (pktable_liveness) and never the table,
+// which the caller keeps changing as it likes, with no lock. `rc` is the
+// heartbeat's own relay connection, handed over to the thread. Returns a
+// Heartbeat to stop later (its last owner stops it).
+@ heartbeat_start PkMemberTable t sink RelayClient rc ( Vec u ) group i interval_ms → Heartbeat {
     : ( Shared HeartbeatImpl ) hb__box ( shared_zero [HeartbeatImpl] )
     : *HeartbeatImpl hb ( shared_ptr [HeartbeatImpl] hb__box )
-    : ( Arc i ) stop ( arc_new [i] 0 )
-    = . hb stop ( arc_clone [i] stop )
+    : Atomic stop ( atomic_new 0 )
+    = . hb stop ( Atomic_share stop )
     = . hb live 0
     : ( Vec u ) grp ( __hb_cpy group )
+    : PkLiveness lv ( pktable_liveness t )
 
     : ( @ v ) body \ → v {
-        ~ == ( nurl_atomic_i64_load # *u ( arc_ptr [i] stop ) ) 0 {
+        ~ == ( atomic_load stop ) 0 {
             ( sleep_ms interval_ms )
-            ? == ( nurl_atomic_i64_load # *u ( arc_ptr [i] stop ) ) 0 {
-                ( mutex_lock mtx )
-                : ( Vec u ) payload ( heartbeat_payload t )
-                ( mutex_unlock mtx )
+            ? == ( atomic_load stop ) 0 {
+                : ( Vec u ) payload ( heartbeat_payload_of lv )
                 ?? ( relay_broadcast rc grp payload ) { T _ → {} F _ → {} }
             } {}
         }

@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+table grew to 2000 members: YES
+ten refutes, incarnation 10: YES
+every payload this node alive, never going down: YES
+the last payload carries incarnation 10: YES
+the thread sent payloads: YES
+liveness payload = table payload: YES

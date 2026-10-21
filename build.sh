@@ -676,8 +676,10 @@ if (( RUN_TESTS == 1 )); then
     # some CPU or an LLVM "Cannot select": tier attributes and gates,
     # the ungated inline copies, the AES dispatch, the stubs under
     # --no-cpu-dispatch, and the program run with the tier taken away.
-    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir
+    # unsafe_report: `--unsafe-report` lists exactly the trusted surface
+    # (stderr, which no golden captures for a program that compiles).
+    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + unsafe report" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir unsafe_report
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

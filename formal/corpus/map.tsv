@@ -281,9 +281,9 @@ h291_unjournaled_drop_skipped_by_a_panic	§7.2	A2	panic past a struct holding a 
 h292_argument_temporary_leaked_by_a_panic	§7.2	A2	a String / Vec made in an argument, the callee panics: the drop after the call was skipped and the journal did not know the temporary — leak	runs-clean
 h293_thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean
 h294_parked_drop_registration_never_forgotten	§7.2	A2	a value whose journal thunk is parked for module end was registered but never forgotten: a later panic dropped it from a returned frame	runs-clean
-h295_param_copy_passed_inout_releases_callers_field	§2.12	A2	a ': ~' copy of a parameter shares its fields; passed inout, the callee replaced a field and released the caller's (UAF)	rejected
+h295_param_copy_passed_inout_releases_callers_field	paramOK_inout	A2	a ': ~' copy of a parameter shares its fields; passed inout, the callee replaced a field and released the caller's (UAF)	rejected
 h296_arm_payload_returned_registration_kept	§7.2	A2	a ?? arm handing its handle payload out as the match value left its journal registration: a later panic read a dead frame's flag	runs-clean
-h297_inout_closure_param_replaced	§7.4	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
+h297_inout_closure_param_replaced	StmtT.assign	A2	a closure handed to an inout parameter and replaced there: the callee dropped the new env as its own and leaked the old; the caller ran freed memory	runs-clean
 h298_closure_inout_capture_replaced	§2.4	A2	a closure handing a captured : ~ String to an inout parameter took it by value; the callee replaced the copy and released the caller's buffer (UAF)	runs-clean
 h299_closure_from_a_call_outlives_its_argument	§2.11	A2	a closure a call returned over an argument it captured without taking it over (retclo) stayed usable after the caller released the argument (UAF)	rejected
 h300_vec_iterator_outlives_its_vec	§2.11	A2	h299 through iter_from_vec: the iterator called after its Vec was released	rejected
@@ -303,3 +303,6 @@ h313_lru_get_value_released	§7.6	A2	h311 through lru_get: releasing the cached 
 h314_lru_value_read_after_eviction	§2.10	A2	a value lru_get lent, read after an lru_put that evicted it	rejected
 h315_first_arm_statement_reads_what_the_scrutinee_ended	§2.10	A2	a match scrutinee call's effects were recorded after the first arm statement, which read a borrow the call had ended	rejected
 h316_vector_result_keeps_its_temporary	§7.1	A2	a call returning a v128 was taken for a possible view of its temporary argument; the temporary's drop waited for a consumer, and a binding is none (leak)	runs-clean
+h317_frozen_asserted_over_a_cell	§6.5	A3	a program's own % Frozen over a Cell, in an RwLocked, written through read guards on two threads: % Frozen only adds checks (question #21, rejected already)	rejected
+h318_send_asserted_by_safe_code	§3	B	safe code asserted % Send over an Rc and raced its count from two threads; a positive marker is now unsafe % Send (heap-use-after-free)	rejected
+h319_member_table_copy_on_two_threads	§6.5	A3	two copies of one PkMemberTable, one moved to a thread, both grew its member Vec (dist/heartbeat's shape); the table is % NotSend	rejected

@@ -185,8 +185,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   declarations (v2.6); the **`inline` always-inline prefix** (v2.7); the
   **`unsafe` raw-memory prefix** (v2.8); the **`raw` caller-vouched
   prefix** (v2.9); **FFI parameter markers** (`in`, `sync`, `nocapture`)
-  and a foreach over a field (v2.10); the **`v512`** lane type of the
-  AVX-512 VAES crypto tier (v2.11); and locked the prefix-arity
+  and a foreach over a field (v2.10); **`unsafe % Send` / `unsafe % Sync`**
+  and the **`v512`** lane type of the AVX-512 VAES crypto tier (v2.11); and locked the prefix-arity
   grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
@@ -230,8 +230,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   never silently duplicated (a compile error says where to clone or move),
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
-  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
-  is known — every one found, through probe h315, is closed; the rules for
+  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 every hole
+  found, through probe h319, is closed but one — a library handle's
+  copies changed on two threads (MEMORY.md §6.2); the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle

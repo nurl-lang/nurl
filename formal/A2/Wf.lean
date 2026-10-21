@@ -700,7 +700,7 @@ theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var
 
 /-- Taking a struct apart keeps the context well-formed. -/
 theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : Ty} (hy : Γ y = some E)
-    (hl : E.live = true) (hm : E.mode = .own) (hty : E.ty = .prod a b) (hx : Γ x = none) (hz : Γ z = none)
+    (hl : E.live = true) (hm : E.mode.ownSlot = true) (hty : E.ty = .prod a b) (hx : Γ x = none) (hz : Γ z = none)
     (hxz : x ≠ z) :
     CtxWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a))
       z (compE E b)) := by
@@ -714,9 +714,9 @@ theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : 
     intro r hr
     have hn : E.ty ≠ .int ∨ E.mode = .rootb := Or.inl (by rw [hty]; simp)
     obtain ⟨Er, hEr, hro⟩ := h y E hy hl hn r (by
-      simpa [roots, Entry.vdeps, hm, Mode.ownSlot] using hr)
+      simpa [roots, Entry.vdeps, hm] using hr)
     by_cases hry : r = y
-    · subst hry; exact ⟨{ E with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+    · subst hry; exact ⟨{ E with live := false }, by simp [A2.setE], Mode.isRoot_of_ownSlot hm⟩
     · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
       exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   have hcomp : ∀ (Γ' : Ctx) (t : Ty), (∀ r ∈ roots E.held, ∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) →
@@ -1009,7 +1009,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
   | catchR _ _ hM _ _ _ => exact fun _ => hM.wf
   | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ ih =>
-    exact fun h => ((ih (h.unpair hy hl hm hty hx hz hxz)).exitScope z).exitScope x
+    exact fun h => ((ih (h.unpair hy hl hm.ownSlot hty hx hz hxz)).exitScope z).exitScope x
   | sub hw _ ho _ =>
     intro _
     rcases ho with rfl | ho

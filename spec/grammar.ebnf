@@ -57,7 +57,7 @@ program = decl* EOF ;
 decl = import_decl                 (*  $                             *)
      | ('pub')? 'unsafe'? ffi_decl (*  &   (unsafe &: callers unsafe) *)
      | ('pub')? trait_decl         (*  %  IDENT  {                   *)
-     | ('pub')? impl_decl          (*  %  IDENT  type                *)
+     | ('pub')? 'unsafe'? impl_decl (* %  IDENT  type (unsafe % v2.11)*)
      | decl_prefix* fn_decl        (*  @  (only kind enforced in v2.0)*)
      | ('pub')? 'raw'? struct_decl (*  :  IDENT   {   (raw v2.9)     *)
      | ('pub')? enum_decl          (*  :  |                          *)
@@ -66,11 +66,13 @@ decl = import_decl                 (*  $                             *)
 
 (* A function declaration may carry any of these prefixes, in any order
    (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9; FFI
-   parameter markers and a foreach over a field v2.10; the `v512` type
-   keyword v2.11).
-   `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`
-   and on a foreign declaration (`unsafe & …`: only `unsafe` code may call
-   it) — on any other decl each is a diagnostic, not a silent
+   parameter markers and a foreach over a field v2.10; `unsafe` on a
+   `% Send` / `% Sync` impl and the `v512` type keyword v2.11).
+   `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`,
+   on a foreign declaration (`unsafe & …`: only `unsafe` code may call
+   it) and on a `% Send` / `% Sync` impl (an assertion the compiler takes
+   on trust, required outside the standard library; on any other impl it
+   is a diagnostic) — on any other decl each is a diagnostic, not a silent
    no-op, because a prefix left pending drifts onto the next `@` the
    parser reaches, which after an import boundary is a function in a
    different file. `pub` had exactly that bug before v2.0 made it
@@ -359,7 +361,15 @@ fn_header  = '@' IDENT type_params? param* '→' type ;
    `Ord` and `Show` are implemented with no declaration, which is how
    the built-in protocols work. An impl of an undeclared trait has no
    contract to check and emits its methods under the mangled name; a
-   typo is caught at the call site instead. *)
+   typo is caught at the call site instead.
+
+   `unsafe % Send T { }` / `unsafe % Sync T { }` (v2.11): a positive
+   thread-safety marker stops the structural derivation at T, so outside
+   the standard library it is an unchecked promise and carries `unsafe`
+   (docs/MEMORY.md §3); `nurlc --unsafe-report` lists it. The markers that
+   only add checks (`NotSend`, `NotSync`, `Frozen`) and `Resource` need
+   none, and `unsafe` on them — or on any other impl, or on a trait
+   declaration — is a diagnostic. *)
 impl_decl = '%' IDENT type_params? type '{' ( 'unsafe'? fn_decl )* '}' ;
 
 
