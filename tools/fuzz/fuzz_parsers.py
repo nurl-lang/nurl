@@ -211,8 +211,13 @@ CORPUS_DIRS = {"tls": [("tls", "ch_")], "tlscli": [("tls", "sh_")],
                "x509": [("x509", "cert_")], "csr": [("x509", "csr_")]}
 
 
+_CORPUS_CACHE = {}
+
+
 def load_corpus(fmt):
-    out = []
+    if fmt in _CORPUS_CACHE:
+        return _CORPUS_CACHE[fmt]
+    out = _CORPUS_CACHE[fmt] = []
     for d, prefix in CORPUS_DIRS.get(fmt, [(fmt, "")]):
         p = os.path.join(CORPUS, d)
         if not os.path.isdir(p):
@@ -467,32 +472,75 @@ def vec8(rng, b): return u8(pick_len(rng, len(b))) + b
 def vec16(rng, b): return u16(pick_len(rng, len(b))) + b
 
 
+_SHARES = None
+
+
+def capture_shares():
+    """Key shares lifted from the real ClientHellos in corpus/tls, by
+    group: a random X25519 key is still a valid one, but a random P-256
+    point or ML-KEM encapsulation key is rejected before the handshake
+    goes anywhere — real ones get the generated hellos to a ServerHello."""
+    global _SHARES
+    if _SHARES is not None:
+        return _SHARES
+    _SHARES = {}
+    for ch in load_corpus("tls"):
+        try:
+            b = ch[5:]                                   # record header
+            p = 4 + 2 + 32                               # hs header, version, random
+            p += 1 + b[p]                                # session id
+            p += 2 + int.from_bytes(b[p:p + 2], "big")   # cipher suites
+            p += 1 + b[p]                                # compression
+            end = p + 2 + int.from_bytes(b[p:p + 2], "big")
+            p += 2
+            while p + 4 <= end:
+                et, el = int.from_bytes(b[p:p + 2], "big"), int.from_bytes(b[p + 2:p + 4], "big")
+                if et == 51:
+                    q, qe = p + 6, p + 4 + el
+                    while q + 4 <= qe:
+                        g, kl = int.from_bytes(b[q:q + 2], "big"), int.from_bytes(b[q + 2:q + 4], "big")
+                        _SHARES.setdefault(g, []).append(b[q + 4:q + 4 + kl])
+                        q += 4 + kl
+                p += 4 + el
+        except IndexError:
+            continue
+    return _SHARES
+
+
 def gen_client_hello(rng):
     exts = []
-    if rng.random() < 0.8:
-        name = rng.choice([b"localhost", b"example.com", b"", b"a" * 300, b"x\x00y"])
-        exts.append(tls_ext(rng, 0, vec16(rng, u8(0) + vec16(rng, name))))
-    groups = [0x001d, 0x0017, 0x11ec, 0x0018, 0x0100, rng.randint(0, 0xFFFF)]
-    rng.shuffle(groups)
-    groups = groups[:rng.randint(0, len(groups))]
-    if rng.random() < 0.9:
+    shares_by_group = capture_shares()
+    if rng.random() < 0.85:
+        name = odd(rng, [b"localhost", b"example.com"], [b"", b"a" * 300, b"x\x00y", b"LOCALHOST."])
+        exts.append(tls_ext(rng, 0, vec16(rng, u8(odd(rng, [0], [1, 255])) + vec16(rng, name))))
+    good_groups = [g for g in (0x11ec, 0x001d, 0x0017) if g in shares_by_group] or [0x001d]
+    groups = rng.sample(good_groups, rng.randint(1, len(good_groups)))
+    if rng.random() < ODD:
+        groups += rng.sample([0x0018, 0x0100, 0x6399, rng.randint(0, 0xFFFF)], rng.randint(1, 2))
+        rng.shuffle(groups)
+    if rng.random() > ODD / 2:
         exts.append(tls_ext(rng, 10, vec16(rng, b"".join(u16(g) for g in groups))))
-    if rng.random() < 0.9:
-        algs = [0x0403, 0x0804, 0x0805, 0x0401, 0x0807, 0x0904, 0x0905, 0x0906, rng.randint(0, 0xFFFF)]
+    if rng.random() > ODD / 2:
+        algs = [0x0403, 0x0804, 0x0805, 0x0401, 0x0807, 0x0904, 0x0905, 0x0906]
         rng.shuffle(algs)
-        exts.append(tls_ext(rng, 13, vec16(rng, b"".join(u16(a) for a in algs[:rng.randint(0, 9)]))))
-    if rng.random() < 0.95:
-        vers = rng.choice([[0x0304], [0x0304, 0x0303], [0x0303], [0x7f1c, 0x0304], []])
+        algs = algs[:rng.randint(1, len(algs))]
+        if rng.random() < ODD:
+            algs = [rng.randint(0, 0xFFFF)] + algs[:rng.randint(0, 2)]
+        exts.append(tls_ext(rng, 13, vec16(rng, b"".join(u16(a) for a in algs))))
+    if rng.random() > ODD / 3:
+        vers = odd(rng, [[0x0304], [0x0304, 0x0303], [0x7a7a, 0x0304]], [[0x0303], [], [0x7f1c]])
         exts.append(tls_ext(rng, 43, vec8(rng, b"".join(u16(v) for v in vers))))
-    if rng.random() < 0.9:
+    if rng.random() > ODD / 3:
         shares = b""
-        for g in (groups or [0x001d])[:rng.randint(0, 3)]:
-            klen = {0x001d: 32, 0x0017: 65, 0x0018: 97, 0x11ec: 1216}.get(g, rng.randint(0, 40))
-            if rng.random() < 0.2:
-                klen = rng.choice([0, 1, klen - 1, klen + 1])
-            key = rng.randbytes(max(klen, 0))
-            if g == 0x0017 and key:
-                key = b"\x04" + key[1:]
+        for g in groups[:rng.randint(1, 2)]:
+            if g in shares_by_group and rng.random() > ODD:
+                key = rng.choice(shares_by_group[g])
+            else:
+                klen = {0x001d: 32, 0x0017: 65, 0x0018: 97, 0x11ec: 1216}.get(g, rng.randint(0, 40))
+                klen = odd(rng, [klen], [0, 1, klen - 1, klen + 1])
+                key = rng.randbytes(max(klen, 0))
+                if g == 0x0017 and key:
+                    key = b"\x04" + key[1:]
             shares += u16(g) + vec16(rng, key)
         exts.append(tls_ext(rng, 51, vec16(rng, shares)))
     if rng.random() < 0.5:
@@ -516,12 +564,16 @@ def gen_client_hello(rng):
                        for _ in range(rng.randint(0, 3)))
         binders = b"".join(vec8(rng, rng.randbytes(rng.choice([32, 48, 0, 31]))) for _ in range(rng.randint(0, 3)))
         exts.append(tls_ext(rng, 41, vec16(rng, ids) + vec16(rng, binders)))
-    suites = [0x1301, 0x1302, 0x1303, 0xc02b, 0x00ff, rng.randint(0, 0xFFFF)]
+    suites = [0x1301, 0x1302, 0x1303]
     rng.shuffle(suites)
-    body = (u16(rng.choice([0x0303, 0x0303, 0x0301, 0x0304])) + rng.randbytes(32) +
-            vec8(rng, rng.randbytes(rng.choice([0, 32, 32, 33, rng.randint(0, 40)]))) +
-            vec16(rng, b"".join(u16(s) for s in suites[:rng.randint(0, 6)])) +
-            vec8(rng, rng.choice([b"\x00", b"\x00", b"\x01\x00", b""])) +
+    suites = suites[:rng.randint(1, 3)]
+    if rng.random() < ODD:
+        suites += [rng.choice([0xc02b, 0x00ff, 0x0a0a, rng.randint(0, 0xFFFF)])]
+        rng.shuffle(suites)
+    body = (u16(odd(rng, [0x0303], [0x0301, 0x0304, 0x0300])) + rng.randbytes(32) +
+            vec8(rng, rng.randbytes(odd(rng, [0, 32], [33, 255, rng.randint(1, 40)]))) +
+            vec16(rng, b"".join(u16(s) for s in suites)) +
+            vec8(rng, odd(rng, [b"\x00"], [b"\x01\x00", b"", b"\x01"])) +
             vec16(rng, b"".join(exts)))
     return u8(1) + u24(pick_len(rng, len(body))) + body
 
@@ -565,7 +617,44 @@ def gen_tls(rng):
 HRR_RANDOM = bytes.fromhex("cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c")
 
 
+def gen_tls12_flight(rng):
+    """A TLS 1.2 server flight — ServerHello choosing an ECDHE suite the
+    NURL client offers, then the plaintext Certificate, ServerKeyExchange
+    and ServerHelloDone its 1.2 fallback parses before any key exists."""
+    shares = capture_shares()
+    exts = b""
+    if rng.random() < 0.5:
+        exts += tls_ext(rng, 0xff01, b"\x00")                     # renegotiation_info
+    if rng.random() < 0.3:
+        exts += tls_ext(rng, 11, vec8(rng, b"\x00"))               # ec_point_formats
+    if rng.random() < 0.3:
+        exts += tls_ext(rng, 16, vec16(rng, vec8(rng, rng.choice([b"h2", b"http/1.1", b""]))))
+    rnd = rng.randbytes(24) + odd(rng, [rng.randbytes(8)], [b"DOWNGRD\x01", b"DOWNGRD\x00"])
+    body = (u16(0x0303) + rnd + vec8(rng, rng.randbytes(odd(rng, [32, 0], [33]))) +
+            u16(odd(rng, [0xc02f, 0xc02b, 0xcca8, 0xcca9], [0xc030, 0x009c, 0x1302])) + u8(0) +
+            (vec16(rng, exts) if exts or rng.random() < 0.5 else b""))
+    msgs = u8(2) + u24(pick_len(rng, len(body))) + body
+    certs = corpus_or("x509", BINARY_SEEDS["x509"])
+    chain = [rng.choice(certs) for _ in range(odd(rng, [1, 2], [0, 3, 17]))]
+    chain = [der_mutate(c, rng) if rng.random() < ODD * 2 else c for c in chain]
+    lst = b"".join(u24(pick_len(rng, len(c))) + c for c in chain)
+    cb = u24(pick_len(rng, len(lst))) + lst
+    msgs += u8(11) + u24(pick_len(rng, len(cb))) + cb
+    curve = odd(rng, [29, 23], [24, 0x11ec, rng.randint(0, 0xFFFF)])
+    point = rng.choice(shares.get(curve, [rng.randbytes(32)]))
+    if rng.random() < ODD:
+        point = rng.randbytes(odd(rng, [len(point)], [0, 1, 255]))
+    ske = (u8(odd(rng, [3], [1, 2, 0])) + u16(curve) + vec8(rng, point) +
+           u16(odd(rng, [0x0403, 0x0804, 0x0401], [0x0201, 0x0807, rng.randint(0, 0xFFFF)])) +
+           vec16(rng, rng.randbytes(odd(rng, [72, 256], [0, 1, 600]))))
+    msgs += u8(12) + u24(pick_len(rng, len(ske))) + ske
+    msgs += u8(14) + u24(odd(rng, [0], [1, 4])) + (b"" if rng.random() > ODD else b"\x00")
+    return tls_records(rng, 22, msgs) + tls_tail(rng)
+
+
 def gen_tlscli(rng):
+    if rng.random() < 0.4:
+        return gen_tls12_flight(rng)
     exts = []
     if rng.random() < 0.95:
         exts.append(tls_ext(rng, 43, u16(rng.choice([0x0304, 0x0304, 0x0303, 0x7f1c]))))
@@ -628,40 +717,47 @@ TEXTS = [b"hello", "héllo €".encode(), b"\xff\xfe", b"\xed\xa0\x80", b"\xf4\x
          b"\xc0\xaf", b"a" * 200, b"\xe2\x82", b""]
 
 
+GOOD_TEXTS = [b"hello", "héllo €".encode(), b"a" * 200, b"", "𝄞".encode()]
+BAD_TEXTS = [b"\xff\xfe", b"\xed\xa0\x80", b"\xf4\x90\x80\x80", b"\xc0\xaf", b"\xe2\x82"]
+
+
 def gen_ws(rng):
     mode = rng.randint(0, 3)
     deflate = bool(mode & 1)
     masked = not (mode & 2)
-    if rng.random() < 0.05:
+    if rng.random() < ODD / 3:
         masked = not masked
     out = bytearray([mode])
     for _ in range(rng.randint(1, 6)):
         r = rng.random()
-        if r < 0.35:
-            data = rng.choice(TEXTS)
+        if r < 0.65:                                    # a data message
+            op = rng.choice([1, 2])
+            data = odd(rng, GOOD_TEXTS, BAD_TEXTS) if op == 1 else rng.randbytes(rng.randint(0, 300))
             rsv = 0
             if deflate and rng.random() < 0.7:
-                data = deflate_raw(data if rng.random() < 0.8 else b"\x00" * rng.choice([1 << 16, 1 << 22, 5 << 20]))
+                big = rng.random() < ODD
+                data = deflate_raw(data if not big else b"\x00" * rng.choice([1 << 16, 1 << 22, 5 << 20]))
                 rsv = 4
-            op = rng.choice([1, 2])
             if rng.random() < 0.3 and len(data) > 1:     # fragmented
-                cut = rng.randint(1, len(data) - 1)
-                out += ws_frame(rng, False, rsv, op, data[:cut], masked)
-                if rng.random() < 0.3:
-                    out += ws_frame(rng, True, 0, 9, b"p", masked)
-                out += ws_frame(rng, True, rng.choice([0, 0, 4]), 0, data[cut:], masked)
+                cuts = sorted(rng.randint(1, len(data) - 1) for _ in range(rng.randint(1, 3)))
+                pieces = [data[x:y] for x, y in zip([0] + cuts, cuts + [len(data)])]
+                for k, piece in enumerate(pieces):
+                    last = k == len(pieces) - 1
+                    if k and rng.random() < 0.2:          # a control frame between fragments
+                        out += ws_frame(rng, True, 0, 9, b"p", masked)
+                    out += ws_frame(rng, last, rsv if k == 0 else odd(rng, [0], [4, 2]), op if k == 0 else 0, piece, masked)
             else:
-                out += ws_frame(rng, True, rsv | rng.choice([0, 0, 0, 0, 1, 2]), op, data, masked)
-        elif r < 0.55:
-            out += ws_frame(rng, rng.random() < 0.9, 0, rng.choice([9, 10]), rng.randbytes(rng.choice([0, 5, 125, 126, 200])), masked)
-        elif r < 0.7:
-            body = b"" if rng.random() < 0.2 else u16(rng.choice([1000, 1001, 1005, 1006, 1015, 2999, 3000, 4999, 5000, 0])) + rng.choice(TEXTS)
-            if rng.random() < 0.1:
-                body = b"\x03"
+                out += ws_frame(rng, True, rsv | odd(rng, [0], [1, 2]), op, data, masked)
+        elif r < 0.85:                                  # ping / pong
+            out += ws_frame(rng, rng.random() > ODD / 2, 0, rng.choice([9, 10]),
+                            rng.randbytes(odd(rng, [0, 5, 125], [126, 200])), masked)
+        elif r < 0.93:                                  # close
+            body = odd(rng, [b"", u16(1000) + b"bye", u16(1001), u16(4000) + "ü".encode()],
+                       [b"\x03", u16(1005), u16(1006), u16(2999), u16(5000), u16(1000) + BAD_TEXTS[0], u16(1000) + b"r" * 124])
             out += ws_frame(rng, True, 0, 8, body, masked)
-        elif r < 0.8:
+        elif r < 0.97:                                  # a stray continuation
             out += ws_frame(rng, rng.random() < 0.5, 0, 0, rng.randbytes(rng.randint(0, 20)), masked)
-        else:
+        else:                                           # reserved opcodes / bits
             out += ws_frame(rng, rng.random() < 0.5, rng.randint(0, 7), rng.choice([3, 4, 7, 11, 15]), rng.randbytes(rng.randint(0, 20)), masked)
     return bytes(out)
 
