@@ -286,8 +286,12 @@ Lifeguard protects the *accuser*; two more mechanisms protect the busy
   OS preempts threads and the heartbeat fires on its timer **even when every
   worker fiber is pinned at 100% CPU**. It gossips the node's Alive self-fact
   (at its current incarnation, so it also carries any refutation) over its own
-  relay connection. `heartbeat_start(table, relay, group, interval, mutex)` /
-  `heartbeat_stop`. *(Tested live: a node pinned in a 900M-iteration loop with
+  relay connection. `heartbeat_start(table, relay, group, interval)` /
+  `heartbeat_stop`. The thread never touches the table, which stays the
+  data plane's (it is `% NotSend`): it holds the node's liveness
+  (`pktable_liveness` — a copy of the self pubkey and the table's
+  incarnation `Atomic`), so a refute is in the next heartbeat with no lock,
+  and the relay connection is handed over to it (`sink`). *(Tested live: a node pinned in a 900M-iteration loop with
   no yield still emits heartbeats — the §7.5 "a 100%-CPU node is not declared
   dead" guarantee, demonstrated.)*
 

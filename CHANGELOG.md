@@ -30,6 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `file:line` rather than the file). Checked by
   `compiler/tests/unsafe_report.sh`. docs/MEMORY.md §3 / §6.4 and
   formal/CLAIM.md's trusted base name `% Frozen` and the foreign claims.
+- **dist/heartbeat's thread no longer reads the membership table under a
+  caller-supplied mutex (h318).** `heartbeat_start` handed its thread the
+  `PkMemberTable` and a `Mutex` the caller had to take around its own
+  changes; nothing made it, and two threads growing one table corrupted
+  the heap. The thread holds the node's liveness now
+  (`pktable_liveness`: a copy of the self pubkey and the table's
+  incarnation, which is an `Atomic`), `heartbeat_start PkMemberTable t
+  sink RelayClient rc ( Vec u ) group i interval_ms` takes no mutex, and
+  `PkMemberTable` is `% NotSend`. `heartbeat_payload_of` builds the same
+  payload from a `PkLiveness`; `pktable_refute` is one atomic max. The
+  stop flag is an `Atomic` instead of an `Arc` read with raw FFI.
+  Test: `dist_heartbeat_thread.nu`.
+- **`mqtt_listen` takes its client over (`sink`).** Its reader thread
+  changes the client's buffers and packet-id state with no lock; the doc
+  asked callers not to use the client meanwhile. Test:
+  `borrow_mqtt_listen_takes_client.nu`.
+- **Known open: a library handle's copies on two threads.** A field read
+  shares a library handle, and the Send derivation looks only at types:
+  one copy moved to a thread while another stays races the state
+  (`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`,
+  docs/MEMORY.md §6.2).
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to

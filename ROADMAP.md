@@ -229,8 +229,9 @@ A high-level map of what exists. Dates and per-feature detail are in
   never silently duplicated (a compile error says where to clone or move),
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
-  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 no hole
-  is known — every one found, through probe h317, is closed; the rules for
+  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 every hole
+  found, through probe h318, is closed but one — a library handle's
+  copies changed on two threads (MEMORY.md §6.2); the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle

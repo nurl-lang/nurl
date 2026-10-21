@@ -800,12 +800,29 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No open holes.** The 0.72.0 and 0.73.0 release reviews found safe programs
+**One open hole: a library handle's copies on two threads.** A library
+handle over a counted block (§7.6) is copied by sharing — a field read
+out of a struct is another owner of the same state — and the Send
+derivation asks only of types, so a struct of a `Shared` field and Vecs is
+Send. One copy moved to a thread while another stays here is two threads
+changing one value in place with no lock: a `PNCounter` (dist/crdt.nu)
+grown from both is a heap-use-after-free under AddressSanitizer
+(`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`). It is
+the standard library's handles over unsynchronised state that reach it —
+not `Arc`, `Locked`, `RwLocked`, `Atomic`, `Channel`, `Mutex` or a
+`Thread`, which are asserted thread-safe, and not `SymTab` or
+`PkMemberTable`, which are marked `% NotSend` / `% NotSync` (h254, h318).
+The rule that closes it — a handle whose copies alias is Send only when
+it is asserted thread-safe, as Rust's `Arc<T>` is Send only for a `Sync`
+`T` — is open with its reach over those handles; until then a value that
+holds one moves to a thread with no copy kept.
+
+**Every other hole is closed.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h317):
+all are closed, each a probe CI now holds (h142–h318):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1165,7 +1182,11 @@ after an eviction), and a match's scrutinee call took effect after the
 arm's first statement, which could read a borrow it had ended (h315).
 `map_keys` over owned keys copied each key and
 emptied its slot too, leaking the key and corrupting the map (h303;
-§7.6). No hole is known.
+§7.6). A thread-safety marker asserted by safe code raced an `Rc`'s count
+(h317: a positive marker is `unsafe` now, §3), and the heartbeat thread
+of dist/heartbeat.nu grew a membership table the data plane grew too,
+under a lock nothing made the caller take (h318, §6.5). No other hole is
+known.
 
 The rules that carry it:
 
@@ -1371,6 +1392,20 @@ the one its type names, so no lock is counted and none can be forgotten.
 State one thread changes is an `Rc`; a value built first is shared whole
 with `arc_new`.
 
+*A lock beside the data is not a lock on it.* A library handle whose
+state is changed in place with no lock of its own, handed to a thread
+together with a `Mutex` its caller is asked to take around its own
+changes, is a race the first caller that forgets writes: nothing ties the
+mutex to the state. `dist/heartbeat.nu` was that shape — its thread read
+the membership table under a caller-supplied mutex (h318). The thread
+holds only what it needs now, in values that synchronise themselves: the
+node's liveness (`pktable_liveness`: a copy of the self pubkey and the
+table's incarnation, an `Atomic` every copy of which is the same word),
+and the table is `% NotSend`. State a thread must change with its
+caller is a `Locked`; state it only reads, a copy or an `Atomic`;
+`mqtt_listen` takes its client over (`sink`), since its thread is the
+client's only user.
+
 ### 6.6 How the guarantee is checked
 
 The guarantee is a property of the rules. The compiler's implementation
@@ -1386,7 +1421,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h317`) to the rule that rejects it. See
+  (`h01–h318`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_mqtt_listen_takes_client.nu:14:13: error: use of moved value 'cl' — a heap handle has exactly one owner, and this one was consumed at line 13 by mqtt_listen. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            : !v MqttErr r ( mqtt_ping cl )
+            ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
