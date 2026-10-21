@@ -21,6 +21,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http_keepalive_cap_modes` test hung in 8 of 30 runs on a loaded
   machine, 0 of 60 after). The reset and the close are now one step
   under the lock.
+- **An outbound connect no longer blocks its fiber's worker.**
+  `nurl_tcp_connect` ran a blocking `getaddrinfo` and a blocking
+  `connect(2)` even on a fiber, so one slow DNS answer or one SYN into a
+  black hole stalled an M:N worker — and every fiber queued on it — for
+  the resolver's or the kernel's full timeout; psql, redis, the HTTP
+  clients and every `tcp_connect_tls*` caller inherited it. On a fiber
+  the connect is now non-blocking and parks for writability on the
+  netpoller, then reads `SO_ERROR`; a name is resolved by the system
+  `getaddrinfo` (`/etc/hosts`, nsswitch) on a small on-demand resolver
+  thread pool while the fiber parks on the job's eventfd; a numeric
+  address skips the resolver entirely. Every resolved address is still
+  tried in order. `udp_connect`, `udp_send_to`, `udp_addr_resolve` and
+  `dns_resolve(_port)` resolve the same way. Off a fiber nothing changes.
+- **`tcp_connect_tls*` reports a failed TCP connect as itself** —
+  `NetTimeout`, `NetOther`, … — instead of `NetTlsHandshake`, and closes
+  the failed socket.
+- **A fiber yielding in a loop no longer starves its worker's I/O.** The
+  scheduler looked at the netpoller and the global queue only once the
+  local queue was empty, which a yield loop never lets happen: on one
+  worker its timers, I/O wakes and unparked fibers waited for ever. Every
+  128th dispatch now looks at both first.
+
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to
@@ -90,6 +112,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot (the callee consumes it): the original leaked, and the map was
   left holding empty keys. A callee that keeps a copy no longer also
   empties the slot, as for a struct field.
+
+### Added
+
+- **`tcp_connect_timeout host port ms`** (`std/net.nu`): `tcp_connect`
+  with one deadline over the name lookup and the TCP handshake,
+  reporting `NetTimeout` — on a fiber a netpoller deadline, off one a
+  `poll(2)`. `tcp_connect` keeps its signature (no deadline).
 
 ### Changed
 

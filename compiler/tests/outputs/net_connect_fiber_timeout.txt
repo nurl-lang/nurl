@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+queue_full=yes
+off_fiber=NetTimeout
+off_fiber_on_time=yes
+fiber=NetTimeout
+fiber_on_time=yes
+ticker_ran_during_connect=yes
+refused=NetOther
+refused_tls=NetOther
+refused_fast=yes
