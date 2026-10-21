@@ -99,6 +99,8 @@ TEXT_SEEDS = {
         b"permessage-deflate; client_max_window_bits=10; server_no_context_takeover",
         b"permessage-deflate; server_max_window_bits",
         b"%" * 300 + b"=" + b"&" * 300,
+        b"event: tick\ndata: one\ndata: two\nid: 7\n: comment\nretry: 100\n\n",
+        b"data\ndata:\ndata: x" + b"\n" * 3,
     ],
     "pem": [
         b"-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n",
@@ -976,7 +978,7 @@ def gen_urlish(rng):
              rng.choice([b"", b"?a=1&b=%2", b"?&&==", b"?k", b"?+%2B+"]) +
              rng.choice([b"", b"#f", b"#"]))
         return u
-    if r < 0.8:
+    if r < 0.75:
         parts = [rng.choice([b"n=v", b"=v", b"n=", b"n", b"", b"n=\"q\""])]
         for _ in range(rng.randint(0, 6)):
             parts.append(rng.choice([b"Domain=" + rng.choice([b".example.com", b"example.com", b"com", b"", b"other.org"]),
@@ -985,6 +987,11 @@ def gen_urlish(rng):
                                      b"Expires=" + rng.choice([b"Wed, 21 Oct 2015 07:28:00 GMT", b"garbage", b"Thu, 01 Jan 1970 00:00:00 GMT", b""]),
                                      b"Secure", b"HttpOnly", b"SameSite=None", b"", b"=", b";"]))
         return b";".join(p if rng.random() < 0.5 else b" " + p for p in parts)
+    if r < 0.9:
+        lines = [odd(rng, [b"data: hello", b"event: msg", b"id: 42", b": keep-alive", b"retry: 1000", b"data"],
+                     [b"data:" + b"x" * 5000, b":", b"\x00data: z", b"event", b"id: \xff", b"data: a\r"])
+                 for _ in range(rng.randint(1, 8))]
+        return b"\n".join(lines) + odd(rng, [b"\n\n"], [b"\n", b"", b"\r\n\r\n"])
     params = [b"permessage-deflate"]
     for _ in range(rng.randint(0, 4)):
         params.append(rng.choice([b"client_max_window_bits", b"client_max_window_bits=" + rng.choice([b"8", b"15", b"16", b"7", b"x", b""]),

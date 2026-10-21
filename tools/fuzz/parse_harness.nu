@@ -19,7 +19,8 @@
 //   h3frame   HTTP/3 frame walk, SETTINGS, HEADERS → QPACK (RFC 9114 §7)
 //   multipart multipart/form-data; the first line is the boundary
 //   urlish    one text through url_parse, the query / form / percent
-//             decoders, cookie_parse and the permessage-deflate offer
+//             decoders, cookie_parse, the permessage-deflate offer and
+//             the SSE frame parser
 //   tlscert   a TLS Certificate message (what a server sends a client):
 //             byte 0 bit 0 picks the TLS 1.2 layout; the chain walk,
 //             x509 parse, name / validity / CA checks and signatures
@@ -229,6 +230,9 @@ unsafe @ __fz_pid → i { ^ # i ( getpid ) }
     : ( Vec QueryPair ) fp ( parse_form_urlencoded raw )
     ?? ( cookie_parse src `example.com` `/a/b` 1700000000 ) { T _ → {} F → {} }
     ?? ( ws_deflate_parse_extensions src ) { T _ → {} F → {} }
+    : i sl ( nurl_str_len src )
+    : i fe ( sse_frame_end src sl )
+    : SseEvent _ev ( sse_parse_frame src ? >= fe 0 fe sl )
 }
 
 // ── loopback plumbing ────────────────────────────────────────────────

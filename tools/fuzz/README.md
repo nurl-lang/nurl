@@ -108,7 +108,7 @@ that parses bytes somebody else chose. Those are the targets
 | `qpack` | qpack_decode_section, encoder- and decoder-stream instructions | bytes |
 | `h3frame` | h3_frame_peek walk, SETTINGS, HEADERS → QPACK | bytes |
 | `multipart` | parse_multipart_form (first line = boundary) | bytes |
-| `urlish` | url_parse, url_query_decode, percent / form / query decoders, cookie_parse, ws_deflate_parse_extensions | text |
+| `urlish` | url_parse, url_query_decode, percent / form / query decoders, cookie_parse, ws_deflate_parse_extensions, the SSE frame parser | text |
 | `tlscert` | tls_chain_verify + tls_leaf_cert on a Certificate message (byte 0 bit 0 = TLS 1.2 layout) | bytes |
 | `http1` | the HTTP server's connection loop: request line, headers, Content-Length / chunked bodies, pipelining | loopback, client side |
 | `h2` | the same server on the HTTP/2 prior-knowledge path: preface sniff, frames, HPACK, CONTINUATION, flow control | loopback, client side |
