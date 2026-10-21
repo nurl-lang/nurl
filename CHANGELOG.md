@@ -120,6 +120,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lightly loaded server spun 80–250 µs of CPU on every I/O wait**
+  (agora t52). With at most four live fibers, a fiber about to park
+  first probed its fd with a fixed 256 poll(2) calls — worth it when the
+  peer answers within the window (c=1 closed loop: ~28 k against ~12 k
+  req/s), pure waste when it does not: a client with think time, an idle
+  keep-alive connection, the listener. Now each fiber learns how long
+  its waits take (every wait counts — a spin hit or a whole park, outliers
+  clamped) and spins only while that is below the cap, for twice it plus
+  a margin; the cap is `NURL_SPIN_US` (µs, 0 = never), else 100 µs, else
+  0 under a cgroup CPU quota or with one usable CPU. i7-5930K, 6 workers,
+  server CPU µs per request, before → after: one connection at 2000
+  req/s 235 → 74 (TLS 239 → 72), at 500 req/s 484 → 84, two at 2500 each
+  183 → 72 with p99 2.14 → 0.46 ms; c=1 / c=10 closed loop unchanged
+  (35.0 / 27.1 plaintext; TLS c=1 44.5 → 41.8). tokio on the same think-
+  time loads: 65 and 76.
+
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key
   and digest went through `bigint_from_bytes_be` / `bigint_rem` /

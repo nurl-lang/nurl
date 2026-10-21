@@ -5345,6 +5345,10 @@ typedef struct NurlFiber {
     pthread_mutex_t *pending_unlock;
     /* Reactor wake-up reason: 1 fd-ready, 0 timeout. */
     int              last_park_result;
+    /* How long this fiber's I/O waits take, ns (an exponentially
+     * weighted average, 0 until the first wait): what nurl__spin_ready
+     * sizes its probe window by. */
+    long long        wait_ewma_ns;
     /* Pending reactor wait — activated by worker after swap-out so the
      * reactor never matches a not-yet-suspended fiber. */
     struct NurlReactorWait *pending_reactor_wait;
@@ -6047,6 +6051,87 @@ long long nurl_available_parallelism(void) {
     }
 #endif
     return n > 0 ? n : 1;
+}
+
+/* ── Spin-before-park ─────────────────────────────────────────────
+ * Before a fiber parks on an fd, a worker with nothing else to run may
+ * probe the fd for a while instead: a park and its wake cost a blocking
+ * epoll_wait, a scheduler wake-up and a context switch, and on a
+ * keep-alive connection the peer's next request often lands within
+ * tens of microseconds. At c=1 that is the difference between ~12 k and
+ * ~28 k req/s at half the latency (and, where the kernel's park path is
+ * expensive, lower CPU per request too). But a probe window that does
+ * NOT end in readiness is CPU burned for nothing — a client with think
+ * time between requests, an idle keep-alive connection, a listener:
+ * spinning a fixed 256 poll(2) calls (80 to 250 µs, by the machine's
+ * syscall cost) on each of those multiplied the CPU of a lightly loaded
+ * server several times over.
+ *
+ * So each fiber keeps an estimate of how long its waits take — every
+ * wait counts, a spin that caught the fd and a park alike, measured
+ * from the start of the wait to its end — and spins only when that
+ * estimate is below the cap, for twice the estimate (plus a margin), or
+ * for the whole cap while it has no estimate yet. A sample is clamped
+ * at twice the cap: a wait that long says "do not spin" as clearly as a
+ * longer one, and one stray stall must not keep a steady peer unspun
+ * for long. The cap is NURL_SPIN_US (µs; 0 = never spin), else 100 µs,
+ * else 0 under a cgroup CPU quota or with one usable CPU, where a burned
+ * core is somebody else's time. As before only a runtime with at most
+ * four live fibers spins at all: a loaded server's workers always have
+ * something to run, and spinning there was measured to cost 15-20 % of
+ * c=10..50 throughput.
+ *
+ * The reads of `pending` and the queues are racy by design: a stale
+ * answer only mis-sizes a spin, never loses a wakeup — the park that
+ * follows re-registers with the poller from scratch. */
+static long long nurl__spin_cap_ns = -1;   /* -1 = not decided yet */
+
+static long long nurl__spin_cap(void) {
+    long long cap = __atomic_load_n(&nurl__spin_cap_ns, __ATOMIC_RELAXED);
+    if (cap >= 0) return cap;
+    const char *e = getenv("NURL_SPIN_US");
+    if (e && *e) {
+        cap = atoll(e) * 1000LL;
+    } else {
+        cap = 100000LL;
+        if (nurl_available_parallelism() < 2) cap = 0;
+#if defined(__linux__)
+        if (nurl__cgroup_cpu_limit() > 0) cap = 0;
+#endif
+    }
+    if (cap < 0) cap = 0;
+    __atomic_store_n(&nurl__spin_cap_ns, cap, __ATOMIC_RELAXED);
+    return cap;
+}
+
+/* Fold one observed wait into the fiber's estimate (weight 1/4). */
+static void nurl__spin_observe(NurlFiber *f, long long waited, long long cap) {
+    if (waited < 0) waited = 0;
+    if (waited > 2 * cap) waited = 2 * cap;
+    f->wait_ewma_ns += (waited - f->wait_ewma_ns) / 4;
+}
+
+/* 1 when `fd` became ready for `events` within the fiber's spin window
+ * (the caller skips the park), 0 to park. `t0` is the wait's start. */
+static int nurl__spin_ready(NurlWorker *w, NurlFiber *f, int fd, short events,
+                            long long t0, long long cap) {
+    if (fd < 0 || cap <= 0) return 0;
+    if (__atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) > 4) return 0;
+    long long est = f->wait_ewma_ns;
+    if (est >= cap) return 0;
+    long long budget = est == 0 ? cap : 2 * est + 10000LL;
+    if (budget > cap) budget = cap;
+    for (;;) {
+        /* Other work for this worker: park now and run it. */
+        if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) return 0;
+        if (__atomic_load_n(&nurl__sched.global_head, __ATOMIC_RELAXED)) return 0;
+        struct pollfd probe = { .fd = fd, .events = events, .revents = 0 };
+        int pr = poll(&probe, 1, 0);
+        long long t = nurl_monotonic_ns() - t0;
+        if (pr > 0) { nurl__spin_observe(f, t, cap); return 1; }
+        if (pr < 0 && errno != EINTR) return 0;
+        if (t >= budget) return 0;
+    }
 }
 
 /* xorshift32 — branch-free victim picker. */
@@ -6898,23 +6983,11 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     nurl__np_start_if_needed();
     if (!nurl__np.started) return -1;
 
-    /* Spin-then-park — unchanged from the poll(2) backend, same gate,
-     * same rationale (see the comment in the non-Linux twin): with at
-     * most 4 live fibers the burned core is genuinely idle and the
-     * probe window usually eats the whole park. */
-    if (fd >= 0 &&
-        __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        for (int i = 0; i < 256; i++) {
-            if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
-            if (__atomic_load_n(&nurl__sched.global_head,
-                                __ATOMIC_RELAXED)) break;
-            struct pollfd probe = { .fd = fd, .events = events,
-                                    .revents = 0 };
-            int pr = poll(&probe, 1, 0);
-            if (pr > 0) return 1;
-            if (pr < 0 && errno != EINTR) break;
-        }
-    }
+    /* Spin-then-park (nurl__spin_ready); every way out of this wait
+     * reports its length to the fiber's estimate. */
+    long long spin_cap = nurl__spin_cap();
+    long long t0 = spin_cap > 0 ? nurl_monotonic_ns() : 0;
+    if (nurl__spin_ready(w, w->current, fd, events, t0, spin_cap)) return 1;
 
     pthread_mutex_lock(&nurl__np.lock);
     /* Fast path: the readiness edge already arrived (banked by the
@@ -6927,6 +7000,7 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
         if (s && (s->ready & (unsigned)events)) {
             s->ready &= (unsigned)~events;
             pthread_mutex_unlock(&nurl__np.lock);
+            if (spin_cap > 0) nurl__spin_observe(w->current, nurl_monotonic_ns() - t0, spin_cap);
             return 1;
         }
     }
@@ -6953,6 +7027,9 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
     nurl__swap_to_loop(cur, w);
+    /* Resumed — possibly on another worker; the fiber carries its own
+     * estimate. */
+    if (spin_cap > 0) nurl__spin_observe(cur, nurl_monotonic_ns() - t0, spin_cap);
     return cur->last_park_result;
 }
 
@@ -7301,49 +7378,13 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
 
-    /* Spin-then-park. A park costs two cross-thread wake chains (pipe
-     * poke to the reactor, then cond-var wake of a worker) — tens of
-     * microseconds of latency per I/O wait. When this worker has
-     * nothing else it could run, spend that time probing the fd
-     * directly instead: on a keep-alive HTTP connection the peer's
-     * next request usually lands within the window, and the park (and
-     * its reactor round-trip) is skipped entirely.
-     *
-     * Spinning is a LOW-concurrency latency optimization only: it is
-     * gated on the whole runtime having at most 4 live fibers. Fibers
-     * parked on the reactor sit in no run queue, so queue-emptiness
-     * checks alone cannot see a loaded server — with dozens of
-     * connections every worker's queues look empty and every park
-     * would spin, and that was measured to cost 15-20 % of c=10..50
-     * closed-loop HTTP throughput purely by burning cores the load
-     * generator needed (spin "success" is no signal either: on a
-     * closed-loop peer the next request always lands in-window). With
-     * few fibers the burned core is genuinely idle, and the win is
-     * large: the c=1 HTTP cell went from 8 k to 21 k req/s.
-     *
-     * Every read here (pending, queues) is racy by design: a stale
-     * answer only mis-sizes the spin, never loses a wakeup, because
-     * the park below re-checks nothing — the reactor owns the wait
-     * from registration on. */
-    if (fd >= 0 &&
-        __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        /* 256 probes ≈ 80-250 µs: sized for a TLS peer's turnaround
-         * (decrypt + handle + encrypt ≈ 35-45 µs on loopback), which
-         * the previous 64-probe window (~25 µs) missed — every
-         * keep-alive HTTPS request then paid the full park/wake chain
-         * even at c=1 with idle cores. The ≤4-live-fibers gate above
-         * still keeps loaded servers off this path entirely. */
-        for (int i = 0; i < 256; i++) {
-            if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
-            if (__atomic_load_n(&nurl__sched.global_head,
-                                __ATOMIC_RELAXED)) break;
-            struct pollfd probe = { .fd = fd, .events = events,
-                                    .revents = 0 };
-            int pr = poll(&probe, 1, 0);
-            if (pr > 0) return 1;
-            if (pr < 0 && errno != EINTR) break;
-        }
-    }
+    /* Spin-then-park (nurl__spin_ready). Here a park costs two
+     * cross-thread wake chains (pipe poke to the reactor, then cond-var
+     * wake of a worker) — tens of microseconds per I/O wait — so a
+     * short wait caught by probing the fd skips the most. */
+    long long spin_cap = nurl__spin_cap();
+    long long t0 = spin_cap > 0 ? nurl_monotonic_ns() : 0;
+    if (nurl__spin_ready(w, w->current, fd, events, t0, spin_cap)) return 1;
 
     pthread_mutex_lock(&nurl__reactor.lock);
     NurlReactorWait *wt = nurl__reactor.freelist;
@@ -7372,6 +7413,9 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
     nurl__swap_to_loop(cur, w);
+    /* Resumed — possibly on another worker; the fiber carries its own
+     * estimate. */
+    if (spin_cap > 0) nurl__spin_observe(cur, nurl_monotonic_ns() - t0, spin_cap);
     return cur->last_park_result;
 }
 
