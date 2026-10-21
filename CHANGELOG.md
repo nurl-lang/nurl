@@ -10,6 +10,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The TLS record layer seals and opens in place** (agora t44, part of
+  t37). A record used to cost about ten allocations and three or four
+  copies each way: the body sliced out of the receive buffer, a nonce,
+  an AAD, a Poly1305 input concatenating AAD and ciphertext, a new
+  plaintext, an append to the application buffer and two more slices on
+  the way out; writing, an inner-plaintext Vec, the sealed copy and a
+  growing record — and on AES-GCM a full key schedule (round keys and
+  eight GHASH powers) per record. Now:
+  - `aes_gcm_seal_in` / `aes_gcm_open_in` and
+    `chacha20poly1305_seal_in` / `chacha20poly1305_open_in` seal or open
+    `buf[data_at, …)` where it lies, the AAD `buf[aad_at, data_at)`, the
+    nonce the connection's iv with the sequence number XORed in (RFC 8446
+    §5.3, RFC 9001 §5.3); the tag is appended, or checked and the range
+    zeroed on a mismatch. Poly1305 is fed from the AAD and ciphertext
+    where they lie (no MAC buffer); the scratch is the buffer's spare
+    capacity. `compiler/tests/aead_in_place.nu` holds them to the Vec
+    APIs over 0–300 bytes, both suites, the AES key on its hardware AND
+    software paths, with foreign bytes around every record.
+  - A connection keeps its AES-GCM keys prepared per traffic secret
+    (`s_gk` / `c_gk`, rebuilt on KeyUpdate), seals each outgoing record
+    in a reused per-connection `txbuf` (64 KB batches, one write each),
+    and opens each incoming record inside its receive buffer, copying the
+    plaintext once — into the caller's buffer through the new
+    `tls_read_into` / `tls_server_read_into`, which `tcp_read_into` and
+    `tcp_try_read_into` now use.
+  - Steady-state record I/O allocates nothing:
+    `compiler/tests/tls_record_inplace.nu` seals and opens 100 records
+    between two connection states and counts zero allocations, for both
+    suites.
+- **`hmac_sha256_key` / `hmac_sha256_mac`: a prepared HMAC-SHA-256 key**
+  (std/hash_sha256.nu). The inner and outer midstates are computed once;
+  each MAC then costs two compressions fewer and builds no K0 block.
+
+- **AES-GCM on short messages: one GHASH reduction for AAD, data and
+  length, J0 encrypted alongside the tail** (agora t58, part of t37). A
+  TLS record of an API response is short, so its latency is per request.
+  The hardware path used to encrypt E_K(J0) and each tail block as its
+  own ten-round chain and reduce GHASH once per block, each reduction
+  waiting on the one before. Now J0 and the tail's counter blocks go
+  through the cipher in ONE interleaved pass (the narrowest of 1/2/4/8
+  blocks that holds them — a block nobody uses still occupies the AES
+  unit), placed after the eight-block steps so it overlaps their last
+  fold; and GHASH outside the stitched loop runs in groups of up to
+  eight blocks with unreduced lo/hi/middle sums and ONE reduction per
+  group (`__ghw_take`) — with no eight-block step, the AAD, the data and
+  the length block of a record up to 96 bytes are a single group.
+  Opening now folds each eight-block step's own input (the ciphertext
+  is there before the cipher runs), which also makes in-place opening
+  valid. i7-5930K, prepared key, cycles per seal: 16 B 360 → 295, 96 B
+  621 → 395, 256 B 644 → 599; ns: 16 B 94 → 79, 64 B 131 → 96, 96 B
+  161 → 103. `aes_gcm_hw_agree.nu` adds AAD past eight blocks before
+  every message shape.
+- **`nurl_v128_ldn` / `nurl_v128_stn`: partial-block load and store**
+  (docs/spec.md §4.1b). The first `n` bytes (0–16) zero-padded, and
+  their store, without touching a byte past `n`: two overlapping 8-, 4-
+  or 1-byte accesses, one branch per size class, no loop and no
+  `memcpy` call — which on the SysV ABI spilled every live vector
+  register around it (the GHASH sums, for a 5-byte TLS AAD block).
+  `compiler/tests/simd_partial.nu` checks every length 0–20 from an
+  allocation of exactly `n` bytes (an over-read is an ASan report) and
+  between sentinel bytes.
+
 - **The hardware crypto tier: AES and carry-less-multiply primitives in
   the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
   t37). `nurl_v128_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`,
@@ -57,6 +119,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a closure.
 
 ### Fixed
+
+- **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
+  are truncated as verify truncates them** (agora t47). The private key
+  and digest went through `bigint_from_bytes_be` / `bigint_rem` /
+  `bigint_to_bytes_be` and every RFC 6979 candidate through two BigInt
+  comparisons; now every scalar is a fixed 32 bytes on the GF(n) field
+  (a constant-time `p256n_in_range_be` replaces the comparisons) and each
+  RFC 6979 HMAC key is prepared once for the MACs made under it. The
+  digest is now bits2int — its leftmost 256 bits (FIPS 186-5 §6.4.1) —
+  where signing used to reduce the WHOLE digest mod n: a SHA-384 or
+  SHA-512 digest signed with P-256 produced a signature that
+  `ecdsa_p256_verify` (and every other implementation) rejects.
+  `ecdsa_p256_sign.nu` adds RFC 6979's SHA-256 "test" vector, SHA-224/
+  384/512 digests verified by OpenSSL, and RFC 4231 HMAC cases on the
+  prepared key.
+
+- **A crypto-tier helper written as a wrapper inlined its callees'
+  gates into the kernel** (nurlc). A function joined the tier only when
+  its own body used a primitive, so an inline-wanting helper that only
+  CALLED tier helpers (`__ghw_take` calling `__ghw_acc1` and
+  `__ghw_finish`) stayed baseline: inlined into a tier body it brought
+  a gated call per callee — four CPUID gate checks in the AES-GCM kernel,
+  and the reason helpers had to be merged by hand so each used a
+  primitive directly. Such a wrapper now gets a `.tier` copy too
+  (`__tier_wrappers`, a fixed point over wrappers of wrappers) whose
+  calls go to the `.tier` copies, and tier bodies call it; the original
+  stays as it was for baseline callers. `crypto_tier_ir.sh` checks the
+  copy and that the `simd` clones call it.
 
 - **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
   A page (and a cut section) was sliced at a byte offset, so one that

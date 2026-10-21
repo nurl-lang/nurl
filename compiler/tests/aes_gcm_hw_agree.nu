@@ -3,9 +3,11 @@
 //
 // Every message length from 0 to 300 bytes walks every path through
 // the hardware kernel: the eight-block stitched loop (none, one, two
-// steps), the single blocks after it and a short last block, with AAD
+// steps), the tail of zero to eight blocks after it and a short last
+// block, with AAD
 // of 0 to 37 bytes (none, a short block, more than two blocks) and
-// both key sizes. The software key is the oracle — its own vectors are
+// both key sizes, and AAD past eight blocks before each of those
+// shapes. The software key is the oracle — its own vectors are
 // aes_gcm_vectors.nu — so a wrong carry in the reflected GHASH, a
 // counter that does not wrap like inc32, or a mis-sized tail shows up
 // as a differing byte. Each sealed message is also opened by the OTHER
@@ -91,6 +93,26 @@ $ `stdlib/std/aes_gcm.nu`
             } {}
             = cases + cases 1
             = n + n 1
+        }
+        // Long AAD — past eight blocks, so its GHASH run reduces in
+        // several groups — before every message shape.
+        = n 0
+        ~ <= n 300 {
+            : ~ i alen 100
+            ~ <= alen 420 {
+                : ( Vec u ) nonce ( fill 12 # u64 + 177 + n alen )
+                : ( Vec u ) aad ( fill alen # u64 + 6000 alen )
+                : ( Vec u ) pt ( fill n # u64 + 9100 n )
+                : ( Vec u ) c1 ( aes_gcm_seal hw nonce aad pt )
+                ? | ! ( same c1 ( aes_gcm_seal sw nonce aad pt ) ) ! ( opens sw nonce aad c1 pt ) {
+                    ( nurl_print `long aad differs: n ` ) ( nurl_print ( nurl_str_int n ) )
+                    ( nurl_print ` aad ` ) ( nurl_print ( nurl_str_int alen ) ) ( nurl_print `\n` )
+                    = fails + fails 1
+                } {}
+                = cases + cases 1
+                = alen + alen 29
+            }
+            = n + n 37
         }
         // One raw block (QUIC header protection) on both keys.
         : ( Vec u ) blk ( fill 16 # u64 31337 )

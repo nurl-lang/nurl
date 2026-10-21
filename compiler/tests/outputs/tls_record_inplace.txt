@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+chacha20-poly1305: ok
+aes-128-gcm: ok

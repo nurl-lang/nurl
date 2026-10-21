@@ -20,7 +20,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
-$ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
+$ `stdlib/std/hash_sha256.nu`  // prepared HMAC keys for the RFC 6979 nonce
 $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arithmetic
 $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
@@ -481,9 +481,20 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ == acc 0
 }
 
+// `v` as exactly 32 big-endian bytes: its LEFTMOST 32 when longer (a
+// digest's bits2int, FIPS 186-5 §6.4.1 / RFC 6979 §2.3.2 — the same
+// truncation verify applies), left zero-padded when shorter.
+@ __ec_be32 ( Vec u ) v → ( Vec u ) {
+    : i n ( vec_len [u] v )
+    : ( Vec u ) o ( vec_zeroed [u] 32 )
+    : i m ? < n 32 n 32
+    ? > m 0 { ( nurl_memcpy # s + # i ( vec_data [u] o ) - 32 m # s ( vec_data [u] v ) m ) } {}
+    ^ o
+}
+
 // V ‖ sep ‖ priv32 ‖ b2o32  (the RFC 6979 HMAC input blocks)
 @ __ec_hmac_msg ( Vec u ) V i sep ( Vec u ) priv32 ( Vec u ) b2o → ( Vec u ) {
-    : ( Vec u ) m ( vec_new [u] )
+    : ( Vec u ) m ( vec_with_cap [u] 97 )
     ( bytes_extend_bytes m V )
     ( vec_push [u] m # u sep )
     ( bytes_extend_bytes m priv32 )
@@ -491,71 +502,59 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ m
 }
 
+// Every scalar stays a fixed 32 bytes on the fixed-width GF(n) field
+// (stdlib/std/p256_scalar.nu) — no variable-length integer, no heap
+// magnitude per step — and each HMAC key of RFC 6979 is prepared once
+// (hmac_sha256_key) for the MACs made under it.
 @ ecdsa_p256_sign ( Vec u ) priv ( Vec u ) hash → ( Vec u ) {
-    : BigInt n ( __p256_n )
-    : BigInt p ( __p256_p )
-    : BigInt x ( bigint_from_bytes_be priv )
-    : BigInt z ( bigint_from_bytes_be hash )
-    : BigInt zmod ( bigint_rem z n )
-    : ( Vec u ) priv32 ( bigint_to_bytes_be x 32 )
-    : ( Vec u ) b2o ( bigint_to_bytes_be zmod 32 )
+    : ( Vec u ) priv32 ( __ec_be32 priv )
+    // z = bits2int(hash), and b2o = int2octets(z mod n): z < 2^256 < 2n,
+    // so one conditional subtraction reduces it.
+    : ( Vec u ) z32 ( __ec_be32 hash )
+    : ( Vec u ) b2o ( p256n_reduce_be z32 )
 
-    // RFC 6979 §3.2 step b/c/d/e/f: V=0x01.., K=0x00.., two HMAC mixes.
+    // RFC 6979 §3.2 steps b–g: V = 0x01.., K = 0x00.., two HMAC mixes.
     : ~ ( Vec u ) V ( __ec_bytes_fill 1 32 )
-    : ~ ( Vec u ) K ( __ec_bytes_fill 0 32 )
-    : ( Vec u ) m1 ( __ec_hmac_msg V 0 priv32 b2o )
-    : ( Vec u ) k1 ( hmac_sha256_pure K m1 )
-    = K k1
-    : ( Vec u ) v1 ( hmac_sha256_pure K V ) = V v1
-    : ( Vec u ) m2 ( __ec_hmac_msg V 1 priv32 b2o )
-    : ( Vec u ) k2 ( hmac_sha256_pure K m2 )
-    = K k2
-    : ( Vec u ) v2 ( hmac_sha256_pure K V ) = V v2
+    : ( Vec u ) k0 ( __ec_bytes_fill 0 32 )
+    : HmacSha256 h0 ( hmac_sha256_key k0 )
+    : ( Vec u ) k1 ( hmac_sha256_mac h0 ( __ec_hmac_msg V 0 priv32 b2o ) )
+    : HmacSha256 h1 ( hmac_sha256_key k1 )
+    = V ( hmac_sha256_mac h1 V )
+    : ( Vec u ) k2 ( hmac_sha256_mac h1 ( __ec_hmac_msg V 1 priv32 b2o ) )
+    : ~ HmacSha256 hk ( hmac_sha256_key k2 )
+    = V ( hmac_sha256_mac hk V )
 
-    : BigInt one ( bigint_from_i 1 )
     : ~ ( Vec u ) sig ( vec_new [u] )
     : ~ b done F
     ~ ! done {
         // T = HMAC(K, V); qlen == hlen == 256 so one block IS the candidate.
-        : ( Vec u ) vt ( hmac_sha256_pure K V ) = V vt
-        : BigInt k ( bigint_from_bytes_be V )
-        : ~ b valid T
-        ? < ( bigint_cmp k one ) 0 { = valid F } {}
-        ? >= ( bigint_cmp k n ) 0 { = valid F } {}
-        ? valid {
+        = V ( hmac_sha256_mac hk V )
+        ? ( p256n_in_range_be V ) {
             // k·G — fixed-base comb (G is the generator), constant-time.
             : ( Vec u ) Rxy ( p256ct_scalarmult_base V )
             : ( Vec u ) Rxb ( bytes_slice Rxy 0 32 )
-            // r = R.x mod n, and the scalar arithmetic s = k⁻¹·(z + r·d)
-            // mod n, all on the fixed-width Montgomery GF(n) field
-            // (stdlib/std/p256_scalar.nu) rather than the generic bigint —
-            // the k⁻¹ Fermat inverse alone was ~half a handshake's crypto.
-            // priv32 is d, b2o is z mod n (both 32-byte big-endian).
+            // r = R.x mod n; s = k⁻¹·(z + r·d) mod n.
             : ( Vec u ) r ( p256n_reduce_be Rxb )
             // identity result → X = 0 → r ≡ 0, retried below (no inf branch).
-            ? ( __ec_zero32 r ) {
-                = valid F
-            } {
+            ? ! ( __ec_zero32 r ) {
                 : ( Vec u ) kinv ( p256n_inv_be V )
                 : ( Vec u ) rd ( p256n_mulmod_be r priv32 )
                 : ( Vec u ) zrd ( p256n_addmod_be b2o rd )
                 : ( Vec u ) s ( p256n_mulmod_be kinv zrd )
-                ? ( __ec_zero32 s ) {
-                    = valid F
-                } {
+                ? ! ( __ec_zero32 s ) {
                     ( bytes_extend_bytes sig r ) ( bytes_extend_bytes sig s )
                     = done T
-                }
-            }
+                } {}
+            } {}
         } {}
         ? ! done {
             // K = HMAC(K, V‖0x00); V = HMAC(K, V) — advance the generator.
-            : ( Vec u ) mz ( vec_new [u] )
+            : ( Vec u ) mz ( vec_with_cap [u] 33 )
             ( bytes_extend_bytes mz V )
             ( vec_push [u] mz # u 0 )
-            : ( Vec u ) kn ( hmac_sha256_pure K mz )
-            = K kn
-            : ( Vec u ) vn ( hmac_sha256_pure K V ) = V vn
+            : ( Vec u ) kn ( hmac_sha256_mac hk mz )
+            = hk ( hmac_sha256_key kn )
+            = V ( hmac_sha256_mac hk V )
         } {}
     }
 
