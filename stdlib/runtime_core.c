@@ -3387,6 +3387,11 @@ static void nurl__jrnl_pop_nulls(void) {
  * cannot — the drain's own record does it instead. The drain marks the
  * journal live for its duration so every nurl_free reaches the check. */
 static __thread int     nurl__draining = 0;
+/* Drains running on this thread, nested (a drop inside one panics again,
+ * or enters a recover of its own that panics). A panic raised by a drop
+ * whose recover frame is OUTSIDE the drain longjmps past the drain's
+ * epilogue; the frame it lands in ends those drains (nurl__drain_unwind). */
+static __thread int     nurl__drain_depth = 0;
 static __thread void  **nurl__dseen = NULL;
 static __thread size_t  nurl__dseen_n = 0, nurl__dseen_cap = 0;
 /* Record `p` as freed by this drain; 1 when it already was. */
@@ -3534,11 +3539,29 @@ static void nurl__jrnl_drain(uint64_t mark) {
     /* A drain inside a drop of an outer drain shares the outer record. */
     int outer = nurl__draining;
     nurl__draining = 1;
+    ++nurl__drain_depth;
     ++nurl__jrnl_live;
     nurl__jrnl_drain_body(mark);
     --nurl__jrnl_live;
+    --nurl__drain_depth;
     nurl__draining = outer;
     if (!outer) {
+        free(nurl__dseen);
+        nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
+    }
+}
+/* A recover frame entered with `depth` drains running catches a panic:
+ * the drains begun since were left by the longjmp, mid-loop (a drop that
+ * panicked — a double panic — or one inside a drop's own recover). End
+ * them as their epilogue would have: the journal no longer live for them,
+ * and once no drain is left, the record of what they freed released.
+ * Without this the thread stayed `draining` for good: every later free was
+ * recorded in a set that only grew, and one of an address the drain had
+ * freed and malloc had handed out again was skipped (a leak). */
+static void nurl__drain_unwind(int depth) {
+    while (nurl__drain_depth > depth) { --nurl__drain_depth; --nurl__jrnl_live; }
+    if (nurl__drain_depth == 0 && nurl__draining) {
+        nurl__draining = 0;
         free(nurl__dseen);
         nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
     }
@@ -5024,6 +5047,7 @@ typedef struct NurlPanicFrame {
     jmp_buf                  jb;
     char                    *msg;   /* owned panic message or NULL */
     uint64_t                 jmark; /* registration sequence at recover entry */
+    int                      drains; /* journal drains running at recover entry */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
@@ -5120,6 +5144,7 @@ static void nurl__recover_leave(NurlPanicFrame *frame) {
 }
 __attribute__((noinline))
 static void nurl__recover_caught(NurlPanicFrame *frame) {
+    nurl__drain_unwind(frame->drains);
     nurl__recover_leave(frame);
     nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
     nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
@@ -5127,6 +5152,7 @@ static void nurl__recover_caught(NurlPanicFrame *frame) {
 __attribute__((noinline))
 static void nurl__recover_enter(NurlPanicFrame *frame) {
     frame->jmark = nurl__jrnl_mark();
+    frame->drains = nurl__drain_depth;
     frame->prev  = nurl__panic_top;
     nurl__panic_top = frame;
     nurl__jrnl_active++;
@@ -5175,11 +5201,13 @@ static void nurl__recover_lean_leave(NurlPanicFrame *frame) {
 __attribute__((noinline))
 static void nurl__recover_lean_enter(NurlPanicFrame *frame) {
     frame->jmark = nurl__jrnl_mark();
+    frame->drains = nurl__drain_depth;
     frame->prev  = nurl__panic_top;
     nurl__panic_top = frame;
 }
 __attribute__((noinline))
 static void nurl__recover_lean_caught(NurlPanicFrame *frame) {
+    nurl__drain_unwind(frame->drains);
     nurl__recover_lean_leave(frame);
     nurl_free(nurl__panic_last_msg);
     nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
@@ -5233,8 +5261,13 @@ NURL_TLS_FN void nurl_panic(const char *msg) {
         fflush(stdout);
         abort();
     }
-    nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
-                                         : strdup("(no message)");
+    /* A panic raised by a drop while this frame's journal drains (a double
+     * panic) is caught by the same frame: the nested drain below releases
+     * what is left, and the first panic — the cause — keeps its message
+     * (overwriting it leaked the first). */
+    if (!nurl__panic_top->msg)
+        nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
+                                             : strdup("(no message)");
     /* Run the scope-exit drops the longjmp is about to skip: free every
      * owned allocation recorded since this recover frame's mark while
      * the owning C frames are still valid. Closes the panic-unwind leak

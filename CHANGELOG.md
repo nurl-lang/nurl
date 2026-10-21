@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one copy moved to a thread while another stays races the state
   (`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`,
   docs/MEMORY.md §6.2).
+- **A double panic no longer leaks, nor leaves the thread draining.** A
+  destructor that panicked while a panic's journal drained replaced the
+  first panic's message (leaking it) and longjmp'd past the drain's
+  epilogue, so the thread stayed in the drain's state for good: every later
+  free went through a record that only grew, and one of an address the
+  drain had freed and malloc reused was skipped. The `recover` frame that
+  catches it now ends the drains begun inside it, and keeps the first
+  message (the cause). formal/CLAIM.md states how the model treats it.
+  Test: `panic_in_drop_while_unwinding.nu`.
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
   is finished") found that the borrow checker did not tie a closure to

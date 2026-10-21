@@ -1474,6 +1474,11 @@ journal** instead:
   hands out as the match's value leaves the journal with its scope.
 - On a panic, the values still recorded since the target frame's mark are
   released before the jump, while their frames are still valid.
+- A destructor that panics while they are released (a double panic) is
+  caught by the same `recover`: each value leaves the journal before its
+  drop runs, the second panic releases what is still recorded, and the
+  `recover` reports the first panic's message, the cause. With no
+  `recover` frame, a panic ends the process before anything is released.
 
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
