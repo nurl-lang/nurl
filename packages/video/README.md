@@ -26,7 +26,7 @@ or how to record instead.
 
 ## Library
 
-```nurl
+```text
 $ `deps/video/src/video.nu`
 
 ( vid_is_video path )                     → b        the extension is a video's

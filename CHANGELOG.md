@@ -144,6 +144,23 @@ catalog instead of a round trip per term.
 
 ### Added
 
+- **The documentation's code is compiled** (`tools/check_doc_examples.sh`,
+  a CI gate). Every ```` ```nurl ```` block in `docs/*.md`,
+  `docs/stdlib/*.md`, `README.md` and the package READMEs is wrapped into
+  a program and run through `nurlc --check`; a block annotated
+  `expect-error="…"` must be rejected with that diagnostic, so a reworded
+  message fails the doc that quotes it, and in `docs/` every fence names
+  its language. MEMORY.md §2.11's example had no `vec` import and died
+  before the use-after-move it was there to show; the first run fixed
+  that and ~40 more — operators called like functions (gpukit), `/* */`
+  comments NURL does not have (spec §6.10, oauth, hub, redis), FFI and
+  raw pointers in safe code (spec §3.1, §7.2), a `continue` that never
+  advanced its counter (spec §5.4.1), `m::alloc` without its type
+  argument, `vec_push` without `[T]` (MEMORY.md §2.5), a quoted
+  diagnostic the compiler no longer prints (§2.10), `vw_serve` and
+  `tls_connect` signatures that had changed under the README quoting
+  them (ply, pqc), `inout` arguments bound immutable (grad). See
+  docs/TOOLING.md#documentation-examples.
 - **`nurl --stdin NAME`** (nurl.sh, nurl.bat): the program arrives on
   stdin and nurlc knows it as NAME (`nurlc --stdin NAME`), so a tool that
   holds source in memory builds it without writing a temp file, and its

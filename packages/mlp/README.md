@@ -6,8 +6,8 @@ The recipe is deliberately faithful to sklearn's `MLPRegressor`, and the
 test suite proves it against that oracle: on the same data, the same
 architecture reconstructs equally well and flags the same outliers.
 
-```nurl
-$ `src/mlp.nu`
+```nurl params="( Vec f ) X i n ( Vec f ) x"
+$ `deps/mlp/src/mlp.nu`
 
 : ( Vec i ) sizes ( vec_new [i] )      // 6 → 64 → 32 → 64 → 6
 ( vec_push [i] sizes 6 ) ( vec_push [i] sizes 64 ) ( vec_push [i] sizes 32 )
@@ -70,7 +70,10 @@ Train with the input as the target, threshold the reconstruction error at
 the 95th percentile of the training errors, and a point whose
 per-row MSE exceeds the threshold is anomalous:
 
-```nurl
+<!-- doctest-prelude
+$ `deps/mlp/src/mlp.nu`
+-->
+```nurl params="( Vec i ) sizes ( Vec f ) X i n i d MlpCfg cfg"
 : MlpFit fit ( mlp_fit sizes X n d X d cfg 3 )
 // per-row MSE over the TRAINING data → sort → p95 threshold
 // score a new point: mse(mlp_predict(x), x) > threshold ⇒ anomaly

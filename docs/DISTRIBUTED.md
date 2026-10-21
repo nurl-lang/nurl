@@ -29,7 +29,7 @@ The whole design follows three invariants:
 
 ## The stack at a glance
 
-```
+```text
    COMPUTE      job.nu           submit→ring_owner executes→result (keystone)
    (The Crown)  lease.nu         fencing tokens for side-effecting tasks
                 identity.nu      pubkey-derived stable replica ids
@@ -97,7 +97,7 @@ too-old packets.
 The Phase-0 finale. It ties the handshake and session onto a single UDP socket
 behind the only API the layers above ever touch:
 
-```
+```text
 send_to(pubkey, bytes)        recv() → (pubkey, bytes)
 ```
 
@@ -191,7 +191,7 @@ guaranteed fallback.
 public key and calls three functions, with no knowledge of NAT, relays,
 endpoints, or roaming:
 
-```
+```text
 transport_send(t, peer_pubkey, payload)        unicast
 transport_broadcast(t, group_id, payload)      broadcast to a group
 transport_recv(t, max) → ?TransportMsg{src, payload}
@@ -209,7 +209,7 @@ quiet). The pure functions `transport_note_direct` / `transport_tick` /
 dispatch on it. `transport_try_direct(t, pubkey, host, port)` is the hook a
 rendezvous candidate drives to begin a direct path.
 
-```
+```text
 transport_open · transport_add_peer · transport_try_direct
 transport_send · transport_broadcast · transport_group_join / _leave
 transport_recv
@@ -255,7 +255,7 @@ Turns the table into a live detector. A pure, time-injected step machine:
 `fd_tick(now)` returns the next action and `fd_on_ack` / `fd_on_gossip` /
 `fd_sweep` feed events in.
 
-```
+```text
 every period          → PING a member (direct)
 no ack by direct_to   → escalate to indirect PING-REQ via k relays
 no ack by total_to    → suspect (Lifeguard timeout → dead)
@@ -433,7 +433,7 @@ all in `compiler/tests/`.
 
 The end-to-end path for "node A updates shared state that node B should see":
 
-```
+```text
 1.  DISCOVER   A and B register with rendezvous; A looks B up → B's
                candidates + relay.                          (net/rendezvous)
 2.  CONNECT    transport_try_direct(B, …): gather candidates, probe NAT type,
@@ -462,7 +462,7 @@ broadcasts its encoded `PNCounter` to the group over the transport, and merges
 every counter it receives. Run a relay and several counters with distinct
 replica ids and they all converge to the sum of everyone's increments.
 
-```
+```sh
 # terminal 1
 ./nurl.sh examples/relay.nu 0.0.0.0 47700
 # terminals 2..n

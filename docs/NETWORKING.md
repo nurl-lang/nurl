@@ -74,7 +74,7 @@ pure-NURL TLS stack. The client connects over **TLS** (default broker port
 8883); the `MqttConfig.tls_verify` field (default **on**) controls
 certificate verification.
 
-```
+```nurl
 $ `stdlib/ext/mqtt.nu`
 
 @ main → i {

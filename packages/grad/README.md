@@ -74,10 +74,13 @@ REPLAY of it. Capture one recorded episode, then per minibatch upload fresh
 input rows, replay forward + backward (one kernel launch per node), and step
 the device optimizer — only the loss scalar comes back:
 
-```nurl
-: GProg pg ( gput_capture kit tp loss )     // after ONE CPU-built episode
-: GpOpt go ( gpopt_adam_new lr )
-( gpopt_add go pg W1 alpha ) …               // opt.nu mirrored, on-device m/v
+<!-- doctest-prelude
+$ `deps/grad/src/gput.nu`
+-->
+```nurl params="GpuKit kit GTape tp GVar loss f lr GVar W1 f alpha GVar X ( Vec f ) batch_rows b training"
+: ~ GProg pg ( gput_capture kit tp loss )   // after ONE CPU-built episode
+: ~ GpOpt go ( gpopt_adam_new lr )
+( gpopt_add go pg W1 alpha )                 // … per parameter; opt.nu mirrored, on-device m/v
 ~ training {
     ( gput_set_input pg X batch_rows )       // fresh minibatch
     ( gput_forward pg ) ( gput_backward pg )

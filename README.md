@@ -47,7 +47,7 @@ figures you can trust. The HTTP-server peer benchmarks are separate:
 
 ## Architecture
 
-```
+```text
 NURL source (.nu)
         │
         ▼
@@ -133,7 +133,7 @@ assign, `@` define, `→` arrow, `.` member, `?` ternary/option, `??` match,
 `~` loop/mutability, `!` not/Result, `\` closure/try, `^` return, `#` cast,
 `%` trait, `$` import).
 
-```
+```nurl
 : | Json { JNull  JBool b  JNum i  JStr s }
 
 @ describe Json v → s {
@@ -250,7 +250,7 @@ small. The concrete vehicle is the public MCP server at
 
 ## Project layout
 
-```
+```text
 nurl/
 ├── spec/grammar.ebnf       — authoritative grammar (versioned snapshots alongside)
 ├── compiler/
