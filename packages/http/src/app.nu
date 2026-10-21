@@ -583,8 +583,8 @@ $ `stdlib/std/atomic.nu`
     // HTTP/3 rides beside it: `__httpapp_serve` binds the same port over
     // UDP for QUIC and the TCP responses announce it with Alt-Svc.
     : !TcpListener NetErr lr ? > ( string_len . a pq_cert ) 0
-    ( tcp_listen_tls_dual host port 128 cert key ( string_data . a pq_cert ) ( string_data . a pq_key ) `h2 http/1.1` )
-    ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
+    ( tcp_listen_tls_dual host port ( tcp_listen_default_backlog ) cert key ( string_data . a pq_cert ) ( string_data . a pq_key ) `h2 http/1.1` )
+    ( tcp_listen_tls_with_alpn host port ( tcp_listen_default_backlog ) cert key `h2 http/1.1` )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `https` host port cert key ) }
         F e → {

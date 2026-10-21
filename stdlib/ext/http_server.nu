@@ -47,6 +47,7 @@
 //   ( server_shutdown HttpServer s )                     → v      stop now (drain, no grace)
 //   ( server_draining HttpServer s )                     → b
 //   ( server_conn_count HttpServer s )                   → i      open connections
+//   ( server_set_acceptors HttpServer s i n )            → v      accept fibers (async); 0 = per worker
 //
 // Memory model:
 //
@@ -169,6 +170,8 @@ $ `stdlib/core/slice.nu`
     ? DosState dos_state
     // Every open connection, for server_drain (see "Graceful drain").
     ServerDrain drain
+    // Accept fibers under server_run_async; 0 = one per runtime worker.
+    i acceptors
 }
 
 // A server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -290,7 +293,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
@@ -298,21 +301,21 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } ( __drain_new ) } )
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
@@ -328,7 +331,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { T st } ( __drain_new ) } )
+        @ ?DosState { T st } ( __drain_new ) 0 } )
 }
 
 // Snapshot the current active-connection count — useful for /metrics
@@ -511,6 +514,13 @@ $ `stdlib/core/slice.nu`
 // not, is shut at once.
 @ server_shutdown HttpServer s → v {
     : b _done ( server_drain s 0 )
+}
+
+// How many accept fibers server_run_async runs on the listener: 0 (the
+// default) = one per runtime worker; 1 = the single accept loop of old.
+// Set before the server runs.
+@ server_set_acceptors HttpServer s i n → v {
+    = . ( __srv s ) acceptors n
 }
 
 // Close the listener: the run loop ends once its current connections do.
@@ -1464,7 +1474,8 @@ $ `stdlib/core/slice.nu`
 
 // ── server_run_async — fiber-driven (Phase 7) ─────────────────────────
 //
-// Per-conn fiber instead of per-conn thread. One accept fiber loops on
+// Per-conn fiber instead of per-conn thread. Accept fibers (one per runtime
+// worker, server_set_acceptors) loop on
 // the listener; each successful accept spawns a *handler fiber* that
 // runs the existing `_serve_keepalive_loop` — which transparently
 // goes through `tcp_read_chunk` / `tcp_write_all`, both of which are
@@ -1560,9 +1571,27 @@ $ `stdlib/std/async.nu`
     // touch of it. The extra ref defers the free until we release it below,
     // after runtime_run has drained every fiber.
     ( tcp_listener_retain . ( __srv s ) listener )
-    // Spawn one accept fiber; runtime_run blocks until the accept
-    // fiber exits AND every in-flight conn fiber drains (pending=0).
-    ( spawn \ → v { ( __async_accept_loop s ) } )
+    // One accept fiber per runtime worker (server_set_acceptors), all on
+    // the one listener: whichever is woken first takes the connection,
+    // the rest find EAGAIN and park again. A single accept fiber made
+    // every connection's accept — and the spawn of its fiber — one
+    // worker's job at a time; connection churn (oha --disable-keepalive,
+    // 20 clients) measured 15–18k → 19–22k conn/s with four, and ~15 %
+    // less server CPU per connection. One listener and SO_REUSEPORT
+    // listeners per worker measured the same within the noise (shared
+    // 4-core host), and the shared listener needs no second socket, works
+    // for TLS listeners and stops with the one close: fibers migrate
+    // between workers, so a listener per worker buys no affinity here.
+    // runtime_run blocks until the accept fibers exit AND every in-flight
+    // conn fiber drains (pending=0).
+    : ~ i nacc . ( __srv s ) acceptors
+    ? <= nacc 0 { = nacc ( runtime_worker_count ) } {}
+    ? < nacc 1 { = nacc 1 } {}
+    : ~ i k 0
+    ~ < k nacc {
+        ( spawn \ → v { ( __async_accept_loop s ) } )
+        = k + k 1
+    }
     ( runtime_run )
     ( tcp_listener_release . ( __srv s ) listener )
     ^ @ !v NetErr { T 0 }

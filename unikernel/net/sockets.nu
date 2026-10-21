@@ -736,6 +736,12 @@ unsafe @ nurl_tcp_close i handle → v {
     ^ ( sock_listen st ip port backlog )
 }
 
+// One stack, one socket per port: SO_REUSEPORT has nothing to spread
+// across, so the options are ignored.
+@ nurl_tcp_listen_opts s host i port i backlog i flags → i {
+    ^ ( nurl_tcp_listen host port backlog )
+}
+
 @ nurl_tcp_accept i listener → i {
     : SockTab st ( __tab )
     ~ T {

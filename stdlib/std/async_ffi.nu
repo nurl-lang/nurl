@@ -32,6 +32,8 @@ unsafe & `c` @ nurl_fiber_unpark i fiber_h → v
 
 & `c` @ nurl_runtime_init i workers → v
 
+& `c` @ nurl_runtime_worker_count → i
+
 & `c` @ nurl_runtime_run → v
 
 & `c` @ nurl_runtime_shutdown → v

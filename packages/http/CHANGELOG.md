@@ -2,11 +2,12 @@
 
 ## [0.7.8] — 2026-10-21
 
-Requires the NURL with `server_drain` and `http3_server_drain`.
+Requires the NURL with `server_drain`, `http3_server_drain` and `tcp_listen_default_backlog`.
 
 ### Added
 
 - Graceful shutdown: SIGTERM / SIGINT now drain the server instead of only closing the listener — idle keep-alive connections close at once, requests in flight finish and go out with `Connection: close` (HTTP/2 and HTTP/3 connections get GOAWAY), and the app waits up to `http_app_drain_ms` (new; default 10000 ms, 0 = stop at once) before closing the rest. Before, an idle keep-alive client held the process open until its idle timeout.
+- TLS listeners take the stdlib's default backlog (4096, `tcp_listen_default_backlog`) instead of 128.
 
 ## [0.7.7] — 2026-10-21
 

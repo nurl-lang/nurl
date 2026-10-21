@@ -173,6 +173,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http_server_drain` (in-flight completes, idle closed, HTTP/2 GOAWAY,
   new connections refused, deadline enforced; pool and fiber).
 
+- **Listener options and parallel accept (agora #50).** `tcp_listen_with
+  host port TcpListenOpts` sets the backlog and `SO_REUSEPORT` (runtime
+  `nurl_tcp_listen_opts`; ignored where the platform has none).
+  `tcp_listen`'s backlog is 4096 (`tcp_listen_default_backlog`, clamped by
+  the kernel to somaxconn) instead of 128, which dropped SYNs under a burst
+  of connections — each one a 1 s client retransmission; the TLS listeners
+  and packages/http use it too. `server_run_async` runs one accept fiber
+  per runtime worker on its listener (`server_set_acceptors`, new
+  `runtime_worker_count`) instead of one: connection churn (oha
+  `--disable-keepalive`, 20 clients, 4 workers, shared 4-core host,
+  interleaved, median of 3 and 5) 17.9k / 15.4k → 19.0k / 22.2k conn/s,
+  server CPU per connection 28.5 → 24–26.5 µs. A SO_REUSEPORT listener per
+  worker measured the same within the noise (20.8k / 17.4k) and was not
+  kept: fibers migrate between workers, so it buys no affinity, and it
+  needs a second socket (and TLS credentials) per worker. New test
+  `net_listen_opts`.
+
 ### Packages
 
 - http 0.7.8: SIGTERM / SIGINT drain the app (`http_app_drain_ms`,

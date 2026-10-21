@@ -858,6 +858,9 @@ void pthread_exit(void *retval) {
  * Same contracts as the M:N runtime in runtime_ffi.c §24, so the NURL
  * side is unchanged. What differs is only what "concurrently" means. */
 
+/* One cooperative worker. */
+long long nurl_runtime_worker_count(void) { return 1; }
+
 void nurl_runtime_init(long long worker_count) {
     /* One vCPU: the worker count is not a tuning knob here, it is a
      * fact. Accepted and ignored rather than rejected, so the same NURL

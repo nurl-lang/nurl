@@ -326,7 +326,34 @@ $ `stdlib/std/thread.nu`
 // to bind without racing another process for a fixed number. Read back
 // what it picked with `tcp_local_addr`.
 @ tcp_listen_with_backlog s host i port i backlog → !TcpListener NetErr {
-    : i raw ( nurl_tcp_listen host port backlog )
+    ^ ( tcp_listen_with host port @ TcpListenOpts { backlog F } )
+}
+
+// Listener options:
+//   backlog     the accept queue's length (the kernel caps it at its own
+//               maximum — net.core.somaxconn on Linux); <= 0 → 16.
+//   reuse_port  SO_REUSEPORT: several listeners may bind the same address
+//               (each must ask, the first included), and the kernel spreads
+//               incoming connections across them — one listener, and one
+//               accept loop, per worker. Linux and the BSDs; ignored where
+//               the platform has no such option.
+: TcpListenOpts { i backlog b reuse_port }
+
+// The accept-queue length every listener gets unless it asks otherwise:
+// 4096, the kernel's own default ceiling (Linux's somaxconn since 5.4;
+// the kernel clamps it to the configured one). 128 — the old default,
+// and the pre-5.4 somaxconn — overflows under a burst of connections: the
+// kernel drops the SYNs it has no room for, and each dropped client waits
+// out a 1 s retransmission. A long queue costs nothing until it is used.
+@ tcp_listen_default_backlog → i { ^ 4096 }
+
+@ tcp_listen_opts_default → TcpListenOpts { ^ @ TcpListenOpts { ( tcp_listen_default_backlog ) F } }
+
+unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
+
+// Bind on host:port and listen with `o` (TcpListenOpts).
+@ tcp_listen_with s host i port TcpListenOpts o → !TcpListener NetErr {
+    : i raw ( nurl_tcp_listen_opts host port . o backlog ? . o reuse_port 1 0 )
     ? == raw 0 { ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
@@ -336,9 +363,10 @@ $ `stdlib/std/thread.nu`
     ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 0 0 0 ) }
 }
 
-// Convenience: same as tcp_listen_with_backlog with backlog = 128.
+// Convenience: tcp_listen_with and the default options
+// (tcp_listen_default_backlog, no SO_REUSEPORT).
 @ tcp_listen s host i port → !TcpListener NetErr {
-    ^ ( tcp_listen_with_backlog host port 128 )
+    ^ ( tcp_listen_with host port ( tcp_listen_opts_default ) )
 }
 
 // TLS listener — loads the PEM cert chain + private key files (EC P-256,
@@ -477,7 +505,7 @@ $ `stdlib/std/thread.nu`
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
-    ^ ( tcp_listen_tls_with_backlog host port 128 cert_path key_path )
+    ^ ( tcp_listen_tls_with_backlog host port ( tcp_listen_default_backlog ) cert_path key_path )
 }
 
 // TLS listener with ALPN (RFC 7301). `alpn_protocols` is a space-separated

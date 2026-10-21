@@ -1663,7 +1663,20 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     return h;
 }
 
+/* Listener options (std/net.nu TcpListenOpts), a bit set:
+ *   1  SO_REUSEPORT — several sockets bound to the same address, the
+ *      kernel spreading incoming connections across them (Linux ≥ 3.9,
+ *      the BSDs; on a platform without it the bit is ignored). Every
+ *      socket bound to the port must ask for it, the first included. */
+#define NURL_LISTEN_REUSEPORT 1LL
+
+long long nurl_tcp_listen_opts(const char *host, long long port, long long backlog, long long flags);
+
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
+    return nurl_tcp_listen_opts(host, port, backlog, 0);
+}
+
+long long nurl_tcp_listen_opts(const char *host, long long port, long long backlog, long long flags) {
 #ifdef _WIN32
     if (!nurl__net_wsa_init()) {
         NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_LISTENER);
@@ -1699,6 +1712,16 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                (const char*)&on, (int)sizeof(on));
+#ifdef SO_REUSEPORT
+    if ((flags & NURL_LISTEN_REUSEPORT) &&
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char*)&on, (int)sizeof(on)) != 0) {
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_BIND);
+        nurl_close_sock(fd);
+        return (long long)(uintptr_t)h;
+    }
+#else
+    (void)flags;
+#endif
 
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof(sa));
@@ -3957,6 +3980,11 @@ static char *nurl__net_take(const char *buf, long long n) {
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     return nurl__ni_tcp_listen(host ? host : "", port, backlog);
 }
+/* The host import takes no socket options: SO_REUSEPORT is not available. */
+long long nurl_tcp_listen_opts(const char *host, long long port, long long backlog, long long flags) {
+    (void)flags;
+    return nurl_tcp_listen(host, port, backlog);
+}
 /* The TLS listener is the pure-NURL stack over a plaintext socket
  * (std/net.nu builds the handshake itself); the PEM arguments are the
  * NURL side's business, not the host's. */
@@ -4154,6 +4182,10 @@ char *nurl_dns_reverse(const char *ip) {
 
 long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     (void)host; (void)port; (void)backlog;
+    return 0;
+}
+long long nurl_tcp_listen_opts(const char *host, long long port, long long backlog, long long flags) {
+    (void)host; (void)port; (void)backlog; (void)flags;
     return 0;
 }
 long long nurl_tcp_listen_tls(const char *host, long long port, long long backlog,
@@ -4631,6 +4663,7 @@ void nurl_fiber_unpark(long long fiber) {
 }
 
 void nurl_runtime_init(long long worker_count) { (void)worker_count; }
+long long nurl_runtime_worker_count(void) { return 1; }
 
 /* Block until every spawned fiber has finished — the same contract the
  * M:N runtime has, and the reason a relay's `runtime_run` never returns:
@@ -6236,6 +6269,11 @@ static void *nurl__worker_loop(void *arg) {
 }
 
 /* ── Runtime lifecycle ────────────────────────────────────────────── */
+
+/* Worker pthreads the M:N runtime runs (0 before runtime_init). */
+long long nurl_runtime_worker_count(void) {
+    return nurl__sched.initialized ? (long long)nurl__sched.worker_count : 0;
+}
 
 void nurl_runtime_init(long long worker_count) {
     if (nurl__sched.initialized) return;
