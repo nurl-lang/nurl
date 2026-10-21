@@ -118,10 +118,70 @@ $ `stdlib/core/vec.nu`
 }
 
 // Little-endian 64-bit load of the 8 bytes at n[off..off+7].
-@ _ld64u ( Vec u ) n i off → i {
-    : i lo | | | ( _x_bget n off ) << ( _x_bget n + off 1 ) 8 << ( _x_bget n + off 2 ) 16 << ( _x_bget n + off 3 ) 24
-    : i hi | | | ( _x_bget n + off 4 ) << ( _x_bget n + off 5 ) 8 << ( _x_bget n + off 6 ) 16 << ( _x_bget n + off 7 ) 24
+inline @ _ld64u ( Vec u ) n i off → i {
+    : *u p ( vec_data [u] n )
+    : i b0 # i . p off
+    : i b1 # i . p + off 1
+    : i b2 # i . p + off 2
+    : i b3 # i . p + off 3
+    : i b4 # i . p + off 4
+    : i b5 # i . p + off 5
+    : i b6 # i . p + off 6
+    : i b7 # i . p + off 7
+    : i lo | | | b0 << b1 8 << b2 16 << b3 24
+    : i hi | | | b4 << b5 8 << b6 16 << b7 24
     ^ | lo << hi 32
+}
+
+// Fully reduce 5 scalar limbs mod 2^255−19 and emit 32 little-endian bytes.
+inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
+    : ~ u64 h0 a0
+    : ~ u64 h1 a1
+    : ~ u64 h2 a2
+    : ~ u64 h3 a3
+    : ~ u64 h4 a4
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h0 + h0 * 19 >> h4 51 = h4 & h4 2251799813685247
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h0 + h0 * 19 >> h4 51 = h4 & h4 2251799813685247
+    = h0 + h0 19
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h0 + h0 * 19 >> h4 51 = h4 & h4 2251799813685247
+    = h0 + h0 2251799813685229
+    = h1 + h1 2251799813685247
+    = h2 + h2 2251799813685247
+    = h3 + h3 2251799813685247
+    = h4 + h4 2251799813685247
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h4 & h4 2251799813685247
+    : u64 w0 | h0 << h1 51
+    : u64 w1 | >> h1 13 << h2 38
+    : u64 w2 | >> h2 26 << h3 25
+    : u64 w3 | >> h3 39 << h4 12
+    : ( Vec u ) o ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] o 32 )
+    : *u op ( vec_data [u] o )
+    : ~ i k 0
+    ~ < k 8 {
+        = . op k # u & >> w0 # u64 * 8 k 255
+        = . op + k 8 # u & >> w1 # u64 * 8 k 255
+        = . op + k 16 # u & >> w2 # u64 * 8 k 255
+        = . op + k 24 # u & >> w3 # u64 * 8 k 255
+        = k + k 1
+    }
+    ^ o
 }
 
 // Decode 32 little-endian bytes into a gf (top bit dropped, per RFC 7748
@@ -443,8 +503,8 @@ inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
     = o4 - + a4 4503599627370494 b4
 }
 
-// o ← a · b mod p (_M)
-@ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+// o ← a · b mod p (_M), inlined for the ladder loop body
+inline @ __fe_mul_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
     : u64 f1 * a1 19
     : u64 f2 * a2 19
     : u64 f3 * a3 19
@@ -482,8 +542,23 @@ inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
     ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
 }
 
-// o ← a² mod p (_S)
-@ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+// o ← a · 121665 mod p: 5 scalar products instead of 25
+inline @ __fe_mul121665 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+    : u64 l0 * a0 121665
+    : u64 h0 ( nurl_umulhi a0 121665 )
+    : u64 l1 * a1 121665
+    : u64 h1 ( nurl_umulhi a1 121665 )
+    : u64 l2 * a2 121665
+    : u64 h2 ( nurl_umulhi a2 121665 )
+    : u64 l3 * a3 121665
+    : u64 h3 ( nurl_umulhi a3 121665 )
+    : u64 l4 * a4 121665
+    : u64 h4 ( nurl_umulhi a4 121665 )
+    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+}
+
+// o ← a² mod p (_S), inlined for the ladder loop body
+inline @ __fe_sq_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
     : u64 d0 * a0 2
     : u64 d1 * a1 2
     : u64 d2 * a2 38
@@ -511,6 +586,16 @@ inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 
     = h4 + h4 ( nurl_mac_hi d1 a3 l4 0 ) = l4 ( nurl_mac_lo d1 a3 l4 0 )
     = h4 + h4 ( nurl_mac_hi a2 a2 l4 0 ) = l4 ( nurl_mac_lo a2 a2 l4 0 )
     ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+}
+
+// o ← a · b mod p (_M)
+@ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
+    ( __fe_mul_in o0 o1 o2 o3 o4 a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 )
+}
+
+// o ← a² mod p (_S)
+@ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+    ( __fe_sq_in o0 o1 o2 o3 o4 a0 a1 a2 a3 a4 )
 }
 
 // five 128-bit column sums (lo, hi) → five 51-bit limbs (__mul_carry_out)
@@ -568,7 +653,7 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     : ~ u64 t3 0
     : ~ u64 t4 0
     : ~ i k 0
-    ~ < k n { ( __fe_sq t0 t1 t2 t3 t4 o0 o1 o2 o3 o4 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = o4 t4 = k + k 1 }
+    ~ < k n { ( __fe_sq_in t0 t1 t2 t3 t4 o0 o1 o2 o3 o4 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = o4 t4 = k + k 1 }
 }
 
 // o ← z^(p−2) = 1/z — _inv25519's ref10 addition chain on scalar limbs
@@ -661,18 +746,16 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 // a, c are x2, z2 and b, d are x3, z3; t is scratch for a product whose
 // destination is also one of its operands.
 @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
-    : ( Vec u ) z ( _zeros_u 32 )
-    : ~ i k 0
-    ~ < k 32 { ( _bset z k ( _x_bget scalar k ) ) = k + k 1 }
-    ( _bset z 31 | & ( _x_bget scalar 31 ) 127 64 )
-    ( _bset z 0 & ( _x_bget scalar 0 ) 248 )
+    : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
+    : u64 sw1 # u64 ( _ld64u scalar 8 )
+    : u64 sw2 # u64 ( _ld64u scalar 16 )
+    : u64 sw3 | & # u64 ( _ld64u scalar 24 ) 9223372036854775807 4611686018427387904
 
-    : ( Vec i ) xv ( _unpack25519 point )
-    : u64 x0 # u64 ( _vget xv 0 )
-    : u64 x1 # u64 ( _vget xv 1 )
-    : u64 x2 # u64 ( _vget xv 2 )
-    : u64 x3 # u64 ( _vget xv 3 )
-    : u64 x4 # u64 ( _vget xv 4 )
+    : u64 x0 & # u64 ( _ld64u point 0 ) 2251799813685247
+    : u64 x1 & >> # u64 ( _ld64u point 6 ) 3 2251799813685247
+    : u64 x2 & >> # u64 ( _ld64u point 12 ) 6 2251799813685247
+    : u64 x3 & >> # u64 ( _ld64u point 19 ) 1 2251799813685247
+    : u64 x4 & >> # u64 ( _ld64u point 24 ) 12 2251799813685247
     : ~ u64 a0 1
     : ~ u64 a1 0
     : ~ u64 a2 0
@@ -711,27 +794,28 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 
     : ~ i i 254
     ~ >= i 0 {
-        : u64 m - # u64 0 # u64 & >> ( _x_bget z >> i 3 ) & i 7 1
+        : u64 sw ? >= i 128 ? >= i 192 sw3 sw2 ? >= i 64 sw1 sw0
+        : u64 m - # u64 0 & >> sw # u64 & i 63 1
         ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
         ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
         = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
         = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
         = c0 + b0 d0 = c1 + b1 d1 = c2 + b2 d2 = c3 + b3 d3 = c4 + b4 d4
         = b0 - + b0 4503599627370458 d0 = b1 - + b1 4503599627370494 d1 = b2 - + b2 4503599627370494 d2 = b3 - + b3 4503599627370494 d3 = b4 - + b4 4503599627370494 d4
-        ( __fe_sq d0 d1 d2 d3 d4 e0 e1 e2 e3 e4 )
-        ( __fe_sq f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
-        ( __fe_mul t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
-        ( __fe_mul c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
+        ( __fe_sq_in d0 d1 d2 d3 d4 e0 e1 e2 e3 e4 )
+        ( __fe_sq_in f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
+        ( __fe_mul_in t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
+        ( __fe_mul_in c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
         = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
         = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
-        ( __fe_sq b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
+        ( __fe_sq_in b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
         = c0 - + d0 4503599627370458 f0 = c1 - + d1 4503599627370494 f1 = c2 - + d2 4503599627370494 f2 = c3 - + d3 4503599627370494 f3 = c4 - + d4 4503599627370494 f4
-        ( __fe_mul a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 121665 0 0 0 0 )  // TweetNaCl's multiply by the element 121665; the zero limbs fold away
+        ( __fe_mul121665 a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 )
         = a0 + a0 d0 = a1 + a1 d1 = a2 + a2 d2 = a3 + a3 d3 = a4 + a4 d4
-        ( __fe_mul t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = c0 t0 = c1 t1 = c2 t2 = c3 t3 = c4 t4
-        ( __fe_mul a0 a1 a2 a3 a4 d0 d1 d2 d3 d4 f0 f1 f2 f3 f4 )
-        ( __fe_mul d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 x0 x1 x2 x3 x4 )
-        ( __fe_sq b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
+        ( __fe_mul_in t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = c0 t0 = c1 t1 = c2 t2 = c3 t3 = c4 t4
+        ( __fe_mul_in a0 a1 a2 a3 a4 d0 d1 d2 d3 d4 f0 f1 f2 f3 f4 )
+        ( __fe_mul_in d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 x0 x1 x2 x3 x4 )
+        ( __fe_sq_in b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
         ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
         ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
         = i - i 1
@@ -744,14 +828,8 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     : ~ u64 v3 0
     : ~ u64 v4 0
     ( __fe_inv v0 v1 v2 v3 v4 c0 c1 c2 c3 c4 )
-    ( __fe_mul t0 t1 t2 t3 t4 a0 a1 a2 a3 a4 v0 v1 v2 v3 v4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
-    : ( Vec i ) xa ( _gf_zero )
-    ( _vset xa 0 # i a0 )
-    ( _vset xa 1 # i a1 )
-    ( _vset xa 2 # i a2 )
-    ( _vset xa 3 # i a3 )
-    ( _vset xa 4 # i a4 )
-    ^ ( _pack25519 xa )
+    ( __fe_mul t0 t1 t2 t3 t4 a0 a1 a2 a3 a4 v0 v1 v2 v3 v4 )
+    ^ ( __fe_pack t0 t1 t2 t3 t4 )
 }
 
 // scalar · point — the ECDH primitive. `scalar` and `point` are 32-byte
@@ -770,13 +848,6 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
 // build), then u = (Z+Y)/(Z−Y). Verified against the ladder for the
 // RFC 7748 vectors. Fixed-base only — the variable-base
 // x25519(scalar, peer) ECDH stays on the Montgomery ladder above.
-
-: XEP { ( Vec i ) x ( Vec i ) y ( Vec i ) z ( Vec i ) t }
-: XEScr { ( Vec i ) a ( Vec i ) b ( Vec i ) c ( Vec i ) d ( Vec i ) e ( Vec i ) f ( Vec i ) g ( Vec i ) h ( Vec i ) tt }
-
-@ __xe_pt → XEP { ^ @ XEP { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
-
-@ __xe_scr → XEScr { ^ @ XEScr { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
 // 2d, the Ed25519 addition constant, baked as five 2^51 limbs.
 @ __xe_d2 → ( Vec i ) {
@@ -939,146 +1010,171 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     ^ @ ( Vec i ) { # s g_xe_ntbl }
 }
 
-// Constant-time read of niels entry `digit` (0..15): all 16 entries
-// scanned, merged under a match mask — 15 limbs each, not the 20 of the
-// extended form (Z = 1 is implicit in the niels shape).
-@ __xe_ntbl_get ( Vec i ) tbl i digit ( Vec i ) yp ( Vec i ) ym ( Vec i ) t2d → v {
-    : *i tb ( vec_data [i] tbl )
-    : *i pp ( vec_data [i] yp )
-    : *i mp ( vec_data [i] ym )
-    : *i dp ( vec_data [i] t2d )
-    : ~ i k 0
-    ~ < k 5 { = . pp k 0 = . mp k 0 = . dp k 0 = k + k 1 }
-    : ~ i e 0
-    ~ < e 16 {
-        : u64 z ^^ # u64 e # u64 digit
-        : i mask - 0 # i >> - z 1 63
-        : i base * e 15
-        : ~ i j 0
-        ~ < j 5 {
-            = . pp j | . pp j & mask . tb + base j
-            = . mp j | . mp j & mask . tb + + base 5 j
-            = . dp j | . dp j & mask . tb + + base 10 j
-            = j + j 1
-        }
-        = e + e 1
-    }
-}
-
-// One carry sweep: limbs (≤ ~2^54) back under 52 bits, top wraps ×19.
-// _Z's SUBTRAHEND must stay below the 2p limb constants (~2^52), so a
-// value built by _A needs this before it may be subtracted; minuends
-// and _M/_S operands tolerate the lazy 2^54 bound as-is.
-@ _gf_carry ( Vec i ) v → v {
-    : *i q ( vec_data [i] v )
-    : ~ i k 0
-    : ~ i c 0
-    ~ < k 4 {
-        = . q k + . q k c
-        = c >> . q k 51
-        = . q k & . q k 2251799813685247
-        = k + k 1
-    }
-    = . q 4 + . q 4 c
-    = c >> . q 4 51
-    = . q 4 & . q 4 2251799813685247
-    = . q 0 + . q 0 * 19 c
-}
-
-// p ← 2·p, extended coordinates (EFD dbl-2008-hwcd, a = −1): 4M + 4S.
-// Scratch registers: a,b,c,e,f,g,h (tt holds the zero for the negation).
-// The −(A+B) negative is taken as (2p − A) + (2p − B): both steps
-// subtract a REDUCED value, which is _Z's contract; C = 2Z² gets one
-// carry sweep before it appears as a subtrahend in F = G − C.
-@ __xe_dbl XEScr sc XEP p → v {
-    ( _S . sc a . p x )  // A = X²
-    ( _S . sc b . p y )  // B = Y²
-    ( _S . sc c . p z )
-    ( _A . sc c . sc c . sc c )
-    ( _gf_carry . sc c )  // C = 2Z², reduced
-    ( _A . sc e . p x . p y )
-    ( _S . sc e . sc e )
-    ( _Z . sc e . sc e . sc a )
-    ( _Z . sc e . sc e . sc b )  // E = (X+Y)² − A − B
-    ( _Z . sc g . sc b . sc a )  // G = B − A   (D = −A folded in)
-    ( _Z . sc f . sc g . sc c )  // F = G − C
-    ( _gf_zero_into . sc tt )
-    ( _Z . sc h . sc tt . sc a )
-    ( _Z . sc h . sc h . sc b )  // H = −(A + B)
-    ( _M . p x . sc e . sc f )
-    ( _M . p y . sc g . sc h )
-    ( _M . p t . sc e . sc h )
-    ( _M . p z . sc f . sc g )
-}
-
-// p ← p + niels(yp, ym, t2d): the ref10 ge_madd shape, 7M, Z2 = 1.
-@ __xe_madd XEScr sc XEP p ( Vec i ) yp ( Vec i ) ym ( Vec i ) t2d → v {
-    ( _Z . sc a . p y . p x )
-    ( _M . sc a . sc a ym )  // A = (Y1−X1)·(y2−x2)
-    ( _A . sc b . p y . p x )
-    ( _M . sc b . sc b yp )  // B = (Y1+X1)·(y2+x2)
-    ( _M . sc c . p t t2d )  // C = T1·2d·t2
-    ( _A . sc d . p z . p z )  // D = 2Z1
-    ( _Z . sc e . sc b . sc a )
-    ( _Z . sc f . sc d . sc c )
-    ( _A . sc g . sc d . sc c )
-    ( _A . sc h . sc b . sc a )
-    ( _M . p x . sc e . sc f )
-    ( _M . p y . sc g . sc h )
-    ( _M . p z . sc g . sc f )
-    ( _M . p t . sc e . sc h )
-}
-
-// Zero a gf in place.
-@ _gf_zero_into ( Vec i ) v → v {
-    : *i q ( vec_data [i] v )
-    = . q 0 0 = . q 1 0 = . q 2 0 = . q 3 0 = . q 4 0
-}
-
 // scalar·B via the comb → 32-byte little-endian Montgomery u (the X25519
-// public key). Constant-time; no per-call table build.
+// public key). Constant-time; no per-call table build or Vec allocations.
 @ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
-    : ( Vec u ) sc ( _zeros_u 32 )
-    : ~ i k 0
-    ~ < k 32 { ( _bset sc k ( _x_bget scalar k ) ) = k + k 1 }
-    ( _bset sc 31 | & ( _x_bget scalar 31 ) 127 64 )
-    ( _bset sc 0 & ( _x_bget scalar 0 ) 248 )
+    : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
+    : u64 sw1 # u64 ( _ld64u scalar 8 )
+    : u64 sw2 # u64 ( _ld64u scalar 16 )
+    : u64 sw3 | & # u64 ( _ld64u scalar 24 ) 9223372036854775807 4611686018427387904
 
-    : XEScr scr ( __xe_scr )
     : ( Vec i ) tbl ( __xe_ntbl )
-    : XEP acc ( __xe_pt )
-    : *i ay ( vec_data [i] . acc y ) : *i az ( vec_data [i] . acc z )
-    = . ay 0 1 = . az 0 1
-    : ( Vec i ) syp ( _gf_zero )
-    : ( Vec i ) sym ( _gf_zero )
-    : ( Vec i ) std ( _gf_zero )
+    : *i tb ( vec_data [i] tbl )
+    : ~ u64 px0 0
+    : ~ u64 px1 0
+    : ~ u64 px2 0
+    : ~ u64 px3 0
+    : ~ u64 px4 0
+    : ~ u64 py0 1
+    : ~ u64 py1 0
+    : ~ u64 py2 0
+    : ~ u64 py3 0
+    : ~ u64 py4 0
+    : ~ u64 pz0 1
+    : ~ u64 pz1 0
+    : ~ u64 pz2 0
+    : ~ u64 pz3 0
+    : ~ u64 pz4 0
+    : ~ u64 pt0 0
+    : ~ u64 pt1 0
+    : ~ u64 pt2 0
+    : ~ u64 pt3 0
+    : ~ u64 pt4 0
+    : ~ u64 a0 0
+    : ~ u64 a1 0
+    : ~ u64 a2 0
+    : ~ u64 a3 0
+    : ~ u64 a4 0
+    : ~ u64 b0 0
+    : ~ u64 b1 0
+    : ~ u64 b2 0
+    : ~ u64 b3 0
+    : ~ u64 b4 0
+    : ~ u64 c0 0
+    : ~ u64 c1 0
+    : ~ u64 c2 0
+    : ~ u64 c3 0
+    : ~ u64 c4 0
+    : ~ u64 e0 0
+    : ~ u64 e1 0
+    : ~ u64 e2 0
+    : ~ u64 e3 0
+    : ~ u64 e4 0
+    : ~ u64 f0 0
+    : ~ u64 f1 0
+    : ~ u64 f2 0
+    : ~ u64 f3 0
+    : ~ u64 f4 0
+    : ~ u64 g0 0
+    : ~ u64 g1 0
+    : ~ u64 g2 0
+    : ~ u64 g3 0
+    : ~ u64 g4 0
+    : ~ u64 h0 0
+    : ~ u64 h1 0
+    : ~ u64 h2 0
+    : ~ u64 h3 0
+    : ~ u64 h4 0
+
     : ~ i i 63
     ~ >= i 0 {
-        ( __xe_dbl scr acc )
-        : ~ i idx 0
-        : ~ i j 0
-        ~ < j 4 {
-            : i bitpos + * 64 j i
-            : i bit & 1 >> ( _x_bget sc >> bitpos 3 ) & bitpos 7
-            = idx | idx << bit j
-            = j + j 1
+        // __xe_dbl: extended-coordinate doubling (4M + 4S)
+        ( __fe_sq_in a0 a1 a2 a3 a4 px0 px1 px2 px3 px4 )
+        ( __fe_sq_in b0 b1 b2 b3 b4 py0 py1 py2 py3 py4 )
+        ( __fe_sq_in c0 c1 c2 c3 c4 pz0 pz1 pz2 pz3 pz4 )
+        = c0 + c0 c0 = c1 + c1 c1 = c2 + c2 c2 = c3 + c3 c3 = c4 + c4 c4
+        : ~ u64 cy >> c0 51
+        = c0 & c0 2251799813685247
+        = c1 + c1 cy = cy >> c1 51 = c1 & c1 2251799813685247
+        = c2 + c2 cy = cy >> c2 51 = c2 & c2 2251799813685247
+        = c3 + c3 cy = cy >> c3 51 = c3 & c3 2251799813685247
+        = c4 + c4 cy = cy >> c4 51 = c4 & c4 2251799813685247
+        = c0 + c0 * 19 cy
+        = e0 + px0 py0 = e1 + px1 py1 = e2 + px2 py2 = e3 + px3 py3 = e4 + px4 py4
+        ( __fe_sq_in f0 f1 f2 f3 f4 e0 e1 e2 e3 e4 )
+        ( __fe_sub g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
+        ( __fe_sub e0 e1 e2 e3 e4 g0 g1 g2 g3 g4 b0 b1 b2 b3 b4 )
+        ( __fe_sub g0 g1 g2 g3 g4 b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
+        ( __fe_sub f0 f1 f2 f3 f4 g0 g1 g2 g3 g4 c0 c1 c2 c3 c4 )
+        ( __fe_sub c0 c1 c2 c3 c4 0 0 0 0 0 a0 a1 a2 a3 a4 )
+        ( __fe_sub h0 h1 h2 h3 h4 c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 )
+        ( __fe_mul_in px0 px1 px2 px3 px4 e0 e1 e2 e3 e4 f0 f1 f2 f3 f4 )
+        ( __fe_mul_in py0 py1 py2 py3 py4 g0 g1 g2 g3 g4 h0 h1 h2 h3 h4 )
+        ( __fe_mul_in pt0 pt1 pt2 pt3 pt4 e0 e1 e2 e3 e4 h0 h1 h2 h3 h4 )
+        ( __fe_mul_in pz0 pz1 pz2 pz3 pz4 f0 f1 f2 f3 f4 g0 g1 g2 g3 g4 )
+
+        // 4-bit comb digit from clamped scalar words
+        : u64 sh # u64 i
+        : u64 digit | | | & >> sw0 sh 1 << & >> sw1 sh 1 1 << & >> sw2 sh 1 2 << & >> sw3 sh 1 3
+
+        // Constant-time scan of 16 niels entries (15 limbs each)
+        : ~ u64 yp0 0
+        : ~ u64 yp1 0
+        : ~ u64 yp2 0
+        : ~ u64 yp3 0
+        : ~ u64 yp4 0
+        : ~ u64 ym0 0
+        : ~ u64 ym1 0
+        : ~ u64 ym2 0
+        : ~ u64 ym3 0
+        : ~ u64 ym4 0
+        : ~ u64 td0 0
+        : ~ u64 td1 0
+        : ~ u64 td2 0
+        : ~ u64 td3 0
+        : ~ u64 td4 0
+        : ~ i e 0
+        ~ < e 16 {
+            : u64 z ^^ # u64 e digit
+            : u64 mask - # u64 0 >> - z 1 63
+            : i base * e 15
+            = yp0 | yp0 & mask # u64 . tb base
+            = yp1 | yp1 & mask # u64 . tb + base 1
+            = yp2 | yp2 & mask # u64 . tb + base 2
+            = yp3 | yp3 & mask # u64 . tb + base 3
+            = yp4 | yp4 & mask # u64 . tb + base 4
+            = ym0 | ym0 & mask # u64 . tb + base 5
+            = ym1 | ym1 & mask # u64 . tb + base 6
+            = ym2 | ym2 & mask # u64 . tb + base 7
+            = ym3 | ym3 & mask # u64 . tb + base 8
+            = ym4 | ym4 & mask # u64 . tb + base 9
+            = td0 | td0 & mask # u64 . tb + base 10
+            = td1 | td1 & mask # u64 . tb + base 11
+            = td2 | td2 & mask # u64 . tb + base 12
+            = td3 | td3 & mask # u64 . tb + base 13
+            = td4 | td4 & mask # u64 . tb + base 14
+            = e + e 1
         }
-        ( __xe_ntbl_get tbl idx syp sym std )
-        ( __xe_madd scr acc syp sym std )
+
+        // __xe_madd: mixed addition with niels entry (7M, Z2 = 1)
+        ( __fe_sub e0 e1 e2 e3 e4 py0 py1 py2 py3 py4 px0 px1 px2 px3 px4 )
+        ( __fe_mul_in a0 a1 a2 a3 a4 e0 e1 e2 e3 e4 ym0 ym1 ym2 ym3 ym4 )
+        = f0 + py0 px0 = f1 + py1 px1 = f2 + py2 px2 = f3 + py3 px3 = f4 + py4 px4
+        ( __fe_mul_in b0 b1 b2 b3 b4 f0 f1 f2 f3 f4 yp0 yp1 yp2 yp3 yp4 )
+        ( __fe_mul_in c0 c1 c2 c3 c4 pt0 pt1 pt2 pt3 pt4 td0 td1 td2 td3 td4 )
+        : u64 d0 + pz0 pz0
+        : u64 d1 + pz1 pz1
+        : u64 d2 + pz2 pz2
+        : u64 d3 + pz3 pz3
+        : u64 d4 + pz4 pz4
+        ( __fe_sub e0 e1 e2 e3 e4 b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
+        ( __fe_sub f0 f1 f2 f3 f4 d0 d1 d2 d3 d4 c0 c1 c2 c3 c4 )
+        = g0 + d0 c0 = g1 + d1 c1 = g2 + d2 c2 = g3 + d3 c3 = g4 + d4 c4
+        = h0 + b0 a0 = h1 + b1 a1 = h2 + b2 a2 = h3 + b3 a3 = h4 + b4 a4
+        ( __fe_mul_in px0 px1 px2 px3 px4 e0 e1 e2 e3 e4 f0 f1 f2 f3 f4 )
+        ( __fe_mul_in py0 py1 py2 py3 py4 g0 g1 g2 g3 g4 h0 h1 h2 h3 h4 )
+        ( __fe_mul_in pz0 pz1 pz2 pz3 pz4 g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 )
+        ( __fe_mul_in pt0 pt1 pt2 pt3 pt4 e0 e1 e2 e3 e4 h0 h1 h2 h3 h4 )
+
         = i - i 1
     }
 
-    : ( Vec i ) num ( _gf_zero )
-    : ( Vec i ) den ( _gf_zero )
-    ( _A num . acc z . acc y )
-    ( _Z den . acc z . acc y )
-    ( _inv25519 den )
-    : ( Vec i ) uf ( _gf_zero )
-    ( _M uf num den )
-    : ( Vec u ) out ( _pack25519 uf )
-
-    // tbl is the shared process-global niels table — never freed here.
-    ^ out
+    // Birational map to Montgomery u = (Z + Y) / (Z - Y)
+    = a0 + pz0 py0 = a1 + pz1 py1 = a2 + pz2 py2 = a3 + pz3 py3 = a4 + pz4 py4
+    ( __fe_sub b0 b1 b2 b3 b4 pz0 pz1 pz2 pz3 pz4 py0 py1 py2 py3 py4 )
+    ( __fe_inv c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 )
+    ( __fe_mul e0 e1 e2 e3 e4 a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 )
+    ^ ( __fe_pack e0 e1 e2 e3 e4 )
 }
 
 @ x25519_base ( Vec u ) scalar → ( Vec u ) {

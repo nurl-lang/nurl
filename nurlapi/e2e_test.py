@@ -707,6 +707,18 @@ def t_tools_call_traversal(c: Client) -> None:
         "traversal flagged as error (isError or no etc/passwd content)",
         bool(res.get("isError")) or ("root:" not in text),
     )
+    # Absolute paths are not workspace paths either: path_join returns an
+    # absolute second argument verbatim, so these used to read any file.
+    env = _tool_call(c, "nurl_read_example", {"name": "/etc/passwd"})
+    assert_true(
+        "absolute MCP name flagged as error",
+        bool(res.get("isError")) or ("root:" not in _tool_text(env)),
+    )
+    for path in ("/examples//etc/passwd", "/stdlib//etc/passwd",
+                 "/tests//etc/passwd", "/static//etc/passwd"):
+        status, _, body = c.get(path)
+        assert_true(f"absolute path refused {path}", status in (403, 404),
+                    f"HTTP {status}: {body[:80]!r}")
 
 
 def t_tools_call_unknown(c: Client) -> None:
@@ -821,6 +833,10 @@ def t_diagnostics_contract(c: Client) -> None:
     # directory unchecked, so '../' wrote outside it.
     status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "filename": "../../escape.nu"})
     assert_eq("traversing filename rejected", status, 400)
+    # `opt` is a literal from a closed set, not a clang argv slot:
+    # `--ld-path=<file>` made clang execute that file as the linker.
+    status, _, _ = c.post("/build", {"source": "@ main → i { ^ 0 }\n", "opt": "--ld-path=/bin/true"})
+    assert_eq("arbitrary opt rejected", status, 400)
     env = _tool_call(c, "nurl_build_native", {"source": "@ main → i { ^ 0 }\n", "filename": "a/b.nu"})
     assert_true("MCP: refused build is isError", env.get("result", {}).get("isError") is True, str(env)[:200])
 
