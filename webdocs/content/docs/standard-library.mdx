@@ -90,9 +90,11 @@ in `ext/`. See [Cryptography](./cryptography).
 
 `aes_gcm.nu` runs on the language's hardware crypto tier where the CPU has
 AES-NI and PCLMULQDQ (`nurl_v128_aesenc`, `nurl_v128_clmul_*`; ~3 GB/s, on par
-with the same kernel in C intrinsics) and on a constant-time bitsliced cipher
-everywhere else; TLS picks AES-128-GCM on such a CPU and ChaCha20-Poly1305
-otherwise.
+with the same kernel in C intrinsics), on its VAES tiers where the CPU has
+VAES and VPCLMULQDQ (`nurl_v256_*` on ymm, `nurl_v512_*` on zmm under
+AVX-512: two and four blocks per instruction, ~8–11 GB/s on a Sapphire
+Rapids) and on a constant-time bitsliced cipher everywhere else; TLS picks
+AES-128-GCM on such a CPU and ChaCha20-Poly1305 otherwise.
 
 ## Data formats and serialization
 

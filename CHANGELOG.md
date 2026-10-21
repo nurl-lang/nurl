@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VAES crypto tiers: AES-GCM on ymm and zmm, two and four blocks per
+  instruction** (agora t56). Two tiers above the AES one (docs/spec.md
+  §4.1b): the **VAES tier** — `nurl_v256_aesenc`, `_aesenclast`,
+  `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` on x86-64-v3
+  + AES + PCLMUL + VAES + VPCLMULQDQ, asked with `nurl_cpu_has_vaes` —
+  and the **AVX-512 VAES tier**, the same on the new **`v512`** lane type
+  (`<8 x i64>`, grammar v2.11, §4.1d: ld/st, zero, xor/and/or,
+  add32/add64, bcast128, join256, lo256/hi256, bswap128) on x86-64-v4,
+  asked with `nurl_cpu_has_vaes512`. The tier contract holds per tier:
+  compiled for the highest tier a function's own primitives need and
+  gated on it (`nurl__vaes_gate`, `nurl__vaes512_gate`; runtime CPUID
+  incl. XCR0 ZMM state, `NURL_CPU_VAES=0` / `NURL_CPU_VAES512=0` take a
+  tier away); a `.tier` copy is called only from code of its tier or a
+  higher one; a `simd` function reaching a VAES tier is emitted once for
+  it. New v256 helpers `nurl_v256_join128`, `_lo128`, `_hi128`,
+  `_bswap128`. `std/aes_gcm.nu` gains a sixteen-block stitched kernel per
+  wide tier for messages of 256 bytes and more (the eight-block one keeps
+  shorter ones): schoolbook GHASH (four VPCLMULQDQ a block beat
+  Karatsuba's three plus a shuffle and an XOR on the AES ports, ~5% in a
+  C model), one Montgomery reduction per step, a branch-free fold
+  (LLVM had hoisted all of a conditional fold ahead of the rounds) and
+  counters carried by a byte add, a pair-at-a-time tail folded with one
+  reduction. Sapphire Rapids, 16 KB seal with a prepared key, best of 25
+  on a shared host: **zmm 11.8 GB/s (0.17 TSC cycles/byte), ymm 8.8
+  (0.23)**, the AES-NI kernel 5.1 (0.41); OpenSSL 3.0's AVX-512 assembly
+  12.3–13.8 (0.15–0.17), its AES-NI one 5.0. A C model of the two loops
+  agrees: zmm ~1.25× ymm here (VAESENC has the same block throughput at
+  both widths; zmm halves everything else), so the AVX-512 form earns
+  its tier. `_aes_gcm_key_tier key t` builds the key a CPU of tier `t`
+  would, and `aes_gcm_hw_agree.nu` now holds every kernel a machine has
+  to the software oracle over 0–1100 bytes plus 4–16 KB lengths
+  (2214 cases); `simd_crypto_v256.nu` / `simd_crypto_v512.nu` check the
+  primitives lane by lane (FIPS-197 C.1 and the v128 primitives), and
+  `crypto_tier_ir.sh` checks both tiers' IR, gates, stubs, machine code
+  and runtime answers. Bootstrap snapshot refreshed (preamble changed).
+
 - **The hardware crypto tier: AES and carry-less-multiply primitives in
   the language, and AES-GCM on them at ~3 GB/s** (agora t55, part of
   t37). `nurl_v128_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`,
@@ -57,6 +93,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a closure.
 
 ### Fixed
+
+- **A `v256` passed to or returned from a `simd @` function was wrong on
+  every AVX2 machine.** The x86-64-v3 clone takes a `<4 x i64>` in one
+  ymm register, the baseline dispatcher (and any caller without AVX)
+  passes it in two xmm registers, and LLVM does not reconcile them: a
+  clone summing two v256s a hundred times answered 301 where 101 was
+  right. The clones now take wide vectors (v256, v512) by pointer and
+  the dispatcher spills them and is `alwaysinline`; a crypto-tier
+  function with a wide signature crosses a call from outside its tier
+  the same way (`f.vabi` + a featureless `alwaysinline` `f`).
+  Regression test `simd_wide_abi.nu`.
 
 - **`nurl_docs` / `nurl_read_roadmap` pages end on a character boundary.**
   A page (and a cut section) was sliced at a byte offset, so one that

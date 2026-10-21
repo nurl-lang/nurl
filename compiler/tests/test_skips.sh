@@ -37,6 +37,14 @@
 #                 its software path or panics at the tier's gate, and the
 #                 golden — written on such a CPU — cannot match.
 #                 NURL_CPU_AES=0 turns it off, as it does in the runtime.
+#     cpu-vaes    runs the VAES tier (nurl_v256_aes*, nurl_v256_clmul_*):
+#                 x86-64-v3 with VAES and VPCLMULQDQ (Ice Lake / Zen 3
+#                 and later). NURL_CPU_VAES=0 turns it off.
+#     cpu-vaes512 runs the AVX-512 VAES tier (nurl_v512_aes*,
+#                 nurl_v512_clmul_*): the VAES tier plus x86-64-v4.
+#                 NURL_CPU_VAES512=0 turns it off.
+#                 Unlike cpu-aes, neither is assumed where the host
+#                 cannot be asked: most x86-64 machines lack them.
 #     <anything>  the name of an external command that must be on
 #     else        $PATH (curl, python3, openssl, bash …).
 #
@@ -171,6 +179,8 @@ is_skipped() {
     for tok in $(test_requires "$name"); do
         case "$tok" in
             cpu-aes)  host_has_cpu_aes || { echo skip; return; } ;;
+            cpu-vaes) host_has_cpu_vaes || { echo skip; return; } ;;
+            cpu-vaes512) host_has_cpu_vaes512 || { echo skip; return; } ;;
             live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
             fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
             internet) [[ "$ENABLE_INTERNET_TESTS" == "1" ]] || { echo skip; return; } ;;
@@ -198,8 +208,45 @@ host_has_cpu_aes() {
     return 0
 }
 
+# The CPU flags the host reports, lower-case and space-separated: Linux
+# /proc/cpuinfo, or the sysctl feature words of an Intel Mac. Empty
+# where neither answers.
+host_cpu_flags() {
+    if [[ -r /proc/cpuinfo ]]; then
+        grep -m1 -E '^(flags|Features)' /proc/cpuinfo | cut -d: -f2
+        return
+    fi
+    if command -v sysctl >/dev/null 2>&1; then
+        sysctl -n machdep.cpu.features machdep.cpu.leaf7_features 2>/dev/null |
+            tr 'A-Z\n' 'a-z '
+    fi
+}
+
+host_has_flags() {  # host_has_flags <flag>...: every one is reported
+    local f fl
+    fl=" $(host_cpu_flags) "
+    for f in "$@"; do [[ "$fl" == *" $f "* ]] || return 1; done
+}
+
+# The `cpu-vaes` requirement: what nurl_cpu_x86_vaes tests — AVX2 (the
+# rest of x86-64-v3 comes with it on every VAES CPU), the AES tier, VAES
+# and VPCLMULQDQ.
+host_has_cpu_vaes() {
+    host_has_cpu_aes || return 1
+    [[ "${NURL_CPU_VAES:-1}" == "0" || "${NURL_CPU_V3:-1}" == "0" ]] && return 1
+    host_has_flags avx2 vaes vpclmulqdq
+}
+
+# The `cpu-vaes512` requirement: that plus x86-64-v4's AVX-512 subsets.
+host_has_cpu_vaes512() {
+    host_has_cpu_vaes || return 1
+    [[ "${NURL_CPU_VAES512:-1}" == "0" ]] && return 1
+    host_has_flags avx512f avx512bw avx512cd avx512dq avx512vl
+}
+
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
-export -f is_skipped test_requires test_mode host_has_cpu_aes
+export -f is_skipped test_requires test_mode host_has_cpu_aes \
+    host_cpu_flags host_has_flags host_has_cpu_vaes host_has_cpu_vaes512
 export NURL_TESTS_DIR NURL_TESTS_ROOT \
        ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

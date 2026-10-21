@@ -3755,15 +3755,23 @@ long long nurl_umulhi(long long a, long long b) {
  * x86-64-v2 plus AES-NI and PCLMULQDQ, the feature set nurlc compiles
  * every function that uses a hardware crypto primitive with.
  *
- * Two environment variables can only ever take an answer AWAY, never
- * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0
- * and NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes. They exist so
+ * And the VAES tier (nurl_cpu_x86_vaes): v3 plus the AES tier plus VAES
+ * and VPCLMULQDQ, for the v256 crypto primitives; and the AVX-512 VAES
+ * tier (nurl_cpu_x86_vaes512): that plus x86-64-v4, for the v512 ones.
+ *
+ * Four environment variables can only ever take an answer AWAY, never
+ * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
+ * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
+ * nurl_cpu_x86_vaes and NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 (and
+ * each tier goes with any it contains). They exist so
  * one machine can run every clone and every fallback a marked function
  * has — the baseline clone, the AES clone without AVX2, the software
  * path a program takes on a CPU with no AES-NI at all — rather than
  * only the one its own CPUID picks. */
 static int nurl__cpu_v3 = -1;
 static int nurl__cpu_aes = -1;
+static int nurl__cpu_vaes = -1;
+static int nurl__cpu_vaes512 = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -3821,6 +3829,35 @@ static void nurl__cpu_v3_detect(void) {
     nurl__cpu_v3 = ((ebx7 & (1u << 5)) && (ebx7 & (1u << 8))) ? 1 : 0;
 }
 
+/* The VAES tier's own bits: leaf-7 ECX VAES (9) and VPCLMULQDQ (10).
+ * Their 256-bit forms are VEX-encoded and need nothing past AVX2 — the
+ * ZMM forms would need AVX-512 and its XCR0 bits, which this tier does
+ * not use — so the rest of the tier is the v3 answer (YMM state saved
+ * by the OS included) and the AES tier's. */
+static int nurl__cpu_vaes_bits(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(7, 0, r);
+    const unsigned need = (1u << 9) | (1u << 10);
+    return (r[2] & need) == need;
+}
+
+/* The AVX-512 VAES tier: x86-64-v4 — leaf-7 EBX AVX512F (16), DQ (17),
+ * CD (28), BW (30), VL (31) — on top of the VAES tier, and the OS saving
+ * the opmask and the full ZMM state: XCR0 bits 5, 6, 7 beside SSE (1)
+ * and AVX (2). The XCR0 read is safe here: the caller only asks after
+ * the v3 answer, which checked OSXSAVE. */
+static int nurl__cpu_avx512_bits(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(7, 0, r);
+    const unsigned need = (1u << 16) | (1u << 17) | (1u << 28) | (1u << 30) | (1u << 31);
+    if ((r[1] & need) != need) return 0;
+    return (nurl__xcr0() & 0xe6) == 0xe6;
+}
+
 static int nurl__cpu_env_off(const char *name) {
     const char *e = getenv(name);
     return e && e[0] == '0' && e[1] == '\0';
@@ -3831,12 +3868,20 @@ static void nurl__cpu_detect(void) {
     int aes = nurl__cpu_aes_detect();
     if (nurl__cpu_env_off("NURL_CPU_V3")) nurl__cpu_v3 = 0;
     if (nurl__cpu_env_off("NURL_CPU_AES")) aes = 0;
+    /* After the two above: taking v3 or AES away takes the VAES tier
+     * with it, since it contains both. */
+    int vaes = nurl__cpu_v3 && aes && nurl__cpu_vaes_bits();
+    if (nurl__cpu_env_off("NURL_CPU_VAES")) vaes = 0;
+    int vaes512 = vaes && nurl__cpu_avx512_bits();
+    if (nurl__cpu_env_off("NURL_CPU_VAES512")) vaes512 = 0;
     nurl__cpu_aes = aes;
+    nurl__cpu_vaes = vaes;
+    nurl__cpu_vaes512 = vaes512;
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; }
 
 #endif
 
@@ -3863,6 +3908,42 @@ int nurl_cpu_x86_v3(void) {
 int nurl_cpu_x86_aes(void) {
     if (nurl__cpu_aes < 0) nurl__cpu_detect();
     return nurl__cpu_aes;
+}
+
+/* Does this CPU have the VAES tier — x86-64-v3 + AES-NI + PCLMULQDQ +
+ * VAES + VPCLMULQDQ, the feature set nurlc compiles every function that
+ * uses a v256 crypto primitive (nurl_v256_aes*, nurl_v256_clmul_*) with?
+ * Ice Lake, Tiger Lake, Alder Lake and later Intel, Zen 3 and later AMD.
+ * `readnone` to nurlc, like the AES answer. NURL_CPU_VAES=0 takes it
+ * away (and NURL_CPU_V3=0 or NURL_CPU_AES=0 does too). */
+int nurl_cpu_x86_vaes(void) {
+    if (nurl__cpu_vaes < 0) nurl__cpu_detect();
+    return nurl__cpu_vaes;
+}
+
+/* Does this CPU have the AVX-512 VAES tier — the VAES tier plus
+ * x86-64-v4 (AVX-512 F/BW/CD/DQ/VL, with the OS saving ZMM state) — the
+ * feature set of every function that uses a v512 crypto primitive
+ * (nurl_v512_aes*, nurl_v512_clmul_*)? Ice Lake server, Sapphire Rapids
+ * and later Intel, Zen 4 and later AMD. NURL_CPU_VAES512=0 takes it
+ * away, and so does anything that takes the VAES tier away. */
+int nurl_cpu_x86_vaes512(void) {
+    if (nurl__cpu_vaes512 < 0) nurl__cpu_detect();
+    return nurl__cpu_vaes512;
+}
+
+void nurl_cpu_vaes512_missing(void) {
+    nurl_panic("this function needs AVX-512 with VAES and VPCLMULQDQ (x86-64-v4 + AES + VAES), "
+               "which this CPU lacks; check nurl_cpu_has_vaes512 before calling it");
+    abort();
+}
+
+/* The VAES tier's gate failure, as nurl_cpu_aes_missing is the AES
+ * tier's. */
+void nurl_cpu_vaes_missing(void) {
+    nurl_panic("this function needs VAES and VPCLMULQDQ (x86-64-v3 + AES + VAES), "
+               "which this CPU lacks; check nurl_cpu_has_vaes before calling it");
+    abort();
 }
 
 /* The gate's failure path: a function compiled for the crypto tier was

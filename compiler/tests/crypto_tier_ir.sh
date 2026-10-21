@@ -17,6 +17,11 @@
 #  LLVM "Cannot select", or a kernel that silently stopped inlining.
 #  Then it runs the program with the tier taken away: the gate must
 #  panic, cleanly, and the AES clone without AVX2 must still be right.
+#  The VAES tier (v256) and the AVX-512 VAES tier (v512) get the same
+#  checks, and what only their wide signatures need: the pointer
+#  crossing of a tier function called from outside its tier
+#  (emit_vabi). Last, AES-GCM's wide kernels must exist as VAES machine
+#  code and agree with the software oracle with each tier taken away.
 #
 #  Every assertion greps for a POSITIVE marker and counts it.
 #
@@ -226,6 +231,154 @@ CEOF
     fi
 else
     note "runtime CPUID cross-check" "skipped (no /proc/cpuinfo)"
+fi
+
+# ── 7. The VAES tiers (v256, v512) ──────────────────────────────────
+# simd_crypto_v256.nu / _v512.nu: the same contract one and two
+# registers wider, plus what only a wide signature needs — the pointer
+# crossing (emit_vabi): a tier function out of line in a caller without
+# its tier hands its v256 / v512 over through memory, because the
+# register it would travel in depends on each side's features.
+TIER2='"target-cpu"="x86-64-v3" "target-features"="+avx,+avx2'
+TIER3='"min-legal-vector-width"="512" "target-cpu"="x86-64-v4"'
+for w in v256:2:encrypt2:round2:encrypt2x:nurl__vaes_gate v512:3:encrypt4:round4:encrypt4x:nurl__vaes512_gate; do
+    IFS=: read -r ty lvl fn rnd sfn gate <<< "$w"
+    src="$SCRIPT_DIR/simd_crypto_$ty.nu"
+    want="$TIER2"; [ "$lvl" = 3 ] && want="$TIER3"
+    "$NURLC" "$src" > "$WORK/$ty.ll" 2> "$WORK/$ty.err" || { bad "$ty: compiles" "$(head -2 "$WORK/$ty.err")"; continue; }
+    "$NURLC" --no-cpu-dispatch "$src" > "$WORK/$ty.off.ll" 2>/dev/null || { bad "$ty: compiles off" "nurlc failed"; continue; }
+    # The body under .vabi: tier attributes, gated, pointer parameters.
+    vhdr=$(grep -E "^define void @__nurl_fn\.${fn}[a-z0-9_]*\.vabi\(i8\* %__vret, " "$WORK/$ty.ll" | head -1)
+    case "$vhdr" in *"$want"*) ok "$fn.vabi: tier $lvl, $ty by pointer" "%__vret + .__vp" ;;
+        *) bad "$fn.vabi: tier $lvl, $ty by pointer" "header: ${vhdr:0:140}" ;; esac
+    vbody=$(awk -v h="$vhdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/$ty.ll")
+    if printf '%s\n' "$vbody" | grep -q "call void @$gate()"; then ok "$fn.vabi: entry gated" "$gate"
+    else bad "$fn.vabi: entry gated" "no $gate"; fi
+    # The wrapper under the real name: the language signature, no
+    # features, alwaysinline, spilling and calling the body.
+    whdr=$(grep -E "^define <[48] x i64> @__nurl_fn\.${fn}[a-z0-9_]*\(" "$WORK/$ty.ll" | head -1)
+    wbody=$(awk -v h="$whdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/$ty.ll")
+    case "$whdr" in *target-features*) bad "$fn: featureless alwaysinline wrapper" "it carries features" ;;
+        *alwaysinline*) if printf '%s\n' "$wbody" | grep -q "\.vabi(i8\* %__vret"; then
+                ok "$fn: featureless alwaysinline wrapper" "spills, calls .vabi"
+            else bad "$fn: featureless alwaysinline wrapper" "does not call the body by pointer"; fi ;;
+        *) bad "$fn: featureless alwaysinline wrapper" "header: ${whdr:0:120}" ;; esac
+    # A one-round helper: its .tier copy, which the simd function calls.
+    thdr=$(grep -E "^define linkonce_odr <[48] x i64> @__nurl_fn\.${rnd}[a-z0-9_]*\.tier\(" "$WORK/$ty.ll" | head -1)
+    case "$thdr" in *alwaysinline*"$want"*) ok "$rnd.tier: alwaysinline, tier $lvl" "linkonce_odr" ;;
+        *) bad "$rnd.tier: alwaysinline, tier $lvl" "header: ${thdr:0:120}" ;; esac
+    # The simd function reaches the tier through its helper: emitted
+    # once, for the tier — no baseline clone, no v3 clone, no dispatcher.
+    n_cl=$(grep -cE "^define .*@__nurl_fn\.${sfn}[a-z0-9_]*\.(base|x86v3)\(" "$WORK/$ty.ll")
+    shdr=$(grep -E "^define void @__nurl_fn\.${sfn}[a-z0-9_]*\.vabi\(" "$WORK/$ty.ll" | head -1)
+    sbody=$(awk -v h="$shdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/$ty.ll")
+    if [ "$n_cl" -eq 0 ] && case "$shdr" in *"$want"*) true ;; *) false ;; esac &&
+            printf '%s\n' "$sbody" | grep -qE "@__nurl_fn\.${rnd}[a-z0-9_]*\.tier\("; then
+        ok "simd $sfn: one body for tier $lvl" "calls $rnd.tier"
+    else
+        bad "simd $sfn: one body for tier $lvl" "clones=$n_cl header: ${shdr:0:100}"
+    fi
+    # --no-cpu-dispatch: stubs and a constant false.
+    has=nurl_cpu_has_vaes; miss=nurl_cpu_vaes_missing
+    [ "$lvl" = 3 ] && { has=nurl_cpu_has_vaes512; miss=nurl_cpu_vaes512_missing; }
+    if grep -A3 "^define linkonce_odr i1 @$has()" "$WORK/$ty.off.ll" | grep -q 'ret i1 false' &&
+            grep -A3 "^define linkonce_odr <[48] x i64> @nurl_${ty}_aesenc(" "$WORK/$ty.off.ll" | grep -q "call void @$miss()" &&
+            [ "$(grep -c 'llvm\.x86\.' "$WORK/$ty.off.ll")" -eq 0 ]; then
+        ok "--no-cpu-dispatch: $has false, ${ty} primitives stubs" "$miss"
+    else
+        bad "--no-cpu-dispatch: $has false, ${ty} primitives stubs" "not so"
+    fi
+    # Machine code: the body really is VAES on ymm / zmm.
+    reg=ymm; [ "$lvl" = 3 ] && reg=zmm
+    if command -v "$CLANG" >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1 &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/$ty.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/$ty" -lm -lpthread 2>/dev/null; then
+        n=$(objdump -d "$WORK/$ty" 2>/dev/null |
+            awk -v f="$fn" '$0 ~ "^[0-9a-f]+ <[^>]*\\." f "[a-z0-9_]*\\.vabi>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc[a-z]* .*%$reg")
+        if [ "$n" -gt 0 ]; then ok "$fn.vabi lowers to VAESENC on $reg" "$n"
+        else bad "$fn.vabi lowers to VAESENC on $reg" "none"; fi
+        env_off=NURL_CPU_VAES; [ "$lvl" = 3 ] && env_off=NURL_CPU_VAES512
+        got=$(env "$env_off=0" "$WORK/$ty" 2>&1); rc=$?
+        if [ "$rc" -eq 1 ] && printf '%s' "$got" | grep -q '^no .*tier on this CPU$'; then
+            ok "$env_off=0: $has answers false" "software branch"
+        else bad "$env_off=0: $has answers false" "exit $rc: ${got:0:80}"; fi
+        sed 's/^    ? ! ( nurl_cpu_has_vaes[0-9]* ).*$//' "$src" > "$WORK/$ty.gate.nu"
+        if "$NURLC" "$WORK/$ty.gate.nu" > "$WORK/$ty.gate.ll" 2>/dev/null &&
+                "$CLANG" -O2 -flto -Wno-override-module "$WORK/$ty.gate.ll" "$ROOT/stdlib/runtime.o" \
+                    -o "$WORK/$ty.gate" -lm -lpthread 2>/dev/null; then
+            got=$(env "$env_off=0" "$WORK/$ty.gate" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ] && printf '%s' "$got" | grep -q 'needs .*VAES and VPCLMULQDQ'; then
+                ok "$env_off=0: an unasked call panics at the gate" "exit $rc"
+            else bad "$env_off=0: an unasked call panics at the gate" "exit $rc: ${got:0:80}"; fi
+        else bad "$env_off=0: an unasked call panics at the gate" "could not build the probe"; fi
+    else
+        note "$ty machine-code and runtime checks" "skipped (no clang/objdump, or the link failed)"
+    fi
+done
+
+# ── 8. A wide vector across a simd call, with each clone ────────────
+# simd_wide_abi.nu proves the dispatcher and clones agree on where a
+# v256 / v512 lives with the clone this CPU picks; here, with the wide
+# clone taken away too.
+if "$NURLC" "$SCRIPT_DIR/simd_wide_abi.nu" > "$WORK/abi.ll" 2>/dev/null &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/abi.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/abi" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/simd_wide_abi.txt" | tail -n +2)
+    a=$("$WORK/abi" 2>&1); b=$(NURL_CPU_V3=0 "$WORK/abi" 2>&1)
+    if [ "$a" = "$want" ] && [ "$b" = "$want" ]; then ok "simd_wide_abi: both clones agree with the golden" "v3 and baseline"
+    else bad "simd_wide_abi: both clones agree with the golden" "v3: ${a:0:40} / base: ${b:0:40}"; fi
+else
+    bad "simd_wide_abi: both clones agree with the golden" "could not build it"
+fi
+
+# ── 9. AES-GCM's kernels: each one built, and each one run ──────────
+# aes_gcm_hw_agree.nu holds every kernel this CPU has to the software
+# oracle; here the wide kernels must exist as VAES machine code, and
+# the test must still agree with each wide tier taken away (the key
+# for the missing tier then falls back a tier).
+if "$NURLC" "$SCRIPT_DIR/aes_gcm_hw_agree.nu" > "$WORK/gcm.ll" 2>/dev/null &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/gcm.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/gcm" -lm -lpthread 2>/dev/null; then
+    for k in "vaes_run:ymm" "vaes512_run:zmm"; do
+        fnk=${k%%:*}; reg=${k##*:}
+        n=$(objdump -d "$WORK/gcm" 2>/dev/null |
+            awk -v f="$fnk" '$0 ~ "^[0-9a-f]+ <[^>]*__gcm_" f "[a-z0-9_]*>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc .*%$reg")
+        if [ "$n" -gt 0 ]; then ok "__gcm_$fnk: VAESENC on $reg" "$n"
+        else bad "__gcm_$fnk: VAESENC on $reg" "none"; fi
+    done
+    if grep -qw aes /proc/cpuinfo 2>/dev/null; then
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/aes_gcm_hw_agree.txt" | tail -n +2)
+        for e in NURL_CPU_VAES512=0 NURL_CPU_VAES=0; do
+            got=$(env "$e" "$WORK/gcm" 2>&1)
+            if [ "$got" = "$want" ]; then ok "aes_gcm_hw_agree with $e" "golden"
+            else bad "aes_gcm_hw_agree with $e" "${got:0:80}"; fi
+        done
+    fi
+else
+    bad "aes_gcm_hw_agree: builds" "nurlc or the link failed"
+fi
+
+# ── 10. The runtime's wide answers match an independent one ─────────
+if [ -r /proc/cpuinfo ] && command -v "$CLANG" >/dev/null 2>&1; then
+    fl=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    has() { for f in "$@"; do case "$fl" in *" $f "*) ;; *) return 1 ;; esac; done; }
+    w2=0; w3=0
+    has aes pclmulqdq avx2 bmi2 fma vaes vpclmulqdq && w2=1
+    [ "$w2" = 1 ] && has avx512f avx512bw avx512cd avx512dq avx512vl && w3=1
+    cat > "$WORK/cpu2.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_vaes(void);
+int nurl_cpu_x86_vaes512(void);
+int main(void) { printf("%d %d\n", nurl_cpu_x86_vaes(), nurl_cpu_x86_vaes512()); return 0; }
+CEOF
+    if "$CLANG" -O0 "$WORK/cpu2.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu2" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu2" 2>/dev/null)
+        if [ "$got" = "$w2 $w3" ]; then ok "runtime VAES / AVX-512 VAES CPUID agrees with /proc/cpuinfo" "both say $got"
+        else bad "runtime VAES / AVX-512 VAES CPUID agrees with /proc/cpuinfo" "runtime $got, /proc/cpuinfo $w2 $w3"; fi
+    else
+        note "runtime wide CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
 fi
 
 echo ""
