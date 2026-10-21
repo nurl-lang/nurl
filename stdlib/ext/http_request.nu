@@ -397,13 +397,7 @@ $ `stdlib/std/simd.nu`
 // Replace s's content with buf[from..to) — clear keeps the capacity, so
 // a String that has held a header before allocates nothing.
 @ __string_set_bytes String s ( Vec u ) buf i from i to → v {
-    ( string_clear s )
-    : i n - to from
-    ? > n 0 {
-        : *u data ( vec_data [u] buf )
-        : *u at # *u + # i data from
-        ( string_push_bytes s at n )
-    } {}
+    ( string_set_bytes s # *u + # i ( vec_data [u] buf ) from - to from )
 }
 
 // ── Percent codec (RFC 3986 §2.1) ─────────────────────────────────────

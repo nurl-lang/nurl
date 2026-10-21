@@ -681,6 +681,13 @@ $ `stdlib/core/slice.nu`
     ^ wr
 }
 
+// The 504 that replaces a handler's response past the per-request total
+// timeout; the late response is recycled unsent.
+@ __timeout_response sink HttpResponse late → HttpResponse {
+    ( response_recycle late )
+    ^ ( response_text 504 `request total-timeout exceeded\n` )
+}
+
 // Build a stock 4xx error response for parse failures.
 @ _parse_err_response HttpReqErr e → HttpResponse {
     : s nm ( http_req_err_name e )
@@ -912,13 +919,6 @@ $ `stdlib/core/slice.nu`
     // __write_response per response — one allocation per CONNECTION
     // instead of one per response.
     : ( Vec u ) wire ( vec_with_cap [u] 256 )
-    // Pre-allocated panic fallback response, hoisted OUT of the request
-    // loop: on the success path the handler's response replaces it and
-    // it survives untouched into the next iteration, so a keep-alive
-    // connection builds it once instead of once per request. It is
-    // rebuilt below only after a panic (or panic+timeout) actually
-    // consumed it — a cold path — and freed at connection end.
-    : ~ HttpResponse panic_resp ( response_text 500 `internal server error\n` )
     // One HttpRequest per CONNECTION, refilled in place by every parse:
     // its four line Strings keep their capacity across requests, and
     // its Header objects — Strings and all — cycle through `spare`
@@ -928,6 +928,18 @@ $ `stdlib/core/slice.nu`
     // ~a dozen allocations per request and 10 % of the server's CPU.
     : HttpRequest req ( request_new )
     : ( Vec Header ) spare ( vec_new [Header] )
+    // The handler and its `recover` closure, built once per CONNECTION:
+    // reading the handler out of the server copies its closure, and a
+    // capturing closure literal allocates its environment, so building
+    // either per request was two allocations of every response. The
+    // closure writes the handler's response into `handed` (captured by
+    // pointer — a `: ~` binding the body assigns) and the loop takes it
+    // out with mem_replace, leaving the slot empty for the next request.
+    // On a panic the slot stays empty: that, not a flag, is how the loop
+    // tells the two apart.
+    : ( @ HttpResponse HttpRequest ) f . ( __srv s ) handler
+    : ~ ? HttpResponse handed @ ?HttpResponse { F }
+    : ( @ v ) call_handler \ → v { = handed @ ?HttpResponse { T ( f req ) } }
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
@@ -960,51 +972,30 @@ $ `stdlib/core/slice.nu`
                     } {}
                     ? __ws_handled { = done T } {
                         : b req_close ( __request_says_close req )
-                        : ( @ HttpResponse HttpRequest ) f . ( __srv s ) handler
-                        // Wrap the handler in `recover` so a panic inside
-                        // the handler doesn't kill the worker thread. On
-                        // panic the connection-level `panic_resp` (500)
-                        // flows out to the client; the captured message is
-                        // logged to stderr. Owned allocations inside the
-                        // handler that didn't run their auto-drop leak —
-                        // see stdlib/std/panic.nu's header for the cost
-                        // model.
-                        //
-                        // Replacement is detected by comparing the body-Vec
-                        // DATA pointers, not via a captured flag: closures
-                        // capture struct bindings by reference but scalar
-                        // bindings by value, so a `= done T` inside the
-                        // recover closure never reaches this scope while
-                        // `= resp …` does. Two live responses can never
-                        // share a body allocation, so pointer inequality
-                        // is exact; and if `= resp` ever failed to
-                        // propagate, the compare degrades to "not
-                        // replaced" — treated as a panic, so `panic_resp`
-                        // is written out and rebuilt: never a double free
-                        // or use-after-free.
-                        : ~ HttpResponse resp panic_resp
-                        : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
+                        // The handler runs under `recover`, so a panic in it
+                        // answers 500 and keeps the worker; the message is
+                        // logged to stderr. The journal reclaims the owned
+                        // values the panic skipped (stdlib/std/panic.nu).
+                        : !v PanicInfo pr ( recover call_handler )
                         ?? pr {
                             T _ → {}
                             F p → {
                                 ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
                             }
                         }
-                        : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
-                        // Per-request total timeout enforcement: free the
-                        // handler's response and substitute 504 if we blew
-                        // the budget. `should_close` forces `Connection:
-                        // close` so the client doesn't reuse possibly-
-                        // corrupted state.
-                        : ~ HttpResponse final_resp resp
+                        : ?HttpResponse got ( mem_replace [? HttpResponse] handed @ ?HttpResponse { F } )
+                        // Per-request total timeout enforcement: past the
+                        // budget the handler's response is dropped and a 504
+                        // goes out instead, with `Connection: close` so the
+                        // client does not reuse possibly-corrupted state.
                         : ~ b timed_out F
                         ? > req_timeout_ms 0 {
-                            : i elapsed - ( now_ms ) req_start_ms
-                            ? > elapsed req_timeout_ms {
-                                = final_resp ( response_text 504 `request total-timeout exceeded\n` )
-                                = timed_out T
-                            } {}
+                            ? > - ( now_ms ) req_start_ms req_timeout_ms { = timed_out T } {}
                         } {}
+                        : HttpResponse final_resp ?? got {
+                            T r → ? timed_out ( __timeout_response r ) r
+                            F → ( response_text 500 `internal server error\n` )
+                        }
                         : b resp_close ( __response_says_close final_resp )
                         = n_served + n_served 1
                         // max_req > 0: a cap; 0: no keep-alive (close
@@ -1012,11 +1003,11 @@ $ `stdlib/core/slice.nu`
                         : b at_cap ? > max_req 0 >= n_served max_req == max_req 0
                         : b should_close | | | req_close resp_close at_cap timed_out
                         : !v NetErr wr ( __write_response conn final_resp should_close wire )
+                        // The written response goes back to this thread's
+                        // stash: the next response_new reuses its header Vec,
+                        // header Strings and body buffer (response_recycle).
+                        ( response_recycle final_resp )
                         ( request_recycle req spare )
-                        // A panic (or panic+timeout) consumed the
-                        // connection-level fallback — rebuild it. Cold
-                        // path: never taken on a successful request.
-                        ? ! replaced { = panic_resp ( response_text 500 `internal server error\n` ) } {}
                         ?? wr {
                             T _ → {
                                 ? should_close { = done T } {}

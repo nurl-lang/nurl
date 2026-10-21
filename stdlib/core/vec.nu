@@ -46,6 +46,14 @@
 //                                                what it owned
 //   ( vec_zeroed [A] n )           → ( Vec A )   n zero-filled elements,
 //                                                len == n, one calloc
+//   ( vec_unstash [A] kind n )     → ( Vec A )   an empty Vec from the
+//                                                per-thread stash `kind`,
+//                                                with the buffer it had;
+//                                                vec_with_cap n on a miss
+//   ( vec_stash [A] kind v max )   → v          drop v's elements and park
+//                                                it, buffer and all, for
+//                                                the next vec_unstash of
+//                                                `kind` (see "Recycling")
 //   ( vec_len [A] v )              → i          current length
 //   ( vec_cap [A] v )              → i          current capacity
 //   ( vec_is_empty [A] v )         → b          len == 0
@@ -325,6 +333,58 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
         ( nurl_vctl_set ctl 1 0 )
         ( nurl_vctl_set ctl 2 0 )
     }
+}
+
+// ── Recycling ───────────────────────────────────────────────────────
+// A per-thread stash of EMPTY control blocks that keep their buffers
+// (stdlib/runtime_core.c §9a′), for objects built and dropped at a steady
+// rate — the HTTP server's response header Vec and body, the router's
+// Params. `vec_stash` empties a Vec (its elements are dropped) and parks
+// it; the next `vec_unstash` of the same kind on that thread takes it back
+// with its capacity, so a steady stream of same-shaped objects stops
+// allocating. It is a cache, not a container: a kind holds a bounded
+// number of blocks, and one it refuses — kind full, buffer past `max`
+// bytes, NURL_STASH=0 — is released as dropping the Vec releases it.
+// Elements never sit in the stash, so its kinds need not agree on the
+// element type, only on what their users expect back (an empty Vec).
+//
+// Kinds in use (0..7): 0 HttpResponse headers, 1 HttpResponse body,
+// 2 header Strings (string_stash), 3 router Params.
+& `libc` @ nurl_stash_pop i kind → s
+
+& `libc` @ nurl_stash_push i kind s ctl → i
+
+// Grow the buffer behind a raw control block to hold `need` elements —
+// vec_reserve for library code that works on the block without binding
+// a handle (core/string.nu's recycled-String paths).
+@ _vec_ctl_reserve [A] s ctl i need → v {
+    ? < ( __vec_cap_raw ctl ) need { ( __vec_grow [A] ctl need ) } {}
+}
+
+@ vec_unstash [A] i kind i n → ( Vec A ) {
+    : s ctl ( nurl_stash_pop kind )
+    ? == # i ctl 0 { ^ ( vec_with_cap [A] n ) } {}
+    ? < ( __vec_cap_raw ctl ) n { ( __vec_grow [A] ctl n ) } {}
+    ^ @ ( Vec A ) { ctl }
+}
+
+@ vec_stash [A] i kind sink ( Vec A ) v i max → v {
+    : s ctl . v ctl
+    : s data ( __vec_data_raw ctl )
+    // A packed String buffer (data inside the control block) stays with
+    // its block's ordinary release.
+    ? & != 0 # i data == # i data + # i ctl 24 { ^ } {}
+    ? ( __vec_is_borrowed ctl ) {
+        // A view owns no buffer: it parks as the empty owned state.
+        ( __vec_point_at ctl 0 0 )
+    } {
+        ( vec_clear [A] v )
+        ? > ( alloc_size Z A ( __vec_cap_raw ctl ) ) max {
+            ( nurl_free data )
+            ( __vec_point_at ctl 0 0 )
+        } {}
+    }
+    ? != 0 ( nurl_stash_push kind ctl ) { ( mem_forget v ) } {}
 }
 
 // `n` zero-filled elements in ONE allocation, with `len` already at n —
