@@ -1466,7 +1466,12 @@ journal** instead:
 The journal belongs to the thread outside fibers and to the fiber inside
 one. The scheduler switches it with the fiber, so fibers sharing a worker,
 or moving between workers, never drain each other's extents. Functions
-that cannot reach a panic do not register anything and pay nothing.
+that cannot reach a panic do not register anything and pay nothing, and
+neither does a binding that never owns while it is registered (a
+parameter its function does not take over, a value read out of a
+container, a temporary a callee sinks): its drop flag is false whenever
+a panic could read it, so its registration is dropped when the flags are
+folded. One whose flag is always true is registered without a flag.
 
 ### 7.3 What a panic does not reclaim
 

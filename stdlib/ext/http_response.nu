@@ -8,6 +8,7 @@
 //
 //   ( response_new i status )                     → HttpResponse
 //   ( http_response_free HttpResponse r )              → v   early release (optional)
+//   ( response_recycle HttpResponse r )                 → v   release into the per-thread stash
 //   ( response_set_header  HttpResponse r s name s value ) → v
 //   ( response_add_header  HttpResponse r s name s value ) → v
 //   ( response_set_body_str   HttpResponse r s text )      → v
@@ -31,10 +32,15 @@
 //
 // Memory model:
 //
-//   * `response_new` allocates a fresh HttpResponse with empty headers
+//   * `response_new` returns a fresh HttpResponse with empty headers
 //     and empty body. Its owner drops it — every Header (name + value)
 //     and the body Vec with it; `http_response_free` is an optional
-//     early release.
+//     early release. `response_recycle` releases it into a per-thread
+//     stash instead (stdlib/runtime_core.c §9a′): the next response_new
+//     and response_set_header on that thread reuse its header Vec,
+//     header Strings and body buffer. The servers recycle every
+//     response they have written, so a keep-alive connection's
+//     responses allocate nothing in steady state.
 //   * `response_set_header` REPLACES any existing header with the same
 //     name (case-insensitive ASCII match per RFC 7230 §3.2). If no
 //     match exists, a fresh entry is appended. This is the right
@@ -90,18 +96,72 @@ $ `stdlib/std/simd.nu`
     ( Vec u ) body
 }
 
+// Stash kinds (core/vec.nu, "Recycling") and the largest buffer each
+// gives back: a body past 16 KiB, a header past 1 KiB is released rather
+// than kept per thread.
+@ __resp_kind_headers → i { ^ 0 }
+
+@ __resp_kind_body → i { ^ 1 }
+
+@ __resp_kind_hstr → i { ^ 2 }
+
+@ __resp_body_keep_max → i { ^ 16384 }
+
+@ __resp_hstr_keep_max → i { ^ 1024 }
+
+@ __resp_headers_keep_max → i { ^ 4096 }
+
+// A fresh response — on a thread that has recycled one before
+// (`response_recycle`, which the server does with every response it has
+// written), built from that one's header Vec and body buffer, capacity
+// and all, so the steady state of a keep-alive server allocates nothing
+// here.
 @ response_new i status → HttpResponse {
     ^ @ HttpResponse {
         status
         // Content-Type, Content-Length, Connection and one more fit
         // without a regrow on the first push.
-        ( vec_with_cap [Header] 4 )
-        ( vec_new [u] )
+        ( vec_unstash [Header] ( __resp_kind_headers ) 4 )
+        ( vec_unstash [u] ( __resp_kind_body ) 0 )
     }
 }
 
 // Let go of `r` now rather than at the end of its owner's scope.
 @ http_response_free sink HttpResponse r → v {}
+
+// Release `r` into this thread's stash instead (stdlib/runtime_core.c
+// §9a′): its header Vec, every header name and value String and its body
+// buffer stay allocated, emptied, for the next `response_new` /
+// `response_set_header` on the thread. What the stash refuses (it is
+// bounded; large buffers are given back) is released as dropping `r`
+// releases it. The HTTP servers call this on every response they have
+// written; a handler or middleware that discards a response may too.
+@ response_recycle sink HttpResponse r → v {
+    : i n ( vec_len [Header] . r headers )
+    : *Header hd ( vec_data [Header] . r headers )
+    // The headers leave with the length; each one's Strings are parked.
+    ( vec_set_len [Header] . r headers 0 )
+    : ~ i k 0
+    ~ < k n {
+        : Header h . hd k
+        ( mem_take h )
+        ( string_stash ( __resp_kind_hstr ) . h name ( __resp_hstr_keep_max ) )
+        ( string_stash ( __resp_kind_hstr ) . h value ( __resp_hstr_keep_max ) )
+        = k + k 1
+    }
+    ( vec_stash [Header] ( __resp_kind_headers ) . r headers ( __resp_headers_keep_max ) )
+    ( vec_stash [u] ( __resp_kind_body ) . r body ( __resp_body_keep_max ) )
+}
+
+// A header for a response: its name and value copied into Strings from
+// the stash (response_recycle) when the thread has some, so a recycled
+// response's headers cost a copy, not two allocations each.
+@ __response_header s name s value → Header {
+    ^ @ Header {
+        ( string_unstash_bytes ( __resp_kind_hstr ) # *u name ( nurl_str_len name ) )
+        ( string_unstash_bytes ( __resp_kind_hstr ) # *u value ( nurl_str_len value ) )
+    }
+}
 
 // ── Header / body mutators ────────────────────────────────────────────
 
@@ -120,13 +180,13 @@ $ `stdlib/std/simd.nu`
         : Header h . hdata k
         ? ( _header_name_eq_ci_n . h name name name_n ) {
             // vec_set drops the header it replaces.
-            ( vec_set [Header] . r headers k ( header_new name value ) )
+            ( vec_set [Header] . r headers k ( __response_header name value ) )
             = found T
         } {}
         = k + k 1
     }
     ? ! found {
-        ( vec_push [Header] . r headers ( header_new name value ) )
+        ( vec_push [Header] . r headers ( __response_header name value ) )
     } {}
 }
 
@@ -136,7 +196,7 @@ $ `stdlib/std/simd.nu`
 // `WWW-Authenticate` (one entry per supported scheme) are the
 // canonical cases.
 @ response_add_header HttpResponse r s name s value → v {
-    ( vec_push [Header] . r headers ( header_new name value ) )
+    ( vec_push [Header] . r headers ( __response_header name value ) )
 }
 
 // Replace the body with a copy of `text`. Existing body bytes are
@@ -292,39 +352,117 @@ $ `stdlib/std/simd.nu`
 // response body into the wire buffer. Content-Length still describes
 // `r.body`, so the head is only valid paired with that body.
 @ response_serialize_head_to HttpResponse r ( Vec u ) out → v {
-    ( vec_reserve [u] out 256 )
-
-    // ── Status line: "HTTP/1.1 <code> <reason>\r\n" ──
-    ( bytes_extend_str out `HTTP/1.1 ` )
-    ( bytes_push_int out . r status )
-    ( bytes_extend_str out ` ` )
-    ( bytes_extend_str out ( status_reason . r status ) )
-    ( bytes_extend_str out `\r\n` )
-
-    // ── Header lines ──
+    : s reason ( status_reason . r status )
+    : i rlen ( nurl_str_len reason )
     : i hcount ( vec_len [Header] . r headers )
     : *Header hdata ( vec_data [Header] . r headers )
+    // One pass sizes the head and spots the framing headers, one reserve,
+    // then plain copies at a cursor: the head of a small response used to
+    // be ~15 appends, each measuring, reserving and re-reading the Vec,
+    // and two more header scans for Transfer-Encoding / Content-Length.
+    // Status line, the Content-Length line and the blank line: 9 + 20 + 1
+    // + 2, 16 + 20 + 2, and 2 bytes at most.
+    : ~ i need + 72 rlen
+    : ~ b has_te F
+    : ~ b has_cl F
     : ~ i k 0
     ~ < k hcount {
-        : Header h . hdata k
-        ( __push_header_no_crlf out . h name )
-        ( bytes_extend_str out `: ` )
-        ( __push_header_no_crlf out . h value )
-        ( bytes_extend_str out `\r\n` )
+        : *Header hp # *Header + # i hdata * k Z Header
+        : i nl ( string_len . . hp 0 name )
+        = need + + + need nl ( string_len . . hp 0 value ) 4
+        ? & == nl 17 ! has_te { = has_te ( _header_name_eq_ci_n . . hp 0 name `Transfer-Encoding` 17 ) } {}
+        ? & == nl 14 ! has_cl { = has_cl ( _header_name_eq_ci_n . . hp 0 name `Content-Length` 14 ) } {}
+        = k + k 1
+    }
+    ( vec_reserve [u] out need )
+    : *u base ( vec_data [u] out )
+    : ~ i at ( vec_len [u] out )
+
+    // ── Status line: "HTTP/1.1 <code> <reason>\r\n" ──
+    = at ( __wire_lit base at `HTTP/1.1 ` 9 )
+    = at ( __wire_int base at . r status )
+    = . base at # u 32
+    = at + at 1
+    = at ( __wire_lit base at reason rlen )
+    = at ( __wire_lit base at `\r\n` 2 )
+
+    // ── Header lines, in insertion order ──
+    = k 0
+    ~ < k hcount {
+        : *Header hp # *Header + # i hdata * k Z Header
+        = at ( __wire_field base at . . hp 0 name )
+        = at ( __wire_lit base at `: ` 2 )
+        = at ( __wire_field base at . . hp 0 value )
+        = at ( __wire_lit base at `\r\n` 2 )
         = k + k 1
     }
 
     // ── Auto-Content-Length (unless TE was set) ──
-    : b has_te ( __has_header_ci . r headers `Transfer-Encoding` )
-    : b has_cl ( __has_header_ci . r headers `Content-Length` )
     ? & ! has_te ! has_cl {
-        ( bytes_extend_str out `Content-Length: ` )
-        ( bytes_push_int out ( vec_len [u] . r body ) )
-        ( bytes_extend_str out `\r\n` )
+        = at ( __wire_lit base at `Content-Length: ` 16 )
+        = at ( __wire_int base at ( vec_len [u] . r body ) )
+        = at ( __wire_lit base at `\r\n` 2 )
     } {}
 
     // ── Blank line ──
-    ( bytes_extend_str out `\r\n` )
+    = at ( __wire_lit base at `\r\n` 2 )
+    ( vec_set_len [u] out at )
+}
+
+// The head writers: each copies into reserved room at base[at..] and
+// returns the new end.
+@ __wire_lit * u base i at s lit i n → i {
+    ( nurl_memcpy # *u + # i base at # *u lit n )
+    ^ + at n
+}
+
+// Decimal `n` (no leading zeros, '-' for negatives), as bytes_push_int
+// writes it: the loop runs on the non-positive magnitude, so the minimum
+// i64 needs no special case.
+@ __wire_int * u base i at i n → i {
+    : i m ? < n 0 n - 0 n
+    : ~ i nd 1
+    : ~ i t m
+    ~ <= t -10 { = t / t 10 = nd + nd 1 }
+    : ~ i pos at
+    ? < n 0 { = . base pos # u 45 = pos + pos 1 } {}
+    : ~ i q - + pos nd 1
+    = t m
+    ~ >= q pos {
+        = . base q # u + 48 - 0 % t 10
+        = t / t 10
+        = q - q 1
+    }
+    ^ + pos nd
+}
+
+// A header field name or value, with any CR (13) / LF (10) dropped. A
+// field reflected from untrusted input (a redirect Location, an echoed
+// header, …) cannot inject `\r\n<injected-header>` and split the
+// response (CWE-113); RFC 9110 §5.5 forbids CR/LF in field values
+// anyway, so stripping them is lossless for any well-formed header. A
+// NUL ends the field there. The String's own length is used, so nothing
+// is re-measured.
+@ __wire_field * u base i at String str → i {
+    : i n ( string_len str )
+    : *u p # *u ( string_data str )
+    // Fast path — no NUL/CR/LF (every well-formed header): one vector
+    // scan + one copy.
+    ? < ( simd_index_ctl3 p n ) 0 {
+        ( nurl_memcpy # *u + # i base at p n )
+        ^ + at n
+    } {}
+    : ~ i pos at
+    : ~ i k 0
+    : ~ b more T
+    ~ & more < k n {
+        : i c & 255 # i . p k
+        ? == c 0 { = more F } {
+            ? | == c 13 == c 10 {} { = . base pos # u c = pos + pos 1 }
+            = k + k 1
+        }
+    }
+    ^ pos
 }
 
 // Case-insensitive header presence check. Direct *Header iteration —

@@ -681,6 +681,14 @@ unsafe @ __wait i fd i for_write i timeout_ms → i {
 
 @ nurl_tcp_unref i handle → v { ( nurl_tcp_close handle ) }
 
+// A connection shut from another context (the HTTP server's drain): the
+// same shut as a listener's — both ways, whichever `both` asks — and the
+// same wake.
+@ nurl_tcp_conn_shutdown i handle i both → v {
+    ( sock_shutdown ( __tab ) handle )
+    ( __wake_ready )
+}
+
 @ nurl_tcp_shutdown i handle → v {
     ( sock_shutdown ( __tab ) handle )
     // A shut fd reports itself ready so a waiter wakes and finds the
@@ -726,6 +734,12 @@ unsafe @ nurl_tcp_close i handle → v {
     ? < ip 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
     ? && != ip 0 != ip ( __lo_ip ) { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
     ^ ( sock_listen st ip port backlog )
+}
+
+// One stack, one socket per port: SO_REUSEPORT has nothing to spread
+// across, so the options are ignored.
+@ nurl_tcp_listen_opts s host i port i backlog i flags → i {
+    ^ ( nurl_tcp_listen host port backlog )
 }
 
 @ nurl_tcp_accept i listener → i {

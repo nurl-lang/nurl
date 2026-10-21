@@ -533,8 +533,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values for `max_keepalive_requests`; an explicit cap still applies in
   every mode.
 
+- **A keep-alive HTTP response allocates nothing in steady state, and
+  costs half the instructions (agora #51).** The plaintext hello path
+  made 11 allocations per request; it makes 0 (pinned ≤ 2 by the new
+  `http_response_recycle` test, thread and fiber mode). User-space
+  instructions per request (callgrind, one keep-alive connection):
+  15 878 → 7 709. Server CPU per request under `oha -c 50` (shared,
+  loaded host, A/B interleaved, median of 3): 8.85 → 7.60 µs total,
+  3.65 → 2.85 µs user. What changed:
+  - The compiler drops the panic-journal registration of a binding that
+    never owns while registered — a parameter its function does not take
+    over, a view read out of a container, a temporary a callee sinks.
+    Its drop flag folds to false, so a drain would skip it anyway; the
+    registration and its forget were ~120 instructions inside a `recover`
+    extent and half of all registrations. A flag that folds true is
+    registered with a null flag. (docs/MEMORY.md §7.2.)
+  - `response_recycle` (new): the servers release every written response
+    into a per-thread stash of emptied control blocks
+    (stdlib/runtime_core.c §9a′, `vec_stash` / `vec_unstash`,
+    `string_stash` / `string_unstash` / `string_unstash_bytes`), so the
+    next `response_new` / `response_set_header` reuse its header Vec,
+    header Strings and body buffer. The router's Params recycle the same
+    way. Bounded per thread; large buffers are given back.
+    `NURL_STASH=0` turns it off.
+  - The handler closure and its `recover` closure are built once per
+    connection, not per request.
+  - `response_serialize_head_to` sizes the head once and copies at a
+    cursor instead of ~15 appends and two extra header scans.
+  - `string_set_bytes` (new), and fast paths in `string_clear`,
+    `string_push_bytes`, `string_push_str` and the NUL seal: a recycled
+    String is refilled with one copy, no view binding or reserve call.
+
+### Added
+
+- **Graceful drain for the HTTP servers (agora #54).** `server_drain s
+  deadline_ms` stops accepting (the listener closes), closes idle
+  keep-alive connections at once, lets requests in flight finish with
+  `Connection: close` — HTTP/2 connections get GOAWAY(NO_ERROR) — and
+  waits up to the deadline before shutting the rest; T when everything
+  finished in time. Works for `server_run`, `server_run_pool` and
+  `server_run_async`. Also `server_drain_begin`, `server_shutdown`,
+  `server_draining`, `server_conn_count`, `h2_conn_serve_drain`,
+  `http3_server_drain` (GOAWAY on every HTTP/3 connection) and
+  `tcp_conn_shutdown` (std/net.nu: shut a connection from another thread
+  without closing it). ROADMAP listed "graceful shutdown" before there
+  was any: `server_stop` only closed the listener, so an idle keep-alive
+  client held a stopping server until its idle timeout. New test
+  `http_server_drain` (in-flight completes, idle closed, HTTP/2 GOAWAY,
+  new connections refused, deadline enforced; pool and fiber).
+
+- **Listener options and parallel accept (agora #50).** `tcp_listen_with
+  host port TcpListenOpts` sets the backlog and `SO_REUSEPORT` (runtime
+  `nurl_tcp_listen_opts`; ignored where the platform has none).
+  `tcp_listen`'s backlog is 4096 (`tcp_listen_default_backlog`, clamped by
+  the kernel to somaxconn) instead of 128, which dropped SYNs under a burst
+  of connections — each one a 1 s client retransmission; the TLS listeners
+  and packages/http use it too. `server_run_async` runs one accept fiber
+  per runtime worker on its listener (`server_set_acceptors`, new
+  `runtime_worker_count`) instead of one: connection churn (oha
+  `--disable-keepalive`, 20 clients, 4 workers, shared 4-core host,
+  interleaved, median of 3 and 5) 17.9k / 15.4k → 19.0k / 22.2k conn/s,
+  server CPU per connection 28.5 → 24–26.5 µs. A SO_REUSEPORT listener per
+  worker measured the same within the noise (20.8k / 17.4k) and was not
+  kept: fibers migrate between workers, so it buys no affinity, and it
+  needs a second socket (and TLS credentials) per worker. New test
+  `net_listen_opts`.
+
 ### Packages
 
+- http 0.7.8: SIGTERM / SIGINT drain the app (`http_app_drain_ms`,
+  default 10 s) instead of only closing the listener.
 - http 0.7.7: an unset `http_app_max_keepalive` follows the serving
   mode — no cap under `http_app_async`, 1000 for the thread servers.
 

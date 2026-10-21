@@ -13,6 +13,14 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   every listener, HTTP/3 beside every TLS listener**, routing, static files,
   middleware, multipart, WebSockets, TLS with ALPN; see
   [HTTPS / TLS](#https--tls), [HTTP/2](#http2) and [HTTP/3](#http3) below).
+  `tcp_listen_with host port @ TcpListenOpts { backlog reuse_port }` sets
+  the accept-queue length (default `tcp_listen_default_backlog`, 4096,
+  clamped by the kernel to `somaxconn`) and `SO_REUSEPORT` (several
+  listeners — or processes, e.g. an old and a new release during a
+  restart — on one address, the kernel spreading connections across
+  them). `server_run_async` runs one accept fiber per runtime worker on
+  its listener (`server_set_acceptors`); `server_drain` stops a server
+  gracefully.
 - **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
   handshake with SNI; the `verify` flag turns on peer-certificate chain +
   host-name verification against the system trust store — the primitive

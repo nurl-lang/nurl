@@ -58355,6 +58355,12 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_flist 0
 : ~ i g_fold_nf 0
 : ~ i g_fold_fcap 0
+// The flags a journal registration reads (nurl_journal_push_drop2), this
+// round: a call made while one is registered may panic, and the drain
+// reads it then (__fold_flag_line).
+: ~ i g_fold_jlist 0
+: ~ i g_fold_nj 0
+: ~ i g_fold_jcap 0
 : ~ i g_fold_end 0
 : ~ i g_fold_fn_end 0
 : ~ i g_fold_k 0
@@ -59344,6 +59350,56 @@ unsafe @ __fold_reset → v {
         ~ < w 6 { ( nurl_poke # s g_fold_map + * r 6 w 0 ) = w + w 1 }
     }
     = g_fold_nf 0
+    = g_fold_nj 0
+}
+
+// Flag r is read by a journal registration (see g_fold_jlist).
+unsafe @ __fold_add_jflag i r → v {
+    ? >= g_fold_nj g_fold_jcap {
+        : i jcap ? == g_fold_jcap 0 64 * g_fold_jcap 2
+        : i fresh # i ( nurl_zalloc * jcap 8 )
+        ? != g_fold_jlist 0 {
+            ( memcpy # s fresh # s g_fold_jlist * g_fold_nj 8 )
+            ( nurl_free # s g_fold_jlist )
+        } {}
+        = g_fold_jlist fresh
+        = g_fold_jcap jcap
+    } {}
+    ( nurl_poke # s g_fold_jlist g_fold_nj r )
+    = g_fold_nj + g_fold_nj 1
+}
+
+// A call: every journaled flag's pending store may be read by a drain.
+unsafe @ __fold_commit_jflags → v {
+    : ~ i i 0
+    ~ < i g_fold_nj { ( __fold_commit ( nurl_peek # s g_fold_jlist i ) ) = i + i 1 }
+}
+
+// The slot and flag registers of a registration line
+// `  call void @nurl_journal_push_drop2(ptr %rS, ptr %rF, …)`: the flag's
+// number (the slot's in g_fold_x), or -1 when either is not a register.
+@ __fold_jrnl_regs i ls i le → i {
+    : i sr ( __fold_reg + ls 41 le )
+    ? < sr 0 { ^ -1 } {}
+    : i se g_fold_end
+    ? ! ( __fold_at se `, ptr ` 6 ) { ^ -1 } {}
+    : i fr ( __fold_reg + se 6 le )
+    ? < fr 0 { ^ -1 } {}
+    ? ! ( __fold_at g_fold_end `, ` 2 ) { ^ -1 } {}
+    = g_fold_x sr
+    ^ fr
+}
+
+// Does line [ls, le) make a call?
+unsafe @ __fold_has_call i ls i le → b {
+    ^ >= ( nurl_memmem_range # s + g_dce_mod ls - le ls ` call ` 6 ) 0
+}
+
+// Length of the `%rN` token that ends at `fe`.
+@ __fold_jrnl_tok i fe → i {
+    : ~ i q - fe 1
+    ~ != ( __fold_byte q ) 37 { = q - q 1 }
+    ^ - fe q
 }
 
 unsafe @ __fold_add_flag i r → v {
@@ -59479,6 +59535,44 @@ unsafe @ __fold_commit_all → v {
     ? | | | ( __fold_at ls `  br ` 5 ) ( __fold_at ls `  ret` 5 ) ( __fold_at ls `  switch ` 9 ) ( __fold_at ls `  unreachable` 13 ) {
         ( __fold_commit_all )
     } {}
+    // A journal registration (nurl_journal_push_drop2: slot, flag, drop)
+    // reads its flag only when a panic drains it — inside a call made
+    // while it is registered — and takes its address for nothing else. So
+    // it is no escape: the flag still folds, every later call reads its
+    // pending store (below), and the registration counts as a read, which
+    // keeps the stores. The writer then drops a registration whose flag
+    // folds false — a binding that never owns while registered: a borrowed
+    // parameter, a view, a temporary a callee sinks — and gives one whose
+    // flag folds true a null flag (always drop). A slot registered under
+    // two different flags keeps both unfolded, so its forgets stay paired.
+    ? ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+        : i fj ( __fold_jrnl_regs ls le )
+        ? >= fj 0 {
+            : i sr g_fold_x
+            ? == 1 ( __fold_get fj 3 ) {
+                : i prev ( __fold_get sr 1 )
+                ? | == prev 0 == prev + fj 1 {
+                    ( __fold_put sr 1 + fj 1 )
+                    ( __fold_put fj 4 | ( __fold_get fj 4 ) 8 )
+                    ( __fold_add_jflag fj )
+                    ^ T
+                } {}
+                // A second flag for the slot: neither folds.
+                ( __fold_put fj 3 2 )
+                ? == 1 ( __fold_get - prev 1 3 ) { ( __fold_put - prev 1 3 2 ) } {}
+                ^ T
+            } {}
+            // An unfolded flag: the slot keeps every registration.
+            ? > ( __fold_get sr 1 ) 0 {
+                : i pf - ( __fold_get sr 1 ) 1
+                ? == 1 ( __fold_get pf 3 ) { ( __fold_put pf 3 2 ) } {}
+            } {}
+            ( __fold_put sr 1 -1 )
+            ^ T
+        } {}
+    } {}
+    // A call may panic, and the drain reads every registered flag then.
+    ? & > g_fold_nj 0 ( __fold_has_call ls le ) { ( __fold_commit_jflags ) } {}
     ? ( __fold_at ls `  %r` 4 ) {
         : i r ( __fold_reg + ls 2 le )
         ? >= r 0 {
@@ -59794,6 +59888,30 @@ unsafe @ __fold_emit_line i ls i le i part → v {
         : i sf ( __fold_store_flag ls le )
         ? & >= sf 0 >= ( __fold_get sf 3 ) 3 { ^ v } {}
     } {}
+    // Journal registrations by their folded flag (__fold_flag_line): one
+    // that never owns goes, with its forgets; one that always owns drops
+    // unconditionally (a null flag).
+    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+        : i fj ( __fold_jrnl_regs ls le )
+        ? >= fj 0 {
+            : i fs ( __fold_get fj 3 )
+            ? == fs 3 { ^ v } {}
+            ? == fs 4 {
+                : i fe g_fold_end
+                ( __ir_write_range ls - fe ( __fold_jrnl_tok fe ) part )
+                ( __fold_puts `null` part )
+                ( __fold_put_range fe + le 1 part 0 )
+                ^ v
+            } {}
+        } {}
+    } {}
+    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_forget_slot(ptr ` 42 ) {
+        : i sr ( __fold_reg + ls 42 le )
+        ? >= sr 0 {
+            : i f1 ( __fold_get sr 1 )
+            ? > f1 0 { ? == 3 ( __fold_get - f1 1 3 ) { ^ v } {} } {}
+        } {}
+    } {}
     ? ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
         : i f ( __fold_flag + ls 33 le )
         ? == f 0 { ^ v } {}
@@ -59859,6 +59977,7 @@ unsafe @ __ir_fold_range i st i en i part → v {
     : ~ b again T
     ~ again {
         = g_fold_nf 0
+        = g_fold_nj 0
         : ~ i p st
         ~ < p en {
             : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )

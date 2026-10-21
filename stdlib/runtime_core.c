@@ -3667,6 +3667,113 @@ void nurl_free(void *ptr) {
 void nurl_free_nonnull(void *ptr) {
     if (ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
 }
+
+/* ── §9a′  Recycled control blocks ────────────────────────────────
+ *
+ * A keep-alive HTTP server builds and drops the same objects for every
+ * response: the header Vec, a String per header name and value, the body
+ * Vec, the router's Params. The allocator cache above makes each of those
+ * blocks cheap, but not free — an allocate/free pair per block, a regrow
+ * of every buffer from empty, and inside the server's `recover` extent the
+ * journal's bookkeeping on top — and a response is built by the handler
+ * (`response_text …`), which has no connection to borrow storage from.
+ *
+ * This is where it borrows it from: a per-thread LIFO of EMPTY Vec / String
+ * control blocks that keep their buffers, in a few kinds (ext/http_response
+ * and ext/http_router name them). Whoever finishes with such an object
+ * empties it and parks its control block here; the next constructor of the
+ * same kind takes it back with its capacity. The stash only ever holds
+ * blocks nothing else references, so it is a cache with no ownership
+ * questions: a fiber that takes a block on one worker and parks it on
+ * another just moves it between two threads' stashes. Each kind holds at
+ * most NURL__STASH_DEPTH blocks; a full kind refuses (push returns 0) and
+ * the caller releases the block as usual. A thread's leftovers go back to
+ * libc when it exits.
+ *
+ * A parked block is {data, len = 0, cap >= 0}; data may be null, or — for
+ * a packed String (string_from_bytes_packed) — the bytes after the block
+ * itself. NURL_STASH=0 turns the stash off at run time (every pop misses,
+ * every push refuses), for A/B measurement. */
+#define NURL__STASH_KINDS 8
+#define NURL__STASH_DEPTH 32
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+#  define NURL__STASH_ENABLED 1
+#  define NURL__STASH_TLS
+#elif !defined(_WIN32) || (defined(__has_include) && __has_include(<pthread.h>))
+#  define NURL__STASH_ENABLED 1
+#  define NURL__STASH_PTHREAD 1
+#  define NURL__STASH_TLS __thread
+#  include <pthread.h>
+#endif
+#ifdef NURL__STASH_ENABLED
+static NURL__STASH_TLS void *nurl__stash[NURL__STASH_KINDS][NURL__STASH_DEPTH];
+static NURL__STASH_TLS int   nurl__stash_n[NURL__STASH_KINDS];
+static NURL__STASH_TLS int   nurl__stash_registered;
+static int nurl__stash_on = -1;   /* -1 unknown, 0 off, 1 on; benign race */
+/* A parked block back to libc. free, not nurl_free: this runs from a
+ * thread-exit destructor, after which the allocator cache's own flush may
+ * already have run (destructor order is unspecified), and nothing parked is
+ * in the panic journal. Every block came from nurl_alloc / nurl_zalloc,
+ * which hand out ordinary libc chunks. */
+static void nurl__stash_release(void *ctl) {
+    long long *c = (long long *)ctl;
+    void *data = (void *)(intptr_t)c[0];
+    if (data && data != (void *)((char *)ctl + 24)) free(data);
+    free(ctl);
+}
+#  ifdef NURL__STASH_PTHREAD
+static pthread_key_t  nurl__stash_key;
+static pthread_once_t nurl__stash_once = PTHREAD_ONCE_INIT;
+static void nurl__stash_thread_flush(void *unused) {
+    (void)unused;
+    for (int k = 0; k < NURL__STASH_KINDS; k++) {
+        while (nurl__stash_n[k] > 0) nurl__stash_release(nurl__stash[k][--nurl__stash_n[k]]);
+    }
+}
+static void nurl__stash_make_key(void) {
+    pthread_key_create(&nurl__stash_key, nurl__stash_thread_flush);
+}
+#  endif
+__attribute__((noinline, cold))
+static int nurl__stash_init(void) {
+    const char *e = getenv("NURL_STASH");
+    nurl__stash_on = !(e && e[0] == '0' && e[1] == '\0');
+    return nurl__stash_on;
+}
+__attribute__((noinline, cold))
+static void nurl__stash_register(void) {
+    nurl__stash_registered = 1;
+#  ifdef NURL__STASH_PTHREAD
+    pthread_once(&nurl__stash_once, nurl__stash_make_key);
+    pthread_setspecific(nurl__stash_key, (void *)1);
+#  endif
+}
+/* An empty control block of `kind` with its buffer, or NULL. */
+NURL_TLS_FN void *nurl_stash_pop(long long kind) {
+    if ((unsigned long long)kind >= NURL__STASH_KINDS) return NULL;
+    int n = nurl__stash_n[kind];
+    if (n == 0) return NULL;
+    nurl__stash_n[kind] = n - 1;
+    return nurl__stash[kind][n - 1];
+}
+/* Park the empty control block `ctl` (len 0) under `kind`: 1 when the
+ * stash took it, 0 when the caller keeps it (kind full, stash off). */
+NURL_TLS_FN long long nurl_stash_push(long long kind, void *ctl) {
+    if (!ctl || (unsigned long long)kind >= NURL__STASH_KINDS) return 0;
+    int on = nurl__stash_on;
+    if (__builtin_expect(on < 0, 0)) on = nurl__stash_init();
+    if (!on) return 0;
+    int n = nurl__stash_n[kind];
+    if (n >= NURL__STASH_DEPTH) return 0;
+    if (__builtin_expect(!nurl__stash_registered, 0)) nurl__stash_register();
+    nurl__stash[kind][n] = ctl;
+    nurl__stash_n[kind] = n + 1;
+    return 1;
+}
+#else
+void *nurl_stash_pop(long long kind) { (void)kind; return NULL; }
+long long nurl_stash_push(long long kind, void *ctl) { (void)kind; (void)ctl; return 0; }
+#endif
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     /* Zero bytes touch nothing — not even a null source (an empty or
      * null string's bytes), which C's memcpy may not be handed. */

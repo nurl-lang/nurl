@@ -6,6 +6,7 @@
 //   ( http3_server_new sock creds alpn_prefs tp handler body_max ) → H3Server
 //   ( http3_server_run s )                                         → v   the loop (a fiber or a thread)
 //   ( http3_server_stop s )                                        → v
+//   ( http3_server_drain s )                                       → v   GOAWAY to every connection
 //   ( http3_server_accepted s )                                    → i   QUIC connections accepted so far
 //   ( http3_server_free s )                                        → v   early release (optional: the last
 //                                                                        owner of an H3Server releases it)
@@ -31,6 +32,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http3_conn.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/std/atomic.nu`
 
 // The HTTP/3 connection over each QUIC connection, keyed by the QUIC
 // connection's identity (its rcbox address) while the listener has it.
@@ -39,6 +41,7 @@ $ `stdlib/core/rcbox.nu`
     ( HashMap i H3Conn ) h3s
     ( @ HttpResponse HttpRequest ) handler
     i body_max
+    Atomic draining  // http3_server_drain: 1 = every connection gets GOAWAY
 }
 
 // An H3Server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -70,13 +73,22 @@ $ `stdlib/core/rcbox.nu`
     : i key # i . qc ctl
     ? == ev 1 {
         : H3Conn h ( h3_conn_new qc . s body_max )
+        ? != 0 ( atomic_load . s draining ) { ( h3_conn_goaway h ) } {}
         ( __h3s_map_set . s h3s key h )
         ^
     } {}
     ? == ev 2 {
         : ( @ i i ) hf \ i x → i { ^ ( hash_int x ) }
         : ( @ b i i ) ef \ i a i b → b { ^ ( eq_int a b ) }
-        ?? ( map_get [i H3Conn] . s h3s key hf ef ) { T h → { ( h3_conn_on_readable h . s handler ) } F → {} }
+        ?? ( map_get [i H3Conn] . s h3s key hf ef ) {
+            T h → {
+                // A draining server says GOAWAY on each connection's next
+                // event (h3_conn_goaway is once per connection).
+                ? != 0 ( atomic_load . s draining ) { ( h3_conn_goaway h ) } {}
+                ( h3_conn_on_readable h . s handler )
+            }
+            F → {}
+        }
         ^
     } {}
     ? == ev 3 { ( __h3s_map_del . s h3s key ) } {}
@@ -88,6 +100,7 @@ $ `stdlib/core/rcbox.nu`
     = . s h3s ( map_new [i H3Conn] )
     = . s handler handler
     = . s body_max body_max
+    = . s draining ( atomic_new 0 )
     // The listener's event closure points back at this server without
     // owning it: the server owns the listener, which owns the closure.
     : ( @ v QuicConn i ) ev \ QuicConn qc i e → v { ( __h3s_event s qc e ) }
@@ -103,6 +116,14 @@ $ `stdlib/core/rcbox.nu`
 @ http3_server_stop H3Server s__h → v {
     : *H3ServerImpl s ( __H3Server_ptr s__h )
     ( quic_server_stop . s qs )
+}
+
+// Begin a graceful stop: every connection is sent GOAWAY (RFC 9114 §5.2)
+// on its next event — new requests go elsewhere, those in flight finish.
+// Safe from any thread; `http3_server_stop` still ends the loop.
+@ http3_server_drain H3Server s__h → v {
+    : *H3ServerImpl s ( __H3Server_ptr s__h )
+    ( atomic_store . s draining 1 )
 }
 
 @ http3_server_accepted H3Server s__h → i {

@@ -35,6 +35,10 @@
 //   ( string_eq a b )          → b           content equality
 //
 //   ( string_with_cap n )      → String      empty, cap-preallocated
+//   ( string_unstash kind )    → String      empty, from the per-thread stash
+//   ( string_stash kind s max ) → v          empty s and park it there
+//   ( string_unstash_bytes kind p n ) → String  string_unstash holding p[0..n)
+//   ( string_set_bytes s p n ) → v           replace the bytes with p[0..n)
 //   ( string_clone s )         → String      independent deep copy
 //   ( string_concat a b )      → String      new owned concatenation
 //   ( string_starts_with s p ) → b           prefix check
@@ -359,6 +363,18 @@ $ `stdlib/core/char.nu`
 // mutation (push, extend, clear, …) so `string_data` returns a C-safe
 // pointer.
 @ _string_seal String str → v {
+    // Fast path — room for the NUL already (every seal after a push that
+    // reserved for it): one store, no view binding and no reserve call.
+    // Measured at ~110 instructions a seal before, 14 seals a request in
+    // the HTTP server's parse. A view (cap -1) takes the slow path, whose
+    // reserve detaches it.
+    : s ctl . str ctl
+    : i len ( nurl_peek ctl 1 )
+    ? > ( nurl_peek ctl 2 ) len {
+        : *u q # *u ( nurl_peek ctl 0 )
+        = . q len # u 0
+        ^
+    } {}
     : ( Vec u ) b ( __sbuf str )
     ( vec_reserve [u] b 1 )
     : *u p ( vec_data [u] b )
@@ -375,6 +391,30 @@ $ `stdlib/core/char.nu`
     : u zero # u 0
     = . p 0 zero
     ^ @ String { . tmp ctl }
+}
+
+// An empty String from the per-thread stash `kind` (core/vec.nu,
+// "Recycling"), keeping the buffer a previous String grew; `string_new`
+// when the kind has none. `string_stash` is the other end: it empties a
+// String and parks it there — released as usual instead when the stash
+// is full, or its buffer is past `max` bytes.
+@ string_unstash i kind → String {
+    : s ctl ( nurl_stash_pop kind )
+    ? == # i ctl 0 { ^ ( string_new ) } {}
+    // Parked with len 0 and a NUL at data[0] (string_stash).
+    ^ @ String { ctl }
+}
+
+@ string_stash i kind sink String str i max → v {
+    : s ctl . str ctl
+    : i cap ( nurl_peek ctl 2 )
+    // A view, or a buffer worth giving back: an ordinary release. (A
+    // packed String parks too: its first growth copies out, as ever.)
+    ? | < cap 1 > cap max { ^ } {}
+    ( nurl_poke ctl 1 0 )
+    : *u p # *u ( nurl_peek ctl 0 )
+    = . p 0 # u 0
+    ? != 0 ( nurl_stash_push kind ctl ) { ( mem_forget str ) } {}
 }
 
 @ string_with_cap i n → String {
@@ -606,8 +646,7 @@ $ `stdlib/core/char.nu`
 }
 
 @ string_push_str String str s raw → v {
-    ( __string_append_raw str raw )
-    ( _string_seal str )
+    ( string_push_bytes str # *u raw ( nurl_str_len raw ) )
 }
 
 // Append exactly `n` raw bytes from `src` onto str's buffer. Unlike
@@ -616,6 +655,18 @@ $ `stdlib/core/char.nu`
 // already knows the line length. `src` is borrowed; the bytes are
 // copied, str keeps no reference.
 @ string_push_bytes String str * u src i n → v {
+    // Fast path — the buffer already holds the bytes and the NUL: a copy
+    // and two stores through the control block, no view binding, no
+    // reserve call and no separate seal.
+    : s ctl . str ctl
+    : i len ( nurl_peek ctl 1 )
+    ? & > n 0 > ( nurl_peek ctl 2 ) + len n {
+        : *u p # *u ( nurl_peek ctl 0 )
+        ( nurl_memcpy # *u + # i p len src n )
+        ( nurl_poke ctl 1 + len n )
+        = . p + len n # u 0
+        ^
+    } {}
     ? > n 0 {
         : ( Vec u ) b ( __sbuf str )
         : i len ( vec_len [u] b )
@@ -667,7 +718,50 @@ $ `stdlib/core/char.nu`
     ( _string_seal str )
 }
 
+// Replace str's bytes with exactly `n` bytes from `src` — string_clear
+// then string_push_bytes, and on the common path (the buffer already
+// holds n + 1 bytes, as a recycled String's does) one copy and two
+// stores. `src` may point into str's own buffer.
+@ string_set_bytes String str * u src i n → v {
+    : s ctl . str ctl
+    ? >= ( nurl_peek ctl 2 ) 0 { ( __string_ctl_set ctl src n ) ^ } {}
+    // A view: the general path detaches it.
+    ( string_clear str )
+    ( string_push_bytes str src n )
+}
+
+// The owned buffer behind `ctl` (cap ≥ 0) set to src[0..n) and sealed,
+// growing it when it cannot hold n + 1. Raw on the control block, so the
+// hot callers bind no handle (a binding is a journal registration inside
+// a `recover` extent). A `src` inside the buffer is only ever shorter
+// than it, so the copy never meets a growth.
+@ __string_ctl_set s ctl * u src i n → v {
+    : i m ? > n 0 n 0
+    ( _vec_ctl_reserve [u] ctl + m 1 )
+    : *u p # *u ( nurl_peek ctl 0 )
+    ( nurl_memmove # s p # s src m )
+    ( nurl_poke ctl 1 m )
+    = . p m # u 0
+}
+
+// string_unstash holding a copy of src[0..n): one copy into a recycled
+// buffer when the stash `kind` has one, string_from_bytes when not.
+@ string_unstash_bytes i kind * u src i n → String {
+    : s ctl ( nurl_stash_pop kind )
+    ? == # i ctl 0 { ^ ( string_from_bytes src n ) } {}
+    ( __string_ctl_set ctl src n )
+    ^ @ String { ctl }
+}
+
 @ string_clear String str → v {
+    // An owned buffer (cap ≥ 1; a view's is -1) empties in place.
+    : s ctl . str ctl
+    ? > ( nurl_peek ctl 2 ) 0 {
+        ( nurl_poke ctl 1 0 )
+        : *u p # *u ( nurl_peek ctl 0 )
+        = . p 0 # u 0
+        ^
+    } {}
     : ( Vec u ) b ( __sbuf str )
     ( vec_clear [u] b )
     ( _string_seal str )

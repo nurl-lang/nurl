@@ -333,7 +333,7 @@ platform-specific shims.
   general categories for tokenizers).
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
-  metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
+  metrics, DoS caps, graceful shutdown (`server_drain`: idle keep-alive closed, in-flight finished with `Connection: close` / HTTP/2+3 GOAWAY, deadline), per-request timeouts, panic recovery),
   HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, client SNI + ALPN; per-hostname server certificates, mTLS and live cert reload are not yet supported on the pure-NURL server, [`docs/NETWORKING.md`](docs/NETWORKING.md)), **HTTP/2**
   (RFC 9113 + HPACK, **server and client** — served by every HttpServer /
   HttpApp listener, ALPN `h2` over TLS and prior knowledge on cleartext,

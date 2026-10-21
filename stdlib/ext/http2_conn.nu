@@ -20,6 +20,7 @@
 //     iteration requires the peer's non-ACK SETTINGS and acknowledges it.
 //
 //   h2_conn_serve inout H2Connection conn ( @ HttpResponse HttpRequest ) handler
+//   h2_conn_serve_drain … handler ( @ b ) draining     the same, GOAWAY once draining
 //                                                   → ! v H2ConnErr
 //     Main loop. Reads frames, dispatches to the stream state
 //     machine, calls `handler` once per fully-received request,
@@ -1903,11 +1904,27 @@ $ `stdlib/core/mem.nu`
 }
 
 @ h2_conn_serve inout H2Connection conn ( @ HttpResponse HttpRequest ) handler → !v H2ConnErr {
+    ^ ( h2_conn_serve_drain conn handler \ → b { ^ F } )
+}
+
+// h2_conn_serve for a server that may drain (ext/http_server.nu,
+// server_drain): once `draining` answers T the connection is sent
+// GOAWAY(NO_ERROR) naming the last stream it accepted — the client opens
+// no new streams here and retries later ones elsewhere (RFC 9113 §6.8) —
+// and the streams already open finish. A drain ends an idle connection by
+// shutting its read side; the loop then sees the connection close and
+// still says GOAWAY on its way out.
+@ h2_conn_serve_drain inout H2Connection conn ( @ HttpResponse HttpRequest ) handler ( @ b ) draining → !v H2ConnErr {
     : ( Vec H2PendingResponse ) pending ( vec_new [H2PendingResponse] )
     : ~ b done F
     : ~ b failed F
     : ~ H2ConnErr error H2ConnOther
     ~ & ! done ! failed {
+        ? & ! . conn goaway_sent ( draining ) {
+            : !v H2FrameErr gw ( __h2_send_goaway conn . conn last_peer_stream_id ( h2_err_no_error ) `` )
+            ?? gw { T _ → {} F _ → {} }
+            = . conn goaway_sent T
+        } {}
         : !v H2ConnErr sent ( __h2_flush_responses conn pending )
         ?? sent { T _ → {} F e → { = failed T = error e } }
         ? ! failed {
@@ -1927,7 +1944,16 @@ $ `stdlib/core/mem.nu`
                 T event → {
                     : i kind . event kind
                     : i sid . event stream_id
-                    ? == kind ( h2_event_closed ) { = done T } {}
+                    ? == kind ( h2_event_closed ) {
+                        // Closed under a drain (its read side shut while
+                        // idle): GOAWAY still goes out.
+                        ? & ! . conn goaway_sent ( draining ) {
+                            : !v H2FrameErr gw2 ( __h2_send_goaway conn . conn last_peer_stream_id ( h2_err_no_error ) `` )
+                            ?? gw2 { T _ → {} F _ → {} }
+                            = . conn goaway_sent T
+                        } {}
+                        = done T
+                    } {}
                     ? | | == kind ( h2_event_headers ) == kind ( h2_event_data ) == kind ( h2_event_trailers ) {
                         : i idx ( __h2_find_stream_index conn sid )
                         : ~ b admitted >= idx 0

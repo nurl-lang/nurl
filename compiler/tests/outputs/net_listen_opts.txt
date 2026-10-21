@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+default backlog: 4096
+reuse_port: both bound
+reuse_port: connect ok
+plain: second refused NetAddrInUse
+3 acceptors answered: 40

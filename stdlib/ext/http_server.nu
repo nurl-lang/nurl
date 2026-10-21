@@ -41,7 +41,13 @@
 //   ( server_run_once HttpServer s )                     → ! v NetErr
 //   ( server_run      HttpServer s )                     → ! v NetErr
 //   ( server_run_pool HttpServer s i n_workers )         → ! v NetErr
-//   ( server_stop     HttpServer s )                     → v
+//   ( server_stop     HttpServer s )                     → v      close the listener
+//   ( server_drain    HttpServer s i deadline_ms )       → b      graceful stop; T = all in time
+//   ( server_drain_begin HttpServer s )                  → v      start one, don't wait
+//   ( server_shutdown HttpServer s )                     → v      stop now (drain, no grace)
+//   ( server_draining HttpServer s )                     → b
+//   ( server_conn_count HttpServer s )                   → i      open connections
+//   ( server_set_acceptors HttpServer s i n )            → v      accept fibers (async); 0 = per worker
 //
 // Memory model:
 //
@@ -113,6 +119,7 @@
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/atomic.nu`
 $ `stdlib/std/dos.nu`
 $ `stdlib/core/rcbox.nu`
 $ `stdlib/std/time.nu`
@@ -161,6 +168,10 @@ $ `stdlib/core/slice.nu`
     // server_run_pool share the same state via the shared HttpServer
     // value; the last copy of the server releases it.
     ? DosState dos_state
+    // Every open connection, for server_drain (see "Graceful drain").
+    ServerDrain drain
+    // Accept fibers under server_run_async; 0 = one per runtime worker.
+    i acceptors
 }
 
 // A server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -282,7 +293,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
@@ -290,21 +301,21 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } } )
+        @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } } )
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } ( __drain_new ) 0 } )
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
@@ -320,7 +331,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { T st } } )
+        @ ?DosState { T st } ( __drain_new ) 0 } )
 }
 
 // Snapshot the current active-connection count — useful for /metrics
@@ -332,6 +343,190 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// ── Graceful drain ───────────────────────────────────────────────────
+//
+// `server_drain s deadline_ms` stops a server the way a deploy wants it
+// stopped: no new connections, nothing in flight lost.
+//
+//   1. The listener closes: accept() fails, so the run loop / accept fiber
+//      ends and the kernel refuses new connections. A connection accepted
+//      in the same instant is closed before it is served.
+//   2. Every keep-alive connection that is IDLE — waiting for its next
+//      request — has its read side shut (tcp_conn_shutdown): the wait
+//      returns EOF and the connection closes at once, as when a peer
+//      closes. An HTTP/2 connection is answered with GOAWAY (NO_ERROR,
+//      the last stream it processed) on its way out.
+//   3. A connection in the middle of a request finishes it: the response
+//      goes out with `Connection: close`, and the connection closes.
+//   4. `server_drain` waits for the last connection, up to `deadline_ms`;
+//      past it, the stragglers are shut both ways (a blocked read or
+//      write fails) and their loops end. T when everything finished in
+//      time.
+//
+// Every connection registers on entry: a slot holding a share of its
+// TcpConn and a state word — 0 idle, 1 busy, 2 shut by the drain — which
+// the serve loop flips per request with one atomic compare-and-swap (no
+// lock on the request path; the registry's mutex is taken only when a
+// connection opens or closes, and by the drain). The handshake is
+// symmetric: the drain sets the phase, then shuts what is idle; the loop
+// marks itself idle, then reads the phase — every operation sequentially
+// consistent, so a connection that turns idle as the drain begins is
+// either shut by it or sees the phase and closes itself.
+//
+// A request whose bytes arrive in the instant its idle connection is
+// shut is not answered: the client sees the connection close before any
+// response — the race every server has when it closes an idle keep-alive
+// connection, which RFC 9112 §9.6 obliges a client to handle (it retries
+// an idempotent request).
+
+: DrainEntry { TcpConn conn Atomic st }
+
+: DrainImpl {
+    Mutex mu
+    ( Vec ? DrainEntry ) slots
+    ( Vec i ) free
+    Atomic phase  // 0 serving, 1 draining, 2 past the deadline
+    Atomic active  // registered connections
+}
+
+// The registry: a handle on its state (stdlib/core/rcbox.nu) that every
+// copy of the server shares.
+: ServerDrain { ( Shared DrainImpl ) ctl }
+
+@ ServerDrain_share ServerDrain h → ServerDrain { ^ @ ServerDrain { ( shared_clone [DrainImpl] . h ctl ) } }
+
+@ ServerDrain_drop sink ServerDrain h → v {}
+
+@ __drain_p ServerDrain d → *DrainImpl { ^ ( shared_ptr [DrainImpl] . d ctl ) }
+
+@ __drain_new → ServerDrain {
+    ^ @ ServerDrain { ( shared_new [DrainImpl] @ DrainImpl {
+            ( mutex_new ) ( vec_new [? DrainEntry] ) ( vec_new [i] ) ( atomic_new 0 ) ( atomic_new 0 ) } ) }
+}
+
+// Register `c` with state word `st`; its slot, or -1 when the server is
+// draining (the caller closes the connection unserved).
+@ __drain_enter ServerDrain d TcpConn c Atomic st → i {
+    : *DrainImpl p ( __drain_p d )
+    ( mutex_lock . p mu )
+    ? != ( atomic_load . p phase ) 0 {
+        ( mutex_unlock . p mu )
+        ^ -1
+    } {}
+    : ~ i slot -1
+    ?? ( vec_pop [i] . p free ) {
+        T k → {
+            = slot k
+            : b _ok ( vec_set [? DrainEntry] . p slots k @ ?DrainEntry { T @ DrainEntry { ( TcpConn_share c ) ( Atomic_share st ) } } )
+        }
+        F → {
+            = slot ( vec_len [? DrainEntry] . p slots )
+            ( vec_push [? DrainEntry] . p slots @ ?DrainEntry { T @ DrainEntry { ( TcpConn_share c ) ( Atomic_share st ) } } )
+        }
+    }
+    : i _n ( atomic_add . p active 1 )
+    ( mutex_unlock . p mu )
+    ^ slot
+}
+
+@ __drain_leave ServerDrain d i slot → v {
+    ? < slot 0 { ^ v } {}
+    : *DrainImpl p ( __drain_p d )
+    ( mutex_lock . p mu )
+    : b _ok ( vec_set [? DrainEntry] . p slots slot @ ?DrainEntry { F } )
+    ( vec_push [i] . p free slot )
+    : i _n ( atomic_sub . p active 1 )
+    ( mutex_unlock . p mu )
+}
+
+// Shut every registered connection whose state moves `from` → 2 (any
+// state when `from` < 0): its read side, or both (`both`).
+@ __drain_shut ServerDrain d i from b both → v {
+    : *DrainImpl p ( __drain_p d )
+    ( mutex_lock . p mu )
+    : i n ( vec_len [? DrainEntry] . p slots )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [? DrainEntry] . p slots k ) {
+            T oe → {
+                ?? oe {
+                    T e → {
+                        : ~ b go F
+                        ? < from 0 { : i _o ( atomic_swap . e st 2 ) = go T } {
+                            = go ( atomic_cas . e st from 2 )
+                        }
+                        ? go { ( tcp_conn_shutdown . e conn both ) } {}
+                    }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( mutex_unlock . p mu )
+}
+
+// Is the server draining (or past its drain deadline)?
+@ server_draining HttpServer s → b {
+    ^ != 0 ( atomic_load . ( __drain_p . ( __srv s ) drain ) phase )
+}
+
+// Connections the server holds open right now (all serving modes).
+@ server_conn_count HttpServer s → i {
+    ^ ( atomic_load . ( __drain_p . ( __srv s ) drain ) active )
+}
+
+// Begin a drain without waiting for it: stop accepting and close the
+// idle connections (steps 1–2 above). The serve loops finish the rest.
+// Safe from any thread, any number of times.
+@ server_drain_begin HttpServer s → v {
+    : *DrainImpl p ( __drain_p . ( __srv s ) drain )
+    : b _first ( atomic_cas . p phase 0 1 )
+    ( tcp_close_listener . ( __srv s ) listener )
+    ( __drain_shut . ( __srv s ) drain 0 F )
+}
+
+// Drain the server (see "Graceful drain"): stop accepting, close idle
+// connections, let the ones mid-request finish with `Connection: close`,
+// and wait up to `deadline_ms` for the last of them; then shut the rest
+// and return. T when every connection finished before the deadline. Call
+// it from outside the server's own connections — a SIGTERM watcher, an
+// admin thread or fiber — since it waits for every connection to end,
+// its caller's included. The run call (server_run / server_run_pool /
+// server_run_async) returns once the last connection has closed.
+@ server_drain HttpServer s i deadline_ms → b {
+    ( server_drain_begin s )
+    : *DrainImpl p ( __drain_p . ( __srv s ) drain )
+    : i until + ( now_ms ) ? > deadline_ms 0 deadline_ms 0
+    ~ & > ( atomic_load . p active ) 0 < ( now_ms ) until { ( sleep_ms 5 ) }
+    ? == 0 ( atomic_load . p active ) { ^ T } {}
+    ( atomic_store . p phase 2 )
+    ( __drain_shut . ( __srv s ) drain -1 T )
+    // The shut loops end promptly; wait for them, briefly, so a caller
+    // that tears the process down next does not cut their last writes.
+    : i grace + ( now_ms ) 1000
+    ~ & > ( atomic_load . p active ) 0 < ( now_ms ) grace { ( sleep_ms 5 ) }
+    ^ F
+}
+
+// Stop now: a drain with no grace period — every connection, busy or
+// not, is shut at once.
+@ server_shutdown HttpServer s → v {
+    : b _done ( server_drain s 0 )
+}
+
+// How many accept fibers server_run_async runs on the listener: 0 (the
+// default) = one per runtime worker; 1 = the single accept loop of old.
+// Set before the server runs.
+@ server_set_acceptors HttpServer s i n → v {
+    = . ( __srv s ) acceptors n
+}
+
+// Close the listener: the run loop ends once its current connections do.
+// Connections keep being served until they close on their own — see
+// server_drain for a stop that ends idle keep-alive connections and
+// bounds the wait.
 @ server_stop HttpServer s → v {
     ( tcp_close_listener . ( __srv s ) listener )
 }
@@ -681,6 +876,13 @@ $ `stdlib/core/slice.nu`
     ^ wr
 }
 
+// The 504 that replaces a handler's response past the per-request total
+// timeout; the late response is recycled unsent.
+@ __timeout_response sink HttpResponse late → HttpResponse {
+    ( response_recycle late )
+    ^ ( response_text 504 `request total-timeout exceeded\n` )
+}
+
 // Build a stock 4xx error response for parse failures.
 @ _parse_err_response HttpReqErr e → HttpResponse {
     : s nm ( http_req_err_name e )
@@ -790,9 +992,14 @@ $ `stdlib/core/slice.nu`
 // The idle timeout and the keep-alive serve loop, which takes the
 // connection over and closes it with its last owner.
 @ __serve_conn HttpServer s TcpConn conn → v {
+    // Registered for server_drain; refused unserved while it drains.
+    : Atomic st ( atomic_new 0 )
+    : i slot ( __drain_enter . ( __srv s ) drain conn st )
+    ? < slot 0 { ^ v } {}
     : i ito . ( __srv s ) idle_timeout_ms
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
-    ( _serve_keepalive_loop s conn )
+    ( _serve_keepalive_loop s conn st )
+    ( __drain_leave . ( __srv s ) drain slot )
 }
 
 @ __serve_gated HttpServer s DosState g TcpConn conn → v {
@@ -826,9 +1033,14 @@ $ `stdlib/core/slice.nu`
         ( tcp_close_conn conn )
         ^ v
     } {}
-    : i ito . ( __srv s ) idle_timeout_ms
-    ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
-    ( _serve_keepalive_loop s conn )
+    : Atomic st ( atomic_new 0 )
+    : i slot ( __drain_enter . ( __srv s ) drain conn st )
+    ? >= slot 0 {
+        : i ito . ( __srv s ) idle_timeout_ms
+        ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
+        ( _serve_keepalive_loop s conn st )
+        ( __drain_leave . ( __srv s ) drain slot )
+    } {}
     ( dos_state_release g peer_ip )
 }
 
@@ -864,7 +1076,7 @@ $ `stdlib/core/slice.nu`
 // these per-request errors are interesting at the listener level —
 // they all just mean "this connection is done, accept the next one".
 
-@ _serve_keepalive_loop HttpServer s TcpConn conn → v {
+@ _serve_keepalive_loop HttpServer s TcpConn conn Atomic st → v {
     : i max_req ( __keepalive_cap . ( __srv s ) max_keepalive_requests )
     : HttpLimits lim . ( __srv s ) limits
     : i body_max . lim body_default_max
@@ -912,13 +1124,6 @@ $ `stdlib/core/slice.nu`
     // __write_response per response — one allocation per CONNECTION
     // instead of one per response.
     : ( Vec u ) wire ( vec_with_cap [u] 256 )
-    // Pre-allocated panic fallback response, hoisted OUT of the request
-    // loop: on the success path the handler's response replaces it and
-    // it survives untouched into the next iteration, so a keep-alive
-    // connection builds it once instead of once per request. It is
-    // rebuilt below only after a panic (or panic+timeout) actually
-    // consumed it — a cold path — and freed at connection end.
-    : ~ HttpResponse panic_resp ( response_text 500 `internal server error\n` )
     // One HttpRequest per CONNECTION, refilled in place by every parse:
     // its four line Strings keep their capacity across requests, and
     // its Header objects — Strings and all — cycle through `spare`
@@ -928,116 +1133,119 @@ $ `stdlib/core/slice.nu`
     // ~a dozen allocations per request and 10 % of the server's CPU.
     : HttpRequest req ( request_new )
     : ( Vec Header ) spare ( vec_new [Header] )
+    // The handler and its `recover` closure, built once per CONNECTION:
+    // reading the handler out of the server copies its closure, and a
+    // capturing closure literal allocates its environment, so building
+    // either per request was two allocations of every response. The
+    // closure writes the handler's response into `handed` (captured by
+    // pointer — a `: ~` binding the body assigns) and the loop takes it
+    // out with mem_replace, leaving the slot empty for the next request.
+    // On a panic the slot stays empty: that, not a flag, is how the loop
+    // tells the two apart.
+    : ( @ HttpResponse HttpRequest ) f . ( __srv s ) handler
+    : ~ ? HttpResponse handed @ ?HttpResponse { F }
+    : ( @ v ) call_handler \ → v { = handed @ ?HttpResponse { T ( f req ) } }
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
         : !i HttpReqErr ph ( _read_request_head_into conn carry lim req spare )
         ?? ph {
             T _used → {
-                // Snapshot the request-start wall-clock right after the
-                // head is parsed. If the handler + body-completion
-                // exceed `request_total_timeout_ms`, we drop the
-                // handler's response and emit a stock 504 instead. The
-                // check is post-handler only — NURL has no thread-
-                // cancellation primitives, so a genuinely runaway
-                // handler runs to completion regardless.
-                : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
-                : b body_ok ( _finish_body conn req carry body_max )
-                ? body_ok {
-                    // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
-                    // over the connection, run nothing else and let the loop end
-                    // so the server closes the finished conn.
-                    : ~ b __ws_handled F
-                    ? g_ws_upgrade_set {
-                        : ( @ b TcpConn HttpRequest ) __upf . g_ws_upgrade fn
-                        ? ( __upf conn req ) { = __ws_handled T } {}
-                    } {}
-                    // Streaming hook: same takeover contract as the
-                    // upgrade hook, for chunked/SSE/NDJSON responses.
-                    ? & ! __ws_handled g_stream_hook_set {
-                        : ( @ b TcpConn HttpRequest ) __shf . g_stream_hook fn
-                        ? ( __shf conn req ) { = __ws_handled T } {}
-                    } {}
-                    ? __ws_handled { = done T } {
-                        : b req_close ( __request_says_close req )
-                        : ( @ HttpResponse HttpRequest ) f . ( __srv s ) handler
-                        // Wrap the handler in `recover` so a panic inside
-                        // the handler doesn't kill the worker thread. On
-                        // panic the connection-level `panic_resp` (500)
-                        // flows out to the client; the captured message is
-                        // logged to stderr. Owned allocations inside the
-                        // handler that didn't run their auto-drop leak —
-                        // see stdlib/std/panic.nu's header for the cost
-                        // model.
-                        //
-                        // Replacement is detected by comparing the body-Vec
-                        // DATA pointers, not via a captured flag: closures
-                        // capture struct bindings by reference but scalar
-                        // bindings by value, so a `= done T` inside the
-                        // recover closure never reaches this scope while
-                        // `= resp …` does. Two live responses can never
-                        // share a body allocation, so pointer inequality
-                        // is exact; and if `= resp` ever failed to
-                        // propagate, the compare degrades to "not
-                        // replaced" — treated as a panic, so `panic_resp`
-                        // is written out and rebuilt: never a double free
-                        // or use-after-free.
-                        : ~ HttpResponse resp panic_resp
-                        : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
-                        ?? pr {
-                            T _ → {}
-                            F p → {
-                                ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
-                            }
-                        }
-                        : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
-                        // Per-request total timeout enforcement: free the
-                        // handler's response and substitute 504 if we blew
-                        // the budget. `should_close` forces `Connection:
-                        // close` so the client doesn't reuse possibly-
-                        // corrupted state.
-                        : ~ HttpResponse final_resp resp
-                        : ~ b timed_out F
-                        ? > req_timeout_ms 0 {
-                            : i elapsed - ( now_ms ) req_start_ms
-                            ? > elapsed req_timeout_ms {
-                                = final_resp ( response_text 504 `request total-timeout exceeded\n` )
-                                = timed_out T
-                            } {}
+                // Busy from here; a connection the drain shut while it
+                // idled is closed unanswered (see "Graceful drain").
+                ? ( atomic_cas st 0 1 ) {} { = done T }
+                ? ! done {
+                    // Snapshot the request-start wall-clock right after the
+                    // head is parsed. If the handler + body-completion
+                    // exceed `request_total_timeout_ms`, we drop the
+                    // handler's response and emit a stock 504 instead. The
+                    // check is post-handler only — NURL has no thread-
+                    // cancellation primitives, so a genuinely runaway
+                    // handler runs to completion regardless.
+                    : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
+                    : b body_ok ( _finish_body conn req carry body_max )
+                    ? body_ok {
+                        // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
+                        // over the connection, run nothing else and let the loop end
+                        // so the server closes the finished conn.
+                        : ~ b __ws_handled F
+                        ? g_ws_upgrade_set {
+                            : ( @ b TcpConn HttpRequest ) __upf . g_ws_upgrade fn
+                            ? ( __upf conn req ) { = __ws_handled T } {}
                         } {}
-                        : b resp_close ( __response_says_close final_resp )
-                        = n_served + n_served 1
-                        // max_req > 0: a cap; 0: no keep-alive (close
-                        // after this one); < 0: uncapped.
-                        : b at_cap ? > max_req 0 >= n_served max_req == max_req 0
-                        : b should_close | | | req_close resp_close at_cap timed_out
-                        : !v NetErr wr ( __write_response conn final_resp should_close wire )
-                        ( request_recycle req spare )
-                        // A panic (or panic+timeout) consumed the
-                        // connection-level fallback — rebuild it. Cold
-                        // path: never taken on a successful request.
-                        ? ! replaced { = panic_resp ( response_text 500 `internal server error\n` ) } {}
-                        ?? wr {
-                            T _ → {
-                                ? should_close { = done T } {}
+                        // Streaming hook: same takeover contract as the
+                        // upgrade hook, for chunked/SSE/NDJSON responses.
+                        ? & ! __ws_handled g_stream_hook_set {
+                            : ( @ b TcpConn HttpRequest ) __shf . g_stream_hook fn
+                            ? ( __shf conn req ) { = __ws_handled T } {}
+                        } {}
+                        ? __ws_handled { = done T } {
+                            : b req_close ( __request_says_close req )
+                            // The handler runs under `recover`, so a panic in it
+                            // answers 500 and keeps the worker; the message is
+                            // logged to stderr. The journal reclaims the owned
+                            // values the panic skipped (stdlib/std/panic.nu).
+                            : !v PanicInfo pr ( recover call_handler )
+                            ?? pr {
+                                T _ → {}
+                                F p → {
+                                    ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
+                                }
                             }
-                            F we → {
-                                // A failed response write is invisible to the
-                                // handler (it already returned its status) —
-                                // surface it, or a client-side "failed to
-                                // fetch" has nothing to correlate against.
-                                ( nurl_eprint `http: response write failed (` )
-                                ( nurl_eprint ( net_err_name we ) )
-                                ( nurl_eprintln `) — closing connection` )
-                                = done T
+                            : ?HttpResponse got ( mem_replace [? HttpResponse] handed @ ?HttpResponse { F } )
+                            // Per-request total timeout enforcement: past the
+                            // budget the handler's response is dropped and a 504
+                            // goes out instead, with `Connection: close` so the
+                            // client does not reuse possibly-corrupted state.
+                            : ~ b timed_out F
+                            ? > req_timeout_ms 0 {
+                                ? > - ( now_ms ) req_start_ms req_timeout_ms { = timed_out T } {}
+                            } {}
+                            : HttpResponse final_resp ?? got {
+                                T r → ? timed_out ( __timeout_response r ) r
+                                F → ( response_text 500 `internal server error\n` )
+                            }
+                            : b resp_close ( __response_says_close final_resp )
+                            = n_served + n_served 1
+                            // max_req > 0: a cap; 0: no keep-alive (close
+                            // after this one); < 0: uncapped.
+                            : b at_cap ? > max_req 0 >= n_served max_req == max_req 0
+                            // A draining server closes the connection after this response.
+                            : b should_close | | | | req_close resp_close at_cap timed_out ( server_draining s )
+                            : !v NetErr wr ( __write_response conn final_resp should_close wire )
+                            // The written response goes back to this thread's
+                            // stash: the next response_new reuses its header Vec,
+                            // header Strings and body buffer (response_recycle).
+                            ( response_recycle final_resp )
+                            ( request_recycle req spare )
+                            ?? wr {
+                                T _ → {
+                                    ? should_close { = done T } {
+                                        // Idle again — then look at the
+                                        // phase: a drain that began while
+                                        // this was busy passed it over.
+                                        ( atomic_store st 0 )
+                                        ? ( server_draining s ) { = done T } {}
+                                    }
+                                }
+                                F we → {
+                                    // A failed response write is invisible to the
+                                    // handler (it already returned its status) —
+                                    // surface it, or a client-side "failed to
+                                    // fetch" has nothing to correlate against.
+                                    ( nurl_eprint `http: response write failed (` )
+                                    ( nurl_eprint ( net_err_name we ) )
+                                    ( nurl_eprintln `) — closing connection` )
+                                    = done T
+                                }
                             }
                         }
+                    } {
+                        : HttpResponse er ( response_text 400 `malformed body\n` )
+                        : !v NetErr _wr ( __write_response conn er T wire )
+                        = done T
                     }
-                } {
-                    : HttpResponse er ( response_text 400 `malformed body\n` )
-                    : !v NetErr _wr ( __write_response conn er T wire )
-                    = done T
-                }
+                } {}
             }
             F e → {
                 // Distinguish "peer closed cleanly with no request
@@ -1102,7 +1310,8 @@ $ `stdlib/core/slice.nu`
     ?? cr {
         T h2c → {
             : ~ H2Connection active h2c
-            : !v H2ConnErr sr ( h2_conn_serve active . ( __srv s ) handler )
+            : ( @ b ) draining \ → b { ^ ( server_draining s ) }
+            : !v H2ConnErr sr ( h2_conn_serve_drain active . ( __srv s ) handler draining )
             ?? sr { T _ → {} F _ → {} }
             ( h2_conn_finish active )
         }
@@ -1195,9 +1404,10 @@ $ `stdlib/core/slice.nu`
 //   * Worker pool size is fixed; no backpressure if all workers are
 //     stuck on slow handlers (new connections sit in the kernel's
 //     accept queue until backlog fills).
-//   * No graceful drain — `server_stop` makes accept() fail
-//     immediately; a worker mid-request finishes that request, then
-//     exits. That's fine but observable as a small lag.
+//   * `server_stop` makes accept() fail immediately and lets open
+//     connections run until they close; `server_drain` is the graceful
+//     stop (idle connections closed, in-flight requests finished with
+//     `Connection: close`, a deadline for the rest).
 @ server_run_pool HttpServer s i n_workers → !v NetErr {
     ? <= n_workers 1 { ^ ( server_run s ) } {}
 
@@ -1264,7 +1474,8 @@ $ `stdlib/core/slice.nu`
 
 // ── server_run_async — fiber-driven (Phase 7) ─────────────────────────
 //
-// Per-conn fiber instead of per-conn thread. One accept fiber loops on
+// Per-conn fiber instead of per-conn thread. Accept fibers (one per runtime
+// worker, server_set_acceptors) loop on
 // the listener; each successful accept spawns a *handler fiber* that
 // runs the existing `_serve_keepalive_loop` — which transparently
 // goes through `tcp_read_chunk` / `tcp_write_all`, both of which are
@@ -1293,8 +1504,8 @@ $ `stdlib/core/slice.nu`
 //   * No paired idle-timer fiber yet — slowloris defence relies on
 //     `tcp_set_timeout`'s per-recv deadline, which under async mode
 //     surfaces as NetTimeout on read and ends the conn fiber.
-//   * No graceful drain on shutdown — workers exit their loops as
-//     soon as their currently-running fiber yields/completes.
+//   * Graceful stop: `server_drain` (see "Graceful drain") — the accept
+//     fiber ends, idle connections close, in-flight ones finish.
 
 $ `stdlib/std/async.nu`
 
@@ -1360,9 +1571,27 @@ $ `stdlib/std/async.nu`
     // touch of it. The extra ref defers the free until we release it below,
     // after runtime_run has drained every fiber.
     ( tcp_listener_retain . ( __srv s ) listener )
-    // Spawn one accept fiber; runtime_run blocks until the accept
-    // fiber exits AND every in-flight conn fiber drains (pending=0).
-    ( spawn \ → v { ( __async_accept_loop s ) } )
+    // One accept fiber per runtime worker (server_set_acceptors), all on
+    // the one listener: whichever is woken first takes the connection,
+    // the rest find EAGAIN and park again. A single accept fiber made
+    // every connection's accept — and the spawn of its fiber — one
+    // worker's job at a time; connection churn (oha --disable-keepalive,
+    // 20 clients) measured 15–18k → 19–22k conn/s with four, and ~15 %
+    // less server CPU per connection. One listener and SO_REUSEPORT
+    // listeners per worker measured the same within the noise (shared
+    // 4-core host), and the shared listener needs no second socket, works
+    // for TLS listeners and stops with the one close: fibers migrate
+    // between workers, so a listener per worker buys no affinity here.
+    // runtime_run blocks until the accept fibers exit AND every in-flight
+    // conn fiber drains (pending=0).
+    : ~ i nacc . ( __srv s ) acceptors
+    ? <= nacc 0 { = nacc ( runtime_worker_count ) } {}
+    ? < nacc 1 { = nacc 1 } {}
+    : ~ i k 0
+    ~ < k nacc {
+        ( spawn \ → v { ( __async_accept_loop s ) } )
+        = k + k 1
+    }
     ( runtime_run )
     ( tcp_listener_release . ( __srv s ) listener )
     ^ @ !v NetErr { T 0 }
