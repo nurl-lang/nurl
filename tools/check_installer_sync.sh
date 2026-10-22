@@ -16,6 +16,12 @@
 #
 #  A byte-compare in CI is the whole fix: drift cannot outlive a PR.
 #  On failure, run:  cd webdocs && pnpm run prebuild
+#
+#  The .ps1 must also be pure ASCII. `nurl upgrade` runs it with Windows
+#  PowerShell 5.1, which reads a BOM-less script in the ANSI code page:
+#  an em-dash (E2 80 94) decodes to a cp1252 right-quote that PowerShell
+#  treats as a string delimiter, so the installer fails to parse and
+#  every Windows upgrade aborts.
 # ============================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,5 +47,13 @@ check_pair() {
 
 check_pair tools/get-nurl.sh  webdocs/public/install.sh
 check_pair tools/get-nurl.ps1 webdocs/public/install.ps1
+
+if LC_ALL=C grep -n '[^[:print:][:space:]]' "$ROOT/tools/get-nurl.ps1" >&2; then
+    echo "ERROR: tools/get-nurl.ps1 has non-ASCII bytes (lines above);" \
+         "Windows PowerShell 5.1 mis-parses them" >&2
+    rc=1
+else
+    echo "ok: tools/get-nurl.ps1 is ASCII"
+fi
 
 exit $rc

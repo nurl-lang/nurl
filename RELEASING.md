@@ -112,6 +112,23 @@ and that gate); the gate is what notices when one of them moves.
 the ordinary CI job. Use the `workflow_dispatch` input
 for a dry run that builds the artifacts without publishing.
 
+### A release made in the GitHub UI, or one with no archives
+
+Publishing a release from the GitHub web UI creates its tag on the
+server, and that does not reliably raise the tag `push` event this
+workflow listens for: v0.77.0 was published that way and got no
+archives. The workflow therefore also runs on `release: published` and
+attaches the archives to the release that was just made.
+
+To repair a release that is already out without its archives, run the
+`release` workflow by hand (Actions → release → Run workflow, from
+`main`) with **tag** = the existing tag and **publish** ticked. It builds
+the *tag's* commit, not `main`, gates on that commit's `ci.yml` exactly
+like a tag push, and attaches the archives to the existing release. A
+dispatch without **publish** is still only a dry run: it builds the
+dispatching branch and uploads nothing, which is what a manual run did
+before this option existed.
+
 An archive is just the `~/.nurl` layout (`bin/`, `build/`, `stdlib/`,
 `docs/`, `nurl.{sh,bat}`, `env`) with shims that resolve their own
 location, so it works wherever it is unpacked. `docs/` (with the proof's

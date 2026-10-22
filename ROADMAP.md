@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-22 · Current release: **0.77.0** · Language: **Grammar
+_Last reviewed: 2026-10-22 · Current release: **0.77.1** · Language: **Grammar
 v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---

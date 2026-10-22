@@ -32,7 +32,7 @@ $ErrorActionPreference = "Stop"
 
 # Delete a toolchain-owned path. Anything Windows refuses to delete because
 # it is IN USE (the running nurlpkg.exe during `nurl upgrade`) is renamed
-# out of the way instead — a rename is permitted where a delete is not —
+# out of the way instead - a rename is permitted where a delete is not -
 # and swept the next time the installer runs.
 function New-StalePath($p) {
     return ($p + ".old-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -52,7 +52,7 @@ function Remove-ToolchainPath($p) {
 $repo = "nurl-lang/nurl"
 $target = "windows-x86_64"
 
-# ── Resolve version (latest release tag if unset) ──────────────────────
+# -- Resolve version (latest release tag if unset) ----------------------
 if (-not $Version) {
     Write-Host "resolving latest release..."
     $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
@@ -79,7 +79,7 @@ try {
     $zip = Join-Path $tmp $archive
     Get-WithRetry "$base/$archive" $zip
 
-    # ── Verify checksum (fail-CLOSED unless -Insecure) ─────────────────
+    # -- Verify checksum (fail-CLOSED unless -Insecure) -----------------
     # A checksum MISMATCH always aborts. Only the *inability* to fetch the
     # checksum file is what -Insecure downgrades to a warning. (Same-release
     # checksum defends against corruption, not a compromised release.)
@@ -90,22 +90,22 @@ try {
         $want = ((Get-Content $sumFile) -split '\s+')[0].ToLower()
         $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
         if (-not $want) {
-            if ($Insecure) { Write-Host "warning: empty checksum file — continuing (-Insecure)." }
+            if ($Insecure) { Write-Host "warning: empty checksum file - continuing (-Insecure)." }
             else { throw "the published checksum file is empty/malformed. Refusing; use -Insecure to override." }
         } elseif ($want -ne $got) {
-            throw "checksum mismatch (expected $want, got $got) — refusing to install."
+            throw "checksum mismatch (expected $want, got $got) - refusing to install."
         } else {
             Write-Host "checksum OK"
         }
     } elseif ($Insecure) {
-        Write-Host "warning: no checksum file for $Version — continuing (-Insecure)."
+        Write-Host "warning: no checksum file for $Version - continuing (-Insecure)."
     } else {
         throw "no checksum file published for $Version ($archive.sha256). Refusing to install unverified bytes; use -Insecure to override."
     }
 
-    # ── Signature (defense-in-depth beyond the same-release checksum) ──
+    # -- Signature (defense-in-depth beyond the same-release checksum) --
     # If minisign is on PATH, verify the detached signature against the pinned
-    # release key, fail-closed. If it isn't, we don't force an install of it —
+    # release key, fail-closed. If it isn't, we don't force an install of it -
     # checksum + HTTPS stay the root of trust (nurl's pure-NURL verifier covers
     # the package layer, where nurl is present).
     $minisignPub = "RWQT5WWtjTnEyaYAG5X4HKCRtb7rFT5psjJVGB5Q9kVQBI71F5jfPWUf"
@@ -115,24 +115,24 @@ try {
         try { Invoke-WebRequest "$base/$archive.minisig" -OutFile $sig; $haveSig = $true } catch { }
         if ($haveSig) {
             & minisign -Vm $zip -P $minisignPub | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "signature verification FAILED — refusing to install." }
+            if ($LASTEXITCODE -ne 0) { throw "signature verification FAILED - refusing to install." }
             Write-Host "signature OK"
         } elseif ($Insecure) {
-            Write-Host "warning: no signature for $Version — continuing (-Insecure)."
+            Write-Host "warning: no signature for $Version - continuing (-Insecure)."
         } else {
             throw "no signature (.minisig) published for $Version, and minisign is available to check it. Use -Insecure to override."
         }
     } else {
-        Write-Host "note: minisign not installed — skipping signature check (checksum + HTTPS enforced)."
+        Write-Host "note: minisign not installed - skipping signature check (checksum + HTTPS enforced)."
     }
 
-    # ── Unpack (archive has a top-level nurl\ dir) ─────────────────────
+    # -- Unpack (archive has a top-level nurl\ dir) ---------------------
     # Guard the wipe: never delete the user profile root or a directory that
     # isn't ours. Only clear an empty dir or a prior NURL install.
     $userRoot = $env:USERPROFILE.TrimEnd('\', '/')
     $pfxNorm  = "$Prefix".TrimEnd('\', '/')
     if ([string]::IsNullOrWhiteSpace($pfxNorm) -or $pfxNorm -eq $userRoot) {
-        throw "refusing to install into '$Prefix' — pick a dedicated directory (e.g. `$env:USERPROFILE\.nurl)."
+        throw "refusing to install into '$Prefix' - pick a dedicated directory (e.g. `$env:USERPROFILE\.nurl)."
     }
     Write-Host "installing to $Prefix..."
     if (Test-Path $Prefix) {
@@ -145,7 +145,7 @@ try {
         # archive overwrites the rest. build\, stdlib\, docs\, zig\ and libexec\
         # go wholesale so a file deleted upstream cannot linger.
         #
-        # Windows cannot DELETE a running executable — and `nurl upgrade`
+        # Windows cannot DELETE a running executable - and `nurl upgrade`
         # is exactly that case: nurlpkg.exe upgrading the tree it runs
         # from. It CAN be renamed, so anything undeletable is moved aside
         # as <name>.old-<id> and swept on the next run. (POSIX needs none
@@ -168,7 +168,7 @@ try {
                 Remove-ToolchainPath (Join-Path $Prefix $f)
             }
         }
-        else { throw "'$Prefix' exists, is not empty, and is not a NURL install — refusing to overwrite it. Remove it yourself or set -Prefix to a fresh path." }
+        else { throw "'$Prefix' exists, is not empty, and is not a NURL install - refusing to overwrite it. Remove it yourself or set -Prefix to a fresh path." }
     }
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
     $unzipTmp = Join-Path $tmp "x"
@@ -182,7 +182,7 @@ try {
     $binDir = Join-Path $Prefix "bin"
 
     # This session: `iex` evaluates in the caller's session, so we can put
-    # NURL on PATH right now — no separate command to copy-paste.
+    # NURL on PATH right now - no separate command to copy-paste.
     if (($env:Path -split ';') -notcontains $binDir) {
         $env:Path = "$binDir;$env:Path"
     }
@@ -190,7 +190,7 @@ try {
 
     Write-Host ""
     Write-Host "NURL $Version installed -> $Prefix"
-    Write-Host "This session is ready — 'nurlc' and 'nurlpkg' are on PATH now."
+    Write-Host "This session is ready - 'nurlc' and 'nurlpkg' are on PATH now."
     Write-Host ""
 
     # Offer to persist to the User environment so new terminals inherit it.
@@ -210,7 +210,7 @@ try {
         } else {
             $newPath = if ($userPath) { "$binDir;$userPath" } else { $binDir }
             [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-            Write-Host "Added $binDir to your User PATH — new terminals will have it."
+            Write-Host "Added $binDir to your User PATH - new terminals will have it."
         }
         [Environment]::SetEnvironmentVariable("NURL_STDLIB", $Prefix, "User")
     } else {
@@ -219,7 +219,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Then:  nurl --version   ·   nurlpkg install nq   ·   nurl upgrade  (later)"
+    Write-Host "Then:  nurl --version   |   nurlpkg install nq   |   nurl upgrade  (later)"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

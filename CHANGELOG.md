@@ -6,6 +6,36 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.77.1] — 2026-10-22
+
+A distribution fix. v0.77.0 was published from the GitHub web UI and
+came out with no archives, and the Windows installer could not be parsed
+by the PowerShell that runs it. Nothing in the compiler or the stdlib
+changed.
+
+### Fixed
+
+- **Windows: `get-nurl.ps1` is pure ASCII again.** `nurl upgrade` runs
+  the installer shipped in `libexec\get-nurl.ps1` with Windows PowerShell
+  5.1, which reads a script without a BOM in the ANSI code page: the
+  em-dashes and box-drawing rules in it decoded to cp1252 quote
+  characters that PowerShell takes as string delimiters, so the script
+  failed to parse and every Windows upgrade aborted. The same bytes made
+  `irm https://nurl-lang.org/install.ps1 | iex` fragile.
+  `tools/check_installer_sync.sh` now fails CI when `tools/get-nurl.ps1`
+  holds a non-ASCII byte. A Windows install from 0.77.0 or earlier still
+  carries the old installer, so upgrade it once with the one-liner
+  (`irm https://nurl-lang.org/install.ps1 | iex`); `nurl upgrade` works
+  from then on.
+- **release.yml: a release made by hand gets its archives.** A release
+  published in the GitHub UI creates its tag on the server without
+  reliably raising the tag `push` event, and the manual
+  `workflow_dispatch` run only ever built the dispatching branch and
+  never published. The workflow now also runs on `release: published`,
+  and a dispatch with **publish** ticked builds the named existing tag,
+  gates on that commit's CI, and attaches the archives to its release.
+  One run per tag at a time. `RELEASING.md` describes the repair.
+
 ## [0.77.0] — 2026-10-22
 
 The backend toward v1.0, and a security release. Outbound connects and
