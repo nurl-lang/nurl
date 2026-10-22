@@ -1950,6 +1950,12 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_coverage_prefix ``  // --coverage=PREFIX: GCOV notes/data output stem
 : ~ s g_coverage_notes ``  // optional staged .gcno path; data keeps final stem
 : ~ s g_coverage_link_ir ``  // optional staged module; stdout stays reusable
+// The directories an import may resolve into (--import-root=DIR,
+// repeatable, else NURL_IMPORT_ROOTS=DIR:DIR…), canonical, each ended by
+// a newline. Empty: no confinement. A server compiling untrusted source
+// sets them — without, `$ `/proc/self/environ`` reads any file the
+// compiler can, and the parse error echoes its lines.
+: ~ s g_import_roots ``
 : ~ i g_coverage_meta_id 0
 : ~ i g_dbg_next_id 100  // metadata-id allocator; starts above any
 //  module-flag id we might add later
@@ -52134,6 +52140,48 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
     result
 }
 
+// Add `dir` to the import roots, canonical. F when it does not resolve:
+// a confinement that silently dropped a root would fail open or closed
+// by accident, so the caller refuses to start instead.
+unsafe @ __import_root_add s dir → b {
+    : s c ( realpath dir # *u 0 )
+    ? == # i c 0 { ^ F } {}
+    = g_import_roots ( nurl_str_cat3 g_import_roots c `\n` )
+    ( nurl_free # s c )
+    ^ T
+}
+
+// Does `path` (an existing file, by any spelling or symlink chain)
+// resolve inside one of the import roots?
+unsafe @ __import_allowed s path → b {
+    : s c ( realpath path # *u 0 )
+    ? == # i c 0 { ^ F } {}
+    : i cn ( nurl_str_len c )
+    : *u cp # *u c
+    : s roots g_import_roots
+    : i rn ( nurl_str_len roots )
+    : *u rp # *u roots
+    : ~ b ok F
+    : ~ i st 0
+    : ~ i k 0
+    ~ & ! ok < k rn {
+        ? == ( nurl_str_at rp rn k ) 10 {
+            : i len - k st
+            // `/` contains everything; any other root R contains R
+            // itself and what lies under R + `/`.
+            ? & == len 1 == ( nurl_str_at rp rn st ) 47 { = ok T } {
+                ? & >= cn len == 0 ( strncmp c # s + # i roots st len ) {
+                    ? | == cn len == ( nurl_str_at cp cn len ) 47 { = ok T } {}
+                } {}
+            }
+            = st + k 1
+        } {}
+        = k + k 1
+    }
+    ( nurl_free # s c )
+    ^ ok
+}
+
 // A missing import file used to die inside the runtime's
 // nurl_read_file as a bare `nurlc: cannot open '<path>'` — no file,
 // line, or `error:` tag, so nothing (editor, agent, the multi-error
@@ -52141,6 +52189,15 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
 // pre-scans and gen_import_decl — calls this first: the diagnostic
 // lands on the `$` directive with the resolution order spelled out.
 @ __require_import_file i lex i iline i icol s path → v {
+    // Under confinement a file outside the roots answers exactly as a
+    // missing one does: a different message would tell the caller which
+    // paths exist on the machine.
+    ? != 0 ( nurl_str_len g_import_roots ) {
+        ? ( __import_allowed path ) { ^ } {}
+        ( die_pos lex iline icol ( nurl_str_cat3 `cannot open import '` path
+        `' — no such file under the directories this compilation may read (--import-root / NURL_IMPORT_ROOTS); imports resolve relative to the importing file and $NURL_STDLIB.` ) )
+        ^
+    } {}
     ? == ( nurl_file_exists path ) 1 { ^ } {}
     ( die_pos lex iline icol ( nurl_str_cat ( nurl_str_cat3
     `cannot open import '` path `' — no such file. The path is tried relative to the importing file's directory, the working directory, and $NURL_STDLIB, in that order` )
@@ -61193,6 +61250,9 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      a redundant release call ([redundant-free])\n` )
     ( nurl_print `  --no-borrowck       deprecated: disable the borrow-checker pass (report a false positive as a bug instead)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
+    ( nurl_print `  --import-root=DIR   read imports only from under DIR (repeatable; symlinks\n` )
+    ( nurl_print `                      and '..' resolved first). Default: $NURL_IMPORT_ROOTS,\n` )
+    ( nurl_print `                      ':'-separated; unset means no confinement\n` )
     ( nurl_print `  --unsafe-report     list what the program asks to be trusted (outside the stdlib) on stderr: unsafe functions, unsafe Send/Sync assertions, in/sync/nocapture FFI claims\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
@@ -61464,6 +61524,13 @@ unsafe @ main → i {
             } {}
             = g_dbg_enabled 1 = ai + ai 1 continue
         } {}
+        ? != 0 ( nurl_str_starts a `--import-root=` ) {
+            : s dir ( nurl_str_slice a 14 - ( nurl_str_len a ) 14 )
+            ? ! ( __import_root_add dir ) {
+                ( nurl_eprintln ( nurl_str_cat3 `nurlc: --import-root=` dir `: no such directory` ) ) ^ 2
+            } {}
+            = ai + ai 1 continue
+        } {}
         ? ( seq a `--unsafe-report` ) { = g_unsafe_report 1 = ai + ai 1 continue } {}
         ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
             ? | ( seq a `--version` ) ( seq a `-v` )
@@ -61520,6 +61587,29 @@ unsafe @ main → i {
     } {}
     ? != != 0 ( nurl_str_len g_coverage_notes ) != 0 ( nurl_str_len g_coverage_link_ir ) {
         ( nurl_eprintln `nurlc: --coverage-notes and --coverage-link-ir must be used together` ) ^ 2
+    } {}
+    // No --import-root: the environment may confine instead, which is
+    // how a build script between a server and nurlc passes it through.
+    ? == 0 ( nurl_str_len g_import_roots ) {
+        : s ev ( getenv `NURL_IMPORT_ROOTS` )
+        ? != # i ev 0 {
+            : i en ( nurl_str_len ev )
+            : *u ep # *u ev
+            : ~ i st 0
+            : ~ i k 0
+            ~ <= k en {
+                ? | == k en == ( nurl_str_at ep en k ) 58 {
+                    ? > k st {
+                        : s dir ( nurl_str_slice ev st - k st )
+                        ? ! ( __import_root_add dir ) {
+                            ( nurl_eprintln ( nurl_str_cat3 `nurlc: NURL_IMPORT_ROOTS: ` dir `: no such directory` ) ) ^ 2
+                        } {}
+                    } {}
+                    = st + k 1
+                } {}
+                = k + k 1
+            }
+        } {}
     } {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

@@ -15,6 +15,10 @@
 //   ( path_extension p )    → String  text after the last '.' in the basename, "" if none
 //   ( path_is_absolute p )  → b       starts with '/' / '\\' or matches X: drive prefix
 //   ( path_normalize p )    → String  collapses '.', '..', and duplicate separators
+//   ( path_rel_ok p )       → b       a relative path that stays under whatever it is
+//                                     joined to: not absolute, no drive, no '..' segment
+//   ( path_within root p )  → b       `p` exists and, after every symlink and '..',
+//                                     lies inside the directory `root` (touches the fs)
 //
 // ── Typed Path ──────────────────────────────────────────────────────
 //
@@ -263,6 +267,64 @@ $ `stdlib/core/vec.nu`
 // Internal: split path into stack of owned segment Strings, after the
 // optional drive/root prefix. The caller passes `pos` = first byte after
 // any leading separators or drive letter that's already been handled.
+// ── Confinement ──────────────────────────────────────────────────────
+//
+// `path_join` follows the usual rule that an absolute second argument
+// wins — `path_join dir "/etc/passwd"` is "/etc/passwd" — and keeps a
+// '..' as written. Both are right for a path the program chose and
+// wrong for one a peer sent: every server that joined a request path to
+// its root has had to rediscover that. The two checks below are the one
+// place it is decided.
+
+// `p` names something under the directory it will be joined to: not
+// absolute (no leading separator, no drive letter), and no segment that
+// is exactly "..". "." and empty segments are harmless and allowed; the
+// empty path is allowed (it names the directory itself). Lexical only:
+// a symlink under the root can still point out — `path_within` decides
+// that once the file exists.
+@ path_rel_ok s p → b {
+    ? ( path_is_absolute p ) { ^ F } {}
+    : i n ( nurl_str_len p )
+    : ~ i st 0
+    : ~ i k 0
+    ~ <= k n {
+        ? | == k n ( __is_sep ( nurl_str_at p n k ) ) {
+            ? & == - k st 2 & == ( nurl_str_at p n st ) 46 == ( nurl_str_at p n + st 1 ) 46 { ^ F } {}
+            = st + k 1
+        } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// `p` exists and its canonical form (absolute, every symlink and '..'
+// resolved — realpath(3)) is `root`'s canonical form or lies under it.
+// F when either does not resolve. The filesystem half of confinement:
+// a link inside a web root that points at /etc fails here, though
+// `path_rel_ok` passed it.
+@ path_within s root s p → b {
+    : s rr ( realpath root # s 0 )
+    ? == 0 # i rr { ^ F } {}
+    : String rc ( string_adopt rr )
+    : s pr ( realpath p # s 0 )
+    ? == 0 # i pr { ^ F } {}
+    : String pc ( string_adopt pr )
+    : i rn ( string_len rc )
+    : i pn ( string_len pc )
+    : s rcs ( string_data rc )
+    : s pcs ( string_data pc )
+    // "/" contains everything; any other root R contains R and R + sep + …
+    ? & == rn 1 ( __is_sep ( nurl_str_at rcs rn 0 ) ) { ^ T } {}
+    ? < pn rn { ^ F } {}
+    : ~ i k 0
+    ~ < k rn {
+        ? != ( nurl_str_at rcs rn k ) ( nurl_str_at pcs pn k ) { ^ F } {}
+        = k + k 1
+    }
+    ? == pn rn { ^ T } {}
+    ^ ( __is_sep ( nurl_str_at pcs pn rn ) )
+}
+
 @ __collect_segments s p i pos → ( Vec String ) {
     : i n ( nurl_str_len p )
     : ( Vec String ) out ( vec_new [String] )

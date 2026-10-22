@@ -2,6 +2,21 @@
 
 All notable changes to this package are documented here.
 
+## [0.14.1] — 2026-10-22
+
+Requires NURL 0.76.0.
+
+### Security
+
+- **Workspace paths are validated; host paths are gated over HTTP.**
+  `nurl_build_project` put `entry` into a single-quoted `sh -c` command
+  and the relative-path check accepted quotes, so
+  `entry="x'; cmd; echo '"` ran a shell as the server user with
+  `--allow-run` off. A workspace path is now the strict
+  `[A-Za-z0-9._/-]` relative grammar (which also covers `files` keys),
+  and over HTTP `path=` and `out=` are refused unless
+  workspace-relative. Stdio behaviour is unchanged.
+
 ## [0.14.0] — 2026-10-20
 
 Requires NURL 0.76.0 (`nurl --stdin NAME`).

@@ -379,6 +379,9 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # and failed. A POSIX-only test belongs in this list, next to the
     # termios and AF_UNIX ones, not behind a command-presence guess.
     elseif ($name -eq 'fs_glob_symlink') { $skip = $true }
+    # http_static_symlink plants symlinks inside a served directory —
+    # the same unprivileged symlink() Windows lacks.
+    elseif ($name -eq 'http_static_symlink') { $skip = $true }
     else {
         foreach ($tok in (Get-Requires (Join-Path $ScriptDir "$name.nu"))) {
             switch ($tok) {

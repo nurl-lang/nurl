@@ -6,7 +6,76 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.77.0] — 2026-10-22
+
+The backend toward v1.0, and a security release. Outbound connects and
+DNS no longer block a fiber's worker; a keep-alive HTTP response
+allocates nothing in steady state, the servers drain gracefully and
+accept in parallel; AES-GCM runs on VAES (ymm/zmm) and on the ARMv8
+Cryptographic Extension; TLS seals records in place and signs ECDSA
+without BigInt; psql 0.5 pools its connections (`std/pool.nu`). And the
+playground's holes are closed at their source: a compilation can be
+confined to its directories (`nurlc --import-root`), `serve_static`
+judges the decoded path and stays inside its root through symlinks, the
+build opt level is a closed set, and the unikernel object cache can no
+longer be poisoned.
+
+### Security
+
+- **nurlc: `--import-root` / `NURL_IMPORT_ROOTS` confine what a
+  compilation may read** (agora t71). A `$` import named any path, and a
+  file that failed to parse was quoted in the diagnostic — the public
+  playground compiled `$ `/proc/self/environ`` and answered with its
+  server's environment. With roots set (the flag is repeatable;
+  the variable is `:`-separated; the flag wins) an import must resolve,
+  after every symlink and `..`, inside one of them, and a file outside
+  is reported exactly as a missing one, so the answer does not tell which
+  paths exist. Unset, nothing changes (docs/spec.md §3.2).
+  `compiler/tests/import_roots.sh` (run by build.sh) checks /etc/passwd,
+  /proc/self/environ, a symlink out, a `..` escape and a sibling
+  directory sharing the root's prefix.
+- **`serve_static` judges the decoded path, hides dotfiles and stays
+  inside its root through symlinks.** It percent-decodes the request
+  path before the traversal checks (`%2e%2e` is `..` — 403; a bad escape
+  or `%00` — 400), answers 404 for any segment starting with `.` except
+  `.well-known`, and serves a file only when its canonical path lies
+  inside the canonical served directory — a link in the served tree to
+  `/etc` was followed before. New `std/path.nu` helpers carry the two
+  halves: `path_rel_ok` (lexical: not absolute, no drive, no `..`
+  segment) and `path_within` (realpath confinement). Regression tests
+  `http_static_traversal` (decoding, dotfiles) and `http_static_symlink`.
+  The `http` package goes to 0.7.9.
+- **nurlapi (the playground server).** It sets `NURL_IMPORT_ROOTS` to its
+  toolchain tree for every compiler it starts (and adds the build's own
+  directory for the unikernel builds that compile files they wrote);
+  build ids carry 128 random bits instead of a guessable counter, since
+  `/download/<id>/<file>` serves whatever a build left; its path checks
+  use `path_rel_ok`. The unikernel object cache is no longer writable by
+  the server user: in the image it is root-owned and read-only, the
+  build scripts link an explicit list of cached objects instead of
+  `nl_*.o` (a planted object was linked into every later image), and a
+  stale read-only cache builds a private copy for that request instead
+  of rebuilding the shared one. `nurlapi/e2e_test.py` checks that
+  imports of /proc/self/environ, /etc/passwd and a `..` path are refused
+  without leaking content, and that encoded `/download` and `/stdlib`
+  traversals are refused.
+- **nurlapi: the build opt level is a closed set** (#1218). `opt` went to
+  clang / zig as a raw argument, so `--ld-path=<file>` ran any binary as
+  the linker — unauthenticated code execution on `/build`,
+  `/build_wasm`, `/build_windows`, `/build_macos` and `/build_target`.
+  Only the `-O` literals are accepted; anything else is a 400.
+- **nurlapi: file routes refuse absolute paths** (#1219). `path_join`
+  returns an absolute second argument verbatim, and the file routes
+  checked only `..` (or nothing): `/examples//etc/passwd`,
+  `/stdlib//etc/passwd`, `/tests//etc/passwd`, `/static//etc/passwd`,
+  `/stdlib-docs`, `/download`, the MCP read tools and resource templates
+  read any file the server user could.
+- **nurl-mcp: workspace paths are validated, host paths gated over HTTP**
+  (#1220). `nurl_build_project` put `entry` into a single-quoted `sh -c`
+  command and the path check accepted quotes, so a crafted entry ran a
+  shell with `--allow-run` off. Paths are now a strict
+  `[A-Za-z0-9._/-]` relative grammar, and over HTTP `path=` / `out=` must
+  be workspace-relative (stdio unchanged).
 
 ### Added
 

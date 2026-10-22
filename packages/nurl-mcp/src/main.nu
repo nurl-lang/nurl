@@ -56,13 +56,12 @@ $ `stdlib/core/slice.nu`
 
 // ── Version ─────────────────────────────────────────────────────────
 //
-// Single source of truth for the server version. Keep this in sync with
-// `version` in nurl.toml on every release — the banners and the MCP
-// `initialize` result both read it here, so there is exactly one string
-// to bump (previously the banners drifted to a stale 0.2.0 while the
-// handshake reported 0.4.0).
+// The server version is the manifest's (`pkg_version`, spec §6.5): the
+// banners and the MCP `initialize` result both read it here, so nothing
+// is bumped by hand (a literal here once drifted to a stale 0.2.0 while
+// the handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.14.0` }
+@ nm_version → s { ^ ( pkg_version ) }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can

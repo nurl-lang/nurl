@@ -273,25 +273,30 @@ $ `stdlib/core/slice.nu`
     ^ full
 }
 
+// `<unix ms>_<128 random bits, hex>`. The build id is the only key to a
+// build's files — /download/<id>/<file> serves the source, the IR and
+// the binary to whoever names it — so it has to be unguessable. It used
+// to be the clock plus the nanoseconds within that millisecond: anyone
+// who knew roughly when a build ran could walk the space and read other
+// users' programs. The millisecond prefix stays because the output
+// sweeper ages directories by it (__build_dir_ms).
 @ create_build_id → String {
-    : i now ( now_ms )
-    : i mono ( monotonic_ns )
-    : i mono_ms / mono 1000000
-    : i suffix - mono * mono_ms 1000000
-    : String build_id ( string_with_cap 24 )
-    ( string_push_int build_id now )
+    : String build_id ( string_with_cap 48 )
+    ( string_push_int build_id ( now_ms ) )
     ( string_push_char build_id 95 )
-    ( string_push_int build_id suffix )
+    : String r ( rand_hex_str 16 )
+    ( string_push_str build_id ( string_data r ) )
     ^ build_id
 }
 
 @ drop_str String s → v {}
 
-// A caller-supplied relative path: non-empty, no `..` segment, not
-// absolute. `path_join` returns an absolute second argument verbatim, so
-// checking only `..` let `/examples//etc/passwd` read any file on the host.
+// A caller-supplied relative path: non-empty and `path_rel_ok` (no `..`
+// segment, not absolute). `path_join` returns an absolute second argument
+// verbatim, so checking only `..` let `/examples//etc/passwd` read any
+// file on the host.
 @ __user_rel_ok s rel → b {
-    ^ & & > ( nurl_str_len rel ) 0 ! ( _has_dotdot_segment rel ) ! ( path_is_absolute rel )
+    ^ & > ( nurl_str_len rel ) 0 ( path_rel_ok rel )
 }
 
 // ── M11 hardening: tool timeouts, per-IP rate limit, output GC ────────
@@ -309,6 +314,31 @@ $ `stdlib/core/slice.nu`
 // Falls back to a plain run where timeout(1) doesn't exist (bare local
 // dev outside the container).
 @ run_tool s path ( Vec s ) args → !Output ProcessErr { ^ ( run_tool_in path args `` ) }
+
+// run_tool with one more variable in the tool's environment — the
+// per-request import roots of a build that compiles files it wrote
+// (`NURL_IMPORT_ROOTS=<toolchain>:<build dir>`), passed on through any
+// script between here and nurlc.
+@ run_tool_env s kv s path ( Vec s ) args → !Output ProcessErr {
+    : ( Vec s ) eargs ( vec_new [s] )
+    ( vec_push [s] eargs kv )
+    ( vec_push [s] eargs path )
+    : i n ( vec_len [s] args )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] eargs a ) F → {} } = k + k 1 }
+    ^ ( run_tool `/usr/bin/env` eargs )
+}
+
+// The import roots of a compile that may also read `dir` (a build
+// directory it wrote sources into): the toolchain tree, then `dir`.
+@ import_roots_kv s dir → String {
+    : String kv ( string_from `NURL_IMPORT_ROOTS=` )
+    : String wr ( get_work_root )
+    ( string_push_str kv ( string_data wr ) )
+    ( string_push_char kv 58 )
+    ( string_push_str kv dir )
+    ^ kv
+}
 
 // run_tool with `stdin` piped to the tool.
 @ run_tool_in s path ( Vec s ) args s stdin → !Output ProcessErr {
@@ -4008,7 +4038,11 @@ unsafe @ __uk_exit_code s log → i {
                         ( vec_push [s] targs ( string_data fs_dir ) )
                     } {}
                     : String script ( get_unikernel_build_script arch )
-                    : !Output ProcessErr t_res ( run_tool ( string_data script ) targs )
+                    // The program may import files it baked into its own
+                    // initfs, so this compile reads the build directory
+                    // too — and nothing else outside the toolchain.
+                    : String roots ( import_roots_kv ( string_data build_dir ) )
+                    : !Output ProcessErr t_res ( run_tool_env ( string_data roots ) ( string_data script ) targs )
 
                     ?? t_res {
                         T t_out → {
@@ -5384,6 +5418,21 @@ unsafe @ gate_free → v {
             ( nurl_eprint ` — stdlib imports in nurlc may fail\n` )
         }
     }
+
+    // Every compiler this server starts reads imports from the toolchain
+    // tree only (nurlc --import-root / NURL_IMPORT_ROOTS, inherited by
+    // each child and by the build scripts between it and nurlc). Without
+    // it a request's `$ `/proc/self/environ`` was read and its first
+    // line came back in the parse error — the server's environment, and
+    // any file the server user can read. An operator who sets the
+    // variable keeps theirs; a build that wrote sources of its own adds
+    // its directory per request (import_roots_kv).
+    ?? ( env_get `NURL_IMPORT_ROOTS` ) { T _ → {} F → {
+            ?? ( env_set `NURL_IMPORT_ROOTS` ( string_data wr ) ) {
+                T _ → {}
+                F _ → { ( nurl_eprintln `[boot] FATAL: could not confine compiler imports (NURL_IMPORT_ROOTS)` ) ^ 1 }
+            }
+        } }
 
     // Registry answers (nurl_api's package footer, nurl_grep packages,
     // package=) are kept ten minutes — made here, before any worker runs.

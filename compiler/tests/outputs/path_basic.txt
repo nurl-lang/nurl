@@ -35,3 +35,18 @@ normalize /a/../../b: /b
 normalize //a//b///: /a/b
 normalize ./foo/../bar: bar
 normalize C:/a/./b/../c: C:/a/c
+rel_ok a/b: T
+rel_ok empty: T
+rel_ok ./a//b/: T
+rel_ok a..b/...: T
+rel_ok ..: F
+rel_ok a/../b: F
+rel_ok a/..: F
+rel_ok a\..\b: F
+rel_ok /etc: F
+rel_ok C:/x: F
+within . .: T
+within . ./.: T
+within . ..: F
+within . missing: F
+within missing .: F

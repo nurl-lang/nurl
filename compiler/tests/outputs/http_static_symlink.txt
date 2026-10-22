@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+  ok   GET /ok.txt = 200
+  ok   GET /alias.txt (link inside) = 200
+  ok   GET /leak.txt (link ../) = 404
+  ok   GET /abs.txt (absolute link) = 404
+  ok   GET /out/also-secret.txt (dir link) = 404
+  ok   GET /nope.txt = 404
+  ok   GET /ok.txt via linked root = 200
+  ok   GET /leak.txt via linked root = 404
+http_static_symlink: all checks passed

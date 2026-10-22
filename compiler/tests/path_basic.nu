@@ -115,5 +115,24 @@ $ `stdlib/core/string.nu`
     ( test_normalize `./foo/../bar` `bar` )
     ( test_normalize `C:/a/./b/../c` `C:/a/c` )
 
+    // path_rel_ok: stays under whatever it is joined to.
+    ( show_bool `rel_ok a/b` ( path_rel_ok `a/b` ) )
+    ( show_bool `rel_ok empty` ( path_rel_ok `` ) )
+    ( show_bool `rel_ok ./a//b/` ( path_rel_ok `./a//b/` ) )
+    ( show_bool `rel_ok a..b/...` ( path_rel_ok `a..b/...` ) )
+    ( show_bool `rel_ok ..` ( path_rel_ok `..` ) )
+    ( show_bool `rel_ok a/../b` ( path_rel_ok `a/../b` ) )
+    ( show_bool `rel_ok a/..` ( path_rel_ok `a/..` ) )
+    ( show_bool `rel_ok a\\..\\b` ( path_rel_ok `a\\..\\b` ) )
+    ( show_bool `rel_ok /etc` ( path_rel_ok `/etc` ) )
+    ( show_bool `rel_ok C:/x` ( path_rel_ok `C:/x` ) )
+
+    // path_within: realpath confinement (the working directory always exists).
+    ( show_bool `within . .` ( path_within `.` `.` ) )
+    ( show_bool `within . ./.` ( path_within `.` `./.` ) )
+    ( show_bool `within . ..` ( path_within `.` `..` ) )
+    ( show_bool `within . missing` ( path_within `.` `no-such-path-xyz` ) )
+    ( show_bool `within missing .` ( path_within `no-such-path-xyz` `.` ) )
+
     ^ 0
 }
