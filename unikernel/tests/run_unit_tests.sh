@@ -160,6 +160,12 @@ done
 #    when build/nurlc is absent (the other gates here need only $CC).
 step build_tool_gate "$ROOT/unikernel/tests/build_tool_gate.sh"
 
+# 6b. …and the object cache it links from is one only the script's own
+#     writers can write: planted objects in any other cache, and in the
+#     caller's zig cache, never reach an image. The cases that need a
+#     second uid run when this runs as root (CI does).
+step cache_trust_gate "$ROOT/unikernel/tests/cache_trust_gate.sh"
+
 # 7. the image is not a QEMU image: the PVH note Firecracker and
 #    cloud-hypervisor dispatch on is present, well-formed, and agrees
 #    with the ELF's entry point. Boots under those two as well when

@@ -6,6 +6,31 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Unikernel builds link a cached object only from a cache nobody else
+  can write.** The program-independent objects every image links (boot
+  shim, nolibc, runtimes) came from a shared cache trusted on its stamp
+  and mtimes alone, so whoever could write that cache put code into
+  every kernel built after them. `build_unikernel*.sh` now links a cache
+  only when every principal that can write it — the objects, the cache
+  directory and each directory above it, read from owner, mode bits and
+  ACLs — can already rewrite the build script, and otherwise compiles
+  the objects into a private directory of its own
+  (`unikernel/cache_trust.sh`). A checksum kept beside the objects
+  cannot do this, since whoever rewrites the objects rewrites it too.
+  The playground's root-owned, read-only cache passes unchanged.
+  zig's own object cache hands back a planted object on a hash match,
+  and the playground's is the server user's, so every zig call in a
+  unikernel build now gets a private one: the arm64 and riscv64 images
+  no longer read the caller's `ZIG_GLOBAL_CACHE_DIR`. Measured cost: a
+  warm build 0.13 → 0.19 s; a cold one is unchanged. Gate:
+  `unikernel/tests/cache_trust_gate.sh` plants an object the way a
+  writer of the cache would (checksums rewritten, stamp refreshed) and
+  fails against the previous scripts.
+
 ## [0.77.2] — 2026-10-22
 
 A playground fix. Every deploy since v0.76.0 served a page script that

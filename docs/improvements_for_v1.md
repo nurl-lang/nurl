@@ -524,7 +524,11 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     enum~~ (done, 0.77.0: `nurlc --import-root` / `NURL_IMPORT_ROOTS`,
     realpath containment; `opt` is a closed set).
   - The shared unikernel object cache is read-only to the server and its
-    objects are linked by name, not glob (0.77.0).
+    objects are linked by name, not glob (0.77.0); a build links a cache
+    only when nobody but the build script's own writers can write it, and
+    gives zig a private cache (unreleased). zig's shared cache
+    (`/opt/zig-cache`, the server user's) still serves `/build_target` and
+    the wasm builds.
   - Give each job a private workspace/cache and an allowlisted environment;
     expose only its source and a read-only stdlib/toolchain.
   - Run compiler/linker/emulator processes with no network, no secrets, no new
