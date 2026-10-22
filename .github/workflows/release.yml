@@ -14,21 +14,49 @@ name: release
 # every archive + its .sha256 to the GitHub Release. The curl|sh front
 # door (tools/get-nurl.sh / .ps1, served from nurl-lang.org) downloads
 # these by target triple.
+#
+# Three ways in, all publishing the same way:
+#   - `git push origin vX.Y.Z` (RELEASING.md, the normal path);
+#   - a release published in the GitHub UI, which creates the tag on the
+#     server. That does not reliably raise a tag `push` event, so v0.77.0
+#     came out with no archives at all; the `release: published` trigger
+#     builds and attaches them to the release that was just made;
+#   - workflow_dispatch with `publish` ticked: builds the EXISTING tag
+#     `tag` (not the dispatching branch) and attaches the archives to its
+#     release, creating it if needed. That is the repair for a release
+#     that is missing assets. Without `publish` it stays a dry run that
+#     builds the dispatching branch and uploads nothing.
 
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v0.1.0); for a dry run without a real tag'
+        description: 'Tag to build (e.g. v0.1.0). With publish: an existing tag. Without: only names the dry-run archives.'
         required: true
+      publish:
+        description: 'Build the tag itself and attach the archives to its GitHub Release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write    # create releases + upload assets
 
 env:
-  NURL_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  NURL_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  # What the build jobs check out: the tag for a publishing dispatch, else
+  # the event's own commit (the tag for a push or release event, the
+  # dispatching branch for a dry run).
+  BUILD_REF: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+# A UI-made release can raise both `release` and a tag `push`: one run per
+# tag at a time, the second one re-uploads over the first.
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   # ── Gate: the tagged commit must already have a green ci.yml run ──────
@@ -38,11 +66,13 @@ jobs:
   # on every push/PR); it WAITS for the tagged commit's ci.yml to conclude
   # and then requires success, because a tag is normally pushed while that
   # run is still in flight. Skipped on workflow_dispatch dry runs (they don't
-  # publish anyway).
+  # publish anyway). The commit checked is the one the TAG names, resolved
+  # through the API, so a publishing dispatch from `main` gates on the tag's
+  # commit and not on main's head.
   verify-ci:
     name: verify tagged commit passed CI
     runs-on: ubuntu-latest
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
     steps:
       - name: Require a successful ci.yml run for this SHA
         uses: actions/github-script@v7
@@ -56,7 +86,27 @@ jobs:
           # the safety property (never publish an unverified commit) is
           # unchanged, only the impatience is gone.
           script: |
-            const sha = context.sha;
+            const tag = process.env.NURL_TAG;
+            if (!/^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$/.test(tag)) {
+              core.setFailed(`'${tag}' is not a release tag (vX.Y.Z).`);
+              return;
+            }
+            let ref;
+            try {
+              ({ data: ref } = await github.rest.git.getRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `tags/${tag}` }));
+            } catch (e) {
+              core.setFailed(`tag ${tag} does not exist: push it first.`);
+              return;
+            }
+            let sha = ref.object.sha;
+            if (ref.object.type === 'tag') {   // annotated: peel to the commit
+              const { data: t } = await github.rest.git.getTag({
+                owner: context.repo.owner, repo: context.repo.repo, tag_sha: sha });
+              sha = t.object.sha;
+            }
+            core.info(`${tag} -> ${sha}`);
             const DEADLINE_MS = 45 * 60 * 1000;   // ci.yml takes ~6 min
             const POLL_MS = 30 * 1000;
             const started = Date.now();
@@ -116,6 +166,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
 
       - name: Install build deps (clang + FFI libs)
         run: |
@@ -219,6 +271,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
 
       - name: Build + assemble + package toolchain on FreeBSD
         uses: vmactions/freebsd-vm@v1
@@ -284,6 +338,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
 
       - name: Install LLVM/clang
         run: choco install llvm -y --no-progress
@@ -412,12 +468,16 @@ jobs:
     # `result`, just that they finished. `!cancelled()` lets us publish after a
     # best-effort job fails; still only for a real pushed tag, not a
     # workflow_dispatch dry run.
-    if: ${{ !cancelled() && needs.verify-ci.result == 'success' && needs.linux.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    # verify-ci runs only for a tag event or a publishing dispatch, so its
+    # success is what says "this run publishes".
+    if: ${{ !cancelled() && needs.verify-ci.result == 'success' && needs.linux.result == 'success' }}
     steps:
       # Checkout FIRST: actions/checkout cleans the workspace, which would
       # delete the downloaded artifacts if it ran after them. The release
       # job needs the tree for tools/check_release_artifacts.sh.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -445,7 +505,7 @@ jobs:
           for f in artifacts/*.tar.gz artifacts/*.zip; do
             [ -e "$f" ] || continue
             minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f" \
-              -c "nurl release $GITHUB_REF_NAME" -t "nurl $GITHUB_REF_NAME"
+              -c "nurl release $NURL_TAG" -t "nurl $NURL_TAG"
             echo "signed $f -> $f.minisig"
           done
           echo "RELEASE_SIGNED=1" >> "$GITHUB_ENV"
@@ -460,14 +520,18 @@ jobs:
         # archive carries the checksum (and signature) the installers
         # verify fail-closed.
         run: |
-          ./tools/check_release_artifacts.sh artifacts "$GITHUB_REF_NAME" \
+          ./tools/check_release_artifacts.sh artifacts "$NURL_TAG" \
             ${RELEASE_SIGNED:+--signed}
 
       - name: Publish release
+        # An existing release for the tag (one made in the UI, or a repair
+        # dispatch) is updated in place: its notes are kept, the title is
+        # normalised to "NURL vX.Y.Z", the archives are attached, and a
+        # same-named asset is replaced.
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: NURL ${{ github.ref_name }}
+          tag_name: ${{ env.NURL_TAG }}
+          name: NURL ${{ env.NURL_TAG }}
           generate_release_notes: true
           files: |
             artifacts/*.tar.gz
