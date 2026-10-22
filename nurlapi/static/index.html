@@ -526,7 +526,9 @@ async function build() {
       if (typeof d.clang_returncode === "number") logLine(`clang exit: ${d.clang_returncode}`, "dim");
       // `stderr` is the whole build log, every stage in order — the
       // server sends no per-stage copies beside it.
-      if (d.stderr)        { section("stderr");        log(d.stderr,        "stderr"); }
+      if (d.stderr) {
+        section("stderr");
+        log(d.stderr, "stderr");
       } else if (d.error) {
         logLine(String(d.error), "stderr");
       } else if (d.message) {
