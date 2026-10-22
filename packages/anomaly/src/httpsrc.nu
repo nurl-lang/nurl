@@ -26,8 +26,8 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `deps/http-client/src/http_client.nu`
-$ `src/importer.nu`
-$ `src/wfs.nu`
+$ `importer.nu`
+$ `wfs.nu`
 
 : i HTTP_TEXT_MAX 200
 : i HTTP_DEPTH_MAX 6

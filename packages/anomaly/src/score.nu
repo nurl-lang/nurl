@@ -27,8 +27,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
+$ `prep.nu`
+$ `model.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`

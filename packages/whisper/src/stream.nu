@@ -50,7 +50,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
-$ `src/silero.nu`
+$ `silero.nu`
 
 : i WSS_NONE 0
 : i WSS_START 1  // speech confirmed at act_from

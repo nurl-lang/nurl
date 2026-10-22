@@ -9,7 +9,7 @@ on, GPU-accelerated through gpukit.
 
 ## Use
 
-```nurl
+```nurl params="sink ( Vec f ) data"
 $ `deps/tensor/src/ops.nu`   // ops.nu re-exports the tensor core
 
 // a 2×3 tensor from a flat buffer (shape vec is adopted)
@@ -20,7 +20,7 @@ $ `deps/tensor/src/ops.nu`   // ops.nu re-exports the tensor core
 ?? ( tensor_transpose a ) {
     T at → {
         ?? ( tensor_matmul a at ) {              // a · aᵀ → ?Tensor
-            T c → { /* … use c … */ }
+            T c → {}   // … use c …
             F _ → {}
         }
     }
@@ -32,6 +32,9 @@ $ `deps/tensor/src/ops.nu`   // ops.nu re-exports the tensor core
 
 ## The type
 
+<!-- doctest-prelude
+$ `stdlib/core/vec.nu`
+-->
 ```nurl
 : Tensor { i dtype  ( Vec i ) shape  ( Vec f ) data }
 ```
@@ -113,7 +116,9 @@ without numpy.
 `src/dev.nu` adds **`DTensor`** — the tensor's data lives in GPU memory
 (a gpukit `GkBuf`) and ops chain on the device with no host roundtrips:
 
-```nurl
+```nurl params="Tensor weights Tensor x"
+$ `deps/tensor/src/dev.nu`
+
 : GpuKit kit ( gk_open 0 )
 : DTensor dw ( tensor_to_device kit weights )   // upload once
 : DTensor dx ( tensor_to_device kit x )

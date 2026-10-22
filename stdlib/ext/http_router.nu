@@ -96,8 +96,19 @@ $ `stdlib/core/rcbox.nu`
     ( Vec QueryPair ) entries
 }
 
+// From the per-thread stash (core/vec.nu, "Recycling") when the router
+// has parked one there: dispatch makes a Params per matching attempt and
+// recycles it once the handler has returned.
 @ params_new → Params {
-    ^ @ Params { ( vec_new [QueryPair] ) }
+    ^ @ Params { ( vec_unstash [QueryPair] ( __params_kind ) 0 ) }
+}
+
+@ __params_kind → i { ^ 3 }
+
+// The router's end of a Params: the captures are dropped and the empty
+// Vec parks for the next params_new on this thread.
+@ __params_recycle sink Params p → v {
+    ( vec_stash [QueryPair] ( __params_kind ) . p entries 1024 )
 }
 
 @ params_free sink Params p → v {}
@@ -382,9 +393,11 @@ $ `stdlib/core/rcbox.nu`
             ? ( __match_pattern pattern req_path params ) {
                 : ( @ HttpResponse HttpRequest Params ) f . impl handler
                 : HttpResponse resp ( f req params )
+                ( __params_recycle params )
                 ? is_head { ( __strip_body_for_head resp ) } {}
                 ^ resp
             } {
+                ( __params_recycle params )
             }
         } {}
         = k + k 1

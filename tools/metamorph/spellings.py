@@ -1820,8 +1820,9 @@ CLASSES = [
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
                 "    ( mutex_free m )",
                 prelude="$ `stdlib/std/thread.nu`\n"),
-            # The escape hatch must actually open: an explicit `% Send`
-            # stops the walk at that type, Rc field and all.
+            # The escape hatch must actually open: an explicit
+            # `unsafe % Send` (the only spelling outside the standard
+            # library, h318) stops the walk at that type, Rc field and all.
             "send-marker-overrides": prog(
                 "    : ( Rc i ) r ( rc_new [i] 1 )\n"
                 "    : Wrapper wr @ Wrapper { r }\n"
@@ -1830,7 +1831,7 @@ CLASSES = [
                 "    ?? t { T h → { ( thread_join h ) } F e → {} }",
                 prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
                         "$ `stdlib/core/marker.nu`\n",
-                extra=": Wrapper { ( Rc i ) r }\n% Send Wrapper { }\n"),
+                extra=": Wrapper { ( Rc i ) r }\nunsafe % Send Wrapper { }\n"),
             # A String and a Vec of scalars crossing the boundary. NURL
             # spells String and every opaque FFI handle `i8*`, so
             # demoting either would demote both and take most correct

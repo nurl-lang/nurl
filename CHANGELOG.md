@@ -10,6 +10,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AArch64 crypto tier: AES-GCM on the ARMv8 Cryptographic Extension**
+  (agora t57). nurlc now knows when it emits for AArch64 — `--target=ARCH`
+  (`aarch64`/`arm64`, `x86_64`, or anything else; a triple's first word
+  counts), and the native default of a nurlc on an AArch64 host
+  (`nurl_host_arch`). There the `nurl_v128_aes*` / `nurl_v128_clmul_*`
+  primitives lower to AESE / AESD / AESMC / AESIMC and PMULL / PMULL2
+  (`aesenc a k` = `AESMC(AESE(a, 0)) ^ k`, …; inlined, each round key
+  folds into the next AESE, the native ARM sequence), functions using
+  them are compiled with `+neon,+aes` and gated on `nurl_cpu_arm_aes`
+  (getauxval HWCAP_AES|HWCAP_PMULL on Linux, `hw.optional.arm.FEAT_AES`
+  on macOS, ID_AA64ISAR0_EL1 when freestanding; `NURL_CPU_AES=0`), and a
+  `simd @` function reaching the tier is one gated body. So
+  `nurl_cpu_has_aes` is true on Apple Silicon and Graviton, and
+  `std/aes_gcm.nu` and TLS take the hardware path there instead of the
+  ~113 MB/s bitsliced cipher. nurl.sh, the build API's arm64 targets and
+  the unikernel's arm64 build pass `--target=aarch64`. The `cpu-aes` test
+  requirement now holds on AArch64 (Linux `Features: aes pmull`, macOS),
+  so the macOS ARM64 CI runs `simd_crypto` and `aes_gcm_hw_agree`;
+  `crypto_tier_ir.sh` checks the AArch64 IR and machine code on every
+  host and runs `simd_crypto`, `aes_gcm_hw_agree` and `aes_gcm_vectors`
+  natively or under qemu-aarch64 (here: `-cpu max`, all three match the
+  x86 goldens, 2214 cases).
+
+- **VAES crypto tiers: AES-GCM on ymm and zmm, two and four blocks per
+  instruction** (agora t56). Two tiers above the AES one (docs/spec.md
+  §4.1b): the **VAES tier** — `nurl_v256_aesenc`, `_aesenclast`,
+  `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` on x86-64-v3
+  + AES + PCLMUL + VAES + VPCLMULQDQ, asked with `nurl_cpu_has_vaes` —
+  and the **AVX-512 VAES tier**, the same on the new **`v512`** lane type
+  (`<8 x i64>`, grammar v2.11, §4.1d: ld/st, zero, xor/and/or,
+  add32/add64, bcast128, join256, lo256/hi256, bswap128) on x86-64-v4,
+  asked with `nurl_cpu_has_vaes512`. The tier contract holds per tier:
+  compiled for the highest tier a function's own primitives need and
+  gated on it (`nurl__vaes_gate`, `nurl__vaes512_gate`; runtime CPUID
+  incl. XCR0 ZMM state, `NURL_CPU_VAES=0` / `NURL_CPU_VAES512=0` take a
+  tier away); a `.tier` copy is called only from code of its tier or a
+  higher one; a `simd` function reaching a VAES tier is emitted once for
+  it. New v256 helpers `nurl_v256_join128`, `_lo128`, `_hi128`,
+  `_bswap128`. `std/aes_gcm.nu` gains a sixteen-block stitched kernel per
+  wide tier for messages of 256 bytes and more (the eight-block one keeps
+  shorter ones): schoolbook GHASH (four VPCLMULQDQ a block beat
+  Karatsuba's three plus a shuffle and an XOR on the AES ports, ~5% in a
+  C model), one Montgomery reduction per step, a branch-free fold
+  (LLVM had hoisted all of a conditional fold ahead of the rounds) and
+  counters carried by a byte add, a pair-at-a-time tail folded with one
+  reduction. Sapphire Rapids, 16 KB seal with a prepared key, best of 25
+  on a shared host: **zmm 11.8 GB/s (0.17 TSC cycles/byte), ymm 8.8
+  (0.23)**, the AES-NI kernel 5.1 (0.41); OpenSSL 3.0's AVX-512 assembly
+  12.3–13.8 (0.15–0.17), its AES-NI one 5.0. A C model of the two loops
+  agrees: zmm ~1.25× ymm here (VAESENC has the same block throughput at
+  both widths; zmm halves everything else), so the AVX-512 form earns
+  its tier. `_aes_gcm_key_tier key t` builds the key a CPU of tier `t`
+  would, and `aes_gcm_hw_agree.nu` now holds every kernel a machine has
+  to the software oracle over 0–1100 bytes plus 4–16 KB lengths
+  (2214 cases); `simd_crypto_v256.nu` / `simd_crypto_v512.nu` check the
+  primitives lane by lane (FIPS-197 C.1 and the v128 primitives), and
+  `crypto_tier_ir.sh` checks both tiers' IR, gates, stubs, machine code
+  and runtime answers. Bootstrap snapshot refreshed (preamble changed).
 - **kTLS (opt-in) and `tcp_sendfile`** (agora t46, part of t37). After
   the pure-NURL handshake a TLS 1.3 connection can hand its record
   protection to the Linux kernel — `tls_ktls` / `tcp_tls_ktls` on one
@@ -149,6 +207,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nurlfmt spaces a trait or impl after `pub` / `unsafe` (#68).** It took
+  the `%` after the prefix for a `%Trait` object type and glued it
+  (`unsafe %Send W {}`, `pub %Ord [T] {}`); it prints `unsafe % Send W {}`
+  now, as at the start of a line. stdlib/core/marker.nu and four tests
+  reformatted. Test: tools/tests/test_formatter.py.
+- **A closure capturing a struct with a `% Drop` field, handed to a call,
+  no longer cuts the function off (#67).** The env's drop asked for the
+  struct's field-by-field drop, and the compiler printed that `define` in
+  the middle of the function it was writing: the module held the function
+  up to the capture and nothing after it (nurlc exited 0; clang rejected
+  the IR). The drop is queued for module end. Test:
+  `closure_capture_drop_field_handed_on.nu`.
+- **A positive thread-safety marker is `unsafe` outside the standard
+  library (h318; grammar v2.11).** `% Send T { }` and `% Sync T { }` stop
+  the Send/Sync derivation at `T` and turn off the frozen-view check
+  through a `Sync` type, so a safe module that asserted `% Send` over an
+  `Rc` raced its count from two threads (AddressSanitizer:
+  heap-use-after-free). A program writes them `unsafe % Send T { }` /
+  `unsafe % Sync T { }`; without the prefix they are an error. `% NotSend`,
+  `% NotSync`, `% Frozen` and `% Resource` only add checks and stay safe
+  code (h317 settles that a program's own `% Frozen` over a `Cell` cannot
+  reach two threads); `unsafe` on them, on any other impl or on a trait
+  declaration is an error rather than a prefix that leaked onto the next
+  foreign declaration.
+- **`nurlc --unsafe-report` lists the whole trusted surface.** Beside the
+  program's `unsafe` functions it lists its `unsafe % Send` /
+  `unsafe % Sync` assertions and the `in` / `sync` / `nocapture` claims of
+  its foreign declarations, one `file:line` each, and no longer lists the
+  standard library's own `unsafe` functions (the trust test was asked of
+  `file:line` rather than the file). Checked by
+  `compiler/tests/unsafe_report.sh`. docs/MEMORY.md §3 / §6.4 and
+  formal/CLAIM.md's trusted base name `% Frozen` and the foreign claims.
+- **dist/heartbeat's thread no longer reads the membership table under a
+  caller-supplied mutex (h319).** `heartbeat_start` handed its thread the
+  `PkMemberTable` and a `Mutex` the caller had to take around its own
+  changes; nothing made it, and two threads growing one table corrupted
+  the heap. The thread holds the node's liveness now
+  (`pktable_liveness`: a copy of the self pubkey and the table's
+  incarnation, which is an `Atomic`), `heartbeat_start PkMemberTable t
+  sink RelayClient rc ( Vec u ) group i interval_ms` takes no mutex, and
+  `PkMemberTable` is `% NotSend`. `heartbeat_payload_of` builds the same
+  payload from a `PkLiveness`; `pktable_refute` is one atomic max. The
+  stop flag is an `Atomic` instead of an `Arc` read with raw FFI.
+  Test: `dist_heartbeat_thread.nu`.
+- **`mqtt_listen` takes its client over (`sink`).** Its reader thread
+  changes the client's buffers and packet-id state with no lock; the doc
+  asked callers not to use the client meanwhile. Test:
+  `borrow_mqtt_listen_takes_client.nu`.
+- **Known open: a library handle's copies on two threads.** A field read
+  shares a library handle, and the Send derivation looks only at types:
+  one copy moved to a thread while another stays races the state
+  (`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`,
+  docs/MEMORY.md §6.2).
+- **formal: `inout` of every owning type, and a field replaced in place
+  (A2).** The calculus passed only a `Vec` `inout`; a struct, an enum and
+  a closure are passed `inout` now, and a field is replaced in place as the
+  struct taken apart and assigned again (`unpair` takes an `inout` struct
+  its bound lets the callee replace). That is where h295 and h297 sit: a
+  copy of a parameter is a borrow and never an `inout` argument
+  (`paramOK_inout`), and a closure replaced through `inout` is an `assign`
+  to the caller's slot. `A2.memory_safe`, `A2.soundness` and
+  `A2.no_leak_end` are re-proven (`formal/check.sh`, Lean 4.35.0, standard
+  axioms only); formal/README.md, RULES.md and corpus/map.tsv follow.
+- **A double panic no longer leaks, nor leaves the thread draining.** A
+  destructor that panicked while a panic's journal drained replaced the
+  first panic's message (leaking it) and longjmp'd past the drain's
+  epilogue, so the thread stayed in the drain's state for good: every later
+  free went through a record that only grew, and one of an address the
+  drain had freed and malloc reused was skipped. The `recover` frame that
+  catches it now ends the drains begun inside it, and keeps the first
+  message (the cause). formal/CLAIM.md states how the model treats it.
+  Test: `panic_in_drop_while_unwinding.nu`.
+- **A `v256` passed to or returned from a `simd @` function was wrong on
+  every AVX2 machine.** The x86-64-v3 clone takes a `<4 x i64>` in one
+  ymm register, the baseline dispatcher (and any caller without AVX)
+  passes it in two xmm registers, and LLVM does not reconcile them: a
+  clone summing two v256s a hundred times answered 301 where 101 was
+  right. The clones now take wide vectors (v256, v512) by pointer and
+  the dispatcher spills them and is `alwaysinline`; a crypto-tier
+  function with a wide signature crosses a call from outside its tier
+  the same way (`f.vabi` + a featureless `alwaysinline` `f`). A struct
+  holding a wide vector is treated as one (passed by value it is split
+  element by element), and an indirect call carrying one — a closure or
+  a trait-object method, called from a `simd` clone or a tier body — goes
+  through a featureless `noinline` thunk per signature that takes the
+  vectors by pointer (`__nurl_vcall.N`), since every address-taken
+  function is compiled without features. Regression test
+  `simd_wide_abi.nu` (v256 / v512 / struct / closure, both clones).
+- **A NURL program under valgrind reported twelve invalid reads before its
+  own.** The allocator cache probes, once at start-up, whether glibc's
+  chunk header can stand in for `malloc_usable_size`, by reading the word
+  before a few fresh blocks. Under valgrind, whose malloc has no such
+  header, every read was an "Invalid read of size 8" in `nurl__sc_init`
+  (the probe then failed and the library query was used, correctly). The
+  probe now asks first — valgrind's RUNNING_ON_VALGRIND client request,
+  inlined for x86-64 and AArch64, a no-op on bare metal — and skips the
+  read under any valgrind tool.
+
+- **The last diagnostics without a file are located (agora #70).** Three
+  checks printed `cycle collection: error: …`, `thread-shared cycle:
+  error: …` and `in function f: error: …`, with no file, line, column,
+  echoed line or caret. A library handle with a `_drop` and no `_trace`
+  is reported at its `_drop`'s declaration; `arc_set` / `arc_ptr` on an
+  Arc that can close a cycle at the check in the instantiated template,
+  with the instantiation and its call site in the bracketed context; a
+  borrowed value that cannot be copied at the statement that would copy
+  it — also when the decision is made at module end (a callee's store
+  flag), from the position parked with it.
+
+- **Seven packages compile again (agora #69).** The borrow checker's
+  frozen-Arc and closure-capture rules refused lingbot-map, map-anything,
+  onnx (and through it yoloe, yoloe-demo, objdet) and benchmark, with
+  nothing in CI compiling packages to notice. Fixed where each is wrong:
+  - gpu 0.17.7: the foreign functions that only read host memory
+    (`cuMemcpyHtoD*`'s source, `wgpu_upload`'s, `nurl_peek_*`'s base) are
+    declared `in *u`. Unmarked, a `*u` is written through, so every upload
+    counted as changing its source and an upload from a mapped checkpoint
+    (an Arc's payload) was a "write to frozen memory".
+  - A GpuHost's memory is an Arc's payload, so filling one through
+    `gpu_host_f32`'s view is a genuine write to shared memory: gpu's new
+    `gpu_host_fill_f32` fills the cells before the buffer is wrapped
+    (yoloe, objdet), and onnx's `rt_download` downloads straight into the
+    buffer (`gk_dbuf_download_host`).
+  - benchmark takes the view of the Vec `sort_by` changes inside the timed
+    closure, not beside it.
 - **A futex round trip per request at moderate concurrency** (agora
   t49). When the netpoller's batch left one fiber beside the one it runs
   directly, it woke an idle worker for it — but stealing takes half of a
@@ -225,6 +408,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so (`__is_vec_num_ty`). Found by the sanitizer corpus on the
   crypto tier's own test.
 
+- **An inferred binding can rebind a name already in scope (agora #59).**
+  `: i n 0` then `: n 5` failed with "unknown type 'n' in a binding
+  type": the parser took the annotated form `: TYPE NAME EXPR` whenever
+  the first word was in the symbol table at all, and the table holds
+  values as well as types. Only a word that names a type (a struct,
+  enum, generic template or type slug) opens the annotated form now, as
+  spec §5.1 says; a struct value rebound as `: p @ P { … }` no longer
+  reports "type 'p' … declared LATER" either. `: P 5` with `P` a struct
+  — the one shape the rule cannot read as inferred — says why `P` was
+  taken as the type.
+- **Sixteen packages are installable as dependencies again (agora #60).**
+  Their `src/` modules imported siblings as `src/<name>.nu`, which nurlc
+  finds only through the working directory — the package root in every
+  in-repo build, the consumer's root once the package sits under
+  `deps/<pkg>/`. anomaly (0.36.5, whose README documents
+  `` $ `deps/anomaly/src/dynamic.nu` ``), arima, audio, benchmark, chart,
+  hub, iforest, lingbot-map, map-anything, md2html, nurllama, registry,
+  safetensor, template, tokenizer and whisper import them relative to
+  the importing file now, with a patch release each.
+  `tools/check_package_imports.sh` gains the rule: every import of a
+  packaged source that is not `stdlib/…`, `deps/…` or `packages/…` must
+  exist beside the importer. Spec §3.2 described the lookup as
+  working-directory-only; it is importer first, then the working
+  directory, then `$NURL_STDLIB`.
+- **Deferred diagnostics carry a column, the echoed line and a caret
+  (agora #61).** A missing supertrait impl printed `file:2: error: …`
+  with nothing under it, unlike every other diagnostic; so did the
+  thread-crossing checks (a closure handed to another thread, a value
+  stored into a thread-shared handle) and a start-time global's
+  initialiser arity. Each records the construct's position when it is
+  scanned and re-reads the line when it reports, anchored at the impl's
+  `%`, the global's name or the statement's start; the supertrait
+  message also names the impl to add. The doc-example gate no longer
+  accepts the column-less form.
+- **The last blocking network calls on a fiber.** `dns_reverse`'s
+  `getnameinfo` now runs on the runtime's resolver pool (a reverse job
+  kind) with the fiber parked, like every forward lookup. The pure HTTP
+  client's plaintext transport (`ext/http_pure.nu`: `hp_conn_read_some`,
+  `hp_conn_write`) issued plain blocking reads and writes, so a slow
+  server held the fiber's worker; on a fiber they now park on the
+  netpoller, honouring `hp_conn_set_timeout`. `hp_conn_open` reports a
+  failed TCP connect at once instead of one read later. A sweep of the
+  stdlib's remaining raw socket calls found every other one already
+  context-aware (udp.nu, net.nu, tls.nu) or wrapped in a TcpConn.
+
+- **errno can no longer be read on the wrong thread after a fiber park.**
+  errno is a thread-local behind a `const` accessor, so the optimiser may
+  compute its address once per function and reuse it; with the runtime
+  inlined into NURL code that parks (read → EAGAIN → park → read), a
+  fiber resumed on another worker would read the old thread's errno.
+  Not observed in today's binaries (a scan of every corpus binary found
+  no function that both computes errno's address and parks before using
+  it), but nothing guaranteed it. Every errno access in the runtime now
+  goes through a volatile function pointer the optimiser cannot merge or
+  hoist; `tools/check_errno_fiber_safe.sh` (CI) fails if a direct
+  accessor call reappears.
+- **`stdlib/std/pool.nu` — a bounded pool of reusable resources**
+  (database connections, sessions). `pool_new [A E] make check cfg
+  timeout_err closed_err`: a factory closure, a check run on every
+  resource coming back, `PoolCfg { min max wait_ms idle_ms }`. A checkout
+  (`pool_get`, `pool_get_ms`) is a guard, `( Pooled A E )`, whose drop
+  gives the resource back — at the end of its scope, with its struct, in
+  a panic's unwind; `pool_discard` drops it instead. When all `max` are
+  lent a fiber parks and a thread waits on the pool's condvar, both
+  bounded by the deadline. `pool_fill`, `pool_evict_idle`, `pool_close`,
+  counts. Pinned by `pool_basic` and `pool_concurrent` (threads, fibers,
+  both on one pool, deadlines racing returns; ASan clean). psql 0.5.0's
+  `pg_pool_new` is built on it.
+- **A timed fiber park a waker can race safely**:
+  `nurl_fiber_park_with_mutex_ms` / `nurl_fiber_wake` (epoll and poll(2)
+  backends, the unikernel runtime). A plain unpark racing the park's
+  timer would make the fiber runnable twice; here the wake and the
+  deadline claim the wait entry under the reactor lock, and the loser
+  does nothing. `cond_wait_ms` (std/thread.nu) is the thread side.
+
+### Fixed
+
+- **A library handle a generic function handed back inside a result was
+  never dropped** when nothing but generic code named its instance
+  (`?? ( get [String] mk ) { T g → … }` with `get → !( G A ) E`): the
+  caller computed the instance's result type before the instance (and so
+  the `( G String )` struct) existed, took the handle for a plain value,
+  and the arm binding leaked with everything the handle held. The
+  instance's identity is recorded when the result type is computed
+  (`generic_handle_result_drop`).
+- **`tcp_starttls` closed a socket twice when the handshake failed** (a
+  refused certificate under verify): the TLS state had closed it, and
+  the TcpConn's drop closed it again — a use-after-free of the runtime's
+  socket record (ASan, psql's verify-full test).
+
 - **A fiber could sleep forever on a socket that reused a closed one's
   fd number.** Closing a socket reset its netpoller slot and then
   closed the fd outside the netpoller lock; a fiber parking on the
@@ -236,6 +509,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http_keepalive_cap_modes` test hung in 8 of 30 runs on a loaded
   machine, 0 of 60 after). The reset and the close are now one step
   under the lock.
+- **An outbound connect no longer blocks its fiber's worker.**
+  `nurl_tcp_connect` ran a blocking `getaddrinfo` and a blocking
+  `connect(2)` even on a fiber, so one slow DNS answer or one SYN into a
+  black hole stalled an M:N worker — and every fiber queued on it — for
+  the resolver's or the kernel's full timeout; psql, redis, the HTTP
+  clients and every `tcp_connect_tls*` caller inherited it. On a fiber
+  the connect is now non-blocking and parks for writability on the
+  netpoller, then reads `SO_ERROR`; a name is resolved by the system
+  `getaddrinfo` (`/etc/hosts`, nsswitch) on a small on-demand resolver
+  thread pool while the fiber parks on the job's eventfd; a numeric
+  address skips the resolver entirely. Every resolved address is still
+  tried in order. `udp_connect`, `udp_send_to`, `udp_addr_resolve` and
+  `dns_resolve(_port)` resolve the same way. Off a fiber nothing changes.
+- **`tcp_connect_tls*` reports a failed TCP connect as itself** —
+  `NetTimeout`, `NetOther`, … — instead of `NetTlsHandshake`, and closes
+  the failed socket.
+- **A fiber yielding in a loop no longer starves its worker's I/O.** The
+  scheduler looked at the netpoller and the global queue only once the
+  local queue was empty, which a yield loop never lets happen: on one
+  worker its timers, I/O wakes and unparked fibers waited for ever. Every
+  128th dispatch now looks at both first.
+- **The sanitizer parser fuzzer covers the network-facing parsers**
+  (agora t53). `tools/fuzz/parse_harness.nu` gains 16 targets beside the
+  data formats: HPACK, HTTP/2 frames, QPACK, HTTP/3 frames, multipart,
+  URL / query / form / cookie / permessage-deflate offers, the TLS
+  Certificate-message chain walk, CSR and PEM, and — over loopback, with
+  the input as the peer's byte stream — the HTTP/1.1 server loop, the
+  HTTP/2 server path, a pure-TLS listener's accept (records + ClientHello),
+  the TLS client handshake, the WebSocket reader (incl.
+  permessage-deflate), the HTTP/1.1 client and the MQTT client.
+  `fuzz_parsers.py` adds per-protocol generators that keep lengths and
+  varints consistent, structure-aware DER mutation, real captures under
+  `tools/fuzz/corpus/`, batched runs with per-input triage, a time budget
+  per target, and LeakSanitizer plus allocation / RSS caps. The weekly
+  `fuzz.yml` job runs the network targets by time (`net_parser_minutes`,
+  default 4 each) beside the data formats; `FUZZRESULTS.md` gets a
+  per-target table.
+
+### Fixed
+
+- **The HTTP/1.1 client's chunked decoder read before its buffer on a
+  hostile chunk size** (`stdlib/ext/http_pure.nu`, found by the new
+  `http1resp` fuzz target). The size parser had no ceiling, so a 16–17
+  digit size wrapped to a negative length and the body copy moved the
+  read position 2^62 bytes back — a SEGV from one response. Sizes are now
+  1*HEXDIG under 2^48 with optional whitespace and extensions, anything
+  else fails the response; the CRLF after each chunk's data is checked;
+  chunk-size and trailer lines are capped at 8 KiB and the response head
+  at 256 KiB, so a server can no longer grow the receive buffer without
+  bound. (`http_client_chunked_strict`)
+- **RSA verification bounds the key it is handed** (`stdlib/std/rsa.nu`).
+  A certificate chain or CSR could carry any key: a 600-bit exponent made
+  one signature check take most of a second at 2048 bits (some 50× an
+  e = 65537 check, and the cost grows with the square of the modulus), and
+  e = 1 was accepted, under which the signature equal to the encoded
+  message verifies anything. `rsa_pkcs1_verify` and `rsa_pss_verify_sha256`
+  now refuse a modulus over 8192 bits and an exponent that is even or
+  outside 3 .. 2^32−1. (`rsa_pubkey_bounds`)
 
 - **A closure no longer outlives what it reads (h299–h302, h304–h310).**
   Probing `map_iter`'s doc comment ("do NOT free the map until iteration
@@ -307,6 +638,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left holding empty keys. A callee that keeps a copy no longer also
   empties the slot, as for a struct field.
 
+### Added
+
+- **`tcp_connect_tls_timeout host port sni verify alpn sess ms`**
+  (`std/net.nu`) and **`tls_attach_full_until`** (`std/tls.nu`): one
+  deadline over the whole TLS connect — name lookup, TCP handshake and
+  TLS handshake — reporting `NetTimeout` wherever it runs out. The
+  handshake's reads take what is left of the deadline as their timeout
+  (the reactor deadline on a fiber, `SO_RCVTIMEO` on a thread) and its
+  writes carry it as their write deadline, instead of the fixed 20 s per
+  read that bounded every client handshake before. Existing signatures
+  are unchanged; `tcp_connect_tls_full` is the deadline-free case.
+
+- **`tcp_connect_timeout host port ms`** (`std/net.nu`): `tcp_connect`
+  with one deadline over the name lookup and the TCP handshake,
+  reporting `NetTimeout` — on a fiber a netpoller deadline, off one a
+  `poll(2)`. `tcp_connect` keeps its signature (no deadline).
+
 ### Changed
 
 - **TLS picks AES-128-GCM on a CPU with AES-NI** — the server when the
@@ -354,8 +702,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values for `max_keepalive_requests`; an explicit cap still applies in
   every mode.
 
+- **A keep-alive HTTP response allocates nothing in steady state, and
+  costs half the instructions (agora #51).** The plaintext hello path
+  made 11 allocations per request; it makes 0 (pinned ≤ 2 by the new
+  `http_response_recycle` test, thread and fiber mode). User-space
+  instructions per request (callgrind, one keep-alive connection):
+  15 878 → 7 709. Server CPU per request under `oha -c 50` (shared,
+  loaded host, A/B interleaved, median of 3): 8.85 → 7.60 µs total,
+  3.65 → 2.85 µs user. What changed:
+  - The compiler drops the panic-journal registration of a binding that
+    never owns while registered — a parameter its function does not take
+    over, a view read out of a container, a temporary a callee sinks.
+    Its drop flag folds to false, so a drain would skip it anyway; the
+    registration and its forget were ~120 instructions inside a `recover`
+    extent and half of all registrations. A flag that folds true is
+    registered with a null flag. (docs/MEMORY.md §7.2.)
+  - `response_recycle` (new): the servers release every written response
+    into a per-thread stash of emptied control blocks
+    (stdlib/runtime_core.c §9a′, `vec_stash` / `vec_unstash`,
+    `string_stash` / `string_unstash` / `string_unstash_bytes`), so the
+    next `response_new` / `response_set_header` reuse its header Vec,
+    header Strings and body buffer. The router's Params recycle the same
+    way. Bounded per thread; large buffers are given back.
+    `NURL_STASH=0` turns it off.
+  - The handler closure and its `recover` closure are built once per
+    connection, not per request.
+  - `response_serialize_head_to` sizes the head once and copies at a
+    cursor instead of ~15 appends and two extra header scans.
+  - `string_set_bytes` (new), and fast paths in `string_clear`,
+    `string_push_bytes`, `string_push_str` and the NUL seal: a recycled
+    String is refilled with one copy, no view binding or reserve call.
+
+### Added
+
+- **Graceful drain for the HTTP servers (agora #54).** `server_drain s
+  deadline_ms` stops accepting (the listener closes), closes idle
+  keep-alive connections at once, lets requests in flight finish with
+  `Connection: close` — HTTP/2 connections get GOAWAY(NO_ERROR) — and
+  waits up to the deadline before shutting the rest; T when everything
+  finished in time. Works for `server_run`, `server_run_pool` and
+  `server_run_async`. Also `server_drain_begin`, `server_shutdown`,
+  `server_draining`, `server_conn_count`, `h2_conn_serve_drain`,
+  `http3_server_drain` (GOAWAY on every HTTP/3 connection) and
+  `tcp_conn_shutdown` (std/net.nu: shut a connection from another thread
+  without closing it). ROADMAP listed "graceful shutdown" before there
+  was any: `server_stop` only closed the listener, so an idle keep-alive
+  client held a stopping server until its idle timeout. New test
+  `http_server_drain` (in-flight completes, idle closed, HTTP/2 GOAWAY,
+  new connections refused, deadline enforced; pool and fiber).
+
+- **Listener options and parallel accept (agora #50).** `tcp_listen_with
+  host port TcpListenOpts` sets the backlog and `SO_REUSEPORT` (runtime
+  `nurl_tcp_listen_opts`; ignored where the platform has none).
+  `tcp_listen`'s backlog is 4096 (`tcp_listen_default_backlog`, clamped by
+  the kernel to somaxconn) instead of 128, which dropped SYNs under a burst
+  of connections — each one a 1 s client retransmission; the TLS listeners
+  and packages/http use it too. `server_run_async` runs one accept fiber
+  per runtime worker on its listener (`server_set_acceptors`, new
+  `runtime_worker_count`) instead of one: connection churn (oha
+  `--disable-keepalive`, 20 clients, 4 workers, shared 4-core host,
+  interleaved, median of 3 and 5) 17.9k / 15.4k → 19.0k / 22.2k conn/s,
+  server CPU per connection 28.5 → 24–26.5 µs. A SO_REUSEPORT listener per
+  worker measured the same within the noise (20.8k / 17.4k) and was not
+  kept: fibers migrate between workers, so it buys no affinity, and it
+  needs a second socket (and TLS credentials) per worker. New test
+  `net_listen_opts`.
+
 ### Packages
 
+- http 0.7.8: SIGTERM / SIGINT drain the app (`http_app_drain_ms`,
+  default 10 s) instead of only closing the listener.
 - http 0.7.7: an unset `http_app_max_keepalive` follows the serving
   mode — no cap under `http_app_async`, 1000 for the thread servers.
 
@@ -374,6 +790,23 @@ catalog instead of a round trip per term.
 
 ### Added
 
+- **The documentation's code is compiled** (`tools/check_doc_examples.sh`,
+  a CI gate). Every ```` ```nurl ```` block in `docs/*.md`,
+  `docs/stdlib/*.md`, `README.md` and the package READMEs is wrapped into
+  a program and run through `nurlc --check`; a block annotated
+  `expect-error="…"` must be rejected with that diagnostic, so a reworded
+  message fails the doc that quotes it, and in `docs/` every fence names
+  its language. MEMORY.md §2.11's example had no `vec` import and died
+  before the use-after-move it was there to show; the first run fixed
+  that and ~40 more — operators called like functions (gpukit), `/* */`
+  comments NURL does not have (spec §6.10, oauth, hub, redis), FFI and
+  raw pointers in safe code (spec §3.1, §7.2), a `continue` that never
+  advanced its counter (spec §5.4.1), `m::alloc` without its type
+  argument, `vec_push` without `[T]` (MEMORY.md §2.5), a quoted
+  diagnostic the compiler no longer prints (§2.10), `vw_serve` and
+  `tls_connect` signatures that had changed under the README quoting
+  them (ply, pqc), `inout` arguments bound immutable (grad). See
+  docs/TOOLING.md#documentation-examples.
 - **`nurl --stdin NAME`** (nurl.sh, nurl.bat): the program arrives on
   stdin and nurlc knows it as NAME (`nurlc --stdin NAME`), so a tool that
   holds source in memory builds it without writing a temp file, and its

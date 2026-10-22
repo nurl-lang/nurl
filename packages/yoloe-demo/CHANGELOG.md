@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.7] — 2026-10-21
+
+### Fixed
+
+- Requires yoloe 0.8.2, whose image packing compiles again.
+
 ## [0.3.6] — 2026-10-15
 
 ### Changed

@@ -353,11 +353,15 @@ fi
 # dispatcher, and nurlc emits no target triple to tell it otherwise. On
 # any other architecture clang would answer with `'+avx2' is not a
 # recognized feature for this target` once per feature per marked
-# function, so turn the prefix off here — nurl.sh always builds for the
-# machine it runs on, which makes `uname -m` the whole decision.
+# function, so the prefix is off there — nurl.sh always builds for the
+# machine it runs on, which makes `uname -m` the whole decision. On
+# AArch64 the hardware crypto tier lowers to the ARMv8 Cryptographic
+# Extension: say so, rather than leave it to the native nurlc's default
+# (an x86-64 nurlc under Rosetta would otherwise emit x86 code).
 NURLC_CPU=""
 case "$(uname -m)" in
     x86_64 | amd64) ;;
+    aarch64 | arm64) NURLC_CPU="--target=aarch64" ;;
     *) NURLC_CPU="--no-cpu-dispatch" ;;
 esac
 NURLC_SAN=""

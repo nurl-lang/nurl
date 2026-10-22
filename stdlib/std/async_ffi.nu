@@ -30,7 +30,19 @@ unsafe & `c` @ nurl_fiber_park_with_mutex i mutex_h → v
 
 unsafe & `c` @ nurl_fiber_unpark i fiber_h → v
 
+// A park with a deadline that a waker can race safely (runtime_ffi.c
+// §25): the fiber parks on a mutex its caller holds, released after the
+// swap-out, until nurl_fiber_wake or `timeout_ms` (< 0 = none) — 1
+// woken, 0 timed out, -1 not on a fiber (the mutex is still held).
+// nurl_fiber_wake answers 1 when it woke the fiber, 0 when the deadline
+// claimed it first. A waiter woken either way relocks and re-checks.
+unsafe & `c` @ nurl_fiber_park_with_mutex_ms i mutex_h i timeout_ms → i
+
+unsafe & `c` @ nurl_fiber_wake i fiber_h → i
+
 & `c` @ nurl_runtime_init i workers → v
+
+& `c` @ nurl_runtime_worker_count → i
 
 & `c` @ nurl_runtime_run → v
 

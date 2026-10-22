@@ -31,15 +31,15 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
 $ `deps/gguf/src/gguf.nu`
-$ `src/tokenizer.nu`
-$ `src/model.nu`
-$ `src/diffuse.nu`
-$ `src/sample.nu`
-$ `src/chat.nu`
-$ `src/store.nu`
-$ `src/config.nu`
-$ `src/history.nu`
-$ `src/webui.nu`
+$ `tokenizer.nu`
+$ `model.nu`
+$ `diffuse.nu`
+$ `sample.nu`
+$ `chat.nu`
+$ `store.nu`
+$ `config.nu`
+$ `history.nu`
+$ `webui.nu`
 $ `stdlib/ext/uuid.nu`
 $ `stdlib/std/thread.nu`
 

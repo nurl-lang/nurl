@@ -205,6 +205,12 @@ $ `stdlib/core/mem.nu`
     } {}
     : i fd ( nurl_tcp_connect host port )
     ? <= fd 0 { ^ @ !HttpConn i { F 1 } } {}
+    // A failed connect still hands back a handle — carrying the error,
+    // with no socket. Reading it used to report "closed" one call later.
+    ? != ( nurl_tcp_err_kind fd ) 0 {
+        ( nurl_tcp_close fd )
+        ^ @ !HttpConn i { F 1 }
+    } {}
     ^ @ !HttpConn i { T ( __hp_conn_new 0 fd @ TlsConn { ( shared_null [TlsConnImpl] ) } skey ) }
 }
 
@@ -250,16 +256,11 @@ $ `stdlib/core/mem.nu`
             F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 2 6
         }
     } {}
+    // Context-aware (tls.nu's plaintext writer): on a fiber an EAGAIN
+    // parks on the reactor instead of blocking the worker.
     : i fd . c fd
-    : *u dp ( vec_data [u] data )
-    : i n ( vec_len [u] data )
-    : ~ i off 0
-    ~ < off n {
-        : i wn ( nurl_tcp_write fd # s + # i dp off - n off )
-        ? <= wn 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6 } {}
-        = off + off wn
-    }
-    ^ 0
+    ? ( _tls_sock_write fd data ) { ^ 0 } {}
+    ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6
 }
 
 // Read one chunk from the transport, appending to `acc`. Returns:
@@ -284,7 +285,18 @@ $ `stdlib/core/mem.nu`
     ( vec_reserve [u] acc 16384 )
     : i len ( vec_len [u] acc )
     : *u dp ( vec_data [u] acc )
-    : i n ( nurl_tcp_read fd # s + # i dp len 16384 )
+    // Context-aware, as tls.nu's record reader: on a fiber the socket is
+    // non-blocking and an EAGAIN parks on the reactor (honouring the
+    // hp_conn_set_timeout deadline) — a plain blocking read here held
+    // the worker, and every fiber queued on it, until the server spoke.
+    : b on_fiber != ( nurl_fiber_current ) 0
+    ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
+    : ~ i n ( nurl_tcp_read fd # s + # i dp len 16384 )
+    ~ & on_fiber & < n 0 == ( nurl_tcp_err_kind fd ) 7 {
+        ? ( __tls_io_wait fd 0 ) {
+            = n ( nurl_tcp_read fd # s + # i dp len 16384 )
+        } { ^ -2 }
+    }
     ? < n 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 -2 -1 } {}
     ? == n 0 { ^ 0 } {}
     ( vec_set_len [u] acc + len n )
@@ -628,14 +640,22 @@ $ `stdlib/core/mem.nu`
             ? == state 0 {
                 // Need a full "size[;ext]\r\n" line.
                 : i nl ( __hp_find_crlf . st raw . st rawpos )
-                ? < nl 0 { = looping F } {
+                ? < nl 0 {
+                    ? > - n . st rawpos ( __hp_max_chunk_line ) { ( __hp_chunk_fail st ) } {}
+                    = looping F
+                } {
                     : i size ( __hp_parse_chunk_size st . st rawpos nl )
-                    = . st rawpos + nl 2
-                    ? == size 0 {
-                        = . st chunk_state 4
+                    ? < size 0 {
+                        ( __hp_chunk_fail st )
+                        = looping F
                     } {
-                        = . st chunk_remaining size
-                        = . st chunk_state 1
+                        = . st rawpos + nl 2
+                        ? == size 0 {
+                            = . st chunk_state 4
+                        } {
+                            = . st chunk_remaining size
+                            = . st chunk_state 1
+                        }
                     }
                 }
             } {
@@ -652,11 +672,20 @@ $ `stdlib/core/mem.nu`
                     }
                 } {
                     ? == state 3 {
-                        // consume the CRLF that terminates a chunk body.
+                        // consume the CRLF that terminates a chunk body —
+                        // exactly CRLF (RFC 9112 §7.1): anything else means
+                        // the size line lied, and the bytes after it are not
+                        // the next chunk.
                         : i avail - n . st rawpos
                         ? < avail 2 { = looping F } {
-                            = . st rawpos + . st rawpos 2
-                            = . st chunk_state 0
+                            : *u d ( vec_data [u] . st raw )
+                            ? & == # i . d . st rawpos 13 == # i . d + . st rawpos 1 10 {
+                                = . st rawpos + . st rawpos 2
+                                = . st chunk_state 0
+                            } {
+                                ( __hp_chunk_fail st )
+                                = looping F
+                            }
                         }
                     } {
                         // state 4: the trailer section after the last
@@ -665,7 +694,10 @@ $ `stdlib/core/mem.nu`
                         // consumed and dropped; the empty line ends the
                         // message, and only then is the transport clean.
                         : i nl ( __hp_find_crlf . st raw . st rawpos )
-                        ? < nl 0 { = looping F } {
+                        ? < nl 0 {
+                            ? > - n . st rawpos ( __hp_max_chunk_line ) { ( __hp_chunk_fail st ) } {}
+                            = looping F
+                        } {
                             : b empty == nl . st rawpos
                             = . st rawpos + nl 2
                             ? empty { = . st chunk_state 2 } {}
@@ -688,20 +720,45 @@ $ `stdlib/core/mem.nu`
     ^ -1
 }
 
-// Parse the hex chunk size in raw[from..crlf] (stops at ';' extensions).
+// The longest chunk-size or trailer line accepted (the server side's
+// __read_crlf_line cap). Without one, a peer that never sends the CRLF
+// grows `raw` without bound — body_max counts decoded body bytes only.
+@ __hp_max_chunk_line → i { ^ 8192 }
+
+// A malformed chunked body: the response fails (error 6) and the
+// transport is not reused — where the next message starts is unknown.
+@ __hp_chunk_fail * HttpStreamStateImpl st → v {
+    = . st err_kind 6
+    = . st conn_close 1
+    = . st finished 1
+}
+
+// Parse the hex chunk size in raw[from..crlf]: 1*HEXDIG, then optional
+// whitespace and `;` extensions (RFC 9112 §7.1.1). -1 for anything else
+// — no digits, junk after them, or a size past 2^48. The ceiling matters:
+// unchecked, `* size 16` wraps i64 on the 17th digit, and a negative
+// chunk_remaining turned the copy in state 1 into a negative-length read
+// before the buffer (found by tools/fuzz `http1resp`). 2^48 is far above
+// any body and far below the wrap, as in http_request.nu's _parse_hex_size.
 @ __hp_parse_chunk_size * HttpStreamStateImpl st i from i crlf → i {
     : *u d ( vec_data [u] . st raw )
     : ~ i size 0
+    : ~ i digits 0
     : ~ i k from
     : ~ b stop F
     ~ & < k crlf ! stop {
-        : i ch # i . d k
-        ? == ch 59 { = stop T } {  // ';' begins chunk extensions
-            : i hv ( __hp_hexval ch )
-            ? >= hv 0 { = size + * size 16 hv } { = stop T }
+        : i hv ( __hp_hexval # i . d k )
+        ? < hv 0 { = stop T } {
+            ? > size 0xFFFFFFFFFFFF { ^ -1 } {}
+            = size + * size 16 hv
+            = digits + digits 1
+            = k + k 1
         }
-        = k + k 1
     }
+    ? == digits 0 { ^ -1 } {}
+    // BWS before `;` (RFC 9112 §7.1.1); then the line must end or extend.
+    ~ & < k crlf | == # i . d k 32 == # i . d k 9 { = k + k 1 }
+    ? & < k crlf != # i . d k 59 { ^ -1 } {}
     ^ size
 }
 
@@ -752,6 +809,11 @@ $ `stdlib/core/mem.nu`
     ( __hp_compact st )
 }
 
+// The most response-head bytes accepted before the final header block
+// ends: interim 1xx heads, status line and fields (curl's per-response
+// ceiling, order of magnitude).
+@ __hp_max_header_bytes → i { ^ 262144 }
+
 // Drive reads until the final response's headers are parsed (or the
 // transport dies). Interim 1xx responses (100 Continue, 103 Early Hints)
 // are consumed and skipped — RFC 9110 §15.2, a client must be able to
@@ -765,6 +827,10 @@ $ `stdlib/core/mem.nu`
             ( __hp_parse_headers st he )
             ? ( __hp_interim st ) {} { = looping F }
         } {
+            // A header block that never ends — or an endless run of 1xx
+            // heads, which are consumed but stay in `raw` — would grow it
+            // (and the rescan) without bound.
+            ? > ( vec_len [u] . st raw ) ( __hp_max_header_bytes ) { ^ 6 } {}
             : i r ( hp_conn_read_some . st conn . st raw )
             ? < r 0 { ^ ? == r -2 2 6 } {}
             ? == r 0 {

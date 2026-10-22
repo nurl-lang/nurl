@@ -22,8 +22,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
+$ `weights.nu`
+$ `devblock.nu`
 
 @ __lmw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 

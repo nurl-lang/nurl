@@ -35,9 +35,9 @@ $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/mcp_auth.nu`
-$ `src/authz.nu`
-$ `src/imptime.nu`
-$ `src/store.nu`
+$ `authz.nu`
+$ `imptime.nu`
+$ `store.nu`
 $ `stdlib/std/thread.nu`
 
 // One version for the CLI banner and the MCP handshake.

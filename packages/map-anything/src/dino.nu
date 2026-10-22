@@ -32,11 +32,11 @@ $ `stdlib/std/float.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
-$ `src/interp.nu`
-$ `src/patchembed.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
+$ `interp.nu`
+$ `patchembed.nu`
 
 : i DN_DIM 1536
 : i DN_HEADS 24

@@ -23,7 +23,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/http.nu`
-$ `src/store.nu`
+$ `store.nu`
 $ `stdlib/core/slice.nu`
 
 // hf.co/ORG/REPO/path/to/file.gguf → https://huggingface.co/ORG/REPO/resolve/main/path/to/file.gguf

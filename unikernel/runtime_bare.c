@@ -750,6 +750,38 @@ int pthread_cond_broadcast(void *cp) {
     return 0;
 }
 
+/* cond_wait_ms (stdlib/std/thread.nu): 1 signalled, 0 timed out. Only
+ * the MAIN context reaches it with a deadline — stdlib code on a
+ * coroutine parks with nurl_fiber_park_with_mutex_ms instead, since
+ * every thread here is a coroutine — so a coroutine caller waits
+ * without one: a coroutine on a condvar's queue AND the timer list
+ * would be made runnable twice when both fire. Main runs whatever is
+ * runnable until the signal or the deadline, sleeping only when
+ * nothing is, as nurl_fiber_sleep_ms does. */
+int nurl_cond_wait_ms(void *cp, void *mp, long long ms) {
+    NbCond  *c = (NbCond *)cp;
+    NbMutex *m = (NbMutex *)mp;
+    if (!c || !m) return 0;
+    if (nb_current || ms < 0) return pthread_cond_wait(cp, mp) == 0;
+    unsigned long long seq = c->seq;
+    long long deadline = nb_now_ms() + ms;
+    int fired = 0;
+    c->main_waiters++;
+    nurl__bare_mutex_release(m);
+    for (;;) {
+        if (c->seq != seq) { fired = 1; break; }
+        long long now = nb_now_ms();
+        if (now >= deadline) break;
+        if (!nb_step_bounded(deadline - now)) {
+            long long left = deadline - nb_now_ms();
+            if (left > 0) nb_sleep_ms(left);
+        }
+    }
+    c->main_waiters--;
+    pthread_mutex_lock(m);
+    return fired;
+}
+
 /* ── §10  Threads ─────────────────────────────────────────────────
  *
  * A NURL thread is a coroutine that nobody runs until someone blocks.
@@ -857,6 +889,9 @@ void pthread_exit(void *retval) {
  *
  * Same contracts as the M:N runtime in runtime_ffi.c §24, so the NURL
  * side is unchanged. What differs is only what "concurrently" means. */
+
+/* One cooperative worker. */
+long long nurl_runtime_worker_count(void) { return 1; }
 
 void nurl_runtime_init(long long worker_count) {
     /* One vCPU: the worker count is not a tuning knob here, it is a
@@ -1041,6 +1076,36 @@ long long nurl_bare_park_ms(long long ms) {
     nb_park();
     if (ms >= 0) nb_timer_remove(c);  /* no-op unless the wake beat it */
     return c->last_park_result;
+}
+
+/* nurl_fiber_park_with_mutex with a deadline (ms < 0 = none), released
+ * mutex and all: 1 woken by nurl_fiber_wake, 0 the deadline passed, -1
+ * not on a coroutine. The hosted runtime's contract (runtime_ffi.c). */
+long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long ms) {
+    NbCoro *c = nb_current;
+    if (!c) return -1;
+    if (c->wake_pending) {
+        c->wake_pending = 0;
+        if (mutex_h) nurl__bare_mutex_release((void *)(unsigned long)mutex_h);
+        return 1;
+    }
+    c->last_park_result = 0;
+    if (ms >= 0) nb_timer_add(c, nb_now_ms() + ms);
+    c->pending_unlock = (void *)(unsigned long)mutex_h;
+    nb_park();
+    if (ms >= 0) nb_timer_remove(c);
+    return c->last_park_result;
+}
+
+/* Wake a coroutine parked in nurl_fiber_park_with_mutex_ms: 1 woken, 0
+ * no longer parked — its deadline made it runnable first (one vCPU:
+ * nothing else can have). Unlike nurl_fiber_unpark it banks nothing, so
+ * a lost race leaves no permit behind to cut short an unrelated park. */
+long long nurl_fiber_wake(long long h) {
+    NbCoro *c = (NbCoro *)(unsigned long)h;
+    if (!c || c->state != NB_PARKED) return 0;
+    nurl_fiber_unpark(h);
+    return 1;
 }
 
 void nurl_fiber_join(long long h) {

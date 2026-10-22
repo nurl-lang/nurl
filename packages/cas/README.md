@@ -60,7 +60,7 @@ cas verify <hash>                 deep-prove a blob or snapshot
 
 ## Library
 
-```nurl
+```nurl params="( Vec u ) wasm_bytes s hex s snap_hex"
 $ `deps/cas/src/manifest.nu`   // pulls cas.nu too
 
 : !Cas String co ( cas_open `/var/lib/mycache` )
@@ -69,7 +69,7 @@ $ `deps/cas/src/manifest.nu`   // pulls cas.nu too
     : !( Vec u ) String back ( cas_get c hex )         // verified fetch
     : !String String snap ( cas_snapshot c `./out` )   // tree → one hash
     : !i String n ( cas_checkout c snap_hex `./dest` )
-} F e → { … } }
+} F e → { ( nurl_eprintln ( string_data e ) ) } }
 ```
 
 Intended building block for: build caches (wasmbuilder / nurlc outputs),

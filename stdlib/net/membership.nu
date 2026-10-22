@@ -23,12 +23,22 @@
 // (pktable_gossip, pktable_sweep, pktable_pick_relays, pktable_self_fact) is
 // an owned copy, as is a decoded PkMsg's gossip — dropping the Vec (or the
 // PkMsg) releases them; pkmsg_free is an early release, optional.
+//
+// The table is one thread's: its state is changed in place with no lock, so
+// a copy of the handle never goes to another thread. What another thread
+// may need — this node's own liveness, to announce it from a heartbeat
+// thread (dist/heartbeat.nu) — is pktable_liveness: a copy of the self
+// pubkey and the table's incarnation counter, an Atomic every copy of which
+// is the same word, so the data plane refutes and the heartbeat reads with
+// no lock between them.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/lifeguard.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/std/atomic.nu`
+$ `stdlib/core/marker.nu`
 
 // ── member state ─────────────────────────────────────────────────
 @ pk_alive → i { ^ 0 }
@@ -81,7 +91,7 @@ $ `stdlib/core/rcbox.nu`
 
 : PkMemberTableImpl {
     ( Vec u ) self_pk
-    i self_incarnation
+    Atomic self_incarnation  // shared with pktable_liveness's holders
     ( Vec PkMember ) members  // excludes self
     LocalHealth health
     i suspect_min_ns  // Lifeguard suspicion floor (corroborated)
@@ -94,6 +104,11 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same state, and the last owner releases it.
 : PkMemberTable { ( Shared PkMemberTableImpl ) ctl }
 
+// Every copy is the same table, changed in place with no lock: a copy
+// moved to another thread while another stays here would race it (h319).
+// What a thread may have is pktable_liveness.
+% NotSend PkMemberTable {}
+
 @ PkMemberTable_share PkMemberTable h → PkMemberTable { ^ @ PkMemberTable { ( shared_clone [PkMemberTableImpl] . h ctl ) } }
 
 @ PkMemberTable_drop sink PkMemberTable h → v {}
@@ -104,7 +119,7 @@ $ `stdlib/core/rcbox.nu`
     : ( Shared PkMemberTableImpl ) t__box ( shared_zero [PkMemberTableImpl] )
     : *PkMemberTableImpl t ( shared_ptr [PkMemberTableImpl] t__box )
     = . t self_pk ( __pk_cpy self_pk )
-    = . t self_incarnation 0
+    = . t self_incarnation ( atomic_new 0 )
     = . t members ( vec_new [PkMember] )
     = . t health ( local_health_new lhm_max )
     = . t suspect_min_ns suspect_min_ns
@@ -244,19 +259,17 @@ $ `stdlib/core/rcbox.nu`
 
 @ pktable_self_incarnation PkMemberTable t__h → i {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    ^ . t self_incarnation
+    ^ ( atomic_load . t self_incarnation )
 }
 
 // Refute a suspicion of THIS node: bump our incarnation past `observed_inc`
 // so the Alive fact our next heartbeat carries strictly outranks the stale
-// Suspect/Dead and reinstates us everywhere. T if a bump happened.
+// Suspect/Dead and reinstates us everywhere. T if a bump happened. (One
+// atomic max: a heartbeat thread reading the counter sees the old value or
+// the new one.)
 @ pktable_refute PkMemberTable t__h i observed_inc → b {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    ? >= observed_inc . t self_incarnation {
-        = . t self_incarnation + observed_inc 1
-        ^ T
-    } {}
-    ^ F
+    ^ <= ( atomic_max . t self_incarnation + observed_inc 1 ) observed_inc
 }
 
 // Proactive "alive-but-busy" heartbeat fact: an Alive self-fact at our
@@ -265,7 +278,28 @@ $ `stdlib/core/rcbox.nu`
 // us back). An owned PkMember.
 @ pktable_self_fact PkMemberTable t__h → PkMember {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    ^ ( __pk_fact . t self_pk ( pk_alive ) . t self_incarnation )
+    ^ ( __pk_fact . t self_pk ( pk_alive ) ( atomic_load . t self_incarnation ) )
+}
+
+// This node's liveness, apart from the table: what a thread that announces
+// the node alive needs and nothing else. `pubkey` is an owned copy;
+// `incarnation` is the table's own counter (every copy of an Atomic is the
+// same word), so it follows every refute. Both may cross to another thread
+// — the table itself stays with its owner.
+: PkLiveness {
+    ( Vec u ) pubkey
+    Atomic incarnation
+}
+
+@ pktable_liveness PkMemberTable t__h → PkLiveness {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    ^ @ PkLiveness { ( __pk_cpy . t self_pk ) ( Atomic_share . t self_incarnation ) }
+}
+
+// The Alive self-fact at the current incarnation, as pktable_self_fact
+// gives it. An owned PkMember.
+@ pk_liveness_fact PkLiveness l → PkMember {
+    ^ ( __pk_fact . l pubkey ( pk_alive ) ( atomic_load . l incarnation ) )
 }
 
 // The effective suspicion deadline for a member, with the Lifeguard

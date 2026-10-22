@@ -44,6 +44,7 @@ $ `stdlib/std/tls_server.nu`
 $ `stdlib/ext/http3_server.nu`
 $ `stdlib/std/rc.nu`
 $ `stdlib/std/arc.nu`
+$ `stdlib/std/atomic.nu`
 
 : HttpAppImpl {
     Router router
@@ -60,6 +61,7 @@ $ `stdlib/std/arc.nu`
     i head_max  // request head byte cap; -1 → stdlib default (8 KiB)
     i max_keepalive  // per-conn request reuse cap; -1 → per-mode default (0 = close after one)
     i req_timeout_ms  // per-request wall-clock budget; -1 → server default (0 = disabled)
+    i drain_ms  // on SIGTERM/SIGINT: drain deadline in ms (server_drain); 0 = stop at once
     i http3  // 1 → a TLS listener also serves HTTP/3 on the same port over UDP (default)
     String pq_cert  // optional second identity for TLS listeners: ML-DSA chain PEM ("" = none)
     String pq_key  // ...and its PKCS#8 key PEM
@@ -91,7 +93,7 @@ $ `stdlib/std/arc.nu`
 
 @ http_app_new → HttpApp {
     ^ @ HttpApp { ( rc_new [HttpAppImpl] @ HttpAppImpl {
-            ( router_new ) 5000 0 F 0 F F F F ( string_new ) -1 -1 -1 -1 1 ( string_new ) ( string_new )
+            ( router_new ) 5000 0 F 0 F F F F ( string_new ) -1 -1 -1 -1 10000 1 ( string_new ) ( string_new )
             ( vec_new [HttpMiddleware] ) } ) }
 }
 
@@ -223,6 +225,17 @@ $ `stdlib/std/arc.nu`
 @ http_app_max_keepalive HttpApp a__h i n → v {
     : ~ HttpAppImpl a ( rc_take [HttpAppImpl] . a__h a )
     = . a max_keepalive n
+    ( rc_restore [HttpAppImpl] . a__h a a )
+}
+
+// Graceful shutdown on SIGTERM / SIGINT (stdlib server_drain): the
+// listener closes, idle keep-alive connections close at once, requests in
+// flight finish and go out with `Connection: close` (HTTP/2: GOAWAY), and
+// the app waits up to `ms` for the last of them before closing the rest.
+// Default 10000; 0 stops at once, dropping requests in flight.
+@ http_app_drain_ms HttpApp a__h i ms → v {
+    : ~ HttpAppImpl a ( rc_take [HttpAppImpl] . a__h a )
+    = . a drain_ms ? < ms 0 0 ms
     ( rc_restore [HttpAppImpl] . a__h a a )
 }
 
@@ -488,6 +501,27 @@ $ `stdlib/std/arc.nu`
     ? < rt 0 { = rt ( server_default_request_total_timeout_ms ) } {}
     : HttpServer srv ( server_new_complete listener base . a idle_ms ka ( __httpapp_limits a ) rt )
     ( __httpapp_banner a scheme host port )
+    // SIGTERM / SIGINT → drain. The signal itself already stopped the
+    // listener (signal_install_shutdown, async-signal-safe); this thread
+    // sees it within 20 ms and runs the drain — idle connections closed,
+    // in-flight requests finished, `drain_ms` for the rest — and the HTTP/3
+    // side says GOAWAY to its connections.
+    : Atomic served_out ( atomic_new 0 )
+    : i dms . a drain_ms
+    : ?H3Server h3w ( mem_dup h3 )
+    : ( @ v ) watcher \ → v {
+        : ~ b watching T
+        ~ watching {
+            ? | ( signal_pending ( signal_constant `SIGTERM` ) ) ( signal_pending ( signal_constant `SIGINT` ) ) {
+                ?? h3w { T s3 → { ( http3_server_drain s3 ) } F → {} }
+                : b _in_time ( server_drain srv dms )
+                = watching F
+            } {
+                ? != 0 ( atomic_load served_out ) { = watching F } { ( sleep_ms 20 ) }
+            }
+        }
+    }
+    : !Thread ThreadErr wt ( thread_spawn watcher )
     : ~ i rc 0
     ? . a use_async {
         ( runtime_init . a async_workers )
@@ -500,6 +534,8 @@ $ `stdlib/std/arc.nu`
             = rc ( __httpapp_run_result ( server_run srv ) )
         }
     }
+    ( atomic_store served_out 1 )
+    ?? wt { T t → { : i _wj ( thread_join t ) } F _ → {} }
     ( server_stop srv )
     ?? h3_thread {
         T t → {
@@ -547,8 +583,8 @@ $ `stdlib/std/arc.nu`
     // HTTP/3 rides beside it: `__httpapp_serve` binds the same port over
     // UDP for QUIC and the TCP responses announce it with Alt-Svc.
     : !TcpListener NetErr lr ? > ( string_len . a pq_cert ) 0
-    ( tcp_listen_tls_dual host port 128 cert key ( string_data . a pq_cert ) ( string_data . a pq_key ) `h2 http/1.1` )
-    ( tcp_listen_tls_with_alpn host port 128 cert key `h2 http/1.1` )
+    ( tcp_listen_tls_dual host port ( tcp_listen_default_backlog ) cert key ( string_data . a pq_cert ) ( string_data . a pq_key ) `h2 http/1.1` )
+    ( tcp_listen_tls_with_alpn host port ( tcp_listen_default_backlog ) cert key `h2 http/1.1` )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `https` host port cert key ) }
         F e → {

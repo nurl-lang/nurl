@@ -61,6 +61,26 @@
 #include <stddef.h>
 #include <sys/stat.h>
 #include <errno.h>
+/* errno, re-derived on every access. errno is a thread-local, and libc
+ * declares its accessor `const` (glibc/musl `__errno_location`, Apple and
+ * FreeBSD `__error`), so the compiler may compute its address once per
+ * function — hoisted out of a loop, merged across calls. A fiber can
+ * suspend on one worker thread and resume on another, and the runtime is
+ * LTO bitcode inlined into NURL code that parks (tcp_read_chunk_async:
+ * read → EAGAIN → park → read again): the reused address then reads the
+ * OLD thread's errno, an EAGAIN misread as a dead socket or the other way
+ * round. Every errno access in this translation unit therefore calls
+ * through a volatile function pointer — an indirect call the optimiser
+ * can neither merge nor hoist, so the address is computed on the thread
+ * the access runs on. Error paths only, so the extra load is free;
+ * tools/check_errno_fiber_safe.sh checks no direct accessor call is left.
+ * No fibers on Windows or WASI, and both spell errno differently. */
+#if !defined(_WIN32) && !defined(__wasi__)
+static int *nurl__errno_addr(void) { return &errno; }
+static int *(*volatile nurl__errno_fn)(void) = nurl__errno_addr;
+#  undef errno
+#  define errno (*nurl__errno_fn())
+#endif
 #include <math.h>
 #include <time.h>
 #ifndef __wasi__
@@ -2910,9 +2930,38 @@ static inline size_t nurl__sc_usable_fast(void *p) {
     }
     return malloc_usable_size(p);
 }
+/* Valgrind replaces malloc with its own, whose blocks have no glibc
+ * header — the word before one is a redzone, and the probe's read of it
+ * was an "Invalid read of size 8" in every program run under memcheck
+ * (twelve, one per probed size), noise in front of any real report. The
+ * probe then failed and the library query was used, as it should be, so
+ * nothing was wrong but the read itself. Ask first: the client request
+ * RUNNING_ON_VALGRIND (valgrind.h's own instruction sequence, inlined so
+ * the runtime needs no valgrind headers to build) answers non-zero under
+ * any valgrind tool and is a no-op rotate sequence on bare metal. */
+static int nurl__sc_on_valgrind(void) {
+    unsigned long args[6] = { 0x1001 /* VG_USERREQ__RUNNING_ON_VALGRIND */, 0, 0, 0, 0, 0 };
+    unsigned long res = 0;
+#  if defined(__x86_64__)
+    __asm__ volatile("rolq $3,  %%rdi ; rolq $13, %%rdi\n\t"
+                     "rolq $61, %%rdi ; rolq $51, %%rdi\n\t"
+                     "xchgq %%rbx,%%rbx"
+                     : "=d"(res) : "a"(&args[0]), "0"(0UL) : "cc", "memory");
+#  elif defined(__aarch64__)
+    __asm__ volatile("mov x3, %1\n\t"
+                     "mov x4, %2\n\t"
+                     "ror x12, x12, #3  ;  ror x12, x12, #13\n\t"
+                     "ror x12, x12, #51 ;  ror x12, x12, #61\n\t"
+                     "orr x10, x10, x10\n\t"
+                     "mov %0, x3"
+                     : "=r"(res) : "r"(0UL), "r"(&args[0]) : "cc", "memory", "x3", "x4");
+#  endif
+    return res != 0;
+}
 static void nurl__sc_probe_hdr(void) {
     static const size_t sizes[] = { 1, 8, 16, 24, 25, 40, 64, 100, 200, 500, 1000, 4000 };
     int ok = 1;
+    if (nurl__sc_on_valgrind()) { nurl__sc_hdr = 0; return; }
     for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
         void *p = malloc(sizes[i]);
         if (!p) { ok = 0; break; }
@@ -3387,6 +3436,11 @@ static void nurl__jrnl_pop_nulls(void) {
  * cannot — the drain's own record does it instead. The drain marks the
  * journal live for its duration so every nurl_free reaches the check. */
 static __thread int     nurl__draining = 0;
+/* Drains running on this thread, nested (a drop inside one panics again,
+ * or enters a recover of its own that panics). A panic raised by a drop
+ * whose recover frame is OUTSIDE the drain longjmps past the drain's
+ * epilogue; the frame it lands in ends those drains (nurl__drain_unwind). */
+static __thread int     nurl__drain_depth = 0;
 static __thread void  **nurl__dseen = NULL;
 static __thread size_t  nurl__dseen_n = 0, nurl__dseen_cap = 0;
 /* Record `p` as freed by this drain; 1 when it already was. */
@@ -3534,11 +3588,29 @@ static void nurl__jrnl_drain(uint64_t mark) {
     /* A drain inside a drop of an outer drain shares the outer record. */
     int outer = nurl__draining;
     nurl__draining = 1;
+    ++nurl__drain_depth;
     ++nurl__jrnl_live;
     nurl__jrnl_drain_body(mark);
     --nurl__jrnl_live;
+    --nurl__drain_depth;
     nurl__draining = outer;
     if (!outer) {
+        free(nurl__dseen);
+        nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
+    }
+}
+/* A recover frame entered with `depth` drains running catches a panic:
+ * the drains begun since were left by the longjmp, mid-loop (a drop that
+ * panicked — a double panic — or one inside a drop's own recover). End
+ * them as their epilogue would have: the journal no longer live for them,
+ * and once no drain is left, the record of what they freed released.
+ * Without this the thread stayed `draining` for good: every later free was
+ * recorded in a set that only grew, and one of an address the drain had
+ * freed and malloc had handed out again was skipped (a leak). */
+static void nurl__drain_unwind(int depth) {
+    while (nurl__drain_depth > depth) { --nurl__drain_depth; --nurl__jrnl_live; }
+    if (nurl__drain_depth == 0 && nurl__draining) {
+        nurl__draining = 0;
         free(nurl__dseen);
         nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
     }
@@ -3647,6 +3719,113 @@ void nurl_free(void *ptr) {
 void nurl_free_nonnull(void *ptr) {
     if (ptr != (void *)nurl__empty_str) nurl__free_nonnull(ptr);
 }
+
+/* ── §9a′  Recycled control blocks ────────────────────────────────
+ *
+ * A keep-alive HTTP server builds and drops the same objects for every
+ * response: the header Vec, a String per header name and value, the body
+ * Vec, the router's Params. The allocator cache above makes each of those
+ * blocks cheap, but not free — an allocate/free pair per block, a regrow
+ * of every buffer from empty, and inside the server's `recover` extent the
+ * journal's bookkeeping on top — and a response is built by the handler
+ * (`response_text …`), which has no connection to borrow storage from.
+ *
+ * This is where it borrows it from: a per-thread LIFO of EMPTY Vec / String
+ * control blocks that keep their buffers, in a few kinds (ext/http_response
+ * and ext/http_router name them). Whoever finishes with such an object
+ * empties it and parks its control block here; the next constructor of the
+ * same kind takes it back with its capacity. The stash only ever holds
+ * blocks nothing else references, so it is a cache with no ownership
+ * questions: a fiber that takes a block on one worker and parks it on
+ * another just moves it between two threads' stashes. Each kind holds at
+ * most NURL__STASH_DEPTH blocks; a full kind refuses (push returns 0) and
+ * the caller releases the block as usual. A thread's leftovers go back to
+ * libc when it exits.
+ *
+ * A parked block is {data, len = 0, cap >= 0}; data may be null, or — for
+ * a packed String (string_from_bytes_packed) — the bytes after the block
+ * itself. NURL_STASH=0 turns the stash off at run time (every pop misses,
+ * every push refuses), for A/B measurement. */
+#define NURL__STASH_KINDS 8
+#define NURL__STASH_DEPTH 32
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+#  define NURL__STASH_ENABLED 1
+#  define NURL__STASH_TLS
+#elif !defined(_WIN32) || (defined(__has_include) && __has_include(<pthread.h>))
+#  define NURL__STASH_ENABLED 1
+#  define NURL__STASH_PTHREAD 1
+#  define NURL__STASH_TLS __thread
+#  include <pthread.h>
+#endif
+#ifdef NURL__STASH_ENABLED
+static NURL__STASH_TLS void *nurl__stash[NURL__STASH_KINDS][NURL__STASH_DEPTH];
+static NURL__STASH_TLS int   nurl__stash_n[NURL__STASH_KINDS];
+static NURL__STASH_TLS int   nurl__stash_registered;
+static int nurl__stash_on = -1;   /* -1 unknown, 0 off, 1 on; benign race */
+/* A parked block back to libc. free, not nurl_free: this runs from a
+ * thread-exit destructor, after which the allocator cache's own flush may
+ * already have run (destructor order is unspecified), and nothing parked is
+ * in the panic journal. Every block came from nurl_alloc / nurl_zalloc,
+ * which hand out ordinary libc chunks. */
+static void nurl__stash_release(void *ctl) {
+    long long *c = (long long *)ctl;
+    void *data = (void *)(intptr_t)c[0];
+    if (data && data != (void *)((char *)ctl + 24)) free(data);
+    free(ctl);
+}
+#  ifdef NURL__STASH_PTHREAD
+static pthread_key_t  nurl__stash_key;
+static pthread_once_t nurl__stash_once = PTHREAD_ONCE_INIT;
+static void nurl__stash_thread_flush(void *unused) {
+    (void)unused;
+    for (int k = 0; k < NURL__STASH_KINDS; k++) {
+        while (nurl__stash_n[k] > 0) nurl__stash_release(nurl__stash[k][--nurl__stash_n[k]]);
+    }
+}
+static void nurl__stash_make_key(void) {
+    pthread_key_create(&nurl__stash_key, nurl__stash_thread_flush);
+}
+#  endif
+__attribute__((noinline, cold))
+static int nurl__stash_init(void) {
+    const char *e = getenv("NURL_STASH");
+    nurl__stash_on = !(e && e[0] == '0' && e[1] == '\0');
+    return nurl__stash_on;
+}
+__attribute__((noinline, cold))
+static void nurl__stash_register(void) {
+    nurl__stash_registered = 1;
+#  ifdef NURL__STASH_PTHREAD
+    pthread_once(&nurl__stash_once, nurl__stash_make_key);
+    pthread_setspecific(nurl__stash_key, (void *)1);
+#  endif
+}
+/* An empty control block of `kind` with its buffer, or NULL. */
+NURL_TLS_FN void *nurl_stash_pop(long long kind) {
+    if ((unsigned long long)kind >= NURL__STASH_KINDS) return NULL;
+    int n = nurl__stash_n[kind];
+    if (n == 0) return NULL;
+    nurl__stash_n[kind] = n - 1;
+    return nurl__stash[kind][n - 1];
+}
+/* Park the empty control block `ctl` (len 0) under `kind`: 1 when the
+ * stash took it, 0 when the caller keeps it (kind full, stash off). */
+NURL_TLS_FN long long nurl_stash_push(long long kind, void *ctl) {
+    if (!ctl || (unsigned long long)kind >= NURL__STASH_KINDS) return 0;
+    int on = nurl__stash_on;
+    if (__builtin_expect(on < 0, 0)) on = nurl__stash_init();
+    if (!on) return 0;
+    int n = nurl__stash_n[kind];
+    if (n >= NURL__STASH_DEPTH) return 0;
+    if (__builtin_expect(!nurl__stash_registered, 0)) nurl__stash_register();
+    nurl__stash[kind][n] = ctl;
+    nurl__stash_n[kind] = n + 1;
+    return 1;
+}
+#else
+void *nurl_stash_pop(long long kind) { (void)kind; return NULL; }
+long long nurl_stash_push(long long kind, void *ctl) { (void)kind; (void)ctl; return 0; }
+#endif
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     /* Zero bytes touch nothing — not even a null source (an empty or
      * null string's bytes), which C's memcpy may not be handed. */
@@ -3755,15 +3934,23 @@ long long nurl_umulhi(long long a, long long b) {
  * x86-64-v2 plus AES-NI and PCLMULQDQ, the feature set nurlc compiles
  * every function that uses a hardware crypto primitive with.
  *
- * Two environment variables can only ever take an answer AWAY, never
- * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0
- * and NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes. They exist so
+ * And the VAES tier (nurl_cpu_x86_vaes): v3 plus the AES tier plus VAES
+ * and VPCLMULQDQ, for the v256 crypto primitives; and the AVX-512 VAES
+ * tier (nurl_cpu_x86_vaes512): that plus x86-64-v4, for the v512 ones.
+ *
+ * Four environment variables can only ever take an answer AWAY, never
+ * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
+ * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
+ * nurl_cpu_x86_vaes and NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 (and
+ * each tier goes with any it contains). They exist so
  * one machine can run every clone and every fallback a marked function
  * has — the baseline clone, the AES clone without AVX2, the software
  * path a program takes on a CPU with no AES-NI at all — rather than
  * only the one its own CPUID picks. */
 static int nurl__cpu_v3 = -1;
 static int nurl__cpu_aes = -1;
+static int nurl__cpu_vaes = -1;
+static int nurl__cpu_vaes512 = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -3821,6 +4008,35 @@ static void nurl__cpu_v3_detect(void) {
     nurl__cpu_v3 = ((ebx7 & (1u << 5)) && (ebx7 & (1u << 8))) ? 1 : 0;
 }
 
+/* The VAES tier's own bits: leaf-7 ECX VAES (9) and VPCLMULQDQ (10).
+ * Their 256-bit forms are VEX-encoded and need nothing past AVX2 — the
+ * ZMM forms would need AVX-512 and its XCR0 bits, which this tier does
+ * not use — so the rest of the tier is the v3 answer (YMM state saved
+ * by the OS included) and the AES tier's. */
+static int nurl__cpu_vaes_bits(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(7, 0, r);
+    const unsigned need = (1u << 9) | (1u << 10);
+    return (r[2] & need) == need;
+}
+
+/* The AVX-512 VAES tier: x86-64-v4 — leaf-7 EBX AVX512F (16), DQ (17),
+ * CD (28), BW (30), VL (31) — on top of the VAES tier, and the OS saving
+ * the opmask and the full ZMM state: XCR0 bits 5, 6, 7 beside SSE (1)
+ * and AVX (2). The XCR0 read is safe here: the caller only asks after
+ * the v3 answer, which checked OSXSAVE. */
+static int nurl__cpu_avx512_bits(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(7, 0, r);
+    const unsigned need = (1u << 16) | (1u << 17) | (1u << 28) | (1u << 30) | (1u << 31);
+    if ((r[1] & need) != need) return 0;
+    return (nurl__xcr0() & 0xe6) == 0xe6;
+}
+
 static int nurl__cpu_env_off(const char *name) {
     const char *e = getenv(name);
     return e && e[0] == '0' && e[1] == '\0';
@@ -3831,12 +4047,86 @@ static void nurl__cpu_detect(void) {
     int aes = nurl__cpu_aes_detect();
     if (nurl__cpu_env_off("NURL_CPU_V3")) nurl__cpu_v3 = 0;
     if (nurl__cpu_env_off("NURL_CPU_AES")) aes = 0;
+    /* After the two above: taking v3 or AES away takes the VAES tier
+     * with it, since it contains both. */
+    int vaes = nurl__cpu_v3 && aes && nurl__cpu_vaes_bits();
+    if (nurl__cpu_env_off("NURL_CPU_VAES")) vaes = 0;
+    int vaes512 = vaes && nurl__cpu_avx512_bits();
+    if (nurl__cpu_env_off("NURL_CPU_VAES512")) vaes512 = 0;
     nurl__cpu_aes = aes;
+    nurl__cpu_vaes = vaes;
+    nurl__cpu_vaes512 = vaes512;
+}
+
+#elif defined(__aarch64__) || defined(_M_ARM64)
+
+/* AArch64: the crypto tier is the ARMv8 Cryptographic Extension's AES
+ * half — AESE / AESD / AESMC / AESIMC and PMULL / PMULL2 (FEAT_AES +
+ * FEAT_PMULL) — which nurlc lowers the same nurl_v128_aes* /
+ * nurl_v128_clmul_* primitives to. Optional in the architecture (a
+ * Cortex-A72 without the crypto licence lacks it: the Raspberry Pi 4),
+ * present on every Apple Silicon and Graviton CPU. Asked of the OS where
+ * there is one — user code may not read the ID registers itself on
+ * macOS — and of ID_AA64ISAR0_EL1 directly on a freestanding target
+ * (EL1 may read it; Linux also emulates the read at EL0). The x86 tiers
+ * answer 0. */
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(_WIN32)
+/* kernel32's, declared rather than <windows.h> pulled in mid-file. */
+__declspec(dllimport) int __stdcall IsProcessorFeaturePresent(unsigned long feature);
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+#include <sys/auxv.h>
+#elif defined(__FreeBSD__)
+#include <sys/auxv.h>
+#endif
+
+static int nurl__cpu_arm_aes_detect(void) {
+#if defined(__APPLE__)
+    int aes = 0, pmull = 0;
+    size_t n = sizeof aes;
+    /* macOS 12 and later name the features; before that the keys are
+     * absent, and every Apple Silicon CPU has both. */
+    if (sysctlbyname("hw.optional.arm.FEAT_AES", &aes, &n, 0, 0) != 0) return 1;
+    n = sizeof pmull;
+    if (sysctlbyname("hw.optional.arm.FEAT_PMULL", &pmull, &n, 0, 0) != 0) return aes != 0;
+    return aes != 0 && pmull != 0;
+#elif defined(_WIN32)
+    /* PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE: AES, PMULL, SHA1, SHA2. */
+    return IsProcessorFeaturePresent(30) != 0;
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+    /* HWCAP_AES (bit 3) and HWCAP_PMULL (bit 4). */
+    unsigned long hw = getauxval(AT_HWCAP);
+    return (hw & (1ul << 3)) && (hw & (1ul << 4));
+#elif defined(__FreeBSD__)
+    unsigned long hw = 0;
+    if (elf_aux_info(AT_HWCAP, &hw, sizeof hw) != 0) return 0;
+    return (hw & (1ul << 3)) && (hw & (1ul << 4));
+#elif defined(__GNUC__) || defined(__clang__)
+    /* ID_AA64ISAR0_EL1.AES, bits 7:4: 1 = AES, 2 = AES and PMULL. */
+    unsigned long long isar0;
+    __asm__ __volatile__("mrs %0, ID_AA64ISAR0_EL1" : "=r"(isar0));
+    return ((isar0 >> 4) & 0xf) >= 2;
+#else
+    return 0;
+#endif
+}
+
+static int nurl__cpu_env_off(const char *name) {
+    const char *e = getenv(name);
+    return e && e[0] == '0' && e[1] == '\0';
+}
+
+static void nurl__cpu_detect(void) {
+    nurl__cpu_v3 = 0;
+    nurl__cpu_vaes = 0;
+    nurl__cpu_vaes512 = 0;
+    nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; }
 
 #endif
 
@@ -3865,13 +4155,63 @@ int nurl_cpu_x86_aes(void) {
     return nurl__cpu_aes;
 }
 
+/* Does this CPU have the AArch64 crypto tier — FEAT_AES and FEAT_PMULL
+ * (above)? The gate and nurl_cpu_has_aes of a module nurlc built for
+ * AArch64 ask this, as an x86-64 module's ask nurl_cpu_x86_aes; the
+ * same cache answers both, so NURL_CPU_AES=0 takes either away. */
+int nurl_cpu_arm_aes(void) {
+    if (nurl__cpu_aes < 0) nurl__cpu_detect();
+    return nurl__cpu_aes;
+}
+
+/* Does this CPU have the VAES tier — x86-64-v3 + AES-NI + PCLMULQDQ +
+ * VAES + VPCLMULQDQ, the feature set nurlc compiles every function that
+ * uses a v256 crypto primitive (nurl_v256_aes*, nurl_v256_clmul_*) with?
+ * Ice Lake, Tiger Lake, Alder Lake and later Intel, Zen 3 and later AMD.
+ * `readnone` to nurlc, like the AES answer. NURL_CPU_VAES=0 takes it
+ * away (and NURL_CPU_V3=0 or NURL_CPU_AES=0 does too). */
+int nurl_cpu_x86_vaes(void) {
+    if (nurl__cpu_vaes < 0) nurl__cpu_detect();
+    return nurl__cpu_vaes;
+}
+
+/* Does this CPU have the AVX-512 VAES tier — the VAES tier plus
+ * x86-64-v4 (AVX-512 F/BW/CD/DQ/VL, with the OS saving ZMM state) — the
+ * feature set of every function that uses a v512 crypto primitive
+ * (nurl_v512_aes*, nurl_v512_clmul_*)? Ice Lake server, Sapphire Rapids
+ * and later Intel, Zen 4 and later AMD. NURL_CPU_VAES512=0 takes it
+ * away, and so does anything that takes the VAES tier away. */
+int nurl_cpu_x86_vaes512(void) {
+    if (nurl__cpu_vaes512 < 0) nurl__cpu_detect();
+    return nurl__cpu_vaes512;
+}
+
+void nurl_cpu_vaes512_missing(void) {
+    nurl_panic("this function needs AVX-512 with VAES and VPCLMULQDQ (x86-64-v4 + AES + VAES), "
+               "which this CPU lacks; check nurl_cpu_has_vaes512 before calling it");
+    abort();
+}
+
+/* The VAES tier's gate failure, as nurl_cpu_aes_missing is the AES
+ * tier's. */
+void nurl_cpu_vaes_missing(void) {
+    nurl_panic("this function needs VAES and VPCLMULQDQ (x86-64-v3 + AES + VAES), "
+               "which this CPU lacks; check nurl_cpu_has_vaes before calling it");
+    abort();
+}
+
 /* The gate's failure path: a function compiled for the crypto tier was
  * entered on a CPU without it. A panic rather than the SIGILL the first
  * AES instruction would raise — and recoverable like any other. A
  * program that wants a software path asks nurl_cpu_has_aes first. */
 void nurl_cpu_aes_missing(void) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    nurl_panic("this function needs the ARMv8 Cryptographic Extension (AES and PMULL), "
+               "which this CPU lacks; check nurl_cpu_has_aes before calling it");
+#else
     nurl_panic("this function needs AES-NI and PCLMULQDQ (x86-64-v2 + AES), "
                "which this CPU lacks; check nurl_cpu_has_aes before calling it");
+#endif
     abort();
 }
 
@@ -3887,6 +4227,25 @@ void nurl_cpu_aes_missing(void) {
 long long nurl_cpu_dispatch_default(void) {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
     return 1;
+#else
+    return 0;
+#endif
+}
+
+/* The architecture a NATIVE nurlc's output is compiled for by default —
+ * its own (nurlc emits no target triple, so clang picks the host): 1
+ * x86-64, 2 AArch64, 0 anything else. It decides which CPU-specific code
+ * nurlc may emit without being told (`--target=` overrides): the `simd`
+ * clones and the x86 crypto tiers on 1, the AArch64 crypto tier on 2,
+ * neither on 0. A wasm nurlc answers 1, the native default, for the
+ * reason nurl_cpu_dispatch_default gives. (That one is what nurlc asked
+ * before it knew AArch64 had a tier; the committed bootstrap snapshot of
+ * an older compiler still calls it.) */
+long long nurl_host_arch(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__wasm__)
+    return 1;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return 2;
 #else
     return 0;
 #endif
@@ -5105,6 +5464,7 @@ typedef struct NurlPanicFrame {
     jmp_buf                  jb;
     char                    *msg;   /* owned panic message or NULL */
     uint64_t                 jmark; /* registration sequence at recover entry */
+    int                      drains; /* journal drains running at recover entry */
     struct NurlPanicFrame   *prev;
 } NurlPanicFrame;
 
@@ -5201,6 +5561,7 @@ static void nurl__recover_leave(NurlPanicFrame *frame) {
 }
 __attribute__((noinline))
 static void nurl__recover_caught(NurlPanicFrame *frame) {
+    nurl__drain_unwind(frame->drains);
     nurl__recover_leave(frame);
     nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
     nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
@@ -5208,6 +5569,7 @@ static void nurl__recover_caught(NurlPanicFrame *frame) {
 __attribute__((noinline))
 static void nurl__recover_enter(NurlPanicFrame *frame) {
     frame->jmark = nurl__jrnl_mark();
+    frame->drains = nurl__drain_depth;
     frame->prev  = nurl__panic_top;
     nurl__panic_top = frame;
     nurl__jrnl_active++;
@@ -5256,11 +5618,13 @@ static void nurl__recover_lean_leave(NurlPanicFrame *frame) {
 __attribute__((noinline))
 static void nurl__recover_lean_enter(NurlPanicFrame *frame) {
     frame->jmark = nurl__jrnl_mark();
+    frame->drains = nurl__drain_depth;
     frame->prev  = nurl__panic_top;
     nurl__panic_top = frame;
 }
 __attribute__((noinline))
 static void nurl__recover_lean_caught(NurlPanicFrame *frame) {
+    nurl__drain_unwind(frame->drains);
     nurl__recover_lean_leave(frame);
     nurl_free(nurl__panic_last_msg);
     nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
@@ -5314,8 +5678,13 @@ NURL_TLS_FN void nurl_panic(const char *msg) {
         fflush(stdout);
         abort();
     }
-    nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
-                                         : strdup("(no message)");
+    /* A panic raised by a drop while this frame's journal drains (a double
+     * panic) is caught by the same frame: the nested drain below releases
+     * what is left, and the first panic — the cause — keeps its message
+     * (overwriting it leaked the first). */
+    if (!nurl__panic_top->msg)
+        nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
+                                             : strdup("(no message)");
     /* Run the scope-exit drops the longjmp is about to skip: free every
      * owned allocation recorded since this recover frame's mark while
      * the owning C frames are still valid. Closes the panic-unwind leak

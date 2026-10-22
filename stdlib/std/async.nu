@@ -167,6 +167,12 @@ $ `stdlib/std/async_ffi.nu`
     ( nurl_runtime_init workers )
 }
 
+// The worker pthreads the runtime runs fibers on (0 before runtime_init;
+// 1 on a single-threaded target).
+@ runtime_worker_count → i {
+    ^ ( nurl_runtime_worker_count )
+}
+
 // Drain the scheduler — runs every runnable fiber to completion or
 // until `runtime_shutdown` is called. From outside a fiber this
 // blocks the calling thread; from inside a fiber it is undefined

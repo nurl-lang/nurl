@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+write=0
+read=1
+body=hello
+ticker_ran_during_read=yes
+write=0
+deadline_read=-2
+deadline_on_time=yes

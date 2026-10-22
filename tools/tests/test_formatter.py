@@ -62,6 +62,16 @@ class FormatterTest(unittest.TestCase):
         self.assertEqual((run.returncode, run.stdout), (0, want), run.stderr)
         self.assertEqual(self.run_fmt('--check', data=want).returncode, 0)
 
+    def test_marker_impl_after_a_prefix_stays_spaced(self):
+        # After `unsafe` / `pub` the `%` opens an impl or a trait (grammar
+        # v2.11 `unsafe % Send T { }`), not a `%Trait` object type: it is
+        # spaced as at the start of a line, while `: %Pet p` still glues.
+        src = 'unsafe %Send W {}\npub %Ord [T] {}\n%Sync W {}\n@ f %Pet p → i { ^ 0 }\n'.encode()
+        want = 'unsafe % Send W {}\n\npub % Ord [T] {}\n\n% Sync W {}\n\n@ f %Pet p → i { ^ 0 }\n'.encode()
+        run = self.run_fmt(data=src)
+        self.assertEqual((run.returncode, run.stdout), (0, want), run.stderr)
+        self.assertEqual(self.run_fmt('--check', data=want).returncode, 0)
+
     def test_file_modes_and_unchanged_write(self):
         run = self.run_fmt(self.path)
         self.assertEqual((run.returncode, run.stdout), (0, CANONICAL), run.stderr)

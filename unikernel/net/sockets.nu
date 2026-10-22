@@ -681,6 +681,14 @@ unsafe @ __wait i fd i for_write i timeout_ms → i {
 
 @ nurl_tcp_unref i handle → v { ( nurl_tcp_close handle ) }
 
+// A connection shut from another context (the HTTP server's drain): the
+// same shut as a listener's — both ways, whichever `both` asks — and the
+// same wake.
+@ nurl_tcp_conn_shutdown i handle i both → v {
+    ( sock_shutdown ( __tab ) handle )
+    ( __wake_ready )
+}
+
 @ nurl_tcp_shutdown i handle → v {
     ( sock_shutdown ( __tab ) handle )
     // A shut fd reports itself ready so a waiter wakes and finds the
@@ -728,6 +736,12 @@ unsafe @ nurl_tcp_close i handle → v {
     ^ ( sock_listen st ip port backlog )
 }
 
+// One stack, one socket per port: SO_REUSEPORT has nothing to spread
+// across, so the options are ignored.
+@ nurl_tcp_listen_opts s host i port i backlog i flags → i {
+    ^ ( nurl_tcp_listen host port backlog )
+}
+
 @ nurl_tcp_accept i listener → i {
     : SockTab st ( __tab )
     ~ T {
@@ -746,6 +760,22 @@ unsafe @ nurl_tcp_close i handle → v {
 // carrying the error, which is the contract every caller of
 // `tcp_connect` is written against.
 @ nurl_tcp_connect s host i port → i {
+    ^ ( nurl_tcp_connect_ms host port 0 )
+}
+
+// Milliseconds left until the absolute `deadline` (`__ms` clock), never
+// below 0 — which `__wait` reads as "do not wait", i.e. timed out.
+@ __left_ms i deadline → i {
+    : i l - deadline ( __ms )
+    ^ ? > l 0 l 0
+}
+
+// `nurl_tcp_connect` with a deadline over the whole call (`ms` <= 0 =
+// none): the hosted runtime's contract, a timed-out connect reports
+// NetTimeout (`sock_err_again`). Waiting here already lets every other
+// coroutine run — the wait loop is the scheduler's customer.
+@ nurl_tcp_connect_ms s host i port i ms → i {
+    : i deadline ? > ms 0 + ( __ms ) ms 0
     : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
@@ -760,7 +790,7 @@ unsafe @ nurl_tcp_close i handle → v {
         } {}
         // Not there yet. A pending connection becomes writable exactly
         // when it is established, so the ordinary wait does the job.
-        : i r ( __wait fd 1 ( __block_ms ( sock_timeout st fd ) ) )
+        : i r ( __wait fd 1 ? > ms 0 ( __left_ms deadline ) ( __block_ms ( sock_timeout st fd ) ) )
         ? != r 1 {
             ( sock_close st fd ( __ms ) )
             ^ ( sock_err_fd st ? == r 0 ( sock_err_again ) ( sock_err_closed ) )

@@ -11,8 +11,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/template/src/template.nu`
 $ `deps/md2html/src/markdown.nu`
-$ `src/store.nu`
-$ `src/extract.nu`
+$ `store.nu`
+$ `extract.nu`
 $ `stdlib/core/slice.nu`
 
 // ── Chrome (shared head/foot partials) ────────────────────────────────

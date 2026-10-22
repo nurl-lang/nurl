@@ -11,7 +11,8 @@
 //     -U USER        user (default $PGUSER or postgres)
 //     -d DB          database (default $PGDATABASE or the user)
 //     -c SQL         run one command and exit; otherwise read from stdin
-//     --sslmode M    disable | prefer | require | verify-full (default prefer)
+//     --sslmode M    disable | prefer | require | verify-full (default
+//                    $PGSSLMODE, else prefer — libpq's default)
 //   Password is taken from $PGPASSWORD.
 //
 //   Meta-commands (when no statement is pending):
@@ -473,6 +474,10 @@ $ `stdlib/core/slice.nu`
     ?? cr {
         F e → {
             ( nurl_eprint `psql: connection failed: ` ) ( nurl_eprint ( pg_err_name e ) ) ( nurl_eprint `\n` )
+            ?? e {
+                PgInsecureAuth → { ( nurl_eprint `psql: the server declined TLS and asked for the password in the clear or as MD5, which anyone in the path could have asked for too; use --sslmode require (or verify-full), or --sslmode disable to send it anyway\n` ) }
+                _ → {}
+            }
             ^ 1
         }
         T c → {
@@ -500,7 +505,7 @@ $ `stdlib/core/slice.nu`
     ( cli_flag_str c `password` 0 `PASS` `password (usually via $PGPASSWORD)` `` `PGPASSWORD` )
     ( cli_flag_str c `dbname` 100 `DB` `database (default: the user name)` `` `PGDATABASE` )
     ( cli_flag_str c `command` 99 `SQL` `run one command and exit (otherwise start a REPL)` `` `` )
-    ( cli_flag_str c `sslmode` 0 `MODE` `disable | prefer | require | verify-full` `prefer` `` )
+    ( cli_flag_str c `sslmode` 0 `MODE` `disable | prefer | require | verify-full (verify-full checks the server's certificate)` `prefer` `PGSSLMODE` )
     ( cli_default c \ CliCtx x → i { ^ ( __psql_go x ) } )
     : i rc ( cli_run c )
     ^ rc

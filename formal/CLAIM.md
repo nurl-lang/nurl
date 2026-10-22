@@ -7,10 +7,13 @@
 ## Statement
 
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
-functions, is memory-safe and leak-free:** no use after free, no double
-free, no read through a dangling view, no out-of-bounds access, no data
-race, and everything it allocated is released — on the panic path as much
-as the normal one.
+functions and its `unsafe` assertions, is memory-safe and leak-free** —
+*proven so far (A1, A2) for the ownership rules of the single-threaded
+language as the calculus models them; the data-race clause is A3, and the
+link from the rules to nurlc and its code is B–D* (below): no use after
+free, no double free, no read through a dangling view, no out-of-bounds
+access, no data race, and everything it allocated is released — on the
+panic path as much as the normal one.
 
 This is the guarantee of [`docs/MEMORY.md` §6.2](../docs/MEMORY.md),
 stated as a theorem. "Memory model" here means NURL's ownership model:
@@ -36,7 +39,8 @@ the LLVM / C11 memory model rather than redefining it.
   `A2.soundness`, `A2.memory_safe` and `A2.no_leak_end`, on the standard
   axioms only. The calculus adds to A1 structs and enums with field-precise
   paths, closures and trait objects as packages with captures by handle
-  and by name, panics with unwinding and `recover`, and the drop journal.
+  and by name, `inout` of every owning type and a field replaced in place,
+  panics with unwinding and `recover`, and the drop journal.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
 - **A3** — the theorem with threads: a well-typed program has no data
@@ -49,6 +53,35 @@ the LLVM / C11 memory model rather than redefining it.
 Until B, C and D are done, the theorem is about the rules; the standard
 library, the compiler and the code generator are part of the trusted base.
 
+## Destructors, and a panic while a panic unwinds
+
+In the calculus a drop releases what a value owns and runs no code of the
+program's: a scope's exit, a `free`, a replaced value and a panic's
+unwinding all release by `DropSlot`, which cannot fail. A destructor
+written by the program (`% Drop T { @ drop … }`, docs/MEMORY.md §7.6) is
+code the calculus does not have yet — its body is an ordinary function the
+rules check, and A2's theorem covers it as a call, not as part of a drop.
+So a *double panic* — a destructor that panics while a panic's journal
+drains — is outside the calculus, and is a property of the runtime
+(`stdlib/runtime_core.c`, `nurl_panic`), stated here so the claim does not
+hide it:
+
+- the second panic is caught by the same `recover` frame as the first;
+  the drain it starts releases what the journal still holds (each entry
+  leaves the journal before its drop runs, so nothing is dropped twice),
+  and the `recover` reports the first panic's message — the cause;
+- the drain the second panic interrupted is ended by the frame that
+  catches it (`nurl__drain_unwind`): the thread's drain state is reset,
+  so later frees are ordinary;
+- with no `recover` frame, any panic ends the process (`abort`) before a
+  drain starts, so nothing is released twice and the process's memory goes
+  with it.
+
+Test: `compiler/tests/panic_in_drop_while_unwinding.nu` (clean under
+AddressSanitizer and LeakSanitizer). Modelling destructors in the calculus
+— a drop that runs a function, and may panic — is a planned refinement
+(`README.md`).
+
 ## Trusted base
 
 Even when every phase is done, these remain trusted rather than proven
@@ -56,7 +89,17 @@ Even when every phase is done, these remain trusted rather than proven
 
 - the proof assistant's kernel;
 - `unsafe` functions outside the standard library — each vouches for
-  itself, and `nurlc --unsafe-report` lists them;
-- marker assertions (`% Send`, `% Sync`, `% NotSend`, `% NotSync`,
-  `% Resource`) on types whose safety the compiler cannot see;
+  itself;
+- `unsafe % Send` / `unsafe % Sync` assertions outside the standard
+  library, on types whose safety the compiler cannot see (a positive
+  marker stops the derivation; every other marker only adds checks, so a
+  safe module may write it — `docs/MEMORY.md` §3);
+- the `in`, `sync` and `nocapture` claims of foreign declarations outside
+  the standard library (`sync` is a data-race claim about C code);
+- `nurlc --unsafe-report` lists all three, one `file:line` each;
+- until B: the standard library's own marker assertions and foreign
+  claims, in both directions — each `% Send` / `% Sync` it writes, and each
+  `% NotSend`, `% NotSync` and `% Frozen` it must not leave out
+  (`% Frozen RGuard {}` in `stdlib/std/rwlock.nu`: what a read guard lends
+  is read-only);
 - the C runtime, LLVM, the linker and the operating system.

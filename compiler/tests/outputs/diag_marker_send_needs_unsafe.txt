@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_marker_send_needs_unsafe.nu:20:16: error: '% Sync Shared2 { }' asserts that 'Shared2' is safe to reach from two threads at once, and the compiler stops checking its fields there — an Rc or a Cell inside it, or an Arc's payload reached through it, is no longer seen. Wrong, it is a data race in safe code, so it is an unchecked promise: write it 'unsafe % Sync Shared2 { }' (docs/MEMORY.md §6.5; nurlc --unsafe-report lists it). If the type holds shared state, put it in a Locked or an RwLocked (stdlib/std/thread.nu, stdlib/std/rwlock.nu) instead, which the compiler checks.
+% Sync Shared2 {}
+               ^

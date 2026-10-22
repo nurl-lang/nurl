@@ -21,8 +21,8 @@ $ `deps/audio/src/resample.nu`
 $ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
-$ `src/ggml.nu`
-$ `src/model.nu`
+$ `ggml.nu`
+$ `model.nu`
 $ `stdlib/core/slice.nu`
 
 // Is `model` a whisper.cpp ggml container? Decided by the file's own first

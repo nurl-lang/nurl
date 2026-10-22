@@ -2,6 +2,22 @@
 
 All notable changes to the `nurllama` package.
 
+## [0.22.2] — 2026-10-21
+
+### Fixed
+
+- Requires gpu 0.17.7 / gpukit 0.11.13: uploading a mapped model's tensor bytes was
+  refused as a write to an Arc's payload until gpu declared its upload path read-only.
+
+## [0.22.1] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/nurllama/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.22.0] — 2026-10-16
 
 - **Every kernel is a gpukit checked kernel.** The 39 CUDA-C kernels launched over raw device addresses are gone: a weight is a byte buffer (`GkBBuf`) read with byte, 16- and 32-bit word loads, activations are `GkBuf`s, and every load and store is bounds-checked. `unsafe` 3 → 0, `raw` 18 → 0. The engine holds no device address.

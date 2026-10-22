@@ -1374,11 +1374,11 @@ picked on startup.
 
 ## Library
 
-```nurl
+```nurl params="Json point_json"
 $ `deps/anomaly/src/dynamic.nu`
 
 : Store st ( store_open `/var/lib/anomaly` )
-: Model mo ( model_open st `boiler` )   // released by its last owner
+: ~ Model mo ( model_open st `boiler` )   // released by its last owner
 : !Verdict String vr ( model_ingest mo point_json )   // or model_detect_only
 ```
 

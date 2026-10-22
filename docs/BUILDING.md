@@ -565,12 +565,12 @@ one that touches both code and either of them runs everything.
 | Job / step | What it checks |
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
-| soundness hole probes | `tools/fuzz/holes/check.sh` — all `h01–h315` soundness probes are rejected or run clean under sanitizers |
+| soundness hole probes | `tools/fuzz/holes/check.sh` — all `h01–h319` soundness probes are rejected or run clean under sanitizers |
 | formal soundness proof (Lean 4) | [`formal.yml`](../.github/workflows/formal.yml), when `formal/` changes: `formal/check.sh` builds the A1 and A2 proofs (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`) and fails on a `sorry` or an axiom beyond Lean's standard ones |
 | diagnostic coverage, anchor & type-spelling gates | `tools/check_diag_coverage.sh`, `tools/check_diag_anchor.sh` and `tools/check_diag_nurl_types.sh` — every compiler diagnostic is exercised by a test, points at the right token, and names types as NURL spells them (no lowered LLVM types in a golden) |
 | self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |
 | self-compile leak gate | `tools/leakgate.sh` — `nurlc compiler/nurlc.nu` must leak nothing under LSan; runs when `compiler/nurlc.nu` changes |
-| examples & package gates | every program under `examples/` compiles (`tools/check_examples.sh`); package imports and versions are consistent (`tools/check_package_imports.sh`, `tools/check_package_version_strings.sh`) |
+| examples & package gates | every program under `examples/` compiles (`tools/check_examples.sh`); every ```` ```nurl ```` block in `docs/`, `README.md` and the package READMEs compiles, or is rejected with the diagnostic it is annotated with (`tools/check_doc_examples.sh`); package imports and versions are consistent (`tools/check_package_imports.sh`, `tools/check_package_version_strings.sh`); every package's `src/main.nu` and `src/<name>.nu` compiles as an installed consumer compiles it (`tools/check_package_entries.py`) |
 | stdlib symbol & builtins doc gates | `tools/check_stdlib_symbols.sh` and `tools/check_builtins_doc.sh` |
 | MCP servers from the checkout | `packages/nurl-mcp/tests/stdio_test.sh` (nurl-mcp built from the tree and driven over stdio as an agent drives it) and `nurlapi/e2e_local.sh --native-only` (the playground server against the checkout's toolchain: native builds, the diagnostics contract, the MCP surface) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |

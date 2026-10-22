@@ -41,7 +41,7 @@
 //   ( mqtt_keepalive_tick MqttClient )                         → ! v MqttErr
 //   ( mqtt_reconnect    MqttClient s host i port MqttConfig cfg ) → ! v MqttErr
 //   ( mqtt_receive      MqttClient )                           → ! MqttMessage MqttErr
-//   ( mqtt_listen       MqttClient )                           → ! MqttListener MqttErr
+//   ( mqtt_listen  sink MqttClient )                           → ! MqttListener MqttErr
 //   ( mqtt_listener_recv MqttListener lst )                    → ? MqttMessage
 //   ( mqtt_listener_stop MqttListener lst )                    → v
 //   ( mqtt_message_prop MqttMessage m s key )                  → s   borrowed
@@ -1419,11 +1419,13 @@ $ `stdlib/ext/websocket.nu`
 // inbound packets, pushes every PUBLISH onto an inbox channel, consumes
 // PINGRESP transparently, and emits its own keep-alive PINGREQs — so
 // the application can do other work and just pull messages with
-// `mqtt_listener_recv`. The thread is the sole user of `cl` from here
-// on; do not call other mqtt_* functions on `cl` while it runs.
+// `mqtt_listener_recv`. The client is handed over (`sink`): the thread
+// is its only user from here on — its buffers and packet-id state are
+// changed with no lock — so the caller has nothing left to call mqtt_*
+// functions on while it runs.
 //
 // Intended for a subscriber: SUBSCRIBE before mqtt_listen, then consume.
-@ mqtt_listen MqttClient cl → !MqttListener MqttErr {
+@ mqtt_listen sink MqttClient cl → !MqttListener MqttErr {
     : ( Channel MqttMessage ) inbox ( chan_new [MqttMessage] )
 
     // Wake often enough to ping within the keep-alive window and to

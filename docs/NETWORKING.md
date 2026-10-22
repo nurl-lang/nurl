@@ -13,10 +13,34 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   every listener, HTTP/3 beside every TLS listener**, routing, static files,
   middleware, multipart, WebSockets, TLS with ALPN; see
   [HTTPS / TLS](#https--tls), [HTTP/2](#http2) and [HTTP/3](#http3) below).
+  `tcp_listen_with host port @ TcpListenOpts { backlog reuse_port }` sets
+  the accept-queue length (default `tcp_listen_default_backlog`, 4096,
+  clamped by the kernel to `somaxconn`) and `SO_REUSEPORT` (several
+  listeners — or processes, e.g. an old and a new release during a
+  restart — on one address, the kernel spreading connections across
+  them). `server_run_async` runs one accept fiber per runtime worker on
+  its listener (`server_set_acceptors`); `server_drain` stops a server
+  gracefully.
 - **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
   handshake with SNI; the `verify` flag turns on peer-certificate chain +
   host-name verification against the system trust store — the primitive
-  behind any outbound TLS application).
+  behind any outbound TLS application). `tcp_connect_timeout host port ms`
+  bounds the whole connect — name lookup and TCP handshake — and reports
+  `NetTimeout` once `ms` passes. `tcp_connect_tls_timeout host port sni
+  verify alpn sess ms` is the TLS form: one deadline over the lookup, the
+  TCP handshake and the TLS handshake (each handshake read waits for what
+  is left of it rather than a fixed 20 s), `NetTimeout` wherever it runs
+  out; `tls_attach_full_until` is the same for a socket already open. Every address a name resolves to is tried in order until
+  one connects. **On a fiber neither step holds the worker**: a name is
+  resolved by the system `getaddrinfo` (so `/etc/hosts`, nsswitch and
+  `resolv.conf` apply as ever) on a small runtime resolver pool while the
+  fiber parks on the netpoller, and the handshake is a non-blocking
+  `connect` parked for writability — the other fibers on that worker keep
+  running through a slow DNS answer or a SYN into a black hole. A numeric
+  address never reaches the resolver. Off a fiber a connect blocks the
+  thread as it always has (the timeout then uses `poll`). A failed TCP
+  connect under `tcp_connect_tls*` reports its own error (`NetTimeout`,
+  `NetOther`, …) rather than `NetTlsHandshake`.
 - **UDP** (`stdlib/std/udp.nu`) — `udp_bind` (dual-stack wildcard),
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /
@@ -36,7 +60,11 @@ reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
   String) NetErr` lists A/AAAA literals in the kernel's preferred order;
   `dns_resolve_port host port` formats each entry as `"ip:port"` (IPv4) or
   `"[ip]:port"` (IPv6, RFC 3986) ready for `tcp_connect` / `udp_connect`;
-  `dns_reverse ip → ? String` runs `NI_NAMEREQD`.
+  `dns_reverse ip → ? String` runs `NI_NAMEREQD`. On a fiber the forward
+  lookups (and the ones inside `udp_connect`, `udp_send_to` and
+  `udp_addr_resolve`) run on the runtime's resolver threads with the
+  fiber parked, as for `tcp_connect`; so does `dns_reverse`'s
+  `getnameinfo`.
 
 TCP writes can share an absolute operation budget with
 `tcp_set_write_deadline(conn, monotonic_ns)`. Zero clears it, and
@@ -74,7 +102,7 @@ pure-NURL TLS stack. The client connects over **TLS** (default broker port
 8883); the `MqttConfig.tls_verify` field (default **on**) controls
 certificate verification.
 
-```
+```nurl
 $ `stdlib/ext/mqtt.nu`
 
 @ main → i {

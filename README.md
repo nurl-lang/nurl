@@ -15,7 +15,7 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers in `unsafe` code inherit LLVM semantics — spec §4.2, §6.1; out-of-range shifts are rejected at compile time or panic at runtime.)
-- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): the ownership rules of the single-threaded language (`A2.memory_safe`, `A2.no_leak_end`) are mechanically proven sound in Lean 4 ([`formal/`](formal/)), every hole found across the tree (`h01–h315`) is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/), and nothing is released by hand.
+- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): the ownership rules of the single-threaded language (`A2.memory_safe`, `A2.no_leak_end`) are mechanically proven sound in Lean 4 ([`formal/`](formal/)), every hole found across the tree (`h01–h319`) is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/) (one is open: a library handle's copies changed on two threads, [`docs/MEMORY.md`](docs/MEMORY.md) §6.2), and nothing is released by hand.
 - **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. The messages do the work a gotchas document used to, and CI fails a change that adds a diagnostic no test makes the compiler print (`tools/check_diag_coverage.sh`).
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
@@ -47,7 +47,7 @@ figures you can trust. The HTTP-server peer benchmarks are separate:
 
 ## Architecture
 
-```
+```text
 NURL source (.nu)
         │
         ▼
@@ -133,7 +133,7 @@ assign, `@` define, `→` arrow, `.` member, `?` ternary/option, `??` match,
 `~` loop/mutability, `!` not/Result, `\` closure/try, `^` return, `#` cast,
 `%` trait, `$` import).
 
-```
+```nurl
 : | Json { JNull  JBool b  JNum i  JStr s }
 
 @ describe Json v → s {
@@ -250,7 +250,7 @@ small. The concrete vehicle is the public MCP server at
 
 ## Project layout
 
-```
+```text
 nurl/
 ├── spec/grammar.ebnf       — authoritative grammar (versioned snapshots alongside)
 ├── compiler/

@@ -1,0 +1,5 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rc=0 in-flight-200=T with-close=T idle-closed-promptly=T

@@ -254,6 +254,11 @@ else
             if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*\.x86v3\(" "$WORK/$name.on.ll"; then
                 found=1; break
             fi
+            # A marked function that reaches a VAES tier has one body,
+            # for that tier (it contains x86-64-v3): no clones to pair.
+            if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*(\.vabi)?\(.*\+vaes" "$WORK/$name.on.ll"; then
+                found=1; break
+            fi
         done
         (( found )) || uncovered+=("$fn")
     done

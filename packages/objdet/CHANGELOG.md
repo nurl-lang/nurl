@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.6] — 2026-10-21
+
+### Fixed
+
+- **`img_to_nchw` did not compile**: it filled a `GpuHost` through `gpu_host_f32`'s view, a
+  write to the payload of the Arc the buffer's copies share. It fills the cells with
+  `gpu_host_fill_f32`, before the buffer is a GpuHost; the values are the same.
+
 ## [0.4.5] — 2026-10-14
 
 ### Changed

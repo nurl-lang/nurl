@@ -10,9 +10,14 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**No open soundness holes.** Every safe program found accepted and faulting
-is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h315`, [`MEMORY.md` §6.2](MEMORY.md));
+**One open soundness hole.** Two copies of one library handle over a
+counted block, one moved to a thread, changed on both: the Send derivation
+does not see that the copies are one value
+([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
+Workaround: a value holding such a handle moves to a thread with no copy
+kept; state threads share and change is a `Locked`. Every other safe
+program found accepted and faulting is closed, and held by a probe in
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h319`);
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).

@@ -32,8 +32,8 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/safetensor/src/safetensor.nu`
-$ `src/ggml.nu`
-$ `src/kernels.nu`
+$ `ggml.nu`
+$ `kernels.nu`
 $ `stdlib/std/arc.nu`
 
 // One encoder layer's weights. k_proj has no bias — none is looked for.

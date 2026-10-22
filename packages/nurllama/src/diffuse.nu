@@ -33,7 +33,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/std/float.nu`  // exp
 $ `deps/gpu/src/gpu.nu`
-$ `src/model.nu`
+$ `model.nu`
 
 @ _dz_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }

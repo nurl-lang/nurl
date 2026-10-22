@@ -31,7 +31,7 @@ $ `stdlib/core/posix.nu`
 // function, which the compiler now rejects rather than miscompiling.
 & `c` @ ioctl i32 fd i req ... → i32
 
-& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_peek_i32 in *u base i idx → i32
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 

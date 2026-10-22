@@ -35,7 +35,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ system s cmd → i32
 
-& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_peek_i32 in *u base i idx → i32
 
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 

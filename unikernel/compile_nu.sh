@@ -111,9 +111,12 @@ cd "$workdir" || exit 2
 # CROSS compiler what it targets rather than pattern-matching its name:
 # NURL_TARGET_CC is a whole command line, and -dumpmachine is the
 # answer from the tool that will actually lower the IR.
+# On AArch64 the crypto primitives lower to the ARMv8 Cryptographic
+# Extension (the guest runtime reads ID_AA64ISAR0_EL1 itself).
 NURLC_CPU=""
 case "$($CC -dumpmachine 2>/dev/null)" in
     x86_64-* | amd64-*) ;;
+    aarch64-* | arm64-*) NURLC_CPU="--target=aarch64" ;;
     *) NURLC_CPU="--no-cpu-dispatch" ;;
 esac
 

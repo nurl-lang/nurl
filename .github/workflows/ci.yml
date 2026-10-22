@@ -297,6 +297,18 @@ jobs:
         # linking or running anything.
         run: ./tools/check_examples.sh
 
+      - name: documentation examples compile
+        # Every ```nurl block in docs/*.md, docs/stdlib/*.md, README.md
+        # and the package READMEs, wrapped into a program and run through
+        # `nurlc --check`; a block annotated expect-error must be rejected
+        # with that diagnostic, so the docs and the messages they quote
+        # cannot drift apart. MEMORY.md §2.11 had sat uncompilable (no vec
+        # import) because nothing compiled it. The controls prove the
+        # wrapping and the annotations.
+        run: |
+          ./tools/check_doc_examples.sh
+          python3 tools/tests/test_doc_examples.py
+
       - name: stdlib symbol-collision gate
         # NURL's flat namespace makes two stdlib modules that define the
         # same top-level @ name collide when a program imports both (link
@@ -304,6 +316,14 @@ jobs:
         # __free_str_vec class). Assert every stdlib @-function name is
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
+
+      - name: errno is re-derived on every access (fiber migration)
+        # A fiber resumes on any worker thread; errno's `const` accessor
+        # lets the optimiser reuse one thread's errno address across a
+        # park. The runtime routes every access through a volatile
+        # function pointer; this compiles it to IR and requires that no
+        # other function calls __errno_location directly.
+        run: ./tools/check_errno_fiber_safe.sh
 
       - name: nolibc covers every libc symbol the runtime core calls
         # unikernel/nolibc/ exists to supply exactly the libc surface of
@@ -391,6 +411,19 @@ jobs:
         run: |
           ./tools/check_package_imports.sh
           python3 tools/tests/test_package_imports.py
+
+      - name: package entry points compile (as an installed consumer compiles them)
+        # Nothing compiled packages/ on a PR, so a compiler that grew
+        # stricter (the frozen-Arc and closure-capture rules) broke
+        # lingbot-map, map-anything, onnx, yoloe, objdet and benchmark
+        # with nothing red. Every src/main.nu and src/<name>.nu goes
+        # through `nurlc --check` from a scratch deps/ layout, in
+        # parallel (~1.5 min); an entry needing an optional native
+        # library this build lacks is skipped. The controls prove the
+        # entry selection and the verdicts.
+        run: |
+          python3 tools/check_package_entries.py
+          python3 tools/tests/test_package_entries.py
 
       - name: a package's --version matches its manifest
         # `cli_new prog about VERSION` takes the version as a string

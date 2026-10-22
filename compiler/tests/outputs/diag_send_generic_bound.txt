@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_send_generic_bound.nu:15:25: error: type 'Rc__i64' does not satisfy the bound T: Send on generic 'ship'. 'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).
+compiler/tests/diag_send_generic_bound.nu:15:25: error: type 'Rc__i64' does not satisfy the bound T: Send on generic 'ship'. 'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
     ^ ( ship [( Rc i )] r )
                         ^
 error: aborting due to 1 previous error

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.3] — 2026-10-21
+
+### Fixed
+
+- Requires gpukit 0.11.13 (gpu 0.17.7): loading the checkpoint uploads tensor bytes
+  straight from the mapped file, which the borrow checker refused as a write to an Arc's
+  payload until gpu declared its upload path read-only. Compiles again.
+
+## [0.12.2] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/lingbot-map/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.12.1] — 2026-10-15
 
 - No `unsafe` left. The 2-D and 3-D RoPE kernels moved into gpukit 0.11.4 as `gkd_rope2d` / `gkd_rope3d`, with the same source and the same checks. The device-block check's output is byte-identical.

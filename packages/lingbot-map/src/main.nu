@@ -36,15 +36,15 @@ $ `deps/gpukit/src/devops.nu`
 $ `deps/ply/src/ply.nu`
 $ `deps/ply/src/view.nu`
 $ `deps/video/src/video.nu`
-$ `src/weights.nu`
-$ `src/devblock.nu`
-$ `src/load.nu`
-$ `src/dino.nu`
-$ `src/aggregator.nu`
-$ `src/camhead.nu`
-$ `src/dpthead.nu`
-$ `src/geom.nu`
-$ `src/preproc.nu`
+$ `weights.nu`
+$ `devblock.nu`
+$ `load.nu`
+$ `dino.nu`
+$ `aggregator.nu`
+$ `camhead.nu`
+$ `dpthead.nu`
+$ `geom.nu`
+$ `preproc.nu`
 $ `stdlib/core/slice.nu`
 
 : i LM_SIZE 518

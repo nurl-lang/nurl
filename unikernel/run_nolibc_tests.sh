@@ -48,6 +48,12 @@ JOBS="${NOLIBC_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 mkdir -p "$OUTDIR/work"
 [ -x "$ROOT/build/nurlc" ] || { echo "run ./build.sh first" >&2; exit 2; }
+# The hosted runner's predicates for a test's `// requires:` line: a
+# hardware requirement (a crypto tier the CPU lacks) means the same here
+# as there. The other tokens (live, fibers, commands) are this corpus's
+# business — the NURL socket layer and the bare runtime stand in for them.
+# shellcheck source=../compiler/tests/test_skips.sh
+. "$TESTS/test_skips.sh"
 
 names=("$@")
 if [ ${#names[@]} -eq 0 ]; then
@@ -77,6 +83,38 @@ one() {
         net_sendfile)
             echo "SKIP $name (needs RST on data after close — agora #74)"; return 0 ;;
     esac
+    # What these two pin is the HOSTED runtime's way of not blocking a
+    # worker: a connect parked on the host kernel's handshake (the black
+    # hole is Linux dropping SYNs to a full accept queue) and getaddrinfo
+    # on a resolver thread (`localhost` from /etc/hosts). The NURL socket
+    # layer has neither a host kernel nor threads to resolve on — its
+    # loopback connect and its lookup run in-process by design.
+    case "$name" in
+        net_connect_fiber_timeout|net_resolve_fiber)
+            echo "SKIP $name (pins host-kernel connect and resolver threads)"; return 0 ;;
+    esac
+    # The host kernel's TCP is what these pin, and the NURL socket layer
+    # is a different, in-process stack by design:
+    #   http_response_recycle counts the process's allocations per
+    #     request — here that count includes the TCP/IP stack itself,
+    #     which runs as NURL code in the same process, so the HTTP
+    #     layer's bound (<= 2) cannot be read off it;
+    #   http_server_drain times shutdown(2) against a peer blocked in
+    #     the host kernel and expects a closed listener to refuse;
+    #   net_listen_opts binds two listeners with SO_REUSEPORT, which the
+    #     socket layer does not have (one owner per port).
+    case "$name" in
+        http_response_recycle|http_server_drain|net_listen_opts)
+            echo "SKIP $name (pins the host kernel's TCP)"; return 0 ;;
+    esac
+    # A deadline against a peer that never answers: the NURL socket layer
+    # sees that nothing can ever make the wait succeed (loopback only, no
+    # runnable coroutine) and fails it AT ONCE — by design, see
+    # unikernel/net/sockets.nu — so there is no deadline left to measure.
+    case "$name" in
+        tls_connect_deadline)
+            echo "SKIP $name (silent peer: the loopback stack fails the wait at once)"; return 0 ;;
+    esac
     # kTLS hands record protection to the HOST kernel; the NURL socket
     # layer here has no kernel to hand it to (tls_ktls reports 0), so a
     # test declaring `requires: ktls` describes a run this is not.
@@ -95,6 +133,14 @@ one() {
     grep -q '^EXIT ' "$golden" || {
         echo "SKIP $name (golden describes no run)"; return 0
     }
+    local tok
+    for tok in $(test_requires "$name"); do
+        case "$tok" in
+            cpu-aes)     host_has_cpu_aes     || { echo "SKIP $name (requires $tok)"; return 0; } ;;
+            cpu-vaes)    host_has_cpu_vaes    || { echo "SKIP $name (requires $tok)"; return 0; } ;;
+            cpu-vaes512) host_has_cpu_vaes512 || { echo "SKIP $name (requires $tok)"; return 0; } ;;
+        esac
+    done
 
     # Compile, and link in the NURL socket layer if this program needs
     # it — see unikernel/compile_nu.sh for why that is a recompile

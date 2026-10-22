@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.4] — 2026-10-21
+
+### Fixed
+
+- Requires gpukit 0.11.13 and onnx 0.12.4: the checkpoint upload from the mapped file
+  and onnx's `rt_download` were refused as writes to an Arc's payload. Compiles again.
+
+## [0.7.3] — 2026-10-21
+
+### Fixed
+
+- Installable as a dependency: the sources in `src/` imported their siblings as
+  `src/<name>.nu`, which resolves only with the package root as the working
+  directory, not under a consumer's `deps/map-anything/`. They are written relative to
+  the importing file (`<name>.nu`) now, which resolves in both layouts.
+
 ## [0.7.2] — 2026-10-14
 
 ### Changed

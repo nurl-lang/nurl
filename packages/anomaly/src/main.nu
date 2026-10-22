@@ -39,15 +39,15 @@ $ `stdlib/std/path.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/cli/src/cli.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
-$ `src/score.nu`
-$ `src/store.nu`
-$ `src/dynamic.nu`
-$ `src/csvdata.nu`
-$ `src/config.nu`
-$ `src/service.nu`
-$ `src/mcp.nu`
+$ `prep.nu`
+$ `model.nu`
+$ `score.nu`
+$ `store.nu`
+$ `dynamic.nu`
+$ `csvdata.nu`
+$ `config.nu`
+$ `service.nu`
+$ `mcp.nu`
 
 @ pline s x → v {
     ( nurl_print x )

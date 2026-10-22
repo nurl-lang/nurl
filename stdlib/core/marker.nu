@@ -7,7 +7,9 @@
 //
 // Both are marker traits: no methods, no runtime representation, no
 // dispatch. A `% Send T { }` block is not code — it is an assertion,
-// NURL's spelling of Rust's `unsafe impl Send for T`.
+// NURL's spelling of Rust's `unsafe impl Send for T`, and outside the
+// standard library it is written that way: `unsafe % Send T { }`
+// (docs/MEMORY.md §3; `nurlc --unsafe-report` lists it).
 //
 // You rarely write either. The compiler DERIVES both structurally over
 // a type's whole graph — struct fields, enum payloads, generic
@@ -47,7 +49,9 @@
 //     % Sync Mutex { }        // and `% Send Mutex { }`
 //
 // An explicit impl STOPS the walk at that type: nothing inside is
-// examined, because you have taken responsibility for it.
+// examined, because you have taken responsibility for it. That is why a
+// program's own positive marker is `unsafe % Send T { }` /
+// `unsafe % Sync T { }`: without the prefix it is an error.
 //
 // **The compiler is too optimistic.** A type that derives clean but
 // wraps thread-hostile state the compiler cannot see — an FFI handle.
@@ -63,7 +67,8 @@
 //
 // A negative marker always wins over a positive one on the same type —
 // if both are written, the type is rejected. That is the safe direction
-// for a contradiction to resolve in.
+// for a contradiction to resolve in. A negative marker only adds checks,
+// so it is ordinary safe code: no `unsafe`.
 //
 // ── As a bound ─────────────────────────────────────────────────────
 //
@@ -91,16 +96,16 @@
 // never invent: it is a sound lint, not a proof (`docs/MEMORY.md` §6.3).
 
 // A value of `T` may be moved to another thread.
-pub %Send [T] {}
+pub % Send [T] {}
 
 // Two threads may reach one value of `T` at the same time.
-pub %Sync [T] {}
+pub % Sync [T] {}
 
 // `T` must never cross a thread boundary, whatever its fields suggest.
-pub %NotSend [T] {}
+pub % NotSend [T] {}
 
 // Two threads must never reach one `T` at the same time.
-pub %NotSync [T] {}
+pub % NotSync [T] {}
 
 // Frozen — what a value of `T` lends is read-only. A function that takes
 // a `T` and hands back something it holds (an accessor) lends a view of
@@ -114,10 +119,12 @@ pub %NotSync [T] {}
 //
 //     % Frozen RGuard { }
 //
-// Like Send and Sync it is an assertion about the type, not code: the
-// compiler follows every view the handle lends and rejects a change to
-// one where it is made.
-pub %Frozen [T] {}
+// Unlike Send and Sync it only adds checks: the compiler follows every
+// view the handle lends and rejects a change to one where it is made, so
+// a safe module may mark a type of its own (no `unsafe`). What is trusted
+// is the other direction — a handle of the standard library's that lends
+// shared data and is NOT marked would lend it mutable.
+pub % Frozen [T] {}
 
 // Resource — a type whose drop is observable outside the program: it
 // closes a file descriptor, a socket, a database connection, reaps a child
@@ -135,4 +142,4 @@ pub %Frozen [T] {}
 // Mark a type of your own the same way when its drop does something the
 // outside world sees (an FFI close, a flush to a socket). Freeing memory,
 // releasing a lock or a count is not that: a Mutex is not a Resource.
-pub %Resource [T] {}
+pub % Resource [T] {}

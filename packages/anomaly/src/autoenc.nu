@@ -31,10 +31,10 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/json.nu`
-$ `src/prep.nu`
-$ `src/model.nu`
-$ `src/score.nu`
-$ `src/aegpu.nu`
+$ `prep.nu`
+$ `model.nu`
+$ `score.nu`
+$ `aegpu.nu`
 $ `deps/mlp/src/mlp.nu`
 
 // ── The trained artifact ──────────────────────────────────────────────

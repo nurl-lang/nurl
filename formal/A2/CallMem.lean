@@ -636,7 +636,7 @@ theorem param_ok (h : CallH P Γ F x fn args m.nv) {k : Nat} {p : PMode × Ty} (
   cases pm with
   | inp => exact absurd rfl hne
   | sink => exact hsink rfl
-  | inout b => obtain ⟨s, hs⟩ := hio b rfl; simp only at hs; rw [hs]; rfl
+  | inout b => exact hio b rfl
 
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}

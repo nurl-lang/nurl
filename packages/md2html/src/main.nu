@@ -17,7 +17,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/args.nu`
-$ `src/markdown.nu`
+$ `markdown.nu`
 
 // Wrap a rendered HTML body in a complete, self-contained document with a
 // clean, readable stylesheet.

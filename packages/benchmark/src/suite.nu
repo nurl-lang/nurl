@@ -15,7 +15,7 @@ $ `stdlib/std/utf8.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cbor.nu`
 $ `stdlib/ext/csv.nu`
-$ `src/report.nu`
+$ `report.nu`
 $ `stdlib/core/slice.nu`
 
 // ---- deterministic input generators (setup, never timed) --------------
@@ -369,12 +369,14 @@ $ `stdlib/core/slice.nu`
     : ( Vec i ) key ( __csv_sort_keys n )
     : ( Slice i ) kp ( slice_prefix [i] ( slice_from_vec [i] key ) n )
     : ( Vec i ) work ( vec_zeroed [i] n )
-    : ( Slice i ) wp ( slice_prefix [i] ( slice_from_vec [i] work ) n )
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
     // --- timed: copy the packed keys into the work buffer (fresh unsorted
-    // input each pass), then quicksort them in place.
+    // input each pass), then quicksort them in place. The view of `work`
+    // is taken inside the pass: sort_by changes `work`, and a view of it
+    // captured beside it would be a second name for what the sort moves.
     : BenchRow r ( bench_thpt `csv sort 1M×8` n `M/s` \ → v {
+        : ( Slice i ) wp ( slice_prefix [i] ( slice_from_vec [i] work ) n )
         : ~ i c 0
         ~ < c n { ( slice_put [i] wp c ( slice_at [i] kp c ) ) = c + c 1 }
         ( sort_by [i] work \ i x i y → i { ^ ? < x y -1 ? > x y 1 0 } )

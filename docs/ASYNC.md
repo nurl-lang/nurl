@@ -8,7 +8,7 @@ The defining property is **no function colouring** — there is no
 Ordinary code runs unchanged inside a fiber; blocking I/O calls become
 cooperative automatically when invoked from fiber context.
 
-```
+```nurl
 $ `stdlib/std/async.nu`
 
 @ main → i {
@@ -108,6 +108,13 @@ middleware are plain functions that work identically under
 resume on the next send/recv; from a plain thread the same calls use the
 per-channel condvar. One `Channel[A]` type serves both worlds.
 
+**Pools are fiber-aware too** (`stdlib/std/pool.nu`): a checkout that
+finds every resource lent parks the fiber with a deadline
+(`nurl_fiber_park_with_mutex_ms`), and a returned resource wakes it with
+`nurl_fiber_wake` — the two race for the wait entry under the reactor
+lock, so a wake that loses to the deadline does nothing and the fiber
+runs once. A thread on the same pool waits on its condvar.
+
 **`server_run_async`** (`stdlib/ext/http_server.nu`) drives the HTTP
 server on fibers: an accept fiber spawns one fiber per connection. It
 returns when the listener closes and the fiber pool drains. Since 0.46.0
@@ -130,6 +137,21 @@ fiber, so handshakes overlap instead of serialising one behind another
 (675 → 7 034 handshakes/s on a 12-core i7-5930K). A connection whose
 handshake fails is now one failed connection; a plain-TCP probe against
 a TLS port used to take the whole accept loop down with it.
+
+**Outbound connects park too.** `tcp_connect` (and everything built on
+it: `tcp_connect_tls*`, the psql, redis and HTTP clients) used to run a
+blocking `getaddrinfo` and a blocking `connect(2)` even on a fiber, so a
+slow DNS answer or a SYN to an unreachable host stalled the whole
+worker and every fiber queued on it. On a fiber the socket is now
+non-blocking and the fiber parks for writability on the netpoller; a
+name is resolved by `getaddrinfo` on a small resolver thread pool
+(`stdlib/runtime_ffi.c` §18-r) and the fiber parks on the job's
+completion eventfd meanwhile. `tcp_connect_timeout` puts one deadline
+over both, on the netpoller's timer heap. The same pass fixed a
+scheduler starvation: a worker whose local queue never emptied — a
+fiber yielding in a loop — never looked at the netpoller or the global
+queue, so timer, I/O and unpark wakes on that worker waited for as long
+as it kept yielding; every 128th dispatch now looks at both first.
 
 `packages/http` exposes this as **`http_app_async n`** — fiber per
 connection, `n` worker pthreads, `0` meaning one per CPU the *process*
@@ -197,7 +219,7 @@ fiber's stack the caller was handed a handle to nothing. Measured on a
 printed the count of the eleven as though that were the answer, and
 exited 0. Both runtimes now print
 
-```
+```text
 nurl: cannot create a fiber — out of memory for its stack (11 live)
 ```
 
@@ -236,7 +258,10 @@ source-level traps.
   fire-and-forget shape) bumps the pending count; every fiber that runs to
   completion decrements it. A long-running accept fiber that never returns
   keeps `runtime_run` blocked forever — which is exactly what a server wants.
-  Call `server_stop` / `runtime_shutdown` to drain on demand.
+  Call `server_stop` / `runtime_shutdown` to stop on demand, or
+  `server_drain s deadline_ms` for a graceful stop that also closes idle
+  keep-alive connections (their fibers would otherwise wait out the idle
+  timeout) and bounds the wait for requests in flight.
 - **A spawned closure moves what it captures.** A `: ~` by-reference
   capture may not reach a `spawn` closure, as for `thread_spawn` (see
   [`MEMORY.md` §2.3](MEMORY.md)); for shared mutable state across fibers

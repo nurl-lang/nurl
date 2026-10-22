@@ -57,9 +57,11 @@ AT_EOF_OK = re.compile(
 # as '* T'") does not match and is still checked.
 NAMES_CLOSER = re.compile(r"\b(found|unexpected) '[)\]}]'")
 
-# `<path>:<line>:<col>: error|warning: <msg>` — the shape all four
-# emitters print. die_at has no column and is skipped: with no column
-# there is no caret to misplace.
+# `<path>:<line>:<col>: error|warning: <msg>` — the shape every emitter
+# that has a file prints (die_file_pos included: a deferred check re-reads
+# the line it reports). die_at names no file — "in function f", "cycle
+# collection" — and is skipped: with no column there is no caret to
+# misplace.
 DIAG = re.compile(r"^(?P<path>[^\s:]+\.nu):(?P<line>\d+):(?P<col>\d+): "
                   r"(?P<sev>error|warning): (?P<msg>.*)$")
 
