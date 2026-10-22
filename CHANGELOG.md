@@ -6,7 +6,19 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.77.0] — 2026-10-22
+
+The backend toward v1.0, and a security release. Outbound connects and
+DNS no longer block a fiber's worker; a keep-alive HTTP response
+allocates nothing in steady state, the servers drain gracefully and
+accept in parallel; AES-GCM runs on VAES (ymm/zmm) and on the ARMv8
+Cryptographic Extension; TLS seals records in place and signs ECDSA
+without BigInt; psql 0.5 pools its connections (`std/pool.nu`). And the
+playground's holes are closed at their source: a compilation can be
+confined to its directories (`nurlc --import-root`), `serve_static`
+judges the decoded path and stays inside its root through symlinks, the
+build opt level is a closed set, and the unikernel object cache can no
+longer be poisoned.
 
 ### Security
 
