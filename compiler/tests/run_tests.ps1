@@ -393,6 +393,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 # flag list to ask without a probe: skipped here.
                 'cpu-vaes'    { $skip = $true }
                 'cpu-vaes512' { $skip = $true }
+                'ktls'     { $skip = $true }
                 'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
                 # Anything else names an external command the test shells
                 # out to. Absent tool → skip, so a stripped host degrades

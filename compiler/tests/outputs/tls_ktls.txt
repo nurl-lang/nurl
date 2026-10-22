@@ -1,0 +1,28 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+both.client_mask=3
+both.server_mask=3
+both.echo=ok
+both.key_update_sent=ok
+both.upload_1mb=ok
+both.download_1mb=ok
+both.sendfile_300k=ok
+both.server_saw_eof=ok
+server_only.client_mask=0
+server_only.server_mask=3
+server_only.echo=ok
+server_only.key_update_sent=ok
+server_only.upload_1mb=ok
+server_only.download_1mb=ok
+server_only.sendfile_300k=ok
+server_only.server_saw_eof=ok
+client_only.client_mask=3
+client_only.server_mask=0
+client_only.echo=ok
+client_only.key_update_sent=ok
+client_only.upload_1mb=ok
+client_only.download_1mb=ok
+client_only.sendfile_300k=ok
+client_only.server_saw_eof=ok

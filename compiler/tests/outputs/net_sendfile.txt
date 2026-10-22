@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+plain.whole_file=ok
+plain.mid_range=ok
+plain.past_end=ok
+plain.peer_gone_is_an_error=ok
+tls.whole_file=ok
+tls.mid_range=ok
+tls.past_end=ok
+tls.peer_gone_is_an_error=ok

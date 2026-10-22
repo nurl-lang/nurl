@@ -278,15 +278,23 @@ source-level traps.
   fiber-aware `tcp_accept` falls through to the blocking path and surfaces
   `NetTimeout`). A new TLS-reading runtime entry point must be annotated the
   same way.
-- **The spin-then-park window is sized for a TLS peer.**
-  `nurl__reactor_wait` spins before paying a park. That window was 64
-  probes (~25 µs), which a plaintext HTTP peer answers inside but a TLS
-  turnaround (decrypt + handle + encrypt, ~35–45 µs on loopback) does
-  not — so every keep-alive HTTPS request at low concurrency missed the
-  spin and ate a full park. It is 256 probes since 0.46.0, and gated to
-  ≤ 4 live fibers so a loaded server does not burn cores spinning.
-  Changing either number moves the low-concurrency HTTPS cell in
-  `bench/HTTP_RESULTS.md` and nothing else.
+- **The spin-then-park window is learned per fiber.**
+  `nurl__reactor_wait` may probe the fd before paying a park
+  (`nurl__spin_ready`). Each fiber keeps an estimate of how long its I/O
+  waits take — every wait counts, a spin that caught the fd and a park
+  alike — and spins only while that estimate is below the cap, for twice
+  the estimate plus a margin (the whole cap before it has one). A
+  closed-loop peer (c=1, plaintext or TLS) answers within the window
+  and skips the park — ~28 k req/s at c=1 against ~12 k without the spin
+  — while a client with think time, an idle keep-alive connection or a
+  listener stops being spun on after a wait or two. The window used to be
+  a fixed 256 poll(2) calls (80–250 µs, by the machine's syscall cost)
+  on every wait, which at 500–2000 req/s on one connection cost 235–484
+  µs of CPU per request; it is 72–84 µs now (tokio: 65–76). The cap is
+  `NURL_SPIN_US` (µs; 0 = never spin), else 100 µs, else 0 under a
+  cgroup CPU quota or with one usable CPU; and only a runtime with at
+  most 4 live fibers spins at all, so a loaded server does not burn
+  cores.
 - **Park-vs-unpark ordering.** `nurl__reactor_wait` fills the wait
   entry but does not publish it; the worker loop hands it to
   `nurl__reactor_activate` only after the parking fiber's context

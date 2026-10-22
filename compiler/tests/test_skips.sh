@@ -47,6 +47,11 @@
 #                 NURL_CPU_VAES512=0 turns it off.
 #                 Unlike cpu-aes, neither is assumed where the host
 #                 cannot be asked: most x86-64 machines lack them.
+#     ktls        hands TLS 1.3 record protection to the kernel (std/tls.nu
+#                 tls_ktls): Linux 6.14+ (KeyUpdate in both directions)
+#                 with the `tls` ULP available — the module loaded, since
+#                 an unprivileged process cannot load it. NURL_KTLS_TESTS=0
+#                 turns it off.
 #     <anything>  the name of an external command that must be on
 #     else        $PATH (curl, python3, openssl, bash …).
 #
@@ -186,6 +191,7 @@ is_skipped() {
             cpu-aes)  host_has_cpu_aes || { echo skip; return; } ;;
             cpu-vaes) host_has_cpu_vaes || { echo skip; return; } ;;
             cpu-vaes512) host_has_cpu_vaes512 || { echo skip; return; } ;;
+            ktls)     host_has_ktls || { echo skip; return; } ;;
             live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
             fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
             internet) [[ "$ENABLE_INTERNET_TESTS" == "1" ]] || { echo skip; return; } ;;
@@ -196,6 +202,17 @@ is_skipped() {
             *)        command -v "$tok" >/dev/null 2>&1 || { echo skip; return; } ;;
         esac
     done
+}
+
+# The `ktls` requirement: the `tls` ULP is available and the kernel is
+# 6.14 or later (what nurl_ktls_supported asks).
+host_has_ktls() {
+    [[ "${NURL_KTLS_TESTS:-1}" == "0" ]] && return 1
+    [[ "$(uname -s)" == "Linux" ]] || return 1
+    grep -qw tls /proc/sys/net/ipv4/tcp_available_ulp 2>/dev/null || return 1
+    local rel maj min
+    rel=$(uname -r); maj=${rel%%.*}; min=${rel#*.}; min=${min%%[!0-9]*}
+    (( maj > 6 || (maj == 6 && min >= 14) ))
 }
 
 # The `cpu-aes` requirement: x86-64 with AES-NI and PCLMULQDQ, the
@@ -268,7 +285,7 @@ host_has_cpu_vaes512() {
 
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
-export -f is_skipped test_requires test_mode host_has_cpu_aes \
+export -f is_skipped test_requires test_mode host_has_cpu_aes host_has_ktls \
     host_cpu_flags host_has_flags host_has_cpu_vaes host_has_cpu_vaes512
 export NURL_TESTS_DIR NURL_TESTS_ROOT \
        ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

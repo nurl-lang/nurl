@@ -17,6 +17,8 @@
 //   ( tcp_write_all       TcpConn c ( Vec u ) bytes )       → ! v NetErr
 //   ( tcp_write_all2      TcpConn c ( Vec u ) head ( Vec u ) body ) → ! v NetErr
 //   ( tcp_write_str       TcpConn c s text )                → ! v NetErr
+//   ( tcp_sendfile        TcpConn c PFile f i off i len )   → ! i NetErr  sendfile(2) where it can
+//   ( tcp_tls_ktls        TcpConn c )                       → i    kTLS handover, see std/tls.nu
 //   ( tcp_close_listener  TcpListener l )                   → v    early close (optional)
 //   ( tcp_close_conn      TcpConn c )                       → v    early close (optional)
 //   ( tcp_conn_adopt      i raw )                           → TcpConn  owns the runtime socket
@@ -95,6 +97,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/pfile.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/std/pkey.nu`
@@ -578,6 +581,16 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ 0 } {}
     ^ ( tls_group # TlsConn tp )
+}
+
+// kTLS on this TLS connection (std/tls.nu tls_ktls): hand its record
+// protection to the kernel where it can go and report what the kernel
+// now protects — 1 the write side, 2 the read side, 3 both, 0 neither
+// (or not a TLS connection).
+@ tcp_tls_ktls TcpConn c → i {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ 0 } {}
+    ^ ( tls_ktls # TlsConn tp )
 }
 
 // T when this TLS connection was established from a session ticket
@@ -1359,6 +1372,8 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 // compiler preamble, like the other stdlib-only runtime entry points.
 unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
+& `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
+
 // The one blocking send loop behind tcp_write_all, tcp_write_str and
 // tcp_write_all2: writes the logical concatenation `p1[0..n1)‖p2[0..n2)`
 // to the raw handle, re-pointing the pair at the unsent remainder after
@@ -1407,6 +1422,57 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
     : i raw # i rp
     : *u p ( vec_data [u] bytes )
     ^ ( __tcp_write_pair_sync raw # s p ( vec_len [u] bytes ) # s 0 0 )
+}
+
+// `len` bytes of `f` from offset `off` to the connection. On a plain
+// TCP connection, and on a TLS one whose write side the kernel seals
+// (kTLS, tls_ktls), the kernel copies them straight from the page cache
+// (sendfile(2)) — the bytes never enter this process, and under kTLS
+// the records are sealed on the way out. A TLS connection sealing its
+// own records, or a platform without sendfile, reads the file in 64 KB
+// slices into one buffer and writes them through tcp_write_all. Ok(the
+// bytes sent: `len`, fewer when the file ends first).
+@ tcp_sendfile TcpConn c PFile f i off i len → !i NetErr {
+    ? <= len 0 { ^ @ !i NetErr { T 0 } } {}
+    : i tls ( __conn_tlsptr c )
+    : b kernel ? == tls 0 T ( tls_ktls_tx_ready # TlsConn tls )
+    : ~ i sent 0
+    ? kernel {
+        // The socket's runtime handle: a TLS connection's own (__conn_fd),
+        // not TcpConnImpl.raw, which only a plaintext connection fills.
+        : i raw ( __conn_fd c )
+        : i fd ( _pfile_fd f )
+        : b on_fiber != ( nurl_fiber_current ) 0
+        ? on_fiber { ( nurl_tcp_set_nonblock raw 1 ) } {}
+        ~ < sent len {
+            : i n ( nurl_tcp_sendfile raw fd + off sent - len sent )
+            ? > n 0 { = sent + sent n } {
+                ? == n 0 { ^ @ !i NetErr { T sent } } {}
+                ? == n -2 { break } {}
+                : i error ( nurl_tcp_err_kind raw )
+                ? | != error 7 ! on_fiber { ^ @ !i NetErr { F ( _net_err_of error ) } } {}
+                : i remaining ( nurl_tcp_write_wait_ms raw )
+                ? == remaining 0 { ^ @ !i NetErr { F NetTimeout } } {}
+                ? <= ( nurl_reactor_wait_write ( nurl_tcp_get_fd raw ) remaining ) 0 { ^ @ !i NetErr { F NetTimeout } } {}
+            }
+        }
+        ? >= sent len { ^ @ !i NetErr { T sent } } {}
+    } {}
+    // Read-and-write: one 64 KB buffer reused for every slice.
+    : ( Vec u ) buf ( vec_with_cap [u] 65536 )
+    ~ < sent len {
+        : i want ? < - len sent 65536 - len sent 65536
+        ( vec_clear [u] buf )
+        ?? ( pfile_read_vec_into f buf + off sent want ) {
+            T got → {
+                ? == got 0 { ^ @ !i NetErr { T sent } } {}
+                ?? ( tcp_write_all c buf ) { T _ → {} F e → { ^ @ !i NetErr { F e } } }
+                = sent + sent got
+            }
+            F _ → { ^ @ !i NetErr { F NetRead } }
+        }
+    }
+    ^ @ !i NetErr { T sent }
 }
 
 // Write `head` then `body` as ONE logical message. On the plaintext

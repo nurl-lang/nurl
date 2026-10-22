@@ -1550,6 +1550,8 @@ typedef struct NurlTcp {
      * its own readiness wait, so accept() must do ONE non-blocking accept
      * and hand EAGAIN back rather than entering the blocking poll loop. */
     int           nonblock;
+    /* Content type of the record nurl_ktls_recv last read (kTLS RX). */
+    int           ktls_rtype;
     /* Reference count (atomic). Created at 1; nurl_tcp_close releases that
      * ref. server_run_async takes an extra ref so a concurrent close (e.g.
      * server_stop from another thread) defers the struct free until the
@@ -3019,6 +3021,264 @@ long long nurl_tcp_write2(long long handle, const char *b1, long long n1,
     }
     h->err_kind = NURL_NET_ERR_OK;
     return total;
+}
+
+/* ── kTLS: TLS 1.3 record protection handed to the kernel ──────────
+ * std/tls.nu runs the handshake itself, then (opt-in) gives each
+ * direction's traffic key to the socket: setsockopt(TCP_ULP, "tls") once,
+ * then SOL_TLS / TLS_TX or TLS_RX with the TLS 1.3 crypto_info. From then
+ * on application data is plain write()/recv() on the socket and the
+ * kernel seals and opens the records (sendfile included); a record of
+ * another content type goes out with a TLS_SET_RECORD_TYPE cmsg and
+ * comes in with TLS_GET_RECORD_TYPE (docs.kernel.org/networking/tls.html).
+ *
+ * KeyUpdate needs the kernel to take a new key in a direction that is
+ * already installed: Linux 6.14 and later (RX pauses with EKEYEXPIRED
+ * after the KeyUpdate record until the new key is set). Older kernels
+ * are refused here, so the connection keeps its userspace record layer
+ * instead of failing on its first KeyUpdate. */
+#if defined(__linux__)
+#include <linux/tls.h>
+#include <sys/utsname.h>
+#ifndef TCP_ULP
+#define TCP_ULP 31
+#endif
+#ifndef SOL_TLS
+#define SOL_TLS 282
+#endif
+
+/* 1 when this kernel can rekey an installed direction (>= 6.14). */
+long long nurl_ktls_supported(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    struct utsname u;
+    int ok = 0;
+    if (uname(&u) == 0) {
+        int maj = 0, min = 0;
+        if (sscanf(u.release, "%d.%d", &maj, &min) == 2)
+            ok = maj > 6 || (maj == 6 && min >= 14);
+    }
+    cached = ok;
+    return ok;
+}
+
+/* Install one direction: dir 1 = TX (records this end writes), 2 = RX.
+ * cipher 1 = AES-128-GCM (16-byte key), 0 = ChaCha20-Poly1305 (32);
+ * iv = the 12-byte static iv; seq = the next record's sequence number.
+ * The first call attaches the "tls" ULP. 0 on success, -1 when the kernel
+ * lacks the ULP (module not loaded and not loadable unprivileged) or the
+ * cipher — the caller keeps its userspace record layer then. */
+long long nurl_ktls_set(long long handle, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK || !key || !iv) return -1;
+    if (dir != 1 && dir != 2) return -1;
+    if (!nurl_ktls_supported()) return -1;
+    if (setsockopt(h->fd, SOL_TCP, TCP_ULP, "tls", 3) != 0 && errno != EEXIST)
+        return -1;
+    unsigned char rec_seq[8];
+    for (int i = 0; i < 8; i++) rec_seq[i] = (unsigned char)((unsigned long long)seq >> (56 - 8 * i));
+    int opt = dir == 1 ? TLS_TX : TLS_RX;
+    int rc;
+    if (cipher == 1) {
+        struct tls12_crypto_info_aes_gcm_128 ci;
+        memset(&ci, 0, sizeof ci);
+        ci.info.version = TLS_1_3_VERSION;
+        ci.info.cipher_type = TLS_CIPHER_AES_GCM_128;
+        memcpy(ci.salt, iv, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+        memcpy(ci.iv, iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE, TLS_CIPHER_AES_GCM_128_IV_SIZE);
+        memcpy(ci.key, key, TLS_CIPHER_AES_GCM_128_KEY_SIZE);
+        memcpy(ci.rec_seq, rec_seq, 8);
+        rc = setsockopt(h->fd, SOL_TLS, opt, &ci, sizeof ci);
+        explicit_bzero(&ci, sizeof ci);
+    } else if (cipher == 0) {
+        struct tls12_crypto_info_chacha20_poly1305 ci;
+        memset(&ci, 0, sizeof ci);
+        ci.info.version = TLS_1_3_VERSION;
+        ci.info.cipher_type = TLS_CIPHER_CHACHA20_POLY1305;
+        memcpy(ci.iv, iv, TLS_CIPHER_CHACHA20_POLY1305_IV_SIZE);
+        memcpy(ci.key, key, TLS_CIPHER_CHACHA20_POLY1305_KEY_SIZE);
+        memcpy(ci.rec_seq, rec_seq, 8);
+        rc = setsockopt(h->fd, SOL_TLS, opt, &ci, sizeof ci);
+        explicit_bzero(&ci, sizeof ci);
+    } else {
+        return -1;
+    }
+    if (rc != 0) return -1;
+    /* A kTLS socket flushes pending records outside the call that queued
+     * them — in close(), say, after the peer has gone — with that call's
+     * flags, which for sendfile carry no MSG_NOSIGNAL: the SIGPIPE it
+     * raises then lands where no call can mask it, and its default action
+     * ends the process. A process that hands TLS to the kernel therefore
+     * ignores SIGPIPE (write errors come back as EPIPE, as on every
+     * socket write here) — unless the program installed its own handler. */
+    static volatile int sigpipe_set = 0;
+    if (!sigpipe_set) {
+        struct sigaction sa;
+        if (sigaction(SIGPIPE, NULL, &sa) == 0 && sa.sa_handler == SIG_DFL) {
+            sa.sa_handler = SIG_IGN;
+            (void)sigaction(SIGPIPE, &sa, NULL);
+        }
+        sigpipe_set = 1;
+    }
+    if (dir == 2) {
+        /* TLS 1.3 records from a peer that does not pad decrypt straight
+         * into the reader's buffer; a padded one is re-read, not lost. */
+        int one = 1;
+        (void)setsockopt(h->fd, SOL_TLS, TLS_RX_EXPECT_NO_PAD, &one, sizeof one);
+    }
+    return 0;
+}
+
+/* One record of content type `rtype` (an alert, a post-handshake
+ * message) through kTLS TX: sendmsg with a TLS_SET_RECORD_TYPE cmsg. The
+ * bytes sent, or -1 with err_kind set (EAGAIN → would-block). */
+long long nurl_ktls_send(long long handle, long long rtype, const char *buf, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n < 0 || (n > 0 && !buf)) { h->err_kind = NURL_NET_ERR_WRITE; return -1; }
+    char cbuf[CMSG_SPACE(sizeof(unsigned char))];
+    memset(cbuf, 0, sizeof cbuf);
+    struct iovec iov;
+    iov.iov_base = (void*)buf;
+    iov.iov_len  = (size_t)n;
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof cbuf;
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+    cm->cmsg_level = SOL_TLS;
+    cm->cmsg_type  = TLS_SET_RECORD_TYPE;
+    cm->cmsg_len   = CMSG_LEN(sizeof(unsigned char));
+    *CMSG_DATA(cm) = (unsigned char)rtype;
+    ssize_t wn;
+    do {
+        wn = sendmsg(h->fd, &msg,
+#  ifdef MSG_NOSIGNAL
+                     MSG_NOSIGNAL);
+#  else
+                     0);
+#  endif
+    } while (wn < 0 && errno == EINTR);
+    if (wn < 0) { h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE); return -1; }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)wn;
+}
+
+/* Read through kTLS RX: up to `n` plaintext bytes of ONE content type
+ * (the kernel never merges records of different types into one read);
+ * the type is nurl_ktls_rtype's afterwards. `nowait` makes this one
+ * call non-blocking whatever the socket's mode. 0 at EOF, -1 with
+ * err_kind set (EAGAIN → would-block). */
+long long nurl_ktls_recv(long long handle, const char *buf, long long n, long long nowait) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!buf) { h->err_kind = NURL_NET_ERR_READ; return -1; }
+    if (h->timeo_dirty && !h->nonblock) nurl__tcp_apply_timeo(h);
+    char cbuf[CMSG_SPACE(sizeof(unsigned char))];
+    struct iovec iov;
+    iov.iov_base = (void*)buf;
+    iov.iov_len  = (size_t)n;
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf;
+    msg.msg_controllen = sizeof cbuf;
+    ssize_t rd;
+    do {
+        rd = recvmsg(h->fd, &msg, nowait ? MSG_DONTWAIT : 0);
+    } while (rd < 0 && errno == EINTR);
+    if (rd < 0) { h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ); return -1; }
+    h->ktls_rtype = 23;
+    for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm))
+        if (cm->cmsg_level == SOL_TLS && cm->cmsg_type == TLS_GET_RECORD_TYPE)
+            h->ktls_rtype = *CMSG_DATA(cm);
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)rd;
+}
+#else
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long handle, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)handle; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long handle, long long rtype, const char *buf, long long n) {
+    (void)handle; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long handle, const char *buf, long long n, long long nowait) {
+    (void)handle; (void)buf; (void)n; (void)nowait; return -1;
+}
+#endif
+
+/* Up to `n` bytes of file descriptor `fd` from offset `off` to the
+ * connection, copied by the kernel from the page cache (sendfile(2)) —
+ * on a kTLS socket the kernel seals the records as it sends. One call,
+ * as far as the socket takes: the bytes sent (0 at the end of the
+ * file), -1 with err_kind set (EAGAIN → would-block), or -2 where this
+ * platform or this file cannot be sent this way — the caller reads and
+ * writes instead. */
+#if defined(__linux__)
+#include <sys/sendfile.h>
+long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long long n) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h) return -1;
+    if (h->fd == NURL_INVALID_SOCK) { h->err_kind = NURL_NET_ERR_CLOSED; return -1; }
+    if (n <= 0) return 0;
+    if (!nurl__tcp_prepare_write(h)) return -1;
+    off_t o = (off_t)off;
+    ssize_t wn;
+    /* sendfile has no MSG_NOSIGNAL: a peer that has gone raises SIGPIPE,
+     * whose default action ends the process — every other write here
+     * passes MSG_NOSIGNAL. Block it for the call, and consume one the
+     * call raised (only if none was pending before, so another cause's
+     * signal is left alone). */
+    sigset_t pipe_set, old_mask, pending;
+    sigemptyset(&pipe_set);
+    sigaddset(&pipe_set, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipe_set, &old_mask);
+    sigemptyset(&pending);
+    sigpending(&pending);
+    int had_pipe = sigismember(&pending, SIGPIPE);
+    do {
+        wn = sendfile(h->fd, (int)fd, &o, (size_t)(n > 0x7ffff000 ? 0x7ffff000 : n));
+    } while (wn < 0 && errno == EINTR);
+    int saved = errno;
+    /* Whatever the return: on a kTLS socket the signal can be raised by
+     * a call that still reports bytes sent. */
+    if (!had_pipe) {
+        sigemptyset(&pending);
+        sigpending(&pending);
+        if (sigismember(&pending, SIGPIPE)) {
+            struct timespec zero = { 0, 0 };
+            while (sigtimedwait(&pipe_set, NULL, &zero) < 0 && errno == EINTR) {}
+        }
+    }
+    pthread_sigmask(SIG_SETMASK, &old_mask, NULL);
+    errno = saved;
+    if (wn < 0) {
+        if (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP) return -2;
+        h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
+        return -1;
+    }
+    h->err_kind = NURL_NET_ERR_OK;
+    return (long long)wn;
+}
+#else
+long long nurl_tcp_sendfile(long long handle, long long fd, long long off, long long n) {
+    (void)handle; (void)fd; (void)off; (void)n; return -2;
+}
+#endif
+
+/* The content type of the record nurl_ktls_recv last read. */
+long long nurl_ktls_rtype(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    return h ? h->ktls_rtype : 0;
 }
 
 /* Async-runtime hooks — expose fd for reactor registration; toggle
@@ -4555,6 +4815,22 @@ long long nurl_tcp_write_nowait(long long h, const char *buf, long long n) { ret
 long long nurl_tcp_wait_io(long long h, long long events, long long ms) { return nurl__ni_tcp_wait_io(h, events, ms); }
 long long nurl_tcp_read_nowait(long long h, const char *buf, long long n) { return nurl__ni_tcp_read_nowait(h, buf, n); }
 long long nurl_tcp_get_fd(long long h)                { return nurl__ni_tcp_get_fd(h); }
+/* No kTLS here: std/tls.nu keeps its userspace record layer. */
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long h, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)h; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long h, long long rtype, const char *buf, long long n) {
+    (void)h; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long h, const char *buf, long long n, long long nowait) {
+    (void)h; (void)buf; (void)n; (void)nowait; return -1;
+}
+long long nurl_ktls_rtype(long long h) { (void)h; return 0; }
+long long nurl_tcp_sendfile(long long h, long long fd, long long off, long long n) {
+    (void)h; (void)fd; (void)off; (void)n; return -2;
+}
 void nurl_tcp_set_nonblock(long long h, long long on) { nurl__ni_tcp_set_nonblock(h, on); }
 void nurl_tcp_ref(long long h)                        { nurl__ni_tcp_ref(h); }
 void nurl_tcp_unref(long long h)                      { nurl__ni_tcp_unref(h); }
@@ -4728,6 +5004,22 @@ long long nurl_tcp_set_send_buffer(long long h, long long bytes) { (void)h; (voi
  * (which references these unconditionally — they just never fire under
  * WASI because the underlying tcp_listen/_accept returned 0). */
 long long nurl_tcp_get_fd(long long h)                 { (void)h; return -1; }
+/* No kTLS here: std/tls.nu keeps its userspace record layer. */
+long long nurl_ktls_supported(void) { return 0; }
+long long nurl_ktls_set(long long h, long long dir, long long cipher,
+                        const char *key, const char *iv, long long seq) {
+    (void)h; (void)dir; (void)cipher; (void)key; (void)iv; (void)seq; return -1;
+}
+long long nurl_ktls_send(long long h, long long rtype, const char *buf, long long n) {
+    (void)h; (void)rtype; (void)buf; (void)n; return -1;
+}
+long long nurl_ktls_recv(long long h, const char *buf, long long n, long long nowait) {
+    (void)h; (void)buf; (void)n; (void)nowait; return -1;
+}
+long long nurl_ktls_rtype(long long h) { (void)h; return 0; }
+long long nurl_tcp_sendfile(long long h, long long fd, long long off, long long n) {
+    (void)h; (void)fd; (void)off; (void)n; return -2;
+}
 void nurl_tcp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
 void nurl_tcp_ref(long long h)                         { (void)h; }
 void nurl_tcp_unref(long long h)                       { (void)h; }
@@ -5956,6 +6248,10 @@ typedef struct NurlFiber {
     pthread_mutex_t *pending_unlock;
     /* Reactor wake-up reason: 1 fd-ready, 0 timeout. */
     int              last_park_result;
+    /* How long this fiber's I/O waits take, ns (an exponentially
+     * weighted average, 0 until the first wait): what nurl__spin_ready
+     * sizes its probe window by. */
+    long long        wait_ewma_ns;
     /* Pending reactor wait — activated by worker after swap-out so the
      * reactor never matches a not-yet-suspended fiber. */
     struct NurlReactorWait *pending_reactor_wait;
@@ -6667,6 +6963,87 @@ long long nurl_available_parallelism(void) {
     return n > 0 ? n : 1;
 }
 
+/* ── Spin-before-park ─────────────────────────────────────────────
+ * Before a fiber parks on an fd, a worker with nothing else to run may
+ * probe the fd for a while instead: a park and its wake cost a blocking
+ * epoll_wait, a scheduler wake-up and a context switch, and on a
+ * keep-alive connection the peer's next request often lands within
+ * tens of microseconds. At c=1 that is the difference between ~12 k and
+ * ~28 k req/s at half the latency (and, where the kernel's park path is
+ * expensive, lower CPU per request too). But a probe window that does
+ * NOT end in readiness is CPU burned for nothing — a client with think
+ * time between requests, an idle keep-alive connection, a listener:
+ * spinning a fixed 256 poll(2) calls (80 to 250 µs, by the machine's
+ * syscall cost) on each of those multiplied the CPU of a lightly loaded
+ * server several times over.
+ *
+ * So each fiber keeps an estimate of how long its waits take — every
+ * wait counts, a spin that caught the fd and a park alike, measured
+ * from the start of the wait to its end — and spins only when that
+ * estimate is below the cap, for twice the estimate (plus a margin), or
+ * for the whole cap while it has no estimate yet. A sample is clamped
+ * at twice the cap: a wait that long says "do not spin" as clearly as a
+ * longer one, and one stray stall must not keep a steady peer unspun
+ * for long. The cap is NURL_SPIN_US (µs; 0 = never spin), else 100 µs,
+ * else 0 under a cgroup CPU quota or with one usable CPU, where a burned
+ * core is somebody else's time. As before only a runtime with at most
+ * four live fibers spins at all: a loaded server's workers always have
+ * something to run, and spinning there was measured to cost 15-20 % of
+ * c=10..50 throughput.
+ *
+ * The reads of `pending` and the queues are racy by design: a stale
+ * answer only mis-sizes a spin, never loses a wakeup — the park that
+ * follows re-registers with the poller from scratch. */
+static long long nurl__spin_cap_ns = -1;   /* -1 = not decided yet */
+
+static long long nurl__spin_cap(void) {
+    long long cap = __atomic_load_n(&nurl__spin_cap_ns, __ATOMIC_RELAXED);
+    if (cap >= 0) return cap;
+    const char *e = getenv("NURL_SPIN_US");
+    if (e && *e) {
+        cap = atoll(e) * 1000LL;
+    } else {
+        cap = 100000LL;
+        if (nurl_available_parallelism() < 2) cap = 0;
+#if defined(__linux__)
+        if (nurl__cgroup_cpu_limit() > 0) cap = 0;
+#endif
+    }
+    if (cap < 0) cap = 0;
+    __atomic_store_n(&nurl__spin_cap_ns, cap, __ATOMIC_RELAXED);
+    return cap;
+}
+
+/* Fold one observed wait into the fiber's estimate (weight 1/4). */
+static void nurl__spin_observe(NurlFiber *f, long long waited, long long cap) {
+    if (waited < 0) waited = 0;
+    if (waited > 2 * cap) waited = 2 * cap;
+    f->wait_ewma_ns += (waited - f->wait_ewma_ns) / 4;
+}
+
+/* 1 when `fd` became ready for `events` within the fiber's spin window
+ * (the caller skips the park), 0 to park. `t0` is the wait's start. */
+static int nurl__spin_ready(NurlWorker *w, NurlFiber *f, int fd, short events,
+                            long long t0, long long cap) {
+    if (fd < 0 || cap <= 0) return 0;
+    if (__atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) > 4) return 0;
+    long long est = f->wait_ewma_ns;
+    if (est >= cap) return 0;
+    long long budget = est == 0 ? cap : 2 * est + 10000LL;
+    if (budget > cap) budget = cap;
+    for (;;) {
+        /* Other work for this worker: park now and run it. */
+        if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) return 0;
+        if (__atomic_load_n(&nurl__sched.global_head, __ATOMIC_RELAXED)) return 0;
+        struct pollfd probe = { .fd = fd, .events = events, .revents = 0 };
+        int pr = poll(&probe, 1, 0);
+        long long t = nurl_monotonic_ns() - t0;
+        if (pr > 0) { nurl__spin_observe(f, t, cap); return 1; }
+        if (pr < 0 && errno != EINTR) return 0;
+        if (t >= budget) return 0;
+    }
+}
+
 /* xorshift32 — branch-free victim picker. */
 static unsigned nurl__rng_next(unsigned *st) {
     unsigned x = *st;
@@ -7039,17 +7416,20 @@ long long nurl_fiber_sleep_ms(long long ms);
  * Now an IDLE WORKER becomes the poller (the Go netpoller / tokio
  * driver shape): it takes the poll lease and blocks in epoll_wait
  * itself. A ready fiber is resumed DIRECTLY on that worker — no queue,
- * no second wake, same core, warm cache. Surplus ready fibers go to
- * the global queue and recruit peers; releasing the lease with work in
- * hand also wakes one peer so the poller role is never vacant while
- * connections are live. Registrations are per-fd and PERSISTENT
- * (EPOLLONESHOT, re-armed with EPOLL_CTL_MOD), so the per-event cost
- * no longer scales with the number of parked connections; the wake
- * pipe is an eventfd; deadlines live in a min-heap.
+ * no second wake, same core, warm cache. Of the surplus, the oldest
+ * few go to this worker's own queue and the rest to the global queue,
+ * which recruits peers (nurl__np_hand_out); the lease itself stays
+ * sticky — no replacement-poller wake when it is released, a peer that
+ * goes idle takes it. Registrations are per-fd and PERSISTENT — one
+ * EPOLL_CTL_ADD with EPOLLIN|EPOLLOUT|EPOLLET, never re-armed (see
+ * nurl__np_slot) — so the per-event cost does not scale with the
+ * number of parked connections; the wake pipe is an eventfd; deadlines
+ * live in a min-heap.
  *
  * Waiters on one fd chain (a read fiber and a write fiber may park on
- * the same socket); the armed mask is the chain's union, and an event
- * wakes the matching waiters and re-arms the remainder. A closed or
+ * the same socket); an edge wakes the waiters whose direction it
+ * carries, and a direction nobody waits on is banked in the slot's
+ * ready bits for the next wait's fast path. A closed or
  * unpollable fd cannot deliver an epoll event (close silently drops
  * the registration), so every close/shutdown path that could strand a
  * parked waiter calls nurl__reactor_wake_if_started(), which sets a
@@ -7379,8 +7759,15 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
         nurl__np.freelist = recycle;
         pthread_mutex_unlock(&nurl__np.lock);
     }
+    /* A peer is worth waking for kept fibers only when it can steal
+     * some: stealing takes half of a queue of two or more. One kept
+     * fiber runs here right after `direct` — the poller role stays on
+     * this core (no replacement-poller wake, see the lease release) —
+     * and waking a peer for it was a futex wake, a futex wait and two
+     * context switches per request at c=10 for a peer that found
+     * nothing and went back to sleep. */
     if (spilled > 0)      nurl__wake_n(spilled);
-    else if (kept > 0)    nurl__wake_one();
+    else if (kept >= 2)   nurl__wake_one();
     return direct;
 }
 
@@ -7556,23 +7943,11 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     nurl__np_start_if_needed();
     if (!nurl__np.started) return -1;
 
-    /* Spin-then-park — unchanged from the poll(2) backend, same gate,
-     * same rationale (see the comment in the non-Linux twin): with at
-     * most 4 live fibers the burned core is genuinely idle and the
-     * probe window usually eats the whole park. */
-    if (fd >= 0 &&
-        __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        for (int i = 0; i < 256; i++) {
-            if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
-            if (__atomic_load_n(&nurl__sched.global_head,
-                                __ATOMIC_RELAXED)) break;
-            struct pollfd probe = { .fd = fd, .events = events,
-                                    .revents = 0 };
-            int pr = poll(&probe, 1, 0);
-            if (pr > 0) return 1;
-            if (pr < 0 && errno != EINTR) break;
-        }
-    }
+    /* Spin-then-park (nurl__spin_ready); every way out of this wait
+     * reports its length to the fiber's estimate. */
+    long long spin_cap = nurl__spin_cap();
+    long long t0 = spin_cap > 0 ? nurl_monotonic_ns() : 0;
+    if (nurl__spin_ready(w, w->current, fd, events, t0, spin_cap)) return 1;
 
     pthread_mutex_lock(&nurl__np.lock);
     /* Fast path: the readiness edge already arrived (banked by the
@@ -7585,6 +7960,7 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
         if (s && (s->ready & (unsigned)events)) {
             s->ready &= (unsigned)~events;
             pthread_mutex_unlock(&nurl__np.lock);
+            if (spin_cap > 0) nurl__spin_observe(w->current, nurl_monotonic_ns() - t0, spin_cap);
             return 1;
         }
     }
@@ -7613,6 +7989,9 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
     nurl__swap_to_loop(cur, w);
+    /* Resumed — possibly on another worker; the fiber carries its own
+     * estimate. */
+    if (spin_cap > 0) nurl__spin_observe(cur, nurl_monotonic_ns() - t0, spin_cap);
     return cur->last_park_result;
 }
 
@@ -8065,49 +8444,13 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
 
-    /* Spin-then-park. A park costs two cross-thread wake chains (pipe
-     * poke to the reactor, then cond-var wake of a worker) — tens of
-     * microseconds of latency per I/O wait. When this worker has
-     * nothing else it could run, spend that time probing the fd
-     * directly instead: on a keep-alive HTTP connection the peer's
-     * next request usually lands within the window, and the park (and
-     * its reactor round-trip) is skipped entirely.
-     *
-     * Spinning is a LOW-concurrency latency optimization only: it is
-     * gated on the whole runtime having at most 4 live fibers. Fibers
-     * parked on the reactor sit in no run queue, so queue-emptiness
-     * checks alone cannot see a loaded server — with dozens of
-     * connections every worker's queues look empty and every park
-     * would spin, and that was measured to cost 15-20 % of c=10..50
-     * closed-loop HTTP throughput purely by burning cores the load
-     * generator needed (spin "success" is no signal either: on a
-     * closed-loop peer the next request always lands in-window). With
-     * few fibers the burned core is genuinely idle, and the win is
-     * large: the c=1 HTTP cell went from 8 k to 21 k req/s.
-     *
-     * Every read here (pending, queues) is racy by design: a stale
-     * answer only mis-sizes the spin, never loses a wakeup, because
-     * the park below re-checks nothing — the reactor owns the wait
-     * from registration on. */
-    if (fd >= 0 &&
-        __atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) <= 4) {
-        /* 256 probes ≈ 80-250 µs: sized for a TLS peer's turnaround
-         * (decrypt + handle + encrypt ≈ 35-45 µs on loopback), which
-         * the previous 64-probe window (~25 µs) missed — every
-         * keep-alive HTTPS request then paid the full park/wake chain
-         * even at c=1 with idle cores. The ≤4-live-fibers gate above
-         * still keeps loaded servers off this path entirely. */
-        for (int i = 0; i < 256; i++) {
-            if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) break;
-            if (__atomic_load_n(&nurl__sched.global_head,
-                                __ATOMIC_RELAXED)) break;
-            struct pollfd probe = { .fd = fd, .events = events,
-                                    .revents = 0 };
-            int pr = poll(&probe, 1, 0);
-            if (pr > 0) return 1;
-            if (pr < 0 && errno != EINTR) break;
-        }
-    }
+    /* Spin-then-park (nurl__spin_ready). Here a park costs two
+     * cross-thread wake chains (pipe poke to the reactor, then cond-var
+     * wake of a worker) — tens of microseconds per I/O wait — so a
+     * short wait caught by probing the fd skips the most. */
+    long long spin_cap = nurl__spin_cap();
+    long long t0 = spin_cap > 0 ? nurl_monotonic_ns() : 0;
+    if (nurl__spin_ready(w, w->current, fd, events, t0, spin_cap)) return 1;
 
     pthread_mutex_lock(&nurl__reactor.lock);
     NurlReactorWait *wt = nurl__reactor.freelist;
@@ -8138,6 +8481,9 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
     nurl__swap_to_loop(cur, w);
+    /* Resumed — possibly on another worker; the fiber carries its own
+     * estimate. */
+    if (spin_cap > 0) nurl__spin_observe(cur, nurl_monotonic_ns() - t0, spin_cap);
     return cur->last_park_result;
 }
 

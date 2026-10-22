@@ -68,6 +68,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   primitives lane by lane (FIPS-197 C.1 and the v128 primitives), and
   `crypto_tier_ir.sh` checks both tiers' IR, gates, stubs, machine code
   and runtime answers. Bootstrap snapshot refreshed (preamble changed).
+- **kTLS (opt-in) and `tcp_sendfile`** (agora t46, part of t37). After
+  the pure-NURL handshake a TLS 1.3 connection can hand its record
+  protection to the Linux kernel — `tls_ktls` / `tcp_tls_ktls` on one
+  connection, `NURL_KTLS=1` or `tls_ktls_default T` for all — and reports
+  which directions went (a direction that cannot go keeps the userspace
+  record layer). Linux 6.14+ only (the kernel must rekey an installed
+  direction for KeyUpdate) with the `tls` ULP loaded. Alerts, KeyUpdate
+  and tickets travel as typed records (cmsg); `tls_key_update conn
+  request_peer` (new, RFC 8446 §4.6.3) works in both modes; a read side
+  waiting on a buffered partial record goes once the buffer drains.
+  Runtime: `nurl_ktls_set` / `_send` / `_recv` / `_rtype` /
+  `_supported`, stubs on every other platform.
+  `tcp_sendfile conn file off len` sends a `PFile` range with sendfile(2)
+  on plain TCP and on a kTLS-sealed TLS connection (bytes never enter the
+  process), else through one reused 64 KB buffer and the record layer
+  (`pfile_read_vec_into`, new); the runtime blocks the SIGPIPE sendfile
+  raises on a closed peer, and a process that installs kTLS ignores
+  SIGPIPE (unless it has its own handler) — a kTLS socket can flush queued
+  records in `close()` after the peer has gone, where no call can mask it. Measured on Haswell / Linux 7.0
+  (`gcm-aesni-avx` in the kernel), server CPU µs per TLS response: 1 MB
+  file C=10 — userspace from memory 1202, pread + seal 1255, kTLS +
+  sendfile 1202, kTLS + write() 1720; 16 KB — 36 / 59 / 62 / 66. Hence
+  opt-in: it pays where the kernel's AES-GCM is faster than NURL's (VAES
+  kernels, NIC offload) — docs/NETWORKING.md. Tests: `tls_ktls.nu`
+  (requires `ktls`: both ends in the kernel, each mixed combination,
+  KeyUpdate both ways, 1 MB each way, sendfile, close_notify),
+  `net_sendfile.nu` (kernel path on plain TCP, fallback under TLS, a
+  peer that goes away mid-file).
+
 - **The TLS record layer seals and opens in place** (agora t44, part of
   t37). A record used to cost about ten allocations and three or four
   copies each way: the body sliced out of the receive buffer, a nonce,
@@ -303,6 +332,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     buffer (`gk_dbuf_download_host`).
   - benchmark takes the view of the Vec `sort_by` changes inside the timed
     closure, not beside it.
+- **A futex round trip per request at moderate concurrency** (agora
+  t49). When the netpoller's batch left one fiber beside the one it runs
+  directly, it woke an idle worker for it — but stealing takes half of a
+  queue of two or more, and the poller role stays on the polling core,
+  so the woken worker found nothing and went back to sleep: a futex
+  wake, a futex wait and two context switches per request at c=10. A
+  peer is now woken only for a stealable surplus. 6 workers, c=10:
+  futex calls per request 1.24 → 0.63, context switches 0.46 → 0.23,
+  server CPU 26.8 → 24.3 µs/request (−9 %), throughput and p99 equal or
+  better; c=50 and c=200 unchanged. Profiled first, as the task asked:
+  mutex lock/unlock is ~1 % of server CPU at c=50..200 with no futex
+  contention on the netpoller lock to speak of — the idle-worker wake
+  path was the cost, not the lock. The netpoller's design comment no
+  longer describes EPOLLONESHOT re-arming or a lease-release wake.
+
+- **A lightly loaded server spun 80–250 µs of CPU on every I/O wait**
+  (agora t52). With at most four live fibers, a fiber about to park
+  first probed its fd with a fixed 256 poll(2) calls — worth it when the
+  peer answers within the window (c=1 closed loop: ~28 k against ~12 k
+  req/s), pure waste when it does not: a client with think time, an idle
+  keep-alive connection, the listener. Now each fiber learns how long
+  its waits take (every wait counts — a spin hit or a whole park, outliers
+  clamped) and spins only while that is below the cap, for twice it plus
+  a margin; the cap is `NURL_SPIN_US` (µs, 0 = never), else 100 µs, else
+  0 under a cgroup CPU quota or with one usable CPU. i7-5930K, 6 workers,
+  server CPU µs per request, before → after: one connection at 2000
+  req/s 235 → 74 (TLS 239 → 72), at 500 req/s 484 → 84, two at 2500 each
+  183 → 72 with p99 2.14 → 0.46 ms; c=1 / c=10 closed loop unchanged
+  (35.0 / 27.1 plaintext; TLS c=1 44.5 → 41.8). tokio on the same think-
+  time loads: 65 and 76.
 
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key

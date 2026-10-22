@@ -914,6 +914,22 @@ unsafe @ nurl_tcp_write2 i conn * u b1 i n1 * u b2 i n2 → i {
     ^ ? < w2 0 w1 + w1 w2
 }
 
+// No kernel to hand TLS to and no page cache to send from: the kTLS
+// entry points answer "not here" (std/tls.nu keeps its own record layer,
+// tls_ktls reports 0) and a sendfile is unsupported (-2), so
+// std/net.nu's tcp_sendfile reads the file and writes it instead.
+@ nurl_ktls_supported → i { ^ 0 }
+
+unsafe @ nurl_ktls_set i conn i dir i cipher * u key * u iv i seq → i { ^ -1 }
+
+unsafe @ nurl_ktls_send i conn i rtype * u buf i n → i { ^ -1 }
+
+unsafe @ nurl_ktls_recv i conn * u buf i n i nowait → i { ^ -1 }
+
+@ nurl_ktls_rtype i conn → i { ^ 0 }
+
+@ nurl_tcp_sendfile i conn i fd i off i n → i { ^ -2 }
+
 @ nurl_reactor_wait_read i fd i timeout_ms → i { ^ ( __wait fd 0 timeout_ms ) }
 
 @ nurl_reactor_wait_write i fd i timeout_ms → i { ^ ( __wait fd 1 timeout_ms ) }

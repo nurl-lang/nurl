@@ -197,6 +197,64 @@ server links `libc` only, exactly like a plain-TCP program. The
 [`psql`](../packages/psql) package builds on the pure-NURL TLS client to
 reach PostgreSQL securely with no libpq and no OpenSSL.
 
+**The record layer** seals and opens each record where it lies: outgoing
+records are built in a per-connection buffer and sealed in place,
+incoming ones are opened inside the receive buffer and their plaintext
+copied once — straight into the caller's buffer with `tcp_read_into` /
+`tls_read_into` / `tls_server_read_into`. The AES-GCM key of each traffic
+secret is prepared once (round keys and GHASH powers, rebuilt on
+KeyUpdate), and a steady-state record allocates nothing. On a CPU with
+AES-NI and PCLMULQDQ the server prefers AES-128-GCM (hardware crypto
+tier, docs/spec.md §4.1b); elsewhere ChaCha20-Poly1305.
+
+### kTLS and sendfile (opt-in, Linux)
+
+After the pure-NURL handshake a connection can hand its TLS 1.3 record
+protection to the kernel: `tcp_tls_ktls conn` / `tls_ktls conn` (or every
+connection, with `NURL_KTLS=1` in the environment or
+`tls_ktls_default T`). It returns what the kernel now protects — 1 the
+write side, 2 the read side, 3 both, 0 neither — and a direction that
+cannot go keeps the userspace record layer, so it is always safe to ask.
+Requirements: Linux **6.14 or later** (the kernel must take a new key in
+an installed direction, which KeyUpdate needs — older kernels are
+refused rather than broken by the first KeyUpdate) and the `tls` ULP
+(`modprobe tls`; an unprivileged process cannot load it). A read side
+goes only when no partial record is buffered; it follows once the buffer
+drains. Under kTLS, alerts, KeyUpdate and NewSessionTicket travel as
+records of their own type (`TLS_SET_RECORD_TYPE` / `TLS_GET_RECORD_TYPE`),
+`tls_key_update conn request_peer` works in both modes, and kernel and
+userspace ends interoperate in either combination
+(`compiler/tests/tls_ktls.nu`).
+
+`tcp_sendfile conn file off len` sends a `PFile` range: on plain TCP and
+on a TLS connection whose write side the kernel seals it is sendfile(2) —
+the bytes never enter the process — and otherwise it reads 64 KB slices
+into one reused buffer and writes them through the record layer. (The
+runtime blocks the SIGPIPE sendfile would raise on a closed peer; every
+other socket write passes `MSG_NOSIGNAL`. A kTLS socket can also flush
+queued records later — in `close()`, after the peer has gone — where no
+call can mask the signal, so a process that installs kTLS sets SIGPIPE to
+ignored unless the program has its own handler; write errors then come
+back as EPIPE, as they already do on every socket write.)
+
+**Measured — why it is opt-in.** i7-5930K (Haswell), Linux 7.0, the
+kernel's AES-GCM being `gcm-aesni-avx`, server pinned to 6 cores, server
+CPU µs per keep-alive response over TLS (AES-128-GCM):
+
+| body | userspace, from memory | userspace, pread + seal | kTLS + sendfile | kTLS, write() from memory |
+|---|---:|---:|---:|---:|
+| 1 MB, C=1 | 783 | 881 | 808 | 1134 |
+| 1 MB, C=10 | 1202 | 1255 | 1202 | 1720 |
+| 16 KB, C=10 | 36 | 59 | 62 | 66 |
+
+With `write()` the kernel copies the plaintext in and seals it into
+separate pages, which costs more than NURL sealing in place; with
+sendfile it ties the in-memory userspace path and beats reading the file
+into the process. The kernel's own AES-GCM is what decides it: on a CPU
+where the kernel uses VAES / AVX-512 (Linux 6.11+, Ice Lake / Zen 3 and
+later), or with NIC TLS offload, kTLS + sendfile is the faster path for
+large files — measure on the deployment hardware before turning it on.
+
 ## HTTP/2
 
 Every HTTP server listener — `server_run`, `server_run_pool`,
