@@ -492,7 +492,14 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 ## 6. Public playground, compiler API, and MCP service
 
-- [ ] **P0 — Contain every public file-read API under its declared root.**
+- [x] **P0 — Contain every public file-read API under its declared root.**
+  *(0.77.0: every nurlapi file route and MCP reader takes a non-empty
+  `path_rel_ok` path — no absolute, drive-letter or `..` form — and the
+  stdlib's `serve_static` decodes first, refuses dotfiles and requires
+  `path_within` (realpath) containment; `nurlapi/e2e_test.py` covers
+  `/etc/passwd`, `/proc/self/environ`, `//`, encoded `..` and the MCP
+  tools/resources. The served trees are read-only to the server user,
+  so no symlink can be planted in them.)*
   Several unauthenticated HTTP and MCP readers reject `..` but then use
   `path_join`, whose absolute right-hand operand discards the trusted root. This
   can expose host files such as `/proc/self/environ` independently of compiler
@@ -512,8 +519,12 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   but `opt` reaches Clang, imports can address parent/absolute host paths, and
   subprocesses inherit a shared working directory/cache/environment
   (`nurlapi/main.nu`).
-  - ~~Accept strict basenames only~~ (done, 0.76.0); canonicalize and contain
-    every output/import, reject symlink escapes, and make `opt` a fixed enum.
+  - ~~Accept strict basenames only~~ (done, 0.76.0); ~~canonicalize and
+    contain every import, reject symlink escapes, and make `opt` a fixed
+    enum~~ (done, 0.77.0: `nurlc --import-root` / `NURL_IMPORT_ROOTS`,
+    realpath containment; `opt` is a closed set).
+  - The shared unikernel object cache is read-only to the server and its
+    objects are linked by name, not glob (0.77.0).
   - Give each job a private workspace/cache and an allowlisted environment;
     expose only its source and a read-only stdlib/toolchain.
   - Run compiler/linker/emulator processes with no network, no secrets, no new

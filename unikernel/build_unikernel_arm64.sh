@@ -102,6 +102,13 @@ TARGET=aarch64-linux-musl
 KFLAGS="-target $TARGET -ffreestanding -fno-stack-protector -fno-builtin
         -mcmodel=small -fno-pie -O2"
 
+# nolibc's C sources, and every nolibc object the link takes — named,
+# never globbed: `nl_*.o` linked whatever else sat in the cache, so one
+# object planted there would have gone into every image built after.
+NL_SRCS="string malloc stdio dtoa math misc"
+NL_OBJS=""
+for f in $NL_SRCS setjmp; do NL_OBJS="$NL_OBJS nl_$f.o"; done
+
 cache_inputs() {
     printf '%s\n' \
         "$ROOT/stdlib/runtime_core.c" "$ROOT/stdlib/runtime_ctx.c" \
@@ -121,7 +128,7 @@ cache_build() {
     $ZIG cc $KFLAGS -c "$ROOT/stdlib/runtime_core.c" -o "$CACHE/runtime_core.o"
     $ZIG cc $KFLAGS -c "$ROOT/stdlib/runtime_ctx.c"  -o "$CACHE/runtime_ctx.o"
     $ZIG cc $KFLAGS -c "$ROOT/unikernel/runtime_bare.c" -o "$CACHE/runtime_bare.o"
-    for f in string malloc stdio dtoa math misc; do
+    for f in $NL_SRCS; do
         $ZIG cc $KFLAGS -c "$NOLIBC/$f.c" -o "$CACHE/nl_$f.o"
     done
     $ZIG cc $KFLAGS -c "$BOOT/platform_arm64.c"  -o "$CACHE/platform.o"
@@ -142,21 +149,38 @@ cache_build() {
 
 stamp="$CACHE/stamp"
 want_key="ZIG=$ZIG KFLAGS=$(echo $KFLAGS)"
-(
-    flock 9
-    fresh=1
-    if [ ! -f "$stamp" ] || [ "$(head -1 "$stamp" 2>/dev/null)" != "$want_key" ]; then
-        fresh=0
-    else
-        while IFS= read -r f; do
-            [ "$f" -nt "$stamp" ] && { fresh=0; break; }
-        done < <(cache_inputs)
-    fi
-    if [ "$fresh" = 0 ]; then
+cache_fresh() {
+    [ -f "$stamp" ] && [ "$(head -1 "$stamp" 2>/dev/null)" = "$want_key" ] || return 1
+    while IFS= read -r f; do
+        [ "$f" -nt "$stamp" ] && return 1
+    done < <(cache_inputs)
+    return 0
+}
+# A cache this build may not write is used as it stands when it is
+# current: the playground server ships it warm and read-only, so no
+# request can plant or swap an object that every later image links.
+# When it is stale (a newer toolchain bind-mounted over the image) the
+# build makes a private one in its own output directory rather than
+# write the shared one.
+if [ ! -w "$CACHE" ]; then
+    if ! cache_fresh; then
+        CACHE="$OUTDIR/cache"
+        stamp="$CACHE/stamp"
+        mkdir -p "$CACHE"
         cache_build
         printf '%s\n' "$want_key" > "$stamp"
     fi
-) 9>"$CACHE/.lock"
+else
+    (
+        flock 9
+        if ! cache_fresh; then
+            cache_build
+            printf '%s\n' "$want_key" > "$stamp"
+        fi
+    ) 9>"$CACHE/.lock"
+fi
+NL_LINK=()
+for o in $NL_OBJS; do NL_LINK+=("$CACHE/$o"); done
 
 # The program. compile_nu.sh links in the NURL socket layer when `nm`
 # says the program needs it; NURL_NM points it at a cross-capable nm so
@@ -213,7 +237,7 @@ $ZIG cc -target $TARGET -nostdlib -static -Wl,-T,"$BOOT/link_arm64.ld" \
     "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" "$CACHE/boot_vfs.o" \
     "$CACHE/boot_fdt.o" "$CACHE/boot_cmdenv.o" "$CACHE/cuda_stubs.o" "$CACHE/nvrtc_stubs.o" \
     "$OUTDIR/$base.initfs_data.o" \
-    "$CACHE"/nl_*.o
+    "${NL_LINK[@]}"
 
 # ── the flat Image, beside the ELF ───────────────────────────────
 #

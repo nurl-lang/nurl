@@ -95,6 +95,9 @@ find "$ROOT_DIR/compiler/tests" -maxdepth 1 -name '*.nu' -print0 \
 if [[ -d "$ROOT_DIR/compiler/tests/diagprobes" ]]; then
     find "$ROOT_DIR/compiler/tests/diagprobes" -maxdepth 1 -name '*.nu' -print0 \
         | xargs -0 -P "$JOBS" -I{} bash -c 'capture probe_ "$0"' {}
+    # The import-root refusal needs roots to refuse against.
+    NURL_IMPORT_ROOTS="$ROOT_DIR/compiler/tests/diagprobes" \
+        capture probe_roots_ "$ROOT_DIR/compiler/tests/diagprobes/import_outside_roots.nu"
 fi
 
 # ── analyse ─────────────────────────────────────────────────────

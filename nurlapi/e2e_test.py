@@ -712,13 +712,58 @@ def t_tools_call_traversal(c: Client) -> None:
     env = _tool_call(c, "nurl_read_example", {"name": "/etc/passwd"})
     assert_true(
         "absolute MCP name flagged as error",
-        bool(res.get("isError")) or ("root:" not in _tool_text(env)),
+        bool(env.get("result", {}).get("isError")) or ("root:" not in _tool_text(env)),
     )
+    for tool, arg in (("nurl_read_stdlib", "name"), ("nurl_read_test", "name"),
+                      ("nurl_read_example", "name"), ("nurl_docs", "topic")):
+        for val in ("/etc/passwd", "//etc/passwd", "../../../../etc/passwd", "/proc/self/environ"):
+            t = _tool_text(_tool_call(c, tool, {arg: val}))
+            assert_true(f"{tool} {val} leaks nothing",
+                        "root:x:" not in t and "PATH=/" not in t, f"got: {t[:120]!r}")
+    for uri in ("nurl://stdlib//etc/passwd", "nurl://stdlib/../../../etc/passwd",
+                "nurl://stdlib//proc/self/environ"):
+        _, _, env = c.rpc({"jsonrpc": "2.0", "id": 43, "method": "resources/read",
+                           "params": {"uri": uri}})
+        t = json.dumps(env) if isinstance(env, dict) else str(env)
+        assert_true(f"resources/read {uri} leaks nothing",
+                    "root:x:" not in t and "PATH=/" not in t, f"got: {t[:120]!r}")
     for path in ("/examples//etc/passwd", "/stdlib//etc/passwd",
-                 "/tests//etc/passwd", "/static//etc/passwd"):
+                 "/tests//etc/passwd", "/static//etc/passwd",
+                 "/download/..%2f..%2fetc/passwd", "/download/x/..%2f..%2f..%2fetc%2fpasswd",
+                 "/download//etc/passwd", "/stdlib/%2e%2e/%2e%2e/etc/passwd",
+                 "/stdlib-docs//etc/passwd.md", "/stdlib//proc/self/environ",
+                 "/static//proc/self/cmdline"):
         status, _, body = c.get(path)
-        assert_true(f"absolute path refused {path}", status in (403, 404),
+        assert_true(f"absolute path refused {path}", status in (400, 403, 404),
                     f"HTTP {status}: {body[:80]!r}")
+        assert_true(f"no passwd content {path}", b"root:" not in body and b"PATH=/" not in body)
+
+
+# The compiler reads imports from the toolchain tree only. Before
+# --import-root / NURL_IMPORT_ROOTS, `$ `/proc/self/environ`` made nurlc
+# open the file and quote its first line in the parse error — the
+# server's environment, or any file the server user could read.
+def t_build_import_confinement(c: Client) -> None:
+    print("\n[MCP] tools/call nurl_build_native — imports outside the toolchain")
+    for target in ("/proc/self/environ", "/etc/passwd", "/etc/hostname",
+                   "../../../../../../etc/passwd", "/no/such/file.nu"):
+        src = f"$ `{target}`\n@ main → i {{ ^ 0 }}\n"
+        env = _tool_call(c, "nurl_build_native", {"source": src, "filename": "main.nu"})
+        text = _tool_text(env)
+        assert_true(f"import {target} refused", "cannot open import" in text, f"got: {text[:300]!r}")
+        # The local harness and the image both export these to the server.
+        for leak in ("root:x:", "PATH=/", "HOME=/", "NURL_PORT=", "NURLC_PATH="):
+            assert_true(f"import {target} leaks no {leak!r}", leak not in text, f"got: {text[:300]!r}")
+    # The toolchain's own stdlib still resolves.
+    src = '$ `stdlib/core/string.nu`\n@ main → i {\n  : String s ( string_from `x` )\n  ^ 0\n}\n'
+    env = _tool_call(c, "nurl_build_native", {"source": src, "filename": "main.nu"})
+    text = _tool_text(env)
+    try:
+        j = json.loads(text)
+    except json.JSONDecodeError:
+        j = {}
+    ok_build = j.get("status") == "ok" or j.get("success") is True or j.get("ok") is True
+    assert_true("stdlib import still builds", ok_build, f"got: {text[:300]!r}")
 
 
 def t_tools_call_unknown(c: Client) -> None:
@@ -1384,10 +1429,12 @@ def main() -> int:
     t_tools_call_unknown(c)
     if args.native_only:
         t_tools_call_build(c)
+        t_build_import_confinement(c)
         t_diagnostics_contract(c)
         print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
     elif not args.quick:
         t_tools_call_build(c)
+        t_build_import_confinement(c)
         t_diagnostics_contract(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)

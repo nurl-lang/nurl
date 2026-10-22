@@ -126,7 +126,7 @@ Configuration (call before serving):
 
 | Call | Default | |
 | --- | --- | --- |
-| `( http_app_static_dir a dir )` | off | serve files for unmatched GET/HEAD (traversal-safe) |
+| `( http_app_static_dir a dir )` | off | serve files for unmatched GET/HEAD — the path is percent-decoded before it is checked, `..` and absolute paths are refused, dotfiles other than `.well-known` are not served, and a symlink that leads out of `dir` is a 404 |
 | `( http_app_cors a )` | off | permissive CORS + 204 OPTIONS preflight |
 | `( http_app_logging a )` | off | access log (method path → status) to stderr |
 | `( http_app_recover a on )` | — | deprecated no-op: panic → 500 is an unconditional stdlib-server guarantee |

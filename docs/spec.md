@@ -184,6 +184,14 @@ root or installed under a consumer's `deps/<pkg>/` — never as
 `src/name.nu`, which only the package root's working directory finds
 (`tools/check_package_imports.sh` refuses it).
 
+A compilation may be **confined** to a set of directories — `nurlc
+--import-root=DIR` (repeatable) or `NURL_IMPORT_ROOTS` (`:`-separated;
+the flag wins). An import whose canonical path (every symlink and `..`
+resolved) lies outside every root is reported exactly as a missing file,
+so the diagnostic does not reveal which paths exist. Without either, any
+readable file may be imported. A server that compiles untrusted source
+sets the roots to its toolchain tree and the build's own directory.
+
 The same path is imported **at most once** per compilation. Dedup keys on
 the `realpath(3)`-canonical file path (falling back to the normalised path
 string when `realpath` fails), so the same file reached through different

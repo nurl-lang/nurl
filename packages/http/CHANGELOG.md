@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.9] — 2026-10-22
+
+Requires the NURL with `path_rel_ok` / `path_within` (std/path.nu).
+
+### Security
+
+- The static-file fallback (`http_app_static_dir`, through the stdlib's `serve_static`) judges the path the filesystem will open: it percent-decodes the request path first, so `/%2e%2e/secret` is the `..` it names (403) and a malformed escape or an encoded NUL is a 400; it no longer serves a segment starting with `.` (`.git`, `.env`, `.htpasswd` — 404), except `.well-known`; and it serves a file only if its canonical path lies inside the canonical web root, so a symlink in the web root that points elsewhere is a 404 instead of a way out. A file whose name needs escaping (`/a%20b.txt`) is now found, where before the literal `%20` was looked up.
+
 ## [0.7.8] — 2026-10-21
 
 Requires the NURL with `server_drain`, `http3_server_drain` and `tcp_listen_default_backlog`.

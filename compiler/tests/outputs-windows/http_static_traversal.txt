@@ -7,4 +7,21 @@ OUTPUT
   ok   GET /../secret.txt = 403
   ok   GET //<abs>/secret.txt blocked (403)
   ok   GET //etc/hostname blocked (404)
+  ok   GET /a%20b.txt = 200
+  ok   GET /%6Fk.txt = 200
+  ok   GET /%2e%2e/secret.txt = 403
+  ok   GET /%2E%2E%2Fsecret.txt = 403
+  ok   GET /..%5csecret.txt = 403
+  ok   GET /%2f%2fetc/hostname blocked (404)
+  ok   GET /C:%2fsecret.txt = 403
+  ok   GET /ok.txt%00.png = 400
+  ok   GET /ok%2 = 400
+  ok   GET /ok%zz = 400
+  ok   GET /.env = 404
+  ok   GET /%2eenv = 404
+  ok   GET /./ok.txt = 404
+  ok   GET /.well-known/security.txt = 200
+  ok   GET /.well-known/.env = 404
+  ok   GET /x/.well-known/security.txt = 404
+  ok   GET /.well-knownx = 404
 http_static_traversal: all checks passed

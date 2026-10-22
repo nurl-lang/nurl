@@ -10,10 +10,19 @@
 // separators (so the tail is always relative) and rejects a tail that is
 // still absolute (Windows drive-letter form) or contains a ".." segment.
 //
+// Second round: the path is percent-decoded BEFORE the checks (the
+// filesystem sees decoded bytes, so "%2e%2e" must be judged as ".."),
+// a bad escape or NUL is a 400, and a dot-segment other than
+// ".well-known" is a 404. The symlink half lives in http_static_symlink
+// (POSIX-only).
+//
 // We lay out:
 //   <tmp>/secret.txt        — a "secret" OUTSIDE the served root
 //   <tmp>/pubdir/index.html    — the served directory's index
 //   <tmp>/pubdir/ok.txt        — a legitimate file
+//   <tmp>/pubdir/a b.txt       — reachable only as "/a%20b.txt"
+//   <tmp>/pubdir/.env          — a dotfile that must never be served
+//   <tmp>/pubdir/.well-known/security.txt — the one dot-dir that is
 // then drive serve_static with crafted request paths and assert that
 // legitimate requests succeed (200) while every escape attempt is BLOCKED
 // (NOT 200, and never serving the secret). main returns the failure count.
@@ -99,6 +108,27 @@ $ `stdlib/ext/env.nu`
     // A bare absolute-style escape to a well-known path.
     ( check_blocked `GET //etc/hostname` ( status_for pubpath `//etc/hostname` ) fails )
 
+    // Escapes are judged after decoding.
+    ( check_eq `GET /a%20b.txt` ( status_for pubpath `/a%20b.txt` ) 200 fails )
+    ( check_eq `GET /%6Fk.txt` ( status_for pubpath `/%6Fk.txt` ) 200 fails )
+    ( check_eq `GET /%2e%2e/secret.txt` ( status_for pubpath `/%2e%2e/secret.txt` ) 403 fails )
+    ( check_eq `GET /%2E%2E%2Fsecret.txt` ( status_for pubpath `/%2E%2E%2Fsecret.txt` ) 403 fails )
+    ( check_eq `GET /..%5csecret.txt` ( status_for pubpath `/..%5csecret.txt` ) 403 fails )
+    ( check_blocked `GET /%2f%2fetc/hostname` ( status_for pubpath `/%2f%2fetc/hostname` ) fails )
+    ( check_eq `GET /C:%2fsecret.txt` ( status_for pubpath `/C:%2fsecret.txt` ) 403 fails )
+    ( check_eq `GET /ok.txt%00.png` ( status_for pubpath `/ok.txt%00.png` ) 400 fails )
+    ( check_eq `GET /ok%2` ( status_for pubpath `/ok%2` ) 400 fails )
+    ( check_eq `GET /ok%zz` ( status_for pubpath `/ok%zz` ) 400 fails )
+
+    // Dotfiles are not content; .well-known is.
+    ( check_eq `GET /.env` ( status_for pubpath `/.env` ) 404 fails )
+    ( check_eq `GET /%2eenv` ( status_for pubpath `/%2eenv` ) 404 fails )
+    ( check_eq `GET /./ok.txt` ( status_for pubpath `/./ok.txt` ) 404 fails )
+    ( check_eq `GET /.well-known/security.txt` ( status_for pubpath `/.well-known/security.txt` ) 200 fails )
+    ( check_eq `GET /.well-known/.env` ( status_for pubpath `/.well-known/.env` ) 404 fails )
+    ( check_eq `GET /x/.well-known/security.txt` ( status_for pubpath `/x/.well-known/security.txt` ) 404 fails )
+    ( check_eq `GET /.well-knownx` ( status_for pubpath `/.well-knownx` ) 404 fails )
+
     ( string_free pubdir )
     : i n ( vec_len [i] fails )
     ( vec_free [i] fails )
@@ -147,6 +177,30 @@ $ `stdlib/ext/env.nu`
     ( string_push_str okp `/ok.txt` )
     : !v IoErr w3 ( write_file ( string_data okp ) `ok\n` )
     ?? w3 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write ok.txt\n` ) } }
+
+    : String sp ( string_new )
+    ( string_push_str sp ( string_data pubdir ) )
+    ( string_push_str sp `/a b.txt` )
+    : !v IoErr w4 ( write_file ( string_data sp ) `space\n` )
+    ?? w4 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write a b.txt\n` ) } }
+    ( string_free sp )
+
+    : String envp ( string_new )
+    ( string_push_str envp ( string_data pubdir ) )
+    ( string_push_str envp `/.env` )
+    : !v IoErr w5 ( write_file ( string_data envp ) `SECRET=1\n` )
+    ?? w5 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write .env\n` ) } }
+    ( string_free envp )
+
+    : String wk ( string_new )
+    ( string_push_str wk ( string_data pubdir ) )
+    ( string_push_str wk `/.well-known` )
+    : !v IoErr d2 ( dir_create_all ( string_data wk ) )
+    ?? d2 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: dir_create_all .well-known\n` ) } }
+    ( string_push_str wk `/security.txt` )
+    : !v IoErr w6 ( write_file ( string_data wk ) `Contact: x\n` )
+    ?? w6 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write security.txt\n` ) } }
+    ( string_free wk )
 
     : i fails ( run b )
 

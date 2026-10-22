@@ -333,14 +333,18 @@ RUN /opt/nurl/unikernel/measure_capability.sh /opt/nurl/examples \
 # needs root. Writable surface is exactly what the tools touch at request
 # time: /app/output (build artifacts), /opt/zig-cache (zig target cache),
 # /tmp (compiler temps), plus a HOME for zig/clang dotfiles.
-# /opt/unikernel-cache is writable by the server for the same reason
-# /opt/zig-cache is: it is a CACHE — build_unikernel.sh takes its flock
-# there on every run, and a bind-mounted stdlib (nurlapi.sh bind) with
-# newer mtimes makes it rebuild itself at request time.
+# The unikernel object caches stay root's and read-only: every image a
+# request builds links them, so a server that could write there could
+# plant or swap an object in every later user's kernel. They ship warm
+# (the smoke check above built them); build_unikernel*.sh uses a
+# read-only cache as it stands when it is current, and builds a private
+# copy in the request's own output directory when it is not (a newer
+# stdlib bind-mounted over the image by nurlapi.sh).
 RUN groupadd -g 10001 nurl \
     && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
-    && chown -R nurl:nurl /app/output /opt/zig-cache /opt/unikernel-cache \
-                          /opt/unikernel-cache-arm64
+    && chown -R nurl:nurl /app/output /opt/zig-cache \
+    && chown -R root:root /opt/unikernel-cache /opt/unikernel-cache-arm64 \
+    && chmod -R a-w,a+rX /opt/unikernel-cache /opt/unikernel-cache-arm64
 USER nurl
 ENV HOME=/home/nurl
 
