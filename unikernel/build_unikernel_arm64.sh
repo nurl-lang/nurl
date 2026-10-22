@@ -162,19 +162,36 @@ cache_fresh() {
 # When it is stale (a newer toolchain bind-mounted over the image) the
 # build makes a private one in its own output directory rather than
 # write the shared one.
+# mtime says when an object was written, not what is in it: a cache the
+# service user can write is exactly where a planted object waits to be
+# linked into every later image. Seal the objects when they are built and
+# verify them before the link, so tampering costs a rebuild, not a payload.
+cache_seal() {
+    : > "$CACHE/SHA256SUMS"
+    for o in "$CACHE"/*.o; do
+        [ -f "$o" ] && ( cd "$CACHE" && sha256sum "${o##*/}" >> SHA256SUMS )
+    done
+}
+cache_intact() {
+    [ -s "$CACHE/SHA256SUMS" ] || return 1
+    ( cd "$CACHE" && sha256sum -c --quiet SHA256SUMS > /dev/null 2>&1 )
+}
+
 if [ ! -w "$CACHE" ]; then
-    if ! cache_fresh; then
+    if ! cache_fresh || ! cache_intact; then
         CACHE="$OUTDIR/cache"
         stamp="$CACHE/stamp"
         mkdir -p "$CACHE"
         cache_build
+        cache_seal
         printf '%s\n' "$want_key" > "$stamp"
     fi
 else
     (
-        flock 9
-        if ! cache_fresh; then
+        flock -w 60 9
+        if ! cache_fresh || ! cache_intact; then
             cache_build
+            cache_seal
             printf '%s\n' "$want_key" > "$stamp"
         fi
     ) 9>"$CACHE/.lock"
