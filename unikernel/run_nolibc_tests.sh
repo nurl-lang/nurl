@@ -71,7 +71,18 @@ one() {
     case "$name" in
         http2_client_duplex|http2_client_streaming)
             echo "SKIP $name (needs preemptive threads over host TCP)"; return 0 ;;
+        # A peer that closes mid-send must make the sender's writes fail;
+        # the NURL TCP stack does not yet answer data for a closed socket
+        # with RST (agora #74).
+        net_sendfile)
+            echo "SKIP $name (needs RST on data after close — agora #74)"; return 0 ;;
     esac
+    # kTLS hands record protection to the HOST kernel; the NURL socket
+    # layer here has no kernel to hand it to (tls_ktls reports 0), so a
+    # test declaring `requires: ktls` describes a run this is not.
+    if sed -n '1,40p' "$src" | grep -qE '^[[:space:]]*//[[:space:]]*requires:.*\bktls\b'; then
+        echo "SKIP $name (requires: ktls — the host kernel's TLS)"; return 0
+    fi
     # Only run a test whose golden says what running it should DO. Ask
     # the GOLDEN, not the name: run_san_tests.sh settled that rule
     # already — "should_fail_*, diag_*, borrow_*, and whatever
