@@ -97,6 +97,10 @@ jobs:
           node-version: 24
       - name: Editor launcher controls
         run: node tools/tests/test_vscode_launcher.cjs
+      - name: Playground and demo scripts parse
+        # A syntax error in nurlapi/static/index.html stops the whole
+        # playground script: no examples, status stuck on "checking...".
+        run: python3 tools/check_static_js.py
       - name: POSIX and PowerShell runner controls
         shell: bash
         run: |
