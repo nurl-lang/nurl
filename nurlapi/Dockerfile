@@ -336,10 +336,12 @@ RUN /opt/nurl/unikernel/measure_capability.sh /opt/nurl/examples \
 # The unikernel object caches stay root's and read-only: every image a
 # request builds links them, so a server that could write there could
 # plant or swap an object in every later user's kernel. They ship warm
-# (the smoke check above built them); build_unikernel*.sh uses a
-# read-only cache as it stands when it is current, and builds a private
-# copy in the request's own output directory when it is not (a newer
-# stdlib bind-mounted over the image by nurlapi.sh).
+# (the smoke check above built them). build_unikernel*.sh links a cache
+# only when nobody but its own script's writers — root, here — can write
+# it (unikernel/cache_trust.sh), and compiles the objects privately when
+# it cannot: a cache gone stale under a newer stdlib bind-mounted by
+# nurlapi.sh, or one the server user could write. Those builds give zig
+# a private cache too; /opt/zig-cache below is the server user's.
 RUN groupadd -g 10001 nurl \
     && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
     && chown -R nurl:nurl /app/output /opt/zig-cache \

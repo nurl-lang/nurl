@@ -86,8 +86,15 @@ if [ -n "$FSDIR" ] && [ ! -d "$FSDIR" ]; then
     exit 2
 fi
 
-CACHE="${NURL_UNIKERNEL_CACHE:-$OUTDIR/cache}"
-mkdir -p "$OUTDIR" "$CACHE"
+# The objects live in a subdirectory these scripts create and alone
+# write: whatever else sits in the cache directory — an earlier
+# layout, another tool's files — neither keeps the cache from being
+# used nor is ever removed. Created owner-writable only, because who
+# can write it decides whether an image may link it
+# (unikernel/cache_trust.sh).
+CACHE="${NURL_UNIKERNEL_CACHE:-$OUTDIR/cache}/objects"
+mkdir -p "$OUTDIR"
+( umask 022; mkdir -p "$CACHE" )
 base="$(basename "${SRC%.nu}")"
 OUT="${OUT:-$OUTDIR/$base.elf}"
 
@@ -121,7 +128,7 @@ cache_inputs() {
         "$BOOT"/multiboot2.c "$BOOT"/console.c "$BOOT"/font8x16.c \
         "$BOOT"/mb2.h "$BOOT"/console.h "$BOOT"/font8x16.h \
         "$ROOT/stdlib/cuda_stubs.c" "$ROOT/stdlib/nvrtc_stubs.c" \
-        "${BASH_SOURCE[0]}"
+        "$ROOT/unikernel/cache_trust.sh" "${BASH_SOURCE[0]}"
 }
 
 cache_build() {
@@ -164,28 +171,42 @@ cache_fresh() {
     done < <(cache_inputs)
     return 0
 }
-# A cache this build may not write is used as it stands when it is
-# current: the playground server ships it warm and read-only, so no
-# request can plant or swap an object that every later image links.
-# When it is stale (a newer toolchain bind-mounted over the image) the
-# build makes a private one in its own output directory rather than
-# write the shared one.
-if [ ! -w "$CACHE" ]; then
-    if ! cache_fresh; then
-        CACHE="$OUTDIR/cache"
-        stamp="$CACHE/stamp"
-        mkdir -p "$CACHE"
-        cache_build
-        printf '%s\n' "$want_key" > "$stamp"
-    fi
-else
+# Fresh says the objects match their sources; trusted says only the
+# principals who can already rewrite this script can have put them
+# there (unikernel/cache_trust.sh has the rule, and why no checksum
+# can stand in for it). The image links a cache only when both hold.
+# One this build can write and whose directory passes is rebuilt in
+# place under the lock when it falls short — the old files removed
+# first, so every object is a new file with an owner-only mode — and
+# checked again. One it cannot write is used as it stands or not at
+# all: the playground ships its cache warm, root's and read-only.
+# Whatever leaves no cache to link — that cache gone stale under a
+# newer bind-mounted toolchain, a cache the server user can write —
+# the objects are compiled into this build's own private directory.
+. "$ROOT/unikernel/cache_trust.sh"
+uk_trust_init "${BASH_SOURCE[0]}" || {
+    echo "${0##*/}: cannot read the ownership of its own path" >&2
+    exit 2
+}
+uk_private_dir "$OUTDIR" || exit 2
+cache_ok() { uk_cache_trusted "$CACHE" && cache_fresh; }
+if ! cache_ok && [ -w "$CACHE" ] && uk_dir_trusted "$CACHE"; then
     (
         flock 9
-        if ! cache_fresh; then
+        if ! cache_ok; then
+            umask 022
+            rm -f -- "$CACHE"/*.o "$stamp" 2>/dev/null || true
             cache_build
             printf '%s\n' "$want_key" > "$stamp"
         fi
     ) 9>"$CACHE/.lock"
+    cache_ok || echo "${0##*/}: note: $CACHE holds an entry that is not an" \
+        "owner-only regular file, so it is not linked; building privately" >&2
+fi
+if ! cache_ok; then
+    CACHE="$UK_PRIVATE/objs"
+    mkdir "$CACHE"
+    ( umask 022; cache_build )
 fi
 NL_LINK=()
 for o in $NL_OBJS; do NL_LINK+=("$CACHE/$o"); done
