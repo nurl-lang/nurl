@@ -149,6 +149,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A futex round trip per request at moderate concurrency** (agora
+  t49). When the netpoller's batch left one fiber beside the one it runs
+  directly, it woke an idle worker for it — but stealing takes half of a
+  queue of two or more, and the poller role stays on the polling core,
+  so the woken worker found nothing and went back to sleep: a futex
+  wake, a futex wait and two context switches per request at c=10. A
+  peer is now woken only for a stealable surplus. 6 workers, c=10:
+  futex calls per request 1.24 → 0.63, context switches 0.46 → 0.23,
+  server CPU 26.8 → 24.3 µs/request (−9 %), throughput and p99 equal or
+  better; c=50 and c=200 unchanged. Profiled first, as the task asked:
+  mutex lock/unlock is ~1 % of server CPU at c=50..200 with no futex
+  contention on the netpoller lock to speak of — the idle-worker wake
+  path was the cost, not the lock. The netpoller's design comment no
+  longer describes EPOLLONESHOT re-arming or a lease-release wake.
+
+- **A lightly loaded server spun 80–250 µs of CPU on every I/O wait**
+  (agora t52). With at most four live fibers, a fiber about to park
+  first probed its fd with a fixed 256 poll(2) calls — worth it when the
+  peer answers within the window (c=1 closed loop: ~28 k against ~12 k
+  req/s), pure waste when it does not: a client with think time, an idle
+  keep-alive connection, the listener. Now each fiber learns how long
+  its waits take (every wait counts — a spin hit or a whole park, outliers
+  clamped) and spins only while that is below the cap, for twice it plus
+  a margin; the cap is `NURL_SPIN_US` (µs, 0 = never), else 100 µs, else
+  0 under a cgroup CPU quota or with one usable CPU. i7-5930K, 6 workers,
+  server CPU µs per request, before → after: one connection at 2000
+  req/s 235 → 74 (TLS 239 → 72), at 500 req/s 484 → 84, two at 2500 each
+  183 → 72 with p99 2.14 → 0.46 ms; c=1 / c=10 closed loop unchanged
+  (35.0 / 27.1 plaintext; TLS c=1 44.5 → 41.8). tokio on the same think-
+  time loads: 65 and 76.
+
 - **ECDSA P-256 signing: no BigInt, and digests longer than 256 bits
   are truncated as verify truncates them** (agora t47). The private key
   and digest went through `bigint_from_bytes_be` / `bigint_rem` /
