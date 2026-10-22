@@ -6,6 +6,23 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.77.2] — 2026-10-22
+
+A playground fix. Every deploy since v0.76.0 served a page script that
+did not parse, so play.nurl-lang.org showed no examples. Nothing in the
+compiler or the stdlib changed.
+
+### Fixed
+
+- **Playground: the page script parses again.** #1209 dropped the
+  per-stage stderr fallback from the build-failure handler in
+  `nurlapi/static/index.html` and left a stray `}`. The syntax error
+  stopped the whole script, so play.nurl-lang.org loaded with no examples
+  and its status badge stuck on "checking..." even though every endpoint
+  behind it answered. `tools/check_static_js.py` now runs `node --check`
+  on every inline script and `.js` file nurlapi serves, in CI's
+  runner-controls job.
+
 ## [0.77.1] — 2026-10-22
 
 A distribution fix. v0.77.0 was published from the GitHub web UI and
