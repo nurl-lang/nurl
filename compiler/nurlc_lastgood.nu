@@ -361,13 +361,50 @@ unsafe @ __import_hint s name b is_type → s {
 }
 
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
-// stored "file:line" location, not a live lexer — so no column, caret, or
-// source-line echo, but the same parseable "loc: msg" prefix. Used by the
-// supertrait-obligation sweep, which runs after every impl in the program has
-// been registered and so cannot point at a single lexer position.
+// stored location string, not a live lexer — so no column, caret, or
+// source-line echo, but the same parseable "loc: msg" prefix. A check that
+// can keep the position it is about uses die_file_pos instead.
 @ die_at s loc s msg → v {
     ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
+}
+
+// die_file_pos: die_pos for a deferred check whose lexer is gone — the
+// position was recorded when the construct was scanned, and the line is
+// re-read from the source snapshot the compilation used (the one
+// compiler_read_source hands every reader of that file), so the echo is
+// the text that was parsed. The supertrait-obligation sweep is the user:
+// it runs once every impl in the program is registered, long after the
+// impl's own file was lexed, and used to print `file:line: error: …` with
+// no column, echo or caret — the one diagnostic of that shape a reader
+// (or a tool parsing `file:line:col:`) met. The thread-crossing checks,
+// whose records keep only a line, pass col 0: the column is then the
+// line's first non-blank character — the STATEMENT's start, the anchor
+// die_stmt and bck_emit_error use when the token itself is not kept.
+unsafe @ die_file_pos s file i line i col s msg → v {
+    : s src ( compiler_read_source file )
+    : s lt ? != 0 ( nurl_str_len src ) ( __src_line_text src ( nurl_str_len src ) line ) ``
+    : ~ i c col
+    ? <= c 0 {
+        : i ln ( nurl_str_len lt )
+        : *u lp # *u lt
+        : ~ i k 0
+        ~ & < k ln | == ( nurl_str_at lp ln k ) 32 == ( nurl_str_at lp ln k ) 9 { = k + k 1 }
+        = c + k 1
+    } {}
+    : s loc ( nurl_str_cat4 file `:` ( nurl_str_int line ) ( nurl_str_cat `:` ( nurl_str_int c ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
+    ? != 0 ( nurl_str_len lt ) {
+        ( nurl_eprintln lt )
+        ( nurl_eprintln ( nurl_diag_caret c ) )
+    } {}
+    ( __diag_abort )
+}
+
+// The same for a position kept as a record "<file> <line> <col>".
+@ die_file_rec s rec s msg → v {
+    : s r1 ( str_skip_word rec )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) ) msg )
 }
 
 // Soft diagnostic — same format as `die` but does not exit. Used for
@@ -1375,7 +1412,7 @@ unsafe @ agg_field_count i syms s ot → i {
 // kept (never freed) at those call sites — a borrow of this global
 // needs no freeing at all.
 : ~ s g_dyn_dtout ``
-: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
+: ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file> <line> <col> "
 //   record per impl block, verified after scan_fn_sigs once every impl across
 //   the program (incl. imports) is registered: a supertrait of an implemented
 //   trait must itself be implemented for that same type (T: Sub ⇒ T: Super).
@@ -1913,6 +1950,12 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_coverage_prefix ``  // --coverage=PREFIX: GCOV notes/data output stem
 : ~ s g_coverage_notes ``  // optional staged .gcno path; data keeps final stem
 : ~ s g_coverage_link_ir ``  // optional staged module; stdout stays reusable
+// The directories an import may resolve into (--import-root=DIR,
+// repeatable, else NURL_IMPORT_ROOTS=DIR:DIR…), canonical, each ended by
+// a newline. Empty: no confinement. A server compiling untrusted source
+// sets them — without, `$ `/proc/self/environ`` reads any file the
+// compiler can, and the parse error echoes its lines.
+: ~ s g_import_roots ``
 : ~ i g_coverage_meta_id 0
 : ~ i g_dbg_next_id 100  // metadata-id allocator; starts above any
 //  module-flag id we might add later
@@ -2714,20 +2757,43 @@ unsafe @ emit_coverage_modules s module → b {
     ? | | == c0 37 == c0 123 == c0 91 { ^ `` } {}
     ^ `, !tbaa !94`
 }
-// `--unsafe-report`: the program's own `unsafe` functions (outside the
-// standard library), one `file:line name` per line — the surface a
-// reviewer has to trust.
+// `--unsafe-report`: what the program asks to be trusted (outside the
+// standard library), one `file:line what` per line — the surface a
+// reviewer has to trust: its `unsafe` functions, its `unsafe % Send` /
+// `unsafe % Sync` assertions, and the parameters of its foreign functions
+// marked `in` / `sync` / `nocapture` (claims about what C code does).
 // > 0 while an arm of a `?` whose condition folded to a constant is
 // generated: code that never runs, for this instance (gen_cond).
 : ~ i g_dead_arm 0
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
 
-unsafe @ note_unsafe_fn s pos s name → v {
-    ? ( bck_trusted_file pos ) { ^ v } {}
-    : s rec ( nurl_str_cat3 pos ` ` name )
+unsafe @ note_unsafe_fn s pos s name → v { ( note_unsafe_item pos name ) }
+
+// One line of the report, once: a file imported by several importers is
+// scanned once per importer. (`pos` is `file:line`; the standard library is
+// asked of the file — of `file:line` it never answered yes, and the report
+// listed the standard library's own unsafe functions.)
+unsafe @ note_unsafe_item s pos s what → v {
+    : i n ( nurl_str_len pos )
+    : *u pp # *u pos
+    : ~ i k - n 1
+    ~ & > k 0 & >= # i . pp k 48 <= # i . pp k 57 { = k - k 1 }
+    : i fl ? & > k 0 & < k - n 1 == # i . pp k 58 k n
+    ? ( bck_trusted_file ( nurl_str_slice pos 0 fl ) ) { ^ v } {}
+    : s rec ( nurl_str_cat3 pos ` ` what )
+    ? ( str_contains_line g_unsafe_list rec ) { ^ v } {}
     = g_unsafe_list ? == 0 ( nurl_str_len g_unsafe_list ) rec ( nurl_str_cat3 g_unsafe_list `\n` rec )
 }
+
+// Is `line` one of the `\n`-separated lines of `text`?
+@ str_contains_line s text s line → b {
+    : s wrapped ( nurl_str_cat3 `\n` text `\n` )
+    : s needle ( nurl_str_cat3 `\n` line `\n` )
+    ^ >= ( nurl_str_find wrapped needle ) 0
+}
+// 1 while scan_impl_decl reads an impl written `unsafe % Trait Type { }`.
+: ~ i g_impl_unsafe 0
 // 1 while the body of an `unsafe` function (or of a closure inside one) is
 // being compiled.
 : ~ i g_in_unsafe 0
@@ -5369,6 +5435,12 @@ unsafe @ gen_ret i lex i syms i cg → s {
 // (e.g. a bind's initializer type mismatch, where the lexer has already
 // advanced to the next statement).
 : ~ i g_stmt_col 0
+
+// g_stmt_lex — the lexer that statement came from, so a check deep in
+// codegen that has no lexer of its own (__nc_copy_die) still reports at
+// the statement, line echoed and caret placed. nurl_lex_free clears it
+// when that lexer goes, so it is never a freed handle.
+: ~ i g_stmt_lex 0
 
 // ── Redundant-free lint ────────────────────────────────────────────
 // `( string_free x )`, `( vec_free [T] x )`, … — a release function (one
@@ -8462,6 +8534,8 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ( nurl_eprintln ( nurl_str_cat4 `  body_done=` ( nurl_sym_get2 syms f `__body_done` ) ` ret_owned=` ( nurl_sym_get2 syms f `__ret_owned` ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ret_borrow=` ( nurl_sym_get2 syms f `__ret_borrow` ) ` mutates=` ( nurl_sym_get g_fn_mutates f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ptypes_src=` ( nurl_sym_get2 syms f `__ptypes_src` ) ` raw0=` ? ( __fn_param_raw syms f 0 ) `1` `0` ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  retlend=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` f ) ) ` retpart=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` f ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  retread=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retread##` f ) ) ` retvia=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` f ) ) ) )
 }
 
 @ mem_emit_arg_flags i syms → v {
@@ -11379,6 +11453,7 @@ unsafe @ nurl_lex_new s src s filename → i {
 // left behind before this existed.
 unsafe @ nurl_lex_free sink i h → v {
     ? == h 0 { ^ } {}
+    ? == g_stmt_lex h { = g_stmt_lex 0 } {}
     : s p # s h
     : i previous ( nurl_peek p 37 )
     : i following ( nurl_peek p 38 )
@@ -11733,7 +11808,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
                     : b violated ? inverted ! lacks lacks
                     : s advice ? inverted
                     `That bound demands a type which must NOT cross a thread boundary, and this one may — mark it '% NotSend <Type> { }' / '% NotSync <Type> { }' if it genuinely must not (stdlib/core/marker.nu).`
-                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).`
+                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.`
                     ? violated
                     { : s q1 ( nurl_str_cat4 `type '` ta `' does not satisfy the bound ` ( nurl_str_cat3 tp `: ` bt ) )
                         : s q2 ( nurl_str_cat3 q1 ` on generic '` ( nurl_str_cat fname `'. ` ) )
@@ -13700,7 +13775,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def g_generic_syms gkey `1` ) }
         { : s already ( nurl_sym_get syms mangled )
             ? == 0 ( nurl_str_len already )
-            { : s rt ( compute_generic_ret_ty fname type_args )
+            { : s rt ( compute_generic_ret_ty fname type_args syms )
                 ( nurl_sym_def syms mangled rt ) }
             {} }
         : s mont ( nurl_sym_get g_res_type_syms `__last_opt_nurl_t__` )
@@ -13730,7 +13805,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             { ( defer_instantiation lex __tw __twm type_args syms )
                 ( nurl_sym_def g_generic_syms __twk `1` ) }
             { ? == 0 ( nurl_str_len ( nurl_sym_get syms __twm ) )
-                { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args ) ) }
+                { ( nurl_sym_def syms __twm ( compute_generic_ret_ty __tw type_args syms ) ) }
                 {} }
             ( nurl_sym_def g_fn_link_sources __twm `1` )
             = __loc_cn __twm }
@@ -30409,6 +30484,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     // "unexpected token" diagnostic and for die_stmt (see g_stmt_line).
     = g_stmt_line bck_line
     = g_stmt_col ( nurl_lex_col lex )
+    = g_stmt_lex lex
     = g_stmt_bare_lit 0
     // Fresh-owned-slice provenance is a per-EXPRESSION signal, so reset it at
     // every statement boundary: after a block runs, the flag then reflects
@@ -30863,6 +30939,23 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ^ ``
 }
 
+// Does `name` name a TYPE in scope — the question a binding's first word
+// asks (§5.1)? The symbol table holds values and types alike, so being
+// in it decides nothing: a struct or enum maps to `%Name` (the pre-scan
+// and gen_struct_decl/gen_enum_decl), a closure/trait-object slug or a
+// generic instance carries `__is_type`, and a generic template's bare
+// name — not a type, but it must reach parse_type's "used without type
+// arguments" diagnostic — is in g_generic_struct_syms. A value is never
+// any of those: a local, parameter or global maps to ITS type, which is
+// `%Other` for a struct value and never `%` + its own name.
+@ __names_type i syms s name → b {
+    : s sv ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_len sv ) { ^ F } {}
+    ? & == ( nurl_str_get sv 0 ) 37 ( seq ( nurl_str_slice sv 1 - ( nurl_str_len sv ) 1 ) name ) { ^ T } {}
+    ? != 0 ( nurl_sym_len2 syms name `__is_type` ) { ^ T } {}
+    ^ & != 0 g_generic_struct_syms != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
+}
+
 unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
@@ -30891,8 +30984,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // happens (see __ptr_kill / the use-site warning in gen_ident), so the
     // blanket warning — which fired on correct code and pushed callers to
     // launder pointers through i64 — is gone.
-    // Check if first token could be a type name by looking it up in symbol table
-    ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_sym_len syms ( nurl_lex_val lex ) )
+    // A plain IDENT opens the annotated form only when it NAMES A TYPE
+    // (§5.1: "an identifier that names a registered type is taken as the
+    // type annotation, otherwise the plain-IDENT form is type-inferred").
+    // The test used to be "is the name in the symbol table at all", and
+    // the table holds values too: `: i n 0` then `: n 5` read the in-scope
+    // VALUE n as a type and died "unknown type 'n' in a binding type" —
+    // while `: i n 5`, the same rebinding spelled out, compiled.
+    ? & == ( nurl_lex_type lex ) TT_IDENT ! ( __names_type syms ( nurl_lex_val lex ) )
     {  // Type inference: plain IDENT that's not a known type
         : s name ( nurl_lex_val lex )
         : i __ob_line g_stmt_line
@@ -31192,6 +31291,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
         : i __bt_line ( nurl_lex_line lex )
         : i __bt_col ( nurl_lex_col lex )
+        // A bare IDENT here named a type (__names_type): kept for the
+        // "expected a binding name" report, where it is the whole story.
+        : s __bt_word ? == ( nurl_lex_type lex ) TT_IDENT ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
         : s ptype ( parse_type lex )
         // A binding's type went unchecked while parameter, field, return
         // and FFI types were all validated — so `: Foo x 0` against an
@@ -31530,9 +31632,15 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { ( die lex `expected variable name in let — 'inline' is a reserved keyword (the always-inline prefix on function declarations) and cannot name a binding` ) }
                     { ? == ( nurl_lex_type lex ) TT_BOOL
                         { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                        { ( die lex ( nurl_str_cat3
+                        {  // `: P 5` with P a struct: the one shape §5.1 cannot
+                            // read as inferred, because the first word NAMES A
+                            // TYPE and so is the annotation. Say that, not only
+                            // the general form — the writer meant P as a name.
+                            : s __tyw ? == 0 ( nurl_str_len __bt_word ) ``
+                            ( nurl_str_cat3 ` Here '` __bt_word `' names a type in scope, so it is read as the binding's TYPE — an identifier that names a registered type is the annotation (spec §5.1), never the inferred form's name. A binding cannot take a type's name: pick another one.` )
+                            ( die lex ( nurl_str_cat4
                             `expected a binding name, found ` ( tok_here lex )
-                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } } } }
+                            `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` __tyw ) ) } } } } }
     }
 }
 
@@ -37744,7 +37852,12 @@ unsafe @ __l2n_list s lst → s {
             : s ht ( nurl_llty ovt )
             : s hm ( __drop_mangle ovt )
             ( __handle_drop_ensure ovt )
-            ( gen_drop_for_type ovt syms )
+            // Its drop graph is emitted at module end: this runs while a
+            // function's body is being written, and a `define` printed here
+            // landed inside it — the rest of the function was cut off (a
+            // struct with a `% Drop` field captured by a closure that a call
+            // was handed: the module had no more of `main`).
+            ( queue_drop_for_type ovt )
             : s k ( nurl_str_cat `o` ( nurl_str_int ofi ) )
             : s vfi ( nurl_str_int ( __word_pos captured_vars ov ) )
             : s fg ( nurl_str_cat4 `  %f` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name ( nurl_str_cat3 `* %t, i32 0, i32 ` ( nurl_str_int ofi ) `\n` ) ) )
@@ -38341,11 +38454,11 @@ unsafe @ __thr_peel s lty → s {
     ? ( seq kind `rc` )
     { ^ ( nurl_str_cat
         `it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. `
-        `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+        `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
     ? ( seq kind `cell` )
     { ^ ( nurl_str_cat
         `it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. `
-        `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with a '% Sync <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+        `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with an 'unsafe % Sync <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
     ? ( seq kind `notsend` )
     { ^ ( nurl_str_cat3
         `it reaches '` nm
@@ -43204,7 +43317,7 @@ unsafe @ __nl_pad i n → s {
 
 // compute_generic_ret_ty: determine return type of a generic instantiation
 // without emitting IR. type_args: space-separated raw NURL type tokens.
-@ compute_generic_ret_ty s fname s type_args → s {
+@ compute_generic_ret_ty s fname s type_args i syms → s {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     : ~ s subst_src ( nurl_str_cat gsrc `` )
@@ -43226,11 +43339,66 @@ unsafe @ __nl_pad i n → s {
     : ~ s ret_ty ( nurl_str_cat `i64` `` )
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
+        ( __inst_ret_structs subst_src syms )
         = ret_ty ( parse_type lex2 )
     }
     {}
     ( nurl_lex_free lex2 )
     ret_ty
+}
+
+// The generic structs a generic function's return type applies (`!( G
+// String ) E`), known by name now: a call site reads the instance's
+// result type before the instance's body is compiled — the first place
+// those structs would otherwise come into being — and every question it
+// asked of the type (is it a library handle? does it own?) was answered
+// for a type nobody had defined: the caller took a handle it owned for a
+// plain value and never dropped it. What makes an instance a library
+// handle is its identity (`libhs##` / `libhta##`, a flat table), so that
+// is recorded here; its layout comes with its first instantiation at
+// the top level, as before (a struct instantiated inside a function body
+// would be scoped to it).
+unsafe @ __inst_ret_structs s src i syms → v {
+    : i lx ( nurl_lex_new src `<generic_ret>` )
+    ~ & != ( nurl_lex_type lx ) TT_ARROW != ( nurl_lex_type lx ) TT_EOF { ( nurl_lex_advance lx ) }
+    ? == ( nurl_lex_type lx ) TT_ARROW { ( nurl_lex_advance lx ) } {}
+    ~ & != ( nurl_lex_type lx ) TT_LBRACE != ( nurl_lex_type lx ) TT_EOF {
+        ? & == ( nurl_lex_type lx ) TT_LPAREN ( is_ident_tok ( nurl_lex_peek_type lx ) ) {
+            : s _m ( __ret_struct_identity lx syms )
+        } { ( nurl_lex_advance lx ) }
+    }
+    ( nurl_lex_free lx )
+}
+
+// `( Name T… )` at `lex` (on its `(`): consumed, its mangle returned, and
+// — when Name is a generic struct with no abstract argument — its
+// identity recorded the way ensure_struct_instantiated records it.
+unsafe @ __ret_struct_identity i lex i syms → s {
+    ( nurl_lex_advance lex )  // '('
+    : s sname ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    ( nurl_lex_advance lex )
+    : ~ s ta_list ``
+    : ~ s mangle_sfx ``
+    : ~ b abstract F
+    ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
+        : ~ s w ``
+        ? & == ( nurl_lex_type lex ) TT_LPAREN ( is_ident_tok ( nurl_lex_peek_type lex ) ) {
+            = w ( __ret_struct_identity lex syms )
+        } { = w ( __scan_ta_word lex syms ) }
+        ? ( is_abstract_tparam syms w ) { = abstract T } {}
+        = ta_list ? == 0 ( nurl_str_len ta_list ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ta_list ` ` w )
+        = mangle_sfx ( nurl_str_cat3 mangle_sfx `__` ( mangle_src_word w ) )
+    }
+    ? == ( nurl_lex_type lex ) TT_RPAREN { ( nurl_lex_advance lex ) } {}
+    : s mangled ( nurl_str_cat sname mangle_sfx )
+    ? & ! abstract != 0 ( nurl_sym_len2 g_generic_struct_syms sname `__stparams` ) {
+        ? == 0 ( nurl_sym_len2 g_impl_name_syms `libhs##%` mangled ) {
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhs##%` mangled ) sname )
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhta##%` mangled ) ta_list )
+            ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
+        } {}
+    } {}
+    ^ mangled
 }
 
 // ── Generic struct instantiation ───────────────────────────────────
@@ -43440,6 +43608,16 @@ unsafe @ check_type_known i lex i syms s llvm_ty s ctx i tline i tcol → v {
     ` — every parameter is substituted by position, so a different count leaves a parameter unsubstituted in the emitted type (or mangles a reference to a type nothing defines). Write one type argument per declared parameter.` ) ) )
 }
 
+// A type's memoised answers (__nc_drop_ty, __libh_plain_is,
+// bck_bind_class), forgotten when a generic instance's identity is first
+// recorded ahead of its instantiation (__ret_struct_identity): an answer
+// given before that was for a type nobody had defined.
+@ __ty_memo_forget s ty → v {
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `ncd##` ty ) `` )
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) `` )
+    ? != 0 g_bcls_memo { ( nurl_sym_def g_bcls_memo ty `-1` ) } {}
+}
+
 unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     : s tparams ( nurl_sym_get2 g_generic_struct_syms sname `__stparams` )
     ? != 0 ( nurl_str_len tparams ) {
@@ -43574,7 +43752,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
         ( __generic_home_tail fname ) ) )
         ( __diag_abort )
     } {}
-    : s ret_ty ( compute_generic_ret_ty fname type_args )
+    : s ret_ty ( compute_generic_ret_ty fname type_args syms )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
     : i n ( nurl_str_to_int cnt_s )
@@ -43814,30 +43992,44 @@ unsafe @ __ha_is_ret s line → b {
 
 // ── The crypto tiers' feature sets ─────────────────────────────────
 //
-// Two tiers (§4.1b, the hardware crypto tier below): level 1, AES-NI and
-// PCLMULQDQ on v128, and level 2, VAES and VPCLMULQDQ on v256 — the
-// same rounds and products on both 128-bit lanes of a ymm register at
-// once. Level 2 contains level 1 and x86-64-v3 (no CPU has VAES without
-// AVX2), so a level-2 function may call level-1 code inline but never
-// the reverse. Here, above emit_multiversion, because the `simd` clones
-// are built from them too.
+// A tier (§4.1b, the hardware crypto tier below) is a SET of hardware
+// extensions, kept as a bit mask: 1 AES-NI and PCLMULQDQ on v128, 2 VAES
+// and VPCLMULQDQ on v256 — the same rounds and products on both 128-bit
+// lanes of a ymm register at once — 4 the same on v512, and 8 the SHA
+// extensions on v128. The wide ones bring the narrower along (no CPU
+// has VAES without AES-NI and AVX2), so a v256 body is tier 3 and a
+// v512 one 7; SHA is on no such chain — Haswell to Cascade Lake have
+// AES-NI without it, Goldmont has it without AVX2. Code of tier `b` may
+// be inlined into a function of tier `a` exactly when b ⊆ a
+// (__tier_contains), and a body that needs two tiers needs their union,
+// `|`. Here, above emit_multiversion, because the `simd` clones are
+// built from them too.
+
+// Does tier `outer` contain tier `inner`?
+@ __tier_contains i outer i inner → b { ^ == & outer inner inner }
 
 // The attributes a function of tier `lvl` is compiled with: exactly
-// what nurl_cpu_x86_aes / nurl_cpu_x86_vaes test.
+// what nurl_cpu_x86_aes / _vaes / _vaes512 / _sha test.
 @ __crypto_tier_attrs i lvl → s {
     // AArch64's one tier: NEON is baseline, `aes` adds AESE/AESD/AESMC/
     // AESIMC and PMULL (FEAT_AES + FEAT_PMULL; nurl_cpu_arm_aes).
     ? == g_crypto_target 2 { ^ ` "target-features"="+neon,+aes"` } {}
-    ? == lvl 3 { ^ ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
-    ? == lvl 2 { ^ ` "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
-    ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
+    : s sha ? != 0 & lvl 8 `,+sha` ``
+    ? != 0 & lvl 4 { ^ ( nurl_str_cat3 ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq` sha `"` ) } {}
+    ? != 0 & lvl 2 { ^ ( nurl_str_cat3 ` "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+aes,+pclmul,+vaes,+vpclmulqdq` sha `"` ) } {}
+    : s aes ? != 0 & lvl 1 `+aes,+pclmul,` ``
+    ^ ( nurl_str_cat4 ` "target-cpu"="x86-64-v2" "target-features"="` aes `+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3` ( nurl_str_cat sha `"` ) )
 }
 
-// The entry gate of a tier-`lvl` function, as a body line.
+// The entry gate of a tier-`lvl` function, as body lines: the widest
+// AES-chain tier it needs (each runtime answer implies the narrower
+// ones), and SHA.
 @ __crypto_gate_line i lvl → s {
-    ? == lvl 3 { ^ `  call void @nurl__vaes512_gate()\n` } {}
-    ? == lvl 2 { ^ `  call void @nurl__vaes_gate()\n` } {}
-    ^ `  call void @nurl__aes_gate()\n`
+    : s sha ? != 0 & lvl 8 `  call void @nurl__sha_gate()\n` ``
+    ? != 0 & lvl 4 { ^ ( nurl_str_cat `  call void @nurl__vaes512_gate()\n` sha ) } {}
+    ? != 0 & lvl 2 { ^ ( nurl_str_cat `  call void @nurl__vaes_gate()\n` sha ) } {}
+    ? != 0 & lvl 1 { ^ ( nurl_str_cat `  call void @nurl__aes_gate()\n` sha ) } {}
+    ^ ( nurl_str_cat sha `` )
 }
 
 // ── A wide vector across a call ──────────────────────────────────
@@ -44357,21 +44549,51 @@ unsafe @ emit_hoisted s funcdef → v {
 // body. emit_hoisted hoists the allocas above it, so the entry block
 // still opens with them.
 //
-// Never `alwaysinline`, which LLVM honours even into a caller compiled
-// WITHOUT the tier — the AES instruction then lands in a baseline
-// function and instruction selection fails (or, worse, a v2 one runs on
-// a CPU without it). A vector signature asks for it (gen_fn_decl's
-// __fn_vecsig), and so may `inline @`; both become `inlinehint`. The
-// inliner then merges the helper into every caller that has the tier —
-// a `simd` clone, another crypto function — and leaves a gated call in
-// any other. A v128 crosses that call in an XMM register under every
-// feature set; a v256 does not, and crosses it by pointer (emit_vabi).
+// A function header (`define … {`, no body) with `alwaysinline` and
+// `inlinehint` removed and `noinline` put right after its parameter list
+// — for a function that must stay a call (a gated tier entry, a `simd`
+// clone its dispatcher picks at run time).
+unsafe @ __ir_hdr_noinline s hdr0 → s {
+    : ~ s h ( __ir_cut_all hdr0 ` alwaysinline` )
+    = h ( __ir_cut_all h ` inlinehint` )
+    = h ( __ir_cut_all h ` noinline` )
+    // The parameter list closes at the header's last `)`: what follows is
+    // attribute keywords, `"key"="value"` strings and `!dbg !N`.
+    : i hl ( strlen h )
+    : *u hp # *u h
+    : ~ i pc - hl 1
+    ~ & >= pc 0 != ( nurl_str_at hp hl pc ) 41 { = pc - pc 1 }
+    ? < pc 0 { ^ h } {}
+    ^ ( nurl_str_cat3 ( nurl_str_slice h 0 + pc 1 ) ` noinline` ( nurl_str_slice h + pc 1 - hl + pc 1 ) )
+}
+
+// `h` with every occurrence of `pat` removed.
+unsafe @ __ir_cut_all s h0 s pat → s {
+    : ~ s h ( nurl_str_cat h0 `` )
+    : i pl ( strlen pat )
+    : ~ i at ( nurl_str_find h pat )
+    ~ >= at 0 {
+        = h ( nurl_str_cat ( nurl_str_slice h 0 at ) ( nurl_str_slice h + at pl - - ( strlen h ) at pl ) )
+        = at ( nurl_str_find h pat )
+    }
+    ^ h
+}
+
+// `noinline`, whatever the source asked (`inline @`, or a vector
+// signature's alwaysinline from gen_fn_decl's __fn_vecsig): a caller
+// that has the tier calls the `.tier` copy (__ir_tier_calls), so this
+// gated original is only ever called from OUTSIDE the tier, where
+// merging it is wrong. LLVM refuses that on its own only when it can see
+// the caller lacks the features — a toolchain that optimises the module
+// for the build host's CPU and then generates code for the baseline
+// (zig cc's ThinLTO) inlined it into a baseline function, and
+// instruction selection failed on the AES there. A v128 crosses the call
+// in an XMM register under every feature set; a v256 does not, and
+// crosses it by pointer (emit_vabi).
 @ __crypto_fn_ir s fn_ir b gate i lvl → s {
     : i ei ( nurl_str_find fn_ir `\nentry:\n` )
     ? < ei 0 { ^ ( nurl_str_cat fn_ir `` ) } {}
-    : s hdr0 ( nurl_str_slice fn_ir 0 ei )
-    : i ai ( nurl_str_find hdr0 `) alwaysinline` )
-    : s hdr ? >= ai 0 ( nurl_str_cat3 ( nurl_str_slice hdr0 0 + ai 1 ) ` inlinehint` ( nurl_str_slice hdr0 + ai 14 - ei + ai 14 ) ) ( nurl_str_cat hdr0 `` )
+    : s hdr ( __ir_hdr_noinline ( nurl_str_slice fn_ir 0 ei ) )
     : i hl ( strlen hdr )
     : i di ( nurl_str_find hdr ` !dbg ` )
     // Without an attachment the header ends ` {`.
@@ -44427,12 +44649,12 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
         ? > crypto 0 { : s gated ( __crypto_fn_ir fn_ir T crypto ) ( emit_hoisted gated ) } { ( emit_hoisted fn_ir ) }
         ^ v
     } {}
-    // A body of the VAES tier (crypto 2: it uses a v256 crypto
-    // primitive, or calls a function that does) has nothing to choose
-    // between: the tier is x86-64-v3 and more, so the wide clone is the
-    // only one there could be. It is emitted once, under its own name,
-    // gated like any tier function.
-    ? >= crypto 2 {
+    // A body of a VAES tier (crypto has bit 2: it uses a v256 or v512
+    // crypto primitive, or calls a function that does) has nothing to
+    // choose between: the tier is x86-64-v3 and more, so the wide clone
+    // is the only one there could be. It is emitted once, under its own
+    // name, gated like any tier function.
+    ? != 0 & crypto 2 {
         : s one ( nurl_str_cat4 ( nurl_str_cat3 `define ` ret_ll ` @` ) lname ( nurl_str_cat3 `(` params `) {` ) body0 )
         : s gated ( __crypto_fn_ir one T crypto )
         ( emit_vabi gated )
@@ -44453,21 +44675,26 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // A `crypto` body (flush_simd_deferred: it uses a hardware crypto
     // primitive, or calls a function that does) cannot have a baseline
     // clone: the instruction does not exist there. Its `.base` is
-    // compiled for the crypto tier instead and gated on it, and its
-    // `.x86v3` gains AES and PCLMUL — picked only when the CPU has both
-    // v3 and the tier, so a v3 machine without AES-NI (a VM that masks
-    // it) falls to the gated base rather than to SIGILL.
+    // compiled for its tier (AES, SHA or both) instead and gated on it,
+    // and its `.x86v3` gains the tier's features — picked only when the
+    // CPU has both v3 and the tier, so a v3 machine without AES-NI (a VM
+    // that masks it) or without SHA (Haswell … Cascade Lake) falls to
+    // the gated base rather than to SIGILL.
 
-    : s base_attrs ? == crypto 1 ( __crypto_tier_attrs 1 ) ``
-    : s base_body ? == crypto 1 ( nurl_str_cat `\nentry:\n  call void @nurl__aes_gate()` ( nurl_str_slice body 7 - ( strlen body ) 7 ) ) ( nurl_str_cat body `` )
+    // Both clones stay calls: the dispatcher picks one at run time, and
+    // a clone compiled for more than the baseline must never be merged
+    // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
+    : s base_attrs ? > crypto 0 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs crypto ) ) ``
+    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( nurl_str_cat body `` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
 
-    : s wide_feat ? == crypto 1 `,+aes,+pclmul` ``
+    : s wide_aes ? != 0 & crypto 1 `,+aes,+pclmul` ``
+    : s wide_feat ( nurl_str_cat wide_aes ? != 0 & crypto 8 `,+sha` `` )
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 cparams
-    `) "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
+    `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_w body ) )
 
     // The dispatcher. `params` doubles as the argument list: it is
@@ -44480,10 +44707,18 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     ? vsig { ( nurl_print ` alwaysinline` ) } {}
     ( nurl_print ` {\nentry:\n` )
     ? vsig { : s sp ( __vabi_spills params rv ) ( nurl_print sp ) } {}
-    ? == crypto 1
+    ? > crypto 0
     { ( nurl_print `  %__mv3 = call i32 @nurl_cpu_x86_v3()\n` )
-        ( nurl_print `  %__mva = call i32 @nurl_cpu_x86_aes()\n` )
-        ( nurl_print `  %__mv = and i32 %__mv3, %__mva\n` ) }
+        : s mv ? != 0 & crypto 1 `%__mva` `%__mv3`
+        ? != 0 & crypto 1 {
+            ( nurl_print `  %__mva0 = call i32 @nurl_cpu_x86_aes()\n` )
+            ( nurl_print `  %__mva = and i32 %__mv3, %__mva0\n` )
+        } {}
+        ? != 0 & crypto 8 {
+            ( nurl_print `  %__mvs0 = call i32 @nurl_cpu_x86_sha()\n` )
+            ( nurl_print `  %__mvs = and i32 ` ) ( nurl_print mv ) ( nurl_print `, %__mvs0\n` )
+        } {}
+        ( nurl_print `  %__mv = or i32 ` ) ( nurl_print ? != 0 & crypto 8 `%__mvs` mv ) ( nurl_print `, 0\n` ) }
     { ( nurl_print `  %__mv = call i32 @nurl_cpu_x86_v3()\n` ) }
     ( nurl_print `  %__mvc = icmp ne i32 %__mv, 0\n` )
     ( nurl_print `  br i1 %__mvc, label %__mv_wide, label %__mv_base\n` )
@@ -46328,7 +46563,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // The initialiser: a function of no arguments returning the type.
         : s frt ( nurl_sym_get g_root_syms fn )
         ? | | == 0 ( nurl_sym_len2 g_root_syms fn `__arity` ) != 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms fn `__arity` ) ) ! ( seq ( nurl_llty frt ) ll ) {
-            ( die_at ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g ( nurl_str_cat4 `' is set at start by '` ? < ( nurl_str_find fn `__fp` ) 0 fn ( nurl_str_slice fn 0 ( nurl_str_find fn `__fp` ) ) `', which must be a function of no arguments returning '` ( __zty_show ll ) ) `'.` ) )
+            ( die_file_rec ( nurl_sym_get2 g_root_syms g `__initglobal_at` ) ( nurl_str_cat4 `the global '` g ( nurl_str_cat4 `' is set at start by '` ? < ( nurl_str_find fn `__fp` ) 0 fn ( nurl_str_slice fn 0 ( nurl_str_find fn `__fp` ) ) `', which must be a function of no arguments returning '` ( __zty_show ll ) ) `'.` ) )
         } {}
         ( nurl_print `  %_gi` ) ( nurl_print n ) ( nurl_print ` = call ` ) ( nurl_print ll )
         ( nurl_print ` @` ) ( nurl_print ( llvm_call_fn fn ) ) ( nurl_print `()\n` )
@@ -46787,7 +47022,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
             ( nurl_sym_def syms cname lt )
             ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
             ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal` ) __gi_call )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal_at` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int __cv_line ) ) )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__initglobal_at` ) ( nurl_str_cat4 ( nurl_lex_filename lex ) ` ` ( nurl_str_int __cv_line ) ( nurl_str_cat ` ` ( nurl_str_int __cv_col ) ) ) )
             = g_init_globals ( nurl_str_cat4 g_init_globals cname ( nurl_str_cat3 ` ` __gi_call ` ` ) ( nurl_str_cat __gi_ll `;` ) )
         }
         ? == tt TT_FLOAT
@@ -47060,6 +47295,9 @@ unsafe @ __ffi_param_count s pt → i {
     // …and those declared `in`: borrowed for the call — read, neither kept
     // nor freed — so a temporary handed there is the caller's to release.
     : ~ s __ff_nofree ``
+    // `in path, sync p`: the claims the declaration makes about the C code,
+    // which --unsafe-report lists for a foreign function outside the stdlib.
+    : ~ s __ff_claims ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -47110,8 +47348,12 @@ unsafe @ __ffi_param_count s pt → i {
             // of x.
             : ~ b __ff_in F
             : ~ b __ff_more ! __ff_io
+            : ~ s __ff_pm ``
             ~ & __ff_more ( is_ident_tok ( nurl_lex_type lex ) ) {
                 : s __ffm ( nurl_lex_val lex )
+                ? | | ( seq __ffm `in` ) ( seq __ffm `sync` ) ( seq __ffm `nocapture` ) {
+                    = __ff_pm ? == 0 ( nurl_str_len __ff_pm ) ( nurl_str_cat __ffm `` ) ( nurl_str_cat3 __ff_pm ` ` __ffm )
+                } {}
                 ? ( seq __ffm `in` ) {
                     = __ff_nocap ? == 0 ( nurl_str_len __ff_nocap ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nocap ` ` ( nurl_str_int pct ) )
                     = __ff_nofree ? == 0 ( nurl_str_len __ff_nofree ) ( nurl_str_int pct ) ( nurl_str_cat3 __ff_nofree ` ` ( nurl_str_int pct ) )
@@ -47134,6 +47376,11 @@ unsafe @ __ffi_param_count s pt → i {
                 ? ! ( str_contains_word __fio ( nurl_str_int pct ) ) {
                     ( nurl_sym_def g_fn_inout fname ? == 0 ( nurl_str_len __fio ) ( nurl_str_int pct ) ( nurl_str_cat3 __fio ` ` ( nurl_str_int pct ) ) )
                 } {}
+            } {}
+            ? != 0 ( nurl_str_len __ff_pm ) {
+                : s __ffpn ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ( nurl_str_cat `#` ( nurl_str_int pct ) )
+                : s __ffc ( nurl_str_cat3 __ff_pm ` ` __ffpn )
+                = __ff_claims ? == 0 ( nurl_str_len __ff_claims ) __ffc ( nurl_str_cat3 __ff_claims `, ` __ffc )
             } {}
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             // params_str is IR text (the `declare` line + variadic call
@@ -47172,6 +47419,13 @@ unsafe @ __ffi_param_count s pt → i {
     // …and where it was declared: one declared outside the stdlib is raw
     // memory to its callers (bck_check_raw_call).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_src` ) ( vis_current_src_file ) )
+    // A program's own `in` / `sync` / `nocapture` are taken on trust by the
+    // checks of every call (a frozen view handed to `in`, a temporary
+    // released after it): part of the surface a reviewer has to trust.
+    ? != 0 ( nurl_str_len __ff_claims ) {
+        ( note_unsafe_item ( nurl_str_cat3 ( vis_current_src_file ) `:` ( nurl_str_int __ffi_line ) )
+        ( nurl_str_cat4 `& ` fname `: ` __ff_claims ) )
+    } {}
     // `unsafe & …`: a foreign function that takes a runtime handle (an
     // address the runtime casts back to its struct) as a plain integer, so
     // any number a program makes up is an address it reads or frees. Raw
@@ -49108,7 +49362,7 @@ unsafe @ __cc_mangle s ty → s {
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
     ? ( __ts_cyclic ty syms ) {
-        ( die_at `thread-shared cycle` ( nurl_str_cat ( nurl_str_cat4 `'` op `' on '` ( llvm_to_nurl ty ) )
+        ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat ( nurl_str_cat4 `thread-shared cycle: '` op `' on '` ( llvm_to_nurl ty ) )
         `': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a copy), and point back with an ArcWeak.` ) ) }
     {}
     ( nurl_set_last_type `void` )
@@ -49660,7 +49914,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                 // resolve_send_checks.)
                 ? | & > ( nurl_str_len u ) 2 | ( seq ( nurl_str_slice u 0 2 ) `?p` ) ( seq ( nurl_str_slice u 0 2 ) `?P` ) == ( nurl_str_get u 0 ) 33 {} {
                     ? ( seq u `?` ) {
-                        ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
+                        ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
                         `' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a Vec element, a join of two values, or a call through a closure value. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.` ) ) }
                     {
                         // A value-type atom (`=N`): only a queue holding a
@@ -49678,7 +49932,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                             // capture atoms, checked as such.)
                             : b reach ? vt ( __ts_reaches_handles cu oo syms ) | ( seq cu `*` ) ( __ts_reaches cu oo syms )
                             ? | qself | ( seq uu oo ) & != 0 ( nurl_str_len cu ) reach {
-                                ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat ( nurl_str_cat4 `this stores a value into '` ( llvm_to_nurl oo ) `' (a handle shared across threads) that holds — directly or through a closure's captures — '` ( llvm_to_nurl uu ) )
+                                ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat ( nurl_str_cat4 `this stores a value into '` ( llvm_to_nurl oo ) `' (a handle shared across threads) that holds — directly or through a closure's captures — '` ( llvm_to_nurl uu ) )
                                 `', which leads back to it: a cycle of counts that nothing frees, since thread-shared handles are not collected (docs/MEMORY.md §7.7). Point back without owning: an ArcWeak, a raw back-pointer the owner outlives (stdlib/ext/http3_server.nu), or pass the handle in as an argument instead of capturing it.` ) ) }
                             {}
                         }
@@ -49914,11 +50168,11 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : i p2 ( nurl_str_find a2 `@` )
             : s bl ( nurl_str_slice a2 0 p2 )
             : s reason ( nurl_str_slice a2 + p2 1 - - ( nurl_str_len a2 ) p2 1 )
-            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat4 ( nurl_str_cat3 how `, but the closure built on line ` bl )
+            ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat4 ( nurl_str_cat3 how `, but the closure built on line ` bl )
             ( nurl_str_cat3 ` captures '` nm `', which is not Send: ` ) ( __thr_explain reason ) `` ) )
         } {}
         ? ( seq u `?` ) {
-            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat how `, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.` ) )
+            ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat how `, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.` ) )
         } {}
     }
 }
@@ -49948,7 +50202,7 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     ? ( __is_libh ty ) {
         ? ! ( __libh_has_op ( __libh_base ty ) `trace` ) {
             : s __lb ( __libh_base ty )
-            ( die_at `cycle collection` ( nurl_str_cat4 ( nurl_str_cat3 `handle type '` __lb `' (here holding an Rc, or a closure) has a ` )
+            ( __die_at_fn ( nurl_str_cat __lb `_drop` ) `cycle collection` ( nurl_str_cat4 ( nurl_str_cat3 `handle type '` __lb `' (here holding an Rc, or a closure) has a ` )
             ( nurl_str_cat __lb `_drop but no ` ) ( nurl_str_cat __lb `_trace, so the cycle collector cannot see inside it and a cycle through it would never be freed. Define ` )
             ( nurl_str_cat __lb `_trace beside it — the handle and an 's vis' as parameters, handing ( mem_trace [T] x vis ) each value the handle holds, as stdlib/std/hashmap.nu HashMap_trace does (docs/MEMORY.md 7.7).` ) ) )
         } {}
@@ -50322,15 +50576,47 @@ u` ) ( nurl_print q ) ( nurl_print `:
         : s n ( str_first_word rest ) = rest ( str_skip_word rest )
         : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
         : s ty ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ( seq n number ) { ( __nc_copy_die fn ty ) } {}
+        : s pf ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pl ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pc ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq n number ) { ( __nc_copy_die_rec ( nurl_str_cat4 pf ` ` pl ( nurl_str_cat ` ` pc ) ) ty ) } {}
     }
+}
+
+// A deferred diagnostic about a function: reported at its declaration
+// (g_fn_pos_syms, "file:line", the generic's under `<name>__g`), the
+// column that line's first non-blank. `what` stands in for a location
+// only when the function was never declared in source.
+unsafe @ __die_at_fn s fname s what s msg → v {
+    : ~ s pos ( nurl_sym_get g_fn_pos_syms fname )
+    ? == 0 ( nurl_str_len pos ) { = pos ( nurl_sym_get g_fn_pos_syms ( nurl_str_cat fname `__g` ) ) } {}
+    : i pn ( nurl_str_len pos )
+    : *u pp # *u pos
+    : ~ i k - pn 1
+    ~ & >= k 0 != ( nurl_str_at pp pn k ) 58 { = k - k 1 }
+    ? < k 1 { ( die_at what msg ) ^ } {}
+    ( die_file_pos ( nurl_str_slice pos 0 k ) ( nurl_str_to_int ( nurl_str_slice pos + k 1 - - ( nurl_str_len pos ) k 1 ) ) 0 msg )
 }
 
 // A borrowed value that cannot be copied, where its owner would have to
 // part with a copy (one diagnostic, from every site that finds it).
-@ __nc_copy_die s fname s ty → v {
-    ( die_at ( nurl_str_cat `in function ` fname )
+// Reported at the statement being compiled (g_stmt_lex) — inline, or
+// from the position parked with a store flag decided at module end — with
+// the line re-read and a caret; it used to name only "in function f".
+@ __nc_copy_die s fname s ty → v { ( __nc_copy_die_rec ( __stmt_pos_rec fname ) ty ) }
+
+@ __nc_copy_die_rec s rec s ty → v {
+    : s r1 ( str_skip_word rec )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
     ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
+}
+
+// The current statement's position as a "<file> <line> <col>" record (for
+// die_file_pos, now or at module end). With no statement current — no
+// check reaches here that way — the function's name stands in for it.
+@ __stmt_pos_rec s fname → s {
+    ? == g_stmt_lex 0 { ^ ( nurl_str_cat3 `in-function:` fname ` 0 0` ) } {}
+    ^ ( nurl_str_cat4 ( nurl_lex_filename g_stmt_lex ) ` ` ( nurl_str_int g_stmt_line ) ( nurl_str_cat ` ` ( nurl_str_int g_stmt_col ) ) )
 }
 
 // Does a match's option stay with someone else — a field (of a parameter,
@@ -51021,8 +51307,10 @@ unsafe @ __clo_take_capture i syms s name → v {
     // owner dropped it a second time.
     ? & == 0 ( nurl_str_starts ty `{ i1, ` ) ! ( seq lent `0` ) {
         ? ( __nc_drop_ty ty ) {
+            // "<n> <fn> <ty> <file> <line> <col>": reported where it was handed.
+            : s __fsn ( nurl_sym_get g_root_syms `__fn_self_name__` )
             ( __park_append g_pending_impl `ncstores` ( nurl_str_cat4 ( nurl_str_slice kflag 15 - ( nurl_str_len kflag ) 15 ) ` `
-            ( nurl_sym_get g_root_syms `__fn_self_name__` ) ( nurl_str_cat ` ` ty ) ) )
+            __fsn ( nurl_str_cat4 ` ` ty ` ` ( __stmt_pos_rec __fsn ) ) ) )
             ^ val
         } {}
     } {}
@@ -51876,6 +52164,48 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
     result
 }
 
+// Add `dir` to the import roots, canonical. F when it does not resolve:
+// a confinement that silently dropped a root would fail open or closed
+// by accident, so the caller refuses to start instead.
+unsafe @ __import_root_add s dir → b {
+    : s c ( realpath dir # *u 0 )
+    ? == # i c 0 { ^ F } {}
+    = g_import_roots ( nurl_str_cat3 g_import_roots c `\n` )
+    ( nurl_free # s c )
+    ^ T
+}
+
+// Does `path` (an existing file, by any spelling or symlink chain)
+// resolve inside one of the import roots?
+unsafe @ __import_allowed s path → b {
+    : s c ( realpath path # *u 0 )
+    ? == # i c 0 { ^ F } {}
+    : i cn ( nurl_str_len c )
+    : *u cp # *u c
+    : s roots g_import_roots
+    : i rn ( nurl_str_len roots )
+    : *u rp # *u roots
+    : ~ b ok F
+    : ~ i st 0
+    : ~ i k 0
+    ~ & ! ok < k rn {
+        ? == ( nurl_str_at rp rn k ) 10 {
+            : i len - k st
+            // `/` contains everything; any other root R contains R
+            // itself and what lies under R + `/`.
+            ? & == len 1 == ( nurl_str_at rp rn st ) 47 { = ok T } {
+                ? & >= cn len == 0 ( strncmp c # s + # i roots st len ) {
+                    ? | == cn len == ( nurl_str_at cp cn len ) 47 { = ok T } {}
+                } {}
+            }
+            = st + k 1
+        } {}
+        = k + k 1
+    }
+    ( nurl_free # s c )
+    ^ ok
+}
+
 // A missing import file used to die inside the runtime's
 // nurl_read_file as a bare `nurlc: cannot open '<path>'` — no file,
 // line, or `error:` tag, so nothing (editor, agent, the multi-error
@@ -51883,6 +52213,15 @@ unsafe @ alias_rewrite_source s src s names s prefix → s {
 // pre-scans and gen_import_decl — calls this first: the diagnostic
 // lands on the `$` directive with the resolution order spelled out.
 @ __require_import_file i lex i iline i icol s path → v {
+    // Under confinement a file outside the roots answers exactly as a
+    // missing one does: a different message would tell the caller which
+    // paths exist on the machine.
+    ? != 0 ( nurl_str_len g_import_roots ) {
+        ? ( __import_allowed path ) { ^ } {}
+        ( die_pos lex iline icol ( nurl_str_cat3 `cannot open import '` path
+        `' — no such file under the directories this compilation may read (--import-root / NURL_IMPORT_ROOTS); imports resolve relative to the importing file and $NURL_STDLIB.` ) )
+        ^
+    } {}
     ? == ( nurl_file_exists path ) 1 { ^ } {}
     ( die_pos lex iline icol ( nurl_str_cat ( nurl_str_cat3
     `cannot open import '` path `' — no such file. The path is tried relative to the importing file's directory, the working directory, and $NURL_STDLIB, in that order` )
@@ -52689,6 +53028,24 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  %vw.r = bitcast <16 x i8> %vw.s to <4 x i32>` )
     ( emit `  ret <4 x i32> %vw.r` )
     ( emit `}` )
+    // Reverse the bytes of each 32-bit lane: four big-endian words in,
+    // four native ones out (SHA-2's message block). `pshufb` with SSSE3,
+    // `rev32` on AArch64.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_bswap32(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vb.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %vb.s = shufflevector <16 x i8> %vb.a, <16 x i8> undef, <16 x i32> <i32 3, i32 2, i32 1, i32 0, i32 7, i32 6, i32 5, i32 4, i32 11, i32 10, i32 9, i32 8, i32 15, i32 14, i32 13, i32 12>` )
+    ( emit `  %vb.r = bitcast <16 x i8> %vb.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vb.r` )
+    ( emit `}` )
+    // `nurl_v128_alignr4 hi lo` = (lo1, lo2, lo3, hi0): the 256-bit
+    // concatenation hi:lo shifted right by one lane — `palignr` by 4
+    // bytes (Intel's _mm_alignr_epi8(hi, lo, 4)), `ext` on AArch64.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_alignr4(<4 x i32> %hi, <4 x i32> %lo) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %va.r = shufflevector <4 x i32> %lo, <4 x i32> %hi, <4 x i32> <i32 1, i32 2, i32 3, i32 4>` )
+    ( emit `  ret <4 x i32> %va.r` )
+    ( emit `}` )
     // ── byte compare → bitmask ────────────────────────────────────
     // The whole point of a vector byte scan: sixteen comparisons in one
     // instruction, their results read out as a 16-bit integer whose bit
@@ -53205,6 +53562,12 @@ unsafe @ __rt_decl_ptypes s region → s {
 // A tier function stays out of line in any caller without its tier, so
 // a v256 in its signature crosses that call by pointer (emit_vabi).
 //
+// The SHA tier (`nurl_v128_sha256rnds2` / `_msg1` / `_msg2`,
+// __emit_sha_prim: x86-64-v2 + SHA, `nurl__sha_gate`,
+// `nurl_cpu_has_sha`) is on no chain with the AES ones, so a tier is a
+// set (__crypto_tier_attrs): a body needs the union of what it uses and
+// calls, and inlines only what that union contains.
+//
 // The semantics are Intel's: `aesenc a k` = MixColumns(SubBytes(
 // ShiftRows(a))) ^ k, `aesenclast` without the MixColumns, `aesdec` /
 // `aesdeclast` the equivalent inverse rounds, `aesimc` InvMixColumns
@@ -53327,6 +53690,29 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `}` ) }
 }
 
+// The SHA tier's primitives (x86 SHA extensions), on v128 as Intel
+// lays them out: `nurl_v128_sha256rnds2 cdgh abef wk` runs two SHA-256
+// rounds on the state halves (A, B, E, F) and (C, D, G, H) — each
+// vector's lanes 3..0 in that order — with the two round inputs W+K in
+// wk's lanes 0 and 1, and answers the new (A, B, E, F); the old one is
+// the next call's (C, D, G, H). `nurl_v128_sha256msg1 a b` is the σ0
+// half of the message schedule for four words (a's four and b's lane
+// 0), `nurl_v128_sha256msg2 a b` the σ1 half (b's lanes 2 and 3).
+@ __emit_sha_prim s name i nargs s call → v {
+    : s sig ? == nargs 2 `(<4 x i32> %a, <4 x i32> %b)` `(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)`
+    ? == g_crypto_target 1
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+sha" {` ) )
+        ( emit `entry:` )
+        ( emit ( nurl_str_cat `  %cs.r = call <4 x i32> ` call ) )
+        ( emit `  ret <4 x i32> %cs.r` )
+        ( emit `}` ) }
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline {` ) )
+        ( emit `entry:` )
+        ( emit `  call void @nurl_cpu_sha_missing()` )
+        ( emit `  unreachable` )
+        ( emit `}` ) }
+}
+
 // A tier's CPUID answer as an `i1` (`nurl_cpu_has_aes` / `_vaes`), and
 // the entry gate of every function of the tier (see above).
 @ __emit_crypto_probe s has s gate s probe s missing → v {
@@ -53353,6 +53739,7 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `declare void @nurl_cpu_aes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes512_missing() noreturn cold` )
+    ( emit `declare void @nurl_cpu_sha_missing() noreturn cold` )
     ? == g_crypto_target 1
     {  // `readnone`: the runtime answers the same value on every call
         // (a cache written once), so the optimiser may merge and hoist
@@ -53361,6 +53748,10 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare i32 @nurl_cpu_x86_aes() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_vaes() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_vaes512() readnone nounwind willreturn` )
+        ( emit `declare i32 @nurl_cpu_x86_sha() readnone nounwind willreturn` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256rnds2(<4 x i32>, <4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256msg1(<4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256msg2(<4 x i32>, <4 x i32>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesdec(<2 x i64>, <2 x i64>)` )
@@ -53379,8 +53770,14 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare <8 x i64> @llvm.x86.pclmulqdq.512(<8 x i64>, <8 x i64>, i8)` )
         ( __emit_crypto_probe `nurl_cpu_has_aes` `nurl__aes_gate` `nurl_cpu_x86_aes` `nurl_cpu_aes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes` `nurl__vaes_gate` `nurl_cpu_x86_vaes` `nurl_cpu_vaes_missing` )
-        ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` ) }
-    {}
+        ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` )
+        ( __emit_crypto_probe `nurl_cpu_has_sha` `nurl__sha_gate` `nurl_cpu_x86_sha` `nurl_cpu_sha_missing` ) }
+    {  // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
+        // split the work differently and are not lowered yet).
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_sha() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  ret i1 false` )
+        ( emit `}` ) }
     ? == g_crypto_target 2
     { ( emit `declare i32 @nurl_cpu_arm_aes() readnone nounwind willreturn` )
         ( emit `declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)` )
@@ -53434,17 +53831,22 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_crypto_prim512 `nurl_v512_clmul_hl` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 1)` )
     ( __emit_crypto_prim512 `nurl_v512_clmul_lh` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 16)` )
     ( __emit_crypto_prim512 `nurl_v512_clmul_hh` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 17)` )
+    ( __emit_sha_prim `nurl_v128_sha256rnds2` 3 `@llvm.x86.sha256rnds2(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
+    ( __emit_sha_prim `nurl_v128_sha256msg1` 2 `@llvm.x86.sha256msg1(<4 x i32> %a, <4 x i32> %b)` )
+    ( __emit_sha_prim `nurl_v128_sha256msg2` 2 `@llvm.x86.sha256msg2(<4 x i32> %a, <4 x i32> %b)` )
 }
 
 // The tier this function's IR needs for the primitives it calls
-// itself: 3 for a v512 crypto primitive, 2 for a v256 one, 1 for a v128
-// one, 0 for none.
+// itself, as a mask (__crypto_tier_attrs): 7 for a v512 AES primitive,
+// 3 for a v256 one, 1 for a v128 one, with 8 for a SHA one; 0 for none.
 @ __ir_crypto_level s ir → i {
-    // (On AArch64 the wide primitives are stubs, so only v128 ones count.)
-    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ 3 } {}
-    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ 2 } {}
-    ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ 1 } {}
-    ^ 0
+    // (On AArch64 the wide and SHA primitives are stubs, so only the
+    // v128 AES ones count.)
+    : i sha ? & == g_crypto_target 1 >= ( nurl_str_find ir `@nurl_v128_sha256` ) 0 8 0
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ | 7 sha } {}
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ | 3 sha } {}
+    ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ | 1 sha } {}
+    ^ sha
 }
 
 // Emit one function's IR with its allocas hoisted. One whose body uses
@@ -53481,7 +53883,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // inlining (g_crypto_inl) pointed at that function's `.tier` copy —
 // when the copy's tier is one the caller's `lvl` contains (a VAES-tier
 // copy inlined into an AES-tier body would put VAES in a function
-// compiled without it). Only a crypto-tier body may call one: the copy
+// compiled without it, a SHA one SHA). Only a crypto-tier body may call one: the copy
 // is ungated and `alwaysinline`, and the caller's own gate — or its
 // dispatcher — is what makes running it safe.
 unsafe @ __ir_tier_calls s ir i lvl → s {
@@ -53501,7 +53903,7 @@ unsafe @ __ir_tier_calls s ir i lvl → s {
         ? & & > e st < e n == 40 # i . p e {
             : s nm ( nurl_str_slice ir st - e st )
             : s cl ( nurl_sym_get g_crypto_inl nm )
-            ? & != 0 ( nurl_str_len cl ) <= ( nurl_str_to_int cl ) lvl {
+            ? & != 0 ( nurl_str_len cl ) ( __tier_contains lvl ( nurl_str_to_int cl ) ) {
                 = out ( nurl_str_cat3 out ( nurl_str_slice ir done - e done ) `.tier` )
                 = done e
             } {}
@@ -53534,12 +53936,12 @@ unsafe @ __ir_tier_calls s ir i lvl → s {
     ^ ( nurl_str_cat4 ( nurl_str_cat h1 h2 ) ( __crypto_tier_attrs lvl ) ` {\nentry:\n` rest )
 }
 
-// The highest tier among the functions of g_crypto_fns this IR calls —
-// `@NAME(` with NAME in the set — or 0.
+// The union of the tiers of the functions of g_crypto_fns this IR calls
+// — `@NAME(` with NAME in the set — or 0.
 @ __ir_calls_crypto s ir → i { ^ ( __ir_calls_level ir g_crypto_fns ) }
 
-// The highest tier among the functions of `set` (name → tier) this IR
-// calls — `@NAME(` with NAME in it — or 0.
+// The union of the tiers of the functions of `set` (name → tier) this
+// IR calls — `@NAME(` with NAME in it — or 0.
 unsafe @ __ir_calls_level s ir i set → i {
     : i n ( strlen ir )
     : *u p # *u ir
@@ -53555,8 +53957,7 @@ unsafe @ __ir_calls_level s ir i set → i {
             : s nm ( nurl_str_slice ir st - e st )
             : s cl ( nurl_sym_get set nm )
             ? != 0 ( nurl_str_len cl ) {
-                : i l ( nurl_str_to_int cl )
-                ? > l best { = best l } {}
+                = best | best ( nurl_str_to_int cl )
             } {}
         } {}
         = k e
@@ -53567,7 +53968,7 @@ unsafe @ __ir_calls_level s ir i set → i {
 // The inline-wanting functions that wrap the tier without using a
 // crypto primitive themselves — calling an inline-wanting tier function,
 // directly or through another such wrapper (a fixed point) — join
-// g_crypto_inl at the highest tier they reach, and each gets a `.tier`
+// g_crypto_inl at the union of the tiers they reach, and each gets a `.tier`
 // copy for that tier. Inlined into a tier body
 // as it is, such a wrapper brings the gate of every tier function it
 // calls along: a gate check per call, in what is usually a hot loop.
@@ -53585,8 +53986,8 @@ unsafe @ __ir_calls_level s ir i set → i {
             : i got ( __ir_calls_level ir g_crypto_inl )
             : s had ( nurl_sym_get g_crypto_inl nm )
             : i was ? > ( nurl_str_len had ) 0 ( nurl_str_to_int had ) 0
-            ? > got was {
-                ( nurl_sym_def g_crypto_inl nm ( nurl_str_int got ) )
+            ? ! ( __tier_contains was got ) {
+                ( nurl_sym_def g_crypto_inl nm ( nurl_str_int | was got ) )
                 = grew T
             } {}
             = w + w 1
@@ -53622,7 +54023,7 @@ unsafe @ __ir_calls_level s ir i set → i {
 // function whose body does — the second so that the helpers a kernel
 // is written with inline into its clones (a helper compiled for the
 // tier inlines only into a caller compiled for it) — and takes the
-// highest tier of the two. The test is deliberately one call deep: a
+// union of the two. The test is deliberately one call deep: a
 // `simd` function that merely reaches the tier through some ordinary
 // function keeps its baseline clone, so a software path that asks
 // nurl_cpu_has_aes before it calls the hardware one is never gated on
@@ -53656,7 +54057,7 @@ unsafe @ __ir_calls_level s ir i set → i {
         : s ir0 ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.ir` ) )
         : i own ( __ir_crypto_level ir0 )
         : i called ( __ir_calls_crypto ir0 )
-        : i lvl ? > own called own called
+        : i lvl | own called
         : s ir ? > lvl 0 ( __ir_tier_calls ir0 lvl ) ( nurl_str_cat ir0 `` )
         ( emit_multiversion ir ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.n` ) )
         ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.r` ) ) ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.p` ) ) lvl )
@@ -53704,6 +54105,8 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
     ( nurl_sym_def syms `nurl_v128_bswap128` `v128` )
+    ( nurl_sym_def syms `nurl_v128_bswap32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_alignr4` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesenc` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesenclast` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesdec` `v128` )
@@ -53749,6 +54152,10 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v512_clmul_lh` `v512` )
     ( nurl_sym_def syms `nurl_v512_clmul_hh` `v512` )
     ( nurl_sym_def syms `nurl_cpu_has_vaes512` `i1` )
+    ( nurl_sym_def syms `nurl_v128_sha256rnds2` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256msg1` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256msg2` `v128` )
+    ( nurl_sym_def syms `nurl_cpu_has_sha` `i1` )
     ( nurl_sym_def syms `nurl_v256_zero` `v256` )
     ( nurl_sym_def syms `nurl_v256_ld` `v256` )
     ( nurl_sym_def syms `nurl_v256_st` `void` )
@@ -55447,11 +55854,43 @@ unsafe @ register_missing_defaults i lex s tname s impl_nurl s impl_llvm s impl_
     ? ! ( nurl_sym_has_word g_impl_trait_syms lk impl_llvm ) { ( __park_append g_impl_trait_syms lk impl_llvm ) } {}
 }
 
+// A positive thread-safety marker widens what the compiler accepts: `% Send
+// T { }` / `% Sync T { }` stop the derivation at T (nothing inside is looked
+// at), and a Sync type's contents are not frozen through it (§6.5). Asserted
+// wrongly, it lets safe code race an Rc's count or a Cell's bytes — so
+// outside the standard library it is spelled `unsafe % Send T { }`, as an
+// unchecked body is spelled `unsafe @`, and `--unsafe-report` lists it.
+// Every other marker only adds checks (`NotSend`, `NotSync`, `Frozen`) or
+// changes when a cycle is collected (`Resource`), so safe code may write
+// it, and `unsafe` on it (or on any other impl) says nothing: an error.
+unsafe @ __marker_impl_gate i lex s tname s impl_nurl b decl_unsafe → v {
+    : b positive | ( seq tname `Send` ) ( seq tname `Sync` )
+    ? & decl_unsafe ! positive {
+        ( die lex ( nurl_str_cat3 `'unsafe' on an impl of '% ` tname `': only a '% Send' or '% Sync' assertion is something the compiler takes on trust (it stops checking the type's fields). Every other impl is checked — its methods are ordinary code, and '% NotSend', '% NotSync', '% Frozen' and '% Resource' only add checks. Remove the 'unsafe'.` ) )
+    } {}
+    ? ! positive { ^ v } {}
+    ? ( bck_trusted_file ( nurl_lex_filename lex ) ) { ^ v } {}
+    : s pos ( nurl_str_cat ( nurl_lex_filename lex ) ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    ? ! decl_unsafe {
+        ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'% ` tname ` ` ) impl_nurl ( nurl_str_cat3 ` { }' asserts that '` impl_nurl `' is safe to ` )
+        ( nurl_str_cat3 ? ( seq tname `Send` ) `move to another thread` `reach from two threads at once`
+        `, and the compiler stops checking its fields there — an Rc or a Cell inside it, or an Arc's payload reached through it, is no longer seen. Wrong, it is a data race in safe code, so it is an unchecked promise: write it 'unsafe % `
+        ( nurl_str_cat4 tname ` ` impl_nurl ` { }' (docs/MEMORY.md §6.5; nurlc --unsafe-report lists it). If the type holds shared state, put it in a Locked or an RwLocked (stdlib/std/thread.nu, stdlib/std/rwlock.nu) instead, which the compiler checks.` ) ) ) )
+    } {}
+    ( note_unsafe_item pos ( nurl_str_cat4 `% ` tname ` ` impl_nurl ) )
+}
+
 // For trait_decl: stores default-method templates in g_trait_syms.
 // For impl_decl: register explicit method signatures, then defer contract
 // checks and default registration until every trait declaration is known.
 unsafe @ scan_impl_decl i lex i syms → v {
     : i impl_pos ( nurl_lex_cur_start lex )
+    : b decl_unsafe != 0 g_impl_unsafe
+    = g_impl_unsafe 0
+    // The `%` that opens the declaration: where a deferred supertrait
+    // obligation is reported (verify_super_obligations).
+    : i impl_line ( nurl_lex_line lex )
+    : i impl_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // skip '%'
     : s tname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // skip trait name
@@ -55492,6 +55931,7 @@ unsafe @ scan_impl_decl i lex i syms → v {
     // Disambiguate: '{' → trait_decl, else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {  // trait: remember its type param and scan for default methods
+        ? decl_unsafe { ( die lex ( nurl_str_cat3 `'unsafe' on the declaration of trait '% ` tname `': a trait declaration asserts nothing. 'unsafe' belongs on an impl that asserts what the compiler cannot check — 'unsafe % Send Type { }' or 'unsafe % Sync Type { }'.` ) ) } {}
         // Structs (`ty##`), enums and impls all guard against a second
         // declaration of the same name. Traits did not, and the hole is
         // not merely cosmetic: `% Speaker : Dog { @ speak … }` — a
@@ -55530,14 +55970,15 @@ unsafe @ scan_impl_decl i lex i syms → v {
         // generic bound `A: tname` can be verified at instantiation.
         ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
         ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
+        ( __marker_impl_gate lex tname impl_nurl decl_unsafe )
         // Park a supertrait obligation: after every impl in the program is
         // registered, each supertrait of `tname` must also be implemented for
         // this type. Recorded unconditionally (the trait's supers may not be
         // parsed yet); the deferred pass skips impls whose trait has none.
-        : s spos ( nurl_str_cat ( nurl_lex_filename lex )
-        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
-        // Four space-separated fields per record (none contains a space):
-        // "<Sub> <impl_llvm> <nurl_type> <file:line> ".
+        : s spos ( nurl_str_cat4 ( nurl_lex_filename lex ) ` ` ( nurl_str_int impl_line )
+        ( nurl_str_cat ` ` ( nurl_str_int impl_col ) ) )
+        // Six space-separated fields per record (none contains a space):
+        // "<Sub> <impl_llvm> <nurl_type> <file> <line> <col> ".
         = g_super_obligations ( nurl_str_cat g_super_obligations
         ( nurl_str_cat tname ( nurl_str_cat ` `
         ( nurl_str_cat impl_llvm ( nurl_str_cat ` `
@@ -55861,7 +56302,11 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
         = rest ( str_skip_word rest )
         : s nty ( str_first_word rest )
         = rest ( str_skip_word rest )
-        : s pos ( str_first_word rest )
+        : s file ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i line ( nurl_str_to_int ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        : i col ( nurl_str_to_int ( str_first_word rest ) )
         = rest ( str_skip_word rest )
         // Each supertrait of `sub` must be implemented for `llvm`.
         : ~ s sup_rest ( nurl_sym_get2 g_trait_syms sub `__supers` )
@@ -55870,11 +56315,13 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
             = sup_rest ( str_skip_word sup_rest )
             ? == 0 ( nurl_sym_len g_trait_syms
             ( nurl_str_cat3 sup `##` llvm ) )
-            { ( die_at pos ( nurl_str_cat
+            { ( die_file_pos file line col ( nurl_str_cat
                 ( nurl_str_cat3 `type '` nty `' implements trait '` )
                 ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
                 ( nurl_str_cat3 `' — every '` sub
-                ( nurl_str_cat3 `' type must also implement '` sup `'` ) ) ) ) ) }
+                ( nurl_str_cat3 `' type must also implement '` sup
+                ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
+                ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
             {}
         }
     }
@@ -57462,7 +57909,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                         {}
                     }
                     { ? == tt TT_PERCENT
-                        { ( __lazy_collect lex `__roots__` ) ( scan_impl_decl lex syms ) }
+                        { ( __lazy_collect lex `__roots__` ) = g_impl_unsafe ? decl_unsafe 1 0 ( scan_impl_decl lex syms ) }
                         { ( nurl_lex_advance lex ) }
                     }
                 } } }
@@ -57687,8 +58134,9 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     // it); only a foreign declaration (`unsafe & …`) reads the flag. A
     // function lazy compilation skips never reached gen_fn_decl's clear,
     // and its `unsafe` marked the next foreign function raw (fs.nu's
-    // `unlink`, after `unsafe @ __fd_write_all`).
-    ? == tt TT_AT { = g_pending_unsafe 0 } {}
+    // `unlink`, after `unsafe @ __fd_write_all`). An impl's (`unsafe % Send
+    // T { }`) was read by the scan pass (scan_impl_decl).
+    ? | == tt TT_AT == tt TT_PERCENT { = g_pending_unsafe 0 } {}
     // `simd` is meaningful only on a function. Anywhere else it is a
     // silent no-op that would leak onto the next `@` the parser reached
     // — the same cross-file bug `pub` had, so it gets the same fix:
@@ -57993,6 +58441,7 @@ unsafe @ llvm_linkage_init → v {
 // not a `: ~ s` global: a mutable string global owns its buffer, and
 // this one is owned by dce_emit_module's caller.
 : ~ i g_dce_mod 0
+: ~ i g_dce_mod_len 0  // its length: no probe reads past the end
 : ~ i g_dce_start 0  // i64[n]: byte offset of each `define`
 : ~ i g_dce_end 0  // i64[n]: byte offset just past its closing `}`
 : ~ i g_dce_live 0  // i64[n]: 1 once reached
@@ -58210,6 +58659,12 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_flist 0
 : ~ i g_fold_nf 0
 : ~ i g_fold_fcap 0
+// The flags a journal registration reads (nurl_journal_push_drop2), this
+// round: a call made while one is registered may panic, and the drain
+// reads it then (__fold_flag_line).
+: ~ i g_fold_jlist 0
+: ~ i g_fold_nj 0
+: ~ i g_fold_jcap 0
 : ~ i g_fold_end 0
 : ~ i g_fold_fn_end 0
 : ~ i g_fold_k 0
@@ -58217,6 +58672,7 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_y 0
 
 unsafe @ __fold_at i p s lit i n → b {
+    ? > + p n g_dce_mod_len { ^ F } {}
     ^ == 0 # i ( memcmp # s + g_dce_mod p lit n )
 }
 
@@ -59199,6 +59655,56 @@ unsafe @ __fold_reset → v {
         ~ < w 6 { ( nurl_poke # s g_fold_map + * r 6 w 0 ) = w + w 1 }
     }
     = g_fold_nf 0
+    = g_fold_nj 0
+}
+
+// Flag r is read by a journal registration (see g_fold_jlist).
+unsafe @ __fold_add_jflag i r → v {
+    ? >= g_fold_nj g_fold_jcap {
+        : i jcap ? == g_fold_jcap 0 64 * g_fold_jcap 2
+        : i fresh # i ( nurl_zalloc * jcap 8 )
+        ? != g_fold_jlist 0 {
+            ( memcpy # s fresh # s g_fold_jlist * g_fold_nj 8 )
+            ( nurl_free # s g_fold_jlist )
+        } {}
+        = g_fold_jlist fresh
+        = g_fold_jcap jcap
+    } {}
+    ( nurl_poke # s g_fold_jlist g_fold_nj r )
+    = g_fold_nj + g_fold_nj 1
+}
+
+// A call: every journaled flag's pending store may be read by a drain.
+unsafe @ __fold_commit_jflags → v {
+    : ~ i i 0
+    ~ < i g_fold_nj { ( __fold_commit ( nurl_peek # s g_fold_jlist i ) ) = i + i 1 }
+}
+
+// The slot and flag registers of a registration line
+// `  call void @nurl_journal_push_drop2(ptr %rS, ptr %rF, …)`: the flag's
+// number (the slot's in g_fold_x), or -1 when either is not a register.
+@ __fold_jrnl_regs i ls i le → i {
+    : i sr ( __fold_reg + ls 41 le )
+    ? < sr 0 { ^ -1 } {}
+    : i se g_fold_end
+    ? ! ( __fold_at se `, ptr ` 6 ) { ^ -1 } {}
+    : i fr ( __fold_reg + se 6 le )
+    ? < fr 0 { ^ -1 } {}
+    ? ! ( __fold_at g_fold_end `, ` 2 ) { ^ -1 } {}
+    = g_fold_x sr
+    ^ fr
+}
+
+// Does line [ls, le) make a call?
+unsafe @ __fold_has_call i ls i le → b {
+    ^ >= ( nurl_memmem_range # s + g_dce_mod ls - le ls ` call ` 6 ) 0
+}
+
+// Length of the `%rN` token that ends at `fe`.
+@ __fold_jrnl_tok i fe → i {
+    : ~ i q - fe 1
+    ~ != ( __fold_byte q ) 37 { = q - q 1 }
+    ^ - fe q
 }
 
 unsafe @ __fold_add_flag i r → v {
@@ -59334,6 +59840,44 @@ unsafe @ __fold_commit_all → v {
     ? | | | ( __fold_at ls `  br ` 5 ) ( __fold_at ls `  ret` 5 ) ( __fold_at ls `  switch ` 9 ) ( __fold_at ls `  unreachable` 13 ) {
         ( __fold_commit_all )
     } {}
+    // A journal registration (nurl_journal_push_drop2: slot, flag, drop)
+    // reads its flag only when a panic drains it — inside a call made
+    // while it is registered — and takes its address for nothing else. So
+    // it is no escape: the flag still folds, every later call reads its
+    // pending store (below), and the registration counts as a read, which
+    // keeps the stores. The writer then drops a registration whose flag
+    // folds false — a binding that never owns while registered: a borrowed
+    // parameter, a view, a temporary a callee sinks — and gives one whose
+    // flag folds true a null flag (always drop). A slot registered under
+    // two different flags keeps both unfolded, so its forgets stay paired.
+    ? ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+        : i fj ( __fold_jrnl_regs ls le )
+        ? >= fj 0 {
+            : i sr g_fold_x
+            ? == 1 ( __fold_get fj 3 ) {
+                : i prev ( __fold_get sr 1 )
+                ? | == prev 0 == prev + fj 1 {
+                    ( __fold_put sr 1 + fj 1 )
+                    ( __fold_put fj 4 | ( __fold_get fj 4 ) 8 )
+                    ( __fold_add_jflag fj )
+                    ^ T
+                } {}
+                // A second flag for the slot: neither folds.
+                ( __fold_put fj 3 2 )
+                ? == 1 ( __fold_get - prev 1 3 ) { ( __fold_put - prev 1 3 2 ) } {}
+                ^ T
+            } {}
+            // An unfolded flag: the slot keeps every registration.
+            ? > ( __fold_get sr 1 ) 0 {
+                : i pf - ( __fold_get sr 1 ) 1
+                ? == 1 ( __fold_get pf 3 ) { ( __fold_put pf 3 2 ) } {}
+            } {}
+            ( __fold_put sr 1 -1 )
+            ^ T
+        } {}
+    } {}
+    // A call may panic, and the drain reads every registered flag then.
+    ? & > g_fold_nj 0 ( __fold_has_call ls le ) { ( __fold_commit_jflags ) } {}
     ? ( __fold_at ls `  %r` 4 ) {
         : i r ( __fold_reg + ls 2 le )
         ? >= r 0 {
@@ -59649,6 +60193,30 @@ unsafe @ __fold_emit_line i ls i le i part → v {
         : i sf ( __fold_store_flag ls le )
         ? & >= sf 0 >= ( __fold_get sf 3 ) 3 { ^ v } {}
     } {}
+    // Journal registrations by their folded flag (__fold_flag_line): one
+    // that never owns goes, with its forgets; one that always owns drops
+    // unconditionally (a null flag).
+    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_push_drop2(ptr ` 41 ) {
+        : i fj ( __fold_jrnl_regs ls le )
+        ? >= fj 0 {
+            : i fs ( __fold_get fj 3 )
+            ? == fs 3 { ^ v } {}
+            ? == fs 4 {
+                : i fe g_fold_end
+                ( __ir_write_range ls - fe ( __fold_jrnl_tok fe ) part )
+                ( __fold_puts `null` part )
+                ( __fold_put_range fe + le 1 part 0 )
+                ^ v
+            } {}
+        } {}
+    } {}
+    ? & != 0 g_fold_nf ( __fold_at ls `  call void @nurl_journal_forget_slot(ptr ` 42 ) {
+        : i sr ( __fold_reg + ls 42 le )
+        ? >= sr 0 {
+            : i f1 ( __fold_get sr 1 )
+            ? > f1 0 { ? == 3 ( __fold_get - f1 1 3 ) { ^ v } {} } {}
+        } {}
+    } {}
     ? ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
         : i f ( __fold_flag + ls 33 le )
         ? == f 0 { ^ v } {}
@@ -59714,6 +60282,7 @@ unsafe @ __ir_fold_range i st i en i part → v {
     : ~ b again T
     ~ again {
         = g_fold_nf 0
+        = g_fold_nj 0
         : ~ i p st
         ~ < p en {
             : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
@@ -59974,6 +60543,7 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     : i g_dce_keep_n ( nurl_str_len g_dce_keep )
     : *u g_dce_keep_p # *u g_dce_keep
     = g_dce_mod # i mod
+    = g_dce_mod_len mlen
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
     ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}
@@ -60772,7 +61342,10 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `                      a redundant release call ([redundant-free])\n` )
     ( nurl_print `  --no-borrowck       deprecated: disable the borrow-checker pass (report a false positive as a bug instead)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
-    ( nurl_print `  --unsafe-report     list the program's own 'unsafe' functions (outside the stdlib) on stderr\n` )
+    ( nurl_print `  --import-root=DIR   read imports only from under DIR (repeatable; symlinks\n` )
+    ( nurl_print `                      and '..' resolved first). Default: $NURL_IMPORT_ROOTS,\n` )
+    ( nurl_print `                      ':'-separated; unset means no confinement\n` )
+    ( nurl_print `  --unsafe-report     list what the program asks to be trusted (outside the stdlib) on stderr: unsafe functions, unsafe Send/Sync assertions, in/sync/nocapture FFI claims\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --keep=a,b          keep these functions even if nothing in the module calls them\n` )
@@ -60957,7 +61530,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // borrow-clean program leaves g_bck_errors at 0 and this is a
         // no-op.
         ? != 0 g_unsafe_report {
-            ? == 0 ( nurl_str_len g_unsafe_list ) { ( nurl_eprintln `unsafe: none — every function is held to the ownership rules` ) } {
+            ? == 0 ( nurl_str_len g_unsafe_list ) { ( nurl_eprintln `unsafe: none — every function and type is held to the ownership rules` ) } {
                 ( nurl_eprintln g_unsafe_list )
             }
         } {}
@@ -61043,6 +61616,13 @@ unsafe @ main → i {
             } {}
             = g_dbg_enabled 1 = ai + ai 1 continue
         } {}
+        ? != 0 ( nurl_str_starts a `--import-root=` ) {
+            : s dir ( nurl_str_slice a 14 - ( nurl_str_len a ) 14 )
+            ? ! ( __import_root_add dir ) {
+                ( nurl_eprintln ( nurl_str_cat3 `nurlc: --import-root=` dir `: no such directory` ) ) ^ 2
+            } {}
+            = ai + ai 1 continue
+        } {}
         ? ( seq a `--unsafe-report` ) { = g_unsafe_report 1 = ai + ai 1 continue } {}
         ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
             ? | ( seq a `--version` ) ( seq a `-v` )
@@ -61099,6 +61679,29 @@ unsafe @ main → i {
     } {}
     ? != != 0 ( nurl_str_len g_coverage_notes ) != 0 ( nurl_str_len g_coverage_link_ir ) {
         ( nurl_eprintln `nurlc: --coverage-notes and --coverage-link-ir must be used together` ) ^ 2
+    } {}
+    // No --import-root: the environment may confine instead, which is
+    // how a build script between a server and nurlc passes it through.
+    ? == 0 ( nurl_str_len g_import_roots ) {
+        : s ev ( getenv `NURL_IMPORT_ROOTS` )
+        ? != # i ev 0 {
+            : i en ( nurl_str_len ev )
+            : *u ep # *u ev
+            : ~ i st 0
+            : ~ i k 0
+            ~ <= k en {
+                ? | == k en == ( nurl_str_at ep en k ) 58 {
+                    ? > k st {
+                        : s dir ( nurl_str_slice ev st - k st )
+                        ? ! ( __import_root_add dir ) {
+                            ( nurl_eprintln ( nurl_str_cat3 `nurlc: NURL_IMPORT_ROOTS: ` dir `: no such directory` ) ) ^ 2
+                        } {}
+                    } {}
+                    = st + k 1
+                } {}
+                = k + k 1
+            }
+        } {}
     } {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

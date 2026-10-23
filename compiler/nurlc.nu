@@ -53772,7 +53772,7 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( __emit_crypto_probe `nurl_cpu_has_vaes` `nurl__vaes_gate` `nurl_cpu_x86_vaes` `nurl_cpu_vaes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_sha` `nurl__sha_gate` `nurl_cpu_x86_sha` `nurl_cpu_sha_missing` ) }
-    { // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
+    {  // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
         // split the work differently and are not lowered yet).
         ( emit `define linkonce_odr i1 @nurl_cpu_has_sha() alwaysinline {` )
         ( emit `entry:` )
