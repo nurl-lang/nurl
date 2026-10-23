@@ -1,17 +1,14 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  BookOpen,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Code2,
   ExternalLink,
   FileCode,
-  Filter,
   GitBranch,
-  Layers,
   Lock,
   Play,
   RotateCcw,
@@ -36,6 +33,18 @@ type MainTab = 'visual' | 'blueprint' | 'browser' | 'holes';
 type GraphMode = 'theorems' | 'modules-a2' | 'modules-a1';
 
 const GITHUB_BASE = 'https://github.com/nurl-lang/nurl/blob/main';
+
+const TABS: { id: MainTab; icon: typeof Sparkles; fi: string; en: string }[] = [
+  { id: 'visual', icon: Sparkles, fi: '1. Visuaalinen selitys & Simulaattori', en: '1. Visual Story & Step Simulator' },
+  { id: 'blueprint', icon: GitBranch, fi: '2. Matemaatikon Blueprint-verkko (DAG)', en: '2. Mathematician’s Blueprint Graph' },
+  { id: 'browser', icon: Code2, fi: '3. Lean 4 -koodi & lauseselain (1 766)', en: '3. Lean 4 Proof & Code Browser (1,766)' },
+  {
+    id: 'holes',
+    icon: ShieldAlert,
+    fi: `4. ${formalData.stats.holesCount} Reikäkoetta & Sääntömatriisi`,
+    en: `4. ${formalData.stats.holesCount} Soundness Holes & Rules`,
+  },
+];
 
 interface SimBinding {
   name: string;
@@ -567,6 +576,7 @@ const LAYER_COLORS: Record<number, { bg: string; border: string; text: string; b
 
 export function FormalExplorer() {
   const [lang, setLang] = useState<Lang>('fi');
+  const t = (fi: string, en: string) => (lang === 'fi' ? fi : en);
   const [activeTab, setActiveTab] = useState<MainTab>('visual');
 
   // Simulator state
@@ -799,20 +809,14 @@ export function FormalExplorer() {
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               <span>
-                {lang === 'fi'
-                  ? 'Lean 4 -koneistettu todistus · A1 & A2 todistettu (0 sorrya)'
-                  : 'Lean 4 Mechanized Proof · Phases A1 & A2 Proven (0 sorrys)'}
+                {t('Lean 4 -koneistettu todistus · A1 & A2 todistettu (0 sorrya)', 'Lean 4 Mechanized Proof · Phases A1 & A2 Proven (0 sorrys)')}
               </span>
             </div>
             <h2 className="mt-2.5 text-xl font-bold tracking-tight text-fd-foreground sm:text-2xl">
-              {lang === 'fi'
-                ? 'NURLin muistimallin visuaalinen ja interaktiivinen todistusselain'
-                : 'Interactive Visual Explorer of NURL’s Mechanized Memory Proof'}
+              {t('NURLin muistimallin visuaalinen ja interaktiivinen todistusselain', 'Interactive Visual Explorer of NURL’s Mechanized Memory Proof')}
             </h2>
             <p className="mt-1.5 text-sm text-fd-muted-foreground">
-              {lang === 'fi'
-                ? 'Tutki sekä visuaalisesti ("tavalliselle ihmiselle") että matemaattisen tarkasti (Lean Blueprint -riippuvuusverkko ja kaikki 1 766 Lean 4 -määritelmää), miten NURL todistaa muistiturvallisuuden (A2.memory_safe) ja vuodottomuuden (A2.no_leak_end, A2.no_leak_panic).'
-                : 'Explore both visually (step-by-step memory & borrow simulator) and mathematically (Lean Blueprint dependency DAG + 1,766 Lean 4 declarations) how NURL proves memory safety (A2.memory_safe) and leak freedom (A2.no_leak_end, A2.no_leak_panic).'}
+              {t('Tutki sekä visuaalisesti ("tavalliselle ihmiselle") että matemaattisen tarkasti (Lean Blueprint -riippuvuusverkko ja kaikki 1 766 Lean 4 -määritelmää), miten NURL todistaa muistiturvallisuuden (A2.memory_safe) ja vuodottomuuden (A2.no_leak_end, A2.no_leak_panic).', 'Explore both visually (step-by-step memory & borrow simulator) and mathematically (Lean Blueprint dependency DAG + 1,766 Lean 4 declarations) how NURL proves memory safety (A2.memory_safe) and leak freedom (A2.no_leak_end, A2.no_leak_panic).')}
             </p>
           </div>
 
@@ -850,7 +854,7 @@ export function FormalExplorer() {
               {(formalData.stats.a1.lines + formalData.stats.a2.lines).toLocaleString('en-US')}
             </div>
             <div className="text-xs text-fd-muted-foreground">
-              {lang === 'fi' ? 'riviä Lean 4 -todistusta' : 'lines of Lean 4 proof'}
+              {t('riviä Lean 4 -todistusta', 'lines of Lean 4 proof')}
             </div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
@@ -858,7 +862,7 @@ export function FormalExplorer() {
               {(formalData.stats.a1.theorems + formalData.stats.a2.theorems).toLocaleString('en-US')}
             </div>
             <div className="text-xs text-fd-muted-foreground">
-              {lang === 'fi' ? 'todistettua lausetta (0 sorry)' : 'proven theorems (0 sorry)'}
+              {t('todistettua lausetta (0 sorry)', 'proven theorems (0 sorry)')}
             </div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
@@ -866,86 +870,40 @@ export function FormalExplorer() {
               {formalData.stats.a1.modules + formalData.stats.a2.modules}
             </div>
             <div className="text-xs text-fd-muted-foreground">
-              {lang === 'fi' ? 'Lean-moduulia (A1 + A2)' : 'Lean modules (A1 + A2)'}
+              {t('Lean-moduulia (A1 + A2)', 'Lean modules (A1 + A2)')}
             </div>
           </div>
           <div className="rounded-lg border bg-fd-background/70 px-3.5 py-2.5">
             <div className="text-lg font-bold text-amber-600 dark:text-amber-400">{formalData.stats.holesCount}</div>
             <div className="text-xs text-fd-muted-foreground">
-              {lang === 'fi' ? 'reikäkoetta (h01–h298)' : 'soundness hole probes'}
+              {t('reikäkoetta (h01–h298)', 'soundness hole probes')}
             </div>
           </div>
           <div className="col-span-2 rounded-lg border bg-fd-background/70 px-3.5 py-2.5 sm:col-span-1">
             <div className="font-mono text-sm font-bold text-fd-foreground">v4.35.0</div>
             <div className="text-xs text-fd-muted-foreground">
-              {lang === 'fi' ? 'Vain standardiaksioomat' : 'Standard axioms only'}
+              {t('Vain standardiaksioomat', 'Standard axioms only')}
             </div>
           </div>
         </div>
 
         {/* Navigation Tabs */}
         <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">
-          <button
-            type="button"
-            onClick={() => setActiveTab('visual')}
-            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'visual'
-                ? 'bg-fd-primary text-fd-primary-foreground shadow-sm'
-                : 'border bg-fd-background text-fd-muted-foreground hover:text-fd-foreground'
-            }`}
-          >
-            <Sparkles className="h-4 w-4" />
-            <span>
-              {lang === 'fi' ? '1. Visuaalinen selitys & Simulaattori' : '1. Visual Story & Step Simulator'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('blueprint')}
-            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'blueprint'
-                ? 'bg-fd-primary text-fd-primary-foreground shadow-sm'
-                : 'border bg-fd-background text-fd-muted-foreground hover:text-fd-foreground'
-            }`}
-          >
-            <GitBranch className="h-4 w-4" />
-            <span>
-              {lang === 'fi' ? '2. Matemaatikon Blueprint-verkko (DAG)' : '2. Mathematician’s Blueprint Graph'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('browser')}
-            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'browser'
-                ? 'bg-fd-primary text-fd-primary-foreground shadow-sm'
-                : 'border bg-fd-background text-fd-muted-foreground hover:text-fd-foreground'
-            }`}
-          >
-            <Code2 className="h-4 w-4" />
-            <span>
-              {lang === 'fi'
-                ? '3. Lean 4 -koodi & lauseselain (1 766)'
-                : '3. Lean 4 Proof & Code Browser (1,766)'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('holes')}
-            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'holes'
-                ? 'bg-fd-primary text-fd-primary-foreground shadow-sm'
-                : 'border bg-fd-background text-fd-muted-foreground hover:text-fd-foreground'
-            }`}
-          >
-            <ShieldAlert className="h-4 w-4" />
-            <span>
-              {lang === 'fi' ? '4. 286 Reikäkoetta & Sääntömatriisi' : '4. 286 Soundness Holes & Rules'}
-            </span>
-          </button>
+          {TABS.map(({ id, icon: Icon, fi, en }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveTab(id)}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
+                activeTab === id
+                  ? 'bg-fd-primary text-fd-primary-foreground shadow-sm'
+                  : 'border bg-fd-background text-fd-muted-foreground hover:text-fd-foreground'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span>{t(fi, en)}</span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -957,14 +915,10 @@ export function FormalExplorer() {
           {/* Section 1A: Plain-Language Visual Overview of What Lean Proves */}
           <div className="rounded-xl border bg-fd-card p-5">
             <h3 className="text-base font-bold text-fd-foreground">
-              {lang === 'fi'
-                ? 'Mitä Lean 4 -todistus oikeasti todistaa? (Kansantajuinen kokonaiskuva)'
-                : 'What Does the Lean 4 Proof Actually Prove? (Plain-Language Picture)'}
+              {t('Mitä Lean 4 -todistus oikeasti todistaa? (Kansantajuinen kokonaiskuva)', 'What Does the Lean 4 Proof Actually Prove? (Plain-Language Picture)')}
             </h3>
             <p className="mt-1.5 text-sm text-fd-muted-foreground">
-              {lang === 'fi'
-                ? 'Ohjelmointikielissä, joissa ei ole roskienkerääjää (GC), on viisi klassista tapaa rikkoa muisti: (1) luku vapautuksen jälkeen (Use-After-Free), (2) saman muistin vapautus kahdesti (Double-Free), (3) luku vanhentuneen näkymän läpi kun puskuri kasvaa (Iterator/View Invalidation), (4) jaetun arvon muokkaus lainan aikana, ja (5) muistivuoto (Memory Leak) normaalin poistumisen tai paniikin yhteydessä. Lean-todistus rakentaa matemaattisen koneen, jossa jokainen näistä virheistä pysäyttäisi koneen Stuck-tilaan — ja todistaa sitten, ettei yksikään tyyppitarkistuksen läpäissyt ohjelma voi koskaan päätyä Stuck-tilaan tai jättää muistia vapauttamatta.'
-                : 'In languages without a garbage collector, there are five classic memory bugs: (1) Use-After-Free, (2) Double-Free, (3) Dangling View / Iterator Invalidation when a buffer grows, (4) Aliased Mutation while borrowed, and (5) Memory Leaks on exit or panic. The Lean proof defines a formal machine where any such bug makes the machine Stuck — and then proves that no well-typed program can ever get Stuck or leave memory allocated.'}
+              {t('Ohjelmointikielissä, joissa ei ole roskienkerääjää (GC), on viisi klassista tapaa rikkoa muisti: (1) luku vapautuksen jälkeen (Use-After-Free), (2) saman muistin vapautus kahdesti (Double-Free), (3) luku vanhentuneen näkymän läpi kun puskuri kasvaa (Iterator/View Invalidation), (4) jaetun arvon muokkaus lainan aikana, ja (5) muistivuoto (Memory Leak) normaalin poistumisen tai paniikin yhteydessä. Lean-todistus rakentaa matemaattisen koneen, jossa jokainen näistä virheistä pysäyttäisi koneen Stuck-tilaan — ja todistaa sitten, ettei yksikään tyyppitarkistuksen läpäissyt ohjelma voi koskaan päätyä Stuck-tilaan tai jättää muistia vapauttamatta.', 'In languages without a garbage collector, there are five classic memory bugs: (1) Use-After-Free, (2) Double-Free, (3) Dangling View / Iterator Invalidation when a buffer grows, (4) Aliased Mutation while borrowed, and (5) Memory Leaks on exit or panic. The Lean proof defines a formal machine where any such bug makes the machine Stuck — and then proves that no well-typed program can ever get Stuck or leave memory allocated.')}
             </p>
 
             {/* 3 Crown Guarantees */}
@@ -978,14 +932,10 @@ export function FormalExplorer() {
                     <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {lang === 'fi'
-                      ? '1. Ei koskaan muistivirhettä (¬ Stuck)'
-                      : '1. Zero Memory Errors (¬ Stuck)'}
+                    {t('1. Ei koskaan muistivirhettä (¬ Stuck)', '1. Zero Memory Errors (¬ Stuck)')}
                   </h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {lang === 'fi'
-                      ? 'Jokainen muistiluku tarkistaa, että keko-osoite on varattu (m.alloc c = true) ja indeksit ovat rajoissa. Jos ohjelma yrittäisi lukea vapautettua muistia tai vanhentunutta Slice-näkymää, sääntöä ei ole (Stuck). Lause todistaa, että jokainen saavutettava tila on joko valmis (.skip), panikoi turvallisesti tai ottaa laillisen askeleen.'
-                      : 'Every memory access requires the heap address to be live (m.alloc c = true). Any Use-After-Free, Double-Free, or dangling view access has no step rule (Stuck). The theorem proves no reachable configuration is ever Stuck.'}
+                    {t('Jokainen muistiluku tarkistaa, että keko-osoite on varattu (m.alloc c = true) ja indeksit ovat rajoissa. Jos ohjelma yrittäisi lukea vapautettua muistia tai vanhentunutta Slice-näkymää, sääntöä ei ole (Stuck). Lause todistaa, että jokainen saavutettava tila on joko valmis (.skip), panikoi turvallisesti tai ottaa laillisen askeleen.', 'Every memory access requires the heap address to be live (m.alloc c = true). Any Use-After-Free, Double-Free, or dangling view access has no step rule (Stuck). The theorem proves no reachable configuration is ever Stuck.')}
                   </p>
                 </div>
                 <button
@@ -993,7 +943,7 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('memory_safe', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300"
                 >
-                  <span>{lang === 'fi' ? 'Avaa lause A2.memory_safe →' : 'Inspect A2.memory_safe →'}</span>
+                  <span>{t('Avaa lause A2.memory_safe →', 'Inspect A2.memory_safe →')}</span>
                 </button>
               </div>
 
@@ -1006,14 +956,10 @@ export function FormalExplorer() {
                     <CheckCircle2 className="h-4 w-4 text-sky-600 dark:text-sky-400" />
                   </div>
                   <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {lang === 'fi'
-                      ? '2. Ei muistivuotoja valmistuessa'
-                      : '2. Zero Leaks on Normal Exit'}
+                    {t('2. Ei muistivuotoja valmistuessa', '2. Zero Leaks on Normal Exit')}
                   </h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {lang === 'fi'
-                      ? 'Invariantti Covers m takaa jokaisella askeleella, että jokainen varattu osoite (m.alloc i = true) kuuluu täsmälleen yhdelle aktiivisen lohkon omistajalle. Kun ohjelma päättyy (.ok m\' .skip), kaikki lohkot ovat poistuneet, joten ∀ i, m\'.alloc i = false.'
-                      : 'The Covers m invariant guarantees at every step that every live heap address belongs to an active owner on the scope spine. When the program reaches .skip, all scopes have exited, forcing ∀ i, m\'.alloc i = false.'}
+                    {t('Invariantti Covers m takaa jokaisella askeleella, että jokainen varattu osoite (m.alloc i = true) kuuluu täsmälleen yhdelle aktiivisen lohkon omistajalle. Kun ohjelma päättyy (.ok m\' .skip), kaikki lohkot ovat poistuneet, joten ∀ i, m\'.alloc i = false.', 'The Covers m invariant guarantees at every step that every live heap address belongs to an active owner on the scope spine. When the program reaches .skip, all scopes have exited, forcing ∀ i, m\'.alloc i = false.')}
                   </p>
                 </div>
                 <button
@@ -1021,7 +967,7 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('no_leak_end', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-sky-700 hover:underline dark:text-sky-300"
                 >
-                  <span>{lang === 'fi' ? 'Avaa lause A2.no_leak_end →' : 'Inspect A2.no_leak_end →'}</span>
+                  <span>{t('Avaa lause A2.no_leak_end →', 'Inspect A2.no_leak_end →')}</span>
                 </button>
               </div>
 
@@ -1034,14 +980,10 @@ export function FormalExplorer() {
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                   </div>
                   <h4 className="mt-2 font-semibold text-fd-foreground">
-                    {lang === 'fi'
-                      ? '3. Ei muistivuotoja edes paniikissa'
-                      : '3. Zero Leaks on Uncaught Panic'}
+                    {t('3. Ei muistivuotoja edes paniikissa', '3. Zero Leaks on Uncaught Panic')}
                   </h4>
                   <p className="mt-1 text-xs leading-relaxed text-fd-muted-foreground">
-                    {lang === 'fi'
-                      ? 'Kun rajatarkistus tai panic laukeaa, ajonaikainen pino purkautuu (panic_unwind) sisimmästä kehyksestä ulompaan (drop journal). Jokainen poistuva kehys vapauttaa omistamansa puut (DropSlot), joten lopputilassa ∀ i, m\'.alloc i = false.'
-                      : 'When a bounds check or explicit panic fires, panic_unwind walks the active scope spine from innermost to outermost (the drop journal), freeing every owned tree via DropSlot so that ∀ i, m\'.alloc i = false.'}
+                    {t('Kun rajatarkistus tai panic laukeaa, ajonaikainen pino purkautuu (panic_unwind) sisimmästä kehyksestä ulompaan (drop journal). Jokainen poistuva kehys vapauttaa omistamansa puut (DropSlot), joten lopputilassa ∀ i, m\'.alloc i = false.', 'When a bounds check or explicit panic fires, panic_unwind walks the active scope spine from innermost to outermost (the drop journal), freeing every owned tree via DropSlot so that ∀ i, m\'.alloc i = false.')}
                   </p>
                 </div>
                 <button
@@ -1049,7 +991,7 @@ export function FormalExplorer() {
                   onClick={() => openDeclInBrowser('no_leak_panic', 'A2')}
                   className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-amber-700 hover:underline dark:text-amber-300"
                 >
-                  <span>{lang === 'fi' ? 'Avaa lause A2.no_leak_panic →' : 'Inspect A2.no_leak_panic →'}</span>
+                  <span>{t('Avaa lause A2.no_leak_panic →', 'Inspect A2.no_leak_panic →')}</span>
                 </button>
               </div>
             </div>
@@ -1062,15 +1004,11 @@ export function FormalExplorer() {
                 <h3 className="flex items-center gap-2 text-base font-bold text-fd-foreground">
                   <Play className="h-4 w-4 text-fd-primary" />
                   <span>
-                    {lang === 'fi'
-                      ? 'Interaktiivinen muisti- ja lainantarkistussimulaattori'
-                      : 'Interactive Memory & Borrow-Checker Step Simulator'}
+                    {t('Interaktiivinen muisti- ja lainantarkistussimulaattori', 'Interactive Memory & Borrow-Checker Step Simulator')}
                   </span>
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {lang === 'fi'
-                    ? 'Valitse skenaario ja astu eteenpäin nähdäksesi rinnakkain käännösaikaisen kontekstin Γ (Typing.lean) ja ajonaikaisen muistin Mem (Semantics.lean).'
-                    : 'Pick a scenario and step through to watch compile-time context Γ (Typing.lean) and runtime store Mem (Semantics.lean) side by side.'}
+                  {t('Valitse skenaario ja astu eteenpäin nähdäksesi rinnakkain käännösaikaisen kontekstin Γ (Typing.lean) ja ajonaikaisen muistin Mem (Semantics.lean).', 'Pick a scenario and step through to watch compile-time context Γ (Typing.lean) and runtime store Mem (Semantics.lean) side by side.')}
                 </p>
               </div>
 
@@ -1124,7 +1062,7 @@ export function FormalExplorer() {
                   className="inline-flex items-center gap-1 rounded-md border bg-fd-background px-3 py-1.5 text-xs font-medium disabled:opacity-40"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
-                  <span>{lang === 'fi' ? 'Edellinen' : 'Prev'}</span>
+                  <span>{t('Edellinen', 'Prev')}</span>
                 </button>
                 <span className="px-2 font-mono text-xs font-semibold">
                   {stepIdx + 1} / {currentScenario.steps.length}
@@ -1135,7 +1073,7 @@ export function FormalExplorer() {
                   disabled={stepIdx >= currentScenario.steps.length - 1}
                   className="inline-flex items-center gap-1 rounded-md bg-fd-primary px-3 py-1.5 text-xs font-medium text-fd-primary-foreground disabled:opacity-40"
                 >
-                  <span>{lang === 'fi' ? 'Seuraava askel' : 'Next Step'}</span>
+                  <span>{t('Seuraava askel', 'Next Step')}</span>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -1220,15 +1158,13 @@ export function FormalExplorer() {
               <div className="rounded-lg border bg-fd-background p-3.5">
                 <div className="mb-2 flex items-center justify-between border-b pb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-fd-muted-foreground">
-                    {lang === 'fi' ? '2. Käännösaikainen konteksti Γ' : '2. Compile-Time Context Γ'}
+                    {t('2. Käännösaikainen konteksti Γ', '2. Compile-Time Context Γ')}
                   </span>
                   <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-400">A2/Typing.lean</span>
                 </div>
                 {currentStep.ctx.length === 0 ? (
                   <div className="py-6 text-center text-xs text-fd-muted-foreground">
-                    {lang === 'fi'
-                      ? 'Konteksti Γ on tyhjä (kaikki lohkot ovat päättyneet).'
-                      : 'Context Γ is empty (all scopes have exited).'}
+                    {t('Konteksti Γ on tyhjä (kaikki lohkot ovat päättyneet).', 'Context Γ is empty (all scopes have exited).')}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2.5">
@@ -1284,13 +1220,13 @@ export function FormalExplorer() {
               <div className="rounded-lg border bg-fd-background p-3.5">
                 <div className="mb-2 flex items-center justify-between border-b pb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-fd-muted-foreground">
-                    {lang === 'fi' ? '3. Ajonaikainen muisti Mem' : '3. Runtime Store Mem'}
+                    {t('3. Ajonaikainen muisti Mem', '3. Runtime Store Mem')}
                   </span>
                   <span className="font-mono text-[11px] text-sky-600 dark:text-sky-400">A2/Semantics.lean</span>
                 </div>
 
                 <div className="text-[11px] font-semibold text-fd-muted-foreground">
-                  {lang === 'fi' ? 'Pinopaikat (m.st : Var → Option Slot):' : 'Variable Slots (m.st : Var → Option Slot):'}
+                  {t('Pinopaikat (m.st : Var → Option Slot):', 'Variable Slots (m.st : Var → Option Slot):')}
                 </div>
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {currentStep.slots.length === 0 ? (
@@ -1324,7 +1260,7 @@ export function FormalExplorer() {
                 </div>
 
                 <div className="mt-3 text-[11px] font-semibold text-fd-muted-foreground">
-                  {lang === 'fi' ? 'Keko-osoitteet (m.alloc : Nat → Bool):' : 'Heap Addresses (m.alloc : Nat → Bool):'}
+                  {t('Keko-osoitteet (m.alloc : Nat → Bool):', 'Heap Addresses (m.alloc : Nat → Bool):')}
                 </div>
                 <div className="mt-1.5 grid grid-cols-1 gap-1.5">
                   {currentStep.heap.map((hb) => (
@@ -1352,14 +1288,10 @@ export function FormalExplorer() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-fd-foreground">
-                  {lang === 'fi'
-                    ? 'Interaktiivinen efektihila (Eff.kills): Mitkä lainat säilyvät ja mitkä kuolevat?'
-                    : 'Interactive Effect & Invalidation Lattice (Eff.kills)'}
+                  {t('Interaktiivinen efektihila (Eff.kills): Mitkä lainat säilyvät ja mitkä kuolevat?', 'Interactive Effect & Invalidation Lattice (Eff.kills)')}
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {lang === 'fi'
-                    ? 'Kokeile mitä tahansa operaatiota säiliölle v (A2/Syntax.lean: Eff.kills e hv k) ja katso mitkä v:stä riippuvat sidonnat pysyvät elossa.'
-                    : 'Select an operation on root container v (A2/Syntax.lean: Eff.kills e hv k) to see which dependent bindings stay live vs get invalidated.'}
+                  {t('Kokeile mitä tahansa operaatiota säiliölle v (A2/Syntax.lean: Eff.kills e hv k) ja katso mitkä v:stä riippuvat sidonnat pysyvät elossa.', 'Select an operation on root container v (A2/Syntax.lean: Eff.kills e hv k) to see which dependent bindings stay live vs get invalidated.')}
                 </p>
               </div>
               <button
@@ -1398,9 +1330,7 @@ export function FormalExplorer() {
                   className="rounded"
                 />
                 <span>
-                  {lang === 'fi'
-                    ? 'Säiliön alkiot sisältävät näkymiä (Ty.holdsView = true)'
-                    : 'Container elements hold views (Ty.holdsView = true)'}
+                  {t('Säiliön alkiot sisältävät näkymiä (Ty.holdsView = true)', 'Container elements hold views (Ty.holdsView = true)')}
                 </span>
               </label>
             </div>
@@ -1475,13 +1405,7 @@ export function FormalExplorer() {
                               : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
                           }`}
                         >
-                          {c.killed
-                            ? lang === 'fi'
-                              ? 'KILLED (live := false)'
-                              : 'KILLED (live := false)'
-                            : lang === 'fi'
-                              ? 'SÄILYY (live = true)'
-                              : 'SURVIVES (live = true)'}
+                          {c.killed ? 'KILLED (live := false)' : t('SÄILYY (live = true)', 'SURVIVES (live = true)')}
                         </span>
                       </div>
                       <div className="mt-1.5 font-semibold text-fd-foreground">
@@ -1511,14 +1435,10 @@ export function FormalExplorer() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-fd-foreground">
-                  {lang === 'fi'
-                    ? 'Lean Blueprint -riippuvuusverkko (Lauseet & Moduulit)'
-                    : 'Interactive Lean Blueprint Dependency Graph (Theorems & Modules)'}
+                  {t('Lean Blueprint -riippuvuusverkko (Lauseet & Moduulit)', 'Interactive Lean Blueprint Dependency Graph (Theorems & Modules)')}
                 </h3>
                 <p className="mt-0.5 text-xs text-fd-muted-foreground">
-                  {lang === 'fi'
-                    ? 'Klikkaa mitä tahansa solmua nähdäksesi sen välittömät riippuvuudet (oranssi), siitä riippuvat lauseet (vihreä) sekä täydellisen Lean 4 -määritelmän.'
-                    : 'Click any node in the DAG to highlight its upstream dependencies (amber), downstream dependents (emerald), and inspect its formal Lean 4 statement.'}
+                  {t('Klikkaa mitä tahansa solmua nähdäksesi sen välittömät riippuvuudet (oranssi), siitä riippuvat lauseet (vihreä) sekä täydellisen Lean 4 -määritelmän.', 'Click any node in the DAG to highlight its upstream dependencies (amber), downstream dependents (emerald), and inspect its formal Lean 4 statement.')}
                 </p>
               </div>
 
@@ -1533,7 +1453,7 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {lang === 'fi' ? 'Päälauseiden Blueprint (21)' : 'Theorem Blueprint (21)'}
+                    {t('Päälauseiden Blueprint (21)', 'Theorem Blueprint (21)')}
                   </button>
                   <button
                     type="button"
@@ -1544,7 +1464,7 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {lang === 'fi' ? 'A2-modueliverkko (28)' : 'A2 Module DAG (28)'}
+                    {t('A2-modueliverkko (28)', 'A2 Module DAG (28)')}
                   </button>
                   <button
                     type="button"
@@ -1555,7 +1475,7 @@ export function FormalExplorer() {
                         : 'text-fd-muted-foreground hover:text-fd-foreground'
                     }`}
                   >
-                    {lang === 'fi' ? 'A1-modueliverkko (22)' : 'A1 Module DAG (22)'}
+                    {t('A1-modueliverkko (22)', 'A1 Module DAG (22)')}
                   </button>
                 </div>
 
@@ -1809,7 +1729,7 @@ export function FormalExplorer() {
                       className="inline-flex items-center gap-1.5 rounded-lg bg-fd-primary px-3 py-1.5 text-xs font-semibold text-fd-primary-foreground"
                     >
                       <Code2 className="h-3.5 w-3.5" />
-                      <span>{lang === 'fi' ? 'Avaa koodiselaimessa' : 'Open in Proof Browser'}</span>
+                      <span>{t('Avaa koodiselaimessa', 'Open in Proof Browser')}</span>
                     </button>
                     <a
                       href={`${GITHUB_BASE}/formal/A2/${selectedBpNode.module}.lean${
@@ -1832,11 +1752,11 @@ export function FormalExplorer() {
                 {/* Dependency pills */}
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                   <span className="font-semibold text-amber-600 dark:text-amber-400">
-                    {lang === 'fi' ? 'Käyttää (Uses):' : 'Depends on (Uses):'}
+                    {t('Käyttää (Uses):', 'Depends on (Uses):')}
                   </span>
                   {selectedBpNode.deps.length === 0 ? (
                     <span className="text-fd-muted-foreground">
-                      {lang === 'fi' ? 'Perusmääritelmä (ei riippuvuuksia)' : 'Foundational definition'}
+                      {t('Perusmääritelmä (ei riippuvuuksia)', 'Foundational definition')}
                     </span>
                   ) : (
                     selectedBpNode.deps.map((depId) => (
@@ -1899,9 +1819,7 @@ export function FormalExplorer() {
                         >
                           <FileCode className="h-3.5 w-3.5" />
                           <span>
-                            {lang === 'fi'
-                              ? `Selaa moduulin ${mod.counts.total} määritelmää`
-                              : `Browse all ${mod.counts.total} declarations`}
+                            {t(`Selaa moduulin ${mod.counts.total} määritelmää`, `Browse all ${mod.counts.total} declarations`)}
                           </span>
                         </button>
                         <a
@@ -1918,7 +1836,7 @@ export function FormalExplorer() {
 
                     <div className="mt-3 flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-semibold text-fd-muted-foreground">
-                        {lang === 'fi' ? 'Tuonnit (Imports):' : 'Imports:'}
+                        {t('Tuonnit (Imports):', 'Imports:')}
                       </span>
                       {mod.imports.length === 0 ? (
                         <span className="text-xs text-fd-muted-foreground">none (root module)</span>
@@ -1989,9 +1907,7 @@ export function FormalExplorer() {
               className="rounded-lg border bg-fd-background px-3 py-1.5 text-xs font-medium"
             >
               <option value="all">
-                {lang === 'fi'
-                  ? `Kaikki moduulit (${formalData.modules[browserPhase].length})`
-                  : `All modules (${formalData.modules[browserPhase].length})`}
+                {t(`Kaikki moduulit (${formalData.modules[browserPhase].length})`, `All modules (${formalData.modules[browserPhase].length})`)}
               </option>
               {formalData.modules[browserPhase].map((m) => (
                 <option key={m.name} value={m.name}>
@@ -2006,7 +1922,7 @@ export function FormalExplorer() {
               onChange={(e) => setBrowserKind(e.target.value)}
               className="rounded-lg border bg-fd-background px-3 py-1.5 text-xs font-medium"
             >
-              <option value="all">{lang === 'fi' ? 'Kaikki tyypit' : 'All kinds'}</option>
+              <option value="all">{t('Kaikki tyypit', 'All kinds')}</option>
               <option value="theorem">theorem / lemma</option>
               <option value="inductive">inductive</option>
               <option value="structure">structure</option>
@@ -2020,17 +1936,16 @@ export function FormalExplorer() {
                 type="text"
                 value={browserSearch}
                 onChange={(e) => setBrowserSearch(e.target.value)}
-                placeholder={
-                  lang === 'fi'
-                    ? 'Hae lauseen nimellä, tyypillä tai selitteellä (esim. no_leak, panic_unwind, Eff.kills)…'
-                    : 'Search theorem name, signature, or docstring (e.g. no_leak, panic_unwind, Eff.kills)…'
-                }
+                placeholder={t(
+                  'Hae lauseen nimellä, tyypillä tai selitteellä (esim. no_leak, panic_unwind, Eff.kills)…',
+                  'Search theorem name, signature, or docstring (e.g. no_leak, panic_unwind, Eff.kills)…',
+                )}
                 className="w-full rounded-lg border bg-fd-background py-1.5 pl-8 pr-3 text-xs"
               />
             </div>
 
             <span className="font-mono text-xs text-fd-muted-foreground">
-              {filteredDecls.length} {lang === 'fi' ? 'osumaa' : 'results'}
+              {filteredDecls.length} {t('osumaa', 'results')}
             </span>
           </div>
 
@@ -2074,9 +1989,7 @@ export function FormalExplorer() {
               })}
               {filteredDecls.length > 250 && (
                 <div className="p-3 text-center text-xs text-fd-muted-foreground">
-                  {lang === 'fi'
-                    ? `Näytetään ensimmäiset 250 / ${filteredDecls.length}. Tarkenna hakua.`
-                    : `Showing first 250 of ${filteredDecls.length}. Refine search or module filter.`}
+                  {t(`Näytetään ensimmäiset 250 / ${filteredDecls.length}. Tarkenna hakua.`, `Showing first 250 of ${filteredDecls.length}. Refine search or module filter.`)}
                 </div>
               )}
             </div>
@@ -2107,7 +2020,7 @@ export function FormalExplorer() {
                       rel="noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-lg border bg-fd-muted/40 px-3 py-1.5 text-xs font-medium hover:bg-fd-muted"
                     >
-                      <span>{lang === 'fi' ? 'Katso GitHubissa' : 'View on GitHub'}</span>
+                      <span>{t('Katso GitHubissa', 'View on GitHub')}</span>
                       <ExternalLink className="h-3.5 w-3.5" />
                     </a>
                   </div>
@@ -2123,9 +2036,7 @@ export function FormalExplorer() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="rounded-lg border bg-fd-muted/20 p-2.5">
                       <div className="text-[11px] font-bold uppercase text-amber-600 dark:text-amber-400">
-                        {lang === 'fi'
-                          ? `Käyttää (${activeDecl.deps.length}):`
-                          : `Uses / Depends on (${activeDecl.deps.length}):`}
+                        {t(`Käyttää (${activeDecl.deps.length}):`, `Uses / Depends on (${activeDecl.deps.length}):`)}
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {activeDecl.deps.length === 0 ? (
@@ -2147,14 +2058,12 @@ export function FormalExplorer() {
 
                     <div className="rounded-lg border bg-fd-muted/20 p-2.5">
                       <div className="text-[11px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
-                        {lang === 'fi'
-                          ? `Käytetään lauseissa (${activeDecl.usedBy.length}):`
-                          : `Used by (${activeDecl.usedBy.length}):`}
+                        {t(`Käytetään lauseissa (${activeDecl.usedBy.length}):`, `Used by (${activeDecl.usedBy.length}):`)}
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {activeDecl.usedBy.length === 0 ? (
                           <span className="text-xs text-fd-muted-foreground">
-                            {lang === 'fi' ? 'Huippulause / päätelmä' : 'Top-level theorem'}
+                            {t('Huippulause / päätelmä', 'Top-level theorem')}
                           </span>
                         ) : (
                           activeDecl.usedBy.map((u) => (
@@ -2183,7 +2092,7 @@ export function FormalExplorer() {
                           rel="noreferrer"
                           className="text-fd-primary hover:underline"
                         >
-                          {lang === 'fi' ? 'Avaa koko todistus GitHubissa →' : 'Open full proof on GitHub →'}
+                          {t('Avaa koko todistus GitHubissa →', 'Open full proof on GitHub →')}
                         </a>
                       )}
                     </div>
@@ -2199,7 +2108,7 @@ export function FormalExplorer() {
       )}
 
       {/* =====================================================================
-          TAB 4: 286 SOUNDNESS HOLES CORPUS & FORMAL RULES MATRIX
+          TAB 4: SOUNDNESS HOLES CORPUS & FORMAL RULES MATRIX
          ===================================================================== */}
       {activeTab === 'holes' && (
         <div className="rounded-xl border bg-fd-card p-5">
@@ -2214,9 +2123,10 @@ export function FormalExplorer() {
                     : 'text-fd-muted-foreground'
                 }`}
               >
-                {lang === 'fi'
-                  ? `286 Reikäkoetta (tools/fuzz/holes/ h01–h298)`
-                  : `286 Soundness Hole Probes (h01–h298)`}
+                {t(
+                  `${formalData.stats.holesCount} Reikäkoetta (tools/fuzz/holes/)`,
+                  `${formalData.stats.holesCount} Soundness Hole Probes`,
+                )}
               </button>
               <button
                 type="button"
@@ -2227,9 +2137,7 @@ export function FormalExplorer() {
                     : 'text-fd-muted-foreground'
                 }`}
               >
-                {lang === 'fi'
-                  ? `docs/MEMORY.md → Lean-sääntömatriisi (${formalData.rules.length})`
-                  : `docs/MEMORY.md → Formal Rules Matrix (${formalData.rules.length})`}
+                {t(`docs/MEMORY.md → Lean-sääntömatriisi (${formalData.rules.length})`, `docs/MEMORY.md → Formal Rules Matrix (${formalData.rules.length})`)}
               </button>
             </div>
 
@@ -2247,7 +2155,7 @@ export function FormalExplorer() {
                     }`}
                   >
                     {ph === 'all'
-                      ? `${lang === 'fi' ? 'Kaikki' : 'All'} (${formalData.stats.holesCount})`
+                      ? `${t('Kaikki', 'All')} (${formalData.stats.holesCount})`
                       : `${ph} (${formalData.stats.holesByPhase[ph]})`}
                   </button>
                 ))}
@@ -2257,7 +2165,7 @@ export function FormalExplorer() {
                     type="text"
                     value={holeSearch}
                     onChange={(e) => setHoleSearch(e.target.value)}
-                    placeholder={lang === 'fi' ? 'Hae reikää (esim. slice, closure)…' : 'Filter holes (e.g. slice, closure)…'}
+                    placeholder={t('Hae reikää (esim. slice, closure)…', 'Filter holes (e.g. slice, closure)…')}
                     className="w-full rounded-lg border bg-fd-background py-1.5 pl-8 pr-3 text-xs"
                   />
                 </div>
@@ -2339,7 +2247,7 @@ export function FormalExplorer() {
 
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
                   <span className="font-bold text-fd-foreground">
-                    {lang === 'fi' ? 'Mitä reikäkoe yrittää tehdä: ' : 'What this soundness probe attempts: '}
+                    {t('Mitä reikäkoe yrittää tehdä: ', 'What this soundness probe attempts: ')}
                   </span>
                   <span className="text-fd-foreground/90">{selectedHole.note}</span>
                 </div>
@@ -2360,10 +2268,10 @@ export function FormalExplorer() {
                 <thead>
                   <tr className="border-b bg-fd-muted/40">
                     <th className="p-2.5 font-semibold">docs/MEMORY.md</th>
-                    <th className="p-2.5 font-semibold">{lang === 'fi' ? 'Omistajuussääntö' : 'Ownership Rule'}</th>
+                    <th className="p-2.5 font-semibold">{t('Omistajuussääntö', 'Ownership Rule')}</th>
                     <th className="p-2.5 font-semibold">Phase</th>
                     <th className="p-2.5 font-semibold">
-                      {lang === 'fi' ? 'Formaali Lean-vastine' : 'Formal Lean Counterpart'}
+                      {t('Formaali Lean-vastine', 'Formal Lean Counterpart')}
                     </th>
                     <th className="p-2.5 font-semibold">Status</th>
                   </tr>

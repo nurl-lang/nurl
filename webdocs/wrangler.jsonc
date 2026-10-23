@@ -11,7 +11,7 @@
   // Assets-only Worker: serves the static `next build` (output: 'export')
   // output, no Worker script. Search runs against a build-time Orama index
   // fetched and queried client-side (see components/search.tsx) instead of
-  // a live API route — see content/docs/fumadocs-migration.mdx for why.
+  // a live API route, which a static export cannot serve.
   "assets": {
     "directory": "./out",
     "not_found_handling": "404-page"

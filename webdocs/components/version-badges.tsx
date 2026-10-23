@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { siteFacts } from '@/lib/site-facts';
+import { docsCommit, nurlVersion } from '@/lib/release-facts.generated';
 import { gitConfig } from '@/lib/shared';
 
 export function Pill({ href, children }: { href: string; children: ReactNode }) {
@@ -19,11 +19,11 @@ export function VersionBadges() {
   const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
 
   return (
-    <div className="m-2 flex flex-wrap items-center gap-2 jusify-between">
+    <div className="m-2 flex flex-wrap items-center gap-2 justify-between">
       <Pill href={`${repoUrl}/blob/${gitConfig.branch}/CHANGELOG.md`}>
-        NURL {siteFacts.nurlVersion}
+        NURL {nurlVersion}
       </Pill>
-      <Pill href={`${repoUrl}/commit/${siteFacts.docsCommit}`}>docs {siteFacts.docsCommit}</Pill>
+      <Pill href={`${repoUrl}/commit/${docsCommit}`}>docs {docsCommit}</Pill>
     </div>
   );
 }

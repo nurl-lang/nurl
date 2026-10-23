@@ -14,7 +14,6 @@
     "deploy": "pnpm run build && wrangler deploy"
   },
   "dependencies": {
-    "cnfast": "^0.0.8",
     "fumadocs-core": "16.15.8",
     "fumadocs-mdx": "15.4.0",
     "fumadocs-ui": "npm:@fumadocs/base-ui@16.15.8",

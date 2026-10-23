@@ -5,8 +5,7 @@ import { Pill } from '@/components/version-badges';
 import { benchmarkStats } from '@/lib/benchmark-stats.generated';
 import { contributors } from '@/lib/contributors.generated';
 import targetFacts from '@/site-facts.json';
-import { releaseFacts } from '@/lib/release-facts.generated';
-import { siteFacts } from '@/lib/site-facts';
+import { docsCommit, nurlVersion, releaseFacts } from '@/lib/release-facts.generated';
 import { gitConfig } from '@/lib/shared';
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
@@ -85,7 +84,7 @@ export default function HomePage() {
           <img src="/graphics/nurl1c.svg" alt="NURL" className="mb-6 h-24 w-24" />
           <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">NURL</h1>
           <div className="mt-4">
-            <Pill href={`${repoUrl}/blob/${gitConfig.branch}/CHANGELOG.md`}>{siteFacts.nurlVersion}</Pill>
+            <Pill href={`${repoUrl}/blob/${gitConfig.branch}/CHANGELOG.md`}>{nurlVersion}</Pill>
           </div>
           <p className="mt-6 max-w-2xl text-lg text-fd-muted-foreground">
             A compiled language without a virtual machine, garbage collector, or interpreter — designed as a target for LLM code generation, with deterministic builds and native LLVM performance.
@@ -192,8 +191,8 @@ export default function HomePage() {
             <thead className="border-b bg-fd-muted text-xs text-fd-foreground/70">
               <tr>
                 <th scope="col" className="px-4 py-3 font-medium">Benchmark</th>
-                {benchmarkStats.columns.map((column) => (
-                  <th key={column.label} scope="col" className={`px-3 py-3 text-center font-medium ${column.nurl ? 'text-fd-primary' : ''}`}>{column.label}</th>
+                {benchmarkStats.columns.map((label, index) => (
+                  <th key={label} scope="col" className={`px-3 py-3 text-center font-medium ${index === 0 ? 'text-fd-primary' : ''}`}>{label}</th>
                 ))}
               </tr>
             </thead>
@@ -202,9 +201,9 @@ export default function HomePage() {
                 <tr key={row.name}>
                   <td className="px-4 py-3"><code className="font-medium">{row.name}</code><span className="mt-1 block text-xs text-fd-muted-foreground">{row.blurb}</span></td>
                   {row.values.map((value, index) => {
-                    const column = benchmarkStats.columns[index];
-                    const nurlWin = column.nurl && row.nurlWins;
-                    return <td key={column.label} className={`px-3 py-3 text-center tabular-nums ${nurlWin ? 'bg-fd-primary/10 font-semibold text-fd-primary' : column.nurl ? 'font-medium' : ''}`}>{value}</td>;
+                    const isNurl = index === 0;
+                    const nurlWin = isNurl && row.nurlWins;
+                    return <td key={benchmarkStats.columns[index]} className={`px-3 py-3 text-center tabular-nums ${nurlWin ? 'bg-fd-primary/10 font-semibold text-fd-primary' : isNurl ? 'font-medium' : ''}`}>{value}</td>;
                   })}
                 </tr>
               ))}
