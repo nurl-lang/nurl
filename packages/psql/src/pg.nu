@@ -707,21 +707,6 @@ $ `stdlib/core/slice.nu`
     ^ | != 0 ( nurl_str_eq code `26000` ) != 0 ( nurl_str_eq code `0A000` )
 }
 
-// The statement for `sql`: taken out of the cache (it goes back after
-// the run), or prepared under a fresh name.
-@ __pg_stmt_take inout PgConnImpl c s sql i hsh → !PgStmt PgErr {
-    ?? ( vec_remove [PgStmt] . c stmts ( __pg_stmt_find c sql hsh ) ) {
-        T x → { ^ @ !PgStmt PgErr { T x } }
-        F → {}
-    }
-    ( __pg_stmt_trim c . c stmt_cap )
-    : String name ( string_with_cap 24 )
-    ( string_push_str name `nurl_s` )
-    ( string_push_int name . c stmt_seq )
-    = . c stmt_seq + . c stmt_seq 1
-    ^ ( __pg_prepare c sql ( string_data name ) )
-}
-
 @ __pg_extended inout PgConnImpl c s sql ( Vec PgVal ) params → !PgResult PgErr {
     ? . c broken { ^ @ !PgResult PgErr { F # PgErr PgConnFail } } {}
     = . c clock + . c clock 1
@@ -736,7 +721,17 @@ $ `stdlib/core/slice.nu`
     ~ T {
         // The statement, out of the cache for the run (and back in after),
         // or prepared now.
-        : ~ PgStmt st \ ( __pg_stmt_take c sql hsh )
+        : ~ PgStmt st ?? ( vec_remove [PgStmt] . c stmts ( __pg_stmt_find c sql hsh ) ) {
+            T x → x
+            F → {
+                ( __pg_stmt_trim c . c stmt_cap )
+                : String name ( string_with_cap 24 )
+                ( string_push_str name `nurl_s` )
+                ( string_push_int name . c stmt_seq )
+                = . c stmt_seq + . c stmt_seq 1
+                \ ( __pg_prepare c sql ( string_data name ) )
+            }
+        }
         = . st used . c clock
         : !PgResult PgErr r ( __pg_execute c st params )
         // A stale statement outside a transaction failed before it did

@@ -306,3 +306,4 @@ h316_vector_result_keeps_its_temporary	§7.1	A2	a call returning a v128 was take
 h317_frozen_asserted_over_a_cell	§6.5	A3	a program's own % Frozen over a Cell, in an RwLocked, written through read guards on two threads: % Frozen only adds checks (question #21, rejected already)	rejected
 h318_send_asserted_by_safe_code	§3	B	safe code asserted % Send over an Rc and raced its count from two threads; a positive marker is now unsafe % Send (heap-use-after-free)	rejected
 h319_member_table_copy_on_two_threads	§6.5	A3	two copies of one PkMemberTable, one moved to a thread, both grew its member Vec (dist/heartbeat's shape); the table is % NotSend	rejected
+h320_match_try_owned_join	§7.6	A2	a fresh handle try-unwrapped in a braced ?? arm lost its ownership at the join and leaked after storage; every arm now contributes an explicit ownership-lattice element	runs-clean

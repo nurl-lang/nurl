@@ -5665,6 +5665,12 @@ unsafe @ gen_ret i lex i syms i cg → s {
 }
 
 @ gen_expr i lex i syms i cg → s {
+    // Value-ownership provenance is consume-latest state, just like the
+    // existing call / join side channels. Clear it for EVERY expression so a
+    // preceding binding or inner statement cannot masquerade as this value.
+    // Transparent producers (block, try, conditional, match) republish their
+    // own lattice element before returning.
+    ( nurl_sym_def syms `__last_value_hown__` `` )
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT ( gen_int_lit lex )
     ? == tt TT_FLOAT ( gen_float_lit lex )
@@ -17113,6 +17119,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // path's scope-exit drop then freed .rodata (SEGV).
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    // Ownership is a value property, not a token property. Clear the
+    // expression channel so this arm must publish its own lattice element:
+    // borrowed (`false`), owned (`true`), or path-dependent (an i1 SSA value).
+    ( nurl_sym_def syms `__last_value_hown__` `` )
     // Variant-join blessing gets the same per-arm reset+snapshot
     // discipline as the ownership channels above: a nested `?`-join of
     // variants publishes into it, and stale residue must not bless an
@@ -17311,6 +17321,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_slice_owned__` `` )
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    ( nurl_sym_def syms `__last_value_hown__` `` )
     ( nurl_sym_def syms `__last_join_variant_enum__` `` )
     ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     ( nurl_sym_def syms `__last_phi_idents__` `` )
@@ -17735,6 +17746,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : b __alias_res & & & __t_alias_ok __e_alias_ok __slice_live
     ( seq ( nurl_llty phi_ty ) `i8*` )
     ( nurl_sym_def syms `__last_value_alias__` ? __alias_res `1` `` )
+    // Publish the join's lattice element as a property of its result. An
+    // enclosing block, try, or join consumes this channel without re-reading
+    // the surface tokens that happened to produce the value.
+    ( nurl_sym_def syms `__last_value_hown__`
+    ( nurl_sym_get syms `__last_join_own__` ) )
     // ── Stack-reference provenance of the `?`-result (§2.3) ──────────
     // A phi carries a stack reference exactly as it carries a handle:
     // `^ ? c f f` returns the same pointer into the dead frame that
@@ -19221,6 +19237,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( nurl_sym_def syms `__last_ident_name__` `` )
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_value_alias__` `` )
+            ( nurl_sym_def syms `__last_value_hown__` `` )
             ( nurl_sym_def syms `__last_call_guard__` `` )
             // Reset the join-variant channel against residue, and
             // snapshot the arm body's FIRST token: variant evidence must
@@ -19671,6 +19688,8 @@ unsafe @ gen_match i lex i syms i cg → s {
         // residue must not leak out as this match's proof.
         ( nurl_sym_def syms `__last_join_variant_enum__`
         ? & m_ven_ok != 0 ( nurl_str_len m_ven ) m_ven `` )
+        ( nurl_sym_def syms `__last_value_hown__`
+        ( nurl_sym_get syms `__last_join_own__` ) )
         // Stack-reference provenance of the `??`-result (§2.3). Every
         // exit of this function publishes it, because the per-arm reset
         // above otherwise leaves the LAST arm's depth standing as the
@@ -19700,6 +19719,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
         ( nurl_sym_def syms `__last_value_alias__` `` )
+        ( nurl_sym_def syms `__last_value_hown__` `` )
         // An integer join cannot carry a heap handle.
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -19710,6 +19730,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     } {}
     ( nurl_set_last_type `void` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    ( nurl_sym_def syms `__last_value_hown__` `` )
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
@@ -40269,6 +40290,17 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : s val ( gen_expr lex syms cg )
     ( nurl_sym_def syms `__last_try_inner_tt__` ( nurl_str_int __try_inner_tt ) )
     : s vt ( nurl_get_last_type )
+    // Snapshot ownership before generating the failure cleanup: that code may
+    // emit calls of its own and overwrite the call channels. This is the
+    // ownership lattice element of the VALUE being unwrapped — `false`
+    // (borrowed), `true` (owned), or an i1 predicate for path-dependent
+    // ownership. The Ok payload inherits it unchanged.
+    : ~ s __try_hown ``
+    ? == __try_inner_tt TT_LPAREN { = __try_hown ( mem_call_retown syms cg ) } {
+        ? & | == __try_inner_tt TT_QUEST == __try_inner_tt TT_QUESTQUEST
+        != 0 ( nurl_sym_len syms `__last_join_own__` )
+        { = __try_hown ( nurl_str_cat ( nurl_sym_get syms `__last_join_own__` ) `` ) } {}
+    }
     // T7: verify expression is opt or res type (must start with "{ i1, ")
     : b is_opt_res & >= ( nurl_str_len vt ) 6
     ( seq ( nurl_str_slice vt 0 6 ) `{ i1, ` )
@@ -40413,6 +40445,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
     ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
     ( nurl_set_last_type inner_ty )
+    // Publish the unwrapped value's lattice element independently of its
+    // surface syntax. A surrounding block or `??` arm consumes this channel;
+    // it never has to guess that `\ (call)` was a call from its first token.
+    ( nurl_sym_def syms `__last_value_hown__` __try_hown )
     res
 }
 
@@ -51179,6 +51215,23 @@ unsafe @ __clo_take_capture i syms s name → v {
     ^ ( nurl_str_cat3 a `\n` b )
 }
 
+// Ownership lattice for value-producing expressions:
+//
+//   borrowed = false
+//   owned    = true
+//   mixed    = an i1 SSA predicate (owned on exactly the true paths)
+//
+// A control-flow join is the path-sensitive least upper bound: it phis the
+// incoming predicates. Keeping the predicate, instead of collapsing mixed to
+// either extreme, avoids both choices' failure mode (leak vs. double-free).
+// Normalise the numeric spellings used by binding flags into the IR spellings
+// used by join phis.
+@ mem_own_lattice s own → s {
+    ? ( seq own `0` ) { ^ ( nurl_str_cat `false` `` ) } {}
+    ? ( seq own `1` ) { ^ ( nurl_str_cat `true` `` ) } {}
+    ^ ( nurl_str_cat own `` )
+}
+
 @ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
     // An option / result of one counts as its registration twin; a value
     // that cannot be copied is handed over the same way (a payload cursor
@@ -51250,6 +51303,13 @@ unsafe @ __clo_take_capture i syms s name → v {
         } {}
         ^ ( nurl_str_cat ijo `` )
     } {}
+    // Prefer the value's explicit lattice element after the context-sensitive
+    // cases above. A nested join can call a payload "borrowed" relative to
+    // itself while that payload is local to THIS arm and must therefore move
+    // through the outer join. Transparent try expressions have no such
+    // promotion and arrive here with their published lattice element intact.
+    : s explicit ( nurl_sym_get syms `__last_value_hown__` )
+    ? != 0 ( nurl_str_len explicit ) { ^ ( mem_own_lattice explicit ) } {}
     // `{ … ( f ) }`: a block arm hands over what its tail call does — also
     // when the callee is summarised as lending (`__ret_borrow`): it may lend
     // on some paths only, and then answers per call; otherwise its bit is

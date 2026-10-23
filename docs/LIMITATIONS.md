@@ -17,7 +17,7 @@ does not see that the copies are one value
 Workaround: a value holding such a handle moves to a thread with no copy
 kept; state threads share and change is a `Locked`. Every other safe
 program found accepted and faulting is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h319`);
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h320`);
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).
