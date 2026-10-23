@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where NURL trails and what the gap is made of.
 - `packages/http-client` 0.3.6: `http_client_set_resume` — turn TLS
   session resumption off for a client.
+- `compiler/tests/x25519_wycheproof`: all 518 X25519 cases of Project
+  Wycheproof (edge-case multiplications, twist points, low-order and
+  non-canonical public keys), and `x25519_base_agree`: the fixed-base
+  public key against the ladder for 300 scalars, seven of them chosen to
+  walk the signed-digit recoding's carries.
 - **The SHA tier: SHA-256 on the x86 SHA extensions, ~7× faster.**
   Three new crypto primitives, `nurl_v128_sha256rnds2`, `_sha256msg1`
   and `_sha256msg2` (Intel's SHA256RNDS2 / MSG1 / MSG2), under the same
@@ -44,6 +49,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **X25519 key generation 37 % faster: 18.3 → 11.6 µs locally (aws-lc-rs
+  8.2).** The public key (`x25519_base`) ran a 4-tooth comb: 64 windows,
+  each a doubling, a scan of sixteen table entries and a mixed addition.
+  It is now ref10's fixed-base method: the clamped scalar recoded into 64
+  signed radix-16 digits, a table of j·256^k·B (k < 32, j ≤ 8) in affine
+  niels form built once per process with a single batched inversion, then
+  64 mixed additions against one masked row scan each and only four
+  doublings. Both X25519 paths now run on one scalar field of four 64-bit
+  words, lazily reduced (2^256 ≡ 38), in place of five 51-bit limbs: a
+  multiply is 16 + 4 products instead of 25 and a square 10 + 4 instead of
+  15. The ladder (`x25519`) is unchanged in speed — it is at what LLVM
+  makes of portable 64-bit code, which a clang build of the same algorithm
+  confirms — and its swap is now one per bit (RFC 7748's) instead of two.
+  The rest of its gap to assembly implementations is the dual carry chain
+  (mulx + adcx/adox), agora #95.
 - **P-256 ECDH twice as fast, ECDSA verify twice as fast, no BigInt on
   either path.** The variable-base scalar multiply (`p256ct_scalarmult`:
   ECDH against a peer's share) ran the complete RCB projective formula

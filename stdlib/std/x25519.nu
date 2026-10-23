@@ -4,12 +4,15 @@
 // multiplication over GF(2^255 − 19), so a NURL program can do the key
 // exchange for TLS 1.3 / Noise / age with nothing installed on the host.
 //
-// The ladder is the well-trodden TweetNaCl one (Bernstein et al.); the
-// field underneath it is curve25519-donna-c64 — five unsigned 64-bit
-// limbs at radix 2^51, each product a full 64×64→128 multiply via
-// nurl_umulhi. Every branch is data-independent (the conditional swap is
-// a constant-time mask), so the ladder runs in constant time w.r.t. the
-// scalar.
+// The ladder is RFC 7748's; the field underneath it is GF(2^255 − 19) in
+// four saturated 64-bit words, lazily reduced, each product one
+// `nurl_mac` (__f4_mul_in). The public key (x25519_base) is ref10's
+// signed-digit fixed-base method on the equivalent Edwards curve. Every
+// branch is data-independent (swaps and table reads are constant-time
+// masks), so both run in constant time w.r.t. the scalar.
+//
+// The five-limb radix-2^51 field (_A / _Z / _M / _S, donna-c64) stays for
+// std/ed25519, which is written on it.
 //
 // Public surface:
 //   ( x25519 scalar point ) → ( Vec u )   scalar·point  (both 32 bytes)
@@ -37,9 +40,8 @@ $ `stdlib/core/vec.nu`
 // Every one of those loops is fixed-count over a five-limb gf, so the
 // bounds check is provably redundant — but it is a real call, and one
 // fixed-base X25519 (the comb behind x25519_base, inversion included)
-// makes ~1200 field multiplies and squarings. The variable-base ladder
-// (__scalarmult) keeps its limbs in u64 locals (__fe_mul / __fe_sq)
-// instead. Constant time is unaffected: the trip counts are fixed and
+// makes ~1200 field multiplies and squarings. X25519 itself keeps its
+// words in u64 locals (__f4_mul_in / __f4_sq_in) instead. Constant time is unaffected: the trip counts are fixed and
 // the data takes no branch.
 
 @ _x_bget ( Vec u ) v i k → i {
@@ -469,170 +471,198 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
     ( _gf_into io z10 )
 }
 
-// ── the ladder's field, on scalar limbs ───────────────────────────
-// The variable-base ladder keeps its field elements as u64 locals, five
-// to an element; a field operation takes its operands by value and writes
-// the limbs of its result `inout`. A `( Vec i )` element lives behind a
-// pointer the optimiser cannot see through: each _M/_S/_A/_Z stored its
-// five limbs and the next operation loaded them back. The arithmetic is
-// _A/_Z/_M/_S's, limb for limb.
+// ── the ladder's field: four 64-bit words ─────────────────────────
+// The variable-base ladder and the fixed-base keygen keep their field
+// elements as u64 locals, FOUR to an element — the saturated radix-2^64
+// form — and a field operation takes its operands by value and writes the
+// words of its result `inout`.
 //
-// The multiply and the square stay functions of their own (only the
-// add, subtract and swap inline). Inlined too, with the ladder in an
-// x86-64-v3 clone for mulx, one scalar multiply ran 30 % faster still —
-// but the ladder became one function of some ten thousand i128-heavy IR
-// instructions, InstCombine and the SLP vectoriser took seconds over it,
-// and every program that does TLS compiled about three seconds slower.
-// Out of line, a TLS program builds about as fast as with the Vec form.
+// Why four words and not donna's five 51-bit limbs (the _A/_Z/_M/_S
+// field above, which ed25519 keeps): a multiply is 16 products and the
+// reduction 4 more (2^256 ≡ 38), against 25; a square 10 + 4 against 15;
+// and an element is four registers, not five, in a ladder step that keeps
+// five elements live. Every product step is one `nurl_mac` — the
+// backend's widening multiply with the carry threaded through the flags
+// as an add/adc chain — so measured on its own the multiply ran 21 %
+// faster than the five-limb one, and the ladder step lost about a third
+// of its instructions. What the saturated form costs back is a carry
+// chain on add and subtract (8 a step).
+//
+// Values are kept LAZILY reduced: any 256-bit pattern is a valid element
+// (it stands for itself mod p), and every operation maps operands
+// < 2^256 to a result < 2^256 by folding the carry out of bit 256 back in
+// as 38. Only __f4_pack reduces to the canonical residue. Every step is a
+// fixed sequence of instructions: nothing branches on the data.
 
-// o ← a + b (_A)
-inline @ __fe_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
-    = o0 + a0 b0
-    = o1 + a1 b1
-    = o2 + a2 b2
-    = o3 + a3 b3
-    = o4 + a4 b4
+// o ← s + 38·c for a 4-word s and a carry c ≤ 2^17, as < 2^256. The fold
+// itself can carry out of bit 256 once more; then s + 38·c − 2^256 < 38·c
+// is small, so the second 38 lands in o0 with no carry to propagate.
+inline @ __f4_fold38 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 s0 u64 s1 u64 s2 u64 s3 u64 c → v {
+    : u64 m * c 38
+    : u64 r0 ( nurl_addc_lo s0 m 0 )
+    : u64 k0 ( nurl_addc_hi s0 m 0 )
+    : u64 r1 ( nurl_addc_lo s1 0 k0 )
+    : u64 k1 ( nurl_addc_hi s1 0 k0 )
+    : u64 r2 ( nurl_addc_lo s2 0 k1 )
+    : u64 k2 ( nurl_addc_hi s2 0 k1 )
+    = o3 ( nurl_addc_lo s3 0 k2 )
+    : u64 k3 ( nurl_addc_hi s3 0 k2 )
+    = o0 + r0 * k3 38
+    = o1 r1
+    = o2 r2
 }
 
-// o ← a − b + 2p (_Z)
-inline @ __fe_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
-    = o0 - + a0 4503599627370458 b0
-    = o1 - + a1 4503599627370494 b1
-    = o2 - + a2 4503599627370494 b2
-    = o3 - + a3 4503599627370494 b3
-    = o4 - + a4 4503599627370494 b4
+// o ← a + b
+inline @ __f4_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    : u64 s0 ( nurl_addc_lo a0 b0 0 )
+    : u64 c0 ( nurl_addc_hi a0 b0 0 )
+    : u64 s1 ( nurl_addc_lo a1 b1 c0 )
+    : u64 c1 ( nurl_addc_hi a1 b1 c0 )
+    : u64 s2 ( nurl_addc_lo a2 b2 c1 )
+    : u64 c2 ( nurl_addc_hi a2 b2 c1 )
+    : u64 s3 ( nurl_addc_lo a3 b3 c2 )
+    : u64 c3 ( nurl_addc_hi a3 b3 c2 )
+    ( __f4_fold38 o0 o1 o2 o3 s0 s1 s2 s3 c3 )
 }
 
-// o ← a · b mod p (_M), inlined for the ladder loop body
-inline @ __fe_mul_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
-    : u64 f1 * a1 19
-    : u64 f2 * a2 19
-    : u64 f3 * a3 19
-    : u64 f4 * a4 19
-    : ~ u64 l0 * a0 b0
-    : ~ u64 h0 ( nurl_umulhi a0 b0 )
-    = h0 + h0 ( nurl_mac_hi f4 b1 l0 0 ) = l0 ( nurl_mac_lo f4 b1 l0 0 )
-    = h0 + h0 ( nurl_mac_hi f1 b4 l0 0 ) = l0 ( nurl_mac_lo f1 b4 l0 0 )
-    = h0 + h0 ( nurl_mac_hi f2 b3 l0 0 ) = l0 ( nurl_mac_lo f2 b3 l0 0 )
-    = h0 + h0 ( nurl_mac_hi f3 b2 l0 0 ) = l0 ( nurl_mac_lo f3 b2 l0 0 )
-    : ~ u64 l1 * a0 b1
-    : ~ u64 h1 ( nurl_umulhi a0 b1 )
-    = h1 + h1 ( nurl_mac_hi a1 b0 l1 0 ) = l1 ( nurl_mac_lo a1 b0 l1 0 )
-    = h1 + h1 ( nurl_mac_hi f4 b2 l1 0 ) = l1 ( nurl_mac_lo f4 b2 l1 0 )
-    = h1 + h1 ( nurl_mac_hi f2 b4 l1 0 ) = l1 ( nurl_mac_lo f2 b4 l1 0 )
-    = h1 + h1 ( nurl_mac_hi f3 b3 l1 0 ) = l1 ( nurl_mac_lo f3 b3 l1 0 )
-    : ~ u64 l2 * a0 b2
-    : ~ u64 h2 ( nurl_umulhi a0 b2 )
-    = h2 + h2 ( nurl_mac_hi a1 b1 l2 0 ) = l2 ( nurl_mac_lo a1 b1 l2 0 )
-    = h2 + h2 ( nurl_mac_hi a2 b0 l2 0 ) = l2 ( nurl_mac_lo a2 b0 l2 0 )
-    = h2 + h2 ( nurl_mac_hi f4 b3 l2 0 ) = l2 ( nurl_mac_lo f4 b3 l2 0 )
-    = h2 + h2 ( nurl_mac_hi f3 b4 l2 0 ) = l2 ( nurl_mac_lo f3 b4 l2 0 )
-    : ~ u64 l3 * a0 b3
-    : ~ u64 h3 ( nurl_umulhi a0 b3 )
-    = h3 + h3 ( nurl_mac_hi a1 b2 l3 0 ) = l3 ( nurl_mac_lo a1 b2 l3 0 )
-    = h3 + h3 ( nurl_mac_hi a2 b1 l3 0 ) = l3 ( nurl_mac_lo a2 b1 l3 0 )
-    = h3 + h3 ( nurl_mac_hi a3 b0 l3 0 ) = l3 ( nurl_mac_lo a3 b0 l3 0 )
-    = h3 + h3 ( nurl_mac_hi f4 b4 l3 0 ) = l3 ( nurl_mac_lo f4 b4 l3 0 )
-    : ~ u64 l4 * a0 b4
-    : ~ u64 h4 ( nurl_umulhi a0 b4 )
-    = h4 + h4 ( nurl_mac_hi a1 b3 l4 0 ) = l4 ( nurl_mac_lo a1 b3 l4 0 )
-    = h4 + h4 ( nurl_mac_hi a2 b2 l4 0 ) = l4 ( nurl_mac_lo a2 b2 l4 0 )
-    = h4 + h4 ( nurl_mac_hi a3 b1 l4 0 ) = l4 ( nurl_mac_lo a3 b1 l4 0 )
-    = h4 + h4 ( nurl_mac_hi a4 b0 l4 0 ) = l4 ( nurl_mac_lo a4 b0 l4 0 )
-    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+// o ← a − b. A borrow out of bit 256 means the words hold a − b + 2^256,
+// which is 38 too much: take 38 away, and if that borrows too (the words
+// were < 38) the result is ≥ 2^256 − 38, so the second 38 comes off o0
+// with no borrow.
+inline @ __f4_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    : u64 d0 ( nurl_subb_lo a0 b0 0 )
+    : u64 w0 ( nurl_subb_hi a0 b0 0 )
+    : u64 d1 ( nurl_subb_lo a1 b1 w0 )
+    : u64 w1 ( nurl_subb_hi a1 b1 w0 )
+    : u64 d2 ( nurl_subb_lo a2 b2 w1 )
+    : u64 w2 ( nurl_subb_hi a2 b2 w1 )
+    : u64 d3 ( nurl_subb_lo a3 b3 w2 )
+    : u64 w3 ( nurl_subb_hi a3 b3 w2 )
+    : u64 m * w3 38
+    : u64 r0 ( nurl_subb_lo d0 m 0 )
+    : u64 k0 ( nurl_subb_hi d0 m 0 )
+    : u64 r1 ( nurl_subb_lo d1 0 k0 )
+    : u64 k1 ( nurl_subb_hi d1 0 k0 )
+    : u64 r2 ( nurl_subb_lo d2 0 k1 )
+    : u64 k2 ( nurl_subb_hi d2 0 k1 )
+    = o3 ( nurl_subb_lo d3 0 k2 )
+    : u64 k3 ( nurl_subb_hi d3 0 k2 )
+    = o0 - r0 * k3 38
+    = o1 r1
+    = o2 r2
 }
 
-// o ← a · 121665 mod p: 5 scalar products instead of 25
-inline @ __fe_mul121665 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
+// The 512-bit (t0 … t7) mod p: t + 38·(the high four words), whose carry
+// out is ≤ 38, then __f4_fold38.
+inline @ __f4_reduce inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 t0 u64 t1 u64 t2 u64 t3 u64 t4 u64 t5 u64 t6 u64 t7 → v {
+    : u64 r0 ( nurl_mac_lo t4 38 t0 0 )
+    : ~ u64 cr ( nurl_mac_hi t4 38 t0 0 )
+    : u64 r1 ( nurl_mac_lo t5 38 t1 cr )
+    = cr ( nurl_mac_hi t5 38 t1 cr )
+    : u64 r2 ( nurl_mac_lo t6 38 t2 cr )
+    = cr ( nurl_mac_hi t6 38 t2 cr )
+    : u64 r3 ( nurl_mac_lo t7 38 t3 cr )
+    = cr ( nurl_mac_hi t7 38 t3 cr )
+    ( __f4_fold38 o0 o1 o2 o3 r0 r1 r2 r3 cr )
+}
+
+// o ← a · b: the 4×4 schoolbook, row by row, each row one carry chain.
+inline @ __f4_mul_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    : ~ u64 x 0
+    : ~ u64 cr ( nurl_umulhi a0 b0 )
+    : u64 t0 * a0 b0
+    : ~ u64 t1 ( nurl_mac_lo a1 b0 cr 0 )
+    = cr ( nurl_mac_hi a1 b0 cr 0 )
+    : ~ u64 t2 ( nurl_mac_lo a2 b0 cr 0 )
+    = cr ( nurl_mac_hi a2 b0 cr 0 )
+    : ~ u64 t3 ( nurl_mac_lo a3 b0 cr 0 )
+    : ~ u64 t4 ( nurl_mac_hi a3 b0 cr 0 )
+    = x ( nurl_mac_lo a0 b1 t1 0 ) = cr ( nurl_mac_hi a0 b1 t1 0 ) = t1 x
+    = x ( nurl_mac_lo a1 b1 t2 cr ) = cr ( nurl_mac_hi a1 b1 t2 cr ) = t2 x
+    = x ( nurl_mac_lo a2 b1 t3 cr ) = cr ( nurl_mac_hi a2 b1 t3 cr ) = t3 x
+    = x ( nurl_mac_lo a3 b1 t4 cr )
+    : ~ u64 t5 ( nurl_mac_hi a3 b1 t4 cr )
+    = t4 x
+    = x ( nurl_mac_lo a0 b2 t2 0 ) = cr ( nurl_mac_hi a0 b2 t2 0 ) = t2 x
+    = x ( nurl_mac_lo a1 b2 t3 cr ) = cr ( nurl_mac_hi a1 b2 t3 cr ) = t3 x
+    = x ( nurl_mac_lo a2 b2 t4 cr ) = cr ( nurl_mac_hi a2 b2 t4 cr ) = t4 x
+    = x ( nurl_mac_lo a3 b2 t5 cr )
+    : ~ u64 t6 ( nurl_mac_hi a3 b2 t5 cr )
+    = t5 x
+    = x ( nurl_mac_lo a0 b3 t3 0 ) = cr ( nurl_mac_hi a0 b3 t3 0 ) = t3 x
+    = x ( nurl_mac_lo a1 b3 t4 cr ) = cr ( nurl_mac_hi a1 b3 t4 cr ) = t4 x
+    = x ( nurl_mac_lo a2 b3 t5 cr ) = cr ( nurl_mac_hi a2 b3 t5 cr ) = t5 x
+    = x ( nurl_mac_lo a3 b3 t6 cr )
+    : u64 t7 ( nurl_mac_hi a3 b3 t6 cr )
+    = t6 x
+    ( __f4_reduce o0 o1 o2 o3 t0 t1 t2 t3 t4 t5 t6 t7 )
+}
+
+// o ← a²: the six cross products once, doubled by a shift, then the four
+// squares on the diagonal — 10 products where the multiply takes 16.
+inline @ __f4_sq_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 → v {
+    : ~ u64 x 0
+    : ~ u64 cr ( nurl_umulhi a0 a1 )
+    : ~ u64 t1 * a0 a1
+    : ~ u64 t2 ( nurl_mac_lo a0 a2 cr 0 )
+    = cr ( nurl_mac_hi a0 a2 cr 0 )
+    : ~ u64 t3 ( nurl_mac_lo a0 a3 cr 0 )
+    : ~ u64 t4 ( nurl_mac_hi a0 a3 cr 0 )
+    = x ( nurl_mac_lo a1 a2 t3 0 ) = cr ( nurl_mac_hi a1 a2 t3 0 ) = t3 x
+    = x ( nurl_mac_lo a1 a3 t4 cr )
+    : ~ u64 t5 ( nurl_mac_hi a1 a3 t4 cr )
+    = t4 x
+    = x ( nurl_mac_lo a2 a3 t5 0 )
+    : ~ u64 t6 ( nurl_mac_hi a2 a3 t5 0 )
+    = t5 x
+    : u64 t7 >> t6 63
+    = t6 | << t6 1 >> t5 63
+    = t5 | << t5 1 >> t4 63
+    = t4 | << t4 1 >> t3 63
+    = t3 | << t3 1 >> t2 63
+    = t2 | << t2 1 >> t1 63
+    = t1 << t1 1
+    : u64 h0 ( nurl_umulhi a0 a0 )
+    : u64 r1 ( nurl_addc_lo t1 h0 0 )
+    : u64 k1 ( nurl_addc_hi t1 h0 0 )
+    : u64 r2 ( nurl_mac_lo a1 a1 t2 k1 )
+    : u64 g2 ( nurl_mac_hi a1 a1 t2 k1 )
+    : u64 r3 ( nurl_addc_lo t3 g2 0 )
+    : u64 k3 ( nurl_addc_hi t3 g2 0 )
+    : u64 r4 ( nurl_mac_lo a2 a2 t4 k3 )
+    : u64 g4 ( nurl_mac_hi a2 a2 t4 k3 )
+    : u64 r5 ( nurl_addc_lo t5 g4 0 )
+    : u64 k5 ( nurl_addc_hi t5 g4 0 )
+    : u64 r6 ( nurl_mac_lo a3 a3 t6 k5 )
+    : u64 g6 ( nurl_mac_hi a3 a3 t6 k5 )
+    ( __f4_reduce o0 o1 o2 o3 * a0 a0 r1 r2 r3 r4 r5 r6 + t7 g6 )
+}
+
+// o ← a · 121665 (the ladder's a24): four products, the top word < 2^17.
+inline @ __f4_mul121665 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 → v {
     : u64 l0 * a0 121665
-    : u64 h0 ( nurl_umulhi a0 121665 )
-    : u64 l1 * a1 121665
-    : u64 h1 ( nurl_umulhi a1 121665 )
-    : u64 l2 * a2 121665
-    : u64 h2 ( nurl_umulhi a2 121665 )
-    : u64 l3 * a3 121665
-    : u64 h3 ( nurl_umulhi a3 121665 )
-    : u64 l4 * a4 121665
-    : u64 h4 ( nurl_umulhi a4 121665 )
-    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+    : ~ u64 cr ( nurl_umulhi a0 121665 )
+    : u64 l1 ( nurl_mac_lo a1 121665 cr 0 )
+    = cr ( nurl_mac_hi a1 121665 cr 0 )
+    : u64 l2 ( nurl_mac_lo a2 121665 cr 0 )
+    = cr ( nurl_mac_hi a2 121665 cr 0 )
+    : u64 l3 ( nurl_mac_lo a3 121665 cr 0 )
+    = cr ( nurl_mac_hi a3 121665 cr 0 )
+    ( __f4_fold38 o0 o1 o2 o3 l0 l1 l2 l3 cr )
 }
 
-// o ← a² mod p (_S), inlined for the ladder loop body
-inline @ __fe_sq_in inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
-    : u64 d0 * a0 2
-    : u64 d1 * a1 2
-    : u64 d2 * a2 38
-    : u64 d419 * a4 19
-    : u64 d4 * d419 2
-    : u64 a319 * a3 19
-    : ~ u64 l0 * a0 a0
-    : ~ u64 h0 ( nurl_umulhi a0 a0 )
-    = h0 + h0 ( nurl_mac_hi d4 a1 l0 0 ) = l0 ( nurl_mac_lo d4 a1 l0 0 )
-    = h0 + h0 ( nurl_mac_hi d2 a3 l0 0 ) = l0 ( nurl_mac_lo d2 a3 l0 0 )
-    : ~ u64 l1 * d0 a1
-    : ~ u64 h1 ( nurl_umulhi d0 a1 )
-    = h1 + h1 ( nurl_mac_hi d4 a2 l1 0 ) = l1 ( nurl_mac_lo d4 a2 l1 0 )
-    = h1 + h1 ( nurl_mac_hi a3 a319 l1 0 ) = l1 ( nurl_mac_lo a3 a319 l1 0 )
-    : ~ u64 l2 * d0 a2
-    : ~ u64 h2 ( nurl_umulhi d0 a2 )
-    = h2 + h2 ( nurl_mac_hi a1 a1 l2 0 ) = l2 ( nurl_mac_lo a1 a1 l2 0 )
-    = h2 + h2 ( nurl_mac_hi d4 a3 l2 0 ) = l2 ( nurl_mac_lo d4 a3 l2 0 )
-    : ~ u64 l3 * d0 a3
-    : ~ u64 h3 ( nurl_umulhi d0 a3 )
-    = h3 + h3 ( nurl_mac_hi d1 a2 l3 0 ) = l3 ( nurl_mac_lo d1 a2 l3 0 )
-    = h3 + h3 ( nurl_mac_hi a4 d419 l3 0 ) = l3 ( nurl_mac_lo a4 d419 l3 0 )
-    : ~ u64 l4 * d0 a4
-    : ~ u64 h4 ( nurl_umulhi d0 a4 )
-    = h4 + h4 ( nurl_mac_hi d1 a3 l4 0 ) = l4 ( nurl_mac_lo d1 a3 l4 0 )
-    = h4 + h4 ( nurl_mac_hi a2 a2 l4 0 ) = l4 ( nurl_mac_lo a2 a2 l4 0 )
-    ( __fe_carry o0 o1 o2 o3 o4 l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+// The multiply and the square out of line, for the inversion chain and the
+// one-time table build — callers that are not a hot loop body.
+@ __f4_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    ( __f4_mul_in o0 o1 o2 o3 a0 a1 a2 a3 b0 b1 b2 b3 )
 }
 
-// o ← a · b mod p (_M)
-@ __fe_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 u64 b0 u64 b1 u64 b2 u64 b3 u64 b4 → v {
-    ( __fe_mul_in o0 o1 o2 o3 o4 a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 )
+@ __f4_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 → v {
+    ( __f4_sq_in o0 o1 o2 o3 a0 a1 a2 a3 )
 }
 
-// o ← a² mod p (_S)
-@ __fe_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → v {
-    ( __fe_sq_in o0 o1 o2 o3 o4 a0 a1 a2 a3 a4 )
-}
-
-// five 128-bit column sums (lo, hi) → five 51-bit limbs (__mul_carry_out)
-inline @ __fe_carry inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 pl0 u64 ph0 u64 pl1 u64 ph1 u64 pl2 u64 ph2 u64 pl3 u64 ph3 u64 pl4 u64 ph4 → v {
-    : ~ u64 l1 pl1
-    : ~ u64 h1 ph1
-    : ~ u64 l2 pl2
-    : ~ u64 h2 ph2
-    : ~ u64 l3 pl3
-    : ~ u64 h3 ph3
-    : ~ u64 l4 pl4
-    : ~ u64 h4 ph4
-    : ~ u64 g0 & pl0 2251799813685247
-    : ~ u64 c | << ph0 13 >> pl0 51
-    = l1 + l1 c = h1 + h1 ? < l1 c 1 0
-    : ~ u64 g1 & l1 2251799813685247
-    = c | << h1 13 >> l1 51
-    = l2 + l2 c = h2 + h2 ? < l2 c 1 0
-    : u64 g2 & l2 2251799813685247
-    = c | << h2 13 >> l2 51
-    = l3 + l3 c = h3 + h3 ? < l3 c 1 0
-    = o3 & l3 2251799813685247
-    = c | << h3 13 >> l3 51
-    = l4 + l4 c = h4 + h4 ? < l4 c 1 0
-    = o4 & l4 2251799813685247
-    = c | << h4 13 >> l4 51
-    = g0 + g0 * c 19
-    = c >> g0 51
-    = o0 & g0 2251799813685247
-    = g1 + g1 c
-    = c >> g1 51
-    = o1 & g1 2251799813685247
-    = o2 + g2 c
-}
-
-// p, q ← q, p when m is all ones, unchanged when m is 0 — in constant time (_sel25519)
-inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u64 p4 inout u64 q0 inout u64 q1 inout u64 q2 inout u64 q3 inout u64 q4 u64 m → v {
+// p, q ← q, p when m is all ones, unchanged when m is 0 — constant time.
+inline @ __f4_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u64 q0 inout u64 q1 inout u64 q2 inout u64 q3 u64 m → v {
     : u64 t0 & m ^^ p0 q0
     = p0 ^^ p0 t0 = q0 ^^ q0 t0
     : u64 t1 & m ^^ p1 q1
@@ -641,195 +671,234 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     = p2 ^^ p2 t2 = q2 ^^ q2 t2
     : u64 t3 & m ^^ p3 q3
     = p3 ^^ p3 t3 = q3 ^^ q3 t3
-    : u64 t4 & m ^^ p4 q4
-    = p4 ^^ p4 t4 = q4 ^^ q4 t4
 }
 
-// o ← o^(2^n): n back-to-back squarings (_sqn25519)
-@ __fe_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 i n → v {
+// o ← o^(2^n): n back-to-back squarings.
+@ __f4_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 i n → v {
     : ~ u64 t0 0
     : ~ u64 t1 0
     : ~ u64 t2 0
     : ~ u64 t3 0
-    : ~ u64 t4 0
     : ~ i k 0
-    ~ < k n { ( __fe_sq_in t0 t1 t2 t3 t4 o0 o1 o2 o3 o4 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = o4 t4 = k + k 1 }
+    ~ < k n { ( __f4_sq_in t0 t1 t2 t3 o0 o1 o2 o3 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = k + k 1 }
 }
 
-// o ← z^(p−2) = 1/z — _inv25519's ref10 addition chain on scalar limbs
-@ __fe_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 inout u64 o4 u64 z0 u64 z1 u64 z2 u64 z3 u64 z4 → v {
+// o ← z^(p−2) = 1/z (0 for 0): ref10's addition chain, 254 squarings and
+// 11 multiplies.
+@ __f4_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 z0 u64 z1 u64 z2 u64 z3 → v {
     : ~ u64 q0 0
     : ~ u64 q1 0
     : ~ u64 q2 0
     : ~ u64 q3 0
-    : ~ u64 q4 0
     : ~ u64 n0 0
     : ~ u64 n1 0
     : ~ u64 n2 0
     : ~ u64 n3 0
-    : ~ u64 n4 0
     : ~ u64 j0 0
     : ~ u64 j1 0
     : ~ u64 j2 0
     : ~ u64 j3 0
-    : ~ u64 j4 0
     : ~ u64 f0 0
     : ~ u64 f1 0
     : ~ u64 f2 0
     : ~ u64 f3 0
-    : ~ u64 f4 0
     : ~ u64 g0 0
     : ~ u64 g1 0
     : ~ u64 g2 0
     : ~ u64 g3 0
-    : ~ u64 g4 0
     : ~ u64 t0 0
     : ~ u64 t1 0
     : ~ u64 t2 0
     : ~ u64 t3 0
-    : ~ u64 t4 0
     : ~ u64 y0 0
     : ~ u64 y1 0
     : ~ u64 y2 0
     : ~ u64 y3 0
-    : ~ u64 y4 0
     : ~ u64 w0 0
     : ~ u64 w1 0
     : ~ u64 w2 0
     : ~ u64 w3 0
-    : ~ u64 w4 0
-    ( __fe_sq q0 q1 q2 q3 q4 z0 z1 z2 z3 z4 )
+    ( __f4_sq q0 q1 q2 q3 z0 z1 z2 z3 )
     // z^2
-    ( __fe_sq n0 n1 n2 n3 n4 q0 q1 q2 q3 q4 )
-    ( __fe_sq w0 w1 w2 w3 w4 n0 n1 n2 n3 n4 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3 = n4 w4
-    ( __fe_mul w0 w1 w2 w3 w4 n0 n1 n2 n3 n4 z0 z1 z2 z3 z4 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3 = n4 w4
+    ( __f4_sq n0 n1 n2 n3 q0 q1 q2 q3 )
+    ( __f4_sq w0 w1 w2 w3 n0 n1 n2 n3 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3
+    ( __f4_mul w0 w1 w2 w3 n0 n1 n2 n3 z0 z1 z2 z3 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3
     // z^9
-    ( __fe_mul j0 j1 j2 j3 j4 n0 n1 n2 n3 n4 q0 q1 q2 q3 q4 )
+    ( __f4_mul j0 j1 j2 j3 n0 n1 n2 n3 q0 q1 q2 q3 )
     // z^11
-    ( __fe_sq f0 f1 f2 f3 f4 j0 j1 j2 j3 j4 )
-    ( __fe_mul w0 w1 w2 w3 w4 f0 f1 f2 f3 f4 n0 n1 n2 n3 n4 ) = f0 w0 = f1 w1 = f2 w2 = f3 w3 = f4 w4
+    ( __f4_sq f0 f1 f2 f3 j0 j1 j2 j3 )
+    ( __f4_mul w0 w1 w2 w3 f0 f1 f2 f3 n0 n1 n2 n3 ) = f0 w0 = f1 w1 = f2 w2 = f3 w3
     // z^(2^5−1)
-    = g0 f0 = g1 f1 = g2 f2 = g3 f3 = g4 f4
-    ( __fe_sqn g0 g1 g2 g3 g4 5 )
-    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    = g0 f0 = g1 f1 = g2 f2 = g3 f3
+    ( __f4_sqn g0 g1 g2 g3 5 )
+    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 f0 f1 f2 f3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
     // z^(2^10−1)
-    = t0 g0 = t1 g1 = t2 g2 = t3 g3 = t4 g4
-    ( __fe_sqn t0 t1 t2 t3 t4 10 )
-    ( __fe_mul w0 w1 w2 w3 w4 t0 t1 t2 t3 t4 g0 g1 g2 g3 g4 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3 = t4 w4
+    = t0 g0 = t1 g1 = t2 g2 = t3 g3
+    ( __f4_sqn t0 t1 t2 t3 10 )
+    ( __f4_mul w0 w1 w2 w3 t0 t1 t2 t3 g0 g1 g2 g3 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3
     // z^(2^20−1)
-    = y0 t0 = y1 t1 = y2 t2 = y3 t3 = y4 t4
-    ( __fe_sqn y0 y1 y2 y3 y4 20 )
-    ( __fe_mul w0 w1 w2 w3 w4 y0 y1 y2 y3 y4 t0 t1 t2 t3 t4 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3 = y4 w4
+    = y0 t0 = y1 t1 = y2 t2 = y3 t3
+    ( __f4_sqn y0 y1 y2 y3 20 )
+    ( __f4_mul w0 w1 w2 w3 y0 y1 y2 y3 t0 t1 t2 t3 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3
     // z^(2^40−1)
-    ( __fe_sqn y0 y1 y2 y3 y4 10 )
-    ( __fe_mul w0 w1 w2 w3 w4 y0 y1 y2 y3 y4 g0 g1 g2 g3 g4 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3 = y4 w4
+    ( __f4_sqn y0 y1 y2 y3 10 )
+    ( __f4_mul w0 w1 w2 w3 y0 y1 y2 y3 g0 g1 g2 g3 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3
     // z^(2^50−1)
-    = t0 y0 = t1 y1 = t2 y2 = t3 y3 = t4 y4
-    ( __fe_sqn t0 t1 t2 t3 t4 50 )
-    ( __fe_mul w0 w1 w2 w3 w4 t0 t1 t2 t3 t4 y0 y1 y2 y3 y4 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3 = t4 w4
+    = t0 y0 = t1 y1 = t2 y2 = t3 y3
+    ( __f4_sqn t0 t1 t2 t3 50 )
+    ( __f4_mul w0 w1 w2 w3 t0 t1 t2 t3 y0 y1 y2 y3 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3
     // z^(2^100−1)
-    = g0 t0 = g1 t1 = g2 t2 = g3 t3 = g4 t4
-    ( __fe_sqn g0 g1 g2 g3 g4 100 )
-    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 t0 t1 t2 t3 t4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    = g0 t0 = g1 t1 = g2 t2 = g3 t3
+    ( __f4_sqn g0 g1 g2 g3 100 )
+    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 t0 t1 t2 t3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
     // z^(2^200−1)
-    ( __fe_sqn g0 g1 g2 g3 g4 50 )
-    ( __fe_mul w0 w1 w2 w3 w4 g0 g1 g2 g3 g4 y0 y1 y2 y3 y4 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3 = g4 w4
+    ( __f4_sqn g0 g1 g2 g3 50 )
+    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 y0 y1 y2 y3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
     // z^(2^250−1)
-    ( __fe_sqn g0 g1 g2 g3 g4 5 )
-    ( __fe_mul o0 o1 o2 o3 o4 g0 g1 g2 g3 g4 j0 j1 j2 j3 j4 )
+    ( __f4_sqn g0 g1 g2 g3 5 )
+    ( __f4_mul o0 o1 o2 o3 g0 g1 g2 g3 j0 j1 j2 j3 )
     // z^(2^255−21)
 }
 
+// The canonical residue of a (< 2^256) as 32 little-endian bytes. Fold bit
+// 255 in as 19 (now a < 2^255 + 19), then a ≥ p exactly when a + 19 has
+// bit 255 set, and a − p is that sum without it: chosen by mask.
+@ __f4_pack u64 a0 u64 a1 u64 a2 u64 a3 → ( Vec u ) {
+    : u64 top >> a3 63
+    : u64 m * top 19
+    : u64 v0 ( nurl_addc_lo a0 m 0 )
+    : u64 k0 ( nurl_addc_hi a0 m 0 )
+    : u64 v1 ( nurl_addc_lo a1 0 k0 )
+    : u64 k1 ( nurl_addc_hi a1 0 k0 )
+    : u64 v2 ( nurl_addc_lo a2 0 k1 )
+    : u64 k2 ( nurl_addc_hi a2 0 k1 )
+    : u64 v3 + & a3 9223372036854775807 k2
+    : u64 w0 ( nurl_addc_lo v0 19 0 )
+    : u64 c0 ( nurl_addc_hi v0 19 0 )
+    : u64 w1 ( nurl_addc_lo v1 0 c0 )
+    : u64 c1 ( nurl_addc_hi v1 0 c0 )
+    : u64 w2 ( nurl_addc_lo v2 0 c1 )
+    : u64 c2 ( nurl_addc_hi v2 0 c1 )
+    : u64 w3 + v3 c2
+    : u64 ge - # u64 0 >> w3 63
+    : u64 r0 | & ge w0 & ^^ ge 18446744073709551615 v0
+    : u64 r1 | & ge w1 & ^^ ge 18446744073709551615 v1
+    : u64 r2 | & ge w2 & ^^ ge 18446744073709551615 v2
+    : u64 r3 | & ge & w3 9223372036854775807 & ^^ ge 18446744073709551615 v3
+    : ( Vec u ) o ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] o 32 )
+    : *u op ( vec_data [u] o )
+    : ~ i k 0
+    ~ < k 8 {
+        : u64 sh # u64 * 8 k
+        = . op k # u & >> r0 sh 255
+        = . op + k 8 # u & >> r1 sh 255
+        = . op + k 16 # u & >> r2 sh 255
+        = . op + k 24 # u & >> r3 sh 255
+        = k + k 1
+    }
+    ^ o
+}
+
 // ── the ladder ────────────────────────────────────────────────────
-// q ← scalar · point, both 32-byte little-endian. Scalar is clamped.
-// TweetNaCl's ladder step for step, on the scalar-limb field above:
-// a, c are x2, z2 and b, d are x3, z3; t is scratch for a product whose
-// destination is also one of its operands.
+// q ← scalar · point, both 32-byte little-endian; the scalar is clamped
+// and the point's top bit dropped (RFC 7748 §5). RFC 7748's ladder step
+// for step: (x2 : z2) and (x3 : z3) are k·P and (k + 1)·P for the bits
+// consumed so far, and one conditional swap per bit — keyed by whether
+// the bit CHANGED — keeps the step's formulas fixed. Constant time: the
+// bit only ever reaches a mask.
 @ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
     : u64 sw1 # u64 ( _ld64u scalar 8 )
     : u64 sw2 # u64 ( _ld64u scalar 16 )
     : u64 sw3 | & # u64 ( _ld64u scalar 24 ) 9223372036854775807 4611686018427387904
 
-    : u64 x0 & # u64 ( _ld64u point 0 ) 2251799813685247
-    : u64 x1 & >> # u64 ( _ld64u point 6 ) 3 2251799813685247
-    : u64 x2 & >> # u64 ( _ld64u point 12 ) 6 2251799813685247
-    : u64 x3 & >> # u64 ( _ld64u point 19 ) 1 2251799813685247
-    : u64 x4 & >> # u64 ( _ld64u point 24 ) 12 2251799813685247
-    : ~ u64 a0 1
+    : u64 u0 # u64 ( _ld64u point 0 )
+    : u64 u1 # u64 ( _ld64u point 8 )
+    : u64 u2 # u64 ( _ld64u point 16 )
+    : u64 u3 & # u64 ( _ld64u point 24 ) 9223372036854775807
+    : ~ u64 x20 1
+    : ~ u64 x21 0
+    : ~ u64 x22 0
+    : ~ u64 x23 0
+    : ~ u64 z20 0
+    : ~ u64 z21 0
+    : ~ u64 z22 0
+    : ~ u64 z23 0
+    : ~ u64 x30 u0
+    : ~ u64 x31 u1
+    : ~ u64 x32 u2
+    : ~ u64 x33 u3
+    : ~ u64 z30 1
+    : ~ u64 z31 0
+    : ~ u64 z32 0
+    : ~ u64 z33 0
+    : ~ u64 a0 0
     : ~ u64 a1 0
     : ~ u64 a2 0
     : ~ u64 a3 0
-    : ~ u64 a4 0
-    : ~ u64 b0 x0
-    : ~ u64 b1 x1
-    : ~ u64 b2 x2
-    : ~ u64 b3 x3
-    : ~ u64 b4 x4
+    : ~ u64 b0 0
+    : ~ u64 b1 0
+    : ~ u64 b2 0
+    : ~ u64 b3 0
     : ~ u64 c0 0
     : ~ u64 c1 0
     : ~ u64 c2 0
     : ~ u64 c3 0
-    : ~ u64 c4 0
-    : ~ u64 d0 1
+    : ~ u64 d0 0
     : ~ u64 d1 0
     : ~ u64 d2 0
     : ~ u64 d3 0
-    : ~ u64 d4 0
     : ~ u64 e0 0
     : ~ u64 e1 0
     : ~ u64 e2 0
     : ~ u64 e3 0
-    : ~ u64 e4 0
     : ~ u64 f0 0
     : ~ u64 f1 0
     : ~ u64 f2 0
     : ~ u64 f3 0
-    : ~ u64 f4 0
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ u64 t4 0
+    : ~ u64 swap 0
 
     : ~ i i 254
     ~ >= i 0 {
         : u64 sw ? >= i 128 ? >= i 192 sw3 sw2 ? >= i 64 sw1 sw0
-        : u64 m - # u64 0 & >> sw # u64 & i 63 1
-        ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
-        ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
-        = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
-        = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
-        = c0 + b0 d0 = c1 + b1 d1 = c2 + b2 d2 = c3 + b3 d3 = c4 + b4 d4
-        = b0 - + b0 4503599627370458 d0 = b1 - + b1 4503599627370494 d1 = b2 - + b2 4503599627370494 d2 = b3 - + b3 4503599627370494 d3 = b4 - + b4 4503599627370494 d4
-        ( __fe_sq_in d0 d1 d2 d3 d4 e0 e1 e2 e3 e4 )
-        ( __fe_sq_in f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
-        ( __fe_mul_in t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = a0 t0 = a1 t1 = a2 t2 = a3 t3 = a4 t4
-        ( __fe_mul_in c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
-        = e0 + a0 c0 = e1 + a1 c1 = e2 + a2 c2 = e3 + a3 c3 = e4 + a4 c4
-        = a0 - + a0 4503599627370458 c0 = a1 - + a1 4503599627370494 c1 = a2 - + a2 4503599627370494 c2 = a3 - + a3 4503599627370494 c3 = a4 - + a4 4503599627370494 c4
-        ( __fe_sq_in b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
-        = c0 - + d0 4503599627370458 f0 = c1 - + d1 4503599627370494 f1 = c2 - + d2 4503599627370494 f2 = c3 - + d3 4503599627370494 f3 = c4 - + d4 4503599627370494 f4
-        ( __fe_mul121665 a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 )
-        = a0 + a0 d0 = a1 + a1 d1 = a2 + a2 d2 = a3 + a3 d3 = a4 + a4 d4
-        ( __fe_mul_in t0 t1 t2 t3 t4 c0 c1 c2 c3 c4 a0 a1 a2 a3 a4 ) = c0 t0 = c1 t1 = c2 t2 = c3 t3 = c4 t4
-        ( __fe_mul_in a0 a1 a2 a3 a4 d0 d1 d2 d3 d4 f0 f1 f2 f3 f4 )
-        ( __fe_mul_in d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 x0 x1 x2 x3 x4 )
-        ( __fe_sq_in b0 b1 b2 b3 b4 e0 e1 e2 e3 e4 )
-        ( __fe_cswap a0 a1 a2 a3 a4 b0 b1 b2 b3 b4 m )
-        ( __fe_cswap c0 c1 c2 c3 c4 d0 d1 d2 d3 d4 m )
+        : u64 kt & >> sw # u64 & i 63 1
+        : u64 m - # u64 0 ^^ swap kt
+        = swap kt
+        ( __f4_cswap x20 x21 x22 x23 x30 x31 x32 x33 m )
+        ( __f4_cswap z20 z21 z22 z23 z30 z31 z32 z33 m )
+        // A = x2 + z2, B = x2 − z2, C = x3 + z3, D = x3 − z3
+        ( __f4_add a0 a1 a2 a3 x20 x21 x22 x23 z20 z21 z22 z23 )
+        ( __f4_sub b0 b1 b2 b3 x20 x21 x22 x23 z20 z21 z22 z23 )
+        ( __f4_add c0 c1 c2 c3 x30 x31 x32 x33 z30 z31 z32 z33 )
+        ( __f4_sub d0 d1 d2 d3 x30 x31 x32 x33 z30 z31 z32 z33 )
+        // DA = D·A (e), CB = C·B (f); AA = A² (c), BB = B² (d)
+        ( __f4_mul_in e0 e1 e2 e3 d0 d1 d2 d3 a0 a1 a2 a3 )
+        ( __f4_mul_in f0 f1 f2 f3 c0 c1 c2 c3 b0 b1 b2 b3 )
+        ( __f4_sq_in c0 c1 c2 c3 a0 a1 a2 a3 )
+        ( __f4_sq_in d0 d1 d2 d3 b0 b1 b2 b3 )
+        // x3 = (DA + CB)², z3 = u · (DA − CB)²
+        ( __f4_add a0 a1 a2 a3 e0 e1 e2 e3 f0 f1 f2 f3 )
+        ( __f4_sub b0 b1 b2 b3 e0 e1 e2 e3 f0 f1 f2 f3 )
+        ( __f4_sq_in x30 x31 x32 x33 a0 a1 a2 a3 )
+        ( __f4_sq_in e0 e1 e2 e3 b0 b1 b2 b3 )
+        ( __f4_mul_in z30 z31 z32 z33 u0 u1 u2 u3 e0 e1 e2 e3 )
+        // x2 = AA·BB; E = AA − BB (f); z2 = E · (AA + a24·E)
+        ( __f4_mul_in x20 x21 x22 x23 c0 c1 c2 c3 d0 d1 d2 d3 )
+        ( __f4_sub f0 f1 f2 f3 c0 c1 c2 c3 d0 d1 d2 d3 )
+        ( __f4_mul121665 a0 a1 a2 a3 f0 f1 f2 f3 )
+        ( __f4_add b0 b1 b2 b3 a0 a1 a2 a3 c0 c1 c2 c3 )
+        ( __f4_mul_in z20 z21 z22 z23 f0 f1 f2 f3 b0 b1 b2 b3 )
         = i - i 1
     }
+    : u64 mf - # u64 0 swap
+    ( __f4_cswap x20 x21 x22 x23 x30 x31 x32 x33 mf )
+    ( __f4_cswap z20 z21 z22 z23 z30 z31 z32 z33 mf )
 
-    // Recover the affine X-coordinate: x2 · z2^-1. (a = x2, c = z2.)
-    : ~ u64 v0 0
-    : ~ u64 v1 0
-    : ~ u64 v2 0
-    : ~ u64 v3 0
-    : ~ u64 v4 0
-    ( __fe_inv v0 v1 v2 v3 v4 c0 c1 c2 c3 c4 )
-    ( __fe_mul t0 t1 t2 t3 t4 a0 a1 a2 a3 a4 v0 v1 v2 v3 v4 )
-    ^ ( __fe_pack t0 t1 t2 t3 t4 )
+    // The affine u: x2 · z2^−1 (z2 = 0 — a low-order point — gives 0).
+    ( __f4_inv a0 a1 a2 a3 z20 z21 z22 z23 )
+    ( __f4_mul b0 b1 b2 b3 x20 x21 x22 x23 a0 a1 a2 a3 )
+    ^ ( __f4_pack b0 b1 b2 b3 )
 }
 
 // scalar · point — the ECDH primitive. `scalar` and `point` are 32-byte
@@ -838,348 +907,382 @@ inline @ __fe_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     ^ ( __scalarmult scalar point )
 }
 
-// scalar · basepoint(9) — derive the public key from a 32-byte secret.
-// ── fixed-base comb for the keygen basepoint (X25519 public key) ──────
-// scalar·9 on the Montgomery curve equals scalar·B on the birationally
-// equivalent Ed25519 curve (B ↦ u=9), and the twisted-Edwards complete
-// addition makes a constant-time fixed-base comb clean where the
-// Montgomery x-only ladder cannot. So the ephemeral public key is
-// scalar·B on Edwards via a 4-tooth comb (baked table, no per-call
-// build), then u = (Z+Y)/(Z−Y). Verified against the ladder for the
-// RFC 7748 vectors. Fixed-base only — the variable-base
-// x25519(scalar, peer) ECDH stays on the Montgomery ladder above.
-
-// 2d, the Ed25519 addition constant, baked as five 2^51 limbs.
-@ __xe_d2 → ( Vec i ) {
-    : ( Vec i ) v ( _gf_zero )
-    : *i q ( vec_data [i] v )
-    = . q 0 # i 1859910466990425 = . q 1 # i 932731440258426 = . q 2 # i 1072319116312658
-    = . q 3 # i 1815898335770999 = . q 4 # i 633789495995903
-    ^ v
-}
-
-@ __xe_comb_table → ( Vec i ) {
-    : ( Vec i ) v ( vec_with_cap [i] 320 )
-    : b _l ( vec_set_len [i] v 320 )
-    : *i q ( vec_data [i] v )
-    = . q 0 # i 0 = . q 1 # i 0 = . q 2 # i 0 = . q 3 # i 0
-    = . q 4 # i 0 = . q 5 # i 1 = . q 6 # i 0 = . q 7 # i 0
-    = . q 8 # i 0 = . q 9 # i 0 = . q 10 # i 1 = . q 11 # i 0
-    = . q 12 # i 0 = . q 13 # i 0 = . q 14 # i 0 = . q 15 # i 0
-    = . q 16 # i 0 = . q 17 # i 0 = . q 18 # i 0 = . q 19 # i 0
-    = . q 20 # i 1738742601995546 = . q 21 # i 1146398526822698 = . q 22 # i 2070867633025821 = . q 23 # i 562264141797630
-    = . q 24 # i 587772402128613 = . q 25 # i 1801439850948184 = . q 26 # i 1351079888211148 = . q 27 # i 450359962737049
-    = . q 28 # i 900719925474099 = . q 29 # i 1801439850948198 = . q 30 # i 1 = . q 31 # i 0
-    = . q 32 # i 0 = . q 33 # i 0 = . q 34 # i 0 = . q 35 # i 1841354044333475
-    = . q 36 # i 16398895984059 = . q 37 # i 755974180946558 = . q 38 # i 900171276175154 = . q 39 # i 1821297809914039
-    = . q 40 # i 962690963841538 = . q 41 # i 2210719638316993 = . q 42 # i 706068330177389 = . q 43 # i 1384191282407386
-    = . q 44 # i 1726421572252383 = . q 45 # i 1964103625364243 = . q 46 # i 307116021699043 = . q 47 # i 120882883216088
-    = . q 48 # i 20816463754899 = . q 49 # i 55369446368493 = . q 50 # i 1 = . q 51 # i 0
-    = . q 52 # i 0 = . q 53 # i 0 = . q 54 # i 0 = . q 55 # i 1568907369646169
-    = . q 56 # i 514127314339263 = . q 57 # i 40774287502072 = . q 58 # i 1976251032040224 = . q 59 # i 1733588893334842
-    = . q 60 # i 7041092221858 = . q 61 # i 1794296929354574 = . q 62 # i 1237236946531720 = . q 63 # i 2250546736920861
-    = . q 64 # i 259111526187668 = . q 65 # i 1617510425255494 = . q 66 # i 1984488342256828 = . q 67 # i 1321950222407495
-    = . q 68 # i 2136088219447137 = . q 69 # i 425530124582567 = . q 70 # i 1 = . q 71 # i 0
-    = . q 72 # i 0 = . q 73 # i 0 = . q 74 # i 0 = . q 75 # i 922449501748080
-    = . q 76 # i 782850774712250 = . q 77 # i 75404956566566 = . q 78 # i 1540981272636625 = . q 79 # i 999254495388672
-    = . q 80 # i 78814272546852 = . q 81 # i 343446598238096 = . q 82 # i 1469662686845463 = . q 83 # i 446722075312752
-    = . q 84 # i 1339733442806879 = . q 85 # i 770831939905131 = . q 86 # i 1066752177064823 = . q 87 # i 855905013023480
-    = . q 88 # i 1194941381303059 = . q 89 # i 1674322643330780 = . q 90 # i 1 = . q 91 # i 0
-    = . q 92 # i 0 = . q 93 # i 0 = . q 94 # i 0 = . q 95 # i 2025065385374602
-    = . q 96 # i 84441031851324 = . q 97 # i 1769310306558354 = . q 98 # i 26295680040963 = . q 99 # i 99051874860870
-    = . q 100 # i 841304234563226 = . q 101 # i 288336583122812 = . q 102 # i 859273953516464 = . q 103 # i 641862895460166
-    = . q 104 # i 1942073973586062 = . q 105 # i 1453985943769243 = . q 106 # i 866246220448934 = . q 107 # i 1936536679015493
-    = . q 108 # i 1230582470035868 = . q 109 # i 989307346767029 = . q 110 # i 1 = . q 111 # i 0
-    = . q 112 # i 0 = . q 113 # i 0 = . q 114 # i 0 = . q 115 # i 194323669222313
-    = . q 116 # i 1986849483265063 = . q 117 # i 1940458793072969 = . q 118 # i 1262977539333204 = . q 119 # i 1255393699631181
-    = . q 120 # i 860244430014981 = . q 121 # i 689939600126334 = . q 122 # i 1756444480111041 = . q 123 # i 604611337970161
-    = . q 124 # i 1934228889371123 = . q 125 # i 1115840552254004 = . q 126 # i 1042279514255678 = . q 127 # i 1769279693616433
-    = . q 128 # i 1033836220221303 = . q 129 # i 1695643946154600 = . q 130 # i 1 = . q 131 # i 0
-    = . q 132 # i 0 = . q 133 # i 0 = . q 134 # i 0 = . q 135 # i 1926874165278898
-    = . q 136 # i 592675951759993 = . q 137 # i 1086762887648803 = . q 138 # i 1624474402714719 = . q 139 # i 1415896675539756
-    = . q 140 # i 1625679944571491 = . q 141 # i 1175657876638287 = . q 142 # i 1157221053353163 = . q 143 # i 528230055263805
-    = . q 144 # i 878345893388895 = . q 145 # i 442279965111911 = . q 146 # i 692289219476686 = . q 147 # i 1388532760188106
-    = . q 148 # i 447879249267108 = . q 149 # i 1078013435304617 = . q 150 # i 1 = . q 151 # i 0
-    = . q 152 # i 0 = . q 153 # i 0 = . q 154 # i 0 = . q 155 # i 1070778974337849
-    = . q 156 # i 1967157437419015 = . q 157 # i 1898027052522780 = . q 158 # i 811855559975557 = . q 159 # i 1378799308038890
-    = . q 160 # i 798540852548237 = . q 161 # i 1186388878089071 = . q 162 # i 554557418141563 = . q 163 # i 2038592377592718
-    = . q 164 # i 488711206961541 = . q 165 # i 833812069173299 = . q 166 # i 646939731425630 = . q 167 # i 1538221673810424
-    = . q 168 # i 2137163637965756 = . q 169 # i 1721356815521377 = . q 170 # i 1 = . q 171 # i 0
-    = . q 172 # i 0 = . q 173 # i 0 = . q 174 # i 0 = . q 175 # i 76009751102151
-    = . q 176 # i 1911895294413367 = . q 177 # i 1262509771121608 = . q 178 # i 1445197895593765 = . q 179 # i 460973337299855
-    = . q 180 # i 1403677045712952 = . q 181 # i 1315744170250425 = . q 182 # i 1615520137472717 = . q 183 # i 283275291933293
-    = . q 184 # i 48798388170078 = . q 185 # i 109354245315004 = . q 186 # i 1914127539105944 = . q 187 # i 844338193600501
-    = . q 188 # i 526428908480878 = . q 189 # i 1176068453980819 = . q 190 # i 1 = . q 191 # i 0
-    = . q 192 # i 0 = . q 193 # i 0 = . q 194 # i 0 = . q 195 # i 1017297571599653
-    = . q 196 # i 1154767515845140 = . q 197 # i 2116819467069976 = . q 198 # i 1446526646935216 = . q 199 # i 281522550596263
-    = . q 200 # i 823269648550439 = . q 201 # i 486037302993554 = . q 202 # i 1474864517748821 = . q 203 # i 1908169744179899
-    = . q 204 # i 1994942704125518 = . q 205 # i 279331970100678 = . q 206 # i 1934337290044654 = . q 207 # i 960630481011071
-    = . q 208 # i 960576887927161 = . q 209 # i 1638226956763142 = . q 210 # i 1 = . q 211 # i 0
-    = . q 212 # i 0 = . q 213 # i 0 = . q 214 # i 0 = . q 215 # i 680913469064949
-    = . q 216 # i 1801805553396661 = . q 217 # i 40715869468621 = . q 218 # i 411457628042078 = . q 219 # i 1291678746780570
-    = . q 220 # i 1967955306114879 = . q 221 # i 25861803287777 = . q 222 # i 1825226422722195 = . q 223 # i 134464352348952
-    = . q 224 # i 1071891513128430 = . q 225 # i 1004361961630985 = . q 226 # i 581618394920088 = . q 227 # i 1253980602882423
-    = . q 228 # i 1065221446170931 = . q 229 # i 1110744382390146 = . q 230 # i 1 = . q 231 # i 0
-    = . q 232 # i 0 = . q 233 # i 0 = . q 234 # i 0 = . q 235 # i 1200200636115096
-    = . q 236 # i 193524975104322 = . q 237 # i 1019915809956827 = . q 238 # i 2195869670433558 = . q 239 # i 2058901671612867
-    = . q 240 # i 955325879284177 = . q 241 # i 1898787560239826 = . q 242 # i 1749051654153895 = . q 243 # i 470747919996685
-    = . q 244 # i 2084763994715858 = . q 245 # i 1315908902790139 = . q 246 # i 560089107386794 = . q 247 # i 2039185471139212
-    = . q 248 # i 1490075862619589 = . q 249 # i 241729012591394 = . q 250 # i 1 = . q 251 # i 0
-    = . q 252 # i 0 = . q 253 # i 0 = . q 254 # i 0 = . q 255 # i 2050838256499573
-    = . q 256 # i 732903749070741 = . q 257 # i 427507250779307 = . q 258 # i 218878215232455 = . q 259 # i 1093251084113008
-    = . q 260 # i 706993755603636 = . q 261 # i 132871503799025 = . q 262 # i 884316320977938 = . q 263 # i 1386218864925745
-    = . q 264 # i 1930913408590715 = . q 265 # i 2125059702603352 = . q 266 # i 2033567999166737 = . q 267 # i 1166281397275359
-    = . q 268 # i 183129527335258 = . q 269 # i 2006112367853226 = . q 270 # i 1 = . q 271 # i 0
-    = . q 272 # i 0 = . q 273 # i 0 = . q 274 # i 0 = . q 275 # i 1282967945218923
-    = . q 276 # i 1656449878990546 = . q 277 # i 959308575661592 = . q 278 # i 559944928652340 = . q 279 # i 1525862227975859
-    = . q 280 # i 658059562747718 = . q 281 # i 788771745829185 = . q 282 # i 953707210284919 = . q 283 # i 1970332484779637
-    = . q 284 # i 858969908771858 = . q 285 # i 1316342944925958 = . q 286 # i 93365034066043 = . q 287 # i 55307526446706
-    = . q 288 # i 1237317543906585 = . q 289 # i 1032567107538987 = . q 290 # i 1 = . q 291 # i 0
-    = . q 292 # i 0 = . q 293 # i 0 = . q 294 # i 0 = . q 295 # i 312585254076678
-    = . q 296 # i 1594982147435131 = . q 297 # i 1689148640964514 = . q 298 # i 150204140210568 = . q 299 # i 1387777698046063
-    = . q 300 # i 862075999903728 = . q 301 # i 2163902595352333 = . q 302 # i 2014073000973098 = . q 303 # i 1166175156245786
-    = . q 304 # i 1767804173463569 = . q 305 # i 1085602682198079 = . q 306 # i 1965932390587234 = . q 307 # i 205988781173318
-    = . q 308 # i 1051733436703390 = . q 309 # i 652575881366654 = . q 310 # i 1 = . q 311 # i 0
-    = . q 312 # i 0 = . q 313 # i 0 = . q 314 # i 0 = . q 315 # i 356077903060975
-    = . q 316 # i 2076605496446737 = . q 317 # i 1233138407901684 = . q 318 # i 1272668747979945 = . q 319 # i 71529050535104
-    ^ v
-}
-
-// ── niels-form comb table + dedicated double/madd (keygen fast path) ──
+// ── fixed-base: scalar · 9, on Edwards ────────────────────────────
+// scalar·9 on the Montgomery curve is scalar·B on the birationally
+// equivalent Ed25519 curve (B ↦ u = 9, u = (1 + y)/(1 − y)), and
+// twisted-Edwards addition is COMPLETE (d is not a square), so a
+// fixed-base method needs no exceptional case. This is ref10's
+// ge_scalarmult_base: the clamped scalar as 64 signed radix-16 digits
+// e_i ∈ [−8, 8], and a table of j·256^k·B (k < 32, 1 ≤ j ≤ 8) in affine
+// niels form (y + x, y − x, 2d·x·y). Then
 //
-// The comb used to run a generic 9-_M complete addition twice per
-// iteration — once as a doubling, once to add a table entry whose Z is
-// 1 by construction. The dedicated shapes below are the ref10/EFD ones:
-// an extended-coordinate doubling (dbl-2008-hwcd, a = −1) at 4M+4S and
-// a mixed addition against a precomputed NIELS entry (y+x, y−x, 2d·t)
-// at 7M. The niels table (16 entries × 15 limbs) is derived ONCE per
-// process from the baked affine table and cached in a global — the old
-// path re-materialised the 320-limb table on every keygen. Two first
-// callers may both build: publish-once slot 4 picks one, and the other
-// copy is dropped (slot registry: stdlib/std/tls_server.nu).
-: ~ i g_xe_ntbl 0
+//     Σ e_i 16^i B = 16 · Σ_{i odd} e_i 16^(i−1) B + Σ_{i even} e_i 16^i B
+//
+// is 64 mixed additions (7M each), each against one entry chosen by a
+// constant-time scan of its row's eight (negated by mask for a negative
+// digit), and FOUR doublings — where the 4-tooth comb this replaces
+// doubled once per window, 64 times, and scanned sixteen entries. The
+// result maps back to u = (Z + Y)/(Z − Y) with one inversion.
 
-@ __xe_ntbl_build → v {
-    : ( Vec i ) src ( __xe_comb_table )
-    : ( Vec i ) d2 ( __xe_d2 )
-    : ( Vec i ) ntbl ( vec_with_cap [i] 240 )
-    : b _l ( vec_set_len [i] ntbl 240 )
-    : *i np ( vec_data [i] ntbl )
-    : ( Vec i ) x ( _gf_zero )
-    : ( Vec i ) y ( _gf_zero )
-    : ( Vec i ) t ( _gf_zero )
-    : ( Vec i ) yp ( _gf_zero )
-    : ( Vec i ) ym ( _gf_zero )
-    : ( Vec i ) t2d ( _gf_zero )
-    : *i sp ( vec_data [i] src )
-    : *i xp ( vec_data [i] x )
-    : *i yq ( vec_data [i] y )
-    : *i tp ( vec_data [i] t )
-    : *i ypp ( vec_data [i] yp )
-    : *i ymp ( vec_data [i] ym )
-    : *i tdp ( vec_data [i] t2d )
-    : ~ i e 0
-    ~ < e 16 {
-        : i base * e 20
-        : ~ i j 0
-        ~ < j 5 {
-            = . xp j . sp + base j
-            = . yq j . sp + + base 5 j
-            = . tp j . sp + + base 15 j
-            = j + j 1
-        }
-        ( _A yp y x )
-        ( _Z ym y x )
-        ( _M t2d t d2 )
-        : i nb * e 15
-        = j 0
-        ~ < j 5 {
-            = . np + nb j . ypp j
-            = . np + + nb 5 j . ymp j
-            = . np + + nb 10 j . tdp j
-            = j + j 1
-        }
-        = e + e 1
-    }
-    // The winner lives for the rest of the program, through the global.
-    = g_xe_ntbl ( vec_publish_once [i] 4 ntbl )
+// One table: 32 rows × 8 entries × (y + x, y − x, 2d·x·y) × 4 words —
+// 24 KB, built once per process (__xe_tbl_build) and shared through
+// publish-once slot 4 (registry: stdlib/std/tls_server.nu).
+: ~ i g_xe_tbl 0
+
+// 2d and the base point B = (x, 4/5), as four words.
+inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
+    = o0 16993941304535871833 = o1 63073048630374742 = o2 1841551078520508720 = o3 2596001775599221991
 }
 
-@ __xe_ntbl → ( Vec i ) {
-    ? == g_xe_ntbl 0 { ( __xe_ntbl_build ) } {}
-    ^ @ ( Vec i ) { # s g_xe_ntbl }
-}
-
-// scalar·B via the comb → 32-byte little-endian Montgomery u (the X25519
-// public key). Constant-time; no per-call table build or Vec allocations.
-@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
-    : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
-    : u64 sw1 # u64 ( _ld64u scalar 8 )
-    : u64 sw2 # u64 ( _ld64u scalar 16 )
-    : u64 sw3 | & # u64 ( _ld64u scalar 24 ) 9223372036854775807 4611686018427387904
-
-    : ( Vec i ) tbl ( __xe_ntbl )
-    : *i tb ( vec_data [i] tbl )
-    : ~ u64 px0 0
-    : ~ u64 px1 0
-    : ~ u64 px2 0
-    : ~ u64 px3 0
-    : ~ u64 px4 0
-    : ~ u64 py0 1
-    : ~ u64 py1 0
-    : ~ u64 py2 0
-    : ~ u64 py3 0
-    : ~ u64 py4 0
-    : ~ u64 pz0 1
-    : ~ u64 pz1 0
-    : ~ u64 pz2 0
-    : ~ u64 pz3 0
-    : ~ u64 pz4 0
-    : ~ u64 pt0 0
-    : ~ u64 pt1 0
-    : ~ u64 pt2 0
-    : ~ u64 pt3 0
-    : ~ u64 pt4 0
+// Extended (X : Y : Z : T), T = XY/Z: o ← p + q, add-2008-hwcd-3 (a = −1),
+// complete. Table build only.
+@ __xe_add * u64 o * u64 p * u64 q → v {
+    : ~ u64 d20 0
+    : ~ u64 d21 0
+    : ~ u64 d22 0
+    : ~ u64 d23 0
+    ( __xe_d2 d20 d21 d22 d23 )
+    : ~ u64 s0 0
+    : ~ u64 s1 0
+    : ~ u64 s2 0
+    : ~ u64 s3 0
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
     : ~ u64 a0 0
     : ~ u64 a1 0
     : ~ u64 a2 0
     : ~ u64 a3 0
-    : ~ u64 a4 0
     : ~ u64 b0 0
     : ~ u64 b1 0
     : ~ u64 b2 0
     : ~ u64 b3 0
-    : ~ u64 b4 0
     : ~ u64 c0 0
     : ~ u64 c1 0
     : ~ u64 c2 0
     : ~ u64 c3 0
-    : ~ u64 c4 0
-    : ~ u64 e0 0
-    : ~ u64 e1 0
-    : ~ u64 e2 0
-    : ~ u64 e3 0
-    : ~ u64 e4 0
-    : ~ u64 f0 0
-    : ~ u64 f1 0
-    : ~ u64 f2 0
-    : ~ u64 f3 0
-    : ~ u64 f4 0
+    : ~ u64 dd0 0
+    : ~ u64 dd1 0
+    : ~ u64 dd2 0
+    : ~ u64 dd3 0
+    // A = (Y1 − X1)(Y2 − X2), B = (Y1 + X1)(Y2 + X2)
+    ( __f4_sub s0 s1 s2 s3 . p 4 . p 5 . p 6 . p 7 . p 0 . p 1 . p 2 . p 3 )
+    ( __f4_sub r0 r1 r2 r3 . q 4 . q 5 . q 6 . q 7 . q 0 . q 1 . q 2 . q 3 )
+    ( __f4_mul a0 a1 a2 a3 s0 s1 s2 s3 r0 r1 r2 r3 )
+    ( __f4_add s0 s1 s2 s3 . p 4 . p 5 . p 6 . p 7 . p 0 . p 1 . p 2 . p 3 )
+    ( __f4_add r0 r1 r2 r3 . q 4 . q 5 . q 6 . q 7 . q 0 . q 1 . q 2 . q 3 )
+    ( __f4_mul b0 b1 b2 b3 s0 s1 s2 s3 r0 r1 r2 r3 )
+    // C = T1 · 2d · T2, D = 2 Z1 Z2
+    ( __f4_mul s0 s1 s2 s3 . p 12 . p 13 . p 14 . p 15 d20 d21 d22 d23 )
+    ( __f4_mul c0 c1 c2 c3 s0 s1 s2 s3 . q 12 . q 13 . q 14 . q 15 )
+    ( __f4_mul s0 s1 s2 s3 . p 8 . p 9 . p 10 . p 11 . q 8 . q 9 . q 10 . q 11 )
+    ( __f4_add dd0 dd1 dd2 dd3 s0 s1 s2 s3 s0 s1 s2 s3 )
+    // E = B − A, F = D − C, G = D + C, H = B + A
     : ~ u64 g0 0
     : ~ u64 g1 0
     : ~ u64 g2 0
     : ~ u64 g3 0
-    : ~ u64 g4 0
     : ~ u64 h0 0
     : ~ u64 h1 0
     : ~ u64 h2 0
     : ~ u64 h3 0
-    : ~ u64 h4 0
+    ( __f4_sub s0 s1 s2 s3 b0 b1 b2 b3 a0 a1 a2 a3 )
+    ( __f4_sub r0 r1 r2 r3 dd0 dd1 dd2 dd3 c0 c1 c2 c3 )
+    ( __f4_add g0 g1 g2 g3 dd0 dd1 dd2 dd3 c0 c1 c2 c3 )
+    ( __f4_add h0 h1 h2 h3 b0 b1 b2 b3 a0 a1 a2 a3 )
+    // X = E·F, Y = G·H, Z = F·G, T = E·H
+    : ~ u64 w0 0
+    : ~ u64 w1 0
+    : ~ u64 w2 0
+    : ~ u64 w3 0
+    ( __f4_mul w0 w1 w2 w3 s0 s1 s2 s3 r0 r1 r2 r3 ) = . o 0 w0 = . o 1 w1 = . o 2 w2 = . o 3 w3
+    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 h0 h1 h2 h3 ) = . o 4 w0 = . o 5 w1 = . o 6 w2 = . o 7 w3
+    ( __f4_mul w0 w1 w2 w3 r0 r1 r2 r3 g0 g1 g2 g3 ) = . o 8 w0 = . o 9 w1 = . o 10 w2 = . o 11 w3
+    ( __f4_mul w0 w1 w2 w3 s0 s1 s2 s3 h0 h1 h2 h3 ) = . o 12 w0 = . o 13 w1 = . o 14 w2 = . o 15 w3
+}
 
-    : ~ i i 63
-    ~ >= i 0 {
-        // __xe_dbl: extended-coordinate doubling (4M + 4S)
-        ( __fe_sq_in a0 a1 a2 a3 a4 px0 px1 px2 px3 px4 )
-        ( __fe_sq_in b0 b1 b2 b3 b4 py0 py1 py2 py3 py4 )
-        ( __fe_sq_in c0 c1 c2 c3 c4 pz0 pz1 pz2 pz3 pz4 )
-        = c0 + c0 c0 = c1 + c1 c1 = c2 + c2 c2 = c3 + c3 c3 = c4 + c4 c4
-        : ~ u64 cy >> c0 51
-        = c0 & c0 2251799813685247
-        = c1 + c1 cy = cy >> c1 51 = c1 & c1 2251799813685247
-        = c2 + c2 cy = cy >> c2 51 = c2 & c2 2251799813685247
-        = c3 + c3 cy = cy >> c3 51 = c3 & c3 2251799813685247
-        = c4 + c4 cy = cy >> c4 51 = c4 & c4 2251799813685247
-        = c0 + c0 * 19 cy
-        = e0 + px0 py0 = e1 + px1 py1 = e2 + px2 py2 = e3 + px3 py3 = e4 + px4 py4
-        ( __fe_sq_in f0 f1 f2 f3 f4 e0 e1 e2 e3 e4 )
-        ( __fe_sub g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 a0 a1 a2 a3 a4 )
-        ( __fe_sub e0 e1 e2 e3 e4 g0 g1 g2 g3 g4 b0 b1 b2 b3 b4 )
-        ( __fe_sub g0 g1 g2 g3 g4 b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
-        ( __fe_sub f0 f1 f2 f3 f4 g0 g1 g2 g3 g4 c0 c1 c2 c3 c4 )
-        ( __fe_sub c0 c1 c2 c3 c4 0 0 0 0 0 a0 a1 a2 a3 a4 )
-        ( __fe_sub h0 h1 h2 h3 h4 c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 )
-        ( __fe_mul_in px0 px1 px2 px3 px4 e0 e1 e2 e3 e4 f0 f1 f2 f3 f4 )
-        ( __fe_mul_in py0 py1 py2 py3 py4 g0 g1 g2 g3 g4 h0 h1 h2 h3 h4 )
-        ( __fe_mul_in pt0 pt1 pt2 pt3 pt4 e0 e1 e2 e3 e4 h0 h1 h2 h3 h4 )
-        ( __fe_mul_in pz0 pz1 pz2 pz3 pz4 f0 f1 f2 f3 f4 g0 g1 g2 g3 g4 )
+// The 256 table points j·256^k·B in extended coordinates, then ONE field
+// inversion for all 256 Z (Montgomery's batch trick: prefix products, the
+// inverse of the last, and back down), then the affine niels triples.
+@ __xe_tbl_build → v {
+    : ( Vec u64 ) pts ( vec_zeroed [u64] * 256 16 )
+    : *u64 pp ( vec_data [u64] pts )
+    : ( Vec u64 ) cur ( vec_zeroed [u64] 16 )
+    : *u64 cp ( vec_data [u64] cur )
+    // B: x, y = 4/5, Z = 1, T = x·y
+    = . cp 0 14507833142362363162 = . cp 1 7578651490590762930 = . cp 2 13881468655802702940 = . cp 3 2407515759118799870
+    = . cp 4 7378697629483820632 = . cp 5 7378697629483820646 = . cp 6 7378697629483820646 = . cp 7 7378697629483820646
+    = . cp 8 1
+    : ~ u64 w0 0
+    : ~ u64 w1 0
+    : ~ u64 w2 0
+    : ~ u64 w3 0
+    ( __f4_mul w0 w1 w2 w3 . cp 0 . cp 1 . cp 2 . cp 3 . cp 4 . cp 5 . cp 6 . cp 7 )
+    = . cp 12 w0 = . cp 13 w1 = . cp 14 w2 = . cp 15 w3
+    : ~ i k 0
+    ~ < k 32 {
+        // row k: 1·Q … 8·Q for Q = 256^k·B (in cur)
+        : *u64 row # *u64 + # i pp * * k 8 128
+        ( nurl_memcpy # s row # s cp 128 )
+        : ~ i j 1
+        ~ < j 8 {
+            ( __xe_add # *u64 + # i row * j 128 # *u64 + # i row * - j 1 128 cp )
+            = j + j 1
+        }
+        // Q ← 256·Q: eight doublings, as additions to itself (complete).
+        : ~ i dbl 0
+        ~ < dbl 8 { ( __xe_add cp cp cp ) = dbl + dbl 1 }
+        = k + k 1
+    }
+    // Batch inversion of the 256 Z: pre[e] = Z_0 ⋯ Z_e.
+    : ( Vec u64 ) pre ( vec_zeroed [u64] * 256 4 )
+    : *u64 rp ( vec_data [u64] pre )
+    = . rp 0 . pp 8 = . rp 1 . pp 9 = . rp 2 . pp 10 = . rp 3 . pp 11
+    : ~ i e 1
+    ~ < e 256 {
+        : i zo + * e 16 8
+        ( __f4_mul w0 w1 w2 w3 . rp * - e 1 4 . rp + * - e 1 4 1 . rp + * - e 1 4 2 . rp + * - e 1 4 3 . pp zo . pp + zo 1 . pp + zo 2 . pp + zo 3 )
+        = . rp * e 4 w0 = . rp + * e 4 1 w1 = . rp + * e 4 2 w2 = . rp + * e 4 3 w3
+        = e + e 1
+    }
+    : ~ u64 v0 0
+    : ~ u64 v1 0
+    : ~ u64 v2 0
+    : ~ u64 v3 0
+    ( __f4_inv v0 v1 v2 v3 . rp 1020 . rp 1021 . rp 1022 . rp 1023 )
+    : ( Vec i ) tbl ( vec_zeroed [i] * 256 12 )
+    : *u64 tp # *u64 ( vec_data [i] tbl )
+    : ~ u64 d20 0
+    : ~ u64 d21 0
+    : ~ u64 d22 0
+    : ~ u64 d23 0
+    ( __xe_d2 d20 d21 d22 d23 )
+    : ~ u64 zi0 0
+    : ~ u64 zi1 0
+    : ~ u64 zi2 0
+    : ~ u64 zi3 0
+    : ~ u64 x0 0
+    : ~ u64 x1 0
+    : ~ u64 x2 0
+    : ~ u64 x3 0
+    : ~ u64 y0 0
+    : ~ u64 y1 0
+    : ~ u64 y2 0
+    : ~ u64 y3 0
+    = e 255
+    ~ >= e 0 {
+        : i po * e 16
+        // 1/Z_e = v · pre[e − 1]; then v ← v · Z_e for the entries below.
+        ? > e 0 {
+            : i ro * - e 1 4
+            ( __f4_mul zi0 zi1 zi2 zi3 v0 v1 v2 v3 . rp ro . rp + ro 1 . rp + ro 2 . rp + ro 3 )
+            ( __f4_mul w0 w1 w2 w3 v0 v1 v2 v3 . pp + po 8 . pp + po 9 . pp + po 10 . pp + po 11 )
+            = v0 w0 = v1 w1 = v2 w2 = v3 w3
+        } { = zi0 v0 = zi1 v1 = zi2 v2 = zi3 v3 }
+        ( __f4_mul x0 x1 x2 x3 . pp po . pp + po 1 . pp + po 2 . pp + po 3 zi0 zi1 zi2 zi3 )
+        ( __f4_mul y0 y1 y2 y3 . pp + po 4 . pp + po 5 . pp + po 6 . pp + po 7 zi0 zi1 zi2 zi3 )
+        : i to * e 12
+        ( __f4_add w0 w1 w2 w3 y0 y1 y2 y3 x0 x1 x2 x3 )
+        = . tp to w0 = . tp + to 1 w1 = . tp + to 2 w2 = . tp + to 3 w3
+        ( __f4_sub w0 w1 w2 w3 y0 y1 y2 y3 x0 x1 x2 x3 )
+        = . tp + to 4 w0 = . tp + to 5 w1 = . tp + to 6 w2 = . tp + to 7 w3
+        ( __f4_mul w0 w1 w2 w3 x0 x1 x2 x3 y0 y1 y2 y3 )
+        ( __f4_mul x0 x1 x2 x3 w0 w1 w2 w3 d20 d21 d22 d23 )
+        = . tp + to 8 x0 = . tp + to 9 x1 = . tp + to 10 x2 = . tp + to 11 x3
+        = e - e 1
+    }
+    // The winner lives for the rest of the program, through the global.
+    = g_xe_tbl ( vec_publish_once [i] 4 tbl )
+}
 
-        // 4-bit comb digit from clamped scalar words
-        : u64 sh # u64 i
-        : u64 digit | | | & >> sw0 sh 1 << & >> sw1 sh 1 1 << & >> sw2 sh 1 2 << & >> sw3 sh 1 3
+@ __xe_tbl → ( Vec i ) {
+    ? == g_xe_tbl 0 { ( __xe_tbl_build ) } {}
+    ^ @ ( Vec i ) { # s g_xe_tbl }
+}
 
-        // Constant-time scan of 16 niels entries (15 limbs each)
-        : ~ u64 yp0 0
+// scalar·B → 32-byte little-endian Montgomery u (the X25519 public key).
+// Constant time in the scalar: every digit's row is scanned whole, its
+// sign applied by mask, and the step sequence is fixed.
+@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec i ) tbl ( __xe_tbl )
+    : *u64 tb # *u64 ( vec_data [i] tbl )
+    // The clamped scalar's 64 signed radix-16 digits, e_i ∈ [−8, 8]
+    // (e_63 ≤ 8: bit 255 is clear and bit 254 set).
+    : ( Vec i ) dig ( vec_zeroed [i] 64 )
+    : *i dp ( vec_data [i] dig )
+    : *u sb ( vec_data [u] scalar )
+    : ~ i q 0
+    ~ < q 32 {
+        : ~ i by # i . sb q
+        ? == q 0 { = by & by 248 } {}
+        ? == q 31 { = by | & by 127 64 } {}
+        = . dp * q 2 & by 15
+        = . dp + * q 2 1 & >> by 4 15
+        = q + q 1
+    }
+    : ~ i carry 0
+    = q 0
+    ~ < q 63 {
+        : i ev + . dp q carry
+        = carry >> + ev 8 4
+        = . dp q - ev << carry 4
+        = q + q 1
+    }
+    = . dp 63 + . dp 63 carry
+
+    // h = the identity (0 : 1 : 1 : 0)
+    : ~ u64 px0 0
+    : ~ u64 px1 0
+    : ~ u64 px2 0
+    : ~ u64 px3 0
+    : ~ u64 py0 1
+    : ~ u64 py1 0
+    : ~ u64 py2 0
+    : ~ u64 py3 0
+    : ~ u64 pz0 1
+    : ~ u64 pz1 0
+    : ~ u64 pz2 0
+    : ~ u64 pz3 0
+    : ~ u64 pt0 0
+    : ~ u64 pt1 0
+    : ~ u64 pt2 0
+    : ~ u64 pt3 0
+    : ~ u64 a0 0
+    : ~ u64 a1 0
+    : ~ u64 a2 0
+    : ~ u64 a3 0
+    : ~ u64 b0 0
+    : ~ u64 b1 0
+    : ~ u64 b2 0
+    : ~ u64 b3 0
+    : ~ u64 c0 0
+    : ~ u64 c1 0
+    : ~ u64 c2 0
+    : ~ u64 c3 0
+    : ~ u64 d0 0
+    : ~ u64 d1 0
+    : ~ u64 d2 0
+    : ~ u64 d3 0
+    : ~ u64 e0 0
+    : ~ u64 e1 0
+    : ~ u64 e2 0
+    : ~ u64 e3 0
+    : ~ u64 f0 0
+    : ~ u64 f1 0
+    : ~ u64 f2 0
+    : ~ u64 f3 0
+
+    // Steps 0 … 31 add the odd digits, 32 … 63 the even ones; between
+    // them h is multiplied by 16. The order is public.
+    : ~ i st 0
+    ~ < st 64 {
+        ? == st 32 {
+            // h ← 16·h: four doublings (dbl-2008-hwcd), 4S + 4M each.
+            : ~ i dn 0
+            ~ < dn 4 {
+                ( __f4_sq_in a0 a1 a2 a3 px0 px1 px2 px3 )
+                ( __f4_sq_in b0 b1 b2 b3 py0 py1 py2 py3 )
+                ( __f4_sq_in e0 e1 e2 e3 pz0 pz1 pz2 pz3 )
+                ( __f4_add c0 c1 c2 c3 e0 e1 e2 e3 e0 e1 e2 e3 )
+                ( __f4_add e0 e1 e2 e3 px0 px1 px2 px3 py0 py1 py2 py3 )
+                ( __f4_sq_in d0 d1 d2 d3 e0 e1 e2 e3 )
+                // Y' = YY + XX, Z' = YY − XX, X' = (X + Y)² − Y', T' = 2ZZ − Z'
+                ( __f4_add py0 py1 py2 py3 b0 b1 b2 b3 a0 a1 a2 a3 )
+                ( __f4_sub pz0 pz1 pz2 pz3 b0 b1 b2 b3 a0 a1 a2 a3 )
+                ( __f4_sub px0 px1 px2 px3 d0 d1 d2 d3 py0 py1 py2 py3 )
+                ( __f4_sub pt0 pt1 pt2 pt3 c0 c1 c2 c3 pz0 pz1 pz2 pz3 )
+                ( __f4_mul_in a0 a1 a2 a3 px0 px1 px2 px3 pt0 pt1 pt2 pt3 )
+                ( __f4_mul_in b0 b1 b2 b3 py0 py1 py2 py3 pz0 pz1 pz2 pz3 )
+                ( __f4_mul_in c0 c1 c2 c3 pz0 pz1 pz2 pz3 pt0 pt1 pt2 pt3 )
+                ( __f4_mul_in pt0 pt1 pt2 pt3 px0 px1 px2 px3 py0 py1 py2 py3 )
+                = px0 a0 = px1 a1 = px2 a2 = px3 a3
+                = py0 b0 = py1 b1 = py2 b2 = py3 b3
+                = pz0 c0 = pz1 c1 = pz2 c2 = pz3 c3
+                = dn + dn 1
+            }
+        } {}
+        : i di ? < st 32 + * st 2 1 * - st 32 2
+        : i row / di 2
+        : i ev . dp di
+        // |e| and its sign, branch-free
+        : u64 neg >> # u64 ev 63
+        : u64 ab # u64 - ev << & - 0 # i neg ev 1
+        // The entry: (1, 1, 0) — the identity — then each of the eight
+        // taken under a mask when it is the one.
+        : ~ u64 yp0 1
         : ~ u64 yp1 0
         : ~ u64 yp2 0
         : ~ u64 yp3 0
-        : ~ u64 yp4 0
-        : ~ u64 ym0 0
+        : ~ u64 ym0 1
         : ~ u64 ym1 0
         : ~ u64 ym2 0
         : ~ u64 ym3 0
-        : ~ u64 ym4 0
-        : ~ u64 td0 0
-        : ~ u64 td1 0
-        : ~ u64 td2 0
-        : ~ u64 td3 0
-        : ~ u64 td4 0
-        : ~ i e 0
-        ~ < e 16 {
-            : u64 z ^^ # u64 e digit
-            : u64 mask - # u64 0 >> - z 1 63
-            : i base * e 15
-            = yp0 | yp0 & mask # u64 . tb base
-            = yp1 | yp1 & mask # u64 . tb + base 1
-            = yp2 | yp2 & mask # u64 . tb + base 2
-            = yp3 | yp3 & mask # u64 . tb + base 3
-            = yp4 | yp4 & mask # u64 . tb + base 4
-            = ym0 | ym0 & mask # u64 . tb + base 5
-            = ym1 | ym1 & mask # u64 . tb + base 6
-            = ym2 | ym2 & mask # u64 . tb + base 7
-            = ym3 | ym3 & mask # u64 . tb + base 8
-            = ym4 | ym4 & mask # u64 . tb + base 9
-            = td0 | td0 & mask # u64 . tb + base 10
-            = td1 | td1 & mask # u64 . tb + base 11
-            = td2 | td2 & mask # u64 . tb + base 12
-            = td3 | td3 & mask # u64 . tb + base 13
-            = td4 | td4 & mask # u64 . tb + base 14
-            = e + e 1
+        : ~ u64 xy0 0
+        : ~ u64 xy1 0
+        : ~ u64 xy2 0
+        : ~ u64 xy3 0
+        : *u64 rb # *u64 + # i tb * row 768
+        : ~ i j 0
+        ~ < j 8 {
+            : u64 z ^^ ab # u64 + j 1
+            : u64 m - # u64 0 >> - z 1 63
+            : i o * j 12
+            = yp0 ^^ yp0 & m ^^ yp0 . rb o
+            = yp1 ^^ yp1 & m ^^ yp1 . rb + o 1
+            = yp2 ^^ yp2 & m ^^ yp2 . rb + o 2
+            = yp3 ^^ yp3 & m ^^ yp3 . rb + o 3
+            = ym0 ^^ ym0 & m ^^ ym0 . rb + o 4
+            = ym1 ^^ ym1 & m ^^ ym1 . rb + o 5
+            = ym2 ^^ ym2 & m ^^ ym2 . rb + o 6
+            = ym3 ^^ ym3 & m ^^ ym3 . rb + o 7
+            = xy0 ^^ xy0 & m ^^ xy0 . rb + o 8
+            = xy1 ^^ xy1 & m ^^ xy1 . rb + o 9
+            = xy2 ^^ xy2 & m ^^ xy2 . rb + o 10
+            = xy3 ^^ xy3 & m ^^ xy3 . rb + o 11
+            = j + j 1
         }
+        // −(x, y) = (−x, y): swap y + x with y − x, negate 2d·x·y.
+        : u64 nm - # u64 0 neg
+        ( __f4_cswap yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 nm )
+        ( __f4_sub a0 a1 a2 a3 0 0 0 0 xy0 xy1 xy2 xy3 )
+        ( __f4_cswap xy0 xy1 xy2 xy3 a0 a1 a2 a3 nm )
 
-        // __xe_madd: mixed addition with niels entry (7M, Z2 = 1)
-        ( __fe_sub e0 e1 e2 e3 e4 py0 py1 py2 py3 py4 px0 px1 px2 px3 px4 )
-        ( __fe_mul_in a0 a1 a2 a3 a4 e0 e1 e2 e3 e4 ym0 ym1 ym2 ym3 ym4 )
-        = f0 + py0 px0 = f1 + py1 px1 = f2 + py2 px2 = f3 + py3 px3 = f4 + py4 px4
-        ( __fe_mul_in b0 b1 b2 b3 b4 f0 f1 f2 f3 f4 yp0 yp1 yp2 yp3 yp4 )
-        ( __fe_mul_in c0 c1 c2 c3 c4 pt0 pt1 pt2 pt3 pt4 td0 td1 td2 td3 td4 )
-        : u64 d0 + pz0 pz0
-        : u64 d1 + pz1 pz1
-        : u64 d2 + pz2 pz2
-        : u64 d3 + pz3 pz3
-        : u64 d4 + pz4 pz4
-        ( __fe_sub e0 e1 e2 e3 e4 b0 b1 b2 b3 b4 a0 a1 a2 a3 a4 )
-        ( __fe_sub f0 f1 f2 f3 f4 d0 d1 d2 d3 d4 c0 c1 c2 c3 c4 )
-        = g0 + d0 c0 = g1 + d1 c1 = g2 + d2 c2 = g3 + d3 c3 = g4 + d4 c4
-        = h0 + b0 a0 = h1 + b1 a1 = h2 + b2 a2 = h3 + b3 a3 = h4 + b4 a4
-        ( __fe_mul_in px0 px1 px2 px3 px4 e0 e1 e2 e3 e4 f0 f1 f2 f3 f4 )
-        ( __fe_mul_in py0 py1 py2 py3 py4 g0 g1 g2 g3 g4 h0 h1 h2 h3 h4 )
-        ( __fe_mul_in pz0 pz1 pz2 pz3 pz4 g0 g1 g2 g3 g4 f0 f1 f2 f3 f4 )
-        ( __fe_mul_in pt0 pt1 pt2 pt3 pt4 e0 e1 e2 e3 e4 h0 h1 h2 h3 h4 )
-
-        = i - i 1
+        // h ← h + entry (ge_madd, 7M): A = (Y + X)(y + x), B = (Y − X)(y − x),
+        // C = T · 2dxy, D = 2Z; X = (A − B)(D − C), Y = (A + B)(D + C),
+        // Z = (D + C)(D − C), T = (A − B)(A + B).
+        ( __f4_add e0 e1 e2 e3 py0 py1 py2 py3 px0 px1 px2 px3 )
+        ( __f4_mul_in a0 a1 a2 a3 e0 e1 e2 e3 yp0 yp1 yp2 yp3 )
+        ( __f4_sub f0 f1 f2 f3 py0 py1 py2 py3 px0 px1 px2 px3 )
+        ( __f4_mul_in b0 b1 b2 b3 f0 f1 f2 f3 ym0 ym1 ym2 ym3 )
+        ( __f4_mul_in c0 c1 c2 c3 pt0 pt1 pt2 pt3 xy0 xy1 xy2 xy3 )
+        ( __f4_add d0 d1 d2 d3 pz0 pz1 pz2 pz3 pz0 pz1 pz2 pz3 )
+        ( __f4_sub px0 px1 px2 px3 a0 a1 a2 a3 b0 b1 b2 b3 )
+        ( __f4_add py0 py1 py2 py3 a0 a1 a2 a3 b0 b1 b2 b3 )
+        ( __f4_add pz0 pz1 pz2 pz3 d0 d1 d2 d3 c0 c1 c2 c3 )
+        ( __f4_sub pt0 pt1 pt2 pt3 d0 d1 d2 d3 c0 c1 c2 c3 )
+        ( __f4_mul_in a0 a1 a2 a3 px0 px1 px2 px3 pt0 pt1 pt2 pt3 )
+        ( __f4_mul_in b0 b1 b2 b3 py0 py1 py2 py3 pz0 pz1 pz2 pz3 )
+        ( __f4_mul_in c0 c1 c2 c3 pz0 pz1 pz2 pz3 pt0 pt1 pt2 pt3 )
+        ( __f4_mul_in pt0 pt1 pt2 pt3 px0 px1 px2 px3 py0 py1 py2 py3 )
+        = px0 a0 = px1 a1 = px2 a2 = px3 a3
+        = py0 b0 = py1 b1 = py2 b2 = py3 b3
+        = pz0 c0 = pz1 c1 = pz2 c2 = pz3 c3
+        = st + st 1
     }
 
-    // Birational map to Montgomery u = (Z + Y) / (Z - Y)
-    = a0 + pz0 py0 = a1 + pz1 py1 = a2 + pz2 py2 = a3 + pz3 py3 = a4 + pz4 py4
-    ( __fe_sub b0 b1 b2 b3 b4 pz0 pz1 pz2 pz3 pz4 py0 py1 py2 py3 py4 )
-    ( __fe_inv c0 c1 c2 c3 c4 b0 b1 b2 b3 b4 )
-    ( __fe_mul e0 e1 e2 e3 e4 a0 a1 a2 a3 a4 c0 c1 c2 c3 c4 )
-    ^ ( __fe_pack e0 e1 e2 e3 e4 )
+    // Birational map to Montgomery u = (Z + Y) / (Z − Y)
+    ( __f4_add a0 a1 a2 a3 pz0 pz1 pz2 pz3 py0 py1 py2 py3 )
+    ( __f4_sub b0 b1 b2 b3 pz0 pz1 pz2 pz3 py0 py1 py2 py3 )
+    ( __f4_inv c0 c1 c2 c3 b0 b1 b2 b3 )
+    ( __f4_mul d0 d1 d2 d3 a0 a1 a2 a3 c0 c1 c2 c3 )
+    ^ ( __f4_pack d0 d1 d2 d3 )
 }
 
 @ x25519_base ( Vec u ) scalar → ( Vec u ) {
-    // Fixed-base: the generator is constant, so a precomputed Edwards comb
-    // (x25519_base_comb) beats the Montgomery ladder. Same result, verified
-    // against the ladder for the RFC 7748 vectors.
+    // Fixed-base: the generator is constant, so ref10's signed-digit
+    // method over a precomputed Edwards table (x25519_base_comb) beats
+    // the Montgomery ladder. Same result: x25519_edge_vectors holds the
+    // two to each other.
     ^ ( x25519_base_comb scalar )
 }

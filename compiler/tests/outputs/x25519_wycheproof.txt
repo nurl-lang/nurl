@@ -1,0 +1,5 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+wycheproof x25519: 518 cases, 0 failures
