@@ -317,8 +317,9 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 - [ ] **P0 — Complete independent cryptographic and X.509 assurance.** Current
   constant-time claims are by construction/review rather than measurement;
-  RSA retains value-dependent bigint timing; name constraints and revocation
-  are not enforced (`docs/CRYPTO.md`).
+  name constraints and revocation are not enforced (`docs/CRYPTO.md`). (RSA's
+  value-dependent `bigint` timing is gone: it runs on the fixed-width
+  `std/rsa_mont` field.)
   - Vendor or content-address authoritative ACVP/KAT/negative vectors so the
     mandatory release gate runs offline and cannot `SKIP`; use a separate
     networked refresh/integrity job to update the corpus.
@@ -452,15 +453,18 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 
 - [ ] **P1 — Protect package credentials and publication contents.** The curl
   backend can place bearer headers in process arguments, follows redirects, and
-  permits `http://`; credential files are plaintext-before-chmod, symlink
-  following, unlocked, and non-atomic. Packaging can include sensitive dotfiles
-  by default.
+  permits `http://`; credential files follow symlinks, are unlocked and are not
+  fsynced. Packaging can include sensitive dotfiles by default. (Done: the file
+  is created owner-only by `mkstemp` and renamed into place —
+  `write_file_private` — and lives under `env_home_dir`, the user profile on
+  Windows; with no home it is refused, never written to the working
+  directory.)
   - Keep secrets out of argv/environment; reject credentialed redirects or
     require same-origin HTTPS validation, and forbid non-loopback plaintext
     registry authentication.
   - Store credentials only under a trusted owner-only home using no-follow
-    checks, exclusive 0600 temp files, fsync, locking, and atomic rename; fail
-    closed if no trusted home exists.
+    checks, fsync and locking (exclusive 0600 temp files, atomic rename and
+    failing closed without a home are in place).
   - Block `.env*`, private keys, credential stores, and high-confidence secret
     material by default, with an explicit override; always present the exact
     package inventory/digest for review.

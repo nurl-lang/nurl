@@ -16,6 +16,11 @@
 //   ( hkdf_expand_label_prk prk label ctx length )         → ( Vec u )
 //   ( derive_secret_prk prk label transcript_hash )        → ( Vec u )
 //
+// `out` must not overlap `info` / `context`: a multi-block expansion
+// streams the info into every block's MAC, so output written into it
+// would change the later blocks. And one derivation at a time per prepared
+// key (see HmacSha256 in std/hash_sha256.nu).
+//
 // The `_in` forms write out[at, at + length) of the caller's buffer and
 // allocate nothing; they return false, writing nothing, when the range
 // is not inside `out` or the request is not one HKDF defines (length

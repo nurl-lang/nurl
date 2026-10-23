@@ -28,6 +28,8 @@
 // point multiply (ECDSA nonce / ECDH); verify keeps the public bigint path.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladder
 
 // p = 2^256 − 2^224 + 2^192 + 2^96 − 1, little-endian 64-bit limbs.
 @ __p256_mod → ( Vec i ) {
@@ -806,86 +808,6 @@ $ `stdlib/core/vec.nu`
     ^ @ P256Pt { ( _mag4 ) ( _mag4 ) ( _mag4 ) }
 }
 
-// a (= −3 mod p) and b3 (= 3·b mod p), plain (non-Montgomery) limbs.
-@ _p256_a_plain → ( Vec i ) {
-    : ( Vec i ) v ( _mag4 )
-    : *i q ( vec_data [i] v )
-    = . q 0 # i 0xFFFFFFFFFFFFFFFC = . q 1 # i 0x00000000FFFFFFFF
-    = . q 2 0 = . q 3 # i 0xFFFFFFFF00000001
-    ^ v
-}
-
-@ _p256_b3_plain → ( Vec i ) {
-    : ( Vec i ) v ( _mag4 )
-    : *i q ( vec_data [i] v )
-    = . q 0 # i 0xB36AB4BA777720E2 = . q 1 # i 0x2F57141164FB12E2
-    = . q 2 # i 0x1BC3380063C99435 = . q 3 # i 0x1052A18AFEAFBBB6
-    ^ v
-}
-
-// Complete projective point addition, RCB Algorithm 4 (a = −3). All operands
-// in Montgomery form; `am` = a, `b3m` = b3 in Montgomery form.
-@ p256ct_padd P256Scratch scr P256Pt P P256Pt Q ( Vec i ) am ( Vec i ) b3m → P256Pt {
-    : P256Pt out ( _p256_pt_mag )
-    ( p256ct_padd_d scr out P Q am b3m )
-    ^ out
-}
-
-// The same, into a caller-owned destination. `dst` MAY be P and/or Q: the
-// forty steps below are the published register schedule, and in it X3 is
-// first written at step 15 (after the last read of X1 at step 9 and of X2
-// at step 10), Y3 at step 24 and Z3 at step 19 (both after the last reads
-// of Y1/Y2/Z1/Z2 at steps 14–15). The six working registers come from the
-// scratch, so a point addition allocates nothing at all.
-@ p256ct_padd_d P256Scratch scr P256Pt dst P256Pt P P256Pt Q ( Vec i ) am ( Vec i ) b3m → v {
-    : ( Vec i ) X1 . P x : ( Vec i ) Y1 . P y : ( Vec i ) Z1 . P z
-    : ( Vec i ) X2 . Q x : ( Vec i ) Y2 . Q y : ( Vec i ) Z2 . Q z
-    : ( Vec i ) X3 . dst x : ( Vec i ) Y3 . dst y : ( Vec i ) Z3 . dst z
-    : ( Vec i ) t0 . scr g0 : ( Vec i ) t1 . scr g1 : ( Vec i ) t2 . scr g2
-    : ( Vec i ) t3 . scr g3 : ( Vec i ) t4 . scr g4 : ( Vec i ) t5 . scr g5
-    ( _p256_mul_d scr t0 X1 X2 )  //  1
-    ( _p256_mul_d scr t1 Y1 Y2 )  //  2
-    ( _p256_mul_d scr t2 Z1 Z2 )  //  3
-    ( __p256_add_d scr t3 X1 Y1 )  //  4
-    ( __p256_add_d scr t4 X2 Y2 )  //  5
-    ( _p256_mul_d scr t3 t3 t4 )  //  6
-    ( __p256_add_d scr t4 t0 t1 )  //  7
-    ( __p256_sub_d scr t3 t3 t4 )  //  8
-    ( __p256_add_d scr t4 X1 Z1 )  //  9
-    ( __p256_add_d scr t5 X2 Z2 )  // 10
-    ( _p256_mul_d scr t4 t4 t5 )  // 11
-    ( __p256_add_d scr t5 t0 t2 )  // 12
-    ( __p256_sub_d scr t4 t4 t5 )  // 13
-    ( __p256_add_d scr t5 Y1 Z1 )  // 14
-    ( __p256_add_d scr X3 Y2 Z2 )  // 15
-    ( _p256_mul_d scr t5 t5 X3 )  // 16
-    ( __p256_add_d scr X3 t1 t2 )  // 17
-    ( __p256_sub_d scr t5 t5 X3 )  // 18
-    ( _p256_mul_d scr Z3 am t4 )  // 19
-    ( _p256_mul_d scr X3 b3m t2 )  // 20
-    ( __p256_add_d scr Z3 X3 Z3 )  // 21
-    ( __p256_sub_d scr X3 t1 Z3 )  // 22
-    ( __p256_add_d scr Z3 t1 Z3 )  // 23
-    ( _p256_mul_d scr Y3 X3 Z3 )  // 24
-    ( __p256_add_d scr t1 t0 t0 )  // 25
-    ( __p256_add_d scr t1 t1 t0 )  // 26
-    ( _p256_mul_d scr t2 am t2 )  // 27
-    ( _p256_mul_d scr t4 b3m t4 )  // 28
-    ( __p256_add_d scr t1 t1 t2 )  // 29
-    ( __p256_sub_d scr t2 t0 t2 )  // 30
-    ( _p256_mul_d scr t2 am t2 )  // 31
-    ( __p256_add_d scr t4 t4 t2 )  // 32
-    ( _p256_mul_d scr t0 t1 t4 )  // 33
-    ( __p256_add_d scr Y3 Y3 t0 )  // 34
-    ( _p256_mul_d scr t0 t5 t4 )  // 35
-    ( _p256_mul_d scr X3 t3 X3 )  // 36
-    ( __p256_sub_d scr X3 X3 t0 )  // 37
-    ( _p256_mul_d scr t0 t3 t1 )  // 38
-    ( _p256_mul_d scr Z3 t5 Z3 )  // 39
-    ( __p256_add_d scr Z3 Z3 t0 )  // 40
-}
-
-// Constant-time select between two points (each coordinate via masked merge).
 @ p256ct_pt_select i bit P256Pt a P256Pt b → P256Pt {
     : P256Pt out ( _p256_pt_mag )
     ( p256ct_pt_select_d out bit a b )
@@ -1109,9 +1031,14 @@ $ `stdlib/core/vec.nu`
     = . tp + base 7 . yp 3
 }
 
-// Constant-time masked read of entry `digit` into (ex, ey): reads all
-// sixteen entries, merges under an arithmetic equality mask — same
-// discipline as _p256_tbl_get_d.
+// Constant-time masked read of entry `digit` into (ex, ey). `digit` is
+// four bits of a SECRET scalar, so this must not become an indexed load:
+// it reads all sixteen entries, every time, and merges each one under a
+// mask that is all-ones exactly when d == digit. The mask is arithmetic,
+// not a comparison — `d ^ digit` is zero only on a match, and subtracting
+// one from zero borrows into the top bit, which nothing else can set for
+// a 4-bit value. No branch, and the address stream is identical for every
+// possible digit.
 @ _p256_atbl_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i digit → v {
     : *i tp ( vec_data [i] tbl )
     : *i xp ( vec_data [i] ex )
@@ -1133,11 +1060,10 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// ── the window table ──────────────────────────────────────────────────
-// Sixteen projective multiples of the base point, 0·B … 15·B, in one flat
-// limb vector: entry d occupies [d·12, d·12+12) as x‖y‖z. Flat because the
-// constant-time read below has to walk EVERY entry, and a straight run of
-// limbs is what that walk wants.
+// ── Jacobian point storage ────────────────────────────────────────────
+// A point stored into a flat limb vector at slot d: [d·12, d·12+12) as
+// x‖y‖z — the Jacobian multiples _p256_affine_multiples builds before it
+// normalises them.
 
 @ _p256_tbl_put ( Vec i ) tbl i d P256Pt p → v {
     : *i tp ( vec_data [i] tbl )
@@ -1154,108 +1080,256 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Read entry `digit` into `dst`. `digit` is four bits of the SECRET scalar,
-// so this must not become an indexed load: it reads all sixteen entries,
-// every time, and merges each one under a mask that is 0xffffffff exactly
-// when d == digit. The mask is arithmetic, not a comparison — `d ^ digit`
-// is zero only on a match, and subtracting one from zero borrows all the
-// way into the top bit, which nothing else can set for a 4-bit value. No
-// branch, and the address stream is identical for every possible digit.
-@ _p256_tbl_get_d P256Pt dst ( Vec i ) tbl i digit → v {
-    : *i tp ( vec_data [i] tbl )
-    : *i xp ( vec_data [i] . dst x )
-    : *i yp ( vec_data [i] . dst y )
-    : *i zp ( vec_data [i] . dst z )
-    = . xp 0 0 = . xp 1 0 = . xp 2 0 = . xp 3 0
-    = . yp 0 0 = . yp 1 0 = . yp 2 0 = . yp 3 0
-    = . zp 0 0 = . zp 1 0 = . zp 2 0 = . zp 3 0
-    : ~ i d 0
-    ~ < d 16 {
-        : u64 z ^^ # u64 d # u64 digit
-        : i mask - 0 # i >> - z 1 63
-        : i base * d 12
-        : ~ i j 0
-        ~ < j 4 {
-            = . xp j | . xp j & mask . tp + base j
-            = . yp j | . yp j & mask . tp + + base 4 j
-            = . zp j | . zp j & mask . tp + + base 8 j
-            = j + j 1
-        }
-        = d + d 1
-    }
+// ── variable-base scalar multiplication ──────────────────────────────
+//
+// k·Q for a point Q the caller supplies (ECDH against a peer's share), on
+// the same Jacobian machinery as the fixed-base comb: 3M+5S doublings and
+// 8M+3S mixed additions against an AFFINE table 1·Q … 15·Q, where the
+// complete projective formula this replaces spent 14 multiplies on every
+// one of 334 operations.
+//
+// Complete for every scalar, by construction rather than by masking. The
+// scalar is first reduced mod n (constant time). Before each addition the
+// accumulator is m·Q with m = 16 × (the windows consumed so far), so
+// either m = 0 — acc = ∞, which the mixed addition commits as the entry
+// — or 16 ≤ m < n. The entry is d·Q with 1 ≤ d ≤ 15, so acc = entry
+// (m ≡ d mod n), the one case the mixed addition cannot compute, is
+// impossible; acc = −entry would need m = n − d, whose sum is n·Q — a
+// scalar of n, excluded by the reduction (and the formula yields Z = 0
+// for it regardless). Without the reduction a crafted scalar reaches the
+// degenerate case: k = n + 30 lands the last window on acc = 15·Q =
+// entry 15 (n ≡ 1 mod 16).
+//
+// The table is built from Q in Jacobian form (one doubling, thirteen mixed
+// additions — never degenerate, since (d−1)·Q = ±Q would need d ≡ 0 or 2
+// mod n) and normalised to affine with ONE field inversion by Montgomery's
+// batch trick. Constant-time in the scalar: 64 windows, each four
+// doublings, one read of all sixteen table entries under a mask, and one
+// masked commit.
+
+// b (the curve coefficient), plain limbs.
+@ _p256_b_plain → ( Vec i ) {
+    : ( Vec i ) v ( _mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0x3BCE3C3E27D2604B = . q 1 # i 0x651D06B0CC53B0F6
+    = . q 2 # i 0xB3EBBD55769886BC = . q 3 # i 0x5AC635D8AA3A93E7
+    ^ v
 }
 
-// Scalar × affine base point → affine (x, y) as two 32-byte big-endian vecs.
-// `kbytes` is the scalar, big-endian; bx/by are the base point's affine
-// coordinates as 8-limb plain (non-Montgomery) field elements. Returns the
-// all-zero 64 bytes for the identity result.
-//
-// FIXED 4-BIT WINDOW over the RCB complete addition. The scalar is consumed
-// a nibble at a time, most significant first: four doublings shift the
-// accumulator up by sixteen, then one addition brings in digit·B read out
-// of the window table. That is 4·64 + 64 + 14 = 334 point additions for a
-// 32-byte scalar, where the bit-at-a-time always-add ladder it replaces
-// needed 512 — and the table walk that buys it costs about 4% of one
-// addition per window.
-//
-// Constant-time on the same terms as before, and for the same reasons:
-//   * the step count is fixed at 8·len(scalar bytes) / 4 windows, so the
-//     scalar's value — including its top bits — cannot change the trace;
-//   * the digit selects nothing by address, only by mask (see
-//     _p256_tbl_get_d), so there is no secret-dependent load;
-//   * digit 0 reads the identity, which the COMPLETE addition formula
-//     absorbs correctly — that is what removes the need to special-case
-//     it, and with it the last data-dependent branch;
-//   * `w` and the nibble position are public loop counters.
-//
-// The whole ladder runs in storage allocated before it starts — `acc`,
-// `added`, the table, the base point and the scratch — so its 334 point
-// additions allocate nothing.
-@ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
-    : P256Scratch scr ( _p256_scr_new )
-    : ( Vec i ) aplain ( _p256_a_plain )
-    : ( Vec i ) am ( _p256_to_mont_s scr aplain )
-    : ( Vec i ) b3plain ( _p256_b3_plain )
-    : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain )
-    // base in Montgomery projective form (Z = 1).
-    : P256Pt base ( _p256_pt_mag )
-    ( _p256_to_mont_d scr . base x bx )
-    ( _p256_to_mont_d scr . base y by )
-    ( _p256_one_mont_d scr . base z )
-    : P256Pt acc ( _p256_pt_mag )
-    : P256Pt added ( _p256_pt_mag )
-    // window table: T[0] = identity, T[d] = T[d-1] + B.
-    : ( Vec i ) tbl ( _magn 192 )
-    ( _p256_set_identity_d scr acc )
-    ( _p256_tbl_put tbl 0 acc )
-    ( _p256_tbl_put tbl 1 base )
-    ( __p256_pt_copy_d added base )
-    : ~ i d 2
+// v < p (plain limbs): the subtraction v − p borrows out of the top word.
+@ _p256_lt_p ( Vec i ) v → b {
+    : *i vp ( vec_data [i] v )
+    : ~ u64 bb ( nurl_subb_hi # u64 . vp 0 18446744073709551615 0 )
+    = bb ( nurl_subb_hi # u64 . vp 1 4294967295 bb )
+    = bb ( nurl_subb_hi # u64 . vp 2 0 bb )
+    = bb ( nurl_subb_hi # u64 . vp 3 18446744069414584321 bb )
+    ^ != # i bb 0
+}
+
+// Do two field elements hold the same value? Every _d worker returns a
+// canonical residue, so limb equality is value equality.
+@ _p256_eq ( Vec i ) a ( Vec i ) b → b {
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : i d | | | ^^ . ap 0 . bp 0 ^^ . ap 1 . bp 1 ^^ . ap 2 . bp 2 ^^ . ap 3 . bp 3
+    ^ == d 0
+}
+
+// Is the Montgomery affine point (x, y) on y² = x³ − 3x + b?
+@ _p256_on_curve P256Scratch scr ( Vec i ) xm ( Vec i ) ym → b {
+    : ( Vec i ) lhs ( _mag4 )
+    : ( Vec i ) rhs ( _mag4 )
+    : ( Vec i ) t ( _mag4 )
+    ( _p256_sqr_d scr lhs ym )
+    ( _p256_sqr_d scr rhs xm )
+    ( _p256_mul_d scr rhs rhs xm )
+    ( __p256_add_d scr t xm xm )
+    ( __p256_add_d scr t t xm )
+    ( __p256_sub_d scr rhs rhs t )
+    : ( Vec i ) bm ( _p256_to_mont_s scr ( _p256_b_plain ) )
+    ( __p256_add_d scr rhs rhs bm )
+    ^ ( _p256_eq lhs rhs )
+}
+
+// Mixed addition for PUBLIC operands (signature verification): exact in
+// every case, by branching — acc = ∞ takes the entry, acc = entry
+// doubles, acc = −entry becomes ∞. Variable time, which public data
+// allows; never call it with a secret scalar's digits.
+@ _p256_jmadd_vt P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m → v {
+    : ( Vec i ) X1 . acc x
+    : ( Vec i ) Y1 . acc y
+    : ( Vec i ) Z1 . acc z
+    ? != ( _p256_zmask Z1 ) 0 {
+        ( __p256_copy_d X1 x2 ) ( __p256_copy_d Y1 y2 ) ( __p256_copy_d Z1 one_m )
+        ^
+    } {}
+    : ( Vec i ) z3 . scr g0
+    : ( Vec i ) hreg . scr g1
+    : ( Vec i ) rreg . scr g2
+    : ( Vec i ) hh . scr g3
+    : ( Vec i ) x3 . scr g4
+    : ( Vec i ) vv . scr g5
+    : ( Vec i ) t . scr gp
+    ( _p256_sqr_d scr z3 Z1 )
+    ( _p256_mul_d scr hreg x2 z3 )
+    ( _p256_mul_d scr t z3 Z1 )
+    ( _p256_mul_d scr rreg y2 t )
+    ( __p256_sub_d scr hreg hreg X1 )
+    ( __p256_sub_d scr rreg rreg Y1 )
+    ? != ( _p256_zmask hreg ) 0 {
+        ? != ( _p256_zmask rreg ) 0 { ( _p256_jdbl_d scr acc ) } {
+            : *i zp ( vec_data [i] Z1 )
+            = . zp 0 0 = . zp 1 0 = . zp 2 0 = . zp 3 0
+        }
+        ^
+    } {}
+    ( _p256_mul_d scr z3 Z1 hreg )
+    ( _p256_sqr_d scr hh hreg )
+    ( _p256_mul_d scr vv X1 hh )
+    ( _p256_sqr_d scr x3 rreg )
+    ( _p256_mul_d scr hh hreg hh )
+    ( __p256_sub_d scr x3 x3 hh )
+    ( __p256_sub_d scr x3 x3 vv )
+    ( __p256_sub_d scr x3 x3 vv )
+    ( __p256_sub_d scr vv vv x3 )
+    ( _p256_mul_d scr vv rreg vv )
+    ( _p256_mul_d scr t Y1 hh )
+    ( __p256_sub_d scr vv vv t )
+    ( __p256_copy_d X1 x3 ) ( __p256_copy_d Y1 vv ) ( __p256_copy_d Z1 z3 )
+}
+
+// Four limbs at `src` into `dst`.
+@ __p256_ld4 ( Vec i ) dst * i src → v {
+    : *i dp ( vec_data [i] dst )
+    = . dp 0 . src 0 = . dp 1 . src 1 = . dp 2 . src 2 = . dp 3 . src 3
+}
+
+// The affine table 0, 1·Q, …, 15·Q (entry 0 all-zero, never committed) for
+// a Montgomery affine Q of order n: Jacobian multiples, then one batch
+// inversion. Q is public in every use (a peer's share, a public key, G).
+@ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i ) one_m → ( Vec i ) {
+    // Jacobian 1·Q … 15·Q, flat x‖y‖z, 12 limbs each, at index d − 1.
+    : ( Vec i ) jac ( _magn 180 )
+    : P256Pt p ( _p256_pt_mag )
+    ( __p256_copy_d . p x qx ) ( __p256_copy_d . p y qy ) ( __p256_copy_d . p z one_m )
+    ( _p256_tbl_put jac 0 p )
+    ( _p256_jdbl_d scr p )
+    ( _p256_tbl_put jac 1 p )
+    : ~ i d 3
     ~ < d 16 {
-        ( p256ct_padd_d scr added added base am b3m )
-        ( _p256_tbl_put tbl d added )
+        ( _p256_jmadd_d scr p qx qy one_m 0 )
+        ( _p256_tbl_put jac - d 1 p )
         = d + d 1
     }
-    : i nbytes ( vec_len [u] kbytes )
+    // Montgomery's trick: prefix products c_k = Z_0·…·Z_k, one inversion,
+    // then back down — z_k⁻¹ = inv·c_(k−1), inv ← inv·Z_k.
+    : *i jp ( vec_data [i] jac )
+    : ( Vec i ) pre ( _magn 60 )
+    : *i pp ( vec_data [i] pre )
+    : ( Vec i ) za ( _mag4 )
+    : ( Vec i ) acc ( _mag4 )
+    ( __p256_copy_d acc one_m )
+    : ~ i k 0
+    ~ < k 15 {
+        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
+        ( _p256_mul_d scr acc acc za )
+        : *i ap ( vec_data [i] acc )
+        : i b * k 4
+        = . pp b . ap 0 = . pp + b 1 . ap 1 = . pp + b 2 . ap 2 = . pp + b 3 . ap 3
+        = k + k 1
+    }
+    : ( Vec i ) inv ( _mag4 )
+    ( _p256_inv_d scr inv acc )
+    : ( Vec i ) tbl ( _magn 128 )
+    : *i tp ( vec_data [i] tbl )
+    = k 0
+    ~ < k 8 { = . tp k 0 = k + k 1 }
+    : ( Vec i ) zi ( _mag4 )
+    : ( Vec i ) zi2 ( _mag4 )
+    : ( Vec i ) xa ( _mag4 )
+    : ( Vec i ) ya ( _mag4 )
+    : ( Vec i ) prev ( _mag4 )
+    = k 14
+    ~ >= k 0 {
+        ? > k 0 {
+            ( __p256_ld4 prev # *i + # i pp * * - k 1 4 8 )
+            ( _p256_mul_d scr zi inv prev )
+        } { ( __p256_copy_d zi inv ) }
+        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
+        ( _p256_mul_d scr inv inv za )
+        ( __p256_ld4 xa # *i + # i jp * * k 12 8 )
+        ( __p256_ld4 ya # *i + # i jp * + * k 12 4 8 )
+        ( _p256_sqr_d scr zi2 zi )
+        ( _p256_mul_d scr xa xa zi2 )
+        ( _p256_mul_d scr zi2 zi2 zi )
+        ( _p256_mul_d scr ya ya zi2 )
+        ( _p256_atbl_put tbl + k 1 xa ya )
+        = k - k 1
+    }
+    ^ tbl
+}
+
+// The scalar as 32 big-endian bytes, reduced mod n in constant time. A
+// shorter scalar is left-padded; a longer one is folded in byte by byte
+// (Horner) — its length is public, so branching on it leaks nothing.
+@ __p256_scalar_mod_n ( Vec u ) k → ( Vec u ) {
+    : i len ( vec_len [u] k )
+    : i head ? < len 32 len 32
+    : ( Vec u ) k32 ( vec_zeroed [u] - 32 head )
+    ( bytes_extend_bytes k32 ( bytes_slice k 0 head ) )
+    : ~ ( Vec u ) acc ( p256n_reduce_be k32 )
+    : ( Vec u ) b256 ( vec_zeroed [u] 32 )
+    ( vec_put [u] b256 30 # u 1 )
+    : ~ i at head
+    ~ < at len {
+        : ( Vec u ) one ( vec_zeroed [u] 32 )
+        ( vec_put [u] one 31 ?? ( vec_get [u] k at ) { T b → b F _ → # u 0 } )
+        = acc ( p256n_addmod_be ( p256n_mulmod_be acc b256 ) one )
+        = at + at 1
+    }
+    ^ acc
+}
+
+// Scalar × affine point → affine (x, y) as 64 big-endian bytes X‖Y, the
+// all-zero encoding for the identity (a scalar ≡ 0 mod n). `kbytes` is
+// the scalar, big-endian, any length; bx/by are the point's affine
+// coordinates as plain (non-Montgomery) limbs and must be a point of the
+// curve — callers validate first (_p256_on_curve). Constant-time in the
+// scalar, and complete for every scalar; see the section header.
+@ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
+    : ( Vec u ) k ( __p256_scalar_mod_n kbytes )
+    : P256Scratch scr ( _p256_scr_new )
+    : ( Vec i ) onem ( _p256_one_mont_s scr )
+    : ( Vec i ) qx ( _p256_to_mont_s scr bx )
+    : ( Vec i ) qy ( _p256_to_mont_s scr by )
+    : ( Vec i ) tbl ( _p256_affine_multiples scr qx qy onem )
+    : P256Pt acc ( _p256_pt_mag )
+    ( _p256_set_identity_d scr acc )
+    : ( Vec i ) ex ( _mag4 )
+    : ( Vec i ) ey ( _mag4 )
     // MSB-first nibbles: window 0 is byte 0's high nibble.
-    : i nwin * nbytes 2
     : ~ i w 0
-    ~ < w nwin {
-        ( p256ct_padd_d scr acc acc acc am b3m )
-        ( p256ct_padd_d scr acc acc acc am b3m )
-        ( p256ct_padd_d scr acc acc acc am b3m )
-        ( p256ct_padd_d scr acc acc acc am b3m )
-        : i bv ?? ( vec_get [u] kbytes / w 2 ) { T b → # i b F _ → 0 }
+    ~ < w 64 {
+        ( _p256_jdbl_d scr acc )
+        ( _p256_jdbl_d scr acc )
+        ( _p256_jdbl_d scr acc )
+        ( _p256_jdbl_d scr acc )
+        : i bv ?? ( vec_get [u] k / w 2 ) { T b → # i b F _ → 0 }
+        // `w` is public: choosing the nibble by its parity leaks nothing.
         : i digit ? == % w 2 0 & 15 >> bv 4 & 15 bv
-        ( _p256_tbl_get_d added tbl digit )
-        ( p256ct_padd_d scr acc acc added am b3m )
+        // keep-mask: −1 exactly when the digit is 0 (branch-free).
+        : i keep - # i >> # u64 | digit - 0 digit 63 1
+        ( _p256_atbl_get_d ex ey tbl digit )
+        ( _p256_jmadd_d scr acc ex ey onem keep )
         = w + w 1
     }
-    // affine: x = X/Z, y = Y/Z (de-Montgomery via inverse).
+    // Jacobian → affine: x = X/Z², y = Y/Z³ (Z = 0 → zinv = 0 → all-zero).
     : ( Vec i ) zinv ( _mag4 )
     ( _p256_inv_d scr zinv . acc z )
-    ( _p256_mul_d scr . acc x . acc x zinv )
-    ( _p256_mul_d scr . acc y . acc y zinv )
+    ( _p256_sqr_d scr . acc z zinv )
+    ( _p256_mul_d scr . acc x . acc x . acc z )
+    ( _p256_mul_d scr . acc z . acc z zinv )
+    ( _p256_mul_d scr . acc y . acc y . acc z )
     ( _p256_from_mont_d scr . acc x . acc x )
     ( _p256_from_mont_d scr . acc y . acc y )
     : ( Vec u ) out ( vec_with_cap [u] 64 )

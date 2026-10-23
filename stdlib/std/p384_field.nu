@@ -558,11 +558,10 @@ $ `stdlib/std/bytes.nu`
     ^ v
 }
 
-// Complete projective point addition — Renes–Costello–Batina, the exact
-// 40-step register schedule std/p256_field.nu runs (see p256ct_padd_d
-// there for the aliasing argument: X3 is first written after the last
-// read of X1/X2, Y3 and Z3 after the last reads of Y1/Y2/Z1/Z2, so
-// `dst` may alias P and/or Q). am / b3m are the Montgomery curve
+// Complete projective point addition — Renes–Costello–Batina,
+// Algorithm 4 (a = −3), in its published 40-step register schedule. X3
+// is first written after the last read of X1/X2, and Y3 and Z3 after the
+// last reads of Y1/Y2/Z1/Z2, so `dst` may alias P and/or Q. am / b3m are the Montgomery curve
 // constants; the six working registers come from the scratch.
 @ __p384_padd_d P384Scr scr P384Pt dst P384Pt P P384Pt Q ( Vec i ) am ( Vec i ) b3m → v {
     : ( Vec i ) X1 . P x : ( Vec i ) Y1 . P y : ( Vec i ) Z1 . P z

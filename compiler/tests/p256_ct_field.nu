@@ -1,6 +1,8 @@
 // p256_ct_field.nu — the constant-time GF(p256) field + scalar multiply
-// (std/p256_field, Montgomery CIOS + RCB complete addition) cross-checked
-// against the KAT-verified bigint reference. Deterministic (fixed RNG seeds).
+// (std/p256_field: Montgomery CIOS, Jacobian window ladder over a
+// scalar reduced mod n) cross-checked against the KAT-verified bigint
+// reference. Deterministic (fixed RNG seeds), plus the edge scalars that
+// reach every case of the ladder's mixed addition.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -297,7 +299,61 @@ $ `stdlib/std/p256_field.nu`
         ( vec_free [u] k ) ( vec_free [u] mine )
         = s + s 1
     }
-    ( nurl_print `field 400 trials, scalarmult 60 trials\n` )
+    // Edge scalars, against G and against Q = 0x01234567·G. With
+    // n ≡ 1 (mod 16), k = n + 30 would land the last window's addition
+    // on acc = 15·B = the table entry — the mixed addition's degenerate
+    // case, which only the reduction mod n keeps out; k = n and k = 0
+    // give ∞ (the all-zero encoding); k ≥ n wraps.
+    : ( Vec s ) edges ( vec_new [s] )
+    ( vec_push [s] edges `0000000000000000000000000000000000000000000000000000000000000001` )
+    ( vec_push [s] edges `0000000000000000000000000000000000000000000000000000000000000002` )
+    ( vec_push [s] edges `000000000000000000000000000000000000000000000000000000000000000f` )
+    ( vec_push [s] edges `0000000000000000000000000000000000000000000000000000000000000010` )
+    ( vec_push [s] edges `0000000000000000000000000000000000000000000000000000000000000011` )
+    ( vec_push [s] edges `00000000000000000000000000000000000000000000000000000000000000ff` )
+    ( vec_push [s] edges `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550` )
+    ( vec_push [s] edges `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632552` )
+    ( vec_push [s] edges `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63256f` )
+    ( vec_push [s] edges `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff` )
+    ( vec_push [s] edges `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` )
+    ( vec_push [s] edges `0000000000000000000000000000000000000000000000000000000000000000` )
+    : RJac g0j @ RJac { ( bigint_clone gx ) ( bigint_clone gy ) ( bigint_from_i 1 ) F }
+    : RJac qj0 ( rj_mul ( hx `01234567` ) g0j p )
+    : BigInt qxb ( rj_affine_x qj0 p )
+    : BigInt qyb ( rj_affine_y qj0 p )
+    : ( Vec i ) qxl ( to_limbs qxb ) : ( Vec i ) qyl ( to_limbs qyb )
+    : ~ i ef 0
+    : ~ i bi 0
+    ~ < bi 2 {
+        : ~ i e 0
+        ~ < e ( vec_len [s] edges ) {
+            : ( Vec u ) k ( hx ?? ( vec_get [s] edges e ) { T x → x F _ → `00` } )
+            : BigInt bx ? == bi 0 ( bigint_clone gx ) ( bigint_clone qxb )
+            : BigInt by ? == bi 0 ( bigint_clone gy ) ( bigint_clone qyb )
+            : ( Vec u ) mine ? == bi 0 ( p256ct_scalarmult k gxl gyl ) ( p256ct_scalarmult k qxl qyl )
+            : RJac bj @ RJac { bx by ( bigint_from_i 1 ) F }
+            : RJac rj ( rj_mul k bj p )
+            : ~ b ok == ( vec_len [u] mine ) 64
+            ? | . rj inf ( bigint_is_zero . rj z ) {
+                // ∞: the all-zero encoding.
+                : ~ i c 0 ~ & ok < c 64 { ? != ( __bg mine c ) 0 { = ok F } {} = c + c 1 }
+            } {
+                : ( Vec u ) refx ( bigint_to_bytes_be ( rj_affine_x rj p ) 32 )
+                : ( Vec u ) refy ( bigint_to_bytes_be ( rj_affine_y rj p ) 32 )
+                : ~ i c 0 ~ & ok < c 32 { ? != ( __bg refx c ) ( __bg mine c ) { = ok F } {} = c + c 1 }
+                : ~ i c2 0 ~ & ok < c2 32 { ? != ( __bg refy c2 ) ( __bg mine + 32 c2 ) { = ok F } {} = c2 + c2 1 }
+            }
+            ? ! ok {
+                = ef + ef 1
+                ( nurl_print `edge scalar FAIL base=` ) ( nurl_print ( nurl_str_int bi ) )
+                ( nurl_print ` k=` ) ( nurl_print ?? ( vec_get [s] edges e ) { T x → x F _ → `?` } ) ( nurl_print `\n` )
+            } {}
+            = e + e 1
+        }
+        = bi + bi 1
+    }
+    = sf + sf ef
+    ( nurl_print `field 400 trials, scalarmult 60 trials, 24 edge scalars\n` )
     ( nurl_print ? & == ff 0 == sf 0 `p256 ct: PASS\n` `p256 ct: FAIL\n` )
     ( bigint_free p ) ( rng_free g ) ( bigint_free gx ) ( bigint_free gy )
     ( vec_free [i] gxl ) ( vec_free [i] gyl ) ( rng_free g2 )

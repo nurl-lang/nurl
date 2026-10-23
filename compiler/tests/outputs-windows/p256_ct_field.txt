@@ -2,5 +2,5 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-field 400 trials, scalarmult 60 trials
+field 400 trials, scalarmult 60 trials, 24 edge scalars
 p256 ct: PASS
