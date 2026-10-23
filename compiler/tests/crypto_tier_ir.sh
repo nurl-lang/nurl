@@ -20,8 +20,12 @@
 #  The VAES tier (v256) and the AVX-512 VAES tier (v512) get the same
 #  checks, and what only their wide signatures need: the pointer
 #  crossing of a tier function called from outside its tier
-#  (emit_vabi). Last, AES-GCM's wide kernels must exist as VAES machine
+#  (emit_vabi). Then AES-GCM's wide kernels must exist as VAES machine
 #  code and agree with the software oracle with each tier taken away.
+#  Last, the SHA tier (nurl_v128_sha256*), which is on no chain with the
+#  AES ones: a body using both is compiled, gated and dispatched on both,
+#  and SHA-256's kernel is SHA256RNDS2 code that agrees with the
+#  portable rounds.
 #
 #  First, on every host, the AArch64 lowering of the AES tier (section
 #  A): its IR and machine code, and — natively on an AArch64 host, or
@@ -576,6 +580,139 @@ CEOF
         else bad "runtime VAES / AVX-512 VAES CPUID agrees with /proc/cpuinfo" "runtime $got, /proc/cpuinfo $w2 $w3"; fi
     else
         note "runtime wide CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
+fi
+
+# ── 11. The SHA tier: not on the AES chain ─────────────────────────
+# nurl_v128_sha256* (x86 SHA extensions). The tier is x86-64-v2 + SHA,
+# incomparable with the AES tiers: a function that uses both kinds of
+# primitive is compiled for, gated on and dispatched on BOTH, and a
+# SHA-only function carries no AES. SHA-256's kernel must be SHA256RNDS2
+# machine code, and its golden must hold on both of SHA-256's paths.
+SHA_SRC="$SCRIPT_DIR/sha256_tier_agree.nu"
+if "$NURLC" "$SHA_SRC" > "$WORK/sha.ll" 2> "$WORK/sha.err"; then
+    nhdr=$(grep -E '^define .*@__nurl_fn\.__sha256_blocks_ni[a-z0-9_]*\(' "$WORK/sha.ll" | head -1)
+    nbody=$(awk -v h="$nhdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/sha.ll")
+    case "$nhdr" in
+        *noinline*'"target-cpu"="x86-64-v2" "target-features"="+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3,+sha"'*)
+            ok "__sha256_blocks_ni: x86-64-v2 + SHA, no AES" "noinline" ;;
+        *) bad "__sha256_blocks_ni: x86-64-v2 + SHA, no AES" "header: ${nhdr:0:160}" ;;
+    esac
+    if printf '%s\n' "$nbody" | grep -q 'call void @nurl__sha_gate()' &&
+            ! printf '%s\n' "$nbody" | grep -q 'nurl__aes_gate' &&
+            grep -A3 '^define linkonce_odr void @nurl__sha_gate()' "$WORK/sha.ll" | grep -q '@nurl_cpu_x86_sha()'; then
+        ok "__sha256_blocks_ni: gated on nurl_cpu_x86_sha alone" "nurl__sha_gate"
+    else
+        bad "__sha256_blocks_ni: gated on nurl_cpu_x86_sha alone" "no SHA gate, or an AES one"
+    fi
+    if command -v "$CLANG" >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1 &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/sha.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/sha" -lm -lpthread 2>/dev/null; then
+        n=$(objdump -d "$WORK/sha" 2>/dev/null |
+            awk '/^[0-9a-f]+ <[^>]*__sha256_blocks_ni[a-z0-9_]*>:/{p=1} /^$/{p=0} p' | grep -cE '\bsha256rnds2\b')
+        if [ "$n" -eq 32 ]; then ok "__sha256_blocks_ni: 32 SHA256RNDS2 a block" "$n"
+        else bad "__sha256_blocks_ni: 32 SHA256RNDS2 a block" "$n"; fi
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/sha256_tier_agree.txt" | tail -n +2)
+        for e in NURL_CPU_SHA=1 NURL_CPU_SHA=0; do
+            got=$(env "$e" "$WORK/sha" 2>&1)
+            if [ "$got" = "$want" ]; then ok "sha256_tier_agree with $e" "golden"
+            else bad "sha256_tier_agree with $e" "${got:0:80}"; fi
+        done
+    else
+        note "SHA-256 machine code and run" "skipped (no clang / objdump, or the link failed)"
+    fi
+else
+    bad "sha256_tier_agree: compiles" "$(head -2 "$WORK/sha.err")"
+fi
+
+# Both tiers in one `simd` body: the union, everywhere it matters.
+cat > "$WORK/mix.nu" <<'NEOF'
+$ `stdlib/core/vec.nu`
+unsafe simd @ mix * u p → v {
+    : v128 a ( nurl_v128_ld # s p )
+    : v128 b ( nurl_v128_aesenc a a )
+    ( nurl_v128_st # s p ( nurl_v128_sha256msg1 b a ) )
+}
+unsafe @ main → i {
+    : ( Vec u ) v ( vec_zeroed [u] 16 )
+    ( mix ( vec_data [u] v ) )
+    ^ 0
+}
+NEOF
+if "$NURLC" "$WORK/mix.nu" > "$WORK/mix.ll" 2> "$WORK/mix.err"; then
+    mb=$(grep -E '^define .*@__nurl_fn\.mix[a-z0-9_]*\.base\(' "$WORK/mix.ll" | head -1)
+    mw=$(grep -E '^define .*@__nurl_fn\.mix[a-z0-9_]*\.x86v3\(' "$WORK/mix.ll" | head -1)
+    md=$(grep -E '^define .*@__nurl_fn\.mix[a-z0-9_]*\(i8\* %p\) \{' "$WORK/mix.ll" | head -1)
+    case "$mb" in *'"target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3,+sha"'*)
+            ok "AES + SHA simd body: .base has both" "+aes,+pclmul … +sha" ;;
+        *) bad "AES + SHA simd body: .base has both" "header: ${mb:0:160}" ;; esac
+    case "$mw" in *'"target-cpu"="x86-64-v3"'*'+aes,+pclmul,+sha"'*)
+            ok "AES + SHA simd body: .x86v3 has both" "v3 +aes,+pclmul,+sha" ;;
+        *) bad "AES + SHA simd body: .x86v3 has both" "header: ${mw:0:160}" ;; esac
+    mbb=$(awk -v h="$mb" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/mix.ll")
+    mdb=$(awk -v h="$md" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/mix.ll")
+    if printf '%s\n' "$mbb" | grep -q 'call void @nurl__aes_gate()' &&
+            printf '%s\n' "$mbb" | grep -q 'call void @nurl__sha_gate()'; then
+        ok "AES + SHA simd body: .base gated on both" "two gates"
+    else
+        bad "AES + SHA simd body: .base gated on both" "a gate is missing"
+    fi
+    if printf '%s\n' "$mdb" | grep -q 'call i32 @nurl_cpu_x86_v3()' &&
+            printf '%s\n' "$mdb" | grep -q 'call i32 @nurl_cpu_x86_aes()' &&
+            printf '%s\n' "$mdb" | grep -q 'call i32 @nurl_cpu_x86_sha()'; then
+        ok "AES + SHA dispatcher: wide only with v3, AES and SHA" "three probes"
+    else
+        bad "AES + SHA dispatcher: wide only with v3, AES and SHA" "missing a probe"
+    fi
+    if grep -qw sha_ni /proc/cpuinfo 2>/dev/null && grep -qw aes /proc/cpuinfo 2>/dev/null &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/mix.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/mix" -lm -lpthread 2>/dev/null; then
+        "$WORK/mix" >/dev/null 2>&1; rc_on=$?
+        got=$(NURL_CPU_SHA=0 "$WORK/mix" 2>&1); rc_off=$?
+        if [ "$rc_on" -eq 0 ] && [ "$rc_off" -ne 0 ] && printf '%s' "$got" | grep -q 'needs the SHA extensions'; then
+            ok "AES + SHA body without SHA: the gate panics" "exit $rc_off"
+        else
+            bad "AES + SHA body without SHA: the gate panics" "on=$rc_on off=$rc_off ${got:0:60}"
+        fi
+    fi
+else
+    bad "AES + SHA simd body: compiles" "$(head -2 "$WORK/mix.err")"
+fi
+
+# Outside x86 there is no SHA tier (yet): a constant false and stubs.
+"$NURLC" --no-cpu-dispatch --no-dce "$WORK/mix.nu" > "$WORK/mix.off.ll" 2>/dev/null
+"$NURLC" --target=aarch64 --no-dce "$WORK/mix.nu" > "$WORK/mix.a64.ll" 2>/dev/null
+for f in off a64; do
+    if grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_sha()' "$WORK/mix.$f.ll" | grep -q 'ret i1 false' &&
+            grep -A3 '^define linkonce_odr <4 x i32> @nurl_v128_sha256rnds2(' "$WORK/mix.$f.ll" | grep -q 'call void @nurl_cpu_sha_missing()' &&
+            [ "$(grep -c 'llvm\.x86\.sha' "$WORK/mix.$f.ll")" -eq 0 ]; then
+        ok "$f: nurl_cpu_has_sha false, SHA primitives stubs" "nurl_cpu_sha_missing"
+    else
+        bad "$f: nurl_cpu_has_sha false, SHA primitives stubs" "not so"
+    fi
+done
+
+# The runtime's SHA answer matches an independent one.
+if [ -r /proc/cpuinfo ] && command -v "$CLANG" >/dev/null 2>&1; then
+    fl=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    ws=1
+    # (SSE3 is `pni` there.)
+    for f in pni ssse3 cx16 sse4_1 sse4_2 popcnt sha_ni; do
+        case "$fl" in *" $f "*) ;; *) ws=0 ;; esac
+    done
+    cat > "$WORK/cpu3.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_sha(void);
+int main(void) { printf("%d\n", nurl_cpu_x86_sha()); return 0; }
+CEOF
+    if "$CLANG" -O0 "$WORK/cpu3.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu3" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu3" 2>/dev/null)
+        off=$(NURL_CPU_SHA=0 "$WORK/cpu3" 2>/dev/null)
+        if [ "$got" = "$ws" ] && [ "$off" = 0 ]; then ok "runtime SHA CPUID agrees with /proc/cpuinfo" "both say $got; NURL_CPU_SHA=0 → 0"
+        else bad "runtime SHA CPUID agrees with /proc/cpuinfo" "runtime $got (off: $off), /proc/cpuinfo $ws"; fi
+    else
+        note "runtime SHA CPUID cross-check" "skipped (could not link runtime.native.o)"
     fi
 fi
 

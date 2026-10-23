@@ -390,7 +390,10 @@ Three consequences worth knowing:
   ordinary function keeps its baseline clone. One that reaches a VAES
   tier (`nurl_v256_*` / `nurl_v512_*` crypto primitives) is emitted
   once, for that tier and gated on it: the tier contains x86-64-v3, so
-  there is no second clone to choose.
+  there is no second clone to choose. One that reaches the SHA tier
+  (`nurl_v128_sha256*`) is cloned the same way for x86-64-v2 + SHA, and
+  one that reaches both the AES and the SHA tier for their union, gated
+  and dispatched on both.
 - **A marked function with a `v256` or `v512` in its signature** takes
   it by pointer in its clones, and its dispatcher — which keeps the
   signature, spills the vectors and is `alwaysinline` — never becomes a
@@ -872,11 +875,11 @@ call site:
 | bitwise | `nurl_v128_xor`, `_and`, `_or`, `_andnot` |
 | lane arithmetic | `nurl_v128_add8`, `_add32`, `_sub32`, `_add64`, `_mul32u` |
 | shift / rotate | `nurl_v128_rotl32(v, n)`, `_shl64(v, n)`, `_shr64(v, n)` |
-| lane permute | `nurl_v128_rotlanes1/2/3(v)` |
+| lane permute | `nurl_v128_rotlanes1/2/3(v)`; `nurl_v128_alignr4(hi, lo)` = (lo₁, lo₂, lo₃, hi₀) — the pair shifted down one lane (`palignr` by 4) |
 | lane interleave | `nurl_v128_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — zip the low or high halves of two vectors at 32- or 64-bit granularity; four of them transpose a 4×4 block of 32-bit words |
 | byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` — 16-bit bitmask |
 | case folding | `nurl_v128_lower8(v)` — ASCII `A`–`Z` only |
-| byte order | `nurl_v128_bswap128(v)` — reverse the sixteen bytes (GHASH's and every big-endian counter's block order) |
+| byte order | `nurl_v128_bswap128(v)` — reverse the sixteen bytes (GHASH's and every big-endian counter's block order); `nurl_v128_bswap32(v)` — reverse each lane's four (SHA-2's big-endian words) |
 
 Lane indices are masked into range and shift counts are masked to the
 lane width, so no primitive has undefined behaviour on an input the
@@ -957,6 +960,7 @@ Ice Lake / Zen 3 and later CPUs have:
 | AES (1) | `nurl_v128_aes*`, `nurl_v128_clmul_*` | x86-64-v2 + AES-NI + PCLMULQDQ | `nurl_cpu_has_aes()` |
 | VAES (2) | `nurl_v256_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` | x86-64-v3 + AES + PCLMUL + VAES + VPCLMULQDQ | `nurl_cpu_has_vaes()` |
 | AVX-512 VAES (3) | the same as `nurl_v512_*` (§4.1d) | x86-64-v4 + the VAES tier's | `nurl_cpu_has_vaes512()` |
+| SHA | `nurl_v128_sha256rnds2(cdgh, abef, wk)`, `_sha256msg1(a, b)`, `_sha256msg2(a, b)` | x86-64-v2 + SHA | `nurl_cpu_has_sha()` |
 
 `clmul_XY` picks the halves within each lane, as the `v128` form does
 within its one; there is no wide `aesimc` (the instruction has none —
@@ -970,6 +974,26 @@ tier is emitted once, for that tier — it contains x86-64-v3, so there
 is no clone left to choose between. `NURL_CPU_VAES=0` and
 `NURL_CPU_VAES512=0` take a tier away at run time, as `NURL_CPU_AES=0`
 does.
+
+**The SHA tier** is the x86 SHA extensions, with Intel's semantics:
+`sha256rnds2(cdgh, abef, wk)` runs two SHA-256 rounds on the state
+halves (A, B, E, F) and (C, D, G, H) — each vector's lanes 3…0 in that
+order — with the two rounds' W + K in lanes 0 and 1 of `wk`, and returns
+the new (A, B, E, F), the old one becoming the next call's (C, D, G, H);
+`sha256msg1` and `sha256msg2` are the σ0 and σ1 halves of the message
+schedule for four words. It is **not** on the AES chain — Haswell to
+Cascade Lake have AES-NI without SHA, Goldmont SHA without AVX2 — so
+nurlc keeps a tier as the set of extensions it needs: a function is
+compiled for the union of the tiers whose primitives it uses, its
+inline helpers' `.tier` copies are called only where their set is
+contained, and a `simd @` function that reaches both AES and SHA is
+cloned, gated and dispatched on both. `NURL_CPU_SHA=0` takes the tier
+away. On AArch64 and under `--no-cpu-dispatch` `nurl_cpu_has_sha` is a
+constant false and the primitives are stubs (ARMv8's SHA2 instructions
+divide the rounds differently and are not lowered yet).
+`stdlib/std/hash_sha256.nu` runs SHA-224/256 on it where the CPU has it
+(Goldmont, Ice Lake and later Intel, every Zen): about 7× the portable
+rounds.
 
 **A wide vector crosses a call by pointer when the two sides' features
 differ.** A `v256` travels in one ymm register where a function is
