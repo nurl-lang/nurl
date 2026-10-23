@@ -2335,6 +2335,18 @@ NURL_TLS_FN long long nurl_tcp_connect_ms(const char *host, long long port,
         if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
 #endif
     }
+    /* Disable Nagle, as the accept paths do. A client's exchanges are
+     * small writes that wait for an answer — a TLS ClientHello then
+     * Finished then the request, an HTTP request head then its body —
+     * and with Nagle on, each write after the first waits for the ACK of
+     * the one before, which the peer delays ~40 ms. tls-bench measured
+     * it: 42 ms per new http-client connection, against 0.8 ms for
+     * reqwest. */
+    {
+        int one = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
+                   (const char*)&one, (socklen_t)sizeof(one));
+    }
     h->fd       = fd;
     h->err_kind = NURL_NET_ERR_OK;
     return (long long)(uintptr_t)h;

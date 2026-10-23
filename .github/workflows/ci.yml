@@ -558,6 +558,10 @@ jobs:
           python3 tools/tests/test_net_duplex.py
           ./nurl.sh tools/net_key_update.nu build/net_key_update
           python3 tools/tests/test_net_key_update.py
+          # Nagle off on both ends of every TCP connection (TCP_NODELAY
+          # read back from the kernel) — the connect side once lacked it.
+          ./nurl.sh tools/net_nodelay.nu build/net_nodelay
+          build/net_nodelay
 
       - name: DEFLATE, gzip and zlib framing against reference codecs
         run: |
