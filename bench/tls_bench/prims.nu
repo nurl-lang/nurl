@@ -105,8 +105,10 @@ $ `stdlib/std/chacha20poly1305.nu`
             ?? ( rsa_priv_from_pem ( string_data pem ) ) {
                 F _ → { ( nurl_eprintln `prims: cannot parse the RSA key` ) }
                 T k → {
+                    // the key the TLS listener signs with: the CRT blob
+                    : ( Vec u ) sk ( rsa_priv_sign_key k )
                     ( __row ( bench_auto `RSA-2048 PSS sign` \ → v {
-                        : ( Vec u ) sg ( rsa_pss_sign_sha256 . k n . k e . k d hash ( __rand 32 ) )
+                        : ( Vec u ) sg ( rsa_pss_sign_sha256 . k n . k e sk hash ( __rand 32 ) )
                         = g_sink + g_sink ( vec_len [u] sg )
                     } ) )
                 }
