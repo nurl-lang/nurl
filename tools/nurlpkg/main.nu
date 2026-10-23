@@ -2061,10 +2061,23 @@ unsafe @ __cmd_login → i {
                 : String p ( creds_path )
                 ( nurl_print `Saved token to ` ) ( nurl_print ( string_data p ) ) ( nurl_print `\n` )
             }
-            F _ → { ( nurl_eprintln `nurlpkg: failed to write credentials` ) = rc 1 }
+            F e → { ( __creds_err `write` e ) = rc 1 }
         }
     }
     ^ rc
+}
+
+// Why a credentials write failed. With no home directory there is no
+// credentials file at all (creds_path is "") — say so and how to proceed,
+// instead of a bare "failed".
+@ __creds_err s what IoErr e → v {
+    : String p ( creds_path )
+    ? == ( string_len p ) 0 {
+        ( nurl_eprintln `nurlpkg: cannot determine your home directory (HOME on Unix, USERPROFILE on Windows), so there is nowhere to keep the token; set NURL_TOKEN in the environment instead` )
+        ^
+    } {}
+    ( nurl_eprint `nurlpkg: failed to ` ) ( nurl_eprint what ) ( nurl_eprint ` ` ) ( nurl_eprint ( string_data p ) )
+    ( nurl_eprint ` (` ) ( nurl_eprint ( io_err_msg e ) ) ( nurl_eprintln `)` )
 }
 
 @ __cmd_logout i revoke → i {
@@ -2083,7 +2096,7 @@ unsafe @ __cmd_login → i {
     : !v IoErr cr ( creds_remove ( string_data reg ) )
     ?? cr {
         T _ → ( nurl_print `Removed local credential.\n` )
-        F _ → { ( nurl_eprintln `nurlpkg: failed to update credentials` ) = rc 1 }
+        F e → { ( __creds_err `update` e ) = rc 1 }
     }
     ^ rc
 }
@@ -2416,7 +2429,8 @@ unsafe @ __cmd_registry_info s name → i {
 }
 
 // The stdlib the USER's toolchain will use: $NURL_STDLIB when set, else
-// ~/.nurl (the installer's prefix).
+// ~/.nurl (the installer's prefix; ~ per env_home_dir, the user profile on
+// Windows). "" when neither is known.
 @ __toolchain_stdlib_root → String {
     ?? ( env_get `NURL_STDLIB` ) {
         T v → {
@@ -2425,15 +2439,10 @@ unsafe @ __cmd_registry_info s name → i {
         }
         F → {}
     }
-    ?? ( env_get `HOME` ) {
-        T h → {
-            : String p2 ( string_from ( string_data h ) )
-            ( string_push_str p2 `/.nurl` )
-            ^ p2
-        }
-        F → {}
-    }
-    ^ ( string_new )
+    : String home ( env_home_dir )
+    ? == ( string_len home ) 0 { ^ home } {}
+    ( string_push_str home `/.nurl` )
+    ^ home
 }
 
 @ __check_stdlib_available → i {
@@ -3099,8 +3108,10 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
 }
 
 // Directory binaries are installed into: $NURL_HOME/bin, else the user
-// home (HOME on POSIX, USERPROFILE on Windows) + /.nurl/bin. Forward
-// slashes work on both platforms (Windows fopen/CreateProcess accept them).
+// home (env_home_dir: HOME on POSIX, the user profile on Windows) +
+// /.nurl/bin. Forward slashes work on both platforms (Windows
+// fopen/CreateProcess accept them). "" when there is no home — the caller
+// refuses rather than installing into the working directory.
 @ __tool_bindir → String {
     : ?String nh ( env_get `NURL_HOME` )
     ?? nh {
@@ -3112,7 +3123,8 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
         }
         F → {}
     }
-    : String home ? ( __is_windows ) ( __env_or `USERPROFILE` `.` ) ( __env_or `HOME` `.` )
+    : String home ( env_home_dir )
+    ? == ( string_len home ) 0 { ^ home } {}
     : String out ( path_join ( string_data home ) `.nurl/bin` )
     ^ out
 }
@@ -3273,6 +3285,10 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
 @ __tool_build_and_install s name s pkgdir s binsrc → i {
     : String nurl ( __env_or `NURL` `nurl` )
     : String bindir ( __tool_bindir )
+    ? == ( string_len bindir ) 0 {
+        ( nurl_eprintln `nurlpkg: cannot determine your home directory (HOME / USERPROFILE unset); set NURL_HOME to choose where tools are installed` )
+        ^ 1
+    } {}
     : b win ( __is_windows )
 
     // Remember where we started so we can return after building in pkgdir.

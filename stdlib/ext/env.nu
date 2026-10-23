@@ -8,6 +8,8 @@
 //   ( env_args_list )        → ( Vec String ) all argv copied into owned Strings
 //   ( env_get name )         → ? String       None when unset
 //   ( env_var_or name def )  → String         convenience: get-or-default
+//   ( env_home_dir )         → String         the user's home directory; ""
+//                                             when the platform names none
 //   ( env_set name value )   → ! v IoErr      Other on failure
 //   ( env_unset name )       → ! v IoErr
 //   ( env_cwd )              → ! String IoErr current working directory
@@ -122,6 +124,41 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
         T s → s
         F → ( string_from default )
     }
+}
+
+// A variable's value, or "" when it is unset or empty.
+@ __env_nonempty s name → String {
+    ^ ?? ( env_get name ) {
+        T v → v
+        F → ( string_new )
+    }
+}
+
+// The user's home directory — the one place in the stdlib that answers
+// "where is ~". POSIX: $HOME. Windows: %USERPROFILE%, else %HOMEDRIVE% +
+// %HOMEPATH% — the profile Windows itself and its tools use (Go's
+// os.UserHomeDir, Rust's home_dir). HOME is NOT read on Windows: it is
+// unset in PowerShell and cmd and set only by Unix-flavoured shells, so a
+// program that read it kept its files in a different place depending on
+// the shell it was started from — or, with a "." fallback, in whatever
+// directory it happened to run in (nurlpkg login once wrote a registry
+// token into a checkout that way).
+//
+// "" when the platform names no home. There is deliberately no relative
+// fallback: a caller that would store something under the home must
+// refuse, not write into the working directory.
+@ env_home_dir → String {
+    // The target's path-list separator is ';' exactly on Windows — a
+    // property of the build, not of the environment, so it cannot be
+    // spoofed by setting a variable.
+    ? != ( posix_const `PATH_LIST_SEPARATOR` ) 59 { ^ ( __env_nonempty `HOME` ) } {}
+    : String prof ( __env_nonempty `USERPROFILE` )
+    ? > ( string_len prof ) 0 { ^ prof } {}
+    : String drive ( __env_nonempty `HOMEDRIVE` )
+    : String hpath ( __env_nonempty `HOMEPATH` )
+    ? | == ( string_len drive ) 0 == ( string_len hpath ) 0 { ^ ( string_new ) } {}
+    ( string_push_str drive ( string_data hpath ) )
+    ^ drive
 }
 
 @ env_set s name s value → !v IoErr {
