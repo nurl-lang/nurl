@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.6] — 2026-10-23
+
+Requires NURL 0.73.0.
+
+### Added
+
+- `http_client_set_resume c F` stops offering cached TLS sessions: every
+  new connection runs the full handshake. The session cache is
+  process-wide, so a client could not opt out of resumption before — not
+  for unlinkability across connections, and not to measure the full
+  handshake (`bench/tls_bench` uses it).
+
 ## [0.3.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).

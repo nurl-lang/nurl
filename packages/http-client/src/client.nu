@@ -155,6 +155,7 @@ $ `stdlib/core/slice.nu`
     i body_max  // response body cap in bytes; 0 = unlimited
     String ua
     i h3_mode  // 0 follow Alt-Svc (default) · 1 try QUIC first · 2 never
+    i resume  // offer cached TLS sessions (1, default) or always run the full handshake (0)
     // Evidence from the most recent request.
     i last_proto  // 1 h1, 2 h2, 3 h3, 0 none yet
     i last_pq  // 1 = post-quantum key exchange
@@ -176,7 +177,7 @@ $ `stdlib/core/slice.nu`
 @ http_client_new → HttpClient {
     ^ @ HttpClient { ( locked_new [HttpClientImpl] @ HttpClientImpl {
             ( cookie_jar_new ) ( vec_new [HcOriginImpl] ) 1 1 10 30000 1 0
-            ( string_from `nurl-http-client/0.1` ) 0 0 0 } ) }
+            ( string_from `nurl-http-client/0.1` ) 0 0 0 1 } ) }
 }
 
 // ── Configuration (chainable-by-mutation) ─────────────────────────────
@@ -238,6 +239,16 @@ $ `stdlib/core/slice.nu`
 @ http_client_set_h3 HttpClient c__h i mode → v {
     : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c h3_mode mode
+    ( locked_restore [HttpClientImpl] . c__h l c )
+}
+
+// Offer the cached TLS session on a new connection (default) or never:
+// off, every connection runs the full handshake — certificate, signature
+// and all — which is what a client that must not be linkable across
+// connections wants, and what a benchmark of the full handshake needs.
+@ http_client_set_resume HttpClient c__h b on → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    = . c resume ? on 1 0
     ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
@@ -339,7 +350,7 @@ $ `stdlib/core/slice.nu`
 @ __hc_ensure_conn HttpClientImpl c inout HcOriginImpl o → i {
     ? | ( opt_is_some [H2Client] . o h2 ) ( opt_is_some [HttpConn] . o h1 ) { ^ 0 } {}
     ? != . o is_https 0 {
-        : ( Vec u ) sess ( hp_session_lookup ( string_data . o host ) . o port )
+        : ( Vec u ) sess ? != . c resume 0 ( hp_session_lookup ( string_data . o host ) . o port ) ( vec_new [u] )
         : !TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
         ( vec_free [u] sess )
         ?? tr {

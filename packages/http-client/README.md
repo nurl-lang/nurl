@@ -35,7 +35,7 @@ $ `deps/http-client/src/http_client.nu`
 | **HTTP/3** | a response carrying `Alt-Svc: h3=":443"` moves the origin's next request onto QUIC (`stdlib/ext/http3_client.nu`, pure NURL: Retry, Version Negotiation, NEW_TOKEN, HANDSHAKE_DONE all honoured); `http_client_set_h3 c 1` tries QUIC first without waiting for Alt-Svc, `2` never uses it. A QUIC attempt that fails (no UDP path, a middlebox, a server that stopped) falls back to TCP for that origin and stays there. |
 | **Post-quantum TLS** | the stdlib client offers X25519MLKEM768 first and verifies ML-DSA (44/65/87) certificate chains, so a post-quantum server is used as such automatically. `http_client_last_pq c` reports it. |
 | **Connection pooling** | one live connection per `(scheme, host, port)` — the h2 connection is multiplexed, the h1 connection is kept alive and reused, the h3 connection carries every request as its own QUIC stream. |
-| **TLS session resumption** | tickets are cached per host and offered on the next connection, so a repeat visit skips the certificate and the signature. |
+| **TLS session resumption** | tickets are cached per host and offered on the next connection, so a repeat visit skips the certificate and the signature (`http_client_set_resume c F` turns it off). |
 | **Redirects** | 3xx are followed (up to `max_redirects`); a 303, and a 301/302 on a POST, become a bodyless GET, exactly as browsers do. Relative `Location`s resolve per RFC 3986 §5.2. |
 | **Cookies** | a built-in RFC 6265 jar stores `Set-Cookie` and sends `Cookie` on matching requests. |
 | **Compression** | `Accept-Encoding: gzip, deflate` is offered and the body is decoded transparently, with an output cap against decompression bombs. |
@@ -55,6 +55,7 @@ $ `deps/http-client/src/http_client.nu`
 ( http_client_set_decompress c F )       // leave bodies as the wire carried them
 ( http_client_set_body_max c 1048576 )   // cap the decoded body; larger → HcTooLarge
 ( http_client_set_user_agent c `myapp/1.0` )
+( http_client_set_resume c F )           // never offer a cached TLS session: every connection is a full handshake
 ```
 
 ## Verbs
