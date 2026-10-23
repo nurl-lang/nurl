@@ -188,6 +188,43 @@ else
     note "runtime CPUID cross-check" "skipped (not x86-64 Linux)"
 fi
 
+# ── The v256 lowering ChaCha20-Poly1305 depends on ────────────────────
+# Two things LLVM gets wrong from the obvious IR, each worth a tenth or
+# more of the AEAD, invisible to any behavioural test:
+#   * a 32×32 → 64 lane multiply (nurl_v256_mul32u) whose operand's high
+#     bits the backend cannot see — a loop-carried value, or a broadcast
+#     whose mask the optimiser moved out of the loop — is lowered as THREE
+#     multiplies and two 32-bit shifts instead of one `vpmuludq`; the
+#     four-block Poly1305 (__poly_wide) is written so that never happens;
+#   * a rotate by 8 or 16 spelled as a funnel shift is reassociated across
+#     ChaCha20's xor into a third byte shuffle per quarter-round pair
+#     (nurl_v256_rotl32 spells it as a byte permutation instead): the
+#     eight-block round must have one `vpshufb` per two `vpxor`.
+if [ "$(uname -m)" = "x86_64" ] && command -v objdump >/dev/null 2>&1 &&
+        "$NURLC" "$SCRIPT_DIR/chacha20poly1305_sweep.nu" > "$WORK/ccp.ll" 2>/dev/null &&
+        clang -O2 -flto -Wno-override-module "$WORK/ccp.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/ccp" -lm -lpthread 2>/dev/null; then
+    objdump -d --no-show-raw-insn "$WORK/ccp" > "$WORK/ccp.s" 2>/dev/null
+    pw=$(awk '/^[0-9a-f]+ <[^>]*__poly_wide[a-z0-9_]*\.x86v3>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s")
+    n_mul=$(printf '%s\n' "$pw" | grep -c 'vpmuludq')
+    n_x32=$(printf '%s\n' "$pw" | grep -cE 'vps(ll|rl)q[[:space:]]+\$0x20')
+    if [ "$n_mul" -gt 0 ] && [ "$n_x32" -eq 0 ]; then
+        ok "__poly_wide: one vpmuludq a product" "$n_mul vpmuludq, no 32-bit split"
+    else
+        bad "__poly_wide: one vpmuludq a product" "$n_mul vpmuludq, $n_x32 split shifts"
+    fi
+    cw=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v3>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s")
+    n_sh=$(printf '%s\n' "$cw" | grep -cE 'vpshufb[[:space:]].*%ymm')
+    n_xo=$(printf '%s\n' "$cw" | grep -cE 'vpxor[[:space:]].*%ymm')
+    if [ "$n_sh" -gt 0 ] && [ $((2 * n_sh)) -le "$n_xo" ]; then
+        ok "chacha20 eight-block round: vpshufb ≤ vpxor / 2" "$n_sh vpshufb, $n_xo vpxor"
+    else
+        bad "chacha20 eight-block round: vpshufb ≤ vpxor / 2" "$n_sh vpshufb, $n_xo vpxor"
+    fi
+else
+    note "ChaCha20-Poly1305 v256 lowering" "skipped (not x86-64, or no objdump / build)"
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
     echo "simd_dispatch_ir: all assertions passed"
