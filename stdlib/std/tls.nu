@@ -1398,8 +1398,10 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     : ( Vec u ) retained ( bytes_slice secret 0 ( vec_len [u] secret ) )
     : ( Vec u ) emptyc ( vec_new [u] )
     : i klen ? == . c cipher 1 16 32
-    : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc klen )
-    : ( Vec u ) iv ( hkdf_expand_label secret `iv` emptyc 12 )
+    // One prepared secret for both derivations (stdlib/std/hkdf.nu).
+    : HmacSha256 sk ( hmac_sha256_key secret )
+    : ( Vec u ) key ( hkdf_expand_label_prk sk `key` emptyc klen )
+    : ( Vec u ) iv ( hkdf_expand_label_prk sk `iv` emptyc 12 )
     ? == dir 0 {
         = . c s_secret retained
         = . c s_gk ( __tls_gk . c cipher key )
@@ -2106,11 +2108,13 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     ? & == . h offer 1 ( __sh_has_psk sh ) { = . h resumed 1 } {}
     : ( Vec u ) early ? == . h resumed 1 ( bytes_slice . h res_early 0 32 ) ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
+    // handshake_secret derives three secrets: prepared once.
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
+    : HmacSha256 hsk ( hmac_sha256_key hs_secret )
     : ( Vec u ) th_sh ( sha256_snapshot . h trh )
-    = . h c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
-    = . h s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
-    : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
+    = . h c_hs ( derive_secret_prk hsk `c hs traffic` th_sh )
+    = . h s_hs ( derive_secret_prk hsk `s hs traffic` th_sh )
+    : ( Vec u ) derived2 ( derive_secret_prk hsk `derived` ehash )
     = . h master ( hkdf_extract derived2 z32 )
     = . h state 2
     ^ 0
@@ -2152,8 +2156,10 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
         // application traffic secrets: transcript through the server
         // Finished — also what our own Finished is computed over
         : ( Vec u ) th_sf ( sha256_snapshot . h trh )
-        = . h c_ap ( derive_secret . h master `c ap traffic` th_sf )
-        = . h s_ap ( derive_secret . h master `s ap traffic` th_sf )
+        // master_secret derives three secrets: prepared once.
+        : HmacSha256 mk ( hmac_sha256_key . h master )
+        = . h c_ap ( derive_secret_prk mk `c ap traffic` th_sf )
+        = . h s_ap ( derive_secret_prk mk `s ap traffic` th_sf )
         : ( Vec u ) cfin ( _finished_mac . h c_hs th_sf )
         : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
         ( vec_push [u] finmsg # u 20 )
@@ -2164,7 +2170,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
         // its PSK from this (see __client_take_ticket).
         ( sha256_update . h trh finmsg )
         : ( Vec u ) th_cf ( sha256_final . h trh )
-        = . h res_master ( derive_secret . h master `res master` th_cf )
+        = . h res_master ( derive_secret_prk mk `res master` th_cf )
         = . h out_fin finmsg
         = . h state 3
         ^ 0
