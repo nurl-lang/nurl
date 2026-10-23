@@ -46,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The HTTP/2 client no longer deadlocks a duplex exchange mid-frame.**
+  When a read had taken part of an inbound frame, `__h2c_read_one`
+  waited for the rest with write interest only if bytes were already
+  framed in the writer — not if request body was sendable but not yet
+  framed (only the pump frames body). A peer that answered only after
+  receiving the whole body then waited for the client while the client
+  waited for the peer, until the 30 s idle timeout reported
+  `H2CReadIo`. Partial frames became common once both ends set
+  `TCP_NODELAY` (below), and `compiler/tests/http2_client_duplex` began
+  failing in CI on ~1 run in 30 under load. The read now also wakes on
+  writability whenever the connection has sendable body, the same
+  invariant the pump already used to decide whether to wait at all.
+  `compiler/tests/http2_client_partial_frame_send` reproduces it
+  deterministically — the peer sends half a PING mid-body and the rest
+  only after the body — failing every time on the previous client (30 s
+  timeout) and passing in ~12 ms now.
 - **A new client connection no longer stalls ~40 ms.** `nurl_tcp_connect`
   left Nagle's algorithm on (only accepted sockets got `TCP_NODELAY`), so
   a client's second small write — the TLS Finished after the
