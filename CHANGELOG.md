@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A new client connection no longer stalls ~40 ms.** `nurl_tcp_connect`
+  left Nagle's algorithm on (only accepted sockets got `TCP_NODELAY`), so
+  a client's second small write — the TLS Finished after the
+  ClientHello, the request after the handshake — waited for the peer's
+  delayed ACK. `packages/http-client` made 24 new connections a second
+  against reqwest's 1 201 in `bench/tls_bench`; with the fix it is at
+  parity or ahead (local run: 2 784 vs 2 482). Every connected socket now
+  has `TCP_NODELAY`; `tools/net_nodelay.nu` reads it back in CI.
+
 ### Added
 
 - **`bench/tls_bench` and the manual `tls-bench` workflow: NURL's TLS
