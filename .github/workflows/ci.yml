@@ -563,6 +563,16 @@ jobs:
           ./nurl.sh tools/net_nodelay.nu build/net_nodelay
           build/net_nodelay
 
+      - name: RSA-PSS signing against OpenSSL (CRT and plain exponent)
+        # std/rsa.nu signs on std/rsa_mont.nu: CRT with blinded half-width
+        # exponents when the key carries its factors, one full-width
+        # exponentiation otherwise. With a fixed salt PSS is deterministic,
+        # so both paths must produce the same bytes, and OpenSSL must
+        # verify them — 1024 to 4096 bits, PKCS#1 and PKCS#8 keys.
+        run: |
+          ./nurl.sh -O2 tools/rsa_sign_gate.nu build/rsa_sign_gate
+          python3 tools/tests/test_rsa_sign.py
+
       - name: DEFLATE, gzip and zlib framing against reference codecs
         run: |
           ./nurl.sh tools/compress_gate.nu build/compress_gate

@@ -1,11 +1,14 @@
 // stdlib/std/rsa.nu — pure-NURL RSA signatures (RSASSA PKCS#1 v1.5 and
-// PSS), built on the BigInt modular exponentiation. No OpenSSL. Verify
+// PSS), on the fixed-width Montgomery arithmetic of std/rsa_mont.nu (CRT
+// for the private key when it carries its factors). No OpenSSL. Verify
 // (X.509 / TLS 1.3 cert signatures) plus PSS signing (the pure TLS 1.3
 // server's CertificateVerify with an RSA leaf cert).
 //
 //   ( rsa_pkcs1_verify n e sig di_prefix digest ) → b
 //   ( rsa_pss_verify_sha256 n e sig mhash )        → b
-//   ( rsa_pss_sign_sha256 n d mhash salt )         → sig  (k-byte BE)
+//   ( rsa_pss_sign_sha256 n e d mhash salt )       → sig  (k-byte BE)
+//        d: the private exponent, or the CRT blob std/pkey.nu's
+//        rsa_priv_sign_key returns (the fast path)
 //
 // n / e / sig are big-endian byte vectors (the modulus, public exponent,
 // and signature). `digest` is the raw hash of the signed data; di_prefix
@@ -15,26 +18,10 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`
-
-// OS CSPRNG bridge (same runtime entry std/random.nu uses) — for the RSA
-// blinding nonce. Returns 1 on success, 0 on total entropy failure.
-& `c` @ nurl_rand_fill *u buf i n → i
+$ `stdlib/std/rsa_mont.nu`
 
 @ __rsa_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ -1 }
-}
-
-// A fresh random BigInt in [0, n) for blinding: fill `k` bytes from the OS
-// CSPRNG and reduce mod n. (Whole-modulus width so the reduction is ~uniform.)
-@ __rsa_rand_mod BigInt bn i k → BigInt {
-    : ( Vec u ) buf ( vec_with_cap [u] ? > k 0 k 1 )
-    : ~ i z 0
-    ~ < z k { ( vec_push [u] buf # u 0 ) = z + z 1 }
-    : i r ( nurl_rand_fill # *u ( vec_data [u] buf ) k )
-    ? == r 0 { ( nurl_panic `rsa: CSPRNG (nurl_rand_fill) failed` ) } {}
-    : BigInt rb ( bigint_from_bytes_be buf )
-    : BigInt rm ( bigint_rem rb bn )
-    ^ rm
 }
 
 // L1: a well-formed signature representative is exactly k bytes and < n.
@@ -67,12 +54,7 @@ $ `stdlib/std/hash_sha256.nu`
 // Recover the encoded message EM = sig^e mod n, padded to the modulus
 // length (k bytes).
 @ __rsa_em ( Vec u ) n ( Vec u ) e ( Vec u ) sig → ( Vec u ) {
-    : BigInt bn ( bigint_from_bytes_be n )
-    : BigInt be ( bigint_from_bytes_be e )
-    : BigInt bs ( bigint_from_bytes_be sig )
-    : BigInt m ( bigint_modpow bs be bn )
-    : ( Vec u ) em ( bigint_to_bytes_be m ( vec_len [u] n ) )
-    ^ em
+    ^ ( _rsa_public n e sig ( vec_len [u] n ) )
 }
 
 // DigestInfo ASN.1 prefixes (RFC 8017 §9.2 notes).
@@ -228,14 +210,16 @@ $ `stdlib/std/hash_sha256.nu`
 // hash length). `n`/`e`/`d` are the modulus, PUBLIC exponent and PRIVATE
 // exponent (big-endian); `mhash` is SHA-256 of the signed data; `salt` is
 // the random salt (32 bytes for TLS 1.3) — passed in so the caller owns the
-// RNG and tests can pin it. Returns the k-byte big-endian signature.
+// RNG and tests can pin it. Returns the k-byte big-endian signature, or []
+// when the CRT path's fault check rejects the result (a computation fault
+// must not release a signature: one bad half factors the key).
 //
-// H1 (base blinding): the private-key exponentiation s = EM^d mod n is
-// computed as s = ((EM · r^e)^d · r^{-1}) mod n for a fresh random r per
-// signature. r^{ed} ≡ r mod n, so this unblinds to the same signature, but
-// the value actually fed to the (variable-time) modexp is randomized, so its
-// timing no longer correlates with EM or d — defeating remote/cache timing
-// recovery of the key (the standard OpenSSL defense). `e` is public.
+// `d` is the private exponent, or — the fast path — the CRT blob
+// std/pkey.nu's rsa_priv_sign_key returns. Either way the exponentiation
+// is std/rsa_mont.nu's constant-time one (fixed windows, masked table
+// reads); with CRT each half's exponent is also blinded per signature.
+// This replaces the old base blinding, which only existed because the
+// BigInt modexp it guarded was variable-time.
 @ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
     : i hlen 32
     : i slen ( vec_len [u] salt )
@@ -272,25 +256,7 @@ $ `stdlib/std/hash_sha256.nu`
     : ~ i hi 0
     ~ < hi hlen { ( vec_push [u] em # u ( __rsa_bget h hi ) ) = hi + hi 1 }
     ( vec_push [u] em # u 188 )  // trailer 0xbc
-    // s = EM^d mod n, with base blinding, encoded big-endian to k bytes.
-    : BigInt bm ( bigint_from_bytes_be em )
-    : BigInt bd ( bigint_from_bytes_be d )
-    : BigInt be ( bigint_from_bytes_be e )
-    : BigInt bn ( bigint_from_bytes_be n )
-    : BigInt r ( __rsa_rand_mod bn k )
-    : BigInt rinv ( bigint_modinv r bn )
-    : ~ BigInt bsig ( bigint_zero )
-    ? ( bigint_is_zero rinv ) {
-        // r not invertible (astronomically rare for n=pq) → sign unblinded.
-        = bsig ( bigint_modpow bm bd bn )
-    } {
-        : BigInt re ( bigint_modpow r be bn )  // r^e mod n (public exp, fast)
-        : BigInt mb ( bigint_mul bm re )
-        : BigInt mbr ( bigint_rem mb bn )  // EM·r^e mod n
-        : BigInt sb ( bigint_modpow mbr bd bn )  // (EM·r^e)^d = EM^d·r mod n
-        : BigInt su ( bigint_mul sb rinv )
-        = bsig ( bigint_rem su bn )  // ·r^{-1} → EM^d mod n
-    }
-    : ( Vec u ) sig ( bigint_to_bytes_be bsig k )
+    // s = EM^d mod n, big-endian, k bytes.
+    : ( Vec u ) sig ( _rsa_private n e d em k )
     ^ sig
 }

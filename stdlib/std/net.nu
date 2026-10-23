@@ -448,7 +448,8 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     }
     : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
         T k → {
-            ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d )
+            // k2: the CRT blob when the key has one (std/rsa_mont.nu), else d
+            ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 ( rsa_priv_sign_key k ) )
             ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
             1
         }

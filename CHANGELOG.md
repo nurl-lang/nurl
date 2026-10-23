@@ -8,17 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **A new client connection no longer stalls ~40 ms.** `nurl_tcp_connect`
-  left Nagle's algorithm on (only accepted sockets got `TCP_NODELAY`), so
-  a client's second small write — the TLS Finished after the
-  ClientHello, the request after the handshake — waited for the peer's
-  delayed ACK. `packages/http-client` made 24 new connections a second
-  against reqwest's 1 201 in `bench/tls_bench`; with the fix it is at
-  parity or ahead (local run: 2 784 vs 2 482). Every connected socket now
-  has `TCP_NODELAY`; `tools/net_nodelay.nu` reads it back in CI.
-
 ### Added
 
 - **`bench/tls_bench` and the manual `tls-bench` workflow: NURL's TLS
@@ -33,6 +22,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where NURL trails and what the gap is made of.
 - `packages/http-client` 0.3.6: `http_client_set_resume` — turn TLS
   session resumption off for a client.
+
+### Changed
+
+- **RSA signing is ~300× faster: 1.6 ms for RSA-2048, from 450–585 ms.**
+  `std/rsa.nu` ran on `std/bigint.nu` — 16-bit limbs and a full long
+  division per modular multiply — so a TLS server with an RSA certificate
+  completed essentially no handshakes under load (`bench/tls_bench`: 0.07
+  handshakes/s against rustls's 574). The private and public operations
+  now run on `std/rsa_mont.nu`: fixed-width 64-bit-limb Montgomery
+  arithmetic (FIOS on `nurl_mac`), a constant-time fixed-window
+  exponentiation, and CRT when the key carries its factors — two
+  half-width exponentiations recombined with Garner's formula, each
+  exponent blinded per signature (d_p + r·(p − 1)), and the signature
+  checked against the message mod p and mod q before it is released (a
+  fault in one half would otherwise factor the key). `RsaPriv` keeps the
+  CRT parameters (`crt`, `rsa_priv_sign_key`), and the TLS listener signs
+  with them. Locally: RSA handshakes 0.33 → 512 /s (rustls 1 527).
+  `tools/rsa_sign_gate.nu` + `tools/tests/test_rsa_sign.py` check, in CI,
+  that the CRT and the plain-exponent paths give identical PSS
+  signatures for 1024–4096-bit PKCS#1 and PKCS#8 keys and that OpenSSL
+  verifies them.
+
+### Fixed
+
+- **A new client connection no longer stalls ~40 ms.** `nurl_tcp_connect`
+  left Nagle's algorithm on (only accepted sockets got `TCP_NODELAY`), so
+  a client's second small write — the TLS Finished after the
+  ClientHello, the request after the handshake — waited for the peer's
+  delayed ACK. `packages/http-client` made 24 new connections a second
+  against reqwest's 1 201 in `bench/tls_bench`; with the fix it is at
+  parity or ahead (local run: 2 784 vs 2 482). Every connected socket now
+  has `TCP_NODELAY`; `tools/net_nodelay.nu` reads it back in CI.
 
 ### Security
 
