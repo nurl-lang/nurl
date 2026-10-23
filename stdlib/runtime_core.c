@@ -3938,11 +3938,17 @@ long long nurl_umulhi(long long a, long long b) {
  * and VPCLMULQDQ, for the v256 crypto primitives; and the AVX-512 VAES
  * tier (nurl_cpu_x86_vaes512): that plus x86-64-v4, for the v512 ones.
  *
- * Four environment variables can only ever take an answer AWAY, never
+ * And the SHA tier (nurl_cpu_x86_sha): x86-64-v2 plus the SHA extensions
+ * (SHA256RNDS2 / SHA256MSG1 / SHA256MSG2), for the nurl_v128_sha256*
+ * primitives. It is NOT on the AES chain: Haswell to Cascade Lake have
+ * AES-NI without SHA, and some Atoms SHA without AVX2.
+ *
+ * Five environment variables can only ever take an answer AWAY, never
  * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
  * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
- * nurl_cpu_x86_vaes and NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 (and
- * each tier goes with any it contains). They exist so
+ * nurl_cpu_x86_vaes, NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 and
+ * NURL_CPU_SHA=0 for nurl_cpu_x86_sha (and each tier goes with any it
+ * contains). They exist so
  * one machine can run every clone and every fallback a marked function
  * has — the baseline clone, the AES clone without AVX2, the software
  * path a program takes on a CPU with no AES-NI at all — rather than
@@ -3951,6 +3957,7 @@ static int nurl__cpu_v3 = -1;
 static int nurl__cpu_aes = -1;
 static int nurl__cpu_vaes = -1;
 static int nurl__cpu_vaes512 = -1;
+static int nurl__cpu_sha = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -4042,7 +4049,23 @@ static int nurl__cpu_env_off(const char *name) {
     return e && e[0] == '0' && e[1] == '\0';
 }
 
+/* The SHA tier: x86-64-v2 (the leaf-1 ECX bits the AES tier also needs,
+ * minus AES-NI and PCLMULQDQ) and leaf-7 EBX SHA (29). SSE state only,
+ * so there is no XCR0 promise to check. */
+static int nurl__cpu_sha_detect(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(1, 0, r);
+    const unsigned v2 = (1u << 0) | (1u << 9) | (1u << 13) | (1u << 19) |
+                        (1u << 20) | (1u << 23);
+    if ((r[2] & v2) != v2) return 0;
+    nurl__cpuid(7, 0, r);
+    return (r[1] & (1u << 29)) != 0;
+}
+
 static void nurl__cpu_detect(void) {
+    nurl__cpu_sha = nurl__cpu_sha_detect() && !nurl__cpu_env_off("NURL_CPU_SHA");
     nurl__cpu_v3_detect();
     int aes = nurl__cpu_aes_detect();
     if (nurl__cpu_env_off("NURL_CPU_V3")) nurl__cpu_v3 = 0;
@@ -4122,11 +4145,12 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_vaes = 0;
     nurl__cpu_vaes512 = 0;
     nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
+    nurl__cpu_sha = 0;
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; }
 
 #endif
 
@@ -4184,6 +4208,24 @@ int nurl_cpu_x86_vaes(void) {
 int nurl_cpu_x86_vaes512(void) {
     if (nurl__cpu_vaes512 < 0) nurl__cpu_detect();
     return nurl__cpu_vaes512;
+}
+
+/* Does this CPU have the SHA tier — x86-64-v2 + the SHA extensions, the
+ * feature set nurlc compiles every function that uses a nurl_v128_sha256*
+ * primitive with? Goldmont, Ice Lake and later Intel, every Zen. Not on
+ * the AES chain (above). `readnone` to nurlc, like the AES answer.
+ * NURL_CPU_SHA=0 takes it away. */
+int nurl_cpu_x86_sha(void) {
+    if (nurl__cpu_sha < 0) nurl__cpu_detect();
+    return nurl__cpu_sha;
+}
+
+/* The SHA tier's gate failure, as nurl_cpu_aes_missing is the AES
+ * tier's. */
+void nurl_cpu_sha_missing(void) {
+    nurl_panic("this function needs the SHA extensions (x86-64-v2 + SHA), "
+               "which this CPU lacks; check nurl_cpu_has_sha before calling it");
+    abort();
 }
 
 void nurl_cpu_vaes512_missing(void) {

@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where NURL trails and what the gap is made of.
 - `packages/http-client` 0.3.6: `http_client_set_resume` — turn TLS
   session resumption off for a client.
+- **The SHA tier: SHA-256 on the x86 SHA extensions, ~7× faster.**
+  Three new crypto primitives, `nurl_v128_sha256rnds2`, `_sha256msg1`
+  and `_sha256msg2` (Intel's SHA256RNDS2 / MSG1 / MSG2), under the same
+  contract as the AES tiers — compiled for x86-64-v2 + SHA, gated on the
+  runtime's CPUID answer (`nurl_cpu_has_sha`, `NURL_CPU_SHA=0` to take it
+  away), stubs on AArch64 and under `--no-cpu-dispatch` — and two
+  portable lane shuffles, `nurl_v128_bswap32` and `nurl_v128_alignr4`.
+  SHA is not on the AES chain (Haswell … Cascade Lake have AES-NI
+  without it), so nurlc now keeps a tier as the set of extensions it
+  needs: a body takes the union of what it uses and calls, a `.tier`
+  copy inlines only where its set is contained, and a `simd` function
+  that reaches AES and SHA is cloned, gated and dispatched on both.
+  `std/hash_sha256` runs whole runs of blocks through a SHA-NI kernel
+  with the state in registers: SHA-256 of 16 KB 52 µs → 7.5 µs locally
+  (aws-lc-rs 8.7 µs), which every transcript hash, HMAC and HKDF of the
+  TLS handshake shares. `compiler/tests/sha256_tier_agree` holds both
+  paths to one golden over every length 0–1100 and FIPS 180-4's
+  million-`a` vector; `crypto_tier_ir.sh` checks the tier's IR, gates,
+  machine code and the AES + SHA union.
 
 ### Changed
 

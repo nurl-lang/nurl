@@ -108,7 +108,7 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = h + t1 + s0 mj
 }
 
-@ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
+@ __sha256_transform_sw * u32 sp * u bp * u32 kp * u32 mp → v {
     : ~ i wi 0
     ~ < wi 16 {
         = . mp wi ( __sha256_be32 bp * wi 4 )
@@ -155,6 +155,97 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . sp 5 + . sp 5 f
     = . sp 6 + . sp 6 g
     = . sp 7 + . sp 7 h
+}
+
+// ── The SHA extensions (SHA-NI) ─────────────────────────────────────
+//
+// Where the CPU has them (`nurl_cpu_has_sha`: Goldmont, Ice Lake and
+// later Intel, every Zen), a block is 32 SHA256RNDS2 — two rounds each —
+// and 12 + 12 SHA256MSG1 / MSG2 for the schedule, against the 64 rounds
+// of ALU above: several times the throughput. The kernel takes a run of
+// blocks so the state stays in its two registers from the first to the
+// last; the dispatch (`__sha256_blocks`) asks once per run.
+//
+// Intel's arrangement (compiler: __emit_sha_prim): the state as the
+// halves (A, B, E, F) and (C, D, G, H), lanes 3..0, so lane 0 is F and
+// H. Each group of four rounds adds four schedule words to their round
+// constants, runs two rounds into (C, D, G, H) and two more — the upper
+// pair of words moved down — into (A, B, E, F), the halves trading roles
+// every call. The schedule runs alongside in m0..m3, group g using
+// m[g mod 4]: m[g+1] is finished (the W[t−7] term, then MSG2's σ1) from
+// group 3 to 14, and m[g−1] started (MSG1's σ0) from group 1 to 12.
+// `g` is public — the branches choose by the round number only.
+unsafe @ __sha256_blocks_ni * u32 sp * u bp i nblk * u32 kp → v {
+    : ~ v128 abef ( nurl_v128_set32 # i . sp 5 # i . sp 4 # i . sp 1 # i . sp 0 )
+    : ~ v128 cdgh ( nurl_v128_set32 # i . sp 7 # i . sp 6 # i . sp 3 # i . sp 2 )
+    : ~ i blk 0
+    ~ < blk nblk {
+        : i at + # i bp * blk 64
+        : v128 abef0 abef
+        : v128 cdgh0 cdgh
+        : ~ v128 m0 ( nurl_v128_bswap32 ( nurl_v128_ld # s at ) )
+        : ~ v128 m1 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 16 ) )
+        : ~ v128 m2 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 32 ) )
+        : ~ v128 m3 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 48 ) )
+        // Four groups a pass, so each m keeps its name.
+        : ~ i q 0
+        ~ < q 4 {
+            : i kq + # i kp * q 64
+            // group 4q: m0
+            : ~ v128 wk ( nurl_v128_add32 m0 ( nurl_v128_ld # s kq ) )
+            = cdgh ( nurl_v128_sha256rnds2 cdgh abef wk )
+            ? > q 0 { = m1 ( nurl_v128_sha256msg2 ( nurl_v128_add32 m1 ( nurl_v128_alignr4 m0 m3 ) ) m0 ) } {}
+            = abef ( nurl_v128_sha256rnds2 abef cdgh ( nurl_v128_rotlanes2 wk ) )
+            ? > q 0 { = m3 ( nurl_v128_sha256msg1 m3 m0 ) } {}
+            // group 4q + 1: m1
+            = wk ( nurl_v128_add32 m1 ( nurl_v128_ld # s + kq 16 ) )
+            = cdgh ( nurl_v128_sha256rnds2 cdgh abef wk )
+            ? > q 0 { = m2 ( nurl_v128_sha256msg2 ( nurl_v128_add32 m2 ( nurl_v128_alignr4 m1 m0 ) ) m1 ) } {}
+            = abef ( nurl_v128_sha256rnds2 abef cdgh ( nurl_v128_rotlanes2 wk ) )
+            ? < q 3 { = m0 ( nurl_v128_sha256msg1 m0 m1 ) } {}
+            // group 4q + 2: m2
+            = wk ( nurl_v128_add32 m2 ( nurl_v128_ld # s + kq 32 ) )
+            = cdgh ( nurl_v128_sha256rnds2 cdgh abef wk )
+            ? > q 0 { = m3 ( nurl_v128_sha256msg2 ( nurl_v128_add32 m3 ( nurl_v128_alignr4 m2 m1 ) ) m2 ) } {}
+            = abef ( nurl_v128_sha256rnds2 abef cdgh ( nurl_v128_rotlanes2 wk ) )
+            ? < q 3 { = m1 ( nurl_v128_sha256msg1 m1 m2 ) } {}
+            // group 4q + 3: m3
+            = wk ( nurl_v128_add32 m3 ( nurl_v128_ld # s + kq 48 ) )
+            = cdgh ( nurl_v128_sha256rnds2 cdgh abef wk )
+            ? < q 3 { = m0 ( nurl_v128_sha256msg2 ( nurl_v128_add32 m0 ( nurl_v128_alignr4 m3 m2 ) ) m3 ) } {}
+            = abef ( nurl_v128_sha256rnds2 abef cdgh ( nurl_v128_rotlanes2 wk ) )
+            ? < q 3 { = m2 ( nurl_v128_sha256msg1 m2 m3 ) } {}
+            = q + q 1
+        }
+        = abef ( nurl_v128_add32 abef abef0 )
+        = cdgh ( nurl_v128_add32 cdgh cdgh0 )
+        = blk + blk 1
+    }
+    = . sp 0 # u32 ( nurl_v128_get32 abef 3 )
+    = . sp 1 # u32 ( nurl_v128_get32 abef 2 )
+    = . sp 4 # u32 ( nurl_v128_get32 abef 1 )
+    = . sp 5 # u32 ( nurl_v128_get32 abef 0 )
+    = . sp 2 # u32 ( nurl_v128_get32 cdgh 3 )
+    = . sp 3 # u32 ( nurl_v128_get32 cdgh 2 )
+    = . sp 6 # u32 ( nurl_v128_get32 cdgh 1 )
+    = . sp 7 # u32 ( nurl_v128_get32 cdgh 0 )
+}
+
+// `nblk` consecutive blocks at `bp` into the state at `sp`: the SHA-NI
+// kernel where the CPU has it, the portable rounds otherwise (`mp` is
+// their schedule scratch). NURL_CPU_SHA=0 forces the portable path.
+@ __sha256_blocks * u32 sp * u bp i nblk * u32 kp * u32 mp → v {
+    ? ( nurl_cpu_has_sha ) { ( __sha256_blocks_ni sp bp nblk kp ) ^ v } {}
+    : ~ i b 0
+    ~ < b nblk {
+        ( __sha256_transform_sw sp # *u + # i bp * b 64 kp mp )
+        = b + b 1
+    }
+}
+
+// One block.
+@ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
+    ( __sha256_blocks sp bp 1 kp mp )
 }
 
 // ── Incremental (streaming) hashing ────────────────────────────────
@@ -259,11 +350,10 @@ inline @ __sha256_iv * u32 sp → v {
             = . h blen 0
         } { = . h blen + have take }
     } {}
-    // full blocks straight from the caller's data — no copy
-    ~ <= + off 64 n {
-        ( __sha256_transform sp # *u + # i dp off kp mp )
-        = off + off 64
-    }
+    // full blocks straight from the caller's data — no copy, one run
+    : i nfull / - n off 64
+    ( __sha256_blocks sp # *u + # i dp off nfull kp mp )
+    = off + off * nfull 64
     // stash the tail
     ? < off n {
         ( nurl_memcpy # s blk # s + # i dp off - n off )
@@ -519,11 +609,9 @@ inline @ __sha256_iv * u32 sp → v {
     ( __sha256_transform sp blk kp mp )
     : i mlen ( vec_len [u] msg )
     : *u dp ( vec_data [u] msg )
-    : ~ i off 0
-    ~ <= + off 64 mlen {
-        ( __sha256_transform sp # *u + # i dp off kp mp )
-        = off + off 64
-    }
+    : i nfull / mlen 64
+    ( __sha256_blocks sp dp nfull kp mp )
+    : i off * nfull 64
     : i rem - mlen off
     ? > rem 0 { ( nurl_memcpy # s blk # s + # i dp off rem ) } {}
     = . blk rem # u 128

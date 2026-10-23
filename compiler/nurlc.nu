@@ -43992,30 +43992,44 @@ unsafe @ __ha_is_ret s line → b {
 
 // ── The crypto tiers' feature sets ─────────────────────────────────
 //
-// Two tiers (§4.1b, the hardware crypto tier below): level 1, AES-NI and
-// PCLMULQDQ on v128, and level 2, VAES and VPCLMULQDQ on v256 — the
-// same rounds and products on both 128-bit lanes of a ymm register at
-// once. Level 2 contains level 1 and x86-64-v3 (no CPU has VAES without
-// AVX2), so a level-2 function may call level-1 code inline but never
-// the reverse. Here, above emit_multiversion, because the `simd` clones
-// are built from them too.
+// A tier (§4.1b, the hardware crypto tier below) is a SET of hardware
+// extensions, kept as a bit mask: 1 AES-NI and PCLMULQDQ on v128, 2 VAES
+// and VPCLMULQDQ on v256 — the same rounds and products on both 128-bit
+// lanes of a ymm register at once — 4 the same on v512, and 8 the SHA
+// extensions on v128. The wide ones bring the narrower along (no CPU
+// has VAES without AES-NI and AVX2), so a v256 body is tier 3 and a
+// v512 one 7; SHA is on no such chain — Haswell to Cascade Lake have
+// AES-NI without it, Goldmont has it without AVX2. Code of tier `b` may
+// be inlined into a function of tier `a` exactly when b ⊆ a
+// (__tier_contains), and a body that needs two tiers needs their union,
+// `|`. Here, above emit_multiversion, because the `simd` clones are
+// built from them too.
+
+// Does tier `outer` contain tier `inner`?
+@ __tier_contains i outer i inner → b { ^ == & outer inner inner }
 
 // The attributes a function of tier `lvl` is compiled with: exactly
-// what nurl_cpu_x86_aes / nurl_cpu_x86_vaes test.
+// what nurl_cpu_x86_aes / _vaes / _vaes512 / _sha test.
 @ __crypto_tier_attrs i lvl → s {
     // AArch64's one tier: NEON is baseline, `aes` adds AESE/AESD/AESMC/
     // AESIMC and PMULL (FEAT_AES + FEAT_PMULL; nurl_cpu_arm_aes).
     ? == g_crypto_target 2 { ^ ` "target-features"="+neon,+aes"` } {}
-    ? == lvl 3 { ^ ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
-    ? == lvl 2 { ^ ` "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+aes,+pclmul,+vaes,+vpclmulqdq"` } {}
-    ^ ` "target-cpu"="x86-64-v2" "target-features"="+aes,+pclmul,+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"`
+    : s sha ? != 0 & lvl 8 `,+sha` ``
+    ? != 0 & lvl 4 { ^ ( nurl_str_cat3 ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq` sha `"` ) } {}
+    ? != 0 & lvl 2 { ^ ( nurl_str_cat3 ` "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+aes,+pclmul,+vaes,+vpclmulqdq` sha `"` ) } {}
+    : s aes ? != 0 & lvl 1 `+aes,+pclmul,` ``
+    ^ ( nurl_str_cat4 ` "target-cpu"="x86-64-v2" "target-features"="` aes `+cx16,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3` ( nurl_str_cat sha `"` ) )
 }
 
-// The entry gate of a tier-`lvl` function, as a body line.
+// The entry gate of a tier-`lvl` function, as body lines: the widest
+// AES-chain tier it needs (each runtime answer implies the narrower
+// ones), and SHA.
 @ __crypto_gate_line i lvl → s {
-    ? == lvl 3 { ^ `  call void @nurl__vaes512_gate()\n` } {}
-    ? == lvl 2 { ^ `  call void @nurl__vaes_gate()\n` } {}
-    ^ `  call void @nurl__aes_gate()\n`
+    : s sha ? != 0 & lvl 8 `  call void @nurl__sha_gate()\n` ``
+    ? != 0 & lvl 4 { ^ ( nurl_str_cat `  call void @nurl__vaes512_gate()\n` sha ) } {}
+    ? != 0 & lvl 2 { ^ ( nurl_str_cat `  call void @nurl__vaes_gate()\n` sha ) } {}
+    ? != 0 & lvl 1 { ^ ( nurl_str_cat `  call void @nurl__aes_gate()\n` sha ) } {}
+    ^ ( nurl_str_cat sha `` )
 }
 
 // ── A wide vector across a call ──────────────────────────────────
@@ -44635,12 +44649,12 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
         ? > crypto 0 { : s gated ( __crypto_fn_ir fn_ir T crypto ) ( emit_hoisted gated ) } { ( emit_hoisted fn_ir ) }
         ^ v
     } {}
-    // A body of the VAES tier (crypto 2: it uses a v256 crypto
-    // primitive, or calls a function that does) has nothing to choose
-    // between: the tier is x86-64-v3 and more, so the wide clone is the
-    // only one there could be. It is emitted once, under its own name,
-    // gated like any tier function.
-    ? >= crypto 2 {
+    // A body of a VAES tier (crypto has bit 2: it uses a v256 or v512
+    // crypto primitive, or calls a function that does) has nothing to
+    // choose between: the tier is x86-64-v3 and more, so the wide clone
+    // is the only one there could be. It is emitted once, under its own
+    // name, gated like any tier function.
+    ? != 0 & crypto 2 {
         : s one ( nurl_str_cat4 ( nurl_str_cat3 `define ` ret_ll ` @` ) lname ( nurl_str_cat3 `(` params `) {` ) body0 )
         : s gated ( __crypto_fn_ir one T crypto )
         ( emit_vabi gated )
@@ -44661,21 +44675,23 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // A `crypto` body (flush_simd_deferred: it uses a hardware crypto
     // primitive, or calls a function that does) cannot have a baseline
     // clone: the instruction does not exist there. Its `.base` is
-    // compiled for the crypto tier instead and gated on it, and its
-    // `.x86v3` gains AES and PCLMUL — picked only when the CPU has both
-    // v3 and the tier, so a v3 machine without AES-NI (a VM that masks
-    // it) falls to the gated base rather than to SIGILL.
+    // compiled for its tier (AES, SHA or both) instead and gated on it,
+    // and its `.x86v3` gains the tier's features — picked only when the
+    // CPU has both v3 and the tier, so a v3 machine without AES-NI (a VM
+    // that masks it) or without SHA (Haswell … Cascade Lake) falls to
+    // the gated base rather than to SIGILL.
 
     // Both clones stay calls: the dispatcher picks one at run time, and
     // a clone compiled for more than the baseline must never be merged
     // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
-    : s base_attrs ? == crypto 1 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs 1 ) ) ``
-    : s base_body ? == crypto 1 ( nurl_str_cat `\nentry:\n  call void @nurl__aes_gate()` ( nurl_str_slice body 7 - ( strlen body ) 7 ) ) ( nurl_str_cat body `` )
+    : s base_attrs ? > crypto 0 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs crypto ) ) ``
+    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( nurl_str_cat body `` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
 
-    : s wide_feat ? == crypto 1 `,+aes,+pclmul` ``
+    : s wide_aes ? != 0 & crypto 1 `,+aes,+pclmul` ``
+    : s wide_feat ( nurl_str_cat wide_aes ? != 0 & crypto 8 `,+sha` `` )
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 cparams
     `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
@@ -44691,10 +44707,18 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     ? vsig { ( nurl_print ` alwaysinline` ) } {}
     ( nurl_print ` {\nentry:\n` )
     ? vsig { : s sp ( __vabi_spills params rv ) ( nurl_print sp ) } {}
-    ? == crypto 1
+    ? > crypto 0
     { ( nurl_print `  %__mv3 = call i32 @nurl_cpu_x86_v3()\n` )
-        ( nurl_print `  %__mva = call i32 @nurl_cpu_x86_aes()\n` )
-        ( nurl_print `  %__mv = and i32 %__mv3, %__mva\n` ) }
+        : s mv ? != 0 & crypto 1 `%__mva` `%__mv3`
+        ? != 0 & crypto 1 {
+            ( nurl_print `  %__mva0 = call i32 @nurl_cpu_x86_aes()\n` )
+            ( nurl_print `  %__mva = and i32 %__mv3, %__mva0\n` )
+        } {}
+        ? != 0 & crypto 8 {
+            ( nurl_print `  %__mvs0 = call i32 @nurl_cpu_x86_sha()\n` )
+            ( nurl_print `  %__mvs = and i32 ` ) ( nurl_print mv ) ( nurl_print `, %__mvs0\n` )
+        } {}
+        ( nurl_print `  %__mv = or i32 ` ) ( nurl_print ? != 0 & crypto 8 `%__mvs` mv ) ( nurl_print `, 0\n` ) }
     { ( nurl_print `  %__mv = call i32 @nurl_cpu_x86_v3()\n` ) }
     ( nurl_print `  %__mvc = icmp ne i32 %__mv, 0\n` )
     ( nurl_print `  br i1 %__mvc, label %__mv_wide, label %__mv_base\n` )
@@ -53004,6 +53028,24 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  %vw.r = bitcast <16 x i8> %vw.s to <4 x i32>` )
     ( emit `  ret <4 x i32> %vw.r` )
     ( emit `}` )
+    // Reverse the bytes of each 32-bit lane: four big-endian words in,
+    // four native ones out (SHA-2's message block). `pshufb` with SSSE3,
+    // `rev32` on AArch64.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_bswap32(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vb.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %vb.s = shufflevector <16 x i8> %vb.a, <16 x i8> undef, <16 x i32> <i32 3, i32 2, i32 1, i32 0, i32 7, i32 6, i32 5, i32 4, i32 11, i32 10, i32 9, i32 8, i32 15, i32 14, i32 13, i32 12>` )
+    ( emit `  %vb.r = bitcast <16 x i8> %vb.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vb.r` )
+    ( emit `}` )
+    // `nurl_v128_alignr4 hi lo` = (lo1, lo2, lo3, hi0): the 256-bit
+    // concatenation hi:lo shifted right by one lane — `palignr` by 4
+    // bytes (Intel's _mm_alignr_epi8(hi, lo, 4)), `ext` on AArch64.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_alignr4(<4 x i32> %hi, <4 x i32> %lo) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %va.r = shufflevector <4 x i32> %lo, <4 x i32> %hi, <4 x i32> <i32 1, i32 2, i32 3, i32 4>` )
+    ( emit `  ret <4 x i32> %va.r` )
+    ( emit `}` )
     // ── byte compare → bitmask ────────────────────────────────────
     // The whole point of a vector byte scan: sixteen comparisons in one
     // instruction, their results read out as a 16-bit integer whose bit
@@ -53520,6 +53562,12 @@ unsafe @ __rt_decl_ptypes s region → s {
 // A tier function stays out of line in any caller without its tier, so
 // a v256 in its signature crosses that call by pointer (emit_vabi).
 //
+// The SHA tier (`nurl_v128_sha256rnds2` / `_msg1` / `_msg2`,
+// __emit_sha_prim: x86-64-v2 + SHA, `nurl__sha_gate`,
+// `nurl_cpu_has_sha`) is on no chain with the AES ones, so a tier is a
+// set (__crypto_tier_attrs): a body needs the union of what it uses and
+// calls, and inlines only what that union contains.
+//
 // The semantics are Intel's: `aesenc a k` = MixColumns(SubBytes(
 // ShiftRows(a))) ^ k, `aesenclast` without the MixColumns, `aesdec` /
 // `aesdeclast` the equivalent inverse rounds, `aesimc` InvMixColumns
@@ -53642,6 +53690,29 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `}` ) }
 }
 
+// The SHA tier's primitives (x86 SHA extensions), on v128 as Intel
+// lays them out: `nurl_v128_sha256rnds2 cdgh abef wk` runs two SHA-256
+// rounds on the state halves (A, B, E, F) and (C, D, G, H) — each
+// vector's lanes 3..0 in that order — with the two round inputs W+K in
+// wk's lanes 0 and 1, and answers the new (A, B, E, F); the old one is
+// the next call's (C, D, G, H). `nurl_v128_sha256msg1 a b` is the σ0
+// half of the message schedule for four words (a's four and b's lane
+// 0), `nurl_v128_sha256msg2 a b` the σ1 half (b's lanes 2 and 3).
+@ __emit_sha_prim s name i nargs s call → v {
+    : s sig ? == nargs 2 `(<4 x i32> %a, <4 x i32> %b)` `(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)`
+    ? == g_crypto_target 1
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+sha" {` ) )
+        ( emit `entry:` )
+        ( emit ( nurl_str_cat `  %cs.r = call <4 x i32> ` call ) )
+        ( emit `  ret <4 x i32> %cs.r` )
+        ( emit `}` ) }
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline {` ) )
+        ( emit `entry:` )
+        ( emit `  call void @nurl_cpu_sha_missing()` )
+        ( emit `  unreachable` )
+        ( emit `}` ) }
+}
+
 // A tier's CPUID answer as an `i1` (`nurl_cpu_has_aes` / `_vaes`), and
 // the entry gate of every function of the tier (see above).
 @ __emit_crypto_probe s has s gate s probe s missing → v {
@@ -53668,6 +53739,7 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `declare void @nurl_cpu_aes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes_missing() noreturn cold` )
     ( emit `declare void @nurl_cpu_vaes512_missing() noreturn cold` )
+    ( emit `declare void @nurl_cpu_sha_missing() noreturn cold` )
     ? == g_crypto_target 1
     {  // `readnone`: the runtime answers the same value on every call
         // (a cache written once), so the optimiser may merge and hoist
@@ -53676,6 +53748,10 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare i32 @nurl_cpu_x86_aes() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_vaes() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_vaes512() readnone nounwind willreturn` )
+        ( emit `declare i32 @nurl_cpu_x86_sha() readnone nounwind willreturn` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256rnds2(<4 x i32>, <4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256msg1(<4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.x86.sha256msg2(<4 x i32>, <4 x i32>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)` )
         ( emit `declare <2 x i64> @llvm.x86.aesni.aesdec(<2 x i64>, <2 x i64>)` )
@@ -53694,8 +53770,14 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare <8 x i64> @llvm.x86.pclmulqdq.512(<8 x i64>, <8 x i64>, i8)` )
         ( __emit_crypto_probe `nurl_cpu_has_aes` `nurl__aes_gate` `nurl_cpu_x86_aes` `nurl_cpu_aes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes` `nurl__vaes_gate` `nurl_cpu_x86_vaes` `nurl_cpu_vaes_missing` )
-        ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` ) }
-    {}
+        ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` )
+        ( __emit_crypto_probe `nurl_cpu_has_sha` `nurl__sha_gate` `nurl_cpu_x86_sha` `nurl_cpu_sha_missing` ) }
+    { // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
+        // split the work differently and are not lowered yet).
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_sha() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  ret i1 false` )
+        ( emit `}` ) }
     ? == g_crypto_target 2
     { ( emit `declare i32 @nurl_cpu_arm_aes() readnone nounwind willreturn` )
         ( emit `declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)` )
@@ -53749,17 +53831,22 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_crypto_prim512 `nurl_v512_clmul_hl` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 1)` )
     ( __emit_crypto_prim512 `nurl_v512_clmul_lh` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 16)` )
     ( __emit_crypto_prim512 `nurl_v512_clmul_hh` 2 `@llvm.x86.pclmulqdq.512(<8 x i64> %a, <8 x i64> %b, i8 17)` )
+    ( __emit_sha_prim `nurl_v128_sha256rnds2` 3 `@llvm.x86.sha256rnds2(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
+    ( __emit_sha_prim `nurl_v128_sha256msg1` 2 `@llvm.x86.sha256msg1(<4 x i32> %a, <4 x i32> %b)` )
+    ( __emit_sha_prim `nurl_v128_sha256msg2` 2 `@llvm.x86.sha256msg2(<4 x i32> %a, <4 x i32> %b)` )
 }
 
 // The tier this function's IR needs for the primitives it calls
-// itself: 3 for a v512 crypto primitive, 2 for a v256 one, 1 for a v128
-// one, 0 for none.
+// itself, as a mask (__crypto_tier_attrs): 7 for a v512 AES primitive,
+// 3 for a v256 one, 1 for a v128 one, with 8 for a SHA one; 0 for none.
 @ __ir_crypto_level s ir → i {
-    // (On AArch64 the wide primitives are stubs, so only v128 ones count.)
-    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ 3 } {}
-    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ 2 } {}
-    ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ 1 } {}
-    ^ 0
+    // (On AArch64 the wide and SHA primitives are stubs, so only the
+    // v128 AES ones count.)
+    : i sha ? & == g_crypto_target 1 >= ( nurl_str_find ir `@nurl_v128_sha256` ) 0 8 0
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ | 7 sha } {}
+    ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ | 3 sha } {}
+    ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ | 1 sha } {}
+    ^ sha
 }
 
 // Emit one function's IR with its allocas hoisted. One whose body uses
@@ -53796,7 +53883,7 @@ unsafe @ __rt_decl_ptypes s region → s {
 // inlining (g_crypto_inl) pointed at that function's `.tier` copy —
 // when the copy's tier is one the caller's `lvl` contains (a VAES-tier
 // copy inlined into an AES-tier body would put VAES in a function
-// compiled without it). Only a crypto-tier body may call one: the copy
+// compiled without it, a SHA one SHA). Only a crypto-tier body may call one: the copy
 // is ungated and `alwaysinline`, and the caller's own gate — or its
 // dispatcher — is what makes running it safe.
 unsafe @ __ir_tier_calls s ir i lvl → s {
@@ -53816,7 +53903,7 @@ unsafe @ __ir_tier_calls s ir i lvl → s {
         ? & & > e st < e n == 40 # i . p e {
             : s nm ( nurl_str_slice ir st - e st )
             : s cl ( nurl_sym_get g_crypto_inl nm )
-            ? & != 0 ( nurl_str_len cl ) <= ( nurl_str_to_int cl ) lvl {
+            ? & != 0 ( nurl_str_len cl ) ( __tier_contains lvl ( nurl_str_to_int cl ) ) {
                 = out ( nurl_str_cat3 out ( nurl_str_slice ir done - e done ) `.tier` )
                 = done e
             } {}
@@ -53849,12 +53936,12 @@ unsafe @ __ir_tier_calls s ir i lvl → s {
     ^ ( nurl_str_cat4 ( nurl_str_cat h1 h2 ) ( __crypto_tier_attrs lvl ) ` {\nentry:\n` rest )
 }
 
-// The highest tier among the functions of g_crypto_fns this IR calls —
-// `@NAME(` with NAME in the set — or 0.
+// The union of the tiers of the functions of g_crypto_fns this IR calls
+// — `@NAME(` with NAME in the set — or 0.
 @ __ir_calls_crypto s ir → i { ^ ( __ir_calls_level ir g_crypto_fns ) }
 
-// The highest tier among the functions of `set` (name → tier) this IR
-// calls — `@NAME(` with NAME in it — or 0.
+// The union of the tiers of the functions of `set` (name → tier) this
+// IR calls — `@NAME(` with NAME in it — or 0.
 unsafe @ __ir_calls_level s ir i set → i {
     : i n ( strlen ir )
     : *u p # *u ir
@@ -53870,8 +53957,7 @@ unsafe @ __ir_calls_level s ir i set → i {
             : s nm ( nurl_str_slice ir st - e st )
             : s cl ( nurl_sym_get set nm )
             ? != 0 ( nurl_str_len cl ) {
-                : i l ( nurl_str_to_int cl )
-                ? > l best { = best l } {}
+                = best | best ( nurl_str_to_int cl )
             } {}
         } {}
         = k e
@@ -53882,7 +53968,7 @@ unsafe @ __ir_calls_level s ir i set → i {
 // The inline-wanting functions that wrap the tier without using a
 // crypto primitive themselves — calling an inline-wanting tier function,
 // directly or through another such wrapper (a fixed point) — join
-// g_crypto_inl at the highest tier they reach, and each gets a `.tier`
+// g_crypto_inl at the union of the tiers they reach, and each gets a `.tier`
 // copy for that tier. Inlined into a tier body
 // as it is, such a wrapper brings the gate of every tier function it
 // calls along: a gate check per call, in what is usually a hot loop.
@@ -53900,8 +53986,8 @@ unsafe @ __ir_calls_level s ir i set → i {
             : i got ( __ir_calls_level ir g_crypto_inl )
             : s had ( nurl_sym_get g_crypto_inl nm )
             : i was ? > ( nurl_str_len had ) 0 ( nurl_str_to_int had ) 0
-            ? > got was {
-                ( nurl_sym_def g_crypto_inl nm ( nurl_str_int got ) )
+            ? ! ( __tier_contains was got ) {
+                ( nurl_sym_def g_crypto_inl nm ( nurl_str_int | was got ) )
                 = grew T
             } {}
             = w + w 1
@@ -53937,7 +54023,7 @@ unsafe @ __ir_calls_level s ir i set → i {
 // function whose body does — the second so that the helpers a kernel
 // is written with inline into its clones (a helper compiled for the
 // tier inlines only into a caller compiled for it) — and takes the
-// highest tier of the two. The test is deliberately one call deep: a
+// union of the two. The test is deliberately one call deep: a
 // `simd` function that merely reaches the tier through some ordinary
 // function keeps its baseline clone, so a software path that asks
 // nurl_cpu_has_aes before it calls the hardware one is never gated on
@@ -53971,7 +54057,7 @@ unsafe @ __ir_calls_level s ir i set → i {
         : s ir0 ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.ir` ) )
         : i own ( __ir_crypto_level ir0 )
         : i called ( __ir_calls_crypto ir0 )
-        : i lvl ? > own called own called
+        : i lvl | own called
         : s ir ? > lvl 0 ( __ir_tier_calls ir0 lvl ) ( nurl_str_cat ir0 `` )
         ( emit_multiversion ir ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.n` ) )
         ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.r` ) ) ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.p` ) ) lvl )
@@ -54019,6 +54105,8 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
     ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
     ( nurl_sym_def syms `nurl_v128_bswap128` `v128` )
+    ( nurl_sym_def syms `nurl_v128_bswap32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_alignr4` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesenc` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesenclast` `v128` )
     ( nurl_sym_def syms `nurl_v128_aesdec` `v128` )
@@ -54064,6 +54152,10 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v512_clmul_lh` `v512` )
     ( nurl_sym_def syms `nurl_v512_clmul_hh` `v512` )
     ( nurl_sym_def syms `nurl_cpu_has_vaes512` `i1` )
+    ( nurl_sym_def syms `nurl_v128_sha256rnds2` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256msg1` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256msg2` `v128` )
+    ( nurl_sym_def syms `nurl_cpu_has_sha` `i1` )
     ( nurl_sym_def syms `nurl_v256_zero` `v256` )
     ( nurl_sym_def syms `nurl_v256_ld` `v256` )
     ( nurl_sym_def syms `nurl_v256_st` `void` )
