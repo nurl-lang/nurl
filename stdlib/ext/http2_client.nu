@@ -1381,7 +1381,17 @@ $ `stdlib/core/mem.nu`
                 ^ @ !H2Frame H2ClientErr { F ( __h2c_frame_err_to_client e ) }
             } }
         ? ! ( tcp_read_ready . c tcp ) {
-            : b sending > ( h2_frame_writer_pending . c writer ) 0
+            // Wake on writability whenever this connection has something to
+            // send — bytes already framed in the writer OR request body the
+            // windows allow but not yet framed. Only the pump frames body
+            // (__h2c_flush_pending); a read that parked for readability
+            // alone while body was sendable waited for a peer that was
+            // itself waiting for that body: a duplex deadlock until the
+            // idle timeout. A partial frame in `rx` is what lands a read
+            // here mid-pump, and with TCP_NODELAY on both ends partial
+            // frames are the common case. A writable wakeup returns
+            // H2CWouldBlock (below) and the pump frames more body.
+            : b sending | > ( h2_frame_writer_pending . c writer ) 0 ( __h2c_has_sendable c )
             : i ready ( tcp_wait_io . c tcp T sending ms )
             ? < ready 0 { ^ @ !H2Frame H2ClientErr { F # H2ClientErr H2CReadIo } } {}
             ? == ready 0 {
