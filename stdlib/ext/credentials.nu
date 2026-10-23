@@ -6,13 +6,21 @@
 //
 //   <registry-url>\t<token>\n
 //
-// chmod 600 on write (owner-only). Token lookup order in the CLI is
-// $NURL_TOKEN first, then this file keyed by the exact registry URL.
+// Written with write_file_private: created owner-only (0600 on POSIX; on
+// Windows under the user profile, whose ACL is owner-only) and renamed into
+// place, so the token is never readable by others, not even for the moment
+// between a write and a chmod. Token lookup order in the CLI is $NURL_TOKEN
+// first, then this file keyed by the exact registry URL.
+//
+// "~" is env_home_dir (std/ext/env.nu): $HOME on POSIX, the user profile on
+// Windows. When the platform names no home there is no file: creds_path is
+// "", creds_get finds nothing and creds_set / creds_remove fail with
+// NotFound — a token is never written relative to the working directory.
 //
 // API:
-//   ( creds_path )                      → String   ~/.nurl/credentials
+//   ( creds_path )                      → String   ~/.nurl/credentials, "" if no home
 //   ( creds_get registry )              → String   token, or "" if none
-//   ( creds_set registry token )        → ! v IoErr   (upsert, chmod 600)
+//   ( creds_set registry token )        → ! v IoErr   (upsert, owner-only)
 //   ( creds_remove registry )           → ! v IoErr
 
 $ `stdlib/core/string.nu`
@@ -20,22 +28,17 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 
-@ __creds_home → String {
-    : ?String h ( env_get `HOME` )
-    ^ ?? h {
-        T hv → { ? > ( string_len hv ) 0 hv { ( string_from `.` ) } }
-        F → ( string_from `.` )
-    }
-}
-
+// ~/.nurl, or "" when there is no home.
 @ __creds_dir → String {
-    : String d ( __creds_home )
+    : String d ( env_home_dir )
+    ? == ( string_len d ) 0 { ^ d } {}
     ( string_push_str d `/.nurl` )
     ^ d
 }
 
 @ creds_path → String {
     : String p ( __creds_dir )
+    ? == ( string_len p ) 0 { ^ p } {}
     ( string_push_str p `/credentials` )
     ^ p
 }
@@ -76,6 +79,7 @@ $ `stdlib/ext/env.nu`
 
 @ creds_get s registry → String {
     : String path ( creds_path )
+    ? == ( string_len path ) 0 { ^ ( string_new ) } {}
     : !String IoErr rr ( read_file ( string_data path ) )
     : ~ String out ( string_new )
     ?? rr {
@@ -110,6 +114,7 @@ $ `stdlib/ext/env.nu`
 
 @ creds_set s registry s token → !v IoErr {
     : String dir ( __creds_dir )
+    ? == ( string_len dir ) 0 { ^ @ !v IoErr { F # IoErr NotFound } } {}
     : !v IoErr dr ( dir_create_all ( string_data dir ) )
     ?? dr { T _ → {} F e → { ^ @ !v IoErr { F e } } }
 
@@ -126,24 +131,19 @@ $ `stdlib/ext/env.nu`
     ( string_push_char body 9 )  // TAB
     ( string_push_str body token )
     ( string_push_char body 10 )  // \n
-    : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
-    : !v IoErr _cm ( set_permissions ( string_data path ) 384 )  // 0600
-    ^ wr
+    ^ ( write_file_private ( string_data path ) ( string_data body ) )
 }
 
 @ creds_remove s registry → !v IoErr {
     : String path ( creds_path )
+    ? == ( string_len path ) 0 { ^ @ !v IoErr { F # IoErr NotFound } } {}
     : !String IoErr rr ( read_file ( string_data path ) )
-    : ~ i rc 0
     ?? rr {
         T content → {
             : String body ( __creds_without content registry )
-            : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
-            ?? wr { T _ → {} F _ → { = rc 1 } }
-            : !v IoErr _cm ( set_permissions ( string_data path ) 384 )
+            ^ ( write_file_private ( string_data path ) ( string_data body ) )
         }
         F → {}  // no file → nothing to remove
     }
-    ? != rc 0 { ^ @ !v IoErr { F # IoErr WriteFailed } } {}
     ^ @ !v IoErr { T 0 }
 }

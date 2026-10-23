@@ -11,6 +11,9 @@
 //
 //   ( read_file path )           → ! String IoErr   owned String, actual byte length
 //   ( write_file path content )  → ! v IoErr        truncates / creates
+//   ( write_file_private path content ) → ! v IoErr  replaces `path` atomically
+//                                                    with an owner-only (0600) file —
+//                                                    for secrets (tokens, keys)
 //   ( append_file path content ) → ! v IoErr        opens "a"; creates if missing
 //   ( file_exists path )         → b
 //   ( file_size path )           → ! i IoErr        bytes; NotFound if stat fails
@@ -1226,6 +1229,40 @@ unsafe @ __fd_write_all i fd ( Vec u ) v → i {
     } {}
     : i _c ( close # i fd )
     ^ @ !String IoErr { T tmpl }  // mkstemp filled XXXXXX in place
+}
+
+// Replace `path` with `content` as a file only its owner can read, for
+// secrets (a registry token, a private key). The content goes into a fresh
+// mkstemp file beside `path` — created 0600, so there is no moment when it
+// is readable by others, as there is between write_file and a following
+// chmod — and is then renamed over `path` (atomic on POSIX; MoveFileEx
+// REPLACE_EXISTING on Windows, where the file takes the directory's ACL —
+// under the user profile, owner-only). A reader sees the old file or the
+// new one, never a torn write. On failure the staged file is removed and
+// `path` is untouched.
+@ write_file_private s path s content → !v IoErr {
+    : String dir ( path_dirname path )
+    : String base ( path_basename path )
+    ( string_push_str base `.` )
+    : String tmp ?? ( fs_tempfile ( string_data dir ) ( string_data base ) ) {
+        T t → t
+        F e → { ^ @ !v IoErr { F e } }
+    }
+    ?? ( write_file ( string_data tmp ) content ) {
+        T _ → {}
+        F e → {
+            : !v IoErr _d ( file_delete ( string_data tmp ) )
+            ^ @ !v IoErr { F e }
+        }
+    }
+    ?? ( fs_rename ( string_data tmp ) path ) {
+        T _ → {}
+        F e → {
+            : !v IoErr _d2 ( file_delete ( string_data tmp ) )
+            ^ @ !v IoErr { F e }
+        }
+    }
+    ^ @ !v IoErr { T 0 }
 }
 
 // Exclusively create a uniquely named directory under `dir` ("" means

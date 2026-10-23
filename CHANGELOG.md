@@ -73,6 +73,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`nurlpkg login` on Windows no longer writes the registry token into
+  the current directory.** `stdlib/ext/credentials.nu` found the home
+  directory through `$HOME` alone and fell back to `.` — and `HOME` is
+  unset in PowerShell and cmd, so `nurlpkg login` saved the token as
+  `./.nurl/credentials` wherever it was run: into a source checkout,
+  where it was not git-ignored and one `git add -A` from being pushed,
+  and where the next `nurlpkg publish` from another directory could not
+  find it. The stdlib now has one answer to "where is ~":
+  `env_home_dir` (`stdlib/ext/env.nu`) — `$HOME` on POSIX, the user
+  profile on Windows (`USERPROFILE`, else `HOMEDRIVE`+`HOMEPATH`, as Go
+  and Rust do; a `HOME` exported by Git Bash no longer moves the file),
+  and an empty answer rather than a relative one when there is none.
+  The credentials file, the registry trust config, the toolchain prefix
+  and `nurlpkg`'s install and stdlib-check paths all use it; with no home
+  `nurlpkg login` says so and points at `NURL_TOKEN`. The token file is
+  now written with the new `write_file_private` (`stdlib/std/fs.nu`):
+  created owner-only by `mkstemp` and renamed into place, instead of
+  written world-readable and `chmod`ed afterwards. `credentials_basic`,
+  previously skipped unless `NURL_CREDS_TESTS=1`, now runs in every
+  corpus run against a temporary home and pins all of this, on Linux,
+  macOS, FreeBSD and Windows.
+
 - **Unikernel builds link a cached object only from a cache nobody else
   can write.** The program-independent objects every image links (boot
   shim, nolibc, runtimes) came from a shared cache trusted on its stamp

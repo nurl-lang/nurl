@@ -62,8 +62,7 @@ $ `stdlib/ext/update_check.nu`
         T v → { ? > ( string_len v ) 0 { ^ v } {} }
         F → {}
     }
-    : s home_var ? ( __tc_is_windows ) `USERPROFILE` `HOME`
-    : String home ( env_var_or home_var `` )
+    : String home ( env_home_dir )
     ? == ( string_len home ) 0 { ^ ( string_new ) } {}
     : String p ( path_join ( string_data home ) `.nurl` )
     ^ p

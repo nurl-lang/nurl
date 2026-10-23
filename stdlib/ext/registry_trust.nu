@@ -102,8 +102,7 @@ $ `stdlib/std/encode.nu`
 @ __trust_config_path → String {
     : String prefix ( env_var_or `NURL_HOME` `` )
     ? > ( string_len prefix ) 0 { ( string_push_str prefix `/registries.toml` ) ^ prefix } {}
-    : s homevar ? == ( posix_const `PATH_LIST_SEPARATOR` ) 59 `USERPROFILE` `HOME`
-    : String home ( env_var_or homevar `` )
+    : String home ( env_home_dir )
     ? > ( string_len home ) 0 { ( string_push_str home `/.nurl/registries.toml` ) } {}
     ^ home
 }
