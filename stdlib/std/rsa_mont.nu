@@ -338,8 +338,8 @@ $ `stdlib/std/random.nu`
             ? < at xn { = . cp j . xp at } {}
             = j + j 1
         }
-        ( _rm_mul_d c acc acc . c r2 )   // acc·R (in form: acc·R·R)
-        ( _rm_mul_d c ch ch . c r2 )     // chunk in form
+        ( _rm_mul_d c acc acc . c r2 )  // acc·R (in form: acc·R·R)
+        ( _rm_mul_d c ch ch . c r2 )  // chunk in form
         ( __rm_add_d c acc acc ch )
         = q - q 1
     }
@@ -509,16 +509,16 @@ $ `stdlib/std/random.nu`
     : ( Vec i ) mq ( _rm_enter cq msg msgn )
     : ( Vec i ) ep ( __rm_blind_exp dpb cp )
     : ( Vec i ) eq ( __rm_blind_exp dqb cq )
-    : ( Vec i ) sp ( _rm_pow_ct cp mp ep + np 1 )   // Montgomery form mod p
+    : ( Vec i ) sp ( _rm_pow_ct cp mp ep + np 1 )  // Montgomery form mod p
     : ( Vec i ) sqm ( _rm_pow_ct cq mq eq + nq 1 )
-    : ( Vec i ) sq ( _rm_leave cq sqm )             // plain, < q
+    : ( Vec i ) sq ( _rm_leave cq sqm )  // plain, < q
     // Garner: h = (s_p − s_q)·q^-1 mod p ; s = s_q + q·h
     : ( Vec i ) sqp ( _rm_enter cp sq nq )
     : ( Vec i ) diff ( __rm_zeros np )
     ( __rm_sub_d cp diff sp sqp )
     : ( Vec i ) qinv ( __rm_from_be qib np )
     : ( Vec i ) h ( __rm_zeros np )
-    ( _rm_mul_d cp h diff qinv )                    // (form)·plain → plain
+    ( _rm_mul_d cp h diff qinv )  // (form)·plain → plain
     : ( Vec i ) ql ( __rm_from_be qb nq )
     : i sn + np nq
     : ( Vec i ) s ( __rm_zeros + sn 1 )
