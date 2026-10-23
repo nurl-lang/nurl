@@ -389,6 +389,12 @@ inline @ __sha256_iv * u32 sp → v {
 //   [168, 176)  T(i), one HKDF-Expand output block (stdlib/std/hkdf.nu)
 //   [176, 244)  an HkdfLabel's head, up to 259 bytes (stdlib/std/hkdf.nu)
 //
+// One MAC or derivation at a time per key: the streaming state and the
+// HKDF scratch above live in the key itself, so two threads (or two
+// interleaved derivations) must not use one HmacSha256 at once — give each
+// its own; preparing a key costs two compressions. Copies of a key share
+// that state (the hasher is a handle).
+//
 // The key-derived scratch (the K0 blocks, the inner digest, T) is wiped
 // when the operation that wrote it ends.
 : HmacSha256 { Sha256 h }

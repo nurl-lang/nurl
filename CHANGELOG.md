@@ -25,6 +25,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **P-256 ECDH twice as fast, ECDSA verify twice as fast, no BigInt on
+  either path.** The variable-base scalar multiply (`p256ct_scalarmult`:
+  ECDH against a peer's share) ran the complete RCB projective formula
+  for all 334 point operations of a 4-bit window ladder; it now runs on
+  Jacobian coordinates like the fixed-base comb — 3M+5S doublings and
+  8M+3S mixed additions against an affine table 1·Q … 15·Q built with one
+  batch inversion. The scalar is reduced mod n first (constant time),
+  which makes the mixed addition complete for every scalar by
+  construction: before each addition the accumulator is m·Q with m = 0 or
+  16 ≤ m < n, so it can never equal a table entry d·Q (1 ≤ d ≤ 15).
+  ECDSA P-256 verify is one Straus–Shamir pass sharing the 256 doublings
+  between u1·G and u2·Q, with an affine table of G built once per process
+  (publish-once slot 11) and exceptional cases handled by branching, as
+  public data allows. Peer points and public keys are decoded and
+  validated (canonical coordinates, curve equation) on the fixed-width
+  field instead of through BigInt. The complete-addition code path this
+  replaces is removed. Locally against aws-lc-rs: ECDH shared 26 % → 47 %,
+  verify 23 % → 40 %, Full · ECDSA · P-256 TLS handshakes 53 % → 63 % of
+  rustls. `compiler/tests/p256_ct_field` adds 24 edge scalars against two
+  base points — k = n + 30 (which reaches the mixed addition's degenerate
+  case without the reduction), k = n, k = 0, k = 2²⁵⁶ − 1 — checked
+  against the independent BigInt reference.
+- **TLS key schedule without allocations** (github#1233): HMAC-SHA-256
+  keys are prepared once (inner/outer midstates kept), HKDF-Expand and
+  HKDF-Expand-Label stream their input from where it lives and write into
+  the caller's buffer, and the TLS 1.3 client and server derive each
+  secret's children from one prepared key. HKDF-Expand-Label 1.19 µs and
+  6 allocations → 0.49 µs and none. `compiler/tests/hkdf_vectors` adds
+  RFC 5869 cases 2–3, RFC 4231 HMAC cases 1–4, 6–7 and the RFC 8448 key
+  schedule trace through the resumption PSK.
 - **RSA signing is ~300× faster: 1.6 ms for RSA-2048, from 450–585 ms.**
   `std/rsa.nu` ran on `std/bigint.nu` — 16-bit limbs and a full long
   division per modular multiply — so a TLS server with an RSA certificate

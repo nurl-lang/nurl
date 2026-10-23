@@ -32,16 +32,9 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ r
 }
 
-@ __p256_p → BigInt { ^ ( __hx `ffffffff00000001000000000000000000000000ffffffffffffffffffffffff` ) }
-
-@ __p256_n → BigInt { ^ ( __hx `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` ) }
-
 @ __p384_p → BigInt { ^ ( __hx `fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff` ) }
 
 @ __p384_n → BigInt { ^ ( __hx `ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973` ) }
-
-// Curve b coefficients (y² = x³ − 3x + b), for on-curve validation (M3).
-@ __p256_b → BigInt { ^ ( __hx `5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b` ) }
 
 @ __p384_b → BigInt { ^ ( __hx `b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef` ) }
 
@@ -91,19 +84,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ ok
 }
 
-// bigint (0 ≤ x < p, ≤ 256 bits) → 4 little-endian 64-bit plain limbs.
-@ __big_to_limbs8 BigInt x → ( Vec i ) {
-    : ( Vec u ) be ( bigint_to_bytes_be x 32 )
-    : ( Vec i ) out ( __p256_be32_to_limbs be 0 )
-    ^ out
-}
-
-// scalar · (affine base) → 64 bytes X‖Y, FULLY constant-time: the dedicated
-// fixed-limb Montgomery field (std/p256_field) + RCB complete addition +
-// branchless always-add ladder. This is the secret-path scalar multiply
-// (ECDSA signing nonce, ECDHE private scalar) — no operand-time-dependent
-// BigInt, no secret-dependent branch, so no scalar blinding is needed (the
-// op is leak-free by construction). Identity result → 64 zero bytes.
 // ── fixed-base comb for the generator G (ECDSA k·G, ECDH keygen) ──────
 // k·G with G the P-256 generator is a FIXED-base multiply, so most of the
 // point doublings the variable-base window ladder pays can be precomputed
@@ -269,18 +249,40 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ out
 }
 
-@ __p256_mul_affine ( Vec u ) scalar BigInt bx BigInt by → ( Vec u ) {
-    : ( Vec i ) bxl ( __big_to_limbs8 bx )
-    : ( Vec i ) byl ( __big_to_limbs8 by )
-    : ( Vec u ) out ( p256ct_scalarmult scalar bxl byl )
-    ^ out
+// ── public points ─────────────────────────────────────────────────
+// A peer's ECDH share and a verifier's public key arrive as the
+// uncompressed SEC1 encoding 0x04 ‖ X(32) ‖ Y(32). Both are decoded and
+// validated on the fixed-width field — canonical coordinates (x, y < p)
+// and the curve equation (M3: an off-curve point would let a peer pull
+// our scalar out through an invalid-curve attack). P-256's cofactor is 1,
+// so an on-curve point other than ∞ (which has no affine encoding) has
+// order n.
+
+// Four limbs at `src` into `dst`.
+@ __ec_set4 ( Vec i ) dst * i src → v {
+    : *i dp ( vec_data [i] dst )
+    = . dp 0 . src 0 = . dp 1 . src 1 = . dp 2 . src 2 = . dp 3 . src 3
+}
+
+// Decode and validate into plain limbs (xl, yl); F if the encoding is not
+// a point of the curve.
+@ __p256_decode_point ( Vec u ) pt ( Vec i ) xl ( Vec i ) yl → b {
+    ? != ( vec_len [u] pt ) 65 { ^ F } {}
+    ? != ?? ( vec_get [u] pt 0 ) { T x → # i x F _ → 0 } 4 { ^ F } {}
+    ( __ec_set4 xl ( vec_data [i] ( __p256_be32_to_limbs pt 1 ) ) )
+    ( __ec_set4 yl ( vec_data [i] ( __p256_be32_to_limbs pt 33 ) ) )
+    ? ! & ( _p256_lt_p xl ) ( _p256_lt_p yl ) { ^ F } {}
+    : P256Scratch scr ( _p256_scr_new )
+    : ( Vec i ) xm ( _p256_to_mont_s scr xl )
+    : ( Vec i ) ym ( _p256_to_mont_s scr yl )
+    ^ ( _p256_on_curve scr xm ym )
 }
 
 // ── ECDHE over NIST P-256 (secp256r1) ─────────────────────────────
 // The TLS 1.3 secp256r1 group (RFC 8446 §4.2.8.2 / RFC 8422): the
 // public key is an uncompressed point 0x04 || X(32) || Y(32), and the
 // shared secret is the 32-byte big-endian X of scalar·peer. `scalar` is
-// the 32-byte ephemeral private key. Reuses the curve arithmetic above.
+// the 32-byte ephemeral private key.
 
 // Private scalar → 65-byte uncompressed public point.
 @ p256_ecdh_keygen ( Vec u ) scalar → ( Vec u ) {
@@ -292,107 +294,150 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     ^ out
 }
 
-// scalar · peer-point → 32-byte shared X. Returns [] on a malformed peer.
+// scalar · peer-point → 32-byte shared X. Returns [] on a malformed or
+// off-curve peer point. The multiply is p256ct_scalarmult: constant-time
+// in the scalar and complete for every scalar.
 @ p256_ecdh_shared ( Vec u ) scalar ( Vec u ) peer → ( Vec u ) {
-    ? != ( vec_len [u] peer ) 65 { ^ ( vec_new [u] ) } {}
-    ? != ?? ( vec_get [u] peer 0 ) { T x → # i x F _ → 0 } 4 { ^ ( vec_new [u] ) } {}
-    : ( Vec u ) qxb ( bytes_slice peer 1 33 )
-    : ( Vec u ) qyb ( bytes_slice peer 33 65 )
-    : BigInt qx ( bigint_from_bytes_be qxb )
-    : BigInt qy ( bigint_from_bytes_be qyb )
-    : BigInt p ( __p256_p )
-    : BigInt n ( __p256_n )
-    : BigInt b ( __p256_b )
-    // M3: reject an off-curve / out-of-field peer point (invalid-curve attack)
-    // before scalar-multiplying our private key into it.
-    ? ! ( __on_curve qx qy p b ) {
-        ^ ( vec_new [u] )
-    } {}
-    // Constant-time scalar · peer; take the 32-byte X (first half of X‖Y).
-    : ( Vec u ) xy ( __p256_mul_affine scalar qx qy )
-    : ( Vec u ) out ( bytes_slice xy 0 32 )
-    ^ out
+    : ( Vec i ) xl ( _mag4 )
+    : ( Vec i ) yl ( _mag4 )
+    ? ! ( __p256_decode_point peer xl yl ) { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) xy ( p256ct_scalarmult scalar xl yl )
+    ^ ( bytes_slice xy 0 32 )
 }
 
 // ── verify ────────────────────────────────────────────────────────
 // Signature verification runs entirely over PUBLIC data (a certificate's
-// key, the signature's r/s, a message digest), so it does not need the
-// operand-independent timing the signing path buys so carefully — it
-// needs to be fast, because a TLS client pays one verify per certificate
-// in the chain and a JWT server pays one per request. Both curves
-// therefore compute u1·G + u2·Q on their fixed-limb Montgomery fields:
-// P-256 on std/p256_field's comb + window ladder joined by ONE complete
-// (RCB) projective addition, P-384 on std/p384_field's double-scalar
-// core. The complete formula makes the join correct for EVERY relation
-// between the two halves — equal, negated, either at infinity — which
-// an adversarially crafted (r, s, Q) can otherwise steer into the
-// degenerate cases of the classic Jacobian add.
+// key, the signature's r/s, a message digest), so it needs no
+// operand-independent timing — it needs speed, because a TLS client pays
+// one verify per certificate in the chain and a JWT server one per
+// request. P-256 computes u1·G + u2·Q as ONE Straus–Shamir pass: the 256
+// doublings are shared, and each 4-bit window adds a digit of u1 from an
+// affine table of G (built once per process) and a digit of u2 from an
+// affine table of Q (built per verify, one batch inversion). Digit 0
+// adds nothing.
 //
-// The BigInt layer is kept for what it is good at: parsing, the r/s
-// range checks, and the on-curve validation (M3) — a handful of
-// operations, off the hot path.
+// The scalars come out of r and s, which an attacker chooses, so the
+// additions must be right for every relation between the accumulator
+// and the entry — equal, negated, either at infinity. Public data lets
+// _p256_jmadd_vt simply branch on each case. Nothing here touches BigInt.
+// (P-384 keeps its own core below.)
 
-// The 64-byte X‖Y affine encoding both P-256 scalar multiplies return
-// uses all-zero for the identity; (0, 0) is not on the curve (b ≠ 0),
-// so the encoding is unambiguous.
-@ __p256_xy_is_identity ( Vec u ) xy → b {
-    : ~ i acc 0
-    : ~ i k 0
-    ~ < k 64 { = acc | acc ?? ( vec_get [u] xy k ) { T x → # i x F _ → 0 } = k + k 1 }
-    ^ == acc 0
+: ~ i g_p256_gtbl 0
+
+// 0, G, 2G, …, 15G as an affine Montgomery table; built on first use and
+// shared through publish-once slot 11 (registry: stdlib/std/tls_server.nu).
+// G is a public constant, so caching it leaks nothing.
+@ __p256_g_tbl → ( Vec i ) {
+    ? == g_p256_gtbl 0 {
+        : P256Scratch scr ( _p256_scr_new )
+        : ( Vec u ) tbytes ?? ( bytes_from_hex ( __p256_comb_tbl_hex ) ) { T v → v F _ → ( vec_new [u] ) }
+        // The comb blob's first point is G itself (tooth pattern 0001).
+        : ( Vec i ) gx ( _p256_to_mont_s scr ( __p256_be32_to_limbs tbytes 0 ) )
+        : ( Vec i ) gy ( _p256_to_mont_s scr ( __p256_be32_to_limbs tbytes 32 ) )
+        : ( Vec i ) onem ( _p256_one_mont_s scr )
+        : ( Vec i ) tbl ( _p256_affine_multiples scr gx gy onem )
+        = g_p256_gtbl ( vec_publish_once [i] 11 tbl )
+    } {}
+    ^ @ ( Vec i ) { # s g_p256_gtbl }
 }
 
-// 64-byte affine X‖Y → Montgomery projective point (identity when the
-// scalar half vanished, i.e. the all-zero encoding).
-@ __p256_affine_to_pt P256Scratch scr ( Vec u ) xy → P256Pt {
-    : P256Pt pt ( _p256_pt_mag )
-    ? ( __p256_xy_is_identity xy ) { ( _p256_set_identity_d scr pt ) } {
-        : ( Vec i ) xl ( __p256_be32_to_limbs xy 0 )
-        : ( Vec i ) yl ( __p256_be32_to_limbs xy 32 )
-        ( _p256_to_mont_d scr . pt x xl )
-        ( _p256_to_mont_d scr . pt y yl )
-        ( _p256_one_mont_d scr . pt z )
-    }
-    ^ pt
+// Nibble `w` (0 = most significant) of a 32-byte big-endian scalar.
+@ __p256_nib ( Vec u ) k i w → i {
+    : i bv ?? ( vec_get [u] k / w 2 ) { T b → # i b F _ → 0 }
+    ^ ? == % w 2 0 & 15 >> bv 4 & 15 bv
 }
 
-// The P-256 verify core: u1 = z·s⁻¹, u2 = r·s⁻¹ over the fixed-width
-// GF(n) (std/p256_scalar), u1·G by the fixed-base comb, u2·Q by the
-// 4-bit window ladder, joined by one complete projective addition.
-// All inputs are 32-byte big-endian; r, s already range-checked and
-// (qx, qy) already validated on-curve by the caller.
-@ __p256_verify_core ( Vec u ) zb ( Vec u ) rb ( Vec u ) sb BigInt qx BigInt qy → b {
+// Entry `d` of an affine table into (ex, ey).
+@ __p256_atbl_at ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i d → v {
+    : *i tp ( vec_data [i] tbl )
+    ( __ec_set4 ex # *i + # i tp * * d 8 8 )
+    ( __ec_set4 ey # *i + # i tp * + * d 8 4 8 )
+}
+
+// The P-256 verify core: u1 = z·s⁻¹, u2 = r·s⁻¹ over GF(n), R = u1·G +
+// u2·Q, accept iff R ≠ ∞ and x(R) ≡ r (mod n). zb, rb, sb are 32-byte
+// big-endian with r, s already in [1, n−1]; (qxl, qyl) is a validated
+// public key, plain limbs.
+@ __p256_verify_core ( Vec u ) zb ( Vec u ) rb ( Vec u ) sb ( Vec i ) qxl ( Vec i ) qyl → b {
     : ( Vec u ) w ( p256n_inv_be sb )
     : ( Vec u ) u1 ( p256n_mulmod_be zb w )
     : ( Vec u ) u2 ( p256n_mulmod_be rb w )
-    : ( Vec u ) a1 ( p256ct_scalarmult_base u1 )
-    : ( Vec u ) a2 ( __p256_mul_affine u2 qx qy )
     : P256Scratch scr ( _p256_scr_new )
-    : P256Pt P1 ( __p256_affine_to_pt scr a1 )
-    : P256Pt P2 ( __p256_affine_to_pt scr a2 )
-    : ( Vec i ) aplain ( _p256_a_plain )
-    : ( Vec i ) am ( _p256_to_mont_s scr aplain )
-    : ( Vec i ) b3plain ( _p256_b3_plain )
-    : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain )
-    ( p256ct_padd_d scr P1 P1 P2 am b3m )
-    : ~ b result F
-    // R = ∞ (Z = 0) rejects; otherwise r =? x(R) mod n, as bytes.
-    ? == ( _p256_zmask . P1 z ) 0 {
-        : ( Vec i ) zinv ( _mag4 )
-        ( _p256_inv_d scr zinv . P1 z )
-        ( _p256_mul_d scr . P1 x . P1 x zinv )
-        ( _p256_from_mont_d scr . P1 x . P1 x )
-        : ( Vec u ) xb ( vec_with_cap [u] 32 )
-        ( _p256_limbs_to_be xb . P1 x )
-        : ( Vec u ) xr ( p256n_reduce_be xb )
-        = result ( bytes_eq xr rb )
-    } {}
-    ^ result
+    : ( Vec i ) onem ( _p256_one_mont_s scr )
+    : ( Vec i ) gtbl ( __p256_g_tbl )
+    : ( Vec i ) qx ( _p256_to_mont_s scr qxl )
+    : ( Vec i ) qy ( _p256_to_mont_s scr qyl )
+    : ( Vec i ) qtbl ( _p256_affine_multiples scr qx qy onem )
+    : P256Pt acc ( _p256_pt_mag )
+    ( _p256_set_identity_d scr acc )
+    : ( Vec i ) ex ( _mag4 )
+    : ( Vec i ) ey ( _mag4 )
+    : ~ i wi 0
+    ~ < wi 64 {
+        ? == ( _p256_zmask . acc z ) 0 {
+            ( _p256_jdbl_d scr acc ) ( _p256_jdbl_d scr acc )
+            ( _p256_jdbl_d scr acc ) ( _p256_jdbl_d scr acc )
+        } {}
+        : i d1 ( __p256_nib u1 wi )
+        ? != d1 0 {
+            ( __p256_atbl_at ex ey gtbl d1 )
+            ( _p256_jmadd_vt scr acc ex ey onem )
+        } {}
+        : i d2 ( __p256_nib u2 wi )
+        ? != d2 0 {
+            ( __p256_atbl_at ex ey qtbl d2 )
+            ( _p256_jmadd_vt scr acc ex ey onem )
+        } {}
+        = wi + wi 1
+    }
+    ? != ( _p256_zmask . acc z ) 0 { ^ F } {}
+    // x(R) = X / Z², compared with r mod n.
+    : ( Vec i ) zinv ( _mag4 )
+    ( _p256_inv_d scr zinv . acc z )
+    ( _p256_sqr_d scr zinv zinv )
+    ( _p256_mul_d scr . acc x . acc x zinv )
+    ( _p256_from_mont_d scr . acc x . acc x )
+    : ( Vec u ) xb ( vec_with_cap [u] 32 )
+    ( _p256_limbs_to_be xb . acc x )
+    ^ ( bytes_eq ( p256n_reduce_be xb ) rb )
 }
 
-// Both NIST P-256 and P-384 use a = -3, so the validation layer above is
-// curve-independent; this entry takes the curve constants and the
-// coordinate byte length. It consumes p / nn / cb.
+// A DER-decoded integer (big-endian, any leading zeros) as exactly 32
+// bytes; [] when its value needs more.
+@ __p256_fixed32 ( Vec u ) v → ( Vec u ) {
+    : i n ( vec_len [u] v )
+    : ~ i lead 0
+    ~ & < lead n == ?? ( vec_get [u] v lead ) { T x → # i x F _ → 1 } 0 { = lead + lead 1 }
+    : i sig - n lead
+    ? > sig 32 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) out ( vec_zeroed [u] - 32 sig )
+    ( bytes_extend_bytes out ( bytes_slice v lead n ) )
+    ^ out
+}
+
+@ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
+    : ( Vec i ) qxl ( _mag4 )
+    : ( Vec i ) qyl ( _mag4 )
+    ? ! ( __p256_decode_point point qxl qyl ) { ^ F } {}
+    : ( Vec u ) rb ( __p256_fixed32 r )
+    : ( Vec u ) sb ( __p256_fixed32 s )
+    ? | == ( vec_len [u] rb ) 0 == ( vec_len [u] sb ) 0 { ^ F } {}
+    // r, s ∈ [1, n−1]
+    ? ! & ( p256n_in_range_be rb ) ( p256n_in_range_be sb ) { ^ F } {}
+    // z = the LEFTMOST 32 bytes of the digest (FIPS 186-5 §6.4.1: a longer
+    // digest is truncated to the order's bit length, not reduced), a
+    // shorter one left-padded.
+    : i hlen ( vec_len [u] hash )
+    : i m ? < hlen 32 hlen 32
+    : ( Vec u ) zb ( vec_zeroed [u] - 32 m )
+    ( bytes_extend_bytes zb ( bytes_slice hash 0 m ) )
+    ^ ( __p256_verify_core zb rb sb qxl qyl )
+}
+
+// P-384's verifier: BigInt parsing, range checks and on-curve validation
+// (a = -3, as for P-256), then std/p384_field's double-scalar core. It
+// takes the curve constants and the coordinate byte length, and consumes
+// p / nn / cb.
 @ __ecdsa_verify BigInt p BigInt nn BigInt cb i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
     ? != ( vec_len [u] point ) + 1 * 2 clen {
         ^ F
@@ -441,15 +486,9 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         }
         : ( Vec u ) rb ( bigint_to_bytes_be br clen )
         : ( Vec u ) sb ( bigint_to_bytes_be bs clen )
-        ? == clen 32
-        { = result ( __p256_verify_core zb rb sb qx qy ) }
-        { = result ( p384_ecdsa_verify_core zb rb sb qxb qyb ) }
+        = result ( p384_ecdsa_verify_core zb rb sb qxb qyb )
     } {}
     ^ result
-}
-
-@ ecdsa_p256_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
-    ^ ( __ecdsa_verify ( __p256_p ) ( __p256_n ) ( __p256_b ) 32 point r s hash )
 }
 
 @ ecdsa_p384_verify ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {

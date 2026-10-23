@@ -12,12 +12,12 @@ does **not** promise.
 > with OpenSSL/curl/browsers) and the protocol enforces the standard TLS 1.3
 > authentication and downgrade controls. On the **timing/cache** side-channel
 > axis the EC and symmetric primitives are constant-time including operand
-> timing (by construction + code review, not yet statistically measured); RSA's
-> `bigint` operand timing is the one residual, covered by base blinding.
+> timing (by construction + code review, not yet statistically measured), and
+> so is RSA, on its own fixed-width Montgomery field.
 > **Power/EM (DPA/template) side-channels are out of scope for the whole
 > software stack** — that needs hardware. Where a guarantee is narrower than
-> OpenSSL's (revocation, name constraints, single-trace RSA timing, all
-> power/EM), this document says so.
+> OpenSSL's (revocation, name constraints, all power/EM), this document says
+> so.
 
 ---
 
@@ -35,7 +35,7 @@ Sources live in `stdlib/std/` (with JWT and SSH protocol helpers in `stdlib/ext/
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
 | ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field`, `minisign` | TweetNaCl-derived 25519 ladder over a five-limb radix-2^51 field (curve25519-donna-c64); `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path; `minisign` verifies Ed25519 + BLAKE2b release/package signatures |
-| RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
+| RSA | `rsa`, `rsa_mont` (PKCS#1 v1.5 verify, PSS verify + sign) | fixed-width Montgomery arithmetic; CRT signing with exponent blinding and a fault check |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify`, `x509_gen`, `csr`, `pkey` | DER parser + chain/host/policy verification; generates self-signed P-256 and ML-DSA certificates; PKCS#10 requests; PEM private-key loading (SEC1 / PKCS#8 P-256, RSA, ML-DSA). `tls_verify` anchors to the system bundle, or to `$SSL_CERT_FILE` when set — which **replaces** the bundle rather than adding to it, matching OpenSSL, and fails closed with "no trust anchor" if the path is unreadable |
 | CSR | `csr` | PKCS#10 (RFC 2986) parser, generator (ECDSA P-256, Ed25519), self-signature verifier (ECDSA P-256, Ed25519, RSA, ML-DSA), and CA certificate issuance |
@@ -151,10 +151,9 @@ follow-up. Hardening (timing/cache axis):
 | AES S-box | **Constant-time, bitsliced**: the state is transposed so each 64-bit word holds one bit position of 64 bytes, and `SubBytes` is Boyar–Peralta's 113-gate boolean circuit evaluated on those words (the `aes_ct64` construction). Every operation is a word-wide AND/XOR — no table lookup, no branch, and nothing indexed by secret data. ShiftRows and MixColumns are shifts and XORs on the same words. The key schedule (once per key, not per block) instead uses the older per-byte form: `SubBytes(x) = Affine(x⁻¹ in GF(2⁸))` via a branchless GF multiply and a fixed-exponent (x²⁵⁴) inversion, verified equal to the reference S-box on all 256 inputs. |
 | GHASH | **Constant-time on any CPU with a constant-time multiplier.** The GF(2¹²⁸) multiply is carry-less multiplication built from ordinary 64-bit integer multiplies (`ghash_ctmul64`): each operand is split into four interleaved bit groups so no carry crosses a kept bit, and the halves recombine by Karatsuba. No branch and no table, so nothing leaks the authentication key H through cache or control flow — but the timing rests on `imul` being data-independent, which holds on every mainstream 64-bit core and does *not* hold on some small in-order ARM cores (Cortex-M3/M0, early Cortex-A), where an early-terminating multiplier would reintroduce an operand-timing signal. |
 | GCM / Poly1305 / TLS Finished tag compares | Constant-time (OR-accumulated XOR, no early exit). |
-| RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per iteration for a fixed iteration count = bit-length of the **modulus `n`** (a public value), register choice by a constant-time conditional swap. The count depends only on the public modulus, **never on the secret exponent `d`** (no naive "multiply only on 1-bits" leak, and the loop length does not reveal `d`'s bit length). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
-| RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. The setup inverse `r⁻¹ mod n` is computed with the variable-time `bigint_modinv`, but its timing is **not security-relevant**: `r` is a fresh per-signature ephemeral that is discarded, so its magnitude leaks nothing about the key. |
-| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Constant-time on the timing/cache axis** (`std/p256_field`): a dedicated fixed-**4-limb (radix 2^64)** GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub built on `nurl_addc`/`nurl_subb` carry chains, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. **Two point paths, and the difference is the point.** *Variable-base* (ECDH against a peer's point, and any input an attacker chooses) uses the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a fixed 4-bit window ladder: four doublings and one addition per nibble, a fixed number of steps regardless of the scalar's value, the secret digit never indexing the table — all sixteen entries are read every window and merged under an arithmetic equality mask. *Fixed-base* (`k·G`: the ECDSA nonce and ECDH keygen, where the point is the public generator and the scalar is a secret **pseudorandom** value) uses an 8-tooth comb over Jacobian coordinates with an affine table, which is faster but not a complete formula — the exceptional cases are closed one at a time by constant-time masks instead: `acc = ∞` commits via a branch-free `Z == 0` mask, a zero digit keeps the accumulator through the same masked select (the addition still runs against a zero entry, so the trace stays digit-independent), and `acc = −entry` falls out of the formula correctly. The one case left open, `acc = entry`, is a ~2^-224 event for the pseudorandom scalars this path serves — the same bound OpenSSL's `ecp_nistz256` accepts — and **adversarial input never reaches it**, because an attacker-supplied point goes down the variable-base path. No branch, no secret-dependent address, no operand-time dependence — **no blinding needed**. Verified for *correctness* (a separate axis from constant-timeness — see the caveat above): `compiler/tests/p256_ct_field.nu` pins the field against the bigint reference (400 field trials, 60 variable-base scalarmult trials), and `compiler/tests/p256_scalarmult_base_kat.nu` pins the comb against an independent Python implementation with 18 vectors chosen to exercise **every masked exceptional path** (k = 1/2/3, long zero-teeth runs, single-tooth and tooth-aligned scalars, n−1). |
-| P-256/P-384 verify | The scalars are **public** (verification), so this path needs no timing countermeasure at all — it needs speed, because a TLS client pays one verify per certificate in the chain and a JWT server one per request. Both curves compute u1·G + u2·Q on their fixed-limb Montgomery fields: P-256 reuses the secret path's comb and window ladder joined by ONE complete (RCB) projective addition, P-384 runs `std/p384_field`'s looped 6-limb CIOS engine with a Straus double-scalar over the same complete formula. The complete formula is load-bearing for *correctness*, not timing: an adversarially crafted (r, s, Q) can steer the two halves of the sum into any relation — equal, negated, either at infinity — and the classic Jacobian add degenerates exactly there. Digests longer than the group order are truncated to their leftmost qlen bits (FIPS 186-5 §6.4.1), pinned against OpenSSL across both curves and five digest widths in `compiler/tests/ecdsa_verify_matrix.nu`. |
+| RSA private key (PSS sign) | **Constant-time on the timing/cache axis** (`std/rsa_mont`): residues are n fixed 64-bit limbs, never normalised; the Montgomery multiply (FIOS on `nurl_mac`) and the final conditional subtraction are branch-free; the exponentiation is a fixed 4-bit window over a fixed number of windows whose table entry is chosen by a masked scan of all sixteen — no secret-dependent branch, address or operand duration. When the key carries its factors (every PKCS#1 / PKCS#8 key; `RsaPriv.crt`) the operation is CRT — two half-width exponentiations recombined by Garner — with **exponent blinding** (`d_p + r·(p − 1)` for a fresh 64-bit `r` per signature, so the exponent bits differ every time) and a **fault check**: the signature is verified mod p and mod q before it is released, so a computation fault in one half cannot leak a factor (Bellcore). Verification uses the same field with the public exponent (variable time, public data). Pinned by `tools/tests/test_rsa_sign.py`: CRT and plain-exponent PSS signatures byte-identical, and OpenSSL-verified, for 1024–4096-bit PKCS#1 and PKCS#8 keys. |
+| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Constant-time on the timing/cache axis** (`std/p256_field`): a dedicated fixed-**4-limb (radix 2^64)** GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub built on `nurl_addc`/`nurl_subb` carry chains, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. **Two point paths, and the difference is the point.** *Variable-base* (ECDH against a peer's point) runs on Jacobian coordinates too: an affine table 1·Q … 15·Q built with one batch inversion, then 64 windows of four 3M+5S doublings and one 8M+3S mixed addition, a fixed number of steps regardless of the scalar's value, the secret digit never indexing the table — all sixteen entries are read every window and merged under an arithmetic equality mask. The scalar is reduced mod n first (constant time), and that makes the mixed addition **complete for every scalar**: before each addition the accumulator is m·Q with m = 0 (∞, committed by mask) or 16 ≤ m < n, and the entry is d·Q with 1 ≤ d ≤ 15, so the degenerate `acc = entry` case cannot occur — where without the reduction k = n + 30 would reach it. *Fixed-base* (`k·G`: the ECDSA nonce and ECDH keygen, where the point is the public generator and the scalar is a secret **pseudorandom** value) uses an 8-tooth comb over Jacobian coordinates with an affine table, which is faster but not a complete formula — the exceptional cases are closed one at a time by constant-time masks instead: `acc = ∞` commits via a branch-free `Z == 0` mask, a zero digit keeps the accumulator through the same masked select (the addition still runs against a zero entry, so the trace stays digit-independent), and `acc = −entry` falls out of the formula correctly. The one case left open, `acc = entry`, is a ~2^-224 event for the pseudorandom scalars this path serves — the same bound OpenSSL's `ecp_nistz256` accepts — and **adversarial input never reaches it**: this path only ever multiplies the public generator by a scalar the stack drew itself. No branch, no secret-dependent address, no operand-time dependence — **no blinding needed**. Verified for *correctness* (a separate axis from constant-timeness — see the caveat above): `compiler/tests/p256_ct_field.nu` pins the field against the bigint reference (400 field trials, 60 random variable-base scalar multiplies, and 24 edge scalars against two base points — including k = n + 30, k = n and k = 2²⁵⁶ − 1), and `compiler/tests/p256_scalarmult_base_kat.nu` pins the comb against an independent Python implementation with 18 vectors chosen to exercise **every masked exceptional path** (k = 1/2/3, long zero-teeth runs, single-tooth and tooth-aligned scalars, n−1). |
+| P-256/P-384 verify | The scalars are **public** (verification), so this path needs no timing countermeasure at all — it needs speed, because a TLS client pays one verify per certificate in the chain and a JWT server one per request. Both curves compute u1·G + u2·Q as one Straus double-scalar pass on their fixed-limb Montgomery fields. P-256 shares the 256 doublings between the two scalars and adds 4-bit digits from two affine tables — G's, built once per process, and Q's, built per verify with one batch inversion; parsing, range checks and the on-curve test of Q run on the same fixed-width field, with no BigInt. P-384 runs `std/p384_field`'s looped 6-limb CIOS engine over the RCB complete formula. Exactness in every case is load-bearing for *correctness*, not timing: an adversarially crafted (r, s, Q) can steer the accumulator and the entry into any relation — equal, negated, either at infinity — and the classic Jacobian add degenerates exactly there. P-256's mixed addition handles those by branching (`_p256_jmadd_vt`: equal doubles, negated becomes ∞), which public data allows. Digests longer than the group order are truncated to their leftmost qlen bits (FIPS 186-5 §6.4.1), pinned against OpenSSL across both curves and five digest widths in `compiler/tests/ecdsa_verify_matrix.nu`. |
 | X25519 | Montgomery ladder with a branchless constant-time conditional swap (TweetNaCl); fixed iteration count. The field underneath is curve25519-donna-c64: five unsigned limbs at radix 2^51 (held as `u64` locals through the variable-base ladder), each product a full 64×64→128 multiply (`nurl_umulhi`), carried by a fixed shift-and-mask sequence with a ×19 fold — no branch on data anywhere in it. |
 | Ed25519 | Deterministic nonce (RFC 8032), so no per-signature secret randomness to leak. The scalar multiply is a **fixed 4-bit window** over the complete twisted-Edwards addition: four doublings and one addition per nibble, a fixed `2·len(scalar bytes)` windows regardless of the scalar. The window digit is secret, so the table is never indexed by it — all sixteen entries are read every window and merged under an arithmetic equality mask (a full 64-bit one, since the field's radix-2^51 limbs run up to ~2^54 and a 32-bit mask would clip them), and digit 0 reads the identity, which the complete formula absorbs. |
 | Secret comparison | `std/subtle.nu` — duration depends only on input *length*, never contents. |
@@ -171,18 +170,13 @@ follow-up. Hardening (timing/cache axis):
   software constant-time code, it does **not** resist a power/EM
   (DPA/template) attacker, which is out of scope stack-wide.
 
-- **RSA private-key exponentiation** — uniform control flow (the Montgomery
-  powering ladder) but the underlying `std/bigint` `mul`/`rem` still **normalize
-  (trim leading-zero limbs)**, so their duration tracks operand *magnitude*.
-  That operand-**timing** residual is **covered by base blinding** (every
-  signature runs on a fresh randomized operand, so no signal aggregates across
-  traces) — exactly OpenSSL's posture for the same arithmetic. So RSA is robust
-  against the multi-trace remote attacker but, unlike the EC path, is **not**
-  hardened against a *single-trace timing/cache* observer of one signature; a
-  dedicated fixed-limb RSA modular multiply (a tracked follow-up) would
-  close that. (Power/EM remains out of scope for RSA too — and for everything.)
-  RSA is the legacy path; the EC path above is the primary one for modern
-  internet-facing TLS and carries no such timing residual.
+- **RSA private-key exponentiation** — constant-time *including operand
+  timing* as well, on its own fixed-width field (`std/rsa_mont`): fixed limbs,
+  a fixed window, masked table reads, branch-free reductions. On the CRT path
+  each signature's exponents are blinded (`d_p + r·(p − 1)`) and the result is
+  checked mod p and mod q before release. The plain-exponent path (a caller
+  that passes only d) is constant-time too, without the blinding. Power/EM
+  remains out of scope for RSA too — and for everything.
 
 ### Practical guidance
 
@@ -278,12 +272,10 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    ECDSA/ECDHE, X25519, Ed25519) and all symmetric primitives are constant-time
    *including operand timing* — no secret-dependent branch, table index, or
    value-dependent duration — so they resist a single-trace **timing/cache**
-   observer. RSA's private exponentiation has uniform control flow plus base
-   blinding, which defeats the multi-trace remote/co-resident attacker; its
-   `bigint` operand **timing** is the one residual on this axis (single-trace
-   timing/cache on one RSA signature is not covered until a fixed-limb RSA
-   multiply lands). These properties are by-construction and code-reviewed, not
-   yet measured statistically (dudect/ctgrind — a tracked follow-up).
+   observer. RSA's private exponentiation is constant-time on the same terms,
+   on its own fixed-width field, with per-signature exponent blinding on the
+   CRT path. These properties are by-construction and code-reviewed, not yet
+   measured statistically (dudect/ctgrind — a tracked follow-up).
 4. **Power / EM (DPA, SPA-power, template) side-channels are OUT of scope for
    the entire software stack.** Software constant-time code does not defend
    them — a table-free or bitsliced AES S-box still leaks through power draw,
@@ -292,9 +284,8 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    library (HSM, secure element, AES-NI + a vetted bignum) where that threat
    model applies.
 
-An external audit, a fixed-limb RSA field (removing the last operand-time
-dependence), and statistical timing measurement (dudect-style) remain open
-work — see [`ROADMAP.md`](../ROADMAP.md).
+An external audit and statistical timing measurement (dudect-style) remain
+open work — see [`ROADMAP.md`](../ROADMAP.md).
 
 ---
 
