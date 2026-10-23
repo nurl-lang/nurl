@@ -8,5 +8,5 @@ export const releaseFacts = [
   ['65', 'registry packages'],
 ] as const;
 
-export const nurlVersion = 'v0.77.2-17-gf4aadf3';
-export const docsCommit = 'f4aadf3';
+export const nurlVersion = 'v0.77.2-17-gff6acea5';
+export const docsCommit = 'ff6acea5';
