@@ -2,8 +2,11 @@
 // fallback when the registry stats API is unavailable during a build.
 export const releaseFacts = [
   ['61,778', 'lines of NURL in the compiler'],
-  ['1,454', 'compiler test programs'],
-  ['240', 'stdlib modules'],
+  ['1,455', 'compiler test programs'],
+  ['241', 'stdlib modules'],
   ['11', 'tested targets'],
   ['65', 'registry packages'],
 ] as const;
+
+export const nurlVersion = 'v0.77.2-17-gff6acea5';
+export const docsCommit = 'ff6acea5';

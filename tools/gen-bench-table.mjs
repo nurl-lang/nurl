@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RESULTS = join(ROOT, 'bench', 'results', 'latest.json');
 const OUTPUT = join(ROOT, 'webdocs', 'lib', 'benchmark-stats.generated.ts');
-const columns = [
-  { key: 'nurl', label: 'NURL', nurl: true },
-  { key: 'c', label: 'C', nurl: false },
-  { key: 'rust', label: 'Rust', nurl: false },
-  { key: 'node', label: 'Node', nurl: false },
-  { key: 'python', label: 'Python', nurl: false },
+// NURL is always first: the homepage highlights column 0.
+const LANGUAGES = [
+  ['nurl', 'NURL'],
+  ['c', 'C'],
+  ['rust', 'Rust'],
+  ['node', 'Node'],
+  ['python', 'Python'],
 ];
 
 function formatMs(value) {
@@ -36,7 +37,7 @@ if (rows.length === 0) {
 }
 
 const generatedRows = rows.map((bench) => {
-  const raw = columns.map((column) => bench.run_ms?.[column.key] ?? null);
+  const raw = LANGUAGES.map(([key]) => bench.run_ms?.[key] ?? null);
   const values = raw.map(formatMs);
   const finite = raw.filter((value) => typeof value === 'number' && Number.isFinite(value));
   const best = finite.length ? formatMs(Math.min(...finite)) : null;
@@ -50,13 +51,11 @@ const generatedRows = rows.map((bench) => {
 
 const stats = {
   benchmarks: generatedRows.length,
-  languages: columns.length,
+  languages: LANGUAGES.length,
   generated: (results.generated_utc ?? '').slice(0, 10),
-  commit: (results.commit ?? '').slice(0, 7),
-  commitUrl: results.commit ? `https://github.com/nurl-lang/nurl/commit/${results.commit}` : '',
   runUrl: results.run_url ?? '',
   host: results.host?.label ?? 'unknown host',
-  columns: columns.map(({ label, nurl }) => ({ label, nurl })),
+  columns: LANGUAGES.map(([, label]) => label),
   rows: generatedRows,
 };
 
