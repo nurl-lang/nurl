@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bench/tls_bench` and the manual `tls-bench` workflow: NURL's TLS
+  against rustls / aws-lc-rs, hyper and reqwest.** Full and resumed
+  handshakes per group (X25519, P-256, X25519MLKEM768) and certificate
+  (ECDSA P-256, RSA-2048) with server CPU per handshake split into the
+  primitives' share and the rest; unloaded handshake latency; the record
+  layer on small keep-alive requests; bulk throughput per suite, with
+  and without kTLS; `packages/http-client` against reqwest; and the
+  primitives underneath. About ten minutes of measurement; the report,
+  `bench/tls_bench/TLS_RESULTS.md`, opens with a worst-first list of
+  where NURL trails and what the gap is made of.
+- `packages/http-client` 0.3.6: `http_client_set_resume` — turn TLS
+  session resumption off for a client.
+
 ### Security
 
 - **Unikernel builds link a cached object only from a cache nobody else

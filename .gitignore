@@ -122,6 +122,7 @@ bench/_build/
 bench/rust_http_server/target/
 bench/rust_http2_server/target/
 bench/rust_pq/target/
+bench/tls_bench/rust/target/
 
 # Development notes & helpers
 TODO.md
