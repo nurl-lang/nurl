@@ -2,9 +2,30 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-rfc5869_prk: PASS
-rfc5869_okm: PASS
-tls13_early_secret: PASS
-sha256_empty: PASS
-tls13_derived: PASS
+rfc5869_case1_prk: PASS
+rfc5869_case1_okm: PASS
+rfc5869_case2_prk: PASS
+rfc5869_case2_okm: PASS
+rfc5869_case3_prk: PASS
+rfc5869_case3_okm: PASS
+rfc4231_case1: PASS
+rfc4231_case2: PASS
+rfc4231_case3: PASS
+rfc4231_case4_in: PASS
+rfc4231_case6: PASS
+rfc4231_case7: PASS
+rfc8448_early_secret: PASS
+rfc8448_derived1: PASS
+rfc8448_handshake_secret: PASS
+rfc8448_c_hs: PASS
+rfc8448_s_hs: PASS
+rfc8448_s_key: PASS
+rfc8448_s_iv: PASS
+rfc8448_s_finished_key: PASS
+rfc8448_derived2: PASS
+rfc8448_master_secret: PASS
+rfc8448_c_ap: PASS
+rfc8448_s_ap: PASS
+rfc8448_res_master: PASS
+rfc8448_resumption_psk: PASS
 hkdf: all vectors PASS

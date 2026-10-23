@@ -9,6 +9,8 @@
 //   ( hmac_sha256_key ( Vec u ) key )   → HmacSha256  a prepared key
 //   ( hmac_sha256_mac HmacSha256 k
 //                     ( Vec u ) msg )   → ( Vec u )   32-byte HMAC
+//   ( hmac_sha256_mac_in HmacSha256 k ( Vec u ) msg
+//                        ( Vec u ) out i at ) → b     into out[at, at+32)
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
@@ -201,10 +203,8 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
 
 @ __Sha256_ptr Sha256 h → *Sha256Impl { ^ ( shared_ptr [Sha256Impl] . h ctl ) }
 
-@ sha256_init → Sha256 {
-    : ( Vec u32 ) w ( vec_with_cap [u32] 144 )
-    : b _l ( vec_set_len [u32] w 144 )
-    : *u32 sp ( vec_data [u32] w )
+// The chaining state's initial value, FIPS 180-4 §5.3.3.
+inline @ __sha256_iv * u32 sp → v {
     = . sp 0 # u32 1779033703
     = . sp 1 # u32 3144134277
     = . sp 2 # u32 1013904242
@@ -213,23 +213,38 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . sp 5 # u32 2600822924
     = . sp 6 # u32 528734635
     = . sp 7 # u32 1541459225
+}
+
+// A fresh stream whose word block is `words` long (at least 144): a
+// prepared HMAC key keeps its own state after the stream's words, in the
+// same block (see HmacSha256).
+@ __sha256_new i words → Sha256 {
+    : ( Vec u32 ) w ( vec_with_cap [u32] words )
+    : b _l ( vec_set_len [u32] w words )
+    ( __sha256_iv ( vec_data [u32] w ) )
     // Built whole and moved into the box: every field is written, so the
     // block needs no zeroing first.
     ^ @ Sha256 { ( shared_new [Sha256Impl] @ Sha256Impl { w ( vec_data [u32] ( __sha256_k_shared ) ) 0 0 } ) }
 }
 
+@ sha256_init → Sha256 { ^ ( __sha256_new 144 ) }
+
 // Let go of `h` now rather than at the end of its owner's scope.
 @ sha256_free sink Sha256 h → v {}
 
 @ sha256_update Sha256 h__h ( Vec u ) data → v {
-    : i n ( vec_len [u] data )
+    ( __sha256_absorb ( __Sha256_ptr h__h ) ( vec_data [u] data ) ( vec_len [u] data ) )
+}
+
+// The `n` bytes at `dp` into the stream behind `h`. The raw core of
+// sha256_update, for a message that arrives in pieces no Vec holds whole
+// (HMAC's legs, an HKDF info streamed field by field).
+@ __sha256_absorb * Sha256Impl h * u dp i n → v {
     ? <= n 0 { ^ v } {}
-    : *Sha256Impl h ( __Sha256_ptr h__h )
     : *u32 sp ( vec_data [u32] . h w )
     : *u32 kp . h k
     : *u32 mp # *u32 + # i sp 64
     : *u blk # *u + # i sp 320
-    : *u dp ( vec_data [u] data )
     = . h total + . h total n
     : ~ i off 0
     // top up a partial block first
@@ -256,9 +271,23 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     } {}
 }
 
+// One byte into the stream: a length prefix or a counter, without a
+// buffer around it.
+@ __sha256_absorb_byte * Sha256Impl h i byte → v {
+    : *u32 sp ( vec_data [u32] . h w )
+    : *u blk # *u + # i sp 320
+    : i have . h blen
+    = . blk have # u & byte 255
+    = . h total + . h total 1
+    ? == have 63 {
+        ( __sha256_transform sp blk . h k # *u32 + # i sp 64 )
+        = . h blen 0
+    } { = . h blen + have 1 }
+}
+
 // Pad the `blen` bytes at `blk` (which has room for 128), run the final
 // block(s) over the state at `sp`, and serialise it big-endian.
-@ __sha256_finish * u32 sp * u blk i blen i total * u32 kp * u32 mp → ( Vec u ) {
+@ __sha256_finish_to * u32 sp * u blk i blen i total * u32 kp * u32 mp * u op → v {
     = . blk blen # u 128
     : i end ? <= + blen 1 56 64 128
     : ~ i zi + blen 1
@@ -275,9 +304,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     ( __sha256_transform sp blk kp mp )
     ? == end 128 { ( __sha256_transform sp # *u + # i blk 64 kp mp ) } {}
 
-    : ( Vec u ) out ( vec_with_cap [u] 32 )
-    : b _l ( vec_set_len [u] out 32 )
-    : *u op ( vec_data [u] out )
     : ~ i si 0
     ~ < si 8 {
         : i siv # i . sp si
@@ -287,7 +313,22 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
         = . op + * si 4 3 # u & siv 255
         = si + si 1
     }
+}
+
+// The same, into a fresh 32-byte Vec.
+@ __sha256_finish * u32 sp * u blk i blen i total * u32 kp * u32 mp → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] out 32 )
+    ( __sha256_finish_to sp blk blen total kp mp ( vec_data [u] out ) )
     ^ out
+}
+
+// Finish the stream behind `h` into the 32 bytes at `op`; the stream is
+// spent (a resume or a restart starts it over).
+@ __sha256_digest_to * Sha256Impl h * u op → v {
+    : *u32 sp ( vec_data [u32] . h w )
+    ( __sha256_finish_to sp # *u + # i sp 320 . h blen . h total . h k # *u32 + # i sp 64 op )
+    = . h blen 0
 }
 
 // Digest: pads, runs the final block(s) and serialises the state
@@ -325,29 +366,120 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
 
 // ── HMAC-SHA-256 (RFC 2104; block size B = 64 bytes for SHA-256). ──
 //
-// Both legs stream through one hasher: the padded key block goes in,
-// then the message (or the inner digest) straight from the caller's
-// buffer — no `ipad ‖ msg` concatenation is built. A TLS key schedule
-// runs this a few dozen times per handshake.
+// Every HMAC under one key starts the same way: the inner hash absorbs
+// K0 ^ ipad and the outer one K0 ^ opad, one compression each, before a
+// byte of the message. A prepared key (HmacSha256) runs those two
+// compressions once and keeps the midstates they leave; every MAC under
+// it then resumes from them — two compressions per MAC instead of four,
+// and no K0 block built again. A TLS 1.3 key schedule derives two or
+// three secrets from each of its secrets, and an HKDF-Expand of several
+// blocks MACs once per block, so the saving is per derivation.
+//
+// Both legs stream through the key's one hasher: the message (or the
+// inner digest) is absorbed straight from wherever it lives — no
+// `ipad ‖ msg` concatenation, no Vec for the inner digest. The `_in`
+// forms write the MAC into the caller's buffer: a MAC under a prepared
+// key allocates nothing.
+//
+// The key's words, after the stream's own 144 (see Sha256Impl):
+//
+//   [144, 152)  inner midstate: the state after K0 ^ ipad
+//   [152, 160)  outer midstate: the state after K0 ^ opad
+//   [160, 168)  the inner digest, 32 bytes, on its way into the outer leg
+//   [168, 176)  T(i), one HKDF-Expand output block (stdlib/std/hkdf.nu)
+//   [176, 244)  an HkdfLabel's head, up to 259 bytes (stdlib/std/hkdf.nu)
+//
+// The key-derived scratch (the K0 blocks, the inner digest, T) is wiped
+// when the operation that wrote it ends.
+: HmacSha256 { Sha256 h }
 
-// Start `h` over as a fresh SHA-256 stream (its block is reused).
-@ __sha256_restart Sha256 h__h → v {
-    : *Sha256Impl h ( __Sha256_ptr h__h )
-    : *u32 sp ( vec_data [u32] . h w )
-    = . sp 0 # u32 1779033703
-    = . sp 1 # u32 3144134277
-    = . sp 2 # u32 1013904242
-    = . sp 3 # u32 2773480762
-    = . sp 4 # u32 1359893119
-    = . sp 5 # u32 2600822924
-    = . sp 6 # u32 528734635
-    = . sp 7 # u32 1541459225
-    = . h blen 0
-    = . h total 0
+@ hmac_sha256_key ( Vec u ) key → HmacSha256 {
+    : Sha256 h ( __sha256_new 244 )
+    : *Sha256Impl hi ( __Sha256_ptr h )
+    : *u32 sp ( vec_data [u32] . hi w )
+    : *u32 kp . hi k
+    : *u32 mp # *u32 + # i sp 64
+    : *u pp # *u + # i sp 320
+    : *u32 mid # *u32 + # i sp 576
+    // K0: the key, hashed down first when longer than a block, then
+    // zero-padded to 64 bytes.
+    ( nurl_memset # s pp 0 64 )
+    : i klen ( vec_len [u] key )
+    ? > klen 64 {
+        : ( Vec u ) khash ( sha256_pure key )
+        ( nurl_memcpy # s pp # s ( vec_data [u] khash ) 32 )
+    } {
+        ? > klen 0 { ( nurl_memcpy # s pp # s ( vec_data [u] key ) klen ) } {}
+    }
+    : ~ i xi 0
+    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 54 = xi + xi 1 }
+    ( __sha256_transform sp pp kp mp )
+    ( nurl_memcpy # s mid # s sp 32 )
+    // 0x36 ^ 0x5c = 0x6a: K0 ^ ipad becomes K0 ^ opad in place.
+    = xi 0
+    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 106 = xi + xi 1 }
+    ( __sha256_iv sp )
+    ( __sha256_transform sp pp kp mp )
+    ( nurl_memcpy # s + # i mid 32 # s sp 32 )
+    ( nurl_memset # s pp 0 64 )
+    ^ @ HmacSha256 { h }
 }
 
+// The hasher resumed from the midstate at word `at` of its block: one
+// 64-byte block already absorbed.
+@ _hmac_resume * Sha256Impl h i at → v {
+    : *u32 sp ( vec_data [u32] . h w )
+    ( nurl_memcpy # s sp # s + # i sp * at 4 32 )
+    = . h blen 0
+    = . h total 64
+}
+
+// A MAC in three steps, so a message that is several pieces (HKDF's
+// T(i-1) ‖ info ‖ counter) streams in without being assembled first:
+// _hmac_begin, any number of _hmac_absorb / _hmac_absorb_byte, then
+// _hmac_end_to writes the 32-byte MAC at `op`.
+@ _hmac_begin HmacSha256 k → v { ( _hmac_resume ( __Sha256_ptr . k h ) 144 ) }
+
+@ _hmac_absorb HmacSha256 k * u dp i n → v { ( __sha256_absorb ( __Sha256_ptr . k h ) dp n ) }
+
+@ _hmac_absorb_byte HmacSha256 k i byte → v { ( __sha256_absorb_byte ( __Sha256_ptr . k h ) byte ) }
+
+@ _hmac_end_to HmacSha256 k * u op → v {
+    : *Sha256Impl h ( __Sha256_ptr . k h )
+    : *u ib # *u + # i ( vec_data [u32] . h w ) 640
+    ( __sha256_digest_to h ib )
+    ( _hmac_resume h 152 )
+    ( __sha256_absorb h ib 32 )
+    ( __sha256_digest_to h op )
+    ( nurl_memset # s ib 0 32 )
+}
+
+// The word block of `k`'s hasher, for the HKDF scratch documented above.
+@ _hmac_words HmacSha256 k → *u32 { ^ ( vec_data [u32] . ( __Sha256_ptr . k h ) w ) }
+
+// HMAC(key, msg) under a prepared key, into out[at, at + 32). False, and
+// nothing written, when the range is not inside `out`.
+@ hmac_sha256_mac_in HmacSha256 k ( Vec u ) msg ( Vec u ) out i at → b {
+    ? | < at 0 > + at 32 ( vec_len [u] out ) { ^ F } {}
+    ( _hmac_begin k )
+    ( _hmac_absorb k ( vec_data [u] msg ) ( vec_len [u] msg ) )
+    ( _hmac_end_to k # *u + # i ( vec_data [u] out ) at )
+    ^ T
+}
+
+// HMAC(key, msg) under a prepared key.
+@ hmac_sha256_mac HmacSha256 k ( Vec u ) msg → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] out 32 )
+    ( _hmac_begin k )
+    ( _hmac_absorb k ( vec_data [u] msg ) ( vec_len [u] msg ) )
+    ( _hmac_end_to k ( vec_data [u] out ) )
+    ^ out
+}
+
+// One-shot HMAC(key, msg). A key that MACs more than once is cheaper
+// prepared (hmac_sha256_key) and reused.
 @ hmac_sha256_pure ( Vec u ) key ( Vec u ) msg → ( Vec u ) {
-    // Allocate one scratch buffer for state (8), schedule (64), and block (32 words = 128 B).
     : ( Vec u32 ) w ( vec_with_cap [u32] 120 )
     : b _l ( vec_set_len [u32] w 120 )
     : *u32 sp ( vec_data [u32] w )
@@ -355,9 +487,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     : *u32 mp # *u32 + # i sp 32
     : *u blk # *u + # i sp 288
     : *u opad_blk # *u + # i sp 416
-
-    // K0: the key, hashed down first when longer than a block, then
-    // zero-padded to 64 bytes inside `blk` (bytes 0..63).
     ( nurl_memset # s blk 0 64 )
     : i klen ( vec_len [u] key )
     ? > klen 64 {
@@ -366,7 +495,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     } {
         ? > klen 0 { ( nurl_memcpy # s blk # s ( vec_data [u] key ) klen ) } {}
     }
-
     : ~ i xi 0
     ~ < xi 64 {
         : i kb # i . blk xi
@@ -374,8 +502,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
         = . blk xi # u ^^ kb 54
         = xi + xi 1
     }
-
-    // inner = SHA-256((K0 ^ ipad) ‖ msg)
     = . sp 0 # u32 1779033703
     = . sp 1 # u32 3144134277
     = . sp 2 # u32 1013904242
@@ -385,7 +511,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . sp 6 # u32 528734635
     = . sp 7 # u32 1541459225
     ( __sha256_transform sp blk kp mp )
-
     : i mlen ( vec_len [u] msg )
     : *u dp ( vec_data [u] msg )
     : ~ i off 0
@@ -404,8 +529,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     ~ < bi 8 { = . blk - - end 1 bi # u & >> bitlen * bi 8 255 = bi + bi 1 }
     ( __sha256_transform sp blk kp mp )
     ? == end 128 { ( __sha256_transform sp # *u + # i blk 64 kp mp ) } {}
-
-    // Save inner digest (8 words) in locals, then run outer = SHA-256((K0 ^ opad) ‖ inner).
     : u32 in0 . sp 0
     : u32 in1 . sp 1
     : u32 in2 . sp 2
@@ -414,7 +537,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     : u32 in5 . sp 5
     : u32 in6 . sp 6
     : u32 in7 . sp 7
-
     = . sp 0 # u32 1779033703
     = . sp 1 # u32 3144134277
     = . sp 2 # u32 1013904242
@@ -424,8 +546,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . sp 6 # u32 528734635
     = . sp 7 # u32 1541459225
     ( __sha256_transform sp opad_blk kp mp )
-
-    // Final outer block: 32-byte inner digest + 0x80 + zeros + 64-bit length (96*8 = 768).
     = . blk 0 # u & >> # i in0 24 255 = . blk 1 # u & >> # i in0 16 255 = . blk 2 # u & >> # i in0 8 255 = . blk 3 # u & # i in0 255
     = . blk 4 # u & >> # i in1 24 255 = . blk 5 # u & >> # i in1 16 255 = . blk 6 # u & >> # i in1 8 255 = . blk 7 # u & # i in1 255
     = . blk 8 # u & >> # i in2 24 255 = . blk 9 # u & >> # i in2 16 255 = . blk 10 # u & >> # i in2 8 255 = . blk 11 # u & # i in2 255
@@ -438,7 +558,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     = . blk 32 # u 128
     = . blk 62 # u 3
     ( __sha256_transform sp blk kp mp )
-
     : ( Vec u ) out ( vec_with_cap [u] 32 )
     : b _lo ( vec_set_len [u] out 32 )
     : *u op ( vec_data [u] out )
@@ -452,66 +571,6 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
         = si + si 1
     }
     ^ out
-}
-
-// ── A prepared HMAC-SHA-256 key ────────────────────────────────────
-// Every HMAC under one key starts the same way: the inner hash absorbs
-// K0 ^ ipad and the outer one K0 ^ opad, one compression each, before
-// a byte of the message. A key that MACs more than once — RFC 6979's
-// nonce generator, an HKDF-Expand of several blocks — keeps the two
-// states those leave behind (`mid`: inner words 0..7, outer 8..15) and
-// starts every MAC from them: two compressions saved per MAC, and no K0
-// block built again. One hasher is reused for every MAC.
-: HmacSha256 { Sha256 h ( Vec u32 ) mid }
-
-@ hmac_sha256_key ( Vec u ) key → HmacSha256 {
-    : Sha256 h ( sha256_init )
-    : *Sha256Impl hi ( __Sha256_ptr h )
-    : *u32 sp ( vec_data [u32] . hi w )
-    : *u32 kp . hi k
-    : *u32 mp # *u32 + # i sp 64
-    : *u pp # *u + # i sp 320
-    ( nurl_memset # s pp 0 64 )
-    : i klen ( vec_len [u] key )
-    ? > klen 64 {
-        : ( Vec u ) khash ( sha256_pure key )
-        ( nurl_memcpy # s pp # s ( vec_data [u] khash ) 32 )
-    } {
-        ? > klen 0 { ( nurl_memcpy # s pp # s ( vec_data [u] key ) klen ) } {}
-    }
-    : ( Vec u32 ) mid ( vec_with_cap [u32] 16 )
-    : b _lm ( vec_set_len [u32] mid 16 )
-    : *u32 mp0 ( vec_data [u32] mid )
-    : ~ i xi 0
-    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 54 = xi + xi 1 }
-    ( __sha256_transform sp pp kp mp )
-    ( nurl_memcpy # s mp0 # s sp 32 )
-    = xi 0
-    ~ < xi 64 { = . pp xi # u ^^ # i . pp xi 106 = xi + xi 1 }
-    ( __sha256_restart h )
-    ( __sha256_transform sp pp kp mp )
-    ( nurl_memcpy # s + # i mp0 32 # s sp 32 )
-    ^ @ HmacSha256 { h mid }
-}
-
-// The hasher resumed from the midstate at `ms` (8 words): one 64-byte
-// block already absorbed.
-@ __hmac_resume Sha256 h__h * u32 ms → v {
-    : *Sha256Impl h ( __Sha256_ptr h__h )
-    ( nurl_memcpy # s ( vec_data [u32] . h w ) # s ms 32 )
-    = . h blen 0
-    = . h total 64
-}
-
-// HMAC(key, msg) under a prepared key.
-@ hmac_sha256_mac HmacSha256 k ( Vec u ) msg → ( Vec u ) {
-    : *u32 ms ( vec_data [u32] . k mid )
-    ( __hmac_resume . k h ms )
-    ( sha256_update . k h msg )
-    : ( Vec u ) inner ( sha256_final . k h )
-    ( __hmac_resume . k h # *u32 + # i ms 32 )
-    ( sha256_update . k h inner )
-    ^ ( sha256_final . k h )
 }
 
 // ── SHA-224 (FIPS 180-4 §6.2) ──────────────────────────────────────

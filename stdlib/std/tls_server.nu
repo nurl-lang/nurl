@@ -973,11 +973,13 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) ehash ( sha256_pure empty )
     : ( Vec u ) early ? == . h resumed 1 ( _psk_early psk ) ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
+    // handshake_secret derives three secrets: prepared once.
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
+    : HmacSha256 hsk ( hmac_sha256_key hs_secret )
     : ( Vec u ) th_sh ( sha256_snapshot . h trh )
-    = . h c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
-    = . h s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
-    : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
+    = . h c_hs ( derive_secret_prk hsk `c hs traffic` th_sh )
+    = . h s_hs ( derive_secret_prk hsk `s hs traffic` th_sh )
+    : ( Vec u ) derived2 ( derive_secret_prk hsk `derived` ehash )
     = . h master ( hkdf_extract derived2 z32 )
 
     // ── EncryptedExtensions ──
@@ -1038,8 +1040,9 @@ $ `stdlib/core/rcbox.nu`
 
     // ── application keys (transcript through server Finished) ──
     = . h th_sf ( sha256_snapshot . h trh )
-    = . h c_ap ( derive_secret . h master `c ap traffic` . h th_sf )
-    = . h s_ap ( derive_secret . h master `s ap traffic` . h th_sf )
+    : HmacSha256 mk ( hmac_sha256_key . h master )
+    = . h c_ap ( derive_secret_prk mk `c ap traffic` . h th_sf )
+    = . h s_ap ( derive_secret_prk mk `s ap traffic` . h th_sf )
 
     // free scratch / handshake secrets
     = . h state 1

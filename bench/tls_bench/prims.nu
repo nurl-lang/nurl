@@ -120,10 +120,13 @@ $ `stdlib/std/chacha20poly1305.nu`
 // The key schedule's building blocks and the transcript hash.
 @ __kdf → v {
     : ( Vec u ) secret ( __rand 32 )
+    : HmacSha256 prk ( hmac_sha256_key secret )
     : ( Vec u ) ctx ( __rand 32 )
+    : ( Vec u ) out ( vec_zeroed [u] 32 )
     ( __row ( bench_auto `HKDF-Expand-Label` \ → v {
-        : ( Vec u ) o ( hkdf_expand_label secret `c hs traffic` ctx 32 )
-        = g_sink + g_sink ( vec_len [u] o )
+        ? ( hkdf_expand_label_in prk `c hs traffic` ctx out 0 32 ) {
+            = g_sink + g_sink 1
+        } {}
     } ) )
     : ( Vec u ) blk ( __rand 16384 )
     ( __row ( bench_auto `SHA-256 16 KB` \ → v {
