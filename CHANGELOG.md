@@ -115,6 +115,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fresh value returned through `\` in a braced `??` arm no longer leaks**
+  (Agora #72, h320). `: ~ String st ?? ( vec_pop v ) { T x → x F → { \ ( mk ) } }`
+  treated the join as a borrow because the braced arm's ownership was guessed
+  from its first token, so the stored String was never dropped (ASan: 32 B
+  leaked). Every live arm now publishes its own ownership-lattice element —
+  borrowed, owned, or an i1 predicate for mixed paths — and the join phis
+  those elements; ownership follows the value through block and try syntax.
+  The PostgreSQL prepared-statement cache uses the direct
+  `vec_remove`/prepare match again, and its `__pg_stmt_take` workaround
+  helper is removed.
 - **The HTTP/2 client no longer deadlocks a duplex exchange mid-frame.**
   When a read had taken part of an inbound frame, `__h2c_read_one`
   waited for the rest with write interest only if bytes were already
