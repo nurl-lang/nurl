@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+limbs 15: 15 of 15 agree with bigint_modpow
+limbs 16: 15 of 15 agree with bigint_modpow
+limbs 17: 15 of 15 agree with bigint_modpow
+limbs 24: 15 of 15 agree with bigint_modpow
+limbs 32: 15 of 15 agree with bigint_modpow
