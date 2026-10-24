@@ -8,8 +8,9 @@
 //
 // Here a residue is n little-endian 64-bit limbs (i64 bit patterns), the
 // width fixed by the modulus and never trimmed. Multiplication is
-// Montgomery CIOS on nurl_mac (one widening multiply and an add-with-carry
-// chain per limb product); exponentiation is a fixed 4-bit window whose
+// Montgomery FIPS on nurl_mac — product scanning with the reduction
+// interleaved, one widening multiply and one add-with-carry chain into a
+// register accumulator per limb product, and a dedicated squaring; exponentiation is a fixed 4-bit window whose
 // table entry is picked by scanning all sixteen under a mask. For a given
 // modulus size every operation runs the same instruction sequence whatever
 // the key and the message: no branch and no memory index depends on a
@@ -121,77 +122,1492 @@ $ `stdlib/std/random.nu`
     ^ ? > n 0 n 1
 }
 
-// ── Montgomery multiply (FIOS) ──────────────────────────────────────
+// ── Montgomery multiply and square (FIPS) ───────────────────────────
 //
-// dst = a·b·R^-1 mod m for a·b < m·R (true whenever a < R and b < m, or
-// both < m). `dst` may alias a or b: the result is assembled in the
-// context's t / d and written last.
+// dst = a·b·R^-1 mod m (and a²·R^-1) for a·b < m·R (true whenever a < R
+// and b < m, or both < m). `dst` may alias a or b: the result is
+// assembled in the context's d / t and written last.
 //
-// FIOS: each row folds the product a·b[r] and the reduction q·m into ONE
-// pass over the accumulator — two carry chains side by side, one load and
-// one store of t[j] per limb — instead of CIOS's two passes (multiply,
-// then reduce), which read and wrote every accumulator limb twice. q is
-// known before the pass: it only needs t[0] + a[0]·b[r].
+// Finely Integrated Product Scanning (Koç, Acar, Kaliski): the result is
+// produced a COLUMN at a time — every a[i]·b[k−i] and every reduction
+// product q[i]·m[k−i] of column k summed into a three-word accumulator
+// that lives in registers, then the column's low word either becomes the
+// next reduction digit q[k] (k < n) or the result limb r[k−n]. A product
+// is one widening multiply and one add-with-carry chain into the
+// accumulator; the row-wise form this replaced (FIOS) carried two chains
+// per product and loaded and stored its n-limb accumulator on every row,
+// about twice the instructions a product. Squaring sums each cross
+// product a[i]·a[j] (i < j) once and doubles the column — n(n+1)/2
+// products for the square instead of n², and four in five Montgomery
+// operations of an exponentiation are squarings.
+//
+// The column sums stay below 2·n·2^128 < 2^192 for every n an RSA key
+// has, so three words never overflow; every loop bound depends on n and
+// the column index alone, so the instruction sequence is the same for
+// every operand.
+//
+// RSA-2048's CRT halves are 16 limbs, and for those the multiply and the
+// square are generated straight-line code (tools/gen_rsa_kernels.py, the
+// block between the markers below): no index arithmetic, every column's
+// products written out, the a·b products and the q·m products summed in
+// two accumulators so their carry chains run side by side. Measured on
+// an i7-11850H: square 1 440 → 1 100 cycles, multiply 1 430 → 1 320;
+// an RSA-2048 signature 0.98 → 0.79 ms. Every other width runs the loops
+// (__rm_mul_gen / __rm_sqr_gen), which compiler/tests/rsa_mont_kernels
+// holds both to std/bigint. What remains to aws-lc's 0.25 ms is the cost
+// of a product itself — about eight instructions where mulx with two
+// carry flags (adcx / adox) needs three: agora #95.
+
+// (z0, z1, z2) += x·y
+inline @ __rm_acc inout u64 z0 inout u64 z1 inout u64 z2 u64 x u64 y → v {
+    : u64 lo ( nurl_mac_lo x y z0 0 )
+    : u64 hi ( nurl_mac_hi x y z0 0 )
+    = z0 lo
+    : u64 s ( nurl_addc_lo z1 hi 0 )
+    = z2 + z2 ( nurl_addc_hi z1 hi 0 )
+    = z1 s
+}
+
+// (z0, z1, z2) += (x0, x1, x2): two column sums kept apart, so their
+// carry chains run side by side, joined once per column.
+inline @ __rm_add3 inout u64 z0 inout u64 z1 inout u64 z2 u64 x0 u64 x1 u64 x2 → v {
+    : u64 s0 ( nurl_addc_lo z0 x0 0 )
+    : u64 c0 ( nurl_addc_hi z0 x0 0 )
+    : u64 s1 ( nurl_addc_lo z1 x1 c0 )
+    : u64 c1 ( nurl_addc_hi z1 x1 c0 )
+    = z2 + + z2 x2 c1
+    = z0 s0
+    = z1 s1
+}
+
+// (z0, z1, z2) += 2·(w0, w1, w2)
+inline @ __rm_acc2 inout u64 z0 inout u64 z1 inout u64 z2 u64 w0 u64 w1 u64 w2 → v {
+    : u64 d0 << w0 1
+    : u64 d1 | << w1 1 >> w0 63
+    : u64 d2 | << w2 1 >> w1 63
+    : u64 s0 ( nurl_addc_lo z0 d0 0 )
+    : u64 c0 ( nurl_addc_hi z0 d0 0 )
+    : u64 s1 ( nurl_addc_lo z1 d1 c0 )
+    : u64 c1 ( nurl_addc_hi z1 d1 c0 )
+    = z2 + + z2 d2 c1
+    = z0 s0
+    = z1 s1
+}
+
+// The reduction digit of column k (k < n): q[k] = z0·n0, after which
+// z0 + q[k]·m[0] ≡ 0 (mod 2^64); then the column shifts out.
+inline @ __rm_qdigit inout u64 z0 inout u64 z1 inout u64 z2 u64 n0 u64 m0 * i qp i k → v {
+    : u64 q * z0 n0
+    = . qp k # i q
+    ( __rm_acc z0 z1 z2 q m0 )
+    = z0 z1
+    = z1 z2
+    = z2 0
+}
+
+// r (n limbs, with `top` the bit above them) is below 2m: subtract m once
+// and keep whichever is in range — by mask — into dst.
+inline @ __rm_final i n * i rp * i mp * i dp u64 top ( Vec i ) dst → v {
+    : ~ u64 bb 0
+    : ~ i j 0
+    ~ < j n {
+        : u64 x # u64 . rp j
+        : u64 y # u64 . mp j
+        = . dp j # i ( nurl_subb_lo x y bb )
+        = bb ( nurl_subb_hi x y bb )
+        = j + j 1
+    }
+    : i topb - # i top # i bb
+    : i mask ? < topb 0 0 - 0 1
+    : i imask ^^ mask - 0 1
+    : *i op ( vec_data [i] dst )
+    = j 0
+    ~ < j n { = . op j | & mask . dp j & imask . rp j = j + j 1 }
+}
+
 @ _rm_mul_d RsaMont c ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : i n . c n
-    : *i tp ( vec_data [i] . c t )
-    : *i dp ( vec_data [i] . c d )
+    : *i qp ( vec_data [i] . c t )  // q digits, then the result
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . c m )
     : u64 n0 # u64 . c n0
-    : u64 a0 # u64 . ap 0
-    : u64 m0 # u64 . mp 0
-    : ~ i k 0
-    ~ < k + n 2 { = . tp k 0 = k + k 1 }
-    : ~ i r 0
-    ~ < r n {
-        : u64 bi # u64 . bp r
-        : u64 t0 # u64 . tp 0
-        : u64 s0 ( nurl_mac_lo a0 bi t0 0 )
-        : ~ u64 c1 ( nurl_mac_hi a0 bi t0 0 )
-        : u64 q * s0 n0
-        // the low limb of s0 + q·m0 is 0 by construction: only its carry
-        : ~ u64 c2 ( nurl_mac_hi q m0 s0 0 )
-        : ~ i j 1
-        ~ < j n {
-            : u64 aj # u64 . ap j
-            : u64 mj # u64 . mp j
-            : u64 tj # u64 . tp j
-            : u64 s1 ( nurl_mac_lo aj bi tj c1 )
-            = c1 ( nurl_mac_hi aj bi tj c1 )
-            : u64 s2 ( nurl_mac_lo q mj s1 c2 )
-            = c2 ( nurl_mac_hi q mj s1 c2 )
-            = . tp - j 1 # i s2
-            = j + j 1
-        }
-        // t[n] + c1 + c2 → t[n-1], its carry above
-        : u64 tn # u64 . tp n
-        : u64 u1 ( nurl_addc_lo tn c1 0 )
-        : u64 k1 ( nurl_addc_hi tn c1 0 )
-        : u64 u2 ( nurl_addc_lo u1 c2 0 )
-        : u64 k2 ( nurl_addc_hi u1 c2 0 )
-        = . tp - n 1 # i u2
-        = . tp n # i + k1 k2
-        = r + r 1
-    }
-    // t < 2m: subtract m once, keep whichever is in range — by mask.
-    : ~ u64 bb 0
-    : ~ i j3 0
-    ~ < j3 n {
-        : u64 x # u64 . tp j3
-        : u64 y # u64 . mp j3
-        = . dp j3 # i ( nurl_subb_lo x y bb )
-        = bb ( nurl_subb_hi x y bb )
-        = j3 + j3 1
-    }
-    : i topb - . tp n # i bb
-    : i mask ? < topb 0 0 - 0 1
-    : i imask ^^ mask - 0 1
-    : *i op ( vec_data [i] dst )
-    = j3 0
-    ~ < j3 n { = . op j3 | & mask . dp j3 & imask . tp j3 = j3 + j3 1 }
+    : ~ u64 top 0
+    ? == n 16 { = top ( __rm_mul16 ap bp mp n0 qp ) } { = top ( __rm_mul_gen n ap bp mp n0 qp ) }
+    ( __rm_final n qp mp ( vec_data [i] . c d ) top dst )
 }
+
+// The n-limb FIPS multiply into qp (q digits, then the result); returns
+// the bit above the result. Every width without a kernel of its own, and
+// the reference those kernels are held to.
+unsafe @ __rm_mul_gen i n * i ap * i bp * i mp u64 n0 * i qp → u64 {
+    : u64 m0 # u64 . mp 0
+    : ~ u64 z0 0
+    : ~ u64 z1 0
+    : ~ u64 z2 0
+    : ~ i k 0
+    ~ < k n {
+        : ~ i i 0
+        ~ < i k {
+            ( __rm_acc z0 z1 z2 # u64 . ap i # u64 . bp - k i )
+            ( __rm_acc z0 z1 z2 # u64 . qp i # u64 . mp - k i )
+            = i + i 1
+        }
+        ( __rm_acc z0 z1 z2 # u64 . ap k # u64 . bp 0 )
+        ( __rm_qdigit z0 z1 z2 n0 m0 qp k )
+        = k + k 1
+    }
+    // Columns n … 2n−1: the result limbs. The q digits a column reads
+    // (index > k − n) are never the slot it writes (k − n): r overwrites
+    // q in place.
+    ~ < k * 2 n {
+        : ~ i i + - k n 1
+        ~ < i n {
+            ( __rm_acc z0 z1 z2 # u64 . ap i # u64 . bp - k i )
+            ( __rm_acc z0 z1 z2 # u64 . qp i # u64 . mp - k i )
+            = i + i 1
+        }
+        = . qp - k n # i z0
+        = z0 z1
+        = z1 z2
+        = z2 0
+        = k + k 1
+    }
+    ^ z0
+}
+
+// dst = a²·R^-1 mod m (a < m): _rm_mul_d with b = a, the cross products
+// of each column summed once and doubled.
+@ _rm_sqr_d RsaMont c ( Vec i ) dst ( Vec i ) a → v {
+    : i n . c n
+    : *i qp ( vec_data [i] . c t )
+    : *i ap ( vec_data [i] a )
+    : *i mp ( vec_data [i] . c m )
+    : u64 n0 # u64 . c n0
+    : ~ u64 top 0
+    ? == n 16 { = top ( __rm_sqr16 ap mp n0 qp ) } { = top ( __rm_sqr_gen n ap mp n0 qp ) }
+    ( __rm_final n qp mp ( vec_data [i] . c d ) top dst )
+}
+
+unsafe @ __rm_sqr_gen i n * i ap * i mp u64 n0 * i qp → u64 {
+    : u64 m0 # u64 . mp 0
+    : ~ u64 z0 0
+    : ~ u64 z1 0
+    : ~ u64 z2 0
+    : ~ i k 0
+    ~ < k * 2 n {
+        // a column's cross products a[i]·a[k−i], i < k − i, once
+        : i lo ? < k n 0 + - k n 1
+        : ~ u64 w0 0
+        : ~ u64 w1 0
+        : ~ u64 w2 0
+        : ~ i i lo
+        ~ < * 2 i k {
+            ( __rm_acc w0 w1 w2 # u64 . ap i # u64 . ap - k i )
+            = i + i 1
+        }
+        ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+        // the square on the diagonal
+        ? == & k 1 0 {
+            : u64 h # u64 . ap >> k 1
+            ( __rm_acc z0 z1 z2 h h )
+        } {}
+        // the reduction products q[i]·m[k−i]
+        : i qlo lo
+        : i qhi ? < k n k n
+        = i qlo
+        ~ < i qhi {
+            ( __rm_acc z0 z1 z2 # u64 . qp i # u64 . mp - k i )
+            = i + i 1
+        }
+        ? < k n {
+            ( __rm_qdigit z0 z1 z2 n0 m0 qp k )
+        } {
+            = . qp - k n # i z0
+            = z0 z1
+            = z1 z2
+            = z2 0
+        }
+        = k + k 1
+    }
+    ^ z0
+}
+
+// ── generated by tools/gen_rsa_kernels.py 16 — do not edit by hand ──
+// a·b·R^-1 into rp (n = 16 limbs, not yet reduced below m); returns
+// the bit above them. Straight-line: tools/gen_rsa_kernels.py.
+unsafe @ __rm_mul16 * i ap * i bp * i mp u64 n0 * i rp → u64 {
+    : ~ u64 z0 0
+    : ~ u64 z1 0
+    : ~ u64 z2 0
+    : ~ u64 x0 0
+    : ~ u64 x1 0
+    : ~ u64 x2 0
+    : ~ u64 y0 0
+    : ~ u64 y1 0
+    : ~ u64 y2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 0 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    : u64 q0 * z0 n0
+    ( __rm_acc z0 z1 z2 q0 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q1 * z0 n0
+    ( __rm_acc z0 z1 z2 q1 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q2 * z0 n0
+    ( __rm_acc z0 z1 z2 q2 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q3 * z0 n0
+    ( __rm_acc z0 z1 z2 q3 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q4 * z0 n0
+    ( __rm_acc z0 z1 z2 q4 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q5 * z0 n0
+    ( __rm_acc z0 z1 z2 q5 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q6 * z0 n0
+    ( __rm_acc z0 z1 z2 q6 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q7 * z0 n0
+    ( __rm_acc z0 z1 z2 q7 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q8 * z0 n0
+    ( __rm_acc z0 z1 z2 q8 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q9 * z0 n0
+    ( __rm_acc z0 z1 z2 q9 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q10 * z0 n0
+    ( __rm_acc z0 z1 z2 q10 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q11 * z0 n0
+    ( __rm_acc z0 z1 z2 q11 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q12 * z0 n0
+    ( __rm_acc z0 z1 z2 q12 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q13 * z0 n0
+    ( __rm_acc z0 z1 z2 q13 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q14 * z0 n0
+    ( __rm_acc z0 z1 z2 q14 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 0 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 1 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 0 )
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q15 * z0 n0
+    ( __rm_acc z0 z1 z2 q15 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 1 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 2 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 1 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 0 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 2 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 3 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 2 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 2 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 1 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 3 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 4 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 3 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 3 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 2 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 4 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 5 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 4 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 4 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 3 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 5 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 6 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 5 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 5 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 4 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 6 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 7 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 6 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 6 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 5 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 7 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 8 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 7 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 7 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 6 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 8 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 9 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 8 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 8 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 7 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 9 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 10 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 9 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 9 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 8 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 10 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 11 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 10 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 10 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 9 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 11 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 12 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 11 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 11 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 10 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 12 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 13 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 12 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 12 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 11 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 13 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 14 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 13 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 13 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 12 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 14 # u64 . bp 15 )
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 14 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 14 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 13 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_acc x0 x1 x2 # u64 . ap 15 # u64 . bp 15 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 15 )
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 14 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = x0 0 = x1 0 = x2 0 = y0 0 = y1 0 = y2 0
+    ( __rm_add3 z0 z1 z2 x0 x1 x2 )
+    = . rp 15 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    ^ z0
+}
+
+// a²·R^-1 into rp, as __rm_mul16 with each column's cross products
+// summed once and doubled.
+unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
+    : ~ u64 z0 0
+    : ~ u64 z1 0
+    : ~ u64 z2 0
+    : ~ u64 w0 0
+    : ~ u64 w1 0
+    : ~ u64 w2 0
+    : ~ u64 y0 0
+    : ~ u64 y1 0
+    : ~ u64 y2 0
+    ( __rm_acc z0 z1 z2 # u64 . ap 0 # u64 . ap 0 )
+    : u64 q0 * z0 n0
+    ( __rm_acc z0 z1 z2 q0 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 1 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q1 * z0 n0
+    ( __rm_acc z0 z1 z2 q1 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 2 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 1 # u64 . ap 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q2 * z0 n0
+    ( __rm_acc z0 z1 z2 q2 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 3 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 2 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q3 * z0 n0
+    ( __rm_acc z0 z1 z2 q3 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 4 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 3 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 2 # u64 . ap 2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q4 * z0 n0
+    ( __rm_acc z0 z1 z2 q4 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 5 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 4 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 3 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q5 * z0 n0
+    ( __rm_acc z0 z1 z2 q5 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 6 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 5 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 4 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 3 # u64 . ap 3 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q6 * z0 n0
+    ( __rm_acc z0 z1 z2 q6 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 7 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 6 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 5 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 4 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q7 * z0 n0
+    ( __rm_acc z0 z1 z2 q7 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 7 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 6 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 5 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 4 # u64 . ap 4 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q8 * z0 n0
+    ( __rm_acc z0 z1 z2 q8 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 7 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 6 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 5 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q9 * z0 n0
+    ( __rm_acc z0 z1 z2 q9 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 7 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 6 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 5 # u64 . ap 5 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q10 * z0 n0
+    ( __rm_acc z0 z1 z2 q10 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 7 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 6 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q11 * z0 n0
+    ( __rm_acc z0 z1 z2 q11 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 7 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 6 # u64 . ap 6 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q12 * z0 n0
+    ( __rm_acc z0 z1 z2 q12 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 8 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 7 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q13 * z0 n0
+    ( __rm_acc z0 z1 z2 q13 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 8 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 7 # u64 . ap 7 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q14 * z0 n0
+    ( __rm_acc z0 z1 z2 q14 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 0 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 9 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 8 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q0 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 1 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    : u64 q15 * z0 n0
+    ( __rm_acc z0 z1 z2 q15 # u64 . mp 0 )
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 1 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 9 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q1 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 2 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 1 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 8 # u64 . ap 8 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 0 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 2 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 10 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 9 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q2 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 3 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 2 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 1 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 3 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 10 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q3 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 4 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 3 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 9 # u64 . ap 9 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 2 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 4 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 11 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 10 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q4 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 5 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 4 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 3 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 5 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 11 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q5 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 6 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 5 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 10 # u64 . ap 10 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 4 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 6 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 12 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 10 # u64 . ap 11 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q6 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 7 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 6 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 5 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 7 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 10 # u64 . ap 12 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q7 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 8 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 7 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 11 # u64 . ap 11 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 6 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 8 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 10 # u64 . ap 13 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 11 # u64 . ap 12 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q8 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 9 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 8 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 7 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 9 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 10 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 11 # u64 . ap 13 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q9 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 10 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 9 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 12 # u64 . ap 12 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 8 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 10 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 11 # u64 . ap 14 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 12 # u64 . ap 13 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q10 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 11 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 10 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 9 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 11 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 12 # u64 . ap 14 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q11 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 12 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 11 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 13 # u64 . ap 13 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 10 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 12 # u64 . ap 15 )
+    ( __rm_acc w0 w1 w2 # u64 . ap 13 # u64 . ap 14 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q12 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 13 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 12 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 11 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 13 # u64 . ap 15 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q13 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 14 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 13 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 14 # u64 . ap 14 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 12 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = w0 0 = w1 0 = w2 0
+    ( __rm_acc w0 w1 w2 # u64 . ap 14 # u64 . ap 15 )
+    ( __rm_acc2 z0 z1 z2 w0 w1 w2 )
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q14 # u64 . mp 15 )
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 14 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 13 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = y0 0 = y1 0 = y2 0
+    ( __rm_acc y0 y1 y2 q15 # u64 . mp 15 )
+    ( __rm_acc z0 z1 z2 # u64 . ap 15 # u64 . ap 15 )
+    ( __rm_add3 z0 z1 z2 y0 y1 y2 )
+    = . rp 14 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    = . rp 15 # i z0
+    = z0 z1 = z1 z2 = z2 0
+    ^ z0
+}
+// ── end of generated kernels ──
 
 // dst = a + b mod m (a, b < m), constant time.
 @ __rm_add_d RsaMont c ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
@@ -310,7 +1726,7 @@ $ `stdlib/std/random.nu`
     : ~ i k 0
     ~ < k + * 64 n s { ( __rm_dbl_d c . c r2 ) = k + k 1 }
     = k 0
-    ~ < k h { ( _rm_mul_d c . c r2 . c r2 . c r2 ) = k + k 1 }
+    ~ < k h { ( _rm_sqr_d c . c r2 . c r2 ) = k + k 1 }
     // 1 in Montgomery form: R^2·1·R^-1.
     : ( Vec i ) one1 ( __rm_zeros n )
     ( vec_put [i] one1 0 1 )
@@ -390,10 +1806,10 @@ $ `stdlib/std/random.nu`
         : u64 limb # u64 . ep li
         : ~ i nib 15
         ~ >= nib 0 {
-            ( _rm_mul_d c acc acc acc )
-            ( _rm_mul_d c acc acc acc )
-            ( _rm_mul_d c acc acc acc )
-            ( _rm_mul_d c acc acc acc )
+            ( _rm_sqr_d c acc acc )
+            ( _rm_sqr_d c acc acc )
+            ( _rm_sqr_d c acc acc )
+            ( _rm_sqr_d c acc acc )
             : u64 dig & >> limb # u64 * nib 4 15
             = j 0
             ~ < j n { = . sp j 0 = j + j 1 }
@@ -425,7 +1841,7 @@ $ `stdlib/std/random.nu`
         : i by ( __rm_get e k )
         : ~ i bit 7
         ~ >= bit 0 {
-            ( _rm_mul_d c acc acc acc )
+            ( _rm_sqr_d c acc acc )
             ? != & >> by bit 1 0 { ( _rm_mul_d c acc acc base ) } {}
             = bit - bit 1
         }

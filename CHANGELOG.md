@@ -49,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **RSA-2048 signing 19 % faster (0.98 → 0.79 ms locally).** `std/rsa_mont`'s
+  Montgomery multiply is now FIPS (product scanning with the reduction
+  interleaved, the column sum in registers) instead of FIOS, with a
+  dedicated squaring (each column's cross products once, doubled) for the
+  four in five operations of an exponentiation that are squarings; and
+  for 16 limbs — RSA-2048's CRT halves — both are generated straight-line
+  kernels (`tools/gen_rsa_kernels.py`) whose a·b and q·m sums run as two
+  carry chains side by side. `compiler/tests/rsa_mont_kernels` holds the
+  exponentiation at 15, 16, 17, 24 and 32 limbs to `std/bigint`. The rest
+  of the gap to aws-lc (0.25 ms) is the per-product cost that mulx +
+  adcx/adox remove (agora #95).
 - **ML-KEM-768 a third faster: encapsulation 21.9 → 14.8 µs, decapsulation
   26.3 → 15.8 µs, key generation 22.2 → 17.0 µs** (local i7-11850H, where
   aws-lc-rs encapsulates in 15.0). Profiled with hardware counters, the
