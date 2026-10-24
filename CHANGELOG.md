@@ -268,6 +268,11 @@ blob, and `quic_tls_srv_new` / `quic_tls_srv_set_pq` take a `TlsIdent`
 
 ### Security
 
+- The JavaScript tooling (`webdocs/`, `cloudflare/`, `registry/`) pins
+  `undici` to 7.30.1 or later (GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472,
+  GHSA-xjj6-f33q-929c), reached through `wrangler > miniflare`, which
+  still pins 7.29.1. Development and deploy tooling only; nothing of it
+  ships in the toolchain.
 - **`nurlpkg login` on Windows no longer writes the registry token into
   the current directory.** `stdlib/ext/credentials.nu` found the home
   directory through `$HOME` alone and fell back to `.` — and `HOME` is

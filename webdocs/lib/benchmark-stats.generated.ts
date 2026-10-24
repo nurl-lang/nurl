@@ -2,8 +2,8 @@
 export const benchmarkStats = {
   "benchmarks": 20,
   "languages": 5,
-  "generated": "2026-10-23",
-  "runUrl": "https://github.com/nurl-lang/nurl/actions/runs/40012927414",
+  "generated": "2026-10-24",
+  "runUrl": "https://github.com/nurl-lang/nurl/actions/runs/40083465235",
   "host": "GitHub Actions ubuntu-latest runner",
   "columns": [
     "NURL",
@@ -17,11 +17,11 @@ export const benchmarkStats = {
       "name": "lcg",
       "blurb": "20M-step 64-bit LCG + xorshift",
       "values": [
-        "30 ms",
-        "30 ms",
-        "32 ms",
-        "1,134 ms",
-        "3,070 ms"
+        "39 ms",
+        "39 ms",
+        "39 ms",
+        "1,934 ms",
+        "5,072 ms"
       ],
       "nurlWins": false
     },
@@ -29,11 +29,11 @@ export const benchmarkStats = {
       "name": "packet_classifier",
       "blurb": "25M unpredictable branches",
       "values": [
-        "43 ms",
-        "44 ms",
-        "43 ms",
-        "133 ms",
-        "2,662 ms"
+        "56 ms",
+        "56 ms",
+        "56 ms",
+        "161 ms",
+        "4,653 ms"
       ],
       "nurlWins": false
     },
@@ -41,11 +41,11 @@ export const benchmarkStats = {
       "name": "ring_write",
       "blurb": "20M ring-buffer stores",
       "values": [
-        "30 ms",
-        "30 ms",
-        "30 ms",
-        "52 ms",
-        "3,756 ms"
+        "42 ms",
+        "42 ms",
+        "42 ms",
+        "65 ms",
+        "6,343 ms"
       ],
       "nurlWins": false
     },
@@ -53,11 +53,11 @@ export const benchmarkStats = {
       "name": "histogram_bins",
       "blurb": "20M binned increments",
       "values": [
-        "30 ms",
-        "30 ms",
-        "30 ms",
-        "52 ms",
-        "3,470 ms"
+        "41 ms",
+        "41 ms",
+        "41 ms",
+        "66 ms",
+        "6,073 ms"
       ],
       "nurlWins": false
     },
@@ -65,11 +65,11 @@ export const benchmarkStats = {
       "name": "prefix_scan",
       "blurb": "1M 16-wide prefix scans",
       "values": [
-        "16 ms",
-        "16 ms",
-        "17 ms",
-        "51 ms",
-        "2,628 ms"
+        "22 ms",
+        "22 ms",
+        "22 ms",
+        "65 ms",
+        "4,831 ms"
       ],
       "nurlWins": false
     },
@@ -77,11 +77,11 @@ export const benchmarkStats = {
       "name": "binary_search",
       "blurb": "5M lower-bound searches",
       "values": [
-        "15 ms",
-        "15 ms",
-        "16 ms",
-        "71 ms",
-        "3,531 ms"
+        "38 ms",
+        "38 ms",
+        "41 ms",
+        "107 ms",
+        "6,728 ms"
       ],
       "nurlWins": false
     },
@@ -89,11 +89,11 @@ export const benchmarkStats = {
       "name": "sort_window",
       "blurb": "2M 8-element bubble sorts",
       "values": [
-        "21 ms",
-        "21 ms",
-        "21 ms",
-        "139 ms",
-        "6,676 ms"
+        "27 ms",
+        "27 ms",
+        "27 ms",
+        "200 ms",
+        "11,503 ms"
       ],
       "nurlWins": false
     },
@@ -101,11 +101,11 @@ export const benchmarkStats = {
       "name": "bloom_filter",
       "blurb": "4M Bloom-filter queries",
       "values": [
-        "9.1 ms",
-        "9.2 ms",
-        "9.5 ms",
-        "1,710 ms",
-        "4,493 ms"
+        "16 ms",
+        "18 ms",
+        "18 ms",
+        "2,831 ms",
+        "7,479 ms"
       ],
       "nurlWins": true
     },
@@ -113,11 +113,11 @@ export const benchmarkStats = {
       "name": "hash_join",
       "blurb": "5M hash-table probes",
       "values": [
-        "17 ms",
-        "18 ms",
-        "19 ms",
-        "2,026 ms",
-        "4,665 ms"
+        "27 ms",
+        "28 ms",
+        "29 ms",
+        "3,390 ms",
+        "8,361 ms"
       ],
       "nurlWins": true
     },
@@ -125,11 +125,11 @@ export const benchmarkStats = {
       "name": "sieve",
       "blurb": "Sieve of Eratosthenes to 10M",
       "values": [
-        "13 ms",
-        "12 ms",
-        "13 ms",
-        "47 ms",
-        "1,928 ms"
+        "19 ms",
+        "18 ms",
+        "18 ms",
+        "66 ms",
+        "3,276 ms"
       ],
       "nurlWins": false
     },
@@ -137,11 +137,11 @@ export const benchmarkStats = {
       "name": "fib",
       "blurb": "Recursive fib(35)",
       "values": [
-        "20 ms",
-        "20 ms",
-        "20 ms",
-        "81 ms",
-        "702 ms"
+        "30 ms",
+        "30 ms",
+        "30 ms",
+        "131 ms",
+        "1,372 ms"
       ],
       "nurlWins": false
     },
@@ -149,11 +149,11 @@ export const benchmarkStats = {
       "name": "collatz",
       "blurb": "Longest Collatz chain below 100k",
       "values": [
-        "9.7 ms",
-        "9.7 ms",
-        "10 ms",
-        "40 ms",
-        "429 ms"
+        "12 ms",
+        "12 ms",
+        "12 ms",
+        "51 ms",
+        "740 ms"
       ],
       "nurlWins": false
     },
@@ -161,11 +161,11 @@ export const benchmarkStats = {
       "name": "matmul",
       "blurb": "256x256 integer matrix product",
       "values": [
-        "21 ms",
-        "21 ms",
-        "21 ms",
-        "52 ms",
-        "1,817 ms"
+        "33 ms",
+        "33 ms",
+        "33 ms",
+        "75 ms",
+        "3,145 ms"
       ],
       "nurlWins": false
     },
@@ -173,11 +173,11 @@ export const benchmarkStats = {
       "name": "json_parse",
       "blurb": "20 parses of a 64 KB document",
       "values": [
-        "5.2 ms",
-        "5.6 ms",
-        "7.3 ms",
-        "26 ms",
-        "26 ms"
+        "8.2 ms",
+        "8.6 ms",
+        "12 ms",
+        "36 ms",
+        "39 ms"
       ],
       "nurlWins": true
     },
@@ -185,21 +185,21 @@ export const benchmarkStats = {
       "name": "nbody",
       "blurb": "500k n-body integration steps",
       "values": [
-        "17 ms",
         "25 ms",
-        "18 ms",
-        "66 ms",
-        "1,545 ms"
+        "40 ms",
+        "25 ms",
+        "102 ms",
+        "3,048 ms"
       ],
-      "nurlWins": true
+      "nurlWins": false
     },
     {
       "name": "chacha20",
       "blurb": "ChaCha20 over 16 MiB (RFC 8439)",
       "values": [
-        "7.3 ms",
-        "21 ms",
-        "20 ms",
+        "7.2 ms",
+        "42 ms",
+        "34 ms",
         "n/a",
         "n/a"
       ],
@@ -209,9 +209,9 @@ export const benchmarkStats = {
       "name": "poly1305",
       "blurb": "Poly1305 MACs over 64 MiB (RFC 8439)",
       "values": [
-        "15 ms",
-        "27 ms",
-        "16 ms",
+        "12 ms",
+        "32 ms",
+        "21 ms",
         "n/a",
         "n/a"
       ],
@@ -221,9 +221,9 @@ export const benchmarkStats = {
       "name": "blake2b",
       "blurb": "BLAKE2b-512 over 32 MiB (RFC 7693)",
       "values": [
-        "27 ms",
-        "43 ms",
-        "49 ms",
+        "44 ms",
+        "65 ms",
+        "69 ms",
         "n/a",
         "n/a"
       ],
@@ -233,9 +233,9 @@ export const benchmarkStats = {
       "name": "sha512",
       "blurb": "SHA-512 over 16 MiB (FIPS 180-4)",
       "values": [
-        "31 ms",
-        "34 ms",
-        "33 ms",
+        "47 ms",
+        "51 ms",
+        "50 ms",
         "n/a",
         "n/a"
       ],
@@ -245,9 +245,9 @@ export const benchmarkStats = {
       "name": "x25519",
       "blurb": "1000 chained X25519 scalar mults (RFC 7748)",
       "values": [
-        "28 ms",
-        "31 ms",
-        "32 ms",
+        "44 ms",
+        "49 ms",
+        "50 ms",
         "n/a",
         "n/a"
       ],
