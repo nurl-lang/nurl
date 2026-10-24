@@ -49,6 +49,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ChaCha20-Poly1305 sealing a 16 KB record: 8.5 → 5.9 µs locally,
+  93 % of aws-lc-rs (5.45 µs).** Poly1305 (`std/chacha20poly1305`) now
+  runs four blocks at a time on 256-bit vectors where the CPU has them:
+  radix-2^26 limbs, one `vpmuludq` a product, two accumulators taking the
+  64-byte groups in turn under r^8 and the last two groups under per-lane
+  powers r^8 … r^1 (the OpenSSL / aws-lc AVX2 shape), with the key's
+  power table built once per MAC into the record's scratch — 16 KB in
+  1.75 µs instead of 3.8. The scalar radix-2^64 blocks stay for short
+  inputs and CPUs without AVX2. The eight-block ChaCha20 kernel went from
+  4.35 to 3.95 µs (79 % of OpenSSL's AVX2 code) through the compiler fixes
+  below. New gates: `chacha20poly1305_wycheproof` (all 325 Wycheproof
+  cases, incl. modified tags, through the Vec API and in place),
+  `chacha20poly1305_sweep` (every length 0–1100 plus 4 and 16 KB, with and
+  without AAD, against a Python RFC 8439 reference; each record also
+  opens back and fails with one tag bit flipped), and machine-code checks
+  in `simd_dispatch_ir.sh`.
+- **The v256 layer has 64-bit lane arithmetic** — `nurl_v256_add64`,
+  `_mul32u`, `_shl64`, `_shr64`, as `v128` has — and three lowering fixes
+  that the obvious IR missed: a rotate by a whole number of bytes
+  (`nurl_v256_rotl32` by 8, 16, 24) is emitted as a byte permutation,
+  because as a funnel shift the x86 backend reassociated ChaCha20's
+  `rotl(rotl(t, 16) ^ a, 8)` into a third shuffle per pair, twelve more a
+  double round on the port that runs them; every broadcast and `set` is
+  built on `poison`, not `undef` (an `undef` lane kept a mask on a
+  broadcast vector-wide, where the backend cannot see it from inside a
+  loop); and Poly1305's kernel carries its accumulator across the loop
+  uncarried, so each multiplied limb is derived — mask and all — in the
+  block that multiplies it (a loop-carried limb lowered as three
+  multiplies and two shifts).
 - **X25519 key generation 37 % faster: 18.3 → 11.6 µs locally (aws-lc-rs
   8.2).** The public key (`x25519_base`) ran a 4-tooth comb: 64 windows,
   each a doubling, a scan of sixteen table entries and a mixed addition.

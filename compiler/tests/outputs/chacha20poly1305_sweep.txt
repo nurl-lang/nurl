@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sweep: 2214 records, 0 failures
+chain 4935847d7689fe4f69f3092922064dea6e6c439fc0bf98b7c6b1f3f2d692fdd8

@@ -978,10 +978,18 @@ inline @ __poly_block inout u64 h0 inout u64 h1 inout u64 h2 u64 t0 u64 t1 u64 p
 // `len` bytes at `p` into the accumulator as ⌈len/16⌉ blocks, a short
 // last one zero-padded to 16 and still carrying the 2^128 bit — the
 // AEAD's pad16 (RFC 8439 §2.8), so the MAC input is fed from where its
-// pieces lie instead of concatenated into a buffer of its own.
-unsafe @ __poly_feed16 inout u64 h0 inout u64 h1 inout u64 h2 * u p i len u64 kr0 u64 kr1 u64 ks1 → v {
+// pieces lie instead of concatenated into a buffer of its own. With
+// `wide` (the caller built __poly_wide_key's table at `st`), whole
+// 64-byte groups of a piece of 64 bytes or more go four blocks at a time.
+unsafe @ __poly_feed16 inout u64 h0 inout u64 h1 inout u64 h2 * u p i len u64 kr0 u64 kr1 u64 ks1 * u st b wide → v {
     : i full & len -16
     : ~ i off 0
+    ? & wide >= full 64 {
+        : *u64 sp # *u64 st
+        = . sp 0 h0 = . sp 1 h1 = . sp 2 h2
+        = off ( __poly_wide st p full )
+        = h0 . sp 0 = h1 . sp 1 = h2 . sp 2
+    } {}
     ~ < off full {
         ( __poly_block h0 h1 h2 # u64 ( __ld64 p off ) # u64 ( __ld64 p + off 8 ) 1 kr0 kr1 ks1 )
         = off + off 16
@@ -1010,6 +1018,293 @@ unsafe @ __poly_finish u64 h0 u64 h1 u64 h2 * u sp * u out → v {
     ( nurl_v128_st # s out ( nurl_v128_set64 # i w0 # i w1 ) )
 }
 
+// ── Poly1305, four blocks at a time ─────────────────────────────────
+// The radix-2^64 block above is a chain: each block's product waits on
+// the last one's, so the multiplier sits idle most of every block. The
+// vector form (Goll–Gueron, OpenSSL's and aws-lc's AVX2 Poly1305) breaks
+// the chain into four: lane j of five v256 limb vectors (radix 2^26, one
+// 64-bit lane per block, every limb product one `vpmuludq`) accumulates
+// blocks j, j+4, j+8, …, each group of four as
+//
+//     H ← (H + M) · r^4
+//
+// and the last group instead by r^4, r^3, r^2, r^1 per lane, so that every
+// block ends up multiplied by the power of r its position calls for. The
+// lanes then add up to the scalar accumulator. Constant time: the same
+// instructions for every input. Run where 256-bit vectors are native
+// (the x86-64-v3 clone), like ChaCha20's eight-block kernel.
+//
+// Limbs stay below 2^27 between groups and r^k's below 2^27 (5·r^k's below
+// 2^30), so every product fits vpmuludq's 32×32 → 64 and a five-term sum
+// stays below 2^60.
+
+// A 130-bit (w0, w1, w2) as five 26-bit limbs, the top one taking w2's
+// bits whole. Every caller's w2 is below 8 (__poly_block keeps h2 there),
+// so the top limb is below 2^27, and the mask says so: it is what lets the
+// compiler see that every limb fits vpmuludq's 32 bits, and multiply a
+// loop-invariant broadcast of one with a single instruction.
+inline @ __pv_limbs u64 w0 u64 w1 u64 w2 inout u64 l0 inout u64 l1 inout u64 l2 inout u64 l3 inout u64 l4 → v {
+    = l0 & w0 67108863
+    = l1 & >> w0 26 67108863
+    = l2 & | >> w0 52 << w1 12 67108863
+    = l3 & >> w1 14 67108863
+    = l4 & | >> w1 40 << w2 24 134217727
+}
+
+// Four blocks at `p` as limb vectors. The two loads hold blocks 0, 1 and
+// 2, 3; interleaving their 64-bit halves puts blocks 0, 2, 1, 3 in lanes
+// 0 … 3 — an order the final powers follow, so no cross-lane permute.
+// Every block carries its 2^128 bit (limb 4, bit 24).
+inline @ __pv_msg * u p inout v256 m0 inout v256 m1 inout v256 m2 inout v256 m3 inout v256 m4 → v {
+    : v256 a ( nurl_v256_ld # s p )
+    : v256 b ( nurl_v256_ld # s + # i p 32 )
+    : v256 lo ( nurl_v256_unpacklo64 a b )
+    : v256 hi ( nurl_v256_unpackhi64 a b )
+    : v256 mk ( nurl_v256_bcast64 67108863 )
+    = m0 ( nurl_v256_and lo mk )
+    = m1 ( nurl_v256_and ( nurl_v256_shr64 lo 26 ) mk )
+    = m2 ( nurl_v256_and ( nurl_v256_or ( nurl_v256_shr64 lo 52 ) ( nurl_v256_shl64 hi 12 ) ) mk )
+    = m3 ( nurl_v256_and ( nurl_v256_shr64 hi 14 ) mk )
+    = m4 ( nurl_v256_or ( nurl_v256_shr64 hi 40 ) ( nurl_v256_bcast64 16777216 ) )
+}
+
+// One lane's limb: low 26 bits kept, the rest carried into `into`.
+inline @ __pv_carry inout v256 from inout v256 into → v {
+    = into ( nurl_v256_add64 into ( nurl_v256_shr64 from 26 ) )
+    = from ( nurl_v256_and from ( nurl_v256_bcast64 67108863 ) )
+}
+
+// d ← h · r per lane (s_i = 5·r_i: 2^130 ≡ 5): the five 64-bit column
+// sums, not yet carried back to 26-bit limbs (__pv_norm).
+inline @ __pv_prod inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout v256 d4 v256 h0 v256 h1 v256 h2 v256 h3 v256 h4 v256 k0 v256 k1 v256 k2 v256 k3 v256 k4 v256 s1 v256 s2 v256 s3 v256 s4 → v {
+    = d0 ( nurl_v256_mul32u h0 k0 )
+    = d1 ( nurl_v256_mul32u h0 k1 )
+    = d2 ( nurl_v256_mul32u h0 k2 )
+    = d3 ( nurl_v256_mul32u h0 k3 )
+    = d4 ( nurl_v256_mul32u h0 k4 )
+    = d0 ( nurl_v256_add64 d0 ( nurl_v256_mul32u h1 s4 ) )
+    = d1 ( nurl_v256_add64 d1 ( nurl_v256_mul32u h1 k0 ) )
+    = d2 ( nurl_v256_add64 d2 ( nurl_v256_mul32u h1 k1 ) )
+    = d3 ( nurl_v256_add64 d3 ( nurl_v256_mul32u h1 k2 ) )
+    = d4 ( nurl_v256_add64 d4 ( nurl_v256_mul32u h1 k3 ) )
+    = d0 ( nurl_v256_add64 d0 ( nurl_v256_mul32u h2 s3 ) )
+    = d1 ( nurl_v256_add64 d1 ( nurl_v256_mul32u h2 s4 ) )
+    = d2 ( nurl_v256_add64 d2 ( nurl_v256_mul32u h2 k0 ) )
+    = d3 ( nurl_v256_add64 d3 ( nurl_v256_mul32u h2 k1 ) )
+    = d4 ( nurl_v256_add64 d4 ( nurl_v256_mul32u h2 k2 ) )
+    = d0 ( nurl_v256_add64 d0 ( nurl_v256_mul32u h3 s2 ) )
+    = d1 ( nurl_v256_add64 d1 ( nurl_v256_mul32u h3 s3 ) )
+    = d2 ( nurl_v256_add64 d2 ( nurl_v256_mul32u h3 s4 ) )
+    = d3 ( nurl_v256_add64 d3 ( nurl_v256_mul32u h3 k0 ) )
+    = d4 ( nurl_v256_add64 d4 ( nurl_v256_mul32u h3 k1 ) )
+    = d0 ( nurl_v256_add64 d0 ( nurl_v256_mul32u h4 s1 ) )
+    = d1 ( nurl_v256_add64 d1 ( nurl_v256_mul32u h4 s2 ) )
+    = d2 ( nurl_v256_add64 d2 ( nurl_v256_mul32u h4 s3 ) )
+    = d3 ( nurl_v256_add64 d3 ( nurl_v256_mul32u h4 s4 ) )
+    = d4 ( nurl_v256_add64 d4 ( nurl_v256_mul32u h4 k0 ) )
+}
+
+// The column sums back to 26-bit limbs (the top one a little over):
+// OpenSSL's order, two chains interleaved, the top carry folded into
+// limb 0 as ×5.
+inline @ __pv_norm inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout v256 d4 → v {
+    ( __pv_carry d3 d4 )
+    ( __pv_carry d0 d1 )
+    // d4's carry wraps to d0 as ×5
+    : v256 c4 ( nurl_v256_shr64 d4 26 )
+    = d4 ( nurl_v256_and d4 ( nurl_v256_bcast64 67108863 ) )
+    = d0 ( nurl_v256_add64 d0 ( nurl_v256_add64 c4 ( nurl_v256_shl64 c4 2 ) ) )
+    ( __pv_carry d1 d2 )
+    ( __pv_carry d2 d3 )
+    ( __pv_carry d0 d1 )
+    ( __pv_carry d3 d4 )
+}
+
+// The key's table for __poly_wide, at `st + 32` (the accumulator's three
+// words are at `st`): four sets of multipliers, each nine vectors — the
+// five limbs of a power of r per lane and the fives of the top four
+// (2^130 ≡ 5) — 288 bytes a set:
+//
+//     t +   0   r^4 in every lane          one group alone (an odd count)
+//     t + 288   r^8 in every lane          the two-group loop
+//     t + 576   r^8, r^6, r^7, r^5         the second-to-last group
+//     t + 864   r^4, r^2, r^3, r^1         the last group
+//
+// (lanes hold blocks 0, 2, 1, 3 — __pv_msg), and past them, at
+// `st + 1184`, the limbs of r^1 … r^8 they are made from: `st` is 1504
+// bytes of scratch. The table is MEMORY on purpose, as in OpenSSL's and aws-lc's:
+// the kernel loads it, so its multipliers are values the compiler knows
+// nothing about and masks next to each `vpmuludq`. Built in the kernel
+// itself, a broadcast of a limb the optimiser had proven small left the
+// loop as a vector whose bounds the backend could no longer see, and
+// every product cost three multiplies. r = (kr0, kr1), clamped.
+unsafe @ __poly_wide_key * u st u64 kr0 u64 kr1 → v {
+    : u64 s1 + kr1 >> kr1 2
+    : *u64 pp # *u64 + # i st 1184
+    // pp[5(k−1) + i] = limb i of r^k, k = 1 … 8, by the scalar block
+    // (h = r^k, no message)
+    : ~ u64 a0 kr0
+    : ~ u64 a1 kr1
+    : ~ u64 a2 0
+    : ~ i k 0
+    ~ < k 8 {
+        : ~ u64 l0 0
+        : ~ u64 l1 0
+        : ~ u64 l2 0
+        : ~ u64 l3 0
+        : ~ u64 l4 0
+        ( __pv_limbs a0 a1 a2 l0 l1 l2 l3 l4 )
+        : i o * k 5
+        = . pp o l0 = . pp + o 1 l1 = . pp + o 2 l2 = . pp + o 3 l3 = . pp + o 4 l4
+        ( __poly_block a0 a1 a2 0 0 0 kr0 kr1 s1 )
+        = k + k 1
+    }
+    : i t + # i st 32
+    ( __pv_put_set t pp 4 4 4 4 )
+    ( __pv_put_set + t 288 pp 8 8 8 8 )
+    ( __pv_put_set + t 576 pp 8 6 7 5 )
+    ( __pv_put_set + t 864 pp 4 2 3 1 )
+}
+
+// One set at `at`: lane j gets r^(e_j) (exponents a, b, c, d), limbs from
+// the power table `pp` (__poly_wide_key).
+unsafe @ __pv_put_set i at * u64 pp i a i b i c i d → v {
+    : ~ i li 0
+    ~ < li 5 {
+        : u64 xa . pp + * - a 1 5 li
+        : u64 xb . pp + * - b 1 5 li
+        : u64 xc . pp + * - c 1 5 li
+        : u64 xd . pp + * - d 1 5 li
+        ( nurl_v256_st # s + at * li 32 ( nurl_v256_set64 # i xa # i xb # i xc # i xd ) )
+        ? > li 0 {
+            ( nurl_v256_st # s + + at 128 * li 32 ( nurl_v256_set64 # i * xa 5 # i * xb 5 # i * xc 5 # i * xd 5 ) )
+        } {}
+        = li + li 1
+    }
+}
+
+// d ← h · (the set at `at`), per lane, uncarried.
+inline @ __pv_mulset inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout v256 d4 v256 h0 v256 h1 v256 h2 v256 h3 v256 h4 i at → v {
+    ( __pv_prod d0 d1 d2 d3 d4 h0 h1 h2 h3 h4
+    ( nurl_v256_ld # s at ) ( nurl_v256_ld # s + at 32 ) ( nurl_v256_ld # s + at 64 )
+    ( nurl_v256_ld # s + at 96 ) ( nurl_v256_ld # s + at 128 )
+    ( nurl_v256_ld # s + at 160 ) ( nurl_v256_ld # s + at 192 ) ( nurl_v256_ld # s + at 224 )
+    ( nurl_v256_ld # s + at 256 ) )
+}
+
+// One group: d holds the accumulator as uncarried column sums; carry it
+// to limbs, add the four blocks at `p`, multiply by the set at `at`.
+//
+// The accumulator crosses the loop's back edge UNCARRIED on purpose. A
+// limb vector that crosses it is, to the code generator, a value from
+// another block whose high bits it cannot know — while the optimiser,
+// which can prove them zero, has dropped the mask `vpmuludq` needs — and
+// the product then costs three multiplies and two shifts. Carried here,
+// each limb is derived in the block that multiplies it, mask and all.
+inline @ __pv_step inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout v256 d4 * u p i at → v {
+    ( __pv_norm d0 d1 d2 d3 d4 )
+    : ~ v256 m0 ( nurl_v256_zero )
+    : ~ v256 m1 ( nurl_v256_zero )
+    : ~ v256 m2 ( nurl_v256_zero )
+    : ~ v256 m3 ( nurl_v256_zero )
+    : ~ v256 m4 ( nurl_v256_zero )
+    ( __pv_msg p m0 m1 m2 m3 m4 )
+    : v256 h0 ( nurl_v256_add64 d0 m0 )
+    : v256 h1 ( nurl_v256_add64 d1 m1 )
+    : v256 h2 ( nurl_v256_add64 d2 m2 )
+    : v256 h3 ( nurl_v256_add64 d3 m3 )
+    : v256 h4 ( nurl_v256_add64 d4 m4 )
+    ( __pv_mulset d0 d1 d2 d3 d4 h0 h1 h2 h3 h4 at )
+}
+
+// Whole 64-byte groups of the `n` bytes at `p` (n ≥ 64) into the
+// accumulator (h0, h1, h2) held at `st`, under the table
+// __poly_wide_key built there. Returns the bytes consumed, a multiple of
+// 64. Two accumulators, A and B, take the groups in turn, each
+// multiplied by r^8 — two independent chains, so one group's multiply
+// overlaps the other's carries — and the last two groups by the per-lane
+// powers that put every block where its position says: block 4g + b of
+// N blocks ends up multiplied by r^(N − 4g − b). An odd group count
+// starts with one group alone by r^4. Callers ask __poly_wide_ok first,
+// so the x86-64-v3 clone is the one that runs (the baseline clone is the
+// same arithmetic in SSE2 halves: correct, never chosen).
+unsafe simd @ __poly_wide * u st * u p i n → i {
+    : *u64 sp # *u64 st
+    : i t + # i st 32
+    // the accumulator so far, in lane 0 of A
+    : ~ u64 q0 0
+    : ~ u64 q1 0
+    : ~ u64 q2 0
+    : ~ u64 q3 0
+    : ~ u64 q4 0
+    ( __pv_limbs . sp 0 . sp 1 . sp 2 q0 q1 q2 q3 q4 )
+    : ~ v256 a0 ( nurl_v256_set64 # i q0 0 0 0 )
+    : ~ v256 a1 ( nurl_v256_set64 # i q1 0 0 0 )
+    : ~ v256 a2 ( nurl_v256_set64 # i q2 0 0 0 )
+    : ~ v256 a3 ( nurl_v256_set64 # i q3 0 0 0 )
+    : ~ v256 a4 ( nurl_v256_set64 # i q4 0 0 0 )
+    : ~ v256 b0 ( nurl_v256_zero )
+    : ~ v256 b1 ( nurl_v256_zero )
+    : ~ v256 b2 ( nurl_v256_zero )
+    : ~ v256 b3 ( nurl_v256_zero )
+    : ~ v256 b4 ( nurl_v256_zero )
+    : i k / n 64
+    : i used * k 64
+    : i base # i p
+    ? == k 1 {
+        ( __pv_step a0 a1 a2 a3 a4 p + t 864 )
+    } {
+        : ~ i off 0
+        ? == % k 2 1 {
+            ( __pv_step a0 a1 a2 a3 a4 p t )
+            = off 64
+        } {}
+        ~ < + off 128 used {
+            ( __pv_step a0 a1 a2 a3 a4 # *u + base off + t 288 )
+            ( __pv_step b0 b1 b2 b3 b4 # *u + + base off 64 + t 288 )
+            = off + off 128
+        }
+        ( __pv_step a0 a1 a2 a3 a4 # *u + base off + t 576 )
+        ( __pv_step b0 b1 b2 b3 b4 # *u + + base off 64 + t 864 )
+    }
+    ( __pv_norm a0 a1 a2 a3 a4 )
+    ( __pv_norm b0 b1 b2 b3 b4 )
+    = a0 ( nurl_v256_add64 a0 b0 )
+    = a1 ( nurl_v256_add64 a1 b1 )
+    = a2 ( nurl_v256_add64 a2 b2 )
+    = a3 ( nurl_v256_add64 a3 b3 )
+    = a4 ( nurl_v256_add64 a4 b4 )
+    // add the lanes up, back to radix 2^64
+    : u64 t0 + + + ( nurl_v256_get64 a0 0 ) ( nurl_v256_get64 a0 1 ) ( nurl_v256_get64 a0 2 ) ( nurl_v256_get64 a0 3 )
+    : u64 t1 + + + ( nurl_v256_get64 a1 0 ) ( nurl_v256_get64 a1 1 ) ( nurl_v256_get64 a1 2 ) ( nurl_v256_get64 a1 3 )
+    : u64 t2 + + + ( nurl_v256_get64 a2 0 ) ( nurl_v256_get64 a2 1 ) ( nurl_v256_get64 a2 2 ) ( nurl_v256_get64 a2 3 )
+    : u64 t3 + + + ( nurl_v256_get64 a3 0 ) ( nurl_v256_get64 a3 1 ) ( nurl_v256_get64 a3 2 ) ( nurl_v256_get64 a3 3 )
+    : u64 t4 + + + ( nurl_v256_get64 a4 0 ) ( nurl_v256_get64 a4 1 ) ( nurl_v256_get64 a4 2 ) ( nurl_v256_get64 a4 3 )
+    : u64 x + t0 << t1 26
+    : u64 lo2 << t2 52
+    : u64 w0 ( nurl_addc_lo x lo2 0 )
+    : u64 c0 ( nurl_addc_hi x lo2 0 )
+    : u64 y + >> t2 12 << t3 14
+    : u64 lo4 << t4 40
+    : u64 w1 ( nurl_addc_lo y lo4 c0 )
+    : u64 w2 + >> t4 24 ( nurl_addc_hi y lo4 c0 )
+    // fold the bits above 2^130 (×5) so h2 is back below 8
+    : u64 f * >> w2 2 5
+    = . sp 0 ( nurl_addc_lo w0 f 0 )
+    : u64 k0 ( nurl_addc_hi w0 f 0 )
+    = . sp 1 ( nurl_addc_lo w1 0 k0 )
+    = . sp 2 + & w2 3 ( nurl_addc_hi w1 0 k0 )
+    ^ used
+}
+
+// Is the vector kernel worth building a table for, for a MAC over
+// `len` bytes? It needs 256-bit vectors, and below 256 bytes its setup —
+// three scalar products for r's powers, the table, the lane sum — costs
+// more than it saves.
+@ __poly_wide_ok i len → b {
+    ^ & >= len 256 != 0 # i ( nurl_cpu_x86_v3 )
+}
+
 // otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
 @ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
     : *u kp ( vec_data [u] otk )
@@ -1026,6 +1321,16 @@ unsafe @ __poly_finish u64 h0 u64 h1 u64 h2 * u sp * u out → v {
     : *u mp ( vec_data [u] msg )
     : i full & mlen -16
     : ~ i off 0
+    // The tag's buffer is __poly_wide's scratch until the tag is written.
+    : ( Vec u ) tag ( vec_with_cap [u] 1504 )
+    ? ( __poly_wide_ok full ) {
+        : *u st ( vec_data [u] tag )
+        : *u64 sp # *u64 st
+        ( __poly_wide_key st r0 r1 )
+        = . sp 0 h0 = . sp 1 h1 = . sp 2 h2
+        = off ( __poly_wide st mp full )
+        = h0 . sp 0 = h1 . sp 1 = h2 . sp 2
+    } {}
     ~ < off full {
         ( __poly_block h0 h1 h2 # u64 ( __ld64 mp off ) # u64 ( __ld64 mp + off 8 ) 1 r0 r1 s1 )
         = off + off 16
@@ -1060,7 +1365,6 @@ unsafe @ __poly_finish u64 h0 u64 h1 u64 h2 * u sp * u out → v {
     : u64 st1 # u64 ( __ld64 kp 24 )
     : u64 w0 ( nurl_addc_lo f0 st0 0 )
     : u64 w1 ( nurl_addc_lo f1 st1 ( nurl_addc_hi f0 st0 0 ) )
-    : ( Vec u ) tag ( vec_with_cap [u] 16 )
     ( __push_le32 tag # i & w0 4294967295 )
     ( __push_le32 tag # i & >> w0 32 4294967295 )
     ( __push_le32 tag # i & w1 4294967295 )
@@ -1177,21 +1481,24 @@ unsafe @ __poly_finish u64 h0 u64 h1 u64 h2 * u sp * u out → v {
 // past its length, reserved here: 16-aligned past room for the tag.
 
 // Scratch layout from __xor_scratch_at len: keystream [0, 128), the
-// one-time key block [128, 192), the nonce [192, 204), the tag [208, 224).
-@ __ccp_scratch → i { ^ 224 }
+// one-time key block [128, 192), the nonce [192, 204), the tag [208, 224),
+// the Poly1305 accumulator and key table [224, 1728) (__poly_wide_key).
+@ __ccp_scratch → i { ^ 1728 }
 
 // The MAC of `aad` (at `ap`, `al` bytes) and the ciphertext (at `cp`,
 // `cl` bytes) under the one-time key at `kp`: pad16 pieces, then the two
-// little-endian lengths. Tag to `out`.
-unsafe @ __ccp_mac * u kp * u ap i al * u cp i cl * u out → v {
+// little-endian lengths. Tag to `out`; `st`, 1504 bytes of scratch.
+unsafe @ __ccp_mac * u kp * u ap i al * u cp i cl * u out * u st → v {
     : u64 r0 & # u64 ( __ld64 kp 0 ) 0x0ffffffc0fffffff
     : u64 r1 & # u64 ( __ld64 kp 8 ) 0x0ffffffc0ffffffc
     : u64 s1 + r1 >> r1 2
     : ~ u64 h0 0
     : ~ u64 h1 0
     : ~ u64 h2 0
-    ( __poly_feed16 h0 h1 h2 ap al r0 r1 s1 )
-    ( __poly_feed16 h0 h1 h2 cp cl r0 r1 s1 )
+    : b wide ( __poly_wide_ok + al cl )
+    ? wide { ( __poly_wide_key st r0 r1 ) } {}
+    ( __poly_feed16 h0 h1 h2 ap al r0 r1 s1 st wide )
+    ( __poly_feed16 h0 h1 h2 cp cl r0 r1 s1 st wide )
     ( __poly_block h0 h1 h2 # u64 al # u64 cl 1 r0 r1 s1 )
     ( __poly_finish h0 h1 h2 # *u + # i kp 16 out )
 }
@@ -1245,7 +1552,7 @@ unsafe @ __ccp_setup ( Vec u ) key ( Vec u ) iv i seq * u np * u kp → b {
     : *u dp # *u + # i base data_at
     ? ( __ccp_setup key iv seq np kp ) {
         ( __chacha20_xor_ptr key 1 # i ( __ld32le_p np 0 ) # i ( __ld32le_p np 4 ) # i ( __ld32le_p np 8 ) dp dp n scr )
-        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 )
+        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 # *u + # i scr 224 )
         ( bytes_extend_raw_cc buf # *u + # i scr 208 16 )
         ^ T
     } {}
@@ -1276,7 +1583,7 @@ unsafe @ __ccp_setup ( Vec u ) key ( Vec u ) iv i seq * u np * u kp → b {
     : *u np # *u + # i scr 192
     : *u dp # *u + # i base data_at
     ? ( __ccp_setup key iv seq np kp ) {
-        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 )
+        ( __ccp_mac kp # *u + # i base aad_at - data_at aad_at dp n # *u + # i scr 208 # *u + # i scr 224 )
         : ~ i diff 0
         : ~ i k 0
         ~ < k 16 { = diff | diff ^^ # i . scr + 208 k # i . dp + n k = k + k 1 }

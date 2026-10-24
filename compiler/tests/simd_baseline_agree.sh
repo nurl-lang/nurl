@@ -102,8 +102,11 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 # across its one-, two-, four- and eight-block kernels' seams.
 # AES-GCM's hardware kernels (the crypto tier) are driven by its NIST
 # vectors: the `on` leg runs them, the `off` leg has no tier and takes
-# the software cipher — and both must print the same answers.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors)
+# the software cipher — and both must print the same answers. The
+# four-block Poly1305 (__poly_wide) is driven by the AEAD length sweep:
+# the `on` leg runs it from 256 bytes of MAC input, the `off` leg runs
+# the scalar blocks throughout, against one golden.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the
