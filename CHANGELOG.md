@@ -6,7 +6,22 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.78.0] — 2026-10-24
+
+The TLS performance release. `bench/tls_bench` now measures NURL's TLS
+against rustls on aws-lc-rs piece by piece, and most of the primitives it
+found behind moved: RSA signing from 450 ms to under a millisecond
+(fixed-width Montgomery, CRT, dedicated kernels), SHA-256 on the x86 SHA
+extensions (~7×), P-256 ECDH and verify twice as fast, X25519 keygen
+37 % faster, ML-KEM-768 a third faster, ChaCha20-Poly1305 sealing 1.4×
+faster, an allocation-free key schedule, and signing keys prepared once
+per listener instead of per handshake. Two compiler ownership fixes
+(h320, h321) close leaks in `??` arms, and `nurlpkg login` no longer
+writes the registry token into the working directory on Windows.
+
+**API changes:** `rsa_priv_sign_key` returns `?RsaKey` instead of a CRT
+blob, and `quic_tls_srv_new` / `quic_tls_srv_set_pq` take a `TlsIdent`
+(see *Changed*).
 
 ### Added
 
@@ -146,6 +161,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirms — and its swap is now one per bit (RFC 7748's) instead of two.
   The rest of its gap to assembly implementations is the dual carry chain
   (mulx + adcx/adox), agora #95.
+- **Add-with-carry and subtract-with-borrow chains lower to native
+  `adc` / `sbb`** (github#1243). `nurl_addc_lo/hi` and `nurl_subb_lo/hi`
+  now detect the carry with plain 64-bit overflow / borrow tests instead
+  of an `i128` round trip, so LLVM fuses a chain of them into one
+  `add`/`adc` (`sub`/`sbb`) run with no spills — every multi-precision
+  routine built on them benefits (RSA, P-256, X25519). X25519's field
+  add, subtract, reduce and multiply-by-121665 fold the second 38 in
+  place; X25519 shared on the tls-bench runner went from 61 % to 63 % of
+  aws-lc-rs. `x25519_vectors` adds RFC 7748 §5.2's iterated test (1 and
+  1 000 iterations).
 - **P-256 ECDH twice as fast, ECDSA verify twice as fast, no BigInt on
   either path.** The variable-base scalar multiply (`p256ct_scalarmult`:
   ECDH against a peer's share) ran the complete RCB projective formula
@@ -243,6 +268,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The JavaScript tooling (`webdocs/`, `cloudflare/`, `registry/`) pins
+  `undici` to 7.30.1 or later (GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472,
+  GHSA-xjj6-f33q-929c), reached through `wrangler > miniflare`, which
+  still pins 7.29.1. Development and deploy tooling only; nothing of it
+  ships in the toolchain.
 - **`nurlpkg login` on Windows no longer writes the registry token into
   the current directory.** `stdlib/ext/credentials.nu` found the home
   directory through `$HOME` alone and fell back to `.` — and `HOME` is

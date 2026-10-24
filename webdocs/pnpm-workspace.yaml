@@ -13,9 +13,11 @@ minimumReleaseAgeExclude:
 # 2026-10-07: wrangler > miniflare > sharp (GHSA-wq5f-xc86-pv6w; miniflare
 # still pins 0.35.4 exactly) and @tailwindcss/node > source-map-js
 # (GHSA-68fv-2mgg-jv7q) — each a patch release on its own minor.
-# 2026-10-24: fumadocs-mdx > zod (GHSA-mrhx-c7xc-m3w5).
+# 2026-10-24: fumadocs-mdx > zod (GHSA-mrhx-c7xc-m3w5), and the undici floor
+# raised to 7.30.1 (GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472,
+# GHSA-xjj6-f33q-929c; miniflare still pins 7.29.1 exactly).
 overrides:
-  undici@>=7.0.0 <7.29.1: ^7.29.1
+  undici@>=7.0.0 <7.30.1: ^7.30.1
   brace-expansion@<1.1.21: ^1.1.21
   brace-expansion@>=4.0.0 <5.0.12: ^5.0.12
   sharp@<0.35.5: ^0.35.5
