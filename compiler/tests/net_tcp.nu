@@ -131,7 +131,7 @@ $ `stdlib/net/tcp.nu`
     : i _d1 ( hand_all oc sv os 10 ( ip_c ) ( ip_s ) )
     ( pb `server queued 24 bytes: ` == ( tcb_recv_queue_len sv ) 24 )
     : ( Vec u ) got ( vec_new [u] )
-    ( pb `read drains 24: ` == ( tcb_read sv got 100 os ) 24 )
+    ( pb `read drains 24: ` == ( tcb_read sv got 100 ) 24 )
     ( pb `receive queue now empty: ` == ( tcb_recv_queue_len sv ) 0 )
     : ~ b same T
     : ~ i k 0
@@ -172,7 +172,7 @@ $ `stdlib/net/tcp.nu`
     : i _a2 ( hand_all os cl oc deadline ( ip_s ) ( ip_c ) )
     ( pb `client queue drained after recovery: ` == ( tcb_send_queue_len cl ) 0 )
     ( pb `rtx count reset by good ACK: ` == ( tcb_rtx_count cl ) 0 )
-    : i _dr ( tcb_read sv got 100 os )
+    : i _dr ( tcb_read sv got 100 )
 
     // Karn's rule: the ACK that finally arrives after a retransmit
     // must NOT feed the RTT estimator — its timing is ambiguous (was
@@ -273,8 +273,9 @@ $ `stdlib/net/tcp.nu`
 
     // ── receive-window back-pressure and reopening ──────────────
     // A peer may queue at most the advertised receive capacity. Once
-    // the application drains bytes, a window-update ACK carries the
-    // reopened capacity back and the remaining byte can move.
+    // the application has drained a silly-window-safe amount (one MSS
+    // here), a window-update ACK carries the reopened capacity back and
+    // the remaining byte can move.
     : Tcb fc ( tcb_new )
     : Tcb fr ( tcb_new )
     : PktBuf ofc ( pktbuf_new )
@@ -296,12 +297,30 @@ $ `stdlib/net/tcp.nu`
     : i _fca ( hand_all ofr fc ofc 21 ( ip_s ) ( ip_c ) )
     ( pb `sender sees a zero window with one byte pending: ` && == ( tcb_snd_wnd fc ) 0 == ( tcb_send_queue_len fc ) 1 )
     : ( Vec u ) drained ( vec_new [u] )
-    : i _fcr ( tcb_read fr drained 32 ofr )
-    ( pb `read emits a window update from zero: ` == ( pktbuf_count ofr ) 1 )
+    : i _fcr ( tcb_read fr drained 32 )
+    ( pb `a small read keeps the zero window shut: ` && ! ( tcb_window_update_due fr ) == ( tcb_window_update fr ofr ) 0 )
+    : i _fcr2 ( tcb_read fr drained ( tcb_mss fr ) )
+    ( pb `an MSS of reopened space is due: ` ( tcb_window_update_due fr ) )
+    : i _fcw ( tcb_window_update fr ofr )
+    ( pb `and leaves as one window update: ` == ( pktbuf_count ofr ) 1 )
     : i _fca2 ( hand_all ofr fc ofc 30 ( ip_s ) ( ip_c ) )
     : i _fcp2 ( hand_all ofc fr ofr 31 ( ip_c ) ( ip_s ) )
     : i _fca3 ( hand_all ofr fc ofc 32 ( ip_s ) ( ip_c ) )
     ( pb `window update releases the pending byte: ` && > ( tcb_snd_wnd fc ) 0 == ( tcb_send_queue_len fc ) 0 )
+    // A FIN riding on the last data segment is taken together with it,
+    // not dropped to be retransmitted after an RTO.
+    : ( Vec u ) finpay ( vec_new [u] )
+    ( bytes_extend_str finpay `bye!` )
+    : ( Vec u ) finbuf ( vec_new [u] )
+    : i fin_seq ( tcb_rcv_nxt fr )
+    : i fin_q ( tcb_recv_queue_len fr )
+    ( tcpseg_push finbuf ( ip_c ) ( ip_s ) 9999 80 fin_seq ( tcb_snd_nxt fr ) | | ( tcp_ack ) ( tcp_psh ) ( tcp_fin ) 65535 0 0 finpay 0 4 )
+    : TcpSeg finseg ( tcpseg_parse finbuf 0 ( vec_len [u] finbuf ) ( ip_c ) ( ip_s ) )
+    ( pktbuf_clear ofr )
+    : i _fin ( tcb_input fr finseg finbuf 40 ofr )
+    ( pb `data+FIN queues the data: ` == ( tcb_recv_queue_len fr ) + fin_q 4 )
+    ( pb `and takes the FIN: ` && ( tcb_fin_rcvd fr ) == ( tcb_state fr ) ( tcp_close_wait ) )
+    ( pb `acknowledging both: ` == ( tcb_rcv_nxt fr ) ( seq_add fin_seq 5 ) )
     ( tcb_free fc ) ( tcb_free fr ) ( pktbuf_free ofc ) ( pktbuf_free ofr )
     ( vec_free [u] fill ) ( vec_free [u] drained )
 

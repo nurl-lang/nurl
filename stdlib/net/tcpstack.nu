@@ -550,9 +550,14 @@ $ `stdlib/core/box.nu`
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ -1 } {}
     ? ! . c used { ^ -1 } {}
-    : PktBuf o ( pktbuf_new )
-    : i read ( tcb_read . c tcb dst n o )
-    : i _emitted ( __flush ts idx o now out )
+    : i read ( tcb_read . c tcb dst n )
+    // Most reads free too little to be worth a segment; build the
+    // output buffer only for the one that does.
+    ? ( tcb_window_update_due . c tcb ) {
+        : PktBuf o ( pktbuf_new )
+        : i _w ( tcb_window_update . c tcb o )
+        : i _emitted ( __flush ts idx o now out )
+    } {}
     ^ read
 }
 
