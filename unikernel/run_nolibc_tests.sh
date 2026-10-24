@@ -77,11 +77,6 @@ one() {
     case "$name" in
         http2_client_duplex|http2_client_streaming)
             echo "SKIP $name (needs preemptive threads over host TCP)"; return 0 ;;
-        # A peer that closes mid-send must make the sender's writes fail;
-        # the NURL TCP stack does not yet answer data for a closed socket
-        # with RST (agora #74).
-        net_sendfile)
-            echo "SKIP $name (needs RST on data after close — agora #74)"; return 0 ;;
     esac
     # What these two pin is the HOSTED runtime's way of not blocking a
     # worker: a connect parked on the host kernel's handshake (the black

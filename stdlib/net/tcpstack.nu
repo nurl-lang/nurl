@@ -545,12 +545,15 @@ $ `stdlib/core/box.nu`
     ^ n
 }
 
-@ tstack_read TcpStack ts__h i idx ( Vec u ) dst i n → i {
+@ tstack_read TcpStack ts__h i idx ( Vec u ) dst i n i now PktBuf out → i {
     : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ -1 } {}
     ? ! . c used { ^ -1 } {}
-    ^ ( tcb_read . c tcb dst n )
+    : PktBuf o ( pktbuf_new )
+    : i read ( tcb_read . c tcb dst n o )
+    : i _emitted ( __flush ts idx o now out )
+    ^ read
 }
 
 @ tstack_close TcpStack ts__h i idx i now PktBuf out → v {

@@ -131,7 +131,7 @@ $ `stdlib/net/tcp.nu`
     : i _d1 ( hand_all oc sv os 10 ( ip_c ) ( ip_s ) )
     ( pb `server queued 24 bytes: ` == ( tcb_recv_queue_len sv ) 24 )
     : ( Vec u ) got ( vec_new [u] )
-    ( pb `read drains 24: ` == ( tcb_read sv got 100 ) 24 )
+    ( pb `read drains 24: ` == ( tcb_read sv got 100 os ) 24 )
     ( pb `receive queue now empty: ` == ( tcb_recv_queue_len sv ) 0 )
     : ~ b same T
     : ~ i k 0
@@ -172,7 +172,7 @@ $ `stdlib/net/tcp.nu`
     : i _a2 ( hand_all os cl oc deadline ( ip_s ) ( ip_c ) )
     ( pb `client queue drained after recovery: ` == ( tcb_send_queue_len cl ) 0 )
     ( pb `rtx count reset by good ACK: ` == ( tcb_rtx_count cl ) 0 )
-    : i _dr ( tcb_read sv got 100 )
+    : i _dr ( tcb_read sv got 100 os )
 
     // Karn's rule: the ACK that finally arrives after a retransmit
     // must NOT feed the RTT estimator — its timing is ambiguous (was
@@ -270,6 +270,40 @@ $ `stdlib/net/tcp.nu`
     ( pb `stale ACK does not shrink the window: ` == ( tcb_snd_wnd w ) 60000 )
     ( tcb_free w ) ( tcb_free wp ) ( pktbuf_free ow ) ( pktbuf_free owp )
     ( vec_free [u] big ) ( vec_free [u] stale )
+
+    // ── receive-window back-pressure and reopening ──────────────
+    // A peer may queue at most the advertised receive capacity. Once
+    // the application drains bytes, a window-update ACK carries the
+    // reopened capacity back and the remaining byte can move.
+    : Tcb fc ( tcb_new )
+    : Tcb fr ( tcb_new )
+    : PktBuf ofc ( pktbuf_new )
+    : PktBuf ofr ( pktbuf_new )
+    ( tcb_listen fr ( ip_s ) 80 )
+    ( tcb_set_iss fr 975000 )
+    ( tcb_set_remote_ip fr ( ip_c ) )
+    ( tcb_connect fc ( ip_c ) 9999 ( ip_s ) 80 275000 0 ofc )
+    : i _fc1 ( hand_all ofc fr ofr 1 ( ip_c ) ( ip_s ) )
+    : i _fc2 ( hand_all ofr fc ofc 2 ( ip_s ) ( ip_c ) )
+    : i _fc3 ( hand_all ofc fr ofr 3 ( ip_c ) ( ip_s ) )
+    : ( Vec u ) fill ( vec_with_cap [u] 65536 )
+    : ~ i fi 0
+    ~ < fi 65536 { ( vec_push [u] fill # u & fi 255 ) = fi + fi 1 }
+    ( pb `full-window write queues one byte beyond capacity: ` == ( tcb_write fc fill 0 65536 65536 ) 65536 )
+    : i _fcp ( tcb_pump fc 20 ofc )
+    : i _fcd ( hand_all ofc fr ofr 20 ( ip_c ) ( ip_s ) )
+    ( pb `receive queue stops at its advertised capacity: ` == ( tcb_recv_queue_len fr ) ( tcb_rcv_wnd fr ) )
+    : i _fca ( hand_all ofr fc ofc 21 ( ip_s ) ( ip_c ) )
+    ( pb `sender sees a zero window with one byte pending: ` && == ( tcb_snd_wnd fc ) 0 == ( tcb_send_queue_len fc ) 1 )
+    : ( Vec u ) drained ( vec_new [u] )
+    : i _fcr ( tcb_read fr drained 32 ofr )
+    ( pb `read emits a window update from zero: ` == ( pktbuf_count ofr ) 1 )
+    : i _fca2 ( hand_all ofr fc ofc 30 ( ip_s ) ( ip_c ) )
+    : i _fcp2 ( hand_all ofc fr ofr 31 ( ip_c ) ( ip_s ) )
+    : i _fca3 ( hand_all ofr fc ofc 32 ( ip_s ) ( ip_c ) )
+    ( pb `window update releases the pending byte: ` && > ( tcb_snd_wnd fc ) 0 == ( tcb_send_queue_len fc ) 0 )
+    ( tcb_free fc ) ( tcb_free fr ) ( pktbuf_free ofc ) ( pktbuf_free ofr )
+    ( vec_free [u] fill ) ( vec_free [u] drained )
 
     // ── graceful close: FIN → TIME_WAIT → CLOSED ────────────────
     : Tcb a ( tcb_new )

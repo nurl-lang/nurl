@@ -949,7 +949,7 @@ $ `stdlib/core/mem.nu`
 //         DIFFERENT thing from an error, which is why it is not an
 //         error code.
 //   < 0   `- err`
-@ sock_read SockTab st__h i fd ( Vec u ) dst i max → i {
+@ sock_read SockTab st__h i fd ( Vec u ) dst i max i now → i {
     : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
@@ -967,7 +967,7 @@ $ `stdlib/core/mem.nu`
         ^ - 0 ( sock_err_closed )
     } {}
     ? <= max 0 { ^ 0 } {}
-    : i n ( tstack_read . st ts . s idx dst max )
+    : i n ( tstack_read . st ts . s idx dst max now . st out )
     ? > n 0 {
         = . s err 0
         ^ n

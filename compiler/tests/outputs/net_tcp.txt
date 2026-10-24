@@ -77,6 +77,11 @@ RST is not answered with a segment: YES
 zero-length option terminates the walk: YES
 window update applied: YES
 stale ACK does not shrink the window: YES
+full-window write queues one byte beyond capacity: YES
+receive queue stops at its advertised capacity: YES
+sender sees a zero window with one byte pending: YES
+read emits a window update from zero: YES
+window update releases the pending byte: YES
 second pair established: YES
 active close sends FIN: YES
 closer is FIN_WAIT_1: YES

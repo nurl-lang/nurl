@@ -48,6 +48,12 @@ the reset peer reads as closed: ok
 the error is on the fd too: ok
 a reset connection is readable — the waiter must wake: ok
 writing to it fails, and not with "again": ok
+unread-close pair is established: ok
+the peer has unread data before close: ok
+close with unread data resets the sender: ok
+post-close-data pair is established: ok
+data can be queued before the FIN reaches its peer: ok
+data arriving after close resets the sender: ok
 both connections came up: ok
 both were accepted, as distinct fds: ok
 with distinct peer ports: ok
