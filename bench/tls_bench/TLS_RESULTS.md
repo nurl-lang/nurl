@@ -1,6 +1,6 @@
 # NURL TLS benchmark — NURL vs Rust (rustls / aws-lc-rs)
 
-Generated `2026-10-23T22:55:41Z` by `bench/tls_bench/run_tls.sh` (MODE=**full**). **Do not edit by hand** — the next run overwrites it.
+Generated `2026-10-24T04:52:01Z` by `bench/tls_bench/run_tls.sh` (MODE=**full**). **Do not edit by hand** — the next run overwrites it.
 
 Every cost a TLS 1.3 HTTP stack pays — handshakes (full, resumed, per group and certificate), the record layer on small and large responses, and the client side — measured against the stack production Rust deploys: rustls on aws-lc-rs (assembly AES-GCM and X25519, the X25519MLKEM768 hybrid), hyper on tokio, reqwest. The NURL server is the `packages/http` HttpApp, the NURL client `packages/http-client`. Servers pinned to cores `0-0`, the load generator to `1-3`.
 
@@ -10,24 +10,24 @@ NURL's result as a share of Rust's (100 % = parity; for latencies the inverse, s
 
 | # | Area | Metric | NURL | Rust | NURL / Rust | Verdict | What the gap is |
 |--:|---|---|--:|--:|--:|---|---|
-| 1 | server handshake | Full · RSA-2048 · X25519 — handshakes/s | 558/s | 1,135/s | 49 % | **gap** | server CPU 1,789 vs 878 µs/handshake: of the 911 µs gap, 887 µs is primitive crypto (largest: RSA-2048 PSS sign, +865 µs), 24.1 µs is protocol / runtime / I/O |
-| 2 | server handshake | Full · RSA-2048 · X25519 — unloaded latency p50 | 1,862 µs | 962 µs | 52 % | **gap** |  |
-| 3 | bulk | 1 MB bodies, one connection, ChaCha20-Poly1305 — MB/s | 674 MB/s | 1,109 MB/s | 61 % | **gap** | server CPU 1,456 vs 831 ns/KB; the AEAD alone is 696 vs 434 ns/KB |
-| 4 | server handshake | Full · ECDSA P-256 · P-256 — handshakes/s | 2,625/s | 3,792/s | 69 % | **gap** | server CPU 380 vs 263 µs/handshake: of the 117 µs gap, 121 µs is primitive crypto (largest: P-256 ECDH shared, +63.4 µs), NURL's protocol / runtime / I/O is 4.25 µs CHEAPER than Rust's |
-| 5 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — handshakes/s | 3,087/s | 3,968/s | 78 % | behind | server CPU 323 vs 251 µs/handshake: of the 71.7 µs gap, 68.1 µs is primitive crypto (largest: ECDSA P-256 sign, +32.6 µs), 3.55 µs is protocol / runtime / I/O |
-| 6 | server handshake | Full · ECDSA P-256 · P-256 — unloaded latency p50 | 522 µs | 413 µs | 79 % | behind |  |
-| 7 | server handshake | Full · ECDSA P-256 · X25519 — handshakes/s | 3,602/s | 4,397/s | 82 % | behind | server CPU 277 vs 227 µs/handshake: of the 50.1 µs gap, 54.1 µs is primitive crypto (largest: ECDSA P-256 sign, +32.6 µs), NURL's protocol / runtime / I/O is 4.02 µs CHEAPER than Rust's |
-| 8 | server handshake | Full · ECDSA P-256 · X25519 — unloaded latency p50 | 433 µs | 359 µs | 83 % | behind |  |
-| 9 | server handshake | Resumed · X25519 (psk_dhe_ke) — unloaded latency p50 | 305 µs | 281 µs | 92 % | behind |  |
-| 10 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — unloaded latency p50 | 479 µs | 443 µs | 92 % | behind |  |
-| 11 | server handshake | Resumed · X25519 (psk_dhe_ke) — handshakes/s | 4,794/s | 4,848/s | 99 % | parity | server CPU 208 vs 206 µs/handshake: of the 2.44 µs gap, 21.5 µs is primitive crypto (largest: X25519 shared, +17.8 µs), NURL's protocol / runtime / I/O is 19.0 µs CHEAPER than Rust's |
-| 12 | record layer | Keep-alive 1 KB plaintext — req/s (baseline) | 70,320/s | 69,120/s | 102 % | parity | not TLS: the HTTP/1.1 server itself |
-| 13 | client (http-client vs reqwest) | New connection per request, resumed — req/s | 1,403/s | 1,251/s | 112 % | ahead | p50 708 vs 787 µs per request |
-| 14 | record layer | Keep-alive 1 KB over TLS — req/s | 60,486/s | 52,198/s | 116 % | ahead | TLS adds 2.25 µs CPU per request on NURL, 4.65 µs on Rust (TLS minus plaintext) |
-| 15 | client (http-client vs reqwest) | Keep-alive 1 MB bodies — MB/s | 878 MB/s | 738 MB/s | 119 % | ahead |  |
-| 16 | client (http-client vs reqwest) | New connection per request, full handshake — req/s | 1,377/s | 1,151/s | 120 % | ahead | p50 722 vs 857 µs per request |
-| 17 | bulk | 1 MB bodies, one connection, AES-128-GCM — MB/s | 1,601 MB/s | 1,251 MB/s | 128 % | ahead | server CPU 500 vs 759 ns/KB; the AEAD alone is 138 vs 247 ns/KB |
-| 18 | client (http-client vs reqwest) | Keep-alive 1 KB — req/s | 12,080/s | 9,178/s | 132 % | ahead |  |
+| 1 | server handshake | Full · RSA-2048 · X25519 — handshakes/s | 645/s | 2,111/s | 31 % | **major gap** | server CPU 1,545 vs 472 µs/handshake: of the 1,073 µs gap, 1,030 µs is primitive crypto (largest: RSA-2048 PSS sign, +1,006 µs), 43.2 µs is protocol / runtime / I/O |
+| 2 | server handshake | Full · RSA-2048 · X25519 — unloaded latency p50 | 1,647 µs | 548 µs | 33 % | **major gap** |  |
+| 3 | server handshake | Full · ECDSA P-256 · P-256 — handshakes/s | 2,946/s | 4,790/s | 61 % | **gap** | server CPU 339 vs 208 µs/handshake: of the 130 µs gap, 122 µs is primitive crypto (largest: P-256 ECDH shared, +64.6 µs), 8.23 µs is protocol / runtime / I/O |
+| 4 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — handshakes/s | 3,530/s | 4,780/s | 74 % | **gap** | server CPU 283 vs 209 µs/handshake: of the 74.0 µs gap, 68.7 µs is primitive crypto (largest: ECDSA P-256 sign, +33.4 µs), 5.38 µs is protocol / runtime / I/O |
+| 5 | server handshake | Full · ECDSA P-256 · X25519 — handshakes/s | 4,305/s | 5,485/s | 78 % | behind | server CPU 232 vs 182 µs/handshake: of the 50.0 µs gap, 56.5 µs is primitive crypto (largest: ECDSA P-256 sign, +33.4 µs), NURL's protocol / runtime / I/O is 6.55 µs CHEAPER than Rust's |
+| 6 | server handshake | Full · ECDSA P-256 · P-256 — unloaded latency p50 | 503 µs | 405 µs | 81 % | behind |  |
+| 7 | server handshake | Full · ECDSA P-256 · X25519MLKEM768 — unloaded latency p50 | 440 µs | 380 µs | 86 % | behind |  |
+| 8 | server handshake | Full · ECDSA P-256 · X25519 — unloaded latency p50 | 344 µs | 301 µs | 88 % | behind |  |
+| 9 | server handshake | Resumed · X25519 (psk_dhe_ke) — handshakes/s | 6,229/s | 6,437/s | 97 % | parity | server CPU 160 vs 155 µs/handshake: of the 5.07 µs gap, 23.2 µs is primitive crypto (largest: X25519 shared, +19.1 µs), NURL's protocol / runtime / I/O is 18.1 µs CHEAPER than Rust's |
+| 10 | record layer | Keep-alive 1 KB plaintext — req/s (baseline) | 112,862/s | 113,990/s | 99 % | parity | not TLS: the HTTP/1.1 server itself |
+| 11 | bulk | 1 MB bodies, one connection, ChaCha20-Poly1305 — MB/s | 936 MB/s | 906 MB/s | 103 % | parity | server CPU 980 vs 1,077 ns/KB; the AEAD alone is 522 vs 494 ns/KB |
+| 12 | record layer | Keep-alive 1 KB over TLS — req/s | 95,238/s | 88,540/s | 108 % | ahead | TLS adds 1.61 µs CPU per request on NURL, 2.50 µs on Rust (TLS minus plaintext) |
+| 13 | bulk | 1 MB bodies, one connection, AES-128-GCM — MB/s | 2,363 MB/s | 2,156 MB/s | 110 % | ahead | server CPU 407 vs 446 ns/KB; the AEAD alone is 89.6 vs 81.4 ns/KB |
+| 14 | client (http-client vs reqwest) | New connection per request, resumed — req/s | 1,724/s | 1,566/s | 110 % | ahead | p50 577 vs 632 µs per request |
+| 15 | server handshake | Resumed · X25519 (psk_dhe_ke) — unloaded latency p50 | 222 µs | 256 µs | 115 % | ahead |  |
+| 16 | client (http-client vs reqwest) | New connection per request, full handshake — req/s | 1,623/s | 1,395/s | 116 % | ahead | p50 614 vs 709 µs per request |
+| 17 | client (http-client vs reqwest) | Keep-alive 1 MB bodies — MB/s | 1,783 MB/s | 1,372 MB/s | 130 % | ahead |  |
+| 18 | client (http-client vs reqwest) | Keep-alive 1 KB — req/s | 23,939/s | 15,525/s | 154 % | ahead |  |
 
 ## Server handshakes
 
@@ -35,16 +35,16 @@ Saturation: hs=15 lat=5 ka=10 client=6 prim_runs=3 — a fresh TCP + TLS connect
 
 | Handshake | Server | handshakes/s | server util | CPU / hs (µs) | crypto budget (µs) | rest (µs) | latency p50 / p99 under load (µs) | unloaded p50 (µs) | resumed |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| Full · ECDSA P-256 · X25519 | NURL | 3,602 | 100 % | 277 | 114 | 163 | 7,728 / 15,245 | 433 | — |
-| Full · ECDSA P-256 · X25519 | RUST | 4,397 | 100 % | 227 | 59.8 | 167 | 8,405 / 10,757 | 359 | — |
-| Resumed · X25519 (psk_dhe_ke) | NURL | 4,794 | 100 % | 208 | 63.7 | 144 | 6,228 / 9,948 | 305 | 100 % |
-| Resumed · X25519 (psk_dhe_ke) | RUST | 4,848 | 100 % | 206 | 42.2 | 164 | 6,588 / 8,035 | 281 | 100 % |
-| Full · ECDSA P-256 · P-256 | NURL | 2,625 | 100 % | 380 | 206 | 174 | 4,586 / 21,401 | 522 | — |
-| Full · ECDSA P-256 · P-256 | RUST | 3,792 | 100 % | 263 | 84.8 | 178 | 8,519 / 10,671 | 413 | — |
-| Full · ECDSA P-256 · X25519MLKEM768 | NURL | 3,087 | 100 % | 323 | 142 | 181 | 3,960 / 17,224 | 479 | — |
-| Full · ECDSA P-256 · X25519MLKEM768 | RUST | 3,968 | 100 % | 251 | 73.6 | 178 | 8,166 / 10,297 | 443 | — |
-| Full · RSA-2048 · X25519 | NURL | 558 | 100 % | 1,789 | 1,591 | 197 | 54,121 / 106,621 | 1,862 | — |
-| Full · RSA-2048 · X25519 | RUST | 1,135 | 100 % | 878 | 704 | 173 | 28,041 / 39,812 | 962 | — |
+| Full · ECDSA P-256 · X25519 | NURL | 4,305 | 100 % | 232 | 113 | 119 | 5,464 / 14,755 | 344 | — |
+| Full · ECDSA P-256 · X25519 | RUST | 5,485 | 100 % | 182 | 56.6 | 125 | 6,519 / 8,868 | 301 | — |
+| Resumed · X25519 (psk_dhe_ke) | NURL | 6,229 | 100 % | 160 | 62.2 | 97.9 | 4,560 / 8,958 | 222 | 100 % |
+| Resumed · X25519 (psk_dhe_ke) | RUST | 6,437 | 100 % | 155 | 39.1 | 116 | 5,957 / 8,535 | 256 | 100 % |
+| Full · ECDSA P-256 · P-256 | NURL | 2,946 | 100 % | 339 | 203 | 136 | 9,677 / 22,128 | 503 | — |
+| Full · ECDSA P-256 · P-256 | RUST | 4,790 | 100 % | 208 | 80.6 | 128 | 8,065 / 10,537 | 405 | — |
+| Full · ECDSA P-256 · X25519MLKEM768 | NURL | 3,530 | 100 % | 283 | 141 | 142 | 6,122 / 18,635 | 440 | — |
+| Full · ECDSA P-256 · X25519MLKEM768 | RUST | 4,780 | 100 % | 209 | 72.2 | 136 | 7,951 / 10,299 | 380 | — |
+| Full · RSA-2048 · X25519 | NURL | 645 | 100 % | 1,545 | 1,368 | 177 | 18,365 / 85,443 | 1,647 | — |
+| Full · RSA-2048 · X25519 | RUST | 2,111 | 100 % | 472 | 338 | 134 | 14,508 / 25,135 | 548 | — |
 
 ## Record layer — small keep-alive requests
 
@@ -52,10 +52,10 @@ Saturation: hs=15 lat=5 ka=10 client=6 prim_runs=3 — a fresh TCP + TLS connect
 
 | Server | transport | req/s | server util | CPU / req (µs) | p50 / p99 (µs) | TLS overhead / req (µs) |
 |---|---|--:|--:|--:|--:|--:|
-| NURL | TLS | 60,486 | 100 % | 16.5 | 1,098 / 1,267 | 2.25 |
-| NURL | plaintext | 70,320 | 100 % | 14.2 | 943 / 1,070 |  |
-| RUST | TLS | 52,198 | 100 % | 19.1 | 1,241 / 1,377 | 4.65 |
-| RUST | plaintext | 69,120 | 100 % | 14.5 | 940 / 1,035 |  |
+| NURL | TLS | 95,238 | 100 % | 10.5 | 694 / 794 | 1.61 |
+| NURL | plaintext | 112,862 | 100 % | 8.85 | 589 / 675 |  |
+| RUST | TLS | 88,540 | 100 % | 11.3 | 732 / 802 | 2.50 |
+| RUST | plaintext | 113,990 | 100 % | 8.76 | 569 / 634 |  |
 
 ## Bulk — one connection, 1 MB bodies
 
@@ -63,13 +63,13 @@ One keep-alive connection downloading `/1m` back to back. *ns / KB* is server CP
 
 | Server | suite | MB/s | server util | server ns / KB | AEAD floor ns / KB | kTLS engaged |
 |---|---|--:|--:|--:|--:|--:|
-| NURL | aes128 | 1,601 | 78 % | 500 | 138 | — |
-| NURL | chacha | 674 | 96 % | 1,456 | 696 | — |
-| NURL | plain | 4,019 | 90 % | 228 | n/a | — |
-| NURL | aes128+ktls | 779 | 60 % | 786 | 138 | yes |
-| RUST | aes128 | 1,251 | 93 % | 759 | 247 | — |
-| RUST | chacha | 1,109 | 90 % | 831 | 434 | — |
-| RUST | plain | 4,166 | 85 % | 209 | n/a | — |
+| NURL | aes128 | 2,363 | 94 % | 407 | 89.6 | — |
+| NURL | chacha | 936 | 90 % | 980 | 522 | — |
+| NURL | plain | 4,721 | 86 % | 187 | n/a | — |
+| NURL | aes128+ktls | 1,532 | 64 % | 431 | 89.6 | yes |
+| RUST | aes128 | 2,156 | 94 % | 446 | 81.4 | — |
+| RUST | chacha | 906 | 95 % | 1,077 | 494 | — |
+| RUST | plain | 4,629 | 85 % | 188 | n/a | — |
 
 ## Client — `packages/http-client` vs reqwest
 
@@ -77,14 +77,14 @@ Both single-threaded and sequential, both against the same Rust server, both off
 
 | Case | Client | req/s | MB/s | p50 / p99 (µs) | errors |
 |---|---|--:|--:|--:|--:|
-| full:/ | http-client | 1,377 | 0.02 | 722 / 806 | 0 |
-| full:/ | reqwest | 1,151 | 0.02 | 857 / 952 | 0 |
-| resume:/ | http-client | 1,403 | 0.02 | 708 / 798 | 0 |
-| resume:/ | reqwest | 1,251 | 0.02 | 787 / 898 | 0 |
-| ka:/1k | http-client | 12,080 | 12.4 | 82.0 / 97.0 | 0 |
-| ka:/1k | reqwest | 9,178 | 9.40 | 106 / 131 | 0 |
-| ka:/1m | http-client | 837 | 878 | 1,186 / 1,285 | 0 |
-| ka:/1m | reqwest | 704 | 738 | 1,378 / 2,008 | 0 |
+| full:/ | http-client | 1,623 | 0.02 | 614 / 668 | 0 |
+| full:/ | reqwest | 1,395 | 0.02 | 709 / 771 | 0 |
+| resume:/ | http-client | 1,724 | 0.02 | 577 / 635 | 0 |
+| resume:/ | reqwest | 1,566 | 0.02 | 632 / 685 | 0 |
+| ka:/1k | http-client | 23,939 | 24.5 | 41.0 / 53.0 | 0 |
+| ka:/1k | reqwest | 15,525 | 15.9 | 62.0 / 81.0 | 0 |
+| ka:/1m | http-client | 1,701 | 1,783 | 587 / 611 | 0 |
+| ka:/1m | reqwest | 1,309 | 1,372 | 698 / 1,078 | 0 |
 
 ## Primitives — single core
 
@@ -92,18 +92,18 @@ Medians of 3 run(s), `bench_auto` discipline on both sides (ramp until a pass cl
 
 | Primitive | NURL µs/op | Rust µs/op | NURL / Rust speed |
 |---|--:|--:|--:|
-| X25519 keygen | 15.6 | 8.69 | 56 % |
-| X25519 shared | 45.8 | 28.0 | 61 % |
-| P-256 ECDH keygen | 38.8 | 10.3 | 26 % |
-| P-256 ECDH shared | 115 | 51.4 | 45 % |
-| ML-KEM-768 encaps | 27.8 | 13.7 | 50 % |
-| ECDSA P-256 sign | 50.3 | 17.6 | 35 % |
-| ECDSA P-256 verify | 137 | 57.9 | 42 % |
-| RSA-2048 PSS sign | 1,527 | 662 | 43 % |
-| HKDF-Expand-Label | 0.14 | 0.34 | 243 % |
-| SHA-256 16 KB | 10.4 | 10.3 | 100 % |
-| AES-128-GCM seal 16 KB | 2.21 | 3.95 | 179 % |
-| ChaCha20-Poly1305 seal 16 KB | 11.1 | 6.95 | 62 % |
+| X25519 keygen | 15.9 | 8.35 | 53 % |
+| X25519 shared | 43.8 | 24.8 | 56 % |
+| P-256 ECDH keygen | 37.9 | 10.3 | 27 % |
+| P-256 ECDH shared | 111 | 46.8 | 42 % |
+| ML-KEM-768 encaps | 27.6 | 15.5 | 56 % |
+| ECDSA P-256 sign | 50.9 | 17.6 | 34 % |
+| ECDSA P-256 verify | 133 | 56.1 | 42 % |
+| RSA-2048 PSS sign | 1,305 | 299 | 23 % |
+| HKDF-Expand-Label | 0.16 | 0.37 | 237 % |
+| SHA-256 16 KB | 12.2 | 12.4 | 101 % |
+| AES-128-GCM seal 16 KB | 1.43 | 1.30 | 91 % |
+| ChaCha20-Poly1305 seal 16 KB | 8.35 | 7.91 | 95 % |
 
 ## Environment
 
@@ -111,13 +111,13 @@ Medians of 3 run(s), `bench_auto` discipline on both sides (ramp until a pass cl
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | `AMD EPYC 7763 64-Core Processor` |
+| CPU | `Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz` |
 | Logical cores | `4` |
 | Server cores | `0-0` |
 | Generator cores | `1-3` |
-| Commit | `0f0dd4c787ab7bdcd88de9bb4c5b0e8e17d70e0d` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/40035625396 |
-| NURL | `v0.77.2-25-g0f0dd4c7` |
+| Commit | `fbdeb3b3ef29efb94ee0f5838e7762fdcf803ca1` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/40063743388 |
+| NURL | `v0.77.2-30-gfbdeb3b3` |
 | Rust | `rustc 1.99.1 (58cf8f9c3 2026-10-13)` |
 | Cell durations (s) | `hs=15 lat=5 ka=10 client=6 prim_runs=3` |
 | rustls | `0.23.46` |
