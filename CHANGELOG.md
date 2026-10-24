@@ -197,6 +197,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `??` / `?` arm whose value is a call's fresh handle made from the
+  arm's payload no longer leaks the payload** (h321). `T a → ( keep a )`,
+  `keep` handing back an `arc_clone` of `a`, parked the payload's drop as
+  "the value may be one of them" — any value that can hold an address was
+  — so the payload's count was never released (LSan: the Arc block, in
+  `http3_creds_load`). The parked drops now also run, on the paths the
+  value is the call's own, when the callee's lend summary says its result
+  borrows from none of the arm's locals; an argument that is not a plain
+  binding is not followed and keeps the old, conservative answer.
 - **A fresh value returned through `\` in a braced `??` arm no longer leaks**
   (Agora #72, h320). `: ~ String st ?? ( vec_pop v ) { T x → x F → { \ ( mk ) } }`
   treated the join as a borrow because the braced arm's ownership was guessed
