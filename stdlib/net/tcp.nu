@@ -21,6 +21,7 @@
 //     ( tcb_pump    c now out )     emit what may be sent now
 //     ( tcb_tick    c now out )     timers → retransmits, probes, 2MSL
 //     ( tcb_read    c dst n )       drain received data
+//     ( tcb_window_update c out )   advertise space a read reopened
 //     ( tcb_close   c now out )     half-close (FIN)
 //
 // Because the clock is an argument, an RTO backoff sequence or a
@@ -146,7 +147,8 @@ $ `stdlib/core/rcbox.nu`
     i iss
     // receive sequence space
     i rcv_nxt
-    i rcv_wnd
+    i rcv_wnd  // receive-buffer capacity; the window offered is at most capacity - queued
+    i rcv_adv  // right edge (sequence) of the most recently advertised window
     i irs
     i mss
     i snd_wscale  // what WE send (fixed 0 in v1)
@@ -197,6 +199,7 @@ $ `stdlib/core/rcbox.nu`
     = . c iss 0
     = . c rcv_nxt 0
     = . c rcv_wnd ( tcp_default_window )
+    = . c rcv_adv 0
     = . c irs 0
     = . c mss ( tcp_fallback_mss )
     = . c snd_wscale 0
@@ -363,9 +366,50 @@ $ `stdlib/core/rcbox.nu`
     = . c probe_deadline x
 }
 
+// Space an incoming segment may still occupy. `rcv_wnd` is the fixed
+// receive-buffer capacity; advertising it unchanged while bytes wait for
+// the application lets a fast peer grow rcvbuf without bound and never
+// experiences TCP back-pressure.
+@ __rcv_available * TcbImpl c → i {
+    : i queued ( vec_len [u] . c rcvbuf )
+    ^ ? > - . c rcv_wnd queued 0 - . c rcv_wnd queued 0
+}
+
+// Receiver silly-window avoidance (RFC 1122 §4.2.3.3): the right edge
+// moves only by at least min(MSS, capacity/2). Offering every byte a
+// small read frees invites the peer to send segments of that size.
+@ __rcv_sws * TcbImpl c → i {
+    : i half / . c rcv_wnd 2
+    ^ ? < . c mss half . c mss half
+}
+
+// How far the right edge could advance past what the peer was told.
+@ __rcv_opened * TcbImpl c → i {
+    ^ ( seq_diff ( seq_add . c rcv_nxt ( __rcv_available c ) ) . c rcv_adv )
+}
+
+// Start the advertised edge at the full capacity, for when rcv_nxt is
+// first learned from the peer's SYN.
+@ __rcv_seed * TcbImpl c → v {
+    = . c rcv_adv ( seq_add . c rcv_nxt ( __rcv_available c ) )
+}
+
+// The window to put on an outgoing segment. The edge never moves left
+// (a probe byte accepted past it pins it at rcv_nxt: a zero window),
+// and moves right only by a silly-window-safe step.
+@ __rcv_advertise * TcbImpl c → i {
+    ? >= ( __rcv_opened c ) ( __rcv_sws c ) {
+        = . c rcv_adv ( seq_add . c rcv_nxt ( __rcv_available c ) )
+    } {
+        ? ( seq_lt . c rcv_adv . c rcv_nxt ) { = . c rcv_adv . c rcv_nxt } {}
+    }
+    ^ ( seq_diff . c rcv_adv . c rcv_nxt )
+}
+
 @ __emit * TcbImpl c PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
+    : i advertised ( __rcv_advertise c )
     ( tcpseg_push ( pktbuf_bytes out ) . c local_ip . c remote_ip . c local_port . c remote_port
-    seq ack flags . c rcv_wnd . c mss . c snd_wscale payload pay_off pay_len )
+    seq ack flags advertised . c mss . c snd_wscale payload pay_off pay_len )
     ( pktbuf_mark out )
 }
 
@@ -444,6 +488,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Drain up to `n` received bytes into `dst`. Returns how many moved.
+// The space this frees reaches the peer only on a segment: see
+// tcb_window_update.
 @ tcb_read Tcb c__h ( Vec u ) dst i n → i {
     : *TcbImpl c ( __Tcb_ptr c__h )
     : i have ( vec_len [u] . c rcvbuf )
@@ -453,6 +499,27 @@ $ `stdlib/core/rcbox.nu`
     // memmove; for v1 the simple form is worth more.
     ( bytes_drop_front . c rcvbuf take )
     ^ take
+}
+
+// Reads have reopened enough receive space that the peer should hear
+// of it now — from a zero window, rather than at its next persist
+// probe. Only ESTABLISHED: after our close, data is answered with RST,
+// and after the peer's FIN no more is coming. Cheap, so a caller can
+// test it before it builds an output buffer.
+@ tcb_window_update_due Tcb c__h → b { ^ ( __window_update_due ( __Tcb_ptr c__h ) ) }
+
+@ __window_update_due * TcbImpl c → b {
+    ? != . c state ( tcp_established ) { ^ F } {}
+    ^ >= ( __rcv_opened c ) ( __rcv_sws c )
+}
+
+// Emit the window-update ACK when one is due. Returns bytes emitted.
+@ tcb_window_update Tcb c__h PktBuf out → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ? ! ( __window_update_due c ) { ^ 0 } {}
+    : i before ( vec_len [u] ( pktbuf_bytes out ) )
+    ( __emit_empty c out ( tcp_ack ) . c snd_nxt . c rcv_nxt )
+    ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }
 
 // ── transmit ────────────────────────────────────────────────────
@@ -505,10 +572,27 @@ $ `stdlib/core/rcbox.nu`
     ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }
 
+// Abort the connection through an already-open TcbImpl. Both the
+// public abort operation and close-with-unread-data use this path, so
+// they cannot drift on the exact RST sequence numbers or terminal state.
+@ __tcb_abort * TcbImpl c PktBuf out → v {
+    ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
+        = . c state ( tcp_closed )
+        ^
+    } {}
+    ( __emit_empty c out ( tcp_rst ) . c snd_nxt . c rcv_nxt )
+    = . c state ( tcp_closed )
+    = . c reset T
+}
+
 // Ask for a graceful close. The FIN itself leaves via tcb_pump once
 // the send queue drains — a close must never truncate queued data.
+// Unread receive data is different: the application has discarded bytes
+// the peer was entitled to believe it delivered, so RFC 9293 CLOSE sends
+// RST instead of falsely acknowledging an orderly end of stream.
 @ tcb_close Tcb c__h i now PktBuf out → v {
     : *TcbImpl c ( __Tcb_ptr c__h )
+    ? > ( vec_len [u] . c rcvbuf ) 0 { ( __tcb_abort c out ) ^ } {}
     = . c close_requested T
     ? == . c state ( tcp_listen_st ) { = . c state ( tcp_closed ) ^ } {}
     ? == . c state ( tcp_syn_sent ) { = . c state ( tcp_closed ) ^ } {}
@@ -518,13 +602,7 @@ $ `stdlib/core/rcbox.nu`
 // Abort: send RST and drop the connection.
 @ tcb_abort Tcb c__h PktBuf out → v {
     : *TcbImpl c ( __Tcb_ptr c__h )
-    ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
-        = . c state ( tcp_closed )
-        ^
-    } {}
-    ( __emit_empty c out ( tcp_rst ) . c snd_nxt . c rcv_nxt )
-    = . c state ( tcp_closed )
-    = . c reset T
+    ( __tcb_abort c out )
 }
 
 // ── timers ──────────────────────────────────────────────────────
@@ -619,7 +697,8 @@ $ `stdlib/core/rcbox.nu`
 // ── receive path ────────────────────────────────────────────────
 
 @ __accept_data * TcbImpl c TcpSeg s ( Vec u ) buf → i {
-    : i n . s payload_len
+    : i room ( __rcv_available c )
+    : i n ? < . s payload_len room . s payload_len room
     ? <= n 0 { ^ 0 } {}
     : ~ i k 0
     ~ < k n {
@@ -711,6 +790,7 @@ $ `stdlib/core/rcbox.nu`
             = . c remote_port . s src_port
             = . c irs . s seq
             = . c rcv_nxt ( seq_add . s seq 1 )
+            ( __rcv_seed c )
             = . c rcv_wscale ? >= . s wscale 0 . s wscale 0
             = . c mss ? > . s mss 0 ? < . s mss ( tcp_default_mss ) . s mss ( tcp_default_mss ) ( tcp_fallback_mss )
             = . c snd_una . c iss
@@ -742,6 +822,7 @@ $ `stdlib/core/rcbox.nu`
         ? has_syn {
             = . c irs . s seq
             = . c rcv_nxt ( seq_add . s seq 1 )
+            ( __rcv_seed c )
             = . c rcv_wscale ? >= . s wscale 0 . s wscale 0
             = . c mss ? > . s mss 0 ? < . s mss ( tcp_default_mss ) . s mss ( tcp_default_mss ) ( tcp_fallback_mss )
             ? has_ack {
@@ -772,12 +853,13 @@ $ `stdlib/core/rcbox.nu`
     // is an ACK of what we actually expect, never silence — silence is
     // what turns one lost ACK into a stalled connection.
     : i seglen ( tcpseg_seq_len s )
+    : i rcv_available ( __rcv_available c )
     : b acceptable ? == seglen 0 {
-        ? == . c rcv_wnd 0 { == . s seq . c rcv_nxt } { ( seq_in_window . s seq . c rcv_nxt . c rcv_wnd ) }
+        ? == rcv_available 0 { == . s seq . c rcv_nxt } { ( seq_in_window . s seq . c rcv_nxt rcv_available ) }
     } {
-        ? == . c rcv_wnd 0 { F } {
-            || ( seq_in_window . s seq . c rcv_nxt . c rcv_wnd )
-            ( seq_in_window ( seq_add . s seq - seglen 1 ) . c rcv_nxt . c rcv_wnd )
+        ? == rcv_available 0 { F } {
+            || ( seq_in_window . s seq . c rcv_nxt rcv_available )
+            ( seq_in_window ( seq_add . s seq - seglen 1 ) . c rcv_nxt rcv_available )
         }
     }
     ? ! acceptable {
@@ -797,6 +879,15 @@ $ `stdlib/core/rcbox.nu`
         ( __emit_empty c out ( tcp_rst ) . c snd_nxt . c rcv_nxt )
         = . c state ( tcp_closed )
         = . c reset T
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
+    } {}
+
+    // close() releases the application's receive side. Data arriving
+    // after that point cannot be delivered, including in FIN_WAIT,
+    // CLOSING and TIME_WAIT, so acknowledge it with RST rather than an
+    // ACK that promises bytes the application will never read.
+    ? && . c close_requested > . s payload_len 0 {
+        ( __tcb_abort c out )
         ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
 
@@ -845,7 +936,10 @@ $ `stdlib/core/rcbox.nu`
     } {}
 
     // ── FIN ──
-    ? && has_fin == . s seq . c rcv_nxt {
+    // The FIN sits after the payload, so it counts only once every byte
+    // before it has been taken — a FIN riding on the last data segment
+    // must not cost the peer a retransmission timeout.
+    ? && has_fin == ( seq_add . s seq . s payload_len ) . c rcv_nxt {
         = . c fin_rcvd T
         = . c rcv_nxt ( seq_add . c rcv_nxt 1 )
         = need_ack T
