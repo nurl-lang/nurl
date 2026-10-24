@@ -114,11 +114,6 @@ $ `stdlib/core/rcbox.nu`
     ^ - a * t # i16 3329
 }
 
-// Multiply two Montgomery-domain residues.
-@ __fqmul i16 a i16 b → i16 {
-    ^ ( __mont * # i32 a # i32 b )
-}
-
 // Fold a signed representative into [0, q). Written as an
 // arithmetic-shift mask rather than `? < a 0`: `a >> 15` is 0 for
 // non-negative a and -1 (all ones) for negative, so the branch that
@@ -152,13 +147,73 @@ $ `stdlib/core/rcbox.nu`
     ^ v
 }
 
+// The transform's whole table, built once per process and shared
+// through publish-once slot 12 (registry: stdlib/std/tls_server.nu):
+// the 128 zetas above, then the zeta VECTORS the narrow layers and the
+// base multiplication read — each sixteen lanes laid out the way the
+// lane shuffles of __ntt_step / __invntt_step / __poly_basemul put the
+// coefficients (see there). i16 offsets:
+//
+//     ZT_F8 128  ZT_F4 256  ZT_F2 384     forward layers len 8, 4, 2
+//     ZT_I2 512  ZT_I4 640  ZT_I8 768     inverse layers len 2, 4, 8
+//     ZT_BM 896                           base multiplication (256 lanes)
+: ~ i g_mlkem_ztab 0
+
+@ __mlkem_ztab → *i16 {
+    ? == g_mlkem_ztab 0 {
+        : ( Vec i16 ) z ( __mlkem_zetas )
+        : *i16 zp ( vec_data [i16] z )
+        : ( Vec i16 ) t ( vec_zeroed [i16] 1152 )
+        : *i16 tp ( vec_data [i16] t )
+        : ~ i i 0
+        ~ < i 128 { = . tp i . zp i = i + i 1 }
+        // Eight steps of 32 coefficients a layer. Lane l of a step's
+        // vector belongs to block `blk` of that layer, `per` lanes a
+        // block-slot: len 8 — lanes 0-7 block 2s, 8-15 block 2s+1; len 4
+        // — four-lane slots of blocks 4s, 4s+2, 4s+1, 4s+3; len 2 —
+        // two-lane slots of blocks 8s + 0, 4, 1, 5, 2, 6, 3, 7.
+        : ~ i st 0
+        ~ < st 8 {
+            : ~ i l 0
+            ~ < l 16 {
+                : i b8 + * st 2 / l 8
+                : i q4 / l 4
+                : i b4 + * st 4 ? == q4 0 0 ? == q4 1 2 ? == q4 2 1 3
+                : i q2 / l 2
+                : i b2 + * st 8 + / q2 2 * 4 % q2 2
+                : i o + * st 16 l
+                = . tp + 128 o . zp + 16 b8
+                = . tp + 256 o . zp + 32 b4
+                = . tp + 384 o . zp + 64 b2
+                = . tp + 512 o . zp - 127 b2
+                = . tp + 640 o . zp - 63 b4
+                = . tp + 768 o . zp - 31 b8
+                = l + l 1
+            }
+            = st + st 1
+        }
+        // Base multiplication: pair 4g in even lane 4g with ζ, pair
+        // 4g + 2 in even lane 4g + 2 with −ζ, ζ = zetas[64 + g].
+        = i 0
+        ~ < i 64 {
+            : i16 zv . zp + 64 i
+            = . tp + 896 * 4 i zv
+            = . tp + + 896 * 4 i 2 - # i16 0 zv
+            = i + i 1
+        }
+        // The winner lives for the rest of the program, through the global.
+        = g_mlkem_ztab ( vec_publish_once [i16] 12 t )
+    } {}
+    ^ ( vec_data [i16] @ ( Vec i16 ) { # s g_mlkem_ztab } )
+}
+
 // ── The number-theoretic transform ─────────────────────────────────
 //
 // q ≡ 1 (mod 256) would give a full 256-point transform, but 3329 only
 // satisfies q ≡ 1 (mod 512) partially: there is no primitive 512th root
 // of unity, so the transform stops one layer early. Seven layers leave
 // 128 degree-1 polynomials rather than 256 constants, which is why
-// multiplication in the NTT domain is `__basemul` below and not a
+// multiplication in the NTT domain is `__poly_basemul` below and not a
 // pointwise product.
 
 // Sixteen Montgomery products at once, bit-identical to __mont per
@@ -181,6 +236,53 @@ $ `stdlib/core/rcbox.nu`
 @ __barrett_v v256 a v256 qv v256 c20159 → v256 {
     : v256 t ( nurl_v256_sra16 ( nurl_v256_add16 ( nurl_v256_mulhi16 a c20159 ) ( nurl_v256_bcast16 512 ) ) 10 )
     ^ ( nurl_v256_sub16 a ( nurl_v256_mullo16 t qv ) )
+}
+
+// The narrow layers, 32 coefficients a step (two v256, A and B), each
+// pair of butterfly operands gathered into X and Y by in-lane shuffles
+// and scattered back after:
+//
+//     len 8   X = A.lo ‖ B.lo, Y = A.hi ‖ B.hi        (permlo/hi128)
+//     len 4   X, Y = the 64-bit halves interleaved     (unpacklo/hi64)
+//     len 2   the 32-bit pairs split even / odd        (unpack32, unpack64)
+//
+// The butterflies are __fqmul_v / __barrett_v, lane for lane the scalar
+// ones they replace, so the coefficients — which ACVP pins byte for
+// byte — are the same; only where they sit in a register differs, and
+// the zeta vectors (__mlkem_ztab) follow it.
+inline @ __nl_gather v256 a v256 b i len inout v256 x inout v256 y → v {
+    ? == len 8 {
+        = x ( nurl_v256_permlo128 a b )
+        = y ( nurl_v256_permhi128 a b )
+    } {
+        ? == len 4 {
+            = x ( nurl_v256_unpacklo64 a b )
+            = y ( nurl_v256_unpackhi64 a b )
+        } {
+            : v256 t0 ( nurl_v256_unpacklo32 a b )
+            : v256 t1 ( nurl_v256_unpackhi32 a b )
+            = x ( nurl_v256_unpacklo64 t0 t1 )
+            = y ( nurl_v256_unpackhi64 t0 t1 )
+        }
+    }
+}
+
+// __nl_gather's inverse: X and Y back to A and B, stored at `p`.
+inline @ __nl_scatter v256 x v256 y i len * i16 p → v {
+    ? == len 8 {
+        ( nurl_v256_st # s p ( nurl_v256_permlo128 x y ) )
+        ( nurl_v256_st # s + # i p 32 ( nurl_v256_permhi128 x y ) )
+    } {
+        ? == len 4 {
+            ( nurl_v256_st # s p ( nurl_v256_unpacklo64 x y ) )
+            ( nurl_v256_st # s + # i p 32 ( nurl_v256_unpackhi64 x y ) )
+        } {
+            : v256 u0 ( nurl_v256_unpacklo32 x y )
+            : v256 u1 ( nurl_v256_unpackhi32 x y )
+            ( nurl_v256_st # s p ( nurl_v256_unpacklo64 u0 u1 ) )
+            ( nurl_v256_st # s + # i p 32 ( nurl_v256_unpackhi64 u0 u1 ) )
+        }
+    }
 }
 
 simd @ __ntt * i16 r i off * i16 zetas → v {
@@ -210,22 +312,21 @@ simd @ __ntt * i16 r i off * i16 zetas → v {
         }
         = len >> len 1
     }
-    // Layers 8, 4, 2: operands interleave below vector width — scalar,
-    // same butterflies, same k walk.
+    // Layers 8, 4, 2: operands interleave below vector width — gathered
+    // into whole vectors first (__nl_gather).
+    : ~ i zo 128
     ~ >= len 2 {
-        : ~ i start 0
-        ~ < start 256 {
-            : i16 zeta . zetas k
-            = k + k 1
-            : ~ i j start
-            ~ < j + start len {
-                : i16 t ( __fqmul zeta . r + off + j len )
-                = . r + off + j len - . r + off j t
-                = . r + off j + . r + off j t
-                = j + j 1
-            }
-            = start + j len
+        : ~ i st 0
+        ~ < st 8 {
+            : *i16 p # *i16 + # i r * 2 + off * st 32
+            : ~ v256 x ( nurl_v256_zero )
+            : ~ v256 y ( nurl_v256_zero )
+            ( __nl_gather ( nurl_v256_ld # s p ) ( nurl_v256_ld # s + # i p 32 ) len x y )
+            : v256 t ( __fqmul_v y ( nurl_v256_ld # s + # i zetas * 2 + zo * st 16 ) qv qinv )
+            ( __nl_scatter ( nurl_v256_add16 x t ) ( nurl_v256_sub16 x t ) len p )
+            = st + st 1
         }
+        = zo + zo 128
         = len >> len 1
     }
 }
@@ -239,23 +340,22 @@ simd @ __invntt * i16 r i off * i16 zetas → v {
     : v256 qinv ( nurl_v256_bcast16 -3327 )
     : v256 c20159 ( nurl_v256_bcast16 20159 )
     : ~ i len 2
-    : ~ i k 127
-    // Narrow layers scalar, exactly as the forward transform.
+    : ~ i k 15
+    // Narrow layers on gathered vectors, as the forward transform.
+    : ~ i zo 512
     ~ <= len 8 {
-        : ~ i start 0
-        ~ < start 256 {
-            : i16 zeta . zetas k
-            = k - k 1
-            : ~ i j start
-            ~ < j + start len {
-                : i16 t . r + off j
-                = . r + off j ( __barrett + t . r + off + j len )
-                = . r + off + j len - . r + off + j len t
-                = . r + off + j len ( __fqmul zeta . r + off + j len )
-                = j + j 1
-            }
-            = start + j len
+        : ~ i st 0
+        ~ < st 8 {
+            : *i16 p # *i16 + # i r * 2 + off * st 32
+            : ~ v256 x ( nurl_v256_zero )
+            : ~ v256 y ( nurl_v256_zero )
+            ( __nl_gather ( nurl_v256_ld # s p ) ( nurl_v256_ld # s + # i p 32 ) len x y )
+            : v256 vz ( nurl_v256_ld # s + # i zetas * 2 + zo * st 16 )
+            ( __nl_scatter ( __barrett_v ( nurl_v256_add16 x y ) qv c20159 )
+            ( __fqmul_v ( nurl_v256_sub16 y x ) vz qv qinv ) len p )
+            = st + st 1
         }
+        = zo + zo 128
         = len << len 1
     }
     ~ <= len 128 {
@@ -287,24 +387,28 @@ simd @ __invntt * i16 r i off * i16 zetas → v {
     }
 }
 
-// Multiply two degree-1 polynomials modulo X² - zeta.
-@ __basemul * i16 r i ri * i16 a i ai * i16 b i bi i16 zeta → v {
-    : i16 a0 . a ai
-    : i16 a1 . a + ai 1
-    : i16 b0 . b bi
-    : i16 b1 . b + bi 1
-    : i16 c0 ( __fqmul ( __fqmul a1 b1 ) zeta )
-    = . r ri + c0 ( __fqmul a0 b0 )
-    = . r + ri 1 + ( __fqmul a0 b1 ) ( __fqmul a1 b0 )
-}
-
+// Base multiplication: 128 products of degree-1 polynomials modulo
+// X² − ζ, (a0 + a1·X)(b0 + b1·X) = (a0·b0 + ζ·a1·b1) + (a0·b1 + a1·b0)·X,
+// every product a Montgomery one. Sixteen coefficients — eight pairs — a
+// step: with P = a·b and Q = a·swap(b) lane by lane (swap exchanges the
+// two coefficients of each pair), the even lane takes P's even + ζ·P's
+// odd and the odd lane Q's even + Q's odd. The ζ of each pair sits in its
+// even lane of the table (__mlkem_ztab).
 simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
+    : v256 qv ( nurl_v256_bcast16 3329 )
+    : v256 qinv ( nurl_v256_bcast16 -3327 )
+    : v256 ev ( nurl_v256_bcast32 65535 )
     : ~ i i 0
-    ~ < i 64 {
-        : i16 z . zetas + 64 i
-        ( __basemul r + ro * 4 i a + ao * 4 i b + bo * 4 i z )
-        ( __basemul r + ro + * 4 i 2 a + ao + * 4 i 2 b + bo + * 4 i 2 - # i16 0 z )
-        = i + i 1
+    ~ < i 256 {
+        : v256 va ( nurl_v256_ld # s + # i a * 2 + ao i )
+        : v256 vb ( nurl_v256_ld # s + # i b * 2 + bo i )
+        : v256 vz ( nurl_v256_ld # s + # i zetas * 2 + 896 i )
+        : v256 pp ( __fqmul_v va vb qv qinv )
+        : v256 qq ( __fqmul_v va ( nurl_v256_rotl32 vb 16 ) qv qinv )
+        : v256 ee ( nurl_v256_add16 pp ( __fqmul_v ( nurl_v256_rotl32 pp 16 ) vz qv qinv ) )
+        : v256 oo ( nurl_v256_add16 qq ( nurl_v256_rotl32 qq 16 ) )
+        ( nurl_v256_st # s + # i r * 2 + ro i ( nurl_v256_or ( nurl_v256_and ee ev ) ( nurl_v256_andnot ev oo ) ) )
+        = i + i 16
     }
 }
 
@@ -345,8 +449,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 }
 
 // Accumulate Σ a_i ∘ b_i over the k polynomials of a vector.
-@ __polyvec_basemul_acc * i16 r i ro * i16 a i ao * i16 b i bo i k * i16 zetas ( Vec i16 ) scratch → v {
-    : *i16 t ( vec_data [i16] scratch )
+@ __polyvec_basemul_acc * i16 r i ro * i16 a i ao * i16 b i bo i k * i16 zetas * i16 t → v {
     ( __poly_basemul r ro a ao b bo zetas )
     : ~ i i 1
     ~ < i k {
@@ -471,17 +574,6 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     }
 }
 
-// PRF_η (FIPS 203 §4.1): SHAKE256(s ‖ b, 64η).
-@ __mlkem_prf ( Vec u ) seed i nonce i eta → ( Vec u ) {
-    : Sha3 h ( shake256_init )
-    ( sha3_absorb h seed )
-    : ( Vec u ) nb ( vec_new [u] )
-    ( vec_push [u] nb # u nonce )
-    ( sha3_absorb h nb )
-    : ( Vec u ) out ( sha3_squeeze h * 64 eta )
-    ^ out
-}
-
 // Four PRF_η streams at once: same seed, four nonce bytes, 64·η bytes
 // each appended to o0..o3. The callers hand out consecutive nonces in
 // fixed-length batches (k or 2k of them), which is the equal-length
@@ -579,10 +671,72 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
 
 // ── Byte encoding, compression ─────────────────────────────────────
 //
-// ByteEncode_d / ByteDecode_d for d ∈ {1,4,5,10,11,12}, written once
-// over a bit cursor rather than six times over hand-unrolled shifts.
-// A 20-bit accumulator is enough: d never exceeds 12 and the loop
-// drains to fewer than 8 bits before each new value goes in.
+// ByteEncode_d / ByteDecode_d for d ∈ {1,4,5,10,11,12}. Eight
+// coefficients are exactly d bytes, so a polynomial is 32 groups of eight,
+// and a group goes through two 64-bit words (8·d ≤ 96 bits) — no bit
+// cursor, no loop whose trip count changes from one coefficient to the
+// next. The callers dispatch on d so each group function is compiled with
+// d a literal, and unrolls into straight-line shifts and byte moves: the
+// cursor this replaces was the hot loop of encapsulation, a tenth of it
+// spent decoding the encapsulation key alone.
+
+// Eight d-bit values from a[at …] into d bytes at dst[w …].
+inline @ __enc8 * i16 a i at i d * u dst i w → v {
+    : i mask - << 1 d 1
+    : ~ u64 lo 0
+    : ~ u64 hi 0
+    : ~ i c 0
+    ~ < c 8 {
+        : u64 x # u64 & # i . a + at c mask
+        : i sh * c d
+        ? < sh 64 {
+            = lo | lo << x # u64 sh
+            ? > + sh d 64 { = hi | hi >> x # u64 - 64 sh } {}
+        } { = hi | hi << x # u64 - sh 64 }
+        = c + c 1
+    }
+    : ~ i b 0
+    ~ < b d {
+        : u64 wv ? < b 8 lo hi
+        : i bs ? < b 8 * b 8 * - b 8 8
+        = . dst + w b # u & >> wv # u64 bs 255
+        = b + b 1
+    }
+}
+
+// d bytes at src[w …] into eight d-bit values at r[at …].
+inline @ __dec8 * u src i w i d * i16 r i at → v {
+    : u64 mask # u64 - << 1 d 1
+    : ~ u64 lo 0
+    : ~ u64 hi 0
+    : ~ i b 0
+    ~ < b d {
+        : u64 x # u64 . src + w b
+        ? < b 8 { = lo | lo << x # u64 * b 8 } { = hi | hi << x # u64 * - b 8 8 }
+        = b + b 1
+    }
+    : ~ i c 0
+    ~ < c 8 {
+        : i sh * c d
+        : ~ u64 v 0
+        ? < sh 64 {
+            = v >> lo # u64 sh
+            ? > + sh d 64 { = v | v << hi # u64 - 64 sh } {}
+        } { = v >> hi # u64 - sh 64 }
+        = . r + at c # i16 & v mask
+        = c + c 1
+    }
+}
+
+inline @ __enc_poly * i16 a i off i d * u dst i base → v {
+    : ~ i g 0
+    ~ < g 32 { ( __enc8 a + off * g 8 d dst + base * g d ) = g + g 1 }
+}
+
+inline @ __dec_poly * u src i srcoff i d * i16 r i off → v {
+    : ~ i g 0
+    ~ < g 32 { ( __dec8 src + srcoff * g d d r + off * g 8 ) = g + g 1 }
+}
 
 @ __byte_encode * i16 a i off i d ( Vec u ) out → v {
     // Exactly 32·d bytes per polynomial: reserve once, write raw. See
@@ -593,40 +747,25 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
     ( vec_reserve [u] out nbytes )
     : b _l ( vec_set_len [u] out + base nbytes )
     : *u dst ( vec_data [u] out )
-    : ~ i w base
-    : ~ i acc 0
-    : ~ i nbits 0
-    : ~ i i 0
-    ~ < i 256 {
-        = acc | acc << & # i . a + off i - << 1 d 1 nbits
-        = nbits + nbits d
-        ~ >= nbits 8 {
-            = . dst w # u & acc 255
-            = w + w 1
-            = acc >> acc 8
-            = nbits - nbits 8
-        }
-        = i + i 1
-    }
+    ? == d 12 { ( __enc_poly a off 12 dst base ) ^ v } {}
+    ? == d 10 { ( __enc_poly a off 10 dst base ) ^ v } {}
+    ? == d 11 { ( __enc_poly a off 11 dst base ) ^ v } {}
+    ? == d 4 { ( __enc_poly a off 4 dst base ) ^ v } {}
+    ? == d 5 { ( __enc_poly a off 5 dst base ) ^ v } {}
+    ? == d 1 { ( __enc_poly a off 1 dst base ) ^ v } {}
+    // FIPS 203 has no other d; a new parameter set would land here.
+    ( nurl_panic `__byte_encode: d must be 1, 4, 5, 10, 11 or 12` )
 }
 
 @ __byte_decode ( Vec u ) src i srcoff i d * i16 r i off → v {
     : *u sp ( vec_data [u] src )
-    : ~ i acc 0
-    : ~ i nbits 0
-    : ~ i pos 0
-    : ~ i i 0
-    ~ < i 256 {
-        ~ < nbits d {
-            = acc | acc << # i . sp + srcoff pos nbits
-            = nbits + nbits 8
-            = pos + pos 1
-        }
-        = . r + off i # i16 & acc - << 1 d 1
-        = acc >> acc d
-        = nbits - nbits d
-        = i + i 1
-    }
+    ? == d 12 { ( __dec_poly sp srcoff 12 r off ) ^ v } {}
+    ? == d 10 { ( __dec_poly sp srcoff 10 r off ) ^ v } {}
+    ? == d 11 { ( __dec_poly sp srcoff 11 r off ) ^ v } {}
+    ? == d 4 { ( __dec_poly sp srcoff 4 r off ) ^ v } {}
+    ? == d 5 { ( __dec_poly sp srcoff 5 r off ) ^ v } {}
+    ? == d 1 { ( __dec_poly sp srcoff 1 r off ) ^ v } {}
+    ( nurl_panic `__byte_decode: d must be 1, 4, 5, 10, 11 or 12` )
 }
 
 // Fold a whole polynomial into [0, q).
@@ -646,12 +785,18 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
 }
 
 // Compress_d(x) = ⌈2^d·x/q⌋ mod 2^d, over a canonical representative.
+// In 32-bit unsigned arithmetic — 2^d·x + 1664 < 2^23 for every d ≤ 11 —
+// because that is a division the compiler can vectorise (a multiply-high
+// by the reciprocal of 3329, eight lanes at a time); spelled in 64-bit
+// signed `i` it stayed a scalar loop of multiplies and sign fix-ups, the
+// hottest loop left in encapsulation.
 @ __poly_compress * i16 a i off i d → v {
-    : i mask - << 1 d 1
+    : u32 mask # u32 - << 1 d 1
+    : u32 sh # u32 d
     : ~ i i 0
     ~ < i 256 {
-        : i t # i ( __csubq_add . a + off i )
-        = . a + off i # i16 & / + << t d 1664 3329 mask
+        : u32 t # u32 # i ( __csubq_add . a + off i )
+        = . a + off i # i16 & / + << t sh # u32 1664 # u32 3329 mask
         = i + i 1
     }
 }
@@ -677,8 +822,7 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
 // take them; k*k is 4, 9 or 16, so k=3 leaves one cell for the scalar
 // sampler. Cell c is row c/k, column c%k, which is the same traversal
 // the nested loops did, in the same order, writing the same offsets.
-@ __gen_matrix ( Vec i16 ) a ( Vec u ) rho i k b transposed * i16 _zetas → v {
-    : *i16 ap ( vec_data [i16] a )
+@ __gen_matrix * i16 ap ( Vec u ) rho i k b transposed * i16 _zetas → v {
     : i n * k k
     : ~ i c 0
     ~ <= + c 4 n {
@@ -700,8 +844,7 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
 // caller; here ek and dk come back as two vectors.
 simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout → v {
     : i k . prm k
-    : ( Vec i16 ) zt ( __mlkem_zetas )
-    : *i16 zp ( vec_data [i16] zt )
+    : *i16 zp ( __mlkem_ztab )
 
     // (ρ, σ) ← G(d ‖ k)
     : ( Vec u ) gin ( vec_new [u] )
@@ -711,15 +854,17 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
     : ( Vec u ) rho ( bytes_slice g 0 32 )
     : ( Vec u ) sigma ( bytes_slice g 32 64 )
 
-    : ( Vec i16 ) a ( __poly_zero * 256 * k k )
-    ( __gen_matrix a rho k F zp )
-
-    : ( Vec i16 ) s ( __poly_zero * 256 k )
-    : ( Vec i16 ) e ( __poly_zero * 256 k )
-    : *i16 sp ( vec_data [i16] s )
-    : *i16 ep ( vec_data [i16] e )
-    ( __cbd_batch sp sigma 0 k . prm eta1 )
-    ( __cbd_batch ep sigma k k . prm eta1 )
+    // One workspace: Â, then ŝ ‖ ê (contiguous, so their 2k CBD streams —
+    // consecutive nonces, one η — go through the four-way sponge as one
+    // batch), then t̂ and a scratch polynomial.
+    : ( Vec i16 ) ws ( __poly_zero * 256 + + * k k * 3 k 1 )
+    : *i16 apz ( vec_data [i16] ws )
+    : *i16 sp # *i16 + # i apz * 512 * k k
+    : *i16 ep # *i16 + # i sp * 512 k
+    : *i16 tp # *i16 + # i ep * 512 k
+    : *i16 scr # *i16 + # i tp * 512 k
+    ( __gen_matrix apz rho k F zp )
+    ( __cbd_batch sp sigma 0 * 2 k . prm eta1 )
     : ~ i i 0
 
     = i 0
@@ -728,13 +873,9 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
     ~ < i k { ( __ntt ep * 256 i zp ) ( __poly_reduce ep * 256 i ) = i + i 1 }
 
     // t̂ ← Â ∘ ŝ + ê
-    : ( Vec i16 ) t ( __poly_zero * 256 k )
-    : ( Vec i16 ) scratch ( __poly_zero 256 )
-    : *i16 tp ( vec_data [i16] t )
-    : *i16 apz ( vec_data [i16] a )
     = i 0
     ~ < i k {
-        ( __polyvec_basemul_acc tp * 256 i apz * 256 * i k sp 0 k zp scratch )
+        ( __polyvec_basemul_acc tp * 256 i apz * 256 * i k sp 0 k zp scr )
         ( __poly_tomont tp * 256 i )
         ( __poly_add tp * 256 i tp * 256 i ep * 256 i )
         ( __poly_reduce tp * 256 i )
@@ -753,40 +894,40 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
 // K-PKE.Encrypt (Algorithm 14).
 simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec u ) ctout → v {
     : i k . prm k
-    : ( Vec i16 ) zt ( __mlkem_zetas )
-    : *i16 zp ( vec_data [i16] zt )
+    : *i16 zp ( __mlkem_ztab )
 
-    : ( Vec i16 ) t ( __poly_zero * 256 k )
-    : *i16 tp ( vec_data [i16] t )
+    // One workspace for every polynomial: t̂, Â^T, then y ‖ e1 ‖ e2 —
+    // contiguous, so their 2k + 1 CBD streams (consecutive nonces) go
+    // through the four-way sponge in as few batches as the two η allow —
+    // then u, v, μ and a scratch polynomial.
+    : ( Vec i16 ) ws ( __poly_zero * 256 + + * k k * 5 k 4 )
+    : *i16 tp ( vec_data [i16] ws )
+    : *i16 atp # *i16 + # i tp * 512 k
+    : *i16 yp # *i16 + # i atp * 512 * k k
+    : *i16 e1p # *i16 + # i yp * 512 k
+    : *i16 e2p # *i16 + # i e1p * 512 k
+    : *i16 up # *i16 + # i e2p 512
+    : *i16 vp # *i16 + # i up * 512 k
+    : *i16 mup # *i16 + # i vp 512
+    : *i16 scr # *i16 + # i mup 512
     : ~ i i 0
     ~ < i k { ( __byte_decode ek * 384 i 12 tp * 256 i ) = i + i 1 }
     : ( Vec u ) rho ( bytes_slice ek * 384 k + * 384 k 32 )
-
-    : ( Vec i16 ) at ( __poly_zero * 256 * k k )
-    ( __gen_matrix at rho k T zp )
-    : *i16 atp ( vec_data [i16] at )
-
-    : ( Vec i16 ) y ( __poly_zero * 256 k )
-    : ( Vec i16 ) e1 ( __poly_zero * 256 k )
-    : ( Vec i16 ) e2 ( __poly_zero 256 )
-    : *i16 yp ( vec_data [i16] y )
-    : *i16 e1p ( vec_data [i16] e1 )
-    : *i16 e2p ( vec_data [i16] e2 )
-    ( __cbd_batch yp r 0 k . prm eta1 )
-    ( __cbd_batch e1p r k k . prm eta2 )
-    : ( Vec u ) prf2 ( __mlkem_prf r * 2 k . prm eta2 )
-    ( __cbd e2p 0 prf2 . prm eta2 )
+    ( __gen_matrix atp rho k T zp )
+    ? == . prm eta1 . prm eta2 {
+        ( __cbd_batch yp r 0 + * 2 k 1 . prm eta1 )
+    } {
+        ( __cbd_batch yp r 0 k . prm eta1 )
+        ( __cbd_batch e1p r k + k 1 . prm eta2 )
+    }
 
     = i 0
     ~ < i k { ( __ntt yp * 256 i zp ) ( __poly_reduce yp * 256 i ) = i + i 1 }
 
     // u ← NTT^-1(Â^T ∘ ŷ) + e1
-    : ( Vec i16 ) uvec ( __poly_zero * 256 k )
-    : ( Vec i16 ) scratch ( __poly_zero 256 )
-    : *i16 up ( vec_data [i16] uvec )
     = i 0
     ~ < i k {
-        ( __polyvec_basemul_acc up * 256 i atp * 256 * i k yp 0 k zp scratch )
+        ( __polyvec_basemul_acc up * 256 i atp * 256 * i k yp 0 k zp scr )
         ( __invntt up * 256 i zp )
         ( __poly_add up * 256 i up * 256 i e1p * 256 i )
         ( __poly_reduce up * 256 i )
@@ -794,14 +935,10 @@ simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec
     }
 
     // v ← NTT^-1(t̂ᵀ ∘ ŷ) + e2 + Decompress1(m)
-    : ( Vec i16 ) vpoly ( __poly_zero 256 )
-    : *i16 vp ( vec_data [i16] vpoly )
-    ( __polyvec_basemul_acc vp 0 tp 0 yp 0 k zp scratch )
+    ( __polyvec_basemul_acc vp 0 tp 0 yp 0 k zp scr )
     ( __invntt vp 0 zp )
     ( __poly_add vp 0 vp 0 e2p 0 )
 
-    : ( Vec i16 ) mu ( __poly_zero 256 )
-    : *i16 mup ( vec_data [i16] mu )
     ( __byte_decode m 0 1 mup 0 )
     ( __poly_decompress mup 0 1 )
     ( __poly_add vp 0 vp 0 mup 0 )
@@ -822,11 +959,15 @@ simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec
 // K-PKE.Decrypt (Algorithm 15) → the 32-byte message.
 simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : i k . prm k
-    : ( Vec i16 ) zt ( __mlkem_zetas )
-    : *i16 zp ( vec_data [i16] zt )
+    : *i16 zp ( __mlkem_ztab )
 
-    : ( Vec i16 ) uvec ( __poly_zero * 256 k )
-    : *i16 up ( vec_data [i16] uvec )
+    // One workspace: u, v, ŝ, w and a scratch polynomial.
+    : ( Vec i16 ) ws ( __poly_zero * 256 + * 2 k 3 )
+    : *i16 up ( vec_data [i16] ws )
+    : *i16 vp # *i16 + # i up * 512 k
+    : *i16 sp # *i16 + # i vp 512
+    : *i16 wp # *i16 + # i sp * 512 k
+    : *i16 scr # *i16 + # i wp 512
     : i ubytes * 32 . prm du
     : ~ i i 0
     ~ < i k {
@@ -835,23 +976,16 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
         = i + i 1
     }
 
-    : ( Vec i16 ) vpoly ( __poly_zero 256 )
-    : *i16 vp ( vec_data [i16] vpoly )
     ( __byte_decode ct * ubytes k . prm dv vp 0 )
     ( __poly_decompress vp 0 . prm dv )
 
-    : ( Vec i16 ) s ( __poly_zero * 256 k )
-    : *i16 sp ( vec_data [i16] s )
     = i 0
     ~ < i k { ( __byte_decode dk * 384 i 12 sp * 256 i ) = i + i 1 }
 
     = i 0
     ~ < i k { ( __ntt up * 256 i zp ) ( __poly_reduce up * 256 i ) = i + i 1 }
 
-    : ( Vec i16 ) w ( __poly_zero 256 )
-    : ( Vec i16 ) scratch ( __poly_zero 256 )
-    : *i16 wp ( vec_data [i16] w )
-    ( __polyvec_basemul_acc wp 0 sp 0 up 0 k zp scratch )
+    ( __polyvec_basemul_acc wp 0 sp 0 up 0 k zp scr )
     ( __invntt wp 0 zp )
     ( __poly_sub wp 0 vp 0 wp 0 )
     ( __poly_reduce wp 0 )

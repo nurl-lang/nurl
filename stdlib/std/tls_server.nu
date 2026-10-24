@@ -106,6 +106,7 @@ $ `stdlib/core/rcbox.nu`
 //   8, 9  base64 decode tables, standard and URL alphabets (std/encode.nu)
 //   10  Keccak-f[1600] round constants (std/hash_sha3.nu)
 //   11  P-256 affine table 0·G … 15·G for signature verification (std/ecdsa_p256.nu)
+//   12  ML-KEM NTT zeta tables, scalar and per-lane (std/mlkem.nu)
 
 @ _tls_ticket_key_ensure → v {
     ? != g_tls_ticket_master 0 { ^ } {}
