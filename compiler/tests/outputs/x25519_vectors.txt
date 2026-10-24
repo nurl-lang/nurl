@@ -8,4 +8,6 @@ alice_pub: PASS
 bob_pub: PASS
 shared_a: PASS
 shared_b: PASS
+iterated_1: PASS
+iterated_1000: PASS
 x25519: all vectors PASS

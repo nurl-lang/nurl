@@ -56,6 +56,27 @@ $ `stdlib/std/x25519.nu`
     : ( Vec u ) ss_b ( x25519 bsk apk )
     = fails + fails ( check `shared_b` ss_b `4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742` )
 
+    // RFC 7748 §5.2 — Iterated test (1 and 1,000 iterations).
+    : ~ ( Vec u ) cur_u ( vec_zeroed [u] 32 )
+    ( vec_set [u] cur_u 0 # u 9 )
+    : ~ ( Vec u ) k_val ( vec_zeroed [u] 32 )
+    ( vec_set [u] k_val 0 # u 9 )
+    : ( Vec u ) iter1 ( x25519 k_val cur_u )
+    = fails + fails ( check `iterated_1` iter1 `422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079` )
+
+    = cur_u ( vec_zeroed [u] 32 )
+    ( vec_set [u] cur_u 0 # u 9 )
+    = k_val ( vec_zeroed [u] 32 )
+    ( vec_set [u] k_val 0 # u 9 )
+    : ~ i it 0
+    ~ < it 1000 {
+        : ( Vec u ) nxt ( x25519 k_val cur_u )
+        = cur_u k_val
+        = k_val nxt
+        = it + it 1
+    }
+    = fails + fails ( check `iterated_1000` k_val `684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51` )
+
     ? == fails 0 { ( nurl_print `x25519: all vectors PASS\n` ) } { ( nurl_print `x25519: FAILURES\n` ) }
     ^ fails
 }
