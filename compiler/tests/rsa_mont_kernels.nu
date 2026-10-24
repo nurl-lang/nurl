@@ -1,5 +1,5 @@
 // rsa_mont_kernels.nu — std/rsa_mont's Montgomery kernels against an
-// independent reference: m^d mod n by _rsa_private (a plain exponent: the
+// independent reference: m^d mod n by _rsa_sign_raw over a plain key (the
 // constant-time fixed-window exponentiation, every step a Montgomery
 // square or multiply) checked against std/bigint's bigint_modpow, for
 // moduli of 15, 16, 17, 24 and 32 limbs. 16 limbs — RSA-2048's CRT
@@ -73,7 +73,7 @@ $ `stdlib/std/rsa_mont.nu`
                 // exponent: up to the modulus width, first byte non-zero
                 : ( Vec u ) d ( rnd_bytes - nb * 3 case )
                 ( vec_set [u] d 0 # u | ?? ( vec_get [u] d 0 ) { T b → # i b F _ → 0 } 1 )
-                : ( Vec u ) got ( _rsa_private n e d m nb )
+                : ( Vec u ) got ( _rsa_sign_raw ( _rsa_key_plain n e d ) m )
                 : ( Vec u ) want ( bigint_to_bytes_be ( bigint_modpow ( bigint_from_bytes_be m ) ( bigint_from_bytes_be d ) nbig ) nb )
                 ? ( bytes_eq got want ) { = ok + ok 1 } {
                     ( nurl_print `MISMATCH limbs=` ) ( nurl_print_int nl )

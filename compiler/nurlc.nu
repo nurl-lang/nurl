@@ -24465,7 +24465,7 @@ unsafe @ bck_trusted_file s path → b {
 }
 
 @ bck_raw_handle_call s base → b {
-    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
+    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn tls_accept_ident tls_accept_ident_dual` base )
 }
 
 @ bck_raw_call s base → b {

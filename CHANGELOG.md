@@ -77,6 +77,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocation, and y ‖ e1 ‖ e2 are contiguous so all 2k + 1 CBD streams go
   through the four-way sponge (e2's scalar SHAKE256 is gone). The ACVP gate
   (180 cases) and the vector tests hold the bytes on both `simd` clones.
+- **A TLS listener prepares its signing key once, at load — no
+  per-handshake key derivation.** The listener's credentials used to
+  carry raw key bytes (an RSA key's CRT parameters packed into a blob in
+  the private-exponent slot), so every handshake rebuilt the Montgomery
+  contexts of p and q, and an ML-DSA listener unpacked s1/s2/t0, ran
+  their NTTs and expanded Â on every signature. Now a server identity is
+  a `TlsIdent` (`std/tls_server.nu`: the certificate_list plus a
+  prepared key — `RsaKey` from `std/rsa.nu`, `MldsaKey` from
+  `std/mldsa.nu`, the EC scalar), built by `tcp_listen_tls*` /
+  `http3_creds_load`, never written after, and shared through an `Arc`
+  by every worker's handshakes. `std/rsa_mont.nu` splits the immutable
+  modulus context (`RsaMont`) from the per-operation scratch (`RsaTmp`),
+  so one key is safe to sign with from many threads at once. Locally:
+  ML-DSA-65 sign 280 → 190 µs; RSA-2048 handshakes 1 703 → 1 858 /s
+  (server CPU 1 736 → 1 593 µs per handshake, tls-bench smoke run).
+  `compiler/tests/sign_key_shared_threads` signs from eight threads with
+  one shared RSA-CRT and one ML-DSA key.
+  **API:** `rsa_priv_sign_key` returns `?RsaKey` (the CRT blob is gone;
+  `RsaPriv` carries `p q dp dq qinv`); new `rsa_key_crt`, `rsa_key_plain`,
+  `rsa_pss_sign_sha256_key`, `mldsa_sign_key`, `mldsa_sign_with`,
+  `tls_ident_ec` / `_rsa` / `_mldsa`, `tls_accept_ident`,
+  `tls_accept_ident_dual`, `quic_creds_ident`, `quic_creds_set_pq_ident`;
+  `quic_tls_srv_new` / `quic_tls_srv_set_pq` take a `TlsIdent`. The
+  byte-vector entry points (`tls_accept*`, `rsa_pss_sign_sha256`,
+  `mldsa_sign`, `quic_creds_new`) remain, preparing the key per call.
 - **ChaCha20-Poly1305 sealing a 16 KB record: 8.5 → 5.9 µs locally,
   93 % of aws-lc-rs (5.45 µs).** Poly1305 (`std/chacha20poly1305`) now
   runs four blocks at a time on 256-bit vectors where the CPU has them:

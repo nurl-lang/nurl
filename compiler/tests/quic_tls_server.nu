@@ -94,11 +94,9 @@ $ `stdlib/std/quic_tls.nu`
 }
 
 @ new_server ( Vec u ) g_chain ( Vec u ) g_priv ( Vec u ) g_tp s alpn → QuicTlsSrv {
-    : ( Vec u ) e ( vec_new [u] )
     : ( Vec u ) prefs ( tls_alpn_pack alpn )
-    : QuicTlsSrv s ( quic_tls_srv_new g_chain 0 g_priv e e e 0 prefs g_tp )
+    : QuicTlsSrv s ( quic_tls_srv_new ( tls_ident_ec g_chain g_priv ) prefs g_tp )
     ( vec_free [u] prefs )
-    ( vec_free [u] e )
     ^ s
 }
 

@@ -41,6 +41,14 @@
 //   ( tls_accept_dual_alpn i raw cert_chain keytype ec_priv n e d pq_chain pq_level pq_sk alpn_prefs )
 //       a classical leaf plus an ML-DSA leaf; the client's
 //       signature_algorithms picks which one it is shown
+//
+// A server that accepts more than once prepares its identities once and
+// accepts with those — what every entry point above does per call:
+//   ( tls_ident_ec ( Vec u ) cert_chain ( Vec u ) priv )        → ( Arc TlsIdent )
+//   ( tls_ident_rsa ( Vec u ) cert_chain RsaKey key )            → ( Arc TlsIdent )
+//   ( tls_ident_mldsa ( Vec u ) cert_chain i level ( Vec u ) sk ) → ( Arc TlsIdent )
+//   ( tls_accept_ident i raw ( Arc TlsIdent ) id ( Vec u ) alpn_prefs ) → !TlsConn TlsErr
+//   ( tls_accept_ident_dual i raw ( Arc TlsIdent ) id ( Arc TlsIdent ) pq ( Vec u ) alpn_prefs )
 //   ( tls_server_read  TlsConn c i max )       → !( Vec u ) TlsErr
 //   ( tls_server_read_into TlsConn c dst max ) → !i TlsErr  (appended to dst; 0 at EOF)
 //   ( tls_server_write TlsConn c ( Vec u ) )   → !v TlsErr
@@ -63,6 +71,7 @@ $ `stdlib/std/rsa.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/std/arc.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -423,33 +432,78 @@ $ `stdlib/core/rcbox.nu`
     ^ m
 }
 
+// ── server identities ──────────────────────────────────────────────
+//
+// What a server presents and signs with: the certificate_list
+// (tls_cert_entry blobs, leaf first) and the private key, PREPARED — an
+// RSA key's Montgomery contexts and limbs (std/rsa.nu RsaKey), an ML-DSA
+// key's NTT forms and Â (std/mldsa.nu MldsaKey) — so nothing the key
+// alone determines is derived per handshake. `keytype` 0 = EC P-256
+// (`ec`, the 32-byte scalar; ECDSA signing has nothing per key to
+// precompute: its fixed-base tables are the generator's, shared by every
+// key), 1 = RSA (`rsa`), 2 = ML-DSA (`ml`); the other key fields are
+// empty. An identity is never written after it is made and travels in an
+// Arc: a listener builds its identities at load, and each handshake on
+// each worker takes a count.
+: TlsIdent { ( Vec u ) chain i keytype ( Vec u ) ec RsaKey rsa MldsaKey ml }
+
+@ __srv_copy ( Vec u ) b → ( Vec u ) { ^ ( bytes_slice b 0 ( vec_len [u] b ) ) }
+
+@ tls_ident_ec ( Vec u ) cert_chain ( Vec u ) priv → ( Arc TlsIdent ) {
+    ^ ( arc_new [TlsIdent] @ TlsIdent { ( __srv_copy cert_chain ) 0 ( __srv_copy priv ) # RsaKey 0 # MldsaKey 0 } )
+}
+
+@ tls_ident_rsa ( Vec u ) cert_chain sink RsaKey key → ( Arc TlsIdent ) {
+    ^ ( arc_new [TlsIdent] @ TlsIdent { ( __srv_copy cert_chain ) 1 ( vec_new [u] ) key # MldsaKey 0 } )
+}
+
+// `level` is 44, 65 or 87 and must match the key the certificate carries.
+@ tls_ident_mldsa ( Vec u ) cert_chain i level ( Vec u ) sk → ( Arc TlsIdent ) {
+    ^ ( arc_new [TlsIdent] @ TlsIdent { ( __srv_copy cert_chain ) 2 ( vec_new [u] ) # RsaKey 0 ( mldsa_sign_key level sk ) } )
+}
+
+// The identity the byte-vector entry points describe: keytype 0 = EC
+// (`ec_priv`), 1 = RSA (`rsa_n` / `rsa_e` / `rsa_d`, the plain private
+// exponent), 2 = ML-DSA (`ec_priv` the secret key at `ml_level`).
+@ __srv_ident_of ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → ( Arc TlsIdent ) {
+    ? == keytype 1 { ^ ( tls_ident_rsa cert_chain ( rsa_key_plain rsa_n rsa_e rsa_d ) ) } {}
+    ? == keytype 2 { ^ ( tls_ident_mldsa cert_chain ml_level ec_priv ) } {}
+    ^ ( tls_ident_ec cert_chain ec_priv )
+}
+
+@ tls_ident_keytype ( Arc TlsIdent ) id → i { ^ . ( arc_get [TlsIdent] id ) keytype }
+
+// The SignatureScheme an identity signs CertificateVerify with.
+@ __srv_ident_scheme TlsIdent id → i {
+    ? == . id keytype 2 { ^ ( __srv_mldsa_scheme ( mldsa_key_level . id ml ) ) } {}
+    ^ ? == . id keytype 1 2052 1027
+}
+
 // Build the CertificateVerify body (SignatureScheme + signature) over the
-// SHA-256 digest `cvdig` of the signed content. keytype 1 = RSA-PSS
-// (rsa_pss_rsae_sha256, 0x0804) — PSS hashes with SHA-256 so the message
-// digest IS cvdig; otherwise EC P-256 (ecdsa_secp256r1_sha256, 0x0403).
-// keytype 2 = ML-DSA. Note it takes `cvc` — the signed *content* — not
-// the digest the other two use: ML-DSA hashes internally, so handing it
-// a SHA-256 digest would sign the wrong thing and still verify against
-// nothing.
-@ __srv_cv_body i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) cvdig ( Vec u ) cvc i ml_level → ( Vec u ) {
+// SHA-256 digest `cvdig` of the signed content, with identity `id`'s key.
+// RSA-PSS (rsa_pss_rsae_sha256, 0x0804) hashes with SHA-256 so the message
+// digest IS cvdig; so does EC P-256 (ecdsa_secp256r1_sha256, 0x0403).
+// ML-DSA takes `cvc` — the signed *content* — not the digest: it hashes
+// internally, so handing it a SHA-256 digest would sign the wrong thing
+// and still verify against nothing.
+@ __srv_cv_body TlsIdent id ( Vec u ) cvdig ( Vec u ) cvc → ( Vec u ) {
     : ( Vec u ) cvbody ( vec_new [u] )
-    ? == keytype 2 {
+    ? == . id keytype 2 {
         : ( Vec u ) ctx ( vec_new [u] )
-        : ( Vec u ) sig ( mldsa_sign ml_level ec_priv cvc ctx )
-        : i scheme ( __srv_mldsa_scheme ml_level )
-        ( _tls_u16 cvbody scheme )
+        : ( Vec u ) sig ( mldsa_sign_with . id ml cvc ctx )
+        ( _tls_u16 cvbody ( __srv_ident_scheme id ) )
         ( _tls_u16 cvbody ( vec_len [u] sig ) )
         ( _tls_cat cvbody sig )
         ^ cvbody
     } {}
-    ? == keytype 1 {
+    ? == . id keytype 1 {
         : ( Vec u ) salt ( _rand_bytes 32 )
-        : ( Vec u ) sig ( rsa_pss_sign_sha256 rsa_n rsa_e rsa_d cvdig salt )
+        : ( Vec u ) sig ( rsa_pss_sign_sha256_key . id rsa cvdig salt )
         ( _tls_u16 cvbody 2052 )  // rsa_pss_rsae_sha256 = 0x0804
         ( _tls_u16 cvbody ( vec_len [u] sig ) )
         ( _tls_cat cvbody sig )
     } {
-        : ( Vec u ) rs ( ecdsa_p256_sign ec_priv cvdig )
+        : ( Vec u ) rs ( ecdsa_p256_sign . id ec cvdig )
         : ( Vec u ) der ( __srv_der_ecdsa rs )
         ( _tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
         ( _tls_u16 cvbody ( vec_len [u] der ) )
@@ -549,12 +603,6 @@ $ `stdlib/core/rcbox.nu`
     ^ sel
 }
 
-// Core server handshake. `keytype` selects the CertificateVerify signature
-// algorithm: 0 = EC P-256 (ec_priv = 32-byte scalar), 1 = RSA (rsa_n /
-// rsa_d = modulus / private exponent, big-endian). The unused key
-// arguments are ignored. `cert_chain` is the pre-framed certificate_list
-// body — a concatenation of `tls_cert_entry` blobs (leaf first, then any
-// intermediates).
 // ── Message-level handshake machine ───────────────────────────────
 //
 // The TLS 1.3 server handshake as a state machine over handshake
@@ -576,7 +624,8 @@ $ `stdlib/core/rcbox.nu`
 // can say them in its own way — an alert record, or a QUIC
 // CONNECTION_CLOSE with 0x100 + description.
 //
-//   ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs ) → SrvHs
+//   ( _srv_hs_new ( Arc TlsIdent ) id alpn_prefs ) → SrvHs
+//   ( _srv_hs_set_pq hs ( Arc TlsIdent ) pq )  → v   a second identity, picked per ClientHello
 //   ( _srv_hs_set_ext hs want ext_out )       → v   require CH extension `want` (0 = none), append
 //                                                   `ext_out` (wire-framed extension(s)) to EE
 //   ( _srv_hs_client_hello hs ch )            → i   0 ok · alert description otherwise; fills
@@ -591,13 +640,10 @@ $ `stdlib/core/rcbox.nu`
 // one copies it.
 
 : SrvHsImpl {
-    ( Vec u ) cert_chain
-    i keytype
-    ( Vec u ) ec_priv
-    ( Vec u ) rsa_n
-    ( Vec u ) rsa_e
-    ( Vec u ) rsa_d
-    i ml_level
+    // The identity this handshake presents and signs with (a count on
+    // the caller's): the one it was made with, or `pq` once
+    // `__srv_pick_cert` chose that.
+    ( Arc TlsIdent ) id
     ( Vec u ) alpn_prefs
     i ext_want
     ( Vec u ) ext_in
@@ -620,13 +666,11 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) out_sh
     ( Vec u ) out_hs
     ( Vec u ) out_ticket
-    // Optional second identity: an ML-DSA leaf chain + FIPS 204 secret
-    // key, selected per ClientHello by `__srv_pick_cert` when the
-    // client's signature_algorithms lists its scheme. Empty when the
-    // caller configured a single certificate.
-    ( Vec u ) pq_chain
-    ( Vec u ) pq_sk
-    i pq_level
+    // Optional second identity (an ML-DSA leaf), selected per
+    // ClientHello by `__srv_pick_cert` when the client's
+    // signature_algorithms lists its scheme. F when the caller
+    // configured a single certificate.
+    ? ( Arc TlsIdent ) pq
 }
 
 // A SrvHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -639,16 +683,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ __SrvHs_ptr SrvHs h → *SrvHsImpl { ^ ( shared_ptr [SrvHsImpl] . h ctl ) }
 
-@ _srv_hs_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → SrvHs {
+@ _srv_hs_new ( Arc TlsIdent ) id ( Vec u ) alpn_prefs → SrvHs {
     : ( Shared SrvHsImpl ) h__box ( shared_zero [SrvHsImpl] )
     : *SrvHsImpl h ( shared_ptr [SrvHsImpl] h__box )
-    = . h cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
-    = . h keytype keytype
-    = . h ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
-    = . h rsa_n ( bytes_slice rsa_n 0 ( vec_len [u] rsa_n ) )
-    = . h rsa_e ( bytes_slice rsa_e 0 ( vec_len [u] rsa_e ) )
-    = . h rsa_d ( bytes_slice rsa_d 0 ( vec_len [u] rsa_d ) )
-    = . h ml_level ml_level
+    = . h id ( arc_clone [TlsIdent] id )
     = . h alpn_prefs ( bytes_slice alpn_prefs 0 ( vec_len [u] alpn_prefs ) )
     = . h ext_want 0
     = . h ext_in ( vec_new [u] )
@@ -676,24 +714,17 @@ $ `stdlib/core/rcbox.nu`
     = . h out_sh ( vec_new [u] )
     = . h out_hs ( vec_new [u] )
     = . h out_ticket ( vec_new [u] )
-    = . h pq_chain ( vec_new [u] )
-    = . h pq_sk ( vec_new [u] )
-    = . h pq_level 0
+    = . h pq @ ?( Arc TlsIdent ) { F }
     ^ @ SrvHs { h__box }
 }
 
-// Give the handshake a second, post-quantum identity: `pq_chain` is a
-// tls_cert_entry-framed ML-DSA certificate_list and `pq_sk` the matching
-// FIPS 204 secret key at `pq_level` (44 / 65 / 87). Which of the two
-// identities a connection gets is decided per ClientHello — see
-// `__srv_pick_cert`. Copies, like the constructor.
-@ _srv_hs_set_pq SrvHs h__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+// Give the handshake a second, post-quantum identity (tls_ident_mldsa).
+// Which of the two identities a connection gets is decided per
+// ClientHello — see `__srv_pick_cert`. Takes a count, like the
+// constructor.
+@ _srv_hs_set_pq SrvHs h__h ( Arc TlsIdent ) pq → v {
     : *SrvHsImpl h ( __SrvHs_ptr h__h )
-    ( vec_clear [u] . h pq_chain )
-    ( bytes_extend_bytes . h pq_chain pq_chain )
-    ( vec_clear [u] . h pq_sk )
-    ( bytes_extend_bytes . h pq_sk pq_sk )
-    = . h pq_level pq_level
+    = . h pq @ ?( Arc TlsIdent ) { T ( arc_clone [TlsIdent] pq ) }
 }
 
 @ _srv_hs_set_ext SrvHs h__h i want ( Vec u ) ext_out → v {
@@ -767,14 +798,11 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __srv_sig_scheme_of . h 0 )
 }
 
-@ __srv_sig_scheme_of inout SrvHsImpl h → i {
-    ? == . h keytype 2 { ^ ( __srv_mldsa_scheme . h ml_level ) } {}
-    ^ ? == . h keytype 1 2052 1027
-}
+@ __srv_sig_scheme_of inout SrvHsImpl h → i { ^ ( __srv_ident_scheme ( arc_get [TlsIdent] . h id ) ) }
 
 @ __srv_pick_cert inout SrvHsImpl h ( Vec u ) ch i es i ee → v {
-    ? == ( vec_len [u] . h pq_chain ) 0 { ^ } {}
-    : i want ( __srv_mldsa_scheme . h pq_level )
+    : i want ?? . h pq { T a → ( __srv_ident_scheme ( arc_get [TlsIdent] a ) ) F → 0 }
+    ? == want 0 { ^ } {}
     : i sa ( __srv_find_ext ch es ee 13 )
     ? < sa 0 { ^ } {}
     : i extlen ( _rdint ch - sa 2 2 )
@@ -789,10 +817,8 @@ $ `stdlib/core/rcbox.nu`
         = p + p 2
     }
     ? == hit 0 { ^ } {}
-    = . h cert_chain ( bytes_slice . h pq_chain 0 ( vec_len [u] . h pq_chain ) )
-    = . h ec_priv ( bytes_slice . h pq_sk 0 ( vec_len [u] . h pq_sk ) )
-    = . h keytype 2
-    = . h ml_level . h pq_level
+    : ( Arc TlsIdent ) chosen ?? . h pq { T a → ( arc_clone [TlsIdent] a ) F → ( arc_clone [TlsIdent] . h id ) }
+    = . h id chosen
 }
 
 @ _srv_hs_client_hello SrvHs h__h ( Vec u ) ch → i {
@@ -848,7 +874,7 @@ $ `stdlib/core/rcbox.nu`
     ? > ee ( vec_len [u] ch ) { ^ ( __srv_hs_fail h 50 ) } {}
 
     // Which identity this connection gets (§4.4.2.2) — decided before
-    // anything below reads keytype / cert_chain.
+    // anything below reads the identity.
     ( __srv_pick_cert h ch es ee )
 
     // key_share (0x0033): pick x25519 (0x001d) if offered, else secp256r1.
@@ -1017,8 +1043,9 @@ $ `stdlib/core/rcbox.nu`
         // by the caller via tls_cert_entry — leaf first, then intermediates.
         : ( Vec u ) certbody ( vec_new [u] )
         ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
-        ( _u24 certbody ( vec_len [u] . h cert_chain ) )  // certificate_list length
-        ( _tls_cat certbody . h cert_chain )
+        : TlsIdent me ( arc_get [TlsIdent] . h id )
+        ( _u24 certbody ( vec_len [u] . me chain ) )  // certificate_list length
+        ( _tls_cat certbody . me chain )
         : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
         ( sha256_update . h trh certmsg )
         ( bytes_extend_bytes . h out_hs certmsg )
@@ -1027,7 +1054,7 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) th_cert ( sha256_snapshot . h trh )
         : ( Vec u ) cvc ( __srv_cv_content th_cert )
         : ( Vec u ) cvdig ( sha256_pure cvc )
-        : ( Vec u ) cvbody ( __srv_cv_body . h keytype . h ec_priv . h rsa_n . h rsa_e . h rsa_d cvdig cvc . h ml_level )
+        : ( Vec u ) cvbody ( __srv_cv_body me cvdig cvc )
         : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
         ( sha256_update . h trh cvmsg )
         ( bytes_extend_bytes . h out_hs cvmsg )
@@ -1118,13 +1145,13 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk ( Vec u ) alpn_prefs → !TlsConn TlsErr {
+@ __tls_accept_impl i raw ( Arc TlsIdent ) id ? ( Arc TlsIdent ) pq ( Vec u ) alpn_prefs → !TlsConn TlsErr {
     ? <= raw 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : TlsConn c__h ( _tls_conn_new raw )
     : ~ * TlsConnImpl c ( _tls_ptr c__h )
     // The machine goes with this scope, on every path out of it.
-    : SrvHs hs__h ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
-    ? > ( vec_len [u] pq_chain ) 0 { ( _srv_hs_set_pq hs__h pq_chain pq_level pq_sk ) } {}
+    : SrvHs hs__h ( _srv_hs_new id alpn_prefs )
+    ?? pq { T a → ( _srv_hs_set_pq hs__h a ) F → {} }
     : ~ * SrvHsImpl hs ( __SrvHs_ptr hs__h )
     : !v TlsErr r ( __srv_accept . c 0 . hs 0 )
     ^ ?? r { T _ → @ !TlsConn TlsErr { T c__h } F e → @ !TlsConn TlsErr { F e } }
@@ -1216,11 +1243,22 @@ $ `stdlib/core/rcbox.nu`
 // offers ALPN with no protocol in common is refused with a fatal
 // no_application_protocol alert. An empty list means "no ALPN".
 @ tls_accept_alpn i raw ( Vec u ) cert_chain ( Vec u ) priv ( Vec u ) alpn_prefs → !TlsConn TlsErr {
-    : ( Vec u ) en ( vec_new [u] )
-    : ( Vec u ) ee ( vec_new [u] )
-    : ( Vec u ) ed ( vec_new [u] )
-    : !TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 en 0 en alpn_prefs )
+    : !TlsConn TlsErr r ( tls_accept_ident raw ( tls_ident_ec cert_chain priv ) alpn_prefs )
     ^ r
+}
+
+// Accept with a prepared identity (tls_ident_ec / tls_ident_rsa /
+// tls_ident_mldsa) — the form a server that accepts more than once uses:
+// the key is prepared once, and each handshake takes a count on it.
+@ tls_accept_ident i raw ( Arc TlsIdent ) id ( Vec u ) alpn_prefs → !TlsConn TlsErr {
+    ^ ( __tls_accept_impl raw id @ ?( Arc TlsIdent ) { F } alpn_prefs )
+}
+
+// tls_accept_ident with a second identity `pq` (an ML-DSA leaf), shown to
+// every client whose signature_algorithms lists its scheme — see
+// tls_accept_dual_alpn.
+@ tls_accept_ident_dual i raw ( Arc TlsIdent ) id ( Arc TlsIdent ) pq ( Vec u ) alpn_prefs → !TlsConn TlsErr {
+    ^ ( __tls_accept_impl raw id @ ?( Arc TlsIdent ) { T ( arc_clone [TlsIdent] pq ) } alpn_prefs )
 }
 
 // `tls_alpn_pack` (the wire form of a "h2 http/1.1" list) lives in
@@ -1228,9 +1266,10 @@ $ `stdlib/core/rcbox.nu`
 
 // Accept a TLS 1.3 connection with an RSA leaf certificate, signing the
 // CertificateVerify with RSASSA-PSS (rsa_pss_rsae_sha256). `rsa_n` /
-// `rsa_d` are the modulus / private exponent, big-endian (see
-// std/pkey.nu `rsa_priv_from_pem` → RsaPriv). `cert_chain` is a
-// tls_cert_entry-framed certificate_list.
+// `rsa_e` / `rsa_d` are the modulus / public / private exponent,
+// big-endian. `cert_chain` is a tls_cert_entry-framed certificate_list.
+// The key is prepared per call and without its factors; a server keeps a
+// tls_ident_rsa of std/pkey.nu's rsa_priv_sign_key instead.
 @ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !TlsConn TlsErr {
     : ( Vec u ) noalpn ( vec_new [u] )
     : !TlsConn TlsErr r ( tls_accept_rsa_alpn raw cert_chain rsa_n rsa_e rsa_d noalpn )
@@ -1239,8 +1278,7 @@ $ `stdlib/core/rcbox.nu`
 
 // tls_accept_rsa with an ALPN preference list — see tls_accept_alpn.
 @ tls_accept_rsa_alpn i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) alpn_prefs → !TlsConn TlsErr {
-    : ( Vec u ) ee ( vec_new [u] )
-    : !TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 ee 0 ee alpn_prefs )
+    : !TlsConn TlsErr r ( tls_accept_ident raw ( tls_ident_rsa cert_chain ( rsa_key_plain rsa_n rsa_e rsa_d ) ) alpn_prefs )
     ^ r
 }
 
@@ -1263,10 +1301,7 @@ $ `stdlib/core/rcbox.nu`
 
 // tls_accept_mldsa with an ALPN preference list — see tls_accept_alpn.
 @ tls_accept_mldsa_alpn i raw ( Vec u ) cert_chain i level ( Vec u ) sk ( Vec u ) alpn_prefs → !TlsConn TlsErr {
-    : ( Vec u ) en ( vec_new [u] )
-    : ( Vec u ) ee ( vec_new [u] )
-    : ( Vec u ) ed ( vec_new [u] )
-    : !TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level en 0 en alpn_prefs )
+    : !TlsConn TlsErr r ( tls_accept_ident raw ( tls_ident_mldsa cert_chain level sk ) alpn_prefs )
     ^ r
 }
 
@@ -1282,8 +1317,12 @@ $ `stdlib/core/rcbox.nu`
 // `tcp_listen_tls_dual` (std/net.nu) is the PEM-file front of this.
 //
 // An empty `pq_chain` makes it tls_accept_alpn / tls_accept_rsa_alpn.
+// Both keys are prepared per call (tls_accept_ident_dual takes them
+// prepared).
 @ tls_accept_dual_alpn i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk ( Vec u ) alpn_prefs → !TlsConn TlsErr {
-    ^ ( __tls_accept_impl raw cert_chain keytype ec_priv rsa_n rsa_e rsa_d 0 pq_chain pq_level pq_sk alpn_prefs )
+    : ( Arc TlsIdent ) id ( __srv_ident_of cert_chain keytype ec_priv rsa_n rsa_e rsa_d 0 )
+    ? == ( vec_len [u] pq_chain ) 0 { ^ ( tls_accept_ident raw id alpn_prefs ) } {}
+    ^ ( tls_accept_ident_dual raw id ( tls_ident_mldsa pq_chain pq_level pq_sk ) alpn_prefs )
 }
 
 @ __srv_rand i n → ( Vec u ) {
