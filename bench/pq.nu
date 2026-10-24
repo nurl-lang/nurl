@@ -28,10 +28,13 @@
 // Pure NURL beats the reference C everywhere, and beats the AVX2
 // implementations on every SLH-DSA operation — the scheme that is
 // almost nothing but Keccak, which stdlib runs four lanes at a time
-// (std/hash_sha3x4) behind the `simd` prefix. The lattice schemes sit
-// at 2–3× from AVX2; what remains there is hand-packed shuffling below
-// vector width in the NTT's narrow layers and the compress/encode bit
-// cursors — measured, known, and cheaper to leave than to hold badly.
+// (std/hash_sha3x4) behind the `simd` prefix. The lattice schemes sat
+// at 2–3× from AVX2, on the NTT's narrow layers and the compress/encode
+// bit cursors; ML-KEM now runs those layers and its base multiplication
+// on lane shuffles, its encodings eight coefficients at a time and its
+// compression vectorised (2026-10: encaps 21.9 → 14.8 µs on an
+// i7-11850H, level with aws-lc-rs there), and is mostly Keccak.
+// ML-DSA still has the scalar narrow layers.
 //
 // Every algorithm here is pinned byte-exact by NIST ACVP vectors
 // (tools/*_acvp_gate.nu), so this file only has to be honest about

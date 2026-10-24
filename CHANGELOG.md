@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ML-KEM-768 a third faster: encapsulation 21.9 → 14.8 µs, decapsulation
+  26.3 → 15.8 µs, key generation 22.2 → 17.0 µs** (local i7-11850H, where
+  aws-lc-rs encapsulates in 15.0). Profiled with hardware counters, the
+  time went to three scalar shapes `std/mlkem` had left behind its AVX2
+  wide layers: the NTT's narrow layers (len 8, 4, 2) and the base
+  multiplication — now gathered into whole vectors by in-lane shuffles
+  (permlo/hi128, unpack64, unpack32) with per-lane zeta tables built once
+  per process (publish-once slot 12), the butterflies the same Montgomery
+  and Barrett lanes as before; ByteEncode / ByteDecode, which ran a bit
+  cursor whose inner loop changed trip count every coefficient — now eight
+  coefficients (exactly d bytes) at a time through two 64-bit words, with
+  d a literal at every call; and Compress, whose division by q in 64-bit
+  signed arithmetic stayed a scalar loop — now in 32-bit unsigned, which
+  the compiler vectorises. K-PKE's polynomials share one workspace
+  allocation, and y ‖ e1 ‖ e2 are contiguous so all 2k + 1 CBD streams go
+  through the four-way sponge (e2's scalar SHAKE256 is gone). The ACVP gate
+  (180 cases) and the vector tests hold the bytes on both `simd` clones.
 - **ChaCha20-Poly1305 sealing a 16 KB record: 8.5 → 5.9 µs locally,
   93 % of aws-lc-rs (5.45 µs).** Poly1305 (`std/chacha20poly1305`) now
   runs four blocks at a time on 256-bit vectors where the CPU has them:
