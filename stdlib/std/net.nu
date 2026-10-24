@@ -66,7 +66,7 @@
 //                       tags still mirror the runtime; only its inert
 //                       nurl_tcp_*_tls* stubs set it, and no .nu calls them
 //   NetTlsCertLoad  10  TLS listener: cert PEM unreadable or has no
-//                       parsable CERTIFICATE block (_load_tls_creds)
+//                       parsable CERTIFICATE block (_load_tls_ident)
 //   NetTlsKeyLoad   11  TLS listener: key PEM is not an EC P-256, RSA or
 //                       ML-DSA PKCS#8 key, or tcp_listen_tls_dual's second
 //                       identity is not ML-DSA
@@ -122,29 +122,23 @@ $ `stdlib/std/thread.nu`
 // Listener and connection are intentionally distinct types — the
 // compiler refuses to mix them at call sites, which catches the
 // classic "passed listener to read" mistake at type-check time.
-// A TLS listener carries the loaded certificate_list (already framed as
-// CertificateEntry blobs, leaf first) + the leaf's private key, so each
-// accept can run the pure handshake (is_tls = 1). keytype selects the
-// key form: 0 = EC P-256 (kp1 = 32-byte scalar, kp2 unused), 1 = RSA
-// (kp1 = modulus n, kp2 = private exponent d, kp3 = public exponent e),
-// 2 = ML-DSA (kp1 = the FIPS 204 secret key; its length names the
-// parameter set), all big-endian. pqcertp / pqkp are an OPTIONAL second
+// A TLS listener carries its identity — the loaded certificate_list
+// (CertificateEntry blobs, leaf first) and the leaf's private key,
+// prepared for signing when the listener is made (std/tls_server.nu
+// TlsIdent) — so each accept runs the pure handshake (is_tls = 1) with
+// nothing derived from the key on the way. `pq` is an OPTIONAL second
 // identity — an ML-DSA chain and key served beside the classical one to
-// clients that list its scheme (`tcp_listen_tls_dual`), 0/0 otherwise.
-// `alpn` is the TLS listener's ALPN preference list in wire form
-// ([len:1][name] entries, server order — see tls_alpn_pack), empty when
-// the listener does not negotiate ALPN. The listener is a plain value
-// every accepting worker copies, so the material lives in a table of the
-// module's (g_tls_lcreds below) and `creds` names its slot (0 on a
-// plaintext listener).
+// clients that list its scheme (`tcp_listen_tls_dual`). `alpn` is the
+// TLS listener's ALPN preference list in wire form ([len:1][name]
+// entries, server order — see tls_alpn_pack), empty when the listener
+// does not negotiate ALPN. The listener is a plain value every accepting
+// worker copies, so the material lives in a table of the module's
+// (g_tls_lcreds below) and `creds` names its slot (0 on a plaintext
+// listener); `keytype` is the identity's (tls_ident_keytype).
 : TlsCreds {
-    ( Vec u ) cert
-    ( Vec u ) k1
-    ( Vec u ) k2
-    ( Vec u ) k3
+    ( Arc TlsIdent ) id
+    ? ( Arc TlsIdent ) pq
     ( Vec u ) alpn
-    ( Vec u ) pqcert
-    ( Vec u ) pqk
 }
 
 // The listener's state: the runtime socket handle, and for a TLS
@@ -424,41 +418,37 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     ^ list
 }
 
-// Load cert chain + private key from PEM files into a TLS listener. Fills
-// `cert_out` with the framed certificate_list and `k1`/`k2` with the key
-// material; returns the keytype (0 = EC P-256 scalar in k1; 1 = RSA with
-// modulus in k1, private exponent in k2, public exponent in k3; 2 =
-// ML-DSA with the FIPS 204 secret key in k1), or a NEGATIVE NetErr-style
-// code on failure (-10 cert, -11 key). The key form is auto-detected:
-// the EC, RSA and ML-DSA PKCS#8 parsers each cleanly reject the others'
+// Load cert chain + private key from PEM files into a server identity:
+// the framed certificate_list and the key, prepared for signing
+// (tls_ident_ec / tls_ident_rsa / tls_ident_mldsa). Fails with
+// NetTlsCertLoad / NetTlsKeyLoad. The key form is auto-detected: the EC,
+// RSA and ML-DSA PKCS#8 parsers each cleanly reject the others'
 // encodings.
-@ _load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
+@ _load_tls_ident s cert_path s key_path → !( Arc TlsIdent ) NetErr {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
-    ? == ( vec_len [u] chain ) 0 { ^ -10 } {}
-    ( bytes_extend_bytes cert_out chain )
+    ? == ( vec_len [u] chain ) 0 { ^ @ !( Arc TlsIdent ) NetErr { F ( _net_err_of 10 ) } } {}
     : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
     // EC first; on failure try RSA (the parsers reject foreign encodings).
-    : ?( Vec u ) ec ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
-        T sc → @ ?( Vec u ) { T sc } F _ → @ ?( Vec u ) { F # ( Vec u ) 0 }
-    }
-    ?? ec {
-        T sc → { ( bytes_extend_bytes k1 sc ) ^ 0 }
+    ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
+        T sc → { ^ @ !( Arc TlsIdent ) NetErr { T ( tls_ident_ec chain sc ) } }
         F _ → {}
     }
-    : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
+    ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
         T k → {
-            // k2: the CRT blob when the key has one (std/rsa_mont.nu), else d
-            ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 ( rsa_priv_sign_key k ) )
-            ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
-            1
+            // CRT form when the key carries its factors (std/pkey.nu)
+            ?? ( rsa_priv_sign_key k ) {
+                T sk → { ^ @ !( Arc TlsIdent ) NetErr { T ( tls_ident_rsa chain sk ) } }
+                F → { ^ @ !( Arc TlsIdent ) NetErr { F ( _net_err_of 11 ) } }
+            }
         }
-        F _ → ?? ( mldsa_priv_from_pem ( string_data keypem ) ) {
-            T mk → { ( bytes_extend_bytes k1 . mk sk ) 2 }
-            F _ → -11
-        }
+        F _ → {}
     }
-    ^ kt
+    ?? ( mldsa_priv_from_pem ( string_data keypem ) ) {
+        T mk → { ^ @ !( Arc TlsIdent ) NetErr { T ( tls_ident_mldsa chain ( mldsa_level_of_sk_len ( vec_len [u] . mk sk ) ) . mk sk ) } }
+        F _ → {}
+    }
+    ^ @ !( Arc TlsIdent ) NetErr { F ( _net_err_of 11 ) }
 }
 
 @ tcp_listen_tls_with_backlog s host i port i backlog s cert_path s key_path → !TcpListener NetErr {
@@ -471,27 +461,23 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // like the cert and key. `pq_cert_path` / `pq_key_path` name an optional
 // ML-DSA chain + key to serve beside the classical pair ("" for none).
 @ __tcp_listen_tls_impl s host i port i backlog s cert_path s key_path s alpn_protocols s pq_cert_path s pq_key_path → !TcpListener NetErr {
-    : ( Vec u ) cert ( vec_new [u] )
-    : ( Vec u ) k1 ( vec_new [u] )
-    : ( Vec u ) k2 ( vec_new [u] )
-    : ( Vec u ) k3 ( vec_new [u] )
-    : i keytype ( _load_tls_creds cert_path key_path cert k1 k2 k3 )
-    ? < keytype 0 {
-        ^ @ !TcpListener NetErr { F ( _net_err_of - 0 keytype ) }
-    } {}
+    : ( Arc TlsIdent ) id ?? ( _load_tls_ident cert_path key_path ) {
+        T x → x
+        F e → { ^ @ !TcpListener NetErr { F e } }
+    }
     // The second identity: it has to BE an ML-DSA key — a classical key
     // here would be a configuration mistake, and is refused as a key
     // load error rather than silently served as a second ECDSA cert.
-    : ( Vec u ) pqcert ( vec_new [u] )
-    : ( Vec u ) pqk ( vec_new [u] )
+    : ~ ? ( Arc TlsIdent ) pq @ ?( Arc TlsIdent ) { F }
     ? > ( nurl_str_len pq_cert_path ) 0 {
-        : ( Vec u ) u2 ( vec_new [u] )
-        : ( Vec u ) u3 ( vec_new [u] )
-        : i pqt ( _load_tls_creds pq_cert_path pq_key_path pqcert pqk u2 u3 )
-        : i pqerr ? < pqt 0 - 0 pqt ? != pqt 2 11 0
-        ? != pqerr 0 {
-            ^ @ !TcpListener NetErr { F ( _net_err_of pqerr ) }
+        : ( Arc TlsIdent ) p2 ?? ( _load_tls_ident pq_cert_path pq_key_path ) {
+            T x → x
+            F e → { ^ @ !TcpListener NetErr { F e } }
+        }
+        ? != ( tls_ident_keytype p2 ) 2 {
+            ^ @ !TcpListener NetErr { F ( _net_err_of 11 ) }
         } {}
+        = pq @ ?( Arc TlsIdent ) { T p2 }
     } {}
     : i raw ( nurl_tcp_listen host port backlog )
     ? == raw 0 {
@@ -506,10 +492,10 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     // single-threaded, so every worker that later accepts on this
     // listener seals and opens tickets under the same key.
     ( _tls_ticket_key_ensure )
-    // The cert list and key material move into the listener's shared
-    // credentials.
+    // The identities move into the listener's shared credentials.
+    : i keytype ( tls_ident_keytype id )
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
-    : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { cert k1 k2 k3 alpn pqcert pqk } )
+    : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { id pq alpn } )
     ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 1 keytype ( __tls_lcreds_add creds ) ) }
 }
 
@@ -905,23 +891,12 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 }
 
 @ __tls_accept_with TcpListener l * TlsCreds c i craw → !TcpConn NetErr {
-    : ( Vec u ) cert . c cert
-    : ( Vec u ) k1 . c k1
-    : ( Vec u ) alpn . c alpn
-    // keytype 0 = EC P-256 (k1 = scalar), 1 = RSA (k1 = n, k2 = d, k3 =
-    // e), 2 = ML-DSA (k1 = secret key). With a second identity parked
-    // on the listener the handshake chooses between the two per
-    // ClientHello (tls_accept_dual_alpn); without one the classical /
-    // ML-DSA single-identity entry points are the same code.
-    : ( Vec u ) k2 . c k2
-    : ( Vec u ) k3 . c k3
-    : ( Vec u ) pqc . c pqcert
-    : ( Vec u ) pqk . c pqk
-    : ( Vec u ) none ( vec_new [u] )
-    : !TlsConn TlsErr r ? == . ( __tli l ) keytype 2
-    ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
-    ( tls_accept_dual_alpn craw cert . ( __tli l ) keytype ? == . ( __tli l ) keytype 1 none k1 ? == . ( __tli l ) keytype 1 k1 none k3 k2
-    pqc ( mldsa_level_of_sk_len ( vec_len [u] pqk ) ) pqk alpn )
+    // With a second identity parked on the listener the handshake
+    // chooses between the two per ClientHello (tls_accept_ident_dual).
+    : !TlsConn TlsErr r ?? . c pq {
+        T pq → ( tls_accept_ident_dual craw . c id pq . c alpn )
+        F → ( tls_accept_ident craw . c id . c alpn )
+    }
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
         T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 2 ( _tls_word tc ) T ) }

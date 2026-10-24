@@ -23,6 +23,11 @@
 // random bytes, which keeps a fault or a repeated message from leaking
 // the key the way deterministic signing can.
 //
+// A signer that signs many messages with one key prepares it once —
+// unpacked, in the NTT domain, Â expanded — and signs with that:
+//   ( mldsa_sign_key i level ( Vec u ) sk )          → MldsaKey
+//   ( mldsa_sign_with MldsaKey key ( Vec u ) msg ( Vec u ) ctx ) → ( Vec u )
+//
 // API — the deterministic and internal forms, which FIPS 204 defines
 // and NIST's ACVP vectors exercise. Production callers want the three
 // above.
@@ -1123,23 +1128,20 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
 
 // ── Signing ────────────────────────────────────────────────────────
 
-// ML-DSA.Sign_internal (Algorithm 7).
-//
-// Returns an empty Vec if the rejection loop fails to terminate within
-// a generous bound. That cannot happen for a well-formed key — the
-// expected iteration count is between 4 and 7 depending on the level —
-// but an unbounded loop on a corrupted secret key would hang a server,
-// and failing is recoverable where hanging is not.
-simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
+// An ML-DSA private key prepared for signing: everything Sign_internal
+// derives from the key alone — s1, s2 and t0 unpacked and in the NTT
+// domain, the matrix Â expanded from ρ — done once, so a signer that signs
+// many messages (a TLS listener) does not redo it per signature. Never
+// written after it is built: one key may be shared by every thread that
+// signs with it (an Arc).
+: MldsaKey { i level ( Vec u ) kk ( Vec u ) tr ( Vec i32 ) s1 ( Vec i32 ) s2 ( Vec i32 ) t0 ( Vec i32 ) a }
+
+@ mldsa_sign_key i level ( Vec u ) sk → MldsaKey {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
-    : i g1 . p gamma1
-    : i g2 . p gamma2
-    : i beta * . p tau . p eta
     : ( Vec i32 ) zt ( __mldsa_zetas )
     : *i32 zp ( vec_data [i32] zt )
-
     : ( Vec u ) rho ( bytes_slice sk 0 32 )
     : ( Vec u ) kk ( bytes_slice sk 32 64 )
     : ( Vec u ) tr ( bytes_slice sk 64 128 )
@@ -1160,7 +1162,36 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
 
     : ( Vec i32 ) a ( __md_poly_zero * 256 * k l )
     ( __md_expand_a a rho k l )
-    : *i32 ap ( vec_data [i32] a )
+    ^ @ MldsaKey { level kk tr s1 s2 t0 a }
+}
+
+// The level a prepared key signs at.
+@ mldsa_key_level MldsaKey key → i { ^ . key level }
+
+// ML-DSA.Sign_internal (Algorithm 7) over a message representative μ,
+// with a prepared key.
+//
+// Returns an empty Vec if the rejection loop fails to terminate within
+// a generous bound. That cannot happen for a well-formed key — the
+// expected iteration count is between 4 and 7 depending on the level —
+// but an unbounded loop on a corrupted secret key would hang a server,
+// and failing is recoverable where hanging is not.
+simd @ mldsa_sign_mu_key MldsaKey key ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
+    : i level . key level
+    : MldsaParams p ( __mldsa_params level )
+    : i k . p k
+    : i l . p l
+    : i g1 . p gamma1
+    : i g2 . p gamma2
+    : i beta * . p tau . p eta
+    : ( Vec i32 ) zt ( __mldsa_zetas )
+    : *i32 zp ( vec_data [i32] zt )
+    : ( Vec u ) kk . key kk
+    : *i32 s1p ( vec_data [i32] . key s1 )
+    : *i32 s2p ( vec_data [i32] . key s2 )
+    : *i32 t0p ( vec_data [i32] . key t0 )
+    : *i32 ap ( vec_data [i32] . key a )
+    : ~ i i 0
 
     // ρ'' ← H(K ‖ rnd ‖ μ, 64)
     : Sha3 hr ( shake256_init )
@@ -1305,6 +1336,10 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     }
 
     ^ sig
+}
+
+@ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
+    ^ ( mldsa_sign_mu_key ( mldsa_sign_key level sk ) mu rnd )
 }
 
 // μ ← H(tr ‖ M', 64) — the message representative, bound to the public
@@ -1467,6 +1502,17 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ( Vec u ) mp ( __mldsa_mprime msg ctx )
     : ( Vec u ) rnd ( rand_bytes 32 )
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
+    ^ sig
+}
+
+// mldsa_sign with a prepared key (mldsa_sign_key): the same hedged
+// signature, without re-deriving the key's NTT forms and Â.
+@ mldsa_sign_with MldsaKey key ( Vec u ) msg ( Vec u ) ctx → ( Vec u ) {
+    ? > ( vec_len [u] ctx ) 255 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) mp ( __mldsa_mprime msg ctx )
+    : ( Vec u ) rnd ( rand_bytes 32 )
+    : ( Vec u ) mu ( __mldsa_mu . key tr mp )
+    : ( Vec u ) sig ( mldsa_sign_mu_key key mu rnd )
     ^ sig
 }
 

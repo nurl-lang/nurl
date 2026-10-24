@@ -22,6 +22,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/x509.nu`
 $ `stdlib/std/ecdsa_p256.nu`
+$ `stdlib/std/rsa.nu`
 
 @ __pk_is_b64 i c → b {
     ? & >= c 65 <= c 90 { ^ T } {}  // A-Z
@@ -124,28 +125,17 @@ $ `stdlib/std/ecdsa_p256.nu`
 //
 // Parsed RSA private key, big-endian magnitudes with the sign byte
 // stripped (so `n`'s length is the true modulus size — RSASSA-PSS uses
-// it as the signature length). `crt` packs the CRT parameters (p, q, dP,
-// dQ, qInv) into the blob std/rsa_mont.nu signs with — two half-width
-// exponentiations instead of one full one, ~4× faster — or is empty when
-// the key carries none; pass it where a private exponent is asked for
-// (`rsa_priv_sign_key`).
-: RsaPriv { ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) crt }
+// it as the signature length). `p`, `q`, `dp`, `dq`, `qinv` are the CRT
+// parameters (RFC 8017 §3.2), all empty when the key carries none.
+: RsaPriv { ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) p ( Vec u ) q ( Vec u ) dp ( Vec u ) dq ( Vec u ) qinv }
 
-// What to hand a signer as the private exponent: the CRT blob when the
-// key has one, else d.
-@ rsa_priv_sign_key RsaPriv k → ( Vec u ) {
-    : ( Vec u ) out ( vec_new [u] )
-    ( bytes_extend_bytes out ? > ( vec_len [u] . k crt ) 0 . k crt . k d )
-    ^ out
-}
-
-// The CRT blob of std/rsa_mont.nu: magic 00 'C' 'R' 'T', then each field
-// as a 2-byte big-endian length and its big-endian bytes.
-@ __pk_crt_push ( Vec u ) out ( Vec u ) f → v {
-    : i l ( vec_len [u] f )
-    ( vec_push [u] out # u & >> l 8 255 )
-    ( vec_push [u] out # u & l 255 )
-    ( bytes_extend_bytes out f )
+// The key prepared for signing (std/rsa.nu RsaKey): the CRT form — two
+// half-width exponentiations, ~4× faster than one full one — when the
+// key carries its factors, else the plain private exponent. F when the
+// factors it carries are unusable (an even or empty prime).
+@ rsa_priv_sign_key RsaPriv k → ?RsaKey {
+    ? == ( vec_len [u] . k p ) 0 { ^ @ ?RsaKey { T ( rsa_key_plain . k n . k e . k d ) } } {}
+    ^ ( rsa_key_crt . k n . k e . k p . k q . k dp . k dq . k qinv )
 }
 
 // Its fields go with their owner; this lets go of them early (optional).
@@ -168,22 +158,18 @@ $ `stdlib/std/ecdsa_p256.nu`
     : DerTlv tdp ( _der_next der tq )
     : DerTlv tdq ( _der_next der tdp )
     : DerTlv tqi ( _der_next der tdq )
-    : ( Vec u ) crt ( vec_new [u] )
     : b ok1 & & == . tp ok 1 == . tq ok 1 == . tdp ok 1
     : b ok2 & == . tdq ok 1 == . tqi ok 1
     : b tg1 & & == . tp tag 2 == . tq tag 2 == . tdp tag 2
     : b tg2 & == . tdq tag 2 == . tqi tag 2
     : b have & & ok1 ok2 & tg1 tg2
-    ? have {
-        ( vec_push [u] crt # u 0 ) ( vec_push [u] crt # u 67 )
-        ( vec_push [u] crt # u 82 ) ( vec_push [u] crt # u 84 )
-        ( __pk_crt_push crt ( _der_uint der tp ) )
-        ( __pk_crt_push crt ( _der_uint der tq ) )
-        ( __pk_crt_push crt ( _der_uint der tdp ) )
-        ( __pk_crt_push crt ( _der_uint der tdq ) )
-        ( __pk_crt_push crt ( _der_uint der tqi ) )
+    : ( Vec u ) n ( _der_uint der tn )
+    : ( Vec u ) e ( _der_uint der te )
+    : ( Vec u ) d ( _der_uint der td )
+    ? ! have {
+        ^ @ ?RsaPriv { T @ RsaPriv { n e d ( vec_new [u] ) ( vec_new [u] ) ( vec_new [u] ) ( vec_new [u] ) ( vec_new [u] ) } }
     } {}
-    ^ @ ?RsaPriv { T @ RsaPriv { ( _der_uint der tn ) ( _der_uint der te ) ( _der_uint der td ) crt } }
+    ^ @ ?RsaPriv { T @ RsaPriv { n e d ( _der_uint der tp ) ( _der_uint der tq ) ( _der_uint der tdp ) ( _der_uint der tdq ) ( _der_uint der tqi ) } }
 }
 
 // Load an RSA private key from a PEM file. Accepts both PKCS#1

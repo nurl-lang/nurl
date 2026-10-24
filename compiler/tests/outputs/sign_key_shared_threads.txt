@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+even prime: refused
+RSA signatures equal to the plain key's and verified: 80
+ML-DSA signatures verified: 16

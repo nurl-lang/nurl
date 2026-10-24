@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+keep  strong 1
+wrap  strong 1
+block strong 1
+take  strong 1

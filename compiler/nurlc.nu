@@ -16739,7 +16739,7 @@ unsafe @ gen_call i lex i syms i cg → s {
 // parent's snapshot, not defer-snapshotted, with a destructor to run).
 // Returns the exit label, or `` when the arm has nothing to drop — then
 // the caller keeps branching straight to the join.
-@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown0 → s {
+@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown0 s xhown → s {
     : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     : ~ s udelta ``
     : ~ s urest ( nurl_sym_get syms `__user_drops__` )
@@ -16783,8 +16783,36 @@ unsafe @ gen_call i lex i syms i cg → s {
     : s skey ( nurl_str_cat lbl `__x_sfields` )
     ( nurl_sym_set g_fn_escapes ukey udelta )
     ( nurl_sym_set g_fn_escapes skey sdelta )
-    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ( mem_arm_exit_hown ty hown0 ) )
+    : s __xh ( mem_arm_exit_hown ty hown0 )
+    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ? & == 0 ( nurl_str_len __xh ) != 0 ( nurl_str_len xhown ) xhown __xh )
     ^ lbl
+}
+
+// The same second chance for a value that CAN hold an address, when it is
+// a call's own result (on the paths `hown` holds) and the call cannot hand
+// back a view of any local this frame owns: the callee's lend summary says
+// which of its arguments its result may borrow from (mem_local_lend_of —
+// decided at module end for a callee compiled later); an argument that is
+// not a plain binding (a nested call, a literal) is not followed, so it
+// answers `` there. `T id → ( quic_creds_ident id )` hands over a handle holding a
+// clone of `id`, not `id`: parked as "the value may be one of them", the
+// payload leaked its Arc on every call.
+@ mem_arm_call_xhown i syms i cg s ty i tt0 s hown → s {
+    ? | == 0 ( nurl_str_len hown ) ( seq hown `false` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __ty_no_address ty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i ht ? == tt0 TT_LBRACE ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) tt0
+    ? != ht TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s args ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    ? ( str_contains_word args `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s lp ( mem_local_lend_of syms cg key args )
+    ? == 0 ( nurl_str_len lp ) { ^ ( nurl_str_cat hown `` ) } {}
+    : s nl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nl ) ( nurl_print ` = xor i1 ` ) ( nurl_print lp ) ( nurl_print `, true\n` )
+    : s o ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = and i1 ` ) ( nurl_print hown ) ( nurl_print `, ` ) ( nurl_print nl ) ( nurl_print `\n` )
+    ^ o
 }
 
 // The arm's ownership bit (mem_arm_hown) as the parked drops' second
@@ -17231,6 +17259,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : ~ s t_hown `false`
     ? == 0 g_did_ret { = t_hown ( mem_arm_hown syms cg tt2 t_tt0 t_v0 t_retid c_jdepth ) } {}
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_hown ) ``
+    : s t_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
     : ~ s t_shown ``
     ? == 0 g_did_ret { = t_shown ( mem_arm_struct_hown syms cg tt2 t_tt0 ) } {}
     // Which enum this arm's value is a variant TAG of, if any: a bare
@@ -17279,7 +17308,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown t_xhown )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -17395,6 +17424,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : ~ s e_hown `false`
     ? == 0 g_did_ret { = e_hown ( mem_arm_hown syms cg et2 e_tt0 e_v0 e_retid c_jdepth ) } {}
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_hown ) ``
+    : s e_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
     : ~ s e_shown ``
     ? == 0 g_did_ret { = e_shown ( mem_arm_struct_hown syms cg et2 e_tt0 ) } {}
     // Mirror of t_ven above.
@@ -17426,7 +17456,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown e_xhown )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -19325,6 +19355,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : ~ s arm_hown `false`
             ? == 0 g_did_ret { = arm_hown ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) } {}
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
+            : s arm_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
             // private exit block a parked-drop arm leaves through.
             : ~ s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -19381,7 +19412,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown arm_xhown )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
@@ -24465,7 +24496,7 @@ unsafe @ bck_trusted_file s path → b {
 }
 
 @ bck_raw_handle_call s base → b {
-    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
+    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn tls_accept_ident tls_accept_ident_dual` base )
 }
 
 @ bck_raw_call s base → b {

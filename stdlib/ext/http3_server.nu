@@ -135,22 +135,13 @@ $ `stdlib/std/atomic.nu`
 @ http3_server_free sink H3Server s → v {}
 
 // The same certificate / key files the TLS listener takes, through the
-// same loader (`std/net.nu` `_load_tls_creds`: fullchain PEM; EC P-256,
-// RSA or ML-DSA key auto-detected).
+// same loader (`std/net.nu` `_load_tls_ident`: fullchain PEM; EC P-256,
+// RSA or ML-DSA key auto-detected, and prepared for signing once).
 @ http3_creds_load s cert_path s key_path → QuicCreds {
-    : ( Vec u ) chain ( vec_new [u] )
-    : ( Vec u ) k1 ( vec_new [u] )
-    : ( Vec u ) k2 ( vec_new [u] )
-    : ( Vec u ) k3 ( vec_new [u] )
-    : i kt ( _load_tls_creds cert_path key_path chain k1 k2 k3 )
-    : ~ QuicCreds out @ QuicCreds { ( shared_null [QuicCredsImpl] ) }
-    : ( Vec u ) e ( vec_new [u] )
-    // keytype 0: EC scalar in k1 · 1: RSA n in k1, d in k2, e in k3 ·
-    // 2: ML-DSA secret key in k1, its length naming the parameter set
-    ? == kt 0 { = out ( quic_creds_new chain 0 k1 e e e 0 ) } {}
-    ? == kt 1 { = out ( quic_creds_new chain 1 e k1 k3 k2 0 ) } {}
-    ? == kt 2 { = out ( quic_creds_new chain 2 k1 e e e ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) ) } {}
-    ^ out
+    ^ ?? ( _load_tls_ident cert_path key_path ) {
+        T id → ( quic_creds_ident id )
+        F _ → @ QuicCreds { ( shared_null [QuicCredsImpl] ) }
+    }
 }
 
 // Did the files load? F for the empty credentials http3_creds_load
@@ -162,14 +153,14 @@ $ `stdlib/std/atomic.nu`
 // (RFC 8446 §4.4.2.2). F when the files do not load or the key is not
 // an ML-DSA key — the same refusal the TCP listener makes.
 @ http3_creds_add_pq QuicCreds k s pq_cert_path s pq_key_path → b {
-    : ( Vec u ) chain ( vec_new [u] )
-    : ( Vec u ) k1 ( vec_new [u] )
-    : ( Vec u ) k2 ( vec_new [u] )
-    : ( Vec u ) k3 ( vec_new [u] )
-    : i kt ( _load_tls_creds pq_cert_path pq_key_path chain k1 k2 k3 )
-    : b ok == kt 2
-    ? ok { ( quic_creds_set_pq k chain ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 ) } {}
-    ^ ok
+    ^ ?? ( _load_tls_ident pq_cert_path pq_key_path ) {
+        T id → {
+            ? != ( tls_ident_keytype id ) 2 { ^ F } {}
+            ( quic_creds_set_pq_ident k id )
+            T
+        }
+        F _ → F
+    }
 }
 
 // Limits: 30 s idle, 1 MiB connection window, 256 KiB per stream,

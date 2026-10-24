@@ -138,10 +138,9 @@ $ `stdlib/std/net.nu`
 // second identity; returns the scheme the server chose, and reports the
 // Certificate message's chain length through `clen`.
 @ offline_pick ( Vec u ) ec_chain ( Vec u ) ec_priv ( Vec u ) pq_chain ( Vec u ) pq_sk b with_pq ( Vec u ) ch → i {
-    : ( Vec u ) e ( vec_new [u] )
     : ( Vec u ) prefs ( tls_alpn_pack `alpn` )
-    : SrvHs hs ( _srv_hs_new ec_chain 0 ec_priv e e e 0 prefs )
-    ? with_pq { ( _srv_hs_set_pq hs pq_chain 65 pq_sk ) } {}
+    : SrvHs hs ( _srv_hs_new ( tls_ident_ec ec_chain ec_priv ) prefs )
+    ? with_pq { ( _srv_hs_set_pq hs ( tls_ident_mldsa pq_chain 65 pq_sk ) ) } {}
     : i rc ( _srv_hs_client_hello hs ch )
     : ~ i scheme -1
     ? == rc 0 {
@@ -151,7 +150,7 @@ $ `stdlib/std/net.nu`
         ? != clen want { = scheme - 0 scheme } {}
     } {}
     ( _srv_hs_free hs )
-    ( vec_free [u] prefs ) ( vec_free [u] e )
+    ( vec_free [u] prefs )
     ^ scheme
 }
 

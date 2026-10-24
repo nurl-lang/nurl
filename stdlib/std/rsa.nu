@@ -6,9 +6,13 @@
 //
 //   ( rsa_pkcs1_verify n e sig di_prefix digest ) → b
 //   ( rsa_pss_verify_sha256 n e sig mhash )        → b
-//   ( rsa_pss_sign_sha256 n e d mhash salt )       → sig  (k-byte BE)
-//        d: the private exponent, or the CRT blob std/pkey.nu's
-//        rsa_priv_sign_key returns (the fast path)
+//   ( rsa_key_crt n e p q dp dq qinv )             → ?RsaKey
+//   ( rsa_key_plain n e d )                        → RsaKey
+//        a private key prepared for signing, once (std/pkey.nu's
+//        rsa_priv_sign_key makes one from a parsed key)
+//   ( rsa_pss_sign_sha256_key key mhash salt )     → sig  (k-byte BE)
+//   ( rsa_pss_sign_sha256 n e d mhash salt )       → sig  — prepares a
+//        plain key on every call; a signer that signs again keeps a key
 //
 // n / e / sig are big-endian byte vectors (the modulus, public exponent,
 // and signature). `digest` is the raw hash of the signed data; di_prefix
@@ -205,22 +209,39 @@ $ `stdlib/std/rsa_mont.nu`
     ^ ok
 }
 
+// A private key prepared for signing (std/rsa_mont.nu RsaKey): everything
+// that depends on the key alone — Montgomery contexts, exponents as limbs —
+// derived here once and never written after, so one key may be shared by
+// every thread that signs with it (an Arc). The CRT form takes the factors
+// and the CRT exponents (RFC 8017 §3.2), big-endian; F unless p and q are
+// odd and every field is present.
+@ rsa_key_crt ( Vec u ) n ( Vec u ) e ( Vec u ) p ( Vec u ) q ( Vec u ) dp ( Vec u ) dq ( Vec u ) qinv → ?RsaKey {
+    ^ ( _rsa_key_crt n e p q dp dq qinv )
+}
+
+// The form for a key known only by its private exponent: one full-width
+// exponentiation per signature, ~4× the work of the CRT form.
+@ rsa_key_plain ( Vec u ) n ( Vec u ) e ( Vec u ) d → RsaKey { ^ ( _rsa_key_plain n e d ) }
+
+// The modulus and public exponent a prepared key signs for (lent).
+@ rsa_key_n RsaKey k → ( Vec u ) { ^ . k n }
+
+@ rsa_key_e RsaKey k → ( Vec u ) { ^ . k e }
+
 // RSASSA-PSS-SIGN with SHA-256 (RFC 8017 §8.1.1 + §9.1.1), specialised to
 // the TLS 1.3 rsa_pss_rsae_sha256 parameters (MGF1-SHA-256, salt length =
-// hash length). `n`/`e`/`d` are the modulus, PUBLIC exponent and PRIVATE
-// exponent (big-endian); `mhash` is SHA-256 of the signed data; `salt` is
-// the random salt (32 bytes for TLS 1.3) — passed in so the caller owns the
-// RNG and tests can pin it. Returns the k-byte big-endian signature, or []
-// when the CRT path's fault check rejects the result (a computation fault
-// must not release a signature: one bad half factors the key).
+// hash length). `key` is the prepared private key; `mhash` is SHA-256 of
+// the signed data; `salt` is the random salt (32 bytes for TLS 1.3) —
+// passed in so the caller owns the RNG and tests can pin it. Returns the
+// k-byte big-endian signature, or [] when the CRT path's fault check
+// rejects the result (a computation fault must not release a signature:
+// one bad half factors the key).
 //
-// `d` is the private exponent, or — the fast path — the CRT blob
-// std/pkey.nu's rsa_priv_sign_key returns. Either way the exponentiation
-// is std/rsa_mont.nu's constant-time one (fixed windows, masked table
-// reads); with CRT each half's exponent is also blinded per signature.
-// This replaces the old base blinding, which only existed because the
-// BigInt modexp it guarded was variable-time.
-@ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
+// The exponentiation is std/rsa_mont.nu's constant-time one (fixed
+// windows, masked table reads); with CRT each half's exponent is also
+// blinded per signature.
+@ rsa_pss_sign_sha256_key RsaKey key ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
+    : ( Vec u ) n . key n
     : i hlen 32
     : i slen ( vec_len [u] salt )
     : i k ( vec_len [u] n )
@@ -257,6 +278,13 @@ $ `stdlib/std/rsa_mont.nu`
     ~ < hi hlen { ( vec_push [u] em # u ( __rsa_bget h hi ) ) = hi + hi 1 }
     ( vec_push [u] em # u 188 )  // trailer 0xbc
     // s = EM^d mod n, big-endian, k bytes.
-    : ( Vec u ) sig ( _rsa_private n e d em k )
+    : ( Vec u ) sig ( _rsa_sign_raw key em )
     ^ sig
+}
+
+// rsa_pss_sign_sha256_key with `n` / `e` / `d` (modulus, public and
+// private exponent, big-endian) prepared into a plain key for this one
+// signature.
+@ rsa_pss_sign_sha256 ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) mhash ( Vec u ) salt → ( Vec u ) {
+    ^ ( rsa_pss_sign_sha256_key ( rsa_key_plain n e d ) mhash salt )
 }

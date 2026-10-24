@@ -7,9 +7,9 @@
 // CRYPTO frames. Traffic secrets are read straight off the machine so
 // the connection derives packet keys with `quic_keys_derive`.
 //
-//   ( quic_tls_srv_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs tp )
+//   ( quic_tls_srv_new ( Arc TlsIdent ) id alpn_prefs tp )   id: std/tls_server.nu tls_ident_*
 //                                         → QuicTlsSrv    `tp` = encoded quic_transport_parameters body
-//   ( quic_tls_srv_set_pq s pq_chain pq_level pq_sk ) → v   optional ML-DSA identity beside the classical one
+//   ( quic_tls_srv_set_pq s ( Arc TlsIdent ) pq ) → v   optional ML-DSA identity beside the classical one
 //   ( quic_tls_srv_free s )               → v             early release (optional: the last owner
 //                                                          of a QuicTlsSrv releases it)
 //   ( quic_tls_srv_crypto s level off data ) → i          0 ok, else a QUIC transport error code:
@@ -80,10 +80,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ __QuicTlsSrv_ptr QuicTlsSrv h → *QuicTlsSrvImpl { ^ ( shared_ptr [QuicTlsSrvImpl] . h ctl ) }
 
-@ quic_tls_srv_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs ( Vec u ) tp → QuicTlsSrv {
+@ quic_tls_srv_new ( Arc TlsIdent ) id ( Vec u ) alpn_prefs ( Vec u ) tp → QuicTlsSrv {
     : ( Shared QuicTlsSrvImpl ) s__box ( shared_zero [QuicTlsSrvImpl] )
     : *QuicTlsSrvImpl s ( shared_ptr [QuicTlsSrvImpl] s__box )
-    = . s hs ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
+    = . s hs ( _srv_hs_new id alpn_prefs )
     // EncryptedExtensions carries quic_transport_parameters (0x0039).
     : ( Vec u ) ext ( vec_with_cap [u] + 4 ( vec_len [u] tp ) )
     ( _tls_u16 ext 57 )
@@ -103,9 +103,9 @@ $ `stdlib/core/rcbox.nu`
 // A second, ML-DSA identity for this handshake — chosen over the
 // classical one when the ClientHello's signature_algorithms lists its
 // scheme (`_srv_hs_set_pq` / `__srv_pick_cert` in std/tls_server.nu).
-@ quic_tls_srv_set_pq QuicTlsSrv s__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+@ quic_tls_srv_set_pq QuicTlsSrv s__h ( Arc TlsIdent ) pq → v {
     : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
-    ( _srv_hs_set_pq . s hs pq_chain pq_level pq_sk )
+    ( _srv_hs_set_pq . s hs pq )
 }
 
 // Let go of `s` now rather than at the end of its owner's scope.

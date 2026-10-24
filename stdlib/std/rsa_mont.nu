@@ -17,9 +17,9 @@
 // secret.
 //
 // The private operation uses the Chinese remainder theorem when the key
-// carries its factors (a CRT key blob, below): two exponentiations at half
-// the width, a quarter of the work each, recombined with Garner's formula.
-// Two hardenings ride along:
+// carries its factors: two exponentiations at half the width, a quarter of
+// the work each, recombined with Garner's formula. Two hardenings ride
+// along:
 //   * exponent blinding — each half exponentiates by d_p + r·(p − 1) for a
 //     fresh 64-bit r, the same residue, so the exponent bits the hardware
 //     sees change on every signature;
@@ -27,16 +27,17 @@
 //     mod p and mod q) before it is released, so a computation fault in one
 //     half cannot leak a factor (the Bellcore attack).
 //
-// CRT key blob (what std/pkey.nu's RsaPriv carries as `crt`, and what the
-// TLS listener passes as the private exponent): the 4-byte magic 00 'C'
-// 'R' 'T', then p, q, d_p, d_q and q^-1 mod p, each as a 2-byte big-endian
-// length and that many big-endian bytes. A plain private exponent never
-// starts with a zero byte, so the two cannot be confused.
+// What depends on the key alone — the Montgomery contexts of p and q (or
+// of n), the exponents and q^-1 as limbs — is derived ONCE, into an
+// RsaKey, and never written after; a TLS listener builds one at load and
+// every handshake on every worker signs with it.
 //
-//   ( _rsa_is_crt_blob ( Vec u ) d )                      → b
-//   ( _rsa_private ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) m i k )
-//        → ( Vec u )   m^d mod n, k bytes big-endian; d is a plain private
-//                      exponent or a CRT blob; [] if the fault check fails
+//   ( _rsa_key_plain ( Vec u ) n ( Vec u ) e ( Vec u ) d )  → RsaKey
+//        a key without its factors: one full-width exponentiation
+//   ( _rsa_key_crt n e p q dp dq qinv )                    → ?RsaKey
+//        the CRT form; F unless p and q are odd and every field is there
+//   ( _rsa_sign_raw RsaKey k ( Vec u ) m ) → ( Vec u )
+//        m^d mod n, k bytes big-endian; [] if the fault check fails
 //   ( _rsa_public ( Vec u ) n ( Vec u ) e ( Vec u ) s i k ) → ( Vec u )
 //        s^e mod n, k bytes big-endian (e is public: variable time)
 
@@ -46,11 +47,17 @@ $ `stdlib/std/random.nu`
 
 // ── context ─────────────────────────────────────────────────────────
 //
-// One modulus: its limbs, −m^-1 mod 2^64, R^2 mod m (R = 2^(64n)), 1 in
-// Montgomery form, and the scratch the multiply works in (accumulator t,
-// n + 2 limbs; difference d, n limbs). Built per operation; nothing in it
-// is shared between threads.
-: RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one ( Vec i ) t ( Vec i ) d }
+// One modulus: its limbs, −m^-1 mod 2^64, R^2 mod m (R = 2^(64n)) and 1 in
+// Montgomery form. Built once per modulus and never written after: a
+// prepared key (RsaKey, below) holds its two and every thread signing
+// with it reads them at once.
+: RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one }
+
+// The scratch a multiply works in — accumulator t, n + 2 limbs; difference
+// d, n limbs — one per operation, so a shared RsaMont stays read-only.
+: RsaTmp { ( Vec i ) t ( Vec i ) d }
+
+@ _rm_tmp RsaMont c → RsaTmp { ^ @ RsaTmp { ( __rm_zeros + . c n 2 ) ( __rm_zeros . c n ) } }
 
 @ __rm_get ( Vec u ) v i k → i { ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 } }
 
@@ -225,16 +232,16 @@ inline @ __rm_final i n * i rp * i mp * i dp u64 top ( Vec i ) dst → v {
     ~ < j n { = . op j | & mask . dp j & imask . rp j = j + j 1 }
 }
 
-@ _rm_mul_d RsaMont c ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+@ _rm_mul_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : i n . c n
-    : *i qp ( vec_data [i] . c t )  // q digits, then the result
+    : *i qp ( vec_data [i] . w t )  // q digits, then the result
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . c m )
     : u64 n0 # u64 . c n0
     : ~ u64 top 0
     ? == n 16 { = top ( __rm_mul16 ap bp mp n0 qp ) } { = top ( __rm_mul_gen n ap bp mp n0 qp ) }
-    ( __rm_final n qp mp ( vec_data [i] . c d ) top dst )
+    ( __rm_final n qp mp ( vec_data [i] . w d ) top dst )
 }
 
 // The n-limb FIPS multiply into qp (q digits, then the result); returns
@@ -278,15 +285,15 @@ unsafe @ __rm_mul_gen i n * i ap * i bp * i mp u64 n0 * i qp → u64 {
 
 // dst = a²·R^-1 mod m (a < m): _rm_mul_d with b = a, the cross products
 // of each column summed once and doubled.
-@ _rm_sqr_d RsaMont c ( Vec i ) dst ( Vec i ) a → v {
+@ _rm_sqr_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a → v {
     : i n . c n
-    : *i qp ( vec_data [i] . c t )
+    : *i qp ( vec_data [i] . w t )
     : *i ap ( vec_data [i] a )
     : *i mp ( vec_data [i] . c m )
     : u64 n0 # u64 . c n0
     : ~ u64 top 0
     ? == n 16 { = top ( __rm_sqr16 ap mp n0 qp ) } { = top ( __rm_sqr_gen n ap mp n0 qp ) }
-    ( __rm_final n qp mp ( vec_data [i] . c d ) top dst )
+    ( __rm_final n qp mp ( vec_data [i] . w d ) top dst )
 }
 
 unsafe @ __rm_sqr_gen i n * i ap * i mp u64 n0 * i qp → u64 {
@@ -1610,10 +1617,10 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 // ── end of generated kernels ──
 
 // dst = a + b mod m (a, b < m), constant time.
-@ __rm_add_d RsaMont c ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+@ __rm_add_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : i n . c n
-    : *i tp ( vec_data [i] . c t )
-    : *i dp ( vec_data [i] . c d )
+    : *i tp ( vec_data [i] . w t )
+    : *i dp ( vec_data [i] . w d )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . c m )
@@ -1644,9 +1651,9 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 }
 
 // dst = a − b mod m (a, b < m), constant time.
-@ __rm_sub_d RsaMont c ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+@ __rm_sub_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : i n . c n
-    : *i tp ( vec_data [i] . c t )
+    : *i tp ( vec_data [i] . w t )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . c m )
@@ -1674,17 +1681,17 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 }
 
 // x = 2x mod m (x < m). Only for building R^2 from the public modulus.
-@ __rm_dbl_d RsaMont c ( Vec i ) x → v {
+@ __rm_dbl_d RsaMont c RsaTmp w ( Vec i ) x → v {
     : i n . c n
     : *i xp ( vec_data [i] x )
-    : *i tp ( vec_data [i] . c t )
+    : *i tp ( vec_data [i] . w t )
     : *i mp ( vec_data [i] . c m )
     : ~ u64 hi 0
     : ~ i j 0
     ~ < j n {
-        : u64 w # u64 . xp j
-        = . tp j # i | << w 1 hi
-        = hi >> w 63
+        : u64 xw # u64 . xp j
+        = . tp j # i | << xw 1 hi
+        = hi >> xw 63
         = j + j 1
     }
     : ~ u64 bb 0
@@ -1714,7 +1721,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     : ~ i it 0
     ~ < it 6 { = x * x - 2 * m0 x = it + it 1 }
     : i n0 # i - 0 x
-    : RsaMont c @ RsaMont { n m n0 ( __rm_zeros n ) ( __rm_zeros n ) ( __rm_zeros + n 2 ) ( __rm_zeros n ) }
+    : RsaMont c @ RsaMont { n m n0 ( __rm_zeros n ) ( __rm_zeros n ) }
+    : RsaTmp w ( _rm_tmp c )
     // R^2 mod m. 64n = s·2^h with s odd: double 1 up to 2^(64n + s) mod m
     // — that is 2^s in Montgomery form — then h Montgomery squarings take
     // it to 2^(s·2^h) = 2^(64n) = R in Montgomery form, i.e. R^2 mod m.
@@ -1724,13 +1732,13 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     // r2 and one are filled in place, through the context's own vectors.
     ( vec_put [i] . c r2 0 1 )
     : ~ i k 0
-    ~ < k + * 64 n s { ( __rm_dbl_d c . c r2 ) = k + k 1 }
+    ~ < k + * 64 n s { ( __rm_dbl_d c w . c r2 ) = k + k 1 }
     = k 0
-    ~ < k h { ( _rm_sqr_d c . c r2 . c r2 ) = k + k 1 }
+    ~ < k h { ( _rm_sqr_d c w . c r2 . c r2 ) = k + k 1 }
     // 1 in Montgomery form: R^2·1·R^-1.
     : ( Vec i ) one1 ( __rm_zeros n )
     ( vec_put [i] one1 0 1 )
-    ( _rm_mul_d c . c one . c r2 one1 )
+    ( _rm_mul_d c w . c one . c r2 one1 )
     ^ c
 }
 
@@ -1738,7 +1746,7 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 // n-limb chunks from the top: acc = acc·R + chunk, each chunk entered as
 // chunk·R^2·R^-1. Valid for any x, so a 2048-bit message reduces into a
 // 1024-bit factor's domain directly.
-@ _rm_enter RsaMont c ( Vec i ) x i xn → ( Vec i ) {
+@ _rm_enter RsaMont c RsaTmp w ( Vec i ) x i xn → ( Vec i ) {
     : i n . c n
     : ( Vec i ) acc ( __rm_zeros n )
     : ( Vec i ) ch ( __rm_zeros n )
@@ -1754,20 +1762,20 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
             ? < at xn { = . cp j . xp at } {}
             = j + j 1
         }
-        ( _rm_mul_d c acc acc . c r2 )  // acc·R (in form: acc·R·R)
-        ( _rm_mul_d c ch ch . c r2 )  // chunk in form
-        ( __rm_add_d c acc acc ch )
+        ( _rm_mul_d c w acc acc . c r2 )  // acc·R (in form: acc·R·R)
+        ( _rm_mul_d c w ch ch . c r2 )  // chunk in form
+        ( __rm_add_d c w acc acc ch )
         = q - q 1
     }
     ^ acc
 }
 
 // Montgomery form → plain.
-@ _rm_leave RsaMont c ( Vec i ) a → ( Vec i ) {
+@ _rm_leave RsaMont c RsaTmp w ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) one1 ( __rm_zeros . c n )
     ( vec_put [i] one1 0 1 )
     : ( Vec i ) out ( __rm_zeros . c n )
-    ( _rm_mul_d c out a one1 )
+    ( _rm_mul_d c w out a one1 )
     ^ out
 }
 
@@ -1775,7 +1783,7 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 // (little-endian). Fixed 4-bit windows over all en limbs, table entry
 // chosen by a masked scan of all sixteen: the same work for every e of
 // that width. Result in Montgomery form.
-@ _rm_pow_ct RsaMont c ( Vec i ) base ( Vec i ) e i en → ( Vec i ) {
+@ _rm_pow_ct RsaMont c RsaTmp w ( Vec i ) base ( Vec i ) e i en → ( Vec i ) {
     : i n . c n
     : ( Vec i ) tbl ( __rm_zeros * 16 n )
     : *i tb ( vec_data [i] tbl )
@@ -1787,14 +1795,14 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     : ( Vec i ) cur ( __rm_zeros n )
     : *i pp ( vec_data [i] prev )
     : *i cp ( vec_data [i] cur )
-    : ~ i w 2
-    ~ < w 16 {
+    : ~ i wi 2
+    ~ < wi 16 {
         = j 0
-        ~ < j n { = . pp j . tb + * - w 1 n j = j + j 1 }
-        ( _rm_mul_d c cur prev base )
+        ~ < j n { = . pp j . tb + * - wi 1 n j = j + j 1 }
+        ( _rm_mul_d c w cur prev base )
         = j 0
-        ~ < j n { = . tb + * w n j . cp j = j + j 1 }
-        = w + w 1
+        ~ < j n { = . tb + * wi n j . cp j = j + j 1 }
+        = wi + wi 1
     }
     : ( Vec i ) acc ( __rm_zeros n )
     ( __rm_copy_d acc . c one n )
@@ -1806,10 +1814,10 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
         : u64 limb # u64 . ep li
         : ~ i nib 15
         ~ >= nib 0 {
-            ( _rm_sqr_d c acc acc )
-            ( _rm_sqr_d c acc acc )
-            ( _rm_sqr_d c acc acc )
-            ( _rm_sqr_d c acc acc )
+            ( _rm_sqr_d c w acc acc )
+            ( _rm_sqr_d c w acc acc )
+            ( _rm_sqr_d c w acc acc )
+            ( _rm_sqr_d c w acc acc )
             : u64 dig & >> limb # u64 * nib 4 15
             = j 0
             ~ < j n { = . sp j 0 = j + j 1 }
@@ -1822,7 +1830,7 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
                 ~ < j n { = . sp j | . sp j & mask . tb + * k n j = j + j 1 }
                 = k + k 1
             }
-            ( _rm_mul_d c acc acc sel )
+            ( _rm_mul_d c w acc acc sel )
             = nib - nib 1
         }
         = li - li 1
@@ -1832,7 +1840,7 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 
 // base^e for a PUBLIC exponent (big-endian bytes): plain square-and-
 // multiply, Montgomery form in and out.
-@ _rm_pow_pub RsaMont c ( Vec i ) base ( Vec u ) e → ( Vec i ) {
+@ _rm_pow_pub RsaMont c RsaTmp w ( Vec i ) base ( Vec u ) e → ( Vec i ) {
     : ( Vec i ) acc ( __rm_zeros . c n )
     ( __rm_copy_d acc . c one . c n )
     : i len ( vec_len [u] e )
@@ -1841,8 +1849,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
         : i by ( __rm_get e k )
         : ~ i bit 7
         ~ >= bit 0 {
-            ( _rm_sqr_d c acc acc )
-            ? != & >> by bit 1 0 { ( _rm_mul_d c acc acc base ) } {}
+            ( _rm_sqr_d c w acc acc )
+            ? != & >> by bit 1 0 { ( _rm_mul_d c w acc acc base ) } {}
             = bit - bit 1
         }
         = k + k 1
@@ -1859,35 +1867,62 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     ^ == diff 0
 }
 
-// ── CRT key blob ────────────────────────────────────────────────────
-
-@ _rsa_is_crt_blob ( Vec u ) d → b {
-    ? < ( vec_len [u] d ) 4 { ^ F } {}
-    ^ & & == ( __rm_get d 0 ) 0 == ( __rm_get d 1 ) 67 & == ( __rm_get d 2 ) 82 == ( __rm_get d 3 ) 84
+// ── prepared private key ────────────────────────────────────────────
+//
+// n and e as big-endian bytes (the signature length, and the fault check's
+// exponent). A CRT key (`crt`) carries the contexts of p and q, d_p and d_q
+// as limbs of their factor's width, q^-1 mod p as limbs of p's and q as
+// limbs of its own; a key without its factors carries the context of n
+// and d as limbs. The other half is empty.
+: RsaKey {
+    ( Vec u ) n
+    ( Vec u ) e
+    b crt
+    RsaMont cn
+    ( Vec i ) d
+    RsaMont cp
+    RsaMont cq
+    ( Vec i ) dp
+    ( Vec i ) dq
+    ( Vec i ) qinv
+    ( Vec i ) ql
 }
 
-// Field `idx` (0 p, 1 q, 2 d_p, 3 d_q, 4 q^-1) of a CRT blob; [] if short.
-@ __rm_blob_field ( Vec u ) blob i idx → ( Vec u ) {
-    : i len ( vec_len [u] blob )
-    : ~ i at 4
-    : ~ i f 0
-    ~ <= f idx {
-        ? > + at 2 len { ^ ( vec_new [u] ) } {}
-        : i fl | << ( __rm_get blob at ) 8 ( __rm_get blob + at 1 )
-        ? > + + at 2 fl len { ^ ( vec_new [u] ) } {}
-        ? == f idx { ^ ( bytes_slice blob + at 2 + + at 2 fl ) } {}
-        = at + + at 2 fl
-        = f + f 1
-    }
-    ^ ( vec_new [u] )
+@ __rm_ctx_none → RsaMont { ^ @ RsaMont { 0 ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) } }
+
+@ __rm_copy_bytes ( Vec u ) b → ( Vec u ) { ^ ( bytes_slice b 0 ( vec_len [u] b ) ) }
+
+@ _rsa_key_plain ( Vec u ) n ( Vec u ) e ( Vec u ) d → RsaKey {
+    : RsaMont cn ( _rm_ctx n )
+    : ( Vec i ) dl ( __rm_from_be d . cn n )
+    ^ @ RsaKey { ( __rm_copy_bytes n ) ( __rm_copy_bytes e ) F cn dl ( __rm_ctx_none ) ( __rm_ctx_none ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) }
+}
+
+// An odd modulus above 1 — what a Montgomery context needs.
+@ __rm_odd_modulus ( Vec u ) x → b {
+    : i len ( vec_len [u] x )
+    ? == len 0 { ^ F } {}
+    ? == & ( __rm_get x - len 1 ) 1 0 { ^ F } {}
+    ^ | > ( __rm_sig_bytes x ) 1 > ( __rm_get x - len 1 ) 1
+}
+
+@ _rsa_key_crt ( Vec u ) n ( Vec u ) e ( Vec u ) p ( Vec u ) q ( Vec u ) dp ( Vec u ) dq ( Vec u ) qinv → ?RsaKey {
+    ? ! & ( __rm_odd_modulus p ) ( __rm_odd_modulus q ) { ^ @ ?RsaKey { F } } {}
+    ? | | == ( vec_len [u] dp ) 0 == ( vec_len [u] dq ) 0 == ( vec_len [u] qinv ) 0 { ^ @ ?RsaKey { F } } {}
+    : RsaMont cp ( _rm_ctx p )
+    : RsaMont cq ( _rm_ctx q )
+    : ( Vec i ) dpl ( __rm_from_be dp . cp n )
+    : ( Vec i ) dql ( __rm_from_be dq . cq n )
+    : ( Vec i ) qil ( __rm_from_be qinv . cp n )
+    : ( Vec i ) ql ( __rm_from_be q . cq n )
+    ^ @ ?RsaKey { T @ RsaKey { ( __rm_copy_bytes n ) ( __rm_copy_bytes e ) T ( __rm_ctx_none ) ( vec_new [i] ) cp cq dpl dql qil ql } }
 }
 
 // d_x + r·(x − 1) for a fresh 64-bit r, as nx + 1 limbs: the same exponent
-// modulo the group order x − 1, different bits every call.
-@ __rm_blind_exp ( Vec u ) dx_be RsaMont cx → ( Vec i ) {
+// modulo the group order x − 1, different bits every call. `dx` is nx limbs.
+@ __rm_blind_exp ( Vec i ) dx RsaMont cx → ( Vec i ) {
     : i n . cx n
     : ( Vec i ) out ( __rm_zeros + n 1 )
-    : ( Vec i ) dx ( __rm_from_be dx_be n )
     : *i op ( vec_data [i] out )
     : *i mp ( vec_data [i] . cx m )
     : *i dp ( vec_data [i] dx )
@@ -1907,39 +1942,31 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 }
 
 // The CRT private operation; [] when the fault check rejects the result.
-@ __rsa_crt ( Vec u ) blob ( Vec u ) e ( Vec i ) msg i msgn i k → ( Vec u ) {
-    : ( Vec u ) pb ( __rm_blob_field blob 0 )
-    : ( Vec u ) qb ( __rm_blob_field blob 1 )
-    : ( Vec u ) dpb ( __rm_blob_field blob 2 )
-    : ( Vec u ) dqb ( __rm_blob_field blob 3 )
-    : ( Vec u ) qib ( __rm_blob_field blob 4 )
-    ? | | == ( vec_len [u] pb ) 0 == ( vec_len [u] qb ) 0 | | == ( vec_len [u] dpb ) 0 == ( vec_len [u] dqb ) 0 == ( vec_len [u] qib ) 0 {
-        ^ ( vec_new [u] )
-    } {}
-    : RsaMont cp ( _rm_ctx pb )
-    : RsaMont cq ( _rm_ctx qb )
+@ __rsa_crt RsaKey key ( Vec i ) msg i msgn i k → ( Vec u ) {
+    : RsaMont cp . key cp
+    : RsaMont cq . key cq
+    : RsaTmp wp ( _rm_tmp cp )
+    : RsaTmp wq ( _rm_tmp cq )
     : i np . cp n
     : i nq . cq n
     // the message in each half's domain
-    : ( Vec i ) mp ( _rm_enter cp msg msgn )
-    : ( Vec i ) mq ( _rm_enter cq msg msgn )
-    : ( Vec i ) ep ( __rm_blind_exp dpb cp )
-    : ( Vec i ) eq ( __rm_blind_exp dqb cq )
-    : ( Vec i ) sp ( _rm_pow_ct cp mp ep + np 1 )  // Montgomery form mod p
-    : ( Vec i ) sqm ( _rm_pow_ct cq mq eq + nq 1 )
-    : ( Vec i ) sq ( _rm_leave cq sqm )  // plain, < q
+    : ( Vec i ) mp ( _rm_enter cp wp msg msgn )
+    : ( Vec i ) mq ( _rm_enter cq wq msg msgn )
+    : ( Vec i ) ep ( __rm_blind_exp . key dp cp )
+    : ( Vec i ) eq ( __rm_blind_exp . key dq cq )
+    : ( Vec i ) sp ( _rm_pow_ct cp wp mp ep + np 1 )  // Montgomery form mod p
+    : ( Vec i ) sqm ( _rm_pow_ct cq wq mq eq + nq 1 )
+    : ( Vec i ) sq ( _rm_leave cq wq sqm )  // plain, < q
     // Garner: h = (s_p − s_q)·q^-1 mod p ; s = s_q + q·h
-    : ( Vec i ) sqp ( _rm_enter cp sq nq )
+    : ( Vec i ) sqp ( _rm_enter cp wp sq nq )
     : ( Vec i ) diff ( __rm_zeros np )
-    ( __rm_sub_d cp diff sp sqp )
-    : ( Vec i ) qinv ( __rm_from_be qib np )
+    ( __rm_sub_d cp wp diff sp sqp )
     : ( Vec i ) h ( __rm_zeros np )
-    ( _rm_mul_d cp h diff qinv )  // (form)·plain → plain
-    : ( Vec i ) ql ( __rm_from_be qb nq )
+    ( _rm_mul_d cp wp h diff . key qinv )  // (form)·plain → plain
     : i sn + np nq
     : ( Vec i ) s ( __rm_zeros + sn 1 )
     : *i spp ( vec_data [i] s )
-    : *i qp ( vec_data [i] ql )
+    : *i qp ( vec_data [i] . key ql )
     : *i hp ( vec_data [i] h )
     : *i sqpp ( vec_data [i] sq )
     : ~ i a 0
@@ -1968,31 +1995,32 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
         = a + a 1
     }
     // Fault check: s^e ≡ m (mod p) and (mod q) before s leaves.
-    : ( Vec i ) chkp ( _rm_pow_pub cp ( _rm_enter cp s + sn 1 ) e )
-    : ( Vec i ) chkq ( _rm_pow_pub cq ( _rm_enter cq s + sn 1 ) e )
+    : ( Vec i ) chkp ( _rm_pow_pub cp wp ( _rm_enter cp wp s + sn 1 ) . key e )
+    : ( Vec i ) chkq ( _rm_pow_pub cq wq ( _rm_enter cq wq s + sn 1 ) . key e )
     ? ! & ( __rm_eq chkp mp np ) ( __rm_eq chkq mq nq ) { ^ ( vec_new [u] ) } {}
     ^ ( __rm_to_be s + sn 1 k )
 }
 
-// m^d mod n, k bytes big-endian. d: a plain private exponent (one
-// exponentiation at full width) or a CRT blob. [] when the CRT fault check
-// fails.
-@ _rsa_private ( Vec u ) n ( Vec u ) e ( Vec u ) d ( Vec u ) m i k → ( Vec u ) {
+// m^d mod n, as many big-endian bytes as n has. [] when the CRT fault
+// check fails.
+@ _rsa_sign_raw RsaKey key ( Vec u ) m → ( Vec u ) {
+    : i k ( vec_len [u] . key n )
     : i mn ( __rm_limbs_for m )
     : ( Vec i ) ml ( __rm_from_be m mn )
-    ? ( _rsa_is_crt_blob d ) { ^ ( __rsa_crt d e ml mn k ) } {}
-    : RsaMont c ( _rm_ctx n )
+    ? . key crt { ^ ( __rsa_crt key ml mn k ) } {}
+    : RsaMont c . key cn
+    : RsaTmp w ( _rm_tmp c )
     : i dn . c n
-    : ( Vec i ) dl ( __rm_from_be d dn )
-    : ( Vec i ) r ( _rm_pow_ct c ( _rm_enter c ml mn ) dl dn )
-    ^ ( __rm_to_be ( _rm_leave c r ) dn k )
+    : ( Vec i ) r ( _rm_pow_ct c w ( _rm_enter c w ml mn ) . key d dn )
+    ^ ( __rm_to_be ( _rm_leave c w r ) dn k )
 }
 
 // s^e mod n, k bytes big-endian (public exponent: variable time).
 @ _rsa_public ( Vec u ) n ( Vec u ) e ( Vec u ) s i k → ( Vec u ) {
     : RsaMont c ( _rm_ctx n )
+    : RsaTmp w ( _rm_tmp c )
     : i sn ( __rm_limbs_for s )
     : ( Vec i ) sl ( __rm_from_be s sn )
-    : ( Vec i ) r ( _rm_pow_pub c ( _rm_enter c sl sn ) e )
-    ^ ( __rm_to_be ( _rm_leave c r ) . c n k )
+    : ( Vec i ) r ( _rm_pow_pub c w ( _rm_enter c w sl sn ) e )
+    ^ ( __rm_to_be ( _rm_leave c w r ) . c n k )
 }
