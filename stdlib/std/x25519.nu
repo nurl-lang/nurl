@@ -494,11 +494,17 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 // as 38. Only __f4_pack reduces to the canonical residue. Every step is a
 // fixed sequence of instructions: nothing branches on the data.
 
-// o ← s + 38·c for a 4-word s and a carry c ≤ 2^17, as < 2^256. The fold
-// itself can carry out of bit 256 once more; then s + 38·c − 2^256 < 38·c
-// is small, so the second 38 lands in o0 with no carry to propagate.
-inline @ __f4_fold38 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 s0 u64 s1 u64 s2 u64 s3 u64 c → v {
-    : u64 m * c 38
+// o ← a + b
+inline @ __f4_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
+    : u64 s0 ( nurl_addc_lo a0 b0 0 )
+    : u64 c0 ( nurl_addc_hi a0 b0 0 )
+    : u64 s1 ( nurl_addc_lo a1 b1 c0 )
+    : u64 c1 ( nurl_addc_hi a1 b1 c0 )
+    : u64 s2 ( nurl_addc_lo a2 b2 c1 )
+    : u64 c2 ( nurl_addc_hi a2 b2 c1 )
+    : u64 s3 ( nurl_addc_lo a3 b3 c2 )
+    : u64 c3 ( nurl_addc_hi a3 b3 c2 )
+    : u64 m * c3 38
     : u64 r0 ( nurl_addc_lo s0 m 0 )
     : u64 k0 ( nurl_addc_hi s0 m 0 )
     : u64 r1 ( nurl_addc_lo s1 0 k0 )
@@ -510,19 +516,6 @@ inline @ __f4_fold38 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 s0 
     = o0 + r0 * k3 38
     = o1 r1
     = o2 r2
-}
-
-// o ← a + b
-inline @ __f4_add inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
-    : u64 s0 ( nurl_addc_lo a0 b0 0 )
-    : u64 c0 ( nurl_addc_hi a0 b0 0 )
-    : u64 s1 ( nurl_addc_lo a1 b1 c0 )
-    : u64 c1 ( nurl_addc_hi a1 b1 c0 )
-    : u64 s2 ( nurl_addc_lo a2 b2 c1 )
-    : u64 c2 ( nurl_addc_hi a2 b2 c1 )
-    : u64 s3 ( nurl_addc_lo a3 b3 c2 )
-    : u64 c3 ( nurl_addc_hi a3 b3 c2 )
-    ( __f4_fold38 o0 o1 o2 o3 s0 s1 s2 s3 c3 )
 }
 
 // o ← a − b. A borrow out of bit 256 means the words hold a − b + 2^256,
@@ -553,7 +546,7 @@ inline @ __f4_sub inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64
 }
 
 // The 512-bit (t0 … t7) mod p: t + 38·(the high four words), whose carry
-// out is ≤ 38, then __f4_fold38.
+// out is ≤ 38, then folded back.
 inline @ __f4_reduce inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 t0 u64 t1 u64 t2 u64 t3 u64 t4 u64 t5 u64 t6 u64 t7 → v {
     : u64 r0 ( nurl_mac_lo t4 38 t0 0 )
     : ~ u64 cr ( nurl_mac_hi t4 38 t0 0 )
@@ -563,7 +556,18 @@ inline @ __f4_reduce inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 t0 
     = cr ( nurl_mac_hi t6 38 t2 cr )
     : u64 r3 ( nurl_mac_lo t7 38 t3 cr )
     = cr ( nurl_mac_hi t7 38 t3 cr )
-    ( __f4_fold38 o0 o1 o2 o3 r0 r1 r2 r3 cr )
+    : u64 m * cr 38
+    : u64 s0 ( nurl_addc_lo r0 m 0 )
+    : u64 k0 ( nurl_addc_hi r0 m 0 )
+    : u64 s1 ( nurl_addc_lo r1 0 k0 )
+    : u64 k1 ( nurl_addc_hi r1 0 k0 )
+    : u64 s2 ( nurl_addc_lo r2 0 k1 )
+    : u64 k2 ( nurl_addc_hi r2 0 k1 )
+    = o3 ( nurl_addc_lo r3 0 k2 )
+    : u64 k3 ( nurl_addc_hi r3 0 k2 )
+    = o0 + s0 * k3 38
+    = o1 s1
+    = o2 s2
 }
 
 // o ← a · b: the 4×4 schoolbook, row by row, each row one carry chain.
@@ -648,7 +652,18 @@ inline @ __f4_mul121665 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 
     = cr ( nurl_mac_hi a2 121665 cr 0 )
     : u64 l3 ( nurl_mac_lo a3 121665 cr 0 )
     = cr ( nurl_mac_hi a3 121665 cr 0 )
-    ( __f4_fold38 o0 o1 o2 o3 l0 l1 l2 l3 cr )
+    : u64 m * cr 38
+    : u64 r0 ( nurl_addc_lo l0 m 0 )
+    : u64 k0 ( nurl_addc_hi l0 m 0 )
+    : u64 r1 ( nurl_addc_lo l1 0 k0 )
+    : u64 k1 ( nurl_addc_hi l1 0 k0 )
+    : u64 r2 ( nurl_addc_lo l2 0 k1 )
+    : u64 k2 ( nurl_addc_hi l2 0 k1 )
+    = o3 ( nurl_addc_lo l3 0 k2 )
+    : u64 k3 ( nurl_addc_hi l3 0 k2 )
+    = o0 + r0 * k3 38
+    = o1 r1
+    = o2 r2
 }
 
 // The multiply and the square out of line, for the inversion chain and the
