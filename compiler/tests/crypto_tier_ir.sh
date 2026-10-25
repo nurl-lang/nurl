@@ -716,6 +716,96 @@ CEOF
     fi
 fi
 
+# ── 12. The ADX tier: nurl_mac_row's two carry chains ───────────────
+# A row of a multi-precision multiply (rp[0..n) += ap[0..n)·b) on mulx,
+# adcx and adox where the runtime says BMI2 + ADX, the portable loop
+# elsewhere. The asm must be there on x86-64 (LLVM never selects ADOX on
+# its own), absent off x86, and both paths must hold the same golden —
+# the primitive's own (every width 0 … 40) and std/rsa_mont's, whose
+# Montgomery multiply takes the row form on the ADX tier and FIPS
+# without it.
+MR_SRC="$SCRIPT_DIR/mac_row_agree.nu"
+if "$NURLC" "$MR_SRC" > "$WORK/mr.ll" 2> "$WORK/mr.err"; then
+    if grep -A8 '^define linkonce_odr i64 @nurl_mac_row(' "$WORK/mr.ll" | grep -q 'call i1 @nurl_cpu_has_adx()' &&
+            grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_adx()' "$WORK/mr.ll" | grep -q '@nurl_cpu_x86_adx()'; then
+        ok "nurl_mac_row: dispatched on nurl_cpu_x86_adx" "nurl_cpu_has_adx"
+    else
+        bad "nurl_mac_row: dispatched on nurl_cpu_x86_adx" "no ADX probe in the row"
+    fi
+    if command -v "$CLANG" >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1 &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/mr.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/mr" -lm -lpthread 2>/dev/null; then
+        # GNU objdump prints adcx / adox, llvm-objdump (FreeBSD's objdump)
+        # the AT&T-suffixed adcxq / adoxq
+        nx=$(objdump -d "$WORK/mr" 2>/dev/null | grep -cE '\badoxq?\b')
+        nc=$(objdump -d "$WORK/mr" 2>/dev/null | grep -cE '\badcxq?\b')
+        # two call sites, each 1 + 4 + 8 product adds and 1 carry fold
+        if [ "$nx" -eq 28 ] && [ "$nc" -eq 28 ]; then ok "mac_row_agree: two inlined rows of ADCX / ADOX" "$nc adcx, $nx adox"
+        else bad "mac_row_agree: two inlined rows of ADCX / ADOX" "$nc adcx, $nx adox"; fi
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/mac_row_agree.txt" | tail -n +2)
+        for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+            got=$(env "$e" "$WORK/mr" 2>&1)
+            if [ "$got" = "$want" ]; then ok "mac_row_agree with $e" "golden"
+            else bad "mac_row_agree with $e" "${got:0:80}"; fi
+        done
+    else
+        note "nurl_mac_row machine code and run" "skipped (no clang / objdump, or the link failed)"
+    fi
+else
+    bad "mac_row_agree: compiles" "$(head -2 "$WORK/mr.err")"
+fi
+
+RK_SRC="$SCRIPT_DIR/rsa_mont_kernels.nu"
+if "$NURLC" "$RK_SRC" > "$WORK/rk.ll" 2> "$WORK/rk.err" &&
+        command -v "$CLANG" >/dev/null 2>&1 &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/rk.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/rk" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/rsa_mont_kernels.txt" | tail -n +2)
+    for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+        got=$(env "$e" "$WORK/rk" 2>&1)
+        if [ "$got" = "$want" ]; then ok "rsa_mont_kernels with $e" "golden"
+        else bad "rsa_mont_kernels with $e" "${got:0:80}"; fi
+    done
+else
+    bad "rsa_mont_kernels: builds" "$(head -2 "$WORK/rk.err")"
+fi
+
+# Off x86 there is no ADX tier: a constant false and no asm.
+"$NURLC" --no-cpu-dispatch --no-dce "$MR_SRC" > "$WORK/mr.off.ll" 2>/dev/null
+"$NURLC" --target=aarch64 --no-dce "$MR_SRC" > "$WORK/mr.a64.ll" 2>/dev/null
+for f in off a64; do
+    if grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_adx()' "$WORK/mr.$f.ll" | grep -q 'ret i1 false' &&
+            grep -q '^define linkonce_odr i64 @nurl_mac_row(' "$WORK/mr.$f.ll" &&
+            [ "$(grep -c 'adox' "$WORK/mr.$f.ll")" -eq 0 ]; then
+        ok "$f: nurl_cpu_has_adx false, nurl_mac_row portable" "no asm"
+    else
+        bad "$f: nurl_cpu_has_adx false, nurl_mac_row portable" "not so"
+    fi
+done
+
+# The runtime's ADX answer matches an independent one.
+if [ -r /proc/cpuinfo ] && command -v "$CLANG" >/dev/null 2>&1; then
+    fl=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    wa=1
+    for f in bmi2 adx; do
+        case "$fl" in *" $f "*) ;; *) wa=0 ;; esac
+    done
+    cat > "$WORK/cpu4.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_adx(void);
+int main(void) { printf("%d\n", nurl_cpu_x86_adx()); return 0; }
+CEOF
+    if "$CLANG" -O0 "$WORK/cpu4.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu4" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu4" 2>/dev/null)
+        off=$(NURL_CPU_ADX=0 "$WORK/cpu4" 2>/dev/null)
+        if [ "$got" = "$wa" ] && [ "$off" = 0 ]; then ok "runtime ADX CPUID agrees with /proc/cpuinfo" "both say $got; NURL_CPU_ADX=0 → 0"
+        else bad "runtime ADX CPUID agrees with /proc/cpuinfo" "runtime $got (off: $off), /proc/cpuinfo $wa"; fi
+    else
+        note "runtime ADX CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
     echo "crypto_tier_ir: all assertions passed"

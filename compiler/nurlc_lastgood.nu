@@ -16739,7 +16739,7 @@ unsafe @ gen_call i lex i syms i cg → s {
 // parent's snapshot, not defer-snapshotted, with a destructor to run).
 // Returns the exit label, or `` when the arm has nothing to drop — then
 // the caller keeps branching straight to the join.
-@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown0 → s {
+@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown0 s xhown → s {
     : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     : ~ s udelta ``
     : ~ s urest ( nurl_sym_get syms `__user_drops__` )
@@ -16783,8 +16783,36 @@ unsafe @ gen_call i lex i syms i cg → s {
     : s skey ( nurl_str_cat lbl `__x_sfields` )
     ( nurl_sym_set g_fn_escapes ukey udelta )
     ( nurl_sym_set g_fn_escapes skey sdelta )
-    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ( mem_arm_exit_hown ty hown0 ) )
+    : s __xh ( mem_arm_exit_hown ty hown0 )
+    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ? & == 0 ( nurl_str_len __xh ) != 0 ( nurl_str_len xhown ) xhown __xh )
     ^ lbl
+}
+
+// The same second chance for a value that CAN hold an address, when it is
+// a call's own result (on the paths `hown` holds) and the call cannot hand
+// back a view of any local this frame owns: the callee's lend summary says
+// which of its arguments its result may borrow from (mem_local_lend_of —
+// decided at module end for a callee compiled later); an argument that is
+// not a plain binding (a nested call, a literal) is not followed, so it
+// answers `` there. `T id → ( quic_creds_ident id )` hands over a handle holding a
+// clone of `id`, not `id`: parked as "the value may be one of them", the
+// payload leaked its Arc on every call.
+@ mem_arm_call_xhown i syms i cg s ty i tt0 s hown → s {
+    ? | == 0 ( nurl_str_len hown ) ( seq hown `false` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __ty_no_address ty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i ht ? == tt0 TT_LBRACE ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) tt0
+    ? != ht TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s args ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    ? ( str_contains_word args `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s lp ( mem_local_lend_of syms cg key args )
+    ? == 0 ( nurl_str_len lp ) { ^ ( nurl_str_cat hown `` ) } {}
+    : s nl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nl ) ( nurl_print ` = xor i1 ` ) ( nurl_print lp ) ( nurl_print `, true\n` )
+    : s o ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = and i1 ` ) ( nurl_print hown ) ( nurl_print `, ` ) ( nurl_print nl ) ( nurl_print `\n` )
+    ^ o
 }
 
 // The arm's ownership bit (mem_arm_hown) as the parked drops' second
@@ -17231,6 +17259,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : ~ s t_hown `false`
     ? == 0 g_did_ret { = t_hown ( mem_arm_hown syms cg tt2 t_tt0 t_v0 t_retid c_jdepth ) } {}
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_hown ) ``
+    : s t_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
     : ~ s t_shown ``
     ? == 0 g_did_ret { = t_shown ( mem_arm_struct_hown syms cg tt2 t_tt0 ) } {}
     // Which enum this arm's value is a variant TAG of, if any: a bare
@@ -17279,7 +17308,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown t_xhown )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -17395,6 +17424,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : ~ s e_hown `false`
     ? == 0 g_did_ret { = e_hown ( mem_arm_hown syms cg et2 e_tt0 e_v0 e_retid c_jdepth ) } {}
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_hown ) ``
+    : s e_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
     : ~ s e_shown ``
     ? == 0 g_did_ret { = e_shown ( mem_arm_struct_hown syms cg et2 e_tt0 ) } {}
     // Mirror of t_ven above.
@@ -17426,7 +17456,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown e_xhown )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -19325,6 +19355,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : ~ s arm_hown `false`
             ? == 0 g_did_ret { = arm_hown ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) } {}
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
+            : s arm_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
             // private exit block a parked-drop arm leaves through.
             : ~ s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -19381,7 +19412,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown arm_xhown )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
@@ -24465,13 +24496,13 @@ unsafe @ bck_trusted_file s path → b {
 }
 
 @ bck_raw_handle_call s base → b {
-    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn` base )
+    ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn tls_accept_ident tls_accept_ident_dual` base )
 }
 
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -53869,6 +53900,13 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare i32 @nurl_cpu_x86_vaes() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_vaes512() readnone nounwind willreturn` )
         ( emit `declare i32 @nurl_cpu_x86_sha() readnone nounwind willreturn` )
+        ( emit `declare i32 @nurl_cpu_x86_adx() readnone nounwind willreturn` )
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_adx() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %ch.a = call i32 @nurl_cpu_x86_adx()` )
+        ( emit `  %ch.b = icmp ne i32 %ch.a, 0` )
+        ( emit `  ret i1 %ch.b` )
+        ( emit `}` )
         ( emit `declare <4 x i32> @llvm.x86.sha256rnds2(<4 x i32>, <4 x i32>, <4 x i32>)` )
         ( emit `declare <4 x i32> @llvm.x86.sha256msg1(<4 x i32>, <4 x i32>)` )
         ( emit `declare <4 x i32> @llvm.x86.sha256msg2(<4 x i32>, <4 x i32>)` )
@@ -53893,8 +53931,13 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_sha` `nurl__sha_gate` `nurl_cpu_x86_sha` `nurl_cpu_sha_missing` ) }
     {  // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
-        // split the work differently and are not lowered yet).
+        // split the work differently and are not lowered yet), and so is
+        // the ADX tier (nurl_mac_row's portable loop is AArch64's row).
         ( emit `define linkonce_odr i1 @nurl_cpu_has_sha() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  ret i1 false` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_adx() alwaysinline {` )
         ( emit `entry:` )
         ( emit `  ret i1 false` )
         ( emit `}` ) }
@@ -54319,6 +54362,119 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_rotr64` `u64` )
 }
 
+// ── nurl_mac_row: a row of a multi-precision multiply, two carry chains ──
+//
+//   ( nurl_mac_row rp ap n b )  →  rp[0..n) += ap[0..n)·b, returning the
+//                                  word above them (the carry-out row)
+//
+// The row is the unit of every big-number multiply and Montgomery
+// reduction (GMP's mpn_addmul_1): n products ap[j]·b, the low half of
+// each added at j and the high half at j+1. The result fits n+1 words
+// for any inputs — rp + ap·b < 2^64n + (2^64n − 1)(2^64 − 1) < 2^64(n+1)
+// — so the top word is returned, not added anywhere.
+//
+// Why a row and not a step. nurl_mac is one product with ONE carry
+// chain: x86 has one carry flag, so the n low halves and the n high
+// halves of a row queue on the same flag, and LLVM cannot do better —
+// given mulx and _addcarryx_u64 it still emits plain adc (measured,
+// LLVM 18: 8 mulx, 14 adc, 0 adcx/adox for a 4-limb row). Broadwell's
+// ADX adds two add-with-carry instructions that each carry through a
+// flag of their own, ADCX through CF and ADOX through OF, and BMI2's
+// MULX multiplies without touching either: the low halves ride CF while
+// the high halves ride OF, one mulx and two adds a product. LLVM never
+// selects ADOX — its flags model has one carry — so the chains have to
+// be written as instructions, and the flags only survive inside ONE
+// asm block: the compiler may put anything between two. The smallest
+// unit whose carries begin and end in registers is the row; that is the
+// primitive. (A row of a fixed width — the limbs in registers — would
+// save the loads and stores of rp, but no width serves RSA's 16 to 64
+// limbs and P-256's 4 at once.)
+//
+// The asm: n mod 4 single limbs, then a block of four if n has one,
+// then blocks of eight. Loop control is lea and jrcxz, neither of which
+// writes a flag (dec writes OF; cmp both). Addressing is base +
+// displacement with the pointers bumped by lea: an indexed operand
+// un-laminates the micro-fused mulx / adcx / mov on Intel, which cost
+// the indexed form of this loop 25 % (measured, 16 limbs). The count
+// lives in rcx, b in rdx (mulx's implicit source). Every branch depends
+// on n alone, so a row takes the same path for every operand value.
+//
+// Behind the ADX tier: the row asks nurl_cpu_has_adx (BMI2 + ADX, the
+// runtime's CPUID answer, `readnone` so the optimiser hoists it out of
+// a caller's loop) and on a CPU without it — and on every target that
+// is not x86-64 — runs the same row as a loop of i128 multiply-adds,
+// which LLVM lowers to mul/umulh/adds/adcs on AArch64 (one carry flag
+// there too, and nothing like ADOX: the portable loop is the lowering).
+// n < 0 is an empty row.
+@ __emit_mac_row → v {
+    ( emit `define linkonce_odr i64 @nurl_mac_row(i64* %rp, i64* %ap, i64 %n, i64 %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mr.neg = icmp slt i64 %n, 0` )
+    ( emit `  %mr.n = select i1 %mr.neg, i64 0, i64 %n` )
+    ? == g_crypto_target 1
+    { ( emit `  %mr.x = call i1 @nurl_cpu_has_adx()` )
+        ( emit `  br i1 %mr.x, label %mr.adx, label %mr.loop` )
+        ( emit `mr.adx:` )
+        ( emit `  %mr.s0 = and i64 %mr.n, 3` )
+        ( emit `  %mr.s = sub i64 0, %mr.s0` )
+        ( emit `  %mr.f0 = lshr i64 %mr.n, 2` )
+        ( emit `  %mr.f1 = and i64 %mr.f0, 1` )
+        ( emit `  %mr.f = sub i64 0, %mr.f1` )
+        ( emit `  %mr.e0 = lshr i64 %mr.n, 3` )
+        ( emit `  %mr.e = sub i64 0, %mr.e0` )
+        ( nurl_print `  %mr.r = call { i64, i64, i64, i64, i64, i64, ptr, ptr } asm sideeffect "` )
+        ( nurl_print `xor ${4:k}, ${4:k}\\0A\\09xor ${3:k}, ${3:k}\\0A\\091:\\0A\\09` )
+        ( nurl_print `jrcxz 2f\\0A\\09mulx 0($6), $0, $1\\0A\\09adcx 0($7), $0\\0A\\09adox $3, $0\\0A\\09` )
+        ( nurl_print `mov $0, 0($7)\\0A\\09mov $1, $3\\0A\\09lea 8($6), $6\\0A\\09lea 8($7), $7\\0A\\09` )
+        ( nurl_print `lea 1($5), $5\\0A\\09jmp 1b\\0A\\092:\\0A\\09` )
+        ( nurl_print `mov $8, $5\\0A\\09jrcxz 3f\\0A\\09mulx 0($6), $0, $1\\0A\\09adcx 0($7), $0\\0A\\09` )
+        ( nurl_print `adox $3, $0\\0A\\09mov $0, 0($7)\\0A\\09mulx 8($6), $2, $3\\0A\\09adcx 8($7), $2\\0A\\09` )
+        ( nurl_print `adox $1, $2\\0A\\09mov $2, 8($7)\\0A\\09mulx 16($6), $0, $1\\0A\\09adcx 16($7), $0\\0A\\09` )
+        ( nurl_print `adox $3, $0\\0A\\09mov $0, 16($7)\\0A\\09mulx 24($6), $2, $3\\0A\\09adcx 24($7), $2\\0A\\09` )
+        ( nurl_print `adox $1, $2\\0A\\09mov $2, 24($7)\\0A\\09lea 32($6), $6\\0A\\09lea 32($7), $7\\0A\\09` )
+        ( nurl_print `3:\\0A\\09` )
+        ( nurl_print `mov $9, $5\\0A\\09jrcxz 6f\\0A\\09jmp 4f\\0A\\096:\\0A\\09` )
+        ( nurl_print `jmp 5f\\0A\\094:\\0A\\09` )
+        ( nurl_print `mulx 0($6), $0, $1\\0A\\09adcx 0($7), $0\\0A\\09adox $3, $0\\0A\\09mov $0, 0($7)\\0A\\09` )
+        ( nurl_print `mulx 8($6), $2, $3\\0A\\09adcx 8($7), $2\\0A\\09adox $1, $2\\0A\\09mov $2, 8($7)\\0A\\09` )
+        ( nurl_print `mulx 16($6), $0, $1\\0A\\09adcx 16($7), $0\\0A\\09adox $3, $0\\0A\\09mov $0, 16($7)\\0A\\09` )
+        ( nurl_print `mulx 24($6), $2, $3\\0A\\09adcx 24($7), $2\\0A\\09adox $1, $2\\0A\\09mov $2, 24($7)\\0A\\09` )
+        ( nurl_print `mulx 32($6), $0, $1\\0A\\09adcx 32($7), $0\\0A\\09adox $3, $0\\0A\\09mov $0, 32($7)\\0A\\09` )
+        ( nurl_print `mulx 40($6), $2, $3\\0A\\09adcx 40($7), $2\\0A\\09adox $1, $2\\0A\\09mov $2, 40($7)\\0A\\09` )
+        ( nurl_print `mulx 48($6), $0, $1\\0A\\09adcx 48($7), $0\\0A\\09adox $3, $0\\0A\\09mov $0, 48($7)\\0A\\09` )
+        ( nurl_print `mulx 56($6), $2, $3\\0A\\09adcx 56($7), $2\\0A\\09adox $1, $2\\0A\\09mov $2, 56($7)\\0A\\09` )
+        ( nurl_print `lea 64($6), $6\\0A\\09lea 64($7), $7\\0A\\09lea 1($5), $5\\0A\\09jrcxz 5f\\0A\\09` )
+        ( nurl_print `jmp 4b\\0A\\095:\\0A\\09` )
+        ( nurl_print `adcx $4, $3\\0A\\09adox $4, $3\\0A\\09` )
+        ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,={cx},=r,=r,r,r,{dx},5,6,7,~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+        ( emit `(i64 %mr.f, i64 %mr.e, i64 %b, i64 %mr.s, ptr %ap, ptr %rp)` )
+        ( emit `  %mr.c = extractvalue { i64, i64, i64, i64, i64, i64, ptr, ptr } %mr.r, 3` )
+        ( emit `  ret i64 %mr.c` ) }
+    { ( emit `  br label %mr.loop` ) }
+    ( emit `mr.loop:` )
+    ( emit `  br label %mr.head` )
+    ( emit `mr.head:` )
+    ( emit `  %mr.j = phi i64 [ 0, %mr.loop ], [ %mr.j1, %mr.body ]` )
+    ( emit `  %mr.cy = phi i64 [ 0, %mr.loop ], [ %mr.cn, %mr.body ]` )
+    ( emit `  %mr.more = icmp slt i64 %mr.j, %mr.n` )
+    ( emit `  br i1 %mr.more, label %mr.body, label %mr.done` )
+    ( emit `mr.body:` )
+    ( emit `  %mr.ap = getelementptr i64, ptr %ap, i64 %mr.j` )
+    ( emit `  %mr.rp = getelementptr i64, ptr %rp, i64 %mr.j` )
+    ( emit `  %mr.a = load i64, ptr %mr.ap` )
+    ( emit `  %mr.t = load i64, ptr %mr.rp` )
+    ( emit `  %mr.w = call i128 @nurl_mac_w(i64 %mr.a, i64 %b, i64 %mr.t, i64 %mr.cy)` )
+    ( emit `  %mr.lo = trunc i128 %mr.w to i64` )
+    ( emit `  %mr.hw = lshr i128 %mr.w, 64` )
+    ( emit `  %mr.cn = trunc i128 %mr.hw to i64` )
+    ( emit `  store i64 %mr.lo, ptr %mr.rp` )
+    ( emit `  %mr.j1 = add i64 %mr.j, 1` )
+    ( emit `  br label %mr.head` )
+    ( emit `mr.done:` )
+    ( emit `  ret i64 %mr.cy` )
+    ( emit `}` )
+}
+
 @ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
@@ -54740,6 +54896,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `  %mv.r = trunc i128 %mv.h to i64` )
     ( emit `  ret i64 %mv.r` )
     ( emit `}` )
+    ( __emit_mac_row )
     ( emit_simd_preamble )
     ( emit_crypto_preamble )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64) "nurl.raw"="1"` )
@@ -55489,6 +55646,8 @@ unsafe @ __canon_import_key s path → s {
     ( nurl_sym_def syms `nurl_subb_hi` `u64` )
     ( nurl_sym_def syms `nurl_mac_lo` `u64` )
     ( nurl_sym_def syms `nurl_mac_hi` `u64` )
+    ( nurl_sym_def syms `nurl_mac_row` `u64` )
+    ( nurl_sym_def syms `nurl_cpu_has_adx` `i1` )
     ( register_simd_syms syms )
     ( nurl_sym_def syms `nurl_init` `void` )
     ( nurl_sym_def syms `nurl_memset` `void` )

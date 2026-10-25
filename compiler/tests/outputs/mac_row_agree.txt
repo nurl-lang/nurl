@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rows: 492, mismatches: 0
+checksum: -8677871171092403470

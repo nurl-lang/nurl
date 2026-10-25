@@ -1073,6 +1073,33 @@ operands straight out of memory, the two halves reload through a
 possibly-aliasing pointer, the CSE cannot happen, and the chain
 collapses back to the tree it was meant to replace.
 
+**A row with two carry chains.** x86 has one carry flag, so a chain of
+`nurl_mac` steps is one serial chain however it is written — and LLVM,
+given `mulx` and the `adcx` intrinsic, still emits plain `adc`; it never
+selects `adox`. ADX (Broadwell, Zen) has two add-with-carry instructions
+that carry through flags of their own, ADCX through CF and ADOX through
+OF, which with BMI2's flag-free MULX run a multiply's low and high
+halves as two chains at once. Flags do not survive between two pieces of
+code the compiler may separate, so the unit is a whole row:
+
+| Primitive | Value |
+|---|---|
+| `nurl_mac_row(rp, ap, n, b)` | `rp[0..n) += ap[0..n)·b`; returns the word above them |
+| `nurl_cpu_has_adx()` | the ADX tier: BMI2 + ADX |
+
+`rp` and `ap` are `*i` limb pointers, so only `unsafe` code may call
+it. The result always fits n + 1 words, so the top word is returned
+rather than added anywhere. On x86-64 the row asks `nurl_cpu_has_adx`
+and runs inline asm (mulx / adcx / adox, loop control by `lea` and
+`jrcxz`, which write no flag); elsewhere — a CPU without ADX, AArch64
+(one carry flag, no ADOX equivalent), `--no-cpu-dispatch` — it is a
+loop of `nurl_mac` steps. Every branch depends on `n` alone. There is no
+gate: unlike the crypto tiers the row runs everywhere, and
+`NURL_CPU_ADX=0` takes the asm away. `stdlib/std/rsa_mont.nu`'s
+Montgomery multiply and square run on rows on the ADX tier (1.2–1.65×
+over its FIPS kernels) and stay FIPS without it. The decision is
+`docs/adr/0001-two-carry-chains.md`.
+
 ### 4.1c `v256` — the wide SIMD lane type (v2.6)
 
 `v256` is the same idea one register wider, and follows every rule
