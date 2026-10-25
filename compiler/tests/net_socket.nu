@@ -123,7 +123,7 @@ $ `stdlib/net/socket.nu`
     ( pb `the listener is back to empty: ` == ( sock_accept st l0 ) ( again ) )
 
     // ── data ─────────────────────────────────────────────────────
-    ( pb `a fresh connection has nothing to read: ` == ( sock_read st s0 scratch 8 ) ( again ) )
+    ( pb `a fresh connection has nothing to read: ` == ( sock_read st s0 scratch 8 2990 ) ( again ) )
     ( pb `and is not readable: ` ! ( sock_readable st s0 ) )
 
     : ( Vec u ) req ( vec_new [u] )
@@ -134,9 +134,9 @@ $ `stdlib/net/socket.nu`
     ( pb `the server can read it: ` ( sock_readable st s0 ) )
 
     : ( Vec u ) got ( vec_new [u] )
-    : i rn ( sock_read st s0 got ( vec_len [u] req ) )
+    : i rn ( sock_read st s0 got ( vec_len [u] req ) 3000 )
     ( pb `and reads exactly what was sent: ` && == rn ( vec_len [u] req ) ( bytes_eq got req ) )
-    ( pb `after which there is nothing left: ` == ( sock_read st s0 got 8 ) ( again ) )
+    ( pb `after which there is nothing left: ` == ( sock_read st s0 got 8 3000 ) ( again ) )
     ( pb `the send queue drained: ` == 0 ( sock_send_queue st c ) )
 
     : ( Vec u ) resp ( vec_new [u] )
@@ -144,7 +144,7 @@ $ `stdlib/net/socket.nu`
     ( sock_write st s0 resp 0 ( vec_len [u] resp ) 3100 )
     ( pump st 3100 12 )
     : ( Vec u ) got2 ( vec_new [u] )
-    : i rn2 ( sock_read st c got2 ( vec_len [u] resp ) )
+    : i rn2 ( sock_read st c got2 ( vec_len [u] resp ) 3100 )
     ( pb `the client reads the response: ` && == rn2 ( vec_len [u] resp ) ( bytes_eq got2 resp ) )
 
     // A short read is a read, not an error: ask for less than is
@@ -152,19 +152,19 @@ $ `stdlib/net/socket.nu`
     ( sock_write st s0 resp 0 8 3200 )
     ( pump st 3200 12 )
     : ( Vec u ) part ( vec_new [u] )
-    ( pb `a short read takes what it asked for: ` == 3 ( sock_read st c part 3 ) )
-    ( pb `and the rest is still there: ` == 5 ( sock_read st c part 99 ) )
+    ( pb `a short read takes what it asked for: ` == 3 ( sock_read st c part 3 3200 ) )
+    ( pb `and the rest is still there: ` == 5 ( sock_read st c part 99 3200 ) )
 
     // ── end of stream ────────────────────────────────────────────
     ( sock_close st s0 3300 )
     ( pump st 3300 12 )
     ( pb `the client is readable at EOF: ` ( sock_readable st c ) )
-    ( pb `read answers 0, which is not an error: ` == 0 ( sock_read st c got2 64 ) )
-    ( pb `and keeps answering 0: ` == 0 ( sock_read st c got2 64 ) )
+    ( pb `read answers 0, which is not an error: ` == 0 ( sock_read st c got2 64 3300 ) )
+    ( pb `and keeps answering 0: ` == 0 ( sock_read st c got2 64 3300 ) )
     ( pb `the connection is still alive for writing: ` != ( sock_state st c ) ( tcp_closed ) )
     ( sock_close st c 3400 )
     ( pump st 3400 12 )
-    ( pb `an operation on a closed fd is refused: ` == ( sock_read st c got2 8 ) - 0 ( sock_err_other ) )
+    ( pb `an operation on a closed fd is refused: ` == ( sock_read st c got2 8 3400 ) - 0 ( sock_err_other ) )
 
     // ── a peer that resets ───────────────────────────────────────
     : i c2 ( sock_connect st ( lo_ip ) lp 0 4000 )
@@ -175,11 +175,38 @@ $ `stdlib/net/socket.nu`
 
     ( sock_abort st s2 4100 )
     ( pump st 4100 12 )
-    ( pb `the reset peer reads as closed: ` == ( sock_read st c2 got2 8 ) - 0 ( sock_err_closed ) )
+    ( pb `the reset peer reads as closed: ` == ( sock_read st c2 got2 8 4100 ) - 0 ( sock_err_closed ) )
     ( pb `the error is on the fd too: ` == ( sock_err st c2 ) ( sock_err_closed ) )
     ( pb `a reset connection is readable — the waiter must wake: ` ( sock_readable st c2 ) )
     ( pb `writing to it fails, and not with "again": ` == ( sock_write st c2 req 0 4 4100 ) - 0 ( sock_err_closed ) )
     ( sock_close st c2 4200 )
+
+    // close() with unread receive data is an abort, not an orderly FIN:
+    // the discarded bytes must turn into a reset visible to the sender.
+    : i c5 ( sock_connect st ( lo_ip ) lp 0 4300 )
+    ( pump st 4300 12 )
+    : i s5 ( sock_accept st l0 )
+    ( pb `unread-close pair is established: ` && == ( sock_status st c5 ) ( sock_conn_ready ) > s5 0 )
+    ( sock_write st c5 req 0 4 4310 )
+    ( pump st 4310 12 )
+    ( pb `the peer has unread data before close: ` ( sock_readable st s5 ) )
+    ( sock_close st s5 4320 )
+    ( pump st 4320 12 )
+    ( pb `close with unread data resets the sender: ` == ( sock_write st c5 req 0 4 4330 ) - 0 ( sock_err_closed ) )
+    ( sock_close st c5 4340 )
+
+    // A clean close can send FIN, but payload already in flight may arrive
+    // after the fd is gone. That data gets RST rather than an ACK for bytes
+    // no application can consume.
+    : i c6 ( sock_connect st ( lo_ip ) lp 0 4400 )
+    ( pump st 4400 12 )
+    : i s6 ( sock_accept st l0 )
+    ( pb `post-close-data pair is established: ` && == ( sock_status st c6 ) ( sock_conn_ready ) > s6 0 )
+    ( sock_close st s6 4410 )
+    ( pb `data can be queued before the FIN reaches its peer: ` == ( sock_write st c6 req 0 4 4410 ) 4 )
+    ( pump st 4410 16 )
+    ( pb `data arriving after close resets the sender: ` == ( sock_write st c6 req 0 4 4420 ) - 0 ( sock_err_closed ) )
+    ( sock_close st c6 4430 )
 
     // ── backlog, and two connections at once ─────────────────────
     : i c3 ( sock_connect st ( lo_ip ) lp 0 5000 )
@@ -202,8 +229,8 @@ $ `stdlib/net/socket.nu`
     ( pump st 5100 24 )
     : ( Vec u ) r3 ( vec_new [u] )
     : ( Vec u ) r4 ( vec_new [u] )
-    : i n3 ( sock_read st s3 r3 32 )
-    : i n4 ( sock_read st s4 r4 32 )
+    : i n3 ( sock_read st s3 r3 32 5100 )
+    : i n4 ( sock_read st s4 r4 32 5100 )
     // s3 and s4 arrived in accept order, which is connect order.
     ( pb `each stream landed on its own connection: ` && && == n3 5 == n4 4 && ( bytes_eq r3 m3 ) ( bytes_eq r4 m4 ) )
 

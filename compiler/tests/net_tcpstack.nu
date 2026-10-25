@@ -154,7 +154,8 @@ $ `stdlib/net/tcpstack.nu`
     ( settle a b w3 3000 6 )
 
     : ( Vec u ) got ( vec_new [u] )
-    : i nread ( tstack_read b cb got ( vec_len [u] msg ) )
+    : PktBuf wr1 ( pktbuf_new )
+    : i nread ( tstack_read b cb got ( vec_len [u] msg ) 3000 wr1 )
     ( pb `B read the whole request: ` == nread ( vec_len [u] msg ) )
     ( pb `and the bytes match: ` ( bytes_eq got msg ) )
 
@@ -164,7 +165,8 @@ $ `stdlib/net/tcpstack.nu`
     ( tstack_write b cb reply 0 ( vec_len [u] reply ) 3100 w4 )
     ( settle b a w4 3100 6 )
     : ( Vec u ) got2 ( vec_new [u] )
-    : i nread2 ( tstack_read a ca got2 ( vec_len [u] reply ) )
+    : PktBuf wr2 ( pktbuf_new )
+    : i nread2 ( tstack_read a ca got2 ( vec_len [u] reply ) 3100 wr2 )
     ( pb `A read the whole reply: ` == nread2 ( vec_len [u] reply ) )
     ( pb `and those bytes match too: ` ( bytes_eq got2 reply ) )
 
@@ -227,6 +229,7 @@ $ `stdlib/net/tcpstack.nu`
     //
     // The `w*` buffers handed to `settle` are gone already: it consumes
     // its wire. The rest are ours.
+    ( pktbuf_free wr1 ) ( pktbuf_free wr2 )
     ( pktbuf_free w6 ) ( pktbuf_free w7 ) ( pktbuf_free w10 )
     ( pktbuf_free back )
     ( vec_free [u] msg ) ( vec_free [u] got )

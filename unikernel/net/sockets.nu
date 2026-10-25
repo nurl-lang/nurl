@@ -804,7 +804,7 @@ unsafe @ nurl_tcp_read i conn s buf i cap → i {
     ? <= cap 0 { ^ 0 } {}
     ~ T {
         : ( Vec u ) tmp ( vec_new [u] )
-        : i n ( sock_read st conn tmp cap )
+        : i n ( sock_read st conn tmp cap ( __ms ) )
         ? > n 0 {
             ( nurl_memcpy buf # s ( vec_data [u] tmp ) n )
             ^ n

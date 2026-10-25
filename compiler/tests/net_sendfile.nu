@@ -119,12 +119,12 @@ $ `stdlib/std/x509_gen.nu`
 }
 
 @ main → i {
-    : s path `/tmp/nurl_net_sendfile.bin`
+    : s path `nurl_net_sendfile.bin`
     : ( Vec u ) file ( pattern 1048576 )
     ?? ( write_file_bytes path file ) { T _ → {} F _ → { ( label `file_write` `FAIL` ) } }
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
-    : s cp `/tmp/nurl_net_sendfile.crt`
-    : s kp `/tmp/nurl_net_sendfile.key`
+    : s cp `nurl_net_sendfile.crt`
+    : s kp `nurl_net_sendfile.key`
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
