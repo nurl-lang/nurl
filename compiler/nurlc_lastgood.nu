@@ -9824,8 +9824,11 @@ unsafe @ nurl_sym_new → i {
     // value again — including the empty sideband values used by the compiler.
     // 13 owns: 1 where the value is a buffer of the entry's own (an
     // accumulated list); 0 where it is interned (above).
+    // 14 pins: a table of the module-scope definitions made inside a
+    // scope (nurl_sym_def_module), replayed by each pop until the table
+    // is back at depth 0; 0 when there are none.
     : i nb 4096
-    : s t # s ( nurl_zalloc 112 )
+    : s t # s ( nurl_zalloc 120 )
     // Compilation owns every table until its explicit release. Intrusive
     // links (slots 9/10) let final cleanup reclaim handles abandoned by a
     // diagnostic without scanning on normal release or allocating a tracker.
@@ -9884,6 +9887,7 @@ unsafe @ nurl_sym_free sink i h → v {
     ( nurl_free # s ( nurl_peek t 11 ) )
     ( nurl_free # s ( nurl_peek t 12 ) )
     ( nurl_free # s ( nurl_peek t 13 ) )
+    ( nurl_sym_free ( nurl_peek t 14 ) )
     ( nurl_free t )
 }
 
@@ -10449,6 +10453,35 @@ unsafe @ nurl_sym_pop i h → v {
     }
     ( nurl_poke t 0 count )
     ? > depth 0 { ( nurl_poke t 1 - depth 1 ) } {}
+    // The module-scope definitions made inside the scope just closed go on
+    // into the one it returns to (nurl_sym_def_module).
+    : i pins ( nurl_peek t 14 )
+    ? != pins 0 {
+        : i pn ( nurl_peek # s pins 0 )
+        : *s pnames # *s # s ( nurl_peek # s pins 3 )
+        : ~ i k 0
+        ~ < k pn {
+            ( nurl_sym_def h . pnames k ( __sym_view # s pins k ) )
+            = k + k 1
+        }
+        ? <= depth 1 {
+            ( nurl_sym_free pins )
+            ( nurl_poke t 14 0 )
+        } {}
+    } {}
+}
+
+// Define `name` at module scope, wherever the table's scope is now: a fact
+// about the whole module (a generic struct instance's layout,
+// ensure_struct_instantiated) first learned inside a function body. It is
+// visible at once, and each pop carries it into the enclosing scope until
+// the table is back at depth 0, where it stays.
+unsafe @ nurl_sym_def_module i h s name s value → v {
+    : s t # s h
+    ( nurl_sym_def h name value )
+    ? == 0 ( nurl_peek t 1 ) { ^ } {}
+    ? == 0 ( nurl_peek t 14 ) { ( nurl_poke t 14 ( nurl_sym_new ) ) } {}
+    ( nurl_sym_def ( nurl_peek t 14 ) name value )
 }
 
 // ── Did-you-mean suggestions (diagnostic cold path only) ──────────
@@ -22993,6 +23026,13 @@ unsafe @ __src_has_raw_ptr s text → b {
         { ? > ( nurl_str_to_int ( nurl_sym_get2 syms rfp `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
                 ( mem_udrop_field_move syms cg ptr ( nurl_sym_get syms `__last_field_read__` ) )
                 ^ v } {} } {}
+        // …and one that cannot be copied cannot move out (a `% Drop` value
+        // leaves no empty state behind): the binding would go on borrowing
+        // it after its struct's block released it (h328).
+        ? & & & == rhs_tt TT_DOT ( __nc_drop_ty ty ) != 0 ( nurl_str_len rfp )
+        & ( nurl_sym_has_word syms `__user_drops__` rfp ) == 0 ( nurl_sym_len2 syms rfp `__pname` )
+        { ? > ( nurl_str_to_int ( nurl_sym_get2 syms rfp `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
+                ( __nc_outlive_die syms ptr ty ) } {} } {}
         ? & & == rhs_tt TT_DOT != 0 ( nurl_str_len rfp )
         & ( nurl_sym_has_word syms `__user_drops__` rfp ) == 0 ( nurl_sym_len2 syms rfp `__pname` )
         { ( __sb syms ptr `local` ) }
@@ -23013,6 +23053,24 @@ unsafe @ __src_has_raw_ptr s text → b {
     // Fresh: owned — also after an earlier move cleared the flag
     // (`( vec_free v ) = v ( vec_new )`).
     { ( mem_udrop_flag_set syms cg ptr `1` ) ( __sb syms ptr `` ) }
+}
+
+// A binding given a field that cannot be copied, out of a struct a block
+// nested inside the binding's drops (`= a . p c`, `p` declared in it).
+// Reported at the statement, as __nc_copy_die is.
+@ __nc_outlive_die i syms s ptr s ty → v {
+    : s rec ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) )
+    : s r1 ( str_skip_word rec )
+    : s bn ( nurl_sym_get2 syms ptr `__bname` )
+    : s root ( nurl_sym_get syms `__last_member_root__` )
+    : s tshow ( llvm_to_nurl ty )
+    : s m1 ( nurl_str_cat4 `'` bn `' would still borrow a field of '` root )
+    : s m2 ( nurl_str_cat4 `' after '` root `' is dropped: '` root )
+    : s m3 ( nurl_str_cat4 `' is declared in a block that ends before '` bn `' does, and a '` tshow )
+    : s m4 ( nurl_str_cat3 `' cannot be copied out of it, nor moved out (a value with a '% Drop' of its own leaves nothing in its place). Declare '` bn `' inside that block, or move the whole of '` )
+    : s m5 ( nurl_str_cat4 root `' out to where '` bn `' is used.` )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
+    ( nurl_str_cat ( nurl_str_cat4 m1 m2 m3 m4 ) m5 ) )
 }
 
 // A payload cursor about to give up a field takes over the option / result
@@ -23097,9 +23155,11 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // as the entry so a nested block's pop cannot take the flag away while
     // the entry lives on. A `:` binding sets the flag itself right after
     // (mem_udrop_bind_flag), so its registration only creates it.
+    // (`2`: a flag the alloca hoister clears at entry, for an owner made
+    // where not every path runs — a call's temporary, mid-expression.)
     ? != 0 g_udrop_noinit
     { : s nf ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = alloca i1\n` )
+        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ? == g_udrop_noinit 2 ` = alloca i1, align 1\n` ` = alloca i1\n` )
         ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) nf )
         = g_udrop_noinit 0 }
     { ( mem_udrop_flag_set syms cg ptr `1` ) }
@@ -35060,6 +35120,7 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // flag — which a binding, a return, an argument or a
                     // literal takes over.
                     : ~ s __tf_res ( nurl_str_cat res `` )
+                    : ~ b __tf_taken F
                     ? & & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     ( __is_handle_ty ftype ) ! ( __has_user_drop ot ) ( __clone_supported ftype syms ) {
                         // (Exactly when the call handed its result over — its
@@ -35067,6 +35128,7 @@ unsafe @ gen_member i lex i syms i cg → s {
                         // view of its owner.)
                         : s tro2 ( mem_call_retown syms cg )
                         ? != 0 ( nurl_str_len tro2 ) {
+                            = __tf_taken T
                             ( nurl_sym_def syms `__last_tmp_field_own__` tro2 )
                             ( nurl_sym_def syms `__last_tmp_field_rk__` ( nurl_sym_get syms `__last_retown_const__` ) )
                             : s rest ( nurl_cg_reg cg )
@@ -35077,6 +35139,72 @@ unsafe @ gen_member i lex i syms i cg → s {
                             ( __dropifv_request ot )
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro2 )
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print rest ) ( nurl_print `)` ) ( emit_dbg_eol )
+                        } {}
+                    } {}
+                    // …and a closure (`: ( @ i i ) f . ( mk ) cb`): the same,
+                    // its env the read's own — taken out of a temporary the
+                    // call handed over, a copy of one it lent — published as
+                    // an owned closure temporary (g_clo_tmp) for the binding,
+                    // argument, return or store that takes it. Neither the
+                    // temporary nor the read released the env (h323).
+                    ? & & & & == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ( __is_closure_ty ftype ) ! ( __has_user_drop ot ) {
+                        : s tro3 ( mem_call_retown syms cg )
+                        ? != 0 ( nurl_str_len tro3 ) {
+                            = __tf_taken T
+                            : s cll ( nurl_llty ftype )
+                            : s cenv ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print cenv ) ( nurl_print ` = extractvalue ` ) ( nurl_print cll )
+                            ( nurl_print ` ` ) ( nurl_print res ) ( nurl_print `, 1\n` )
+                            : s cow ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print cow ) ( nurl_print ` = select i1 ` ) ( nurl_print tro3 )
+                            ( nurl_print `, i8* ` ) ( nurl_print cenv ) ( nurl_print `, i8* null\n` )
+                            : s cown ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print cown ) ( nurl_print ` = call i8* @nurl_closure_own(i8* ` )
+                            ( nurl_print cenv ) ( nurl_print `, i8* ` ) ( nurl_print cow ) ( nurl_print `)\n` )
+                            : s cval ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print cval ) ( nurl_print ` = insertvalue ` ) ( nurl_print cll )
+                            ( nurl_print ` ` ) ( nurl_print res ) ( nurl_print `, i8* ` ) ( nurl_print cown ) ( nurl_print `, 1\n` )
+                            : s rest ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print rest ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ot ) )
+                            ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print cll )
+                            ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                            ( __handle_drop_ensure ot )
+                            ( __dropifv_request ot )
+                            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro3 )
+                            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print rest ) ( nurl_print `)` ) ( emit_dbg_eol )
+                            ( __clo_tmp_set ( nurl_str_cat3 cval ` ` cown ) )
+                            = __tf_res cval
+                        } {}
+                    } {}
+                    // …and a field the read cannot take out of the temporary:
+                    // the struct has a `% Drop` of its own, which would see the
+                    // field gone, or the field has no empty state to leave (a
+                    // value that cannot be copied). The temporary gets an owner
+                    // of its own for the rest of the scope, as an enum a match
+                    // takes does (h233), and the field is read out of it — lent,
+                    // as a local's field is. Nothing released the temporary: it
+                    // leaked, and its destructors never ran (h329, h330). (Not
+                    // journaled, as h233's owner is not: a panic before the
+                    // scope ends leaves it unreleased.)
+                    ? & & & & ! __tf_taken == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) {
+                        : s tro4 ( mem_call_retown syms cg )
+                        ? != 0 ( nurl_str_len tro4 ) {
+                            : s tp ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print tp ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print `\n` )
+                            ( __handle_drop_ensure ot )
+                            // (Its flag starts clear on every path — the read may
+                            // sit in an arm of a `?` — and a read run again, in a
+                            // loop's condition, releases the one before it.)
+                            = g_udrop_noinit 2
+                            ( mem_own_add_user_drop syms cg tp ot )
+                            ( mem_emit_gated_drop_of cg tp ot `` ( nurl_sym_get2 syms tp `__live` ) )
+                            ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov )
+                            ( nurl_print `, ptr ` ) ( nurl_print tp ) ( nurl_print `\n` )
+                            ( mem_udrop_flag_set syms cg tp tro4 )
+                            ( nurl_sym_def syms ( nurl_str_cat tp `__tmpown` ) `1` )
+                            ( nurl_sym_def syms `__last_field_read__` ( nurl_str_cat4 ( nurl_str_cat3 tp ` ` ot ) ` ` fidx_s ( nurl_str_cat ` ` ftype ) ) )
                         } {}
                     } {}
                     // ftype is the field's raw declared type — an
@@ -35667,6 +35795,14 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // !HpackDecoded E { T @ HpackDecoded { hdrs cur } }`, cur a cursor
         // over a parameter): copying would split the aliased value.
         // (Not a closure's: its callers own every result — copied below.)
+        // A field that cannot be copied, lent that way, has to be lent by
+        // something that outlives the return — a parameter (lent back),
+        // not a local dropped on the way out, a closure's capture or a
+        // module global: as `^ . p c` (__nc_ret_check). Lent out of a
+        // local, the result pointed into what the return released (h327).
+        ? & & & agg_moves_fields ( seq fld_lent `1` ) == fld_first_tt TT_DOT ( __nc_drop_ty fty ) {
+            ( __nc_ret_check lex syms fty fld_first_tt fld_first_val agg_line )
+        } {}
         ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
             // A field of a parameter is part of the caller's value; what
@@ -43162,14 +43298,29 @@ unsafe @ __tok_src_text i lex → s {
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
         : i cur_ln ( nurl_lex_line lex )
-        ~ < prev_ln cur_ln {
-            = result ( nurl_str_cat result `\n` )
-            = prev_ln + prev_ln 1
-        }
+        ? < prev_ln cur_ln
+        { = result ( nurl_str_cat3 result ( __nl_pad - cur_ln prev_ln ) ( __col_pad lex ) )
+            = prev_ln cur_ln }
+        {}
         = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     result
+}
+
+// The spaces that put the first token of a re-lexed template line at its
+// SOURCE column. Tokens are joined by single spaces, so without this every
+// line of a template began at column 1 and every diagnostic raised inside
+// a generic instance said `file:line:1`, whatever the indentation. Columns
+// after the first token stay right for nurlfmt-canonical source (single
+// spaces between tokens). Shares one growing buffer like __nl_pad.
+: ~ s g_sp_buf ``
+
+unsafe @ __col_pad i lex → s {
+    : i n - ( nurl_lex_col lex ) 1
+    ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ~ < ( nurl_str_len g_sp_buf ) n { = g_sp_buf ( nurl_str_cat3 g_sp_buf g_sp_buf ` ` ) }
+    ^ ( nurl_str_slice g_sp_buf 0 n )
 }
 
 // N newlines — the re-lex padding that maps a template buffer's line 1
@@ -43348,10 +43499,10 @@ unsafe @ __nl_pad i n → s {
     : ~ i __gc_prev_ln ( nurl_lex_line lex )
     ~ & < ( nurl_lex_cur_start lex ) __gc_sig_end != ( nurl_lex_type lex ) TT_EOF {
         : i __gc_ln ( nurl_lex_line lex )
-        ~ < __gc_prev_ln __gc_ln {
-            = src ( nurl_str_cat src `\n` )
-            = __gc_prev_ln + __gc_prev_ln 1
-        }
+        ? < __gc_prev_ln __gc_ln
+        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_ln __gc_prev_ln ) ( __col_pad lex ) )
+            = __gc_prev_ln __gc_ln }
+        {}
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
@@ -43362,10 +43513,10 @@ unsafe @ __nl_pad i n → s {
     {}
     ? != ( nurl_lex_type lex ) TT_EOF
     { : i __gc_bln ( nurl_lex_line lex )
-        ~ < __gc_prev_ln __gc_bln {
-            = src ( nurl_str_cat src `\n` )
-            = __gc_prev_ln + __gc_prev_ln 1
-        }
+        ? < __gc_prev_ln __gc_bln
+        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_bln __gc_prev_ln ) ( __col_pad lex ) )
+            = __gc_prev_ln __gc_bln }
+        {}
         = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
@@ -43422,9 +43573,12 @@ unsafe @ __nl_pad i n → s {
 // for a type nobody had defined: the caller took a handle it owned for a
 // plain value and never dropped it. What makes an instance a library
 // handle is its identity (`libhs##` / `libhta##`, a flat table), so that
-// is recorded here; its layout comes with its first instantiation at
-// the top level, as before (a struct instantiated inside a function body
-// would be scoped to it).
+// is recorded here — and the instance is made, layout and all, at module
+// scope (nurl_sym_def_module): a call in a body may read a field of the
+// result (`. ( mk [i] 5 ) k`) before anything at the top level named the
+// type, and an instance made only inside a body went with that body's
+// scope while its `__done` mark stayed (compiler/tests/
+// generic_ret_struct_made_in_body.nu).
 unsafe @ __inst_ret_structs s src i syms → v {
     : i lx ( nurl_lex_new src `<generic_ret>` )
     ~ & != ( nurl_lex_type lx ) TT_ARROW != ( nurl_lex_type lx ) TT_EOF { ( nurl_lex_advance lx ) }
@@ -43438,8 +43592,9 @@ unsafe @ __inst_ret_structs s src i syms → v {
 }
 
 // `( Name T… )` at `lex` (on its `(`): consumed, its mangle returned, and
-// — when Name is a generic struct with no abstract argument — its
-// identity recorded the way ensure_struct_instantiated records it.
+// — when Name is a generic struct with no abstract argument — the
+// instance made (ensure_struct_instantiated), any answer given about the
+// type before its identity was known forgotten.
 unsafe @ __ret_struct_identity i lex i syms → s {
     ( nurl_lex_advance lex )  // '('
     : s sname ( nurl_str_cat ( nurl_lex_val lex ) `` )
@@ -43452,7 +43607,7 @@ unsafe @ __ret_struct_identity i lex i syms → s {
         ? & == ( nurl_lex_type lex ) TT_LPAREN ( is_ident_tok ( nurl_lex_peek_type lex ) ) {
             = w ( __ret_struct_identity lex syms )
         } { = w ( __scan_ta_word lex syms ) }
-        ? ( is_abstract_tparam syms w ) { = abstract T } {}
+        ? ( __ta_abstract syms w ) { = abstract T } {}
         = ta_list ? == 0 ( nurl_str_len ta_list ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ta_list ` ` w )
         = mangle_sfx ( nurl_str_cat3 mangle_sfx `__` ( mangle_src_word w ) )
     }
@@ -43464,6 +43619,7 @@ unsafe @ __ret_struct_identity i lex i syms → s {
             ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhta##%` mangled ) ta_list )
             ( __ty_memo_forget ( nurl_str_cat `%` mangled ) )
         } {}
+        ( ensure_struct_instantiated syms sname ta_list )
     } {}
     ^ mangled
 }
@@ -43518,6 +43674,46 @@ unsafe @ __ret_struct_identity i lex i syms → s {
     : s sv ( nurl_sym_get syms tok )
     ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37 { ^ F } {}
     ^ T
+}
+
+// Is a type argument of a generic struct application — one word of a
+// ta_list (__scan_ta_word) — still abstract? A type parameter, or a type
+// made of one: behind `?` / `??` / `*` (`?A`), an instance of a generic
+// struct over one (`Pair__A__i64`, `?Slot__A`), or a closure or trait
+// object naming one (`fn1_1_A_3_i64`). The last two are the words
+// ensure_struct_instantiated and __scan_ta_word marked `__abstract` when
+// they met them. Taken for concrete, `( Wrap ?A )` in a generic signature
+// was instantiated as `%Wrap__opt_A = type { { i1, %A }, i64 }`, a type
+// naming one nothing defines: invalid IR, compiled with status 0.
+unsafe @ __ta_abstract i syms s ta → b {
+    : i n ( nurl_str_len ta )
+    : *u p # *u ta
+    : ~ i k 0
+    ~ & < k n | == & # i . p k 255 63 == & # i . p k 255 42 { = k + k 1 }
+    : s core ? == k 0 ( nurl_str_cat ta `` ) ( nurl_str_slice ta k - n k )
+    ? ( is_abstract_tparam syms core ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len2 g_struct_inst_syms core `__abstract` )
+}
+
+// Does an LLVM type spelled by the pre-scan (__scan_part_lty) name a type
+// that is still abstract — `%A` for a type parameter, or an instance
+// marked `__abstract`?
+unsafe @ __lty_abstract i syms s lty → b {
+    : i n ( nurl_str_len lty )
+    : *u p # *u lty
+    : ~ i k 0
+    ~ < k n {
+        ? == & # i . p k 255 37 {
+            : ~ i q + k 1
+            ~ & < q n | ( __dce_ident_byte & # i . p q 255 ) == & # i . p q 255 46 { = q + q 1 }
+            ? > q + k 1 {
+                : s nm ( nurl_str_slice lty + k 1 - - q k 1 )
+                ? ( __ta_abstract syms nm ) { ^ T } {}
+            } {}
+            = k q
+        } { = k + k 1 }
+    }
+    ^ F
 }
 
 // __has_dunder: true if `str` contains "__" — the mark of a compiler-mangled
@@ -43695,27 +43891,31 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
         // time and re-enters scan_generic_structs / parse_type_paren.
         // `is_abstract_tparam` (not the bare spelling test) so a concrete
         // struct whose NAME is tparam-shaped — `: P { … }`, `( Vec P )` —
-        // instantiates like any other type argument.
+        // instantiates like any other type argument. (__ta_abstract: so is
+        // a type made of one — `( Wrap ?A )`, `( Wrap ( Pair A i ) )`.)
         : ~ s ta_chk ( nurl_str_cat ta_list `` )
         : ~ b skip F
         ~ & != 0 ( nurl_str_len ta_chk ) ! skip {
             : s ta ( str_first_word ta_chk )
             = ta_chk ( str_skip_word ta_chk )
-            ? ( is_abstract_tparam syms ta ) { = skip T } {}
+            ? ( __ta_abstract syms ta ) { = skip T } {}
         }
+        // Compute mangled name by walking tparams + ta_list in parallel.
+        : ~ s mangled ( nurl_str_cat sname `` )
+        : ~ s tp_r ( nurl_str_cat tparams `` )
+        : ~ s ta_r ( nurl_str_cat ta_list `` )
+        ~ & != 0 ( nurl_str_len tp_r ) != 0 ( nurl_str_len ta_r ) {
+            : s tp ( str_first_word tp_r )
+            = tp_r ( str_skip_word tp_r )
+            : s ta ( str_first_word ta_r )
+            = ta_r ( str_skip_word ta_r )
+            = mangled ( nurl_str_cat mangled
+            ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
+        }
+        // An instance over a type parameter is abstract in turn: an outer
+        // application naming it (`( Wrap ( Pair A i ) )`) waits as well.
+        ? skip { ( nurl_sym_def g_struct_inst_syms ( nurl_str_cat mangled `__abstract` ) `1` ) } {}
         ? ! skip {
-            // Compute mangled name by walking tparams + ta_list in parallel.
-            : ~ s mangled ( nurl_str_cat sname `` )
-            : ~ s tp_r ( nurl_str_cat tparams `` )
-            : ~ s ta_r ( nurl_str_cat ta_list `` )
-            ~ & != 0 ( nurl_str_len tp_r ) != 0 ( nurl_str_len ta_r ) {
-                : s tp ( str_first_word tp_r )
-                = tp_r ( str_skip_word tp_r )
-                : s ta ( str_first_word ta_r )
-                = ta_r ( str_skip_word ta_r )
-                = mangled ( nurl_str_cat mangled
-                ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
-            }
             // A library handle is recognised by its instance type (__libh_base).
             ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhs##%` mangled ) sname )
             ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhta##%` mangled ) ta_list )
@@ -43761,20 +43961,20 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                     // `u64` field), mirroring gen_struct_decl.
                     : i __ft_star g_pt_star
                     : s flt ( parse_type lex2 )
-                    ? != g_pt_star __ft_star { ( nurl_sym_def syms ( nurl_str_cat mangled `__rawrep` ) `1` ) } {}
+                    ? != g_pt_star __ft_star { ( nurl_sym_def_module syms ( nurl_str_cat mangled `__rawrep` ) `1` ) } {}
                     ? ( is_ident_tok ( nurl_lex_type lex2 ) )
                     { : s fname ( nurl_lex_val lex2 )
                         ( nurl_lex_advance lex2 )
-                        ( nurl_sym_def syms
+                        ( nurl_sym_def_module syms
                         ( nurl_str_cat mangled ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
                         ( nurl_str_int fidx ) )
-                        ( nurl_sym_def syms
+                        ( nurl_sym_def_module syms
                         ( nurl_str_cat mangled ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                         flt )
-                        ( nurl_sym_def syms
+                        ( nurl_sym_def_module syms
                         ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__type` ) )
                         flt )
-                        ( nurl_sym_def syms
+                        ( nurl_sym_def_module syms
                         ( nurl_str_cat3 mangled `__idx_` ( nurl_str_cat ( nurl_str_int fidx ) `__name` ) )
                         fname )
                     }
@@ -43788,9 +43988,9 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 ( nurl_print ` }\n\n` )
                 ( nurl_lex_free lex2 )
                 = g_vis_inst_targs __saved_vta
-                ( nurl_sym_def syms mangled ( nurl_str_cat `%` mangled ) )
-                ( nurl_sym_def syms ( nurl_str_cat mangled `__is_type` ) `1` )
-                ( nurl_sym_def syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
+                ( nurl_sym_def_module syms mangled ( nurl_str_cat `%` mangled ) )
+                ( nurl_sym_def_module syms ( nurl_str_cat mangled `__is_type` ) `1` )
+                ( nurl_sym_def_module syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
             } {}
         } {}
     } {}
@@ -43803,10 +44003,13 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     // can render `<generic vec_as_slice__i64 from user.nu:42>:1:21:` in
     // any diagnostic emitted while re-parsing the substituted body,
     // instead of the opaque `<generic>:1:21:`.
-    ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) )
+    ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) `` )
 }
 
-@ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col → v {
+// `why` is empty for a call; an instance no call asked for (a library
+// handle's drop, copy or trace) names what made it instead, and the
+// caller_* position is then the statement that first needed it, if any.
+@ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col s why → v {
     // No template under this name: said here, at the call, rather than at
     // the flush. Inside another generic's instantiation the call's result
     // would otherwise be typed `i64` (compute_generic_ret_ty's fallback)
@@ -43831,6 +44034,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cf` ) caller_file )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cc` ) ( nurl_str_int caller_col ) )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_why` ) why )
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -48084,7 +48288,18 @@ unsafe @ __hmemo_close s key i mark b r → v {
     : s gkey ( nurl_str_cat `__inst_` mangled )
     ? != 0 ( nurl_sym_len g_generic_syms gkey ) { ^ v } {}
     ( nurl_sym_def g_generic_syms gkey `1` )
-    ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms `<library handle>` 0 0 )
+    // No call made this instance, so there is no call site to report:
+    // a diagnostic inside it names what did — the drop (copy, trace) of
+    // the handle type — and the statement being compiled when that was
+    // first needed, when one is (g_stmt_lex).
+    : s what ? ( seq op `drop` ) `the drop of`
+    ? ( seq op `trace` ) `the cycle collector's trace of`
+    `a copy of`
+    : s why ( nurl_str_cat4 what ` '` ( __ty_src_show ty ) `'` )
+    ? == g_stmt_lex 0
+    { ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms `` 0 0 why ) }
+    { ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms
+        ( nurl_lex_filename g_stmt_lex ) g_stmt_line g_stmt_col why ) }
 }
 
 // Every library handle a type reaches (through Vec elements, fields,
@@ -50925,6 +51140,13 @@ unsafe @ __sx_names_capture i syms s sx → b {
     } {}
     ? == tt TT_DOT {
         : s root ( nurl_sym_get syms `__last_member_root__` )
+        // A field of a call's result that had to be given an owner of its
+        // own to be read (h330): that owner is dropped on the way out.
+        : s tfp ( str_first_word ( nurl_sym_get syms `__last_field_read__` ) )
+        ? & != 0 ( nurl_str_len tfp ) != 0 ( nurl_sym_len2 syms tfp `__tmpown` ) {
+            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `this hands back a field of a call's result, which is dropped, fields and all, on the way out; a '` tshow
+            `' cannot be copied out of it — the field would be released with it under the caller. Bind the result, and keep the field in a binding of its own and hand that back, or hand back the whole result.` ) )
+        } {}
         // (A field of a call's result leaves with the result; one read
         // through a pointer is its owner's, lent, which raw code vouches
         // for.)
@@ -51061,6 +51283,14 @@ unsafe @ __clo_take_capture i syms s name → v {
     // a pointer; anything else moves. Taken for moved always, a parameter's
     // Database handed out of an accessor was closed by the caller while
     // its owner still held it.
+    // A field read is always one: the struct it is a field of — a
+    // parameter, a local, the value a destructor is dropping, a call's
+    // result — still drops it, and a value with a `% Drop` of its own has
+    // no empty state to leave behind. Taken for moved, a field stored into
+    // a literal, a container, a `dyn` box or another field was released
+    // twice (h322, h324–h326). (A returned literal that moves such a
+    // field whole, zeroed at the source — h264 — says so where it zeroes
+    // it.)
     ? ( __clone_supported ty syms ) {} { ? ( __nc_drop_ty ty ) {
             ? ( is_ident_tok tt ) {
                 : s up ( mem_udrop_ptr_of syms val )
@@ -51070,7 +51300,7 @@ unsafe @ __clo_take_capture i syms s name → v {
                 ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}
                 ^ ( nurl_str_cat `` `` )
             } {}
-            ? == tt TT_DOT { ? ( __nc_field_lent syms ) { ^ ( nurl_str_cat `1` `` ) } {} } {}
+            ? == tt TT_DOT { ^ ( nurl_str_cat `1` `` ) } {}
             ^ ( nurl_str_cat `` `` )
         } {}
         ^ ( nurl_str_cat `` `` )
@@ -52403,7 +52633,7 @@ unsafe @ __import_allowed s path → b {
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
+unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -52465,9 +52695,13 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     // Context suffix for every diagnostic raised inside this re-parse.
     // Saved/restored — instantiations nest.
     : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
-    : s __ctx_from ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
-    ( nurl_str_cat4 `; first call site: ` caller_file `:` caller_line )
+    : s __ctx_at ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    ( nurl_str_cat3 caller_file `:` caller_line )
     ``
+    : s __ctx_from ? != 0 ( nurl_str_len why )
+    ( nurl_str_cat3 `; made for ` why
+    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `, first needed at ` __ctx_at ) `` )
+    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `; first call site: ` __ctx_at ) ``
     = g_diag_ctx ( nurl_str_cat3
     ` [while instantiating '` mangled
     ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
@@ -52574,7 +52808,8 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         : s caller_file ( nurl_sym_get2 g_generic_syms base `_cf` )
         : s caller_line ( nurl_sym_get2 g_generic_syms base `_cl` )
         : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
-        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
+        : s why ( nurl_sym_get2 g_generic_syms base `_why` )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col why syms cg )
         = k + k 1
     }
     = g_inst_done k
@@ -57388,7 +57623,13 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
         : s __in ( __scan_ta_word lex syms )
         ^ ( nurl_str_cat pre __in )
     } {}
-    ? & == tt TT_LPAREN == ( nurl_lex_peek_type lex ) TT_AT { ^ ( mangle_type ( __scan_part_lty lex syms ) ) } {}
+    // (A closure over a type parameter is abstract as its slug: __ta_abstract.)
+    ? & == tt TT_LPAREN == ( nurl_lex_peek_type lex ) TT_AT {
+        : s lty ( __scan_part_lty lex syms )
+        : s slug ( mangle_type lty )
+        ? ( __lty_abstract syms lty ) { ( nurl_sym_def g_struct_inst_syms ( nurl_str_cat slug `__abstract` ) `1` ) } {}
+        ^ slug
+    } {}
     ? == tt TT_LPAREN { ^ ( scan_compound_ta_inner lex syms ) } {}
     ? & == tt TT_PERCENT ( is_ident_tok ( nurl_lex_peek_type lex ) ) { ^ ( mangle_type ( __scan_part_lty lex syms ) ) } {}
     ^ ( capture_type_arg_src lex )

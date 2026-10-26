@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-stdlib/core/box.nu:191:1: error: 'mem_dup' would copy a 'Res', and it cannot be copied: it has a '% Drop' of its own and no clone, so the copy and the original would both release it. A generic that copies its T (box_clone, a container's clone) cannot be used with this type; move the value instead, or give the type a clone. [while instantiating 'Box_clone__Res' — the error may depend on the concrete type arguments; first call site: stdlib/core/box.nu:161]
-} { } 
-^
+stdlib/core/box.nu:191:5: error: 'mem_dup' would copy a 'Res', and it cannot be copied: it has a '% Drop' of its own and no clone, so the copy and the original would both release it. A generic that copies its T (box_clone, a container's clone) cannot be used with this type; move the value instead, or give the type a clone. [while instantiating 'Box_clone__Res' — the error may depend on the concrete type arguments; first call site: stdlib/core/box.nu:161]
+    } { } 
+    ^
