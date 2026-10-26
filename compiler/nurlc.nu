@@ -37692,6 +37692,23 @@ unsafe @ __l2n_list s lst → s {
     : i backslash_line ( nurl_lex_line lex )
     : i backslash_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume '\'
+    ? ( __backslash_is_closure lex syms )
+    {
+        : s value ( gen_closure_expr lex syms cg )
+        ( nurl_sym_def syms `__last_backslash_try__` `0` )
+        ^ value
+    }
+    {
+        : s value ( gen_try_expr lex syms cg backslash_line backslash_col )
+        ( nurl_sym_def syms `__last_backslash_try__` `1` )
+        ^ value
+    }
+}
+
+// Whether the '\' just consumed opens a closure literal rather than a
+// try-expression, from the 1–3 tokens after it (spec: closure_expr). The
+// closure capture scan asks the same question (__clo_scan_skip_type).
+@ __backslash_is_closure i lex i syms → b {
     : i t1 ( nurl_lex_type lex )
     : s t1v ( nurl_lex_val lex )
     : i t2 ( nurl_lex_peek_type lex )
@@ -37726,18 +37743,7 @@ unsafe @ __l2n_list s lst → s {
     : b lparen_type & == t1 TT_LPAREN | | | | | | | | == t2 TT_AT == t2 TT_TYPE_KW == t2 TT_STAR == t2 TT_QUEST == t2 TT_QUESTQUEST == t2 TT_LBRACK == t2 TT_BANG == t2 TT_PIPE t2_is_type
     // `\ inout T name …` — an inout first parameter (__clo_inout_ty).
     : b t1_inout & == t1 TT_IDENT ( seq t1v `inout` )
-    : b is_closure | | | | | | t1_inout == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
-    ? is_closure
-    {
-        : s value ( gen_closure_expr lex syms cg )
-        ( nurl_sym_def syms `__last_backslash_try__` `0` )
-        ^ value
-    }
-    {
-        : s value ( gen_try_expr lex syms cg backslash_line backslash_col )
-        ( nurl_sym_def syms `__last_backslash_try__` `1` )
-        ^ value
-    }
+    ^ | | | | | | t1_inout == t1 TT_ARROW == t1 TT_TYPE_KW t1_is_type | | | == t1 TT_STAR == t1 TT_QUEST == t1 TT_LBRACK == t1 TT_BANG lparen_type & & == t1 TT_IDENT t2_is_name == t3 TT_ARROW
 }
 
 // ── Integer width coercion ──────────────────────────────────────
@@ -40626,6 +40632,66 @@ unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
     ^ out
 }
 
+// The innermost bracket the capture scan stands in: 40 '(', 91 '[', 123 '{'.
+@ __clo_ctx_top s ctx → i {
+    ? == 0 ( nurl_str_len ctx ) { ^ 0 } {}
+    ^ ( nurl_str_get ctx - ( nurl_str_len ctx ) 1 )
+}
+
+@ __clo_ctx_pop s ctx i c → s {
+    ? != ( __clo_ctx_top ctx ) c { ^ ctx } {}
+    ^ ( nurl_str_slice ctx 0 - ( nurl_str_len ctx ) 1 )
+}
+
+// A token of a TYPE names no binding (agora #122). A binding may be called
+// `v`, `i` or `s`, and the scan took the type keyword in `( @ v i )` for a
+// capture of it: a thread's closure that only spelled that type moved the
+// spawner's Vec named `v`. Called on the token that opens a type in an
+// expression: `:` in a block (a binding's type and name — inside a call it
+// labels an argument), `#` (a cast), `Z`, `@` (an aggregate), `\` (a
+// closure's parameters and return type; a try-expression has none), `[`
+// (a call's type arguments, a select arm's type, a slice literal's element
+// type). Consumes the type and leaves the lexer on the first token that can
+// read a binding: 1, or 2 when that is inside a slice literal's `[`;
+// 0 (nothing consumed) for any other token. prev1 / prev2 are the two
+// tokens before this one.
+@ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → i {
+    ? & == tt TT_COLON == ( __clo_ctx_top ctx ) 123 {
+        ( nurl_lex_advance lex )
+        ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+        // `: name value` is the inferred form; anything else opens a type.
+        ? ! & == ( nurl_lex_type lex ) TT_IDENT ! ( __names_type outer_syms ( nurl_lex_val lex ) ) { ( skip_one_type lex ) } {}
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+        ^ 1
+    } {}
+    ? | | == tt TT_HASH == tt TT_SIZEOF == tt TT_AT {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ^ 1
+    } {}
+    ? == tt TT_BACKSLASH {
+        ( nurl_lex_advance lex )
+        ? ( __backslash_is_closure lex outer_syms ) {
+            ~ & & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+                ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `inout` ) { ( nurl_lex_advance lex ) } {}
+                ( skip_one_type lex )
+                ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+            }
+            ? == ( nurl_lex_type lex ) TT_ARROW { ( nurl_lex_advance lex ) ( skip_one_type lex ) } {}
+        } {}
+        ^ 1
+    } {}
+    ? == tt TT_LBRACK {
+        ? & ( is_ident_tok prev1 ) == prev2 TT_LPAREN { ( skip_balanced_bracks lex ) ^ 1 } {}
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ? == ( nurl_lex_type lex ) TT_PIPE { ( nurl_lex_advance lex ) ^ 2 } {}
+        ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
+        ^ 1
+    } {}
+    ^ 0
+}
+
 unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
     // (The outer locals the body assigns: g_clo_scan_assigned.)
@@ -40638,8 +40704,15 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
 
     // Scan tokens in closure body until closing brace
     : ~ i brace_depth 1
+    // The open brackets (__clo_ctx_top), the two tokens before this one, and
+    // whether the type skip already left the lexer on the next token.
+    : ~ s ctx ( nurl_str_cat `{` `` )
+    : ~ i prev1 TT_LBRACE
+    : ~ i prev2 TT_EOF
+    : ~ b held F
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
+        = held F
 
         // Unbalanced braces used to spin this loop at EOF forever — the
         // capture pre-scan runs before the body parse, so a closure
@@ -40649,10 +40722,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             `end of file inside this closure body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.` ) }
         {}
         ? == tt TT_LBRACE
-        { = brace_depth + brace_depth 1 }
+        { = brace_depth + brace_depth 1 = ctx ( nurl_str_cat ctx `{` ) }
         {
             ? == tt TT_RBRACE
-            { = brace_depth - brace_depth 1 }
+            { = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 ) }
             {
                 // Check for assignment to immutable variables
                 ? == tt TT_EQ
@@ -40700,6 +40773,14 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     {}
                 }
                 {
+                    // A type's tokens are skipped; the scan resumes on the
+                    // token after it.
+                    : i skt ( __clo_scan_skip_type lex outer_syms tt prev1 prev2 ctx )
+                    = held != 0 skt
+                    ? == skt 2 { = ctx ( nurl_str_cat ctx `[` ) } {}
+                    ? == tt TT_LPAREN { = ctx ( nurl_str_cat ctx `(` ) } {}
+                    ? == tt TT_RPAREN { = ctx ( __clo_ctx_pop ctx 40 ) } {}
+                    ? == tt TT_RBRACK { = ctx ( __clo_ctx_pop ctx 91 ) } {}
                     // A binding handed to an `inout` parameter is changed.
                     ? == tt TT_LPAREN {
                         : ~ s ios ( __clo_scan_inout_call lex outer_syms closure_params )
@@ -40741,7 +40822,9 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
 
         ? == tt TT_EOF
         { = brace_depth 0 }  // Break on EOF
-        { ( nurl_lex_advance lex ) }
+        { ? ! held { ( nurl_lex_advance lex ) } {} }
+        = prev2 prev1
+        = prev1 tt
     }
     // Lexer is now positioned after closing brace
     = g_clo_scan_assigned assigned
