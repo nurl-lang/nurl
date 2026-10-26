@@ -148,6 +148,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields. The environment belongs to the read: it is taken when the call
   handed its result over and copied when the call lent it. A binding, an
   argument, a return or a store then takes it over.
+- **An error inside a generic instance points at its real column**
+  (Agora #106). A template body is stored as its tokens joined by single
+  spaces, line breaks kept, so every line of the re-parsed body began at
+  column 1 and every diagnostic raised there said `file:line:1` with the
+  caret under the first column, whatever the statement's indentation.
+  Each line's first token is now padded to its source column. The
+  columns after it were already right for nurlfmt-formatted source.
+- **A library handle's drop instance says what made it.** An error
+  inside `Guard_drop__Conn`, which no call made, ended in
+  `first call site: <library handle>:0`. It now reads `made for the drop
+  of '( Guard Conn )', first needed at file:line`, where the line is the
+  statement whose compilation first needed it. A copy or a cycle trace
+  says so the same way.
 
 ## [0.78.0] — 2026-10-24
 

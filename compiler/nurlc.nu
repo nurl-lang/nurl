@@ -43298,14 +43298,29 @@ unsafe @ __tok_src_text i lex → s {
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
         : i cur_ln ( nurl_lex_line lex )
-        ~ < prev_ln cur_ln {
-            = result ( nurl_str_cat result `\n` )
-            = prev_ln + prev_ln 1
-        }
+        ? < prev_ln cur_ln
+        { = result ( nurl_str_cat3 result ( __nl_pad - cur_ln prev_ln ) ( __col_pad lex ) )
+            = prev_ln cur_ln }
+        {}
         = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     result
+}
+
+// The spaces that put the first token of a re-lexed template line at its
+// SOURCE column. Tokens are joined by single spaces, so without this every
+// line of a template began at column 1 and every diagnostic raised inside
+// a generic instance said `file:line:1`, whatever the indentation. Columns
+// after the first token stay right for nurlfmt-canonical source (single
+// spaces between tokens). Shares one growing buffer like __nl_pad.
+: ~ s g_sp_buf ``
+
+unsafe @ __col_pad i lex → s {
+    : i n - ( nurl_lex_col lex ) 1
+    ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ~ < ( nurl_str_len g_sp_buf ) n { = g_sp_buf ( nurl_str_cat3 g_sp_buf g_sp_buf ` ` ) }
+    ^ ( nurl_str_slice g_sp_buf 0 n )
 }
 
 // N newlines — the re-lex padding that maps a template buffer's line 1
@@ -43484,10 +43499,10 @@ unsafe @ __nl_pad i n → s {
     : ~ i __gc_prev_ln ( nurl_lex_line lex )
     ~ & < ( nurl_lex_cur_start lex ) __gc_sig_end != ( nurl_lex_type lex ) TT_EOF {
         : i __gc_ln ( nurl_lex_line lex )
-        ~ < __gc_prev_ln __gc_ln {
-            = src ( nurl_str_cat src `\n` )
-            = __gc_prev_ln + __gc_prev_ln 1
-        }
+        ? < __gc_prev_ln __gc_ln
+        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_ln __gc_prev_ln ) ( __col_pad lex ) )
+            = __gc_prev_ln __gc_ln }
+        {}
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
@@ -43498,10 +43513,10 @@ unsafe @ __nl_pad i n → s {
     {}
     ? != ( nurl_lex_type lex ) TT_EOF
     { : i __gc_bln ( nurl_lex_line lex )
-        ~ < __gc_prev_ln __gc_bln {
-            = src ( nurl_str_cat src `\n` )
-            = __gc_prev_ln + __gc_prev_ln 1
-        }
+        ? < __gc_prev_ln __gc_bln
+        { = src ( nurl_str_cat3 src ( __nl_pad - __gc_bln __gc_prev_ln ) ( __col_pad lex ) )
+            = __gc_prev_ln __gc_bln }
+        {}
         = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
@@ -43988,10 +44003,13 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     // can render `<generic vec_as_slice__i64 from user.nu:42>:1:21:` in
     // any diagnostic emitted while re-parsing the substituted body,
     // instead of the opaque `<generic>:1:21:`.
-    ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) )
+    ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) `` )
 }
 
-@ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col → v {
+// `why` is empty for a call; an instance no call asked for (a library
+// handle's drop, copy or trace) names what made it instead, and the
+// caller_* position is then the statement that first needed it, if any.
+@ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col s why → v {
     // No template under this name: said here, at the call, rather than at
     // the flush. Inside another generic's instantiation the call's result
     // would otherwise be typed `i64` (compute_generic_ret_ty's fallback)
@@ -44016,6 +44034,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cf` ) caller_file )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cc` ) ( nurl_str_int caller_col ) )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_why` ) why )
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -48269,7 +48288,18 @@ unsafe @ __hmemo_close s key i mark b r → v {
     : s gkey ( nurl_str_cat `__inst_` mangled )
     ? != 0 ( nurl_sym_len g_generic_syms gkey ) { ^ v } {}
     ( nurl_sym_def g_generic_syms gkey `1` )
-    ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms `<library handle>` 0 0 )
+    // No call made this instance, so there is no call site to report:
+    // a diagnostic inside it names what did — the drop (copy, trace) of
+    // the handle type — and the statement being compiled when that was
+    // first needed, when one is (g_stmt_lex).
+    : s what ? ( seq op `drop` ) `the drop of`
+    ? ( seq op `trace` ) `the cycle collector's trace of`
+    `a copy of`
+    : s why ( nurl_str_cat4 what ` '` ( __ty_src_show ty ) `'` )
+    ? == g_stmt_lex 0
+    { ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms `` 0 0 why ) }
+    { ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms
+        ( nurl_lex_filename g_stmt_lex ) g_stmt_line g_stmt_col why ) }
 }
 
 // Every library handle a type reaches (through Vec elements, fields,
@@ -52603,7 +52633,7 @@ unsafe @ __import_allowed s path → b {
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
+unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col s why i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -52665,9 +52695,13 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
     // Context suffix for every diagnostic raised inside this re-parse.
     // Saved/restored — instantiations nest.
     : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
-    : s __ctx_from ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
-    ( nurl_str_cat4 `; first call site: ` caller_file `:` caller_line )
+    : s __ctx_at ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    ( nurl_str_cat3 caller_file `:` caller_line )
     ``
+    : s __ctx_from ? != 0 ( nurl_str_len why )
+    ( nurl_str_cat3 `; made for ` why
+    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `, first needed at ` __ctx_at ) `` )
+    ? != 0 ( nurl_str_len __ctx_at ) ( nurl_str_cat `; first call site: ` __ctx_at ) ``
     = g_diag_ctx ( nurl_str_cat3
     ` [while instantiating '` mangled
     ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
@@ -52774,7 +52808,8 @@ unsafe @ emit_one_instantiation s fname s mangled s type_args s caller_file s ca
         : s caller_file ( nurl_sym_get2 g_generic_syms base `_cf` )
         : s caller_line ( nurl_sym_get2 g_generic_syms base `_cl` )
         : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
-        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
+        : s why ( nurl_sym_get2 g_generic_syms base `_why` )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col why syms cg )
         = k + k 1
     }
     = g_inst_done k
