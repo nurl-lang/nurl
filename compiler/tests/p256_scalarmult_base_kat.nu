@@ -1,12 +1,19 @@
-// p256_scalarmult_base_kat.nu — fixed-base comb KATs for the Jacobian
-// path (std/ecdsa_p256 p256ct_scalarmult_base). Eighteen scalars, each
-// expected X||Y verified against an independent Python implementation:
-// eight pseudorandom, plus the structured edges that exercise the
-// masked exceptional cases the Jacobian formulas do NOT absorb the way
-// the complete projective ones did — k = 1/2/3 (accumulator starts at
-// infinity, first commits through the inf mask), scalars whose teeth
-// are zero for long runs (the keep mask), single-tooth and
-// tooth-aligned patterns, and n − 1.
+// p256_scalarmult_base_kat.nu — fixed-base comb KATs (std/p256_field
+// p256ct_scalarmult_base). Thirty scalars, each expected X||Y verified
+// against an independent Python implementation:
+//
+//   * eight pseudorandom;
+//   * k = 1/2/3 (the accumulator starts at infinity and first commits
+//     through the inf mask), long runs of zero digits (the keep mask),
+//     single-bit and limb-aligned patterns, n − 2 and n − 1;
+//   * scalars the comb must reduce mod n first: n (the identity, all
+//     zero), n + 1, 2^256 − 1 and a 33-byte 2^256;
+//   * the two scalars the completeness argument names, 2^256 − n and
+//     2^257 − 2n, where a top Booth digit of 1 or 2 would meet the
+//     doubling case if the digit were not derived from the reduced k;
+//   * Booth extremes: every window's top bit set (all digits negative),
+//     2^255 − 1 (all middle digits zero), a top digit of 2, and the
+//     alternating patterns 0x55… and 0xaa….
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
@@ -44,8 +51,32 @@ $ `stdlib/std/ecdsa_p256.nu`
     = pass + pass ( kat_one `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550` `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296b01cbd1c01e58065711814b583f061e9d431cca994cea1313449bf97c840ae0a` )
     = pass + pass ( kat_one `00000000000000000000000000000000000000000000000000000000ffffffff` `618466bcb739585c20c44b7fc962d8671d94867054859361a18293ffe4a720e134587f80988db9bd798cb5da178ec512db9aec2fe35f85e0678b4e91f7c873b4` )
     = pass + pass ( kat_one `0000000100000001000000010000000100000001000000010000000100000001` `daf3f4f19bf107063b239e560e25bd0dc5f4cef51ee27deb2be3f5f5564efa227ffa38df051194cde06424031e312dcb1bc79c9ebf83cb15788294b55b919a7d` )
+    // n
+    = pass + pass ( kat_one `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551` `00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000` )
+    // n + 1
+    = pass + pass ( kat_one `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632552` `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5` )
+    // 2^256 − 1
+    = pass + pass ( kat_one `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff` `f72cbd240e26c0d21b1023179586eb532c6102c49c3677cc1a3d132b9db9d31a43e4ca77e2a36621dc0dbd91bfe7a5d223250ef0cdca831ee453d93fa83408a7` )
+    // 2^256 − n
+    = pass + pass ( kat_one `00000000ffffffff00000000000000004319055258e8617b0c46353d039cdaaf` `0b197a2e1e67a44b5afb62de48adde6400b60867487cab5739912513c420924aa4a03b30f39453e2566f385d67c641fc0f5f54efb8bfb340b9e53b38d1045a5f` )
+    // 2^257 − 2n
+    = pass + pass ( kat_one `00000001fffffffe000000000000000086320aa4b1d0c2f6188c6a7a0739b55e` `1de4d76cd10a793b504023d8a4afba595c1fdf971d53f9e22378719781868ba171821762743848a6becb359b3ed71df4988c00b97a4e620dfc55fa88cdde321b` )
+    // 2^256, 33 bytes
+    = pass + pass ( kat_one `010000000000000000000000000000000000000000000000000000000000000000` `0b197a2e1e67a44b5afb62de48adde6400b60867487cab5739912513c420924aa4a03b30f39453e2566f385d67c641fc0f5f54efb8bfb340b9e53b38d1045a5f` )
+    // every window's top bit (bits 5w + 4)
+    = pass + pass ( kat_one `4210842108421084210842108421084210842108421084210842108421084210` `50536389c3f478b0b65d57ff031a44bc00dc5bf6d79f4f5dc0a0d88a2d6d0006e24e002d6e908cc0a471b5bce0ae06809ac17735b78ca38001981e8e73e47e55` )
+    // 2^255 − 1
+    = pass + pass ( kat_one `7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff` `c1d17269e46e387acbe299ec2cc9cc2dada3f05e4cf412f2ad946b700aa2613aedb7744f370c13a4f49957d54ff798119d111f69129c24db5f5fb84162909dbb` )
+    // 2^255 + 2^254 (top digit 2)
+    = pass + pass ( kat_one `c000000000000000000000000000000000000000000000000000000000000000` `510869f66298a7cf0cd84489c68f7b4bd1d983ea87c3ea8fe51cdf4fed6741cbcee1ab93a5b40cc2ba412433bba63ce930380a05e0a5c27857252b046fc4ac9d` )
+    // 0x55…
+    = pass + pass ( kat_one `5555555555555555555555555555555555555555555555555555555555555555` `57e977f6db7e33c3fe7acf2842ed987009caf56d458682fca447b7d3d762ab34c5ab3770ba573bdff5414065640ffb5b346dfa84dec4db4d68e5f59cc471c2ec` )
+    // 0xaa…
+    = pass + pass ( kat_one `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` `38014c603c89da9712426320ee53a94c795dda3b90bb5b0791ae8f5db486b7db25e3aa368ede37b96566f66590f89ea2ac834bcd61541b90738cbc8294706c96` )
+    // n − 2
+    = pass + pass ( kat_one `ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f` `7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978f888aaee24712fc0d6c26539608bcf244582521ac3167dd661fb4862dd878c2e` )
     ( nurl_print `scalarmult_base KAT ` )
     ( nurl_print ( nurl_str_int pass ) )
-    ( nurl_print `/18\n` )
-    ^ ? == pass 18 0 1
+    ( nurl_print `/30\n` )
+    ^ ? == pass 30 0 1
 }

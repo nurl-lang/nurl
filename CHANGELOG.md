@@ -37,6 +37,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   faster form on a single carry chain. `crypto_tier_ir.sh` holds both
   forms to the `rsa_mont_kernels` golden.
 
+- **P-256 fixed-base multiply: signed 5-bit Booth comb, no doublings,
+  complete for every scalar.** `p256ct_scalarmult_base` (ECDSA's nonce
+  point, ECDH keygen) reduces the scalar mod n, recodes it into 52 digits
+  in [−16, 16] and adds one entry of a per-window affine table per
+  digit, negated in constant time for a negative digit. That is 52 mixed
+  additions in place of 32 doublings and 64 mixed additions, about 40 %
+  fewer field operations. The table (832 points, 53 KB) is built once per
+  process from G, in place of the 30-point hex constant of the old comb.
+  On this machine (Xeon, 2.1 GHz):
+  - P-256 keygen: 34.3 → 23.4 µs.
+  - ECDSA P-256 sign: 43.6 → 31.4 µs.
+
+  The old comb accepted a ~2⁻²²⁴ chance per addition of the one case its
+  mixed addition cannot compute (acc = entry). The new one cannot meet
+  it, for any scalar; the proof is at the comb in `std/p256_field.nu`,
+  and `compiler/tests/p256_scalarmult_base_kat.nu` (now 30 vectors,
+  including the two scalars the proof names) and the new
+  `p256_comb_agree.nu` (comb against the variable-base ladder) hold it.
+- **P-256 scalar inverse on a fixed addition chain.** `p256n_inv_be`
+  (k⁻¹ in every ECDSA signature) builds x32 = a^(2^32 − 1) for the
+  all-ones top half of n − 2 and slides an odd 4-bit window over the
+  bottom half: 253 squarings and 39 multiplies, against 255 and 70.
+  `compiler/tests/p256_scalar_inv.nu` checks it against Python and over
+  2000 random a·a⁻¹ ≡ 1.
+
 ## [0.78.0] — 2026-10-24
 
 The TLS performance release. `bench/tls_bench` now measures NURL's TLS

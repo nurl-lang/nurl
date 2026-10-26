@@ -2,4 +2,4 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-scalarmult_base KAT 18/18
+scalarmult_base KAT 30/30
