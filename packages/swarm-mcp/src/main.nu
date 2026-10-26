@@ -2775,7 +2775,7 @@ $ `stdlib/core/slice.nu`
 // outcome, not a JSON-RPC fault, so they still COMPLETE the task (the
 // payload's own "status" field says "error"). `failed` is reserved for
 // the case where the swarm task itself has vanished.
-@ __mcp_task_sync inout McpState st s mt → v {
+@ __mcp_task_sync inout McpState st McpTask mt → v {
     ? ( mcp_task_status_is_terminal ( mcp_task_status mt ) ) { ^ v } {}
     : i k ( task_find st ( mcp_task_link mt ) )
     ? < k 0 {
@@ -2806,7 +2806,7 @@ $ `stdlib/core/slice.nu`
     : i n ( mcp_task_store_count store )
     : ~ i k 0
     ~ < k n {
-        ( __mcp_task_sync st ( mcp_task_nth store k ) )
+        ?? ( mcp_task_nth store k ) { T mt → ( __mcp_task_sync st mt ) F → {} }
         = k + k 1
     }
 }
@@ -2817,7 +2817,7 @@ $ `stdlib/core/slice.nu`
 @ __mcp_task_augment inout McpState st s name Json args → ?Json {
     : i lt . st last_task
     ? == lt 0 { ^ @ ?Json { F @ Json { JNull } } } {}
-    : s mt ( mcp_task_create . st mcptasks `tools/call` name ( json_clone args )
+    : McpTask mt ( mcp_task_create . st mcptasks `tools/call` name ( json_clone args )
     ( __mcp_task_ttl ) ( __mcp_task_poll ) )
     ( mcp_task_set_link mt lt )
     // The submit path already pumped once, so a small range may well be

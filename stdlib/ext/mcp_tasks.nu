@@ -71,38 +71,38 @@
 //   ( mcp_missing_capability_response id ext ) → Json  -32003 + data
 //   ( mcp_task_invalid_id_response id msg )    → Json  -32602
 //
-// Store + task lifecycle (`s tp` is an opaque task handle; 0 = none):
+// Store + task lifecycle (`McpTask t` is a handle on one task):
 //   ( mcp_task_store_new )                          → McpTaskStore
 //   ( mcp_task_store_count store )                  → i
 //   ( mcp_task_store_max )                          → i    2048
-//   ( mcp_task_create store method tool args ttl poll ) → s  CONSUMES args
-//   ( mcp_task_find store id )                      → s
-//   ( mcp_task_nth store k )                        → s    live-task sweep
+//   ( mcp_task_create store method tool args ttl poll ) → McpTask  CONSUMES args
+//   ( mcp_task_find store id )                      → ?McpTask
+//   ( mcp_task_nth store k )                        → ?McpTask  live-task sweep
 //   ( mcp_task_store_sweep store now )              → i    expired dropped
 //   ( mcp_task_store_free store )                   → v    early release (optional)
 //
-//   ( mcp_task_id tp )              → s     borrowed
-//   ( mcp_task_status tp )          → i
-//   ( mcp_task_tool tp )            → s     borrowed
-//   ( mcp_task_method tp )          → s     borrowed
-//   ( mcp_task_args tp )            → Json  lent by the task
-//   ( mcp_task_link tp )            → i
-//   ( mcp_task_set_link tp v )      → v
-//   ( mcp_task_cancel_requested tp ) → b    cooperative cancel signal
+//   ( mcp_task_id t )              → s     borrowed
+//   ( mcp_task_status t )          → i
+//   ( mcp_task_tool t )            → s     borrowed
+//   ( mcp_task_method t )          → s     borrowed
+//   ( mcp_task_args t )            → Json  lent by the task
+//   ( mcp_task_link t )            → i
+//   ( mcp_task_set_link t v )      → v
+//   ( mcp_task_cancel_requested t ) → b    cooperative cancel signal
 //
-//   ( mcp_task_set_working tp msg )        → v
-//   ( mcp_task_set_message tp msg )        → v     status unchanged
-//   ( mcp_task_complete tp result )        → v     CONSUMES result
-//   ( mcp_task_fail tp code message )      → v
-//   ( mcp_task_fail_error tp error )       → v     CONSUMES error
-//   ( mcp_task_cancel tp )                 → v
-//   ( mcp_task_request_input tp requests )  → v    CONSUMES requests
-//   ( mcp_task_take_input_responses tp )   → ?Json owned; clears
+//   ( mcp_task_set_working t msg )        → v
+//   ( mcp_task_set_message t msg )        → v     status unchanged
+//   ( mcp_task_complete t result )        → v     CONSUMES result
+//   ( mcp_task_fail t code message )      → v
+//   ( mcp_task_fail_error t error )       → v     CONSUMES error
+//   ( mcp_task_cancel t )                 → v
+//   ( mcp_task_request_input t requests )  → v    CONSUMES requests
+//   ( mcp_task_take_input_responses t )   → ?Json owned; clears
 //
 // Wire shapes:
-//   ( mcp_task_create_result tp )   → Json  CreateTaskResult, resultType "task"
-//   ( mcp_task_detail tp )          → Json  DetailedTask (tasks/get body)
-//   ( mcp_task_notification tp )    → Json  notifications/tasks envelope
+//   ( mcp_task_create_result t )   → Json  CreateTaskResult, resultType "task"
+//   ( mcp_task_detail t )          → Json  DetailedTask (tasks/get body)
+//   ( mcp_task_notification t )    → Json  notifications/tasks envelope
 //   ( mcp_tasks_listen_ids params ) → ( Vec String )  subscriptions/listen
 //   ( mcp_tasks_subscribed_notification ids ) → Json  CONSUMES ids
 //
@@ -123,17 +123,21 @@
 //
 // ── Memory model ────────────────────────────────────────────────────
 //
-// The store owns every task and every Json inside it; its last owner
-// releases all of it (`mcp_task_store_free` is an optional early
-// release). Task handles (`s`) stay valid until the task is swept or the
-// store is released. Functions taking a Json CONSUME it;
-// `mcp_task_args` is the one BORROWING accessor, and what
-// `mcp_task_take_input_responses` hands back is the caller's own.
+// A task belongs to the store's list and to every `McpTask` handle on
+// it, and its last owner releases it with every Json inside it
+// (`mcp_task_store_free` is an optional early release of the store). A
+// handle stays good after the store has let its task go — evicted at the
+// cap, swept past its TTL, or the store itself released: the task is
+// then no longer found by id, and nothing done to it reaches a client.
+// Functions taking a Json CONSUME it; `mcp_task_args` is the one
+// BORROWING accessor, and what `mcp_task_take_input_responses` hands
+// back is the caller's own.
 
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/subtle.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/rcbox.nu`
@@ -267,11 +271,12 @@ $ `stdlib/std/thread.nu`
 
 // ── Task record + store ─────────────────────────────────────────────
 //
-// Tasks live on the heap, each in its own rcbox, and are addressed by an
-// opaque `s` handle (the address of the McpTask inside the box) so that
-// field writes (`= . t status …`) hit the real record rather than a
-// Vec-element copy. The store's list holds the boxes: a task goes when
-// it leaves the list or the store goes.
+// Tasks live on the heap, each in its own rcbox, so that field writes
+// (`= . t status …`) hit the real record rather than a Vec-element copy.
+// An `McpTask` handle is one owner of that box: the store's list holds
+// one, and every handle `mcp_task_create`, `_find` and `_nth` give out
+// is another. A task the list lets go of — evicted at the cap, swept
+// past its TTL — lives on until its last handle goes.
 //
 // One lock guards a store and every task in it: each function below
 // holds it for its whole call (the `__…_l` helpers expect it held), so
@@ -279,7 +284,7 @@ $ `stdlib/std/thread.nu`
 // one store at once. A task's id, method, tool and arguments never
 // change once it is made; the views of them stay good while it lives.
 
-: McpTask {
+: McpTaskImpl {
     String id  // 32 hex chars of CSPRNG output — unguessable (spec: security)
     i status
     String status_message
@@ -299,15 +304,28 @@ $ `stdlib/std/thread.nu`
     Mutex mu  // the store's lock
 }
 
-// One task in an rcbox (stdlib/core/rcbox.nu), as the store's list keeps
-// it; its last owner drops the McpTask and every String / Json in it.
-: McpTaskBox { ( Shared McpTask ) ctl }
+// A handle on one task (stdlib/core/rcbox.nu): every copy — the store's,
+// the caller's — is the same task, and the last owner drops the
+// McpTaskImpl and every String / Json in it.
+: McpTask { ( Shared McpTaskImpl ) ctl }
 
-@ McpTaskBox_share McpTaskBox h → McpTaskBox { ^ @ McpTaskBox { ( shared_clone [McpTask] . h ctl ) } }
+// Its copies are used by several threads at once — the store's by the
+// HTTP server's workers answering tasks/*, the application's by the
+// thread that drives the work. That is an assertion, not a proof
+// (stdlib/core/marker.nu). What backs it: every function here that reads
+// or changes a task's state holds the store's lock (the task's `mu`) for
+// its whole call, and what one reads without it — id, method, tool,
+// arguments — never changes once the task is made.
+% Sync McpTask {}
 
-@ McpTaskBox_drop sink McpTaskBox h → v {}
+@ McpTask_share McpTask h → McpTask { ^ @ McpTask { ( shared_clone [McpTaskImpl] . h ctl ) } }
 
-: McpTaskStoreImpl { ( Vec McpTaskBox ) tasks Mutex mu }
+@ McpTask_drop sink McpTask h → v {}
+
+// The task in place (borrowed: good while `h` is).
+@ __mt_ptr McpTask h → *McpTaskImpl { ^ ( shared_ptr [McpTaskImpl] . h ctl ) }
+
+: McpTaskStoreImpl { ( Vec McpTask ) tasks Mutex mu }
 
 // A handle on the store in an rcbox: every copy — the caller's, the one a
 // server keeps (mcp_server_set_task_store) — is the same task list, and
@@ -326,19 +344,16 @@ $ `stdlib/std/thread.nu`
 @ McpTaskStore_drop sink McpTaskStore h → v {}
 
 // The store's task list (its own, lent).
-@ __mts_tasks McpTaskStore h → ( Vec McpTaskBox ) { ^ . ( shared_ptr [McpTaskStoreImpl] . h ctl ) tasks }
+@ __mts_tasks McpTaskStore h → ( Vec McpTask ) { ^ . ( shared_ptr [McpTaskStoreImpl] . h ctl ) tasks }
 
 @ mcp_task_store_new → McpTaskStore {
-    ^ @ McpTaskStore { ( shared_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [McpTaskBox] ) ( mutex_new ) } ) }
+    ^ @ McpTaskStore { ( shared_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [McpTask] ) ( mutex_new ) } ) }
 }
 
 // The store's lock, and a task's (the same one).
 @ __mts_mu McpTaskStore h → Mutex { ^ ( Mutex_share . ( shared_ptr [McpTaskStoreImpl] . h ctl ) mu ) }
 
-@ __mt_mu s tp → Mutex {
-    : *McpTask t # *McpTask tp
-    ^ ( Mutex_share . t mu )
-}
+@ __mt_mu McpTask h → Mutex { ^ ( Mutex_share . ( __mt_ptr h ) mu ) }
 
 // Hard cap on retained tasks. Every task holds its arguments and its
 // final result, so an unbounded store is a memory sink for a server
@@ -351,102 +366,108 @@ $ `stdlib/std/thread.nu`
 @ mcp_task_store_count McpTaskStore store → i {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : i n ( vec_len [McpTaskBox] ( __mts_tasks store ) )
+    : i n ( vec_len [McpTask] ( __mts_tasks store ) )
     ( mutex_unlock m )
     ^ n
 }
 
-@ __mcp_task_at McpTaskStore store i k → s {
-    ^ ?? ( vec_get [McpTaskBox] ( __mts_tasks store ) k ) { T b → # s ( shared_ptr [McpTask] . b ctl ) F → # s 0 }
+// The k-th task in place, 0 <= k < count (the lock held; good while the
+// list keeps it).
+@ __mcp_task_at McpTaskStore store i k → *McpTaskImpl {
+    ^ ( __mt_ptr ( vec_at [McpTask] ( __mts_tasks store ) k ) )
 }
 
-// Drop the k-th task from the list (and with it the task).
+// A handle on the k-th task (the lock held), F when out of range.
+@ __mcp_task_share_at McpTaskStore store i k → ?McpTask {
+    ?? ( vec_get [McpTask] ( __mts_tasks store ) k ) {
+        T b → { ^ @ ?McpTask { T ( McpTask_share b ) } }
+        F → { ^ @ ?McpTask { F } }
+    }
+}
+
+// Drop the k-th task from the list (and with it the task, unless a
+// handle still holds it).
 @ __mcp_task_remove McpTaskStore store i k → v {
-    ?? ( vec_remove [McpTaskBox] ( __mts_tasks store ) k ) { T _gone → {} F _ → {} }
+    ?? ( vec_remove [McpTask] ( __mts_tasks store ) k ) { T _gone → {} F _ → {} }
 }
 
 // Index of the eviction victim: the oldest terminal task, else index 0.
 @ __mcp_task_victim McpTaskStore store → i {
-    : i n ( vec_len [McpTaskBox] ( __mts_tasks store ) )
+    : i n ( vec_len [McpTask] ( __mts_tasks store ) )
     : ~ i k 0
     ~ < k n {
-        : s pp ( __mcp_task_at store k )
-        ? != # i pp 0 {
-            : *McpTask t # *McpTask pp
-            ? ( mcp_task_status_is_terminal . t status ) { ^ k } {}
-        } {}
+        : *McpTaskImpl t ( __mcp_task_at store k )
+        ? ( mcp_task_status_is_terminal . t status ) { ^ k } {}
         = k + k 1
     }
     ^ 0
 }
 
 // CONSUMES `args`. `ttl_ms` < 0 means unlimited; `poll_ms` <= 0 omits
-// the polling hint. Returns an opaque task handle (never 0).
-@ mcp_task_create McpTaskStore store s method s tool sink Json args i ttl_ms i poll_ms → s {
+// the polling hint. Returns a handle on the new task.
+@ mcp_task_create McpTaskStore store s method s tool sink Json args i ttl_ms i poll_ms → McpTask {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ( __mcp_task_create_l store method tool args ttl_ms poll_ms )
+    : McpTask t ( __mcp_task_create_l store method tool args ttl_ms poll_ms )
     ( mutex_unlock m )
-    ^ tp
+    ^ t
 }
 
-@ __mcp_task_create_l McpTaskStore store s method s tool sink Json args i ttl_ms i poll_ms → s {
-    ? >= ( vec_len [McpTaskBox] ( __mts_tasks store ) ) ( mcp_task_store_max ) {
+@ __mcp_task_create_l McpTaskStore store s method s tool sink Json args i ttl_ms i poll_ms → McpTask {
+    ? >= ( vec_len [McpTask] ( __mts_tasks store ) ) ( mcp_task_store_max ) {
         ( __mcp_task_remove store ( __mcp_task_victim store ) )
     } {}
     : i now ( now_ms )
     // 16 CSPRNG bytes → 32 hex chars. The spec treats a task id as a
     // bearer token for server-side state, so it must not be guessable.
-    : McpTaskBox b @ McpTaskBox { ( shared_new [McpTask] @ McpTask {
+    : McpTask t @ McpTask { ( shared_new [McpTaskImpl] @ McpTaskImpl {
             ( rand_hex_str 16 ) mcp_task_working ( string_new ) now now ttl_ms poll_ms
             ( string_from method ) ( string_from tool ) args
             ( json_null ) ( json_null ) ( json_obj_new ) ( json_obj_new ) 0 0 ( __mts_mu store )
         } ) }
-    : s tp # s ( shared_ptr [McpTask] . b ctl )
-    ( vec_push [McpTaskBox] ( __mts_tasks store ) b )
-    ^ tp
+    ( vec_push [McpTask] ( __mts_tasks store ) ( McpTask_share t ) )
+    ^ t
 }
 
-// The k-th retained task, 0 when out of range. Order is unspecified and
+// The k-th retained task, F when out of range. Order is unspecified and
 // changes as tasks are swept — this is for a server sweeping its own
 // live tasks (advancing jobs, pushing notifications), not for paging.
-@ mcp_task_nth McpTaskStore store i k → s {
+@ mcp_task_nth McpTaskStore store i k → ?McpTask {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ? | < k 0 >= k ( vec_len [McpTaskBox] ( __mts_tasks store ) ) # s 0 ( __mcp_task_at store k )
+    : ?McpTask t ( __mcp_task_share_at store k )
     ( mutex_unlock m )
-    ^ tp
+    ^ t
 }
 
-@ mcp_task_find McpTaskStore store s id → s {
+@ mcp_task_find McpTaskStore store s id → ?McpTask {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ( __mcp_task_find_l store id )
+    : ?McpTask t ( __mcp_task_share_at store ( __mcp_task_find_l store id ) )
     ( mutex_unlock m )
-    ^ tp
+    ^ t
 }
 
-@ __mcp_task_find_l McpTaskStore store s id → s {
-    ? == ( nurl_str_len id ) 0 { ^ # s 0 } {}
-    : i n ( vec_len [McpTaskBox] ( __mts_tasks store ) )
-    : ~ s found # s 0
+// The index of the task with this id (the lock held), -1 when none. An
+// id is a bearer token, so it is compared in constant time
+// (std/subtle.nu): how long a lookup takes says nothing of how much of a
+// guessed id matched a real one.
+@ __mcp_task_find_l McpTaskStore store s id → i {
+    ? == ( nurl_str_len id ) 0 { ^ -1 } {}
+    : i n ( vec_len [McpTask] ( __mts_tasks store ) )
     : ~ i k 0
-    ~ & == # i found 0 < k n {
-        : s pp ( __mcp_task_at store k )
-        ? != # i pp 0 {
-            : *McpTask t # *McpTask pp
-            ? != 0 ( nurl_str_eq ( string_data . t id ) id ) { = found pp } {}
-        } {}
+    ~ < k n {
+        : *McpTaskImpl t ( __mcp_task_at store k )
+        ? ( constant_time_eq ( string_data . t id ) id ) { ^ k } {}
         = k + k 1
     }
-    ^ found
+    ^ -1
 }
 
 // A task with a finite TTL is discardable once `createdAt + ttlMs` has
 // elapsed. The spec lets the server mark it failed and delete it at any
 // point after that; this store deletes.
-@ __mcp_task_expired s tp i now → b {
-    : *McpTask t # *McpTask tp
+@ __mcp_task_expired * McpTaskImpl t i now → b {
     ? < . t ttl_ms 0 { ^ F } {}
     ^ > now + . t created_ms . t ttl_ms
 }
@@ -464,9 +485,8 @@ $ `stdlib/std/thread.nu`
 @ __mcp_task_store_sweep_l McpTaskStore store i now → i {
     : ~ i dropped 0
     : ~ i k 0
-    ~ < k ( vec_len [McpTaskBox] ( __mts_tasks store ) ) {
-        : s pp ( __mcp_task_at store k )
-        ? & != # i pp 0 ( __mcp_task_expired pp now ) {
+    ~ < k ( vec_len [McpTask] ( __mts_tasks store ) ) {
+        ? ( __mcp_task_expired ( __mcp_task_at store k ) now ) {
             ( __mcp_task_remove store k )
             = dropped + dropped 1
         } {
@@ -481,120 +501,116 @@ $ `stdlib/std/thread.nu`
 
 // ── Task accessors ──────────────────────────────────────────────────
 
-@ mcp_task_id s tp → s { : *McpTask t # *McpTask tp ^ ( string_data . t id ) }
+@ mcp_task_id McpTask t → s { ^ ( string_data . ( __mt_ptr t ) id ) }
 
-@ mcp_task_status s tp → i {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_status McpTask t → i {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    : i st . t status
+    : i st . ( __mt_ptr t ) status
     ( mutex_unlock m )
     ^ st
 }
 
-@ mcp_task_tool s tp → s { : *McpTask t # *McpTask tp ^ ( string_data . t tool ) }
+@ mcp_task_tool McpTask t → s { ^ ( string_data . ( __mt_ptr t ) tool ) }
 
-@ mcp_task_method s tp → s { : *McpTask t # *McpTask tp ^ ( string_data . t method ) }
+@ mcp_task_method McpTask t → s { ^ ( string_data . ( __mt_ptr t ) method ) }
 
-// BORROWED — the store still owns it. Clone before keeping it.
-@ mcp_task_args s tp → Json { : *McpTask t # *McpTask tp ^ . t args }
+// BORROWED — the task still owns it. Clone before keeping it.
+@ mcp_task_args McpTask t → Json { ^ . ( __mt_ptr t ) args }
 
-@ mcp_task_link s tp → i {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_link McpTask t → i {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    : i l . t link
+    : i l . ( __mt_ptr t ) link
     ( mutex_unlock m )
     ^ l
 }
 
-@ mcp_task_set_link s tp i v → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_set_link McpTask t i v → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t link v
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p link v
     ( mutex_unlock m )
 }
 
 // Cancellation is COOPERATIVE: `tasks/cancel` records intent and acks;
 // the server polls this flag and decides whether and when to stop.
-@ mcp_task_cancel_requested s tp → b {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_cancel_requested McpTask t → b {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    : b r == . t cancel_req 1
+    : b r == . ( __mt_ptr t ) cancel_req 1
     ( mutex_unlock m )
     ^ r
 }
 
-@ mcp_task_request_cancel s tp → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_request_cancel McpTask t → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t cancel_req 1
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p cancel_req 1
     ( mutex_unlock m )
 }
 
 // ── Task state transitions ──────────────────────────────────────────
 
-@ __mcp_task_touch * McpTask t → v { = . t updated_ms ( now_ms ) }
+@ __mcp_task_touch * McpTaskImpl t → v { = . t updated_ms ( now_ms ) }
 
 // A field the record replaces is taken out of it first and dropped here:
 // a store through the task pointer does not release what it overwrites.
-@ __mcp_task_set_message * McpTask t s msg → v {
+@ __mcp_task_set_message * McpTaskImpl t s msg → v {
     = . t status_message ( string_from msg )
 }
 
-@ __mcp_task_set_input_requests * McpTask t sink Json requests → v {
+@ __mcp_task_set_input_requests * McpTaskImpl t sink Json requests → v {
     = . t input_requests requests
 }
 
 // Replace the status message without touching the status — a progress
 // description for a long-running "working" task.
-@ mcp_task_set_message s tp s msg → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_set_message McpTask t s msg → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    ( __mcp_task_set_message t msg )
-    ( __mcp_task_touch t )
+    : *McpTaskImpl p ( __mt_ptr t )
+    ( __mcp_task_set_message p msg )
+    ( __mcp_task_touch p )
     ( mutex_unlock m )
 }
 
-@ mcp_task_set_working s tp s msg → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_set_working McpTask t s msg → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t status mcp_task_working
-    ( __mcp_task_set_message t msg )
-    ( __mcp_task_touch t )
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p status mcp_task_working
+    ( __mcp_task_set_message p msg )
+    ( __mcp_task_touch p )
     ( mutex_unlock m )
 }
 
 // CONSUMES `result` — the CallToolResult the original request would
 // have returned. A tool-level failure (isError: true) is still a
 // COMPLETED task: `failed` is reserved for JSON-RPC protocol faults.
-@ mcp_task_complete s tp sink Json result → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_complete McpTask t sink Json result → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t status mcp_task_completed
-    = . t result result
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p status mcp_task_completed
+    = . p result result
     // A completed task has nothing outstanding.
-    ( __mcp_task_set_input_requests t ( json_obj_new ) )
-    ( __mcp_task_touch t )
+    ( __mcp_task_set_input_requests p ( json_obj_new ) )
+    ( __mcp_task_touch p )
     ( mutex_unlock m )
 }
 
 // CONSUMES `error` — a JSON-RPC error object ({code, message[, data]}).
-@ mcp_task_fail_error s tp sink Json error → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_fail_error McpTask t sink Json error → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    ( __mcp_task_fail_error_l tp error )
+    ( __mcp_task_fail_error_l ( __mt_ptr t ) error )
     ( mutex_unlock m )
 }
 
-@ __mcp_task_fail_error_l s tp sink Json error → v {
-    : *McpTask t # *McpTask tp
+@ __mcp_task_fail_error_l * McpTaskImpl t sink Json error → v {
     = . t status mcp_task_failed
     = . t error error
     ( __mcp_task_set_input_requests t ( json_obj_new ) )
@@ -604,26 +620,26 @@ $ `stdlib/std/thread.nu`
 // Fail with a JSON-RPC error built from code + message. The message
 // also becomes the statusMessage, which the spec says SHOULD carry
 // diagnostic information on a failed task.
-@ mcp_task_fail s tp i code s message → v {
+@ mcp_task_fail McpTask t i code s message → v {
     : Json err ( json_obj_new )
     ( json_obj_set err `code` ( json_int code ) )
     ( json_obj_set err `message` ( json_str_lit message ) )
-    : Mutex m ( __mt_mu tp )
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    ( __mcp_task_set_message t message )
-    ( __mcp_task_fail_error_l tp err )
+    : *McpTaskImpl p ( __mt_ptr t )
+    ( __mcp_task_set_message p message )
+    ( __mcp_task_fail_error_l p err )
     ( mutex_unlock m )
 }
 
-@ mcp_task_cancel s tp → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_cancel McpTask t → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t status mcp_task_cancelled
-    = . t cancel_req 1
-    ( __mcp_task_set_input_requests t ( json_obj_new ) )
-    ( __mcp_task_touch t )
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p status mcp_task_cancelled
+    = . p cancel_req 1
+    ( __mcp_task_set_input_requests p ( json_obj_new ) )
+    ( __mcp_task_touch p )
     ( mutex_unlock m )
 }
 
@@ -631,13 +647,13 @@ $ `stdlib/std/thread.nu`
 // keyed by identifiers unique over the task's lifetime (the spec
 // forbids reusing a key once its response has been delivered). Moves
 // the task to input_required.
-@ mcp_task_request_input s tp sink Json requests → v {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_request_input McpTask t sink Json requests → v {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    = . t status mcp_task_input_required
-    ( __mcp_task_set_input_requests t requests )
-    ( __mcp_task_touch t )
+    : *McpTaskImpl p ( __mt_ptr t )
+    = . p status mcp_task_input_required
+    ( __mcp_task_set_input_requests p requests )
+    ( __mcp_task_touch p )
     ( mutex_unlock m )
 }
 
@@ -646,8 +662,7 @@ $ `stdlib/std/thread.nu`
 // `responses`. Keys that are not currently outstanding are IGNORED, per
 // the spec — that covers keys never issued, already-answered keys and
 // superseded ones, and it is what makes duplicate client updates safe.
-@ __mcp_task_put_input_responses s tp sink Json responses → i {
-    : *McpTask t # *McpTask tp
+@ __mcp_task_put_input_responses * McpTaskImpl t sink Json responses → i {
     : ~ i taken 0
     : ( Vec String ) keys ( json_obj_keys responses )
     : i n ( vec_len [String] keys )
@@ -679,14 +694,14 @@ $ `stdlib/std/thread.nu`
 // Collect the responses delivered so far and clear the slot. None when
 // nothing has arrived. The server calls this from its own scheduler,
 // applies the answers, and moves the task back to working.
-@ mcp_task_take_input_responses s tp → ?Json {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_take_input_responses McpTask t → ?Json {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : *McpTask t # *McpTask tp
-    : ( Vec String ) keys ( json_obj_keys . t input_responses )
+    : *McpTaskImpl p ( __mt_ptr t )
+    : ( Vec String ) keys ( json_obj_keys . p input_responses )
     // The responses leave the task (an empty object left behind): the
     // caller owns them.
-    : ?Json out ? == ( vec_len [String] keys ) 0 @ ?Json { F @ Json { JNull } } @ ?Json { T ( mem_replace [Json] . t input_responses ( json_obj_new ) ) }
+    : ?Json out ? == ( vec_len [String] keys ) 0 @ ?Json { F @ Json { JNull } } @ ?Json { T ( mem_replace [Json] . p input_responses ( json_obj_new ) ) }
     ( mutex_unlock m )
     ^ out
 }
@@ -701,16 +716,15 @@ $ `stdlib/std/thread.nu`
 // payload (result / error / inputRequests). This is what `tasks/get`
 // returns and what a `notifications/tasks` notification carries — the
 // spec requires them to be identical.
-@ mcp_task_detail s tp → Json {
-    : Mutex m ( __mt_mu tp )
+@ mcp_task_detail McpTask t → Json {
+    : Mutex m ( __mt_mu t )
     ( mutex_lock m )
-    : Json o ( __mcp_task_detail_l tp )
+    : Json o ( __mcp_task_detail_l ( __mt_ptr t ) )
     ( mutex_unlock m )
     ^ o
 }
 
-@ __mcp_task_detail_l s tp → Json {
-    : *McpTask t # *McpTask tp
+@ __mcp_task_detail_l * McpTaskImpl t → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `taskId` ( json_str_lit ( string_data . t id ) ) )
     ( json_obj_set o `status` ( json_str_lit ( mcp_task_status_name . t status ) ) )
@@ -745,14 +759,14 @@ $ `stdlib/std/thread.nu`
 // of a CallToolResult. `resultType` is set here to "task"; the central
 // injection in `mcp_response_result` only fills in "complete" when the
 // field is absent, so wrapping this in the usual envelope is safe.
-@ mcp_task_create_result s tp → Json {
-    : Json o ( mcp_task_detail tp )
+@ mcp_task_create_result McpTask t → Json {
+    : Json o ( mcp_task_detail t )
     ( json_obj_set o `resultType` ( json_str_lit `task` ) )
     ^ o
 }
 
-@ mcp_task_notification s tp → Json {
-    ^ ( mcp_notification `notifications/tasks` ( mcp_task_detail tp ) )
+@ mcp_task_notification McpTask t → Json {
+    ^ ( mcp_notification `notifications/tasks` ( mcp_task_detail t ) )
 }
 
 // `subscriptions/listen` params → the task ids the client wants status
@@ -821,10 +835,10 @@ $ `stdlib/std/thread.nu`
     ?? t { T j → { ^ ( json_as_str j ) } F _ → { ^ `` } }
 }
 
-// Sweep expired tasks, then look up (the lock held). 0 when unknown or
-// already expired — the spec explicitly allows reporting a purged task as
-// not found.
-@ __mcp_tasks_lookup McpTaskStore store Json params → s {
+// Sweep expired tasks, then look up (the lock held): the task's index,
+// -1 when unknown or already expired — the spec explicitly allows
+// reporting a purged task as not found.
+@ __mcp_tasks_lookup McpTaskStore store Json params → i {
     : i _dropped ( __mcp_task_store_sweep_l store ( now_ms ) )
     ^ ( __mcp_task_find_l store ( __mcp_tasks_param_id params ) )
 }
@@ -833,8 +847,8 @@ $ `stdlib/std/thread.nu`
 @ mcp_tasks_handle_get McpTaskStore store Json id Json params → Json {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ( __mcp_tasks_lookup store params )
-    : Json out ? == # i tp 0 ( mcp_task_invalid_id_response id `Failed to retrieve task: task not found or expired` ) ( mcp_response_result id ( __mcp_task_detail_l tp ) )
+    : i k ( __mcp_tasks_lookup store params )
+    : Json out ? < k 0 ( mcp_task_invalid_id_response id `Failed to retrieve task: task not found or expired` ) ( mcp_response_result id ( __mcp_task_detail_l ( __mcp_task_at store k ) ) )
     ( mutex_unlock m )
     ^ out
 }
@@ -845,16 +859,16 @@ $ `stdlib/std/thread.nu`
 @ mcp_tasks_handle_update McpTaskStore store Json id Json params → Json {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ( __mcp_tasks_lookup store params )
-    ? != # i tp 0 {
+    : i k ( __mcp_tasks_lookup store params )
+    ? >= k 0 {
         : ?Json ir ( json_obj_get params `inputResponses` )
         ?? ir {
-            T iv → { : i _taken ( __mcp_task_put_input_responses tp ( json_clone iv ) ) }
+            T iv → { : i _taken ( __mcp_task_put_input_responses ( __mcp_task_at store k ) ( json_clone iv ) ) }
             F _ → {}
         }
     } {}
     ( mutex_unlock m )
-    ? == # i tp 0 {
+    ? < k 0 {
         ^ ( mcp_task_invalid_id_response id `Failed to update task: task not found or expired` )
     } {}
     ^ ( mcp_response_result id ( json_obj_new ) )
@@ -865,13 +879,13 @@ $ `stdlib/std/thread.nu`
 @ mcp_tasks_handle_cancel McpTaskStore store Json id Json params → Json {
     : Mutex m ( __mts_mu store )
     ( mutex_lock m )
-    : s tp ( __mcp_tasks_lookup store params )
-    ? != # i tp 0 {
-        : *McpTask t # *McpTask tp
+    : i k ( __mcp_tasks_lookup store params )
+    ? >= k 0 {
+        : *McpTaskImpl t ( __mcp_task_at store k )
         ? ( mcp_task_status_is_terminal . t status ) {} { = . t cancel_req 1 }
     } {}
     ( mutex_unlock m )
-    ? == # i tp 0 {
+    ? < k 0 {
         ^ ( mcp_task_invalid_id_response id `Failed to cancel task: task not found or expired` )
     } {}
     ^ ( mcp_response_result id ( json_obj_new ) )

@@ -1,6 +1,6 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**Two.** `library_handle_copy_on_two_threads.nu` — a share of a library
+**One.** `library_handle_copy_on_two_threads.nu` — a share of a library
 handle made before the handle moves to a thread
 (`( PNCounter_share a )`; a literal storing `. h c`, or a callee keeping
 one, does the same) stays with the spawner, and both threads change one
@@ -16,13 +16,11 @@ closure carrying one onto a channel takes it along; `h342`, a closure
 several threads run changing what it captured. `h341`, found on the way,
 is a listener accepted on after its close.
 
-`mcp_task_handle_after_eviction.nu` — an MCP task handle (`s`, from
-`mcp_task_create`) kept past its task: the store's eviction at its cap,
-or a sweep past the TTL, frees the task the handle still names
-(docs/MEMORY.md §6.2, agora #124).
-
 Every other probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent were `h316` — a call returning
+gate in the parent directory. The most recent was `h343` — an MCP task
+handle (`s`, from `mcp_task_create`) kept past its task, which the
+store's eviction at its cap or a sweep past the TTL freed (agora #124);
+before it `h316` — a call returning
 a SIMD vector kept its temporary argument alive for a consumer a binding
 never is (leak) — and before it `h311`–`h315`: lends
 returned through a join (`lru_get`) and a match's scrutinee taking effect

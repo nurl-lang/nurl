@@ -10,17 +10,14 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Two open soundness holes** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
+**One open soundness hole** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
 A share of a library handle made before the handle moves to a thread
 (`( PNCounter_share a )`, a struct literal storing one) stays with the
 spawner, and both threads change one value: the checker does not connect
 that owner to the moved one. Workaround: make no share of a handle that
-moves to a thread; state threads share and change is a `Locked`. And an
-MCP task handle (`mcp_task_create` / `_find`) kept past its task's
-eviction or expiry reads freed memory. Workaround: look a task up by id
-where it is used. Every other safe
+moves to a thread; state threads share and change is a `Locked`. Every other safe
 program found accepted and faulting is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h342`);
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h343`);
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).

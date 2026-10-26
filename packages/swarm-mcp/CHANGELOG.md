@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.32.0] — 2026-10-26
+
+Requires NURL 0.79.0.
+
+### Changed
+
+- Follows `stdlib/ext/mcp_tasks.nu`'s task handle: an `McpTask`, which
+  owns a share of its task, instead of an opaque `s` (the task's bare
+  address), and `mcp_task_nth` answers an option. No change in
+  behaviour: this server uses a handle right after it gets one, with no
+  eviction or sweep in between.
+
 ## [0.31.2] — 2026-10-20
 
 ### Changed
