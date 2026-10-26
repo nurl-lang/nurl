@@ -13,8 +13,9 @@
 // children, so they run only when it ends and alternate at each yield.
 // Part 2 runs many fibers on four workers; each one's own extent must
 // catch its own panic and keep its own values, whatever the schedule.
-// Windows has no fiber backend yet (spawn is a stub, docs/ASYNC.md):
-// outputs-windows/ pins what the stubs print, as for async_basic.
+// On Windows the panic's longjmp unwinds through the CRT, which checks
+// every frame against the TIB stack bounds — the Win64 switch carries
+// them per fiber (runtime_ctx.c), which is what this part also covers.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/async.nu`

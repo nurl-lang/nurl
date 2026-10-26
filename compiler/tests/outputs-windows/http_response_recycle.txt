@@ -1,0 +1,64 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+fresh headers=0 body=0
+HTTP/1.1 201 Created
+
+X: 1
+
+Content-Length: 2
+
+
+
+ok|
+HTTP/1.1 404 Not Found
+
+Content-Type: text/plain; charset=utf-8
+
+x-one: replaced
+
+X-Two: 2
+
+Content-Length: 7
+
+
+
+missing|
+big body kept: no
+small body kept: yes
+HTTP/1.1 200 OK
+
+Content-Length: 14
+
+
+
+borrowed-bytes|
+HTTP/1.1 200 OK
+
+Content-Length: 3
+
+
+
+own|
+source after: borrowed-bytes
+HTTP/1.1 200 OK
+
+Content-Type: text/plain; charset=utf-8
+
+Content-Length: 17
+
+
+
+n=2 id=7 tab=home|
+HTTP/1.1 200 OK
+
+Content-Type: text/plain; charset=utf-8
+
+Content-Length: 3
+
+
+
+n=1|
+thread served=300 allocations per request <= 2: T
+fiber served=300 allocations per request <= 2: T

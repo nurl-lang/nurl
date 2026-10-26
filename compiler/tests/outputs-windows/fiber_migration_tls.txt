@@ -1,5 +1,0 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-sum 0 live 0

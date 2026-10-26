@@ -1540,12 +1540,23 @@ typedef struct NurlTcp {
      * interrupt a thread blocked in accept() on Linux, so a cross-thread
      * nurl_tcp_shutdown needs an explicit wakeup: accept() polls
      * {fd, wake_rfd}; shutdown sets `shutting_down` and writes one
-     * never-drained byte to wake_wfd → every current and future poll
-     * returns. wake_* are NURL_INVALID_SOCK on conns / when pipe() failed
-     * (then accept falls back to plain blocking accept). POSIX only. */
+     * never-drained signal to wake_wfd (nurl__signal_raise) → every
+     * current and future poll returns. wake_* are NURL_INVALID_SOCK on
+     * conns / when the channel could not be opened (then accept falls
+     * back to plain blocking accept). Every platform: Winsock's
+     * closesocket would wake the accept, but frees the handle number for
+     * reuse while the accept may still be entering. */
     nurl_sockfd_t wake_rfd;
     nurl_sockfd_t wake_wfd;
     volatile int  shutting_down;
+    /* nurl_tcp_conn_shutdown shut the read side (Windows reads it: a
+     * receive there after the shutdown fails, where POSIX reads EOF). */
+    volatile int  read_shut;
+    /* Windows: the signal a thread waiting for this connection to turn
+     * readable (nurl_tcp_wait_io) waits on beside it, raised by the
+     * read-side shutdown — which select and WSAPoll never report. Opened
+     * by the first such wait; NURL_INVALID_SOCK until then. */
+    nurl_sockfd_t rd_wake;
     /* Set by nurl_tcp_set_nonblock: the fiber/reactor accept path drives
      * its own readiness wait, so accept() must do ONE non-blocking accept
      * and hand EAGAIN back rather than entering the blocking poll loop. */
@@ -1587,8 +1598,17 @@ static void nurl__tcp_apply_timeo(NurlTcp *h);
  * not re-evaluate an fd closed by another thread mid-call). After the wake
  * the reactor's next poll reports POLLNVAL for the closed fd and fails the
  * wait, so the parked fiber resumes and sees EBADF. Real impl lives with
- * the reactor; a no-op stub covers WASI/Windows. */
+ * the reactor; a no-op stub covers WASI. */
 void nurl__reactor_wake_if_started(void);
+
+#ifdef _WIN32
+/* Winsock's half of a receive-side shutdown, which WSAPoll does not
+ * report (see nurl_tcp_conn_shutdown): the reactor wakes the fibers
+ * waiting to read `fd`, and any that waits on it later, until the socket
+ * is closed and forgotten. Defined with the reactor (§25). */
+void nurl__reactor_read_shut(long long fd);
+void nurl__reactor_forget_fd(long long fd);
+#endif
 
 
 /* errno/WSAGetLastError → NetErr; call sites override when needed. */
@@ -1641,6 +1661,92 @@ static int nurl__net_wsa_init(void) {
 }
 #endif
 
+/* poll(2) for the resolver wait here, the fiber spin probe (§24) and the
+ * reactor (§25). Winsock's WSAPoll takes the same pollfd array, but its
+ * fd is a SOCKET — a pointer-sized handle — which is why the fds those
+ * pass along are long long or nurl_sockfd_t, never int. */
+#ifdef _WIN32
+typedef WSAPOLLFD nurl_pollfd_t;
+#  define nurl__poll(fds, n, ms) WSAPoll((fds), (ULONG)(n), (ms))
+#else
+typedef struct pollfd nurl_pollfd_t;
+#  define nurl__poll(fds, n, ms) poll((fds), (nfds_t)(n), (ms))
+#endif
+
+static int nurl__poll_ms(long long left) {
+    return left < 0 ? -1 : (int)(left > 0x7fffffff ? 0x7fffffff : left);
+}
+
+/* A one-shot cross-thread signal a poller can wait on: an eventfd on
+ * Linux (rd == wr), a nonblocking pipe on the other POSIX hosts, and on
+ * Windows — where WSAPoll waits on sockets only and pipe() is a stub — a
+ * loopback UDP socket connected to itself (rd == wr). 0 on success. */
+static int nurl__signal_open(nurl_sockfd_t *rd, nurl_sockfd_t *wr) {
+#if defined(_WIN32)
+    if (!nurl__net_wsa_init()) return -1;
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) return -1;
+    struct sockaddr_in a;
+    int alen = (int)sizeof a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    u_long on = 1;
+    if (bind(s, (struct sockaddr *)&a, alen) != 0 ||
+        getsockname(s, (struct sockaddr *)&a, &alen) != 0 ||
+        connect(s, (struct sockaddr *)&a, alen) != 0 ||
+        ioctlsocket(s, FIONBIO, &on) != 0) {
+        closesocket(s);
+        return -1;
+    }
+    *rd = *wr = s;
+#elif defined(__linux__)
+    int fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (fd < 0) return -1;
+    *rd = *wr = fd;
+#else
+    int p[2];
+    if (pipe(p) != 0) return -1;
+    for (int i = 0; i < 2; i++) {
+        fcntl(p[i], F_SETFD, FD_CLOEXEC);
+        fcntl(p[i], F_SETFL, fcntl(p[i], F_GETFL, 0) | O_NONBLOCK);
+    }
+    *rd = p[0];
+    *wr = p[1];
+#endif
+    return 0;
+}
+
+/* Raise the signal. Nonblocking: one pending signal is all a waiter
+ * needs, so a full channel is not an error. */
+static void nurl__signal_raise(nurl_sockfd_t rd, nurl_sockfd_t wr) {
+#if defined(_WIN32)
+    (void)rd;
+    send(wr, "w", 1, 0);
+#else
+    unsigned long long one = 1;
+    ssize_t w = write(wr, &one, wr == rd ? sizeof one : 1);
+    (void)w;
+#endif
+}
+
+/* Empty the channel so the next wait blocks until the next raise. */
+static void nurl__signal_drain(nurl_sockfd_t rd) {
+    char buf[64];
+#if defined(_WIN32)
+    while (recv(rd, buf, sizeof buf, 0) > 0) {}
+#else
+    while (read(rd, buf, sizeof buf) > 0) {}
+#endif
+}
+
+static void nurl__signal_close(nurl_sockfd_t rd, nurl_sockfd_t wr) {
+    if (rd != NURL_INVALID_SOCK) nurl_close_sock(rd);
+    if (wr != NURL_INVALID_SOCK && wr != rd) nurl_close_sock(wr);
+}
+
+int nurl_cond_wait_ms(void *cv, void *m, long long ms);
+
 /* AF_INET sockaddr → owned "ip:port" string. */
 static char *nurl__net_format_peer(const struct sockaddr_in *sa) {
     char ip[INET_ADDRSTRLEN] = {0};
@@ -1667,6 +1773,7 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
     h->peer     = NULL;
     h->wake_rfd = NURL_INVALID_SOCK;
     h->wake_wfd = NURL_INVALID_SOCK;
+    h->rd_wake  = NURL_INVALID_SOCK;
     h->shutting_down = 0;
     h->nonblock = 0;
     h->refcount = 1;
@@ -1679,6 +1786,22 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
  *      the BSDs; on a platform without it the bit is ignored). Every
  *      socket bound to the port must ask for it, the first included. */
 #define NURL_LISTEN_REUSEPORT 1LL
+
+/* What every bound socket asks for so a restarted server can bind its
+ * port while the last run's connections sit in TIME_WAIT: SO_REUSEADDR
+ * on POSIX. NOT on Windows, where the same name means something else —
+ * "let a second socket bind this address while the first still has it",
+ * so any process could take over a listening port — and where TIME_WAIT
+ * never blocked a bind to begin with. There the default is already what
+ * the POSIX option buys. */
+static void nurl__sock_restart_ok(nurl_sockfd_t fd) {
+#ifdef _WIN32
+    (void)fd;
+#else
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, (int)sizeof(on));
+#endif
+}
 
 long long nurl_tcp_listen_opts(const char *host, long long port, long long backlog, long long flags);
 
@@ -1718,11 +1841,19 @@ long long nurl_tcp_listen_opts(const char *host, long long port, long long backl
         return (long long)(uintptr_t)h;
     }
 
-    /* SO_REUSEADDR so quick restarts skip TIME_WAIT. */
+    nurl__sock_restart_ok(fd);
     int on = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-               (const char*)&on, (int)sizeof(on));
-#ifdef SO_REUSEPORT
+#if defined(_WIN32)
+    /* Windows' way for several sockets to share one port is SO_REUSEADDR
+     * itself (see nurl__sock_restart_ok) — asked for here, by the caller
+     * that means it, and only then. */
+    if ((flags & NURL_LISTEN_REUSEPORT) &&
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, (int)sizeof(on)) != 0) {
+        h->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_BIND);
+        nurl_close_sock(fd);
+        return (long long)(uintptr_t)h;
+    }
+#elif defined(SO_REUSEPORT)
     if ((flags & NURL_LISTEN_REUSEPORT) &&
         setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char*)&on, (int)sizeof(on)) != 0) {
         h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_BIND);
@@ -1730,7 +1861,7 @@ long long nurl_tcp_listen_opts(const char *host, long long port, long long backl
         return (long long)(uintptr_t)h;
     }
 #else
-    (void)flags;
+    (void)flags; (void)on;
 #endif
 
     struct sockaddr_in sa;
@@ -1780,26 +1911,21 @@ long long nurl_tcp_listen_opts(const char *host, long long port, long long backl
     h->fd       = fd;
     h->err_kind = NURL_NET_ERR_OK;
 
-#ifndef _WIN32
-    /* Accept-wakeup self-pipe (see struct comment). Best-effort: if pipe()
-     * fails we leave wake_* invalid and accept() blocks the old way — only
-     * the cross-thread-shutdown path degrades, never the happy path. */
-    {
-        int p[2];
-        if (pipe(p) == 0) {
-            h->wake_rfd = p[0];
-            h->wake_wfd = p[1];
-            fcntl(h->wake_rfd, F_SETFD, FD_CLOEXEC);
-            fcntl(h->wake_wfd, F_SETFD, FD_CLOEXEC);
-            fcntl(h->wake_wfd, F_SETFL, O_NONBLOCK);
-            /* Non-blocking listen fd: after poll reports POLLIN we accept;
-             * if a sibling worker grabbed the connection first, accept
-             * returns EAGAIN and we re-poll instead of blocking. */
-            int fl = fcntl(fd, F_GETFL, 0);
-            if (fl != -1) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
-        }
-    }
+    /* Accept-wakeup channel (see struct comment). Best-effort: if it cannot
+     * be opened we leave wake_* invalid and accept() blocks the old way —
+     * only the cross-thread-shutdown path degrades, never the happy path. */
+    if (nurl__signal_open(&h->wake_rfd, &h->wake_wfd) == 0) {
+        /* Non-blocking listen fd: after poll reports POLLIN we accept;
+         * if a sibling worker grabbed the connection first, accept
+         * returns EAGAIN and we re-poll instead of blocking. */
+#ifdef _WIN32
+        u_long nb_on = 1;
+        ioctlsocket(fd, FIONBIO, &nb_on);
+#else
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl != -1) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 #endif
+    }
     return (long long)(uintptr_t)h;
 }
 
@@ -1833,7 +1959,9 @@ long long nurl_tcp_listen_opts(const char *host, long long port, long long backl
  * under a deadline, goes to a small pool of resolver threads running
  * the real getaddrinfo — /etc/hosts, nsswitch and resolv.conf mean
  * exactly what they meant before — while the fiber parks on the job's
- * completion eventfd (a pipe off Linux) through the ordinary netpoller:
+ * completion signal (nurl__signal_open: an eventfd on Linux, a pipe on
+ * the other POSIX hosts, a loopback socket on Windows) through the
+ * ordinary netpoller:
  * the runtime's existing cross-thread wake, with the timer heap's
  * deadline for free. A waiter whose deadline passes abandons the job,
  * and the resolver thread frees it when getaddrinfo returns
@@ -1874,11 +2002,6 @@ static long long nurl__conn_left_ms(long long deadline) {
     return left > 0 ? left : 0;
 }
 
-#ifndef _WIN32
-static int nurl__poll_ms(long long left) {
-    return left < 0 ? -1 : (int)(left > 0x7fffffff ? 0x7fffffff : left);
-}
-
 #  define NURL_DNS_MAX_THREADS 8
 #  define NURL_DNS_IDLE_S      30
 
@@ -1899,7 +2022,7 @@ typedef struct NurlDnsJob {
     int                rc;
     int                done;       /* nurl__dns.lock */
     int                abandoned;  /* nurl__dns.lock: the waiter gave up */
-    int                rfd, wfd;   /* completion signal; rfd == wfd: eventfd */
+    nurl_sockfd_t      rfd, wfd;   /* completion signal (nurl__signal_open) */
 } NurlDnsJob;
 
 static struct {
@@ -1924,8 +2047,7 @@ static void nurl__dns_job_free(NurlDnsJob *j) {
     if (j->res) freeaddrinfo(j->res);
     /* Through the close hook: the waiter may have parked on rfd, and the
      * fd number must not reach its next owner with netpoller state. */
-    if (j->rfd >= 0) nurl_close_sock(j->rfd);
-    if (j->wfd >= 0 && j->wfd != j->rfd) nurl_close_sock(j->wfd);
+    nurl__signal_close(j->rfd, j->wfd);
     free(j->host);
     free(j);
 }
@@ -1935,13 +2057,11 @@ static void *nurl__dns_thread(void *arg) {
     pthread_mutex_lock(&nurl__dns.lock);
     for (;;) {
         while (!nurl__dns.head) {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_sec += NURL_DNS_IDLE_S;
             nurl__dns.idle++;
-            int rc = pthread_cond_timedwait(&nurl__dns.cv, &nurl__dns.lock, &ts);
+            int signalled = nurl_cond_wait_ms(&nurl__dns.cv, &nurl__dns.lock,
+                                              NURL_DNS_IDLE_S * 1000LL);
             nurl__dns.idle--;
-            if (rc == ETIMEDOUT && !nurl__dns.head) {
+            if (!signalled && !nurl__dns.head) {
                 nurl__dns.threads--;
                 pthread_mutex_unlock(&nurl__dns.lock);
                 return NULL;
@@ -1976,41 +2096,44 @@ static void *nurl__dns_thread(void *arg) {
             /* Signal under the lock: once `done` is visible the waiter
              * may free the job and close wfd, so the write lands first.
              * Non-blocking, and never more than one signal deep. */
-            unsigned long long one = 1;
-            ssize_t w = write(j->wfd, &one, j->wfd == j->rfd ? sizeof one : 1);
-            (void)w;
+            nurl__signal_raise(j->rfd, j->wfd);
         }
     }
 }
 
+#ifndef _WIN32
 /* A forked child inherits the queue but none of the threads: start it
- * from empty, or its first lookup would wait for ever. */
+ * from empty, or its first lookup would wait for ever. (Windows has no
+ * fork.) */
 static void nurl__dns_atfork_child(void) {
     pthread_mutex_init(&nurl__dns.lock, NULL);
     pthread_cond_init(&nurl__dns.cv, NULL);
     nurl__dns.head = nurl__dns.tail = NULL;
     nurl__dns.queued = nurl__dns.threads = nurl__dns.idle = 0;
 }
+#endif
 
 /* Queue `j`, growing the pool when every thread is busy. 0 on success;
  * -1 when no thread exists to run it (creation failed, pool empty) —
  * the caller resolves inline instead. */
 static int nurl__dns_submit(NurlDnsJob *j) {
-    static int atfork_done;
     pthread_mutex_lock(&nurl__dns.lock);
+#ifndef _WIN32
+    static int atfork_done;
     if (!atfork_done) {
         atfork_done = 1;
         pthread_atfork(NULL, NULL, nurl__dns_atfork_child);
     }
+#endif
     if (nurl__dns.queued + 1 > nurl__dns.idle &&
         nurl__dns.threads < NURL_DNS_MAX_THREADS) {
-        pthread_attr_t at;
+        /* Detached: a pool thread exits on its own after an idle spell
+         * and nobody joins it. */
         pthread_t tid;
-        pthread_attr_init(&at);
-        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-        if (pthread_create(&tid, &at, nurl__dns_thread, NULL) == 0)
+        if (pthread_create(&tid, NULL, nurl__dns_thread, NULL) == 0) {
+            pthread_detach(tid);
             nurl__dns.threads++;
-        pthread_attr_destroy(&at);
+        }
     }
     if (nurl__dns.threads == 0) {
         pthread_mutex_unlock(&nurl__dns.lock);
@@ -2026,31 +2149,13 @@ static int nurl__dns_submit(NurlDnsJob *j) {
     return 0;
 }
 
-static int nurl__dns_signal_fds(NurlDnsJob *j) {
-#  if defined(__linux__)
-    int fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-    if (fd < 0) return -1;
-    j->rfd = j->wfd = fd;
-#  else
-    int p[2];
-    if (pipe(p) != 0) return -1;
-    for (int i = 0; i < 2; i++) {
-        fcntl(p[i], F_SETFD, FD_CLOEXEC);
-        fcntl(p[i], F_SETFL, fcntl(p[i], F_GETFL, 0) | O_NONBLOCK);
-    }
-    j->rfd = p[0];
-    j->wfd = p[1];
-#  endif
-    return 0;
-}
-
 /* Run `j` on the pool and wait for it — parked on the netpoller on a
  * fiber, in poll(2) off one. 0: done, the result is in `j` and the
  * caller frees it. -1: could not offload (no thread, no fd); the caller
  * frees `j` and does the lookup inline. NURL_RESOLVE_TIMEOUT: the
  * deadline passed and `j` now belongs to the resolver thread. */
 static int nurl__dns_offload(NurlDnsJob *j, int on_fiber, long long deadline) {
-    if (nurl__dns_signal_fds(j) != 0 || nurl__dns_submit(j) != 0) return -1;
+    if (nurl__signal_open(&j->rfd, &j->wfd) != 0 || nurl__dns_submit(j) != 0) return -1;
     /* A wake is only a hint (spurious, or the deadline) — `done` under
      * the lock is the truth. */
     for (;;) {
@@ -2064,13 +2169,15 @@ static int nurl__dns_offload(NurlDnsJob *j, int on_fiber, long long deadline) {
         pthread_mutex_unlock(&nurl__dns.lock);
         if (done) return 0;
         long long left = nurl__conn_left_ms(deadline);
-        if (!on_fiber || nurl_reactor_wait_read(j->rfd, left) < 0) {
-            struct pollfd pf = { .fd = j->rfd, .events = POLLIN, .revents = 0 };
-            poll(&pf, 1, nurl__poll_ms(left));
+        if (!on_fiber || nurl_reactor_wait_read((long long)j->rfd, left) < 0) {
+            nurl_pollfd_t pf;
+            pf.fd = j->rfd;
+            pf.events = POLLIN;
+            pf.revents = 0;
+            nurl__poll(&pf, 1, nurl__poll_ms(left));
         }
     }
 }
-#endif /* !_WIN32 */
 
 /* getaddrinfo that does not hold a fiber's worker. `deadline` is an
  * absolute nurl__conn_now_ms (-1 = none). Returns getaddrinfo's code,
@@ -2080,7 +2187,6 @@ static int nurl__resolve(const char *host, const char *port,
                          const struct addrinfo *hints,
                          struct addrinfo **res, long long deadline) {
     *res = NULL;
-#ifndef _WIN32
     int on_fiber = nurl_fiber_current() != 0;
     if (!on_fiber && deadline < 0) return getaddrinfo(host, port, hints, res);
 
@@ -2093,7 +2199,7 @@ static int nurl__resolve(const char *host, const char *port,
 
     NurlDnsJob *j = (NurlDnsJob*)calloc(1, sizeof *j);
     if (!j) return getaddrinfo(host, port, hints, res);
-    j->rfd = j->wfd = -1;
+    j->rfd = j->wfd = NURL_INVALID_SOCK;
     j->host = strdup(host);
     j->hints = *hints;
     j->noport = !port;
@@ -2109,12 +2215,6 @@ static int nurl__resolve(const char *host, const char *port,
     j->res = NULL;
     nurl__dns_job_free(j);
     return rc;
-#else
-    /* Winsock: no fibers to protect, and no cancellable lookup — the
-     * connect deadline below still bounds the connect itself. */
-    (void)deadline;
-    return getaddrinfo(host, port, hints, res);
-#endif
 }
 
 /* getnameinfo that does not hold a fiber's worker: the reverse twin
@@ -2123,12 +2223,11 @@ static int nurl__resolve(const char *host, const char *port,
 __attribute__((noinline))
 static int nurl__reverse(const struct sockaddr *sa, socklen_t salen,
                          char *out, size_t cap, int flags) {
-#ifndef _WIN32
     int on_fiber = nurl_fiber_current() != 0;
     if (on_fiber && salen <= (socklen_t)sizeof(struct sockaddr_storage)) {
         NurlDnsJob *j = (NurlDnsJob*)calloc(1, sizeof *j);
         if (j) {
-            j->rfd = j->wfd = -1;
+            j->rfd = j->wfd = NURL_INVALID_SOCK;
             j->reverse = 1;
             memcpy(&j->sa, sa, salen);
             j->salen = salen;
@@ -2142,7 +2241,6 @@ static int nurl__reverse(const struct sockaddr *sa, socklen_t salen,
             nurl__dns_job_free(j);
         }
     }
-#endif
     return getnameinfo(sa, salen, out, (socklen_t)cap, NULL, 0, flags);
 }
 
@@ -2373,12 +2471,62 @@ long long nurl_tcp_accept(long long listener) {
     memset(&peer, 0, sizeof(peer));
     nurl_sockfd_t fd = NURL_INVALID_SOCK;
 #ifdef _WIN32
-    fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-    if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-    if (fd == NURL_INVALID_SOCK) {
-        int we = WSAGetLastError();
-        c->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_ACCEPT);
+    /* The POSIX shape below, in Winsock's words. The fiber path does ONE
+     * accept on the non-blocking listener and leaves WSAEWOULDBLOCK to its
+     * caller (tcp_accept_async parks on the reactor); a Winsock accept
+     * hands the listener's non-blocking mode to the new socket, which the
+     * memo records. The blocking path polls {fd, wake_rfd} like POSIX:
+     * closesocket from another thread does wake a blocked accept, but it
+     * frees the handle number for reuse while that accept may still be
+     * entering — the wake channel stops it without touching the fd. */
+    if (l->nonblock) {
+        fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK) {
+            c->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_ACCEPT);
+            return (long long)(uintptr_t)c;
+        }
+        c->fd       = fd;
+        c->err_kind = NURL_NET_ERR_OK;
+        c->peer     = nurl__net_format_peer(&peer);
+        {
+            int one = 1;
+            setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, (int)sizeof(one));
+        }
+        c->nonblock = 1;
         return (long long)(uintptr_t)c;
+    }
+    for (;;) {
+        if (l->shutting_down) {
+            c->err_kind = NURL_NET_ERR_ACCEPT;
+            return (long long)(uintptr_t)c;
+        }
+        if (l->wake_rfd != NURL_INVALID_SOCK) {
+            nurl_pollfd_t pfds[2];
+            pfds[0].fd = l->fd;       pfds[0].events = POLLIN; pfds[0].revents = 0;
+            pfds[1].fd = l->wake_rfd; pfds[1].events = POLLIN; pfds[1].revents = 0;
+            if (nurl__poll(pfds, 2, -1) < 0) {
+                c->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_ACCEPT);
+                return (long long)(uintptr_t)c;
+            }
+            if (l->shutting_down ||
+                (pfds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+                c->err_kind = NURL_NET_ERR_ACCEPT;
+                return (long long)(uintptr_t)c;
+            }
+            if (!(pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+        }
+        fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK) {
+            int we = WSAGetLastError();
+            /* A sibling worker took the connection, or the peer reset it
+             * while it was queued: poll again. */
+            if (we == WSAEWOULDBLOCK || we == WSAECONNRESET || we == WSAEINTR) continue;
+            c->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_ACCEPT);
+            return (long long)(uintptr_t)c;
+        }
+        break;
     }
 #else
     if (l->nonblock) {
@@ -2505,6 +2653,15 @@ long long nurl_tcp_accept(long long listener) {
     {
         int fl = fcntl(c->fd, F_GETFL, 0);
         if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(c->fd, F_SETFL, fl & ~O_NONBLOCK);
+    }
+    c->nonblock = 0;
+#else
+    /* Winsock always hands the listener's mode on, and the listener is
+     * non-blocking whenever it has a wake channel (see nurl_tcp_listen):
+     * the same normalisation, for the same callers. */
+    {
+        u_long off = 0;
+        ioctlsocket(c->fd, FIONBIO, &off);
     }
     c->nonblock = 0;
 #endif
@@ -2667,6 +2824,18 @@ const char *nurl_tcp_alpn_selected(long long handle) {
     return strdup("");
 }
 
+#ifdef _WIN32
+/* A receive that failed because nurl_tcp_conn_shutdown shut the read side
+ * — WSAESHUTDOWN for one that started after it, WSAEINTR for one its
+ * CancelIoEx ended — is the EOF a POSIX receive-side shutdown reads. */
+static int nurl__win_read_shut_eof(NurlTcp *h, int we) {
+    if (!h->read_shut || (we != WSAESHUTDOWN && we != WSAEINTR &&
+                          we != WSA_OPERATION_ABORTED)) return 0;
+    h->err_kind = NURL_NET_ERR_OK;
+    return 1;
+}
+#endif
+
 long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return -1;
@@ -2695,6 +2864,7 @@ long long nurl_tcp_read(long long handle, const char *buf, long long n) {
     if (rd == 0) return 0;   /* clean EOF — not an error */
 #ifdef _WIN32
     int we = WSAGetLastError();
+    if (nurl__win_read_shut_eof(h, we)) return 0;
     h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_READ);
 #else
     h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_READ);
@@ -2864,6 +3034,7 @@ long long nurl_tcp_read_nowait(long long handle, const char *buf, long long n) {
 #endif
         if (got >= 0) { h->err_kind = NURL_NET_ERR_OK; return (long long)got; }
 #ifdef _WIN32
+        if (nurl__win_read_shut_eof(h, saved)) return 0;
         h->err_kind = nurl__net_map_wsa(saved, NURL_NET_ERR_READ);
 #else
         h->err_kind = nurl__net_map_errno(saved, NURL_NET_ERR_READ);
@@ -2872,11 +3043,34 @@ long long nurl_tcp_read_nowait(long long handle, const char *buf, long long n) {
     }
 }
 
+#ifdef _WIN32
+/* Guards each connection's rd_wake and read_shut together, so a wait that
+ * starts as the read side is shut either sees the flag or has its signal
+ * raised (nurl_tcp_wait_io / nurl_tcp_conn_shutdown). Taken once per wait
+ * and once per shutdown. */
+static pthread_mutex_t nurl__rd_wake_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 /* Wait for either read (bit 1) or write (bit 2). EINTR does not restart
  * the timeout; a pending absolute write budget additionally bounds POLLOUT. */
 long long nurl_tcp_wait_io(long long handle, long long events, long long ms) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK || !(events & 3)) return -1;
+#ifdef _WIN32
+    /* A read-side shutdown is readable (the read returns EOF), as on
+     * POSIX — but Winsock does not say so, so it is asked here and, for a
+     * wait already under way, signalled through rd_wake. */
+    if (events & 1) {
+        pthread_mutex_lock(&nurl__rd_wake_lock);
+        int shut = h->read_shut;
+        if (!shut && h->rd_wake == NURL_INVALID_SOCK) {
+            nurl_sockfd_t wr;
+            if (nurl__signal_open(&h->rd_wake, &wr) != 0) h->rd_wake = NURL_INVALID_SOCK;
+        }
+        pthread_mutex_unlock(&nurl__rd_wake_lock);
+        if (shut) return 1;
+    }
+#endif
     long long start = nurl_monotonic_ns();
     for (;;) {
         long long wait_ms = ms;
@@ -2892,15 +3086,20 @@ long long nurl_tcp_wait_io(long long handle, long long events, long long ms) {
         }
         int bounded = wait_ms < 0 ? -1 : (int)(wait_ms > 2147483647 ? 2147483647 : wait_ms);
 #ifdef _WIN32
-        fd_set reads, writes, errors;
-        FD_ZERO(&reads); FD_ZERO(&writes); FD_ZERO(&errors);
-        if (events & 1) FD_SET(h->fd, &reads);
-        if (events & 2) FD_SET(h->fd, &writes);
-        FD_SET(h->fd, &errors);
-        struct timeval timeout, *timep = NULL;
-        if (bounded >= 0) { timeout.tv_sec = bounded / 1000; timeout.tv_usec = (bounded % 1000) * 1000; timep = &timeout; }
-        int ready = select(0, &reads, &writes, &errors, timep);
+        nurl_pollfd_t fds[2];
+        int nfds = 1;
+        fds[0].fd = h->fd;
+        fds[0].events = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
+        fds[0].revents = 0;
+        if ((events & 1) && h->rd_wake != NURL_INVALID_SOCK) {
+            fds[1].fd = h->rd_wake;
+            fds[1].events = POLLIN;
+            fds[1].revents = 0;
+            nfds = 2;
+        }
+        int ready = nurl__poll(fds, nfds, bounded);
         if (ready < 0 && WSAGetLastError() == WSAEINTR) continue;
+        if (ready > 0 && nfds == 2 && fds[1].revents) return 1;   /* read side shut */
 #else
         struct pollfd fd;
         fd.fd = h->fd;
@@ -3304,7 +3503,7 @@ long long nurl_tcp_get_fd(long long handle) {
 
 void nurl_tcp_set_nonblock(long long handle, long long on) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
-    if (!h || h->fd < 0) return;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
     /* Memoized on h->nonblock — every mutation of the fd's O_NONBLOCK
      * goes through here (or through the accept path, which normalises
      * the flag AND the cache together), so a matching cache means the
@@ -3332,13 +3531,18 @@ void nurl_tcp_set_nonblock(long long handle, long long on) {
  * released (see nurl_tcp_close / nurl_tcp_ref). */
 static void nurl__tcp_destroy(NurlTcp *h) {
     if (h->fd != NURL_INVALID_SOCK) {
+#ifdef _WIN32
+        if (h->read_shut) nurl__reactor_forget_fd((long long)h->fd);
+        if (h->rd_wake != NURL_INVALID_SOCK) {
+            nurl__signal_close(h->rd_wake, h->rd_wake);
+            h->rd_wake = NURL_INVALID_SOCK;
+        }
+#endif
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
     }
-#ifndef _WIN32
-    if (h->wake_rfd != NURL_INVALID_SOCK) { close(h->wake_rfd); h->wake_rfd = NURL_INVALID_SOCK; }
-    if (h->wake_wfd != NURL_INVALID_SOCK) { close(h->wake_wfd); h->wake_wfd = NURL_INVALID_SOCK; }
-#endif
+    nurl__signal_close(h->wake_rfd, h->wake_wfd);
+    h->wake_rfd = h->wake_wfd = NURL_INVALID_SOCK;
     free(h->peer);
     free(h);
 }
@@ -3372,14 +3576,9 @@ void nurl_tcp_close(long long handle) {
      * release path (refcount 1 → 0 → destroy), preserving the exact
      * SSL_shutdown-before-fd-close ordering inside nurl__tcp_destroy. */
     if (h->kind == NURL_TCP_KIND_LISTENER) {
-#ifndef _WIN32
         h->shutting_down = 1;
-        if (h->wake_wfd != NURL_INVALID_SOCK) {
-            char b = 1;
-            ssize_t w = write(h->wake_wfd, &b, 1);
-            (void)w;
-        }
-#endif
+        if (h->wake_wfd != NURL_INVALID_SOCK)
+            nurl__signal_raise(h->wake_rfd, h->wake_wfd);
         if (h->fd != NURL_INVALID_SOCK) {
             nurl_close_sock(h->fd);
             h->fd = NURL_INVALID_SOCK;
@@ -3398,29 +3597,22 @@ void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
     h->shutting_down = 1;
-#ifndef _WIN32
-    /* Wake every worker blocked in accept()'s poll via the self-pipe. We
+    /* Wake every worker blocked in accept()'s poll via the wake channel. We
      * must NOT close(h->fd) here: another thread may be mid-accept on it,
      * and on Linux close() neither interrupts that accept nor is safe
      * against fd reuse (the old close-from-another-thread relied on a
      * wakeup that never happens → workers hang, join never returns). The
-     * fd is released by nurl_tcp_close once all workers have joined. */
+     * fd is released by nurl_tcp_close once all workers have joined.
+     * Winsock's closesocket does interrupt an accept, but frees the handle
+     * number for reuse just the same — Windows takes this path too. */
     if (h->wake_wfd != NURL_INVALID_SOCK) {
-        char b = 1;
-        ssize_t w = write(h->wake_wfd, &b, 1);
-        (void)w;
+        nurl__signal_raise(h->wake_rfd, h->wake_wfd);
     } else if (h->fd != NURL_INVALID_SOCK) {
-        /* No wakeup pipe (pipe() failed at listen): best-effort old path. */
+        /* No wake channel (it could not be opened at listen): best-effort
+         * old path. */
         nurl_close_sock(h->fd);
         h->fd = NURL_INVALID_SOCK;
     }
-#else
-    /* Win32: closesocket does interrupt a blocked accept. */
-    if (h->fd != NURL_INVALID_SOCK) {
-        nurl_close_sock(h->fd);
-        h->fd = NURL_INVALID_SOCK;
-    }
-#endif
     /* Also unblock a fiber parked on this listener via the async reactor. */
     nurl__reactor_wake_if_started();
 }
@@ -3438,8 +3630,28 @@ void nurl_tcp_conn_shutdown(long long handle, long long both) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK) return;
 #ifdef _WIN32
-    (void)both;
-    shutdown(h->fd, SD_BOTH);
+    /* Measured on Winsock: a receive-side shutdown wakes neither a thread
+     * blocked in recv nor one in select/WSAPoll, and a recv issued after
+     * it fails with WSAESHUTDOWN. So, after shutting the side, each kind of
+     * waiter is woken its own way, every one of them sticky against a wait
+     * that has not started yet:
+     *   - in recv: CancelIoEx ends it (the write side keeps working, which
+     *     is what lets an HTTP/2 connection send its GOAWAY on the way
+     *     out); a recv that starts later fails at once;
+     *   - in nurl_tcp_wait_io: rd_wake is raised, and a wait that starts
+     *     later sees read_shut — the two under one lock;
+     *   - a parked fiber: the reactor (nurl__reactor_read_shut).
+     * The reads turn those failures into the EOF POSIX gives
+     * (nurl__win_read_shut_eof). CancelIoEx cancels everything pending on
+     * the handle, a blocked send too: the drain shuts a connection's read
+     * side only while it is idle, with nothing being sent. */
+    shutdown(h->fd, both ? SD_BOTH : SD_RECEIVE);
+    pthread_mutex_lock(&nurl__rd_wake_lock);
+    h->read_shut = 1;
+    if (h->rd_wake != NURL_INVALID_SOCK) nurl__signal_raise(h->rd_wake, h->rd_wake);
+    pthread_mutex_unlock(&nurl__rd_wake_lock);
+    CancelIoEx((HANDLE)h->fd, NULL);
+    nurl__reactor_read_shut((long long)h->fd);
 #else
     shutdown(h->fd, both ? SHUT_RDWR : SHUT_RD);
 #endif
@@ -3672,9 +3884,7 @@ long long nurl_udp_bind(const char *host, long long port) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK) continue;
-        int on = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                   (const char*)&on, (int)sizeof(on));
+        nurl__sock_restart_ok(fd);
         /* Dual-stack wildcard: ask the kernel to also serve IPv4. */
         if (ai->ai_family == AF_INET6 && (!host || !*host)) {
             int off = 0;
@@ -3712,9 +3922,7 @@ long long nurl_udp_bind(const char *host, long long port) {
                 fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
                 if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
                 if (fd == NURL_INVALID_SOCK) continue;
-                int on = 1;
-                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                           (const char*)&on, (int)sizeof(on));
+                nurl__sock_restart_ok(fd);
                 if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
                     chosen_family = ai->ai_family;
                     break;
@@ -5880,12 +6088,9 @@ static void nurl__signal_stop_listener(void) {
     shutdown(h->fd, SD_BOTH);
 #  else
     shutdown(h->fd, SHUT_RDWR);
-    if (h->wake_wfd != NURL_INVALID_SOCK) {
-        char b = 1;
-        ssize_t w = write(h->wake_wfd, &b, 1);
-        (void)w;
-    }
 #  endif
+    if (h->wake_wfd != NURL_INVALID_SOCK)
+        nurl__signal_raise(h->wake_rfd, h->wake_wfd);
 }
 
 /* OS-level handler. Async-signal-safe: only sig_atomic_t writes,
@@ -6135,7 +6340,8 @@ void      nurl_signal_trigger_shutdown(void)              {}
  * I/O reactor in Phase 5 (see §25). Full design in docs/ASYNC.md.
  *
  * Fiber handles are long long (uintptr_t cast); 0 = error/no fiber.
- * POSIX-only (pthreads + ucontext); Win32 + WASI are stubbed below.
+ * pthreads + a stackful switch (own-ctx or ucontext; Win32 x64 on its own
+ * switch and VirtualAlloc stacks); WASI is stubbed below.
  * Closure shape matches nurl_thread_spawn in §19. */
 long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_owned(void *fn, void *env);
@@ -6165,14 +6371,17 @@ void      nurl_runtime_shutdown(void);
  *     makecontext/swapcontext (FreeBSD / NetBSD / DragonFly — NOT
  *     OpenBSD, which removed it). macOS gates it behind _XOPEN_SOURCE.
  *
- * wasi and Win32 have neither and fall through to the stub block.
- * §25 (reactor) tests NURL_HAVE_FIBERS, so the two gates cannot drift
- * apart the way two spelled-out conditions did. */
-#if !defined(__wasi__) && !defined(_WIN32)
+ * Win32 has no ucontext but has the own-ctx switch on x64 (runtime_ctx.c,
+ * NURL_CTX_WIN64), threads through winpthreads or runtime_core.c's shim,
+ * and VirtualAlloc where POSIX has mmap — so it takes the own-ctx branch.
+ * wasi has none of it and falls through to the stub block. §25 (reactor)
+ * tests NURL_HAVE_FIBERS, so the two gates cannot drift apart the way two
+ * spelled-out conditions did. */
+#if !defined(__wasi__)
 #  if defined(NURL_CTX_AVAILABLE)
 #    define NURL_HAVE_FIBERS   1
 #    define NURL_FIBER_OWN_CTX 1
-#  elif defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+#  elif !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__))
 #    define NURL_HAVE_FIBERS   1
 #  endif
 #endif
@@ -6184,9 +6393,11 @@ void      nurl_runtime_shutdown(void);
 #endif
 #include <ucontext.h>
 #endif
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
 #include <pthread.h>
+#endif
 
 /* macOS deprecates ucontext_t but keeps it working — silence one warn. */
 #if defined(__APPLE__)
@@ -6622,7 +6833,7 @@ static void nurl__fiber_entry(void *arg) {
         /* Never returns: the loop sees NF_DONE and never resumes us. */
         nurl_ctx_switch(&f->ctx, &w->loop_ctx);
     }
-    pthread_exit(NULL);  /* unreachable */
+    abort();  /* unreachable: a fiber runs only on a worker */
 }
 #else
 /* makecontext on 64-bit POSIX passes args as int (32 bits) — reassemble
@@ -6657,11 +6868,62 @@ static pthread_mutex_t nurl__stack_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 static void  *nurl__stack_cache_head = NULL;
 static int    nurl__stack_cache_len  = 0;
 
+/* A fiber stack's memory: `total` bytes whose lowest `guard` bytes fault
+ * on any access, so an overflow dies at a deterministic page instead of
+ * writing into whatever lies below. NULL when either step fails. */
+static long nurl__page_size(void) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (long)si.dwPageSize;
+#else
+    return sysconf(_SC_PAGESIZE);
+#endif
+}
+
+static void nurl__stack_unmap(void *base, size_t total) {
+#ifdef _WIN32
+    (void)total;
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    munmap(base, total);
+#endif
+}
+
+static void *nurl__stack_map(size_t total, size_t guard) {
+#ifdef _WIN32
+    /* Committed whole, like the POSIX mapping: the TIB's StackLimit is
+     * set to the stack's low end while the fiber runs (runtime_ctx.c), so
+     * nothing relies on Windows' grow-on-touch thread-stack protocol. */
+    void *base = VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!base) return NULL;
+    DWORD old;
+    if (!VirtualProtect(base, guard, PAGE_NOACCESS, &old)) {
+        VirtualFree(base, 0, MEM_RELEASE);
+        return NULL;
+    }
+    return base;
+#else
+#if defined(MAP_ANONYMOUS)
+    int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
+#else
+    int mflags = MAP_PRIVATE | MAP_ANON;
+#endif
+    void *base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    if (mprotect(base, guard, PROT_NONE) != 0) {
+        munmap(base, total);
+        return NULL;
+    }
+    return base;
+#endif
+}
+
 static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     NurlFiber *f = (NurlFiber*)calloc(1, sizeof(NurlFiber));
     if (!f) return NULL;
 
-    long pg = sysconf(_SC_PAGESIZE);
+    long pg = nurl__page_size();
     if (pg <= 0) pg = 4096;
     size_t guard = ((size_t)NURL_FIBER_GUARD_BYTES + (size_t)pg - 1)
                  / (size_t)pg * (size_t)pg;
@@ -6679,19 +6941,8 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     pthread_mutex_unlock(&nurl__stack_cache_lock);
 
     if (!base) {
-#if defined(MAP_ANONYMOUS)
-        int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
-#else
-        int mflags = MAP_PRIVATE | MAP_ANON;
-#endif
-        base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
-        if (base == MAP_FAILED) { free(f); return NULL; }
-
-        if (mprotect(base, guard, PROT_NONE) != 0) {
-            munmap(base, total);
-            free(f);
-            return NULL;
-        }
+        base = nurl__stack_map(total, guard);
+        if (!base) { free(f); return NULL; }
     }
     f->stack_base = base;
     f->stack_total_sz = total;
@@ -6712,7 +6963,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
                   nurl__fiber_entry, f);
 #else
     if (getcontext(&f->ctx) != 0) {
-        munmap(base, total);
+        nurl__stack_unmap(base, total);
         free(f);
         return NULL;
     }
@@ -6747,7 +6998,7 @@ static void nurl__fiber_free(NurlFiber *f) {
             cached = 1;
         }
         pthread_mutex_unlock(&nurl__stack_cache_lock);
-        if (!cached) munmap(f->stack_base, f->stack_total_sz);
+        if (!cached) nurl__stack_unmap(f->stack_base, f->stack_total_sz);
     }
     free(f);
 }
@@ -7035,7 +7286,7 @@ static void nurl__spin_observe(NurlFiber *f, long long waited, long long cap) {
 
 /* 1 when `fd` became ready for `events` within the fiber's spin window
  * (the caller skips the park), 0 to park. `t0` is the wait's start. */
-static int nurl__spin_ready(NurlWorker *w, NurlFiber *f, int fd, short events,
+static int nurl__spin_ready(NurlWorker *w, NurlFiber *f, long long fd, short events,
                             long long t0, long long cap) {
     if (fd < 0 || cap <= 0) return 0;
     if (__atomic_load_n(&nurl__sched.pending, __ATOMIC_RELAXED) > 4) return 0;
@@ -7047,11 +7298,18 @@ static int nurl__spin_ready(NurlWorker *w, NurlFiber *f, int fd, short events,
         /* Other work for this worker: park now and run it. */
         if (__atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) > 0) return 0;
         if (__atomic_load_n(&nurl__sched.global_head, __ATOMIC_RELAXED)) return 0;
-        struct pollfd probe = { .fd = fd, .events = events, .revents = 0 };
-        int pr = poll(&probe, 1, 0);
+        nurl_pollfd_t probe;
+        probe.fd = (nurl_sockfd_t)fd;
+        probe.events = events;
+        probe.revents = 0;
+        int pr = nurl__poll(&probe, 1, 0);
         long long t = nurl_monotonic_ns() - t0;
         if (pr > 0) { nurl__spin_observe(f, t, cap); return 1; }
+#ifdef _WIN32
+        if (pr < 0) return 0;          /* WSAPoll has no EINTR */
+#else
         if (pr < 0 && errno != EINTR) return 0;
+#endif
         if (t >= budget) return 0;
     }
 }
@@ -7350,7 +7608,7 @@ void nurl_runtime_shutdown(void) {
 #endif
 
 #elif !(defined(__wasi__) && defined(__wasm_atomics__))
-/* no fiber backend (Windows, wasm without threads) — stubs */
+/* no fiber backend (wasm without threads, an ISA with no switch) — stubs */
 
 long long nurl_fiber_spawn(void *fn, void *env) {
     (void)fn; (void)env; return 0;
@@ -7387,8 +7645,8 @@ static int nurl__rw_in_fiber(void) { return 0; }
  * fiber and drops the entry. sleep_ms registers without an fd — just a
  * deadline; poll's timeout is min(next_deadline, INFINITE).
  *
- * POSIX-only (poll). epoll/kqueue/IOCP wait for a real 10 K+ consumer.
- * WASI/Windows fall through to the stub block.
+ * poll(2), or WSAPoll on Windows. kqueue/IOCP wait for a real 10 K+ consumer.
+ * WASI falls through to the stub block.
  *
  * ABI: nurl_reactor_wait_read(fd, timeout_ms) → 1 ready / 0 timeout /
  * -1 not on a fiber. Same shape for _write. nurl_fiber_sleep_ms always
@@ -7410,8 +7668,10 @@ long long nurl_fiber_sleep_ms(long long ms);
 /* The reactor is built on the fiber primitives, so it lives or dies with
  * them — one macro, not a second copy of the platform condition. */
 #ifdef NURL_HAVE_FIBERS
+#ifndef _WIN32
 #include <poll.h>
 #include <fcntl.h>
+#endif
 #include <errno.h>
 
 #if defined(__linux__)
@@ -8008,17 +8268,17 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, POLLOUT, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
-    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, mask, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
@@ -8202,10 +8462,10 @@ void nurl__reactor_cleanup(void) {
     pthread_mutex_destroy(&nurl__np.lock);
 }
 
-#else /* !__linux__ — portable poll(2) reactor thread */
+#else /* !__linux__ — portable poll(2) reactor thread (WSAPoll on Windows) */
 
 typedef struct NurlReactorWait {
-    int                     fd;          /* -1 = pure timer */
+    long long               fd;          /* -1 = pure timer */
     short                   events;      /* POLLIN | POLLOUT */
     long long               deadline_ms; /* -1 = infinite */
     NurlFiber              *fiber;
@@ -8219,11 +8479,16 @@ typedef struct NurlReactorWait {
      * activation. Lock held for both. */
     int                     mutex_park;
     int                     park_state;
+    /* Windows: the read side of `fd` was shut (nurl__reactor_read_shut),
+     * which WSAPoll never reports — wake as ready, so the reader sees EOF. */
+    int                     forced;
 } NurlReactorWait;
 
 typedef struct NurlReactor {
     pthread_t        thread;
-    int              wake_pipe[2];   /* [0] = read, [1] = write */
+    /* [0] = read, [1] = write (nurl__signal_open; one socket, both
+     * slots, on Windows). */
+    nurl_sockfd_t    wake_pipe[2];
     pthread_mutex_t  lock;           /* protects `waits` and `freelist` */
     NurlReactorWait *waits;
     /* Recycled wait entries. Every park used to calloc an entry on the
@@ -8239,17 +8504,71 @@ typedef struct NurlReactor {
 
 static NurlReactor nurl__reactor;
 
+#ifdef _WIN32
+/* The sockets whose read side nurl_tcp_conn_shutdown shut, until each is
+ * closed (nurl__reactor_forget_fd): a fiber that starts waiting to read
+ * one after the shutdown is woken at once, like one already waiting.
+ * Its own lock, statically initialised, so a drain on a program that
+ * never started the reactor needs nothing of it; taken after the
+ * reactor's lock, never before. */
+static pthread_mutex_t nurl__shut_lock = PTHREAD_MUTEX_INITIALIZER;
+static long long      *nurl__shut_fds;
+static int             nurl__shut_n, nurl__shut_cap;
+
+static int nurl__shut_has(long long fd) {
+    int hit = 0;
+    pthread_mutex_lock(&nurl__shut_lock);
+    for (int i = 0; i < nurl__shut_n; i++) if (nurl__shut_fds[i] == fd) { hit = 1; break; }
+    pthread_mutex_unlock(&nurl__shut_lock);
+    return hit;
+}
+
+static void nurl__reactor_wake(void);
+
+void nurl__reactor_read_shut(long long fd) {
+    pthread_mutex_lock(&nurl__shut_lock);
+    int have = 0;
+    for (int i = 0; i < nurl__shut_n; i++) if (nurl__shut_fds[i] == fd) { have = 1; break; }
+    if (!have) {
+        if (nurl__shut_n == nurl__shut_cap) {
+            int cap = nurl__shut_cap ? nurl__shut_cap * 2 : 16;
+            long long *grown = (long long *)realloc(nurl__shut_fds, (size_t)cap * sizeof *grown);
+            if (!grown) { pthread_mutex_unlock(&nurl__shut_lock); abort(); }
+            nurl__shut_fds = grown;
+            nurl__shut_cap = cap;
+        }
+        nurl__shut_fds[nurl__shut_n++] = fd;
+    }
+    pthread_mutex_unlock(&nurl__shut_lock);
+    /* Then the readers already parked. One registering in between finds
+     * the fd in the set (nurl__reactor_wait), so none is missed. */
+    if (!nurl__reactor.started) return;
+    pthread_mutex_lock(&nurl__reactor.lock);
+    for (NurlReactorWait *w = nurl__reactor.waits; w; w = w->next)
+        if (w->fd == fd && (w->events & POLLIN)) w->forced = 1;
+    pthread_mutex_unlock(&nurl__reactor.lock);
+    nurl__reactor_wake();
+}
+
+void nurl__reactor_forget_fd(long long fd) {
+    pthread_mutex_lock(&nurl__shut_lock);
+    for (int i = 0; i < nurl__shut_n; i++)
+        if (nurl__shut_fds[i] == fd) { nurl__shut_fds[i] = nurl__shut_fds[--nurl__shut_n]; break; }
+    pthread_mutex_unlock(&nurl__shut_lock);
+}
+#endif
+
 static long long nurl__now_ms_internal(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000L);
 }
 
+/* The wake channel is nurl__signal_open's (§18-r): a pipe here, a
+ * self-connected loopback UDP socket on Windows. Best-effort pokes;
+ * several coalesce, and the loop drains them all after its poll. */
 static void nurl__reactor_wake(void) {
-    /* Best-effort poke; multiple writes coalesce — reactor drains on poll. */
-    char b = 'w';
-    ssize_t r = write(nurl__reactor.wake_pipe[1], &b, 1);
-    (void)r;
+    nurl__signal_raise(nurl__reactor.wake_pipe[0], nurl__reactor.wake_pipe[1]);
 }
 
 void nurl__reactor_wake_if_started(void) {
@@ -8260,7 +8579,7 @@ void nurl__reactor_wake_if_started(void) {
  * ready / timed-out fibers. */
 static void *nurl__reactor_loop(void *arg) {
     (void)arg;
-    struct pollfd fds[256];
+    nurl_pollfd_t fds[256];
     NurlReactorWait *batch[256];
     for (;;) {
         if (nurl__reactor.shutdown) break;
@@ -8281,7 +8600,7 @@ static void *nurl__reactor_loop(void *arg) {
                     min_deadline = w->deadline_ms;
             }
             if (w->fd >= 0 && nfds < 256) {
-                fds[nfds].fd = w->fd;
+                fds[nfds].fd = (nurl_sockfd_t)w->fd;
                 fds[nfds].events = w->events;
                 fds[nfds].revents = 0;
                 batch[nfds] = w;
@@ -8298,18 +8617,17 @@ static void *nurl__reactor_loop(void *arg) {
             timeout = (int)delta;
         }
 
-        int r = poll(fds, (nfds_t)nfds, timeout);
+        int r = nurl__poll(fds, nfds, timeout);
         if (r < 0) {
+#ifndef _WIN32
             if (errno == EINTR) continue;
+#endif
             /* Unrecoverable — bail. */
             break;
         }
 
         /* Drain wake-pipe if signalled. */
-        if (fds[0].revents & POLLIN) {
-            char buf[64];
-            while (read(nurl__reactor.wake_pipe[0], buf, sizeof(buf)) > 0) {}
-        }
+        if (fds[0].revents & POLLIN) nurl__signal_drain(nurl__reactor.wake_pipe[0]);
 
         /* Walk the wait list, decide who wakes up. We snapshot the
          * list under the lock, then process and re-attach the
@@ -8344,6 +8662,7 @@ static void *nurl__reactor_loop(void *arg) {
                     }
                 }
             }
+            if (!wake && w->forced) { wake = 1; result = 1; }
             if (!wake && w->deadline_ms >= 0 && now >= w->deadline_ms) {
                 wake = 1; result = 0;
                 /* The deadline claims a timed mutex park: a later
@@ -8397,11 +8716,7 @@ static void *nurl__reactor_loop(void *arg) {
 }
 
 static void nurl__reactor_init_once(void) {
-    if (pipe(nurl__reactor.wake_pipe) != 0) return;
-    int fl0 = fcntl(nurl__reactor.wake_pipe[0], F_GETFL, 0);
-    int fl1 = fcntl(nurl__reactor.wake_pipe[1], F_GETFL, 0);
-    fcntl(nurl__reactor.wake_pipe[0], F_SETFL, fl0 | O_NONBLOCK);
-    fcntl(nurl__reactor.wake_pipe[1], F_SETFL, fl1 | O_NONBLOCK);
+    if (nurl__signal_open(&nurl__reactor.wake_pipe[0], &nurl__reactor.wake_pipe[1]) != 0) return;
     pthread_mutex_init(&nurl__reactor.lock, NULL);
     nurl__reactor.waits = NULL;
     nurl__reactor.freelist = NULL;
@@ -8451,7 +8766,7 @@ void nurl__reactor_activate(NurlReactorWait *w) {
  * until the worker loop activates it via nurl__reactor_activate after
  * swap-out, which closes the unpark-before-park double-execution race. */
 __attribute__((noinline))
-static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
+static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) {
     NurlWorker *w = nurl__tls_worker;
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
@@ -8482,6 +8797,10 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->active = 0;
     wt->mutex_park = 0;
     wt->park_state = 0;
+    wt->forced = 0;
+#ifdef _WIN32
+    if ((events & POLLIN) && fd >= 0 && nurl__shut_has(fd)) wt->forced = 1;
+#endif
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     pthread_mutex_unlock(&nurl__reactor.lock);
@@ -8500,17 +8819,17 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, POLLOUT, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
-    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
+    return (long long)nurl__reactor_wait(fd, mask, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
@@ -8546,6 +8865,7 @@ NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long
     wt->active = 0;
     wt->mutex_park = 1;
     wt->park_state = 0;
+    wt->forced = 0;
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     cur->timed_park = wt;
@@ -8590,8 +8910,7 @@ void nurl__reactor_shutdown(void) {
     nurl__reactor_wake();
     pthread_join(nurl__reactor.thread, NULL);
     nurl__reactor.started = 0;
-    close(nurl__reactor.wake_pipe[0]);
-    close(nurl__reactor.wake_pipe[1]);
+    nurl__signal_close(nurl__reactor.wake_pipe[0], nurl__reactor.wake_pipe[1]);
     pthread_mutex_destroy(&nurl__reactor.lock);
     NurlReactorWait *w = nurl__reactor.waits;
     while (w) { NurlReactorWait *n = w->next; free(w); w = n; }
@@ -8606,10 +8925,15 @@ void nurl__reactor_cleanup(void) {}
 
 #endif /* __linux__ */
 
-#else  /* WASI / Windows — Phase 5 stubs */
+#else  /* WASI — Phase 5 stubs */
 
 void nurl__reactor_shutdown(void) {}
 void nurl__reactor_wake_if_started(void) {}
+#ifdef _WIN32
+/* Windows with no fiber backend (no Win64 x64 switch): nothing parks. */
+void nurl__reactor_read_shut(long long fd) { (void)fd; }
+void nurl__reactor_forget_fd(long long fd) { (void)fd; }
+#endif
 
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
@@ -8621,7 +8945,7 @@ NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long 
     (void)fd; (void)events; (void)timeout_ms; return -1;
 }
 NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
-    /* WASI/Windows fall-through; real sleep awaits port. */
+    /* WASI fall-through; real sleep awaits port. */
     (void)ms; return 0;
 }
 /* No fiber to park: the caller waits on its condvar instead. */

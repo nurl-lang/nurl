@@ -25,7 +25,7 @@
 //
 // Server on an OS thread (tcp_accept blocks), client on the main thread,
 // as tls_resume.nu does.
-// requires: live fibers python3 openssl
+// requires: live fibers python3 openssl posix-shell
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

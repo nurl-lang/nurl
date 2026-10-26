@@ -71,6 +71,22 @@
  * (there is no separate mask register to seed: FPCR's trap-enable
  * bits default to off and live in the same register). */
 #  define NURL_CTX_AARCH64 1
+#elif defined(__x86_64__) && defined(_WIN32)
+/* x64 Windows (the Microsoft x64 calling convention), both ABIs the
+ * runtime is built for (clang's MSVC target and MinGW). Callee-saved:
+ * rbx, rbp, rdi, rsi, r12–r15, rsp, all of xmm6–xmm15, and the control
+ * bits of MXCSR and the x87 control word — rdi, rsi and the ten xmm
+ * registers are what the System V switch above does not save.
+ *
+ * And the stack bounds in the thread's TIB (gs:0x08 StackBase, gs:0x10
+ * StackLimit, gs:0x1478 DeallocationStack). Windows reads them where
+ * POSIX reads nothing: RtlUnwindEx — which the CRT's longjmp, and so
+ * every NURL panic, unwinds through — rejects a frame outside
+ * [StackLimit, StackBase) as a bad stack, and __chkstk probes against
+ * StackLimit. A fiber's stack is none of the thread's, so they switch
+ * with it. A fiber that migrates to another worker carries them to
+ * that thread's TIB the same way. */
+#  define NURL_CTX_WIN64 1
 #endif
 
 /* Whether this file supplies a context switch at all — one name for
@@ -87,7 +103,8 @@
  * produce a usable frame. Every async test SIGSEGV'd there, on a
  * machine whose own switch backend had been passing the AArch64
  * unikernel gate in CI the whole time. */
-#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64) || defined(NURL_CTX_RISCV64)
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64) || defined(NURL_CTX_RISCV64) || \
+    defined(NURL_CTX_WIN64)
 #  define NURL_CTX_AVAILABLE 1
 #endif
 
@@ -461,6 +478,127 @@ void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
 
 int nurl_ctx_available(void) { return 1; }
 
+#elif defined(NURL_CTX_WIN64)
+
+/* The switch. save in rcx, restore in rdx. Frame, from ctx->sp upward
+ * (33 slots, 264 bytes):
+ *
+ *     +0    mxcsr (4) | x87 control word (2)
+ *     +8    xmm6 … xmm15        (10 × 16, unaligned stores: the frame
+ *                                is 16-aligned only at its top)
+ *     +168  TIB StackBase       (gs:0x08)
+ *     +176  TIB StackLimit      (gs:0x10)
+ *     +184  TIB DeallocationStack (gs:0x1478)
+ *     +192  r15  r14  r13  r12  rdi  rsi  rbx  rbp
+ *     +256  return address
+ *
+ * r12 carries the entry argument and r13 the entry point on a first
+ * switch, as in the System V frame. */
+__attribute__((naked, noinline))
+void nurl_ctx_switch(nurl_ctx_t *save, nurl_ctx_t *restore)
+{
+    __asm__ volatile(
+        "pushq %rbp\n\t"
+        "pushq %rbx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %r12\n\t"
+        "pushq %r13\n\t"
+        "pushq %r14\n\t"
+        "pushq %r15\n\t"
+        "pushq %gs:0x1478\n\t"
+        "pushq %gs:0x10\n\t"
+        "pushq %gs:0x08\n\t"
+        "subq  $168, %rsp\n\t"
+        "stmxcsr (%rsp)\n\t"
+        "fnstcw  4(%rsp)\n\t"
+        "movups %xmm6,    8(%rsp)\n\t"
+        "movups %xmm7,   24(%rsp)\n\t"
+        "movups %xmm8,   40(%rsp)\n\t"
+        "movups %xmm9,   56(%rsp)\n\t"
+        "movups %xmm10,  72(%rsp)\n\t"
+        "movups %xmm11,  88(%rsp)\n\t"
+        "movups %xmm12, 104(%rsp)\n\t"
+        "movups %xmm13, 120(%rsp)\n\t"
+        "movups %xmm14, 136(%rsp)\n\t"
+        "movups %xmm15, 152(%rsp)\n\t"
+        "movq  %rsp, (%rcx)\n\t"      /* save->sp = rsp                */
+        "movq  (%rdx), %rsp\n\t"      /* rsp = restore->sp             */
+        "fldcw   4(%rsp)\n\t"
+        "ldmxcsr (%rsp)\n\t"
+        "movups    8(%rsp), %xmm6\n\t"
+        "movups   24(%rsp), %xmm7\n\t"
+        "movups   40(%rsp), %xmm8\n\t"
+        "movups   56(%rsp), %xmm9\n\t"
+        "movups   72(%rsp), %xmm10\n\t"
+        "movups   88(%rsp), %xmm11\n\t"
+        "movups  104(%rsp), %xmm12\n\t"
+        "movups  120(%rsp), %xmm13\n\t"
+        "movups  136(%rsp), %xmm14\n\t"
+        "movups  152(%rsp), %xmm15\n\t"
+        "addq  $168, %rsp\n\t"
+        "popq  %rax\n\t"
+        "movq  %rax, %gs:0x08\n\t"
+        "popq  %rax\n\t"
+        "movq  %rax, %gs:0x10\n\t"
+        "popq  %rax\n\t"
+        "movq  %rax, %gs:0x1478\n\t"
+        "popq  %r15\n\t"
+        "popq  %r14\n\t"
+        "popq  %r13\n\t"
+        "popq  %r12\n\t"
+        "popq  %rdi\n\t"
+        "popq  %rsi\n\t"
+        "popq  %rbx\n\t"
+        "popq  %rbp\n\t"
+        "ret\n\t"
+    );
+}
+
+/* First-entry trampoline: r12 holds the argument, r13 the entry point.
+ * Entered via `ret` with rsp 16-aligned; the 32 bytes below the call
+ * are the shadow space every Microsoft x64 callee may write its
+ * register arguments into. `ud2` for the reason the System V one gives. */
+__attribute__((naked, noinline))
+static void nurl__ctx_trampoline(void)
+{
+    __asm__ volatile(
+        "movq %r12, %rcx\n\t"
+        "subq $32, %rsp\n\t"
+        "callq *%r13\n\t"
+        "ud2\n\t"
+    );
+}
+
+void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
+                   void (*entry)(void *), void *arg)
+{
+    unsigned char *top = (unsigned char *)stack + size;
+    /* 16-align the top and put the 264-byte frame right under it: after
+     * the switch's final `ret` rsp is the aligned top, which the
+     * trampoline keeps aligned through its shadow space. */
+    unsigned long long  t  = (unsigned long long)top & ~(unsigned long long)15;
+    unsigned long long *fp = (unsigned long long *)(t - 264);
+    unsigned long long  i;
+
+    for (i = 0; i < 33; i++) fp[i] = 0;
+    /* Seed the control words from the CURRENT thread (see the System V
+     * init for why a zeroed MXCSR is fatal). xmm6–15 start zeroed: a
+     * fresh frame has no caller whose values they could be. */
+    __asm__ volatile("stmxcsr %0" : "=m"(*(unsigned *)&fp[0]));
+    __asm__ volatile("fnstcw  %0" : "=m"(*(unsigned short *)((char *)&fp[0] + 4)));
+    fp[21] = t;                                    /* StackBase          */
+    fp[22] = (unsigned long long)stack;            /* StackLimit         */
+    fp[23] = (unsigned long long)stack;            /* DeallocationStack  */
+    fp[26] = (unsigned long long)entry;            /* r13                */
+    fp[27] = (unsigned long long)arg;              /* r12                */
+    fp[32] = (unsigned long long)&nurl__ctx_trampoline; /* return address */
+
+    ctx->sp = (void *)fp;
+}
+
+int nurl_ctx_available(void) { return 1; }
+
 #else /* neither x86_64 nor aarch64 — other architectures still use ucontext */
 
 void nurl_ctx_switch(nurl_ctx_t *save, nurl_ctx_t *restore)
@@ -520,11 +658,20 @@ static unsigned long  nurl__ctx_main_size;
  * two lives inside an asm string, which LTO cannot see. Without it the
  * optimizer concludes they are dead, strips them, and the link fails on
  * an undefined symbol the source plainly contains. */
+#ifdef NURL_CTX_WIN64
+/* The TIB StackBase the fiber saw on its last arrival (Win64 preserve
+ * test): it must be the fiber's own stack top, not the thread's. */
+static unsigned long long nurl__ctx_fiber_seen_base;
+#endif
+
 __attribute__((used))
 void nurl__ctx_test_enter(void)
 {
     nurl_ctx_asan_finish_switch(nurl__ctx_fib_fake,
                                 &nurl__ctx_main_lo, &nurl__ctx_main_size);
+#ifdef NURL_CTX_WIN64
+    __asm__ volatile("movq %%gs:0x08, %0" : "=r"(nurl__ctx_fiber_seen_base));
+#endif
 }
 
 /* Called on the FIBER, immediately before it hands control back.
@@ -583,6 +730,37 @@ static void nurl__ctx_bounce(void *arg)
         "callq " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
         "leaq " NURL_CTX_SYM(nurl__ctx_fiber) "(%rip), %rdi\n\t"
         "leaq " NURL_CTX_SYM(nurl__ctx_main) "(%rip), %rsi\n\t"
+        "callq " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "jmp 1b\n\t"
+    );
+}
+#elif defined(NURL_CTX_WIN64)
+/* Same fiber, the Microsoft x64 callee-saved set: rdi, rsi and xmm6–15
+ * on top of the System V five. `subq $40` aligns rsp for the calls out
+ * AND gives each callee its 32-byte shadow space; the enter/leave calls
+ * are ordinary C functions, so the ABI makes them preserve every
+ * sentinel up to the switch. */
+__attribute__((naked, noinline))
+static void nurl__ctx_bounce(void *arg)
+{
+    __asm__ volatile(
+        "subq  $40, %rsp\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "movabsq $0xdeadbeefdeadbeef, %rbx\n\t"
+        "movq  %rbx, %rsi\n\t"
+        "movq  %rbx, %rdi\n\t"
+        "movq  %rbx, %r12\n\t"
+        "movq  %rbx, %r13\n\t"
+        "movq  %rbx, %r14\n\t"
+        "movq  %rbx, %r15\n\t"
+        "movq  %rbx, %xmm6\n\t"
+        "movq  %rbx, %xmm11\n\t"
+        "movq  %rbx, %xmm15\n\t"
+        "1:\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
+        "leaq " NURL_CTX_SYM(nurl__ctx_fiber) "(%rip), %rcx\n\t"
+        "leaq " NURL_CTX_SYM(nurl__ctx_main) "(%rip), %rdx\n\t"
         "callq " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
         "callq " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
         "jmp 1b\n\t"
@@ -647,7 +825,7 @@ static void nurl__ctx_fpbounce(void *arg)
 {
     (void)arg;
     nurl__ctx_test_enter();
-#if defined(NURL_CTX_X86_64)
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_WIN64)
     unsigned       mx = 0x1f80u;              /* default, all masked   */
     unsigned short cw = 0x037fu;              /* x87 default           */
     __asm__ volatile("ldmxcsr %0" :: "m"(mx));
@@ -713,6 +891,92 @@ long nurl_ctx_test_preserve(void)
         : "rbx", "r12", "r13", "r14", "r15", "rcx", "memory", "cc");
     nurl__ctx_test_from_fiber();
     return ok;
+}
+#elif defined(NURL_CTX_WIN64)
+/* Every callee-saved GPR, three of the ten xmm registers (the ends and
+ * one between: a switch that stored a short run would miss at least one)
+ * and the TIB's StackBase: the fiber runs with its own, and this side
+ * must get the thread's back. Sentinels go in through rax and xmm0, and
+ * the comparisons read rcx/rax — all caller-saved, so nothing compared
+ * is a value the switch was not responsible for. */
+long nurl_ctx_test_preserve(void)
+{
+    nurl__ctx_test_init(nurl__ctx_bounce, (void *)0);
+    long long ok;
+    unsigned long long base_before, base_after;
+    /* In/out: the comparisons below reuse rcx and rdx as scratch. */
+    nurl_ctx_t *pm = &nurl__ctx_main, *pf = &nurl__ctx_fiber;
+    __asm__ volatile("movq %%gs:0x08, %0" : "=r"(base_before));
+    nurl__ctx_test_to_fiber();
+    __asm__ volatile(
+        "movabsq $0x1111111111111111, %%rbx\n\t"
+        "movabsq $0x2222222222222222, %%rsi\n\t"
+        "movabsq $0x3333333333333333, %%rdi\n\t"
+        "movabsq $0x4444444444444444, %%r12\n\t"
+        "movabsq $0x5555555555555555, %%r13\n\t"
+        "movabsq $0x6666666666666666, %%r14\n\t"
+        "movabsq $0x7777777777777777, %%r15\n\t"
+        "movabsq $0x8888888888888888, %%rax\n\t"
+        "movq    %%rax, %%xmm6\n\t"
+        "movabsq $0x9999999999999999, %%rax\n\t"
+        "movq    %%rax, %%xmm11\n\t"
+        "movabsq $0xaaaaaaaaaaaaaaaa, %%rax\n\t"
+        "movq    %%rax, %%xmm15\n\t"
+        "subq    $32, %%rsp\n\t"
+        "callq   " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "addq    $32, %%rsp\n\t"
+        "xorl    %%eax, %%eax\n\t"
+        "movabsq $0x1111111111111111, %%rcx\n\t"
+        "cmpq    %%rcx, %%rbx\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x2222222222222222, %%rcx\n\t"
+        "cmpq    %%rcx, %%rsi\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x3333333333333333, %%rcx\n\t"
+        "cmpq    %%rcx, %%rdi\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x4444444444444444, %%rcx\n\t"
+        "cmpq    %%rcx, %%r12\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x5555555555555555, %%rcx\n\t"
+        "cmpq    %%rcx, %%r13\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x6666666666666666, %%rcx\n\t"
+        "cmpq    %%rcx, %%r14\n\t"
+        "jne     1f\n\t"
+        "movabsq $0x7777777777777777, %%rcx\n\t"
+        "cmpq    %%rcx, %%r15\n\t"
+        "jne     1f\n\t"
+        "movq    %%xmm6, %%rdx\n\t"
+        "movabsq $0x8888888888888888, %%rcx\n\t"
+        "cmpq    %%rcx, %%rdx\n\t"
+        "jne     1f\n\t"
+        "movq    %%xmm11, %%rdx\n\t"
+        "movabsq $0x9999999999999999, %%rcx\n\t"
+        "cmpq    %%rcx, %%rdx\n\t"
+        "jne     1f\n\t"
+        "movq    %%xmm15, %%rdx\n\t"
+        "movabsq $0xaaaaaaaaaaaaaaaa, %%rcx\n\t"
+        "cmpq    %%rcx, %%rdx\n\t"
+        "jne     1f\n\t"
+        "movl    $1, %%eax\n\t"
+        "1:\n\t"
+        : "=a"(ok), "+c"(pm), "+d"(pf)
+        :
+        /* The fiber side calls C functions, so everything the ABI lets
+         * a callee clobber is clobbered across the switch. */
+        : "rbx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+          "r12", "r13", "r14", "r15",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5",
+          "xmm6", "xmm11", "xmm15", "memory", "cc");
+    nurl__ctx_test_from_fiber();
+    __asm__ volatile("movq %%gs:0x08, %0" : "=r"(base_after));
+    /* Both directions: the fiber ran on its own stack's bounds (what the
+     * CRT's longjmp unwind checks frames against), and this side got the
+     * thread's back. */
+    unsigned long long fiber_top =
+        ((unsigned long long)nurl__ctx_stack + sizeof nurl__ctx_stack) & ~15ULL;
+    return ok && base_after == base_before && nurl__ctx_fiber_seen_base == fiber_top;
 }
 #elif defined(NURL_CTX_RISCV64)
 long nurl_ctx_test_preserve(void)
@@ -795,7 +1059,7 @@ long nurl_ctx_test_preserve(void)
 /* Same question for the floating-point control words: set a non-default
  * rounding mode, bounce through a fiber that sets its own, and check we
  * get ours back. */
-#ifdef NURL_CTX_X86_64
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_WIN64)
 long nurl_ctx_test_fpcw(void)
 {
     nurl__ctx_test_init(nurl__ctx_fpbounce, (void *)0UL);
@@ -869,7 +1133,7 @@ long nurl_ctx_test_fpcw(void)
 static void nurl__ctx_pingpong(void *arg)
 {
     nurl__ctx_test_enter();
-    long n = (long)(unsigned long)arg;
+    long n = (long)(__UINTPTR_TYPE__)arg;
     nurl__ctx_arg_seen = n;
     for (long i = 0; i < n; i++) {
         nurl__ctx_counter++;
@@ -886,7 +1150,7 @@ long nurl_ctx_test_pingpong(long n)
     nurl__ctx_counter  = 0;
     nurl__ctx_switches = 0;
     nurl__ctx_arg_seen = -1;
-    nurl__ctx_test_init(nurl__ctx_pingpong, (void *)(unsigned long)n);
+    nurl__ctx_test_init(nurl__ctx_pingpong, (void *)(__UINTPTR_TYPE__)n);
     for (long i = 0; i < n + 1; i++) {
         nurl__ctx_test_to_fiber();
         nurl_ctx_switch(&nurl__ctx_main, &nurl__ctx_fiber);

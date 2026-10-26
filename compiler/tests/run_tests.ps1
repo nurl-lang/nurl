@@ -44,16 +44,16 @@
 #  Which tests run: the same `// requires:` declaration the POSIX
 #  runners read (see test_skips.sh for the contract and for why the
 #  name lists that used to live here were wrong). Tokens: `live`,
-#  `internet`, or the name of a tool that must be on PATH.
+#  `fibers`, `internet`, the CPU tiers, or the name of a tool that must
+#  be on PATH — with the same defaults as there: `live` and `fibers` ON
+#  (the fiber runtime runs on Win64's own context switch, docs/ASYNC.md).
 #
-#  ONE difference from the POSIX side, and it is a capability fact
-#  rather than a policy: `fibers` is OFF here. NURL has no Win64
-#  context-switch backend (docs/ASYNC.md), so `spawn` returns a null
-#  handle and the closure never runs — a test that pairs a fiber-side
-#  server with a blocking client would wait forever for a peer that
-#  cannot exist. `live` is ON, same as everywhere else: Windows has
-#  threads and sockets, and udp_basic / websocket_basic / net_basic
-#  have been exercising them here all along.
+#  The differences from the POSIX side are capability facts, not policy:
+#  `posix-shell` is never met here (process_run_shell is cmd.exe on
+#  Windows by design), `ktls` neither (a Linux kernel facility), and the
+#  CPU tiers are answered by the runtime's own CPUID gates — Windows has
+#  no /proc/cpuinfo, so the runner links a probe against runtime.o and
+#  asks nurl_cpu_x86_*, NURL_CPU_* overrides included.
 #
 #  Environment (mirrors run_tests.sh):
 #    NURL_TEST_JOBS=N   parallelism (default: CPU count)
@@ -151,13 +151,47 @@ $CompileTimeout = if ($env:NURL_COMPILE_TIMEOUT) { [double]$env:NURL_COMPILE_TIM
 if ($CompileTimeout -le 0) { throw 'NURL_COMPILE_TIMEOUT must be positive' }
 $Jobs        = if ($env:NURL_TEST_JOBS){ [int]$env:NURL_TEST_JOBS} else { [Environment]::ProcessorCount }
 $EnableLive     = if ($env:NURL_LIVE_TESTS) { $env:NURL_LIVE_TESTS } else { '1' }
-# See the header: no Win64 context-switch backend, so this one differs
-# from the POSIX default on purpose.
-$EnableFibers   = if ($env:NURL_FIBER_TESTS) { $env:NURL_FIBER_TESTS } else { '0' }
+$EnableFibers   = if ($env:NURL_FIBER_TESTS) { $env:NURL_FIBER_TESTS } else { '1' }
 $EnableInternet = if (($env:NURL_HTTP_TESTS -eq '1') -or ($env:NURL_NET_TESTS -eq '1')) { '1' } else { '0' }
 
 New-Item -ItemType Directory -Force -Path $OutDir, $WorkDir | Out-Null
 Write-Host "Artifacts: $WorkDir"
+
+# ── CPU tiers: ask the runtime ──────────────────────────────────
+# `cpu-vaes` / `cpu-vaes512` / `cpu-ifma` mean "the program's tier gate
+# lets the tier run", and the gate is nurl_cpu_x86_* in runtime.o — so
+# that is what answers, through a probe linked against the same object
+# the tests link, in this process's environment (NURL_CPU_VAES=0 & co
+# turn a tier off for it exactly as for the tests). runtime.o and clang
+# were found above, so a probe that will not build or answer is a broken
+# setup, reported as one — not read as "no tiers", which would turn the
+# breakage into silent skips.
+$CpuTiers = @{ 'cpu-vaes' = $false; 'cpu-vaes512' = $false; 'cpu-ifma' = $false }
+if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+    $probeC   = Join-Path $WorkDir 'cpu_probe.c'
+    $probeExe = Join-Path $WorkDir 'cpu_probe.exe'
+    [System.IO.File]::WriteAllText($probeC, @'
+#include <stdio.h>
+int nurl_cpu_x86_vaes(void);
+int nurl_cpu_x86_vaes512(void);
+int nurl_cpu_x86_ifma(void);
+int main(void) {
+    printf("%d %d %d\n", nurl_cpu_x86_vaes(), nurl_cpu_x86_vaes512(), nurl_cpu_x86_ifma());
+    return 0;
+}
+'@)
+    $probeLog = & $Clang $probeC $Runtime '-lwinhttp' @WinLibs '-o' $probeExe 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $probeExe)) {
+        Write-Error "CPU-tier probe failed to link against runtime.o:`n$probeLog"; exit 2
+    }
+    $bits = @(((& $probeExe) | Out-String).Trim() -split '\s+')
+    if ($LASTEXITCODE -ne 0 -or $bits.Count -ne 3) {
+        Write-Error "CPU-tier probe gave no answer: '$($bits -join ' ')'"; exit 2
+    }
+    $CpuTiers['cpu-vaes']    = $bits[0] -eq '1'
+    $CpuTiers['cpu-vaes512'] = $bits[1] -eq '1'
+    $CpuTiers['cpu-ifma']    = $bits[2] -eq '1'
+}
 
 # ── collect the test set (ordinal sort, LC_ALL=C equivalent) ─────
 $names = @(Get-ChildItem -Path $ScriptDir -Filter '*.nu' -File | ForEach-Object { $_.BaseName })
@@ -195,6 +229,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     $EnableLive     = $using:EnableLive
     $EnableFibers   = $using:EnableFibers
     $EnableInternet = $using:EnableInternet
+    $CpuTiers       = $using:CpuTiers
 
     function Read-TextOrEmpty([string]$p) {
         if (-not (Test-Path -LiteralPath $p)) { return '' }
@@ -370,6 +405,11 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # breakage, not coverage.
     elseif ($name -like 'fswatch_*') { $skip = $true }
     elseif ($name -like 'fdlimit_*') { $skip = $true }
+    # Linux-only in test_skips.sh too: its black hole is Linux dropping
+    # SYNs to a full accept queue, and its "refused at once" is Linux
+    # answering a SYN to a closed port with RST — Windows retries the SYN
+    # for about two seconds first.
+    elseif ($name -eq 'net_connect_fiber_timeout') { $skip = $true }
     # fs_glob_symlink builds a symlinked directory under /tmp and globs
     # through it. Windows has neither an unprivileged symlink() nor /tmp.
     # It first declared `requires: ln` as a capability probe, on the
@@ -392,12 +432,13 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 # turns it off here as it does in the runtime. (Windows on
                 # ARM builds no AArch64 crypto tier: skipped there.)
                 'cpu-aes'  { if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -or $env:NURL_CPU_AES -eq '0') { $skip = $true } }
-                # The VAES and IFMA tiers are on few x64 hosts, and Windows has no
-                # flag list to ask without a probe: skipped here.
-                'cpu-vaes'    { $skip = $true }
-                'cpu-vaes512' { $skip = $true }
-                'cpu-ifma'    { $skip = $true }
+                # Answered by the runtime's own gates (the probe above).
+                'cpu-vaes'    { if (-not $CpuTiers['cpu-vaes'])    { $skip = $true } }
+                'cpu-vaes512' { if (-not $CpuTiers['cpu-vaes512']) { $skip = $true } }
+                'cpu-ifma'    { if (-not $CpuTiers['cpu-ifma'])    { $skip = $true } }
                 'ktls'     { $skip = $true }
+                # process_run_shell is cmd.exe here (test_skips.sh).
+                'posix-shell' { $skip = $true }
                 'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
                 # Anything else names an external command the test shells
                 # out to. Absent tool → skip, so a stripped host degrades

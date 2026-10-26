@@ -15,7 +15,7 @@
 //      one-segment-empty path), then closes.
 //   4. Checks that head‖body is byte-identical to response_serialize,
 //      and that the client saw the whole stream.
-// requires: live fibers python3
+// requires: live fibers python3 posix-shell
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
