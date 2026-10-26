@@ -1,0 +1,43 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+matched
+drop conn matched
+caught in arm
+enum_arm live 0
+after-match
+drop conn after-match
+caught after match
+enum_after live 0
+text
+caught in text arm
+msg_arm live 0
+4
+drop conn bound
+caught bound
+field_bound live 0
+copy
+drop wrap copy
+caught copy
+field_copy live 0
+drop conn loop
+drop conn loop
+drop conn loop
+caught loop
+field_loop live 0
+drop conn cond
+drop conn cond
+drop conn cond
+drop conn cond
+no panic
+enum_loop live 0
+drop conn cond
+drop conn cond
+caught enum loop
+enum_loop_panic live 0
+drop conn one arm
+8
+no panic
+enum_one_arm live 0
+end

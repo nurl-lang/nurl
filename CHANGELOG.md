@@ -94,6 +94,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A panic no longer leaks a call's result that the scope owns**
+  (Agora #110, h334, h335). Two kinds of call result get an owner of
+  their own for the rest of the scope. One is an enum a match takes and
+  nothing binds (`?? ( mk ) { … }`, h233). The other is a result read
+  for a field it cannot give up (`: Conn c . ( mk ) c`, h329/h330).
+  Neither owner was in the panic journal. A panic under `recover`
+  before the scope ended skipped the drop, so the value leaked and its
+  destructors never ran (docs/MEMORY.md §7.2 promises otherwise).
+
+  Each such owner is now journaled once, by its slot and with its drop
+  flag. The registration is made once the value and the flag are
+  stored, and the scope's end forgets it by slot. A read run again in a
+  loop's condition first forgets the previous round's registration,
+  then releases that round's value. One registration per slot was a
+  requirement: an alloca-keyed entry per round would have dropped
+  values a later round had already released.
+
+  An enum matched in a loop's condition (`~ ?? ( mk ) { … } { … }`) was
+  stored over the previous round's enum without releasing it, so every
+  round but the last leaked. Each round now releases the one before, as
+  a field read in a loop's condition already did. The owner's flag
+  starts clear on every path. A match on one arm of an expression `?`
+  used to drop the slot unconditionally at the scope's end, on paths
+  that never stored an enum too; it no longer does.
 - **A binding read out of a field can no longer outlive its struct**
   (Agora #111, h331–h333). `: String n . h name` borrowed nothing in the
   borrow checker. The right-hand side's reads went with the row recorded
