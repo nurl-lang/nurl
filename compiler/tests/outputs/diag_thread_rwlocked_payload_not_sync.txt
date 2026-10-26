@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_rwlocked_payload_not_sync.nu:12:5: error: 'thread_spawn' runs this closure on another thread or fiber, but the closure built on line 11 captures 'l', which is not Send: it reaches 'PNCounter', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, an RwLocked's value, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync PNCounter { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
+    ?? ( thread_spawn body ) { T t → { ( thread_join t ) } F _ → {} }
+    ^

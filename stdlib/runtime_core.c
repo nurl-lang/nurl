@@ -3289,6 +3289,11 @@ typedef struct NurlCenvVt {
      * Both null when the env owns all it captures. */
     const struct NurlCenvVt *own;
     void (*adopt)(void *env);
+    /* The crossing check (docs/MEMORY.md §6.5): panics unless every handle
+     * whose copies are one state that the captures reach has no owner but
+     * the env (or, in an env that views it, the binding it lends). Null
+     * when no capture reaches one. */
+    void (*sendck)(void *env, const char *what);
 } NurlCenvVt;
 
 void nurl_closure_drop(void *env) {
@@ -3319,6 +3324,34 @@ void nurl_closure_adopt(void *env) {
     if (!vt || !vt->own) return;
     if (vt->adopt) vt->adopt(env);
     *(const NurlCenvVt **)env = vt->own;
+}
+
+/* A closure about to run on another thread or fiber, or to be handed to
+ * one (`mem_send_check`): its env's crossing check. */
+void nurl_closure_send_check(void *env, const char *what) {
+    if (!env) return;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    if (vt && vt->sendck) vt->sendck(env, what);
+}
+
+/* A handle whose copies are one state, changed in place with no lock (a
+ * PNCounter, a TcpConn, a Cell), reached another thread while another
+ * owner of that state stayed behind: two threads would change it together.
+ * `what` names the crossing ("thread_spawn", "chan_send", "locked_restore"),
+ * `ty` the handle. */
+void nurl_send_check_fail(const char *what, const char *ty) {
+    char buf[640];
+    char *p = buf, *lim = buf + sizeof buf - 1;
+    nurl__put_str(&p, lim, what && *what ? what : "a thread crossing");
+    nurl__put_str(&p, lim, ": a '");
+    nurl__put_str(&p, lim, ty && *ty ? ty : "handle");
+    nurl__put_str(&p, lim, "' crosses between threads with another owner of the same state left on "
+                           "this side (a share, a struct, Vec or closure holding one, a copy taken out "
+                           "of a Locked), and two threads would change one state in place with no "
+                           "lock. Hand over the only owner, or keep the state behind a Locked and "
+                           "share that (docs/MEMORY.md 6.5)");
+    *p = '\0';
+    nurl_panic(buf);
 }
 
 void *nurl_closure_own_copy(void *env) {

@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_sync_arc_share_handle.nu:14:47: error: thread_spawn closure captures 'p', which is not Send: it reaches 'PNCounter', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync PNCounter { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
+compiler/tests/diag_sync_arc_share_handle.nu:14:47: error: thread_spawn closure captures 'p', which is not Send: it reaches 'PNCounter', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, an RwLocked's value, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync PNCounter { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
     : !Thread ThreadErr r ( thread_spawn work )
                                               ^
 error: aborting due to 1 previous error

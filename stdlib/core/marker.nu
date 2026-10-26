@@ -21,6 +21,20 @@
 //   ( chan_send ch v )   `v` must be Send
 //   ( Arc T )            T must be Send AND Sync — an Arc exists to be
 //                        shared, so its payload faces the harder question
+//   ( RwLocked T )       T must be Send AND Sync — several readers reach it
+//                        at once; a Locked's, a Channel's or a Pool's T
+//                        must be Send, even where a `% Sync` marker on the
+//                        container stops the walk (it vouches for the
+//                        container, never for what it holds)
+//
+// A handle whose copies are one state (a library handle over a counted
+// block — a PNCounter, a TcpConn, a Cell — not asserted Sync) is Send, but
+// only with every owner of that state: a copy left on this side would be
+// changed by two threads with no lock. No type says how many copies a
+// value has, so the crossing asks at run time: `( mem_send_check [T] x
+// what )`, in thread_spawn, spawn, chan_send and a Locked's operations,
+// panics unless every such handle x reaches has one owner
+// (docs/MEMORY.md §6.5).
 //
 // The derivation has three levels, worst-wins across the graph:
 //

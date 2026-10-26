@@ -692,6 +692,29 @@ $ `stdlib/core/box.nu`
     ( btree_each [K V] m \ K k V x → v { ( mem_trace [K] k vis ) ( mem_trace [V] x vis ) } )
 }
 
+// The thread crossing's check (docs/MEMORY.md §6.5): every key and value.
+// (A walk of its own, not btree_each: a closure the check panics through
+// would leak its environment, agora #131.)
+@ BTree_sendck [K V] ( BTree K V ) m s what → v {
+    : s root # s ( box_ptr [BtNode] . ( box_ptr [BtCtl] . m ctl ) root )
+    ? == 0 # i root { ^ v } {}
+    ( __bt_sendck_node [K V] root what )
+}
+
+@ __bt_sendck_node [K V] s n s what → v {
+    : *K kp # *K ( nurl_peek n 0 )
+    : *V vp # *V ( nurl_peek n 2 )
+    : i nk ( __bt_nkeys n )
+    : ~ i j 0
+    ~ < j nk {
+        ? ( __bt_leaf n ) {} { ( __bt_sendck_node [K V] ( __bt_kid n j ) what ) }
+        ( mem_send_check [K] . kp j what )
+        ( mem_send_check [V] . vp j what )
+        = j + j 1
+    }
+    ? ( __bt_leaf n ) {} { ( __bt_sendck_node [K V] ( __bt_kid n nk ) what ) }
+}
+
 // A node-for-node copy of the subtree owning copies of its entries.
 @ __bt_clone_rec [K V] s n → ( Box BtNode ) {
     : b leaf ( __bt_leaf n )

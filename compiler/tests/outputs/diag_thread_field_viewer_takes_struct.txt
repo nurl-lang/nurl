@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_field_viewer_takes_struct.nu:13:5: error: use of moved value 'h' — a heap handle has exactly one owner, and this one was consumed at line 13 by taking over 'x', a binding read out of its field 'h.c': the library handle there went with it, and the field left empty holds none (read what is needed from the struct before that line, or give the struct a fresh value). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ?? ( thread_spawn body ) { T t → { ( pncounter_inc . h c 2 1 ) ( thread_join t ) } F _ → {} }
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the field's string, long enough to own a buffer
+a borrowed string, long enough to own a buffer
+a borrowed string, long enough to own a buffer
+a fresh string, long enough to own a buffer
+the field's string, long enough to own a buffer
+a borrowed string, long enough to own a buffer

@@ -860,27 +860,22 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One open hole.** *A share made before a library handle moves to a
-thread.* A library handle over a counted block (§7.6) is copied by
-sharing, and its copies are one state. One not asserted `% Sync` moves
-into a thread's closure as a `Vec` does, a parameter of one may not be
-captured, a closure carrying one where another thread takes it takes it
-along, and it is not Sync (§6.5). A share made *before* the move is
-another owner the checker does not connect to the moved one —
-`( PNCounter_share a )`, a literal that stores `. h c`, a callee that
-keeps one — and two threads then change one value in place with no
-lock: a `PNCounter` (dist/crdt.nu) grown from both is a double free under
-AddressSanitizer
-(`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`, agora
-#121). Until it closes, make no share of a handle that moves to a
-thread; state threads share and change is a `Locked`.
+**No hole is known open.** The last one, *a share made before a library
+handle moves to a thread*, is closed (agora #121, h349–h358). A library
+handle over a counted block (§7.6) is copied by sharing, and its copies
+are one state. A copy made *before* the handle moved — `( PNCounter_share
+a )`, a literal that stores `. h c`, a `Vec` or a closure holding one, a
+copy taken out of a `Locked` — is another owner no checker can follow to
+the move, since any store of a borrowed handle makes one. So the
+crossing checks at run time: a value going to another thread carries
+every owner of such a handle it reaches, or the crossing panics (§6.5).
 
 **Every other hole is closed.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h344):
+all are closed, each a probe CI now holds (h142–h359):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1283,7 +1278,22 @@ handle (`McpTask`) is now one owner of its task. A trait object answered
 Send and Sync for whatever it boxed, an `Rc` among them, because its
 type has no field to walk (h344): it now crosses only when its trait
 declares `: Send` (and is shared only with `: Send Sync`), a promise
-every impl is held to. No other hole is known.
+every impl is held to. Closing #121 — the
+copies a crossing to another thread may leave behind (h349–h357), checked
+at run time (§6.5) — found four ownership holes on one thread: an `inout`
+parameter given a binding read out of a field (h345) or a closure's
+capture (h346) stored the value as is, two owners of one buffer; a
+closure's `inout` parameter given a fresh value dropped it on return
+(h347); and a binding read out of a library handle field, consumed, left
+the field empty — a null handle the struct was still read through (h348).
+An `inout` parameter is given a copy of a binding whose value another
+owner keeps, is never an owner of its own, and a field viewer of a
+library handle takes its struct with it (§7.6). A `% Sync` marker on a
+container vouched for its value too: an `Rc` in a `Locked` in an `Arc`
+crossed to every thread (h358). And a function whose only panic was an
+index past the end leaked its bindings under `recover` (h359): the
+journal's elision took the runtime's index panic for a call that cannot
+panic. No other hole is known.
 
 The rules that carry it:
 
@@ -1440,7 +1450,12 @@ and a `%Job` may then move; `: Send Sync` makes it Sync as well (h344).
 They are checked where a value crosses: `thread_spawn` and `spawn` (every
 capture must be Send), `chan_send` (the value must be Send), and `Arc T`
 (T must be Send and Sync). `[T: Send]` bounds are answered by the same
-derivation.
+derivation. A marker asserting a container Sync vouches for the container,
+never for what it holds: where the Sync question reaches a `Locked`, a
+`Channel` or a `Pool`, its value must be Send (one thread at a time has
+it), and an `RwLocked`'s must be Send and Sync, wherever it crosses, since
+several readers reach it at once (h357, h358; Rust's `Mutex<T>: Sync where
+T: Send`).
 
 A closure's captures are not part of its type, so for closures the
 question is asked of the **value**, followed from where the closure is
@@ -1482,8 +1497,38 @@ worker at once (h342); it counts in an `Atomic` or keeps the list in a
 `HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's
 `RpcEntry`, an MCP `McpTaskStore` and its `McpTask`s), each with the reason beside its
 marker — and a handle made only of `Arc`s and such handles (nurldb's
-`Store`), whose fields answer. A share made before the move is still
-open (§6.2).
+`Store`), whose fields answer.
+
+**The crossing check.** Moving a handle whose copies are one state is
+sound only if no other owner of that state stays behind, and a copy is
+made by any store of a borrowed handle into an owner — a literal storing
+`. h c`, a `Vec` push, a closure capture — or by an explicit
+`PNCounter_share`, so the checker cannot follow every one to the move.
+The crossing checks at run time instead (agora #121): `( mem_send_check
+[T] x what )` walks T's graph — fields, payloads, `Vec` elements, a
+container's contents through its `S_sendck` hook (`HashMap`, `Set`,
+`Deque`, `BTree`, `Box` have one), a closure's captures through its
+environment's descriptor, a handle's state — and panics, naming the
+crossing and the handle, unless the counted block of every such handle it
+reaches has exactly one owner. It compiles to nothing for a T that reaches
+none, and costs one load per handle for one that does. It counts owners,
+not where they are, so it is conservative: a value carrying two copies of
+one state — both going along — panics too; hand over one. The standard
+library's crossings call it: `thread_spawn`, `thread_spawn_owned`,
+`spawn`, `spawn_owned`, `spawn_joinable` (before the thread copies the
+environment), `chan_send`, a pool taking a value back, and a `Locked`:
+every value going in (`locked_new`, `locked_set`, `locked_restore`), the
+value again after a closure ran on it under the lock (`locked_with`,
+`locked_update`, `locked_apply`, `locked_await`), checked before the lock
+is let go — a failure panics with it held, as a panic in the closure
+does — and `locked_get`'s copy, which for such a handle is the same state
+and is never handed out. An `RwLocked` needs no check: its value is
+Sync, so it holds no such handle (above). The checker keeps its part: the
+binding a moved handle came from, a parameter of one (h337), and a
+binding read out of a field of one (h356), whose struct goes along, are
+dead past the crossing — what is left behind is only ever a copy the
+check sees. A `dyn` box hides what it holds from the check as from the
+Send derivation (agora #127).
 
 *An `Arc`'s payload is frozen once made.* `Arc` makes the reference
 count atomic, not the data: every thread holding a clone reads the
@@ -1823,7 +1868,19 @@ are dropped, moved and copied by the same rules:
   handed `s` `inout` ends it only when it may replace that field. A store
   replacing that very field hands the binding the value it held, and a
   `sink` handed the binding takes the field over (a String, Vec or
-  handle field, emptied where it lives).
+  handle field, emptied where it lives). A String or a Vec left empty is
+  still one; a library handle field left empty holds none, so a binding
+  read out of one takes its struct along when it is consumed — handed to
+  a `sink`, or to another thread — and reading the struct after is an
+  error until it is given a fresh value (h348, h356).
+- **`inout` parameters.** An `inout` parameter is the caller's binding,
+  in a closure as in a function: never an owner of its own (h347). Given
+  a fresh value, it drops the value it held; given a binding that owns
+  its value outright, it takes that value over; given one whose value
+  another owner keeps — a parameter it only borrows, a binding read out
+  of another binding's field, a closure's capture — it gets a copy (h201,
+  h345, h346). A cursor over it, or what a call lent back of it, is its
+  own value and is stored as is.
 - **Cursors.** `: ~ cur root` borrows `root`. Consuming the cursor
   consumes `root`'s value; reassigning the cursor releases nothing.
 - **Stores move.** A value stored into a literal, a field or a container

@@ -190,6 +190,18 @@ $ `stdlib/core/box.nu`
     }
 }
 
+// The thread crossing's check (docs/MEMORY.md §6.5): every live element.
+@ Deque_sendck [A] ( Deque A ) d s what → v {
+    ? ( box_is_null [DqCtl] . d ctl ) { ^ } {}
+    : *DqCtl c ( box_ptr [DqCtl] . d ctl )
+    : *A data # *A ( raw_block_ptr . c buf )
+    : ~ i i 0
+    ~ < i . c len {
+        ( mem_send_check [A] . data % + . c head i . c cap what )
+        = i + i 1
+    }
+}
+
 // A copy that owns its own elements, in logical order (head at 0).
 @ Deque_clone [A] ( Deque A ) d → ( Deque A ) {
     : *DqCtl sc ( box_ptr [DqCtl] . d ctl )

@@ -10,14 +10,14 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**One open soundness hole** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
-A share of a library handle made before the handle moves to a thread
-(`( PNCounter_share a )`, a struct literal storing one) stays with the
-spawner, and both threads change one value: the checker does not connect
-that owner to the moved one. Workaround: make no share of a handle that
-moves to a thread; state threads share and change is a `Locked`. Every other safe
-program found accepted and faulting is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h344`);
+**No soundness hole is known open** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
+Every safe program found accepted and faulting is closed, and held by
+a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h359`). One
+of them is closed at run time rather than at compile time: a handle
+whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
+crossing to another thread while a copy of it stays behind panics at the
+crossing (`thread_spawn`, `spawn`, `chan_send`, a `Locked`), naming the
+handle ([`MEMORY.md` §6.5](MEMORY.md));
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).

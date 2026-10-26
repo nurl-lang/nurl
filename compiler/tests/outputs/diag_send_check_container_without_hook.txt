@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_check_container_without_hook.nu:11:1: error: handle type 'Bag' here holds a handle whose copies are one state (a PNCounter, a TcpConn, a Cell, or a closure that may capture one) and has no Bag_sendck, so a crossing to another thread cannot check that it carries every owner of that state (docs/MEMORY.md 6.5). Define Bag_sendck beside its drop — the handle and an 's what' as parameters, handing ( mem_send_check [T] x what ) each value the handle holds, as stdlib/std/hashmap.nu HashMap_sendck does.
+@ Bag_drop [T] sink ( Bag T ) b → v {}
+^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

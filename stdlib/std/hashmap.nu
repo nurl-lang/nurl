@@ -425,6 +425,28 @@ $ `stdlib/core/box.nu`
     ( map_each [K V] m \ K k V x → v { ( mem_trace [K] k vis ) ( mem_trace [V] x vis ) } )
 }
 
+// The thread crossing's check (docs/MEMORY.md §6.5): every live entry's key
+// and value carries every owner of a handle whose copies are one state. (A
+// loop, not map_each: a closure the check panics through would leak its
+// environment, agora #131.)
+@ HashMap_sendck [K V] ( HashMap K V ) m s what → v {
+    : *MapCtl c ( box_ptr [MapCtl] . m ctl )
+    : i cap . c cap
+    ? > cap 0 {
+        : *K keys # *K ( raw_block_ptr . c keys )
+        : *V vals # *V ( raw_block_ptr . c vals )
+        : *u states # *u ( raw_block_ptr . c states )
+        : ~ i i 0
+        ~ < i cap {
+            ? ( __map_occupied # i . states i ) {
+                ( mem_send_check [K] . keys i what )
+                ( mem_send_check [V] . vals i what )
+            } {}
+            = i + i 1
+        }
+    } {}
+}
+
 // A copy of the map that owns its own entries (each key and value copied
 // — a String deep, an integer as is), at the same slot layout: no rehash.
 // What a borrowed map stored into an owner becomes (docs/MEMORY.md §7.6).
