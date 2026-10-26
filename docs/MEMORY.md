@@ -1508,12 +1508,14 @@ The crossing checks at run time instead (agora #121): `( mem_send_check
 [T] x what )` walks T's graph — fields, payloads, `Vec` elements, a
 container's contents through its `S_sendck` hook (`HashMap`, `Set`,
 `Deque`, `BTree`, `Box` have one), a closure's captures through its
-environment's descriptor, a handle's state — and panics, naming the
-crossing and the handle, unless the counted block of every such handle it
-reaches has exactly one owner. It compiles to nothing for a T that reaches
-none, and costs one load per handle for one that does. It counts owners,
-not where they are, so it is conservative: a value carrying two copies of
-one state — both going along — panics too; hand over one. The standard
+environment's descriptor, a handle's state — counting how many places in
+the value hold each such handle's counted block, and panics, naming the
+crossing and the handle, if a block has more owners than that: an owner
+left on this side. Several owners of one state that all go along cross —
+a node's transport and the job node beside it holding a share of it — and
+a block's state is walked once, however many places hold it. It compiles
+to nothing for a T that reaches none, and costs a load and a table entry
+per handle for one that does. The standard
 library's crossings call it: `thread_spawn`, `thread_spawn_owned`,
 `spawn`, `spawn_owned`, `spawn_joinable` (before the thread copies the
 environment), `chan_send`, a pool taking a value back, and a `Locked`:

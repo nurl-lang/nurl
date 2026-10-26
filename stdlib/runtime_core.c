@@ -3326,8 +3326,81 @@ void nurl_closure_adopt(void *env) {
     *(const NurlCenvVt **)env = vt->own;
 }
 
+/* The thread crossing's check (docs/MEMORY.md §6.5): `( mem_send_check [T]
+ * x what )` compiles to begin, a walk of x, and end. The walk names each
+ * counted block a handle whose copies are one state holds (visit), once per
+ * place in x that holds it; end then asks every block it saw whether it has
+ * more owners than x holds, which would be a copy left on this side. Owners
+ * x carries several of — a node's transport and the job node beside it
+ * holding a share of it — cross together. Nested begins (a container's
+ * S_sendck hook checking its elements) add to the outermost walk. One walk
+ * at a time per thread: it runs no code but the walk, so nothing yields
+ * inside it. */
+typedef struct { void *blk; const char *name; long long seen; } NurlSendSeen;
+/* Fibonacci hashing, the journal's: the top bits, which every input bit
+ * reaches (a block's low bits are its alignment's zeros). cap: a power of
+ * two >= 64. */
+static inline size_t nurl__sk_slot(void *blk, size_t cap) {
+    return (size_t)(((uint64_t)(uintptr_t)blk * UINT64_C(0x9e3779b97f4a7c15)) >> (64 - __builtin_ctzll((unsigned long long)cap)));
+}
+static __thread NurlSendSeen *nurl__sk_tab = NULL;
+static __thread size_t nurl__sk_cap = 0, nurl__sk_len = 0;
+static __thread int nurl__sk_depth = 0;
+
+void nurl_sendck_begin(void) { nurl__sk_depth++; }
+
+static void nurl__sk_grow(void) {
+    size_t ncap = nurl__sk_cap ? nurl__sk_cap * 2 : 64;
+    NurlSendSeen *nt = (NurlSendSeen *)calloc(ncap, sizeof *nt);
+    if (!nt) nurl__oom(ncap * sizeof *nt);
+    for (size_t i = 0; i < nurl__sk_cap; i++) {
+        if (!nurl__sk_tab[i].blk) continue;
+        size_t h = nurl__sk_slot(nurl__sk_tab[i].blk, ncap);
+        while (nt[h].blk) h = (h + 1) & (ncap - 1);
+        nt[h] = nurl__sk_tab[i];
+    }
+    free(nurl__sk_tab);
+    nurl__sk_tab = nt;
+    nurl__sk_cap = ncap;
+}
+
+/* One more place in the value holding block `blk` (`name`: its handle's
+ * type). 1 the first time: the walk goes on into the block's state then,
+ * and only then, so what the state holds is counted once. */
+int nurl_sendck_visit(void *blk, const char *name) {
+    if (!blk) return 0;
+    if (2 * (nurl__sk_len + 1) > nurl__sk_cap) nurl__sk_grow();
+    size_t h = nurl__sk_slot(blk, nurl__sk_cap);
+    while (nurl__sk_tab[h].blk && nurl__sk_tab[h].blk != blk) h = (h + 1) & (nurl__sk_cap - 1);
+    if (nurl__sk_tab[h].blk) { nurl__sk_tab[h].seen++; return 0; }
+    nurl__sk_tab[h].blk = blk;
+    nurl__sk_tab[h].name = name;
+    nurl__sk_tab[h].seen = 1;
+    nurl__sk_len++;
+    return 1;
+}
+
+static void nurl_send_check_fail(const char *what, const char *ty);
+
+/* The end of a walk: a block with more owners than the value holds has an
+ * owner left on this side — the crossing panics, naming the handle. The
+ * table is cleared before. */
+void nurl_sendck_end(const char *what) {
+    if (--nurl__sk_depth > 0) return;
+    nurl__sk_depth = 0;
+    const char *bad = NULL;
+    for (size_t i = 0; i < nurl__sk_cap; i++) {
+        NurlSendSeen *e = &nurl__sk_tab[i];
+        if (!e->blk) continue;
+        if (!bad && __atomic_load_n((long long *)e->blk, __ATOMIC_ACQUIRE) > e->seen) bad = e->name;
+        e->blk = NULL;
+    }
+    nurl__sk_len = 0;
+    if (bad) nurl_send_check_fail(what, bad);
+}
+
 /* A closure about to run on another thread or fiber, or to be handed to
- * one (`mem_send_check`): its env's crossing check. */
+ * one: its env's part of the walk (the descriptor's sendck slot). */
 void nurl_closure_send_check(void *env, const char *what) {
     if (!env) return;
     NurlCenvVt *vt = *(NurlCenvVt **)env;
@@ -3339,7 +3412,7 @@ void nurl_closure_send_check(void *env, const char *what) {
  * owner of that state stayed behind: two threads would change it together.
  * `what` names the crossing ("thread_spawn", "chan_send", "locked_restore"),
  * `ty` the handle. */
-void nurl_send_check_fail(const char *what, const char *ty) {
+static void nurl_send_check_fail(const char *what, const char *ty) {
     char buf[640];
     char *p = buf, *lim = buf + sizeof buf - 1;
     nurl__put_str(&p, lim, what && *what ? what : "a thread crossing");

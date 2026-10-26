@@ -1,7 +1,9 @@
 // The thread crossing's run-time check (docs/MEMORY.md §6.5, agora #121):
 // a handle whose copies are one state (a PNCounter) crosses to another
 // thread only with every owner of that state. One that is the only owner
-// crosses — alone, in a struct, a Vec, a Locked, on a channel. One with a
+// crosses — alone, in a struct, a Vec, a Locked, on a channel — and so do
+// several owners of one state that all go along (a struct holding two, a
+// copy inside a Box beside the original: the walk counts them). One with a
 // copy left behind — an explicit share, a struct literal storing one, a
 // share in a Vec, a HashMap, a BTree, a Deque, a Set or a Box, a closure's
 // capture — panics at the crossing, naming the crossing and the handle.
@@ -21,6 +23,10 @@ $ `stdlib/std/panic.nu`
 : Holder { PNCounter c }
 
 : Job { ( @ v ) run }
+
+: Twin { PNCounter x PNCounter y }
+
+: Boxed { PNCounter c ( Box PNCounter ) bx }
 
 @ say s what ! v PanicInfo r → v {
     ?? r {
@@ -57,6 +63,23 @@ $ `stdlib/std/panic.nu`
     : Job j @ Job { \ → v { ( pncounter_inc . h c 1 1 ) } }
     ( spawn_join . j run )
     ( pncounter_inc . h2 c 2 1 )
+}
+
+@ both_go_along → v {
+    : PNCounter a ( pncounter_new )
+    : PNCounter b ( PNCounter_share a )
+    : Twin p @ Twin { a b }
+    ( spawn_join \ → v { ( pncounter_inc . p x 1 1 ) ( pncounter_inc . p y 2 1 ) } )
+}
+
+@ box_copy_goes_along → v {
+    : PNCounter a ( pncounter_new )
+    : ( Box PNCounter ) bx ( box_new [PNCounter] ( PNCounter_share a ) )
+    : Boxed k @ Boxed { a bx }
+    : ( Locked Boxed ) l ( locked_new [Boxed] k )
+    : Boxed got ( locked_take [Boxed] l )
+    ( pncounter_inc . got c 1 1 )
+    ( locked_restore [Boxed] l got )
 }
 
 @ vec_of_only_owners → v {
@@ -176,6 +199,8 @@ $ `stdlib/std/panic.nu`
     ( say `share kept` ( recover \ → v { ( share_kept ) } ) )
     ( say `in a struct` ( recover \ → v { ( in_a_struct ) } ) )
     ( say `literal kept` ( recover \ → v { ( literal_kept ) } ) )
+    ( say `both go along` ( recover \ → v { ( both_go_along ) } ) )
+    ( say `box copy goes along` ( recover \ → v { ( box_copy_goes_along ) } ) )
     ( say `vec of only owners` ( recover \ → v { ( vec_of_only_owners ) } ) )
     ( say `vec share kept` ( recover \ → v { ( vec_share_kept ) } ) )
     ( say `map share kept` ( recover \ → v { ( map_share_kept ) } ) )

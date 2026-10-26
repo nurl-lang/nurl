@@ -6,6 +6,8 @@ only owner: crossed
 share kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)
 in a struct: crossed
 literal kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)
+both go along: crossed
+box copy goes along: crossed
 vec of only owners: crossed
 vec share kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)
 map share kept: thread_spawn: a 'PNCounter' crosses between threads with another owner of the same state left on this side (a share, a struct, Vec or closure holding one, a copy taken out of a Locked), and two threads would change one state in place with no lock. Hand over the only owner, or keep the state behind a Locked and share that (docs/MEMORY.md 6.5)

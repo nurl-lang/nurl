@@ -44767,6 +44767,12 @@ unsafe @ __emit_hoisted_body s funcdef → v {
     ? < ei 0 { ( nurl_print funcdef ) ^ v } {}
     : i hdr_end + ei 8  // past "\nentry:\n"
     : *u fp # *u funcdef
+    // The function ends at its first `}` line: what follows rides along (a
+    // closure's env descriptor and thunks, gen_env_vtable) and is printed as
+    // it is — none of its allocas belongs to this entry block, nor any of
+    // its returns to this frame table.
+    : i __fe ( nurl_memmem_range # s + # i fp hdr_end - flen hdr_end `\n}\n` 3 )
+    : i bend ? < __fe 0 flen + + hdr_end __fe 1
     // The frame table of the owned string bindings (`;jfs` lines, see
     // mem_journal_push_str): one word per distinct slot, in first-seen
     // order.
@@ -44791,8 +44797,8 @@ unsafe @ __emit_hoisted_body s funcdef → v {
     = . fp hdr_end sv_h
     // Pass 1: the alloca instructions, hoisted into the entry block.
     : ~ i p hdr_end
-    ~ < p flen {
-        : i le ( __ha_line_end funcdef p flen )
+    ~ < p bend {
+        : i le ( __ha_line_end funcdef p bend )
         : u sv . fp le
         = . fp le # u 0
         : s line # s + # i fp p
@@ -44835,8 +44841,8 @@ unsafe @ __emit_hoisted_body s funcdef → v {
     } {}
     // Pass 2: everything else, in original order.
     = p hdr_end
-    ~ < p flen {
-        : i le ( __ha_line_end funcdef p flen )
+    ~ < p bend {
+        : i le ( __ha_line_end funcdef p bend )
         : u sv2 . fp le
         = . fp le # u 0
         : s line # s + # i fp p
@@ -44859,6 +44865,7 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         = . fp le sv2
         = p + le 1
     }
+    ? < bend flen { ( nurl_print # s + # i fp bend ) } {}
 }
 
 // `  ;jfs %slot` — an owned string binding's slot joins the frame table.
@@ -51584,10 +51591,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
 // checker cannot follow them all; the crossing checks at run time instead.
 // `( mem_send_check [T] x what )` — in the standard library's crossings:
 // thread_spawn, spawn, chan_send, a Locked's value going in or coming out —
-// walks T's graph and panics unless the counted block of every such
-// handle it reaches has exactly one owner: the value crossing, or the
-// binding a view of it lends (the checker ends that binding at the
-// crossing). It compiles to nothing for a T that reaches none.
+// walks T's graph, counting how many places in the value hold the counted
+// block of each such handle, and panics unless no block has more owners
+// than that: every owner goes along (a view of one counts its lender, which
+// the checker ends at the crossing). It compiles to nothing for a T that
+// reaches none.
 
 // Does a value of type `ty` reach such a handle, or a closure (whose
 // captures its type does not name)? Memoised; a type reached again inside
@@ -51778,8 +51786,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
         : s slot ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
-        ( nurl_print `  call void ` ) ( nurl_print ( __sk_fn ty ) ) ( nurl_print `(ptr ` ) ( nurl_print slot )
-        ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `)\n` )
+        ( nurl_print `  call void @nurl_sendck_begin()\n  call void ` ) ( nurl_print ( __sk_fn ty ) ) ( nurl_print `(ptr ` ) ( nurl_print slot )
+        ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `)\n  call void @nurl_sendck_end(ptr ` ) ( nurl_print w ) ( nurl_print `)\n` )
     } {}
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `undef` `` )
@@ -51796,25 +51804,23 @@ u` ) ( nurl_print q ) ( nurl_print `:
     }
 }
 
-// The count check of the counted block whose `{ s ctl }` handle is at
-// `at` (`k` keeps the labels apart; `nm`: the handle's name, for the
-// panic), and then the check of its state `st` ("" when that reaches
-// nothing).
+// The counted block whose `{ s ctl }` handle is at `at` counted once more
+// in the value (`k` keeps the labels apart; `nm`: the handle's name), and
+// — the first time the walk meets it — its state `st` walked too ("" when
+// that reaches nothing). The runtime compares the counts with the blocks'
+// owners when the walk ends (nurl_sendck_end).
 @ __sk_emit_block s at s k s st s nm → v {
     ( nurl_print `  %b` ) ( nurl_print k ) ( nurl_print ` = load ptr, ptr ` ) ( nurl_print at )
-    ( nurl_print `\n  %z` ) ( nurl_print k ) ( nurl_print ` = icmp eq ptr %b` ) ( nurl_print k ) ( nurl_print `, null\n  br i1 %z` ) ( nurl_print k )
-    ( nurl_print `, label %k` ) ( nurl_print k ) ( nurl_print `, label %c` ) ( nurl_print k )
-    ( nurl_print `\nc` ) ( nurl_print k ) ( nurl_print `:\n  %n` ) ( nurl_print k ) ( nurl_print ` = load atomic i64, ptr %b` ) ( nurl_print k )
-    ( nurl_print ` acquire, align 8\n  %u` ) ( nurl_print k ) ( nurl_print ` = icmp eq i64 %n` ) ( nurl_print k ) ( nurl_print `, 1\n  br i1 %u` ) ( nurl_print k )
-    ( nurl_print `, label %s` ) ( nurl_print k ) ( nurl_print `, label %e` ) ( nurl_print k )
-    ( nurl_print `\ne` ) ( nurl_print k ) ( nurl_print `:\n  call void @nurl_send_check_fail(ptr %w, ptr ` ) ( nurl_print nm )
-    ( nurl_print `)\n  unreachable\ns` ) ( nurl_print k ) ( nurl_print `:\n` )
+    ( nurl_print `\n  %v` ) ( nurl_print k ) ( nurl_print ` = call i32 @nurl_sendck_visit(ptr %b` ) ( nurl_print k )
+    ( nurl_print `, ptr ` ) ( nurl_print nm ) ( nurl_print `)\n` )
     ? != 0 ( nurl_str_len st ) {
-        ( nurl_print `  %t` ) ( nurl_print k ) ( nurl_print ` = getelementptr { i64, ` ) ( nurl_print ( nurl_llty st ) )
+        ( nurl_print `  %u` ) ( nurl_print k ) ( nurl_print ` = icmp ne i32 %v` ) ( nurl_print k )
+        ( nurl_print `, 0\n  br i1 %u` ) ( nurl_print k ) ( nurl_print `, label %s` ) ( nurl_print k ) ( nurl_print `, label %k` ) ( nurl_print k )
+        ( nurl_print `\ns` ) ( nurl_print k ) ( nurl_print `:\n  %t` ) ( nurl_print k ) ( nurl_print ` = getelementptr { i64, ` ) ( nurl_print ( nurl_llty st ) )
         ( nurl_print ` }, ptr %b` ) ( nurl_print k ) ( nurl_print `, i32 0, i32 1\n  call void ` ) ( nurl_print ( __sk_fn st ) )
-        ( nurl_print `(ptr %t` ) ( nurl_print k ) ( nurl_print `, ptr %w)\n` )
+        ( nurl_print `(ptr %t` ) ( nurl_print k ) ( nurl_print `, ptr %w)\n  br label %k` ) ( nurl_print k )
+        ( nurl_print `\nk` ) ( nurl_print k ) ( nurl_print `:\n` )
     } {}
-    ( nurl_print `  br label %k` ) ( nurl_print k ) ( nurl_print `\nk` ) ( nurl_print k ) ( nurl_print `:\n` )
 }
 
 // `__nurl_sendck_<m>(ptr %p, ptr %w)`: the check of the value at %p.
@@ -51878,8 +51884,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ^ v
     } {}
     ? ( __thr_unsafe_share syms ty ) {
-        // Every counted block the handle holds has one owner — this one —
-        // and what its state and its other handles reach is checked too.
+        // Every counted block the handle holds is counted once more, and
+        // what its state and its other handles reach is walked too.
         : s nm ( nurl_str_cat `@.sk.` m )
         : s sname ( nurl_str_slice ty 1 - n 1 )
         : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
@@ -56077,7 +56083,9 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( __emit_rt_decl syms `declare void @nurl_cc_visit(i8*, i8*, i8*) "nurl.raw"="1"` )
     // The thread crossing's check (mem_send_check, docs/MEMORY.md §6.5).
     ( __emit_rt_decl syms `declare void @nurl_closure_send_check(i8*, i8*) "nurl.raw"="1"` )
-    ( __emit_rt_decl syms `declare void @nurl_send_check_fail(i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_sendck_begin() "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare i32 @nurl_sendck_visit(i8*, i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_sendck_end(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_closure_adopt(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own_copy(i8*) "nurl.raw"="1"` )
@@ -60482,7 +60490,11 @@ unsafe @ __fold_byte i p → i {
 
 // A runtime / external function that can start a panic on this thread.
 unsafe @ __mp_runtime_panics s nm i p i le → b {
-    ? ( seq nm `nurl_panic` ) { ^ T } {}
+    // (`nurl_panic_index`: an index past the end; `nurl_sendck_end`: a
+    // thread crossing that leaves an owner behind; `nurl_cpu_*_missing`: a
+    // tier the CPU lacks.)
+    ? | | ( seq nm `nurl_panic` ) ( seq nm `nurl_panic_index` ) ( seq nm `nurl_sendck_end` ) { ^ T } {}
+    ? & != 0 ( nurl_str_starts nm `nurl_cpu_` ) != 0 ( nurl_str_ends nm `_missing` ) { ^ T } {}
     // An RwLocked taken by a thread that already holds it for writing.
     ? != 0 ( nurl_str_starts nm `nurl_rwlock_` ) { ^ | ( seq nm `nurl_rwlock_rdlock` ) ( seq nm `nurl_rwlock_wrlock` ) } {}
     // Drop / clone walks that call a thunk; with no thunk they cannot.

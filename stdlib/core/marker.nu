@@ -33,7 +33,7 @@
 // changed by two threads with no lock. No type says how many copies a
 // value has, so the crossing asks at run time: `( mem_send_check [T] x
 // what )`, in thread_spawn, spawn, chan_send and a Locked's operations,
-// panics unless every such handle x reaches has one owner
+// panics unless x carries every owner of each such handle it reaches
 // (docs/MEMORY.md §6.5).
 //
 // The derivation has three levels, worst-wins across the graph:

@@ -161,9 +161,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph: fields, payloads, `Vec` elements, a container's contents through
   its new `S_sendck` hook (`HashMap`, `Set`, `Deque`, `BTree`, `Box`), a
   closure's captures through a new slot of its environment's descriptor,
-  and a handle's state. It panics, naming the crossing and the handle,
-  unless every such handle's counted block has exactly one owner. It
-  compiles to nothing for a T that reaches none. `thread_spawn`,
+  and a handle's state. It counts how many places in the value hold each
+  such handle's counted block, and panics, naming the crossing and the
+  handle, if a block has more owners than that. Several owners of one
+  state that all go along cross, such as a node's transport and the job
+  node beside it holding a share of it. It compiles to nothing for a T
+  that reaches none. `thread_spawn`,
   `thread_spawn_owned`, `spawn`, `spawn_owned`, `spawn_joinable`,
   `chan_send`, a pool taking a value back, and every `Locked` operation
   that lets a value in or out call it. The checker closes the rest at
