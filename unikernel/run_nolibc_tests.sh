@@ -134,6 +134,7 @@ one() {
             cpu-aes)     host_has_cpu_aes     || { echo "SKIP $name (requires $tok)"; return 0; } ;;
             cpu-vaes)    host_has_cpu_vaes    || { echo "SKIP $name (requires $tok)"; return 0; } ;;
             cpu-vaes512) host_has_cpu_vaes512 || { echo "SKIP $name (requires $tok)"; return 0; } ;;
+            cpu-ifma)    host_has_cpu_ifma    || { echo "SKIP $name (requires $tok)"; return 0; } ;;
         esac
     done
 

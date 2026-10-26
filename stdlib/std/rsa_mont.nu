@@ -12,7 +12,9 @@
 // interleaved, one widening multiply and one add-with-carry chain into a
 // register accumulator per limb product, and a dedicated squaring — or,
 // on a CPU with ADX, rows of nurl_mac_row with two carry chains in
-// flight; exponentiation is a fixed 4-bit window whose table entry is
+// flight — and on one with AVX-512 IFMA the two halves of an RSA-2048
+// CRT signature run at once in radix 2^52 (below, docs/adr/0002-ifma-
+// rsa.md); exponentiation is a fixed 4-bit window whose table entry is
 // picked by scanning all sixteen under a mask. For a given
 // modulus size every operation runs the same instruction sequence whatever
 // the key and the message: no branch and no memory index depends on a
@@ -53,7 +55,12 @@ $ `stdlib/std/random.nu`
 // Montgomery form. Built once per modulus and never written after: a
 // prepared key (RsaKey, below) holds its two and every thread signing
 // with it reads them at once.
-: RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one }
+//
+// A 1024-bit modulus (n = 16, the factors of an RSA-2048 key) also
+// carries its radix-2^52 form for the IFMA tier (below): m52, the
+// modulus as 20 limbs of 52 bits, and rr52, R'^2 mod m with R' = 2^1040,
+// in the same limbs. Empty for any other width.
+: RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one ( Vec i ) m52 ( Vec i ) rr52 }
 
 // The scratch a multiply works in — accumulator t, 2n + 1 limbs (the row
 // form's product); difference d, n limbs — one per operation, so a shared
@@ -179,9 +186,10 @@ $ `stdlib/std/random.nu`
 // FIPS is the faster form (16 limbs: square 245 against 361 ns), so
 // FIPS stays the kernel of every other CPU and target — chosen per
 // call on the runtime's answer, both forms held to the same golden by
-// crypto_tier_ir.sh. What remains to aws-lc's 0.25 ms on this CPU is not
+// crypto_tier_ir.sh. What remained to aws-lc on this CPU was not
 // scalar: aws-lc signs with AVX-512 IFMA (rsaz_amm52x20_x2_ifma256, both
-// CRT halves in one 52-bit-radix vector multiply).
+// CRT halves in one 52-bit-radix vector multiply) — and so, on such a
+// CPU, does __rm_pow2_52 below.
 
 // (z0, z1, z2) += x·y
 inline @ __rm_acc inout u64 z0 inout u64 z1 inout u64 z2 u64 x u64 y → v {
@@ -1814,7 +1822,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     : ~ i it 0
     ~ < it 6 { = x * x - 2 * m0 x = it + it 1 }
     : i n0 # i - 0 x
-    : RsaMont c @ RsaMont { n m n0 ( __rm_zeros n ) ( __rm_zeros n ) }
+    : b r52 == n 16
+    : RsaMont c @ RsaMont { n m n0 ( __rm_zeros n ) ( __rm_zeros n ) ( __rm_zeros ? r52 20 0 ) ( __rm_zeros ? r52 20 0 ) }
     : RsaTmp w ( _rm_tmp c )
     // R^2 mod m. 64n = s·2^h with s odd: double 1 up to 2^(64n + s) mod m
     // — that is 2^s in Montgomery form — then h Montgomery squarings take
@@ -1832,6 +1841,15 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     : ( Vec i ) one1 ( __rm_zeros n )
     ( vec_put [i] one1 0 1 )
     ( _rm_mul_d c w . c one . c r2 one1 )
+    // The IFMA tier's R'^2 = 2^2080 mod m: R^2 = 2^2048 doubled 32 times.
+    ? r52 {
+        : ( Vec i ) x ( __rm_zeros n )
+        ( __rm_copy_d x . c r2 n )
+        = k 0
+        ~ < k 32 { ( __rm_dbl_d c w x ) = k + k 1 }
+        ( __rm_to52 ( vec_data [i] . c m ) n ( vec_data [i] . c m52 ) )
+        ( __rm_to52 ( vec_data [i] x ) n ( vec_data [i] . c rr52 ) )
+    } {}
     ^ c
 }
 
@@ -1960,6 +1978,286 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     ^ == diff 0
 }
 
+// ── the IFMA tier: both CRT halves at once, radix 2^52 ──────────────
+//
+// On a CPU with AVX-512 IFMA (nurl_cpu_has_ifma: Ice Lake, Zen 4 and
+// later) the two 1024-bit exponentiations of an RSA-2048 signature run
+// in lockstep on nurl_v256_madd52lo / _hi, each operand 20 limbs of 52
+// bits in five v256 registers. A VPMADD52 adds the low or high 52 bits
+// of four limb products to four 64-bit lanes and carries nothing: each
+// lane has 12 bits of headroom, so a whole multiply accumulates with no
+// carry chain at all and is normalised once at the end — where the
+// scalar forms above serialise every product on a carry.
+//
+// The multiply is an almost Montgomery multiply (AMM): for a, b < 2m
+// and 4m < R' = 2^1040 it answers a·b·R'^-1 mod m, below 2m but not
+// reduced. Operand scanning, one limb b_i of b at a time:
+//   r += a·b_i (low halves) ; y = r_0·k0 mod 2^52 ; r += m·y (low)
+//   r /= 2^52 — exact: r_0 ≡ 0 — one limb down the registers
+//   r += a·b_i, m·y (high halves, which belong one limb up: now here)
+// r_0, y and the carry out of limb 0 are scalar; nothing in the loop
+// depends on a secret but the values. Two independent multiplies are
+// interleaved, the p half and the q half: the scalar step of one hides
+// in the other's vector latency. Measured on an i7-11850H, a 1024-bit
+// AMM costs 88 ns this way against 203 ns for the ADX rows.
+//
+// Exponentiation keeps the fixed 4-bit window and the masked scan of
+// all sixteen table entries; values stay in the AMM domain (x·R' mod m,
+// below 2m) from entry to exit, and only the result is reduced. Moduli
+// of other widths and CPUs without IFMA take _rm_pow_ct.
+
+// n 64-bit limbs → 20 limbs of 52 bits (the low 1040 bits).
+unsafe @ __rm_to52 * i src i n * i dst → v {
+    : u64 m52 0xfffffffffffff
+    : ~ i j 0
+    ~ < j 20 {
+        : i bit * j 52
+        : i w >> bit 6
+        : u64 sh # u64 & bit 63
+        : ~ u64 v 0
+        ? < w n { = v >> # u64 . src w sh } {}
+        ? & > sh 12 < + w 1 n { = v | v << # u64 . src + w 1 - 64 sh } {}
+        = . dst j # i & v m52
+        = j + j 1
+    }
+}
+
+// 20 normalised limbs of 52 bits → n 64-bit limbs.
+unsafe @ __rm_from52 * i src * i dst i n → v {
+    : ~ u64 acc 0
+    : ~ u64 have 0
+    : ~ i o 0
+    : ~ i k 0
+    ~ < k n { = . dst k 0 = k + k 1 }
+    = k 0
+    ~ < k 20 {
+        : u64 x # u64 . src k
+        = acc | acc << x have
+        = have + have 52
+        ? >= have 64 {
+            ? < o n { = . dst o # i acc } {}
+            = o + o 1
+            = have - have 64
+            = acc >> x - 52 have
+        } {}
+        = k + k 1
+    }
+    ? < o n { = . dst o # i acc } {}
+}
+
+// One register block of the low or high half: r += a·bv + m·yv, block k.
+inline unsafe @ __rm_a52lo inout v256 r * i a * i m i k v256 bv v256 yv → v {
+    : i off * k 32
+    = r ( nurl_v256_madd52lo ( nurl_v256_madd52lo r ( nurl_v256_ld # s + # i a off ) bv ) ( nurl_v256_ld # s + # i m off ) yv )
+}
+
+inline unsafe @ __rm_a52hi inout v256 r * i a * i m i k v256 bv v256 yv → v {
+    : i off * k 32
+    = r ( nurl_v256_madd52hi ( nurl_v256_madd52hi r ( nurl_v256_ld # s + # i a off ) bv ) ( nurl_v256_ld # s + # i m off ) yv )
+}
+
+// The registers r0..r4 as 20 normalised limbs at rp: each lane's bits
+// above 52 carried into the next. The value is below 2m < 2^1025, so
+// nothing leaves limb 19.
+inline unsafe @ __rm_a52_out * i rp v256 g0 v256 g1 v256 g2 v256 g3 v256 g4 → v {
+    ( nurl_v256_st # s rp g0 )
+    ( nurl_v256_st # s + # i rp 32 g1 )
+    ( nurl_v256_st # s + # i rp 64 g2 )
+    ( nurl_v256_st # s + # i rp 96 g3 )
+    ( nurl_v256_st # s + # i rp 128 g4 )
+    : u64 m52 0xfffffffffffff
+    : ~ u64 c 0
+    : ~ i j 0
+    ~ < j 20 {
+        : u64 x + # u64 . rp j c
+        = . rp j # i & x m52
+        = c >> x 52
+        = j + j 1
+    }
+}
+
+// rp = AMM(ap, bp) mod mp and sp = AMM(cp, dp) mod np, 20 limbs each
+// (k1, k2: −m^-1 mod 2^52). rp may be ap or bp, sp cp or dp: the
+// operands are read in the loop, the results written after it.
+inline unsafe @ __rm_amm52x2 * i rp * i ap * i bp * i mp u64 k1 * i sp * i cp * i dp * i np u64 k2 → v {
+    : u64 m52 0xfffffffffffff
+    : v256 z ( nurl_v256_zero )
+    : ~ v256 r0 z : ~ v256 r1 z : ~ v256 r2 z : ~ v256 r3 z : ~ v256 r4 z
+    : ~ v256 s0 z : ~ v256 s1 z : ~ v256 s2 z : ~ v256 s3 z : ~ v256 s4 z
+    : u64 a0 # u64 . ap 0
+    : u64 m0 # u64 . mp 0
+    : u64 c0 # u64 . cp 0
+    : u64 n0 # u64 . np 0
+    : ~ u64 x0 0
+    : ~ u64 w0 0
+    : ~ i ix 0
+    ~ < ix 20 {
+        : u64 bi # u64 . bp ix
+        : u64 di # u64 . dp ix
+        : u64 t + x0 & * a0 bi m52
+        : u64 u + w0 & * c0 di m52
+        : u64 y & * t k1 m52
+        : u64 q & * u k2 m52
+        : u64 cy >> + t & * m0 y m52 52
+        : u64 cq >> + u & * n0 q m52 52
+        : v256 bv ( nurl_v256_bcast64 bi )
+        : v256 yv ( nurl_v256_bcast64 y )
+        : v256 dv ( nurl_v256_bcast64 di )
+        : v256 qv ( nurl_v256_bcast64 q )
+        ( __rm_a52lo r0 ap mp 0 bv yv ) ( __rm_a52lo s0 cp np 0 dv qv )
+        ( __rm_a52lo r1 ap mp 1 bv yv ) ( __rm_a52lo s1 cp np 1 dv qv )
+        ( __rm_a52lo r2 ap mp 2 bv yv ) ( __rm_a52lo s2 cp np 2 dv qv )
+        ( __rm_a52lo r3 ap mp 3 bv yv ) ( __rm_a52lo s3 cp np 3 dv qv )
+        ( __rm_a52lo r4 ap mp 4 bv yv ) ( __rm_a52lo s4 cp np 4 dv qv )
+        // one limb down; limb 0's carry (scalar, above) into the new 0
+        = r0 ( nurl_v256_add64 ( nurl_v256_shrlane64 r0 r1 ) ( nurl_v256_set64 cy 0 0 0 ) )
+        = r1 ( nurl_v256_shrlane64 r1 r2 )
+        = r2 ( nurl_v256_shrlane64 r2 r3 )
+        = r3 ( nurl_v256_shrlane64 r3 r4 )
+        = r4 ( nurl_v256_shrlane64 r4 z )
+        = s0 ( nurl_v256_add64 ( nurl_v256_shrlane64 s0 s1 ) ( nurl_v256_set64 cq 0 0 0 ) )
+        = s1 ( nurl_v256_shrlane64 s1 s2 )
+        = s2 ( nurl_v256_shrlane64 s2 s3 )
+        = s3 ( nurl_v256_shrlane64 s3 s4 )
+        = s4 ( nurl_v256_shrlane64 s4 z )
+        ( __rm_a52hi r0 ap mp 0 bv yv ) ( __rm_a52hi s0 cp np 0 dv qv )
+        ( __rm_a52hi r1 ap mp 1 bv yv ) ( __rm_a52hi s1 cp np 1 dv qv )
+        ( __rm_a52hi r2 ap mp 2 bv yv ) ( __rm_a52hi s2 cp np 2 dv qv )
+        ( __rm_a52hi r3 ap mp 3 bv yv ) ( __rm_a52hi s3 cp np 3 dv qv )
+        ( __rm_a52hi r4 ap mp 4 bv yv ) ( __rm_a52hi s4 cp np 4 dv qv )
+        = x0 ( nurl_v256_get64 r0 0 )
+        = w0 ( nurl_v256_get64 s0 0 )
+        = ix + ix 1
+    }
+    ( __rm_a52_out rp r0 r1 r2 r3 r4 )
+    ( __rm_a52_out sp s0 s1 s2 s3 s4 )
+}
+
+// sel = the table entry `dig` of 16 (20 limbs each), by a masked scan of
+// all sixteen.
+inline unsafe @ __rm_sel52 * i tb u64 dig * i sel → v {
+    : v256 z ( nurl_v256_zero )
+    : ~ v256 o0 z : ~ v256 o1 z : ~ v256 o2 z : ~ v256 o3 z : ~ v256 o4 z
+    : ~ i k 0
+    ~ < k 16 {
+        // all-ones exactly when k == dig, without a branch
+        : u64 dz - ^^ # u64 k dig 1
+        : v256 mv ( nurl_v256_bcast64 - 0 >> dz 63 )
+        : i e + # i tb * k 160
+        = o0 ( nurl_v256_or o0 ( nurl_v256_and mv ( nurl_v256_ld # s e ) ) )
+        = o1 ( nurl_v256_or o1 ( nurl_v256_and mv ( nurl_v256_ld # s + e 32 ) ) )
+        = o2 ( nurl_v256_or o2 ( nurl_v256_and mv ( nurl_v256_ld # s + e 64 ) ) )
+        = o3 ( nurl_v256_or o3 ( nurl_v256_and mv ( nurl_v256_ld # s + e 96 ) ) )
+        = o4 ( nurl_v256_or o4 ( nurl_v256_and mv ( nurl_v256_ld # s + e 128 ) ) )
+        = k + k 1
+    }
+    ( nurl_v256_st # s sel o0 )
+    ( nurl_v256_st # s + # i sel 32 o1 )
+    ( nurl_v256_st # s + # i sel 64 o2 )
+    ( nurl_v256_st # s + # i sel 96 o3 )
+    ( nurl_v256_st # s + # i sel 128 o4 )
+}
+
+// x1^e1 mod m1 and x2^e2 mod m2 at once, for two 1024-bit moduli with
+// their radix-2^52 forms: x1, x2 plain (16 limbs, below their modulus),
+// e1, e2 SECRET exponents of en limbs each; the results plain and fully
+// reduced into o1, o2 (16 limbs).
+unsafe simd @ __rm_pow2_52 RsaMont c1 RsaMont c2 * i x1 * i x2 * i e1 * i e2 i en * i o1 * i o2 → v {
+    : *i m1 ( vec_data [i] . c1 m52 )
+    : *i m2 ( vec_data [i] . c2 m52 )
+    : *i rr1 ( vec_data [i] . c1 rr52 )
+    : *i rr2 ( vec_data [i] . c2 rr52 )
+    : u64 k1 & # u64 . c1 n0 0xfffffffffffff
+    : u64 k2 & # u64 . c2 n0 0xfffffffffffff
+    // two tables of 16 entries, then acc, sel and a scratch 1, per half
+    : ( Vec i ) buf ( __rm_zeros * 2 * 19 20 )
+    : *i t1 ( vec_data [i] buf )
+    : *i t2 # *i + # i t1 * 8 320
+    : *i a1 # *i + # i t2 * 8 320
+    : *i a2 # *i + # i a1 160
+    : *i s1 # *i + # i a2 160
+    : *i s2 # *i + # i s1 160
+    : *i u1 # *i + # i s2 160
+    : *i u2 # *i + # i u1 160
+    // entry 1 = x·R' (x·R'^2·R'^-1); entry 0 = R' mod m (1·R'^2·R'^-1)
+    ( __rm_to52 x1 16 s1 )
+    ( __rm_to52 x2 16 s2 )
+    : *i t11 # *i + # i t1 160
+    : *i t21 # *i + # i t2 160
+    ( __rm_amm52x2 t11 s1 rr1 m1 k1 t21 s2 rr2 m2 k2 )
+    = . u1 0 1
+    = . u2 0 1
+    ( __rm_amm52x2 t1 u1 rr1 m1 k1 t2 u2 rr2 m2 k2 )
+    : ~ i wi 2
+    ~ < wi 16 {
+        : i off * wi 160
+        : i prev - off 160
+        ( __rm_amm52x2 # *i + # i t1 off # *i + # i t1 prev t11 m1 k1 # *i + # i t2 off # *i + # i t2 prev t21 m2 k2 )
+        = wi + wi 1
+    }
+    : ~ i j 0
+    ~ < j 20 { = . a1 j . t1 j = . a2 j . t2 j = j + j 1 }
+    : ~ i li - en 1
+    ~ >= li 0 {
+        : u64 l1 # u64 . e1 li
+        : u64 l2 # u64 . e2 li
+        : ~ i nib 15
+        ~ >= nib 0 {
+            ( __rm_amm52x2 a1 a1 a1 m1 k1 a2 a2 a2 m2 k2 )
+            ( __rm_amm52x2 a1 a1 a1 m1 k1 a2 a2 a2 m2 k2 )
+            ( __rm_amm52x2 a1 a1 a1 m1 k1 a2 a2 a2 m2 k2 )
+            ( __rm_amm52x2 a1 a1 a1 m1 k1 a2 a2 a2 m2 k2 )
+            : u64 sh # u64 * nib 4
+            ( __rm_sel52 t1 & >> l1 sh 15 s1 )
+            ( __rm_sel52 t2 & >> l2 sh 15 s2 )
+            ( __rm_amm52x2 a1 a1 s1 m1 k1 a2 a2 s2 m2 k2 )
+            = nib - nib 1
+        }
+        = li - li 1
+    }
+    // out of the domain: AMM(acc, 1) = acc·R'^-1, at most m
+    ( __rm_amm52x2 s1 a1 u1 m1 k1 s2 a2 u2 m2 k2 )
+    ( __rm_from52 s1 o1 16 )
+    ( __rm_from52 s2 o2 16 )
+    ( __rm_reduce_once o1 ( vec_data [i] . c1 m ) )
+    ( __rm_reduce_once o2 ( vec_data [i] . c2 m ) )
+}
+
+// x1^e1 mod m1 and x2^e2 mod m2 for SECRET exponents (en1 and en2
+// limbs), bases and results plain and below their modulus, into o1 and
+// o2: the two halves of a CRT signature. On the IFMA tier with two
+// 1024-bit moduli both at once (__rm_pow2_52), else one after the other
+// by _rm_pow_ct — the same answers, which rsa_pow2_agree holds both to.
+@ _rm_pow2_ct RsaMont c1 RsaTmp w1 ( Vec i ) x1 ( Vec i ) e1 i en1 RsaMont c2 RsaTmp w2 ( Vec i ) x2 ( Vec i ) e2 i en2 ( Vec i ) o1 ( Vec i ) o2 → v {
+    ? & & & ( nurl_cpu_has_ifma ) == en1 en2 > ( vec_len [i] . c1 m52 ) 0 > ( vec_len [i] . c2 m52 ) 0 {
+        ( __rm_pow2_52 c1 c2 ( vec_data [i] x1 ) ( vec_data [i] x2 ) ( vec_data [i] e1 ) ( vec_data [i] e2 ) en1 ( vec_data [i] o1 ) ( vec_data [i] o2 ) )
+        ^ v
+    } {}
+    : ( Vec i ) r1 ( _rm_leave c1 w1 ( _rm_pow_ct c1 w1 ( _rm_enter c1 w1 x1 . c1 n ) e1 en1 ) )
+    : ( Vec i ) r2 ( _rm_leave c2 w2 ( _rm_pow_ct c2 w2 ( _rm_enter c2 w2 x2 . c2 n ) e2 en2 ) )
+    ( __rm_copy_d o1 r1 . c1 n )
+    ( __rm_copy_d o2 r2 . c2 n )
+}
+
+// x (16 limbs, at most m) → x mod m: subtract m when x ≥ m, by mask.
+unsafe @ __rm_reduce_once * i xp * i mp → v {
+    : ( Vec i ) d ( __rm_zeros 16 )
+    : *i dp ( vec_data [i] d )
+    : ~ u64 bb 0
+    : ~ i j 0
+    ~ < j 16 {
+        : u64 x # u64 . xp j
+        : u64 y # u64 . mp j
+        = . dp j # i ( nurl_subb_lo x y bb )
+        = bb ( nurl_subb_hi x y bb )
+        = j + j 1
+    }
+    // no borrow: x ≥ m, keep the difference
+    : i keep - # i bb 1
+    = j 0
+    ~ < j 16 { = . xp j | & keep . dp j & ^^ keep - 0 1 . xp j = j + j 1 }
+}
+
 // ── prepared private key ────────────────────────────────────────────
 //
 // n and e as big-endian bytes (the signature length, and the fault check's
@@ -1981,7 +2279,7 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     ( Vec i ) ql
 }
 
-@ __rm_ctx_none → RsaMont { ^ @ RsaMont { 0 ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) } }
+@ __rm_ctx_none → RsaMont { ^ @ RsaMont { 0 ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) } }
 
 @ __rm_copy_bytes ( Vec u ) b → ( Vec u ) { ^ ( bytes_slice b 0 ( vec_len [u] b ) ) }
 
@@ -2047,9 +2345,11 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
     : ( Vec i ) mq ( _rm_enter cq wq msg msgn )
     : ( Vec i ) ep ( __rm_blind_exp . key dp cp )
     : ( Vec i ) eq ( __rm_blind_exp . key dq cq )
-    : ( Vec i ) sp ( _rm_pow_ct cp wp mp ep + np 1 )  // Montgomery form mod p
-    : ( Vec i ) sqm ( _rm_pow_ct cq wq mq eq + nq 1 )
-    : ( Vec i ) sq ( _rm_leave cq wq sqm )  // plain, < q
+    // both halves' powers, plain: s_p < p, s_q < q
+    : ( Vec i ) spl ( __rm_zeros np )
+    : ( Vec i ) sq ( __rm_zeros nq )
+    ( _rm_pow2_ct cp wp ( _rm_leave cp wp mp ) ep + np 1 cq wq ( _rm_leave cq wq mq ) eq + nq 1 spl sq )
+    : ( Vec i ) sp ( _rm_enter cp wp spl np )  // Montgomery form mod p
     // Garner: h = (s_p − s_q)·q^-1 mod p ; s = s_q + q·h
     : ( Vec i ) sqp ( _rm_enter cp wp sq nq )
     : ( Vec i ) diff ( __rm_zeros np )

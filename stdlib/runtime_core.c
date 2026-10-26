@@ -3950,12 +3950,19 @@ long long nurl_umulhi(long long a, long long b) {
  * flight instead of one. General-purpose registers only, so there is no
  * OS state to check; Broadwell and later Intel, Zen and later AMD.
  *
- * Six environment variables can only ever take an answer AWAY, never
+ * And the IFMA tier (nurl_cpu_x86_ifma): x86-64-v4 plus AVX-512 IFMA
+ * (VPMADD52LUQ / VPMADD52HUQ), for the nurl_v256_madd52* primitives —
+ * a radix-2^52 multiply-accumulate, four limbs per instruction, that
+ * std/rsa_mont's Montgomery multiply runs on. Not on the AES chain
+ * either: Cannon Lake has IFMA without VAES.
+ *
+ * Seven environment variables can only ever take an answer AWAY, never
  * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
  * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
  * nurl_cpu_x86_vaes, NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 and
  * NURL_CPU_SHA=0 for nurl_cpu_x86_sha, NURL_CPU_ADX=0 for
- * nurl_cpu_x86_adx (and each tier goes with any it
+ * nurl_cpu_x86_adx, NURL_CPU_IFMA=0 for nurl_cpu_x86_ifma (and each
+ * tier goes with any it
  * contains). They exist so
  * one machine can run every clone and every fallback a marked function
  * has — the baseline clone, the AES clone without AVX2, the software
@@ -3967,6 +3974,7 @@ static int nurl__cpu_vaes = -1;
 static int nurl__cpu_vaes512 = -1;
 static int nurl__cpu_sha = -1;
 static int nurl__cpu_adx = -1;
+static int nurl__cpu_ifma = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -4096,6 +4104,16 @@ static void nurl__cpu_detect(void) {
     if (nurl__cpu_env_off("NURL_CPU_VAES")) vaes = 0;
     int vaes512 = vaes && nurl__cpu_avx512_bits();
     if (nurl__cpu_env_off("NURL_CPU_VAES512")) vaes512 = 0;
+    /* IFMA: x86-64-v4 (the same AVX-512 and XCR0 bits, asked only
+     * after v3 — as above) plus leaf-7 EBX AVX512_IFMA (21). */
+    int ifma = 0;
+    if (nurl__cpu_v3 && nurl__cpu_avx512_bits()) {
+        unsigned r[4];
+        nurl__cpuid(7, 0, r);
+        ifma = (r[1] & (1u << 21)) != 0;
+    }
+    if (nurl__cpu_env_off("NURL_CPU_IFMA")) ifma = 0;
+    nurl__cpu_ifma = ifma;
     nurl__cpu_aes = aes;
     nurl__cpu_vaes = vaes;
     nurl__cpu_vaes512 = vaes512;
@@ -4167,11 +4185,12 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
     nurl__cpu_sha = 0;
     nurl__cpu_adx = 0;
+    nurl__cpu_ifma = 0;
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; nurl__cpu_adx = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; nurl__cpu_adx = 0; nurl__cpu_ifma = 0; }
 
 #endif
 
@@ -4249,6 +4268,24 @@ int nurl_cpu_x86_sha(void) {
 int nurl_cpu_x86_adx(void) {
     if (nurl__cpu_adx < 0) nurl__cpu_detect();
     return nurl__cpu_adx;
+}
+
+/* Does this CPU have the IFMA tier — x86-64-v4 (AVX-512 F/BW/CD/DQ/VL,
+ * with the OS saving ZMM state) + AVX-512 IFMA, the feature set of every
+ * function that uses a nurl_v256_madd52* primitive? Cannon Lake, Ice
+ * Lake and later Intel with AVX-512, Zen 4 and later AMD. `readnone` to
+ * nurlc, like the AES answer. NURL_CPU_IFMA=0 takes it away, and so does
+ * NURL_CPU_V3=0. */
+int nurl_cpu_x86_ifma(void) {
+    if (nurl__cpu_ifma < 0) nurl__cpu_detect();
+    return nurl__cpu_ifma;
+}
+
+/* The IFMA tier's gate failure. */
+void nurl_cpu_ifma_missing(void) {
+    nurl_panic("this function needs AVX-512 IFMA (x86-64-v4 + AVX512_IFMA), "
+               "which this CPU lacks; check nurl_cpu_has_ifma before calling it");
+    abort();
 }
 
 /* The SHA tier's gate failure, as nurl_cpu_aes_missing is the AES

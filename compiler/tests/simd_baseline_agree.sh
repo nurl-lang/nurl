@@ -105,8 +105,11 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 # the software cipher — and both must print the same answers. The
 # four-block Poly1305 (__poly_wide) is driven by the AEAD length sweep:
 # the `on` leg runs it from 256 bytes of MAC input, the `off` leg runs
-# the scalar blocks throughout, against one golden.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep)
+# the scalar blocks throughout, against one golden. RSA's IFMA kernel
+# (__rm_pow2_52, one body of the IFMA tier) is driven by
+# rsa_pow2_agree: the `on` leg runs it on an IFMA CPU, the `off` leg
+# the scalar exponentiation, against one golden.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep rsa_pow2_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the
@@ -154,16 +157,26 @@ build_leg() {  # build_leg <test> <leg: on|off>
         -lm -lpthread $DL_LIB 2> "$WORK/$name.$leg.lerr" || return 1
 }
 
-# What only a wide clone can contain, counted inside the bodies of the
-# .x86v3 symbols: ymm registers, and the crypto tier's AES and
-# carry-less-multiply instructions (an AES kernel is all xmm, and its
-# `off` leg has no tier at all). The baseline build has no such
-# symbols, so its count is 0 by construction — which is why the
-# whole-binary count is checked for it instead.
-WIDE_RE='ymm|aesenc|aesdec|pclmul'
-ymm_in_wide() {
+# What only a wide body can contain, counted inside the .x86v3 clones
+# and the one-body tier functions (a `simd` function that reaches a
+# VAES or the IFMA tier has no clones: tier_bodies names them from the
+# IR): ymm registers, and the crypto tiers' AES, carry-less-multiply and
+# IFMA instructions (an AES kernel is all xmm, and its `off` leg has no
+# tier at all). The baseline build has no such symbols, so its count is
+# 0 by construction — which is why the whole-binary count is checked
+# for it instead.
+WIDE_RE='ymm|aesenc|aesdec|pclmul|vpmadd52'
+TIER_RE='\+(vaes|avx512ifma)'
+tier_bodies() {  # tier_bodies <ll>: names of one-body tier functions
+    grep -E "^define .*@[^(]+\(.*$TIER_RE" "$1" | grep -vE '\.(tier|vabi)\(' |
+        sed -E 's/^define [^@]*@([^(]+)\(.*/\1/'
+}
+ymm_in_wide() {  # ymm_in_wide <binary> <ll>
+    local names
+    names=$(tier_bodies "$2" | paste -sd'|' -)
     objdump -d "$1" 2>/dev/null |
-        awk '/^[0-9a-f]+ <[^>]*\.x86v3>:/{p=1} /^$/{p=0} p' | grep -cE "$WIDE_RE"
+        awk -v t="^[0-9a-f]+ <(${names:-^})>:" '/^[0-9a-f]+ <[^>]*\.x86v3>:/ || $0 ~ t {p=1} /^$/{p=0} p' |
+        grep -cE "$WIDE_RE"
 }
 
 have_objdump=1
@@ -200,9 +213,9 @@ for name in "${DRIVERS[@]}"; do
     # baseline build carries none anywhere, because nurlc emits no
     # target triple and clang's default x86-64 has no AVX.
     if (( have_objdump )); then
-        w=$(ymm_in_wide "$WORK/$name.on")
+        w=$(ymm_in_wide "$WORK/$name.on" "$WORK/$name.on.ll")
         b=$(objdump -d "$WORK/$name.off" 2>/dev/null | grep -cE "$WIDE_RE")
-        n_clone=$(grep -cE '^define .*\.x86v3\(' "$WORK/$name.on.ll")
+        n_clone=$(( $(grep -cE '^define .*\.x86v3\(' "$WORK/$name.on.ll") + $(tier_bodies "$WORK/$name.on.ll" | grep -c .) ))
         n_off=$(grep -cE '^define .*(\.base|\.x86v3)\(' "$WORK/$name.off.ll")
         if (( w > 0 && b == 0 && n_clone > 0 && n_off == 0 )); then
             ok "$name: the two legs are different code" \
@@ -257,9 +270,10 @@ else
             if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*\.x86v3\(" "$WORK/$name.on.ll"; then
                 found=1; break
             fi
-            # A marked function that reaches a VAES tier has one body,
-            # for that tier (it contains x86-64-v3): no clones to pair.
-            if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*(\.vabi)?\(.*\+vaes" "$WORK/$name.on.ll"; then
+            # A marked function that reaches a VAES or the IFMA tier has
+            # one body, for that tier (it contains x86-64-v3): no clones
+            # to pair.
+            if grep -qE "^define .*@__nurl_fn\.${fn}[a-z0-9_]*(\.vabi)?\(.*$TIER_RE" "$WORK/$name.on.ll"; then
                 found=1; break
             fi
         done

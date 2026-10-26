@@ -961,6 +961,7 @@ Ice Lake / Zen 3 and later CPUs have:
 | VAES (2) | `nurl_v256_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` | x86-64-v3 + AES + PCLMUL + VAES + VPCLMULQDQ | `nurl_cpu_has_vaes()` |
 | AVX-512 VAES (3) | the same as `nurl_v512_*` (§4.1d) | x86-64-v4 + the VAES tier's | `nurl_cpu_has_vaes512()` |
 | SHA | `nurl_v128_sha256rnds2(cdgh, abef, wk)`, `_sha256msg1(a, b)`, `_sha256msg2(a, b)` | x86-64-v2 + SHA | `nurl_cpu_has_sha()` |
+| IFMA | `nurl_v256_madd52lo(acc, a, b)`, `_madd52hi(acc, a, b)` | x86-64-v4 + AVX-512 IFMA | `nurl_cpu_has_ifma()` |
 
 `clmul_XY` picks the halves within each lane, as the `v128` form does
 within its one; there is no wide `aesimc` (the instruction has none —
@@ -994,6 +995,34 @@ divide the rounds differently and are not lowered yet).
 `stdlib/std/hash_sha256.nu` runs SHA-224/256 on it where the CPU has it
 (Goldmont, Ice Lake and later Intel, every Zen): about 7× the portable
 rounds.
+
+**The IFMA tier** is AVX-512 IFMA on a ymm register (with AVX-512VL):
+`nurl_v256_madd52lo(acc, a, b)` adds to each 64-bit lane of `acc` the
+low 52 bits of the 104-bit product of the low 52 bits of `a`'s and
+`b`'s lanes, `madd52hi` the 52 bits above them (VPMADD52LUQ /
+VPMADD52HUQ). A number held as 52-bit limbs in 64-bit lanes takes four
+limb products per instruction and keeps every carry in its lane's top
+12 bits until one normalising pass — a multi-precision multiply with no
+carry chain. Like SHA it is on no chain with the AES tiers (Cannon Lake
+has IFMA without VAES); it needs x86-64-v4, so a `simd @` function that
+reaches it is emitted once, for it, as for the VAES tiers.
+`NURL_CPU_IFMA=0` takes it away; on AArch64 and under
+`--no-cpu-dispatch` `nurl_cpu_has_ifma` is a constant false and the
+primitives are stubs. `stdlib/std/rsa_mont.nu` runs the two
+exponentiations of an RSA-2048 CRT signature on it at once, 20 limbs
+each in five registers (an almost Montgomery multiply, radix 2^52):
+0.65 → ~0.27 ms a signature on an i7-11850H, within 1.2× of aws-lc's
+AVX-512 kernel (~0.23 ms). The decision is `docs/adr/0002-ifma-rsa.md`.
+
+A `simd @` function reaches a tier through what it calls ONE call deep:
+a function whose body uses the tier's primitives. An `inline` function
+is not a call in that sense — it becomes part of the body — so one that
+reaches a tier through other inline functions (a kernel written as
+helpers of helpers) counts as the body's own: the whole chain is
+compiled into the one tier body, its helpers' `.tier` copies inlined
+ungated. An ordinary function between them still ends the reach, so a
+software path that asks `nurl_cpu_has_*` before calling the hardware
+one keeps its baseline clone.
 
 **A wide vector crosses a call by pointer when the two sides' features
 differ.** A `v256` travels in one ymm register where a function is
@@ -1133,6 +1162,7 @@ a CPUID probe.
 | 16-bit lanes | `nurl_v256_add16`, `_sub16`, `_mullo16`, `_mulhi16`, `_sra16` |
 | interleave | `nurl_v256_unpacklo32(a, b)`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — within each 128-bit half, as `vpunpck*` |
 | half permute | `nurl_v256_permlo128(a, b)` → low halves of a and b, `_permhi128` → high halves (`vperm2i128`) |
+| lane shift | `nurl_v256_shrlane64(lo, hi)` → lo's lanes 1, 2, 3 and hi's lane 0: the pair hi:lo one 64-bit lane down (`valignq` with AVX-512VL) |
 
 The 64-bit group is what four-way Keccak needs (rotate and xor) and what
 four-way Poly1305 needs (radix-2^26 limbs, one `vpmuludq` a product); the

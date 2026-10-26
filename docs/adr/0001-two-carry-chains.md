@@ -85,7 +85,7 @@ Measurements are on an i7-11850H.
 - **Remaining gap to aws-lc (0.25 ms on this CPU):** the gap is not
   scalar. aws-lc signs with AVX-512 IFMA (`rsaz_amm52x20_x2_ifma256`),
   which runs both CRT halves in one 52-bit-radix vector multiply. Closing
-  it is a vector tier of its own, not more of this one.
+  it is a vector tier of its own, not more of this one: ADR 0002.
 - **Memory traffic:** a row loads and stores `rp` on every row. Kernels
   whose operands fit in registers (P-256's and X25519's four limbs)
   would save that traffic with a fixed-width register form. That is a

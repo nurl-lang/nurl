@@ -45,7 +45,10 @@
 #     cpu-vaes512 runs the AVX-512 VAES tier (nurl_v512_aes*,
 #                 nurl_v512_clmul_*): the VAES tier plus x86-64-v4.
 #                 NURL_CPU_VAES512=0 turns it off.
-#                 Unlike cpu-aes, neither is assumed where the host
+#     cpu-ifma    runs the IFMA tier (nurl_v256_madd52lo / _hi):
+#                 x86-64-v4 with AVX-512 IFMA (Ice Lake / Zen 4 and
+#                 later). NURL_CPU_IFMA=0 turns it off.
+#                 Unlike cpu-aes, none of these is assumed where the host
 #                 cannot be asked: most x86-64 machines lack them.
 #     ktls        hands TLS 1.3 record protection to the kernel (std/tls.nu
 #                 tls_ktls): Linux 6.14+ (KeyUpdate in both directions)
@@ -191,6 +194,7 @@ is_skipped() {
             cpu-aes)  host_has_cpu_aes || { echo skip; return; } ;;
             cpu-vaes) host_has_cpu_vaes || { echo skip; return; } ;;
             cpu-vaes512) host_has_cpu_vaes512 || { echo skip; return; } ;;
+            cpu-ifma) host_has_cpu_ifma || { echo skip; return; } ;;
             ktls)     host_has_ktls || { echo skip; return; } ;;
             live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
             fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
@@ -283,9 +287,17 @@ host_has_cpu_vaes512() {
     host_has_flags avx512f avx512bw avx512cd avx512dq avx512vl
 }
 
+# The `cpu-ifma` requirement: what nurl_cpu_x86_ifma tests — x86-64-v4
+# (AVX2 standing in for the rest of v3, as above) and AVX-512 IFMA. Not
+# on the AES chain.
+host_has_cpu_ifma() {
+    [[ "${NURL_CPU_IFMA:-1}" == "0" || "${NURL_CPU_V3:-1}" == "0" ]] && return 1
+    host_has_flags avx2 avx512f avx512bw avx512cd avx512dq avx512vl avx512ifma
+}
+
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
 export -f is_skipped test_requires test_mode host_has_cpu_aes host_has_ktls \
-    host_cpu_flags host_has_flags host_has_cpu_vaes host_has_cpu_vaes512
+    host_cpu_flags host_has_flags host_has_cpu_vaes host_has_cpu_vaes512     host_has_cpu_ifma
 export NURL_TESTS_DIR NURL_TESTS_ROOT \
        ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

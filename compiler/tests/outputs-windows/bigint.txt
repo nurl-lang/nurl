@@ -24,6 +24,9 @@ OUTPUT
   ok   cmp eq = 0
   ok   cmp -5 vs 3 = -1
   ok   cmp -5 vs -9 = 1
+  ok   modpow 3^(2^40+1) = 135029
+  ok   modpow 3^(2^25+7) = 126715
+  ok   modpow 7^(2^19+5) = 894579
   ok   empty → err
   ok   12a34 → err
   ok   "-" → err
