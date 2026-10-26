@@ -35,11 +35,26 @@ $ `stdlib/std/async.nu`
   FIFO); an idle worker steals the front half of a victim's queue. This
   is deliberately simple — a lock-free deque is unnecessary at the
   scale the runtime currently serves.
+- **Service order.** A worker runs fibers in the order they became
+  runnable. Every push onto a run queue stamps the fiber from one
+  clock; the worker takes the older of its own queue's head and the
+  global queue's head, and a yield re-stamps the fiber behind
+  everything that became runnable meanwhile. So a worker never runs a
+  fiber while an older one waits in its queues: not a spawn ahead of
+  an unparked fiber, not fresh I/O ahead of older I/O. Until agora
+  #113 the local queue simply came first, and on a saturated worker
+  fibers spilled or unparked onto the global queue were overtaken by
+  everything pushed locally after them. tls-bench measured that as
+  handshake p99 at 1.4–4.5× p50 where rustls stayed near 1.3×;
+  `compiler/tests/sched_ready_order` measured the order itself (a
+  reader overtaken by 114 later ones before, none after).
 - **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a
   ready fiber resumes directly on that worker — no queue hop, no
-  cross-thread wake chain, no core migration. Surplus ready fibers are
+  cross-thread wake chain, no core migration. That direct run is for
+  an idle worker only: what a busy worker's poll wakes joins the
+  queues' tails in event order. Surplus ready fibers are
   split: the oldest few stay on the poller's own local queue (warm
   cache, no wake), and anything beyond that bounded share is appended
   to the global FIFO as one pre-linked chain, which every worker
@@ -48,9 +63,11 @@ $ `stdlib/std/async.nu`
   saturation stealing never fires (it needs an empty thief queue), so
   an unbounded local haul would drain a 100-event burst at one core's
   speed — measured as a multi-ms p99. Workers also run a cadence poll
-  (every 16th dispatch) so the epoll instance is drained continuously
-  instead of only when the queues run dry — without it the pool lives
-  in feast-famine cycles. Sockets are registered once per fd lifetime
+  (every 16th dispatch, whatever is queued) so the epoll instance is
+  drained continuously instead of only when the queues run dry. Ready
+  I/O enters the service order when it is polled, so this also bounds
+  how long it waits unpolled; without it the pool lives in
+  feast-famine cycles. Sockets are registered once per fd lifetime
   (`EPOLLIN|EPOLLOUT|EPOLLET`, persistent); readiness edges that
   arrive while a fiber is busy are banked in per-fd ready bits, so
   under load the next wait consumes the bit and skips the park
@@ -151,7 +168,8 @@ over both, on the netpoller's timer heap. The same pass fixed a
 scheduler starvation: a worker whose local queue never emptied — a
 fiber yielding in a loop — never looked at the netpoller or the global
 queue, so timer, I/O and unpark wakes on that worker waited for as long
-as it kept yielding; every 128th dispatch now looks at both first.
+as it kept yielding. (Then every 128th dispatch looked at both first;
+since #113 the cadence poll and the service order cover it.)
 
 `packages/http` exposes this as **`http_app_async n`** — fiber per
 connection, `n` worker pthreads, `0` meaning one per CPU the *process*
