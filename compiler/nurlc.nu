@@ -11861,11 +11861,15 @@ unsafe @ nurl_lex_peek4_type i h → i {
                     : b violated ? inverted ! lacks lacks
                     : s advice ? inverted
                     `That bound demands a type which must NOT cross a thread boundary, and this one may — mark it '% NotSend <Type> { }' / '% NotSync <Type> { }' if it genuinely must not (stdlib/core/marker.nu).`
-                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.`
+                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: `
                     ? violated
                     { : s q1 ( nurl_str_cat4 `type '` ta `' does not satisfy the bound ` ( nurl_str_cat3 tp `: ` bt ) )
                         : s q2 ( nurl_str_cat3 q1 ` on generic '` ( nurl_str_cat fname `'. ` ) )
-                        ( die lex ( nurl_str_cat q2 advice ) ) }
+                        // What the type reaches, and the fix for that: the
+                        // reason a thread boundary would give (an Rc, a
+                        // Cell, a trait object whose trait promises nothing).
+                        ? inverted { ( die lex ( nurl_str_cat q2 advice ) ) }
+                        { ( die lex ( nurl_str_cat3 q2 advice ( __thr_explain ( __thr_check syms ta_llvm want 0 ) ) ) ) } }
                     {} }
                 { ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
                     { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
@@ -38937,6 +38941,37 @@ unsafe @ __thr_peel s lty → s {
     ^ ( nurl_str_cat `%` ( nurl_str_slice lty + at 2 - n + at 2 ) )
 }
 
+// __dyn_trait_of: the trait a trait-object base name spells — `dyn.Peek`
+// (the object type `%dyn.Peek` itself) or `dyn_Peek` (its word inside a
+// generic's mangle, `%Vec__dyn_Peek`) — or "" when `bn` names none. A
+// `dyn_` word is the object only when the rest is a trait, so a struct
+// of the program's own spelled that way stays itself (__dyn_unslug).
+@ __dyn_trait_of s bn → s {
+    : i n ( nurl_str_len bn )
+    ? | < n 5 & == 0 ( nurl_str_starts bn `dyn.` ) == 0 ( nurl_str_starts bn `dyn_` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s tn ( nurl_str_slice bn 4 - n 4 )
+    ? == 0 ( nurl_sym_len2 g_trait_syms tn `__istrait` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ tn
+}
+
+// __trait_has_super: does trait `tname` name `want` among its
+// supertraits at any depth (`% Job [T] : Task`, `% Task [T] : Send`)?
+@ __trait_has_super s tname s want → b {
+    // Owned copies, so the cursor is tracked (see dyn_flat_count).
+    : ~ s work ( nurl_str_cat ( nurl_sym_get2 g_trait_syms tname `__supers` ) `` )
+    : ~ s seen ( nurl_str_cat `` `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s sup ( str_first_word work ) = work ( str_skip_word work )
+        ? & != 0 ( nurl_str_len sup ) ! ( str_contains_word seen sup ) {
+            ? ( seq sup want ) { ^ T } {}
+            = seen ( nurl_str_cat3 seen ` ` sup )
+            : s ss ( nurl_sym_get2 g_trait_syms sup `__supers` )
+            ? != 0 ( nurl_str_len ss ) { = work ( nurl_str_cat3 work ` ` ss ) } {}
+        } {}
+    }
+    ^ F
+}
+
 // __thr_check: "" if `lty` satisfies `want` (0 = Send, 1 = Sync)
 // everywhere in its type graph, else "<TypeName> <kind>".
 @ __thr_check i syms s lty i want i depth → s {
@@ -38963,6 +38998,20 @@ unsafe @ __thr_peel s lty → s {
     { ^ ( nurl_str_cat `` `` ) } {}
     ? & == want 1 ( __thr_marked `Sync##` lty bn )
     { ^ ( nurl_str_cat `` `` ) } {}
+
+    // A trait object. Its box holds whichever type implements the trait,
+    // and the object's type no longer says which: `{ i8*, i8* }` has no
+    // field to walk, and answering from that answered Send and Sync for
+    // an Rc boxed in one (#127). The trait is all there is to go on: a
+    // `: Send` supertrait makes every impl prove Send, `: Sync` Sync
+    // (verify_super_obligations). Without the promise the object stays
+    // on its thread — and, as everywhere in this derivation, what may
+    // not move may not be shared either.
+    : s dtr ( __dyn_trait_of bn )
+    ? != 0 ( nurl_str_len dtr ) {
+        ? ! ( __trait_has_super dtr `Send` ) { ^ ( nurl_str_cat dtr ` dynsend` ) } {}
+        ? & == want 1 ! ( __trait_has_super dtr `Sync` ) { ^ ( nurl_str_cat dtr ` dynsync` ) } {}
+    } {}
 
     // The two built-in leaves.
     ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
@@ -39069,6 +39118,16 @@ unsafe @ __thr_peel s lty → s {
     { ^ ( nurl_str_cat4
         `it reaches '` nm
         `', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync ` ( nurl_str_cat nm ` { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) ) } {}
+    ? ( seq kind `dynsend` )
+    { ^ ( nurl_str_cat4
+        `it reaches a '%` nm
+        ( nurl_str_cat3 `' object, a trait object whose box may hold any type that implements '` nm `' — an 'Rc', a 'Cell' or a handle bound to its thread among them — and the object's type does not say which. ` )
+        ( nurl_str_cat3 `Declare the trait '% ` nm ` [T] : Send { … }': every type implementing it is then checked to be safe to move, and its objects may cross. Or keep the object on the thread that made it.` ) ) } {}
+    ? ( seq kind `dynsync` )
+    { ^ ( nurl_str_cat4
+        `it reaches a '%` nm
+        ( nurl_str_cat3 `' object, which two threads would reach at once: a trait object whose box may hold any type that implements '` nm `' — one not safe to share among them — and the object's type does not say which. ` )
+        ( nurl_str_cat3 `Declare the trait '% ` nm ` [T] : Send Sync { … }': every type implementing it is then checked to be safe to share. Or give each thread its own object.` ) ) } {}
     ? ( seq kind `notsend` )
     { ^ ( nurl_str_cat3
         `it reaches '` nm
@@ -57583,7 +57642,7 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
 // be implemented for the SAME type — the static guarantee that backs `T: Sub ⇒
 // T: Super`, so a bound `[A: Sub]` may freely call any supertrait method on A
 // (dispatch resolves through the supertrait impl that this check proves exists).
-@ verify_super_obligations → v {
+@ verify_super_obligations i syms → v {
     : ~ s rest ( nurl_str_cat g_super_obligations `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s sub ( str_first_word rest )
@@ -57603,16 +57662,38 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
         ~ != 0 ( nurl_str_len sup_rest ) {
             : s sup ( str_first_word sup_rest )
             = sup_rest ( str_skip_word sup_rest )
-            ? == 0 ( nurl_sym_len g_trait_syms
-            ( nurl_str_cat3 sup `##` llvm ) )
-            { ( die_file_pos file line col ( nurl_str_cat
-                ( nurl_str_cat3 `type '` nty `' implements trait '` )
-                ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
-                ( nurl_str_cat3 `' — every '` sub
-                ( nurl_str_cat3 `' type must also implement '` sup
-                ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
-                ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
-            {}
+            // A `: Send` / `: Sync` supertrait is answered by the
+            // derivation, as the bound is (__thr_bound_trait): no impl
+            // block says it. It is the promise that lets the trait's
+            // objects cross a thread boundary (__thr_check), so every
+            // type that can be boxed in one must keep it. (Through a
+            // supertrait that declares it, too: that one's own impl for
+            // this type is parked and checked here as well.)
+            : i thr_q ( __thr_bound_trait sup )
+            ? | == thr_q 0 == thr_q 1 {
+                : s why ( __thr_check syms llvm thr_q 0 )
+                ? != 0 ( nurl_str_len why ) {
+                    : s what ? == thr_q 0
+                    `' object may move to another thread, so every type it can box must be safe to move, and this one is not: `
+                    `' object may be reached from two threads at once, so every type it can box must be safe to share, and this one is not: `
+                    ( die_file_pos file line col ( nurl_str_cat4
+                    ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                    ( nurl_str_cat4 sub `', declared ': ` sup `' — a '%` )
+                    ( nurl_str_cat sub what )
+                    ( __thr_explain why ) ) )
+                } {}
+            } {
+                ? == 0 ( nurl_sym_len g_trait_syms
+                ( nurl_str_cat3 sup `##` llvm ) )
+                { ( die_file_pos file line col ( nurl_str_cat
+                    ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                    ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
+                    ( nurl_str_cat3 `' — every '` sub
+                    ( nurl_str_cat3 `' type must also implement '` sup
+                    ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
+                    ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
+                {}
+            }
         }
     }
 }
@@ -62723,7 +62804,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     ( emit_header syms )
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
-    ( verify_super_obligations )
+    ( verify_super_obligations syms )
     // Dynamic trait objects (docs/spec.md §4.9): collect every trait used as a
     // `%Trait` object (body-aware, after __istrait markers exist) and emit the
     // `%dyn.<T>` fat-pointer type defs + synthesized Drop functions at module

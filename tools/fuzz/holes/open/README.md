@@ -17,7 +17,10 @@ several threads run changing what it captured. `h341`, found on the way,
 is a listener accepted on after its close.
 
 Every other probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent was `h343` — an MCP task
+gate in the parent directory. The most recent was `h344` — a trait
+object (`%Churn`) boxing an `Rc` crossed to a thread, because the
+Send/Sync derivation saw no field inside one (agora #127); before it
+`h343` — an MCP task
 handle (`s`, from `mcp_task_create`) kept past its task, which the
 store's eviction at its cap or a sweep past the TTL freed (agora #124);
 before it `h316` — a call returning

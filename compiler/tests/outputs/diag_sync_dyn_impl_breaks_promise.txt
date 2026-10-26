@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sync_dyn_impl_breaks_promise.nu:11:1: error: type 'Buf' implements trait 'Look', declared ': Sync' — a '%Look' object may be reached from two threads at once, so every type it can box must be safe to share, and this one is not: it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with an 'unsafe % Sync <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.
+% Look Buf { @ look Buf b → i { ^ 0 } }
+^

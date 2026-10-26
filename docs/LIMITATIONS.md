@@ -17,7 +17,7 @@ spawner, and both threads change one value: the checker does not connect
 that owner to the moved one. Workaround: make no share of a handle that
 moves to a thread; state threads share and change is a `Locked`. Every other safe
 program found accepted and faulting is closed, and held by a probe in
-[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h343`);
+[`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h344`);
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`, phases A1–A2) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)).

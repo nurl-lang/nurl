@@ -880,7 +880,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h343):
+all are closed, each a probe CI now holds (h142–h344):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1279,7 +1279,11 @@ now keeps the record until the last owner, and closes the fd only once no
 accept is in progress. Making the MCP task store thread-safe for it found
 the store handing out a task as a bare address, which its eviction at the
 cap or a sweep past the TTL freed under a kept handle (h343): a task
-handle (`McpTask`) is now one owner of its task. No other hole is known.
+handle (`McpTask`) is now one owner of its task. A trait object answered
+Send and Sync for whatever it boxed, an `Rc` among them, because its
+type has no field to walk (h344): it now crosses only when its trait
+declares `: Send` (and is shared only with `: Send Sync`), a promise
+every impl is held to. No other hole is known.
 
 The rules that carry it:
 
@@ -1425,7 +1429,13 @@ aggregate members and closure captures. Two leaves are built in:
 | `Rc` | ✗ | ✗ | the reference count is not atomic |
 | `Cell` | ✓ | ✗ | a raw byte buffer with unsynchronised writes |
 | a library handle (§7.6) | ✓ | ✗ unless asserted | its copies are one state, changed in place |
+| a trait object `%Trait` | ✗ unless `: Send` | ✗ unless `: Send Sync` | its box holds any type implementing the trait |
 | everything else | ✓ | ✓ | unless a field says otherwise |
+
+A trait object's type does not say what its box holds, so the trait
+answers for it: `% Job [T] : Send { … }` holds every type implementing
+`Job` to Send where its impl is (rejected there if it reaches an `Rc`),
+and a `%Job` may then move; `: Send Sync` makes it Sync as well (h344).
 
 They are checked where a value crosses: `thread_spawn` and `spawn` (every
 capture must be Send), `chan_send` (the value must be Send), and `Arc T`
@@ -1534,7 +1544,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h343`) to the rule that rejects it. See
+  (`h01–h344`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

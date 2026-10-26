@@ -36,6 +36,13 @@
 // closure capturing any of those are all !Send for the same one reason,
 // and the diagnostic names that reason rather than the spelling.
 //
+// A trait object is the one type whose graph cannot be walked: a
+// `%Job` boxes whichever type implements `Job`, and its type does not
+// say which. Its trait answers for it instead. `% Job [T] : Send { … }`
+// holds every type implementing `Job` to Send where its impl is, and
+// then a `%Job` may move; `: Send Sync` lets one be shared as well.
+// Without the promise a trait object stays on the thread that made it.
+//
 // ── When you DO write one ──────────────────────────────────────────
 //
 // The derivation is structural, so it is wrong in exactly two ways,
