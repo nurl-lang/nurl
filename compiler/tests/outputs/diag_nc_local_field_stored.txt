@@ -1,0 +1,10 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_local_field_stored.nu:27:5: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+    : Box b @ Box { . p c 1 }
+    ^
+compiler/tests/diag_nc_local_field_stored.nu:34:5: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+    = . b c . p c
+    ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

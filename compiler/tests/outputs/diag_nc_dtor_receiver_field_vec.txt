@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_dtor_receiver_field_vec.nu:23:9: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+        ( vec_push [Conn] out . h c )
+        ^
