@@ -3943,11 +3943,19 @@ long long nurl_umulhi(long long a, long long b) {
  * primitives. It is NOT on the AES chain: Haswell to Cascade Lake have
  * AES-NI without SHA, and some Atoms SHA without AVX2.
  *
- * Five environment variables can only ever take an answer AWAY, never
+ * And the ADX tier (nurl_cpu_x86_adx): BMI2's MULX and ADX's ADCX / ADOX,
+ * the flag-free widening multiply and the two add-with-carry instructions
+ * that each carry through a flag of its own (CF / OF). nurl_mac_row runs
+ * a row of a multi-precision multiply on them: two carry chains in
+ * flight instead of one. General-purpose registers only, so there is no
+ * OS state to check; Broadwell and later Intel, Zen and later AMD.
+ *
+ * Six environment variables can only ever take an answer AWAY, never
  * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
  * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
  * nurl_cpu_x86_vaes, NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 and
- * NURL_CPU_SHA=0 for nurl_cpu_x86_sha (and each tier goes with any it
+ * NURL_CPU_SHA=0 for nurl_cpu_x86_sha, NURL_CPU_ADX=0 for
+ * nurl_cpu_x86_adx (and each tier goes with any it
  * contains). They exist so
  * one machine can run every clone and every fallback a marked function
  * has — the baseline clone, the AES clone without AVX2, the software
@@ -3958,6 +3966,7 @@ static int nurl__cpu_aes = -1;
 static int nurl__cpu_vaes = -1;
 static int nurl__cpu_vaes512 = -1;
 static int nurl__cpu_sha = -1;
+static int nurl__cpu_adx = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -4064,8 +4073,19 @@ static int nurl__cpu_sha_detect(void) {
     return (r[1] & (1u << 29)) != 0;
 }
 
+/* The ADX tier: leaf-7 EBX BMI2 (8) and ADX (19). */
+static int nurl__cpu_adx_detect(void) {
+    unsigned r[4];
+    nurl__cpuid(0, 0, r);
+    if (r[0] < 7) return 0;
+    nurl__cpuid(7, 0, r);
+    const unsigned need = (1u << 8) | (1u << 19);
+    return (r[1] & need) == need;
+}
+
 static void nurl__cpu_detect(void) {
     nurl__cpu_sha = nurl__cpu_sha_detect() && !nurl__cpu_env_off("NURL_CPU_SHA");
+    nurl__cpu_adx = nurl__cpu_adx_detect() && !nurl__cpu_env_off("NURL_CPU_ADX");
     nurl__cpu_v3_detect();
     int aes = nurl__cpu_aes_detect();
     if (nurl__cpu_env_off("NURL_CPU_V3")) nurl__cpu_v3 = 0;
@@ -4146,11 +4166,12 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_vaes512 = 0;
     nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
     nurl__cpu_sha = 0;
+    nurl__cpu_adx = 0;
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; nurl__cpu_adx = 0; }
 
 #endif
 
@@ -4218,6 +4239,16 @@ int nurl_cpu_x86_vaes512(void) {
 int nurl_cpu_x86_sha(void) {
     if (nurl__cpu_sha < 0) nurl__cpu_detect();
     return nurl__cpu_sha;
+}
+
+/* Does this CPU have the ADX tier — BMI2 (MULX) and ADX (ADCX / ADOX)?
+ * Broadwell and later Intel, Zen and later AMD. Unlike the crypto tiers
+ * it has no gate: nurl_mac_row asks it itself and takes its portable
+ * loop on a CPU without it. `readnone` to nurlc, like the AES answer.
+ * NURL_CPU_ADX=0 takes it away. */
+int nurl_cpu_x86_adx(void) {
+    if (nurl__cpu_adx < 0) nurl__cpu_detect();
+    return nurl__cpu_adx;
 }
 
 /* The SHA tier's gate failure, as nurl_cpu_aes_missing is the AES

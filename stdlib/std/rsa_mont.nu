@@ -10,8 +10,10 @@
 // width fixed by the modulus and never trimmed. Multiplication is
 // Montgomery FIPS on nurl_mac — product scanning with the reduction
 // interleaved, one widening multiply and one add-with-carry chain into a
-// register accumulator per limb product, and a dedicated squaring; exponentiation is a fixed 4-bit window whose
-// table entry is picked by scanning all sixteen under a mask. For a given
+// register accumulator per limb product, and a dedicated squaring — or,
+// on a CPU with ADX, rows of nurl_mac_row with two carry chains in
+// flight; exponentiation is a fixed 4-bit window whose table entry is
+// picked by scanning all sixteen under a mask. For a given
 // modulus size every operation runs the same instruction sequence whatever
 // the key and the message: no branch and no memory index depends on a
 // secret.
@@ -53,11 +55,12 @@ $ `stdlib/std/random.nu`
 // with it reads them at once.
 : RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one }
 
-// The scratch a multiply works in — accumulator t, n + 2 limbs; difference
-// d, n limbs — one per operation, so a shared RsaMont stays read-only.
+// The scratch a multiply works in — accumulator t, 2n + 1 limbs (the row
+// form's product); difference d, n limbs — one per operation, so a shared
+// RsaMont stays read-only.
 : RsaTmp { ( Vec i ) t ( Vec i ) d }
 
-@ _rm_tmp RsaMont c → RsaTmp { ^ @ RsaTmp { ( __rm_zeros + . c n 2 ) ( __rm_zeros . c n ) } }
+@ _rm_tmp RsaMont c → RsaTmp { ^ @ RsaTmp { ( __rm_zeros + * 2 . c n 1 ) ( __rm_zeros . c n ) } }
 
 @ __rm_get ( Vec u ) v i k → i { ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 } }
 
@@ -161,9 +164,24 @@ $ `stdlib/std/random.nu`
 // an i7-11850H: square 1 440 → 1 100 cycles, multiply 1 430 → 1 320;
 // an RSA-2048 signature 0.98 → 0.79 ms. Every other width runs the loops
 // (__rm_mul_gen / __rm_sqr_gen), which compiler/tests/rsa_mont_kernels
-// holds both to std/bigint. What remains to aws-lc's 0.25 ms is the cost
-// of a product itself — about eight instructions where mulx with two
-// carry flags (adcx / adox) needs three: agora #95.
+// holds both to std/bigint.
+//
+// On the ADX tier (BMI2 + ADX: Broadwell and later Intel, every Zen) the
+// multiply and the square take the row form instead — separated operand
+// scanning on nurl_mac_row: t = a·b (or a²: the cross products once, then
+// doubled with the diagonal added) by rows of n products, then n rows of
+// reduction. A row is mulx, adcx and adox a product, the low halves
+// carried through CF and the high halves through OF at once; FIPS's
+// column sums have no second chain to give it. Measured on an
+// i7-11850H, 16 limbs: square 245 → 203 ns, multiply 322 → 211 ns; 32
+// limbs 1.65× both; an RSA-2048 signature 0.79 → ~0.62 ms. Without ADX
+// the same rows are a loop of single-chain multiply-adds, and there
+// FIPS is the faster form (16 limbs: square 245 against 361 ns), so
+// FIPS stays the kernel of every other CPU and target — chosen per
+// call on the runtime's answer, both forms held to the same golden by
+// crypto_tier_ir.sh. What remains to aws-lc's 0.25 ms on this CPU is not
+// scalar: aws-lc signs with AVX-512 IFMA (rsaz_amm52x20_x2_ifma256, both
+// CRT halves in one 52-bit-radix vector multiply).
 
 // (z0, z1, z2) += x·y
 inline @ __rm_acc inout u64 z0 inout u64 z1 inout u64 z2 u64 x u64 y → v {
@@ -239,9 +257,79 @@ inline @ __rm_final i n * i rp * i mp * i dp u64 top ( Vec i ) dst → v {
     : *i bp ( vec_data [i] b )
     : *i mp ( vec_data [i] . c m )
     : u64 n0 # u64 . c n0
+    ? ( nurl_cpu_has_adx ) {
+        : u64 cy ( __rm_mul_rows n ap bp mp n0 qp )
+        ( __rm_final n # *i + # i qp * 8 n mp ( vec_data [i] . w d ) cy dst )
+        ^ v
+    } {}
     : ~ u64 top 0
     ? == n 16 { = top ( __rm_mul16 ap bp mp n0 qp ) } { = top ( __rm_mul_gen n ap bp mp n0 qp ) }
     ( __rm_final n qp mp ( vec_data [i] . w d ) top dst )
+}
+
+// The row form (SOS, the ADX tier): t = a·b by n rows of nurl_mac_row,
+// then n rows of reduction; tp holds 2n + 1 limbs, the result in
+// tp[n … 2n) with the bit above it returned. Row k adds a·b[k] at k and
+// writes its carry word to k + n, a limb no earlier row reached.
+unsafe @ __rm_mul_rows i n * i ap * i bp * i mp u64 n0 * i tp → u64 {
+    : ~ i k 0
+    ~ < k n { = . tp k 0 = k + k 1 }
+    = k 0
+    ~ < k n {
+        = . tp + k n # i ( nurl_mac_row # *i + # i tp * 8 k bp n # u64 . ap k )
+        = k + k 1
+    }
+    ^ ( __rm_redc n mp n0 tp )
+}
+
+unsafe @ __rm_sqr_rows i n * i ap * i mp u64 n0 * i tp → u64 {
+    // the cross products a[i]·a[j], i < j, once: row i adds a[i+1 … n)·a[i]
+    // at 2i + 1
+    : ~ i k 0
+    ~ <= k n { = . tp k 0 = k + k 1 }
+    = . tp - * 2 n 1 0
+    = k 0
+    ~ < k - n 1 {
+        = . tp + k n # i ( nurl_mac_row # *i + # i tp * 8 + * 2 k 1 # *i + # i ap * 8 + k 1 - - n k 1 # u64 . ap k )
+        = k + k 1
+    }
+    // doubled, plus the squares on the diagonal
+    : ~ u64 cc 0
+    : ~ u64 hb 0
+    = k 0
+    ~ < k n {
+        : u64 x0 # u64 . tp * 2 k
+        : u64 x1 # u64 . tp + * 2 k 1
+        : u64 d0 | << x0 1 hb
+        : u64 d1 | << x1 1 >> x0 63
+        = hb >> x1 63
+        : u64 a # u64 . ap k
+        : u64 lo ( nurl_mac_lo a a 0 0 )
+        : u64 hi ( nurl_mac_hi a a 0 0 )
+        = . tp * 2 k # i ( nurl_addc_lo d0 lo cc )
+        = cc ( nurl_addc_hi d0 lo cc )
+        = . tp + * 2 k 1 # i ( nurl_addc_lo d1 hi cc )
+        = cc ( nurl_addc_hi d1 hi cc )
+        = k + k 1
+    }
+    ^ ( __rm_redc n mp n0 tp )
+}
+
+// Montgomery reduction of t (2n limbs) by rows: row k clears limb k with
+// q = t[k]·n0 and its carry word joins limb k + n, the bit above riding
+// to the next row's.
+unsafe @ __rm_redc i n * i mp u64 n0 * i tp → u64 {
+    : ~ u64 cy 0
+    : ~ i k 0
+    ~ < k n {
+        : u64 q * # u64 . tp k n0
+        : u64 c ( nurl_mac_row # *i + # i tp * 8 k mp n q )
+        : u64 x # u64 . tp + k n
+        = . tp + k n # i ( nurl_addc_lo x c cy )
+        = cy ( nurl_addc_hi x c cy )
+        = k + k 1
+    }
+    ^ cy
 }
 
 // The n-limb FIPS multiply into qp (q digits, then the result); returns
@@ -291,6 +379,11 @@ unsafe @ __rm_mul_gen i n * i ap * i bp * i mp u64 n0 * i qp → u64 {
     : *i ap ( vec_data [i] a )
     : *i mp ( vec_data [i] . c m )
     : u64 n0 # u64 . c n0
+    ? ( nurl_cpu_has_adx ) {
+        : u64 cy ( __rm_sqr_rows n ap mp n0 qp )
+        ( __rm_final n # *i + # i qp * 8 n mp ( vec_data [i] . w d ) cy dst )
+        ^ v
+    } {}
     : ~ u64 top 0
     ? == n 16 { = top ( __rm_sqr16 ap mp n0 qp ) } { = top ( __rm_sqr_gen n ap mp n0 qp ) }
     ( __rm_final n qp mp ( vec_data [i] . w d ) top dst )

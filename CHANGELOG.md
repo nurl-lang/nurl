@@ -6,6 +6,37 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`nurl_mac_row`: a multi-precision multiply row with two carry
+  chains (the ADX tier).** `( nurl_mac_row rp ap n b )` computes
+  `rp[0..n) += ap[0..n)·b` and returns the word above. Where the
+  runtime's CPUID says BMI2 + ADX (`nurl_cpu_has_adx`, Broadwell and
+  later Intel, every Zen; `NURL_CPU_ADX=0` takes it away), the row is
+  inline asm on mulx, adcx and adox: the products' low halves carry
+  through CF and their high halves through OF at the same time. LLVM
+  cannot produce that from any IR, because it never selects ADOX.
+  Elsewhere the row is a loop of `nurl_mac` steps, including on AArch64,
+  which has no second carry flag. One asm body serves every width and
+  every x86-64 OS. The decision is recorded in
+  `docs/adr/0001-two-carry-chains.md`. `compiler/tests/mac_row_agree`
+  checks every width from 0 to 40 against the `nurl_mac` chain on both
+  paths.
+
+### Changed
+
+- **RSA: Montgomery multiply and square on rows where the CPU has
+  ADX.** On an i7-11850H:
+  - 16 limbs: square 245 → 203 ns, multiply 322 → 211 ns.
+  - 32 limbs: 1.65× faster.
+  - RSA-2048 signature: 0.79 → ~0.62 ms.
+
+  Without ADX, `std/rsa_mont.nu` keeps its FIPS kernels, which are the
+  faster form on a single carry chain. `crypto_tier_ir.sh` holds both
+  forms to the `rsa_mont_kernels` golden.
+
 ## [0.78.0] — 2026-10-24
 
 The TLS performance release. `bench/tls_bench` now measures NURL's TLS
