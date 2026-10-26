@@ -465,6 +465,18 @@ python3 tools/sanitizer_controls.py
 NURL_SAN=1 ./nurl.sh -O0 --debug examples/fizzbuzz.nu
 ```
 
+A sanitized build needs a clang with compiler-rt, the library that holds
+the ASan runtime. `NURL_SAN=1` never builds with the bundled zig, even on an
+installed toolchain where zig is the default compiler, because `zig cc`
+ships no ASan runtime: asked for `-fsanitize=address,undefined` it keeps
+UBSan, drops ASan and exits 0. A use-after-free in that binary would run
+clean. Without a system clang, `nurl.sh` stops and says so; set
+`CLANG=/path/to/clang` for one under another name. The driver also rebuilds
+a `stdlib/runtime_san.o` that lacks ASan (one zig built before this check
+existed), and fails a build whose runtime or linked program has no
+`__asan_init`. `./build.sh --san` checks its stage 0 binary the same way.
+`tools/tests/test_sanitizer_toolchain.py` covers these cases.
+
 `nurlc --sanitize-address` marks every emitted function for LLVM's ASan
 pass, including closures, drop glue, dyn/SIMD thunks and split definitions.
 The driver, bootstrap, corpus and fuzz runners use this compiler option.

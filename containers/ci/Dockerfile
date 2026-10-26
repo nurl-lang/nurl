@@ -97,9 +97,8 @@ RUN curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
 RUN git config --system --add safe.directory '*'
 
 # Deliberately NO global NURL_ZIG. nurl.sh prefers a bundled zig when it
-# sees one, and zig's own ASan runtime is a different LLVM
-# generation from system clang 18's instrumentation — a runtime_san.o
-# compiled by one and linked by the other dies with "undefined symbol:
-# __asan_unregister_elf_globals". On the bare runners NURL_ZIG was only
+# sees one, and the native jobs test the system-clang path. (A NURL_SAN=1
+# build never uses zig: zig ships no ASan runtime, and nurl.sh picks
+# clang for it, agora #126.) On the bare runners NURL_ZIG was only
 # ever set per-step by the unikernel job, and the workflow still does
 # exactly that; the image just provides /opt/zig for it to point at.
