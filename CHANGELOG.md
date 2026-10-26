@@ -114,6 +114,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`NURL_SAN=1` no longer builds a binary without AddressSanitizer on an
+  installed toolchain** (Agora #126). `nurl.sh` compiled with the bundled
+  `zig cc` whenever it existed, and every install has one. zig ships no
+  ASan runtime: asked for `-fsanitize=address,undefined` it keeps UBSan,
+  drops ASan and exits 0. Neither the program nor `runtime_san.o` was
+  instrumented, so a real use-after-free ran clean. `tools/fuzz/holes/check.sh`
+  builds through the same path, so on a box with only the bundled zig it
+  reported every probe as "ran clean". A sanitized build now always uses
+  a system clang with compiler-rt. Without one, `nurl.sh` stops and names
+  the reason. A `runtime_san.o` that lacks ASan is rebuilt, and a build
+  whose runtime or linked program has no `__asan_init` fails instead of
+  publishing. `./build.sh --san` checks its stage 0 binary the same way.
+  `tools/tests/test_sanitizer_toolchain.py` covers each case, against a
+  stand-in for zig and, in CI, the real one.
 - **A type in a closure body no longer captures a binding of the same
   name** (Agora #122). The capture scan took every type keyword in the
   body for a use of a binding: `v`, `i`, `s` and the other one-letter

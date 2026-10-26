@@ -226,6 +226,13 @@ jobs:
       - name: Driver paths through split lowering
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: NURL_SAN=1 never builds through the bundled zig
+        # zig cc has no ASan runtime: it drops -fsanitize=address and
+        # exits 0. A sanitized build must use a clang with compiler-rt,
+        # or fail, never publish an uninstrumented binary. Runs the real
+        # zig at /opt/zig/zig too.
+        run: python3 tools/tests/test_sanitizer_toolchain.py
+
       - name: Consistent source snapshots during compilation
         run: python3 tools/tests/test_compiler_source_snapshot.py
 

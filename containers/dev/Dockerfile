@@ -281,11 +281,10 @@ RUN if [ "${INCLUDE_WRANGLER}" = "1" ]; then \
 # with `zig cc -target ...`, which is how the whole Windows link path is
 # diagnosed from Linux.
 #
-# Deliberately NO global ENV NURL_ZIG — the same trap containers/ci
-# documents: nurl.sh prefers a bundled zig when it sees one, and zig's
-# ASan runtime is a different LLVM generation from system clang 18's
-# instrumentation, so a sanitizer build links against a runtime_san.o it
-# cannot resolve ("undefined symbol: __asan_unregister_elf_globals").
+# Deliberately NO global ENV NURL_ZIG, as in containers/ci: nurl.sh
+# prefers a bundled zig when it sees one, and the native builds here are
+# meant to run on system clang. (A NURL_SAN=1 build never uses zig, which
+# has no ASan runtime at all; nurl.sh picks clang for it, agora #126.)
 # Set NURL_ZIG per-command when you want zig; leave it unset otherwise.
 RUN case "${TARGETARCH}" in \
         amd64) ZIG_ARCH=x86_64 ;; \

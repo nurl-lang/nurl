@@ -573,6 +573,12 @@ fi
 # is a single file by definition — so it is also the one that gains most
 # from $BOOT_OPT: 8.4 s to 1.6 s, link and emit together.
 step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $OPAQUE_FLAGS $SAN_LDFLAGS $AS_NEEDED compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+# A compiler that takes -fsanitize=address and links no ASan runtime (zig
+# cc does exactly that, agora #126) would leave every --san stage
+# uninstrumented and the san corpus reading "clean".
+if (( SAN == 1 )); then
+    step "stage0 has the ASan runtime" grep -q __asan_init build/nurlc_lastgood.bin
+fi
 
 # Stage 1 is a throwaway: its only job is to emit stage 2's IR, and it
 # is rebuilt on every single build. Split it, and do not optimise it.
