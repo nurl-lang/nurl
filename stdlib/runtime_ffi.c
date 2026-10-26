@@ -6485,6 +6485,10 @@ typedef struct NurlFiber {
     void            *env;
     NurlFiberState   state;
     struct NurlFiber*next;           /* intrusive runqueue link */
+    /* When this fiber last became runnable: a stamp from
+     * nurl__sched.rseq_clock, taken as it joins a run queue. Workers
+     * serve the oldest stamp first (see "Service order"). */
+    unsigned long long rseq;
     int              joinable;       /* survives DONE for join() */
     /* Fire-and-forget spawn whose closure env the FIBER owns: freed
      * (nurl_free — envs come from nurl_malloc) right after the body
@@ -6554,7 +6558,7 @@ typedef struct NurlWorker {
      * locked steal, which re-checks under the lock. */
     int              rq_len;         /* accessed via __atomic_* only */
     unsigned         steal_rng;      /* xorshift victim picker */
-    unsigned         tick;           /* dispatch counter (fairness poll) */
+    unsigned         tick;           /* dispatch counter (netpoller cadence) */
 } NurlWorker;
 
 typedef struct NurlScheduler {
@@ -6563,6 +6567,11 @@ typedef struct NurlScheduler {
     NurlFiber       *global_head;
     NurlFiber       *global_tail;
     int              global_len;     /* maintained under global_lock */
+    /* The head's rseq, 0 when the global queue is empty: written under
+     * global_lock, read without it (__atomic_*) by a worker deciding
+     * whether its own queue's head or the global head is older. */
+    unsigned long long global_head_rseq;
+    unsigned long long rseq_clock;   /* __atomic_*: last stamp handed out */
     pthread_mutex_t  global_lock;
     long long        pending;        /* live fibers (spawned, not freed) */
     pthread_mutex_t  pending_lock;
@@ -6652,10 +6661,47 @@ static void nurl__pending_dec(void) {
     pthread_mutex_unlock(&nurl__sched.pending_lock);
 }
 
+/* ── Service order ───────────────────────────────────────────────────
+ *
+ * A worker runs its fibers in the order they became runnable. Every
+ * push onto a run queue stamps the fiber with the next value of one
+ * clock (rseq), so each queue holds its fibers oldest first, and a
+ * worker compares the head of its own queue with the global head and
+ * takes the older (nurl__rq_pop_oldest). A yield re-stamps: the fiber
+ * goes behind everything that became runnable meanwhile.
+ *
+ * Before this, the local queue simply came first. A fiber unparked or
+ * spilled onto the global queue waited until the local queue emptied —
+ * or for the 128th-dispatch starvation guard — while everything pushed
+ * locally after it (a spawn, a yield, the netpoller's local share) ran
+ * ahead. On a saturated worker that is service out of arrival order,
+ * and it is the shape tls-bench measured: handshake p50 below rustls's,
+ * p99 well above it (agora #113). Now a worker never runs a fiber
+ * while an older one waits in its own queue or the global queue, on
+ * any path into them, and a queue that never empties cannot starve the
+ * other one. (Across workers the order is looser: a peer runs what it
+ * holds or steals. Ready I/O enters the order when it is polled — see
+ * the cadence poll in nurl__worker_next.)
+ *
+ * Stamps of different workers interleave in clock order; a steal moves
+ * the victim's oldest half with their stamps, so the thief's queue stays
+ * ordered too. One relaxed fetch-add per push. */
+static unsigned long long nurl__rseq_next(void) {
+    return __atomic_add_fetch(&nurl__sched.rseq_clock, 1, __ATOMIC_RELAXED);
+}
+
+/* Publish the global head's stamp (global_lock held). */
+static void nurl__global_head_publish(void) {
+    NurlFiber *h = nurl__sched.global_head;
+    __atomic_store_n(&nurl__sched.global_head_rseq, h ? h->rseq : 0ULL,
+                     __ATOMIC_RELAXED);
+}
+
 /* ── Per-worker FIFO runqueue ────────────────────────────────────── */
 
 static void nurl__rq_push_local(NurlWorker *w, NurlFiber *f) {
     f->next = NULL;
+    f->rseq = nurl__rseq_next();
     pthread_mutex_lock(&w->rq_lock);
     if (w->rq_tail) w->rq_tail->next = f;
     else            w->rq_head = f;
@@ -6727,26 +6773,32 @@ static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
 
 /* ── Global runqueue (spawn-from-non-fiber, overflow) ──────────── */
 
+/* Stamped under global_lock, so the global queue is in stamp order even
+ * when several threads push at once. */
 static void nurl__rq_push_global(NurlFiber *f) {
     f->next = NULL;
     pthread_mutex_lock(&nurl__sched.global_lock);
+    f->rseq = nurl__rseq_next();
     if (nurl__sched.global_tail) nurl__sched.global_tail->next = f;
     else                         nurl__sched.global_head = f;
     nurl__sched.global_tail = f;
     nurl__sched.global_len++;
+    nurl__global_head_publish();
     pthread_mutex_unlock(&nurl__sched.global_lock);
 }
 
 /* Append a pre-linked chain of n fibers in one lock acquisition — the
- * netpoller's surplus lands here as a single unit. */
+ * netpoller's surplus lands here as a single unit, stamped in order. */
 static void nurl__rq_push_global_chain(NurlFiber *head, NurlFiber *tail, int n) {
     if (!head) return;
     tail->next = NULL;
     pthread_mutex_lock(&nurl__sched.global_lock);
+    for (NurlFiber *p = head; p; p = p->next) p->rseq = nurl__rseq_next();
     if (nurl__sched.global_tail) nurl__sched.global_tail->next = head;
     else                         nurl__sched.global_head = head;
     nurl__sched.global_tail = tail;
     nurl__sched.global_len += n;
+    nurl__global_head_publish();
     pthread_mutex_unlock(&nurl__sched.global_lock);
 }
 
@@ -6758,6 +6810,7 @@ static NurlFiber *nurl__rq_pop_global(void) {
         if (!nurl__sched.global_head) nurl__sched.global_tail = NULL;
         f->next = NULL;
         nurl__sched.global_len--;
+        nurl__global_head_publish();
     }
     pthread_mutex_unlock(&nurl__sched.global_lock);
     return f;
@@ -6765,7 +6818,9 @@ static NurlFiber *nurl__rq_pop_global(void) {
 
 /* Take a fair share of the global queue: the first fiber to run now,
  * up to (len / worker_count + 1, capped) more onto the local queue.
- * One global-lock acquisition either way (Go's globrunqget shape). */
+ * One global-lock acquisition either way (Go's globrunqget shape).
+ * Only with w's local queue EMPTY: the share is appended, and anything
+ * already queued locally may be newer than it (see "Service order"). */
 static NurlFiber *nurl__rq_take_global_batch(NurlWorker *w) {
     pthread_mutex_lock(&nurl__sched.global_lock);
     int len = nurl__sched.global_len;
@@ -6787,6 +6842,7 @@ static NurlFiber *nurl__rq_take_global_batch(NurlWorker *w) {
     nurl__sched.global_head = tail->next;
     if (!nurl__sched.global_head) nurl__sched.global_tail = NULL;
     nurl__sched.global_len -= n;
+    nurl__global_head_publish();
     pthread_mutex_unlock(&nurl__sched.global_lock);
     tail->next = NULL;
     NurlFiber *first = head;
@@ -6805,6 +6861,32 @@ static NurlFiber *nurl__rq_take_global_batch(NurlWorker *w) {
         pthread_mutex_unlock(&w->rq_lock);
     }
     return first;
+}
+
+/* w's next fiber in service order: the head of its own queue or the
+ * global head, whichever became runnable first. With its own queue
+ * empty it takes a fair share of the global queue; with both non-empty
+ * and the global head older, just that one fiber, so its own queue
+ * stays ordered. NULL when both are empty. Only w pushes to its own
+ * queue (peers only steal from it), so "empty" holds until w pushes. */
+static NurlFiber *nurl__rq_pop_oldest(NurlWorker *w) {
+    unsigned long long g =
+        __atomic_load_n(&nurl__sched.global_head_rseq, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&w->rq_lock);
+    NurlFiber *f = w->rq_head;
+    if (f && (g == 0 || f->rseq < g)) {
+        w->rq_head = f->next;
+        if (!w->rq_head) w->rq_tail = NULL;
+        f->next = NULL;
+        __atomic_fetch_sub(&w->rq_len, 1, __ATOMIC_RELAXED);
+        pthread_mutex_unlock(&w->rq_lock);
+        return f;
+    }
+    pthread_mutex_unlock(&w->rq_lock);
+    if (g == 0) return NULL;
+    if (!f) return nurl__rq_take_global_batch(w);
+    NurlFiber *gf = nurl__rq_pop_global();
+    return gf ? gf : nurl__rq_pop_local(w);   /* a peer took it first */
 }
 
 /* Wake one parked worker (if any). Cheap when idle_waiters is 0.
@@ -7374,43 +7456,33 @@ static NurlFiber *nurl__np_poll_nowait(NurlWorker *w);
 static void       nurl__np_poke_if_sleeping(void);
 #endif
 
-/* Next runnable for `w`: local → steal up to 2×worker_count peers →
- * global → block in the netpoller (Linux; one worker at a time) →
- * park on idle_cv. NULL on shutdown. */
+/* Next runnable for `w`: the oldest of its own queue and the global
+ * queue → steal up to 2×worker_count peers → global → block in the
+ * netpoller (Linux; one worker at a time) → park on idle_cv. NULL on
+ * shutdown. */
 static NurlFiber *nurl__worker_next(NurlWorker *w) {
     for (;;) {
         if (nurl__sched.shutdown) return NULL;
         unsigned tick = ++w->tick;
-        if (__builtin_expect((tick & 15u) == 0, 0)) {
-            /* Starvation guard: every 128th pass looks at the netpoller
-             * and the global queue BEFORE the local queue. A local queue
-             * that never empties — one fiber yielding in a loop is enough
-             * — used to keep this worker from ever reaching either, so
-             * every I/O and timer wake due on it, and every fiber
-             * unparked onto the global queue (channel, mutex and
-             * DNS-resolver wakes), waited for as long as that fiber kept
-             * yielding: on one worker, for ever. */
-            int guard = (tick & 127u) == 0;
 #if defined(__linux__)
-            /* Cadence poll: drain the epoll instance every 16th dispatch
-             * even while queued work exists. Without this a saturated
-             * pool lives in feast-famine cycles — nobody polls until the
-             * global queue exhausts, then the whole pool stalls on one
-             * big poll. */
-            if (guard || __atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) == 0) {
-                NurlFiber *nf = nurl__np_poll_nowait(w);
-                if (nf) return nf;
-            }
-#endif
-            if (guard &&
-                __atomic_load_n(&nurl__sched.global_len, __ATOMIC_RELAXED) > 0) {
-                NurlFiber *gf = nurl__rq_take_global_batch(w);
-                if (gf) return gf;
-            }
+        /* Cadence poll: drain the epoll instance every 16th dispatch
+         * whatever is queued. I/O that is ready but not yet polled has
+         * no place in the service order at all, and everything that
+         * becomes runnable meanwhile goes ahead of it; polling only once
+         * the local queue emptied (or every 128th dispatch) let a busy
+         * worker leave a ready connection in the epoll instance for
+         * hundreds of dispatches. What the poll wakes joins the TAIL
+         * (nurl__np_hand_out). A saturated pool also no longer lives in
+         * feast-famine cycles, nobody polling until the queues exhaust
+         * and the whole pool then stalling on one big poll. */
+        if (__builtin_expect((tick & 15u) == 0, 0)) {
+            NurlFiber *nf = nurl__np_poll_nowait(w);
+            if (nf) return nf;
         }
-        NurlFiber *f = nurl__rq_pop_local(w);
-        if (f) return f;
-        f = nurl__rq_take_global_batch(w);
+#else
+        (void)tick;
+#endif
+        NurlFiber *f = nurl__rq_pop_oldest(w);
         if (f) return f;
 #if defined(__linux__)
         {
@@ -7997,11 +8069,12 @@ static NurlReactorWait *nurl__np_probe_all_locked(NurlReactorWait *batch) {
 #define NURL_NP_LOCAL_SHARE 8
 
 /* Recycle a consumed wake batch onto the freelist and hand the fibers
- * out. The FIRST fiber is returned to run right now on this worker;
+ * out. On an idle worker the FIRST fiber is returned to run right now;
  * the next NP_LOCAL_SHARE (oldest first) go to this worker's OWN local
  * queue; anything beyond that is appended to the GLOBAL queue as one
  * pre-linked chain, in event order, with wakes batched under a single
- * idle_lock acquisition (wake_n).
+ * idle_lock acquisition (wake_n). On a busy worker nothing runs at
+ * once: all of them join the queues' tails.
  *
  * Both extremes of this split were measured and lost:
  *   - Everything to the global queue, one wake apiece (the first cut):
@@ -8032,20 +8105,32 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
         recycle = batch;
         if (f) {
             f->last_park_result = r;
-            if (!direct) {
-                direct = f;
-            } else {
-                f->state = NF_RUNNABLE;
-                f->next = chain_head;      /* batch list is newest-first;   */
-                chain_head = f;            /* prepend restores event order  */
-                if (!chain_tail) chain_tail = f;
-                surplus++;
-            }
+            f->state = NF_RUNNABLE;
+            f->next = chain_head;          /* batch list is newest-first;   */
+            chain_head = f;                /* prepend restores event order  */
+            if (!chain_tail) chain_tail = f;
+            surplus++;
         }
         batch = next;
     }
+    /* The oldest woken fiber runs at once only on a worker with nothing
+     * queued, locally or globally: then it IS the oldest runnable fiber.
+     * A worker polling between dispatches (the cadence poll) has older
+     * fibers waiting, and running the polled one first put fresh I/O
+     * ahead of all of them (see "Service order"); there every woken
+     * fiber joins the tail. */
+    if (chain_head &&
+        __atomic_load_n(&w->rq_len, __ATOMIC_RELAXED) == 0 &&
+        __atomic_load_n(&nurl__sched.global_head_rseq, __ATOMIC_RELAXED) == 0) {
+        direct = chain_head;
+        chain_head = direct->next;
+        direct->next = NULL;
+        if (!chain_head) chain_tail = NULL;
+        surplus--;
+    }
     /* Split the ordered surplus: the OLDEST few stay on this worker's
-     * local queue (they run next, warm cache, no wake needed), the rest
+     * local queue (warm cache, no wake needed; on an idle worker they
+     * run next), the rest
      * go to the global FIFO in one chunk. Small batches — the c<=50
      * case — never leave the polling core; an overload batch is bounded
      * to NP_LOCAL_SHARE locally so no fiber ever sits behind a hundred

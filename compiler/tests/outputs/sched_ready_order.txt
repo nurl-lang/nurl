@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+readers=200
+woke_ready=200
+displacement_below_16=yes
