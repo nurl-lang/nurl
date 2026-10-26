@@ -181,13 +181,16 @@ $ `stdlib/std/pfile.nu`
     : i crc ( crc32_slice payload )
     : ( WGuard LogBuf ) g ( rw_write [LogBuf] . x pend )
     : LogBuf b ( wguard_get [LogBuf] g )
+    // (Read before the pushes: growing the buffer through `buf` ends the
+    // other borrows of the guard's value, `b` among them.)
+    : i start . b start
     : ( Vec u ) buf . b buf
     ( vec_push_word_u8 buf n 4 F )
     ( vec_push_word_u8 buf crc 4 F )
     : i at ( vec_len [u] buf )
     ( vec_resize_zeroed [u] buf + at n )
     ( slice_copy [u] ( slice_window [u] ( slice_from_vec [u] buf ) at n ) payload )
-    : i lsn + . b start ( vec_len [u] buf )
+    : i lsn + start ( vec_len [u] buf )
     ( atomic_store . x next lsn )
     ^ lsn
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.1] — 2026-10-26
+
+### Fixed
+
+- `wal_append` reads the log buffer's start before it grows the buffer.
+  The compiler now tracks a binding read out of a field as a borrow of
+  that field (NURL agora #111). Growing `buf` therefore ends the other
+  borrows of the guard's value, and `b` was read after that. The
+  behaviour is unchanged.
+
 ## [0.1.0] — 2026-10-20
 
 Requires NURL 0.75.0 (`std/atomic.nu`, `std/rwlock.nu`, `std/pfile.nu`,

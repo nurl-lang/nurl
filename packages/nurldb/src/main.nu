@@ -20,7 +20,7 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/std/time.nu`
 $ `nurldb.nu`
 
-: s VERSION `0.1.0`
+: s VERSION `0.1.1`
 
 @ usage → i {
     ( nurl_println ( nurl_str_cat `nurldb ` VERSION ) )

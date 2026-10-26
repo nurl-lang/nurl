@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_field_borrow_outlives_its_struct.nu:19:5: error: 'n' borrows from '. h name', which ended at line 18 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'n' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup n ).
+    ^ ( string_len n )
+    ^
+compiler/tests/diag_field_borrow_outlives_its_struct.nu:26:5: error: 'n' borrows from '. h name', which ended at line 25 — it was given a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'n' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup n ).
+    ^ ( string_len n )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
