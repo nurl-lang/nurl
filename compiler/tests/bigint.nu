@@ -1,8 +1,9 @@
 // bigint.nu — acceptance test for stdlib/std/bigint.nu. Pure computation,
 // no socket, runs ungated. Covers from_i / to_string round-trips across
 // the i64 range (incl. min), add/sub/mul with mixed signs, comparison,
-// base-10 parse beyond i64, and a 25! magnitude check against a known
-// value. main returns the failure count.
+// base-10 parse beyond i64, a 25! magnitude check against a known
+// value, and modpow with exponents wider than the modulus. main returns
+// the failure count.
 
 $ `stdlib/std/bigint.nu`
 $ `stdlib/core/string.nu`
@@ -167,6 +168,25 @@ $ `stdlib/core/errors.nu`
     : BigInt neg9 ( bigint_from_i -9 )
     ( ck_int `cmp -5 vs -9` ( bigint_cmp neg5 neg9 ) 1 fails )
     ( bigint_free neg5 ) ( bigint_free pos3 ) ( bigint_free neg9 )
+
+    // ── modpow: every exponent bit counts, wider than the modulus too ──
+    // (1000003 is 20 bits: 2^40 + 1 has more limbs, 2^25 + 7 the same
+    // limbs and more bits, 2^19 + 5 fewer bits.)
+    : BigInt pm ( bigint_from_i 1000003 )
+    : BigInt b3 ( bigint_from_i 3 )
+    : BigInt b7 ( bigint_from_i 7 )
+    : BigInt x40 ( bigint_from_i 1099511627777 )
+    : BigInt x25 ( bigint_from_i 33554439 )
+    : BigInt x19 ( bigint_from_i 524293 )
+    : BigInt r40 ( bigint_modpow b3 x40 pm )
+    : BigInt r25 ( bigint_modpow b3 x25 pm )
+    : BigInt r19 ( bigint_modpow b7 x19 pm )
+    ( ck_str `modpow 3^(2^40+1)` r40 `135029` fails )
+    ( ck_str `modpow 3^(2^25+7)` r25 `126715` fails )
+    ( ck_str `modpow 7^(2^19+5)` r19 `894579` fails )
+    ( bigint_free r40 ) ( bigint_free r25 ) ( bigint_free r19 )
+    ( bigint_free x40 ) ( bigint_free x25 ) ( bigint_free x19 )
+    ( bigint_free pm ) ( bigint_free b3 ) ( bigint_free b7 )
 
     // ── parse errors ──
     : !BigInt ParseErr e1 ( bigint_from_string `` )

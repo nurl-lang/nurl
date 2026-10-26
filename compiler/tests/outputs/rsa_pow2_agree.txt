@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+pair 0 (16 and 16 limbs): 8 of 8 agree with bigint_modpow
+pair 1 (16 and 16 limbs): 8 of 8 agree with bigint_modpow
+pair 2 (16 and 15 limbs): 8 of 8 agree with bigint_modpow

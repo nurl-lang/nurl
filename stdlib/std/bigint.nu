@@ -628,8 +628,13 @@ $ `stdlib/core/vec.nu`
 // base^exp mod m (all non-negative), via the Montgomery powering ladder.
 // Unlike textbook square-and-multiply — which multiplies only on 1-bits and
 // runs for bit-length(exp) iterations — this performs EXACTLY two modular
-// multiplies every iteration for a FIXED count = bit-length(m), selecting
-// registers with a constant-time swap. So neither the per-bit operation
+// multiplies every iteration for a FIXED count — every bit of the
+// modulus's 16-bit limbs (its bit length rounded up), or of the
+// exponent's when it has more limbs — selecting registers with a
+// constant-time swap. Every exponent bit counts, those above the
+// modulus's bit length too (a blinded RSA exponent, d + r·φ, is wider
+// than n); leading zero bits only square 1. For every exponent no wider
+// than the modulus's limbs, then, neither the per-bit operation
 // sequence nor the loop count depends on the secret exponent: a co-resident
 // cache / SPA observer sees a uniform square-multiply trace regardless of the
 // RSA private exponent d. (The underlying BigInt mul/rem are still operand-
@@ -639,9 +644,12 @@ $ `stdlib/core/vec.nu`
 @ bigint_modpow BigInt base BigInt exp BigInt m → BigInt {
     : ~ BigInt R0 ( bigint_from_i 1 )
     : ~ BigInt R1 ( bigint_rem base m )
-    : i bl ( __bigint_bitlen m )
+    : i mbl ( __bigint_bitlen m )
     : ( Vec i ) elimbs . exp limbs
     : i enl ( vec_len [i] elimbs )
+    // the exponent's limb count, never its bits, can lengthen the ladder
+    : i mw * 16 / + mbl 15 16
+    : i bl ? > * 16 enl mw * 16 enl mw
     : ~ i i - bl 1
     ~ >= i 0 {
         : i li / i 16

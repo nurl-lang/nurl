@@ -392,10 +392,11 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 # turns it off here as it does in the runtime. (Windows on
                 # ARM builds no AArch64 crypto tier: skipped there.)
                 'cpu-aes'  { if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -or $env:NURL_CPU_AES -eq '0') { $skip = $true } }
-                # The VAES tiers are on few x64 hosts, and Windows has no
+                # The VAES and IFMA tiers are on few x64 hosts, and Windows has no
                 # flag list to ask without a probe: skipped here.
                 'cpu-vaes'    { $skip = $true }
                 'cpu-vaes512' { $skip = $true }
+                'cpu-ifma'    { $skip = $true }
                 'ktls'     { $skip = $true }
                 'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
                 # Anything else names an external command the test shells

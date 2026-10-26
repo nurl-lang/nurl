@@ -24,8 +24,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/adr/0001-two-carry-chains.md`. `compiler/tests/mac_row_agree`
   checks every width from 0 to 40 against the `nurl_mac` chain on both
   paths.
+- **The IFMA tier: `nurl_v256_madd52lo` / `_madd52hi`.** AVX-512 IFMA
+  (VPMADD52LUQ / VPMADD52HUQ) on a ymm register: each 64-bit lane of the
+  accumulator gains the low or high 52 bits of the product of two 52-bit
+  limbs, so a radix-2^52 multiply accumulates four limb products an
+  instruction with no carry chain. Gated like the AES tiers, on x86-64-v4
+  + AVX512_IFMA (`nurl_cpu_has_ifma`; Ice Lake, Zen 4 and later;
+  `NURL_CPU_IFMA=0` takes it away); stubs on AArch64 and under
+  `--no-cpu-dispatch`. Tests that need it say `requires: cpu-ifma`.
+- **`nurl_v256_shrlane64 lo hi`**: lo's lanes 1–3 and hi's lane 0, the
+  pair moved down one 64-bit lane — a number held as limbs across v256
+  registers divided by one limb.
 
 ### Changed
+
+- **RSA-2048 signing on AVX-512 IFMA: 0.65 → ~0.27 ms, within 1.2× of
+  aws-lc (~0.23 ms on the same CPU, an i7-11850H).** Where the CPU has the IFMA tier, `std/rsa_mont.nu` runs the
+  two 1024-bit exponentiations of a CRT signature at once
+  (`_rm_pow2_ct`): each operand 20 limbs of 52 bits in five ymm
+  registers, an almost Montgomery multiply whose scalar step for one
+  half hides in the other's vector latency. The p and q halves are
+  computed in the 52-bit domain from entry to exit; the moduli's 52-bit
+  forms are derived once per key. Other widths and CPUs keep the ADX
+  rows and FIPS kernels. `compiler/tests/rsa_pow2_agree` holds both
+  paths to `bigint_modpow`. The decision is recorded in
+  `docs/adr/0002-ifma-rsa.md`.
+- **A `simd @` function reaches a tier through inline helpers of inline
+  helpers.** Before, only a callee that used a tier primitive itself
+  counted, so a kernel written as helpers of helpers got baseline
+  clones that called each helper's gated original out of line, its
+  vectors crossing by pointer — the RSA kernel above ran at 4.1 ms that
+  way. An inline function now counts as the body it becomes; an
+  ordinary call still ends the reach.
 
 - **RSA: Montgomery multiply and square on rows where the CPU has
   ADX.** On an i7-11850H:
@@ -61,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bottom half: 253 squarings and 39 multiplies, against 255 and 70.
   `compiler/tests/p256_scalar_inv.nu` checks it against Python and over
   2000 random a·a⁻¹ ≡ 1.
+
+### Fixed
+
+- **`bigint_modpow` ignored exponent bits above the modulus's bit
+  length.** Its constant-time ladder ran bit-length(m) steps, so an
+  exponent wider than the modulus (a blinded RSA exponent, d + r·φ) lost
+  its top bits and the answer was wrong. The ladder now covers the
+  modulus's whole 16-bit limbs, or the exponent's when it has more: the
+  count still never depends on the exponent's bits.
 
 ## [0.78.0] — 2026-10-24
 

@@ -806,6 +806,105 @@ CEOF
     fi
 fi
 
+# ── 13. The IFMA tier: both RSA CRT halves at once, radix 2^52 ───────
+# nurl_v256_madd52lo / _hi on x86-64-v4 + AVX-512 IFMA, gated like the
+# AES tiers. std/rsa_mont's __rm_pow2_52 is a `simd` function written
+# with inline helpers of inline helpers; it must be ONE body of the tier
+# (the helpers' .tier copies inlined, ungated) — not baseline clones
+# calling each helper's gated original by pointer, which ran a
+# signature at 4.1 ms instead of ~0.27. Both paths hold the goldens of
+# rsa_pow2_agree (_rm_pow2_ct against bigint_modpow) and rsa_pss_sign
+# (a CRT key end to end).
+P2_SRC="$SCRIPT_DIR/rsa_pow2_agree.nu"
+if "$NURLC" "$P2_SRC" > "$WORK/p2.ll" 2> "$WORK/p2.err"; then
+    if grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_ifma()' "$WORK/p2.ll" | grep -q '@nurl_cpu_x86_ifma()' &&
+            grep -A3 '^define linkonce_odr void @nurl__ifma_gate()' "$WORK/p2.ll" | grep -q '@nurl_cpu_x86_ifma()'; then
+        ok "IFMA probe and gate ask nurl_cpu_x86_ifma" "probe"
+    else
+        bad "IFMA probe and gate ask nurl_cpu_x86_ifma" "no probe"
+    fi
+    pw=$(grep '^define.*@__nurl_fn\.__rm_pow2_52[^(]*(' "$WORK/p2.ll")
+    pb=$(awk '/^define.*@__nurl_fn\.__rm_pow2_52[^(.]*\(/{p=1} p{print} /^}/{p=0}' "$WORK/p2.ll")
+    if [ "$(printf '%s\n' "$pw" | grep -c .)" -eq 1 ] &&
+            printf '%s\n' "$pw" | grep -q '+avx512ifma' &&
+            printf '%s\n' "$pb" | grep -q 'call void @nurl__ifma_gate()' &&
+            ! printf '%s\n' "$pb" | grep -q '@__nurl_fn\.__rm_a52lo[^.(]*(' ; then
+        ok "__rm_pow2_52: one IFMA body, helpers inlined ungated" "+avx512ifma, gated"
+    else
+        bad "__rm_pow2_52: one IFMA body, helpers inlined ungated" "$(printf '%s\n' "$pw" | grep -c .) definitions"
+    fi
+    if command -v "$CLANG" >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1 &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/p2.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/p2" -lm -lpthread 2>/dev/null; then
+        nl=$(objdump -d "$WORK/p2" 2>/dev/null | grep -cE '\bvpmadd52luq\b')
+        nh=$(objdump -d "$WORK/p2" 2>/dev/null | grep -cE '\bvpmadd52huq\b')
+        # nine inlined AMMs, each 2 halves × 5 blocks × 2 (a·b, m·y)
+        if [ "$nl" -eq 180 ] && [ "$nh" -eq 180 ]; then ok "__rm_pow2_52: nine inlined AMMs of VPMADD52" "$nl lo, $nh hi"
+        else bad "__rm_pow2_52: nine inlined AMMs of VPMADD52" "$nl lo, $nh hi"; fi
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/rsa_pow2_agree.txt" | tail -n +2)
+        for e in NURL_CPU_IFMA=1 NURL_CPU_IFMA=0; do
+            got=$(env "$e" "$WORK/p2" 2>&1)
+            if [ "$got" = "$want" ]; then ok "rsa_pow2_agree with $e" "golden"
+            else bad "rsa_pow2_agree with $e" "${got:0:80}"; fi
+        done
+    else
+        note "IFMA machine code and run" "skipped (no clang / objdump, or the link failed)"
+    fi
+else
+    bad "rsa_pow2_agree: compiles" "$(head -2 "$WORK/p2.err")"
+fi
+
+PS_SRC="$SCRIPT_DIR/rsa_pss_sign.nu"
+if "$NURLC" "$PS_SRC" > "$WORK/ps.ll" 2> "$WORK/ps.err" &&
+        command -v "$CLANG" >/dev/null 2>&1 &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/ps.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/ps" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/rsa_pss_sign.txt" | tail -n +2)
+    for e in NURL_CPU_IFMA=1 NURL_CPU_IFMA=0; do
+        got=$(env "$e" "$WORK/ps" 2>&1)
+        if [ "$got" = "$want" ]; then ok "rsa_pss_sign with $e" "golden"
+        else bad "rsa_pss_sign with $e" "${got:0:80}"; fi
+    done
+else
+    bad "rsa_pss_sign: builds" "$(head -2 "$WORK/ps.err")"
+fi
+
+# Off x86 there is no IFMA tier: a constant false and panicking stubs.
+"$NURLC" --no-cpu-dispatch --no-dce "$P2_SRC" > "$WORK/p2.off.ll" 2>/dev/null
+"$NURLC" --target=aarch64 --no-dce "$P2_SRC" > "$WORK/p2.a64.ll" 2>/dev/null
+for f in off a64; do
+    if grep -A3 '^define linkonce_odr i1 @nurl_cpu_has_ifma()' "$WORK/p2.$f.ll" | grep -q 'ret i1 false' &&
+            grep -A3 '^define linkonce_odr <4 x i64> @nurl_v256_madd52lo(' "$WORK/p2.$f.ll" | grep -q 'nurl_cpu_ifma_missing' &&
+            [ "$(grep -c 'avx512ifma\|vpmadd52' "$WORK/p2.$f.ll")" -eq 0 ]; then
+        ok "$f: nurl_cpu_has_ifma false, IFMA primitives stubs" "nurl_cpu_ifma_missing"
+    else
+        bad "$f: nurl_cpu_has_ifma false, IFMA primitives stubs" "not so"
+    fi
+done
+
+# The runtime's IFMA answer matches an independent one.
+if [ -r /proc/cpuinfo ] && command -v "$CLANG" >/dev/null 2>&1; then
+    fl=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    wi=1
+    for f in avx2 avx512f avx512bw avx512cd avx512dq avx512vl avx512ifma; do
+        case "$fl" in *" $f "*) ;; *) wi=0 ;; esac
+    done
+    cat > "$WORK/cpu5.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_ifma(void);
+int main(void) { printf("%d\n", nurl_cpu_x86_ifma()); return 0; }
+CEOF
+    if "$CLANG" -O0 "$WORK/cpu5.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu5" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu5" 2>/dev/null)
+        off=$(NURL_CPU_IFMA=0 "$WORK/cpu5" 2>/dev/null)
+        if [ "$got" = "$wi" ] && [ "$off" = 0 ]; then ok "runtime IFMA CPUID agrees with /proc/cpuinfo" "both say $got; NURL_CPU_IFMA=0 → 0"
+        else bad "runtime IFMA CPUID agrees with /proc/cpuinfo" "runtime $got (off: $off), /proc/cpuinfo $wi"; fi
+    else
+        note "runtime IFMA CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then
     echo "crypto_tier_ir: all assertions passed"
