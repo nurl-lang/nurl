@@ -114,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A type in a closure body no longer captures a binding of the same
+  name** (Agora #122). The capture scan took every type keyword in the
+  body for a use of a binding: `v`, `i`, `s` and the other one-letter
+  types are also valid binding names. A thread's closure that only
+  spelled the type `( @ v i )` therefore moved the spawner's Vec named
+  `v`, and the next `vec_push` on it was rejected as a use of a moved
+  value. A closure that is not detached copied the value into its env
+  for nothing. The scan now steps over each type position: a binding's
+  type and name, call type arguments, a slice literal's element type, a
+  select arm's type, a cast, `Z`, an aggregate's type, and a nested
+  closure's parameters and return type. A `:` inside a call still labels
+  an argument. `compiler/tests/closure_capture_type_position` covers
+  each position.
 - **A panic no longer leaks a call's result that the scope owns**
   (Agora #110, h334, h335). Two kinds of call result get an owner of
   their own for the rest of the scope. One is an enum a match takes and
