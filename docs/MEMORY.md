@@ -860,30 +860,34 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One open hole: a library handle's copies on two threads.** A library
-handle over a counted block (§7.6) is copied by sharing — a closure's
-capture of it, a parameter, a copy stored into a struct is another owner
-of the same state — and the Send
-derivation asks only of types, so a struct of a `Shared` field and Vecs is
-Send. One copy moved to a thread while another stays here is two threads
-changing one value in place with no lock: a `PNCounter` (dist/crdt.nu)
-grown from both is a heap-use-after-free under AddressSanitizer
-(`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`). It is
-the standard library's handles over unsynchronised state that reach it —
-not `Arc`, `Locked`, `RwLocked`, `Atomic`, `Channel`, `Mutex` or a
-`Thread`, which are asserted thread-safe, and not `SymTab` or
-`PkMemberTable`, which are marked `% NotSend` / `% NotSync` (h254, h319).
-The rule that closes it — a handle whose copies alias is Send only when
-it is asserted thread-safe, as Rust's `Arc<T>` is Send only for a `Sync`
-`T` — is open with its reach over those handles; until then a value that
-holds one moves to a thread with no copy kept.
+**Two open holes.** *A share made before a library handle moves to a
+thread.* A library handle over a counted block (§7.6) is copied by
+sharing, and its copies are one state. One not asserted `% Sync` moves
+into a thread's closure as a `Vec` does, a parameter of one may not be
+captured, a closure carrying one where another thread takes it takes it
+along, and it is not Sync (§6.5). A share made *before* the move is
+another owner the checker does not connect to the moved one —
+`( PNCounter_share a )`, a literal that stores `. h c`, a callee that
+keeps one — and two threads then change one value in place with no
+lock: a `PNCounter` (dist/crdt.nu) grown from both is a double free under
+AddressSanitizer
+(`tools/fuzz/holes/open/library_handle_copy_on_two_threads.nu`, agora
+#121). Until it closes, make no share of a handle that moves to a
+thread; state threads share and change is a `Locked`.
+
+*An MCP task handle kept past its task.* `mcp_task_create`, `_find` and
+`_nth` (ext/mcp_tasks.nu) hand out a task as an opaque `s` handle that
+owns nothing. When the store evicts the task at its cap, or sweeps it
+once its TTL has passed, a kept handle reads freed memory
+(`tools/fuzz/holes/open/mcp_task_handle_after_eviction.nu`, agora #124).
+Until it closes, look a task up by id where it is used.
 
 **Every other hole is closed.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h333):
+all are closed, each a probe CI now holds (h142–h342):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1270,7 +1274,16 @@ with the row before the binding's, so the borrow borrowed nothing and
 outlived its struct handed to a `sink` (h331) or given a new value
 (h332) — and a library handle's copy made that way outlived its struct
 taken by a thread (h333, the shape #66 was found with). It borrows the
-field's path now (§7.6). No other hole is known.
+field's path now (§7.6). The rest of #66 is the thread rule for library
+handles (§6.5): a thread's capture of one the spawner kept (h336), a
+parameter (h337), an `Arc` of one (h338), a closure capturing one kept in
+an `Arc` (h339) or sent on a channel (h340), and a closure several
+threads run changing what it captured (h342: a route handler pushing to
+a `Vec`). Making the standard
+library's shared handles honest for it found `tcp_close_listener` then
+`tcp_accept` reading the freed socket record on one thread (h341): a stop
+now keeps the record until the last owner, and closes the fd only once no
+accept is in progress. No other hole is known.
 
 The rules that carry it:
 
@@ -1415,6 +1428,7 @@ aggregate members and closure captures. Two leaves are built in:
 |---|---|---|---|
 | `Rc` | ✗ | ✗ | the reference count is not atomic |
 | `Cell` | ✓ | ✗ | a raw byte buffer with unsynchronised writes |
+| a library handle (§7.6) | ✓ | ✗ unless asserted | its copies are one state, changed in place |
 | everything else | ✓ | ✓ | unless a field says otherwise |
 
 They are checked where a value crosses: `thread_spawn` and `spawn` (every
@@ -1442,9 +1456,28 @@ positive marker is taken on trust, so a program writes it
 adds checks and is safe code.
 
 **Shared mutation.** A closure run on another thread moves its captures,
-so the spawner cannot keep using a plain `Vec` a worker was handed. Only
-share handles (`Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
-`PFile`) are used on both sides.
+so the spawner cannot keep using a plain `Vec` a worker was handed — nor
+a library handle whose copies are one state changed in place with no
+lock (a `PNCounter`, a `TcpConn`, a `Cell`): it moves as the `Vec` does
+(h336). A thread's closure may not capture a parameter of one, which its
+caller keeps (`sink` hands it over, h337), and a call that keeps a
+closure beside a handle another thread takes it from — a channel, an
+`Arc`, a server — moves the closure's captures that are not Sync (h340).
+Where several threads reach a value at once — an `Arc`'s payload, a
+closure kept in an `Arc` or in a handle asserted `% Sync`, such as a
+server's handler — what it holds or captures must be Sync, and such a
+handle is not (h338, h339). A closure several threads run may not change
+what it captured, either, unless that synchronises itself: a handler
+that pushes to a `Vec` it captured grows one environment from every
+worker at once (h342); it counts in an `Atomic` or keeps the list in a
+`Locked`. Share handles used on both sides are the ones asserted
+`% Sync` — `Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
+`PFile`, `Pool`, and the handles servers share (`TcpListener`,
+`HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's
+`RpcEntry`, an MCP `McpTaskStore`), each with the reason beside its
+marker — and a handle made only of `Arc`s and such handles (nurldb's
+`Store`), whose fields answer. A share made before the move is still
+open (§6.2).
 
 *An `Arc`'s payload is frozen once made.* `Arc` makes the reference
 count atomic, not the data: every thread holding a clone reads the
@@ -1505,7 +1538,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h335`) to the rule that rejects it. See
+  (`h01–h342`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

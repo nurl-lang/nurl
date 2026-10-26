@@ -1801,13 +1801,13 @@ CLASSES = [
             #
             # A Cell MOVED to a worker rather than shared. Cell is the
             # !Sync leaf, and only Arc asks about Sync: capturing one
-            # directly is Send and stays accepted.
+            # directly is Send and stays accepted. The worker's closure
+            # takes it along and drops it (the spawner may not free it).
             "cell-moved-not-shared": prog(
                 "    : Cell c ( cell_zero 64 )\n"
                 "    : ( @ v ) w \\ → v { : i n ( cell_size c ) }\n"
                 "    : !Thread ThreadErr r ( thread_spawn w )\n"
-                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
-                "    ( cell_free c )",
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }",
                 prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/cell.nu`\n"),
             # A Mutex is `{ Cell c }` — structurally the !Sync leaf, and
             # the very thing that makes contents shareable. If the

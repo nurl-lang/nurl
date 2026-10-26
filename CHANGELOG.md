@@ -162,7 +162,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callback is that hook. The keep-alive server's allocations per
   request on that build dropped from 8 to the ≤ 2 every other platform
   has.
+- **A library handle whose copies are one state is no longer changed by
+  two threads at once** (Agora #66, h336–h340). A handle over a counted
+  block (a `PNCounter`, a `TcpConn`, a `Cell`) is copied by sharing,
+  and the Send check asked only about types. So a thread could change
+  the state the spawner was still changing, with no lock. ASan reported
+  a double free in the counter's replica `Vec`. Such a handle, unless it
+  is asserted `% Sync`, is now held to the same rules as a `Vec`:
+  - A thread's closure moves it (h336).
+  - A thread's closure may not capture a parameter of one, because the
+    caller keeps it. Declare the parameter `sink` to hand it over (h337).
+  - A call that keeps a closure beside a handle another thread takes it
+    from moves the closure's captures that are not Sync. Such a handle is
+    a channel, an `Arc`, a server, or one the call returns (h340).
+  - Under the Sync question such a handle is not Sync. That covers an
+    `Arc` of one (h338), and a closure capturing one when the closure is
+    kept in an `Arc` or in a handle asserted `% Sync`, such as an HTTP
+    server's handler (h339).
+  - A closure kept where several threads run it may not change what it
+    captured unless that synchronises itself (h342). A route handler
+    that pushed to a `Vec` it captured grew one environment from every
+    worker at once, a double free under ASan.
 
+  A handle made only of `Arc`s and handles asserted `% Sync` (nurldb's
+  `Store`) is Sync when its fields are. It is no longer moved by a
+  thread's closure.
+
+  The standard library's handles that are shared on purpose are now
+  asserted `% Sync`, each with the reason beside its marker:
+  `TcpListener`, `HttpServer`, `QuicServer`, `H3Server` and a router's
+  `Route`. To back the markers:
+  - `HttpServer`'s acceptor count is an `Atomic`.
+  - `QuicServer`'s `running` and `accepted` counters are `Atomic`, and
+    one loop runs at a time: `quic_server_run` returns at once if the
+    loop already runs, or was stopped before it started.
+  - `quic_server_pump` is removed. Nothing called it, and the loop
+    already sends what an event callback writes.
+  - `RpcEntry` (ext/cluster.nu) is asserted `% Sync`: an entry never
+    changes after `registry_register`.
+
+  The new rules found races in the standard library, fixed here:
+  - `with_metrics` incremented plain `Vec i` counters from every worker.
+    `Metrics` now counts in `Atomic`s.
+  - The MCP server wrote its serving flag into a shared `Vec i` on every
+    request. Its control block is now `( Vec Atomic )`.
+  - An MCP `McpTaskStore` attached to a server was changed by concurrent
+    `tasks/*` requests with no lock. One lock now guards a store and its
+    tasks, and every task function holds it for its whole call. Still
+    open, and older: a task handle kept past its task's eviction or
+    expiry reads freed memory (Agora #124, `tools/fuzz/holes/open/`).
+  - The tasks dispatcher read the hook and the store through raw
+    pointers. It now uses `vec_at`.
+
+  What is still open: a share made before the move, such as
+  `( PNCounter_share a )` or a struct literal storing one. That is
+  tracked as Agora #121 in `tools/fuzz/holes/open/`.
+- **Closing a listener and then accepting on it no longer reads freed
+  memory** (h341). `tcp_close_listener` released the runtime's socket
+  record while the handle, and every copy of it, still named it. A later
+  `tcp_accept` on the same thread was a heap-use-after-free. The record
+  now stays until the handle's last owner. A stop is idempotent and
+  safe from any thread: an accept in progress returns `NetAccept`, and
+  so does every later one. The fd is closed only once no accept is in
+  progress, so an accept never runs on a closed or reused descriptor.
+  `tcp_shutdown_listener` now releases the port too.
 - **A binding read out of a field can no longer outlive its struct**
   (Agora #111, h331–h333). `: String n . h name` borrowed nothing in the
   borrow checker. The right-hand side's reads went with the row recorded

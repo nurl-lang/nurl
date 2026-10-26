@@ -123,6 +123,7 @@ $ `stdlib/std/subtle.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_tasks.nu`
+$ `stdlib/std/atomic.nu`
 $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -337,7 +338,8 @@ $ `stdlib/ext/http_response.nu`
 // below — `mcp_server_name`, `_version`, `_tool_count`, `_has_tool` —
 // and a field reorder or a new field underneath cannot touch you.
 //
-// `__ctl` is a one-slot ( Vec i ) holding the serving flag, and it is
+// `__ctl` is a ( Vec Atomic ) holding the serving flag and the cache
+// TTLs — Atomics, since the workers of a server serve at once — and it is
 // a Vec rather than an `i` field for a reason worth stating: a struct
 // is passed BY VALUE in NURL, so `= . r __frozen 1` inside a method
 // writes to that method's own copy and no caller ever sees it. A Vec
@@ -361,7 +363,7 @@ $ `stdlib/ext/http_response.nu`
     ( Vec McpResource ) __resources
     ( Vec McpResourceTemplate ) __templates
     ( Vec McpCompletion ) __completions
-    ( Vec i ) __ctl
+    ( Vec Atomic ) __ctl
     // The `cacheScope` a CacheableResult carries. A String rather than
     // a scalar for the same reason `__ctl` is a Vec: a struct is passed
     // by value, so only a shared handle lets a setter reach every copy.
@@ -410,14 +412,14 @@ $ `stdlib/ext/http_response.nu`
     }
 }
 
-@ __mcp_ctl_new → ( Vec i ) {
-    : ( Vec i ) c ( vec_with_cap [i] 3 )
-    ( vec_push [i] c 0 )
+@ __mcp_ctl_new → ( Vec Atomic ) {
+    : ( Vec Atomic ) c ( vec_with_cap [Atomic] 3 )
+    ( vec_push [Atomic] c ( atomic_new 0 ) )
     // Defaults: a registry fixed after startup but possibly behind
     // auth — a modest TTL, private. A server whose surface is public
     // and static says so with `mcp_server_set_cache_policy`.
-    ( vec_push [i] c 60000 )
-    ( vec_push [i] c 5000 )
+    ( vec_push [Atomic] c ( atomic_new 60000 ) )
+    ( vec_push [Atomic] c ( atomic_new 5000 ) )
     ^ c
 }
 
@@ -451,14 +453,14 @@ $ `stdlib/ext/http_response.nu`
 //
 // A TTL of 0 leaves that result uncached.
 @ mcp_server_set_cache_policy McpServer r i list_ttl_ms i read_ttl_ms s scope → v {
-    ( vec_set [i] . r __ctl MCP_CTL_TTL_LIST list_ttl_ms )
-    ( vec_set [i] . r __ctl MCP_CTL_TTL_READ read_ttl_ms )
+    ( atomic_store ( vec_at [Atomic] . r __ctl MCP_CTL_TTL_LIST ) list_ttl_ms )
+    ( atomic_store ( vec_at [Atomic] . r __ctl MCP_CTL_TTL_READ ) read_ttl_ms )
     ( string_clear . r __cache_scope )
     ( string_push_str . r __cache_scope scope )
 }
 
 @ __mcp_ctl McpServer r i slot → i {
-    ?? ( vec_get [i] . r __ctl slot ) { T v → { ^ v } F → { ^ 0 } }
+    ^ ( atomic_load ( vec_at [Atomic] . r __ctl slot ) )
 }
 
 // Stamp a listing result with the server's cache policy.
@@ -474,7 +476,7 @@ $ `stdlib/ext/http_response.nu`
 
 // T once the server has served its first request — see `__ctl`.
 @ mcp_server_is_serving McpServer r → b {
-    ?? ( vec_get [i] . r __ctl MCP_CTL_SERVING ) { T v → { ^ != v 0 } F → { ^ F } }
+    ^ != ( atomic_load ( vec_at [Atomic] . r __ctl MCP_CTL_SERVING ) ) 0
 }
 
 @ mcp_server_free sink McpServer r → v {}
@@ -1406,7 +1408,7 @@ b read_only b destructive b idempotent b open_world
 // One server, built once, serves every caller: the per-request work is
 // authenticating and building `ctx`, not registering tools.
 @ mcp_server_dispatch_as McpServer r Json req Json ctx → !Json McpRpcErr {
-    ( vec_set [i] . r __ctl MCP_CTL_SERVING 1 )
+    ( atomic_store ( vec_at [Atomic] . r __ctl MCP_CTL_SERVING ) 1 )
     : ~ s method ``
     ?? ( json_obj_get req `method` ) {
         T mv → { = method ( json_as_str mv ) }
@@ -1476,14 +1478,12 @@ b read_only b destructive b idempotent b open_world
 // `result` is unwrapped here and its `error` becomes an McpRpcErr —
 // the envelope is built once, by the caller, for every method alike.
 @ __mcp_dispatch_tasks McpServer r Json req s method → !Json McpRpcErr {
-    : *McpTaskHook hp ( vec_data [McpTaskHook] . r __task_hook )
     ? > ( vec_len [McpTaskHook] . r __task_hook ) 0 {
-        : McpTaskHook hk . hp 0
+        : McpTaskHook hk ( vec_at [McpTaskHook] . r __task_hook 0 )
         : ( @ v ) f . hk f
         ( f )
     } {}
-    : *McpTaskStore sp ( vec_data [McpTaskStore] . r __tasks )
-    : McpTaskStore store . sp 0
+    : McpTaskStore store ( vec_at [McpTaskStore] . r __tasks 0 )
     // mcp_tasks_dispatch wants the id to echo; it is re-wrapped by the
     // envelope layer anyway, so a null placeholder is enough here.
     ?? ( mcp_tasks_dispatch store req ( json_null ) method ) {

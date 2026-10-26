@@ -15858,6 +15858,15 @@ unsafe @ gen_call i lex i syms i cg → s {
             // share of its own, gen_closure_expr: not moved.)
             : s __cmcaps ( bck_unshared_caps syms __cacaps )
             ? != 0 ( nurl_str_len __cmcaps ) { ( bck_stash_cdep `-` ( nurl_lex_line lex ) call_name ( nurl_str_cat __cai `!` ) __cmcaps ) } {}
+            // …and when it keeps the closure in a handle another thread
+            // takes it from (a channel, an Arc, a server), the closure's copy
+            // of a capture two threads may not reach at once — a share
+            // handle, a Cell — is this side's very state: it goes along too
+            // (decided at the walk: the callee keeps the closure; #66).
+            : s __cxcaps ( bck_nosync_caps syms __cacaps )
+            ? & != 0 ( nurl_str_len __cxcaps ) ( __thr_xnode_call syms cc_arg_tys ( nurl_sym_get syms call_name ) ( nurl_str_to_int __cai ) ) {
+                ( bck_stash_cdep `-` ( nurl_lex_line lex ) call_name ( nurl_str_cat __cai `x!` ) __cxcaps )
+            } {}
             : ~ s __cw_rest ( nurl_str_cat arg_idents `` )
             : ~ i __cwi 0
             ~ != 0 ( nurl_str_len __cw_rest ) {
@@ -25921,18 +25930,113 @@ unsafe @ bck_stash_move s name i line s cause → v {
 // carrying one of these rows is deferred to the end of the module
 // (borrowck_fn_end → g_deferred_bck) so every summary is final.
 // The captures in `caps` that a detached closure moves: all but the
-// handles whose copy is a share of the same object.
+// handles whose copy is a share of the same object and that are made to be
+// reached from two threads at once (__thr_share_ok). Any other share
+// handle — a PNCounter, a Cell, a connection — moves as a Vec does: its
+// copies are one state, changed in place with no lock, so the thread
+// takes it and this side may not use it again (#66).
 @ bck_unshared_caps i syms s caps → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s v ( str_first_word rest ) = rest ( str_skip_word rest )
         : s vt ( nurl_sym_get syms v )
-        ? & ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) {} {
+        ? & & ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) ( __thr_share_ok syms vt ) {} {
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v )
         }
     }
     ^ out
+}
+
+// The captures in `caps` two threads may not reach at once (a share
+// handle not asserted Sync, a Cell, a value holding one): a closure kept
+// where another thread takes it carries this side's very state in them.
+@ bck_nosync_caps i syms s caps → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( nurl_sym_get syms v )
+        ? & ! ( __is_closure_ty vt ) ( __thr_not_sync syms vt ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v )
+        } {}
+    }
+    ^ out
+}
+
+// Does a call with arguments of types `tys` (`;`-separated) returning
+// `rlt` hand argument `k` somewhere other threads reach — beside it a
+// handle made for that (a channel, an Arc, one asserted Sync), or one it
+// returns?
+@ __thr_xnode_call i syms s tys s rlt i k → b {
+    ? ( __thr_xnode_ty syms rlt ) { ^ T } {}
+    : ~ i j 0
+    : ~ s t ( __semi_nth tys 0 )
+    ~ & != 0 ( nurl_str_len t ) < j 64 {
+        ? & != j k ( __thr_xnode_ty syms t ) { ^ T } {}
+        = j + j 1
+        = t ( __semi_nth tys j )
+    }
+    ^ F
+}
+
+@ __thr_xnode_ty i syms s ty → b {
+    ? ! ( __ts_is_node ty ) { ^ F } {}
+    : s b ( __libh_base ty )
+    ? | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ T } {}
+    ^ ( __thr_share_ok syms ty )
+}
+
+// Is `ty` a share handle whose copies are one state changed in place with
+// no lock — held in an rcbox (__libh_rc_backed) and not asserted `% Sync`
+// — so that two threads may not use it at once?
+@ __thr_unsafe_share i syms s ty → b {
+    ? ! ( __is_libh ty ) { ^ F } {}
+    ? ! ( seq ( __libh_copy_op ty ) `share` ) { ^ F } {}
+    : s bn ( __lty_base_name ty )
+    ? ( seq bn `Arc` ) { ^ F } {}
+    ? ( __thr_marked `NotSync##` ty bn ) { ^ T } {}
+    ? ( __thr_marked `Sync##` ty bn ) { ^ F } {}
+    ^ ( __libh_rc_backed syms ty 0 )
+}
+
+// May copies of share handle `ty` — one state — be used by two threads at
+// once? Where its type says so: asserted `% Sync` (Channel, Mutex, Locked,
+// Atomic, a pool…), or an `Arc`, whose payload is frozen once made and is
+// held to Sync itself where the Arc crosses (__thr_check) — and a handle
+// made of those (nurldb's Store: Arcs over locks and Atomics), whose fields
+// are Sync.
+@ __thr_share_ok i syms s ty → b {
+    : s bn ( __lty_base_name ty )
+    ? ( seq bn `Arc` ) { ^ T } {}
+    ? ( __thr_marked `NotSync##` ty bn ) { ^ F } {}
+    ? ( __thr_marked `Sync##` ty bn ) { ^ T } {}
+    ? & ( __is_libh ty ) ! ( __libh_rc_backed syms ty 0 ) { ^ ! ( __thr_not_sync syms ty ) } {}
+    ^ F
+}
+
+// Is share handle `ty`'s state in an rcbox — a `( Shared … )` it holds
+// directly or through a share handle of its own — where every copy changes
+// it in place? (One whose state is in Arcs, frozen once made, and handles
+// that synchronise themselves is not: its fields answer.)
+@ __libh_rc_backed i syms s ty i depth → b {
+    : s bn ( __lty_base_name ty )
+    ? ( seq bn `Shared` ) { ^ T } {}
+    ? > depth 4 { ^ T } {}
+    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    ? == 0 ( nurl_str_len fc ) { ^ T } {}
+    : i fn_ ( nurl_str_to_int fc )
+    : ~ i fi 0
+    ~ < fi fn_ {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+        : s fb ( __lty_base_name ft )
+        ? ( seq fb `Shared` ) { ^ T } {}
+        ? & & & ( __is_libh ft ) ( seq ( __libh_copy_op ft ) `share` ) ! ( seq fb `Arc` ) ! ( __thr_marked `Sync##` ft fb ) {
+            ? ( __libh_rc_backed syms ft + depth 1 ) { ^ T } {}
+        } {}
+        = fi + fi 1
+    }
+    ^ F
 }
 
 // A copy of `str` with every byte `from` replaced by `to`. (The copy is
@@ -28070,7 +28174,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // may not name them again — sharing goes through Arc / Mutex /
                 // a channel, each shared explicitly.
                 : s mcal ( bck_field rec 5 )
-                ? | ( __thr_is_detach ( bck_generic_base mcal ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` mcal `##` ( bck_field rec 6 ) ) ) {
+                // (`Kx`: a closure argument K handed beside a handle other
+                // threads reach — it goes along if the callee keeps it.)
+                : s mix ( bck_field rec 6 )
+                : i mixn ( nurl_str_len mix )
+                : b mxk & & > mixn 1 == ( nurl_str_get mix - mixn 1 ) 120 ! ( __bck_invoke_only mcal ( nurl_str_slice mix 0 - mixn 1 ) )
+                ? | | mxk ( __thr_is_detach ( bck_generic_base mcal ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` mcal `##` mix ) ) {
                     : ~ s mr ( nurl_str_cat ( bck_field rec 2 ) `` )
                     ~ != 0 ( nurl_str_len mr ) {
                         : s c ( str_first_word mr ) = mr ( str_skip_word mr )
@@ -28079,7 +28188,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             = st ( bck_st_set st ci BCK_MOVED )
                             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` c ) ( bck_field rec 3 ) )
                             ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` c ) ( bck_field rec 3 ) )
-                            ( nurl_str_cat3 `the closure that '` mcal `' runs on another thread or fiber, which takes it along (to keep using a value here, give the closure a copy — ( mem_dup x ) — or share it through Arc / Mutex / a channel, shared before the spawn)` ) )
+                            ? mxk ( nurl_str_cat3 `the closure that '` ( bck_fn_show mcal ) `' keeps where another thread takes it (a channel, an Arc, a server), which takes it along: the closure's copy of it is this very state, changed in place with no lock (to keep using it here, keep it behind a Locked or an Atomic and capture that)` )
+                            ( nurl_str_cat3 `the closure that '` mcal `' runs on another thread or fiber, which takes it along (to keep using a value here, give the closure a copy of a Vec or a String — ( mem_dup x ) — or share it through Arc / Mutex / a channel, shared before the spawn; a handle whose copies are one state, such as a PNCounter, has no copy to give: keep it behind a Locked or an Atomic)` ) )
                         } {}
                     }
                 } {}
@@ -29421,6 +29531,13 @@ unsafe @ bck_sx_is_id s e → b {
     : i k ( nurl_str_find callee `__` )
     ? <= k 0 { ^ ( nurl_str_cat callee `` ) } {}
     ^ ( nurl_str_slice callee 0 k )
+}
+
+// Does `callee` (an instance, or its generic) only ever invoke its closure
+// argument `idx` — never keep it?
+@ __bck_invoke_only s callee s idx → b {
+    ? ( nurl_sym_has_word g_fn_invoke_only callee idx ) { ^ T } {}
+    ^ ( nurl_sym_has_word g_fn_invoke_only ( bck_generic_base callee ) idx )
 }
 
 // An instance of a generic over one plain scalar (`slice_put__f64`): what
@@ -37399,6 +37516,50 @@ unsafe @ __l2n_fields s lt → s {
     ^ out
 }
 
+// A closure `{ R (i8*, A, …)*, i8* }` → `( @ R A … )` (the `i8*` first is
+// its environment); "" for anything else.
+unsafe @ __l2n_closure s lt → s {
+    : i n ( nurl_str_len lt )
+    ? | < n 12 ! ( __is_closure_ty lt ) { ^ ( nurl_str_cat `` `` ) } {}
+    : *u lv # *u lt
+    // The return type ends at the first `(` outside braces.
+    : ~ i depth 0
+    : ~ i k 2
+    : ~ i lp -1
+    ~ & < k n < lp 0 {
+        : i c ( nurl_str_at lv n k )
+        ? == c 123 { = depth + depth 1 } {}
+        ? == c 125 { = depth - depth 1 } {}
+        ? & == c 40 == depth 0 { = lp k } {}
+        = k + k 1
+    }
+    ? < lp 3 { ^ ( nurl_str_cat `` `` ) } {}
+    : s rt ( nurl_str_slice lt 2 - lp 3 )
+    : ~ s out ( nurl_str_cat `( @ ` ? ( seq rt `void` ) ( nurl_str_cat `v` `` ) ( __ty_show rt ) )
+    // The parameters, split at `, ` outside nesting up to the `)` closing
+    // the list.
+    : ~ i d 0
+    : ~ i st + lp 1
+    : ~ i idx 0
+    : ~ b done F
+    = k + lp 1
+    ~ & < k n ! done {
+        : i c ( nurl_str_at lv n k )
+        : b close & == c 41 == d 0
+        ? | close & == c 44 == d 0 {
+            ? > idx 0 { = out ( nurl_str_cat3 out ` ` ( __ty_show ( nurl_str_slice lt st - k st ) ) ) } {}
+            = idx + idx 1
+            = st + k 2
+            ? close { = done T } {}
+        } {
+            ? | == c 123 == c 40 { = d + d 1 } {}
+            ? | == c 125 == c 41 { = d - d 1 } {}
+        }
+        = k + k 1
+    }
+    ^ ( nurl_str_cat out ` )` )
+}
+
 // `{ i1, T }` → `?T`, `{ i1, T, E }` → `!T E`, `{ T*, i64 }` → `[T`;
 // "" for any other literal struct.
 @ __l2n_agg s lt → s {
@@ -38801,6 +38962,10 @@ unsafe @ __thr_peel s lty → s {
     ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
     ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `Cell` ` cell` ) } {}
 
+    // A share handle not made to be reached from two threads at once: its
+    // copies are one state, changed in place with no lock (#66).
+    ? & == want 1 ( __thr_unsafe_share syms lty ) { ^ ( nurl_str_cat bn ` sharenosync` ) } {}
+
     // Generic arguments. `Arc` is the one container that SHARES its
     // payload rather than moving it, so from here down the question
     // becomes the harder one — `( Arc ( Rc i ) )` and `( Arc Cell )`
@@ -38890,6 +39055,14 @@ unsafe @ __thr_peel s lty → s {
     { ^ ( nurl_str_cat
         `it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. `
         `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with an 'unsafe % Sync <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) } {}
+    ? ( seq kind `share` )
+    { ^ ( nurl_str_cat3
+        `it is a parameter: its caller keeps the '` nm
+        `' it passed, a handle whose copies are one state, changed in place with no lock — the other thread would change it under the caller. Declare the parameter 'sink' so this function takes the handle over (it then moves with the closure), or keep the state behind a 'Locked' or a 'Mutex' and share that.` ) } {}
+    ? ( seq kind `sharenosync` )
+    { ^ ( nurl_str_cat4
+        `it reaches '` nm
+        `', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync ` ( nurl_str_cat nm ` { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) ) } {}
     ? ( seq kind `notsend` )
     { ^ ( nurl_str_cat3
         `it reaches '` nm
@@ -38914,6 +39087,28 @@ unsafe @ __thr_peel s lty → s {
     : s r ( __thr_check syms lty 0 0 )
     ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len r ) ( nurl_str_cat `-` `` ) ( nurl_str_cat r `` ) )
     ^ r
+}
+
+// __thr_sync_reason: the Sync verdict for a value several threads may
+// reach at once, "" when they may (memoised as __thr_capture_reason is).
+@ __thr_sync_reason i syms s lty → s {
+    : s key ( nurl_str_cat `thrsync##` lty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) {
+        : s m ( nurl_sym_get g_impl_name_syms key )
+        ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( nurl_str_cat m `` )
+    } {}
+    : s r ( __thr_check syms lty 1 0 )
+    ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len r ) ( nurl_str_cat `-` `` ) ( nurl_str_cat r `` ) )
+    ^ r
+}
+
+// …as a boolean, for the callers above these definitions (an owned
+// result of a call to a function further down is never released there).
+@ __thr_not_sync i syms s lty → b {
+    : s r ( __thr_sync_reason syms lty )
+    : b bad != 0 ( nurl_str_len r )
+    ^ bad
 }
 
 // __thr_lacks: the same question with a BOOLEAN answer, for the callers
@@ -40098,7 +40293,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_did_ret outer_did_ret
 
     ( __clo_merge_summaries syms closure_fn_name )
-    = g_last_closure_cs ( nurl_str_cat clo_cs `` )
+    // …with what running it changes of a capture that does not synchronise
+    // itself: several threads running it at once would change it together.
+    = g_last_closure_cs ( __bar_union clo_cs ( __clo_mut_atoms syms __cl_effs g_clo_assigned clo_line ) )
     // Captures the body releases itself (`( string_free r2 )` in a thread
     // body): the env takes them over from the enclosing binding, which
     // no longer drops them, and the env's own drop skips them.
@@ -50067,11 +50264,78 @@ unsafe @ __cc_mangle s ty → s {
             // reason` (spaces as `~`), decided where the closure crosses one.
             : s ty ( nurl_sym_get syms v )
             ? ! ( __is_closure_ty ty ) {
-                : s why ( __thr_capture_reason syms ty )
+                : ~ s why ( __thr_capture_reason syms ty )
+                // …or a parameter the caller keeps, of a share handle no two
+                // threads may use at once: the closure's copy of it is the
+                // caller's very state (#66). (A `sink` one is the function's
+                // to hand over: it moves with the closure.)
+                ? & == 0 ( nurl_str_len why ) ( __thr_unsafe_share syms ty ) {
+                    : i pi ( nurl_sym_word_index syms `__fn_param_names__` v )
+                    ? & >= pi 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) ) {
+                        = why ( nurl_str_cat ( __lty_base_name ty ) ` share` )
+                    } {}
+                } {}
                 ? != 0 ( nurl_str_len why ) {
                     = out ( __bar_add out ( __tilde ( nurl_str_cat4 ( nurl_str_cat `!` v ) `@` ( nurl_str_int line ) ( nurl_str_cat `@` why ) ) ) )
-                } {}
+                } {
+                    // …or one that may cross but not be reached from two
+                    // threads at once: `$name@line@reason`, decided where
+                    // the closure is kept in a handle several threads run it
+                    // from (__sync_crossing).
+                    : s swhy ( __thr_sync_reason syms ty )
+                    ? != 0 ( nurl_str_len swhy ) {
+                        = out ( __bar_add out ( __tilde ( nurl_str_cat4 ( nurl_str_cat `$` v ) `@` ( nurl_str_int line ) ( nurl_str_cat `@` swhy ) ) ) )
+                    } {}
+                }
             } {}
+        } {}
+    }
+    ^ out
+}
+
+// The index of the last byte `c` in `x`, -1 for none.
+unsafe @ __str_rfind_char s x i c → i {
+    : i n ( nurl_str_len x )
+    : *u xp # *u x
+    : ~ i k - n 1
+    ~ >= k 0 {
+        ? == ( nurl_str_at xp n k ) c { ^ k } {}
+        = k - k 1
+    }
+    ^ -1
+}
+
+// What running a closure built on `line` changes of its captures that do
+// not synchronise themselves (not a handle asserted `% Sync`): a capture it
+// hands to a call (`effs`: `name:callee:k`) as `&name@line@callee@k`, one it
+// assigns (`assigned`) as `&name@line@=@0`. Whether the callee changes it
+// is decided where the closure is kept for several threads to run at once
+// (__sync_verdict), once every summary is final.
+@ __clo_mut_atoms i syms s effs s assigned i line → s {
+    : ~ s out ``
+    : ~ s r ( nurl_str_cat effs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s e ( str_first_word r ) = r ( str_skip_word r )
+        : i c1 ( nurl_str_find e `:` )
+        : i c2 ( __str_rfind_char e 58 )
+        ? & > c1 0 > c2 c1 {
+            : s nm ( nurl_str_slice e 0 c1 )
+            : i dot ( nurl_str_find nm `.` )
+            : s root ? > dot 0 ( nurl_str_slice nm 0 dot ) nm
+            : s ty ( nurl_sym_get syms root )
+            ? & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_share_ok syms ty ) {
+                : s cal ( nurl_str_slice e + c1 1 - - c2 c1 1 )
+                : s k ( nurl_str_slice e + c2 1 - - ( nurl_str_len e ) c2 1 )
+                = out ( __bar_add out ( nurl_str_cat4 ( nurl_str_cat3 `&` root `@` ) ( nurl_str_int line ) ( nurl_str_cat `@` cal ) ( nurl_str_cat `@` k ) ) )
+            } {}
+        } {}
+    }
+    : ~ s a ( nurl_str_cat assigned `` )
+    ~ != 0 ( nurl_str_len a ) {
+        : s w ( str_first_word a ) = a ( str_skip_word a )
+        : s ty ( nurl_sym_get syms w )
+        ? & & != 0 ( nurl_str_len ty ) ! ( __is_closure_ty ty ) ! ( __thr_share_ok syms ty ) {
+            = out ( __bar_add out ( nurl_str_cat4 ( nurl_str_cat3 `&` w `@` ) ( nurl_str_int line ) `@=` `@0` ) )
         } {}
     }
     ^ out
@@ -50461,9 +50725,9 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : ~ s r ( nurl_str_cat cs `` )
             ~ != 0 ( nurl_str_len r ) {
                 : s u ( __bar_first r ) = r ( __bar_rest r )
-                // (`?pK`: the callers decide; `!…`: a Send question,
-                // resolve_send_checks.)
-                ? | & > ( nurl_str_len u ) 2 | ( seq ( nurl_str_slice u 0 2 ) `?p` ) ( seq ( nurl_str_slice u 0 2 ) `?P` ) == ( nurl_str_get u 0 ) 33 {} {
+                // (`?pK`: the callers decide; `!…` / `$…` / `&…`: a Send /
+                // Sync question, resolve_send_checks.)
+                ? | | & > ( nurl_str_len u ) 2 | ( seq ( nurl_str_slice u 0 2 ) `?p` ) ( seq ( nurl_str_slice u 0 2 ) `?P` ) | == ( nurl_str_get u 0 ) 33 == ( nurl_str_get u 0 ) 36 == ( nurl_str_get u 0 ) 38 {} {
                     ? ( seq u `?` ) {
                         ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
                         `' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a Vec element, a join of two values, or a call through a closure value. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.` ) ) }
@@ -50607,11 +50871,16 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
                 : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
                 : s r3 ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) )
                 : s encl ( str_first_word r3 )
-                ? ( __send_req_params encl ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) ) 0 ) ) { = changed T } {}
+                : s ccs ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) ) 0 )
+                ? ( __send_req_params encl ccs ) { = changed T } {}
+                ? ( __sync_crossing syms ns ) {
+                    ? ( __sync_req_params encl ccs ) { = changed T } {}
+                } {}
             } {}
             = i + i 1
         }
         ? ( __dyn_virtual_arg_round `sendreq##` ) { = changed T } {}
+        ? ( __dyn_virtual_arg_round `syncreq##` ) { = changed T } {}
     }
     // The verdicts.
     = j 0
@@ -50635,7 +50904,9 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
             : s r4 ( str_skip_word r3 )
             : s line ( str_first_word r4 )
             : s file ( str_first_word ( str_skip_word r4 ) )
-            ( __send_verdict ( __cc_expand ( str_skip_word ( str_skip_word r4 ) ) 0 ) file line why )
+            : s vcs ( __cc_expand ( str_skip_word ( str_skip_word r4 ) ) 0 )
+            ( __send_verdict vcs file line why )
+            ? ( __sync_crossing syms ns ) { ( __sync_verdict vcs file line why ) } {}
         } {}
         = i + i 1
     }
@@ -50643,6 +50914,8 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
 
 // A type as written: `( Channel Job )` for a handle instance.
 @ __ty_show s ty → s {
+    : s clo ( __l2n_closure ty )
+    ? != 0 ( nurl_str_len clo ) { ^ clo } {}
     ? ! ( __is_libh ty ) { ^ ( llvm_to_nurl ty ) } {}
     : ~ s out ( nurl_str_cat `( ` ( __libh_base ty ) )
     : ~ i i 0
@@ -50689,6 +50962,10 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     : s ks ( str_first_word ( str_skip_word ( str_skip_word rec ) ) )
     : i k ( nurl_str_to_int ks )
     : s shown ( llvm_to_nurl gn )
+    ? | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` cn `##` ks ) )
+    != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` gn `##` ks ) ) {
+        ^ ( nurl_str_cat4 `'` shown ( nurl_str_cat3 `' keeps its parameter ` ( nurl_str_int + k 1 ) ` in a handle shared across threads` ) `` )
+    } {}
     ? | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` cn `##` ks ) )
     != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` gn `##` ks ) ) {
         ^ ( nurl_str_cat4 `'` shown ( nurl_str_cat3 `' runs its parameter ` ( nurl_str_int + k 1 ) ` on another thread or fiber` ) `` )
@@ -50707,6 +50984,106 @@ unsafe @ __cc_note_call i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
 
 // A value that crosses: every capture that may not, and every closure
 // whose captures cannot be followed, is an error at `file:line`.
+// Does store record `ns` keep its value where several threads may reach it
+// at once — an Arc, a handle asserted Sync (a server running its handler on
+// every worker) — rather than hand it to one (a channel, a Locked, a pool)
+// or run it on one (a detach)? What its closures capture must then be Sync
+// as well as Send.
+@ __sync_crossing i syms s ns → b {
+    : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
+    : s cn ( str_first_word rec )
+    : s gn ( str_first_word ( str_skip_word rec ) )
+    : s ks ( str_first_word ( str_skip_word ( str_skip_word rec ) ) )
+    ? | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` cn `##` ks ) )
+    != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `syncreq##` gn `##` ks ) ) { ^ T } {}
+    : ~ s o ( __cc_owners syms ns )
+    ~ != 0 ( nurl_str_len o ) {
+        : s u ( __bar_first o ) = o ( __bar_rest o )
+        ? ( __ts_many_threads syms u ) { ^ T } {}
+    }
+    : s rlt ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `ccchk#` ns `#rlt` ) )
+    : s tys ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `ccchk#` ns `#tys` ) )
+    ? & & ( __ts_is_node rlt ) ( __cc_keeps cn gn ( nurl_str_to_int ks ) ( __semi_nth tys ( nurl_str_to_int ks ) ) ) ( __ts_many_threads syms rlt ) { ^ T } {}
+    ^ F
+}
+
+// Is `node` a thread-shared handle several threads may reach what it
+// holds through at once: an Arc, or a share handle asserted `% Sync` that
+// does not hand what it holds to one thread at a time (a channel, a
+// Locked, a pool)? (One not asserted Sync moves to the thread that uses
+// it; what it holds runs where its own code runs it.)
+@ __ts_many_threads i syms s node → b {
+    : s b ( __libh_base node )
+    ? | | | ( seq b `Channel` ) ( seq b `DChannel` ) ( seq b `Locked` ) ( seq b `Pool` ) { ^ F } {}
+    ^ ( __thr_share_ok syms node )
+}
+
+// The `$` atoms of `cs` — captures that are Send but not Sync — at a store
+// several threads may run the closure from (__sync_crossing).
+@ __sync_verdict s cs s file s line s how → v {
+    : ~ s r ( nurl_str_cat cs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? & != 0 ( nurl_str_len u ) == ( nurl_str_get u 0 ) 36 {
+            : s a ( __untilde ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 ) )
+            : i p1 ( nurl_str_find a `@` )
+            : s nm ( nurl_str_slice a 0 p1 )
+            : s a2 ( nurl_str_slice a + p1 1 - - ( nurl_str_len a ) p1 1 )
+            : i p2 ( nurl_str_find a2 `@` )
+            : s bl ( nurl_str_slice a2 0 p2 )
+            : s reason ( nurl_str_slice a2 + p2 1 - - ( nurl_str_len a2 ) p2 1 )
+            ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat4 ( nurl_str_cat3 how `, where several threads may run the closure at once, but the closure built on line ` bl )
+            ( nurl_str_cat3 ` captures '` nm `', which is not Sync: ` ) ( __thr_explain reason ) `` ) )
+        } {}
+        // `&name@line@callee@k`: a capture the body hands to `callee`
+        // (argument k), or assigns (`=`).
+        ? & != 0 ( nurl_str_len u ) == ( nurl_str_get u 0 ) 38 {
+            : s a ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 )
+            : i p1 ( nurl_str_find a `@` )
+            : s nm ( nurl_str_slice a 0 p1 )
+            : s a2 ( nurl_str_slice a + p1 1 - - ( nurl_str_len a ) p1 1 )
+            : i p2 ( nurl_str_find a2 `@` )
+            : s bl ( nurl_str_slice a2 0 p2 )
+            : s a3 ( nurl_str_slice a2 + p2 1 - - ( nurl_str_len a2 ) p2 1 )
+            : i p3 ( __str_rfind_char a3 64 )
+            : s cal ( nurl_str_slice a3 0 p3 )
+            : s k ( nurl_str_slice a3 + p3 1 - - ( nurl_str_len a3 ) p3 1 )
+            ? ( __cc_callee_changes cal k ) {
+                : s act ? ( seq cal `=` ) ( nurl_str_cat `gives it a new value` `` ) ( nurl_str_cat3 `hands it to '` ( bck_fn_show cal ) `', which changes it` )
+                ( die_file_pos file ( nurl_str_to_int line ) 0 ( nurl_str_cat3 ( nurl_str_cat3 how `, where several threads may run the closure at once, but the closure built on line ` bl )
+                ( nurl_str_cat4 ` changes '` nm `' when it runs (it ` act )
+                `): two threads running it at once would change it together, with no lock. Keep what it changes behind a 'Locked' or an 'Atomic' and capture that, or give each thread a closure of its own.` ) )
+            } {}
+        } {}
+    }
+}
+
+// Does `callee` change its argument `k` — add to it, drop from it, replace
+// it or take it over (`=`: an assignment)?
+@ __cc_callee_changes s callee s k → b {
+    ? ( seq callee `=` ) { ^ T } {}
+    : s base ( bck_generic_base callee )
+    ? | ( str_contains_word ( nurl_sym_get g_fn_mutates callee ) k ) ( str_contains_word ( nurl_sym_get g_fn_mutates base ) k ) { ^ T } {}
+    ? | | ( nurl_sym_has_word g_fn_reallocs callee k ) ( nurl_sym_has_word g_fn_drops callee k ) ( nurl_sym_has_word g_fn_inout callee k ) { ^ T } {}
+    ? | ( nurl_sym_has_word g_fn_sink callee k ) ( nurl_sym_has_word g_fn_sink base k ) { ^ T } {}
+    ? & ( seq k `0` ) | ( bck_is_container_mutator base ) != 0 ( bck_lib_kind base ) { ^ T } {}
+    ^ F
+}
+
+@ __sync_req_params s encl s cs → b {
+    : ~ b added F
+    : ~ s r ( nurl_str_cat cs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        : s fk ( __cc_param_atom encl u )
+        ? != 0 ( nurl_str_len fk ) {
+            : s key ( nurl_str_cat `syncreq##` fk )
+            ? == 0 ( nurl_sym_len g_pending_impl key ) { ( nurl_sym_def g_pending_impl key `1` ) = added T } {}
+        } {}
+    }
+    ^ added
+}
+
 @ __send_verdict s cs s file s line s how → v {
     : ~ s r ( nurl_str_cat cs `` )
     ~ != 0 ( nurl_str_len r ) {

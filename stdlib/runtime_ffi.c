@@ -1498,6 +1498,7 @@ typedef SOCKET nurl_sockfd_t;
 #    include <fcntl.h>
 #    include <sys/time.h>
 #    include <poll.h>              /* connect deadline off a fiber */
+#    include <sched.h>             /* sched_yield — a listener's stop */
 #    include <pthread.h>           /* §18-r resolver threads */
 #    if defined(__linux__)
 #      include <sys/eventfd.h>     /* §18-r resolver completion signal */
@@ -1557,6 +1558,11 @@ typedef struct NurlTcp {
      * read-side shutdown — which select and WSAPoll never report. Opened
      * by the first such wait; NURL_INVALID_SOCK until then. */
     nurl_sockfd_t rd_wake;
+    /* Listener-only: the accepts in progress (atomic). A stop closes the
+     * fd only once this is 0, so no accept ever reads a closed — or a
+     * reused — descriptor; one that starts after the stop sees
+     * `shutting_down` before it reads the fd (nurl__tcp_listener_stop). */
+    int           accepting;
     /* Set by nurl_tcp_set_nonblock: the fiber/reactor accept path drives
      * its own readiness wait, so accept() must do ONE non-blocking accept
      * and hand EAGAIN back rather than entering the blocking poll loop. */
@@ -2454,14 +2460,39 @@ long long nurl_tcp_connect(const char *host, long long port) {
     return nurl_tcp_connect_ms(host, port, 0);
 }
 
+/* nurl__fd_reclaim from inside an accept. The collection it runs may
+ * drop values, and a destructor may stop this very listener, which waits
+ * for the accepts in progress: step out of the count for it, and retry
+ * only if the listener is still running. */
+static int nurl__accept_reclaim(NurlTcp *l) {
+    __atomic_sub_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    int r = nurl__fd_reclaim();
+    __atomic_add_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    return r && !__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST);
+}
+
+static void nurl__tcp_accept_on(NurlTcp *l, NurlTcp *c);
+
 long long nurl_tcp_accept(long long listener) {
     NurlTcp *l = (NurlTcp*)(uintptr_t)listener;
     NurlTcp *c = nurl__tcp_new_handle(NURL_TCP_KIND_CONN);
     if (!c) return 0;
-    if (!l || l->fd == NURL_INVALID_SOCK || l->kind != NURL_TCP_KIND_LISTENER) {
+    if (!l || l->kind != NURL_TCP_KIND_LISTENER) {
         c->err_kind = NURL_NET_ERR_ACCEPT;
         return (long long)(uintptr_t)c;
     }
+    /* Counted in before the fd is read: a stop closes it only once no
+     * accept is in progress (nurl__tcp_listener_stop). */
+    __atomic_add_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST) || l->fd == NURL_INVALID_SOCK)
+        c->err_kind = NURL_NET_ERR_ACCEPT;
+    else
+        nurl__tcp_accept_on(l, c);
+    __atomic_sub_fetch(&l->accepting, 1, __ATOMIC_SEQ_CST);
+    return (long long)(uintptr_t)c;
+}
+
+static void nurl__tcp_accept_on(NurlTcp *l, NurlTcp *c) {
     struct sockaddr_in peer;
 #ifdef _WIN32
     int peerlen = (int)sizeof(peer);
@@ -2481,10 +2512,10 @@ long long nurl_tcp_accept(long long listener) {
      * entering — the wake channel stops it without touching the fd. */
     if (l->nonblock) {
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__accept_reclaim(l)) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd == NURL_INVALID_SOCK) {
             c->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_ACCEPT);
-            return (long long)(uintptr_t)c;
+            return;
         }
         c->fd       = fd;
         c->err_kind = NURL_NET_ERR_OK;
@@ -2494,12 +2525,12 @@ long long nurl_tcp_accept(long long listener) {
             setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, (int)sizeof(one));
         }
         c->nonblock = 1;
-        return (long long)(uintptr_t)c;
+        return;
     }
     for (;;) {
-        if (l->shutting_down) {
+        if (__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST)) {
             c->err_kind = NURL_NET_ERR_ACCEPT;
-            return (long long)(uintptr_t)c;
+            return;
         }
         if (l->wake_rfd != NURL_INVALID_SOCK) {
             nurl_pollfd_t pfds[2];
@@ -2507,24 +2538,24 @@ long long nurl_tcp_accept(long long listener) {
             pfds[1].fd = l->wake_rfd; pfds[1].events = POLLIN; pfds[1].revents = 0;
             if (nurl__poll(pfds, 2, -1) < 0) {
                 c->err_kind = nurl__net_map_wsa(WSAGetLastError(), NURL_NET_ERR_ACCEPT);
-                return (long long)(uintptr_t)c;
+                return;
             }
-            if (l->shutting_down ||
+            if (__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST) ||
                 (pfds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
                 c->err_kind = NURL_NET_ERR_ACCEPT;
-                return (long long)(uintptr_t)c;
+                return;
             }
             if (!(pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) continue;
         }
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__accept_reclaim(l)) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd == NURL_INVALID_SOCK) {
             int we = WSAGetLastError();
             /* A sibling worker took the connection, or the peer reset it
              * while it was queued: poll again. */
             if (we == WSAEWOULDBLOCK || we == WSAECONNRESET || we == WSAEINTR) continue;
             c->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_ACCEPT);
-            return (long long)(uintptr_t)c;
+            return;
         }
         break;
     }
@@ -2550,11 +2581,11 @@ long long nurl_tcp_accept(long long listener) {
 #  if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
         fd = accept4(l->fd, (struct sockaddr*)&peer, &peerlen,
                      SOCK_NONBLOCK | SOCK_CLOEXEC);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim())
+        if (fd == NURL_INVALID_SOCK && nurl__accept_reclaim(l))
             fd = accept4(l->fd, (struct sockaddr*)&peer, &peerlen, SOCK_NONBLOCK | SOCK_CLOEXEC);
 #  else
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__accept_reclaim(l)) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd != NURL_INVALID_SOCK) {
             int fl = fcntl(fd, F_GETFL, 0);
             if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -2562,7 +2593,7 @@ long long nurl_tcp_accept(long long listener) {
 #  endif
         if (fd == NURL_INVALID_SOCK) {
             c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
-            return (long long)(uintptr_t)c;
+            return;
         }
         c->fd       = fd;
         c->err_kind = NURL_NET_ERR_OK;
@@ -2573,7 +2604,7 @@ long long nurl_tcp_accept(long long listener) {
                        (const char*)&one, (socklen_t)sizeof(one));
         }
         c->nonblock = 1;
-        return (long long)(uintptr_t)c;
+        return;
     } else
     /* Blocking accept (single-threaded + server_run_pool). If this listener
      * has no wakeup pipe (pipe() failed at listen) the loop's poll is
@@ -2581,9 +2612,9 @@ long long nurl_tcp_accept(long long listener) {
      * {fd, wake_rfd} so a cross-thread nurl_tcp_shutdown reliably unblocks
      * every worker. */
     for (;;) {
-        if (l->shutting_down) {
+        if (__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST)) {
             c->err_kind = NURL_NET_ERR_ACCEPT;
-            return (long long)(uintptr_t)c;
+            return;
         }
         if (l->wake_rfd != NURL_INVALID_SOCK) {
             struct pollfd pfds[2];
@@ -2593,19 +2624,19 @@ long long nurl_tcp_accept(long long listener) {
             if (pr < 0) {
                 if (errno == EINTR) continue;
                 c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
-                return (long long)(uintptr_t)c;
+                return;
             }
             /* Shutdown wins: the wake byte is never drained, so this stays
              * readable for every worker, not just the first to wake. */
-            if (l->shutting_down ||
+            if (__atomic_load_n(&l->shutting_down, __ATOMIC_SEQ_CST) ||
                 (pfds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
                 c->err_kind = NURL_NET_ERR_ACCEPT;
-                return (long long)(uintptr_t)c;
+                return;
             }
             if (!(pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) continue;
         }
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
-        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__accept_reclaim(l)) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd == NURL_INVALID_SOCK) {
             if (errno == EINTR || errno == ECONNABORTED ||
                 errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -2615,7 +2646,7 @@ long long nurl_tcp_accept(long long listener) {
                 continue;
             }
             c->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_ACCEPT);
-            return (long long)(uintptr_t)c;
+            return;
         }
         break;
     }
@@ -2665,7 +2696,6 @@ long long nurl_tcp_accept(long long listener) {
     }
     c->nonblock = 0;
 #endif
-    return (long long)(uintptr_t)c;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -3564,56 +3594,64 @@ void nurl_tcp_unref(long long handle) {
         nurl__tcp_destroy(h);
 }
 
+/* Stop a listener: every accept in progress returns, every later one
+ * fails, and the fd is closed — but never under an accept that may still
+ * read it, which would then accept on a closed or a reused descriptor.
+ * The struct stays: whatever still names it (the NURL handle's copies, a
+ * retaining accept fiber) reads a stopped listener, not freed memory.
+ * Idempotent, from any thread.
+ *
+ * The wake signal (never drained) makes every current and future accept
+ * poll return, so the accepts in progress leave at once; one that starts
+ * now sees `shutting_down` before it reads the fd (both sides are
+ * sequentially consistent: either this sees its count, or it sees the
+ * flag). Then nothing reads the fd, and it is closed. Without a wake
+ * channel (it could not be opened at listen) it is closed at once, as
+ * before. */
+static void nurl__tcp_listener_stop(NurlTcp *h) {
+    __atomic_store_n(&h->shutting_down, 1, __ATOMIC_SEQ_CST);
+    if (h->wake_wfd != NURL_INVALID_SOCK) {
+        nurl__signal_raise(h->wake_rfd, h->wake_wfd);
+        while (__atomic_load_n(&h->accepting, __ATOMIC_SEQ_CST) > 0) {
+#ifdef _WIN32
+            SwitchToThread();
+#else
+            sched_yield();
+#endif
+        }
+    }
+    nurl_sockfd_t fd = __atomic_exchange_n(&h->fd, NURL_INVALID_SOCK, __ATOMIC_SEQ_CST);
+    if (fd != NURL_INVALID_SOCK) nurl_close_sock(fd);
+    /* …and a fiber parked on it in the reactor wakes (its accept fails). */
+    nurl__reactor_wake_if_started();
+}
+
 void nurl_tcp_close(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
-    /* For a LISTENER, perform the stop + wakeup side-effects IMMEDIATELY,
-     * even if the struct free is deferred (an async accept fiber may still
-     * hold a ref): close the fd, raise the shutdown flag, poke the
-     * accept self-pipe (blocking pool) and the async reactor (fiber). A
-     * fiber/worker then resumes, sees the fd gone, and exits — at which
-     * point its ref drop runs the destructor. Conns take the plain
-     * release path (refcount 1 → 0 → destroy), preserving the exact
-     * SSL_shutdown-before-fd-close ordering inside nurl__tcp_destroy. */
-    if (h->kind == NURL_TCP_KIND_LISTENER) {
-        h->shutting_down = 1;
-        if (h->wake_wfd != NURL_INVALID_SOCK)
-            nurl__signal_raise(h->wake_rfd, h->wake_wfd);
-        if (h->fd != NURL_INVALID_SOCK) {
-            nurl_close_sock(h->fd);
-            h->fd = NURL_INVALID_SOCK;
-        }
-        nurl__reactor_wake_if_started();
-    }
+    /* A LISTENER stops now, even if the struct free is deferred (an async
+     * accept fiber may still hold a ref): it resumes, sees the listener
+     * stopped, and exits — at which point its ref drop runs the
+     * destructor. Conns take the plain release path (refcount 1 → 0 →
+     * destroy), preserving the exact SSL_shutdown-before-fd-close
+     * ordering inside nurl__tcp_destroy. */
+    if (h->kind == NURL_TCP_KIND_LISTENER) nurl__tcp_listener_stop(h);
     nurl_tcp_unref(handle);
 }
 
-/* Soft-shutdown — close the socket but KEEP the struct. server_run_pool's
- * shutdown thread relies on this: workers blocked in accept(2) wake with
- * an error and then read h->err_kind / h->fd on exit; freeing here would
- * race them (saw ~40% intermittent SIGSEGV on Windows). Caller invokes
- * nurl_tcp_close after workers have joined. */
+/* Stop a listener (nurl__tcp_listener_stop) but KEEP the struct and this
+ * handle's reference to it: server_run_pool's shutdown thread stops the
+ * listener its workers are blocked accepting on, and they then read
+ * h->err_kind on exit; tcp_close_listener stops one every copy of the
+ * NURL handle still names. The last owner's nurl_tcp_close frees it. */
 void nurl_tcp_shutdown(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h) return;
-    h->shutting_down = 1;
-    /* Wake every worker blocked in accept()'s poll via the wake channel. We
-     * must NOT close(h->fd) here: another thread may be mid-accept on it,
-     * and on Linux close() neither interrupts that accept nor is safe
-     * against fd reuse (the old close-from-another-thread relied on a
-     * wakeup that never happens → workers hang, join never returns). The
-     * fd is released by nurl_tcp_close once all workers have joined.
-     * Winsock's closesocket does interrupt an accept, but frees the handle
-     * number for reuse just the same — Windows takes this path too. */
-    if (h->wake_wfd != NURL_INVALID_SOCK) {
-        nurl__signal_raise(h->wake_rfd, h->wake_wfd);
-    } else if (h->fd != NURL_INVALID_SOCK) {
-        /* No wake channel (it could not be opened at listen): best-effort
-         * old path. */
-        nurl_close_sock(h->fd);
-        h->fd = NURL_INVALID_SOCK;
-    }
-    /* Also unblock a fiber parked on this listener via the async reactor. */
+    if (h->kind == NURL_TCP_KIND_LISTENER) { nurl__tcp_listener_stop(h); return; }
+    /* A connection (packages/nwasm's guest `tcp_shutdown`): its fd closes
+     * now, the struct with its owner's nurl_tcp_close. */
+    nurl_sockfd_t fd = __atomic_exchange_n(&h->fd, NURL_INVALID_SOCK, __ATOMIC_SEQ_CST);
+    if (fd != NURL_INVALID_SOCK) nurl_close_sock(fd);
     nurl__reactor_wake_if_started();
 }
 
