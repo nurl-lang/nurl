@@ -5,24 +5,53 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-10-19** · toolchain `v0.73.0-9-ge99655b7` · commit `e99655b7`_
+_Last run: **2026-10-26** · toolchain `v0.78.0-20-gf06d55c2` · commit `f06d55c2`_
 
-**Latest run:** ✅ **clean** — no findings
+**Latest run:** ❌ **27 finding(s)** — reproducers in `tools/fuzz/failures/` (workflow artifact)
 
 | family | configuration | executions | pass | findings | sanitized runs | wasm runs |
 |---|---|---:|---:|---:|---:|---:|
 | `differential-int` | seeds 1–1500, size=12, depth=4 | 1500 | 1500 | 0 | 0 | 150 |
 | `parser-mutational` | iters=4000 rng-seed=1 | 4000 | 4000 | 0 | 4000 | 0 |
 | `parser-mutational` | iters=4000 rng-seed=2 | 4000 | 4000 | 0 | 4000 | 0 |
+| `parser-mutational` | 4 min × 14 targets, rng-seed=18 | 2370080 | 2370053 | 27 | 2370080 | 0 |
 | `reject-inverse` | seeds 1–400, depth=3 | 400 | 400 | 0 | 0 | 0 |
 | `differential-struct` | seeds 1–600, size=14, depth=3 | 600 | 600 | 0 | 120 | 120 |
+
+Parser targets (all `parser-mutational` legs of this run):
+
+| target | executions | minutes | findings |
+|---|---:|---:|---:|
+| `cbor` | 704 | 0.0 | 0 |
+| `csr` | 1216 | 0.0 | 0 |
+| `h2` | 48896 | 4.0 | 0 |
+| `h2frame` | 308416 | 4.0 | 0 |
+| `h3frame` | 305856 | 4.0 | 0 |
+| `hpack` | 245440 | 4.0 | 0 |
+| `http1` | 49376 | 4.0 | 0 |
+| `http1resp` | 56160 | 4.0 | 0 |
+| `json` | 1024 | 0.0 | 0 |
+| `mqtt` | 55568 | 4.0 | 0 |
+| `msgpack` | 1056 | 0.0 | 0 |
+| `multipart` | 504064 | 4.0 | 0 |
+| `pem` | 832 | 0.0 | 0 |
+| `qpack` | 310720 | 4.0 | 0 |
+| `tls` | 32048 | 4.0 | 0 |
+| `tlscert` | 17792 | 4.0 | 0 |
+| `tlscli` | 36112 | 4.0 | 27 |
+| `toml` | 800 | 0.0 | 0 |
+| `urlish` | 356224 | 4.0 | 0 |
+| `ws` | 43408 | 4.0 | 0 |
+| `x509` | 832 | 0.0 | 0 |
+| `xml` | 704 | 0.0 | 0 |
+| `yaml` | 832 | 0.0 | 0 |
 
 ## What each family probes
 
 - **`differential-int`** — `gen.py` — random integer/float expression trees with a Python oracle; compiled at `-O0` and `-O2`, both outputs must equal the oracle bit for bit.
 - **`differential-struct`** — `genprog.py` — whole structural programs (enums with N-ary mixed payloads, match guards/or-patterns/literal constraints, struct field writes, nested aggregates and struct-payload enums, generic functions and generic structs, `?T` / `!T E` with `\` propagation, traits with default methods and bounds, closures, while/foreach with `break`/`continue`, defer, `% Drop`, string/Vec/slice ownership incl. containers of structs, helper calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds.
 - **`reject-inverse`** — `genreject.py` — the inverse oracle: programs that are ownership violations by construction (alias double free, use after move, loop-carried free, iterator invalidation), crossed with every context the language offers (`?` arms, loops, foreach, bare blocks, defers, `??` arms, helpers, generic bodies, trait methods, closure bodies) and nested. Each MUST be rejected, with the diagnostic that violation deserves — a program that compiles, or one rejected for an unrelated reason, is the finding.
-- **`parser-mutational`** — `fuzz_parsers.py` — mutated inputs for the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a finding.
+- **`parser-mutational`** — `fuzz_parsers.py` — mutated seeds, real captures and generated message streams for the untrusted-input parsers against an ASan+UBSan+LSan harness: the data formats (x509/DER with structure-aware TLV mutation, CSR, PEM, cbor, msgpack, json, yaml, xml, toml) and the network-facing protocol stacks, driven over loopback where the real code reads a socket (HTTP/1.1 server and client, HTTP/2 + HPACK, HTTP/3 frames + QPACK, TLS records + ClientHello / ServerHello / Certificate chain, WebSocket incl. permessage-deflate, MQTT, multipart, URL / query / cookie); any crash / OOB / UB / leak / oversized allocation / hang is a finding.
 
 A **finding** is any of: output divergence from the oracle at either
 opt level or on the wasm32-wasi leg (a third, independent execution
@@ -51,6 +80,8 @@ can.
 
 | date | family | severity | finding | status |
 |---|---|---|---|---|
+| 2026-10-21 | `parser-mutational` | memory-safety | HTTP/1.1 client (http_pure.nu): the chunk-size parser had no overflow ceiling — a 16/17-digit size wrapped i64 to a negative chunk_remaining and the body copy moved the read position 2^62 bytes back (SEGV on any build, from one response). It now takes 1*HEXDIG under a 2^48 ceiling plus BWS/extensions only, checks the CRLF after each chunk, and caps chunk-size/trailer lines (8 KiB) and the response head (256 KiB) | fixed (http_client_chunked_strict); target http1resp, minutes into its first run |
+| 2026-10-21 | `parser-mutational` | dos + forgery under a degenerate key | RSA verify (rsa.nu) spent sig^e mod n on any key a peer sent: a 600-bit exponent made one certificate-chain or CSR signature check take most of a second at 2048 bits (~50x e = 65537) with nothing bounding the modulus either, and e = 1 was accepted, under which sig = EM verifies anything. Verify now refuses a modulus over 8192 bits and an exponent outside odd 3 .. 2^32-1 | fixed (rsa_pubkey_bounds); found chasing the csr target's low throughput |
 | 2026-09-14 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a `;` defer body was accepted whenever the defer was written in a `?` arm, a `??` arm, a `~` body or a foreach body — the exit-state replay only walked a site whose synthetic arming flag was DEFINITELY set, and each of those four contexts weakens or drops it. Conditionally-armed bodies are now swept body-local, from an EMPTY state, like a `??` arm | fixed (borrow_defer_nested_context); 12 of 400 seeds, the first weekly CI fuzz finding |
 | 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a closure body was accepted — one flag meant both 'this belongs to the closure' and 'record nothing', so the checker was off for everything written in a closure. The body now gets its own recording context and its own analyze pass | fixed (borrow_closure_body_double_free) |
 | 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a `??` arm was accepted — arms were a state-preserving black box because payload bindings have no `let` row. Each arm is now walked from an EMPTY state, so only arm-local bindings are tracked and nothing can be conflated | fixed (borrow_match_arm_double_free) |
@@ -76,7 +107,9 @@ tools/fuzz/fuzz.sh 1 500                        # integer differential
 FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \
     tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs
 FUZZ_GEN=reject tools/fuzz/fuzz.sh 1 400 0 3   # inverse oracle
-tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational
+tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational (all targets)
+FUZZ_FORMATS=http1,h2,tls FUZZ_MINUTES=10 FUZZ_JOBS=2 \
+    tools/fuzz/fuzz_parsers.sh 1 0 8            # time-budgeted, per target
 
 # reproduce and shrink one seed by hand
 python3 tools/fuzz/genprog.py 684 --selfcheck > bug.nu
