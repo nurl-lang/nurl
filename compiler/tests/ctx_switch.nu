@@ -21,9 +21,10 @@
 // switch primitive. Where there is no backend for it, the first line
 // reads "not implemented on this arch" and every assertion below is
 // about something that is not there — a fact docs/ASYNC.md already
-// records, not one worth a second golden. Windows is that platform
-// until a Win64 backend lands (different ABI: rdi/rsi and XMM6-15 are
-// callee-saved, plus the TIB stack fields and the SEH chain).
+// records, not one worth a second golden. On x64 Windows the same
+// assertions cover the Microsoft ABI's larger callee-saved set — rdi,
+// rsi and xmm6–15 — and the TIB's stack base, which the switch carries
+// per fiber (runtime_ctx.c, NURL_CTX_WIN64).
 
 & `c` @ nurl_ctx_available → i
 

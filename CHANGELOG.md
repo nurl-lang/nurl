@@ -35,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`nurl_v256_shrlane64 lo hi`**: lo's lanes 1–3 and hi's lane 0, the
   pair moved down one 64-bit lane — a number held as limbs across v256
   registers divided by one limb.
+- **Fibers on Windows (x64).** `spawn`, channels, `sleep_ms` on a fiber
+  and the async network calls used to be stubs there: `spawn` returned
+  a null handle and its closure never ran, so a program printed zeros
+  and exited 0. `stdlib/runtime_ctx.c` now has a Win64 switch for the
+  Microsoft x64 ABI. It also saves `rdi`, `rsi` and `xmm6`–`xmm15`, and
+  carries the TIB's stack bounds per fiber, because the CRT's `longjmp`
+  (every panic) unwinds against them. Without that, a panic recovered
+  on a fiber ended the process with `STATUS_BAD_STACK`. Fiber stacks
+  are `VirtualAlloc`ed with a no-access guard page. The I/O reactor
+  runs on `WSAPoll`, and the resolver pool runs on Windows too, so a
+  lookup on a fiber no longer holds its worker. Both MinGW and
+  MSVC-target clang builds. `docs/ASYNC.md` has the platform table.
+- **The Windows test runner asks the runtime for the CPU tiers.**
+  `cpu-vaes`, `cpu-vaes512` and `cpu-ifma` tests used to be skipped on
+  every Windows host. `run_tests.ps1` now links a probe against
+  `runtime.o` and asks `nurl_cpu_x86_*`, `NURL_CPU_*` overrides
+  included. Its `fibers` default is on, as in `run_tests.sh`. A test
+  that writes POSIX shell syntax into `process_run_shell` now says so
+  (`requires: posix-shell`) instead of hiding behind `fibers`. On
+  Windows, `process_run_shell` is `cmd.exe` by design.
 
 ### Changed
 
@@ -118,6 +138,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts clear on every path. A match on one arm of an expression `?`
   used to drop the slot unconditionally at the scope's end, on paths
   that never stored an enum too; it no longer does.
+- **A Windows listener can no longer be taken over.** Every TCP
+  listener and UDP socket was bound with `SO_REUSEADDR`, which on POSIX
+  lets a restarted server reuse its port past TIME_WAIT. On Windows it
+  lets a second socket bind the same address while the first still
+  holds it, so any process could take over the port. Windows never
+  needed it for TIME_WAIT. It is now set there only for
+  `tcp_listen_opts` with `reuse_port`, the case that asks to share a
+  port.
+- **Signal-driven and graceful shutdown on Windows.**
+  `signal_install_shutdown` / `signal_trigger_shutdown` did not wake a
+  thread blocked in `accept`: `shutdown()` does nothing to a listening
+  socket. `server_drain` could not close an idle HTTP/2 connection with
+  GOAWAY, because a receive-side shutdown wakes neither `recv` nor
+  `select`/`WSAPoll` on Winsock, so it shut both ways and the GOAWAY
+  had nowhere to go. The listener now has the accept wake channel POSIX
+  has. A receive-side shutdown cancels the pending `recv`
+  (`CancelIoEx`), signals a thread in `tcp_wait_io` and a parked fiber,
+  and every read after it returns EOF, as `SHUT_RD` does.
+- **The response stash and the allocator cache run under MSVC-target
+  clang.** Both were compiled out there for want of a thread-exit hook.
+  The pthread shim now provides keys on fiber-local storage, whose
+  callback is that hook. The keep-alive server's allocations per
+  request on that build dropped from 8 to the ≤ 2 every other platform
+  has.
+
 - **A binding read out of a field can no longer outlive its struct**
   (Agora #111, h331–h333). `: String n . h name` borrowed nothing in the
   borrow checker. The right-hand side's reads went with the row recorded
