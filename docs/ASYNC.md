@@ -183,7 +183,10 @@ Fibers need pthreads, `mmap`, and a stackful context switch. The switch
 has two backends:
 
 - **`stdlib/runtime_ctx.c`** — NURL's own inline-assembly switch on all three
-  64-bit ISAs (`x86_64` SysV, `AArch64` AAPCS64, and `RISC-V64` LP64D). It
+  64-bit ISAs (`x86_64` SysV, `AArch64` AAPCS64, and `RISC-V64` LP64D), and
+  on x64 Windows (the Microsoft x64 ABI: `rdi`, `rsi` and `xmm6`–`xmm15`
+  callee-saved too, and the TIB's stack bounds switched per fiber, since the
+  CRT's `longjmp` — every panic — unwinds against them). It
   depends on the instruction set alone, so it needs no libc support at
   all (including musl, macOS ARM64 where Apple's `ucontext` is broken, and
   freestanding unikernels), and it does not pay `swapcontext`'s `sigprocmask`
@@ -198,11 +201,15 @@ has two backends:
 | macOS x86_64 / arm64 | ✔ own asm switch (`runtime_ctx.c`) |
 | FreeBSD / NetBSD / DragonFly (x86_64 / arm64) | ✔ own asm switch (`runtime_ctx.c`, `ucontext` fallback on other ISAs) |
 | Unikernel (x86_64 / arm64 / riscv64) | ✔ own asm switch (`runtime_bare.c`) |
+| Windows x64 (MSVC-target clang and MinGW) | ✔ own asm switch (`runtime_ctx.c`), `VirtualAlloc` stacks |
 | OpenBSD | stubbed (removed `swapcontext`) |
-| Windows, WASI | stubbed |
+| Windows arm64, WASI | stubbed |
 
-The I/O backend is POSIX-only (`epoll` netpoller on Linux, `poll(2)`
-reactor thread elsewhere); it starts only where fibers are enabled.
+The I/O backend is the `epoll` netpoller on Linux and a `poll(2)`
+reactor thread elsewhere — `WSAPoll` on Windows, where the reactor's wake
+channel and the resolver pool's completion signal are self-connected
+loopback UDP sockets (`WSAPoll` waits on sockets only). It starts only
+where fibers are enabled.
 
 **What "stubbed" means, precisely.** The `*_async` I/O calls do degrade
 to their blocking forms and stay correct. `spawn` does **not**: with no

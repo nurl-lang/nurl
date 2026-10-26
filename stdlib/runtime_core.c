@@ -74,7 +74,9 @@
  * can neither merge nor hoist, so the address is computed on the thread
  * the access runs on. Error paths only, so the extra load is free;
  * tools/check_errno_fiber_safe.sh checks no direct accessor call is left.
- * No fibers on Windows or WASI, and both spell errno differently. */
+ * Not needed on Windows: the CRT's errno is `(*_errno())` and _errno is
+ * declared without `const`, so every access already calls it on the
+ * thread it runs on. WASI has no fibers that migrate. */
 #if !defined(_WIN32) && !defined(__wasi__)
 static int *nurl__errno_addr(void) { return &errno; }
 static int *(*volatile nurl__errno_fn)(void) = nurl__errno_addr;
@@ -95,6 +97,126 @@ static int *(*volatile nurl__errno_fn)(void) = nurl__errno_addr;
 #  include <windows.h>
 #  include <io.h>
 #  include <fcntl.h>
+#endif
+#ifdef _WIN32
+#  include <process.h>
+/* mingw-w64 ships winpthreads (<pthread.h>, POSIX names). MSVC-target
+ * clang (the official LLVM installer) has no pthread.h at all, so we
+ * provide a minimal Win32-backed shim with the same exported names —
+ * SRWLOCK for mutexes, CONDITION_VARIABLE for condvars, _beginthreadex
+ * for threads. The NURL stdlib (thread.nu/channel.nu/cell.nu) calls
+ * these symbols via FFI, so they must be real exported functions, not
+ * macros. Attr/rwlock types exist only so nurl_native_sizeof can
+ * report a size; no attr/rwlock operations are reachable on Win32. */
+#  if defined(__has_include)
+#    if __has_include(<pthread.h>)
+#      define NURL_HAVE_PTHREAD_H 1
+#    endif
+#  else
+#    define NURL_HAVE_PTHREAD_H 1   /* non-clang compilers: assume winpthreads */
+#  endif
+#  ifdef NURL_HAVE_PTHREAD_H
+#    include <pthread.h>  /* winpthreads — same names as POSIX */
+#  else
+#    define NURL_WIN32_PTHREAD_SHIM 1
+#    include <process.h>  /* _beginthreadex */
+
+typedef SRWLOCK            pthread_mutex_t;
+typedef CONDITION_VARIABLE pthread_cond_t;
+typedef HANDLE             pthread_t;
+typedef void              *pthread_attr_t;
+typedef void              *pthread_mutexattr_t;
+typedef void              *pthread_condattr_t;
+typedef SRWLOCK            pthread_rwlock_t;
+
+/* NURL closures compile to void(*)(void*); the void* return is always
+ * discarded through a throwaway slot on join, same as the POSIX path. */
+typedef struct { void *(*fn)(void *); void *arg; } nurl__thr_boot;
+
+static unsigned __stdcall nurl__thr_tramp(void *p) {
+    nurl__thr_boot b = *(nurl__thr_boot *)p;
+    free(p);
+    b.fn(b.arg);
+    return 0;
+}
+
+int pthread_create(pthread_t *t, const pthread_attr_t *attr,
+                   void *(*fn)(void *), void *arg) {
+    (void)attr;
+    nurl__thr_boot *b = (nurl__thr_boot *)malloc(sizeof *b);
+    if (!b) return EAGAIN;
+    b->fn = fn; b->arg = arg;
+    uintptr_t h = _beginthreadex(NULL, 0, nurl__thr_tramp, b, 0, NULL);
+    if (!h) { free(b); return EAGAIN; }
+    *t = (HANDLE)h;
+    return 0;
+}
+int pthread_join(pthread_t t, void **rv) {
+    if (rv) *rv = NULL;
+    if (!t) return EINVAL;
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    return 0;
+}
+int pthread_detach(pthread_t t) {
+    if (t) CloseHandle(t);
+    return 0;
+}
+
+int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) {
+    (void)a; InitializeSRWLock(m); return 0;
+}
+int pthread_mutex_lock(pthread_mutex_t *m)    { AcquireSRWLockExclusive(m); return 0; }
+int pthread_mutex_unlock(pthread_mutex_t *m)  { ReleaseSRWLockExclusive(m); return 0; }
+int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
+
+int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
+    (void)a; InitializeConditionVariable(c); return 0;
+}
+int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+    return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : EINVAL;
+}
+int pthread_cond_signal(pthread_cond_t *c)    { WakeConditionVariable(c); return 0; }
+int pthread_cond_broadcast(pthread_cond_t *c) { WakeAllConditionVariable(c); return 0; }
+int pthread_cond_destroy(pthread_cond_t *c)   { (void)c; return 0; }
+
+/* Static initialisers and one-time init, which the fiber runtime and its
+ * reactor (runtime_ffi.c §24/§25) use. An SRW lock's static initialiser
+ * is the zeroed lock, as PTHREAD_MUTEX_INITIALIZER is for a POSIX mutex;
+ * pthread_once is InitOnceExecuteOnce, whose callback takes a context
+ * pointer — the init function rides in it. */
+#    define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
+#    define PTHREAD_COND_INITIALIZER  CONDITION_VARIABLE_INIT
+typedef INIT_ONCE pthread_once_t;
+#    define PTHREAD_ONCE_INIT INIT_ONCE_STATIC_INIT
+static BOOL CALLBACK nurl__once_tramp(PINIT_ONCE o, PVOID fn, PVOID *ctx) {
+    (void)o; (void)ctx;
+    ((void (*)(void))fn)();
+    return TRUE;
+}
+int pthread_once(pthread_once_t *o, void (*fn)(void)) {
+    return InitOnceExecuteOnce(o, nurl__once_tramp, (PVOID)fn, NULL) ? 0 : EINVAL;
+}
+/* Thread-specific keys, for the two per-thread caches that hand their
+ * contents back when a thread exits (the allocator cache, §9a; the
+ * recycled control blocks, §9a′). Fiber-local storage is the Win32 hook
+ * with a destructor: FlsAlloc's callback runs in the exiting thread for
+ * every non-NULL value, as a pthread_key destructor does — threads are
+ * Win32 threads here (_beginthreadex), never Win32 fibers, so FLS is
+ * per-thread storage. One calling convention on x64: the destructor's
+ * type is the callback's. */
+typedef DWORD pthread_key_t;
+int pthread_key_create(pthread_key_t *k, void (*dtor)(void *)) {
+    DWORD i = FlsAlloc((PFLS_CALLBACK_FUNCTION)dtor);
+    if (i == FLS_OUT_OF_INDEXES) return EAGAIN;
+    *k = i;
+    return 0;
+}
+int pthread_setspecific(pthread_key_t k, const void *v) {
+    return FlsSetValue(k, (PVOID)v) ? 0 : EINVAL;
+}
+void *pthread_getspecific(pthread_key_t k) { return FlsGetValue(k); }
+#  endif /* NURL_WIN32_PTHREAD_SHIM */
 #endif
 #if defined(__SSE2__)
 #  include <emmintrin.h>
@@ -2840,16 +2962,11 @@ static unsigned long long nurl__actr_total(int freed) {
 /* A thread's cached blocks must go back to libc when the thread exits,
  * or a thread-churning server strands up to the class budgets per
  * exited thread. pthread_key destructors run in the exiting thread with
- * its TLS intact, which is exactly the hook needed. MSVC-target clang
- * has no <pthread.h> (see the §13 mutex shims) and no equivalent
- * destructor hook here — the cache stays off there rather than leak. */
-#  ifdef _WIN32
-#    if defined(__has_include) && __has_include(<pthread.h>)
-#      include <pthread.h>   /* winpthreads (mingw-w64) */
-#    else
-#      undef NURL__SC_ENABLED
-#    endif
-#  else
+ * its TLS intact, which is exactly the hook needed. Windows has it in
+ * both builds: winpthreads under MinGW, and under MSVC-target clang the
+ * shim at the top of this file, whose keys are fiber-local storage —
+ * FlsAlloc's callback is that destructor. */
+#  ifndef _WIN32
 #    include <pthread.h>
 #  endif
 #endif
@@ -3751,11 +3868,15 @@ void nurl_free_nonnull(void *ptr) {
 #if defined(__wasi__) && !defined(__wasm_atomics__)
 #  define NURL__STASH_ENABLED 1
 #  define NURL__STASH_TLS
-#elif !defined(_WIN32) || (defined(__has_include) && __has_include(<pthread.h>))
+#else
+/* Every hosted target has the thread-exit hook (pthread_key; on Windows
+ * winpthreads or the FLS-backed shim at the top of this file). */
 #  define NURL__STASH_ENABLED 1
 #  define NURL__STASH_PTHREAD 1
 #  define NURL__STASH_TLS __thread
-#  include <pthread.h>
+#  ifndef _WIN32
+#    include <pthread.h>
+#  endif
 #endif
 #ifdef NURL__STASH_ENABLED
 static NURL__STASH_TLS void *nurl__stash[NURL__STASH_KINDS][NURL__STASH_DEPTH];
@@ -4505,86 +4626,7 @@ void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
-/* mingw-w64 ships winpthreads (<pthread.h>, POSIX names). MSVC-target
- * clang (the official LLVM installer) has no pthread.h at all, so we
- * provide a minimal Win32-backed shim with the same exported names —
- * SRWLOCK for mutexes, CONDITION_VARIABLE for condvars, _beginthreadex
- * for threads. The NURL stdlib (thread.nu/channel.nu/cell.nu) calls
- * these symbols via FFI, so they must be real exported functions, not
- * macros. Attr/rwlock types exist only so nurl_native_sizeof can
- * report a size; no attr/rwlock operations are reachable on Win32. */
-#  if defined(__has_include)
-#    if __has_include(<pthread.h>)
-#      define NURL_HAVE_PTHREAD_H 1
-#    endif
-#  else
-#    define NURL_HAVE_PTHREAD_H 1   /* non-clang compilers: assume winpthreads */
-#  endif
-#  ifdef NURL_HAVE_PTHREAD_H
-#    include <pthread.h>  /* winpthreads — same names as POSIX */
-#  else
-#    define NURL_WIN32_PTHREAD_SHIM 1
-#    include <process.h>  /* _beginthreadex */
-
-typedef SRWLOCK            pthread_mutex_t;
-typedef CONDITION_VARIABLE pthread_cond_t;
-typedef HANDLE             pthread_t;
-typedef void              *pthread_attr_t;
-typedef void              *pthread_mutexattr_t;
-typedef void              *pthread_condattr_t;
-typedef SRWLOCK            pthread_rwlock_t;
-
-/* NURL closures compile to void(*)(void*); the void* return is always
- * discarded through a throwaway slot on join, same as the POSIX path. */
-typedef struct { void *(*fn)(void *); void *arg; } nurl__thr_boot;
-
-static unsigned __stdcall nurl__thr_tramp(void *p) {
-    nurl__thr_boot b = *(nurl__thr_boot *)p;
-    free(p);
-    b.fn(b.arg);
-    return 0;
-}
-
-int pthread_create(pthread_t *t, const pthread_attr_t *attr,
-                   void *(*fn)(void *), void *arg) {
-    (void)attr;
-    nurl__thr_boot *b = (nurl__thr_boot *)malloc(sizeof *b);
-    if (!b) return EAGAIN;
-    b->fn = fn; b->arg = arg;
-    uintptr_t h = _beginthreadex(NULL, 0, nurl__thr_tramp, b, 0, NULL);
-    if (!h) { free(b); return EAGAIN; }
-    *t = (HANDLE)h;
-    return 0;
-}
-int pthread_join(pthread_t t, void **rv) {
-    if (rv) *rv = NULL;
-    if (!t) return EINVAL;
-    WaitForSingleObject(t, INFINITE);
-    CloseHandle(t);
-    return 0;
-}
-int pthread_detach(pthread_t t) {
-    if (t) CloseHandle(t);
-    return 0;
-}
-
-int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) {
-    (void)a; InitializeSRWLock(m); return 0;
-}
-int pthread_mutex_lock(pthread_mutex_t *m)    { AcquireSRWLockExclusive(m); return 0; }
-int pthread_mutex_unlock(pthread_mutex_t *m)  { ReleaseSRWLockExclusive(m); return 0; }
-int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
-
-int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
-    (void)a; InitializeConditionVariable(c); return 0;
-}
-int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
-    return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : EINVAL;
-}
-int pthread_cond_signal(pthread_cond_t *c)    { WakeConditionVariable(c); return 0; }
-int pthread_cond_broadcast(pthread_cond_t *c) { WakeAllConditionVariable(c); return 0; }
-int pthread_cond_destroy(pthread_cond_t *c)   { (void)c; return 0; }
-#  endif /* NURL_WIN32_PTHREAD_SHIM */
+/* pthreads: winpthreads, or the Win32 shim near the top of this file. */
 
 /* ── MSVC-target libc compat (mingw-w64 ships these, UCRT doesn't) ──
  *

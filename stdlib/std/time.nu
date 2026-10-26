@@ -137,7 +137,7 @@ $ `stdlib/std/async_ffi.nu`
 // Context-aware sleep: when called from inside a fiber, parks on
 // the async runtime's timer wheel so the worker pthread keeps
 // running other fibers. When called from a plain OS thread (or on
-// WASI / Windows where the fiber runtime is stubbed), falls back to
+// WASI, where the fiber runtime is stubbed), falls back to
 // `nanosleep`-style blocking. The dispatch is invisible to the
 // caller — same name, same signature, same observable wait time.
 //

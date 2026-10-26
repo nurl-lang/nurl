@@ -16,7 +16,7 @@
 // deployment negotiate) → tcp_listen_tls → server_run_async; a pthread
 // runs a shell client that (1) opens and drops a bare TCP conn, then
 // (2) drives one HTTPS GET via python3/ssl, then stops the server.
-// requires: live fibers openssl python3
+// requires: live fibers openssl python3 posix-shell
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
