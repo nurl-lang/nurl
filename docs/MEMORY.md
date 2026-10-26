@@ -1505,7 +1505,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h333`) to the rule that rejects it. See
+  (`h01–h335`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1556,6 +1556,11 @@ journal** instead:
   value whose destructor is written at module end (a struct holding a
   guard) is recorded and forgotten like any other; a value a `??` arm
   hands out as the match's value leaves the journal with its scope.
+- A call's result given an owner for the rest of the scope — an enum a
+  match takes and nothing binds (h233), a result read for a field it
+  cannot give up (h329, h330) — is recorded once, with its drop flag. Read
+  again in a loop's condition, the round before leaves the journal and is
+  released before the next takes its place.
 - On a panic, the values still recorded since the target frame's mark are
   released before the jump, while their frames are still valid.
 - A destructor that panics while they are released (a double panic) is

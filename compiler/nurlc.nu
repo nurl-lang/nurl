@@ -1685,6 +1685,12 @@ unsafe @ agg_field_count i syms s ot → i {
 // rule stores the drop flag itself, so registration only creates it.
 : ~ i g_udrop_noinit 0
 
+// Set by a call's temporary given an owner of its own (h233, h330) just
+// before registering it: its journal registration is made once the value
+// and its flag are in place (mem_journal_push_tmpown), not by the
+// registration itself.
+: ~ i g_udrop_tmpown 0
+
 // The kept parameters whose value ends up somewhere the compiler drops — a
 // literal, a local struct, a container element — rather than in a struct
 // the program manages by hand through a pointer (`= . st out history` on a
@@ -18189,6 +18195,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     // An enum a call handed over and nothing binds (`?? ( mk ) { … }`): an
     // owner of its own for the rest of the scope, which drops it — it
     // leaked, payload and cell — and lends its payload to the arms (h233).
+    // Its flag starts clear on every path, as h330's does: the match may sit
+    // in an arm of a `?`, whose other path reaches the scope's end with no
+    // enum. A match run again in a loop's condition releases the round
+    // before it — it overwrote it, and that one leaked — and both take its
+    // journal registration with them (mem_journal_push_tmpown).
     : ~ b m_tmp_enum F
     ? & & & == match_first_tt TT_LPAREN != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
     | ( __is_autodrop_enum match_type syms ) ( __is_handle_enum match_type ) {
@@ -18196,12 +18207,16 @@ unsafe @ gen_match i lex i syms i cg → s {
         ? != 0 ( nurl_str_len mte_own ) {
             : s mte_p ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print mte_p ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print `\n` )
+            ( __handle_drop_ensure match_type )
+            = g_udrop_noinit 2
+            = g_udrop_tmpown 1
+            ( mem_own_add_user_drop syms cg mte_p match_type )
+            ( mem_journal_forget_tmpown cg mte_p )
+            ( mem_emit_gated_drop_of cg mte_p match_type `` ( nurl_sym_get2 syms mte_p `__live` ) )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print ` ` ) ( nurl_print match_val )
             ( nurl_print `, ptr ` ) ( nurl_print mte_p ) ( nurl_print `\n` )
-            ( __handle_drop_ensure match_type )
-            = g_udrop_noinit 1
-            ( mem_own_add_user_drop syms cg mte_p match_type )
             ( mem_udrop_flag_set syms cg mte_p mte_own )
+            ( mem_journal_push_tmpown syms cg mte_p match_type )
             = m_tmp_enum T
         } {}
     } {}
@@ -23197,6 +23212,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_str_cat entry `` )
     ( nurl_str_cat3 cur ` ` entry )
     ( nurl_sym_def syms `__user_drops__` new )
+    ? != 0 g_udrop_tmpown { = g_udrop_tmpown 0 ^ v } {}
     ( mem_journal_push_handle syms cg ptr vt )
 }
 
@@ -23954,10 +23970,59 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
 }
 
+// A call's temporary given an owner of its own for the rest of the scope
+// (an enum a match takes, h233; a result read for a field it cannot give
+// up, h330) is journaled by its slot with its drop flag, so a panic before
+// the scope ends releases it (docs/MEMORY.md §7.2). Emitted once the value
+// and the flag are stored. One registration per owner: a read run again
+// without its scope ending (a loop's condition) forgets the one before it
+// first (mem_journal_forget_tmpown), and the scope's end forgets it by
+// slot (mem_journal_forget_userdrop) — a pointer-journal entry for the
+// same alloca would be one more per round, each replaying a value the
+// round after released.
+@ mem_journal_push_tmpown i syms i cg s ptr s vt → v {
+    ? == 0 g_auto_drop_strings { ^ v } {}
+    : s live ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len live ) { ^ v } {}
+    : ~ s fnv ``
+    ? ( __is_handle_ty vt ) { = fnv ( __hjdrop_fn vt ) } {
+        : s impl_mangle ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+        ? == 0 ( nurl_str_len impl_mangle ) { ^ v } {}
+        // (A thunk not out yet is emitted at module end, as for a binding:
+        // mem_journal_push_userdrop.)
+        ? == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` impl_mangle ) {
+            : s ukey ( nurl_str_cat `ujdrop##` impl_mangle )
+            ? == 0 ( nurl_sym_len g_impl_name_syms ukey ) {
+                ( nurl_sym_def g_impl_name_syms ukey `1` )
+                ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
+            } {}
+        } {}
+        = fnv ( nurl_str_cat `@__jdrop_` impl_mangle )
+    }
+    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` )
+    ( nurl_print live ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
+    ( nurl_sym_def g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) `1` )
+}
+
+// The registration a read run again in a condition made the round before
+// (mem_journal_push_tmpown) ends before that round's value is released —
+// so neither a panic in its destructor nor one later replays it. Only in
+// a condition: anywhere else the read runs once per scope, whose end
+// forgets it.
+@ mem_journal_forget_tmpown i cg s ptr → v {
+    ? | == 0 g_auto_drop_strings == 0 g_cond_depth { ^ v } {}
+    ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+}
+
 // Forget a user `% Drop` value's journal entry (keyed by its alloca) —
 // emitted wherever its typed drop is run on the normal path, so a later
 // panic in the same extent cannot replay an already-run destructor.
 @ mem_journal_forget_userdrop i cg s ptr s vt → v {
+    // A call's temporary owner is journaled by its slot.
+    ? != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) {
+        ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+        ^ v
+    } {}
     // Nothing to forget where nothing was journaled: a push is only made
     // for a type with a journal thunk (mem_journal_push_userdrop). String /
     // Vec bindings in a hot loop were paying a journal search per exit.
@@ -35359,9 +35424,9 @@ unsafe @ gen_member i lex i syms i cg → s {
                     // of its own for the rest of the scope, as an enum a match
                     // takes does (h233), and the field is read out of it — lent,
                     // as a local's field is. Nothing released the temporary: it
-                    // leaked, and its destructors never ran (h329, h330). (Not
-                    // journaled, as h233's owner is not: a panic before the
-                    // scope ends leaves it unreleased.)
+                    // leaked, and its destructors never ran (h329, h330). Journaled
+                    // once its value is in place, as h233's owner is
+                    // (mem_journal_push_tmpown).
                     ? & & & & ! __tf_taken == __mb_tt TT_LPAREN != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
                     | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) {
                         : s tro4 ( mem_call_retown syms cg )
@@ -35373,11 +35438,14 @@ unsafe @ gen_member i lex i syms i cg → s {
                             // sit in an arm of a `?` — and a read run again, in a
                             // loop's condition, releases the one before it.)
                             = g_udrop_noinit 2
+                            = g_udrop_tmpown 1
                             ( mem_own_add_user_drop syms cg tp ot )
+                            ( mem_journal_forget_tmpown cg tp )
                             ( mem_emit_gated_drop_of cg tp ot `` ( nurl_sym_get2 syms tp `__live` ) )
                             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov )
                             ( nurl_print `, ptr ` ) ( nurl_print tp ) ( nurl_print `\n` )
                             ( mem_udrop_flag_set syms cg tp tro4 )
+                            ( mem_journal_push_tmpown syms cg tp ot )
                             ( nurl_sym_def syms ( nurl_str_cat tp `__tmpown` ) `1` )
                             ( nurl_sym_def syms `__last_field_read__` ( nurl_str_cat4 ( nurl_str_cat3 tp ` ` ot ) ` ` fidx_s ( nurl_str_cat ` ` ftype ) ) )
                         } {}
