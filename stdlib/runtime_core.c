@@ -3335,22 +3335,30 @@ void nurl_closure_adopt(void *env) {
  * holding a share of it — cross together. Nested begins (a container's
  * S_sendck hook checking its elements) add to the outermost walk. One walk
  * at a time per thread: it runs no code but the walk, so nothing yields
- * inside it. */
+ * inside it. The three entries are NURL_TLS_FN: inlined into a NURL
+ * function, the table's address would be taken once at its entry — before
+ * an accept or a read that moved the fiber to another worker — and the
+ * walk would count into another thread's table. */
 typedef struct { void *blk; const char *name; long long seen; } NurlSendSeen;
 /* Fibonacci hashing, the journal's: the top bits, which every input bit
  * reaches (a block's low bits are its alignment's zeros). cap: a power of
- * two >= 64. */
+ * two >= 32. */
 static inline size_t nurl__sk_slot(void *blk, size_t cap) {
     return (size_t)(((uint64_t)(uintptr_t)blk * UINT64_C(0x9e3779b97f4a7c15)) >> (64 - __builtin_ctzll((unsigned long long)cap)));
 }
+/* The table lives in the thread, 32 entries; a walk that meets more blocks
+ * (a big container of handles) grows it on the heap and frees that when it
+ * ends, so a thread that exits — a server's worker — leaves nothing. */
+#define NURL__SK_SMALL 32
+static __thread NurlSendSeen nurl__sk_small[NURL__SK_SMALL];
 static __thread NurlSendSeen *nurl__sk_tab = NULL;
 static __thread size_t nurl__sk_cap = 0, nurl__sk_len = 0;
 static __thread int nurl__sk_depth = 0;
 
-void nurl_sendck_begin(void) { nurl__sk_depth++; }
+NURL_TLS_FN void nurl_sendck_begin(void) { nurl__sk_depth++; }
 
 static void nurl__sk_grow(void) {
-    size_t ncap = nurl__sk_cap ? nurl__sk_cap * 2 : 64;
+    size_t ncap = nurl__sk_cap * 2;
     NurlSendSeen *nt = (NurlSendSeen *)calloc(ncap, sizeof *nt);
     if (!nt) nurl__oom(ncap * sizeof *nt);
     for (size_t i = 0; i < nurl__sk_cap; i++) {
@@ -3359,7 +3367,8 @@ static void nurl__sk_grow(void) {
         while (nt[h].blk) h = (h + 1) & (ncap - 1);
         nt[h] = nurl__sk_tab[i];
     }
-    free(nurl__sk_tab);
+    if (nurl__sk_tab == nurl__sk_small) memset(nurl__sk_small, 0, sizeof nurl__sk_small);
+    else free(nurl__sk_tab);
     nurl__sk_tab = nt;
     nurl__sk_cap = ncap;
 }
@@ -3367,8 +3376,9 @@ static void nurl__sk_grow(void) {
 /* One more place in the value holding block `blk` (`name`: its handle's
  * type). 1 the first time: the walk goes on into the block's state then,
  * and only then, so what the state holds is counted once. */
-int nurl_sendck_visit(void *blk, const char *name) {
+NURL_TLS_FN int nurl_sendck_visit(void *blk, const char *name) {
     if (!blk) return 0;
+    if (!nurl__sk_tab) { nurl__sk_tab = nurl__sk_small; nurl__sk_cap = NURL__SK_SMALL; }
     if (2 * (nurl__sk_len + 1) > nurl__sk_cap) nurl__sk_grow();
     size_t h = nurl__sk_slot(blk, nurl__sk_cap);
     while (nurl__sk_tab[h].blk && nurl__sk_tab[h].blk != blk) h = (h + 1) & (nurl__sk_cap - 1);
@@ -3385,7 +3395,7 @@ static void nurl_send_check_fail(const char *what, const char *ty);
 /* The end of a walk: a block with more owners than the value holds has an
  * owner left on this side — the crossing panics, naming the handle. The
  * table is cleared before. */
-void nurl_sendck_end(const char *what) {
+NURL_TLS_FN void nurl_sendck_end(const char *what) {
     if (--nurl__sk_depth > 0) return;
     nurl__sk_depth = 0;
     const char *bad = NULL;
@@ -3396,6 +3406,11 @@ void nurl_sendck_end(const char *what) {
         e->blk = NULL;
     }
     nurl__sk_len = 0;
+    if (nurl__sk_tab && nurl__sk_tab != nurl__sk_small) {
+        free(nurl__sk_tab);
+        nurl__sk_tab = nurl__sk_small;
+        nurl__sk_cap = NURL__SK_SMALL;
+    }
     if (bad) nurl_send_check_fail(what, bad);
 }
 
