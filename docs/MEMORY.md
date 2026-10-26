@@ -860,7 +860,7 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Two open holes.** *A share made before a library handle moves to a
+**One open hole.** *A share made before a library handle moves to a
 thread.* A library handle over a counted block (§7.6) is copied by
 sharing, and its copies are one state. One not asserted `% Sync` moves
 into a thread's closure as a `Vec` does, a parameter of one may not be
@@ -875,19 +875,12 @@ AddressSanitizer
 #121). Until it closes, make no share of a handle that moves to a
 thread; state threads share and change is a `Locked`.
 
-*An MCP task handle kept past its task.* `mcp_task_create`, `_find` and
-`_nth` (ext/mcp_tasks.nu) hand out a task as an opaque `s` handle that
-owns nothing. When the store evicts the task at its cap, or sweeps it
-once its TTL has passed, a kept handle reads freed memory
-(`tools/fuzz/holes/open/mcp_task_handle_after_eviction.nu`, agora #124).
-Until it closes, look a task up by id where it is used.
-
 **Every other hole is closed.** The 0.72.0 and 0.73.0 release reviews found safe programs
 the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h342):
+all are closed, each a probe CI now holds (h142–h343):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1283,7 +1276,10 @@ a `Vec`). Making the standard
 library's shared handles honest for it found `tcp_close_listener` then
 `tcp_accept` reading the freed socket record on one thread (h341): a stop
 now keeps the record until the last owner, and closes the fd only once no
-accept is in progress. No other hole is known.
+accept is in progress. Making the MCP task store thread-safe for it found
+the store handing out a task as a bare address, which its eviction at the
+cap or a sweep past the TTL freed under a kept handle (h343): a task
+handle (`McpTask`) is now one owner of its task. No other hole is known.
 
 The rules that carry it:
 
@@ -1474,7 +1470,7 @@ worker at once (h342); it counts in an `Atomic` or keeps the list in a
 `% Sync` — `Channel`, `Mutex`, `Arc`, `Locked`, `RwLocked`, `Atomic`,
 `PFile`, `Pool`, and the handles servers share (`TcpListener`,
 `HttpServer`, `QuicServer`, `H3Server`, a router's `Route`, a cluster's
-`RpcEntry`, an MCP `McpTaskStore`), each with the reason beside its
+`RpcEntry`, an MCP `McpTaskStore` and its `McpTask`s), each with the reason beside its
 marker — and a handle made only of `Arc`s and such handles (nurldb's
 `Store`), whose fields answer. A share made before the move is still
 open (§6.2).
@@ -1538,7 +1534,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h342`) to the rule that rejects it. See
+  (`h01–h343`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

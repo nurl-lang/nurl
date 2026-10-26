@@ -129,7 +129,7 @@ $ `stdlib/core/vec.nu`
 
     : Json args ( json_obj_new )
     ( json_obj_set args `city` ( json_str_lit `Helsinki` ) )
-    : s tp ( mcp_task_create store `tools/call` `get_weather` args 3600000 5000 )
+    : McpTask tp ( mcp_task_create store `tools/call` `get_weather` args 3600000 5000 )
     ? != ( mcp_task_store_count store ) 1 {
         ( nurl_print `  FAIL count1\n` ) = fails + fails 1
     } {}
@@ -154,7 +154,7 @@ $ `stdlib/core/vec.nu`
     ? != ( mcp_task_link tp ) 42 { ( nurl_print `  FAIL link\n` ) = fails + fails 1 } {}
 
     // Distinct ids.
-    : s tp2 ( mcp_task_create store `tools/call` `other` ( json_obj_new ) -1 0 )
+    : McpTask tp2 ( mcp_task_create store `tools/call` `other` ( json_obj_new ) -1 0 )
     ? != 0 ( nurl_str_eq ( mcp_task_id tp ) ( mcp_task_id tp2 ) ) {
         ( nurl_print `  FAIL id-collision\n` ) = fails + fails 1
     } {}
@@ -162,15 +162,44 @@ $ `stdlib/core/vec.nu`
     // ── lookup ──
     : String held ( string_from ( mcp_task_id tp ) )
     : s tid ( string_data held )
-    ? != # i ( mcp_task_find store tid ) # i tp {
-        ( nurl_print `  FAIL find\n` ) = fails + fails 1
-    } {}
-    ? != # i ( mcp_task_find store `deadbeef` ) 0 {
-        ( nurl_print `  FAIL find-bogus\n` ) = fails + fails 1
-    } {}
-    ? != # i ( mcp_task_find store `` ) 0 {
-        ( nurl_print `  FAIL find-empty\n` ) = fails + fails 1
-    } {}
+    // The handle found is the same task, not a copy: it sees the link.
+    ?? ( mcp_task_find store tid ) {
+        T f → {
+            ? & != 0 ( nurl_str_eq ( mcp_task_id f ) tid ) == ( mcp_task_link f ) 42 {} {
+                ( nurl_print `  FAIL find\n` ) = fails + fails 1
+            }
+        }
+        F → { ( nurl_print `  FAIL find-none\n` ) = fails + fails 1 }
+    }
+    ?? ( mcp_task_find store `deadbeef` ) {
+        T _f → { ( nurl_print `  FAIL find-bogus\n` ) = fails + fails 1 }
+        F → {}
+    }
+    ?? ( mcp_task_find store `` ) {
+        T _f → { ( nurl_print `  FAIL find-empty\n` ) = fails + fails 1 }
+        F → {}
+    }
+    // A guess of a real id's length (the constant-time compare's full path).
+    ?? ( mcp_task_find store `00000000000000000000000000000000` ) {
+        T _f → { ( nurl_print `  FAIL find-guess\n` ) = fails + fails 1 }
+        F → {}
+    }
+    ?? ( mcp_task_nth store 1 ) {
+        T f → {
+            ? != 0 ( nurl_str_eq ( mcp_task_id f ) ( mcp_task_id tp2 ) ) {} {
+                ( nurl_print `  FAIL nth\n` ) = fails + fails 1
+            }
+        }
+        F → { ( nurl_print `  FAIL nth-none\n` ) = fails + fails 1 }
+    }
+    ?? ( mcp_task_nth store 2 ) {
+        T _f → { ( nurl_print `  FAIL nth-past\n` ) = fails + fails 1 }
+        F → {}
+    }
+    ?? ( mcp_task_nth store -1 ) {
+        T _f → { ( nurl_print `  FAIL nth-negative\n` ) = fails + fails 1 }
+        F → {}
+    }
 
     // ── CreateTaskResult shape ──
     : Json ctr ( mcp_task_create_result tp )
@@ -341,7 +370,7 @@ $ `stdlib/core/vec.nu`
     ( json_free g6 )
 
     // ── failure carries a JSON-RPC error object ──
-    : s tp3 ( mcp_task_create store `tools/call` `boom` ( json_obj_new ) -1 0 )
+    : McpTask tp3 ( mcp_task_create store `tools/call` `boom` ( json_obj_new ) -1 0 )
     ( mcp_task_fail tp3 mcp_err_internal_error `API rate limit exceeded` )
     ? != ( mcp_task_status tp3 ) mcp_task_failed {
         ( nurl_print `  FAIL failed-status\n` ) = fails + fails 1
@@ -488,7 +517,7 @@ $ `stdlib/core/vec.nu`
 
     // ── TTL sweep ──
     // The store now holds tp (ttl 3600000), tp2 and tp3 (both unlimited).
-    : s tp4 ( mcp_task_create store `tools/call` `short` ( json_obj_new ) 0 0 )
+    : McpTask tp4 ( mcp_task_create store `tools/call` `short` ( json_obj_new ) 0 0 )
     : String held4 ( string_from ( mcp_task_id tp4 ) )
     ? != ( mcp_task_store_count store ) 4 {
         ( nurl_print `  FAIL sweep-before\n` ) = fails + fails 1
@@ -509,15 +538,62 @@ $ `stdlib/core/vec.nu`
     } {}
     ( json_free g7 )
     ( json_free p_gone )
+    // The handles kept on the swept tasks still hold them: readable,
+    // changeable, no longer found by id.
+    ? != 0 ( nurl_str_eq ( mcp_task_id tp4 ) ( string_data held4 ) ) {} {
+        ( nurl_print `  FAIL swept-handle-id\n` ) = fails + fails 1
+    }
+    ? != ( mcp_task_status tp ) mcp_task_completed {
+        ( nurl_print `  FAIL swept-handle-status\n` ) = fails + fails 1
+    } {}
+    ( mcp_task_complete tp4 ( mcp_tool_result_text `late` ) )
+    ? != ( mcp_task_status tp4 ) mcp_task_completed {
+        ( nurl_print `  FAIL swept-handle-complete\n` ) = fails + fails 1
+    } {}
+    ?? ( mcp_task_find store ( string_data held4 ) ) {
+        T _f → { ( nurl_print `  FAIL swept-found\n` ) = fails + fails 1 }
+        F → {}
+    }
     ( string_free held4 )
 
     // An unlimited-TTL task must survive any sweep.
-    : s tp5 ( mcp_task_create store `tools/call` `forever` ( json_obj_new ) -1 0 )
+    : McpTask tp5 ( mcp_task_create store `tools/call` `forever` ( json_obj_new ) -1 0 )
     ? != ( mcp_task_store_sweep store 99999999999999 ) 0 {
         ( nurl_print `  FAIL sweep-unlimited\n` ) = fails + fails 1
     } {}
     ? != ( mcp_task_store_count store ) 3 {
         ( nurl_print `  FAIL sweep-unlimited-count\n` ) = fails + fails 1
+    } {}
+
+    // ── eviction at the cap ──
+    // Every task live, so the oldest goes: `first`. Its handle keeps it.
+    : McpTaskStore full ( mcp_task_store_new )
+    : McpTask first ( mcp_task_create full `tools/call` `first` ( json_obj_new ) -1 0 )
+    : String first_id ( string_from ( mcp_task_id first ) )
+    : ~ i c 0
+    ~ < c ( mcp_task_store_max ) {
+        : McpTask _t ( mcp_task_create full `tools/call` `filler` ( json_obj_new ) -1 0 )
+        = c + c 1
+    }
+    ? != ( mcp_task_store_count full ) ( mcp_task_store_max ) {
+        ( nurl_print `  FAIL evict-count\n` ) = fails + fails 1
+    } {}
+    ?? ( mcp_task_find full ( string_data first_id ) ) {
+        T _f → { ( nurl_print `  FAIL evict-found\n` ) = fails + fails 1 }
+        F → {}
+    }
+    ( mcp_task_set_message first `still here` )
+    : Json fd ( mcp_task_detail first )
+    ? & != 0 ( nurl_str_eq ( jstr fd `taskId` ) ( string_data first_id ) ) != 0 ( nurl_str_eq ( jstr fd `statusMessage` ) `still here` ) {} {
+        ( nurl_print `  FAIL evict-handle\n` ) = fails + fails 1
+    }
+    ( json_free fd )
+    ( string_free first_id )
+    // The store goes first; the handle still holds its task.
+    ( mcp_task_store_free full )
+    ( mcp_task_complete first ( mcp_tool_result_text `after the store` ) )
+    ? != ( mcp_task_status first ) mcp_task_completed {
+        ( nurl_print `  FAIL store-gone-handle\n` ) = fails + fails 1
     } {}
 
     ( json_free p_get )

@@ -221,9 +221,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     request. Its control block is now `( Vec Atomic )`.
   - An MCP `McpTaskStore` attached to a server was changed by concurrent
     `tasks/*` requests with no lock. One lock now guards a store and its
-    tasks, and every task function holds it for its whole call. Still
-    open, and older: a task handle kept past its task's eviction or
-    expiry reads freed memory (Agora #124, `tools/fuzz/holes/open/`).
+    tasks, and every task function holds it for its whole call. The
+    older hole beside it, a task handle kept past its task, is closed
+    below (h343).
   - The tasks dispatcher read the hook and the store through raw
     pointers. It now uses `vec_at`.
 
@@ -239,6 +239,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so does every later one. The fd is closed only once no accept is in
   progress, so an accept never runs on a closed or reused descriptor.
   `tcp_shutdown_listener` now releases the port too.
+- **An MCP task handle kept past its task no longer reads freed memory**
+  (Agora #124, h343). `mcp_task_create`, `mcp_task_find` and
+  `mcp_task_nth` (ext/mcp_tasks.nu) handed out a task as an opaque `s`:
+  the address of the record inside its rcbox, owning nothing. At the cap
+  of 2048 tasks `mcp_task_create` evicts the oldest live task, and every
+  `tasks/*` request sweeps the expired ones, so a handle kept across
+  either read freed memory. A task handle is now an `McpTask`, one
+  owner of the task beside the store's list: a task the store lets go of
+  lives until its last handle goes, still readable and changeable, and
+  is no longer found by id. `mcp_task_find` and `mcp_task_nth` return
+  `?McpTask` (F where they returned 0), every `mcp_task_*` function
+  takes an `McpTask`, and `McpTask` is asserted `% Sync` because every
+  function that reads or changes a task's state holds the store's lock.
+  The record type is now `McpTaskImpl`. swarm-mcp 0.32.0 follows. A
+  lookup by id now compares ids in constant time (std/subtle.nu), as the
+  MCP server's bearer-token check does: a task id is a bearer token, and
+  `nurl_str_eq` stopped at the first byte that differed.
 - **A binding read out of a field can no longer outlive its struct**
   (Agora #111, h331–h333). `: String n . h name` borrowed nothing in the
   borrow checker. The right-hand side's reads went with the row recorded
