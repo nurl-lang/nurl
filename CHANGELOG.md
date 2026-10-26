@@ -100,15 +100,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its top bits and the answer was wrong. The ladder now covers the
   modulus's whole 16-bit limbs, or the exponent's when it has more: the
   count still never depends on the exponent's bits.
-- **A destructor can no longer release a field of its receiver twice**
-  (Agora #73, h322). A drop hook or a `% Drop` impl that stored a field
-  it cannot copy into a literal, a container or another field
-  (`@ ( Slot A ) { . g val 1 }` in `Guard_drop`, the shape of
-  `std/pool.nu`'s checkout guard) moved the field without emptying it,
-  and the receiver's drop glue then released it again (ASan:
-  heap-use-after-free). Such a field is now lent, as a parameter's is,
-  so the store is rejected with the same error a `sink` function's
-  parameter already got.
+- **A field that cannot be copied is no longer released twice when it
+  is stored** (Agora #73, h322, h324–h327). A `% Drop` value with no
+  clone read out of a struct and stored into a literal, a container or
+  another field was moved without being emptied: the struct released it
+  again (ASan: heap-use-after-free). This happened in a destructor
+  (`@ ( Slot A ) { . g val 1 }` in a drop hook, the shape of
+  `std/pool.nu`'s checkout guard) and with any local struct
+  (`@ Box { . p c 1 }`, `( vec_push [Conn] v . p c )`,
+  `= . b c . p c`). A `% Drop` value has no empty state to leave in the
+  field, so such a read is now a lend and each of those stores is
+  rejected, as a `sink` argument already was. A returned literal may
+  hold such a field only when a parameter lends it. One lent by a local
+  released it on the way out, and is rejected like `^ . p c`.
+- **A binding can no longer borrow such a field past its struct's
+  block** (h328). `= a . p c`, with `p` declared in an inner block,
+  left `a` reading what the block's end released (ASan:
+  heap-use-after-free). A handle field moves out there. This one cannot,
+  so the assignment is rejected.
+- **A field read out of a call's result runs the result's destructors**
+  (h329, h330). `: String s . ( mk ) name`, with `mk`'s struct having a
+  `% Drop` of its own, and `: Conn a . ( mk ) c` or `. . ( mk ) c fd`,
+  with a field that cannot be copied, left the temporary with no owner.
+  Everything in it leaked, and no destructor ran. Such a temporary now
+  gets an owner for the rest of the scope, as an enum a match takes
+  does, and the field is lent out of it. Handing such a field back out
+  of the function is rejected, as for a local.
 - **A generic struct instance first needed inside a function body keeps
   its layout** (Agora #73). `. ( mk [i] 5 ) k`, with `mk` returning
   `( Wrap ?( Slot A ) )` and no top-level code naming that type, failed

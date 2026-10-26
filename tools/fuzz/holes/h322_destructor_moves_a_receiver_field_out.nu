@@ -1,5 +1,5 @@
 // H322: a destructor (a library handle's drop hook, or a `% Drop` impl) that stored a field of its receiver into a literal, a container or another field moved it there without emptying the field, so its drop glue released it a second time.
-// Closed: a non-copyable field of the value a destructor is dropping is lent, as a parameter's is (__nc_field_lent), so storing it is rejected; a `sink` function's parameter was already rejected the same way.
+// Closed: a value that cannot be copied, read out of a field, is lent — here out of the value a destructor is dropping, whose drop glue still releases the field (mem_lent_cond) — so storing it is rejected; a `sink` function's parameter was already rejected the same way.
 // v0.78.0: accepted; ASan reported heap-use-after-free in Res's drop (std/pool.nu's Pooled guard had this shape, reported in Agora #73).
 $ `stdlib/core/string.nu`
 

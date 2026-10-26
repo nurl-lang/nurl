@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+4
+4
+4
+copy
+drop wrap ret
+ret
+stored
+7
+drop conn loop
+drop conn loop
+4
+end
+drop conn bound
+drop conn chain
+drop conn arg
+drop wrap copy
+drop wrap stored
+drop conn loop
