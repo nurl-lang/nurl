@@ -142,16 +142,15 @@ $ `stdlib/std/thread.nu`
 }
 
 // The listener's state: the runtime socket handle, and for a TLS
-// listener its key type and credentials slot. `owns`: this handle closes
-// it — its last owner, or an early tcp_close_listener.
-: TcpListenerImpl { i raw i is_tls i keytype i creds b owns }
+// listener its key type and credentials slot. None of it changes once
+// made: an early tcp_close_listener stops the runtime socket (closing its
+// fd) and empties the slot, and the last owner releases the handle.
+: TcpListenerImpl { i raw i is_tls i keytype i creds }
 
 % Drop TcpListenerImpl {
     @ drop TcpListenerImpl l → v {
-        ? . l owns {
-            ( nurl_tcp_close . l raw )
-            ? != . l creds 0 { ( __tls_lcreds_close . l creds ) } {}
-        } {}
+        ( nurl_tcp_close . l raw )
+        ? != . l creds 0 { ( __tls_lcreds_close . l creds ) } {}
     }
 }
 
@@ -162,6 +161,17 @@ $ `stdlib/std/thread.nu`
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource TcpListener {}
 
+// Its copies are made to be used by several threads at once — workers
+// accepting on one socket, another thread closing it to stop them. That
+// is an assertion, not a proof (stdlib/core/marker.nu). What backs it:
+// the fields never change after tcp_listen; the runtime socket's accept
+// counts itself in before it reads the fd, and its stop
+// (tcp_close_listener / tcp_shutdown_listener, idempotent) closes the fd
+// only once no accept is in progress (nurl__tcp_listener_stop,
+// stdlib/runtime_ffi.c); the TLS material's slot is read and emptied
+// under its lock.
+% Sync TcpListener {}
+
 @ TcpListener_share TcpListener h → TcpListener { ^ @ TcpListener { ( shared_clone [TcpListenerImpl] . h ctl ) } }
 
 @ TcpListener_drop sink TcpListener h → v {}
@@ -169,7 +179,7 @@ $ `stdlib/std/thread.nu`
 @ __tli TcpListener l → *TcpListenerImpl { ^ ( shared_ptr [TcpListenerImpl] . l ctl ) }
 
 @ __tcp_listener_make i raw i is_tls i keytype i creds → TcpListener {
-    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { raw is_tls keytype creds T } ) }
+    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { raw is_tls keytype creds } ) }
 }
 
 // The runtime handle behind a listener.
@@ -768,28 +778,21 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     ^ ( string_new )
 }
 
-// Close the listener now rather than with its last owner. Every copy
-// sees it closed. The runtime handle stays named: a worker that retained
-// it (tcp_listener_retain) still releases it, and its accept reports the
-// close.
+// Close the listener now rather than with its last owner, from any
+// thread. Every copy sees it closed: an accept in progress returns
+// NetAccept, and so does every later one. The runtime handle stays
+// named until the last owner: a worker that retained it
+// (tcp_listener_retain) still releases it.
 @ tcp_close_listener TcpListener l → v {
     : *TcpListenerImpl p ( __tli l )
-    ? . p owns {
-        ( nurl_tcp_close . p raw )
-        ? != . p creds 0 { ( __tls_lcreds_close . p creds ) } {}
-    } {}
-    = . p owns F
-    = . p creds 0
+    ( nurl_tcp_shutdown . p raw )
+    ? != . p creds 0 { ( __tls_lcreds_close . p creds ) } {}
 }
 
-// Soft-shutdown: close the underlying socket but KEEP the handle's
-// runtime struct alive. Used by `server_run_pool`'s shutdown thread —
-// every worker blocked in `tcp_accept` wakes up with a NetClosed /
-// NetAccept error and proceeds to read `h->err_kind` as part of its
-// normal exit. Calling `tcp_close_listener` here would race with
-// those reads (use-after-free observed empirically as ~40% SIGSEGV
-// at exit on Windows). Pair this with a final `tcp_close_listener`
-// after every worker has joined to release the runtime struct.
+// Stop the listener's socket — every accept in progress returns NetAccept,
+// and so does every later one — and leave its TLS material in place.
+// `server_run_pool`'s shutdown thread stops its workers so; the last
+// owner releases the rest.
 @ tcp_shutdown_listener TcpListener l → v {
     : s rp # s . ( __tli l ) raw
     : i raw # i rp

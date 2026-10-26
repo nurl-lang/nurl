@@ -1,14 +1,25 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**One:** `library_handle_copy_on_two_threads.nu` — two copies of one
-library handle over a counted block (a thread's closure takes a share of
-it and the spawner keeps its own; a parameter, or a share stored before
-the move, does the same), both changed: the Send derivation looks at
-types, not at which values alias (docs/MEMORY.md §6.2). Three instances
-of it are closed and graduated: `h254` (SymTab, `% NotSync`), `h319`
-(the membership table dist/heartbeat.nu's thread read, `% NotSend`) and
-`h333` (a binding read out of a struct's field, now a borrow of that
-field that the thread's move of the struct ends).
+**Two.** `library_handle_copy_on_two_threads.nu` — a share of a library
+handle made before the handle moves to a thread
+(`( PNCounter_share a )`; a literal storing `. h c`, or a callee keeping
+one, does the same) stays with the spawner, and both threads change one
+state: the checker does not connect that owner to the moved one
+(docs/MEMORY.md §6.2, agora #121). The rest of the class is closed and
+graduated: `h254` (SymTab, `% NotSync`), `h319` (the membership table
+dist/heartbeat.nu's thread read, `% NotSend`), `h333` (a binding read out
+of a struct's field, a borrow the thread's move of the struct ends), and
+`h336`–`h340` (agora #66): a thread's capture of a handle not asserted
+`% Sync` moves it, a parameter of one may not be captured, it is not
+Sync (an `Arc` of one, a closure capturing one kept in an `Arc`), and a
+closure carrying one onto a channel takes it along; `h342`, a closure
+several threads run changing what it captured. `h341`, found on the way,
+is a listener accepted on after its close.
+
+`mcp_task_handle_after_eviction.nu` — an MCP task handle (`s`, from
+`mcp_task_create`) kept past its task: the store's eviction at its cap,
+or a sweep past the TTL, frees the task the handle still names
+(docs/MEMORY.md §6.2, agora #124).
 
 Every other probe this directory held is closed and graduated to the CI
 gate in the parent directory. The most recent were `h316` — a call returning

@@ -79,10 +79,9 @@ unsafe % Send Wrapper {}
 
     ( chan_close [i] ch )
     ( chan_free [i] ch )
-    // `nums` moved into the worker's closure, which drops it; `local`
-    // moved into `w`, which drops it.
+    // `nums` and `scratch` moved into the worker's closure, which drops
+    // them; `local` moved into `w`, which drops it.
     ( arc_free [i] counter )
-    ( cell_free scratch )
     ( mutex_free lock )
     ^ 0
 }

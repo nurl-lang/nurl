@@ -164,6 +164,12 @@ $ `stdlib/core/rcbox.nu`
 // docs/MEMORY.md §7.4); the last owner of the Route releases them.
 @ Route_share Route h → Route { ^ @ Route { ( shared_clone [RouteImpl] . h ctl ) } }
 
+// Its copies are reached by every worker that dispatches a request. That
+// is an assertion, not a proof (stdlib/core/marker.nu). What backs it: a
+// route is never changed after router_any builds it — dispatch only reads
+// its method, its pattern and its handler.
+% Sync Route {}
+
 @ Route_drop sink Route h → v {}
 
 // ── Router ────────────────────────────────────────────────────────────

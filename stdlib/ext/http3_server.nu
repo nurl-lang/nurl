@@ -49,6 +49,13 @@ $ `stdlib/std/atomic.nu`
 // server, and the last owner releases the listener and its connections.
 : H3Server { ( Shared H3ServerImpl ) ctl }
 
+// Its copies are made to be used by several threads at once — the one
+// running it, another draining or stopping it. That is an assertion, not
+// a proof (stdlib/core/marker.nu). What backs it: the connection table
+// and the handler are reached by the QUIC loop alone (__h3s_event), one
+// loop at a time (QuicServer, itself Sync); `draining` is an Atomic.
+% Sync H3Server {}
+
 @ H3Server_share H3Server h → H3Server { ^ @ H3Server { ( shared_clone [H3ServerImpl] . h ctl ) } }
 
 @ H3Server_drop sink H3Server h → v {}

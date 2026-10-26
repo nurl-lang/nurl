@@ -7,15 +7,16 @@
 //   ( quic_server_free s )                                → v   early release (optional: the last owner
 //                                                               of a QuicServer releases it)
 //   ( quic_server_run s )                                 → v   the loop; returns when `quic_server_stop`
+//                                                               (at once if it already runs, or was stopped)
 //   ( quic_server_stop s )                                → v   from another fiber / thread
-//   ( quic_server_pump s conn now )                       → v   send whatever `conn` has ready (the
-//                                                               application calls this after writing streams)
+//   ( quic_server_accepted s )                            → i   connections accepted so far, from anywhere
 //
-// `on_event conn event` is called with the connection (BORROWED: an
-// application that keeps it keeps a `QuicConn_share`) and: 1 = new
-// connection (handshake confirmed, ALPN known) · 2 = streams readable
-// (`quic_conn_take_readable`) · 3 = connection gone (the listener lets
-// go of it right after the callback returns).
+// `on_event conn event` is called on the loop with the connection
+// (BORROWED: an application that keeps it keeps a `QuicConn_share`) and:
+// 1 = new connection (handshake confirmed, ALPN known) · 2 = streams
+// readable (`quic_conn_take_readable`) · 3 = connection gone (the
+// listener lets go of it right after the callback returns). What the
+// callback writes to the connection's streams is sent when it returns.
 //
 // A QuicServer is a handle: every copy (the thread running the loop,
 // the one that stops it) is the same listener, and the last owner
@@ -39,6 +40,7 @@ $ `stdlib/std/quic_packet.nu`
 $ `stdlib/std/quic_tp.nu`
 $ `stdlib/std/quic_conn.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/std/atomic.nu`
 
 // The routing table maps the first 8 bytes of every connection ID a
 // connection answers to onto the connection (one owner per entry).
@@ -50,13 +52,22 @@ $ `stdlib/core/rcbox.nu`
     ( @ v QuicConn i ) on_event
     ( HashMap i QuicConn ) by_cid
     ( Vec QuicConn ) conns
-    i running
-    i accepted
+    Atomic running  // 0 not yet run · 1 the loop runs · 2 stopped
+    Atomic accepted
     i rejected
 }
 
 // A QuicServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu).
 : QuicServer { ( Shared QuicServerImpl ) ctl }
+
+// Its copies are made to be used by several threads at once — the one
+// running the loop, another stopping it or reading its count. That is an
+// assertion, not a proof (stdlib/core/marker.nu). What backs it: the
+// loop's state (the socket, the connections, their table, the event
+// closure) is reached by the loop alone, and one loop runs at a time
+// (quic_server_run takes `running` from 0 to 1, or returns); what other
+// threads touch is Atomic.
+% Sync QuicServer {}
 
 @ QuicServer_share QuicServer h → QuicServer { ^ @ QuicServer { ( shared_clone [QuicServerImpl] . h ctl ) } }
 
@@ -76,8 +87,8 @@ $ `stdlib/core/rcbox.nu`
     = . s on_event on_event
     = . s by_cid ( map_new [i QuicConn] )
     = . s conns ( vec_new [QuicConn] )
-    = . s running 0
-    = . s accepted 0
+    = . s running ( atomic_new 0 )
+    = . s accepted ( atomic_new 0 )
     = . s rejected 0
     ^ @ QuicServer { s__box }
 }
@@ -87,12 +98,12 @@ $ `stdlib/core/rcbox.nu`
 
 @ quic_server_stop QuicServer s__h → v {
     : *QuicServerImpl s ( __QuicServer_ptr s__h )
-    = . s running 0
+    ( atomic_store . s running 2 )
 }
 
 @ quic_server_accepted QuicServer s__h → i {
     : *QuicServerImpl s ( __QuicServer_ptr s__h )
-    ^ . s accepted
+    ^ ( atomic_load . s accepted )
 }
 
 // The first 8 bytes of a connection id as the map key.
@@ -182,12 +193,6 @@ $ `stdlib/core/rcbox.nu`
     ( __qs_register . s by_cid c )
 }
 
-// Send everything `conn` has ready.
-@ quic_server_pump QuicServer s__h QuicConn c i now → v {
-    : ~ * QuicServerImpl s ( __QuicServer_ptr s__h )
-    ( __qs_pump . s 0 c now )
-}
-
 @ __qs_dispatch inout QuicServerImpl s ( Vec u ) dgram ( Vec u ) from i now → v {
     : i n ( vec_len [u] dgram )
     ? < n 1 { ^ } {}
@@ -215,7 +220,7 @@ $ `stdlib/core/rcbox.nu`
                 ( vec_push [QuicConn] . s conns ( QuicConn_share c ) )
                 ( __qs_map_set . s by_cid ( __qs_key dcid 0 ) c )
                 ( __qs_register . s by_cid c )
-                = . s accepted + . s accepted 1
+                : i _n ( atomic_add . s accepted 1 )
             } { = . s rejected + . s rejected 1 }
         }
     } {}
@@ -278,10 +283,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ quic_server_run QuicServer s__h → v {
     : ~ * QuicServerImpl s ( __QuicServer_ptr s__h )
-    = . s running 1
+    ? ! ( atomic_cas . s running 0 1 ) { ^ } {}
     : ( Vec u ) buf ( vec_with_cap [u] 65536 )
     : ( Vec u ) from ( udp_addr_new )
-    ~ != . s running 0 {
+    ~ == ( atomic_load . s running ) 1 {
         // the earliest deadline over all connections
         : i now0 ( __qs_now )
         : ~ i wait 1000

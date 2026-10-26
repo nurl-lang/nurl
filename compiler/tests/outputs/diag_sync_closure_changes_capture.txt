@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sync_closure_changes_capture.nu:18:13: error: 'server_new' keeps its parameter 2 in a handle shared across threads, where several threads may run the closure at once, but the closure built on line 14 changes 'seen' when it runs (it hands it to 'vec_push', which changes it): two threads running it at once would change it together, with no lock. Keep what it changes behind a 'Locked' or an 'Atomic' and capture that, or give each thread a closure of its own.
+            : HttpServer srv ( server_new l h )
+            ^

@@ -542,9 +542,9 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h335`, is closed and held by a probe in `tools/fuzz/holes/`; one
-is open — a library handle's copies changed on two threads, MEMORY.md
-§6.2).
+`h01–h342`, is closed and held by a probe in `tools/fuzz/holes/`; two
+are open — a share of a library handle made before the handle moves to
+a thread, and an MCP task handle kept past its task, MEMORY.md §6.2).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -2814,9 +2814,10 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h335`) is
-closed and held by a probe in `tools/fuzz/holes/` — but one, open: a
-library handle's copies changed on two threads (docs/MEMORY.md §6.2).
+([`formal/`](../formal/)), and every hole found so far (`h01–h342`) is
+closed and held by a probe in `tools/fuzz/holes/` — but two, open: a
+share of a library handle made before the handle moves to a thread, and
+an MCP task handle kept past its task (docs/MEMORY.md §6.2).
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is

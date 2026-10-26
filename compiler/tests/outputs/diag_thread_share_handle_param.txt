@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_share_handle_param.nu:10:5: error: 'thread_spawn' runs this closure on another thread or fiber, but the closure built on line 10 captures 'c', which is not Send: it is a parameter: its caller keeps the 'PNCounter' it passed, a handle whose copies are one state, changed in place with no lock — the other thread would change it under the caller. Declare the parameter 'sink' so this function takes the handle over (it then moves with the closure), or keep the state behind a 'Locked' or a 'Mutex' and share that.
+    ^ ( thread_spawn \ → v { ( pncounter_inc c 1 1 ) } )
+    ^

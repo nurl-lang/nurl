@@ -32,10 +32,11 @@
 //     no User-Agent column, no timestamp. When `tcp_peer_addr` flows
 //     through to the request, this becomes a single-line edit.
 //   * `Metrics` is a fixed-shape counter bag — total requests, in-
-//     flight, status-class buckets (1xx/2xx/3xx/4xx/5xx). Mutating
-//     i64 fields in a struct via direct field-store works in NURL
-//     today (no atomics — single-thread or per-worker counters; the
-//     thread-pool path needs a Mutex around the same struct).
+//     flight, status-class buckets (1xx/2xx/3xx/4xx/5xx). Each counter
+//     is an `Atomic`, so the workers of a pool or an async server count
+//     into one bag with no lock (and the compiler holds a handler that
+//     several threads run to that: what it changes must synchronise
+//     itself).
 //   * `metrics_handler` emits Prometheus 0.0.4 text-exposition
 //     payload. `# HELP` + `# TYPE` lines first, then sample lines.
 //     No external libs, no labels — three counters, one gauge, one
@@ -47,6 +48,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/atomic.nu`
 
 // ── with_access_log ───────────────────────────────────────────────────
 
@@ -91,10 +93,9 @@ $ `stdlib/core/vec.nu`
 
 // ── Metrics ───────────────────────────────────────────────────────────
 //
-// Backed by a 10-slot `Vec[i]` so the entire Metrics struct fits in
-// a single pointer-handle slot (cheap to pass by value, mutations
-// through the inner pointer are observed by every holder of the
-// handle). Slot indices:
+// Backed by a 10-slot `Vec[Atomic]` so the entire Metrics struct fits
+// in a single pointer-handle slot (cheap to pass by value; every holder
+// counts into the same words, from any thread). Slot indices:
 //
 // Historical note: a plain `{ i requests, i in_flight, … }` struct
 // used to be impossible because closures captured multi-field structs
@@ -114,15 +115,15 @@ $ `stdlib/core/vec.nu`
 //   3 latency_ms_total     8 status_5xx
 //   4 status_1xx           9 errors_total
 
-: Metrics { ( Vec i ) counters }
+: Metrics { ( Vec Atomic ) counters }
 
 @ metrics_slot_count → i { ^ 10 }
 
 @ metrics_new → Metrics {
-    : ( Vec i ) v ( vec_with_cap [i] 10 )
+    : ( Vec Atomic ) v ( vec_with_cap [Atomic] 10 )
     : ~ i k 0
     ~ < k 10 {
-        ( vec_push [i] v 0 )
+        ( vec_push [Atomic] v ( atomic_new 0 ) )
         = k + k 1
     }
     ^ @ Metrics { v }
@@ -131,14 +132,11 @@ $ `stdlib/core/vec.nu`
 @ metrics_free sink Metrics m → v {}
 
 @ __m_inc Metrics m i idx i delta → v {
-    : *i data ( vec_data [i] . m counters )
-    : i cur . data idx
-    ( vec_set [i] . m counters idx + cur delta )
+    : i _old ( atomic_add ( vec_at [Atomic] . m counters idx ) delta )
 }
 
 @ __m_get Metrics m i idx → i {
-    : *i data ( vec_data [i] . m counters )
-    ^ . data idx
+    ^ ( atomic_load ( vec_at [Atomic] . m counters idx ) )
 }
 
 @ metrics_requests_total Metrics m → i { ^ ( __m_get m 0 ) }

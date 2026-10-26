@@ -171,7 +171,7 @@ $ `stdlib/core/slice.nu`
     // Every open connection, for server_drain (see "Graceful drain").
     ServerDrain drain
     // Accept fibers under server_run_async; 0 = one per runtime worker.
-    i acceptors
+    Atomic acceptors
 }
 
 // A server is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -180,6 +180,15 @@ $ `stdlib/core/slice.nu`
 // releases it. A thread or fiber that captures one takes a share of its
 // own, so the server outlives whichever side finishes first.
 : HttpServer { ( Shared HttpServerImpl ) ctl }
+
+// Its copies are made to be used by several threads at once — the
+// workers serving, another thread stopping or draining them. That is an
+// assertion, not a proof (stdlib/core/marker.nu). What backs it: the
+// configuration fields are written once, by the constructor; the one
+// knob set after it (acceptors) is an Atomic; the listener is Sync; the
+// connection registry is changed under its Mutex, with Atomic counters;
+// the DoS counters live behind the runtime's own lock.
+% Sync HttpServer {}
 
 @ HttpServer_share HttpServer h → HttpServer { ^ @ HttpServer { ( shared_clone [HttpServerImpl] . h ctl ) } }
 
@@ -293,7 +302,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) 0 } )
+        @ ?DosState { F } ( __drain_new ) ( atomic_new 0 ) } )
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
@@ -301,21 +310,21 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) 0 } )
+        @ ?DosState { F } ( __drain_new ) ( atomic_new 0 ) } )
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { F } ( __drain_new ) 0 } )
+        @ ?DosState { F } ( __drain_new ) ( atomic_new 0 ) } )
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } ( __drain_new ) 0 } )
+    ^ ( __srv_new @ HttpServerImpl { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ ?DosState { F } ( __drain_new ) ( atomic_new 0 ) } )
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
@@ -331,7 +340,7 @@ $ `stdlib/core/slice.nu`
         ( server_keepalive_auto )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        @ ?DosState { T st } ( __drain_new ) 0 } )
+        @ ?DosState { T st } ( __drain_new ) ( atomic_new 0 ) } )
 }
 
 // Snapshot the current active-connection count — useful for /metrics
@@ -520,7 +529,7 @@ $ `stdlib/core/slice.nu`
 // default) = one per runtime worker; 1 = the single accept loop of old.
 // Set before the server runs.
 @ server_set_acceptors HttpServer s i n → v {
-    = . ( __srv s ) acceptors n
+    ( atomic_store . ( __srv s ) acceptors n )
 }
 
 // Close the listener: the run loop ends once its current connections do.
@@ -1584,7 +1593,7 @@ $ `stdlib/std/async.nu`
     // between workers, so a listener per worker buys no affinity here.
     // runtime_run blocks until the accept fibers exit AND every in-flight
     // conn fiber drains (pending=0).
-    : ~ i nacc . ( __srv s ) acceptors
+    : ~ i nacc ( atomic_load . ( __srv s ) acceptors )
     ? <= nacc 0 { = nacc ( runtime_worker_count ) } {}
     ? < nacc 1 { = nacc 1 } {}
     : ~ i k 0

@@ -150,6 +150,12 @@ $ `stdlib/core/rcbox.nu`
 // the entry releases them with the block.
 @ RpcEntry_share RpcEntry h → RpcEntry { ^ @ RpcEntry { ( shared_clone [RpcImpl] . h ctl ) } }
 
+// Its copies are reached by every worker that dispatches a call. That is
+// an assertion, not a proof (stdlib/core/marker.nu). What backs it: an
+// entry is never changed after registry_register builds it — dispatch
+// only reads its name and its handler.
+% Sync RpcEntry {}
+
 @ RpcEntry_drop sink RpcEntry h → v {}
 
 // Let go of `r` now rather than at the end of its owner's scope.

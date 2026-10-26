@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_thread_share_handle_captured_kept.nu:16:13: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 14 by the closure that 'thread_spawn' runs on another thread or fiber, which takes it along (to keep using a value here, give the closure a copy of a Vec or a String — ( mem_dup x ) — or share it through Arc / Mutex / a channel, shared before the spawn; a handle whose copies are one state, such as a PNCounter, has no copy to give: keep it behind a Locked or an Atomic). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( pncounter_inc a 2 1 )
+            ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
