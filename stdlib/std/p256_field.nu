@@ -29,7 +29,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
-$ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladder
+$ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 
 // p = 2^256 − 2^224 + 2^192 + 2^96 − 1, little-endian 64-bit limbs.
 @ __p256_mod → ( Vec i ) {
@@ -893,14 +893,9 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladde
 //   * acc = −entry: H = 0, R ≠ 0 → Z3 = Z1·H = 0 — the formula itself
 //     yields ∞, which is the right answer.
 //   * acc = entry (the doubling case, H = 0, R = 0): the formula
-//     degenerates. For this to trigger, the partial sum (a multiple of
-//     G determined by the scalar's higher teeth) must equal the table
-//     entry's multiple mod n — for the secret, (pseudo)random scalars
-//     this path serves (RFC 6979 nonces, ephemeral ECDH keys) that is a
-//     ~2⁻²²⁴ event per addition, the same bound production
-//     implementations (e.g. ecp_nistz256) accept. Adversarial scalars
-//     never reach this path: the VARIABLE-base ladder keeps the
-//     complete formula.
+//     degenerates. Its callers rule the case out instead: the fixed-base
+//     comb and the variable-base ladder below each carry the proof that, for a scalar
+//     reduced mod n, no addition they make can meet it.
 //
 // All limb traffic stays masked and fixed-count: same constant-time
 // discipline as the projective path.
@@ -1080,6 +1075,15 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladde
     }
 }
 
+// The point at slot d of such a flat vector, into `dst`.
+@ _p256_tbl_get P256Pt dst ( Vec i ) tbl i d → v {
+    : *i tp ( vec_data [i] tbl )
+    : i base * d 12
+    ( __p256_ld4 . dst x # *i + # i tp * base 8 )
+    ( __p256_ld4 . dst y # *i + # i tp * + base 4 8 )
+    ( __p256_ld4 . dst z # *i + # i tp * + base 8 8 )
+}
+
 // ── variable-base scalar multiplication ──────────────────────────────
 //
 // k·Q for a point Q the caller supplies (ECDH against a peer's share), on
@@ -1204,6 +1208,97 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladde
     = . dp 0 . src 0 = . dp 1 . src 1 = . dp 2 . src 2 = . dp 3 . src 3
 }
 
+// Jacobian += Jacobian (add-1998-cmo-2: 12M+4S), for PUBLIC points whose
+// relation is known: neither is ∞ and acc ≠ ±q. Nothing here checks it —
+// H = 0 would give Z = 0 — so it is for the fixed-base table builder
+// alone, where every call is an (j−1)·B + B with 3 ≤ j ≤ 15, which is
+// neither case. Uses every scratch register.
+@ _p256_jadd_d P256Scratch scr P256Pt acc P256Pt q → v {
+    : ( Vec i ) X1 . acc x
+    : ( Vec i ) Y1 . acc y
+    : ( Vec i ) Z1 . acc z
+    : ( Vec i ) u1 . scr g0
+    : ( Vec i ) hreg . scr g1
+    : ( Vec i ) s1 . scr g2
+    : ( Vec i ) rreg . scr g3
+    : ( Vec i ) hh . scr g4
+    : ( Vec i ) vv . scr g5
+    : ( Vec i ) t . scr gp
+    // U1 = X1·Z2², S1 = Y1·Z2³; U2 = X2·Z1², S2 = Y2·Z1³
+    ( _p256_sqr_d scr t . q z )
+    ( _p256_mul_d scr u1 X1 t )
+    ( _p256_mul_d scr t t . q z )
+    ( _p256_mul_d scr s1 Y1 t )
+    ( _p256_sqr_d scr t Z1 )
+    ( _p256_mul_d scr hreg . q x t )
+    ( _p256_mul_d scr t t Z1 )
+    ( _p256_mul_d scr rreg . q y t )
+    // H = U2 − U1, R = S2 − S1; Z3 = Z1·Z2·H
+    ( __p256_sub_d scr hreg hreg u1 )
+    ( __p256_sub_d scr rreg rreg s1 )
+    ( _p256_mul_d scr Z1 Z1 . q z )
+    ( _p256_mul_d scr Z1 Z1 hreg )
+    // V = U1·H², H³; X3 = R² − H³ − 2V; Y3 = R·(V − X3) − S1·H³
+    ( _p256_sqr_d scr hh hreg )
+    ( _p256_mul_d scr vv u1 hh )
+    ( _p256_mul_d scr hh hh hreg )
+    ( _p256_sqr_d scr X1 rreg )
+    ( __p256_sub_d scr X1 X1 hh )
+    ( __p256_sub_d scr X1 X1 vv )
+    ( __p256_sub_d scr X1 X1 vv )
+    ( __p256_sub_d scr vv vv X1 )
+    ( _p256_mul_d scr vv rreg vv )
+    ( _p256_mul_d scr t s1 hh )
+    ( __p256_sub_d scr Y1 vv t )
+}
+
+// `count` Jacobian points (flat x‖y‖z, 12 limbs each, none of them ∞) into
+// affine entries of `tbl` (x‖y, 8 limbs each) at slots at … at+count−1,
+// with ONE field inversion: Montgomery's trick — prefix products
+// c_k = Z_0·…·Z_k, invert the last, then back down: z_k⁻¹ = inv·c_(k−1),
+// inv ← inv·Z_k. Public points only (the loop is fixed-count anyway).
+@ _p256_batch_affine P256Scratch scr ( Vec i ) jac i count ( Vec i ) tbl i at ( Vec i ) one_m → v {
+    : *i jp ( vec_data [i] jac )
+    : ( Vec i ) pre ( _magn * count 4 )
+    : *i pp ( vec_data [i] pre )
+    : ( Vec i ) za ( _mag4 )
+    : ( Vec i ) acc ( _mag4 )
+    ( __p256_copy_d acc one_m )
+    : ~ i k 0
+    ~ < k count {
+        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
+        ( _p256_mul_d scr acc acc za )
+        : *i ap ( vec_data [i] acc )
+        : i b * k 4
+        = . pp b . ap 0 = . pp + b 1 . ap 1 = . pp + b 2 . ap 2 = . pp + b 3 . ap 3
+        = k + k 1
+    }
+    : ( Vec i ) inv ( _mag4 )
+    ( _p256_inv_d scr inv acc )
+    : ( Vec i ) zi ( _mag4 )
+    : ( Vec i ) zi2 ( _mag4 )
+    : ( Vec i ) xa ( _mag4 )
+    : ( Vec i ) ya ( _mag4 )
+    : ( Vec i ) prev ( _mag4 )
+    = k - count 1
+    ~ >= k 0 {
+        ? > k 0 {
+            ( __p256_ld4 prev # *i + # i pp * * - k 1 4 8 )
+            ( _p256_mul_d scr zi inv prev )
+        } { ( __p256_copy_d zi inv ) }
+        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
+        ( _p256_mul_d scr inv inv za )
+        ( __p256_ld4 xa # *i + # i jp * * k 12 8 )
+        ( __p256_ld4 ya # *i + # i jp * + * k 12 4 8 )
+        ( _p256_sqr_d scr zi2 zi )
+        ( _p256_mul_d scr xa xa zi2 )
+        ( _p256_mul_d scr zi2 zi2 zi )
+        ( _p256_mul_d scr ya ya zi2 )
+        ( _p256_atbl_put tbl + at k xa ya )
+        = k - k 1
+    }
+}
+
 // The affine table 0, 1·Q, …, 15·Q (entry 0 all-zero, never committed) for
 // a Montgomery affine Q of order n: Jacobian multiples, then one batch
 // inversion. Q is public in every use (a peer's share, a public key, G).
@@ -1221,51 +1316,11 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladde
         ( _p256_tbl_put jac - d 1 p )
         = d + d 1
     }
-    // Montgomery's trick: prefix products c_k = Z_0·…·Z_k, one inversion,
-    // then back down — z_k⁻¹ = inv·c_(k−1), inv ← inv·Z_k.
-    : *i jp ( vec_data [i] jac )
-    : ( Vec i ) pre ( _magn 60 )
-    : *i pp ( vec_data [i] pre )
-    : ( Vec i ) za ( _mag4 )
-    : ( Vec i ) acc ( _mag4 )
-    ( __p256_copy_d acc one_m )
-    : ~ i k 0
-    ~ < k 15 {
-        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
-        ( _p256_mul_d scr acc acc za )
-        : *i ap ( vec_data [i] acc )
-        : i b * k 4
-        = . pp b . ap 0 = . pp + b 1 . ap 1 = . pp + b 2 . ap 2 = . pp + b 3 . ap 3
-        = k + k 1
-    }
-    : ( Vec i ) inv ( _mag4 )
-    ( _p256_inv_d scr inv acc )
     : ( Vec i ) tbl ( _magn 128 )
     : *i tp ( vec_data [i] tbl )
-    = k 0
+    : ~ i k 0
     ~ < k 8 { = . tp k 0 = k + k 1 }
-    : ( Vec i ) zi ( _mag4 )
-    : ( Vec i ) zi2 ( _mag4 )
-    : ( Vec i ) xa ( _mag4 )
-    : ( Vec i ) ya ( _mag4 )
-    : ( Vec i ) prev ( _mag4 )
-    = k 14
-    ~ >= k 0 {
-        ? > k 0 {
-            ( __p256_ld4 prev # *i + # i pp * * - k 1 4 8 )
-            ( _p256_mul_d scr zi inv prev )
-        } { ( __p256_copy_d zi inv ) }
-        ( __p256_ld4 za # *i + # i jp * + * k 12 8 8 )
-        ( _p256_mul_d scr inv inv za )
-        ( __p256_ld4 xa # *i + # i jp * * k 12 8 )
-        ( __p256_ld4 ya # *i + # i jp * + * k 12 4 8 )
-        ( _p256_sqr_d scr zi2 zi )
-        ( _p256_mul_d scr xa xa zi2 )
-        ( _p256_mul_d scr zi2 zi2 zi )
-        ( _p256_mul_d scr ya ya zi2 )
-        ( _p256_atbl_put tbl + k 1 xa ya )
-        = k - k 1
-    }
+    ( _p256_batch_affine scr jac 15 tbl 1 one_m )
     ^ tbl
 }
 
@@ -1324,6 +1379,244 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before the variable-base ladde
         = w + w 1
     }
     // Jacobian → affine: x = X/Z², y = Y/Z³ (Z = 0 → zinv = 0 → all-zero).
+    : ( Vec i ) zinv ( _mag4 )
+    ( _p256_inv_d scr zinv . acc z )
+    ( _p256_sqr_d scr . acc z zinv )
+    ( _p256_mul_d scr . acc x . acc x . acc z )
+    ( _p256_mul_d scr . acc z . acc z zinv )
+    ( _p256_mul_d scr . acc y . acc y . acc z )
+    ( _p256_from_mont_d scr . acc x . acc x )
+    ( _p256_from_mont_d scr . acc y . acc y )
+    : ( Vec u ) out ( vec_with_cap [u] 64 )
+    ( _p256_limbs_to_be out . acc x )
+    ( _p256_limbs_to_be out . acc y )
+    ^ out
+}
+
+// ── fixed-base comb for the generator G (ECDSA k·G, ECDH keygen) ──────
+// k·G with a SECRET k (an RFC 6979 nonce, an ephemeral ECDH key) and a
+// FIXED base: everything that depends on G alone is computed once per
+// process. The scalar, reduced mod n, is Booth-recoded into 52 signed
+// 5-bit digits d_w ∈ [−16, 16] with k = Σ d_w·32^w, and window w has an
+// affine table of its own, 1·32^w·G … 16·32^w·G. Then
+//
+//     k·G = Σ_w d_w·(32^w·G)
+//
+// is 52 mixed additions of a table entry, negated in constant time for a
+// negative digit, and NO doublings: 52 × (8M+3S) against the 32 × (3M+5S)
+// + 64 × (8M+3S) of the eight-tooth comb this replaces — 40 % fewer field
+// operations. Each window is one constant-time scan of 16 entries, as
+// before, and there are 52 scans instead of 64.
+//
+// Complete for every scalar, by construction. The mixed addition cannot
+// add a point to itself; it handles acc = ∞ (the inf mask), digit 0 (the
+// keep mask) and acc = −entry (it yields Z = 0, the right answer) — see
+// the Jacobian-layer header above. Before window w the
+// accumulator is L·G with L = Σ_{v<w} d_v·32^v, so acc = entry needs
+// L ≡ d_w·32^w (mod n) with d_w ≠ 0:
+//
+//   * As integers L ≠ d_w·32^w: their difference is a signed-digit
+//     expansion whose lowest non-zero digit has magnitude at most 16, so
+//     it is not 0 mod 32 and the difference is not 0.
+//   * For w ≤ 50, |L − d_w·32^w| < 17·32^w ≤ 17·2^250 < n, so it is not a
+//     non-zero multiple of n either.
+//   * The top window holds bits 254‥259 of k < n < 2^256, so d_51 ∈ {0, 1,
+//     2} and L = k − d_51·2^255. L − d_51·2^255 = k − d_51·2^256 would have
+//     to be −n (d_51 = 1: k = 2^256 − n) or −2n (d_51 = 2: k = 2^257 − 2n).
+//     Both are below 2^226, where d_51 = 0. Contradiction.
+//
+// The reduction mod n is what keeps the top digit that small; the comb
+// before this one skipped it and accepted a ~2⁻²²⁴ chance of the doubling
+// case per addition.
+//
+// The 832 affine entries (53 KB) are built on first use from G alone —
+// no constant blob to audit — with public-point arithmetic and one batch
+// inversion, and shared through publish-once slot 5.
+
+// G's affine coordinates, plain little-endian limbs.
+@ _p256_gx_plain → ( Vec i ) {
+    : ( Vec i ) v ( _mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0xF4A13945D898C296 = . q 1 # i 0x77037D812DEB33A0
+    = . q 2 # i 0xF8BCE6E563A440F2 = . q 3 # i 0x6B17D1F2E12C4247
+    ^ v
+}
+
+@ _p256_gy_plain → ( Vec i ) {
+    : ( Vec i ) v ( _mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0xCBB6406837BF51F5 = . q 1 # i 0x2BCE33576B315ECE
+    = . q 2 # i 0x8EE7EB4A7C0F9E16 = . q 3 # i 0x4FE342E2FE1A7F9B
+    ^ v
+}
+
+// 32 big-endian bytes at offset `off` → four little-endian 2^64 limbs.
+@ _p256_be32_to_limbs ( Vec u ) src i off → ( Vec i ) {
+    : ( Vec i ) out ( vec_with_cap [i] 4 )
+    : ~ i k 0
+    ~ < k 4 {
+        // limb k = bytes [off + 24−8k … off + 31−8k], big-endian.
+        : i base + off - 24 * 8 k
+        : ~ u64 acc 0
+        : ~ i j 0
+        ~ < j 8 {
+            : u64 bj # u64 ?? ( vec_get [u] src + base j ) { T b → # i b F _ → 0 }
+            = acc | << acc 8 bj
+            = j + j 1
+        }
+        ( vec_push [i] out # i acc )
+        = k + k 1
+    }
+    ^ out
+}
+
+// The comb table: window w's entries j·32^w·G (j = 1‥16) at slots
+// 16·w + j − 1, x‖y Montgomery affine. Every point is public. Within a
+// window the even multiples are doublings of the half (2B, 4B = 2·2B, …,
+// 16B = 2·8B) and the odd ones (j−1)·B + B with 3 ≤ j ≤ 15 — never ±B, so
+// the plain Jacobian addition is exact — and the next window's base is
+// 32·B = 2·(16·B).
+@ __p256_comb_build → ( Vec i ) {
+    : P256Scratch scr ( _p256_scr_new )
+    : ( Vec i ) onem ( _p256_one_mont_s scr )
+    : ( Vec i ) gx ( _p256_to_mont_s scr ( _p256_gx_plain ) )
+    : ( Vec i ) gy ( _p256_to_mont_s scr ( _p256_gy_plain ) )
+    : ( Vec i ) jac ( _magn * 832 12 )
+    : P256Pt b ( _p256_pt_mag )
+    : P256Pt p ( _p256_pt_mag )
+    ( __p256_copy_d . b x gx ) ( __p256_copy_d . b y gy ) ( __p256_copy_d . b z onem )
+    : ~ i w 0
+    ~ < w 52 {
+        : i base * w 16
+        ( _p256_tbl_put jac base b )
+        : ~ i j 2
+        ~ <= j 16 {
+            ? == % j 2 0 {
+                ( _p256_tbl_get p jac - + base / j 2 1 )
+                ( _p256_jdbl_d scr p )
+            } {
+                ( _p256_tbl_get p jac - + base j 2 )
+                ( _p256_jadd_d scr p b )
+            }
+            ( _p256_tbl_put jac - + base j 1 p )
+            = j + j 1
+        }
+        // p holds 16·B
+        ( _p256_jdbl_d scr p )
+        ( __p256_pt_copy_d b p )
+        = w + w 1
+    }
+    : ( Vec i ) tbl ( _magn * 832 8 )
+    ( _p256_batch_affine scr jac 832 tbl 0 onem )
+    ^ tbl
+}
+
+: ~ i g_p256_comb_tbl 0
+
+// The comb table, built by the first caller; two first callers may both
+// build, publish-once slot 5 keeps one (registry: stdlib/std/tls_server.nu)
+// and the other copy is dropped. The winner lives for the rest of the
+// program, through the global — callers BORROW it and must not free it.
+@ __p256_comb_tbl → ( Vec i ) {
+    ? == g_p256_comb_tbl 0 {
+        : ( Vec i ) tbl ( __p256_comb_build )
+        = g_p256_comb_tbl ( vec_publish_once [i] 5 tbl )
+    } {}
+    ^ @ ( Vec i ) { # s g_p256_comb_tbl }
+}
+
+// The six-bit Booth window w of a scalar held as five little-endian limbs
+// (the fifth 0): bits 5w−1 … 5w+4, bit −1 being 0. `w` is public, so
+// choosing limbs and shifts by it leaks nothing.
+@ __p256_booth_bits * i kl i w → i {
+    ? == w 0 { ^ & << . kl 0 1 63 } {}
+    : i lo - * 5 w 1
+    : i q / lo 64
+    : i r % lo 64
+    : u64 v >> # u64 . kl q r
+    : u64 hi ? > r 58 << # u64 . kl + q 1 - 64 r 0
+    ^ # i & | v hi 63
+}
+
+// Constant-time read of window w's entry `digit` (1‥16; 0 reads all
+// zero) into (ex, ey). `digit` comes from the secret scalar: every one of
+// the sixteen entries is read, every time, and merged under a mask that
+// is all-ones exactly on the match — arithmetic, not a comparison (see
+// _p256_atbl_get_d). The address stream depends on w alone.
+@ __p256_comb_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i w i digit → v {
+    : *i tp # *i + # i ( vec_data [i] tbl ) * * w 128 8
+    : ~ i x0 0
+    : ~ i x1 0
+    : ~ i x2 0
+    : ~ i x3 0
+    : ~ i y0 0
+    : ~ i y1 0
+    : ~ i y2 0
+    : ~ i y3 0
+    : ~ i s 0
+    ~ < s 16 {
+        : u64 z ^^ # u64 + s 1 # u64 digit
+        : i mask - 0 # i >> - z 1 63
+        : i b * s 8
+        = x0 | x0 & mask . tp b
+        = x1 | x1 & mask . tp + b 1
+        = x2 | x2 & mask . tp + b 2
+        = x3 | x3 & mask . tp + b 3
+        = y0 | y0 & mask . tp + b 4
+        = y1 | y1 & mask . tp + b 5
+        = y2 | y2 & mask . tp + b 6
+        = y3 | y3 & mask . tp + b 7
+        = s + s 1
+    }
+    : *i xp ( vec_data [i] ex )
+    : *i yp ( vec_data [i] ey )
+    = . xp 0 x0 = . xp 1 x1 = . xp 2 x2 = . xp 3 x3
+    = . yp 0 y0 = . yp 1 y1 = . yp 2 y2 = . yp 3 y3
+}
+
+// scalar · G → 64 bytes X‖Y (all zero for a scalar ≡ 0 mod n), constant
+// time in the scalar: 52 windows, each one Booth recode, one masked
+// table scan, one masked negation and one masked mixed addition.
+@ p256ct_scalarmult_base ( Vec u ) kbytes → ( Vec u ) {
+    : ( Vec u ) k ( __p256_scalar_mod_n kbytes )
+    : ( Vec i ) kl4 ( _p256_be32_to_limbs k 0 )
+    : ( Vec i ) kl ( _magn 5 )
+    : *i kp ( vec_data [i] kl )
+    ( __p256_copy_d kl kl4 )
+    = . kp 4 0
+    : P256Scratch scr ( _p256_scr_new )
+    // Shared, lazily-built table of G multiples — BORROWED from the
+    // global cache; must not be freed here.
+    : ( Vec i ) tbl ( __p256_comb_tbl )
+    : ( Vec i ) onem ( _p256_one_mont_s scr )
+    : ( Vec i ) zero ( __zeros4 )
+    : ( Vec i ) ex ( _mag4 )
+    : ( Vec i ) ey ( _mag4 )
+    : ( Vec i ) ny ( _mag4 )
+    // acc = ∞: Z = 0 (X/Y are irrelevant while Z = 0; the first committed
+    // addition replaces all three coordinates through the ∞ mask).
+    : P256Pt acc ( _p256_pt_mag )
+    ( _p256_set_identity_d scr acc )
+    : ~ i w 0
+    ~ < w 52 {
+        // Booth recode (constant time): the six-bit window b5‥b0 is the
+        // digit b0 + b1 + 2b2 + 4b3 + 8b4 − 16b5. neg is all-ones when b5
+        // is set, and the magnitude is then that of the complement,
+        // 63 − in, halved and rounded up.
+        : i inb ( __p256_booth_bits kp w )
+        : i neg - 0 >> inb 5
+        : i dd | & - 63 inb neg & inb ^^ neg - 0 1
+        : i digit + >> dd 1 & dd 1
+        // keep-mask: −1 exactly when the digit is 0 (branch-free).
+        : i keep - # i >> # u64 | digit - 0 digit 63 1
+        ( __p256_comb_get_d ex ey tbl w digit )
+        ( __p256_sub_d scr ny zero ey )
+        ( __p256_lmerge_d ey neg ^^ neg - 0 1 ny ey )
+        ( _p256_jmadd_d scr acc ex ey onem keep )
+        = w + w 1
+    }
+    // Jacobian → affine: x = X/Z², y = Y/Z³ (Z = 0 → zinv = 0 → the
+    // all-zero identity output).
     : ( Vec i ) zinv ( _mag4 )
     ( _p256_inv_d scr zinv . acc z )
     ( _p256_sqr_d scr . acc z zinv )

@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+inverse KAT 13/13
+a * inv(a) == 1: 2000/2000
