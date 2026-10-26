@@ -882,7 +882,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h321):
+all are closed, each a probe CI now holds (h142–h323):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1157,7 +1157,7 @@ owns or shares the bytes it reads (h260); a join nothing takes owns
 nothing (h259); a temporary argument is dropped after the call whether
 the result is an option, a result with an enum error, or a value that
 cannot be copied (h261, h265), and a field read out of a call's result
-leaves the rest of it to be dropped (h266); a field that cannot be copied
+leaves the rest of it to be dropped (h266; a closure field too, h323); a field that cannot be copied
 moves whole out of a struct literal (h264); an option taken out of a
 `Locked` empties its slot (h267); a number, a pointer or a struct is
 never passed where another of them is declared (h262, h268, h269); a
@@ -1245,8 +1245,16 @@ emptied its slot too, leaking the key and corrupting the map (h303;
 §7.6). A thread-safety marker asserted by safe code raced an `Rc`'s count
 (h318: a positive marker is `unsafe` now, §3), and the heartbeat thread
 of dist/heartbeat.nu grew a membership table the data plane grew too,
-under a lock nothing made the caller take (h319, §6.5). No other hole is
-known.
+under a lock nothing made the caller take (h319, §6.5). Fixing
+`std/pool.nu`'s checkout guard (Agora #73) found two more: a destructor —
+a drop hook or a `% Drop` impl — that stored a field of its receiver that
+cannot be copied into a literal, a container or another field moved it
+there without emptying it, and the receiver's drop glue released it again
+(h322: the field is lent, as a parameter's is; §7.6); and a closure field
+read out of a call's result was nobody's — neither the read nor the
+temporary released its environment or the temporary's other fields (h323:
+the field leaves the temporary as h266's handle fields do, and its
+environment is the read's own; §7.4). No other hole is known.
 
 The rules that carry it:
 
@@ -1481,7 +1489,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h321`) to the rule that rejects it. See
+  (`h01–h323`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1609,6 +1617,7 @@ which drops it:
 | a closure or call result passed straight to a call | the call site, right after the call, unless it went into an aggregate literal first |
 | a statement whose value is discarded | that statement |
 | a function result | the caller |
+| a closure field read out of a call's result (`. ( mk ) cb`) | whatever takes the read — the field leaves the temporary, whose rest is dropped there (h323) |
 | a struct field | the struct, with its other fields; copying the struct copies the environment |
 | a slice of closures | the slice, element by element |
 | a container whose element type is a closure (`( Vec ( @ i i ) )`, a map's values, an `Rc`, a generic struct's field) | the container, element by element; copying the container copies each environment |
@@ -1767,7 +1776,9 @@ are dropped, moved and copied by the same rules:
   on some paths and returns a fresh value on others answers per call, at
   run time.
 - **Values that cannot be copied.** A `% Drop` value with no clone (a
-  sqlite `Database`, a `Statement`) read out of a parameter is lent.
+  sqlite `Database`, a `Statement`) read out of a parameter is lent, and
+  so is one read out of the value a destructor is dropping: its drop glue
+  releases the field once the destructor returns (h322).
   Where a copy would be needed (stored into an owner, handed to a keeping
   callee), compilation stops with an error naming the type.
 - **Joins.** A `?` / `??` yielding an owning value hands its binding what

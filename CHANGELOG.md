@@ -100,6 +100,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its top bits and the answer was wrong. The ladder now covers the
   modulus's whole 16-bit limbs, or the exponent's when it has more: the
   count still never depends on the exponent's bits.
+- **A destructor can no longer release a field of its receiver twice**
+  (Agora #73, h322). A drop hook or a `% Drop` impl that stored a field
+  it cannot copy into a literal, a container or another field
+  (`@ ( Slot A ) { . g val 1 }` in `Guard_drop`, the shape of
+  `std/pool.nu`'s checkout guard) moved the field without emptying it,
+  and the receiver's drop glue then released it again (ASan:
+  heap-use-after-free). Such a field is now lent, as a parameter's is,
+  so the store is rejected with the same error a `sink` function's
+  parameter already got.
+- **A generic struct instance first needed inside a function body keeps
+  its layout** (Agora #73). `. ( mk [i] 5 ) k`, with `mk` returning
+  `( Wrap ?( Slot A ) )` and no top-level code naming that type, failed
+  with "has no field 'k'": the instance was made in the body's scope and
+  went with it, while its "already made" mark stayed. An instance's
+  layout is now a module-scope fact wherever it is first made
+  (`nurl_sym_def_module`), and a call's return type makes its instances
+  in full at the call.
+- **No invalid IR from a generic struct applied to a type made of a type
+  parameter.** `( Wrap ?A )`, `( Wrap ( Pair A i ) )`, `( Wrap ?( Slot A
+  ) )` or `( Wrap ( @ A i ) )` in a generic signature or body was
+  instantiated with the parameter still abstract
+  (`%Wrap__opt_A = type { { i1, %A }, i64 }`): nurlc exited 0 and clang
+  rejected the module ("use of undefined type named 'A'"). Such an
+  argument is abstract like the parameter itself.
+- **A closure field read out of a call's result no longer leaks** (h323).
+  `: ( @ i i ) f . ( mk 9 ) inner` released neither the closure's
+  environment nor the temporary's other fields. The field now leaves the
+  temporary, which is dropped where it is read, as h266 does for handle
+  fields. The environment belongs to the read: it is taken when the call
+  handed its result over and copied when the call lent it. A binding, an
+  argument, a return or a store then takes it over.
 
 ## [0.78.0] — 2026-10-24
 
