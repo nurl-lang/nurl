@@ -1902,10 +1902,13 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_fn_reallocs_witness ``
 // `g_fn_replaces[fname]`: the `inout` parameters an owned field of which
 // (or the whole value) the function may replace — releasing what was
-// there. Built like the mutation summary; its call edges (`fn|k|callee|j`:
-// parameter k handed on as `inout` argument j) are closed at module end,
-// and the calls that hand a `: ~` copy of a parameter in `inout`
-// (g_repl_checks) are judged against it then (h295).
+// there: `k` for the whole of parameter k (or a part not told apart), `k.f`
+// for its top-level field f, so a borrow of another field survives the call
+// (__repl_hits). Built like the mutation summary; its call edges
+// (`fn|k|callee|j|f`: parameter k — its field f, or the whole when f is
+// empty — handed on as `inout` argument j) are closed at module end, and the
+// calls that hand a `: ~` copy of a parameter in `inout` (g_repl_checks)
+// are judged against it then (h295).
 : ~ i g_fn_replaces 0
 : ~ s g_fn_replaces_witness ``
 : ~ s g_repl_edges ``
@@ -2838,6 +2841,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // call hands back is a borrow of.
 : ~ i g_member_path_on 0
 : ~ s g_member_path ``
+// …and the path a binding's field-read right-hand side named (`: T n .
+// h name` → `h.name`): what a borrow decided for that binding borrows
+// from (bck_note_borrow), so it ends with that field, not every borrow
+// of `h`.
+: ~ s g_bck_rhs_path ``
 // Source expressions (srcx): where a view's value came from, as an
 // expression the walk evaluates once every summary is final — a binding
 // (`v`), a field path (`b.items`), a call (`callee(a0|a1|…)`: the
@@ -11942,10 +11950,18 @@ unsafe @ nurl_lex_peek4_type i h → i {
     { ( die lex `mem_take takes a binding: '( mem_take x )' — x owns the value it holds from here on (a container has given it up), so it is dropped at scope exit and moved when stored or returned.` ) }
     {}
     : s name ( nurl_lex_val lex )
+    : i __tk_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
-    // Taken over: no longer lent by the storage it was read out of.
+    // Taken over: no longer lent by the storage it was read out of — nor,
+    // for the borrow checker, a borrow of it (a `take` row).
     ? != 0 ( nurl_sym_len2 syms name `__rlent` ) { ( nurl_sym_set_deep syms ( nurl_str_cat name `__rlent` ) `` ) } {}
+    ? & != 0 g_borrowck == 0 g_bck_rec_off {
+        : s __tk_reads ( nurl_sym_get g_bck `reads` )
+        ( nurl_sym_set g_bck `reads` `` )
+        ( bck_record `take` name __tk_line )
+        ( nurl_sym_set g_bck `reads` __tk_reads )
+    } {}
     // Read out of memory reached through a pointer (`: T x . p f`): the
     // place is left empty — a zero value, which drops as nothing — so a
     // later store there, which drops what the place holds, cannot drop x.
@@ -14191,7 +14207,10 @@ unsafe @ gen_call i lex i syms i cg → s {
             ? ( seq ( nurl_sym_get2 syms __bc_name `__inout` ) `1` ) {
                 : i __rk ( nurl_sym_word_index syms `__fn_param_names__` __bc_name )
                 ? >= __rk 0 {
-                    = g_repl_edges ( nurl_str_cat3 g_repl_edges ` ` ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_sym_get syms `__fn_self_name__` ) `|` ( nurl_str_int __rk ) ) `|` call_name ( nurl_str_cat `|` ( nurl_str_int arg_idx ) ) ) )
+                    // (Its field handed on, `. s f`: what the callee replaces of
+                    // its parameter is inside field f.)
+                    : s __rf ? & == bck_arg_tt TT_DOT ( is_ident_tok ( nurl_lex_peek2_type lex ) ) ( nurl_lex_peek2_val lex ) ``
+                    = g_repl_edges ( nurl_str_cat3 g_repl_edges ` ` ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_sym_get syms `__fn_self_name__` ) `|` ( nurl_str_int __rk ) ) `|` call_name ( nurl_str_cat4 `|` ( nurl_str_int arg_idx ) `|` __rf ) ) )
                 } {}
             } {}
             ? & != 0 ( nurl_sym_len2 syms __bc_name `__bcopy` ) ( __type_needs_drop ( nurl_sym_get syms __bc_name ) g_root_syms ) {
@@ -22969,7 +22988,7 @@ unsafe @ __src_has_raw_ptr s text → b {
             // call, which only the arms that yield a payload pass on.
             : b __j_let ? == g_borrowck 0 F ( seq ( nurl_sym_get2 syms ptr `__bname` ) ( nurl_sym_get g_bck `lastname` ) )
             : b __j_sx & & != 0 g_srcx_on __j_let ( __sx_lends_any g_bck_let_sx_last )
-            ? __j_sx {} { ( bck_note_borrow syms ptr ) }
+            ? __j_sx {} { ( bck_note_borrow syms ptr `1` ) }
             ^ v } {} } {}
     ? & != 0 ( nurl_str_len rhs_borrow ) == rhs_tt TT_LPAREN {
         ? != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow` ) {
@@ -23147,7 +23166,7 @@ unsafe @ __src_has_raw_ptr s text → b {
 // (mem_lent_cond).
 @ __sb i syms s ptr s how → v {
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__sborrow` ) how )
-    ? | | ( seq how `1` ) ( seq how `local` ) ( seq how `elem` ) { ( bck_note_borrow syms ptr ) } {}
+    ? | | ( seq how `1` ) ( seq how `local` ) ( seq how `elem` ) { ( bck_note_borrow syms ptr how ) } {}
 }
 
 unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
@@ -25128,17 +25147,49 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     }
 }
 
+// The first name of a dotted path (`a.b` → `a`), the path itself when it
+// has one name.
+@ __path_head s p → s {
+    : i d ( nurl_str_find p `.` )
+    ? < d 0 { ^ ( nurl_str_cat p `` ) } {}
+    ^ ( nurl_str_slice p 0 d )
+}
+
+// The binding a field path starts at (`h.a.b` → `h`).
+@ __path_root_name s p → s {
+    : i d ( nurl_str_find p `.` )
+    ? < d 0 { ^ ( nurl_str_cat p `` ) } {}
+    ^ ( nurl_str_slice p 0 d )
+}
+
 // Binding `ptr` was just decided a borrow (__sb): record that it borrows
 // from what its initialiser read. A superset of the true source only ends
 // the borrow early — a rejection, never a hole.
-@ bck_note_borrow i syms s ptr → v {
+@ bck_note_borrow i syms s ptr s how → v {
+    : s rpath ( nurl_str_cat g_bck_rhs_path `` )
+    = g_bck_rhs_path ``
     ? | | == g_borrowck 0 != g_bck_rec_off 0 ! ( bck_sound ) { ^ v } {}
     : s name ( nurl_sym_get2 syms ptr `__bname` )
     ? | == 0 ( nurl_str_len name ) ! ( seq name ( nurl_sym_get g_bck `lastname` ) ) { ^ v } {}
     : s saved ( nurl_sym_get g_bck `reads` )
-    : s from ? ( seq g_bck_rhs_lend `-` ) ( nurl_sym_get g_bck `lastreads` ) g_bck_rhs_lend
+    // A field read borrows that field's path (`h.name`, under the root its
+    // reads name), so it ends with that field, not with every field of
+    // `h`. (Read through a raw pointer, `: T x . p k` — an element of a
+    // buffer, which raw code vouches for — it follows nothing, as before.)
+    : s lr ( nurl_sym_get g_bck `lastreads` )
+    : b raw ( seq how `elem` )
+    : b fpath & & ! raw != 0 ( nurl_str_len rpath ) ( str_contains_word lr ( __path_root_name rpath ) )
+    : s fp ? raw ( nurl_str_cat `` `` ) ? fpath ( nurl_str_cat rpath `` ) ( nurl_str_cat lr `` )
+    : s from ? ( seq g_bck_rhs_lend `-` ) fp g_bck_rhs_lend
     ( nurl_sym_set g_bck `reads` ( bck_owning_reads syms from ` ` ) )
-    ( bck_record `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
+    // A handle read out of a struct binding's field is codegen's field
+    // viewer (__fview_note): a store replacing the field hands it the
+    // value, and a consumer of it takes the field over (zeroed where it
+    // lives). Its row is `fborrow` (bck_borrow_sweep, bck_borrow_sweep's
+    // own-name check).
+    : s bt ( nurl_sym_get syms name )
+    : b taker & fpath | ( __is_handle_ty bt ) ( __is_libh bt )
+    ( bck_record ? taker `fborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
     ( nurl_sym_set g_bck `reads` saved )
 }
 
@@ -26154,6 +26205,12 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     // borrows among those it copies (bck_view_from_reads).
     // (The checker's table exists only when it runs.)
     = g_bck_view_reads ? & == cls 2 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ( nurl_str_cat `` `` )
+    // What the right-hand side read goes with the `expr` row; a borrow
+    // decided a moment later (bck_note_borrow) borrows from it, so it is
+    // the binding's `lastreads` — not the empty reads of its own row. Read
+    // from that row, a field read's borrow (`: String n . h name`)
+    // borrowed nothing, and outlived `h` moved or given a new value.
+    : s rhs_reads ? != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ( nurl_str_cat `` `` )
     ( bck_record `expr` `` line )
     // A literal on the right stored values into the binding's NEW value
     // (bck_agg_field_alias): those rows name it as their owner and go in
@@ -26162,6 +26219,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     : s held ? == g_bck_ownerless 0 `` ( bck_take_owner_stores )
     ( bck_flush_moves )
     ( bck_record kind name line )
+    ? & != 0 g_borrowck == 0 g_bck_rec_off { ( nurl_sym_set g_bck `lastreads` rhs_reads ) } {}
     = g_bck_bind_scalar 0
     = g_bck_bind_sown 0
     ? != 0 ( nurl_str_len held ) { ( bck_emit_owner_stores held name ) } {}
@@ -26716,7 +26774,8 @@ unsafe @ bck_kc i idx → i {
     ? == c 97 { ^ ? ( seq k `assign` ) 3 ? ( seq k `arcx` ) 33 0 } {}
     ? == c 109 { ^ ? ( seq k `move` ) 4 ? ( seq k `maybemove` ) 5 ? ( seq k `maybealias` ) 6 ? ( seq k `match` ) 27 ? ( seq k `match-arm-edge` ) 29 0 } {}
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
-    ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 0 } {}
+    ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 0 } {}
+    ? == c 116 { ^ ? ( seq k `take` ) 37 0 } {}
     ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
@@ -27093,7 +27152,7 @@ unsafe @ bck_sx_ids s sx → s {
         ^ ( nurl_str_cat4 ( nurl_str_cat4 kind `\t` vw `\t` ) ( nurl_str_cat4 rds `\t` ( bck_field rec 3 ) `\t` ) ( bck_field rec 4 ) ( nurl_str_cat4 `\t` ( bck_field rec 5 ) ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `\t\t` ) lf8 ) )
     } {}
     : b __pend | | | | | | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `pendtake` ) ( seq kind `pendeff` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `pendfield` ) ( seq kind `xfer` ) ( seq kind `maybealias` ) ( seq kind `cdep` ) ( seq kind `cmove` )
-    : b __named | | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` ) ( seq kind `maybemove` ) ( seq kind `fieldset` ) __pend
+    : b __named | | | | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` ) ( seq kind `borrow` ) ( seq kind `fborrow` ) ( seq kind `take` ) ( seq kind `maybemove` ) ( seq kind `fieldset` ) __pend
     : s w2 ? | ( seq kind `let` ) ( seq kind `fevar` ) ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
@@ -27991,6 +28050,24 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s bprior ? == BCK_BORROWED_SHARED ( bck_st_get st bwid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) ) ``
                 : s bsrcs ( bck_field rec 2 )
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
+                // (A field viewer, `fborrow` — bck_note_borrow — and the one
+                // field it views, before its sources were flattened to owners.)
+                : b bfv ( seq ( bck_field rec 0 ) `fborrow` )
+                ( nurl_sym_set g_bck ( bck_bkey `fb_` ( bck_field rec 1 ) ) ? bfv `1` `` )
+                ( nurl_sym_set g_bck ( bck_bkey `fp_` ( bck_field rec 1 ) ) ? bfv ( nurl_str_cat bsrcs `` ) `` )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done == kc 37 {
+                // `( mem_take x )` (raw code): the binding owns what it read
+                // out by hand — a borrow no longer, so nothing ends it.
+                : i tid ( bck_field_int rec 1 )
+                ? == BCK_BORROWED_SHARED ( bck_st_get st tid ) {
+                    = st ( bck_st_set st tid BCK_OWNED )
+                    ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` )
+                    ( nurl_sym_set g_bck ( bck_bkey `fb_` ( bck_field rec 1 ) ) `` )
+                    ( nurl_sym_set g_bck ( bck_bkey `fp_` ( bck_field rec 1 ) ) `` )
+                } {}
                 = p + p 1
                 = done T
             } {}
@@ -28021,7 +28098,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // bck_sx_name — one key per row, not a key per question).
                 ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
+                ? != 0 g_bck_has_borrow {
+                    ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` )
+                    ( nurl_sym_set g_bck ( bck_bkey `fb_` ( bck_field rec 1 ) ) `` )
+                    ( nurl_sym_set g_bck ( bck_bkey `fp_` ( bck_field rec 1 ) ) `` )
+                } {}
                 // A join or a block (`n` with no call of its own): its source
                 // expression names each arm's sources, a call in an arm by
                 // that callee's summary — the line's other calls (the
@@ -29448,6 +29529,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : i wid ? == 0 ( nurl_str_len wn ) -1 ( nurl_str_to_int wn )
     : i wroot ? < wid 0 -1 ( bck_path_root wid )
     : b wfield | == kc 8 == kc 13
+    // A field replaced (`= . s v x`, directly or through a borrow of `s`):
+    // the bindings viewing exactly that field take the value it held over
+    // (__fs_viewers_take) — owners now, not borrows that end below.
+    ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) { = out ( bck_fview_take out ( nurl_str_int wid ) ) } {}
     ~ != 0 ( nurl_str_len rest ) {
         : s srcs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i sid ( nurl_str_to_int srcs )
@@ -29494,7 +29579,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                     // A callee that may give the `inout` parameter (or an
                     // owned field of it) a new value releases the old one:
                     // what holds a copy of its handle ends too (h307).
-                    ? ( str_contains_word ( nurl_sym_get g_fn_replaces ( bck_field rec 5 ) ) ( bck_field rec 6 ) ) {
+                    ? ( __repl_hits ( bck_field rec 5 ) ( bck_field rec 6 ) sid wid ) {
                         = why ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may give it a new value (an 'inout' parameter it replaces, or a field of one)` `` )
                     } {
                         ? ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) { = why ( nurl_str_cat4 pw0 ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` `` ) = eonly T } {
@@ -29571,12 +29656,15 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             = g_bck_end_eonly 0
         } {}
     } {}
-    // A borrow released by its own name: never its to release.
+    // A borrow released by its own name: never its to release. (A field
+    // viewer, `fborrow`, is consumed by taking the field over: codegen
+    // empties the field where it lives.)
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
     : ~ i k 0
     ~ < k n {
-        ? & == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) {
+        ? & & == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k )
+        == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ( nurl_str_int k ) ) ) {
             ( bck_diag_borrow_consumed k ( bck_field_int rec 3 ) )
             = out ( bck_st_set out k BCK_INVALID )
         } {}
@@ -29685,6 +29773,28 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 }
 
 // End every borrow taken from `sid` (and the borrows taken from those).
+// A field replaced: each binding viewing exactly that field (`fborrow`,
+// still a borrow) owns the value it held from here on, as codegen hands it
+// over (__fs_viewers_take).
+@ bck_fview_take s st s wids → s {
+    : ~ s out st
+    : i n ( nurl_str_len st )
+    : ~ i k 0
+    ~ < k n {
+        ? == BCK_BORROWED_SHARED ( bck_st_get out k ) {
+            : s ks ( nurl_str_int k )
+            ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ks ) ) ( seq ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) ) wids ) {
+                = out ( bck_st_set out k BCK_OWNED )
+                ( nurl_sym_set g_bck ( bck_bkey `bs_` ks ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `fb_` ks ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `fp_` ks ) `` )
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 @ bck_borrow_end s st i sid i line s why i depth → s {
     : ~ s out st
     : s sids ( nurl_str_int sid )
@@ -29703,7 +29813,11 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i b ( nurl_str_to_int bs )
-        ? & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids ) {
+        // (A field viewer, `fborrow`, holds the field's handle: elements
+        // dropped or replaced inside what it reaches leave that handle where
+        // it is — it reads them as they are now. A replaced field ends it.)
+        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
+        | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) ) {
             = out ( bck_st_set out b BCK_INVALID )
             ( nurl_sym_set g_bck ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -31157,7 +31271,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ? == bck_rhs_tt TT_BACKSLASH { = g_clo_bind_name ( nurl_str_cat name `` ) } {}
         : i __sxn0 g_sx_n
         : i __sxmp0 g_member_path_on
-        = g_member_path_on ? & != 0 g_srcx_on == bck_rhs_tt TT_DOT 1 g_member_path_on
+        = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == bck_rhs_tt TT_DOT 1 g_member_path_on
         = g_last_alloc_reg ``
         : s __obn0 g_open_bind_name
         : i __obl0 g_open_bind_line
@@ -31170,6 +31284,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_line __obl0
         = g_open_bind_col __obc0
         = g_member_path_on __sxmp0
+        = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
         // (What the right-hand side's value came from: a view binding's
         // sources, decided in the walk.)
         : s __rhs_sx ? != 0 g_srcx_on ( __sx_operand syms bck_rhs_tt bck_rhs_val ( nurl_get_last_type ) ( __sx_froot syms bck_rhs_tt ( nurl_get_last_type ) ) __sxn0 ) ``
@@ -31495,7 +31610,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? == bck_rhs_tt TT_BACKSLASH { = g_clo_bind_name ( nurl_str_cat name `` ) } {}
             : i __sxn0 g_sx_n
             : i __sxmp0 g_member_path_on
-            = g_member_path_on ? & != 0 g_srcx_on == bck_rhs_tt TT_DOT 1 g_member_path_on
+            = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == bck_rhs_tt TT_DOT 1 g_member_path_on
             = g_last_alloc_reg ``
             // A block computing a number or a flag (`: i n { … }`) is a scope
             // of its own: what it binds goes at its `}` (gen_block_expr).
@@ -31511,6 +31626,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_line __obl0
             = g_open_bind_col __obc0
             = g_member_path_on __sxmp0
+            = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
             // (What the right-hand side's value came from: a view binding's
             // sources, decided in the walk.)
             : s __rhs_sx ? != 0 g_srcx_on ( __sx_operand syms bck_rhs_tt bck_rhs_val ( nurl_get_last_type ) ( __sx_froot syms bck_rhs_tt ( nurl_get_last_type ) ) __sxn0 ) ``
@@ -31845,10 +31961,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ( nurl_sym_has_word syms `__owned_closure_envs__` bck_rhs_val )
         : i __sxn0 g_sx_n
         : i __sxmp0 g_member_path_on
-        = g_member_path_on ? & != 0 g_srcx_on == bck_rhs_tt TT_DOT 1 g_member_path_on
+        = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == bck_rhs_tt TT_DOT 1 g_member_path_on
         = g_last_alloc_reg ``
         : ~ s val ( gen_operand lex syms cg )
         = g_member_path_on __sxmp0
+        = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
         // (What the right-hand side's value came from: a view binding's
         // sources, decided in the walk.)
         : s __rhs_sx ? != 0 g_srcx_on ( __sx_operand syms bck_rhs_tt bck_rhs_val ( nurl_get_last_type ) ( __sx_froot syms bck_rhs_tt ( nurl_get_last_type ) ) __sxn0 ) ``
@@ -32372,7 +32489,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : s __ud_ptr ( mem_udrop_ptr_of syms name )
         // (An `inout` parameter that owns something given a new value: h295.)
         ? ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) {
-            ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note syms name ) } {}
+            ? | ( __is_handle_ty vt ) ( __type_needs_drop vt syms ) { ( __replaces_note syms name `` ) } {}
         } {}
         // An `inout` parameter is the caller's binding (§2.4): a fresh value
         // assigned over it replaces the caller's, which is dropped. A call
@@ -33178,13 +33295,67 @@ unsafe @ gen_assign i lex i syms i cg → s {
 
 // This function replaces something `name` owns, and `name` is one of its
 // `inout` parameters: note which (g_fn_replaces).
-unsafe @ __replaces_note i syms s name → v {
+unsafe @ __replaces_note i syms s name s field → v {
     ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ v } {}
     : i k ( nurl_sym_word_index syms `__fn_param_names__` name )
     ? < k 0 { ^ v } {}
-    : s w ( nurl_str_int k )
-    ? ( str_contains_word g_fn_replaces_witness w ) { ^ v } {}
-    = g_fn_replaces_witness ? == 0 ( nurl_str_len g_fn_replaces_witness ) ( nurl_str_cat w `` ) ( nurl_str_cat3 g_fn_replaces_witness ` ` w )
+    = g_fn_replaces_witness ( __repl_word_add g_fn_replaces_witness ( nurl_str_int k ) field )
+}
+
+// `ws` with parameter `k` replaced — its field `f`, or the whole when `f`
+// is empty (the whole covers its fields: they are not listed beside it).
+@ __repl_word_add s ws s k s f → s {
+    ? ( str_contains_word ws k ) { ^ ( nurl_str_cat ws `` ) } {}
+    : s w ? == 0 ( nurl_str_len f ) ( nurl_str_cat k `` ) ( nurl_str_cat3 k `.` f )
+    ? ( str_contains_word ws w ) { ^ ( nurl_str_cat ws `` ) } {}
+    ^ ? == 0 ( nurl_str_len ws ) ( nurl_str_cat w `` ) ( nurl_str_cat3 ws ` ` w )
+}
+
+// What `callee` may replace of its parameter `j`: `*` for the whole, else
+// the top-level fields (space-separated), `` for nothing.
+@ __repl_of s callee s j → s {
+    : ~ s rest ( nurl_sym_get g_fn_replaces callee )
+    : ~ s out ``
+    : s pre ( nurl_str_cat j `.` )
+    : i pn ( nurl_str_len pre )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq w j ) { ^ ( nurl_str_cat `*` `` ) } {}
+        ? & > ( nurl_str_len w ) pn ( seq ( nurl_str_slice w 0 pn ) pre ) {
+            : s f ( nurl_str_slice w pn - ( nurl_str_len w ) pn )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat f `` ) ( nurl_str_cat3 out ` ` f )
+        } {}
+    }
+    ^ out
+}
+
+// Does `callee`, handed the binding or field `wid` as its parameter `j`,
+// replace something the borrow of `sid` reaches? The whole parameter, or a
+// field of it overlapping `sid`'s path (by name: `pg.kit` is untouched by a
+// callee replacing `pg.zrec`).
+@ __repl_hits s callee s j i sid i wid → b {
+    : s r ( __repl_of callee j )
+    ? == 0 ( nurl_str_len r ) { ^ F } {}
+    ? ( seq r `*` ) { ^ T } {}
+    : s wn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) )
+    : s sn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int sid ) )
+    ? | == 0 ( nurl_str_len wn ) == 0 ( nurl_str_len sn ) { ^ T } {}
+    : ~ s rest ( nurl_str_cat r `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s f ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __path_names_overlap sn ( nurl_str_cat3 wn `.` f ) ) { ^ T } {}
+    }
+    ^ F
+}
+
+// Two field paths by name (`h.a.b`), one the other or inside it.
+@ __path_names_overlap s a s b → b {
+    ? ( seq a b ) { ^ T } {}
+    : i na ( nurl_str_len a )
+    : i nb ( nurl_str_len b )
+    ? & > na nb ( seq ( nurl_str_slice a 0 + nb 1 ) ( nurl_str_cat b `.` ) ) { ^ T } {}
+    ? & > nb na ( seq ( nurl_str_slice b 0 + na 1 ) ( nurl_str_cat a `.` ) ) { ^ T } {}
+    ^ F
 }
 
 @ gen_field_store i lex i syms i cg → s {
@@ -33506,7 +33677,7 @@ unsafe @ __replaces_note i syms s name → v {
                             // (An owned field of an `inout` parameter replaced: h295.)
                             : s __rp_root ? != 0 ( nurl_str_len __nl_root ) __nl_root obj_name
                             ? ( seq ( nurl_sym_get2 syms __rp_root `__inout` ) `1` ) {
-                                ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms __rp_root ) } {}
+                                ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms __rp_root ? != 0 ( nurl_str_len __nl_root ) ( __path_head ( nurl_sym_get syms `__last_nested_names__` ) ) fname ) } {}
                             } {}
                             ? & != 0 ( nurl_str_len __nl_root ) ( __type_needs_drop ftype syms ) {
                                 ( bck_stash_fieldset ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) __fs_l0 )
@@ -33696,7 +33867,7 @@ unsafe @ __replaces_note i syms s name → v {
                 ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v1 __fs_l1 ) } {}
                 // (An owned field of an `inout` parameter replaced: h295.)
                 ? ( seq ( nurl_sym_get2 syms obj_name `__inout` ) `1` ) {
-                    ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name ) } {}
+                    ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name fname ) } {}
                 } {}
                 ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
                 : s gep ( nurl_cg_reg cg )
@@ -34899,12 +35070,16 @@ unsafe @ gen_member i lex i syms i cg → s {
                 // (Which slot a raw read reads, when the index is a binding.)
                 : s __mb_ix ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_str_cat ( nurl_lex_val lex ) `` ) ``
                 // A member read in the index (`. p . c k`) publishes its own
-                // root and path: this read's are still the object's.
+                // root and path: this read's are still the object's — and it
+                // is no field of a struct binding (`__last_field_read__`, left
+                // as the index's, made a borrow of the element out of a field
+                // of `c`).
                 : s __mb_root ( nurl_sym_get syms `__last_member_root__` )
                 : s __mb_path ( nurl_str_cat g_member_path `` )
                 : s idx_val ( gen_expr lex syms cg )
                 ( nurl_sym_def syms `__last_member_root__` __mb_root )
                 = g_member_path ( nurl_str_cat __mb_path `` )
+                ( nurl_sym_def syms `__last_field_read__` `` )
                 : s idx_type ( nurl_get_last_type )
                 ( die_if_not_index lex idx_type `element` )
                 : s gep ( nurl_cg_reg cg )
@@ -42562,11 +42737,29 @@ unsafe @ resolve_replaces → v {
             : s r2 ( nurl_str_slice r1 + b2 1 - - ( nurl_str_len r1 ) b2 1 )
             : i b3 ( nurl_str_find r2 `|` )
             : s callee ( nurl_str_slice r2 0 b3 )
-            : s j ( nurl_str_slice r2 + b3 1 - - ( nurl_str_len r2 ) b3 1 )
-            ? & ( str_contains_word ( nurl_sym_get g_fn_replaces callee ) j ) ! ( str_contains_word ( nurl_sym_get g_fn_replaces fn ) k ) {
+            : s r3 ( nurl_str_slice r2 + b3 1 - - ( nurl_str_len r2 ) b3 1 )
+            : i b4 ( nurl_str_find r3 `|` )
+            : s j ? < b4 0 ( nurl_str_cat r3 `` ) ( nurl_str_slice r3 0 b4 )
+            : s f ? < b4 0 ( nurl_str_cat `` `` ) ( nurl_str_slice r3 + b4 1 - - ( nurl_str_len r3 ) b4 1 )
+            : s rj ( __repl_of callee j )
+            ? != 0 ( nurl_str_len rj ) {
                 : s cur ( nurl_sym_get g_fn_replaces fn )
-                ( nurl_sym_def g_fn_replaces fn ? == 0 ( nurl_str_len cur ) ( nurl_str_cat k `` ) ( nurl_str_cat3 cur ` ` k ) )
-                = changed T
+                : ~ s nw ( nurl_str_cat cur `` )
+                // Handed field f: something inside f is replaced. Handed the
+                // parameter itself: what the callee replaces of it, as is.
+                ? != 0 ( nurl_str_len f ) { = nw ( __repl_word_add nw k f ) } {
+                    ? ( seq rj `*` ) { = nw ( __repl_word_add nw k `` ) } {
+                        : ~ s rr ( nurl_str_cat rj `` )
+                        ~ != 0 ( nurl_str_len rr ) {
+                            : s x ( str_first_word rr ) = rr ( str_skip_word rr )
+                            = nw ( __repl_word_add nw k x )
+                        }
+                    }
+                }
+                ? ! ( seq nw cur ) {
+                    ( nurl_sym_def g_fn_replaces fn nw )
+                    = changed T
+                } {}
             } {}
         }
     }
@@ -42591,7 +42784,7 @@ unsafe @ resolve_replaces → v {
         : i b6 ( nurl_str_find r5 `|` )
         : s file ( nurl_str_slice r5 0 b6 )
         : s shown ( nurl_str_slice r5 + b6 1 - - ( nurl_str_len r5 ) b6 1 )
-        ? ( str_contains_word ( nurl_sym_get g_fn_replaces callee ) j ) {
+        ? != 0 ( nurl_str_len ( __repl_of callee j ) ) {
             ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat ( nurl_str_cat4 `'` name `' is a copy of the parameter '` ( nurl_str_cat4 src `', and '` shown `' replaces a field of what it is handed 'inout' — ` ) )
             `releasing what the caller of this function owns (the copy shares those fields, it does not own them). Make it a copy of its own: ': ~ T name ( mem_dup param )', or take the parameter itself as 'inout'.` ) )
         } {}

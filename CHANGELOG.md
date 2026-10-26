@@ -94,6 +94,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A binding read out of a field can no longer outlive its struct**
+  (Agora #111, h331–h333). `: String n . h name` borrowed nothing in the
+  borrow checker. The right-hand side's reads went with the row recorded
+  before the binding's, so the borrow it decided read an empty list. `n`
+  then outlived `h` handed to a `sink` or given a new value, and read
+  freed memory (ASan: heap-use-after-free). Through a library handle
+  (`: PNCounter mine . h c`), the same gap let a thread change `h`'s
+  counter while the spawner changed it through `mine`, which is the
+  shape Agora #66 was found with.
+
+  Such a binding now borrows the field's path (`h.name`). A call that
+  changes another field of `h` leaves it standing. A store replacing
+  that very field hands the binding the old value, and a `sink` handed
+  the binding takes the field over, as codegen already did.
+  `( mem_take x )` makes the binding an owner. #66's probe is closed.
+
+  The summary of what a function may replace in an `inout` parameter
+  now names fields (`k.f`), and follows calls that hand on a field. A
+  borrow of `pg.kit` therefore survives a helper that rebuilds
+  `pg.zrec`, a common idiom in grad's and whisper's GPU code.
+
+  nurldb 0.1.1 reads its log buffer's start before it grows the buffer.
+  The checker still takes a change made through one field of a borrowed
+  value as reaching the value's other borrows.
+  The open hole is narrowed to a share kept by other means: a thread's
+  capture of the handle itself, a parameter, or a share stored before
+  the move.
 - **`bigint_modpow` ignored exponent bits above the modulus's bit
   length.** Its constant-time ladder ran bit-length(m) steps, so an
   exponent wider than the modulus (a blinded RSA exponent, d + r·φ) lost

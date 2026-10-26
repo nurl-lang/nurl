@@ -1,12 +1,14 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **One:** `library_handle_copy_on_two_threads.nu` — two copies of one
-library handle over a counted block (a field read out of a struct shares
-it), one moved to a thread and both changed: the Send derivation looks at
-types, not at which values alias (docs/MEMORY.md §6.2). Two instances of
-it are closed by hand and graduated: `h254` (SymTab, `% NotSync`) and
-`h319` (the membership table dist/heartbeat.nu's thread read,
-`% NotSend`).
+library handle over a counted block (a thread's closure takes a share of
+it and the spawner keeps its own; a parameter, or a share stored before
+the move, does the same), both changed: the Send derivation looks at
+types, not at which values alias (docs/MEMORY.md §6.2). Three instances
+of it are closed and graduated: `h254` (SymTab, `% NotSync`), `h319`
+(the membership table dist/heartbeat.nu's thread read, `% NotSend`) and
+`h333` (a binding read out of a struct's field, now a borrow of that
+field that the thread's move of the struct ends).
 
 Every other probe this directory held is closed and graduated to the CI
 gate in the parent directory. The most recent were `h316` — a call returning

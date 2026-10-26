@@ -861,8 +861,9 @@ as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
 **One open hole: a library handle's copies on two threads.** A library
-handle over a counted block (§7.6) is copied by sharing — a field read
-out of a struct is another owner of the same state — and the Send
+handle over a counted block (§7.6) is copied by sharing — a closure's
+capture of it, a parameter, a copy stored into a struct is another owner
+of the same state — and the Send
 derivation asks only of types, so a struct of a `Shared` field and Vecs is
 Send. One copy moved to a thread while another stays here is two threads
 changing one value in place with no lock: a `PNCounter` (dist/crdt.nu)
@@ -882,7 +883,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h330):
+all are closed, each a probe CI now holds (h142–h333):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1262,8 +1263,14 @@ closure field (h323: it leaves the temporary as h266's handle fields do,
 its environment the read's own; §7.4), any owning field of a struct with
 a `% Drop` of its own (h329), and a field that cannot be copied (h330) —
 the temporary leaked and its destructors never ran. Such a temporary now
-gets an owner for the rest of the scope, as h233's enum does (§7.6). No
-other hole is known.
+gets an owner for the rest of the scope, as h233's enum does (§7.6).
+Working agora #66 found the borrow checker's view of a binding read out
+of a field (`: String n . h name`) empty: the right-hand side's reads went
+with the row before the binding's, so the borrow borrowed nothing and
+outlived its struct handed to a `sink` (h331) or given a new value
+(h332) — and a library handle's copy made that way outlived its struct
+taken by a thread (h333, the shape #66 was found with). It borrows the
+field's path now (§7.6). No other hole is known.
 
 The rules that carry it:
 
@@ -1498,7 +1505,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h330`) to the rule that rejects it. See
+  (`h01–h333`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1766,6 +1773,13 @@ copies it.
 `TomlValue`), Options and results that own memory, and library handles
 are dropped, moved and copied by the same rules:
 
+- **Field reads.** A binding read out of a field (`: String n . s name`)
+  borrows that field: `s` moved, consumed or given a new value ends it,
+  a call changing another field of `s` does not (h331, h332) — a callee
+  handed `s` `inout` ends it only when it may replace that field. A store
+  replacing that very field hands the binding the value it held, and a
+  `sink` handed the binding takes the field over (a String, Vec or
+  handle field, emptied where it lives).
 - **Cursors.** `: ~ cur root` borrows `root`. Consuming the cursor
   consumes `root`'s value; reassigning the cursor releases nothing.
 - **Stores move.** A value stored into a literal, a field or a container
