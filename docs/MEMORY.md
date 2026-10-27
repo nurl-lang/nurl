@@ -875,7 +875,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h359):
+all are closed, each a probe CI now holds (h142–h363):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1293,7 +1293,13 @@ container vouched for its value too: an `Rc` in a `Locked` in an `Arc`
 crossed to every thread (h358). And a function whose only panic was an
 index past the end leaked its bindings under `recover` (h359): the
 journal's elision took the runtime's index panic for a call that cannot
-panic. No other hole is known.
+panic. Meeting the trait object's promise, the check missed what a
+`%Trait` of a `: Send` trait boxed (h360): its vtable now carries the
+boxed type's check. And a value with a destructor moved on — into a
+literal, a `sink` parameter, a closure, a `dyn` box — was dropped once
+more by a panic later in its scope (h361–h363): its journal registration
+had read its drop flag when it was made, and now reads it when the panic
+drains (§7.2). No other hole is known.
 
 The rules that carry it:
 
@@ -1508,7 +1514,8 @@ The crossing checks at run time instead (agora #121): `( mem_send_check
 [T] x what )` walks T's graph — fields, payloads, `Vec` elements, a
 container's contents through its `S_sendck` hook (`HashMap`, `Set`,
 `Deque`, `BTree`, `Box` have one), a closure's captures through its
-environment's descriptor, a handle's state — counting how many places in
+environment's descriptor, a trait object's box through its vtable, a
+handle's state — counting how many places in
 the value hold each such handle's counted block, and panics, naming the
 crossing and the handle, if a block has more owners than that: an owner
 left on this side. Several owners of one state that all go along cross —
@@ -1529,8 +1536,10 @@ Sync, so it holds no such handle (above). The checker keeps its part: the
 binding a moved handle came from, a parameter of one (h337), and a
 binding read out of a field of one (h356), whose struct goes along, are
 dead past the crossing — what is left behind is only ever a copy the
-check sees. A `dyn` box hides what it holds from the check as from the
-Send derivation (agora #127).
+check sees. A trait object's type does not say what its box holds, so
+its vtable does: an impl of a `: Send` trait — the only trait objects
+that cross — whose type reaches such a handle puts that type's check in
+the vtable's last slot, and the walk runs it on the box (h360).
 
 *An `Arc`'s payload is frozen once made.* `Arc` makes the reference
 count atomic, not the data: every thread holding a clone reads the
@@ -1591,7 +1600,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h344`) to the rule that rejects it. See
+  (`h01–h363`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

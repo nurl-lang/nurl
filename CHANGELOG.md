@@ -149,7 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diag_send_dyn_impl_breaks_promise`, `diag_sync_dyn_impl_breaks_promise`
   and `diag_sync_dyn_object_in_arc`.
 - **A handle whose copies are one state crosses to another thread only
-  with every owner of that state** (Agora #121, h349–h358). A
+  with every owner of that state** (Agora #121, h349–h358, h360). A
   `PNCounter`, a `TcpConn` or a `Cell` is copied by sharing. A copy made
   before the handle moved to a thread stayed with the spawner, and both
   threads changed one state with no lock (ASan: double free). Such a copy
@@ -161,7 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph: fields, payloads, `Vec` elements, a container's contents through
   its new `S_sendck` hook (`HashMap`, `Set`, `Deque`, `BTree`, `Box`), a
   closure's captures through a new slot of its environment's descriptor,
-  and a handle's state. It counts how many places in the value hold each
+  a trait object's box through a new last slot of its vtable (filled for
+  an impl of a `: Send` trait whose type reaches such a handle), and a
+  handle's state. It counts how many places in the value hold each
   such handle's counted block, and panics, naming the crossing and the
   handle, if a block has more owners than that. Several owners of one
   state that all go along cross, such as a node's transport and the job

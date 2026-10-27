@@ -6,7 +6,8 @@
 // copy inside a Box beside the original: the walk counts them). One with a
 // copy left behind — an explicit share, a struct literal storing one, a
 // share in a Vec, a HashMap, a BTree, a Deque, a Set or a Box, a closure's
-// capture — panics at the crossing, naming the crossing and the handle.
+// capture, a trait object's box — panics at the crossing, naming the
+// crossing and the handle.
 // (The closures that panic crossing are held in a `Job`, whose drop the
 // unwind runs: a closure environment the frame holds directly is not in
 // the panic journal yet, agora #131.)
@@ -27,6 +28,21 @@ $ `stdlib/std/panic.nu`
 : Twin { PNCounter x PNCounter y }
 
 : Boxed { PNCounter c ( Box PNCounter ) bx }
+
+: Plain { i n }
+
+% Bump [T] : Send { @ bump T self i k → i }
+
+% Bump Holder {
+    @ bump Holder h i k → i {
+        ( pncounter_inc . h c 1 1 )
+        ^ k
+    }
+}
+
+% Bump Plain {
+    @ bump Plain p i k → i { ^ + . p n k }
+}
 
 @ say s what ! v PanicInfo r → v {
     ?? r {
@@ -194,6 +210,21 @@ $ `stdlib/std/panic.nu`
     ( pncounter_inc c 2 1 )
 }
 
+@ dyn_only_owner → v {
+    : %Bump d ( dyn Bump @ Holder { ( pncounter_new ) } )
+    : %Bump e ( dyn Bump @ Plain { 3 } )
+    ( spawn_join \ → v { : i _r ( bump d 1 ) : i _s ( bump e 1 ) } )
+}
+
+@ dyn_share_kept → v {
+    : PNCounter a ( pncounter_new )
+    : PNCounter b ( PNCounter_share a )
+    : %Bump d ( dyn Bump @ Holder { a } )
+    : Job j @ Job { \ → v { : i _r ( bump d 1 ) } }
+    ( spawn_join . j run )
+    ( pncounter_inc b 2 1 )
+}
+
 @ main → i {
     ( say `only owner` ( recover \ → v { ( only_owner ) } ) )
     ( say `share kept` ( recover \ → v { ( share_kept ) } ) )
@@ -215,5 +246,7 @@ $ `stdlib/std/panic.nu`
     ( say `locked share kept` ( recover \ → v { ( locked_share_kept ) } ) )
     ( say `locked restore share kept` ( recover \ → v { ( locked_restore_share_kept ) } ) )
     ( say `locked get` ( recover \ → v { ( locked_get_copies ) } ) )
+    ( say `dyn only owner` ( recover \ → v { ( dyn_only_owner ) } ) )
+    ( say `dyn share kept` ( recover \ → v { ( dyn_share_kept ) } ) )
     ^ 0
 }

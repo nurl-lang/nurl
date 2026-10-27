@@ -16321,7 +16321,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_print `  ` ) ( nurl_print __data ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print ` ` ) ( nurl_print __fat ) ( nurl_print `, 0\n` )
             : s __vtp ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __vtp ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print ` ` ) ( nurl_print __fat ) ( nurl_print `, 1\n` )
-            : i __vsz + ( dyn_flat_count __dtrait ) 1
+            : i __vsz ( dyn_vt_size __dtrait )
             : s __vszs ( nurl_str_int __vsz )
             : s __arr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __arr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print __vtp ) ( nurl_print ` to [` ) ( nurl_print __vszs ) ( nurl_print ` x i8*]*\n` )
@@ -51701,10 +51701,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
 @ __sk_walk_calc s ty i syms s seen → b {
     : i n ( nurl_str_len ty )
     ? ( __is_closure_ty ty ) { ^ T } {}
-    // Raw memory, and a `dyn` box (its contents are not in its type:
-    // agora #127).
+    // Raw memory.
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    // A trait object: its box holds whichever type implements the trait,
+    // and only one of a `: Send` trait crosses at all (__thr_check). What
+    // the box holds is checked through the vtable (emit_dyn_vtable).
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __trait_has_super ( nurl_str_slice ty 5 - n 5 ) `Send` ) } {}
     ? == ( nurl_str_get ty 0 ) 123 {
         ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
             ? ( __sk_walk ( __wrap_part ty 0 ) syms seen ) { ^ T } {}
@@ -51790,7 +51792,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ? ! ( __sk_needed ty syms ) { ^ v } {}
     : s __p0 ( nurl_sym_get g_impl_name_syms `__pending_sendck__` )
     ( nurl_sym_def g_impl_name_syms `__pending_sendck__` ( __bar_add __p0 ty ) )
-    ? ( __is_closure_ty ty ) { ^ v } {}
+    // (A closure's captures and a trait object's box are checked through
+    // their descriptor and vtable, which ask for their own.)
+    ? | ( __is_closure_ty ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ v } {}
     : i n ( nurl_str_len ty )
     ? == ( nurl_str_get ty 0 ) 123 {
         ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
@@ -51921,6 +51925,14 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_print `define linkonce_odr void ` ) ( nurl_print ( __sk_fn ty ) ) ( nurl_print `(ptr %p, ptr %w) {\nentry:\n` )
     ? ( __is_closure_ty ty ) {
         ( nurl_print `  %ep = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  %env = load ptr, ptr %ep\n  call void @nurl_closure_send_check(ptr %env, ptr %w)\n  ret void\n}\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) {
+        // The box's check, the vtable's last slot (null: nothing to check,
+        // and a null vtable is an object moved out).
+        ( nurl_print `  %vp = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  %vt = load ptr, ptr %vp\n  %vn = icmp eq ptr %vt, null\n  br i1 %vn, label %x, label %h\nh:\n  %fp = getelementptr ptr, ptr %vt, i64 ` )
+        ( nurl_print ( nurl_str_int - ( dyn_vt_size ( nurl_str_slice ty 5 - n 5 ) ) 1 ) )
+        ( nurl_print `\n  %f = load ptr, ptr %fp\n  %fn = icmp eq ptr %f, null\n  br i1 %fn, label %x, label %c\nc:\n  %d = load ptr, ptr %p\n  call void %f(ptr %d, ptr %w)\n  br label %x\nx:\n  ret void\n}\n` )
         ^ v
     } {}
     ? == ( nurl_str_get ty 0 ) 123 {
@@ -58263,6 +58275,8 @@ unsafe @ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bi
 //   field 1 = vtable  — points at a per-impl `[K x i8*]` constant:
 //                        slot 0      = concrete destructor void(i8*) (or null)
 //                        slots 1..K  = one thunk per flattened trait method
+//                        slot K+1    = the crossing check of the boxed value
+//                                      (emit_sendck_fn), or null
 // Construction `( dyn Trait v )` boxes v and pairs it with the impl's vtable.
 // A bare-name call `( m d )` whose receiver is a `%dyn.Trait` loads the method
 // slot and calls it indirectly through the uniform ABI `<ret>(i8* self, …)`.
@@ -58365,7 +58379,8 @@ unsafe @ __dyn_flat_add s vtTrait s declTrait → v {
 }
 
 // dyn_flat_count: number of methods in the flattened vtable (vtable size is
-// this + 1 for the drop slot).
+// this + 2: the drop slot before them, the crossing check's after —
+// dyn_vt_size).
 @ dyn_flat_count s tname → i {
     ( __dyn_flat_reset )
     // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
@@ -58380,6 +58395,11 @@ unsafe @ __dyn_flat_add s vtTrait s declTrait → v {
         = c + c 1
     }
     ^ c
+}
+
+// dyn_vt_size: the slots of `tname`'s vtable (the layout above).
+@ dyn_vt_size s tname → i {
+    ^ + ( dyn_flat_count tname ) 2
 }
 
 // dyn_method_slot: 1-based vtable slot of method `m` in `tname`'s flattened
@@ -58567,7 +58587,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         ( emit_dyn_method_thunk tname dt m impl_nurl impl_llvm impl_mangle cg )
     }
     // Pass 2: emit the vtable constant referencing thunks by symbol.
-    : i vsize + ( dyn_flat_count tname ) 1
+    : i vsize ( dyn_vt_size tname )
     ( nurl_print `@__vt.` ) ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print impl_mangle )
     ( nurl_print ` = constant [` ) ( nurl_print ( nurl_str_int vsize ) ) ( nurl_print ` x i8*] [ ` )
     ( nurl_print slot0 )
@@ -58585,6 +58605,14 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print impl_mangle ) ( nurl_print `.` ) ( nurl_print m )
         ( nurl_print ` to i8*)` )
     }
+    // The last slot: the boxed value's crossing check. Only an object of a
+    // `: Send` trait may cross a thread (__thr_check), and its box may hold
+    // a handle whose copies are one state, which the object's type does not
+    // show — so the check of a `%dyn` (emit_sendck_fn) runs the impl's.
+    ? & ( __trait_has_super tname `Send` ) ( __sk_needed impl_llvm syms ) {
+        ( __sk_request impl_llvm syms )
+        ( nurl_print `, i8* ` ) ( nurl_print ( __sk_fn impl_llvm ) )
+    } { ( nurl_print `, i8* null` ) }
     ( nurl_print ` ]\n` )
 }
 
@@ -58761,7 +58789,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_print `  ` ) ( nurl_print boxc ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print box ) ( nurl_print ` to ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print `*\n` )
     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print `* ` ) ( nurl_print boxc ) ( nurl_print `\n` )
     // fat pointer { box, bitcast(@__vt.Trait.mangle) }
-    : i vsize + ( dyn_flat_count tname ) 1
+    : i vsize ( dyn_vt_size tname )
     : s vti8 ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print vti8 ) ( nurl_print ` = bitcast [` ) ( nurl_print ( nurl_str_int vsize ) ) ( nurl_print ` x i8*]* @__vt.` ) ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print cmangle ) ( nurl_print ` to i8*\n` )
     : s f0 ( nurl_cg_reg cg )
