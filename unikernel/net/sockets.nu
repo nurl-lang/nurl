@@ -1035,6 +1035,14 @@ unsafe @ __peer_forget * Shim sh i conn → v {
     ^ ( sock_udp_bind st want port )
 }
 
+// `udp_close`: the socket stops (its reads answer closed) and keeps its
+// slot, which its last owner frees with nurl_udp_close — freed here, the
+// slot could be another socket's by the time that owner closed it.
+unsafe @ nurl_udp_shutdown i handle → v {
+    ( sock_shutdown ( __tab ) handle )
+    ( __wake_ready )
+}
+
 unsafe @ nurl_udp_close i handle → v {
     : *Shim sh ( __shim )
     ( __peer_forget sh handle )
