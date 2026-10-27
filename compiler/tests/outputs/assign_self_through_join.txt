@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+vec 12
+string a string long enough to own a heap buffer
+bag 4 4
+option 5
+match 9

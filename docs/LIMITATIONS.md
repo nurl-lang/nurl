@@ -10,9 +10,9 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**No soundness hole is known open** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)).
+**Two soundness holes are known open** ([`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/), [`MEMORY.md` §6.2](MEMORY.md)): a `UdpSocket` read after `udp_close` reads freed memory, and one never closed leaks — close each exactly once and do not use it after (agora #139); and a binding, or a closure's env, that views a call's temporary argument leaks that temporary — `: s v ( first ( string_from … ) )` with `first` handing back a view of its argument; bind the argument first (agora #138).
 Every safe program found accepted and faulting is closed, and held by
-a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h370`). One
+a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h377`). One
 of them is closed at run time rather than at compile time: a handle
 whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the

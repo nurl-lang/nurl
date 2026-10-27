@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+range 0 lo=0 hi=2
+range 3 lo=0 hi=3
+range 6 lo=6 hi=255
+field 4
+opt rhs 4
+match statement 5
+owning struct 11
+strings 102

@@ -6,6 +6,110 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Known issues
+
+- **A `UdpSocket` read after `udp_close` reads freed memory, and one
+  never closed leaks its record and fd** (Agora #139;
+  `tools/fuzz/holes/open/`). The handle is the runtime record's address.
+  It has no drop, and its "close exactly once" contract is not checked.
+  This predates 0.79.0, and it was found by the new UDP tests' LSan run.
+  The fix gives it the handle-with-a-drop shape every other resource has.
+  That is written, but it waits on #140: a way to hand a fiber the only
+  owner of a handle taken out of an option binding. Close each
+  `UdpSocket` exactly once and do not use it after.
+
+- **A binding that views a call's temporary argument leaks the temporary**
+  (Agora #138; `tools/fuzz/holes/open/`). The pattern is
+  `: s v ( first ( string_from … ) )`, where `first` hands back a view of
+  its argument, and it includes a closure whose env views such an
+  argument. The temporary must outlive the binding, and the borrow checker
+  has no name for it with which to keep the view from escaping, so the
+  compiler never drops it. It is a leak, never a use after free. Bind the
+  argument first. This was found while testing #131, and it predates
+  0.79.0.
+
+### Fixed
+
+- **An assignment at the end of a `?` / `??` arm no longer has its value
+  dropped by the statement** (Agora #132, h371, h372). nurldb's
+  `sql_test` segfaulted on `SELECT … WHERE id > 100`, and its
+  `__pick_access`, safe code, handed back an `Access` whose key it had
+  freed. An assignment publishes the stored value's type, so an arm
+  ending in one is value-typed, and the statement joins the arms' values.
+  The arm's ownership bit was the right-hand side's. With a `?` or `??`
+  on the right (`= lo ? c ( f ) ( g )`) it said "owned", so the
+  statement dropped its discarded value on that path: the value `lo` had
+  just received. Locals, fields, Vecs, Strings, owning structs and
+  options were all affected. An assignment's value is now lent to
+  whatever reads it: the target owns it.
+- **`= x ? c x ( f )` no longer leaves `x` holding freed memory** (h373,
+  h374). On the path that chose `x`, the join lends x's own value. The
+  assignment dropped x's old value by its flag and then stored the join's
+  result, which was the buffer it had just freed. The same held for
+  `= x ?? o { T v → v F → x }`. Where a join that may select the target
+  lends, the value is now copied in, so the target owns what it holds on
+  every path. A value that cannot be copied is refused there instead.
+  `compiler/tests/arm_assign_join_tail_lent` and
+  `assign_self_through_join` cover each shape. All of nurldb's tests
+  (151) now run ASan- and LSan-clean.
+- **A panic no longer leaks a closure's env** (Agora #131, h375–h377).
+  The panic journal had no entry for a closure, so a panic that unwound
+  past one skipped its drop. That leaked the env and everything it had
+  captured or adopted, for every kind of closure:
+  - a literal handed to a call;
+  - a bound closure;
+  - a `sink` closure parameter;
+  - a closure a call returned;
+  - the closure field of a struct literal argument.
+
+  #121's crossing check, which panics in `thread_spawn`, leaked a whole
+  `PNCounter` that way. Each function's closure bindings are now
+  registered once, as a frame table of value and owner-slot pairs
+  (`nurl_jframe_clo_drop`). A panic drops the value's env where the slot
+  says the binding owns one, as the binding's scope exit would. An
+  argument's closure temporaries and a struct literal argument's owned
+  fields (its Strings, Vecs and closures, which leaked the same way) are
+  journaled while the call runs. A binding's slot is now cleared before
+  its env is dropped, so a capture's destructor that panics mid-drop
+  leaves nothing to drop twice. `compiler/tests/panic_reclaims_closure_envs`
+  covers each shape, and `send_check_crossings` now runs LSan-clean.
+- **A wait on a number that names no descriptor answers at once and
+  costs nothing** (Agora #133). The Linux netpoller's table is indexed by
+  fd, and it grew to fd + 64 entries before epoll was asked whether the fd
+  existed. `wait_readable` on 300000000 (a socket handle passed where its
+  fd belonged) took 56 s and 19 GB, and a pointer-sized value aborted.
+  Now:
+  - A closed fd never grows the table.
+  - A negative fd is no longer a pure timer that waits out its whole
+    timeout.
+  - An fd past INT_MAX is no longer narrowed onto some other fd.
+
+  Each is answered "ready", as poll(2) answers an fd it cannot poll, and
+  the caller's read says what the fd is. The table now grows by doubling.
+  `compiler/tests/wait_unpollable_fd` holds it: 0.1 s and 2 MB.
+- **The poll(2) / WSAPoll reactor polls every waiting fd** (FreeBSD,
+  macOS, Windows; Agora #133). Its poll set was a fixed 256 entries, so
+  every waiter past the 255th was left out. New waits join the head of
+  its list, so the oldest were the ones that starved, for as long as 255
+  newer ones waited. The set now grows with the waits, and a ready fd
+  finds its waiter in constant time.
+  `compiler/tests/reactor_many_waiters` (300 waiters) woke 0 of the 45
+  oldest before and all 45 after. A poll that fails as a whole used to
+  end the reactor thread, the only thread that wakes a fiber waiting on
+  an fd, and every such fiber then hung. A number that is no socket can
+  make WSAPoll fail that way. The reactor now asks each fd on its own and
+  reports one it cannot poll as POLLNVAL, as poll(2) does.
+- **`udp_bind host 0` no longer hands out a port another socket holds.**
+  UDP sockets were bound with SO_REUSEADDR, the option a TCP listener
+  takes for TIME_WAIT. On a UDP socket it lets sockets share a port, so
+  the ephemeral allocator returned held ports: several in every 900 binds
+  on 127.0.0.1. A datagram sent to one socket then reached the other,
+  which looked like a lost wakeup. It also let any program bind a running
+  server's UDP port beside it. `compiler/tests/udp_bind_ephemeral_distinct`
+  checks that 900 binds get 900 ports.
+
 ## [0.79.0] — 2026-10-27
 
 The threads-and-scheduling release. Every soundness hole found so far is

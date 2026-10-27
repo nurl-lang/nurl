@@ -26,9 +26,10 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included. No hole is known: each one found so
-  far is a probe in `tools/fuzz/holes/` that CI holds rejected or clean
-  under the sanitizers. A view is tracked wherever it goes (§2.10).
+  races and the panic path included. Each hole found so far is a probe in
+  `tools/fuzz/holes/` that CI holds rejected or clean under the
+  sanitizers, but two, open (`tools/fuzz/holes/open/`, below): a leak
+  class, and `UdpSocket`'s missing drop. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -869,7 +870,24 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last one, *an `inout` argument whose
+**Two holes are known open.** `UdpSocket` is the runtime record's
+address with no drop: read after `udp_close` it reads freed memory, and a
+socket never closed leaks its record and fd (agora #139; the fix — a
+handle with a drop, as every other resource has — waits on a way to move a
+handle out of an option binding to a fiber, #140). Close a `UdpSocket`
+exactly once and do not use it after.
+
+**And a leak:** a binding whose value views a call's
+temporary argument leaks the temporary (`: s v ( first ( string_from … )
+)`, with `first` handing back a view of its argument), and so does a
+closure whose env views one (a call returning a closure that captures its
+parameter, given a temporary). The temporary must outlive the binding,
+and the borrow checker has no name for it with which to keep the view
+from escaping it, so the compiler never drops it: a leak, never a use
+after free. Two probes in `tools/fuzz/holes/open/` hold it (agora #138).
+Bind the argument first (`: String t ( string_from … ) : s v ( first t )`).
+
+**Closed before it:** the last, *an `inout` argument whose
 binding does not own its value*, is closed (agora #135, h367–h370): a
 cursor over another binding, a field read or a value `arc_get` lends,
 handed to a callee that gives that parameter (or a field of it) a new
@@ -892,7 +910,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h370):
+all are closed, each a probe CI now holds (h142–h377):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1325,7 +1343,17 @@ union of its impls. And a binding that only borrowed its value, handed
 `inout` to a callee that gives that parameter a new value, released the
 value under its owner (h367–h370). It is now refused, and a `: ~` copy
 of a `% Drop` struct takes its owner's drop flag, so the replacing call
-makes it the owner (§7.6). No other hole is known.
+makes it the owner (§7.6). nurldb's tests then found a `?` statement
+whose arm ended in an assignment from a join (`= lo ? c ( f ) ( g )`)
+dropping the value `lo` had just received as the statement's discarded
+value (h371, h372): an assignment's value is lent to whatever reads it.
+A join that hands a binding its own value back (`= x ? c x ( f )`) had x
+drop it first (h373, h374): where such a join lends, the value is copied
+in. And a closure's env was not in the panic journal (h375–h377): a
+literal handed to a call, a bound closure, a struct literal's closure
+field; each function's closure bindings are now one frame-table entry,
+and an argument's closure and literal fields are journaled while the
+call runs (§7.2). The two open holes are above.
 
 The rules that carry it:
 
@@ -1626,7 +1654,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h370`) to the rule that rejects it. See
+  (`h01–h377`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1676,8 +1704,14 @@ journal** instead:
   not when the binding is recorded: a value moved on — into a literal, a
   `sink` parameter, a closure's capture, a `dyn` box — has its flag
   cleared, and only its new owner releases it (h361–h363).
+- A closure binding is recorded with its owner slot, all of a function's
+  as one entry (`nurl_jframe_clo_drop`): a panic drops the env of each
+  one whose slot says it owns it, as its scope exit would (h375, h376).
 - A String / Vec / struct made by a call right in an argument is recorded
-  while the callee runs (it is the caller's until the call returns); a
+  while the callee runs (it is the caller's until the call returns), and
+  so is a closure literal or a closure a call returned, handed on as an
+  argument, and every owned field of a struct literal argument (h375,
+  h377); a
   value whose destructor is written at module end (a struct holding a
   guard) is recorded and forgotten like any other; a value a `??` arm
   hands out as the match's value leaves the journal with its scope.

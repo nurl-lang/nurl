@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+300000000: 1
+pointer-sized: 1
+negative: 1
+answered before the timeout: yes

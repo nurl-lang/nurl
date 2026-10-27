@@ -149,19 +149,41 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       # This C-runtime gate needs no NURL build. Keep package installation
       # outside the compiler container's budget; the dated CI image has no
       # MinGW. Hosted runners may already have it. A missing prerequisite
       # after installation fails explicitly instead of letting the gate skip.
+      # The packages are cached. The runner's Azure mirror stalled on them
+      # (2 min per 6 MB package, 115 MB in all) four times on 2026-10-27,
+      # and the old 4-minute budget cancelled the gate each time. A cache hit
+      # installs the .debs it holds with no network. A miss downloads once,
+      # trying archive.ubuntu.com before the Azure mirror, under a cold-path
+      # budget, and saves them.
+      - name: Restore the MinGW packages
+        uses: actions/cache@v4
+        with:
+          path: ~/mingw-debs
+          key: mingw-debs-ubuntu-24.04-gcc-mingw-w64-x86-64-v1
       - name: Ensure the distro MinGW toolchain
-        timeout-minutes: 4
+        timeout-minutes: 10
         run: |
           if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
-            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update --error-on=any
-            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-install-recommends gcc-mingw-w64-x86-64
+            if ls ~/mingw-debs/*.deb >/dev/null 2>&1; then
+              sudo apt-get install -y --no-install-recommends ~/mingw-debs/*.deb
+            else
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                { printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\n'; cat /etc/apt/apt-mirrors.txt; } | sudo tee /etc/apt/apt-mirrors.txt.new >/dev/null
+                sudo mv /etc/apt/apt-mirrors.txt.new /etc/apt/apt-mirrors.txt
+              fi
+              sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update --error-on=any
+              sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 install -y --no-install-recommends --download-only gcc-mingw-w64-x86-64
+              mkdir -p ~/mingw-debs
+              cp /var/cache/apt/archives/*.deb ~/mingw-debs/
+              sudo apt-get install -y --no-install-recommends ~/mingw-debs/*.deb
+            fi
           fi
           command -v x86_64-w64-mingw32-gcc
       - name: Compile and link the whole runtime against msvcrt
