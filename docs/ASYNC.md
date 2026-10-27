@@ -47,7 +47,7 @@ $ `stdlib/std/async.nu`
   everything pushed locally after them. tls-bench measured that as
   handshake p99 at 1.4–4.5× p50 where rustls stayed near 1.3×;
   `compiler/tests/sched_ready_order` measured the order itself (a
-  reader overtaken by 114 later ones before, none after).
+  reader overtaken by 55 of 99 later ones before, none after).
 - **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a

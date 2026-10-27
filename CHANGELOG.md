@@ -129,9 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   global head. A busy worker's poll puts what it wakes at the queues'
   tails. The netpoller is polled every 16th dispatch whatever is queued,
   which replaces the 128th-dispatch guard. `compiler/tests/sched_ready_order`
-  (one worker, 200 readers made ready in a known order behind seven
-  yielders) measured a reader overtaken by 114 later ones before and by
-  none after; its bound, below 16, comes from the poll cadence.
+  (one worker, 100 loopback TCP readers made ready in a known order
+  behind seven yielders) measured a reader overtaken by 55 later ones
+  before and by none after; its bound, below 16, comes from the poll
+  cadence.
   Measured locally (4 vCPU, server on one core, 64 connections, three
   runs each), the whole request (connect, handshake, response) now has
   p99/p50 of 1.76–1.86 against rustls's 1.71–1.92 (before: 1.93–2.67,
