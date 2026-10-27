@@ -48,6 +48,29 @@ $ `stdlib/std/async.nu`
   handshake p99 at 1.4–4.5× p50 where rustls stayed near 1.3×;
   `compiler/tests/sched_ready_order` measured the order itself (a
   reader overtaken by 55 of 99 later ones before, none after).
+- **Admission.** A fiber parked in an accept runs as soon as its
+  listener is polled ready, ahead of everything queued: the Linux
+  netpoller hands it back to run now, the poll(2) reactor puts it at the
+  head of the global queue with the oldest stamp, and the unikernel's
+  socket layer wakes it to the head of the bare runtime's run queue.
+  Accepting is how the connections waiting in the kernel's queue enter
+  the service order (each one's fiber is stamped when it is spawned),
+  and it is cheap: an accept and a spawn per connection. Queued at the
+  tail like any woken fiber, the accept first waited a whole pass of the
+  run queue, and everything that became runnable meanwhile went ahead of
+  connections that had arrived before it. On a saturated TLS server a
+  new connection then waited one pass in the kernel's queue and another
+  in the run queue, by however much work happened to be queued at each:
+  the handshake latency spread over 4–11 ms where rustls held 5–8 ms
+  (agora #113, measured per connection by joining the client's and the
+  server's timestamps on the source port). With admission the accept
+  waits at most one poll window, and the spread is inside rustls's own
+  run-to-run range: handshake p99/p50 medians of three runs 1.57 against
+  rustls's 1.62 (full X25519, 2.25 before) and 1.57 against 1.46
+  (resumed, 1.85 before); rustls's ratio moved between 1.42 and 2.05 on
+  that host. `compiler/tests/sched_accept_admission` holds the bound: a
+  connection is accepted within half a pass of a 64-fiber queue (before:
+  never, a full pass and more).
 - **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a

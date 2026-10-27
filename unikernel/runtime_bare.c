@@ -270,6 +270,13 @@ static void nb_rq_push(NbCoro *c) {
     nb_rq_tail = c;
 }
 
+/* At the head: an admitted waiter (nurl_bare_unpark_admit) runs next. */
+static void nb_rq_push_front(NbCoro *c) {
+    c->next = nb_rq_head;
+    nb_rq_head = c;
+    if (!nb_rq_tail) nb_rq_tail = c;
+}
+
 static NbCoro *nb_rq_pop(void) {
     NbCoro *c = nb_rq_head;
     if (!c) return 0;
@@ -1033,7 +1040,7 @@ void nurl_fiber_park_with_mutex(long long mutex_h) {
     nb_park();
 }
 
-void nurl_fiber_unpark(long long h) {
+static void nb_unpark(long long h, int front) {
     NbCoro *c = (NbCoro *)(unsigned long)h;
     if (!c) return;
     /* Only a PARKED coroutine goes back on the run queue. Unparking one
@@ -1052,8 +1059,20 @@ void nurl_fiber_unpark(long long h) {
     nb_timer_remove(c);               /* it may have parked with a deadline */
     c->last_park_result = 1;          /* woken, not timed out */
     c->state = NB_RUNNABLE;
-    nb_rq_push(c);
+    if (front) nb_rq_push_front(c);
+    else       nb_rq_push(c);
 }
+
+void nurl_fiber_unpark(long long h) { nb_unpark(h, 0); }
+
+/* Unpark a coroutine parked in an accept: it runs next, ahead of
+ * everything queued (Admission, stdlib/runtime_ffi.c under "Service
+ * order"). Accepting and spawning is cheap, and it is how a connection
+ * enters the run queue; queued at the tail, the accept waited a whole
+ * pass of the queue first and every connection it then spawned went
+ * behind whatever had become runnable meanwhile. net/sockets.nu wakes
+ * a waiter registered by nurl_reactor_wait_accept through this. */
+void nurl_bare_unpark_admit(long long h) { nb_unpark(h, 1); }
 
 /* Park until someone unparks this coroutine, or until `ms` have passed
  * (ms < 0 = no deadline). 1 = woken by an unpark, 0 = the deadline

@@ -53,6 +53,8 @@ unsafe & `c` @ nurl_fiber_wake i fiber_h → i
 //   sleep_ms always returns 0.
 & `c` @ nurl_reactor_wait_read i fd i timeout_ms → i
 
+& `c` @ nurl_reactor_wait_accept i fd i timeout_ms → i
+
 & `c` @ nurl_reactor_wait_write i fd i timeout_ms → i
 
 & `c` @ nurl_fiber_sleep_ms i ms → i

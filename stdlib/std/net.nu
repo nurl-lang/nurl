@@ -1579,8 +1579,13 @@ unsafe & `c` @ nurl_tcp_unref i handle → v
                 // CONNECTION's reads and writes; a listener has no such
                 // deadline, and a server loop reads "the accept ended"
                 // as "we were stopped" — report a timeout there and
-                // every clean shutdown becomes an error.
-                : i rc ( nurl_reactor_wait_read fd - 0 1 )
+                // every clean shutdown becomes an error. The accept wait
+                // runs this fiber as soon as the listener is ready, ahead
+                // of everything queued: accepting is how the connections
+                // waiting in the kernel enter the service order, so it
+                // does not wait its turn behind work that became runnable
+                // after they arrived (Admission, stdlib/runtime_ffi.c).
+                : i rc ( nurl_reactor_wait_accept fd - 0 1 )
                 // wait_readable returns -1 outside a fiber; in that
                 // case the sync accept already blocked, so EAGAIN
                 // shouldn't recur — bail to NetAccept.
