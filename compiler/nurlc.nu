@@ -38928,11 +38928,23 @@ unsafe @ __l2n_list s lst → s {
         ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
-                : s f ( mem_udrop_flag_get syms cg up )
+                // Owned by the binding, or — a cursor over an option
+                // binding, a match's payload — by the option, whose
+                // ownership the move takes along (agora #140).
+                : ~ s f ( mem_udrop_flag_get syms cg up )
+                : ~ s al ( nurl_sym_get2 syms up `__alias` )
+                ~ != 0 ( nurl_str_len al ) {
+                    : s w ( str_first_word al ) = al ( str_skip_word al )
+                    : s wf ( mem_udrop_flag_get syms cg w )
+                    : s o ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+                    = f o
+                }
                 : s lr ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
                 = loaded ( mem_emit_cloneif cg var_type loaded lr )
                 ( mem_udrop_flag_set syms cg up `0` )
+                ( mem_udrop_alias_move syms cg up `0` )
             } { = loaded ( mem_emit_cloneif cg var_type loaded `1` ) }
         } {}
         // GEP to field and store with the effective type.
@@ -39569,6 +39581,57 @@ unsafe @ __thr_peel s lty → s {
 // binding still named later (a Vec the thread fills for the spawner) stays
 // shared, as before. A closure bound to a name counts only when the rest of
 // the function hands that name to a spawn.
+// The owners a cursor `up` is over, by name (`a,b`), when every one of them
+// is a binding of this frame a detached closure may take the value from: an
+// owner outright, not a parameter, not itself a cursor, made in the same
+// innermost loop. `-` when one is not; `` when `up` is no cursor.
+@ __clo_alias_owners i syms s up s ld → s {
+    : ~ s rest ( nurl_sym_get2 syms up `__alias` )
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s a ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s an ( nurl_sym_get2 syms a `__bname` )
+        : s asb ( nurl_sym_get2 syms a `__sborrow` )
+        ? | | | | | == 0 ( nurl_str_len an ) != 0 ( nurl_sym_len2 syms a `__pname` ) != 0 ( nurl_sym_len2 syms a `__alias` )
+        ! | == 0 ( nurl_str_len asb ) != 0 ( nurl_str_starts asb `@` )
+        ! ( seq ( nurl_sym_get2 syms a `__lserial` ) ld ) == 0 ( nurl_sym_len2 syms a `__live` ) {
+            ^ ( nurl_str_cat `-` `` )
+        } {}
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat an `` ) ( nurl_str_cat3 out `,` an )
+    }
+    ^ out
+}
+
+// `used` with every candidate added whose `v=a,b` entry in `deps` names
+// `tv`.
+@ __clo_dep_used s deps s tv s used → s {
+    : ~ s out ( nurl_str_cat used `` )
+    : ~ s rest ( nurl_str_cat deps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i eq ( nurl_str_find e `=` )
+        ? >= eq 0 {
+            : s v ( nurl_str_slice e 0 eq )
+            : s names ( nurl_str_slice e + eq 1 - - ( nurl_str_len e ) eq 1 )
+            ? & ( __csv_has names tv ) ! ( str_contains_word out v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
+        } {}
+    }
+    ^ out
+}
+
+// Is `w` one of the comma-separated names in `csv`?
+@ __csv_has s csv s w → b {
+    : ~ s rest ( nurl_str_cat csv `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i c ( nurl_str_find rest `,` )
+        : s x ? < c 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 c )
+        ? ( seq x w ) { ^ T } {}
+        = rest ? < c 0 `` ( nurl_str_slice rest + c 1 - - ( nurl_str_len rest ) c 1 )
+    }
+    ^ F
+}
+
 unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
     ? & ! lit == 0 ( nurl_str_len bind ) { ^ ( nurl_str_cat `` `` ) } {}
     : s hp ( nurl_sym_get syms `__fn_hdr_pos__` )
@@ -39578,16 +39641,34 @@ unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
     : s ld ( nurl_sym_get syms `__loop_depth__` )
     : s pnames ( nurl_sym_get syms `__fn_param_names__` )
     : ~ s cand ``
+    // (`v=a,b`: candidate v also goes unmoved if a binding it is a cursor
+    // over, a or b, is named later.)
+    : ~ s deps ``
     : ~ s rest ( nurl_str_cat caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s v ( str_first_word rest ) = rest ( str_skip_word rest )
         : s up ( mem_udrop_ptr_of syms v )
+        // Owned outright, owned by its flag on some paths (`dyn`: a value
+        // bound out of a match, agora #140), or a cursor over an option
+        // binding of this frame — a match's payload — which takes the
+        // option's ownership along when it moves (__clo_alias_owners).
+        : s sb ? != 0 ( nurl_str_len up ) ( nurl_sym_get2 syms up `__sborrow` ) ``
+        : b own_ok | | == 0 ( nurl_str_len sb ) != 0 ( nurl_str_starts sb `@` ) ( seq sb `dyn` )
+        : s al ? != 0 ( nurl_str_len up ) ( __clo_alias_owners syms up ld ) ``
+        : b al_ok | == 0 ( nurl_sym_len2 syms up `__alias` ) & != 0 ( nurl_str_len al ) ! ( seq al `-` )
         ? & & & & & & ( __is_handle_ty ( nurl_sym_get syms v ) ) ! ( __is_capture_byref v syms ) < ( str_word_index pnames v ) 0
-        != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms up `__sborrow` ) `@` ) == 0 ( nurl_sym_len2 syms up `__alias` )
+        != 0 ( nurl_str_len up ) own_ok al_ok
         ( seq ( nurl_sym_get2 syms up `__lserial` ) ld )
-        { = cand ( nurl_str_cat3 cand ` ` v ) } {}
+        { = cand ( nurl_str_cat3 cand ` ` v )
+            ? & != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_str_len al ) {
+                = deps ( nurl_str_cat3 deps ` ` ( nurl_str_cat3 v `=` al ) )
+            } {} } {}
     }
-    ? == 0 ( nurl_str_len cand ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (No candidate to move still scans: the shares below are what a
+    // spawned closure takes of a handle it does not move — a parameter's,
+    // or a payload whose option is named later. Left as views, they passed
+    // the crossing check before the spawn copied them in, and two threads
+    // held one state: agora #140.)
     : i here ( nurl_lex_cur_start lex )
     ( nurl_lex_set_pos lex ( nurl_str_to_int hp ) )
     ( skip_balanced lex )
@@ -39604,6 +39685,9 @@ unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
         ? ( is_ident_tok tt ) {
             = tv ( nurl_lex_val lex )
             ? & ( str_contains_word cand tv ) ! ( str_contains_word used tv ) { = used ( nurl_str_cat3 used ` ` tv ) } {}
+            // A binding a candidate is a cursor over, named later: the
+            // candidate stays where it is (the option still holds it).
+            ? != 0 ( nurl_str_len deps ) { = used ( __clo_dep_used deps tv used ) } {}
             ? & & & ! spawned == p2 TT_LPAREN ( __thr_is_detach p1v ) ( seq tv bind ) { = spawned T } {}
         } {}
         = p2 p1 = p1 tt = p1v tv
