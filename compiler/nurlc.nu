@@ -42726,12 +42726,13 @@ unsafe @ __dyn_virtual_repl_edges → v {
 
 // The parameters of a `dyn` method, its receiver included, from its packed
 // signature (dyn_sig_parts: `ret|recvmode|recv[|p1|p2…]`).
-@ __dyn_parts_arity s parts → i {
+unsafe @ __dyn_parts_arity s parts → i {
     : i n ( nurl_str_len parts )
+    : *u pp # *u parts
     : ~ i bars 0
     : ~ i j 0
     ~ < j n {
-        ? == ( nurl_str_get parts j ) 124 { = bars + bars 1 } {}
+        ? == # i . pp j 124 { = bars + bars 1 } {}
         = j + j 1
     }
     ^ - bars 1
