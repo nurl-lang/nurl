@@ -6,7 +6,26 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.79.1] — 2026-10-27
+
+The safety patch. 0.79.0 said no hole was known open while two were.
+- nurldb's tests segfaulted on a `?` statement whose arm ended in an
+  assignment from a join.
+- A panic leaked closure environments.
+
+Both are closed (h371–h377), and so is a binding given its own value back
+through a join.
+
+The I/O layer no longer pays for, or starves on, unusual waits:
+- A wait on a number that names no descriptor answers at once, where it
+  used to grow a table to gigabytes.
+- The poll(2) / WSAPoll reactor polls every waiter, not only the first
+  255.
+- `udp_bind host 0` no longer hands out a port another socket holds.
+
+Two holes found on the way stay open and are listed under *Known issues*:
+a `UdpSocket` used after `udp_close` or never closed (Agora #139), and a
+binding that views a call's temporary argument, a leak (Agora #138).
 
 ### Known issues
 
@@ -29,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiler never drops it. It is a leak, never a use after free. Bind the
   argument first. This was found while testing #131, and it predates
   0.79.0.
+
+### Changed
+
+- CI: the Windows cross gate's MinGW packages are cached, and
+  archive.ubuntu.com is tried before the Azure mirror, which stalled on
+  them four times in one day.
 
 ### Fixed
 
