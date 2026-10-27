@@ -149,7 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep-alive record layer and HTTP keep-alive and connection-setup rates
   are unchanged. `compiler/tests/sched_accept_admission` fails on the old
   scheduler (worst delay 80 dispatches of a 64-fiber queue hosted, 64
-  under nolibc) and passes on the new one, hosted and nolibc.
+  under nolibc) and passes on the new one, hosted and nolibc. It runs on
+  Linux only: on FreeBSD, macOS and Windows a reactor thread polls, and
+  the wake waits for that thread's time slice first (36–80 ms on the
+  loaded CI hosts; agora #137).
 
 - **A program's own `( nurl_cpu_x86_v3 )` call is lowered `i32`, as the
   preamble declares it.** The compiler had no return type for it, so

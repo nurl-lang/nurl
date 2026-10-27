@@ -12,12 +12,14 @@
 // The rule (Admission, stdlib/runtime_ffi.c "Service order"): a fiber
 // parked in an accept runs as soon as its listener is polled ready,
 // ahead of everything queued. The Linux netpoller is polled every 16th
-// dispatch, so the delay stays within 16; the poll(2) reactor thread of
-// the other targets puts the acceptor at the head of the run queue, so
-// it runs at the worker's next dispatch, and the unikernel's socket
+// dispatch, so the delay stays within 16, and the unikernel's socket
 // layer (nolibc, where the client thread is a coroutine too) wakes it to
-// the head of the bare runtime's run queue. Every way the delay is far
-// below Y, whatever N and timing.
+// the head of the bare runtime's run queue. Either way the delay is far
+// below Y, whatever N and timing. Linux and nolibc only: on the other
+// targets a reactor THREAD polls, and puts the acceptor at the head of
+// the run queue — but only once the OS gives that thread a time slice,
+// which on a loaded FreeBSD or Windows host is tens of milliseconds
+// (agora #137; test_skips.sh).
 //
 // Before, the acceptor joined the TAIL of the run queue like any woken
 // fiber and waited behind all Y yielders first: a delay of at least Y

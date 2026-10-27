@@ -410,6 +410,10 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # answering a SYN to a closed port with RST — Windows retries the SYN
     # for about two seconds first.
     elseif ($name -eq 'net_connect_fiber_timeout') { $skip = $true }
+    # Linux-only in test_skips.sh too: the WSAPoll reactor is a thread of
+    # its own, and its wait for a time slice (1820 dispatches on the CI
+    # runner) is what the test would measure, not admission (agora #137).
+    elseif ($name -eq 'sched_accept_admission') { $skip = $true }
     # fs_glob_symlink builds a symlinked directory under /tmp and globs
     # through it. Windows has neither an unprivileged symlink() nor /tmp.
     # It first declared `requires: ln` as a capability probe, on the

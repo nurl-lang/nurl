@@ -70,7 +70,10 @@ $ `stdlib/std/async.nu`
   (resumed, 1.85 before); rustls's ratio moved between 1.42 and 2.05 on
   that host. `compiler/tests/sched_accept_admission` holds the bound: a
   connection is accepted within half a pass of a 64-fiber queue (before:
-  never, a full pass and more).
+  never, a full pass and more). On the poll(2) targets the reactor is a
+  thread of its own, and the wake waits for that thread's time slice
+  first: tens of milliseconds on a loaded FreeBSD or Windows host, where
+  the test is skipped (agora #137).
 - **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a

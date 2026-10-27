@@ -6700,7 +6700,10 @@ static void nurl__pending_dec(void) {
  * saturated server a connection waited one pass in the kernel's queue
  * and another in the run queue, by however much work happened to be
  * queued at each, and tls-bench's handshake latency spread over twice
- * the rustls range (agora #113). */
+ * the rustls range (agora #113). The poll(2) reactor is a thread of its
+ * own, though, so there the wake itself still waits for that thread's
+ * time slice, tens of milliseconds on a loaded FreeBSD or Windows host
+ * (agora #137). */
 static unsigned long long nurl__rseq_next(void) {
     return __atomic_add_fetch(&nurl__sched.rseq_clock, 1, __ATOMIC_RELAXED);
 }
