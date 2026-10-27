@@ -26,9 +26,9 @@ specified in spec §3.3d.
   released, reassigned or reallocated (§6.2).
 - **The guarantee (§6.2).** Every program the compiler accepts outside
   the bodies of `unsafe` functions is memory-safe and leak-free, data
-  races and the panic path included. No hole is known: each one found so
-  far is a probe in `tools/fuzz/holes/` that CI holds rejected or clean
-  under the sanitizers. A view is tracked wherever it goes (§2.10).
+  races and the panic path included. Each hole found so far is a probe in
+  `tools/fuzz/holes/` that CI holds rejected or clean under the
+  sanitizers, but one: a leak, open (`tools/fuzz/holes/open/`, below). A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -869,7 +869,17 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last one, *an `inout` argument whose
+**One hole is known open, a leak:** a binding whose value views a call's
+temporary argument leaks the temporary (`: s v ( first ( string_from … )
+)`, with `first` handing back a view of its argument), and so does a
+closure whose env views one (a call returning a closure that captures its
+parameter, given a temporary). The temporary must outlive the binding,
+and the borrow checker has no name for it with which to keep the view
+from escaping it, so the compiler never drops it: a leak, never a use
+after free. Two probes in `tools/fuzz/holes/open/` hold it (agora #138).
+Bind the argument first (`: String t ( string_from … ) : s v ( first t )`).
+
+**Closed before it:** the last, *an `inout` argument whose
 binding does not own its value*, is closed (agora #135, h367–h370): a
 cursor over another binding, a field read or a value `arc_get` lends,
 handed to a callee that gives that parameter (or a field of it) a new
@@ -1335,7 +1345,7 @@ in. And a closure's env was not in the panic journal (h375–h377): a
 literal handed to a call, a bound closure, a struct literal's closure
 field; each function's closure bindings are now one frame-table entry,
 and an argument's closure and literal fields are journaled while the
-call runs (§7.2). No other hole is known.
+call runs (§7.2). The one open hole is the leak above.
 
 The rules that carry it:
 

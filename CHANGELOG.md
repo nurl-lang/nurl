@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Known issues
+
+- **A binding that views a call's temporary argument leaks the temporary**
+  (Agora #138; `tools/fuzz/holes/open/`). The pattern is
+  `: s v ( first ( string_from … ) )`, where `first` hands back a view of
+  its argument, and it includes a closure whose env views such an
+  argument. The temporary must outlive the binding, and the borrow checker
+  has no name for it with which to keep the view from escaping, so the
+  compiler never drops it. It is a leak, never a use after free. Bind the
+  argument first. This was found while testing #131, and it predates
+  0.79.0.
+
 ### Fixed
 
 - **An assignment at the end of a `?` / `??` arm no longer has its value

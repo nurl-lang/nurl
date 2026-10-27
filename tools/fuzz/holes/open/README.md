@@ -1,8 +1,22 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.**
+**One class, a leak (agora #138):**
 
-The latest closed: `h367`–`h370` (agora #135), an `inout` argument whose
+| Probe | What leaks |
+|---|---|
+| `binding_viewing_a_call_temporary_leaks_it.nu` | `: s v ( first ( string_from … ) )`, `first` handing back a view of its argument: the String the binding views is never dropped |
+| `closure_over_a_temporary_argument_leaks_it.nu` | `( mk ( string_from … ) )`, `mk` returning a closure that captures its parameter without taking it over: the String the env views is never dropped |
+
+The temporary must outlive the binding (or the closure). The compiler keeps
+it alive by never dropping it — a leak, never a use after free — because
+the borrow checker has no name for a temporary with which to keep the view
+from escaping it. The fix gives such a temporary an owner the borrow
+checker sees: a hidden binding in the statement's scope.
+
+The latest closed: `h371`–`h377` (agora #132, #131): an assignment's value
+dropped by the `?` statement it ended, a binding given its own value back
+through a join, and closure envs a panic skipped. Before them `h367`–`h370`
+(agora #135), an `inout` argument whose
 binding does not own its value — a cursor over another binding, a field
 read, a value `arc_get` lends — handed to a callee that gives the
 parameter, or a field of it, a new value: the callee released what the
