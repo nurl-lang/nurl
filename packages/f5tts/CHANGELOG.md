@@ -3,6 +3,17 @@
 All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] — 2026-10-27
+
+### Fixed
+
+- The model thread copied its state out of a `sink` parameter into a
+  mutable binding and handed that to the job functions. The copy only
+  borrowed the state: a job that switched models or cached a voice gave a
+  field a new value and released the old one, which the parameter still
+  held and dropped again when the thread ended. NURL now refuses the shape
+  (agora #135). The thread binds its state itself and hands it `inout`.
+
 ## [0.5.0] — 2026-10-15
 
 ### Changed

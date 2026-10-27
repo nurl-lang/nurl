@@ -74,30 +74,30 @@ $ `stdlib/core/io.nu`
 }
 
 @ serve TcpConn tcp i encoding → i {
-    : !GrpcServer GrpcError made ( grpc_server_new tcp ( grpc_server_limits ) )
-    ?? made {
+    // The server bound out of the result is this function's own: a binding
+    // of the payload would only borrow it, and grpc_server_next replaces
+    // what it holds.
+    : ~ GrpcServer server ?? ( grpc_server_new tcp ( grpc_server_limits ) ) {
         F e → { ^ 1 }
-        T value → {
-            : ~ GrpcServer server value
-            : ( Vec TestCall ) calls ( vec_new [TestCall] )
-            : ~ b done F
-            : ~ i result 0
-            ~ ! done {
-                ?? ( grpc_server_next server ) {
-                    F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
-                    T event → {
-                        ? == . event kind ( grpc_server_event_closed ) { = done T } {
-                            ?? ( handle server calls event encoding ) {
-                                F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
-                                T _ → {}
-                            }
-                        }
+        T value → value
+    }
+    : ( Vec TestCall ) calls ( vec_new [TestCall] )
+    : ~ b done F
+    : ~ i result 0
+    ~ ! done {
+        ?? ( grpc_server_next server ) {
+            F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
+            T event → {
+                ? == . event kind ( grpc_server_event_closed ) { = done T } {
+                    ?? ( handle server calls event encoding ) {
+                        F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
+                        T _ → {}
                     }
                 }
             }
-            ^ result
         }
     }
+    ^ result
 }
 
 @ main → i {

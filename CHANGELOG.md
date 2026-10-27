@@ -137,6 +137,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wasmbuilder's fold of `call i32 @nurl_cpu_x86_v3()` to 0 never matched
   the call, so `poly1305_mac` on wasm32 printed nothing (wasm-bench's
   correctness gate). `simd_dispatch_ir` now checks the call's type.
+- **An `inout` argument that does not own its value is refused where a
+  callee replaces it** (Agora #135, h367–h370). A cursor over another
+  binding (`: ~ ( Vec i ) cur root`), a field read (`: ~ H h . o h`) or a
+  value `arc_get` lends, handed to a callee that gives the parameter or a
+  field of it a new value, made the callee release what the owner still
+  held. The owner then read freed memory and dropped it again; through an
+  Arc's payload, under another thread's reader. The rule for this shape
+  (h295) covered only a `: ~` copy of a parameter, by a marker set where
+  the binding was made. The borrow walk now refuses any argument in a
+  borrow state, on any path, handed to a parameter its callee may replace
+  (`bck_inout_borrow_check`), and checks the calls in a returned
+  expression too. h295 is one case of it. A copy of a value with a
+  `% Drop`, taken from a local that owns it outright, already held that
+  local's drop. Such a call now makes it the owner and moves the local,
+  so reading the local afterwards is an error (h370), where it used to read
+  freed memory. The rule found the shape in three packages: gRPC's test
+  fixtures, anomaly's file importer (0.36.6) and f5tts's model thread
+  (0.5.1). There, a payload or a `sink` parameter was copied into a mutable
+  binding and handed to a replacing call. `diag_inout_borrow_replaced` and
+  `inout_borrow_takeover` show both sides.
 - **A method called through a trait object does what its impls do**
   (h364–h366, found with Agora #128). A `dyn` call's virtual callee had
   the union of its impls' summaries, with three gaps. A receiver declared

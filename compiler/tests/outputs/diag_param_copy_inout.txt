@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_param_copy_inout.nu:31:5: error: 'c' is a copy of the parameter 'b', and 'reset' replaces a field of what it is handed 'inout' — releasing what the caller of this function owns (the copy shares those fields, it does not own them). Make it a copy of its own: ': ~ T name ( mem_dup param )', or take the parameter itself as 'inout'.
+compiler/tests/diag_param_copy_inout.nu:31:5: error: 'c' does not own its value: it borrows it from the parameter 'b' (a ': ~' binding of another binding, of a field or of what a call lends shares that value), and 'reset' gives what it is handed 'inout' a new value, or one of its fields — releasing what the caller of this function owns. Make 'c' a value of its own where it is bound — ': ~ T c ( mem_dup … )', or, for a match's payload, the value the match hands out: ': ~ T c ?? … { T v → v … }' — or hand 'reset' the parameter itself, declared 'inout'.
     ( reset c )
     ^
 error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

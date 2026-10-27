@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.36.6] — 2026-10-27
+
+### Fixed
+
+- The file importer counted a column through a mutable binding of the
+  payload it took out of the column list. That binding only borrowed the
+  column, and counting gives the column's `sample` a new value, which
+  released the string the payload still held. NURL now refuses the shape
+  (agora #135). The column is bound out of the match as a value of its
+  own, counted, and put back.
+
 ## [0.36.5] — 2026-10-21
 
 ### Fixed

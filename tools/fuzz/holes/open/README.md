@@ -1,13 +1,16 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**One:** `inout_argument_that_does_not_own_its_value.nu` (agora #135) — an
-`inout` argument whose binding does not own its value (a cursor over
-another binding, a field read, a value `arc_get` lends) handed to a callee
-that gives the parameter, or a field of it, a new value: the callee
-releases what the other owner holds. The rule that refuses the shape
-(`h295`) covers only a `: ~` copy of a parameter.
+**None.**
 
-The latest closed, found reading a trait object out of an `Arc` (agora
+The latest closed: `h367`–`h370` (agora #135), an `inout` argument whose
+binding does not own its value — a cursor over another binding, a field
+read, a value `arc_get` lends — handed to a callee that gives the
+parameter, or a field of it, a new value: the callee released what the
+other owner held (and `h370`, the local a copy took the drop of, read after
+such a call). The rule that refused the shape (`h295`) had covered only a
+`: ~` copy of a parameter.
+
+Before them, found reading a trait object out of an `Arc` (agora
 #128): `h364`–`h366`, a method called through a trait object did less to
 its arguments than its impls do — an `inout` receiver writing the box a
 read guard lends, a field it replaced leaving a view of it reading freed

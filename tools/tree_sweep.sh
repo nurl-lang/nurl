@@ -150,16 +150,45 @@ echo "tree_sweep: ${#FILES[@]} file(s), $JOBS job(s)"
 echo "tree_sweep: base = $BASE_BIN"
 echo "tree_sweep: new  = $NEW_BIN"
 
+# A package's sources import `deps/<pkg>/…` and their siblings: compiled
+# from the repository root, every one of them stopped at its first import
+# on both sides, and an identical import error is no evidence (f5tts's
+# model thread, agora #135, was refused by a new rule and the sweep said
+# nothing). Each package is compiled from a root laid out as an installed
+# one's: its own entries linked in, `deps/<name>` linking every in-tree
+# package under its manifest name (tools/check_package_entries.py does the
+# same for the entry points).
+PKGROOT="$WORK/pkgroot"
+mkdir -p "$PKGROOT/deps"
+for pd in packages/*/; do
+    pd="${pd%/}"; pd="${pd#packages/}"
+    [[ -f "packages/$pd/nurl.toml" ]] || continue
+    name="$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "packages/$pd/nurl.toml" | head -1)"
+    [[ -n "$name" && ! -e "$PKGROOT/deps/$name" ]] && ln -s "$ROOT_DIR/packages/$pd" "$PKGROOT/deps/$name"
+    mkdir -p "$PKGROOT/$pd"
+    for e in "packages/$pd"/*; do
+        [[ "$(basename "$e")" == deps ]] && continue
+        ln -s "$ROOT_DIR/$e" "$PKGROOT/$pd/$(basename "$e")"
+    done
+    ln -s "$PKGROOT/deps" "$PKGROOT/$pd/deps"
+done
+
 # One transcript per file per compiler: the exit code, then stderr,
 # then a hash of the emitted IR. The IR is hashed rather than stored
 # because the tree emits hundreds of megabytes of it and the only
 # question asked here is "the same or not".
-export WORK
+export WORK PKGROOT ROOT_DIR
 record() {
     local which="$1" bin="$2" f="$3"
     local out="$WORK/$which/${f//\//__}.txt"
     local ir err rc
-    ir="$("$bin" "$f" 2>"$out.stderr")"; rc=$?
+    if [[ "$f" == packages/*/*/* && -d "$PKGROOT/$(cut -d/ -f2 <<<"$f")" ]]; then
+        local pd rel
+        pd="$(cut -d/ -f2 <<<"$f")"; rel="${f#packages/$pd/}"
+        ir="$(cd "$PKGROOT/$pd" && NURL_STDLIB="$ROOT_DIR" "$bin" "$rel" 2>"$out.stderr")"; rc=$?
+    else
+        ir="$("$bin" "$f" 2>"$out.stderr")"; rc=$?
+    fi
     {
         echo "exit=$rc"
         echo "ir_sha=$(printf '%s' "$ir" | sha256sum | cut -d' ' -f1)"
