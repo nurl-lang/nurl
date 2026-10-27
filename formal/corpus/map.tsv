@@ -357,3 +357,10 @@ h367_inout_cursor_released_by_a_replacing_callee	§2.4	A2	a : ~ cursor over anot
 h368_inout_field_read_released_by_a_replacing_callee	§2.4	A2	as h367, the binding a field read and the callee replacing a field of it	rejected
 h369_inout_lend_of_an_arc_payload_released_by_a_replacing_callee	§2.4	A2	as h367, the binding what arc_get lends: the callee released the Arc's payload	rejected
 h370_local_read_after_its_copy_was_given_a_new_value	§2.4	A2	a local of a % Drop type copied into a : ~ binding (which took its drop flag), handed inout to a replacing callee, then the local read: the copy becomes the owner and the local is moved at the call	rejected
+h371_arm_assigned_from_a_join_dropped_as_the_statement_value	§7.6	A2	a ? statement whose arm ends in = x ? c ( f ) ( g ) beside an arm assigning another binding: the statement dropped the joined value as discarded, the one x had just received; an assignment's value is lent to whatever reads it	runs-clean
+h372_field_assigned_from_a_join_in_a_match_arm_dropped	§7.6	A2	as h371, a field store in a ?? statement's arm	runs-clean
+h373_binding_given_its_own_value_through_a_join	§7.6	A2	= x ? c x ( f ): the join lent x's own value, which the assignment freed as the old value before storing it; where a join that may select the target lends, the value is copied in	runs-clean
+h374_binding_given_its_own_value_through_a_match	§7.6	A2	as h373, through a ?? whose arm hands back the target	runs-clean
+h375_panic_through_a_call_leaks_its_closure_argument	§7.2	A2	a closure literal handed to a call that panics: the env, dropped after the call, leaked; an argument's closure temporary is journaled while the call runs	runs-clean
+h376_panic_past_a_closure_binding_leaks_its_env	§7.2	A2	a closure binding handed to a call that panics: its scope exit never ran; every closure binding is in the function's closure frame table	runs-clean
+h377_panic_through_a_call_leaks_its_literal_argument	§7.2	A2	a struct literal handed to a call that panics: the String and closure it made leaked; a literal argument's owned fields are journaled while the call runs	runs-clean

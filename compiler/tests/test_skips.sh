@@ -196,6 +196,9 @@ is_skipped() {
         # on the FreeBSD CI VM, nothing to do with the run queue (agora
         # #137).
         sched_accept_admission) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
+        # Hundreds of sockets open at once: past macOS's default limit of
+        # 256 descriptors per process.
+        reactor_many_waiters|udp_bind_ephemeral_distinct) [[ "$(uname -s)" != "Darwin" ]] || { echo skip; return; } ;;
     esac
 
     local tok

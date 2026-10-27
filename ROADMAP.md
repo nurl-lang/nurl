@@ -232,7 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
-  through probe h370, is closed and held by a probe; the rules for
+  through probe h377, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -606,7 +606,9 @@ new language features.
   MCP task store, and, making threads sound, a trait object's Send, a
   handle's copies left behind at a crossing (checked at run time), the
   journal's drop flags, a `dyn` method's effects and a borrowed `inout`
-  argument replaced. No hole is known.
+  argument replaced; and h371–h377 (0.79.1): an assignment's value
+  dropped by the `?` statement it ended, a binding given its own value
+  through a join, and closure envs a panic skipped. No hole is known.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

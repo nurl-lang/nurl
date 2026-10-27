@@ -892,7 +892,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h370):
+all are closed, each a probe CI now holds (h142–h377):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1325,7 +1325,17 @@ union of its impls. And a binding that only borrowed its value, handed
 `inout` to a callee that gives that parameter a new value, released the
 value under its owner (h367–h370). It is now refused, and a `: ~` copy
 of a `% Drop` struct takes its owner's drop flag, so the replacing call
-makes it the owner (§7.6). No other hole is known.
+makes it the owner (§7.6). nurldb's tests then found a `?` statement
+whose arm ended in an assignment from a join (`= lo ? c ( f ) ( g )`)
+dropping the value `lo` had just received as the statement's discarded
+value (h371, h372): an assignment's value is lent to whatever reads it.
+A join that hands a binding its own value back (`= x ? c x ( f )`) had x
+drop it first (h373, h374): where such a join lends, the value is copied
+in. And a closure's env was not in the panic journal (h375–h377): a
+literal handed to a call, a bound closure, a struct literal's closure
+field; each function's closure bindings are now one frame-table entry,
+and an argument's closure and literal fields are journaled while the
+call runs (§7.2). No other hole is known.
 
 The rules that carry it:
 
@@ -1626,7 +1636,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h370`) to the rule that rejects it. See
+  (`h01–h377`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1676,8 +1686,14 @@ journal** instead:
   not when the binding is recorded: a value moved on — into a literal, a
   `sink` parameter, a closure's capture, a `dyn` box — has its flag
   cleared, and only its new owner releases it (h361–h363).
+- A closure binding is recorded with its owner slot, all of a function's
+  as one entry (`nurl_jframe_clo_drop`): a panic drops the env of each
+  one whose slot says it owns it, as its scope exit would (h375, h376).
 - A String / Vec / struct made by a call right in an argument is recorded
-  while the callee runs (it is the caller's until the call returns); a
+  while the callee runs (it is the caller's until the call returns), and
+  so is a closure literal or a closure a call returned, handed on as an
+  argument, and every owned field of a struct literal argument (h375,
+  h377); a
   value whose destructor is written at module end (a struct holding a
   guard) is recorded and forgotten like any other; a value a `??` arm
   hands out as the match's value leaves the journal with its scope.

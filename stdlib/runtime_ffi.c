@@ -1793,9 +1793,10 @@ static NurlTcp *nurl__tcp_new_handle(int kind) {
  *      socket bound to the port must ask for it, the first included. */
 #define NURL_LISTEN_REUSEPORT 1LL
 
-/* What every bound socket asks for so a restarted server can bind its
+/* What every bound TCP socket asks for so a restarted server can bind its
  * port while the last run's connections sit in TIME_WAIT: SO_REUSEADDR
- * on POSIX. NOT on Windows, where the same name means something else —
+ * on POSIX. (Not a UDP socket: it has no TIME_WAIT, and there the option
+ * lets sockets share a port — see nurl_udp_bind.) NOT on Windows, where the same name means something else —
  * "let a second socket bind this address while the first still has it",
  * so any process could take over a listening port — and where TIME_WAIT
  * never blocked a bind to begin with. There the default is already what
@@ -3922,7 +3923,12 @@ long long nurl_udp_bind(const char *host, long long port) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK) continue;
-        nurl__sock_restart_ok(fd);
+        /* No SO_REUSEADDR (nurl__sock_restart_ok): it is for TCP's
+         * TIME_WAIT, which UDP does not have, and on a UDP socket it lets
+         * sockets share a port — an ephemeral `udp_bind host 0` was handed
+         * a port another socket held, and datagrams sent to "its" port
+         * went to the other (one in five of 300 binds), and any program
+         * could bind a server's port beside it. */
         /* Dual-stack wildcard: ask the kernel to also serve IPv4. */
         if (ai->ai_family == AF_INET6 && (!host || !*host)) {
             int off = 0;
@@ -3960,7 +3966,7 @@ long long nurl_udp_bind(const char *host, long long port) {
                 fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
                 if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
                 if (fd == NURL_INVALID_SOCK) continue;
-                nurl__sock_restart_ok(fd);
+                /* (no SO_REUSEADDR: see above) */
                 if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) {
                     chosen_family = ai->ai_family;
                     break;
@@ -8032,7 +8038,13 @@ static NurlNpFd *nurl__np_slot(int fd, int grow) {
     if (fd < 0) return NULL;
     if (fd >= nurl__np.byfd_cap) {
         if (!grow) return NULL;
-        int nc = fd + 64;
+        /* Only an open descriptor earns a slot (agora #133): the table is
+         * indexed by fd, and a number that names nothing — a handle passed
+         * where its fd belonged — grew it to that number, gigabytes for one
+         * wait. The caller answers an unpollable fd "ready" either way. */
+        if (fcntl(fd, F_GETFD) < 0) return NULL;
+        int nc = nurl__np.byfd_cap * 2;
+        if (nc < fd + 64) nc = fd + 64;
         NurlNpFd *nb =
             (NurlNpFd*)realloc(nurl__np.byfd, (size_t)nc * sizeof *nb);
         if (!nb) return NULL;
@@ -8473,23 +8485,45 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     return nurl__reactor_wait_k(fd, events, timeout_ms, 0);
 }
 
+/* An I/O wait's fd as NURL hands it over (a `long long`), before it is
+ * narrowed: a number that cannot name a descriptor — negative, which the
+ * reactor would take for a pure timer and wait the whole timeout, or past
+ * INT_MAX, which narrowed onto an unrelated fd (agora #133) — is
+ * unpollable, and answers "ready" at once, as poll(2) does an fd it cannot
+ * poll; the caller's read or write then says what the fd is. -1 off a
+ * fiber, as every wait. */
+static int nurl__wait_fd_bad(long long fd, long long *verdict) {
+    if (fd >= 0 && fd <= INT_MAX) return 0;
+    NurlWorker *w = nurl__tls_worker;
+    *verdict = (w && w->current) ? 1 : -1;
+    return 1;
+}
+
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
+    return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
 }
 
 /* nurl_reactor_wait_read for an accept on listener `fd` (Admission). */
 NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
     return (long long)nurl__reactor_wait_k((int)fd, POLLIN, timeout_ms, 1);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
-    return (long long)nurl__reactor_wait(fd, POLLOUT, timeout_ms);
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
+    return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
-    return (long long)nurl__reactor_wait(fd, mask, timeout_ms);
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
+    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
@@ -8696,6 +8730,9 @@ typedef struct NurlReactorWait {
     int                     forced;
     /* An accept's wait (Admission, under "Service order"). */
     int                     admit;
+    /* Its index in the poll round's set (0: not in it). Read only when
+     * that index still holds this entry, so a stale one is harmless. */
+    int                     pidx;
 } NurlReactorWait;
 
 typedef struct NurlReactor {
@@ -8793,12 +8830,30 @@ void nurl__reactor_wake_if_started(void) {
  * ready / timed-out fibers. */
 static void *nurl__reactor_loop(void *arg) {
     (void)arg;
-    nurl_pollfd_t fds[256];
-    NurlReactorWait *batch[256];
+    /* One pollfd per waiting fd, grown as the waits are counted: a fixed
+     * 256 left every waiter past the 255th out of the poll set — and new
+     * waits join the list's head, so the oldest starved for as long as
+     * 255 newer ones waited (agora #133). */
+    int cap = 256;
+    nurl_pollfd_t *fds = (nurl_pollfd_t *)malloc((size_t)cap * sizeof *fds);
+    NurlReactorWait **batch = (NurlReactorWait **)malloc((size_t)cap * sizeof *batch);
+    if (!fds || !batch) abort();
     for (;;) {
         if (nurl__reactor.shutdown) break;
 
         pthread_mutex_lock(&nurl__reactor.lock);
+        int want = 1;
+        for (NurlReactorWait *w = nurl__reactor.waits; w; w = w->next)
+            if (w->active && w->fd >= 0) want++;
+        if (want > cap) {
+            while (cap < want) cap *= 2;
+            nurl_pollfd_t *nf = (nurl_pollfd_t *)realloc(fds, (size_t)cap * sizeof *fds);
+            if (!nf) abort();
+            fds = nf;
+            NurlReactorWait **nb = (NurlReactorWait **)realloc(batch, (size_t)cap * sizeof *batch);
+            if (!nb) abort();
+            batch = nb;
+        }
         int nfds = 1;
         fds[0].fd = nurl__reactor.wake_pipe[0];
         fds[0].events = POLLIN;
@@ -8813,11 +8868,12 @@ static void *nurl__reactor_loop(void *arg) {
                 if (min_deadline < 0 || w->deadline_ms < min_deadline)
                     min_deadline = w->deadline_ms;
             }
-            if (w->fd >= 0 && nfds < 256) {
+            if (w->fd >= 0) {
                 fds[nfds].fd = (nurl_sockfd_t)w->fd;
                 fds[nfds].events = w->events;
                 fds[nfds].revents = 0;
                 batch[nfds] = w;
+                w->pidx = nfds;
                 nfds++;
             }
         }
@@ -8836,8 +8892,20 @@ static void *nurl__reactor_loop(void *arg) {
 #ifndef _WIN32
             if (errno == EINTR) continue;
 #endif
-            /* Unrecoverable — bail. */
-            break;
+            /* One fd the call would not take (a number that is no socket:
+             * WSAPoll may fail the whole call for it) must not end the
+             * reactor — this thread is the only one that wakes a fiber
+             * waiting on an fd, and every such fiber would hang. Each fd is
+             * asked on its own instead, and one that cannot be polled is
+             * reported as poll(2) reports it, POLLNVAL: its waiter wakes
+             * and its own read or write says what is wrong (agora #133). */
+            fds[0].revents = 0;
+            for (int i = 1; i < nfds; i++) {
+                nurl_pollfd_t one = fds[i];
+                one.revents = 0;
+                if (nurl__poll(&one, 1, 0) < 0) one.revents = POLLNVAL;
+                fds[i].revents = one.revents;
+            }
         }
 
         /* Drain wake-pipe if signalled. */
@@ -8866,14 +8934,11 @@ static void *nurl__reactor_loop(void *arg) {
                 continue;
             }
             if (w->fd >= 0) {
-                /* Find this entry in the poll batch and check revents. */
-                for (int i = 1; i < nfds; i++) {
-                    if (batch[i] == w) {
-                        if (fds[i].revents & (w->events | POLLERR | POLLHUP | POLLNVAL)) {
-                            wake = 1; result = 1;
-                        }
-                        break;
-                    }
+                /* This entry's place in the poll set, if it was in it. */
+                int i = w->pidx;
+                if (i > 0 && i < nfds && batch[i] == w &&
+                    (fds[i].revents & (w->events | POLLERR | POLLHUP | POLLNVAL))) {
+                    wake = 1; result = 1;
                 }
             }
             if (!wake && w->forced) { wake = 1; result = 1; }
@@ -8927,6 +8992,8 @@ static void *nurl__reactor_loop(void *arg) {
             pthread_mutex_unlock(&nurl__reactor.lock);
         }
     }
+    free(fds);
+    free(batch);
     return NULL;
 }
 
@@ -9038,22 +9105,47 @@ static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) 
     return nurl__reactor_wait_k(fd, events, timeout_ms, 0);
 }
 
+/* An I/O wait's fd that cannot name a descriptor answers "ready" at once
+ * (the Linux backend's nurl__wait_fd_bad, agora #133): a negative one,
+ * which the reactor would take for a pure timer, and on POSIX one past
+ * INT_MAX, which pollfd's int would narrow onto an unrelated fd. (A
+ * Windows SOCKET is a pointer-sized handle: only INVALID_SOCKET, -1 here,
+ * names nothing.) -1 off a fiber, as every wait. */
+static int nurl__wait_fd_bad(long long fd, long long *verdict) {
+#ifdef _WIN32
+    if (fd >= 0) return 0;
+#else
+    if (fd >= 0 && fd <= INT_MAX) return 0;
+#endif
+    NurlWorker *w = nurl__tls_worker;
+    *verdict = (w && w->current) ? 1 : -1;
+    return 1;
+}
+
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
     return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
 }
 
 /* nurl_reactor_wait_read for an accept on listener `fd` (Admission). */
 NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
     return (long long)nurl__reactor_wait_k(fd, POLLIN, timeout_ms, 1);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
     return (long long)nurl__reactor_wait(fd, POLLOUT, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
+    long long v;
+    if (nurl__wait_fd_bad(fd, &v)) return v;
     return (long long)nurl__reactor_wait(fd, mask, timeout_ms);
 }
 

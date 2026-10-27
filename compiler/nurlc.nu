@@ -14873,7 +14873,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             // stores a clone (docs/MEMORY.md §7.4).
             ? __clo_sink {} {
                 = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
-                ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle ) } }
+                ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle )
+                // …journaled while the call runs (agora #131): the later
+                // arguments and the callee may panic before that drop.
+                : s __clj ( mem_journal_push_cloenv cg __cle )
+                = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __clj ( nurl_str_cat3 owned_arg_temps ` ` __clj ) } }
         { ? __clo_sink {
                 : s __csl ( nurl_llty at )
                 : s __cse ( nurl_cg_reg cg )
@@ -22542,11 +22546,14 @@ unsafe @ mem_path_to_indices s path → s {
                 ( nurl_print `  ` ) ( nurl_print __ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty lty ) ) ( nurl_print ` ` ) ( nurl_print lval ) ( nurl_print `, 1\n` )
                 : s __co ( nurl_cg_reg cg )
                 ( emit_sink_owner_select lc `i8*` __ce `null` __co )
-                = w ( nurl_str_cat `c|` __co )
+                // (Journaled while the call runs, its registration ended
+                // just before the drop: the literal's field is the caller's
+                // until the call returns, agora #131.)
+                = w ( nurl_str_cat3 ( mem_journal_push_cloenv cg __co ) ` c|` __co )
             } {
                 ( __handle_drop_ensure lty )
                 ( __dropifv_request lty )
-                = w ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval )
+                = w ( nurl_str_cat3 ( mem_journal_push_temp cg lty lval lc ) ` ` ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval ) )
             }
             = owned ? == 0 ( nurl_str_len owned ) w ( nurl_str_cat3 owned ` ` w )
         }
@@ -23318,6 +23325,19 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ ( nurl_str_cat `j|` js )
 }
 
+// A temporary closure's env (an argument's: the literal, or a call's
+// result) is the call site's while the later arguments and the callee run:
+// its slot is journaled for that window, and the returned word (`j|slot`)
+// ends the registration once the call returns (mem_drop_arg_temps), just
+// before the env's drop. Elided where no panic can reach (__jrnl_elide).
+@ mem_journal_push_cloenv i cg s env → s {
+    : s js ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print js ) ( nurl_print ` = alloca i8*\n` )
+    ( nurl_print `  store i8* ` ) ( nurl_print env ) ( nurl_print `, ptr ` ) ( nurl_print js ) ( nurl_print `\n` )
+    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print js ) ( nurl_print `, ptr null, ptr @nurl_jdrop_cloenv)\n` )
+    ^ ( nurl_str_cat `j|` js )
+}
+
 // Emit a `void(i8*)` journal-drop thunk for an owned value of LLVM type
 // `llvm` whose typed destructor is `drop__<mangle>`: load the value from
 // its alloca and run the destructor. Used on the panic-unwind path to
@@ -23418,6 +23438,20 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 @ mem_clo_slot_new i syms i cg s name s owner → v {
     : s slot ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
+    // The panic journal (agora #131): the binding's value and its slot
+    // join the function's closure frame table (`;jcs`, __emit_hoisted_body),
+    // so a panic that unwinds past the binding drops the env it owns — the
+    // value's env while the slot is set, as at its scope exit. A `sink`
+    // parameter's value is the parameter: it is stored where the table can
+    // read it, before the slot says the env is owned.
+    : ~ s vptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len vptr ) {
+        : s ll ( nurl_llty ( nurl_sym_get syms name ) )
+        = vptr ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print vptr ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+        ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` %` ) ( nurl_print name ) ( nurl_print `, ptr ` ) ( nurl_print vptr ) ( nurl_print `\n` )
+    } {}
+    ( nurl_print `  ;jcs ` ) ( nurl_print vptr ) ( nurl_print ` ` ) ( nurl_print slot ) ( nurl_print `\n` )
     ( nurl_print `  store i8* ` ) ( nurl_print owner ) ( nurl_print `, i8** ` )
     ( nurl_print slot ) ( nurl_print `\n` )
     ( nurl_sym_def syms ( nurl_str_cat name `__envown` ) slot )
@@ -23521,9 +23555,11 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     : s slot ( nurl_sym_get2 syms name `__envown` )
     ? != 0 ( nurl_str_len slot )
     { : s ev ( mem_clo_slot_env syms cg name slot )
+        // Cleared first: a destructor of a capture that panics mid-drop
+        // leaves nothing for the journal's drain to drop again.
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
         ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ev ) ( nurl_print `)` )
         ( emit_dbg_eol )
-        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
         ^ v }
     {}
     : s ty ( nurl_sym_get syms name )
@@ -32240,13 +32276,31 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
     }
 }
 
+// What an assignment's value is to whatever reads it — the arm of a `?` /
+// `??` that ends in `= x …`, joined with its sibling: the value its
+// target now holds, lent. Never a fresh owner: the target owns it, and a
+// join that took the RHS's own bit (a `?` or `??` on the right, a call's
+// result) for the arm's dropped it as a discarded statement's value — on
+// the path where the target had just received it (#132: nurldb's
+// `__pick_access` handed back an `Access` whose key it had freed).
+@ __assign_result_lent i syms → v {
+    ( nurl_sym_def syms `__last_value_hown__` `false` )
+    ( nurl_sym_def syms `__last_join_own__` `` )
+    ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
+    ( nurl_sym_def syms `__last_value_alias__` `1` )
+}
+
 unsafe @ gen_assign i lex i syms i cg → s {
     // Borrow checker: source line of the `=` token.
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     // Field store: = . obj field val
     ? == ( nurl_lex_type lex ) TT_DOT
-    { ^ ( gen_field_store lex syms cg ) }
+    { : s __fs_v ( gen_field_store lex syms cg )
+        ( __assign_result_lent syms )
+        ^ __fs_v }
     {}
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
@@ -32986,6 +33040,26 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( mem_udrop_flag_set syms cg __ud_ptr __ud_g )
             } {}
         } {}
+        // `= x ? c x ( f )`: a join that may select this binding's own
+        // value hands it back lent (its arm is a bare `x`), and the old
+        // value's drop below then left x holding what it had just freed.
+        // On the paths where the join lends, the value is copied in: x
+        // owns what it holds on every path, and the old value goes by its
+        // flag as for any other assignment. (A value that cannot be copied
+        // is refused there: the owner has to give it up instead.)
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST
+        ( nurl_sym_has_word syms `__last_phi_idents__` name ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
+            : s __sj_jo ( nurl_sym_get syms `__last_join_own__` )
+            ? ! ( seq __sj_jo `true` ) {
+                : ~ s __sj_lent `1`
+                ? != 0 ( nurl_str_len __sj_jo ) {
+                    = __sj_lent ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __sj_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __sj_jo ) ( nurl_print `, 1\n` )
+                } {}
+                = store_val ( mem_emit_cloneif cg vt store_val __sj_lent )
+                ( nurl_sym_def syms `__last_join_own__` `true` )
+            } {}
+        } {}
         : b __ud_same F
         ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend ! __ud_same
         {  // (By the type the binding was registered with: an option /
@@ -33059,6 +33133,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // RHS expression) and disagree with the stored register's actual
         // type (`%WsErr` post-coercion), producing a phi type mismatch.
         ( nurl_set_last_type vt )
+        ( __assign_result_lent syms )
         // A COPY: store_val may alias `val`, a tracked local this
         // function's scope exit frees — returning the alias hands the
         // caller freed memory once gen_* results carry ownership.
@@ -45040,6 +45115,23 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         : i jr ( nurl_memmem_range # s + # i fp je - flen je `\n  ;jfs ` 8 )
         = jq ? < jr 0 -1 + je jr
     }
+    // The closure frame table (`;jcs <value> <slot>` lines, see
+    // mem_clo_slot_new): a pair of words per closure binding — where its
+    // value is and its owner slot. Both are allocas, so the table is filled
+    // here at entry; a slot is null until its binding owns an env, and
+    // again once the env is moved on or dropped (agora #131).
+    : ~ s jc_pairs ``
+    : ~ i jc_n 0
+    : ~ i cq ( nurl_str_find funcdef `\n  ;jcs ` )
+    ~ >= cq 0 {
+        : i cs + cq 8
+        : i ce ( __ha_line_end funcdef cs flen )
+        : s cw ( nurl_str_slice funcdef cs - ce cs )
+        = jc_pairs ? == 0 jc_n ( nurl_str_cat cw `` ) ( nurl_str_cat3 jc_pairs ` ` cw )
+        = jc_n + jc_n 1
+        : i cr ( nurl_memmem_range # s + # i fp ce - flen ce `\n  ;jcs ` 8 )
+        = cq ? < cr 0 -1 + ce cr
+    }
     // Header [0, hdr_end).
     : u sv_h . fp hdr_end
     = . fp hdr_end # u 0
@@ -45089,6 +45181,21 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         }
         ( nurl_print `  call void @nurl_journal_push_drop2(ptr %__jf, ptr null, ptr @nurl_jframe_drop)\n` )
     } {}
+    : s jc_ty ( nurl_str_cat3 `[` ( nurl_str_int + * jc_n 2 1 ) ` x ptr]` )
+    ? > jc_n 0 {
+        ( nurl_print `  %__jc = alloca ` ) ( nurl_print jc_ty ) ( nurl_print `\n` )
+        ( nurl_print `  store ptr inttoptr (i64 ` ) ( nurl_print ( nurl_str_int jc_n ) ) ( nurl_print ` to ptr), ptr %__jc\n` )
+        : ~ s cpr ( nurl_str_cat jc_pairs `` )
+        : ~ i ck 1
+        ~ != 0 ( nurl_str_len cpr ) {
+            : s cw ( str_first_word cpr ) = cpr ( str_skip_word cpr )
+            ( nurl_print `  %__jc` ) ( nurl_print ( nurl_str_int ck ) ) ( nurl_print ` = getelementptr inbounds ` )
+            ( nurl_print jc_ty ) ( nurl_print `, ptr %__jc, i64 0, i64 ` ) ( nurl_print ( nurl_str_int ck ) ) ( nurl_print `\n` )
+            ( nurl_print `  store ptr ` ) ( nurl_print cw ) ( nurl_print `, ptr %__jc` ) ( nurl_print ( nurl_str_int ck ) ) ( nurl_print `\n` )
+            = ck + ck 1
+        }
+        ( nurl_print `  call void @nurl_journal_push_drop2(ptr %__jc, ptr null, ptr @nurl_jframe_clo_drop)\n` )
+    } {}
     // Pass 2: everything else, in original order.
     = p hdr_end
     ~ < p bend {
@@ -45096,7 +45203,7 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         : u sv2 . fp le
         = . fp le # u 0
         : s line # s + # i fp p
-        ? ! ( __ha_is_alloca line ) {
+        ? & ! ( __ha_is_alloca line ) ! ( __ha_is_jcs line ) {
             ? & > jf_n 0 ( __ha_is_jfs line ) {
                 // A binding's slot now holds an owned value: its table
                 // entry points at it (idempotent on a loop's next pass).
@@ -45108,6 +45215,9 @@ unsafe @ __emit_hoisted_body s funcdef → v {
                 // first.
                 ? & > jf_n 0 ( __ha_is_ret line ) {
                     ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jf)\n` )
+                } {}
+                ? & > jc_n 0 ( __ha_is_ret line ) {
+                    ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jc)\n` )
                 } {}
                 ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
             }
@@ -45123,6 +45233,13 @@ unsafe @ __ha_is_jfs s line → b {
     ? < ( strlen line ) 8 { ^ F } {}
     : *u p # *u line
     ^ & & & == # i . p 2 59 == # i . p 3 106 == # i . p 4 102 == # i . p 5 115
+}
+
+// `  ;jcs %value %slot` — a closure binding joins the closure frame table.
+unsafe @ __ha_is_jcs s line → b {
+    ? < ( strlen line ) 8 { ^ F } {}
+    : *u p # *u line
+    ^ & & & == # i . p 2 59 == # i . p 3 106 == # i . p 4 99 == # i . p 5 115
 }
 
 // `  ret …` — a return instruction.
@@ -56440,6 +56557,8 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_journal_disown(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_jframe_drop(ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_jframe_clo_drop(ptr) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_jdrop_cloenv(ptr) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_memcpy(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_memmove(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2" "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_memset(i8* nocapture nofree, i64, i64) "nurl.value-only"="2" "nurl.raw"="1"` )

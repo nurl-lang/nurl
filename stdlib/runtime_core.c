@@ -3777,6 +3777,35 @@ NURL_TLS_FN void nurl_jframe_drop(void *table) {
     }
 }
 
+/* A function's closure bindings, registered as ONE slot entry the same way
+ * (agora #131): word 0 holds n, then a pair of words per binding — the
+ * address of its value `{ fn, env }` and of its owner slot. The slot holds
+ * an env exactly while the binding owns its value's env: null before the
+ * binding is made (every `i8*` alloca starts null), and again once the env
+ * is moved on or dropped. A panic drops the VALUE's env under a set slot,
+ * as the binding's scope exit would (h297: an `inout` callee may have
+ * replaced the value), clearing the slot first. */
+NURL_TLS_FN void nurl_jframe_clo_drop(void *table) {
+    void **f = (void **)table;
+    size_t n = (size_t)(uintptr_t)f[0];
+    for (size_t k = 0; k < n; k++) {
+        void **val = (void **)f[1 + 2 * k];
+        void **own = (void **)f[2 + 2 * k];
+        if (!val || !own || !*own) continue;
+        *own = NULL;
+        nurl_closure_drop(val[1]);
+    }
+}
+
+/* A temporary closure's env, journaled for the call it is an argument of:
+ * the slot holds the env. */
+NURL_TLS_FN void nurl_jdrop_cloenv(void *slot) {
+    void **sp = (void **)slot;
+    void *env = *sp;
+    *sp = NULL;
+    nurl_closure_drop(env);
+}
+
 /* An owned value leaves through a struct (stored into a longer-lived
  * owner, returned): forget its pointer registration, and unregister every
  * frame slot that currently holds it — the binding's slot keeps the
