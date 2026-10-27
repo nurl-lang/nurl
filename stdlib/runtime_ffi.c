@@ -4294,6 +4294,20 @@ void nurl_udp_close(long long handle) {
     free(h);
 }
 
+/* Stop a UDP socket now (`udp_close`): close its fd and KEEP the struct.
+ * Every copy of the handle still names it — reading it after the close
+ * read freed memory — and its last owner releases it (nurl_udp_close, the
+ * handle's drop). Idempotent; a later call on it reports NetClosed. */
+void nurl_udp_shutdown(long long handle) {
+    NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
+    if (!h) return;
+    if (h->fd != NURL_INVALID_SOCK) {
+        nurl_close_sock(h->fd);
+        h->fd = NURL_INVALID_SOCK;
+    }
+    h->err_kind = NURL_NET_ERR_CLOSED;
+}
+
 long long nurl_udp_set_broadcast(long long handle, long long on) {
     NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK) {
@@ -5136,6 +5150,9 @@ long long nurl_udp_family(long long h)                 { return nurl__ni_udp_fam
 void nurl_udp_set_nonblock(long long h, long long on)  { nurl__ni_udp_set_nonblock(h, on); }
 void nurl_udp_set_timeout(long long h, long long ms)   { nurl__ni_udp_set_timeout(h, ms); }
 void nurl_udp_close(long long h)                       { nurl__ni_udp_close(h); }
+/* The host has no half-close: the socket stays open until its last owner
+ * closes it (nurl_udp_close). */
+void nurl_udp_shutdown(long long h)                    { (void)h; }
 long long nurl_udp_set_broadcast(long long h, long long on) { return nurl__ni_udp_set_broadcast(h, on); }
 long long nurl_udp_join_group(long long h, const char *g, const char *i) {
     return nurl__ni_udp_join_group(h, g ? g : "", i ? i : "");
@@ -5316,6 +5333,7 @@ long long nurl_udp_family(long long h)                 { (void)h; return -1; }
 void nurl_udp_set_nonblock(long long h, long long on)  { (void)h; (void)on; }
 void nurl_udp_set_timeout(long long h, long long ms)   { (void)h; (void)ms; }
 void nurl_udp_close(long long h)                       { (void)h; }
+void nurl_udp_shutdown(long long h)                    { (void)h; }
 long long nurl_udp_set_broadcast(long long h, long long on)            { (void)h; (void)on; return -1; }
 long long nurl_udp_join_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }
 long long nurl_udp_leave_group(long long h, const char *g, const char *i){ (void)h; (void)g; (void)i; return -1; }

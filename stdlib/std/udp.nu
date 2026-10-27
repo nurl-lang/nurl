@@ -54,10 +54,11 @@
 //
 // Memory model:
 //
-//   * `UdpSocket` is a single-field opaque handle (`s raw`) wrapping a
-//     heap `NurlUdp*` cast to i64. `udp_close` MUST be called exactly
-//     once per Ok-path; Err arms NEVER carry a handle (the runtime
-//     frees its half before returning).
+//   * `UdpSocket` is a handle: every copy (`UdpSocket_share`) is the same
+//     socket, and its last owner closes it — nothing to close by hand.
+//     `udp_close` stops it early: every copy then sees it closed. Err
+//     arms never carry a handle (the runtime frees its half before
+//     returning).
 //   * `udp_recv_from` returns an OWNED `UdpPacket { data peer }`.
 //     Caller frees with `udp_packet_free`.
 //   * `udp_send_to` / `udp_send` / `udp_send_str_to` BORROW their input
@@ -121,6 +122,8 @@ unsafe & `c` @ nurl_udp_set_timeout i handle i ms → v
 
 unsafe & `c` @ nurl_udp_close i handle → v
 
+unsafe & `c` @ nurl_udp_shutdown i handle → v
+
 unsafe & `c` @ nurl_udp_set_broadcast i handle i on → i
 
 & `c` @ nurl_udp_join_group i handle s group s iface → i
@@ -143,10 +146,35 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
 // ── Public types ───────────────────────────────────────────────────
 
-: UdpSocket { s raw }
+// The socket's state: the runtime handle. An early udp_close stops it
+// (closes the fd); the last owner releases the handle.
+: UdpSocketImpl { i raw }
+
+% Drop UdpSocketImpl {
+    @ drop UdpSocketImpl u → v { ( nurl_udp_close . u raw ) }
+}
+
+// A socket is a handle: every copy is the same socket, and the last owner
+// closes it. It used to be the bare runtime pointer with a close by hand:
+// a socket never closed leaked its record and its fd, and one read after
+// its close read freed memory.
+: UdpSocket { ( Shared UdpSocketImpl ) ctl }
 
 // Its drop closes something the outside world sees (stdlib/core/marker.nu).
 % Resource UdpSocket {}
+
+@ UdpSocket_share UdpSocket h → UdpSocket { ^ @ UdpSocket { ( shared_clone [UdpSocketImpl] . h ctl ) } }
+
+@ UdpSocket_drop sink UdpSocket h → v {}
+
+// The runtime handle behind a socket (0: none).
+@ __udp_raw UdpSocket sk → i { ^ . ( shared_ptr [UdpSocketImpl] . sk ctl ) raw }
+
+@ __udp_make i raw → UdpSocket { ^ @ UdpSocket { ( shared_new [UdpSocketImpl] @ UdpSocketImpl { raw } ) } }
+
+// A socket that is none, for a place a bind fills later: every operation
+// on it reports an error.
+@ udp_socket_none → UdpSocket { ^ ( __udp_make 0 ) }
 
 : UdpPacket {
     ( Vec u ) data
@@ -165,9 +193,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
         ( nurl_udp_close raw )
         ^ @ !UdpSocket NetErr { F ( _net_err_of ek ) }
     } {}
-    : s rp # s raw
-    : UdpSocket sk @ UdpSocket { rp }
-    ^ @ !UdpSocket NetErr { T sk }
+    ^ @ !UdpSocket NetErr { T ( __udp_make raw ) }
 }
 
 // Convenience — wildcard bind with the kernel choosing the port.
@@ -180,8 +206,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // instead of the explicit sendto/recvfrom variants. Also wires up the
 // kernel to report ICMP unreachables synchronously on the next call.
 @ udp_connect UdpSocket sk s host i port → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_connect raw host port )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -190,19 +215,16 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
     ^ @ !v NetErr { T 0 }
 }
 
-@ udp_close UdpSocket sk → v {
-    : s rp . sk raw
-    : i raw # i rp
-    ( nurl_udp_close raw )
-}
+// Stop the socket now rather than with its last owner: every copy sees it
+// closed (NetClosed). The last owner releases the rest.
+@ udp_close UdpSocket sk → v { ( nurl_udp_shutdown ( __udp_raw sk ) ) }
 
 // ── Address accessors ──────────────────────────────────────────────
 
 // BORROWED view of the last-peer address ("ip:port" for IPv4,
 // "[ip]:port" for IPv6). Empty until the first recv_from / connect.
 @ udp_peer_addr UdpSocket sk → s {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ^ ( nurl_udp_peer_addr raw )
 }
 
@@ -211,40 +233,34 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // discovers which port the kernel actually picked. Caller frees
 // with `string_free`.
 @ udp_local_addr UdpSocket sk → String {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ^ ( string_adopt ( nurl_udp_local_addr raw ) )
 }
 
 @ udp_family UdpSocket sk → i {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ^ ( nurl_udp_family raw )
 }
 
 @ udp_get_fd UdpSocket sk → i {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ^ ( nurl_udp_get_fd raw )
 }
 
 // ── Socket options ─────────────────────────────────────────────────
 
 @ udp_set_timeout UdpSocket sk i ms → v {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_timeout raw ms )
 }
 
 @ udp_set_nonblock UdpSocket sk i on → v {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_nonblock raw on )
 }
 
 @ udp_set_broadcast UdpSocket sk i on → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_set_broadcast raw on )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -256,8 +272,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // ── Multicast ──────────────────────────────────────────────────────
 
 @ udp_join_group UdpSocket sk s group s iface → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_join_group raw group iface )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -267,8 +282,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_leave_group UdpSocket sk s group s iface → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_leave_group raw group iface )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -278,8 +292,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_set_multicast_ttl UdpSocket sk i ttl → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_set_multicast_ttl raw ttl )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -289,8 +302,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_set_multicast_loop UdpSocket sk i on → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_set_multicast_loop raw on )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
@@ -313,8 +325,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
     // Context-aware dispatch — see tcp_read_chunk's note.
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( udp_send_to_async sk bytes host port ) } {}
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i n ( vec_len [u] bytes )
     ? <= n 0 {
         // Allow zero-length datagrams — pass NULL buffer through.
@@ -337,8 +348,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
 // String convenience — sends bytes [0..nurl_str_len) of `text`.
 @ udp_send_str_to UdpSocket sk s text s host i port → !i NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i n ( nurl_str_len text )
     : i sent ( nurl_udp_send_to raw text n host port )
     ? < sent 0 {
@@ -355,8 +365,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 @ udp_recv_from UdpSocket sk i max → !UdpPacket NetErr {
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( udp_recv_from_async sk max ) } {}
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ? <= max 0 {
         : ( Vec u ) v0 ( vec_new [u] )
         : String p0 ( string_new )
@@ -380,8 +389,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 @ udp_send UdpSocket sk ( Vec u ) bytes → !i NetErr {
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( udp_send_async sk bytes ) } {}
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i n ( vec_len [u] bytes )
     ? <= n 0 {
         : i sent ( nurl_udp_send raw `` 0 )
@@ -407,8 +415,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 @ udp_recv UdpSocket sk i max → !( Vec u ) NetErr {
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( udp_recv_async sk max ) } {}
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ? <= max 0 {
         : ( Vec u ) v0 ( vec_new [u] )
         ^ @ !( Vec u ) NetErr { T v0 }
@@ -438,8 +445,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // no-data — mixing sync + async on one socket is not supported.
 
 @ udp_recv_from_async UdpSocket sk i max → !UdpPacket NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_nonblock raw 1 )
     : i fd ( nurl_udp_get_fd raw )
     ? <= max 0 {
@@ -472,8 +478,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_recv_async UdpSocket sk i max → !( Vec u ) NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_nonblock raw 1 )
     : i fd ( nurl_udp_get_fd raw )
     ? <= max 0 {
@@ -503,8 +508,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_send_to_async UdpSocket sk ( Vec u ) bytes s host i port → !i NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_nonblock raw 1 )
     : i fd ( nurl_udp_get_fd raw )
     : i n ( vec_len [u] bytes )
@@ -527,8 +531,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 }
 
 @ udp_send_async UdpSocket sk ( Vec u ) bytes → !i NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ( nurl_udp_set_nonblock raw 1 )
     : i fd ( nurl_udp_get_fd raw )
     : i n ( vec_len [u] bytes )
@@ -624,8 +627,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // the socket's receive timeout (SO_RCVTIMEO) for the duration of the
 // call, so the same contract holds on a plain OS thread.
 @ udp_recv_into_deadline UdpSocket sk ( Vec u ) buf ( Vec u ) from i deadline_ms → !i NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     ? <= ( vec_cap [u] buf ) 0 { ^ @ !i NetErr { F # NetErr NetRead } } {}
     : i fcur ( nurl_fiber_current )
     ? == fcur 0 {
@@ -666,8 +668,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // Send `bytes` to an address obtained from `udp_recv_into` or
 // `udp_addr_resolve`. No resolver involved.
 @ udp_send_addr UdpSocket sk ( Vec u ) bytes ( Vec u ) to → !i NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i n ( vec_len [u] bytes )
     : *u p ( vec_data [u] bytes )
     : s pbuf ? <= n 0 `` # s p
@@ -699,8 +700,7 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 // IP_TOS, …); a name the platform lacks resolves to -1 and is refused
 // here rather than handed to the kernel as a number.
 @ udp_setsockopt_int UdpSocket sk i level i opt i val → !v NetErr {
-    : s rp . sk raw
-    : i raw # i rp
+    : i raw ( __udp_raw sk )
     : i rc ( nurl_udp_setsockopt_int raw level opt val )
     ? < rc 0 {
         : i ek ( nurl_udp_err_kind raw )
