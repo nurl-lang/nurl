@@ -85,6 +85,11 @@ $ `stdlib/core/vec.nu`
     } )
     ( runtime_run )
     ( runtime_shutdown )
+    = k 0
+    ~ < k n {
+        ( udp_close ( vec_at [UdpSocket] socks k ) )
+        = k + k 1
+    }
     ( nurl_print `oldest woken within 2 s: ` ) ( nurl_print_int got ) ( nurl_print `/` ) ( nurl_println_int early )
     ^ 0
 }

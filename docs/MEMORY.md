@@ -28,7 +28,8 @@ specified in spec §3.3d.
   the bodies of `unsafe` functions is memory-safe and leak-free, data
   races and the panic path included. Each hole found so far is a probe in
   `tools/fuzz/holes/` that CI holds rejected or clean under the
-  sanitizers, but one: a leak, open (`tools/fuzz/holes/open/`, below). A view is tracked wherever it goes (§2.10).
+  sanitizers, but two, open (`tools/fuzz/holes/open/`, below): a leak
+  class, and `UdpSocket`'s missing drop. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -869,7 +870,14 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One hole is known open, a leak:** a binding whose value views a call's
+**Two holes are known open.** `UdpSocket` is the runtime record's
+address with no drop: read after `udp_close` it reads freed memory, and a
+socket never closed leaks its record and fd (agora #139; the fix — a
+handle with a drop, as every other resource has — waits on a way to move a
+handle out of an option binding to a fiber, #140). Close a `UdpSocket`
+exactly once and do not use it after.
+
+**And a leak:** a binding whose value views a call's
 temporary argument leaks the temporary (`: s v ( first ( string_from … )
 )`, with `first` handing back a view of its argument), and so does a
 closure whose env views one (a call returning a closure that captures its
@@ -1345,7 +1353,7 @@ in. And a closure's env was not in the panic journal (h375–h377): a
 literal handed to a call, a bound closure, a struct literal's closure
 field; each function's closure bindings are now one frame-table entry,
 and an argument's closure and literal fields are journaled while the
-call runs (§7.2). The one open hole is the leak above.
+call runs (§7.2). The two open holes are above.
 
 The rules that carry it:
 

@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
+- **A `UdpSocket` read after `udp_close` reads freed memory, and one
+  never closed leaks its record and fd** (Agora #139;
+  `tools/fuzz/holes/open/`). The handle is the runtime record's address.
+  It has no drop, and its "close exactly once" contract is not checked.
+  This predates 0.79.0, and it was found by the new UDP tests' LSan run.
+  The fix gives it the handle-with-a-drop shape every other resource has.
+  That is written, but it waits on #140: a way to hand a fiber the only
+  owner of a handle taken out of an option binding. Close each
+  `UdpSocket` exactly once and do not use it after.
+
 - **A binding that views a call's temporary argument leaks the temporary**
   (Agora #138; `tools/fuzz/holes/open/`). The pattern is
   `: s v ( first ( string_from … ) )`, where `first` hands back a view of

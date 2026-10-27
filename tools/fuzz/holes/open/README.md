@@ -1,13 +1,21 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**One class, a leak (agora #138):**
+**Two classes (agora #138, #139):**
 
-| Probe | What leaks |
+| Probe | What happens |
 |---|---|
+| `udp_socket_read_after_close.nu` | A `UdpSocket` read after `udp_close`: the handle is the runtime record's address and the close freed it — heap-use-after-free (#139) |
+| `udp_socket_never_closed_leaks.nu` | A `UdpSocket` never closed leaks its record and fd: it has no drop, and "close exactly once" is unchecked (#139) |
 | `binding_viewing_a_call_temporary_leaks_it.nu` | `: s v ( first ( string_from … ) )`, `first` handing back a view of its argument: the String the binding views is never dropped |
 | `closure_over_a_temporary_argument_leaks_it.nu` | `( mk ( string_from … ) )`, `mk` returning a closure that captures its parameter without taking it over: the String the env views is never dropped |
 
-The temporary must outlive the binding (or the closure). The compiler keeps
+`UdpSocket` needs the shape every other resource has — a handle with a
+drop, `udp_close` only stopping the socket (the fix is written, agora
+#139) — and that needs a way to move a handle out of an option binding
+to a fiber as its only owner (agora #140), or the thread crossing check
+rightly refuses the sharing UDP code does today.
+
+For the first class: the temporary must outlive the binding (or the closure). The compiler keeps
 it alive by never dropping it — a leak, never a use after free — because
 the borrow checker has no name for a temporary with which to keep the view
 from escaping it. The fix gives such a temporary an owner the borrow

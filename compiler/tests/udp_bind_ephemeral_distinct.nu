@@ -45,6 +45,11 @@ $ `stdlib/core/vec.nu`
         }
         = k + k 1
     }
+    = k 0
+    ~ < k ( vec_len [UdpSocket] socks ) {
+        ( udp_close ( vec_at [UdpSocket] socks k ) )
+        = k + k 1
+    }
     ( nurl_print `ports shared: ` ) ( nurl_println_int dup )
     ^ 0
 }
