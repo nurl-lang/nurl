@@ -159,131 +159,136 @@ $ `stdlib/core/slice.nu`
 @ main → i {
     ( runtime_init 2 )
 
-    // Each socket is taken out of its result: the fiber and the thread
-    // below are then handed the only owner of each.
-    : UdpSocket srv ?? ( udp_bind `` 0 ) {
-        T s → s
-        F e → { ( pr_str `server_bind` ( net_err_name e ) ) ^ 1 }
-    }
-    : UdpSocket cli ?? ( udp_bind `127.0.0.1` 0 ) {
-        T c → c
-        F e → { ( pr_str `client_bind` ( net_err_name e ) ) ^ 1 }
-    }
-    {
-        : String slocal ( udp_local_addr srv )
-        : i sport ( port_of slocal )
-        : String clocal ( udp_local_addr cli )
-        = client_port ( port_of clocal )
-        ( string_free slocal )
-        ( string_free clocal )
+    : !UdpSocket NetErr sr ( udp_bind `` 0 )
+    : !UdpSocket NetErr cr ( udp_bind `127.0.0.1` 0 )
+    ?? sr {
+        F e → {
+            ( pr_str `server_bind` ( net_err_name e ) )
+            ?? cr { T c → ( udp_close c ) F _ → {} }
+            ^ 1
+        }
+        T srv → {
+            ?? cr {
+                F e → { ( pr_str `client_bind` ( net_err_name e ) ) ( udp_close srv ) ^ 1 }
+                T cli → {
+                    : String slocal ( udp_local_addr srv )
+                    : i sport ( port_of slocal )
+                    : String clocal ( udp_local_addr cli )
+                    = client_port ( port_of clocal )
+                    ( string_free slocal )
+                    ( string_free clocal )
 
-        : ( Channel i ) done ( chan_new [i] )
-        // spawn_owned: the runtime frees the fiber's env when
-        // the fiber ends (plain `spawn` leaks one env per
-        // fire-and-forget spawn — async.nu:96).
-        ( spawn_owned \ → v { ( server_fiber srv done ) } )
+                    : ( Channel i ) done ( chan_new [i] )
+                    // spawn_owned: the runtime frees the fiber's env when
+                    // the fiber ends (plain `spawn` leaks one env per
+                    // fire-and-forget spawn — async.nu:96).
+                    ( spawn_owned \ → v { ( server_fiber srv done ) } )
 
-        : ( @ v ) client \ → v {
-            // 2. Thread path: SO_RCVTIMEO for one call.
-            : ( Vec u ) cbuf ( vec_with_cap [u] 64 )
-            : ( Vec u ) cfrom ( udp_addr_new )
-            : !i NetErr t ( udp_recv_into_deadline cli cbuf cfrom 50 )
-            ?? t {
-                T n → { = cli_timeout_first 0 }
-                F e → { = cli_timeout_first ? ( net_is_timeout e ) 1 0 }
-            }
-            // Give the server fiber's 100 ms deadline time to fire.
-            ( sleep_ms 250 )
-
-            // 3. Resolve once, send "ping".
-            : !( Vec u ) NetErr ar ( udp_addr_resolve `127.0.0.1` sport )
-            ?? ar {
-                F e → { = cli_resolve_failed 1 }
-                T to → {
-                    = cli_resolve_family ( udp_addr_family to )
-                    = cli_resolve_port_match ? == ( udp_addr_port to ) sport 1 0
-                    : String txt ( udp_addr_format to )
-                    : String want ( string_from `127.0.0.1:` )
-                    ( string_push_int want sport )
-                    = cli_resolve_format_match ? ( string_eq txt want ) 1 0
-                    ( string_free want )
-                    ( string_free txt )
-
-                    : ( Vec u ) ping ( bytes_from_str `ping` )
-                    : !i NetErr w ( udp_send_addr cli ping to )
-                    ?? w {
-                        T n → { = cli_send_ping n }
-                        F e → { = cli_send_ping -2 }
-                    }
-                    ( vec_free [u] ping )
-
-                    // 5. "pong" back within 2 s.
-                    : !i NetErr r ( udp_recv_into_deadline cli cbuf cfrom 2000 )
-                    ?? r {
-                        T n → {
-                            : String got ( bytes_to_str cbuf )
-                            = cli_recv_pong ? ( nurl_str_eq ( string_data got ) `pong` ) 1 0
-                            ( string_free got )
-                            = cli_recv_from_server_port ? == ( udp_addr_port cfrom ) sport 1 0
-                            = cli_recv_from_family ( udp_addr_family cfrom )
+                    : ( @ v ) client \ → v {
+                        // 2. Thread path: SO_RCVTIMEO for one call.
+                        : ( Vec u ) cbuf ( vec_with_cap [u] 64 )
+                        : ( Vec u ) cfrom ( udp_addr_new )
+                        : !i NetErr t ( udp_recv_into_deadline cli cbuf cfrom 50 )
+                        ?? t {
+                            T n → { = cli_timeout_first 0 }
+                            F e → { = cli_timeout_first ? ( net_is_timeout e ) 1 0 }
                         }
-                        F e → { = cli_recv_pong -1 }
-                    }
+                        // Give the server fiber's 100 ms deadline time to fire.
+                        ( sleep_ms 250 )
 
-                    // 6. Longer datagram, same peer.
-                    : ( Vec u ) second ( bytes_from_str `second-datagram-longer-than-ping` )
-                    : !i NetErr w2 ( udp_send_addr cli second to )
-                    ?? w2 {
-                        T n → { = cli_send_second n }
-                        F e → { = cli_send_second -2 }
+                        // 3. Resolve once, send "ping".
+                        : !( Vec u ) NetErr ar ( udp_addr_resolve `127.0.0.1` sport )
+                        ?? ar {
+                            F e → { = cli_resolve_failed 1 }
+                            T to → {
+                                = cli_resolve_family ( udp_addr_family to )
+                                = cli_resolve_port_match ? == ( udp_addr_port to ) sport 1 0
+                                : String txt ( udp_addr_format to )
+                                : String want ( string_from `127.0.0.1:` )
+                                ( string_push_int want sport )
+                                = cli_resolve_format_match ? ( string_eq txt want ) 1 0
+                                ( string_free want )
+                                ( string_free txt )
+
+                                : ( Vec u ) ping ( bytes_from_str `ping` )
+                                : !i NetErr w ( udp_send_addr cli ping to )
+                                ?? w {
+                                    T n → { = cli_send_ping n }
+                                    F e → { = cli_send_ping -2 }
+                                }
+                                ( vec_free [u] ping )
+
+                                // 5. "pong" back within 2 s.
+                                : !i NetErr r ( udp_recv_into_deadline cli cbuf cfrom 2000 )
+                                ?? r {
+                                    T n → {
+                                        : String got ( bytes_to_str cbuf )
+                                        = cli_recv_pong ? ( nurl_str_eq ( string_data got ) `pong` ) 1 0
+                                        ( string_free got )
+                                        = cli_recv_from_server_port ? == ( udp_addr_port cfrom ) sport 1 0
+                                        = cli_recv_from_family ( udp_addr_family cfrom )
+                                    }
+                                    F e → { = cli_recv_pong -1 }
+                                }
+
+                                // 6. Longer datagram, same peer.
+                                : ( Vec u ) second ( bytes_from_str `second-datagram-longer-than-ping` )
+                                : !i NetErr w2 ( udp_send_addr cli second to )
+                                ?? w2 {
+                                    T n → { = cli_send_second n }
+                                    F e → { = cli_send_second -2 }
+                                }
+                                ( vec_free [u] second )
+                                ( vec_free [u] to )
+                            }
+                        }
+                        ( vec_free [u] cfrom )
+                        ( vec_free [u] cbuf )
                     }
-                    ( vec_free [u] second )
-                    ( vec_free [u] to )
+                    : !Thread ThreadErr ct ( thread_spawn client )
+
+                    : ?i res ( chan_recv [i] done )
+                    : i server_done ?? res { T v → v F → -1 }
+                    ?? ct {
+                        T t → ( thread_join t )
+                        F e → {}
+                    }
+                    // Every line is printed here, after the client thread has
+                    // joined and the server fiber has reported: two threads
+                    // printing on their own would interleave nondeterministically.
+                    ( pr_int `client_timeout_first` cli_timeout_first )
+                    ( pr_int `resolve_failed` cli_resolve_failed )
+                    ( pr_int `resolve_family` cli_resolve_family )
+                    ( pr_int `resolve_port_match` cli_resolve_port_match )
+                    ( pr_int `resolve_format_match` cli_resolve_format_match )
+                    ( pr_int `client_send_ping` cli_send_ping )
+                    ( pr_int `client_recv_pong` cli_recv_pong )
+                    ( pr_int `client_recv_from_server_port` cli_recv_from_server_port )
+                    ( pr_int `client_recv_from_family` cli_recv_from_family )
+                    ( pr_int `client_send_second` cli_send_second )
+                    ( pr_int `server_done` server_done )
+                    // thread_spawn borrows the closure's heap env; the
+                    // thread has joined, so free it here (LSan gate).
+                    ( runtime_run )
+                    ( runtime_shutdown )
+
+                    ( pr_int `srv_first_timeout` srv_first_timeout )
+                    ( pr_int `srv_ping_len` srv_ping_len )
+                    ( pr_int `srv_ping_family` srv_ping_family )
+                    ( pr_int `srv_ping_port_match` srv_ping_port_match )
+                    ( pr_int `srv_pong_sent` srv_pong_sent )
+                    ( pr_int `srv_second_len` srv_second_len )
+                    ( pr_int `srv_second_same_peer` srv_second_same_peer )
+                    ( pr_int `srv_second_cap_kept` srv_second_cap_kept )
+
+                    ( chan_close [i] done )
+                    ( chan_free [i] done )
+                    // (srv went to the server fiber and cli to the client
+                    // thread, each the only owner: each closes with its
+                    // closure's env.)
                 }
             }
-            ( vec_free [u] cfrom )
-            ( vec_free [u] cbuf )
         }
-        : !Thread ThreadErr ct ( thread_spawn client )
-
-        : ?i res ( chan_recv [i] done )
-        : i server_done ?? res { T v → v F → -1 }
-        ?? ct {
-            T t → ( thread_join t )
-            F e → {}
-        }
-        // Every line is printed here, after the client thread has
-        // joined and the server fiber has reported: two threads
-        // printing on their own would interleave nondeterministically.
-        ( pr_int `client_timeout_first` cli_timeout_first )
-        ( pr_int `resolve_failed` cli_resolve_failed )
-        ( pr_int `resolve_family` cli_resolve_family )
-        ( pr_int `resolve_port_match` cli_resolve_port_match )
-        ( pr_int `resolve_format_match` cli_resolve_format_match )
-        ( pr_int `client_send_ping` cli_send_ping )
-        ( pr_int `client_recv_pong` cli_recv_pong )
-        ( pr_int `client_recv_from_server_port` cli_recv_from_server_port )
-        ( pr_int `client_recv_from_family` cli_recv_from_family )
-        ( pr_int `client_send_second` cli_send_second )
-        ( pr_int `server_done` server_done )
-        // thread_spawn borrows the closure's heap env; the
-        // thread has joined, so free it here (LSan gate).
-        ( runtime_run )
-        ( runtime_shutdown )
-
-        ( pr_int `srv_first_timeout` srv_first_timeout )
-        ( pr_int `srv_ping_len` srv_ping_len )
-        ( pr_int `srv_ping_family` srv_ping_family )
-        ( pr_int `srv_ping_port_match` srv_ping_port_match )
-        ( pr_int `srv_pong_sent` srv_pong_sent )
-        ( pr_int `srv_second_len` srv_second_len )
-        ( pr_int `srv_second_same_peer` srv_second_same_peer )
-        ( pr_int `srv_second_cap_kept` srv_second_cap_kept )
-
-        ( chan_close [i] done )
-        ( chan_free [i] done )
-        // (cli went to the client thread and srv to the server
-        // fiber: each closes with its closure's env.)
     }
 
     // 7. Pure address formatting — IPv6 loopback, a middle zero run,
