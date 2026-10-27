@@ -11861,11 +11861,15 @@ unsafe @ nurl_lex_peek4_type i h → i {
                     : b violated ? inverted ! lacks lacks
                     : s advice ? inverted
                     `That bound demands a type which must NOT cross a thread boundary, and this one may — mark it '% NotSend <Type> { }' / '% NotSync <Type> { }' if it genuinely must not (stdlib/core/marker.nu).`
-                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with an 'unsafe % Send <Type> { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.`
+                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: `
                     ? violated
                     { : s q1 ( nurl_str_cat4 `type '` ta `' does not satisfy the bound ` ( nurl_str_cat3 tp `: ` bt ) )
                         : s q2 ( nurl_str_cat3 q1 ` on generic '` ( nurl_str_cat fname `'. ` ) )
-                        ( die lex ( nurl_str_cat q2 advice ) ) }
+                        // What the type reaches, and the fix for that: the
+                        // reason a thread boundary would give (an Rc, a
+                        // Cell, a trait object whose trait promises nothing).
+                        ? inverted { ( die lex ( nurl_str_cat q2 advice ) ) }
+                        { ( die lex ( nurl_str_cat3 q2 advice ( __thr_explain ( __thr_check syms ta_llvm want 0 ) ) ) ) } }
                     {} }
                 { ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
                     { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
@@ -16317,7 +16321,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_print `  ` ) ( nurl_print __data ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print ` ` ) ( nurl_print __fat ) ( nurl_print `, 0\n` )
             : s __vtp ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __vtp ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print ` ` ) ( nurl_print __fat ) ( nurl_print `, 1\n` )
-            : i __vsz + ( dyn_flat_count __dtrait ) 1
+            : i __vsz ( dyn_vt_size __dtrait )
             : s __vszs ( nurl_str_int __vsz )
             : s __arr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __arr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print __vtp ) ( nurl_print ` to [` ) ( nurl_print __vszs ) ( nurl_print ` x i8*]*\n` )
@@ -23955,11 +23959,6 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
             ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
         } {}
     } {}
-    : s cond ( mem_drop_cond syms cg ptr )
-    : s bc ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print bc )
-    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
-    ( nurl_print ` to i8*\n` )
     // Branch-free (see mem_emit_gated_drop): a dead registration journals
     // a null destructor, which the runtime skips.
     : ~ s fnv ( nurl_str_cat `@__jdrop_` impl_mangle )
@@ -23973,6 +23972,33 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_print `, ptr @__jglue_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `\n` )
         = fnv gsel
     } {}
+    // A binding with a drop flag is journaled with it, as a handle's is
+    // (mem_journal_push_handle): the drain reads the flag, so a move that
+    // clears it — into a literal, a `sink` parameter, a closure's capture,
+    // a `dyn` box — ends the registration too. Read once at the push, it
+    // said "owns" for good, and a panic after the move ran the destructor
+    // on a value its new owner dropped as well.
+    : s live ( nurl_sym_get2 syms ptr `__live` )
+    ? != 0 ( nurl_str_len live ) {
+        : s sf ( nurl_sym_get2 syms ptr `__sinkflag` )
+        ? != 0 ( nurl_str_len sf ) {
+            : s c ( nurl_cg_reg cg )
+            ( emit_sink_flag_load sf c )
+            : s sel ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print c )
+            ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `, ptr null\n` )
+            = fnv sel
+        } {}
+        ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` )
+        ( nurl_print live ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
+        ( nurl_sym_def g_fn_escapes ( nurl_str_cat3 ptr `__ujs` ( nurl_str_int g_ff_gen ) ) `1` )
+        ^ v
+    } {}
+    : s cond ( mem_drop_cond syms cg ptr )
+    : s bc ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print bc )
+    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
+    ( nurl_print ` to i8*\n` )
     ? != 0 ( nurl_str_len cond )
     { : s sel ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print cond )
@@ -24031,8 +24057,9 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // emitted wherever its typed drop is run on the normal path, so a later
 // panic in the same extent cannot replay an already-run destructor.
 @ mem_journal_forget_userdrop i cg s ptr s vt → v {
-    // A call's temporary owner is journaled by its slot.
-    ? != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) {
+    // A call's temporary owner is journaled by its slot, and so is a
+    // binding with a drop flag (mem_journal_push_userdrop).
+    ? | != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__ujs` ( nurl_str_int g_ff_gen ) ) ) {
         ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
         ^ v
     } {}
@@ -38999,6 +39026,37 @@ unsafe @ __thr_peel s lty → s {
     ^ ( nurl_str_cat `%` ( nurl_str_slice lty + at 2 - n + at 2 ) )
 }
 
+// __dyn_trait_of: the trait a trait-object base name spells — `dyn.Peek`
+// (the object type `%dyn.Peek` itself) or `dyn_Peek` (its word inside a
+// generic's mangle, `%Vec__dyn_Peek`) — or "" when `bn` names none. A
+// `dyn_` word is the object only when the rest is a trait, so a struct
+// of the program's own spelled that way stays itself (__dyn_unslug).
+@ __dyn_trait_of s bn → s {
+    : i n ( nurl_str_len bn )
+    ? | < n 5 & == 0 ( nurl_str_starts bn `dyn.` ) == 0 ( nurl_str_starts bn `dyn_` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s tn ( nurl_str_slice bn 4 - n 4 )
+    ? == 0 ( nurl_sym_len2 g_trait_syms tn `__istrait` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ tn
+}
+
+// __trait_has_super: does trait `tname` name `want` among its
+// supertraits at any depth (`% Job [T] : Task`, `% Task [T] : Send`)?
+@ __trait_has_super s tname s want → b {
+    // Owned copies, so the cursor is tracked (see dyn_flat_count).
+    : ~ s work ( nurl_str_cat ( nurl_sym_get2 g_trait_syms tname `__supers` ) `` )
+    : ~ s seen ( nurl_str_cat `` `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s sup ( str_first_word work ) = work ( str_skip_word work )
+        ? & != 0 ( nurl_str_len sup ) ! ( str_contains_word seen sup ) {
+            ? ( seq sup want ) { ^ T } {}
+            = seen ( nurl_str_cat3 seen ` ` sup )
+            : s ss ( nurl_sym_get2 g_trait_syms sup `__supers` )
+            ? != 0 ( nurl_str_len ss ) { = work ( nurl_str_cat3 work ` ` ss ) } {}
+        } {}
+    }
+    ^ F
+}
+
 // __thr_check: "" if `lty` satisfies `want` (0 = Send, 1 = Sync)
 // everywhere in its type graph, else "<TypeName> <kind>".
 @ __thr_check i syms s lty i want i depth → s {
@@ -39035,6 +39093,20 @@ unsafe @ __thr_peel s lty → s {
             ^ ( __thr_check syms sargs ? ( seq bn `RwLocked` ) 1 0 + depth 1 )
         } {}
         ^ ( nurl_str_cat `` `` ) } {}
+
+    // A trait object. Its box holds whichever type implements the trait,
+    // and the object's type no longer says which: `{ i8*, i8* }` has no
+    // field to walk, and answering from that answered Send and Sync for
+    // an Rc boxed in one (#127). The trait is all there is to go on: a
+    // `: Send` supertrait makes every impl prove Send, `: Sync` Sync
+    // (verify_super_obligations). Without the promise the object stays
+    // on its thread — and, as everywhere in this derivation, what may
+    // not move may not be shared either.
+    : s dtr ( __dyn_trait_of bn )
+    ? != 0 ( nurl_str_len dtr ) {
+        ? ! ( __trait_has_super dtr `Send` ) { ^ ( nurl_str_cat dtr ` dynsend` ) } {}
+        ? & == want 1 ! ( __trait_has_super dtr `Sync` ) { ^ ( nurl_str_cat dtr ` dynsync` ) } {}
+    } {}
 
     // The two built-in leaves.
     ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
@@ -39142,6 +39214,16 @@ unsafe @ __thr_peel s lty → s {
     { ^ ( nurl_str_cat4
         `it reaches '` nm
         `', a handle whose copies are one state, changed in place with no lock: reached from two threads at once (an Arc's payload, an RwLocked's value, a closure several threads run, a Sync bound), they would change it together. Move it to the other thread instead (a thread's closure takes it along, a Channel hands it over), or keep the state behind a 'Locked' and share that. If it IS safe to reach from two threads and the compiler cannot see why, assert it with an 'unsafe % Sync ` ( nurl_str_cat nm ` { }' marker impl (stdlib/core/marker.nu) — a promise the compiler takes on trust.` ) ) } {}
+    ? ( seq kind `dynsend` )
+    { ^ ( nurl_str_cat4
+        `it reaches a '%` nm
+        ( nurl_str_cat3 `' object, a trait object whose box may hold any type that implements '` nm `' — an 'Rc', a 'Cell' or a handle bound to its thread among them — and the object's type does not say which. ` )
+        ( nurl_str_cat3 `Declare the trait '% ` nm ` [T] : Send { … }': every type implementing it is then checked to be safe to move, and its objects may cross. Or keep the object on the thread that made it.` ) ) } {}
+    ? ( seq kind `dynsync` )
+    { ^ ( nurl_str_cat4
+        `it reaches a '%` nm
+        ( nurl_str_cat3 `' object, which two threads would reach at once: a trait object whose box may hold any type that implements '` nm `' — one not safe to share among them — and the object's type does not say which. ` )
+        ( nurl_str_cat3 `Declare the trait '% ` nm ` [T] : Send Sync { … }': every type implementing it is then checked to be safe to share. Or give each thread its own object.` ) ) } {}
     ? ( seq kind `notsend` )
     { ^ ( nurl_str_cat3
         `it reaches '` nm
@@ -51619,10 +51701,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
 @ __sk_walk_calc s ty i syms s seen → b {
     : i n ( nurl_str_len ty )
     ? ( __is_closure_ty ty ) { ^ T } {}
-    // Raw memory, and a `dyn` box (its contents are not in its type:
-    // agora #127).
+    // Raw memory.
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
-    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    // A trait object: its box holds whichever type implements the trait,
+    // and only one of a `: Send` trait crosses at all (__thr_check). What
+    // the box holds is checked through the vtable (emit_dyn_vtable).
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __trait_has_super ( nurl_str_slice ty 5 - n 5 ) `Send` ) } {}
     ? == ( nurl_str_get ty 0 ) 123 {
         ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
             ? ( __sk_walk ( __wrap_part ty 0 ) syms seen ) { ^ T } {}
@@ -51708,7 +51792,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ? ! ( __sk_needed ty syms ) { ^ v } {}
     : s __p0 ( nurl_sym_get g_impl_name_syms `__pending_sendck__` )
     ( nurl_sym_def g_impl_name_syms `__pending_sendck__` ( __bar_add __p0 ty ) )
-    ? ( __is_closure_ty ty ) { ^ v } {}
+    // (A closure's captures and a trait object's box are checked through
+    // their descriptor and vtable, which ask for their own.)
+    ? | ( __is_closure_ty ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ v } {}
     : i n ( nurl_str_len ty )
     ? == ( nurl_str_get ty 0 ) 123 {
         ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
@@ -51839,6 +51925,14 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_print `define linkonce_odr void ` ) ( nurl_print ( __sk_fn ty ) ) ( nurl_print `(ptr %p, ptr %w) {\nentry:\n` )
     ? ( __is_closure_ty ty ) {
         ( nurl_print `  %ep = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  %env = load ptr, ptr %ep\n  call void @nurl_closure_send_check(ptr %env, ptr %w)\n  ret void\n}\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) {
+        // The box's check, the vtable's last slot (null: nothing to check,
+        // and a null vtable is an object moved out).
+        ( nurl_print `  %vp = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  %vt = load ptr, ptr %vp\n  %vn = icmp eq ptr %vt, null\n  br i1 %vn, label %x, label %h\nh:\n  %fp = getelementptr ptr, ptr %vt, i64 ` )
+        ( nurl_print ( nurl_str_int - ( dyn_vt_size ( nurl_str_slice ty 5 - n 5 ) ) 1 ) )
+        ( nurl_print `\n  %f = load ptr, ptr %fp\n  %fn = icmp eq ptr %f, null\n  br i1 %fn, label %x, label %c\nc:\n  %d = load ptr, ptr %p\n  call void %f(ptr %d, ptr %w)\n  br label %x\nx:\n  ret void\n}\n` )
         ^ v
     } {}
     ? == ( nurl_str_get ty 0 ) 123 {
@@ -58081,7 +58175,7 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
 // be implemented for the SAME type — the static guarantee that backs `T: Sub ⇒
 // T: Super`, so a bound `[A: Sub]` may freely call any supertrait method on A
 // (dispatch resolves through the supertrait impl that this check proves exists).
-@ verify_super_obligations → v {
+@ verify_super_obligations i syms → v {
     : ~ s rest ( nurl_str_cat g_super_obligations `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s sub ( str_first_word rest )
@@ -58101,16 +58195,38 @@ unsafe @ __impl_sig_check i lex s tname s mname s impl_nurl s impl_llvm s ty s t
         ~ != 0 ( nurl_str_len sup_rest ) {
             : s sup ( str_first_word sup_rest )
             = sup_rest ( str_skip_word sup_rest )
-            ? == 0 ( nurl_sym_len g_trait_syms
-            ( nurl_str_cat3 sup `##` llvm ) )
-            { ( die_file_pos file line col ( nurl_str_cat
-                ( nurl_str_cat3 `type '` nty `' implements trait '` )
-                ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
-                ( nurl_str_cat3 `' — every '` sub
-                ( nurl_str_cat3 `' type must also implement '` sup
-                ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
-                ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
-            {}
+            // A `: Send` / `: Sync` supertrait is answered by the
+            // derivation, as the bound is (__thr_bound_trait): no impl
+            // block says it. It is the promise that lets the trait's
+            // objects cross a thread boundary (__thr_check), so every
+            // type that can be boxed in one must keep it. (Through a
+            // supertrait that declares it, too: that one's own impl for
+            // this type is parked and checked here as well.)
+            : i thr_q ( __thr_bound_trait sup )
+            ? | == thr_q 0 == thr_q 1 {
+                : s why ( __thr_check syms llvm thr_q 0 )
+                ? != 0 ( nurl_str_len why ) {
+                    : s what ? == thr_q 0
+                    `' object may move to another thread, so every type it can box must be safe to move, and this one is not: `
+                    `' object may be reached from two threads at once, so every type it can box must be safe to share, and this one is not: `
+                    ( die_file_pos file line col ( nurl_str_cat4
+                    ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                    ( nurl_str_cat4 sub `', declared ': ` sup `' — a '%` )
+                    ( nurl_str_cat sub what )
+                    ( __thr_explain why ) ) )
+                } {}
+            } {
+                ? == 0 ( nurl_sym_len g_trait_syms
+                ( nurl_str_cat3 sup `##` llvm ) )
+                { ( die_file_pos file line col ( nurl_str_cat
+                    ( nurl_str_cat3 `type '` nty `' implements trait '` )
+                    ( nurl_str_cat ( nurl_str_cat3 sub `' but not its supertrait '` sup )
+                    ( nurl_str_cat3 `' — every '` sub
+                    ( nurl_str_cat3 `' type must also implement '` sup
+                    ( nurl_str_cat4 `'. Add the impl beside this one: '% ` sup ( nurl_str_cat3 ` ` nty ` { … }'` )
+                    ( nurl_str_cat3 `, with the methods '` sup `' declares.` ) ) ) ) ) ) ) }
+                {}
+            }
         }
     }
 }
@@ -58159,6 +58275,8 @@ unsafe @ emit_missing_defaults s tname s impl_nurl s impl_mangle s provided s bi
 //   field 1 = vtable  — points at a per-impl `[K x i8*]` constant:
 //                        slot 0      = concrete destructor void(i8*) (or null)
 //                        slots 1..K  = one thunk per flattened trait method
+//                        slot K+1    = the crossing check of the boxed value
+//                                      (emit_sendck_fn), or null
 // Construction `( dyn Trait v )` boxes v and pairs it with the impl's vtable.
 // A bare-name call `( m d )` whose receiver is a `%dyn.Trait` loads the method
 // slot and calls it indirectly through the uniform ABI `<ret>(i8* self, …)`.
@@ -58261,7 +58379,8 @@ unsafe @ __dyn_flat_add s vtTrait s declTrait → v {
 }
 
 // dyn_flat_count: number of methods in the flattened vtable (vtable size is
-// this + 1 for the drop slot).
+// this + 2: the drop slot before them, the crossing check's after —
+// dyn_vt_size).
 @ dyn_flat_count s tname → i {
     ( __dyn_flat_reset )
     // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
@@ -58276,6 +58395,11 @@ unsafe @ __dyn_flat_add s vtTrait s declTrait → v {
         = c + c 1
     }
     ^ c
+}
+
+// dyn_vt_size: the slots of `tname`'s vtable (the layout above).
+@ dyn_vt_size s tname → i {
+    ^ + ( dyn_flat_count tname ) 2
 }
 
 // dyn_method_slot: 1-based vtable slot of method `m` in `tname`'s flattened
@@ -58463,7 +58587,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         ( emit_dyn_method_thunk tname dt m impl_nurl impl_llvm impl_mangle cg )
     }
     // Pass 2: emit the vtable constant referencing thunks by symbol.
-    : i vsize + ( dyn_flat_count tname ) 1
+    : i vsize ( dyn_vt_size tname )
     ( nurl_print `@__vt.` ) ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print impl_mangle )
     ( nurl_print ` = constant [` ) ( nurl_print ( nurl_str_int vsize ) ) ( nurl_print ` x i8*] [ ` )
     ( nurl_print slot0 )
@@ -58481,6 +58605,14 @@ unsafe @ dyn_method_decltrait s tname s m → s {
         ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print impl_mangle ) ( nurl_print `.` ) ( nurl_print m )
         ( nurl_print ` to i8*)` )
     }
+    // The last slot: the boxed value's crossing check. Only an object of a
+    // `: Send` trait may cross a thread (__thr_check), and its box may hold
+    // a handle whose copies are one state, which the object's type does not
+    // show — so the check of a `%dyn` (emit_sendck_fn) runs the impl's.
+    ? & ( __trait_has_super tname `Send` ) ( __sk_needed impl_llvm syms ) {
+        ( __sk_request impl_llvm syms )
+        ( nurl_print `, i8* ` ) ( nurl_print ( __sk_fn impl_llvm ) )
+    } { ( nurl_print `, i8* null` ) }
     ( nurl_print ` ]\n` )
 }
 
@@ -58657,7 +58789,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_print `  ` ) ( nurl_print boxc ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print box ) ( nurl_print ` to ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print `*\n` )
     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ct ) ) ( nurl_print `* ` ) ( nurl_print boxc ) ( nurl_print `\n` )
     // fat pointer { box, bitcast(@__vt.Trait.mangle) }
-    : i vsize + ( dyn_flat_count tname ) 1
+    : i vsize ( dyn_vt_size tname )
     : s vti8 ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print vti8 ) ( nurl_print ` = bitcast [` ) ( nurl_print ( nurl_str_int vsize ) ) ( nurl_print ` x i8*]* @__vt.` ) ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print cmangle ) ( nurl_print ` to i8*\n` )
     : s f0 ( nurl_cg_reg cg )
@@ -63225,7 +63357,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     ( emit_header syms )
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
-    ( verify_super_obligations )
+    ( verify_super_obligations syms )
     // Dynamic trait objects (docs/spec.md §4.9): collect every trait used as a
     // `%Trait` object (body-aware, after __istrait markers exist) and emit the
     // `%dyn.<T>` fat-pointer type defs + synthesized Drop functions at module

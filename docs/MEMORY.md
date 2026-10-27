@@ -1637,6 +1637,10 @@ journal** instead:
 - A value released normally, or moved out of the extent (assigned into a
   binding the caller owns), is removed from the journal, so the journal
   never releases something twice or releases what the caller now owns.
+- An owned binding's drop flag is read when a panic drains the journal,
+  not when the binding is recorded: a value moved on — into a literal, a
+  `sink` parameter, a closure's capture, a `dyn` box — has its flag
+  cleared, and only its new owner releases it (h361–h363).
 - A String / Vec / struct made by a call right in an argument is recorded
   while the callee runs (it is the caller's until the call returns); a
   value whose destructor is written at module end (a struct holding a

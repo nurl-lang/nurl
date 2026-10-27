@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop literal
+after a literal
+took sink
+drop sink
+after a sink
+drop closure
+after a capture
+drop old
+drop name
+after an assignment
+drop dyn literal
+after a dyn literal
+drop dyn sink
+after a dyn sink
+drop dyn closure
+after a dyn capture

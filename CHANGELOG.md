@@ -199,7 +199,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (every `vec_at` / `slice_at` past the end), a CPU tier's `_missing`
   gate, and the crossing check. A function whose only panic was an index
   dropped its bindings' registrations, and a recovered panic leaked them.
-
+- **A value with a destructor, once moved on, is no longer dropped again
+  by a later panic** (h361–h363). An owned binding with a drop flag was
+  recorded in the panic journal with the flag's value at that moment. A
+  move clears the flag, but the record went on saying the binding owned
+  its value: one moved into a struct literal, handed to a `sink`
+  parameter or captured by a closure was released by its new owner, and
+  again when a panic later in the scope drained the journal under
+  `recover`. A trait object's box was freed twice. The binding is now
+  recorded with its flag, which the drain reads, as a handle binding
+  already was. Test `recover_moved_drop_value`.
 - **A type in a closure body no longer captures a binding of the same
   name** (Agora #122). The capture scan took every type keyword in the
   body for a use of a binding: `v`, `i`, `s` and the other one-letter

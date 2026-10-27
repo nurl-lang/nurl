@@ -23959,11 +23959,6 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
             ( __park_append g_impl_name_syms `__pending_ujdrops__` vt )
         } {}
     } {}
-    : s cond ( mem_drop_cond syms cg ptr )
-    : s bc ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print bc )
-    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
-    ( nurl_print ` to i8*\n` )
     // Branch-free (see mem_emit_gated_drop): a dead registration journals
     // a null destructor, which the runtime skips.
     : ~ s fnv ( nurl_str_cat `@__jdrop_` impl_mangle )
@@ -23977,6 +23972,33 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( nurl_print `, ptr @__jglue_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `\n` )
         = fnv gsel
     } {}
+    // A binding with a drop flag is journaled with it, as a handle's is
+    // (mem_journal_push_handle): the drain reads the flag, so a move that
+    // clears it — into a literal, a `sink` parameter, a closure's capture,
+    // a `dyn` box — ends the registration too. Read once at the push, it
+    // said "owns" for good, and a panic after the move ran the destructor
+    // on a value its new owner dropped as well.
+    : s live ( nurl_sym_get2 syms ptr `__live` )
+    ? != 0 ( nurl_str_len live ) {
+        : s sf ( nurl_sym_get2 syms ptr `__sinkflag` )
+        ? != 0 ( nurl_str_len sf ) {
+            : s c ( nurl_cg_reg cg )
+            ( emit_sink_flag_load sf c )
+            : s sel ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print c )
+            ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `, ptr null\n` )
+            = fnv sel
+        } {}
+        ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` )
+        ( nurl_print live ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
+        ( nurl_sym_def g_fn_escapes ( nurl_str_cat3 ptr `__ujs` ( nurl_str_int g_ff_gen ) ) `1` )
+        ^ v
+    } {}
+    : s cond ( mem_drop_cond syms cg ptr )
+    : s bc ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print bc )
+    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
+    ( nurl_print ` to i8*\n` )
     ? != 0 ( nurl_str_len cond )
     { : s sel ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print cond )
@@ -24035,8 +24057,9 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // emitted wherever its typed drop is run on the normal path, so a later
 // panic in the same extent cannot replay an already-run destructor.
 @ mem_journal_forget_userdrop i cg s ptr s vt → v {
-    // A call's temporary owner is journaled by its slot.
-    ? != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) {
+    // A call's temporary owner is journaled by its slot, and so is a
+    // binding with a drop flag (mem_journal_push_userdrop).
+    ? | != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__ujs` ( nurl_str_int g_ff_gen ) ) ) {
         ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
         ^ v
     } {}
