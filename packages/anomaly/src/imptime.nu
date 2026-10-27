@@ -605,15 +605,15 @@ $ `stdlib/core/slice.nu`
                             } {}
                             ?? ( json_obj_get row ( string_data key ) ) {
                                 T v → {
-                                    // Taken out of its slot, counted, put back.
-                                    ?? ( vec_replace [ImpCol] cols ci ( __it_col_blank ) ) {
-                                        T col → {
-                                            : ~ ImpCol c col
-                                            ( __it_col_add c v )
-                                            : ?ImpCol _old ( vec_replace [ImpCol] cols ci c )
-                                        }
-                                        F → {}
+                                    // Taken out of its slot (this binding's own: one of the
+                                    // payload would only borrow it, and counting replaces
+                                    // its sample), counted, put back.
+                                    : ~ ImpCol c ?? ( vec_replace [ImpCol] cols ci ( __it_col_blank ) ) {
+                                        T col → col
+                                        F → ( __it_col_blank )
                                     }
+                                    ( __it_col_add c v )
+                                    : ?ImpCol _old ( vec_replace [ImpCol] cols ci c )
                                 }
                                 F _ → {}
                             }

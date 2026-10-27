@@ -384,8 +384,11 @@ $ `stdlib/std/bytes.nu`
     } {}
 }
 
-@ __f5s_model_loop sink F5Run start → v {
-    : ~ F5Run r start
+// `r` is the model thread's own state, handed in place: a job changes what
+// it holds (the current model, the voice cache), which a binding copied out
+// of a `sink` parameter would only borrow — the parameter's old values were
+// released under it.
+@ __f5s_model_loop inout F5Run r → v {
     // A CUDA context belongs to the thread that made it current, and this is
     // not that thread: the kit was opened while the process was still one
     // thread. Without this every launch from here fails, quietly, and a
@@ -771,8 +774,9 @@ s host i port s token i device i unload_s → i {
     ( locked_set [F5Stat] g_f5_stat @ F5Stat { ( string_from model_id ) T 0 0 1 0 0 } )
     : String cur ( string_from model_id )
     : ( @ v ) modelfn \ → v {
-        ( __f5s_model_loop @ F5Run { ( F5Model_share m ) ( Vocos_share vc ) ( F5Vocab_share vb ) ( __f5s_vc_new )
-            ( string_from ( string_data cur ) ) unload_ms ( monotonic_ns ) } )
+        : ~ F5Run run @ F5Run { ( F5Model_share m ) ( Vocos_share vc ) ( F5Vocab_share vb ) ( __f5s_vc_new )
+            ( string_from ( string_data cur ) ) unload_ms ( monotonic_ns ) }
+        ( __f5s_model_loop run )
     }
     ?? ( thread_spawn modelfn ) {
         T th → { ( thread_detach th ) }

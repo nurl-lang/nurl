@@ -88,10 +88,13 @@ $ `stdlib/core/io.nu`
         = k + k 1
     }
     ~ > ( vec_len [GrpcCall] calls ) 0 {
-        ?? ( vec_remove [GrpcCall] calls 0 ) {
-            T c → { : ~ GrpcCall stream c \ ( finish_one stream request ) }
-            F → {}
+        // The call taken out of `calls` is this loop's own: a binding of the
+        // payload would only borrow it, and receiving replaces what it holds.
+        : ~ GrpcCall stream ?? ( vec_remove [GrpcCall] calls 0 ) {
+            T c → c
+            F → { ^ @ !v GrpcError { T 0 } }
         }
+        \ ( finish_one stream request )
     }
     ^ @ !v GrpcError { T 0 }
 }

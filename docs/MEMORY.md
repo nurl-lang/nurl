@@ -434,13 +434,22 @@ its call. Passing the same binding again in the same call, as another
 Reads of the binding inside other arguments (`( grow v ( vec_len v ) )`)
 are evaluated before the call runs and are allowed.
 
-A `: ~` copy of a parameter (`: ~ T c p`) shares p's fields — it owns
-none of them. It may be changed in place, and a field assigned in this
-function leaves the old value to p's owner; but it may not be passed
-`inout` to a function that replaces an owned field of what it is handed
-(directly or through a function it calls): the callee would release p's
-field, which the caller still owns (h295). `: ~ T c ( mem_dup p )` is a
-copy of its own.
+A binding that does not own its value — a `: ~` copy of a parameter
+(`: ~ T c p`) or of another binding (a cursor, `: ~ T cur root`), a field
+read (`: ~ T h . o h`), what a call lends (`: ~ T s ( arc_get [T] a )`) —
+shares that value: it owns none of it. It may be changed in place, and a
+field assigned in this function leaves the old value to the owner; but it
+may not be passed `inout` to a function that gives that parameter, or an
+owned field of it, a new value (directly or through a function it calls):
+the callee would release what the owner still holds, and the owner would
+read and drop it again (h295, h367–h369). The check follows every path: a
+binding that borrows on one of them is refused. `: ~ T c ( mem_dup p )` is
+a value of its own, and so is one given a fresh value (`= cur ( vec_new )`)
+before the call, or a match's payload bound out of the match (`: ~ T x ??
+r { T v → v … }`). A copy of a value with a `% Drop` of its own, taken from
+a local that owns it outright (a `let`, a `sink` parameter), holds that
+local's drop: such a call makes it the owner, and the local is moved there
+— reading it afterwards is a use of a moved value (h370).
 
 The same holds for any argument a callee may change, `inout` or not —
 what its summary says it mutates, reallocates or drops elements of: that
@@ -860,15 +869,13 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One hole is known open** (agora #135, probe
-`tools/fuzz/holes/open/inout_argument_that_does_not_own_its_value.nu`):
-an `inout` argument whose binding does not own its value — a cursor over
-another binding (`: ~ ( Vec i ) cur root`), a field read, a value
-`arc_get` lends — handed to a callee that gives that parameter, or a field
-of it, a new value. The callee releases what the other owner holds. The
-rule that refuses this (§2.4, h295) covers only a `: ~` copy of a
-parameter. Until it is closed, hand the owner itself, or bind a copy of
-its own (`( mem_dup root )`).
+**No hole is known open.** The last one, *an `inout` argument whose
+binding does not own its value*, is closed (agora #135, h367–h370): a
+cursor over another binding, a field read or a value `arc_get` lends,
+handed to a callee that gives that parameter (or a field of it) a new
+value, released what the owner still held. The rule had covered only a
+`: ~` copy of a parameter (h295); the walk now refuses any argument in a
+borrow state on any path (§2.4).
 
 The one before it, *a share made before a library handle moves to a
 thread*, is closed (agora #121, h349–h358). A library
