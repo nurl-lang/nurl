@@ -113,6 +113,9 @@ binding that views a call's temporary argument, a leak (Agora #138).
 
   Each is answered "ready", as poll(2) answers an fd it cannot poll, and
   the caller's read says what the fd is. The table now grows by doubling.
+  On Windows a number that names no socket is answered the same way
+  without reaching WSAPoll. WSAPoll could hold the whole call to its
+  timeout before saying so, and every other waiter with it.
   `compiler/tests/wait_unpollable_fd` holds it: 0.1 s and 2 MB.
 - **The poll(2) / WSAPoll reactor polls every waiting fd** (FreeBSD,
   macOS, Windows; Agora #133). Its poll set was a fixed 256 entries, so
