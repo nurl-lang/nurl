@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arc_cycle_payload_frozen.nu:14:5: error: this call hands 'vec_push' the contents of Arc 'a' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( vec_push [( Arc Node )] . ( arc_get [Node] a ) kids ( arc_clone [Node] a ) )
+    ^
+compiler/tests/diag_arc_cycle_payload_frozen.nu:17:5: error: this call hands 'vec_push' the contents of Arc 'a' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( vec_push [( Arc Node )] ks ( arc_clone [Node] a ) )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -1,0 +1,15 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arc_dyn_payload_frozen.nu:25:5: error: this call hands 'bump' the contents of Arc 'a' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( bump j )
+    ^
+compiler/tests/diag_arc_dyn_payload_frozen.nu:26:5: error: this call hands 'poke' the contents of Arc 'a' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( poke j )
+    ^
+compiler/tests/diag_arc_dyn_payload_frozen.nu:29:5: error: this call hands 'bump' the contents of Arc 'h' to change, but an Arc's payload is frozen once made: every thread holding a clone reads it without a lock, so changing it races them, whatever lock this code holds. Build the value before arc_new and arc_new it whole; keep state one thread changes in an Rc; put state threads share and change in a Locked (stdlib/std/thread.nu) and change it with locked_with / locked_set, which hold its lock.
+    ( bump . hv j )
+    ^
+compiler/tests/diag_arc_dyn_payload_frozen.nu:33:5: error: this call hands 'bump' what 'g' lends to change, but it is frozen: its type is marked '% Frozen' (a read guard is), so other threads may be reading the same value at the same time without a lock, and changing it races them. Change it through a handle that holds the value exclusively — take a write guard (rw_write in stdlib/std/rwlock.nu) or use locked_update on a Locked — or copy what you need with mem_dup and change the copy.
+    ( bump k )
+    ^
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

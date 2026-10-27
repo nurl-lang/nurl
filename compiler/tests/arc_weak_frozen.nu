@@ -1,8 +1,8 @@
 // arc_weak_frozen.nu — Arc's cycles are ruled out, not collected
 // (docs/MEMORY.md §7.7). An Arc whose payload can hold a handle back to it
-// is frozen like any other — arc_get even hands out a copy, so nothing
-// done to it reaches the shared value — and a tree is built from its leaves
-// up.
+// is frozen like any other — what arc_get lends no call may change, so
+// nothing closes a cycle through it; a reader that wants a changed value
+// copies it — and a tree is built from its leaves up.
 // ArcWeak points back without owning.
 
 $ `stdlib/core/string.nu`
@@ -25,7 +25,7 @@ unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
     : ( Vec ( Arc TNode ) ) ks ( vec_new [( Arc TNode )] )
     ( vec_push [( Arc TNode )] ks ( arc_clone [TNode] leaf ) )
     : ( Arc TNode ) root ( arc_new [TNode] @ TNode { 1 ks } )
-    : TNode r ( arc_get [TNode] root )
+    : TNode r ( mem_dup ( arc_get [TNode] root ) )
     // The copy takes the push; the shared root keeps its one child.
     ( vec_push [( Arc TNode )] . r kids ( arc_clone [TNode] root ) )
     : TNode r2 ( arc_get [TNode] root )
