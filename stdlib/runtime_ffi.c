@@ -8766,6 +8766,16 @@ static pthread_mutex_t nurl__shut_lock = PTHREAD_MUTEX_INITIALIZER;
 static long long      *nurl__shut_fds;
 static int             nurl__shut_n, nurl__shut_cap;
 
+/* Does `fd` name a socket? A wait on a number that does not (agora #133)
+ * must not join the WSAPoll set: Windows can hold the whole call to its
+ * timeout before saying so, and every other waiter with it. Asked once per
+ * park, beside the cross-thread wakes a park costs anyway. */
+static int nurl__win_is_socket(long long fd) {
+    int type = 0;
+    int len = (int)sizeof type;
+    return getsockopt((SOCKET)fd, SOL_SOCKET, SO_TYPE, (char *)&type, &len) == 0;
+}
+
 static int nurl__shut_has(long long fd) {
     int hit = 0;
     pthread_mutex_lock(&nurl__shut_lock);
@@ -8868,7 +8878,10 @@ static void *nurl__reactor_loop(void *arg) {
                 if (min_deadline < 0 || w->deadline_ms < min_deadline)
                     min_deadline = w->deadline_ms;
             }
-            if (w->fd >= 0) {
+            /* (A forced entry wakes without being polled: a Windows
+             * socket whose read side was shut, or a number that names no
+             * socket, which would hold WSAPoll to its timeout.) */
+            if (w->fd >= 0 && !w->forced) {
                 fds[nfds].fd = (nurl_sockfd_t)w->fd;
                 fds[nfds].events = w->events;
                 fds[nfds].revents = 0;
@@ -9083,6 +9096,9 @@ static int nurl__reactor_wait_k(long long fd, short events, long long timeout_ms
     wt->admit = admit;
 #ifdef _WIN32
     if ((events & POLLIN) && fd >= 0 && nurl__shut_has(fd)) wt->forced = 1;
+    /* …and so is one on a number that names no socket: ready, as poll(2)
+     * answers POLLNVAL, without ever reaching WSAPoll. */
+    if (fd >= 0 && !nurl__win_is_socket(fd)) wt->forced = 1;
 #endif
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
