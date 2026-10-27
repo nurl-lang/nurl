@@ -6,7 +6,37 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.79.0] — 2026-10-27
+
+The threads-and-scheduling release. Every soundness hole found so far is
+closed. The last open one was a handle's copies changed on two threads,
+and it is now checked where the handle crosses to a thread. The probes
+run to h370 with none open. A trait object crosses a thread only when its
+trait promises `Send`, and an `( Arc %Trait )` is readable in safe code,
+because `arc_get` lends every payload. Windows x64 gets fibers: a Win64
+context switch, a `WSAPoll` reactor and the resolver pool. The M:N
+scheduler serves fibers in the order they became runnable, and runs an
+accept the moment its listener is ready. Measured locally, that brings
+the TLS handshake latency spread under load into rustls's range. RSA-2048
+signing runs on AVX-512 IFMA (~0.27 ms) and on ADX multiply rows, P-256
+fixed-base multiplication is a complete Booth comb, and the unikernel's
+TCP stack bounds its receive window and resets a connection closed with
+unread data.
+
+**API changes:** `ext/mcp_tasks.nu` hands out an `McpTask`
+(`mcp_task_find` / `mcp_task_nth` return `?McpTask`), and
+`quic_server_pump` is removed. Some programs the checker used to accept
+were unsound, and they are now refused:
+- a borrowed `inout` argument handed to a callee that replaces it
+  (h367–h370);
+- a trait object sent to a thread when its trait does not promise
+  `Send`.
+
+A share of a handle left behind when the handle crosses to a thread is
+now a run-time panic that names the crossing.
+
+**Packages** published with this release: anomaly 0.36.6, f5tts 0.5.1,
+nurldb 0.1.1, psql 0.5.1 and swarm-mcp 0.32.0 (requires 0.79.0).
 
 ### Added
 
@@ -126,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bottom half: 253 squarings and 39 multiplies, against 255 and 70.
   `compiler/tests/p256_scalar_inv.nu` checks it against Python and over
   2000 random a·a⁻¹ ≡ 1.
+- CI: a change to `CHANGELOG.md` alone no longer runs the compiler jobs.
 
 ### Fixed
 
@@ -434,9 +465,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The tasks dispatcher read the hook and the store through raw
     pointers. It now uses `vec_at`.
 
-  What is still open: a share made before the move, such as
-  `( PNCounter_share a )` or a struct literal storing one. That is
-  tracked as Agora #121 in `tools/fuzz/holes/open/`.
+  A share made before the move, such as `( PNCounter_share a )` or a
+  struct literal storing one, is checked where the handle crosses to
+  the thread (Agora #121, above).
+- **The NURL TCP stack (the unikernel's) offers only the receive space
+  it has, and resets a connection closed with unread data** (Agora
+  #74). It used to advertise the whole receive buffer however much was
+  waiting for the application. A fast peer could therefore grow the
+  buffer without bound and never met back-pressure. Now:
+  - The window is the capacity minus what is queued. Its right edge
+    never moves left, and moves right only by min(MSS, capacity/2)
+    (RFC 1122 §4.2.3.3, silly-window avoidance).
+  - A read that reopens that much sends a window update.
+  - A close with unread data, or data arriving after the close, is
+    answered with RST (RFC 9293), instead of an orderly FIN claiming
+    the bytes were delivered.
+  - A FIN riding on the last data segment is taken with it, instead of
+    costing the peer a retransmit timeout.
 - **Closing a listener and then accepting on it no longer reads freed
   memory** (h341). `tcp_close_listener` released the runtime's socket
   record while the handle, and every copy of it, still named it. A later
@@ -487,9 +532,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nurldb 0.1.1 reads its log buffer's start before it grows the buffer.
   The checker still takes a change made through one field of a borrowed
   value as reaching the value's other borrows.
-  The open hole is narrowed to a share kept by other means: a thread's
-  capture of the handle itself, a parameter, or a share stored before
-  the move.
+  A share kept by other means is checked where the handle crosses
+  (Agora #121, above). That covers a thread's capture of the handle
+  itself, a parameter, and a share stored before the move.
 - **`bigint_modpow` ignored exponent bits above the modulus's bit
   length.** Its constant-time ladder ran bit-length(m) steps, so an
   exponent wider than the modulus (a blinded RSA exponent, d + r·φ) lost

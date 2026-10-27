@@ -104,8 +104,9 @@ $ `stdlib/std/async.nu`
   is always a fresh edge. Closing a socket routes through the
   netpoller (`nurl_close_sock`), which wakes any parked waiter and
   resets the per-fd slot before the fd number can be reused.
-- **Reactor (other POSIX).** On non-Linux POSIX a dedicated thread
-  runs the portable `poll(2)` loop plus a timer wheel: a fiber that
+- **Reactor (other POSIX, Windows).** Elsewhere a dedicated thread
+  runs the portable `poll(2)` loop (`WSAPoll` on Windows) plus a timer
+  wheel: a fiber that
   would block registers the fd and parks; the reactor unparks it when
   the fd is ready or the timeout fires. (A `kqueue` netpoller is the
   matching upgrade path for macOS/BSD.)
@@ -189,7 +190,8 @@ worker and every fiber queued on it. On a fiber the socket is now
 non-blocking and the fiber parks for writability on the netpoller; a
 name is resolved by `getaddrinfo` on a small resolver thread pool
 (`stdlib/runtime_ffi.c` §18-r) and the fiber parks on the job's
-completion eventfd meanwhile. `tcp_connect_timeout` puts one deadline
+completion signal meanwhile (an eventfd, a pipe, or a loopback socket on
+Windows). `tcp_connect_timeout` puts one deadline
 over both, on the netpoller's timer heap. The same pass fixed a
 scheduler starvation: a worker whose local queue never emptied — a
 fiber yielding in a loop — never looked at the netpoller or the global

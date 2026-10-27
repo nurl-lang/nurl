@@ -542,7 +542,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h363`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h370`, is closed and held by a probe in `tools/fuzz/holes/`).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -1417,7 +1417,9 @@ guarantee, not a dispatch mechanism.
 `Ord : Eq` means *every type implementing `Ord` must also implement `Eq`* for
 that same type. The obligation is enforced across the whole program (all
 `$`-imports, any order) after signatures are collected; a missing supertrait
-impl is a compile error naming it. It composes transitively (`C : B`, `B : A`).
+impl is a compile error naming it. `: Send` and `: Sync` are the exception:
+they are derived, never implemented, so the derivation answers them where
+each impl is (*Marker traits*, below). It composes transitively (`C : B`, `B : A`).
 Because the supertrait impl is guaranteed to exist, a function bounded `[A:
 Ord]` may freely call any supertrait method on `A` — dispatch resolves through
 the supertrait impl the check proves present.
@@ -1474,9 +1476,13 @@ compiler:
 Unlike every other trait, `Send` and `Sync` are **derived, not implemented**.
 The compiler answers both questions by walking a type's whole graph — struct
 fields, enum variant payloads, generic arguments, aggregate members, closure
-captures — from two built-in leaves: `Rc` is neither Send nor Sync (its
-refcount is not atomic), and `Cell` is Send but not Sync (a raw byte buffer
-with unsynchronised writes). Everything else inherits from what it contains.
+captures — from four built-in cases: `Rc` is neither Send nor Sync (its
+refcount is not atomic); `Cell` is Send but not Sync (a raw byte buffer
+with unsynchronised writes); a library handle is Send, and Sync only where
+asserted (its copies are one state, changed in place); and a trait object
+`%Trait` is Send only when its trait declares `: Send`, and Sync only with
+`: Send Sync` (its box holds any type implementing the trait).
+Everything else inherits from what it contains.
 
 The derivation is enforced where a value crosses a thread boundary —
 `thread_spawn`, `spawn`, `chan_send`, and `Arc T` (whose payload must be Send
@@ -2825,10 +2831,10 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h344`) is
-closed and held by a probe in `tools/fuzz/holes/` — but one, open: a
-share of a library handle made before the handle moves to a thread
-(docs/MEMORY.md §6.2).
+([`formal/`](../formal/)), and every hole found so far (`h01–h370`) is
+closed and held by a probe in `tools/fuzz/holes/`; a handle whose copies
+are one state is checked where it crosses to another thread
+(docs/MEMORY.md §6.5).
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
 built from a `Vec` (`slice_from_vec`, `slice_sub`, `slice_window`, protobuf's
 `ProtoReader`) is now tracked as a view of it and ends when the `Vec` is

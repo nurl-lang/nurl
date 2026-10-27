@@ -892,7 +892,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h363):
+all are closed, each a probe CI now holds (h142–h370):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1316,7 +1316,16 @@ boxed type's check. And a value with a destructor moved on — into a
 literal, a `sink` parameter, a closure, a `dyn` box — was dropped once
 more by a panic later in its scope (h361–h363): its journal registration
 had read its drop flag when it was made, and now reads it when the panic
-drains (§7.2). No other hole is known.
+drains (§7.2). Making `arc_get` lend a trait object's payload (§7.7)
+found the checker taking a method called through a trait object for one
+that changes nothing: an `inout` receiver writing the shared box
+(h364), an impl replacing what a view read (h365), a helper handing its
+parameter to such a method (h366). A `dyn` call is now summarised as the
+union of its impls. And a binding that only borrowed its value, handed
+`inout` to a callee that gives that parameter a new value, released the
+value under its owner (h367–h370). It is now refused, and a `: ~` copy
+of a `% Drop` struct takes its owner's drop flag, so the replacing call
+makes it the owner (§7.6). No other hole is known.
 
 The rules that carry it:
 
@@ -1455,7 +1464,7 @@ body), by the unwind of a panic, or when the struct holding it is.
 be reached from two threads at once") are marker traits
 (`stdlib/core/marker.nu`) that the compiler derives structurally over a
 type's whole graph: struct fields, enum payloads, generic arguments,
-aggregate members and closure captures. Two leaves are built in:
+aggregate members and closure captures. Four cases are built in:
 
 | | Send | Sync | why |
 |---|---|---|---|
@@ -1617,7 +1626,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h363`) to the rule that rejects it. See
+  (`h01–h370`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

@@ -7,7 +7,7 @@ NURL's single-owner memory model ([Memory and Ownership](./memory-and-ownership)
 
 Use the interactive explorer below to inspect the proof at two levels:
 1. **For Everyone (Tab 1 — Visual Story & Simulator):** Step through concrete NURL programs to see how the compile-time context $\Gamma$ (`Typing.lean`) and runtime memory store `Mem` (`Semantics.lean`) interact, why `vec_push` kills `Slice` views while preserving element borrows (`Eff.kills`), and how panic unwinding (`panic_unwind`) frees every owned allocation via the drop journal.
-2. **For Mathematicians & PL Researchers (Tabs 2–4 — Lean Blueprint DAG, Code Browser & 303 Hole Corpus):** Explore the interactive **Lean Blueprint** theorem/module dependency graphs, browse all **1,766 Lean 4 declarations** with cross-referenced dependencies, and inspect all **303 soundness hole probes** (`h01`–`h315`).
+2. **For Mathematicians & PL Researchers (Tabs 2–4 — Lean Blueprint DAG, Code Browser & Hole Corpus):** Explore the interactive **Lean Blueprint** theorem/module dependency graphs, browse all **1,773 Lean 4 declarations** with cross-referenced dependencies, and inspect all **358 soundness hole probes** (`h01`–`h370`).
 
 <FormalExplorer />
 
@@ -20,7 +20,7 @@ The mechanization is organized into phases:
 | Phase | Scope | Key Theorems | Status |
 |---|---|---|---|
 | **A1** | Core single-threaded calculus: owned `Vec` trees (a `String` is a `Vec` of bytes), moves and drop flags, `in` / `inout` / `sink`, borrows and `Slice` views, buffer reallocation (`Eff.realloc`), element drop (`Eff.drop`), function summaries (`CallT`, `FnOK`). | `A1.soundness`, `A1.memory_safe` | **Proven** (22 modules, 9,571 lines, 449 theorems) |
-| **A2** | Full single-threaded calculus: A1 + inline structs (`Ty.prod`) and enums/options (`Ty.sum`) with field-precise paths, closures and trait objects as packages (`Val.pkg`, `Rhs.pack`, `Stmt.callc`) with captures by handle and by name (`Kind.name`), panics with unwinding and `recover` (`Stmt.catchR`), the drop journal, and **complete leak freedom**. | `A2.soundness`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` | **Proven** (28 modules, 20,693 lines, 920 theorems) |
+| **A2** | Full single-threaded calculus: A1 + inline structs (`Ty.prod`) and enums/options (`Ty.sum`) with field-precise paths, closures and trait objects as packages (`Val.pkg`, `Rhs.pack`, `Stmt.callc`) with captures by handle and by name (`Kind.name`), panics with unwinding and `recover` (`Stmt.catchR`), the drop journal, and **complete leak freedom**. | `A2.soundness`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` | **Proven** (28 modules, 20,757 lines, 926 theorems) |
 | **A3** | Concurrency: `Send` / `Sync`, `Arc`, `Mutex`, `Locked [T]`, `RwLocked [T]` and `% Frozen`, `Atomic`, channels, M:N fibers — data-race freedom against the LLVM / C11 memory model. | — | Planned |
 | **B** | Semantic soundness of the standard library's `unsafe` foundation (`Vec`, `String`, `HashMap`, `Rc` + cycle collector, `Arc`, channels). | — | Planned |
 | **C** | Compiler verification: `nurlc` emits proof certificates for accepted programs, checked by a small verified validator. | — | Planned |

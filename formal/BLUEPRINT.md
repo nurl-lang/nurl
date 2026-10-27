@@ -1,11 +1,11 @@
 # Visual Blueprint of the Lean 4 Soundness Proof (`formal/`)
 
-> **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable 303-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
+> **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom):** **28 modules**, **20,693 lines of Lean 4**, **920 theorems**, **1153 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom):** **28 modules**, **20,757 lines of Lean 4**, **926 theorems**, **1160 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
-* **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** **303 hole probes** (70 in A1, 156 in A2, 19 in A3, 58 in B)
+* **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** **358 hole probes** (70 in A1, 185 in A2, 33 in A3, 70 in B)
 
 ---
 
