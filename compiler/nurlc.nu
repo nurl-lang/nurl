@@ -12066,11 +12066,22 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ ( nurl_str_cat `undef` `` )
 }
 
+// The source expression producer `me`'s one operand built — the next
+// producer number, when it published — else `*`. (Above gen_mem_dup, its
+// caller: a callee below has no ownership summary there.)
+@ __sx_inner i me → s {
+    ? == g_sx_at + me 1 { ^ ( nurl_str_cat g_sx `` ) } {}
+    ^ ( nurl_str_cat `*` `` )
+}
+
 // `( mem_dup x )` — an owned copy of x's value: a deep copy of a String,
 // a Vec, a library handle or an owning struct / enum, the value itself for
 // anything that owns nothing. How a generic container copies its elements
 // (`S_clone`, map_clone) without knowing what they are.
-@ gen_mem_dup i lex i syms i cg → s {
+// `__me` is the call's number as a source-expression producer (gen_call's):
+// what it hands on is the copy, not the value the copied expression read —
+// `: T c ( mem_dup ( arc_get … ) )` is no view of the payload.
+@ gen_mem_dup i lex i syms i cg i __me → s {
     : s v ( gen_expr lex syms cg )
     : s ty ( nurl_get_last_type )
     ( expect lex TT_RPAREN )
@@ -12087,6 +12098,8 @@ unsafe @ nurl_lex_peek4_type i h → i {
         ( nurl_print `  ` ) ( nurl_print cr ) ( nurl_print ` = insertvalue ` ) ( nurl_print cll ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, i8* ` ) ( nurl_print cc ) ( nurl_print `, 1\n` )
         ( nurl_sym_def syms `__last_call_name__` `` )
         ( mem_retclo_take syms cg cr ty )
+        : s __dsx ( __sx_inner __me )
+        ( __sx_publish __me __dsx )
         ( nurl_set_last_type ty )
         ^ cr
     } {}
@@ -12115,9 +12128,34 @@ unsafe @ nurl_lex_peek4_type i h → i {
         // to ask, the argument path recognises the copy by its register
         // (SSA: no other value has it). Before, every such copy leaked.
         ( nurl_sym_def syms `__last_fresh_reg__` r )
+        // A deep copy owns its data — unless the type holds views (a raw
+        // string field, §2.13), which the copy points where they did.
+        : s __dll ( nurl_llty ty )
+        // (Asked precisely, as of a callee's result: a handle holds what
+        // its type arguments can — an Arc's count owns, it views nothing.)
+        = g_thv_precise 1
+        : b __dhv ( __ty_holds_view __dll 0 )
+        = g_thv_precise 0
+        ? __dhv {
+            : s __dsx ( __sx_inner __me )
+            ( __sx_publish __me __dsx )
+        } {
+            // …and borrows from nothing the copied call lent from: `: T c
+            // ( mem_dup ( arc_get [T] a ) )` is no view of `a`'s payload.
+            ( nurl_sym_def syms `__last_call_lend_idents__` `` )
+            ( nurl_sym_def syms `__last_phi_idents__` `` )
+            ( nurl_sym_def syms `__last_call_part_idents__` `` )
+            ( nurl_sym_def syms `__last_call_args__` `` )
+            = g_call_roots ``
+            = g_call_lend_roots ``
+            ( __sx_publish __me `-` )
+        }
         ( nurl_set_last_type ty )
         ^ r
     } {}
+    // (Nothing to copy: the value itself, with what it reads.)
+    : s __dsx ( __sx_inner __me )
+    ( __sx_publish __me __dsx )
     ( nurl_set_last_type ty )
     ^ v
 }
@@ -13701,7 +13739,7 @@ unsafe @ gen_call i lex i syms i cg → s {
     { ^ ( gen_mem_put_back lex syms cg ) }
     {}
     ? ( seq fname `mem_dup` )
-    { ^ ( gen_mem_dup lex syms cg ) }
+    { ^ ( gen_mem_dup lex syms cg __sx_me ) }
     {}
     // Reference-count cycle collection (docs/MEMORY.md §7.7).
     ? ( seq fname `mem_cyclic` )
@@ -14600,10 +14638,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             // lends through an Arc parameter is a view of the payload —
             // arc_get's result, or a helper's over it — which the walk
             // follows wherever it goes (bck_sx_ev, bck_arc_frozen_check).
-            // (An Arc whose payload can reach it back hands out a copy.)
+            // (One whose payload can reach it back too: what it lends is
+            // all that keeps a store from closing a cycle through it.)
             ? ( __lty_base_is at `Arc` ) {
                 = g_fn_arcseen 1
-                ? ! ( __ts_cyclic ( nurl_llty at ) syms ) { ( __arcp_note call_name arg_idx F F ) } {}
+                ( __arcp_note call_name arg_idx F F )
             } {
                 // A `% Frozen` handle lends what it guards the same way: a
                 // read guard's value is shared with every other reader
@@ -25388,8 +25427,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
 }
 
 // Does a value of type `lty` lend frozen views? 1: it is, or holds, an
-// Arc (one whose payload cannot reach it back — such an Arc hands out
-// copies); 2: a `% Frozen` handle (a read guard); 0: neither. Held means
+// Arc; 2: a `% Frozen` handle (a read guard); 0: neither. Held means
 // through a struct's field, an enum's payload, an option or a result, or
 // a generic argument (a Vec of them) — but not through a handle that
 // synchronises what it holds (`% Sync`: a Locked, an RwLocked, a Mutex,
@@ -25410,7 +25448,7 @@ unsafe @ __ty_lend_frozen i syms s lty i depth → i {
 
 unsafe @ __ty_lend_frozen_walk i syms s lty i depth → i {
     : s bn ( __lty_base_name lty )
-    ? ( seq bn `Arc` ) { ^ ? ( __ts_cyclic lty syms ) 0 1 } {}
+    ? ( seq bn `Arc` ) { ^ 1 } {}
     ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` lty bn ) { ^ 2 } {}
     ? ( __thr_marked `Sync##` lty bn ) { ^ 0 } {}
     : s args ( __thr_peel lty )
@@ -31626,6 +31664,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
+        // (A `( mem_dup … )` copy binds no call that lends: the line's other
+        // calls lend to what it copied, not to the copy — bck_take_plend takes
+        // only the bound call's.)
+        ? & == bck_rhs_tt TT_LPAREN ( seq val ( nurl_sym_get syms `__last_fresh_reg__` ) ) { = g_bck_rhs_callee `mem_dup` } {}
         // A binding that took its own copy holds a fresh value, not a view
         // of where the copy came from; an `s` that owns its buffer (tracked
         // or guarded) is marked so that a copy of it borrows it.
@@ -31959,6 +32001,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
             : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
             = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
+            // (A `( mem_dup … )` copy binds no call that lends: the line's other
+            // calls lend to what it copied, not to the copy — bck_take_plend takes
+            // only the bound call's.)
+            ? & == bck_rhs_tt TT_LPAREN ( seq val ( nurl_sym_get syms `__last_fresh_reg__` ) ) { = g_bck_rhs_callee `mem_dup` } {}
             // (As on the inferred path: a copy is fresh, an owning `s` marked.)
             = g_bck_rhs_sx ? lit_track ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
             = g_bck_bind_sown 0
@@ -32348,6 +32394,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
+        // (A `( mem_dup … )` copy binds no call that lends: the line's other
+        // calls lend to what it copied, not to the copy — bck_take_plend takes
+        // only the bound call's.)
+        ? & == bck_rhs_tt TT_LPAREN ( seq val ( nurl_sym_get syms `__last_fresh_reg__` ) ) { = g_bck_rhs_callee `mem_dup` } {}
         // What the copy rules below make of this `s` (the walk's row says
         // it): a tracked owned one takes a fresh value or its own copy of
         // any other; a guarded one owns an owned call's value, a copy of a
@@ -42623,6 +42673,70 @@ unsafe @ bck_scalar_lty s t → b {
     ^ changed
 }
 
+// …and the summaries closed over call edges: what a virtual callee
+// changes, moves or replaces of its arguments is what any impl does, and a
+// function handing a parameter to a `dyn` call does what that impl does to
+// it, however deep. So each parameter of the virtual callee is an edge to
+// the same parameter of every impl, closed with the program's other edges —
+// the mutation summaries' (__dyn_virtual_mut_edges, before
+// resolve_mutation_summaries) and the replacement summary's
+// (__dyn_virtual_repl_edges, in resolve_replaces). A receiver declared
+// `inout` changes the object in place, whatever its impls write: the impl
+// is handed the object's box, which every copy of the object reaches (a
+// field written through a struct's own `inout` parameter is the caller's
+// slot; through a trait object it is shared storage).
+unsafe @ __dyn_virtual_mut_edges → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `dynvirt` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s parts ( dyn_subst_parts ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvt##` vn ) ) ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvm##` vn ) ) `i64` )
+        : s r1 ( pipe_rest parts )
+        : s mode ( pipe_first r1 )
+        ? ( seq mode `inout` ) { ( nurl_sym_def g_fn_mutates vn ( __word_union ( nurl_sym_get g_fn_mutates vn ) `0` ) ) } {}
+        : i na ( __dyn_parts_arity parts )
+        : i vf ( __rpg_fn_id vn )
+        : ~ s fns ( __dyn_impl_fns vn )
+        ~ != 0 ( nurl_str_len fns ) {
+            : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+            : i ff ( __rpg_fn_id fn )
+            : ~ i k 0
+            ~ < k na { ( __rpg_edge_push vf k ff k ) = k + k 1 }
+        }
+    }
+}
+
+unsafe @ __dyn_virtual_repl_edges → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `dynvirt` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s parts ( dyn_subst_parts ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvt##` vn ) ) ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvm##` vn ) ) `i64` )
+        : i na ( __dyn_parts_arity parts )
+        : ~ s fns ( __dyn_impl_fns vn )
+        ~ != 0 ( nurl_str_len fns ) {
+            : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+            : ~ i k 0
+            ~ < k na {
+                : s ks ( nurl_str_int k )
+                = g_repl_edges ( nurl_str_cat3 g_repl_edges ` ` ( nurl_str_cat4 ( nurl_str_cat3 vn `|` ks ) `|` fn ( nurl_str_cat3 `|` ks `|` ) ) )
+                = k + k 1
+            }
+        }
+    }
+}
+
+// The parameters of a `dyn` method, its receiver included, from its packed
+// signature (dyn_sig_parts: `ret|recvmode|recv[|p1|p2…]`).
+@ __dyn_parts_arity s parts → i {
+    : i n ( nurl_str_len parts )
+    : ~ i bars 0
+    : ~ i j 0
+    ~ < j n {
+        ? == ( nurl_str_get parts j ) 124 { = bars + bars 1 } {}
+        = j + j 1
+    }
+    ^ - bars 1
+}
+
 // The thread-sharing facts of a `dyn` call's virtual callee, per argument
 // (`ccprop##F##K`, `sendreq##F##K`): every impl's at once. One pass of the
 // cycle and Send fixed points (resolve_cc_checks, resolve_send_checks),
@@ -43226,6 +43340,7 @@ unsafe @ resolve_mutation_summaries → v {
 // call that handed a `: ~` copy of a parameter (or a field of one) to a
 // parameter its callee may replace a field of: refused (h295).
 unsafe @ resolve_replaces → v {
+    ( __dyn_virtual_repl_edges )
     : ~ b changed T
     ~ changed {
         = changed F
@@ -50357,7 +50472,7 @@ unsafe @ __cc_mangle s ty → s {
     ( expect lex TT_RPAREN )
     ? ( __ts_cyclic ty syms ) {
         ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat ( nurl_str_cat4 `thread-shared cycle: '` op `' on '` ( llvm_to_nurl ty ) )
-        `': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a copy), and point back with an ArcWeak.` ) ) }
+        `': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a frozen view), and point back with an ArcWeak.` ) ) }
     {}
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `undef` `` )
@@ -63419,6 +63534,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( emit_pending_drop_graphs syms )
         // Every body compiled: resolve the raw provenance graph, then close
         // the mutation summaries, before anything reads them.
+        ( __dyn_virtual_mut_edges )
         ( resolve_raw_provenance )
         ( resolve_mutation_summaries )
         ( resolve_drop_summaries )

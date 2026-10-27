@@ -1,8 +1,19 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.**
+**One:** `inout_argument_that_does_not_own_its_value.nu` (agora #135) — an
+`inout` argument whose binding does not own its value (a cursor over
+another binding, a field read, a value `arc_get` lends) handed to a callee
+that gives the parameter, or a field of it, a new value: the callee
+releases what the other owner holds. The rule that refuses the shape
+(`h295`) covers only a `: ~` copy of a parameter.
 
-The last one, `library_handle_copy_on_two_threads.nu` — a
+The latest closed, found reading a trait object out of an `Arc` (agora
+#128): `h364`–`h366`, a method called through a trait object did less to
+its arguments than its impls do — an `inout` receiver writing the box a
+read guard lends, a field it replaced leaving a view of it reading freed
+memory, and both through a helper that hands its parameter on.
+
+Before them, the last open one, `library_handle_copy_on_two_threads.nu` — a
 share of a library handle made before the handle moved to a thread, kept
 by the spawner while both threads changed one state — is closed and
 graduated as `h349` (agora #121), with the rest of its class: a literal
