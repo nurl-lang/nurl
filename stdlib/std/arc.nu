@@ -141,15 +141,12 @@
 
 // ── Access ──────────────────────────────────────────────────────────
 
-// The shared value. For a payload that can hold a handle back to this Arc
-// (mem_ts_cyclic) it is a COPY: such an Arc is frozen once made, so no
-// cycle of shared handles can be closed through it (docs/MEMORY.md §7.7).
+// The shared value, lent: it lives as long as `r`, and safe code changes
+// nothing in it (the payload is frozen, §6.5 above). That is also what keeps
+// a payload that can hold a handle back to this Arc (mem_ts_cyclic) from
+// closing a cycle of shared handles through it (docs/MEMORY.md §7.7).
 @ arc_get [A] ( Arc A ) r → A {
     : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
-    ? ( mem_ts_cyclic [( Arc A )] ) {
-        : A v . impl value
-        ^ ( mem_dup v )
-    } {}
     ^ . impl value
 }
 

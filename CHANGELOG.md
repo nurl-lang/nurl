@@ -58,6 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`arc_get` lends the payload of every `Arc`, a trait object's too**
+  (Agora #128). An Arc whose payload can hold a handle back to it
+  (`mem_ts_cyclic`: a tree of Arcs, a payload holding a closure or a
+  trait object) used to hand out a `mem_dup` copy, from before every
+  Arc's payload was frozen (0.72.0). A trait object has no clone, so
+  `( arc_get [%Job] a )` did not compile and an `( Arc %Job )` (the Rust
+  `Arc<dyn Job + Send + Sync>`) could not be read in safe code at all. A
+  copy is not what keeps such an Arc acyclic: no call may change what
+  `arc_get` lends, so nothing stored through it can close a cycle. Every
+  read is a lend now, and a cyclic payload's lend is checked like any
+  other. A program that changed its copy of a cyclic payload now copies
+  it itself: `( mem_dup ( arc_get [T] a ) )`.
+  `compiler/tests/thread_arc_dyn_shared` runs one `%Job` on two threads
+  and reads a payload holding a trait object and a tree of Arcs.
+
 - **RSA-2048 signing on AVX-512 IFMA: 0.65 → ~0.27 ms, within 1.2× of
   aws-lc (~0.23 ms on the same CPU, an i7-11850H).** Where the CPU has the IFMA tier, `std/rsa_mont.nu` runs the
   two 1024-bit exponentiations of a CRT signature at once
@@ -113,6 +128,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2000 random a·a⁻¹ ≡ 1.
 
 ### Fixed
+
+- **A method called through a trait object does what its impls do**
+  (h364–h366, found with Agora #128). A `dyn` call's virtual callee had
+  the union of its impls' summaries, with three gaps. A receiver declared
+  `inout` is handed the object's box, which every copy of the object
+  reaches, yet a write to it counted as no change: an `inout` method
+  changed what a read guard or an Arc lends. The replacement summary was
+  not in the union: a view read out of the object outlived a method that
+  gave the field a new value. And the union came after the mutation
+  summaries had closed, so a helper handing its parameter to a `dyn` call
+  changed nothing as far as its callers knew. Each parameter of the
+  virtual callee is now an edge to the same parameter of every impl, in
+  both fixed points, and an `inout` receiver changes the object.
+  `diag_arc_dyn_payload_frozen` and `diag_dyn_inout_replace_ends_views`
+  show the diagnostics.
+- **`( mem_dup ( f … ) )` over a call that lends is a value of its own.**
+  The borrow walk took the lend of the call inside for the binding's
+  own. A copy of an Arc's payload was refused as a change to the payload,
+  and a copy of a `vec_at` element ended with its vector. The copy now
+  binds no lending call (`mem_dup_of_a_lend_is_owned`).
 
 - **A saturated worker serves its fibers in the order they became
   runnable** (Agora #113). The local run queue used to come first. A

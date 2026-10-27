@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-stdlib/std/arc.nu:157:5: error: thread-shared cycle: 'arc_set' on '( Arc TNode )': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a copy), and point back with an ArcWeak. [while instantiating 'arc_set__TNode' — the error may depend on the concrete type arguments; first call site: compiler/tests/diag_arc_cycle_set.nu:16]
+stdlib/std/arc.nu:154:5: error: thread-shared cycle: 'arc_set' on '( Arc TNode )': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a frozen view), and point back with an ArcWeak. [while instantiating 'arc_set__TNode' — the error may depend on the concrete type arguments; first call site: compiler/tests/diag_arc_cycle_set.nu:16]
     ( mem_ts_frozen_only [ ( Arc TNode ) ] arc_set ) 
     ^

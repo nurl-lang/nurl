@@ -860,8 +860,18 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last one, *a share made before a library
-handle moves to a thread*, is closed (agora #121, h349–h358). A library
+**One hole is known open** (agora #135, probe
+`tools/fuzz/holes/open/inout_argument_that_does_not_own_its_value.nu`):
+an `inout` argument whose binding does not own its value — a cursor over
+another binding (`: ~ ( Vec i ) cur root`), a field read, a value
+`arc_get` lends — handed to a callee that gives that parameter, or a field
+of it, a new value. The callee releases what the other owner holds. The
+rule that refuses this (§2.4, h295) covers only a `: ~` copy of a
+parameter. Until it is closed, hand the owner itself, or bind a copy of
+its own (`( mem_dup root )`).
+
+The one before it, *a share made before a library handle moves to a
+thread*, is closed (agora #121, h349–h358). A library
 handle over a counted block (§7.6) is copied by sharing, and its copies
 are one state. A copy made *before* the handle moved — `( PNCounter_share
 a )`, a literal that stores `. h c`, a `Vec` or a closure holding one, a
@@ -2155,11 +2165,15 @@ and a collector for them would have to stop every thread at a safe point.
 Their cycles are rejected at compile time instead:
 
 - **An `Arc` whose payload can lead back to it is frozen once made.**
-  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph. For such
-  an `Arc`, `arc_get` returns a copy, and `arc_set` / `arc_ptr` are
-  compile errors even in `unsafe` code (every `Arc`'s payload is frozen
-  in safe code, §6.5). The payload is built first and shared whole, a tree
-  from its leaves up. `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
+  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph. Every
+  `Arc`'s payload is frozen in safe code (§6.5): what `arc_get` lends is
+  a view no call may change, so nothing stored through it can close a
+  cycle. For such an `Arc`, `arc_set` / `arc_ptr` are compile errors even
+  in `unsafe` code. The payload is built first and shared whole, a tree
+  from its leaves up. A trait object reads as any other payload: a
+  `( Arc %Job )` lends its object, and a method called on it runs on the
+  shared box (the trait declares `: Send Sync` for that to cross a
+  thread). `ArcWeak` (`arc_downgrade` / `arc_weak_upgrade`)
   points back without owning. A closure inside a library handle's state
   (a job handler, a route) is not followed by this walk: it reached that
   state through a call handed the handle, which the store rule below
