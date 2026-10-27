@@ -280,6 +280,23 @@ $ `stdlib/core/box.nu`
     ( set_each [E] st \ E x → v { ( mem_trace [E] x vis ) } )
 }
 
+// The thread crossing's check (docs/MEMORY.md §6.5): every live element. (A
+// loop, not set_each: a closure the check panics through would leak its
+// environment, agora #131.)
+@ Set_sendck [E] ( Set E ) st s what → v {
+    : *SetCtl c ( box_ptr [SetCtl] . st ctl )
+    : i cap . c cap
+    ? > cap 0 {
+        : *E keys # *E ( raw_block_ptr . c keys )
+        : *i states # *i ( raw_block_ptr . c states )
+        : ~ i i 0
+        ~ < i cap {
+            ? == . states i 1 { ( mem_send_check [E] . keys i what ) } {}
+            = i + i 1
+        }
+    } {}
+}
+
 // A copy that owns its own elements, at the same slot layout (no rehash).
 @ Set_clone [E] ( Set E ) st → ( Set E ) {
     : *SetCtl sc ( box_ptr [SetCtl] . st ctl )

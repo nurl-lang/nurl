@@ -172,6 +172,9 @@ $ `stdlib/core/box.nu`
 // Wakes one parked receiver — a fiber (via unpark) or a pthread
 // (via cond_signal) — depending on which arrived first.
 @ chan_send [A] ( Channel A ) ch A v → b {
+    // `v` goes to whichever thread receives it: a handle in it whose copies
+    // are one state may have no owner on this side (docs/MEMORY.md §6.5).
+    ( mem_send_check [A] v `chan_send` )
     : *( ChannelImpl A ) impl # *( ChannelImpl A ) . . ch ctl ctl
     ( mutex_lock . impl m )
     ? != 0 . impl closed {

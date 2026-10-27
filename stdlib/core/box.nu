@@ -181,6 +181,12 @@ $ `stdlib/core/mem.nu`
     ? != 0 # i p { ( mem_trace [T] . p 0 vis ) } {}
 }
 
+// The thread crossing's check (docs/MEMORY.md §6.5): the payload.
+@ Box_sendck [T] ( Box T ) b s what → v {
+    : *T p # *T . b ptr
+    ? != 0 # i p { ( mem_send_check [T] . p 0 what ) } {}
+}
+
 @ Box_clone [T] ( Box T ) b → ( Box T ) {
     : *T src # *T . b ptr
     ? == 0 # i src { ^ @ ( Box T ) { # s 0 } } {}

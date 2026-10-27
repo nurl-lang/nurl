@@ -171,6 +171,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `thread_dyn_send_trait`, `diag_send_dyn_object`,
   `diag_send_dyn_impl_breaks_promise`, `diag_sync_dyn_impl_breaks_promise`
   and `diag_sync_dyn_object_in_arc`.
+- **A handle whose copies are one state crosses to another thread only
+  with every owner of that state** (Agora #121, h349–h358, h360). A
+  `PNCounter`, a `TcpConn` or a `Cell` is copied by sharing. A copy made
+  before the handle moved to a thread stayed with the spawner, and both
+  threads changed one state with no lock (ASan: double free). Such a copy
+  can come from an explicit share, a literal storing `. h c`, a share in
+  a `Vec`, a channel, or a `Locked`'s value: going in, changed under the
+  lock, or copied out by `locked_get`. Any store of a borrowed handle
+  makes one, so no checker can follow them all to the move. The crossing
+  checks at run time instead. `( mem_send_check [T] x what )` walks T's
+  graph: fields, payloads, `Vec` elements, a container's contents through
+  its new `S_sendck` hook (`HashMap`, `Set`, `Deque`, `BTree`, `Box`), a
+  closure's captures through a new slot of its environment's descriptor,
+  a trait object's box through a new last slot of its vtable (filled for
+  an impl of a `: Send` trait whose type reaches such a handle), and a
+  handle's state. It counts how many places in the value hold each
+  such handle's counted block, and panics, naming the crossing and the
+  handle, if a block has more owners than that. Several owners of one
+  state that all go along cross, such as a node's transport and the job
+  node beside it holding a share of it. It compiles to nothing for a T
+  that reaches none. `thread_spawn`,
+  `thread_spawn_owned`, `spawn`, `spawn_owned`, `spawn_joinable`,
+  `chan_send`, a pool taking a value back, and every `Locked` operation
+  that lets a value in or out call it. The checker closes the rest at
+  compile time:
+  - An `RwLocked`'s value faces the Sync question, as an `Arc`'s payload
+    does. Several readers reach it at once (h357).
+  - A `% Sync` marker on a `Locked`, a `Channel` or a `Pool` no longer
+    vouches for the value it holds. That value faces the Send question
+    where the container is reached from several threads: an `Rc` in a
+    `Locked` in an `Arc` crossed to every thread (h358).
+  - A binding read out of a library handle field takes its struct along
+    when a thread takes it or a `sink` consumes it (h356, h348). The
+    field, emptied, holds no handle: reading it after was a null
+    dereference. The struct is dead until it is given a fresh value.
+
+  `compiler/tests/send_check_crossings` covers each crossing, with the
+  only owner and with a copy left behind.
+- **An `inout` parameter is the caller's binding, in a closure as in a
+  function** (h345–h347). Given a binding whose value another owner
+  keeps, it stored the value as is, so two owners released one buffer.
+  The bindings were a field read (`: String z . r name` … `= y z`) and,
+  in a closure, a capture. It now gets a copy and drops the value it
+  held. A closure's `inout` parameter given a fresh value was registered
+  as an owner of its own, so the closure dropped the value on return,
+  under the caller.
+- **An index past the end no longer leaks the panicking function's
+  bindings under `recover`** (h359). The journal's elision decides which
+  functions can panic from the calls they make. It knew `nurl_panic`,
+  but not the runtime's other panicking entries: `nurl_panic_index`
+  (every `vec_at` / `slice_at` past the end), a CPU tier's `_missing`
+  gate, and the crossing check. A function whose only panic was an index
+  dropped its bindings' registrations, and a recovered panic leaked them.
+- **A value with a destructor, once moved on, is no longer dropped again
+  by a later panic** (h361–h363). An owned binding with a drop flag was
+  recorded in the panic journal with the flag's value at that moment. A
+  move clears the flag, but the record went on saying the binding owned
+  its value: one moved into a struct literal, handed to a `sink`
+  parameter or captured by a closure was released by its new owner, and
+  again when a panic later in the scope drained the journal under
+  `recover`. A trait object's box was freed twice. The binding is now
+  recorded with its flag, which the drain reads, as a handle binding
+  already was. Test `recover_moved_drop_value`.
 - **A type in a closure body no longer captures a binding of the same
   name** (Agora #122). The capture scan took every type keyword in the
   body for a use of a binding: `v`, `i`, `s` and the other one-letter

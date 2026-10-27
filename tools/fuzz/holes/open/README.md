@@ -1,23 +1,37 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**One.** `library_handle_copy_on_two_threads.nu` — a share of a library
-handle made before the handle moves to a thread
-(`( PNCounter_share a )`; a literal storing `. h c`, or a callee keeping
-one, does the same) stays with the spawner, and both threads change one
-state: the checker does not connect that owner to the moved one
-(docs/MEMORY.md §6.2, agora #121). The rest of the class is closed and
-graduated: `h254` (SymTab, `% NotSync`), `h319` (the membership table
-dist/heartbeat.nu's thread read, `% NotSend`), `h333` (a binding read out
-of a struct's field, a borrow the thread's move of the struct ends), and
-`h336`–`h340` (agora #66): a thread's capture of a handle not asserted
-`% Sync` moves it, a parameter of one may not be captured, it is not
-Sync (an `Arc` of one, a closure capturing one kept in an `Arc`), and a
-closure carrying one onto a channel takes it along; `h342`, a closure
-several threads run changing what it captured. `h341`, found on the way,
-is a listener accepted on after its close.
+**None.**
 
-Every other probe this directory held is closed and graduated to the CI
-gate in the parent directory. The most recent was `h344` — a trait
+The last one, `library_handle_copy_on_two_threads.nu` — a
+share of a library handle made before the handle moved to a thread, kept
+by the spawner while both threads changed one state — is closed and
+graduated as `h349` (agora #121), with the rest of its class: a literal
+storing `. h c` (`h350`), a share in a `Vec` (`h351`), a channel
+(`h352`), a `Locked`'s value going in, changed under the lock and copied
+out (`h353`–`h355`), a field read taken by a thread (`h356`), an
+`RwLocked` (`h357`), an `Rc` in a `Locked` in an `Arc` (`h358`) and a
+trait object's box (`h360`). A crossing to another thread now checks at
+run time that it leaves no owner of a handle whose copies are one state
+behind (`mem_send_check`, docs/MEMORY.md §6.5); the `RwLocked` and `Arc`
+cases are rejected at compile time. Found on the way and closed with them:
+`h345`–`h348`, an `inout` parameter given a binding it does not own (a
+field read, a closure's capture) or a fresh value in a closure, and a
+library handle field read after the binding read out of it was consumed;
+`h359`, an index panic that skipped the journal's registrations; and
+`h361`–`h363`, a trait object moved into a literal, a `sink` parameter
+or a closure, dropped once more by a later panic.
+The rest of the class closed before: `h254` (SymTab, `% NotSync`), `h319`
+(the membership table dist/heartbeat.nu's thread read, `% NotSend`),
+`h333` (a binding read out of a struct's field, a borrow the thread's
+move of the struct ends), and `h336`–`h340` (agora #66): a thread's
+capture of a handle not asserted `% Sync` moves it, a parameter of one
+may not be captured, it is not Sync (an `Arc` of one, a closure capturing
+one kept in an `Arc`), and a closure carrying one onto a channel takes it
+along; `h342`, a closure several threads run changing what it captured.
+`h341`, found on the way, is a listener accepted on after its close.
+
+Every probe this directory held is closed and graduated to the CI
+gate in the parent directory. Before `h345`–`h363` came `h344` — a trait
 object (`%Churn`) boxing an `Rc` crossed to a thread, because the
 Send/Sync derivation saw no field inside one (agora #127); before it
 `h343` — an MCP task

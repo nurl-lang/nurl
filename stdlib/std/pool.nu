@@ -310,6 +310,10 @@ $ `stdlib/std/time.nu`
 // the check, or the pool closed — dropped at the end, with no lock held
 // (its drop may do I/O), its place freed. The pool owner `sh` goes last.
 @ __pool_return [A E] sink ( Shared ( PoolImpl A E ) ) sh sink A x b gone → v {
+    // The next thread to check it out gets it: a handle in it whose copies
+    // are one state may have no owner left with this one (docs/MEMORY.md
+    // §6.5) — a copy the borrower kept of what pooled_get lent.
+    ( mem_send_check [A] x `pool return` )
     : *( PoolImpl A E ) p ( shared_ptr [( PoolImpl A E )] sh )
     : ~ b keep ! gone
     ? keep {
@@ -341,6 +345,7 @@ $ `stdlib/std/time.nu`
         : ( @ !A E ) mk . p make
         ?? ( mk ) {
             T x → {
+                ( mem_send_check [A] x `pool_fill` )
                 ( mutex_lock . p m )
                 ( __pool_push_idle [A E] p x )
                 ( __pool_wake_one [A E] p )

@@ -83,6 +83,10 @@ $ `stdlib/std/async_ffi.nu`
 // fine. Fire-and-forget — the fiber's control block is freed
 // automatically once its body returns.
 @ spawn ( @ v ) body → Fiber {
+    // A fiber may run on any worker thread: a handle whose copies are one
+    // state that `body` captures goes with it only with every owner of that
+    // state (docs/MEMORY.md §6.5).
+    ( mem_send_check [( @ v )] body `spawn` )
     // Decompose the closure exactly as `thread_spawn` does — bare-form
     // `#`-cast (parenthesised `( # ... )` would be parsed as a call
     // whose function is named `#`).
@@ -97,6 +101,7 @@ $ `stdlib/std/async_ffi.nu`
 // Kept for the programs written when plain `spawn` borrowed the env and
 // this was the only leak-free spelling of a fire-and-forget fiber.
 @ spawn_owned ( @ v ) body → Fiber {
+    ( mem_send_check [( @ v )] body `spawn_owned` )
     : *u fnp # *u body 0
     : *u env # *u body 1
     : i raw ( nurl_fiber_spawn_owned fnp env )
@@ -111,6 +116,7 @@ $ `stdlib/std/async_ffi.nu`
 // thread — a fiber-to-fiber park lands in Phase 4 alongside the
 // channel work.
 @ spawn_joinable ( @ v ) body → Fiber {
+    ( mem_send_check [( @ v )] body `spawn_joinable` )
     : *u fnp # *u body 0
     : *u env # *u body 1
     : i raw ( nurl_fiber_spawn_joinable fnp env )
