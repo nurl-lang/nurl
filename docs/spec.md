@@ -542,7 +542,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h343`, is closed and held by a probe in `tools/fuzz/holes/`; one
+`h01–h344`, is closed and held by a probe in `tools/fuzz/holes/`; one
 is open — a share of a library handle made before the handle moves to
 a thread, MEMORY.md §6.2).
 
@@ -1558,6 +1558,16 @@ identity for concrete values — the runtime representation exists only for the
   its receiver (the object only lends it), are rejected at the call
   (docs/MEMORY.md §1, "Methods"). `sink` and `inout` parameters other than the
   receiver dispatch as declared.
+- **Threads.** A `%Trait` object's box holds whichever type implements the
+  trait, and the object's type does not say which, so the object is neither
+  `Send` nor `Sync` unless its trait promises it: `% Job [T] : Send { … }`
+  lets a `%Job` move to another thread (a thread's or fiber's capture,
+  `chan_send`, a `[T: Send]` bound), and `: Send Sync` lets one object be
+  reached from several at once (an `Arc`'s payload, a `[T: Sync]` bound). The
+  promise is kept where each impl is: a type implementing `Job` is held to
+  `Send` by the derivation (§4.9's markers), and an impl for one that reaches
+  an `Rc`, a `Cell` or a thread-bound handle is rejected there. It reaches
+  through supertraits: `% Step [T] : Job` objects may move as well.
 
 The static surface is pinned by tests: `trait_bounds` / `should_fail_trait_
 bound` (bounds), `test_09_trait_defaults` (defaults), `should_fail_duplicate_
@@ -1568,6 +1578,9 @@ surface is pinned by `dyn_dispatch` (object construction + vtable dispatch with 
 value parameter), `dyn_diamond` (supertrait upcast + inherited default +
 override), `dyn_call_ownership` (arguments and results across impls),
 `diag_dyn_impls_disagree` / `diag_dyn_keeps_receiver` (the ownership checks),
+`thread_dyn_send_trait` / `diag_send_dyn_object` /
+`diag_send_dyn_impl_breaks_promise` / `diag_sync_dyn_impl_breaks_promise` /
+`diag_sync_dyn_object_in_arc` (threads),
 and `should_fail_dyn_not_object_safe` (object-safety rejection).
 
 ## 5. Statements
@@ -2814,7 +2827,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h343`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h344`) is
 closed and held by a probe in `tools/fuzz/holes/` — but one, open: a
 share of a library handle made before the handle moves to a thread
 (docs/MEMORY.md §6.2).

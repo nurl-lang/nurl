@@ -128,6 +128,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publishing. `./build.sh --san` checks its stage 0 binary the same way.
   `tools/tests/test_sanitizer_toolchain.py` covers each case, against a
   stand-in for zig and, in CI, the real one.
+- **A trait object no longer carries an `Rc` to another thread**
+  (Agora #127, h344). The Send/Sync derivation walks a type's fields,
+  payloads, generic arguments and aggregates, and a `%Trait` object is
+  `{ i8*, i8* }`, with nothing to walk: it answered Send and Sync for
+  whatever the box held. A `%Peek` boxing a struct with an `( Rc i )`
+  went into a thread's closure, and the thread and the spawner changed
+  one non-atomic count; ASan reported a use-after-free or a double free
+  on every run. A trait object is now Send only when its trait declares
+  `: Send` (`% Job [T] : Send { … }`), and Sync only with `: Send Sync`.
+  Through a supertrait counts too. **This is a breaking change** for a
+  program that sends a trait object to a thread or a fiber, down a
+  channel or into an `Arc` another thread reaches: declare the trait's
+  promise. The promise is checked where each impl is, by the derivation:
+  a `: Send` or `: Sync` supertrait used to demand an impl block of the
+  marker, which the derivation never has, so it was rejected with advice
+  to write `% Send T { }`. A `[T: Send]` bound the type fails now says
+  what the type reaches, as a thread boundary does. Tests
+  `thread_dyn_send_trait`, `diag_send_dyn_object`,
+  `diag_send_dyn_impl_breaks_promise`, `diag_sync_dyn_impl_breaks_promise`
+  and `diag_sync_dyn_object_in_arc`.
 - **A type in a closure body no longer captures a binding of the same
   name** (Agora #122). The capture scan took every type keyword in the
   body for a use of a binding: `v`, `i`, `s` and the other one-letter
