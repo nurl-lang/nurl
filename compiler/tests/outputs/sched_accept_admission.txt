@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+accepted=100
+connect_failures=0
+admitted_within_half_the_queue=yes

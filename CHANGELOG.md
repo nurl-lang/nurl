@@ -129,6 +129,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A saturated server accepts a connection within one poll window of its
+  arrival** (Agora #113). The fiber parked in an accept used to join the
+  tail of the run queue when its listener became ready, like any woken
+  fiber. It waited a whole pass of the queue before accepting, and the
+  connections it then spawned were stamped behind everything that had
+  become runnable meanwhile. On a TLS server under handshake load, a new
+  connection waited one pass in the kernel's accept queue and another in
+  the run queue. Joining the client's and the server's per-connection
+  timestamps on the source port showed the handshake latency spread over
+  4–11 ms where rustls held 5–8 ms. Now an accept's wait
+  (`nurl_reactor_wait_accept`, which `tcp_accept_async` uses) runs the
+  fiber as soon as the listener is polled ready: the Linux netpoller hands
+  it back to run now, the poll(2) reactor puts it at the head of the
+  global queue, and the unikernel's socket layer wakes it to the head of
+  the bare runtime's run queue (`nurl_bare_unpark_admit`). Locally (server on one core, 64 connections), handshake
+  p99/p50 went from 2.25 to 1.57 (full X25519; rustls 1.62) and from 1.85
+  to 1.57 (resumed; rustls 1.46), medians of three runs. Handshakes/s, the
+  keep-alive record layer and HTTP keep-alive and connection-setup rates
+  are unchanged. `compiler/tests/sched_accept_admission` fails on the old
+  scheduler (worst delay 80 dispatches of a 64-fiber queue hosted, 64
+  under nolibc) and passes on the new one, hosted and nolibc. It runs on
+  Linux only: on FreeBSD, macOS and Windows a reactor thread polls, and
+  the wake waits for that thread's time slice first (36–80 ms on the
+  loaded CI hosts; agora #137).
+
 - **A program's own `( nurl_cpu_x86_v3 )` call is lowered `i32`, as the
   preamble declares it.** The compiler had no return type for it, so
   `std/chacha20poly1305.nu`'s `# i ( nurl_cpu_x86_v3 )` (the four-way

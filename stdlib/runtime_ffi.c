@@ -6685,10 +6685,33 @@ static void nurl__pending_dec(void) {
  *
  * Stamps of different workers interleave in clock order; a steal moves
  * the victim's oldest half with their stamps, so the thief's queue stays
- * ordered too. One relaxed fetch-add per push. */
+ * ordered too. One relaxed fetch-add per push.
+ *
+ * Admission. A fiber parked in an accept (nurl_reactor_wait_accept) runs
+ * the moment its listener is polled ready, ahead of everything queued:
+ * on Linux the netpoller hands it back to run now, and the poll(2)
+ * reactor puts it at the head of the global queue with the oldest stamp
+ * there is (nurl__fiber_unpark_admit). What it does is cheap — accept and
+ * spawn — and it is how the connections waiting in the kernel's queue
+ * enter the service order: each one's fiber is stamped when it is
+ * spawned. Queued at the tail like any fiber, the accept waited a full
+ * pass of the run queue first, and everything that became runnable
+ * meanwhile went ahead of connections that had arrived before it: on a
+ * saturated server a connection waited one pass in the kernel's queue
+ * and another in the run queue, by however much work happened to be
+ * queued at each, and tls-bench's handshake latency spread over twice
+ * the rustls range (agora #113). The poll(2) reactor is a thread of its
+ * own, though, so there the wake itself still waits for that thread's
+ * time slice, tens of milliseconds on a loaded FreeBSD or Windows host
+ * (agora #137). */
 static unsigned long long nurl__rseq_next(void) {
     return __atomic_add_fetch(&nurl__sched.rseq_clock, 1, __ATOMIC_RELAXED);
 }
+
+/* The stamp of an admitted fiber (see Admission): older than any the
+ * clock hands out once it has started, and not 0, which says "the global
+ * queue is empty". */
+#define NURL_RSEQ_ADMIT 1ULL
 
 /* Publish the global head's stamp (global_lock held). */
 static void nurl__global_head_publish(void) {
@@ -6801,6 +6824,22 @@ static void nurl__rq_push_global_chain(NurlFiber *head, NurlFiber *tail, int n) 
     nurl__global_head_publish();
     pthread_mutex_unlock(&nurl__sched.global_lock);
 }
+
+#if !defined(__linux__)
+/* An admitted fiber at the head of the global queue, stamped as the
+ * oldest: the next worker to look runs it before anything it holds.
+ * (The poll(2) reactor's path; Linux's netpoller runs it at once.) */
+static void nurl__rq_push_global_front(NurlFiber *f) {
+    f->rseq = NURL_RSEQ_ADMIT;
+    pthread_mutex_lock(&nurl__sched.global_lock);
+    f->next = nurl__sched.global_head;
+    nurl__sched.global_head = f;
+    if (!nurl__sched.global_tail) nurl__sched.global_tail = f;
+    nurl__sched.global_len++;
+    nurl__global_head_publish();
+    pthread_mutex_unlock(&nurl__sched.global_lock);
+}
+#endif
 
 static NurlFiber *nurl__rq_pop_global(void) {
     pthread_mutex_lock(&nurl__sched.global_lock);
@@ -7252,6 +7291,17 @@ void nurl_fiber_unpark(long long fiber_h) {
     nurl__rq_push_global(f);
     nurl__wake_one();
 }
+
+#if !defined(__linux__)
+/* nurl_fiber_unpark for a fiber parked in an accept: it runs next
+ * (Admission, under "Service order"). */
+static void nurl__fiber_unpark_admit(NurlFiber *f) {
+    if (!f) return;
+    f->state = NF_RUNNABLE;
+    nurl__rq_push_global_front(f);
+    nurl__wake_one();
+}
+#endif
 
 /* Block until the target fiber's body returns, then free it. Calling
  * join twice on the same handle is undefined. */
@@ -7846,6 +7896,9 @@ typedef struct NurlReactorWait {
      * the activation then wakes it at once. Lock held for both. */
     int                     mutex_park;
     int                     park_state;
+    /* An accept's wait: the fiber runs as soon as it is polled ready
+     * (Admission, under "Service order"). */
+    int                     admit;
 } NurlReactorWait;
 
 /* Per-fd netpoller slot. `ready` accumulates edge-triggered readiness
@@ -8092,6 +8145,7 @@ static NurlReactorWait *nurl__np_probe_all_locked(NurlReactorWait *batch) {
  * bounds the tail. Called WITHOUT the lock. */
 static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
     NurlFiber *direct = NULL;
+    NurlFiber *admit = NULL;
     NurlReactorWait *recycle = NULL;
     NurlFiber *chain_head = NULL, *chain_tail = NULL;
     int surplus = 0;
@@ -8099,11 +8153,20 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
         NurlReactorWait *next = batch->wake_next;
         NurlFiber *f = batch->fiber;
         int r = batch->result;
+        int adm = batch->admit;
         batch->fiber = NULL;
         batch->wake_next = NULL;
+        batch->admit = 0;
         batch->free_next = recycle;
         recycle = batch;
-        if (f) {
+        if (f && adm && !admit) {
+            /* An accept runs now, ahead of everything (Admission). One is
+             * enough: it drains the listener's queue, and a second
+             * acceptor of the same listener finds it empty. */
+            f->last_park_result = r;
+            f->state = NF_RUNNABLE;
+            admit = f;
+        } else if (f) {
             f->last_park_result = r;
             f->state = NF_RUNNABLE;
             f->next = chain_head;          /* batch list is newest-first;   */
@@ -8163,6 +8226,21 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
      * nothing and went back to sleep. */
     if (spilled > 0)      nurl__wake_n(spilled);
     else if (kept >= 2)   nurl__wake_one();
+    if (admit) {
+        /* The fiber an idle worker would have run first is the oldest
+         * woken: it goes at the head of this worker's queue, to run
+         * right after the accept. */
+        if (direct) {
+            direct->rseq = NURL_RSEQ_ADMIT;
+            pthread_mutex_lock(&w->rq_lock);
+            direct->next = w->rq_head;
+            w->rq_head = direct;
+            if (!w->rq_tail) w->rq_tail = direct;
+            __atomic_fetch_add(&w->rq_len, 1, __ATOMIC_RELAXED);
+            pthread_mutex_unlock(&w->rq_lock);
+        }
+        return admit;
+    }
     return direct;
 }
 
@@ -8332,7 +8410,7 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
 }
 
 __attribute__((noinline))
-static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
+static int nurl__reactor_wait_k(int fd, short events, long long timeout_ms, int admit) {
     NurlWorker *w = nurl__tls_worker;
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__np_start_if_needed();
@@ -8378,6 +8456,7 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->wake_next = NULL;
     wt->mutex_park = 0;
     wt->park_state = 0;
+    wt->admit = admit;
 
     NurlFiber *cur = w->current;
     cur->pending_unlock = NULL;
@@ -8390,8 +8469,17 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     return cur->last_park_result;
 }
 
+static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
+    return nurl__reactor_wait_k(fd, events, timeout_ms, 0);
+}
+
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
+}
+
+/* nurl_reactor_wait_read for an accept on listener `fd` (Admission). */
+NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
+    return (long long)nurl__reactor_wait_k((int)fd, POLLIN, timeout_ms, 1);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
@@ -8449,6 +8537,7 @@ NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long
     wt->wake_next = NULL;
     wt->mutex_park = 1;
     wt->park_state = 0;
+    wt->admit = 0;
     cur->timed_park = wt;
     cur->pending_unlock = (pthread_mutex_t *)(uintptr_t)mutex_h;
     cur->pending_reactor_wait = wt;
@@ -8605,6 +8694,8 @@ typedef struct NurlReactorWait {
     /* Windows: the read side of `fd` was shut (nurl__reactor_read_shut),
      * which WSAPoll never reports — wake as ready, so the reader sees EOF. */
     int                     forced;
+    /* An accept's wait (Admission, under "Service order"). */
+    int                     admit;
 } NurlReactorWait;
 
 typedef struct NurlReactor {
@@ -8822,7 +8913,8 @@ static void *nurl__reactor_loop(void *arg) {
             recycle = w;
             if (fb) {
                 fb->last_park_result = result;
-                nurl_fiber_unpark((long long)(uintptr_t)fb);
+                if (w->admit) nurl__fiber_unpark_admit(fb);
+                else          nurl_fiber_unpark((long long)(uintptr_t)fb);
             }
             w = next;
         }
@@ -8889,7 +8981,7 @@ void nurl__reactor_activate(NurlReactorWait *w) {
  * until the worker loop activates it via nurl__reactor_activate after
  * swap-out, which closes the unpark-before-park double-execution race. */
 __attribute__((noinline))
-static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) {
+static int nurl__reactor_wait_k(long long fd, short events, long long timeout_ms, int admit) {
     NurlWorker *w = nurl__tls_worker;
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
@@ -8921,6 +9013,7 @@ static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) 
     wt->mutex_park = 0;
     wt->park_state = 0;
     wt->forced = 0;
+    wt->admit = admit;
 #ifdef _WIN32
     if ((events & POLLIN) && fd >= 0 && nurl__shut_has(fd)) wt->forced = 1;
 #endif
@@ -8941,8 +9034,17 @@ static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) 
     return cur->last_park_result;
 }
 
+static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) {
+    return nurl__reactor_wait_k(fd, events, timeout_ms, 0);
+}
+
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait(fd, POLLIN, timeout_ms);
+}
+
+/* nurl_reactor_wait_read for an accept on listener `fd` (Admission). */
+NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
+    return (long long)nurl__reactor_wait_k(fd, POLLIN, timeout_ms, 1);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
@@ -8989,6 +9091,7 @@ NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long
     wt->mutex_park = 1;
     wt->park_state = 0;
     wt->forced = 0;
+    wt->admit = 0;
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     cur->timed_park = wt;
@@ -9059,6 +9162,9 @@ void nurl__reactor_forget_fd(long long fd) { (void)fd; }
 #endif
 
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+    (void)fd; (void)timeout_ms; return -1;
+}
+NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
 }
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {

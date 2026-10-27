@@ -93,6 +93,10 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_fiber_unpark i handle → v
 
+// …and to the head of the run queue, for a waiter in an accept
+// (Admission: nurl_reactor_wait_accept below).
+& `c` @ nurl_bare_unpark_admit i handle → v
+
 // The device poller below is a coroutine like any other; spawning one
 // is the two halves of a closure handed to the runtime, exactly as
 // std/async.nu does it.
@@ -103,13 +107,15 @@ $ `stdlib/core/slice.nu`
     TcpStack ts
     SockTab st
     ( Vec i ) peer  // cached "ip:port" per fd slot — see nurl_tcp_peer_addr
-    // The waiter registry: who is parked on which fd. Three parallel
+    // The waiter registry: who is parked on which fd. Parallel
     // vectors rather than a vector of structs, because a Vec of
-    // pointers is not a thing here and the three are always written
-    // together. `coro` 0 means the slot is free.
+    // pointers is not a thing here and they are always written
+    // together. `coro` 0 means the slot is free; `adm` 1 means an
+    // accept's waiter, woken to the head of the run queue.
     ( Vec i ) w_fd
     ( Vec i ) w_wr
     ( Vec i ) w_coro
+    ( Vec i ) w_adm
     i has_device
     i dns_ip  // the resolver: dns= cmdline key, else DHCP option 6; 0 = none
     i dns_port  // 53 unless dns=ip:port said otherwise
@@ -149,6 +155,7 @@ unsafe @ __shim → *Shim {
     = . sh w_fd ( vec_new [i] )
     = . sh w_wr ( vec_new [i] )
     = . sh w_coro ( vec_new [i] )
+    = . sh w_adm ( vec_new [i] )
     = . sh has_device have
     // nurl_alloc Z is sizeof-and-malloc, NOT calloc — a recycled block
     // arrives holding the last one's bytes, so every field is written.
@@ -430,7 +437,7 @@ unsafe @ __tab → SockTab { ^ . ( __shim ) st }
 // this runtime exists to be able to make. Two pollers then each
 // conclude the other is making progress and neither ever gives up.
 
-unsafe @ __waiter_add i fd i for_write → i {
+unsafe @ __waiter_add i fd i for_write i admit → i {
     : *Shim sh ( __shim )
     : i me ( nurl_fiber_current )
     ? == me 0 { ^ -1 } {}  // the main context cannot park inside itself
@@ -441,6 +448,7 @@ unsafe @ __waiter_add i fd i for_write → i {
             : b _a ( vec_set [i] . sh w_fd k fd )
             : b _b ( vec_set [i] . sh w_wr k for_write )
             : b _c ( vec_set [i] . sh w_coro k me )
+            : b _d ( vec_set [i] . sh w_adm k admit )
             ^ k
         } {}
         = k + k 1
@@ -448,6 +456,7 @@ unsafe @ __waiter_add i fd i for_write → i {
     ( vec_push [i] . sh w_fd fd )
     ( vec_push [i] . sh w_wr for_write )
     ( vec_push [i] . sh w_coro me )
+    ( vec_push [i] . sh w_adm admit )
     ^ n
 }
 
@@ -472,7 +481,10 @@ unsafe @ __wake_ready → v {
         ? && != coro 0 != coro me {
             : i fd ?? ( vec_get [i] . sh w_fd k ) { T x → x F → 0 }
             : i wr ?? ( vec_get [i] . sh w_wr k ) { T x → x F → 0 }
-            ? ( __ready fd wr ) { ( nurl_fiber_unpark coro ) } {}
+            ? ( __ready fd wr ) {
+                : i adm ?? ( vec_get [i] . sh w_adm k ) { T x → x F → 0 }
+                ? != adm 0 { ( nurl_bare_unpark_admit coro ) } { ( nurl_fiber_unpark coro ) }
+            } {}
         } {}
         = k + k 1
     }
@@ -585,7 +597,12 @@ unsafe @ __drive i now → i {
 // the scheduler it is — it drives the scheduler a step at a time, and a
 // step that runs nothing, with no frames queued and no device, is the
 // end of the road for this wait.
-unsafe @ __wait i fd i for_write i timeout_ms → i {
+//
+// `admit` 1 is an accept's wait: woken, it runs ahead of everything
+// queued (nurl_reactor_wait_accept).
+unsafe @ __wait i fd i for_write i timeout_ms → i { ^ ( __wait_k fd for_write timeout_ms 0 ) }
+
+unsafe @ __wait_k i fd i for_write i timeout_ms i admit → i {
     ? == timeout_ms 0 {
         // A poll still drives once: readiness on this machine only
         // changes when someone moves the stack, so "right now" means
@@ -595,7 +612,7 @@ unsafe @ __wait i fd i for_write i timeout_ms → i {
         ^ ? ( __ready fd for_write ) 1 0
     } {}
     : i start ( __ms )
-    : i slot ( __waiter_add fd for_write )
+    : i slot ( __waiter_add fd for_write admit )
     : ~ i rc -1
     : ~ b again T
     ~ again {
@@ -931,6 +948,12 @@ unsafe @ nurl_ktls_recv i conn * u buf i n i nowait → i { ^ -1 }
 @ nurl_tcp_sendfile i conn i fd i off i n → i { ^ -2 }
 
 @ nurl_reactor_wait_read i fd i timeout_ms → i { ^ ( __wait fd 0 timeout_ms ) }
+
+// An accept's wait: the read wait, and the waiter, once its listener is
+// ready, runs ahead of everything queued (Admission, stdlib/runtime_ffi.c
+// under "Service order"). Accepting is how a connection enters the run
+// queue; at the tail of the queue it waited a whole pass first.
+@ nurl_reactor_wait_accept i fd i timeout_ms → i { ^ ( __wait_k fd 0 timeout_ms 1 ) }
 
 @ nurl_reactor_wait_write i fd i timeout_ms → i { ^ ( __wait fd 1 timeout_ms ) }
 
