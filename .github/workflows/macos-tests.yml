@@ -64,12 +64,14 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          # Every exclusion must hold (see ci.yml's `code` step).
+          # Every exclusion must hold (see ci.yml's `code` step, which
+          # also says why CHANGELOG.md is one).
           predicate-quantifier: 'every'
           filters: |
             code:
               - '!webdocs/**'
               - '!formal/**'
+              - '!CHANGELOG.md'
 
   macos:
     needs: changes

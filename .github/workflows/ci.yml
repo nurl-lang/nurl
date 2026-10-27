@@ -61,8 +61,14 @@ jobs:
               - 'tools/tests/test_arithmetic_safety.py'
               - 'compiler/tests/enum_tree_drop.nu'
               - 'compiler/tests/nested_field_store.nu'
-      # `code` is everything outside the webdocs paths and outside formal/
-      # (the memory-model proof, which nothing is compiled from). It is
+      # `code` is everything outside the webdocs paths, outside formal/
+      # (the memory-model proof, which nothing is compiled from) and
+      # other than CHANGELOG.md: a PR whose only change is the changelog
+      # (resolving one of its frequent conflicts with main, or wording
+      # an entry) builds and tests nothing, so it skips the compiler
+      # jobs as a docs-only PR does. A merge of main into a PR still runs
+      # them when the PR changes code, since the paths are measured
+      # against the PR's base, not the previous push. It is
       # its own step because a list of negations needs
       # predicate-quantifier `every` — under the default `some` a file
       # matches when it escapes ANY one exclusion, so every change counted
@@ -83,6 +89,7 @@ jobs:
               - '!tools/gen-contributors.mjs'
               - '!.github/workflows/webdocs-deploy.yml'
               - '!formal/**'
+              - '!CHANGELOG.md'
 
   runner-controls:
     name: compiler runner fault-injection controls
