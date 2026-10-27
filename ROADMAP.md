@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-24 · Current release: **0.78.0** · Language: **Grammar
+_Last reviewed: 2026-10-27 · Current release: **0.79.0** · Language: **Grammar
 v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -132,8 +132,9 @@ shape). Sockets register once per fd lifetime, edge-triggered, and
 readiness that arrives while the fiber computes is banked so the next
 wait skips the park entirely. The surplus a saturated poller cannot
 keep spills into a **fair global FIFO** taken in batches, which is
-what keeps the tail flat under load; non-Linux POSIX keeps the
-portable `poll(2)` reactor. The contract — a wait may only follow an
+what keeps the tail flat under load. Elsewhere a reactor thread polls:
+`poll(2)` on the other POSIX systems, `WSAPoll` on Windows (busy
+workers polling there too is agora #137). The contract — a wait may only follow an
 `EAGAIN` — is in [`docs/ASYNC.md`](docs/ASYNC.md).
 
 ### Standard library
@@ -230,9 +231,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   never silently duplicated (a compile error says where to clone or move),
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
-  own is memory-safe and leak-free (MEMORY.md §6.2; since 0.73.0 every hole
-  found, through probe h319, is closed but one — a library handle's
-  copies changed on two threads (MEMORY.md §6.2); the rules for
+  own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
+  through probe h370, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -600,8 +600,13 @@ new language features.
   library's doc comments still asked of callers: closures that outlived
   what they read — a closure a call returned over its argument, the
   library's iterators, a by-value capture whose binding was given a new
-  value — and lends returned through a join (`lru_get`), h311–h315. No
-  hole is known.
+  value — and lends returned through a join (`lru_get`), h311–h315;
+  h316–h321 (0.77.0–0.78.0); and h322–h370 (0.79.0): fields that cannot
+  be copied, field borrows, a call's temporaries on the panic path, the
+  MCP task store, and, making threads sound, a trait object's Send, a
+  handle's copies left behind at a crossing (checked at run time), the
+  journal's drop flags, a `dyn` method's effects and a borrowed `inout`
+  argument replaced. No hole is known.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

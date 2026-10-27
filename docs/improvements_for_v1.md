@@ -139,8 +139,8 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     join, detach, cancellation, and shutdown tests for every runtime backend
     under ASan and a race-detection/stress gate.
 
-- [ ] **P0 — Never silently discard spawned work.** Windows, non-threaded WASI,
-  and OpenBSD currently expose async calls for which `spawn` can return null and
+- [ ] **P0 — Never silently discard spawned work.** Windows arm64, non-threaded
+  WASI, and OpenBSD currently expose async calls for which `spawn` can return null and
   `runtime_run` does nothing (`docs/ASYNC.md`, `stdlib/runtime_ffi.c`).
   - Unsupported async must fail at compile/link time, return a typed failure,
     panic clearly, or use a documented synchronous fallback.

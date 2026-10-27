@@ -5,8 +5,8 @@ NURL reaches the network through a pure-POSIX socket layer in the C runtime
 at this layer. (The stdlib HTTP *client* `ext/http.nu` and the reverse proxy
 are separate, optional libcurl bridges.) Four primitives, every one
 dual-stack IPv4/IPv6 and integrated with the fiber scheduler's I/O layer
-for async I/O — the `epoll` netpoller on Linux, the portable `poll(2)`
-reactor elsewhere (see [`ASYNC.md`](ASYNC.md)).
+for async I/O — the `epoll` netpoller on Linux, a reactor thread
+elsewhere (`poll(2)`, `WSAPoll` on Windows; see [`ASYNC.md`](ASYNC.md)).
 
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
   HTTP server stack on top (`stdlib/ext/http_*` — HTTP/1.1 **and HTTP/2 on

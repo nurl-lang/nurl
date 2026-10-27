@@ -37,8 +37,8 @@ Host requirements use a separate leading comment, for example
 `NURL_LIVE_TESTS=0` and `NURL_FIBER_TESTS=0` disable them. `internet` is opt-in
 through `NURL_HTTP_TESTS=1` or `NURL_NET_TESTS=1`. Other tokens name required
 commands on PATH. Optional native libraries and platform APIs also affect
-availability; see `test_skips.sh`. Windows defaults fibers off because its
-runtime has no context-switch backend. Filename network prefixes do not gate
+availability; see `test_skips.sh`. `run_tests.ps1` runs `fibers` by default
+too: Windows x64 has its own context switch (Windows arm64 has none yet). Filename network prefixes do not gate
 execution.
 
 Compiler invocations are bounded by `NURL_COMPILE_TIMEOUT` (seconds, default

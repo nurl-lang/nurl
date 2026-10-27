@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.1] — 2026-10-27
+
+Requires NURL 0.78.0.
+
+### Changed
+
+- The statement cache takes a statement out, or prepares one under a
+  fresh name, inside the `??` arm itself. 0.5.0 needed a helper
+  (`__pg_stmt_take`) because an arm ending in `\ ( call )` did not hand
+  back an owned value before NURL 0.78.0 (agora #72). No change in
+  behaviour.
+
 ## [0.5.0] — 2026-10-21
 
 Requires NURL 0.77.0 (`stdlib/std/pool.nu`, and the compiler fix that
