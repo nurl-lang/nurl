@@ -7,7 +7,9 @@
 // empties — and the scheduler used to look at the netpoller (timers,
 // I/O) and the global queue (unparked fibers) only once it did. The
 // sleeper's timer could never fire and this program never ended. The
-// worker now looks at both every 128th dispatch regardless.
+// worker now polls the netpoller every 16th dispatch regardless, and
+// serves its local and the global queue oldest first, so a yield (which
+// re-stamps the spinner) never goes ahead of a fiber already waiting.
 // requires: live fibers
 
 $ `stdlib/std/async.nu`

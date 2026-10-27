@@ -114,6 +114,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A saturated worker serves its fibers in the order they became
+  runnable** (Agora #113). The local run queue used to come first. A
+  fiber that the netpoller spilled, or that a channel or mutex unparked,
+  onto the global queue therefore waited until the local queue emptied,
+  or for the 128th-dispatch starvation guard. Meanwhile everything pushed
+  locally after it ran ahead: spawns, yields, the netpoller's local share.
+  A busy worker's poll also ran the first fiber it woke at once, ahead of
+  everything queued. On one worker under TLS handshake load this was
+  service out of arrival order: tls-bench showed NURL's handshake p50
+  below rustls's and its p99 at 1.4–4.5× its p50, against ~1.3× for
+  rustls. Now every push onto a run queue stamps the fiber from one
+  clock, and a worker takes the older of its own queue's head and the
+  global head. A busy worker's poll puts what it wakes at the queues'
+  tails. The netpoller is polled every 16th dispatch whatever is queued,
+  which replaces the 128th-dispatch guard. `compiler/tests/sched_ready_order`
+  (one worker, 100 loopback TCP readers made ready in a known order
+  behind seven yielders) measured a reader overtaken by 55 later ones
+  before and by none after; its bound, below 16, comes from the poll
+  cadence.
+  Measured locally (4 vCPU, server on one core, 64 connections, three
+  runs each), the whole request (connect, handshake, response) now has
+  p99/p50 of 1.76–1.86 against rustls's 1.71–1.92 (before: 1.93–2.67,
+  11.2 on RSA-2048), with handshakes/s unchanged.
 - **`NURL_SAN=1` no longer builds a binary without AddressSanitizer on an
   installed toolchain** (Agora #126). `nurl.sh` compiled with the bundled
   `zig cc` whenever it existed, and every install has one. zig ships no
