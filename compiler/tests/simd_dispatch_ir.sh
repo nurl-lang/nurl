@@ -188,6 +188,34 @@ else
     note "runtime CPUID cross-check" "skipped (not x86-64 Linux)"
 fi
 
+# ── 8. A program's own CPUID question is lowered as declared ─────────
+# std/chacha20poly1305.nu asks `# i ( nurl_cpu_x86_v3 )` itself before
+# taking a wide path. The preamble declares the function `i32`; a call
+# lowered `call i64` ran on x86 (eax read as rax) but trapped a wasm
+# module on the signature mismatch, and wasmbuilder's fold of
+# `call i32 @nurl_cpu_x86_v3()` to 0 never matched it (wasm-bench:
+# poly1305 printed nothing).
+cat > "$WORK/ask.nu" <<'NEOF'
+@ wide_ok i len → b {
+    ^ & >= len 256 != 0 # i ( nurl_cpu_x86_v3 )
+}
+@ main → i {
+    ( nurl_println_int # i ( wide_ok 300 ) )
+    ^ 0
+}
+NEOF
+if "$NURLC" "$WORK/ask.nu" > "$WORK/ask.ll" 2> "$WORK/ask.err"; then
+    n_i32=$(grep -cE '= call i32 @nurl_cpu_x86_v3\(\)' "$WORK/ask.ll")
+    n_bad=$(grep -E 'call [^ ]+ @nurl_cpu_x86_v3\(' "$WORK/ask.ll" | grep -vc 'call i32 @')
+    if [ "$n_i32" -gt 0 ] && [ "$n_bad" -eq 0 ]; then
+        ok "a program's nurl_cpu_x86_v3 call is i32" "$n_i32"
+    else
+        bad "a program's nurl_cpu_x86_v3 call is i32" "$n_i32 i32, $n_bad other"
+    fi
+else
+    bad "a program's nurl_cpu_x86_v3 call is i32" "nurlc failed: $(head -1 "$WORK/ask.err")"
+fi
+
 # ── The v256 lowering ChaCha20-Poly1305 depends on ────────────────────
 # Two things LLVM gets wrong from the obvious IR, each worth a tenth or
 # more of the AEAD, invisible to any behavioural test:

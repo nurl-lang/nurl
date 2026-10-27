@@ -55881,6 +55881,12 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v128_clmul_lh` `v128` )
     ( nurl_sym_def syms `nurl_v128_clmul_hh` `v128` )
     ( nurl_sym_def syms `nurl_cpu_has_aes` `i1` )
+    // The preamble declares it `i32` (emit_header). A program's own call
+    // (`# i ( nurl_cpu_x86_v3 )`, std/chacha20poly1305.nu) was lowered
+    // `call i64` with no type here: x86 happened to read eax, a wasm
+    // module trapped on the signature mismatch, and wasmbuilder's fold of
+    // `call i32 @nurl_cpu_x86_v3()` to 0 never matched it.
+    ( nurl_sym_def syms `nurl_cpu_x86_v3` `i32` )
     ( nurl_sym_def syms `nurl_v256_aesenc` `v256` )
     ( nurl_sym_def syms `nurl_v256_aesenclast` `v256` )
     ( nurl_sym_def syms `nurl_v256_aesdec` `v256` )

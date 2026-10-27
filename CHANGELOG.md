@@ -114,6 +114,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A program's own `( nurl_cpu_x86_v3 )` call is lowered `i32`, as the
+  preamble declares it.** The compiler had no return type for it, so
+  `std/chacha20poly1305.nu`'s `# i ( nurl_cpu_x86_v3 )` (the four-way
+  Poly1305 gate) became `call i64`. x86-64 read eax and got the right
+  answer. A wasm module trapped on the signature mismatch instead, and
+  wasmbuilder's fold of `call i32 @nurl_cpu_x86_v3()` to 0 never matched
+  the call, so `poly1305_mac` on wasm32 printed nothing (wasm-bench's
+  correctness gate). `simd_dispatch_ir` now checks the call's type.
 - **A saturated worker serves its fibers in the order they became
   runnable** (Agora #113). The local run queue used to come first. A
   fiber that the netpoller spilled, or that a channel or mutex unparked,
