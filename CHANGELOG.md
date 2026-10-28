@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closure that gives a capture a new value ends what borrows it
+  where the closure runs** (Agora #151, h523–h542). `= x …` or
+  `= . r f …` in a closure body was not an effect of running the
+  closure. A view or element of `x` taken before the call was still
+  readable after it, and a `~` loop over `x` kept walking the old
+  buffer. Both are now rejected:
+  - when the closure is called;
+  - when it is a literal or a binding handed to any callee, including
+    one defined further down;
+  - when another closure runs it.
+
+  A closure that runs one that frees a capture now frees it too. A
+  `~` loop now also sees a closure that clears its container through a
+  generic callee (`vec_clear [String]`).
 - **A `~` closure binding given a closure its owner lends now borrows
   from that owner** (Agora #153, h512–h522). `= f . h cb`, `= f cb` from
   a `??` arm and `= f g` from a borrowed binding kept the mark of the

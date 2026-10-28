@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_loop_container_closure_effects.nu:21:5: error: 'h' gives '. r xs' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body
+    ~ x . r xs { ( h ) }
+    ^
+compiler/tests/diag_loop_container_closure_effects.nu:27:5: error: the closure gives 'xs' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body
+    ~ x xs { ( run \ → v { = xs ( vec_new [String] ) } ) }
+    ^
+compiler/tests/diag_loop_container_closure_effects.nu:34:5: error: 'h' gives 'xs' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body
+    ~ x xs { ( run_later h ) }
+    ^
+compiler/tests/diag_loop_container_closure_effects.nu:42:5: error: 'g' gives 'xs' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body
+    ~ x xs { ( g ) }
+    ^
+compiler/tests/diag_loop_container_closure_effects.nu:49:5: error: 'h' hands 'xs' to 'vec_clear', which changes or takes it, when it runs — here inside a '~' loop over it, which holds a borrow of the container; run the closure outside the loop body
+    ~ x xs { ( h ) }
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

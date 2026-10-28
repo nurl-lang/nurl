@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_assign_ends_borrows.nu:55:5: error: use of possibly-moved value 's' — the closure 'g' frees it when it runs, and it was used at line 54; on that path this reads a freed buffer. Consume it on every path, or rebind it (= s …) on the path that consumed it
+    ( g )
+    ^
+compiler/tests/diag_closure_assign_ends_borrows.nu:22:5: error: 'v' borrows from 'x', which ended at line 21 — a closure that runs here gives it a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'v' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup v ).
+    ( nurl_println v )
+    ^
+compiler/tests/diag_closure_assign_ends_borrows.nu:30:5: error: 'v' borrows from '. r s', which ended at line 29 — a closure that runs here gives it a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'v' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup v ).
+    ( nurl_println v )
+    ^
+compiler/tests/diag_closure_assign_ends_borrows.nu:38:5: error: 'e' borrows from 'xs', which ended at line 37 — a closure that runs here gives it a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'e' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup e ).
+    ( nurl_println ( string_data e ) )
+    ^
+compiler/tests/diag_closure_assign_ends_borrows.nu:47:5: error: 'v' borrows from 'x', which ended at line 46 — a closure that runs here gives it a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'v' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup v ).
+    ( nurl_println v )
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
