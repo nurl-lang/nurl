@@ -4,6 +4,7 @@
 //
 //   <data>/registry.db                       SQLite (see db.nu)
 //   <data>/pkgs/<name>/<name>-<version>.tar.gz
+//   <data>/pkgs/<name>/<name>-<version>.tar.gz.minisig
 //
 // Tarball paths are BUILT from a validated (name, version) pair — no
 // client-supplied path segment is ever joined onto the filesystem, so
@@ -43,6 +44,13 @@ $ `stdlib/ext/registry_id.nu`
     ^ out
 }
 
+// The detached signature lives beside the exact immutable tarball it covers.
+@ reg_minisig_path s data_dir s name s version → String {
+    : String out ( reg_tarball_path data_dir name version )
+    ( string_push_str out `.minisig` )
+    ^ out
+}
+
 // Persist a published tarball; T on success.
 @ reg_tarball_write s data_dir s name s version ( Vec u ) bytes → b {
     : String dir ( string_from data_dir )
@@ -72,4 +80,25 @@ $ `stdlib/ext/registry_id.nu`
         F _ → {}
     }
     ^ out
+}
+
+// Persist a detached minisign file; T on success. The package directory is
+// created here as well so this primitive is independently usable in tests and
+// by a signer that prepares the sidecar before committing publish metadata.
+@ reg_minisig_write s data_dir s name s version s signature → b {
+    : String dir ( string_from data_dir )
+    ( string_push_str dir `/pkgs/` )
+    ( string_push_str dir name )
+    ?? ( dir_create_all ( string_data dir ) ) {
+        T _ → {}
+        F _ → { ^ F }
+    }
+    : String path ( reg_minisig_path data_dir name version )
+    ^ ?? ( write_file ( string_data path ) signature ) { T _ → T F _ → F }
+}
+
+// Read a detached minisign file; empty String when absent or unreadable.
+@ reg_minisig_read s data_dir s name s version → String {
+    : String path ( reg_minisig_path data_dir name version )
+    ^ ?? ( read_file ( string_data path ) ) { T text → text F _ → ( string_new ) }
 }
