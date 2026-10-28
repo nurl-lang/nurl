@@ -6,6 +6,38 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A function that hands a field of its parameter to a callee that
+  takes it now takes the parameter** (an inferred `sink`, Agora #145).
+  It already owned the struct and dropped the rest of it; now the call
+  moves its caller's binding too, so reading the struct after the call
+  is a use-after-move. A `vec_free_with` hook that hands each element to
+  such a function is rejected: the Vec drops its elements itself.
+
+### Fixed
+
+- **A field handed to a callee that takes it is no longer released
+  twice or read after its release** (Agora #145, h389–h404). Before, these
+  were accepted and read freed memory:
+  - a caller read a struct whose field its callee had taken — directly,
+    through a field viewer, a method, a generic or a forward callee;
+  - a field of a `vec_at` copy, or of a binding read out of another's
+    field, was emptied only in that copy, and its owner released it
+    again (now rejected; a `vec_get` element is emptied in its slot);
+  - a closure took a field of a value it captured (now rejected);
+  - a closure or a view over a struct outlived a field of it handed to a
+    `sink`.
+  These predate 0.79.0.
+- **A closure that gives a field of a struct it captured by reference a
+  new value releases the old one** (Agora #144, h405–h407). It leaked
+  before. The env carries the binding's drop flag, so the old value is
+  released when the binding owns it. A binding that only borrows its
+  value, such as a `vec_at` copy, would leave the new value with no
+  owner, so that assignment is rejected.
+
 ## [0.80.0] — 2026-10-28
 
 The two holes 0.79.1 listed under *Known issues* are closed (h378–h383),

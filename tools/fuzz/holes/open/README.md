@@ -1,6 +1,18 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** The last class, agora #141, is closed and graduated as
+**None.** The last classes, agora #145 and #144, are closed and
+graduated as `h389`–`h407`, found by a hunt along one shape — a field
+handed to a callee that takes it — in every context:
+
+| Probes | What happened | How it is closed |
+|---|---|---|
+| `h389`–`h393`, `h396`, `h397` | A function that handed a field of its by-value parameter to a consumer owned the parameter and dropped the rest, but its caller's binding was not moved: the caller read the struct after the call (directly, through a field viewer, a forward callee, a method; a `vec_at` copy handed to it) | The parameter is an inferred `sink` (`__param_field_taken`) |
+| `h394`, `h395`, `h398` | A field of a `vec_at` copy or of a field viewer, handed to a taker, was emptied only in that copy; its owner released it again | Rejected: gen_call's `pendfx` row, decided on the callee's final summary |
+| `h399`, `h400` | A closure handed a field of its capture to a taker | Rejected: a `pendfc` row |
+| `h401`–`h404` | A closure or a view over a struct outlived a field of it handed to a `sink` | The borrow sweep ends them as at a field replaced |
+| `h405`–`h407` | A field assigned through a by-reference capture leaked what it held (agora #144) | Released under the binding's drop flag; a borrowed binding's field cannot be assigned there |
+
+Before them, agora #141, closed and graduated as
 `h384`–`h388`: a closure a function returns over a parameter it did not
 take over — bound to a local first, joined, given a new value, or over a
 local view of the parameter — was not recorded as a view of the caller's

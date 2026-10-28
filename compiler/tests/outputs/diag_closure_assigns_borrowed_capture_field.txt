@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_assigns_borrowed_capture_field.nu:18:25: error: this closure gives a field of 'e' a new value through its pointer to it, but 'e' borrows its value (a copy vec_at lends, a field read, a value a call lends): the struct is its owner's, so the value stored would have no owner and leak. Give the field its value outside the closure, or capture a binding that owns its value (a copy: clone, string_from, vec_clone).
+    : ( @ v ) h \ → v { = . e b ( mk `gamma` ) }
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

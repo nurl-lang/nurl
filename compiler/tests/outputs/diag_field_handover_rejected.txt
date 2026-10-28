@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_field_handover_rejected.nu:23:5: error: use of moved value 'q' — a heap handle has exactly one owner, and this one was consumed at line 22 by drop_a. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ( nurl_println ( string_data . q b ) )
+    ^
+compiler/tests/diag_field_handover_rejected.nu:30:5: error: 'e' is a borrow (a copy of an element vec_at lends, a view of something another binding owns), and its field '. e a' is handed here to 'string_free', which takes it, as if it owned the value. Only the copy in 'e' is emptied: the owner still holds that field and releases it again. Hand over a copy that is yours (string_from, mem_dup, slice_to_vec), or take the field from where it lives — an element read with vec_get (its slot is emptied), the owner's own field.
+    ( string_free . e a )
+    ^
+compiler/tests/diag_field_handover_rejected.nu:39:5: error: 'e' is a borrow (a copy of an element vec_at lends, a view of something another binding owns), and its field '. e a' is handed here to 'string_free', which takes it, as if it owned the value. Only the copy in 'e' is emptied: the owner still holds that field and releases it again. Hand over a copy that is yours (string_from, mem_dup, slice_to_vec), or take the field from where it lives — an element read with vec_get (its slot is emptied), the owner's own field.
+    ( string_free n )
+    ^
+compiler/tests/diag_field_handover_rejected.nu:46:5: error: '. e a' is a field of 'e', a binding read out of the field '. o p', and is handed here to 'string_free', which takes it. Emptied in 'e', the field stays in '. o p', which releases it again. Hand that field over from its owner, or take 'e' over whole.
+    ( string_free . e a )
+    ^
+compiler/tests/diag_field_handover_rejected.nu:51:5: error: '. c a' is (a field of) a value this closure captured, and is handed here to 'string_free', which takes it. The binding the closure captured still holds that field and releases it again (the closure empties its own copy; whether the binding owns the field, only its own function knows). Release the field outside the closure, through the binding that owns it.
+    : ( @ v ) h \ → v { ( string_free . c a ) }
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
