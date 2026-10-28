@@ -25260,9 +25260,10 @@ unsafe @ __callee_decl_name s cn → s {
 // ── Sealed representations ─────────────────────────────────────────
 //
 // A struct whose representation is raw memory: it declares a raw-pointer
-// field (a `*` anywhere in a field's type), or it is a library handle whose
+// field (a `*` anywhere in a field's type), it is a library handle whose
 // hooks are raw code — every standard-library handle, and a program's own
-// handle whose drop hook is `unsafe`. Its fields carry an invariant the
+// handle whose drop hook is `unsafe` — or it is a standard-library struct
+// with its own `% Drop`, the state such a handle shares. Its fields carry an invariant the
 // code managing them relies on (a Slice's `len` covers its `data`, a Vec's
 // `ctl` is its one control block), so outside `unsafe` code such a value
 // is built and changed only through its API: a literal of it, a write to
@@ -25284,7 +25285,15 @@ unsafe @ __callee_decl_name s cn → s {
                 ? ( bck_trusted_file dfile ) { = sealed T } {
                     = sealed & != 0 g_unsafe_fns != 0 ( nurl_sym_len2 g_unsafe_fns base `_drop` )
                 }
-            } {}
+            } {
+                // A standard-library struct with its own `% Drop` is the
+                // state behind a handle (TcpConnImpl, FileImpl, RawBlock,
+                // …): its destructor hands its fields to raw code — a
+                // runtime record, a FILE*, an address to free — so one
+                // built by a literal released whatever the program wrote
+                // there. Only the library builds and changes it.
+                = sealed & ( __has_user_drop ty ) ( bck_trusted_file ( nurl_sym_get2 g_vis_syms sname `__src_file` ) )
+            }
         }
     } {}
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `sealed##` ty ) ? sealed `1` `-` )
@@ -25301,7 +25310,7 @@ unsafe @ __callee_decl_name s cn → s {
 // `what` (a literal of / a write to … of) a sealed `ty` outside `unsafe`.
 @ __sealed_die i lex s ty s what → v {
     ( die lex ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
-    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block or the state behind one, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
 }
 
 // The arguments the result of the call just generated may borrow from:

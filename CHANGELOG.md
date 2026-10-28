@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The state behind a library handle can no longer be built by a
+  literal** (h433, h434). `@ TcpConnImpl { 4096 0 0 T }` was accepted,
+  and its destructor closed the made-up number 4096 as the address of a
+  runtime record. The same went for `RawBlock` (whose destructor frees
+  its pointer), `FileImpl`, `BufReaderImpl`, `UdpSocketImpl`,
+  `ThreadImpl` and every other standard-library struct with its own
+  `% Drop`. Such a struct is now sealed, which future ones are too: only
+  the library builds it or writes its fields.
+- **`sort_by` with an inconsistent comparator no longer reads past the
+  Vec** (h435). The nearly-sorted path's partition scans stopped only at
+  an element the comparator ranked against the pivot. Each scan now also
+  stops at its range's end. Measured: 2 M nearly-sorted integers sort in
+  the same 47–49 ms as before.
 - **Core library calls given huge or negative offsets no longer read or
   write outside their buffers** (h428–h432). Each tested `start + n`
   against the length, a sum that wraps for a count near i64 max, or

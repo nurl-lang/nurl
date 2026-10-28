@@ -10,7 +10,9 @@ unsafe @ ku_state → TlsConn {
     ^ h
 }
 
-@ ku_setup inout TlsConnImpl c → v {
+// Writes the state behind the handle (sealed: the library's own), so
+// it vouches as `unsafe`.
+unsafe @ ku_setup inout TlsConnImpl c → v {
     : ( Vec u ) ss ( bytes_from_str `01234567890123456789012345678901` )
     : ( Vec u ) cs ( bytes_from_str `12345678901234567890123456789012` )
     ( _set_keys c 0 ss ) ( _set_keys c 1 cs )

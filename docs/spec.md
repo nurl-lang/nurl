@@ -471,8 +471,11 @@ A function or method declaration may carry a leading `unsafe` prefix
   parameter or in the result, outside a closure type: `vec_data`,
   `slice_data`, `nurl_str_at`, a program's own `→ *T`);
 - build a sealed representation field by field, write any of its fields
-  or read its raw fields — a struct that declares a raw-pointer field, or
-  a library handle (`Slice`, `Vec`, `Box`, …);
+  or read its raw fields — a struct that declares a raw-pointer field, a
+  library handle (`Slice`, `Vec`, `Box`, …), or a standard-library struct
+  with its own `% Drop` (the state behind a handle — `TcpConnImpl`,
+  `FileImpl`, `RawBlock`, … — whose destructor hands its fields to raw
+  code);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
@@ -548,7 +551,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h432`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h435`, is closed and held by a probe in `tools/fuzz/holes/`).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -2847,7 +2850,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h432`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h435`) is
 closed and held by a probe in `tools/fuzz/holes/`; a handle whose copies
 are one state is checked where it crosses to another thread
 (docs/MEMORY.md §6.5).

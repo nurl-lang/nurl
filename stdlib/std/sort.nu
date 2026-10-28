@@ -82,11 +82,17 @@ $ `stdlib/core/mem.nu`
     : A pivot . data pi
     : ~ i i - lo 1
     : ~ i j + hi 1
+    // The scans stop at the range's ends as well as at the pivot: the
+    // median-of-three sentinels bound them only for a comparator that is
+    // consistent, and `cmp` is the caller's — one that says "less" for
+    // every pair walked `i` past `hi` (and `j` below `lo`), out of the
+    // Vec. A split at an end still shrinks nothing only until the
+    // partition budget hands the range to heapsort.
     ~ T {
         = i + i 1
-        ~ < ( cmp . data i pivot ) 0 { = i + i 1 }
+        ~ < ( cmp . data i pivot ) 0 { ? >= i hi { break } {} = i + i 1 }
         = j - j 1
-        ~ > ( cmp . data j pivot ) 0 { = j - j 1 }
+        ~ > ( cmp . data j pivot ) 0 { ? <= j lo { break } {} = j - j 1 }
         ? >= i j { ^ j } {}
         ( __sort_swap [A] data i j )
     }
