@@ -49,23 +49,30 @@ NURL_HOME="$PREFIX" "$ROOT/tools/install-toolchain.sh" >/dev/null || fail=1
 # ── 2. Serve + mint ────────────────────────────────────────────────────
 say "serve registry (NURL)"
 export REG_TOKEN_PEPPER="e2e-pepper"
+export REG_SIGNING_SEED_HEX="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+export REG_SIGNING_KEY_ID_HEX="0a0b0c0d0e0f1011"
 "$WORK/registry" serve --data "$WORK/data" --port "$PORT" >"$WORK/server.log" 2>&1 &
 SRVPID=$!
 for i in $(seq 1 40); do curl -sf "${REG}api/v1/stats" >/dev/null 2>&1 && break; sleep 0.25; done
 curl -sf "${REG}api/v1/stats" >/dev/null || { echo "server did not come up"; cat "$WORK/server.log"; exit 2; }
 echo "serve: OK"
 
+PUBKEY=$(sed -n 's/^registry: signing public key //p' "$WORK/server.log" | head -1)
+[[ -n "$PUBKEY" ]] || { echo "server did not report its signing public key"; cat "$WORK/server.log"; exit 2; }
+printf '[registries]\n"%s" = "%s"\n' "$REG" "$PUBKEY" > "$PREFIX/registries.toml"
+echo "registry trust: OK"
+
 TOKEN=$("$WORK/registry" token new e2e --data "$WORK/data" 2>/dev/null)
 [[ -n "$TOKEN" ]] && echo "token: OK" || { echo "token: FAILED"; fail=1; }
 
 # ── 3. Publish the real md2html package ────────────────────────────────
 say "nurlpkg publish md2html"
-OUT=$(cd "$ROOT/packages/md2html" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
+OUT=$(cd "$ROOT/packages/md2html" && NURL_HOME="$PREFIX" NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
 echo "$OUT"
 echo "$OUT" | grep -q 'published' && echo "publish: OK" || { echo "publish: FAILED"; fail=1; }
 
 # Immutability: publishing the same version again must fail with a conflict.
-OUT=$(cd "$ROOT/packages/md2html" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
+OUT=$(cd "$ROOT/packages/md2html" && NURL_HOME="$PREFIX" NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
 echo "$OUT" | grep -q 'already published' && echo "immutability: OK" || { echo "immutability: FAILED ($OUT)"; fail=1; }
 
 # ── 4. Synthesize + publish the consumer package ───────────────────────
@@ -98,8 +105,14 @@ $ `deps/md2html/src/markdown.nu`
 }
 EOF
 
+say "nurlpkg install mdcat dependencies"
+OUT=$(cd "$MDCAT" && NURL_HOME="$PREFIX" NURL_REGISTRY="$REG" "$ROOT/build/nurlpkg" install 2>&1)
+echo "$OUT"
+[[ -e "$MDCAT/deps/md2html" ]] \
+    && echo "dependency install: OK" || { echo "dependency install: FAILED"; fail=1; }
+
 say "nurlpkg publish mdcat (with a registry dep)"
-OUT=$(cd "$MDCAT" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
+OUT=$(cd "$MDCAT" && NURL_HOME="$PREFIX" NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
 echo "$OUT"
 echo "$OUT" | grep -q 'published' && echo "publish: OK" || { echo "publish: FAILED"; fail=1; }
 
@@ -120,7 +133,7 @@ OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
     nurlpkg install mdcat 2>&1
 ")
 echo "$OUT"
-echo "$OUT" | grep -q 'Installed mdcat' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
+echo "$OUT" | grep -qi 'mdcat .* installed' && echo "install: OK" || { echo "install: FAILED"; fail=1; }
 
 say "run installed mdcat"
 MD_OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
@@ -143,7 +156,7 @@ OUT=$(env -i HOME="$WORK" PATH=/usr/bin:/bin bash -c "
     export NURL_REGISTRY='$REG'
     nurlpkg install mdcat 2>&1
 ")
-echo "$OUT" | grep -qi 'Installed mdcat' \
+echo "$OUT" | grep -qi 'mdcat .* installed' \
     && { echo "yanked install: FAILED (still installable)"; fail=1; } \
     || echo "yanked install refused: OK"
 
