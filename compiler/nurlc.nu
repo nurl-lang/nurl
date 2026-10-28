@@ -28467,10 +28467,10 @@ unsafe @ bck_sx_skip s e → v {
     } {}
     // (…and what the views it holds point into: bck_dep_set.)
     : s deps ( __src_mark2 ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` rs ) ) )
+    // (A scalar, a closure that owns its env — or one borrowed out of an
+    // owner, which points into nothing: stored, returned or handed to
+    // another thread, it is copied. bck_nh_mark.)
     ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` ids ) ) { ^ ( nurl_str_cat deps `` ) } {}
-    // (A closure borrowed out of an owner points into nothing: stored,
-    // returned or handed to another thread, it is copied.)
-    ? != 0 ( nurl_sym_len g_bck ( bck_bkey `kc_` ids ) ) { ^ ( nurl_str_cat deps `` ) } {}
     : i v ( bck_st_get st r )
     ? ( bck_dead_state v ) { ^ ( nurl_str_cat `` `` ) } {}
     // An `s` that owns the buffer it points at (view mark `o`): a copy of
@@ -28819,11 +28819,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( nurl_sym_set g_bck ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
                 ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
-                ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
-                // A closure borrowed out of an owner (`k`): a borrow while it
-                // is called, never a view — wherever it goes it goes as a copy
-                // (bck_sx_name).
-                ( nurl_sym_set g_bck ( bck_bkey `kc_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `k` ) `1` `` )
+                ( bck_nh_mark rec )
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
                 // the buffer it points at (`o`: the view mark is `o`, read by
@@ -28866,11 +28862,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( bck_partner_unlink asid )
                 = st ( bck_st_set st asid BCK_OWNED )
                 ? != 0 g_bck_ab_any { ( nurl_sym_set g_bck ( bck_bkey `ab_` ( nurl_str_int asid ) ) `` ) } {}
-                ? | ( seq ( bck_field rec 5 ) `s` ) ( seq ( bck_field rec 5 ) `c` ) { ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `1` ) } {}
-                // A closure borrowed out of an owner (`k`): a borrow while it
-                // is called, never a view — wherever it goes it goes as a copy
-                // (bck_sx_name).
-                ( nurl_sym_set g_bck ( bck_bkey `kc_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `k` ) `1` `` )
+                ( bck_nh_mark rec )
                 // A view (an address into storage another binding owns) —
                 // one that owns nothing itself (`w`), or an `s` that may own
                 // the buffer it points at (`o`: the view mark is `o`, read by
@@ -29328,7 +29320,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( bck_partner_unlink fid )
                 = st ( bck_st_set st fid BCK_UNINIT )
                 ( nurl_sym_set g_bck ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
-                ( nurl_sym_set g_bck ( bck_bkey `kc_` ( bck_field rec 1 ) ) `` )
+                ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) `` )
                 ( nurl_sym_set g_bck ( bck_bkey `vw_` ( bck_field rec 1 ) ) `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( bck_field rec 1 ) ) `` )
                 ? != 0 g_bck_has_borrow { ( nurl_sym_set g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
@@ -29354,10 +29346,26 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // to a call that may drop its elements; reading it then is an error.
 @ bck_bkey s pre s ids → s { ^ ( nurl_str_cat4 pre ( nurl_str_int g_bck_gen ) `_` ids ) }
 
+// A row's binding that holds nothing a borrow could be of — a scalar, or
+// a closure that owns what it captured (field 5 `s` `c`) — is marked
+// `nh_` `1`, and bck_borrow_begin records no borrow for it. A closure
+// borrowed out of an owner (`k`) is marked `k`: a borrow while it is
+// called, never a view — wherever it goes it goes as a copy (bck_sx_name).
+// Every `let` and `assign` sets the mark: a new value of another class
+// (`= f . h cb`) must not keep the old one, or the borrow its next row
+// records is lost (agora #153).
+@ bck_nh_mark s rec → v {
+    : s cls ( bck_field rec 5 )
+    ( nurl_sym_set g_bck ( bck_bkey `nh_` ( bck_field rec 1 ) ) ? | ( seq cls `s` ) ( seq cls `c` ) `1` ? ( seq cls `k` ) `k` `` )
+}
+
+// Marked `nh_` `1` (bck_nh_mark): it holds nothing to borrow from.
+@ bck_holds_nothing s ids → b { ^ == ( nurl_str_get ( nurl_sym_get g_bck ( bck_bkey `nh_` ids ) ) 0 ) 49 }
+
 @ bck_borrow_begin s st i bid s srcs → s {
     : s bids ( nurl_str_int bid )
     // A scalar is a copy: it borrows nothing.
-    ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` bids ) ) { ^ st } {}
+    ? ( bck_holds_nothing bids ) { ^ st } {}
     = g_bck_has_borrow 1
     : ~ s set ``
     // (A borrow of a borrow of an Arc's payload is one too, §6.5.)
@@ -30063,7 +30071,7 @@ unsafe @ bck_sx_is_id s e → b {
         ? & >= wpc 0 == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int wid ) ) ) { continue } {}
         ? & & != 0 ( nurl_str_len callee ) != 0 ( nurl_str_len wc ) ! ( seq wc callee ) { continue } {}
         // A number holds nothing to borrow from.
-        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `nh_` w ) ) { continue } {}
+        ? ( bck_holds_nothing w ) { continue } {}
         // A field (`s.items`) is as alive as its binding; a field of a borrow
         // borrows what that borrow does.
         : i wr ( bck_path_root ( nurl_str_to_int w ) )

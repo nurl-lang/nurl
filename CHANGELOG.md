@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `~` closure binding given a closure its owner lends now borrows
+  from that owner** (Agora #153, h512–h522). `= f . h cb`, `= f cb` from
+  a `??` arm and `= f g` from a borrowed binding kept the mark of the
+  closure that `f` owned before, so no borrow was recorded and `f` could
+  be called after `h` ended. Each such call is now rejected, as it is for
+  `: ( @ i ) f . h cb`.
 - **A parameter pushed into a container can no longer be read or kept
   twice** (Agora #152, h506–h511). The store row that makes a pushed
   local the container's skipped parameters, so a function could push its
