@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `;` defer may read the value a return hands back, but no longer
+  release it** (Agora #165, h426–h434). The defers run after the value
+  is the caller's. A defer that frees it, gives it or a field of it a new
+  value, or hands a part of it on is now rejected. This covers a defer
+  armed in a `?` arm or a loop, and a value stored in a parameter's
+  container before the function falls off its end.
 - **A field of a call's lent result handed to a `sink` is a copy** (Agora
   #150, h424–h425). `( string_free . ( box_get b ) name )` released the
   Box's field, and the Box released it again. The callee is now handed a

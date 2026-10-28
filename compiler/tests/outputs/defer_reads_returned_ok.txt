@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+logged
+logged
+kept
+fresh
+early
+late

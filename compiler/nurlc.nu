@@ -1558,6 +1558,9 @@ unsafe @ agg_field_count i syms s ot → i {
 //  from earlier functions read as misses without any
 //  table clearing
 : ~ i g_bck_inn 0  // next dense binding id within the current function
+: ~ i g_bck_ret_guard -1  // while a return's defers replay: the owner it hands back (bck_apply_defers)
+: ~ i g_bck_has_defers 0  // the function being walked has a `;` defer site (defer_blocks non-empty)
+: ~ i g_bck_ret_line 0  // …and that return's line
 // >0 while the borrow checker's capture hooks must not record. Used to be
 // spelled `g_bck_closure_depth != 0`, which conflated two different things:
 // "this statement belongs to a closure, not to the enclosing function"
@@ -5240,6 +5243,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_bck_ret_sx ( nurl_str_cat __ret_sx `` )
     = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 0
     ( bck_flush_vpass )
+    // With a `;` defer armed, the chain runs after the value is the
+    // caller's: the owner this `^` hands back by name is lent to the
+    // defers — read, not released (the walk's ret row, bck_apply_defers).
+    ? & & & != 0 g_defer_count != g_borrowck 0 == 0 g_bck_closure_depth != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) {
+        ? & ( is_ident_tok ret_first_tt ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
+            ( nurl_sym_set g_bck ( nurl_str_cat4 `rto_` ( nurl_lex_filename lex ) `:` ( nurl_str_int bck_line ) ) ret_first_val )
+        } {}
+    } {}
     ( bck_record `ret` `` bck_line )
     = g_bck_ret_sx ``
     = g_bck_ret_dep 0
@@ -28683,7 +28694,35 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = rp + rp 1
                 }
                 ( bck_param_view_check st ( bck_field_int rec 3 ) )
+                // With defers to replay: what the returned expression did
+                // first — its stores and calls, the rows after this one on
+                // its line — so a defer body that releases what the return
+                // handed over (into a literal, to a callee) is a use after
+                // the move. (Without one the walk ends here as before.)
+                : ~ i rto -1
+                ? != 0 g_bck_has_defers {
+                    : i rln ( bck_field_int rec 3 )
+                    : ~ i rq + p 1
+                    ~ ? < rq hi == ( bck_field_int ( bck_rec rq ) 3 ) rln F { = rq + rq 1 }
+                    ? > rq + p 1 { = st ( bck_walk_seq + p 1 rq st ) } {}
+                    // (…and the owner it hands back by name, gen_ret: lent to
+                    // the defers, which may read it but not release it or a
+                    // field of it — the caller owns it when they run.)
+                    : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int rln ) ) )
+                    ? != 0 ( nurl_str_len rtn ) {
+                        = rto ( bck_intern rtn )
+                        ? != BCK_OWNED ( bck_st_get st rto ) { = rto -1 } {}
+                    } {}
+                } {}
+                // (Any defer that may run at this return — armed for certain,
+                // on some path, or in a loop — read for what it does to that
+                // owner: the replay below walks only the certain ones.)
+                ? >= rto 0 { ? ( bck_defers_release_ret st p rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) } {} } {}
+                = g_bck_ret_guard rto
+                = g_bck_ret_line ( bck_field_int rec 3 )
                 : s after_defers ( bck_apply_defers st )
+                = g_bck_ret_guard -1
+                ? & >= rto 0 != BCK_OWNED ( bck_st_get after_defers rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) } {}
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -29192,6 +29231,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // the field holds ends that binding's borrows
                 // (bck_borrow_sweep). The binding itself is not moved.
                 : s fcal ( bck_field rec 5 )
+                // (In a defer replayed at a return: a field of the owner the
+                // return hands back, taken by the callee — gen_ret.)
+                ? >= g_bck_ret_guard 0 {
+                    ? & == ( bck_path_root ( bck_field_int rec 1 ) ) g_bck_ret_guard ( nurl_sym_has_word g_fn_sink fcal ( bck_field rec 6 ) ) {
+                        ( bck_diag_defer_releases_returned g_bck_ret_guard g_bck_ret_line )
+                    } {}
+                } {}
                 = st ( bck_inout_borrow_check st rec )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
@@ -29270,7 +29316,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     } {
                         // …and what it declared and still holds is released at
                         // its `}`: the borrows of it end there.
-                        = st ( bck_scope_close + p 1 eb blk_pre ( bck_walk_seq + p 1 eb st ) ( bck_field_int ( bck_rec eb ) 3 ) )
+                        // (The function's own body falling off its end runs its defers
+                        // before its locals leave scope, as fn_cleanup does: a
+                        // value they read or release is still tracked.
+                        // Replayed once — a site's flag clears.)
+                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers ( bck_walk_seq + p 1 eb st ) ) ( bck_walk_seq + p 1 eb st ) ( bck_field_int ( bck_rec eb ) 3 ) )
                     }
                     = g_bck_sc_n - g_bck_sc_n 1
                 }
@@ -30676,6 +30726,87 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 m1 m2 `', the field stays in '` ( nurl_str_cat3 src `', which releases it again. Hand that field over from its owner, or take '` ( nurl_str_cat name `' over whole.` ) ) ) )
 }
 
+// The defer sites a return at row `p` may run (state `st`): armed for
+// certain, on some path (a `?` arm), or registered inside a loop (which
+// keeps no flag for it). Does one of them release `id`, give it a new
+// value, or give away, replace or store a field of it?
+@ bck_defers_release_ret s st i p i id → b {
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s row ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i start ( nurl_str_to_int row )
+        ? < start p {
+            : i fs ( bck_st_get st ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) ) )
+            ? | | == fs BCK_MOVED == fs BCK_MAYBE_MOVED ( __bck_row_in_loop start ) {
+                ? ( __bck_defer_body_releases start id ) { ^ T } {}
+            } {}
+        } {}
+    }
+    ^ F
+}
+
+// The walk state at the end of the function's own body, before its
+// locals leave scope: its defers replayed there (bck_walk_seq's block row).
+@ __bck_body_defers s st → s {
+    ? ( seq st `!` ) { ^ st } {}
+    ^ ( bck_apply_defers st )
+}
+
+// Is row `d` inside a `~` loop's body (a `loop` or `foreach` block)?
+@ __bck_row_in_loop i d → b {
+    : ~ i j 0
+    ~ < j d {
+        : s r ( bck_rec j )
+        ? != 0 ( nurl_str_starts r `block\t` ) {
+            : s k ( bck_field r 1 )
+            ? | ( seq k `loop` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) d { ^ T } {} } {}
+        } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// The rows of the defer body at `start` that release `id` or a part of it:
+// a move of it, a new value for it or a field of it, a store of it into
+// an owner, it or a field of it handed to a callee that takes or keeps it.
+@ __bck_defer_body_releases i start i id → b {
+    : i end ( bck_match_close start `block` `endblock` )
+    : ~ i q + start 1
+    ~ < q end {
+        : i k ( bck_kc q )
+        ? | | | | | | | | == k 3 == k 4 == k 5 == k 8 == k 9 == k 11 == k 12 == k 13 == k 14 {
+            : s r ( bck_rec q )
+            : s f1 ( bck_field r 1 )
+            ? & != 0 ( nurl_str_len f1 ) ! ( seq f1 `-` ) {
+                ? == ( bck_path_root ( nurl_str_to_int f1 ) ) id {
+                    ? | | | == k 3 == k 4 == k 5 == k 14 { ^ T } {}
+                    // (A library call dropping elements of it, `e`, leaves
+                    // the caller a consistent handle: not a release.)
+                    ? & == k 8 ! ( seq ( bck_field r 6 ) `e` ) { ^ T } {}
+                    : s cal ( bck_field r 5 )
+                    : s ax ( bck_field r 6 )
+                    ? | | ( nurl_sym_has_word g_fn_sink cal ax ) ( nurl_sym_has_word g_fn_keeps cal ax ) ( nurl_sym_has_word g_fn_stores cal ax ) { ^ T } {}
+                } {}
+            } {}
+        } {}
+        = q + q 1
+    }
+    ^ F
+}
+
+// A `;` defer replayed at a return releases (or gives away a field of) the
+// owner that return hands to the caller: the defer runs after the value is
+// the caller's.
+@ bck_diag_defer_releases_returned i id i line → v {
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `dr:` ( nurl_str_int line ) ) `:` ( nurl_str_int id ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( nurl_sym_set g_bck `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s name ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) )
+    : s m1 ( nurl_str_cat3 `'` name `' is handed to the caller by this return, but a ';' defer releases it (or a field of it) on the way out — the defers run after the value is the caller's, so the caller would get freed memory. ` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat m1 `Release it before the return and hand back something else, or return a copy (string_clone, vec_clone, mem_dup); a defer may still read it.` ) )
+}
+
 // A field of a capture (or a binding viewing one), handed to `cal`, which
 // takes it.
 @ bck_diag_capture_field_taken i fid i line s cal → v {
@@ -31326,10 +31457,12 @@ unsafe @ bck_loop_mask s pre s post → s {
     }
     : i n ( bck_explode )
     ( nurl_sym_set g_bck `defer_blocks` `` )
+    = g_bck_has_defers 0
     : ~ i row 0
     ~ < row n {
         : s rec ( bck_rec row )
         ? & ( seq ( bck_field rec 0 ) `block` ) ( seq ( bck_field rec 1 ) `defer` ) {
+            = g_bck_has_defers 1
             : s index ( nurl_str_int row )
             : i flag ( bck_intern ( nurl_str_cat `$defer:` index ) )
             ( nurl_sym_set g_bck ( nurl_str_cat `df_` index ) ( nurl_str_int flag ) )
