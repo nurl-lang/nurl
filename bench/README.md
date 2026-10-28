@@ -133,10 +133,12 @@ and `x25519` (stdlib/std/x25519.nu) — because that code is what a NURL
 program doing TLS, Noise or age actually runs. C and Rust have none of the
 five in their standard libraries, so their files carry the algorithm
 written out by hand, line for line the same in both, and in the
-formulation the stdlib uses: Poly1305 at radix 2^64 (four 64x64→128
-products a block, as OpenSSL's and BoringSSL's scalar code has it) and the
-TweetNaCl ladder over the donna-c64 field (radix 2^51) with native 128-bit
-products where NURL uses `nurl_umulhi`, the ref10 inversion chain. ChaCha20
+formulation the stdlib uses for Poly1305 — radix 2^64, four 64x64→128
+products a block, as OpenSSL's and BoringSSL's scalar code has it. For
+X25519 they carry the TweetNaCl ladder over the donna-c64 field (radix
+2^51) and the ref10 inversion chain, with native 128-bit products; the
+stdlib has since moved to four 64-bit words (ADX blocks where present)
+and a divstep inverse. ChaCha20
 is the one deliberate difference: the stdlib runs it on `v128` lanes
 (`v256` lanes in its x86-64-v3 clone), C and Rust carry the scalar RFC
 rounds (the stdlib's own big-endian fallback), and that gap is what the

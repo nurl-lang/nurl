@@ -87,8 +87,8 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // ── field scratch ─────────────────────────────────────────────────────
 // Every temporary a scalar multiply needs, allocated once and held for the
 // whole ladder: the modulus, the CIOS accumulator and difference, the six
-// registers RCB point addition works in, and one spare for the inversion
-// chain.
+// registers RCB point addition works in, and one spare (gp) for the point
+// formulas.
 //
 // This is where the allocator time went. `vec_with_cap` is TWO
 // allocations — a 24-byte control block and the data buffer — and a P-256
@@ -100,7 +100,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // A scratch is created per scalar multiply and never shared between them,
 // so there is no state to race over, and no `_d` worker calls another that
 // wants the same register (the point layer owns g0..g5, the field layer
-// owns t/diff, the inversion chain owns gp).
+// owns t/diff, the mixed addition owns gp).
 : P256Scratch {
     ( Vec i ) modp ( Vec i ) t ( Vec i ) diff
     ( Vec i ) g0 ( Vec i ) g1 ( Vec i ) g2

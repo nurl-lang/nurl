@@ -24,7 +24,7 @@ semaphores, and `Locked [T]` for state threads share and change.
 ```
 
 The runtime copies a `thread_spawn` closure's captured environment to the worker
-thread. The compiler rejects capturing an `Rc` (a non-atomic reference count) at
+thread (a closure written in the call itself is handed over instead). The compiler rejects capturing an `Rc` (a non-atomic reference count) at
 compile time. If two threads race on its count, the result is undefined behavior. Use
 `Arc` (`stdlib/std/arc.nu`, atomic reference count) for any read-only handle that you share
 across threads. An `Arc`'s payload is frozen once made; state that threads

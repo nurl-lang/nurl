@@ -1,12 +1,13 @@
 // benchmark-contract: x25519;rfc7748;k=u=9;iterations=1000;checksum=k-le64
 //
 // x25519 — RFC 7748 X25519 Diffie-Hellman through the standard library's
-// variable-base `x25519` (stdlib/std/x25519.nu): the TweetNaCl Montgomery
-// ladder over the curve25519-donna-c64 field (five limbs at radix 2^51,
-// 64x64->128 products via `nurl_umulhi` / `nurl_mac_*`) and the ref10
-// inversion chain. The C and Rust peers carry that same formulation
-// written out by hand, with their native 128-bit integers — their
-// standard libraries have no X25519.
+// variable-base `x25519` (stdlib/std/x25519.nu): the RFC 7748 ladder over
+// four 64-bit words (the compiler's ADX blocks where the CPU has them,
+// `nurl_mac` products elsewhere) and a divstep inverse. The C and Rust
+// peers carry the TweetNaCl ladder over the curve25519-donna-c64 field
+// (five limbs at radix 2^51) and the ref10 inversion chain, written out
+// by hand with their native 128-bit integers — their standard libraries
+// have no X25519.
 //
 // The workload is RFC 7748 §5.2's iteration test: k = u = 9, then 1000
 // times (k, u) <- (X25519(k, u), k), so each scalar multiplication

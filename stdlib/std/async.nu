@@ -78,7 +78,8 @@ $ `stdlib/std/async_ffi.nu`
 // Spawn a new fiber to run `body`. The closure's function and its OWN
 // copy of the env land on the scheduler's runqueue (the runtime clones
 // the env and drops the copy when the body returns — docs/MEMORY.md
-// §7.4), so the spawner's closure stays the spawner's: spawning one
+// §7.4; a closure written in the call is handed over and adopted in
+// place instead), so the spawner's closure stays the spawner's: spawning one
 // closure many times, or letting it go out of scope right after, is
 // fine. Fire-and-forget — the fiber's control block is freed
 // automatically once its body returns.
