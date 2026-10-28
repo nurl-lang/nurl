@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_option_kept_by_callee.nu:21:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 20 by vec_free (it was stored in 'out'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
+    ^
+compiler/tests/diag_option_kept_by_callee.nu:29:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 28 by vec_free (it was stored in 'out'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
+    ^
+compiler/tests/diag_option_kept_by_callee.nu:37:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 36 by vec_free (it was stored in 'out'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

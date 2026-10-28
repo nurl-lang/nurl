@@ -1,6 +1,11 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** The last class, agora #147, is closed and graduated as
+**None.** The last class, agora #149, is closed and graduated as
+`h421`–`h423`: an option of a String kept by a callee (`vec_push`,
+directly or through a helper) was not tied to the container's life, so
+it was read after the container released it.
+
+Before it, agora #147, closed and graduated as
 `h416`–`h420`: a `~` loop's container released in its body — given a
 new value, handed to a callee that takes it, or reassigned by a closure
 the body runs — and an `inout` callee that took a field its caller

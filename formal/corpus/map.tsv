@@ -407,3 +407,6 @@ h417_inout_callee_takes_a_field_the_caller_borrows	§2.4	A1	an inout callee hand
 h418_loop_field_container_given_a_new_value_in_its_body	§2.5	A1	a ~ loop over a field gave that field a new value in its body (UAF); assignment to a loop container is rejected	rejected
 h419_loop_container_given_a_new_value_in_its_body	§2.5	A1	as h418, a local container	rejected
 h420_loop_container_given_a_new_value_by_a_closure_run_in_its_body	§2.5	A1	as h419, through a closure run in the body	rejected
+h421_option_kept_by_vec_push_then_read_after_the_vec	§2.12	A2	an option of a String pushed into a Vec, the Vec freed, the option read (UAF); the store row covers every value that needs a drop	rejected
+h422_option_parameter_kept_by_a_helper_then_read_after_the_vec	§2.12	A2	as h421, through a helper	rejected
+h423_option_parameter_payload_kept_by_a_helper_then_read	§2.12	A2	as h422, the payload pushed	rejected
