@@ -1,17 +1,15 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**One class (agora #141):**
+**None.** The last class, agora #141, is closed and graduated as
+`h384`–`h388`: a closure a function returns over a parameter it did not
+take over — bound to a local first, joined, given a new value, or over a
+local view of the parameter — was not recorded as a view of the caller's
+argument (the function's `retclo` summary saw only a literal written in
+the `^`), and the caller freed the argument under it. What a returned
+value that may hold a closure lends is now read off its source
+expression, through the frame's closures, views and borrows.
 
-| Probe | What happens |
-|---|---|
-| `closure_bound_then_returned_over_a_parameter.nu` | A closure literal bound to a local, then returned, over a String parameter it captured: the callee's `retclo` summary records only a literal written in the `^`, so the caller frees its argument and the closure reads freed memory |
-| `closure_over_a_view_of_a_parameter_returned.nu` | A closure returned over a local view of a parameter (`: s v ( string_data s )`): the summary records captures that are parameters, not one that views one — heap-use-after-free |
-
-The walk at the return already knows both sources (the local-owner
-versions are rejected, h310); the fix derives the summary from them for
-every spelling.
-
-The last two classes before it are closed and graduated as `h378`–`h383`:
+Before it, two classes closed and graduated as `h378`–`h383`:
 
 | Probes | What happened | How it is closed |
 |---|---|---|

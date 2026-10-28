@@ -232,9 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
-  through probe h383, is closed and held by a probe, but one, open: a
-  closure a function returns over a parameter, bound before the return
-  or capturing a view of it (#141); the rules for
+  through probe h388, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -613,8 +611,9 @@ new language features.
   through a join, and closure envs a panic skipped; and h378–h383: a view
   of a call's temporary argument kept past its statement (rejected), and
   a `UdpSocket` used after `udp_close` or never closed (a handle with a
-  drop now). One is open: a closure a function returns over a parameter,
-  bound before the return or capturing a view of it (agora #141).
+  drop now); and h384–h388: a closure returned over a parameter in a
+  spelling its function's summary missed (bound first, joined, given a
+  new value, over a view). None is open.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

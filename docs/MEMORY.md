@@ -28,9 +28,7 @@ specified in spec §3.3d.
   the bodies of `unsafe` functions is memory-safe and leak-free, data
   races and the panic path included. Each hole found so far is a probe in
   `tools/fuzz/holes/` that CI holds rejected or clean under the
-  sanitizers, but one, open (`tools/fuzz/holes/open/`, below): a closure
-  a function returns over its parameter, in two spellings the summary
-  misses. A view is tracked wherever it goes (§2.10).
+  sanitizers; none is known open. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -901,17 +899,16 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One hole is known open:** a closure a function returns over a
-parameter it captured without taking it over is a view of the caller's
-argument (h299), but the function's summary of it (`retclo`) misses two
-spellings — a closure literal bound to a local before the `^`, and a
-capture that is a local view of the parameter (`: s v ( string_data s )
-^ \ → v { … v … }`). A caller that releases the argument and then runs
-the closure reads freed memory (agora #141; two probes in
-`tools/fuzz/holes/open/`). Return the closure literal itself, over the
-parameter by name, or keep the argument alive while the closure runs.
-
-**Closed in this release:** *A `UdpSocket`*
+**No hole is known open.** The last ones are closed. *A closure a
+function returns over a parameter* it captured without taking it over is
+a view of the caller's argument (h299), and the function's summary of it
+(`retclo`) recorded only a closure literal written in the `^` over the
+parameter by name. Bound to a local first, joined, given a new value, or
+over a local view of the parameter (`: s v ( string_data s ) ^ \ → v {
+… v … }`), it was the caller's to release the argument under — and the
+closure read freed memory. What a returned value that may hold a closure
+lends is now read off its source expression, through the closures, views
+and borrows of the frame it names (agora #141, h384–h388). *A `UdpSocket`*
 was the runtime record's address with no drop: read after `udp_close` it
 read freed memory, and a socket never closed leaked its record and fd. It
 is a handle with a drop now, as every other resource is; `udp_close` only
@@ -949,7 +946,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h383):
+all are closed, each a probe CI now holds (h142–h388):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1396,8 +1393,9 @@ call runs (§7.2). Converting `UdpSocket` to a handle with a drop closed
 its use after `udp_close` and its leak (h382, h383), and probing the
 temporaries such a conversion leans on found a view of a call's
 temporary argument kept past its statement leaving the temporary owned
-by nothing (h378–h381): such a view is rejected (§1, Temporaries). The
-open hole above was found on the way.
+by nothing (h378–h381): such a view is rejected (§1, Temporaries). On
+the way, a closure returned over a parameter in a spelling the summary
+missed (h384–h388) was found and closed (above).
 
 The rules that carry it:
 
@@ -1703,7 +1701,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h383`) to the rule that rejects it. See
+  (`h01–h388`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

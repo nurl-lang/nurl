@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+a string long enough to own a heap buffer here
+46
+a field string long enough to own a heap buffer
