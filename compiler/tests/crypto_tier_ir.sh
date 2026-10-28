@@ -806,6 +806,49 @@ CEOF
     fi
 fi
 
+# ── 12b. The field kernels on the ADX tier: X25519 and P-256 ────────
+# nurl_x25519_mulm / _sqrm (mulx, adcx, adox where the runtime says
+# BMI2 + ADX, else F: the register form) and nurl_p256_mulm / _sqrm (the
+# same tier, else mulq) are asm blocks the compiler emits on x86-64 and a
+# constant F off it. Each agreement test holds the kernels — and the
+# ladders written on them — to the register form, so both settings of
+# the tier must give its golden.
+for fk in x25519_kernel_agrees p256_kernel_agrees; do
+    if "$NURLC" "$SCRIPT_DIR/$fk.nu" > "$WORK/$fk.ll" 2> "$WORK/$fk.err" &&
+            command -v "$CLANG" >/dev/null 2>&1 &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/$fk.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/$fk" -lm -lpthread 2>/dev/null; then
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/$fk.txt" | tail -n +2)
+        for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+            got=$(env "$e" "$WORK/$fk" 2>&1)
+            if [ "$got" = "$want" ]; then ok "$fk with $e" "golden"
+            else bad "$fk with $e" "${got:0:80}"; fi
+        done
+    else
+        bad "$fk: builds" "$(head -2 "$WORK/$fk.err")"
+    fi
+done
+if grep -A4 '^define linkonce_odr i1 @nurl_x25519_mulm(' "$WORK/x25519_kernel_agrees.ll" | grep -q 'call i1 @nurl_cpu_has_adx()' &&
+        grep -A4 '^define linkonce_odr i1 @nurl_x25519_sqrm(' "$WORK/x25519_kernel_agrees.ll" | grep -q 'call i1 @nurl_cpu_has_adx()'; then
+    ok "nurl_x25519_mulm / _sqrm: dispatched on nurl_cpu_has_adx" "both"
+else
+    bad "nurl_x25519_mulm / _sqrm: dispatched on nurl_cpu_has_adx" "no ADX probe"
+fi
+if command -v objdump >/dev/null 2>&1 && [ -x "$WORK/x25519_kernel_agrees" ]; then
+    nx=$(objdump -d "$WORK/x25519_kernel_agrees" 2>/dev/null | grep -cE '\badoxq?\b')
+    nc=$(objdump -d "$WORK/x25519_kernel_agrees" 2>/dev/null | grep -cE '\badcxq?\b')
+    if [ "$nx" -gt 0 ] && [ "$nc" -gt 0 ]; then ok "x25519_kernel_agrees: ADCX / ADOX in the machine code" "$nc adcx, $nx adox"
+    else bad "x25519_kernel_agrees: ADCX / ADOX in the machine code" "$nc adcx, $nx adox"; fi
+fi
+"$NURLC" --target=aarch64 --no-dce "$SCRIPT_DIR/x25519_kernel_agrees.nu" > "$WORK/fkx.a64.ll" 2>/dev/null
+if grep -A3 '^define linkonce_odr i1 @nurl_x25519_mulm(' "$WORK/fkx.a64.ll" | grep -q 'ret i1 false' &&
+        grep -A3 '^define linkonce_odr i1 @nurl_x25519_sqrm(' "$WORK/fkx.a64.ll" | grep -q 'ret i1 false' &&
+        [ "$(grep -c 'adox\|mulx' "$WORK/fkx.a64.ll")" -eq 0 ]; then
+    ok "a64: nurl_x25519_mulm / _sqrm a constant F" "no asm"
+else
+    bad "a64: nurl_x25519_mulm / _sqrm a constant F" "not so"
+fi
+
 # ── 13. The IFMA tier: both RSA CRT halves at once, radix 2^52 ───────
 # nurl_v256_madd52lo / _hi on x86-64-v4 + AVX-512 IFMA, gated like the
 # AES tiers. std/rsa_mont's __rm_pow2_52 is a `simd` function written

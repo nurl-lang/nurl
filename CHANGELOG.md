@@ -45,6 +45,18 @@ and so is one found on the way (h384–h388); no hole is known open.
   (`p256_kernel_agrees`: 120,162 cases, 0 disagreements). On Skylake
   (ADX): ECDH shared 134 → 97 µs, keygen 30 → 22 µs, ECDSA sign
   49 → 38 µs.
+- **X25519 on the ADX tier** (Agora #114). The compiler emits
+  `nurl_x25519_mulm` / `nurl_x25519_sqrm`: the 4×4 product of
+  GF(2^255 − 19) and its 2^256 ≡ 38 fold as one block each, mulx with
+  adcx/adox on two carry chains, a dedicated square. The ladder and the
+  fixed-base keygen walk run on them where the CPU has ADX (a buffer of
+  elements, the ladder kept as the point it added to and the one it
+  doubled, so a step swaps nothing and doubles the one the bit asks for
+  by mask), and everywhere else keep the register form. Constant time.
+  `x25519_kernel_agrees` holds the kernels, the ladder and the walk to
+  the register form (120,576 field cases, 144 scalar multiplies,
+  0 disagreements), and `crypto_tier_ir.sh` runs it with the tier on and
+  off. On Skylake: X25519 shared 45.4 → 35.1 µs, keygen 16.2 → 15.0 µs.
 - **A spawn takes over the closure written in its argument** (Agora
   #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
   on a copy of the closure's environment, and the caller dropped its own

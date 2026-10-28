@@ -90,6 +90,21 @@ Measurements are on an i7-11850H.
   whose operands fit in registers (P-256's and X25519's four limbs)
   would save that traffic with a fixed-width register form. That is a
   separate primitive, to be measured when those fields move to ADX.
+  - **Measured, X25519 (Agora #114):** `nurl_x25519_mulm` /
+    `nurl_x25519_sqrm` are that form — the whole 4×4 product and its
+    2^256 ≡ 38 fold in one block on the two chains, operands from
+    memory, the result in registers. On a Skylake i7-6700T, four
+    independent chains: multiply 10.2 ns and square 8.4 ns, against
+    24.1 ns for the same product as C over u128. The ladder written on
+    them (`std/x25519.nu`, `__scalarmult_k`) runs a step in ~830
+    instructions against 1613 for the `nurl_mac` register ladder, and
+    X25519 shared takes 35.1 µs against 45.4 µs; keygen 15.0 against
+    16.2 µs, where a quarter of the time is the Fermat inversion, a
+    serial chain of 265 kernel latencies.
+  - Without ADX the same block on `mulq` measured only 4 % on a whole
+    Haswell ladder, so that tier keeps the register form. P-256's
+    kernels (Agora #108) kept a `mulq` block: there it measured 15.6 ns
+    against 28.3 ns for the same CIOS as C.
 - **Squaring:** on rows, squaring saves less than its product count
   suggests: 376 products against 512, yet 203 ns against 211 ns. The
   cross-product rows are short, so their per-row setup and the doubling

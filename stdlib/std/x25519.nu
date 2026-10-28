@@ -815,14 +815,241 @@ inline @ __f4_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     ^ o
 }
 
-// ── the ladder ────────────────────────────────────────────────────
+// ── the field in memory, on the compiler's kernels ────────────────
+// On the ADX tier the compiler emits the multiply and the square as one
+// block each (nurl_x25519_mulm / nurl_x25519_sqrm: mulx with adcx and
+// adox), over four words in memory and in the lazy form above. Their
+// operands come from memory, so the ladder that uses them keeps its
+// elements in one buffer, and the additions here read and write it too.
+// A kernel says F where there is none (no ADX, or not x86-64); each
+// helper then falls back to the register form, but the ladders below are
+// only entered after a T.
+
+// Element k of a buffer of elements: four words, 32 bytes each.
+inline @ __xk_at * u64 w i k → *u64 { ^ # *u64 + # i w * k 32 }
+
+@ __xk_mul_port * u64 o * u64 a * u64 b → v {
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
+    ( __f4_mul_in r0 r1 r2 r3 . a 0 . a 1 . a 2 . a 3 . b 0 . b 1 . b 2 . b 3 )
+    = . o 0 r0 = . o 1 r1 = . o 2 r2 = . o 3 r3
+}
+
+// o ← a · b and o ← a²; o may be a or b.
+inline @ __xk_mul * u64 o * u64 a * u64 b → v { ? ( nurl_x25519_mulm o a b ) {} { ( __xk_mul_port o a b ) } }
+
+inline @ __xk_sq * u64 o * u64 a → v { ? ( nurl_x25519_sqrm o a ) {} { ( __xk_mul_port o a a ) } }
+
+// o ← a^(2^n), n ≥ 1.
+@ __xk_sqn * u64 o * u64 a i n → v {
+    ( __xk_sq o a )
+    : ~ i k 1
+    ~ < k n { ( __xk_sq o o ) = k + k 1 }
+}
+
+// o ← a + b and o ← a − b (__f4_add / __f4_sub over the buffer).
+inline @ __xk_add * u64 o * u64 a * u64 b → v {
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
+    ( __f4_add r0 r1 r2 r3 . a 0 . a 1 . a 2 . a 3 . b 0 . b 1 . b 2 . b 3 )
+    = . o 0 r0 = . o 1 r1 = . o 2 r2 = . o 3 r3
+}
+
+inline @ __xk_sub * u64 o * u64 a * u64 b → v {
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
+    ( __f4_sub r0 r1 r2 r3 . a 0 . a 1 . a 2 . a 3 . b 0 . b 1 . b 2 . b 3 )
+    = . o 0 r0 = . o 1 r1 = . o 2 r2 = . o 3 r3
+}
+
+// o ← x where m is all ones, y where m is 0 — constant time.
+inline @ __xk_mux * u64 o * u64 x * u64 y u64 m → v {
+    = . o 0 ^^ . y 0 & m ^^ . x 0 . y 0
+    = . o 1 ^^ . y 1 & m ^^ . x 1 . y 1
+    = . o 2 ^^ . y 2 & m ^^ . x 2 . y 2
+    = . o 3 ^^ . y 3 & m ^^ . x 3 . y 3
+}
+
+// o ← 121666·p + d. The sum is below 2^274; everything from bit 255 up,
+// times 19, folds into word 0 with no carry out of word 3.
+inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
+    : u64 l0 ( nurl_mac_lo . p 0 121666 . d 0 0 )
+    : ~ u64 cr ( nurl_mac_hi . p 0 121666 . d 0 0 )
+    : u64 l1 ( nurl_mac_lo . p 1 121666 . d 1 cr )
+    = cr ( nurl_mac_hi . p 1 121666 . d 1 cr )
+    : u64 l2 ( nurl_mac_lo . p 2 121666 . d 2 cr )
+    = cr ( nurl_mac_hi . p 2 121666 . d 2 cr )
+    : u64 l3 ( nurl_mac_lo . p 3 121666 . d 3 cr )
+    = cr ( nurl_mac_hi . p 3 121666 . d 3 cr )
+    : u64 m * | << cr 1 >> l3 63 19
+    : u64 r0 ( nurl_addc_lo l0 m 0 )
+    : u64 k0 ( nurl_addc_hi l0 m 0 )
+    : u64 r1 ( nurl_addc_lo l1 0 k0 )
+    : u64 k1 ( nurl_addc_hi l1 0 k0 )
+    : u64 r2 ( nurl_addc_lo l2 0 k1 )
+    : u64 k2 ( nurl_addc_hi l2 0 k1 )
+    = . o 0 r0 = . o 1 r1 = . o 2 r2
+    = . o 3 + & l3 9223372036854775807 k2
+}
+
+// (ox : oz) ← 2·(x : z): d = (x − z)², s = (x + z)², p = s − d = 4xz,
+// ox = s·d, oz = p·(d + 121666·p). d, s, p, e are scratch; (ox, oz)
+// may be (x, z).
+@ __xk_dbl * u64 ox * u64 oz * u64 x * u64 z * u64 d * u64 s * u64 p * u64 e → v {
+    ( __xk_sub d x z )
+    ( __xk_add s x z )
+    ( __xk_sq d d )
+    ( __xk_sq s s )
+    ( __xk_sub p s d )
+    ( __xk_cmadd e p d )
+    ( __xk_mul ox s d )
+    ( __xk_mul oz p e )
+}
+
+// o ← z^(p−2) = 1/z (0 for 0): the chain __f4_inv takes, in the buffer.
+// w holds nine scratch elements (w[0 … 8]); o may not be among them.
+@ __xk_inv * u64 o * u64 z * u64 w → v {
+    : *u64 z2 ( __xk_at w 0 )
+    : *u64 z9 ( __xk_at w 1 )
+    : *u64 z11 ( __xk_at w 2 )
+    : *u64 z5 ( __xk_at w 3 )
+    : *u64 z10 ( __xk_at w 4 )
+    : *u64 z20 ( __xk_at w 5 )
+    : *u64 z50 ( __xk_at w 6 )
+    : *u64 z100 ( __xk_at w 7 )
+    : *u64 t ( __xk_at w 8 )
+    ( __xk_sq z2 z )
+    ( __xk_sqn t z2 2 )
+    ( __xk_mul z9 t z )
+    ( __xk_mul z11 z9 z2 )
+    ( __xk_sq t z11 )
+    ( __xk_mul z5 t z9 )
+    // z^(2^5−1)
+    ( __xk_sqn t z5 5 )
+    ( __xk_mul z10 t z5 )
+    // z^(2^10−1)
+    ( __xk_sqn t z10 10 )
+    ( __xk_mul z20 t z10 )
+    // z^(2^20−1)
+    ( __xk_sqn t z20 20 )
+    ( __xk_mul t t z20 )
+    // z^(2^40−1)
+    ( __xk_sqn t t 10 )
+    ( __xk_mul z50 t z10 )
+    // z^(2^50−1)
+    ( __xk_sqn t z50 50 )
+    ( __xk_mul z100 t z50 )
+    // z^(2^100−1)
+    ( __xk_sqn t z100 100 )
+    ( __xk_mul t t z100 )
+    // z^(2^200−1)
+    ( __xk_sqn t t 50 )
+    ( __xk_mul t t z50 )
+    // z^(2^250−1)
+    ( __xk_sqn t t 5 )
+    ( __xk_mul o t z11 )
+    // z^(2^255−21)
+}
+
+// The ladder on the kernels. Its two points are kept as m — the one the
+// last step ADDED to — and n — the one it DOUBLED — and `swap` says
+// which of them is k·P: n when the last bit was 0, m when it was 1. A
+// step adds m and n (symmetric, so neither needs swapping), and doubles
+// the one the next bit asks for, chosen by mask (__xk_mux) on whether
+// that bit differs from `swap`; the sum goes to m, the double to n. The
+// clamped scalar's bit 254 is 1 and bits 2 … 0 are 0, so the walk starts
+// at m = P, n = 2P and ends with three plain doublings. Same result as
+// __scalarmult's register ladder (x25519_kernel_agrees holds them to
+// each other); w is a buffer of 17 zeroed elements.
+@ __scalarmult_k * u64 w ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+    : *u64 xm ( __xk_at w 0 )
+    : *u64 zm ( __xk_at w 1 )
+    : *u64 xn ( __xk_at w 2 )
+    : *u64 zn ( __xk_at w 3 )
+    : *u64 dm ( __xk_at w 4 )
+    : *u64 sm ( __xk_at w 5 )
+    : *u64 dn ( __xk_at w 6 )
+    : *u64 sn ( __xk_at w 7 )
+    : *u64 d ( __xk_at w 8 )
+    : *u64 sq ( __xk_at w 9 )
+    : *u64 p ( __xk_at w 10 )
+    : *u64 e ( __xk_at w 11 )
+    : *u64 dmsn ( __xk_at w 12 )
+    : *u64 dnsm ( __xk_at w 13 )
+    : *u64 dpro ( __xk_at w 14 )
+    : *u64 spro ( __xk_at w 15 )
+    : *u64 u ( __xk_at w 16 )
+    : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
+    : u64 sw1 # u64 ( _ld64u scalar 8 )
+    : u64 sw2 # u64 ( _ld64u scalar 16 )
+    : u64 sw3 | & # u64 ( _ld64u scalar 24 ) 9223372036854775807 4611686018427387904
+    = . u 0 # u64 ( _ld64u point 0 )
+    = . u 1 # u64 ( _ld64u point 8 )
+    = . u 2 # u64 ( _ld64u point 16 )
+    = . u 3 & # u64 ( _ld64u point 24 ) 9223372036854775807
+    // bit 254: m = (u : 1), n = 2·(u : 1)
+    = . xm 0 . u 0 = . xm 1 . u 1 = . xm 2 . u 2 = . xm 3 . u 3
+    = . zm 0 1 = . zm 1 0 = . zm 2 0 = . zm 3 0
+    ( __xk_dbl xn zn xm zm d sq p e )
+    : ~ u64 swap 1
+    : ~ i i 253
+    ~ >= i 3 {
+        ( __xk_sub dm xm zm )
+        ( __xk_add sn xn zn )
+        ( __xk_sub dn xn zn )
+        ( __xk_add sm xm zm )
+        : u64 sw ? >= i 128 ? >= i 192 sw3 sw2 ? >= i 64 sw1 sw0
+        : u64 kt & >> sw # u64 & i 63 1
+        : u64 m - # u64 0 ^^ kt swap
+        = swap kt
+        // the point to double: m when the bit differs from swap, else n
+        ( __xk_mux d dm dn m )
+        ( __xk_mux sq sm sn m )
+        // adding: x_m' = (dm·sn + sm·dn)², z_m' = u·(dm·sn − sm·dn)²
+        ( __xk_mul dnsm sm dn )
+        ( __xk_mul dmsn sn dm )
+        ( __xk_sq d d )
+        ( __xk_sub dpro dmsn dnsm )
+        ( __xk_add spro dmsn dnsm )
+        ( __xk_sq sq sq )
+        ( __xk_sq dpro dpro )
+        // doubling: p = s − d, e = 121666·p + d, x_n' = s·d, z_n' = p·e
+        ( __xk_sub p sq d )
+        ( __xk_sq xm spro )
+        ( __xk_cmadd e p d )
+        ( __xk_mul xn sq d )
+        ( __xk_mul zn p e )
+        ( __xk_mul zm dpro u )
+        = i - i 1
+    }
+    : u64 mf - # u64 0 swap
+    ( __xk_mux xn xm xn mf )
+    ( __xk_mux zn zm zn mf )
+    ( __xk_dbl xn zn xn zn d sq p e )
+    ( __xk_dbl xn zn xn zn d sq p e )
+    ( __xk_dbl xn zn xn zn d sq p e )
+    // The affine u: x · z^−1 (z = 0 — a low-order point — gives 0).
+    ( __xk_inv spro zn dm )
+    ( __xk_mul d xn spro )
+    ^ ( __f4_pack . d 0 . d 1 . d 2 . d 3 )
+}
+
+// ── the register ladder ───────────────────────────────────────────
+// The ladder where the target has no kernels (and the reference the
+// kernels' ladder is tested against).
 // q ← scalar · point, both 32-byte little-endian; the scalar is clamped
 // and the point's top bit dropped (RFC 7748 §5). RFC 7748's ladder step
 // for step: (x2 : z2) and (x3 : z3) are k·P and (k + 1)·P for the bits
 // consumed so far, and one conditional swap per bit — keyed by whether
 // the bit CHANGED — keeps the step's formulas fixed. Constant time: the
 // bit only ever reaches a mask.
-@ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+@ __scalarmult_r ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : u64 sw0 & # u64 ( _ld64u scalar 0 ) 18446744073709551608
     : u64 sw1 # u64 ( _ld64u scalar 8 )
     : u64 sw2 # u64 ( _ld64u scalar 16 )
@@ -915,6 +1142,69 @@ inline @ __f4_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     ( __f4_mul b0 b1 b2 b3 x20 x21 x22 x23 a0 a1 a2 a3 )
     ^ ( __f4_pack b0 b1 b2 b3 )
 }
+
+// The kernels' ladder where the target has the kernels (a square of the
+// zeroed buffer asks), else the register ladder.
+@ __scalarmult ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 68 )
+    : *u64 kw ( vec_data [u64] kb )
+    ? ( nurl_x25519_sqrm kw kw ) { ^ ( __scalarmult_k kw scalar point ) } {}
+    ^ ( __scalarmult_r scalar point )
+}
+
+// ── for x25519_kernel_agrees: the kernels against the register form ──
+// Elements are 32 little-endian bytes — any 256-bit pattern — and come
+// back reduced. `over` writes the kernel's result over its first operand
+// (the ladder's own `( __xk_sq d d )`).
+@ __xk_load * u64 o ( Vec u ) a → v {
+    = . o 0 # u64 ( _ld64u a 0 )
+    = . o 1 # u64 ( _ld64u a 8 )
+    = . o 2 # u64 ( _ld64u a 16 )
+    = . o 3 # u64 ( _ld64u a 24 )
+}
+
+@ _x25519_mul_k ( Vec u ) a ( Vec u ) b b over → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 12 )
+    : *u64 x ( vec_data [u64] kb )
+    : *u64 y ( __xk_at x 1 )
+    : *u64 r ? over x ( __xk_at x 2 )
+    ( __xk_load x a )
+    ( __xk_load y b )
+    ( __xk_mul r x y )
+    ^ ( __f4_pack . r 0 . r 1 . r 2 . r 3 )
+}
+
+@ _x25519_sq_k ( Vec u ) a b over → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 8 )
+    : *u64 x ( vec_data [u64] kb )
+    : *u64 r ? over x ( __xk_at x 1 )
+    ( __xk_load x a )
+    ( __xk_sq r x )
+    ^ ( __f4_pack . r 0 . r 1 . r 2 . r 3 )
+}
+
+@ _x25519_mul_r ( Vec u ) a ( Vec u ) b → ( Vec u ) {
+    : ~ u64 w0 0
+    : ~ u64 w1 0
+    : ~ u64 w2 0
+    : ~ u64 w3 0
+    ( __f4_mul_in w0 w1 w2 w3 # u64 ( _ld64u a 0 ) # u64 ( _ld64u a 8 ) # u64 ( _ld64u a 16 ) # u64 ( _ld64u a 24 ) # u64 ( _ld64u b 0 ) # u64 ( _ld64u b 8 ) # u64 ( _ld64u b 16 ) # u64 ( _ld64u b 24 ) )
+    ^ ( __f4_pack w0 w1 w2 w3 )
+}
+
+@ _x25519_ladder_k ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 68 )
+    ^ ( __scalarmult_k ( vec_data [u64] kb ) scalar point )
+}
+
+@ _x25519_ladder_r ( Vec u ) scalar ( Vec u ) point → ( Vec u ) { ^ ( __scalarmult_r scalar point ) }
+
+@ _x25519_base_k ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 52 )
+    ^ ( __xe_base_k ( vec_data [u64] kb ) scalar )
+}
+
+@ _x25519_base_r ( Vec u ) scalar → ( Vec u ) { ^ ( __xe_base_r scalar ) }
 
 // scalar · point — the ECDH primitive. `scalar` and `point` are 32-byte
 // little-endian `( Vec u )`; the result is the 32-byte shared X-coord.
@@ -1116,14 +1406,9 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     ^ @ ( Vec i ) { # s g_xe_tbl }
 }
 
-// scalar·B → 32-byte little-endian Montgomery u (the X25519 public key).
-// Constant time in the scalar: every digit's row is scanned whole, its
-// sign applied by mask, and the step sequence is fixed.
-@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
-    : ( Vec i ) tbl ( __xe_tbl )
-    : *u64 tb # *u64 ( vec_data [i] tbl )
-    // The clamped scalar's 64 signed radix-16 digits, e_i ∈ [−8, 8]
-    // (e_63 ≤ 8: bit 255 is clear and bit 254 set).
+// The clamped scalar's 64 signed radix-16 digits, e_i ∈ [−8, 8]
+// (e_63 ≤ 8: bit 255 is clear and bit 254 set).
+@ __xe_digits ( Vec u ) scalar → ( Vec i ) {
     : ( Vec i ) dig ( vec_zeroed [i] 64 )
     : *i dp ( vec_data [i] dig )
     : *u sb ( vec_data [u] scalar )
@@ -1146,6 +1431,58 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     }
     = . dp 63 + . dp 63 carry
 
+    ^ dig
+}
+
+// The entry for digit ev of the row at rb (eight entries of y + x,
+// y − x, 2d·x·y): the identity (1, 1, 0), then each of the eight taken
+// under a mask when it is the one, then −(x, y) = (−x, y) by mask for a
+// negative digit — y + x and y − x swapped, 2d·x·y negated. Constant
+// time: every entry is read, and the digit only reaches masks.
+inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout u64 ym0 inout u64 ym1 inout u64 ym2 inout u64 ym3 inout u64 xy0 inout u64 xy1 inout u64 xy2 inout u64 xy3 * u64 rb i ev → v {
+    // |e| and its sign, branch-free
+    : u64 neg >> # u64 ev 63
+    : u64 ab # u64 - ev << & - 0 # i neg ev 1
+    = yp0 1 = yp1 0 = yp2 0 = yp3 0
+    = ym0 1 = ym1 0 = ym2 0 = ym3 0
+    = xy0 0 = xy1 0 = xy2 0 = xy3 0
+    : ~ i j 0
+    ~ < j 8 {
+        : u64 z ^^ ab # u64 + j 1
+        : u64 m - # u64 0 >> - z 1 63
+        : i o * j 12
+        = yp0 ^^ yp0 & m ^^ yp0 . rb o
+        = yp1 ^^ yp1 & m ^^ yp1 . rb + o 1
+        = yp2 ^^ yp2 & m ^^ yp2 . rb + o 2
+        = yp3 ^^ yp3 & m ^^ yp3 . rb + o 3
+        = ym0 ^^ ym0 & m ^^ ym0 . rb + o 4
+        = ym1 ^^ ym1 & m ^^ ym1 . rb + o 5
+        = ym2 ^^ ym2 & m ^^ ym2 . rb + o 6
+        = ym3 ^^ ym3 & m ^^ ym3 . rb + o 7
+        = xy0 ^^ xy0 & m ^^ xy0 . rb + o 8
+        = xy1 ^^ xy1 & m ^^ xy1 . rb + o 9
+        = xy2 ^^ xy2 & m ^^ xy2 . rb + o 10
+        = xy3 ^^ xy3 & m ^^ xy3 . rb + o 11
+        = j + j 1
+    }
+    : u64 nm - # u64 0 neg
+    ( __f4_cswap yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 nm )
+    : ~ u64 n0 0
+    : ~ u64 n1 0
+    : ~ u64 n2 0
+    : ~ u64 n3 0
+    ( __f4_sub n0 n1 n2 n3 0 0 0 0 xy0 xy1 xy2 xy3 )
+    ( __f4_cswap xy0 xy1 xy2 xy3 n0 n1 n2 n3 nm )
+}
+
+// The register walk: scalar·B → 32-byte little-endian Montgomery u.
+// Constant time in the scalar: every digit's row is scanned whole, its
+// sign applied by mask, and the step sequence is fixed.
+@ __xe_base_r ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec i ) tbl ( __xe_tbl )
+    : *u64 tb # *u64 ( vec_data [i] tbl )
+    : ( Vec i ) dig ( __xe_digits scalar )
+    : *i dp ( vec_data [i] dig )
     // h = the identity (0 : 1 : 1 : 0)
     : ~ u64 px0 0
     : ~ u64 px1 0
@@ -1218,18 +1555,11 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
             }
         } {}
         : i di ? < st 32 + * st 2 1 * - st 32 2
-        : i row / di 2
-        : i ev . dp di
-        // |e| and its sign, branch-free
-        : u64 neg >> # u64 ev 63
-        : u64 ab # u64 - ev << & - 0 # i neg ev 1
-        // The entry: (1, 1, 0) — the identity — then each of the eight
-        // taken under a mask when it is the one.
-        : ~ u64 yp0 1
+        : ~ u64 yp0 0
         : ~ u64 yp1 0
         : ~ u64 yp2 0
         : ~ u64 yp3 0
-        : ~ u64 ym0 1
+        : ~ u64 ym0 0
         : ~ u64 ym1 0
         : ~ u64 ym2 0
         : ~ u64 ym3 0
@@ -1237,31 +1567,7 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
         : ~ u64 xy1 0
         : ~ u64 xy2 0
         : ~ u64 xy3 0
-        : *u64 rb # *u64 + # i tb * row 768
-        : ~ i j 0
-        ~ < j 8 {
-            : u64 z ^^ ab # u64 + j 1
-            : u64 m - # u64 0 >> - z 1 63
-            : i o * j 12
-            = yp0 ^^ yp0 & m ^^ yp0 . rb o
-            = yp1 ^^ yp1 & m ^^ yp1 . rb + o 1
-            = yp2 ^^ yp2 & m ^^ yp2 . rb + o 2
-            = yp3 ^^ yp3 & m ^^ yp3 . rb + o 3
-            = ym0 ^^ ym0 & m ^^ ym0 . rb + o 4
-            = ym1 ^^ ym1 & m ^^ ym1 . rb + o 5
-            = ym2 ^^ ym2 & m ^^ ym2 . rb + o 6
-            = ym3 ^^ ym3 & m ^^ ym3 . rb + o 7
-            = xy0 ^^ xy0 & m ^^ xy0 . rb + o 8
-            = xy1 ^^ xy1 & m ^^ xy1 . rb + o 9
-            = xy2 ^^ xy2 & m ^^ xy2 . rb + o 10
-            = xy3 ^^ xy3 & m ^^ xy3 . rb + o 11
-            = j + j 1
-        }
-        // −(x, y) = (−x, y): swap y + x with y − x, negate 2d·x·y.
-        : u64 nm - # u64 0 neg
-        ( __f4_cswap yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 nm )
-        ( __f4_sub a0 a1 a2 a3 0 0 0 0 xy0 xy1 xy2 xy3 )
-        ( __f4_cswap xy0 xy1 xy2 xy3 a0 a1 a2 a3 nm )
+        ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 # *u64 + # i tb * / di 2 768 . dp di )
 
         // h ← h + entry (ge_madd, 7M): A = (Y + X)(y + x), B = (Y − X)(y − x),
         // C = T · 2dxy, D = 2Z; X = (A − B)(D − C), Y = (A + B)(D + C),
@@ -1292,6 +1598,117 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     ( __f4_inv c0 c1 c2 c3 b0 b1 b2 b3 )
     ( __f4_mul d0 d1 d2 d3 a0 a1 a2 a3 c0 c1 c2 c3 )
     ^ ( __f4_pack d0 d1 d2 d3 )
+}
+
+// o ← a, one element.
+inline @ __xk_cp * u64 o * u64 a → v { = . o 0 . a 0 = . o 1 . a 1 = . o 2 . a 2 = . o 3 . a 3 }
+
+// The fixed-base walk of __xe_base_r on the kernels: h = (X : Y : Z : T)
+// and the step's scratch in a buffer of 13 zeroed elements (w), the same
+// formulas in the same order. x25519_kernel_agrees holds the two to each
+// other.
+@ __xe_base_k * u64 w ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec i ) tbl ( __xe_tbl )
+    : *u64 tb # *u64 ( vec_data [i] tbl )
+    : ( Vec i ) dig ( __xe_digits scalar )
+    : *i dp ( vec_data [i] dig )
+    : *u64 px ( __xk_at w 0 )
+    : *u64 py ( __xk_at w 1 )
+    : *u64 pz ( __xk_at w 2 )
+    : *u64 pt ( __xk_at w 3 )
+    : *u64 a ( __xk_at w 4 )
+    : *u64 b ( __xk_at w 5 )
+    : *u64 c ( __xk_at w 6 )
+    : *u64 d ( __xk_at w 7 )
+    : *u64 e ( __xk_at w 8 )
+    : *u64 f ( __xk_at w 9 )
+    : *u64 yp ( __xk_at w 10 )
+    : *u64 ym ( __xk_at w 11 )
+    : *u64 xy ( __xk_at w 12 )
+    // h = the identity (0 : 1 : 1 : 0)
+    = . py 0 1 = . pz 0 1
+    : ~ i st 0
+    ~ < st 64 {
+        ? == st 32 {
+            // h ← 16·h: four doublings (dbl-2008-hwcd), 4S + 4M each.
+            : ~ i dn 0
+            ~ < dn 4 {
+                ( __xk_sq a px )
+                ( __xk_sq b py )
+                ( __xk_sq e pz )
+                ( __xk_add c e e )
+                ( __xk_add e px py )
+                ( __xk_sq d e )
+                // Y' = YY + XX, Z' = YY − XX, X' = (X + Y)² − Y', T' = 2ZZ − Z'
+                ( __xk_add py b a )
+                ( __xk_sub pz b a )
+                ( __xk_sub px d py )
+                ( __xk_sub pt c pz )
+                ( __xk_mul a px pt )
+                ( __xk_mul b py pz )
+                ( __xk_mul c pz pt )
+                ( __xk_mul pt px py )
+                ( __xk_cp px a )
+                ( __xk_cp py b )
+                ( __xk_cp pz c )
+                = dn + dn 1
+            }
+        } {}
+        : i di ? < st 32 + * st 2 1 * - st 32 2
+        : ~ u64 yp0 0
+        : ~ u64 yp1 0
+        : ~ u64 yp2 0
+        : ~ u64 yp3 0
+        : ~ u64 ym0 0
+        : ~ u64 ym1 0
+        : ~ u64 ym2 0
+        : ~ u64 ym3 0
+        : ~ u64 xy0 0
+        : ~ u64 xy1 0
+        : ~ u64 xy2 0
+        : ~ u64 xy3 0
+        ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 # *u64 + # i tb * / di 2 768 . dp di )
+        = . yp 0 yp0 = . yp 1 yp1 = . yp 2 yp2 = . yp 3 yp3
+        = . ym 0 ym0 = . ym 1 ym1 = . ym 2 ym2 = . ym 3 ym3
+        = . xy 0 xy0 = . xy 1 xy1 = . xy 2 xy2 = . xy 3 xy3
+        // h ← h + entry (ge_madd, 7M): A = (Y + X)(y + x), B = (Y − X)(y − x),
+        // C = T · 2dxy, D = 2Z; X = (A − B)(D − C), Y = (A + B)(D + C),
+        // Z = (D + C)(D − C), T = (A − B)(A + B).
+        ( __xk_add e py px )
+        ( __xk_mul a e yp )
+        ( __xk_sub f py px )
+        ( __xk_mul b f ym )
+        ( __xk_mul c pt xy )
+        ( __xk_add d pz pz )
+        ( __xk_sub px a b )
+        ( __xk_add py a b )
+        ( __xk_add pz d c )
+        ( __xk_sub pt d c )
+        ( __xk_mul a px pt )
+        ( __xk_mul b py pz )
+        ( __xk_mul c pz pt )
+        ( __xk_mul pt px py )
+        ( __xk_cp px a )
+        ( __xk_cp py b )
+        ( __xk_cp pz c )
+        = st + st 1
+    }
+    // Birational map to Montgomery u = (Z + Y) / (Z − Y)
+    ( __xk_add px pz py )
+    ( __xk_sub pt pz py )
+    ( __xk_inv py pt a )
+    ( __xk_mul pz px py )
+    ^ ( __f4_pack . pz 0 . pz 1 . pz 2 . pz 3 )
+}
+
+// scalar·B → 32-byte little-endian Montgomery u (the X25519 public key):
+// the kernels' walk where the target has the kernels (a square of the
+// zeroed buffer asks), else the register one.
+@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec u64 ) kb ( vec_zeroed [u64] 52 )
+    : *u64 kw ( vec_data [u64] kb )
+    ? ( nurl_x25519_sqrm kw kw ) { ^ ( __xe_base_k kw scalar ) } {}
+    ^ ( __xe_base_r scalar )
 }
 
 @ x25519_base ( Vec u ) scalar → ( Vec u ) {
