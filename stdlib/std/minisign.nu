@@ -16,6 +16,11 @@
 // API:
 //   ( minisign_verify msg pubfile_text sigfile_text ) → b   parse .pub + .minisig text
 //   ( minisign_verify_b64 msg pub_b64 sig_b64 )       → b   raw base64 lines
+//   ( minisign_pubkey_b64 seed32 keyid8 )             → String
+//   ( minisign_sign_b64 seed32 keyid8 msg )           → String
+//
+// The signing helpers emit legacy `Ed` payloads (raw Ed25519). An invalid
+// seed or key-id length returns an empty String; no truncated key is accepted.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -61,6 +66,38 @@ $ `stdlib/core/slice.nu`
 @ __ms_b64 s line → ( Vec u ) {
     : !( Vec u ) ParseErr r ( b64_decode_vec line )
     ^ ?? r { T v → v F _ → ( vec_new [u] ) }
+}
+
+// Build the base64 payload line of a minisign public key:
+// `Ed` || key-id(8) || Ed25519-public-key(32).
+@ minisign_pubkey_b64 ( Vec u ) seed ( Vec u ) keyid → String {
+    ? | != ( vec_len [u] seed ) 32 != ( vec_len [u] keyid ) 8 {
+        ^ ( string_new )
+    } {}
+    : ( Vec u ) pubkey ( ed25519_pubkey_pure seed )
+    ? != ( vec_len [u] pubkey ) 32 { ^ ( string_new ) } {}
+    : ( Vec u ) raw ( vec_new [u] )
+    ( vec_push [u] raw # u 69 )  // E
+    ( vec_push [u] raw # u 100 )  // d — legacy raw-message mode
+    ( bytes_extend_bytes raw keyid )
+    ( bytes_extend_bytes raw pubkey )
+    ^ ( b64_encode_vec raw )
+}
+
+// Sign `message` in legacy `Ed` mode and return the signature payload line:
+// `Ed` || key-id(8) || Ed25519-signature(64).
+@ minisign_sign_b64 ( Vec u ) seed ( Vec u ) keyid ( Vec u ) message → String {
+    ? | != ( vec_len [u] seed ) 32 != ( vec_len [u] keyid ) 8 {
+        ^ ( string_new )
+    } {}
+    : ( Vec u ) signature ( ed25519_sign_pure seed message )
+    ? != ( vec_len [u] signature ) 64 { ^ ( string_new ) } {}
+    : ( Vec u ) raw ( vec_new [u] )
+    ( vec_push [u] raw # u 69 )  // E
+    ( vec_push [u] raw # u 100 )  // d — legacy raw-message mode
+    ( bytes_extend_bytes raw keyid )
+    ( bytes_extend_bytes raw signature )
+    ^ ( b64_encode_vec raw )
 }
 
 // Verify against raw base64 pubkey + signature lines.
