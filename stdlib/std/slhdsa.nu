@@ -43,6 +43,10 @@
 //   ( slhdsa_sign_internal set sk msg addrnd )       → ( Vec u )
 //   ( slhdsa_verify_internal set pk msg sig )        → b
 //
+// Sizes are checked at the entry, as verify checks pk and sig: a seed
+// that is not n bytes gives keys with an empty pk and sk, and a secret
+// key that is not slhdsa_sk_len bytes an empty signature.
+//
 // Sets are named by the integers 128, 129, 192, 193, 256, 257 — the
 // even value is the `s` variant and the odd one its `f` sibling; see
 // `slhdsa_set_*` below rather than memorising that.
@@ -941,6 +945,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ slhdsa_keygen_derand i set ( Vec u ) skseed ( Vec u ) skprf ( Vec u ) pkseed → SlhKeys {
     : SlhParams p ( __slh_params set )
+    : i sn . p n
+    ? | | != ( vec_len [u] skseed ) sn != ( vec_len [u] skprf ) sn != ( vec_len [u] pkseed ) sn {
+        ^ @ SlhKeys { ( shared_new [SlhKeysImpl] @ SlhKeysImpl { ( vec_new [u] ) ( vec_new [u] ) } ) }
+    } {}
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_layer adrs - . p d 1 )
     : ~ SlhCtx c ( __slhx4_new )
@@ -997,6 +1005,7 @@ $ `stdlib/core/rcbox.nu`
 @ slhdsa_sign_internal i set ( Vec u ) sk ( Vec u ) msg ( Vec u ) addrnd → ( Vec u ) {
     : SlhParams p ( __slh_params set )
     : i n . p n
+    ? != ( vec_len [u] sk ) * 4 n { ^ ( vec_new [u] ) } {}
     : ( Vec u ) skseed ( bytes_slice sk 0 n )
     : ( Vec u ) skprf ( bytes_slice sk n * 2 n )
     : ( Vec u ) pkseed ( bytes_slice sk * 2 n * 3 n )

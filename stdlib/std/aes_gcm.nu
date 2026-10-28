@@ -2067,7 +2067,7 @@ unsafe @ __gcm_core * AesGcmKeyImpl k * u np * u aadp i aadlen * u inp i n * u o
 // is zeroed, never left as unauthenticated plaintext.
 @ aes_gcm_open_in AesGcmKey k__h ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at i end → b {
     : i len ( vec_len [u] buf )
-    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | > + data_at 16 end > end len { ^ F } {}
+    ? | | == 0 # i . k__h ctl != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | | < end 16 > end len > data_at - end 16 { ^ F } {}
     : i n - - end data_at 16
     : i at ( __gcm_scr_at len )
     ( vec_reserve [u] buf + - at len ( __gcm_scratch ) )

@@ -23,6 +23,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The crypto library's offset checks, size checks and limb helpers no
+  longer let safe code read or write past a buffer** (h436–h459). Found
+  by an audit of the stdlib's raw-memory entry points:
+  - `hmac_sha256_mac_in`, `hkdf_expand_in` / `hkdf_expand_label_in`,
+    `chacha20poly1305_open_in` and `aes_gcm_open_in` checked
+    `at + n > len`, which wraps for a huge offset; the checks now cannot
+    wrap and the calls return F.
+  - `chacha20_xor_range` gives an empty Vec for a range outside its data,
+    and `poly1305_mac` an empty tag for a key that is not 32 bytes;
+    `sha3_new` / `sha3x4_new` panic for a rate outside 1–200 bytes.
+  - `mlkem_encaps*` / `mlkem_decaps`, the `mldsa_sign*` family and
+    `slhdsa_keygen_derand` / `slhdsa_sign*` check key, seed and
+    ciphertext sizes at the entry and fail as verify does (an empty
+    result); `p256ct_scalarmult` checks its coordinates.
+  - The RSA Montgomery helpers (`_rm_mul_d`, `_rm_pow_ct`, …), the P-256
+    field and point helpers (`p256ct_mul`, `_p256_*_d`, `_mag4`, …),
+    `_chacha20_xor_range_scalar` and `bytes_range_cc` are `raw`, and
+    `RsaKey`, `RsaMont`, `RsaTmp`, `P256Pt`, `P256Scratch`, `MldsaKey`
+    and `HmacSha256` are sealed: only `unsafe` code may call or build
+    them. A prepared RSA or ML-DSA key whose limbs were shrunk through
+    its fields signs nothing (the compiler gap behind that is Agora
+    #159). No check runs per limb or per block.
 - **The state behind a library handle can no longer be built by a
   literal** (h433, h434). `@ TcpConnImpl { 4096 0 0 T }` was accepted,
   and its destructor closed the made-up number 4096 as the address of a

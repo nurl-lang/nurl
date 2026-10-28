@@ -242,9 +242,10 @@ $ `stdlib/std/p256_field.nu`
     ^ y
 }
 
-@ main → i {
-    : BigInt p ( p256p )
-    : Rng g ( rng_seed 0x50607080 )
+// The field operations against bigint. They are `raw` (four-limb
+// operands), and to_limbs and the field ops build every operand at four
+// limbs, so this is where the test vouches for that.
+unsafe @ field_trials BigInt p Rng g → i {
     : ~ i ff 0
     : ~ i t 0
     ~ < t 400 {
@@ -271,6 +272,13 @@ $ `stdlib/std/p256_field.nu`
         ( vec_free [i] pm ) ( vec_free [i] pr ) ( vec_free [i] sl )
         = t + t 1
     }
+    ^ ff
+}
+
+@ main → i {
+    : BigInt p ( p256p )
+    : Rng g ( rng_seed 0x50607080 )
+    : i ff ( field_trials p g )
     // Scalar multiply against the INDEPENDENT reference ladder above.
     // (It must not be compared against p256_ecdh_keygen: that calls the
     // very ladder under test, so the check would be vacuous.)

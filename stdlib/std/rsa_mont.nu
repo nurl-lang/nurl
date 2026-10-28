@@ -42,6 +42,7 @@
 //        the CRT form; F unless p and q are odd and every field is there
 //   ( _rsa_sign_raw RsaKey k ( Vec u ) m ) → ( Vec u )
 //        m^d mod n, k bytes big-endian; [] if the fault check fails
+//        (or the key's limbs were changed through its fields)
 //   ( _rsa_public ( Vec u ) n ( Vec u ) e ( Vec u ) s i k ) → ( Vec u )
 //        s^e mod n, k bytes big-endian (e is public: variable time)
 
@@ -60,12 +61,25 @@ $ `stdlib/std/random.nu`
 // carries its radix-2^52 form for the IFMA tier (below): m52, the
 // modulus as 20 limbs of 52 bits, and rr52, R'^2 mod m with R' = 2^1040,
 // in the same limbs. Empty for any other width.
-: RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one ( Vec i ) m52 ( Vec i ) rr52 }
+//
+// The limb helpers below (_rm_mul_d, _rm_sqr_d, _rm_enter, _rm_leave,
+// _rm_pow_ct, _rm_pow_pub, _rm_pow2_ct) are `raw` (spec §3.3e): each
+// requires its context and scratch to be the ones _rm_ctx / _rm_tmp
+// built (their vectors unshrunk: __rm_ctx_ok), and its residues to hold
+// the context's n limbs, and indexes
+// them through `vec_data` with no length check — a check per Montgomery
+// operation would be paid thousands of times a signature. The three
+// structs are sealed (`raw :`) for the same reason: a literal could pair
+// an n with shorter limb vectors. The safe surface — _rsa_key_plain,
+// _rsa_key_crt, _rsa_sign_raw, _rsa_public, and std/rsa.nu over them —
+// builds every context and residue itself, and _rsa_sign_raw checks a
+// key's limb counts against its contexts (__rm_key_ok) before it signs.
+raw : RsaMont { i n ( Vec i ) m i n0 ( Vec i ) r2 ( Vec i ) one ( Vec i ) m52 ( Vec i ) rr52 }
 
 // The scratch a multiply works in — accumulator t, 2n + 1 limbs (the row
 // form's product); difference d, n limbs — one per operation, so a shared
 // RsaMont stays read-only.
-: RsaTmp { ( Vec i ) t ( Vec i ) d }
+raw : RsaTmp { ( Vec i ) t ( Vec i ) d }
 
 @ _rm_tmp RsaMont c → RsaTmp { ^ @ RsaTmp { ( __rm_zeros + * 2 . c n 1 ) ( __rm_zeros . c n ) } }
 
@@ -258,7 +272,9 @@ inline @ __rm_final i n * i rp * i mp * i dp u64 top ( Vec i ) dst → v {
     ~ < j n { = . op j | & mask . dp j & imask . rp j = j + j 1 }
 }
 
-@ _rm_mul_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+// requires: c from _rm_ctx, w from _rm_tmp c, and dst, a, b each . c n
+// limbs.
+raw @ _rm_mul_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : i n . c n
     : *i qp ( vec_data [i] . w t )  // q digits, then the result
     : *i ap ( vec_data [i] a )
@@ -381,7 +397,8 @@ unsafe @ __rm_mul_gen i n * i ap * i bp * i mp u64 n0 * i qp → u64 {
 
 // dst = a²·R^-1 mod m (a < m): _rm_mul_d with b = a, the cross products
 // of each column summed once and doubled.
-@ _rm_sqr_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a → v {
+// requires: c from _rm_ctx, w from _rm_tmp c, dst and a each . c n limbs.
+raw @ _rm_sqr_d RsaMont c RsaTmp w ( Vec i ) dst ( Vec i ) a → v {
     : i n . c n
     : *i qp ( vec_data [i] . w t )
     : *i ap ( vec_data [i] a )
@@ -1857,7 +1874,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 // n-limb chunks from the top: acc = acc·R + chunk, each chunk entered as
 // chunk·R^2·R^-1. Valid for any x, so a 2048-bit message reduces into a
 // 1024-bit factor's domain directly.
-@ _rm_enter RsaMont c RsaTmp w ( Vec i ) x i xn → ( Vec i ) {
+// requires: c from _rm_ctx, w from _rm_tmp c, and 0 ≤ xn ≤ vec_len x.
+raw @ _rm_enter RsaMont c RsaTmp w ( Vec i ) x i xn → ( Vec i ) {
     : i n . c n
     : ( Vec i ) acc ( __rm_zeros n )
     : ( Vec i ) ch ( __rm_zeros n )
@@ -1882,7 +1900,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 }
 
 // Montgomery form → plain.
-@ _rm_leave RsaMont c RsaTmp w ( Vec i ) a → ( Vec i ) {
+// requires: c from _rm_ctx, w from _rm_tmp c, a . c n limbs.
+raw @ _rm_leave RsaMont c RsaTmp w ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) one1 ( __rm_zeros . c n )
     ( vec_put [i] one1 0 1 )
     : ( Vec i ) out ( __rm_zeros . c n )
@@ -1894,7 +1913,9 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 // (little-endian). Fixed 4-bit windows over all en limbs, table entry
 // chosen by a masked scan of all sixteen: the same work for every e of
 // that width. Result in Montgomery form.
-@ _rm_pow_ct RsaMont c RsaTmp w ( Vec i ) base ( Vec i ) e i en → ( Vec i ) {
+// requires: c from _rm_ctx, w from _rm_tmp c, base . c n limbs and
+// 0 ≤ en ≤ vec_len e.
+raw @ _rm_pow_ct RsaMont c RsaTmp w ( Vec i ) base ( Vec i ) e i en → ( Vec i ) {
     : i n . c n
     : ( Vec i ) tbl ( __rm_zeros * 16 n )
     : *i tb ( vec_data [i] tbl )
@@ -1951,7 +1972,8 @@ unsafe @ __rm_sqr16 * i ap * i mp u64 n0 * i rp → u64 {
 
 // base^e for a PUBLIC exponent (big-endian bytes): plain square-and-
 // multiply, Montgomery form in and out.
-@ _rm_pow_pub RsaMont c RsaTmp w ( Vec i ) base ( Vec u ) e → ( Vec i ) {
+// requires: c from _rm_ctx, w from _rm_tmp c, base . c n limbs.
+raw @ _rm_pow_pub RsaMont c RsaTmp w ( Vec i ) base ( Vec u ) e → ( Vec i ) {
     : ( Vec i ) acc ( __rm_zeros . c n )
     ( __rm_copy_d acc . c one . c n )
     : i len ( vec_len [u] e )
@@ -2228,7 +2250,10 @@ unsafe simd @ __rm_pow2_52 RsaMont c1 RsaMont c2 * i x1 * i x2 * i e1 * i e2 i e
 // o2: the two halves of a CRT signature. On the IFMA tier with two
 // 1024-bit moduli both at once (__rm_pow2_52), else one after the other
 // by _rm_pow_ct — the same answers, which rsa_pow2_agree holds both to.
-@ _rm_pow2_ct RsaMont c1 RsaTmp w1 ( Vec i ) x1 ( Vec i ) e1 i en1 RsaMont c2 RsaTmp w2 ( Vec i ) x2 ( Vec i ) e2 i en2 ( Vec i ) o1 ( Vec i ) o2 → v {
+// requires: c1, c2 from _rm_ctx, w1, w2 from _rm_tmp of them; x1 and o1
+// . c1 n limbs, x2 and o2 . c2 n limbs; 0 ≤ en1 ≤ vec_len e1 and
+// 0 ≤ en2 ≤ vec_len e2.
+raw @ _rm_pow2_ct RsaMont c1 RsaTmp w1 ( Vec i ) x1 ( Vec i ) e1 i en1 RsaMont c2 RsaTmp w2 ( Vec i ) x2 ( Vec i ) e2 i en2 ( Vec i ) o1 ( Vec i ) o2 → v {
     ? & & & ( nurl_cpu_has_ifma ) == en1 en2 > ( vec_len [i] . c1 m52 ) 0 > ( vec_len [i] . c2 m52 ) 0 {
         ( __rm_pow2_52 c1 c2 ( vec_data [i] x1 ) ( vec_data [i] x2 ) ( vec_data [i] e1 ) ( vec_data [i] e2 ) en1 ( vec_data [i] o1 ) ( vec_data [i] o2 ) )
         ^ v
@@ -2264,8 +2289,9 @@ unsafe @ __rm_reduce_once * i xp * i mp → v {
 // exponent). A CRT key (`crt`) carries the contexts of p and q, d_p and d_q
 // as limbs of their factor's width, q^-1 mod p as limbs of p's and q as
 // limbs of its own; a key without its factors carries the context of n
-// and d as limbs. The other half is empty.
-: RsaKey {
+// and d as limbs. The other half is empty. Sealed, as RsaMont is: the
+// signing path trusts its limb counts to match its contexts.
+raw : RsaKey {
     ( Vec u ) n
     ( Vec u ) e
     b crt
@@ -2280,6 +2306,28 @@ unsafe @ __rm_reduce_once * i xp * i mp → v {
 }
 
 @ __rm_ctx_none → RsaMont { ^ @ RsaMont { 0 ( vec_new [i] ) 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) } }
+
+// Does `c` still hold the limbs its width says (what _rm_ctx built)? The
+// seal stops a literal, but a context's vectors are readable fields, and
+// safe code may shrink one in place (`vec_clear`, `vec_shrink_to_fit` on
+// `. c m`). The signing entry asks once, before a raw kernel indexes them.
+@ __rm_ctx_ok RsaMont c → b {
+    : i n . c n
+    : i w52 ? == n 16 20 0
+    ^ & & & & & > n 0 == ( vec_len [i] . c m ) n == ( vec_len [i] . c r2 ) n == ( vec_len [i] . c one ) n == ( vec_len [i] . c m52 ) w52 == ( vec_len [i] . c rr52 ) w52
+}
+
+// The same for a whole key: its contexts, and every limb vector the
+// width of the context it is used under.
+@ __rm_key_ok RsaKey k → b {
+    ? . k crt {
+        : RsaMont cp . k cp
+        : RsaMont cq . k cq
+        ^ & & & & & ( __rm_ctx_ok cp ) ( __rm_ctx_ok cq ) == ( vec_len [i] . k dp ) . cp n == ( vec_len [i] . k dq ) . cq n == ( vec_len [i] . k qinv ) . cp n == ( vec_len [i] . k ql ) . cq n
+    } {}
+    : RsaMont cn . k cn
+    ^ & ( __rm_ctx_ok cn ) == ( vec_len [i] . k d ) . cn n
+}
 
 @ __rm_copy_bytes ( Vec u ) b → ( Vec u ) { ^ ( bytes_slice b 0 ( vec_len [u] b ) ) }
 
@@ -2395,8 +2443,10 @@ unsafe @ __rm_reduce_once * i xp * i mp → v {
 }
 
 // m^d mod n, as many big-endian bytes as n has. [] when the CRT fault
-// check fails.
+// check fails, or when the key's limbs no longer match its contexts
+// (__rm_key_ok: one check a signature).
 @ _rsa_sign_raw RsaKey key ( Vec u ) m → ( Vec u ) {
+    ? ! ( __rm_key_ok key ) { ^ ( vec_new [u] ) } {}
     : i k ( vec_len [u] . key n )
     : i mn ( __rm_limbs_for m )
     : ( Vec i ) ml ( __rm_from_be m mn )

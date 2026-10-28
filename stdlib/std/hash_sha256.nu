@@ -487,7 +487,12 @@ inline @ __sha256_iv * u32 sp → v {
 //
 // The key-derived scratch (the K0 blocks, the inner digest, T) is wiped
 // when the operation that wrote it ends.
-: HmacSha256 { Sha256 h }
+//
+// Sealed (`raw`, spec §3.3e): the MAC steps read and write the key's
+// words past 144, so its hasher must be the 244-word one
+// hmac_sha256_key builds — a literal around any other Sha256 would
+// index past it. Reading `h` stays safe.
+raw : HmacSha256 { Sha256 h }
 
 @ hmac_sha256_key ( Vec u ) key → HmacSha256 {
     : Sha256 h ( __sha256_new 244 )
@@ -556,7 +561,8 @@ inline @ __sha256_iv * u32 sp → v {
 // HMAC(key, msg) under a prepared key, into out[at, at + 32). False, and
 // nothing written, when the range is not inside `out`.
 @ hmac_sha256_mac_in HmacSha256 k ( Vec u ) msg ( Vec u ) out i at → b {
-    ? | < at 0 > + at 32 ( vec_len [u] out ) { ^ F } {}
+    // (`at > len - 32`, not `at + 32 > len`: the sum wraps for a huge `at`.)
+    ? | < at 0 > at - ( vec_len [u] out ) 32 { ^ F } {}
     ( _hmac_begin k )
     ( _hmac_absorb k ( vec_data [u] msg ) ( vec_len [u] msg ) )
     ( _hmac_end_to k # *u + # i ( vec_data [u] out ) at )

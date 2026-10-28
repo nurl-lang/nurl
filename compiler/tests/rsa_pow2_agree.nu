@@ -86,6 +86,13 @@ $ `stdlib/std/rsa_mont.nu`
     ^ ( bigint_to_bytes_be ( bigint_modpow ( bigint_from_bytes_be x ) ( bigint_from_bytes_be e ) ( bigint_from_bytes_be n ) ) ( vec_len [u] n ) )
 }
 
+// _rm_pow2_ct is `raw`: it trusts its residues to hold their context's
+// n limbs. main builds them that way (`limbs x . c n`, 17 exponent
+// limbs, o1 and o2 of . c n), so this is where the test vouches for it.
+unsafe @ pow2 RsaMont c1 RsaTmp w1 ( Vec i ) x1 ( Vec i ) e1 RsaMont c2 RsaTmp w2 ( Vec i ) x2 ( Vec i ) e2 ( Vec i ) o1 ( Vec i ) o2 → v {
+    ( _rm_pow2_ct c1 w1 x1 e1 17 c2 w2 x2 e2 17 o1 o2 )
+}
+
 @ main → i {
     : ~ i bad 0
     : ~ i pair 0
@@ -105,7 +112,7 @@ $ `stdlib/std/rsa_mont.nu`
             : ( Vec u ) e2 ( rnd_bytes 136 )
             : ( Vec i ) o1 ( vec_zeroed [i] . c1 n )
             : ( Vec i ) o2 ( vec_zeroed [i] . c2 n )
-            ( _rm_pow2_ct c1 w1 ( limbs x1 . c1 n ) ( limbs e1 17 ) 17 c2 w2 ( limbs x2 . c2 n ) ( limbs e2 17 ) 17 o1 o2 )
+            ( pow2 c1 w1 ( limbs x1 . c1 n ) ( limbs e1 17 ) c2 w2 ( limbs x2 . c2 n ) ( limbs e2 17 ) o1 o2 )
             : b g1 ( bytes_eq ( bytes_of o1 ( vec_len [u] n1 ) ) ( want x1 e1 n1 ) )
             : b g2 ( bytes_eq ( bytes_of o2 ( vec_len [u] n2 ) ) ( want x2 e2 n2 ) )
             ? & g1 g2 { = ok + ok 1 } {
