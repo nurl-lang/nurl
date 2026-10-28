@@ -14516,6 +14516,10 @@ unsafe @ gen_call i lex i syms i cg → s {
         : ~ b arg_call_lends F
         : ~ s arg_lit_own ``
         : ~ s arg_fread ``
+        // (A field of a call's result: `1` when the object was a call, and
+        // the flag that says the field left with the read, if it did.)
+        : ~ s arg_ofcall ``
+        : ~ s arg_tfown ``
         : ~ b arg_had_fread F
         : ~ s arg_faddr ``
         // The field path an argument reads (`. b items` → `b.items`,
@@ -14637,7 +14641,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             | | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
             | ( mem_fn_lends syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
             != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow_x` )
-            ? == bck_arg_tt TT_DOT { = arg_fread ( nurl_sym_get syms `__last_field_read__` ) } {}
+            ? == bck_arg_tt TT_DOT {
+                = arg_fread ( nurl_sym_get syms `__last_field_read__` )
+                = arg_ofcall ( nurl_sym_get syms `__last_member_of_call__` )
+                = arg_tfown ( nurl_sym_get syms `__last_tmp_field_own__` )
+            } {}
             // A field read through a pointer (`. . data k name`): where it lives.
             = arg_faddr ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_field_addr__` ) ``
             // (A field that holds storage: one a borrow can be taken from.)
@@ -15630,6 +15638,21 @@ unsafe @ gen_call i lex i syms i cg → s {
         // is rejected — and so is a field that cannot be copied of a struct
         // that still drops it (`( eat . h r )`, `h` a local).
         ? & summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            // A field of a call's result: it left with the read only where
+            // the call handed its result over (`__last_tmp_field_own__`'s
+            // flag); of a result the call lends (`. ( box_get b ) name`) it
+            // is still its owner's, so the callee is handed a copy — and one
+            // that cannot be copied is rejected.
+            ? & == bck_arg_tt TT_DOT != 0 ( nurl_str_len arg_ofcall ) {
+                ? ( __clone_supported at syms ) {
+                    : ~ s __fcl ( nurl_str_cat `1` `` )
+                    ? != 0 ( nurl_str_len arg_tfown ) {
+                        = __fcl ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __fcl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ? ( seq arg_tfown `true` ) `1` arg_tfown ) ( nurl_print `, 1\n` )
+                    } {}
+                    = av ( mem_emit_cloneif cg at av __fcl )
+                } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
             ? & & & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {}
             } {}
@@ -35868,6 +35891,10 @@ unsafe @ gen_member i lex i syms i cg → s {
     // the field can hold is what that binding can (__clo_cs_expr).
     ? ( is_ident_tok __mb_tt ) { ( nurl_sym_def syms `__last_member_root__` __mb_val ) } {
         ? != __mb_tt TT_DOT { ( nurl_sym_def syms `__last_member_root__` `` ) } {} }
+    // (…and whether the object is a call's result, `. ( f ) x`, through a
+    // field of one too: gen_call asks for a field handed to a `sink`.)
+    ? == __mb_tt TT_LPAREN { ( nurl_sym_def syms `__last_member_of_call__` `1` ) } {
+        ? != __mb_tt TT_DOT { ( nurl_sym_def syms `__last_member_of_call__` `` ) } {} }
     // …and the field path it reads, when a call argument asks: a field of a
     // struct value extends its object's path; anything read through a
     // pointer is the pointer's (an element is not told apart from the rest).
