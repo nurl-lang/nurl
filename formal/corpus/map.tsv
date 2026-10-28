@@ -394,3 +394,11 @@ h404_closure_over_a_struct_then_a_nested_struct_field_taken	§2.11	A2	as h401, a
 h405_field_of_a_by_reference_capture_assigned_leaked	§2.11	A2	a closure assigned a field of a by-reference capture: the old value leaked; it is released under the caller's drop flag	runs-clean
 h406_field_of_a_borrowed_by_reference_capture_assigned	§2.11	A2	as h405, the binding a vec_at copy: the stored value had no owner (leak); rejected unless the binding owns its value	rejected
 h407_nested_field_of_a_by_reference_capture_assigned_leaked	§2.11	A2	as h405, a nested field	runs-clean
+h408_option_parameter_payload_handed_back_by_a_match	CallT.sink	A1	an option parameter's payload handed back as a ?? value: the parameter was only kept, the caller read its option after freeing the result (UAF); a parameter whose value moves on is an inferred sink	rejected
+h409_option_parameter_payload_bound_by_a_match_then_handed_back	CallT.sink	A1	as h408, bound first	rejected
+h410_option_parameter_payload_falls_off_a_match	CallT.sink	A1	as h408, falling off the end	rejected
+h411_option_parameter_payload_handed_back_through_a_ternary	CallT.sink	A1	as h408, through a ternary	rejected
+h412_result_parameter_payload_handed_back_by_a_match	CallT.sink	A1	as h408, a result parameter	rejected
+h413_option_parameter_payload_put_in_a_returned_literal	§7.6	A2	an option parameter's payload in a returned literal: the caller freed the result's field and read its option (UAF); the result's field is a borrow's	rejected
+h414_cursor_over_an_option_parameter_payload_handed_back	CallT.sink	A1	as h408, through a cursor over the parameter	rejected
+h415_generic_option_parameter_payload_handed_back	CallT.sink	A1	as h408, a generic instance	rejected

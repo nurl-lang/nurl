@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A function that hands back its option or result parameter's payload
+  now takes the parameter** (an inferred `sink`, Agora #146). It already
+  took the payload over; now the call moves its caller's option too.
+
 - **A function that hands a field of its parameter to a callee that
   takes it now takes the parameter** (an inferred `sink`, Agora #145).
   It already owned the struct and dropped the rest of it; now the call
@@ -19,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An option parameter's payload handed back by a function is no
+  longer read through the caller's option after its release** (Agora
+  #146, h408–h415). As the value of a `??`, through a local over the
+  parameter, inside a `?`, or in a generic, the caller's option was not
+  moved and still held what the function gave away. This predates
+  0.79.0.
 - **A field handed to a callee that takes it is no longer released
   twice or read after its release** (Agora #145, h389–h404). Before, these
   were accepted and read freed memory:

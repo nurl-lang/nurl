@@ -4854,7 +4854,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         : s rsb ( nurl_sym_get2 syms rup `__sborrow` )
         // A payload of an option / result parameter: handing it back
         // keeps the parameter (the caller hands the option over).
-        ? != 0 ( nurl_sym_len2 syms rup `__optparam` ) { ( mem_udrop_optparam_kept syms rup ) } {}
+        ? != 0 ( nurl_sym_len2 syms rup `__optparam` ) { ( mem_udrop_optparam_taken syms rup ) } {}
         ? & & & & & != 0 ( nurl_str_len rup ) == 0 ( nurl_sym_len2 syms rup `__pname` ) == 0 ( nurl_sym_len2 syms rup `__optparam` )
         == 0 ( nurl_sym_len2 syms rup `__alias` ) ( __clone_supported rty syms )
         // Only a binding that may hold ANOTHER LOCAL's value — a join, a
@@ -22338,7 +22338,7 @@ unsafe @ mem_path_to_indices s path → s {
 // clears too. `val` as for mem_udrop_flag_set.
 @ mem_udrop_alias_move i syms i cg s ptr s val → v {
     ? == 0 ( nurl_str_len ptr ) { ^ v } {}
-    ( mem_udrop_optparam_kept syms ptr )
+    ( mem_udrop_optparam_taken syms ptr )
     : ~ s rest ( nurl_sym_get2 syms ptr `__alias` )
     ~ != 0 ( nurl_str_len rest ) {
         : s src ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -22412,11 +22412,21 @@ unsafe @ mem_path_to_indices s path → s {
     ? != 0 ( nurl_str_len op ) { ( mem_record_kept_param syms op ) } {}
 }
 
+// …and moved on for good (handed back, put in a literal, given to a
+// `sink`): the parameter is the function's to take, an inferred `sink` —
+// its caller's binding is moved by the call. Kept alone, a caller went on
+// reading the option whose payload this function had given away.
+@ mem_udrop_optparam_taken i syms s ptr → v {
+    : s op ( nurl_sym_get2 syms ptr `__optparam` )
+    ? != 0 ( nurl_str_len op ) { ( mem_record_kept_param syms op ) ( bck_record_inferred_sink syms op ) } {}
+}
+
 // A parameter's value moved on through a cursor over it: the parameter
-// is kept (g_fn_keeps), so callers hand the value over.
+// is the function's to take (an inferred `sink`, as above), and kept
+// (g_fn_keeps), so callers hand the value over.
 @ mem_udrop_param_moved i syms s ptr → v {
     : s pname ( nurl_sym_get2 syms ptr `__pname` )
-    ? != 0 ( nurl_str_len pname ) { ( mem_record_kept_param syms pname ) } {}
+    ? != 0 ( nurl_str_len pname ) { ( mem_record_kept_param syms pname ) ( bck_record_inferred_sink syms pname ) } {}
 }
 
 // `ptr` may be a cursor over `src`'s value. May-alias, never narrowed: an

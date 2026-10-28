@@ -1,8 +1,15 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** The last classes, agora #145 and #144, are closed and
-graduated as `h389`–`h407`, found by a hunt along one shape — a field
-handed to a callee that takes it — in every context:
+**None.** The last class, agora #146, is closed and graduated as
+`h408`–`h415`: a function that handed back its option (or result)
+parameter's payload — as the value of a `??`, through a local over the
+parameter, in a generic — took the payload over but left its caller's
+option holding it (the parameter was only kept). A parameter whose value
+moves on through a cursor over it is an inferred `sink` now.
+
+Before it, agora #145 and #144, closed and graduated as `h389`–`h407`,
+found by a hunt along one shape — a field handed to a callee that takes
+it — in every context:
 
 | Probes | What happened | How it is closed |
 |---|---|---|
