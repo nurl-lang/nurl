@@ -38934,15 +38934,16 @@ unsafe @ __sx_names s sx → s {
 // rows so far: a view's or a closure's `let` / `assign` (what its
 // right-hand side read, its source expression), a borrow's reads. An
 // owner's own rows say nothing of a source — it owns its value.
-@ __bck_made_from s name → s {
+unsafe @ __bck_made_from s name → s {
     ? == 0 g_borrowck { ^ ( nurl_str_cat `` `` ) } {}
     : s rows ( nurl_sym_get g_bck `stmts` )
     : i n ( nurl_str_len rows )
+    : *u rp # *u rows
     : ~ s out ``
     : ~ i p 0
     ~ < p n {
         : ~ i e p
-        ~ & < e n != ( nurl_str_get rows e ) 10 { = e + e 1 }
+        ~ & < e n != # i . rp e 10 { = e + e 1 }
         : s row ( __span_dup rows p e )
         = p + e 1
         ? ( seq ( bck_field row 1 ) name ) {
