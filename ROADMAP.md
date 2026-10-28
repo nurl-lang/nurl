@@ -232,7 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
-  through probe h423, is closed and held by a probe; the rules for
+  through probe h425, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -623,7 +623,8 @@ new language features.
   loop's container released in its body (given a new value, handed to a
   `sink`, or by a closure the body runs), and an `inout` callee taking a
   field its caller borrowed; and h421–h423: an option of a String kept
-  by a callee (`vec_push`) was not tied to the container's life. None is
+  by a callee (`vec_push`) was not tied to the container's life; and
+  h424–h425: a field of a call's lent result handed to a `sink`. None is
   open.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait

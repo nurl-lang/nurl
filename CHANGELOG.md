@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A field of a call's lent result handed to a `sink` is a copy** (Agora
+  #150, h424–h425). `( string_free . ( box_get b ) name )` released the
+  Box's field, and the Box released it again. The callee is now handed a
+  copy, as for a bare lent result. A field of an owned result still
+  leaves with the read.
 - **An option of a String pushed into a Vec can no longer be read after
   the Vec is released** (Agora #149, h421–h423). A String or a struct in
   the same place was already rejected ("stored in 'out'"); an option or

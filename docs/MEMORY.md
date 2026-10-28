@@ -903,7 +903,11 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last ones are closed. *An option of a
+**No hole is known open.** The last ones are closed. *A field of a
+call's lent result handed to a `sink`* — `( string_free . ( box_get b )
+name )` — went over as is, and the owner released it again (agora #150,
+h424–h425): the callee is handed a copy now, as a bare lent result is
+(h228), unless the field left with the read. *An option of a
 String kept by a callee* — `( vec_push [?String] out o )`, directly or
 through a helper — was not tied to the container's life the way a String
 or a struct is ("stored in 'out'"): the row that ties them was written
@@ -986,7 +990,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h423):
+all are closed, each a probe CI now holds (h142–h425):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1439,8 +1443,9 @@ missed (h384–h388) was found and closed (above), and so were a field
 handed to a callee that takes it from a binding that cannot give it
 (h389–h404) and a field a closure assigned through its by-reference
 capture (h405–h407), an option parameter's payload handed back
-(h408–h415), a loop's container released in its body (h416–h420), and an option kept
-by a callee (h421–h423).
+(h408–h415), a loop's container released in its body (h416–h420), an option kept
+by a callee (h421–h423), and a field of a call's lent result handed to a
+`sink` (h424–h425).
 
 The rules that carry it:
 
@@ -1746,7 +1751,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h423`) to the rule that rejects it. See
+  (`h01–h425`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

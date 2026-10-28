@@ -410,3 +410,5 @@ h420_loop_container_given_a_new_value_by_a_closure_run_in_its_body	§2.5	A1	as h
 h421_option_kept_by_vec_push_then_read_after_the_vec	§2.12	A2	an option of a String pushed into a Vec, the Vec freed, the option read (UAF); the store row covers every value that needs a drop	rejected
 h422_option_parameter_kept_by_a_helper_then_read_after_the_vec	§2.12	A2	as h421, through a helper	rejected
 h423_option_parameter_payload_kept_by_a_helper_then_read	§2.12	A2	as h422, the payload pushed	rejected
+h424_field_of_a_lent_call_result_handed_to_a_sink	CallT.sink	A1	a field of box_get's lent result handed to string_free: the Box released it again (double free); such a field is handed over as a copy	runs-clean
+h425_nested_field_of_a_lent_call_result_handed_to_a_sink	CallT.sink	A1	as h424, a nested field	runs-clean
