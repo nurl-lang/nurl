@@ -439,12 +439,27 @@ $ `stdlib/ext/http_cli.nu`
     ^ out
 }
 
+@ __pub_has_crlf s str → b {
+    : i n ( nurl_str_len str )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at str n k )
+        ? | == c 10 == c 13 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 // `deps_json` is a JSON array of { name, req } for this package's registry
 // dependencies (built by the caller from the manifest), sent as
 // X-Nurl-Deps so the registry records them in the index and transitive
 // registry resolution works. Pass `[]` (or empty) for none.
 @ pkg_publish s registry s token ( Vec u ) tarball s name s version s deps_json → !i PublishErr {
     ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
+    ? ( __pub_has_crlf token ) { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
+    ? | | ( __pub_has_crlf name ) ( __pub_has_crlf version ) ( __pub_has_crlf deps_json ) {
+        ^ @ !i PublishErr { F # PublishErr PubRejected }
+    } {}
     : String url ( __publish_url registry )
     : String hb ( string_with_cap 256 )
     ( string_push_str hb `Authorization: Bearer ` )
@@ -499,6 +514,7 @@ $ `stdlib/ext/http_cli.nu`
 // POST <registry>/api/v1/revoke — deletes the presented token server-side.
 @ pkg_revoke s registry s token → !i PublishErr {
     ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
+    ? ( __pub_has_crlf token ) { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
     : String url ( __reg_api_url registry `api/v1/revoke` )
     : String hb ( string_with_cap 96 )
     ( string_push_str hb `Authorization: Bearer ` )
@@ -519,6 +535,10 @@ $ `stdlib/ext/http_cli.nu`
 // yank, 0 to unyank.
 @ pkg_yank s registry s token s name s version i yank → !i PublishErr {
     ? == ( nurl_str_len token ) 0 { ^ @ !i PublishErr { F # PublishErr PubNoToken } } {}
+    ? ( __pub_has_crlf token ) { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
+    ? | ( __pub_has_crlf name ) ( __pub_has_crlf version ) {
+        ^ @ !i PublishErr { F # PublishErr PubRejected }
+    } {}
     : s ep ? != yank 0 `api/v1/yank` `api/v1/unyank`
     : String url ( __reg_api_url registry ep )
     : String hb ( string_with_cap 160 )

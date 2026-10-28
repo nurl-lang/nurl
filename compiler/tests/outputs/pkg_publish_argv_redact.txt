@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+classify=TTTFF
+redact=TTTT
+crlf_guard=PubAuth
+srv_publish: inspect=0 auth=T pkg=demo ver=1.2.3 body_ok=T
+cli_publish=ok
+srv_yank: inspect=0 auth=T pkg=demo ver=1.2.3
+cli_yank=ok
+srv_unyank: inspect=0 auth=T pkg=demo ver=1.2.3
+cli_unyank=ok
+srv_revoke: inspect=0 auth=T
+cli_revoke=ok
+done

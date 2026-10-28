@@ -31,7 +31,11 @@
 // `--data-binary @file` so its embedded NULs survive too.
 //
 // headers_blob format matches ext/http.nu: "Name: Value\r\n" segments
-// concatenated; each becomes one curl `-H` argument.
+// concatenated. Non-secret headers become curl `-H` arguments; secret-bearing
+// headers (Authorization, Cookie, Set-Cookie, Proxy-Authorization, X-Api-Key,
+// X-Auth-Token, and any header whose name carries auth/token/secret/cookie/
+// password/credential/key) are never placed in argv or on disk — they are
+// piped to curl on stdin via `-K -`.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -88,10 +92,150 @@ $ `stdlib/core/slice.nu`
     ^ out
 }
 
-// Split a "Name: Value\r\n"… headers blob into `-H <segment>` argument
-// pairs. Each segment is a fresh owned String pushed onto `hold` (which
-// the caller keeps until after the spawn) and its data pointer onto `a`.
-@ __httpc_push_headers s blob ( Vec s ) a ( Vec String ) hold → v {
+@ __httpc_ascii_lower i c → i {
+    ? & >= c 65 <= c 90 { ^ + c 32 } {}
+    ^ c
+}
+
+// Case-insensitive substring check over `str[start..end)` against lowercase `needle`.
+@ __httpc_range_contains_ci s str i n i start i end s needle → b {
+    : i m ( nurl_str_len needle )
+    ? <= m 0 { ^ T } {}
+    ? < - end start m { ^ F } {}
+    : ~ i pos start
+    : i limit - end m
+    ~ <= pos limit {
+        : ~ i j 0
+        : ~ b ok T
+        ~ & < j m ok {
+            : i c1 ( __httpc_ascii_lower ( nurl_str_at str n + pos j ) )
+            : i c2 ( nurl_str_at needle m j )
+            ? != c1 c2 { = ok F } {}
+            = j + j 1
+        }
+        ? ok { ^ T } {}
+        = pos + pos 1
+    }
+    ^ F
+}
+
+// Central classifier for secret-bearing HTTP header lines ("Name: Value").
+// Any header whose field name matches an authentication, cookie, token, key,
+// secret, password or credential pattern (or a malformed line with no ':')
+// is classified as secret so it is never placed in process argv or logs.
+@ httpc_is_secret_header s seg → b {
+    : i n ( nurl_str_len seg )
+    : ~ i colon -1
+    : ~ i i 0
+    ~ & < i n < colon 0 {
+        ? == ( nurl_str_at seg n i ) 58 { = colon i } {}
+        = i + i 1
+    }
+    ? < colon 0 { ^ T } {}
+    : ~ i a 0
+    ~ & < a colon | == ( nurl_str_at seg n a ) 32 == ( nurl_str_at seg n a ) 9 {
+        = a + a 1
+    }
+    : ~ i b colon
+    ~ & > b a | == ( nurl_str_at seg n - b 1 ) 32 == ( nurl_str_at seg n - b 1 ) 9 {
+        = b - b 1
+    }
+    ? <= b a { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `auth` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `token` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `cookie` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `secret` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `password` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `credential` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `api-key` ) { ^ T } {}
+    ? ( __httpc_range_contains_ci seg n a b `apikey` ) { ^ T } {}
+    ^ F
+}
+
+// Redact secret-bearing header values in a "Name: Value\r\n" headers blob
+// for safe diagnostics/logging. Non-secret headers are preserved verbatim;
+// secret headers become "Name: <redacted>\r\n".
+@ __httpc_redact_segment String out s seg → v {
+    ? ! ( httpc_is_secret_header seg ) {
+        ( string_push_str out seg )
+        ( string_push_str out `\r\n` )
+        ^
+    } {}
+    : i n ( nurl_str_len seg )
+    : ~ i colon -1
+    : ~ i i 0
+    ~ & < i n < colon 0 {
+        ? == ( nurl_str_at seg n i ) 58 { = colon i } {}
+        = i + i 1
+    }
+    ? < colon 0 {
+        ( string_push_str out `<redacted>\r\n` )
+        ^
+    } {}
+    : String name ( __httpc_substr seg 0 + colon 1 )
+    ( string_push_str out ( string_data name ) )
+    ( string_push_str out ` <redacted>\r\n` )
+}
+
+@ httpc_redact_headers s blob → String {
+    : i n ( nurl_str_len blob )
+    : String out ( string_with_cap + n 16 )
+    : ~ i start 0
+    : ~ i i 0
+    ~ < i n {
+        ? & == ( nurl_str_at blob n i ) 13 & < + i 1 n == ( nurl_str_at blob n + i 1 ) 10 {
+            ? > i start {
+                : String seg ( __httpc_substr blob start i )
+                ( __httpc_redact_segment out ( string_data seg ) )
+            } {}
+            = i + i 2
+            = start i
+        } {
+            = i + i 1
+        }
+    }
+    ? > n start {
+        : String seg ( __httpc_substr blob start n )
+        ( __httpc_redact_segment out ( string_data seg ) )
+    } {}
+    ^ out
+}
+
+// Append a `header = "..."` directive for curl `-K -` stdin config, escaping
+// `\` and `"` and stripping any CR/LF bytes so a header value cannot break
+// out of the quoted config line.
+@ __httpc_append_cfg_header String cfg s seg → v {
+    : i n ( nurl_str_len seg )
+    ( string_push_str cfg `header = "` )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at seg n k )
+        ? | == c 10 == c 13 {} {
+            ? | == c 34 == c 92 {
+                ( string_push_char cfg 92 )
+            } {}
+            ( string_push_char cfg c )
+        }
+        = k + k 1
+    }
+    ( string_push_str cfg `"\n` )
+}
+
+@ __httpc_handle_header_seg String seg ( Vec s ) a ( Vec String ) hold String stdin_cfg → v {
+    ? ( httpc_is_secret_header ( string_data seg ) ) {
+        ( __httpc_append_cfg_header stdin_cfg ( string_data seg ) )
+        ^
+    } {}
+    ( vec_push [s] a `-H` )
+    ( vec_push [s] a ( string_data seg ) )
+    ( vec_push [String] hold seg )
+}
+
+// Split a "Name: Value\r\n"… headers blob: non-secret segments become
+// `-H <segment>` argument pairs on `a` (kept alive in `hold`); secret-bearing
+// segments are written to `stdin_cfg` and fed to curl via `-K -` on stdin so
+// they never appear in process argv or temporary files.
+@ __httpc_push_headers s blob ( Vec s ) a ( Vec String ) hold String stdin_cfg → v {
     : i n ( nurl_str_len blob )
     : ~ i start 0
     : ~ i i 0
@@ -99,9 +243,7 @@ $ `stdlib/core/slice.nu`
         ? & == ( nurl_str_at blob n i ) 13 & < + i 1 n == ( nurl_str_at blob n + i 1 ) 10 {
             ? > i start {
                 : String seg ( __httpc_substr blob start i )
-                ( vec_push [s] a `-H` )
-                ( vec_push [s] a ( string_data seg ) )
-                ( vec_push [String] hold seg )
+                ( __httpc_handle_header_seg seg a hold stdin_cfg )
             } {}
             = i + i 2
             = start i
@@ -112,9 +254,11 @@ $ `stdlib/core/slice.nu`
     // Trailing segment with no closing CRLF.
     ? > n start {
         : String seg ( __httpc_substr blob start n )
-        ( vec_push [s] a `-H` )
-        ( vec_push [s] a ( string_data seg ) )
-        ( vec_push [String] hold seg )
+        ( __httpc_handle_header_seg seg a hold stdin_cfg )
+    } {}
+    ? > ( string_len stdin_cfg ) 0 {
+        ( vec_push [s] a `-K` )
+        ( vec_push [s] a `-` )
     } {}
 }
 
@@ -164,7 +308,8 @@ $ `stdlib/core/slice.nu`
             ( vec_push [s] a `%{http_code}` )
             ( vec_push [s] a `-X` )
             ( vec_push [s] a method )
-            ( __httpc_push_headers headers_blob a hold )
+            : String stdin_cfg ( string_new )
+            ( __httpc_push_headers headers_blob a hold stdin_cfg )
 
             // Body: --data-binary @<reqfile>. The "@path" arg must outlive
             // the spawn, so park it in `atarg`.
@@ -181,7 +326,7 @@ $ `stdlib/core/slice.nu`
             : ~ i status 0
             : ~ i ok 0
             : ~ i ec 0
-            ?? ( process_run `curl` a `` ) {
+            ?? ( process_run `curl` a ( string_data stdin_cfg ) ) {
                 F _ → { = ec -1 }
                 T out → {
                     = ec ( output_exit_code out )
