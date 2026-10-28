@@ -29,8 +29,10 @@ $ `stdlib/ext/env.nu`
         ( nurl_print `usage: tls_server <cert.der> <key.pem> <port>\n` )
         ^ 1
     } {}
-    : s certpath ( string_data ( __arg args 1 ) )
-    : s keypath ( string_data ( __arg args 2 ) )
+    : String certarg ( __arg args 1 )
+    : String keyarg ( __arg args 2 )
+    : s certpath ( string_data certarg )
+    : s keypath ( string_data keyarg )
     : i port ( nurl_str_to_int ( string_data ( __arg args 3 ) ) )
 
     : ( Vec u ) cert ?? ( read_file_bytes certpath ) { T v → v F _ → ( vec_new [u] ) }

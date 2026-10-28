@@ -45,7 +45,9 @@ elsewhere (`poll(2)`, `WSAPoll` on Windows; see [`ASYNC.md`](ASYNC.md)).
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /
   `_set_multicast_ttl` / `_set_multicast_loop`). Sync + fiber-aware async on
-  every send/recv. Address-carrying variants for a datagram-per-packet
+  every send/recv. A `UdpSocket` is a shared handle that closes itself when
+  its last owner goes, as a `TcpConn` does; `udp_close` stops it early, and
+  every copy then sees it closed. Address-carrying variants for a datagram-per-packet
   transport: `udp_recv_into` / `udp_recv_into_deadline` receive into a
   caller-owned buffer and report the peer as a 24-byte `udp_addr_*`
   value (no allocation, no name lookup per datagram; the deadline form

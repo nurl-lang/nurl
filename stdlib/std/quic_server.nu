@@ -75,12 +75,13 @@ $ `stdlib/std/atomic.nu`
 
 @ __QuicServer_ptr QuicServer h → *QuicServerImpl { ^ ( shared_ptr [QuicServerImpl] . h ctl ) }
 
-// `creds` and `tp` are shared with every connection; `on_event` is the
+// `creds` and `tp` are shared with every connection, and the socket with
+// its caller (a share: the caller's stays its own); `on_event` is the
 // server's own copy.
 @ quic_server_new UdpSocket sock QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ v QuicConn i ) on_event → QuicServer {
     : ( Shared QuicServerImpl ) s__box ( shared_zero [QuicServerImpl] )
     : *QuicServerImpl s ( shared_ptr [QuicServerImpl] s__box )
-    = . s sock sock
+    = . s sock ( UdpSocket_share sock )
     = . s creds ( QuicCreds_share creds )
     = . s alpn_prefs ( bytes_slice alpn_prefs 0 ( vec_len [u] alpn_prefs ) )
     = . s tp ( QuicTp_share tp )

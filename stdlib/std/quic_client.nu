@@ -94,7 +94,7 @@ $ `stdlib/core/rcbox.nu`
     // a socket of the peer's family: bind the wildcard of that family
     : !UdpSocket NetErr sr ( udp_bind ? == ( udp_addr_family peer ) 6 `::` `0.0.0.0` 0 )
     : ~ i ok 0
-    : ~ UdpSocket sock @ UdpSocket { `` }
+    : ~ UdpSocket sock ( udp_socket_none )
     ?? sr { T s → { = sock s = ok 1 } F _ → {} }
     ? == ok 0 { ^ @ QuicClient { ( shared_null [QuicClientImpl] ) } } {}
     : ( Shared QuicClientImpl ) cl__box ( shared_zero [QuicClientImpl] )

@@ -283,10 +283,11 @@ $ `stdlib/core/slice.nu`
 
                     ( chan_close [i] done )
                     ( chan_free [i] done )
-                    ( udp_close cli )
+                    // (srv went to the server fiber and cli to the client
+                    // thread, each the only owner: each closes with its
+                    // closure's env.)
                 }
             }
-            ( udp_close srv )
         }
     }
 

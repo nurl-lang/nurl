@@ -6,6 +6,64 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The two holes 0.79.1 listed under *Known issues* are closed (h378–h383).
+One found on the way stays open, under *Known issues*.
+
+### Known issues
+
+- **A closure a function returns over a parameter, bound before the
+  return or capturing a view of the parameter, reads freed memory once
+  the caller releases the argument** (Agora #141;
+  `tools/fuzz/holes/open/`). What a returned closure lends is recorded
+  only for a closure literal written in the `^` that captures the
+  parameter by name. Return the closure literal itself, or keep the
+  argument alive while the closure runs. This predates 0.79.0.
+
+### Changed
+
+- **A view of a call's temporary argument may not outlive its
+  statement** (Agora #138). `( string_data ( mk ) )`, a helper handing
+  back a view of its parameter, or a closure over it: the temporary is
+  released once a call further out is done with the view, as before.
+  Kept past that call — bound (`: s v ( string_data ( mk ) )`), returned,
+  assigned, stored, taken by a join, or handed to a callee that keeps
+  it — the view left the temporary owned by nothing, and it leaked. That
+  is now a compile error naming the call; bind the argument to a name
+  first (`: String t ( mk ) : s v ( string_data t )`). Only a temporary
+  the caller owned is refused: a value the inner call lent (`vec_at`,
+  `arc_get`) is not. A view-typed result that, by the callee's summary,
+  holds nothing of the argument (`→ s` over a literal) has its temporary
+  released right after the call.
+- **`UdpSocket` closes itself** (Agora #139). It is a shared handle with
+  a drop, as `TcpConn` is: its last owner closes the socket, and
+  `udp_close` only stops it early — every copy then sees it closed.
+  Calling `udp_close` is optional, and code that called it exactly once
+  is unchanged. `quic_server_new` takes a share of the socket it is
+  handed, so the socket stays the caller's, as its contract says.
+
+### Fixed
+
+- **A `UdpSocket` read after `udp_close` no longer reads freed memory,
+  and one never closed no longer leaks its record and fd** (Agora #139,
+  h382, h383).
+- **A fiber handed a connection out of an option binding no longer
+  panics at the crossing** (Agora #140). A closure handed to `spawn_owned`
+  (or a thread) that captured a match's payload `c` together with an
+  owned local was built owning a copy of `c` while the option kept the
+  original, and the crossing check saw two owners. The option's owner now
+  moves with the payload, also for a binding read out of one
+  (`: TcpConn c ?? cr { T x → x … }`); an option matched again after its
+  payload went to the fiber still panics at the crossing, as it should.
+  A spawned closure's env takes a share of its own only of a handle the
+  crossing check follows; a `Channel`, `Mutex` or `Atomic` it captures is
+  shared once, by the spawn's copy, which also drops a share and a
+  release per spawn that a closure moving a capture used to pay (Agora
+  #142).
+- **A temporary whose view a binding, a return or a closure kept no
+  longer leaks** (Agora #138, h378–h381): the program is refused, above.
+
 ## [0.79.1] — 2026-10-27
 
 The safety patch. 0.79.0 said no hole was known open while two were.

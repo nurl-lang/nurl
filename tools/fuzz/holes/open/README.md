@@ -1,27 +1,24 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**Two classes (agora #138, #139):**
+**One class (agora #141):**
 
 | Probe | What happens |
 |---|---|
-| `udp_socket_read_after_close.nu` | A `UdpSocket` read after `udp_close`: the handle is the runtime record's address and the close freed it — heap-use-after-free (#139) |
-| `udp_socket_never_closed_leaks.nu` | A `UdpSocket` never closed leaks its record and fd: it has no drop, and "close exactly once" is unchecked (#139) |
-| `binding_viewing_a_call_temporary_leaks_it.nu` | `: s v ( first ( string_from … ) )`, `first` handing back a view of its argument: the String the binding views is never dropped |
-| `closure_over_a_temporary_argument_leaks_it.nu` | `( mk ( string_from … ) )`, `mk` returning a closure that captures its parameter without taking it over: the String the env views is never dropped |
+| `closure_bound_then_returned_over_a_parameter.nu` | A closure literal bound to a local, then returned, over a String parameter it captured: the callee's `retclo` summary records only a literal written in the `^`, so the caller frees its argument and the closure reads freed memory |
+| `closure_over_a_view_of_a_parameter_returned.nu` | A closure returned over a local view of a parameter (`: s v ( string_data s )`): the summary records captures that are parameters, not one that views one — heap-use-after-free |
 
-`UdpSocket` needs the shape every other resource has — a handle with a
-drop, `udp_close` only stopping the socket (the fix is written, agora
-#139) — and that needs a way to move a handle out of an option binding
-to a fiber as its only owner (agora #140), or the thread crossing check
-rightly refuses the sharing UDP code does today.
+The walk at the return already knows both sources (the local-owner
+versions are rejected, h310); the fix derives the summary from them for
+every spelling.
 
-For the first class: the temporary must outlive the binding (or the closure). The compiler keeps
-it alive by never dropping it — a leak, never a use after free — because
-the borrow checker has no name for a temporary with which to keep the view
-from escaping it. The fix gives such a temporary an owner the borrow
-checker sees: a hidden binding in the statement's scope.
+The last two classes before it are closed and graduated as `h378`–`h383`:
 
-The latest closed: `h371`–`h377` (agora #132, #131): an assignment's value
+| Probes | What happened | How it is closed |
+|---|---|---|
+| `h378`–`h381` | A view of a call's temporary argument kept past its statement — a binding of it (`: s v ( first ( string_from … ) )`), a closure over the temporary, the view returned, or handed to a callee that keeps it — left the temporary owned by nothing: it leaked (agora #138) | A temporary a call's result may view waits for a call further out that consumes the view; one that no call consumes is rejected once the module-end summaries say the caller owned it (`resolve_view_temps`): bind the argument to a name first |
+| `h382`, `h383` | A `UdpSocket` was the runtime record's address with no drop: read after `udp_close` it read freed memory, and one never closed leaked its record and fd (agora #139) | A shared handle with a drop (`UdpSocketImpl`); `udp_close` only stops the socket, and its last owner releases it. Handing one to a fiber as its only owner needed the payload of an option binding to move with the closure (agora #140) |
+
+Before them: `h371`–`h377` (agora #132, #131): an assignment's value
 dropped by the `?` statement it ended, a binding given its own value back
 through a join, and closure envs a panic skipped. Before them `h367`–`h370`
 (agora #135), an `inout` argument whose

@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string long enough to own a heap buffer, number 1
+a string long enough to own a heap buffer, number 2
+51
+a string long enough to own a heap buffer, number 4
+51
+a string long enough to own a heap buffer, number 0
+a string long enough to own a heap buffer, number 10
+b
+51
+a string long enough to own a heap buffer, number 1
+a string long enough to own a heap buffer, number 11
+b
+51
+OK
+a string long enough to own a heap buffer, number 2
+a

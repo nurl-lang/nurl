@@ -1170,6 +1170,11 @@ i clang_rc s build_stdout s build_stderr → v {
                     : !Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
                     ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) } F _ → {} }
 
+                    // (The runtime objects' paths outlive the argument list
+                    // that views them.)
+                    : String rt_wasm_o ( get_runtime_wasm_o )
+                    : String canvas_wasm_o ( get_canvas_wasm_o )
+                    : String audio_wasm_o ( get_audio_wasm_o )
                     : ( Vec s ) clang_args ( vec_new [s] )
                     ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt_lit ) ( vec_push [s] clang_args `-Wno-override-module` )
                     // Keep dead-code elimination off: NURL closures take function
@@ -1194,9 +1199,9 @@ i clang_rc s build_stdout s build_stderr → v {
                     // time with its name, under our nwasm runtime.
                     ( vec_push [s] clang_args `-Wl,--allow-undefined` )
                     ( vec_push [s] clang_args ( string_data ll_path ) )
-                    ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
-                    ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
-                    ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
+                    ( vec_push [s] clang_args ( string_data rt_wasm_o ) )
+                    ? uses_canvas { ( vec_push [s] clang_args ( string_data canvas_wasm_o ) ) } {}
+                    ? uses_audio { ( vec_push [s] clang_args ( string_data audio_wasm_o ) ) } {}
                     ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
                     : !Output ProcessErr clang_res ( run_tool ( string_data ( get_wasi_clang ) ) clang_args )
@@ -1415,8 +1420,8 @@ i clang_rc s build_stdout s build_stderr → v {
                                         // non-HTTP exe — which PE --gc-sections cannot do.
                                         : String curl_marker ( path_join ( string_data ( get_stdlib_dir ) ) `runtime.win.curl` )
                                         : b uses_curl & ( file_exists ( string_data curl_marker ) ) >= ( nurl_str_find ( output_stdout n_out ) `nurl_curl` ) 0
-                                        ? uses_curl { ( vec_push [s] link_args ( string_data ( get_runtime_win_curl_o ) ) ) }
-                                        { ( vec_push [s] link_args ( string_data ( get_runtime_win_o ) ) ) }
+                                        : String rt_win_o ? uses_curl ( get_runtime_win_curl_o ) ( get_runtime_win_o )
+                                        ( vec_push [s] link_args ( string_data rt_win_o ) )
 
                                         // Static-link libgcc + winpthread so the .exe doesn't
                                         // depend on libgcc_s_seh-1.dll / libwinpthread-1.dll
@@ -1542,9 +1547,10 @@ i clang_rc s build_stdout s build_stderr → v {
                             : i n_rc ( output_exit_code n_out )
                             ? ( output_success n_out ) {
                                 ( write_file ( string_data ll_path ) ( output_stdout n_out ) )
+                                : String rt_mac_o ( get_runtime_mac_o )
                                 : ( Vec s ) zig_args ( vec_new [s] )
                                 ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt_lit )
-                                ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data ( get_runtime_mac_o ) ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
+                                ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data rt_mac_o ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
                                 : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
                                     T z_out → {

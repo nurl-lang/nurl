@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_view_of_call_temporary.nu:23:5: error: the result of 'first' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+    : s v ( first ( string_from `a string long enough to own a heap buffer here` ) )
+    ^
+compiler/tests/diag_view_of_call_temporary.nu:27:1: error: the result of 'first' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+@ returned → s { ^ ( first ( string_from `a string long enough to own a heap buffer here` ) ) }
+^
+compiler/tests/diag_view_of_call_temporary.nu:32:9: error: the result of 'first' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+        = outer ( first ( string_from `a string long enough to own a heap buffer here` ) )
+        ^
+compiler/tests/diag_view_of_call_temporary.nu:38:5: error: the result of 'mk' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+    : ( @ v ) g ( mk ( string_from `a string long enough to own a heap buffer here` ) )
+    ^
+compiler/tests/diag_view_of_call_temporary.nu:42:1: error: the result of 'first' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+@ kept ( Vec s ) names → i { ^ ( keep names ( first ( string_from `a string long enough to own a heap buffer here` ) ) ) }
+^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
