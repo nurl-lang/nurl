@@ -1,0 +1,15 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_returned_closure_outlives_argument.nu:34:5: error: 'g' holds a view of 't' (one stored into it, or captured by it), and 't' ended at line 33 — it was released or moved away. Using 'g' now would read freed memory. End 't' only after 'g' is done, or have 'g' hold a copy that owns its data (string_from, slice_to_vec).
+    ( g )
+    ^
+compiler/tests/diag_returned_closure_outlives_argument.nu:41:5: error: 'g' holds a view of 't' (one stored into it, or captured by it), and 't' ended at line 40 — it was released or moved away. Using 'g' now would read freed memory. End 't' only after 'g' is done, or have 'g' hold a copy that owns its data (string_from, slice_to_vec).
+    ( g )
+    ^
+compiler/tests/diag_returned_closure_outlives_argument.nu:48:5: error: 'g' holds a view of 't' (one stored into it, or captured by it), and 't' ended at line 47 — it was released or moved away. Using 'g' now would read freed memory. End 't' only after 'g' is done, or have 'g' hold a copy that owns its data (string_from, slice_to_vec).
+    ( g )
+    ^
+compiler/tests/diag_returned_closure_outlives_argument.nu:55:5: error: 'g' holds a view of 't' (one stored into it, or captured by it), and 't' ended at line 54 — it was released or moved away. Using 'g' now would read freed memory. End 't' only after 'g' is done, or have 'g' hold a copy that owns its data (string_from, slice_to_vec).
+    ( g )
+    ^
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

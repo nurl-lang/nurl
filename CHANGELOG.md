@@ -8,18 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The two holes 0.79.1 listed under *Known issues* are closed (h378–h383).
-One found on the way stays open, under *Known issues*.
-
-### Known issues
-
-- **A closure a function returns over a parameter, bound before the
-  return or capturing a view of the parameter, reads freed memory once
-  the caller releases the argument** (Agora #141;
-  `tools/fuzz/holes/open/`). What a returned closure lends is recorded
-  only for a closure literal written in the `^` that captures the
-  parameter by name. Return the closure literal itself, or keep the
-  argument alive while the closure runs. This predates 0.79.0.
+The two holes 0.79.1 listed under *Known issues* are closed (h378–h383),
+and so is one found on the way (h384–h388); no hole is known open.
 
 ### Changed
 
@@ -63,6 +53,12 @@ One found on the way stays open, under *Known issues*.
   #142).
 - **A temporary whose view a binding, a return or a closure kept no
   longer leaks** (Agora #138, h378–h381): the program is refused, above.
+- **A closure a function returns over a parameter is a view of the
+  caller's argument in every spelling** (Agora #141, h384–h388). Bound to
+  a local before the `^`, joined (`^ ? c f g`), given a new value, or over
+  a local view of the parameter, it was not recorded as one: the caller
+  could release the argument and then run the closure, which read freed
+  memory. This predates 0.79.0.
 
 ## [0.79.1] — 2026-10-27
 

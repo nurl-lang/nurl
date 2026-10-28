@@ -370,3 +370,8 @@ h380_view_of_a_call_temporary_returned_leaked_it	§1	A2	as h378, the view return
 h381_view_of_a_call_temporary_kept_by_a_callee_leaked_it	§1	A2	as h378, the view handed to a callee that keeps it (vec_push into a parameter Vec): no call could drop the temporary	rejected
 h382_udp_socket_read_after_close	§6.4	B	a UdpSocket was the runtime record's address with no drop; udp_close freed the record every copy still named: a shared handle with a drop, udp_close only stops the socket	runs-clean
 h383_udp_socket_never_closed_leaked	§6.4	B	as h382, a socket never closed leaked its record and fd: its last owner closes it	runs-clean
+h384_closure_bound_then_returned_over_a_parameter	§2.11	A2	a closure literal bound to a local, then returned over a String parameter: retclo recorded only a literal written in the ^; the caller freed its argument and the closure read freed memory (UAF); a returned value that may hold a closure lends what its source expression reaches	rejected
+h385_closure_over_a_view_of_a_parameter_returned	§2.11	A2	as h384, a closure over a local view of the parameter (: s v ( string_data s ))	rejected
+h386_closure_returned_through_a_join_over_a_parameter	§2.11	A2	as h384, through a join of closure literals in the ^	rejected
+h387_closure_binding_reassigned_then_returned_over_a_parameter	§2.11	A2	as h384, a closure binding given a new closure over the parameter	rejected
+h388_closure_bindings_joined_then_returned_over_a_parameter	§2.11	A2	as h384, a join of closure bindings	rejected
