@@ -1090,7 +1090,10 @@ zero-extend and a separate add; chained across four limbs that is an
 add/cmp/setb/add tree, serialised through the ALU, and the multiplies
 feeding it cannot become a flag-free widening multiply because the tree
 is reading the flags. Written through these primitives the same four
-limbs legalise to `add; adc; adc; adc; setb`.
+limbs legalise to `add; adc; adc; adc; setb`. (`nurl_subb` goes through
+`llvm.x86.subborrow.64` on x86-64: LLVM rewrites the generic borrow test
+into a shape it no longer chains, and a four-word subtract came out as
+setcc logic — the intrinsic is the `sub; sbb` chain itself.)
 
 Two functions rather than one returning a pair, because a NURL function
 returns one value and a pointer out-param would put the sum in memory —
@@ -1114,6 +1117,8 @@ code the compiler may separate, so the unit is a whole row:
 | Primitive | Value |
 |---|---|
 | `nurl_mac_row(rp, ap, n, b)` | `rp[0..n) += ap[0..n)·b`; returns the word above them |
+| `nurl_p256_mulm(r, a, b)` / `nurl_p256_sqrm(r, a)` | P-256 Montgomery multiply / square of four-word operands; T when a kernel ran (ADX or mulq on x86-64), F elsewhere — the caller runs its portable form |
+| `nurl_x25519_mulm(r, a, b)` / `nurl_x25519_sqrm(r, a)` | GF(2^255 − 19) multiply / square, lazily reduced; T on the ADX tier, F elsewhere |
 | `nurl_cpu_has_adx()` | the ADX tier: BMI2 + ADX |
 
 `rp` and `ap` are `*i` limb pointers, so only `unsafe` code may call
@@ -2057,7 +2062,8 @@ temporary closure passed to a call is dropped right after it, a
 `:`-bound closure at scope exit, a returned closure by the caller that
 receives it, and one stored into a struct field, a container or another
 closure's captures with its holder; `spawn` / `thread_spawn` keep their
-own copy. The env records how to drop and copy what it captured, so
+own copy — or, for a closure written in the call itself, the closure,
+handed over. The env records how to drop and copy what it captured, so
 dropping it releases the whole tree. A hand-written free of an env is a
 compile error. It is **not** reference-counted — copying a closure
 copies its env. See [`docs/MEMORY.md` §7.5](MEMORY.md) for the full

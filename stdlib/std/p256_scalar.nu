@@ -10,7 +10,7 @@
 // crypto cost — roughly half of it in bigint_rem / __mag_clone.
 //
 // This is the same treatment: four 64-bit limbs, Montgomery CIOS with
-// nurl_umulhi, and Fermat inversion over that field. n has no
+// nurl_umulhi, and std/modinv's constant-time divstep inverse. n has no
 // p ≡ −1 (mod 2^64) shortcut, so the reduction uses the general
 // Montgomery constant n0 = −n⁻¹ mod 2^64.
 //

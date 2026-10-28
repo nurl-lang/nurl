@@ -200,8 +200,9 @@ $ `stdlib/core/rcbox.nu`
 
 @ __SecureNode_ptr SecureNode h → *SecureNodeImpl { ^ ( shared_ptr [SecureNodeImpl] . h ctl ) }
 
-// The socket is the one raw part: a node nobody closed is closed by its
-// last owner (the keys and the peers go with the fields after it).
+// A node nobody closed is closed by its last owner, the socket stopped
+// with it (the socket itself, a handle, closes with its own last owner;
+// the keys and the peers go with the fields after it).
 % Drop SecureNodeImpl {
     @ drop SecureNodeImpl n → v {
         ? != . n open 0 { ( udp_close . n sock ) } {}

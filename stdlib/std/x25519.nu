@@ -5,11 +5,14 @@
 // exchange for TLS 1.3 / Noise / age with nothing installed on the host.
 //
 // The ladder is RFC 7748's; the field underneath it is GF(2^255 − 19) in
-// four saturated 64-bit words, lazily reduced, each product one
-// `nurl_mac` (__f4_mul_in). The public key (x25519_base) is ref10's
-// signed-digit fixed-base method on the equivalent Edwards curve. Every
-// branch is data-independent (swaps and table reads are constant-time
-// masks), so both run in constant time w.r.t. the scalar.
+// four saturated 64-bit words, lazily reduced. On the ADX tier its
+// products are the compiler's nurl_x25519_mulm / _sqrm blocks and the
+// ladder needs no swap (__scalarmult_k); elsewhere each product is one
+// `nurl_mac` (__f4_mul_in). The inverse is std/modinv's divsteps. The
+// public key (x25519_base) is ref10's signed-digit fixed-base method on
+// the equivalent Edwards curve. Every branch is data-independent (swaps,
+// picks and table reads are constant-time masks), so both run in
+// constant time w.r.t. the scalar.
 //
 // The five-limb radix-2^51 field (_A / _Z / _M / _S, donna-c64) stays for
 // std/ed25519, which is written on it.
@@ -667,14 +670,10 @@ inline @ __f4_mul121665 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 
     = o2 r2
 }
 
-// The multiply and the square out of line, for the inversion chain and the
-// one-time table build — callers that are not a hot loop body.
+// The multiply out of line, for the one-time table build and the
+// ladder's final product — callers that are not a hot loop body.
 @ __f4_mul inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
     ( __f4_mul_in o0 o1 o2 o3 a0 a1 a2 a3 b0 b1 b2 b3 )
-}
-
-@ __f4_sq inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 → v {
-    ( __f4_sq_in o0 o1 o2 o3 a0 a1 a2 a3 )
 }
 
 // p, q ← q, p when m is all ones, unchanged when m is 0 — constant time.

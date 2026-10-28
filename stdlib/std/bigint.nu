@@ -639,8 +639,8 @@ $ `stdlib/core/vec.nu`
 // cache / SPA observer sees a uniform square-multiply trace regardless of the
 // RSA private exponent d. (The underlying BigInt mul/rem are still operand-
 // value-dependent in time — RSA base blinding covers that residual; see
-// docs/CRYPTO.md §3.) The exponent here may be public (ECDSA Fermat inverse,
-// r^e) or secret (RSA d); the ladder is correct and CT-control-flow for both.
+// docs/CRYPTO.md §3.) The exponent here may be public (r^e) or secret
+// (RSA d); the ladder is correct and CT-control-flow for both.
 @ bigint_modpow BigInt base BigInt exp BigInt m → BigInt {
     : ~ BigInt R0 ( bigint_from_i 1 )
     : ~ BigInt R1 ( bigint_rem base m )

@@ -6,10 +6,21 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.80.0] — 2026-10-28
 
 The two holes 0.79.1 listed under *Known issues* are closed (h378–h383),
 and so is one found on the way (h384–h388); no hole is known open.
+
+The TLS handshake's elliptic-curve work got faster. X25519 and P-256 now
+run their field multiply and square as compiler-emitted mulx/adcx/adox
+blocks on the ADX tier. They invert by constant-time divsteps instead of
+Fermat chains. On a Zen 3 runner against aws-lc:
+- X25519 shared is 30.8 µs (was 42.3, aws-lc 28.0) and keygen is 11.3 µs
+  (was 15.1, aws-lc 8.74).
+- ECDSA P-256 sign is 20.5 µs (was 35.4, aws-lc 17.6), and P-256 ECDH is
+  77.4 µs (was 114, aws-lc 51.4).
+- Full handshakes with a P-256 key share went from 72 % of rustls's rate
+  to 96 %, and with X25519 from 84 % to 103 %.
 
 ### Changed
 

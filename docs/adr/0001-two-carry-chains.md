@@ -99,8 +99,9 @@ Measurements are on an i7-11850H.
     them (`std/x25519.nu`, `__scalarmult_k`) runs a step in ~830
     instructions against 1613 for the `nurl_mac` register ladder, and
     X25519 shared takes 35.1 µs against 45.4 µs; keygen 15.0 against
-    16.2 µs, where a quarter of the time is the Fermat inversion, a
-    serial chain of 265 kernel latencies.
+    16.2 µs, where a quarter of the time was the Fermat inversion, a
+    serial chain of 265 kernel latencies — since replaced by std/modinv's
+    divsteps (#1274: keygen 14.9 → 12.9 µs).
   - Without ADX the same block on `mulq` measured only 4 % on a whole
     Haswell ladder, so that tier keeps the register form. P-256's
     kernels (Agora #108) kept a `mulq` block: there it measured 15.6 ns

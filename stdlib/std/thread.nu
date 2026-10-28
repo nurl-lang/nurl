@@ -78,7 +78,8 @@
 //     placeholder for one not spawned (yet): joining it returns -1,
 //     detaching or dropping it does nothing.
 //   * The thread runs on its OWN copy of the closure env (the runtime
-//     clones it and drops the copy when the body returns), so the
+//     clones it — or adopts a closure written in the call, handed over —
+//     and drops it when the body returns), so the
 //     spawner's closure stays the spawner's to drop and an inline
 //     closure can be spawned without outliving anything.
 //   * The mutex passed to `cond_wait` must already be held by the
@@ -241,8 +242,9 @@ $ `stdlib/core/rcbox.nu`
 // ── Thread lifecycle ──────────────────────────────────────────────
 
 // A thread started on a fresh one-owner handle: fn(env) on its own copy
-// of the env (the runtime clones it and drops the copy when the body
-// returns — docs/MEMORY.md §7.4), so the spawner's closure stays the
+// of the env (the runtime clones it, or adopts a closure written in the
+// call, and drops it when the body returns — docs/MEMORY.md §7.4), so
+// the spawner's closure stays the
 // spawner's to drop. F when the thread could not be had (its handle is
 // then marked settled, so dropping it detaches nothing).
 @ __thread_start * u fnp * u env inout Thread out → b {
