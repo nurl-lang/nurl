@@ -1872,7 +1872,13 @@ owner calls. Releasing an environment by hand is a compile error.
 keeps a `nurl_closure_clone` and releases that with `nurl_closure_drop`.
 
 A closure run by a thread or fiber moves the bindings it captures into its
-environment (§6.2); share handles are captured as a share of their own.
+environment (§6.2); a handle whose copies are one state is captured as a
+share of its own, so the crossing check sees an owner left behind (§6.5).
+The runtime keeps its own copy of the environment — or, for a closure
+written right in the spawn's argument (a literal, a call's result), the
+environment itself: the caller hands it over (`nurl_closure_handover`)
+instead of dropping it after the call, and the spawn adopts it in place
+(agora #142).
 
 **A closure stored into a struct, a slice, a container or an option owns
 what it captured.** A closure made in a function views the `String`s, `Vec`s and handles it

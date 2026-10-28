@@ -33,6 +33,16 @@ and so is one found on the way (h384–h388); no hole is known open.
   is unchanged. `quic_server_new` takes a share of the socket it is
   handed, so the socket stays the caller's, as its contract says.
 
+### Performance
+
+- **A spawn takes over the closure written in its argument** (Agora
+  #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
+  on a copy of the closure's environment, and the caller dropped its own
+  right after the call. A closure literal (or a closure a call returned)
+  written as the argument is now handed over and adopted in place — no
+  second environment, and no share and release of each captured handle.
+  200k fiber spawns: 437.4M → 416.8M instructions (−4.7 %).
+
 ### Fixed
 
 - **A `UdpSocket` read after `udp_close` no longer reads freed memory,

@@ -14971,11 +14971,22 @@ unsafe @ gen_call i lex i syms i cg → s {
             // this call site and is dropped after the call: a callee only
             // borrows its closure arguments, and one that keeps a closure
             // stores a clone (docs/MEMORY.md §7.4).
+            // …but a spawn of the standard library runs on its own copy of
+            // the env (nurl_closure_own_copy), which this one would be
+            // dropped beside: it is handed over, and the copy adopts it in
+            // place — no second env, no share and release of each capture
+            // per spawn (agora #142).
+            : b __clo_hand & & ! __callee_shadowed ( __thr_is_detach fname ) ( __fn_from_stdlib fname )
             ? __clo_sink {} {
-                = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
-                ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle )
+                ? __clo_hand {
+                    ( nurl_print `  call void @nurl_closure_handover(i8* ` ) ( nurl_print __cle ) ( nurl_print `)\n` )
+                } {
+                    = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
+                    ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle )
+                }
                 // …journaled while the call runs (agora #131): the later
-                // arguments and the callee may panic before that drop.
+                // arguments and the callee may panic before that drop (or,
+                // handed over, before the spawn takes it).
                 : s __clj ( mem_journal_push_cloenv cg __cle )
                 = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __clj ( nurl_str_cat3 owned_arg_temps ` ` __clj ) } }
         { ? __clo_sink {
@@ -57020,6 +57031,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_closure_adopt(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own_copy(i8*) "nurl.raw"="1"` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_handover(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_closure_slice_drop(i8*, i64) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_print(i8* nocapture nofree)` )
