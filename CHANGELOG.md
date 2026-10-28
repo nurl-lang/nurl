@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core library calls given huge or negative offsets no longer read or
+  write outside their buffers** (h428–h432). Each tested `start + n`
+  against the length, a sum that wraps for a count near i64 max, or
+  checked only one end of the range:
+  - `string_substr` and `vec_extend_range` with a length near i64 max;
+  - `slice_move` to or from a negative index (it panics now);
+  - the six `bytes_read_*` readers at an offset near i64 max (they give
+    `F`);
+  - `utf8_decode` / `utf8_decode_at` at a negative position.
+  The checks cost what the old ones did.
+- **The recycling stash and `string_commit` can no longer be called from
+  safe code** (h426, h427). A stash kind taken back as a wider element
+  type came back with room for more elements than its buffer held, and
+  `string_commit` grew a String by any count. `vec_stash`,
+  `vec_unstash`, `string_stash`, `string_unstash` and `string_commit`
+  are `raw`; the library code that owns the kinds still calls them.
 - **A TLS 1.2 server can no longer make the client read past its key
   share** (h424). The ServerKeyExchange names its key's length, and the
   client handed a key of any length to `x25519`, which read 32 bytes

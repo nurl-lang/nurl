@@ -398,14 +398,16 @@ $ `stdlib/core/char.nu`
 // when the kind has none. `string_stash` is the other end: it empties a
 // String and parks it there — released as usual instead when the stash
 // is full, or its buffer is past `max` bytes.
-@ string_unstash i kind → String {
+// Both are `raw`: a kind belongs to one element type (core/vec.nu,
+// "Recycling"), and kind 2 is the HTTP server's header Strings.
+raw @ string_unstash i kind → String {
     : s ctl ( nurl_stash_pop kind )
     ? == # i ctl 0 { ^ ( string_new ) } {}
     // Parked with len 0 and a NUL at data[0] (string_stash).
     ^ @ String { ctl }
 }
 
-@ string_stash i kind sink String str i max → v {
+raw @ string_stash i kind sink String str i max → v {
     : s ctl . str ctl
     : i cap ( nurl_peek ctl 2 )
     // A view, or a buffer worth giving back: an ordinary release. (A
@@ -614,7 +616,9 @@ $ `stdlib/core/char.nu`
     ^ # *u + # i p len
 }
 
-@ string_commit String str i n → v {
+// requires: the `n` bytes after the String's length were reserved with
+// string_reserve_at and written (its `unsafe` caller's half of the pair).
+raw @ string_commit String str i n → v {
     ? <= n 0 { ^ } {}
     : s ctl . str ctl
     : i len ( nurl_peek ctl 1 )
@@ -923,7 +927,8 @@ $ `stdlib/core/char.nu`
     ? > start slen { = start slen } {}
     : ~ i n len
     ? < n 0 { = n 0 } {}
-    ? > + start n slen { = n - slen start } {}
+    // Against the room left: `start + n` wraps for a length near i64 max.
+    ? > n - slen start { = n - slen start } {}
 
     : ( Vec u ) tmp ( vec_with_cap [u] + n 1 )
     : *u dst ( vec_data [u] tmp )

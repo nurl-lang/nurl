@@ -56,7 +56,8 @@ $ `stdlib/core/slice.nu`
 // Same, with the byte length supplied by the caller (hoist it outside
 // the loop). Bytes are read through a raw pointer — O(1) per access.
 @ utf8_decode_n * u str i n i pos → Utf8Dec {
-    ? >= pos n { ^ @ Utf8Dec { 0 0 0 } } {}  // end of string
+    // One unsigned compare: a negative `pos` is out of range too.
+    ? >= # u64 pos # u64 n { ^ @ Utf8Dec { 0 0 0 } } {}  // end of string
     : *u P # *u str
     : i b0 & 255 # i . P pos
 

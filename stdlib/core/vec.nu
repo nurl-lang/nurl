@@ -345,8 +345,13 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 // allocating. It is a cache, not a container: a kind holds a bounded
 // number of blocks, and one it refuses — kind full, buffer past `max`
 // bytes, NURL_STASH=0 — is released as dropping the Vec releases it.
-// Elements never sit in the stash, so its kinds need not agree on the
-// element type, only on what their users expect back (an empty Vec).
+// Elements never sit in the stash, but a parked block keeps its capacity
+// counted in the elements of the type that parked it: a kind taken back
+// as another element type would come back with room for `cap` of those
+// in a buffer sized for `cap` of the old ones. So a kind belongs to one
+// element type, which the compiler cannot check — the four functions are
+// `raw` (requires: every stash and unstash of a kind names one element
+// type), for the library code that owns the kinds below.
 //
 // Kinds in use (0..7): 0 HttpResponse headers, 1 HttpResponse body,
 // 2 header Strings (string_stash), 3 router Params.
@@ -361,14 +366,14 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     ? < ( __vec_cap_raw ctl ) need { ( __vec_grow [A] ctl need ) } {}
 }
 
-@ vec_unstash [A] i kind i n → ( Vec A ) {
+raw @ vec_unstash [A] i kind i n → ( Vec A ) {
     : s ctl ( nurl_stash_pop kind )
     ? == # i ctl 0 { ^ ( vec_with_cap [A] n ) } {}
     ? < ( __vec_cap_raw ctl ) n { ( __vec_grow [A] ctl n ) } {}
     ^ @ ( Vec A ) { ctl }
 }
 
-@ vec_stash [A] i kind sink ( Vec A ) v i max → v {
+raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
     // A packed String buffer (data inside the control block) stays with
@@ -807,7 +812,9 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : i start ? < off 0 0 off
     ? >= start slen { ^ } {}
     : i want ? < n 0 0 n
-    : i cnt ? > + start want slen - slen start want
+    // (Against the room left, not `start + want`: a count near i64 max
+    // wrapped the sum negative and skipped the clamp.)
+    : i cnt ? > want - slen start - slen start want
     ? <= cnt 0 { ^ } {}
     : s dctl . dst ctl
     : i dlen ( __vec_len_raw dctl )

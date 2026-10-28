@@ -486,7 +486,13 @@ A function or method declaration may carry a leading `unsafe` prefix
   the builtins marked raw in `stdlib/core/builtins.nu`);
 - call a standard-library function whose name begins with `__` (the
   library's own machinery, which trusts the control blocks and buffers
-  it is handed);
+  it is handed), or one declared `raw` (§3.3e). Every other library
+  function is safe for every argument a program can pass — a short or
+  empty buffer, a negative or huge offset, a count whose sum with an
+  offset wraps — so a helper shared between library files that needs
+  its operands sized or its offsets checked by the caller (x25519.nu's
+  field limbs, the recycling stash) is `raw`, and a struct whose fields
+  carry such an invariant is a `raw` struct;
 - call a foreign (`&`) function declared outside the standard library;
 - pass a runtime handle as a plain integer: a standard-library function
   or foreign function that takes the address of the runtime's own record
@@ -542,7 +548,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h425`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h432`, is closed and held by a probe in `tools/fuzz/holes/`).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -2841,7 +2847,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h425`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h432`) is
 closed and held by a probe in `tools/fuzz/holes/`; a handle whose copies
 are one state is checked where it crosses to another thread
 (docs/MEMORY.md §6.5).

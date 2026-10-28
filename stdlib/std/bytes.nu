@@ -354,8 +354,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u16_be ( Vec u ) v i off → ?u16 {
     : i n ( vec_len [u] v )
-    : i end + off 2
-    ? | < off 0 > end n { ^ @ ?u16 { F # u16 0 } } {}
+    ? | < off 0 > off - n 2 { ^ @ ?u16 { F # u16 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -365,8 +364,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u16_le ( Vec u ) v i off → ?u16 {
     : i n ( vec_len [u] v )
-    : i end + off 2
-    ? | < off 0 > end n { ^ @ ?u16 { F # u16 0 } } {}
+    ? | < off 0 > off - n 2 { ^ @ ?u16 { F # u16 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -376,8 +374,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u32_be ( Vec u ) v i off → ?u32 {
     : i n ( vec_len [u] v )
-    : i end + off 4
-    ? | < off 0 > end n { ^ @ ?u32 { F # u32 0 } } {}
+    ? | < off 0 > off - n 4 { ^ @ ?u32 { F # u32 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -391,8 +388,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u32_le ( Vec u ) v i off → ?u32 {
     : i n ( vec_len [u] v )
-    : i end + off 4
-    ? | < off 0 > end n { ^ @ ?u32 { F # u32 0 } } {}
+    ? | < off 0 > off - n 4 { ^ @ ?u32 { F # u32 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -406,8 +402,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u64_be ( Vec u ) v i off → ?u64 {
     : i n ( vec_len [u] v )
-    : i end + off 8
-    ? | < off 0 > end n { ^ @ ?u64 { F # u64 0 } } {}
+    ? | < off 0 > off - n 8 { ^ @ ?u64 { F # u64 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -429,8 +424,7 @@ $ `stdlib/core/errors.nu`
 
 @ bytes_read_u64_le ( Vec u ) v i off → ?u64 {
     : i n ( vec_len [u] v )
-    : i end + off 8
-    ? | < off 0 > end n { ^ @ ?u64 { F # u64 0 } } {}
+    ? | < off 0 > off - n 8 { ^ @ ?u64 { F # u64 0 } } {}
     : *u p ( vec_data [u] v )
     : i b0 # i . p off
     : i b1 # i . p + off 1

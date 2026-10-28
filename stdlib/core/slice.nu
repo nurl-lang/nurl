@@ -265,7 +265,10 @@ inline @ slice_byte ( Slice u ) s i idx → i {
 // one for elements that own something).
 @ slice_move [A] ( Slice A ) s i from i to i n → v {
     : i len . s len
-    ? | | < n 0 > # u64 + from n # u64 len > # u64 + to n # u64 len { ( __slice_index_panic + ? > from to from to n len ) } {}
+    // Each start against the room `n` leaves (`from + n` wraps, and a
+    // negative start passed the old sum test): unsigned, so a negative
+    // one is out of range too.
+    ? | | | < n 0 > n len > # u64 from # u64 - len n > # u64 to # u64 - len n { ( __slice_index_panic + ? > from to from to n len ) } {}
     : *A p . s data
     ? > to from {
         : ~ i k - n 1
