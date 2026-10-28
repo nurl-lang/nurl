@@ -57517,6 +57517,20 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `  %mh.r = trunc i128 %mh.h to i64` )
     ( emit `  ret i64 %mh.r` )
     ( emit `}` )
+    // `nurl_smulhi` — the same for the SIGNED product (one `imul`): a
+    // signed 128-bit accumulator is the (`*`, nurl_smulhi) pair, which
+    // the divsteps of std/modinv.nu sum. The unsigned high half with the
+    // two sign corrections spelled out stays a mul and four more
+    // instructions — LLVM does not fold it back.
+    ( emit `define linkonce_odr i64 @nurl_smulhi(i64 %a, i64 %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sh.a = sext i64 %a to i128` )
+    ( emit `  %sh.b = sext i64 %b to i128` )
+    ( emit `  %sh.p = mul i128 %sh.a, %sh.b` )
+    ( emit `  %sh.h = ashr i128 %sh.p, 64` )
+    ( emit `  %sh.r = trunc i128 %sh.h to i64` )
+    ( emit `  ret i64 %sh.r` )
+    ( emit `}` )
     // ── Wide arithmetic: carry, borrow, multiply-accumulate ───────
     //
     // `nurl_umulhi` gave the language the high half of a PRODUCT. These
@@ -58382,6 +58396,7 @@ unsafe @ __canon_import_key s path → s {
     ( nurl_sym_def syms `nurl_vctl_data` `i8*` )
     ( nurl_sym_def syms `nurl_vctl_set` `void` )
     ( nurl_sym_def syms `nurl_umulhi` `i64` )
+    ( nurl_sym_def syms `nurl_smulhi` `i64` )
     ( nurl_sym_def syms `nurl_addc_lo` `u64` )
     ( nurl_sym_def syms `nurl_addc_hi` `u64` )
     ( nurl_sym_def syms `nurl_subb_lo` `u64` )

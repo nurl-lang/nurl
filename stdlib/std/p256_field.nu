@@ -6,7 +6,7 @@
 // constant-time core the generic std/bigint.nu cannot be (it trims
 // leading-zero limbs → operand-time-dependent). Multiplication is
 // Montgomery CIOS; add/sub use a constant-time conditional ±p; inversion
-// is a fixed Fermat chain (a^(p-2)). All loops are fixed-count and
+// is std/modinv's fixed walk of divsteps. All loops are fixed-count and
 // branch-free in the data.
 //
 // Storage USED to be eight 32-bit limbs with the multiply packing to
@@ -28,6 +28,7 @@
 // point multiply (ECDSA nonce / ECDH); verify keeps the public bigint path.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/modinv.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 
@@ -136,8 +137,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // sources. That is safe by construction, not by luck: each one reads all
 // of its operands into the scratch accumulator (`t` / `diff`) FIRST and
 // only then writes `dst`, and the elementwise mergers read and write the
-// same index in the same step. `_p256_inv_d` is the one exception —
-// its `dst` must not alias `a`, and its own comment says so.
+// same index in the same step.
 
 // Montgomery multiply: returns (a·b·R^-1) mod p as 8 fixed limbs. CIOS, all
 // fixed-count loops, no data-dependent branch. a, b are 8-limb (< p).
@@ -390,9 +390,9 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // collapses to 10 — six cross products doubled by one carry-chained
 // shift, plus the four diagonals — followed by the same four rounds of
 // sparse-p Montgomery reduction the multiply runs and the same
-// constant-time conditional subtract. Everything the point formulas and
-// the Fermat inversion spell as `mul x x` comes through here: 37% of a
-// fixed-base comb's field ops are squarings, and an inversion is ~95%.
+// constant-time conditional subtract. Everything the point formulas
+// spell as `mul x x` comes through here: 37% of a fixed-base comb's
+// field ops are squarings.
 // `dst` may alias `a` — the limbs are read into locals first.
 @ _p256_sqr_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     // The register kernel where the target has one (nurl_p256_sqrm).
@@ -561,12 +561,6 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     = . op 1 # i o1
     = . op 2 # i o2
     = . op 3 # i o3
-}
-
-// dst ← dst^(2^n) — n back-to-back Montgomery squarings.
-@ __p256_sqn P256Scratch scr ( Vec i ) x i n → v {
-    : ~ i k 0
-    ~ < k n { ( _p256_sqr_d scr x x ) = k + k 1 }
 }
 
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
@@ -738,10 +732,8 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     ( _p256_to_mont_d scr dst one )
 }
 
-// Modular inverse in Montgomery form: a^(p-2) mod p, via a fixed addition
-// chain over montmul/montsqr. The exponent p−2 is a public constant, so the
-// square/multiply schedule is data-independent. Input/output in Mont form;
-// a^(p-2)·R ≡ a^-1·R (mod p). For a == 0 returns 0.
+// Modular inverse in Montgomery form (_p256_inv_d): a·R ↦ a⁻¹·R mod p,
+// constant time. For a == 0 returns 0.
 @ p256ct_inv ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_inv_s scr a )
@@ -754,46 +746,27 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     ^ out
 }
 
-// 256 squarings and 256 multiplies of the Fermat chain, all in place off
-// one scratch. UNLIKE the other `_d` workers, `dst` must NOT alias `a`:
-// `a` is read on every iteration, and `dst` is the running accumulator.
+// dst ← a⁻¹ in Montgomery form (0 for 0): the divsteps of std/modinv
+// over p (−1 + 2^34·2^62 + (2^6 − 2^38)·2^186 + 256·2^248 in signed-62
+// form) invert aR to a⁻¹R⁻¹, and a Montgomery multiply by R³ makes that
+// a⁻¹R. Constant time; dst may alias a. It replaces Fermat's a^(p−2),
+// 255 squarings and 13 multiplies, a serial chain of their latencies.
 @ _p256_inv_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
-    // dst ← a^(p−2) — Fermat. The exponent is a PUBLIC curve constant,
-    // so the old bit-scanned square-and-multiply with a constant-time
-    // select (256 S + 256 M, half of them discarded) bought nothing: the
-    // sequence of operations in a fixed addition chain is identical for
-    // every input, only the (public) exponent shapes it. This is the
-    // standard p−2 chain over p = 2^256 − 2^224 + 2^192 + 2^96 − 1:
-    // MSB-first the exponent is [32×1][31×0][1][96×0][94×1][0][1], built
-    // from the all-ones blocks x2..x32 — 255 squarings + 13 multiplies,
-    // all in the dedicated Montgomery squaring. Still branch-free in the
-    // DATA; verified against the old path over random field elements and
-    // by every ECDSA/ECDH KAT in the corpus.
-    : ( Vec i ) x2 ( _mag4 )
-    : ( Vec i ) x4 ( _mag4 )
-    : ( Vec i ) x8 ( _mag4 )
-    : ( Vec i ) x16 ( _mag4 )
-    : ( Vec i ) x32 ( _mag4 )
-    // x2 = a^(2^2−1), x4 = a^(2^4−1), … x32 = a^(2^32−1)
-    ( _p256_sqr_d scr x2 a ) ( _p256_mul_d scr x2 x2 a )
-    ( _p256_sqr_d scr x4 x2 ) ( _p256_sqr_d scr x4 x4 )
-    ( _p256_mul_d scr x4 x4 x2 )
-    ( __p256_cp x8 x4 ) ( __p256_sqn scr x8 4 )
-    ( _p256_mul_d scr x8 x8 x4 )
-    ( __p256_cp x16 x8 ) ( __p256_sqn scr x16 8 )
-    ( _p256_mul_d scr x16 x16 x8 )
-    ( __p256_cp x32 x16 ) ( __p256_sqn scr x32 16 )
-    ( _p256_mul_d scr x32 x32 x16 )
-    // assemble the exponent MSB→LSB
-    ( __p256_cp dst x32 )
-    ( __p256_sqn scr dst 32 ) ( _p256_mul_d scr dst dst a )
-    ( __p256_sqn scr dst 128 ) ( _p256_mul_d scr dst dst x32 )
-    ( __p256_sqn scr dst 32 ) ( _p256_mul_d scr dst dst x32 )
-    ( __p256_sqn scr dst 16 ) ( _p256_mul_d scr dst dst x16 )
-    ( __p256_sqn scr dst 8 ) ( _p256_mul_d scr dst dst x8 )
-    ( __p256_sqn scr dst 4 ) ( _p256_mul_d scr dst dst x4 )
-    ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst x2 )
-    ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst a )
+    : *i ap ( vec_data [i] a )
+    : ~ u64 o0 0
+    : ~ u64 o1 0
+    : ~ u64 o2 0
+    : ~ u64 o3 0
+    ( _modinv256 o0 o1 o2 o3 # u64 . ap 0 # u64 . ap 1 # u64 . ap 2 # u64 . ap 3 -1 17179869184 0 -274877906880 256 4611686018427387903 )
+    : *i dp ( vec_data [i] dst )
+    = . dp 0 # i o0 = . dp 1 # i o1 = . dp 2 # i o2 = . dp 3 # i o3
+    // R³ mod p
+    : ( Vec i ) r3 ( _mag4 )
+    : *i rp ( vec_data [i] r3 )
+    : u64 c0 18446744060824649738
+    : u64 c1 18446743996400140279
+    = . rp 0 # i c0 = . rp 1 # i c1 = . rp 2 25769803772 = . rp 3 103079215105
+    ( _p256_mul_d scr dst dst r3 )
 }
 
 // 4-limb copy.

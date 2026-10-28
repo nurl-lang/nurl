@@ -22,10 +22,11 @@
 //   ( p256n_reduce_be x )     → x mod n
 //   ( p256n_mulmod_be a b )   → a·b mod n
 //   ( p256n_addmod_be a b )   → (a+b) mod n
-//   ( p256n_inv_be a )        → a⁻¹ mod n   (a ≠ 0)
+//   ( p256n_inv_be a )        → a⁻¹ mod n   (0 for 0)
 //   ( p256n_in_range_be k )   → 1 ≤ k < n   (constant-time)
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/modinv.nu`
 
 // ── limb helpers ──────────────────────────────────────────────────
 // A field element is four 64-bit limbs, little-endian, stored as i64 bit
@@ -377,282 +378,20 @@ $ `stdlib/core/vec.nu`
     ^ & != bb 0 != nz 0
 }
 
-inline @ __sn_condsub_u64 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 w0 u64 w1 u64 w2 u64 w3 u64 w4 → v {
-    : u64 d0 ( nurl_subb_lo w0 0xf3b9cac2fc632551 0 )
-    : ~ u64 bb ( nurl_subb_hi w0 0xf3b9cac2fc632551 0 )
-    : u64 d1 ( nurl_subb_lo w1 0xbce6faada7179e84 bb )
-    = bb ( nurl_subb_hi w1 0xbce6faada7179e84 bb )
-    : u64 d2 ( nurl_subb_lo w2 0xffffffffffffffff bb )
-    = bb ( nurl_subb_hi w2 0xffffffffffffffff bb )
-    : u64 d3 ( nurl_subb_lo w3 0xffffffff00000000 bb )
-    = bb ( nurl_subb_hi w3 0xffffffff00000000 bb )
-    : i topb - # i w4 # i bb
-    : u64 mask ? < topb 0 0 0xffffffffffffffff
-    : u64 imask ^^ mask 0xffffffffffffffff
-    = o0 | & mask d0 & imask w0
-    = o1 | & mask d1 & imask w1
-    = o2 | & mask d2 & imask w2
-    = o3 | & mask d3 & imask w3
-}
-
-inline @ __sn_mul_u64 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 u64 b0 u64 b1 u64 b2 u64 b3 → v {
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ u64 t4 0
-    : ~ u64 t5 0
-    : ~ u64 m 0
-    : ~ u64 cr 0
-    // ── round 0: t += a·b0, then one Montgomery reduction ──
-    = cr ( nurl_mac_hi a0 b0 t0 0 )
-    = t0 ( nurl_mac_lo a0 b0 t0 0 )
-    : u64 q01 ( nurl_mac_lo a1 b0 t1 cr )
-    = cr ( nurl_mac_hi a1 b0 t1 cr )
-    = t1 q01
-    : u64 q02 ( nurl_mac_lo a2 b0 t2 cr )
-    = cr ( nurl_mac_hi a2 b0 t2 cr )
-    = t2 q02
-    : u64 q03 ( nurl_mac_lo a3 b0 t3 cr )
-    = cr ( nurl_mac_hi a3 b0 t3 cr )
-    = t3 q03
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = m * t0 0xccd1c8aaee00bc4f
-    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
-    : u64 w01 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
-    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
-    = t1 w01
-    : u64 w02 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
-    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
-    = t2 w02
-    : u64 w03 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
-    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
-    = t3 w03
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
-    // ── round 1: t += a·b1, then one Montgomery reduction ──
-    = cr ( nurl_mac_hi a0 b1 t0 0 )
-    = t0 ( nurl_mac_lo a0 b1 t0 0 )
-    : u64 q11 ( nurl_mac_lo a1 b1 t1 cr )
-    = cr ( nurl_mac_hi a1 b1 t1 cr )
-    = t1 q11
-    : u64 q12 ( nurl_mac_lo a2 b1 t2 cr )
-    = cr ( nurl_mac_hi a2 b1 t2 cr )
-    = t2 q12
-    : u64 q13 ( nurl_mac_lo a3 b1 t3 cr )
-    = cr ( nurl_mac_hi a3 b1 t3 cr )
-    = t3 q13
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = m * t0 0xccd1c8aaee00bc4f
-    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
-    : u64 w11 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
-    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
-    = t1 w11
-    : u64 w12 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
-    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
-    = t2 w12
-    : u64 w13 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
-    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
-    = t3 w13
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
-    // ── round 2: t += a·b2, then one Montgomery reduction ──
-    = cr ( nurl_mac_hi a0 b2 t0 0 )
-    = t0 ( nurl_mac_lo a0 b2 t0 0 )
-    : u64 q21 ( nurl_mac_lo a1 b2 t1 cr )
-    = cr ( nurl_mac_hi a1 b2 t1 cr )
-    = t1 q21
-    : u64 q22 ( nurl_mac_lo a2 b2 t2 cr )
-    = cr ( nurl_mac_hi a2 b2 t2 cr )
-    = t2 q22
-    : u64 q23 ( nurl_mac_lo a3 b2 t3 cr )
-    = cr ( nurl_mac_hi a3 b2 t3 cr )
-    = t3 q23
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = m * t0 0xccd1c8aaee00bc4f
-    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
-    : u64 w21 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
-    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
-    = t1 w21
-    : u64 w22 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
-    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
-    = t2 w22
-    : u64 w23 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
-    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
-    = t3 w23
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
-    // ── round 3: t += a·b3, then one Montgomery reduction ──
-    = cr ( nurl_mac_hi a0 b3 t0 0 )
-    = t0 ( nurl_mac_lo a0 b3 t0 0 )
-    : u64 q31 ( nurl_mac_lo a1 b3 t1 cr )
-    = cr ( nurl_mac_hi a1 b3 t1 cr )
-    = t1 q31
-    : u64 q32 ( nurl_mac_lo a2 b3 t2 cr )
-    = cr ( nurl_mac_hi a2 b3 t2 cr )
-    = t2 q32
-    : u64 q33 ( nurl_mac_lo a3 b3 t3 cr )
-    = cr ( nurl_mac_hi a3 b3 t3 cr )
-    = t3 q33
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    = m * t0 0xccd1c8aaee00bc4f
-    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
-    : u64 w31 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
-    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
-    = t1 w31
-    : u64 w32 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
-    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
-    = t2 w32
-    : u64 w33 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
-    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
-    = t3 w33
-    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
-    = t4 ( nurl_addc_lo t4 cr 0 )
-    ( __sn_condsub_u64 o0 o1 o2 o3 t1 t2 t3 t4 t5 )
-}
-
-@ __sn_sqn inout u64 x0 inout u64 x1 inout u64 x2 inout u64 x3 i count → v {
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ i k 0
-    ~ < k count {
-        ( __sn_mul_u64 t0 t1 t2 t3 x0 x1 x2 x3 x0 x1 x2 x3 )
-        = x0 t0 = x1 t1 = x2 t2 = x3 t3
-        = k + k 1
-    }
-}
-
-// x ← x^(2^s) · a^v for an odd v ≤ 15, with a^v at tp[2(v−1) …] (the
-// table of odd powers below). s and v come from the public exponent.
-@ __sn_win inout u64 x0 inout u64 x1 inout u64 x2 inout u64 x3 * u64 tp i s i v → v {
-    ( __sn_sqn x0 x1 x2 x3 s )
-    : i b * / - v 1 2 4
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    ( __sn_mul_u64 t0 t1 t2 t3 x0 x1 x2 x3 . tp b . tp + b 1 . tp + b 2 . tp + b 3 )
-    = x0 t0 = x1 t1 = x2 t2 = x3 t3
-}
-
-// a^-1 mod n by Fermat, a^(n−2), on a fixed addition chain — the
-// exponent is the public curve constant, so the sequence of operations
-// is the same for every a:
-//
-//   n − 2 = ffffffff 00000000 ffffffff ffffffff ‖ bce6faad … fc63254f
-//
-// The top half is all-ones blocks: x32 = a^(2^32 − 1) from x4 = a^15 by
-// x8, x16, x32, then 32 squarings (the zero word), and twice 32 squarings
-// times x32. The bottom half is a sliding window over the odd powers a,
-// a³, …, a^15: the schedule below is the greedy left-to-right window over
-// those 128 bits, checked to rebuild n − 2 exactly. 253 squarings and 39
-// multiplies, against 255 and 70 for the fixed 4-bit window it replaces.
-// (A dedicated squaring was measured and not kept: with a general n the
-// reduction is 20 of a square's 30 products, and it saved 4 %.)
+// a⁻¹ mod n (0 for 0): the divsteps of std/modinv over n, on a reduced
+// first. Constant time. It replaces Fermat's a^(n−2) — 253 squarings and
+// 39 multiplies in the generic Montgomery form, a serial chain of their
+// latencies.
 @ p256n_inv_be ( Vec u ) a → ( Vec u ) {
     : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
-    : ( Vec i ) am ( __sn_to_mont av )
-    : *i amp ( vec_data [i] am )
-    : u64 a1_0 # u64 . amp 0
-    : u64 a1_1 # u64 . amp 1
-    : u64 a1_2 # u64 . amp 2
-    : u64 a1_3 # u64 . amp 3
-
-    // tp[4k …] = a^(2k+1) (Montgomery), k = 0‥7
-    : ( Vec u64 ) tbl ( vec_with_cap [u64] 32 )
-    : b _l ( vec_set_len [u64] tbl 32 )
-    : *u64 tp ( vec_data [u64] tbl )
-    = . tp 0 a1_0 = . tp 1 a1_1 = . tp 2 a1_2 = . tp 3 a1_3
-    : ~ u64 s0 0
-    : ~ u64 s1 0
-    : ~ u64 s2 0
-    : ~ u64 s3 0
-    ( __sn_mul_u64 s0 s1 s2 s3 a1_0 a1_1 a1_2 a1_3 a1_0 a1_1 a1_2 a1_3 )
-    : ~ u64 w0 a1_0
-    : ~ u64 w1 a1_1
-    : ~ u64 w2 a1_2
-    : ~ u64 w3 a1_3
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ i k 1
-    ~ < k 8 {
-        ( __sn_mul_u64 t0 t1 t2 t3 w0 w1 w2 w3 s0 s1 s2 s3 )
-        = w0 t0 = w1 t1 = w2 t2 = w3 t3
-        : i base * k 4
-        = . tp base w0 = . tp + base 1 w1 = . tp + base 2 w2 = . tp + base 3 w3
-        = k + k 1
-    }
-    // w = a^15 = x4; x8, x16, x32 by doubling the run of ones
-    : ~ u64 x0 w0
-    : ~ u64 x1 w1
-    : ~ u64 x2 w2
-    : ~ u64 x3 w3
-    : ~ i run 4
-    ~ < run 32 {
-        : u64 y0 x0
-        : u64 y1 x1
-        : u64 y2 x2
-        : u64 y3 x3
-        ( __sn_sqn x0 x1 x2 x3 run )
-        ( __sn_mul_u64 t0 t1 t2 t3 x0 x1 x2 x3 y0 y1 y2 y3 )
-        = x0 t0 = x1 t1 = x2 t2 = x3 t3
-        = run * run 2
-    }
-    // top half: x32 ‖ 32 zeros ‖ x32 ‖ x32
-    : ~ u64 r0 x0
-    : ~ u64 r1 x1
-    : ~ u64 r2 x2
-    : ~ u64 r3 x3
-    ( __sn_sqn r0 r1 r2 r3 64 )
-    ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 x0 x1 x2 x3 )
-    = r0 t0 = r1 t1 = r2 t2 = r3 t3
-    ( __sn_sqn r0 r1 r2 r3 32 )
-    ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 x0 x1 x2 x3 )
-    = r0 t0 = r1 t1 = r2 t2 = r3 t3
-    // bottom half: bce6faada7179e84f3b9cac2fc63254f, (squarings, odd power)
-    ( __sn_win r0 r1 r2 r3 tp 4 11 )
-    ( __sn_win r0 r1 r2 r3 tp 2 3 )
-    ( __sn_win r0 r1 r2 r3 tp 5 7 )
-    ( __sn_win r0 r1 r2 r3 tp 6 13 )
-    ( __sn_win r0 r1 r2 r3 tp 4 15 )
-    ( __sn_win r0 r1 r2 r3 tp 4 5 )
-    ( __sn_win r0 r1 r2 r3 tp 5 11 )
-    ( __sn_win r0 r1 r2 r3 tp 5 13 )
-    ( __sn_win r0 r1 r2 r3 tp 5 7 )
-    ( __sn_win r0 r1 r2 r3 tp 7 11 )
-    ( __sn_win r0 r1 r2 r3 tp 2 3 )
-    ( __sn_win r0 r1 r2 r3 tp 6 15 )
-    ( __sn_win r0 r1 r2 r3 tp 2 1 )
-    ( __sn_win r0 r1 r2 r3 tp 8 9 )
-    ( __sn_win r0 r1 r2 r3 tp 3 7 )
-    ( __sn_win r0 r1 r2 r3 tp 5 7 )
-    ( __sn_win r0 r1 r2 r3 tp 4 7 )
-    ( __sn_win r0 r1 r2 r3 tp 5 7 )
-    ( __sn_win r0 r1 r2 r3 tp 5 5 )
-    ( __sn_win r0 r1 r2 r3 tp 3 3 )
-    ( __sn_win r0 r1 r2 r3 tp 8 11 )
-    ( __sn_win r0 r1 r2 r3 tp 4 15 )
-    ( __sn_win r0 r1 r2 r3 tp 5 3 )
-    ( __sn_win r0 r1 r2 r3 tp 5 3 )
-    ( __sn_win r0 r1 r2 r3 tp 6 9 )
-    ( __sn_win r0 r1 r2 r3 tp 4 5 )
-    ( __sn_win r0 r1 r2 r3 tp 6 15 )
-
-    // Convert from Montgomery: multiply by 1
-    ( __sn_mul_u64 t0 t1 t2 t3 r0 r1 r2 r3 1 0 0 0 )
+    : *i q ( vec_data [i] av )
+    : ~ u64 o0 0
+    : ~ u64 o1 0
+    : ~ u64 o2 0
+    : ~ u64 o3 0
+    ( _modinv256 o0 o1 o2 o3 # u64 . q 0 # u64 . q 1 # u64 . q 2 # u64 . q 3 3727233105432618321 3718823987352861203 4611686018427387899 4611685743549481023 255 3687945983376704433 )
     : ( Vec i ) out ( __sn_mag4 )
     : *i op ( vec_data [i] out )
-    = . op 0 # i t0 = . op 1 # i t1 = . op 2 # i t2 = . op 3 # i t3
+    = . op 0 # i o0 = . op 1 # i o1 = . op 2 # i o2 = . op 3 # i o3
     ^ ( __sn_to_be out )
 }

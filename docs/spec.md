@@ -1068,7 +1068,9 @@ return 64) rather than poison.
 
 **Wide arithmetic** completes the same story for integers wider than
 the language can spell. `nurl_umulhi(a, b)` gives the high half of a
-product; these give the high half of a sum and of a multiply-accumulate:
+product, and `nurl_smulhi(a, b)` the high half of the signed product
+(one `imul`; with `*` it is a signed 128-bit result); these give the
+high half of a sum and of a multiply-accumulate:
 
 | Primitive | Value |
 |---|---|

@@ -22,6 +22,7 @@
 // internally per RFC 7748 §5, so any 32 random bytes is a valid secret.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/modinv.nu`
 
 // ── tiny accessors ────────────────────────────────────────────────
 // vec_get returns an option; in this module every index is in range by
@@ -688,97 +689,10 @@ inline @ __f4_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     = p3 ^^ p3 t3 = q3 ^^ q3 t3
 }
 
-// o ← o^(2^n): n back-to-back squarings.
-@ __f4_sqn inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 i n → v {
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ i k 0
-    ~ < k n { ( __f4_sq_in t0 t1 t2 t3 o0 o1 o2 o3 ) = o0 t0 = o1 t1 = o2 t2 = o3 t3 = k + k 1 }
-}
-
-// o ← z^(p−2) = 1/z (0 for 0): ref10's addition chain, 254 squarings and
-// 11 multiplies.
-@ __f4_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 z0 u64 z1 u64 z2 u64 z3 → v {
-    : ~ u64 q0 0
-    : ~ u64 q1 0
-    : ~ u64 q2 0
-    : ~ u64 q3 0
-    : ~ u64 n0 0
-    : ~ u64 n1 0
-    : ~ u64 n2 0
-    : ~ u64 n3 0
-    : ~ u64 j0 0
-    : ~ u64 j1 0
-    : ~ u64 j2 0
-    : ~ u64 j3 0
-    : ~ u64 f0 0
-    : ~ u64 f1 0
-    : ~ u64 f2 0
-    : ~ u64 f3 0
-    : ~ u64 g0 0
-    : ~ u64 g1 0
-    : ~ u64 g2 0
-    : ~ u64 g3 0
-    : ~ u64 t0 0
-    : ~ u64 t1 0
-    : ~ u64 t2 0
-    : ~ u64 t3 0
-    : ~ u64 y0 0
-    : ~ u64 y1 0
-    : ~ u64 y2 0
-    : ~ u64 y3 0
-    : ~ u64 w0 0
-    : ~ u64 w1 0
-    : ~ u64 w2 0
-    : ~ u64 w3 0
-    ( __f4_sq q0 q1 q2 q3 z0 z1 z2 z3 )
-    // z^2
-    ( __f4_sq n0 n1 n2 n3 q0 q1 q2 q3 )
-    ( __f4_sq w0 w1 w2 w3 n0 n1 n2 n3 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3
-    ( __f4_mul w0 w1 w2 w3 n0 n1 n2 n3 z0 z1 z2 z3 ) = n0 w0 = n1 w1 = n2 w2 = n3 w3
-    // z^9
-    ( __f4_mul j0 j1 j2 j3 n0 n1 n2 n3 q0 q1 q2 q3 )
-    // z^11
-    ( __f4_sq f0 f1 f2 f3 j0 j1 j2 j3 )
-    ( __f4_mul w0 w1 w2 w3 f0 f1 f2 f3 n0 n1 n2 n3 ) = f0 w0 = f1 w1 = f2 w2 = f3 w3
-    // z^(2^5−1)
-    = g0 f0 = g1 f1 = g2 f2 = g3 f3
-    ( __f4_sqn g0 g1 g2 g3 5 )
-    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 f0 f1 f2 f3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
-    // z^(2^10−1)
-    = t0 g0 = t1 g1 = t2 g2 = t3 g3
-    ( __f4_sqn t0 t1 t2 t3 10 )
-    ( __f4_mul w0 w1 w2 w3 t0 t1 t2 t3 g0 g1 g2 g3 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3
-    // z^(2^20−1)
-    = y0 t0 = y1 t1 = y2 t2 = y3 t3
-    ( __f4_sqn y0 y1 y2 y3 20 )
-    ( __f4_mul w0 w1 w2 w3 y0 y1 y2 y3 t0 t1 t2 t3 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3
-    // z^(2^40−1)
-    ( __f4_sqn y0 y1 y2 y3 10 )
-    ( __f4_mul w0 w1 w2 w3 y0 y1 y2 y3 g0 g1 g2 g3 ) = y0 w0 = y1 w1 = y2 w2 = y3 w3
-    // z^(2^50−1)
-    = t0 y0 = t1 y1 = t2 y2 = t3 y3
-    ( __f4_sqn t0 t1 t2 t3 50 )
-    ( __f4_mul w0 w1 w2 w3 t0 t1 t2 t3 y0 y1 y2 y3 ) = t0 w0 = t1 w1 = t2 w2 = t3 w3
-    // z^(2^100−1)
-    = g0 t0 = g1 t1 = g2 t2 = g3 t3
-    ( __f4_sqn g0 g1 g2 g3 100 )
-    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 t0 t1 t2 t3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
-    // z^(2^200−1)
-    ( __f4_sqn g0 g1 g2 g3 50 )
-    ( __f4_mul w0 w1 w2 w3 g0 g1 g2 g3 y0 y1 y2 y3 ) = g0 w0 = g1 w1 = g2 w2 = g3 w3
-    // z^(2^250−1)
-    ( __f4_sqn g0 g1 g2 g3 5 )
-    ( __f4_mul o0 o1 o2 o3 g0 g1 g2 g3 j0 j1 j2 j3 )
-    // z^(2^255−21)
-}
-
-// The canonical residue of a (< 2^256) as 32 little-endian bytes. Fold bit
-// 255 in as 19 (now a < 2^255 + 19), then a ≥ p exactly when a + 19 has
-// bit 255 set, and a − p is that sum without it: chosen by mask.
-@ __f4_pack u64 a0 u64 a1 u64 a2 u64 a3 → ( Vec u ) {
+// o ← the canonical residue of a (< 2^256): fold bit 255 in as 19 (now
+// a < 2^255 + 19), then a ≥ p exactly when a + 19 has bit 255 set, and
+// a − p is that sum without it — chosen by mask.
+inline @ __f4_canon inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 a0 u64 a1 u64 a2 u64 a3 → v {
     : u64 top >> a3 63
     : u64 m * top 19
     : u64 v0 ( nurl_addc_lo a0 m 0 )
@@ -796,10 +710,33 @@ inline @ __f4_cswap inout u64 p0 inout u64 p1 inout u64 p2 inout u64 p3 inout u6
     : u64 c2 ( nurl_addc_hi v2 0 c1 )
     : u64 w3 + v3 c2
     : u64 ge - # u64 0 >> w3 63
-    : u64 r0 | & ge w0 & ^^ ge 18446744073709551615 v0
-    : u64 r1 | & ge w1 & ^^ ge 18446744073709551615 v1
-    : u64 r2 | & ge w2 & ^^ ge 18446744073709551615 v2
-    : u64 r3 | & ge & w3 9223372036854775807 & ^^ ge 18446744073709551615 v3
+    = o0 | & ge w0 & ^^ ge 18446744073709551615 v0
+    = o1 | & ge w1 & ^^ ge 18446744073709551615 v1
+    = o2 | & ge w2 & ^^ ge 18446744073709551615 v2
+    = o3 | & ge & w3 9223372036854775807 & ^^ ge 18446744073709551615 v3
+}
+
+// o ← 1/z (0 for 0): the divsteps of std/modinv over p = 2^255 − 19
+// (−19 + 128·2^248 in signed-62 form), on z reduced first — the walk's
+// bound is for z < p. Constant time, ~2.4 µs on Skylake; Fermat's chain
+// (254 squarings, 11 multiplies) is a serial chain of their latencies,
+// ~3.9 µs even on the ADX kernels.
+@ __f4_inv inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 u64 z0 u64 z1 u64 z2 u64 z3 → v {
+    : ~ u64 c0 0
+    : ~ u64 c1 0
+    : ~ u64 c2 0
+    : ~ u64 c3 0
+    ( __f4_canon c0 c1 c2 c3 z0 z1 z2 z3 )
+    ( _modinv256 o0 o1 o2 o3 c0 c1 c2 c3 -19 0 0 0 128 4126245384908715493 )
+}
+
+// The canonical residue of a (< 2^256) as 32 little-endian bytes.
+@ __f4_pack u64 a0 u64 a1 u64 a2 u64 a3 → ( Vec u ) {
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
+    ( __f4_canon r0 r1 r2 r3 a0 a1 a2 a3 )
     : ( Vec u ) o ( vec_with_cap [u] 32 )
     : b _l ( vec_set_len [u] o 32 )
     : *u op ( vec_data [u] o )
@@ -841,13 +778,6 @@ inline @ __xk_at * u64 w i k → *u64 { ^ # *u64 + # i w * k 32 }
 inline @ __xk_mul * u64 o * u64 a * u64 b → v { ? ( nurl_x25519_mulm o a b ) {} { ( __xk_mul_port o a b ) } }
 
 inline @ __xk_sq * u64 o * u64 a → v { ? ( nurl_x25519_sqrm o a ) {} { ( __xk_mul_port o a a ) } }
-
-// o ← a^(2^n), n ≥ 1.
-@ __xk_sqn * u64 o * u64 a i n → v {
-    ( __xk_sq o a )
-    : ~ i k 1
-    ~ < k n { ( __xk_sq o o ) = k + k 1 }
-}
 
 // o ← a + b and o ← a − b (__f4_add / __f4_sub over the buffer).
 inline @ __xk_add * u64 o * u64 a * u64 b → v {
@@ -912,49 +842,14 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     ( __xk_mul oz p e )
 }
 
-// o ← z^(p−2) = 1/z (0 for 0): the chain __f4_inv takes, in the buffer.
-// w holds nine scratch elements (w[0 … 8]); o may not be among them.
-@ __xk_inv * u64 o * u64 z * u64 w → v {
-    : *u64 z2 ( __xk_at w 0 )
-    : *u64 z9 ( __xk_at w 1 )
-    : *u64 z11 ( __xk_at w 2 )
-    : *u64 z5 ( __xk_at w 3 )
-    : *u64 z10 ( __xk_at w 4 )
-    : *u64 z20 ( __xk_at w 5 )
-    : *u64 z50 ( __xk_at w 6 )
-    : *u64 z100 ( __xk_at w 7 )
-    : *u64 t ( __xk_at w 8 )
-    ( __xk_sq z2 z )
-    ( __xk_sqn t z2 2 )
-    ( __xk_mul z9 t z )
-    ( __xk_mul z11 z9 z2 )
-    ( __xk_sq t z11 )
-    ( __xk_mul z5 t z9 )
-    // z^(2^5−1)
-    ( __xk_sqn t z5 5 )
-    ( __xk_mul z10 t z5 )
-    // z^(2^10−1)
-    ( __xk_sqn t z10 10 )
-    ( __xk_mul z20 t z10 )
-    // z^(2^20−1)
-    ( __xk_sqn t z20 20 )
-    ( __xk_mul t t z20 )
-    // z^(2^40−1)
-    ( __xk_sqn t t 10 )
-    ( __xk_mul z50 t z10 )
-    // z^(2^50−1)
-    ( __xk_sqn t z50 50 )
-    ( __xk_mul z100 t z50 )
-    // z^(2^100−1)
-    ( __xk_sqn t z100 100 )
-    ( __xk_mul t t z100 )
-    // z^(2^200−1)
-    ( __xk_sqn t t 50 )
-    ( __xk_mul t t z50 )
-    // z^(2^250−1)
-    ( __xk_sqn t t 5 )
-    ( __xk_mul o t z11 )
-    // z^(2^255−21)
+// o ← 1/z (0 for 0), __f4_inv over the buffer.
+@ __xk_inv * u64 o * u64 z → v {
+    : ~ u64 r0 0
+    : ~ u64 r1 0
+    : ~ u64 r2 0
+    : ~ u64 r3 0
+    ( __f4_inv r0 r1 r2 r3 . z 0 . z 1 . z 2 . z 3 )
+    = . o 0 r0 = . o 1 r1 = . o 2 r2 = . o 3 r3
 }
 
 // The ladder on the kernels. Its two points are kept as m — the one the
@@ -1035,7 +930,7 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     ( __xk_dbl xn zn xn zn d sq p e )
     ( __xk_dbl xn zn xn zn d sq p e )
     // The affine u: x · z^−1 (z = 0 — a low-order point — gives 0).
-    ( __xk_inv spro zn dm )
+    ( __xk_inv spro zn )
     ( __xk_mul d xn spro )
     ^ ( __f4_pack . d 0 . d 1 . d 2 . d 3 )
 }
@@ -1696,7 +1591,7 @@ inline @ __xk_cp * u64 o * u64 a → v { = . o 0 . a 0 = . o 1 . a 1 = . o 2 . a
     // Birational map to Montgomery u = (Z + Y) / (Z − Y)
     ( __xk_add px pz py )
     ( __xk_sub pt pz py )
-    ( __xk_inv py pt a )
+    ( __xk_inv py pt )
     ( __xk_mul pz px py )
     ^ ( __f4_pack . pz 0 . pz 1 . pz 2 . pz 3 )
 }
