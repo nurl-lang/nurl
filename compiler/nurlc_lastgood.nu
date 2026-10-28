@@ -57119,10 +57119,14 @@ unsafe @ __ir_calls_level s ir i set → i {
 // The 512-bit sum folds by 2^256 ≡ 38: the high four words times 38 into
 // the low four on the same two chains, then everything from bit 255 up —
 // at most 2·38 + 1 — times 19 into word 0, which cannot carry out. The
-// square takes its six cross products once, doubles them and adds the
-// diagonal. Fourteen registers at most, so a frame pointer still fits.
+// square takes its six cross products once: a0a1, a0a3 and a2a3 do not
+// overlap, so they land in place with no add, and a0a2, a1a2, a1a3 go
+// on in one pass of the two chains; then one more pass doubles (adcx
+// t, t) and adds the diagonal (adox) — 12.9 ns latency against 14.7
+// for a row per word. Fourteen registers at most, so a frame pointer
+// still fits.
 // No branch depends on the operands. Skylake, four independent chains:
-// multiply 10.2 ns, square 8.4 ns, against 24.1 for the same product as
+// multiply 10.2 ns, square 7.0 ns, against 24.1 for the same product as
 // C over u128.
 @ __emit_x25519_kernels → v {
     ( emit `define linkonce_odr i1 @nurl_x25519_mulm(i64* %r, i64* %a, i64* %b) alwaysinline {` )
@@ -57166,23 +57170,22 @@ unsafe @ __ir_calls_level s ir i set → i {
         ( emit `  br i1 %xs.x, label %xs.adx, label %xs.no` )
         ( emit `xs.adx:` )
         ( nurl_print `  %xs.ra = call { i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
-        ( nurl_print `movq 0($11), %rdx\\0A\\09mulxq 8($11), $1, $2\\0A\\09mulxq 16($11), $8, $3\\0A\\09addq $8, $2\\0A\\09` )
-        ( nurl_print `mulxq 24($11), $8, $4\\0A\\09adcq $8, $3\\0A\\09adcq $$0, $4\\0A\\09movq 8($11), %rdx\\0A\\09` )
-        ( nurl_print `xorl ${5:k}, ${5:k}\\0A\\09mulxq 16($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
-        ( nurl_print `mulxq 24($11), $8, $9\\0A\\09adcxq $8, $4\\0A\\09adoxq $9, $5\\0A\\09movq 16($11), %rdx\\0A\\09` )
-        ( nurl_print `mulxq 24($11), $8, $6\\0A\\09movl $$0, ${10:k}\\0A\\09adcxq $8, $5\\0A\\09adoxq $10, $6\\0A\\09` )
-        ( nurl_print `adcxq $10, $6\\0A\\09xorl ${7:k}, ${7:k}\\0A\\09addq $1, $1\\0A\\09adcq $2, $2\\0A\\09` )
-        ( nurl_print `adcq $3, $3\\0A\\09adcq $4, $4\\0A\\09adcq $5, $5\\0A\\09adcq $6, $6\\0A\\09` )
-        ( nurl_print `adcq $$0, $7\\0A\\09movq 0($11), %rdx\\0A\\09mulxq %rdx, $0, $9\\0A\\09addq $9, $1\\0A\\09` )
-        ( nurl_print `movq 8($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $2\\0A\\09adcq $9, $3\\0A\\09` )
-        ( nurl_print `movq 16($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $4\\0A\\09adcq $9, $5\\0A\\09` )
-        ( nurl_print `movq 24($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $6\\0A\\09adcq $9, $7\\0A\\09` )
-        ( nurl_print `movl $$38, %edx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09mulxq $4, $8, $9\\0A\\09adcxq $8, $0\\0A\\09` )
-        ( nurl_print `adoxq $9, $1\\0A\\09mulxq $5, $8, $9\\0A\\09adcxq $8, $1\\0A\\09adoxq $9, $2\\0A\\09` )
-        ( nurl_print `mulxq $6, $8, $9\\0A\\09adcxq $8, $2\\0A\\09adoxq $9, $3\\0A\\09mulxq $7, $8, $9\\0A\\09` )
-        ( nurl_print `adcxq $8, $3\\0A\\09adoxq $10, $9\\0A\\09adcxq $10, $9\\0A\\09shldq $$1, $3, $9\\0A\\09` )
-        ( nurl_print `btrq $$63, $3\\0A\\09imulq $$19, $9, $9\\0A\\09addq $9, $0\\0A\\09adcq $10, $1\\0A\\09` )
-        ( nurl_print `adcq $10, $2\\0A\\09adcq $10, $3\\0A\\09` )
+        ( nurl_print `movq 0($11), %rdx\\0A\\09mulxq 8($11), $1, $2\\0A\\09mulxq 24($11), $3, $4\\0A\\09movq 16($11), %rdx\\0A\\09` )
+        ( nurl_print `mulxq 24($11), $5, $6\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09mulxq 0($11), $8, $9\\0A\\09adcxq $8, $2\\0A\\09` )
+        ( nurl_print `adoxq $9, $3\\0A\\09mulxq 8($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
+        ( nurl_print `movq 24($11), %rdx\\0A\\09mulxq 8($11), $8, $9\\0A\\09adcxq $8, $4\\0A\\09adoxq $9, $5\\0A\\09` )
+        ( nurl_print `adcxq $10, $5\\0A\\09adoxq $10, $6\\0A\\09adcq $10, $6\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09` )
+        ( nurl_print `movq 0($11), %rdx\\0A\\09mulxq %rdx, $0, $9\\0A\\09adcxq $1, $1\\0A\\09adoxq $9, $1\\0A\\09` )
+        ( nurl_print `movq 8($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcxq $2, $2\\0A\\09adoxq $8, $2\\0A\\09` )
+        ( nurl_print `adcxq $3, $3\\0A\\09adoxq $9, $3\\0A\\09movq 16($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $4, $4\\0A\\09adoxq $8, $4\\0A\\09adcxq $5, $5\\0A\\09adoxq $9, $5\\0A\\09` )
+        ( nurl_print `movq 24($11), %rdx\\0A\\09mulxq %rdx, $8, $7\\0A\\09adcxq $6, $6\\0A\\09adoxq $8, $6\\0A\\09` )
+        ( nurl_print `adcxq $10, $7\\0A\\09adoxq $10, $7\\0A\\09movl $$38, %edx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09` )
+        ( nurl_print `mulxq $4, $8, $9\\0A\\09adcxq $8, $0\\0A\\09adoxq $9, $1\\0A\\09mulxq $5, $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $8, $1\\0A\\09adoxq $9, $2\\0A\\09mulxq $6, $8, $9\\0A\\09adcxq $8, $2\\0A\\09` )
+        ( nurl_print `adoxq $9, $3\\0A\\09mulxq $7, $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $10, $9\\0A\\09` )
+        ( nurl_print `adcxq $10, $9\\0A\\09shldq $$1, $3, $9\\0A\\09btrq $$63, $3\\0A\\09imulq $$19, $9, $9\\0A\\09` )
+        ( nurl_print `addq $9, $0\\0A\\09adcq $10, $1\\0A\\09adcq $10, $2\\0A\\09adcq $10, $3\\0A\\09` )
         ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
         ( emit `(i64* %a)` )
         ( __emit_x25519_store `xs.a` `{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } %xs.ra` )
@@ -57593,39 +57596,80 @@ unsafe @ __ir_calls_level s ir i set → i {
     // arithmetic legalise it (wasm32 → compiler-rt's __multi3, which
     // the bundled zig links by default).
     // For addc / subb: clean i64-based overflow / borrow detection is
-    // recognized by LLVM SelectionDAG and directly generates native
-    // `add; adc; adc...` and `sub; sbb; sbb...` chains without i128 legalisation spills.
-    ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
-    ( emit `entry:` )
-    ( emit `  %sum = add i64 %a, %b` )
-    ( emit `  %res = add i64 %sum, %c` )
-    ( emit `  ret i64 %res` )
-    ( emit `}` )
-    ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
-    ( emit `entry:` )
-    ( emit `  %sum = add i64 %a, %b` )
-    ( emit `  %c1 = icmp ult i64 %sum, %a` )
-    ( emit `  %res = add i64 %sum, %c` )
-    ( emit `  %c2 = icmp ult i64 %res, %sum` )
-    ( emit `  %car = or i1 %c1, %c2` )
-    ( emit `  %r = zext i1 %car to i64` )
-    ( emit `  ret i64 %r` )
-    ( emit `}` )
-    ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
-    ( emit `entry:` )
-    ( emit `  %diff = sub i64 %a, %b` )
-    ( emit `  %res = sub i64 %diff, %c` )
-    ( emit `  ret i64 %res` )
-    ( emit `}` )
-    ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
-    ( emit `entry:` )
-    ( emit `  %b1 = icmp ult i64 %a, %b` )
-    ( emit `  %d1 = sub i64 %a, %b` )
-    ( emit `  %b2 = icmp ult i64 %d1, %c` )
-    ( emit `  %bor = or i1 %b1, %b2` )
-    ( emit `  %r = zext i1 %bor to i64` )
-    ( emit `  ret i64 %r` )
-    ( emit `}` )
+    // recognized by LLVM SelectionDAG and generates a native `add; adc;
+    // adc…` chain without i128 legalisation spills. The borrow is not:
+    // InstCombine rewrites `(a − b) < c` for a 0/1 `c` into `a == b & c`,
+    // which the DAG no longer sees as a borrow, and a four-word subtract
+    // came out as sub/setb/sete/and/or per word — 42 instructions where
+    // sub/sbb is 23. So on x86-64 subb is `llvm.x86.subborrow.64`, the
+    // sbb itself (RSA verify −20 % cycles, P-256 ECDH −5 %; addc through
+    // `llvm.x86.addcarry.64` measured no better and RSA sign +5 %, so
+    // addc stays generic everywhere).
+    ? == g_crypto_target 1
+    { ( emit `declare { i8, i64 } @llvm.x86.subborrow.64(i8, i64, i64)` )
+        ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sum = add i64 %a, %b` )
+        ( emit `  %res = add i64 %sum, %c` )
+        ( emit `  ret i64 %res` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sum = add i64 %a, %b` )
+        ( emit `  %c1 = icmp ult i64 %sum, %a` )
+        ( emit `  %res = add i64 %sum, %c` )
+        ( emit `  %c2 = icmp ult i64 %res, %sum` )
+        ( emit `  %car = or i1 %c1, %c2` )
+        ( emit `  %r = zext i1 %car to i64` )
+        ( emit `  ret i64 %r` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sb.c = trunc i64 %c to i8` )
+        ( emit `  %sb.x = call { i8, i64 } @llvm.x86.subborrow.64(i8 %sb.c, i64 %a, i64 %b)` )
+        ( emit `  %sb.r = extractvalue { i8, i64 } %sb.x, 1` )
+        ( emit `  ret i64 %sb.r` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sh.c = trunc i64 %c to i8` )
+        ( emit `  %sh.x = call { i8, i64 } @llvm.x86.subborrow.64(i8 %sh.c, i64 %a, i64 %b)` )
+        ( emit `  %sh.o = extractvalue { i8, i64 } %sh.x, 0` )
+        ( emit `  %sh.r = zext i8 %sh.o to i64` )
+        ( emit `  ret i64 %sh.r` )
+        ( emit `}` ) }
+    {
+        ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sum = add i64 %a, %b` )
+        ( emit `  %res = add i64 %sum, %c` )
+        ( emit `  ret i64 %res` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %sum = add i64 %a, %b` )
+        ( emit `  %c1 = icmp ult i64 %sum, %a` )
+        ( emit `  %res = add i64 %sum, %c` )
+        ( emit `  %c2 = icmp ult i64 %res, %sum` )
+        ( emit `  %car = or i1 %c1, %c2` )
+        ( emit `  %r = zext i1 %car to i64` )
+        ( emit `  ret i64 %r` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %diff = sub i64 %a, %b` )
+        ( emit `  %res = sub i64 %diff, %c` )
+        ( emit `  ret i64 %res` )
+        ( emit `}` )
+        ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  %b1 = icmp ult i64 %a, %b` )
+        ( emit `  %d1 = sub i64 %a, %b` )
+        ( emit `  %b2 = icmp ult i64 %d1, %c` )
+        ( emit `  %bor = or i1 %b1, %b2` )
+        ( emit `  %r = zext i1 %bor to i64` )
+        ( emit `  ret i64 %r` )
+        ( emit `}` ) }
     ( emit `define linkonce_odr i128 @nurl_mac_w(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
     ( emit `entry:` )
     ( emit `  %mw.a = zext i64 %a to i128` )
