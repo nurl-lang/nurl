@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+field cases 120576
+field disagreements 0
+ladder cases 144
+ladder disagreements 0

@@ -25026,7 +25026,7 @@ unsafe @ bck_trusted_file s path → b {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -57100,6 +57100,113 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit ( nurl_str_cat4 `(i64* ` a ( nurl_str_cat3 `, i64* ` b `, i64* %r)` ) `` ) )
 }
 
+// ── nurl_x25519_mulm / nurl_x25519_sqrm: GF(2^255 − 19) multiply and square ──
+//
+//   ( nurl_x25519_mulm r a b )  →  r ≡ a·b (mod p)
+//   ( nurl_x25519_sqrm r a )    →  r ≡ a·a (mod p)
+//
+// p = 2^255 − 19, four little-endian 64-bit words behind each pointer in
+// stdlib/std/x25519.nu's lazy form: any 256-bit pattern is an element,
+// and the result is < 2^255 + 2^11 — its value mod p, not reduced. T on
+// the ADX tier (nurl_cpu_has_adx), F elsewhere: the caller then runs its
+// register form. (Without ADX a mulq block measured 4 % faster on a whole
+// Haswell ladder — not worth a second block.) `r` may be `a` or `b`: the
+// result leaves the block in registers and is stored after it.
+//
+// The product is the 4×4 schoolbook, a row per word of b: mulx, with
+// adcx and adox carrying a row's low and high halves on two flags —
+// the one thing LLVM never selects (docs/adr/0001-two-carry-chains.md).
+// The 512-bit sum folds by 2^256 ≡ 38: the high four words times 38 into
+// the low four on the same two chains, then everything from bit 255 up —
+// at most 2·38 + 1 — times 19 into word 0, which cannot carry out. The
+// square takes its six cross products once, doubles them and adds the
+// diagonal. Fourteen registers at most, so a frame pointer still fits.
+// No branch depends on the operands. Skylake, four independent chains:
+// multiply 10.2 ns, square 8.4 ns, against 24.1 for the same product as
+// C over u128.
+@ __emit_x25519_kernels → v {
+    ( emit `define linkonce_odr i1 @nurl_x25519_mulm(i64* %r, i64* %a, i64* %b) alwaysinline {` )
+    ( emit `entry:` )
+    ? == g_crypto_target 1
+    { ( emit `  %xm.x = call i1 @nurl_cpu_has_adx()` )
+        ( emit `  br i1 %xm.x, label %xm.adx, label %xm.no` )
+        ( emit `xm.adx:` )
+        ( nurl_print `  %xm.ra = call { i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
+        ( nurl_print `movq 0($12), %rdx\\0A\\09mulxq 0($11), $0, $1\\0A\\09mulxq 8($11), $8, $2\\0A\\09addq $8, $1\\0A\\09` )
+        ( nurl_print `mulxq 16($11), $8, $3\\0A\\09adcq $8, $2\\0A\\09mulxq 24($11), $8, $4\\0A\\09adcq $8, $3\\0A\\09` )
+        ( nurl_print `adcq $$0, $4\\0A\\09movq 8($12), %rdx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09mulxq 0($11), $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $8, $1\\0A\\09adoxq $9, $2\\0A\\09mulxq 8($11), $8, $9\\0A\\09adcxq $8, $2\\0A\\09` )
+        ( nurl_print `adoxq $9, $3\\0A\\09mulxq 16($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
+        ( nurl_print `mulxq 24($11), $8, $5\\0A\\09adcxq $8, $4\\0A\\09adoxq $10, $5\\0A\\09adcxq $10, $5\\0A\\09` )
+        ( nurl_print `movq 16($12), %rdx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09mulxq 0($11), $8, $9\\0A\\09adcxq $8, $2\\0A\\09` )
+        ( nurl_print `adoxq $9, $3\\0A\\09mulxq 8($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
+        ( nurl_print `mulxq 16($11), $8, $9\\0A\\09adcxq $8, $4\\0A\\09adoxq $9, $5\\0A\\09mulxq 24($11), $8, $6\\0A\\09` )
+        ( nurl_print `adcxq $8, $5\\0A\\09adoxq $10, $6\\0A\\09adcxq $10, $6\\0A\\09movq 24($12), %rdx\\0A\\09` )
+        ( nurl_print `xorl ${10:k}, ${10:k}\\0A\\09mulxq 0($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
+        ( nurl_print `mulxq 8($11), $8, $9\\0A\\09adcxq $8, $4\\0A\\09adoxq $9, $5\\0A\\09mulxq 16($11), $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $8, $5\\0A\\09adoxq $9, $6\\0A\\09mulxq 24($11), $8, $7\\0A\\09adcxq $8, $6\\0A\\09` )
+        ( nurl_print `adoxq $10, $7\\0A\\09adcxq $10, $7\\0A\\09movl $$38, %edx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09` )
+        ( nurl_print `mulxq $4, $8, $9\\0A\\09adcxq $8, $0\\0A\\09adoxq $9, $1\\0A\\09mulxq $5, $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $8, $1\\0A\\09adoxq $9, $2\\0A\\09mulxq $6, $8, $9\\0A\\09adcxq $8, $2\\0A\\09` )
+        ( nurl_print `adoxq $9, $3\\0A\\09mulxq $7, $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $10, $9\\0A\\09` )
+        ( nurl_print `adcxq $10, $9\\0A\\09shldq $$1, $3, $9\\0A\\09btrq $$63, $3\\0A\\09imulq $$19, $9, $9\\0A\\09` )
+        ( nurl_print `addq $9, $0\\0A\\09adcq $10, $1\\0A\\09adcq $10, $2\\0A\\09adcq $10, $3\\0A\\09` )
+        ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,r,~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+        ( emit `(i64* %a, i64* %b)` )
+        ( __emit_x25519_store `xm.a` `{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } %xm.ra` )
+        ( emit `  ret i1 true` )
+        ( emit `xm.no:` )
+        ( emit `  ret i1 false` ) }
+    { ( emit `  ret i1 false` ) }
+    ( emit `}` )
+    ( emit `define linkonce_odr i1 @nurl_x25519_sqrm(i64* %r, i64* %a) alwaysinline {` )
+    ( emit `entry:` )
+    ? == g_crypto_target 1
+    { ( emit `  %xs.x = call i1 @nurl_cpu_has_adx()` )
+        ( emit `  br i1 %xs.x, label %xs.adx, label %xs.no` )
+        ( emit `xs.adx:` )
+        ( nurl_print `  %xs.ra = call { i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
+        ( nurl_print `movq 0($11), %rdx\\0A\\09mulxq 8($11), $1, $2\\0A\\09mulxq 16($11), $8, $3\\0A\\09addq $8, $2\\0A\\09` )
+        ( nurl_print `mulxq 24($11), $8, $4\\0A\\09adcq $8, $3\\0A\\09adcq $$0, $4\\0A\\09movq 8($11), %rdx\\0A\\09` )
+        ( nurl_print `xorl ${5:k}, ${5:k}\\0A\\09mulxq 16($11), $8, $9\\0A\\09adcxq $8, $3\\0A\\09adoxq $9, $4\\0A\\09` )
+        ( nurl_print `mulxq 24($11), $8, $9\\0A\\09adcxq $8, $4\\0A\\09adoxq $9, $5\\0A\\09movq 16($11), %rdx\\0A\\09` )
+        ( nurl_print `mulxq 24($11), $8, $6\\0A\\09movl $$0, ${10:k}\\0A\\09adcxq $8, $5\\0A\\09adoxq $10, $6\\0A\\09` )
+        ( nurl_print `adcxq $10, $6\\0A\\09xorl ${7:k}, ${7:k}\\0A\\09addq $1, $1\\0A\\09adcq $2, $2\\0A\\09` )
+        ( nurl_print `adcq $3, $3\\0A\\09adcq $4, $4\\0A\\09adcq $5, $5\\0A\\09adcq $6, $6\\0A\\09` )
+        ( nurl_print `adcq $$0, $7\\0A\\09movq 0($11), %rdx\\0A\\09mulxq %rdx, $0, $9\\0A\\09addq $9, $1\\0A\\09` )
+        ( nurl_print `movq 8($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $2\\0A\\09adcq $9, $3\\0A\\09` )
+        ( nurl_print `movq 16($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $4\\0A\\09adcq $9, $5\\0A\\09` )
+        ( nurl_print `movq 24($11), %rdx\\0A\\09mulxq %rdx, $8, $9\\0A\\09adcq $8, $6\\0A\\09adcq $9, $7\\0A\\09` )
+        ( nurl_print `movl $$38, %edx\\0A\\09xorl ${10:k}, ${10:k}\\0A\\09mulxq $4, $8, $9\\0A\\09adcxq $8, $0\\0A\\09` )
+        ( nurl_print `adoxq $9, $1\\0A\\09mulxq $5, $8, $9\\0A\\09adcxq $8, $1\\0A\\09adoxq $9, $2\\0A\\09` )
+        ( nurl_print `mulxq $6, $8, $9\\0A\\09adcxq $8, $2\\0A\\09adoxq $9, $3\\0A\\09mulxq $7, $8, $9\\0A\\09` )
+        ( nurl_print `adcxq $8, $3\\0A\\09adoxq $10, $9\\0A\\09adcxq $10, $9\\0A\\09shldq $$1, $3, $9\\0A\\09` )
+        ( nurl_print `btrq $$63, $3\\0A\\09imulq $$19, $9, $9\\0A\\09addq $9, $0\\0A\\09adcq $10, $1\\0A\\09` )
+        ( nurl_print `adcq $10, $2\\0A\\09adcq $10, $3\\0A\\09` )
+        ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+        ( emit `(i64* %a)` )
+        ( __emit_x25519_store `xs.a` `{ i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } %xs.ra` )
+        ( emit `  ret i1 true` )
+        ( emit `xs.no:` )
+        ( emit `  ret i1 false` ) }
+    { ( emit `  ret i1 false` ) }
+    ( emit `}` )
+}
+
+// r[0 … 3] ← words 0 … 3 of `agg` (an asm result, typed: `{ i64, … } %v`).
+@ __emit_x25519_store s pfx s agg → v {
+    : ~ i k 0
+    ~ < k 4 {
+        : s ks ( nurl_str_int k )
+        ( emit ( nurl_str_cat4 ( nurl_str_cat3 `  %` pfx `.w` ) ks ( nurl_str_cat3 ` = extractvalue ` agg `, ` ) ks ) )
+        ? == k 0
+        { ( emit ( nurl_str_cat4 `  store i64 %` pfx `.w0, i64* %r` `` ) ) }
+        { ( emit ( nurl_str_cat4 ( nurl_str_cat3 `  %` pfx `.p` ) ks ( nurl_str_cat ` = getelementptr i64, i64* %r, i64 ` ks ) `` ) )
+            ( emit ( nurl_str_cat4 ( nurl_str_cat3 `  store i64 %` pfx `.w` ) ks ( nurl_str_cat3 `, i64* %` pfx `.p` ) ks ) ) }
+        = k + k 1
+    }
+}
+
 @ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
@@ -57531,6 +57638,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `}` )
     ( __emit_mac_row )
     ( __emit_p256_kernels )
+    ( __emit_x25519_kernels )
     ( emit_simd_preamble )
     ( emit_crypto_preamble )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64) "nurl.raw"="1"` )
@@ -58283,6 +58391,8 @@ unsafe @ __canon_import_key s path → s {
     ( nurl_sym_def syms `nurl_mac_row` `u64` )
     ( nurl_sym_def syms `nurl_p256_mulm` `i1` )
     ( nurl_sym_def syms `nurl_p256_sqrm` `i1` )
+    ( nurl_sym_def syms `nurl_x25519_mulm` `i1` )
+    ( nurl_sym_def syms `nurl_x25519_sqrm` `i1` )
     ( nurl_sym_def syms `nurl_cpu_has_adx` `i1` )
     ( register_simd_syms syms )
     ( nurl_sym_def syms `nurl_init` `void` )
