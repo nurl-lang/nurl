@@ -427,3 +427,14 @@ h508_param_pushed_then_freed	§2.12	A2	agora #152: param_pushed_then_freed	rejec
 h509_param_pushed_then_returned	§2.12	A2	agora #152: param_pushed_then_returned	rejected
 h510_param_pushed_into_inout_freed_read	§2.12	A2	agora #152: param_pushed_into_inout_freed_read	rejected
 h511_option_param_pushed_vec_freed_read	§2.12	A2	agora #152: option_param_pushed_vec_freed_read	rejected
+h512_closure_var_from_inner_struct_field	§2.11	A2	agora #153: closure_var_from_inner_struct_field	rejected
+h513_closure_var_from_inner_option_match	§2.11	A2	agora #153: closure_var_from_inner_option_match	rejected
+h514_closure_var_from_field_then_struct_sunk	§2.11	A2	agora #153: closure_var_from_field_then_struct_sunk	rejected
+h515_closure_var_from_match_then_option_sunk	§2.11	A2	agora #153: closure_var_from_match_then_option_sunk	rejected
+h516_closure_var_from_loop_body_struct	§2.11	A2	agora #153: closure_var_from_loop_body_struct	rejected
+h517_closure_var_from_field_then_owner_reassigned	§2.11	A2	agora #153: closure_var_from_field_then_owner_reassigned	rejected
+h518_closure_var_from_borrowed_closure_var	§2.11	A2	agora #153: closure_var_from_borrowed_closure_var	rejected
+h519_closure_var_from_field_in_if_arm	§2.11	A2	agora #153: closure_var_from_field_in_if_arm	rejected
+h520_closure_var_from_nested_field	§2.11	A2	agora #153: closure_var_from_nested_field	rejected
+h521_closure_var_from_vec_get_then_freed	§2.11	A2	agora #153: closure_var_from_vec_get_then_freed	rejected
+h522_closure_var_chain_through_second_var	§2.11	A2	agora #153: closure_var_chain_through_second_var	rejected
