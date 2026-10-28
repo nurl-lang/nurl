@@ -167,6 +167,14 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // table and the whole point/inversion layer are untouched. `dst` may alias
 // a or b — both are read into the packed locals before any write to dst.
 @ _p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+    // The register kernel where the target has one (x86-64: the ADX tier
+    // or mulq — the compiler's nurl_p256_mulm); the form below elsewhere.
+    ? ( nurl_p256_mulm ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) {} { ( _p256_mul_port scr dst a b ) }
+}
+
+// The multiply as NURL, for a target with no kernel (and the reference
+// compiler/tests/p256_kernel_agrees.nu holds the kernels to).
+@ _p256_mul_port P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     // Limbs load directly — the field IS 4×64 now (no pack step).
@@ -387,6 +395,12 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // fixed-base comb's field ops are squarings, and an inversion is ~95%.
 // `dst` may alias `a` — the limbs are read into locals first.
 @ _p256_sqr_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+    // The register kernel where the target has one (nurl_p256_sqrm).
+    ? ( nurl_p256_sqrm ( vec_data [i] dst ) ( vec_data [i] a ) ) {} { ( _p256_sqr_port scr dst a ) }
+}
+
+// The square as NURL (as _p256_mul_port).
+@ _p256_sqr_port P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : *i ap ( vec_data [i] a )
     : u64 a0 # u64 . ap 0
     : u64 a1 # u64 . ap 1

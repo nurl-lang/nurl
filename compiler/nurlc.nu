@@ -25026,7 +25026,7 @@ unsafe @ bck_trusted_file s path → b {
 @ bck_raw_call s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
-    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
+    ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr vec_set_len` base )
 }
 
 // A function that takes a raw pointer (`*T` in a parameter's type, outside
@@ -56928,6 +56928,178 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `}` )
 }
 
+// ── nurl_p256_mulm / nurl_p256_sqrm: P-256 Montgomery multiply and square ──
+//
+//   ( nurl_p256_mulm r a b )  →  r ← a·b·2^-256 mod p, for a, b < p
+//   ( nurl_p256_sqrm r a )    →  r ← a·a·2^-256 mod p, for a < p
+//
+// T when a kernel did it, F on a target without one: the caller then runs
+// its portable form (stdlib/std/p256_field.nu). Four little-endian 64-bit
+// limbs behind each pointer; `r` may be `a` or `b` — every limb is read
+// before the result is stored.
+//
+// The field multiply and square are most of a P-256 scalar multiplication.
+// In NURL (nurl_mac / nurl_addc) the multiply lowers to about 260
+// instructions: `mul` pins rdx:rax, so every product moves out of them,
+// and the accumulate's and the reduction's carries serialise through one
+// flag. Written as one block, the accumulator lives in six registers that
+// rotate a word per round, and the reduction is P-256's sparse one: m = t0
+// (−p⁻¹ ≡ 1 mod 2^64), m·p as m<<32 / m>>32 into words 1–2 and one product
+// m·(2^64−2^32+1) into words 3–4; the final conditional subtract is sbb
+// and cmov. On the ADX tier (mulx; adcx and adox carry the low and the
+// high halves of a round on two flags) the multiply is 127 instructions
+// and the square 113 — its six cross products once, doubled, the four
+// diagonals, then four reduction rounds of the low half and the high half
+// added (the high words never become a round's lowest word, so adding
+// them last is the same sum). Without ADX, 167 with mulq, the square as
+// a·a. No branch depends on the operands: constant time, as the portable
+// form is. Measured, 4 independent chains: Skylake multiply 13.4 ns ADX /
+// 15.6 mulq, square 11.1 ADX, against 28.3 for the same CIOS as C; on
+// P-256 ECDH shared 134 → 100 µs, keygen 30 → 21 µs (agora #108).
+@ __emit_p256_kernels → v {
+    ( emit `define linkonce_odr i1 @nurl_p256_mulm(i64* %r, i64* %a, i64* %b) alwaysinline {` )
+    ( emit `entry:` )
+    ? == g_crypto_target 1
+    { ( emit `  %pm.x = call i1 @nurl_cpu_has_adx()` )
+        ( emit `  br i1 %pm.x, label %pm.adx, label %pm.q` )
+        ( emit `pm.adx:` )
+        ( nurl_print `  %pm.ra = call { i64, i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
+        ( nurl_print `movq 0($10), %rdx\\0A\\09mulxq 0($9), $0, $1\\0A\\09mulxq 8($9), $6, $2\\0A\\09addq $6, $1\\0A\\09` )
+        ( nurl_print `mulxq 16($9), $6, $3\\0A\\09adcq $6, $2\\0A\\09mulxq 24($9), $6, $4\\0A\\09adcq $6, $3\\0A\\09` )
+        ( nurl_print `adcq $$0, $4\\0A\\09xorl ${5:k}, ${5:k}\\0A\\09movq $0, %rdx\\0A\\09movabsq $$0xffffffff00000001, $6\\0A\\09` )
+        ( nurl_print `mulxq $6, $6, $7\\0A\\09movq $0, $8\\0A\\09shlq $$32, $8\\0A\\09shrq $$32, $0\\0A\\09` )
+        ( nurl_print `addq $8, $1\\0A\\09adcq $0, $2\\0A\\09adcq $6, $3\\0A\\09adcq $7, $4\\0A\\09` )
+        ( nurl_print `adcq $$0, $5\\0A\\09movq 8($10), %rdx\\0A\\09xorl ${8:k}, ${8:k}\\0A\\09xorl ${0:k}, ${0:k}\\0A\\09` )
+        ( nurl_print `mulxq 0($9), $6, $7\\0A\\09adcxq $6, $1\\0A\\09adoxq $7, $2\\0A\\09mulxq 8($9), $6, $7\\0A\\09` )
+        ( nurl_print `adcxq $6, $2\\0A\\09adoxq $7, $3\\0A\\09mulxq 16($9), $6, $7\\0A\\09adcxq $6, $3\\0A\\09` )
+        ( nurl_print `adoxq $7, $4\\0A\\09mulxq 24($9), $6, $7\\0A\\09adcxq $6, $4\\0A\\09adoxq $7, $5\\0A\\09` )
+        ( nurl_print `adcxq $8, $5\\0A\\09adoxq $8, $0\\0A\\09adcxq $8, $0\\0A\\09movq $1, %rdx\\0A\\09` )
+        ( nurl_print `movabsq $$0xffffffff00000001, $6\\0A\\09mulxq $6, $6, $7\\0A\\09movq $1, $8\\0A\\09shlq $$32, $8\\0A\\09` )
+        ( nurl_print `shrq $$32, $1\\0A\\09addq $8, $2\\0A\\09adcq $1, $3\\0A\\09adcq $6, $4\\0A\\09` )
+        ( nurl_print `adcq $7, $5\\0A\\09adcq $$0, $0\\0A\\09movq 16($10), %rdx\\0A\\09xorl ${8:k}, ${8:k}\\0A\\09` )
+        ( nurl_print `xorl ${1:k}, ${1:k}\\0A\\09mulxq 0($9), $6, $7\\0A\\09adcxq $6, $2\\0A\\09adoxq $7, $3\\0A\\09` )
+        ( nurl_print `mulxq 8($9), $6, $7\\0A\\09adcxq $6, $3\\0A\\09adoxq $7, $4\\0A\\09mulxq 16($9), $6, $7\\0A\\09` )
+        ( nurl_print `adcxq $6, $4\\0A\\09adoxq $7, $5\\0A\\09mulxq 24($9), $6, $7\\0A\\09adcxq $6, $5\\0A\\09` )
+        ( nurl_print `adoxq $7, $0\\0A\\09adcxq $8, $0\\0A\\09adoxq $8, $1\\0A\\09adcxq $8, $1\\0A\\09` )
+        ( nurl_print `movq $2, %rdx\\0A\\09movabsq $$0xffffffff00000001, $6\\0A\\09mulxq $6, $6, $7\\0A\\09movq $2, $8\\0A\\09` )
+        ( nurl_print `shlq $$32, $8\\0A\\09shrq $$32, $2\\0A\\09addq $8, $3\\0A\\09adcq $2, $4\\0A\\09` )
+        ( nurl_print `adcq $6, $5\\0A\\09adcq $7, $0\\0A\\09adcq $$0, $1\\0A\\09movq 24($10), %rdx\\0A\\09` )
+        ( nurl_print `xorl ${8:k}, ${8:k}\\0A\\09xorl ${2:k}, ${2:k}\\0A\\09mulxq 0($9), $6, $7\\0A\\09adcxq $6, $3\\0A\\09` )
+        ( nurl_print `adoxq $7, $4\\0A\\09mulxq 8($9), $6, $7\\0A\\09adcxq $6, $4\\0A\\09adoxq $7, $5\\0A\\09` )
+        ( nurl_print `mulxq 16($9), $6, $7\\0A\\09adcxq $6, $5\\0A\\09adoxq $7, $0\\0A\\09mulxq 24($9), $6, $7\\0A\\09` )
+        ( nurl_print `adcxq $6, $0\\0A\\09adoxq $7, $1\\0A\\09adcxq $8, $1\\0A\\09adoxq $8, $2\\0A\\09` )
+        ( nurl_print `adcxq $8, $2\\0A\\09movq $3, %rdx\\0A\\09movabsq $$0xffffffff00000001, $6\\0A\\09mulxq $6, $6, $7\\0A\\09` )
+        ( nurl_print `movq $3, $8\\0A\\09shlq $$32, $8\\0A\\09shrq $$32, $3\\0A\\09addq $8, $4\\0A\\09` )
+        ( nurl_print `adcq $3, $5\\0A\\09adcq $6, $0\\0A\\09adcq $7, $1\\0A\\09adcq $$0, $2\\0A\\09` )
+        ( nurl_print `movq $4, $3\\0A\\09movq $5, $6\\0A\\09movq $0, $7\\0A\\09movq $1, %rdx\\0A\\09` )
+        ( nurl_print `subq $$-1, $3\\0A\\09movl $$0xffffffff, ${8:k}\\0A\\09sbbq $8, $6\\0A\\09sbbq $$0, $7\\0A\\09` )
+        ( nurl_print `movabsq $$0xffffffff00000001, $8\\0A\\09sbbq $8, %rdx\\0A\\09sbbq $$0, $2\\0A\\09cmovcq $4, $3\\0A\\09` )
+        ( nurl_print `cmovcq $5, $6\\0A\\09cmovcq $0, $7\\0A\\09cmovcq $1, %rdx\\0A\\09movq $3, 0($11)\\0A\\09` )
+        ( nurl_print `movq $6, 8($11)\\0A\\09movq $7, 16($11)\\0A\\09movq %rdx, 24($11)\\0A\\09` )
+        ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,r,r,~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+        ( emit `(i64* %a, i64* %b, i64* %r)` )
+        ( emit `  ret i1 true` )
+        ( emit `pm.q:` )
+        ( __emit_p256_mulq `%a` `%b` )
+        ( emit `  ret i1 true` ) }
+    { ( emit `  ret i1 false` ) }
+    ( emit `}` )
+    ( emit `define linkonce_odr i1 @nurl_p256_sqrm(i64* %r, i64* %a) alwaysinline {` )
+    ( emit `entry:` )
+    ? == g_crypto_target 1
+    { ( emit `  %ps.x = call i1 @nurl_cpu_has_adx()` )
+        ( emit `  br i1 %ps.x, label %ps.adx, label %ps.q` )
+        ( emit `ps.adx:` )
+        ( nurl_print `  %ps.ra = call { i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
+        ( nurl_print `movq 0($10), %rdx\\0A\\09mulxq 8($10), $0, $1\\0A\\09mulxq 16($10), $7, $2\\0A\\09addq $7, $1\\0A\\09` )
+        ( nurl_print `mulxq 24($10), $7, $3\\0A\\09adcq $7, $2\\0A\\09adcq $$0, $3\\0A\\09movq 8($10), %rdx\\0A\\09` )
+        ( nurl_print `xorl ${4:k}, ${4:k}\\0A\\09mulxq 16($10), $7, $8\\0A\\09adcxq $7, $2\\0A\\09adoxq $8, $3\\0A\\09` )
+        ( nurl_print `mulxq 24($10), $7, $8\\0A\\09adcxq $7, $3\\0A\\09adoxq $8, $4\\0A\\09movq 16($10), %rdx\\0A\\09` )
+        ( nurl_print `mulxq 24($10), $7, $5\\0A\\09movl $$0, ${9:k}\\0A\\09adcxq $7, $4\\0A\\09adoxq $9, $5\\0A\\09` )
+        ( nurl_print `adcxq $9, $5\\0A\\09xorl ${6:k}, ${6:k}\\0A\\09addq $0, $0\\0A\\09adcq $1, $1\\0A\\09` )
+        ( nurl_print `adcq $2, $2\\0A\\09adcq $3, $3\\0A\\09adcq $4, $4\\0A\\09adcq $5, $5\\0A\\09` )
+        ( nurl_print `adcq $$0, $6\\0A\\09movq 0($10), %rdx\\0A\\09mulxq %rdx, $9, $8\\0A\\09addq $8, $0\\0A\\09` )
+        ( nurl_print `movq 8($10), %rdx\\0A\\09mulxq %rdx, $7, $8\\0A\\09adcq $7, $1\\0A\\09adcq $8, $2\\0A\\09` )
+        ( nurl_print `movq 16($10), %rdx\\0A\\09mulxq %rdx, $7, $8\\0A\\09adcq $7, $3\\0A\\09adcq $8, $4\\0A\\09` )
+        ( nurl_print `movq 24($10), %rdx\\0A\\09mulxq %rdx, $7, $8\\0A\\09adcq $7, $5\\0A\\09adcq $8, $6\\0A\\09` )
+        ( nurl_print `movq $9, %rdx\\0A\\09movabsq $$0xffffffff00000001, $7\\0A\\09mulxq $7, $7, $8\\0A\\09movq $9, %rdx\\0A\\09` )
+        ( nurl_print `shlq $$32, %rdx\\0A\\09shrq $$32, $9\\0A\\09addq %rdx, $0\\0A\\09adcq $9, $1\\0A\\09` )
+        ( nurl_print `adcq $7, $2\\0A\\09adcq $$0, $8\\0A\\09movq $8, $9\\0A\\09movq $0, %rdx\\0A\\09` )
+        ( nurl_print `movabsq $$0xffffffff00000001, $7\\0A\\09mulxq $7, $7, $8\\0A\\09movq $0, %rdx\\0A\\09shlq $$32, %rdx\\0A\\09` )
+        ( nurl_print `shrq $$32, $0\\0A\\09addq %rdx, $1\\0A\\09adcq $0, $2\\0A\\09adcq $7, $9\\0A\\09` )
+        ( nurl_print `adcq $$0, $8\\0A\\09movq $8, $0\\0A\\09movq $1, %rdx\\0A\\09movabsq $$0xffffffff00000001, $7\\0A\\09` )
+        ( nurl_print `mulxq $7, $7, $8\\0A\\09movq $1, %rdx\\0A\\09shlq $$32, %rdx\\0A\\09shrq $$32, $1\\0A\\09` )
+        ( nurl_print `addq %rdx, $2\\0A\\09adcq $1, $9\\0A\\09adcq $7, $0\\0A\\09adcq $$0, $8\\0A\\09` )
+        ( nurl_print `movq $8, $1\\0A\\09movq $2, %rdx\\0A\\09movabsq $$0xffffffff00000001, $7\\0A\\09mulxq $7, $7, $8\\0A\\09` )
+        ( nurl_print `movq $2, %rdx\\0A\\09shlq $$32, %rdx\\0A\\09shrq $$32, $2\\0A\\09addq %rdx, $9\\0A\\09` )
+        ( nurl_print `adcq $2, $0\\0A\\09adcq $7, $1\\0A\\09adcq $$0, $8\\0A\\09movq $8, $2\\0A\\09` )
+        ( nurl_print `addq $3, $9\\0A\\09adcq $4, $0\\0A\\09adcq $5, $1\\0A\\09adcq $6, $2\\0A\\09` )
+        ( nurl_print `movl $$0, ${8:k}\\0A\\09adcq $$0, $8\\0A\\09movq $9, $3\\0A\\09movq $0, $4\\0A\\09` )
+        ( nurl_print `movq $1, $5\\0A\\09movq $2, $6\\0A\\09subq $$-1, $3\\0A\\09movl $$0xffffffff, %edx\\0A\\09` )
+        ( nurl_print `sbbq %rdx, $4\\0A\\09sbbq $$0, $5\\0A\\09movabsq $$0xffffffff00000001, %rdx\\0A\\09sbbq %rdx, $6\\0A\\09` )
+        ( nurl_print `sbbq $$0, $8\\0A\\09cmovcq $9, $3\\0A\\09cmovcq $0, $4\\0A\\09cmovcq $1, $5\\0A\\09` )
+        ( nurl_print `cmovcq $2, $6\\0A\\09movq $3, 0($11)\\0A\\09movq $4, 8($11)\\0A\\09movq $5, 16($11)\\0A\\09` )
+        ( nurl_print `movq $6, 24($11)\\0A\\09` )
+        ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,r,~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+        ( emit `(i64* %a, i64* %r)` )
+        ( emit `  ret i1 true` )
+        ( emit `ps.q:` )
+        ( __emit_p256_mulq `%a` `%a` )
+        ( emit `  ret i1 true` ) }
+    { ( emit `  ret i1 false` ) }
+    ( emit `}` )
+}
+
+// The mulq multiply (no ADX): r ← a·b, `a` / `b` the IR names of the
+// operand pointers (the same name squares).
+@ __emit_p256_mulq s a s b → v {
+    ( nurl_print `  call { i64, i64, i64, i64, i64, i64, i64, i64 } asm sideeffect "` )
+    ( nurl_print `movq 0($9), $6\\0A\\09movq 0($8), %rax\\0A\\09mulq $6\\0A\\09movq %rax, $0\\0A\\09` )
+    ( nurl_print `movq %rdx, $1\\0A\\09movq 8($8), %rax\\0A\\09mulq $6\\0A\\09addq %rax, $1\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09movq %rdx, $2\\0A\\09movq 16($8), %rax\\0A\\09mulq $6\\0A\\09` )
+    ( nurl_print `addq %rax, $2\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $3\\0A\\09movq 24($8), %rax\\0A\\09` )
+    ( nurl_print `mulq $6\\0A\\09addq %rax, $3\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $4\\0A\\09` )
+    ( nurl_print `xorl ${5:k}, ${5:k}\\0A\\09movabsq $$0xffffffff00000001, %rax\\0A\\09mulq $0\\0A\\09movq $0, $7\\0A\\09` )
+    ( nurl_print `shlq $$32, $7\\0A\\09shrq $$32, $0\\0A\\09addq $7, $1\\0A\\09adcq $0, $2\\0A\\09` )
+    ( nurl_print `adcq %rax, $3\\0A\\09adcq %rdx, $4\\0A\\09adcq $$0, $5\\0A\\09xorl ${0:k}, ${0:k}\\0A\\09` )
+    ( nurl_print `movq 8($9), $6\\0A\\09movq 0($8), %rax\\0A\\09mulq $6\\0A\\09addq %rax, $1\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09movq 8($8), %rax\\0A\\09mulq $6\\0A\\09` )
+    ( nurl_print `addq $7, $2\\0A\\09adcq $$0, %rdx\\0A\\09addq %rax, $2\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `movq %rdx, $7\\0A\\09movq 16($8), %rax\\0A\\09mulq $6\\0A\\09addq $7, $3\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09addq %rax, $3\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09` )
+    ( nurl_print `movq 24($8), %rax\\0A\\09mulq $6\\0A\\09addq $7, $4\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `addq %rax, $4\\0A\\09adcq $$0, %rdx\\0A\\09addq %rdx, $5\\0A\\09adcq $$0, $0\\0A\\09` )
+    ( nurl_print `movabsq $$0xffffffff00000001, %rax\\0A\\09mulq $1\\0A\\09movq $1, $7\\0A\\09shlq $$32, $7\\0A\\09` )
+    ( nurl_print `shrq $$32, $1\\0A\\09addq $7, $2\\0A\\09adcq $1, $3\\0A\\09adcq %rax, $4\\0A\\09` )
+    ( nurl_print `adcq %rdx, $5\\0A\\09adcq $$0, $0\\0A\\09xorl ${1:k}, ${1:k}\\0A\\09movq 16($9), $6\\0A\\09` )
+    ( nurl_print `movq 0($8), %rax\\0A\\09mulq $6\\0A\\09addq %rax, $2\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `movq %rdx, $7\\0A\\09movq 8($8), %rax\\0A\\09mulq $6\\0A\\09addq $7, $3\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09addq %rax, $3\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09` )
+    ( nurl_print `movq 16($8), %rax\\0A\\09mulq $6\\0A\\09addq $7, $4\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `addq %rax, $4\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09movq 24($8), %rax\\0A\\09` )
+    ( nurl_print `mulq $6\\0A\\09addq $7, $5\\0A\\09adcq $$0, %rdx\\0A\\09addq %rax, $5\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09addq %rdx, $0\\0A\\09adcq $$0, $1\\0A\\09movabsq $$0xffffffff00000001, %rax\\0A\\09` )
+    ( nurl_print `mulq $2\\0A\\09movq $2, $7\\0A\\09shlq $$32, $7\\0A\\09shrq $$32, $2\\0A\\09` )
+    ( nurl_print `addq $7, $3\\0A\\09adcq $2, $4\\0A\\09adcq %rax, $5\\0A\\09adcq %rdx, $0\\0A\\09` )
+    ( nurl_print `adcq $$0, $1\\0A\\09xorl ${2:k}, ${2:k}\\0A\\09movq 24($9), $6\\0A\\09movq 0($8), %rax\\0A\\09` )
+    ( nurl_print `mulq $6\\0A\\09addq %rax, $3\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09` )
+    ( nurl_print `movq 8($8), %rax\\0A\\09mulq $6\\0A\\09addq $7, $4\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `addq %rax, $4\\0A\\09adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09movq 16($8), %rax\\0A\\09` )
+    ( nurl_print `mulq $6\\0A\\09addq $7, $5\\0A\\09adcq $$0, %rdx\\0A\\09addq %rax, $5\\0A\\09` )
+    ( nurl_print `adcq $$0, %rdx\\0A\\09movq %rdx, $7\\0A\\09movq 24($8), %rax\\0A\\09mulq $6\\0A\\09` )
+    ( nurl_print `addq $7, $0\\0A\\09adcq $$0, %rdx\\0A\\09addq %rax, $0\\0A\\09adcq $$0, %rdx\\0A\\09` )
+    ( nurl_print `addq %rdx, $1\\0A\\09adcq $$0, $2\\0A\\09movabsq $$0xffffffff00000001, %rax\\0A\\09mulq $3\\0A\\09` )
+    ( nurl_print `movq $3, $7\\0A\\09shlq $$32, $7\\0A\\09shrq $$32, $3\\0A\\09addq $7, $4\\0A\\09` )
+    ( nurl_print `adcq $3, $5\\0A\\09adcq %rax, $0\\0A\\09adcq %rdx, $1\\0A\\09adcq $$0, $2\\0A\\09` )
+    ( nurl_print `movq $4, $3\\0A\\09movq $5, $6\\0A\\09movq $0, $7\\0A\\09movq $1, %rdx\\0A\\09` )
+    ( nurl_print `subq $$-1, $3\\0A\\09movl $$0xffffffff, %eax\\0A\\09sbbq %rax, $6\\0A\\09sbbq $$0, $7\\0A\\09` )
+    ( nurl_print `movabsq $$0xffffffff00000001, %rax\\0A\\09sbbq %rax, %rdx\\0A\\09sbbq $$0, $2\\0A\\09cmovcq $4, $3\\0A\\09` )
+    ( nurl_print `cmovcq $5, $6\\0A\\09cmovcq $0, $7\\0A\\09cmovcq $1, %rdx\\0A\\09movq $3, 0($10)\\0A\\09` )
+    ( nurl_print `movq $6, 8($10)\\0A\\09movq $7, 16($10)\\0A\\09movq %rdx, 24($10)\\0A\\09` )
+    ( nurl_print `", "=&r,=&r,=&r,=&r,=&r,=&r,=&r,=&r,r,r,r,~{rax},~{rdx},~{cc},~{memory},~{dirflag},~{fpsr},~{flags}"` )
+    ( emit ( nurl_str_cat4 `(i64* ` a ( nurl_str_cat3 `, i64* ` b `, i64* %r)` ) `` ) )
+}
+
 @ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
@@ -57358,6 +57530,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `  ret i64 %mv.r` )
     ( emit `}` )
     ( __emit_mac_row )
+    ( __emit_p256_kernels )
     ( emit_simd_preamble )
     ( emit_crypto_preamble )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64) "nurl.raw"="1"` )
@@ -58108,6 +58281,8 @@ unsafe @ __canon_import_key s path → s {
     ( nurl_sym_def syms `nurl_mac_lo` `u64` )
     ( nurl_sym_def syms `nurl_mac_hi` `u64` )
     ( nurl_sym_def syms `nurl_mac_row` `u64` )
+    ( nurl_sym_def syms `nurl_p256_mulm` `i1` )
+    ( nurl_sym_def syms `nurl_p256_sqrm` `i1` )
     ( nurl_sym_def syms `nurl_cpu_has_adx` `i1` )
     ( register_simd_syms syms )
     ( nurl_sym_def syms `nurl_init` `void` )
