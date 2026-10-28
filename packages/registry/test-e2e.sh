@@ -66,7 +66,7 @@ echo "$OUT" | grep -q 'published' && echo "publish: OK" || { echo "publish: FAIL
 
 # Immutability: publishing the same version again must fail with a conflict.
 OUT=$(cd "$ROOT/packages/md2html" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$ROOT/build/nurlpkg" publish 2>&1)
-echo "$OUT" | grep -q 'PubConflict' && echo "immutability: OK" || { echo "immutability: FAILED ($OUT)"; fail=1; }
+echo "$OUT" | grep -q 'already published' && echo "immutability: OK" || { echo "immutability: FAILED ($OUT)"; fail=1; }
 
 # ── 4. Synthesize + publish the consumer package ───────────────────────
 MDCAT="$WORK/mdcat"
