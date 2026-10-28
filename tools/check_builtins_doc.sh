@@ -40,6 +40,9 @@ cd "$ROOT"
 #   nurl_closure_adopt / nurl_closure_own_copy — compiler-emitted: a closure
 #                            stored into a field or a slice takes over
 #                            what its env only viewed (MEMORY.md §7.5)
+#   nurl_closure_handover  — compiler-emitted: a closure temporary written
+#                            as a spawn's argument is handed to the spawn,
+#                            which adopts it in place (MEMORY.md §7.4)
 #   nurl_vec_drop          — compiler-emitted container destructor hook
 #   nurl_cc_visit          — called by compiler-generated cycle-collector
 #                            trace functions (__nurl_trace_<T>)
@@ -50,7 +53,7 @@ cd "$ROOT"
 #                            sendck slot; MEMORY.md §6.5)
 #   printf                 — variadic libc; documented C everywhere
 #   strtod                 — i8** out-param; use float.nu's checked parsers
-SKIP='^(llvm\.dbg\.declare|llvm\.trunc\.f32|llvm\.trunc\.f64|nurl_init|nurl_journal_push|nurl_journal_push_drop|nurl_journal_push_drop2|nurl_journal_forget|nurl_journal_forget_slot|nurl_journal_disown|nurl_jframe_drop|nurl_jframe_clo_drop|nurl_jdrop_cloenv|nurl_ret_owned_get|nurl_ret_owned_set|nurl_ret_hown_get|nurl_ret_hown_set|nurl_vec_slot_clear_if|nurl_closure_own|nurl_closure_adopt|nurl_closure_own_copy|nurl_closure_slice_drop|nurl_vec_drop|nurl_cc_visit|nurl_closure_cc_trace|nurl_closure_send_check|nurl_sendck_begin|nurl_sendck_visit|nurl_sendck_end|nurl_vec_clone|printf|strtod)$'
+SKIP='^(llvm\.dbg\.declare|llvm\.trunc\.f32|llvm\.trunc\.f64|nurl_init|nurl_journal_push|nurl_journal_push_drop|nurl_journal_push_drop2|nurl_journal_forget|nurl_journal_forget_slot|nurl_journal_disown|nurl_jframe_drop|nurl_jframe_clo_drop|nurl_jdrop_cloenv|nurl_ret_owned_get|nurl_ret_owned_set|nurl_ret_hown_get|nurl_ret_hown_set|nurl_vec_slot_clear_if|nurl_closure_own|nurl_closure_adopt|nurl_closure_own_copy|nurl_closure_handover|nurl_closure_slice_drop|nurl_vec_drop|nurl_cc_visit|nurl_closure_cc_trace|nurl_closure_send_check|nurl_sendck_begin|nurl_sendck_visit|nurl_sendck_end|nurl_vec_clone|printf|strtod)$'
 
 # `__emit_rt_decl_as` is the same registration for a builtin the module
 # defines inline (nurl_free): the `declare` it is given is its contract.
