@@ -144,7 +144,11 @@ Hello *there*.
     ?? ( dir_create_all ( string_data data ) ) { T _ → {} F _ → {} }
     : String dbp ( string_from ( string_data data ) )
     ( string_push_str dbp `/registry.db` )
-    ( reg_service_config ( string_data data ) ( string_data dbp ) `test-pepper` `` `` `` )
+    : s signing_seed `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`
+    : s signing_keyid `0a0b0c0d0e0f1011`
+    // Direct service users get a closed publish path too; the CLI refuses to
+    // start before serving when either value is absent or malformed.
+    ( reg_service_config ( string_data data ) ( string_data dbp ) `test-pepper` `` `` `` `` `` )
 
     // Mint a token straight through the auth+db layers.
     : String token ( reg_token_new )
@@ -162,6 +166,17 @@ Hello *there*.
     : Router r ( reg_service_router )
     : ( Vec u ) gz ( mk_tarball )
     ( check > ( vec_len [u] gz ) 0 `tarball built` )
+
+    // ── missing signing config fails before storing a publish ──
+    {
+        : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data token ) `demo` `0.1.0` `` ) ( vec_clone [u] gz ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 500 `unsigned publish refused` )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `signing_failed` ) `unsigned publish reason` )
+    }
+    ( check == ( string_len ( reg_signing_public_key `bad` signing_keyid ) ) 0 `bad signing seed refused` )
+    ( reg_service_config ( string_data data ) ( string_data dbp ) `test-pepper` `` `` `` signing_seed signing_keyid )
 
     // ── publish ──
     {
@@ -236,21 +251,20 @@ Hello *there*.
 
     // ── detached minisign sidecar ──
     {
-        // A published tarball has no signature until the signer writes one.
-        : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-0.1.0.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-9.9.9.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 404 `missing minisig 404` )
     }
     {
-        : s sig `untrusted comment: registry test signature
-RWR0ZXN0a2V5aWR0ZXN0LXNpZ25hdHVyZQ==
-`
-        ( check ( reg_minisig_write ( string_data data ) `demo` `0.1.0` sig ) `minisig stored` )
         : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-0.1.0.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 200 `minisig 200` )
         : String b ( resp_body_str resp )
-        ( check != 0 ( nurl_str_eq ( string_data b ) sig ) `minisig bytes identical` )
+        : String pubfile ( string_from `untrusted comment: registry wire-test key
+` )
+        ( string_push_str pubfile ( string_data ( reg_signing_public_key signing_seed signing_keyid ) ) )
+        ( string_push_char pubfile 10 )
+        ( check ( minisign_verify gz ( string_data pubfile ) ( string_data b ) ) `minisig verifies tarball` )
         ?? ( header_get . resp headers `Cache-Control` ) {
             T value → ( check ( string_contains value `immutable` ) `minisig immutable cache` )
             F → ( check F `minisig immutable cache` )

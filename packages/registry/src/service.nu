@@ -26,6 +26,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/minisign.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
@@ -47,21 +48,58 @@ $ `stdlib/core/slice.nu`
 : ~ s g_reg_base_url ``  // public base URL, for the OAuth redirect
 : ~ s g_reg_gh_id ``  // GitHub OAuth app (empty = OAuth disabled)
 : ~ s g_reg_gh_secret ``
+: ~ s g_reg_signing_seed ``  // 32-byte Ed25519 seed, 64 hex chars
+: ~ s g_reg_signing_keyid ``  // 8-byte minisign key id, 16 hex chars
 
 // The caller OWNS the config strings and must keep them alive for the
 // server's lifetime (main holds them; the anomaly service follows the
 // same contract).
-@ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret → v {
+@ reg_service_config s data s dbpath s pepper s base_url s gh_id s gh_secret s signing_seed s signing_keyid → v {
     = g_reg_data data
     = g_reg_dbpath dbpath
     = g_reg_pepper pepper
     = g_reg_base_url base_url
     = g_reg_gh_id gh_id
     = g_reg_gh_secret gh_secret
+    = g_reg_signing_seed signing_seed
+    = g_reg_signing_keyid signing_keyid
 }
 
 @ __reg_now → i {
     ^ ( time_to_unix ( time_now ) )
+}
+
+// Decode one fixed-size hex component of the registry signing identity.
+@ __reg_signing_bytes s hex i want → ( Vec u ) {
+    ?? ( bytes_from_hex hex ) {
+        F _ → ^ ( vec_new [u] )
+        T bytes → {
+            ? == ( vec_len [u] bytes ) want { ^ bytes } {}
+            ^ ( vec_new [u] )
+        }
+    }
+}
+
+// The public trust payload corresponding to a configured seed + key id.
+// Empty means the configuration is malformed.
+@ reg_signing_public_key s seed_hex s keyid_hex → String {
+    : ( Vec u ) seed ( __reg_signing_bytes seed_hex 32 )
+    : ( Vec u ) keyid ( __reg_signing_bytes keyid_hex 8 )
+    ^ ( minisign_pubkey_b64 seed keyid )
+}
+
+// Sign one exact tarball and format the detached file nurlpkg consumes.
+// Empty means the process was started without a valid signing identity.
+@ __reg_signing_text ( Vec u ) tarball → String {
+    : ( Vec u ) seed ( __reg_signing_bytes g_reg_signing_seed 32 )
+    : ( Vec u ) keyid ( __reg_signing_bytes g_reg_signing_keyid 8 )
+    : String payload ( minisign_sign_b64 seed keyid tarball )
+    ? == ( string_len payload ) 0 { ^ ( string_new ) } {}
+    : String out ( string_from `untrusted comment: signature from the NURL registry
+` )
+    ( string_push_str out ( string_data payload ) )
+    ( string_push_char out 10 )
+    ^ out
 }
 
 // ── Response helpers ──────────────────────────────────────────────────
@@ -327,13 +365,20 @@ $ `stdlib/core/slice.nu`
             // Server-side checksum — a client digest is never trusted.
             : ( Vec u ) digest ( sha256_pure . req body )
             : String checksum ( bytes_to_hex digest )
+            : String signature ( __reg_signing_text . req body )
+            ? == ( string_len signature ) 0 {
+                ^ ( __reg_err 500 `signing_failed` )
+            } {}
 
-            // Tarball first, then the DB rows in one transaction. A
-            // failure between the two leaves an orphan file that the
-            // (name, version) immutability makes harmless — the next
-            // attempt overwrites the identical path.
+            // Tarball and its signature first, then the DB rows in one
+            // transaction. A failure between them leaves orphan files that
+            // (name, version) immutability makes harmless — the next attempt
+            // overwrites the identical paths.
             ? ! ( reg_tarball_write g_reg_data ( string_data name ) ( string_data version ) . req body ) {
                 ^ ( __reg_err 500 `store_failed` )
+            } {}
+            ? ! ( reg_minisig_write g_reg_data ( string_data name ) ( string_data version ) ( string_data signature ) ) {
+                ^ ( __reg_err 500 `signature_store_failed` )
             } {}
 
             : i now ( __reg_now )

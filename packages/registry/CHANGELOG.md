@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0] — 2026-10-28
+
+### Added
+
+- Every accepted publish is signed by the registry before its database rows
+  become visible, and the detached signature is stored beside the tarball.
+  `registry serve` fails fast unless `REG_SIGNING_SEED_HEX` is a 32-byte
+  Ed25519 seed and `REG_SIGNING_KEY_ID_HEX` is an 8-byte minisign key id; it
+  prints the corresponding public trust payload at startup.
+
 ## [0.4.8] — 2026-10-28
 
 ### Added

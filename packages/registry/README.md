@@ -14,6 +14,8 @@ nurlpkg install registry            # or build in-tree: nurl.sh src/main.nu regi
                                     #  or just run ./test-e2e.sh which sets them up)
 
 registry token new tero --data ./data       # mint a publish token (printed once)
+export REG_SIGNING_SEED_HEX=<64 hex chars>
+export REG_SIGNING_KEY_ID_HEX=<16 hex chars>
 registry serve --data ./data --port 8914    # serve
 
 export NURL_REGISTRY=http://127.0.0.1:8914/
@@ -82,7 +84,9 @@ registry token new <login> [--data DIR]
 ```
 
 Environment: `REG_TOKEN_PEPPER`, `REG_BASE_URL`, `GITHUB_CLIENT_ID`,
-`GITHUB_CLIENT_SECRET`.
+`GITHUB_CLIENT_SECRET`, `REG_SIGNING_SEED_HEX`, `REG_SIGNING_KEY_ID_HEX`.
+The signing seed and key id are required by `registry serve`; startup prints
+their public minisign payload, which clients pin in `registries.toml`.
 
 ## Tests
 

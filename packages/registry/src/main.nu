@@ -20,6 +20,8 @@
 //   GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
 //                         enable the /login OAuth flow (optional; without
 //                         them /login explains local token minting)
+//   REG_SIGNING_SEED_HEX   32-byte Ed25519 seed as 64 hex chars (required)
+//   REG_SIGNING_KEY_ID_HEX 8-byte minisign key id as 16 hex chars (required)
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -43,7 +45,8 @@ $ `service.nu`
     ( nurl_print `  registry serve [--host H] [--port N] [--data DIR] [--workers N] [--log]\n` )
     ( nurl_print `                 [--tls-cert PEM --tls-key PEM]\n` )
     ( nurl_print `  registry token new <login> [--data DIR]\n\n` )
-    ( nurl_print `env: REG_TOKEN_PEPPER, REG_BASE_URL, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET\n` )
+    ( nurl_print `env: REG_TOKEN_PEPPER, REG_BASE_URL, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,\n` )
+    ( nurl_print `     REG_SIGNING_SEED_HEX, REG_SIGNING_KEY_ID_HEX\n` )
 }
 
 // Shared: <data>/registry.db
@@ -165,6 +168,14 @@ $ `service.nu`
         : String base ( __reg_env_or `REG_BASE_URL` `` )
         : String ghid ( __reg_env_or `GITHUB_CLIENT_ID` `` )
         : String ghsec ( __reg_env_or `GITHUB_CLIENT_SECRET` `` )
+        : String signing_seed ( __reg_env_or `REG_SIGNING_SEED_HEX` `` )
+        : String signing_keyid ( __reg_env_or `REG_SIGNING_KEY_ID_HEX` `` )
+        : String signing_public ( reg_signing_public_key ( string_data signing_seed ) ( string_data signing_keyid ) )
+
+        ? == ( string_len signing_public ) 0 {
+            ( nurl_eprintln `registry: REG_SIGNING_SEED_HEX must be 64 hex chars and REG_SIGNING_KEY_ID_HEX 16 hex chars` )
+            = rc 1
+        } {}
 
         // Fail fast when the DB can't be opened/migrated — not per request.
         ?? ( reg_db_open ( string_data dbp ) ) {
@@ -177,8 +188,11 @@ $ `service.nu`
         }
 
         ? == rc 0 {
+            ( nurl_eprint `registry: signing public key ` )
+            ( nurl_eprintln ( string_data signing_public ) )
             ( reg_service_config ( string_data data ) ( string_data dbp ) ( string_data pepper )
-            ( string_data base ) ( string_data ghid ) ( string_data ghsec ) )
+            ( string_data base ) ( string_data ghid ) ( string_data ghsec )
+            ( string_data signing_seed ) ( string_data signing_keyid ) )
             : HttpApp app ( http_app_new )
             ( http_app_use_router app ( reg_service_router ) )
             // The publish endpoint accepts tarballs up to 16 MiB — the
