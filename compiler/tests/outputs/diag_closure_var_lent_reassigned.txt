@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_var_lent_reassigned.nu:22:5: error: 'f' borrows from 'h', which ended at line 21 — it went out of scope at the end of its block. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'f' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup f ).
+    ^ ( f )
+    ^
+compiler/tests/diag_closure_var_lent_reassigned.nu:32:5: error: 'f' borrows from 'o', which ended at line 31 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'f' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup f ).
+    ^ ( f )
+    ^
+compiler/tests/diag_closure_var_lent_reassigned.nu:42:5: error: 'f' borrows from 'h', which ended at line 41 — it was released or moved away. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'f' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup f ).
+    ^ ( f )
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

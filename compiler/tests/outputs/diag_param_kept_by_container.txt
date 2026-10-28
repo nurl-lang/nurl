@@ -1,0 +1,15 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_param_kept_by_container.nu:13:5: error: use of moved value 's' — a heap handle has exactly one owner, and this one was consumed at line 12 by vec_free (it was stored in 'out'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ( nurl_println ( string_data s ) )
+    ^
+compiler/tests/diag_param_kept_by_container.nu:19:5: error: 's' is read here, but its value was moved into 'out' at line 18. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'out' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup s ).
+    ( vec_push [String] out s )
+    ^
+compiler/tests/diag_param_kept_by_container.nu:19:5: error: 's' is stored into a second owner here, but its value was already stored into an owner at line 18 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 's' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup s ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
+    ( vec_push [String] out s )
+    ^
+compiler/tests/diag_param_kept_by_container.nu:25:5: error: 's' is read here, but its value was moved into 'out' at line 24. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'out' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup s ).
+    ^ s
+    ^
+error: compilation aborted — 4 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
