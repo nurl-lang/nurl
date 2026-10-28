@@ -104,7 +104,8 @@ $ `stdlib/std/arc.nu`
 //   eof     — 1 once the underlying stream is exhausted
 //   owns    — 1 if the reader closes the handle (it opened it)
 //   scratch — start offset of the line last returned
-: BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
+// Sealed (`raw`): `h` is the FILE* its drop closes.
+raw : BufReaderImpl { i h ( Vec u ) buf i start i end i eof i owns i scratch }
 
 // The stream is the outside world's: closing a file the reader opened is
 // its own drop, run by its last owner (the buffer goes with it).

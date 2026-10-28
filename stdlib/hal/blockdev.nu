@@ -49,9 +49,10 @@ $ `stdlib/core/vec.nu`
 // every caller — and a caller that got it wrong reads a refusal rather
 // than the allocator's neighbouring bytes.
 @ __blk_ptr ( Vec u ) buf i off i nbytes → i {
-    ? < off 0 { ^ 0 } {}
-    ? < nbytes 0 { ^ 0 } {}
-    ? > + off nbytes ( vec_len [u] buf ) { ^ 0 } {}
+    : i len ( vec_len [u] buf )
+    ? | < off 0 > off len { ^ 0 } {}
+    // (off + nbytes is never formed: a large count wraps it past the test)
+    ? | < nbytes 0 > nbytes - len off { ^ 0 } {}
     ^ + # i ( vec_data [u] buf ) off
 }
 
@@ -60,7 +61,8 @@ $ `stdlib/core/vec.nu`
     ? <= nsec 0 { ^ F } {}
     : i cap ( blk_sector_count )
     ? == cap 0 { ^ F } {}
-    ? > + lba nsec cap { ^ F } {}
+    // lba in [0, cap], then nsec against what is left — lba + nsec wraps.
+    ? | > lba cap > nsec - cap lba { ^ F } {}
     ^ T
 }
 

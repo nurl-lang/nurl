@@ -23,6 +23,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HTTP/2, HPACK and QPACK parsers refuse a negative offset**
+  (h460–h464). `h2_parse_frame`, `h2_rx_consume`, `hpack_decode_int`,
+  `hpack_decode_string` and the QPACK instruction readers read before
+  their buffer when given a negative offset or count, and
+  `_hpack_huffman_decode` trusted its range. Each now checks once per
+  call.
+- **`_header_name_eq_ci_n` and `response_set_body_borrowed_bytes` are
+  `raw`** (h465, h466). The first trusted a length its caller passed;
+  the second made a response body a view of a Vec nothing kept alive.
+  `response_set_body_bytes` copies.
+- **CSV tables:**
+  - a cell view from `csv_table_view` borrows from its table and ends
+    with it (h468);
+  - `csv_table_filter` survives a predicate that sorts or filters the
+    same table (h467);
+  - a failed `csv_table_load*` returns an empty table that
+    `csv_table_ok` answers F for, instead of a null table every
+    accessor dereferenced (h469).
+- **`sqlite_close` with a statement still alive** no longer frees the
+  authorizer libsqlite may still call, or leaks the connection (h470,
+  h471). It uninstalls the authorizer and closes with
+  `sqlite3_close_v2`.
+- **More range checks no longer wrap:** `fatfs_write` (h472), the block
+  layer's `blk_read` / `blk_write`, and `quic_rxbuf_add`.
+- **Raw runtime handles stay behind `unsafe`** (h473–h475, h486–h488):
+  - `_tls_word`, `_tls_word_release`, `_tls_conn_new`,
+    `_tls_sock_write(2)` and `tls_attach_full_until` are `raw`;
+  - `nurl_ktls_rtype`, `nurl_tcp_sendfile`, `nurl_udp_join_group` /
+    `_leave_group` and `term.nu`'s `ioctl` are declared `unsafe &`.
+- **Library connection state is sealed by name too** (h476–h482).
+  `TlsConnImpl`, `CliHsImpl`, `SrvHsImpl`, `TcpConnImpl`,
+  `TcpListenerImpl`, `UdpSocketImpl`, `BufReaderImpl`, `ProcChildImpl`,
+  `__CProcResult`, `HttpConnImpl`, `QuicRxBufImpl` and
+  `QuicRecoveryImpl` are `raw :`, including the ones with no destructor.
+- **Refused QUIC and HTTP/3 handles no longer read address 0**
+  (h483–h485). An accessor of the null `QuicTp`, `QuicFrame`,
+  `QuicClient` or `H3Client` panics. The new `quic_tp_ok`,
+  `quic_frame_ok` and `quic_client_ok` let safe code test for it first.
+- **An MQTT packet that lies about its property lengths** no longer
+  keeps `_mqtt_parse_props`, and so the client's receive loop, spinning
+  for ever.
 - **The crypto library's offset checks, size checks and limb helpers no
   longer let safe code read or write past a buffer** (h436–h459). Found
   by an audit of the stdlib's raw-memory entry points:

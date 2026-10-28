@@ -125,7 +125,8 @@ $ `stdlib/std/time.nu`
 
 // The runtime's C result block (Win32, WASI, the shell form there),
 // released by the drop of its holder once it has been copied out.
-: __CProcResult { i res }
+// Sealed (`raw`): `res` is the runtime's result record its drop frees.
+raw : __CProcResult { i res }
 
 % Drop __CProcResult { @ drop __CProcResult c → v { ( nurl_proc_free . c res ) } }
 
@@ -648,7 +649,9 @@ $ `stdlib/std/time.nu`
 // A child: its pid, pipe ends and read buffers. The pure-NURL POSIX
 // backend keeps all of it here; on Win32 / WASI `craw` is the runtime's C
 // block (NurlProcChild, stdlib/runtime.c §16b) and the rest goes unused.
-: ProcChildImpl {
+// Sealed (`raw`): `craw` is the runtime's child record its drop frees,
+// and `pid` the process it signals.
+raw : ProcChildImpl {
     i craw
     i err_kind  // 0 / NURL_PROC_ERR_*
     i last_io_err  // errno snapshot

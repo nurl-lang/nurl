@@ -78,7 +78,8 @@ raw @ _tls_io_wait i raw i want → b {
 // EAGAIN parks on the reactor until writable (the worker pthread stays
 // free for other fibers); off a fiber the write blocks in the kernel,
 // which is what a synchronous client wants.
-@ _tls_sock_write i fd ( Vec u ) data → b {
+// requires: `fd` is a live runtime TCP handle (it is read as one).
+raw @ _tls_sock_write i fd ( Vec u ) data → b {
     : *u dp ( vec_data [u] data )
     : i n ( vec_len [u] data )
     : b on_fiber != ( nurl_fiber_current ) 0
@@ -103,7 +104,8 @@ raw @ _tls_io_wait i raw i want → b {
 
 // `head` then `body` to the socket in one sendmsg per attempt
 // (nurl_tcp_write2), parking a fiber while the socket is full.
-@ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
+// requires: `fd` is a live runtime TCP handle (it is read as one).
+raw @ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
     : *u hp ( vec_data [u] head )
     : *u bp ( vec_data [u] body )
     : i hn ( vec_len [u] head )
@@ -131,7 +133,7 @@ raw @ _tls_io_wait i raw i want → b {
 
 & `c` @ nurl_ktls_recv i conn *u buf i n i nowait → i
 
-& `c` @ nurl_ktls_rtype i conn → i
+unsafe & `c` @ nurl_ktls_rtype i conn → i
 
 unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
@@ -166,8 +168,11 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 }
 
 // Live connection state. Vec fields are reassigned as keys rotate
-// (handshake → application) and as buffers are consumed.
-: TlsConnImpl {
+// (handshake → application) and as buffers are consumed. Sealed (`raw`):
+// `fd` is a runtime socket handle its drop closes, and the record layer
+// trusts the keys, ivs and buffers to be the ones it set — a state built
+// or changed field by field outside `unsafe` code could name any memory.
+raw : TlsConnImpl {
     i fd
     i owns_fd  // 1 until tls_close closes the socket
     i read_nowait  // one try-read call must not park on partial records
@@ -256,14 +261,17 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // The connection as a word, for a holder that is not a handle itself
 // (std/net.nu's TcpConn keeps one): one more owner, which
 // `_tls_word_release` gives back.
-@ _tls_word TlsConn h → i { ^ ( shared_into_word [TlsConnImpl] ( shared_clone [TlsConnImpl] . h ctl ) ) }
+// requires: the word is given back, once, with _tls_word_release.
+raw @ _tls_word TlsConn h → i { ^ ( shared_into_word [TlsConnImpl] ( shared_clone [TlsConnImpl] . h ctl ) ) }
 
-@ _tls_word_release i w → v { : ( Shared TlsConnImpl ) _back ( shared_from_word [TlsConnImpl] w ) }
+// requires: `w` came from _tls_word and is given back only this once.
+raw @ _tls_word_release i w → v { : ( Shared TlsConnImpl ) _back ( shared_from_word [TlsConnImpl] w ) }
 
 // A connection over socket `raw`. The connection owns the socket from
 // here: tls_close closes it, or else the last owner does. A `raw` of 0 is
 // no socket (a connection state built for a test).
-@ _tls_conn_new i raw → TlsConn {
+// requires: `raw` is 0 or a live runtime TCP handle nothing else closes.
+raw @ _tls_conn_new i raw → TlsConn {
     : ( Shared TlsConnImpl ) c__box ( shared_zero [TlsConnImpl] )
     : *TlsConnImpl c ( shared_ptr [TlsConnImpl] c__box )
     = . c fd raw
@@ -801,6 +809,10 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // it on the way out), and any other content type is sent at once as a
 // record of its own (_tls_ktls_send).
 @ _tls_rec_range_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) data i lo i hi → v {
+    // [lo, hi) within `data`, once per record (an empty range is still a
+    // record: an empty one).
+    : i dn ( vec_len [u] data )
+    ? | | < lo 0 > lo dn | < hi lo > hi dn { ^ v } {}
     ? != 0 ( _tls_ktls_of c dir ) {
         ? == ct 23 { ( bytes_extend_raw out # s + # i ( vec_data [u] data ) lo - hi lo ) } { : b _k ( _tls_ktls_send c ct # *u + # i ( vec_data [u] data ) lo - hi lo ) }
         ^ v
@@ -1799,8 +1811,9 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 // the record layer has always done (`__verify_conn`). A resumed
 // handshake captures nothing — the PSK authenticates the server.
 
-// The machine's state, behind the CliHs handle below.
-: CliHsImpl {
+// The machine's state, behind the CliHs handle below. Sealed (`raw`):
+// the handshake trusts its keys and buffers to be the ones it set.
+raw : CliHsImpl {
     ( Vec u ) sni  // host bytes for server_name
     ( Vec u ) alpn  // ALPN offer, wire form (tls_alpn_pack)
     ( Vec u ) ext_out  // extra ClientHello extension(s), wire-framed
@@ -2560,7 +2573,9 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 // tls_attach_full with the whole handshake bounded by `deadline_ns`, an
 // absolute nurl_monotonic_ns (std/time.nu's monotonic_ns); 0 = none,
 // which is tls_attach_full. A deadline that passes fails the handshake.
-@ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
+// requires: `raw` is a live runtime TCP handle the TlsConn then owns (as
+// for every tls_attach*; a program reaches it through tcp_starttls).
+raw @ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
     : !TlsConn TlsErr r ( __tls_handshake_until raw server_name alpn sess deadline_ns )
     ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
     ^ r

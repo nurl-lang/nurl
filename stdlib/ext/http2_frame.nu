@@ -194,9 +194,11 @@ $ `stdlib/core/slice.nu`
 
 // Parse one frame from a byte buffer starting at `from`. Returns
 // H2FrameReadShort when fewer than 9+payload_len bytes are available
-// (caller fills the buffer further and retries). Pure — no I/O.
+// (caller fills the buffer further and retries). Pure — no I/O. A
+// negative `from` is no offset into the buffer: H2FrameOther.
 @ h2_parse_frame ( Vec u ) buf i from → !H2ParsedFrame H2FrameErr {
     : i n ( vec_len [u] buf )
+    ? < from 0 { ^ @ !H2ParsedFrame H2FrameErr { F H2FrameOther } } {}
     ? < - n from 9 {
         ^ @ !H2ParsedFrame H2FrameErr { F H2FrameReadShort }
     } {}
@@ -381,8 +383,10 @@ $ `stdlib/core/slice.nu`
     ^ @ !v H2FrameErr { T 0 }
 }
 
-// Drop the first `n` bytes of rx (the tail moves down in place).
+// Drop the first `n` bytes of rx (the tail moves down in place); n <= 0
+// drops nothing.
 @ h2_rx_consume ( Vec u ) rx i n → v {
+    ? <= n 0 { ^ } {}
     : i total ( vec_len [u] rx )
     ? >= n total { ( vec_clear [u] rx ) } {
         : i remaining - total n
@@ -609,14 +613,20 @@ $ `stdlib/core/slice.nu`
 }
 
 // The state words, in place (a Vec so that every copy of the writer shares
-// them and the writer's owner releases them).
-@ __h2w_state H2FrameWriter writer → s { ^ # s ( vec_data [i] . writer state ) }
+// them and the writer's owner releases them). Read and written through the
+// Vec's checked accessors: the writer is a plain struct, so its `state` is
+// whatever Vec it was built with — a missing word reads as 0.
+@ __h2w_get H2FrameWriter writer i k → i {
+    ?? ( vec_get [i] . writer state k ) { T x → ^ x F → ^ 0 }
+}
+
+@ __h2w_set H2FrameWriter writer i k i x → v { : b _s ( vec_set [i] . writer state k x ) }
 
 // Let go of `writer` now rather than at the end of its owner's scope.
 @ h2_frame_writer_free sink H2FrameWriter writer → v {}
 
 @ h2_frame_writer_pending H2FrameWriter writer → i {
-    ^ - ( vec_len [u] . writer pending ) ( nurl_peek ( __h2w_state writer ) 0 )
+    ^ - ( vec_len [u] . writer pending ) ( __h2w_get writer 0 )
 }
 
 // Conservative TLS overhead reservation (covers TLS1.2 AES explicit nonces as
@@ -630,52 +640,52 @@ $ `stdlib/core/slice.nu`
 
 // The application asked for room and was refused: remember to tell it when
 // a flush makes some.
-@ h2_frame_writer_starve H2FrameWriter writer → v { ( nurl_poke ( __h2w_state writer ) 2 1 ) }
+@ h2_frame_writer_starve H2FrameWriter writer → v { ( __h2w_set writer 2 1 ) }
 
 @ h2_frame_writer_take_starved H2FrameWriter writer → b {
-    : i starved ( nurl_peek ( __h2w_state writer ) 2 )
-    ? != starved 0 { ( nurl_poke ( __h2w_state writer ) 2 0 ) } {}
+    : i starved ( __h2w_get writer 2 )
+    ? != starved 0 { ( __h2w_set writer 2 0 ) } {}
     ^ != starved 0
 }
 
 @ h2_frame_writer_queue H2FrameWriter writer H2Frame frame i max_frame_size → !v H2FrameErr {
-    ? != 0 ( nurl_peek ( __h2w_state writer ) 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
+    ? != 0 ( __h2w_get writer 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
     : i n ( vec_len [u] . frame payload )
     ? > n max_frame_size { ^ @ !v H2FrameErr { F H2FrameOversized } } {}
     ? ! ( h2_frame_writer_room writer + 9 n ) {
         ( h2_frame_writer_starve writer )
         ^ @ !v H2FrameErr { F H2FrameWouldBlock }
     } {}
-    : i offset ( nurl_peek ( __h2w_state writer ) 0 )
-    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke ( __h2w_state writer ) 0 0 ) } {}
+    : i offset ( __h2w_get writer 0 )
+    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( __h2w_set writer 0 0 ) } {}
     ( vec_clear [u] . writer head )
     ( h2_push_frame_header . writer head n . frame frame_type . frame flags . frame stream_id )
     : !v NetErr encoded ( tcp_prepare_write2_to . writer tcp . writer pending . writer head . frame payload )
     ?? encoded {
         T _ → ^ @ !v H2FrameErr { T 0 }
         F _ → {
-            ( nurl_poke ( __h2w_state writer ) 1 1 )
+            ( __h2w_set writer 1 1 )
             ^ @ !v H2FrameErr { F H2FrameWriteIo }
         }
     }
 }
 
 @ h2_frame_writer_flush H2FrameWriter writer → !i H2FrameErr {
-    ? != 0 ( nurl_peek ( __h2w_state writer ) 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
+    ? != 0 ( __h2w_get writer 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
     ( h2_frame_writer_controls writer )
     ? == ( h2_frame_writer_pending writer ) 0 { ^ @ !i H2FrameErr { T 0 } } {}
-    : i offset ( nurl_peek ( __h2w_state writer ) 0 )
+    : i offset ( __h2w_get writer 0 )
     : !i NetErr sent ( tcp_try_write_wire . writer tcp . writer pending offset )
     ?? sent {
         T count → {
             : i next + offset count
             ? == next ( vec_len [u] . writer pending ) {
-                ( vec_clear [u] . writer pending ) ( nurl_poke ( __h2w_state writer ) 0 0 )
-            } { ( nurl_poke ( __h2w_state writer ) 0 next ) }
+                ( vec_clear [u] . writer pending ) ( __h2w_set writer 0 0 )
+            } { ( __h2w_set writer 0 next ) }
             ^ @ !i H2FrameErr { T count }
         }
         F _ → {
-            ( nurl_poke ( __h2w_state writer ) 1 1 )
+            ( __h2w_set writer 1 1 )
             ^ @ !i H2FrameErr { F H2FrameWriteIo }
         }
     }

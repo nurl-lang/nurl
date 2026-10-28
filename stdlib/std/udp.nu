@@ -126,9 +126,9 @@ unsafe & `c` @ nurl_udp_shutdown i handle → v
 
 unsafe & `c` @ nurl_udp_set_broadcast i handle i on → i
 
-& `c` @ nurl_udp_join_group i handle s group s iface → i
+unsafe & `c` @ nurl_udp_join_group i handle s group s iface → i
 
-& `c` @ nurl_udp_leave_group i handle s group s iface → i
+unsafe & `c` @ nurl_udp_leave_group i handle s group s iface → i
 
 unsafe & `c` @ nurl_udp_set_multicast_ttl i handle i ttl → i
 
@@ -148,7 +148,8 @@ unsafe & `c` @ nurl_udp_setsockopt_int i handle i level i opt i val → i
 
 // The socket's state: the runtime handle. An early udp_close stops it
 // (closes the fd); the last owner releases the handle.
-: UdpSocketImpl { i raw }
+// Sealed (`raw`): `raw` is the runtime socket record its drop frees.
+raw : UdpSocketImpl { i raw }
 
 % Drop UdpSocketImpl {
     @ drop UdpSocketImpl u → v { ( nurl_udp_close . u raw ) }

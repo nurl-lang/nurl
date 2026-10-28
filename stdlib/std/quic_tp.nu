@@ -6,9 +6,10 @@
 //   ( quic_tp_new )                        → QuicTp    RFC defaults (§18.2)
 //   ( quic_tp_free tp )                    → v         early release (optional: the last
 //                                                      owner of a QuicTp releases it)
-//   ( quic_tp_decode bytes from_client )   → QuicTp    null (`== 0 # i . tp ctl`) when the encoding
+//   ( quic_tp_decode bytes from_client )   → QuicTp    null (`quic_tp_ok` F) when the encoding
 //                                                      or a value is invalid (the caller closes
-//                                                      with TRANSPORT_PARAMETER_ERROR)
+//                                                      with TRANSPORT_PARAMETER_ERROR); an
+//                                                      accessor of the null QuicTp panics
 //   ( quic_tp_encode tp is_server )        → ( Vec u )
 //
 // Fields, each a getter and a setter (`quic_tp_set_<name> tp v`):
@@ -81,7 +82,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ QuicTp_drop sink QuicTp h → v {}
 
-@ __QuicTp_ptr QuicTp h → *QuicTpImpl { ^ ( shared_ptr [QuicTpImpl] . h ctl ) }
+// The state in place. The null QuicTp quic_tp_decode refuses with holds
+// none: every accessor stops here with a panic rather than read through
+// it (safe code tests for it with quic_tp_ok).
+@ __QuicTp_ptr QuicTp h → *QuicTpImpl {
+    ? == 0 ( shared_addr [QuicTpImpl] . h ctl ) { ( nurl_panic `quic_tp: transport parameters quic_tp_decode refused (test with quic_tp_ok)` ) } {}
+    ^ ( shared_ptr [QuicTpImpl] . h ctl )
+}
+
+// F for the null QuicTp quic_tp_decode returns on an invalid encoding.
+@ quic_tp_ok QuicTp t → b { ^ != 0 ( shared_addr [QuicTpImpl] . t ctl ) }
 
 @ quic_tp_new → QuicTp {
     : ( Shared QuicTpImpl ) t__box ( shared_zero [QuicTpImpl] )

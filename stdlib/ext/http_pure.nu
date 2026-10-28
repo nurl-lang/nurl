@@ -55,7 +55,8 @@ $ `stdlib/core/mem.nu`
 
 // ── Transport ───────────────────────────────────────────────────────
 
-: HttpConnImpl {
+// Sealed (`raw`): `fd` is a runtime socket handle its drop closes.
+raw : HttpConnImpl {
     i is_tls
     i fd  // plaintext socket; 0 once closed
     TlsConn tc  // TLS connection; a null handle on plaintext / once closed

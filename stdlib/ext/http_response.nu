@@ -14,7 +14,7 @@
 //   ( response_set_body_str   HttpResponse r s text )      → v
 //   ( response_set_body_bytes HttpResponse r ( Vec u ) )   → v
 //   ( response_set_body_borrowed HttpResponse r *u p i n )  → v   no copy; p outlives the write
-//   ( response_set_body_borrowed_bytes HttpResponse r ( Vec u ) ) → v   no copy; Vec outlives the write
+//   ( response_set_body_borrowed_bytes HttpResponse r ( Vec u ) ) → v   no copy; Vec outlives the write (raw)
 //   ( response_set_body_json  HttpResponse r Json j )      → v
 //
 //   ( response_text     i status s text )          → HttpResponse
@@ -234,10 +234,12 @@ $ `stdlib/std/simd.nu`
     ( vec_borrow_into [u] . r body p n )
 }
 
-// Same, borrowing the live range of an existing `( Vec u )`. The caller
-// keeps `bytes` alive and does not mutate or free it until the response
-// has been written.
-@ response_set_body_borrowed_bytes HttpResponse r ( Vec u ) bytes → v {
+// Same, borrowing the live range of an existing `( Vec u )`. Nothing ties
+// the response to `bytes`, so the contract is the caller's to keep, and
+// only an `unsafe` (or `raw`) caller may make it.
+// requires: `bytes` stays alive and unchanged until the response has been
+// written (a buffer that outlives every request, such as one main owns).
+raw @ response_set_body_borrowed_bytes HttpResponse r ( Vec u ) bytes → v {
     ( response_set_body_borrowed r ( vec_data [u] bytes ) ( vec_len [u] bytes ) )
 }
 
@@ -490,7 +492,8 @@ $ `stdlib/std/simd.nu`
 // The same with `raw`'s length already known, for the loops that test
 // one name against every header: the name is measured once and most
 // headers are rejected on length alone.
-@ _header_name_eq_ci_n String name s raw i lb → b {
+// requires: lb <= nurl_str_len raw (`raw` has at least `lb` bytes).
+raw @ _header_name_eq_ci_n String name s raw i lb → b {
     : i la ( string_len name )
     ? != la lb { ^ F } {}
     ? == la 0 { ^ T } {}

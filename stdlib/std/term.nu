@@ -310,7 +310,7 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 // argp pointer must go through the variadic ABI. See the note on fcntl
 // in core/posix.nu for why a fixed-arity spelling is silently wrong on
 // Apple arm64 and silently fine everywhere else.
-& `c` @ ioctl i32 fd i req ... → i32
+unsafe & `c` @ ioctl i32 fd i req ... → i32
 
 @ __term_ioctl_word i fd i req inout i w → i32 {
     ^ ( ioctl # i32 fd req # *u ( mem_addr w ) )

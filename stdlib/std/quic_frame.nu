@@ -2,7 +2,8 @@
 // frame at a time out of a decrypted packet payload, build frames into
 // a payload. Pure codec; the connection decides what a frame means.
 //
-//   ( quic_frame_parse buf off )       → QuicFrame    null (`== 0 # i . f ctl`) on a malformed frame
+//   ( quic_frame_parse buf off )       → QuicFrame    null (`quic_frame_ok` F) on a malformed frame;
+//                                                    an accessor of the null frame panics
 //                                                     (FRAME_ENCODING_ERROR for the caller);
 //                                                     `( quic_frame_next f )` is the offset after it
 //   ( quic_frame_free f )              → v            early release (optional: the last owner
@@ -73,7 +74,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ QuicFrame_drop sink QuicFrame h → v {}
 
-@ __QuicFrame_ptr QuicFrame h → *QuicFrameImpl { ^ ( shared_ptr [QuicFrameImpl] . h ctl ) }
+// The state in place. The null frame quic_frame_parse refuses with holds
+// none: every accessor stops here with a panic rather than read through
+// it (safe code tests for it with quic_frame_ok).
+@ __QuicFrame_ptr QuicFrame h → *QuicFrameImpl {
+    ? == 0 ( shared_addr [QuicFrameImpl] . h ctl ) { ( nurl_panic `quic_frame: a frame quic_frame_parse refused (test with quic_frame_ok)` ) } {}
+    ^ ( shared_ptr [QuicFrameImpl] . h ctl )
+}
+
+// F for the null frame quic_frame_parse returns on a malformed one.
+@ quic_frame_ok QuicFrame f → b { ^ != 0 ( shared_addr [QuicFrameImpl] . f ctl ) }
 
 @ quic_ft_padding → i { ^ 0 }
 

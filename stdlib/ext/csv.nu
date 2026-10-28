@@ -46,8 +46,8 @@
 // same reader / writer / table, and the last owner releases it (a writer's
 // last owner closes its file). `csv_reader_free` / `csv_dict_reader_free`
 // / `csv_table_free` are early releases (optional); `csv_writer_close` /
-// `csv_dict_writer_close` close the file now. A failed `csv_table_load*` returns the null table:
-// test it with `csv_table_ok`.
+// `csv_dict_writer_close` close the file now. A failed `csv_table_load*` returns an empty
+// table that `csv_table_ok` answers F for (every accessor reads it as a table of no rows).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -454,6 +454,7 @@ $ `stdlib/core/rcbox.nu`
     // pre-parsed value instead of re-parsing the cell text.
     ( Vec f ) typed_floats
     i typed_float_col
+    b failed  // a failed csv_table_load*: empty, csv_table_ok F
 }
 
 // A CSVTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -469,12 +470,24 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_new → CSVTable {
     ^ @ CSVTable { ( shared_new [CSVTableImpl] @ CSVTableImpl {
             ( string_new ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-            ( vec_new [u] ) ( vec_new [f] ) - 0 1
+            ( vec_new [u] ) ( vec_new [f] ) - 0 1 F
         } ) }
 }
 
-// F for the null table a failed `csv_table_load*` returns.
-@ csv_table_ok CSVTable t → b { ^ != 0 # i . t ctl }
+// What a failed `csv_table_load*` returns: a table of no rows (so every
+// accessor reads it as one) that csv_table_ok answers F for.
+@ __csv_table_failed → CSVTable {
+    ^ @ CSVTable { ( shared_new [CSVTableImpl] @ CSVTableImpl {
+            ( string_new ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( vec_new [u] ) ( vec_new [f] ) - 0 1 T
+        } ) }
+}
+
+// F for the table a failed `csv_table_load*` returns.
+@ csv_table_ok CSVTable t → b {
+    ? == 0 # i . t ctl { ^ F } {}
+    ^ ! . ( __CSVTable_ptr t ) failed
+}
 
 // The table's own header Strings, lent (valid while the table lives).
 @ csv_table_headers CSVTable t__h → ( Vec String ) {
@@ -522,11 +535,36 @@ $ `stdlib/core/rcbox.nu`
 // embedded `""` escapes — the materialized bytes live in
 // `t.escape_buf` at index `-off - 1`. Unquoted cells and quoted cells
 // without escapes both stay zero-copy into `t.content`.
+//
+// The view is of the table: it is read through `t` bound to the table's
+// state (not through a bare pointer), so the borrow checker holds it to
+// `t__h` — it ends when the table is released, as a Vec's view does.
 @ csv_table_view CSVTable t__h i row i col → ( Slice u ) {
-    : *CSVTableImpl t ( __CSVTable_ptr t__h )
-    : s p ( __csv_view t row col )
-    ? == # i p 0 { ^ ( slice_empty [u] ) } {}
-    ^ @ ( Slice u ) { # *u p ( __csv_view_len t row col ) }
+    : *CSVTableImpl tp ( __CSVTable_ptr t__h )
+    : i off ( __csv_cell_off tp row col )
+    ? == off ( __csv_no_cell ) { ^ ( slice_empty [u] ) } {}
+    : i len ( __csv_view_len tp row col )
+    // (read straight out of the handle: a pointer bound first would not
+    // carry the borrow)
+    : CSVTableImpl t . ( __CSVTable_ptr t__h ) 0
+    ? >= off 0 { ^ ( slice_from_raw [u] # *u + # i ( string_data . t content ) off len ) } {}
+    ^ ( slice_from_raw [u] # *u + # i ( vec_data [u] . t escape_buf ) - 0 + off 1 len )
+}
+
+// What __csv_cell_off answers for a (row, col) out of range.
+@ __csv_no_cell → i { ^ -9223372036854775807 }
+
+// The flat_cells offset of (row, col) (see the layout above), or
+// __csv_no_cell when out of range.
+@ __csv_cell_off * CSVTableImpl t i row i col → i {
+    : i nr ( __csv_n_rows t )
+    ? | < row 0 >= row nr { ^ ( __csv_no_cell ) } {}
+    : *i rsp ( vec_data [i] . t row_starts )
+    : *i rlp ( vec_data [i] . t row_lens )
+    : i row_count . rlp row
+    ? | < col 0 >= col row_count { ^ ( __csv_no_cell ) } {}
+    : *i fcp ( vec_data [i] . t flat_cells )
+    ^ . fcp * + . rsp row col 2
 }
 
 @ __csv_view * CSVTableImpl t i row i col → s {
@@ -961,7 +999,7 @@ $ `stdlib/core/rcbox.nu`
 @ __csv_table_build sink String content i typed_float_col CSVDialect dia → CSVTable {
     : CSVTable h @ CSVTable { ( shared_new [CSVTableImpl] @ CSVTableImpl {
             content ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-            ( vec_new [u] ) ( vec_new [f] ) typed_float_col
+            ( vec_new [u] ) ( vec_new [f] ) typed_float_col F
         } ) }
     : *CSVTableImpl t ( __CSVTable_ptr h )
     ? >= typed_float_col 0 {
@@ -986,7 +1024,7 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_load_typed_f s path i typed_float_col → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
+        F e → { ^ ( __csv_table_failed ) }
         T content → { ^ ( csv_table_from_string_typed_f content typed_float_col ) }
     }
 }
@@ -995,13 +1033,13 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __csv_table_build content -1 dia )
 }
 
-// Load a CSV file using the default dialect. Returns the null table
-// (csv_table_ok F) on read failure (use file_exists / read_file
+// Load a CSV file using the default dialect. Returns an empty table
+// that csv_table_ok answers F for on read failure (use file_exists / read_file
 // separately for diagnostics).
 @ csv_table_load s path → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
+        F e → { ^ ( __csv_table_failed ) }
         T content → { ^ ( csv_table_from_string content ) }
     }
 }
@@ -1009,7 +1047,7 @@ $ `stdlib/core/rcbox.nu`
 @ csv_table_load_dialect s path CSVDialect dia → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ @ CSVTable { ( shared_null [CSVTableImpl] ) } }
+        F e → { ^ ( __csv_table_failed ) }
         T content → { ^ ( csv_table_from_string_dialect content dia ) }
     }
 }
@@ -1321,13 +1359,18 @@ $ `stdlib/core/rcbox.nu`
     : i n ( __csv_n_rows t )
     : ( Vec i ) new_starts ( vec_new [i] )
     : ( Vec i ) new_lens ( vec_new [i] )
-    : *i rsp ( vec_data [i] . t row_starts )
-    : *i rlp ( vec_data [i] . t row_lens )
     : ~ i ri 0
     ~ < ri n {
         ? ( pred t__h ri ) {
-            ( vec_push [i] new_starts . rsp ri )
-            ( vec_push [i] new_lens . rlp ri )
+            // `pred` holds the table and may have changed it (sorted,
+            // filtered or truncated it, which replaces the row index): the
+            // index is read afresh, and a row it dropped is not kept.
+            ? < ri ( __csv_n_rows t ) {
+                : *i rsp ( vec_data [i] . t row_starts )
+                : *i rlp ( vec_data [i] . t row_lens )
+                ( vec_push [i] new_starts . rsp ri )
+                ( vec_push [i] new_lens . rlp ri )
+            } {}
         } {}
         = ri + ri 1
     }
