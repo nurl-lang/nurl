@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A parameter pushed into a container can no longer be read or kept
+  twice** (Agora #152, h506–h511). The store row that makes a pushed
+  local the container's skipped parameters, so a function could push its
+  parameter, free the Vec and read the parameter, push it twice, or push
+  it and return it. Each of these is now rejected, as for a local.
+  yoloe 0.8.3 keys its BPE encoder table with the arena's copy.
 - **A `;` defer may read the value a return hands back, but no longer
   release it** (Agora #165, h426–h434). The defers run after the value
   is the caller's. A defer that frees it, gives it or a field of it a new

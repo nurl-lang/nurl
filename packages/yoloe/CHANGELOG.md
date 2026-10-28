@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.3] — 2026-10-29
+
+### Fixed
+
+- The BPE tokenizer's encoder table keys the arena's copy of each key. It
+  read the key through the parameter after handing it to the arena, which
+  the compiler now rejects (agora #152). The table and the tokens are the
+  same.
+
 ## [0.8.2] — 2026-10-21
 
 ### Fixed
