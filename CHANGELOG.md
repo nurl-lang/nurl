@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An option of a String pushed into a Vec can no longer be read after
+  the Vec is released** (Agora #149, h421–h423). A String or a struct in
+  the same place was already rejected ("stored in 'out'"); an option or
+  a result, directly or through a helper, was not.
 - **A `~` loop's container can no longer be released in the loop's
   body** (Agora #147, h416–h420). These were accepted and read freed
   memory:

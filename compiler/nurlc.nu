@@ -15708,8 +15708,10 @@ unsafe @ gen_call i lex i syms i cg → s {
             call_name arg_idx fname F )
             ( __clo_effect_note bck_arg_val call_name arg_idx )
             ( __drop_note bck_arg_val call_name arg_idx )
-            // A handle it may keep instead (bck_stash_store).
-            ? & ( __is_handle_ty at ) ! ( nurl_sym_has_word syms `__fn_param_names__` bck_arg_val )
+            // A handle it may keep instead (bck_stash_store) — or an option
+            // or a result that owns one (`{ i1, … }`): kept, it lives as long
+            // as the container does.
+            ? & | ( __is_handle_ty at ) & != 0 ( nurl_str_starts at `{ i1, ` ) ( __type_needs_drop at syms ) ! ( nurl_sym_has_word syms `__fn_param_names__` bck_arg_val )
             {  // …into the first argument, when that is a binding of this
                 // frame: the value lives as long as the container does
                 // (bck_kill_stored_in) — `( vec_push all a )` then
