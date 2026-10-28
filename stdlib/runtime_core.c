@@ -866,18 +866,46 @@ void nurl_print_buf_unwind(void) {
  * `nurl_flush_stdout` is exported for anything else that needs it. */
 static int g_stdout_tty = -1;
 
-/* Serialised on the wasi-threads target: see runtime_wasm_alloc.c —
+/* One print is one critical section: nurl_println writes its text and
+ * its newline under one hold, and the capture buffer (g_outbuf) is only
+ * touched under it. libc's own stream locks cover one call each, so two
+ * threads printing a line apiece could write text, text, newline,
+ * newline. Held on stdout's FILE lock — which every stdio call on stdout
+ * takes anyway, and which is recursive, so the fputs inside re-enters
+ * it — or, on the wasi-threads target, on runtime_wasm_alloc.c's lock:
  * that libc's stdio does no locking of its own, and a torn FILE buffer
- * is heap corruption, not just ugly output. Every other target relies on
- * libc's own stream locks, so these are empty there. */
+ * is heap corruption, not just ugly output. Single-threaded wasi has
+ * nothing to serialise; nolibc has no threads, and says so. */
 #if defined(__wasi__) && defined(__wasm_atomics__)
 void nurl__io_acquire(void);
 void nurl__io_release(void);
 #  define NURL_IO_LOCK()   nurl__io_acquire()
 #  define NURL_IO_UNLOCK() nurl__io_release()
-#else
+#elif defined(__wasi__)
 #  define NURL_IO_LOCK()   ((void)0)
 #  define NURL_IO_UNLOCK() ((void)0)
+#elif defined(_WIN32)
+#  define NURL_IO_LOCK()   _lock_file(stdout)
+#  define NURL_IO_UNLOCK() _unlock_file(stdout)
+#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 32)) && \
+      defined(__has_include) && __has_include(<sys/single_threaded.h>)
+/* glibc says when the process has only ever had one thread, and its own
+ * stdio skips the lock then; so does this — a print loop would otherwise
+ * pay two atomics a line (+20 % on a println loop). The answer taken at
+ * the lock is the one the unlock uses: a thread started in between
+ * cannot be, since this thread is the one printing. */
+#  include <sys/single_threaded.h>
+static inline int nurl__io_lock(void) {
+    if (__libc_single_threaded) return 0;
+    flockfile(stdout);
+    return 1;
+}
+static inline void nurl__io_unlock(int held) { if (held) funlockfile(stdout); }
+#  define NURL_IO_LOCK()   int nurl__io_held = nurl__io_lock()
+#  define NURL_IO_UNLOCK() nurl__io_unlock(nurl__io_held)
+#else
+#  define NURL_IO_LOCK()   flockfile(stdout)
+#  define NURL_IO_UNLOCK() funlockfile(stdout)
 #endif
 
 /* Print without a trailing newline. */

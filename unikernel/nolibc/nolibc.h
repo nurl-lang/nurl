@@ -78,6 +78,8 @@ nl_size_t malloc_usable_size(void *p);
 
 /* ── stdio ──────────────────────────────────────────────────────── */
 int   fflush(FILE *f);
+void  flockfile(FILE *f);
+void  funlockfile(FILE *f);
 int   fputc(int c, FILE *f);
 int   fputs(const char *s, FILE *f);
 int   puts(const char *s);
