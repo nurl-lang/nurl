@@ -258,8 +258,9 @@ $ `stdlib/core/vec.nu`
 
 **Inferred `sink`.** A parameter does not have to be spelled `sink` to be
 one. If the body consumes it (releases it, stores it in an owner, passes
-it to another `sink` position) or returns it, the parameter is a `sink`
-for every caller:
+it — or one of its fields — to another `sink` position) or returns it,
+the parameter is a `sink` for every caller (a function that takes a
+field of its parameter owns the rest of it, and drops it on the way out):
 
 ```nurl expect-error="use of moved value 'xs'"
 $ `stdlib/core/vec.nu`
@@ -272,8 +273,7 @@ $ `stdlib/core/vec.nu`
 Inference is decided after the whole module is compiled, so the order in
 which functions are defined never changes the result. A function's name
 and return type are never evidence of consumption. A destructor that
-releases fields or raw memory declares its consuming parameter
-explicitly.
+releases raw memory declares its consuming parameter explicitly.
 
 **Closure parameters** are always borrowed (§7.5).
 
@@ -899,7 +899,25 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last ones are closed. *A closure a
+**No hole is known open.** The last ones are closed. *A field handed to a
+callee that takes it* was taken from bindings that could not give it
+(agora #145, h389–h404). A function that hands a field of its by-value
+parameter to a consumer owns the parameter and drops the rest of it, but
+its caller's binding was not moved, and the caller read the struct after
+the call: such a parameter is an inferred `sink` now (§1, Inferred `sink`). A `vec_at`
+copy, a binding read out of another's field and a closure's capture have
+the field emptied only in their own copy, while the owner releases it
+again: handing such a field to a callee that takes it is rejected (§7.6).
+And a closure or a view over a struct outlived a field of it handed to a
+`sink` — the borrow sweep took the hand-over for a change of elements,
+which a view of the binding outlives; it ends them as a field replaced
+does. *A field a closure gives a new value through its by-reference
+capture* leaked the value it held (agora #144, h405–h407): it is released
+under the binding's drop flag, which the env carries, and a binding that
+borrows its value cannot be given one there — the value stored would have
+no owner — so that assignment is rejected (§2.11).
+
+**Closed before it:** *a closure a
 function returns over a parameter* it captured without taking it over is
 a view of the caller's argument (h299), and the function's summary of it
 (`retclo`) recorded only a closure literal written in the `^` over the
@@ -946,7 +964,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h388):
+all are closed, each a probe CI now holds (h142–h407):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1395,7 +1413,10 @@ temporaries such a conversion leans on found a view of a call's
 temporary argument kept past its statement leaving the temporary owned
 by nothing (h378–h381): such a view is rejected (§1, Temporaries). On
 the way, a closure returned over a parameter in a spelling the summary
-missed (h384–h388) was found and closed (above).
+missed (h384–h388) was found and closed (above), and so were a field
+handed to a callee that takes it from a binding that cannot give it
+(h389–h404) and a field a closure assigned through its by-reference
+capture (h405–h407).
 
 The rules that carry it:
 
@@ -1701,7 +1722,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h388`) to the rule that rejects it. See
+  (`h01–h407`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -2020,7 +2041,14 @@ are dropped, moved and copied by the same rules:
   share a buffer. A literal returned as is lends instead, and so does a
   field written back where it was read.
 - **Fields.** A field of an owned struct handed to a consumer is emptied
-  in the struct, so the struct's drop skips it. A field returned out of a
+  in the struct, so the struct's drop skips it — and so is one of a
+  `vec_get` element (in its slot), an option's payload (in its owner), a
+  cursor (in the binding it reads) and an `inout` parameter (in the
+  caller's struct). A binding that only borrows its struct — a `vec_at`
+  copy, a binding read out of another's field — would have the field
+  emptied only in its own copy, and so would a closure's capture: handing
+  such a field to a callee that takes it is rejected, since the owner
+  still holds it (h394–h400). A field returned out of a
   struct this function owns is copied (or moved, into a returned
   literal).
 - **Call results.** Whether a call returns an owned value or a borrow of

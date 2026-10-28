@@ -375,3 +375,22 @@ h385_closure_over_a_view_of_a_parameter_returned	§2.11	A2	as h384, a closure ov
 h386_closure_returned_through_a_join_over_a_parameter	§2.11	A2	as h384, through a join of closure literals in the ^	rejected
 h387_closure_binding_reassigned_then_returned_over_a_parameter	§2.11	A2	as h384, a closure binding given a new closure over the parameter	rejected
 h388_closure_bindings_joined_then_returned_over_a_parameter	§2.11	A2	as h384, a join of closure bindings	rejected
+h389_field_of_a_parameter_taken_then_the_caller_read_the_struct	CallT.sink	A1	a field of a by-value struct parameter handed to string_free: the function took the parameter over (kept) and dropped the rest, but the caller read the struct after the call (UAF); a parameter whose field is taken is an inferred sink	rejected
+h390_nested_field_of_a_parameter_taken_then_read	CallT.sink	A1	as h389, a nested struct field handed to a generic sink	rejected
+h391_field_viewer_of_a_parameter_taken_then_read	CallT.sink	A1	as h389, through a field viewer of the parameter taken whole	rejected
+h392_parameter_field_taken_by_a_forward_callee_then_read	CallT.sink	A1	as h389, the taker defined later (a module-end implication)	rejected
+h393_method_receiver_field_taken_then_read	CallT.sink	A1	as h389, a method receiver	rejected
+h394_vec_at_copy_field_taken_then_vec_freed	§7.6	A2	a field of a vec_at copy handed to string_free: only the copy was emptied, the Vec released it again (double free); a field emptied only in a borrowing binding's copy may not be taken	rejected
+h395_vec_at_copy_field_viewer_taken_then_vec_freed	§7.6	A2	as h394, through a field viewer of the copy taken whole	rejected
+h396_vec_at_copy_handed_to_a_field_taker	CallT.sink	A1	a vec_at copy handed whole to a function that takes a field of its parameter: kept only, so the borrow went over and the Vec released the field again; the parameter is a sink now	rejected
+h397_vec_at_result_handed_to_a_field_taker	CallT.sink	A1	as h396, the vec_at call as the argument: the sink is handed a copy	runs-clean
+h398_field_of_a_field_viewer_taken_then_owner_dropped	§7.6	A2	a field of a field viewer handed to string_free: the owner released it again (double free)	rejected
+h399_field_of_a_capture_taken_in_its_closure	§2.11	A2	a closure handed a field of a by-value capture to string_free: the binding released it again (double free); a capture's field may not be taken in the closure	rejected
+h400_field_of_a_by_reference_capture_taken_in_its_closure	§2.11	A2	as h399, captured by reference	rejected
+h401_closure_over_a_struct_then_its_field_taken	§2.11	A2	a closure over a struct ran after its field was handed to string_free (UAF): a field hand-over to a sink ends the views of the struct, as a field replaced does	rejected
+h402_closure_over_a_struct_then_its_field_taken_by_a_generic_sink	§2.11	A2	as h401, a generic sink	rejected
+h403_view_into_a_nested_field_then_the_field_taken	§2.12	A2	a view into a nested field read after the field holding it was handed to a sink (UAF)	rejected
+h404_closure_over_a_struct_then_a_nested_struct_field_taken	§2.11	A2	as h401, a nested field	rejected
+h405_field_of_a_by_reference_capture_assigned_leaked	§2.11	A2	a closure assigned a field of a by-reference capture: the old value leaked; it is released under the caller's drop flag	runs-clean
+h406_field_of_a_borrowed_by_reference_capture_assigned	§2.11	A2	as h405, the binding a vec_at copy: the stored value had no owner (leak); rejected unless the binding owns its value	rejected
+h407_nested_field_of_a_by_reference_capture_assigned_leaked	§2.11	A2	as h405, a nested field	runs-clean

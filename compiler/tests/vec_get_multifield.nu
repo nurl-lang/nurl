@@ -27,11 +27,6 @@ $ `stdlib/core/vec.nu`
     ^ @ MPart { ( string_from nm ) ( string_from `f.txt` ) ( string_from `text/plain` ) d }
 }
 
-@ free_part MPart p → v {
-    ( string_free . p name ) ( string_free . p filename )
-    ( string_free . p content_type ) ( vec_free [u] . p data )
-}
-
 @ mk_wide s x → !Wide s {
     ^ @ !Wide s { T @ Wide { ( string_from x ) ( string_from `bee` ) 7 } }
 }
@@ -44,7 +39,9 @@ unsafe @ main → i {
     ?? g { T p → ( printf `owned: %s len=%d\n` ( string_data . p name ) ( vec_len [u] . p data ) ) F _ → ( puts `miss` ) }
     : ?MPart g9 ( vec_get [MPart] v 9 )
     ?? g9 { T _ → ( puts `BUG oob hit` ) F _ → ( puts `owned oob: None` ) }
-    ( vec_free_with [MPart] v \ MPart p → v { ( free_part p ) } )
+    // (The parts go with the Vec: a hook handing each to a function that
+    // takes it would release what the Vec still holds — rejected.)
+    ( vec_free [MPart] v )
 
     : ( Vec CRoute ) rs ( vec_new [CRoute] )
     ( vec_push [CRoute] rs @ CRoute { ( string_from `GET` ) ( string_from `/a` ) \ i x → i { + x 1 } } )

@@ -542,7 +542,7 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far,
-`h01–h388`, is closed and held by a probe in `tools/fuzz/holes/`).
+`h01–h407`, is closed and held by a probe in `tools/fuzz/holes/`).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -2156,11 +2156,12 @@ A function parameter may carry a leading convention marker (§7.2):
 
 #### Auto-inferred `sink` (v2.1, 2026-05-25)
 
-A function whose body passes one of its own parameters to another
-function's `sink` slot has that parameter
-**auto-inferred** as `sink`. Call sites of such a wrapper see the
-same ownership contract: the argument is moved, and a subsequent read is a
-use-after-move error. Explicit signatures seed a fixed point of call effects
+A function whose body passes one of its own parameters — or a field of
+one — to another function's `sink` slot has that parameter
+**auto-inferred** as `sink` (a function that takes a field of its
+parameter owns the rest of it, and drops it). Call sites of such a
+wrapper see the same ownership contract: the argument is moved, and a
+subsequent read is a use-after-move error. Explicit signatures seed a fixed point of call effects
 across ordinary bodies and generic instances, including forward calls and
 all argument positions. Names and return types never imply consumption.
 
@@ -2839,7 +2840,7 @@ to the rules above — every program accepted without an `unsafe` function of
 its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
-([`formal/`](../formal/)), and every hole found so far (`h01–h388`) is
+([`formal/`](../formal/)), and every hole found so far (`h01–h407`) is
 closed and held by a probe in `tools/fuzz/holes/`; a handle whose copies
 are one state is checked where it crosses to another thread
 (docs/MEMORY.md §6.5).
