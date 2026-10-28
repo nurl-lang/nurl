@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8] — 2026-10-29
+
+### Fixed
+
+- Requires yoloe 0.8.3, whose tokenizer compiles under the current
+  ownership rules.
+
 ## [0.3.7] — 2026-10-21
 
 ### Fixed
