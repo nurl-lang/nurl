@@ -39925,14 +39925,18 @@ unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
         ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
     }
     // Every other capture that is a handle whose copy is another owner of
-    // the same object (Channel, Mutex, Arc, a server) — still named here,
-    // or a parameter the caller owns: the thread or fiber takes a share of
-    // its own, so either side may end first.
+    // one state the crossing check follows (a TcpConn, a PNCounter) —
+    // still named here, or a parameter the caller owns: the env holds a
+    // share of its own, so the check sees the owner left on this side.
+    // (One made to be reached from two threads — a Channel, a Mutex, an
+    // Atomic — the spawn's copy of the env shares when it adopts it, as a
+    // view's: a share here too was one more share and release per spawn.)
     = rest ( nurl_str_cat caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s v ( str_first_word rest ) = rest ( str_skip_word rest )
         : s vt ( nurl_sym_get syms v )
-        ? & & ! ( str_contains_word out v ) ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) { = g_clo_detach_shared ( nurl_str_cat3 g_clo_detach_shared ` ` v ) } {}
+        ? & & & ! ( str_contains_word out v ) ( __is_libh vt ) ( seq ( __libh_copy_op vt ) `share` ) ( __sk_needed vt syms )
+        { = g_clo_detach_shared ( nurl_str_cat3 g_clo_detach_shared ` ` v ) } {}
     }
     ^ out
 }

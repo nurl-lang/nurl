@@ -40,7 +40,8 @@ One found on the way stays open, under *Known issues*.
   a drop, as `TcpConn` is: its last owner closes the socket, and
   `udp_close` only stops it early — every copy then sees it closed.
   Calling `udp_close` is optional, and code that called it exactly once
-  is unchanged.
+  is unchanged. `quic_server_new` takes a share of the socket it is
+  handed, so the socket stays the caller's, as its contract says.
 
 ### Fixed
 
@@ -55,6 +56,11 @@ One found on the way stays open, under *Known issues*.
   moves with the payload, also for a binding read out of one
   (`: TcpConn c ?? cr { T x → x … }`); an option matched again after its
   payload went to the fiber still panics at the crossing, as it should.
+  A spawned closure's env takes a share of its own only of a handle the
+  crossing check follows; a `Channel`, `Mutex` or `Atomic` it captures is
+  shared once, by the spawn's copy, which also drops a share and a
+  release per spawn that a closure moving a capture used to pay (Agora
+  #142).
 - **A temporary whose view a binding, a return or a closure kept no
   longer leaks** (Agora #138, h378–h381): the program is refused, above.
 
