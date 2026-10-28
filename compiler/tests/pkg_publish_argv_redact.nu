@@ -62,6 +62,16 @@ $ `stdlib/core/vec.nu`
     ^ T
 }
 
+// Windows always exports OS=Windows_NT; nothing else does.
+@ is_windows → b {
+    : ~ b w F
+    ?? ( env_get `OS` ) {
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) }
+        F → {}
+    }
+    ^ w
+}
+
 @ test_tmpdir → String {
     : String t1 ( env_var_or `TMPDIR` `` )
     ? > ( string_len t1 ) 0 { ^ t1 } {}
@@ -127,8 +137,30 @@ $ `stdlib/core/vec.nu`
         F _ → {}
     }
 
+    // Windows has neither procfs nor `ps`: ask WMI for every live process's
+    // command line (the same text another local user can read).
+    ? & ! found ( is_windows ) {
+        : ( Vec s ) pargs ( vec_new [s] )
+        ( vec_push [s] pargs `-NoProfile` )
+        ( vec_push [s] pargs `-NonInteractive` )
+        ( vec_push [s] pargs `-Command` )
+        ( vec_push [s] pargs `Get-CimInstance Win32_Process | ForEach-Object CommandLine` )
+        ?? ( process_run `powershell` pargs `` ) {
+            T out → {
+                : s txt ( output_stdout out )
+                ? >= ( nurl_str_find txt url_marker ) 0 {
+                    = found T
+                    ? | >= ( nurl_str_find txt secret_tok ) 0 >= ( nurl_str_find txt `Authorization` ) 0 {
+                        = leaked_argv T
+                    } {}
+                } {}
+            }
+            F _ → {}
+        }
+    } {}
+
     // Fallback for non-procfs POSIX hosts (macOS): inspect live `ps` command lines.
-    ? ! found {
+    ? & ! found ! ( is_windows ) {
         ?? ( process_run_shell `ps -Ao command` ) {
             T out → {
                 : s txt ( output_stdout out )
