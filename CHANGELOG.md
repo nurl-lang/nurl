@@ -81,6 +81,13 @@ and so is one found on the way (h384–h388); no hole is known open.
   scan now takes six 16-byte vectors per entry (`nurl_v128_and` / `_or`
   under the entry's mask) instead of twelve words — still every entry
   read, the digit only reaching masks. Skylake: keygen 15.3 → 13.4 µs.
+- **P-256's point formulas take their operands' limbs once.** The
+  doubling and the mixed addition fetch each coordinate's and each
+  temporary's data pointer at the top and run the field operations on
+  limb pointers (`__p256_mul_p` / `_sqr_p` / `_add_p` / `_sub_p`),
+  where every operation re-derived three Vecs' data pointers, each with
+  its null test. Skylake: P-256 ECDH 80.8 → 77.4 µs, keygen 16.8 →
+  15.9 µs, ECDSA sign 27.3 → 26.5 µs.
 - **A spawn takes over the closure written in its argument** (Agora
   #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
   on a copy of the closure's environment, and the caller dropped its own

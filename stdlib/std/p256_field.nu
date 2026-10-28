@@ -166,6 +166,14 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // entry and the result unpacked back on exit, so every caller, constant
 // table and the whole point/inversion layer are untouched. `dst` may alias
 // a or b — both are read into the packed locals before any write to dst.
+// The multiply and the square on limb pointers: the register kernel where
+// the target has one, the portable form elsewhere. The point formulas
+// take their operands' data pointers once and run on these, rather than
+// re-deriving each Vec's data pointer around every operation.
+inline @ __p256_mul_p * i op * i ap * i bp → v { ? ( nurl_p256_mulm op ap bp ) {} { ( __p256_mul_port_p op ap bp ) } }
+
+inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __p256_sqr_port_p op ap ) } }
+
 @ _p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     // The register kernel where the target has one (x86-64: the ADX tier
     // or mulq — the compiler's nurl_p256_mulm); the form below elsewhere.
@@ -174,9 +182,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 
 // The multiply as NURL, for a target with no kernel (and the reference
 // compiler/tests/p256_kernel_agrees.nu holds the kernels to).
-@ _p256_mul_port P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
-    : *i ap ( vec_data [i] a )
-    : *i bp ( vec_data [i] b )
+@ __p256_mul_port_p * i op * i ap * i bp → v {
     // Limbs load directly — the field IS 4×64 now (no pack step).
     : u64 a0 # u64 . ap 0
     : u64 a1 # u64 . ap 1
@@ -376,12 +382,13 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     : u64 o1 | & mask d1 & imask t1
     : u64 o2 | & mask d2 & imask t2
     : u64 o3 | & mask d3 & imask t3
-    : *i op ( vec_data [i] dst )
     = . op 0 # i o0
     = . op 1 # i o1
     = . op 2 # i o2
     = . op 3 # i o3
 }
+
+@ _p256_mul_port P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_mul_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 // (kept: the 9-limb staging cond-sub is gone — add/sub carry in
 // registers now and fold the conditional ±p inline, like the multiply.)
@@ -400,8 +407,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 }
 
 // The square as NURL (as _p256_mul_port).
-@ _p256_sqr_port P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
-    : *i ap ( vec_data [i] a )
+@ __p256_sqr_port_p * i op * i ap → v {
     : u64 a0 # u64 . ap 0
     : u64 a1 # u64 . ap 1
     : u64 a2 # u64 . ap 2
@@ -556,12 +562,13 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     : u64 o1 | & mask e1 & imask r5
     : u64 o2 | & mask e2 & imask r6
     : u64 o3 | & mask e3 & imask r7
-    : *i op ( vec_data [i] dst )
     = . op 0 # i o0
     = . op 1 # i o1
     = . op 2 # i o2
     = . op 3 # i o3
 }
+
+@ _p256_sqr_port P256Scratch scr ( Vec i ) dst ( Vec i ) a → v { ( __p256_sqr_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ) }
 
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
 @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
@@ -579,9 +586,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // (a + b) then one constant-time conditional subtract of p, all in
 // registers: a, b < p ⇒ a+b < 2p ⇒ one masked subtract suffices. `dst`
 // may alias a and/or b — everything is read before dst is written.
-@ __p256_add_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
-    : *i ap ( vec_data [i] a )
-    : *i bp ( vec_data [i] b )
+inline @ __p256_add_p * i op * i ap * i bp → v {
     : u64 a0 # u64 . ap 0
     : u64 a1 # u64 . ap 1
     : u64 a2 # u64 . ap 2
@@ -610,12 +615,13 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     : i topb - # i cc # i bb
     : u64 mask ? < topb 0 0 18446744073709551615
     : u64 imask ^^ mask 18446744073709551615
-    : *i op ( vec_data [i] dst )
     = . op 0 # i | & mask d0 & imask t0
     = . op 1 # i | & mask d1 & imask t1
     = . op 2 # i | & mask d2 & imask t2
     = . op 3 # i | & mask d3 & imask t3
 }
+
+@ __p256_add_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_add_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 // (a − b) mod p, constant-time: a − b, and if it borrows add p back.
 @ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
@@ -632,9 +638,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 
 // a − b with borrow, then a masked add-back of p when it underflowed.
 // `dst` may alias a and/or b.
-@ __p256_sub_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
-    : *i ap ( vec_data [i] a )
-    : *i bp ( vec_data [i] b )
+inline @ __p256_sub_p * i op * i ap * i bp → v {
     : u64 a0 # u64 . ap 0
     : u64 a1 # u64 . ap 1
     : u64 a2 # u64 . ap 2
@@ -663,12 +667,13 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     : u64 r2 ( nurl_addc_lo d2 0 cc )
     = cc ( nurl_addc_hi d2 0 cc )
     : u64 r3 ( nurl_addc_lo d3 p3 cc )
-    : *i op ( vec_data [i] dst )
     = . op 0 # i r0
     = . op 1 # i r1
     = . op 2 # i r2
     = . op 3 # i r3
 }
+
+@ __p256_sub_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_sub_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 @ p256ct_sqr ( Vec i ) a → ( Vec i ) { ^ ( p256ct_mul a a ) }
 
@@ -811,6 +816,13 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
     ( __p256_lmerge_d . dst z mask imask . a z . b z )
 }
 
+inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
+    = . op 0 | & mask . ap 0 & imask . bp 0
+    = . op 1 | & mask . ap 1 & imask . bp 1
+    = . op 2 | & mask . ap 2 & imask . bp 2
+    = . op 3 | & mask . ap 3 & imask . bp 3
+}
+
 @ __p256_lmerge_d ( Vec i ) dst i mask i imask ( Vec i ) a ( Vec i ) b → v {
     : *i op ( vec_data [i] dst )
     : *i ap ( vec_data [i] a )
@@ -890,43 +902,43 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // Jacobian doubling in place, a = −3 (dbl-2001-b): 3M+5S.
 // Registers: g0=delta g1=gamma g2=beta g3=alpha g4/g5=temps.
 @ _p256_jdbl_d P256Scratch scr P256Pt pt → v {
-    : ( Vec i ) xr . pt x
-    : ( Vec i ) yr . pt y
-    : ( Vec i ) zr . pt z
-    : ( Vec i ) delta . scr g0
-    : ( Vec i ) gamma . scr g1
-    : ( Vec i ) beta . scr g2
-    : ( Vec i ) alpha . scr g3
-    : ( Vec i ) t4 . scr g4
-    : ( Vec i ) t5 . scr g5
-    ( _p256_sqr_d scr delta zr )
-    ( _p256_sqr_d scr gamma yr )
-    ( _p256_mul_d scr beta xr gamma )
+    : *i xr ( vec_data [i] . pt x )
+    : *i yr ( vec_data [i] . pt y )
+    : *i zr ( vec_data [i] . pt z )
+    : *i delta ( vec_data [i] . scr g0 )
+    : *i gamma ( vec_data [i] . scr g1 )
+    : *i beta ( vec_data [i] . scr g2 )
+    : *i alpha ( vec_data [i] . scr g3 )
+    : *i t4 ( vec_data [i] . scr g4 )
+    : *i t5 ( vec_data [i] . scr g5 )
+    ( __p256_sqr_p delta zr )
+    ( __p256_sqr_p gamma yr )
+    ( __p256_mul_p beta xr gamma )
     // alpha = 3·(xr − delta)·(xr + delta)
-    ( __p256_sub_d scr t4 xr delta )
-    ( __p256_add_d scr t5 xr delta )
-    ( _p256_mul_d scr alpha t4 t5 )
-    ( __p256_add_d scr t4 alpha alpha )
-    ( __p256_add_d scr alpha t4 alpha )
+    ( __p256_sub_p t4 xr delta )
+    ( __p256_add_p t5 xr delta )
+    ( __p256_mul_p alpha t4 t5 )
+    ( __p256_add_p t4 alpha alpha )
+    ( __p256_add_p alpha t4 alpha )
     // Z3 = (yr + zr)² − gamma − delta   (before xr/yr are overwritten)
-    ( __p256_add_d scr t4 yr zr )
-    ( _p256_sqr_d scr t4 t4 )
-    ( __p256_sub_d scr t4 t4 gamma )
-    ( __p256_sub_d scr zr t4 delta )
+    ( __p256_add_p t4 yr zr )
+    ( __p256_sqr_p t4 t4 )
+    ( __p256_sub_p t4 t4 gamma )
+    ( __p256_sub_p zr t4 delta )
     // X3 = alpha² − 8·beta
-    ( _p256_sqr_d scr t4 alpha )
-    ( __p256_add_d scr t5 beta beta )
-    ( __p256_add_d scr t5 t5 t5 )
-    ( __p256_add_d scr delta t5 t5 )
-    ( __p256_sub_d scr xr t4 delta )
+    ( __p256_sqr_p t4 alpha )
+    ( __p256_add_p t5 beta beta )
+    ( __p256_add_p t5 t5 t5 )
+    ( __p256_add_p delta t5 t5 )
+    ( __p256_sub_p xr t4 delta )
     // Y3 = alpha·(4·beta − X3) − 8·gamma²
-    ( __p256_sub_d scr t4 t5 xr )
-    ( _p256_mul_d scr t4 alpha t4 )
-    ( _p256_sqr_d scr t5 gamma )
-    ( __p256_add_d scr t5 t5 t5 )
-    ( __p256_add_d scr t5 t5 t5 )
-    ( __p256_add_d scr t5 t5 t5 )
-    ( __p256_sub_d scr yr t4 t5 )
+    ( __p256_sub_p t4 t5 xr )
+    ( __p256_mul_p t4 alpha t4 )
+    ( __p256_sqr_p t5 gamma )
+    ( __p256_add_p t5 t5 t5 )
+    ( __p256_add_p t5 t5 t5 )
+    ( __p256_add_p t5 t5 t5 )
+    ( __p256_sub_p yr t4 t5 )
 }
 
 // Branch-free "all four limbs zero" mask: −1 when v == 0, else 0.
@@ -946,50 +958,53 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // end, so both fixup paths still see the old point. Uses every scratch
 // register (g0..g5 + gp).
 @ _p256_jmadd_d P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m i keep → v {
-    : ( Vec i ) X1 . acc x
-    : ( Vec i ) Y1 . acc y
-    : ( Vec i ) Z1 . acc z
-    : ( Vec i ) z3 . scr g0
-    : ( Vec i ) hreg . scr g1
-    : ( Vec i ) rreg . scr g2
-    : ( Vec i ) hh . scr g3
-    : ( Vec i ) x3 . scr g4
-    : ( Vec i ) vv . scr g5
-    : ( Vec i ) t . scr gp
-    : i inf_mask ( _p256_zmask Z1 )
+    : *i X1 ( vec_data [i] . acc x )
+    : *i Y1 ( vec_data [i] . acc y )
+    : *i Z1 ( vec_data [i] . acc z )
+    : *i px2 ( vec_data [i] x2 )
+    : *i py2 ( vec_data [i] y2 )
+    : *i pone ( vec_data [i] one_m )
+    : *i z3 ( vec_data [i] . scr g0 )
+    : *i hreg ( vec_data [i] . scr g1 )
+    : *i rreg ( vec_data [i] . scr g2 )
+    : *i hh ( vec_data [i] . scr g3 )
+    : *i x3 ( vec_data [i] . scr g4 )
+    : *i vv ( vec_data [i] . scr g5 )
+    : *i t ( vec_data [i] . scr gp )
+    : i inf_mask ( _p256_zmask . acc z )
     // zz = Z1²; u2 = x2·zz; s2 = y2·Z1·zz
-    ( _p256_sqr_d scr z3 Z1 )
-    ( _p256_mul_d scr hreg x2 z3 )
-    ( _p256_mul_d scr t z3 Z1 )
-    ( _p256_mul_d scr rreg y2 t )
+    ( __p256_sqr_p z3 Z1 )
+    ( __p256_mul_p hreg px2 z3 )
+    ( __p256_mul_p t z3 Z1 )
+    ( __p256_mul_p rreg py2 t )
     // H = u2 − X1; R = s2 − Y1
-    ( __p256_sub_d scr hreg hreg X1 )
-    ( __p256_sub_d scr rreg rreg Y1 )
+    ( __p256_sub_p hreg hreg X1 )
+    ( __p256_sub_p rreg rreg Y1 )
     // Z3 = Z1·H (into its own register — acc stays whole until commit)
-    ( _p256_mul_d scr z3 Z1 hreg )
+    ( __p256_mul_p z3 Z1 hreg )
     // hh = H²; V = X1·hh; X3 = R² − H³ − 2V
-    ( _p256_sqr_d scr hh hreg )
-    ( _p256_mul_d scr vv X1 hh )
-    ( _p256_sqr_d scr x3 rreg )
-    ( _p256_mul_d scr hh hreg hh )
-    ( __p256_sub_d scr x3 x3 hh )
-    ( __p256_sub_d scr x3 x3 vv )
-    ( __p256_sub_d scr x3 x3 vv )
+    ( __p256_sqr_p hh hreg )
+    ( __p256_mul_p vv X1 hh )
+    ( __p256_sqr_p x3 rreg )
+    ( __p256_mul_p hh hreg hh )
+    ( __p256_sub_p x3 x3 hh )
+    ( __p256_sub_p x3 x3 vv )
+    ( __p256_sub_p x3 x3 vv )
     // Y3 = R·(V − X3) − Y1·H³
-    ( __p256_sub_d scr vv vv x3 )
-    ( _p256_mul_d scr vv rreg vv )
-    ( _p256_mul_d scr t Y1 hh )
-    ( __p256_sub_d scr vv vv t )
+    ( __p256_sub_p vv vv x3 )
+    ( __p256_mul_p vv rreg vv )
+    ( __p256_mul_p t Y1 hh )
+    ( __p256_sub_p vv vv t )
     // Masked two-stage commit: result ← (∞ ? affine : computed), then
     // acc ← (keep ? acc : result). Element-wise merges, no branches.
     : i ninf ^^ inf_mask - 0 1
     : i nkeep ^^ keep - 0 1
-    ( __p256_lmerge_d x3 inf_mask ninf x2 x3 )
-    ( __p256_lmerge_d vv inf_mask ninf y2 vv )
-    ( __p256_lmerge_d z3 inf_mask ninf one_m z3 )
-    ( __p256_lmerge_d X1 nkeep keep x3 X1 )
-    ( __p256_lmerge_d Y1 nkeep keep vv Y1 )
-    ( __p256_lmerge_d Z1 nkeep keep z3 Z1 )
+    ( __p256_lmerge_p x3 inf_mask ninf px2 x3 )
+    ( __p256_lmerge_p vv inf_mask ninf py2 vv )
+    ( __p256_lmerge_p z3 inf_mask ninf pone z3 )
+    ( __p256_lmerge_p X1 nkeep keep x3 X1 )
+    ( __p256_lmerge_p Y1 nkeep keep vv Y1 )
+    ( __p256_lmerge_p Z1 nkeep keep z3 Z1 )
 }
 
 // ── affine window table (fixed-base comb) ─────────────────────────────
