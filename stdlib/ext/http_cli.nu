@@ -267,6 +267,30 @@ $ `stdlib/core/slice.nu`
 // say) passes its own with the *_timeout entry points.
 @ httpc_default_max_time → i { ^ 300 }
 
+// The only URLs this client hands to curl: `http://` or `https://` (scheme
+// case-insensitive) followed by a non-empty rest with no control byte, space
+// or DEL. Anything else — a registry string starting with `-`, `file://`,
+// `gopher://`, a CR/LF — is refused before a temp file or a process exists.
+// curl is additionally told the same thing (--proto / --proto-redir), so a
+// redirect cannot leave HTTP(S) either. One pass over the URL, no allocation.
+@ httpc_url_ok s url → b {
+    : i n ( nurl_str_len url )
+    : ~ i rest 0
+    ? & >= n 8 ( __httpc_range_contains_ci url n 0 8 `https://` ) { = rest 8 } {
+        ? & >= n 7 ( __httpc_range_contains_ci url n 0 7 `http://` ) { = rest 7 } {}
+    }
+    ? | == rest 0 >= rest n { ^ F } {}
+    : ~ i k rest
+    ~ < k n {
+        : i c ( nurl_str_at url n k )
+        ? | <= c 32 == c 127 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __httpc_bad_url → !HttpcResp HttpcErr { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcInvalidUrl } }
+
 // ── Core: run one curl request ──────────────────────────────────────
 // `reqfile` is "" for no body, else a path whose contents are POSTed
 // with --data-binary. `max_secs` caps the whole exchange. Returns the parsed
@@ -276,6 +300,7 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs → !HttpcResp HttpcErr {
+    ? ! ( httpc_url_ok url ) { ^ ( __httpc_bad_url ) } {}
     : String tdir ( __httpc_tmpdir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
     ?? rf {
@@ -286,6 +311,13 @@ $ `stdlib/core/slice.nu`
             ( vec_push [s] a `-s` )
             ( vec_push [s] a `-S` )
             ( vec_push [s] a `-L` )
+            // No URL globbing ([] / {} are literal), and neither the request
+            // nor any redirect it follows may use a protocol but HTTP(S).
+            ( vec_push [s] a `-g` )
+            ( vec_push [s] a `--proto` )
+            ( vec_push [s] a `=http,https` )
+            ( vec_push [s] a `--proto-redir` )
+            ( vec_push [s] a `=http,https` )
             ( vec_push [s] a `--connect-timeout` )
             ( vec_push [s] a `10` )
             ( vec_push [s] a `--max-time` )
@@ -321,6 +353,8 @@ $ `stdlib/core/slice.nu`
                 ( string_push_str atarg reqfile )
                 ( vec_push [s] a ( string_data atarg ) )
             } {}
+            // End of options: the URL is an operand even if it began with `-`.
+            ( vec_push [s] a `--` )
             ( vec_push [s] a url )
 
             : ~ i status 0
@@ -367,6 +401,7 @@ $ `stdlib/core/slice.nu`
 
 // Write `body` to a temp file, run the request, then unlink the temp.
 @ __httpc_with_body s method s url ( Vec u ) body s headers_blob → !HttpcResp HttpcErr {
+    ? ! ( httpc_url_ok url ) { ^ ( __httpc_bad_url ) } {}
     : String tdir ( __httpc_tmpdir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
     ?? bf {
@@ -407,6 +442,7 @@ $ `stdlib/core/slice.nu`
     } {}
     // Non-empty text body: stage it through a temp file so the byte path
     // and the text path are identical on the wire.
+    ? ! ( httpc_url_ok url ) { ^ ( __httpc_bad_url ) } {}
     : String tdir ( __httpc_tmpdir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
     ?? bf {

@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+http=T
+https_upper=T
+option=F
+option_after_scheme_check=F
+file=F
+gopher=F
+empty_rest=F
+crlf=F
+space=F
+empty=F
+get_option=invalid URL
+get_file=invalid URL
+post_ftp=invalid URL
+glob=status 200 body /a[1-2]{b,c}
+redirect_ftp=transport
+done
