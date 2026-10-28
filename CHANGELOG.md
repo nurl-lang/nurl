@@ -29,48 +29,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy, as for a bare lent result. A field of an owned result still
   leaves with the read.
 - **HTTP/2, HPACK and QPACK parsers refuse a negative offset**
-  (h462–h466). `h2_parse_frame`, `h2_rx_consume`, `hpack_decode_int`,
+  (h471–h475). `h2_parse_frame`, `h2_rx_consume`, `hpack_decode_int`,
   `hpack_decode_string` and the QPACK instruction readers read before
   their buffer when given a negative offset or count, and
   `_hpack_huffman_decode` trusted its range. Each now checks once per
   call.
 - **`_header_name_eq_ci_n` and `response_set_body_borrowed_bytes` are
-  `raw`** (h467, h468). The first trusted a length its caller passed;
+  `raw`** (h476, h477). The first trusted a length its caller passed;
   the second made a response body a view of a Vec nothing kept alive.
   `response_set_body_bytes` copies.
 - **CSV tables:**
   - a cell view from `csv_table_view` borrows from its table and ends
-    with it (h470);
+    with it (h479);
   - `csv_table_filter` survives a predicate that sorts or filters the
-    same table (h469);
+    same table (h478);
   - a failed `csv_table_load*` returns an empty table that
     `csv_table_ok` answers F for, instead of a null table every
-    accessor dereferenced (h471).
+    accessor dereferenced (h480).
 - **`sqlite_close` with a statement still alive** no longer frees the
-  authorizer libsqlite may still call, or leaks the connection (h472,
-  h473). It uninstalls the authorizer and closes with
+  authorizer libsqlite may still call, or leaks the connection (h481,
+  h482). It uninstalls the authorizer and closes with
   `sqlite3_close_v2`.
-- **More range checks no longer wrap:** `fatfs_write` (h474), the block
+- **More range checks no longer wrap:** `fatfs_write` (h483), the block
   layer's `blk_read` / `blk_write`, and `quic_rxbuf_add`.
-- **Raw runtime handles stay behind `unsafe`** (h475–h477, h488–h490):
+- **Raw runtime handles stay behind `unsafe`** (h484–h486, h497–h499):
   - `_tls_word`, `_tls_word_release`, `_tls_conn_new`,
     `_tls_sock_write(2)` and `tls_attach_full_until` are `raw`;
   - `nurl_ktls_rtype`, `nurl_tcp_sendfile`, `nurl_udp_join_group` /
     `_leave_group` and `term.nu`'s `ioctl` are declared `unsafe &`.
-- **Library connection state is sealed by name too** (h478–h484).
+- **Library connection state is sealed by name too** (h487–h493).
   `TlsConnImpl`, `CliHsImpl`, `SrvHsImpl`, `TcpConnImpl`,
   `TcpListenerImpl`, `UdpSocketImpl`, `BufReaderImpl`, `ProcChildImpl`,
   `__CProcResult`, `HttpConnImpl`, `QuicRxBufImpl` and
   `QuicRecoveryImpl` are `raw :`, including the ones with no destructor.
 - **Refused QUIC and HTTP/3 handles no longer read address 0**
-  (h485–h487). An accessor of the null `QuicTp`, `QuicFrame`,
+  (h494–h496). An accessor of the null `QuicTp`, `QuicFrame`,
   `QuicClient` or `H3Client` panics. The new `quic_tp_ok`,
   `quic_frame_ok` and `quic_client_ok` let safe code test for it first.
 - **An MQTT packet that lies about its property lengths** no longer
   keeps `_mqtt_parse_props`, and so the client's receive loop, spinning
   for ever.
 - **The crypto library's offset checks, size checks and limb helpers no
-  longer let safe code read or write past a buffer** (h438–h461). Found
+  longer let safe code read or write past a buffer** (h447–h470). Found
   by an audit of the stdlib's raw-memory entry points:
   - `hmac_sha256_mac_in`, `hkdf_expand_in` / `hkdf_expand_label_in`,
     `chacha20poly1305_open_in` and `aes_gcm_open_in` checked
@@ -92,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its fields signs nothing (the compiler gap behind that is Agora
     #159). No check runs per limb or per block.
 - **The state behind a library handle can no longer be built by a
-  literal** (h435, h436). `@ TcpConnImpl { 4096 0 0 T }` was accepted,
+  literal** (h444, h445). `@ TcpConnImpl { 4096 0 0 T }` was accepted,
   and its destructor closed the made-up number 4096 as the address of a
   runtime record. The same went for `RawBlock` (whose destructor frees
   its pointer), `FileImpl`, `BufReaderImpl`, `UdpSocketImpl`,
@@ -100,12 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `% Drop`. Such a struct is now sealed, which future ones are too: only
   the library builds it or writes its fields.
 - **`sort_by` with an inconsistent comparator no longer reads past the
-  Vec** (h437). The nearly-sorted path's partition scans stopped only at
+  Vec** (h446). The nearly-sorted path's partition scans stopped only at
   an element the comparator ranked against the pivot. Each scan now also
   stops at its range's end. Measured: 2 M nearly-sorted integers sort in
   the same 47–49 ms as before.
 - **Core library calls given huge or negative offsets no longer read or
-  write outside their buffers** (h430–h434). Each tested `start + n`
+  write outside their buffers** (h439–h443). Each tested `start + n`
   against the length, a sum that wraps for a count near i64 max, or
   checked only one end of the range:
   - `string_substr` and `vec_extend_range` with a length near i64 max;
@@ -115,13 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `utf8_decode` / `utf8_decode_at` at a negative position.
   The checks cost what the old ones did.
 - **The recycling stash and `string_commit` can no longer be called from
-  safe code** (h428, h429). A stash kind taken back as a wider element
+  safe code** (h437, h438). A stash kind taken back as a wider element
   type came back with room for more elements than its buffer held, and
   `string_commit` grew a String by any count. `vec_stash`,
   `vec_unstash`, `string_stash`, `string_unstash` and `string_commit`
   are `raw`; the library code that owns the kinds still calls them.
 - **A TLS 1.2 server can no longer make the client read past its key
-  share** (h426). The ServerKeyExchange names its key's length, and the
+  share** (h435). The ServerKeyExchange names its key's length, and the
   client handed a key of any length to `x25519`, which read 32 bytes
   from it (found by the `tlscli` parser fuzzer). Now:
   - the client refuses a curve it did not offer and a key of the wrong
@@ -131,7 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `x25519` / `x25519_base` given an input that is not 32 bytes return
     32 zero bytes, which RFC 7748 §6.1 tells every caller to refuse.
 - **x25519.nu's field helpers can no longer be called from safe code**
-  (h427). `_A`, `_M`, `_pack25519` and the others carry one underscore
+  (h436). `_A`, `_M`, `_pack25519` and the others carry one underscore
   and index five limbs (or 32 bytes) with no length check; empty
   operands read unallocated memory. Each is now `raw`, which only an
   `unsafe` caller may call. This costs nothing at run time.
