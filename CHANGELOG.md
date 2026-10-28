@@ -76,6 +76,11 @@ and so is one found on the way (h384–h388); no hole is known open.
   X25519's square takes its cross products in an order that needs one
   accumulating pass, not three (latency 14.7 → 12.9 ns). Skylake:
   X25519 shared 33.3 → 31.7 µs, P-256 ECDH 87.5 → 82.0 µs.
+- **X25519 keygen reads its table a vector at a time.** The fixed-base
+  walk scans all eight entries of a row for each of its 64 digits; the
+  scan now takes six 16-byte vectors per entry (`nurl_v128_and` / `_or`
+  under the entry's mask) instead of twelve words — still every entry
+  read, the digit only reaching masks. Skylake: keygen 15.3 → 13.4 µs.
 - **A spawn takes over the closure written in its argument** (Agora
   #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
   on a copy of the closure's environment, and the caller dropped its own

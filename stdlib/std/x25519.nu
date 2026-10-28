@@ -1330,36 +1330,51 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
 }
 
 // The entry for digit ev of the row at rb (eight entries of y + x,
-// y − x, 2d·x·y): the identity (1, 1, 0), then each of the eight taken
-// under a mask when it is the one, then −(x, y) = (−x, y) by mask for a
-// negative digit — y + x and y − x swapped, 2d·x·y negated. Constant
-// time: every entry is read, and the digit only reaches masks.
+// y − x, 2d·x·y, 96 bytes each): every entry read, six 16-byte vectors
+// at a time, and ORed in under a mask that is all ones for the one that
+// is |e| — then the identity (1, 1, 0) where |e| = 0, and −(x, y) =
+// (−x, y) by mask for a negative digit: y + x and y − x swapped, 2d·x·y
+// negated. Constant time: the digit only reaches masks. (The vectors
+// halve the scan's instructions against one word at a time.)
 inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout u64 ym0 inout u64 ym1 inout u64 ym2 inout u64 ym3 inout u64 xy0 inout u64 xy1 inout u64 xy2 inout u64 xy3 * u64 rb i ev → v {
     // |e| and its sign, branch-free
     : u64 neg >> # u64 ev 63
     : u64 ab # u64 - ev << & - 0 # i neg ev 1
-    = yp0 1 = yp1 0 = yp2 0 = yp3 0
-    = ym0 1 = ym1 0 = ym2 0 = ym3 0
-    = xy0 0 = xy1 0 = xy2 0 = xy3 0
+    : ~ v128 v0 ( nurl_v128_zero )
+    : ~ v128 v1 ( nurl_v128_zero )
+    : ~ v128 v2 ( nurl_v128_zero )
+    : ~ v128 v3 ( nurl_v128_zero )
+    : ~ v128 v4 ( nurl_v128_zero )
+    : ~ v128 v5 ( nurl_v128_zero )
+    : i base # i rb
     : ~ i j 0
     ~ < j 8 {
         : u64 z ^^ ab # u64 + j 1
         : u64 m - # u64 0 >> - z 1 63
-        : i o * j 12
-        = yp0 ^^ yp0 & m ^^ yp0 . rb o
-        = yp1 ^^ yp1 & m ^^ yp1 . rb + o 1
-        = yp2 ^^ yp2 & m ^^ yp2 . rb + o 2
-        = yp3 ^^ yp3 & m ^^ yp3 . rb + o 3
-        = ym0 ^^ ym0 & m ^^ ym0 . rb + o 4
-        = ym1 ^^ ym1 & m ^^ ym1 . rb + o 5
-        = ym2 ^^ ym2 & m ^^ ym2 . rb + o 6
-        = ym3 ^^ ym3 & m ^^ ym3 . rb + o 7
-        = xy0 ^^ xy0 & m ^^ xy0 . rb + o 8
-        = xy1 ^^ xy1 & m ^^ xy1 . rb + o 9
-        = xy2 ^^ xy2 & m ^^ xy2 . rb + o 10
-        = xy3 ^^ xy3 & m ^^ xy3 . rb + o 11
+        : v128 mv ( nurl_v128_set64 # i m # i m )
+        : i o + base * j 96
+        = v0 ( nurl_v128_or v0 ( nurl_v128_and mv ( nurl_v128_ld # s o ) ) )
+        = v1 ( nurl_v128_or v1 ( nurl_v128_and mv ( nurl_v128_ld # s + o 16 ) ) )
+        = v2 ( nurl_v128_or v2 ( nurl_v128_and mv ( nurl_v128_ld # s + o 32 ) ) )
+        = v3 ( nurl_v128_or v3 ( nurl_v128_and mv ( nurl_v128_ld # s + o 48 ) ) )
+        = v4 ( nurl_v128_or v4 ( nurl_v128_and mv ( nurl_v128_ld # s + o 64 ) ) )
+        = v5 ( nurl_v128_or v5 ( nurl_v128_and mv ( nurl_v128_ld # s + o 80 ) ) )
         = j + j 1
     }
+    // |e| = 0 matched none: the identity
+    : u64 one & >> - ab 1 63 1
+    = yp0 | ( nurl_v128_get64 v0 0 ) one
+    = yp1 ( nurl_v128_get64 v0 1 )
+    = yp2 ( nurl_v128_get64 v1 0 )
+    = yp3 ( nurl_v128_get64 v1 1 )
+    = ym0 | ( nurl_v128_get64 v2 0 ) one
+    = ym1 ( nurl_v128_get64 v2 1 )
+    = ym2 ( nurl_v128_get64 v3 0 )
+    = ym3 ( nurl_v128_get64 v3 1 )
+    = xy0 ( nurl_v128_get64 v4 0 )
+    = xy1 ( nurl_v128_get64 v4 1 )
+    = xy2 ( nurl_v128_get64 v5 0 )
+    = xy3 ( nurl_v128_get64 v5 1 )
     : u64 nm - # u64 0 neg
     ( __f4_cswap yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 nm )
     : ~ u64 n0 0
