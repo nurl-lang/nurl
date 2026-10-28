@@ -412,3 +412,12 @@ h422_option_parameter_kept_by_a_helper_then_read_after_the_vec	§2.12	A2	as h421
 h423_option_parameter_payload_kept_by_a_helper_then_read	§2.12	A2	as h422, the payload pushed	rejected
 h424_field_of_a_lent_call_result_handed_to_a_sink	CallT.sink	A1	a field of box_get's lent result handed to string_free: the Box released it again (double free); such a field is handed over as a copy	runs-clean
 h425_nested_field_of_a_lent_call_result_handed_to_a_sink	CallT.sink	A1	as h424, a nested field	runs-clean
+h426_defer_frees_returned_value	§7.2	A2	agora #165: defer_frees_returned_value	rejected
+h427_defer_frees_value_returned_in_literal	§7.2	A2	agora #165: defer_frees_value_returned_in_literal	rejected
+h428_defer_frees_field_of_returned	§7.2	A2	agora #165: defer_frees_field_of_returned	rejected
+h429_defer_frees_value_pushed_to_param	§7.2	A2	agora #165: defer_frees_value_pushed_to_param	rejected
+h430_defer_assigns_returned	§7.2	A2	agora #165: defer_assigns_returned	rejected
+h431_defer_assigns_field_of_returned	§7.2	A2	agora #165: defer_assigns_field_of_returned	rejected
+h432_defer_in_if_frees_returned	§7.2	A2	agora #165: defer_in_if_frees_returned	rejected
+h433_defer_in_loop_frees_returned	§7.2	A2	agora #165: defer_in_loop_frees_returned	rejected
+h434_defer_frees_early_returned	§7.2	A2	agora #165: defer_frees_early_returned	rejected
