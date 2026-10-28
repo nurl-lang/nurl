@@ -258,7 +258,8 @@ $ `stdlib/core/vec.nu`
 
 **Inferred `sink`.** A parameter does not have to be spelled `sink` to be
 one. If the body consumes it (releases it, stores it in an owner, passes
-it — or one of its fields — to another `sink` position) or returns it,
+it — or one of its fields, or its payload — to another `sink` position)
+or returns it,
 the parameter is a `sink` for every caller (a function that takes a
 field of its parameter owns the rest of it, and drops it on the way out):
 
@@ -899,7 +900,13 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last ones are closed. *A field handed to a
+**No hole is known open.** The last ones are closed. *An option
+parameter's payload handed back* — as the value of a `??` (`^ ?? o { T s
+→ s F → … }`), through a local over the parameter, in a generic — left
+the caller's option holding what the function gave away (agora #146,
+h408–h415): the parameter was only kept. A parameter whose value a
+function moves on through a cursor over it is an inferred `sink` now,
+as a parameter whose field it takes is. *A field handed to a
 callee that takes it* was taken from bindings that could not give it
 (agora #145, h389–h404). A function that hands a field of its by-value
 parameter to a consumer owns the parameter and drops the rest of it, but
@@ -964,7 +971,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h407):
+all are closed, each a probe CI now holds (h142–h415):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1416,7 +1423,8 @@ the way, a closure returned over a parameter in a spelling the summary
 missed (h384–h388) was found and closed (above), and so were a field
 handed to a callee that takes it from a binding that cannot give it
 (h389–h404) and a field a closure assigned through its by-reference
-capture (h405–h407).
+capture (h405–h407), and an option parameter's payload handed back
+(h408–h415).
 
 The rules that carry it:
 
@@ -1722,7 +1730,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h407`) to the rule that rejects it. See
+  (`h01–h415`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
