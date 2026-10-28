@@ -57,6 +57,25 @@ and so is one found on the way (h384–h388); no hole is known open.
   the register form (120,576 field cases, 144 scalar multiplies,
   0 disagreements), and `crypto_tier_ir.sh` runs it with the tier on and
   off. On Skylake: X25519 shared 45.4 → 35.1 µs, keygen 16.2 → 15.0 µs.
+- **Field and scalar inverses by divsteps** (Agora #114). X25519,
+  P-256's field and P-256's group order invert with a new
+  constant-time Bernstein–Yang inverse (`std/modinv`, the formulation
+  of libsecp256k1's modinv64: ten rounds of 59 divsteps, a fixed walk)
+  instead of Fermat's a^(m−2), a serial chain of ~265 multiplies. The
+  signed products it sums come from a new `nurl_smulhi` (one `imul`).
+  `modinv_agrees` holds it to std/bigint's extended Euclid for the
+  three moduli (1,253 inputs, the edge set and 0 included). On Skylake:
+  ECDSA P-256 sign 38.3 → 29.3 µs, X25519 keygen 14.9 → 12.9 µs,
+  P-256 keygen ~22 → ~19 µs; without ADX (Haswell) X25519 shared
+  55 → 48 µs and P-256 keygen 28.6 → 22.8 µs.
+- **A multi-word subtract is a `sub; sbb` chain on x86-64.**
+  `nurl_subb_lo` / `_hi` lower through `llvm.x86.subborrow.64`: the
+  generic borrow test was rewritten by LLVM into a shape it no longer
+  chains, and a four-word subtract took 42 instructions where 23 do.
+  Haswell: RSA verify −20 %, RSA-PSS sign −4 %, P-256 ECDH −5 %.
+  X25519's square takes its cross products in an order that needs one
+  accumulating pass, not three (latency 14.7 → 12.9 ns). Skylake:
+  X25519 shared 33.3 → 31.7 µs, P-256 ECDH 87.5 → 82.0 µs.
 - **A spawn takes over the closure written in its argument** (Agora
   #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
   on a copy of the closure's environment, and the caller dropped its own
