@@ -232,7 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
-  through probe h415, is closed and held by a probe; the rules for
+  through probe h420, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -619,7 +619,10 @@ new language features.
   own copy emptied; and h405–h407: a field a closure assigned through
   its by-reference capture leaked what it held; and h408–h415: an option
   parameter's payload handed back (by a `??`, through a local or a
-  generic) left the caller's option holding it. None is open.
+  generic) left the caller's option holding it; and h416–h420: a `~`
+  loop's container released in its body (given a new value, handed to a
+  `sink`, or by a closure the body runs), and an `inout` callee taking a
+  field its caller borrowed. None is open.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

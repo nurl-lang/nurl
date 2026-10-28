@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `~` loop's container can no longer be released in the loop's
+  body** (Agora #147, h416–h420). These were accepted and read freed
+  memory:
+  - giving it a new value (`= xs …`, `= . r xs …`);
+  - handing it to a callee that takes it;
+  - a closure the body runs that reassigns it.
+- **An `inout` callee that hands a field of its parameter to a callee
+  that takes it now ends the caller's borrows of that field** (h417).
+  The field is emptied in the caller's struct, and an element borrowed
+  out of it was read after the call.
 - **An option parameter's payload handed back by a function is no
   longer read through the caller's option after its release** (Agora
   #146, h408–h415). As the value of a `??`, through a local over the

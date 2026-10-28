@@ -402,3 +402,8 @@ h412_result_parameter_payload_handed_back_by_a_match	CallT.sink	A1	as h408, a re
 h413_option_parameter_payload_put_in_a_returned_literal	§7.6	A2	an option parameter's payload in a returned literal: the caller freed the result's field and read its option (UAF); the result's field is a borrow's	rejected
 h414_cursor_over_an_option_parameter_payload_handed_back	CallT.sink	A1	as h408, through a cursor over the parameter	rejected
 h415_generic_option_parameter_payload_handed_back	CallT.sink	A1	as h408, a generic instance	rejected
+h416_loop_field_container_handed_to_a_sink_in_its_body	§2.5	A1	a ~ loop over a field handed that field to a sink in its body and read the element (UAF); a container handed to a taker is a mutation	rejected
+h417_inout_callee_takes_a_field_the_caller_borrows	§2.4	A1	an inout callee handed a field of its parameter to a sink; the caller's element borrow of that field outlived it (UAF); a replacement edge resolved on the callee's sink summary	rejected
+h418_loop_field_container_given_a_new_value_in_its_body	§2.5	A1	a ~ loop over a field gave that field a new value in its body (UAF); assignment to a loop container is rejected	rejected
+h419_loop_container_given_a_new_value_in_its_body	§2.5	A1	as h418, a local container	rejected
+h420_loop_container_given_a_new_value_by_a_closure_run_in_its_body	§2.5	A1	as h419, through a closure run in the body	rejected
