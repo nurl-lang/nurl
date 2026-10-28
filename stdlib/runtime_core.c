@@ -332,6 +332,7 @@ static void nurl__xfree(void *p) {
 void *nurl_alloc(long long bytes);  /* §9a */
 void *nurl_closure_clone(void *env);  /* closure envs, see below */
 void *nurl_closure_own_copy(void *env);  /* …owning what it only viewed */
+void nurl_closure_handover(void *env);  /* …which the next own_copy takes as is */
 void  nurl_free(void *ptr);  /* §9a */
 void  nurl_free_nonnull(void *ptr);
 void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */
@@ -3296,18 +3297,36 @@ typedef struct NurlCenvVt {
     void (*sendck)(void *env, const char *what);
 } NurlCenvVt;
 
+/* An env its maker hands over: a closure literal (or a closure a call
+ * returned) written as the argument of a spawn, which the caller does not
+ * drop after the call (the compiler's gen_call). The low bit of its
+ * descriptor word says so — descriptors are aligned — set by
+ * nurl_closure_handover and taken off by the nurl_closure_own_copy that
+ * adopts the env in place instead of copying it. Every reader of the
+ * descriptor masks it, so a panic before the spawn (the journal drops the
+ * env) or the crossing check sees the env as it was. */
+#define NURL__CENV_HANDED ((uintptr_t)1)
+static inline NurlCenvVt *nurl__cenv_vt(void *env) {
+    return (NurlCenvVt *)(*(uintptr_t *)env & ~NURL__CENV_HANDED);
+}
+
+void nurl_closure_handover(void *env) {
+    if (env) *(uintptr_t *)env |= NURL__CENV_HANDED;
+}
+
 void nurl_closure_drop(void *env) {
     if (!env) return;
-    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    NurlCenvVt *vt = nurl__cenv_vt(env);
     if (vt && vt->drop) vt->drop(env);
     nurl_free((char *)env);
 }
 
 void *nurl_closure_clone(void *env) {
     if (!env) return NULL;
-    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    NurlCenvVt *vt = nurl__cenv_vt(env);
     void *copy = nurl_alloc(vt->size);
     memcpy(copy, env, (size_t)vt->size);
+    *(uintptr_t *)copy &= ~NURL__CENV_HANDED;
     if (vt->clone) vt->clone(copy);
     return copy;
 }
@@ -3320,7 +3339,7 @@ void *nurl_closure_clone(void *env) {
  * keeps. */
 void nurl_closure_adopt(void *env) {
     if (!env) return;
-    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    NurlCenvVt *vt = nurl__cenv_vt(env);
     if (!vt || !vt->own) return;
     if (vt->adopt) vt->adopt(env);
     *(const NurlCenvVt **)env = vt->own;
@@ -3418,7 +3437,7 @@ NURL_TLS_FN void nurl_sendck_end(const char *what) {
  * one: its env's part of the walk (the descriptor's sendck slot). */
 void nurl_closure_send_check(void *env, const char *what) {
     if (!env) return;
-    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    NurlCenvVt *vt = nurl__cenv_vt(env);
     if (vt && vt->sendck) vt->sendck(env, what);
 }
 
@@ -3443,6 +3462,12 @@ static void nurl_send_check_fail(const char *what, const char *ty) {
 }
 
 void *nurl_closure_own_copy(void *env) {
+    /* Handed over: this owner takes the env itself (owning, in place). */
+    if (env && (*(uintptr_t *)env & NURL__CENV_HANDED)) {
+        *(uintptr_t *)env &= ~NURL__CENV_HANDED;
+        nurl_closure_adopt(env);
+        return env;
+    }
     void *copy = nurl_closure_clone(env);
     nurl_closure_adopt(copy);
     return copy;
@@ -6299,7 +6324,7 @@ static void nurl__cc_batch_end(void) {
  * (the descriptor's trace; null when it owns none that matter). */
 void nurl_closure_cc_trace(void *env, void *vis) {
     if (!env) return;
-    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    NurlCenvVt *vt = nurl__cenv_vt(env);
     if (vt && vt->trace) vt->trace(env, vis);
 }
 
