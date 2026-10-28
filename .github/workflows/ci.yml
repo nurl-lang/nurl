@@ -247,6 +247,17 @@ jobs:
         # 19 s for the 129 probes of the pre-production hardening.
         run: ./tools/fuzz/holes/check.sh
 
+      - name: Parser fuzz harness smoke (every target runs, briefly)
+        # The weekly fuzz run (fuzz.yml) is the only other place the
+        # parser harness runs, so a change that breaks the harness goes
+        # unseen until then: the thread crossing check (agora #121) made
+        # every socket target abort at thread_spawn before its parser read
+        # a byte, and the fuzzer counted each abort as a finding. Three
+        # seconds per target, four side by side, behind the harness build
+        # (~40 s), on a fixed seed so a PR sees the same first inputs; any
+        # finding fails the job (the input is kept in tools/fuzz/failures/).
+        run: FUZZ_MINUTES=0.05 FUZZ_JOBS=4 ./tools/fuzz/fuzz_parsers.sh 1 0 8
+
       - name: Enum ownership across compiled modules
         run: |
           NURL_SPLIT=4 NURL_SPLIT_MIN=1 ./nurl.sh compiler/tests/sink_enum_owned.nu build/sink-owned-split

@@ -23,6 +23,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A TLS 1.2 server can no longer make the client read past its key
+  share** (h424). The ServerKeyExchange names its key's length, and the
+  client handed a key of any length to `x25519`, which read 32 bytes
+  from it (found by the `tlscli` parser fuzzer). Now:
+  - the client refuses a curve it did not offer and a key of the wrong
+    size for its curve;
+  - it refuses an all-zero x25519 secret, or a P-256 point off the
+    curve (RFC 8422 §5.11), instead of keying the connection with it;
+  - `x25519` / `x25519_base` given an input that is not 32 bytes return
+    32 zero bytes, which RFC 7748 §6.1 tells every caller to refuse.
+- **x25519.nu's field helpers can no longer be called from safe code**
+  (h425). `_A`, `_M`, `_pack25519` and the others carry one underscore
+  and index five limbs (or 32 bytes) with no length check; empty
+  operands read unallocated memory. Each is now `raw`, which only an
+  `unsafe` caller may call. This costs nothing at run time.
+- **The parser fuzzer's socket targets run again.** Since the thread
+  crossing check (Agora #121), all seven (`http1`, `h2`, `tls`,
+  `tlscli`, `ws`, `http1resp`, `mqtt`) aborted at `thread_spawn` before
+  the parser read a byte: the harness's drain thread took a share of
+  the connection. The drain now reads the socket by its fd. CI runs
+  every target for a few seconds on each PR, so a broken harness no
+  longer waits for the weekly run.
+- **ext/http_pure.nu no longer reaches tls.nu's file-private
+  `__tls_io_wait`**, a path due to stop resolving. It is `_tls_io_wait`,
+  declared `raw`: it reads a runtime handle given as a number.
 - **An option of a String pushed into a Vec can no longer be read after
   the Vec is released** (Agora #149, h421–h423). A String or a struct in
   the same place was already rejected ("stored in 'out'"); an option or

@@ -61,8 +61,9 @@ $ `stdlib/core/slice.nu`
 // or writable (want = 1), honouring the handle's configured timeout
 // (0 = wait for ever, matching the blocking path's SO_RCVTIMEO
 // semantics). Returns T when the socket is ready, F on timeout or a
-// missing fiber context.
-@ __tls_io_wait i raw i want → b {
+// missing fiber context. Shared with ext/http_pure's reader.
+// requires: `raw` is a live runtime TCP handle (it is read as one).
+raw @ _tls_io_wait i raw i want → b {
     : i fd ( nurl_tcp_get_fd raw )
     : i ms ( nurl_tcp_timeout_ms raw )
     : i deadline ? != want 0 ( nurl_tcp_write_wait_ms raw ) ? > ms 0 ms - 0 1
@@ -88,7 +89,7 @@ $ `stdlib/core/slice.nu`
         ? <= wn 0 {
             : ~ b retry F
             ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 {
-                = retry ( __tls_io_wait fd 1 )
+                = retry ( _tls_io_wait fd 1 )
             } {}
             ? retry {} { ^ F }
         } {
@@ -115,7 +116,7 @@ $ `stdlib/core/slice.nu`
         : i wn ? < off hn ( nurl_tcp_write2 fd # *u + # i hp off - hn off bp bn ) ( nurl_tcp_write fd # s + # i bp - off hn - n off )
         ? <= wn 0 {
             : ~ b retry F
-            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 { = retry ( __tls_io_wait fd 1 ) } {}
+            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 { = retry ( _tls_io_wait fd 1 ) } {}
             ? retry {} { ^ F }
         } { = off + off wn }
     }
@@ -436,7 +437,7 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // so a fiber HTTP-over-TLS server multiplexes its connections instead
 // of pinning one worker per idle keep-alive conn. Off a fiber the raw
 // blocking read is what a synchronous client wants (SO_RCVTIMEO still
-// bounds it; the reactor deadline mirrors that via __tls_io_wait).
+// bounds it; the reactor deadline mirrors that via _tls_io_wait).
 @ __fill inout TlsConnImpl c i n → !i TlsErr {
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
@@ -467,7 +468,7 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
         : ~ b timed_out F
         : ~ i at len
         ~ & == . c read_nowait 0 & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
-            ? ( __tls_io_wait raw 0 ) {
+            ? ( _tls_io_wait raw 0 ) {
                 // Parked: another fiber holding this connection may have
                 // read into rxbuf meanwhile and moved it, so the place to
                 // read into is taken again, not the one from before.
@@ -849,7 +850,7 @@ unsafe @ _tls_ktls_send inout TlsConnImpl c i ct * u p i n → b {
         : i wn ( nurl_ktls_send . c fd ct # *u + # i p off - n off )
         ? <= wn 0 {
             : ~ b retry F
-            ? & on_fiber == ( nurl_tcp_err_kind . c fd ) 7 { = retry ( __tls_io_wait . c fd 1 ) } {}
+            ? & on_fiber == ( nurl_tcp_err_kind . c fd ) 7 { = retry ( _tls_io_wait . c fd 1 ) } {}
             ? retry {} { = . c closed 1 ^ F }
         } { = off + off wn }
     }
@@ -989,7 +990,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
         } {
             ? == got 0 { = . c closed 1 ^ @ !i TlsErr { T 0 } } {}
             ? | != . c read_nowait 0 | ! on_fiber != ( nurl_tcp_err_kind raw ) 7 { ^ @ !i TlsErr { F TlsRead } } {}
-            ? ! ( __tls_io_wait raw 0 ) { ^ @ !i TlsErr { F TlsRead } } {}
+            ? ! ( _tls_io_wait raw 0 ) { ^ @ !i TlsErr { F TlsRead } } {}
         }
     }
     ^ @ !i TlsErr { T 0 }
@@ -2968,6 +2969,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 
     // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
     : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ i kx_type 3  // curve_type from ServerKeyExchange: 3 named_curve
     : ~ i kx_curve 29  // named_curve from ServerKeyExchange: 29 x25519, 23 secp256r1
     : ~ i err 0
     : ~ i done 0
@@ -2982,6 +2984,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
                 } {}
                 ? == t 12 {
                     // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
+                    = kx_type ( _t_bget msg 4 )
                     = kx_curve ( _rdint msg 5 2 )
                     : i pklen ( _t_bget msg 7 )
                     = spub ( bytes_slice msg 8 + 8 pklen )
@@ -3005,6 +3008,15 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     ? | == err 1 == ( vec_len [u] spub ) 0 {
         ^ ( __fail c # TlsErr TlsHandshake )
     } {}
+    // RFC 8422 §5.4: a named curve we offered, and a public key of that
+    // curve's size — 32 bytes for x25519, an uncompressed 65-byte point
+    // for secp256r1. Any other curve was never offered, and a key of the
+    // wrong size (a length byte that lies, a message cut short) is no
+    // key: refused here, not read past.
+    : i want_pk ? == kx_curve 29 32 ? == kx_curve 23 65 0
+    ? | | != kx_type 3 == want_pk 0 != ( vec_len [u] spub ) want_pk {
+        ^ ( __fail c # TlsErr TlsHandshake )
+    } {}
 
     // ── ECDHE + master secret ──
     // Curve chosen by the server's ServerKeyExchange: secp256r1 (P-256,
@@ -3013,6 +3025,12 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     : i is_p256 == kx_curve 23
     : ( Vec u ) ckpub ? is_p256 ( p256_ecdh_keygen . c kx_p256 ) cpub
     : ( Vec u ) pms ? is_p256 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
+    // RFC 8422 §5.11 / RFC 7748 §6.1: an all-zero x25519 secret (a
+    // low-order server point) and a P-256 point off the curve (an empty
+    // secret) end the handshake instead of keying it.
+    ? ( _all_zero pms ) {
+        ^ ( __fail c # TlsErr TlsHandshake )
+    } {}
     : ( Vec u ) cs_seed ( vec_new [u] )
     ( bytes_extend_bytes cs_seed random )
     ( bytes_extend_bytes cs_seed srand )
