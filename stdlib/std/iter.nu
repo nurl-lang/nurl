@@ -119,16 +119,21 @@ $ `stdlib/core/cell.nu`
 @ range_step i from i to i step → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     ? == step 0 { ^ out } {}
+    // Each step is tested against the distance left (in u64, where it is
+    // exact) before it is taken: `k + step` wrapped back below `to` near
+    // i64 max, and the Vec grew for ever.
     ? > step 0 {
         : ~ i k from
         ~ < k to {
             ( vec_push [i] out k )
+            ? <= - # u64 to # u64 k # u64 step { break } {}
             = k + k step
         }
     } {
         : ~ i k from
         ~ > k to {
             ( vec_push [i] out k )
+            ? <= - # u64 k # u64 to - # u64 0 # u64 step { break } {}
             = k + k step
         }
     }
@@ -180,7 +185,10 @@ $ `stdlib/core/cell.nu`
         : i cur . c 0
         : b at_end ? > step 0 >= cur to <= cur to
         ? at_end { ^ @ ?i { F 0 } } {}
-        = . c 0 + cur step
+        // The last step lands on `to` (as range_step: `cur + step` wraps
+        // near i64 max, and the iterator never ended).
+        : b last ? > step 0 <= - # u64 to # u64 cur # u64 step <= - # u64 cur # u64 to - # u64 0 # u64 step
+        = . c 0 ? last to + cur step
         ^ @ ?i { T cur }
     }
 }

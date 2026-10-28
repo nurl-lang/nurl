@@ -62,7 +62,10 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     : Atomic seen ( Atomic_share woken )
-    : ~ i got 0
+    // (The count comes back through an Atomic: a fiber may not reach a
+    // `: ~` local of this frame by pointer — it may outlive the frame.)
+    : Atomic gotv ( atomic_new 0 )
+    : Atomic gotw ( Atomic_share gotv )
     ( spawn_owned \ → v {
         ( sleep_ms 100 )  // every waiter parked
         ?? ( udp_bind `127.0.0.1` 0 ) {
@@ -77,7 +80,7 @@ $ `stdlib/core/vec.nu`
                     ( sleep_ms 10 )
                     = waited + waited 10
                 }
-                = got ( atomic_load seen )
+                ( atomic_store gotw ( atomic_load seen ) )
                 ( udp_close tx )
             }
             F _ → {}
@@ -90,6 +93,7 @@ $ `stdlib/core/vec.nu`
         ( udp_close ( vec_at [UdpSocket] socks k ) )
         = k + k 1
     }
+    : i got ( atomic_load gotv )
     ( nurl_print `oldest woken within 2 s: ` ) ( nurl_print_int got ) ( nurl_print `/` ) ( nurl_println_int early )
     ^ 0
 }

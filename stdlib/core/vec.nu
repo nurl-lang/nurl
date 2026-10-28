@@ -748,7 +748,9 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? > n 0 {
         : s ctl . v ctl
         : i len ( __vec_len_raw ctl )
-        ? < ( __vec_cap_raw ctl ) + len n { ( __vec_grow [A] ctl + len n ) } {}
+        // Against the room left: `len + n` wraps for a huge `n`, and the
+        // reserve did nothing — a caller then handed `n` to recv(2).
+        ? < - ( __vec_cap_raw ctl ) len n { ( __vec_grow [A] ctl ( alloc_count_add len n ) ) } {}
     } {}
 }
 

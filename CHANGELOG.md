@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closure handed to `spawn`, `spawn_owned`, `spawn_joinable`,
+  `thread_spawn_owned` or `signal_install` can no longer reach a dead
+  frame** (h503–h505). Only `thread_spawn` was refused a closure over a
+  `: ~` local by pointer. The fiber, thread or signal handler ran after
+  the frame was gone. Every call that detaches a closure is checked now.
+- **`vec_reserve` with a count near i64 max panics instead of reserving
+  nothing** (h502). `len + n` wrapped, and `tcp_read_into` then let
+  recv(2) write past the Vec. The same path reached `tcp_try_read_into`,
+  `posix_read_append` and `pfile_read_vec_into`. The new test is
+  cheaper: 20 M reserve-and-push pairs take 46–48 ms, against 52–53 ms
+  before.
+- **`LruCache` and `TermState` can no longer be forged** (h500, h501).
+  - LruCache's control words are read through checked accessors (no
+    slower measured: 29–33 ms for 400 k operations before and after).
+  - TermState is `raw`, and `term_raw_disable` restores nothing from a
+    short `saved`.
+- **`rand_range`, `range_step` and `iter_range_step` end for spans past
+  i64 max.** They looped for ever before.
 - **A `;` defer may read the value a return hands back, but no longer
   release it** (Agora #165, h426–h434). The defers run after the value
   is the caller's. A defer that frees it, gives it or a field of it a new

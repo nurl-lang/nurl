@@ -45,7 +45,8 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 // `saved` is the termios the terminal had before raw mode, kept as the
 // bytes C wrote (the struct is opaque here) and released with the state.
-: TermState { i fd ( Vec u ) saved }
+// Only term_raw_enable makes one (`raw`: a literal is unsafe code).
+raw : TermState { i fd ( Vec u ) saved }
 
 // The runtime's echo-off line read (stdlib/runtime_core.c): the prompt goes
 // to stderr, and the line comes back without its newline, the caller's.
@@ -86,6 +87,9 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 }
 
 @ term_raw_disable TermState st → v {
+    // tcsetattr reads a whole struct termios: `saved` must still hold one
+    // (a callee can empty a sealed struct's Vec field, agora #159).
+    ? < ( vec_len [u] . st saved ) ( nurl_native_sizeof `struct termios` ) { ^ } {}
     : i32 _rc ( tcsetattr # i32 . st fd # i32 ( posix_const `TCSAFLUSH` ) # *u ( vec_data [u] . st saved ) )
 }
 

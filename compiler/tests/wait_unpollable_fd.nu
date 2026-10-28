@@ -16,6 +16,7 @@
 $ `stdlib/std/async.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/atomic.nu`
 
 @ main → i {
     : ~ ( Vec i ) fds ( vec_new [i] )
@@ -28,18 +29,29 @@ $ `stdlib/core/vec.nu`
         ( spawn_owned \ → v { ( sleep_ms 100 ) } )
         = k + k 1
     }
-    : ~ i rc0 7
-    : ~ i rc1 7
-    : ~ i rc2 7
+    // (The answers come back through Atomics: a fiber may not reach a
+    // `: ~` local of this frame by pointer — it may outlive the frame.)
+    : Atomic a0 ( atomic_new 7 )
+    : Atomic a1 ( atomic_new 7 )
+    : Atomic a2 ( atomic_new 7 )
+    : Atomic w0 ( Atomic_share a0 )
+    : Atomic w1 ( Atomic_share a1 )
+    : Atomic w2 ( Atomic_share a2 )
+    : i f0 ( vec_at [i] fds 0 )
+    : i f1 ( vec_at [i] fds 1 )
+    : i f2 ( vec_at [i] fds 2 )
     ( spawn \ → v {
-        = rc0 ( wait_readable ( vec_at [i] fds 0 ) 5000 )
-        = rc1 ( wait_writable ( vec_at [i] fds 1 ) 5000 )
-        = rc2 ( wait_readable ( vec_at [i] fds 2 ) 5000 )
+        ( atomic_store w0 ( wait_readable f0 5000 ) )
+        ( atomic_store w1 ( wait_writable f1 5000 ) )
+        ( atomic_store w2 ( wait_readable f2 5000 ) )
     } )
     : i t0 ( monotonic_ns )
     ( runtime_run )
     : i took / - ( monotonic_ns ) t0 1000000
     ( runtime_shutdown )
+    : i rc0 ( atomic_load a0 )
+    : i rc1 ( atomic_load a1 )
+    : i rc2 ( atomic_load a2 )
     ( nurl_print `300000000: ` ) ( nurl_println_int rc0 )
     ( nurl_print `pointer-sized: ` ) ( nurl_println_int rc1 )
     ( nurl_print `negative: ` ) ( nurl_println_int rc2 )

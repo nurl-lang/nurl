@@ -14057,11 +14057,18 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( die lex ( nurl_str_cat4 `'` fname `' fills its value with zero bytes, and zero bytes are not a '` ( nurl_str_cat ( __zty_show __zct ) `': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so code using it reads through null or calls it. Build the value with its constructor (vec_new, string_new, … — or rc_new / arc_new / box_new of a whole value), or, if this function fills every such field in before anything reads it and you vouch for that, declare it 'unsafe @ name …'.` ) ) )
         } {}
     } {}
-    : b is_escape_call & ! __callee_shadowed | | |
+    // (A call that keeps what it is handed past the call: a store into a
+    // Vec, and every call that detaches a closure onto something that
+    // runs after this frame may be gone — a thread or a fiber
+    // (__thr_is_detach), and a signal handler the runtime keeps. The
+    // runtime entries behind spawn and signal_install take the env `in`,
+    // so the summaries cannot see that they keep it.)
+    : b is_escape_call & ! __callee_shadowed | | | |
     ( seq fname `vec_push` )
     ( seq fname `vec_insert` )
     ( seq fname `vec_set` )
-    ( seq fname `thread_spawn` )
+    ( __thr_is_detach fname )
+    ( seq fname `signal_install` )
     : ~ i arg_idx 0
     // The arguments' source expressions, `|`-separated (__sx_operand), and
     // the binding the first argument is.
