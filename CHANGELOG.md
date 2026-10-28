@@ -55,6 +55,15 @@ and so is one found on the way (h384–h388); no hole is known open.
 
 ### Fixed
 
+- **A line printed on one thread is no longer split by a line from
+  another.** `nurl_println` writes its text and its newline as two
+  stdio calls, and on native targets nothing held them together: two
+  workers printing a line each could write text, text, newline, newline
+  (16 000 lines from eight fibers on four workers: ~800 torn). It, and
+  every print, now holds stdout's stream lock across the whole write —
+  skipped while glibc reports one thread, as its own stdio does — and
+  the output-capture buffer only grows under it. The test corpus's
+  `fiber_owns_option_payload` failed on this once in CI.
 - **A `UdpSocket` read after `udp_close` no longer reads freed memory,
   and one never closed no longer leaks its record and fd** (Agora #139,
   h382, h383).

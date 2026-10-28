@@ -91,6 +91,15 @@ static int nl_putb(FILE *f, unsigned char c) {
     return 0;
 }
 
+/* The runtime holds a stream's lock across a line (NURL_IO_LOCK). This
+ * libc has no threads — the guest has one vCPU and cooperative fibers,
+ * and nolibc on Linux has no pthreads — so there is no one to exclude,
+ * and the process is single-threaded for good (glibc's flag of that
+ * name, which the runtime reads when built against glibc's headers). */
+void flockfile(FILE *f) { (void)f; }
+void funlockfile(FILE *f) { (void)f; }
+char __libc_single_threaded = 1;
+
 int fputc(int c, FILE *f) { return nl_putb(f, (unsigned char)c) < 0 ? -1 : (unsigned char)c; }
 
 int fputs(const char *s, FILE *f) {
