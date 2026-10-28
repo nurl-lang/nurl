@@ -28,8 +28,9 @@ specified in spec §3.3d.
   the bodies of `unsafe` functions is memory-safe and leak-free, data
   races and the panic path included. Each hole found so far is a probe in
   `tools/fuzz/holes/` that CI holds rejected or clean under the
-  sanitizers, but two, open (`tools/fuzz/holes/open/`, below): a leak
-  class, and `UdpSocket`'s missing drop. A view is tracked wherever it goes (§2.10).
+  sanitizers, but one, open (`tools/fuzz/holes/open/`, below): a closure
+  a function returns over its parameter, in two spellings the summary
+  misses. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -104,6 +105,35 @@ $ `stdlib/core/string.nu`
 ```nurl
 ( nurl_eprint ( nurl_str_int . resp status ) )   // released after the call
 : i n ( takes ( string_from `x` ) )              // likewise
+```
+
+A callee whose result may view the temporary — `( string_data ( mk ) )`,
+a helper handing back a view of its parameter, a closure over it — leaves
+it to the call further out that uses the view: it is released once that
+call returns something that cannot point into it (a number, a value of
+its own) and keeps nothing of it. A view kept past that point — bound,
+returned, assigned, stored, or taken by a join — would leave the
+temporary owned by nothing, and is rejected; bind the argument to a name
+first, and the view borrows from the binding (agora #138, h378–h381):
+
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+@ mk → String { ^ ( string_from `a string long enough to own a heap buffer` ) }
+-->
+```nurl expect-error="may view its argument"
+: s v ( string_data ( mk ) )               // rejected: nothing would own the String
+( nurl_println v )
+```
+
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+@ mk → String { ^ ( string_from `a string long enough to own a heap buffer` ) }
+-->
+```nurl
+: String t ( mk )
+: s v ( string_data t )                    // a view of `t`, until `t`'s scope ends
+( nurl_println v )
+( nurl_println ( string_data ( mk ) ) )    // the String is released after the println
 ```
 
 ### Explicit early release
@@ -829,6 +859,7 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | A closure that changes a capture, beside another route to it in one call | §2.11 |
 | A closure read out of an owner, called after the owner changed | §7.5 |
 | A borrowed part of a temporary that cannot be copied | §6.2 |
+| A view of a temporary kept past the call that uses it | §1 |
 | Releasing a value a closure still holds | §2.11 |
 | Borrow used after its owner moved, ended, or was reassigned | §6.2 |
 | Non-shareable value crossing a thread boundary | §6.5 |
@@ -870,24 +901,32 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Two holes are known open.** `UdpSocket` is the runtime record's
-address with no drop: read after `udp_close` it reads freed memory, and a
-socket never closed leaks its record and fd (agora #139; the fix — a
-handle with a drop, as every other resource has — waits on a way to move a
-handle out of an option binding to a fiber, #140). Close a `UdpSocket`
-exactly once and do not use it after.
+**One hole is known open:** a closure a function returns over a
+parameter it captured without taking it over is a view of the caller's
+argument (h299), but the function's summary of it (`retclo`) misses two
+spellings — a closure literal bound to a local before the `^`, and a
+capture that is a local view of the parameter (`: s v ( string_data s )
+^ \ → v { … v … }`). A caller that releases the argument and then runs
+the closure reads freed memory (agora #141; two probes in
+`tools/fuzz/holes/open/`). Return the closure literal itself, over the
+parameter by name, or keep the argument alive while the closure runs.
 
-**And a leak:** a binding whose value views a call's
-temporary argument leaks the temporary (`: s v ( first ( string_from … )
-)`, with `first` handing back a view of its argument), and so does a
-closure whose env views one (a call returning a closure that captures its
-parameter, given a temporary). The temporary must outlive the binding,
-and the borrow checker has no name for it with which to keep the view
-from escaping it, so the compiler never drops it: a leak, never a use
-after free. Two probes in `tools/fuzz/holes/open/` hold it (agora #138).
-Bind the argument first (`: String t ( string_from … ) : s v ( first t )`).
+**Closed in this release:** *A `UdpSocket`*
+was the runtime record's address with no drop: read after `udp_close` it
+read freed memory, and a socket never closed leaked its record and fd. It
+is a handle with a drop now, as every other resource is; `udp_close` only
+stops the socket early, and its last owner releases it (agora #139,
+h382–h383). Handing one to a fiber as its only owner needed a way to move
+a payload out of an option binding: a closure handed to a thread or
+fiber that captures a match's payload, or a binding read out of one,
+moves the option's owner with it, so the crossing check (§6.5) sees one
+owner (agora #140). *A view of a call's temporary argument kept past the
+statement* — `: s v ( first ( string_from … ) )`, a closure over the
+temporary, a return or an assignment of the view, a callee that keeps
+it — left the temporary owned by nothing: it leaked. Such a view is
+rejected now (§1, Temporaries; agora #138, h378–h381).
 
-**Closed before it:** the last, *an `inout` argument whose
+**Closed before them:** *an `inout` argument whose
 binding does not own its value*, is closed (agora #135, h367–h370): a
 cursor over another binding, a field read or a value `arc_get` lends,
 handed to a callee that gives that parameter (or a field of it) a new
@@ -910,7 +949,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h377):
+all are closed, each a probe CI now holds (h142–h383):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1353,7 +1392,12 @@ in. And a closure's env was not in the panic journal (h375–h377): a
 literal handed to a call, a bound closure, a struct literal's closure
 field; each function's closure bindings are now one frame-table entry,
 and an argument's closure and literal fields are journaled while the
-call runs (§7.2). The two open holes are above.
+call runs (§7.2). Converting `UdpSocket` to a handle with a drop closed
+its use after `udp_close` and its leak (h382, h383), and probing the
+temporaries such a conversion leans on found a view of a call's
+temporary argument kept past its statement leaving the temporary owned
+by nothing (h378–h381): such a view is rejected (§1, Temporaries). The
+open hole above was found on the way.
 
 The rules that carry it:
 
@@ -1387,6 +1431,11 @@ The rules that carry it:
   fresh result (`( vec_get [String] ( mk ) 0 )`) is copied before the
   temporary is dropped; one that cannot be copied is an error naming the
   fix — bind the container to a name.
+- **A view of a temporary stays in its statement.** A call's result that
+  may view a temporary argument (`( string_data ( mk ) )`) is used inside
+  a call that consumes the view; kept past it — bound, returned, assigned,
+  stored, taken by a join — it is an error naming the same fix (§1,
+  Temporaries).
 - **A container keeps what it is handed.** A view stored in a `Vec`, used
   as a map key or handed to a function that keeps its argument may live no
   longer than its source.
@@ -1654,7 +1703,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h377`) to the rule that rejects it. See
+  (`h01–h383`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean

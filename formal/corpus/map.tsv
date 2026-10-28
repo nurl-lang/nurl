@@ -364,3 +364,9 @@ h374_binding_given_its_own_value_through_a_match	§7.6	A2	as h373, through a ?? 
 h375_panic_through_a_call_leaks_its_closure_argument	§7.2	A2	a closure literal handed to a call that panics: the env, dropped after the call, leaked; an argument's closure temporary is journaled while the call runs	runs-clean
 h376_panic_past_a_closure_binding_leaks_its_env	§7.2	A2	a closure binding handed to a call that panics: its scope exit never ran; every closure binding is in the function's closure frame table	runs-clean
 h377_panic_through_a_call_leaks_its_literal_argument	§7.2	A2	a struct literal handed to a call that panics: the String and closure it made leaked; a literal argument's owned fields are journaled while the call runs	runs-clean
+h378_binding_viewing_a_call_temporary_leaked_it	§1	A2	: s v ( first ( string_from … ) ), first handing back a view of its argument: the temporary's drop waited for a call to consume the view, and a binding is none (leak); a view of a temporary no call consumes is rejected once the caller owned it	rejected
+h379_closure_over_a_temporary_argument_leaked_it	§1	A2	as h378, a closure a call returned over its temporary argument (retclo)	rejected
+h380_view_of_a_call_temporary_returned_leaked_it	§1	A2	as h378, the view returned straight out (^ ( first ( string_from … ) ))	rejected
+h381_view_of_a_call_temporary_kept_by_a_callee_leaked_it	§1	A2	as h378, the view handed to a callee that keeps it (vec_push into a parameter Vec): no call could drop the temporary	rejected
+h382_udp_socket_read_after_close	§6.4	B	a UdpSocket was the runtime record's address with no drop; udp_close freed the record every copy still named: a shared handle with a drop, udp_close only stops the socket	runs-clean
+h383_udp_socket_never_closed_leaked	§6.4	B	as h382, a socket never closed leaked its record and fd: its last owner closes it	runs-clean
