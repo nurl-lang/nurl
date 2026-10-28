@@ -35,6 +35,16 @@ and so is one found on the way (h384–h388); no hole is known open.
 
 ### Performance
 
+- **P-256 field multiply and square in registers** (Agora #108). The
+  compiler emits `nurl_p256_mulm` / `nurl_p256_sqrm`: on x86-64 one
+  inline-asm block each, on the ADX tier (mulx, with adcx/adox carrying
+  the low and high halves of a round on two flags) or with mulq, using
+  P-256's sparse Montgomery reduction; the square takes its six cross
+  products once. Constant time, branch-free. Other targets keep the
+  portable NURL form, which a new test holds the kernels to
+  (`p256_kernel_agrees`: 120,162 cases, 0 disagreements). On Skylake
+  (ADX): ECDH shared 134 → 97 µs, keygen 30 → 22 µs, ECDSA sign
+  49 → 38 µs.
 - **A spawn takes over the closure written in its argument** (Agora
   #142). `spawn` / `spawn_owned` / `spawn_joinable` / `thread_spawn*` ran
   on a copy of the closure's environment, and the caller dropped its own
