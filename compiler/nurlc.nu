@@ -2838,6 +2838,17 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Whether this function's walk has recorded any view dependency
 // (bck_dep_add), and statement `vpass` rows pending (bck_stash_vpass).
 : ~ i g_bck_has_deps 0
+// …and whether it has bound a `??` arm's payload as a cursor over the
+// option binding it matched (bck_handle_match, `cu_` keys).
+: ~ i g_bck_has_cursor 0
+// …and the ids a row may concern them through (bck_cursor_watch): up to
+// four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_cwn` of them), more in the `cuw`
+// key (`g_bck_cwn` 5).
+: ~ i g_bck_cwn 0
+: ~ i g_bck_cw0 -1
+: ~ i g_bck_cw1 -1
+: ~ i g_bck_cw2 -1
+: ~ i g_bck_cw3 -1
 // Set while a borrow end comes from elements dropped or replaced (not the
 // value itself): an owner holding a closure that captured the binding
 // still holds a good one — it reaches the binding, not those elements.
@@ -18742,6 +18753,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             // an identifier (binds the payload) or an integer literal (compared).
             // Int-literal patterns carry no payload — skip the loop entirely.
             : ~ s pv0 ``
+            // (The payload a cursor over the option binding matched —
+            // mem_udrop_link_alias: `&*` for the walk, bck_handle_match.)
+            : ~ b pv0_cursor F
             : ~ s pv1 ``
             : ~ s pv2 ``
             : ~ s pv_over ``
@@ -19383,6 +19397,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                             ? != 0 ( nurl_str_len __ncmop ) {
                                 ( mem_udrop_flag_set syms cg vp0 `0` )
                                 ( mem_udrop_link_alias syms vp0 __ncmop )
+                                = pv0_cursor T
                             } {
                                 ? >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
                                     ( mem_udrop_flag_set syms cg vp0 `0` )
@@ -19411,6 +19426,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                         ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 `0` )
                         ( mem_udrop_link_alias syms vp0 __mop )
+                        // (A cursor for the walk too: the option is consumed
+                        // with it, and ending the option ends it — agora #170.)
+                        = pv0_cursor T
                     } {}
                     // …of an option PARAMETER: consuming the payload consumes
                     // the parameter (its caller hands the option over).
@@ -19596,7 +19614,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // from the matched binding's state — a payload of a borrow
                     // is a borrow (bck_handle_match).
                     : b __abc & & ! __lent ( bck_sound ) | | | ( __is_handle_ty __abt ) ( __is_hown_ty __abt ) __abv __abcl
-                    : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ( nurl_str_cat __ab `&` ) __abn0
+                    // (`&*`: a cursor over the option binding it matched —
+                    // mem_udrop_link_alias, bck_handle_match.)
+                    : s __abn1 ? __abc ? != 0 ( nurl_str_len __m_lkey ) ( nurl_str_cat4 __ab `&` ( str_first_word __m_lkey ) ( nurl_str_cat `%` ( bck_swap_char __m_lroots 32 43 ) ) ) ( nurl_str_cat3 __ab `&` ? & pv0_cursor ( seq __ab pv0 ) `*` `` ) __abn0
                     // A view payload is marked (`~`; `!` one that owns nothing):
                     // its buffer moving ends it.
                     : s __abn ? __abv ( nurl_str_cat ? ( __view_may_own __abt ) `~` `!` __abn1 ) ( nurl_str_cat __abn1 `` )
@@ -27585,6 +27605,16 @@ unsafe @ __bck_field_off s rec i idx → i {
 // digits up to the first non-digit, 0 for an empty or missing field —
 // except that it stops at the field's tab where atoll would skip it and
 // read the NEXT field.
+// Field `idx` of a row as a walk id, or -1 when it holds none.
+unsafe @ bck_field_id s rec i idx → i {
+    : i off ( __bck_field_off rec idx )
+    ? < off 0 { ^ -1 } {}
+    : *u rp # *u rec
+    : i c # i . rp off
+    ? | < c 48 > c 57 { ^ -1 } {}
+    ^ ( bck_field_int rec idx )
+}
+
 unsafe @ bck_field_int s rec i idx → i {
     : i off ( __bck_field_off rec idx )
     ? < off 0 { ^ 0 } {}
@@ -28926,6 +28956,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
+                // (…or handed to the `??` payload a cursor over it, which owns
+                // it from here on: bck_cursor_handover.)
+                ? != 0 g_bck_has_cursor { ( bck_cursor_handover asid ) } {}
                 : i amk0 ( __bck_row_mark rec )
                 : i amk ? == amk0 110 0 amk0
                 : s asx ? != 0 amk ( bck_field rec 8 ) ``
@@ -28983,6 +29016,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 = st ( bck_partners_freed st mvid mv_was ( bck_field_int rec 3 ) )
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
                 ( bck_field rec 3 ) )
+                // (A `??` payload that is a cursor over its option, handed on
+                // by a row of a kind that can — this one, and the alias,
+                // pending-call, store and effect rows — takes the option's
+                // value with it: bck_cursor_follow.)
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29030,6 +29068,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     } {}
                 }
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29051,6 +29090,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
                 ( bck_field rec 3 ) )
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29131,6 +29171,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         } {}
                     } {}
                 } {}
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29222,12 +29263,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // a view the statement binds borrows it (`:p`).
                         ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( bck_field rec 3 ) ) } {}
                     } }
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
             ? & ! done == kc 32 {
                 // What a closure that may run here does to its captures: the
                 // sweep below ends what that ends (bck_borrow_sweep).
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29313,6 +29356,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( nurl_sym_append_word g_bck `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                     } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -29343,6 +29387,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         }
                     }
                 } {}
+                ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -30644,6 +30689,135 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ^ st
 }
 
+// A `??` arm's payload that is a cursor over the option binding it
+// matched (bck_handle_match, `cul`: `payload:option` pairs) is handed on by
+// a row — freed, stored, moved, on some path or for certain: the option's
+// value goes with it (codegen clears the option's drop with the payload's,
+// mem_udrop_link_alias), so the option is consumed as well, and handing it
+// on after that would release the value a second time (agora #170).
+@ bck_cursor_follow s st s rec i kc → s {
+    : i rid0 ( bck_field_id rec 1 )
+    ? < rid0 0 { ^ st } {}
+    : i rid ( bck_path_root rid0 )
+    ? ! ( bck_cursor_watched rid ) { ^ st } {}
+    : ~ s out st
+    : i line ( bck_field_int rec 3 )
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c ( nurl_str_find w `:` )
+        : s xs ( nurl_str_slice w 0 c )
+        : s os ( nurl_str_slice w + c 1 - - ( nurl_str_len w ) c 1 )
+        : i xid ( nurl_str_to_int xs )
+        : i oid ( nurl_str_to_int os )
+        ? == rid xid {
+            // The payload handed on: the option's value goes with it.
+            : i now ( bck_st_get out xid )
+            ? != BCK_OWNED now {
+                ? == BCK_OWNED ( bck_st_get out oid ) {
+                    = out ( bck_st_set out oid ? | == now BCK_MAYBE_MOVED == now BCK_MAYBE_ALIAS BCK_MAYBE_MOVED BCK_MOVED )
+                    : s ls ( nurl_str_int line )
+                    ( nurl_sym_set g_bck ( nurl_str_cat `ml_` os ) ls )
+                    ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` os ) ls ) ( nurl_str_cat3 `its payload '` ( nurl_sym_get2 g_bck `rv_` xs ) `' was handed on, and a '??' arm's payload carries its option's value` ) )
+                } {}
+                ( bck_cursor_unpair xs os )
+            } {}
+        } {}
+        ? == rid oid {
+            : i onow ( bck_st_get out oid )
+            ? != BCK_OWNED onow {
+                // (…taken apart through the payload — a field of it handed on,
+                // bck_note_payload_taken: the payload owns what it took.)
+                ? | == kc 11 & == kc 4 ( seq ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` os ) ( nurl_str_int line ) ) ) `taking its payload apart` ) {
+                    ( bck_cursor_unpair xs os )
+                } {
+                    = out ( bck_cursor_end_one out xs os line ? == onow BCK_STORED `it was stored into another owner` `it was released or moved away` )
+                }
+            } {
+                // Given a new value by a callee, or by a closure that runs here.
+                ? | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+                    : s cal ( bck_field rec 5 )
+                    : s aix ( bck_field rec 6 )
+                    : s pw ? == kc 32 `a closure that runs here passes it to '` `it was passed to '`
+                    ? | ( seq cal `@assign` ) ( seq cal `@opaqueclo` ) {
+                        = out ( bck_cursor_end_one out xs os line ? ( seq cal `@assign` ) `a closure that runs here gives it a new value` `a closure called here may give it a new value` )
+                    } {
+                        ? | != 0 ( nurl_str_len ( __repl_of cal aix ) ) ( bck_callee_drops_elems cal aix ) {
+                            = out ( bck_cursor_end_one out xs os line ( nurl_str_cat3 pw ( bck_fn_show cal ) `', which may give it a new value or drop what it holds` ) )
+                        } {}
+                    }
+                } {}
+            }
+        } {}
+    }
+    ^ out
+}
+
+// The option `os` ended on `line` (`why`), released, replaced or handed on
+// with its payload `xs` still a cursor over it: `xs` points at what is gone
+// (bck_diag_invalid, `!cur`).
+@ bck_cursor_end_one s st s xs s os i line s why → s {
+    : ~ s out st
+    : i x ( nurl_str_to_int xs )
+    ? == BCK_OWNED ( bck_st_get out x ) {
+        = out ( bck_st_set out x BCK_INVALID )
+        ( nurl_sym_set g_bck ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ( nurl_str_cat ` !cur ` why ) ) )
+    } {}
+    ( bck_cursor_unpair xs os )
+    ^ out
+}
+
+// `= o …` over an option binding that `??` arm payloads are cursors over
+// (bck_handle_match): codegen hands the old value to the cursor that holds
+// it (mem_udrop_hand_over), so those payloads depend on `o` no longer.
+@ bck_cursor_handover i oid → v {
+    : s os ( nurl_str_int oid )
+    : s ck ( bck_bkey `cu_` os )
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ck ) `` )
+    ? == 0 ( nurl_str_len rest ) { ^ } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( bck_cursor_unpair c os )
+    }
+    ( nurl_sym_set g_bck ck `` )
+}
+
+// Payload `xs` is a cursor over option `os` no longer.
+@ bck_cursor_unpair s xs s os → v {
+    : s lk ( bck_bkey `cul` `` )
+    ( nurl_sym_set g_bck lk ( __word_drop ( nurl_sym_get g_bck lk ) ( nurl_str_cat3 xs `:` os ) ) )
+    : s ck ( bck_bkey `cu_` os )
+    ( nurl_sym_set g_bck ck ( __word_drop ( nurl_sym_get g_bck ck ) xs ) )
+    ( bck_cursor_watch )
+}
+
+// The ids a row may concern the cursors through (`cuw`): every payload
+// and option of the `cul` pairs.
+@ bck_cursor_watch → v {
+    : ~ s out ``
+    : ~ i n 0
+    = g_bck_cw0 -1 = g_bck_cw1 -1 = g_bck_cw2 -1 = g_bck_cw3 -1
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_bkey `cul` `` ) ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c ( nurl_str_find w `:` )
+        : i a ( nurl_str_to_int ( nurl_str_slice w 0 c ) )
+        : i b ( nurl_str_to_int ( nurl_str_slice w + c 1 - - ( nurl_str_len w ) c 1 ) )
+        ? == n 0 { = g_bck_cw0 a = g_bck_cw1 b } { ? == n 2 { = g_bck_cw2 a = g_bck_cw3 b } {} }
+        = n + n 2
+        = out ( nurl_str_cat4 out ` ` ( bck_swap_char w 58 32 ) `` )
+    }
+    = g_bck_cwn ? > n 4 5 n
+    ( nurl_sym_set g_bck ( bck_bkey `cuw` `` ) out )
+}
+
+// Is id `rid` one of the cursors' or their options' (bck_cursor_watch)?
+@ bck_cursor_watched i rid → b {
+    ? | | | == rid g_bck_cw0 == rid g_bck_cw1 == rid g_bck_cw2 == rid g_bck_cw3 { ^ T } {}
+    ? <= g_bck_cwn 4 { ^ F } {}
+    ^ ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `cuw` `` ) ) ( nurl_str_int rid ) )
+}
+
 // Binding `did` depends on `sid` no longer.
 @ bck_dep_clear_one i did i sid → v {
     : s ds ( nurl_str_int did )
@@ -30777,6 +30951,17 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     : s ln ( str_first_word info ) = info ( str_skip_word info )
     : s srcid ( str_first_word info ) = info ( str_skip_word info )
     : s sname ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcid ) )
+    // (A `??` arm's payload, a cursor over the option it matched:
+    // bck_cursor_end_one.)
+    ? ( seq ( str_first_word info ) `!cur` ) {
+        : s cwhy ( str_skip_word info )
+        : s c1 ( nurl_str_cat4 `'` name `' is the payload of '` sname )
+        : s c2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' ended at line ` ( nurl_str_cat3 ln ` — ` cwhy ) )
+        : s c3 ( nurl_str_cat4 `. The payload is still '` sname `''s, so using '` ( nurl_str_cat3 name `' now would read freed memory. Use it before that line, give '` sname ) )
+        : s c4 ( nurl_str_cat3 `' its new value with '=' (the old value then goes to '` name `'), or take a copy that owns its data first (string_from, mem_dup).` )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 c1 c2 c3 c4 ) )
+        ^ v
+    } {}
     ? ( seq ( str_first_word info ) `!vdep` ) {
         : s vwhy ( str_skip_word info )
         : s v1 ( nurl_str_cat4 `'` name `' holds a view of '` sname )
@@ -31131,6 +31316,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // shadow any same-named outer binding for the arm's extent.
             : ~ s entry ( nurl_str_cat state `` )
             : ~ s shadow_bs ``
+            : ~ s cursors ``
             : ~ s binds ( bck_field rec 1 )
             : ~ s ids ``
             ~ != 0 ( nurl_str_len binds ) {
@@ -31144,6 +31330,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 : i caret ( nurl_str_find nm0 `^` )
                 : i amp ( nurl_str_find nm0 `&` )
                 : ~ b lent >= caret 0
+                : ~ s cursor_src ``
                 : s nm ? lent ( nurl_str_slice nm0 0 caret ) ? >= amp 0 ( nurl_str_slice nm0 0 amp ) nm0
                 // The sources ride after the `^`, `+`-separated, as names.
                 : ~ s lsrc ``
@@ -31188,13 +31375,29 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                         : s sr ( bck_field ( bck_rec mi ) 2 )
                         ? & != 0 ( nurl_str_len sr ) == ( nurl_str_len ( str_first_word sr ) ) ( nurl_str_len sr ) {
                             : i sid ( nurl_str_to_int sr )
-                            ? == BCK_BORROWED_SHARED ( bck_st_get state sid ) { = lsrc ( nurl_str_int sid ) } {}
+                            ? == BCK_BORROWED_SHARED ( bck_st_get state sid ) { = lsrc ( nurl_str_int sid ) } {
+                                // …an owner's: the payload is a cursor over it —
+                                // its own to hand on or release, but the buffer is
+                                // the option's while the option holds it. Released
+                                // or replaced any other way than by a `=` here
+                                // (which hands the old value to the cursor,
+                                // mem_udrop_hand_over), it ends the payload
+                                // (agora #170).
+                                ? & & ( bck_sound ) ( seq after `*` ) == BCK_OWNED ( bck_st_get state sid ) { = cursor_src sr } {}
+                            }
                         } {}
                     }
                     = lent != 0 ( nurl_str_len lsrc )
                 } {}
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
+                ? != 0 ( nurl_str_len cursor_src ) {
+                    ( nurl_sym_append_word g_bck ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
+                    ( nurl_sym_append_word g_bck ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
+                    ( bck_cursor_watch )
+                    = g_bck_has_cursor 1
+                    = cursors ( nurl_str_cat4 cursors ` ` ( nurl_str_int id ) ( nurl_str_cat `:` cursor_src ) )
+                } {}
                 ( nurl_sym_set g_bck ( bck_bkey `vw_` ( nurl_str_int id ) ) ? isview `1` `` )
                 ( nurl_sym_set g_bck ( bck_bkey `wv_` ( nurl_str_int id ) ) ? isw `1` `` )
                 // A payload that shadows an outer binding of the same name:
@@ -31212,6 +31415,18 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             }
             // (What a payload still holds is released at the arm's end.)
             : s armfinal ( bck_ids_end ids ( bck_walk_seq + j 1 end entry ) ( bck_field_int ( bck_rec - end 1 ) 3 ) )
+            // (A cursor payload is gone with its arm: the option it matched
+            // ending later ends nothing of it.)
+            ~ != 0 ( nurl_str_len cursors ) {
+                : s cw ( str_first_word cursors ) = cursors ( str_skip_word cursors )
+                : i cc ( nurl_str_find cw `:` )
+                : s cid ( nurl_str_slice cw 0 cc )
+                : s ck ( bck_bkey `cu_` ( nurl_str_slice cw + cc 1 - - ( nurl_str_len cw ) cc 1 ) )
+                ( nurl_sym_set g_bck ck ( __word_drop ( nurl_sym_get g_bck ck ) cid ) )
+                : s lk ( bck_bkey `cul` `` )
+                ( nurl_sym_set g_bck lk ( __word_drop ( nurl_sym_get g_bck lk ) cw ) )
+                ( bck_cursor_watch )
+            }
             ~ != 0 ( nurl_str_len shadow_bs ) {
                 : s sw ( str_first_word shadow_bs ) = shadow_bs ( str_skip_word shadow_bs )
                 : i eq ( nurl_str_find sw `=` )
@@ -31536,6 +31751,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     = g_bck_has_borrow 0
     = g_bck_has_paths 0
     = g_bck_has_deps 0
+    = g_bck_has_cursor 0
     // The parameters are the outermost frame's bindings (bck_xl_declare_id).
     ( bck_xl_reset )
     : ~ s xps ( nurl_str_cat params `` )
