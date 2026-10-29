@@ -86,6 +86,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A payload handed out of an enum this function owns leaves the enum**
+  (Agora #175, h660–h668, h670). The enum might be a local, a `sink`
+  parameter or a call's temporary. Handing out its payload by returning
+  `?? e { S s → s … }`, `^ s` in an arm, or a `?` that picks it gave the
+  result a lend of the enum, and the function then dropped the enum. The
+  caller read freed memory. The same happened to a binding of the
+  payload, directly or through a `?` in the arm, when the enum was
+  reassigned. Now the payload is taken out: its slot is zeroed (the
+  enum's drop and copy skip it), a boxed one's box is freed, and the
+  value is owned. A payload lent by a parameter the caller keeps is
+  still a lend.
+- **A match over an enum's payload that is an option or a result**
+  (h671–h675). Matching such a payload (`?? e { Opt o → ?? o { T d →
+  … } } }`) handed a `% Drop` value inside it to `d` as its own, and the
+  enum dropped it again (since agora #155 boxed these payloads). That
+  payload is now lent, as the enum's payloads are. Handing out the
+  inner value of an enum this function owns takes the option out of
+  the enum.
+- **Taking an option's payload moves the option** (h669). A binding
+  that took `?? o { T s → s … }` left `o` readable. Read after that
+  binding ended, `o` read freed memory. On that path `o` is now moved,
+  as an enum is.
 - **An enum payload that is an option, a result or a closure is boxed
   and owned by the enum** (Agora #155, h640–h653). Such a payload was
   kept in the stack frame that built the enum, and the enum held its

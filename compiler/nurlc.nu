@@ -2907,6 +2907,17 @@ unsafe @ note_unsafe_item s pos s what → v {
 // `one` constant (agora #172). A global, not a symbol-table entry: it is
 // set for every argument of every call.
 : ~ i g_agg_arg_lend 0
+// 1 while mem_arm_hown asks about an arm of a join whose value is taken
+// (gen_cond's c_valu, gen_match's m_val): only there may an arm take a
+// payload out of an enum this function owns (agora #175).
+: ~ i g_arm_valu 0
+// 1 from gen_match to the `?` / `??` that is an arm's whole value, in a
+// match whose value is taken: that join's value is taken too (gen_cond's
+// c_armq, gen_match's m_armq).
+: ~ i g_arm_qval 0
+// Payload bindings of an enum the function being compiled owns
+// (mem_enum_take_note): while 0, nothing asks whether a value is one.
+: ~ i g_etake_n 0
 // 1 while the code being compiled sits in a `~` loop over a container
 // (`iter_containers` in g_bck is not empty): what a call there hands a
 // closure is checked against the loop (__iter_closure_effs_check).
@@ -4849,6 +4860,16 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ( __record_param_idx syms `__fn_retpart__` rpf_pn )
             = ret_field_copy T
             = hbit own
+        } {}
+    } {}
+    // `^ x` of a payload of an enum this function owns: the enum is dropped
+    // on the way out, so x leaves it — taken out, not lent (agora #175).
+    ? & & != 0 g_etake_n ( is_ident_tok ret_first_tt ) ! ret_field_copy {
+        : s __ert ( __etake_rec syms ret_first_val )
+        ? != 0 ( nurl_str_len __ert ) {
+            ( mem_enum_take cg __ert )
+            = hbit ( nurl_str_cat `true` `` )
+            = ret_field_copy T
         } {}
     } {}
     // `^ x` of a `??` payload: what its matched call lent (h270).
@@ -17523,6 +17544,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : b c_is_stmt ( mem_join_heads_stmt lex )
     // Whether anything takes the join's value (gen_match's m_val).
     : b c_valu | ! c_is_stmt != 0 g_blk_val_depth
+    // (…and, for an arm's take of an enum payload, an arm's whole value.)
+    : b c_armq == g_arm_qval 1
+    = g_arm_qval 0
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
     // Parsing a CONDITION: a `{` after a ternary in here opens this
@@ -17732,7 +17756,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     } {}
     : s t_owner ( mem_arm_string_owner syms cg tt2 t_tt0 tv t_dup )
     : ~ s t_hown `false`
+    = g_arm_valu ? | c_valu c_armq 1 0
     ? == 0 g_did_ret { = t_hown ( mem_arm_hown syms cg tt2 t_tt0 t_v0 t_retid c_jdepth ) } {}
+    = g_arm_valu 0
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_hown ) ``
     : s t_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
     : ~ s t_shown ``
@@ -17902,7 +17928,9 @@ unsafe @ gen_cond i lex i syms i cg → s {
     } {}
     : s e_owner ( mem_arm_string_owner syms cg et2 e_tt0 ev e_dup )
     : ~ s e_hown `false`
+    = g_arm_valu ? | c_valu c_armq 1 0
     ? == 0 g_did_ret { = e_hown ( mem_arm_hown syms cg et2 e_tt0 e_v0 e_retid c_jdepth ) } {}
+    = g_arm_valu 0
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_hown ) ``
     : s e_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
     : ~ s e_shown ``
@@ -18591,6 +18619,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // can later look up `<name>__res_nurl_T` (set by gen_let_or_struct)
     // to know the source-level NURL T of an `! T E` value being matched.
     : ~ s match_var_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    // (An arm's whole value — g_arm_qval: its value is taken.)
+    : b m_armq == g_arm_qval 1
+    = g_arm_qval 0
 
     // Generate the value to match against. Clear __last_nurl_call__
     // first: for a non-binding scrutinee, a non-empty value afterwards
@@ -18668,8 +18699,19 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( mem_udrop_flag_set syms cg mte_p mte_own )
             ( mem_journal_push_tmpown syms cg mte_p match_type )
             = m_tmp_enum T
+            ( nurl_sym_def syms `__m_tmp_slot__` mte_p )
         } {}
     } {}
+    // The slot of an enum this function owns — a local owner, a `sink`
+    // parameter, the temporary above — that an arm handing out one of its
+    // payloads takes it out of (mem_enum_take): the payload is the join's
+    // own, and the enum drops the rest. Lent instead, it was a lend of what
+    // this function then dropped (agora #175).
+    // (A join inside an arm takes it only in a match a `^` returns, where
+    // that join is the value; an arm's `^ x` takes it too — gen_ret.)
+    // (Asked where an arm binds payloads, not held across the arms: one
+    // more value live through every arm of every match cost more than the
+    // question.)
     // Borrow provenance: snapshot whether the SCRUTINEE was a borrow. A
     // match that yields a value out of a borrowed scrutinee conservatively
     // yields a borrow (the arms commonly return a payload view); restored
@@ -19656,6 +19698,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
                 ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
+                ( nurl_sym_def syms ( nurl_str_cat pv1 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
@@ -19686,6 +19729,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
                 ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
+                ( nurl_sym_def syms ( nurl_str_cat pv2 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
@@ -19708,6 +19752,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ? ! ( seq pb_tok `_` ) { ( emit_enum_payload_bind pb_tok pb_idx pattern_name match_type match_val syms cg ) } {}
                 = pb_idx + pb_idx 1
             }
+            // What an arm handing a payload out takes it out of (agora #175).
+            ( mem_enum_take_arm syms pattern_name pv0 pv1 pv2 pv_over m_tmp_enum match_first_tt match_var_name match_type )
 
             // Guard test (after payload binding so it sees the bound
             // payloads): replay the recorded guard expression, branch to
@@ -19820,6 +19866,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : s arm_pend0 ( nurl_sym_get g_fn_escapes `__pend_exits__` )
             ( mem_arm_body_mark lex )
             = g_arm_val | ! m_is_stmt != 0 g_blk_val_depth
+            = g_arm_qval ? & m_val | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST 1 0
             : i arm_sxn0 g_sx_n
             : ~ s arm_result ( gen_stmt lex syms cg )
             ? & m_val != 0 __sx_mme {
@@ -19885,7 +19932,9 @@ unsafe @ gen_match i lex i syms i cg → s {
             } {}
             : s arm_owner ( mem_arm_string_owner syms cg arm_type arm_tt0 arm_result arm_dup )
             : ~ s arm_hown `false`
+            = g_arm_valu ? | m_val m_armq 1 0
             ? == 0 g_did_ret { = arm_hown ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) } {}
+            = g_arm_valu 0
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
             : s arm_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
@@ -24339,6 +24388,105 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 // A payload binding `pv` of the match numbered `ser`: what it may point
 // into (__ptr_root_owner) — the matched binding, or what the matched call
 // lends from.
+// The slot of the enum a match reads when this function owns it — a local
+// owner, a `sink` parameter, the match's temporary (`__m_tmp_slot__`) — as
+// __reg_num gives it (N + 1 for `%rN`), 0 otherwise. Not a capture: a
+// closure called again would find its payload gone.
+@ __m_take_slot i syms b tmp i tt s name s ty → i {
+    // (Asked where an arm binds payloads: the cheap questions first — an
+    // option or a result is not a named type.)
+    ? | == 0 g_auto_drop_strings != ( nurl_str_get ty 0 ) 37 { ^ 0 } {}
+    ? tmp {
+        ? ! | ( __is_autodrop_enum ty syms ) ( __is_handle_enum ty ) { ^ 0 } {}
+        ^ ( __reg_num ( nurl_sym_get syms `__m_tmp_slot__` ) )
+    } {}
+    ? ! ( is_ident_tok tt ) { ^ 0 } {}
+    : s u0 ( mem_udrop_ptr_of syms name )
+    // (…or the owner slot of an enum parameter declared `sink` — one an
+    // inferred sink owns only when its flag says so stays lent.)
+    : s eo ( nurl_sym_get2 syms name `__enum_owner` )
+    : s u ? != 0 ( nurl_str_len u0 ) ( nurl_str_cat u0 `` ) ? & != 0 ( nurl_str_len eo ) == 0 ( nurl_sym_len2 syms eo `__sinkflag` ) ( nurl_str_cat eo `` ) ( nurl_str_cat `` `` )
+    ? | | == 0 ( nurl_str_len u ) != 0 ( nurl_sym_len2 syms u `__sborrow` ) != 0 ( nurl_sym_len2 syms u `__outer_owned` ) { ^ 0 } {}
+    ? & != 0 ( nurl_sym_len2 syms u `__pname` ) ! ( __param_owned_slot syms u ) { ^ 0 } {}
+    ? ! | ( __is_autodrop_enum ty syms ) ( __is_handle_enum ty ) { ^ 0 } {}
+    ? | ( str_contains_word g_clo_caps_now name ) ! ( nurl_sym_has_word syms `__user_drops__` u ) { ^ 0 } {}
+    ^ ( __reg_num u )
+}
+
+// `%rN` → N + 1; 0 for any other name (no take is made through it).
+@ __reg_num s r → i {
+    : i n ( nurl_str_len r )
+    ? | < n 3 == 0 ( nurl_str_starts r `%r` ) { ^ 0 } {}
+    // (Digits only: the number prints back as written.)
+    : s d ( nurl_str_slice r 2 - n 2 )
+    : i v ( nurl_str_to_int d )
+    ? ! ( seq ( nurl_str_int v ) d ) { ^ 0 } {}
+    ^ + v 1
+}
+
+// The payloads a match arm binds (`p0`–`p2`, the rest in `pover`), when the
+// match reads an enum this function owns: what mem_enum_take needs to take
+// one out when the arm hands it out (gen_match; all of it here, out of
+// gen_match's own body).
+@ mem_enum_take_arm i syms s pattern s p0 s p1 s p2 s pover b tmp i tt s name s ty → v {
+    ? & & == 0 ( nurl_str_len p0 ) == 0 ( nurl_str_len p1 ) == 0 ( nurl_str_len p2 ) { ^ v } {}
+    : i reg ( __m_take_slot syms tmp tt name ty )
+    ? == reg 0 { ^ v } {}
+    : s names ( nurl_str_cat4 ? == 0 ( nurl_str_len p0 ) `_` p0 ` ` ? == 0 ( nurl_str_len p1 ) `_` p1 ( nurl_str_cat3 ` ` ? == 0 ( nurl_str_len p2 ) `_` p2 ( nurl_str_cat ` ` pover ) ) )
+    : ~ s rest ( nurl_str_cat names `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s pv ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq pv `_` ) { ( mem_enum_take_note syms pv reg k ( nurl_sym_get syms ( nurl_str_cat3 pattern `__payload__` ( nurl_str_int k ) ) ) ty ) } {}
+        = k + k 1
+    }
+}
+
+// Payload `pidx` (of type `pt`, of an enum of type `ety` in register
+// `reg`) bound as `pv`: `pv__etake` is the slot, the enum field, the
+// payload's storage and the enum's type. Only a payload that owns something.
+@ mem_enum_take_note i syms s pv i reg i pidx s pt s ety → v {
+    ? ! ( __payload_needs_drop pt syms ) { ^ v } {}
+    = g_etake_n + g_etake_n 1
+    ( nurl_sym_def syms ( nurl_str_cat pv `__etake` ) ( nurl_str_cat4 ( nurl_str_cat `%r` ( nurl_str_int - reg 1 ) ) ` ` ( nurl_str_int + pidx 1 ) ( nurl_str_cat4 ` ` ( nurl_str_int ( enum_payload_storage pt syms ) ) ` ` ety ) ) )
+}
+
+// The take record of `name` (mem_enum_take_note): its own, or — for the
+// payload of an option or a result that is itself such a payload (`?? e {
+// Opt o → ?? o { T s → s … } }`) — that option's: `s` is all of what the
+// option holds, so taking the option out of the enum hands `s` over whole.
+@ __etake_rec i syms s name → s {
+    : s r ( nurl_sym_get2 syms name `__etake` )
+    ? != 0 ( nurl_str_len r ) { ^ ( nurl_str_cat r `` ) } {}
+    : s o ( nurl_sym_get2 syms name `__plend` )
+    ? | == 0 ( nurl_str_len o ) != 0 ( nurl_str_len ( str_skip_word o ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_starts ( nurl_sym_get syms o ) `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat ( nurl_sym_get2 syms o `__etake` ) `` )
+}
+
+// Take a payload out of the enum in `slot`: its i64 slot is zeroed (a zero
+// slot is moved out — the enum's drop and copy skip it), and a heap box it
+// was in is freed, its value already loaded into the payload binding.
+@ mem_enum_take i cg s rec → v {
+    : s slot ( str_first_word rec )
+    : s r1 ( str_skip_word rec )
+    : s fidx ( str_first_word r1 )
+    : s r2 ( str_skip_word r1 )
+    : s storage ( str_first_word r2 )
+    : s ety ( str_skip_word r2 )
+    : s gp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print gp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty ety ) )
+    ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print fidx ) ( nurl_print `\n` )
+    ? ( seq storage `3` ) {
+        : s bx ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print bx ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+        : s bp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print bx ) ( nurl_print ` to i8*\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print bp ) ( nurl_print `)\n` )
+    } {}
+    ( nurl_print `  store i64 0, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+}
+
 @ mem_note_plend i syms s pv i tt s mvar i ser → v {
     ? ( is_ident_tok tt ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) mvar ) ^ v } {}
     ? != tt TT_LPAREN { ^ v } {}
@@ -35892,6 +36040,8 @@ unsafe @ __replaces_note i syms s name s field → v {
     ( nurl_print `* ` ) ( nurl_print vpi ) ( nurl_print `\n` )
     ( nurl_sym_def syms pvi pti )
     ( nurl_sym_def syms ( nurl_str_cat pvi `__ptr` ) vpi )
+    // (An enum's payload: lent by the enum, h231.)
+    ( nurl_sym_def syms ( nurl_str_cat pvi `__enum_pl` ) `1` )
     ? != 0 g_auto_drop_strings
     { : s akey ( nurl_str_cat `drop##` pti )
         ? & != 0 ( nurl_sym_len g_impl_name_syms akey )
@@ -37441,7 +37591,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // (…and when the callee hands the literal back whole: the result is
         // the literal, and owns what the binding held — a local's, agora
         // #172.)
-        // (Asked only for such a literal: `&` evaluates every operand.)
+        // (Asked only for such a literal.)
         ? != 0 g_agg_arg_lend {
             ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! agg_returned < ( nurl_sym_word_index syms `__fn_param_names__` fld_first_val ) 0 {
                 : s __lac ( nurl_sym_get syms `__agg_arg_call__` )
@@ -47935,6 +48085,9 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( bck_fn_begin )
     ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
     = g_ptr_own_n 0
+    // (A generic instance compiled inside another function keeps its own.)
+    : i __etk_saved g_etake_n
+    = g_etake_n 0
     = g_ff_gen + g_ff_gen 1
     = g_ff_any 0
     ( nurl_sym_def g_ptrtab `__ptr_dead__` `` )
@@ -48770,6 +48923,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     {}
     ? __hook_glue { = g_drop_glue_ty `` } {}
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
+    = g_etake_n __etk_saved
 }
 
 // Is `fname` a library handle's drop hook — `X_drop` (or an instance of a
@@ -51546,10 +51700,18 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // is stored in the slot itself, as construction stores it
     // (enum_payload_storage 2) — not boxed: rebuild it and drop it.
     ? & == 0 ( nurl_str_starts pt `%Vec__` ) == ( enum_payload_storage pt syms ) 2 {
+        // (A zero slot was moved out — mem_enum_take: nothing to drop.)
+        : s hz ( __dr ctr )
+        : s hl ( nurl_str_cat `drop_hlive_` ( nurl_str_int ctr ) )
+        : s hd ( nurl_str_cat `drop_hdone_` ( nurl_str_int ctr ) )
+        ( nurl_print `  ` ) ( nurl_print hz ) ( nurl_print ` = icmp ne i64 ` ) ( nurl_print slot ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print hz ) ( nurl_print `, label %` ) ( nurl_print hl ) ( nurl_print `, label %` ) ( nurl_print hd ) ( nurl_print `\n` )
+        ( nurl_print hl ) ( nurl_print `:\n` )
         : s hv ( __dr ctr )
         ( nurl_print `  ` ) ( nurl_print hv ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty pt ) ) ( nurl_print ` zeroinitializer, i8* ` )
         ( nurl_print sp ) ( nurl_print `, 0\n` )
         ( emit_drop_value pt hv ctr syms )
+        ( nurl_print `  br label %` ) ( nurl_print hd ) ( nurl_print `\n` ) ( nurl_print hd ) ( nurl_print `:\n` )
         ^ v
     } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) {
@@ -54163,6 +54325,10 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     // with itself — a field of a local too, h223.)
     ? == tt TT_DOT { ^ T } {}
     ? ( is_ident_tok tt ) {
+        // (An enum's payload binding: the enum keeps that option and drops
+        // it with itself — a `% Drop` payload of it taken over was dropped
+        // twice.)
+        ? ( seq ( nurl_sym_get2 syms var `__enum_pl` ) `1` ) { ^ T } {}
         : s msp ( mem_udrop_ptr_of syms var )
         ? == 0 ( nurl_str_len msp ) { ^ F } {}
         : s msb ( nurl_sym_get2 syms msp `__sborrow` )
@@ -54763,6 +54929,20 @@ unsafe @ __clo_take_capture i syms s name → v {
 }
 
 @ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
+    // A payload of an enum this function owns, as the value of a join
+    // that is taken: this path takes it out of the enum, which is moved on
+    // it, as an option is (mem_enum_take, agora #175). (Asked only once one
+    // is bound.)
+    ? & != 0 g_etake_n != 0 g_arm_valu {
+        ? & ( is_ident_tok tt0 ) ( seq v0 retid ) {
+            : s rec ( __etake_rec syms retid )
+            ? != 0 ( nurl_str_len rec ) {
+                ( mem_enum_take cg rec )
+                ( bck_note_payload_taken syms ( str_first_word rec ) g_stmt_line )
+                ^ ( nurl_str_cat `true` `` )
+            } {}
+        } {}
+    } {}
     // An option / result of one counts as its registration twin; a value
     // that cannot be copied is handed over the same way (a payload cursor
     // over an option binding takes the option along, h223).
@@ -54787,10 +54967,21 @@ unsafe @ __clo_take_capture i syms s name → v {
             : ~ s r ( mem_udrop_flag_get syms cg up )
             ( mem_udrop_flag_set syms cg up `0` )
             // A cursor (`T s → s` over an option binding): the values it
-            // is a cursor over leave with it.
+            // is a cursor over leave with it — the option is moved on this
+            // path, as one whose field was taken (read again after the
+            // value ended, it read freed memory).
             : ~ s al ( nurl_sym_get2 syms up `__alias` )
             ~ != 0 ( nurl_str_len al ) {
                 : s w ( str_first_word al ) = al ( str_skip_word al )
+                // (Only an option this function owns: a borrowed one — a cursor
+                // over a parameter — is its owner's, which still drops it.)
+                // (`w` is a drop registration already: a cursor's `__alias`
+                // names only those.)
+                ? & & & & == 0 ( nurl_sym_len2 syms w `__sborrow` ) == 0 ( nurl_sym_len2 syms w `__alias` ) == 0 ( nurl_sym_len2 syms w `__optparam` )
+                != 0 ( nurl_str_starts ( nurl_sym_get2 syms w `__udty` ) `%__opt.` )
+                | == 0 ( nurl_sym_len2 syms w `__pname` ) ( __param_owned_slot syms w ) {
+                    ( bck_note_payload_taken syms w g_stmt_line )
+                } {}
                 : s wf ( mem_udrop_flag_get syms cg w )
                 : s o ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
