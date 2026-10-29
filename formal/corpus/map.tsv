@@ -651,3 +651,12 @@ h672_nested_match_over_a_result_of_drop_payload	§7.6	A2	agora #175: the same ov
 h673_nested_match_over_a_second_payload	§7.6	A2	agora #175: the same over a variant's second payload	runs-clean
 h674_nested_payload_returned_out_of_a_sink_enum	§7.6	A2	agora #175: an option payload's payload returned out of a sink enum through an inner match	runs-clean
 h675_nested_payload_bound_then_its_enum_reassigned	§7.6	A2	agora #175: an option payload's payload bound through an inner match, then the enum reassigned	runs-clean
+h680_uncopyable_capture_closure_returned_in_a_struct	§2.11	A2	agora #161: a closure over a ( Vec D ) (D with a Drop, no Clone) returned inside a struct literal: adopting it could not copy the Vec in, its copy was the frame's released handle (UAF)	rejected
+h681_uncopyable_capture_closure_in_a_struct_bound_then_returned	§2.11	A2	agora #161: as h680 with the struct bound first and returned by name: the capture, modelled as stored into the struct, was no dependency of it	rejected
+h682_uncopyable_capture_closure_pushed_into_a_parameter	§2.11	A2	agora #161: as h680, the closure pushed into the caller's ( Vec ( @ i ) ): the cdep row ended the parameter silently	rejected
+h683_uncopyable_capture_closure_stored_into_an_inout_field	§2.11	A2	agora #161: as h680, the closure stored into a field of the caller's struct through inout	rejected
+h684_uncopyable_capture_through_a_wrapping_closure	§2.11	A2	agora #161: as h680, the closure wrapped in a closure literal written in the returned struct	rejected
+h685_captured_closure_views_survive_a_wrapping_closure	§2.11	A2	agora #161: as h684 over a ( Vec String ): adopting copies in nothing a captured closure views	rejected
+h686_option_of_a_drop_type_captured_closure_returned_in_a_struct	§2.11	A2	agora #161: as h680, the capture a ?D	rejected
+h687_result_of_a_drop_type_captured_closure_stored_into_a_field	§2.11	A2	agora #161: as h683, the capture a !D i	rejected
+h688_trait_object_vec_captured_closure_returned_in_a_struct	§2.11	A2	agora #161: as h680, the capture a ( Vec %Show )	rejected

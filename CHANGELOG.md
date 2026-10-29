@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A closure stored into an owner depends on what it could not copy in**
+  (agora #161, h680–h688). Storing a closure into a struct or a container
+  copies in the values it captured by value — but only those with a
+  Clone. A `Vec` of values with a `% Drop` of their own, an option or a
+  result of one, a trait object, and anything a captured closure holds
+  stayed a copy of the frame's handle, and the checker took the owner to
+  hold a copy of its own. Returned inside a struct, pushed into a
+  parameter's `Vec`, stored into an `inout` field, or wrapped in a closure
+  that escapes, it was run on freed memory. Each is now refused, and the
+  message names the cure: share the value through an `( Rc T )`. Nothing
+  changes for a closure that stays in its frame or captures values with
+  a Clone; no code is emitted differently.
 - **A sealed struct's handle field handed to a callee that may change it
   is a write to that field** (agora #159, h617–h620, h638). A sealed
   representation (`raw :` or a standard-library `% Drop` struct) refused
