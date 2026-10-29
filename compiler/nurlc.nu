@@ -4622,6 +4622,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_member_path_on ? & != 0 g_srcx_on == ret_first_tt TT_DOT 1 g_member_path_on
     : ~ s val ( gen_operand lex syms cg )
     = g_member_path_on __rsxmp
+    // A block whose tail is a field read hands back that field as `^ . x f`
+    // does: its own locals are this frame's, dropped on the way out
+    // (agora #180).
+    : ~ i ret_eff_tt ret_first_tt
+    ? == ret_first_tt TT_LBRACE { ? != 0 ( nurl_str_len g_blk_froot ) { = ret_eff_tt TT_DOT } {} } {}
     // A fall-off value that turned out to be none — a call that never
     // returns (`( die … )`), or one returning `v` — is the fall-off's to
     // judge (__tail_noreturn_close, ret_ty_agree's fall-off wording).
@@ -4629,7 +4634,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         = g_fn_ret_count - g_fn_ret_count 1
         ^ val
     } {}
-    ( __nc_ret_check lex syms ( nurl_get_last_type ) ret_first_tt ret_first_val bck_line )
+    ( __nc_ret_check lex syms ( nurl_get_last_type ) ret_eff_tt ret_first_val bck_line )
     // …and a join that lent, on some path, a field of a value this frame
     // releases on the way out (g_join_flends; agora #178): copied below
     // when it can be, refused when it cannot.
@@ -4818,7 +4823,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // caller's own where the call handed the result over, lent where it
     // lent it (`^ . ( vec_at [Bx] bxs 0 ) items`) — answered per call, as
     // `^ ( g x )` is.
-    ? & == ret_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+    ? & == ret_eff_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
         : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
         ? ! ( seq __tfo `true` ) {
             : s __tfp ( __retown_pair ( nurl_sym_get syms `__last_tmp_field_rk__` ) )
@@ -4830,7 +4835,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
         = hbit __tfo
         = ret_field_copy T
     } {}
-    ? & == ret_first_tt TT_DOT ! ret_field_copy {
+    ? & == ret_eff_tt TT_DOT ! ret_field_copy {
         : s rfr ( nurl_sym_get syms `__last_field_read__` )
         : s rfp ( str_first_word rfr )
         : s rft ( nurl_get_last_type )
@@ -4868,7 +4873,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // on the taking path, and callers read the answer through the
     // function's `@.__nurl_retown` constant (`retlend##`).
     : ~ s ret_pfield ``
-    ? == ret_first_tt TT_DOT { = ret_pfield ( nurl_sym_get syms `__last_field_read__` ) } {}
+    ? == ret_eff_tt TT_DOT { = ret_pfield ( nurl_sym_get syms `__last_field_read__` ) } {}
     ? ( is_ident_tok ret_first_tt ) {
         : s __rpu ( mem_udrop_ptr_of syms ret_first_val )
         ? != 0 ( nurl_str_len __rpu ) { = ret_pfield ( nurl_sym_get2 syms __rpu `__fsrc` ) } {}
@@ -17818,8 +17823,16 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( mem_note_field_part syms t_froot tt2 )
         ? ( is_ident_tok t_tt0 ) { ( mem_note_payload_part syms t_v0 ) } {}
     } { = t_fl 0 }
+    // A field of a struct the arm owns itself (`{ : P q … . q s }`): it
+    // moves out of q, so the arm hands over a value of its own and its
+    // locals go at its exit (agora #180).
+    : ~ b t_took F
+    ? & t_lends != 0 ( nurl_str_len t_froot ) {
+        : s __tk ( mem_arm_take_field syms cg tt2 t_froot old_user_t )
+        ? != 0 ( nurl_str_len __tk ) { = t_hown __tk = t_took T } {}
+    } {}
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_hown ) ``
-    : s t_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
+    : s t_xhown ? == 0 g_did_ret ? t_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
     : ~ s t_shown ``
     ? == 0 g_did_ret { = t_shown ( mem_arm_struct_hown syms cg tt2 t_tt0 ) } {}
     // Which enum this arm's value is a variant TAG of, if any: a bare
@@ -18005,8 +18018,13 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( mem_note_field_part syms e_froot et2 )
         ? ( is_ident_tok e_tt0 ) { ( mem_note_payload_part syms e_v0 ) } {}
     } { = e_fl 0 }
+    : ~ b e_took F
+    ? & e_lends != 0 ( nurl_str_len e_froot ) {
+        : s __ek ( mem_arm_take_field syms cg et2 e_froot old_user_e )
+        ? != 0 ( nurl_str_len __ek ) { = e_hown __ek = e_took T } {}
+    } {}
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_hown ) ``
-    : s e_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
+    : s e_xhown ? == 0 g_did_ret ? e_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
     : ~ s e_shown ``
     ? == 0 g_did_ret { = e_shown ( mem_arm_struct_hown syms cg et2 e_tt0 ) } {}
     // Mirror of t_ven above.
@@ -20046,8 +20064,15 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( mem_note_field_part syms arm_froot arm_type )
                 = m_fl | m_fl arm_fl
             } {}
+            // (…a field of a struct the arm owns itself moves out of it, as
+            // in gen_cond's arms; agora #180.)
+            : ~ b arm_took F
+            ? & arm_lends != 0 ( nurl_str_len arm_froot ) {
+                : s __mk ( mem_arm_take_field syms cg arm_type arm_froot old_user_m )
+                ? != 0 ( nurl_str_len __mk ) { = arm_hown __mk = arm_took T } {}
+            } {}
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
-            : s arm_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
+            : s arm_xhown ? == 0 g_did_ret ? arm_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
             // private exit block a parked-drop arm leaves through.
             : ~ s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -21497,8 +21522,9 @@ unsafe @ __blk_leave b val → v {
         {}
         = any T
     }
-    // (What a tail field read starts at, read before this scope goes.)
-    ? & any == __tail_tt TT_DOT { ( __blk_froot_set ( nurl_sym_get syms `__last_member_root__` ) ) } { = g_blk_froot `` }
+    // (What a tail field read starts at, read before this scope goes — or,
+    // for a tail that is itself a block, what that block's tail read.)
+    ? & any == __tail_tt TT_DOT { ( __blk_froot_set ( nurl_sym_get syms `__last_member_root__` ) ) } { ? & any == __tail_tt TT_LBRACE {} { = g_blk_froot `` } }
     ? & blk_val != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
     ? __blk_scope {
         ? == g_did_ret 0 {
@@ -24716,9 +24742,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // (g_blk_froot): `` when it is no field read.
 @ __arm_froot i syms i tt0 → s {
     ? == tt0 TT_DOT { ^ ( nurl_sym_get syms `__last_member_root__` ) } {}
-    ? & == tt0 TT_LBRACE != 0 ( nurl_str_len g_blk_froot ) {
-        ? == ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) TT_DOT { ^ ( nurl_str_cat g_blk_froot `` ) } {}
-    } {}
+    ? == tt0 TT_LBRACE { ^ ( nurl_str_cat g_blk_froot `` ) } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -24732,6 +24756,43 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? == tt TT_LBRACE { = tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) } {}
     ? | == tt TT_QUEST == tt TT_QUESTQUEST { ^ inner } {}
     ^ 0
+}
+
+// An arm whose value is a field (`. q s`, or its block's tail one) of a
+// struct `froot` the arm owns itself — registered in the arm, not in its
+// parent's `old_user`: the arm drops q at its exit, and the join may still
+// read the field, so the field moves out of q, emptied while q owns it
+// (mem_zero_field), as `^ . q s` does (agora #180). Returns q's flag —
+// whether the arm now owns its value; `` when it is no such arm.
+@ mem_arm_take_field i syms i cg s ty s froot s old_user → s {
+    ? ! ( __is_handle_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s rfr ( nurl_sym_get syms `__last_field_read__` )
+    : s rfp ( str_first_word rfr )
+    ? | | == 0 ( nurl_str_len rfp ) ( str_contains_word old_user rfp ) ! ( seq rfp ( mem_udrop_ptr_of syms froot ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s sty ( str_first_word ( str_skip_word rfr ) )
+    : s idx ( str_first_word ( str_skip_word ( str_skip_word rfr ) ) )
+    : s fty ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word rfr ) ) ) )
+    // (Not a view, a cursor, or under a `;` defer that may read it.)
+    ? | | | ! ( __is_handle_ty fty ) != 0 ( nurl_sym_len2 syms rfp `__vget` ) != 0 ( nurl_sym_len2 syms rfp `__eaddr` ) != 0 ( nurl_sym_len2 syms rfp `__alias` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | | != 0 ( nurl_sym_len2 syms rfp `__fsrc` ) != 0 g_bck_closure_depth != 0 g_defer_count { ^ ( nurl_str_cat `` `` ) } {}
+    : s own ( mem_udrop_flag_get syms cg rfp )
+    // (A struct whose own drop may read the field keeps a copy of it.)
+    ? ( __has_user_drop sty ) { ( mem_field_copy_back cg rfp sty idx fty own ) } { ( mem_zero_field cg rfp sty idx fty own ) }
+    ^ own
+}
+
+// Field `idx` of the struct at `ptr` replaced by a copy of itself where
+// `cond` holds: the value it held leaves, and the struct keeps one of its
+// own for its drop to read (mem_arm_take_field).
+@ mem_field_copy_back i cg s ptr s sty s idx s fty s cond → v {
+    : s g ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print sty ) ( nurl_print `, ` )
+    ( nurl_print sty ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path idx ) ) ( nurl_print `\n` )
+    : s lt ( nurl_llty fty )
+    : s cur ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `\n` )
+    : s cp ( mem_emit_cloneif cg fty cur cond )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `\n` )
 }
 
 // How deep the value an arm's lend reads from was bound: the owner of the

@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_block_tail_field_not_copyable.nu:16:51: error: this hands back a field of 'h', which is dropped, fields and all, on the way out; a 'D' cannot be copied out of it — the field would be released with it under the caller. Keep the value in a binding of its own and hand that back, or hand back the whole of it.
+@ part → D { ^ { : H h @ H { @ D { ( mk ) } 1 } . h d } }
+                                                  ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
