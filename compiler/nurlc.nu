@@ -34206,7 +34206,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_join_rdepth -1
         = g_join_deep 0
         ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
-            ? != 0 ( nurl_sym_len2 syms ptr `__depth` ) { = g_join_rdepth ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) } {}
+            ? != 0 ( nurl_sym_len2 syms ptr `__depth` ) { = g_join_rdepth ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) } {
+                // (An `inout` parameter or a binding captured by reference
+                // is the caller's: everything this function binds dies
+                // before it — agora #183.)
+                ? | ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( seq ( nurl_sym_get2 syms name `__captured_byref` ) `1` ) { = g_join_rdepth 0 } {}
+            }
         } {}
         : ~ s val ( gen_operand lex syms cg )
         = g_member_path_on __sxmp0
@@ -34761,6 +34766,35 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // place (h199: `= o @ ?String { … }` over an `inout ?String`, or an
         // owned `?T` global, left the old string).
         : b __io_oty & & ! ( __is_handle_ty vt ) ! ( __is_closure_llty vt ) | ( __type_needs_drop vt syms ) != 0 ( nurl_str_len ( __nc_opt_payload vt ) )
+        // …and by a `?` / `??`: its value is made the caller's own on every
+        // path first — a copy where it was lent, also of this very binding
+        // (`= t ? c t …`) — and then the caller's old value goes (agora #183).
+        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
+            ? & ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) | ( __is_handle_ty vt ) __io_oty {
+                : s __io_jo ( nurl_sym_get syms `__last_join_own__` )
+                ? ! ( seq __io_jo `true` ) {
+                    : ~ s __io_jc `1`
+                    ? != 0 ( nurl_str_len __io_jo ) {
+                        = __io_jc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __io_jc ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_jo ) ( nurl_print `, 1\n` )
+                    } {}
+                    = store_val ( mem_emit_cloneif cg vt store_val __io_jc )
+                    ( nurl_sym_def syms `__last_join_own__` `true` )
+                } {}
+                ? __io_oty {
+                    ( nurl_print `  call void @__nurl_rawdrop.` ) ( nurl_print ( __rawdrop_request vt ) )
+                    ( nurl_print `(i1 true, ptr ` ) ( nurl_print ptr ) ( nurl_print `)` ) ( emit_dbg_eol )
+                } {
+                    : s __io_oldj ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_oldj ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                    ( __handle_drop_ensure vt )
+                    ( __dropifv_request vt )
+                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 true, ` )
+                    ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_oldj ) ( nurl_print `)` ) ( emit_dbg_eol )
+                }
+            } {}
+        } {}
         ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty
         | == bck_rhs_tt TT_AT & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             : s __io_ro3 ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
