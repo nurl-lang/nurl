@@ -115,6 +115,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value block whose tail reads a field of the block's own struct
+  hands the field over** (Agora #180, h746–h752). `^ { : P q @ P { ( mk )
+  1 } . q s }` handed the caller `s` as a lend, and the return dropped `q`
+  under it. A nested block did the same. As a `?` / `??` arm, the arm
+  never dropped `q`: its locals stayed parked because the value might
+  view them, and the struct leaked. `^` of such a block now hands the
+  field back as `^ . q s` does: moved out of `q` while `q` owns it,
+  copied otherwise, refused when it cannot be copied. In an arm the
+  field moves out of the arm's own struct, so the arm hands over a value
+  of its own and drops its locals. A struct with a `% Drop` of its own
+  keeps a copy of the field for that drop.
 - **A `?` / `??` assigned to a binding of an outer block hands it a value
   of its own** (Agora #179, h740–h745). `= t ? T x ( mk )` inside a
   block, with `x` that block's String, gave `t` a lend of `x`. The same
