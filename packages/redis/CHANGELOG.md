@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.6] — 2026-10-29
+
+### Changed
+
+- The `SUBSCRIBE` / `PSUBSCRIBE` loop and the command dispatch bind the token they view (`: String … ?? ( vec_get … )`) before taking `string_data` of it. NURL now refuses a view of a `?` / `??` join kept past its statement: on the path that made a fresh `String`, nothing could release it (agora #181).
+
 ## [0.3.5] — 2026-10-14
 
 Requires NURL 0.73.0 (`slice_at`, `slice_put`, `rc_take`, `locked_take`).
