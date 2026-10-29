@@ -603,7 +603,7 @@ h617_sealed_field_viewed_by_a_binding_then_cleared	§3.3d	B	`: ( Vec i ) d . k d
 h618_sealed_field_cleared_by_a_user_function	§3.3d	B	`( wipe . k d )` with `wipe` a function of the program that clears its Vec: a callee whose summary changes the argument is refused a sealed field (agora #159).	rejected
 h619_sealed_field_of_a_nested_struct_cleared	§3.3d	B	`( vec_clear [i] . . k cn m )`: a sealed representation's field two levels down (agora #159).	rejected
 h620_sealed_field_view_copied_then_cleared	§3.3d	B	`: ( Vec i ) d2 d` from a view `d` of a sealed field, then `( vec_clear [i] d2 )`: a copy of a view views it too (agora #159).	rejected
-h630_sealed_field_cleared_by_a_later_function	§3.3d	B	as h618 with `wipe` defined after its caller: the call is parked and decided at module end by the callee's final summary (resolve_sealed_handoffs; agora #159).	rejected
+h638_sealed_field_cleared_by_a_later_function	§3.3d	B	as h618 with `wipe` defined after its caller: the call is parked and decided at module end by the callee's final summary (resolve_sealed_handoffs; agora #159).	rejected
 h621_closure_binding_in_an_option_literal_unwrapped	§7.5	A2	agora #173: closure binding in an option literal unwrapped: env copy leaks	runs-clean
 h622_closure_binding_in_a_struct_literal_picked	§7.5	A2	agora #173: closure binding in a struct literal picked: env copy leaks	runs-clean
 h623_closure_binding_in_a_literal_read_by_a_callee	§7.5	A2	agora #173: closure binding in a literal read by a callee: env copy leaks	runs-clean
@@ -613,3 +613,11 @@ h626_closure_binding_in_a_literal_handed_back_in_a_loop	§7.5	A2	agora #173: clo
 h627_closure_binding_in_a_result_literal_unwrapped	§7.5	A2	agora #173: closure binding in a result literal unwrapped: env copy leaks	runs-clean
 h628_two_closure_fields_of_a_literal_picked_and_read	§7.5	A2	agora #173: two closure fields of a literal picked and read: env copy leaks	runs-clean
 h629_closure_binding_in_a_literal_picked_twice	§7.5	A2	agora #173: closure binding in a literal picked twice: env copy leaks	runs-clean
+h630_dyn_of_a_bound_byref_closure_struct_returned	§2.8	A2	agora #156: a struct holding a by-reference closure, bound, then boxed with dyn and returned	rejected
+h631_dyn_wrapper_of_a_byref_closure_struct_returned	§2.8	A2	agora #156: a wrapper boxing its parameter with dyn: the caller returns the object of a by-reference closure struct	rejected
+h632_dyn_sink_wrapper_of_a_byref_closure_struct_returned	§2.8	A2	agora #156: the same through a sink parameter, the literal built at the call	rejected
+h633_dyn_of_a_view_struct_literal_returned	§2.11	A2	agora #156: a struct literal viewing a local String, boxed with dyn and returned	rejected
+h634_dyn_of_a_bound_view_struct_returned	§2.11	A2	agora #156: a bound struct viewing a local String, boxed with dyn and returned	rejected
+h635_dyn_of_a_view_struct_outlives_its_owner	§2.11	A2	agora #156: a dyn object over a view assigned to an outer binding, read after the String ended	rejected
+h636_dyn_of_a_view_field_returned	§2.11	A2	agora #156: a struct field viewing a local String, boxed with dyn and returned	rejected
+h637_dyn_of_a_viewing_call_returned	§2.11	A2	agora #156: a call result viewing a local String, boxed with dyn and returned	rejected
