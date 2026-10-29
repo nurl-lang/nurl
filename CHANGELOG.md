@@ -107,6 +107,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `??` over an enum literal drops the literal** (Agora #182,
+  h753–h759). `?? @ E { S ( mk ) } { … }` gave the literal no owner, so
+  its payload leaked, a struct payload's box too, and in a loop every
+  round leaked again. A call's result in the same place already had an
+  owner of its own. A literal now gets one: it is dropped at the end of
+  its scope, an arm that hands its payload on takes the payload out, and
+  a binding's value placed in it is moved there, as the borrow checker
+  already said.
 - **A value block whose tail reads a field of the block's own struct
   hands the field over** (Agora #180, h746–h752). `^ { : P q @ P { ( mk )
   1 } . q s }` handed the caller `s` as a lend, and the return dropped `q`
