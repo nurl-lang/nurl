@@ -3,9 +3,8 @@
 // and a literal pointed it at a one-byte string; every accessor read and
 // wrote 24 bytes through it. LruCache is generic, so it cannot be a `raw`
 // struct.
-// Closed: the words are read and written in `meta` through vec_get /
-// vec_set; a literal with a short `meta` reads them as -1 and writes
-// nothing.
+// Closed: each operation takes the words' address from `meta` after
+// checking that it holds three (a literal with a shorter `meta` panics).
 // v0.80.0: accepted; AddressSanitizer reported heap-buffer-overflow.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`

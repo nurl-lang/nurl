@@ -173,23 +173,30 @@ $ `stdlib/core/cell.nu`
 
 // Constructor — strided integer iterator. Direction picked from sign
 // of step. step == 0 produces an empty iterator (safe, no hang).
-// Cursor: the next value.
 @ iter_range_step i from i to i step → ( @ ?i i ) {
+    // The number of values is worked out once, in u64 where the span is
+    // exact, and the cursor is just the index of the next one: stepping
+    // until `cur` passed `to` broke when `cur + step` wrapped back below it
+    // near i64 max (the iterator never ended), and a per-step test of the
+    // room left cost a quarter of the loop. (Value i is `from + i * step`,
+    // which never wraps for an i below the count.)
+    : ~ u64 n # u64 0
+    ? > step 0 {
+        ? < from to { = n + / - - # u64 to # u64 from # u64 1 # u64 step # u64 1 } {}
+    } {
+        ? & < step 0 > from to {
+            = n + / - - # u64 from # u64 to # u64 1 - # u64 0 # u64 step # u64 1
+        } {}
+    }
+    : i count # i n
     : Cell st ( cell_zero 8 )
-    : *i c0 ( cell_ptr_as [i] st )
-    = . c0 0 from
     ^ \ i cmd → ?i {
         : *i c ( cell_ptr_as [i] st )
-        ? == cmd 1 { = . c 0 to ^ @ ?i { F 0 } } {}
-        ? == step 0 { ^ @ ?i { F 0 } } {}
-        : i cur . c 0
-        : b at_end ? > step 0 >= cur to <= cur to
-        ? at_end { ^ @ ?i { F 0 } } {}
-        // The last step lands on `to` (as range_step: `cur + step` wraps
-        // near i64 max, and the iterator never ended).
-        : b last ? > step 0 <= - # u64 to # u64 cur # u64 step <= - # u64 cur # u64 to - # u64 0 # u64 step
-        = . c 0 ? last to + cur step
-        ^ @ ?i { T cur }
+        ? == cmd 1 { = . c 0 count ^ @ ?i { F 0 } } {}
+        : i k . c 0
+        ? == k count { ^ @ ?i { F 0 } } {}
+        = . c 0 + k 1
+        ^ @ ?i { T + from * k step }
     }
 }
 
