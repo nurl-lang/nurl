@@ -660,9 +660,16 @@ h685_captured_closure_views_survive_a_wrapping_closure	§2.11	A2	agora #161: as 
 h686_option_of_a_drop_type_captured_closure_returned_in_a_struct	§2.11	A2	agora #161: as h680, the capture a ?D	rejected
 h687_result_of_a_drop_type_captured_closure_stored_into_a_field	§2.11	A2	agora #161: as h683, the capture a !D i	rejected
 h688_trait_object_vec_captured_closure_returned_in_a_struct	§2.11	A2	agora #161: as h680, the capture a ( Vec %Show )	rejected
-h690_struct_literal_join_handed_to_a_reader	§7.6	A2	agora #174: a `?` join of two struct literals handed to a callee that only reads it: the literals were no argument of the call, nothing dropped their Strings	runs-clean
-h691_struct_literal_join_handed_back_whole	§7.6	A2	agora #174: the same handed back whole into a binding: the result is the join's value	runs-clean
-h692_bindings_moved_into_a_literal_join_argument	§7.6	A2	agora #174: the same with bindings moved into the arms' literals	runs-clean
-h693_call_join_handed_to_a_reader	§7.6	A2	agora #174: the same with calls in the arms: the join's ownership bit was never asked	runs-clean
-h694_struct_literal_match_join_handed_to_a_reader	§7.6	A2	agora #174: the same through a `??` over an option	runs-clean
-h695_binding_beside_a_literal_in_a_join_argument	§7.6	A2	agora #174: a binding arm beside a literal arm: dropped on the literal's path only	runs-clean
+h690_option_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum literal with an option payload handed to a callee that borrows it	runs-clean
+h691_struct_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum literal with a boxed struct payload handed to a borrowing callee	runs-clean
+h692_closure_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum literal with a closure payload handed to a borrowing callee	runs-clean
+h693_binding_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum literal holding bindings' values handed to a borrowing callee	runs-clean
+h694_enum_literal_handed_back_whole	§7.6	A2	agora #177: an enum literal that cannot be copied, handed back by its callee	runs-clean
+h695_enum_literal_to_a_borrower_in_a_loop	§7.6	A2	agora #177: an enum literal with an option payload handed to a borrower in a loop	runs-clean
+h696_enum_literal_payload_of_payload_lent_back	§7.6	A2	agora #177: an enum literal whose callee lends back its payload's payload	runs-clean
+h725_struct_literal_join_handed_to_a_reader	§7.6	A2	agora #174: a `?` join of two struct literals handed to a callee that only reads it: the literals were no argument of the call, nothing dropped their Strings	runs-clean
+h726_struct_literal_join_handed_back_whole	§7.6	A2	agora #174: the same handed back whole into a binding: the result is the join's value	runs-clean
+h727_bindings_moved_into_a_literal_join_argument	§7.6	A2	agora #174: the same with bindings moved into the arms' literals	runs-clean
+h728_call_join_handed_to_a_reader	§7.6	A2	agora #174: the same with calls in the arms: the join's ownership bit was never asked	runs-clean
+h729_struct_literal_match_join_handed_to_a_reader	§7.6	A2	agora #174: the same through a `??` over an option	runs-clean
+h730_binding_beside_a_literal_in_a_join_argument	§7.6	A2	agora #174: a binding arm beside a literal arm: dropped on the literal's path only	runs-clean

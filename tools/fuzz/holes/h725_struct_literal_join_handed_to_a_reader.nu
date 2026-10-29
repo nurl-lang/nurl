@@ -1,4 +1,4 @@
-// H690: `( use ? c @ S { ( mk ) 0 } @ S { ( mk ) 1 } )` — a `?` join of two
+// H725: `( use ? c @ S { ( mk ) 0 } @ S { ( mk ) 1 } )` — a `?` join of two
 // struct literals handed to a callee that only reads its argument. The
 // literal in an arm is no argument of the call, so it published nothing
 // for the call to drop, and nothing else did: each String leaked.

@@ -1,6 +1,6 @@
-// H691: as h690, the callee handing its argument back whole (`^ h`) into a
-// binding: the result IS the join's value — it moves into the binding,
-// which drops it (mem_lend_const `one`).
+// H727: as h725, the literals' fields bindings: placed in a literal they
+// moved in (mem_note_kept), so the literal owned them — and was dropped
+// by no one.
 // Closed: the join's ownership bit is taken for the call before
 // mem_lent_cond consumes it (arg_join_own), and mem_arg_temps drops the
 // joined value by it unless the callee keeps, consumes or hands it back
@@ -12,13 +12,14 @@ $ `stdlib/core/string.nu`
 
 @ mk → String { ^ ( string_from `a string long enough to own a heap buffer here` ) }
 
-@ pass S h → S { ^ h }
+@ use S h → i { ^ ( string_len . h s ) }
 
 @ main → i {
     : ~ i n 0
     ~ < n 4 {
-        : S p ( pass ? == 0 % n 2 @ S { ( mk ) 0 } @ S { ( mk ) 1 } )
-        ( nurl_println_int . p pad )
+        : String a ( mk )
+        : String b ( mk )
+        ( nurl_println_int ( use ? == 0 % n 2 @ S { a 0 } @ S { b 1 } ) )
         = n + n 1
     }
     ^ 0

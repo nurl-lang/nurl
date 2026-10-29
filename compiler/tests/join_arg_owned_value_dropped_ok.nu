@@ -1,7 +1,7 @@
 // join_arg_owned_value_dropped_ok.nu — a `?` / `??` join of owning values
 // handed straight to a call is a temporary of that call: dropped after it by
 // the phi of its arms' ownership bits, unless the callee keeps, consumes or
-// hands it back (agora #174, h690–h695). Each loop below must leave the
+// hands it back (agora #174, h725–h730). Each loop below must leave the
 // live allocation count where it found it.
 
 $ `stdlib/core/string.nu`

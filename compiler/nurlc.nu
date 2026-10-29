@@ -19940,6 +19940,11 @@ unsafe @ gen_match i lex i syms i cg → s {
             = g_arm_valu ? | m_val m_armq 1 0
             ? == 0 g_did_ret { = arm_hown ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) } {}
             = g_arm_valu 0
+            // An arm handing out an enum's payload — or a payload of one —
+            // of a parameter hands that parameter back in part, not whole:
+            // a caller's temporary is dropped and the result copied, not
+            // taken for the temporary itself (agora #177).
+            ? & == 0 g_did_ret ( is_ident_tok arm_tt0 ) { ( mem_note_payload_part syms arm_v0 ) } {}
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
             : s arm_xhown ? == 0 g_did_ret ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
             // The phi's predecessor for this arm: its last block, or the
@@ -23077,8 +23082,18 @@ unsafe @ mem_path_to_indices s path → s {
         // (A binding's value it holds moved in with it: __agg_arg_lend__,
         // mem_note_kept_arg, agora #172.)
         ? & ( __is_hown_ty __crt ) | != 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) != 0 ( nurl_sym_len2 syms fname `__garity` ) {
-            : s __llo ( nurl_cg_reg cg )
+            : ~ s __llo ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( mem_lend_const syms `one` call_name fname arg_idx ) __llo )
+            // (A result that cannot be copied, lent back in part: no copy can
+            // be made of it, so the literal goes with it as with a whole one —
+            // dropped under it, the result read freed memory.)
+            ? ! ( __clone_supported __crt syms ) {
+                : s __llz ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( mem_lend_const syms `part` call_name fname arg_idx ) __llz )
+                : s __llw ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __llw ) ( nurl_print ` = or i1 ` ) ( nurl_print __llo ) ( nurl_print `, ` ) ( nurl_print __llz ) ( nurl_print `\n` )
+                = __llo __llw
+            } {}
             : s __llb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __llb ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk0 ) ( nurl_print `, ` ) ( nurl_print __llo ) ( nurl_print `\n` )
             ( nurl_sym_def syms `__argtmp_one__` __llb )
@@ -23110,20 +23125,30 @@ unsafe @ mem_path_to_indices s path → s {
                 ( nurl_print `  ` ) ( nurl_print lc ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk ) ( nurl_print `, ` ) ( nurl_print lcond ) ( nurl_print `\n` )
             } {}
             : ~ s w ``
-            ? ( __is_closure_ty lty ) {
-                // A closure: its env, released through nurl_closure_drop.
-                : s __ce ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print __ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty lty ) ) ( nurl_print ` ` ) ( nurl_print lval ) ( nurl_print `, 1\n` )
-                : s __co ( nurl_cg_reg cg )
-                ( emit_sink_owner_select lc `i8*` __ce `null` __co )
-                // (Journaled while the call runs, its registration ended
-                // just before the drop: the literal's field is the caller's
-                // until the call returns, agora #131.)
-                = w ( nurl_str_cat3 ( mem_journal_push_cloenv cg __co ) ` c|` __co )
+            // A heap box an enum literal's payload went into (gen_agg_lit):
+            // freed, what it holds released by its own entry.
+            ? ( seq lty `!box` ) {
+                : s __bp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __bp ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print lval ) ( nurl_print ` to i8*\n` )
+                : s __bo ( nurl_cg_reg cg )
+                ( emit_sink_owner_select lc `i8*` __bp `null` __bo )
+                = w ( nurl_str_cat __bo `` )
             } {
-                ( __handle_drop_ensure lty )
-                ( __dropifv_request lty )
-                = w ( nurl_str_cat3 ( mem_journal_push_temp cg lty lval lc ) ` ` ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval ) )
+                ? ( __is_closure_ty lty ) {
+                    // A closure: its env, released through nurl_closure_drop.
+                    : s __ce ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty lty ) ) ( nurl_print ` ` ) ( nurl_print lval ) ( nurl_print `, 1\n` )
+                    : s __co ( nurl_cg_reg cg )
+                    ( emit_sink_owner_select lc `i8*` __ce `null` __co )
+                    // (Journaled while the call runs, its registration ended
+                    // just before the drop: the literal's field is the caller's
+                    // until the call returns, agora #131.)
+                    = w ( nurl_str_cat3 ( mem_journal_push_cloenv cg __co ) ` c|` __co )
+                } {
+                    ( __handle_drop_ensure lty )
+                    ( __dropifv_request lty )
+                    = w ( nurl_str_cat3 ( mem_journal_push_temp cg lty lval lc ) ` ` ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval ) )
+                }
             }
             = owned ? == 0 ( nurl_str_len owned ) w ( nurl_str_cat3 owned ` ` w )
         }
@@ -24398,12 +24423,6 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ f
 }
 
-// At a drop point of `ptr` (its struct drop gated on `cond`, `` when
-// unconditional): the fields it owns on its own go too when the struct
-// does not (`extra`: and only then — `` for always).
-// A payload binding `pv` of the match numbered `ser`: what it may point
-// into (__ptr_root_owner) — the matched binding, or what the matched call
-// lends from.
 // The slot of the enum a match reads when this function owns it — a local
 // owner, a `sink` parameter, the match's temporary (`__m_tmp_slot__`) — as
 // __reg_num gives it (N + 1 for `%rN`), 0 otherwise. Not a capture: a
@@ -24503,6 +24522,28 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_print `  store i64 0, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
 }
 
+// `name` is a payload binding whose scrutinees (`__plend`) lead, through an
+// enum's payload binding, to a parameter: that parameter is lent back in
+// part (`retpart`) when the payload is.
+@ mem_note_payload_part i syms s name → v {
+    ? == 0 ( nurl_sym_len2 syms name `__plend` ) { ^ v } {}
+    : ~ s cur ( nurl_str_cat name `` )
+    : ~ b via_enum F
+    : ~ i hops 0
+    ~ < hops 6 {
+        ? ( seq ( nurl_sym_get2 syms cur `__enum_pl` ) `1` ) { = via_enum T } {}
+        : s up ( nurl_sym_get2 syms cur `__plend` )
+        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { = hops 6 } {
+            = cur ( nurl_str_cat up `` )
+            = hops + hops 1
+        }
+    }
+    ? & via_enum ( nurl_sym_has_word syms `__fn_param_names__` cur ) { ( __record_param_idx syms `__fn_retpart__` cur ) } {}
+}
+
+// A payload binding `pv` of the match numbered `ser`: what it may point
+// into (__ptr_root_owner) — the matched binding, or what the matched call
+// lends from.
 @ mem_note_plend i syms s pv i tt s mvar i ser → v {
     ? ( is_ident_tok tt ) { ( nurl_sym_def syms ( nurl_str_cat pv `__plend` ) mvar ) ^ v } {}
     ? != tt TT_LPAREN { ^ v } {}
@@ -24550,6 +24591,9 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ^ & ! ( __callee_lent syms cn gn ) ! | ( __hown_dyn syms cn 0 ) ( __hown_dyn syms gn 0 )
 }
 
+// At a drop point of `ptr` (its struct drop gated on `cond`, `` when
+// unconditional): the fields it owns on its own go too when the struct
+// does not (`extra`: and only then — `` for always).
 @ mem_emit_ff_drops i cg s ptr s cond s extra → v {
     ? | == 0 g_ff_any != 0 g_bck_closure_depth { ^ v } {}
     : ~ s rest ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 ptr `__ff` ( nurl_str_int g_ff_gen ) ) )
@@ -37510,6 +37554,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
     // invalid IR or a silently misread sibling slot). Underflow stays
     // legal: zeroinitializer backs the payload-less `@ ?T { F }` idiom.
     : ~ i enum_paycount -1
+    // An enum literal built as a call's argument: what it owns, collected
+    // aside (enum_ao), and whether it owns every payload that owns
+    // something (enum_ao_all) — then it is dropped whole after the call,
+    // boxes and all (below).
+    : ~ s enum_ao ``
+    : ~ b enum_ao_all T
+    // (…and the heap boxes its payloads went into: freed after the call
+    // when it is not dropped whole.)
+    : ~ s enum_boxes ``
     : ~ s enum_vname ``
     ? & != 0 ( nurl_str_len cur_sname )
     != 0 ( nurl_sym_len2 syms cur_sname `__variants` )
@@ -37524,6 +37577,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         {}
     }
     {}
+    // (What the argument's literals own before this enum's fields: one
+    // dropped whole takes its nested literals' along.)
+    : s enum_ao0 ? >= enum_paycount 0 ( nurl_str_cat ( nurl_sym_get syms `__agg_arg_own__` ) `` ) ( nurl_str_cat `` `` )
     // Closure-escape (docs/MEMORY.md §2.3):
     // track the deepest referent depth among the field values. A field
     // that is a stack reference (a closure capturing a binding by
@@ -38010,10 +38066,20 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & & & __ao_ctx __ao_ty != fld_first_tt TT_AT ! __ao_tag {
             : s __aoc ? __ao_cloid ( nurl_str_cat `1` `` ) ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
             ? != 0 ( nurl_str_len __aoc ) {
-                : s __aol ( nurl_sym_get syms `__agg_arg_own__` )
                 : s __aoe ( nurl_str_cat4 fty `|` __aoc ( nurl_str_cat `|` fval ) )
-                ( nurl_sym_def syms `__agg_arg_own__` ? == 0 ( nurl_str_len __aol ) __aoe ( nurl_str_cat3 __aol `;` __aoe ) )
+                ? >= enum_paycount 0 {
+                    = enum_ao ? == 0 ( nurl_str_len enum_ao ) ( nurl_str_cat __aoe `` ) ( nurl_str_cat3 enum_ao `;` __aoe )
+                } {
+                    : s __aol ( nurl_sym_get syms `__agg_arg_own__` )
+                    ( nurl_sym_def syms `__agg_arg_own__` ? == 0 ( nurl_str_len __aol ) __aoe ( nurl_str_cat3 __aol `;` __aoe ) )
+                }
             } {}
+        } {}
+        // (A payload that owns something and is not the literal's own — a
+        // binding's value, a field read — keeps the enum from being dropped
+        // whole: that payload is not its to release.)
+        ? & & & __ao_ctx >= enum_paycount 0 ! __ao_tag ( __type_needs_drop fty syms ) {
+            ? ! | | | == fld_first_tt TT_LPAREN == fld_first_tt TT_AT == fld_first_tt TT_BACKSLASH __ao_cloid { = enum_ao_all F } {}
         } {}
         // A POINTER read out of something else, stored into this
         // aggregate: the aggregate now aliases whatever that pointer
@@ -38805,6 +38871,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     {  // Anonymous aggregate (an option, a result, a closure):
                         // heap-boxed, as a multi-field struct (enum_payload_storage 3).
                         = actual_fval ( __enum_box_payload cg fty fval )
+                        = enum_boxes ( nurl_str_cat3 enum_boxes ` ` actual_fval )
                         = actual_fty `i64`
                     }
                     ? & == ( nurl_str_get fty 0 ) 37
@@ -38842,6 +38909,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                                 = actual_fval pcast
                                 = actual_fty `i64` }
                             { = actual_fval ( __enum_box_payload cg fty fval )
+                                = enum_boxes ( nurl_str_cat3 enum_boxes ` ` actual_fval )
                                 = actual_fty `i64` }
                         }
                     }
@@ -39041,6 +39109,33 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         enum_vname
         ( nurl_str_cat3 `' declares only ` ( nurl_str_int enum_paycount ) ` — if a CamelCase name in the enum declaration was meant as this variant's payload TYPE, note that an unknown/unimported type name parses as a SEPARATE variant; define or import the type before the enum.` ) ) ) }
     {}
+    // An enum literal built as a call's argument (__ao_ctx): dropped whole
+    // after the call unless the callee keeps, consumes or hands it back
+    // (mem_arg_temps) — its drop releases the boxes its payloads are in,
+    // which no field's entry did, and it leaked (agora #155). When it holds
+    // a payload that is not its own, its fields' entries as before.
+    ? & & & & != 0 g_auto_drop_strings >= enum_paycount 0 ! agg_returned ! agg_nested != 0 ( nurl_sym_len syms `__agg_arg_sink__` ) {
+        // (One that owns nothing — `@ Value { VNull }` — needs no entry.)
+        : b __eany | | != 0 ( nurl_str_len enum_ao ) != 0 ( nurl_str_len enum_boxes ) ! ( seq ( nurl_sym_get syms `__agg_arg_own__` ) enum_ao0 )
+        : b __ew & & enum_ao_all __eany | ( __is_autodrop_enum agg_ty syms ) ( __is_handle_enum agg_ty )
+        : ~ s __eo ? __ew ( nurl_str_cat3 agg_ty `|1|` result ) ( nurl_str_cat enum_ao `` )
+        // (Not whole: each box goes too, what it holds by its own entry or
+        // with the binding it is.)
+        ? ! __ew {
+            : ~ s __eb ( nurl_str_cat enum_boxes `` )
+            ~ != 0 ( nurl_str_len __eb ) {
+                : s __bx ( str_first_word __eb ) = __eb ( str_skip_word __eb )
+                ? != 0 ( nurl_str_len __bx ) {
+                    : s __bxe ( nurl_str_cat `!box|1|` __bx )
+                    = __eo ? == 0 ( nurl_str_len __eo ) ( nurl_str_cat __bxe `` ) ( nurl_str_cat3 __eo `;` __bxe )
+                } {}
+            }
+        } {}
+        : s __aol ? __ew ( nurl_str_cat enum_ao0 `` ) ( nurl_sym_get syms `__agg_arg_own__` )
+        ? != 0 ( nurl_str_len __eo ) {
+            ( nurl_sym_def syms `__agg_arg_own__` ? == 0 ( nurl_str_len __aol ) __eo ( nurl_str_cat3 __aol `;` __eo ) )
+        } {}
+    } {}
     ( nurl_set_last_type agg_ty )
     // Borrow provenance: a freshly-constructed `@ T { … }` aggregate is
     // OWNED — never a borrow. Reset the flag so the value's last

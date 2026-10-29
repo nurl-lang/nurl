@@ -1,4 +1,4 @@
-// H693: as h690, the arms calls that build the struct: the join knew its
+// H728: as h725, the arms calls that build the struct: the join knew its
 // arms owned what they yielded (mem_arm_hown), and the call never asked.
 // Closed: the join's ownership bit is taken for the call before
 // mem_lent_cond consumes it (arg_join_own), and mem_arg_temps drops the
