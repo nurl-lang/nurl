@@ -40,5 +40,23 @@ $ `stdlib/core/string.nu`
     = all & all ( report `wrongkey ` ( minisign_verify_b64 m3 wrong_pub good_sig ) F )
     ( vec_free [u] m3 )
 
+    // 4. Payloads produced by the pure-NURL signing helpers verify together.
+    : ( Vec u ) seed ( bytes_from_str `0123456789abcdef0123456789abcdef` )
+    : ( Vec u ) keyid ( bytes_from_str `nurltest` )
+    : ( Vec u ) m4 ( msg )
+    : String made_pub ( minisign_pubkey_b64 seed keyid )
+    : String made_sig ( minisign_sign_b64 seed keyid m4 )
+    = all & all ( report `generated` ( minisign_verify_b64 m4 ( string_data made_pub ) ( string_data made_sig ) ) T )
+
+    // 5. The generated signature is still bound to the exact message.
+    : ( Vec u ) changed ( bytes_from_str `hello nurl signing?` )
+    = all & all ( report `genchange` ( minisign_verify_b64 changed ( string_data made_pub ) ( string_data made_sig ) ) F )
+
+    // 6. A seed or key id of the wrong size produces no payload.
+    : ( Vec u ) short_seed ( bytes_from_str `too short` )
+    : ( Vec u ) short_id ( bytes_from_str `short` )
+    = all & all ( report `badseed  ` == ( string_len ( minisign_pubkey_b64 short_seed keyid ) ) 0 T )
+    = all & all ( report `badkeyid ` == ( string_len ( minisign_sign_b64 seed short_id m4 ) ) 0 T )
+
     ^ ? all 0 1
 }

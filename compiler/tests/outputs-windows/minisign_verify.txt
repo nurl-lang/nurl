@@ -5,3 +5,7 @@ OUTPUT
 valid     ok
 tampered  ok
 wrongkey  ok
+generated ok
+genchange ok
+badseed   ok
+badkeyid  ok
