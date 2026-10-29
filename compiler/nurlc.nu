@@ -15779,7 +15779,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // as the container does. A parameter too: kept by the callee it
             // is the container's (the function keeps it, g_fn_keeps), and
             // read after that container let it go it reads freed memory.
-            ? | ( __is_handle_ty at ) & != 0 ( nurl_str_starts at `{ i1, ` ) ( __type_needs_drop at syms )
+            ? | ( __moves_on_store at ) & != 0 ( nurl_str_starts at `{ i1, ` ) ( __type_needs_drop at syms )
             {  // …into the first argument, when that is a binding of this
                 // frame: the value lives as long as the container does
                 // (bck_kill_stored_in) — `( vec_push all a )` then
@@ -26399,7 +26399,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
         // a value the aggregate drops: a struct of plain words — a device
         // buffer's address and length — is copied, not owned.)
         : s ac ( nurl_sym_get syms `__agg_arg_call__` )
-        ? ! ( __is_handle_ty lty ) {}
+        ? ! ( __moves_on_store lty ) {}
         ? == 0 ( nurl_str_len ac )
         { ( bck_stash_store name line `-` `0` `store` ) }
         { ( bck_stash_store name line ( str_first_word ac ) ( str_first_word ( str_skip_word ac ) ) `pendstore` ) } }
@@ -29148,9 +29148,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     } {}
                 } {}
                 ? & takes ! s_moves {
-                    : i cur ( bck_st_get st svid )
-                    ? == cur BCK_STORED { ( bck_diag_stored svid ( bck_field_int rec 3 ) T ) } {}
-                    ? | == cur BCK_OWNED == cur BCK_UNINIT {
+                    : s s_pko ? == kc 12 ( bck_field rec 7 ) ``
+                    : s s_own ? != 0 ( nurl_str_len s_pko ) ( nurl_str_cat `=` ( nurl_str_int ( bck_intern s_pko ) ) ) ( nurl_str_cat scal `` )
+                    // (Stored into the binding's own new value — `= src ( dyn
+                    // Op @ Wrap { src … } )`: the old value lives on inside it,
+                    // and the binding is still its owner, agora #157.)
+                    : b s_self & == ( nurl_str_get s_own 0 ) 61 ( seq ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 ) svn )
+                    : i cur ? s_self BCK_UNINIT ( bck_st_get st svid )
+                    ? & ! s_self == cur BCK_STORED { ( bck_diag_stored svid ( bck_field_int rec 3 ) T ) } {}
+                    ? & ! s_self | == cur BCK_OWNED == cur BCK_UNINIT {
                         = st ( bck_st_set st svid BCK_STORED )
                         ( nurl_sym_set g_bck ( nurl_str_cat `sl_` svn ) ( bck_field rec 3 ) )
                         // Stored into a binding's value (`: H t @ H { a }`), or
@@ -29158,8 +29164,6 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // (`pko_`): it lives as long as that value does
                         // (bck_kill_stored_in).
                         // (The container's spelling rides on the row: bck_xlate_row1.)
-                        : s s_pko ? == kc 12 ( bck_field rec 7 ) ``
-                        : s s_own ? != 0 ( nurl_str_len s_pko ) ( nurl_str_cat `=` ( nurl_str_int ( bck_intern s_pko ) ) ) ( nurl_str_cat scal `` )
                         ? == ( nurl_str_get s_own 0 ) 61 {
                             : s oids ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 )
                             ( nurl_sym_set g_bck ( bck_so_key svn ) oids )
@@ -34336,7 +34340,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     ? & & & & ( is_ident_tok __fs_tt ) ! manual ! indirect ! __fs_putback != 0 ( nurl_str_len __fs_obj ) {
         : s __fslt ( nurl_sym_get syms __fs_val )
         : i __fspi ( nurl_sym_word_index syms `__fn_param_names__` __fs_val )
-        ? & & ( bck_is_heap_lty __fslt ) ( __is_handle_ty __fslt )
+        ? & & ( bck_is_heap_lty __fslt ) ( __moves_on_store __fslt )
         | < __fspi 0 ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fspi ) )
         { ( bck_stash_store __fs_val __fs_line ( nurl_str_cat `=` __fs_obj ) `0` `store` ) } {}
     } {}
@@ -50051,6 +50055,18 @@ unsafe @ __ffi_param_count s pt → i {
 // dropped by the compiler like any `% Drop` value (docs/MEMORY.md §7.6),
 // through `drop__String` / `drop__Vec__<T>` generated from emit_drop_value
 // (which also drops a Vec's elements when they own resources).
+// A value a store takes over whole, its source dead from there on: a
+// handle (__is_handle_ty), or a value that is moved and never copied — a
+// user `% Drop` type, a trait object (agora #157). The borrow checker's
+// stored-in-owner rows are emitted for these (bck_stash_store).
+@ __moves_on_store s ty → b {
+    ? ( __is_handle_ty ty ) { ^ T } {}
+    // (Only a named type is either: a number, a pointer, an option is not.)
+    ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty )
+}
+
 @ __is_handle_ty s ty → b {
     : i n ( nurl_str_len ty )
     ? == 0 n { ^ F } {}
@@ -50083,6 +50099,27 @@ unsafe @ __brace_close s s → i {
     ^ -1
 }
 
+// Where a result body's T ends: the `, ` before E (`T, E` inside
+// `{ i1, … }`), past T's braces when T is an option or a result itself
+// (agora #158). -1 for an option's body (one T, braced or not).
+@ __res_t_end s body → i {
+    ? == ( nurl_str_get body 0 ) 123 {
+        : i bc ( __brace_close body )
+        ? | < bc 0 == bc - ( nurl_str_len body ) 1 { ^ -1 } {}
+        ? ( seq ( nurl_str_slice body + bc 1 2 ) `, ` ) { ^ + bc 1 } {}
+        ^ -1
+    } {}
+    ^ ( nurl_str_find body `, ` )
+}
+
+// An option or a result of plain words (`{ i1, i64 }`): nothing in it
+// to drop — no twin, no closure.
+@ __opt_of_words s ty → b {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    ? != 0 ( nurl_str_len ( __wrap_twin ty ) ) { ^ F } {}
+    ^ == 0 ( nurl_str_len ( __opt_clo_payload ty ) )
+}
+
 // The payload type of an option `{ i1, T }` whose T is a String, a Vec or
 // an owning struct; `` otherwise.
 @ __opt_payload s ty → s {
@@ -50093,7 +50130,16 @@ unsafe @ __brace_close s s → i {
         : s ip ( nurl_str_slice ty 6 - n 8 )
         ? == ( __brace_close ip ) - ( nurl_str_len ip ) 1 {
             ? != 0 ( nurl_str_len ( __wrap_twin ip ) ) { ^ ip } {}
-        } {}
+        } {
+            // …or a result of one (`! ?String E`): T up to its brace, an
+            // error of plain words or one that owns (its own drop).
+            : i te ( __res_t_end ip )
+            ? >= te 0 {
+                : s t ( nurl_str_slice ip 0 te )
+                : s e ( nurl_str_slice ip + te 2 - - ( nurl_str_len ip ) te 2 )
+                ? & != 0 ( nurl_str_len ( __wrap_twin t ) ) | < ( nurl_str_find e ` ` ) 0 | ( __opt_of_words e ) != 0 ( nurl_str_len ( __wrap_twin e ) ) { ^ t } {}
+            } {}
+        }
         ^ ( nurl_str_cat `` `` )
     } {}
     // An option of a closure owns the closure's env, as a struct field of
@@ -50111,8 +50157,10 @@ unsafe @ __brace_close s s → i {
     ? >= cm 0 {
         : s e ( nurl_str_slice p + cm 2 - - ( nurl_str_len p ) cm 2 )
         // Only the Ok payload is ever dropped through this registration;
-        // the error side keeps whatever protocol it had.
-        ? >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+        // the error side keeps whatever protocol it had. (An error that is
+        // an option or result itself — of plain words, or owning, with its
+        // own drop — leaves T the payload: agora #158.)
+        ? & >= ( nurl_str_find e ` ` ) 0 ! | ( __opt_of_words e ) != 0 ( nurl_str_len ( __wrap_twin e ) ) { ^ ( nurl_str_cat `` `` ) } {}
         = p ( nurl_str_slice p 0 cm )
 
     } {}
@@ -50190,7 +50238,9 @@ unsafe @ __opt_err_mangle s e → s {
     : ~ i k 0
     ~ < k ( nurl_str_len m ) {
         : i ch ( nurl_str_at m_p m_n k )
-        = out ( nurl_str_cat out ? == ch 42 `P` ( nurl_str_slice m k 1 ) )
+        // (…and an option or result of plain words, `{ i1, i64 }`, by its
+        // shape: `{` `L`, `}` `R`, `,` `_`, spaces dropped — agora #158.)
+        = out ( nurl_str_cat out ? == ch 42 `P` ? == ch 123 `L` ? == ch 125 `R` ? == ch 44 `_` ? == ch 32 `` ( nurl_str_slice m k 1 ) )
         = k + k 1
     }
     ^ out
@@ -50203,14 +50253,18 @@ unsafe @ __opt_err_mangle s e → s {
     ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
     : s body ( nurl_str_slice ty 6 - n 8 )
-    : i cm ( nurl_str_find body `, ` )
+    // (T an option or a result itself: split past its braces, agora #158.)
+    : i cm ( __res_t_end body )
     ? < cm 0 { ^ ( nurl_str_cat `` `` ) } {}
     // (A closure payload has commas of its own: split nesting-aware.)
     : b __ecl != 0 ( nurl_str_len ( __opt_clo_payload ty ) )
     : s __ete ? __ecl ( __wrap_te ty ) ``
     : s t ? __ecl ( seplist_first __ete ) ( nurl_str_slice body 0 cm )
     : s e ? __ecl ( __seplist_rest __ete ) ( nurl_str_slice body + cm 2 - - ( nurl_str_len body ) cm 2 )
-    ? | & >= ( nurl_str_find t ` ` ) 0 ! __ecl >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    // (An option or result error that owns: dropped through its own twin.)
+    : b t_ok | < ( nurl_str_find t ` ` ) 0 | __ecl | ( __opt_of_words t ) != 0 ( nurl_str_len ( __wrap_twin t ) )
+    ? & t_ok != 0 ( nurl_str_len ( __wrap_twin e ) ) { ^ e } {}
+    ? | ! t_ok >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_value_handle e )
     { ^ e } {}
     // An error that cannot be copied (a `% Drop` value with no clone):
@@ -50241,8 +50295,9 @@ unsafe @ __opt_err_mangle s e → s {
     ? & == 0 ( nurl_str_len p ) == 0 ( nurl_str_len ep ) { ^ ( nurl_str_cat ty `` ) } {}
     // The twin is named for T (and, for a result, E): `%__opt.<T>.<E>`.
     : s body ( nurl_str_slice ty 6 - ( nurl_str_len ty ) 8 )
-    // (An option of an option: the whole body is T, h238.)
-    : i cm0 ? & != 0 ( nurl_str_starts body `{ ` ) == ( __brace_close body ) - ( nurl_str_len body ) 1 -1 ( nurl_str_find body `, ` )
+    // (An option of an option: the whole body is T, h238. A result of
+    // one: T ends past its braces, agora #158.)
+    : i cm0 ( __res_t_end body )
     // (A result of a closure: its payload has commas of its own.)
     : s __rte ? & >= cm0 0 != 0 ( nurl_str_len ( __opt_clo_payload ty ) ) ( __wrap_te ty ) ``
     : i cm ? != 0 ( nurl_str_len __rte ) ( nurl_str_len ( seplist_first __rte ) ) cm0
