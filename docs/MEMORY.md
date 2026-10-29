@@ -694,7 +694,13 @@ growing, or its elements set, removed or cleared, does not end it; the
 closure reads what the value holds then (h299–h310). Returning such a
 closure past the value is rejected as returning any view is. A closure
 stored into an owner — a container, a struct field — copies in what it
-holds a handle of, so the owner does not depend on that.
+holds a handle of, so the owner does not depend on that — except a value
+it cannot copy: one with no Clone (a `Vec` of values with a `% Drop` of
+their own, an option or a result of one, a trait object), and anything a
+closure it captured holds. Its copy stays the frame's handle, so the
+owner depends on that value: returned, or stored into storage the caller
+holds, it is rejected as a view of the value would be (h680–h688; share
+the value through an `Rc` instead, whose handle is copied).
 
 The mechanized proof (`formal/A2`, [`RULES.md`](../formal/RULES.md))
 covers this rule, with one difference on the conservative side: the
@@ -990,7 +996,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h653):
+all are closed, each a probe CI now holds (h142–h688):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1751,7 +1757,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h653`) to the rule that rejects it. See
+  (`h01–h688`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
@@ -1939,7 +1945,9 @@ outlive that function, so the stored
 environment copies in what it only viewed: `nurl_closure_adopt` (a
 literal's environment, in place) and `nurl_closure_own_copy` (a binding's,
 in a copy) switch it to a second descriptor, `own`, whose `drop` and
-`clone` cover those captures too (h195). The descriptor is
+`clone` cover those captures too (h195). Only a capture with a Clone is
+copied in; one without, and what a captured closure views, stay views of
+the frame's values, which the owner then depends on (§2.11, h680–h688). The descriptor is
 `{ size, drop, clone, trace, own, adopt }`; `own` and `adopt` are null for
 an environment that already owns everything it captured.
 

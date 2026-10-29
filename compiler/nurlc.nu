@@ -28666,6 +28666,9 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 // an `s` that owns its buffer, handed back by name, goes with it — the
 // caller owns it — where a copy of it would be a view of the buffer.
 : ~ b g_sxe_handover F
+// …and whether any handle copy was marked one an owner cannot copy in
+// (`nch_`, __src_mark_nc) — none: __src_drop_handles asks nothing.
+: ~ i g_bck_nch_any 0
 // …and whether the leaf is an argument a callee stores (bck_sx_ev): only
 // what a view points into, or the views an owner holds, count.
 : ~ b g_sxe_vonly F
@@ -28722,15 +28725,39 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
 }
 
 // `list` without its handle copies (`~id`): what an adopted closure holds.
+// (Not one adopting cannot copy in, marked `nch_` — __src_mark_nc: the
+// owner holds the frame's handle still, agora #161.)
 @ __src_drop_handles s list → s {
     ? < ( nurl_str_find list `~` ) 0 { ^ ( nurl_str_cat list `` ) } {}
     : ~ s out ``
     : ~ s rest ( nurl_str_cat list `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != ( nurl_str_get w 0 ) 126 { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
+        ? | != ( nurl_str_get w 0 ) 126 ( bck_nch ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
+        } {}
     }
     ^ out
+}
+
+// Is `ids` a binding a closure holds a copy of the handle of that storing
+// the closure into an owner cannot copy in (`nch_`, __src_mark_nc)?
+@ bck_nch s ids → b {
+    ? == 0 g_bck_nch_any { ^ F } {}
+    ^ != 0 ( nurl_sym_len g_bck ( bck_bkey `nch_` ids ) )
+}
+
+// Marks the handle copies (`~id`) in `list` as ones a closure holds that
+// storing it into an owner cannot copy in (`nch_`, `\\~!(…)`).
+@ __src_mark_nc s list → v {
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? == ( nurl_str_get w 0 ) 126 {
+            = g_bck_nch_any 1
+            ( nurl_sym_set g_bck ( bck_bkey `nch_` ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ) `1` )
+        } {}
+    }
 }
 
 // …and the handle copies only (`~id`, held no other way).
@@ -28876,7 +28903,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // `( wrapv ( string_data x ) )` keeps a view of `x` itself (h304).
         // (A closure literal stored is adopted: it copies what it views.)
         : b __vo g_sxe_vonly
-        ? ! | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
+        ? ! | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
         : ~ s out ``
         : ~ i j 0
         : ~ b more ! & < g_sxe_pos n == # i . ep g_sxe_pos 41
@@ -28893,7 +28920,10 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             // reads at each call, as it does an owner it frees. `\\a(…)`: a
             // closure value stored into an owner, adopted — it copies in
             // what it held a handle of.)
-            : b __hcap ( seq w `\\~` )
+            // (`\\~!(…)`: such a copy an owner the closure is stored into
+            // cannot copy in — it stays one, `nch_`: __src_drop_handles.)
+            : b __hnc ( seq w `\\~!` )
+            : b __hcap | __hnc ( seq w `\\~` )
             : b __adop ( seq w `\\a` )
             ? | | | | | ( seq w `\\` ) __hcap __adop ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) ( __fn_retclo_arg w js ) {
                 : i __a0 g_sxe_pos
@@ -28904,6 +28934,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     = __lj ( bck_sx_handle_mark st __lj ( nurl_str_slice e __a0 - g_sxe_pos __a0 ) )
                 } {}
                 ? __hcap { = __lj ( __src_handles_only __lj ) } {}
+                ? __hnc { ( __src_mark_nc __lj ) } {}
                 ? __adop { = __lj ( __src_drop_handles __lj ) } {}
                 // (What a callee lends through an Arc parameter is a view
                 // of the payload, §6.5.)
@@ -29817,6 +29848,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     // (At the store that put the view there, when it is known.)
     : s sl ( nurl_sym_get g_bck ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int ( bck_path_root d ) ) `:` ( nurl_str_int src ) ) ) )
     : i at ? != 0 ( nurl_str_len sl ) ( nurl_str_to_int sl ) line
+    // (A closure stored there holding a copy of the handle of a value no
+    // owner could copy in, `nch_`: agora #161.)
+    ? & ( bck_nch ( nurl_str_int src ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ( nurl_str_int ( bck_path_root d ) ) ) ) ( nurl_str_int src ) ) {
+        : s c1 ( nurl_str_cat4 `'` dn `' is storage the caller holds (a parameter, or what one points into), and this stores into it a closure — or a value holding one — that holds a copy of the handle of '` sn )
+        : s c2 ( nurl_str_cat4 `', which is released when this function returns. '` sn `' has no Clone (a Vec of values with a Drop of their own, an option of one, a trait object, a closure), so storing the closure cannot give it a copy of its own: the caller would run it on freed memory (agora #161). Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or take '` sn )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat3 c1 c2 `' as a parameter so the caller owns it.` ) )
+        ^ v
+    } {}
     : s m1 ( nurl_str_cat4 `'` dn `' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of '` sn )
     : s m2 ( nurl_str_cat4 `', which is released when this function returns (or its scope ends): the caller would read freed memory through '` dn `'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take '` sn )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat3 m1 m2 `' as a parameter so the caller owns what is viewed.` ) )
@@ -29868,11 +29907,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         : i r ( bck_local_source st ( nurl_str_to_int w ) )
         ? >= r 0 {
             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
-            ? ( str_contains_word hnd w ) {
-                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a closure that holds a copy of the handle of '` nm `', and '` ( nurl_str_cat3 nm `' is released when the function returns, so running the closure would read freed memory (h310). A closure literal written in the return itself ('^ \\ … { … }') takes over what it captures — return that instead of a closure bound first — or keep '` ( nurl_str_cat nm `' alive in a caller that outlives the closure.` ) ) ) )
-            } {
-                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a view of '` nm `' (an address into its storage), and '` ( nurl_str_cat3 nm `' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.` `` ) ) )
-            }
+            ? & ( str_contains_word hnd w ) ( bck_nch w ) {
+                // (A copy no owner could copy in: holding it on is the only
+                // way left, so the literal-in-the-return cure is none.)
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a closure — or a value holding one — that holds a copy of the handle of '` nm `', and '` ( nurl_str_cat4 nm `' is released when the function returns. '` nm ( nurl_str_cat3 `' has no Clone (a Vec of values with a Drop of their own, an option of one, a trait object, a closure), so nothing can give the closure a copy of its own: running it would read freed memory (agora #161). Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or keep '` nm `' alive in a caller that outlives the closure.` ) ) ) )
+            } { ? ( str_contains_word hnd w ) {
+                    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a closure that holds a copy of the handle of '` nm `', and '` ( nurl_str_cat3 nm `' is released when the function returns, so running the closure would read freed memory (h310). A closure literal written in the return itself ('^ \\ … { … }') takes over what it captures — return that instead of a closure bound first — or keep '` ( nurl_str_cat nm `' alive in a caller that outlives the closure.` ) ) ) )
+                } {
+                    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `this returns a view of '` nm `' (an address into its storage), and '` ( nurl_str_cat3 nm `' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.` `` ) ) )
+                } }
             ^
         } {}
     }
@@ -30941,10 +30984,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         } {}
     }
     : ~ s drest ( nurl_sym_get g_bck ( bck_bkey `vdd_` sids ) )
+    // (A copy of its handle a closure holds and an owner cannot copy in,
+    // `nch_`, is still the frame's handle: the frame releases `sid`, not
+    // `oid` — agora #161.)
+    : b snc ( bck_nch sids )
     ~ != 0 ( nurl_str_len drest ) {
         : s ds ( str_first_word drest ) = drest ( str_skip_word drest )
         : i d ( nurl_str_to_int ds )
-        ? & ! ( bck_dead_state ( bck_st_get st d ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) {
+        ? & & ! ( bck_dead_state ( bck_st_get st d ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & snc ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids ) {
             ( bck_dep_clear_one d sid )
             ( bck_dep_add d ( nurl_str_cat `^` oids ) )
         } {}
@@ -31151,10 +31198,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // Owners that may hold a closure which captured `sid` (bck `cdep`) —
     // not when only its elements went (g_bck_end_eonly).
     : ~ s drest ? == 0 g_bck_end_eonly ( nurl_sym_get g_bck ( bck_bkey `dd_` sids ) ) ``
+    // (One that holds a copy of its handle it could not copy in, `nch_`, is
+    // a dependency too: bck_deps_end ends it, and names storage the caller
+    // holds — agora #161.)
+    : b dnc ( bck_nch sids )
     ~ != 0 ( nurl_str_len drest ) {
         : s ds ( str_first_word drest ) = drest ( str_skip_word drest )
         : i d ( nurl_str_to_int ds )
-        ? ! ( bck_dead_state ( bck_st_get out d ) ) {
+        ? & ! ( bck_dead_state ( bck_st_get out d ) ) ! & dnc ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids ) {
             = out ( bck_st_set out d BCK_INVALID )
             ( nurl_sym_set g_bck ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !dep ` why ) ) )
         } {}
@@ -32026,6 +32077,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     ( nurl_sym_set g_bck `warnset` `` )
     ( nurl_sym_set g_bck `pml` `` )
     = g_bck_ab_any 0
+    = g_bck_nch_any 0
     ? != 0 g_arcp_any { ( nurl_sym_set g_bck `plarc` `` ) } {}
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
@@ -41253,8 +41305,17 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // by pointer): its env holds a copy of it, which the binding
             // giving it a new value — `=`, or an `inout` callee replacing it
             // — leaves pointing at what was released (h306): `\\~(…)`.
-            ? & & & & != 0 __sx_me ( bck_is_heap_lty __cap_ll ) ! clo_returned ! ( str_contains_word g_nc_own_caps __cap_w ) ! ( __is_capture_byref __cap_w syms ) {
-                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 `\\~(` __cap_w `)` ) )
+            // `\\~!(…)` when storing the closure into an owner cannot copy it
+            // in (gen_env_vtable's adopt copies only a handle with a Clone): a
+            // Vec of `% Drop` values, an option of one, a captured closure —
+            // that one's own captures, too, even in a closure written where
+            // it escapes. The copy stays a copy of the frame's handle (agora
+            // #161).
+            : b __cap_clo ( __is_closure_ty __cap_ll )
+            ? & & & & != 0 __sx_me | __cap_clo ( bck_is_heap_lty __cap_ll ) | ! clo_returned __cap_clo ! ( str_contains_word g_nc_own_caps __cap_w ) ! ( __is_capture_byref __cap_w syms ) {
+                : s __cap_ty ( nurl_sym_get syms __cap_w )
+                : b __cap_cp & ! __cap_clo & ( __is_handle_ty __cap_ty ) ( __clone_supported __cap_ty syms )
+                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 ? __cap_cp `\\~(` `\\~!(` __cap_w `)` ) )
             } {}
             ? & ( bck_is_heap_lty __cap_ll ) ! ( str_contains_word g_nc_own_caps __cap_w )
             { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
