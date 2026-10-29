@@ -2891,6 +2891,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_fn_safe 0
 : ~ s g_fn_safe_list ``
 : ~ s g_cur_params ``
+// 1 while the call argument being compiled is an aggregate literal its
+// callee may hand back whole (gen_call); gen_agg_lit then asks for its
+// `one` constant (agora #172). A global, not a symbol-table entry: it is
+// set for every argument of every call.
+: ~ i g_agg_arg_lend 0
 // 1 while the code being compiled sits in a `~` loop over a container
 // (`iter_containers` in g_bck is not empty): what a call there hands a
 // closure is checked against the loop (__iter_closure_effs_check).
@@ -14658,6 +14663,15 @@ unsafe @ gen_call i lex i syms i cg → s {
             // A literal built as this argument moves its fields in only if
             // the callee keeps the argument (mem_note_kept_arg).
             : s __aas_saved ( nurl_sym_get syms `__agg_arg_sink__` )
+            // …or hands it back whole (`one`, mem_fn_lend_kind): its result
+            // then IS the literal, and a binding's value moves in as for a
+            // keep (agora #172).
+            : i __aal_saved g_agg_arg_lend
+            = g_agg_arg_lend 0
+            ? & == bck_arg_tt TT_AT ! __callee_shadowed {
+                ? & ( __is_hown_ty ( nurl_sym_get syms call_name ) ) | != 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) != 0 ( nurl_sym_len2 syms fname `__garity` )
+                { = g_agg_arg_lend 1 } {}
+            } {}
             ( nurl_sym_def syms `__deferred_temps__` `` )
             ( nurl_sym_def syms `__deferred_ids__` `` )
             // `( f ( dyn Trait v ) )`: the box dyn allocates is a temporary.
@@ -14665,8 +14679,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def syms `__agg_arg_sink__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) `` )
             : s __aac_saved ( nurl_sym_get syms `__agg_arg_call__` )
+            // (…and the generic it instantiates, for mem_lend_const.)
             ( nurl_sym_def syms `__agg_arg_call__` ? == bck_arg_tt TT_AT
-            ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) `` )
+            ( nurl_str_cat3 call_name ` ` ( nurl_str_cat3 ( nurl_str_int arg_idx ) ` ` fname ) ) `` )
             ( nurl_sym_def syms `__last_field_read__` `` )
             : s __aao_saved ( nurl_sym_get syms `__agg_arg_own__` )
             ( nurl_sym_def syms `__agg_arg_own__` `` )
@@ -14689,6 +14704,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def syms `__agg_arg_own__` __aao_saved )
             = arg_had_fread != 0 ( nurl_sym_len syms `__last_field_read__` )
             ( nurl_sym_def syms `__agg_arg_sink__` __aas_saved )
+            = g_agg_arg_lend __aal_saved
             ( nurl_sym_def syms `__agg_arg_call__` __aac_saved )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
@@ -22938,20 +22954,9 @@ unsafe @ mem_path_to_indices s path → s {
         // fields dropped. Either way the caller owns the result
         // (mem_fn_lend_kind, mem_own_lendback; agora #171).
         : ~ s __lnk ( nurl_str_cat __lnk0 `` )
-        // (Only a literal that owns every owning field it holds: one holding
-        // a binding's value — moved in only when the callee keeps it — stays
-        // that binding's, and the result cannot take it over.)
-        : ~ b __lall T
-        : ~ s __lsc ( nurl_str_cat __lo `` )
-        ~ & __lall != 0 ( nurl_str_len __lsc ) {
-            : i __lse ( nurl_str_find __lsc `;` )
-            : s __lsn ? < __lse 0 ( nurl_str_cat __lsc `` ) ( nurl_str_slice __lsc 0 __lse )
-            = __lsc ? < __lse 0 `` ( nurl_str_slice __lsc + __lse 1 - - ( nurl_str_len __lsc ) __lse 1 )
-            : i __lb1 ( nurl_str_find __lsn `|` )
-            : s __lr1 ( nurl_str_slice __lsn + __lb1 1 - - ( nurl_str_len __lsn ) __lb1 1 )
-            = __lall ( seq ( nurl_str_slice __lr1 0 ( nurl_str_find __lr1 `|` ) ) `1` )
-        }
-        ? & & __lall ( __is_hown_ty __crt ) | != 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) != 0 ( nurl_sym_len2 syms fname `__garity` ) {
+        // (A binding's value it holds moved in with it: __agg_arg_lend__,
+        // mem_note_kept_arg, agora #172.)
+        ? & ( __is_hown_ty __crt ) | != 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) != 0 ( nurl_sym_len2 syms fname `__garity` ) {
             : s __llo ( nurl_cg_reg cg )
             ( emit_sink_flag_load ( mem_lend_const syms `one` call_name fname arg_idx ) __llo )
             : s __llb ( nurl_cg_reg cg )
@@ -29264,7 +29269,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // Stored into an owner that drops it (g_fn_stores) — not kept
                 // in raw memory the caller still frees by hand.
                 : b s_keep ( nurl_sym_has_word g_fn_stores scal saix )
-                : b takes ? == kc 14 T ? == kc 12 & s_keep ! s_sink | s_sink s_keep
+                : ~ b takes ? == kc 14 T ? == kc 12 & s_keep ! s_sink | s_sink s_keep
+                // (A literal its callee hands back whole: its result is the
+                // literal, which took the binding's value, agora #172.)
+                ? & ! takes == kc 15 {
+                    : s s_who ? != 0 ( nurl_sym_len2 g_root_syms scal `__body_done` ) scal ( bck_generic_base scal )
+                    = takes == 1 ( mem_fn_lend_kind g_root_syms s_who ( nurl_str_to_int saix ) )
+                } {}
                 // A literal argument whose callee CONSUMES it: the value went
                 // with it, as a bare argument to that sink would have.
                 : b s_moves & == kc 15 s_sink
@@ -37287,6 +37298,17 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         } {}
         ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! agg_returned != 0 ( nurl_str_len __argk )
         { ( mem_note_kept_arg syms cg fld_first_val __argk ) } {}
+        // (…and when the callee hands the literal back whole: the result is
+        // the literal, and owns what the binding held — a local's, agora
+        // #172.)
+        // (Asked only for such a literal: `&` evaluates every operand.)
+        ? != 0 g_agg_arg_lend {
+            ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! agg_returned < ( nurl_sym_word_index syms `__fn_param_names__` fld_first_val ) 0 {
+                : s __lac ( nurl_sym_get syms `__agg_arg_call__` )
+                : s __lai ( str_skip_word __lac )
+                ( mem_note_kept_arg syms cg fld_first_val ( mem_lend_const syms `one` ( str_first_word __lac ) ( str_first_word ( str_skip_word __lai ) ) ( nurl_str_to_int ( str_first_word __lai ) ) ) )
+            } {}
+        } {}
         ? ( is_ident_tok fld_first_tt )
         { ( bck_record_embedded_param syms fld_first_val )
             // …and it is a MOVE, which the borrow checker was not told.
@@ -37603,11 +37625,14 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         : b __ao_ctx & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __argk ) ! agg_returned ! agg_nested
         // (A closure the literal builds — a literal, a call's result — is
         // its own too: its env goes with the literal, like a handle's.)
-        : b __ao_clo & ( __is_closure_ty fty ) | == fld_first_tt TT_BACKSLASH == fld_first_tt TT_LPAREN
+        // (…a binding's too: the field holds a copy of its env, made for it
+        // — mem_clo_into_store — and dropped with it, agora #173.)
+        : b __ao_cloid & fld_is_clo ( is_ident_tok fld_first_tt )
+        : b __ao_clo & ( __is_closure_ty fty ) | | == fld_first_tt TT_BACKSLASH == fld_first_tt TT_LPAREN __ao_cloid
         : b __ao_ty & & | | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) __ao_clo | __ao_clo ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
         : b __ao_tag & == idx 0 | agg_is_wrap != 0 ( nurl_sym_len2 syms ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) `__variants` )
         ? & & & __ao_ctx __ao_ty != fld_first_tt TT_AT ! __ao_tag {
-            : s __aoc ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
+            : s __aoc ? __ao_cloid ( nurl_str_cat `1` `` ) ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
             ? != 0 ( nurl_str_len __aoc ) {
                 : s __aol ( nurl_sym_get syms `__agg_arg_own__` )
                 : s __aoe ( nurl_str_cat4 fty `|` __aoc ( nurl_str_cat `|` fval ) )
