@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stack_ref_through_a_callee.nu:17:5: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ ( unwrap @ ?( @ i ) { T f } )
+    ^
+compiler/tests/diag_stack_ref_through_a_callee.nu:24:5: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ g
+    ^
+compiler/tests/diag_stack_ref_through_a_callee.nu:30:5: error: passing a value that references a stack binding by pointer to 'vec_push' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+    ( vec_push [( @ i )] out ( pick @ H { f 0 } ) )
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

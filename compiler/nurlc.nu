@@ -8883,8 +8883,7 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ? ! ( seq ( nurl_llty ty ) `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
     { ^ ( nurl_str_cat value `` ) } {}
-    ? ! | | == tt TT_LPAREN == tt TT_QUEST | == tt TT_QUESTQUEST == tt TT_LBRACE
-    { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( __tt_guarded tt ) { ^ ( nurl_str_cat `` `` ) } {}
     : s guard ( nurl_sym_get syms `__last_call_guard__` )
     ? == 0 ( nurl_str_len guard ) { ^ ( nurl_str_cat `` `` ) } {}
     ( nurl_sym_def syms `__last_call_guard__` `` )
@@ -8892,6 +8891,12 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ( nurl_print `  ` ) ( nurl_print owner )
     ( nurl_print ` = load i8*, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
     ^ owner
+}
+
+// The arms whose value a guard may own (`__last_call_guard__`): a call's
+// result, a `?` / `??` join's (mem_publish_join_owner) and a block's.
+@ __tt_guarded i tt → b {
+    ^ | | == tt TT_LPAREN == tt TT_QUEST | == tt TT_QUESTQUEST == tt TT_LBRACE
 }
 
 // A join carries a separate owner from its value. Borrowed raw pointers may
@@ -13117,6 +13122,19 @@ unsafe @ __has_pct_token s ll s name → b {
 // literal), else — when the expression was a bare identifier — that
 // binding's `<name>__refdepth`. 0 means "not a stack reference"
 // (a real referent depth is always >= 1, the function body).
+// Does the space-separated list of numbers hold one other than 0?
+unsafe @ __has_nonzero_word s list → b {
+    : i n ( nurl_str_len list )
+    : *u lp # *u list
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at lp n k )
+        ? & > c 48 <= c 57 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 @ bck_expr_refdepth i syms s ident → i {
     ? == g_borrowck 0 { ^ 0 } {}
     : s d ( nurl_sym_get syms `__last_expr_refdepth__` )
@@ -16401,8 +16419,14 @@ unsafe @ gen_call i lex i syms i cg → s {
     // result as the argument's reference even when `f` returns a fresh
     // value. The explicit `0` says "this call result is not a stack
     // reference"; a positive depth says "it is, with this referent".
-    : i __ret_rd ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_param )
-    ( bck_max_ret_refdepth callee_ret_param arg_refdepths ) 0
+    // (…or, for a closure handed back, part of one — a field or a payload,
+    // g_fn_ret_alias: a closure that captured by reference stays one,
+    // agora #154.)
+    // (Asked only when an argument is a stack reference at all.)
+    : b __rd_any & != g_borrowck 0 ( __has_nonzero_word arg_refdepths )
+    : s __rd_pos ? ! __rd_any `` ? & ! __callee_shadowed ( __is_closure_ty ( nurl_sym_get syms call_name ) ) ( __words_join callee_ret_param callee_ret_alias ) ( nurl_str_cat callee_ret_param `` )
+    : i __ret_rd ? & __rd_any != 0 ( nurl_str_len __rd_pos )
+    ( bck_max_ret_refdepth __rd_pos arg_refdepths ) 0
     ( nurl_sym_def syms `__last_expr_refdepth__` ( nurl_str_int __ret_rd ) )
     // Returned-handle propagation (docs/MEMORY.md §2.2): when the callee
     // may hand back one of its parameters' handles, the call RESULT may
@@ -17596,11 +17620,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // tracked owned string is provably copyable, so a mixed
     // `? c ( owner ) param` join preserves the borrowed pointer and carries
     // a separate owner phi that is null on that path.
+    // (Nor a nested `?`: its own join settled its arms, and the ident it
+    // left behind may be its condition's — a copy of what it chose, the
+    // join's owner left behind, leaked.)
     : b t_is_lit & == t_tt0 TT_STR ( seq ( nurl_llty tt2 ) `i8*` )
-    ? & & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ? & & & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
     ! t_alias
     ! ( seq t_str_flag `str` )
     ! t_is_lit
+    != t_tt0 TT_QUEST
     != 0 ( nurl_str_len t_retid )
     ( nurl_sym_has_word syms `__owned_strings__`
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
@@ -17613,9 +17641,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
         // The arm was a call (its value the call's result, the ident only
         // its last argument): the copy replaces that result, so what the
         // call handed over through its guard goes now — kept, it leaked
-        // once per evaluation (h194).
+        // once per evaluation (h194). So does a join's or a block's owner
+        // (__tt_guarded, h602).
         : s __tg ( nurl_sym_get syms `__last_call_guard__` )
-        ? & == t_tt0 TT_LPAREN != 0 ( nurl_str_len __tg ) {
+        ? & ( __tt_guarded t_tt0 ) != 0 ( nurl_str_len __tg ) {
             ( nurl_sym_def syms `__last_call_guard__` `` )
             : s __tgv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __tgv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __tg ) ( nurl_print `\n` )
@@ -17763,6 +17792,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // now — the else side has no single-pass blindness.) A literal
     // beside a non-owned then-arm copies nothing: the join is uniformly
     // borrowed, which is what the old unconditional copy leaked.
+    // (Not a nested `?`'s, as on the then side.)
     : ~ b e_dup F
     : b e_is_lit & == e_tt0 TT_STR ( seq ( nurl_llty et2 ) `i8*` )
     : b t_arm_owned & == 0 tdr | ( seq t_str_flag `str` ) t_dup
@@ -17770,7 +17800,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ! e_alias
     ! ( seq e_str_flag `str` )
     | & e_is_lit t_arm_owned
-    & != 0 ( nurl_str_len e_retid )
+    & & != e_tt0 TT_QUEST != 0 ( nurl_str_len e_retid )
     ( nurl_sym_has_word syms `__owned_strings__`
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
     { : s __ed ( nurl_cg_reg cg )
@@ -17784,7 +17814,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
         // call handed over through its guard goes now — kept, it leaked
         // once per evaluation (h194).
         : s __eg ( nurl_sym_get syms `__last_call_guard__` )
-        ? & == e_tt0 TT_LPAREN != 0 ( nurl_str_len __eg ) {
+        ? & ( __tt_guarded e_tt0 ) != 0 ( nurl_str_len __eg ) {
             ( nurl_sym_def syms `__last_call_guard__` `` )
             : s __egv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __egv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __eg ) ( nurl_print `\n` )
@@ -18496,6 +18526,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     : i __msxn0 g_sx_n
     : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
+    // (The parameters the matched value may be part of: a payload bound out
+    // of it is part of them too — handed back, it hands them back, agora
+    // #154.)
+    : i __m_scrut_origin ( origin_expr syms match_first_tt match_var_name )
+    : s __m_scrut_psrc ( bck_let_carrier_src syms match_first_tt match_var_name )
     // (A matched call whose lent argument is itself a call — `( vec_get (
     // vec_at top 0 ) 0 )` — lends what that one lends: its source
     // expression rides on the `match` row, h214.)
@@ -19357,6 +19392,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // payload's signedness in its type and a later `# i <b>`
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv0 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
                 // A closure payload (`T f →` over a `?( @ … )`): the binding
                 // owns its env exactly when the option was a call's and
@@ -19534,6 +19571,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt1 ) )
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings
@@ -19562,6 +19601,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt2 ) )
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings

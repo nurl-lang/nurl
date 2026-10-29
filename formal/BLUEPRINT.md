@@ -5,7 +5,7 @@
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A2 (Full Single-Threaded Calculus + Leak Freedom):** **28 modules**, **20,757 lines of Lean 4**, **926 theorems**, **1160 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
-* **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** **580 hole probes** (108 in A1, 299 in A2, 33 in A3, 140 in B)
+* **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** **594 hole probes** (108 in A1, 309 in A2, 33 in A3, 144 in B)
 
 ---
 

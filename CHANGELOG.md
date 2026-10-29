@@ -75,6 +75,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A closure that captured a local by reference no longer escapes
+  through a callee** (Agora #154, h597–h601). Two such callees were
+  missed: one that returns a `??` payload of its parameter
+  (`^ ?? o { T g → g … }`), and one that returns a closure field of it
+  (`^ . h cb`). Returning or storing the result left it pointing into a
+  frame that was gone. A payload now carries the parameters its
+  scrutinee carries. A closure handed back as part of an argument
+  carries that argument's stack referent.
+- **A `?` join nested in another `?` no longer leaks its string**
+  (h602–h604). When the inner join's condition read an owned string,
+  the outer join copied the inner one's value and never released the
+  owner the inner join had kept, leaking one string per evaluation. A
+  nested join is no longer copied: it has already settled its own
+  arms. The copy of any arm whose owner travels separately (a call, a
+  `?` or `??` join, a block) now releases that owner. The compiler's
+  own code loses nine string copies, at five places.
 - **A value stored into an owner on some paths, or on every iteration,
   stays stored** (Agora #160, h590–h596). A store on one arm of a `?`
   or `??`, or before a `break`, was forgotten where the paths met. A
