@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A select waiter is counted, and a ready select makes none** (agora
+  #167, h616). `chan_select_arm` left the waiter's raw address on the
+  channel, so a waiter dropped while armed was fired, freed, by the next
+  `chan_send`. The waiter's block is now a `Shared` one: every channel it
+  is armed on holds a share until the disarm, and a channel's drop lets
+  its shares go. The `?? { }` lowering now polls the arms once before it
+  makes a waiter, so a select with a value already waiting allocates and
+  arms nothing: 104 → 23 ns on a two-channel select with one arm ready. A
+  select that has to wait is unchanged (29.9 → 29.2 µs per thread round
+  trip).
 - **`Fiber` is a sealed, move-only handle; `fiber_join` takes it** (agora
   #168, h610–h615). It was a copyable `{ s raw }`: joining a handle twice,
   or two copies of it once each, freed the fiber's control block twice; a

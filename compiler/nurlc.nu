@@ -18236,16 +18236,21 @@ unsafe @ gen_cond i lex i syms i cg → s {
 // Lowering (no default):
 //   { : ~ i WHICH -1
 //     : ~ ?Tk Vk @ ?Tk { F }                    // one slot per case
-//     : SelWaiter W ( select_waiter_new )
-//     ~ < WHICH 0 {
-//       ( select_waiter_prepare W )
-//       ( chan_select_arm [Tk] chexpr_k W )      // every case
-//       ? < WHICH 0 { ? > ( chan_select_poll [Tk] chexpr_k ) 0 {
-//           = WHICH k = Vk ( chan_try_recv [Tk] chexpr_k ) } {} } {}
-//       ? < WHICH 0 { ( select_waiter_wait W ) } {}
-//       ( chan_select_disarm [Tk] chexpr_k W ) } // every case
+//     POLL                                       // a ready arm: no waiter
+//     ? < WHICH 0 {
+//       : SelWaiter W ( select_waiter_new )
+//       ~ < WHICH 0 {
+//         ( select_waiter_prepare W )
+//         ( chan_select_arm [Tk] chexpr_k W )    // every case
+//         POLL
+//         ? < WHICH 0 { ( select_waiter_wait W ) } {}
+//         ( chan_select_disarm [Tk] chexpr_k W ) } // every case
+//     } {}                                       // W dropped here
 //     ? == WHICH k { : ?Tk bind_k Vk <body_k> } {}   // every case
-//   }                                            // W dropped here
+//   }
+// where POLL is, for every case in order,
+//   ? < WHICH 0 { ? > ( chan_select_poll [Tk] chexpr_k ) 0 {
+//       = WHICH k = Vk ( chan_try_recv [Tk] chexpr_k ) } {} } {}
 //
 // The bodies run after the loop, every channel disarmed: a `break` or
 // `continue` in one belongs to the author's loop, and leaving through `^`
@@ -18374,9 +18379,13 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
         = src ( nurl_str_cat src body_block )
         = src ( nurl_str_cat4 src ( nurl_str_cat3 `? < ` which_name ` 0 ` ) default_body ` {}\n` )
     } {
-        // Blocking: arm / poll / wait / disarm until an arm is chosen,
-        // then its body. The waiter is dropped with the block — after the
-        // last disarm, whichever way the body leaves.
+        // Blocking. A first poll takes a ready arm with no waiter at all
+        // (no allocation, no arming); only when none is ready is a waiter
+        // made and the arm / poll / wait / disarm loop run until one is.
+        // The waiter is dropped with the inner block — after the last
+        // disarm, before any body runs.
+        = src ( nurl_str_cat src poll_block )
+        = src ( nurl_str_cat4 src `? < ` which_name ` 0 {\n` )
         = src ( nurl_str_cat4 src `: SelWaiter ` w_name ` ( select_waiter_new )\n` )
         = src ( nurl_str_cat4 src `~ < ` which_name ` 0 {\n` )
         = src ( nurl_str_cat4 src `( select_waiter_prepare ` w_name ` )\n` )
@@ -18386,6 +18395,7 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
         ( nurl_str_cat3 w_name ` )` ` } {}\n` ) `` )
         = src ( nurl_str_cat src disarm_block )
         = src ( nurl_str_cat src `}\n` )
+        = src ( nurl_str_cat src `} {}\n` )
         = src ( nurl_str_cat src body_block )
     }
     = src ( nurl_str_cat src `}\n` )
