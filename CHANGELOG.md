@@ -86,6 +86,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An enum payload that is an option, a result or a closure is boxed
+  and owned by the enum** (Agora #155, h640–h653). Such a payload was
+  kept in the stack frame that built the enum, and the enum held its
+  address. Returned or stored further out, the enum pointed into a dead
+  frame, and nothing ever dropped what the payload owned: an option's
+  String or a closure's env leaked with every enum. It now lives in a
+  heap box, as a multi-field struct payload does. The enum's drop, copy
+  and replacement handle it, and a closure payload's env is the enum's
+  own. Such an enum is now dropped and moved like any owning value. One
+  holding a closure cannot be copied with `mem_dup`.
+- **A match over a call's enum inside a loop no longer frees it twice**
+  (h650–h652). `?? ( make n ) { … }` owns the enum until its scope ends.
+  In a loop's body the scope ends every round, and the next round,
+  after a `continue` or not, released the same enum again.
 - **A closure that captured a local by reference no longer escapes
   through a callee** (Agora #154, h597–h601). Two such callees were
   missed: one that returns a `??` payload of its parameter

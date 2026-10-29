@@ -621,3 +621,17 @@ h634_dyn_of_a_bound_view_struct_returned	§2.11	A2	agora #156: a bound struct vi
 h635_dyn_of_a_view_struct_outlives_its_owner	§2.11	A2	agora #156: a dyn object over a view assigned to an outer binding, read after the String ended	rejected
 h636_dyn_of_a_view_field_returned	§2.11	A2	agora #156: a struct field viewing a local String, boxed with dyn and returned	rejected
 h637_dyn_of_a_viewing_call_returned	§2.11	A2	agora #156: a call result viewing a local String, boxed with dyn and returned	rejected
+h640_enum_closure_payload_returned_from_a_frame	§7.6	A2	agora #155: a closure literal as an enum payload, returned	runs-clean
+h641_enum_closure_payload_capturing_a_string	§7.6	A2	agora #155: an enum payload closure that captured a local String, returned	runs-clean
+h642_enum_option_payload_duplicated	§7.6	A2	agora #155: an enum with an option-of-String payload, copied with mem_dup	runs-clean
+h643_enum_option_payload_reassigned_in_a_loop	§7.6	A2	agora #155: an enum binding with an option payload reassigned in a loop	runs-clean
+h644_enum_option_payload_pushed_into_a_vec	§7.6	A2	agora #155: enums with option payloads pushed into a Vec the caller drops	runs-clean
+h645_enum_option_binding_moved_into_a_payload	§7.6	A2	agora #155: an option binding moved into an enum payload	runs-clean
+h646_enum_closure_payload_bound_in_an_arm	§7.6	A2	agora #155: an enum closure payload capturing a String, rebound in a match arm	runs-clean
+h647_enum_result_payload_read_from_a_vec	§7.6	A2	agora #155: enums with result payloads in a Vec, matched through vec_get	runs-clean
+h648_enum_closure_temp_matched_in_a_loop	§7.6	A2	agora #155: a call's enum with a closure payload matched unbound in a loop	runs-clean
+h649_enum_option_of_closure_payload	§7.6	A2	agora #155: an enum payload that is an option of a closure	runs-clean
+h650_enum_temp_matched_in_a_loop_body	§7.6	A2	agora #155: a call's enum matched unbound in a loop body: the next round released it again	runs-clean
+h651_enum_temp_matched_before_a_continue	§7.6	A2	agora #155: the same with a continue in the arm	runs-clean
+h652_enum_temp_matched_before_a_break	§7.6	A2	agora #155: the same with a break in the arm	runs-clean
+h653_enum_closure_temp_matched_once	§7.6	A2	agora #155: a call's enum with a closure payload matched unbound once	runs-clean

@@ -18657,6 +18657,10 @@ unsafe @ gen_match i lex i syms i cg → s {
             = g_udrop_noinit 2
             = g_udrop_tmpown 1
             ( mem_own_add_user_drop syms cg mte_p match_type )
+            // (…and the scope's own drop of it clears that flag: a match in
+            // a loop's body ends its scope every round, and the next round's
+            // release of the round before freed it again.)
+            ( nurl_sym_def syms ( nurl_str_cat mte_p `__tmpclr` ) `1` )
             ( mem_journal_forget_tmpown cg mte_p )
             ( mem_emit_gated_drop_of cg mte_p match_type `` ( nurl_sym_get2 syms mte_p `__live` ) )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print ` ` ) ( nurl_print match_val )
@@ -24535,6 +24539,12 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ^ v
     } {}
     ( mem_emit_gated_drop_of cg ptr vt ( nurl_sym_get2 syms ptr `__sinkflag` ) ( nurl_sym_get2 syms ptr `__live` ) )
+    // A match's temporary enum is released again before the next round
+    // that builds one (gen_match): its drop here marks it gone.
+    ? != 0 ( nurl_sym_len2 syms ptr `__tmpclr` ) {
+        : s __tcl ( nurl_sym_get2 syms ptr `__live` )
+        ? != 0 ( nurl_str_len __tcl ) { ( nurl_print `  store i1 false, ptr ` ) ( nurl_print __tcl ) ( nurl_print `\n` ) } {}
+    } {}
     = g_ff_mark 0
 }
 
@@ -35768,10 +35778,39 @@ unsafe @ __replaces_note i syms s name s field → v {
 // `i8*`, `%Foo*`, `i8**`). Used by comparison codegen to coerce
 // pointer operands to i64 before `icmp`, so `== ptr 0` / `!= ptr 0`
 // null-checks and pointer↔pointer compares emit valid IR.
+// A payload of type `ty` moved into a heap box, as an enum slot holds it
+// (enum_payload_storage 3): the box's address, an i64.
+@ __enum_box_payload i cg s ty s val → s {
+    : s ll ( nurl_llty ty )
+    : s sz_reg ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sz_reg ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll )
+    ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* null, i32 1\n` )
+    : s sz_int ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sz_int ) ( nurl_print ` = ptrtoint ` ) ( nurl_print ll )
+    ( nurl_print `* ` ) ( nurl_print sz_reg ) ( nurl_print ` to i64\n` )
+    : s box_raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print box_raw )
+    ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)` ) ( emit_dbg_eol )
+    : s box_ptr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print box_ptr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print box_raw )
+    ( nurl_print ` to ` ) ( nurl_print ll ) ( nurl_print `*\n` )
+    ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print `\n` )
+    : s box_cast ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print box_cast ) ( nurl_print ` = ptrtoint ` ) ( nurl_print ll )
+    ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print ` to i64\n` )
+    ^ box_cast
+}
+
 // Canonical representation of a named value inside an enum's i64 slot.
-// 0 = scalar/pointer/anonymous; 1 = tag-only enum; 2 = one-pointer handle;
+// 0 = scalar/pointer; 1 = tag-only enum; 2 = one-pointer handle;
 // 3 = boxed aggregate. Construction, matching and drop classification share it.
+// (An anonymous aggregate — an option, a result, a closure — is boxed
+// too: kept in the frame that built it, its address in the slot dangled
+// once the enum left that frame, and nothing dropped what it owned —
+// agora #155.)
 @ enum_payload_storage s ty i syms → i {
+    ? == ( nurl_str_get ty 0 ) 123 { ^ 3 } {}
     ? | != ( nurl_str_get ty 0 ) 37 ( is_ptr_ty ty ) { ^ 0 } {}
     : s name ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     ? != 0 ( nurl_sym_len2 syms name `__variants` ) {
@@ -37530,9 +37569,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // string field. So is an option's or a result's (__opt_payload).
         // (Not one a returned literal lends: read out of a parameter's
         // storage, it is handed back as it is — `vec_get`'s payload.)
-        : b fld_is_clo & & & & != 0 g_auto_drop_strings | != 0 ( nurl_str_len cur_sname ) & & agg_is_wrap > idx 0 ! opt_is_none ! fld_rlent
+        // So is an enum variant's: its box drops it (agora #155).
+        : b fld_is_clo | & & & & != 0 g_auto_drop_strings | != 0 ( nurl_str_len cur_sname ) & & agg_is_wrap > idx 0 ! opt_is_none ! fld_rlent
         == enum_paycount -1 & ( __is_closure_ty fty )
         == 0 ( nurl_sym_len2 syms cur_sname `__variants` )
+        & & & & != 0 g_auto_drop_strings >= enum_paycount 0 > idx 0 ! fld_rlent ( __is_closure_ty fty )
         ? fld_is_clo { = fval ( mem_clo_into_store syms cg fty fval fld_first_tt ) } {}
         // …and the handles it captured live on in the aggregate (a
         // returned literal moved them into the env already).
@@ -37977,8 +38018,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         {}
         // (A struct dropped whole — an owning struct — drops its closure
         // fields in its own drop graph, wherever the value goes: a Vec,
-        // a return, another struct. Only the others track them here.)
-        ? & fld_is_clo ! ( __is_owned_struct_ty agg_ty )
+        // a return, another struct. Only the others track them here. An
+        // enum drops its boxed payloads the same way.)
+        ? & & fld_is_clo ! ( __is_owned_struct_ty agg_ty ) == enum_paycount -1
         { : s tag ( nurl_str_cat3 idx_str `:clo:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
             ( nurl_str_cat tag `` )
@@ -38526,19 +38568,9 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                         = actual_fty `i64`
                     }
                     ? == ( nurl_str_get fty 0 ) 123
-                    {  // Anonymous aggregate (e.g., { i1, i64 }): alloca + store +
-                        // ptrtoint into the i64 slot
-                        : s alloc_reg ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print alloc_reg )
-                        ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `\n` )
-                        ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` )
-                        ( nurl_print fval ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) )
-                        ( nurl_print `* ` ) ( nurl_print alloc_reg ) ( nurl_print `\n` )
-                        : s conv_reg ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `* ` )
-                        ( nurl_print alloc_reg ) ( nurl_print ` to i64\n` )
-                        = actual_fval conv_reg
+                    {  // Anonymous aggregate (an option, a result, a closure):
+                        // heap-boxed, as a multi-field struct (enum_payload_storage 3).
+                        = actual_fval ( __enum_box_payload cg fty fval )
                         = actual_fty `i64`
                     }
                     ? & == ( nurl_str_get fty 0 ) 37
@@ -38575,31 +38607,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                                 ( nurl_print ` ` ) ( nurl_print xv3 ) ( nurl_print ` to i64\n` )
                                 = actual_fval pcast
                                 = actual_fty `i64` }
-                            { : s sz_reg ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print sz_reg )
-                                ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print `* null, i32 1\n` )
-                                : s sz_int ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print sz_int )
-                                ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print `* ` ) ( nurl_print sz_reg ) ( nurl_print ` to i64\n` )
-                                : s box_raw ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print box_raw )
-                                ( nurl_print ` = call i8* @nurl_alloc(i64 ` ) ( nurl_print sz_int ) ( nurl_print `)` ) ( emit_dbg_eol )
-                                : s box_ptr ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print box_ptr )
-                                ( nurl_print ` = bitcast i8* ` ) ( nurl_print box_raw )
-                                ( nurl_print ` to ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print `*\n` )
-                                ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print ` ` ) ( nurl_print fval )
-                                ( nurl_print `, ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print `\n` )
-                                : s box_cast ( nurl_cg_reg cg )
-                                ( nurl_print `  ` ) ( nurl_print box_cast )
-                                ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty fty ) )
-                                ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print ` to i64\n` )
-                                = actual_fval box_cast
+                            { = actual_fval ( __enum_box_payload cg fty fval )
                                 = actual_fty `i64` }
                         }
                     }
