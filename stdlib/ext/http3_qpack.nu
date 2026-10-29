@@ -391,8 +391,7 @@ $ `stdlib/std/quic_varint.nu`
 // except Set Dynamic Table Capacity 0.
 @ qpack_encoder_instruction ( Vec u ) buf i off → i {
     : i n ( vec_len [u] buf )
-    ? < off 0 { ^ -2 } {}
-    ? >= off n { ^ -1 } {}
+    ? >= # u64 off # u64 n { ? < off 0 { ^ -2 } {} ^ -1 } {}
     : i b ( __qpk_bget buf off )
     ? != & b 128 0 { ^ -2 } {}
     ? != & b 64 0 { ^ -2 } {}
@@ -414,8 +413,7 @@ $ `stdlib/std/quic_varint.nu`
 // Decoder stream (RFC 9204 §4.4), read by the encoder side (us).
 @ qpack_decoder_instruction ( Vec u ) buf i off → i {
     : i n ( vec_len [u] buf )
-    ? < off 0 { ^ -2 } {}
-    ? >= off n { ^ -1 } {}
+    ? >= # u64 off # u64 n { ? < off 0 { ^ -2 } {} ^ -1 } {}
     : i b ( __qpk_bget buf off )
     ? != & b 128 0 {
         // Section Acknowledgment: 1 stream id(7+) — we never send a

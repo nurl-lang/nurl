@@ -306,8 +306,9 @@ $ `stdlib/ext/http2_frame.nu`
 // bytes (a malicious peer could otherwise force an unbounded shift).
 @ hpack_decode_int ( Vec u ) buf i from i prefix_bits → !HpackInt HpackErr {
     : i n ( vec_len [u] buf )
-    ? < from 0 { ^ @ !HpackInt HpackErr { F HpackOther } } {}
-    ? >= from n {
+    // one unsigned compare catches both a negative `from` and the end
+    ? >= # u64 from # u64 n {
+        ? < from 0 { ^ @ !HpackInt HpackErr { F HpackOther } } {}
         ^ @ !HpackInt HpackErr { F HpackTruncated }
     } {}
     : *u p ( vec_data [u] buf )
@@ -358,8 +359,8 @@ $ `stdlib/ext/http2_frame.nu`
 
 @ hpack_decode_string ( Vec u ) buf i from → !HpackString HpackErr {
     : i n ( vec_len [u] buf )
-    ? < from 0 { ^ @ !HpackString HpackErr { F HpackOther } } {}
-    ? >= from n {
+    ? >= # u64 from # u64 n {
+        ? < from 0 { ^ @ !HpackString HpackErr { F HpackOther } } {}
         ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}
     : *u p ( vec_data [u] buf )
@@ -383,23 +384,16 @@ $ `stdlib/ext/http2_frame.nu`
     ? < - n data_off length {
         ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}
-    : ~ String s ( string_new )
-    ? huffman {
-        : !String HpackErr hr ( _hpack_huffman_decode buf data_off length )
-        ?? hr {
-            T text → { = s text }
-            F e → { ^ @ !HpackString HpackErr { F e } }
+    ? ! huffman {
+        // A literal is its bytes: one copy into an exact-size String.
+        ^ @ !HpackString HpackErr {
+            T @ HpackString { ( string_from_bytes # *u + # i p data_off length ) + len_consumed length }
         }
-    } {
-        : ~ i k 0
-        ~ < k length {
-            : i b # i . p + data_off k
-            ( string_push_char s b )
-            = k + k 1
-        }
-    }
-    ^ @ !HpackString HpackErr {
-        T @ HpackString { s + len_consumed length }
+    } {}
+    : !String HpackErr hr ( _hpack_huffman_decode buf data_off length )
+    ?? hr {
+        T text → { ^ @ !HpackString HpackErr { T @ HpackString { text + len_consumed length } } }
+        F e → { ^ @ !HpackString HpackErr { F e } }
     }
 }
 
@@ -738,7 +732,9 @@ $ `stdlib/ext/http2_frame.nu`
 // HpackTruncated.
 @ _hpack_huffman_decode ( Vec u ) buf i from i length → !String HpackErr {
     : i n ( vec_len [u] buf )
-    ? | | < from 0 < length 0 | > from n > length - n from {
+    // unsigned: a negative from or length reads as huge (0 <= from <= n
+    // once the first holds, so n - from is no wrap)
+    ? | > # u64 from # u64 n > # u64 length # u64 - n from {
         ^ @ !String HpackErr { F HpackTruncated }
     } {}
     : ~ String out ( string_new )

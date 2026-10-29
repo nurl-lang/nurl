@@ -218,12 +218,12 @@ $ `stdlib/core/slice.nu`
     ? < - n + from 9 length {
         ^ @ !H2ParsedFrame H2FrameErr { F H2FrameReadShort }
     } {}
+    // The payload is one copy of its bytes (checked in range above).
     : ( Vec u ) payload ( vec_with_cap [u] length )
-    : ~ i k 0
-    ~ < k length {
-        ( vec_push [u] payload # u . p + + from 9 k )
-        = k + k 1
-    }
+    ? > length 0 {
+        ( nurl_memcpy ( vec_data [u] payload ) # *u + # i p + from 9 length )
+        : b _ok ( vec_set_len [u] payload length )
+    } {}
     ^ @ !H2ParsedFrame H2FrameErr {
         T @ H2ParsedFrame {
             @ H2Frame { ftype fflags stream_id payload }
@@ -581,11 +581,10 @@ $ `stdlib/core/slice.nu`
     } {}
     : i data_len - - n 1 pad_len
     : ( Vec u ) out ( vec_with_cap [u] data_len )
-    : ~ i k 0
-    ~ < k data_len {
-        ( vec_push [u] out # u . p + 1 k )
-        = k + k 1
-    }
+    ? > data_len 0 {
+        ( nurl_memcpy ( vec_data [u] out ) # *u + # i p 1 data_len )
+        : b _ok ( vec_set_len [u] out data_len )
+    } {}
     ^ @ !( Vec u ) H2FrameErr { T out }
 }
 
