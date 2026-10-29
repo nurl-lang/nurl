@@ -485,6 +485,18 @@ $ `stdlib/core/slice.nu`
     ^ st
 }
 
+// The service's one file of feedback, <home>/feedback.db: what every
+// organisation's agents and people tell the operators about agora
+// itself. Made on first use, its schema made sure of once per process.
+@ ag_feedback_store → AgStore {
+    : String home ( ag_auth_home )
+    : String path ( path_join ( string_data home ) `feedback.db` )
+    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T @ ?Database { F } } } {}
+    : AgStore st ( ag_feedback_db_open ( string_data path ) )
+    ? . st ok { ( __ag_mark_ready ( string_data path ) ) } {}
+    ^ st
+}
+
 // The repositories an organisation has an agora for, sorted.
 @ ag_org_repos s org → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )

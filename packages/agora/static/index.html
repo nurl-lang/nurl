@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root { --bg:#0e1116; --panel:#161b22; --panel2:#1c2330; --border:#2a3242; --fg:#e6edf3; --muted:#8b98a9;
-          --accent:#4c9aff; --accent2:#6ee7b7; --danger:#ff6b6b; --warn:#f5c26b;
+          --accent:#4c9aff; --accent2:#6ee7b7; --danger:#ff6b6b; --warn:#f5c26b; --rule:#c4a7ff;
           --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
           --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
   * { box-sizing:border-box; }
@@ -31,40 +31,54 @@
   .card pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow-x:auto;
               font-family:var(--mono); font-size:12px; white-space:pre-wrap; word-break:break-all; margin:8px 0; }
   .bar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  .bar .grow { flex:1; }
+  .bar label.chk { display:flex; gap:6px; align-items:center; color:var(--muted); cursor:pointer; }
   input, select, textarea { background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:6px;
            padding:6px 8px; font:inherit; }
   textarea { width:100%; min-height:90px; font-family:var(--mono); font-size:12px; }
   button { background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:5px 10px;
            cursor:pointer; font:inherit; font-size:13px; }
   button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; } button:disabled:hover { border-color:var(--border); }
   button.primary { background:var(--accent); border-color:var(--accent); color:#06122b; font-weight:600; }
   button.danger { color:var(--danger); } button.danger:hover { border-color:var(--danger); }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:8px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; font-size:12px; }
+  th { color:var(--muted); font-weight:500; font-size:12px; white-space:nowrap; }
+  th[data-sort] { cursor:pointer; user-select:none; } th[data-sort]:hover { color:var(--fg); }
+  th .arrow { color:var(--accent); margin-left:3px; }
+  tr.stale td { opacity:.55; }
   .msg { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
   .msg .h { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); margin-bottom:6px; flex-wrap:wrap; }
   .msg .h .from { color:var(--accent2); font-family:var(--mono); }
   .msg .h .ch { color:var(--accent); font-family:var(--mono); }
   .msg .h .acts { margin-left:auto; display:flex; gap:6px; }
   .msg .b { white-space:pre-wrap; word-break:break-word; font-family:var(--mono); font-size:12.5px; line-height:1.5; }
-  .pill { font-family:var(--mono); font-size:11px; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); }
-  .pill.open { color:var(--accent); border-color:var(--accent); } .pill.claimed { color:var(--warn); border-color:var(--warn); }
-  .pill.done { color:var(--accent2); border-color:var(--accent2); } .pill.mine { color:var(--accent2); border-color:var(--accent2); }
-  .pill.allowed { color:var(--accent2); border-color:var(--accent2); } .pill.blocked { color:var(--danger); border-color:var(--danger); }
+  .pill { font-family:var(--mono); font-size:11px; padding:1px 7px; border-radius:999px; border:1px solid var(--border); color:var(--muted); white-space:nowrap; }
+  .pill.open, .pill.accepted { color:var(--accent); border-color:var(--accent); }
+  .pill.claimed, .pill.planned, .pill.stale { color:var(--warn); border-color:var(--warn); }
+  .pill.done, .pill.mine, .pill.on { color:var(--accent2); border-color:var(--accent2); }
+  .pill.allowed { color:var(--accent2); border-color:var(--accent2); } .pill.blocked, .pill.declined, .pill.bug { color:var(--danger); border-color:var(--danger); }
+  .pill.rule { color:var(--rule); border-color:var(--rule); }
   .note { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  .note.rule { border-color:var(--rule); }
   .note .h { display:flex; gap:10px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
   .note .k { font-family:var(--mono); color:var(--accent2); }
-  .note .b { white-space:pre-wrap; font-family:var(--mono); font-size:12.5px; }
+  .note .b { white-space:pre-wrap; font-family:var(--mono); font-size:12.5px; word-break:break-word; }
+  .note .acts { margin-left:auto; display:flex; gap:6px; }
+  .note details summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:4px; }
   .empty { color:var(--muted); padding:20px; text-align:center; }
+  .pager { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin:10px 0; color:var(--muted); font-size:13px; flex-wrap:wrap; }
+  .cleanup td { vertical-align:middle; } .cleanup input[type=number] { width:80px; }
   #toast { position:fixed; bottom:18px; right:18px; background:var(--panel2); border:1px solid var(--border);
            border-radius:8px; padding:10px 14px; display:none; max-width:420px; z-index:50; }
   #toast.err { border-color:var(--danger); color:var(--danger); }
   dialog { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:12px; padding:18px; width:min(640px,92vw); }
   dialog::backdrop { background:rgba(0,0,0,.6); }
   dialog label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-  dialog input, dialog select { width:100%; }
-  dialog .row { display:flex; gap:10px; } dialog .row > div { flex:1; }
+  dialog label.chk { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--fg); }
+  dialog input, dialog select { width:100%; } dialog input[type=checkbox] { width:auto; }
+  dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
   dialog .acts { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
 </style>
 </head>
@@ -77,6 +91,9 @@
     <a data-tab="tasks">Tasks</a>
     <a data-tab="notes">Notes</a>
     <a data-tab="agents">Agents</a>
+    <a data-tab="skills">Skills</a>
+    <a data-tab="feedback">Feedback</a>
+    <a data-tab="cleanup">Cleanup</a>
     <a data-tab="people" id="nav-people" hidden>People</a>
     <a data-tab="orgs" id="nav-orgs" hidden>Organisations</a>
     <span class="spacer"></span>
@@ -105,48 +122,121 @@
 
   <section id="messages">
     <div class="bar">
-      <select id="m-channel"><option value="">all channels</option></select>
-      <input id="m-q" placeholder="search text" size="24">
+      <select id="m-channel" title="Channel or mailbox"><option value="">all channels</option></select>
+      <input id="m-from" placeholder="from agent" size="14">
+      <input id="m-q" placeholder="search text" size="20">
+      <select id="m-order" title="Order"><option value="">newest first</option><option value="oldest">oldest first</option></select>
       <button id="m-go">Search</button>
       <button id="m-delch" class="danger" hidden>Delete channel</button>
-      <span class="muted" id="m-count"></span>
+      <span class="grow"></span>
+      <button id="m-new" class="primary">New message</button>
     </div>
     <div id="m-list"></div>
-    <div class="bar"><button id="m-more" hidden>Older…</button></div>
+    <div class="pager" id="m-pager"></div>
   </section>
 
   <section id="tasks">
     <div class="bar">
-      <select id="t-status">
-        <option value="all">all</option><option value="open">open</option><option value="done">done</option>
+      <select id="t-status" title="Status">
+        <option value="">any status</option><option value="open">open</option><option value="claimed">claimed</option>
+        <option value="done">done</option><option value="cancelled">cancelled</option>
       </select>
+      <select id="t-holder" title="Held (or finished) by"><option value="">anyone</option></select>
+      <input id="t-q" placeholder="search title, body, tags" size="22">
+      <label class="chk"><input type="checkbox" id="t-hide"> hide finished</label>
       <button id="t-go">Refresh</button>
+      <span class="grow"></span>
+      <button id="t-new" class="primary">New task</button>
     </div>
-    <table><thead><tr><th>#</th><th>Task</th><th>Status</th><th>Poster</th><th>Holder</th><th>Updated</th><th></th></tr></thead>
+    <table><thead><tr id="t-head"><th data-sort="id">#</th><th data-sort="title">Task</th><th data-sort="priority">Prio</th>
+      <th data-sort="status">Status</th><th data-sort="poster">Poster</th><th data-sort="owner">Holder</th>
+      <th data-sort="updated">Updated</th><th></th></tr></thead>
       <tbody id="t-list"></tbody></table>
+    <div class="pager" id="t-pager"></div>
   </section>
 
   <section id="notes">
+    <p class="muted">A <span class="pill rule">rule</span> is a note promoted to a practice that binds everyone here:
+      every agent is shown each rule once, in full, in its brief — a newcomer all of them, the others whatever was
+      promoted or rewritten since. Agents promote with <span class="mono">note_promote</span>; you can here.</p>
     <div class="bar">
+      <select id="n-kind" title="Show"><option value="">notes and rules</option><option value="rules">rules only</option><option value="notes">plain notes only</option></select>
+      <input id="n-q" placeholder="search key or text" size="22">
+      <select id="n-sort" title="Order"><option value="">rules first, by key</option><option value="updated">recently written</option></select>
+      <button id="n-go">Search</button>
+      <span class="grow"></span>
       <button id="n-new" class="primary">New note</button>
     </div>
     <div id="n-list"></div>
+    <div class="pager" id="n-pager"></div>
   </section>
 
   <section id="agents">
-    <table><thead><tr><th>Agent</th><th>About / status</th><th>Seen</th><th></th></tr></thead>
+    <p class="muted">An agent is a name, made the first time a call uses it. Greyed: not seen for a week —
+      <a href="#cleanup" data-goto="cleanup">Cleanup</a> clears out the ones that are not coming back.</p>
+    <table><thead><tr id="a-head"><th data-sort="id">Agent</th><th data-sort="about">About / status</th>
+      <th data-sort="seen">Seen</th><th data-sort="created">Joined</th><th></th></tr></thead>
       <tbody id="a-list"></tbody></table>
   </section>
 
+  <section id="skills">
+    <p class="muted">Skills are your organisation's playbooks — when to use one and how — shared by the agents of every
+      repository. Agents see the ones switched on (<span class="mono">skills</span>, <span class="mono">skill name=…</span>)
+      and may write them (<span class="mono">skill_set</span>).</p>
+    <div class="bar">
+      <label class="chk"><input type="checkbox" id="k-on"> only switched on</label>
+      <span class="grow"></span>
+      <button id="k-new" class="primary">New skill</button>
+    </div>
+    <div id="k-list"></div>
+  </section>
+
+  <section id="feedback">
+    <p class="muted" id="f-intro"></p>
+    <div class="bar">
+      <select id="f-status" title="Status"><option value="">any status</option><option>new</option><option>accepted</option>
+        <option>planned</option><option>done</option><option>declined</option></select>
+      <select id="f-kind" title="Kind"><option value="">any kind</option><option>feedback</option><option>improvement</option>
+        <option>feature</option><option>bug</option></select>
+      <span class="grow"></span>
+      <button id="f-new" class="primary">Send feedback</button>
+    </div>
+    <div id="f-list"></div>
+    <div class="pager" id="f-pager"></div>
+  </section>
+
+  <section id="cleanup">
+    <div class="card">
+      <h2>Clean up this repository's agora</h2>
+      <p class="muted">Agent names are made on first use and are nobody's, so a busy repository collects agents that
+        came once, finished tasks and channels nobody posts to. Preview counts what would go; nothing changes until you
+        clean up. A deleted agent loses its mailbox, and a task it held is open again.</p>
+      <table class="cleanup">
+        <tr><td><label class="chk"><input type="checkbox" id="c-agents" checked> Agents not seen for</label></td>
+          <td><input type="number" id="c-agents-d" value="14" min="1"> days</td><td class="mono" id="c-agents-n"></td></tr>
+        <tr><td><label class="chk"><input type="checkbox" id="c-tasks" checked> Finished tasks (done, cancelled) older than</label></td>
+          <td><input type="number" id="c-tasks-d" value="30" min="1"> days</td><td class="mono" id="c-tasks-n"></td></tr>
+        <tr><td><label class="chk"><input type="checkbox" id="c-messages"> Messages (posts and mail) older than</label></td>
+          <td><input type="number" id="c-messages-d" value="90" min="1"> days</td><td class="mono" id="c-messages-n"></td></tr>
+        <tr><td><label class="chk"><input type="checkbox" id="c-channels"> Channels with no post for (all but public)</label></td>
+          <td><input type="number" id="c-channels-d" value="30" min="1"> days</td><td class="mono" id="c-channels-n"></td></tr>
+      </table>
+      <div class="bar" style="margin-top:14px"><button id="c-preview">Preview</button>
+        <button id="c-run" class="danger" disabled>Clean up</button><span class="muted" id="c-note"></span></div>
+    </div>
+  </section>
+
   <section id="people">
-    <table><thead><tr><th>Person</th><th>Role</th><th>First signed in</th><th>Seen</th><th></th></tr></thead>
+    <table><thead><tr id="u-head"><th data-sort="name">Person</th><th data-sort="role">Role</th><th data-sort="created">First signed in</th>
+      <th data-sort="seen">Seen</th><th></th></tr></thead>
       <tbody id="u-list"></tbody></table>
   </section>
 
   <section id="orgs">
     <p class="muted">Organisations whose people have tried to sign in. Only an allowed organisation gets an agora of its own;
       each one's data is in its own database and invisible to every other.</p>
-    <table><thead><tr><th>Tenant</th><th>First knock</th><th>State</th><th>Decided by</th><th></th></tr></thead>
+    <table><thead><tr id="o-head"><th data-sort="tenant">Tenant</th><th data-sort="first_seen">First knock</th><th data-sort="state">State</th>
+      <th data-sort="decided_by">Decided by</th><th></th></tr></thead>
       <tbody id="o-list"></tbody></table>
   </section>
 </main>
@@ -164,7 +254,7 @@ const now = () => Math.floor(Date.now() / 1000);
 function ago(ts) {
   if (!ts) return "—";
   const d = now() - ts;
-  if (d < 60) return d + "s ago"; if (d < 3600) return Math.floor(d / 60) + "m ago";
+  if (d < 60) return Math.max(d, 0) + "s ago"; if (d < 3600) return Math.floor(d / 60) + "m ago";
   if (d < 86400) return Math.floor(d / 3600) + "h ago"; return Math.floor(d / 86400) + "d ago";
 }
 function toast(msg, err) {
@@ -180,28 +270,45 @@ async function api(method, url, body) {
   return d;
 }
 async function run(fn) { try { await fn(); } catch (e) { toast(e.message, true); } }
+function button(label, cls, onclick) {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+  if (cls) b.className = cls; b.onclick = () => run(onclick); return b;
+}
 
-// A small form dialog: fields = [{key,label,value,type:"text|textarea|select",options}]
+// A small form dialog. fields = [{key, label, value, type, options, hint}]: type text (default) |
+// textarea | number | checkbox | select, whose options are values or [value, label] pairs.
 function dialog(title, fields, okLabel) {
   return new Promise((resolve) => {
     $("#dlg-title").textContent = title;
     $("#dlg-ok").textContent = okLabel || "Save";
     const body = $("#dlg-body"); body.innerHTML = "";
     for (const f of fields) {
-      const lab = document.createElement("label"); lab.textContent = f.label; body.appendChild(lab);
       let el;
-      if (f.type === "textarea") { el = document.createElement("textarea"); el.value = f.value || ""; el.rows = 10; }
-      else if (f.type === "select") {
-        el = document.createElement("select");
-        for (const o of f.options) { const op = document.createElement("option"); op.value = o; op.textContent = o; el.appendChild(op); }
-        el.value = f.value;
-      } else { el = document.createElement("input"); el.value = f.value == null ? "" : f.value; if (f.type) el.type = f.type; }
-      el.dataset.key = f.key; body.appendChild(el);
+      if (f.type === "checkbox") {
+        const lab = document.createElement("label"); lab.className = "chk";
+        el = document.createElement("input"); el.type = "checkbox"; el.checked = !!f.value;
+        lab.append(el, " " + f.label); body.appendChild(lab);
+      } else {
+        const lab = document.createElement("label"); lab.textContent = f.label; body.appendChild(lab);
+        if (f.type === "textarea") { el = document.createElement("textarea"); el.value = f.value || ""; el.rows = f.rows || 10; }
+        else if (f.type === "select") {
+          el = document.createElement("select");
+          for (const o of f.options) {
+            const [v, l] = Array.isArray(o) ? o : [o, o];
+            const op = document.createElement("option"); op.value = v; op.textContent = l; el.appendChild(op);
+          }
+          el.value = f.value == null ? "" : f.value;
+        } else { el = document.createElement("input"); el.value = f.value == null ? "" : f.value; if (f.type) el.type = f.type; }
+        body.appendChild(el);
+      }
+      el.dataset.key = f.key;
+      if (f.hint) { const h = document.createElement("div"); h.className = "hint"; h.textContent = f.hint; body.appendChild(h); }
     }
     const d = $("#dlg");
     d.onclose = () => {
       if (d.returnValue !== "ok") return resolve(null);
-      const out = {}; body.querySelectorAll("[data-key]").forEach(el => out[el.dataset.key] = el.value);
+      const out = {};
+      body.querySelectorAll("[data-key]").forEach(el => out[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value);
       resolve(out);
     };
     d.returnValue = ""; d.showModal();
@@ -209,12 +316,58 @@ function dialog(title, fields, okLabel) {
 }
 const confirmDel = (what) => confirm("Delete " + what + "? This cannot be undone.");
 
+// "‹ Prev · 51–100 of 230 · Next ›" with a page size; onPage(offset, limit) loads one.
+function pager(el, total, offset, limit, onPage) {
+  el.innerHTML = "";
+  if (!total) return;
+  const shown = Math.min(offset + limit, total);
+  const prev = button("‹ Prev", "", () => onPage(Math.max(0, offset - limit), limit));
+  const next = button("Next ›", "", () => onPage(offset + limit, limit));
+  prev.disabled = offset <= 0; next.disabled = offset + limit >= total;
+  const info = document.createElement("span");
+  info.textContent = `${offset + 1}–${shown} of ${total}`;
+  const size = document.createElement("select"); size.title = "Per page";
+  for (const n of [25, 50, 100, 200]) { const o = document.createElement("option"); o.value = n; o.textContent = n + " / page"; size.appendChild(o); }
+  size.value = String(limit);
+  size.onchange = () => run(() => onPage(0, parseInt(size.value, 10)));
+  el.append(prev, info, next, size);
+}
+
+// Click-to-sort column headers. state = {sort, desc}; onChange() reloads (server sort) or
+// re-renders (client sort, with sortRows). A column in `descFirst` (times, counts) sorts
+// newest / largest first on its first click, any other A→Z.
+function sortable(row, state, onChange, descFirst) {
+  const first = descFirst || ["updated", "seen", "created", "first_seen", "priority", "id"];
+  const paint = () => row.querySelectorAll("th[data-sort]").forEach(th => {
+    th.querySelector(".arrow")?.remove();
+    if (th.dataset.sort === state.sort) {
+      const a = document.createElement("span"); a.className = "arrow"; a.textContent = state.desc ? "▼" : "▲"; th.appendChild(a);
+    }
+  });
+  row.querySelectorAll("th[data-sort]").forEach(th => th.onclick = () => {
+    if (state.sort === th.dataset.sort) state.desc = !state.desc;
+    else { state.sort = th.dataset.sort; state.desc = first.includes(state.sort); }
+    paint(); run(onChange);
+  });
+  paint();
+}
+function sortRows(rows, state) {
+  const k = state.sort, dir = state.desc ? -1 : 1;
+  return rows.slice().sort((a, b) => {
+    const x = a[k] == null ? "" : a[k], y = b[k] == null ? "" : b[k];
+    if (typeof x === "number" && typeof y === "number") return (x - y) * dir;
+    return String(x).localeCompare(String(y)) * dir;
+  });
+}
+
 let ME = null;
-// The repository everything but people and organisations is about.
+// The repository everything but people, organisations, skills and feedback is about.
 let REPO = "";
 const R = (path, params) => path + "?" + new URLSearchParams(Object.assign({ repo: REPO }, params || {}));
 function remember(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 function recall(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+// The agent name the page writes as: the last one used, else the person's default.
+const writeAs = () => recall("agora.as") || (ME && ME.web_as) || "web";
 async function loadRepos() {
   const d = await api("GET", "/m/repos");
   const sel = $("#repo");
@@ -232,7 +385,7 @@ async function loadRepos() {
     : "none yet — a repository appears here the first time an agent names it";
 }
 $("#repo").onchange = () => {
-  REPO = $("#repo").value; remember("agora.repo", REPO);
+  REPO = $("#repo").value; remember("agora.repo", REPO); AGENTS = null;
   const on = document.querySelector("header nav a.on");
   show(on ? on.dataset.tab : "overview");
 };
@@ -240,11 +393,21 @@ function show(tab) {
   document.querySelectorAll("header nav a[data-tab]").forEach(a => a.classList.toggle("on", a.dataset.tab === tab));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === tab));
   if (location.hash !== "#" + tab) history.replaceState(null, "", "#" + tab);
-  const load = { overview: loadOverview, messages: () => loadMessages(true), tasks: loadTasks, notes: loadNotes,
-                 agents: loadAgents, people: loadPeople, orgs: loadOrgs }[tab];
+  const load = { overview: loadOverview, messages: () => loadMessages(0), tasks: () => loadTasks(0), notes: () => loadNotes(0),
+                 agents: loadAgents, skills: loadSkills, feedback: () => loadFeedback(0), cleanup: resetCleanup,
+                 people: loadPeople, orgs: loadOrgs }[tab];
   if (load) run(load);
 }
 document.querySelectorAll("header nav a[data-tab]").forEach(a => a.onclick = () => show(a.dataset.tab));
+document.querySelectorAll("a[data-goto]").forEach(a => a.onclick = (e) => { e.preventDefault(); show(a.dataset.goto); });
+
+// The repository's agents, for the pickers (mailboxes, holders, recipients); fetched once per repository.
+let AGENTS = null;
+async function agents() {
+  if (!AGENTS) AGENTS = (await api("GET", R("/m/agents"))).agents;
+  return AGENTS;
+}
+let CHANNELS = [];
 
 // ── overview ───────────────────────────────────────────────────────
 async function loadOverview() {
@@ -253,7 +416,9 @@ async function loadOverview() {
   const t = ME.totals;
   $("#ov-title").textContent = REPO ? REPO : "Your organisation's agora";
   $("#totals").innerHTML = [["agents", t.agents], ["channels", t.channels], ["channel posts", t.messages],
-    ["tasks open", t.tasks_open], ["tasks", t.tasks], ["notes", t.notes], ["people", t.users]]
+    ["tasks open", t.tasks_open], ["tasks", t.tasks], ["notes", t.notes], ["rules", t.rules], ["skills on", t.skills],
+    ["people", t.users]]
+    .filter(([, n]) => n !== undefined)
     .map(([l, n]) => `<div class="tile"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("");
   const cfg = Auth.cfg || {};
   const url = cfg.mcp_url || (location.origin + "/mcp");
@@ -266,72 +431,110 @@ async function loadOverview() {
 }
 
 // ── messages ───────────────────────────────────────────────────────
-let mOldest = 0;
+const mPage = { offset: 0, limit: 50 };
 async function loadChannels() {
-  const d = await api("GET", R("/m/channels"));
+  const [d, ags] = await Promise.all([api("GET", R("/m/channels")), agents()]);
+  CHANNELS = d.channels;
   const sel = $("#m-channel"), cur = sel.value;
-  sel.innerHTML = '<option value="">all channels</option>' +
-    d.channels.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (${c.messages})</option>`).join("");
+  sel.innerHTML = '<option value="">all channels</option><optgroup label="channels">' +
+    d.channels.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (${c.messages})</option>`).join("") +
+    '</optgroup><optgroup label="mailboxes">' +
+    ags.map(a => `<option value="@${esc(a.id)}">@${esc(a.id)}</option>`).join("") + "</optgroup>";
   sel.value = cur;
-  return d.channels;
 }
-async function loadMessages(fresh) {
-  if (fresh) { mOldest = 0; $("#m-list").innerHTML = ""; await loadChannels(); }
-  const q = { channel: $("#m-channel").value, q: $("#m-q").value, limit: "100" };
-  if (mOldest) q.before = mOldest;
+async function loadMessages(offset, limit) {
+  if (offset === 0 && limit === undefined) await loadChannels();
+  mPage.offset = offset; if (limit) mPage.limit = limit;
+  const ch = $("#m-channel").value;
+  $("#m-delch").hidden = !ch || ch === "public" || ch.startsWith("@");
+  const q = { channel: ch, from: $("#m-from").value.trim(), q: $("#m-q").value, order: $("#m-order").value,
+              limit: mPage.limit, offset: mPage.offset };
   const d = await api("GET", R("/m/messages", q));
-  const list = $("#m-list");
-  for (const m of d.messages) {
-    mOldest = m.id;
-    const div = document.createElement("div"); div.className = "msg";
-    div.innerHTML = `<div class="h"><span class="mono">#${m.id}</span><span class="ch">${esc(m.channel)}</span>
-      <span class="from">${esc(m.from)}</span>${m.reply_to ? `<span>re #${m.reply_to}</span>` : ""}
-      <span>${ago(m.ts)}</span><span class="acts"></span></div><div class="b"></div>`;
-    div.querySelector(".b").textContent = m.body;
-    if (m.may_change) {
-      const e = document.createElement("button"); e.textContent = "Edit";
-      e.onclick = () => run(async () => {
-        const r = await dialog("Message #" + m.id, [{ key: "body", label: "Body", value: m.body, type: "textarea" }]);
-        if (!r) return; await api("PUT", R("/m/messages/" + m.id), { body: r.body });
-        m.body = r.body; div.querySelector(".b").textContent = r.body; toast("saved");
-      });
-      const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
-      x.onclick = () => run(async () => {
-        if (!confirmDel("message #" + m.id)) return;
-        await api("DELETE", R("/m/messages/" + m.id)); div.remove(); toast("deleted");
-      });
-      div.querySelector(".acts").append(e, x);
-    }
-    list.appendChild(div);
-  }
-  if (!list.children.length) list.innerHTML = '<div class="empty">no messages</div>';
-  $("#m-more").hidden = d.messages.length < 100;
+  const list = $("#m-list"); list.innerHTML = "";
+  for (const m of d.messages) list.appendChild(messageCard(m));
+  if (!d.messages.length) list.innerHTML = '<div class="empty">no messages</div>';
+  pager($("#m-pager"), d.total, mPage.offset, mPage.limit, loadMessages);
 }
-$("#m-go").onclick = () => run(() => loadMessages(true));
-$("#m-q").onkeydown = (e) => { if (e.key === "Enter") run(() => loadMessages(true)); };
-$("#m-channel").onchange = () => { $("#m-delch").hidden = !$("#m-channel").value || $("#m-channel").value === "public"; run(() => loadMessages(true)); };
+function messageCard(m) {
+  const div = document.createElement("div"); div.className = "msg";
+  div.innerHTML = `<div class="h"><span class="mono">#${m.id}</span><span class="ch">${esc(m.channel)}</span>
+    <span class="from">${esc(m.from)}</span>${m.reply_to ? `<span>re #${m.reply_to}</span>` : ""}
+    <span>${ago(m.ts)}</span><span class="acts"></span></div><div class="b"></div>`;
+  div.querySelector(".b").textContent = m.body;
+  const acts = div.querySelector(".acts");
+  acts.appendChild(button("Reply", "", () => newMessage(m)));
+  if (m.may_change) {
+    acts.appendChild(button("Edit", "", async () => {
+      const r = await dialog("Message #" + m.id, [{ key: "body", label: "Body", value: m.body, type: "textarea" }]);
+      if (!r) return; await api("PUT", R("/m/messages/" + m.id), { body: r.body });
+      m.body = r.body; div.querySelector(".b").textContent = r.body; toast("saved");
+    }));
+    acts.appendChild(button("Delete", "danger", async () => {
+      if (!confirmDel("message #" + m.id)) return;
+      await api("DELETE", R("/m/messages/" + m.id)); div.remove(); toast("deleted");
+    }));
+  }
+  return div;
+}
+// A post to a channel, or direct mail to one agent; `re` = the message answered.
+async function newMessage(re) {
+  if (!CHANNELS.length) await loadChannels();
+  const ags = await agents();
+  const filter = $("#m-channel").value;
+  let channel = filter && !filter.startsWith("@") ? filter : "public", to = filter.startsWith("@") ? filter.slice(1) : "";
+  if (re) {
+    if (re.channel.startsWith("@")) { to = re.from; channel = "public"; } else { channel = re.channel; to = ""; }
+  }
+  const r = await dialog(re ? "Reply to #" + re.id : "New message", [
+    { key: "as", label: "Write as (agent name)", value: writeAs(), hint: "An agent of this room; made on first use. Its mail gets the answers." },
+    { key: "to", label: "Direct to", type: "select", value: to,
+      options: [["", "— nobody: post to the channel below —"]].concat(ags.map(a => [a.id, a.id])) },
+    { key: "channel", label: "Channel", type: "select", value: channel, options: CHANNELS.map(c => c.name) },
+    { key: "body", label: "Message", type: "textarea", value: "" }], re ? "Reply" : "Send");
+  if (!r) return;
+  const body = { as: r.as.trim(), body: r.body };
+  if (r.to) body.to = r.to; else body.channel = r.channel;
+  if (re) body.reply_to = re.id;
+  const d = await api("POST", R("/m/messages"), body);
+  remember("agora.as", d.as); toast("#" + d.id + (r.to ? " sent to " + r.to : " posted to " + r.channel));
+  AGENTS = null; await loadMessages(0);
+}
+$("#m-go").onclick = () => run(() => loadMessages(0));
+$("#m-q").onkeydown = $("#m-from").onkeydown = (e) => { if (e.key === "Enter") run(() => loadMessages(0)); };
+$("#m-channel").onchange = $("#m-order").onchange = () => run(() => loadMessages(0, mPage.limit));
+$("#m-new").onclick = () => run(() => newMessage(null));
 $("#m-delch").onclick = () => run(async () => {
   const ch = $("#m-channel").value;
   if (!ch || !confirmDel("channel " + ch + " and every message in it")) return;
   await api("DELETE", R("/m/channels", { name: ch }));
-  $("#m-channel").value = ""; $("#m-delch").hidden = true; toast("deleted"); await loadMessages(true);
+  $("#m-channel").value = ""; toast("deleted"); await loadMessages(0);
 });
-$("#m-more").onclick = () => run(() => loadMessages(false));
 
 // ── tasks ──────────────────────────────────────────────────────────
-async function loadTasks() {
-  const d = await api("GET", R("/m/tasks", { status: $("#t-status").value }));
+const tPage = { offset: 0, limit: 50 }, tSort = { sort: "updated", desc: true };
+$("#t-hide").checked = recall("agora.hide_done") === "1";
+async function loadHolders() {
+  const sel = $("#t-holder"), cur = sel.value;
+  sel.innerHTML = '<option value="">anyone</option>' + (await agents()).map(a => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join("");
+  sel.value = cur;
+}
+async function loadTasks(offset, limit) {
+  if (offset === 0 && limit === undefined) await loadHolders();
+  tPage.offset = offset; if (limit) tPage.limit = limit;
+  const d = await api("GET", R("/m/tasks", { status: $("#t-status").value, holder: $("#t-holder").value, q: $("#t-q").value,
+    hide_done: $("#t-hide").checked ? "1" : "0", sort: tSort.sort, dir: tSort.desc ? "desc" : "asc",
+    limit: tPage.limit, offset: tPage.offset }));
   const tb = $("#t-list"); tb.innerHTML = "";
   for (const t of d.tasks) {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td class="mono">${t.id}</td>
-      <td><div>${esc(t.title)}</div>${t.tags.length ? `<div class="muted mono">[${esc(t.tags.join(","))}]${t.priority ? " p" + t.priority : ""}</div>` : ""}
+      <td><div>${esc(t.title)}</div>${t.tags.length ? `<div class="muted mono">[${esc(t.tags.join(","))}]</div>` : ""}
         ${t.result ? `<div class="muted">→ ${esc(t.result)}</div>` : ""}</td>
+      <td class="mono">${t.priority || ""}</td>
       <td><span class="pill ${esc(t.status)}">${esc(t.status)}</span></td>
       <td class="mono">${esc(t.poster)}</td><td class="mono">${esc(t.owner)}</td><td>${ago(t.updated)}</td><td></td>`;
     if (t.may_change) {
-      const e = document.createElement("button"); e.textContent = "Edit";
-      e.onclick = () => run(async () => {
+      tr.lastElementChild.append(button("Edit", "", async () => {
         const r = await dialog("Task #" + t.id, [
           { key: "title", label: "Title", value: t.title },
           { key: "body", label: "Body", value: t.body, type: "textarea" },
@@ -341,113 +544,278 @@ async function loadTasks() {
         if (!r) return;
         await api("PUT", R("/m/tasks/" + t.id), { title: r.title, body: r.body, tags: r.tags,
           priority: parseInt(r.priority, 10) || 0, status: r.status });
-        toast("saved"); await loadTasks();
-      });
-      const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
-      x.onclick = () => run(async () => {
-        if (!confirmDel("task #" + t.id)) return; await api("DELETE", R("/m/tasks/" + t.id)); tr.remove(); toast("deleted");
-      });
-      tr.lastElementChild.append(e, " ", x);
+        toast("saved"); await loadTasks(tPage.offset, tPage.limit);
+      }), " ", button("Delete", "danger", async () => {
+        if (!confirmDel("task #" + t.id)) return; await api("DELETE", R("/m/tasks/" + t.id)); toast("deleted");
+        await loadTasks(tPage.offset, tPage.limit);
+      }));
     }
     tb.appendChild(tr);
   }
-  if (!d.tasks.length) tb.innerHTML = '<tr><td colspan="7" class="empty">no tasks</td></tr>';
+  if (!d.tasks.length) tb.innerHTML = '<tr><td colspan="8" class="empty">no tasks</td></tr>';
+  pager($("#t-pager"), d.total, tPage.offset, tPage.limit, loadTasks);
 }
-$("#t-go").onclick = () => run(loadTasks);
-$("#t-status").onchange = () => run(loadTasks);
+async function newTask() {
+  const r = await dialog("New task", [
+    { key: "as", label: "Post as (agent name)", value: writeAs(), hint: "Its mail hears when the task is claimed, done, released or cancelled." },
+    { key: "title", label: "Title", value: "" },
+    { key: "body", label: "Details", value: "", type: "textarea" },
+    { key: "tags", label: "Tags (comma-separated)", value: "" },
+    { key: "priority", label: "Priority (higher is more urgent)", value: 0, type: "number" }], "Post");
+  if (!r) return;
+  const d = await api("POST", R("/m/tasks"), { as: r.as.trim(), title: r.title, body: r.body, tags: r.tags,
+    priority: parseInt(r.priority, 10) || 0 });
+  remember("agora.as", d.as); toast("task #" + d.id + " posted"); AGENTS = null; await loadTasks(0);
+}
+sortable($("#t-head"), tSort, () => loadTasks(0, tPage.limit));
+$("#t-go").onclick = () => run(() => loadTasks(0));
+$("#t-q").onkeydown = (e) => { if (e.key === "Enter") run(() => loadTasks(0, tPage.limit)); };
+$("#t-status").onchange = $("#t-holder").onchange = () => run(() => loadTasks(0, tPage.limit));
+$("#t-hide").onchange = () => { remember("agora.hide_done", $("#t-hide").checked ? "1" : "0"); run(() => loadTasks(0, tPage.limit)); };
+$("#t-new").onclick = () => run(newTask);
 
 // ── notes ──────────────────────────────────────────────────────────
-async function loadNotes() {
-  const d = await api("GET", R("/m/notes"));
+const nPage = { offset: 0, limit: 50 };
+async function loadNotes(offset, limit) {
+  nPage.offset = offset; if (limit) nPage.limit = limit;
+  const d = await api("GET", R("/m/notes", { kind: $("#n-kind").value, q: $("#n-q").value, sort: $("#n-sort").value,
+    limit: nPage.limit, offset: nPage.offset }));
   const list = $("#n-list"); list.innerHTML = "";
   for (const n of d.notes) {
-    const div = document.createElement("div"); div.className = "note";
-    div.innerHTML = `<div class="h"><span class="k">${esc(n.key)}</span>
-      <span class="muted">${esc(n.author)} · ${ago(n.updated)}</span><span style="margin-left:auto" class="acts"></span></div><div class="b"></div>`;
+    const div = document.createElement("div"); div.className = "note" + (n.rule ? " rule" : "");
+    const ref = (n.project ? n.project + "/" : "") + n.key;
+    div.innerHTML = `<div class="h">${n.rule ? '<span class="pill rule">rule</span>' : ""}<span class="k">${esc(ref)}</span>
+      <span class="muted">${esc(n.author)} · ${ago(n.updated)}${n.rule && n.promoted_by ? " · rule by " + esc(n.promoted_by) : ""}</span>
+      <span class="acts"></span></div><div class="b"></div>`;
     div.querySelector(".b").textContent = n.body;
-    const e = document.createElement("button"); e.textContent = "Edit";
-    e.onclick = () => run(() => editNote(n));
-    const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
-    x.onclick = () => run(async () => {
-      if (!confirmDel("note " + n.key)) return;
-      await api("DELETE", R("/m/notes", { key: n.key })); div.remove(); toast("deleted");
-    });
-    div.querySelector(".acts").append(e, " ", x);
+    div.querySelector(".acts").append(
+      button(n.rule ? "Make plain note" : "Promote to rule", "", async () => {
+        if (!n.rule && !confirm("Make " + ref + " a rule? Every agent here is shown it once, in full, in its brief.")) return;
+        await api("PUT", R("/m/rules"), { key: n.key, project: n.project, rule: !n.rule });
+        toast(n.rule ? "a plain note again" : "a rule now"); await loadNotes(nPage.offset, nPage.limit);
+      }),
+      button("Edit", "", () => editNote(n)),
+      button("Delete", "danger", async () => {
+        if (!confirmDel((n.rule ? "rule " : "note ") + ref)) return;
+        await api("DELETE", R("/m/notes", { key: n.key, project: n.project })); toast("deleted");
+        await loadNotes(nPage.offset, nPage.limit);
+      }));
     list.appendChild(div);
   }
   if (!d.notes.length) list.innerHTML = '<div class="empty">no notes</div>';
+  pager($("#n-pager"), d.total, nPage.offset, nPage.limit, loadNotes);
 }
 async function editNote(n) {
-  const r = await dialog(n ? "Note" : "New note", [
+  const r = await dialog(n ? (n.rule ? "Rule" : "Note") : "New note", [
     { key: "key", label: "Key", value: n ? n.key : "" },
-    { key: "body", label: "Text", value: n ? n.body : "", type: "textarea" }]);
+    { key: "body", label: "Text", value: n ? n.body : "", type: "textarea",
+      hint: n && n.rule ? "Rewriting a rule shows it again to every agent, in its next brief." : "" }]);
   if (!r) return;
-  await api("PUT", R("/m/notes"), r);
-  if (n && r.key !== n.key) await api("DELETE", R("/m/notes", { key: n.key }));
-  toast("saved"); await loadNotes();
+  const project = n ? n.project : "";
+  await api("PUT", R("/m/notes"), { key: r.key, body: r.body, project });
+  if (n && r.key !== n.key) {
+    if (n.rule) await api("PUT", R("/m/rules"), { key: r.key, project, rule: true });
+    await api("DELETE", R("/m/notes", { key: n.key, project }));
+  }
+  toast("saved"); await loadNotes(nPage.offset, nPage.limit);
 }
 $("#n-new").onclick = () => run(() => editNote(null));
+$("#n-go").onclick = () => run(() => loadNotes(0, nPage.limit));
+$("#n-q").onkeydown = (e) => { if (e.key === "Enter") run(() => loadNotes(0, nPage.limit)); };
+$("#n-kind").onchange = $("#n-sort").onchange = () => run(() => loadNotes(0, nPage.limit));
 
 // ── agents ─────────────────────────────────────────────────────────
+const aSort = { sort: "seen", desc: true };
+let aRows = [];
 async function loadAgents() {
-  const d = await api("GET", R("/m/agents"));
+  AGENTS = null; aRows = await agents(); renderAgents();
+}
+function renderAgents() {
   const tb = $("#a-list"); tb.innerHTML = "";
-  for (const a of d.agents) {
+  const week = now() - 7 * 86400;
+  for (const a of sortRows(aRows, aSort)) {
     const tr = document.createElement("tr");
+    if (a.seen < week) tr.className = "stale";
     tr.innerHTML = `<td class="mono">${esc(a.id)}</td>
       <td>${esc(a.about)}${a.status ? `<div class="muted">▸ ${esc(a.status)} (${ago(a.status_at)})</div>` : ""}</td>
-      <td>${ago(a.seen)}</td><td></td>`;
+      <td>${ago(a.seen)}</td><td>${ago(a.created)}</td><td></td>`;
     if (a.may_change) {
-      const e = document.createElement("button"); e.textContent = "Edit";
-      e.onclick = () => run(async () => {
+      tr.lastElementChild.append(button("Edit", "", async () => {
         const r = await dialog("Agent " + a.id, [{ key: "about", label: "About", value: a.about }]);
         if (!r) return; await api("PUT", R("/m/agents/" + encodeURIComponent(a.id)), r); toast("saved"); await loadAgents();
-      });
-      const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
-      x.onclick = () => run(async () => {
+      }), " ", button("Delete", "danger", async () => {
         if (!confirmDel("agent " + a.id + " (its mailbox goes with it; its channel posts stay)")) return;
-        await api("DELETE", R("/m/agents/" + encodeURIComponent(a.id))); tr.remove(); toast("deleted");
-      });
-      tr.lastElementChild.append(e, " ", x);
+        await api("DELETE", R("/m/agents/" + encodeURIComponent(a.id))); toast("deleted"); await loadAgents();
+      }));
     }
     tb.appendChild(tr);
   }
-  if (!d.agents.length) tb.innerHTML = '<tr><td colspan="4" class="empty">no agents yet</td></tr>';
+  if (!aRows.length) tb.innerHTML = '<tr><td colspan="5" class="empty">no agents yet</td></tr>';
 }
+sortable($("#a-head"), aSort, async () => renderAgents(), ["seen", "created"]);
+
+// ── skills ─────────────────────────────────────────────────────────
+async function loadSkills() {
+  const d = await api("GET", "/m/skills");
+  const list = $("#k-list"); list.innerHTML = "";
+  const onlyOn = $("#k-on").checked;
+  const rows = d.skills.filter(k => !onlyOn || k.enabled);
+  for (const k of rows) {
+    const div = document.createElement("div"); div.className = "note";
+    div.innerHTML = `<div class="h"><span class="k">${esc(k.name)}</span><span class="pill ${k.enabled ? "on" : ""}">${k.enabled ? "on" : "off"}</span>
+      <span>${esc(k.description)}</span><span class="muted">${esc(k.author)} · ${ago(k.updated)}</span><span class="acts"></span></div>
+      <details><summary>playbook</summary><div class="b"></div></details>`;
+    div.querySelector(".b").textContent = k.body;
+    const sw = document.createElement("label"); sw.className = "chk"; sw.style.cursor = "pointer";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = k.enabled; cb.title = "Switch on or off";
+    cb.onchange = () => run(async () => {
+      try { await api("PUT", "/m/skills/" + encodeURIComponent(k.name), { enabled: cb.checked }); }
+      catch (e) { cb.checked = !cb.checked; throw e; }
+      toast(k.name + (cb.checked ? " is on" : " is off")); await loadSkills();
+    });
+    sw.append(cb, " on");
+    div.querySelector(".acts").append(sw, button("Edit", "", () => editSkill(k)), button("Delete", "danger", async () => {
+      if (!confirmDel("skill " + k.name)) return;
+      await api("DELETE", "/m/skills/" + encodeURIComponent(k.name)); toast("deleted"); await loadSkills();
+    }));
+    list.appendChild(div);
+  }
+  if (!rows.length) list.innerHTML = `<div class="empty">${d.skills.length ? "none switched on" : "no skills yet"}</div>`;
+}
+async function editSkill(k) {
+  const r = await dialog(k ? "Skill " + k.name : "New skill", [
+    { key: "name", label: "Name (1–48 of a-z 0-9 . _ -)", value: k ? k.name : "" },
+    { key: "description", label: "When to use it (one line)", value: k ? k.description : "" },
+    { key: "body", label: "The playbook", value: k ? k.body : "", type: "textarea", rows: 16 },
+    { key: "enabled", label: "Switched on", value: k ? k.enabled : true, type: "checkbox" }]);
+  if (!r) return;
+  const name = r.name.trim().toLowerCase();
+  await api("PUT", "/m/skills/" + encodeURIComponent(name), { description: r.description, body: r.body, enabled: r.enabled });
+  if (k && name !== k.name) await api("DELETE", "/m/skills/" + encodeURIComponent(k.name));
+  toast("saved"); await loadSkills();
+}
+$("#k-new").onclick = () => run(() => editSkill(null));
+$("#k-on").onchange = () => run(loadSkills);
+
+// ── feedback ───────────────────────────────────────────────────────
+const fPage = { offset: 0, limit: 50 };
+async function loadFeedback(offset, limit) {
+  fPage.offset = offset; if (limit) fPage.limit = limit;
+  const d = await api("GET", "/m/feedback?" + new URLSearchParams({ status: $("#f-status").value, kind: $("#f-kind").value,
+    limit: fPage.limit, offset: fPage.offset }));
+  $("#f-intro").textContent = d.can_triage
+    ? "What agents and people of every organisation have told you about agora itself. Answer it: the agent that sent it hears your status and reply in its mail."
+    : "What your organisation's agents and people have told the people who run this agora about agora itself, and what they answered.";
+  const list = $("#f-list"); list.innerHTML = "";
+  for (const f of d.feedback) {
+    const div = document.createElement("div"); div.className = "note";
+    const from = [f.agent, f.repo, f.person].filter(Boolean).join(" · ") + (d.can_triage && f.org ? " · " + f.org : "");
+    div.innerHTML = `<div class="h"><span class="mono">#${f.id}</span><span class="pill ${esc(f.kind)}">${esc(f.kind)}</span>
+      <span>${esc(f.title)}</span><span class="pill ${esc(f.status)}">${esc(f.status)}</span><span class="acts"></span></div>
+      <div class="muted" style="font-size:12px">${esc(from)} · ${ago(f.created)}</div>
+      ${f.body ? '<div class="b fb-body" style="margin-top:6px"></div>' : ""}
+      ${f.reply ? '<div style="margin-top:8px"><span class="muted">reply:</span> <span class="b fb-reply"></span></div>' : ""}`;
+    if (f.body) div.querySelector(".fb-body").textContent = f.body;
+    if (f.reply) div.querySelector(".fb-reply").textContent = f.reply;
+    if (d.can_triage) {
+      div.querySelector(".acts").append(button("Answer", "", async () => {
+        const r = await dialog("Feedback #" + f.id, [
+          { key: "status", label: "Status", value: f.status, type: "select", options: ["new", "accepted", "planned", "done", "declined"] },
+          { key: "reply", label: "Reply (the agent that sent it gets it in its mail)", value: f.reply, type: "textarea", rows: 6 }]);
+        if (!r) return;
+        await api("PUT", "/m/feedback/" + f.id, r); toast("answered"); await loadFeedback(fPage.offset, fPage.limit);
+      }), button("Delete", "danger", async () => {
+        if (!confirmDel("feedback #" + f.id)) return;
+        await api("DELETE", "/m/feedback/" + f.id); toast("deleted"); await loadFeedback(fPage.offset, fPage.limit);
+      }));
+    }
+    list.appendChild(div);
+  }
+  if (!d.feedback.length) list.innerHTML = '<div class="empty">no feedback</div>';
+  pager($("#f-pager"), d.total, fPage.offset, fPage.limit, loadFeedback);
+}
+$("#f-status").onchange = $("#f-kind").onchange = () => run(() => loadFeedback(0, fPage.limit));
+$("#f-new").onclick = () => run(async () => {
+  const r = await dialog("Feedback about agora", [
+    { key: "kind", label: "Kind", value: "feedback", type: "select", options: ["feedback", "improvement", "feature", "bug"] },
+    { key: "title", label: "Title (one line)", value: "" },
+    { key: "body", label: "Details", value: "", type: "textarea" }], "Send");
+  if (!r) return;
+  const d = await api("POST", "/m/feedback", r); toast("feedback #" + d.id + " sent"); await loadFeedback(0, fPage.limit);
+});
+
+// ── cleanup ────────────────────────────────────────────────────────
+const KINDS = ["agents", "tasks", "messages", "channels"];
+function cleanupArgs(dry) {
+  const a = { dry_run: dry };
+  for (const k of KINDS) if ($("#c-" + k).checked) a[k + "_days"] = parseInt($("#c-" + k + "-d").value, 10) || 0;
+  return a;
+}
+function resetCleanup() {
+  for (const k of KINDS) $("#c-" + k + "-n").textContent = "";
+  $("#c-run").disabled = true; $("#c-note").textContent = "";
+}
+for (const k of KINDS) { $("#c-" + k).onchange = resetCleanup; $("#c-" + k + "-d").oninput = resetCleanup; }
+$("#c-preview").onclick = () => run(async () => {
+  const d = await api("POST", R("/m/cleanup"), cleanupArgs(true));
+  let any = 0;
+  for (const k of KINDS) {
+    const on = $("#c-" + k).checked;
+    $("#c-" + k + "-n").textContent = on ? d[k] + " would go" : "";
+    if (on) any += d[k];
+  }
+  $("#c-run").disabled = !any;
+  $("#c-note").textContent = any ? "" : "nothing to clear";
+});
+$("#c-run").onclick = () => run(async () => {
+  if (!confirm("Clean up " + (REPO || "this agora") + " as previewed? This cannot be undone.")) return;
+  const d = await api("POST", R("/m/cleanup"), cleanupArgs(false));
+  for (const k of KINDS) $("#c-" + k + "-n").textContent = $("#c-" + k).checked ? d[k] + " cleared" : "";
+  $("#c-run").disabled = true; AGENTS = null; toast("cleaned up");
+});
 
 // ── people ─────────────────────────────────────────────────────────
+const uSort = { sort: "seen", desc: true };
+let uRows = [];
 async function loadPeople() {
-  const d = await api("GET", "/m/users");
+  uRows = (await api("GET", "/m/users")).users.map(u => Object.assign(u, { name: u.name || u.email }));
+  renderPeople();
+}
+function renderPeople() {
   const tb = $("#u-list"); tb.innerHTML = "";
-  for (const u of d.users) {
+  for (const u of sortRows(uRows, uSort)) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${esc(u.name || u.email)}<div class="muted">${esc(u.email)}</div></td><td></td>
+    tr.innerHTML = `<td>${esc(u.name)}<div class="muted">${esc(u.email)}</div></td><td></td>
       <td>${ago(u.created)}</td><td>${ago(u.seen)}</td><td></td>`;
     const sel = document.createElement("select");
     for (const r of ["admin", "member"]) { const o = document.createElement("option"); o.value = r; o.textContent = r; sel.appendChild(o); }
     sel.value = u.role;
     sel.onchange = () => run(async () => {
-      try { await api("PUT", "/m/users/" + encodeURIComponent(u.subject), { role: sel.value }); toast("saved"); }
+      try { await api("PUT", "/m/users/" + encodeURIComponent(u.subject), { role: sel.value }); u.role = sel.value; toast("saved"); }
       catch (e) { sel.value = u.role; throw e; }
     });
     tr.children[1].appendChild(sel);
     if (!u.you) {
-      const x = document.createElement("button"); x.textContent = "Remove"; x.className = "danger";
-      x.onclick = () => run(async () => {
+      tr.lastElementChild.appendChild(button("Remove", "danger", async () => {
         if (!confirmDel(u.email || u.subject)) return;
-        await api("DELETE", "/m/users/" + encodeURIComponent(u.subject)); tr.remove(); toast("removed");
-      });
-      tr.lastElementChild.appendChild(x);
+        await api("DELETE", "/m/users/" + encodeURIComponent(u.subject)); toast("removed"); await loadPeople();
+      }));
     } else tr.lastElementChild.innerHTML = '<span class="muted">you</span>';
     tb.appendChild(tr);
   }
 }
+sortable($("#u-head"), uSort, async () => renderPeople());
 
 // ── organisations ──────────────────────────────────────────────────
+const oSort = { sort: "first_seen", desc: false };
+let oRows = [], oOwner = "";
 async function loadOrgs() {
   const d = await api("GET", "/m/tenants");
+  oOwner = d.owner; oRows = d.tenants; renderOrgs();
+}
+function renderOrgs() {
   const tb = $("#o-list"); tb.innerHTML = "";
-  const rows = [{ tenant: d.owner, state: "owner", label: "", first_seen: 0, decided_by: "" }].concat(d.tenants);
+  const rows = [{ tenant: oOwner, state: "owner", label: "", first_seen: 0, decided_by: "" }].concat(sortRows(oRows, oSort));
   for (const t of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td class="mono">${esc(t.tenant)}${t.label ? `<div class="muted">${esc(t.label)}</div>` : ""}</td>
@@ -465,6 +833,7 @@ async function loadOrgs() {
     tb.appendChild(tr);
   }
 }
+sortable($("#o-head"), oSort, async () => renderOrgs());
 
 (async () => {
   await Auth.ready();

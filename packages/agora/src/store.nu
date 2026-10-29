@@ -12,7 +12,12 @@
 //             the mechanism behind "shown exactly once"
 //   tasks     the work board: open → claimed (under a lease) → done,
 //             or back to open when released or the lease runs out
-//   notes     a shared key → text notebook, per project ('' = global)
+//   notes     a shared key → text notebook, per project ('' = global);
+//             a note promoted to a RULE is handed to every agent once
+//   skills    named playbooks an organisation switches on or off (a
+//             signed-in service keeps them in the organisation's file)
+//   feedback  what agents and people tell the service's operators about
+//             agora itself (signed in: one file for the whole service)
 //
 // A signed-in service keeps one such file per repository of each
 // organisation, and the organisation's people in a file of their own
@@ -97,6 +102,34 @@ $ `stdlib/core/slice.nu`
     String body
     String author
     i updated
+    b rule  // promoted: a practice that binds everyone (see Rules below)
+    String promoted_by  // who made it a rule ('' = never was one)
+    i rev  // the table's write counter at its last write or promotion
+}
+
+: AgSkill {
+    String name
+    String description  // one line: when to use it
+    String body  // the playbook itself
+    b enabled  // switched on: agents are shown it
+    String author  // who wrote it last
+    i created
+    i updated
+}
+
+: AgFeedback {
+    i id
+    String kind  // feedback | improvement | feature | bug
+    String title
+    String body
+    String org  // signed in: the organisation it came from ('' locally)
+    String repo  // the repository it was sent from ('' = none)
+    String agent  // the agent that sent it ('' = a person on the web page)
+    String person  // signed in: who was signed in
+    String status  // new | accepted | planned | done | declined
+    String reply  // the operators' answer
+    i created
+    i updated
 }
 
 // ── Frees ─────────────────────────────────────────────────────────────
@@ -134,9 +167,15 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// Organisation-wide and service-wide tables. A local agora has them in
+// its one file; a signed-in service keeps skills in each organisation's
+// file (manage.nu) and feedback in one file of its own.
+: s AG_SKILLS_TABLE `CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, author TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL)`
+: s AG_FEEDBACK_TABLE `CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', org TEXT NOT NULL DEFAULT '', repo TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', person TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', reply TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL)`
+
 @ __ag_schema → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', status_at INTEGER NOT NULL DEFAULT 0)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', status_at INTEGER NOT NULL DEFAULT 0, rules_rev INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS follows (agent TEXT NOT NULL, channel TEXT NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, reply_to INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)` ) )
@@ -144,7 +183,9 @@ $ `stdlib/core/slice.nu`
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS cursors (agent TEXT NOT NULL, channel TEXT NOT NULL, last_id INTEGER NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL, ref INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, priority, id)` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (project, key))` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, rule INTEGER NOT NULL DEFAULT 0, promoted_by TEXT NOT NULL DEFAULT '', rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (project, key))` ) )
+    ( vec_push [String] v ( string_from AG_SKILLS_TABLE ) )
+    ( vec_push [String] v ( string_from AG_FEEDBACK_TABLE ) )
     ( vec_push [String] v ( string_from `INSERT OR IGNORE INTO channels (name, about, created_by, created) VALUES ('public', 'Everyone follows this channel.', '', 0)` ) )
     ^ v
 }
@@ -195,6 +236,16 @@ $ `stdlib/core/slice.nu`
             ? & old_notes ! failed {
                 ?? ( sqlite_exec db `INSERT INTO notes (project, key, body, author, updated) SELECT '', key, body, author, updated FROM notes_v1` ) { T _ → {} F _ → { = failed T } }
                 ? failed {} { ?? ( sqlite_exec db `DROP TABLE notes_v1` ) { T _ → {} F _ → {} } }
+            } {}
+            // 0.8.0: rules (notes.rule / promoted_by / rev, agents.rules_rev).
+            // After the schema: a 0.1.0 notes table has been remade by now.
+            ? ( __ag_table_lacks db `notes` `rule` ) {
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN rule INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN promoted_by TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN rev INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
+            } {}
+            ? ( __ag_table_lacks db `agents` `rules_rev` ) {
+                ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN rules_rev INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
             } {}
             = ok ! failed
         }
@@ -972,7 +1023,7 @@ $ `stdlib/core/slice.nu`
 
 // ── Tasks ─────────────────────────────────────────────────────────────
 
-@ __ag_read_task Statement q → AgTask {
+@ _ag_read_task Statement q → AgTask {
     ^ @ AgTask {
         ( sqlite_column_int q 0 )
         ( sqlite_column_text q 1 )
@@ -995,7 +1046,7 @@ $ `stdlib/core/slice.nu`
 // Leases that ran out: the task goes back to open and the holder that
 // went quiet hears about it in its mailbox. Called at the start of every
 // task operation, so nobody ever sees a claimed task whose lease is over.
-@ __ag_expire_on Database db i now → v {
+@ _ag_expire_on Database db i now → v {
     : ( Vec i ) ids ( vec_new [i] )
     : ( Vec String ) owners ( vec_new [String] )
     : ( Vec String ) titles ( vec_new [String] )
@@ -1072,7 +1123,7 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( _ag_begin db ) { ( __ag_expire_on db now ) ( _ag_commit db ) } {}
+            ? ( _ag_begin db ) { ( _ag_expire_on db now ) ( _ag_commit db ) } {}
             : String sql ( string_from `SELECT ` )
             ( string_push_str sql AG_TASK_COLS )
             ( string_push_str sql ` FROM tasks WHERE id = ?1` )
@@ -1081,7 +1132,7 @@ $ `stdlib/core/slice.nu`
                 T q → {
                     ( _ag_bind_i q 1 id )
                     ? ( _ag_row q ) {
-                        = out ( __ag_read_task q )
+                        = out ( _ag_read_task q )
                         = found T
                     } {}
                 }
@@ -1100,7 +1151,7 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( _ag_begin db ) { ( __ag_expire_on db now ) ( _ag_commit db ) } {}
+            ? ( _ag_begin db ) { ( _ag_expire_on db now ) ( _ag_commit db ) } {}
             : String sql ( string_from `SELECT ` )
             ( string_push_str sql AG_TASK_COLS )
             ( string_push_str sql ` FROM tasks WHERE (?3 = '' OR tags LIKE ?3) AND ` )
@@ -1137,7 +1188,7 @@ $ `stdlib/core/slice.nu`
                         ( string_push_str pat `,%` )
                     } {}
                     ( _ag_bind_str q 3 pat )
-                    ~ ( _ag_row q ) { ( vec_push [AgTask] out ( __ag_read_task q ) ) }
+                    ~ ( _ag_row q ) { ( vec_push [AgTask] out ( _ag_read_task q ) ) }
                 }
             }
         }
@@ -1160,24 +1211,25 @@ $ `stdlib/core/slice.nu`
 }
 
 // The counts brief shows, in one connection and one statement: open
-// tasks, tasks `agent` posted that are not finished, notes.
+// tasks, tasks `agent` posted that are not finished, notes, rules.
 : AgCounts {
     i open
     i posted
     i notes
+    i rules
 }
 
 @ ag_counts AgStore st s agent → AgCounts {
-    : ~ AgCounts c @ AgCounts { 0 0 0 }
+    : ~ AgCounts c @ AgCounts { 0 0 0 0 }
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM tasks WHERE status = 'open'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed') AND poster = ?1), (SELECT COUNT(*) FROM notes)` ) {
+            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM tasks WHERE status = 'open'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed') AND poster = ?1), (SELECT COUNT(*) FROM notes), (SELECT COUNT(*) FROM notes WHERE rule = 1)` ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_s q 1 agent )
                     ? ( _ag_row q ) {
-                        = c @ AgCounts { ( sqlite_column_int q 0 ) ( sqlite_column_int q 1 ) ( sqlite_column_int q 2 ) }
+                        = c @ AgCounts { ( sqlite_column_int q 0 ) ( sqlite_column_int q 1 ) ( sqlite_column_int q 2 ) ( sqlite_column_int q 3 ) }
                     } {}
                 }
             }
@@ -1201,7 +1253,7 @@ $ `stdlib/core/slice.nu`
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
-            ( __ag_expire_on db now )
+            ( _ag_expire_on db now )
             : ~ String poster ( string_new )
             : ~ String title ( string_new )
             : ~ String status ( string_new )
@@ -1255,7 +1307,7 @@ $ `stdlib/core/slice.nu`
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
-            ( __ag_expire_on db now )
+            ( _ag_expire_on db now )
             ?? ( sqlite_prepare db `UPDATE tasks SET lease_until = ?3, updated = ?4 WHERE id = ?1 AND status = 'claimed' AND owner = ?2` ) {
                 F _ → {}
                 T q → {
@@ -1281,7 +1333,7 @@ $ `stdlib/core/slice.nu`
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
-            ( __ag_expire_on db now )
+            ( _ag_expire_on db now )
             : ~ String poster ( string_new )
             : ~ String title ( string_new )
             : ~ i ref 0
@@ -1386,7 +1438,7 @@ $ `stdlib/core/slice.nu`
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
-            ( __ag_expire_on db now )
+            ( _ag_expire_on db now )
             : ~ String owner ( string_new )
             : ~ String title ( string_new )
             : ~ b found F
@@ -1441,12 +1493,21 @@ $ `stdlib/core/slice.nu`
 // same key can mean one thing here and another there, and `notes
 // project=x` is everything known about x.
 
+// Every write takes the next `rev` of the table, so "changed since an
+// agent last looked" is one comparison (see Rules).
+: s AG_NOTE_REV `(SELECT COALESCE(MAX(rev), 0) + 1 FROM notes)`
+
+: s AG_NOTE_COLS `project, key, body, author, updated, rule, promoted_by, rev`
+
 @ ag_note_set AgStore st s project s key s body s author i now → b {
     : ~ b ok F
+    : String sql ( string_from `INSERT INTO notes (project, key, body, author, updated, rev) VALUES (?1, ?2, ?3, ?4, ?5, ` )
+    ( string_push_str sql AG_NOTE_REV )
+    ( string_push_str sql `) ON CONFLICT (project, key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated, rev = excluded.rev` )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `INSERT INTO notes (project, key, body, author, updated) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (project, key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated` ) {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_s q 1 project )
@@ -1462,29 +1523,36 @@ $ `stdlib/core/slice.nu`
     ^ ok
 }
 
-@ __ag_read_note Statement q → AgNote {
+@ _ag_read_note Statement q → AgNote {
+    : b rule != ( sqlite_column_int q 5 ) 0
     ^ @ AgNote {
         ( sqlite_column_text q 0 )
         ( sqlite_column_text q 1 )
         ( sqlite_column_text q 2 )
         ( sqlite_column_text q 3 )
         ( sqlite_column_int q 4 )
+        rule
+        ( sqlite_column_text q 6 )
+        ( sqlite_column_int q 7 )
     }
 }
 
 @ ag_note_get AgStore st s project s key → ?AgNote {
     : ~ b found F
-    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 }
+    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 F ( string_new ) 0 }
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_NOTE_COLS )
+    ( string_push_str sql ` FROM notes WHERE project = ?1 AND key = ?2` )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT project, key, body, author, updated FROM notes WHERE project = ?1 AND key = ?2` ) {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_s q 1 project )
                     ( _ag_bind_s q 2 key )
                     ? ( _ag_row q ) {
-                        = out ( __ag_read_note q )
+                        = out ( _ag_read_note q )
                         = found T
                     } {}
                 }
@@ -1503,14 +1571,14 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            : String sql ( string_from ? full `SELECT project, key, body, author, updated FROM notes` `SELECT project, key, '', author, updated FROM notes` )
+            : String sql ( string_from ? full `SELECT project, key, body, author, updated, rule, promoted_by, rev FROM notes` `SELECT project, key, '', author, updated, rule, promoted_by, rev FROM notes` )
             ? all {} { ( string_push_str sql ` WHERE project = ?1` ) }
             ( string_push_str sql ` ORDER BY project, key` )
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
                     ? all {} { ( _ag_bind_s q 1 project ) }
-                    ~ ( _ag_row q ) { ( vec_push [AgNote] out ( __ag_read_note q ) ) }
+                    ~ ( _ag_row q ) { ( vec_push [AgNote] out ( _ag_read_note q ) ) }
                 }
             }
         }
@@ -1548,4 +1616,409 @@ $ `stdlib/core/slice.nu`
         }
     }
     ^ n
+}
+
+// ── Rules ─────────────────────────────────────────────────────────────
+//
+// A rule is a note the room has agreed binds everyone — a practice that
+// has become absolute. Any note can be promoted (by an agent with
+// note_promote, or by a person on the web page) and demoted again. Each
+// agent is shown every rule once, in full, in its brief: a newcomer's
+// first brief carries them all, a later one only what was promoted or
+// rewritten since. The mechanism is the `rev` every note write takes and
+// the agent's `rules_rev`, the newest it has been shown.
+
+// Make the note a rule (`rule` T) or a plain note again (F). F when there
+// is no such note.
+@ ag_note_promote AgStore st s project s key b rule s by i now → b {
+    : ~ b ok F
+    : String sql ( string_from `UPDATE notes SET rule = ?3, promoted_by = ?4, rev = ` )
+    ( string_push_str sql AG_NOTE_REV )
+    ( string_push_str sql ` WHERE project = ?1 AND key = ?2` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    ( _ag_bind_i q 3 ? rule 1 0 )
+                    ( _ag_bind_s q 4 ? rule by `` )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
+// Every rule, in full, project then key order.
+@ ag_rules AgStore st → ( Vec AgNote ) {
+    : ( Vec AgNote ) out ( vec_new [AgNote] )
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_NOTE_COLS )
+    ( string_push_str sql ` FROM notes WHERE rule = 1 ORDER BY project, key` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → { ~ ( _ag_row q ) { ( vec_push [AgNote] out ( _ag_read_note q ) ) } }
+            }
+        }
+    }
+    ^ out
+}
+
+// The rules `agent` has not been shown yet — promoted or rewritten since
+// it last was — and its mark moved past them. Nothing new (the usual
+// answer) writes nothing.
+@ ag_rules_new AgStore st s agent → ( Vec AgNote ) {
+    : ( Vec AgNote ) out ( vec_new [AgNote] )
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_NOTE_COLS )
+    ( string_push_str sql ` FROM notes WHERE rule = 1 AND rev > COALESCE((SELECT rules_rev FROM agents WHERE id = ?1), 0) ORDER BY project, key` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            : ~ i top 0
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 agent )
+                    ~ ( _ag_row q ) {
+                        : AgNote n ( _ag_read_note q )
+                        ? > . n rev top { = top . n rev } {}
+                        ( vec_push [AgNote] out n )
+                    }
+                }
+            }
+            ? > top 0 {
+                ?? ( sqlite_prepare db `UPDATE agents SET rules_rev = MAX(rules_rev, ?2) WHERE id = ?1` ) {
+                    F _ → {}
+                    T q → {
+                        ( _ag_bind_s q 1 agent )
+                        ( _ag_bind_i q 2 top )
+                        ( _ag_run q )
+                    }
+                }
+            } {}
+        }
+    }
+    ^ out
+}
+
+// ── Skills ────────────────────────────────────────────────────────────
+//
+// A skill is a named playbook — when to use it (`description`) and how
+// (`body`) — that an organisation keeps for all of its agents and
+// switches on or off. Switched off, agents are not shown it.
+
+@ __ag_read_skill Statement q → AgSkill {
+    : b on != ( sqlite_column_int q 3 ) 0
+    ^ @ AgSkill {
+        ( sqlite_column_text q 0 )
+        ( sqlite_column_text q 1 )
+        ( sqlite_column_text q 2 )
+        on
+        ( sqlite_column_text q 4 )
+        ( sqlite_column_int q 5 )
+        ( sqlite_column_int q 6 )
+    }
+}
+
+// Write a skill whole (made, or replaced).
+@ ag_skill_put AgStore st s name s description s body b enabled s author i now → b {
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `INSERT INTO skills (name, description, body, enabled, author, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) ON CONFLICT (name) DO UPDATE SET description = excluded.description, body = excluded.body, enabled = excluded.enabled, author = excluded.author, updated = excluded.updated` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 name )
+                    ( _ag_bind_s q 2 description )
+                    ( _ag_bind_s q 3 body )
+                    ( _ag_bind_i q 4 ? enabled 1 0 )
+                    ( _ag_bind_s q 5 author )
+                    ( _ag_bind_i q 6 now )
+                    = ok ( _ag_run q )
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
+@ ag_skill_get AgStore st s name → ?AgSkill {
+    : ~ b found F
+    : ~ AgSkill out @ AgSkill { ( string_new ) ( string_new ) ( string_new ) F ( string_new ) 0 0 }
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT name, description, body, enabled, author, created, updated FROM skills WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 name )
+                    ? ( _ag_row q ) {
+                        = out ( __ag_read_skill q )
+                        = found T
+                    } {}
+                }
+            }
+        }
+    }
+    ? found { ^ @ ?AgSkill { T out } } {}
+    ^ @ ?AgSkill { F }
+}
+
+// The skills switched on (`all` F) or every one (T), by name. `full` =
+// with bodies.
+@ ag_skills AgStore st b all b full → ( Vec AgSkill ) {
+    : ( Vec AgSkill ) out ( vec_new [AgSkill] )
+    : String sql ( string_from ? full `SELECT name, description, body, enabled, author, created, updated FROM skills` `SELECT name, description, '', enabled, author, created, updated FROM skills` )
+    ? all {} { ( string_push_str sql ` WHERE enabled = 1` ) }
+    ( string_push_str sql ` ORDER BY name` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → { ~ ( _ag_row q ) { ( vec_push [AgSkill] out ( __ag_read_skill q ) ) } }
+            }
+        }
+    }
+    ^ out
+}
+
+@ ag_skill_del AgStore st s name → b {
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `DELETE FROM skills WHERE name = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 name )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
+// How many are switched on.
+@ ag_skill_count AgStore st → i {
+    : ~ i n 0
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT COUNT(*) FROM skills WHERE enabled = 1` ) {
+                F _ → {}
+                T q → { ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {} }
+            }
+        }
+    }
+    ^ n
+}
+
+// ── Feedback ──────────────────────────────────────────────────────────
+//
+// What agents (and people) tell the people who run the service about
+// agora itself: a bug, an improvement, a feature they want. A signed-in
+// service keeps all of it in one file of its own, where the owner
+// organisation reads and answers it; a local agora in its one file.
+
+: s AG_FEEDBACK_COLS `id, kind, title, body, org, repo, agent, person, status, reply, created, updated`
+
+// Open (creating) a file that holds feedback only.
+@ ag_feedback_db_open s path → AgStore {
+    : String dir ( path_dirname path )
+    ? > ( string_len dir ) 0 {
+        ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → {} }
+    } {}
+    : AgStore st @ AgStore { ( string_from path ) T @ ?Database { F } }
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db AG_FEEDBACK_TABLE ) { T _ → { = ok T } F _ → {} }
+        }
+    }
+    ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
+}
+
+@ __ag_read_feedback Statement q → AgFeedback {
+    ^ @ AgFeedback {
+        ( sqlite_column_int q 0 )
+        ( sqlite_column_text q 1 )
+        ( sqlite_column_text q 2 )
+        ( sqlite_column_text q 3 )
+        ( sqlite_column_text q 4 )
+        ( sqlite_column_text q 5 )
+        ( sqlite_column_text q 6 )
+        ( sqlite_column_text q 7 )
+        ( sqlite_column_text q 8 )
+        ( sqlite_column_text q 9 )
+        ( sqlite_column_int q 10 )
+        ( sqlite_column_int q 11 )
+    }
+}
+
+// Record one; its id, 0 on failure.
+@ ag_feedback_add AgStore st s kind s title s body s org s repo s agent s person i now → i {
+    : ~ i id 0
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `INSERT INTO feedback (kind, title, body, org, repo, agent, person, status, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'new', ?8, ?8)` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 kind )
+                    ( _ag_bind_s q 2 title )
+                    ( _ag_bind_s q 3 body )
+                    ( _ag_bind_s q 4 org )
+                    ( _ag_bind_s q 5 repo )
+                    ( _ag_bind_s q 6 agent )
+                    ( _ag_bind_s q 7 person )
+                    ( _ag_bind_i q 8 now )
+                    ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
+                }
+            }
+        }
+    }
+    ^ id
+}
+
+@ ag_feedback_get AgStore st i id → ?AgFeedback {
+    : ~ b found F
+    : ~ AgFeedback out @ AgFeedback { 0 ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 0 }
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_FEEDBACK_COLS )
+    ( string_push_str sql ` FROM feedback WHERE id = ?1` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) {
+                        = out ( __ag_read_feedback q )
+                        = found T
+                    } {}
+                }
+            }
+        }
+    }
+    ? found { ^ @ ?AgFeedback { T out } } {}
+    ^ @ ?AgFeedback { F }
+}
+
+// The filter every feedback listing shares: ?1 org, ?2 status, ?3 kind
+// ('' = any of each).
+: s AG_FEEDBACK_WHERE ` FROM feedback WHERE (?1 = '' OR org = ?1) AND (?2 = '' OR status = ?2) AND (?3 = '' OR kind = ?3)`
+
+// A page of feedback, newest first (`oldest` T: oldest first).
+@ ag_feedback_list AgStore st s org s status s kind b oldest i limit i offset → ( Vec AgFeedback ) {
+    : ( Vec AgFeedback ) out ( vec_new [AgFeedback] )
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_FEEDBACK_COLS )
+    ( string_push_str sql AG_FEEDBACK_WHERE )
+    ( string_push_str sql ? oldest ` ORDER BY id LIMIT ?4 OFFSET ?5` ` ORDER BY id DESC LIMIT ?4 OFFSET ?5` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 org )
+                    ( _ag_bind_s q 2 status )
+                    ( _ag_bind_s q 3 kind )
+                    ( _ag_bind_i q 4 limit )
+                    ( _ag_bind_i q 5 offset )
+                    ~ ( _ag_row q ) { ( vec_push [AgFeedback] out ( __ag_read_feedback q ) ) }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+@ ag_feedback_count AgStore st s org s status s kind → i {
+    : ~ i n 0
+    : String sql ( string_from `SELECT COUNT(*)` )
+    ( string_push_str sql AG_FEEDBACK_WHERE )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 org )
+                    ( _ag_bind_s q 2 status )
+                    ( _ag_bind_s q 3 kind )
+                    ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+                }
+            }
+        }
+    }
+    ^ n
+}
+
+: s AG_FEEDBACK_STATES ` new accepted planned done declined `
+: s AG_FEEDBACK_KINDS ` feedback improvement feature bug `
+
+// Is `word` one of the space-separated `set` (which starts and ends with
+// a space)?
+@ ag_word_in s word s set → b {
+    : i n ( nurl_str_len word )
+    ? | == n 0 > n 32 { ^ F } {}
+    ? ( string_contains ( string_from word ) ` ` ) { ^ F } {}
+    : String key ( string_from ` ` )
+    ( string_push_str key word )
+    ( string_push_str key ` ` )
+    ^ ( string_contains ( string_from set ) ( string_data key ) )
+}
+
+// The operators' verdict and answer. F for an unknown status or id.
+@ ag_feedback_set AgStore st i id s status s reply i now → b {
+    ? ( ag_word_in status AG_FEEDBACK_STATES ) {} { ^ F }
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `UPDATE feedback SET status = ?2, reply = ?3, updated = ?4 WHERE id = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 id )
+                    ( _ag_bind_s q 2 status )
+                    ( _ag_bind_s q 3 reply )
+                    ( _ag_bind_i q 4 now )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
+@ ag_feedback_del AgStore st i id → b {
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `DELETE FROM feedback WHERE id = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 id )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
 }

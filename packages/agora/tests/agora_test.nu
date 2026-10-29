@@ -9,6 +9,8 @@
 //                 GET with a query, 401, 404 for an unknown op
 //   4. MCP        tools/list from the catalog; tools/call with and
 //                 without a context
+//   5. 0.8.0      rules, skills, feedback; the web page's paging,
+//                 sorting, writing and cleanup; the same signed in
 //
 // Prints one ok/FAIL line per check and exits non-zero if any failed.
 // Run from the package directory (tests/agora_test.sh does).
@@ -193,7 +195,7 @@ $ `src/service.nu`
     // Every catalog entry has a handler (a 501 would mean it does not).
     : ( Vec AgOpDef ) cat ( ag_op_catalog )
     : i n ( vec_len [AgOpDef] cat )
-    ( check == n 27 `ops: 27 in the catalog` )
+    ( check == n 32 `ops: 32 in the catalog` )
     : ~ b all_wired T
     : ~ i i 0
     ~ < i n {
@@ -683,7 +685,7 @@ $ `src/service.nu`
 
 @ test_mcp → v {
     : McpServer srv ( ag_mcp_server )
-    ( check == ( mcp_server_tool_count srv ) 27 `mcp: 27 tools from the catalog` )
+    ( check == ( mcp_server_tool_count srv ) 32 `mcp: 32 tools from the catalog` )
     : String tl ( mcp srv `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` ( json_null ) )
     ( check ( has tl `"name":"task_claim"` ) `mcp: tools/list` )
     ( check ( has tl `"required":["id"]` ) `mcp: schemas carry required` )
@@ -702,6 +704,213 @@ $ `src/service.nu`
     : String c3 ( mcp srv `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` ( json_null ) )
     ( check ( has c3 `you: stdio-agent` ) `mcp: null context is the local identity` )
     ( ag_state_set_local `` )
+}
+
+// ── 6. 0.8.0: rules, skills, feedback; the page's paging and cleanup ──
+
+// Where `needle` starts in `hay` (-1: nowhere).
+@ pos String hay s needle → i { ^ ( nurl_str_find ( string_data hay ) needle ) }
+
+@ test_rules_skills_feedback → v {
+    // Rules: a promoted note is shown to every agent once, in full.
+    : AgRes n1 ( call `rina` `note_set` `{"key":"push","body":"never push to main"}` 5000 )
+    ( check == . n1 status 200 `rules: a plain note first` )
+    : AgRes b0 ( call `rolf` `brief` `{}` 5001 )
+    ( check ! ( has . b0 text `never push` ) `rules: a plain note is not in the brief` )
+    : AgRes pr ( call `rina` `note_promote` `{"key":"push"}` 5002 )
+    ( check ( has . pr text `note push is a rule now` ) `rules: note_promote` )
+    : AgRes b1 ( call `rolf` `brief` `{}` 5003 )
+    ( check ( has . b1 text `rules — new or changed; they bind everyone here:\nrule push (rina now):\nnever push to main\n` ) `rules: the next brief shows it in full` )
+    ( check ( has . b1 text ` · rules: 1` ) `rules: and counts it` )
+    : AgRes b2 ( call `rolf` `brief` `{}` 5004 )
+    ( check ! ( has . b2 text `never push` ) `rules: shown once` )
+    ( check ( has . b2 text ` · rules: 1` ) `rules: still counted` )
+    : AgRes b3 ( call `rhea` `brief` `{}` 5005 )
+    ( check ( has . b3 text `never push to main` ) `rules: a newcomer's first brief has every rule` )
+    : AgRes n2 ( call `rina` `note_set` `{"key":"push","body":"never push to main; open a PR"}` 5006 )
+    : AgRes b4 ( call `rolf` `brief` `{}` 5007 )
+    ( check ( has . b4 text `open a PR` ) `rules: a rewritten rule is shown again` )
+    : AgRes b5 ( call `rina` `brief` `{}` 5007 )
+    ( check ( has . b5 text `open a PR` ) `rules: to its author too` )
+    : AgRes nl ( call `rolf` `notes` `{}` 5008 )
+    ( check ( has . nl text `push (rina now) [rule]` ) `rules: notes marks them` )
+    : AgRes rl ( call `rolf` `notes` `{"rules":true}` 5008 )
+    ( check ( has . rl text `rule push (rina now):\nnever push to main; open a PR\n` ) `rules: notes rules=true reads them whole` )
+    : AgRes nd ( call `rolf` `note_del` `{"key":"push"}` 5009 )
+    ( check & == . nd status 409 ( has . nd text `note_promote rule=false` ) `rules: a rule is not deleted as it is` )
+    : AgRes dm ( call `rolf` `note_promote` `{"key":"push","rule":false}` 5010 )
+    ( check ( has . dm text `is a plain note again` ) `rules: demoted` )
+    : AgRes b6 ( call `rhea` `brief` `{}` 5010 )
+    ( check ! ( has . b6 text `rules: ` ) `rules: none left to count` )
+    : AgRes nd2 ( call `rolf` `note_del` `{"key":"push"}` 5011 )
+    ( check == . nd2 status 200 `rules: then it can go` )
+    : AgRes np ( call `rolf` `note_promote` `{"key":"nope"}` 5012 )
+    ( check == . np status 404 `rules: no such note` )
+
+    // Skills: written once, for every agent; switched on or off.
+    : AgRes s0 ( call `rina` `skills` `{}` 5100 )
+    ( check ( has . s0 text `no skills switched on` ) `skills: none yet` )
+    : AgRes s1 ( call `rina` `skill_set` `{"name":"release","description":"Cut a release","body":"1. bump\\n2. tag"}` 5101 )
+    ( check ( has . s1 text `skill release saved (on)` ) `skills: skill_set makes one, on` )
+    : AgRes s1b ( call `rina` `skill_set` `{"name":"draft"}` 5101 )
+    ( check == . s1b status 400 `skills: a new one needs a body` )
+    : AgRes s1c ( call `rina` `skill_set` `{"name":"Bad Name","body":"x"}` 5101 )
+    ( check == . s1c status 400 `skills: the name rule` )
+    : AgRes s2 ( call `rolf` `skills` `{}` 5102 )
+    ( check ( seq ( string_data . s2 text ) `release — Cut a release\n(skill name=… reads one)\n` ) `skills: skills lists it` )
+    : AgRes s3 ( call `rolf` `skill` `{"name":"release"}` 5103 )
+    ( check ( has . s3 text `skill release — Cut a release (rina now):\n1. bump\n2. tag\n` ) `skills: skill reads it whole` )
+    : AgRes bb ( call `rolf` `brief` `{}` 5104 )
+    ( check ( has . bb text ` · skills: 1` ) `skills: brief counts them` )
+    : AgRes s4 ( call `rolf` `skill_set` `{"name":"release","enabled":false}` 5105 )
+    ( check ( has . s4 text `saved (off` ) `skills: switched off` )
+    : AgRes s5 ( call `rolf` `skill` `{"name":"release"}` 5106 )
+    ( check == . s5 status 409 `skills: a switched-off skill is not handed out` )
+    : AgRes s6 ( call `rolf` `skills` `{"all":true}` 5107 )
+    ( check ( has . s6 text `release (off) — Cut a release` ) `skills: all=true lists it, off` )
+    : AgRes bc ( call `rolf` `brief` `{}` 5108 )
+    ( check ! ( has . bc text `skills: ` ) `skills: brief counts only those on` )
+    ?? ( ag_skill_get ( ag_store ) `release` ) {
+        T k → { ( check & ( has . k body `2. tag` ) ( seq ( string_data . k author ) `rina` ) `skills: switching off keeps the body and its author` ) }
+        F _ → { ( check F `skills: switching off keeps the body and its author` ) }
+    }
+    : AgRes s7 ( call `rina` `skill` `{"name":"nope"}` 5109 )
+    ( check == . s7 status 404 `skills: no such skill` )
+
+    // Feedback: about agora itself, to the people who run it.
+    : AgRes f0 ( call `rina` `feedback` `{"kind":"feature","title":"Let wait watch a channel","body":"so I need not follow it"}` 5200 )
+    ( check ( has . f0 text `feedback #1 recorded` ) `feedback: recorded` )
+    : AgRes f1 ( call `rina` `feedback` `{"kind":"wish","title":"x"}` 5201 )
+    ( check == . f1 status 400 `feedback: an unknown kind is refused` )
+    : AgRes f2 ( call `rina` `feedback` `{"body":"no title"}` 5201 )
+    ( check == . f2 status 400 `feedback: a title is required` )
+    : AgRes f3 ( call `rolf` `feedback` `{"title":"brief is great"}` 5202 )
+    ( check == . f3 status 200 `feedback: kind defaults` )
+    : ( Vec AgFeedback ) fl ( ag_feedback_list ( ag_store ) `` `` `` F 10 0 )
+    ( check == ( vec_len [AgFeedback] fl ) 2 `feedback: listed` )
+    ?? ( vec_get [AgFeedback] fl 0 ) {
+        T f → { ( check & & ( seq ( string_data . f kind ) `feedback` ) ( seq ( string_data . f agent ) `rolf` ) ( seq ( string_data . f status ) `new` ) `feedback: newest first, who sent it, new` ) }
+        F _ → { ( check F `feedback: newest first, who sent it, new` ) }
+    }
+    ( check == ( ag_feedback_count ( ag_store ) `` `` `feature` ) 1 `feedback: counted by kind` )
+}
+
+@ test_web_more Router r → v {
+    : i now ( now_seconds )
+    // Feedback answered: the agent that sent it hears, in its mail.
+    : HttpResponse fa ( rest r `PUT` `/m/feedback/1` `` `` `{"status":"planned","reply":"next release"}` )
+    ( check == . fa status 200 `web: feedback answered` )
+    : HttpResponse fx ( rest r `PUT` `/m/feedback/1` `` `` `{"status":"someday"}` )
+    ( check == . fx status 400 `web: an unknown feedback status is refused` )
+    : AgRes fb ( call `rina` `inbox` `{}` now )
+    ( check ( has . fb text `your feedback #1 (Let wait watch a channel) is planned\nreply: next release` ) `web: the agent hears the answer` )
+    : HttpResponse fg ( rest r `GET` `/m/feedback` `status=planned` `` `` )
+    ( check & ( has ( body_of fg ) `"reply":"next release"` ) ( has ( body_of fg ) `"total":1` ) `web: feedback by status, with a total` )
+    : HttpResponse fn ( rest r `POST` `/m/feedback` `` `` `{"kind":"bug","title":"the page forgets my filter"}` )
+    ( check == . fn status 200 `web: a person sends feedback` )
+    : HttpResponse fd ( rest r `DELETE` `/m/feedback/3` `` `` `` )
+    ( check == . fd status 200 `web: feedback deleted` )
+
+    // Writing from the page, as a named agent or the person's default.
+    : HttpResponse wm ( rest r `POST` `/m/messages` `` `` `{"as":"Web-Ann","body":"zq one"}` )
+    ( check & == . wm status 200 ( has ( body_of wm ) `"as":"web-ann"` ) `web: a new post, as a named agent` )
+    ( rest r `POST` `/m/messages` `` `` `{"as":"web-ann","body":"zq two"}` )
+    ( rest r `POST` `/m/messages` `` `` `{"as":"web-ann","body":"zq three","reply_to":1}` )
+    : HttpResponse wd ( rest r `POST` `/m/messages` `` `` `{"to":"rina","body":"psst from the page"}` )
+    ( check ( has ( body_of wd ) `"as":"web"` ) `web: direct mail, as the default name` )
+    : AgRes ri ( call `rina` `inbox` `{}` now )
+    ( check ( has . ri text `dm web now: psst from the page` ) `web: it arrives` )
+    : HttpResponse wb ( rest r `POST` `/m/messages` `` `` `{"to":"nobody-here","body":"x"}` )
+    ( check == . wb status 404 `web: mail to nobody is 404` )
+    : HttpResponse we ( rest r `POST` `/m/messages` `` `` `{"as":"bad name","body":"x"}` )
+    ( check == . we status 400 `web: as follows the name rule` )
+    : HttpResponse mp ( rest r `GET` `/m/messages` `from=web-ann&limit=1&offset=1&order=oldest` `` `` )
+    : String mpb ( body_of mp )
+    ( check & & ( has mpb `zq two` ) ! ( has mpb `zq one` ) ( has mpb `"total":3` ) `web: messages a page at a time, oldest first` )
+    : HttpResponse mq ( rest r `GET` `/m/messages` `q=ZQ&limit=2` `` `` )
+    : String mqb ( body_of mq )
+    ( check & & ( has mqb `zq three` ) ! ( has mqb `zq one` ) ( has mqb `"total":3` ) `web: newest first by default` )
+
+    // Tasks: filtered by status and holder, sorted, paged, done hidden.
+    : HttpResponse wt ( rest r `POST` `/m/tasks` `` `` `{"title":"zq alpha","tags":"web","priority":1}` )
+    ( check & == . wt status 200 ( has ( body_of wt ) `"as":"web"` ) `web: a new task` )
+    : AgRes tb ( call `rina` `task_post` `{"title":"zq beta","priority":5}` now )
+    : AgRes tc ( call `rina` `task_post` `{"title":"zq gamma","priority":3}` now )
+    : String cb ( id_args ( res_id tb ) )
+    : String cc ( id_args ( res_id tc ) )
+    ( call `rolf` `task_claim` ( string_data cb ) now )
+    ( call `rolf` `task_claim` ( string_data cc ) now )
+    : String dargs ( string_from `{"id":` )
+    ( string_push_int dargs ( res_id tc ) )
+    ( string_push_str dargs `,"result":"ok"}` )
+    ( call `rolf` `task_done` ( string_data dargs ) now )
+    : HttpResponse t1 ( rest r `GET` `/m/tasks` `q=zq&sort=priority&dir=desc` `` `` )
+    : String t1b ( body_of t1 )
+    ( check & & < ( pos t1b `zq beta` ) ( pos t1b `zq gamma` ) < ( pos t1b `zq gamma` ) ( pos t1b `zq alpha` ) ( has t1b `"total":3` ) `web: tasks sorted by priority` )
+    : HttpResponse t2 ( rest r `GET` `/m/tasks` `q=zq&sort=title&dir=asc` `` `` )
+    : String t2b ( body_of t2 )
+    ( check & < ( pos t2b `zq alpha` ) ( pos t2b `zq beta` ) < ( pos t2b `zq beta` ) ( pos t2b `zq gamma` ) `web: … or by title` )
+    : HttpResponse t3 ( rest r `GET` `/m/tasks` `q=zq&status=claimed` `` `` )
+    ( check & ( has ( body_of t3 ) `zq beta` ) ( has ( body_of t3 ) `"total":1` ) `web: tasks by status claimed` )
+    : HttpResponse t4 ( rest r `GET` `/m/tasks` `q=zq&holder=rolf` `` `` )
+    ( check & ! ( has ( body_of t4 ) `zq alpha` ) ( has ( body_of t4 ) `"total":2` ) `web: tasks by holder` )
+    : HttpResponse t5 ( rest r `GET` `/m/tasks` `q=zq&hide_done=1` `` `` )
+    ( check & ! ( has ( body_of t5 ) `zq gamma` ) ( has ( body_of t5 ) `"total":2` ) `web: done tasks hidden` )
+    : HttpResponse t6 ( rest r `GET` `/m/tasks` `q=zq&sort=id&dir=asc&limit=1&offset=1` `` `` )
+    : String t6b ( body_of t6 )
+    ( check & & ( has t6b `zq beta` ) ! ( has t6b `zq alpha` ) ( has t6b `"total":3` ) `web: tasks a page at a time` )
+    : HttpResponse t7 ( rest r `GET` `/m/tasks` `q=zq&sort=title;DROP TABLE tasks` `` `` )
+    ( check == . t7 status 200 `web: an unknown sort column is just the default` )
+
+    // Notes: rules first, filtered, promoted from the page.
+    ( call `rina` `note_set` `{"key":"zq-a","body":"plain"}` now )
+    ( call `rina` `note_set` `{"key":"zq-b","body":"binding"}` now )
+    : HttpResponse pr ( rest r `PUT` `/m/rules` `` `` `{"key":"zq-b"}` )
+    ( check == . pr status 200 `web: a person promotes a note` )
+    : HttpResponse pn ( rest r `PUT` `/m/rules` `` `` `{"key":"zq-none"}` )
+    ( check == . pn status 404 `web: … only one that exists` )
+    : HttpResponse n1 ( rest r `GET` `/m/notes` `q=zq` `` `` )
+    : String n1b ( body_of n1 )
+    ( check & & < ( pos n1b `zq-b` ) ( pos n1b `zq-a` ) ( has n1b `"rule":true` ) ( has n1b `"total":2` ) `web: notes, rules first` )
+    : HttpResponse n2 ( rest r `GET` `/m/notes` `q=zq&kind=rules` `` `` )
+    ( check & ! ( has ( body_of n2 ) `zq-a` ) ( has ( body_of n2 ) `"promoted_by":"web"` ) `web: only the rules` )
+    : HttpResponse n3 ( rest r `GET` `/m/notes` `q=zq&kind=notes&limit=1` `` `` )
+    ( check & ! ( has ( body_of n3 ) `zq-b` ) ( has ( body_of n3 ) `"total":1` ) `web: only the plain notes` )
+
+    // Skills from the page.
+    : HttpResponse k1 ( rest r `PUT` `/m/skills/zq-skill` `` `` `{"description":"d","body":"step one"}` )
+    ( check == . k1 status 200 `web: a skill made` )
+    : HttpResponse k2 ( rest r `PUT` `/m/skills/zq-skill` `` `` `{"enabled":false}` )
+    ( check == . k2 status 200 `web: switched off` )
+    : HttpResponse k3 ( rest r `GET` `/m/skills` `` `` `` )
+    ( check ( has ( body_of k3 ) `"name":"zq-skill","description":"d","body":"step one","enabled":false` ) `web: listed off, body kept` )
+    : HttpResponse k4 ( rest r `DELETE` `/m/skills/zq-skill` `` `` `` )
+    ( check == . k4 status 200 `web: a skill deleted` )
+    : HttpResponse k5 ( rest r `DELETE` `/m/skills/zq-skill` `` `` `` )
+    ( check == . k5 status 404 `web: … once` )
+    : HttpResponse me ( rest r `GET` `/m/me` `` `` `` )
+    ( check & ( has ( body_of me ) `"web_as":"web"` ) ( has ( body_of me ) `"can_triage":true` ) `web: me says how the page writes and who triages` )
+
+    // Cleanup: count first, then clear.
+    : AgStore st ( ag_store )
+    ( ag_agent_create st `zq-stale` `` `h-zq-stale` 100 )
+    ( ag_channel_create st `zq-quiet` `` `zq-stale` 100 )
+    : i ot ( ag_task_post st `zq old` `` `` `zq-stale` 0 100 )
+    ( ag_task_claim st ot `rolf` 600 101 )
+    ( ag_task_done st ot `rolf` `long ago` 102 )
+    : HttpResponse c1 ( rest r `POST` `/m/cleanup` `` `` `{"agents_days":30,"tasks_days":30,"channels_days":30}` )
+    : String c1b ( body_of c1 )
+    ( check & ( has c1b `"dry_run":true` ) ! ( has c1b `"channels":0` ) `web: cleanup counts first` )
+    ?? ( ag_agent_get st `zq-stale` ) { T _ → { ( check T `web: and changes nothing` ) } F → { ( check F `web: and changes nothing` ) } }
+    : HttpResponse c2 ( rest r `POST` `/m/cleanup` `` `` `{"agents_days":30,"tasks_days":30,"channels_days":30,"dry_run":false}` )
+    ( check & == . c2 status 200 ( has ( body_of c2 ) `"dry_run":false` ) `web: cleanup runs` )
+    ?? ( ag_agent_get st `zq-stale` ) { T _ → { ( check F `web: the stale agent is gone` ) } F → { ( check T `web: the stale agent is gone` ) } }
+    ?? ( ag_agent_get st `web-ann` ) { T _ → { ( check T `web: one seen today stays` ) } F → { ( check F `web: one seen today stays` ) } }
+    ( check ! ( ag_channel_exists st `zq-quiet` ) `web: the quiet channel is gone` )
+    ( check ( ag_channel_exists st `public` ) `web: public stays` )
+    ?? ( ag_task_get st ot now ) { T _ → { ( check F `web: the old finished task is gone` ) } F → { ( check T `web: the old finished task is gone` ) } }
+    : HttpResponse t8 ( rest r `GET` `/m/tasks` `q=zq&hide_done=0` `` `` )
+    ( check ( has ( body_of t8 ) `"total":3` ) `web: today's tasks stay` )
 }
 
 // ── 5. projects, ownership and the signed-in service ─────────────────
@@ -923,6 +1132,51 @@ $ `src/service.nu`
     ( check ( seq ( string_data ( ag_org_key `../../etc` ) ) ( string_data ( ag_org_key `../../etc` ) ) ) `org key: deterministic` )
     ( check ! ( string_contains ( ag_org_key `../../etc` ) `/` ) `org key: no path in it` )
     ( check ! ( string_contains ( ag_repo_path `org-a` `github.com/o/r` ) `github.com/o` ) `repo file: no '/' from the key` )
+    // A tenant decision forgets every cached verdict: sign in again, and
+    // let org b in.
+    ( ag_tenant_set_state `org-b` `allowed` `test` 102 )
+    ( seed `tok-a1` `org-a` `sub-a1` `ann@a.example` )
+    ( seed `tok-a2` `org-a` `sub-a2` `bob@a.example` )
+    ( seed `tok-b1` `org-b` `sub-b1` `ann@b.example` )
+    // Feedback leaves the organisation: the owner organisation reads it.
+    : HttpResponse fb1 ( rest_h r `POST` `/api/feedback` `` `Bearer tok-b1` `` `` `{"repo":"github.com/o/r","as":"ann-bot","kind":"improvement","title":"b wants more","body":"details"}` )
+    ( check & == . fb1 status 200 ( has ( body_of fb1 ) `"id":1` ) `oidc: org b's agent sends feedback` )
+    ( rest_h r `POST` `/api/feedback` `` `Bearer tok-a1` `` `` `{"repo":"github.com/o/r","as":"ann-bot","title":"a's own"}` )
+    : HttpResponse fl1 ( rest_h r `GET` `/m/feedback` `` `Bearer tok-a2` `` `` `` )
+    : String fl1b ( body_of fl1 )
+    ( check & & ( has fl1b `"org":"org-b"` ) ( has fl1b `"person":"ann@b.example"` ) ( has fl1b `"can_triage":true` ) `oidc: the owner organisation's members read everyone's feedback` )
+    ( check ( has fl1b `"total":2` ) `oidc: … all of it` )
+    : HttpResponse fl2 ( rest_h r `GET` `/m/feedback` `` `Bearer tok-b1` `` `` `` )
+    : String fl2b ( body_of fl2 )
+    ( check & & ( has fl2b `b wants more` ) ! ( has fl2b `a's own` ) ( has fl2b `"can_triage":false` ) `oidc: another organisation reads only its own` )
+    : HttpResponse fp1 ( rest_h r `PUT` `/m/feedback/1` `` `Bearer tok-b1` `` `` `{"status":"done"}` )
+    ( check == . fp1 status 403 `oidc: only the owner organisation answers` )
+    : HttpResponse fp2 ( rest_h r `PUT` `/m/feedback/1` `` `Bearer tok-a2` `` `` `{"status":"accepted","reply":"on it"}` )
+    ( check == . fp2 status 200 `oidc: a member of the owner organisation answers` )
+    : HttpResponse fb2 ( rest_h r `POST` `/api/brief` `` `Bearer tok-b1` `` `` `{"repo":"github.com/o/r","as":"ann-bot"}` )
+    ( check & ( has ( body_of fb2 ) `your feedback #1 (b wants more) is accepted` ) ( has ( body_of fb2 ) `reply: on it` ) `oidc: the answer reaches the agent in its own organisation's room` )
+    : HttpResponse fb3 ( rest_h r `POST` `/api/brief` `` `Bearer tok-a1` `` `` `{"repo":"github.com/o/r","as":"ann-bot"}` )
+    ( check ! ( has ( body_of fb3 ) `b wants more` ) `oidc: and not in the owner's room of the same name` )
+    // Skills are the organisation's: every repository's agents, no other organisation's.
+    : HttpResponse sk1 ( rest_h r `POST` `/api/skill_set` `` `Bearer tok-a1` `` `` `{"repo":"github.com/o/r","as":"ann-bot","name":"review","description":"How we review","body":"read the diff"}` )
+    ( check == . sk1 status 200 `oidc: a skill set from one repository` )
+    : HttpResponse sk2 ( rest_h r `POST` `/api/skills` `` `Bearer tok-a2` `` `` `{"repo":"github.com/o/other","as":"bob-bot"}` )
+    ( check ( has ( body_of sk2 ) `"name":"review"` ) `oidc: is the organisation's, seen from another repository` )
+    : HttpResponse sk3 ( rest_h r `POST` `/api/skills` `` `Bearer tok-b1` `` `` `{"repo":"github.com/o/r","as":"ann-bot"}` )
+    ( check ! ( has ( body_of sk3 ) `review` ) `oidc: and not by another organisation` )
+    : HttpResponse sk4 ( rest_h r `POST` `/api/brief` `` `Bearer tok-a2` `` `` `{"repo":"github.com/o/other","as":"bob-bot"}` )
+    ( check ( has ( body_of sk4 ) `"skills":1` ) `oidc: brief counts the organisation's skills` )
+    : HttpResponse sk5 ( rest_h r `GET` `/m/skills` `` `Bearer tok-a2` `` `` `` )
+    ( check ( has ( body_of sk5 ) `"author":"ann-bot"` ) `oidc: the page lists the organisation's skills` )
+    : HttpResponse sk6 ( rest_h r `PUT` `/m/skills/review` `` `Bearer tok-a2` `` `` `{"enabled":false}` )
+    ( check == . sk6 status 200 `oidc: a member switches one off` )
+    : HttpResponse sk7 ( rest_h r `POST` `/api/skills` `` `Bearer tok-a1` `` `` `{"repo":"github.com/o/r","as":"ann-bot"}` )
+    ( check ! ( has ( body_of sk7 ) `"name":"review"` ) `oidc: then agents are not shown it` )
+    : HttpResponse sk8 ( rest_h r `GET` `/m/skills` `` `Bearer tok-b1` `` `` `` )
+    ( check ! ( has ( body_of sk8 ) `review` ) `oidc: another organisation's page has none of it` )
+    // The page writes into a repository as a name made from the e-mail.
+    : HttpResponse wn ( rest_h r `POST` `/m/messages` `repo=github.com%2Fo%2Fr` `Bearer tok-a2` `` `` `{"body":"from bob's page"}` )
+    ( check ( has ( body_of wn ) `"as":"bob"` ) `oidc: the page writes as the e-mail's name` )
     ( ag_auth_configure F F `` `` `` `` `` `` )
 }
 
@@ -947,6 +1201,8 @@ $ `src/service.nu`
     : Router r ( http_app_router app )
     ( test_rest r )
     ( test_mcp )
+    ( test_rules_skills_feedback )
+    ( test_web_more r )
     ( test_project_norm )
     ( test_own_posts )
     ( test_manage )

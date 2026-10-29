@@ -59,7 +59,8 @@ $ `web.nu`
         : String sub ( __ag_ctx_str ctx `sub` )
         : ~ AgRes res ( _ag_err 401 `not signed in` )
         ? & > ( string_len org ) 0 > ( string_len sub ) 0 {
-            = res ( ag_oidc_call ( string_data org ) args name now )
+            : String email ( __ag_ctx_str ctx `email` )
+            = res ( ag_oidc_call ( string_data org ) ( string_data email ) args name now )
         } {}
         ? & < . res status 400 != 0 ( nurl_str_eq name `whoami` ) {
             ( string_push_str . res text `signed in: ` )
@@ -97,7 +98,8 @@ Every turn: brief — what is new (each message once; long channel posts cut, ms
 Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
 Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
 Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
-Remember: note_set / note / notes for facts about the repository that outlive this conversation.`
+Remember: note_set / note / notes for facts about the repository that outlive this conversation. A note_promote'd note is a rule: brief shows each rule to every agent once — follow them.
+Skills: skills lists your organisation's playbooks; skill name=X reads one. Something about agora itself in your way? feedback tells the people who run it.`
 
 // The MCP server, from the catalog. Built once; served over any
 // transport. A tool's annotations follow its flags: read-only ops are
@@ -266,7 +268,7 @@ Remember: note_set / note / notes for facts about the repository that outlive th
     ? ( ag_auth_oidc ) {
         : AgWho w ( ag_who req now )
         ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-        : AgRes res ( ag_oidc_call ( string_data . . w who org ) args ( string_data op ) now )
+        : AgRes res ( ag_oidc_call ( string_data . . w who org ) ( string_data . . w who email ) args ( string_data op ) now )
         : HttpResponse r ( response_json . res status . res body )
         ^ r
     } {}
@@ -398,14 +400,25 @@ Remember: note_set / note / notes for facts about the repository that outlive th
     ( http_app_get a `/m/channels` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_channels req p ) } )
     ( http_app_delete a `/m/channels` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_channel_del req p ) } )
     ( http_app_get a `/m/messages` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_messages req p ) } )
+    ( http_app_post a `/m/messages` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_message_new req p ) } )
     ( http_app_put a `/m/messages/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_message_put req p ) } )
     ( http_app_delete a `/m/messages/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_message_del req p ) } )
     ( http_app_get a `/m/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_tasks req p ) } )
+    ( http_app_post a `/m/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_task_new req p ) } )
     ( http_app_put a `/m/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_task_put req p ) } )
     ( http_app_delete a `/m/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_task_del req p ) } )
     ( http_app_get a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_notes req p ) } )
     ( http_app_put a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_note_put req p ) } )
     ( http_app_delete a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_note_del req p ) } )
+    ( http_app_put a `/m/rules` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_rule_put req p ) } )
+    ( http_app_get a `/m/skills` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skills req p ) } )
+    ( http_app_put a `/m/skills/:name` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skill_put req p ) } )
+    ( http_app_delete a `/m/skills/:name` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skill_del req p ) } )
+    ( http_app_get a `/m/feedback` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback req p ) } )
+    ( http_app_post a `/m/feedback` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback_new req p ) } )
+    ( http_app_put a `/m/feedback/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback_put req p ) } )
+    ( http_app_delete a `/m/feedback/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback_del req p ) } )
+    ( http_app_post a `/m/cleanup` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_cleanup req p ) } )
     ( http_app_get a `/m/users` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_users req p ) } )
     ( http_app_put a `/m/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_user_put req p ) } )
     ( http_app_delete a `/m/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_user_del req p ) } )
