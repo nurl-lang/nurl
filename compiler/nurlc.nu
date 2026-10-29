@@ -23186,8 +23186,11 @@ unsafe @ mem_path_to_indices s path → s {
     // the callee kept nothing, agora #174.)
     : s __jown ( nurl_sym_get syms `__argtmp_joinown__` )
     ( nurl_sym_def syms `__argtmp_joinown__` `` )
-    // (A join whose arms all lend — the constant `false` — owns nothing.)
-    : b __tjo & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at )
+    // (A join whose arms all lend — the constant `false` — owns nothing.
+    // Only for a call whose result cannot view it — a number, or a value
+    // of its own: one that may (`( string_data ?? … )`) keeps it as before.)
+    : b __tj_fresh | __scalar_ret & ! shadowed | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
+    : b __tjo & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at ) __tj_fresh
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
