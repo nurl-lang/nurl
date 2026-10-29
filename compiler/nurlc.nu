@@ -2880,6 +2880,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_fn_safe 0
 : ~ s g_fn_safe_list ``
 : ~ s g_cur_params ``
+// 1 while the code being compiled sits in a `~` loop over a container
+// (`iter_containers` in g_bck is not empty): what a call there hands a
+// closure is checked against the loop (__iter_closure_effs_check).
+: ~ i g_bck_iter_live 0
 // While a closure body is compiled: what it captured (g_clo_caps_now) and
 // the calls it hands one of them — or a field of one — to, `name:callee:
 // aix` (g_closure_effects): what running the closure does to them.
@@ -14473,7 +14477,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // or a field of the struct it belongs to (`~ x . obj items`).
         // (Only inside a loop that iterates something — the common case
         // pays one lookup.)
-        : b fe_any ? == g_borrowck 0 F ? == 0 ( nurl_sym_len g_bck `iter_containers` ) F & != 0 ( nurl_str_len bck_arg_root ) | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
+        : b fe_any ? == 0 g_bck_iter_live F & != 0 ( nurl_str_len bck_arg_root ) | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
         ? fe_any {
             // Iterator invalidation: if this argument names a
             // container currently being iterated by an enclosing `~`
@@ -14982,7 +14986,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // programs that are correct.
         ? & ( is_ident_tok bck_arg_tt )
         ( nurl_sym_has_word g_fn_invoke_only call_name ( nurl_str_int arg_idx ) )
-        { ( bck_note_closure_caps syms bck_arg_val ( nurl_lex_line lex ) ) ( __iter_closure_check syms bck_arg_val ( nurl_lex_line lex ) ( nurl_lex_filename lex ) ) }
+        { ( bck_note_closure_caps syms bck_arg_val ( nurl_lex_line lex ) ) }
         {}
         // A parameter handed on to a parameter its (compiled) callee only
         // invokes is not loaded as a value: the wrapper only invokes it too
@@ -15277,6 +15281,16 @@ unsafe @ gen_call i lex i syms i cg → s {
             ? ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__closure_effects` ) ``
             ( bck_closure_effects_run __ce_effs ( nurl_lex_line lex ) )
             = __clo_routes ( __clo_routes_add __clo_routes arg_idx __ce_effs )
+        } {}
+        // …and inside a `~` loop, one may change the loop's container when
+        // it runs: a closure literal, or a binding handed to any callee —
+        // one that only invokes it, or one not compiled yet (agora #151).
+        ? & != 0 g_bck_iter_live ( __is_closure_ty at ) {
+            ? == bck_arg_tt TT_BACKSLASH {
+                ( __iter_closure_effs_check `the closure` ( nurl_sym_get syms `__last_closure_assigns__` ) ( nurl_sym_get syms `__last_closure_effects__` ) ( nurl_lex_line lex ) ( nurl_lex_filename lex ) )
+            } {
+                ? ( is_ident_tok bck_arg_tt ) { ( __iter_closure_check syms bck_arg_val ( nurl_lex_line lex ) ( nurl_lex_filename lex ) ) } {}
+            }
         } {}
         // An inline closure literal's captures are known only now: one of
         // them passed inout earlier in this call is the same aliasing the
@@ -20122,13 +20136,17 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? != 0 ( nurl_str_len cont )
     { ( nurl_sym_set g_bck `iter_containers`
         ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
-        ( nurl_str_cat3 saved ` ` cont ) ) }
+        ( nurl_str_cat3 saved ` ` cont ) )
+        = g_bck_iter_live 1 }
     {}
     saved
 }
 
 @ bck_iter_exit s saved → v {
-    ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
+    ? == g_borrowck 0 {} {
+        ( nurl_sym_set g_bck `iter_containers` saved )
+        = g_bck_iter_live ? == 0 ( nurl_str_len saved ) 0 1
+    }
 }
 
 // The member path at the lexer's position as a dotted name (`. . a b c` →
@@ -20155,7 +20173,7 @@ unsafe @ gen_match i lex i syms i cg → s {
 // field it iterates belongs to — given a new value in the loop body: the
 // old value is released under the loop's cursor (§2.5).
 @ __iter_assign_check i lex i line s path → v {
-    ? | == g_borrowck 0 == 0 ( nurl_sym_len g_bck `iter_containers` ) { ^ v } {}
+    ? == 0 g_bck_iter_live { ^ v } {}
     ? ( __iter_conflict ( nurl_sym_get g_bck `iter_containers` ) path ) {
         ( bck_esc_warn lex line ( nurl_str_cat3 `cannot give '` ( bck_name_show path ) `' a new value while iterating over it — the '~' loop holds a borrow of the container, and the value it held is released under the loop; move the assignment out of the loop body` ) )
     } {}
@@ -20166,17 +20184,25 @@ unsafe @ gen_match i lex i syms i cg → s {
 // takes it (the captures it assigns, its effects): the value is released
 // or moved under the loop's cursor (§2.5).
 @ __iter_closure_check i syms s name i line s file → v {
-    ? | == g_borrowck 0 == 0 ( nurl_sym_len g_bck `iter_containers` ) { ^ v } {}
+    ? == 0 g_bck_iter_live { ^ v } {}
+    ( __iter_closure_effs_check ( nurl_str_cat3 `'` name `'` ) ( nurl_sym_get2 syms name `__closure_assigns` ) ( nurl_sym_get2 syms name `__closure_effects` ) line file )
+}
+
+// …for a closure (`who`, named for the message) by the captures it
+// assigns and its effects (a capture or a field of one given a new value
+// is the effect `@assign`, __clo_assign_note).
+@ __iter_closure_effs_check s who s assigns s effs i line s file → v {
+    ? == 0 g_bck_iter_live { ^ v } {}
     : s conts ( nurl_sym_get g_bck `iter_containers` )
-    : ~ s rest ( nurl_sym_get2 syms name `__closure_assigns` )
+    : ~ s rest ( nurl_str_cat assigns `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s a ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ( __iter_conflict conts a ) {
-            ( bck_emit_error file line ( nurl_str_cat4 `'` name `' gives '` ( nurl_str_cat3 a `' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body` `` ) ) )
+            ( __iter_closure_assign_diag who a line file )
             ^ v
         } {}
     }
-    = rest ( nurl_sym_get2 syms name `__closure_effects` )
+    = rest ( nurl_str_cat effs `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s e ( str_first_word rest ) = rest ( str_skip_word rest )
         : i c1 ( nurl_str_find e `:` )
@@ -20186,12 +20212,23 @@ unsafe @ gen_match i lex i syms i cg → s {
         : s cal ( nurl_str_slice tail 0 c2 )
         : s ax ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 )
         ? ( __iter_conflict conts nm ) {
-            ? | | & ( seq ax `0` ) ( bck_is_container_mutator cal ) ( nurl_sym_has_word g_fn_mutates cal ax ) ( nurl_sym_has_word g_fn_sink cal ax ) {
-                ( bck_emit_error file line ( nurl_str_cat4 `'` name `' hands '` ( nurl_str_cat3 ( bck_name_show nm ) `' to '` ( nurl_str_cat3 cal `', which changes or takes it, when it runs — here inside a '~' loop over it, which holds a borrow of the container; run the closure outside the loop body` `` ) ) ) )
+            ? ( seq cal `@assign` ) {
+                ( __iter_closure_assign_diag who nm line file )
+                ^ v
+            } {}
+            // (A generic callee by its instance, `vec_clear__String`, or
+            // by the generic it instantiates.)
+            : s cb ( bck_generic_base cal )
+            ? | | | | & ( seq ax `0` ) ( bck_is_container_mutator cb ) ( nurl_sym_has_word g_fn_mutates cal ax ) ( nurl_sym_has_word g_fn_sink cal ax ) ( nurl_sym_has_word g_fn_mutates cb ax ) ( nurl_sym_has_word g_fn_sink cb ax ) {
+                ( bck_emit_error file line ( nurl_str_cat3 who ` hands '` ( nurl_str_cat3 ( bck_name_show nm ) `' to '` ( nurl_str_cat3 ( bck_fn_show cal ) `', which changes or takes it, when it runs — here inside a '~' loop over it, which holds a borrow of the container; run the closure outside the loop body` `` ) ) ) )
                 ^ v
             } {}
         } {}
     }
+}
+
+@ __iter_closure_assign_diag s who s path i line s file → v {
+    ( bck_emit_error file line ( nurl_str_cat3 who ` gives '` ( nurl_str_cat3 ( bck_name_show path ) `' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body` `` ) ) )
 }
 
 @ __iter_conflict s conts s path → b {
@@ -24784,6 +24821,7 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         = g_bck_fevar 0
         // (A loop a failed declaration never closed iterates nothing here.)
         ( nurl_sym_set g_bck `iter_containers` `` )
+        = g_bck_iter_live 0
         ( nurl_sym_set g_bck `pmoves` `` )
         ( nurl_sym_set g_bck `pmaybes` `` )
         = g_bck_rcty ``
@@ -24849,6 +24887,30 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
     = g_closure_effects ? == 0 ( nurl_str_len g_closure_effects ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_closure_effects ` ` e )
 }
 
+// Inside a closure body: a closure it runs frees `frees` — those that are
+// this closure's captures too (g_clo_caps_now: a captured closure's
+// captures with them), running this one frees (g_closure_consumed).
+unsafe @ __clo_frees_note s frees → v {
+    ? | == 0 ( nurl_str_len frees ) == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
+    : ~ s rest ( nurl_str_cat frees `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ( str_contains_word g_clo_caps_now w ) ! ( str_contains_word g_closure_consumed w ) {
+            = g_closure_consumed ? == 0 ( nurl_str_len g_closure_consumed ) ( nurl_str_cat w `` ) ( nurl_str_cat3 g_closure_consumed ` ` w )
+        } {}
+    }
+}
+
+// Inside a closure body: a capture, or a field of one, given a new value
+// releases what it held — an effect of running the closure, as a callee
+// replacing it would be (`@assign`): where the closure may run, what
+// borrows or views it ends (bck_borrow_sweep), and a `~` loop over it is
+// changed under its cursor (__iter_closure_check, agora #151).
+unsafe @ __clo_assign_note i syms s path s ty → v {
+    ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
+    ? | ( __type_needs_drop ty syms ) ( __is_closure_ty ty ) { ( __clo_effect_note path `@assign` 0 ) } {}
+}
+
 // A use of a closure that may run it here (`effs`, its effects): each one
 // happens to that capture on `line` (a `pendeff` row — what the inline call
 // would do to borrows and views of it).
@@ -24897,6 +24959,9 @@ unsafe @ bck_note_closure_caps i syms s name i line → v {
     ? == g_borrowck 0 { ^ v } {}
     // What running it does to its captures (bck_closure_effects_run).
     ( bck_closure_effects_run ( nurl_sym_get2 syms name `__closure_effects` ) line )
+    // (Run inside another closure's body: what it frees, that closure
+    // frees when it runs — agora #151.)
+    ? != 0 g_bck_closure_depth { ( __clo_frees_note ( nurl_sym_get2 syms name `__closure_frees` ) ) } {}
     ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
     // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
     // below reassigns itself with owned slices of it (bck_alias_from_phi
@@ -30376,6 +30441,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             ? | | | == kc 9 == kc 12 == kc 13 == kc 32 {
                 // (`pendeff`: a closure that runs here does it.)
                 : s pw0 ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
+                // (`@assign`: a closure that runs here gives it, or a field of
+                // it, a new value — __clo_assign_note — as a `= x …` here
+                // would, agora #151.)
+                ? & & == kc 32 ( seq ( bck_field rec 5 ) `@assign` ) != BCK_BORROWED_SHARED ( bck_st_get ist rid ) {
+                    = why ? whole `a closure that runs here gives it a new value` `a closure that runs here gives a field of it a new value`
+                } {}
                 ? ( seq ( bck_field rec 5 ) `@opaqueclo` ) {
                     // An opaque closure called inside a closure body — a
                     // parameter (h285), or a closure a parameter holds
@@ -32964,6 +33035,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : s glb ( nurl_sym_get2 syms name `__global` )
         ( __ownglobal_gate lex syms name )
         ( __iter_assign_check lex bck_line name )
+        ? != 0 g_bck_closure_depth { ( __clo_assign_note syms name vt ) } {}
         : s param_check ( nurl_sym_get2 syms name `__param` )
         ? & != 0 ( nurl_str_len vt ) == 0 ( nurl_str_len mut_check )
         {  // known binding, declared immutable. Point the diagnostic at
@@ -34770,7 +34842,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                             : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_store syms cg ftype rhsc0 __fs_tt )
                             ( nurl_str_cat rhsc0 `` )
                             ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v0 __fs_l0 ) } {}
-                            ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( __iter_assign_check lex __fs_l0 ( nurl_str_cat3 obj_name `.` fname ) ) ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l0 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l0 ) } {} } {}
+                            ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( __iter_assign_check lex __fs_l0 ( nurl_str_cat3 obj_name `.` fname ) ) ? != 0 g_bck_closure_depth { ( __clo_assign_note syms ( nurl_str_cat3 obj_name `.` fname ) ftype ) } {} ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l0 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l0 ) } {} } {}
                             // A field of a struct held by value inside a binding
                             // (`= . . o b items v`, walked by address): the
                             // binding's own storage, written as `= . o f v` is —
@@ -34784,6 +34856,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                             ( __clo_note_fassigned syms __rp_root ftype )
                             ? & != 0 ( nurl_str_len __nl_root ) ( __type_needs_drop ftype syms ) {
                                 ( __iter_assign_check lex __fs_l0 ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) )
+                                ? != 0 g_bck_closure_depth { ( __clo_assign_note syms ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) ftype ) } {}
                                 ( bck_stash_fieldset ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) __fs_l0 )
                                 ? ( bck_sound ) { ( __ptr_kill __nl_root __fs_l0 ) } {}
                             } {}
@@ -34974,7 +35047,7 @@ unsafe @ __replaces_note i syms s name s field → v {
                     ? ( __type_needs_drop ftype syms ) { ( __replaces_note syms obj_name fname ) } {}
                 } {}
                 ( __clo_note_fassigned syms obj_name ftype )
-                ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( __iter_assign_check lex __fs_l1 ( nurl_str_cat3 obj_name `.` fname ) ) ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
+                ? & != 0 ( nurl_str_len obj_name ) | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) { ( __iter_assign_check lex __fs_l1 ( nurl_str_cat3 obj_name `.` fname ) ) ? != 0 g_bck_closure_depth { ( __clo_assign_note syms ( nurl_str_cat3 obj_name `.` fname ) ftype ) } {} ( bck_stash_fieldset ( nurl_str_cat3 obj_name `.` fname ) __fs_l1 ) ? ( bck_sound ) { ( __ptr_kill obj_name __fs_l1 ) } {} } {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
@@ -41244,6 +41317,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : ~ s __cl_bck_side ( nurl_str_cat `` `` )
     : ~ s __cl_bck_warnset ( nurl_str_cat `` `` )
     : ~ s __cl_bck_deferred ( nurl_str_cat `` `` )
+    // (…and the `~` loops the closure literal sits in: what it does when it
+    // runs is checked against them after its body, __iter_closure_effs_check.)
+    : ~ s __cl_bck_iterc ( nurl_str_cat `` `` )
+    : i __cl_iter_live g_bck_iter_live
     ? != g_borrowck 0 {
         = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
         = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
@@ -41255,6 +41332,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         = __cl_bck_side ( bck_side_lists_take )
         = __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
         = __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
+        = __cl_bck_iterc ( nurl_sym_get g_bck `iter_containers` )
     } {}
     : i __cl_bck_depth g_bck_depth
     ( bck_fn_begin )
@@ -41374,7 +41452,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ( bck_side_lists_put __cl_bck_side )
         ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
         ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
+        ( nurl_sym_set g_bck `iter_containers` __cl_bck_iterc )
     } {}
+    = g_bck_iter_live __cl_iter_live
     = g_bck_depth __cl_bck_depth
     = g_bck_cap_names __cl_capnames_saved
     = g_bck_cap_via __cl_capvia_saved
@@ -41413,7 +41493,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ~ != 0 ( nurl_str_len __cl_cons ) {
         : s __cl_n ( str_first_word __cl_cons )
         = __cl_cons ( str_skip_word __cl_cons )
-        ? & ( str_contains_word captured_vars __cl_n ) ! ( str_contains_word g_nc_own_caps __cl_n ) {
+        // (…or one a closure it captured frees when it runs, __clo_frees_note.)
+        ? & | ( str_contains_word captured_vars __cl_n ) ( str_contains_word __cap_heap __cl_n ) ! ( str_contains_word g_nc_own_caps __cl_n ) {
             = __cl_frees ? == 0 ( nurl_str_len __cl_frees ) ( nurl_str_cat __cl_n `` ) ( nurl_str_cat3 __cl_frees ` ` __cl_n )
             ? __cl_used_now
             { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
