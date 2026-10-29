@@ -5,6 +5,8 @@
 // Closed: `_rsa_sign_raw` checks the key's limb counts against its
 // contexts once a signature (__rm_key_ok) and signs nothing (an empty
 // Vec) for a key that no longer matches.
+// Since agora #159 the program is rejected: handing a sealed field to
+// a callee that may change it in place is a write to that field.
 // v0.80.0: accepted; AddressSanitizer reported SEGV.
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rsa_mont.nu`

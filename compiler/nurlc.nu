@@ -1549,6 +1549,12 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_retcap_n 0  // …and with a `retcap##` one (a `sink` parameter the returned closure took over)
 : ~ i g_thv_precise 0  // 1 while __ty_holds_view answers for a library handle by its type arguments
 : ~ i g_clolend_n 0  // bindings that recorded a `__clolend` (mem_check_ret_clo_lend skips idents while 0)
+: ~ i g_sealed_views 0  // bindings marked `__sealed_view` so far (agora #159): none, no lookup
+// The last field read (gen_member) was out of a sealed representation, at
+// any depth of its chain, or out of a binding that views one: 1, and
+// g_msealed_ty names the sealed type (agora #159).
+: ~ i g_msealed 0
+: ~ s g_msealed_ty ``
 : ~ i g_clo_lend_set 0  // 1 while `__last_call_clo_lend_idents__` holds the last call's answer (else it is empty)
 : ~ i g_clo_cap_set 0  // …and `__last_call_clo_cap_idents__` (retcap)
 : ~ i g_bck_ownerless 0  // owner-less `store` rows pending in this statement (bck_take_owner_stores)
@@ -1820,6 +1826,11 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_lm_inner ``
 : ~ i g_lm_depth 0
 : ~ i g_lm_pend 0
+// A sealed representation's field handed to a function of the program not
+// compiled yet: whether it changes that argument is known at module end
+// (resolve_sealed_handoffs; agora #159). Same layout as g_lm_pend.
+: ~ i g_sh_pend 0
+: ~ i g_sh_pend_n 0
 : ~ i g_lm_pend_n 0
 
 // Names of functions whose body has been compiled — the "is the inline
@@ -13522,6 +13533,24 @@ unsafe @ __lm_pair_handoffs i lex i line i col s calls s nm s head → v {
 // The literal-field handoffs parked by __lm_pair_handoffs, decided now
 // that every callee's summary is final. Called from main() beside
 // resolve_deferred_borrowck.
+// The sealed fields parked by gen_call for a callee compiled later: a
+// final summary that changes, reallocates or takes the argument is a write
+// to the sealed field (agora #159).
+unsafe @ resolve_sealed_handoffs → v {
+    ? == g_sh_pend 0 { ^ } {}
+    : ~ i i 0
+    ~ < i g_sh_pend_n {
+        : s k ( nurl_str_int i )
+        : s cal ( nurl_sym_get g_sh_pend ( nurl_str_cat `c` k ) )
+        : s ix ( nurl_sym_get g_sh_pend ( nurl_str_cat `x` k ) )
+        ? | | ( nurl_sym_has_word g_fn_mutates cal ix ) ( nurl_sym_has_word g_fn_reallocs cal ix ) ( nurl_sym_has_word g_fn_sink cal ix ) {
+            ( nurl_eprintln ( nurl_sym_get g_sh_pend ( nurl_str_cat `m` k ) ) )
+            ( __diag_abort )
+        } {}
+        = i + i 1
+    }
+}
+
 unsafe @ resolve_lit_handoffs → v {
     ? | == g_lm_pend 0 == 0 g_borrowck { ^ } {}
     : ~ i i 0
@@ -14690,6 +14719,39 @@ unsafe @ gen_call i lex i syms i cg → s {
             = g_member_path_on ? & == bck_arg_tt TT_DOT | != 0 g_borrowck != 0 __sx_me 1 0
             = av ( gen_operand lex syms cg )
             = g_member_path_on __mp_saved
+            // A handle that is a sealed representation's field (`. key d`,
+            // or a binding that views one) handed to a callee that may
+            // change it in place: a write to that field, as `= . key d …`
+            // is (agora #159).
+            ? & & & | & == bck_arg_tt TT_DOT != 0 g_msealed & != 0 g_sealed_views ( is_ident_tok bck_arg_tt ) ( bck_sound ) ! ( bck_unsafe_ctx ) ( __is_handle_ty ( nurl_get_last_type ) ) {
+                : s __sv ? == bck_arg_tt TT_DOT ? != 0 g_msealed g_msealed_ty `` ? & != 0 g_sealed_views ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__sealed_view` ) ``
+                ? != 0 ( nurl_str_len __sv ) {
+                    : s __six ( nurl_str_int arg_idx )
+                    : s __swhat ( nurl_str_cat3 `handing a field of it to '` ( bck_generic_base call_name ) `', which may change that field in place, is a write to a field of` )
+                    ? | | | & == arg_idx 0 ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __six ) ( nurl_sym_has_word g_fn_reallocs call_name __six ) ( nurl_sym_has_word g_fn_sink call_name __six ) {
+                        ( __sealed_die lex __sv __swhat )
+                    } {
+                        // A function of the program (not the library, whose
+                        // summaries are written) not compiled yet: its final
+                        // summary decides, at module end.
+                        : s __ssf ( nurl_sym_get2 g_vis_syms fname `__src_file` )
+                        ? & & == 0 ( nurl_sym_len g_fn_compiled call_name ) != 0 ( nurl_str_len __ssf ) ! ( bck_trusted_file __ssf ) {
+                            ? == g_sh_pend 0 { = g_sh_pend ( nurl_sym_new ) } {}
+                            : s __sk ( nurl_str_int g_sh_pend_n )
+                            : i __sln ( nurl_lex_line lex )
+                            : i __scl ( nurl_lex_col lex )
+                            ( nurl_sym_def g_sh_pend ( nurl_str_cat `c` __sk ) call_name )
+                            ( nurl_sym_def g_sh_pend ( nurl_str_cat `x` __sk ) __six )
+                            ( nurl_sym_def g_sh_pend ( nurl_str_cat `m` __sk )
+                            ( nurl_str_cat4 ( nurl_str_cat4 ( nurl_lex_filename lex ) `:` ( nurl_str_int __sln ) `:` )
+                            ( nurl_str_cat3 ( nurl_str_int __scl ) `: error: ` ( __sealed_msg __sv __swhat ) )
+                            ( nurl_str_cat3 `\n` ( nurl_lex_line_text_at lex __sln ) `\n` )
+                            ( nurl_diag_caret __scl ) ) )
+                            = g_sh_pend_n + g_sh_pend_n 1
+                        } {}
+                    }
+                } {}
+            } {}
             // (Only for a callee that may change it — a container mutator, a
             // summary that says so, or a function of the program's own not
             // compiled yet: asked before the sources are, agora #169.)
@@ -25569,9 +25631,28 @@ unsafe @ __callee_decl_name s cn → s {
 }
 
 // `what` (a literal of / a write to … of) a sealed `ty` outside `unsafe`.
-@ __sealed_die i lex s ty s what → v {
-    ( die lex ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
-    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block or the state behind one, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` ) )
+// A `:` binding of a handle read out of a sealed representation's field
+// (`: ( Vec i ) d . key d`), or from a binding that views one, views it
+// too: gen_call refuses handing it to a callee that may change it
+// (agora #159). Recorded only when it is one — or to clear a stale mark
+// of the same name — so a program with no such binding pays nothing.
+@ __sealed_view_bind i syms s name i rhs_tt s rhs_val → v {
+    // (Inside `unsafe` / the trusted library nothing is checked against it.)
+    ? ( bck_unsafe_ctx ) { ^ } {}
+    : s sv ? ( __is_handle_ty ( nurl_get_last_type ) ) ? == rhs_tt TT_DOT ? != 0 g_msealed g_msealed_ty `` ? & != 0 g_sealed_views ( is_ident_tok rhs_tt ) ( nurl_sym_get2 syms rhs_val `__sealed_view` ) `` ``
+    ? != 0 ( nurl_str_len sv ) {
+        = g_sealed_views + g_sealed_views 1
+        ( nurl_sym_def syms ( nurl_str_cat name `__sealed_view` ) sv )
+    } {
+        ? & != 0 g_sealed_views != 0 ( nurl_sym_len2 syms name `__sealed_view` ) { ( nurl_sym_def syms ( nurl_str_cat name `__sealed_view` ) `` ) } {}
+    }
+}
+
+@ __sealed_die i lex s ty s what → v { ( die lex ( __sealed_msg ty what ) ) }
+
+@ __sealed_msg s ty s what → s {
+    ^ ( nurl_str_cat4 what ` '` ( __ty_src_show ty )
+    `' is raw memory, which only an 'unsafe' function may touch: its representation (a raw-pointer field, a library handle's control block or the state behind one, or a 'raw' struct's fields) carries an invariant the code managing it relies on, so a value built or changed field by field could point anywhere. Build and change it through its API — its constructors and accessors (slice_from_vec / slice_empty / slice_len, vec_new / vec_len, …) — or, if this function genuinely manages that memory and you vouch for its memory safety, declare it 'unsafe @ name …'.` )
 }
 
 // The arguments the result of the call just generated may borrow from:
@@ -32807,6 +32888,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_line __ob_line
         = g_open_bind_col __ob_col
         : ~ s val ( gen_expr lex syms cg )
+        // A handle bound from a sealed representation's field, or from a
+        // binding that views one, views it too (gen_call, agora #159).
+        ( __sealed_view_bind syms name bck_rhs_tt bck_rhs_val )
         = g_open_bind_name __obn0
         = g_open_bind_line __obl0
         = g_open_bind_col __obc0
@@ -33155,6 +33239,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
             : ~ s val ( gen_expr lex syms cg )
+            // A handle bound from a sealed representation's field, or from a
+            // binding that views one, views it too (gen_call, agora #159).
+            ( __sealed_view_bind syms name bck_rhs_tt bck_rhs_val )
             = g_open_bind_name __obn0
             = g_open_bind_line __obl0
             = g_open_bind_col __obc0
@@ -36546,8 +36633,22 @@ unsafe @ gen_member i lex i syms i cg → s {
     // Raw provenance: what a read through a pointer here reaches (set at
     // the pointer reads below; a nested read in the object publishes its own).
     ? != 0 g_rprov_on { ( nurl_sym_set syms `__last_raw_prov__` `` ) } {}
+    = g_msealed 0
     : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
+    // A field read out of a sealed representation, at any depth of the
+    // chain (`. . k cn m`), or out of a binding that views one: a callee
+    // that may change it in place writes that representation (gen_call,
+    // agora #159).
+    // (Inside `unsafe` / the trusted library nothing is checked against it.)
+    ? ! ( bck_unsafe_ctx ) {
+        ? ( __ty_sealed ot ) { = g_msealed 1 = g_msealed_ty ( nurl_str_cat ot `` ) } {
+            ? & & == 0 g_msealed != 0 g_sealed_views ( is_ident_tok __mb_tt ) {
+                : s __mb_sv ( nurl_sym_get2 syms __mb_val `__sealed_view` )
+                ? != 0 ( nurl_str_len __mb_sv ) { = g_msealed 1 = g_msealed_ty ( nurl_str_cat __mb_sv `` ) } {}
+            } {}
+        }
+    } {}
     : ~ s __mb_prov ``
     ? & != 0 g_rprov_on ( is_ptr_ty ot ) {
         = __mb_prov ? ( is_ident_tok __mb_tt ) ( nurl_str_cat __mb_val `` ) ( nurl_sym_get syms `__last_raw_prov__` )
@@ -65669,6 +65770,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // (After every walk: the payload views are parked by the walks.)
         ( resolve_arc_mut )
         ( resolve_lit_handoffs )
+        ( resolve_sealed_handoffs )
         ( lazy_check_complete )
         ( dbg_flush )
         // Unused-symbol lint (--lint): every call site (incl. generic

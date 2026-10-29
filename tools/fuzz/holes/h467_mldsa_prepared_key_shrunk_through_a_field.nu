@@ -4,6 +4,8 @@
 // Closed: `mldsa_sign_mu_key` checks the key's vector sizes against its
 // level once a signature (__mldsa_key_ok) and returns an empty Vec for a
 // key that no longer matches.
+// Since agora #159 the program is rejected: handing a sealed field to
+// a callee that may change it in place is a write to that field.
 // v0.80.0: accepted; AddressSanitizer reported SEGV.
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/mldsa.nu`

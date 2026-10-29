@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A sealed struct's handle field handed to a callee that may change it
+  is a write to that field** (agora #159, h617–h620, h638). A sealed
+  representation (`raw :` or a standard-library `% Drop` struct) refused
+  a field write, but `( vec_clear [i] . key d )` — or the same through a
+  binding read out of the field, a copy of that binding, a nested field
+  chain, or a function of the program that clears its argument, even
+  one defined after the call —
+  emptied the field in place, and raw code that trusted the struct's
+  invariant read past the buffer. Each is now refused outside `unsafe`.
+  h459 and h467, which the RSA and ML-DSA signers had contained with a
+  check, are now rejected at compile time.
 - **A select waiter is counted, and a ready select makes none** (agora
   #167, h616). `chan_select_arm` left the waiter's raw address on the
   channel, so a waiter dropped while armed was fired, freed, by the next

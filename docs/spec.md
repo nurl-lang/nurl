@@ -475,7 +475,11 @@ A function or method declaration may carry a leading `unsafe` prefix
   library handle (`Slice`, `Vec`, `Box`, …), or a standard-library struct
   with its own `% Drop` (the state behind a handle — `TcpConnImpl`,
   `FileImpl`, `RawBlock`, … — whose destructor hands its fields to raw
-  code);
+  code). Handing a handle field of one (`. key d`, at any depth of a
+  field chain, or a binding read out of such a field) to a callee that
+  may change it in place — a container mutator, or a function whose
+  summary changes or takes that argument (for one defined later, its
+  final summary) — is a write to that field;
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
