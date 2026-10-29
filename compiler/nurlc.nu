@@ -8176,7 +8176,8 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     : b __jt & | == tt TT_QUEST == tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_join_own__` )
     : s __jown ? __jt ( nurl_sym_get syms `__last_join_own__` ) ``
     ( nurl_sym_def syms `__last_join_own__` `` )
-    : b __dcall & == tt TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+    : ~ b __dcall & == tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    ? & __dcall != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { = __dcall ( __call_answers syms tt ) } {}
     ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings ( __is_handle_ty dty ) {
         : s ro ? __jt __jown ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len ro ) {
@@ -8265,7 +8266,8 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
 // dropped when the arm ends.
 @ mem_arm_tail_own i syms i cg s val i tt → v {
     ? | | | != 0 g_did_ret != tt TT_LPAREN == 0 ( nurl_str_len val ) == 0 g_auto_drop_strings { ^ v } {}
-    ? | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ^ v } {}
+    ? != 0 ( nurl_sym_len syms `__last_value_borrow__` ) { ^ v } {}
+    ? != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ? ! ( __call_answers syms tt ) { ^ v } {} } {}
     : s dty ( nurl_get_last_type )
     : s rty ( __udrop_regty dty )
     ? ! ( __is_handle_ty rty ) { ^ v } {}
@@ -18765,8 +18767,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // a statement arm unless moved on. Whether the call's result is owned
     // at all is its `@.__nurl_retown` constant.
     : ~ s scrut_own ``
+    // (…a view the callee answers per call, too: __call_answers, #185.)
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
-    == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+    | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms match_first_tt )
     { = scrut_own ( mem_call_retown syms cg ) } {}
     // An enum a call handed over and nothing binds (`?? ( mk ) { … }`): an
     // owner of its own for the rest of the scope, which drops it — it
@@ -23351,8 +23354,10 @@ unsafe @ mem_path_to_indices s path → s {
     // a call's temporary is: the view may not outlive its statement — bind
     // the join first — agora #181.)
     : b __tjo & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at )
+    // (A call that hands back a view of its argument but answers per call
+    // whether it lent goes by that answer: __call_answers, agora #185.)
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
+    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
         // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
         ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
@@ -23798,6 +23803,17 @@ unsafe @ __src_has_raw_ptr s text → b {
     ( __mem_udrop_bind_flag syms cg ptr ty rhs_tt rhs_val rhs_borrow )
 }
 
+// Does the call just made (`tt` a `(`) answer per call whether it lent its
+// result (`@.__nurl_retdyn`, __hown_dyn)? Then whoever holds the result —
+// a binding (__mem_bind_call_bit), an argument's temporary, a discarded
+// value — goes by that answer: taken for a lend because the callee hands
+// back a view of its argument, a fresh result was never dropped (agora
+// #185).
+@ __call_answers i syms i rhs_tt → b {
+    ? != rhs_tt TT_LPAREN { ^ F } {}
+    ^ ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
+}
+
 // The binding `ptr` takes the ownership bit of the call just emitted
 // (mem_call_retown: the callee's per-call answer, or its module-end
 // constant). F when no call name was published.
@@ -23948,8 +23964,11 @@ unsafe @ __src_has_raw_ptr s text → b {
     // A handle from a call that returns a view into, or an alias of,
     // something its argument owns (`__sbuf`, an accessor handing back a
     // parameter's field — g_fn_ret_view / the returned-handle summary).
+    // (…unless that call answers per call whether it lent: its bit
+    // decides, as for a callee summarised as lending — agora #185.)
     ? & & ( __is_handle_ty ty ) == rhs_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
-    { ( mem_udrop_flag_set syms cg ptr `0` ) ( __sb syms ptr `1` ) ^ v } {}
+    { ? ( __call_answers syms rhs_tt ) { ? ( __mem_bind_call_bit syms cg ptr ) { ^ v } {} } {}
+        ( mem_udrop_flag_set syms cg ptr `0` ) ( __sb syms ptr `1` ) ^ v } {}
     // A callee not compiled yet: whether it hands back a fresh value or a
     // borrow (`^ x` out of a `vec_get`) is known at module end. (So for a
     // value that cannot be copied, owned or lent per call — a struct with
@@ -55353,7 +55372,9 @@ unsafe @ __clo_take_capture i syms s name → v {
         // A borrow by name (`vec_get…`) or a view: lent. A callee summarised
         // as lending (`__ret_borrow`) may lend on some paths only — its bit
         // decides below (always "lent" when it does not answer per call).
-        ? | ! ( __arm_call_bit_ok syms ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+        // (A view that the callee answers per call goes by that answer:
+        // __call_answers, agora #185.)
+        ? | ! ( __arm_call_bit_ok syms ) & != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ! ( __call_answers syms tt )
         { ^ ( nurl_str_cat `1` `` ) } {}
         // Otherwise the call's ownership decides (mem_call_retown).
         : s ro ( mem_call_retown syms cg )
@@ -55597,7 +55618,7 @@ unsafe @ __clo_take_capture i syms s name → v {
     // on some paths only, and then answers per call; otherwise its bit is
     // the module-end "lent" (mem_fn_lends), as before.
     ? | == tt0 TT_LPAREN == ht TT_LPAREN { ? & ( __arm_call_bit_ok syms )
-        == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
+        | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms TT_LPAREN ) {
             : s r ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len r ) { ^ r } {}
         } {} } {}
@@ -55621,7 +55642,7 @@ unsafe @ __clo_take_capture i syms s name → v {
 @ mem_arm_struct_hown i syms i cg s ty i tt0 → s {
     ? != tt0 TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
     ? | ( __is_handle_ty ( __udrop_regty ty ) ) ! ( __is_hown_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? | ! ( __arm_call_bit_ok syms ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | ! ( __arm_call_bit_ok syms ) & != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ! ( __call_answers syms tt0 ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_call_retown syms cg )
 }
 
