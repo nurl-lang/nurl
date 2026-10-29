@@ -107,6 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `?` / `??` assigned to an `inout` parameter or a by-reference
+  capture hands the caller a value of its own** (Agora #183, h760–h767).
+  `= t ? c x ( mk )` with `t` an `inout` parameter, `x` a local of the
+  function, gave the caller a lend of `x`. So did a field of a local
+  struct, a borrowed parameter, a loop body's Vec, and the same inside a
+  closure over a captured `t`. The function then dropped what it bound,
+  and the caller read freed memory. The caller's old value also leaked,
+  for any join on the right, including one that handed `t` back to
+  itself. A plain `= t x` already handled both. Now the join measures
+  its arms against the caller's scope (#179's rule), its value is made
+  the caller's own on every path (copied where it was lent), and then
+  the caller's old value is dropped.
 - **A `??` over an enum literal drops the literal** (Agora #182,
   h753–h759). `?? @ E { S ( mk ) } { … }` gave the literal no owner, so
   its payload leaked, a struct payload's box too, and in a loop every

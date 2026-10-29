@@ -714,3 +714,11 @@ h756_literal_scrutinee_payload_returned	§7.6	A2	agora #182: a payload, or a fie
 h757_literal_scrutinee_in_a_loop	§7.6	A2	agora #182: an enum literal scrutinee in a loop	runs-clean
 h758_nested_literal_scrutinee	§7.6	A2	agora #182: an enum literal scrutinee whose payload is an enum literal	runs-clean
 h759_binding_payload_literal_scrutinee	§7.6	A2	agora #182: an enum literal scrutinee holding a binding's value	runs-clean
+h760_inner_local_join_to_inout_param	§7.6	A2	agora #183: a function's String handed through a `?` to an `inout` parameter	runs-clean
+h761_local_field_join_to_inout_param	§7.6	A2	agora #183: a local struct's field handed through a `?` to an `inout` parameter	runs-clean
+h762_inner_local_join_to_byref_capture	§7.6	A2	agora #183: a closure's local handed through a `?` to a binding it captured by reference	runs-clean
+h763_fresh_join_to_inout_param	§7.6	A2	agora #183: a `?` of fresh values assigned to an `inout` parameter: the caller's old value	runs-clean
+h764_borrowed_param_join_to_inout_param	§7.6	A2	agora #183: a borrowed parameter handed through a `?` to an `inout` parameter	runs-clean
+h765_self_join_to_inout_param	§7.6	A2	agora #183: an `inout` parameter handed back to itself through a `?`	runs-clean
+h766_option_join_to_inout_param	§7.6	A2	agora #183: an option `?` assigned to an `inout ?String`	runs-clean
+h767_loop_local_vec_join_to_inout_param	§7.6	A2	agora #183: a loop body's Vec handed through a `?` to an `inout` parameter	runs-clean
