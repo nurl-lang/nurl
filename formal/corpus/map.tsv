@@ -667,3 +667,24 @@ h693_binding_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum lit
 h694_enum_literal_handed_back_whole	§7.6	A2	agora #177: an enum literal that cannot be copied, handed back by its callee	runs-clean
 h695_enum_literal_to_a_borrower_in_a_loop	§7.6	A2	agora #177: an enum literal with an option payload handed to a borrower in a loop	runs-clean
 h696_enum_literal_payload_of_payload_lent_back	§7.6	A2	agora #177: an enum literal whose callee lends back its payload's payload	runs-clean
+h700_struct_param_field_through_a_cond_then_reassigned	§7.6	A2	agora #178: a struct parameter's field handed back through a `?`, the argument reassigned while the result is read	rejected
+h701_struct_param_field_through_a_cond_literal	§7.6	A2	agora #178: a struct parameter's field handed back through a `?`, the argument a literal	runs-clean
+h702_struct_param_field_through_an_else_arm	§7.6	A2	agora #178: the same through the else arm	runs-clean
+h703_payload_field_through_a_match_literal	§7.6	A2	agora #178: a field of an enum parameter's payload handed back through a `??` arm, the argument a literal	runs-clean
+h704_payload_field_through_a_match_then_reassigned	§7.6	A2	agora #178: the same, the argument a binding reassigned while the result is read	rejected
+h705_payload_field_through_a_cond_in_a_match_arm	§7.6	A2	agora #178: a payload's field handed back through a `?` inside a `??` arm	runs-clean
+h706_payload_nested_field_through_a_match	§7.6	A2	agora #178: a payload's nested field (`. . q p s`) handed back through a `??` arm	runs-clean
+h707_option_param_payload_field_through_a_match	§7.6	A2	agora #178: a field of an option parameter's payload handed back through a `??` arm, the argument a literal	runs-clean
+h708_option_param_payload_field_then_reassigned	§7.6	A2	agora #178: the same, the argument a binding reassigned while the result is read	rejected
+h709_struct_param_nested_field_through_a_cond	§7.6	A2	agora #178: a struct parameter's nested field handed back through a `?`, the argument reassigned	rejected
+h710_payload_field_through_a_block_arm	§7.6	A2	agora #178: a payload's field handed back as a `??` block arm's tail (`V p → { . p s }`)	runs-clean
+h711_struct_field_of_a_struct_param_through_a_cond	§7.6	A2	agora #178: a struct field (a String inside) of a parameter handed back through a `?`, the argument reassigned	rejected
+h712_vec_field_of_a_struct_param_through_a_cond	§7.6	A2	agora #178: a Vec field of a parameter handed back through a `?`, the argument reassigned	rejected
+h713_local_struct_field_through_a_cond_returned	§7.6	A2	agora #178: a local struct's field returned through a `?`	runs-clean
+h714_sink_param_field_through_a_cond_returned	§7.6	A2	agora #178: a `sink` parameter's field returned through a `?`	runs-clean
+h715_local_enum_payload_field_returned	§7.6	A2	agora #178: a field of a local enum's payload returned through a `??` arm	runs-clean
+h716_sink_enum_payload_field_returned	§7.6	A2	agora #178: a field of a `sink` enum parameter's payload returned through a `??` arm	runs-clean
+h717_call_temp_payload_field_returned	§7.6	A2	agora #178: a field of the payload of a match's call temporary returned through its arm	runs-clean
+h718_local_drop_field_through_a_cond_returned	§7.6	A2	agora #178: a `% Drop` field of a local returned through a `?`: it cannot be copied	rejected
+h719_local_drop_field_through_a_cond_fall_off	§7.6	A2	agora #178: the same as the function's fall-off value	rejected
+h720_payload_through_a_cond_in_an_arm_then_reassigned	§7.6	A2	agora #178: an enum parameter's payload handed back through a `?` inside a `??` arm, the argument reassigned while the result is read	rejected

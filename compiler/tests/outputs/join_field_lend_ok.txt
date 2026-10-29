@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+85
+168
+42
+4200
+hello world, long enough for a heap buffer
