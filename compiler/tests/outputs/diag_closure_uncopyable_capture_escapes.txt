@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_uncopyable_capture_escapes.nu:23:5: error: this returns a closure — or a value holding one — that holds a copy of the handle of 'v', and 'v' is released when the function returns. 'v' has no Clone (a Vec of values with a Drop of their own, an option of one, a trait object, a closure), so nothing can give the closure a copy of its own: running it would read freed memory (agora #161). Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or keep 'v' alive in a caller that outlives the closure.
+    ^ @ H { f 0 }
+    ^
+compiler/tests/diag_closure_uncopyable_capture_escapes.nu:30:5: error: 'out' is storage the caller holds (a parameter, or what one points into), and this stores into it a closure — or a value holding one — that holds a copy of the handle of 'w', which is released when this function returns. 'w' has no Clone (a Vec of values with a Drop of their own, an option of one, a trait object, a closure), so storing the closure cannot give it a copy of its own: the caller would run it on freed memory (agora #161). Share the value instead — bind it as an ( Rc T ) (rc_new) and capture that — or take 'w' as a parameter so the caller owns it.
+    ( vec_push [( @ i )] out g )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
