@@ -707,5 +707,12 @@ h749_match_arm_block_local_field_returned	§7.6	A2	agora #180: a `??` arm block'
 h750_cond_arm_block_local_field_returned	§7.6	A2	agora #180: a `?` arm block's tail field of the arm's own struct, returned	runs-clean
 h751_match_arm_block_local_field_bound	§7.6	A2	agora #180: a `??` arm block's tail field of the arm's own struct, bound by a `:`	runs-clean
 h752_arm_block_local_drop_struct_field	§7.6	A2	agora #180: a field of an arm block's own struct that has a `% Drop`	runs-clean
+h753_string_payload_literal_scrutinee	§7.6	A2	agora #182: a `??` over an enum literal with a String payload	runs-clean
+h754_struct_payload_literal_scrutinee	§7.6	A2	agora #182: the same with a boxed struct payload, as a statement	runs-clean
+h755_struct_payload_literal_scrutinee_bound	§7.6	A2	agora #182: the same bound by a `:`	runs-clean
+h756_literal_scrutinee_payload_returned	§7.6	A2	agora #182: a payload, or a field of one, of an enum literal scrutinee returned	runs-clean
+h757_literal_scrutinee_in_a_loop	§7.6	A2	agora #182: an enum literal scrutinee in a loop	runs-clean
+h758_nested_literal_scrutinee	§7.6	A2	agora #182: an enum literal scrutinee whose payload is an enum literal	runs-clean
+h759_binding_payload_literal_scrutinee	§7.6	A2	agora #182: an enum literal scrutinee holding a binding's value	runs-clean
 h731_owning_join_viewed_inside_its_statement	§1	A2	agora #181: a `??` join with an owning arm handed to string_data inside a consuming call: the owning arm's value was dropped by no one	runs-clean
 h732_owning_join_viewed_past_its_statement	§1	A2	agora #181: the same with the view bound past its statement: rejected as a view of a call's temporary is	rejected

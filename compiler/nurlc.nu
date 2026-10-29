@@ -18777,9 +18777,9 @@ unsafe @ gen_match i lex i syms i cg → s {
     // before it — it overwrote it, and that one leaked — and both take its
     // journal registration with them (mem_journal_push_tmpown).
     : ~ b m_tmp_enum F
-    ? & & & == match_first_tt TT_LPAREN != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
+    ? & & & | == match_first_tt TT_LPAREN == match_first_tt TT_AT != 0 g_auto_drop_strings == 0 ( nurl_str_starts match_type `{ i1, ` )
     | ( __is_autodrop_enum match_type syms ) ( __is_handle_enum match_type ) {
-        : s mte_own ( mem_call_retown syms cg )
+        : s mte_own ? == match_first_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len mte_own ) {
             : s mte_p ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print mte_p ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty match_type ) ) ( nurl_print `\n` )

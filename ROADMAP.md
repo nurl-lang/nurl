@@ -232,7 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found,
-  through probe h752, is closed and held by a probe; the rules for
+  through probe h759, is closed and held by a probe; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
