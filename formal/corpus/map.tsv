@@ -694,3 +694,5 @@ h727_bindings_moved_into_a_literal_join_argument	§7.6	A2	agora #174: the same w
 h728_call_join_handed_to_a_reader	§7.6	A2	agora #174: the same with calls in the arms: the join's ownership bit was never asked	runs-clean
 h729_struct_literal_match_join_handed_to_a_reader	§7.6	A2	agora #174: the same through a `??` over an option	runs-clean
 h730_binding_beside_a_literal_in_a_join_argument	§7.6	A2	agora #174: a binding arm beside a literal arm: dropped on the literal's path only	runs-clean
+h731_owning_join_viewed_inside_its_statement	§1	A2	agora #181: a `??` join with an owning arm handed to string_data inside a consuming call: the owning arm's value was dropped by no one	runs-clean
+h732_owning_join_viewed_past_its_statement	§1	A2	agora #181: the same with the view bound past its statement: rejected as a view of a call's temporary is	rejected

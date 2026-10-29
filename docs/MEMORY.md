@@ -996,7 +996,7 @@ the compiler accepted and that leaked, freed memory they did not own or read
 freed memory; converting the packages' handles to `Arc`, removing
 gratuitous `unsafe` across `packages/`, modelling closures for the
 mechanized proof and making closure types generic arguments found more;
-all are closed, each a probe CI now holds (h142–h730):
+all are closed, each a probe CI now holds (h142–h732):
 
 - an owner moved by one argument of a call and read by another (§2.1),
   and a keyword-argument call to a forward function that consumes its
@@ -1489,7 +1489,9 @@ The rules that carry it:
   may view a temporary argument (`( string_data ( mk ) )`) is used inside
   a call that consumes the view; kept past it — bound, returned, assigned,
   stored, taken by a join — it is an error naming the same fix (§1,
-  Temporaries).
+  Temporaries). A `?` / `??` join with an arm that owns its value is such
+  a temporary too (`( string_data ?? ( vec_get v k ) { T x → x F _ → (
+  string_new ) } )`): bind the join first (h731, h732).
 - **A container keeps what it is handed.** A view stored in a `Vec`, used
   as a map key or handed to a function that keeps its argument may live no
   longer than its source.
@@ -1757,7 +1759,7 @@ of them is tested continuously:
   borrows and views, `inout` with its bounds, structs and enums, closures
   and trait objects with their captures (§2.11), panics and the drop
   journal; `formal/corpus/map.tsv` maps every regression probe
-  (`h01–h730`) to the rule that rejects it. See
+  (`h01–h732`) to the rule that rejects it. See
   [`formal/README.md`](../formal/README.md).
 - **Hole probes.** Every way safe code has been shown to break the
   guarantee is kept as a program that must be rejected, or run clean
