@@ -694,3 +694,9 @@ h727_bindings_moved_into_a_literal_join_argument	§7.6	A2	agora #174: the same w
 h728_call_join_handed_to_a_reader	§7.6	A2	agora #174: the same with calls in the arms: the join's ownership bit was never asked	runs-clean
 h729_struct_literal_match_join_handed_to_a_reader	§7.6	A2	agora #174: the same through a `??` over an option	runs-clean
 h730_binding_beside_a_literal_in_a_join_argument	§7.6	A2	agora #174: a binding arm beside a literal arm: dropped on the literal's path only	runs-clean
+h740_inner_local_through_a_cond_assigned_outward	§7.6	A2	agora #179: an inner block's String handed through a `?` to a binding of an outer block	runs-clean
+h741_inner_struct_field_through_a_cond_assigned_outward	§7.6	A2	agora #179: an inner block's struct field handed through a `?` to a binding of an outer block	runs-clean
+h742_inner_view_through_a_cond_assigned_outward	§7.6	A2	agora #179: a view of an inner block's struct field handed through a `?` to a binding of an outer block	runs-clean
+h743_loop_locals_through_a_nested_cond_assigned_outward	§7.6	A2	agora #179: a loop body's Strings handed through a nested `?` to a binding outside the loop	runs-clean
+h744_inner_payload_field_through_a_match_assigned_outward	§7.6	A2	agora #179: a field of an inner block's enum payload handed through a `??` to a binding of an outer block	runs-clean
+h745_inner_drop_field_through_a_cond_assigned_outward	§7.6	A2	agora #179: an inner block's `% Drop` field handed through a `?` to a binding of an outer block: it cannot be copied	rejected
