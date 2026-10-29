@@ -38385,7 +38385,12 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
             { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
             { ? ! | fld_param_lend fld_rlent { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
-        { ? & & agg_returned agg_is_wrap == ( nurl_str_get fld_lent 0 ) 37 {
+        {  // (A payload that is a `?` / `??`: lent per call only when what it
+            // lent is the caller's — a local's lend is copied, as `^ ?` does;
+            // agora #184.)
+            : ~ b __dyn_ok & & agg_returned agg_is_wrap == ( nurl_str_get fld_lent 0 ) 37
+            ? & __dyn_ok | == fld_first_tt TT_QUEST == fld_first_tt TT_QUESTQUEST { = __dyn_ok ( __phi_lends_params_only syms ) } {}
+            ? __dyn_ok {
                 // A returned wrap whose payload is lent on some runs only (a
                 // payload of a call's `?T`, borrowed when the callee lent it):
                 // the function answers per call — the caller owns the result
