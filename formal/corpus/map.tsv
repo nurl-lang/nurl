@@ -598,3 +598,4 @@ h617_sealed_field_viewed_by_a_binding_then_cleared	§3.3d	B	`: ( Vec i ) d . k d
 h618_sealed_field_cleared_by_a_user_function	§3.3d	B	`( wipe . k d )` with `wipe` a function of the program that clears its Vec: a callee whose summary changes the argument is refused a sealed field (agora #159).	rejected
 h619_sealed_field_of_a_nested_struct_cleared	§3.3d	B	`( vec_clear [i] . . k cn m )`: a sealed representation's field two levels down (agora #159).	rejected
 h620_sealed_field_view_copied_then_cleared	§3.3d	B	`: ( Vec i ) d2 d` from a view `d` of a sealed field, then `( vec_clear [i] d2 )`: a copy of a view views it too (agora #159).	rejected
+h621_sealed_field_cleared_by_a_later_function	§3.3d	B	as h618 with `wipe` defined after its caller: the call is parked and decided at module end by the callee's final summary (resolve_sealed_handoffs; agora #159).	rejected

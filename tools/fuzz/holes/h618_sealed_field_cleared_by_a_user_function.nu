@@ -1,9 +1,9 @@
 // H618: a function of the program that clears the Vec it is given, handed
 // a sealed RsaKey's field: `( wipe . k d )` changed the key in place, the
 // same as the container mutator in h459 does.
-// Closed: a callee whose summary says it changes the argument (or one not
-// compiled yet) is refused a sealed representation's field outside
-// `unsafe` (agora #159).
+// Closed: a callee whose summary says it changes the argument is refused
+// a sealed representation's field outside `unsafe` (agora #159; h621 for
+// one defined after the call).
 // v0.80.0: accepted; _rsa_sign_raw checks the limb counts since h459.
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rsa_mont.nu`
