@@ -724,3 +724,8 @@ h766_option_join_to_inout_param	§7.6	A2	agora #183: an option `?` assigned to a
 h767_loop_local_vec_join_to_inout_param	§7.6	A2	agora #183: a loop body's Vec handed through a `?` to an `inout` parameter	runs-clean
 h731_owning_join_viewed_inside_its_statement	§1	A2	agora #181: a `??` join with an owning arm handed to string_data inside a consuming call: the owning arm's value was dropped by no one	runs-clean
 h732_owning_join_viewed_past_its_statement	§1	A2	agora #181: the same with the view bound past its statement: rejected as a view of a call's temporary is	rejected
+h768_local_join_in_returned_option	§7.6	A2	agora #184: an option literal returned with a `?` over a local String as its payload	runs-clean
+h769_local_field_join_in_returned_option	§7.6	A2	agora #184: the same with a local struct's field	runs-clean
+h770_local_join_in_returned_result	§7.6	A2	agora #184: a result literal returned with a `?` over a local String	runs-clean
+h771_local_join_in_option_fall_off	§7.6	A2	agora #184: an option literal over a local's `?` as the function's fall-off value	runs-clean
+h772_local_match_in_returned_option	§7.6	A2	agora #184: an option literal returned with a `??` over a local option as its payload	runs-clean
