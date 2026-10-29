@@ -60,7 +60,8 @@ Every turn: brief — what is new (each message once; long channel posts cut, ms
 Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
 Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
 Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
-Remember: note_set / note / notes for facts that outlive this conversation, per project=<name> or global.`
+Remember: note_set / note / notes for facts that outlive this conversation, per project=<name> or global. A note_promote'd note is a rule: brief shows each rule to every agent once — follow them.
+Skills: skills lists playbooks kept for every agent here; skill name=X reads one. Something about agora itself in your way? feedback tells the people who run it.`
 
 // ── The service state ────────────────────────────────────────────────
 //
@@ -183,9 +184,21 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 : AgCaller {
     b authed
     String agent
+    // Signed in, where the call stands beyond its repository's agora
+    // (web.nu fills these in); '' locally, where the one file is all of it.
+    String org  // the organisation (tenant id)
+    String repo  // the repository key
+    String person  // who is signed in (e-mail)
+    String org_db  // the organisation's file: its skills
+    String feedback_db  // the service's file of feedback
 }
 
-@ ag_caller_anon → AgCaller { ^ @ AgCaller { F ( string_new ) } }
+@ ag_caller_anon → AgCaller { ^ @ AgCaller { F ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) } }
+
+// Agent `agent`, with nothing beyond the store it is called on.
+@ ag_caller_as s agent → AgCaller {
+    ^ @ AgCaller { T ( string_from agent ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) }
+}
 
 // The store keeps sha256(token), never the token.
 @ ag_token_hash s token → String {
@@ -202,7 +215,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : String h ( ag_token_hash token )
     : ?String id ( ag_agent_by_token st ( string_data h ) now )
     ?? id {
-        T a → { ^ @ AgCaller { T a } }
+        T a → { ^ ( ag_caller_as ( string_data a ) ) }
         F _ → { ^ ( ag_caller_anon ) }
     }
 }
@@ -243,7 +256,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
             ( ag_agent_create_from st name `` ( string_data h ) origin now )
         }
     }
-    ^ @ AgCaller { T ( string_from name ) }
+    ^ ( ag_caller_as name )
 }
 
 // Why the last local resolution refused (empty when it did not), replaced
@@ -266,7 +279,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         ?? ( json_obj_get ctx `agent` ) {
             T a → {
                 : s id ( json_as_str a )
-                ? > ( nurl_str_len id ) 0 { ^ @ AgCaller { T ( string_from id ) } } {}
+                ? > ( nurl_str_len id ) 0 { ^ ( ag_caller_as id ) } {}
             }
             F _ → {}
         }
@@ -660,6 +673,50 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ? with_body { ( json_obj_set o `body` ( json_str_lit ( string_data . n body ) ) ) } {}
     ( json_obj_set o `author` ( json_str_lit ( string_data . n author ) ) )
     ( json_obj_set o `updated` ( json_int . n updated ) )
+    ( json_obj_set o `rule` ( json_bool . n rule ) )
+    ? . n rule { ( json_obj_set o `promoted_by` ( json_str_lit ( string_data . n promoted_by ) ) ) } {}
+    ^ o
+}
+
+// `rule build (bob 3d):` and the body, whole — a rule is read in full.
+@ __ag_rule_text String out AgNote n i now → v {
+    ( string_push_str out `rule ` )
+    ( __ag_note_ref out ( string_data . n project ) ( string_data . n key ) )
+    ( string_push_str out ` (` )
+    ( string_push_str out ( string_data . n author ) )
+    ( string_push_str out ` ` )
+    ( __ag_age out now . n updated )
+    ( string_push_str out `):\n` )
+    ( string_push_str out ( string_data . n body ) )
+    ? ( string_ends_with . n body `\n` ) {} { ( string_push_str out `\n` ) }
+}
+
+@ _ag_skill_json AgSkill k b with_body → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `name` ( json_str_lit ( string_data . k name ) ) )
+    ( json_obj_set o `description` ( json_str_lit ( string_data . k description ) ) )
+    ? with_body { ( json_obj_set o `body` ( json_str_lit ( string_data . k body ) ) ) } {}
+    ( json_obj_set o `enabled` ( json_bool . k enabled ) )
+    ( json_obj_set o `author` ( json_str_lit ( string_data . k author ) ) )
+    ( json_obj_set o `created` ( json_int . k created ) )
+    ( json_obj_set o `updated` ( json_int . k updated ) )
+    ^ o
+}
+
+@ _ag_feedback_json AgFeedback f → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `id` ( json_int . f id ) )
+    ( json_obj_set o `kind` ( json_str_lit ( string_data . f kind ) ) )
+    ( json_obj_set o `title` ( json_str_lit ( string_data . f title ) ) )
+    ( json_obj_set o `body` ( json_str_lit ( string_data . f body ) ) )
+    ( json_obj_set o `org` ( json_str_lit ( string_data . f org ) ) )
+    ( json_obj_set o `repo` ( json_str_lit ( string_data . f repo ) ) )
+    ( json_obj_set o `agent` ( json_str_lit ( string_data . f agent ) ) )
+    ( json_obj_set o `person` ( json_str_lit ( string_data . f person ) ) )
+    ( json_obj_set o `status` ( json_str_lit ( string_data . f status ) ) )
+    ( json_obj_set o `reply` ( json_str_lit ( string_data . f reply ) ) )
+    ( json_obj_set o `created` ( json_int . f created ) )
+    ( json_obj_set o `updated` ( json_int . f updated ) )
     ^ o
 }
 
@@ -872,12 +929,45 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 
     : Json s_notes ( __ag_sc oidc )
     ? oidc {} { ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F ) }
-    ( __ag_def v `notes` `List notes: keys, authors, ages (no bodies).` s_notes T T )
+    ( mcp_schema_prop s_notes `rules` `boolean` `true: only the rules, in full.` F )
+    ( __ag_def v `notes` `List notes: keys, authors, ages (no bodies); rules marked.` s_notes T T )
 
     : Json s_nd ( __ag_sc oidc )
     ( mcp_schema_prop s_nd `key` `string` `Note key.` T )
     ? oidc {} { ( __ag_sc_project s_nd ) }
-    ( __ag_def v `note_del` `Delete a note.` s_nd F T )
+    ( __ag_def v `note_del` `Delete a note (a rule must be demoted first).` s_nd F T )
+
+    : Json s_np ( __ag_sc oidc )
+    ( mcp_schema_prop s_np `key` `string` `Note key.` T )
+    ( mcp_schema_prop s_np `rule` `boolean` `false: make it a plain note again (default true).` F )
+    ? oidc {} { ( __ag_sc_project s_np ) }
+    ( __ag_def v `note_promote` `Make a note a rule: a practice agreed to bind everyone here. Every agent is shown each rule once, in full, in its brief.` s_np F T )
+
+    : Json s_skills ( __ag_sc oidc )
+    ( mcp_schema_prop s_skills `all` `boolean` `true: the switched-off ones too.` F )
+    ( __ag_def v `skills` `Skills: playbooks kept for every agent of the organisation (switched on or off on the web page). skill name=X reads one.` s_skills T T )
+
+    : Json s_skill ( __ag_sc oidc )
+    ( mcp_schema_prop s_skill `name` `string` `Skill name.` T )
+    ( __ag_def v `skill` `Read one skill in full.` s_skill T T )
+
+    : Json s_ss ( __ag_sc oidc )
+    ( mcp_schema_prop s_ss `name` `string` AG_NAME_DESC T )
+    ( mcp_schema_prop s_ss `description` `string` `One line: when to use it.` F )
+    ( mcp_schema_prop s_ss `body` `string` `The playbook, up to 64 KiB; required for a new skill.` F )
+    ( mcp_schema_prop s_ss `enabled` `boolean` `Switch it on or off (default: as it was; on for a new one).` F )
+    ( __ag_def v `skill_set` `Write or update a skill for every agent of the organisation, or switch one on or off.` s_ss F T )
+
+    : Json s_fb ( __ag_sc oidc )
+    : Json kinds ( json_arr_new )
+    ( json_arr_push kinds ( json_str_lit `feedback` ) )
+    ( json_arr_push kinds ( json_str_lit `improvement` ) )
+    ( json_arr_push kinds ( json_str_lit `feature` ) )
+    ( json_arr_push kinds ( json_str_lit `bug` ) )
+    ( mcp_schema_prop_enum s_fb `kind` `string` `Default feedback.` kinds F )
+    ( mcp_schema_prop s_fb `title` `string` `One line, max 200.` T )
+    ( mcp_schema_prop s_fb `body` `string` `Details: what you tried, what would help.` F )
+    ( __ag_def v `feedback` `Tell the people who run this agora about agora itself: a bug, an improvement, a feature you want (your project's work is a task instead). It leaves your repository: no secrets.` s_fb F T )
 
     ^ v
 }
@@ -887,7 +977,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // GET /api shows it as `text_arg`.
 @ ag_op_text_arg s name → s {
     ? | | != 0 ( nurl_str_eq name `post` ) != 0 ( nurl_str_eq name `send` ) != 0 ( nurl_str_eq name `note_set` ) { ^ `body` } {}
-    ? != 0 ( nurl_str_eq name `task_post` ) { ^ `body` } {}
+    ? | | != 0 ( nurl_str_eq name `task_post` ) != 0 ( nurl_str_eq name `skill_set` ) != 0 ( nurl_str_eq name `feedback` ) { ^ `body` } {}
     ? != 0 ( nurl_str_eq name `task_done` ) { ^ `result` } {}
     ? != 0 ( nurl_str_eq name `task_release` ) { ^ `note` } {}
     ? != 0 ( nurl_str_eq name `status` ) { ^ `text` } {}
@@ -1041,12 +1131,32 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ ( _ag_ok o t )
 }
 
-@ __ag_op_brief AgStore st s me Json args i now → AgRes {
+@ __ag_op_brief AgStore st AgCaller c Json args i now → AgRes {
+    : s me ( string_data . c agent )
     : Json o ( json_obj_new )
     : String t ( string_from `you: ` )
     ( string_push_str t me )
     ( json_obj_set o `agent` ( json_str_lit me ) )
     ( string_push_str t `\n` )
+    // The rules this agent has not been shown: every one, the first time.
+    : ( Vec AgNote ) nr ( ag_rules_new st me )
+    : i nnr ( vec_len [AgNote] nr )
+    : Json rj ( json_arr_new )
+    ? > nnr 0 {
+        ( string_push_str t `rules — new or changed; they bind everyone here:\n` )
+        : ~ i k 0
+        ~ < k nnr {
+            ?? ( vec_get [AgNote] nr k ) {
+                T r → {
+                    ( __ag_rule_text t r now )
+                    ( json_arr_push rj ( _ag_note_json r T ) )
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+    } {}
+    ( json_obj_set o `rules` rj )
     ( __ag_deliver st me args AG_BRIEF_MAX_BODY now o t )
     : ( Vec AgTask ) mine ( ag_tasks st `mine` me `` AG_LIMIT_MAX now )
     : i nm ( vec_len [AgTask] mine )
@@ -1055,21 +1165,49 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         ( string_push_str t `holding:\n` )
         ( __ag_tasks_text t mine now )
     } {}
-    : AgCounts c ( ag_counts st me )
-    ( json_obj_set o `open_tasks` ( json_int . c open ) )
-    ( json_obj_set o `posted_open` ( json_int . c posted ) )
-    ( json_obj_set o `notes` ( json_int . c notes ) )
+    : AgCounts n ( ag_counts st me )
+    ( json_obj_set o `open_tasks` ( json_int . n open ) )
+    ( json_obj_set o `posted_open` ( json_int . n posted ) )
+    ( json_obj_set o `notes` ( json_int . n notes ) )
+    ( json_obj_set o `rule_count` ( json_int . n rules ) )
+    : i nsk ( __ag_skill_count_for st c )
+    ( json_obj_set o `skills` ( json_int nsk ) )
     ( string_push_str t `open tasks: ` )
-    ( string_push_int t . c open )
-    ? > . c posted 0 {
+    ( string_push_int t . n open )
+    ? > . n posted 0 {
         ( string_push_str t ` · you posted ` )
-        ( string_push_int t . c posted )
+        ( string_push_int t . n posted )
         ( string_push_str t ` unfinished` )
     } {}
     ( string_push_str t ` · notes: ` )
-    ( string_push_int t . c notes )
+    ( string_push_int t . n notes )
+    ? > . n rules 0 {
+        ( string_push_str t ` · rules: ` )
+        ( string_push_int t . n rules )
+    } {}
+    ? > nsk 0 {
+        ( string_push_str t ` · skills: ` )
+        ( string_push_int t nsk )
+    } {}
     ( string_push_str t `\n` )
     ^ ( _ag_ok o t )
+}
+
+// The organisation's file when signed in (a store of its own, opened per
+// use); none locally, where the skills are in this agora's own file.
+@ __ag_org_st AgStore st AgCaller c → AgStore {
+    ? > ( string_len . c org_db ) 0 { ^ @ AgStore { ( string_from ( string_data . c org_db ) ) T @ ?Database { F } } } {}
+    ^ @ AgStore { ( string_from ( string_data . st path ) ) . st ok @ ?Database { F } }
+}
+
+// How many skills are switched on for the caller: on this operation's own
+// connection locally, from the organisation's file signed in.
+@ __ag_skill_count_for AgStore st AgCaller c → i {
+    ? > ( string_len . c org_db ) 0 {
+        : AgStore os ( __ag_org_st st c )
+        ^ ( ag_skill_count os )
+    } {}
+    ^ ( ag_skill_count st )
 }
 
 & `c` @ nurl_atomic_i64_inc *u p → i
@@ -1110,7 +1248,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // then deliver. Polls the file every AG_WAIT_STEP_MS: a worker thread
 // (or the stdio process) sits in the loop for the duration, which is
 // the price of a wait that costs the caller nothing.
-@ __ag_op_wait AgStore st s me Json args i now → AgRes {
+@ __ag_op_wait AgStore st AgCaller c Json args i now → AgRes {
+    : s me ( string_data . c agent )
     : i timeout ( __ag_clamp ( _ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : ~ b busy F
     ? != 0 g_ag_wait_cap {
@@ -1126,8 +1265,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     }
     ? & != 0 g_ag_wait_cap ! busy { ( __ag_wait_leave ) } {}
     : i then ( now_seconds )
-    ? ( __ag_arg_bool args `deliver` T ) {
-        : AgRes r ( __ag_op_brief st me args then )
+    ? ( _ag_arg_bool args `deliver` T ) {
+        : AgRes r ( __ag_op_brief st c args then )
         ? busy { ^ ( __ag_busy_note r ) } {}
         ^ r
     } {}
@@ -1162,7 +1301,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // A boolean argument (JSON true/false, or "true"/"false"/"1"/"0").
-@ __ag_arg_bool Json args s key b dflt → b {
+@ _ag_arg_bool Json args s key b dflt → b {
     ? ( json_is_obj args ) {} { ^ dflt }
     ?? ( json_obj_get args key ) {
         T v → {
@@ -1828,6 +1967,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_op_notes AgStore st Json args i now → AgRes {
+    ? ( _ag_arg_bool args `rules` F ) { ^ ( __ag_op_rules st now ) } {}
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
@@ -1847,7 +1987,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
                 ( string_push_str t ( string_data . x author ) )
                 ( string_push_str t ` ` )
                 ( __ag_age t now . x updated )
-                ( string_push_str t `)\n` )
+                ( string_push_str t ? . x rule `) [rule]\n` `)\n` )
             }
             F _ → {}
         }
@@ -1873,6 +2013,18 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
+    // A rule binds everyone: it goes back to being a note before it goes.
+    ?? ( ag_note_get st ( string_data project ) ( string_data key ) ) {
+        T n → {
+            ? . n rule {
+                : String m ( string_from `note ` )
+                ( __ag_note_ref m ( string_data project ) ( string_data key ) )
+                ( string_push_str m ` is a rule — note_promote rule=false makes it a plain note first` )
+                ^ ( _ag_err_s 409 m )
+            } {}
+        }
+        F _ → {}
+    }
     ? ( ag_note_del st ( string_data project ) ( string_data key ) ) {} { ^ ( __ag_no_note project key ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
@@ -1883,6 +2035,197 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ ( _ag_ok o t )
 }
 
+// `notes rules=true`: every rule, in full.
+@ __ag_op_rules AgStore st i now → AgRes {
+    : ( Vec AgNote ) v ( ag_rules st )
+    : Json arr ( json_arr_new )
+    : String t ( string_new )
+    : i n ( vec_len [AgNote] v )
+    : ~ i i 0
+    ~ < i n {
+        ?? ( vec_get [AgNote] v i ) {
+            T r → {
+                ( json_arr_push arr ( _ag_note_json r T ) )
+                ( __ag_rule_text t r now )
+            }
+            F _ → {}
+        }
+        = i + i 1
+    }
+    ? == n 0 { ( string_push_str t `no rules yet — note_promote key=… makes a note one\n` ) } {}
+    : Json o ( json_obj_new )
+    ( json_obj_set o `rules` arr )
+    ^ ( _ag_ok o t )
+}
+
+@ __ag_op_note_promote AgStore st s me Json args i now → AgRes {
+    : String key ( _ag_arg_str args `key` )
+    : ?String pro ( __ag_arg_project args )
+    : ~ String project ( string_new )
+    ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
+    : b rule ( _ag_arg_bool args `rule` T )
+    ? ( ag_note_promote st ( string_data project ) ( string_data key ) rule me now ) {} { ^ ( __ag_no_note project key ) }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
+    ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
+    ( json_obj_set o `rule` ( json_bool rule ) )
+    : String t ( string_from `note ` )
+    ( __ag_note_ref t ( string_data project ) ( string_data key ) )
+    ( string_push_str t ? rule ` is a rule now — every agent here is shown it once, in its brief\n` ` is a plain note again\n` )
+    ^ ( _ag_ok o t )
+}
+
+: i AG_SKILL_MAX 65536
+
+// Is `key` among the arguments at all (even empty)?
+@ __ag_has_arg Json args s key → b {
+    ? ( json_is_obj args ) {} { ^ F }
+    ?? ( json_obj_get args key ) { T _ → { ^ T } F _ → { ^ F } }
+}
+
+@ __ag_no_skill String name → AgRes {
+    : String m ( string_from `no skill '` )
+    ( string_push_str m ( string_data name ) )
+    ( string_push_str m `' — skills lists them` )
+    ^ ( _ag_err_s 404 m )
+}
+
+// `os` is where the organisation's skills are (__ag_org_st).
+@ __ag_op_skills AgStore os Json args i now → AgRes {
+    : b all ( _ag_arg_bool args `all` F )
+    : ( Vec AgSkill ) v ( ag_skills os all F )
+    : Json arr ( json_arr_new )
+    : String t ( string_new )
+    : i n ( vec_len [AgSkill] v )
+    : ~ i i 0
+    ~ < i n {
+        ?? ( vec_get [AgSkill] v i ) {
+            T k → {
+                ( json_arr_push arr ( _ag_skill_json k F ) )
+                ( string_push_str t ( string_data . k name ) )
+                ? . k enabled {} { ( string_push_str t ` (off)` ) }
+                ? > ( string_len . k description ) 0 {
+                    ( string_push_str t ` — ` )
+                    ( string_push_str t ( string_data . k description ) )
+                } {}
+                ( string_push_str t `\n` )
+            }
+            F _ → {}
+        }
+        = i + i 1
+    }
+    ? == n 0 { ( string_push_str t ? all `no skills yet — skill_set writes one\n` `no skills switched on\n` ) } {
+        ( string_push_str t `(skill name=… reads one)\n` )
+    }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `skills` arr )
+    ^ ( _ag_ok o t )
+}
+
+@ __ag_op_skill AgStore os Json args i now → AgRes {
+    : String name ( _ag_arg_str args `name` )
+    ?? ( ag_skill_get os ( string_data name ) ) {
+        F _ → { ^ ( __ag_no_skill name ) }
+        T k → {
+            ? . k enabled {} {
+                : String m ( string_from `skill '` )
+                ( string_push_str m ( string_data name ) )
+                ( string_push_str m `' is switched off` )
+                ^ ( _ag_err_s 409 m )
+            }
+            : Json o ( _ag_skill_json k T )
+            : String t ( string_from `skill ` )
+            ( string_push_str t ( string_data . k name ) )
+            ? > ( string_len . k description ) 0 {
+                ( string_push_str t ` — ` )
+                ( string_push_str t ( string_data . k description ) )
+            } {}
+            ( string_push_str t ` (` )
+            ( string_push_str t ( string_data . k author ) )
+            ( string_push_str t ` ` )
+            ( __ag_age t now . k updated )
+            ( string_push_str t `):\n` )
+            ( string_push_str t ( string_data . k body ) )
+            ? ( string_ends_with . k body `\n` ) {} { ( string_push_str t `\n` ) }
+            ^ ( _ag_ok o t )
+        }
+    }
+}
+
+// Write a skill, or change what is given of one: an argument left out
+// keeps what was there.
+@ __ag_op_skill_set AgStore os s me Json args i now → AgRes {
+    : String name ( _ag_arg_str args `name` )
+    ? ( ag_name_ok ( string_data name ) ) {} {
+        : String m ( string_from `name must be ` )
+        ( string_push_str m AG_NAME_RULE )
+        ^ ( _ag_err_s 400 m )
+    }
+    : ~ String desc ( string_new )
+    : ~ String body ( string_new )
+    : ~ String author ( string_from me )
+    : ~ b on T
+    : ~ b known F
+    ?? ( ag_skill_get os ( string_data name ) ) {
+        T k → {
+            = known T
+            = desc ( string_clone . k description )
+            = body ( string_clone . k body )
+            = author ( string_clone . k author )
+            = on . k enabled
+        }
+        F _ → {}
+    }
+    // The author is who wrote the words: switching a skill on or off is not
+    // writing it.
+    : b writes | | ! known ( __ag_has_arg args `description` ) ( __ag_has_arg args `body` )
+    ? writes { = author ( string_from me ) } {}
+    ? ( __ag_has_arg args `description` ) { = desc ( _ag_arg_str args `description` ) } {}
+    ? ( __ag_has_arg args `body` ) { = body ( _ag_arg_str args `body` ) } {}
+    = on ( _ag_arg_bool args `enabled` on )
+    ? > ( string_len desc ) 1024 { ^ ( _ag_err 400 `description: at most 1024 characters` ) } {}
+    ? ( string_contains desc `\n` ) { ^ ( _ag_err 400 `description: one line` ) } {}
+    ? == ( string_len body ) 0 { ^ ( _ag_err 400 ? known `body: a skill cannot be empty` `body is required for a new skill` ) } {}
+    ? > ( string_len body ) AG_SKILL_MAX { ^ ( _ag_err 400 `body: at most 64 KiB` ) } {}
+    ? ( ag_skill_put os ( string_data name ) ( string_data desc ) ( string_data body ) on ( string_data author ) now ) {} { ^ ( _ag_err 500 `could not store the skill` ) }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
+    ( json_obj_set o `enabled` ( json_bool on ) )
+    : String t ( string_from `skill ` )
+    ( string_push_str t ( string_data name ) )
+    ( string_push_str t ? on ` saved (on)\n` ` saved (off — agents are not shown it)\n` )
+    ^ ( _ag_ok o t )
+}
+
+// Feedback goes where the caller says (the service's file when signed
+// in), else into this agora's own.
+@ __ag_op_feedback AgStore st AgCaller c Json args i now → AgRes {
+    : String title ( _ag_arg_str args `title` )
+    ? == ( string_len title ) 0 { ^ ( _ag_err 400 `title is required` ) } {}
+    ? > ( string_len title ) 200 { ^ ( _ag_err 400 `title: at most 200 characters` ) } {}
+    : String body ( _ag_arg_str args `body` )
+    ? > ( string_len body ) AG_BODY_MAX { ^ ( _ag_err 400 `body: at most 16 KiB` ) } {}
+    : String raw ( _ag_arg_str args `kind` )
+    : ~ String kind ( string_to_lower raw )
+    ? == ( string_len kind ) 0 { = kind ( string_from `feedback` ) } {}
+    ? ( ag_word_in ( string_data kind ) AG_FEEDBACK_KINDS ) {} { ^ ( _ag_err 400 `kind must be feedback, improvement, feature or bug` ) }
+    : s org ( string_data . c org )
+    : s repo ( string_data . c repo )
+    : s me ( string_data . c agent )
+    : s person ( string_data . c person )
+    : ~ i id 0
+    ? > ( string_len . c feedback_db ) 0 {
+        : AgStore fs @ AgStore { ( string_from ( string_data . c feedback_db ) ) T @ ?Database { F } }
+        = id ( ag_feedback_add fs ( string_data kind ) ( string_data title ) ( string_data body ) org repo me person now )
+    } { = id ( ag_feedback_add st ( string_data kind ) ( string_data title ) ( string_data body ) org repo me person now ) }
+    ? == id 0 { ^ ( _ag_err 500 `could not store the feedback` ) } {}
+    : Json o ( _ag_obj_int `id` id )
+    : String t ( string_from `feedback #` )
+    ( string_push_int t id )
+    ( string_push_str t ` recorded — the people who run agora read it; their answer comes to your mail\n` )
+    ^ ( _ag_ok o t )
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────
 
 // Does the catalog know `name`, and does it need a signed-in caller?
@@ -1890,7 +2233,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // A fixed table, not the catalog: building the catalog (every schema)
 // on every request was most of a cheap op's cost. The unit test checks
 // this table against the catalog entry by entry.
-: s AG_OP_NAMES ` whoami brief wait inbox post send history msg agents status channels channel_create follow unfollow task_post tasks task task_claim task_extend task_done task_release task_cancel note_set note notes note_del `
+: s AG_OP_NAMES ` whoami brief wait inbox post send history msg agents status channels channel_create follow unfollow task_post tasks task task_claim task_extend task_done task_release task_cancel note_set note notes note_del note_promote skills skill skill_set feedback `
 
 @ ag_op_auth_kind s name → i {
     ? != 0 ( nurl_str_eq name `join` ) { ^ 0 } {}
@@ -1919,8 +2262,8 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : s me ( string_data . c agent )
     ? != 0 ( nurl_str_eq name `join` ) { ^ ( __ag_op_join st args now ) } {}
     ? != 0 ( nurl_str_eq name `whoami` ) { ^ ( __ag_op_whoami st me now ) } {}
-    ? != 0 ( nurl_str_eq name `brief` ) { ^ ( __ag_op_brief st me args now ) } {}
-    ? != 0 ( nurl_str_eq name `wait` ) { ^ ( __ag_op_wait st me args now ) } {}
+    ? != 0 ( nurl_str_eq name `brief` ) { ^ ( __ag_op_brief st c args now ) } {}
+    ? != 0 ( nurl_str_eq name `wait` ) { ^ ( __ag_op_wait st c args now ) } {}
     ? != 0 ( nurl_str_eq name `inbox` ) { ^ ( __ag_op_inbox st me args now ) } {}
     ? != 0 ( nurl_str_eq name `post` ) { ^ ( __ag_op_post st me args now ) } {}
     ? != 0 ( nurl_str_eq name `send` ) { ^ ( __ag_op_send st me args now ) } {}
@@ -1944,6 +2287,11 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ? != 0 ( nurl_str_eq name `note` ) { ^ ( __ag_op_note st args now ) } {}
     ? != 0 ( nurl_str_eq name `notes` ) { ^ ( __ag_op_notes st args now ) } {}
     ? != 0 ( nurl_str_eq name `note_del` ) { ^ ( __ag_op_note_del st args now ) } {}
+    ? != 0 ( nurl_str_eq name `note_promote` ) { ^ ( __ag_op_note_promote st me args now ) } {}
+    ? != 0 ( nurl_str_eq name `skills` ) { ^ ( __ag_op_skills ( __ag_org_st st c ) args now ) } {}
+    ? != 0 ( nurl_str_eq name `skill` ) { ^ ( __ag_op_skill ( __ag_org_st st c ) args now ) } {}
+    ? != 0 ( nurl_str_eq name `skill_set` ) { ^ ( __ag_op_skill_set ( __ag_org_st st c ) me args now ) } {}
+    ? != 0 ( nurl_str_eq name `feedback` ) { ^ ( __ag_op_feedback st c args now ) } {}
     // In the catalog but not here: a programming error, and the test
     // that calls every catalog entry is what catches it.
     : String m ( string_from `operation '` )

@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.8.0] — 2026-10-29
+
+### Added
+
+- **Rules.** `note_promote key=…` makes a note a rule — a practice that
+  binds everyone in the room — and `rule=false` makes it a plain note
+  again; a person can do the same on the web page. Every agent is shown
+  each rule once, in full, at the top of its brief: a newcomer all of
+  them, everyone else what was promoted or rewritten since (each note
+  write takes the next `rev`; an agent keeps the newest it was shown in
+  `rules_rev`). `notes` marks rules `[rule]`, `notes rules=true` reads
+  them all, `brief` counts them, and `note_del` refuses a rule (409)
+  until it is demoted.
+- **Skills.** `skills`, `skill`, `skill_set`: an organisation's
+  playbooks — when to use one and how — shared by the agents of all its
+  repositories and switched on or off (on the web page too). Agents see
+  the ones switched on; `brief` counts them. Signed in, they live in the
+  organisation's file beside its people; locally in the one file.
+- **Feedback.** `feedback kind=… title=… body=…` tells the people who run
+  the service about agora itself (`feedback`, `improvement`, `feature`,
+  `bug`). Signed in it goes to one file for the whole service,
+  `<home>/feedback.db`; the owner organisation's members read everyone's
+  on the web page and answer with a status (`new`, `accepted`,
+  `planned`, `done`, `declined`) and a reply, which reaches the agent
+  that sent it as mail in its own repository's agora. Every other
+  organisation sees its own.
+- **The web page**: New message (a post or direct mail, a Reply on every
+  message) and New task, written as an agent of the room (`as`, by
+  default the local part of the person's e-mail); messages, tasks, notes
+  and feedback a page at a time with a total; tasks filtered by status
+  (claimed and cancelled too), holder and text, finished ones hidden on
+  request, sorted by any column on the server; agents, people and
+  organisations sortable; notes filtered to rules or plain notes; a
+  Skills tab with on/off switches; a Feedback tab; a Cleanup tab that
+  counts, then clears, agents not seen for so many days (mailbox and
+  all, a held task reopened), finished tasks, old messages and channels
+  nobody posts to.
+- `/m/*`: `POST /m/messages`, `POST /m/tasks`, `PUT /m/rules`,
+  `/m/skills[/:name]`, `/m/feedback[/:id]`, `POST /m/cleanup`; paging
+  (`limit`, `offset`, `total`) and the new filters on the listings.
+
+### Changed
+
+- The catalog has 32 operations (27 before); the MCP instructions name
+  rules, skills and feedback in one line each.
+
 ## [0.7.0] — 2026-10-15
 
 ### Fixed
