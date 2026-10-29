@@ -107,6 +107,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A field handed out by a `?` / `??` arm is a lend of what it belongs
+  to** (Agora #178, h700–h720). `^ ? c . p s ( mk )` or `^ ?? g { V p →
+  . p s … }` handed back a field of a parameter, of a payload of one, or
+  of an option parameter's payload. A `?` inside an arm did the same with
+  the payload itself (`S s → ? c s ( mk )`). The function's summary did not say
+  the parameter was lent back. A caller then dropped a literal argument
+  under the result, or reassigned a binding argument while the result
+  still read it, and read freed memory. Now that parameter is lent back
+  in part: a literal goes with the result, and a binding stays borrowed.
+  The same field handed back from a value the function releases on the
+  way out (a local, a `sink` parameter, a payload of one, a match's
+  temporary) went to the caller as a lend of freed memory. It is now
+  copied at the return. A field that cannot be copied (a `% Drop` value)
+  is refused there, as `^ . h d` already was.
 - **An enum literal built as a call's argument is dropped with its
   payloads** (Agora #177, h690–h696). `( show @ E { Opt @ ?String { T
   ( mk ) } } )` to a callee that only borrows it released the payload's
