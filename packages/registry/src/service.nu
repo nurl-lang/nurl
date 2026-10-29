@@ -6,6 +6,7 @@
 //
 //   GET  /index/<name>.json                     package index (rendered from SQLite)
 //   GET  /pkgs/<name>/<name>-<version>.tar.gz   tarball (disk, immutable)
+//   GET  /pkgs/<name>/<name>-<version>.tar.gz.minisig   detached signature
 //   POST /api/v1/publish                        Bearer + X-Nurl-Package/-Version/-Deps
 //   POST /api/v1/yank | /api/v1/unyank          owner-only version flag
 //   POST /api/v1/revoke                         delete the presented token
@@ -185,7 +186,8 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-// GET /pkgs/:name/:file — file must be "<name>-<version>.tar.gz".
+// GET /pkgs/:name/:file — file is "<name>-<version>.tar.gz" or its
+// detached "<name>-<version>.tar.gz.minisig" signature.
 @ __reg_h_tarball HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
@@ -201,15 +203,18 @@ $ `stdlib/core/slice.nu`
     ? ! ( reg_name_valid ( string_data name ) ) {
         ^ ( __reg_err 400 `bad_path` )
     } {}
-    // expect exactly <name>-<version>.tar.gz
+    // Expect exactly <name>-<version>.tar.gz[.minisig]. The longer suffix
+    // must be tested first because its filename does not end in `.tar.gz`.
     : String prefix ( string_from ( string_data name ) )
     ( string_push_char prefix 45 )
+    : b is_minisig ( string_ends_with file `.tar.gz.minisig` )
+    : i suffix_len ? is_minisig 15 7
     : ~ b shape_ok F
-    ? & ( string_starts_with file ( string_data prefix ) ) ( string_ends_with file `.tar.gz` ) { = shape_ok T } {}
+    ? & ( string_starts_with file ( string_data prefix ) ) | is_minisig ( string_ends_with file `.tar.gz` ) { = shape_ok T } {}
     : String version ( string_new )
     ? shape_ok {
         : i from ( string_len prefix )
-        : i to - ( string_len file ) 7
+        : i to - ( string_len file ) suffix_len
         ? > to from {
             : ~ i k from
             ~ < k to {
@@ -220,6 +225,17 @@ $ `stdlib/core/slice.nu`
     } {}
     ? | ! shape_ok ! ( reg_version_valid ( string_data version ) ) {
         ^ ( __reg_err 400 `bad_path` )
+    } {}
+    ? is_minisig {
+        : String signature ( reg_minisig_read g_reg_data ( string_data name ) ( string_data version ) )
+        ? == ( string_len signature ) 0 {
+            ^ ( __reg_err 404 `not_found` )
+        } {}
+        : HttpResponse r ( response_new 200 )
+        ( response_set_header r `Content-Type` `text/plain; charset=utf-8` )
+        ( response_set_header r `Cache-Control` `public, max-age=31536000, immutable` )
+        ( response_set_body_str r ( string_data signature ) )
+        ^ r
     } {}
     : ( Vec u ) bytes ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] bytes ) 0 {

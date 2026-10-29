@@ -234,6 +234,39 @@ Hello *there*.
         ( check same `tarball bytes identical` )
     }
 
+    // ── detached minisign sidecar ──
+    {
+        // A published tarball has no signature until the signer writes one.
+        : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-0.1.0.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 404 `missing minisig 404` )
+    }
+    {
+        : s sig `untrusted comment: registry test signature
+RWR0ZXN0a2V5aWR0ZXN0LXNpZ25hdHVyZQ==
+`
+        ( check ( reg_minisig_write ( string_data data ) `demo` `0.1.0` sig ) `minisig stored` )
+        : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-0.1.0.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 200 `minisig 200` )
+        : String b ( resp_body_str resp )
+        ( check != 0 ( nurl_str_eq ( string_data b ) sig ) `minisig bytes identical` )
+        ?? ( header_get . resp headers `Cache-Control` ) {
+            T value → ( check ( string_contains value `immutable` ) `minisig immutable cache` )
+            F → ( check F `minisig immutable cache` )
+        }
+    }
+    {
+        : HttpRequest req ( mk_req `GET` `/pkgs/demo/other-0.1.0.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 400 `foreign minisig name 400` )
+    }
+    {
+        : HttpRequest req ( mk_req `GET` `/pkgs/demo/demo-not-semver.tar.gz.minisig` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 400 `bad minisig version 400` )
+    }
+
     // ── tarball path traversal shapes → 400 ──
     {
         : HttpRequest req ( mk_req `GET` `/pkgs/demo/other-0.1.0.tar.gz` `` ( no_headers ) ( vec_new [u] ) )

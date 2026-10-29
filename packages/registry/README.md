@@ -30,6 +30,7 @@ Read path (static, cacheable):
 | --- | --- |
 | `GET /index/<name>.json` | the package index — versions, SHA-256 checksums, yank flags, dependency requirements |
 | `GET /pkgs/<name>/<name>-<v>.tar.gz` | the tarball, content-addressed and immutable |
+| `GET /pkgs/<name>/<name>-<v>.tar.gz.minisig` | the tarball's detached minisign signature, immutable with the tarball |
 
 Write path (Bearer token):
 

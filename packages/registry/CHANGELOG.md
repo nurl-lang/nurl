@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.8] — 2026-10-28
+
+### Added
+
+- Detached minisign files can be stored beside immutable package tarballs and
+  fetched from `GET /pkgs/<name>/<name>-<version>.tar.gz.minisig`. The route
+  applies the same validated package/version path construction as tarballs,
+  returns 404 for an absent sidecar, and is immutable-cacheable.
+
 ## [0.4.7] — 2026-10-21
 
 ### Fixed
