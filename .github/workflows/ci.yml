@@ -204,7 +204,11 @@ jobs:
     # here should come with a measurement, not a hope.
     # 30, not 20: by v0.67.0 the job ran 15–19 min (18m36s on #1143) and
     # a rerun was cancelled at exactly 20:00 in the nurl-cov gate.
-    timeout-minutes: 30
+    # 45, not 30: on 2026-10-29 it passed in 28m53s (run 3047) and was then
+    # cancelled at 30:00 on #1294 and on main's push run 3049, both in
+    # the network-deadline gate with every earlier step green. The hole
+    # corpus and the test corpus grew by about 100 entries that day.
+    timeout-minutes: 45
     container:
       # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
       # qemu + grub for the unikernel gates, gdb, zstd, and zig at
