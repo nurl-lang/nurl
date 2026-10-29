@@ -8883,8 +8883,7 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ? ! ( seq ( nurl_llty ty ) `i8*` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
     { ^ ( nurl_str_cat value `` ) } {}
-    ? ! | | == tt TT_LPAREN == tt TT_QUEST | == tt TT_QUESTQUEST == tt TT_LBRACE
-    { ^ ( nurl_str_cat `` `` ) } {}
+    ? ! ( __tt_guarded tt ) { ^ ( nurl_str_cat `` `` ) } {}
     : s guard ( nurl_sym_get syms `__last_call_guard__` )
     ? == 0 ( nurl_str_len guard ) { ^ ( nurl_str_cat `` `` ) } {}
     ( nurl_sym_def syms `__last_call_guard__` `` )
@@ -8892,6 +8891,12 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ( nurl_print `  ` ) ( nurl_print owner )
     ( nurl_print ` = load i8*, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
     ^ owner
+}
+
+// The arms whose value a guard may own (`__last_call_guard__`): a call's
+// result, a `?` / `??` join's (mem_publish_join_owner) and a block's.
+@ __tt_guarded i tt → b {
+    ^ | | == tt TT_LPAREN == tt TT_QUEST | == tt TT_QUESTQUEST == tt TT_LBRACE
 }
 
 // A join carries a separate owner from its value. Borrowed raw pointers may
@@ -17615,11 +17620,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // tracked owned string is provably copyable, so a mixed
     // `? c ( owner ) param` join preserves the borrowed pointer and carries
     // a separate owner phi that is null on that path.
+    // (Nor a nested `?`: its own join settled its arms, and the ident it
+    // left behind may be its condition's — a copy of what it chose, the
+    // join's owner left behind, leaked.)
     : b t_is_lit & == t_tt0 TT_STR ( seq ( nurl_llty tt2 ) `i8*` )
-    ? & & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ? & & & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
     ! t_alias
     ! ( seq t_str_flag `str` )
     ! t_is_lit
+    != t_tt0 TT_QUEST
     != 0 ( nurl_str_len t_retid )
     ( nurl_sym_has_word syms `__owned_strings__`
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
@@ -17632,9 +17641,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
         // The arm was a call (its value the call's result, the ident only
         // its last argument): the copy replaces that result, so what the
         // call handed over through its guard goes now — kept, it leaked
-        // once per evaluation (h194).
+        // once per evaluation (h194). So does a join's or a block's owner
+        // (__tt_guarded, h602).
         : s __tg ( nurl_sym_get syms `__last_call_guard__` )
-        ? & == t_tt0 TT_LPAREN != 0 ( nurl_str_len __tg ) {
+        ? & ( __tt_guarded t_tt0 ) != 0 ( nurl_str_len __tg ) {
             ( nurl_sym_def syms `__last_call_guard__` `` )
             : s __tgv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __tgv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __tg ) ( nurl_print `\n` )
@@ -17782,6 +17792,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // now — the else side has no single-pass blindness.) A literal
     // beside a non-owned then-arm copies nothing: the join is uniformly
     // borrowed, which is what the old unconditional copy leaked.
+    // (Not a nested `?`'s, as on the then side.)
     : ~ b e_dup F
     : b e_is_lit & == e_tt0 TT_STR ( seq ( nurl_llty et2 ) `i8*` )
     : b t_arm_owned & == 0 tdr | ( seq t_str_flag `str` ) t_dup
@@ -17789,7 +17800,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ! e_alias
     ! ( seq e_str_flag `str` )
     | & e_is_lit t_arm_owned
-    & != 0 ( nurl_str_len e_retid )
+    & & != e_tt0 TT_QUEST != 0 ( nurl_str_len e_retid )
     ( nurl_sym_has_word syms `__owned_strings__`
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
     { : s __ed ( nurl_cg_reg cg )
@@ -17803,7 +17814,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
         // call handed over through its guard goes now — kept, it leaked
         // once per evaluation (h194).
         : s __eg ( nurl_sym_get syms `__last_call_guard__` )
-        ? & == e_tt0 TT_LPAREN != 0 ( nurl_str_len __eg ) {
+        ? & ( __tt_guarded e_tt0 ) != 0 ( nurl_str_len __eg ) {
             ( nurl_sym_def syms `__last_call_guard__` `` )
             : s __egv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __egv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __eg ) ( nurl_print `\n` )
