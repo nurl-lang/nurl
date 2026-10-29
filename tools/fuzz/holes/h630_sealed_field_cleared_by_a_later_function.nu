@@ -1,4 +1,4 @@
-// H621: as h618, with the function that clears the Vec defined after its
+// H630: as h618, with the function that clears the Vec defined after its
 // caller: when `( wipe . k d )` is compiled, nothing is known yet of what
 // `wipe` does with its argument, and it emptied the sealed RsaKey's limbs.
 // Closed: the call is parked and decided at module end by `wipe`'s final

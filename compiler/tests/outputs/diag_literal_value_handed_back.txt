@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_literal_value_handed_back.nu:20:5: error: 'b' is read here, but its value was moved into an owner at line 19. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup b ).
+    ( nurl_println_int ( vec_len [String] b ) )
+    ^
+compiler/tests/diag_literal_value_handed_back.nu:23:5: error: 't' is read here, but its value was moved into an owner at line 22. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through that owner, or store a copy and keep the original: ( mem_dup t ).
+    ( nurl_println ( string_data t ) )
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

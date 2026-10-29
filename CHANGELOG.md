@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A sealed struct's handle field handed to a callee that may change it
-  is a write to that field** (agora #159, h617–h621). A sealed
+  is a write to that field** (agora #159, h617–h620, h630). A sealed
   representation (`raw :` or a standard-library `% Drop` struct) refused
   a field write, but `( vec_clear [i] . key d )` — or the same through a
   binding read out of the field, a copy of that binding, a nested field
@@ -102,6 +102,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arms. The copy of any arm whose owner travels separately (a call, a
   `?` or `??` join, a block) now releases that owner. The compiler's
   own code loses nine string copies, at five places.
+- **A literal handed back by its callee takes a binding's value with it**
+  (Agora #172, h605–h609). A literal built as an argument, holding
+  both a binding's value and a fresh one, was handed back whole by
+  callees like `@ pass V2 v → V2 { ^ v }`. The result then owned the
+  fresh field, while the binding kept its own value. The binding and
+  the result both freed it, and reading the binding read freed memory.
+  The binding's value now moves into the literal, as for a callee that
+  keeps it, so a later read of the binding is a use after move.
+- **A closure binding stored into a literal argument no longer leaks
+  its env** (Agora #173, h621–h629). The field gets a copy of the env,
+  which nothing dropped when the literal was a call's temporary. The
+  literal now owns that copy and drops it unless the callee keeps the
+  literal or hands it back.
 - **A value stored into an owner on some paths, or on every iteration,
   stays stored** (Agora #160, h590–h596). A store on one arm of a `?`
   or `??`, or before a `break`, was forgotten where the paths met. A

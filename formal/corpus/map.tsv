@@ -587,6 +587,11 @@ h601_byref_closure_picked_then_pushed_into_a_param_vec	§2.8	A2	agora #154: byre
 h602_join_copies_a_nested_join_for_its_condition	§7.1	A2	?-join copies a nested ?-join arm for its condition's ident: the inner owner leaks	runs-clean
 h603_join_copies_a_nested_join_on_the_then_side	§7.1	A2	?-join copies a nested ?-join then-arm: the inner join's owner leaks	runs-clean
 h604_join_of_a_nested_join_assigned_to_a_cursor	§7.1	A2	nested ?-join copied when assigned to a cursor: the inner owner leaks	runs-clean
+h605_literal_with_a_binding_value_handed_back	CallT.summary	A1	agora #172: a literal holding a binding's value and a fresh one, handed back whole: binding and result share it	runs-clean
+h606_literal_with_a_binding_value_through_a_generic	CallT.summary	A1	agora #172: the same through a generic identity: the binding drops what the result holds	runs-clean
+h607_literal_with_a_binding_value_through_a_later_callee	CallT.summary	A1	agora #172: the same through a callee defined after the caller	runs-clean
+h608_literal_with_a_binding_value_then_binding_read	CallT.summary	A1	agora #172: binding read after its value went into a literal the callee handed back	rejected
+h609_literal_with_a_binding_value_part_handed_back	CallT.summary	A1	agora #172: callee hands back one field of the literal: the binding still drops its value in the rest	runs-clean
 h610_fiber_joined_twice	§2.1	A2	`( fiber_join f ) ( fiber_join f )` on one spawn_joinable handle: the second join freed the fiber's control block again (agora #168). Fiber is move-only and fiber_join takes it.	rejected
 h611_fiber_handle_copy_joined_twice	§2.1	A2	as h610 through a copy `: Fiber b a`, each copy joined once (agora #168).	rejected
 h612_joinable_fiber_never_joined	§3.3d	B	a spawn_joinable handle never joined: the finished fiber's block leaked; dropping the handle now detaches the fiber (nurl_fiber_detach; agora #168).	runs-clean
@@ -598,4 +603,13 @@ h617_sealed_field_viewed_by_a_binding_then_cleared	§3.3d	B	`: ( Vec i ) d . k d
 h618_sealed_field_cleared_by_a_user_function	§3.3d	B	`( wipe . k d )` with `wipe` a function of the program that clears its Vec: a callee whose summary changes the argument is refused a sealed field (agora #159).	rejected
 h619_sealed_field_of_a_nested_struct_cleared	§3.3d	B	`( vec_clear [i] . . k cn m )`: a sealed representation's field two levels down (agora #159).	rejected
 h620_sealed_field_view_copied_then_cleared	§3.3d	B	`: ( Vec i ) d2 d` from a view `d` of a sealed field, then `( vec_clear [i] d2 )`: a copy of a view views it too (agora #159).	rejected
-h621_sealed_field_cleared_by_a_later_function	§3.3d	B	as h618 with `wipe` defined after its caller: the call is parked and decided at module end by the callee's final summary (resolve_sealed_handoffs; agora #159).	rejected
+h630_sealed_field_cleared_by_a_later_function	§3.3d	B	as h618 with `wipe` defined after its caller: the call is parked and decided at module end by the callee's final summary (resolve_sealed_handoffs; agora #159).	rejected
+h621_closure_binding_in_an_option_literal_unwrapped	§7.5	A2	agora #173: closure binding in an option literal unwrapped: env copy leaks	runs-clean
+h622_closure_binding_in_a_struct_literal_picked	§7.5	A2	agora #173: closure binding in a struct literal picked: env copy leaks	runs-clean
+h623_closure_binding_in_a_literal_read_by_a_callee	§7.5	A2	agora #173: closure binding in a literal read by a callee: env copy leaks	runs-clean
+h624_closure_param_in_a_literal_read_and_picked	§7.5	A2	agora #173: closure param in a literal read and picked: env copy leaks	runs-clean
+h625_closure_binding_in_a_literal_through_a_generic	§7.5	A2	agora #173: closure binding in a literal through a generic: env copy leaks	runs-clean
+h626_closure_binding_in_a_literal_handed_back_in_a_loop	§7.5	A2	agora #173: closure binding in a literal handed back in a loop: env copy leaks	runs-clean
+h627_closure_binding_in_a_result_literal_unwrapped	§7.5	A2	agora #173: closure binding in a result literal unwrapped: env copy leaks	runs-clean
+h628_two_closure_fields_of_a_literal_picked_and_read	§7.5	A2	agora #173: two closure fields of a literal picked and read: env copy leaks	runs-clean
+h629_closure_binding_in_a_literal_picked_twice	§7.5	A2	agora #173: closure binding in a literal picked twice: env copy leaks	runs-clean
