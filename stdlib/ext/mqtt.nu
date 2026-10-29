@@ -1123,15 +1123,15 @@ $ `stdlib/ext/websocket.nu`
 
 // Build an owned String from `len` bytes of `pkt` starting at `start`.
 @ __mqtt_extract_str ( Vec u ) pkt i start i len → String {
-    : String out ( string_with_cap 16 )
-    : i stop + start len
-    : ~ i k start
-    ~ < k stop {
-        : i b ( _mqtt_byte pkt k )
-        ? >= b 0 { ( string_push_char out b ) } {}
-        = k + k 1
-    }
-    ^ out
+    // The bytes of [start, start + len) that the packet holds, in one
+    // copy: the range is clamped to the packet once, not byte by byte.
+    // (Offsets and lengths here come from 2-byte fields and varints, far
+    // from i64's ends, so neither sum below wraps.)
+    : i n ( vec_len [u] pkt )
+    ? | | <= len 0 >= start n <= + start len 0 { ^ ( string_new ) } {}
+    : i lo ? < start 0 0 start
+    : i hi ? > len - n start n + start len
+    ^ ( string_from_bytes # *u + # i ( vec_data [u] pkt ) lo - hi lo )
 }
 
 // Advance past one MQTT 5 property's value — `p` points just after the
