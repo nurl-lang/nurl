@@ -748,3 +748,28 @@ h788_dyn_result_to_sink	§7.6	A2	agora #185: a String result lent on one path, f
 h789_dyn_result_as_join_arm	§7.6	A2	agora #185: the same result as an arm of a `?` bound by `:`, in a loop	runs-clean
 h790_dyn_option_as_scrutinee	§7.6	A2	agora #185: an option result of that kind as a `??` scrutinee, in a loop	runs-clean
 h791_dyn_option_payload_handed_out	§7.6	A2	agora #185: the payload of such an option scrutinee handed out of the match	runs-clean
+h792_dyn_drop_result_bound	§7.6	A2	agora #186: a `% Drop` result its callee lends on one path and makes on another, bound by `:`	runs-clean
+h793_dyn_drop_result_pushed	§7.6	A2	agora #186: the same result handed to `vec_push`, which keeps it: it cannot be copied	rejected
+h794_dyn_drop_result_as_argument	§7.6	A2	agora #186: the same result passed straight to a call that only reads it	runs-clean
+h795_dyn_drop_match_returned	§7.6	A2	agora #186: a `??` handing back a `% Drop` parameter on one arm and a fresh value on the other	runs-clean
+h796_dyn_drop_join_fall_off	§7.6	A2	agora #186: a `?` over a `% Drop` parameter and a literal as the function's fall-off value	runs-clean
+h797_dyn_drop_join_returned	§7.6	A2	agora #186: the same handed back by `^`	runs-clean
+h798_drop_join_bound	§7.6	A2	agora #186: a `?` over a `% Drop` binding and a literal, bound by `:`	runs-clean
+h799_drop_join_returns_local	§7.6	A2	agora #186: `^ ? c l @ D { … }` with `l` a `% Drop` local: the local moves out on its path	runs-clean
+h800_drop_join_param_or_local	§7.6	A2	agora #186: `^ ? c x l`, a `% Drop` parameter on one path and a local on the other	runs-clean
+h801_drop_join_local_under_defer	§7.6	A2	agora #186: the returned join's local under a `;` defer: not moved out from under the defer, and it cannot be copied	rejected
+h802_drop_nested_join_locals	§7.6	A2	agora #186: `^ ? c ? d l1 l2 @ D { … }`: two locals through a nested join	runs-clean
+h803_drop_join_two_locals	§7.6	A2	agora #186: `^ ? c l1 l2`, both arms `% Drop` locals	runs-clean
+h804_drop_param_local_fall_off	§7.6	A2	agora #186: `? c x l` as the fall-off value: the local would be lent past its frame, and cannot be copied	rejected
+h805_drop_option_param_or_local	§7.6	A2	agora #186: `^ ? c xo lo` over options of a `% Drop` value, a parameter and a local	runs-clean
+h806_closure_drop_capture_join	§7.6	A2	agora #186: a closure handing back a `% Drop` capture through `^ ?`: it keeps the capture for its next call	rejected
+h807_closure_drop_capture_join_fall	§7.6	A2	agora #186: the same as the closure's fall-off value	rejected
+h808_closure_drop_two_captures	§7.6	A2	agora #186: a closure handing back one of two `% Drop` captures through a `?`	rejected
+h809_closure_drop_capture_field_join	§7.6	A2	agora #186: a closure handing back a `% Drop` field of a capture through a `?`	rejected
+h810_closure_drop_param_join	§7.6	A2	agora #186: a closure handing back its `% Drop` parameter through a `?`	rejected
+h811_closure_fresh_join_fall	§7.6	A2	agora #186: a closure whose fall-off value is a `?` over two fresh Strings: the value it hands back was copied and the original leaked	runs-clean
+h812_closure_drop_dyncall_join	§7.6	A2	agora #186: a closure handing back, through a `?`, a `% Drop` value from a call that lends it on some calls	rejected
+h813_closure_drop_local_join_returned	§7.6	A2	agora #186: a closure handing back its own `% Drop` local through `^ ?`: the local moves out	runs-clean
+h814_closure_drop_local_join_fall_off	§7.6	A2	agora #186: the same as the closure's fall-off value: the local would be lent past the body, and cannot be copied	rejected
+h852_str_join_local_defer_releases	§7.6	A2	agora #186: `^ ? c l ( mk )` with a `;` defer handing `l` to a `sink`: the local is copied, not moved out from under the defer	runs-clean
+h853_drop_join_local_defer_releases	§7.6	A2	agora #186: the same with a `% Drop` local: it cannot be copied	rejected
