@@ -14675,6 +14675,19 @@ unsafe @ gen_call i lex i syms i cg → s {
             = g_member_path_on ? & == bck_arg_tt TT_DOT | != 0 g_borrowck != 0 __sx_me 1 0
             = av ( gen_operand lex syms cg )
             = g_member_path_on __mp_saved
+            // A handle that is a sealed representation's field (`. key d`,
+            // or a binding that views one) handed to a callee that may
+            // change it in place: a write to that field, as `= . key d …`
+            // is (agora #159).
+            ? & & ( bck_sound ) ! ( bck_unsafe_ctx ) ( __is_handle_ty ( nurl_get_last_type ) ) {
+                : s __sv ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_sealed__` ) ? ( is_ident_tok bck_arg_tt ) ( nurl_sym_get2 syms bck_arg_val `__sealed_view` ) ``
+                ? != 0 ( nurl_str_len __sv ) {
+                    : s __six ( nurl_str_int arg_idx )
+                    ? | | | | & == arg_idx 0 ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __six ) ( nurl_sym_has_word g_fn_reallocs call_name __six ) ( nurl_sym_has_word g_fn_sink call_name __six ) & == 0 ( nurl_sym_len g_fn_compiled call_name ) ( __user_callee syms call_name fname ) {
+                        ( __sealed_die lex __sv ( nurl_str_cat3 `handing a field of it to '` ( bck_generic_base call_name ) `', which may change that field in place, is a write to a field of` ) )
+                    } {}
+                } {}
+            } {}
             // (Only for a callee that may change it — a container mutator, a
             // summary that says so, or a function of the program's own not
             // compiled yet: asked before the sources are, agora #169.)
@@ -32786,6 +32799,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_line __ob_line
         = g_open_bind_col __ob_col
         : ~ s val ( gen_expr lex syms cg )
+        // A handle bound from a sealed representation's field, or from a
+        // binding that views one, views it too (gen_call, agora #159).
+        ( nurl_sym_def syms ( nurl_str_cat name `__sealed_view` ) ? ( __is_handle_ty ( nurl_get_last_type ) ) ? == bck_rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_sealed__` ) ? ( is_ident_tok bck_rhs_tt ) ( nurl_sym_get2 syms bck_rhs_val `__sealed_view` ) `` `` )
         = g_open_bind_name __obn0
         = g_open_bind_line __obl0
         = g_open_bind_col __obc0
@@ -33134,6 +33150,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
             : ~ s val ( gen_expr lex syms cg )
+            // A handle bound from a sealed representation's field, or from a
+            // binding that views one, views it too (gen_call, agora #159).
+            ( nurl_sym_def syms ( nurl_str_cat name `__sealed_view` ) ? ( __is_handle_ty ( nurl_get_last_type ) ) ? == bck_rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_sealed__` ) ? ( is_ident_tok bck_rhs_tt ) ( nurl_sym_get2 syms bck_rhs_val `__sealed_view` ) `` `` )
             = g_open_bind_name __obn0
             = g_open_bind_line __obl0
             = g_open_bind_col __obc0
@@ -36496,8 +36515,15 @@ unsafe @ gen_member i lex i syms i cg → s {
     // Raw provenance: what a read through a pointer here reaches (set at
     // the pointer reads below; a nested read in the object publishes its own).
     ? != 0 g_rprov_on { ( nurl_sym_set syms `__last_raw_prov__` `` ) } {}
+    ( nurl_sym_def syms `__last_member_sealed__` `` )
     : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
+    // A field read out of a sealed representation, at any depth of the
+    // chain (`. . k cn m`), or out of a binding that views one: a callee
+    // that may change it in place writes that representation (gen_call,
+    // agora #159).
+    : s __mb_sealed_in ? & ( is_ident_tok __mb_tt ) == 0 ( nurl_sym_len syms `__last_member_sealed__` ) ( nurl_sym_get2 syms __mb_val `__sealed_view` ) ( nurl_sym_get syms `__last_member_sealed__` )
+    ( nurl_sym_def syms `__last_member_sealed__` ? ( __ty_sealed ot ) ot __mb_sealed_in )
     : ~ s __mb_prov ``
     ? & != 0 g_rprov_on ( is_ptr_ty ot ) {
         = __mb_prov ? ( is_ident_tok __mb_tt ) ( nurl_str_cat __mb_val `` ) ( nurl_sym_get syms `__last_raw_prov__` )
