@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The MQTT client copies a topic, payload or user property in one
+  go.** `__mqtt_extract_str` read the packet a byte at a time through a
+  bounds-checked `vec_get` and pushed each byte, so a 1 MB payload took a
+  million calls. It now clamps the range to the packet once and copies it
+  into an exact-size String. Walking a property block of 8 user
+  properties and 16 other properties takes 437 ns, down from 852 ns.
+
 - **HTTP/2 frame payloads and HPACK literal strings are copied in one
   go.** `h2_parse_frame` and `h2_data_strip_padding` copied a payload
   byte by byte through `vec_push`, and `hpack_decode_string` copied a
