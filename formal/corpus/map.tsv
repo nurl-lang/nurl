@@ -608,3 +608,11 @@ h626_closure_binding_in_a_literal_handed_back_in_a_loop	§7.5	A2	agora #173: clo
 h627_closure_binding_in_a_result_literal_unwrapped	§7.5	A2	agora #173: closure binding in a result literal unwrapped: env copy leaks	runs-clean
 h628_two_closure_fields_of_a_literal_picked_and_read	§7.5	A2	agora #173: two closure fields of a literal picked and read: env copy leaks	runs-clean
 h629_closure_binding_in_a_literal_picked_twice	§7.5	A2	agora #173: closure binding in a literal picked twice: env copy leaks	runs-clean
+h630_dyn_of_a_bound_byref_closure_struct_returned	§2.8	A2	agora #156: a struct holding a by-reference closure, bound, then boxed with dyn and returned	rejected
+h631_dyn_wrapper_of_a_byref_closure_struct_returned	§2.8	A2	agora #156: a wrapper boxing its parameter with dyn: the caller returns the object of a by-reference closure struct	rejected
+h632_dyn_sink_wrapper_of_a_byref_closure_struct_returned	§2.8	A2	agora #156: the same through a sink parameter, the literal built at the call	rejected
+h633_dyn_of_a_view_struct_literal_returned	§2.11	A2	agora #156: a struct literal viewing a local String, boxed with dyn and returned	rejected
+h634_dyn_of_a_bound_view_struct_returned	§2.11	A2	agora #156: a bound struct viewing a local String, boxed with dyn and returned	rejected
+h635_dyn_of_a_view_struct_outlives_its_owner	§2.11	A2	agora #156: a dyn object over a view assigned to an outer binding, read after the String ended	rejected
+h636_dyn_of_a_view_field_returned	§2.11	A2	agora #156: a struct field viewing a local String, boxed with dyn and returned	rejected
+h637_dyn_of_a_viewing_call_returned	§2.11	A2	agora #156: a call result viewing a local String, boxed with dyn and returned	rejected
