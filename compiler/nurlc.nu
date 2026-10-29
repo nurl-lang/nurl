@@ -28740,6 +28740,19 @@ unsafe @ bck_check_moved_reads s reads i line s state → v {
     ^ out
 }
 
+// …all of them, those too: what crosses to another thread takes its handle
+// copies along (bck_send_view_check).
+@ __src_drop_handles_all s list → s {
+    ? < ( nurl_str_find list `~` ) 0 { ^ ( nurl_str_cat list `` ) } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat list `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != ( nurl_str_get w 0 ) 126 { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
+    }
+    ^ out
+}
+
 // Is `ids` a binding a closure holds a copy of the handle of that storing
 // the closure into an owner cannot copy in (`nch_`, __src_mark_nc)?
 @ bck_nch s ids → b {
@@ -28903,7 +28916,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // `( wrapv ( string_data x ) )` keeps a view of `x` itself (h304).
         // (A closure literal stored is adopted: it copies what it views.)
         : b __vo g_sxe_vonly
-        ? ! | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
+        ? ! | | | | ( seq w `\\` ) ( seq w `\\~` ) ( seq w `\\~!` ) ( seq w `\\~*` ) ( seq w `\\a` ) { = g_sxe_vonly F } {}
         : ~ s out ``
         : ~ i j 0
         : ~ b more ! & < g_sxe_pos n == # i . ep g_sxe_pos 41
@@ -28921,11 +28934,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             // closure value stored into an owner, adopted — it copies in
             // what it held a handle of.)
             // (`\\~!(…)`: such a copy an owner the closure is stored into
-            // cannot copy in — it stays one, `nch_`: __src_drop_handles.)
-            : b __hnc ( seq w `\\~!` )
-            : b __hcap | __hnc ( seq w `\\~` )
+            // cannot copy in — it stays one, `nch_`: __src_drop_handles.
+            // `\\~*(…)`: a captured closure — the handle copies it holds,
+            // marked so, and not one of its own: the env owns a share.)
+            : b __hin ( seq w `\\~*` )
+            : b __hcap | ( seq w `\\~!` ) ( seq w `\\~` )
+            : b __hnc | __hin ( seq w `\\~!` )
             : b __adop ( seq w `\\a` )
-            ? | | | | | ( seq w `\\` ) __hcap __adop ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) ( __fn_retclo_arg w js ) {
+            ? | | | | | | ( seq w `\\` ) __hcap __hin __adop ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) ( __fn_retclo_arg w js ) {
                 : i __a0 g_sxe_pos
                 : ~ s __lj ( bck_sx_ev st e ? __adop F ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpass##` w ) ) js ) )
                 // (An owner the returned closure only captured: a copy of
@@ -28933,7 +28949,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? | __hcap & & & ! ( seq w `\\` ) ! __adop ( __fn_retclo_arg w js ) ! | ( mem_fn_lends_arg w js ) ( mem_fn_retptr_arg w js ) {
                     = __lj ( bck_sx_handle_mark st __lj ( nurl_str_slice e __a0 - g_sxe_pos __a0 ) )
                 } {}
-                ? __hcap { = __lj ( __src_handles_only __lj ) } {}
+                ? | __hcap __hin { = __lj ( __src_handles_only __lj ) } {}
                 ? __hnc { ( __src_mark_nc __lj ) } {}
                 ? __adop { = __lj ( __src_drop_handles __lj ) } {}
                 // (What a callee lends through an Arc parameter is a view
@@ -30226,7 +30242,7 @@ unsafe @ bck_sx_is_id s e → b {
 @ bck_send_view_check s st s sx s cal i line → v {
     // (A handle a closure holds a copy of goes along with it, or as a share
     // of its own: `~id` is no view of this side's.)
-    : s srcs ( __src_plain0 ( __src_drop_handles ( bck_sx_sources st sx -1 ) ) )
+    : s srcs ( __src_plain0 ( __src_drop_handles_all ( bck_sx_sources st sx -1 ) ) )
     ? ( seq srcs `*` ) { ^ } {}
     : ~ s rest ( nurl_str_cat srcs `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -41307,15 +41323,16 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // — leaves pointing at what was released (h306): `\\~(…)`.
             // `\\~!(…)` when storing the closure into an owner cannot copy it
             // in (gen_env_vtable's adopt copies only a handle with a Clone): a
-            // Vec of `% Drop` values, an option of one, a captured closure —
-            // that one's own captures, too, even in a closure written where
-            // it escapes. The copy stays a copy of the frame's handle (agora
-            // #161).
+            // Vec of `% Drop` values, an option of one. The copy stays a copy
+            // of the frame's handle (agora #161). A captured closure is cloned
+            // in — the env owns a share of it — but what that one views it
+            // views still, adopted or not, and even in a closure written where
+            // it escapes: `\\~*(…)`, its handle copies alone.
             : b __cap_clo ( __is_closure_ty __cap_ll )
             ? & & & & != 0 __sx_me | __cap_clo ( bck_is_heap_lty __cap_ll ) | ! clo_returned __cap_clo ! ( str_contains_word g_nc_own_caps __cap_w ) ! ( __is_capture_byref __cap_w syms ) {
                 : s __cap_ty ( nurl_sym_get syms __cap_w )
                 : b __cap_cp & ! __cap_clo & ( __is_handle_ty __cap_ty ) ( __clone_supported __cap_ty syms )
-                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 ? __cap_cp `\\~(` `\\~!(` __cap_w `)` ) )
+                = __cap_sx ( __sx_join __cap_sx ( nurl_str_cat3 ? __cap_clo `\\~*(` ? __cap_cp `\\~(` `\\~!(` __cap_w `)` ) )
             } {}
             ? & ( bck_is_heap_lty __cap_ll ) ! ( str_contains_word g_nc_own_caps __cap_w )
             { = __cap_heap ? == 0 ( nurl_str_len __cap_heap )
