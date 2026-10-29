@@ -115,6 +115,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An arm's own locals are dropped when its value was lent out of them**
+  (Agora #191, h846–h851). `: String r ? c { : W w ( mkw ) ( gets w ) } (
+  mk )` never dropped `w`, because the join's value is consumed and might
+  be a view of it. The leak recurred on every loop round and every call
+  of a function returning such a join, in `?`, else and `??` arms alike.
+  The arm now hands over a copy of what the call lent of its own locals,
+  and they are dropped at its exit. A lend of the enclosing code's
+  binding is not copied.
 - **A returned literal's field lent out of a local is copied** (Agora
   #189, h838–h844, h860–h861). `^ @ W { ( gets w ) }`, with `gets` lending a field
   of the local `w`, handed the caller a lend of `w`, and the function

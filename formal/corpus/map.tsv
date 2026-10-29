@@ -805,3 +805,9 @@ h843_nested_literal_call_field_local	§7.6	A2	agora #189: the call field inside 
 h844_returned_literal_call_field_param	§7.6	A2	agora #189: the call field lending a parameter: still a lend, not copied	runs-clean
 h860_sink_arg_block_call_lend	§7.6	A2	agora #189: `( keep { : W w ( mkw ) ( gets w ) } )`, `keep` taking a `sink`: the block's lend of its own local went to the callee as its own	runs-clean
 h861_drop_sink_arg_block_call_lend	§7.6	A2	agora #189: the same with a `% Drop` value: it cannot be copied	rejected
+h846_arm_block_call_lend_loop	§7.6	A2	agora #191: `: String r ? c { : W w ( mkw ) ( gets w ) } ( mk )` in a loop: `w` was never dropped	runs-clean
+h847_else_arm_block_call_lend_loop	§7.6	A2	agora #191: the same in the else arm	runs-clean
+h848_match_arm_block_call_lend_loop	§7.6	A2	agora #191: the same in a `??` arm	runs-clean
+h849_arm_block_call_lend_returned	§7.6	A2	agora #191: `^ ? c { : W w … ( gets w ) } ( mk )`: the arm's local leaked on every call	runs-clean
+h850_match_arm_block_call_lend_returned	§7.6	A2	agora #191: the same through a returned `??`	runs-clean
+h851_arm_call_outer_local	§7.6	A2	agora #191: an arm's call lending a binding of the enclosing code: not copied, nothing of the arm's to drop	runs-clean

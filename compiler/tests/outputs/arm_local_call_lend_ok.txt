@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop 1
+a string lent out of an arm's local
+drop 2
+a string lent out of an arm's local
+drop 3
+a string lent out of an arm's local
+drop 4
+a string lent out of an arm's local
+a string lent out of an arm's local
+drop 5
