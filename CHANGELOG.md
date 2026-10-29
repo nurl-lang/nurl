@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `?` / `??` join handed straight to a call drops what it owns**
+  (agora #174, h725–h730). `( use ? c @ S { ( mk ) 0 } @ S { ( mk ) 1 } )`
+  — struct literals in the arms, calls that build the struct, bindings
+  moved into the literals — was dropped by no one when the callee kept
+  nothing: the join's ownership bit, which `mem_lent_cond` takes for a
+  keeping callee, was gone before the call's temporaries were settled.
+  The joined value is now a temporary of the call, dropped by that bit
+  (on the owning arms' paths only) unless the callee keeps, consumes or
+  hands it back.
 - **A closure stored into an owner depends on what it could not copy in**
   (agora #161, h680–h688). Storing a closure into a struct or a container
   copies in the values it captured by value — but only those with a

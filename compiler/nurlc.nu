@@ -14640,6 +14640,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         : ~ s arg_lent ``
         : ~ b arg_call_lends F
         : ~ s arg_lit_own ``
+        // (…and whether a `?` / `??` join made as it owns what it yields,
+        // before mem_lent_cond takes the bit: mem_arg_temps.)
+        : ~ s arg_join_own ``
         // (What a call made as this argument lends from: bck_call_lend_srcs.)
         : ~ s arg_lend_srcs ``
         : ~ s arg_fread ``
@@ -14815,6 +14818,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ? ( seq call_name `nurl_free` )
             { ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `stfree##` ( nurl_sym_get syms `__fn_self_name__` ) `##`
                 ( nurl_sym_get syms `__last_ident_name__` ) ) `1` ) } {}
+            = arg_join_own ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             = arg_lent ( mem_lent_cond syms cg at bck_arg_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -16224,6 +16228,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // What this argument leaves the caller to drop after the call, and
         // whether the result is it (mem_arg_temps).
         ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own )
+        ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own )
         ( mem_arg_temps lex syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
         : s __at_o ( nurl_sym_get syms `__argtmp_owned__` )
         ? != 0 ( nurl_str_len __at_o ) { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __at_o `` ) ( nurl_str_cat3 owned_arg_temps ` ` __at_o ) } {}
@@ -23251,9 +23256,20 @@ unsafe @ mem_path_to_indices s path → s {
     // (…or a field taken out of a call's result, `( len . ( mk ) name )`:
     // a value of its own, h266.)
     : b __tfo & & == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
-    ? | __tfo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
+    // (…or a `?` / `??` join of owning values, by the phi of its arms'
+    // ownership bits — a literal's, a call's (mem_arm_hown,
+    // mem_arm_struct_hown): a value of its own, which nothing dropped when
+    // the callee kept nothing, agora #174.)
+    : s __jown ( nurl_sym_get syms `__argtmp_joinown__` )
+    ( nurl_sym_def syms `__argtmp_joinown__` `` )
+    // (A join whose arms all lend — the constant `false` — owns nothing.
+    // Only for a call whose result cannot view it — a number, or a value
+    // of its own: one that may (`( string_data ?? … )`) keeps it as before.)
+    : b __tj_fresh | __scalar_ret & ! shadowed | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
+    : b __tjo & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at ) __tj_fresh
+    ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
-        : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ( mem_call_retown syms cg )
+        : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
         // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
         ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
         ? != 0 ( nurl_str_len __tro ) {

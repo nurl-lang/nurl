@@ -688,3 +688,9 @@ h717_call_temp_payload_field_returned	§7.6	A2	agora #178: a field of the payloa
 h718_local_drop_field_through_a_cond_returned	§7.6	A2	agora #178: a `% Drop` field of a local returned through a `?`: it cannot be copied	rejected
 h719_local_drop_field_through_a_cond_fall_off	§7.6	A2	agora #178: the same as the function's fall-off value	rejected
 h720_payload_through_a_cond_in_an_arm_then_reassigned	§7.6	A2	agora #178: an enum parameter's payload handed back through a `?` inside a `??` arm, the argument reassigned while the result is read	rejected
+h725_struct_literal_join_handed_to_a_reader	§7.6	A2	agora #174: a `?` join of two struct literals handed to a callee that only reads it: the literals were no argument of the call, nothing dropped their Strings	runs-clean
+h726_struct_literal_join_handed_back_whole	§7.6	A2	agora #174: the same handed back whole into a binding: the result is the join's value	runs-clean
+h727_bindings_moved_into_a_literal_join_argument	§7.6	A2	agora #174: the same with bindings moved into the arms' literals	runs-clean
+h728_call_join_handed_to_a_reader	§7.6	A2	agora #174: the same with calls in the arms: the join's ownership bit was never asked	runs-clean
+h729_struct_literal_match_join_handed_to_a_reader	§7.6	A2	agora #174: the same through a `??` over an option	runs-clean
+h730_binding_beside_a_literal_in_a_join_argument	§7.6	A2	agora #174: a binding arm beside a literal arm: dropped on the literal's path only	runs-clean
