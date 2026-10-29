@@ -724,3 +724,27 @@ h766_option_join_to_inout_param	§7.6	A2	agora #183: an option `?` assigned to a
 h767_loop_local_vec_join_to_inout_param	§7.6	A2	agora #183: a loop body's Vec handed through a `?` to an `inout` parameter	runs-clean
 h731_owning_join_viewed_inside_its_statement	§1	A2	agora #181: a `??` join with an owning arm handed to string_data inside a consuming call: the owning arm's value was dropped by no one	runs-clean
 h732_owning_join_viewed_past_its_statement	§1	A2	agora #181: the same with the view bound past its statement: rejected as a view of a call's temporary is	rejected
+h768_local_join_in_returned_option	§7.6	A2	agora #184: an option literal returned with a `?` over a local String as its payload	runs-clean
+h769_local_field_join_in_returned_option	§7.6	A2	agora #184: the same with a local struct's field	runs-clean
+h770_local_join_in_returned_result	§7.6	A2	agora #184: a result literal returned with a `?` over a local String	runs-clean
+h771_local_join_in_option_fall_off	§7.6	A2	agora #184: an option literal over a local's `?` as the function's fall-off value	runs-clean
+h772_local_match_in_returned_option	§7.6	A2	agora #184: an option literal returned with a `??` over a local option as its payload	runs-clean
+h773_dyn_string_result_bound	§7.6	A2	agora #185: a String result lent on one path, fresh on the other, bound by `:`	runs-clean
+h774_dyn_option_result_bound	§7.6	A2	agora #185: the same with an option result	runs-clean
+h775_dyn_result_result_bound	§7.6	A2	agora #185: the same with a result type	runs-clean
+h776_dyn_enum_result_bound	§7.6	A2	agora #185: the same with an enum result	runs-clean
+h777_dyn_option_result_in_a_loop	§7.6	A2	agora #185: the option case in a loop	runs-clean
+h778_static_lend_option_bound	§7.6	A2	agora #185: a vec_get option, a lend on every path, bound by `:`	runs-clean
+h779_owned_option_bound	§7.6	A2	agora #185: an owned option result bound by `:`	runs-clean
+h780_dyn_struct_result_bound	§7.6	A2	agora #185: a struct result lent on one path, fresh on the other, bound by `:`	runs-clean
+h781_dyn_result_as_argument	§7.6	A2	agora #185: a String result of that kind passed straight to a call	runs-clean
+h782_dyn_result_discarded	§7.6	A2	agora #185: the same result discarded by a statement	runs-clean
+h783_dyn_result_arm_tail_discarded	§7.6	A2	agora #185: the same result as an arm's discarded tail, in a loop	runs-clean
+h784_dyn_result_in_struct_literal	§7.6	A2	agora #185: a String result lent on one path, fresh on the other, as a struct literal's field	runs-clean
+h785_dyn_result_pushed	§7.6	A2	agora #185: the same result pushed into a Vec	runs-clean
+h786_dyn_result_returned_in_option	§7.6	A2	agora #185: the same result as a returned option literal's payload	runs-clean
+h787_dyn_result_stored_in_field	§7.6	A2	agora #185: the same result stored into a field	runs-clean
+h788_dyn_result_to_sink	§7.6	A2	agora #185: a String result lent on one path, fresh on the other, handed to a `sink` parameter	runs-clean
+h789_dyn_result_as_join_arm	§7.6	A2	agora #185: the same result as an arm of a `?` bound by `:`, in a loop	runs-clean
+h790_dyn_option_as_scrutinee	§7.6	A2	agora #185: an option result of that kind as a `??` scrutinee, in a loop	runs-clean
+h791_dyn_option_payload_handed_out	§7.6	A2	agora #185: the payload of such an option scrutinee handed out of the match	runs-clean

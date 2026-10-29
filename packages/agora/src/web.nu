@@ -13,9 +13,12 @@
 //               machine — and the name is made on first use.
 //   join        Optional in signed-in mode: sets the agent's `about`.
 //   /m/…        What the web page does: look at a repository's agora
-//               (`?repo=`), edit and delete; manage the organisation's
-//               people (admins) and which organisations may sign in
-//               (admins of the owner organisation).
+//               (`?repo=`) a page at a time, write into it, edit, delete
+//               and clean up; the organisation's skills; feedback about
+//               agora (the owner organisation reads everyone's); manage
+//               the organisation's people (admins) and which
+//               organisations may sign in (admins of the owner
+//               organisation).
 //
 // In local mode the web page works too, as the one local administrator
 // (whoever can reach the port is whoever can open the file); `repo` is
@@ -184,9 +187,20 @@ $ `auth.nu`
     ?? ( ag_agent_get st name ) { T _ → { ^ T } F → { ^ F } }
 }
 
-// Run op `name` for a signed-in person of organisation `org`: the
+// The caller a signed-in call acts as: agent `who` in repository `repo`
+// of organisation `org`, signed in as `person`, reaching the
+// organisation's file (skills) and the service's (feedback) beyond the
+// repository.
+@ __ag_caller_in s org s repo s person s who → AgCaller {
+    : AgStore os ( ag_org_store org )
+    : AgStore fs ( ag_feedback_store )
+    ^ @ AgCaller { T ( string_from who ) ( string_from org ) ( string_from repo ) ( string_from person )
+        ( string_from ( string_data . os path ) ) ( string_from ( string_data . fs path ) ) }
+}
+
+// Run op `name` for `person`, signed in to organisation `org`: the
 // repository and the agent come from the call's own arguments.
-@ ag_oidc_call s org Json args s name i now → AgRes {
+@ ag_oidc_call s org s person Json args s name i now → AgRes {
     ? < ( ag_op_auth_kind name ) 0 {
         ^ ( ag_op_call ( __ag_no_store ) ( ag_caller_anon ) name args now )
     } {}
@@ -226,7 +240,7 @@ $ `auth.nu`
         ( string_push_str t ` on every call. Call brief.\n` )
         ^ ( _ag_ok o t )
     } {}
-    : AgCaller c @ AgCaller { T ( string_from ( string_data who ) ) }
+    : AgCaller c ( __ag_caller_in org ( string_data repo ) person ( string_data who ) )
     : ~ AgRes r ( ag_op_call st c name args now )
     ? & < . r status 400 != 0 ( nurl_str_eq name `whoami` ) {
         ( string_push_str . r text `repo: ` )
@@ -302,6 +316,74 @@ $ `auth.nu`
     ^ != 0 ( nurl_str_eq ( string_data . . w who org ) ( string_data owner ) )
 }
 
+// Of the organisation that runs the service — who reads and answers the
+// feedback. Locally: the one administrator, who runs it.
+@ __ag_is_owner_member AgWho w → b {
+    ? ( ag_auth_oidc ) {} { ^ T }
+    : String owner ( ag_auth_owner )
+    ^ != 0 ( nurl_str_eq ( string_data . . w who org ) ( string_data owner ) )
+}
+
+// The agent name a person writes as from the web page unless they say
+// otherwise: the local part of their e-mail made a name (`ann.b` for
+// Ann.B@x.example); `web` when that leaves nothing (and locally).
+@ __ag_web_name AgWho w → String {
+    : String out ( string_new )
+    : s e ( string_data . . w who email )
+    : ( Slice u ) ev ( slice_of_str e )
+    : i n ( nurl_str_len e )
+    : ~ i i 0
+    ~ & & < i n != ( slice_byte ev i ) 64 < ( string_len out ) AG_NAME_MAX {
+        : i c0 ( slice_byte ev i )
+        : i c ? & >= c0 65 <= c0 90 + c0 32 c0
+        : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57 | | == c 45 == c 46 == c 95
+        ( string_push_char out ? ok c 45 )
+        = i + i 1
+    }
+    ? == ( string_len out ) 0 { ^ ( string_from `web` ) } {}
+    ^ out
+}
+
+// A query parameter as a whole number; `dflt` when absent, kept to lo…hi.
+@ __ag_query_int HttpRequest req s key i dflt i lo i hi → i {
+    : String v ( __ag_query req key )
+    : ~ i x dflt
+    ? > ( string_len v ) 0 { = x ( nurl_str_to_int ( string_data v ) ) } {}
+    ? < x lo { ^ lo } {}
+    ? > x hi { ^ hi } {}
+    ^ x
+}
+
+// A query parameter that is true when it says `1` or `true`.
+@ __ag_query_on HttpRequest req s key → b {
+    : String v ( __ag_query req key )
+    ^ | != 0 ( nurl_str_eq ( string_data v ) `1` ) != 0 ( nurl_str_eq ( string_data v ) `true` )
+}
+
+// Answer what an operation answered: its JSON body on success, its text
+// as the error otherwise.
+@ __ag_res_http sink AgRes r → HttpResponse {
+    ? >= . r status 400 { ^ ( ag_json_err . r status ( string_data . r text ) ) } {}
+    : HttpResponse h ( response_json 200 . r body )
+    ( response_set_header h `Cache-Control` `no-store` )
+    ^ h
+}
+
+// Run op `op` with `args` as the agent the web page writes as — `as`, or
+// the person's default name (__ag_web_name) — made on first use, as an
+// agent's own call would make it.
+@ __ag_web_act AgWho w Json args s op i now → HttpResponse {
+    : String raw ( _ag_arg_str args `as` )
+    : ~ String who ( string_to_lower raw )
+    ? == ( string_len who ) 0 { = who ( __ag_web_name w ) } {}
+    ? ( ag_name_ok ( string_data who ) ) {} { ^ ( ag_json_err 400 `as must be 1–48 of a-z 0-9 . _ -` ) }
+    : AgStore st ( ag_store_conn . w rs )
+    ? ( ag_agent_ensure st ( string_data who ) now ) {} { ^ ( ag_json_err 500 `could not record the agent` ) }
+    : ~ AgRes r ( ag_op_call st ( ag_caller_as ( string_data who ) ) op args now )
+    ? < . r status 400 { ( json_obj_set . r body `as` ( json_str_lit ( string_data who ) ) ) } {}
+    ^ ( __ag_res_http r )
+}
+
 // GET /m/me[?repo=] — who is signed in; with a repository, its counts.
 @ ag_h_me HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
@@ -317,6 +399,8 @@ $ `auth.nu`
     ( json_obj_set o `role` ( json_str_lit ( string_data . . w who role ) ) )
     ( json_obj_set o `is_admin` ( json_bool ( ag_principal_is_admin . w who ) ) )
     ( json_obj_set o `is_owner_admin` ( json_bool ( __ag_is_owner_admin w ) ) )
+    ( json_obj_set o `can_triage` ( json_bool ( __ag_is_owner_member w ) ) )
+    ( json_obj_set o `web_as` ( json_str_lit ( string_data ( __ag_web_name w ) ) ) )
     ( json_obj_set o `repo` ( json_str_lit ( string_data . w repo ) ) )
     : Json tj ( json_obj_new )
     ? in_repo {
@@ -327,8 +411,10 @@ $ `auth.nu`
         ( json_obj_set tj `tasks_open` ( json_int . t tasks_open ) )
         ( json_obj_set tj `tasks` ( json_int . t tasks ) )
         ( json_obj_set tj `notes` ( json_int . t notes ) )
+        ( json_obj_set tj `rules` ( json_int . t rules ) )
     } {}
     ( json_obj_set tj `users` ( json_int ( vec_len [AgUser] ( ag_users . w st ) ) ) )
+    ( json_obj_set tj `skills` ( json_int ( ag_skill_count . w st ) ) )
     ( json_obj_set o `totals` tj )
     ( json_obj_set o `version` ( json_str_lit AG_VERSION ) )
     ^ ( __ag_json_ok o )
@@ -460,19 +546,22 @@ $ `auth.nu`
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
-// GET /m/messages?channel=&q=&before=&limit= — newest first.
+// GET /m/messages?channel=&from=&q=&before=&limit=&offset=&order= — a
+// page, newest first (`order=oldest`: oldest first), with how many match
+// (`total`).
 @ ag_h_messages HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
     : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String channel ( __ag_query req `channel` )
+    : String from ( __ag_query req `from` )
     : String q ( __ag_query req `q` )
-    : String bs ( __ag_query req `before` )
-    : String ls ( __ag_query req `limit` )
-    : i before ( nurl_str_to_int ( string_data bs ) )
-    : ~ i limit ( nurl_str_to_int ( string_data ls ) )
-    ? | <= limit 0 > limit 500 { = limit 100 } {}
-    : ( Vec AgMsg ) v ( ag_messages_list . w rs ( string_data channel ) ( string_data q ) before limit )
+    : i before ( __ag_query_int req `before` 0 0 9223372036854775807 )
+    : i limit ( __ag_query_int req `limit` 100 1 500 )
+    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : String order ( __ag_query req `order` )
+    : b oldest != 0 ( nurl_str_eq ( string_data order ) `oldest` )
+    : ( Vec AgMsg ) v ( ag_messages_page . w rs ( string_data channel ) ( string_data from ) ( string_data q ) before oldest limit offset )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgMsg] v )
     : ~ i k 0
@@ -489,7 +578,20 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `messages` arr )
+    ( json_obj_set out `total` ( json_int ( ag_messages_count . w rs ( string_data channel ) ( string_data from ) ( string_data q ) ) ) )
     ^ ( __ag_json_ok out )
+}
+
+// POST /m/messages?repo= {as, channel | to, body, reply_to} — a person
+// writes into the room as an agent of it: `to` sends direct mail, else it
+// is a post (to `public` unless `channel` says otherwise).
+@ ag_h_message_new HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : String to ( _ag_arg_str b `to` )
+    ^ ( __ag_web_act w b ? > ( string_len to ) 0 `send` `post` now )
 }
 
 // PUT /m/messages/:id {body}  ·  DELETE /m/messages/:id
@@ -527,14 +629,27 @@ $ `auth.nu`
     }
 }
 
-// GET /m/tasks?status=all|open|done|…
+// GET /m/tasks?status=&holder=&q=&hide_done=&sort=&dir=&limit=&offset= —
+// a page of tasks: `status` open | claimed | done | cancelled ('' or
+// `all` = any), `holder` the agent holding (or that finished) it,
+// `hide_done=1` leaves done and cancelled out; sorted by `sort` (id,
+// title, status, poster, owner, priority, created, updated — the
+// default), `dir=asc` or newest first; `total` is how many match.
 @ ag_h_tasks HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
     : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-    : ~ String which ( __ag_query req `status` )
-    ? == ( string_len which ) 0 { = which ( string_from `all` ) } {}
-    : ( Vec AgTask ) v ( ag_tasks . w rs ( string_data which ) `` `` 500 now )
+    : ~ String status ( __ag_query req `status` )
+    ? != 0 ( nurl_str_eq ( string_data status ) `all` ) { = status ( string_new ) } {}
+    : String holder ( __ag_query req `holder` )
+    : String q ( __ag_query req `q` )
+    : b hide ( __ag_query_on req `hide_done` )
+    : String sort ( __ag_query req `sort` )
+    : String dir ( __ag_query req `dir` )
+    : b desc == 0 ( nurl_str_eq ( string_data dir ) `asc` )
+    : i limit ( __ag_query_int req `limit` 50 1 500 )
+    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : ( Vec AgTask ) v ( ag_tasks_page . w rs ( string_data status ) ( string_data holder ) ( string_data q ) hide ( string_data sort ) desc limit offset now )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgTask] v )
     : ~ i k 0
@@ -551,7 +666,18 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `tasks` arr )
+    ( json_obj_set out `total` ( json_int ( ag_tasks_count . w rs ( string_data status ) ( string_data holder ) ( string_data q ) hide ) ) )
     ^ ( __ag_json_ok out )
+}
+
+// POST /m/tasks?repo= {as, title, body, tags, priority} — a person offers
+// work as an agent of the room; that agent's mail hears of every step.
+@ ag_h_task_new HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    ^ ( __ag_web_act w b `task_post` now )
 }
 
 // PUT /m/tasks/:id {title, body, tags, priority, status}  ·  DELETE
@@ -605,18 +731,20 @@ $ `auth.nu`
     }
 }
 
-// GET /m/notes?repo=[&project=] — with bodies; no project = every note.
+// GET /m/notes?repo=&q=&kind=&sort=&limit=&offset= — a page of notes with
+// bodies, every project's: `kind` rules | notes ('' = both), `q` in key
+// or body, rules first then by key (`sort=updated`: newest first);
+// `total` is how many match.
 @ ag_h_notes HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
     : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-    : String raw ( __ag_query req `project` )
-    : b all == ( string_len raw ) 0
-    : ~ String project ( string_new )
-    ? all {} {
-        ?? ( ag_project_norm ( string_data raw ) ) { T pr → { = project pr } F → { ^ ( ag_json_err 400 `bad project` ) } }
-    }
-    : ( Vec AgNote ) v ( ag_notes . w rs ( string_data project ) all T )
+    : String q ( __ag_query req `q` )
+    : String kind ( __ag_query req `kind` )
+    : String sort ( __ag_query req `sort` )
+    : i limit ( __ag_query_int req `limit` 50 1 500 )
+    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : ( Vec AgNote ) v ( ag_notes_page . w rs ( string_data q ) ( string_data kind ) ( string_data sort ) limit offset )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgNote] v )
     : ~ i k 0
@@ -626,6 +754,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `notes` arr )
+    ( json_obj_set out `total` ( json_int ( ag_notes_count . w rs ( string_data q ) ( string_data kind ) ) ) )
     ^ ( __ag_json_ok out )
 }
 
@@ -661,6 +790,211 @@ $ `auth.nu`
     ?? ( ag_project_norm ( string_data raw ) ) { T pr → { = project pr } F → { ^ ( ag_json_err 400 `bad project` ) } }
     ? ( ag_note_del . w rs ( string_data project ) ( string_data key ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+}
+
+// The name a person's edits are signed with: their e-mail, `web` locally.
+@ __ag_person AgWho w → String {
+    ? ( ag_auth_oidc ) { ^ ( string_from ( string_data . . w who email ) ) } {}
+    ^ ( string_from `web` )
+}
+
+// PUT /m/rules?repo= {key, project?, rule} — a person promotes a note to a
+// rule (rule true) or makes it a plain note again.
+@ ag_h_rule_put HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : String who ( __ag_person w )
+    ^ ( __ag_res_http ( ag_op_call . w rs ( ag_caller_as ( string_data who ) ) `note_promote` b now ) )
+}
+
+// GET /m/skills — the organisation's skills, with bodies, switched off
+// ones too. Not about a repository: every one of them shares these.
+@ ag_h_skills HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : ( Vec AgSkill ) v ( ag_skills . w st T T )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgSkill] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgSkill] v k ) { T x → { ( json_arr_push arr ( _ag_skill_json x T ) ) } F _ → {} }
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `skills` arr )
+    ^ ( __ag_json_ok out )
+}
+
+// PUT /m/skills/:name {description?, body?, enabled?} — make or change a
+// skill (what is left out stays as it was), or switch it on or off.
+@ ag_h_skill_put HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : String name ( __ag_param req p `name` )
+    ( json_obj_set b `name` ( json_str_lit ( string_data name ) ) )
+    : String who ( __ag_person w )
+    ^ ( __ag_res_http ( ag_op_call . w st ( ag_caller_as ( string_data who ) ) `skill_set` b now ) )
+}
+
+@ ag_h_skill_del HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : String name ( __ag_param req p `name` )
+    ? ( ag_skill_del . w st ( string_data name ) ) {} { ^ ( ag_json_err 404 `no such skill` ) }
+    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+}
+
+// Where feedback is kept: the service's file when signed in, the one
+// local file otherwise.
+@ __ag_feedback_st AgWho w → AgStore {
+    ? ( ag_auth_oidc ) { ^ ( ag_feedback_store ) } {}
+    ^ @ AgStore { ( string_from ( string_data . . w st path ) ) . . w st ok @ ?Database { F } }
+}
+
+// GET /m/feedback?status=&kind=&limit=&offset=&order= — the owner
+// organisation's people read everyone's; everybody else their own
+// organisation's. Newest first (`order=oldest`: oldest first).
+@ ag_h_feedback HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : b triage ( __ag_is_owner_member w )
+    : String org ( string_from ? triage `` ( string_data . . w who org ) )
+    // '' would mean every organisation's: only the owner's people read that.
+    ? & ! triage == ( string_len org ) 0 { ^ ( ag_json_err 403 `no organisation to show the feedback of` ) } {}
+    : String status ( __ag_query req `status` )
+    : String kind ( __ag_query req `kind` )
+    : i limit ( __ag_query_int req `limit` 50 1 500 )
+    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : String order ( __ag_query req `order` )
+    : b oldest != 0 ( nurl_str_eq ( string_data order ) `oldest` )
+    : AgStore fs ( __ag_feedback_st w )
+    : ( Vec AgFeedback ) v ( ag_feedback_list fs ( string_data org ) ( string_data status ) ( string_data kind ) oldest limit offset )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgFeedback] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgFeedback] v k ) { T f → { ( json_arr_push arr ( _ag_feedback_json f ) ) } F _ → {} }
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `feedback` arr )
+    ( json_obj_set out `total` ( json_int ( ag_feedback_count fs ( string_data org ) ( string_data status ) ( string_data kind ) ) ) )
+    ( json_obj_set out `can_triage` ( json_bool triage ) )
+    ^ ( __ag_json_ok out )
+}
+
+// POST /m/feedback {kind, title, body} — from a person, not an agent.
+@ ag_h_feedback_new HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : String person ( __ag_person w )
+    : ~ String fdb ( string_new )
+    ? ( ag_auth_oidc ) {
+        : AgStore fs ( ag_feedback_store )
+        = fdb ( string_from ( string_data . fs path ) )
+    } {}
+    : AgCaller c @ AgCaller { T ( string_new ) ( string_from ( string_data . . w who org ) ) ( string_new ) person ( string_new ) fdb }
+    ^ ( __ag_res_http ( ag_op_call . w st c `feedback` b now ) )
+}
+
+// PUT /m/feedback/:id {status, reply} — the owner organisation answers.
+// The agent that sent it hears of it in its own repository's mail.
+@ ag_h_feedback_put HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    ? ( __ag_is_owner_member w ) {} { ^ ( ag_json_err 403 `the organisation that runs this agora answers feedback` ) }
+    : i id ( nurl_str_to_int ( string_data ( __ag_param req p `id` ) ) )
+    : AgStore fs ( __ag_feedback_st w )
+    ?? ( ag_feedback_get fs id ) {
+        F _ → { ^ ( ag_json_err 404 `no such feedback` ) }
+        T f → {
+            : Json b ( __ag_body_obj req )
+            : ~ String status ( _ag_arg_str b `status` )
+            ? == ( string_len status ) 0 { = status ( string_clone . f status ) } {}
+            : ~ String reply ( string_clone . f reply )
+            ?? ( json_obj_get b `reply` ) { T _ → { = reply ( _ag_arg_str b `reply` ) } F _ → {} }
+            ? > ( string_len reply ) AG_BODY_MAX { ^ ( ag_json_err 400 `reply: at most 16 KiB` ) } {}
+            ? ( ag_feedback_set fs id ( string_data status ) ( string_data reply ) now ) {} {
+                ^ ( ag_json_err 400 `status must be new, accepted, planned, done or declined` )
+            }
+            : b changed | ! ( string_eq status . f status ) ! ( string_eq reply . f reply )
+            ? changed { ( __ag_feedback_tell f ( string_data status ) ( string_data reply ) now ) } {}
+            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+        }
+    }
+}
+
+// Tell the agent that sent feedback `f` its new standing, in its own
+// repository's mail (a person on the web page has no mailbox: nothing).
+@ __ag_feedback_tell AgFeedback f s status s reply i now → v {
+    ? == ( string_len . f agent ) 0 { ^ v } {}
+    : String body ( string_from `your feedback #` )
+    ( string_push_int body . f id )
+    ( string_push_str body ` (` )
+    ( string_push_str body ( string_data . f title ) )
+    ( string_push_str body `) is ` )
+    ( string_push_str body status )
+    ? > ( nurl_str_len reply ) 0 {
+        ( string_push_str body `\nreply: ` )
+        ( string_push_str body reply )
+    } {}
+    : String mbox ( ag_mailbox ( string_data . f agent ) )
+    ? ( ag_auth_oidc ) {
+        ? | == ( string_len . f org ) 0 == ( string_len . f repo ) 0 { ^ v } {}
+        : AgStore rs ( ag_repo_store ( string_data . f org ) ( string_data . f repo ) )
+        ? . rs ok { ( ag_post rs ( string_data mbox ) `agora` ( string_data body ) 0 now ) } {}
+    } { ( ag_post ( ag_store ) ( string_data mbox ) `agora` ( string_data body ) 0 now ) }
+}
+
+@ ag_h_feedback_del HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    ? ( __ag_is_owner_member w ) {} { ^ ( ag_json_err 403 `the organisation that runs this agora answers feedback` ) }
+    : i id ( nurl_str_to_int ( string_data ( __ag_param req p `id` ) ) )
+    : AgStore fs ( __ag_feedback_st w )
+    ? ( ag_feedback_del fs id ) {} { ^ ( ag_json_err 404 `no such feedback` ) }
+    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+}
+
+// A cutoff `days` ago from `now`; 0 days = none (that kind is left alone).
+@ __ag_days_ago Json b s key i now → i {
+    : i d ( _ag_arg_int b key 0 )
+    ? | <= d 0 > d 36500 { ^ 0 } {}
+    ^ - now * d 86400
+}
+
+// POST /m/cleanup?repo= {agents_days, tasks_days, messages_days,
+// channels_days, dry_run} — clear out of the repository's agora the agents
+// not seen for so many days, the tasks finished that long ago, older
+// messages and channels nobody has posted to (manage.nu's ag_cleanup); a
+// kind left out or 0 is left alone. `dry_run` (the default) only counts.
+@ ag_h_cleanup HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : b dry ( _ag_arg_bool b `dry_run` T )
+    : AgCleanup r ( ag_cleanup . w rs ( __ag_days_ago b `agents_days` now ) ( __ag_days_ago b `tasks_days` now )
+    ( __ag_days_ago b `messages_days` now ) ( __ag_days_ago b `channels_days` now ) dry now )
+    ? < . r agents 0 { ^ ( ag_json_err 500 `the cleanup failed; nothing was changed` ) } {}
+    : Json o ( json_obj_new )
+    ( json_obj_set o `agents` ( json_int . r agents ) )
+    ( json_obj_set o `tasks` ( json_int . r tasks ) )
+    ( json_obj_set o `messages` ( json_int . r messages ) )
+    ( json_obj_set o `channels` ( json_int . r channels ) )
+    ( json_obj_set o `dry_run` ( json_bool dry ) )
+    ^ ( __ag_json_ok o )
 }
 
 // GET /m/users — admins only: it names everyone who has signed in.

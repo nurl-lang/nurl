@@ -9,6 +9,8 @@
 //             of an organisation becomes its admin — nobody else could
 //             have granted it, and an organisation with no admin could
 //             never be administered.
+//   skills    the organisation's playbooks (store.nu's table), for every
+//             repository's agents alike
 //
 // People and agents are not tied together: a repository's agora is one
 // shared room for everybody of the organisation who works on it, and an
@@ -16,7 +18,8 @@
 //
 // Plus the editing a person does from the web page and an agent never
 // does: rewrite or delete a message, edit or delete a task, delete a
-// channel or an agent. Same rules as store.nu: a connection per
+// channel or an agent, page through and sort what is there, and clear
+// out what has gone stale. Same rules as store.nu: a connection per
 // operation, BEGIN IMMEDIATE around anything that writes twice.
 
 $ `store.nu`
@@ -132,6 +135,7 @@ $ `store.nu`
                 T _ → { = ok T }
                 F _ → {}
             }
+            ?? ( sqlite_exec db AG_SKILLS_TABLE ) { T _ → {} F _ → { = ok F } }
         }
     }
     ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
@@ -262,29 +266,35 @@ $ `store.nu`
 // back to open, as an expired lease would.
 @ ag_agent_delete AgStore st s id i now → b {
     : ~ b ok F
-    : String mbox ( ag_mailbox id )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ F }
-            = ok ( __ag_on_s db `DELETE FROM agents WHERE id = ?1` id )
-            : b existed > ( sqlite_changes db ) 0
-            = ok & & ok ( __ag_on_s db `DELETE FROM follows WHERE agent = ?1` id )
-            ( __ag_on_s db `DELETE FROM cursors WHERE agent = ?1` id )
-            = ok & ok ( __ag_on_s db `DELETE FROM messages WHERE channel = ?1` ( string_data mbox ) )
-            ?? ( sqlite_prepare db `UPDATE tasks SET status = 'open', owner = '', lease_until = 0, updated = ?2 WHERE status = 'claimed' AND owner = ?1` ) {
-                F _ → { = ok F }
-                T q → {
-                    ( _ag_bind_s q 1 id )
-                    ( _ag_bind_i q 2 now )
-                    = ok & ok ( _ag_run q )
-                }
-            }
-            = ok & ok existed
+            = ok ( __ag_agent_delete_on db id now )
             ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
         }
     }
     ^ ok
+}
+
+// The same inside the caller's transaction; F when there was no such
+// agent or a statement failed.
+@ __ag_agent_delete_on Database db s id i now → b {
+    : String mbox ( ag_mailbox id )
+    : ~ b ok ( __ag_on_s db `DELETE FROM agents WHERE id = ?1` id )
+    : b existed > ( sqlite_changes db ) 0
+    = ok & & ok ( __ag_on_s db `DELETE FROM follows WHERE agent = ?1` id )
+    ( __ag_on_s db `DELETE FROM cursors WHERE agent = ?1` id )
+    = ok & ok ( __ag_on_s db `DELETE FROM messages WHERE channel = ?1` ( string_data mbox ) )
+    ?? ( sqlite_prepare db `UPDATE tasks SET status = 'open', owner = '', lease_until = 0, updated = ?2 WHERE status = 'claimed' AND owner = ?1` ) {
+        F _ → { = ok F }
+        T q → {
+            ( _ag_bind_s q 1 id )
+            ( _ag_bind_i q 2 now )
+            = ok & ok ( _ag_run q )
+        }
+    }
+    ^ & ok existed
 }
 
 // ── Channels ─────────────────────────────────────────────────────────
@@ -298,15 +308,19 @@ $ `store.nu`
         F _ → {}
         T db → {
             ? ( _ag_begin db ) {} { ^ F }
-            = ok ( __ag_on_s db `DELETE FROM channels WHERE name = ?1` name )
-            : b existed > ( sqlite_changes db ) 0
-            = ok & & & & ok existed ( __ag_on_s db `DELETE FROM messages WHERE channel = ?1` name )
-            ( __ag_on_s db `DELETE FROM follows WHERE channel = ?1` name )
-            ( __ag_on_s db `DELETE FROM cursors WHERE channel = ?1` name )
+            = ok ( __ag_channel_delete_on db name )
             ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
         }
     }
     ^ ok
+}
+
+@ __ag_channel_delete_on Database db s name → b {
+    : b ok ( __ag_on_s db `DELETE FROM channels WHERE name = ?1` name )
+    : b existed > ( sqlite_changes db ) 0
+    ^ & & & & ok existed ( __ag_on_s db `DELETE FROM messages WHERE channel = ?1` name )
+    ( __ag_on_s db `DELETE FROM follows WHERE channel = ?1` name )
+    ( __ag_on_s db `DELETE FROM cursors WHERE channel = ?1` name )
 }
 
 // ── Messages ─────────────────────────────────────────────────────────
@@ -342,23 +356,61 @@ $ `store.nu`
 // shared by everybody in it. `channel` '' = all channels; `text` '' = any
 // body; `before` 0 = from the newest.
 @ ag_messages_list AgStore st s channel s text i before i limit → ( Vec AgMsg ) {
+    ^ ( ag_messages_page st channel `` text before F limit 0 )
+}
+
+// The filter every message listing shares: ?1 channel, ?2 sender, ?3 a
+// LIKE pattern for the body ('' = any of each), ?4 ids below (0 = any).
+: s AG_MSG_WHERE ` FROM messages WHERE (?1 = '' OR channel = ?1) AND (?2 = '' OR sender = ?2) AND (?3 = '' OR body LIKE ?3 ESCAPE '\\') AND (?4 = 0 OR id < ?4)`
+
+// A page of them: `offset` rows past the first, newest first (`oldest`
+// T: oldest first). `from` '' = anyone.
+@ ag_messages_page AgStore st s channel s from s text i before b oldest i limit i offset → ( Vec AgMsg ) {
     : ( Vec AgMsg ) out ( vec_new [AgMsg] )
+    : String sql ( string_from `SELECT id, channel, sender, body, reply_to, ts` )
+    ( string_push_str sql AG_MSG_WHERE )
+    ( string_push_str sql ? oldest ` ORDER BY id LIMIT ?5 OFFSET ?6` ` ORDER BY id DESC LIMIT ?5 OFFSET ?6` )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE (?2 = '' OR channel = ?2) AND (?3 = 0 OR id < ?3) AND (?4 = '' OR body LIKE ?4 ESCAPE '\\') ORDER BY id DESC LIMIT ?5` ) {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ( _ag_bind_s q 2 channel )
-                    ( _ag_bind_i q 3 before )
-                    ( _ag_bind_str q 4 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 1 channel )
+                    ( _ag_bind_s q 2 from )
+                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_i q 4 before )
                     ( _ag_bind_i q 5 limit )
+                    ( _ag_bind_i q 6 offset )
                     ~ ( _ag_row q ) { ( vec_push [AgMsg] out ( _ag_read_msg q ) ) }
                 }
             }
         }
     }
     ^ out
+}
+
+// How many the same filter matches (for "page 2 of 7").
+@ ag_messages_count AgStore st s channel s from s text → i {
+    : ~ i n 0
+    : String sql ( string_from `SELECT COUNT(*)` )
+    ( string_push_str sql AG_MSG_WHERE )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 channel )
+                    ( _ag_bind_s q 2 from )
+                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_i q 4 0 )
+                    ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+                }
+            }
+        }
+    }
+    ^ n
 }
 
 // ── Tasks ────────────────────────────────────────────────────────────
@@ -400,6 +452,241 @@ $ `store.nu`
     ^ ok
 }
 
+// The filter every task listing of the page shares: ?1 status, ?2
+// holder, ?3 a LIKE pattern for title, body or tags ('' = any of each),
+// ?4 1 = leave out what is finished (done, cancelled).
+: s AG_TASK_WHERE ` FROM tasks WHERE (?1 = '' OR status = ?1) AND (?2 = '' OR owner = ?2) AND (?3 = '' OR title LIKE ?3 ESCAPE '\\' OR body LIKE ?3 ESCAPE '\\' OR tags LIKE ?3 ESCAPE '\\') AND (?4 = 0 OR status NOT IN ('done', 'cancelled'))`
+
+// The column a page is sorted by: one of a fixed list, so nothing a
+// caller writes reaches the SQL. Anything else is `updated`.
+@ ag_task_sort_col s sort → s {
+    ? != 0 ( nurl_str_eq sort `id` ) { ^ `id` } {}
+    ? != 0 ( nurl_str_eq sort `title` ) { ^ `title COLLATE NOCASE` } {}
+    ? != 0 ( nurl_str_eq sort `status` ) { ^ `status` } {}
+    ? != 0 ( nurl_str_eq sort `poster` ) { ^ `poster` } {}
+    ? != 0 ( nurl_str_eq sort `owner` ) { ^ `owner` } {}
+    ? != 0 ( nurl_str_eq sort `priority` ) { ^ `priority` } {}
+    ? != 0 ( nurl_str_eq sort `created` ) { ^ `created` } {}
+    ^ `updated`
+}
+
+// A page of tasks for the web page: filtered (`status` '' = any, `holder`
+// '' = anyone, `text` '' = anything, `hide_done`), sorted by `sort`
+// (ag_task_sort_col) ascending or `desc`, `limit` from `offset`. Leases
+// that ran out are reopened first, as every task read does.
+@ ag_tasks_page AgStore st s status s holder s text b hide_done s sort b desc i limit i offset i now → ( Vec AgTask ) {
+    : ( Vec AgTask ) out ( vec_new [AgTask] )
+    : s dir ? desc ` DESC` ` ASC`
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_TASK_COLS )
+    ( string_push_str sql AG_TASK_WHERE )
+    ( string_push_str sql ` ORDER BY ` )
+    ( string_push_str sql ( ag_task_sort_col sort ) )
+    ( string_push_str sql dir )
+    ( string_push_str sql `, id` )
+    ( string_push_str sql dir )
+    ( string_push_str sql ` LIMIT ?5 OFFSET ?6` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ? ( _ag_begin db ) { ( _ag_expire_on db now ) ( _ag_commit db ) } {}
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 status )
+                    ( _ag_bind_s q 2 holder )
+                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_i q 4 ? hide_done 1 0 )
+                    ( _ag_bind_i q 5 limit )
+                    ( _ag_bind_i q 6 offset )
+                    ~ ( _ag_row q ) { ( vec_push [AgTask] out ( _ag_read_task q ) ) }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+@ ag_tasks_count AgStore st s status s holder s text b hide_done → i {
+    : ~ i n 0
+    : String sql ( string_from `SELECT COUNT(*)` )
+    ( string_push_str sql AG_TASK_WHERE )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 status )
+                    ( _ag_bind_s q 2 holder )
+                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_i q 4 ? hide_done 1 0 )
+                    ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+                }
+            }
+        }
+    }
+    ^ n
+}
+
+// ── Notes ────────────────────────────────────────────────────────────
+
+// The filter of the page's notes: ?1 a LIKE pattern for key or body ('' =
+// any), ?2 `rules` (only rules), `notes` (only plain notes) or '' (both).
+: s AG_NOTE_WHERE ` FROM notes WHERE (?1 = '' OR key LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\') AND (?2 = '' OR (?2 = 'rules' AND rule = 1) OR (?2 = 'notes' AND rule = 0))`
+
+// A page of notes with their bodies: rules first, then by key (`sort`
+// `updated`: the most recently written first).
+@ ag_notes_page AgStore st s text s kind s sort i limit i offset → ( Vec AgNote ) {
+    : ( Vec AgNote ) out ( vec_new [AgNote] )
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql AG_NOTE_COLS )
+    ( string_push_str sql AG_NOTE_WHERE )
+    ( string_push_str sql ? != 0 ( nurl_str_eq sort `updated` ) ` ORDER BY updated DESC, project, key` ` ORDER BY rule DESC, project, key` )
+    ( string_push_str sql ` LIMIT ?3 OFFSET ?4` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_str q 1 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 2 kind )
+                    ( _ag_bind_i q 3 limit )
+                    ( _ag_bind_i q 4 offset )
+                    ~ ( _ag_row q ) { ( vec_push [AgNote] out ( _ag_read_note q ) ) }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+@ ag_notes_count AgStore st s text s kind → i {
+    : ~ i n 0
+    : String sql ( string_from `SELECT COUNT(*)` )
+    ( string_push_str sql AG_NOTE_WHERE )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_str q 1 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 2 kind )
+                    ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+                }
+            }
+        }
+    }
+    ^ n
+}
+
+// ── Cleaning up ──────────────────────────────────────────────────────
+//
+// An agent name is made on first use and nobody's, so a busy repository
+// collects agents that came once and never again, finished tasks, and
+// channels nobody posts to. Each kind has its own cutoff time (0 leaves
+// that kind alone); `dry` counts what would go and changes nothing.
+//
+//   agents    not seen since the cutoff: deleted as ag_agent_delete does
+//             (mailbox, follows, cursors; a held task reopens)
+//   tasks     done or cancelled, last changed before the cutoff
+//   messages  posted before the cutoff, channel posts and mail alike
+//   channels  every one but `public` made before the cutoff with no post
+//             since, with what is left in it
+
+: AgCleanup {
+    i agents
+    i tasks
+    i messages
+    i channels
+}
+
+// The names `sql` (?1 = cutoff) selects.
+@ __ag_names_on Database db s sql i cutoff → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    ?? ( sqlite_prepare db sql ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_i q 1 cutoff )
+            ~ ( _ag_row q ) { ( vec_push [String] out ( sqlite_column_text q 0 ) ) }
+        }
+    }
+    ^ out
+}
+
+// The count `sql` (?1 = cutoff) answers.
+@ __ag_count_on Database db s sql i cutoff → i {
+    : ~ i n 0
+    ?? ( sqlite_prepare db sql ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_i q 1 cutoff )
+            ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+        }
+    }
+    ^ n
+}
+
+: s AG_STALE_CHANNELS `SELECT name FROM channels c WHERE name != 'public' AND created < ?1 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = c.name AND m.ts >= ?1) ORDER BY name`
+
+@ ag_cleanup AgStore st i agents_before i tasks_before i msgs_before i channels_before b dry i now → AgCleanup {
+    : ~ AgCleanup r @ AgCleanup { 0 0 0 0 }
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ? ( _ag_begin db ) {} { ^ r }
+            : ~ b ok T
+            ? > agents_before 0 {
+                : ( Vec String ) ids ( __ag_names_on db `SELECT id FROM agents WHERE seen < ?1 ORDER BY id` agents_before )
+                : i n ( vec_len [String] ids )
+                = . r agents n
+                ? dry {} {
+                    : ~ i k 0
+                    ~ < k n {
+                        ?? ( vec_get [String] ids k ) {
+                            T id → { = ok & ok ( __ag_agent_delete_on db ( string_data id ) now ) }
+                            F _ → {}
+                        }
+                        = k + k 1
+                    }
+                }
+            } {}
+            ? > tasks_before 0 {
+                = . r tasks ( __ag_count_on db `SELECT COUNT(*) FROM tasks WHERE status IN ('done', 'cancelled') AND updated < ?1` tasks_before )
+                ? dry {} { = ok & ok ( __ag_on_i db `DELETE FROM tasks WHERE status IN ('done', 'cancelled') AND updated < ?1` tasks_before ) }
+            } {}
+            ? > msgs_before 0 {
+                = . r messages ( __ag_count_on db `SELECT COUNT(*) FROM messages WHERE ts < ?1` msgs_before )
+                ? dry {} { = ok & ok ( __ag_on_i db `DELETE FROM messages WHERE ts < ?1` msgs_before ) }
+            } {}
+            ? > channels_before 0 {
+                : ( Vec String ) names ( __ag_names_on db AG_STALE_CHANNELS channels_before )
+                : i n ( vec_len [String] names )
+                = . r channels n
+                ? dry {} {
+                    : ~ i k 0
+                    ~ < k n {
+                        ?? ( vec_get [String] names k ) {
+                            T c → { = ok & ok ( __ag_channel_delete_on db ( string_data c ) ) }
+                            F _ → {}
+                        }
+                        = k + k 1
+                    }
+                }
+            } {}
+            ? & ok ! dry {
+                ? ( _ag_commit db ) {} { ( _ag_rollback db ) = r @ AgCleanup { -1 -1 -1 -1 } }
+            } {
+                ( _ag_rollback db )
+                ? ok {} { = r @ AgCleanup { -1 -1 -1 -1 } }
+            }
+        }
+    }
+    ^ r
+}
+
 // ── Counts for the overview ──────────────────────────────────────────
 
 : AgTotals {
@@ -409,14 +696,15 @@ $ `store.nu`
     i tasks_open
     i tasks
     i notes
+    i rules
 }
 
 @ ag_totals AgStore st → AgTotals {
-    : ~ AgTotals t @ AgTotals { 0 0 0 0 0 0 }
+    : ~ AgTotals t @ AgTotals { 0 0 0 0 0 0 0 }
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM agents), (SELECT COUNT(*) FROM channels), (SELECT COUNT(*) FROM messages WHERE substr(channel, 1, 1) != '@'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed')), (SELECT COUNT(*) FROM tasks), (SELECT COUNT(*) FROM notes)` ) {
+            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM agents), (SELECT COUNT(*) FROM channels), (SELECT COUNT(*) FROM messages WHERE substr(channel, 1, 1) != '@'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed')), (SELECT COUNT(*) FROM tasks), (SELECT COUNT(*) FROM notes), (SELECT COUNT(*) FROM notes WHERE rule = 1)` ) {
                 F _ → {}
                 T q → {
                     ? ( _ag_row q ) {
@@ -427,6 +715,7 @@ $ `store.nu`
                             ( sqlite_column_int q 3 )
                             ( sqlite_column_int q 4 )
                             ( sqlite_column_int q 5 )
+                            ( sqlite_column_int q 6 )
                         }
                     } {}
                 }

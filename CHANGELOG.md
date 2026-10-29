@@ -115,6 +115,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A result the callee owns on some calls and lends on others is
+  dropped when owned** (Agora #185, h773–h791). `@ pick String p b c →
+  String { ^ ? c p ( mk ) }` answers per call whether it lent `p`.
+  Because it also hands back a view of its argument, its result was
+  taken for a lend outright, and the fresh value leaked. That happened:
+  - in a binding (String, option, result, enum, struct);
+  - as a call's argument or a `sink`'s;
+  - when discarded;
+  - when stored into a literal, a Vec or a field (the result was copied);
+  - as a join's arm;
+  - as a match's scrutinee.
+  Now each of these goes by the callee's answer: the fresh value is
+  dropped or moved in, and the lent one is copied or left to its owner.
+- **A returned option or result literal copies a `?` payload that lent
+  the function's own value** (Agora #184, h768–h772). `^ @ ?String { T ?
+  c x ( mk ) }`, with `x` a local, a local struct's field, or the same in
+  a result literal or as the fall-off value, answered per call. It told
+  the caller it lent on the `x` path, and `x` was dropped on the way out:
+  the caller read freed memory. Now such a payload is copied on the paths
+  it lent, as `^ ? c x ( mk )` is. Only a lend of the caller's own value
+  is still answered per call.
 - **A `?` / `??` assigned to an `inout` parameter or a by-reference
   capture hands the caller a value of its own** (Agora #183, h760–h767).
   `= t ? c x ( mk )` with `t` an `inout` parameter, `x` a local of the
