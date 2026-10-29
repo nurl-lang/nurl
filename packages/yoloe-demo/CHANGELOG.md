@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.9] — 2026-10-29
+
+### Fixed
+
+- The wasm detector keeps its frame in one Image for the whole loop. It
+  built an Image from the frame buffer on every frame. That Image took
+  the buffer over and released it when the frame ended, so the next
+  frame was written into freed memory. The compiler now rejects the old
+  shape (agora #160).
+
 ## [0.3.8] — 2026-10-29
 
 ### Fixed

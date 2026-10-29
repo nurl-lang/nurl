@@ -29,8 +29,11 @@ for f in "${files[@]}"; do
         continue
     fi
     (cd "$ROOT" && NURL_SAN=1 ./nurl.sh "$DIR/$f" "${b}_san" >/dev/null 2>&1)
-    r=$(timeout 60 "${b}_san" 2>&1 >/dev/null)
-    k=$(grep -m1 -oE "heap-use-after-free|double-free|attempting free|heap-buffer-overflow|stack-use-after-return|detected memory leaks|SEGV|runtime error" <<<"$r")
+    # (A frame handed out lives on ASan's fake stack: without
+    # detect_stack_use_after_return a read through it after the return
+    # "runs clean".)
+    r=$(ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_stack_use_after_return=1" timeout 60 "${b}_san" 2>&1 >/dev/null)
+    k=$(grep -m1 -oE "heap-use-after-free|double-free|attempting free|heap-buffer-overflow|stack-use-after-return|stack-use-after-scope|detected memory leaks|SEGV|runtime error" <<<"$r")
     if [ -n "$k" ]; then echo "HOLE      $f: $k"; holes=$((holes+1)); else echo "ACCEPTED  $f: ran clean"; fi
 done
 echo "holes: $holes"

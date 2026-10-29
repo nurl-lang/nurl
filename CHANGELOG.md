@@ -51,6 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value stored into an owner on some paths, or on every iteration,
+  stays stored** (Agora #160, h590–h596). A store on one arm of a `?`
+  or `??`, or before a `break`, was forgotten where the paths met. A
+  store on one iteration was forgotten on the next. Reading the value
+  after the owner let it go, freeing it, or storing it again was
+  accepted, and on the path that stored it that read freed memory or
+  released it twice.
+  - Now such a value is possibly moved where the paths meet, and a loop
+    carries a store into an owner bound before the loop.
+  - A closure's capture, stored with it only for the checker, is
+    unaffected.
+  - stdlib `json_obj_set` finds the key before it hands the value over.
+  - yoloe-demo 0.3.9 keeps its wasm frame in one Image: the old one
+    adopted and released the buffer on every frame.
 - **A mutator called on a value an accessor lends changes what that
   accessor lends from** (Agora #169, h584–h589). The pattern is
   `( vec_push [i] ( rc_get [( Vec i )] r ) x )`. A view or element of

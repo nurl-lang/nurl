@@ -1309,28 +1309,17 @@ $ `stdlib/core/vec.nu`
     ^ ?? j {
         JObj v → {
             : i n ( vec_len [Json] v )
+            // Find the key's slot first, then hand `val` over at exactly
+            // one place: the walk proves one owner per path, and a store
+            // inside the search loop it could not tell from a second one.
+            : ~ i found -1
             : ~ i k 0
-            : ~ b done F
-            ~ & ! done < k n {
+            ~ & < found 0 < k n {
                 : ?Json ek ( vec_get [Json] v k )
                 ?? ek {
                     T jk → {
                         ?? jk {
-                            JStr ks → {
-                                ? != 0 ( nurl_str_eq ( string_data ks ) key ) {
-                                    // Key match: the new value replaces the old at slot
-                                    // k+1 (vec_set drops the old one).
-                                    : i k_v + k 1
-                                    ? < k_v n {
-                                        ( vec_set [Json] v k_v val )
-                                    } {
-                                        // Object was malformed (odd-sized) — append val to
-                                        // restore the alternating shape.
-                                        ( vec_push [Json] v val )
-                                    }
-                                    = done T
-                                } {}
-                            }
+                            JStr ks → { ? != 0 ( nurl_str_eq ( string_data ks ) key ) { = found k } {} }
                             _ → {}
                         }
                     }
@@ -1338,14 +1327,20 @@ $ `stdlib/core/vec.nu`
                 }
                 = k + k 2
             }
-            ? ! done {
+            ? >= found 0 {
+                // Key match: the new value replaces the old at slot k+1
+                // (vec_set drops the old one); an odd-sized, malformed
+                // object gets it appended, restoring the alternating shape.
+                : i k_v + found 1
+                ? < k_v n { ( vec_set [Json] v k_v val ) } { ( vec_push [Json] v val ) }
+            } {
                 // No match → append fresh pair.
                 : i klen ( nurl_str_len key )
                 : String kc ( string_with_cap klen )
                 ( string_push_str kc key )
                 ( vec_push [Json] v @ Json { JStr kc } )
                 ( vec_push [Json] v val )
-            } {}
+            }
             ^ T
         }
         _ → F

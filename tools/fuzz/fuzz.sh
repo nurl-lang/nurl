@@ -258,7 +258,7 @@ for seed in $(seq "$START" "$end"); do
     if [[ $ok -eq 1 && "$SAN_EVERY" != "0" ]] && (( seed % SAN_EVERY == 0 )); then
         san_runs=$((san_runs+1))
         if NURL_SAN=1 "$NURL" -O0 "$prog" "$TMP/osan" >"$TMP/bsan.log" 2>&1; then
-            ASAN_OPTIONS="detect_leaks=1:exitcode=99" timeout "$RUN_TIMEOUT" \
+            ASAN_OPTIONS="detect_leaks=1:detect_stack_use_after_return=1:exitcode=99" timeout "$RUN_TIMEOUT" \
                 "$TMP/osan" > "$TMP/outsan" 2>"$TMP/errsan"; rcs=$?
             if [[ $rcs -ne 0 ]] || ! cmp -s "$TMP/outsan" "$exp" || grep -q "ERROR:" "$TMP/errsan"; then
                 ok=0; reason="sanitizer leg (rc=$rcs)"

@@ -572,3 +572,10 @@ h586_view_of_rc_payload_then_pushed_through_rc_get	§2.11	A2	agora #169: view_of
 h587_view_of_rc_payload_then_pushed_through_a_clone	§2.11	A2	agora #169: view_of_rc_payload_then_pushed_through_a_clone	rejected
 h588_element_of_rc_payload_then_cleared_through_rc_get	§2.11	A2	agora #169: element_of_rc_payload_then_cleared_through_rc_get	rejected
 h589_view_of_box_payload_then_pushed_through_box_get	§2.11	A2	agora #169: view_of_box_payload_then_pushed_through_box_get	rejected
+h590_stored_on_one_path_then_its_owner_freed	§2.12	A2	agora #160: stored_on_one_path_then_its_owner_freed	rejected
+h591_stored_into_one_owner_on_every_iteration	§2.12	A2	agora #160: stored_into_one_owner_on_every_iteration	rejected
+h592_stored_in_a_match_arm_then_its_owner_freed	§2.12	A2	agora #160: stored_in_a_match_arm_then_its_owner_freed	rejected
+h593_stored_before_a_break_then_its_owner_freed	§2.12	A2	agora #160: stored_before_a_break_then_its_owner_freed	rejected
+h594_stored_on_one_path_then_freed	§2.12	A2	agora #160: stored_on_one_path_then_freed	rejected
+h595_stored_on_one_path_then_stored_again	§2.12	A2	agora #160: stored_on_one_path_then_stored_again	rejected
+h596_buffer_adopted_by_a_loop_local_then_reused	§2.12	A2	agora #160: buffer_adopted_by_a_loop_local_then_reused	rejected
