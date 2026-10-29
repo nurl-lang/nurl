@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_join_view_kept_past_statement.nu:13:5: error: the result of 'string_data' may view its argument 1, a temporary this statement made, and the view is kept past the call that uses it (bound, returned, stored, or taken by a join) — nothing would own the temporary then: it could never be released, and releasing it at the statement's end would leave the view dangling. Bind the argument to a name first (': String x ( … )') — it then lives to the end of that scope, and the view borrows from it — or use the view inside a call that copies what it needs.
+    : s w ( string_data ?? ( vec_get [String] v 1 ) { T x → x F _ → ( string_from `fresh` ) } )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

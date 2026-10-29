@@ -126,7 +126,8 @@ $ `stdlib/core/slice.nu`
     : i n ( vec_len [String] toks )
     : ~ i k 1
     ~ < k n {
-        : s ch ( string_data ?? ( vec_get [String] toks k ) { T x → x F _ → ( string_new ) } )
+        : String chs ?? ( vec_get [String] toks k ) { T x → x F _ → ( string_new ) }
+        : s ch ( string_data chs )
         : !RedisMessage RedisErr sr ? != is_pattern 0 ( redis_psubscribe c ch ) ( redis_subscribe c ch )
         ?? sr {
             T m → { ( __print_msg m ) }
@@ -146,7 +147,8 @@ $ `stdlib/core/slice.nu`
 // Route a parsed command: SUBSCRIBE / PSUBSCRIBE enter the message loop,
 // everything else is a one-shot request/reply. Frees `toks` either way.
 @ __dispatch RedisConn c ( Vec String ) toks → v {
-    : s cmd0 ( string_data ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) } )
+    : String cmd0s ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) }
+    : s cmd0 ( string_data cmd0s )
     ? ( __rci_eq cmd0 `subscribe` ) { ( __subscribe_loop c toks 0 ) ^ v } {}
     ? ( __rci_eq cmd0 `psubscribe` ) { ( __subscribe_loop c toks 1 ) ^ v } {}
     ( __run_cmd c toks )
@@ -324,7 +326,8 @@ $ `stdlib/core/slice.nu`
                         : ( Vec String ) toks ( __tokenize ( string_data line ) )
                         : i tn ( vec_len [String] toks )
                         ? == tn 0 {} {
-                            : s cmd0 ( string_data ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) } )
+                            : String cmd0s ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) }
+                            : s cmd0 ( string_data cmd0s )
                             ? | ( nurl_str_eq cmd0 `quit` ) ( nurl_str_eq cmd0 `exit` ) {
                                 = running F
                             } {

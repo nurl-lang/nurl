@@ -722,3 +722,5 @@ h764_borrowed_param_join_to_inout_param	§7.6	A2	agora #183: a borrowed paramete
 h765_self_join_to_inout_param	§7.6	A2	agora #183: an `inout` parameter handed back to itself through a `?`	runs-clean
 h766_option_join_to_inout_param	§7.6	A2	agora #183: an option `?` assigned to an `inout ?String`	runs-clean
 h767_loop_local_vec_join_to_inout_param	§7.6	A2	agora #183: a loop body's Vec handed through a `?` to an `inout` parameter	runs-clean
+h731_owning_join_viewed_inside_its_statement	§1	A2	agora #181: a `??` join with an owning arm handed to string_data inside a consuming call: the owning arm's value was dropped by no one	runs-clean
+h732_owning_join_viewed_past_its_statement	§1	A2	agora #181: the same with the view bound past its statement: rejected as a view of a call's temporary is	rejected

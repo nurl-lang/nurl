@@ -23347,10 +23347,10 @@ unsafe @ mem_path_to_indices s path → s {
     : s __jown ( nurl_sym_get syms `__argtmp_joinown__` )
     ( nurl_sym_def syms `__argtmp_joinown__` `` )
     // (A join whose arms all lend — the constant `false` — owns nothing.
-    // Only for a call whose result cannot view it — a number, or a value
-    // of its own: one that may (`( string_data ?? … )`) keeps it as before.)
-    : b __tj_fresh | __scalar_ret & ! shadowed | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
-    : b __tjo & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at ) __tj_fresh
+    // One a call's result may view (`( string_data ?? … )`) is deferred as
+    // a call's temporary is: the view may not outlive its statement — bind
+    // the join first — agora #181.)
+    : b __tjo & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at )
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
@@ -23359,7 +23359,8 @@ unsafe @ mem_path_to_indices s path → s {
         ? != 0 ( nurl_str_len __tro ) {
             // (The constant that says whether it is owned, for a temporary
             // nothing ends up consuming: resolve_view_temps.)
-            : s __trk ? __tfo ( nurl_sym_get syms `__last_tmp_field_rk__` ) ? ( seq __tro `true` ) ( nurl_str_cat `true` `` ) ( nurl_sym_get syms `__last_retown_const__` )
+            // (A join's arms differ per path: owned on some, so owned.)
+            : s __trk ? __tfo ( nurl_sym_get syms `__last_tmp_field_rk__` ) ? | __tjo ( seq __tro `true` ) ( nurl_str_cat `true` `` ) ( nurl_sym_get syms `__last_retown_const__` )
             : s __tnk ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
             : ~ s __tc ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __tc ) ( nurl_print ` = and i1 ` ) ( nurl_print __tro ) ( nurl_print `, ` ) ( nurl_print __tnk ) ( nurl_print `\n` )

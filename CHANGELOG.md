@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A join a call's result may view is that call's temporary** (agora
+  #181, h731–h732). `( string_data ?? ( vec_get v k ) { T x → x F _ → (
+  string_new ) } )` leaked the owning arm's value: #174 settled a join
+  argument only for a call whose result cannot view it. It is now deferred
+  as a call's temporary is — dropped after the call that consumes the view
+  — and a view of it kept past its statement is refused with the same cure
+  as `( string_data ( mk ) )`: bind the join first. `packages/redis` binds
+  its two such joins.
 - **A `?` / `??` join handed straight to a call drops what it owns**
   (agora #174, h725–h730). `( use ? c @ S { ( mk ) 0 } @ S { ( mk ) 1 } )`
   — struct literals in the arms, calls that build the struct, bindings

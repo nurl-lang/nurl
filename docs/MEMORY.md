@@ -1489,7 +1489,9 @@ The rules that carry it:
   may view a temporary argument (`( string_data ( mk ) )`) is used inside
   a call that consumes the view; kept past it — bound, returned, assigned,
   stored, taken by a join — it is an error naming the same fix (§1,
-  Temporaries).
+  Temporaries). A `?` / `??` join with an arm that owns its value is such
+  a temporary too (`( string_data ?? ( vec_get v k ) { T x → x F _ → (
+  string_new ) } )`): bind the join first (h731, h732).
 - **A container keeps what it is handed.** A view stored in a `Vec`, used
   as a map key or handed to a function that keeps its argument may live no
   longer than its source.
