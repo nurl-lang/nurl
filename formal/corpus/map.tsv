@@ -587,6 +587,11 @@ h601_byref_closure_picked_then_pushed_into_a_param_vec	§2.8	A2	agora #154: byre
 h602_join_copies_a_nested_join_for_its_condition	§7.1	A2	?-join copies a nested ?-join arm for its condition's ident: the inner owner leaks	runs-clean
 h603_join_copies_a_nested_join_on_the_then_side	§7.1	A2	?-join copies a nested ?-join then-arm: the inner join's owner leaks	runs-clean
 h604_join_of_a_nested_join_assigned_to_a_cursor	§7.1	A2	nested ?-join copied when assigned to a cursor: the inner owner leaks	runs-clean
+h605_literal_with_a_binding_value_handed_back	CallT.summary	A1	agora #172: a literal holding a binding's value and a fresh one, handed back whole: binding and result share it	runs-clean
+h606_literal_with_a_binding_value_through_a_generic	CallT.summary	A1	agora #172: the same through a generic identity: the binding drops what the result holds	runs-clean
+h607_literal_with_a_binding_value_through_a_later_callee	CallT.summary	A1	agora #172: the same through a callee defined after the caller	runs-clean
+h608_literal_with_a_binding_value_then_binding_read	CallT.summary	A1	agora #172: binding read after its value went into a literal the callee handed back	rejected
+h609_literal_with_a_binding_value_part_handed_back	CallT.summary	A1	agora #172: callee hands back one field of the literal: the binding still drops its value in the rest	runs-clean
 h610_fiber_joined_twice	§2.1	A2	`( fiber_join f ) ( fiber_join f )` on one spawn_joinable handle: the second join freed the fiber's control block again (agora #168). Fiber is move-only and fiber_join takes it.	rejected
 h611_fiber_handle_copy_joined_twice	§2.1	A2	as h610 through a copy `: Fiber b a`, each copy joined once (agora #168).	rejected
 h612_joinable_fiber_never_joined	§3.3d	B	a spawn_joinable handle never joined: the finished fiber's block leaked; dropping the handle now detaches the fiber (nurl_fiber_detach; agora #168).	runs-clean
@@ -594,3 +599,12 @@ h613_fire_and_forget_fiber_joined	§3.3d	B	fiber_join on a plain spawn's handle 
 h614_fiber_joins_its_own_current_handle	§3.3d	B	a joinable fiber joined fiber_current's handle and waited for its own end (hang); fiber_current's handle is not joinable (agora #168).	runs-clean
 h615_fiber_handle_built_by_a_literal	§3.3d	B	`( fiber_join @ Fiber { ( string_data k ) } )`: the join waited on and freed any address; Fiber is a sealed `raw` struct (agora #168).	rejected
 h616_select_waiter_dropped_while_armed	§3.3d	B	`( chan_select_arm [i] ch w )`, `w` dropped, then `chan_send`: the channel fired the freed waiter by its raw address; the waiter is a Shared block each channel holds a share of while armed (agora #167).	runs-clean
+h621_closure_binding_in_an_option_literal_unwrapped	§7.5	A2	agora #173: closure binding in an option literal unwrapped: env copy leaks	runs-clean
+h622_closure_binding_in_a_struct_literal_picked	§7.5	A2	agora #173: closure binding in a struct literal picked: env copy leaks	runs-clean
+h623_closure_binding_in_a_literal_read_by_a_callee	§7.5	A2	agora #173: closure binding in a literal read by a callee: env copy leaks	runs-clean
+h624_closure_param_in_a_literal_read_and_picked	§7.5	A2	agora #173: closure param in a literal read and picked: env copy leaks	runs-clean
+h625_closure_binding_in_a_literal_through_a_generic	§7.5	A2	agora #173: closure binding in a literal through a generic: env copy leaks	runs-clean
+h626_closure_binding_in_a_literal_handed_back_in_a_loop	§7.5	A2	agora #173: closure binding in a literal handed back in a loop: env copy leaks	runs-clean
+h627_closure_binding_in_a_result_literal_unwrapped	§7.5	A2	agora #173: closure binding in a result literal unwrapped: env copy leaks	runs-clean
+h628_two_closure_fields_of_a_literal_picked_and_read	§7.5	A2	agora #173: two closure fields of a literal picked and read: env copy leaks	runs-clean
+h629_closure_binding_in_a_literal_picked_twice	§7.5	A2	agora #173: closure binding in a literal picked twice: env copy leaks	runs-clean
