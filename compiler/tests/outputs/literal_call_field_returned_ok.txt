@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a field lent out of a local
+a field from a block's local
+an option payload lent out of a local
+a fall-off literal's field
+a nested literal's field
+a parameter's field, lent back
+32

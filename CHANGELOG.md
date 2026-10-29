@@ -115,6 +115,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A returned literal's field lent out of a local is copied** (Agora
+  #189, h838–h844, h860–h861). `^ @ W { ( gets w ) }`, with `gets` lending a field
+  of the local `w`, handed the caller a lend of `w`, and the function
+  dropped `w` on the way out. The same happened with an option literal's
+  payload, a fall-off literal, a literal nested in the returned one, and a
+  block field ending in such a call. Such a field is now copied, as `^ (
+  gets w )` is, and so is such a block handed to a `sink` parameter (a
+  `% Drop` value there is refused). A lend of a parameter stays a lend.
 - **A bare `{ … }` block as a function's fall-off value hands back what
   it holds** (Agora #188, h828–h837). `@ f → String { : i z 1 { : String
   w ( mk ) w } }` returned freed memory. As the body's last statement,
