@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_local_lend_returned.nu:21:5: error: this hands back what 'getd' may lend out of 'w', which this function drops on the way out; a 'D' cannot be copied, so the caller would hold it after it is released. Take the value out of 'w' (vec_remove, vec_pop, or a function that hands it over) and hand that back, or hand back the owner itself.
+    ^ ( getd w )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
