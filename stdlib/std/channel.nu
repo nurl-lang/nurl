@@ -99,7 +99,7 @@ $ `stdlib/core/box.nu`
     ( Vec A ) q  // FIFO: push back, pop front
     i closed  // 0 = open, 1 = closed
     ( Vec i ) recv_fibers  // parked fiber handles awaiting recv (FIFO)
-    ( Vec i ) select_waiters  // raw SelectWaiter* of threads in a `?? {}` select
+    ( Vec ( Shared SelectWaiter ) ) select_waiters  // one share of each armed `?? {}` select waiter
 }
 
 // The counted block as the operations reach it: the owner count the
@@ -112,7 +112,7 @@ $ `stdlib/core/box.nu`
     ( Vec A ) q  // FIFO: push back, pop front
     i closed  // 0 = open, 1 = closed
     ( Vec i ) recv_fibers  // parked fiber handles awaiting recv (FIFO)
-    ( Vec i ) select_waiters  // raw SelectWaiter* of threads in a `?? {}` select
+    ( Vec ( Shared SelectWaiter ) ) select_waiters  // one share of each armed `?? {}` select waiter
 }
 
 // A handle every copy of which is the same channel: the producer's and
@@ -147,7 +147,7 @@ $ `stdlib/core/box.nu`
     ( Vec i ) q
     i closed
     ( Vec i ) recv_fibers
-    ( Vec i ) select_waiters
+    ( Vec ( Shared SelectWaiter ) ) select_waiters
 }
 
 // The block behind a SelWaiter (the select machinery below): `fired` is
@@ -162,7 +162,7 @@ $ `stdlib/core/box.nu`
 // ── Constructor ────────────────────────────────────────────────────
 
 @ chan_new [A] → ( Channel A ) {
-    ^ @ ( Channel A ) { ( shared_new [( ChImpl A )] @ ( ChImpl A ) { ( mutex_new ) ( cond_new ) ( vec_new [A] ) 0 ( vec_new [i] ) ( vec_new [i] ) } ) }
+    ^ @ ( Channel A ) { ( shared_new [( ChImpl A )] @ ( ChImpl A ) { ( mutex_new ) ( cond_new ) ( vec_new [A] ) 0 ( vec_new [i] ) ( vec_new [( Shared SelectWaiter )] ) } ) }
 }
 
 // ── Send / receive ─────────────────────────────────────────────────
@@ -334,21 +334,26 @@ $ `stdlib/core/box.nu`
 
 // A select rendezvous token: one per in-flight blocking select. The
 // selecting thread arms it on every channel it waits on, and a sender or
-// closer fires it (__select_waiter_fire). Its block is released by its
-// drop, which the lowering reaches only after every channel let go of it.
-: SelWaiter { ( Box SelectWaiter ) ctl }
+// closer fires it (__select_waiter_fire). Its block is counted (Shared):
+// every channel it is armed on holds a share until the disarm, so a
+// waiter dropped while still armed — which the lowering never does, but
+// a program calling chan_select_arm itself can — stays alive for the
+// channel's next fire, and the channel's drop lets the last share go
+// (agora #167).
+: SelWaiter { ( Shared SelectWaiter ) ctl }
 
 @ select_waiter_new → SelWaiter {
-    ^ @ SelWaiter { ( box_new [SelectWaiter] @ SelectWaiter { ( mutex_new ) ( cond_new ) 0 } ) }
+    ^ @ SelWaiter { ( shared_new [SelectWaiter] @ SelectWaiter { ( mutex_new ) ( cond_new ) 0 } ) }
 }
 
-// The block goes with the handle's field (its lock and condvar with it).
+// One share fewer; the last owner drops the block (its lock and condvar
+// with it).
 @ SelWaiter_drop sink SelWaiter h → v {}
 
 // Reset the fired flag before a scan iteration arms its channels. Done
 // under the waiter mutex so a fire racing the reset is ordered.
 @ select_waiter_prepare SelWaiter h → v {
-    : *SelectWaiter w ( box_ptr [SelectWaiter] . h ctl )
+    : *SelectWaiter w ( shared_ptr [SelectWaiter] . h ctl )
     ( mutex_lock . w m )
     = . w fired 0
     ( mutex_unlock . w m )
@@ -358,7 +363,7 @@ $ `stdlib/core/box.nu`
 // loop on `fired`, so a fire that arrives between arming and waiting is
 // not lost (fired is already 1 → no sleep).
 @ select_waiter_wait SelWaiter h → v {
-    : *SelectWaiter w ( box_ptr [SelectWaiter] . h ctl )
+    : *SelectWaiter w ( shared_ptr [SelectWaiter] . h ctl )
     ( mutex_lock . w m )
     ~ == . w fired 0 {
         ( cond_wait . w c . w m )
@@ -367,30 +372,29 @@ $ `stdlib/core/box.nu`
 }
 
 // Register / unregister the selecting thread's waiter on a channel.
-@ chan_select_arm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_arm ( shared_addr [( ChImpl A )] . ch ctl ) # i ( box_ptr [SelectWaiter] . h ctl ) ) }
+@ chan_select_arm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_arm ( shared_addr [( ChImpl A )] . ch ctl ) . h ctl ) }
 
-@ chan_select_disarm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_disarm ( shared_addr [( ChImpl A )] . ch ctl ) # i ( box_ptr [SelectWaiter] . h ctl ) ) }
+@ chan_select_disarm [A] ( Channel A ) ch SelWaiter h → v { ( __chan_raw_disarm ( shared_addr [( ChImpl A )] . ch ctl ) ( shared_addr [SelectWaiter] . h ctl ) ) }
 
 // Readiness: 0 not ready, 1 a value is queued, 2 closed and drained.
 @ chan_select_poll [A] ( Channel A ) ch → i { ^ ( __chan_raw_poll ( shared_addr [( ChImpl A )] . ch ctl ) ) }
 
 // Called by a sender / closer (while holding the channel mutex) for
 // each registered selecting thread.
-@ __select_waiter_fire i wp → v {
-    : *SelectWaiter w # *SelectWaiter wp
+@ __select_waiter_fire ( Shared SelectWaiter ) h → v {
+    : *SelectWaiter w ( shared_ptr [SelectWaiter] h )
     ( mutex_lock . w m )
     = . w fired 1
     ( cond_signal . w c )
     ( mutex_unlock . w m )
 }
 
-@ __chan_fire_select_waiters ( Vec i ) ws → v {
-    : i n ( vec_len [i] ws )
+@ __chan_fire_select_waiters ( Vec ( Shared SelectWaiter ) ) ws → v {
+    : i n ( vec_len [( Shared SelectWaiter )] ws )
     : ~ i k 0
     ~ < k n {
-        : ?i ov ( vec_get [i] ws k )
-        ?? ov {
-            T wp → { ( __select_waiter_fire wp ) }
+        ?? ( vec_get [( Shared SelectWaiter )] ws k ) {
+            T wh → { ( __select_waiter_fire wh ) }
             F → {}
         }
         = k + k 1
@@ -398,30 +402,27 @@ $ `stdlib/core/box.nu`
 }
 
 // Register / unregister a selecting thread's waiter on a channel.
-@ __chan_raw_arm i ctl i wp → v {
+// The channel takes a share of the waiter: it stays alive while armed.
+@ __chan_raw_arm i ctl ( Shared SelectWaiter ) wh → v {
     : *ChannelRaw impl # *ChannelRaw ctl
     ( mutex_lock . impl m )
-    ( vec_push [i] . impl select_waiters wp )
+    ( vec_push [( Shared SelectWaiter )] . impl select_waiters ( shared_clone [SelectWaiter] wh ) )
     ( mutex_unlock . impl m )
 }
 
 @ __chan_raw_disarm i ctl i wp → v {
     : *ChannelRaw impl # *ChannelRaw ctl
     ( mutex_lock . impl m )
-    : i n ( vec_len [i] . impl select_waiters )
+    : i n ( vec_len [( Shared SelectWaiter )] . impl select_waiters )
     : ~ i k 0
     : ~ b done2 F
     ~ & < k n ! done2 {
-        : ?i ov ( vec_get [i] . impl select_waiters k )
-        ?? ov {
-            T val → {
-                ? == val wp {
-                    : ?i rm ( vec_remove [i] . impl select_waiters k )
-                    = done2 T
-                } { = k + k 1 }
-            }
-            F → { = k + k 1 }
-        }
+        : i val ?? ( vec_get [( Shared SelectWaiter )] . impl select_waiters k ) { T wh → ( shared_addr [SelectWaiter] wh ) F → 0 }
+        ? == val wp {
+            // the channel's share goes with the removed element
+            : ?( Shared SelectWaiter ) _rm ( vec_remove [( Shared SelectWaiter )] . impl select_waiters k )
+            = done2 T
+        } { = k + k 1 }
     }
     ( mutex_unlock . impl m )
 }

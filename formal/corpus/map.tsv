@@ -585,3 +585,4 @@ h612_joinable_fiber_never_joined	§3.3d	B	a spawn_joinable handle never joined: 
 h613_fire_and_forget_fiber_joined	§3.3d	B	fiber_join on a plain spawn's handle after the fiber ended read its freed block; a non-joinable handle never touches the runtime (agora #168).	runs-clean
 h614_fiber_joins_its_own_current_handle	§3.3d	B	a joinable fiber joined fiber_current's handle and waited for its own end (hang); fiber_current's handle is not joinable (agora #168).	runs-clean
 h615_fiber_handle_built_by_a_literal	§3.3d	B	`( fiber_join @ Fiber { ( string_data k ) } )`: the join waited on and freed any address; Fiber is a sealed `raw` struct (agora #168).	rejected
+h616_select_waiter_dropped_while_armed	§3.3d	B	`( chan_select_arm [i] ch w )`, `w` dropped, then `chan_send`: the channel fired the freed waiter by its raw address; the waiter is a Shared block each channel holds a share of while armed (agora #167).	runs-clean
