@@ -13909,7 +13909,7 @@ unsafe @ gen_call i lex i syms i cg → s {
     ? & ( seq fname `dyn` ) ( is_ident_tok ( nurl_lex_type lex ) )
     { : s __dtn ( nurl_lex_val lex )
         ? != 0 ( nurl_sym_len2 g_trait_syms __dtn `__istrait` )
-        { ^ ( gen_dyn_construct lex syms cg ) }
+        { ^ ( gen_dyn_construct lex syms cg __sx_me ) }
         {} }
     {}
     // Visibility check (grammar v2.0). If the base fname is an @-defined
@@ -60910,8 +60910,9 @@ unsafe @ dyn_method_decltrait s tname s m → s {
 
 // gen_dyn_construct: `( dyn Trait v )` — box v and pair it with the impl's
 // vtable, yielding a `%dyn.Trait` value. lex is positioned at the trait name
-// (gen_call consumed '(' and the `dyn` keyword).
-@ gen_dyn_construct i lex i syms i cg → s {
+// (gen_call consumed '(' and the `dyn` keyword); `__me` is the call's
+// number as a source-expression producer (gen_call's).
+@ gen_dyn_construct i lex i syms i cg i __me → s {
     : s tname ( nurl_lex_val lex )
     ( lint_note_used tname )
     ( nurl_lex_advance lex )  // consume trait name
@@ -60942,10 +60943,23 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     : s vdynarg ( nurl_sym_get syms `__arg_dyn_box__` )
     ( nurl_sym_def syms `__arg_dyn_box__` `` )
     ( nurl_sym_def syms `__in_call_arg__` `1` )
+    : i __dsxn0 g_sx_n
+    : i __dmp0 g_member_path_on
+    = g_member_path_on ? & != 0 __me == vtt TT_DOT 1 g_member_path_on
     : ~ s val ( gen_operand lex syms cg )
+    = g_member_path_on __dmp0
     ( nurl_sym_def syms `__in_call_arg__` `` )
     ( nurl_sym_def syms `__arg_dyn_box__` vdynarg )
     : s ct ( nurl_get_last_type )
+    // The object holds what the operand was, so it is returned, stored and
+    // bound as the operand would be: its stack referent (§2.8), the
+    // parameters it may be (a function returning it returns them), and
+    // what it may point into (its source expression). An identifier
+    // operand published none of them, and the object of a by-reference
+    // closure or of a struct of views escaped (agora #156).
+    : s __dsx ? != 0 __me ( __sx_operand syms vtt vname ct ( __sx_froot syms vtt ct ) __dsxn0 ) ``
+    ? vident { ( nurl_sym_def syms `__last_expr_refdepth__` ( nurl_str_int ( bck_expr_refdepth syms vname ) ) ) } {}
+    ( bck_save_expr_carriers syms `__last_call_ret_param_idents__` vtt vname )
     ( expect lex TT_RPAREN )
     ? ( __type_needs_drop ct syms ) {
         : b vclone ( __clone_supported ct syms )
@@ -60993,6 +61007,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_print `  ` ) ( nurl_print f0 ) ( nurl_print ` = insertvalue ` ) ( nurl_print dynty ) ( nurl_print ` undef, i8* ` ) ( nurl_print box ) ( nurl_print `, 0\n` )
     : s f1 ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print f1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print dynty ) ( nurl_print ` ` ) ( nurl_print f0 ) ( nurl_print `, i8* ` ) ( nurl_print vti8 ) ( nurl_print `, 1\n` )
+    ( __sx_publish __me __dsx )
     ( nurl_set_last_type dynty )
     ^ f1
 }

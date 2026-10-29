@@ -104,6 +104,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which nothing dropped when the literal was a call's temporary. The
   literal now owns that copy and drops it unless the callee keeps the
   literal or hands it back.
+- **A trait object holds what its operand held** (Agora #156,
+  h630–h637). `( dyn Trait v )` over a bare identifier published none
+  of what `v` carried: its stack referent, the parameters it may be, and
+  what it points into. So the object of a struct holding a by-reference
+  closure, or of a struct of views, could be returned or kept past what
+  it pointed into. Bound first, built by a wrapper that boxes its
+  parameter, or made from a field or a viewing call, it read a dead
+  frame or freed memory. Such an object is now rejected where its
+  operand would be.
 - **A value stored into an owner on some paths, or on every iteration,
   stays stored** (Agora #160, h590–h596). A store on one arm of a `?`
   or `??`, or before a `break`, was forgotten where the paths met. A

@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_keeps_views.nu:20:5: error: this returns a view of 's' (an address into its storage), and 's' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ ( dyn Show v )
+    ^
+compiler/tests/diag_dyn_keeps_views.nu:26:5: error: this returns a view of 's' (an address into its storage), and 's' is released when the function returns, so the caller would read freed memory. Return a value that owns its data (a copy — slice_to_vec, string_from — or the owner itself), or take what the view points into as a parameter.
+    ^ ( dyn Show . w v )
+    ^
+compiler/tests/diag_dyn_keeps_views.nu:35:5: error: 'r' holds a view of 's' (one stored into it, or captured by it), and 's' ended at line 34 — it went out of scope at the end of its block. Using 'r' now would read freed memory. End 's' only after 'r' is done, or have 'r' hold a copy that owns its data (string_from, slice_to_vec).
+    ^ ( len r )
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
