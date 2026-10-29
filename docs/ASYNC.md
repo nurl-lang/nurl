@@ -119,15 +119,15 @@ $ `stdlib/std/async.nu`
 | `runtime_run → v` | block until the pending-fiber count reaches 0 |
 | `runtime_shutdown → v` | request shutdown, wake workers, join threads |
 | `spawn ( @ v ) body → Fiber` | fire-and-forget fiber |
-| `spawn_joinable ( @ v ) body → Fiber` | fiber whose completion can be awaited |
-| `fiber_join Fiber f → v` | park until a joinable fiber finishes |
+| `spawn_joinable ( @ v ) body → Fiber` | fiber whose completion can be awaited; a handle dropped unjoined detaches it |
+| `fiber_join sink Fiber f → v` | park until a joinable fiber finishes; takes the handle |
 | `yield → v` | cooperative reschedule point |
 | `fiber_current → ?Fiber` | the running fiber, `None` outside fiber context |
 | `fiber_worker_id → i` | index of the worker executing this fiber |
 | `wait_readable i fd i timeout_ms → i` | park until fd readable / timeout |
 | `wait_writable i fd i timeout_ms → i` | park until fd writable / timeout |
 
-`Fiber` is an opaque handle (`: Fiber { s raw }`). `sleep_ms` lives in
+`Fiber` is a sealed, move-only handle (`raw : Fiber { s raw b joinable }` with its own drop): copying one moves it, and `fiber_join` takes it, so a fiber is joined at most once. A joinable handle dropped without a join detaches its fiber (the runtime frees the block when the body ends); a handle from `spawn` or `fiber_current` is not joinable and never touches the runtime block. `sleep_ms` lives in
 `stdlib/std/time.nu`; inside a fiber it parks on the timer wheel instead
 of blocking the worker.
 

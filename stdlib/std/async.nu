@@ -71,7 +71,20 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── Opaque handle ──────────────────────────────────────────────────
 
-: Fiber { s raw }
+// A fiber handle. `raw` is the runtime's control block; `joinable` says
+// this handle is the one owner of a joinable fiber's block, which a
+// fiber_join or the handle's drop (a detach) releases exactly once.
+// Sealed (`raw`) and move-only (its own drop): a copy of the handle was
+// joined twice and freed the block twice, and an unjoined joinable fiber
+// leaked it (agora #168). A handle from spawn or fiber_current is not
+// joinable and never touches the block.
+raw : Fiber { s raw b joinable }
+
+% Drop Fiber {
+    @ drop Fiber f → v {
+        ? . f joinable { ( nurl_fiber_detach # i . f raw ) } {}
+    }
+}
 
 // ── spawn ──────────────────────────────────────────────────────────
 
@@ -95,7 +108,7 @@ $ `stdlib/std/async_ffi.nu`
     : *u env # *u body 1
     : i raw ( nurl_fiber_spawn fnp env )
     : s rp # s raw
-    ^ @ Fiber { rp }
+    ^ @ Fiber { rp F }
 }
 
 // The same as `spawn`: every spawn now runs on its own copy of the env.
@@ -107,12 +120,13 @@ $ `stdlib/std/async_ffi.nu`
     : *u env # *u body 1
     : i raw ( nurl_fiber_spawn_owned fnp env )
     : s rp # s raw
-    ^ @ Fiber { rp }
+    ^ @ Fiber { rp F }
 }
 
 // Spawn a joinable fiber. The returned handle survives the fiber's
-// completion; the caller MUST call `fiber_join` exactly once on it,
-// which both waits for completion AND releases the control block.
+// completion; `fiber_join` takes it, waits for completion and releases
+// the control block. A handle dropped without a join detaches the fiber:
+// it runs on, and its block is released when it ends.
 // Calling `fiber_join` from a fiber currently blocks the worker
 // thread — a fiber-to-fiber park lands in Phase 4 alongside the
 // channel work.
@@ -122,17 +136,17 @@ $ `stdlib/std/async_ffi.nu`
     : *u env # *u body 1
     : i raw ( nurl_fiber_spawn_joinable fnp env )
     : s rp # s raw
-    ^ @ Fiber { rp }
+    ^ @ Fiber { rp T }
 }
 
 // Block (Phase 3: at the pthread level) until `f` has finished
 // running, then free its control block. Joining a non-joinable
-// fiber is a silent no-op. Joining the same handle twice is
-// undefined.
-@ fiber_join Fiber f → v {
-    : s rp . f raw
-    : i raw # i rp
-    ( nurl_fiber_join raw )
+// fiber is a silent no-op. The join takes the handle: joining it
+// again is a use after move.
+@ fiber_join sink Fiber f → v {
+    ? . f joinable { ( nurl_fiber_join # i . f raw ) } {}
+    // Joined: the handle's drop has nothing left to release.
+    ( mem_forget f )
 }
 
 // ── yield ──────────────────────────────────────────────────────────
@@ -150,9 +164,9 @@ $ `stdlib/std/async_ffi.nu`
 // any fiber (e.g. main thread before `runtime_run` enters the loop).
 @ fiber_current → ?Fiber {
     : i raw ( nurl_fiber_current )
-    ? == raw 0 { ^ @ ?Fiber { F # Fiber @ Fiber { # s 0 } } } {}
+    ? == raw 0 { ^ @ ?Fiber { F } } {}
     : s rp # s raw
-    ^ @ ?Fiber { T @ Fiber { rp } }
+    ^ @ ?Fiber { T @ Fiber { rp F } }
 }
 
 // Returns 0..worker_count-1 when called from inside a fiber, or -1

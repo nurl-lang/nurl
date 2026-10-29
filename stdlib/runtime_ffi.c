@@ -5673,6 +5673,10 @@ typedef struct NurlWasmFiber {
     void             *env;
     int32_t           own_env;   /* free env after the body returns */
     int32_t           joinable;
+    /* A joinable fiber's owners: its body and its handle (2). Detaching
+     * drops the handle's; whichever is last frees the block. A join waits
+     * for the thread, so it needs none. */
+    _Atomic int32_t   refs;
     _Atomic int32_t   done;
     _Atomic int32_t   parked;    /* futex word for park/unpark */
     void             *tid;       /* pthread_t block, when joinable */
@@ -5724,7 +5728,7 @@ static void nurl__wf_body(void *arg) {
             nurl__wake(&g->gen, -1);
         }
     }
-    if (!f->joinable) {
+    if (!f->joinable || atomic_fetch_sub(&f->refs, 1) == 1) {
         if (f->tid) { free(f->tid); }
         free(f);
     }
@@ -5738,6 +5742,7 @@ static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) 
     f->env = env;
     f->own_env = own_env;
     f->joinable = joinable;
+    atomic_store(&f->refs, 2);
     void **tid = (void**)calloc(1, sizeof(void*));
     if (!tid) { free(f); return 0; }
     f->tid = tid;
@@ -5768,6 +5773,18 @@ void nurl_fiber_join(long long fiber) {
     while (atomic_load(&f->done) == 0) nurl__wait32(&f->done, 0);
     if (f->tid) { nurl_pthread_join_ptr(f->tid); free(f->tid); }
     free(f);
+}
+
+/* No join will come: the thread is detached, and whichever of it and this
+ * handle lets go last frees the block. */
+void nurl_fiber_detach(long long fiber) {
+    NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
+    if (!f || !f->joinable) return;
+    if (f->tid) nurl_pthread_detach_ptr(f->tid);
+    if (atomic_fetch_sub(&f->refs, 1) == 1) {
+        if (f->tid) { free(f->tid); }
+        free(f);
+    }
 }
 
 /* Nothing to yield to: the OS is the scheduler here. */
@@ -6409,6 +6426,7 @@ long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_owned(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long fiber);
+void      nurl_fiber_detach(long long fiber);
 void      nurl_fiber_yield(void);
 long long nurl_fiber_current(void);
 long long nurl_fiber_worker_id(void);
@@ -6529,6 +6547,9 @@ typedef struct NurlFiber {
      * fiber while the worker still swapped its state (ASan: a
      * use-after-free in nurl__rctx_swap, send_closure_ok). */
     int              released;
+    /* Set (under join_m) by nurl_fiber_detach: no join will come, so
+     * whichever of the worker and the detach is second frees the fiber. */
+    int              detached;
     pthread_mutex_t  join_m;
     pthread_cond_t   join_c;
     /* Park-with-unlock: worker releases this mutex AFTER swap-out so
@@ -7327,8 +7348,8 @@ static void nurl__fiber_unpark_admit(NurlFiber *f) {
 }
 #endif
 
-/* Block until the target fiber's body returns, then free it. Calling
- * join twice on the same handle is undefined. */
+/* Block until the target fiber's body returns, then free it. A handle
+ * is joined or detached once (std/async.nu's Fiber is move-only). */
 void nurl_fiber_join(long long fiber) {
     NurlFiber *f = (NurlFiber*)(uintptr_t)fiber;
     if (!f || !f->joinable) return;
@@ -7339,6 +7360,18 @@ void nurl_fiber_join(long long fiber) {
     f->done_taken = 1;
     pthread_mutex_unlock(&f->join_m);
     nurl__fiber_free(f);
+}
+
+/* A joinable fiber nobody will join (its handle was dropped): free it now
+ * if the worker is through with it, else let the worker free it then. */
+void nurl_fiber_detach(long long fiber) {
+    NurlFiber *f = (NurlFiber*)(uintptr_t)fiber;
+    if (!f || !f->joinable) return;
+    pthread_mutex_lock(&f->join_m);
+    int done = f->released;
+    if (!done) f->detached = 1;
+    pthread_mutex_unlock(&f->join_m);
+    if (done) nurl__fiber_free(f);
 }
 
 /* ── Worker loop ─────────────────────────────────────────────────── */
@@ -7644,9 +7677,11 @@ static void *nurl__worker_loop(void *arg) {
             if (f->joinable) {
                 pthread_mutex_lock(&f->join_m);
                 f->released = 1;
+                int detached = f->detached;
                 pthread_cond_broadcast(&f->join_c);
                 pthread_mutex_unlock(&f->join_m);
-                /* Joiner does the free. */
+                /* The joiner does the free — or, detached, nobody will. */
+                if (detached) nurl__fiber_free(f);
             } else {
                 nurl__fiber_free(f);
             }
@@ -7804,6 +7839,7 @@ long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     (void)fn; (void)env; return 0;
 }
 void      nurl_fiber_join(long long fiber) { (void)fiber; }
+void      nurl_fiber_detach(long long fiber) { (void)fiber; }
 void      nurl_fiber_yield(void) {}
 long long nurl_fiber_current(void) { return 0; }
 long long nurl_fiber_worker_id(void) { return -1; }

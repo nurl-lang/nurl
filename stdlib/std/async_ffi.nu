@@ -20,6 +20,8 @@
 
 unsafe & `c` @ nurl_fiber_join i fiber → v
 
+unsafe & `c` @ nurl_fiber_detach i fiber → v
+
 & `c` @ nurl_fiber_yield → v
 
 & `c` @ nurl_fiber_current → i
