@@ -579,3 +579,9 @@ h593_stored_before_a_break_then_its_owner_freed	§2.12	A2	agora #160: stored_bef
 h594_stored_on_one_path_then_freed	§2.12	A2	agora #160: stored_on_one_path_then_freed	rejected
 h595_stored_on_one_path_then_stored_again	§2.12	A2	agora #160: stored_on_one_path_then_stored_again	rejected
 h596_buffer_adopted_by_a_loop_local_then_reused	§2.12	A2	agora #160: buffer_adopted_by_a_loop_local_then_reused	rejected
+h610_fiber_joined_twice	§2.1	A2	`( fiber_join f ) ( fiber_join f )` on one spawn_joinable handle: the second join freed the fiber's control block again (agora #168). Fiber is move-only and fiber_join takes it.	rejected
+h611_fiber_handle_copy_joined_twice	§2.1	A2	as h610 through a copy `: Fiber b a`, each copy joined once (agora #168).	rejected
+h612_joinable_fiber_never_joined	§3.3d	B	a spawn_joinable handle never joined: the finished fiber's block leaked; dropping the handle now detaches the fiber (nurl_fiber_detach; agora #168).	runs-clean
+h613_fire_and_forget_fiber_joined	§3.3d	B	fiber_join on a plain spawn's handle after the fiber ended read its freed block; a non-joinable handle never touches the runtime (agora #168).	runs-clean
+h614_fiber_joins_its_own_current_handle	§3.3d	B	a joinable fiber joined fiber_current's handle and waited for its own end (hang); fiber_current's handle is not joinable (agora #168).	runs-clean
+h615_fiber_handle_built_by_a_literal	§3.3d	B	`( fiber_join @ Fiber { ( string_data k ) } )`: the join waited on and freed any address; Fiber is a sealed `raw` struct (agora #168).	rejected

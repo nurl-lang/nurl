@@ -41,28 +41,19 @@ unsafe @ main → i {
     ( nurl_print `\n` )
 
     // ── B: 200 joinable fibers, each contributes once ──────────────
-    // `nurl_poke` / `nurl_peek` use i64-slot indexing (not byte
-    // offsets) — index `i` lands at byte `i*8`. Allocate 200 i64
-    // slots = 1600 bytes.
+    // The handles are kept in a Vec (a Fiber is move-only) and each is
+    // taken back out and joined.
     = counter 0
-    : s handles ( nurl_alloc * 200 8 )
+    : ( Vec Fiber ) handles ( vec_new [Fiber] )
     : ~ i i 0
     ~ < i 200 {
-        : Fiber fx ( spawn_joinable tiny )
-        : s rpx . fx raw
-        : i rawx # i rpx
-        ( nurl_poke handles i rawx )
+        ( vec_push [Fiber] handles ( spawn_joinable tiny ) )
         = i + i 1
     }
-    = i 0
-    ~ < i 200 {
-        : i rawx ( nurl_peek handles i )
-        : s rpx # s rawx
-        : Fiber fx @ Fiber { rpx }
-        ( fiber_join fx )
-        = i + i 1
+    : ~ b more T
+    ~ more {
+        ?? ( vec_pop [Fiber] handles ) { T fx → ( fiber_join fx ) F → { = more F } }
     }
-    ( nurl_free handles )
 
     ( nurl_print `B1 counter=` )
     ( nurl_print ( nurl_str_int counter ) )

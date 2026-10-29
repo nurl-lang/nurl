@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Fiber` is a sealed, move-only handle; `fiber_join` takes it** (agora
+  #168, h610–h615). It was a copyable `{ s raw }`: joining a handle twice,
+  or two copies of it once each, freed the fiber's control block twice; a
+  joinable fiber nobody joined leaked its block and stack; joining a
+  plain `spawn`'s handle after the fiber ended read the freed block; a
+  fiber joining its own `fiber_current` handle hung; and a literal could
+  hand `fiber_join` any address. Now a second join is a use after move, a
+  joinable handle dropped without a join detaches its fiber (the new
+  `nurl_fiber_detach`: the runtime frees the block when the body ends), a
+  handle from `spawn`, `spawn_owned` or `fiber_current` is not joinable
+  and never touches the runtime, and only unsafe code builds a `Fiber`.
+  A program that copied a `Fiber` and used both copies, or rebuilt one
+  from its `raw` field, keeps the handles in a `Vec` instead.
+
 - **`iter_range_step` counts its values once; LruCache keeps its control
   words in a Box.** The fixes for h500/h504 made both slower:
   `iter_range_step` tested the room left on every step (+25 % on a

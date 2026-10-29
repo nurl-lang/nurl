@@ -1133,6 +1133,13 @@ void nurl_fiber_join(long long h) {
     nb_join(c);
 }
 
+/* A joinable fiber nobody will join (its handle was dropped). */
+void nurl_fiber_detach(long long h) {
+    NbCoro *c = (NbCoro *)(unsigned long)h;
+    if (!c || !c->joinable) return;
+    nb_detach(c);
+}
+
 /* ── §12  Sleep ───────────────────────────────────────────────────
  *
  * The reactor ABI: 1 = the fd was ready, 0 = the deadline passed,
