@@ -24,7 +24,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/rcbox.nu`
 
-: QuicRxBufImpl {
+// Sealed (`raw`): `base` and `consumed` place the stream in `buf`, and
+// the copy into it trusts them.
+raw : QuicRxBufImpl {
     ( Vec u ) buf
     i base
     ( Vec i ) ranges
@@ -88,8 +90,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ _quic_rxbuf_add_in inout QuicRxBufImpl r i off ( Vec u ) data → b {
     : i n ( vec_len [u] data )
+    // off in [0, cap], then n against what is left: off + n is formed only
+    // once it cannot wrap past the cap test.
+    ? | | < off 0 > off . r cap > n - . r cap off { ^ F } {}
     : i end + off n
-    ? | < off 0 > end . r cap { ^ F } {}
     ? > end . r highest { = . r highest end } {}
     ? == n 0 { ^ T } {}
     // Bytes already consumed are a retransmission of what was read.

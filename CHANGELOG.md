@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter, free the Vec and read the parameter, push it twice, or push
   it and return it. Each of these is now rejected, as for a local.
   yoloe 0.8.3 keys its BPE encoder table with the arena's copy.
+- **A closure handed to `spawn`, `spawn_owned`, `spawn_joinable`,
+  `thread_spawn_owned` or `signal_install` can no longer reach a dead
+  frame** (h503–h505). Only `thread_spawn` was refused a closure over a
+  `: ~` local by pointer. The fiber, thread or signal handler ran after
+  the frame was gone. Every call that detaches a closure is checked now.
+- **`vec_reserve` with a count near i64 max panics instead of reserving
+  nothing** (h502). `len + n` wrapped, and `tcp_read_into` then let
+  recv(2) write past the Vec. The same path reached `tcp_try_read_into`,
+  `posix_read_append` and `pfile_read_vec_into`. The new test is
+  cheaper: 20 M reserve-and-push pairs take 46–48 ms, against 52–53 ms
+  before.
+- **`LruCache` and `TermState` can no longer be forged** (h500, h501).
+  - LruCache's control words are read through checked accessors (no
+    slower measured: 29–33 ms for 400 k operations before and after).
+  - TermState is `raw`, and `term_raw_disable` restores nothing from a
+    short `saved`.
+- **`rand_range`, `range_step` and `iter_range_step` end for spans past
+  i64 max.** They looped for ever before.
 - **A `;` defer may read the value a return hands back, but no longer
   release it** (Agora #165, h426–h434). The defers run after the value
   is the caller's. A defer that frees it, gives it or a field of it a new
@@ -46,6 +64,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Box's field, and the Box released it again. The callee is now handed a
   copy, as for a bare lent result. A field of an owned result still
   leaves with the read.
+- **HTTP/2, HPACK and QPACK parsers refuse a negative offset**
+  (h471–h475). `h2_parse_frame`, `h2_rx_consume`, `hpack_decode_int`,
+  `hpack_decode_string` and the QPACK instruction readers read before
+  their buffer when given a negative offset or count, and
+  `_hpack_huffman_decode` trusted its range. Each now checks once per
+  call.
+- **`_header_name_eq_ci_n` and `response_set_body_borrowed_bytes` are
+  `raw`** (h476, h477). The first trusted a length its caller passed;
+  the second made a response body a view of a Vec nothing kept alive.
+  `response_set_body_bytes` copies.
+- **CSV tables:**
+  - a cell view from `csv_table_view` borrows from its table and ends
+    with it (h479);
+  - `csv_table_filter` survives a predicate that sorts or filters the
+    same table (h478);
+  - a failed `csv_table_load*` returns an empty table that
+    `csv_table_ok` answers F for, instead of a null table every
+    accessor dereferenced (h480).
+- **`sqlite_close` with a statement still alive** no longer frees the
+  authorizer libsqlite may still call, or leaks the connection (h481,
+  h482). It uninstalls the authorizer and closes with
+  `sqlite3_close_v2`.
+- **More range checks no longer wrap:** `fatfs_write` (h483), the block
+  layer's `blk_read` / `blk_write`, and `quic_rxbuf_add`.
+- **Raw runtime handles stay behind `unsafe`** (h484–h486, h497–h499):
+  - `_tls_word`, `_tls_word_release`, `_tls_conn_new`,
+    `_tls_sock_write(2)` and `tls_attach_full_until` are `raw`;
+  - `nurl_ktls_rtype`, `nurl_tcp_sendfile`, `nurl_udp_join_group` /
+    `_leave_group` and `term.nu`'s `ioctl` are declared `unsafe &`.
+- **Library connection state is sealed by name too** (h487–h493).
+  `TlsConnImpl`, `CliHsImpl`, `SrvHsImpl`, `TcpConnImpl`,
+  `TcpListenerImpl`, `UdpSocketImpl`, `BufReaderImpl`, `ProcChildImpl`,
+  `__CProcResult`, `HttpConnImpl`, `QuicRxBufImpl` and
+  `QuicRecoveryImpl` are `raw :`, including the ones with no destructor.
+- **Refused QUIC and HTTP/3 handles no longer read address 0**
+  (h494–h496). An accessor of the null `QuicTp`, `QuicFrame`,
+  `QuicClient` or `H3Client` panics. The new `quic_tp_ok`,
+  `quic_frame_ok` and `quic_client_ok` let safe code test for it first.
+- **An MQTT packet that lies about its property lengths** no longer
+  keeps `_mqtt_parse_props`, and so the client's receive loop, spinning
+  for ever.
+- **The crypto library's offset checks, size checks and limb helpers no
+  longer let safe code read or write past a buffer** (h447–h470). Found
+  by an audit of the stdlib's raw-memory entry points:
+  - `hmac_sha256_mac_in`, `hkdf_expand_in` / `hkdf_expand_label_in`,
+    `chacha20poly1305_open_in` and `aes_gcm_open_in` checked
+    `at + n > len`, which wraps for a huge offset; the checks now cannot
+    wrap and the calls return F.
+  - `chacha20_xor_range` gives an empty Vec for a range outside its data,
+    and `poly1305_mac` an empty tag for a key that is not 32 bytes;
+    `sha3_new` / `sha3x4_new` panic for a rate outside 1–200 bytes.
+  - `mlkem_encaps*` / `mlkem_decaps`, the `mldsa_sign*` family and
+    `slhdsa_keygen_derand` / `slhdsa_sign*` check key, seed and
+    ciphertext sizes at the entry and fail as verify does (an empty
+    result); `p256ct_scalarmult` checks its coordinates.
+  - The RSA Montgomery helpers (`_rm_mul_d`, `_rm_pow_ct`, …), the P-256
+    field and point helpers (`p256ct_mul`, `_p256_*_d`, `_mag4`, …),
+    `_chacha20_xor_range_scalar` and `bytes_range_cc` are `raw`, and
+    `RsaKey`, `RsaMont`, `RsaTmp`, `P256Pt`, `P256Scratch`, `MldsaKey`
+    and `HmacSha256` are sealed: only `unsafe` code may call or build
+    them. A prepared RSA or ML-DSA key whose limbs were shrunk through
+    its fields signs nothing (the compiler gap behind that is Agora
+    #159). No check runs per limb or per block.
+- **The state behind a library handle can no longer be built by a
+  literal** (h444, h445). `@ TcpConnImpl { 4096 0 0 T }` was accepted,
+  and its destructor closed the made-up number 4096 as the address of a
+  runtime record. The same went for `RawBlock` (whose destructor frees
+  its pointer), `FileImpl`, `BufReaderImpl`, `UdpSocketImpl`,
+  `ThreadImpl` and every other standard-library struct with its own
+  `% Drop`. Such a struct is now sealed, which future ones are too: only
+  the library builds it or writes its fields.
+- **`sort_by` with an inconsistent comparator no longer reads past the
+  Vec** (h446). The nearly-sorted path's partition scans stopped only at
+  an element the comparator ranked against the pivot. Each scan now also
+  stops at its range's end. Measured: 2 M nearly-sorted integers sort in
+  the same 47–49 ms as before.
+- **Core library calls given huge or negative offsets no longer read or
+  write outside their buffers** (h439–h443). Each tested `start + n`
+  against the length, a sum that wraps for a count near i64 max, or
+  checked only one end of the range:
+  - `string_substr` and `vec_extend_range` with a length near i64 max;
+  - `slice_move` to or from a negative index (it panics now);
+  - the six `bytes_read_*` readers at an offset near i64 max (they give
+    `F`);
+  - `utf8_decode` / `utf8_decode_at` at a negative position.
+  The checks cost what the old ones did.
+- **The recycling stash and `string_commit` can no longer be called from
+  safe code** (h437, h438). A stash kind taken back as a wider element
+  type came back with room for more elements than its buffer held, and
+  `string_commit` grew a String by any count. `vec_stash`,
+  `vec_unstash`, `string_stash`, `string_unstash` and `string_commit`
+  are `raw`; the library code that owns the kinds still calls them.
+- **A TLS 1.2 server can no longer make the client read past its key
+  share** (h435). The ServerKeyExchange names its key's length, and the
+  client handed a key of any length to `x25519`, which read 32 bytes
+  from it (found by the `tlscli` parser fuzzer). Now:
+  - the client refuses a curve it did not offer and a key of the wrong
+    size for its curve;
+  - it refuses an all-zero x25519 secret, or a P-256 point off the
+    curve (RFC 8422 §5.11), instead of keying the connection with it;
+  - `x25519` / `x25519_base` given an input that is not 32 bytes return
+    32 zero bytes, which RFC 7748 §6.1 tells every caller to refuse.
+- **x25519.nu's field helpers can no longer be called from safe code**
+  (h436). `_A`, `_M`, `_pack25519` and the others carry one underscore
+  and index five limbs (or 32 bytes) with no length check; empty
+  operands read unallocated memory. Each is now `raw`, which only an
+  `unsafe` caller may call. This costs nothing at run time.
+- **The parser fuzzer's socket targets run again.** Since the thread
+  crossing check (Agora #121), all seven (`http1`, `h2`, `tls`,
+  `tlscli`, `ws`, `http1resp`, `mqtt`) aborted at `thread_spawn` before
+  the parser read a byte: the harness's drain thread took a share of
+  the connection. The drain now reads the socket by its fd. CI runs
+  every target for a few seconds on each PR, so a broken harness no
+  longer waits for the weekly run.
+- **ext/http_pure.nu no longer reaches tls.nu's file-private
+  `__tls_io_wait`**, a path due to stop resolving. It is `_tls_io_wait`,
+  declared `raw`: it reads a runtime handle given as a number.
 - **An option of a String pushed into a Vec can no longer be read after
   the Vec is released** (Agora #149, h421–h423). A String or a struct in
   the same place was already rejected ("stored in 'out'"); an option or

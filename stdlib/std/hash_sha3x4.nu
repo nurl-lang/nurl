@@ -206,7 +206,9 @@ pub @ Sha3x4_drop sink Sha3x4 h → v {}
 
 @ __Sha3x4_ptr Sha3x4 h → *Sha3x4Impl { ^ ( shared_ptr [Sha3x4Impl] . h ctl ) }
 
+// A rate outside [1, 200] panics, as sha3_new's does.
 pub @ sha3x4_new i rate i dom → Sha3x4 {
+    ? | < rate 1 > rate 200 { ( nurl_panic `sha3x4_new: rate must be 1 to 200 bytes (the Keccak state is 200)` ) } {}
     : ( Vec u64 ) st ( vec_with_cap [u64] 100 )
     : b _l ( vec_set_len [u64] st 100 )
     : *u64 sp ( vec_data [u64] st )

@@ -145,7 +145,8 @@ $ `stdlib/std/thread.nu`
 // listener its key type and credentials slot. None of it changes once
 // made: an early tcp_close_listener stops the runtime socket (closing its
 // fd) and empties the slot, and the last owner releases the handle.
-: TcpListenerImpl { i raw i is_tls i keytype i creds }
+// Sealed (`raw`): `raw` is a runtime socket handle its drop closes.
+raw : TcpListenerImpl { i raw i is_tls i keytype i creds }
 
 % Drop TcpListenerImpl {
     @ drop TcpListenerImpl l → v {
@@ -231,7 +232,8 @@ $ `stdlib/std/thread.nu`
 // client, 2 = pure TLS server. For kinds 1/2 `tlsh` is one owner of the
 // TlsConn as a word (`_tls_word`; tcp_close_conn gives it back) and
 // reads/writes dispatch to the pure stack.
-: TcpConnImpl { i raw i kind i tlsh b owns }
+// Sealed (`raw`): `raw` and `tlsh` are runtime handles its drop closes.
+raw : TcpConnImpl { i raw i kind i tlsh b owns }
 
 % Drop TcpConnImpl {
     @ drop TcpConnImpl c → v {
@@ -1351,7 +1353,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 // compiler preamble, like the other stdlib-only runtime entry points.
 unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
-& `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
+unsafe & `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
 
 // The one blocking send loop behind tcp_write_all, tcp_write_str and
 // tcp_write_all2: writes the logical concatenation `p1[0..n1)‖p2[0..n2)`

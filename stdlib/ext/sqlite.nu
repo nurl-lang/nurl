@@ -91,6 +91,8 @@ $ `stdlib/core/box.nu`
 
 & `sqlite3` @ sqlite3_close *u db → i
 
+& `sqlite3` @ sqlite3_close_v2 *u db → i
+
 & `sqlite3` @ sqlite3_busy_timeout *u db i ms → i
 
 & `sqlite3` @ sqlite3_exec *u db s sql *u cb *u data *u out_err → i
@@ -340,12 +342,23 @@ $ `stdlib/core/box.nu`
 }
 
 // Close the connection now (optional: the handle does it when it goes).
-// Idempotent: the sqlite3* is cleared after sqlite3_close.
+// Idempotent: the sqlite3* is cleared after the close.
+//
+// A Statement of this connection may still be alive (its own handle,
+// finalized when it goes): sqlite3_close would refuse (SQLITE_BUSY) and
+// leave the connection open with nobody to close it, so the close is
+// sqlite3_close_v2's — the connection is released now, or, while a
+// statement lives, when the last one is finalized. Such a statement may
+// still re-prepare (a schema change), which runs the authorizer: it is
+// uninstalled first, so the handle's copy of it can go now.
 @ sqlite_close Database db → v {
     : *DbState h ( __db_state db )
     ? == # i h 0 { ^ } {}
-    ? != # i . h db 0 { : i _rc ( sqlite3_close . h db ) = . h db # *u 0 } {}
-    // The authorizer goes only now: libsqlite may call it until the close.
+    ? != # i . h db 0 {
+        ?? . h auth { T _a → { : i _ra ( sqlite3_set_authorizer . h db # *u 0 # *u 0 ) } F → {} }
+        : i _rc ( sqlite3_close_v2 . h db )
+        = . h db # *u 0
+    } {}
     = . h auth @ ?( @ i i s s s s ) { F }
 }
 

@@ -21,8 +21,10 @@
 //   ( x25519 scalar point ) → ( Vec u )   scalar·point  (both 32 bytes)
 //   ( x25519_base scalar )  → ( Vec u )   scalar·basepoint  (the pubkey)
 //
-// All inputs/outputs are 32-byte `( Vec u )`. Scalars are clamped
-// internally per RFC 7748 §5, so any 32 random bytes is a valid secret.
+// All inputs/outputs are 32-byte `( Vec u )`; an input of another
+// length gives 32 zero bytes, the output RFC 7748 §6.1 tells a caller to
+// refuse. Scalars are clamped internally per RFC 7748 §5, so any 32
+// random bytes is a valid secret.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/modinv.nu`
@@ -88,11 +90,18 @@ $ `stdlib/std/modinv.nu`
 //
 // M51 = 2^51−1 = 2251799813685247 recurs as the limb mask throughout.
 
+// The five-limb helpers below are `raw` (spec §3.3e): each requires its
+// gf operands to hold five limbs (a `_gf_zero`, `_gf_copy` or
+// `_unpack25519` result) and reads and writes them through `vec_data`
+// with no length check — a check per limb op would cost std/ed25519 more
+// than the op. Their callers here and in std/ed25519 build every gf
+// themselves; a program calls the public surface, which checks lengths.
+
 // A fresh field element, all zero.
 @ _gf_zero → ( Vec i ) { ^ ( _zeros_i 5 ) }
 
 // Copy the five limbs of `a` into a new gf.
-@ _gf_copy ( Vec i ) a → ( Vec i ) {
+raw @ _gf_copy ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
@@ -102,7 +111,7 @@ $ `stdlib/std/modinv.nu`
 }
 
 // dst ← src (five limbs), in place.
-@ _gf_into ( Vec i ) dst ( Vec i ) src → v {
+raw @ _gf_into ( Vec i ) dst ( Vec i ) src → v {
     : *i dp ( vec_data [i] dst )
     : *i sp ( vec_data [i] src )
     : ~ i k 0
@@ -110,7 +119,7 @@ $ `stdlib/std/modinv.nu`
 }
 
 // Constant-time conditional swap of p and q when b = 1.
-@ _sel25519 ( Vec i ) p ( Vec i ) q i b → v {
+raw @ _sel25519 ( Vec i ) p ( Vec i ) q i b → v {
     : i c - 0 b
     : *i pp ( vec_data [i] p )
     : *i qp ( vec_data [i] q )
@@ -124,7 +133,8 @@ $ `stdlib/std/modinv.nu`
 }
 
 // Little-endian 64-bit load of the 8 bytes at n[off..off+7].
-inline @ _ld64u ( Vec u ) n i off → i {
+// requires: off ≥ 0 and off + 8 ≤ vec_len n.
+inline raw @ _ld64u ( Vec u ) n i off → i {
     : *u p ( vec_data [u] n )
     : i b0 # i . p off
     : i b1 # i . p + off 1
@@ -191,9 +201,9 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 }
 
 // Decode 32 little-endian bytes into a gf (top bit dropped, per RFC 7748
-// §5). Five overlapping 64-bit loads, each shifted to its limb boundary
+// §5); requires vec_len n ≥ 32. Five overlapping 64-bit loads, each shifted to its limb boundary
 // and masked to 51 bits (donna-c64 fexpand).
-@ _unpack25519 ( Vec u ) n → ( Vec i ) {
+raw @ _unpack25519 ( Vec u ) n → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
     : *i op ( vec_data [i] o )
     = . op 0 # i & # u64 ( _ld64u n 0 ) 2251799813685247
@@ -210,7 +220,7 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 // constant time; the final carry has no ×19 fold, so masking limb 4 drops
 // the 2^255 bit and leaves the canonical residue. The five 51-bit limbs
 // are then repacked into four 64-bit words and emitted as bytes.
-@ _pack25519 ( Vec i ) n → ( Vec u ) {
+raw @ _pack25519 ( Vec i ) n → ( Vec u ) {
     : *i np ( vec_data [i] n )
     : ~ u64 h0 # u64 . np 0
     : ~ u64 h1 # u64 . np 1
@@ -265,7 +275,7 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 // or b. _M / _S read all inputs into locals first, same guarantee.
 
 // o ← a + b (limbwise; limbs grow, the next multiply carries them).
-@ _A ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
+raw @ _A ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
@@ -275,7 +285,7 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 
 // o ← a − b mod p. Add 2p limbwise before subtracting so no limb goes
 // negative (donna-c64 fdifference_backwards): 2p = [2^52−38, 2^52−2, …].
-@ _Z ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
+raw @ _Z ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
@@ -290,7 +300,7 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 // 128-bit sum of products held as an (lo, hi) pair (nurl_umulhi high
 // half), with the 2^255 ≡ 19 wrap folded into the r1..r4 factors. Then
 // one carry pass reduces the ten 128-bit words back to five 51-bit limbs.
-@ _M ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
+raw @ _M ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : u64 r0 # u64 . ap 0
@@ -347,7 +357,7 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 
 // o ← a² mod 2^255−19. donna-c64 fsquare: the cross terms are doubled
 // once via d0..d4 instead of appearing twice, so 15 products, not 25.
-@ _S ( Vec i ) o ( Vec i ) a → v {
+raw @ _S ( Vec i ) o ( Vec i ) a → v {
     : *i ap ( vec_data [i] a )
     : u64 r0 # u64 . ap 0
     : u64 r1 # u64 . ap 1
@@ -431,12 +441,12 @@ inline @ __fe_pack u64 a0 u64 a1 u64 a2 u64 a3 u64 a4 → ( Vec u ) {
 
 // io ← io^(p-2) = io^-1  (Fermat inversion, 254 squarings).
 // io ← io^(2^n) — n back-to-back squarings.
-@ _sqn25519 ( Vec i ) io i n → v {
+raw @ _sqn25519 ( Vec i ) io i n → v {
     : ~ i k 0
     ~ < k n { ( _S io io ) = k + k 1 }
 }
 
-@ _inv25519 ( Vec i ) io → v {
+raw @ _inv25519 ( Vec i ) io → v {
     // io ← io^(p−2), p = 2^255−19 — Fermat, via the standard ref10
     // addition chain: 254 squarings + 11 multiplies. The old
     // tweetnacl-style ladder multiplied on every exponent bit — 254 S
@@ -1048,7 +1058,7 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
 
 // ── for x25519_kernel_agrees: the kernels against the register form ──
 // Elements are 32 little-endian bytes — any 256-bit pattern — and come
-// back reduced. `over` writes the kernel's result over its first operand
+// back reduced. Each requires 32-byte operands (`raw`: the test vouches). `over` writes the kernel's result over its first operand
 // (the ladder's own `( __xk_sq d d )`).
 @ __xk_load * u64 o ( Vec u ) a → v {
     = . o 0 # u64 ( _ld64u a 0 )
@@ -1057,7 +1067,7 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     = . o 3 # u64 ( _ld64u a 24 )
 }
 
-@ _x25519_mul_k ( Vec u ) a ( Vec u ) b b over → ( Vec u ) {
+raw @ _x25519_mul_k ( Vec u ) a ( Vec u ) b b over → ( Vec u ) {
     : ( Vec u64 ) kb ( vec_zeroed [u64] 12 )
     : *u64 x ( vec_data [u64] kb )
     : *u64 y ( __xk_at x 1 )
@@ -1068,7 +1078,7 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     ^ ( __f4_pack . r 0 . r 1 . r 2 . r 3 )
 }
 
-@ _x25519_sq_k ( Vec u ) a b over → ( Vec u ) {
+raw @ _x25519_sq_k ( Vec u ) a b over → ( Vec u ) {
     : ( Vec u64 ) kb ( vec_zeroed [u64] 8 )
     : *u64 x ( vec_data [u64] kb )
     : *u64 r ? over x ( __xk_at x 1 )
@@ -1077,7 +1087,7 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     ^ ( __f4_pack . r 0 . r 1 . r 2 . r 3 )
 }
 
-@ _x25519_mul_r ( Vec u ) a ( Vec u ) b → ( Vec u ) {
+raw @ _x25519_mul_r ( Vec u ) a ( Vec u ) b → ( Vec u ) {
     : ~ u64 w0 0
     : ~ u64 w1 0
     : ~ u64 w2 0
@@ -1086,23 +1096,32 @@ inline @ __xk_cmadd * u64 o * u64 p * u64 d → v {
     ^ ( __f4_pack w0 w1 w2 w3 )
 }
 
-@ _x25519_ladder_k ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+raw @ _x25519_ladder_k ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
     : ( Vec u64 ) kb ( vec_zeroed [u64] 68 )
     ^ ( __scalarmult_k ( vec_data [u64] kb ) scalar point )
 }
 
-@ _x25519_ladder_r ( Vec u ) scalar ( Vec u ) point → ( Vec u ) { ^ ( __scalarmult_r scalar point ) }
+raw @ _x25519_ladder_r ( Vec u ) scalar ( Vec u ) point → ( Vec u ) { ^ ( __scalarmult_r scalar point ) }
 
-@ _x25519_base_k ( Vec u ) scalar → ( Vec u ) {
+raw @ _x25519_base_k ( Vec u ) scalar → ( Vec u ) {
     : ( Vec u64 ) kb ( vec_zeroed [u64] 52 )
     ^ ( __xe_base_k ( vec_data [u64] kb ) scalar )
 }
 
-@ _x25519_base_r ( Vec u ) scalar → ( Vec u ) { ^ ( __xe_base_r scalar ) }
+raw @ _x25519_base_r ( Vec u ) scalar → ( Vec u ) { ^ ( __xe_base_r scalar ) }
+
+// A scalar or point that is not 32 bytes is no X25519 input. The ladders
+// read 32 bytes through `vec_data`, so the public surface answers it
+// with the all-zero output a low-order point gives — which every caller
+// following RFC 7748 §6.1 refuses (TLS: RFC 8446 §7.4.2, the `_all_zero`
+// checks) — instead of reading past a shorter buffer: it fails closed.
+@ __x_not32 ( Vec u ) v → b { ^ != ( vec_len [u] v ) 32 }
 
 // scalar · point — the ECDH primitive. `scalar` and `point` are 32-byte
-// little-endian `( Vec u )`; the result is the 32-byte shared X-coord.
+// little-endian `( Vec u )`; the result is the 32-byte shared X-coord
+// (all zero for an input of another length, above).
 @ x25519 ( Vec u ) scalar ( Vec u ) point → ( Vec u ) {
+    ? | ( __x_not32 scalar ) ( __x_not32 point ) { ^ ( _zeros_u 32 ) } {}
     ^ ( __scalarmult scalar point )
 }
 
@@ -1614,6 +1633,7 @@ inline @ __xk_cp * u64 o * u64 a → v { = . o 0 . a 0 = . o 1 . a 1 = . o 2 . a
 // the kernels' walk where the target has the kernels (a square of the
 // zeroed buffer asks), else the register one.
 @ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
+    ? ( __x_not32 scalar ) { ^ ( _zeros_u 32 ) } {}
     : ( Vec u64 ) kb ( vec_zeroed [u64] 52 )
     : *u64 kw ( vec_data [u64] kb )
     ? ( nurl_x25519_sqrm kw kw ) { ^ ( __xe_base_k kw scalar ) } {}

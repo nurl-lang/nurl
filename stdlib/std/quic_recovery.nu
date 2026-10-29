@@ -38,7 +38,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) frames
 }
 
-: QuicRecoveryImpl {
+// Sealed (`raw`): the recovery state is the one it keeps.
+raw : QuicRecoveryImpl {
     ( Vec QuicSentPkt ) sent0  // the sent logs, oldest first
     ( Vec QuicSentPkt ) sent1
     ( Vec QuicSentPkt ) sent2

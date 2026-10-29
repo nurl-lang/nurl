@@ -17,6 +17,8 @@
 //   ( mlkem_encaps i level ( Vec u ) ek )         → MlkemEncap    (ct, ss)
 //   ( mlkem_decaps i level ( Vec u ) dk
 //                          ( Vec u ) ct )         → ( Vec u )     32-byte ss
+// An ek, dk or ct of the wrong size for the level gives an empty ct and
+// ss (encaps) or an empty Vec (decaps).
 //
 // API — the deterministic forms, which take the randomness as an
 // argument instead of drawing it. These exist because FIPS 203 defines
@@ -1074,8 +1076,14 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ^ h
 }
 
-// ML-KEM.Encaps_internal (Algorithm 17).
+// ML-KEM.Encaps_internal (Algorithm 17). An ek that is not the level's
+// mlkem_ek_len bytes, or an m that is not 32, gives an empty ct and ss
+// (FIPS 203 §7.2's input check): the encryption reads both at their
+// fixed sizes.
 @ mlkem_encaps_derand i level ( Vec u ) ek ( Vec u ) m → MlkemEncap {
+    ? | != ( vec_len [u] ek ) ( mlkem_ek_len level ) != ( vec_len [u] m ) 32 {
+        ^ @ MlkemEncap { ( shared_new [MlkemEncapImpl] @ MlkemEncapImpl { ( vec_new [u] ) ( vec_new [u] ) } ) }
+    } {}
     : MlkemParams prm ( __mlkem_params level )
     // (K, r) ← G(m ‖ H(ek))
     : ( Vec u ) gin ( vec_new [u] )
@@ -1107,7 +1115,13 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
 // CCA-secure, so the comparison and the select below must not leak
 // which path ran: the compare is `constant_time_eq_vec` and the select
 // is a byte mask.
+//
+// A dk or ct that is not the level's size (mlkem_dk_len, mlkem_ct_len)
+// gives an empty Vec: FIPS 203 §7.3's input check, and the one input
+// error implicit rejection cannot absorb — decryption reads both at
+// their fixed sizes.
 @ mlkem_decaps i level ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
+    ? | != ( vec_len [u] dk ) ( mlkem_dk_len level ) != ( vec_len [u] ct ) ( mlkem_ct_len level ) { ^ ( vec_new [u] ) } {}
     : MlkemParams prm ( __mlkem_params level )
     : i k . prm k
     : ( Vec u ) dkpke ( bytes_slice dk 0 * 384 k )

@@ -640,7 +640,9 @@ $ `stdlib/std/arc.nu`
 // `( Vec u )` field is owned by the machine; a caller that wants to keep
 // one copies it.
 
-: SrvHsImpl {
+// Sealed (`raw`): the handshake trusts its keys and buffers to be the
+// ones it set.
+raw : SrvHsImpl {
     // The identity this handshake presents and signs with (a count on
     // the caller's): the one it was made with, or `pq` once
     // `__srv_pick_cert` chose that.

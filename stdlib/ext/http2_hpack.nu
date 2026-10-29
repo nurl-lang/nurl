@@ -306,6 +306,7 @@ $ `stdlib/ext/http2_frame.nu`
 // bytes (a malicious peer could otherwise force an unbounded shift).
 @ hpack_decode_int ( Vec u ) buf i from i prefix_bits → !HpackInt HpackErr {
     : i n ( vec_len [u] buf )
+    ? < from 0 { ^ @ !HpackInt HpackErr { F HpackOther } } {}
     ? >= from n {
         ^ @ !HpackInt HpackErr { F HpackTruncated }
     } {}
@@ -357,6 +358,7 @@ $ `stdlib/ext/http2_frame.nu`
 
 @ hpack_decode_string ( Vec u ) buf i from → !HpackString HpackErr {
     : i n ( vec_len [u] buf )
+    ? < from 0 { ^ @ !HpackString HpackErr { F HpackOther } } {}
     ? >= from n {
         ^ @ !HpackString HpackErr { F HpackTruncated }
     } {}
@@ -732,7 +734,13 @@ $ `stdlib/ext/http2_frame.nu`
 // codes by length (5..30 bits); first match wins because the codes are
 // prefix-free. EOS (symbol 256) inside data is a protocol error.
 
+// Decodes buf[from, from + length); a range outside the buffer is
+// HpackTruncated.
 @ _hpack_huffman_decode ( Vec u ) buf i from i length → !String HpackErr {
+    : i n ( vec_len [u] buf )
+    ? | | < from 0 < length 0 | > from n > length - n from {
+        ^ @ !String HpackErr { F HpackTruncated }
+    } {}
     : ~ String out ( string_new )
     : ~ i bit_window 0
     : ~ i bits_avail 0

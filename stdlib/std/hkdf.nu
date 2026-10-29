@@ -40,9 +40,11 @@ $ `stdlib/std/hash_sha256.nu`
     ^ ( hmac_sha256_pure salt ikm )
 }
 
-// RFC 5869 §2.3: L <= 255 * HashLen.
+// RFC 5869 §2.3: L <= 255 * HashLen. `length <= len - at` (both sides
+// in range once `at` ≥ 0), not `at + length <= len`, which wraps for a
+// huge `at`.
 @ __hkdf_range_ok ( Vec u ) out i at i length → b {
-    ^ & & & >= at 0 >= length 0 <= length 8160 <= + at length ( vec_len [u] out )
+    ^ & & & >= at 0 >= length 0 <= length 8160 <= length - ( vec_len [u] out ) at
 }
 
 // T(1) ‖ T(2) ‖ … into the `length` bytes at `op`, the info being the

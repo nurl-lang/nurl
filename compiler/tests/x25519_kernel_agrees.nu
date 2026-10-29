@@ -70,7 +70,9 @@ $ `stdlib/std/x25519.nu`
 }
 
 // a·b, a·b over a, a² and a² over a: the kernels against the register form.
-@ check ( Vec u ) a ( Vec u ) b → i {
+// The kernels' entry points are `raw` (32-byte operands, which `fe` and
+// `edge` always build), so the functions calling them vouch for that.
+unsafe @ check ( Vec u ) a ( Vec u ) b → i {
     : ( Vec u ) want ( _x25519_mul_r a b )
     : ( Vec u ) sq ( _x25519_mul_r a a )
     : ~ i bad 0
@@ -104,10 +106,15 @@ $ `stdlib/std/x25519.nu`
     ( nurl_println_int n )
     ( nurl_print `field disagreements ` )
     ( nurl_println_int bad )
+    ( ladders )
+    ^ 0
+}
 
+// The ladders and the fixed-base walks, against each other.
+unsafe @ ladders → v {
     : ~ i lb 0
     : ~ i ln 0
-    = k 0
+    : ~ i k 0
     ~ < k 36 {
         : ( Vec u ) sc ( fe ( rnd ) ( rnd ) ( rnd ) ( rnd ) )
         : ( Vec u ) pt ? < k 12 ( edge k ) ( fe ( rnd ) ( rnd ) ( rnd ) ( rnd ) )
@@ -133,5 +140,4 @@ $ `stdlib/std/x25519.nu`
     ( nurl_println_int ln )
     ( nurl_print `ladder disagreements ` )
     ( nurl_println_int lb )
-    ^ 0
 }

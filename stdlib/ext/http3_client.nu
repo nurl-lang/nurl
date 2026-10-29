@@ -6,7 +6,7 @@
 // `HttpResponse` the HTTP/1.1 and HTTP/2 clients produce.
 //
 //   ( h3_client_connect host port server_name verify timeout_ms ) → H3Client
-//                                            null (`== 0 # i . cl ctl`) when the name does not resolve
+//                                            null (`h3_client_ok` F) when the name does not resolve
 //                                            or no socket could be bound; otherwise `h3_client_connected`
 //                                            says whether the QUIC handshake completed (with ALPN "h3")
 //                                            and `h3_client_close_code` why not
@@ -89,7 +89,13 @@ $ `stdlib/core/mem.nu`
 
 @ H3Client_drop sink H3Client h → v {}
 
-@ __H3Client_ptr H3Client h → *H3ClientImpl { ^ ( shared_ptr [H3ClientImpl] . h ctl ) }
+// The state in place. The null client h3_client_connect fails with holds
+// none: every accessor stops here with a panic rather than read through
+// it (test for it with h3_client_ok).
+@ __H3Client_ptr H3Client h → *H3ClientImpl {
+    ? == 0 ( shared_addr [H3ClientImpl] . h ctl ) { ( nurl_panic `h3_client: a client h3_client_connect failed to make (test with h3_client_ok)` ) } {}
+    ^ ( shared_ptr [H3ClientImpl] . h ctl )
+}
 
 @ h3c_default_max_field_section → i { ^ 65536 }
 

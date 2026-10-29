@@ -50,7 +50,9 @@ $ `stdlib/std/p256_field.nu`
     ^ & & & == ( vec_at [i] x 0 ) ( vec_at [i] y 0 ) == ( vec_at [i] x 1 ) ( vec_at [i] y 1 ) == ( vec_at [i] x 2 ) ( vec_at [i] y 2 ) == ( vec_at [i] x 3 ) ( vec_at [i] y 3 )
 }
 
-@ check P256Scratch scr ( Vec i ) a ( Vec i ) b → i {
+// The kernels' entry points are `raw` (four-limb operands, which `fe`
+// always builds), so the function calling them vouches for that.
+unsafe @ check P256Scratch scr ( Vec i ) a ( Vec i ) b → i {
     : ( Vec i ) k1 ( fe 0 0 0 0 )
     : ( Vec i ) p1 ( fe 0 0 0 0 )
     ( _p256_mul_d scr k1 a b )

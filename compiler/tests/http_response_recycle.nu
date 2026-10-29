@@ -43,7 +43,8 @@ unsafe @ allocs → i { ^ ( nurl_alloc_count ) }
     ( nurl_print `|\n` )
 }
 
-@ part1 → v {
+// `unsafe`: it keeps the borrowed-body contract (`src` outlives `view`).
+unsafe @ part1 → v {
     // A response with three headers and a body, recycled.
     : HttpResponse a ( response_text 200 `first body` )
     ( response_set_header a `X-Long-Header-Name` `a-fairly-long-header-value` )

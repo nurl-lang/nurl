@@ -21,7 +21,10 @@
 // one protocol cannot be replayed into another. Pass an empty Vec when
 // there is none. Signing is *hedged* by default: it draws 32 fresh
 // random bytes, which keeps a fault or a repeated message from leaking
-// the key the way deterministic signing can.
+// the key the way deterministic signing can. Every signing form returns
+// an empty Vec for a secret key that is not the level's mldsa_sk_len
+// bytes, as verify returns F for a public key or signature of the wrong
+// size.
 //
 // A signer that signs many messages with one key prepares it once —
 // unpacked, in the NTT domain, Â expanded — and signs with that:
@@ -1134,9 +1137,28 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
 // many messages (a TLS listener) does not redo it per signature. Never
 // written after it is built: one key may be shared by every thread that
 // signs with it (an Arc).
-: MldsaKey { i level ( Vec u ) kk ( Vec u ) tr ( Vec i32 ) s1 ( Vec i32 ) s2 ( Vec i32 ) t0 ( Vec i32 ) a }
+//
+// Sealed (`raw`, spec §3.3e): signing reads s1, s2, t0 and Â at the sizes
+// `level` implies, so a literal pairing a level with other vectors would
+// read past them. The vectors are readable fields, though, and safe code
+// may shrink one in place, so mldsa_sign_mu_key also checks their sizes
+// (__mldsa_key_ok) once a signature.
+raw : MldsaKey { i level ( Vec u ) kk ( Vec u ) tr ( Vec i32 ) s1 ( Vec i32 ) s2 ( Vec i32 ) t0 ( Vec i32 ) a }
 
+// Does `key` hold the vectors its level's sizes say?
+@ __mldsa_key_ok MldsaKey key → b {
+    : MldsaParams p ( __mldsa_params . key level )
+    : i k . p k
+    : i l . p l
+    ^ & & & == ( vec_len [i32] . key s1 ) * 256 l == ( vec_len [i32] . key s2 ) * 256 k == ( vec_len [i32] . key t0 ) * 256 k == ( vec_len [i32] . key a ) * * 256 k l
+}
+
+// A secret key that is not the level's mldsa_sk_len bytes gives a key
+// that signs nothing: every signature under it is an empty Vec.
 @ mldsa_sign_key i level ( Vec u ) sk → MldsaKey {
+    ? != ( vec_len [u] sk ) ( mldsa_sk_len level ) {
+        ^ @ MldsaKey { level ( vec_new [u] ) ( vec_new [u] ) ( vec_new [i32] ) ( vec_new [i32] ) ( vec_new [i32] ) ( vec_new [i32] ) }
+    } {}
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
@@ -1175,8 +1197,11 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
 // a generous bound. That cannot happen for a well-formed key — the
 // expected iteration count is between 4 and 7 depending on the level —
 // but an unbounded loop on a corrupted secret key would hang a server,
-// and failing is recoverable where hanging is not.
+// and failing is recoverable where hanging is not. An empty Vec too for a
+// key that signs nothing (mldsa_sign_key of a wrong-size sk) or whose
+// vectors were changed through its fields.
 simd @ mldsa_sign_mu_key MldsaKey key ( Vec u ) mu ( Vec u ) rnd → ( Vec u ) {
+    ? ! ( __mldsa_key_ok key ) { ^ ( vec_new [u] ) } {}
     : i level . key level
     : MldsaParams p ( __mldsa_params level )
     : i k . p k

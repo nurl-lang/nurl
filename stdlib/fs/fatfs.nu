@@ -1338,8 +1338,11 @@ $ `stdlib/core/slice.nu`
     ^ total
 }
 
+// Writes src[off, off + n). The range is checked against the Vec without
+// forming off + n, which a large n wraps past the test.
 @ fatfs_write i h ( Vec u ) src i off i n → i {
-    ? || < off 0 > + off n ( vec_len [u] src ) { ^ ( fe_inval ) } {}
+    : i len ( vec_len [u] src )
+    ? || || < off 0 > off len || < n 0 > n - len off { ^ ( fe_inval ) } {}
     ^ ( fatfs_write_raw h # s + # i ( vec_data [u] src ) off n )
 }
 

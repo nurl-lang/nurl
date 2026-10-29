@@ -22,6 +22,17 @@
 // scalar multiply allocates a fixed handful of limb vectors instead of one
 // per field operation (see p256ct_scalarmult).
 //
+// Both forms of every operation that takes an element are `raw` (spec
+// §3.3e): each requires its operands to hold four limbs — and a point's
+// coordinates, a scratch's registers, a table's slots the sizes its
+// comment names — and reads and writes them through `vec_data` with no
+// length check; a check per field operation would cost a scalar multiply
+// more than the operation. P256Pt and P256Scratch are sealed (`raw :`) for
+// the same reason. Their callers here and in std/ecdsa_p256 build every
+// element themselves; a program calls the byte-level surface
+// (p256ct_scalarmult_base, p256ct_scalarmult, std/ecdsa_p256), which
+// checks sizes once.
+//
 // Elements live in Montgomery form (ā = a·R mod p, R = 2^256) so that
 // p256ct_mul ā b̄ = (a·b)·R mod p stays in form. Convert in with
 // p256ct_to_mont, out with p256ct_from_mont. Used by the secret-scalar P-256
@@ -71,14 +82,18 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // limb through a raw `*i` before anyone reads one, so there is nothing to
 // zero first — and unlike a push loop, filling by index costs no capacity
 // check per limb.
-@ _mag4 → ( Vec i ) {
+// requires: the caller writes all four limbs before any is read (they
+// start uninitialised).
+raw @ _mag4 → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] 4 )
     : b _l ( vec_set_len [i] v 4 )
     ^ v
 }
 
 // The same for an arbitrary limb count (the CIOS accumulator wants 10).
-@ _magn i n → ( Vec i ) {
+// requires: the caller writes all n limbs before any is read (they start
+// uninitialised).
+raw @ _magn i n → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] n )
     : b _l ( vec_set_len [i] v n )
     ^ v
@@ -101,7 +116,7 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 // so there is no state to race over, and no `_d` worker calls another that
 // wants the same register (the point layer owns g0..g5, the field layer
 // owns t/diff, the mixed addition owns gp).
-: P256Scratch {
+raw : P256Scratch {
     ( Vec i ) modp ( Vec i ) t ( Vec i ) diff
     ( Vec i ) g0 ( Vec i ) g1 ( Vec i ) g2
     ( Vec i ) g3 ( Vec i ) g4 ( Vec i ) g5
@@ -141,7 +156,8 @@ $ `stdlib/std/p256_scalar.nu`  // reduction mod n before either scalar multiply
 
 // Montgomery multiply: returns (a·b·R^-1) mod p as 8 fixed limbs. CIOS, all
 // fixed-count loops, no data-dependent branch. a, b are 8-limb (< p).
-@ p256ct_mul ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+// requires: a and b hold 4 limbs.
+raw @ p256ct_mul ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_mul_s scr a b )
     ^ r
@@ -174,7 +190,8 @@ inline @ __p256_mul_p * i op * i ap * i bp → v { ? ( nurl_p256_mulm op ap bp )
 
 inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __p256_sqr_port_p op ap ) } }
 
-@ _p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     // The register kernel where the target has one (x86-64: the ADX tier
     // or mulq — the compiler's nurl_p256_mulm); the form below elsewhere.
     ? ( nurl_p256_mulm ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) {} { ( _p256_mul_port scr dst a b ) }
@@ -388,7 +405,8 @@ inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __
     = . op 3 # i o3
 }
 
-@ _p256_mul_port P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_mul_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_mul_port P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_mul_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 // (kept: the 9-limb staging cond-sub is gone — add/sub carry in
 // registers now and fold the conditional ±p inline, like the multiply.)
@@ -401,7 +419,8 @@ inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __
 // spell as `mul x x` comes through here: 37% of a fixed-base comb's
 // field ops are squarings.
 // `dst` may alias `a` — the limbs are read into locals first.
-@ _p256_sqr_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_sqr_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     // The register kernel where the target has one (nurl_p256_sqrm).
     ? ( nurl_p256_sqrm ( vec_data [i] dst ) ( vec_data [i] a ) ) {} { ( _p256_sqr_port scr dst a ) }
 }
@@ -568,10 +587,12 @@ inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __
     = . op 3 # i o3
 }
 
-@ _p256_sqr_port P256Scratch scr ( Vec i ) dst ( Vec i ) a → v { ( __p256_sqr_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ) }
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_sqr_port P256Scratch scr ( Vec i ) dst ( Vec i ) a → v { ( __p256_sqr_port_p ( vec_data [i] dst ) ( vec_data [i] a ) ) }
 
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
-@ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+// requires: a and b hold 4 limbs.
+raw @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_add_s scr a b )
     ^ r
@@ -624,7 +645,8 @@ inline @ __p256_add_p * i op * i ap * i bp → v {
 @ __p256_add_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_add_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 // (a − b) mod p, constant-time: a − b, and if it borrows add p back.
-@ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+// requires: a and b hold 4 limbs.
+raw @ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_sub_s scr a b )
     ^ r
@@ -675,26 +697,31 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
 
 @ __p256_sub_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_sub_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
-@ p256ct_sqr ( Vec i ) a → ( Vec i ) { ^ ( p256ct_mul a a ) }
+// requires: a holds 4 limbs.
+raw @ p256ct_sqr ( Vec i ) a → ( Vec i ) { ^ ( p256ct_mul a a ) }
 
-@ p256ct_to_mont ( Vec i ) a → ( Vec i ) {
+// requires: a holds 4 limbs.
+raw @ p256ct_to_mont ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( _p256_to_mont_s scr a )
     ^ r
 }
 
-@ _p256_to_mont_s P256Scratch scr ( Vec i ) a → ( Vec i ) {
+// requires: a holds 4 limbs.
+raw @ _p256_to_mont_s P256Scratch scr ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) out ( _mag4 )
     ( _p256_to_mont_d scr out a )
     ^ out
 }
 
-@ _p256_to_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_to_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : ( Vec i ) r2 ( __p256_r2 )
     ( _p256_mul_d scr dst a r2 )
 }
 
-@ p256ct_from_mont ( Vec i ) a → ( Vec i ) {
+// requires: a holds 4 limbs.
+raw @ p256ct_from_mont ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_from_mont_s scr a )
     ^ r
@@ -706,7 +733,8 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
     ^ out
 }
 
-@ _p256_from_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_from_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : ( Vec i ) one ( __p256_one )
     ( _p256_mul_d scr dst a one )
 }
@@ -732,14 +760,16 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
     ^ out
 }
 
-@ _p256_one_mont_d P256Scratch scr ( Vec i ) dst → v {
+// requires: dst holds 4 limbs.
+raw @ _p256_one_mont_d P256Scratch scr ( Vec i ) dst → v {
     : ( Vec i ) one ( __p256_one )
     ( _p256_to_mont_d scr dst one )
 }
 
 // Modular inverse in Montgomery form (_p256_inv_d): a·R ↦ a⁻¹·R mod p,
 // constant time. For a == 0 returns 0.
-@ p256ct_inv ( Vec i ) a → ( Vec i ) {
+// requires: a holds 4 limbs.
+raw @ p256ct_inv ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_inv_s scr a )
     ^ r
@@ -756,7 +786,8 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
 // form) invert aR to a⁻¹R⁻¹, and a Montgomery multiply by R³ makes that
 // a⁻¹R. Constant time; dst may alias a. It replaces Fermat's a^(p−2),
 // 255 squarings and 13 multiplies, a serial chain of their latencies.
-@ _p256_inv_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
+// requires: every field-element operand (dst included) holds 4 limbs.
+raw @ _p256_inv_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : *i ap ( vec_data [i] a )
     : ~ u64 o0 0
     : ~ u64 o1 0
@@ -793,14 +824,17 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
 // cross-checked against the bigint reference). a / b3 are passed in Montgomery
 // form (curve constants, computed once per scalar-mult).
 
-: P256Pt { ( Vec i ) x ( Vec i ) y ( Vec i ) z }
+raw : P256Pt { ( Vec i ) x ( Vec i ) y ( Vec i ) z }
 
 // An uninitialised point (three 8-limb magnitudes) — a ladder register.
-@ _p256_pt_mag → P256Pt {
+// requires: every coordinate is written before it is read (they start
+// uninitialised).
+raw @ _p256_pt_mag → P256Pt {
     ^ @ P256Pt { ( _mag4 ) ( _mag4 ) ( _mag4 ) }
 }
 
-@ p256ct_pt_select i bit P256Pt a P256Pt b → P256Pt {
+// requires: a and b are points of 4-limb coordinates.
+raw @ p256ct_pt_select i bit P256Pt a P256Pt b → P256Pt {
     : P256Pt out ( _p256_pt_mag )
     ( p256ct_pt_select_d out bit a b )
     ^ out
@@ -808,7 +842,8 @@ inline @ __p256_sub_p * i op * i ap * i bp → v {
 
 // `dst` may alias `a` or `b`: the merge reads and writes one limb index at
 // a time.
-@ p256ct_pt_select_d P256Pt dst i bit P256Pt a P256Pt b → v {
+// requires: dst, a and b are points of 4-limb coordinates.
+raw @ p256ct_pt_select_d P256Pt dst i bit P256Pt a P256Pt b → v {
     : i mask - 0 bit
     : i imask - 0 - 1 bit
     ( __p256_lmerge_d . dst x mask imask . a x . b x )
@@ -833,7 +868,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
     = . op 3 | & mask . ap 3 & imask . bp 3
 }
 
-@ p256ct_pt_clone P256Pt p → P256Pt {
+// requires: p's coordinates hold 4 limbs.
+raw @ p256ct_pt_clone P256Pt p → P256Pt {
     ^ @ P256Pt { ( __mag4_clone . p x ) ( __mag4_clone . p y ) ( __mag4_clone . p z ) }
 }
 
@@ -861,7 +897,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 }
 
 // Set an existing point to the identity, off the caller's scratch.
-@ _p256_set_identity_d P256Scratch scr P256Pt dst → v {
+// requires: dst's coordinates hold 4 limbs.
+raw @ _p256_set_identity_d P256Scratch scr P256Pt dst → v {
     : *i xp ( vec_data [i] . dst x )
     : *i zp ( vec_data [i] . dst z )
     = . xp 0 0 = . xp 1 0 = . xp 2 0 = . xp 3 0
@@ -901,7 +938,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 
 // Jacobian doubling in place, a = −3 (dbl-2001-b): 3M+5S.
 // Registers: g0=delta g1=gamma g2=beta g3=alpha g4/g5=temps.
-@ _p256_jdbl_d P256Scratch scr P256Pt pt → v {
+// requires: scr from _p256_scr_new, its registers unshrunk; pt's coordinates
+// hold 4 limbs.
+raw @ _p256_jdbl_d P256Scratch scr P256Pt pt → v {
     : *i xr ( vec_data [i] . pt x )
     : *i yr ( vec_data [i] . pt y )
     : *i zr ( vec_data [i] . pt z )
@@ -942,7 +981,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 }
 
 // Branch-free "all four limbs zero" mask: −1 when v == 0, else 0.
-@ _p256_zmask ( Vec i ) v → i {
+// requires: v holds 4 limbs.
+raw @ _p256_zmask ( Vec i ) v → i {
     : *i vp ( vec_data [i] v )
     : i zz | | | . vp 0 . vp 1 | . vp 2 . vp 3 0
     // (zz | −zz) has its top bit set exactly when zz ≠ 0.
@@ -957,7 +997,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // caller. The accumulator is NOT touched until the masked commit at the
 // end, so both fixup paths still see the old point. Uses every scratch
 // register (g0..g5 + gp).
-@ _p256_jmadd_d P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m i keep → v {
+// requires: scr from _p256_scr_new, its registers unshrunk; acc's
+// coordinates, x2, y2 and one_m hold 4 limbs.
+raw @ _p256_jmadd_d P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m i keep → v {
     : *i X1 ( vec_data [i] . acc x )
     : *i Y1 ( vec_data [i] . acc y )
     : *i Z1 ( vec_data [i] . acc z )
@@ -1013,7 +1055,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // the accumulator via _p256_jmadd_d's mask), but the scan still reads
 // it so the trace is digit-independent.
 
-@ _p256_atbl_put ( Vec i ) tbl i d ( Vec i ) ax ( Vec i ) ay → v {
+// requires: ax and ay hold 4 limbs, and 0 ≤ d with 8·d + 8 ≤ vec_len tbl.
+raw @ _p256_atbl_put ( Vec i ) tbl i d ( Vec i ) ax ( Vec i ) ay → v {
     : *i tp ( vec_data [i] tbl )
     : *i xp ( vec_data [i] ax )
     : *i yp ( vec_data [i] ay )
@@ -1036,7 +1079,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // one from zero borrows into the top bit, which nothing else can set for
 // a 4-bit value. No branch, and the address stream is identical for every
 // possible digit.
-@ _p256_atbl_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i digit → v {
+// requires: ex and ey hold 4 limbs, and tbl holds 16 entries (128 limbs).
+raw @ _p256_atbl_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i digit → v {
     : *i tp ( vec_data [i] tbl )
     : *i xp ( vec_data [i] ex )
     : *i yp ( vec_data [i] ey )
@@ -1062,7 +1106,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // x‖y‖z — the Jacobian multiples _p256_affine_multiples builds before it
 // normalises them.
 
-@ _p256_tbl_put ( Vec i ) tbl i d P256Pt p → v {
+// requires: p's coordinates hold 4 limbs, and 0 ≤ d with 12·d + 12 ≤ vec_len
+// tbl.
+raw @ _p256_tbl_put ( Vec i ) tbl i d P256Pt p → v {
     : *i tp ( vec_data [i] tbl )
     : *i xp ( vec_data [i] . p x )
     : *i yp ( vec_data [i] . p y )
@@ -1078,7 +1124,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 }
 
 // The point at slot d of such a flat vector, into `dst`.
-@ _p256_tbl_get P256Pt dst ( Vec i ) tbl i d → v {
+// requires: dst's coordinates hold 4 limbs, and 0 ≤ d with 12·d + 12 ≤
+// vec_len tbl.
+raw @ _p256_tbl_get P256Pt dst ( Vec i ) tbl i d → v {
     : *i tp ( vec_data [i] tbl )
     : i base * d 12
     ( __p256_ld4 . dst x # *i + # i tp * base 8 )
@@ -1123,7 +1171,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 }
 
 // v < p (plain limbs): the subtraction v − p borrows out of the top word.
-@ _p256_lt_p ( Vec i ) v → b {
+// requires: v holds 4 limbs.
+raw @ _p256_lt_p ( Vec i ) v → b {
     : *i vp ( vec_data [i] v )
     : ~ u64 bb ( nurl_subb_hi # u64 . vp 0 18446744073709551615 0 )
     = bb ( nurl_subb_hi # u64 . vp 1 4294967295 bb )
@@ -1134,7 +1183,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 
 // Do two field elements hold the same value? Every _d worker returns a
 // canonical residue, so limb equality is value equality.
-@ _p256_eq ( Vec i ) a ( Vec i ) b → b {
+// requires: a and b hold 4 limbs.
+raw @ _p256_eq ( Vec i ) a ( Vec i ) b → b {
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : i d | | | ^^ . ap 0 . bp 0 ^^ . ap 1 . bp 1 ^^ . ap 2 . bp 2 ^^ . ap 3 . bp 3
@@ -1142,7 +1192,8 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 }
 
 // Is the Montgomery affine point (x, y) on y² = x³ − 3x + b?
-@ _p256_on_curve P256Scratch scr ( Vec i ) xm ( Vec i ) ym → b {
+// requires: xm and ym hold 4 limbs.
+raw @ _p256_on_curve P256Scratch scr ( Vec i ) xm ( Vec i ) ym → b {
     : ( Vec i ) lhs ( _mag4 )
     : ( Vec i ) rhs ( _mag4 )
     : ( Vec i ) t ( _mag4 )
@@ -1161,7 +1212,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // every case, by branching — acc = ∞ takes the entry, acc = entry
 // doubles, acc = −entry becomes ∞. Variable time, which public data
 // allows; never call it with a secret scalar's digits.
-@ _p256_jmadd_vt P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m → v {
+// requires: scr from _p256_scr_new, its registers unshrunk; acc's
+// coordinates, x2, y2 and one_m hold 4 limbs.
+raw @ _p256_jmadd_vt P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i ) one_m → v {
     : ( Vec i ) X1 . acc x
     : ( Vec i ) Y1 . acc y
     : ( Vec i ) Z1 . acc z
@@ -1215,7 +1268,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // H = 0 would give Z = 0 — so it is for the fixed-base table builder
 // alone, where every call is an (j−1)·B + B with 3 ≤ j ≤ 15, which is
 // neither case. Uses every scratch register.
-@ _p256_jadd_d P256Scratch scr P256Pt acc P256Pt q → v {
+// requires: scr from _p256_scr_new, its registers unshrunk; acc's and q's
+// coordinates hold 4 limbs.
+raw @ _p256_jadd_d P256Scratch scr P256Pt acc P256Pt q → v {
     : ( Vec i ) X1 . acc x
     : ( Vec i ) Y1 . acc y
     : ( Vec i ) Z1 . acc z
@@ -1259,7 +1314,10 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // with ONE field inversion: Montgomery's trick — prefix products
 // c_k = Z_0·…·Z_k, invert the last, then back down: z_k⁻¹ = inv·c_(k−1),
 // inv ← inv·Z_k. Public points only (the loop is fixed-count anyway).
-@ _p256_batch_affine P256Scratch scr ( Vec i ) jac i count ( Vec i ) tbl i at ( Vec i ) one_m → v {
+// requires: scr from _p256_scr_new, its registers unshrunk; jac holds count
+// points (12·count limbs), one_m 4 limbs, and tbl the slots
+// at … at + count − 1 (8 limbs each).
+raw @ _p256_batch_affine P256Scratch scr ( Vec i ) jac i count ( Vec i ) tbl i at ( Vec i ) one_m → v {
     : *i jp ( vec_data [i] jac )
     : ( Vec i ) pre ( _magn * count 4 )
     : *i pp ( vec_data [i] pre )
@@ -1304,7 +1362,9 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // The affine table 0, 1·Q, …, 15·Q (entry 0 all-zero, never committed) for
 // a Montgomery affine Q of order n: Jacobian multiples, then one batch
 // inversion. Q is public in every use (a peer's share, a public key, G).
-@ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i ) one_m → ( Vec i ) {
+// requires: scr from _p256_scr_new, its registers unshrunk; qx, qy and one_m
+// hold 4 limbs.
+raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i ) one_m → ( Vec i ) {
     // Jacobian 1·Q … 15·Q, flat x‖y‖z, 12 limbs each, at index d − 1.
     : ( Vec i ) jac ( _magn 180 )
     : P256Pt p ( _p256_pt_mag )
@@ -1352,8 +1412,10 @@ inline @ __p256_lmerge_p * i op i mask i imask * i ap * i bp → v {
 // the scalar, big-endian, any length; bx/by are the point's affine
 // coordinates as plain (non-Montgomery) limbs and must be a point of the
 // curve — callers validate first (_p256_on_curve). Constant-time in the
-// scalar, and complete for every scalar; see the section header.
+// scalar, and complete for every scalar; see the section header. A
+// coordinate that is not four limbs gives an empty Vec.
 @ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
+    ? | != ( vec_len [i] bx ) 4 != ( vec_len [i] by ) 4 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) k ( __p256_scalar_mod_n kbytes )
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) onem ( _p256_one_mont_s scr )

@@ -55,7 +55,8 @@ $ `stdlib/core/mem.nu`
 
 // ── Transport ───────────────────────────────────────────────────────
 
-: HttpConnImpl {
+// Sealed (`raw`): `fd` is a runtime socket handle its drop closes.
+raw : HttpConnImpl {
     i is_tls
     i fd  // plaintext socket; 0 once closed
     TlsConn tc  // TLS connection; a null handle on plaintext / once closed
@@ -293,7 +294,7 @@ $ `stdlib/core/mem.nu`
     ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
     : ~ i n ( nurl_tcp_read fd # s + # i dp len 16384 )
     ~ & on_fiber & < n 0 == ( nurl_tcp_err_kind fd ) 7 {
-        ? ( __tls_io_wait fd 0 ) {
+        ? ( _tls_io_wait fd 0 ) {
             = n ( nurl_tcp_read fd # s + # i dp len 16384 )
         } { ^ -2 }
     }

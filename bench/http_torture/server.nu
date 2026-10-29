@@ -35,7 +35,9 @@ $ `packages/http/src/http.nu`
     ^ v
 }
 
-@ __sized i status ( Vec u ) body → HttpResponse {
+// `unsafe`: it vouches for the borrowed-body contract (main's bodies
+// outlive every response).
+unsafe @ __sized i status ( Vec u ) body → HttpResponse {
     : HttpResponse r ( response_new status )
     ( response_set_header r `Content-Type` `application/octet-stream` )
     ( response_set_body_borrowed_bytes r body )

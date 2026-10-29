@@ -229,8 +229,10 @@ pub @ Sha3_drop sink Sha3 h → v {}
 
 // A sponge with an explicit rate and domain byte. `rate` is the block
 // size in bytes (200 - 2·capacity/8); `dom` is 6 for the SHA-3 digests
-// and 31 for the SHAKE XOFs.
+// and 31 for the SHAKE XOFs. A rate outside [1, 200] — the 200-byte
+// state's bounds, which absorb, pad and squeeze index by — panics.
 pub @ sha3_new i rate i dom → Sha3 {
+    ? | < rate 1 > rate 200 { ( nurl_panic `sha3_new: rate must be 1 to 200 bytes (the Keccak state is 200)` ) } {}
     : ( Vec u64 ) st ( vec_with_cap [u64] 25 )
     : b _l ( vec_set_len [u64] st 25 )
     : *u64 sp ( vec_data [u64] st )

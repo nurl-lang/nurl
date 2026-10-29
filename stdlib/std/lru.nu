@@ -32,13 +32,15 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
-// ctl is a 3-word scalar block (boxed so mutations survive the value-
-// passed struct): [0]=head slot, [1]=tail slot (both -1 when empty),
-// [2]=live count. The collections (keys/vals/prev/nxt) are slot-indexed
+// meta holds three words (a Vec, so changes survive the value-passed
+// struct): [0]=head slot, [1]=tail slot (both -1 when empty), [2]=live
+// count. They are read and written through vec_get / vec_set: a raw
+// `s ctl` pointer into meta's buffer was trusted for 24 bytes, and a
+// literal could point it anywhere (the struct is generic, so it cannot
+// be a `raw` one). The collections (keys/vals/prev/nxt) are slot-indexed
 // arrays of length `cap`; `freelist` is a stack of unused slot indices.
 : LruCache [V] {
-    s ctl
-    ( Vec i ) meta  // owns the 3 words `ctl` points at
+    ( Vec i ) meta
     i cap
     ( HashMap s i ) index
     ( Vec String ) keys
@@ -48,17 +50,17 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( Vec i ) freelist
 }
 
-@ __lru_head s ctl → i { ^ ( nurl_peek ctl 0 ) }
+@ __lru_head ( Vec i ) m → i { ^ ( __lru_gi m 0 ) }
 
-@ __lru_tail s ctl → i { ^ ( nurl_peek ctl 1 ) }
+@ __lru_tail ( Vec i ) m → i { ^ ( __lru_gi m 1 ) }
 
-@ __lru_count s ctl → i { ^ ( nurl_peek ctl 2 ) }
+@ __lru_count ( Vec i ) m → i { ^ ( __lru_gi m 2 ) }
 
-@ __lru_set_head s ctl i v → v { ( nurl_poke ctl 0 v ) }
+@ __lru_set_head ( Vec i ) m i v → v { : b _s ( vec_set [i] m 0 v ) }
 
-@ __lru_set_tail s ctl i v → v { ( nurl_poke ctl 1 v ) }
+@ __lru_set_tail ( Vec i ) m i v → v { : b _s ( vec_set [i] m 1 v ) }
 
-@ __lru_set_count s ctl i v → v { ( nurl_poke ctl 2 v ) }
+@ __lru_set_count ( Vec i ) m i v → v { : b _s ( vec_set [i] m 2 v ) }
 
 @ __lru_gi ( Vec i ) v i idx → i {
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → -1 }
@@ -91,7 +93,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // ── intrusive list ────────────────────────────────────────────────────
 
 @ __lru_detach [V] ( LruCache V ) c i slot → v {
-    : s ctl . c ctl
+    : ( Vec i ) ctl . c meta
     : i p ( __lru_gi . c prev slot )
     : i n ( __lru_gi . c nxt slot )
     ? >= p 0 { : b _a ( vec_set [i] . c nxt p n ) {} } { ( __lru_set_head ctl n ) }
@@ -99,7 +101,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 }
 
 @ __lru_push_front [V] ( LruCache V ) c i slot → v {
-    : s ctl . c ctl
+    : ( Vec i ) ctl . c meta
     : i h ( __lru_head ctl )
     : b _a ( vec_set [i] . c prev slot -1 )
     : b _b ( vec_set [i] . c nxt slot h )
@@ -109,7 +111,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 }
 
 @ __lru_touch [V] ( LruCache V ) c i slot → v {
-    ? == ( __lru_head . c ctl ) slot {} {
+    ? == ( __lru_head . c meta ) slot {} {
         ( __lru_detach [V] c slot )
         ( __lru_push_front [V] c slot )
     }
@@ -119,13 +121,10 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 @ lru_new [V] i cap → ( LruCache V ) {
     : i c ? > cap 0 cap 1
-    // The control words live in a Vec the cache owns (dropped with it);
-    // `ctl` points at its buffer, which never grows.
+    // The control words live in a Vec the cache owns (dropped with it).
     : ( Vec i ) meta ( vec_zeroed [i] 3 )
-    : s ctl # s ( vec_data [i] meta )
-    ( nurl_poke ctl 0 -1 )
-    ( nurl_poke ctl 1 -1 )
-    ( nurl_poke ctl 2 0 )
+    ( __lru_set_head meta -1 )
+    ( __lru_set_tail meta -1 )
     // Key and value slots start empty (zero): storing into one drops what
     // it held, which for a never-used slot is nothing.
     : ( Vec String ) keys ( vec_zeroed [String] c )
@@ -138,14 +137,14 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     : ~ i k 0
     ~ < k c { ( vec_push [i] fl k ) = k + k 1 }
     : ( HashMap s i ) index ( map_new [s i] )
-    ^ @ ( LruCache V ) { ctl meta c index keys vals prev nxt fl }
+    ^ @ ( LruCache V ) { meta c index keys vals prev nxt fl }
 }
 
-@ lru_len [V] ( LruCache V ) c → i { ^ ( __lru_count . c ctl ) }
+@ lru_len [V] ( LruCache V ) c → i { ^ ( __lru_count . c meta ) }
 
 @ lru_cap [V] ( LruCache V ) c → i { ^ . c cap }
 
-@ lru_is_empty [V] ( LruCache V ) c → b { ^ == ( __lru_count . c ctl ) 0 }
+@ lru_is_empty [V] ( LruCache V ) c → b { ^ == ( __lru_count . c meta ) 0 }
 
 @ lru_contains [V] ( LruCache V ) c s key → b {
     ^ ?? ( __lru_idx_get . c index key ) { T _ → T F _ → F }
@@ -171,7 +170,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // Insert a brand-new key: evict the LRU entry first if at capacity,
 // then claim a free slot. Returns the evicted value (owned) or None.
 @ __lru_insert_new [V] ( LruCache V ) c s key V val → ?V {
-    : s ctl . c ctl
+    : ( Vec i ) ctl . c meta
     : ~ ? V evicted @ ?V { F }
     ? >= ( __lru_count ctl ) . c cap {
         : i t ( __lru_tail ctl )
@@ -219,7 +218,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 }
 
 @ lru_remove [V] ( LruCache V ) c s key → ?V {
-    : s ctl . c ctl
+    : ( Vec i ) ctl . c meta
     ^ ?? ( __lru_idx_get . c index key ) {
         T slot → {
             // The slot gives its key and value up, as an eviction does: the
@@ -240,7 +239,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 // Visit live entries most-recent first.
 @ lru_each [V] ( LruCache V ) c ( @ v s V ) f → v {
-    : ~ i cur ( __lru_head . c ctl )
+    : ~ i cur ( __lru_head . c meta )
     ~ >= cur 0 {
         : i nextc ( __lru_gi . c nxt cur )
         ?? ( vec_get [String] . c keys cur ) {
@@ -260,7 +259,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // Early release with a last look at every live value (see vec_free_with);
 // then `c` goes as `lru_free` releases it, values included.
 @ lru_free_with [V] sink ( LruCache V ) c ( @ v V ) drop → v {
-    : ~ i cur ( __lru_head . c ctl )
+    : ~ i cur ( __lru_head . c meta )
     ~ >= cur 0 {
         : i nx ( __lru_gi . c nxt cur )
         ?? ( vec_get [V] . c vals cur ) { T v → ( drop v ) F _ → {} }

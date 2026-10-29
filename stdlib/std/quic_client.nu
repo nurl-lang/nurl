@@ -7,7 +7,7 @@
 // (`ext/http3_client.nu`) sits on top and talks to streams.
 //
 //   ( quic_client_connect host port server_name alpn tp verify timeout_ms )
-//                                          → QuicClient    null (`== 0 # i . cl ctl`) when the name does not resolve or the socket
+//                                          → QuicClient    null (`quic_client_ok` F) when the name does not resolve or the socket
 //                                                          cannot be bound; otherwise the handshake has been
 //                                                          driven until it completed, failed, or `timeout_ms`
 //                                                          passed — `quic_client_connected` says which, and
@@ -66,7 +66,16 @@ $ `stdlib/core/rcbox.nu`
 
 @ QuicClient_drop sink QuicClient h → v {}
 
-@ __QuicClient_ptr QuicClient h → *QuicClientImpl { ^ ( shared_ptr [QuicClientImpl] . h ctl ) }
+// The state in place. The null client quic_client_connect fails with
+// holds none: every accessor stops here with a panic rather than read
+// through it (safe code tests for it with quic_client_ok).
+@ __QuicClient_ptr QuicClient h → *QuicClientImpl {
+    ? == 0 ( shared_addr [QuicClientImpl] . h ctl ) { ( nurl_panic `quic_client: a client quic_client_connect failed to make (test with quic_client_ok)` ) } {}
+    ^ ( shared_ptr [QuicClientImpl] . h ctl )
+}
+
+// F for the null client quic_client_connect returns when it cannot start.
+@ quic_client_ok QuicClient cl → b { ^ != 0 ( shared_addr [QuicClientImpl] . cl ctl ) }
 
 @ __qcl_now → i { ^ / ( monotonic_ns ) 1000000 }
 

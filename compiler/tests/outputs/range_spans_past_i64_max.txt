@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rand_range in range
+2
+2
+2
+2
+4
+4

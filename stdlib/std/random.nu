@@ -81,20 +81,21 @@ $ `stdlib/core/vec.nu`
 // stay unbiased. The mask grows by doubling until it covers the range.
 @ rand_range i from i to → i {
     ? >= from to { ^ from } {}
-    : i span - to from
+    // The span in u64, where `to - from` is exact for every from < to: as
+    // an i64 it wraps negative past i64 max, and no value was ever
+    // accepted (an endless loop).
+    : u64 span - # u64 to # u64 from
     // Find the smallest mask >= span (power-of-two minus 1).
-    : ~ i mask 1
-    ~ < mask span { = mask + * mask 2 1 }
-    : ~ i v 0
+    : ~ u64 mask 1
+    ~ < mask span { = mask | << mask 1 1 }
+    : ~ u64 v 0
     : ~ b done F
     ~ ! done {
-        = v & ( rand_u64 ) mask
-        // rand_u64 may return negative (top bit set in signed i64); the
-        // mask is positive, so & yields 0..mask. The value is rejected if
-        // it's >= span.
+        = v & # u64 ( rand_u64 ) mask
+        // Rejected when >= span.
         ? < v span { = done T } {}
     }
-    ^ + from v
+    ^ # i + # u64 from v
 }
 
 @ rand_hex_str i n → String {

@@ -471,8 +471,11 @@ A function or method declaration may carry a leading `unsafe` prefix
   parameter or in the result, outside a closure type: `vec_data`,
   `slice_data`, `nurl_str_at`, a program's own `→ *T`);
 - build a sealed representation field by field, write any of its fields
-  or read its raw fields — a struct that declares a raw-pointer field, or
-  a library handle (`Slice`, `Vec`, `Box`, …);
+  or read its raw fields — a struct that declares a raw-pointer field, a
+  library handle (`Slice`, `Vec`, `Box`, …), or a standard-library struct
+  with its own `% Drop` (the state behind a handle — `TcpConnImpl`,
+  `FileImpl`, `RawBlock`, … — whose destructor hands its fields to raw
+  code);
 - call a raw-memory primitive (`nurl_alloc`, `nurl_free`, `nurl_realloc`,
   `nurl_peek*` / `nurl_poke*`, `nurl_memcpy`, …), an ownership primitive
   that gives a value up or claims it by hand (`mem_forget`, `mem_take`,
@@ -486,7 +489,13 @@ A function or method declaration may carry a leading `unsafe` prefix
   the builtins marked raw in `stdlib/core/builtins.nu`);
 - call a standard-library function whose name begins with `__` (the
   library's own machinery, which trusts the control blocks and buffers
-  it is handed);
+  it is handed), or one declared `raw` (§3.3e). Every other library
+  function is safe for every argument a program can pass — a short or
+  empty buffer, a negative or huge offset, a count whose sum with an
+  offset wraps — so a helper shared between library files that needs
+  its operands sized or its offsets checked by the caller (x25519.nu's
+  field limbs, the recycling stash) is `raw`, and a struct whose fields
+  carry such an invariant is a `raw` struct;
 - call a foreign (`&`) function declared outside the standard library;
 - pass a runtime handle as a plain integer: a standard-library function
   or foreign function that takes the address of the runtime's own record

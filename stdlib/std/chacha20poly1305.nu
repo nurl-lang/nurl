@@ -124,10 +124,9 @@ $ `stdlib/core/vec.nu`
 // to be copied out of that buffer byte by bounds-checked byte before
 // this kernel would look at it.
 //
-// The caller is responsible for `doff + n` being within `data`; this is
-// a private-by-convention entry point (the AEAD pair below and the
-// record layer are its only users) and it does no bounds check of its
-// own, exactly like the raw-pointer loop it feeds.
+// A range not inside `data` (a negative `doff` or `n`, or `n` past
+// `vec_len data - doff`) gives an empty Vec: one check a call, not a
+// block.
 // ── The vector kernel ────────────────────────────────────────────────
 //
 // One double round of ChaCha20 over four `v128` registers, in the layout
@@ -506,6 +505,7 @@ simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op 
 // straight from the input pointer to the output pointer; only a final
 // partial block goes through a 64-byte keystream scratch.
 @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
+    ? | | < doff 0 < n 0 > n - ( vec_len [u] data ) doff { ^ ( vec_new [u] ) } {}
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
     : ( Vec u ) out ( __xor_out n 128 )
@@ -578,7 +578,9 @@ unsafe @ __chacha20_xor_ptr ( Vec u ) key i counter i nn0 i nn1 i nn2 * u dp * u
 // on a big-endian target where a vector store would lay the state's
 // 32-bit words down in the wrong byte order. See chacha20_xor_range
 // below for the vector path that handles every little-endian host.
-@ _chacha20_xor_range_scalar ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
+// requires: 0 ≤ doff, 0 ≤ n and n ≤ vec_len data − doff (chacha20_xor_range
+// checks it; the range is read through `vec_data` unchecked).
+raw @ _chacha20_xor_range_scalar ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     : ( Vec u ) out ( __xor_out n 64 )
     ? == n 0 { ^ out } {}
     : *u dp # *u + # i ( vec_data [u] data ) doff
@@ -1305,8 +1307,10 @@ unsafe simd @ __poly_wide * u st * u p i n → i {
     ^ & >= len 256 != 0 # i ( nurl_cpu_x86_v3 )
 }
 
-// otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
+// otk = 32-byte one-time key (r || s). Returns the 16-byte tag, or an
+// empty Vec for a key that is not 32 bytes.
 @ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
+    ? != ( vec_len [u] otk ) 32 { ^ ( vec_new [u] ) } {}
     : *u kp ( vec_data [u] otk )
     // RFC 8439's clamp on the two little-endian words of r
     : u64 r0 & # u64 ( __ld64 kp 0 ) 0x0ffffffc0fffffff
@@ -1573,7 +1577,7 @@ unsafe @ __ccp_setup ( Vec u ) key ( Vec u ) iv i seq * u np * u kp → b {
 // range is zeroed.
 @ chacha20poly1305_open_in ( Vec u ) key ( Vec u ) iv i seq ( Vec u ) buf i aad_at i data_at i end → b {
     : i len ( vec_len [u] buf )
-    ? | | != ( vec_len [u] key ) 32 != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | > + data_at 16 end > end len { ^ F } {}
+    ? | | != ( vec_len [u] key ) 32 != ( vec_len [u] iv ) 12 | | < aad_at 0 > aad_at data_at | | < end 16 > end len > data_at - end 16 { ^ F } {}
     : i n - - end data_at 16
     : i at ( __xor_scratch_at len )
     ( vec_reserve [u] buf + - at len ( __ccp_scratch ) )
@@ -1623,7 +1627,8 @@ unsafe @ __ccp_setup ( Vec u ) key ( Vec u ) iv i seq * u np * u kp → b {
 }
 
 // A copy of `v[lo, hi)`.
-@ bytes_range_cc ( Vec u ) v i lo i hi → ( Vec u ) {
+// requires: 0 ≤ lo ≤ hi ≤ vec_len v (the seal/open callers check it).
+raw @ bytes_range_cc ( Vec u ) v i lo i hi → ( Vec u ) {
     : ( Vec u ) out ( vec_with_cap [u] - hi lo )
     ( bytes_extend_raw_cc out # *u + # i ( vec_data [u] v ) lo - hi lo )
     ^ out

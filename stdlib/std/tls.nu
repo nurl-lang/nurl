@@ -61,8 +61,9 @@ $ `stdlib/core/slice.nu`
 // or writable (want = 1), honouring the handle's configured timeout
 // (0 = wait for ever, matching the blocking path's SO_RCVTIMEO
 // semantics). Returns T when the socket is ready, F on timeout or a
-// missing fiber context.
-@ __tls_io_wait i raw i want → b {
+// missing fiber context. Shared with ext/http_pure's reader.
+// requires: `raw` is a live runtime TCP handle (it is read as one).
+raw @ _tls_io_wait i raw i want → b {
     : i fd ( nurl_tcp_get_fd raw )
     : i ms ( nurl_tcp_timeout_ms raw )
     : i deadline ? != want 0 ( nurl_tcp_write_wait_ms raw ) ? > ms 0 ms - 0 1
@@ -77,7 +78,8 @@ $ `stdlib/core/slice.nu`
 // EAGAIN parks on the reactor until writable (the worker pthread stays
 // free for other fibers); off a fiber the write blocks in the kernel,
 // which is what a synchronous client wants.
-@ _tls_sock_write i fd ( Vec u ) data → b {
+// requires: `fd` is a live runtime TCP handle (it is read as one).
+raw @ _tls_sock_write i fd ( Vec u ) data → b {
     : *u dp ( vec_data [u] data )
     : i n ( vec_len [u] data )
     : b on_fiber != ( nurl_fiber_current ) 0
@@ -88,7 +90,7 @@ $ `stdlib/core/slice.nu`
         ? <= wn 0 {
             : ~ b retry F
             ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 {
-                = retry ( __tls_io_wait fd 1 )
+                = retry ( _tls_io_wait fd 1 )
             } {}
             ? retry {} { ^ F }
         } {
@@ -102,7 +104,8 @@ $ `stdlib/core/slice.nu`
 
 // `head` then `body` to the socket in one sendmsg per attempt
 // (nurl_tcp_write2), parking a fiber while the socket is full.
-@ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
+// requires: `fd` is a live runtime TCP handle (it is read as one).
+raw @ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
     : *u hp ( vec_data [u] head )
     : *u bp ( vec_data [u] body )
     : i hn ( vec_len [u] head )
@@ -115,7 +118,7 @@ $ `stdlib/core/slice.nu`
         : i wn ? < off hn ( nurl_tcp_write2 fd # *u + # i hp off - hn off bp bn ) ( nurl_tcp_write fd # s + # i bp - off hn - n off )
         ? <= wn 0 {
             : ~ b retry F
-            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 { = retry ( __tls_io_wait fd 1 ) } {}
+            ? & on_fiber == ( nurl_tcp_err_kind fd ) 7 { = retry ( _tls_io_wait fd 1 ) } {}
             ? retry {} { ^ F }
         } { = off + off wn }
     }
@@ -130,7 +133,7 @@ $ `stdlib/core/slice.nu`
 
 & `c` @ nurl_ktls_recv i conn *u buf i n i nowait → i
 
-& `c` @ nurl_ktls_rtype i conn → i
+unsafe & `c` @ nurl_ktls_rtype i conn → i
 
 unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 
@@ -165,8 +168,11 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 }
 
 // Live connection state. Vec fields are reassigned as keys rotate
-// (handshake → application) and as buffers are consumed.
-: TlsConnImpl {
+// (handshake → application) and as buffers are consumed. Sealed (`raw`):
+// `fd` is a runtime socket handle its drop closes, and the record layer
+// trusts the keys, ivs and buffers to be the ones it set — a state built
+// or changed field by field outside `unsafe` code could name any memory.
+raw : TlsConnImpl {
     i fd
     i owns_fd  // 1 until tls_close closes the socket
     i read_nowait  // one try-read call must not park on partial records
@@ -255,14 +261,17 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // The connection as a word, for a holder that is not a handle itself
 // (std/net.nu's TcpConn keeps one): one more owner, which
 // `_tls_word_release` gives back.
-@ _tls_word TlsConn h → i { ^ ( shared_into_word [TlsConnImpl] ( shared_clone [TlsConnImpl] . h ctl ) ) }
+// requires: the word is given back, once, with _tls_word_release.
+raw @ _tls_word TlsConn h → i { ^ ( shared_into_word [TlsConnImpl] ( shared_clone [TlsConnImpl] . h ctl ) ) }
 
-@ _tls_word_release i w → v { : ( Shared TlsConnImpl ) _back ( shared_from_word [TlsConnImpl] w ) }
+// requires: `w` came from _tls_word and is given back only this once.
+raw @ _tls_word_release i w → v { : ( Shared TlsConnImpl ) _back ( shared_from_word [TlsConnImpl] w ) }
 
 // A connection over socket `raw`. The connection owns the socket from
 // here: tls_close closes it, or else the last owner does. A `raw` of 0 is
 // no socket (a connection state built for a test).
-@ _tls_conn_new i raw → TlsConn {
+// requires: `raw` is 0 or a live runtime TCP handle nothing else closes.
+raw @ _tls_conn_new i raw → TlsConn {
     : ( Shared TlsConnImpl ) c__box ( shared_zero [TlsConnImpl] )
     : *TlsConnImpl c ( shared_ptr [TlsConnImpl] c__box )
     = . c fd raw
@@ -436,7 +445,7 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // so a fiber HTTP-over-TLS server multiplexes its connections instead
 // of pinning one worker per idle keep-alive conn. Off a fiber the raw
 // blocking read is what a synchronous client wants (SO_RCVTIMEO still
-// bounds it; the reactor deadline mirrors that via __tls_io_wait).
+// bounds it; the reactor deadline mirrors that via _tls_io_wait).
 @ __fill inout TlsConnImpl c i n → !i TlsErr {
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
@@ -467,7 +476,7 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
         : ~ b timed_out F
         : ~ i at len
         ~ & == . c read_nowait 0 & ! timed_out & on_fiber & < got 0 == ( nurl_tcp_err_kind raw ) 7 {
-            ? ( __tls_io_wait raw 0 ) {
+            ? ( _tls_io_wait raw 0 ) {
                 // Parked: another fiber holding this connection may have
                 // read into rxbuf meanwhile and moved it, so the place to
                 // read into is taken again, not the one from before.
@@ -800,6 +809,10 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 // it on the way out), and any other content type is sent at once as a
 // record of its own (_tls_ktls_send).
 @ _tls_rec_range_to inout TlsConnImpl c ( Vec u ) out i dir i ct ( Vec u ) data i lo i hi → v {
+    // [lo, hi) within `data`, once per record (an empty range is still a
+    // record: an empty one).
+    : i dn ( vec_len [u] data )
+    ? | | < lo 0 > lo dn | < hi lo > hi dn { ^ v } {}
     ? != 0 ( _tls_ktls_of c dir ) {
         ? == ct 23 { ( bytes_extend_raw out # s + # i ( vec_data [u] data ) lo - hi lo ) } { : b _k ( _tls_ktls_send c ct # *u + # i ( vec_data [u] data ) lo - hi lo ) }
         ^ v
@@ -849,7 +862,7 @@ unsafe @ _tls_ktls_send inout TlsConnImpl c i ct * u p i n → b {
         : i wn ( nurl_ktls_send . c fd ct # *u + # i p off - n off )
         ? <= wn 0 {
             : ~ b retry F
-            ? & on_fiber == ( nurl_tcp_err_kind . c fd ) 7 { = retry ( __tls_io_wait . c fd 1 ) } {}
+            ? & on_fiber == ( nurl_tcp_err_kind . c fd ) 7 { = retry ( _tls_io_wait . c fd 1 ) } {}
             ? retry {} { = . c closed 1 ^ F }
         } { = off + off wn }
     }
@@ -989,7 +1002,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
         } {
             ? == got 0 { = . c closed 1 ^ @ !i TlsErr { T 0 } } {}
             ? | != . c read_nowait 0 | ! on_fiber != ( nurl_tcp_err_kind raw ) 7 { ^ @ !i TlsErr { F TlsRead } } {}
-            ? ! ( __tls_io_wait raw 0 ) { ^ @ !i TlsErr { F TlsRead } } {}
+            ? ! ( _tls_io_wait raw 0 ) { ^ @ !i TlsErr { F TlsRead } } {}
         }
     }
     ^ @ !i TlsErr { T 0 }
@@ -1798,8 +1811,9 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 // the record layer has always done (`__verify_conn`). A resumed
 // handshake captures nothing — the PSK authenticates the server.
 
-// The machine's state, behind the CliHs handle below.
-: CliHsImpl {
+// The machine's state, behind the CliHs handle below. Sealed (`raw`):
+// the handshake trusts its keys and buffers to be the ones it set.
+raw : CliHsImpl {
     ( Vec u ) sni  // host bytes for server_name
     ( Vec u ) alpn  // ALPN offer, wire form (tls_alpn_pack)
     ( Vec u ) ext_out  // extra ClientHello extension(s), wire-framed
@@ -2559,7 +2573,9 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 // tls_attach_full with the whole handshake bounded by `deadline_ns`, an
 // absolute nurl_monotonic_ns (std/time.nu's monotonic_ns); 0 = none,
 // which is tls_attach_full. A deadline that passes fails the handshake.
-@ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
+// requires: `raw` is a live runtime TCP handle the TlsConn then owns (as
+// for every tls_attach*; a program reaches it through tcp_starttls).
+raw @ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
     : !TlsConn TlsErr r ( __tls_handshake_until raw server_name alpn sess deadline_ns )
     ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
     ^ r
@@ -2968,6 +2984,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 
     // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
     : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ i kx_type 3  // curve_type from ServerKeyExchange: 3 named_curve
     : ~ i kx_curve 29  // named_curve from ServerKeyExchange: 29 x25519, 23 secp256r1
     : ~ i err 0
     : ~ i done 0
@@ -2982,6 +2999,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
                 } {}
                 ? == t 12 {
                     // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
+                    = kx_type ( _t_bget msg 4 )
                     = kx_curve ( _rdint msg 5 2 )
                     : i pklen ( _t_bget msg 7 )
                     = spub ( bytes_slice msg 8 + 8 pklen )
@@ -3005,6 +3023,15 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     ? | == err 1 == ( vec_len [u] spub ) 0 {
         ^ ( __fail c # TlsErr TlsHandshake )
     } {}
+    // RFC 8422 §5.4: a named curve we offered, and a public key of that
+    // curve's size — 32 bytes for x25519, an uncompressed 65-byte point
+    // for secp256r1. Any other curve was never offered, and a key of the
+    // wrong size (a length byte that lies, a message cut short) is no
+    // key: refused here, not read past.
+    : i want_pk ? == kx_curve 29 32 ? == kx_curve 23 65 0
+    ? | | != kx_type 3 == want_pk 0 != ( vec_len [u] spub ) want_pk {
+        ^ ( __fail c # TlsErr TlsHandshake )
+    } {}
 
     // ── ECDHE + master secret ──
     // Curve chosen by the server's ServerKeyExchange: secp256r1 (P-256,
@@ -3013,6 +3040,12 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     : i is_p256 == kx_curve 23
     : ( Vec u ) ckpub ? is_p256 ( p256_ecdh_keygen . c kx_p256 ) cpub
     : ( Vec u ) pms ? is_p256 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
+    // RFC 8422 §5.11 / RFC 7748 §6.1: an all-zero x25519 secret (a
+    // low-order server point) and a P-256 point off the curve (an empty
+    // secret) end the handshake instead of keying it.
+    ? ( _all_zero pms ) {
+        ^ ( __fail c # TlsErr TlsHandshake )
+    } {}
     : ( Vec u ) cs_seed ( vec_new [u] )
     ( bytes_extend_bytes cs_seed random )
     ( bytes_extend_bytes cs_seed srand )

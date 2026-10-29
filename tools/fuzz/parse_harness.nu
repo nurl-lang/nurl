@@ -48,6 +48,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
@@ -94,7 +95,7 @@ unsafe @ __fz_connect i port → ?TcpConn {
     ^ @ ?TcpConn { T ( tcp_conn_adopt raw ) }
 }
 
-unsafe @ __fz_shutdown_wr TcpConn conn → v { : i32 _s ( shutdown # i32 ( nurl_tcp_get_fd ( tcp_conn_fd conn ) ) # i32 1 ) }
+unsafe @ __fz_shutdown_wr TcpConn conn → v { : i32 _s ( shutdown # i32 ( __fz_fd conn ) # i32 1 ) }
 
 unsafe @ __fz_pid → i { ^ # i ( getpid ) }
 
@@ -251,23 +252,36 @@ unsafe @ __fz_pid → i { ^ # i ( getpid ) }
     ^ port
 }
 
-// Write `path`'s bytes to `conn`, half-close it, then read until the far
-// side closes. The drain runs on its own thread so a big input never
-// deadlocks against a peer whose replies filled the socket buffer.
-@ __fz_drain TcpConn conn → v {
-    ( tcp_set_timeout conn 20000 )
+// Read and drop what the far side sends on socket `fd` until it closes,
+// fails, or stays quiet for 20 s. The drain gets the fd number, not the
+// connection: a share of the TcpConn would leave its other owner on the
+// writing thread, which the crossing check refuses (docs/MEMORY.md 6.5),
+// and the runtime record's read state is the writer's alone. The fd may
+// be non-blocking (the runtime's choice), so poll before each read; a
+// read that finds nothing after poll said ready is an error, and ends it.
+unsafe @ __fz_drain_fd i fd → v {
+    : *u pfd # *u ( nurl_alloc ( posix_pollfd_size ) )
+    : *u buf # *u ( nurl_alloc 65536 )
     : ~ b go T
     ~ go {
-        ?? ( tcp_read_chunk conn 65536 ) {
-            T _ → {}
-            F _ → { = go F }
+        ( posix_pollfd_set pfd 0 fd 1 )
+        ? <= # i ( poll pfd 1 # i32 20000 ) 0 { = go F } {
+            ? <= ( read # i32 fd buf 65536 ) 0 { = go F } {}
         }
     }
+    ( nurl_free # s buf )
+    ( nurl_free # s pfd )
 }
 
+unsafe @ __fz_fd TcpConn conn → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd conn ) ) }
+
+// Write `path`'s bytes to `conn`, half-close it, then read until the far
+// side closes. The drain runs on its own thread so a big input never
+// deadlocks against a peer whose replies filled the socket buffer; the
+// connection outlives it (closed by the caller after the join).
 @ __fz_feed TcpConn conn s path → v {
-    : TcpConn dconn ( TcpConn_share conn )
-    : ( @ v ) drain \ → v { ( __fz_drain dconn ) }
+    : i fd ( __fz_fd conn )
+    : ( @ v ) drain \ → v { ( __fz_drain_fd fd ) }
     : !Thread ThreadErr dt ( thread_spawn drain )
     : ( Vec u ) data ( __fuzz_bytes path )
     ?? ( tcp_write_all conn data ) { T _ → {} F _ → {} }

@@ -1160,26 +1160,37 @@ $ `stdlib/ext/websocket.nu`
 // Walk the property block `pkt[start, end)` and append every User
 // Property (id 0x26 — a UTF-8 string pair) to `out`. Any other
 // property is skipped by its wire length.
+//
+// The walk ends at the packet's end at the latest, and every step moves
+// it forward: a length byte past the end reads -1, and the length it made
+// stepped the walk back to a property it had already read — a packet that
+// lied about its lengths kept the reader in the loop for ever.
 @ _mqtt_parse_props ( Vec u ) pkt i start i end ( Vec ( Pair String String ) ) out → v {
+    : i n ( vec_len [u] pkt )
+    : i stop ? > end n n end
     : ~ i p start
-    ~ < p end {
+    ~ < p stop {
         : i id ( _mqtt_byte pkt p )
-        ? < id 0 { = p end } {
+        ? < id 0 { = p stop } {
             = p + p 1
             ? == id 38 {
                 : i kh ( _mqtt_byte pkt p )
                 : i kl ( _mqtt_byte pkt + p 1 )
-                : i klen + * kh 256 kl
-                : String key ( __mqtt_extract_str pkt + p 2 klen )
-                = p + + p 2 klen
-                : i vh ( _mqtt_byte pkt p )
-                : i vl ( _mqtt_byte pkt + p 1 )
-                : i vlen + * vh 256 vl
-                : String val ( __mqtt_extract_str pkt + p 2 vlen )
-                = p + + p 2 vlen
-                ( vec_push [( Pair String String )] out @ ( Pair String String ) { key val } )
+                : i vp + + p 2 + * kh 256 kl
+                : i vh ( _mqtt_byte pkt vp )
+                : i vl ( _mqtt_byte pkt + vp 1 )
+                ? | | < kh 0 < kl 0 | < vh 0 < vl 0 { = p stop } {
+                    : i klen + * kh 256 kl
+                    : String key ( __mqtt_extract_str pkt + p 2 klen )
+                    = p vp
+                    : i vlen + * vh 256 vl
+                    : String val ( __mqtt_extract_str pkt + p 2 vlen )
+                    = p + + p 2 vlen
+                    ( vec_push [( Pair String String )] out @ ( Pair String String ) { key val } )
+                }
             } {
-                = p ( __mqtt_skip_prop_value pkt p id )
+                : i np ( __mqtt_skip_prop_value pkt p id )
+                = p ? > np p np stop
             }
         }
     }
