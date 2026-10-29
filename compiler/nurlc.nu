@@ -1694,6 +1694,11 @@ unsafe @ agg_field_count i syms s ot → i {
 // rule stores the drop flag itself, so registration only creates it.
 : ~ i g_udrop_noinit 0
 
+// Set when a `?` / `??` argument's ownership bit waits in
+// `__argtmp_joinown__` for mem_arg_temps (agora #174): the symbol is
+// written and read for a join only.
+: ~ i g_arg_join_set 0
+
 // Set by a call's temporary given an owner of its own (h233, h330) just
 // before registering it: its journal registration is made once the value
 // and its flag are in place (mem_journal_push_tmpown), not by the
@@ -16243,7 +16248,8 @@ unsafe @ gen_call i lex i syms i cg → s {
         // What this argument leaves the caller to drop after the call, and
         // whether the result is it (mem_arg_temps).
         ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own )
-        ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own )
+        // (Only a join's: every other argument pays one int test for it.)
+        ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 } {}
         ( mem_arg_temps lex syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
         : s __at_o ( nurl_sym_get syms `__argtmp_owned__` )
         ? != 0 ( nurl_str_len __at_o ) { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __at_o `` ) ( nurl_str_cat3 owned_arg_temps ` ` __at_o ) } {}
@@ -23344,13 +23350,14 @@ unsafe @ mem_path_to_indices s path → s {
     // ownership bits — a literal's, a call's (mem_arm_hown,
     // mem_arm_struct_hown): a value of its own, which nothing dropped when
     // the callee kept nothing, agora #174.)
-    : s __jown ( nurl_sym_get syms `__argtmp_joinown__` )
-    ( nurl_sym_def syms `__argtmp_joinown__` `` )
+    : s __jown ? != 0 g_arg_join_set ( nurl_sym_get syms `__argtmp_joinown__` ) ``
+    ? != 0 g_arg_join_set { ( nurl_sym_def syms `__argtmp_joinown__` `` ) = g_arg_join_set 0 } {}
     // (A join whose arms all lend — the constant `false` — owns nothing.
     // One a call's result may view (`( string_data ?? … )`) is deferred as
     // a call's temporary is: the view may not outlive its statement — bind
     // the join first — agora #181.)
-    : b __tjo & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __jown ) ! ( seq __jown `false` ) | ( __is_handle_ty at ) ( __is_hown_ty at )
+    // (The type is asked only of a join that owns on some path.)
+    : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F | ( __is_handle_ty at ) ( __is_hown_ty at )
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
     == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
