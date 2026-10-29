@@ -12,7 +12,7 @@ limitations — they live with each module (the `stdlib/**` file headers and
 
 **No soundness hole is known open** ([`MEMORY.md` §6.2](MEMORY.md)).
 Every safe program found accepted and faulting is closed, and held by
-a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h688`). One
+a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/) (`h01–h696`). One
 of them is closed at run time rather than at compile time: a handle
 whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the

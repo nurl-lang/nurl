@@ -98,6 +98,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An enum literal built as a call's argument is dropped with its
+  payloads** (Agora #177, h690–h696). `( show @ E { Opt @ ?String { T
+  ( mk ) } } )` to a callee that only borrows it released the payload's
+  String but not the heap box agora #155 put it in, so the box leaked on
+  every call. A boxed struct payload leaked the same way before #155. A
+  closure payload's env, and a literal the callee handed back whole or
+  lent part of back (`?? e { Str o → ?? o { T s → s … } }`), were
+  released under the result, and the caller read freed memory. Now an
+  argument literal that owns all it holds is dropped whole after the
+  call, boxes and all. One holding a binding's value frees just its
+  boxes, and the value stays the binding's. One lent back in part that
+  cannot be copied goes with the result.
 - **A payload handed out of an enum this function owns leaves the enum**
   (Agora #175, h660–h668, h670). The enum might be a local, a `sink`
   parameter or a call's temporary. Handing out its payload by returning
