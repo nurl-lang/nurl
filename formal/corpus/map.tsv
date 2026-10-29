@@ -579,6 +579,11 @@ h593_stored_before_a_break_then_its_owner_freed	§2.12	A2	agora #160: stored_bef
 h594_stored_on_one_path_then_freed	§2.12	A2	agora #160: stored_on_one_path_then_freed	rejected
 h595_stored_on_one_path_then_stored_again	§2.12	A2	agora #160: stored_on_one_path_then_stored_again	rejected
 h596_buffer_adopted_by_a_loop_local_then_reused	§2.12	A2	agora #160: buffer_adopted_by_a_loop_local_then_reused	rejected
+h597_byref_closure_returned_through_an_unwrapping_callee	§2.8	A2	agora #154: byref_closure_returned_through_an_unwrapping_callee	rejected
+h598_byref_closure_returned_through_a_field_picking_callee	§2.8	A2	agora #154: byref_closure_returned_through_a_field_picking_callee	rejected
+h599_byref_closure_picked_then_bound_then_returned	§2.8	A2	agora #154: byref_closure_picked_then_bound_then_returned	rejected
+h600_byref_closure_through_an_unwrapper_defined_later	§2.8	A2	agora #154: byref_closure_through_an_unwrapper_defined_later	rejected
+h601_byref_closure_picked_then_pushed_into_a_param_vec	§2.8	A2	agora #154: byref_closure_picked_then_pushed_into_a_param_vec	rejected
 h610_fiber_joined_twice	§2.1	A2	`( fiber_join f ) ( fiber_join f )` on one spawn_joinable handle: the second join freed the fiber's control block again (agora #168). Fiber is move-only and fiber_join takes it.	rejected
 h611_fiber_handle_copy_joined_twice	§2.1	A2	as h610 through a copy `: Fiber b a`, each copy joined once (agora #168).	rejected
 h612_joinable_fiber_never_joined	§3.3d	B	a spawn_joinable handle never joined: the finished fiber's block leaked; dropping the handle now detaches the fiber (nurl_fiber_detach; agora #168).	runs-clean

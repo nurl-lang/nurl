@@ -13117,6 +13117,19 @@ unsafe @ __has_pct_token s ll s name → b {
 // literal), else — when the expression was a bare identifier — that
 // binding's `<name>__refdepth`. 0 means "not a stack reference"
 // (a real referent depth is always >= 1, the function body).
+// Does the space-separated list of numbers hold one other than 0?
+unsafe @ __has_nonzero_word s list → b {
+    : i n ( nurl_str_len list )
+    : *u lp # *u list
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_at lp n k )
+        ? & > c 48 <= c 57 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 @ bck_expr_refdepth i syms s ident → i {
     ? == g_borrowck 0 { ^ 0 } {}
     : s d ( nurl_sym_get syms `__last_expr_refdepth__` )
@@ -16401,8 +16414,14 @@ unsafe @ gen_call i lex i syms i cg → s {
     // result as the argument's reference even when `f` returns a fresh
     // value. The explicit `0` says "this call result is not a stack
     // reference"; a positive depth says "it is, with this referent".
-    : i __ret_rd ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_param )
-    ( bck_max_ret_refdepth callee_ret_param arg_refdepths ) 0
+    // (…or, for a closure handed back, part of one — a field or a payload,
+    // g_fn_ret_alias: a closure that captured by reference stays one,
+    // agora #154.)
+    // (Asked only when an argument is a stack reference at all.)
+    : b __rd_any & != g_borrowck 0 ( __has_nonzero_word arg_refdepths )
+    : s __rd_pos ? ! __rd_any `` ? & ! __callee_shadowed ( __is_closure_ty ( nurl_sym_get syms call_name ) ) ( __words_join callee_ret_param callee_ret_alias ) ( nurl_str_cat callee_ret_param `` )
+    : i __ret_rd ? & __rd_any != 0 ( nurl_str_len __rd_pos )
+    ( bck_max_ret_refdepth __rd_pos arg_refdepths ) 0
     ( nurl_sym_def syms `__last_expr_refdepth__` ( nurl_str_int __ret_rd ) )
     // Returned-handle propagation (docs/MEMORY.md §2.2): when the callee
     // may hand back one of its parameters' handles, the call RESULT may
@@ -18486,6 +18505,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     : i __msxn0 g_sx_n
     : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
+    // (The parameters the matched value may be part of: a payload bound out
+    // of it is part of them too — handed back, it hands them back, agora
+    // #154.)
+    : i __m_scrut_origin ( origin_expr syms match_first_tt match_var_name )
+    : s __m_scrut_psrc ( bck_let_carrier_src syms match_first_tt match_var_name )
     // (A matched call whose lent argument is itself a call — `( vec_get (
     // vec_at top 0 ) 0 )` — lends what that one lends: its source
     // expression rides on the `match` row, h214.)
@@ -19347,6 +19371,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // payload's signedness in its type and a later `# i <b>`
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv0 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
                 // A closure payload (`T f →` over a `?( @ … )`): the binding
                 // owns its env exactly when the option was a call's and
@@ -19524,6 +19550,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt1 ) )
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings
@@ -19552,6 +19580,8 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt2 ) )
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
+                ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
+                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
                 ? != 0 g_auto_drop_strings
