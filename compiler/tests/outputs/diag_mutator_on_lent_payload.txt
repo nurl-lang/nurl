@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_mutator_on_lent_payload.nu:17:5: error: 'sl' borrows from 'r', which ended at line 16 — a value lent from it was passed to 'vec_push', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int ( slice_at [i] sl 0 ) )
+    ^
+compiler/tests/diag_mutator_on_lent_payload.nu:27:5: error: 'sl' borrows from 'r', which ended at line 26 — 'r2', which may be another handle on the same Rc value, was passed to 'vec_push', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'sl' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup sl ).
+    ( nurl_println_int ( slice_at [i] sl 0 ) )
+    ^
+compiler/tests/diag_mutator_on_lent_payload.nu:35:5: error: 'r' is reached by this call through the closure at argument 2, which passes it to 'vec_push', which may move or free its buffer, when it runs here, and through argument 1, which is it, points into it, borrows from it or captured it: inside the call the two are unrelated names, and the closure's change leaves the other dangling. Hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other one, or do not hand both to the same call.
+    ( vec_each [i] ( rc_get [( Vec i )] r ) \ i x → v { ( vec_push [i] ( rc_get [( Vec i )] r2 ) x ) } )
+    ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

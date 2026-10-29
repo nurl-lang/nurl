@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+whole
+in part
+rewrapped
+through a generic
+through a later callee

@@ -49,6 +49,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mutator called on a value an accessor lends changes what that
+  accessor lends from** (Agora #169, h584–h589). The pattern is
+  `( vec_push [i] ( rc_get [( Vec i )] r ) x )`. A view or element of
+  the payload taken before such a call, and a walk over it
+  (`vec_each … ( rc_get r )`) with a closure doing it, were not ended
+  by it. That held through a clone of the Rc and through `box_get` too.
+  Such reads are now rejected:
+  - every clone of an Rc shares one payload;
+  - a closure body's Rc handles no longer replace the enclosing
+    function's.
+- **An aggregate literal handed straight to a callee that hands it back
+  is the result's** (Agora #171, h576–h583). `( pass @ P { ( mk ) 0 } )`
+  with `@ pass P p → P { ^ p }` dropped the literal's fields after the
+  call, while the result still held them. This covered a struct, an
+  option or a result, handed back through a generic or a callee defined
+  further down. Now the result takes the literal over when it is handed
+  back whole, and is copied from it when it is handed back in part
+  (`^ . p s`), as for a call's temporary. A literal holding a binding's
+  value is still left to that binding (Agora #172).
 - **A value that is moved and never copied is the owner's once stored**
   (Agora #157, h558–h564). A user `% Drop` value or a trait object
   stored into a struct literal, a field, or a container a call keeps
