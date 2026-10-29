@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_payload_taken_then_read.nu:18:5: error: use of possibly-moved value 'e' — it was consumed on only some paths, at line 17; on that path this reads a freed buffer. Consume it on every path, or rebind it (= e …) on the path that consumed it
+    ?? e { S s → { ( nurl_println ( string_data s ) ) } NoVal → {} }
+    ^
+compiler/tests/diag_payload_taken_then_read.nu:28:5: error: use of possibly-moved value 'o' — it was consumed on only some paths, at line 25; on that path this reads a freed buffer. Consume it on every path, or rebind it (= o …) on the path that consumed it
+    ?? o { T s → { ( nurl_println ( string_data s ) ) } F → {} }
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

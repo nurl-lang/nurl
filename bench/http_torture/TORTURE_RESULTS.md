@@ -3,86 +3,86 @@
 Open-loop, coordinated-omission corrected (`oha -q --latency-correction`). Server pinned to cores `0-1`, generator to `2-3`. Both peers serve byte-identical bodies. MODE=**full**.
 
 - Host: **GitHub Actions ubuntu-latest runner** — `Linux 7.0.0-1017-azure` — AMD EPYC 9V74 80-Core Processor (4 CPUs)
-- NURL: `v0.79.1-12-gda5aacbf`  ·  oha: `oha 1.8.0`  ·  commit `da5aacbf`
-- Run: https://github.com/nurl-lang/nurl/actions/runs/40633076043
+- NURL: `v0.80.0-54-g29401773`  ·  oha: `oha 1.8.0`  ·  commit `29401773`
+- Run: https://github.com/nurl-lang/nurl/actions/runs/40868083024
 - Sustainable capacity = highest offered rate with achieved ≥ 97% of target and p99 ≤ 50 ms.
 
 ### Body 1k — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 136000 | 0.707/1.485/4.949 | 1.205/50.807/86.161 | 1.371/86.786/108.790 |
-| RUST | 136000 | 0.712/1.527/12.113 | 1.188/3.435/13.508 | 1.322/61.581/87.822 |
+| NURL | 120000 | 0.674/1.775/25.840 | 1.032/2.700/11.716 | 1.378/65.243/90.576 |
+| RUST | 136000 | 0.743/1.922/19.687 | 1.337/14.660/47.455 | 1.372/67.029/85.702 |
 
 ### Body 16k — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 124000 | 0.705/1.842/6.736 | 1.210/7.311/20.735 | 1.693/97.451/116.911 |
-| RUST | 124000 | 0.710/2.081/32.130 | 1.205/3.763/19.980 | 1.642/70.792/110.841 |
+| NURL | 112000 | 0.716/2.801/29.632 | 1.236/3.556/8.780 | 1.551/49.865/62.626 |
+| RUST | 112000 | 0.714/2.082/10.094 | 1.164/4.619/28.349 | 1.444/9.762/74.027 |
 
 ### Body 1m — sustainable capacity & tail under load
 
 | Server | Sustainable req/s | 50% p50/p99/p99.9 (ms) | 80% p50/p99/p99.9 | 95% p50/p99/p99.9 |
 |---|--:|--:|--:|--:|
-| NURL | 5250 | 0.420/0.915/1.361 | 0.595/1.483/12.014 | 0.638/2.696/56.033 |
-| RUST | 5000 | 0.317/0.722/1.386 | 0.462/0.923/8.118 | 0.529/1.484/52.193 |
+| NURL | 4750 | 0.438/0.915/1.311 | 0.605/1.307/6.524 | 0.626/1.719/46.411 |
+| RUST | 4500 | 0.328/0.756/1.384 | 0.436/0.919/6.182 | 0.512/1.429/46.928 |
 
 ### Body 1k — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 1903976 | 21.48 | 11.28 |
-| RUST | 1903873 | 21.46 | 11.27 |
+| NURL | 1679966 | 19.65 | 11.70 |
+| RUST | 1903965 | 22.04 | 11.58 |
 
 ### Body 16k — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 1735887 | 23.28 | 13.41 |
-| RUST | 1735883 | 22.93 | 13.21 |
+| NURL | 1567888 | 22.10 | 14.10 |
+| RUST | 1567884 | 22.29 | 14.22 |
 
 ### Body 1m — CPU seconds per request (server-side)
 
 | Server | req served | CPU s (utime+stime) | µs / request |
 |---|--:|--:|--:|
-| NURL | 73496 | 13.87 | 188.72 |
-| RUST | 69999 | 14.08 | 201.15 |
+| NURL | 66499 | 12.83 | 192.94 |
+| RUST | 62996 | 12.78 | 202.87 |
 
 ### Body 1k — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 27967 | 3.602/4.057/5.084 | 1.0000 |
-| RUST | 27645 | 3.648/4.176/5.039 | 1.0000 |
+| NURL | 27986 | 3.608/4.059/4.978 | 1.0000 |
+| RUST | 27732 | 3.648/4.117/4.951 | 1.0000 |
 
 ### Body 16k — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 26496 | 3.848/4.155/5.220 | 1.0000 |
-| RUST | 26286 | 3.858/4.227/5.231 | 1.0000 |
+| NURL | 26299 | 3.872/4.197/5.432 | 1.0000 |
+| RUST | 26154 | 3.884/4.256/5.227 | 1.0000 |
 
 ### Body 1m — connection churn (no keep-alive, fresh conn/request)
 
 | Server | req/s (churn) | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|
-| NURL | 5074 | 19.804/21.051/23.041 | 1.0000 |
-| RUST | 5051 | 19.921/20.810/22.454 | 1.0000 |
+| NURL | 4608 | 21.723/23.490/25.048 | 1.0000 |
+| RUST | 4554 | 21.995/23.869/26.222 | 1.0000 |
 
 ### Slowloris — 200 trickle clients held open, fast-client latency meanwhile (16k)
 
 | Server | fast-client req/s | p50/p99 (ms) | survived |
 |---|--:|--:|:--:|
-| NURL | 131363 | 0.153/0.209 | yes |
-| RUST | 130773 | 0.154/0.204 | yes |
+| NURL | 131694 | 0.152/0.210 | yes |
+| RUST | 129889 | 0.154/0.210 | yes |
 
 ### Keep-alive scale — 2000 concurrent keep-alive connections (1k body)
 
 | Server | conns | req/s | p50/p99/p99.9 (ms) | ok |
 |---|--:|--:|--:|--:|
-| NURL | 2000 | 115203 | 17.205/20.103/55.210 | 1.0000 |
-| RUST | 2000 | 113638 | 17.476/22.611/39.528 | 1.0000 |
+| NURL | 2000 | 97696 | 20.266/22.626/49.373 | 1.0000 |
+| RUST | 2000 | 98660 | 20.099/25.053/50.457 | 1.0000 |
 
 ### TLS 1.3 session resumption — does a reconnect skip the full handshake?
 
@@ -95,8 +95,8 @@ Open-loop, coordinated-omission corrected (`oha -q --latency-correction`). Serve
 
 | Server | req/s | p50/p99/p99.9 (ms) | ok | errors |
 |---|--:|--:|--:|--:|
-| NURL | 99199 | 1.236/798.301/1528.864 | 1.0000 | 5 (RSS 4872→10216 KiB) |
-| RUST | 99199 | 1.194/523.232/1142.521 | 1.0000 | 2 (RSS 4892→9344 KiB) |
+| NURL | 89599 | 1.134/606.678/1357.683 | 1.0000 | 4 (RSS 4836→10184 KiB) |
+| RUST | 89599 | 1.129/401.701/1255.698 | 1.0000 | 2 (RSS 4804→9324 KiB) |
 
 ---
 

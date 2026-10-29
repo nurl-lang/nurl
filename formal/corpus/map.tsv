@@ -635,6 +635,22 @@ h650_enum_temp_matched_in_a_loop_body	§7.6	A2	agora #155: a call's enum matched
 h651_enum_temp_matched_before_a_continue	§7.6	A2	agora #155: the same with a continue in the arm	runs-clean
 h652_enum_temp_matched_before_a_break	§7.6	A2	agora #155: the same with a break in the arm	runs-clean
 h653_enum_closure_temp_matched_once	§7.6	A2	agora #155: a call's enum with a closure payload matched unbound once	runs-clean
+h660_string_payload_returned_out_of_a_sink_enum	§7.6	A2	agora #175: a String payload returned out of a sink enum parameter	runs-clean
+h661_struct_payload_returned_out_of_a_sink_enum	§7.6	A2	agora #175: a boxed struct payload returned out of a sink enum parameter	runs-clean
+h662_struct_payload_returned_out_of_a_local_enum	§7.6	A2	agora #175: a boxed struct payload returned out of a local enum	runs-clean
+h663_option_payload_returned_out_of_a_sink_enum	§7.6	A2	agora #175: an option payload returned out of a sink enum parameter	runs-clean
+h664_one_of_two_payloads_returned_out_of_an_enum	§7.6	A2	agora #175: one of a variant's two payloads returned, the other dropped with the enum	runs-clean
+h665_payload_returned_out_of_a_temporary_enum	§7.6	A2	agora #175: a payload returned out of a call's enum matched unbound	runs-clean
+h666_payload_bound_then_its_enum_reassigned	§7.6	A2	agora #175: a payload bound out of an enum that is then reassigned	runs-clean
+h667_payload_returned_through_a_join_in_an_arm	§7.6	A2	agora #175: a payload returned through a ? join in one arm	runs-clean
+h668_payload_returned_from_an_arm_block	§7.6	A2	agora #175: a payload returned by ^ inside an arm of a statement match	runs-clean
+h669_option_read_after_a_taker_of_its_payload_ended	§7.6	A2	agora #175: an option whose payload a block's binding took, read after the block	rejected
+h670_payload_through_a_join_then_its_enum_reassigned	§7.6	A2	agora #175: a payload bound through a ? join in an arm, then its enum reassigned	runs-clean
+h671_nested_match_over_an_option_of_drop_payload	§7.6	A2	agora #175: a match over an enum payload that is an option of a % Drop type	runs-clean
+h672_nested_match_over_a_result_of_drop_payload	§7.6	A2	agora #175: the same over a result of a % Drop type	runs-clean
+h673_nested_match_over_a_second_payload	§7.6	A2	agora #175: the same over a variant's second payload	runs-clean
+h674_nested_payload_returned_out_of_a_sink_enum	§7.6	A2	agora #175: an option payload's payload returned out of a sink enum through an inner match	runs-clean
+h675_nested_payload_bound_then_its_enum_reassigned	§7.6	A2	agora #175: an option payload's payload bound through an inner match, then the enum reassigned	runs-clean
 h680_uncopyable_capture_closure_returned_in_a_struct	§2.11	A2	agora #161: a closure over a ( Vec D ) (D with a Drop, no Clone) returned inside a struct literal: adopting it could not copy the Vec in, its copy was the frame's released handle (UAF)	rejected
 h681_uncopyable_capture_closure_in_a_struct_bound_then_returned	§2.11	A2	agora #161: as h680 with the struct bound first and returned by name: the capture, modelled as stored into the struct, was no dependency of it	rejected
 h682_uncopyable_capture_closure_pushed_into_a_parameter	§2.11	A2	agora #161: as h680, the closure pushed into the caller's ( Vec ( @ i ) ): the cdep row ended the parameter silently	rejected
