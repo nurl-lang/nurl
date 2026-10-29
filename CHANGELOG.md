@@ -10,15 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`iter_range_step` counts its values once; LruCache reads its control
-  words through one checked address an operation.** The fixes for
-  h500/h504 made both slower: `iter_range_step` tested the room left on
-  every step (+25 % on a 333-value walk) and LruCache read its head, tail
-  and count through `vec_get` / `vec_set` (+6 %). `iter_range_step` now
-  works out the number of values in u64 when it is made and steps by
-  index (1 % faster than before the fix). LruCache checks that `meta`
-  holds the three words once per operation and reads them in place; a
-  cache literal with a shorter `meta` now panics instead of reading -1.
+- **`iter_range_step` counts its values once; LruCache keeps its control
+  words in a Box.** The fixes for h500/h504 made both slower:
+  `iter_range_step` tested the room left on every step (+25 % on a
+  333-value walk) and LruCache read its head, tail and count through
+  `vec_get` / `vec_set` (+6 %). `iter_range_step` now works out the
+  number of values in u64 when it is made and steps by index (1 % faster
+  than before the fix). LruCache's `meta` is a `( Box LruCtl )`, read in
+  place as HashMap reads its `MapCtl`: a Box always holds its one value
+  and no literal can build one, so there is nothing to check (put + get
+  1.4 % faster than before the fix). A cache literal now needs a
+  `( Box LruCtl )` for `meta`.
 
 - **The MQTT client copies a topic, payload or user property in one
   go.** `__mqtt_extract_str` read the packet a byte at a time through a

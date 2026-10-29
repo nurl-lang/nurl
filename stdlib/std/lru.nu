@@ -28,20 +28,26 @@
 // (h313, h314). `lru_free_with` lends each value to a closure before the
 // cache goes.
 
+$ `stdlib/core/box.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
-// meta holds three words (a Vec, so changes survive the value-passed
-// struct): [0]=head slot, [1]=tail slot (both -1 when empty), [2]=live
-// count. Each operation takes their address from meta (__lru_ctl, which
-// makes sure meta holds them): a raw `s ctl` field into meta's buffer was
+// The cache's three control words: the head and tail slots (both -1 when
+// empty) and the live count.
+: LruCtl { i head i tail i count }
+
+// meta boxes the control words (a Box, so changes survive the
+// value-passed struct, as HashMap keeps its MapCtl). A Box always holds
+// one LruCtl and cannot be built by a literal, so the words are read in
+// place with no check: a raw `s ctl` field into a Vec's buffer was
 // trusted for 24 bytes, and a literal could point it anywhere (the struct
-// is generic, so it cannot be a `raw` one). The collections
-// (keys/vals/prev/nxt) are slot-indexed arrays of length `cap`;
-// `freelist` is a stack of unused slot indices.
+// is generic, so it cannot be a `raw` one). A literal can still box any
+// three numbers; every slot index is checked where it is used. The
+// collections (keys/vals/prev/nxt) are slot-indexed arrays of length
+// `cap`; `freelist` is a stack of unused slot indices.
 : LruCache [V] {
-    ( Vec i ) meta
+    ( Box LruCtl ) meta
     i cap
     ( HashMap s i ) index
     ( Vec String ) keys
@@ -51,28 +57,21 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( Vec i ) freelist
 }
 
-// meta's three words, in place: fetched once an operation and handed to
-// the helpers below, which read and write through it as the old `s ctl`
-// field did.
-// A literal can hand the cache a shorter meta: that is a panic, as a
-// cache's other broken invariants are (a panic, not a call, so the hot
-// helpers stay inlined). meta never grows, so the address stays good.
-@ __lru_ctl ( Vec i ) m → s {
-    ? < ( vec_len [i] m ) 3 { ( nurl_panic `LruCache: its meta does not hold the three control words (a cache not made by lru_new)` ) } {}
-    ^ # s ( vec_data [i] m )
-}
+// The control words' address, fetched once an operation and handed to
+// the helpers below.
+@ __lru_ctl ( Box LruCtl ) m → *LruCtl { ^ ( box_ptr [LruCtl] m ) }
 
-@ __lru_head s ctl → i { ^ ( nurl_peek ctl 0 ) }
+@ __lru_head * LruCtl ctl → i { ^ . ctl head }
 
-@ __lru_tail s ctl → i { ^ ( nurl_peek ctl 1 ) }
+@ __lru_tail * LruCtl ctl → i { ^ . ctl tail }
 
-@ __lru_count s ctl → i { ^ ( nurl_peek ctl 2 ) }
+@ __lru_count * LruCtl ctl → i { ^ . ctl count }
 
-@ __lru_set_head s ctl i v → v { ( nurl_poke ctl 0 v ) }
+@ __lru_set_head * LruCtl ctl i v → v { = . ctl head v }
 
-@ __lru_set_tail s ctl i v → v { ( nurl_poke ctl 1 v ) }
+@ __lru_set_tail * LruCtl ctl i v → v { = . ctl tail v }
 
-@ __lru_set_count s ctl i v → v { ( nurl_poke ctl 2 v ) }
+@ __lru_set_count * LruCtl ctl i v → v { = . ctl count v }
 
 @ __lru_gi ( Vec i ) v i idx → i {
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → -1 }
@@ -104,14 +103,14 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 // ── intrusive list ────────────────────────────────────────────────────
 
-@ __lru_detach [V] ( LruCache V ) c s ctl i slot → v {
+@ __lru_detach [V] ( LruCache V ) c * LruCtl ctl i slot → v {
     : i p ( __lru_gi . c prev slot )
     : i n ( __lru_gi . c nxt slot )
     ? >= p 0 { : b _a ( vec_set [i] . c nxt p n ) {} } { ( __lru_set_head ctl n ) }
     ? >= n 0 { : b _b ( vec_set [i] . c prev n p ) {} } { ( __lru_set_tail ctl p ) }
 }
 
-@ __lru_push_front [V] ( LruCache V ) c s ctl i slot → v {
+@ __lru_push_front [V] ( LruCache V ) c * LruCtl ctl i slot → v {
     : i h ( __lru_head ctl )
     : b _a ( vec_set [i] . c prev slot -1 )
     : b _b ( vec_set [i] . c nxt slot h )
@@ -121,7 +120,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 }
 
 @ __lru_touch [V] ( LruCache V ) c i slot → v {
-    : s ctl ( __lru_ctl . c meta )
+    : *LruCtl ctl ( __lru_ctl . c meta )
     ? == ( __lru_head ctl ) slot {} {
         ( __lru_detach [V] c ctl slot )
         ( __lru_push_front [V] c ctl slot )
@@ -132,11 +131,8 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 @ lru_new [V] i cap → ( LruCache V ) {
     : i c ? > cap 0 cap 1
-    // The control words live in a Vec the cache owns (dropped with it).
-    : ( Vec i ) meta ( vec_zeroed [i] 3 )
-    : s ctl ( __lru_ctl meta )
-    ( __lru_set_head ctl -1 )
-    ( __lru_set_tail ctl -1 )
+    // The control words live in a Box the cache owns (dropped with it).
+    : ( Box LruCtl ) meta ( box_new [LruCtl] @ LruCtl { -1 -1 0 } )
     // Key and value slots start empty (zero): storing into one drops what
     // it held, which for a never-used slot is nothing.
     : ( Vec String ) keys ( vec_zeroed [String] c )
@@ -182,7 +178,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // Insert a brand-new key: evict the LRU entry first if at capacity,
 // then claim a free slot. Returns the evicted value (owned) or None.
 @ __lru_insert_new [V] ( LruCache V ) c s key V val → ?V {
-    : s ctl ( __lru_ctl . c meta )
+    : *LruCtl ctl ( __lru_ctl . c meta )
     : ~ ? V evicted @ ?V { F }
     ? >= ( __lru_count ctl ) . c cap {
         : i t ( __lru_tail ctl )
@@ -230,7 +226,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 }
 
 @ lru_remove [V] ( LruCache V ) c s key → ?V {
-    : s ctl ( __lru_ctl . c meta )
+    : *LruCtl ctl ( __lru_ctl . c meta )
     ^ ?? ( __lru_idx_get . c index key ) {
         T slot → {
             // The slot gives its key and value up, as an eviction does: the
