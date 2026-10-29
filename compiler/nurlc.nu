@@ -2878,6 +2878,15 @@ unsafe @ note_unsafe_item s pos s what → v {
 // block's tail field read starts at.
 : ~ i g_join_flends 0
 : ~ s g_blk_froot ``
+// The scope depth of the binding the next `?` / `??` hands its value to,
+// when that binding is assigned (`= t ? …`, gen_assign): what the join's
+// arms bound below it dies before it does (agora #179). -1: none.
+: ~ i g_join_rdepth -1
+// …and whether one of those arms lent what it bound there (a view, a
+// field of one): the assignment copies the join's lent paths (agora #179).
+: ~ i g_join_deep 0
+// (…and the binding that arm read: what a refusal names.)
+: ~ s g_join_droot ``
 // …and the path a binding's field-read right-hand side named (`: T n .
 // h name` → `h.name`): what a borrow decided for that binding borrows
 // from (bck_note_borrow), so it ends with that field, not every borrow
@@ -4585,6 +4594,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // did not own it (`:` and `=` already clear these before their RHS).
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     = g_join_flends 0
+    = g_join_deep 0
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
@@ -17551,8 +17561,11 @@ unsafe @ __ty_no_address s ty0 i depth → b {
 
 unsafe @ gen_cond i lex i syms i cg → s {
     // Scope depth at the `?`: an arm binding deeper than this is local to
-    // the arm (mem_arm_hown).
-    : i c_jdepth ( nurl_peek # s syms 1 )
+    // the arm (mem_arm_hown) — or than the binding the join's value is
+    // assigned to, when that is shallower (g_join_rdepth; agora #179).
+    : i c_jdepth0 ( nurl_peek # s syms 1 )
+    : i c_jdepth ? & >= g_join_rdepth 0 < g_join_rdepth c_jdepth0 g_join_rdepth c_jdepth0
+    = g_join_rdepth -1
     ( nurl_sym_def syms `__last_join_own__` `` )
     // Borrow checker (Phase 0d): source line of the `?`, for the
     // `cond`/`endcond` structural markers bracketing this conditional.
@@ -17689,6 +17702,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ( nurl_sym_def syms `__deferred_temps__` `` )
     ( nurl_sym_def syms `__deferred_ids__` `` )
     = g_join_flends 0
+    = g_join_deep 0
+    = g_join_rdepth ? & < c_jdepth c_jdepth0 | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST c_jdepth -1
     : ~ s tv ( gen_expr lex syms cg )
     = g_dead_arm - g_dead_arm ? c_dead_then 1 0
     : s t_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
@@ -17698,6 +17713,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_member_path_on t_mp0
     : s t_froot ( __arm_froot syms t_tt0 )
     : ~ i t_fl ( __arm_flends syms t_tt0 t_froot g_join_flends )
+    : ~ i t_dp ? | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST g_join_deep 0
     : s t_sx ? != 0 __sx_me ( __sx_operand syms t_tt0 t_v0 ( nurl_get_last_type ) ( __sx_froot syms t_tt0 ( nurl_get_last_type ) ) t_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` t_tt0 t_v0 )
     : s t_params ( nurl_sym_get syms `__last_join_params__` )
@@ -17786,9 +17802,19 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_arm_valu ? | c_valu c_armq 1 0
     ? == 0 g_did_ret { = t_hown ( mem_arm_hown syms cg tt2 t_tt0 t_v0 t_retid c_jdepth ) } {}
     = g_arm_valu 0
-    // An arm lending a field, or an enum's payload, of a parameter lends
-    // that parameter back in part (agora #177, #178).
-    ? & & == 0 g_did_ret ! ( seq t_hown `true` ) ( __ty_owns tt2 syms ) {
+    // Does this arm lend a value that owns something? (`&` evaluates both
+    // sides: the cheap tests first, nested.)
+    : ~ b t_lends F
+    ? == 0 g_did_ret { ? ! ( seq t_hown `true` ) { = t_lends ( __ty_owns tt2 syms ) } {} } {}
+    // A view or a field of a value bound below the binding the join is
+    // assigned to: that value dies first, so the arm hands over a copy
+    // (agora #179).
+    ? & t_lends < c_jdepth c_jdepth0 {
+        ? > ( __arm_src_depth syms t_tt0 t_v0 t_froot ) c_jdepth { = t_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len t_froot ) t_froot t_v0 `` ) } {}
+    } {}
+    // A field, or an enum's payload, of a parameter: that parameter is
+    // lent back in part (agora #177, #178).
+    ? t_lends {
         ( mem_note_field_part syms t_froot tt2 )
         ? ( is_ident_tok t_tt0 ) { ( mem_note_payload_part syms t_v0 ) } {}
     } { = t_fl 0 }
@@ -17900,6 +17926,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_member_path_on ? & != 0 __sx_me == e_tt0 TT_DOT 1 g_member_path_on
     = g_dead_arm + g_dead_arm ? c_dead_else 1 0
     = g_join_flends 0
+    = g_join_deep 0
+    = g_join_rdepth ? & < c_jdepth c_jdepth0 | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST c_jdepth -1
     : ~ s ev ( gen_expr lex syms cg )
     = g_dead_arm - g_dead_arm ? c_dead_else 1 0
     : s e_dtw ( nurl_str_cat ( nurl_sym_get syms `__deferred_temps__` ) `` )
@@ -17909,6 +17937,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_member_path_on e_mp0
     : s e_froot ( __arm_froot syms e_tt0 )
     : ~ i e_fl ( __arm_flends syms e_tt0 e_froot g_join_flends )
+    : ~ i e_dp ? | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST g_join_deep 0
     : s e_sx ? != 0 __sx_me ( __sx_operand syms e_tt0 e_v0 ( nurl_get_last_type ) ( __sx_froot syms e_tt0 ( nurl_get_last_type ) ) e_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` e_tt0 e_v0 )
     : s e_params ( nurl_sym_get syms `__last_join_params__` )
@@ -17967,7 +17996,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     = g_arm_valu ? | c_valu c_armq 1 0
     ? == 0 g_did_ret { = e_hown ( mem_arm_hown syms cg et2 e_tt0 e_v0 e_retid c_jdepth ) } {}
     = g_arm_valu 0
-    ? & & == 0 g_did_ret ! ( seq e_hown `true` ) ( __ty_owns et2 syms ) {
+    : ~ b e_lends F
+    ? == 0 g_did_ret { ? ! ( seq e_hown `true` ) { = e_lends ( __ty_owns et2 syms ) } {} } {}
+    ? & e_lends < c_jdepth c_jdepth0 {
+        ? > ( __arm_src_depth syms e_tt0 e_v0 e_froot ) c_jdepth { = e_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len e_froot ) e_froot e_v0 `` ) } {}
+    } {}
+    ? e_lends {
         ( mem_note_field_part syms e_froot et2 )
         ? ( is_ident_tok e_tt0 ) { ( mem_note_payload_part syms e_v0 ) } {}
     } { = e_fl 0 }
@@ -18113,6 +18147,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     { = phi_ids ( __phi_ids_union phi_ids e_inner_ids ) } {}
     ( nurl_sym_def syms `__last_phi_idents__` phi_ids )
     = g_join_flends | ? == 0 tdr t_fl 0 ? == 0 edr e_fl 0
+    = g_join_deep | ? == 0 tdr t_dp 0 ? == 0 edr e_dp 0
     // Snapshot before each arm scope was popped; retain only live values.
     ( nurl_sym_def syms `__last_join_params__`
     ( nurl_str_cat3 ? == tdr 0 t_params `` ` ` ? == edr 0 e_params `` ) )
@@ -18637,6 +18672,11 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
 }
 
 unsafe @ gen_match i lex i syms i cg → s {
+    // (The scope of the binding this match's value is assigned to, when
+    // that is shallower than the match: g_join_rdepth, taken before the
+    // scrutinee can.)
+    : i m_rdepth g_join_rdepth
+    = g_join_rdepth -1
     // Borrow checker (Phase 0d): source line of the `??`, for the
     // `match`/`endmatch` structural markers bracketing this match.
     : i bck_mline ( nurl_lex_line lex )
@@ -18841,7 +18881,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     : ~ s hown_entries ``
     : ~ b any_hown F
     : ~ s m_alends ``
-    : i m_jdepth ( nurl_peek # s syms 1 )
+    : i m_jdepth0 ( nurl_peek # s syms 1 )
+    : i m_jdepth ? & >= m_rdepth 0 < m_rdepth m_jdepth0 m_rdepth m_jdepth0
     ( nurl_sym_def syms `__last_join_own__` `` )
     : ~ s phi_type ``
     : ~ b phi_ok T
@@ -18875,6 +18916,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     // (…and whether a lending arm lent a field of this frame's own
     // value: g_join_flends.)
     : ~ i m_fl 0
+    : ~ i m_dp 0
     : ~ s m_params ``
     : ~ i m_origin 0
     // Exit labels of the arms whose drops wait for the join's verdict
@@ -19913,9 +19955,12 @@ unsafe @ gen_match i lex i syms i cg → s {
             = g_arm_qval ? & m_val | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST 1 0
             : i arm_sxn0 g_sx_n
             = g_join_flends 0
+            = g_join_deep 0
+            = g_join_rdepth ? & < m_jdepth m_jdepth0 | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST m_jdepth -1
             : ~ s arm_result ( gen_stmt lex syms cg )
             : s arm_froot ( __arm_froot syms arm_tt0 )
             : i arm_fl ( __arm_flends syms arm_tt0 arm_froot g_join_flends )
+            : i arm_dp0 ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST g_join_deep 0
             ? & m_val != 0 __sx_mme {
                 // (A payload handed back as is is part of the matched value.)
                 : s __atv ( nurl_sym_get syms `__tail_first_val__` )
@@ -19986,8 +20031,18 @@ unsafe @ gen_match i lex i syms i cg → s {
             // of a parameter hands that parameter back in part, not whole:
             // a caller's temporary is dropped and the result copied, not
             // taken for the temporary itself (agora #177).
+            // (Whether it lends a value that owns something: the cheap
+            // tests first, nested — `&` evaluates both sides.)
+            : ~ b arm_lends F
+            ? == 0 g_did_ret { ? ! ( seq arm_hown `true` ) { = arm_lends ( __ty_owns arm_type syms ) } {} } {}
+            // (…a view or a field of a value bound below the binding the
+            // match is assigned to: copied, as gen_cond's arms do; agora #179.)
+            = m_dp | m_dp arm_dp0
+            ? & arm_lends < m_jdepth m_jdepth0 {
+                ? > ( __arm_src_depth syms arm_tt0 arm_v0 arm_froot ) m_jdepth { = m_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len arm_froot ) arm_froot arm_v0 `` ) } {}
+            } {}
             ? & == 0 g_did_ret ( is_ident_tok arm_tt0 ) { ( mem_note_payload_part syms arm_v0 ) } {}
-            ? & & == 0 g_did_ret ! ( seq arm_hown `true` ) ( __ty_owns arm_type syms ) {
+            ? arm_lends {
                 ( mem_note_field_part syms arm_froot arm_type )
                 = m_fl | m_fl arm_fl
             } {}
@@ -20320,6 +20375,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         { = m_phi_ids ( __phi_ids_union m_phi_ids m_inner_ids ) } {}
         ( nurl_sym_def syms `__last_phi_idents__` m_phi_ids )
         = g_join_flends m_fl
+        = g_join_deep m_dp
         ( nurl_sym_def syms `__last_match_params__` m_params )
         ( origin_set syms `__last_match_params__` m_origin )
         ( nurl_sym_def syms `__last_phi_cause__`
@@ -20392,6 +20448,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         // An integer join cannot carry a heap handle.
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         = g_join_flends 0
+        = g_join_deep 0
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         // …nor a stack reference.
@@ -20403,6 +20460,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_value_hown__` `` )
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     = g_join_flends 0
+    = g_join_deep 0
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
     // A valueless `??` hands nothing out — clear the per-arm residue.
@@ -24603,7 +24661,10 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // reassigned while the result still read it (agora #178).
 // Does a value of type `ty` own what it points at (a handle, or something
 // with a drop)? A copied number lends nothing.
-@ __ty_owns s ty i syms → b { ^ | ( __is_handle_ty ty ) ( __type_needs_drop ty syms ) }
+@ __ty_owns s ty i syms → b {
+    ? ( __is_handle_ty ty ) { ^ T } {}
+    ^ ( __type_needs_drop ty syms )
+}
 
 @ mem_note_field_part i syms s root s ty → v {
     ? == 0 ( nurl_str_len root ) { ^ v } {}
@@ -24672,6 +24733,67 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? == tt TT_LBRACE { = tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) } {}
     ? | == tt TT_QUEST == tt TT_QUESTQUEST { ^ inner } {}
     ^ 0
+}
+
+// How deep the value an arm's lend reads from was bound: the owner of the
+// field it reads (`froot`, through what a payload came out of), or what the
+// view binding `v0` it hands out reads (`__fsrc`, `__alias`). -1: neither.
+@ __arm_src_depth i syms i tt0 s v0 s froot → i {
+    ? != 0 ( nurl_str_len froot ) {
+        : ~ s cur ( nurl_str_cat froot `` )
+        : ~ i hops 0
+        ~ < hops 6 {
+            : s up ( nurl_sym_get2 syms cur `__plend` )
+            ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { = hops 6 } {
+                = cur ( nurl_str_cat up `` )
+                = hops + hops 1
+            }
+        }
+        : s p ( mem_udrop_ptr_of syms cur )
+        ? | == 0 ( nurl_str_len p ) == 0 ( nurl_sym_len2 syms p `__depth` ) { ^ -1 } {}
+        ^ ( nurl_str_to_int ( nurl_sym_get2 syms p `__depth` ) )
+    } {}
+    ? ! ( is_ident_tok tt0 ) { ^ -1 } {}
+    : s up ( mem_udrop_ptr_of syms v0 )
+    ? == 0 ( nurl_str_len up ) { ^ -1 } {}
+    : ~ i d -1
+    : s fsp ( str_first_word ( nurl_sym_get2 syms up `__fsrc` ) )
+    ? & & != 0 ( nurl_str_len fsp ) ( nurl_sym_has_word syms `__user_drops__` fsp ) != 0 ( nurl_sym_len2 syms fsp `__depth` ) { = d ( nurl_str_to_int ( nurl_sym_get2 syms fsp `__depth` ) ) } {}
+    : ~ s al ( nurl_sym_get2 syms up `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? != 0 ( nurl_sym_len2 syms w `__depth` ) {
+            : i wd ( nurl_str_to_int ( nurl_sym_get2 syms w `__depth` ) )
+            ? > wd d { = d wd } {}
+        } {}
+    }
+    ^ d
+}
+
+// The value of a join (`?` / `??`) just stored into `ptr`, a binding of
+// an outer block, when one of the join's arms lent what that arm bound in
+// an inner block (g_join_deep): copied in place on the paths it was lent
+// (`__last_join_own__`), so the binding owns it on every path (agora
+// #179). One that cannot be copied is refused, as a plain `= t . p c` is
+// (__nc_outlive_die).
+@ mem_join_copy_slot i syms i cg s ptr s ty → v {
+    ? ( __nc_drop_ty ty ) {
+        ( nurl_sym_def syms `__last_member_root__` g_join_droot )
+        ( __nc_outlive_die syms ptr ty )
+    } {}
+    : s jo ( nurl_sym_get syms `__last_join_own__` )
+    ? ( seq jo `true` ) { ^ v } {}
+    ( nurl_sym_def syms `__last_join_own__` `true` )
+    : ~ s cond `1`
+    ? != 0 ( nurl_str_len jo ) {
+        = cond ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print cond ) ( nurl_print ` = xor i1 ` ) ( nurl_print jo ) ( nurl_print `, 1\n` )
+    } {}
+    : s lt ( nurl_llty ty )
+    : s cur ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s cp ( mem_emit_cloneif cg ty cur cond )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
 }
 
 // A payload binding `pv` of the match numbered `ser`: what it may point
@@ -34018,6 +34140,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : i __sxmp0 g_member_path_on
         = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == bck_rhs_tt TT_DOT 1 g_member_path_on
         = g_last_alloc_reg ``
+        // (A join's value goes to `name`, which may outlive what the join's
+        // arms bound: g_join_rdepth.)
+        // (Only a registered binding has a `__depth`: ptr.)
+        = g_join_rdepth -1
+        = g_join_deep 0
+        ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
+            ? != 0 ( nurl_sym_len2 syms ptr `__depth` ) { = g_join_rdepth ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) } {}
+        } {}
         : ~ s val ( gen_operand lex syms cg )
         = g_member_path_on __sxmp0
         = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
@@ -34708,6 +34838,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
             ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
             ( nurl_print `* ` ) ( nurl_print ptr ) ( emit_dbg_line_eol bck_line )
+            // (A join one of whose arms lent what it bound below `name`:
+            // the lent paths are copied in place, agora #179.)
+            ? != 0 g_join_deep { ( mem_join_copy_slot syms cg ptr vt ) } {}
         }
         { ? != 0 ( nurl_str_len glb )
             { ( store_global syms cg vt store_val name ) ( emit_dbg_line_eol bck_line )

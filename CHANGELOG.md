@@ -115,6 +115,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `?` / `??` assigned to a binding of an outer block hands it a value
+  of its own** (Agora #179, h740–h745). `= t ? T x ( mk )` inside a
+  block, with `x` that block's String, gave `t` a lend of `x`. The same
+  happened with a field or a view of a struct of that block, a payload
+  field of its enum, or a loop body's locals through a nested `?`. The
+  block then released the value, and `t` read freed memory. A plain
+  `= t x` already moved `x`. Now the join measures its arms against the
+  scope of the binding it is assigned to: a binding of the inner block
+  moves out, and a view or a field of one is copied. A field that cannot
+  be copied (a `% Drop` value) is refused.
 - **A field handed out by a `?` / `??` arm is a lend of what it belongs
   to** (Agora #178, h700–h720). `^ ? c . p s ( mk )` or `^ ?? g { V p →
   . p s … }` handed back a field of a parameter, of a payload of one, or
