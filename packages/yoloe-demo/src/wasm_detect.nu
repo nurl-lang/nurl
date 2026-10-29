@@ -156,8 +156,11 @@ unsafe @ wd_use_webgpu → b { ^ != 0 ( host_use_webgpu ) }
     ? ! ( rt_ok e ) { ( wd_status - 0 1 12 ) ^ 1 } {}
     ( wd_status 2 nc )
 
-    // shared frame + control + result buffers
-    : ( Vec u ) rgb ( vec_zeroed [u] * * WD_W WD_H 3 )
+    // shared frame + control + result buffers. The frame lives in the
+    // Image for the whole loop: an Image built from it per frame took the
+    // buffer over and released it at the end of that frame, and the next
+    // frame was written into freed memory.
+    : Image im ( image_of WD_W WD_H 3 ( vec_zeroed [u] * * WD_W WD_H 3 ) )
     : GpuHost ctl ( gpu_host_alloc * 544 4 )
     : GpuHost dets_out ( gpu_host_alloc * * WD_MAXDET 6 4 )
 
@@ -167,7 +170,7 @@ unsafe @ wd_use_webgpu → b { ^ != 0 ( host_use_webgpu ) }
 
     : ~ b run T
     ~ run {
-        : i cmd ( wd_frame rgb ctl )
+        : i cmd ( wd_frame . im data ctl )
         ? == cmd 2 {
             // add prompt: embedding f32[512] at ctl slot 16.. into tpe slot
             : i slot ( gpu_host_get_i32 ctl 4 )
@@ -186,7 +189,6 @@ unsafe @ wd_use_webgpu → b { ^ != 0 ( host_use_webgpu ) }
                 : i want_masks ( gpu_host_get_i32 ctl 1 )
                 : i emask ( gpu_host_get_i32 ctl 2 )
 
-                : Image im ( image_of WD_W WD_H 3 rgb )
                 : Letterbox lb ( letterbox im 640 )
                 : GpuHost host ( img_to_nchw_norm . lb img )
                 : ( Vec i ) s3 ( vec_new [i] )

@@ -1,0 +1,12 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_store_on_some_paths.nu:16:5: error: use of possibly-moved value 's' — it was stored into an owner (a container, a literal, a callee that keeps it) on only some paths, and that owner may release it, at line 14; on that path this reads a freed buffer. Consume it on every path, or rebind it (= s …) on the path that consumed it
+    ( nurl_println ( string_data s ) )
+    ^
+compiler/tests/diag_store_on_some_paths.nu:23:5: error: use of possibly-moved value 's' — it was stored into an owner (a container, a literal, a callee that keeps it) on only some paths, and that owner may release it, at line 22; on that path this reads a freed buffer. Consume it on every path, or rebind it (= s …) on the path that consumed it
+    ( string_free s )
+    ^
+compiler/tests/diag_store_on_some_paths.nu:32:9: error: use of possibly-moved value 's' — it was stored into an owner (a container, a literal, a callee that keeps it) on only some paths, and that owner may release it, at line 32; on that path this reads a freed buffer. Consume it on every path, or rebind it (= s …) on the path that consumed it
+        ( vec_push [String] v s )
+        ^
+error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

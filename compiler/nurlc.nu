@@ -27248,13 +27248,11 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
         ? | == o BCK_MOVED == o BCK_MAYBE_MOVED { ^ BCK_MAYBE_MOVED } {}
         ^ BCK_MAYBE_ALIAS
     } {}
-    // Stored on one path only: a later consume is a double free on that
-    // path alone — not flagged (the conditional-move contract below).
-    ? | == a BCK_STORED == b BCK_STORED {
-        : i o ? == a BCK_STORED b a
-        ? | == o BCK_MOVED == o BCK_MAYBE_MOVED { ^ BCK_MAYBE_MOVED } {}
-        ^ BCK_OWNED
-    } {}
+    // Stored on one path only: its value may be an owner's from here on
+    // — a read after that owner let it go reads freed memory on that path,
+    // a consume or a second store releases it twice. Maybe-moved, as a
+    // value consumed on some paths is (agora #160).
+    ? | == a BCK_STORED == b BCK_STORED { ^ BCK_MAYBE_MOVED } {}
     // Owned and Uninit are both "not moved here"; Moved and MaybeMoved
     // are "moved-ish". Any merge of a not-moved state with a moved-ish
     // one — or of two differing moved-ish states — is a conditional
@@ -27580,7 +27578,13 @@ unsafe @ bck_join_state s a s b → s {
     ~ < i m {
         : i va ? < i na - # i . ap i 48 BCK_UNINIT
         : i vb ? < i nb - # i . bp i 48 BCK_UNINIT
-        : u dg # u + 48 ( bck_join va vb )
+        : ~ i jv ( bck_join va vb )
+        // (Stored on one path as a closure's capture only — not an owner's
+        // value: owned, as on the other path. agora #160.)
+        ? & == jv BCK_MAYBE_MOVED | & == va BCK_STORED | == vb BCK_OWNED == vb BCK_UNINIT & == vb BCK_STORED | == va BCK_OWNED == va BCK_UNINIT {
+            ? != 0 ( nurl_sym_len g_bck ( bck_bkey `cst_` ( nurl_str_int i ) ) ) { = jv BCK_OWNED } {}
+        } {}
+        : u dg # u + 48 jv
         = . ob i dg
         = i + i 1
     }
@@ -28337,8 +28341,10 @@ unsafe @ bck_emit_error s file i line s msg → v {
         ( nurl_sym_set g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
-        : s ml ( nurl_sym_get2 g_bck `ml_` ids )
-        : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
+        : s ml0 ( nurl_sym_get2 g_bck `ml_` ids )
+        : b stored & == 0 ( nurl_str_len ml0 ) != 0 ( nurl_sym_len2 g_bck `sl_` ids )
+        : s ml ? stored ( nurl_sym_get2 g_bck `sl_` ids ) ml0
+        : s cause ? stored ( nurl_str_cat `it was stored into an owner on only some paths` `` ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
         : s by ? == 0 ( nurl_str_len cause )
         ( nurl_str_cat ` — it was conditionally consumed (one branch only) at line ` `` )
         ( nurl_str_cat3 ` — ` cause ` at line ` )
@@ -28375,8 +28381,12 @@ unsafe @ bck_emit_error s file i line s msg → v {
         ( nurl_sym_set g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
-        : s ml ( nurl_sym_get2 g_bck `ml_` ids )
-        : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
+        // (Stored into an owner on some paths, not consumed: its store line,
+        // bck_join, agora #160.)
+        : s ml0 ( nurl_sym_get2 g_bck `ml_` ids )
+        : b stored & == 0 ( nurl_str_len ml0 ) != 0 ( nurl_sym_len2 g_bck `sl_` ids )
+        : s ml ? stored ( nurl_sym_get2 g_bck `sl_` ids ) ml0
+        : s cause ? stored ( nurl_str_cat `it was stored into an owner (a container, a literal, a callee that keeps it) on only some paths, and that owner may release it,` `` ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
         : s by ? == 0 ( nurl_str_len cause )
         ( nurl_str_cat ` — it was consumed on only some paths, at line ` `` )
         ( nurl_str_cat3 ` — ` cause ` at line ` )
@@ -29229,6 +29239,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     ? & ! s_self | == cur BCK_OWNED == cur BCK_UNINIT {
                         = st ( bck_st_set st svid BCK_STORED )
                         ( nurl_sym_set g_bck ( nurl_str_cat `sl_` svn ) ( bck_field rec 3 ) )
+                        // (A closure's capture, stored with it for the checker
+                        // only — read through freely, released never: a join
+                        // with a path that did not store it leaves it owned,
+                        // bck_join_state.)
+                        : b s_cap != 0 ( nurl_sym_len g_bck ( nurl_str_cat4 `sk_` ( nurl_sym_get2 g_bck `rv_` svn ) `_` ( bck_field rec 3 ) ) )
+                        ( nurl_sym_set g_bck ( bck_bkey `cst_` svn ) ? s_cap `1` `` )
                         // Stored into a binding's value (`: H t @ H { a }`), or
                         // into the container a keeping call was handed first
                         // (`pko_`): it lives as long as that value does
@@ -31713,6 +31729,20 @@ unsafe @ bck_scope_leave s st i line → s {
 // iteration consumed it. Bindings absent from `pre` (declared inside
 // the loop, or a foreach element) are fresh every iteration and are
 // deliberately dropped, so they never carry a stale Moved state.
+// Was what `id` is stored in (bck_so_key: the owner ids) bound before the
+// loop `pre` is the entry state of?
+@ bck_owner_before_loop s pre i id → b {
+    : s own ( nurl_sym_get g_bck ( bck_so_key ( nurl_str_int id ) ) )
+    ? == 0 ( nurl_str_len own ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat own `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i o ( bck_path_root ( nurl_str_to_int w ) )
+        ? | >= o ( nurl_str_len pre ) == BCK_UNINIT ( bck_st_get pre o ) { ^ F } {}
+    }
+    ^ T
+}
+
 unsafe @ bck_loop_carry_seed s pre s post → s {
     ? ( seq post `!` ) { ^ ( nurl_str_cat pre `` ) } {}
     // One pointwise pass: a binding present in pre carries its pre
@@ -31731,7 +31761,14 @@ unsafe @ bck_loop_carry_seed s pre s post → s {
         : i pv - # i . pp i 48
         : ~ i cv pv
         ? & != pv BCK_UNINIT < i npo {
-            ? == BCK_MOVED - # i . pop i 48 { = cv BCK_MOVED } {}
+            // (…or Stored into an owner that outlives the iteration — one
+            // bound before the loop: the next iteration storing it again is
+            // a second owner of one value, agora #160. An owner the body
+            // declared went with its iteration, and a closure's capture
+            // stored with it has none.)
+            : i qv - # i . pop i 48
+            ? == BCK_MOVED qv { = cv qv } {}
+            ? & == BCK_STORED qv ( bck_owner_before_loop pre i ) { = cv qv } {}
         } {}
         : u dg # u + 48 cv
         = . ob i dg
