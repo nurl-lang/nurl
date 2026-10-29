@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **HTTP/2 frame payloads and HPACK literal strings are copied in one
+  go.** `h2_parse_frame` and `h2_data_strip_padding` copied a payload
+  byte by byte through `vec_push`, and `hpack_decode_string` copied a
+  literal through `string_push_char`. Each is now one `memcpy` into an
+  exact-size buffer. Parsing 64 DATA frames of 1 KB takes 2.6 µs, down
+  from 151 µs; a 6-header HPACK block takes 0.85 µs, down from 1.6 µs.
+  The negative-offset checks in HPACK and QPACK now share the
+  end-of-buffer compare, so they cost nothing on the hot path.
+
 - **A function that hands back its option or result parameter's payload
   now takes the parameter** (an inferred `sink`, Agora #146). It already
   took the payload over; now the call moves its caller's option too.
