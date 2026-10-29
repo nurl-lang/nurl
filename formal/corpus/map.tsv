@@ -544,3 +544,17 @@ h554_payload_option_replaced_by_a_closure_argument	§2.11	A2	agora #170: payload
 h555_payload_option_replaced_by_a_closure_call	§2.11	A2	agora #170: payload_option_replaced_by_a_closure_call	rejected
 h556_payload_option_replaced_by_an_inout_callee	§2.11	A2	agora #170: payload_option_replaced_by_an_inout_callee	rejected
 h557_payload_option_assigned_by_a_closure	§2.11	A2	agora #170: payload_option_assigned_by_a_closure	rejected
+h558_drop_value_stored_into_two_literals	§2.12	A2	agora #157: drop_value_stored_into_two_literals	rejected
+h559_drop_value_read_after_its_literal_dropped	§2.12	A2	agora #157: drop_value_read_after_its_literal_dropped	rejected
+h560_drop_value_read_after_its_field_replaced	§2.12	A2	agora #157: drop_value_read_after_its_field_replaced	rejected
+h561_drop_value_read_after_a_keeping_param_container_freed	§2.12	A2	agora #157: drop_value_read_after_a_keeping_param_container_freed	rejected
+h562_drop_value_read_after_its_vec_freed	§2.12	A2	agora #157: drop_value_read_after_its_vec_freed	rejected
+h563_drop_value_assigned_to_a_field_and_stored_again	§2.12	A2	agora #157: drop_value_assigned_to_a_field_and_stored_again	rejected
+h564_dyn_value_used_after_its_vec_freed	§2.12	A2	agora #157: dyn_value_used_after_its_vec_freed	rejected
+h565_result_of_an_option_matched	§7.6	A2	agora #158: result_of_an_option_matched	runs-clean
+h566_result_error_option_matched	§7.6	A2	agora #158: result_error_option_matched	runs-clean
+h567_result_of_an_option_copied_then_matched	§7.6	A2	agora #158: result_of_an_option_copied_then_matched	rejected
+h568_result_with_an_option_error_matched	§7.6	A2	agora #158: result_with_an_option_error_matched	runs-clean
+h569_result_error_option_of_a_string_matched	§7.6	A2	agora #158: result_error_option_of_a_string_matched	runs-clean
+h570_result_of_an_option_matched_payload_unused	§7.6	A2	agora #158: result_of_an_option_matched_payload_unused	runs-clean
+h571_struct_field_result_with_an_option_error_matched	§7.6	A2	agora #158: struct_field_result_with_an_option_error_matched	runs-clean

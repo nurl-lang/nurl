@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value that is moved and never copied is the owner's once stored**
+  (Agora #157, h558–h564). A user `% Drop` value or a trait object
+  stored into a struct literal, a field, or a container a call keeps
+  it in was still readable through its old name. It was also storable
+  twice: read after the owner let it go, it read freed memory, and
+  stored twice it was released twice. These are now rejected as they
+  are for a String. A binding given a new value built from its old one
+  (`= d ( dyn Op @ Wrap { d } )`) is still that value's owner.
+- **A result whose payload or error is an option is dropped whole**
+  (Agora #158, h565–h571). `! ?String i`, `! i ?String` and
+  `! String ?i` registered no drop twin: the type was split at the
+  first comma, inside the inner option. A matched result leaked what it
+  held. The split now goes past the inner braces, and the twin's name
+  spells a word-only option or result by its shape.
 - **A `??` arm's payload over an option binding is a cursor over that
   option's value** (Agora #170, h543–h557). The payload had no tie to
   the option for the borrow checker. These were accepted and read freed

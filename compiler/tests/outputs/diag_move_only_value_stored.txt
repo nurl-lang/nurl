@@ -1,0 +1,18 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_move_only_value_stored.nu:32:5: error: 'a' is read here, but its value was moved into 'h' at line 31. A heap value has one owner; once it is stored into an aggregate, an Option or a container (vec_push), the old name is gone, because the owner may release or replace the value while the name still points at it. Read it through 'h' (a field read, or vec_get on it), or store a copy and keep the original: ( mem_dup a ).
+    : Box1 h2 @ Box1 { a 1 }
+    ^
+compiler/tests/diag_move_only_value_stored.nu:32:5: error: 'a' is stored into a second owner here, but its value was already stored into an owner at line 31 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'a' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup a ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
+    : Box1 h2 @ Box1 { a 1 }
+    ^
+compiler/tests/diag_move_only_value_stored.nu:40:5: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 39 by vec_free (it was stored in 'v'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ( nurl_println_int ( vec_len [i] . a buf ) )
+    ^
+compiler/tests/diag_move_only_value_stored.nu:48:5: error: use of possibly-moved value 'a' — it was stored into 'h', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 47; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+    ( nurl_println_int ( vec_len [i] . a buf ) )
+    ^
+compiler/tests/diag_move_only_value_stored.nu:56:5: error: use of moved value 'd' — a heap handle has exactly one owner, and this one was consumed at line 55 by vec_free (it was stored in 'v'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ( nurl_println_int ( size d ) )
+    ^
+error: compilation aborted — 5 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok of option
+error of option
+ok beside an option error
+ok beside an option error
