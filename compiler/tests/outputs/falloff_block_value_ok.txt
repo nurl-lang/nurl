@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a block's own string
+a string lent out of a block's local
+a string from a nested block
+14
+drop 1
+a block's local through a join
+a fresh string through a join
+a closure's block

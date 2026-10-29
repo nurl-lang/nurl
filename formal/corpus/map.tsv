@@ -786,3 +786,13 @@ h824_str_block_tail_param	§7.6	A2	agora #187: a block whose tail call lends a p
 h825_str_nested_block_tail_getter	§7.6	A2	agora #187: the String case through a nested block	runs-clean
 h826_raw_view_block_tail	§7.6	A2	agora #187: `^ { : String x … ( string_data x ) }`: a raw view of a block's own String	runs-clean
 h827_closure_block_tail_getter	§7.6	A2	agora #187: a closure's `^ { : W w … ( gets w ) }`	runs-clean
+h828_fall_off_block_fresh	§7.6	A2	agora #188: `{ : String w ( mk ) w }` as a function's fall-off value: the block dropped `w` at its `}`	runs-clean
+h829_fall_off_block_own_local_call	§7.6	A2	agora #188: `{ : W w … ( gets w ) }` as the fall-off value: a call lending the block's own local	runs-clean
+h830_fall_off_block_outer_local_call	§7.6	A2	agora #188: `: W w …  { ( gets w ) }`: the call lends the function's local, which is dropped on the way out	runs-clean
+h831_closure_fall_off_block	§7.6	A2	agora #188: a closure body ending in a bare block that hands back its own String	runs-clean
+h832_nested_fall_off_block	§7.6	A2	agora #188: the fall-off block nested in another	runs-clean
+h833_drop_fall_off_block	§7.6	A2	agora #188: the fall-off block handing back its own `% Drop` value	runs-clean
+h834_fall_off_block_join_local	§7.6	A2	agora #188: the fall-off block ending in `? c w ( mk )` over its own local	runs-clean
+h835_ret_block_join_local	§7.6	A2	agora #188: `^ { : String w … ? c w ( mk ) }`: a block whose tail join lends its own local	runs-clean
+h836_drop_ret_block_join_local	§7.6	A2	agora #188: the same with a `% Drop` local: it cannot be copied	rejected
+h837_fall_off_block_scalar	§7.6	A2	agora #188: a fall-off block whose value is a number read from its own String	runs-clean

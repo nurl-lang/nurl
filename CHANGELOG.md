@@ -115,6 +115,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bare `{ … }` block as a function's fall-off value hands back what
+  it holds** (Agora #188, h828–h837). `@ f → String { : i z 1 { : String
+  w ( mk ) w } }` returned freed memory. As the body's last statement,
+  the block was a scope of its own and dropped `w` at its `}`. The same
+  happened with a call lending the block's local or the function's, a
+  nested block, a `% Drop` value, a closure body, and a tail `?` over the
+  block's local. Such a block is now a value block, returned as `^ { … }`
+  is. A block whose tail `?` / `??` lends the block's own local (`^ { :
+  String w … ? c w ( mk ) }`) now copies on that path, and refuses a
+  value that cannot be copied.
 - **A call that lends a value out of a local is not handed back as is**
   (Agora #187, h815–h827). Two cases returned memory that was then freed:
   - A value that cannot be copied (a `% Drop` struct, or an option of
