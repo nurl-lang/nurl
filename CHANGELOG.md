@@ -161,6 +161,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A raw string kept in its slot past its block does not leak on an early
+  return later in the loop** (Agora #201, h926–h928). Inside `~ … { ? == k
+  3 { ^ … } {}  ? c { : s o … = acc o } {} }`, `o`'s slot outlives its
+  block and is freed at its next store or by the fall-off. The early `^`
+  frees only the slots parked above it in the text, so the value a pass
+  left in `o` leaked when a later pass returned. At the loop's back-edge
+  (and at a `continue`), a slot parked after one of the function's exits
+  is now freed and emptied. Nine of the compiler's own functions had the
+  shape. `nurl_llty` is one of them. In a closure body, a `^` did not free
+  any parked slot at all. It does now: the list there is the body's own.
 - **A `% Drop` value a call may lend is not moved on through a binding**
   (Agora #200, h918–h925). `: D d \ ( getr h )  ^ @ !D E { T d }`, with
   `getr` lending `h`'s field, put in the result a value `h` released on
