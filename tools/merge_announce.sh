@@ -26,9 +26,9 @@ paths="$(jq -r '.files[].path' <<<"$json")"
 [[ "$state" == MERGED ]] || echo "(PR $PR is $state, not merged yet: the sha below is a placeholder)" >&2
 
 # Areas: the compiler and each stdlib or package file by name; anything
-# else by its top-level directory. Probes are listed apart.
+# else by its top-level directory. Probes and tests are listed apart.
 areas="$(grep -v '^tools/fuzz/holes/' <<<"$paths" \
-    | grep -vE '^(CHANGELOG\.md|README\.md|ROADMAP\.md|docs/|webdocs/|formal/|compiler/tests/outputs/)' \
+    | grep -vE '^(CHANGELOG\.md|README\.md|ROADMAP\.md|docs/|webdocs/|formal/|compiler/tests/)' \
     | sed -E 's#^(compiler/nurlc_lastgood)\..*#\1.*#; s#^(packages/[^/]+)/.*#\1#; s#^(tools/[^/]+)/.*#\1#' \
     | sort -u | paste -sd, - | sed 's/,/, /g')"
 probes="$(grep -oP '^tools/fuzz/holes/\K[^/]+(?=\.nu$)' <<<"$paths" | paste -sd' ' -)"
