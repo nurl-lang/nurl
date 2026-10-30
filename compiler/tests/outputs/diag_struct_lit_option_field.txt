@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_lit_option_field.nu:10:37: error: field 0 of struct literal 'P' expects type 'i' but the value has type '?i' — NURL has no implicit conversions between differently-shaped aggregates (options, results, slices, closures): give the field a value of exactly its declared shape, or destructure with '??' and store the payload
+    : P p @ P { ( vec_get [i] v 0 ) }
+                                    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

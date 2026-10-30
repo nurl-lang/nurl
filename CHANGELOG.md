@@ -151,6 +151,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A struct literal field and an enum payload refuse a value of another
+  shape** (Agora #129, h913–h917). `: P { ( @ i i ) f }` took a
+  `( @ i s )` closure in `@ P { … }`: both lower to `{ ptr, ptr }`, clang
+  accepted it, and the call through the field read an int as a string
+  pointer (a crash in safe code). The same happened through an enum
+  variant's payload, and with an enum payload declared `A` given a `B`
+  struct. Binding, argument, return, field assignment and option/result
+  literal already refused these. The literal now applies the binding's
+  shape rule to its fields, and an enum payload applies it too, along
+  with the nominal check. An option or result of the wrong shape in a
+  literal field (`@ P { ( vec_get [i] v 0 ) }` into an `i` field) now
+  gets a NURL error with its source location instead of a clang error
+  about generated IR.
 - **nurlc fails a compile whose output did not reach the disk** (Agora
   #101). The `--split` parts were written with every `fwrite`, `fputs`
   and `fclose` result ignored, and the one module on stdout was never
