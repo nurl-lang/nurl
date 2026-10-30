@@ -135,6 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A try over a call that lends a local hands on the call's lend**
+  (Agora #194, h862–h864). `^ @ !String E { T \ ( getr w ) }`, with `getr`
+  lending a field of the local `w`, and `( keep \ ( getr w ) )` with
+  `keep` taking a `sink` both handed on a lend of `w`. The function then
+  dropped `w`. The consumers judged the value by its first token, and a try
+  (`\`) is no call. A try over a call now carries that call's provenance,
+  so the lend is copied there. A lend of a parameter stays a lend.
 - **A value block assigned to an outer binding does not lend it its own
   locals** (Agora #190, h854–h859). `= out { : W w ( mkw ) ( gets w ) }` in
   a loop body or an arm handed `out` a lend of `w`. A value block's

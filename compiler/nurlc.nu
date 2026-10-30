@@ -4664,6 +4664,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // or refused when it cannot be, and a string it hands over is the
     // caller's (agora #187).
     : ~ i ret_eff_tt ret_first_tt
+    ? & == ret_first_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = ret_eff_tt TT_LPAREN = ret_is_direct_call T } {}
     ? == ret_first_tt TT_LBRACE { ? != 0 ( nurl_str_len g_blk_froot ) { = ret_eff_tt TT_DOT } {
             ? == g_blk_tail_eff TT_LPAREN { = ret_eff_tt TT_LPAREN = ret_is_direct_call T } {}
             // (…and one whose tail is a `?` / `??` as that join is; its
@@ -14896,7 +14897,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             = arg_join_own ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             // (A block whose tail is a call hands on that call's value:
             // g_blk_tail_eff, agora #189.)
-            = arg_eff_tt ? & == bck_arg_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_arg_tt
+            = arg_eff_tt ? & | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_arg_tt
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -33638,7 +33639,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         // Borrow checker (Phase 2): snapshot the RHS's first token —
         // a bare identifier RHS is a binding-to-binding alias copy.
-        : i bck_rhs_tt ( nurl_lex_type lex )
+        : ~ i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         ( nurl_sym_def syms `__last_call_guard__` `` )
@@ -33674,6 +33675,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_line __ob_line
         = g_open_bind_col __ob_col
         : ~ s val ( gen_expr lex syms cg )
+        // (A try over a call binds the call's payload: what follows asks the
+        // call, as mem_udrop_bind_flag does — agora #194.)
+        ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
         // A handle bound from a sealed representation's field, or from a
         // binding that views one, views it too (gen_call, agora #159).
         ( __sealed_view_bind syms name bck_rhs_tt bck_rhs_val )
@@ -33986,7 +33990,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
             // Borrow checker (Phase 2): snapshot the RHS's first
             // token — a bare-identifier RHS is an alias copy.
-            : i bck_rhs_tt ( nurl_lex_type lex )
+            : ~ i bck_rhs_tt ( nurl_lex_type lex )
             : s bck_rhs_val ( nurl_lex_val lex )
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
@@ -34025,6 +34029,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
             : ~ s val ( gen_expr lex syms cg )
+            // (A try over a call binds the call's payload: what follows asks the
+            // call, as mem_udrop_bind_flag does — agora #194.)
+            ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
             // A handle bound from a sealed representation's field, or from a
             // binding that views one, views it too (gen_call, agora #159).
             ( __sealed_view_bind syms name bck_rhs_tt bck_rhs_val )
@@ -34368,7 +34375,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
         // RHS would publish.
-        : i bck_rhs_tt ( nurl_lex_type lex )
+        : ~ i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
         // `= dst src` with a bare identifier on the right is the same
         // alias move `: T dst src` already is — `( string_free w ) = w c1`
@@ -34409,6 +34416,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
             }
         } {}
         : ~ s val ( gen_operand lex syms cg )
+        // (A try over a call binds the call's payload: what follows asks the
+        // call, as mem_udrop_bind_flag does — agora #194.)
+        ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
         = g_member_path_on __sxmp0
         = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
         // (What the right-hand side's value came from: a view binding's
@@ -35159,7 +35169,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         }
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
-        ? & & != 0 ( nurl_str_len ptr ) == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr ) } {}
+        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr ) } {}
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
@@ -38341,7 +38351,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = g_dead_payload 0
         : s fty ( nurl_get_last_type )
         // (A block whose tail is a call hands on that call's value: g_blk_tail_eff.)
-        : i fld_eff_tt ? & == fld_first_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN TT_LPAREN fld_first_tt
+        : i fld_eff_tt ? & | == fld_first_tt TT_LBRACE == fld_first_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN fld_first_tt
         // (A closure field is adopted — mem_clo_into_store: `\\a(…)`.)
         ? != 0 __sx_me {
             : s __fsx ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
@@ -38599,6 +38609,10 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             // agora #184.)
             : ~ b __dyn_ok & & agg_returned agg_is_wrap == ( nurl_str_get fld_lent 0 ) 37
             ? & __dyn_ok | == fld_first_tt TT_QUEST == fld_first_tt TT_QUESTQUEST { = __dyn_ok ( __phi_lends_params_only syms ) } {}
+            // (…and a call's, or a try's over one: one that may lend out of a
+            // local of this frame is copied where it lent, as `^ ( g x )` is;
+            // agora #194.)
+            ? & __dyn_ok == fld_eff_tt TT_LPAREN { = __dyn_ok == 0 ( nurl_str_len ( mem_ret_local_lend syms cg ) ) } {}
             ? __dyn_ok {
                 // A returned wrap whose payload is lent on some runs only (a
                 // payload of a call's `?T`, borrowed when the callee lent it):
@@ -40134,6 +40148,7 @@ unsafe @ __l2n_list s lst → s {
     {
         : s value ( gen_closure_expr lex syms cg )
         ( nurl_sym_def syms `__last_backslash_try__` `0` )
+        = g_blk_tail_eff 0
         ^ value
     }
     {
@@ -43914,6 +43929,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // surface syntax. A surrounding block or `??` arm consumes this channel;
     // it never has to guess that `\ (call)` was a call from its first token.
     ( nurl_sym_def syms `__last_value_hown__` __try_hown )
+    // …and its provenance: a try over a call is lent where the call lent it,
+    // so a consumer asks the call (g_blk_tail_eff, as for a block; agora
+    // #194).
+    = g_blk_tail_eff ? == __try_inner_tt TT_LBRACE g_blk_tail_eff __try_inner_tt
     res
 }
 

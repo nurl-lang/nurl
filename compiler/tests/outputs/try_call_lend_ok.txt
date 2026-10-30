@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a try's payload lent out of a local
+44
+a parameter's field, lent back

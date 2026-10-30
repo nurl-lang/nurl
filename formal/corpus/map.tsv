@@ -817,3 +817,6 @@ h856_loop_assign_nested_block_call_lend	§7.6	A2	agora #190: the same through a 
 h857_drop_loop_assign_block_call_lend	§7.6	A2	agora #190: the same with a `% Drop` value: it cannot be copied	rejected
 h858_same_scope_assign_block_call_lend	§7.6	A2	agora #190: the block assigned in the scope the binding was made in: nothing dies first, no copy	runs-clean
 h859_loop_assign_block_param_lend	§7.6	A2	agora #190: the block's call lending a parameter: still a lend, no copy	runs-clean
+h862_try_call_lend_returned_payload	§7.6	A2	agora #194: `^ @ !String E { T \ ( getr w ) }`: a try over a call lending the local `w` as a returned result's payload	runs-clean
+h863_try_call_lend_sink_arg	§7.6	A2	agora #194: `( keep \ ( getr w ) )`, `keep` taking a `sink`	runs-clean
+h864_try_call_param_lend_guard	§7.6	A2	agora #194: the try over a call lending a parameter: still a lend	runs-clean
