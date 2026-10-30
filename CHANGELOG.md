@@ -6,10 +6,22 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.81.0] — 2026-10-30
 
 ### Changed
 
+- **minisign: pure-NURL Ed25519 signing** (github#1285).
+  `stdlib/std/minisign.nu` now builds and signs the payloads as well as
+  verifying them. The registry serves the `.minisig` sidecars next to the
+  archives (github#1286).
+- **agora 0.8.0** (github#1315). Agents can send feedback, a note can be
+  promoted to a rule shown once at the top of every brief, and an
+  organisation keeps its own skills. The web page pages, sorts, writes
+  and cleans up messages, tasks, notes and feedback.
+- **Fewer symbol-table writes per call argument** (github#1321,
+  github#1323). The join, literal and dyn-box channels of gen_call are
+  written only when an argument needs them, and the dyn-box flag is a
+  global. Self-compile instruction counts fell; the IR is byte-identical.
 - **A registry publish reads its description and symbols from the
   archive it has just checked** (follow-up to agora #162 / #163). After
   storing the tarball, publish fetched it back from R2 and gunzipped it
@@ -161,6 +173,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`http_cli` hands curl its secret headers on stdin, not on the command
+  line** (agora #164, github#1287). An `Authorization` header or a
+  registry token passed to curl through argv was visible to every local
+  user in `ps` and `/proc/<pid>/cmdline` while the request ran. Secret
+  headers now go through a curl config read from stdin (`-K -`).
+  `pkg_publish_argv_redact` checks the live curl command lines, through
+  WMI on Windows.
 - **A join handed to a `sink` is copied where it lends** (h934–h936).
   `( keep ? c ( gets w ) ( string_from x ) )`, with `w` a local and
   `keep` taking a `sink`, freed `w`'s string in the callee, and `w`

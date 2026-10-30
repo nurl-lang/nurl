@@ -1705,7 +1705,11 @@ Semantics (v2.3, 2026-08-03):
   bound *after* the last defer drop at their normal scope exit.
   Returning an owned value transfers it to the caller as usual. With
   several return paths, a pre-defer owned value is transferred on the
-  paths that return it and dropped after the chain on the others.
+  paths that return it and dropped after the chain on the others. A
+  defer that may run at such a return may read the value that `^`, or a
+  returned or fall-off block, hands back, but releasing it, giving it or a
+  field of it a new value, or handing it on is a compile error
+  (h426–h434, h872–h874).
 - `^` (return) and `\` (failure propagation) inside a defer body are
   compile errors — the chain runs during return; handle cleanup failures
   locally with `??`. A closure defined there has its own return context.
@@ -2585,7 +2589,8 @@ parameter through it either). A
 by-pointer capture borrows the caller's stack frame and MUST NOT
 out-live it. The borrow checker rejects an escaping by-ref capture
 (returning the closure, pushing it into a longer-lived container,
-spawning a thread that holds it).
+spawning a thread or a fiber, or installing a signal handler, that holds
+it).
 
 ### 8.5 `String`, `Vec` and owning structs
 
@@ -2666,7 +2671,8 @@ that owns its buffer is the exception: `: s b a` makes `b` a view of
 
 A closure capturing a binding by pointer (a `: ~` multi-field struct, or
 a `: ~` binding it assigns or hands to an `inout` parameter — see §8.4) is a *stack reference*. Returning it, pushing it
-into a longer-lived container, spawning a thread that holds it, or
+into a longer-lived container, spawning a thread or a fiber (or
+installing a signal handler) that holds it, or
 assigning it into a longer-lived binding is rejected. The escape rule
 also covers an aggregate (struct) literal that holds such a closure,
 a `= . obj field` store into one (the struct inherits the reference),
