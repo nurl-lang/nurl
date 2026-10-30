@@ -17374,6 +17374,42 @@ unsafe @ gen_call i lex i syms i cg → s {
     ^ lbl
 }
 
+// An arm whose value is a call's lend out of a binding the arm owns itself
+// (`{ : W w … ( gets w ) }`): the arm's locals were kept past its exit when
+// the value was consumed, and leaked (mem_arm_exit_open's conservative
+// direction). The value is copied on the paths the call may have lent one
+// of them — the callee's lend constants, as mem_local_lend_of asks — so the
+// arm hands over a value of its own and its locals go at its exit (agora
+// #191). `` when it is no such arm, else `<value> <ownership bit>`.
+@ mem_arm_take_call i syms i cg s ty i tt0 s hown s val s old_user → s {
+    ? ! ( __clone_supported ty syms ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i ht ? == tt0 TT_LBRACE ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) tt0
+    ? != ht TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s mine ``
+    : ~ b any F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s up ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
+        : b own & != 0 ( nurl_str_len up ) ! ( str_contains_word old_user up )
+        ? own { = any T } {}
+        = mine ? == 0 ( nurl_str_len mine ) ( nurl_str_cat ? own nm `-` `` ) ( nurl_str_cat3 mine ` ` ? own nm `-` )
+    }
+    ? ! any { ^ ( nurl_str_cat `` `` ) } {}
+    : s lp ( mem_local_lend_of syms cg key mine )
+    ? == 0 ( nurl_str_len lp ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s nh ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nh ) ( nurl_print ` = xor i1 ` ) ( nurl_print hown ) ( nurl_print `, true\n` )
+    : s c ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = and i1 ` ) ( nurl_print nh ) ( nurl_print `, ` ) ( nurl_print lp ) ( nurl_print `\n` )
+    : s nv ( mem_emit_cloneif cg ty val c )
+    : s oh ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print oh ) ( nurl_print ` = or i1 ` ) ( nurl_print hown ) ( nurl_print `, ` ) ( nurl_print lp ) ( nurl_print `\n` )
+    ^ ( nurl_str_cat3 nv ` ` oh )
+}
+
 // The same second chance for a value that CAN hold an address, when it is
 // a call's own result (on the paths `hown` holds) and the call cannot hand
 // back a view of any local this frame owns: the callee's lend summary says
@@ -17895,6 +17931,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
         : s __tk ( mem_arm_take_field syms cg tt2 t_froot old_user_t )
         ? != 0 ( nurl_str_len __tk ) { = t_hown __tk = t_took T } {}
     } {}
+    // …and a call's value lent out of a binding the arm owns itself is
+    // copied there, so the arm's locals go at its exit too (agora #191).
+    ? & & t_lends ! t_took == 0 g_did_ret {
+        : s __tc ( mem_arm_take_call syms cg tt2 t_tt0 t_hown tv old_user_t )
+        ? != 0 ( nurl_str_len __tc ) { = tv ( str_first_word __tc ) = t_hown ( str_first_word ( str_skip_word __tc ) ) = t_took T } {}
+    } {}
     : s t_alend ? == 0 g_did_ret ( mem_arm_call_lend syms t_tt0 t_hown ) ``
     : s t_xhown ? == 0 g_did_ret ? t_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg tt2 t_tt0 t_hown ) ``
     : ~ s t_shown ``
@@ -18086,6 +18128,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? & e_lends != 0 ( nurl_str_len e_froot ) {
         : s __ek ( mem_arm_take_field syms cg et2 e_froot old_user_e )
         ? != 0 ( nurl_str_len __ek ) { = e_hown __ek = e_took T } {}
+    } {}
+    ? & & e_lends ! e_took == 0 g_did_ret {
+        : s __ec ( mem_arm_take_call syms cg et2 e_tt0 e_hown ev old_user_e )
+        ? != 0 ( nurl_str_len __ec ) { = ev ( str_first_word __ec ) = e_hown ( str_first_word ( str_skip_word __ec ) ) = e_took T } {}
     } {}
     : s e_alend ? == 0 g_did_ret ( mem_arm_call_lend syms e_tt0 e_hown ) ``
     : s e_xhown ? == 0 g_did_ret ? e_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg et2 e_tt0 e_hown ) ``
@@ -20142,6 +20188,10 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? & arm_lends != 0 ( nurl_str_len arm_froot ) {
                 : s __mk ( mem_arm_take_field syms cg arm_type arm_froot old_user_m )
                 ? != 0 ( nurl_str_len __mk ) { = arm_hown __mk = arm_took T } {}
+            } {}
+            ? & & arm_lends ! arm_took == 0 g_did_ret {
+                : s __mc ( mem_arm_take_call syms cg arm_type arm_tt0 arm_hown arm_result old_user_m )
+                ? != 0 ( nurl_str_len __mc ) { = arm_result ( str_first_word __mc ) = arm_hown ( str_first_word ( str_skip_word __mc ) ) = arm_took T } {}
             } {}
             ? == 0 g_did_ret { = m_alends ( __arm_lends_join m_alends ( mem_arm_call_lend syms arm_tt0 arm_hown ) ) } {}
             : s arm_xhown ? == 0 g_did_ret ? arm_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
