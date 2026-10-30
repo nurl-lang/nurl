@@ -151,6 +151,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nurlc fails a compile whose output did not reach the disk** (Agora
+  #101). The `--split` parts were written with every `fwrite`, `fputs`
+  and `fclose` result ignored, and the one module on stdout was never
+  flushed and checked. A full disk or a file-size limit left a short
+  file and exit status 0. A short part can still be a valid module (an
+  empty one is), so the build failed only at link time, naming a symbol
+  the lost text defined: `undefined symbol: __nurl_fn.scale_into` in the
+  FreeBSD `split_equivalence` run. nurlc now exits nonzero naming the
+  part (`cannot write …/p.0.ll`) or the output. `split_equivalence.sh`
+  checks both with writes capped at 8 KiB.
 - **A value block bound with `:` does not lend the binding its own
   locals** (Agora #193, h875–h879). `: String r { : W w ( mkw ) ( gets w )
   }` followed by `= out r` in a loop body or an arm, or by `^ r`, handed

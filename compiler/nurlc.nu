@@ -63637,6 +63637,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
 & `c` @ nurl_recover_lean *u fnp *u env → i
 
 & `c` @ nurl_print_buf_unwind → v
+// (fflush(NULL): every stream — stdout's FILE is not nameable here.)
+& `c` @ fflush *u h → i32
 
 // strdup on the runtime's small-allocation cache, declared the same way
 // and for the same reason: the bootstrap compiler predates the symbol.
@@ -63834,6 +63836,8 @@ unsafe @ llvm_linkage_init → v {
 : ~ i g_split_max 0  // --split=N, the CEILING on the part count
 : ~ i g_split_min 131072  // --split-min=, the floor on a part's size
 : ~ s g_split_out ``  // --split-out= path prefix
+: ~ s g_split_name ``  // the part being written (for a write error)
+: ~ b g_split_werr F  // a write to it fell short
 : ~ i g_split_part 0  // i64[n]: which part each function went to
 : ~ i g_split_fill 0  // i64[parts]: bytes assigned to each part so far
 : ~ i g_split_priv 0  // symtab: private global name → the part that owns it
@@ -66154,11 +66158,15 @@ unsafe @ dce_free → v {
 unsafe @ __sp_write i from i to → v {
     ? >= from to { ^ v } {}
     : *u mp # *u # s g_dce_mod
-    : i _ ( fwrite # s + # i mp from 1 - to from # s g_split_fh )
+    : i wrote ( fwrite # s + # i mp from 1 - to from # s g_split_fh )
+    ? != wrote - to from { = g_split_werr T } {}
 }
 
 // Write a literal to the part being built.
-unsafe @ __sp_puts s t → v { : i32 _ ( fputs t # s g_split_fh ) }
+unsafe @ __sp_puts s t → v {
+    : i32 r ( fputs t # s g_split_fh )
+    ? < r # i32 0 { = g_split_werr T } {}
+}
 
 // Index of the newline ending the line that starts at `p`, or `lim`.
 unsafe @ __sp_line_end i p i lim → i {
@@ -66420,11 +66428,21 @@ unsafe @ __sp_open i k → v {
     { ( nurl_eprintln ( nurl_str_cat `nurlc: cannot write ` nm ) ) ( nurl_exit 1 ) }
     {}
     = g_split_fh # i fh
+    = g_split_name ( nurl_str_cat nm `` )
+    = g_split_werr F
 }
 
+// A part whose bytes did not all reach the file (a full disk, a quota) is
+// an error, never a short part: a truncated part can still be a valid
+// module — an empty one is — and the build then failed only at link
+// time, naming whatever symbol the lost text defined (agora #101).
 unsafe @ __sp_close → v {
-    : i32 _ ( fclose # s g_split_fh )
+    : i32 closed ( fclose # s g_split_fh )
     = g_split_fh 0
+    ? | g_split_werr != closed # i32 0 {
+        ( nurl_eprintln ( nurl_str_cat3 `nurlc: cannot write ` g_split_name ` — the write failed (is the disk full?)` ) )
+        ( nurl_exit 1 )
+    } {}
 }
 
 // A module with no function bodies at all: nothing to partition, so
@@ -67275,6 +67293,14 @@ unsafe @ main → i {
             ( dbg_fix_module_locations __out )
         } {}
     }
+    // Everything written to stdout reached it, or the module on disk is
+    // short (a full disk under `> out.ll`): a truncated module can still
+    // parse, and the build then failed only at link time, naming a symbol
+    // the lost text defined (agora #101).
+    ? & == compile_error 0 != ( fflush # *u 0 ) # i32 0 {
+        ( nurl_eprintln `nurlc: cannot write the output — the write failed (is the disk full?)` )
+        = compile_error 2
+    } {}
     // Exit-time release. The compilation owns every symbol table it made
     // (nurl_sym_new links each into g_live_symtables), so the sweep below
     // releases the global tables, `syms` and any a diagnostic abandoned —
