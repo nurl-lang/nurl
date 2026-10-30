@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`http_cli` runs curl for http(s) only** (agora #166). `nurlpkg` reaches
+  a registry through `stdlib/ext/http_cli.nu`, which runs the system
+  `curl`; a manifest's `registry = "…"` that started with `-` became one
+  of curl's options, and curl would follow it to file://, gopher://,
+  dict://, ldap://… or glob `[]` / `{}`. A URL that is not http:// or
+  https:// is now refused before curl runs (`httpc_url_is_http`, the
+  request returns `HttpcOther`), and curl is passed `-g`, `--proto
+  =http,https`, `--proto-redir =http,https` and `--` before the URL.
 - **A join a call's result may view is that call's temporary** (agora
   #181, h731–h732). `( string_data ?? ( vec_get v k ) { T x → x F _ → (
   string_new ) } )` leaked the owning arm's value: #174 settled a join

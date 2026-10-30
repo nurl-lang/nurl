@@ -275,7 +275,28 @@ $ `stdlib/core/slice.nu`
     ^ ( __httpc_exec_t method url reqfile headers_blob ( httpc_default_max_time ) )
 }
 
+// Is `url` an http:// or https:// URL (scheme case-insensitive)? Anything
+// else is refused before curl is run: a value starting with `-` would be
+// one of curl's options (a manifest's `registry`), and curl speaks file://,
+// gopher://, dict://, ldap://, scp://… as well (agora #166).
+@ httpc_url_is_http s url → b {
+    : i n ( nurl_str_len url )
+    : ~ i k 0
+    : ~ b ok T
+    // "http" then an optional 's', then "://".
+    : s http `http`
+    ~ & < k 4 ok {
+        ? | >= k n != ( __httpc_ascii_lower ( nurl_str_at url n k ) ) ( nurl_str_at http 4 k ) { = ok F } {}
+        = k + k 1
+    }
+    ? ! ok { ^ F } {}
+    ? & < k n == ( __httpc_ascii_lower ( nurl_str_at url n k ) ) 115 { = k + k 1 } {}
+    ? > + k 3 n { ^ F } {}
+    ^ & & == ( nurl_str_at url n k ) 58 == ( nurl_str_at url n + k 1 ) 47 == ( nurl_str_at url n + k 2 ) 47
+}
+
 @ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs → !HttpcResp HttpcErr {
+    ? ! ( httpc_url_is_http url ) { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther } } {}
     : String tdir ( __httpc_tmpdir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
     ?? rf {
@@ -286,6 +307,12 @@ $ `stdlib/core/slice.nu`
             ( vec_push [s] a `-s` )
             ( vec_push [s] a `-S` )
             ( vec_push [s] a `-L` )
+            // HTTP(S) only, redirects too, and no URL globbing (`[]` `{}`).
+            ( vec_push [s] a `-g` )
+            ( vec_push [s] a `--proto` )
+            ( vec_push [s] a `=http,https` )
+            ( vec_push [s] a `--proto-redir` )
+            ( vec_push [s] a `=http,https` )
             ( vec_push [s] a `--connect-timeout` )
             ( vec_push [s] a `10` )
             ( vec_push [s] a `--max-time` )
@@ -321,6 +348,8 @@ $ `stdlib/core/slice.nu`
                 ( string_push_str atarg reqfile )
                 ( vec_push [s] a ( string_data atarg ) )
             } {}
+            // (`--`: the URL is never read as one of curl's options.)
+            ( vec_push [s] a `--` )
             ( vec_push [s] a url )
 
             : ~ i status 0
