@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A package archive's expansion is bounded, on the registry and in
+  nurlpkg** (agora #163). A signed tarball is still the publisher's bytes,
+  and a small gzip can expand without bound: the registry signed and
+  served it, and `nurlpkg install` decompressed it whole. Now the
+  registry gunzips a publish within 64 MiB and 10 000 members before it
+  stores or signs anything (413 / 422 otherwise, nothing left behind),
+  and its file, API, README and asset routes gunzip within the same cap
+  (`gunzipBounded`, which counts every gzip member). nurlpkg downloads
+  with a 16 MiB body cap (`httpc_get_max`, curl `--max-filesize`, never
+  holding a larger body), decompresses with `gzip_decompress_max` at
+  64 MiB, and refuses an archive of more than 10 000 entries
+  (`pkg_tarball_max_bytes`, `pkg_unpacked_max_bytes`, `pkg_max_entries`).
 - **`http_cli` runs curl for http(s) only** (agora #166). `nurlpkg` reaches
   a registry through `stdlib/ext/http_cli.nu`, which runs the system
   `curl`; a manifest's `registry = "…"` that started with `-` became one

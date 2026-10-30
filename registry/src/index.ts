@@ -22,7 +22,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules, extractPackageSymbols } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules, extractPackageSymbols, gunzipBounded, countTarEntries, ArchiveTooLarge, MAX_TAR_ENTRIES } from "./readme.ts";
 import { renderNurldoc, symbolsIndex } from "./nurldoc.ts";
 
 export interface Env {
@@ -357,6 +357,17 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   const existing = await env.REG_DB.prepare(`SELECT version FROM versions WHERE name = ? AND version = ?`)
     .bind(name, version).first();
   if (existing) return json({ error: "version_exists" }, 409);
+
+  // A bounded look inside before anything is stored or signed (agora #163):
+  // the archive must gunzip within MAX_UNPACKED_BYTES and hold at most
+  // MAX_TAR_ENTRIES members, or the publish leaves nothing behind.
+  try {
+    const tar = await gunzipBounded(new Response(body).body!);
+    if (countTarEntries(tar) > MAX_TAR_ENTRIES) return json({ error: "archive_too_many_entries" }, 422);
+  } catch (e) {
+    if (e instanceof ArchiveTooLarge) return json({ error: "archive_too_large" }, 413);
+    return json({ error: "bad_archive" }, 422);
+  }
 
   // Sign the tarball before storing it, so the signature lands atomically with
   // the bytes. A signing failure ABORTS the publish — we never expose an
@@ -758,8 +769,13 @@ async function handlePackageFiles(env: Env, name: string, version: string): Prom
     return htmlPage("not found",
       `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Tarball missing.</p>`, 404);
   }
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-  const files = listTarFiles(new Uint8Array(ab));
+  let ab: Uint8Array;
+  try {
+    ab = await gunzipBounded(obj.body);
+  } catch (e) {
+    return htmlPage("too large", `<p>This release's archive is too large to list.</p>`, 413);
+  }
+  const files = listTarFiles(ab);
   const total = files.reduce((s, f) => s + f.size, 0);
   const rows = files.map((f) =>
     `<tr><td><code>${esc(f.path)}</code></td>` +
@@ -791,8 +807,13 @@ async function handlePackageApi(env: Env, name: string, version: string): Promis
     return htmlPage("not found",
       `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Tarball missing.</p>`, 404);
   }
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-  const mods = listTarSrcModules(new Uint8Array(ab));
+  let ab: Uint8Array;
+  try {
+    ab = await gunzipBounded(obj.body);
+  } catch (e) {
+    return htmlPage("too large", `<p>This release's archive is too large to document.</p>`, 413);
+  }
+  const mods = listTarSrcModules(ab);
   let bodyHtml =
     `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p>` +
     `<h1>${esc(name)} <span style="color:#666">${esc(version)}</span> API</h1>`;

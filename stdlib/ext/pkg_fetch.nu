@@ -35,7 +35,7 @@ $ `stdlib/ext/manifest.nu`
     PkgEmpty  // empty tarball body
     PkgChecksumMismatch  // downloaded bytes don't match the recorded sha256
     PkgBadSig  // missing or invalid registry signature (fail-closed)
-    PkgDecompress  // gzip_decompress failed
+    PkgDecompress  // gzip_decompress failed, or expanded past pkg_unpacked_max_bytes
     PkgUnpack  // tar_unpack failed (bad/unsafe archive, I/O)
     PkgBadIdentity  // URL/index/archive does not identify the requested package
     PkgUntrustedRegistry  // no signing key configured for this registry
@@ -192,9 +192,19 @@ $ `stdlib/ext/manifest.nu`
     ^ @ !v PkgFetchErr { T 0 }
 }
 
+// What a package archive may cost a client (agora #163): a signed tarball
+// is still the publisher's bytes, and a small gzip can expand without
+// bound. The registry takes no upload over 16 MiB compressed; the largest
+// package in this tree unpacks to ~3 MiB. Past a limit the install fails
+// (PkgHttp for the download, PkgDecompress for the expansion, PkgUnpack
+// for the entry count) before anything is written.
+@ pkg_tarball_max_bytes → i { ^ 16777216 }  // 16 MiB compressed
+@ pkg_unpacked_max_bytes → i { ^ 67108864 }  // 64 MiB of tar
+@ pkg_max_entries → i { ^ 10000 }
+
 @ __pkg_install_verified s registry s name s version s checksum s dest s pubkey s toolchain → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
-    : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
+    : !HttpcResp HttpcErr rr ( httpc_get_max ( string_data url ) ( pkg_tarball_max_bytes ) )
     ?? rr {
         F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgHttp }
         T resp → {
@@ -221,7 +231,7 @@ $ `stdlib/ext/manifest.nu`
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgBadSig }
             }
 
-            : !( Vec u ) CompressErr dr ( gzip_decompress gz )
+            : !( Vec u ) CompressErr dr ( gzip_decompress_max gz ( pkg_unpacked_max_bytes ) )
             ?? dr {
                 F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgDecompress }
                 T raw → {
@@ -229,6 +239,7 @@ $ `stdlib/ext/manifest.nu`
                     ?? parsed {
                         F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
                         T entries → {
+                            ? > ( vec_len [TarEntry] entries ) ( pkg_max_entries ) { ^ @ !i PkgFetchErr { F PkgUnpack } } {}
                             ?? ( __pkg_archive_identity entries name version toolchain ) {
                                 F error → {
                                     ^ @ !i PkgFetchErr { F error }

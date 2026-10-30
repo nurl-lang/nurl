@@ -8,6 +8,57 @@
 
 const BLOCK = 512;
 
+// What a package archive may cost the registry (agora #163): a publisher's
+// gzip can expand far past a Worker's memory. The same limits as the NURL
+// client's (stdlib/ext/pkg_fetch.nu: pkg_unpacked_max_bytes, pkg_max_entries).
+export const MAX_UNPACKED_BYTES = 64 * 1024 * 1024;
+export const MAX_TAR_ENTRIES = 10000;
+
+export class ArchiveTooLarge extends Error {}
+
+// Gunzip `body`, stopping (and cancelling the stream) once the output passes
+// `max` bytes: a bomb costs at most `max` plus one chunk, never its full
+// expansion. Every member of a multi-member gzip counts toward the one cap.
+export async function gunzipBounded(
+  body: ReadableStream<Uint8Array>,
+  max: number = MAX_UNPACKED_BYTES,
+): Promise<Uint8Array> {
+  const reader = body.pipeThrough(new DecompressionStream("gzip")).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new ArchiveTooLarge(`archive expands past ${max} bytes`);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
+}
+
+// The number of members (headers) in an uncompressed tar image.
+export function countTarEntries(buf: Uint8Array): number {
+  let n = 0;
+  let pos = 0;
+  while (pos + BLOCK <= buf.length) {
+    if (isZeroBlock(buf, pos)) break;
+    const sizeRaw = readCStr(buf, pos + 124, 12).trim();
+    const size = parseInt(sizeRaw.replace(/[^0-7]/g, "") || "0", 8);
+    n++;
+    pos = pos + BLOCK + Math.ceil(size / BLOCK) * BLOCK;
+  }
+  return n;
+}
+
 function readCStr(buf: Uint8Array, off: number, max: number): string {
   let end = off;
   const lim = Math.min(off + max, buf.length);
@@ -117,8 +168,8 @@ export async function extractReadme(
 ): Promise<string | null> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return null;
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-  return findReadmeInTar(new Uint8Array(ab));
+  const ab = await gunzipBounded(obj.body);
+  return findReadmeInTar(ab);
 }
 
 // Pull one `[package]` scalar out of the published tarball's nurl.toml.
@@ -135,8 +186,8 @@ export async function extractManifestKey(
 ): Promise<string | null> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return null;
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-  const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === "nurl.toml");
+  const ab = await gunzipBounded(obj.body);
+  const hit = findInTar(ab, (p) => p.replace(/^\.\//, "") === "nurl.toml");
   if (!hit) return null;
   const toml = new TextDecoder().decode(hit.data);
   let inPackage = false;
@@ -201,8 +252,8 @@ export async function extractFile(
 ): Promise<Uint8Array | null> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return null;
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-  const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === rel);
+  const ab = await gunzipBounded(obj.body);
+  const hit = findInTar(ab, (p) => p.replace(/^\.\//, "") === rel);
   return hit ? hit.data : null;
 }
 
@@ -252,7 +303,7 @@ export async function extractPackageSymbols(
 ): Promise<string> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return "";
-  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const ab = await gunzipBounded(obj.body);
   const { symbolsIndex } = await import("./nurldoc.ts");
-  return symbolsIndex(listTarSrcModules(new Uint8Array(ab)));
+  return symbolsIndex(listTarSrcModules(ab));
 }
