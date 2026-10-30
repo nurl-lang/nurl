@@ -889,3 +889,6 @@ h925_drop_bound_field_store	§7.6	A2	agora #200: `= . h2 d d` into an `inout` st
 h926_raw_slot_early_return_in_loop	§7.6	A2	agora #201: `~ < k n { ? == k 3 { ^ … } {}  ? ! ( part k ) { : s o … = acc o } {} … }`: o's slot, kept past its block, freed by the fall-off only — the early `^` of a later pass leaked it	runs-clean
 h927_raw_slot_early_return_in_foreach	§7.6	A2	agora #201: the same in a `~ k xs` loop	runs-clean
 h928_raw_slot_closure_early_return	§7.6	A2	agora #201: a closure body's early `^` after a `?` arm parked a raw string's slot: the drain at a closure's `^` was skipped	runs-clean
+h934_sink_arg_join_lend	§7.6	A2	a join whose arm lends a local, handed to a `sink` parameter: the callee freed the local's string	runs-clean
+h935_sink_arg_block_join_lend	§7.6	A2	the same join as a block's tail	runs-clean
+h936_sink_arg_join_fresh_path_guard	§7.6	A2	the sink join taking its fresh arm: moved, nothing copied	runs-clean

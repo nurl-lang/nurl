@@ -15959,6 +15959,18 @@ unsafe @ gen_call i lex i syms i cg → s {
             ? & & & arg_call_lends == arg_eff_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
                 ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at )
             } {}
+            // A `?` / `??` — bare or a block's tail — whose arms may lend
+            // (`? c ( gets w ) ( string_from x )`): the callee would release
+            // what such an arm only lent, and its owner again. Copied on the
+            // paths where the join lends (its published ownership,
+            // `__last_join_own__`); one that cannot be copied is rejected.
+            ? & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) {
+                ? ( __clone_supported at syms ) {
+                    : s __sjl ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __sjl ) ( nurl_print ` = xor i1 ` ) ( nurl_print arg_join_own ) ( nurl_print `, 1\n` )
+                    = av ( mem_emit_cloneif cg at av __sjl )
+                } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
+            } {}
             // An enum's payload, which the arm only borrows: a copy goes
             // over; one that cannot be copied is rejected (h231). (Other
             // borrowing bindings are cursors a `sink` takes over.)

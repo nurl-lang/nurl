@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+28
+28
+a string lent out of a local
+drop 1
+5
+5
+a string lent out of a local
+drop 2
