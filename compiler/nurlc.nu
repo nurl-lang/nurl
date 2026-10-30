@@ -5012,16 +5012,16 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ( mem_ret_param_lend_via syms ( nurl_sym_get2 syms ret_first_val `__pljk` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) )
         } {}
     } {}
-    // `^ p` of a String / Vec parameter: the caller's own value comes
-    // back — lent, unless this function keeps p (retlend, resolved at
-    // module end in mem_emit_arg_flags).
+    // `^ p` of a String / Vec parameter, or of one that cannot be copied:
+    // the caller's own value comes back — lent, unless this function keeps
+    // p (retlend, resolved at module end in mem_emit_arg_flags).
     // A closure's parameter is its caller's (gen_closure_expr), and a call
     // through a closure value takes the result as its own: a copy.
     ? & & ( is_ident_tok ret_first_tt ) ( __is_clo_param syms ret_first_val ) ( __clone_supported ( nurl_get_last_type ) syms ) {
         = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val `1` )
         = ret_field_copy T
     } {}
-    ? & & ( is_ident_tok ret_first_tt ) ( __is_handle_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
+    ? & & ( is_ident_tok ret_first_tt ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __nc_held_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
         ? >= ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
             ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
@@ -18933,6 +18933,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
     | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms match_first_tt )
     { = scrut_own ( mem_call_retown syms cg ) } {}
+    // A call that lends what it hands back (a borrow — `vec_get`'s
+    // element — or a view of an argument it does not answer per call for)
+    // leaves the option with its owner: the arms are lent its payload.
+    : b __m_call_lent & & == match_first_tt TT_LPAREN == 0 ( nurl_str_len scrut_own )
+    | ! ( __arm_call_bit_ok syms ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
     // An enum a call handed over and nothing binds (`?? ( mk ) { … }`): an
     // owner of its own for the rest of the scope, which drops it — it
     // leaked, payload and cell — and lends its payload to the arms (h233).
@@ -19836,12 +19841,17 @@ unsafe @ gen_match i lex i syms i cg → s {
                     { ( mem_own_add_user_drop syms cg vp0 pt0_eff )
                         // …unless the option stays with someone else (a
                         // field of a parameter, behind a pointer, a borrowed
-                        // binding): then the payload is lent to the arm.
+                        // binding, a call's that lends it): then the payload
+                        // is lent to the arm.
                         // Dropped here, `?? . st db { T d → … }` closed the
-                        // connection its owner still held.
-                        ? ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field ) {
+                        // connection its owner still held. (A `vec_get`
+                        // element stays one a consumer may take: its slot
+                        // is emptied then, mem_vget_consume.)
+                        : b __m_slt ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field )
+                        ? | __m_call_lent __m_slt {
                             ( mem_udrop_flag_set syms cg vp0 `0` )
-                            ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                            ? | __m_slt == 0 ( nurl_sym_len2 syms match_var_name `__vget` )
+                            { ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` ) } {}
                         } {}
                         // …and of a call's option: owned exactly when the call
                         // handed its result over (a callee that lends on some
