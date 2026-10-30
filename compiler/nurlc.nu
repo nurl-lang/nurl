@@ -44003,6 +44003,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // What the tried expression is: `\ ( call … )` hands its payload over
     // exactly as the call itself would (mem_udrop_bind_flag).
     : i __try_inner_tt ( nurl_lex_type lex )
+    : s __try_inner_v ? ( is_ident_tok __try_inner_tt ) ( nurl_lex_val lex ) ``
     : s val ( gen_expr lex syms cg )
     ( nurl_sym_def syms `__last_try_inner_tt__` ( nurl_str_int __try_inner_tt ) )
     : s vt ( nurl_get_last_type )
@@ -44128,10 +44129,36 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     {}
     // Leaving the function drops what it owns, as a `^` does. A tried
     // call's result is bound nowhere, so no local owns the failure being
-    // handed on; a tried binding may (its payload is returned as is), so
-    // that shape keeps the bare return.
-    ? & != 0 g_auto_drop_strings == __try_inner_tt TT_LPAREN
-    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` `` `` `` ) }
+    // handed on. A tried binding does: its value is the one handed on, so
+    // it is skipped as `^ o` skips it — a cursor over another binding's
+    // value keeps the bare return. A failure that owns nothing (an option's
+    // None, a result whose error owns nothing) leaves no question for any
+    // other operand. Returned bare, every other local leaked (agora #202).
+    : s __t_up ? != 0 ( nurl_str_len __try_inner_v ) ( mem_udrop_ptr_of syms __try_inner_v ) ``
+    : b __t_bind & != 0 ( nurl_str_len __try_inner_v ) | == 0 ( nurl_str_len __t_up ) == 0 ( nurl_sym_len2 syms __t_up `__alias` )
+    : s __t_et ? == ( agg_field_count syms vt ) 3 ( compound_field_type vt 2 ) ``
+    : b __t_bare | == 0 ( nurl_str_len __t_et ) ! ( __type_needs_drop __t_et syms )
+    // A failure that owns its error goes to the caller as the caller's own
+    // (the function's result is owned on this path), so it is copied where
+    // it is not this function's to give: a call's that lent it (the call's
+    // bit), a binding's that does not own it (its flag; a parameter's is the
+    // caller's), any other operand's (a field, a join's pick) always. One
+    // that cannot be copied keeps the old handling.
+    : b __t_need & & != 0 g_auto_drop_strings ! __t_bare ( __clone_supported fn_rt syms )
+    : ~ s __t_c ``
+    ? __t_need {
+        ? == __try_inner_tt TT_LPAREN { ? != 0 ( nurl_str_len __try_hown ) { = __t_c ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __t_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __try_hown ) ( nurl_print `, 1\n` ) } {} } {
+            ? & __t_bind != 0 ( nurl_str_len __t_up ) {
+                : s __t_f ( mem_udrop_flag_get syms cg __t_up )
+                = __t_c ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __t_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __t_f ) ( nurl_print `, 1\n` )
+            } { = __t_c ( nurl_str_cat `1` `` ) }
+        }
+    } {}
+    ? != 0 ( nurl_str_len __t_c ) { = fail_val ( mem_emit_cloneif cg fn_rt fail_val __t_c ) } {}
+    ? & != 0 g_auto_drop_strings | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? __t_bind __t_up `` `` ? __t_bind __try_inner_v `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
             { : s rvp ( nurl_sym_get syms `__ret_val__` )
