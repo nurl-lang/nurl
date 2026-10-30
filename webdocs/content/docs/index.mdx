@@ -18,7 +18,7 @@ NURL targets **LLM code generation** specifically. The regular grammar means err
 
 - **Prefix-arity grammar** -- every construct has a fixed arity and there is no infix/precedence table to learn. The grammar fits on one page, parses with at most 4 tokens of lookahead (LL(k≤4)), keeps errors local, and yields high first-pass and single-round diagnostic repair compile rates for LLMs.
 - **Reproducible builds** (deterministic compilation) -- same source produces byte-identical output on every supported platform.
-- **Single-owner memory & mechanized soundness** -- values auto-drop at scope exit, and a static borrow checker rejects use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation at compile time. Every safe NURL program (outside `unsafe` functions) is memory-safe and leak-free, backed by 858 soundness hole probes (`tools/fuzz/holes/`) and a mechanized **Lean 4 soundness proof** (`formal/`, phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`).
+- **Single-owner memory & mechanized soundness** -- values auto-drop at scope exit, and a static borrow checker rejects use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation at compile time. Every safe NURL program (outside `unsafe` functions) is memory-safe and leak-free, backed by 873 soundness hole probes (`tools/fuzz/holes/`) and a mechanized **Lean 4 soundness proof** (`formal/`, phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`).
 - **One LLVM pipeline** -- the same codegen path targets native binaries (Linux, macOS, Windows, FreeBSD), WebAssembly (`wasm32-wasi`), bare-metal Unikernels (x86_64, AArch64, RISC-V64), and embedded microcontrollers (ESP32, RISC-V) without per-platform ports.
 
 ### State of NURL
