@@ -223,12 +223,35 @@ The sandboxed way to see output needs no switch: `nurl_build_unikernel`
 boots the program as its own kernel under QEMU, with no network and a
 time cap, and hands back the guest console.
 
+**How deep a program may nest.** nurlc compiles every request under a
+fixed nesting limit: 200 levels of expressions, blocks and types inside
+one another (`--max-nesting-fixed`; set `NURL_PLAYGROUND_MAX_NESTING`
+on a self-hosted server). Past it the build fails with a diagnostic, and
+no `flags` value raises it. The bundled examples and the compiler's test
+corpus, stdlib imports included, peak below 50. A local nurlc defaults
+to 1000 and takes `--max-nesting=N` or `NURL_MAX_NESTING=N` (0 turns it
+off).
+
+**The build sandbox.** Every build tool the server starts (nurlc,
+clang, wasm-opt, zig, mingw gcc, the unikernel scripts, the QEMU smoke
+boot) runs under `nurl-sandbox` (`nurlapi/sandbox/`). Landlock confines
+the tool to the system and toolchain trees, read-only, and to the
+request's own build directory. It cannot read the server, other builds'
+directories or `/tmp`, and cannot open TCP connections. `NURL_SANDBOX`
+picks the policy: `auto` (default) confines wherever the kernel has
+Landlock and runs tools as before where it does not; `required` fails a
+build rather than run a tool unconfined; `off` drops the wrapper. A
+toolchain kept outside `/opt` and `NURL_WORK_ROOT` is named in
+`NURL_SANDBOX_RO` (`:`-separated). `GET /health` reports the policy in
+force as `sandbox_status` (`landlock <abi>` when confined).
+
 **Caveats:**
 - Open and unauthenticated. The hosted instance is a free public endpoint —
   don't push secrets through it; assume the source is logged. For
   trust-sensitive use, self-host.
 - Build endpoints run arbitrary NURL source through `clang` inside the
-  container. Container-level sandboxing is the only isolation; downstream
-  binaries are returned, not executed.
+  container. Each build tool is confined by the build sandbox above
+  where the kernel has Landlock; beyond that, the container is the
+  isolation. Downstream binaries are returned, not executed.
 - The tool/resource catalog tracks `main`. Breaking changes to a tool
   signature are announced in [`CHANGELOG.md`](../CHANGELOG.md).

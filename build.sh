@@ -686,8 +686,10 @@ if (( RUN_TESTS == 1 )); then
     # (stderr, which no golden captures for a program that compiles).
     # import_roots: `--import-root` / NURL_IMPORT_ROOTS keep a compile of
     # untrusted source from reading files outside its roots.
-    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + unsafe report + import roots" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir unsafe_report import_roots
+    # nesting_limit: `--max-nesting` / NURL_MAX_NESTING / a fixed limit
+    # stop a deeply nested program with a diagnostic, not a stack overflow.
+    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + unsafe report + import roots + nesting limit" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir unsafe_report import_roots nesting_limit
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

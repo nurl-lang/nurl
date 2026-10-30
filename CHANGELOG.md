@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **nurlc stops at a nesting limit instead of overflowing its stack**
+  (Agora #207). A program nested deep enough (about 5 400 nested `?`
+  statements, 6 600 nested calls) ran nurlc out of stack: SIGSEGV, no
+  diagnostic. Past 1000 levels of expressions, blocks and types inside one
+  another it now stops with a diagnostic that says how to raise the limit:
+  `--max-nesting=N` or `NURL_MAX_NESTING=N`, 0 turns it off.
+  `--max-nesting-fixed=N` sets the limit for good, for a service compiling
+  other people's code. Compile time and the IR are unchanged (the
+  self-compile measures the same, and its IR is byte-identical).
+  `compiler/tests/nesting_limit.sh` and `diag_nesting_limit` cover it.
+
 ### Fixed
 
 - **A try over a binding, a field or a block leaves the function as `^`
@@ -75,16 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a `% Drop` struct) is now taken the way a consumer argument is. One
   that can be copied is still copied.
 
-### Security
-
-- **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An
-  optional `ir` field let a caller hand clang raw LLVM IR in place of
-  nurlc's output, which skipped every check the build surface makes on
-  caller input. Through it, an unauthenticated request could read files
-  the server could see, including other builds' directories. The field is
-  now ignored. `nurlapi/e2e_test.py` checks that a request's `ir` reaches
-  neither the linked IR nor the wasm.
-
 - **Every function summary written inside a block survives the block**
   (Agora #214, h969). #206 found that the returned-parameter records were
   written into the scope of the block holding the `^`, and lost when that
@@ -101,6 +104,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This rejected the iforest and anomaly packages, and a thread's closure
   moved a Vec it never touched. A name after `. obj` is now a field
   whenever `obj` is a struct value (agora #125, the field-name shape).
+
+### Security
+
+- **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An
+  optional `ir` field let a caller hand clang raw LLVM IR in place of
+  nurlc's output, which skipped every check the build surface makes on
+  caller input. Through it, an unauthenticated request could read files
+  the server could see, including other builds' directories. The field is
+  now ignored. `nurlapi/e2e_test.py` checks that a request's `ir` reaches
+  neither the linked IR nor the wasm.
+
+- **nurlapi: every build tool runs in a Landlock sandbox** (Agora #207).
+  nurlc, clang, wasm-opt, zig, mingw gcc, the unikernel scripts and the
+  QEMU smoke boot now start under `nurl-sandbox` (`nurlapi/sandbox/`).
+  The tool reads the system and toolchain trees and writes only its own
+  build directory. It cannot see the server binary, other builds'
+  directories or `/tmp`, and has no TCP. `NURL_SANDBOX=auto|required|off`
+  picks the policy (`auto` runs unconfined where the kernel lacks
+  Landlock), and `GET /health` reports it as `sandbox_status`. In the image
+  `/app/nurlapi` is root's and execute-only, so the server's `/proc`
+  entries are closed to the processes it starts. The playground compiles
+  every request under `--max-nesting-fixed=200`
+  (`NURL_PLAYGROUND_MAX_NESTING`).
 
 ## [0.81.0] — 2026-10-30
 

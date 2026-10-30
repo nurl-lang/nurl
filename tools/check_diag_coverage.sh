@@ -98,6 +98,9 @@ if [[ -d "$ROOT_DIR/compiler/tests/diagprobes" ]]; then
     # The import-root refusal needs roots to refuse against.
     NURL_IMPORT_ROOTS="$ROOT_DIR/compiler/tests/diagprobes" \
         capture probe_roots_ "$ROOT_DIR/compiler/tests/diagprobes/import_outside_roots.nu"
+    # The fixed nesting limit speaks only when it is fixed.
+    "$NURLC" --lint --max-nesting-fixed=4 "$ROOT_DIR/compiler/tests/diagprobes/nesting_fixed.nu" \
+        >/dev/null 2>"$ERRDIR/probe_fixed_nesting_fixed.err"
 fi
 
 # ── analyse ─────────────────────────────────────────────────────

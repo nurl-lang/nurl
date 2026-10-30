@@ -27,6 +27,15 @@ PORT="${E2E_PORT:-18000}"
 WORK="$(mktemp -d)"
 mkdir -p "$WORK/out"
 ./nurl.sh nurlapi/main.nu "$WORK/nurlapi" >/dev/null
+# The build sandbox (Agora #207): the wrapper and what it confines, then
+# every build below runs under it — required wherever the kernel has
+# Landlock, so a tool the policy breaks fails this run.
+cc -O2 -Wall -Wextra -Werror -std=c11 -o "$WORK/nurl-sandbox" nurlapi/sandbox/nurl_sandbox.c
+bash nurlapi/sandbox/sandbox_test.sh "$WORK/nurl-sandbox"
+SANDBOX_MODE=auto
+case "$("$WORK/nurl-sandbox" --probe)" in landlock*) SANDBOX_MODE=required ;; esac
+export NURL_SANDBOX_BIN="$WORK/nurl-sandbox" NURL_SANDBOX="$SANDBOX_MODE"
+[ "$SANDBOX_MODE" = required ] && export E2E_EXPECT_SANDBOX=1
 export NURLC_PATH="$ROOT/build/nurlc" NURL_STDLIB_DIR="$ROOT/stdlib" NURL_OUTPUT_DIR="$WORK/out" \
     NURL_EXAMPLES_DIR="$ROOT/examples" NURL_WORK_ROOT="$ROOT" NURL_STATIC_DIR="$ROOT/nurlapi/static" \
     NURL_README_PATH="$ROOT/README.md" NURL_GRAMMAR_PATH="$ROOT/spec/grammar.ebnf" \

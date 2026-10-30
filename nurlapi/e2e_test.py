@@ -189,6 +189,12 @@ def t_health(c: Client) -> None:
     assert_eq("status=ok", j.get("status"), "ok")
     assert_eq("nurlc_available", j.get("nurlc_available"), True)
     assert_true("stdlib_modules non-empty", bool(j.get("stdlib_modules")))
+    sb = j.get("sandbox_status")
+    assert_true("sandbox_status reported", isinstance(sb, str) and bool(sb), f"got {sb!r}")
+    # e2e_local.sh sets this when the kernel has Landlock and the server
+    # runs with NURL_SANDBOX=required: every build below is confined.
+    if os.environ.get("E2E_EXPECT_SANDBOX") == "1":
+        assert_true("build tools run confined", str(sb).startswith("landlock "), f"got {sb!r}")
 
 
 def t_mcp_info(c: Client) -> None:
@@ -765,6 +771,31 @@ def t_build_import_confinement(c: Client) -> None:
         j = {}
     ok_build = j.get("status") == "ok" or j.get("success") is True or j.get("ok") is True
     assert_true("stdlib import still builds", ok_build, f"got: {text[:300]!r}")
+
+
+def t_build_nesting_limit(c: Client) -> None:
+    print("\n[REST] /build — the playground's fixed nesting limit")
+    # nurlc runs every request under --max-nesting-fixed (200 unless the
+    # operator says otherwise): past it the build fails with a diagnostic
+    # that does not offer a way to raise it, and no caller flag can.
+    src = "@ main → i {\n^ " + "+ 1 " * 250 + "0\n}\n"
+    status, _, raw = c.post("/build", {"source": src, "filename": "deep.nu"}, timeout=120.0)
+    assert_eq("deep build answers 200", status, 200)
+    j = json.loads(raw)
+    assert_eq("deep build fails", j.get("status"), "error")
+    assert_eq("nurlc said so (exit 1)", j.get("nurlc_returncode"), 1)
+    text = json.dumps(j.get("nurlc_errors") or [])
+    assert_true("diagnostic names the limit", "nested deeper than 200 levels" in text, text[:300])
+    assert_true("and says it is fixed here", "cannot be raised here" in text, text[:300])
+    status, _, raw = c.post("/build", {"source": src, "filename": "deep.nu", "flags": "--max-nesting=0"}, timeout=60.0)
+    assert_eq("a flag to lift it is refused", status, 400)
+    # What used to overflow nurlc's stack (SIGSEGV, rc 139) is now that
+    # same diagnostic.
+    src = "@ main → i {\n" + "{ " * 60000 + ": i z 1" + " }" * 60000 + "\n^ 0\n}\n"
+    status, _, raw = c.post("/build", {"source": src, "filename": "deeper.nu"}, timeout=120.0)
+    assert_eq("60000 nested blocks answer 200", status, 200)
+    j = json.loads(raw)
+    assert_eq("nurlc exits 1, no crash", j.get("nurlc_returncode"), 1)
 
 
 def t_tools_call_unknown(c: Client) -> None:
@@ -1462,11 +1493,13 @@ def main() -> int:
     if args.native_only:
         t_tools_call_build(c)
         t_build_import_confinement(c)
+        t_build_nesting_limit(c)
         t_diagnostics_contract(c)
         print("[REST/MCP] wasm + unikernel builds — skipped (--native-only)")
     elif not args.quick:
         t_tools_call_build(c)
         t_build_import_confinement(c)
+        t_build_nesting_limit(c)
         t_diagnostics_contract(c)
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
