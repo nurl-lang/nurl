@@ -8,8 +8,9 @@
 //   POST /api/v1/publish               → Bearer token; X-Nurl-Package /
 //        X-Nurl-Version headers; body = .tar.gz. The server recomputes the
 //        SHA-256 (never trusts a client digest), enforces first-publisher
-//        name ownership + version immutability, writes the tarball + the
-//        updated index to R2, and records the version in D1.
+//        name ownership + version immutability by reserving the version in
+//        D1 first (atomically, so a concurrent loser writes nothing), then
+//        writes the tarball + the updated index to R2 and commits.
 //
 // Auth bootstrap (GitHub OAuth):
 //   GET  /login                        → redirect to GitHub authorize
@@ -47,6 +48,9 @@ export interface Env {
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9_-]{0,63})$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)*$/;
+// A publish reservation older than this is a dead worker's (no commit, no
+// rollback); the same publisher may reclaim it. Far past any real publish.
+const STALE_RESERVATION_MS = 15 * 60_000;
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -206,6 +210,23 @@ async function readIndex(env: Env, name: string): Promise<PackageIndex> {
   return JSON.parse(await obj.text()) as PackageIndex;
 }
 
+// Read-modify-write of index/<name>.json as a compare-and-swap on the R2
+// etag (create-only when absent), retried on a lost race, so concurrent
+// publishes / yanks of one package never drop each other's entry.
+async function updateIndex(env: Env, name: string, edit: (idx: PackageIndex) => void): Promise<void> {
+  const key = `index/${name}.json`;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const obj = await env.REG_BUCKET.get(key);
+    const idx: PackageIndex = obj ? JSON.parse(await obj.text()) : { name, versions: [] };
+    edit(idx);
+    const put = await env.REG_BUCKET.put(key, JSON.stringify(idx), {
+      onlyIf: obj ? { etagMatches: obj.etag } : { etagDoesNotMatch: "*" },
+    });
+    if (put) return;
+  }
+  throw new Error("index_contended");
+}
+
 // Optional X-Nurl-Deps: JSON array of { name, req }. Lets transitive
 // registry resolution work; defaults to [] when the client omits it.
 function parseDeps(req: Request): IndexDep[] {
@@ -340,27 +361,20 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   if (body.byteLength > 16 * 1024 * 1024) return json({ error: "too_large" }, 413);
   const checksum = await sha256Hex(body);
 
-  // First-publisher ownership.
+  // First-publisher ownership. These reads only refuse early; the
+  // reservation below is what decides.
   const owner = await env.REG_DB.prepare(`SELECT owner_user_id FROM packages WHERE name = ?`)
     .bind(name).first<{ owner_user_id: number }>();
   if (owner && owner.owner_user_id !== user.id) return json({ error: "not_owner" }, 403);
   // New names pass reserved-word + lookalike (typosquat) checks.
   if (!owner) {
     const rejection = await newNameRejection(env, name, user.id);
-    if (rejection) {
-      const [error, conflict] = rejection.split(":");
-      return json(conflict ? { error, conflict } : { error }, 403);
-    }
+    if (rejection) return nameRejected(rejection);
   }
 
-  // Immutability.
-  const existing = await env.REG_DB.prepare(`SELECT version FROM versions WHERE name = ? AND version = ?`)
-    .bind(name, version).first();
-  if (existing) return json({ error: "version_exists" }, 409);
-
-  // A bounded look inside before anything is stored or signed (agora #163):
-  // the archive must gunzip within MAX_UNPACKED_BYTES and hold at most
-  // MAX_TAR_ENTRIES members, or the publish leaves nothing behind.
+  // A bounded look inside before anything is reserved, stored or signed
+  // (agora #163): the archive must gunzip within MAX_UNPACKED_BYTES and hold
+  // at most MAX_TAR_ENTRIES members, or the publish leaves nothing behind.
   try {
     const tar = await gunzipBounded(new Response(body).body!);
     if (countTarEntries(tar) > MAX_TAR_ENTRIES) return json({ error: "archive_too_many_entries" }, 422);
@@ -369,58 +383,145 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
     return json({ error: "bad_archive" }, 422);
   }
 
-  // Sign the tarball before storing it, so the signature lands atomically with
-  // the bytes. A signing failure ABORTS the publish — we never expose an
-  // unsigned tarball once a key is configured (fail-closed).
+  // Reserve (name, version) atomically before anything public is written
+  // (agora #162): one D1 batch is one transaction, so of two concurrent
+  // publishers exactly one owns the name (its PRIMARY KEY) and exactly one
+  // holds the `pending` version row, which only the owner may insert. The
+  // loser stops here, having written nothing. `now` identifies this
+  // reservation; a stale one its worker died holding is reclaimed by the
+  // same publisher.
+  const now = Date.now();
+  const deps = parseDeps(req);
+  const [, pkgIns, verIns] = await env.REG_DB.batch([
+    env.REG_DB.prepare(
+      `DELETE FROM versions WHERE name = ?1 AND version = ?2 AND pending = 1
+          AND published_by = ?3 AND published_at < ?4`,
+    ).bind(name, version, user.id, now - STALE_RESERVATION_MS),
+    env.REG_DB.prepare(
+      `INSERT INTO packages (name, owner_user_id, created_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT(name) DO NOTHING`,
+    ).bind(name, user.id, now),
+    env.REG_DB.prepare(
+      `INSERT INTO versions (name, version, checksum, yanked, published_by, published_at, pending)
+       SELECT ?1, ?2, ?3, 0, ?4, ?5, 1
+        WHERE EXISTS (SELECT 1 FROM packages WHERE name = ?1 AND owner_user_id = ?4)
+          AND NOT EXISTS (SELECT 1 FROM versions WHERE name = ?1 AND version = ?2)`,
+    ).bind(name, version, checksum, user.id, now),
+  ]);
+  if ((verIns.meta?.changes ?? 0) === 0) {
+    const won = await env.REG_DB.prepare(`SELECT owner_user_id FROM packages WHERE name = ?`)
+      .bind(name).first<{ owner_user_id: number }>();
+    return won && won.owner_user_id !== user.id
+      ? json({ error: "not_owner" }, 403)
+      : json({ error: "version_exists" }, 409);
+  }
+  const createdPkg = (pkgIns.meta?.changes ?? 0) === 1;
+
   const tarKey = `pkgs/${name}/${name}-${version}.tar.gz`;
-  await env.REG_BUCKET.put(tarKey, body);
-  if (env.REG_SIGN_KEY) {
-    try {
-      const sig = await signTarball(env.REG_SIGN_KEY, signKeyid(env), body);
+  let wroteTar = false, indexed = false;
+  // Undo whatever this publish made visible, then drop the reservation (and
+  // the package row, when this publish created it and nothing else landed).
+  const rollback = async () => {
+    if (indexed) {
+      await updateIndex(env, name, (idx) => {
+        idx.versions = idx.versions.filter((v) => v.version !== version);
+      }).catch(() => {});
+    }
+    if (wroteTar) await env.REG_BUCKET.delete([tarKey, `${tarKey}.minisig`]).catch(() => {});
+    const undo = [
+      env.REG_DB.prepare(
+        `DELETE FROM versions WHERE name = ?1 AND version = ?2 AND pending = 1
+            AND published_by = ?3 AND published_at = ?4`,
+      ).bind(name, version, user.id, now),
+    ];
+    if (createdPkg) {
+      undo.push(env.REG_DB.prepare(
+        `DELETE FROM packages WHERE name = ?1 AND owner_user_id = ?2
+            AND NOT EXISTS (SELECT 1 FROM versions WHERE name = ?1)`,
+      ).bind(name, user.id));
+    }
+    await env.REG_DB.batch(undo).catch(() => {});
+  };
+
+  try {
+    // Two strangers racing lookalike NEW names both passed the check above;
+    // re-run it now that both rows exist, so neither slips past the other.
+    if (createdPkg) {
+      const rejection = await newNameRejection(env, name, user.id);
+      if (rejection) {
+        await rollback();
+        return nameRejected(rejection);
+      }
+    }
+
+    // Sign before storing, so the signature lands with the bytes. A signing
+    // failure ABORTS the publish — we never expose an unsigned tarball once
+    // a key is configured (fail-closed).
+    let sig: string | null = null;
+    if (env.REG_SIGN_KEY) {
+      try {
+        sig = await signTarball(env.REG_SIGN_KEY, signKeyid(env), body);
+      } catch (e) {
+        await rollback();
+        return json({ error: "signing_failed", detail: String(e) }, 500);
+      }
+    }
+    wroteTar = true;
+    await env.REG_BUCKET.put(tarKey, body);
+    if (sig !== null) {
       await env.REG_BUCKET.put(`${tarKey}.minisig`, sig, {
         httpMetadata: { contentType: "text/plain" },
       });
-    } catch (e) {
-      await env.REG_BUCKET.delete(tarKey); // don't leave signed-expecting bytes unsigned
-      return json({ error: "signing_failed", detail: String(e) }, 500);
     }
-  }
-  const idx = await readIndex(env, name);
-  idx.versions.push({ version, checksum, yanked: false, deps: parseDeps(req) });
-  await env.REG_BUCKET.put(`index/${name}.json`, JSON.stringify(idx));
 
-  const now = Date.now();
-  // Description comes from the tarball's own manifest, extracted
-  // server-side (never a client header) — the latest publish wins, so a
-  // wording fix ships with the next version. Extraction failure must not
-  // fail the publish: the description is search metadata, not integrity.
-  const description = await extractManifestDescription(env.REG_BUCKET, name, version)
-    .catch(() => "");
-  // The public symbol names (nurldoc over src/*.nu) — same failure policy:
-  // search metadata, never integrity, so extraction failure can't fail the
-  // publish. The latest version's surface wins.
-  const symbols = await extractPackageSymbols(env.REG_BUCKET, name, version)
-    .catch(() => "");
-  if (!owner) {
-    await env.REG_DB.prepare(
-      `INSERT INTO packages (name, owner_user_id, created_at, description, symbols) VALUES (?, ?, ?, ?, ?)`,
-    ).bind(name, user.id, now, description, symbols).run();
-  } else {
-    // Only overwrite with a non-empty value — a failed extraction must not
-    // wipe a good description/symbol index from an earlier publish.
-    await env.REG_DB.prepare(
-      `UPDATE packages SET
-         description = CASE WHEN ?1 != '' THEN ?1 ELSE description END,
-         symbols     = CASE WHEN ?2 != '' THEN ?2 ELSE symbols END
-       WHERE name = ?3`,
-    ).bind(description, symbols, name).run();
+    // Description comes from the tarball's own manifest, extracted
+    // server-side (never a client header) — the latest publish wins, so a
+    // wording fix ships with the next version. Extraction failure must not
+    // fail the publish: the description is search metadata, not integrity.
+    const description = await extractManifestDescription(env.REG_BUCKET, name, version)
+      .catch(() => "");
+    // The public symbol names (nurldoc over src/*.nu) — same failure policy:
+    // search metadata, never integrity, so extraction failure can't fail the
+    // publish. The latest version's surface wins.
+    const symbols = await extractPackageSymbols(env.REG_BUCKET, name, version)
+      .catch(() => "");
+
+    // An entry a dead reservation of this version left behind is replaced.
+    indexed = true;
+    await updateIndex(env, name, (idx) => {
+      idx.versions = idx.versions.filter((v) => v.version !== version);
+      idx.versions.push({ version, checksum, yanked: false, deps });
+    });
+
+    // Commit. Only overwrite metadata with a non-empty value — a failed
+    // extraction must not wipe a good description/symbol index from an
+    // earlier publish.
+    const [, committed] = await env.REG_DB.batch([
+      env.REG_DB.prepare(
+        `UPDATE packages SET
+           description = CASE WHEN ?1 != '' THEN ?1 ELSE description END,
+           symbols     = CASE WHEN ?2 != '' THEN ?2 ELSE symbols END
+         WHERE name = ?3`,
+      ).bind(description, symbols, name),
+      env.REG_DB.prepare(
+        `UPDATE versions SET pending = 0 WHERE name = ?1 AND version = ?2 AND pending = 1
+            AND published_by = ?3 AND published_at = ?4`,
+      ).bind(name, version, user.id, now),
+    ]);
+    // Reclaimed as stale by a later publish of the same version: that one
+    // now owns the R2 objects, so leave them to it.
+    if ((committed.meta?.changes ?? 0) === 0) return json({ error: "reservation_lost" }, 409);
+  } catch (e) {
+    await rollback();
+    return json({ error: "publish_failed", detail: String(e) }, 500);
   }
-  await env.REG_DB.prepare(
-    `INSERT INTO versions (name, version, checksum, yanked, published_by, published_at)
-     VALUES (?, ?, ?, 0, ?, ?)`,
-  ).bind(name, version, checksum, user.id, now).run();
 
   return json({ ok: true, name, version, checksum });
+}
+
+function nameRejected(rejection: string): Response {
+  const [error, conflict] = rejection.split(":");
+  return json(conflict ? { error, conflict } : { error }, 403);
 }
 
 // Constant-time string compare (avoid leaking the admin key via timing).
@@ -613,9 +714,10 @@ function esc(s: string): string {
 
 interface CatalogRow { name: string; latest: string | null; description: string; symbols?: string; }
 
-// Most-recently-published non-yanked version per package (display only).
+// Most-recently-published non-yanked committed version per package
+// (display only).
 const LATEST_SUBQUERY =
-  `(SELECT v.version FROM versions v WHERE v.name = p.name AND v.yanked = 0
+  `(SELECT v.version FROM versions v WHERE v.name = p.name AND v.yanked = 0 AND v.pending = 0
       ORDER BY v.published_at DESC LIMIT 1)`;
 
 // A package matches a (lower-cased) query that occurs, literally, in its
@@ -669,7 +771,7 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   const pubRows = await env.REG_DB.prepare(
     `SELECT v.version AS version, u.login AS login, v.published_at AS published_at
        FROM versions v JOIN users u ON u.id = v.published_by
-      WHERE v.name = ?`,
+      WHERE v.name = ? AND v.pending = 0`,
   ).bind(name).all<{ version: string; login: string; published_at: number }>();
   const pubBy = new Map((pubRows.results ?? []).map((r) => [r.version, r]));
   const ghLink = (login: string) =>
@@ -882,7 +984,7 @@ async function handleCatalogJson(req: Request, env: Env): Promise<Response> {
 async function handleStats(env: Env): Promise<Response> {
   const pkgs = await env.REG_DB.prepare(`SELECT COUNT(*) AS n FROM packages`).first<{ n: number }>();
   const vers = await env.REG_DB.prepare(
-    `SELECT COUNT(*) AS n FROM versions WHERE yanked = 0`,
+    `SELECT COUNT(*) AS n FROM versions WHERE yanked = 0 AND pending = 0`,
   ).first<{ n: number }>();
   return json(
     { packages: pkgs?.n ?? 0, versions: vers?.n ?? 0 },
@@ -907,12 +1009,13 @@ async function handleYank(req: Request, env: Env, yank: boolean): Promise<Respon
     .bind(name).first<{ owner_user_id: number }>();
   if (!owner) return json({ error: "not_found" }, 404);
   if (owner.owner_user_id !== user.id) return json({ error: "not_owner" }, 403);
-  const res = await env.REG_DB.prepare(`UPDATE versions SET yanked = ? WHERE name = ? AND version = ?`)
-    .bind(yank ? 1 : 0, name, version).run();
+  const res = await env.REG_DB.prepare(
+    `UPDATE versions SET yanked = ? WHERE name = ? AND version = ? AND pending = 0`,
+  ).bind(yank ? 1 : 0, name, version).run();
   if ((res.meta?.changes ?? 0) === 0) return json({ error: "version_not_found" }, 404);
-  const idx = await readIndex(env, name);
-  for (const v of idx.versions) if (v.version === version) v.yanked = yank;
-  await env.REG_BUCKET.put(`index/${name}.json`, JSON.stringify(idx));
+  await updateIndex(env, name, (idx) => {
+    for (const v of idx.versions) if (v.version === version) v.yanked = yank;
+  });
   return json({ ok: true, name, version, yanked: yank });
 }
 
