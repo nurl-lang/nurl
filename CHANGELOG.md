@@ -160,6 +160,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The value is now copied in place at the binding, which owns it. A
   `% Drop` value is refused. A lend of a binding made before the block
   stays a lend, and the compiler's own output is byte-identical.
+- **A `;` defer may not release what a block hands back** (Agora #197,
+  h872–h874). `; { ( keep l ) }  ^ { : i z 1 l }` released `l` after the
+  return had handed it to the caller. So did a fall-off block ending in
+  `l`. The bare `^ l` was already refused. The block's tail name is now
+  the owner that return hands back, so the defer is refused the same way.
+  A defer that only reads it is fine.
 - **An `inout` parameter is not handed a lend of the function's locals**
   (Agora #196, h865–h871). `@ fill inout String io → v { : W w ( mkw ) =
   io ( gets w ) }` gave the caller a lend of `w`, which `fill` dropped on

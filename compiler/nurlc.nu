@@ -5391,8 +5391,10 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // caller's: the owner this `^` hands back by name is lent to the
     // defers — read, not released (the walk's ret row, bck_apply_defers).
     ? & & & != 0 g_defer_count != g_borrowck 0 == 0 g_bck_closure_depth != 0 ( nurl_sym_len g_fn_escapes `__defer_top_fn__` ) {
-        ? & ( is_ident_tok ret_first_tt ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
-            ( nurl_sym_set g_bck ( nurl_str_cat4 `rto_` ( nurl_lex_filename lex ) `:` ( nurl_str_int bck_line ) ) ret_first_val )
+        // (…a block whose tail names it hands it back too: agora #197.)
+        : s __rto ? ( is_ident_tok ret_first_tt ) ret_first_val ? & == ret_first_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) ( nurl_sym_get syms `__tail_first_val__` ) ``
+        ? & != 0 ( nurl_str_len __rto ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __type_needs_drop ( nurl_get_last_type ) syms ) {
+            ( nurl_sym_set g_bck ( nurl_str_cat4 `rto_` ( nurl_lex_filename lex ) `:` ( nurl_str_int bck_line ) ) __rto )
         } {}
     } {}
     ( bck_record `ret` `` bck_line )
