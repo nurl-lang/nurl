@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -1163,6 +1164,37 @@ def t_build_wasm_vararg_libc(c: Client) -> None:
     assert_true("no `... %aN` in shim defines", not bad_defines, "; ".join(bad_defines)[:200])
 
 
+def t_build_wasm_ignores_caller_ir(c: Client) -> None:
+    print("\n[REST] /build_wasm — a caller-supplied `ir` is ignored")
+    # A request's `ir` used to go to clang in place of nurlc's output,
+    # past every check the build surface makes on caller input (#207).
+    # The build must come from `source` alone: the marker in the
+    # caller's IR must reach neither the linked IR nor the wasm.
+    marker = "caller-ir-marker-207"
+    ir = (
+        f'@m = constant [{len(marker)} x i8] c"{marker}"\n'
+        "define i64 @main() {\n  ret i64 0\n}\n"
+    )
+    src = "@ main → i {\n  ( puts `from-source-207` )\n  ^ 0\n}\n"
+    status, _, raw = c.post(
+        "/build_wasm",
+        {"source": src, "filename": "noir.nu", "ir": ir, "emit_ll": True},
+        timeout=180.0,
+    )
+    assert_eq("build_wasm status 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("build_wasm result is JSON", f"got {raw[:200]!r}")
+        return
+    assert_eq("build_wasm ok", j.get("status"), "ok")
+    out_ir = j.get("llvm_ir") or ""
+    assert_true("IR comes from the source", "from-source-207" in out_ir, "source string missing from IR")
+    assert_true("caller IR not in the linked IR", marker not in out_ir)
+    wasm = base64.b64decode(j.get("wasm_base64") or "")
+    assert_true("caller IR not in the wasm", marker.encode() not in wasm)
+
+
 def t_build_unikernel_rest(c: Client) -> None:
     print("\n[REST] /build_unikernel — image + initfs + guards")
     # 1. A hello builds into a PVH ELF with boot commands attached.
@@ -1439,6 +1471,7 @@ def main() -> int:
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_vararg_libc(c)
+        t_build_wasm_ignores_caller_ir(c)
         t_build_wasm_links_only_rest(c)
         t_build_unikernel_rest(c)
         t_tools_call_build_unikernel(c)
@@ -1446,6 +1479,7 @@ def main() -> int:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
         print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
+        print("[REST] /build_wasm caller ir — skipped (--quick)")
         print("[REST] /build_wasm links_only — skipped (--quick)")
         print("[REST] /build_unikernel — skipped (--quick)")
         print("[MCP] tools/call nurl_build_unikernel — skipped (--quick)")
