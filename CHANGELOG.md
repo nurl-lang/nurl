@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registered e with no owner, and it leaked. It is now owned by the call's
   bit, as a String payload is.
 
+- **A `vec_get` element moved into a literal is taken out of its slot**
+  (Agora #204, h957–h960). Handed to a consumer call (`vec_push [T] ys
+  e`), a `vec_get` payload was already taken, its slot emptied. Moved into
+  a literal, it stayed where it was: `?? ( vec_get [Res] xs 0 ) { T e → {
+  ^ @ ?Res { T e } } … }`, or `: Hold h @ Hold { e 1 }` inside the arm. The
+  Vec and the literal then both freed it. A payload that cannot be copied
+  (a `% Drop` struct) is now taken the way a consumer argument is. One
+  that can be copied is still copied.
+
 ## [0.81.0] — 2026-10-30
 
 ### Changed

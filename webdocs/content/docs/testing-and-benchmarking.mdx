@@ -111,7 +111,7 @@ has its own pass/fail logic. This logic is separate from the goldens.
 
 Two additional gates guard memory safety:
 
-- **Soundness hole regression suite (`tools/fuzz/holes/check.sh`)** — runs 925 adversarial probes (`h01`–`h968`) covering historical ownership, borrow-checking, view-lifetime, closure-capture, and concurrency edge cases. Negative probes must be rejected at compile time; positive probes must compile and run clean under ASan + LSan.
+- **Soundness hole regression suite (`tools/fuzz/holes/check.sh`)** — runs 929 adversarial probes (`h01`–`h968`) covering historical ownership, borrow-checking, view-lifetime, closure-capture, and concurrency edge cases. Negative probes must be rejected at compile time; positive probes must compile and run clean under ASan + LSan.
 - **Mechanized Lean 4 soundness proof (`formal/`)** — `cd formal && ./check.sh` checks the machine-verified proof (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`; no `sorry`, only Lean's standard axioms) that well-typed, borrow-checked single-threaded NURL programs — structs, enums, closures, trait objects and panics included — neither use-after-free, double-free, nor leak owned allocations.
 
 ## Next

@@ -924,3 +924,7 @@ h965_nested_view_payload_moved_out	§7.6	A2	the inner payload of a `vec_get` ele
 h966_fresh_option_enum_payload_flat	§7.6	A2	a fresh `?E` whose enum holds a `% Drop` value: its payload was owned by nothing and leaked	runs-clean
 h967_fresh_option_enum_payload_nested	§7.6	A2	the same matched again inside the arm	runs-clean
 h968_bound_option_enum_payload_nested	§7.6	A2	a nested `??` over a bound option's enum payload: dropped twice	runs-clean
+h957_vget_payload_rewrapped_param_vec	§7.6	A2	agora #204: a `vec_get` payload moved into a returned option stayed in the parameter's slot: freed twice	runs-clean
+h958_vget_payload_rewrapped_local_vec	§7.6	A2	the same out of a local Vec, dropped on the way out	runs-clean
+h959_vget_payload_in_local_struct	§7.6	A2	a `vec_get` payload moved into a local struct: the struct and the Vec both dropped it	runs-clean
+h960_vget_payload_in_struct_param_vec	§7.6	A2	the same out of a parameter's Vec	runs-clean
