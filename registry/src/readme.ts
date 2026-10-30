@@ -187,7 +187,11 @@ export async function extractManifestKey(
 ): Promise<string | null> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return null;
-  const ab = await gunzipBounded(obj.body);
+  return manifestKeyInTar(await gunzipBounded(obj.body), key);
+}
+
+// The same scalar from an already-unpacked tar image (publish has one).
+export function manifestKeyInTar(ab: Uint8Array, key: string): string | null {
   const hit = findInTar(ab, (p) => p.replace(/^\.\//, "") === "nurl.toml");
   if (!hit) return null;
   const toml = new TextDecoder().decode(hit.data);
@@ -239,6 +243,16 @@ export async function extractManifestDescription(
   const d = await extractManifestKey(bucket, name, version, "description");
   if (d) return d.slice(0, 500);
   const md = await extractReadme(bucket, name, version).catch(() => null);
+  return md ? readmeFirstParagraph(md).slice(0, 500) : "";
+}
+
+// The same from an already-unpacked tar image: publish reads it from the
+// archive it has just checked instead of fetching and gunzipping the
+// stored tarball again.
+export function descriptionInTar(ab: Uint8Array): string {
+  const d = manifestKeyInTar(ab, "description");
+  if (d) return d.slice(0, 500);
+  const md = findReadmeInTar(ab);
   return md ? readmeFirstParagraph(md).slice(0, 500) : "";
 }
 
@@ -304,7 +318,11 @@ export async function extractPackageSymbols(
 ): Promise<string> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return "";
-  const ab = await gunzipBounded(obj.body);
+  return symbolsInTar(await gunzipBounded(obj.body));
+}
+
+// The same from an already-unpacked tar image (publish has one).
+export async function symbolsInTar(ab: Uint8Array): Promise<string> {
   const { symbolsIndex } = await import("./nurldoc.ts");
   return symbolsIndex(listTarSrcModules(ab));
 }

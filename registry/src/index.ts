@@ -23,7 +23,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules, extractPackageSymbols, gunzipBounded, countTarEntries, ArchiveTooLarge, MAX_TAR_ENTRIES } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules, extractPackageSymbols, descriptionInTar, symbolsInTar, gunzipBounded, countTarEntries, ArchiveTooLarge, MAX_TAR_ENTRIES } from "./readme.ts";
 import { renderNurldoc, symbolsIndex } from "./nurldoc.ts";
 
 export interface Env {
@@ -375,8 +375,10 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   // A bounded look inside before anything is reserved, stored or signed
   // (agora #163): the archive must gunzip within MAX_UNPACKED_BYTES and hold
   // at most MAX_TAR_ENTRIES members, or the publish leaves nothing behind.
+  // The image is kept for the description and symbols below.
+  let tar: Uint8Array;
   try {
-    const tar = await gunzipBounded(new Response(body).body!);
+    tar = await gunzipBounded(new Response(body).body!);
     if (countTarEntries(tar) > MAX_TAR_ENTRIES) return json({ error: "archive_too_many_entries" }, 422);
   } catch (e) {
     if (e instanceof ArchiveTooLarge) return json({ error: "archive_too_large" }, 413);
@@ -478,13 +480,14 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
     // server-side (never a client header) — the latest publish wins, so a
     // wording fix ships with the next version. Extraction failure must not
     // fail the publish: the description is search metadata, not integrity.
-    const description = await extractManifestDescription(env.REG_BUCKET, name, version)
-      .catch(() => "");
+    // Both are read from the image the bounded check above unpacked, not
+    // by fetching the stored tarball back and gunzipping it twice more.
+    let description = "";
+    try { description = descriptionInTar(tar); } catch { /* search metadata only */ }
     // The public symbol names (nurldoc over src/*.nu) — same failure policy:
     // search metadata, never integrity, so extraction failure can't fail the
     // publish. The latest version's surface wins.
-    const symbols = await extractPackageSymbols(env.REG_BUCKET, name, version)
-      .catch(() => "");
+    const symbols = await symbolsInTar(tar).catch(() => "");
 
     // An entry a dead reservation of this version left behind is replaced.
     indexed = true;
