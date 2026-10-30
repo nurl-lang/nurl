@@ -37,6 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mkres ) } {}  ^ q` leaked the fresh value, which was taken for a view of
   the argument.
 
+- **A parameter handed back from inside a block is summarised**
+  (Agora #206, h952–h956). The returned-parameter records
+  (bck_record_ret_param, bck_record_ret_alias) were written into the
+  scope of the block holding the `^`, and that block's pop discarded
+  them. So `? c { ^ cb } {}`, or a `^ cb` in a loop body or a `??` arm,
+  never told callers that the result may be their argument. A closure
+  that captures a local by pointer then escaped `make` through `^ ( pick
+  T f )`, a stack-use-after-scope. The records now go to the function's
+  own summary. Two rules that had been relying on the loss are now exact.
+  A `??` payload that holds no address (a truth value, a float, or an
+  enum with no payloads) carries none of its scrutinee's parameters. A raw
+  string handed back by a NURL body may be handed over unless no path of
+  the body does (`__ret_unowned`). Before, a `^ x` on one path made `(
+  maybe_fresh a 1 )` look like a lend, and a fresh string stored in a
+  struct leaked or was freed under the caller. A temporary that a call
+  lends back is now judged by the call's per-call answer, even when the
+  call is summarised as handing back a parameter.
+
 ## [0.81.0] — 2026-10-30
 
 ### Changed

@@ -912,3 +912,8 @@ h948_drop_param_result_temp_scrut	§7.6	A2	`?? ( f r )`, f handing back its `!i 
 h949_drop_param_ret_nested_block	§7.6	A2	`? c { ^ q } {}  ^ ( mkres )`, q a `% Drop` parameter: the caller dropped r and the result	runs-clean
 h950_drop_param_ret_mixed_fresh_leak	§7.6	A2	`? c { ^ ( mkres ) } {}  ^ q`: the fresh result, taken for a view of r, leaked	runs-clean
 h951_drop_mixed_accessor_scrut_arm	§7.6	A2	a `??` over a call handing back its option parameter or a fresh one: the arm dropped r's payload	runs-clean
+h952_ret_param_nested_block_escape	§2.8	A2	agora #206: a callee's `^ cb` inside a block was never summarised: a closure capturing a local by pointer escaped its frame	rejected
+h953_ret_param_loop_body_escape	§2.8	A2	the same `^ cb` inside a loop body	rejected
+h954_ret_param_match_arm_escape	§2.8	A2	the same `^ cb` inside a `??` arm	rejected
+h955_raw_maybe_fresh_rec_returned	§2.13	A2	a raw string a call may hand over fresh, stored in a returned struct: taken for a lend (one path's `^ x`), it leaked	rejected
+h956_raw_maybe_fresh_rec_bound_returned	§2.13	A2	the same struct bound first, then handed back: freed under the caller	rejected

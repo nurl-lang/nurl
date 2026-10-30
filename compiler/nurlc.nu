@@ -7935,6 +7935,14 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // lend it? (resolve_owned_strings_kept.)
 @ __pair_may_own i syms s ic s ig → b {
     ? ( seq ic `+` ) { ^ T } {}
+    // A raw string a NURL body hands back answers per call by its proof
+    // (mem_emit_fwd_own_guard): it may be handed over unless no path of the
+    // body does (`__ret_unowned`). That it hands a parameter back on some
+    // path (the returned-handle summary) says nothing of the others.
+    ? & ( seq ( nurl_llty ( nurl_sym_get syms ic ) ) `i8*` )
+    | != 0 ( nurl_sym_len2 syms ic `__nurlfn` ) != 0 ( nurl_sym_len2 syms ig `__garity` ) {
+        ^ ! | ( __ret_never_owned syms ic ) ( __ret_never_owned syms ig )
+    } {}
     ^ | ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 )
 }
 
@@ -19791,7 +19799,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv0 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt0_eff syms ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
                 // A closure payload (`T f →` over a `?( @ … )`): the binding
                 // owns its env exactly when the option was a call's and
@@ -19975,7 +19983,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt1 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
@@ -20006,7 +20014,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt2 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
@@ -23571,9 +23579,13 @@ unsafe @ mem_path_to_indices s path → s {
     // (The type is asked only of a join that owns on some path.)
     : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F | ( __is_handle_ty at ) ( __is_hown_ty at )
     // (A call that hands back a view of its argument but answers per call
-    // whether it lent goes by that answer: __call_answers, agora #185.)
+    // whether it lent goes by that answer: __call_answers, agora #185. So
+    // does one handed a temporary it lends back: its bit says whether the
+    // result is the caller's — the temporary moved in, or a copy —
+    // mem_own_lendback.)
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt ) {
+    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt )
+    ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
         // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
         ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
@@ -44842,7 +44854,7 @@ unsafe @ origin_free → v {
     { : s cur ( nurl_sym_get syms `__fn_ret_param__` )
         : s new ( nurl_str_int idx )
         ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_ret_param__`
+        { ( nurl_sym_set_deep syms `__fn_ret_param__`
             ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
@@ -45153,7 +45165,7 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
     { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
         : s new ( nurl_str_int idx )
         ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_ret_alias__`
+        { ( nurl_sym_set_deep syms `__fn_ret_alias__`
             ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
@@ -52582,6 +52594,25 @@ unsafe @ __hmemo_close s key i mark b r → v {
         } {}
     } {}
     ^ F
+}
+
+// A value of `ty` holds no address: a truth value, a float, or an enum none
+// of whose variants carries a payload. A payload of that type bound out of
+// a match is no part of what the matched value was part of (an integer may
+// be an address cast to one, and stays a carrier).
+@ __ty_holds_no_addr s ty i syms → b {
+    ? | | ( seq ty `i1` ) ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    : s vl ( nurl_sym_get2 syms ( nurl_str_slice ty 1 - n 1 ) `__variants` )
+    ? == 0 ( nurl_str_len vl ) { ^ F } {}
+    : ~ s scan ( nurl_str_cat vl `` )
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        : s pcs ( nurl_sym_get2 syms vname `__paycount` )
+        ? & != 0 ( nurl_str_len pcs ) != 0 ( nurl_str_to_int pcs ) { ^ F } {}
+    }
+    ^ T
 }
 
 @ __enum_needs_drop s variants i syms → b {
