@@ -170,6 +170,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The value is now copied in place at the binding, which owns it. A
   `% Drop` value is refused. A lend of a binding made before the block
   stays a lend, and the compiler's own output is byte-identical.
+- **A join handed back copies what its arms' calls lend of a local**
+  (Agora #198, h880–h896). `^ ? c ( getr w ) ( okf )`, with `getr`
+  lending a field of the local `w` through its result, handed the caller
+  a lend of `w`. So did a try arm (`^ @ !String E { T ? c \ ( getr w ) … }`)
+  and a `??`'s scrutinee in a returned payload. Only the scrutinee's
+  call was asked, and only at a `^`. Every lending arm's call is now asked
+  too, and the path that lent a local is copied. A function's fall-off
+  `?` / `??` now goes through the same code as `^`. It used to skip these
+  copies, and it left a lend of a parameter out of the function's summary,
+  so a caller handing the result back over its own local did not copy it.
+  A returned literal's field that is a block ending in a join is judged as
+  that join. One of two fresh arms used to leak. An option or a result of a
+  `% Drop` value is now held to the `% Drop` value's rules when lent into a
+  `sink` argument or a literal's field, so such a lend is refused.
 - **A `;` defer may not release what a block hands back** (Agora #197,
   h872–h874). `; { ( keep l ) }  ^ { : i z 1 l }` released `l` after the
   return had handed it to the caller. So did a fall-off block ending in

@@ -835,3 +835,20 @@ h876_arm_let_block_call_lend	§7.6	A2	agora #193: the same binding and assignmen
 h877_loop_let_inferred_block_call_lend	§7.6	A2	agora #193: the same with the binding's type inferred	runs-clean
 h878_ret_let_block_call_lend	§7.6	A2	agora #193: the bound block value returned out of the frame that drops the block's local	runs-clean
 h879_let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean
+h880_try_join_arm_wrap_payload	§7.6	A2	agora #198: `^ @ !String E { T ? c \ ( getr w ) ( string_from … ) }`: a try over a call lending the local `w`, as a join arm in a returned payload	runs-clean
+h881_result_call_join_arm_returned	§7.6	A2	agora #198: `^ ? c ( getr w ) ( okf )`: an arm's call whose result lends part of the local `w`	runs-clean
+h882_result_call_match_arm_returned	§7.6	A2	agora #198: the same through a returned `??` arm	runs-clean
+h883_result_call_block_arm_returned	§7.6	A2	agora #198: the same through a block arm ending in the call	runs-clean
+h884_scrutinee_lend_wrap_payload	§7.6	A2	agora #198: `^ @ !String E { T ?? ( getr w ) { T x → x … } }`: the scrutinee's lend of a local in a returned payload	runs-clean
+h885_fall_off_join_arm_result_call	§7.6	A2	agora #198: `? c ( getr w ) ( okf )` as the function's fall-off value	runs-clean
+h886_fall_off_match_scrutinee_lend	§7.6	A2	agora #198: `?? ( getr w ) { T x → x … }` as the fall-off value	runs-clean
+h887_fall_off_match_arm_result_call	§7.6	A2	agora #198: `?? c { T → ( getr w ) F → ( okf ) }` as the fall-off value	runs-clean
+h888_fall_off_scrutinee_param_lend	§7.6	A2	agora #198: a fall-off `??` lending a parameter: its callers are told, and one handing it back over its own local copies	runs-clean
+h889_fall_off_arm_param_lend	§7.6	A2	agora #198: the same through a fall-off `?` arm's call	runs-clean
+h890_block_join_tail_wrap_payload	§7.6	A2	agora #198: `^ @ !String E { T { : i k 1 ? c ( gets w ) ( string_from … ) } }`: a block ending in a join as a returned payload	runs-clean
+h891_block_join_tail_wrap_fresh	§7.6	A2	agora #198: the same with two fresh arms: copied as if lent, the original leaked	runs-clean
+h892_block_join_tail_try_arm	§7.6	A2	agora #198: the same with a try arm `\ ( getr w )`	runs-clean
+h893_drop_join_arm_result_returned	§7.6	A2	agora #198: `^ ? c ( getr h ) ( okd )` with a `% Drop` payload lent out of the local `h`: it cannot be copied	rejected
+h894_drop_result_lent_sink_arg	§7.6	A2	agora #198: `( keepr ( getr h ) )`: a `!D E` lent out of `h` handed to a `sink`, D `% Drop`	rejected
+h895_drop_option_lent_sink_arg	§7.6	A2	agora #198: the same with a `?D`	rejected
+h896_drop_option_lent_literal_field	§7.6	A2	agora #198: `@ P { ( getr h ) }`: a lent `?D` stored into a literal's field	rejected
