@@ -852,3 +852,8 @@ h893_drop_join_arm_result_returned	§7.6	A2	agora #198: `^ ? c ( getr h ) ( okd 
 h894_drop_result_lent_sink_arg	§7.6	A2	agora #198: `( keepr ( getr h ) )`: a `!D E` lent out of `h` handed to a `sink`, D `% Drop`	rejected
 h895_drop_option_lent_sink_arg	§7.6	A2	agora #198: the same with a `?D`	rejected
 h896_drop_option_lent_literal_field	§7.6	A2	agora #198: `@ P { ( getr h ) }`: a lent `?D` stored into a literal's field	rejected
+h913_literal_field_closure_signature	§2.11	A2	agora #129: a struct literal stores a `( @ i s )` closure in a `( @ i i )` field; both lower to `{ ptr, ptr }` and the call through the field reads an int as a string	rejected
+h914_enum_payload_closure_signature	§2.11	A2	agora #129: the same closure as an enum variant's payload	rejected
+h915_enum_payload_named_struct	§2.12	A2	agora #129: an enum variant declared to carry an `A` given a `B`: the arm reads B's int as A's String	rejected
+h916_literal_field_closure_guard	§2.11	A2	agora #129: a closure of the declared signature in a struct literal field: accepted	runs-clean
+h917_enum_payload_closure_guard	§2.11	A2	agora #129: a closure of the declared signature as an enum payload: accepted	runs-clean

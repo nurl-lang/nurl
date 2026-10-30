@@ -7,7 +7,7 @@ NURL's single-owner memory model ([Memory and Ownership](./memory-and-ownership)
 
 Use the interactive explorer below to inspect the proof at two levels:
 1. **For Everyone (Tab 1 — Visual Story & Simulator):** Step through concrete NURL programs to see how the compile-time context $\Gamma$ (`Typing.lean`) and runtime memory store `Mem` (`Semantics.lean`) interact, why `vec_push` kills `Slice` views while preserving element borrows (`Eff.kills`), and how panic unwinding (`panic_unwind`) frees every owned allocation via the drop journal.
-2. **For Mathematicians & PL Researchers (Tabs 2–4 — Lean Blueprint DAG, Code Browser & Hole Corpus):** Explore the interactive **Lean Blueprint** theorem/module dependency graphs, browse all **1,773 Lean 4 declarations** with cross-referenced dependencies, and inspect all **853 soundness hole probes** (`h01`–`h896`).
+2. **For Mathematicians & PL Researchers (Tabs 2–4 — Lean Blueprint DAG, Code Browser & Hole Corpus):** Explore the interactive **Lean Blueprint** theorem/module dependency graphs, browse all **1,773 Lean 4 declarations** with cross-referenced dependencies, and inspect all **858 soundness hole probes** (`h01`–`h917`).
 
 <FormalExplorer />
 
