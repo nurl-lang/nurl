@@ -161,6 +161,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A join handed to a `sink` is copied where it lends** (h934–h936).
+  `( keep ? c ( gets w ) ( string_from x ) )`, with `w` a local and
+  `keep` taking a `sink`, freed `w`'s string in the callee, and `w`
+  freed it again. The same happened with the join as a block's tail. The
+  sink path copied a call's lend but never a join's. It now copies on the
+  paths the join's published ownership says an arm lent; the fresh arm
+  still moves. A value that cannot be copied is refused.
 - **A raw string kept in its slot past its block does not leak on an early
   return later in the loop** (Agora #201, h926–h928). Inside `~ … { ? == k
   3 { ^ … } {}  ? c { : s o … = acc o } {} }`, `o`'s slot outlives its
