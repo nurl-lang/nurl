@@ -161,6 +161,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `% Drop` value a call may lend is not moved on through a binding**
+  (Agora #200, h918–h925). `: D d \ ( getr h )  ^ @ !D E { T d }`, with
+  `getr` lending `h`'s field, put in the result a value `h` released on
+  the way out. The same happened when the binding was pushed, stored in
+  a field or put in a kept literal, and when the whole result was bound
+  and handed back. The call itself was refused in each place: the bare
+  `^ ( getr h )`, and `( getr h )` in a literal or a keeping argument. A
+  binding of the call's value is now judged as that call is. A store
+  that keeps it is refused when the call lends, and a `^` of it when the
+  call may lend out of a local. A `^` that lends a parameter's value back
+  stays a lend. A try field in a literal or an argument (`T \ ( getr h )`)
+  is now asked as its call.
 - **A value block ending in a join is judged as that join at a store or
   argument** (Agora #199, h918–h923). `= o { : i k 1 ? c ( string_from a )
   ( string_from b ) }` judged the RHS value only by its first token

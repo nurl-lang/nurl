@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_lent_binding_stored.nu:25:5: error: 'getr' lends what it hands back, and this hands it to a place that owns what it holds (a field, an element, a literal's field) while its owner still holds it; a 'D' cannot be copied, so no copy can stand in. Pass a value the caller owns — one a call hands over, or the owner itself (take it out of the container: vec_remove, vec_pop).
+    = . h2 d d
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
