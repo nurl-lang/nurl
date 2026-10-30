@@ -1,0 +1,33 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+-- pick fresh
+drop 2
+-- pick lent
+-- match fresh
+drop 3
+-- match lent
+-- fall-off fresh
+drop 4
+-- fall-off lent
+-- local moved
+drop 5
+drop 5
+-- local dropped
+drop 6
+drop 7
+-- parameter lent
+-- local moved
+drop 7
+drop 8
+-- option lent
+-- option moved
+drop 8
+-- closure first
+drop 10
+-- closure second
+drop 11
+39
+drop 1
+drop 9
