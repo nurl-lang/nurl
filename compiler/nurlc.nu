@@ -2903,6 +2903,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // cannot be copied which a call may lend (`__nclk`, __nc_bind_lend_note):
 // none, and no store or return need ask (agora #200).
 : ~ i g_ncl_n 0
+// How many function exits have emitted the deferred-drop list
+// (mem_drain_deferred) so far: a slot parked after one of them, inside a
+// loop, is emptied at the loop's back-edge (agora #201).
+: ~ i g_drain_n 0
 // How many bindings of the function being compiled are cursors over part
 // of a value (`__alias_part`) or may hold a join's lend of a local
 // (`__llocal`): none, and nothing need ask (__part_src, agora #195).
@@ -4157,7 +4161,11 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         { ( mem_drop_owned_strings syms cg skip_str_ptr )
             ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
             ( mem_drop_user_drops syms cg skip_user_ptr )
-            ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
+            // (In a closure body too: the list is the body's own there —
+            // gen_closure_expr empties it for the body and drains it at
+            // its fall-off. Skipped at an early `^`, what the body had
+            // parked leaked on every such return; agora #201.)
+            ( mem_drain_deferred cg )
         }
         {}
         ( mem_own_closure_ret_release syms ret_ident )
@@ -7504,10 +7512,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
         ? ( str_contains_word old_list ptr ) {} {
             : s drop_slot ( mem_guard_drop_slot syms ptr )
             : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
-            ? ( str_contains_word cur drop_slot ) {} {
-                ( nurl_sym_set g_fn_escapes `__deferred_drops__`
-                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat drop_slot `` ) ( nurl_str_cat3 cur ` ` drop_slot ) )
-            }
+            ? ( str_contains_word cur drop_slot ) {} { ( mem_defer_slot_add drop_slot ) }
         }
     }
 }
@@ -7515,6 +7520,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // Free every parked slot's current value (see mem_defer_new_strings).
 // Emitted wherever the function-exit owned-string drops run.
 @ mem_drain_deferred i cg → v {
+    = g_drain_n + g_drain_n 1
     : ~ s rest ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
     ~ != 0 ( nurl_str_len rest ) {
         : s ptr ( str_first_word rest )
@@ -7524,6 +7530,42 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
         ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
     }
+}
+
+// …and, at a loop body's back-edge (its fall-through, a `continue`), the
+// slots parked while that body ran — past `from` in the list — after one of
+// the function's exits had been emitted in it (`exits`, g_drain_n then):
+// their value is freed and the slot emptied. The next pass may leave the
+// function through that exit before the statement that parked the slot
+// runs again, and the exit frees only what was parked above it in the text:
+// the value the pass before left in the slot leaked (agora #201). A slot
+// parked above every exit of the body is freed there already. (Emptied,
+// the slot's next store and the epilogue free nothing twice.)
+@ mem_drain_deferred_since i cg i from i exits → v {
+    ? == exits g_drain_n { ^ v } {}
+    : s all ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+    : i n ( nurl_str_len all )
+    ? <= n from { ^ v } {}
+    : ~ s rest ( nurl_str_slice all from - n from )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? & != 0 ( nurl_str_len ptr ) > ( nurl_str_to_int ( nurl_sym_get g_fn_escapes ( nurl_str_cat `__ddn` ptr ) ) ) exits {
+            : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)\n` )
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ptr ) ( emit_dbg_eol )
+        } {}
+    }
+}
+
+// Park `slot` on the function's deferred-drop list (mem_defer_new_strings),
+// with how many of its exits had been emitted by then (g_drain_n).
+@ mem_defer_slot_add s slot → v {
+    : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+    ( nurl_sym_set g_fn_escapes `__deferred_drops__` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat slot `` ) ( nurl_str_cat3 cur ` ` slot ) )
+    ( nurl_sym_set g_fn_escapes ( nurl_str_cat `__ddn` slot ) ( nurl_str_int g_drain_n ) )
 }
 
 // An owned argument remains the caller's obligation while later arguments
@@ -8024,9 +8066,7 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
         ( nurl_print `  ` ) ( nurl_print old ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ks ) ( nurl_print `\n` )
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old ) ( nurl_print `)\n` )
         ( nurl_print `  store i8* ` ) ( nurl_print kv ) ( nurl_print `, i8** ` ) ( nurl_print ks ) ( nurl_print `\n` )
-        : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
-        ( nurl_sym_set g_fn_escapes `__deferred_drops__`
-        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 cur ` ` ks ) )
+        ( mem_defer_slot_add ks )
         : s fv ( nurl_cg_reg cg )
         ( emit_sink_owner_select drop `i8*` owner `null` fv )
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
@@ -20919,6 +20959,10 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s old_bc_user ( nurl_sym_get syms `__loop_snap_user__` )
     : s old_bc_slices ( nurl_sym_get syms `__loop_snap_slices__` )
     : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
+    : s old_bc_dd ( nurl_sym_get syms `__loop_snap_dd__` )
+    : i dd_fe ( nurl_sym_len g_fn_escapes `__deferred_drops__` )
+    : i dn_fe g_drain_n
+    ( nurl_sym_def syms `__loop_snap_dd__` ( nurl_str_cat3 ( nurl_str_int dd_fe ) ` ` ( nurl_str_int dn_fe ) ) )
     ( nurl_sym_def syms `__loop_exit__` le )
     ( nurl_sym_def syms `__loop_check__` lcont )
     : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
@@ -20952,6 +20996,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
     ( nurl_sym_def syms `__loop_snap_slices__` old_bc_slices )
     ( nurl_sym_def syms `__loop_snap_cenv__` old_bc_cenv )
+    ( nurl_sym_def syms `__loop_snap_dd__` old_bc_dd )
     ? == g_did_ret 0
     { ? != 0 g_auto_drop_strings
         { ( mem_drop_new_strings syms cg old_strs_fe )
@@ -20959,6 +21004,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ( mem_drop_new_user_drops syms cg old_user_fe )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_fe ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_fe )
+        ( mem_drain_deferred_since cg dd_fe dn_fe )
         ( nurl_print `  br label %` ) ( nurl_print lcont ) ( emit_dbg_eol )
     }
     {}
@@ -21064,6 +21110,11 @@ unsafe @ gen_match i lex i syms i cg → s {
         { ( mem_drop_new_slices syms cg snap_slices ) } {} }
     {}
     ( mem_drop_new_closure_envs syms cg snap_cenv )
+    // (A `continue` is a back-edge too: gen_loop's fall-through.)
+    ? ! is_break {
+        : s __bdd ( nurl_sym_get syms `__loop_snap_dd__` )
+        ( mem_drain_deferred_since cg ( nurl_str_to_int ( str_first_word __bdd ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word __bdd ) ) ) )
+    } {}
     ( nurl_sym_set_deep syms `__owned_strings__` save_strs )
     ( nurl_sym_set_deep syms `__owned_struct_fields__` save_structs )
     ( nurl_sym_set_deep syms `__user_drops__` save_user )
@@ -21162,6 +21213,10 @@ unsafe @ gen_match i lex i syms i cg → s {
         : s old_bc_user ( nurl_sym_get syms `__loop_snap_user__` )
         : s old_bc_slices ( nurl_sym_get syms `__loop_snap_slices__` )
         : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
+        : s old_bc_dd ( nurl_sym_get syms `__loop_snap_dd__` )
+        : i dd_lp ( nurl_sym_len g_fn_escapes `__deferred_drops__` )
+        : i dn_lp g_drain_n
+        ( nurl_sym_def syms `__loop_snap_dd__` ( nurl_str_cat3 ( nurl_str_int dd_lp ) ` ` ( nurl_str_int dn_lp ) ) )
         ( nurl_sym_def syms `__loop_exit__` le )
         ( nurl_sym_def syms `__loop_check__` lc )
         : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
@@ -21190,6 +21245,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
         ( nurl_sym_def syms `__loop_snap_slices__` old_bc_slices )
         ( nurl_sym_def syms `__loop_snap_cenv__` old_bc_cenv )
+        ( nurl_sym_def syms `__loop_snap_dd__` old_bc_dd )
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
@@ -21197,6 +21253,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( mem_drop_new_user_drops syms cg old_user_lp )
                 ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_lp ) } {} } {}
             ( mem_drop_new_closure_envs syms cg old_closure_lp )
+            ( mem_drain_deferred_since cg dd_lp dn_lp )
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
         ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}

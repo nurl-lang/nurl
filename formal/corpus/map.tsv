@@ -886,3 +886,6 @@ h922_drop_bound_param_lend_wrap	§7.6	A2	agora #200: `: D d \ ( getr h )  ^ @ !D
 h923_drop_bound_param_lend_bare	§7.6	A2	agora #200: `: !D E r ( getr h )  ^ r`, h a parameter: a lend of the caller's value, handed back as one	runs-clean
 h924_drop_bound_local_literal	§7.6	A2	agora #200: `: H h2 @ H { d }`, a literal this function keeps	rejected
 h925_drop_bound_field_store	§7.6	A2	agora #200: `= . h2 d d` into an `inout` struct	rejected
+h926_raw_slot_early_return_in_loop	§7.6	A2	agora #201: `~ < k n { ? == k 3 { ^ … } {}  ? ! ( part k ) { : s o … = acc o } {} … }`: o's slot, kept past its block, freed by the fall-off only — the early `^` of a later pass leaked it	runs-clean
+h927_raw_slot_early_return_in_foreach	§7.6	A2	agora #201: the same in a `~ k xs` loop	runs-clean
+h928_raw_slot_closure_early_return	§7.6	A2	agora #201: a closure body's early `^` after a `?` arm parked a raw string's slot: the drain at a closure's `^` was skipped	runs-clean
