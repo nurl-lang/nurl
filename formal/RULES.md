@@ -122,11 +122,12 @@ a rule made to reject more: every existing proof still holds) or
 | A `??` over a name that owns nothing — a `vec_get` element, an option element, a call lending a parameter's field — lends its arms the payload; a fresh `?E` from a call owns its enum (agora #208, h962–h968) | §7.6 | no: a match on a borrowed value lends the payload (`RhsT.getl`, `RhsT.getr`), and a fresh result is owned (`resMode`) | none to the proof: the compiler brought into line with A2's matches |
 | A `vec_get` element that cannot be copied, moved into a literal, is taken out of its slot, as for a consumer argument (agora #204, h957–h960) | §2.12, §7.6 | no: in the calculus an element leaves its `Vec` only by `RhsT.pop`; a `vec_get` element is lent (`RhsT.at`) | none to the proof: taking an element out of the middle of a `Vec` is the standard library's (B), as for a consumer argument |
 | Every function summary written inside a block survives the block — the inferred escape, the returned struct's owned fields, the builds-a-view flag, the parameters read as values; a name after `. obj` is a field when `obj` is a struct value, never a capture (agora #214, #125, h969) | §2.7, §2.11 | no: a summary is the function's (`FnOK`), and a closure captures the bindings its code is given (`RhsT.pack`, `CapsOK`): a field name is none of them | none to the proof: the summaries brought into line with `FnOK`, and the capture scan accepts more exactly where `CapsOK` already does |
+| A try whose error cannot be copied hands it to the caller as the caller's own only when the function owned it: the fail path stores the per-call ownership bit and records what the failure is part of (a call's lends, a binding, a parameter's field, a join), and a lend out of a local is refused (agora #205, old ids h970–h974) | §7.6 | no: a try is surface syntax for a match and an early return; per-call ownership is not in the calculus | outside the calculus, as #185; the refusal of a lend out of a local is an extension (safe code is rejected more) |
 
-### Audit of h426–h969 (agora #104, 2026-10-30)
+### Audit of h426–h974 (agora #104, 2026-10-30)
 
-The rows from agora #165 to #214 were written in one pass, against main
-`20b200d`. In every one of these changes the diff to `docs/MEMORY.md`
+The rows from agora #165 to #214 and #205 were written in one pass,
+against main `20b200d` and `10b54e3`. In every one of these changes the diff to `docs/MEMORY.md`
 only moved the probe ranges. No rule text changed: each change brought
 nurlc into line with a rule that already held, or fixed the lowering.
 Three findings matter to the proof:
@@ -141,8 +142,8 @@ Three findings matter to the proof:
   (`RhsT.at`, `StmtT.push`). The clones' bodies are part of the standard
   library's base (B). A value with no clone is refused, as A2 refuses
   returning or storing the lend.
-- **Per-call ownership is the open gap.** #184, #185, #186, #203 and
-  #206 answer at run time whether a result is owned. A2 does not
+- **Per-call ownership is the open gap.** #184, #185, #186, #203, #205
+  and #206 answer at run time whether a result is owned. A2 does not
   model that yet (`README.md`), so these shapes rest on the probes and
   ASan/LSan, not on the proof.
 
