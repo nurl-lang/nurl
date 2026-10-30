@@ -3,3 +3,5 @@ ERRORS
 compiler/tests/diag_nesting_limit.nu:106:35: error: nested deeper than 1000 levels (expressions, blocks and types inside one another). Split the code into functions or bind intermediate values, or raise the limit with --max-nesting=N or NURL_MAX_NESTING=N (0 turns it off); nesting much deeper can also need a larger stack (ulimit -s)
     + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
                                   ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

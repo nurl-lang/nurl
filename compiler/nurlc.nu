@@ -144,6 +144,9 @@
 // Who set g_max_nesting: 0 the default or the variable, 1 a flag, 2
 // --max-nesting-fixed (then nothing changes it).
 : ~ i g_max_nesting_set 0
+// 1 once a program passed the nesting limit: every parse_program walk
+// stops at the declaration it is in, without resyncing (__nest_die).
+: ~ i g_nest_abort 0
 
 // Diagnostic context suffix, appended to every die/warn message while
 // non-empty. Set (and saved/restored — instantiations nest) around a
@@ -5906,11 +5909,13 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ^ ( nurl_str_to_int v )
 }
 
-// Fatal, past any recovery frame: resyncing from thousands of levels deep
-// took longer than the nesting itself (quadratic in it) and only reported
-// the leftover tokens as more errors.
+// Ends the compile. The diagnostic unwinds like any other, so the
+// compilation is released on the way out; g_nest_abort then stops every
+// parse_program walk instead of resyncing. Resyncing from thousands of
+// levels deep took longer than the nesting itself (quadratic in it) and
+// only reported the leftover tokens as more errors.
 @ __nest_die i lex → v {
-    = g_diag_recover_active 0
+    = g_nest_abort 1
     : s lim ( nurl_str_int g_max_nesting )
     ? == g_max_nesting_set 2 {
         ( die lex ( nurl_str_cat3 `nested deeper than ` lim ` levels (expressions, blocks and types inside one another), the limit this build runs under; it cannot be raised here. Split the code into functions or bind intermediate values` ) )
@@ -64244,7 +64249,7 @@ unsafe @ __diag_recover ( @ v ) closure → i {
 }
 
 unsafe @ parse_program i lex i syms i cg → v {
-    ~ & != ( nurl_lex_type lex ) TT_EOF < g_err_count NURLC_MAX_ERRORS {
+    ~ & & != ( nurl_lex_type lex ) TT_EOF < g_err_count NURLC_MAX_ERRORS == g_nest_abort 0 {
         // Each top-level declaration compiles under a recovery frame so a
         // diagnostic (die → __nurlc_diag__ panic) skips just that decl and
         // the walk continues — one run reports many errors. Nested calls
@@ -64284,7 +64289,9 @@ unsafe @ parse_program i lex i syms i cg → v {
                 ~ > ( nurl_peek # s syms 1 ) 0 { ( nurl_sym_pop syms ) }
                 ( nurl_print_buf_unwind )
                 ( nurl_print_buf_start )
-                ( __diag_resync lex )
+                // Past the nesting limit the walk ends here (the loop
+                // tests g_nest_abort): nothing to resync to.
+                ? == g_nest_abort 0 { ( __diag_resync lex ) } {}
             }
             { ? > g_err_count 0
                 {  // The compiler lost its footing in state a half-parsed
