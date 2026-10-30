@@ -272,7 +272,7 @@ $ `stdlib/core/slice.nu`
 // with --data-binary. `max_secs` caps the whole exchange. Returns the parsed
 // HttpcResp or a transport error.
 @ __httpc_exec s method s url s reqfile s headers_blob → !HttpcResp HttpcErr {
-    ^ ( __httpc_exec_t method url reqfile headers_blob ( httpc_default_max_time ) )
+    ^ ( __httpc_exec_t method url reqfile headers_blob ( httpc_default_max_time ) 0 )
 }
 
 // Is `url` an http:// or https:// URL (scheme case-insensitive)? Anything
@@ -295,7 +295,10 @@ $ `stdlib/core/slice.nu`
     ^ & & == ( nurl_str_at url n k ) 58 == ( nurl_str_at url n + k 1 ) 47 == ( nurl_str_at url n + k 2 ) 47
 }
 
-@ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs → !HttpcResp HttpcErr {
+// `max_bytes` > 0 caps the response body: curl stops past it
+// (--max-filesize, exit 63), and a body that still arrives larger is
+// refused before it is read into memory (agora #163). 0 = no cap.
+@ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs i max_bytes → !HttpcResp HttpcErr {
     ? ! ( httpc_url_is_http url ) { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther } } {}
     : String tdir ( __httpc_tmpdir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
@@ -325,6 +328,12 @@ $ `stdlib/core/slice.nu`
             // once the transfer has moved < 1 byte/s for 30 s — a genuinely
             // slow upload keeps its full --max-time, a dead one gives up in
             // half a minute. curl reports this as exit 28, same as a timeout.
+            : String mfs ( string_from ( nurl_str_int max_bytes ) )
+            ? > max_bytes 0 {
+                ( vec_push [s] a `--max-filesize` )
+                ( vec_push [s] a ( string_data mfs ) )
+            } {}
+            ( vec_push [String] hold mfs )
             ( vec_push [s] a `--speed-limit` )
             ( vec_push [s] a `1` )
             ( vec_push [s] a `--speed-time` )
@@ -375,6 +384,15 @@ $ `stdlib/core/slice.nu`
                 ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
             } {}
 
+            // (A body past the cap curl could not see coming — no length
+            // up front — is not read at all.)
+            ? > max_bytes 0 {
+                : i fsz ?? ( file_size ( string_data respfile ) ) { T z → z F _ → -1 }
+                ? | < fsz 0 > fsz max_bytes {
+                    ( unlink ( string_data respfile ) )
+                    ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
+                } {}
+            } {}
             // Read the captured body, append a NUL for httpc_body_str.
             : ~ ( Vec u ) body ( vec_new [u] )
             : ~ i blen 0
@@ -423,6 +441,13 @@ $ `stdlib/core/slice.nu`
     ^ ( __httpc_exec `GET` url `` `` )
 }
 
+// GET with the response body capped at `max_bytes` (> 0): a larger one is
+// HttpcOther, and never held in memory whole — a download from a server
+// the caller does not control (a registry's tarball, agora #163).
+@ httpc_get_max s url i max_bytes → !HttpcResp HttpcErr {
+    ^ ( __httpc_exec_t `GET` url `` `` ( httpc_default_max_time ) max_bytes )
+}
+
 @ httpc_request s method s url s body s headers_blob → !HttpcResp HttpcErr {
     ^ ( httpc_request_timeout method url body headers_blob ( httpc_default_max_time ) )
 }
@@ -432,7 +457,7 @@ $ `stdlib/core/slice.nu`
 // is long enough that a hung peer looks like a hang of your own program.
 @ httpc_request_timeout s method s url s body s headers_blob i max_secs → !HttpcResp HttpcErr {
     ? == ( nurl_str_len body ) 0 {
-        ^ ( __httpc_exec_t method url `` headers_blob max_secs )
+        ^ ( __httpc_exec_t method url `` headers_blob max_secs 0 )
     } {}
     // Non-empty text body: stage it through a temp file so the byte path
     // and the text path are identical on the wire.
@@ -450,7 +475,7 @@ $ `stdlib/core/slice.nu`
                 ( unlink ( string_data bodyfile ) )
                 ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
             } {}
-            : !HttpcResp HttpcErr res ( __httpc_exec_t method url ( string_data bodyfile ) headers_blob max_secs )
+            : !HttpcResp HttpcErr res ( __httpc_exec_t method url ( string_data bodyfile ) headers_blob max_secs 0 )
             ( unlink ( string_data bodyfile ) )
             ^ res
         }

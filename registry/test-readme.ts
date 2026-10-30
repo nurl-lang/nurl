@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
-import { findReadmeInTar, normalizeRelPath, listTarFiles, listTarSrcModules, readmeFirstParagraph } from "./src/readme.ts";
+import { findReadmeInTar, normalizeRelPath, listTarFiles, listTarSrcModules, readmeFirstParagraph, gunzipBounded, countTarEntries, ArchiveTooLarge, MAX_UNPACKED_BYTES } from "./src/readme.ts";
 import { renderNurldoc, extractSymbols, symbolsIndex } from "./src/nurldoc.ts";
 
 let pass = 0, fail = 0;
@@ -220,6 +220,40 @@ const NUDOC = `// demo.nu — the fixture module.
   ok(idx.includes("demo_hello") && idx.includes("Point"), "symbolsIndex joins the module symbols");
   // a caller searching a symbol substring finds it
   ok(idx.toLowerCase().includes("hello"), "symbol index is substring-searchable");
+}
+
+// ── bounded gunzip (agora #163) ────────────────────────────────────────
+// A bomb — one member of 70 MiB of zeros, ~70 KiB compressed — stops at the
+// cap; a small archive passes; tar members count. One member, because whether
+// DecompressionStream reads past the first member differs between Node
+// releases; the cap holds either way.
+{
+  const bomb = gzipSync(Buffer.alloc(70 * 1024 * 1024));
+  ok(bomb.length < 1024 * 1024, "bomb is small compressed");
+  let refused = false;
+  try {
+    await gunzipBounded(new Response(bomb).body!);
+  } catch (e) {
+    refused = e instanceof ArchiveTooLarge;
+  }
+  ok(refused, `a gzip bomb is refused at ${MAX_UNPACKED_BYTES} bytes`);
+  let refusedSmallCap = false;
+  try {
+    await gunzipBounded(new Response(gzipSync(Buffer.alloc(5000))).body!, 4096);
+  } catch (e) {
+    refusedSmallCap = e instanceof ArchiveTooLarge;
+  }
+  ok(refusedSmallCap, "a cap below the expansion refuses");
+  const small = await gunzipBounded(new Response(gzipSync(Buffer.from("hello"))).body!);
+  ok(new TextDecoder().decode(small) === "hello", "a small archive gunzips intact");
+  // A two-member tar image: two 512-byte headers (one file of 3 bytes).
+  const tar = new Uint8Array(512 * 4);
+  tar.set(new TextEncoder().encode("a.txt"), 0);
+  tar.set(new TextEncoder().encode("00000000003"), 124);
+  tar.set(new TextEncoder().encode("abc"), 512);
+  tar.set(new TextEncoder().encode("b.txt"), 1024);
+  tar.set(new TextEncoder().encode("00000000000"), 1024 + 124);
+  ok(countTarEntries(tar) === 2, `countTarEntries counts members (got ${countTarEntries(tar)})`);
 }
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);
