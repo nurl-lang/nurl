@@ -24970,6 +24970,27 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
 }
 
+// The arguments of the call just made (a value block's tail call) that
+// are bindings made below scope depth `td`, or (`rmin` ≥ 0) bound at
+// register `%r<rmin>` or later — while the value was being computed —
+// `-` for every other position; `` when the call lends nothing or no
+// argument is such a binding.
+@ mem_blk_tail_deeper_args i syms i td i rmin → s {
+    ? == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_lend_key__` ) ) { ^ `` } {}
+    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s deeper ``
+    : ~ b any F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ap ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
+        : b dp & != 0 ( nurl_str_len ap ) | > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td
+        & & >= rmin 0 != 0 ( nurl_str_starts ap `%r` ) >= ( nurl_str_to_int ( nurl_str_slice ap 2 ( nurl_str_len ap ) ) ) rmin
+        ? dp { = any T } {}
+        = deeper ? == 0 ( nurl_str_len deeper ) ( nurl_str_cat ? dp nm `-` `` ) ( nurl_str_cat3 deeper ` ` ? dp nm `-` )
+    }
+    ^ ? any deeper ``
+}
+
 // The value of a value block (`= out { : W w … ( gets w ) }`) just stored
 // into `ptr`, a binding of an outer scope, when the block's tail call may
 // lend it out of a binding made below that one — the block's own locals
@@ -24977,23 +24998,11 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // copied in place on those paths, and the binding owns it there. The walk
 // takes such a value for what the block's names held (h216); this makes
 // it so (agora #190). One that cannot be copied is refused.
-@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up → v {
+@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up i rmin → v {
     ? == 0 ( nurl_str_len up ) { ^ v } {}
-    : i td ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) )
-    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
-    ? == 0 ( nurl_str_len key ) { ^ v } {}
-    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
-    : ~ s deeper ``
-    : ~ b any F
-    ~ != 0 ( nurl_str_len rest ) {
-        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s ap ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
-        : b dp & != 0 ( nurl_str_len ap ) > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td
-        ? dp { = any T } {}
-        = deeper ? == 0 ( nurl_str_len deeper ) ( nurl_str_cat ? dp nm `-` `` ) ( nurl_str_cat3 deeper ` ` ? dp nm `-` )
-    }
-    ? ! any { ^ v } {}
-    : s lp ( mem_local_lend_of syms cg key deeper )
+    : s deeper ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) rmin )
+    ? == 0 ( nurl_str_len deeper ) { ^ v } {}
+    : s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
     ? == 0 ( nurl_str_len lp ) { ^ v } {}
     ? ! ( __clone_supported ty syms ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty ) ^ v } {}
     : s lt ( nurl_llty ty )
@@ -33629,6 +33638,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
         = g_open_bind_line __ob_line
         = g_open_bind_col __ob_col
+        // (The first register the right-hand side takes: a value block's
+        // own locals are bound from here on — agora #193.)
+        : i __rhs_r0 ( nurl_peek # s cg 0 )
         : ~ s val ( gen_expr lex syms cg )
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
@@ -33854,7 +33866,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // the RHS is a borrow (vec_get / a ret_borrow accessor) — dropping
         // it would double-free the container that still owns the value. The
         // binding inherits `__borrow` so it propagates further.
-        ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow )
+        // A value block whose tail call lends one of the block's own locals
+        // (`: String r { : W w ( mkw ) ( gets w ) }`): those live only to the
+        // end of this scope, while the walk takes the value for what they
+        // held (h216) and lets it outlive them. It is copied in place below
+        // and this binding owns it, so it is no borrow (agora #193).
+        : ~ b __blk_lend F
+        ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
+        ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
             { : s rvt ( __udrop_regty vt )
@@ -33866,6 +33885,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_vget_binding syms name bck_rhs_tt )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt bck_rhs_tt bck_rhs_val rhs_borrow )
+                    ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
                     ( mem_journal_push_userdrop syms cg ptr rvt ) }
                 {}
             }
@@ -33983,6 +34003,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
+            : i __rhs_r0 ( nurl_peek # s cg 0 )
             : ~ s val ( gen_expr lex syms cg )
             // (A try over a call binds the call's payload: what follows asks the
             // call, as mem_udrop_bind_flag does — agora #194.)
@@ -34205,7 +34226,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // Phase 2D: User Drop trait. Skip a COMPILER-auto Drop when
             // the RHS is a borrow (would double-free the owner); mark the
             // binding `__borrow` so it propagates.
-            ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow )
+            // A value block whose tail call lends one of the block's own locals
+            // (`: String r { : W w ( mkw ) ( gets w ) }`): those live only to the
+            // end of this scope, while the walk takes the value for what they
+            // held (h216) and lets it outlive them. It is copied in place below
+            // and this binding owns it, so it is no borrow (agora #193).
+            : ~ b __blk_lend F
+            ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
+            ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
             { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
             { ? != 0 g_auto_drop_strings
                 { : s rpt ( __udrop_regty ptype )
@@ -34216,6 +34244,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { = g_udrop_noinit 1
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt bck_rhs_tt bck_rhs_val rhs_borrow )
+                        ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
                         ( mem_journal_push_userdrop syms cg ptr rpt ) }
                     {}
                 }
@@ -35170,7 +35199,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         }
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
-        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr ) } {}
+        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
@@ -63639,6 +63668,8 @@ unsafe @ priv_resolve i lex i syms s fname → s {
 & `c` @ nurl_recover_lean *u fnp *u env → i
 
 & `c` @ nurl_print_buf_unwind → v
+// (fflush(NULL): every stream — stdout's FILE is not nameable here.)
+& `c` @ fflush *u h → i32
 
 // strdup on the runtime's small-allocation cache, declared the same way
 // and for the same reason: the bootstrap compiler predates the symbol.
@@ -63836,6 +63867,8 @@ unsafe @ llvm_linkage_init → v {
 : ~ i g_split_max 0  // --split=N, the CEILING on the part count
 : ~ i g_split_min 131072  // --split-min=, the floor on a part's size
 : ~ s g_split_out ``  // --split-out= path prefix
+: ~ s g_split_name ``  // the part being written (for a write error)
+: ~ b g_split_werr F  // a write to it fell short
 : ~ i g_split_part 0  // i64[n]: which part each function went to
 : ~ i g_split_fill 0  // i64[parts]: bytes assigned to each part so far
 : ~ i g_split_priv 0  // symtab: private global name → the part that owns it
@@ -66156,11 +66189,15 @@ unsafe @ dce_free → v {
 unsafe @ __sp_write i from i to → v {
     ? >= from to { ^ v } {}
     : *u mp # *u # s g_dce_mod
-    : i _ ( fwrite # s + # i mp from 1 - to from # s g_split_fh )
+    : i wrote ( fwrite # s + # i mp from 1 - to from # s g_split_fh )
+    ? != wrote - to from { = g_split_werr T } {}
 }
 
 // Write a literal to the part being built.
-unsafe @ __sp_puts s t → v { : i32 _ ( fputs t # s g_split_fh ) }
+unsafe @ __sp_puts s t → v {
+    : i32 r ( fputs t # s g_split_fh )
+    ? < r # i32 0 { = g_split_werr T } {}
+}
 
 // Index of the newline ending the line that starts at `p`, or `lim`.
 unsafe @ __sp_line_end i p i lim → i {
@@ -66422,11 +66459,21 @@ unsafe @ __sp_open i k → v {
     { ( nurl_eprintln ( nurl_str_cat `nurlc: cannot write ` nm ) ) ( nurl_exit 1 ) }
     {}
     = g_split_fh # i fh
+    = g_split_name ( nurl_str_cat nm `` )
+    = g_split_werr F
 }
 
+// A part whose bytes did not all reach the file (a full disk, a quota) is
+// an error, never a short part: a truncated part can still be a valid
+// module — an empty one is — and the build then failed only at link
+// time, naming whatever symbol the lost text defined (agora #101).
 unsafe @ __sp_close → v {
-    : i32 _ ( fclose # s g_split_fh )
+    : i32 closed ( fclose # s g_split_fh )
     = g_split_fh 0
+    ? | g_split_werr != closed # i32 0 {
+        ( nurl_eprintln ( nurl_str_cat3 `nurlc: cannot write ` g_split_name ` — the write failed (is the disk full?)` ) )
+        ( nurl_exit 1 )
+    } {}
 }
 
 // A module with no function bodies at all: nothing to partition, so
@@ -67277,6 +67324,14 @@ unsafe @ main → i {
             ( dbg_fix_module_locations __out )
         } {}
     }
+    // Everything written to stdout reached it, or the module on disk is
+    // short (a full disk under `> out.ll`): a truncated module can still
+    // parse, and the build then failed only at link time, naming a symbol
+    // the lost text defined (agora #101).
+    ? & == compile_error 0 != ( fflush # *u 0 ) # i32 0 {
+        ( nurl_eprintln `nurlc: cannot write the output — the write failed (is the disk full?)` )
+        = compile_error 2
+    } {}
     // Exit-time release. The compilation owns every symbol table it made
     // (nurl_sym_new links each into g_live_symtables), so the sweep below
     // releases the global tables, `syms` and any a diagnostic abandoned —

@@ -222,6 +222,25 @@ else
     fails=$((fails + 1))
 fi
 
+# A part, or the one module on stdout, that does not fully reach the disk
+# fails the compile (agora #101). Unchecked, a full disk left a short part
+# that still compiled — an empty one is a valid module — and the build
+# failed only at link time, naming a symbol the lost text defined. With
+# every file capped at 8 KiB (SIGXFSZ ignored, so the write just fails),
+# both legs must exit nonzero.
+if ( trap '' XFSZ; ulimit -f 8
+     "$NURLC" "--split=$PARTS" "--split-out=$WORK/short" --split-min=1 \
+         compiler/tests/simd_dispatch.nu > /dev/null 2>"$WORK/short.err" ); then
+    echo "FAIL a split part that could not be written did not fail the compile"
+    fails=$((fails + 1))
+elif ( trap '' XFSZ; ulimit -f 8
+     "$NURLC" compiler/tests/simd_dispatch.nu > "$WORK/short.ll" 2>"$WORK/short.err" ); then
+    echo "FAIL a module that could not be written did not fail the compile"
+    fails=$((fails + 1))
+else
+    echo "ok   a write that falls short fails the compile (split and stdout)"
+fi
+
 if (( fails )); then
     echo "FAIL split_equivalence — $fails failure(s)"
     exit 1

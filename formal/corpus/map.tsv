@@ -830,6 +830,11 @@ h871_drop_inout_assign_local_field	§7.6	A2	agora #196: the same with a `% Drop`
 h872_defer_releases_block_returned	§7.6	A2	agora #197: `; { ( keep l ) }  ^ { : i z 1 l }`: the defer hands `l` to a `sink` after the block returned it	rejected
 h873_defer_releases_fall_off_block	§7.6	A2	agora #197: the same with the block as the function's fall-off value	rejected
 h874_defer_reads_block_returned	§7.6	A2	agora #197: a defer that only reads the local the block hands back: allowed	runs-clean
+h875_loop_let_block_call_lend	§7.6	A2	agora #193: `: String r { : W w ( mkw ) ( gets w ) }` then `= out r` in a loop: the block's local dies with the loop body, `out` outlives it	runs-clean
+h876_arm_let_block_call_lend	§7.6	A2	agora #193: the same binding and assignment inside a `?` arm	runs-clean
+h877_loop_let_inferred_block_call_lend	§7.6	A2	agora #193: the same with the binding's type inferred	runs-clean
+h878_ret_let_block_call_lend	§7.6	A2	agora #193: the bound block value returned out of the frame that drops the block's local	runs-clean
+h879_let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean
 h880_try_join_arm_wrap_payload	§7.6	A2	agora #198: `^ @ !String E { T ? c \ ( getr w ) ( string_from … ) }`: a try over a call lending the local `w`, as a join arm in a returned payload	runs-clean
 h881_result_call_join_arm_returned	§7.6	A2	agora #198: `^ ? c ( getr w ) ( okf )`: an arm's call whose result lends part of the local `w`	runs-clean
 h882_result_call_match_arm_returned	§7.6	A2	agora #198: the same through a returned `??` arm	runs-clean
