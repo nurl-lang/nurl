@@ -928,3 +928,4 @@ h957_vget_payload_rewrapped_param_vec	§7.6	A2	agora #204: a `vec_get` payload m
 h958_vget_payload_rewrapped_local_vec	§7.6	A2	the same out of a local Vec, dropped on the way out	runs-clean
 h959_vget_payload_in_local_struct	§7.6	A2	a `vec_get` payload moved into a local struct: the struct and the Vec both dropped it	runs-clean
 h960_vget_payload_in_struct_param_vec	§7.6	A2	the same out of a parameter's Vec	runs-clean
+h969_escape_inside_block_detached	§2.7	A2	agora #214: an escape recorded inside a block was popped with it: a by-pointer closure ran on a detached thread after its frame	rejected

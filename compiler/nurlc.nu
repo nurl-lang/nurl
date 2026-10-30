@@ -1666,6 +1666,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // (gen_let_or_struct → gen_block_expr, consumed at the block's `{`).
 : ~ i g_blk_scalar_let 0
 : ~ s g_clo_scan_assigned ``
+// The closure body's own bindings of a plain struct type, as the capture
+// scan meets them: a name after `. <one of them>` is a field (agora #125).
+: ~ s g_clo_scan_structs ``
 // …and, for one that a thread or a fiber will run, the captures it takes
 // over from bindings the function no longer uses (gen_closure_expr).
 : ~ s g_env_moved ``
@@ -15272,7 +15275,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         ? & & ( is_ident_tok bck_arg_tt )
         ( nurl_sym_has_word g_fn_invoke_only call_name ( nurl_str_int arg_idx ) )
         >= ( nurl_sym_word_index syms `__fn_param_names__` bck_arg_val ) 0
-        { ( nurl_sym_def syms `__fn_param_valueread__` __io_vr0 ) }
+        { ( nurl_sym_set_deep syms `__fn_param_valueread__` __io_vr0 ) }
         {}
         // A closure-returning call as the argument hands over the owner it
         // published (mem_retclo_take) — the same reclamation a literal gets.
@@ -22651,7 +22654,7 @@ unsafe @ mem_path_to_indices s path → s {
     : s rid_ptr ( nurl_sym_get2 syms ret_ident `__ptr` )
     : s from_binding ( mem_collect_struct_fields_for syms rid_ptr )
     ? != 0 ( nurl_str_len from_binding )
-    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_binding )
+    { ( nurl_sym_set_deep syms `__fn_ret_struct_owned__` from_binding )
         ^ ( nurl_str_cat rid_ptr `` ) }
     {}
     // Non-binding shapes: a direct `@ T {…}` (gen_agg_lit set
@@ -22659,12 +22662,12 @@ unsafe @ mem_path_to_indices s path → s {
     // (gen_call set `__last_call_ret_struct_fields__`).
     : s from_agg ( nurl_sym_get syms `__last_agg_owned_fields__` )
     ? != 0 ( nurl_str_len from_agg )
-    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_agg )
+    { ( nurl_sym_set_deep syms `__fn_ret_struct_owned__` from_agg )
         ^ ( nurl_str_cat `` `` ) }
     {}
     : s from_call ( nurl_sym_get syms `__last_call_ret_struct_fields__` )
     ? != 0 ( nurl_str_len from_call )
-    { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_call ) }
+    { ( nurl_sym_set_deep syms `__fn_ret_struct_owned__` from_call ) }
     {}
     ^ ( nurl_str_cat `` `` )
 }
@@ -38952,7 +38955,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         & > ( nurl_str_len fty ) 0
         == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
         == 0 ( nurl_sym_len syms `__agg_arg_call__` )
-        { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_builds_view__` `1` ) }
         {}
         // …or a global cast back to a pointer: `@ ( Vec u32 ) { # s g_tbl }`
         // hands out a view of a table the program keeps for its lifetime.
@@ -38962,7 +38965,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ? & & == fld_first_tt TT_HASH
         != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_ident_name__` ) `__global` )
         & > ( nurl_str_len fty ) 0 == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
-        { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
+        { ( nurl_sym_set_deep syms `__fn_builds_view__` `1` ) }
         {}
         // Struct-literal field checks. PLAIN structs only — enum / option /
         // result variant literals reach here too but use the enum_paycount
@@ -43728,14 +43731,21 @@ unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
 // type). Consumes the type and leaves the lexer on the first token that can
 // read a binding: 1, or 2 when that is inside a slice literal's `[`;
 // 0 (nothing consumed) for any other token. prev1 / prev2 are the two
-// tokens before this one.
-@ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → i {
+// tokens before this one. (`unsafe`: it extends g_clo_scan_structs, the
+// scan's own list, which only simple_capture_analysis reads.)
+unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → i {
     ? & == tt TT_COLON == ( __clo_ctx_top ctx ) 123 {
         ( nurl_lex_advance lex )
         ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+        // (A binding of a plain struct type: what `. name f` reads is a
+        // field, g_clo_scan_structs.)
+        : b __sct & == ( nurl_lex_type lex ) TT_IDENT != 0 ( nurl_sym_len2 outer_syms ( nurl_lex_val lex ) `__field_count` )
         // `: name value` is the inferred form; anything else opens a type.
         ? ! & == ( nurl_lex_type lex ) TT_IDENT ! ( __names_type outer_syms ( nurl_lex_val lex ) ) { ( skip_one_type lex ) } {}
-        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) {
+            ? __sct { = g_clo_scan_structs ( nurl_str_cat3 g_clo_scan_structs ` ` ( nurl_lex_val lex ) ) } {}
+            ( nurl_lex_advance lex )
+        } {}
         ^ 1
     } {}
     ? | | == tt TT_HASH == tt TT_SIZEOF == tt TT_AT {
@@ -43766,6 +43776,18 @@ unsafe @ __clo_scan_inout_call i lex i outer_syms s closure_params → s {
     ^ 0
 }
 
+// Is `obj` a struct value, so that the name after `. obj` is one of its
+// fields? A binding of a plain struct type the closure body made itself
+// (g_clo_scan_structs), or an outer one whose type is a struct and not a
+// pointer to one — `. p k` through a pointer indexes it by the value `k`.
+@ __clo_scan_struct_obj i outer_syms s obj → b {
+    ? ( str_contains_word g_clo_scan_structs obj ) { ^ T } {}
+    : s ty ( nurl_sym_get outer_syms obj )
+    : i n ( nurl_str_len ty )
+    ? | < n 2 | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 outer_syms ( nurl_str_slice ty 1 - n 1 ) `__field_count` )
+}
+
 unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
     // (The outer locals the body assigns: g_clo_scan_assigned.)
@@ -43783,9 +43805,14 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s ctx ( nurl_str_cat `{` `` )
     : ~ i prev1 TT_LBRACE
     : ~ i prev2 TT_EOF
+    // (The name the token before this one spelled, when it was a name.)
+    : ~ s prev1_name ``
+    : ~ s cur_name ``
+    = g_clo_scan_structs ( nurl_str_cat `` `` )
     : ~ b held F
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
+        = cur_name ? | == tt TT_IDENT == tt TT_TYPE_KW ( nurl_lex_val lex ) ``
         = held F
 
         // Unbalanced braces used to spin this loop at EOF forever — the
@@ -43867,8 +43894,11 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     ? | == tt TT_IDENT == tt TT_TYPE_KW
                     {
                         : s var_name ( nurl_lex_val lex )
-                        // Skip closure parameters
-                        : b is_clo_param ( str_contains closure_params var_name )
+                        // Skip closure parameters, and a field name: `. j fo`
+                        // over a struct j reads j's field `fo`, not a binding
+                        // fo (agora #125).
+                        : b is_clo_param | ( str_contains closure_params var_name )
+                        & & == prev2 TT_DOT == prev1 TT_IDENT ( __clo_scan_struct_obj outer_syms prev1_name )
                         ? ! is_clo_param
                         {
                             // Capture locals (have __ptr) and outer fn params (have __param)
@@ -43899,6 +43929,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         { ? ! held { ( nurl_lex_advance lex ) } {} }
         = prev2 prev1
         = prev1 tt
+        = prev1_name cur_name
     }
     // Lexer is now positioned after closing brace
     = g_clo_scan_assigned assigned
@@ -44421,7 +44452,7 @@ unsafe @ str_word_index s list s word → i {
     ? == 0 ( nurl_str_len name ) { ^ v } {}
     : s cur ( nurl_sym_get syms `__fn_param_valueread__` )
     ? ( str_contains_word cur name ) {} {
-        ( nurl_sym_def syms `__fn_param_valueread__`
+        ( nurl_sym_set_deep syms `__fn_param_valueread__`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
@@ -44545,7 +44576,7 @@ unsafe @ str_word_index s list s word → i {
     { : s cur ( nurl_sym_get syms `__fn_inferred_escape__` )
         : s new ( nurl_str_int idx )
         ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_inferred_escape__`
+        { ( nurl_sym_set_deep syms `__fn_inferred_escape__`
             ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
