@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string from a local
+a string from a nested block
+a string the caller owns
+a raw view of a local
+a string from a closure's block

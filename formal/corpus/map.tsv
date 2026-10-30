@@ -773,3 +773,16 @@ h813_closure_drop_local_join_returned	§7.6	A2	agora #186: a closure handing bac
 h814_closure_drop_local_join_fall_off	§7.6	A2	agora #186: the same as the closure's fall-off value: the local would be lent past the body, and cannot be copied	rejected
 h852_str_join_local_defer_releases	§7.6	A2	agora #186: `^ ? c l ( mk )` with a `;` defer handing `l` to a `sink`: the local is copied, not moved out from under the defer	runs-clean
 h853_drop_join_local_defer_releases	§7.6	A2	agora #186: the same with a `% Drop` local: it cannot be copied	rejected
+h815_drop_vec_get_local_returned	§7.6	A2	agora #187: `^ ( vec_get [D] v 0 )`, `v` a local Vec of a `% Drop` value: the element dies with `v`	rejected
+h816_drop_vec_get_local_match	§7.6	A2	agora #187: the same element handed out of a returned `??` over the call	rejected
+h817_drop_vec_get_local_join	§7.6	A2	agora #187: the same call as an arm of a returned `?`	rejected
+h818_drop_field_getter_local	§7.6	A2	agora #187: `^ ( getd w )`, a getter lending a `% Drop` field of the local `w`	rejected
+h819_drop_field_getter_fall_off	§7.6	A2	agora #187: the same call as the function's fall-off value	rejected
+h820_drop_field_getter_sink	§7.6	A2	agora #187: the same over a `sink` parameter, which the function drops too	rejected
+h821_drop_field_getter_param	§7.6	A2	agora #187: the same over a borrowed parameter: a lend of the caller's own, still answered as a lend	runs-clean
+h822_drop_block_tail_getter	§7.6	A2	agora #187: `^ { : W w … ( getd w ) }`: a block whose tail call lends its own local	rejected
+h823_str_block_tail_getter	§7.6	A2	agora #187: the same with a String: the call's lend was handed back uncopied	runs-clean
+h824_str_block_tail_param	§7.6	A2	agora #187: a block whose tail call lends a parameter: still a lend, no copy	runs-clean
+h825_str_nested_block_tail_getter	§7.6	A2	agora #187: the String case through a nested block	runs-clean
+h826_raw_view_block_tail	§7.6	A2	agora #187: `^ { : String x … ( string_data x ) }`: a raw view of a block's own String	runs-clean
+h827_closure_block_tail_getter	§7.6	A2	agora #187: a closure's `^ { : W w … ( gets w ) }`	runs-clean

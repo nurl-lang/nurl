@@ -115,6 +115,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A call that lends a value out of a local is not handed back as is**
+  (Agora #187, h815–h827). Two cases returned memory that was then freed:
+  - A value that cannot be copied (a `% Drop` struct, or an option of
+    one), from a call that lends it out of a local, a `sink` parameter or
+    a Vec of them: `^ ( vec_get [D] v 0 )`, `^ ( getd w )`, the same
+    through a `?` / `??` or as the fall-off value. Nothing could stand in
+    for the lend, and the caller read freed memory. It is now refused once
+    the callee's summary is final, with the cure: take the value out of
+    its owner (`vec_remove`, `vec_pop`), or hand back the owner.
+  - `^ { : W w … ( gets w ) }`, a block whose tail call lends the block's
+    own local, also nested and in a closure, and a raw view of one. The
+    call's lend was handed back uncopied, for any type. Such a block now
+    returns as `^ ( gets w )` does: the lend is copied, and a string the
+    call hands over is the caller's.
 - **A `% Drop` value handed back through a `?` / `??` is dropped exactly
   once** (Agora #186, h792–h814). Several cases went wrong for a value
   that cannot be copied (a `% Drop` struct with no Clone, or an option of
