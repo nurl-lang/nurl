@@ -1812,6 +1812,14 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     ^ 0
 }
 
+// The kernel aes_gcm_key_new's keys run on this CPU, by name: `vaes512`,
+// `vaes`, `aesni` or `software` — the tier above, after any NURL_CPU_*=0
+// masking. For reports and diagnostics (bench/tls_bench records it).
+@ aes_gcm_cpu_tier → s {
+    : i t ( __aes_cpu_tier )
+    ^ ? == t 3 `vaes512` ? == t 2 `vaes` ? == t 1 `aesni` `software`
+}
+
 // The key aes_gcm_key_new builds on a CPU whose best crypto tier is
 // `tier` (0 software, 1 AES-NI, 2 VAES, 3 AVX-512 VAES) — or on this
 // one, where it has less. aes_gcm_key_new asks for the best; the tests

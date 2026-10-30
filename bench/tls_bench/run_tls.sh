@@ -34,20 +34,28 @@
 # every saturation cell also records the server's CPU utilisation, and
 # the report flags any cell where the server was not the bottleneck.
 #
-# Writes bench/tls_bench/TLS_RESULTS.md — fully generated, overwritten
-# every run (the same contract as bench/PQ_RESULTS.md / run_pq.sh).
+# Writes this run's report to $MD_OUT (default: the scratch directory).
+# With STORE=1 (the tls-bench workflow) the run also becomes its CPU
+# family's latest — bench/tls_bench/runs/<family>.tsv — and the committed
+# reports are re-rendered: TLS_RESULTS.<family>.md per family and the
+# index TLS_RESULTS.md. The family comes from the CPU's vendor and flags
+# (gen_tls_results.py), because the runner pool's families disagree about
+# the ratios (Agora #112); a workstation run is posted in its PR, not
+# committed.
 #
 # Usage:
 #   bench/tls_bench/run_tls.sh                    # smoke (~3 min, checks the pipeline)
 #   MODE=full bench/tls_bench/run_tls.sh          # the real run (~10 min of measurement)
 #   DIMS="handshake bulk" MODE=full bench/tls_bench/run_tls.sh
+#   STORE=1 MODE=full bench/tls_bench/run_tls.sh  # and record it for its CPU family
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TB="$ROOT/bench/tls_bench"
 SCRATCH="${SCRATCH:-$(mktemp -d "${TMPDIR:-/tmp}/tls-bench.XXXXXX")}"
 mkdir -p "$SCRATCH" "$ROOT/bench/_build"
-MD_OUT="${MD_OUT:-$TB/TLS_RESULTS.md}"
+MD_OUT="${MD_OUT:-$SCRATCH/TLS_RESULTS.md}"
+STORE="${STORE:-0}"
 
 MODE="${MODE:-smoke}"
 DIMS="${DIMS:-prims handshake latency records bulk client}"
@@ -102,6 +110,19 @@ certs() {
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$SCRATCH/rsa.key" 2>/dev/null
   openssl req -new -x509 -key "$SCRATCH/rsa.key" -out "$SCRATCH/rsa.crt" -days 3 -subj /CN=localhost 2>/dev/null
   [ -s "$SCRATCH/ec.crt" ] && [ -s "$SCRATCH/rsa.crt" ] || die "openssl could not make the test certificates"
+}
+
+# The crypto-relevant CPU flags present, in a fixed order: every flag a
+# NURL or aws-lc kernel is chosen by. x86 reports them in `flags`,
+# AArch64 in `Features`.
+cpu_flags() {
+  local have; have=" $(grep -m1 -E '^(flags|Features)' /proc/cpuinfo 2>/dev/null | sed 's/.*: //') "
+  local f out=""
+  for f in aes pclmulqdq avx avx2 bmi2 adx sha_ni vaes vpclmulqdq gfni avx512f avx512vl avx512bw avx512ifma avx512vbmi \
+           asimd pmull sha2 sha512 sve sve2; do
+    case "$have" in *" $f "*) out="$out $f";; esac
+  done
+  printf '%s' "${out# }"
 }
 
 # ── servers ─────────────────────────────────────────────────────────
@@ -250,6 +271,14 @@ main() {
     printf 'ENV\thost\t%s\n' "${BENCH_HOST_LABEL:-$(uname -s) $(uname -m)}"
     printf 'ENV\tkernel\t%s\n' "$(uname -srm)"
     printf 'ENV\tcpu\t%s\n' "$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | sed 's/.*: //')"
+    # What decides the CPU family and every kernel choice: the vendor and
+    # the crypto-relevant flags present (x86 `flags`, AArch64 `Features`),
+    # NURL's own CPU answers and per-primitive kernels (prims --tiers),
+    # and any masking of either side's CPUID.
+    printf 'ENV\tcpu_vendor\t%s\n' "$(grep -m1 -E '^(vendor_id|CPU implementer)' /proc/cpuinfo 2>/dev/null | sed 's/.*: //')"
+    printf 'ENV\tcpu_flags\t%s\n' "$(cpu_flags)"
+    printf 'ENV\tnurl_cpu_mask\t%s\n' "$(env | grep -E '^NURL_CPU_[A-Z0-9]+=' | sort | tr '\n' ' ' | sed 's/ $//' | grep . || echo none)"
+    printf 'ENV\topenssl_ia32cap\t%s\n' "${OPENSSL_ia32cap:-unset}"
     printf 'ENV\tcores\t%s\n' "$NCPU"
     printf 'ENV\tsrv_cores\t%s\n' "$SRV_CORES"
     printf 'ENV\tgen_cores\t%s\n' "$GEN_CORES"
@@ -264,6 +293,7 @@ main() {
       printf 'ENV\tcrate_%s\t%s\n' "$c" "$(grep -A1 "^name = \"$c\"$" "$TB/rust/Cargo.lock" 2>/dev/null | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
     done
   } >>"$RES"
+  "$NP" --tiers >>"$RES" || die "prims --tiers failed"
 
   case " $DIMS " in *" prims "*)     dim_prims;; esac
   case " $DIMS " in *" handshake "*) say "[handshake] saturation, $HS_CONNS conns, ${HS_SEC}s"; dim_handshake "$HS_CONNS" "$HS_SEC" handshake;; esac
@@ -274,5 +304,9 @@ main() {
 
   python3 "$TB/gen_tls_results.py" <"$RES" >"$MD_OUT" || die "report generation failed (raw results: $RES)"
   say ""; say "report -> $MD_OUT   (raw: $RES)"
+  if [ "$STORE" = 1 ]; then
+    local fam; fam="$(python3 "$TB/gen_tls_results.py" --store "$TB" <"$RES")" || die "recording the run failed (raw results: $RES)"
+    say "recorded for its CPU family -> $fam (index: $TB/TLS_RESULTS.md)"
+  fi
 }
 main

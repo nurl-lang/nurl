@@ -243,8 +243,9 @@ exactly that.
   rest), the record layer, bulk throughput and the client side, NURL
   against rustls / aws-lc-rs, hyper and reqwest — driven by
   [`tls_bench/run_tls.sh`](tls_bench/run_tls.sh); results in
-  [`tls_bench/TLS_RESULTS.md`](tls_bench/TLS_RESULTS.md), led by a
-  worst-first focus list. See [`tls_bench/README.md`](tls_bench/README.md).
+  [`tls_bench/TLS_RESULTS.md`](tls_bench/TLS_RESULTS.md) — an index of
+  one report per CPU family of the runner pool, each led by a worst-first
+  focus list. See [`tls_bench/README.md`](tls_bench/README.md).
 * `stdlib_hotpath.nu` is a NURL-only profiling probe with no peers.
 
 ## The wasm suite — `wasmbench.sh`

@@ -287,6 +287,11 @@ inline @ __nl_scatter v256 x v256 y i len * i16 p → v {
     }
 }
 
+// The clone ML-KEM's NTT, inverse NTT and base multiply run on this CPU,
+// by name: `avx2` (the x86-64-v3 clone of each `simd @` function) or
+// `baseline`. NURL_CPU_V3=0 masks the first. For reports and diagnostics.
+@ mlkem_cpu_tier → s { ^ ? != 0 # i ( nurl_cpu_x86_v3 ) `avx2` `baseline` }
+
 simd @ __ntt * i16 r i off * i16 zetas → v {
     : v256 qv ( nurl_v256_bcast16 3329 )
     : v256 qinv ( nurl_v256_bcast16 -3327 )
