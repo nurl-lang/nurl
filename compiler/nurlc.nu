@@ -36669,6 +36669,30 @@ unsafe @ __replaces_note i syms s name s field → v {
 // True iff an LLVM type string is a float type (`double` or f32 `float`).
 @ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
 
+// A value of LLVM type `vty` into a slot declared `dty` (a struct
+// literal's field, an enum variant's payload) where either side is an
+// anonymous aggregate — an option, a result, a slice, a closure — and the
+// other is not that exact shape. Two closures of different signatures
+// both lower to `{ ptr, ptr }` and ASSEMBLE, so every call through the
+// slot reinterpreted its arguments: a `(@ i s)` stored where `(@ i i)`
+// was declared read an int as a string pointer — a SEGV in safe code.
+// The option / result mismatches were invalid IR only clang rejected
+// (agora #129). The binding check's rule (csv_agg / csv_agg2 /
+// csv_agg_src), whitespace-blind. A declared side still in source
+// spelling (a generic's `?T`) is neither `{` nor a scalar, pointer or
+// named type, so it is left alone.
+unsafe @ __agg_shape_clash s vty s dty → b {
+    ? | == 0 ( nurl_str_len vty ) == 0 ( nurl_str_len dty ) { ^ F } {}
+    : s vs ( __strip_spaces vty )
+    : s ds ( __strip_spaces dty )
+    : b va == ( nurl_str_get vs 0 ) 123
+    : b da == ( nurl_str_get ds 0 ) 123
+    ? & va da { ^ ! ( seq vs ds ) } {}
+    ? va { ^ | | | > ( int_width dty ) 0 ( is_float_ty dty ) ( is_ptr_ty dty ) == ( nurl_str_get dty 0 ) 37 } {}
+    ? da { ^ | | | > ( int_width vty ) 0 ( is_float_ty vty ) ( is_ptr_ty vty ) == ( nurl_str_get vty 0 ) 37 } {}
+    ^ F
+}
+
 // A first-class LLVM integer scalar. i1 counts — that is the point: the
 // return-type width check exists mostly to catch b/i mixups.
 @ is_int_ty s ty → b {
@@ -38880,12 +38904,17 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                     { : s __slvn ( nurl_str_slice fty 1 - ( nurl_str_len fty ) 1 )
                         ? == 0 ( nurl_sym_len2 syms __slvn `__variants` ) { = __slag T } {} }
                     {}
-                    : s __slcure ? __slip
+                    // (g) an option, result, slice or closure on either
+                    // side and another shape on the other (__agg_shape_clash).
+                    : b __slshape ( __agg_shape_clash fty __sldft )
+                    : s __slcure ? __slshape
+                    `' — NURL has no implicit conversions between differently-shaped aggregates (options, results, slices, closures): give the field a value of exactly its declared shape, or destructure with '??' and store the payload`
+                    ? __slip
                     `' — NURL has no implicit integer-to-pointer conversion; give the field a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
                     ? __slag
                     `' — a struct value cannot be stored in a scalar field, and nothing converts it. If this literal is positional, check that its values line up with the struct's CURRENT field order — a field added in the middle shifts every later value one slot.`
                     `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'`
-                    ? | | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip __slag
+                    ? | | | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip __slag __slshape
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` ( llvm_to_nurl __sldft ) `' but the value has type '` ( llvm_to_nurl fty ) )
@@ -39429,6 +39458,24 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                         ( nurl_str_cat3 enum_vname `' is a pointer/string, but the variant declares it as '` ( llvm_to_nurl __ep_decl ) )
                         `', a number. The payload slot is a numeric word and the '??' arm reads it back as that type, so the address would be returned as arithmetic. `
                         `Declare the payload as the type you are storing, or store a number.` ) ) }
+                    {}
+                    // A payload of another type than the variant declares,
+                    // boxed here and read back through the declared one: a
+                    // closure of the wrong signature called with the
+                    // declared arguments, a `B` struct read as the `A` the
+                    // variant names — a String field taken from an int, a
+                    // SEGV in safe code. An option, result, slice or
+                    // closure of another shape (__agg_shape_clash), or a
+                    // different named type (__arg_named_struct_mismatch).
+                    : b __ep_shape ( __agg_shape_clash fty __ep_decl )
+                    ? | __ep_shape ( __arg_named_struct_mismatch fty __ep_decl )
+                    { ( die lex ( nurl_str_cat4
+                        ( nurl_str_cat3 `payload ` ( nurl_str_int idx ) ` of enum variant '` )
+                        ( nurl_str_cat4 enum_vname `' expects type '` ( llvm_to_nurl __ep_decl ) `' but the value has type '` )
+                        ( llvm_to_nurl fty )
+                        ? __ep_shape
+                        `' — NURL has no implicit conversions between differently-shaped aggregates (options, results, slices, closures): give the payload a value of exactly its declared shape, or destructure with '??' and store its payload`
+                        `' — NURL named types are NOMINAL: no struct or enum converts into another. Construct the type the variant declares.` ) ) }
                     {}
                     ? ( seq fty `i1` )
                     {  // Convert boolean to i64

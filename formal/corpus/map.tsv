@@ -867,3 +867,8 @@ h908_part_cursor_local_literal	§7.6	A2	agora #195: `: H h @ H { s }`, a literal
 h909_part_cursor_closure_capture	§7.6	A2	agora #195: a returned closure capturing `s`	runs-clean
 h910_part_cursor_param_guard	§7.6	A2	agora #195: `: String s ( gets w )` over a parameter `w`, handed back: still the caller's lend, not copied	runs-clean
 h911_part_cursor_with_its_owner_returned	§7.6	A2	agora #195: `^ @ R { s w }`: a returned literal holding both the part cursor `s` and the local `w` it is part of	runs-clean
+h913_literal_field_closure_signature	§2.11	A2	agora #129: a struct literal stores a `( @ i s )` closure in a `( @ i i )` field; both lower to `{ ptr, ptr }` and the call through the field reads an int as a string	rejected
+h914_enum_payload_closure_signature	§2.11	A2	agora #129: the same closure as an enum variant's payload	rejected
+h915_enum_payload_named_struct	§2.12	A2	agora #129: an enum variant declared to carry an `A` given a `B`: the arm reads B's int as A's String	rejected
+h916_literal_field_closure_guard	§2.11	A2	agora #129: a closure of the declared signature in a struct literal field: accepted	runs-clean
+h917_enum_payload_closure_guard	§2.11	A2	agora #129: a closure of the declared signature as an enum payload: accepted	runs-clean
