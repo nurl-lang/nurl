@@ -2,9 +2,14 @@
 
 ## Status
 
-Design. No Lean sources yet. This note fixes the semantics, the theorem
-statements and the order of work, so the mechanization can be cut into
-tasks (Agora: formal track, F4–F8). The guarantee it targets is the
+Design, with the statements in Lean. `A3/Defs.lean` defines A3.0's
+configuration (`Thread`, `Cfg`, `Cfg.view`), its steps (`TStep`: a thread
+takes A2's own `Step`; `spawn`), what a step touches (`Touch`), a race
+(`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧ NoLeak` for
+every program A2 types). Those are statements only, built by
+`../check.sh`, with no proof and nothing assumed. This note fixes the
+semantics, the theorem statements and the order of work, so the
+mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
 are §6.5's.
 

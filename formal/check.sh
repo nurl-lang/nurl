@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 lake build
-if grep -rnwE --include='*.lean' 'sorry|admit|axiom' A1 A1.lean A2 A2.lean; then
+if grep -rnwE --include='*.lean' 'sorry|admit|axiom' A1 A1.lean A2 A2.lean A3 A3.lean; then
   echo "error: the proof is incomplete or adds an axiom" >&2; exit 1
 fi
 out=$(lake env lean Check.lean)
@@ -15,4 +15,4 @@ bad=$(grep -oE "depends on axioms: \[[^]]*\]" <<<"$out" | grep -vE "^depends on 
 if [ -n "$bad" ] || ! grep -q "depends on axioms" <<<"$out"; then
   echo "error: unexpected axioms: $bad" >&2; exit 1
 fi
-echo "formal: A1 and A2 proofs complete"
+echo "formal: A1 and A2 proofs complete; A3 statements build"

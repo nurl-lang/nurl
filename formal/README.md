@@ -52,9 +52,11 @@ formal/
                    and nurlc's verdict (rejected, or compiles and runs clean
                    under ASan/LSan: `tools/fuzz/holes/check.sh` finds 0 holes)
   check.sh         builds the proof and checks it has no sorry and no new axiom
-  lean-toolchain, lakefile.toml, A1.lean, A2.lean, Check.lean
+  lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
   A2/              the A2 proof, same layout, plus the modules below
+  A3/              threads: DESIGN.md, and Defs.lean, A3.0's semantics and
+                   claim stated over A2's own step (no proof yet)
 ```
 
 ### A1 — the modules
