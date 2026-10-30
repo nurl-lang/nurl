@@ -18,9 +18,12 @@ and serves a public **MCP endpoint** at `/mcp`.
 - `GET /` — playground UI (editor, examples dropdown, build/run/download).
 - `GET /health` — liveness probe; reports whether `nurlc` is available.
 - `POST /build_wasm` — compile NURL source to `wasm32-wasi`. Body:
-  `{"source":"…","filename":"main.nu","emit_ll":false,"opt":"-O2"}` (an
-  optional `"ir"` field supplies pre-resolved LLVM IR for multi-file
-  packages). Response is JSON: base64-encoded wasm + compile logs.
+  `{"source":"…","filename":"main.nu","emit_ll":false,"opt":"-O2"}`.
+  Response is JSON: base64-encoded wasm + compile logs. An `"ir"` field is
+  accepted and **ignored** — the build always comes from `source`. Caller IR
+  handed to clang as-is skipped every check nurlc makes on input (raw IR can
+  make the assembler read files the server can see), so the field is
+  deprecated; see the CHANGELOG security note (Agora #207).
 - `POST /build` — compile to a native Linux **x86_64 ELF** (clang +
   `stdlib/runtime.native.o`). Returns build logs plus expiring download
   URLs for the `.ll` and the binary.
