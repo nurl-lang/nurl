@@ -89,6 +89,7 @@ The same modules under `A2/`, extended, and:
 | `Closure` | a call through a package, opened: the environment bound as a borrowed parameter, the captures as `inout` arguments of their own; the context after the opened call says no less than after the call through the package |
 | `Codes` | packages name code of their signature, through every step |
 | `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
+| `DYN_DESIGN.md` | values owned or not per call: the refinement that types them (a mode owned or borrowed per run), not yet in the sources |
 
 The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
 `A2.no_leak_panic` (`check.sh` prints the axioms of each).
@@ -110,7 +111,9 @@ caller's) sit.
 
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves: values owned or not per call (a
-trait method's result, a raw string that may be fresh); a destructor
+trait method's result, a raw string that may be fresh, a result lent on
+one path and fresh on another; designed in `A2/DYN_DESIGN.md`, and the
+`RULES.md` rows of agora #184–#206 that rest on it); a destructor
 written by the program (`% Drop`), whose drop runs code and may panic
 (`CLAIM.md`); `Rc` and its cycle collector, which are the standard
 library's `unsafe` base (phase B).

@@ -151,7 +151,7 @@ Three findings matter to the proof:
   flag to `x`, and `DropSlot` releases under the flag. The refinement is
   a binding mode that is owned or borrowed at run time. `SlotOK` would
   allow either flag, and `derive` would make such a binding a root *and*
-  a borrow of what its summary lends.
+  a borrow of what its summary lends. `A2/DYN_DESIGN.md` specifies it.
 
 Most of the holes in this range were in surface forms the calculus has
 only as statements: `?` / `??` joins as values, value blocks and their
