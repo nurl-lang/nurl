@@ -827,3 +827,6 @@ h868_drop_inout_assign_call_lend	§7.6	A2	agora #196: the same with a `% Drop` v
 h869_inout_assign_param_derived	§7.6	A2	agora #196: an `inout` assignment of a value made from a parameter's lend: nothing of this frame's	runs-clean
 h870_inout_assign_local_field	§7.6	A2	agora #196: `= io . w s`, a field of the local struct `w` assigned to an `inout` parameter	runs-clean
 h871_drop_inout_assign_local_field	§7.6	A2	agora #196: the same with a `% Drop` field: it cannot be copied	rejected
+h872_defer_releases_block_returned	§7.6	A2	agora #197: `; { ( keep l ) }  ^ { : i z 1 l }`: the defer hands `l` to a `sink` after the block returned it	rejected
+h873_defer_releases_fall_off_block	§7.6	A2	agora #197: the same with the block as the function's fall-off value	rejected
+h874_defer_reads_block_returned	§7.6	A2	agora #197: a defer that only reads the local the block hands back: allowed	runs-clean
