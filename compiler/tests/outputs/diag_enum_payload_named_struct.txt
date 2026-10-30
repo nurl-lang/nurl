@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_payload_named_struct.nu:13:21: error: payload 1 of enum variant 'V' expects type 'A' but the value has type 'B' — NURL named types are NOMINAL: no struct or enum converts into another. Construct the type the variant declares.
+    : E e @ E { V b }
+                    ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
