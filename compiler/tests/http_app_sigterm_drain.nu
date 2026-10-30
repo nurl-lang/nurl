@@ -1,8 +1,14 @@
 // http_app_sigterm_drain.nu — the packages/http facade drains on SIGTERM
 // (agora #54): the signal closes the listener, an idle keep-alive
 // connection is closed at once (not after its 20 s idle timeout), a
-// request in flight (its handler sleeps 400 ms) is answered with
-// `Connection: close`, and http_app_listen returns 0.
+// request in flight is answered with `Connection: close`, and
+// http_app_listen returns 0.
+//
+// Ordered by events, not sleeps: SIGTERM is raised once the /slow handler
+// is running, and the handler answers once the idle connection has been
+// closed — the drain has begun, so the response is composed while the
+// server drains. A fixed 400 ms handler lost that race on a loaded runner
+// (`with-close=F`, agora #539).
 // requires: live
 
 $ `stdlib/core/string.nu`
@@ -13,6 +19,17 @@ $ `packages/http/src/http.nu`
 : ~ b slow_ok F
 : ~ b slow_close F
 : ~ i idle_eof_ms -1
+: ~ b slow_started F
+: ~ b idle_gone F
+
+// Wait (10 ms steps, 5 s at most) until `flag` reads true.
+@ wait_for ( @ b ) flag → v {
+    : ~ i waited 0
+    ~ & ! ( flag ) < waited 5000 {
+        ( sleep_ms 10 )
+        = waited + waited 10
+    }
+}
 
 @ read_to_eof TcpConn c → String {
     : ( Vec u ) acc ( vec_new [u] )
@@ -44,11 +61,12 @@ $ `packages/http/src/http.nu`
                 }
             }
             : !Thread ThreadErr st ( thread_spawn slow )
-            ( sleep_ms 150 )
+            ( wait_for \ → b { ^ slow_started } )
             : i t0 ( now_ms )
             : i _r ( signal_raise ( signal_constant `SIGTERM` ) )
             : String _e ( read_to_eof idle )
             = idle_eof_ms - ( now_ms ) t0
+            = idle_gone T
             ?? st { T t → { ( thread_join t ) } F _ → {} }
         }
         F _ → { ( nurl_println `connect FAIL` ) }
@@ -62,7 +80,8 @@ $ `packages/http/src/http.nu`
     ( http_app_workers a 4 )
     ( http_app_get a `/fast` \ HttpRequest req Params p → HttpResponse { ^ ( response_text 200 `fast\n` ) } )
     ( http_app_get a `/slow` \ HttpRequest req Params p → HttpResponse {
-        ( sleep_ms 400 )
+        = slow_started T
+        ( wait_for \ → b { ^ idle_gone } )
         ^ ( response_text 200 `slow\n` )
     } )
     : ( @ v ) c \ → v { ( ctl 18995 ) }
