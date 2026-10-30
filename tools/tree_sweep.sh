@@ -223,4 +223,5 @@ if (( differs == 0 )); then
 fi
 echo "tree_sweep: $differs of ${#FILES[@]} file(s) DIFFER (transcripts in $WORK)"
 echo "tree_sweep: every difference must be one the change intends — read each one."
+echo "tree_sweep: tools/sweep_classify.py $WORK $BASE_BIN $NEW_BIN groups them by function."
 exit 1
