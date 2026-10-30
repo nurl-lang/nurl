@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop 1
+lent by a call
+drop 2
+lent through a block
+drop 3
+lent through a try
+drop 4
+a local struct's field

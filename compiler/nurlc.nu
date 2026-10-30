@@ -34971,6 +34971,52 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // place (h199: `= o @ ?String { … }` over an `inout ?String`, or an
         // owned `?T` global, left the old string).
         : b __io_oty & & ! ( __is_handle_ty vt ) ! ( __is_closure_llty vt ) | ( __type_needs_drop vt syms ) != 0 ( nurl_str_len ( __nc_opt_payload vt ) )
+        // …and a call — or a block or a try ending in one — that may lend
+        // out of this function's own locals, which are gone when it returns
+        // while the caller keeps the value: a copy where it lent, or a
+        // refusal when it cannot be copied (agora #196).
+        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) {
+            : i __io_et ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_rhs_tt
+            // (…or a field read of a value this frame owns, `= io . w s`:
+            // the struct is dropped on the way out, so the field is copied.)
+            ? & == bck_rhs_tt TT_DOT ( __froot_lends_frame syms ( nurl_sym_get syms `__last_member_root__` ) ) {
+                ? ( __clone_supported vt syms ) {
+                    = store_val ( mem_emit_cloneif cg vt store_val `1` )
+                    : s __io_fo ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __io_fo ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                    ( __handle_drop_ensure vt )
+                    ( __dropifv_request vt )
+                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 true, ` )
+                    ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_fo ) ( nurl_print `)` ) ( emit_dbg_eol )
+                } { ? ( __nc_drop_ty vt ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) vt ) } {} }
+            } {}
+            ? == __io_et TT_LPAREN {
+                : s __io_ll ( mem_ret_local_lend syms cg )
+                ? != 0 ( nurl_str_len __io_ll ) {
+                    ? ( __clone_supported vt syms ) {
+                        : s __io_lt ( mem_lent_cond syms cg vt TT_LPAREN `` )
+                        ? != 0 ( nurl_str_len __io_lt ) {
+                            : s __io_lr ( mem_lent_reg cg __io_lt )
+                            : s __io_c ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __io_c ) ( nurl_print ` = and i1 ` ) ( nurl_print __io_lr ) ( nurl_print `, ` ) ( nurl_print __io_ll ) ( nurl_print `\n` )
+                            = store_val ( mem_emit_cloneif cg vt store_val __io_c )
+                            // (The caller's old value goes on those paths: the
+                            // lend kept it, the copy replaces it.)
+                            : s __io_lo ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __io_lo ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+                            ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                            ( __handle_drop_ensure vt )
+                            ( __dropifv_request vt )
+                            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 ` ) ( nurl_print __io_c )
+                            ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_lo ) ( nurl_print `)` ) ( emit_dbg_eol )
+                        } {}
+                    } { ? | ( __nc_drop_ty vt ) != 0 ( nurl_str_len ( __nc_wrap_payload vt ) ) {
+                            ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get syms `__last_call_args__` ) vt )
+                        } {} }
+                } {}
+            } {}
+        } {}
         // …and by a `?` / `??`: its value is made the caller's own on every
         // path first — a copy where it was lent, also of this very binding
         // (`= t ? c t …`) — and then the caller's old value goes (agora #183).

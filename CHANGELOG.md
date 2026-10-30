@@ -135,6 +135,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `inout` parameter is not handed a lend of the function's locals**
+  (Agora #196, h865–h871). `@ fill inout String io → v { : W w ( mkw ) =
+  io ( gets w ) }` gave the caller a lend of `w`, which `fill` dropped on
+  the way out, and the caller's old value leaked. The same happened
+  through a block ending in the call, through a try, and for a field of
+  a local struct (`= io . w s`). Such a value is
+  now copied where it lent, and the old value is dropped there. A `% Drop`
+  value is refused. (#183 did this for a `?` / `??`.)
 - **A try over a call that lends a local hands on the call's lend**
   (Agora #194, h862–h864). `^ @ !String E { T \ ( getr w ) }`, with `getr`
   lending a field of the local `w`, and `( keep \ ( getr w ) )` with
