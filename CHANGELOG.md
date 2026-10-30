@@ -151,6 +151,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A binding holding part of a local is not that local's whole value**
+  (Agora #195, h897–h911). `: String s \ ( getr w )  ^ @ !String E { T s
+  }`, with `getr` handing back `@ !String E { T . w s }`, gave the caller
+  a lend of the local `w`, which the function then dropped. So did a
+  `??` over the call, the whole result bound and returned, and the
+  fall-off forms. Now a call's returned-part summary makes such a binding
+  a cursor over part of the local, as a return-alias summary already
+  did. Such a cursor (`: String s ( gets w )`) was taken for w's whole
+  value whenever it was stored, pushed, captured, put in a literal or
+  picked by an arm, so w's other fields leaked, and over an `inout` the
+  caller was left with a lend of w. The local now keeps dropping all of
+  itself, and the cursor's value leaves as a copy where it does not own
+  it. A part of a parameter is still a lend.
 - **nurlc fails a compile whose output did not reach the disk** (Agora
   #101). The `--split` parts were written with every `fwrite`, `fputs`
   and `fclose` result ignored, and the one module on stdout was never
