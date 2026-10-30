@@ -135,6 +135,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value block assigned to an outer binding does not lend it its own
+  locals** (Agora #190, h854–h859). `= out { : W w ( mkw ) ( gets w ) }` in
+  a loop body or an arm handed `out` a lend of `w`. A value block's
+  locals live to the end of the enclosing scope, which ended before
+  `out`, so the next read was of freed memory. The value is now copied in
+  place after the store, and the binding owns it. A `% Drop` value is
+  refused. Nothing is copied in the binding's own scope or for a
+  parameter's lend.
 - **An arm's own locals are dropped when its value was lent out of them**
   (Agora #191, h846–h851). `: String r ? c { : W w ( mkw ) ( gets w ) } (
   mk )` never dropped `w`, because the join's value is consumed and might
