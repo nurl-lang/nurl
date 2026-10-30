@@ -90,7 +90,8 @@ The same modules under `A2/`, extended, and:
 | `Codes` | packages name code of their signature, through every step |
 | `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
 
-The theorems, `A2.memory_safe`, `A2.soundness` and `A2.no_leak_end`.
+The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
+`A2.no_leak_panic` (`check.sh` prints the axioms of each).
 
 An `inout` parameter may have any owning type — a `Vec`, a struct, an
 enum, a closure (`paramOK`, `FnOK`) — and a field of a struct is replaced
