@@ -820,6 +820,13 @@ h859_loop_assign_block_param_lend	§7.6	A2	agora #190: the block's call lending 
 h862_try_call_lend_returned_payload	§7.6	A2	agora #194: `^ @ !String E { T \ ( getr w ) }`: a try over a call lending the local `w` as a returned result's payload	runs-clean
 h863_try_call_lend_sink_arg	§7.6	A2	agora #194: `( keep \ ( getr w ) )`, `keep` taking a `sink`	runs-clean
 h864_try_call_param_lend_guard	§7.6	A2	agora #194: the try over a call lending a parameter: still a lend	runs-clean
+h865_inout_assign_call_lend_local	§7.6	A2	agora #196: `= io ( gets w )`, `io` an `inout` parameter, `w` a local: the caller got a lend of `w`	runs-clean
+h866_inout_assign_block_call_lend	§7.6	A2	agora #196: the same through a block ending in the call	runs-clean
+h867_inout_assign_try_call_lend	§7.6	A2	agora #196: the same through a try `\ ( getr w )`	runs-clean
+h868_drop_inout_assign_call_lend	§7.6	A2	agora #196: the same with a `% Drop` value: it cannot be copied	rejected
+h869_inout_assign_param_derived	§7.6	A2	agora #196: an `inout` assignment of a value made from a parameter's lend: nothing of this frame's	runs-clean
+h870_inout_assign_local_field	§7.6	A2	agora #196: `= io . w s`, a field of the local struct `w` assigned to an `inout` parameter	runs-clean
+h871_drop_inout_assign_local_field	§7.6	A2	agora #196: the same with a `% Drop` field: it cannot be copied	rejected
 h875_loop_let_block_call_lend	§7.6	A2	agora #193: `: String r { : W w ( mkw ) ( gets w ) }` then `= out r` in a loop: the block's local dies with the loop body, `out` outlives it	runs-clean
 h876_arm_let_block_call_lend	§7.6	A2	agora #193: the same binding and assignment inside a `?` arm	runs-clean
 h877_loop_let_inferred_block_call_lend	§7.6	A2	agora #193: the same with the binding's type inferred	runs-clean
