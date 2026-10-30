@@ -142,7 +142,7 @@ What it checks, briefly:
   same problem as a free-inside-a-loop double-free in C.
 
 <Callout type="info" title="Soundness boundary and mechanized Lean 4 proof">
-Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 918 regression probes in `tools/fuzz/holes/` (`h01`–`h956`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
+Together, auto-drop, the borrow checker, and the `unsafe` / `raw` boundary (`docs/spec.md` §3.3d–e) guarantee that every program the compiler accepts outside `unsafe` functions is memory-safe and leak-free (`docs/MEMORY.md` §6.2). Every soundness hole ever found is locked down by 925 regression probes in `tools/fuzz/holes/` (`h01`–`h968`), and the ownership and borrow rules of the single-threaded language have a mechanized **Lean 4 soundness proof** in [`formal/`](https://github.com/nurl-lang/nurl/tree/main/formal) (phases A1–A2: `A2.memory_safe`, `A2.no_leak_end`; no `sorry`). Raw `*T` pointers, pointer casts, raw struct fields (`raw :`), and foreign (FFI) calls are gated behind `unsafe @`.
 </Callout>
 
 ## Threads and shared state
