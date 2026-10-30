@@ -59,32 +59,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Gate: the tagged commit must already have a green ci.yml run ──────
+  # ── Gate: the tagged commit must already have green ci.yml and macos-tests.yml
   # Branch protection keeps `main` green, so a tag on a merged main commit
-  # passes this. It exists to catch a tag pushed to a NON-main / untested
-  # SHA. It does NOT re-run the suite (that would be redundant — ci.yml runs
-  # on every push/PR); it WAITS for the tagged commit's ci.yml to conclude
-  # and then requires success, because a tag is normally pushed while that
-  # run is still in flight. Skipped on workflow_dispatch dry runs (they don't
-  # publish anyway). The commit checked is the one the TAG names, resolved
-  # through the API, so a publishing dispatch from `main` gates on the tag's
-  # commit and not on main's head.
+  # passes the ci.yml half. That half exists to catch a tag pushed to a
+  # NON-main / untested SHA. It does NOT re-run the suite (that would be
+  # redundant — ci.yml runs on every push/PR); it WAITS for the tagged
+  # commit's runs to conclude and then requires success, because a tag is
+  # normally pushed while those runs are still in flight. Skipped on
+  # workflow_dispatch dry runs (they don't publish anyway). The commit
+  # checked is the one the TAG names, resolved through the API, so a
+  # publishing dispatch from `main` gates on the tag's commit and not on
+  # main's head.
+  #
+  # macos-tests.yml is part of the gate (Agora #213). Pull requests run it
+  # only when labelled `ci:macos`, because the macOS pool is often empty.
+  # The release is where macOS is not optional: macOS ARM64 is tier 1 in
+  # docs/PLATFORMS.md, and an archive-less platform is still a claim users
+  # rely on. Its push run on the release commit has to finish green, or a
+  # dispatched run on the tag (Actions → macos-tests → Run workflow → the
+  # tag), before anything is published.
   verify-ci:
-    name: verify tagged commit passed CI
+    name: verify tagged commit passed CI (ci + macOS)
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
     steps:
-      - name: Require a successful ci.yml run for this SHA
+      - name: Require successful ci.yml and macos-tests.yml runs for this SHA
         uses: actions/github-script@v7
         with:
           # A tag is normally pushed seconds after the release PR merges, so
-          # the merge commit's ci.yml is still QUEUED or RUNNING (and may not
+          # the merge commit's runs are still QUEUED or RUNNING (and may not
           # even be listed yet) when this job starts. A single instantaneous
           # look therefore fails the gate on a race and skips the whole
-          # release — which is exactly what happened to v0.13.0. Wait for the
-          # SHA's ci.yml to reach a conclusion instead, then demand success:
-          # the safety property (never publish an unverified commit) is
-          # unchanged, only the impatience is gone.
+          # release — which is exactly what happened to v0.13.0. Wait for
+          # each workflow to reach a conclusion instead, then demand
+          # success: the safety property (never publish an unverified
+          # commit) is unchanged, only the impatience is gone.
           script: |
             const tag = process.env.NURL_TAG;
             if (!/^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$/.test(tag)) {
@@ -107,50 +116,64 @@ jobs:
               sha = t.object.sha;
             }
             core.info(`${tag} -> ${sha}`);
-            const DEADLINE_MS = 45 * 60 * 1000;   // ci.yml takes ~6 min
+            // ci.yml takes ~40 min. macos-tests.yml has a 90 min job and
+            // may queue for a runner first.
+            const GATES = [
+              { wf: 'ci.yml', deadline_min: 75 },
+              { wf: 'macos-tests.yml', deadline_min: 150,
+                again: `Run it on the tag (Actions → macos-tests → Run workflow → ` +
+                       `${tag}) and re-run this job.` },
+            ];
             const POLL_MS = 30 * 1000;
             const started = Date.now();
             const sleep = ms => new Promise(r => setTimeout(r, ms));
+            const open = new Set(GATES.map(g => g.wf));
 
-            while (true) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'ci.yml',
-                head_sha: sha,
-                per_page: 100,
-              });
-              if (runs.some(r => r.conclusion === 'success')) {
-                core.info(`ci.yml is green for ${sha} — proceeding.`);
-                return;
-              }
-              const pending = runs.filter(
-                r => r.status === 'queued' || r.status === 'in_progress');
+            while (open.size > 0) {
               const waited = Date.now() - started;
+              for (const g of GATES) {
+                if (!open.has(g.wf)) continue;
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: g.wf,
+                  head_sha: sha,
+                  per_page: 100,
+                });
+                if (runs.some(r => r.conclusion === 'success')) {
+                  core.info(`${g.wf} is green for ${sha}.`);
+                  open.delete(g.wf);
+                  continue;
+                }
+                const pending = runs.filter(
+                  r => r.status === 'queued' || r.status === 'in_progress');
+                const seen = runs.map(r => r.status + '/' + r.conclusion).join(', ') || 'none';
 
-              // Nothing running and nothing green: if a run has already
-              // concluded non-success, the commit is genuinely bad — fail
-              // now rather than burning the deadline. An empty list this
-              // early is just the API not having indexed the push yet.
-              if (pending.length === 0 && runs.length > 0) {
-                core.setFailed(
-                  `ci.yml did not pass for ${sha} (conclusions: ` +
-                  `${runs.map(r => r.conclusion).join(', ')}). Tag a commit ` +
-                  `whose CI is green.`);
-                return;
+                // Nothing running and nothing green: if a run has already
+                // concluded non-success, fail now rather than burning the
+                // deadline. A cancelled macOS run usually never got a
+                // runner, so say how to get one. An empty list this early
+                // is just the API not having indexed the push yet.
+                if (pending.length === 0 && runs.length > 0) {
+                  core.setFailed(
+                    `${g.wf} did not pass for ${sha} (runs: ${seen}). ` +
+                    (g.again || `Tag a commit whose CI is green.`));
+                  return;
+                }
+                if (waited > g.deadline_min * 60 * 1000) {
+                  core.setFailed(
+                    `Timed out after ${Math.round(waited / 60000)} min waiting ` +
+                    `for a ${g.wf} run for ${sha}. Runs seen: ${seen}. ` +
+                    (g.again || ''));
+                  return;
+                }
+                core.info(
+                  `waiting for ${g.wf} on ${sha} — ${pending.length} run(s) ` +
+                  `pending, ${Math.round(waited / 1000)}s elapsed…`);
               }
-              if (waited > DEADLINE_MS) {
-                core.setFailed(
-                  `Timed out after ${Math.round(waited / 60000)} min waiting ` +
-                  `for a ci.yml run for ${sha}. Runs seen: ` +
-                  `${runs.map(r => r.status + '/' + r.conclusion).join(', ') || 'none'}.`);
-                return;
-              }
-              core.info(
-                `waiting for ci.yml on ${sha} — ${pending.length} run(s) ` +
-                `pending, ${Math.round(waited / 1000)}s elapsed…`);
-              await sleep(POLL_MS);
+              if (open.size > 0) await sleep(POLL_MS);
             }
+            core.info(`ci.yml and macos-tests.yml are green for ${sha} — proceeding.`);
 
   # ── Linux (x86_64 + arm64), native per-arch runners ──────────────────
   linux:

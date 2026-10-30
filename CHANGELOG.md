@@ -116,6 +116,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moved a Vec it never touched. A name after `. obj` is now a field
   whenever `obj` is a struct value (agora #125, the field-name shape).
 
+### Changed
+
+- **The macOS gate runs where it can finish: on `main`, on labelled PRs
+  and on every release** (Agora #213). macOS runners are scarce. On
+  github#1347–#1349 the arm64 job never got one: every attempt was
+  cancelled with 0 steps, and the PRs showed a red X for code that had
+  passed everything. A pull request now runs macos-tests only when it
+  carries the `ci:macos` label. A PR that touches Darwin-sensitive files
+  (the C runtime, build.sh, nurl.sh, the installers, run_tests.sh) gets a
+  notice pointing at the label. Every push to `main` still runs the gate.
+  release.yml's `verify-ci` now waits for a green `macos-tests.yml` run
+  on the tagged commit, as well as `ci.yml`, and stops the release
+  without one (RELEASING.md, step 4).
+
 ### Security
 
 - **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An
@@ -138,6 +152,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries are closed to the processes it starts. The playground compiles
   every request under `--max-nesting-fixed=200`
   (`NURL_PLAYGROUND_MAX_NESTING`).
+
+- **A try hands on an error it cannot copy as the caller's own only when
+  it owned it** (Agora #205, h970–h974). A try whose error cannot be copied
+  (a `% Drop` struct) went to the caller as owned even when it was only lent
+  out of the caller's argument. That happened over a parameter (`\ q`), a
+  parameter's field, a join of two parameters, a call lending a parameter's
+  field (`\ ( getr b )`), and a binding of such a call. The caller then freed
+  its argument's error twice. The fail path now tells the caller per call
+  whether it owns the error, and records what the error is part of, as `^
+  <operand>` does. An `!T E` result whose error cannot be copied now counts
+  as one that cannot be copied.
 
 ## [0.81.0] — 2026-10-30
 

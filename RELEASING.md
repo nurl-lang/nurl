@@ -64,11 +64,12 @@ described in prose somewhere that no test covers:
 ```bash
 git switch -c Release-vX.Y.Z
 git commit -am "Release vX.Y.Z"
-gh pr create --title "Release vX.Y.Z" --fill
+gh pr create --title "Release vX.Y.Z" --fill --label ci:macos
 ```
 
 Same review and same CI as any other change — Windows, FreeBSD, arm64,
-ASan and the unikernel gates all run.
+ASan and the unikernel gates all run. The `ci:macos` label adds the
+macOS gate, which pull requests run only on request (see step 4).
 
 ### 4. Tag, once it is merged and CI is green on `main`
 
@@ -81,6 +82,19 @@ git push origin vX.Y.Z
 Tag the merge commit on `main`, never the branch: the tag is what users
 download, and it should name a commit that passed CI in the state it
 was merged.
+
+**The release needs a green macOS run on that commit** (Agora #213).
+release.yml's first job, `verify-ci`, waits for both `ci.yml` and
+`macos-tests.yml` on the tagged commit to finish, and publishes nothing
+unless both passed. Pull requests run macOS only when labelled
+`ci:macos`, because the macOS pool is often empty and a job that never
+got a runner shows as a red X. `main` runs it on every push, so the
+release commit gets its own run when the release PR merges. Keep other
+merges out until the tag is out: a later push to `main` cancels the
+release commit's macOS run, and a run that never got a runner is
+cancelled as well. Either way `verify-ci` fails and says so. Run
+macos-tests on the tag by hand (Actions → macos-tests → Run workflow,
+"Use workflow from" = the tag), then re-run the failed `verify-ci` job.
 
 `.github/workflows/release.yml` then builds, on a `v*` tag:
 
@@ -279,7 +293,8 @@ manually from Actions.
   clear message and the install route stays build-from-source. It is *not*
   untested: the `macos-tests` workflow runs `./build.sh` on Apple Silicon
   (bootstrap fixed point + the full corpus against the same `outputs/`
-  goldens as Linux) on every push to `main` and every PR. Adding a release
+  goldens as Linux) on every push to `main`, on every PR labelled
+  `ci:macos`, and as a gate on every release tag. Adding a release
   leg means `macos-14` (arm64) only — the Intel `macos-13` image never left
   GitHub's queue across ten attempted runs, which is why that leg was
   removed rather than left permanently pending (see
