@@ -3950,6 +3950,36 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `retdyn##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` )
 }
 
+// This function hands back what the call `cname` handed it, as is
+// (`^ ( g … )`, a try over one): it lends whenever g does — resolved at
+// module end, when every callee's answer is final (mem_emit_arg_flags).
+// WHICH of its parameters it lends back follows from g's final summary
+// (resolve_retfwd_lends): for g compiled before this function, by the
+// call's lend key and its arguments' roots — what g lends was not recorded
+// as this function's lend at all, so `^ ( g p )` over a `g` lending its
+// argument handed callers an unchecked view of `p` (h271); for g compiled
+// after it (a generic accessor instantiated at module end — `^ ( vec_at xs
+// 0 )`), each parameter handed to g is noted with its position (h215).
+@ mem_ret_lends_as_call i syms s cname s key s roots s fwd s pargs → v {
+    : s rvk ( nurl_str_cat `retvia##` ( nurl_sym_get syms `__fn_self_name__` ) )
+    : s rvc ( nurl_sym_get g_pending_impl rvk )
+    ? ! ( str_contains_word rvc cname )
+    { ( nurl_sym_def g_pending_impl rvk ? == 0 ( nurl_str_len rvc ) ( nurl_str_cat cname `` ) ( nurl_str_cat3 rvc ` ` cname ) ) } {}
+    ( mem_ret_param_lend_via syms key roots )
+    ? & != 0 ( nurl_str_len fwd ) != 0 ( nurl_str_len pargs ) {
+        : s rfn ( nurl_sym_get syms `__fn_self_name__` )
+        : s rfc ( str_first_word fwd )
+        : s rfnames ( nurl_sym_get syms `__fn_param_names__` )
+        : ~ s rfp ( nurl_str_cat pargs `` )
+        ~ != 0 ( nurl_str_len rfp ) {
+            : s rfai ( str_first_word rfp ) = rfp ( str_skip_word rfp )
+            : s rfpn ( str_first_word rfp ) = rfp ( str_skip_word rfp )
+            : i rfpi ( str_word_index rfnames rfpn )
+            ? >= rfpi 0 { ( __retfwd_note rfn ( nurl_str_cat4 rfc `:` rfai ( nurl_str_cat `:` ( nurl_str_int rfpi ) ) ) ) } {}
+        }
+    } {}
+}
+
 // A return-site copy condition that only applies when this function's
 // result is decided statically: a function answering per call hands back
 // what it holds and says whether it owns it instead of copying.
@@ -4908,35 +4938,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // end, when every callee's answer is final — mem_emit_arg_flags).
     // (Not when the result was copied here: this path hands back its own.)
     ? & & == ret_eff_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_name__` ) ! ret_call_copied {
-        : s rvk ( nurl_str_cat `retvia##` ( nurl_sym_get syms `__fn_self_name__` ) )
-        : s rvc ( nurl_sym_get g_pending_impl rvk )
-        : s rvn ( nurl_sym_get syms `__last_call_name__` )
-        ? ! ( str_contains_word rvc rvn )
-        { ( nurl_sym_def g_pending_impl rvk ? == 0 ( nurl_str_len rvc ) ( nurl_str_cat rvn `` ) ( nurl_str_cat3 rvc ` ` rvn ) ) } {}
-        // …and WHICH of this function's parameters it lends back follows
-        // from g's final summary (resolve_retfwd_lends) — g compiled before
-        // this function too: what g lends was not recorded as this
-        // function's lend at all, so `^ ( g p )` over a `g` lending its
-        // argument handed callers an unchecked view of `p` (h271).
         : s rfroots ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
-        ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_call_lend_key__` ) rfroots )
-        // …and when g compiles after this function (a generic accessor
-        // instantiated at module end — `^ ( vec_at xs 0 )`), WHICH
-        // parameters this function lends back follows from g's final
-        // summary: each one handed to g is noted with its position
-        // (resolve_retfwd_lends, h215).
-        ? & != 0 ( nurl_sym_len syms `__last_call_forward__` ) != 0 ( nurl_sym_len syms `__last_call_param_args__` ) {
-            : s rfn ( nurl_sym_get syms `__fn_self_name__` )
-            : s rfc ( str_first_word ( nurl_sym_get syms `__last_call_forward__` ) )
-            : s rfnames ( nurl_sym_get syms `__fn_param_names__` )
-            : ~ s rfp ( nurl_sym_get syms `__last_call_param_args__` )
-            ~ != 0 ( nurl_str_len rfp ) {
-                : s rfai ( str_first_word rfp ) = rfp ( str_skip_word rfp )
-                : s rfpn ( str_first_word rfp ) = rfp ( str_skip_word rfp )
-                : i rfpi ( str_word_index rfnames rfpn )
-                ? >= rfpi 0 { ( __retfwd_note rfn ( nurl_str_cat4 rfc `:` rfai ( nurl_str_cat `:` ( nurl_str_int rfpi ) ) ) ) } {}
-            }
-        } {}
+        ( mem_ret_lends_as_call syms ( nurl_sym_get syms `__last_call_name__` ) ( nurl_sym_get syms `__last_call_lend_key__` ) rfroots
+        ( nurl_sym_get syms `__last_call_forward__` ) ( nurl_sym_get syms `__last_call_param_args__` ) )
     } {}
     // `^ . x f` out of a struct this function owns: x is dropped on the
     // way out, so the caller gets the field — moved out (emptied in x, whose
@@ -44185,6 +44189,11 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         != 0 ( nurl_sym_len syms `__last_join_own__` )
         { = __try_hown ( nurl_str_cat ( nurl_sym_get syms `__last_join_own__` ) `` ) } {}
     }
+    // (…and a block's whose tail is a join, for a failure handed on as it
+    // is: agora #205.)
+    : i __try_veff ( __val_eff_tt __try_inner_tt )
+    : s __try_jown ? & == __try_inner_tt TT_LBRACE | == __try_veff TT_QUEST == __try_veff TT_QUESTQUEST
+    ( nurl_sym_get syms `__last_join_own__` ) ``
     // T7: verify expression is opt or res type (must start with "{ i1, ")
     : b is_opt_res & >= ( nurl_str_len vt ) 6
     ( seq ( nurl_str_slice vt 0 6 ) `{ i1, ` )
@@ -44324,7 +44333,83 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         }
     } {}
     ? != 0 ( nurl_str_len __t_c ) { = fail_val ( mem_emit_cloneif cg fn_rt fail_val __t_c ) } {}
-    ? & != 0 g_auto_drop_strings | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need
+    // A failure that cannot be copied goes over as it is (agora #205): the
+    // caller is told per call whether it owns it (mem_store_hown) — this
+    // function's own where the operand was, lent where it was the
+    // caller's — and what it is part of is recorded as `^ <operand>`
+    // records it: a parameter, or a field of one, lent back; a call's
+    // lends as that call's (mem_ret_lends_as_call). A lend out of a local,
+    // gone on the way out, is refused, as `^ <operand>` is (__nc_ret_check,
+    // and at module end __nc_lend_args_park).
+    : ~ b __t_ncok F
+    ? & & != 0 g_auto_drop_strings ! __t_bare ! __t_need {
+        : ~ s __t_ob ``
+        ( __nc_ret_check lex syms vt __try_inner_tt __try_inner_v try_line )
+        ? == __try_inner_tt TT_LPAREN {
+            ? != 0 ( nurl_sym_len syms `__last_call_name__` ) {
+                = __t_ob ? == 0 ( nurl_str_len __try_hown ) ( nurl_str_cat `true` `` ) ( nurl_str_cat __try_hown `` )
+                : s __t_rr ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+                ( __nc_lend_args_park syms lex ( nurl_sym_get syms `__last_call_lend_key__` ) ( nurl_sym_get syms `__last_call_args__` ) vt )
+                ( mem_ret_lends_as_call syms ( nurl_sym_get syms `__last_call_name__` ) ( nurl_sym_get syms `__last_call_lend_key__` ) __t_rr
+                ( nurl_sym_get syms `__last_call_forward__` ) ( nurl_sym_get syms `__last_call_param_args__` ) )
+            } {}
+        } {
+            ? __t_bind {
+                // (…a binding of what a call may lend: as that call, agora
+                // #200.)
+                : s __t_nk ( nurl_sym_get2 syms __try_inner_v `__nclk` )
+                ? != 0 ( nurl_str_len __t_nk ) {
+                    ( __nc_lend_args_park syms lex __t_nk ( nurl_sym_get2 syms __try_inner_v `__ncla` ) vt )
+                    ( mem_ret_param_lend_via syms __t_nk ( nurl_sym_get2 syms __try_inner_v `__ncla` ) )
+                } {}
+                ? != 0 ( nurl_str_len __t_up ) { = __t_ob ( mem_udrop_flag_get syms cg __t_up ) } {
+                    ? >= ( nurl_sym_word_index syms `__fn_param_names__` __try_inner_v ) 0 {
+                        ( __record_param_idx syms `__fn_retlend__` __try_inner_v )
+                        = __t_ob ( nurl_str_cat `false` `` )
+                    } {}
+                }
+            } {
+                ? == __try_inner_tt TT_DOT {
+                    : s __t_root ( nurl_sym_get syms `__last_member_root__` )
+                    ? >= ( nurl_sym_word_index syms `__fn_param_names__` __t_root ) 0 {
+                        ( __record_param_idx syms `__fn_retlend__` __t_root )
+                        ( __record_param_idx syms `__fn_retpart__` __t_root )
+                        = __t_ob ( nurl_str_cat `false` `` )
+                    } {}
+                } {
+                    // A join picks a binding: owned by its arms' bits
+                    // (`__last_join_own__`), lending what its parameters hold.
+                    : s __t_jo ? | == __try_inner_tt TT_QUEST == __try_inner_tt TT_QUESTQUEST ( nurl_str_cat __try_hown `` ) ( nurl_str_cat __try_jown `` )
+                    : s __t_pn ( nurl_sym_get syms `__fn_param_names__` )
+                    : s __t_phs ( nurl_sym_get syms `__last_phi_idents__` )
+                    // (A join whose arms only pick parameters this function
+                    // does not own publishes no bit: it lends on every path.)
+                    : ~ b __t_allp & != 0 ( nurl_str_len __t_phs ) == 0 ( nurl_str_len __t_jo )
+                    : ~ s __t_pc ( nurl_str_cat __t_phs `` )
+                    ~ & __t_allp != 0 ( nurl_str_len __t_pc ) {
+                        : s w ( str_first_word __t_pc ) = __t_pc ( str_skip_word __t_pc )
+                        : s __t_wp ( mem_udrop_ptr_of syms w )
+                        = __t_allp & ( str_contains_word __t_pn w )
+                        | == 0 ( nurl_str_len __t_wp ) & != 0 ( nurl_sym_len2 syms __t_wp `__pname` ) ! ( __param_owned_slot syms __t_wp )
+                    }
+                    ? | != 0 ( nurl_str_len __t_jo ) __t_allp {
+                        = __t_ob ? __t_allp ( nurl_str_cat `false` `` ) ( nurl_str_cat __t_jo `` )
+                        : ~ s __t_ph ( nurl_str_cat __t_phs `` )
+                        ~ != 0 ( nurl_str_len __t_ph ) {
+                            : s w ( str_first_word __t_ph ) = __t_ph ( str_skip_word __t_ph )
+                            ? ( str_contains_word __t_pn w ) { ( __record_param_idx syms `__fn_retlend__` w ) } {}
+                        }
+                    } {}
+                }
+            }
+        }
+        ? != 0 ( nurl_str_len __t_ob ) {
+            = __t_ncok T
+            ? ! ( seq __t_ob `true` ) { ( nurl_sym_set_deep syms `__ret_path_lends__` `1` ) } {}
+            ( mem_store_hown syms __t_ob )
+        } {}
+    } {}
+    ? & != 0 g_auto_drop_strings | | | | == __try_inner_tt TT_LPAREN __t_bind __t_bare __t_need __t_ncok
     { ( gen_ret_term lex syms cg fn_rt fail_val `` `` ? __t_bind __t_up `` `` ? __t_bind __try_inner_v `` ) }
     { ? != 0 ( nurl_str_len dtop )
         { ? ! ( seq fn_rt `void` )
@@ -51882,7 +51967,7 @@ unsafe @ __brace_close s s → i {
 // The same for an option OR a result (`{ i1, T, E }`: its Ok payload T).
 // Memoised: asked of every call's result type.
 @ __nc_wrap_payload s ty → s {
-    ? == 0 ( nurl_str_starts ty `{ i1, %` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_sym_len2 g_impl_name_syms `ncw##` ty ) {
         : s m ( nurl_sym_get2 g_impl_name_syms `ncw##` ty )
         ^ ( nurl_str_cat ? ( seq m `-` ) `` m `` )
@@ -51902,14 +51987,12 @@ unsafe @ __brace_close s s → i {
 @ __nc_wrap_payload_calc s ty → s {
     : s o ( __nc_opt_payload ty )
     ? != 0 ( nurl_str_len o ) { ^ o } {}
-    : i n ( nurl_str_len ty )
-    ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, %` ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s body ( nurl_str_slice ty 6 - n 8 )
-    : i cm ( nurl_str_find body `, ` )
-    ? < cm 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : s p ( nurl_str_slice body 0 cm )
-    ? | ( __is_value_handle p ) ! ( __nc_drop_ty p ) { ^ ( nurl_str_cat `` `` ) } {}
-    ^ p
+    // A result: its payload, or its error (`!i Res`), that cannot be copied.
+    : s p ( __wrap_part ty 0 )
+    ? & & != 0 ( nurl_str_len p ) ! ( __is_value_handle p ) ( __nc_drop_ty p ) { ^ p } {}
+    : s e ( __wrap_part ty 1 )
+    ? & & != 0 ( nurl_str_len e ) ! ( __is_value_handle e ) ( __nc_drop_ty e ) { ^ e } {}
+    ^ ( nurl_str_cat `` `` )
 }
 
 // The type a `:` binding registers its value under. An option of a String /

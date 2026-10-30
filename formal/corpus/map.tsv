@@ -929,3 +929,8 @@ h958_vget_payload_rewrapped_local_vec	§7.6	A2	the same out of a local Vec, drop
 h959_vget_payload_in_local_struct	§7.6	A2	a `vec_get` payload moved into a local struct: the struct and the Vec both dropped it	runs-clean
 h960_vget_payload_in_struct_param_vec	§7.6	A2	the same out of a parameter's Vec	runs-clean
 h969_escape_inside_block_detached	§2.7	A2	agora #214: an escape recorded inside a block was popped with it: a by-pointer closure ran on a detached thread after its frame	rejected
+h970_try_nc_error_param	§7.6	A2	agora #205: `\ q`, q a parameter whose error cannot be copied: the caller got its own argument's error as owned	runs-clean
+h971_try_nc_error_param_field	§7.6	A2	the same through a parameter's field	runs-clean
+h972_try_nc_error_param_join	§7.6	A2	the same through a join of two parameters	runs-clean
+h973_try_nc_error_call_lends_param	§7.6	A2	`\ ( getr b )`, getr lending a parameter's field	runs-clean
+h974_try_nc_error_bound_from_call	§7.6	A2	a binding of such a call tried	runs-clean
