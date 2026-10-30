@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A registry publish reads its description and symbols from the
+  archive it has just checked** (follow-up to agora #162 / #163). After
+  storing the tarball, publish fetched it back from R2 and gunzipped it
+  twice more, once for the manifest description and once for the symbol
+  index. Both now come from the image that the bounded archive check
+  already unpacked (`descriptionInTar`, `symbolsInTar`; the
+  bucket-reading versions remain for the backfills). With the in-memory
+  D1/R2 harness, 300 publishes take 891 ms (median of five), down from
+  1194 ms on main and 1043 ms before #162 / #163. Each publish makes 6 D1
+  calls and one R2 read (the index), against 7 and 3.
 - **A registry publish reserves its name and version before it writes
   anything public** (agora #162). Ownership and immutability were read,
   then the tarball, signature and index were written to R2, and only then

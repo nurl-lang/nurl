@@ -267,6 +267,9 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   rng = 9;
   const { d1, env } = makeEnv();
   await publish(env, "tok-a", "stale", "0.1.0", tarball("stale", "alice"));
+  // Description and symbols come from the archive the publish checked.
+  const meta = d1.db.prepare(`SELECT description, symbols FROM packages WHERE name = 'stale'`).get() as { description: string; symbols: string };
+  ok(meta.description === "by alice", `description recorded from the manifest (got ${JSON.stringify(meta.description)})`);
   d1.db.prepare(`INSERT INTO versions (name, version, checksum, published_by, published_at, pending) VALUES ('stale', '1.0.0', 'x', 1, ?, 1)`).run(Date.now());
   const fresh = await publish(env, "tok-a", "stale", "1.0.0", tarball("stale", "alice"));
   ok(fresh.status === 409, `a fresh reservation blocks the same version (got ${fresh.status})`);
