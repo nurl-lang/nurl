@@ -33,7 +33,7 @@ jobs:
       matrix:
         include:
           - directory: registry
-            checks: npm run typecheck && npm run test:readme
+            checks: npm run typecheck && npm run test:readme && npm run test:publish
             artifact: registry
           - directory: cloudflare
             checks: npm run typecheck && npm run test:recovery && npm run test:artifacts

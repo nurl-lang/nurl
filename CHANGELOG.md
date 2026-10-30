@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A registry publish reserves its name and version before it writes
+  anything public** (agora #162). Ownership and immutability were read,
+  then the tarball, signature and index were written to R2, and only then
+  were the D1 rows inserted: two users publishing one unclaimed name could
+  both pass the checks, and the loser's bytes could stay in R2 under the
+  winner's ownership, or an index entry outlive the loser's failed insert.
+  Now one D1 batch reserves the package row and a `pending` version row
+  only the owner can insert (migration `0005`), so a concurrent loser gets
+  403 / 409 having written nothing; the index is a compare-and-swap on its
+  R2 etag, so concurrent publishes and yanks no longer drop each other's
+  entries; any failure removes the tarball, signature, index entry and
+  reservation it made; and lookalike new names racing each other are
+  re-checked once both exist. A publish takes one fewer D1 round trip than
+  before. `registry/test-publish.ts` runs the Worker over node:sqlite and
+  an in-memory R2 under 40 seeded interleavings per scenario.
+
 - **A package archive's expansion is bounded, on the registry and in
   nurlpkg** (agora #163). A signed tarball is still the publisher's bytes,
   and a small gzip can expand without bound: the registry signed and
@@ -17,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registry gunzips a publish within 64 MiB and 10 000 members before it
   stores or signs anything (413 / 422 otherwise, nothing left behind),
   and its file, API, README and asset routes gunzip within the same cap
-  (`gunzipBounded`, which counts every gzip member). nurlpkg downloads
+  (`gunzipBounded`). nurlpkg downloads
   with a 16 MiB body cap (`httpc_get_max`, curl `--max-filesize`, never
   holding a larger body), decompresses with `gzip_decompress_max` at
   64 MiB, and refuses an archive of more than 10 000 entries
