@@ -796,3 +796,12 @@ h834_fall_off_block_join_local	§7.6	A2	agora #188: the fall-off block ending in
 h835_ret_block_join_local	§7.6	A2	agora #188: `^ { : String w … ? c w ( mk ) }`: a block whose tail join lends its own local	runs-clean
 h836_drop_ret_block_join_local	§7.6	A2	agora #188: the same with a `% Drop` local: it cannot be copied	rejected
 h837_fall_off_block_scalar	§7.6	A2	agora #188: a fall-off block whose value is a number read from its own String	runs-clean
+h838_returned_literal_call_field_local	§7.6	A2	agora #189: `^ @ W { ( gets w ) }`, a returned literal's field from a call lending the local `w`	runs-clean
+h839_returned_literal_block_field_local	§7.6	A2	agora #189: the same field from a block `{ : W w … ( gets w ) }`	runs-clean
+h840_returned_option_call_payload_local	§7.6	A2	agora #189: `^ @ ?String { T ( gets w ) }`, an option literal's payload	runs-clean
+h841_returned_option_block_payload_local	§7.6	A2	agora #189: the same payload from a block over its own local	runs-clean
+h842_fall_off_literal_call_field_local	§7.6	A2	agora #189: the struct literal as the function's fall-off value	runs-clean
+h843_nested_literal_call_field_local	§7.6	A2	agora #189: the call field inside a literal nested in the returned one	runs-clean
+h844_returned_literal_call_field_param	§7.6	A2	agora #189: the call field lending a parameter: still a lend, not copied	runs-clean
+h860_sink_arg_block_call_lend	§7.6	A2	agora #189: `( keep { : W w ( mkw ) ( gets w ) } )`, `keep` taking a `sink`: the block's lend of its own local went to the callee as its own	runs-clean
+h861_drop_sink_arg_block_call_lend	§7.6	A2	agora #189: the same with a `% Drop` value: it cannot be copied	rejected

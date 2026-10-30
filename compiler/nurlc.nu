@@ -14712,6 +14712,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         : ~ s av ( nurl_str_cat `` `` )
         : ~ s at ( nurl_str_cat `` `` )
         : ~ s arg_lent ``
+        : ~ i arg_eff_tt 0
         : ~ b arg_call_lends F
         : ~ s arg_lit_own ``
         // (…and whether a `?` / `??` join made as it owns what it yields,
@@ -14893,10 +14894,13 @@ unsafe @ gen_call i lex i syms i cg → s {
             { ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `stfree##` ( nurl_sym_get syms `__fn_self_name__` ) `##`
                 ( nurl_sym_get syms `__last_ident_name__` ) ) `1` ) } {}
             = arg_join_own ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
-            = arg_lent ( mem_lent_cond syms cg at bck_arg_tt bck_arg_val )
+            // (A block whose tail is a call hands on that call's value:
+            // g_blk_tail_eff, agora #189.)
+            = arg_eff_tt ? & == bck_arg_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_arg_tt
+            = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
-            = arg_call_lends & & == bck_arg_tt TT_LPAREN ! ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` )
+            = arg_call_lends & & == arg_eff_tt TT_LPAREN ! ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` )
             | | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
             | ( mem_fn_lends syms ( nurl_sym_get syms `__last_call_name__` ) 0 )
             != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_call_name__` ) `__ret_borrow_x` )
@@ -15922,10 +15926,10 @@ unsafe @ gen_call i lex i syms i cg → s {
                     = av ( mem_emit_cloneif cg at av __fcl )
                 } { ? ( __nc_drop_ty at ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at ) } {} }
             } {}
-            ? & & & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) {
+            ? & & & == arg_eff_tt TT_LPAREN != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `0` ) ! ( seq arg_lent `false` ) {
                 ? ( __clone_supported at syms ) { = av ( mem_emit_cloneif cg at av arg_lent ) } {}
             } {}
-            ? & & & arg_call_lends == bck_arg_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
+            ? & & & arg_call_lends == arg_eff_tt TT_LPAREN ! ( __clone_supported at syms ) ( __nc_drop_ty at ) {
                 ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) at )
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
@@ -38246,6 +38250,8 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         = g_member_path_on __fmp0
         = g_dead_payload 0
         : s fty ( nurl_get_last_type )
+        // (A block whose tail is a call hands on that call's value: g_blk_tail_eff.)
+        : i fld_eff_tt ? & == fld_first_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN TT_LPAREN fld_first_tt
         // (A closure field is adopted — mem_clo_into_store: `\\a(…)`.)
         ? != 0 __sx_me {
             : s __fsx ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
@@ -38333,7 +38339,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // returned literal moved them into the env already).
         ? & fld_is_clo ! agg_moves_fields { ( bck_note_clo_caps_stored syms fld_first_tt fld_first_val ( nurl_lex_line lex ) ) } {}
         // A borrowed String / Vec stored into the aggregate: its copy.
-        ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_first_tt fld_first_val ) } {}
+        ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_eff_tt fld_first_val ) } {}
         // (…but a field taken out of a call's result is a value of its own,
         // h266: it moves in.)
         ? & == fld_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
@@ -38480,6 +38486,16 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // local, the result pointed into what the return released (h327).
         ? & & & agg_moves_fields ( seq fld_lent `1` ) == fld_first_tt TT_DOT ( __nc_drop_ty fty ) {
             ( __nc_ret_check lex syms fty fld_first_tt fld_first_val agg_line )
+        } {}
+        // A returned literal's field from a call that lends it, and may lend
+        // it out of a local of this frame — dropped on the way out: copied,
+        // as `^ ( g x )` copies it (agora #189). (One that cannot be copied
+        // is never lent here: the store of it is judged at module end, h228.)
+        ? & & & agg_moves_fields ( seq fld_lent `1` ) == fld_eff_tt TT_LPAREN == g_bck_closure_depth 0 {
+            ? != 0 ( nurl_str_len ( mem_ret_local_lend syms cg ) ) {
+                = fval ( mem_emit_cloneif cg fty fval `1` )
+                = fld_lent ``
+            } {}
         } {}
         ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
