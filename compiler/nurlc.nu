@@ -19874,9 +19874,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                         // payload moved out takes the option's ownership.
                         // An enum's payload that cannot be copied, the enum
                         // held by a binding or a parameter: lent to the arm —
-                        // the enum keeps it in its own cell (h231).
+                        // the enum keeps it in its own cell (h231). (…or by a
+                        // name that owns nothing itself, a view of an enum
+                        // someone else keeps: an arm's payload, agora #208.)
                         ? & & ! pt0_is_opt_bool ( __nc_drop_ty pt0_eff ) | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
-                        | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
+                        | | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0
+                        ( is_ident_tok match_first_tt ) {
                             ( mem_udrop_flag_set syms cg vp0 `0` )
                             ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
                         } {}
@@ -19890,7 +19893,15 @@ unsafe @ gen_match i lex i syms i cg → s {
                                 ? >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
                                     ( mem_udrop_flag_set syms cg vp0 `0` )
                                     ( nurl_sym_def syms ( nurl_str_cat vp0 `__optparam` ) match_var_name )
-                                } {}
+                                } {
+                                    // A name that owns nothing itself (an arm's
+                                    // payload, a view): the option is someone
+                                    // else's, its payload lent (agora #208).
+                                    ? ( is_ident_tok match_first_tt ) {
+                                        ( mem_udrop_flag_set syms cg vp0 `0` )
+                                        ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                                    } {}
+                                }
                             }
                         } {} }
                     {}
@@ -19898,7 +19909,13 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // (An option payload — `??T`'s inner option — counts as its
                     // registration twin, h238.)
                     : s pt0_reg ( __udrop_regty pt0_eff )
-                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) ( __is_handle_ty pt0_reg ) {
+                    // (…and one that cannot be copied whose drop the compiler
+                    // makes — an enum holding a `% Drop` value: owned by
+                    // nothing, it leaked, agora #208. A user `% Drop` one is
+                    // registered above.)
+                    : b __pt0_ncauto & ( __nc_drop_ty pt0_eff )
+                    | == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` pt0_eff ) ( __drop_is_compiler_auto pt0_eff )
+                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) | ( __is_handle_ty pt0_reg ) __pt0_ncauto {
                         ( __handle_drop_ensure pt0_reg )
                         ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 scrut_own )

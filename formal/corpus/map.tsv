@@ -917,3 +917,10 @@ h953_ret_param_loop_body_escape	§2.8	A2	the same `^ cb` inside a loop body	reje
 h954_ret_param_match_arm_escape	§2.8	A2	the same `^ cb` inside a `??` arm	rejected
 h955_raw_maybe_fresh_rec_returned	§2.13	A2	a raw string a call may hand over fresh, stored in a returned struct: taken for a lend (one path's `^ x`), it leaked	rejected
 h956_raw_maybe_fresh_rec_bound_returned	§2.13	A2	the same struct bound first, then handed back: freed under the caller	rejected
+h962_nested_enum_over_vget_payload	§7.6	A2	agora #208: a nested `??` over a `vec_get` element's enum: the inner arm dropped its `% Drop` payload	runs-clean
+h963_nested_option_over_vget_payload	§7.6	A2	the same over an option element	runs-clean
+h964_nested_enum_over_lent_call_payload	§7.6	A2	the same over the option payload of a call lending a parameter's field	runs-clean
+h965_nested_view_payload_moved_out	§7.6	A2	the inner payload of a `vec_get` element moved out: dropped by both Vecs	rejected
+h966_fresh_option_enum_payload_flat	§7.6	A2	a fresh `?E` whose enum holds a `% Drop` value: its payload was owned by nothing and leaked	runs-clean
+h967_fresh_option_enum_payload_nested	§7.6	A2	the same matched again inside the arm	runs-clean
+h968_bound_option_enum_payload_nested	§7.6	A2	a nested `??` over a bound option's enum payload: dropped twice	runs-clean

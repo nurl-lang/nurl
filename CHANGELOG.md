@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lends back is now judged by the call's per-call answer, even when the
   call is summarised as handing back a parameter.
 
+- **A `??` over a name that owns nothing lends its arms the payload, and
+  a fresh `?E` owns its enum** (Agora #208, h962–h968). `?? ( vec_get [E]
+  xs 0 ) { T e → { ?? e { EV r → … } } }`, with E holding a `% Drop`
+  value, dropped r in the inner arm while xs still held it. So did the same
+  shape over an option element, and over a call lending a parameter's
+  field. The outer payload e owns nothing, so a match over it now lends
+  its payloads, as a match over a parameter or an owning binding already
+  did. `?? ( mke ) { T e → … }`, with mke handing over a fresh `?E`,
+  registered e with no owner, and it leaked. It is now owned by the call's
+  bit, as a String payload is.
+
 ## [0.81.0] — 2026-10-30
 
 ### Changed
