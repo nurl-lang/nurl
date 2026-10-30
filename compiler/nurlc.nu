@@ -135,6 +135,16 @@
 : ~ i g_diag_recover_active 0
 : i NURLC_MAX_ERRORS 20
 
+// The nesting limit (see `── Nesting limit` above gen_expr): the
+// gen_expr / gen_stmt / parse_type levels open now.
+: ~ i g_nest_depth 0
+// The limit, 0 for none: --max-nesting / NURL_MAX_NESTING, else 1000
+// (nurlc_print_help says so too).
+: ~ i g_max_nesting 1000
+// Who set g_max_nesting: 0 the default or the variable, 1 a flag, 2
+// --max-nesting-fixed (then nothing changes it).
+: ~ i g_max_nesting_set 0
+
 // Diagnostic context suffix, appended to every die/warn message while
 // non-empty. Set (and saved/restored — instantiations nest) around a
 // generic instantiation's re-parse: the location then points at the
@@ -778,7 +788,16 @@ unsafe @ __strip_spaces s t → s {
 // struct a sealed representation (__ty_sealed).
 : ~ i g_pt_star 0
 
+// Counted with gen_expr's levels (the nesting limit): `( Vec ( Vec …`
+// recurses here once per level, and ran out of stack the same way.
 @ parse_type i lex → s {
+    ( __nest_enter lex )
+    : s t ( __parse_type_level lex )
+    = g_nest_depth - g_nest_depth 1
+    ^ t
+}
+
+@ __parse_type_level i lex → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
     ? == tt TT_QUEST { ^ ( parse_type_opt lex ) } {}
@@ -5856,7 +5875,63 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ( nurl_str_cat `this token` `` )
 }
 
+// ── Nesting limit ─────────────────────────────────────────────────
+// gen_expr, gen_stmt and parse_type recurse once per level a program
+// nests expressions, blocks and types inside one another, so a program nested deep
+// enough ran nurlc out of stack: a SIGSEGV and no diagnostic (8 MiB took
+// about 5 400 nested `?` statements). g_nest_depth counts the levels open
+// now. Past g_max_nesting the compile stops with a diagnostic instead.
+//   --max-nesting=N / NURL_MAX_NESTING=N  set the limit; 0 turns it off.
+//                                          The flag wins over the variable.
+//   --max-nesting-fixed=N  set it for good: later flags and the variable
+//                          are ignored, and the diagnostic offers no way
+//                          to raise it. For a service that compiles other
+//                          people's code (nurlapi).
+// The default is far past anything written by hand and still well inside
+// an 8 MiB stack for every construct measured.
+// (g_nest_depth, g_max_nesting and g_max_nesting_set are declared with
+// the abort helpers, ahead of parse_type.)
+
+// A --max-nesting value: decimal digits only, at most 9 of them. -1 when
+// it is not one.
+@ __nesting_arg s v → i {
+    : i n ( nurl_str_len v )
+    ? | == n 0 > n 9 { ^ - 0 1 } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get v k )
+        ? | < c 48 > c 57 { ^ - 0 1 } {}
+        = k + k 1
+    }
+    ^ ( nurl_str_to_int v )
+}
+
+// Fatal, past any recovery frame: resyncing from thousands of levels deep
+// took longer than the nesting itself (quadratic in it) and only reported
+// the leftover tokens as more errors.
+@ __nest_die i lex → v {
+    = g_diag_recover_active 0
+    : s lim ( nurl_str_int g_max_nesting )
+    ? == g_max_nesting_set 2 {
+        ( die lex ( nurl_str_cat3 `nested deeper than ` lim ` levels (expressions, blocks and types inside one another), the limit this build runs under; it cannot be raised here. Split the code into functions or bind intermediate values` ) )
+    } {
+        ( die lex ( nurl_str_cat3 `nested deeper than ` lim ` levels (expressions, blocks and types inside one another). Split the code into functions or bind intermediate values, or raise the limit with --max-nesting=N or NURL_MAX_NESTING=N (0 turns it off); nesting much deeper can also need a larger stack (ulimit -s)` ) )
+    }
+}
+
+@ __nest_enter i lex → v {
+    = g_nest_depth + g_nest_depth 1
+    ? & > g_max_nesting 0 > g_nest_depth g_max_nesting { ( __nest_die lex ) } {}
+}
+
 @ gen_expr i lex i syms i cg → s {
+    ( __nest_enter lex )
+    : s v ( __gen_expr_level lex syms cg )
+    = g_nest_depth - g_nest_depth 1
+    ^ v
+}
+
+@ __gen_expr_level i lex i syms i cg → s {
     // Value-ownership provenance is consume-latest state, just like the
     // existing call / join side channels. Clear it for EVERY expression so a
     // preceding binding or inner statement cannot masquerade as this value.
@@ -33167,7 +33242,15 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ^ ! ( seq lt `void` )
 }
 
+// Counted with gen_expr's levels (see the nesting limit above it).
 @ gen_stmt i lex i syms i cg → s {
+    ( __nest_enter lex )
+    : s v ( __gen_stmt_level lex syms cg )
+    = g_nest_depth - g_nest_depth 1
+    ^ v
+}
+
+@ __gen_stmt_level i lex i syms i cg → s {
     // A view temporary never outlives its statement (gen_call): one no
     // call consumed is rejected once owned (resolve_view_temps).
     ( nurl_sym_def syms `__deferred_temps__` `` )
@@ -64101,7 +64184,12 @@ unsafe @ parse_program i lex i syms i cg → v {
         // (imports re-enter parse_program) nest frames; the depth counter
         // keeps die's panic-vs-exit decision right on the way back out.
         = g_diag_recover_active + g_diag_recover_active 1
+        // A diagnostic's panic skips the nesting count's way back out of
+        // every gen_expr / gen_stmt level it unwinds; the next declaration
+        // starts where this one did.
+        : i nest0 g_nest_depth
         : i rv ( __diag_recover \ → v { ( parse_toplevel_decl lex syms cg ) } )
+        = g_nest_depth nest0
         = g_diag_recover_active - g_diag_recover_active 1
         ? != rv 0 {
             : s pm ( nurl_panic_last_msg )
@@ -67170,6 +67258,12 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `  --import-root=DIR   read imports only from under DIR (repeatable; symlinks\n` )
     ( nurl_print `                      and '..' resolved first). Default: $NURL_IMPORT_ROOTS,\n` )
     ( nurl_print `                      ':'-separated; unset means no confinement\n` )
+    ( nurl_print `  --max-nesting=N     stop with a diagnostic past N levels of expressions,\n` )
+    ( nurl_print `                      blocks and types inside one another (default 1000;\n` )
+    ( nurl_print `                      0: no limit).\n` )
+    ( nurl_print `                      Default: $NURL_MAX_NESTING\n` )
+    ( nurl_print `  --max-nesting-fixed=N  the same, for good: later flags and the variable\n` )
+    ( nurl_print `                      cannot change it (a service compiling others' code)\n` )
     ( nurl_print `  --unsafe-report     list what the program asks to be trusted (outside the stdlib) on stderr: unsafe functions, unsafe Send/Sync assertions, in/sync/nocapture FFI claims\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
@@ -67452,6 +67546,19 @@ unsafe @ main → i {
             } {}
             = ai + ai 1 continue
         } {}
+        ? | != 0 ( nurl_str_starts a `--max-nesting=` ) != 0 ( nurl_str_starts a `--max-nesting-fixed=` ) {
+            : b fixed != 0 ( nurl_str_starts a `--max-nesting-fixed=` )
+            : i at ? fixed 20 14
+            : i lim ( __nesting_arg ( nurl_str_slice a at - ( nurl_str_len a ) at ) )
+            ? < lim 0 {
+                ( nurl_eprintln ( nurl_str_cat3 `nurlc: ` a `: the limit is a whole number of levels (0 turns it off)` ) ) ^ 2
+            } {}
+            ? != g_max_nesting_set 2 {
+                = g_max_nesting lim
+                = g_max_nesting_set ? fixed 2 1
+            } {}
+            = ai + ai 1 continue
+        } {}
         ? ( seq a `--unsafe-report` ) { = g_unsafe_report 1 = ai + ai 1 continue } {}
         ? ( seq a `--sanitize-address` ) { = g_sanitize_address 1 } {
             ? | ( seq a `--version` ) ( seq a `-v` )
@@ -67498,7 +67605,7 @@ unsafe @ main → i {
         = ai + ai 1
     }
     ? | != path_count 1 == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch | --target=ARCH] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>` ) ^ 1 }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch | --target=ARCH] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--max-nesting=N | --max-nesting-fixed=N] [--] <file.nu>` ) ^ 1 }
     {}
     ? & != 0 ( nurl_str_len g_coverage_notes ) == 0 ( nurl_str_len g_coverage_prefix ) {
         ( nurl_eprintln `nurlc: --coverage-notes requires --coverage=PREFIX` ) ^ 2
@@ -67508,6 +67615,17 @@ unsafe @ main → i {
     } {}
     ? != != 0 ( nurl_str_len g_coverage_notes ) != 0 ( nurl_str_len g_coverage_link_ir ) {
         ( nurl_eprintln `nurlc: --coverage-notes and --coverage-link-ir must be used together` ) ^ 2
+    } {}
+    // No --max-nesting: the environment may set the limit instead.
+    ? == g_max_nesting_set 0 {
+        : s nv ( getenv `NURL_MAX_NESTING` )
+        ? != # i nv 0 {
+            : i lim ( __nesting_arg nv )
+            ? < lim 0 {
+                ( nurl_eprintln ( nurl_str_cat3 `nurlc: NURL_MAX_NESTING=` nv `: the limit is a whole number of levels (0 turns it off)` ) ) ^ 2
+            } {}
+            = g_max_nesting lim
+        } {}
     } {}
     // No --import-root: the environment may confine instead, which is
     // how a build script between a server and nurlc passes it through.
