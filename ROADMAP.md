@@ -7,14 +7,14 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-27 · Current release: **0.79.1** · Language: **Grammar
+_Last reviewed: 2026-10-30 · Current release: **0.81.0** · Language: **Grammar
 v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
 ## Status at a glance
 
-NURL is a small systems language with a regular prefix-arity grammar, a
+NURL is a systems language with a regular prefix-arity grammar, a
 self-hosted compiler written in NURL, and an LLVM backend. The compiler
 bootstraps to a **byte-identical fixed point** on its own source (stage1 ≡
 stage2). The only build dependency is clang / LLVM 15+.
@@ -505,7 +505,8 @@ platform-specific shims.
   local LLMs (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech
   recognition and synthesis (`whisper`, `f5tts`, `audio` — WAV, resampling,
   mel spectrograms and MP3 encoding), agent coordination (`agora` — channels,
-  mail, a task board and notes over one SQLite file, as MCP and REST),
+  mail, a task board, notes and rules, organisation skills and feedback,
+  as MCP, REST and a web console),
   distributed compute (`swarm`, `swarm-mcp`), web
   (`template` HTML templating, `http`, `http-client` — one client facade
   over HTTP/1.1, HTTP/2 and HTTP/3 — `gRPC`, a native client and server over
@@ -624,8 +625,15 @@ new language features.
   `sink`, or by a closure the body runs), and an `inout` callee taking a
   field its caller borrowed; and h421–h423: an option of a String kept
   by a callee (`vec_push`) was not tied to the container's life; and
-  h424–h425: a field of a call's lent result handed to a `sink`. None is
-  open.
+  h424–h425: a field of a call's lent result handed to a `sink`; and
+  h426–h936 (0.81.0): a `;` defer releasing what a return or a block
+  hands back, the standard library's raw entry points made safe for
+  every argument, a `Fiber` joined twice or never and a select waiter
+  dropped while armed, enum and option payloads, joins, value blocks,
+  tries and bindings handing back or storing a lend of a local (a part of
+  one, a `% Drop` value a call lent, a join's arm), a value of another
+  shape in a literal field, and raw strings an early return left in a
+  loop's slots. None is open.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4

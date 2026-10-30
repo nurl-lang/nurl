@@ -128,7 +128,7 @@ What it checks, briefly:
 - **Alias / double-free** — the checker treats an immutable copy of an owned
   binding as a move, not a second owner.
 - **Escaping closures** — you cannot return, store, or send a closure to a
-  thread if it captures by reference: a `: ~` binding it assigns or hands
+  thread, a fiber or a signal handler if it captures by reference: a `: ~` binding it assigns or hands
   to an `inout` parameter, or a `: ~` multi-field struct.
 - **Exclusive access at a call site** — a binding you pass `inout` cannot
   also have an alias from another plain argument in the same call. The

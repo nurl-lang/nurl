@@ -102,7 +102,7 @@ $ `stdlib/std/async.nu`
 | `runtime_init workers` | start the worker pool |
 | `runtime_run` | block until the pending-fiber count reaches 0 |
 | `spawn body` | fire-and-forget fiber |
-| `spawn_joinable body` | fiber whose completion can be awaited with `fiber_join` |
+| `spawn_joinable body` | fiber whose completion can be awaited with `fiber_join`; `fiber_join` takes the handle (a `Fiber` is move-only), and a handle dropped unjoined detaches the fiber |
 | `yield` | cooperative reschedule point |
 
 `stdlib/runtime_ctx.c` implements inline-assembly fiber context switching on **`x86_64`** (Linux glibc and musl, macOS, FreeBSD), **`AArch64`** (Linux and macOS ARM64), and **`RISC-V64`** (including freestanding unikernels), falling back to POSIX `ucontext` on other Unix targets. On stubbed targets (**Windows**, **OpenBSD**, and **WASI**), fibers are not supported and `spawn` is a no-op stub — treat stubbed platforms as having no async runtime.

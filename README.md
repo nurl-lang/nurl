@@ -1,6 +1,6 @@
 # NURL — Neural Unified Representation Language
 
-> A small systems language with a regular prefix-arity grammar, single-owner memory whose ownership rules make safe programs memory-safe and leak-free, deterministic compilation, and LLVM-based codegen.
+> A systems language with a regular prefix-arity grammar, single-owner memory whose ownership rules make safe programs memory-safe and leak-free, deterministic compilation, and LLVM-based codegen.
 
 **Project site:** <https://nurl-lang.org> · **Live playground & MCP endpoint:** <https://play.nurl-lang.org>
 

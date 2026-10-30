@@ -430,8 +430,10 @@ aggregate and closure literals, and `?` / `??` joins. An escape is an
 error when a stack reference reaches:
 
 - a `^` return,
-- a container (`vec_push`, `vec_insert`, `vec_set`) or a thread
-  (`thread_spawn`),
+- a container (`vec_push`, `vec_insert`, `vec_set`), or a call that
+  detaches it: a thread or a fiber (`thread_spawn`, `thread_spawn_owned`,
+  `spawn`, `spawn_owned`, `spawn_joinable`) or `signal_install`
+  (h503–h505),
 - an assignment into a binding of a longer-lived scope.
 
 ```text
@@ -909,7 +911,21 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last ones are closed. *A field of a
+**No hole is known open.** The last ones are closed (0.81.0,
+h426–h936). Most were one shape in many contexts: a value lent out of one
+of the function's own locals, by a call, a try, a join's arm, a value
+block's tail or a binding of any of them, was handed back, stored,
+assigned to an `inout` parameter or given to a `sink` as if it were the
+function's own, and the local released it on the way out. Such a value is
+copied now where it lent. A value that cannot be copied (a `% Drop` type,
+an option or a result of one) is refused, and a lend of a parameter stays
+a lend. A binding that holds part of a local (`: String s ( gets w )`) is
+a cursor over that part, never the local's whole value. Beside those:
+a `;` defer that releases what a return or a block hands back is
+refused, a `Fiber` is a move-only handle that `fiber_join` takes, the
+standard library's raw entry points are safe for every argument, a
+literal field of another shape is refused, and a raw string an early
+return left in a loop's slot is freed. Before them, *a field of a
 call's lent result handed to a `sink`* — `( string_free . ( box_get b )
 name )` — went over as is, and the owner released it again (agora #150,
 h424–h425): the callee is handed a copy now, as a bare lent result is
@@ -1451,7 +1467,7 @@ handed to a callee that takes it from a binding that cannot give it
 capture (h405–h407), an option parameter's payload handed back
 (h408–h415), a loop's container released in its body (h416–h420), an option kept
 by a callee (h421–h423), and a field of a call's lent result handed to a
-`sink` (h424–h425).
+`sink` (h424–h425); after 0.80.0, h426–h936 (§6.2).
 
 The rules that carry it:
 

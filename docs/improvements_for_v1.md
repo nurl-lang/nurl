@@ -129,7 +129,12 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
   wasm-threads path can also free it again (`stdlib/std/async.nu`,
   `stdlib/runtime_ffi.c`). *(0.71.0, #1166: `fiber_join` now waits until the
   worker is through with a finished fiber; the detached-handle case is not
-  re-verified.)*
+  re-verified.)* *(0.81.0, agora #168: `Fiber` is a sealed, move-only
+  handle and `fiber_join` takes it, so a second join is a use after move;
+  a joinable handle dropped unjoined detaches; a `spawn` / `fiber_current`
+  handle is not joinable — h610–h615. Open: a wrong-kind join is still a
+  silent no-op rather than a typed error, and the concurrent-join and
+  shutdown stress tests.)*
   - Use distinct `DetachedFiber` and `JoinHandle` types, or a refcounted/registered
     control block whose state remains valid through join.
   - Make wrong-kind joins unrepresentable at compile time where possible;
@@ -399,7 +404,11 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
 - [ ] **P0 — Bound and strictly validate package archives end to end.** Client
   package fetch uses unlimited gzip decompression and tar extraction lacks
   aggregate/member/count limits; registry read paths also decompress complete
-  objects.
+  objects. *(0.81.0, agora #163: nurlpkg caps a download at 16 MiB, its
+  decompression at 64 MiB and an archive at 10 000 entries; the registry
+  applies 64 MiB / 10 000 before it stores or signs anything, and its read
+  paths gunzip within the same cap. Open: per-file, path-depth,
+  duplicate-path and expansion-ratio limits.)*
   - Enforce streaming limits for compressed and decoded bytes, expansion ratio,
     CPU, entry count, individual file, total extracted bytes, path length/depth,
     and duplicate normalized paths.
@@ -410,8 +419,10 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     malformed-header, race, and boundary tests.
 
 - [ ] **P0 — Make registry publication serialized, atomic, validated, and
-  obligatorily signed.** Ownership checks, object/signature/index writes, and D1
-  updates are currently separate operations; the signing key is optional.
+  obligatorily signed.** The signing key is optional. *(0.81.0, agora #162:
+  one D1 batch reserves the name and version, the index is a
+  compare-and-swap on its R2 etag, and a failure cleans up what was
+  written.)*
   - Production must refuse startup/publication without a valid signing key.
     Reserve owner/version under a uniqueness constraint, make object writes
     immutable/idempotent, and expose a version only after every object and index
@@ -452,8 +463,10 @@ accurate user-facing documentation. A local one-off pass is not sufficient.
     CSP, referrer, and frame policies to token/account pages.
 
 - [ ] **P1 — Protect package credentials and publication contents.** The curl
-  backend can place bearer headers in process arguments, follows redirects, and
-  permits `http://`; credential files follow symlinks, are unlocked and are not
+  backend follows redirects and permits `http://` (0.81.0: secret headers
+  reach curl on stdin, `-K -`, not in its arguments — agora #164 — and curl
+  runs only http(s) URLs, with `--proto` / `--proto-redir` and `--`, agora
+  #166); credential files follow symlinks, are unlocked and are not
   fsynced. Packaging can include sensitive dotfiles by default. (Done: the file
   is created owner-only by `mkstemp` and renamed into place —
   `write_file_private` — and lives under `env_home_dir`, the user profile on
