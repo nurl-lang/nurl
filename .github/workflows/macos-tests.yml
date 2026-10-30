@@ -33,17 +33,39 @@ name: macos-tests
 # requirement it needs in its own source (compiler/tests/test_skips.sh)
 # and is skipped by capability, not pinned to a divergent expectation.
 
+# When it runs (Agora #213):
+#
+#   * every push to main, and a manual dispatch (Actions → macos-tests →
+#     Run workflow; pick a branch or a tag);
+#   * a pull request only when it carries the `ci:macos` label.
+#
+# macOS runners are scarce. On 2026-10-30, github#1347, #1348 and #1349
+# never got one: every attempt was cancelled with 0 steps. A job that
+# never started still shows as a red X on the PR, so a PR whose code
+# passed everything read as failing, and watchers reran it in a loop.
+# The PR gate therefore asks for macOS explicitly. Label a PR that
+# touches what differs on Darwin: stdlib/runtime*.c, build.sh, nurl.sh,
+# the installers, run_tests.sh / test_skips.sh, or this file. The
+# `changes` job leaves a notice on any such PR that has no label.
+# Everything else is covered by the run on main right after the merge.
+# The release cannot skip macOS: release.yml's verify-ci waits for a
+# green macos-tests run on the tagged commit and stops the release
+# without one (RELEASING.md, step 4).
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    # `labeled` so that adding `ci:macos` starts the run without a push.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 # macOS runners are the scarcest minutes in the repo; do not leave a
-# superseded run burning them.
+# superseded run burning them. A `labeled` event for any other label
+# gets a group of its own (its run id), so it cannot cancel a macOS run
+# that is in progress. Its macos job is skipped anyway.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -52,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+    # Nothing to classify for a `labeled` event with some other label.
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci:macos' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,13 +96,39 @@ jobs:
               - '!webdocs/**'
               - '!formal/**'
               - '!CHANGELOG.md'
+      # A second filter, because the one above needs 'every' and this
+      # one needs 'some' (any listed path).
+      - uses: dorny/paths-filter@v3
+        id: darwin
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          filters: |
+            darwin:
+              - 'stdlib/*.c'
+              - 'stdlib/*.h'
+              - 'stdlib/core/posix.nu'
+              - 'build.sh'
+              - 'build_lastgood.sh'
+              - 'nurl.sh'
+              - 'install.sh'
+              - 'tools/install-toolchain.sh'
+              - 'tools/get-nurl.sh'
+              - 'compiler/tests/run_tests.sh'
+              - 'compiler/tests/test_skips.sh'
+              - 'tools/tests/test_driver_paths.py'
+              - 'tools/tests/test_arithmetic_safety.py'
+              - '.github/workflows/macos-tests.yml'
+      - name: Point a Darwin-sensitive PR at the label
+        if: ${{ github.event_name == 'pull_request' && steps.darwin.outputs.darwin == 'true' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
+        run: echo "::notice title=macOS not run::This PR touches files that differ on Darwin. Add the ci:macos label to run the macOS gate before merging; otherwise main runs it after the merge."
 
   macos:
     needs: changes
     # On a push or a manual dispatch there is no PR base to diff
-    # against, so the filter has nothing to say — run. On a PR, skip a
-    # docs-only change rather than spend macOS minutes on it.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
+    # against, so the filter has nothing to say — run. On a PR, run only
+    # when it carries `ci:macos` (see the comment at the top), and even
+    # then skip a docs-only change rather than spend macOS minutes on it.
+    if: ${{ github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci:macos') && needs.changes.outputs.code == 'true') }}
     # Apple Silicon only, and that is a capacity fact rather than a
     # preference. This started as a matrix with `macos-13` (the last
     # Intel image) as its second leg; across ten runs that job never once
