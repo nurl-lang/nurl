@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string lent out of a block's local
+drop 1
+a string lent out of a block's local
+drop 2
+drop 3
+a string lent out of a block's local
+drop 4
+a string lent out of a block's local
+a parameter's string
+56
+drop 9

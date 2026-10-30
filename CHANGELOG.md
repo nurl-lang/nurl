@@ -151,6 +151,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value block bound with `:` does not lend the binding its own
+  locals** (Agora #193, h875–h879). `: String r { : W w ( mkw ) ( gets w )
+  }` followed by `= out r` in a loop body or an arm, or by `^ r`, handed
+  on a lend of `w`. The checker takes a block's value for what its locals
+  held and let `r` outlive them, but a value block's locals live only to
+  the end of the enclosing scope, so the next read was of freed memory.
+  The value is now copied in place at the binding, which owns it. A
+  `% Drop` value is refused. A lend of a binding made before the block
+  stays a lend, and the compiler's own output is byte-identical.
 - **A try over a call that lends a local hands on the call's lend**
   (Agora #194, h862–h864). `^ @ !String E { T \ ( getr w ) }`, with `getr`
   lending a field of the local `w`, and `( keep \ ( getr w ) )` with
