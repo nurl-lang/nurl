@@ -38468,6 +38468,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
         ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         ? fld_param_copy { = fld_lent ( nurl_str_cat `1` `` ) } {}
+        // A `vec_get` element that cannot be copied, moved into the literal,
+        // is taken out of its slot as a consumer argument takes it
+        // (mem_vget_consume): left there, its Vec dropped it under the
+        // literal (agora #204). (One that can be copied is copied.)
+        ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy != 0 ( nurl_sym_len2 syms fld_first_val `__vget` )
+        ( __nc_held_ty ( nurl_sym_get syms fld_first_val ) ) {
+            ( mem_vget_consume syms cg fld_first_val `1` )
+            = fld_lent ``
+        } {}
         : s __lm_w ? & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ( __type_needs_drop ( nurl_sym_get syms fld_first_val ) syms ) fld_first_val `-`
         = __lm_mv ? == 0 ( nurl_str_len __lm_mv ) ( nurl_str_cat __lm_w `` ) ( nurl_str_cat3 __lm_mv ` ` __lm_w )
         // A parameter handed back wrapped (`^ @ ?T { T p }`, `^ @ !T E { T p }`)
