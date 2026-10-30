@@ -901,3 +901,30 @@ h937_try_param_field_result_error	§7.6	A2	agora #202: `: i v \ . p r`, r a para
 h938_try_join_param_results_error	§7.6	A2	agora #202: `: i v \ { ? c a b }` over two `!i String` parameters: the same through a join	runs-clean
 h939_try_call_error_lent_from_local	§7.6	A2	agora #202: `: i v \ ( gete w )`, gete handing back `@ !i String { F . w s }` over the local `w`: the error went to the caller as its own and w released it	runs-clean
 h940_try_call_error_lent_from_param	§7.6	A2	agora #202: the same over a parameter `w`: the caller got its own argument's field as a second owner	runs-clean
+h941_drop_vec_get_scrut_arm	§7.6	A2	agora #203: `?? ( vec_get [Res] xs 0 )` with a `% Drop` payload: the arm dropped the element xs still held	runs-clean
+h942_drop_field_accessor_scrut_arm	§7.6	A2	the same over an accessor handing back a parameter's option field	runs-clean
+h943_drop_param_alias_scrut_arm	§7.6	A2	the same over a call handing back its option parameter (`^ q`)	runs-clean
+h944_drop_nested_alias_scrut_arm	§7.6	A2	the same through two such calls	runs-clean
+h945_drop_result_err_alias_scrut_arm	§7.6	A2	the Err arm of an `!i Res` handed back by `^ q`	runs-clean
+h946_drop_alias_payload_bound_on	§7.6	A2	the lent payload bound on inside the arm	runs-clean
+h947_drop_value_match_vec_get	§7.6	A2	a value-position `??` over `vec_get`	runs-clean
+h948_drop_param_result_temp_scrut	§7.6	A2	`?? ( f r )`, f handing back its `!i Res` parameter: the Err arm dropped r's error	runs-clean
+h949_drop_param_ret_nested_block	§7.6	A2	`? c { ^ q } {}  ^ ( mkres )`, q a `% Drop` parameter: the caller dropped r and the result	runs-clean
+h950_drop_param_ret_mixed_fresh_leak	§7.6	A2	`? c { ^ ( mkres ) } {}  ^ q`: the fresh result, taken for a view of r, leaked	runs-clean
+h951_drop_mixed_accessor_scrut_arm	§7.6	A2	a `??` over a call handing back its option parameter or a fresh one: the arm dropped r's payload	runs-clean
+h952_ret_param_nested_block_escape	§2.8	A2	agora #206: a callee's `^ cb` inside a block was never summarised: a closure capturing a local by pointer escaped its frame	rejected
+h953_ret_param_loop_body_escape	§2.8	A2	the same `^ cb` inside a loop body	rejected
+h954_ret_param_match_arm_escape	§2.8	A2	the same `^ cb` inside a `??` arm	rejected
+h955_raw_maybe_fresh_rec_returned	§2.13	A2	a raw string a call may hand over fresh, stored in a returned struct: taken for a lend (one path's `^ x`), it leaked	rejected
+h956_raw_maybe_fresh_rec_bound_returned	§2.13	A2	the same struct bound first, then handed back: freed under the caller	rejected
+h962_nested_enum_over_vget_payload	§7.6	A2	agora #208: a nested `??` over a `vec_get` element's enum: the inner arm dropped its `% Drop` payload	runs-clean
+h963_nested_option_over_vget_payload	§7.6	A2	the same over an option element	runs-clean
+h964_nested_enum_over_lent_call_payload	§7.6	A2	the same over the option payload of a call lending a parameter's field	runs-clean
+h965_nested_view_payload_moved_out	§7.6	A2	the inner payload of a `vec_get` element moved out: dropped by both Vecs	rejected
+h966_fresh_option_enum_payload_flat	§7.6	A2	a fresh `?E` whose enum holds a `% Drop` value: its payload was owned by nothing and leaked	runs-clean
+h967_fresh_option_enum_payload_nested	§7.6	A2	the same matched again inside the arm	runs-clean
+h968_bound_option_enum_payload_nested	§7.6	A2	a nested `??` over a bound option's enum payload: dropped twice	runs-clean
+h957_vget_payload_rewrapped_param_vec	§7.6	A2	agora #204: a `vec_get` payload moved into a returned option stayed in the parameter's slot: freed twice	runs-clean
+h958_vget_payload_rewrapped_local_vec	§7.6	A2	the same out of a local Vec, dropped on the way out	runs-clean
+h959_vget_payload_in_local_struct	§7.6	A2	a `vec_get` payload moved into a local struct: the struct and the Vec both dropped it	runs-clean
+h960_vget_payload_in_struct_param_vec	§7.6	A2	the same out of a parameter's Vec	runs-clean

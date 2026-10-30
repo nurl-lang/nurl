@@ -23,6 +23,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an error that a local released on the way out, or that its own argument
   still held.
 
+- **A `% Drop` value that cannot be copied, handed back by a call that
+  lends it, is lent to a `??` arm** (Agora #203, h941–h951). `?? (
+  vec_get [Res] xs 0 ) { T e → … }` dropped the element `xs` still held at
+  the end of the arm. So did `?? ( pass r )` with `pass` = `^ q`, an
+  accessor `^ . h o`, an `!i Res` result's `F e` arm, and a value-position
+  `??`. The arms are now lent the payload. A `vec_get` element can still be
+  taken by a consumer, which empties its slot. `^ p` of a parameter of
+  such a type now answers per call, as a String or a Vec does. A function
+  that hands back the parameter on one path and a fresh value on another
+  used to fail both ways. `? c { ^ q } {}  ^ ( mkres )` handed the caller
+  its own argument as owned, and the caller dropped it twice. `? c { ^ (
+  mkres ) } {}  ^ q` leaked the fresh value, which was taken for a view of
+  the argument.
+
+- **A parameter handed back from inside a block is summarised**
+  (Agora #206, h952–h956). The returned-parameter records
+  (bck_record_ret_param, bck_record_ret_alias) were written into the
+  scope of the block holding the `^`, and that block's pop discarded
+  them. So `? c { ^ cb } {}`, or a `^ cb` in a loop body or a `??` arm,
+  never told callers that the result may be their argument. A closure
+  that captures a local by pointer then escaped `make` through `^ ( pick
+  T f )`, a stack-use-after-scope. The records now go to the function's
+  own summary. Two rules that had been relying on the loss are now exact.
+  A `??` payload that holds no address (a truth value, a float, or an
+  enum with no payloads) carries none of its scrutinee's parameters. A raw
+  string handed back by a NURL body may be handed over unless no path of
+  the body does (`__ret_unowned`). Before, a `^ x` on one path made `(
+  maybe_fresh a 1 )` look like a lend, and a fresh string stored in a
+  struct leaked or was freed under the caller. A temporary that a call
+  lends back is now judged by the call's per-call answer, even when the
+  call is summarised as handing back a parameter.
+
+- **A `??` over a name that owns nothing lends its arms the payload, and
+  a fresh `?E` owns its enum** (Agora #208, h962–h968). `?? ( vec_get [E]
+  xs 0 ) { T e → { ?? e { EV r → … } } }`, with E holding a `% Drop`
+  value, dropped r in the inner arm while xs still held it. So did the same
+  shape over an option element, and over a call lending a parameter's
+  field. The outer payload e owns nothing, so a match over it now lends
+  its payloads, as a match over a parameter or an owning binding already
+  did. `?? ( mke ) { T e → … }`, with mke handing over a fresh `?E`,
+  registered e with no owner, and it leaked. It is now owned by the call's
+  bit, as a String payload is.
+
+- **A `vec_get` element moved into a literal is taken out of its slot**
+  (Agora #204, h957–h960). Handed to a consumer call (`vec_push [T] ys
+  e`), a `vec_get` payload was already taken, its slot emptied. Moved into
+  a literal, it stayed where it was: `?? ( vec_get [Res] xs 0 ) { T e → {
+  ^ @ ?Res { T e } } … }`, or `: Hold h @ Hold { e 1 }` inside the arm. The
+  Vec and the literal then both freed it. A payload that cannot be copied
+  (a `% Drop` struct) is now taken the way a consumer argument is. One
+  that can be copied is still copied.
+
 ### Security
 
 - **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An

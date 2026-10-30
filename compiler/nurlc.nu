@@ -5012,16 +5012,16 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ( mem_ret_param_lend_via syms ( nurl_sym_get2 syms ret_first_val `__pljk` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) )
         } {}
     } {}
-    // `^ p` of a String / Vec parameter: the caller's own value comes
-    // back — lent, unless this function keeps p (retlend, resolved at
-    // module end in mem_emit_arg_flags).
+    // `^ p` of a String / Vec parameter, or of one that cannot be copied:
+    // the caller's own value comes back — lent, unless this function keeps
+    // p (retlend, resolved at module end in mem_emit_arg_flags).
     // A closure's parameter is its caller's (gen_closure_expr), and a call
     // through a closure value takes the result as its own: a copy.
     ? & & ( is_ident_tok ret_first_tt ) ( __is_clo_param syms ret_first_val ) ( __clone_supported ( nurl_get_last_type ) syms ) {
         = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val `1` )
         = ret_field_copy T
     } {}
-    ? & & ( is_ident_tok ret_first_tt ) ( __is_handle_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
+    ? & & ( is_ident_tok ret_first_tt ) | ( __is_handle_ty ( nurl_get_last_type ) ) ( __nc_held_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
         ? >= ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
             ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
@@ -7935,6 +7935,14 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // lend it? (resolve_owned_strings_kept.)
 @ __pair_may_own i syms s ic s ig → b {
     ? ( seq ic `+` ) { ^ T } {}
+    // A raw string a NURL body hands back answers per call by its proof
+    // (mem_emit_fwd_own_guard): it may be handed over unless no path of the
+    // body does (`__ret_unowned`). That it hands a parameter back on some
+    // path (the returned-handle summary) says nothing of the others.
+    ? & ( seq ( nurl_llty ( nurl_sym_get syms ic ) ) `i8*` )
+    | != 0 ( nurl_sym_len2 syms ic `__nurlfn` ) != 0 ( nurl_sym_len2 syms ig `__garity` ) {
+        ^ ! | ( __ret_never_owned syms ic ) ( __ret_never_owned syms ig )
+    } {}
     ^ | ! ( __callee_lent syms ic ig ) | ( __hown_dyn syms ic 0 ) ( __hown_dyn syms ig 0 )
 }
 
@@ -18933,6 +18941,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? & & == match_first_tt TT_LPAREN ( __arm_call_bit_ok syms )
     | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms match_first_tt )
     { = scrut_own ( mem_call_retown syms cg ) } {}
+    // A call that lends what it hands back (a borrow — `vec_get`'s
+    // element — or a view of an argument it does not answer per call for)
+    // leaves the option with its owner: the arms are lent its payload.
+    : b __m_call_lent & & == match_first_tt TT_LPAREN == 0 ( nurl_str_len scrut_own )
+    | ! ( __arm_call_bit_ok syms ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
     // An enum a call handed over and nothing binds (`?? ( mk ) { … }`): an
     // owner of its own for the rest of the scope, which drops it — it
     // leaked, payload and cell — and lends its payload to the arms (h233).
@@ -19786,7 +19799,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // widen zero-extends a `u`-family payload.
                 ( nurl_sym_def syms pv0 pt0_eff )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv0 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt0_eff syms ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__ptr` ) vp0 )
                 // A closure payload (`T f →` over a `?( @ … )`): the binding
                 // owns its env exactly when the option was a call's and
@@ -19836,12 +19849,17 @@ unsafe @ gen_match i lex i syms i cg → s {
                     { ( mem_own_add_user_drop syms cg vp0 pt0_eff )
                         // …unless the option stays with someone else (a
                         // field of a parameter, behind a pointer, a borrowed
-                        // binding): then the payload is lent to the arm.
+                        // binding, a call's that lends it): then the payload
+                        // is lent to the arm.
                         // Dropped here, `?? . st db { T d → … }` closed the
-                        // connection its owner still held.
-                        ? ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field ) {
+                        // connection its owner still held. (A `vec_get`
+                        // element stays one a consumer may take: its slot
+                        // is emptied then, mem_vget_consume.)
+                        : b __m_slt ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field )
+                        ? | __m_call_lent __m_slt {
                             ( mem_udrop_flag_set syms cg vp0 `0` )
-                            ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                            ? | __m_slt == 0 ( nurl_sym_len2 syms match_var_name `__vget` )
+                            { ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` ) } {}
                         } {}
                         // …and of a call's option: owned exactly when the call
                         // handed its result over (a callee that lends on some
@@ -19856,9 +19874,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                         // payload moved out takes the option's ownership.
                         // An enum's payload that cannot be copied, the enum
                         // held by a binding or a parameter: lent to the arm —
-                        // the enum keeps it in its own cell (h231).
+                        // the enum keeps it in its own cell (h231). (…or by a
+                        // name that owns nothing itself, a view of an enum
+                        // someone else keeps: an arm's payload, agora #208.)
                         ? & & ! pt0_is_opt_bool ( __nc_drop_ty pt0_eff ) | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
-                        | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
+                        | | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0
+                        ( is_ident_tok match_first_tt ) {
                             ( mem_udrop_flag_set syms cg vp0 `0` )
                             ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
                         } {}
@@ -19872,7 +19893,15 @@ unsafe @ gen_match i lex i syms i cg → s {
                                 ? >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
                                     ( mem_udrop_flag_set syms cg vp0 `0` )
                                     ( nurl_sym_def syms ( nurl_str_cat vp0 `__optparam` ) match_var_name )
-                                } {}
+                                } {
+                                    // A name that owns nothing itself (an arm's
+                                    // payload, a view): the option is someone
+                                    // else's, its payload lent (agora #208).
+                                    ? ( is_ident_tok match_first_tt ) {
+                                        ( mem_udrop_flag_set syms cg vp0 `0` )
+                                        ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                                    } {}
+                                }
                             }
                         } {} }
                     {}
@@ -19880,7 +19909,13 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // (An option payload — `??T`'s inner option — counts as its
                     // registration twin, h238.)
                     : s pt0_reg ( __udrop_regty pt0_eff )
-                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) ( __is_handle_ty pt0_reg ) {
+                    // (…and one that cannot be copied whose drop the compiler
+                    // makes — an enum holding a `% Drop` value: owned by
+                    // nothing, it leaked, agora #208. A user `% Drop` one is
+                    // registered above.)
+                    : b __pt0_ncauto & ( __nc_drop_ty pt0_eff )
+                    | == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` pt0_eff ) ( __drop_is_compiler_auto pt0_eff )
+                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) | ( __is_handle_ty pt0_reg ) __pt0_ncauto {
                         ( __handle_drop_ensure pt0_reg )
                         ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 scrut_own )
@@ -19965,7 +20000,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `* ` ) ( nurl_print vp1 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv1 pt1 )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv1 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt1 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv1 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__ptr` ) vp1 )
                 ( nurl_sym_def syms ( nurl_str_cat pv1 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv1 match_first_tt match_var_name __m_ser )
@@ -19996,7 +20031,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_print `* ` ) ( nurl_print vp2 ) ( nurl_print `\n` )
                 ( nurl_sym_def syms pv2 pt2 )
                 ? != 0 __m_scrut_origin { ( nurl_sym_def syms ( nurl_str_cat pv2 `__origin` ) ( nurl_str_int __m_scrut_origin ) ) } {}
-                ? != 0 ( nurl_str_len __m_scrut_psrc ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
+                ? & != 0 ( nurl_str_len __m_scrut_psrc ) ! ( __ty_holds_no_addr pt2 syms ) { ( nurl_sym_def syms ( nurl_str_cat pv2 `__paramsrc` ) __m_scrut_psrc ) } {}
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__ptr` ) vp2 )
                 ( nurl_sym_def syms ( nurl_str_cat pv2 `__enum_pl` ) `1` )
                 ( mem_note_plend syms pv2 match_first_tt match_var_name __m_ser )
@@ -23561,9 +23596,13 @@ unsafe @ mem_path_to_indices s path → s {
     // (The type is asked only of a join that owns on some path.)
     : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F | ( __is_handle_ty at ) ( __is_hown_ty at )
     // (A call that hands back a view of its argument but answers per call
-    // whether it lent goes by that answer: __call_answers, agora #185.)
+    // whether it lent goes by that answer: __call_answers, agora #185. So
+    // does one handed a temporary it lends back: its bit says whether the
+    // result is the caller's — the temporary moved in, or a copy —
+    // mem_own_lendback.)
     ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt ) {
+    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt )
+    ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` ) {
         : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
         // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
         ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
@@ -38429,6 +38468,15 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
         ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         ? fld_param_copy { = fld_lent ( nurl_str_cat `1` `` ) } {}
+        // A `vec_get` element that cannot be copied, moved into the literal,
+        // is taken out of its slot as a consumer argument takes it
+        // (mem_vget_consume): left there, its Vec dropped it under the
+        // literal (agora #204). (One that can be copied is copied.)
+        ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy != 0 ( nurl_sym_len2 syms fld_first_val `__vget` )
+        ( __nc_held_ty ( nurl_sym_get syms fld_first_val ) ) {
+            ( mem_vget_consume syms cg fld_first_val `1` )
+            = fld_lent ``
+        } {}
         : s __lm_w ? & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ( __type_needs_drop ( nurl_sym_get syms fld_first_val ) syms ) fld_first_val `-`
         = __lm_mv ? == 0 ( nurl_str_len __lm_mv ) ( nurl_str_cat __lm_w `` ) ( nurl_str_cat3 __lm_mv ` ` __lm_w )
         // A parameter handed back wrapped (`^ @ ?T { T p }`, `^ @ !T E { T p }`)
@@ -44832,7 +44880,7 @@ unsafe @ origin_free → v {
     { : s cur ( nurl_sym_get syms `__fn_ret_param__` )
         : s new ( nurl_str_int idx )
         ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_ret_param__`
+        { ( nurl_sym_set_deep syms `__fn_ret_param__`
             ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
@@ -45143,7 +45191,7 @@ unsafe @ bck_record_expr_return i syms i tt s value → v {
     { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
         : s new ( nurl_str_int idx )
         ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_ret_alias__`
+        { ( nurl_sym_set_deep syms `__fn_ret_alias__`
             ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
             ( nurl_str_cat3 cur ` ` new ) ) }
         {} }
@@ -52572,6 +52620,25 @@ unsafe @ __hmemo_close s key i mark b r → v {
         } {}
     } {}
     ^ F
+}
+
+// A value of `ty` holds no address: a truth value, a float, or an enum none
+// of whose variants carries a payload. A payload of that type bound out of
+// a match is no part of what the matched value was part of (an integer may
+// be an address cast to one, and stays a carrier).
+@ __ty_holds_no_addr s ty i syms → b {
+    ? | | ( seq ty `i1` ) ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    : s vl ( nurl_sym_get2 syms ( nurl_str_slice ty 1 - n 1 ) `__variants` )
+    ? == 0 ( nurl_str_len vl ) { ^ F } {}
+    : ~ s scan ( nurl_str_cat vl `` )
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        : s pcs ( nurl_sym_get2 syms vname `__paycount` )
+        ? & != 0 ( nurl_str_len pcs ) != 0 ( nurl_str_to_int pcs ) { ^ F } {}
+    }
+    ^ T
 }
 
 @ __enum_needs_drop s variants i syms → b {
