@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop 1
+an arm's call
+drop 1
+fresh
+drop 2
+a match arm's call
+drop 3
+a try arm
+drop 3
+fresh
+drop 4
+the scrutinee's call
+drop 5
+a fall-off arm
+drop 6
+a fall-off scrutinee
+drop 7
+a block ending in a join
+drop 7
+fresh
+drop 8
+a parameter's lend
