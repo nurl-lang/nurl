@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop 1
+a try's payload
+drop 2
+a match's payload
+drop 3
+a bound result
+drop 4
+a call's lend in a literal
+drop 5
+pushed
+drop 6
+stored in a field
+drop 7
+assigned to an inout

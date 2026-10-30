@@ -852,3 +852,18 @@ h893_drop_join_arm_result_returned	§7.6	A2	agora #198: `^ ? c ( getr h ) ( okd 
 h894_drop_result_lent_sink_arg	§7.6	A2	agora #198: `( keepr ( getr h ) )`: a `!D E` lent out of `h` handed to a `sink`, D `% Drop`	rejected
 h895_drop_option_lent_sink_arg	§7.6	A2	agora #198: the same with a `?D`	rejected
 h896_drop_option_lent_literal_field	§7.6	A2	agora #198: `@ P { ( getr h ) }`: a lent `?D` stored into a literal's field	rejected
+h897_try_bound_payload_wrap	§7.6	A2	agora #195: `: String s \ ( getr w )  ^ @ !String E { T s }`: a try's payload, part of the local `w`, handed back in a returned result	runs-clean
+h898_match_bound_payload_wrap	§7.6	A2	agora #195: `: String s ?? ( getr w ) { T x → x … }  ^ @ !String E { T s }`	runs-clean
+h899_try_join_arm_bound_wrap	§7.6	A2	agora #195: `: String s ? c \ ( getr w ) ( … )` then handed back in a returned result	runs-clean
+h900_result_bound_returned	§7.6	A2	agora #195: `: !String E r ( getr w )  ^ r`: the whole result bound, then returned	runs-clean
+h901_try_bound_fall_off_literal	§7.6	A2	agora #195: the try binding handed back by the fall-off literal `@ !String E { T s }`	runs-clean
+h902_result_payload_arm_fall_off	§7.6	A2	agora #195: `: !String E r ( getr w )` then the fall-off `?? r { T x → x … }`	runs-clean
+h903_result_payload_arm_returned	§7.6	A2	agora #195: the same through `^ ?? r { T x → x … }`	runs-clean
+h904_call_bound_two_fields_literal	§7.6	A2	agora #195: `: String s ( gets w )  ^ @ !String E { T s }` with `w` holding a second field: taken for w's whole value, the other field leaked	runs-clean
+h905_part_cursor_vec_push	§7.6	A2	agora #195: `: String s ( gets w )  ( vec_push [String] v s )`, v a parameter	runs-clean
+h906_part_cursor_field_store	§7.6	A2	agora #195: `= . h s s` into an `inout` struct	runs-clean
+h907_part_cursor_inout_assign	§7.6	A2	agora #195: `= o s` over an `inout String o`: the caller kept a lend of `w`	runs-clean
+h908_part_cursor_local_literal	§7.6	A2	agora #195: `: H h @ H { s }`, a literal this function keeps	runs-clean
+h909_part_cursor_closure_capture	§7.6	A2	agora #195: a returned closure capturing `s`	runs-clean
+h910_part_cursor_param_guard	§7.6	A2	agora #195: `: String s ( gets w )` over a parameter `w`, handed back: still the caller's lend, not copied	runs-clean
+h911_part_cursor_with_its_owner_returned	§7.6	A2	agora #195: `^ @ R { s w }`: a returned literal holding both the part cursor `s` and the local `w` it is part of	runs-clean
