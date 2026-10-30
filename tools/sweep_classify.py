@@ -18,8 +18,9 @@
 #    tools/sweep_classify.py SWEEP_OUT BASE_BIN NEW_BIN
 #    tools/sweep_classify.py SWEEP_OUT BASE_BIN NEW_BIN --fn FILE FUNC
 #
-#  SWEEP_OUT is tree_sweep's NURL_SWEEP_OUT directory (base/, new/ and
-#  pkgroot/ are read from it); the IR is written to SWEEP_OUT/ir/. The
+#  Run it from the checkout that was swept. SWEEP_OUT is tree_sweep's
+#  NURL_SWEEP_OUT directory (base/, new/ and pkgroot/ are read from it);
+#  the IR is written to SWEEP_OUT/ir/. The
 #  second form prints one function's normalised diff — a plain line
 #  diff, one hunk per run of changed lines.
 # ============================================================
@@ -31,7 +32,10 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The repository the sweep ran in: the one the caller stands in, which is
+# not always the one this script was read from.
+ROOT = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True).stdout.strip() \
+    or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REG = re.compile(r'%r\d+')
 PURE = re.compile(r'^\s*(%r\d+) = (xor|and|or|load|icmp|extractvalue|insertvalue|phi|zext|sext|trunc|select|bitcast|getelementptr|ptrtoint)\b')
 DEFINE = re.compile(r'^define [^@]*@("[^"]+"|[^(\s]+)\(')
