@@ -25014,6 +25014,43 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
 }
 
+// The value of a value block (`= out { : W w … ( gets w ) }`) just stored
+// into `ptr`, a binding of an outer scope, when the block's tail call may
+// lend it out of a binding made below that one — the block's own locals
+// live to the end of the enclosing scope (a loop body), which ends first:
+// copied in place on those paths, and the binding owns it there. The walk
+// takes such a value for what the block's names held (h216); this makes
+// it so (agora #190). One that cannot be copied is refused.
+@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up → v {
+    ? == 0 ( nurl_str_len up ) { ^ v } {}
+    : i td ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) )
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ v } {}
+    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s deeper ``
+    : ~ b any F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ap ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
+        : b dp & != 0 ( nurl_str_len ap ) > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td
+        ? dp { = any T } {}
+        = deeper ? == 0 ( nurl_str_len deeper ) ( nurl_str_cat ? dp nm `-` `` ) ( nurl_str_cat3 deeper ` ` ? dp nm `-` )
+    }
+    ? ! any { ^ v } {}
+    : s lp ( mem_local_lend_of syms cg key deeper )
+    ? == 0 ( nurl_str_len lp ) { ^ v } {}
+    ? ! ( __clone_supported ty syms ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty ) ^ v } {}
+    : s lt ( nurl_llty ty )
+    : s cur ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s cp ( mem_emit_cloneif cg ty cur lp )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s f ( mem_udrop_flag_get syms cg up )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print lp ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg up nf )
+}
+
 // A payload binding `pv` of the match numbered `ser`: what it may point
 // into (__ptr_root_owner) — the matched binding, or what the matched call
 // lends from.
@@ -35120,6 +35157,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
                 { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
         }
+        // A value block whose tail call may lend what was bound below
+        // `name`, which dies first: copied in place, owned (agora #190).
+        ? & & != 0 ( nurl_str_len ptr ) == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr ) } {}
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}

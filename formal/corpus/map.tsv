@@ -811,3 +811,9 @@ h848_match_arm_block_call_lend_loop	§7.6	A2	agora #191: the same in a `??` arm	
 h849_arm_block_call_lend_returned	§7.6	A2	agora #191: `^ ? c { : W w … ( gets w ) } ( mk )`: the arm's local leaked on every call	runs-clean
 h850_match_arm_block_call_lend_returned	§7.6	A2	agora #191: the same through a returned `??`	runs-clean
 h851_arm_call_outer_local	§7.6	A2	agora #191: an arm's call lending a binding of the enclosing code: not copied, nothing of the arm's to drop	runs-clean
+h854_loop_assign_block_call_lend	§7.6	A2	agora #190: `= out { : W w ( mkw ) ( gets w ) }` in a loop: the block's local dies with the loop body, `out` outlives it	runs-clean
+h855_arm_assign_block_call_lend	§7.6	A2	agora #190: the same assignment inside a `?` arm	runs-clean
+h856_loop_assign_nested_block_call_lend	§7.6	A2	agora #190: the same through a nested block	runs-clean
+h857_drop_loop_assign_block_call_lend	§7.6	A2	agora #190: the same with a `% Drop` value: it cannot be copied	rejected
+h858_same_scope_assign_block_call_lend	§7.6	A2	agora #190: the block assigned in the scope the binding was made in: nothing dies first, no copy	runs-clean
+h859_loop_assign_block_param_lend	§7.6	A2	agora #190: the block's call lending a parameter: still a lend, no copy	runs-clean

@@ -1,0 +1,23 @@
+// H855: agora #190 — the same assignment inside a `?` arm (arm_assign_block_call_lend).
+// Closed: A value block whose tail call (g_blk_tail_eff) may lend what was bound below the assigned binding — the block's own locals, which live to the end of the enclosing scope — is copied in place after the store, and the binding owns it (mem_blk_tail_copy_slot; agora #190). One that cannot be copied is refused.
+// main: accepted; AddressSanitizer reported heap-use-after-free.
+$ `stdlib/core/string.nu`
+
+: W { String s }
+
+@ gets W w → String { ^ . w s }
+
+@ mkw → W { ^ @ W { ( string_from `a string long enough for a heap buffer` ) } }
+
+@ main → i {
+    : ~ String out ( string_from `start` )
+    : b c T
+    ? c {
+        = out {
+            : W w ( mkw )
+            ( gets w )
+        }
+    } {}
+    ( nurl_println_int ( string_len out ) )
+    ^ 0
+}
