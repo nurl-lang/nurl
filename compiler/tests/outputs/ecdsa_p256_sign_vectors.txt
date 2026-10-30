@@ -1,0 +1,5 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ecdsa p256 sign-then-verify: 48 keys, 0 failures
