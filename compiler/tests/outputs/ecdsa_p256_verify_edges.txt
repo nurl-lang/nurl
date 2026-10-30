@@ -1,0 +1,5 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ecdsa p256 verify edges: 19 signatures, 0 failures
