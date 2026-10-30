@@ -2896,6 +2896,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // when that binding is assigned (`= t ? …`, gen_assign): what the join's
 // arms bound below it dies before it does (agora #179). -1: none.
 : ~ i g_join_rdepth -1
+// Did an arm of the join that last published its ownership
+// (`__last_join_own__`) lend what it yields — the constant `false`, not a
+// call's answer or a moved binding's flag? (A closure cannot answer per
+// call: __nc_ret_check; agora #186.)
+: ~ i g_join_lent 0
 // …and whether one of those arms lent what it bound there (a view, a
 // field of one): the assignment copies the join's lent paths (agora #179).
 : ~ i g_join_deep 0
@@ -4634,6 +4639,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : i __rsxn0 g_sx_n
     : i __rsxmp g_member_path_on
     = g_member_path_on ? & != 0 g_srcx_on == ret_first_tt TT_DOT 1 g_member_path_on
+    // A join handed back goes to the caller, and everything this frame
+    // binds dies before it: an arm that selects one of its owners moves it
+    // out on that path (mem_arm_hown) — the only way out for a value that
+    // cannot be copied (agora #186). (Not under a `;` defer, which runs
+    // after the value is the caller's and may release the owner: the lend
+    // is copied then, or refused when it cannot be.)
+    : b __jmove & == 0 g_defer_count | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    ? __jmove { = g_join_rdepth 0 } {}
     : ~ s val ( gen_operand lex syms cg )
     = g_member_path_on __rsxmp
     // A block whose tail is a field read hands back that field as `^ . x f`
@@ -5101,26 +5114,32 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // ? ok v { … ( string_from … ) } } … }`: one arm lends a cursor, another
     // hands over a fresh value) carries that as a phi: the caller gets a
     // copy on the paths that only lent.
-    ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
-    != 0 ( nurl_sym_len syms `__last_join_own__` ) ( __clone_supported ( nurl_get_last_type ) syms ) {
+    // (…also for a value that cannot be copied: the arms that own their
+    // value say so per call, the others lend the caller's — agora #186.)
+    ? ? & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    != 0 ( nurl_sym_len syms `__last_join_own__` ) | ( __clone_supported ( nurl_get_last_type ) syms ) ( __is_hown_ty ( nurl_get_last_type ) ) F {
         : s rty ( nurl_get_last_type )
+        : b rcl ( __clone_supported rty syms )
         : s jo ( nurl_sym_get syms `__last_join_own__` )
         : s rb ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print jo ) ( nurl_print `, 1\n` )
         // Arms that differ are this function answering per call — when
         // what the lending arms lend is the caller's (a parameter). A lend
         // of this frame's own value (a payload of a local option) dies with
-        // the frame: that is copied, always.
-        ? ( __phi_lends_params_only syms ) {
+        // the frame: that is copied, always. One that cannot be copied is
+        // answered per call whatever its arms lend: a local an arm selects
+        // moved out on that path (g_join_rdepth, __jmove), what is left lent
+        // is the caller's.
+        ? | & ! rcl __jmove ( __phi_lends_params_only syms ) {
             ( mem_hown_mark_dyn syms )
-            = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
+            ? rcl { = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) ) } {}
             = hbit jo
             ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_roots__` ) )
             ( mem_ret_arm_lends_via syms )
             // …unless a lending arm's payload came out of a call over a
             // value this frame owns (`^ ?? ( vec_get v 0 ) { T s → s … }`,
             // v local): copied on those paths, which then own it.
-            : s __jrl ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_args__` ) )
+            : s __jrl ? rcl ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_args__` ) ) ``
             ? != 0 ( nurl_str_len __jrl ) {
                 : s __jc ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __jc ) ( nurl_print ` = and i1 ` ) ( nurl_print rb ) ( nurl_print `, ` ) ( nurl_print __jrl ) ( nurl_print `\n` )
@@ -5138,7 +5157,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // caller's value; one that lends this frame's own is copied.
     ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     == 0 ( nurl_sym_len syms `__last_join_own__` ) ( __is_hown_ty ( nurl_get_last_type ) ) {
-        ? | ( __phi_lends_params_only syms ) ! ( __clone_supported ( nurl_get_last_type ) syms ) {
+        ? ( __phi_lends_params_only syms ) {
             ( mem_hown_mark_dyn syms )
             = hbit ( nurl_str_cat `false` `` )
             ( mem_ret_param_lend_via syms ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_roots__` ) )
@@ -18298,17 +18317,24 @@ unsafe @ gen_cond i lex i syms i cg → s {
             ( nurl_set_last_type phi_ty )
             = result res
             ( nurl_sym_set_deep syms `__last_join_arm_lends__` ( __arm_lends_join t_alend e_alend ) )
-            // String / Vec ownership through the join (mem_arm_hown).
-            ? & ( __is_handle_ty ( __udrop_regty phi_ty ) ) | ! ( seq t_hown `false` ) ! ( seq e_hown `false` ) {
-                : s jo ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print jo ) ( nurl_print ` = phi i1 ` )
-                ? == 0 tdr { ( nurl_print `[ ` ) ( nurl_print t_hown ) ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]` ) } {}
-                ? & == 0 tdr == 0 edr { ( nurl_print `, ` ) } {}
-                ? == 0 edr { ( nurl_print `[ ` ) ( nurl_print e_hown ) ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]` ) } {}
-                ( nurl_print `\n` )
-                // both live arms own: a constant (see the `??` join)
+            // String / Vec ownership through the join (mem_arm_hown) — and a
+            // value that cannot be copied, or an option / result of one,
+            // whose arms answer the same way (agora #186).
+            // (A ternary: the type is asked only of a join an arm owns.)
+            ? ? | ! ( seq t_hown `false` ) ! ( seq e_hown `false` ) ? ( __is_handle_ty ( __udrop_regty phi_ty ) ) T | ( __nc_drop_ty phi_ty ) != 0 ( nurl_str_len ( __nc_wrap_payload phi_ty ) ) F {
+                // both live arms own: a constant (see the `??` join), and no
+                // phi of constants to emit
                 : b __q_allown & | != 0 tdr ( seq t_hown `true` ) | != 0 edr ( seq e_hown `true` )
-                ( nurl_sym_def syms `__last_join_own__` ? __q_allown `true` jo )
+                ? __q_allown { ( nurl_sym_def syms `__last_join_own__` `true` ) } {
+                    : s jo ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print jo ) ( nurl_print ` = phi i1 ` )
+                    ? == 0 tdr { ( nurl_print `[ ` ) ( nurl_print t_hown ) ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]` ) } {}
+                    ? & == 0 tdr == 0 edr { ( nurl_print `, ` ) } {}
+                    ? == 0 edr { ( nurl_print `[ ` ) ( nurl_print e_hown ) ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]` ) } {}
+                    ( nurl_print `\n` )
+                    ( nurl_sym_def syms `__last_join_own__` jo )
+                }
+                = g_join_lent ? | & == 0 tdr ( seq t_hown `false` ) & == 0 edr ( seq e_hown `false` ) 1 0
             } {}
             // An owning struct out of two calls (mem_arm_struct_hown): the
             // phi of their bits, when every live arm has one.
@@ -20366,16 +20392,20 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         // Every arm handed over an owned env: so does the join.
         ? & m_val ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
-        ? & any_hown ( __is_handle_ty ( __udrop_regty phi_type ) ) {
-            : s own_reg ( nurl_cg_reg cg )
+        ? ? any_hown ? ( __is_handle_ty ( __udrop_regty phi_type ) ) T | ( __nc_drop_ty phi_type ) != 0 ( nurl_str_len ( __nc_wrap_payload phi_type ) ) F {
             : ~ s hfull ( nurl_str_cat hown_entries `` )
             ? != 0 ( nurl_str_len fallback_pred ) { = hfull ( nurl_str_cat4 hfull `, [ false, %` fallback_pred ` ]` ) } {}
-            ( nurl_print `  ` ) ( nurl_print own_reg ) ( nurl_print ` = phi i1 ` ) ( nurl_print hfull ) ( nurl_print `\n` )
             // Every arm hands over a value of its own: the join owns on
             // every path — a constant, which a binding takes for owned
-            // (no borrow of the scrutinee its arms read to make it).
+            // (no borrow of the scrutinee its arms read to make it), and no
+            // phi of constants to emit.
             : b __m_allown & < ( nurl_str_find hfull `[ false` ) 0 < ( nurl_str_find hfull `[ %` ) 0
-            ( nurl_sym_def syms `__last_join_own__` ? __m_allown `true` own_reg )
+            ? __m_allown { ( nurl_sym_def syms `__last_join_own__` `true` ) } {
+                : s own_reg ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print own_reg ) ( nurl_print ` = phi i1 ` ) ( nurl_print hfull ) ( nurl_print `\n` )
+                ( nurl_sym_def syms `__last_join_own__` own_reg )
+            }
+            = g_join_lent ? < ( nurl_str_find hown_entries `[ false` ) 0 0 1
         } {}
         ( nurl_sym_set_deep syms `__last_join_lend_key__` __m_lkey )
         ( nurl_sym_set_deep syms `__last_join_lend_args__` __m_largs )
@@ -21558,10 +21588,21 @@ unsafe @ __blk_leave b val → v {
         // current block too: a `?` / `~` inside it recorded its last label
         // in the scope popped here, and a `??` around it named the arm's
         // first block in its phi (a select in an arm: invalid IR).
+        // (…and a closure body's tail join says what it owns, and which
+        // calls of its arms may lend, to the closure's return,
+        // gen_closure_expr: lost with the scope, the return copied a fresh
+        // value and leaked it, or could not tell a `% Drop` one from a lent
+        // one — agora #186.)
         ? != 0 g_auto_drop_strings {
             : s __blk_lbl ( nurl_sym_get syms `__cur_lbl__` )
+            : s __blk_jo ? __blk_ret_val ( nurl_sym_get syms `__last_join_own__` ) ``
+            : s __blk_jal ? __blk_ret_val ( nurl_sym_get syms `__last_join_arm_lends__` ) ``
             ( nurl_sym_pop syms )
             ( nurl_sym_def syms `__cur_lbl__` __blk_lbl )
+            ? __blk_ret_val {
+                ( nurl_sym_def syms `__last_join_own__` __blk_jo )
+                ( nurl_sym_def syms `__last_join_arm_lends__` __blk_jal )
+            } {}
         } {}
     } {}
     ( __blk_leave blk_val )
@@ -49231,10 +49272,11 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
             : s tjo ( nurl_sym_get syms `__last_join_own__` )
             : s tnb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print tnb ) ( nurl_print ` = xor i1 ` ) ( nurl_print tjo ) ( nurl_print `, 1\n` )
-            // (As `^` does: only a lend of the caller's value is handed on.)
+            // (As `^` does: only a lend of the caller's value is handed on —
+            // as it is, when it cannot be copied, agora #186.)
             ? ( __phi_lends_params_only syms ) {
                 ( mem_hown_mark_dyn syms )
-                = last ( mem_emit_cloneif cg ret_ty last ( mem_hown_static syms cg tnb ) )
+                ? ( __clone_supported ret_ty syms ) { = last ( mem_emit_cloneif cg ret_ty last ( mem_hown_static syms cg tnb ) ) } {}
                 ( mem_store_hown syms tjo )
             } {
                 = last ( mem_emit_cloneif cg ret_ty last tnb )
@@ -49243,7 +49285,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         } {
             // A join none of whose arms owns what it yields lends it.
             ? | == tail_tt TT_QUEST == tail_tt TT_QUESTQUEST {
-                ? | ( __phi_lends_params_only syms ) ! ( __clone_supported ret_ty syms ) {
+                ? ( __phi_lends_params_only syms ) {
                     ( mem_hown_mark_dyn syms )
                     ( mem_store_hown syms `false` )
                 } {
@@ -55148,6 +55190,26 @@ unsafe @ __sx_names_capture i syms s sx → b {
         } {}
         ^ v
     } {}
+    // …nor a join an arm of which lends what it yields (g_join_lent), or
+    // none of whose arms owns it: a closure cannot answer per call which
+    // paths lent (agora #186).
+    ? & clo | == tt TT_QUEST == tt TT_QUESTQUEST {
+        ? | == 0 ( nurl_sym_len syms `__last_join_own__` ) != 0 g_join_lent {
+            ( die_pos lex g_stmt_line g_stmt_col ( nurl_str_cat3 `a closure hands its result to its caller as the caller's own, but on some path this join hands back a value the body only lends — a capture the closure keeps for its next call, a parameter its caller keeps, a field of one, or a binding the body drops on the way out — and a '` tshow
+            `' cannot be copied: the value would be released twice. Hand back on every path a value the body makes (a literal, or a call that hands its result over).` ) )
+        } {}
+        // (…and an arm's call that may lend it, as a bare call is.)
+        : ~ s rest ( nurl_str_cat ( nurl_sym_get syms `__last_join_arm_lends__` ) `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : i nl ( nurl_str_find rest `\n` )
+            : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+            = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+            : i tb ( nurl_str_find ent `\t` )
+            : s key ? > tb 0 ( nurl_str_slice ent 0 tb ) ``
+            ? != 0 ( nurl_str_len key ) { ( __park_clo_nc_ret lex ( str_first_word key ) ( str_first_word ( str_skip_word key ) ) line tshow ) } {}
+        }
+        ^ v
+    } {}
     ? == tt TT_DOT {
         : s root ( nurl_sym_get syms `__last_member_root__` )
         // A field of a call's result that had to be given an owner of its
@@ -55182,13 +55244,17 @@ unsafe @ __sx_names_capture i syms s sx → b {
             : s fw ( nurl_sym_get syms `__last_call_forward__` )
             = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
         } {}
-        ? & != 0 ( nurl_str_len cn ) == 0 ( nurl_sym_len2 syms cn `__ptr` ) {
-            : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
-            ( nurl_sym_def g_pending_impl `clonc_n` ( nurl_str_int + n 1 ) )
-            ( nurl_sym_def g_pending_impl ( nurl_str_cat `clonc#` ( nurl_str_int n ) )
-            ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` ? == 0 ( nurl_str_len gn ) cn gn ) ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` tshow ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
-        } {}
+        ? & != 0 ( nurl_str_len cn ) == 0 ( nurl_sym_len2 syms cn `__ptr` ) { ( __park_clo_nc_ret lex cn gn line tshow ) } {}
     } {}
+}
+
+// One call a closure hands back whose result cannot be copied, judged at
+// module end on its callee's final summary (resolve_clo_nc_rets).
+@ __park_clo_nc_ret i lex s cn s gn i line s tshow → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonc_n` ) )
+    ( nurl_sym_def g_pending_impl `clonc_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `clonc#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` ? == 0 ( nurl_str_len gn ) cn gn ) ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` tshow ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
 }
 
 // The calls closures hand back whose result cannot be copied (__nc_ret_check):

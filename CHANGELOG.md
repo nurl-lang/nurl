@@ -115,6 +115,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `% Drop` value handed back through a `?` / `??` is dropped exactly
+  once** (Agora #186, h792–h814). Several cases went wrong for a value
+  that cannot be copied (a `% Drop` struct with no Clone, or an option of
+  one):
+  - Lent on one path and made on another (`^ ? c d @ D { … }`, `d` a
+    parameter): the fresh value's drop never ran.
+  - `^ ? c l @ D { … }` with `l` a local: the caller got a lend of `l`,
+    which the function then dropped.
+  - A local beside a parameter, two locals, a nested join, an option, a
+    fall-off value: freed memory under the caller.
+  - A closure handing back its capture, its parameter, a capture's field
+    or a lending call's result through a join: its caller released what
+    the closure still held.
+  - A closure body ending in a join of two fresh Strings copied the
+    result and leaked the original.
+
+  Now such a join answers per call whether it owns what it hands over. A
+  returned join gives the caller each local an arm selects (it moves out
+  on that path, as `^ l` moves it), and what stays lent is the caller's
+  own. Under a `;` defer, which may still release the local, the lend is
+  copied instead, or refused when it cannot be. A fall-off join that would lend a local is refused, as is a
+  closure's join that lends on some path. A closure join whose arm calls a
+  function that may lend is judged at module end, as a bare call is.
 - **A result the callee owns on some calls and lends on others is
   dropped when owned** (Agora #185, h773–h791). `@ pick String p b c →
   String { ^ ? c p ( mk ) }` answers per call whether it lent `p`.
