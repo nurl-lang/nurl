@@ -151,6 +151,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `;` defer may not release what a block hands back** (Agora #197,
+  h872–h874). `; { ( keep l ) }  ^ { : i z 1 l }` released `l` after the
+  return had handed it to the caller. So did a fall-off block ending in
+  `l`. The bare `^ l` was already refused. The block's tail name is now
+  the owner that return hands back, so the defer is refused the same way.
+  A defer that only reads it is fine.
 - **An `inout` parameter is not handed a lend of the function's locals**
   (Agora #196, h865–h871). `@ fill inout String io → v { : W w ( mkw ) =
   io ( gets w ) }` gave the caller a lend of `w`, which `fill` dropped on

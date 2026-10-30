@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_defer_releases_block_returned.nu:13:5: error: 'l' is handed to the caller by this return, but a ';' defer releases it (or a field of it) on the way out — the defers run after the value is the caller's, so the caller would get freed memory. Release it before the return and hand back something else, or return a copy (string_clone, vec_clone, mem_dup); a defer may still read it.
+    ^ {
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
