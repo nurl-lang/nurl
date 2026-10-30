@@ -18,7 +18,8 @@ export class ArchiveTooLarge extends Error {}
 
 // Gunzip `body`, stopping (and cancelling the stream) once the output passes
 // `max` bytes: a bomb costs at most `max` plus one chunk, never its full
-// expansion. Every member of a multi-member gzip counts toward the one cap.
+// expansion. Whatever members of a multi-member gzip the runtime decodes
+// all count toward the one cap.
 export async function gunzipBounded(
   body: ReadableStream<Uint8Array>,
   max: number = MAX_UNPACKED_BYTES,

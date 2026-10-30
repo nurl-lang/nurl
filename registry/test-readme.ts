@@ -223,11 +223,12 @@ const NUDOC = `// demo.nu — the fixture module.
 }
 
 // ── bounded gunzip (agora #163) ────────────────────────────────────────
-// A bomb — 70 concatenated members of 1 MiB of zeros, ~70 MiB of output
-// from ~70 KiB — stops at the cap; a small archive passes; tar members count.
+// A bomb — one member of 70 MiB of zeros, ~70 KiB compressed — stops at the
+// cap; a small archive passes; tar members count. One member, because whether
+// DecompressionStream reads past the first member differs between Node
+// releases; the cap holds either way.
 {
-  const member = gzipSync(Buffer.alloc(1024 * 1024));
-  const bomb = Buffer.concat(Array.from({ length: 70 }, () => member));
+  const bomb = gzipSync(Buffer.alloc(70 * 1024 * 1024));
   ok(bomb.length < 1024 * 1024, "bomb is small compressed");
   let refused = false;
   try {
