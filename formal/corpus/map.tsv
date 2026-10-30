@@ -872,3 +872,9 @@ h914_enum_payload_closure_signature	§2.11	A2	agora #129: the same closure as an
 h915_enum_payload_named_struct	§2.12	A2	agora #129: an enum variant declared to carry an `A` given a `B`: the arm reads B's int as A's String	rejected
 h916_literal_field_closure_guard	§2.11	A2	agora #129: a closure of the declared signature in a struct literal field: accepted	runs-clean
 h917_enum_payload_closure_guard	§2.11	A2	agora #129: a closure of the declared signature as an enum payload: accepted	runs-clean
+h918_inout_assign_block_join_local	§7.6	A2	agora #199: `@ put inout String o b c → v { : W w ( mkw ) = o { : i k 1 ? c ( gets w ) ( string_from … ) } }`: a block ending in a join over an inout parameter	runs-clean
+h919_inout_assign_block_join_fresh	§7.6	A2	agora #199: `= o { : i k 1 ? c ( string_from … ) ( string_from … ) }` over `inout String o`: not judged as a join, the fresh string leaked	runs-clean
+h920_local_assign_block_join_fresh	§7.6	A2	agora #199: local `: ~ String o … = o { : i k 1 ? c ( string_from … ) ( string_from … ) }`: marked as borrow, the fresh string leaked	runs-clean
+h921_field_store_block_join_local	§7.6	A2	agora #199: `= . h s { : i k 1 ? c ( gets w ) ( string_from … ) }` over `inout H h`: fresh arm copied as if lent, the original leaked	runs-clean
+h922_vec_push_block_join_fresh	§7.6	A2	agora #199: `( vec_push [String] v { : i k 1 ? c ( string_from … ) ( string_from … ) } )`: lentness judged by first token, the pushed string leaked	runs-clean
+h923_borrowing_arg_block_join_fresh	§7.6	A2	agora #199: `( slen { : i k 1 ? c ( string_from … ) ( string_from … ) } )`: temporary join ownership unrecorded, argument leaked	runs-clean

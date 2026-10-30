@@ -161,6 +161,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value block ending in a join is judged as that join at a store or
+  argument** (Agora #199, h918–h923). `= o { : i k 1 ? c ( string_from a )
+  ( string_from b ) }` judged the RHS value only by its first token
+  (`TT_LBRACE`), so the consumers missed that the block's tail was a join
+  (`?` / `??`) producing an owned value (`__last_join_own__`). Assigned
+  to an outer binding or an argument taking ownership (such as `vec_push`),
+  the fresh arm leaked memory. Assigned to an inout parameter, the old value
+  was not dropped or was overwritten without cloning when joining a local,
+  causing use-after-free. Field stores and borrowing arguments had the same
+  oversight. The effective token of a block's tail (`__val_eff_tt`) is now
+  used at assignments, field writes, and call arguments so the join's ownership
+  and drop semantics are honored.
 - **A struct literal field and an enum payload refuse a value of another
   shape** (Agora #129, h913–h917). `: P { ( @ i i ) f }` took a
   `( @ i s )` closure in `@ P { … }`: both lower to `{ ptr, ptr }`, clang
