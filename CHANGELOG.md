@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **nurlc stops at a nesting limit instead of overflowing its stack**
+  (Agora #207). A program nested deep enough (about 5 400 nested `?`
+  statements, 6 600 nested calls) ran nurlc out of stack: SIGSEGV, no
+  diagnostic. Past 1000 levels of expressions, blocks and types inside one
+  another it now stops with a diagnostic that says how to raise the limit:
+  `--max-nesting=N` or `NURL_MAX_NESTING=N`, 0 turns it off.
+  `--max-nesting-fixed=N` sets the limit for good, for a service compiling
+  other people's code. Compile time and the IR are unchanged (the
+  self-compile measures the same, and its IR is byte-identical).
+  `compiler/tests/nesting_limit.sh` and `diag_nesting_limit` cover it.
+
 ### Fixed
 
 - **A try over a binding, a field or a block leaves the function as `^`
@@ -22,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not own it, or as a field or a join's pick. The caller used to get
   an error that a local released on the way out, or that its own argument
   still held.
+
+### Security
+
+- **nurlapi: every build tool runs in a Landlock sandbox** (Agora #207).
+  nurlc, clang, wasm-opt, zig, mingw gcc, the unikernel scripts and the
+  QEMU smoke boot now start under `nurl-sandbox` (`nurlapi/sandbox/`).
+  The tool reads the system and toolchain trees and writes only its own
+  build directory. It cannot see the server binary, other builds'
+  directories or `/tmp`, and has no TCP. `NURL_SANDBOX=auto|required|off`
+  picks the policy (`auto` runs unconfined where the kernel lacks
+  Landlock), and `GET /health` reports it as `sandbox_status`. In the image
+  `/app/nurlapi` is root's and execute-only, so the server's `/proc`
+  entries are closed to the processes it starts. The playground compiles
+  every request under `--max-nesting-fixed=200`
+  (`NURL_PLAYGROUND_MAX_NESTING`).
 
 ## [0.81.0] — 2026-10-30
 

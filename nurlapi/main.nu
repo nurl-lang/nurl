@@ -212,7 +212,7 @@ $ `stdlib/core/slice.nu`
 // build tool uses, and fold the result into the response.
 @ __run_built_binary Json res s bin_path → v {
     : ( Vec s ) noargs ( vec_new [s] )
-    : !Output ProcessErr r ( run_tool bin_path noargs )
+    : !Output ProcessErr r ( run_tool `` bin_path noargs )
     ?? r {
         T o → {
             : Json run ( json_obj_new )
@@ -309,24 +309,53 @@ $ `stdlib/core/slice.nu`
 //   * request bodies have an explicit cap (source / wasm IR),
 //   * /app/output build dirs are TTL-swept and count-capped.
 
+// ── Build sandbox (Agora #207) ────────────────────────────────────────
+//
+// Every build tool runs under nurl-sandbox (nurlapi/sandbox/nurl_sandbox.c).
+// Landlock confines the tool, and everything it starts, to the system and
+// toolchain trees (read-only) and its own build directory (read-write).
+// It can't see /app, other builds' directories or /tmp, and has no TCP.
+// A hole in some tool's handling of its input (raw IR once
+// reached clang) then reads nothing of the server's or of other users'.
+// NURL_SANDBOX picks the policy:
+//   auto (default)  confine when the wrapper is installed and the kernel
+//                   has Landlock; otherwise run the tool as before;
+//   required        never run a build tool unconfined: without the
+//                   wrapper or Landlock the build fails;
+//   off             no wrapper.
+// GET /health reports which one is in force (sandbox_status).
+@ get_sandbox_bin → String { ^ ( env_var_or `NURL_SANDBOX_BIN` `/opt/nurl/build/nurl-sandbox` ) }
+
+@ get_sandbox_mode → String { ^ ( env_var_or `NURL_SANDBOX` `auto` ) }
+
+// The nesting limit nurlc compiles every request's source under: fixed,
+// so neither a caller's flags nor anything else can raise it. nurlc
+// defaults to 1000, far past hand-written code; a playground for trying
+// the language needs much less. The bundled examples and the compiler
+// test corpus, stdlib imports included, peak below 50.
+@ get_playground_max_nesting → String { ^ ( env_var_or `NURL_PLAYGROUND_MAX_NESTING` `200` ) }
+
 // Run a build tool under timeout(1) so a hanging compile can't hold a
 // compile-gate permit forever. -k 5: SIGKILL 5s after the soft TERM.
 // Falls back to a plain run where timeout(1) doesn't exist (bare local
-// dev outside the container).
-@ run_tool s path ( Vec s ) args → !Output ProcessErr { ^ ( run_tool_in path args `` ) }
+// dev outside the container). `dir` is the request's build directory,
+// the one place the tool may write; `` runs it outside the sandbox.
+@ run_tool s dir s path ( Vec s ) args → !Output ProcessErr { ^ ( run_tool_in dir path args `` ) }
 
-// run_tool with one more variable in the tool's environment — the
-// per-request import roots of a build that compiles files it wrote
-// (`NURL_IMPORT_ROOTS=<toolchain>:<build dir>`), passed on through any
-// script between here and nurlc.
-@ run_tool_env s kv s path ( Vec s ) args → !Output ProcessErr {
+// run_tool with more variables in the tool's environment: the per-request
+// import roots of a build that compiles files it wrote
+// (`NURL_IMPORT_ROOTS=<toolchain>:<build dir>`) and the nesting limit,
+// passed on through a script between here and nurlc.
+@ run_tool_env s dir ( Vec s ) kvs s path ( Vec s ) args → !Output ProcessErr {
     : ( Vec s ) eargs ( vec_new [s] )
-    ( vec_push [s] eargs kv )
+    : i nkv ( vec_len [s] kvs )
+    : ~ i j 0
+    ~ < j nkv { ?? ( vec_get [s] kvs j ) { T kv → ( vec_push [s] eargs kv ) F → {} } = j + j 1 }
     ( vec_push [s] eargs path )
     : i n ( vec_len [s] args )
     : ~ i k 0
     ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] eargs a ) F → {} } = k + k 1 }
-    ^ ( run_tool `/usr/bin/env` eargs )
+    ^ ( run_tool dir `/usr/bin/env` eargs )
 }
 
 // The import roots of a compile that may also read `dir` (a build
@@ -340,18 +369,113 @@ $ `stdlib/core/slice.nu`
     ^ kv
 }
 
+@ __push_all ( Vec s ) dst ( Vec s ) src → v {
+    : i n ( vec_len [s] src )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [s] src k ) { T a → ( vec_push [s] dst a ) F → {} } = k + k 1 }
+}
+
+// `--<kind>=<path>` for nurl-sandbox's argv.
+@ __sandbox_flag s kind s path → String {
+    : String f ( string_from `--` )
+    ( string_push_str f kind )
+    ( string_push_char f 61 )
+    ( string_push_str f path )
+    ^ f
+}
+
+// Whether a build tool for `dir` runs under the wrapper (see Build sandbox).
+@ sandbox_wraps s dir → b {
+    ? == ( nurl_str_len dir ) 0 { ^ F } {}
+    : String mode ( get_sandbox_mode )
+    ? != 0 ( nurl_str_eq ( string_data mode ) `off` ) { ^ F } {}
+    ? != 0 ( nurl_str_eq ( string_data mode ) `required` ) { ^ T } {}
+    : String sb ( get_sandbox_bin )
+    ^ ( file_exists ( string_data sb ) )
+}
+
+// What GET /health says about the build sandbox: `off`, `landlock <abi>`
+// (confined), or why builds run unconfined — or fail, under `required`.
+@ sandbox_status → String {
+    : String mode ( get_sandbox_mode )
+    ? != 0 ( nurl_str_eq ( string_data mode ) `off` ) { ^ ( string_from `off` ) } {}
+    : b req != 0 ( nurl_str_eq ( string_data mode ) `required` )
+    : String sb ( get_sandbox_bin )
+    ? ! ( file_exists ( string_data sb ) ) {
+        ? req { ^ ( string_from `required, but nurl-sandbox is not installed: builds fail` ) } {}
+        ^ ( string_from `nurl-sandbox is not installed: builds run unconfined` )
+    } {}
+    : ( Vec s ) pa ( vec_new [s] )
+    ( vec_push [s] pa `--probe` )
+    : ~ String probe ( string_from `the probe did not run` )
+    : !Output ProcessErr pr ( process_run ( string_data sb ) pa `` )
+    ?? pr {
+        T po → { = probe ( string_trim ( string_from ( output_stdout po ) ) ) }
+        F _ → {}
+    }
+    ? ( string_starts_with probe `landlock ` ) { ^ probe } {}
+    : String m ( string_from ? req `required, but Landlock is not available (` `Landlock is not available (` )
+    ( string_push_str m ( string_data probe ) )
+    ( string_push_str m ? req `): builds fail` `): builds run unconfined` )
+    ^ m
+}
+
 // run_tool with `stdin` piped to the tool.
-@ run_tool_in s path ( Vec s ) args s stdin → !Output ProcessErr {
-    ? ! ( file_exists `/usr/bin/timeout` ) { ^ ( process_run path args stdin ) } {}
+@ run_tool_in s dir s path ( Vec s ) args s stdin → !Output ProcessErr {
     : String secs ( env_var_or `NURL_COMPILE_TIMEOUT_SECS` `120` )
+    ^ ( run_tool_timed dir ( string_data secs ) path args stdin )
+}
+
+// [timeout(1) after `secs`] [nurl-sandbox for `dir`] path args.
+@ run_tool_timed s dir s secs s path ( Vec s ) args s stdin → !Output ProcessErr {
+    : b wrap ( sandbox_wraps dir )
+    // The wrapper's flags own their text until process_run returns.
+    : ( Vec String ) owned ( vec_new [String] )
+    : ( Vec s ) cmd ( vec_new [s] )
+    : String sb ( get_sandbox_bin )
+    ? wrap {
+        : String mode ( get_sandbox_mode )
+        ? != 0 ( nurl_str_eq ( string_data mode ) `required` ) { ( vec_push [s] cmd `--require` ) } {}
+        // The build directory first: it becomes the tool's TMPDIR.
+        ( vec_push [String] owned ( __sandbox_flag `rw` dir ) )
+        : String zc ( env_var_or `ZIG_GLOBAL_CACHE_DIR` `` )
+        ? > ( string_len zc ) 0 { ( vec_push [String] owned ( __sandbox_flag `rw` ( string_data zc ) ) ) } {}
+        // A relocated qemu's firmware (__uk_smoke_boot passes it as -L).
+        : String qs ( env_var_or `NURL_QEMU_SHARE` `` )
+        ? > ( string_len qs ) 0 { ( vec_push [String] owned ( __sandbox_flag `ro` ( string_data qs ) ) ) } {}
+        // The toolchain trees, wherever this deployment keeps them (the
+        // image's are under /opt, which the wrapper reads by default),
+        // and whatever else NURL_SANDBOX_RO names, ':'-separated.
+        : String wr ( get_work_root )
+        ( vec_push [String] owned ( __sandbox_flag `ro` ( string_data wr ) ) )
+        : String sd ( get_stdlib_dir )
+        ( vec_push [String] owned ( __sandbox_flag `ro` ( string_data sd ) ) )
+        : String extra ( env_var_or `NURL_SANDBOX_RO` `` )
+        : ( Vec String ) parts ( string_split extra `:` )
+        : i np ( vec_len [String] parts )
+        : ~ i k 0
+        ~ < k np {
+            ?? ( vec_get [String] parts k ) {
+                T p → { ? > ( string_len p ) 0 { ( vec_push [String] owned ( __sandbox_flag `ro` ( string_data p ) ) ) } {} }
+                F → {}
+            }
+            = k + k 1
+        }
+        : i no ( vec_len [String] owned )
+        = k 0
+        ~ < k no { ?? ( vec_get [String] owned k ) { T f → ( vec_push [s] cmd ( string_data f ) ) F → {} } = k + k 1 }
+        ( vec_push [s] cmd `--` )
+        ( vec_push [s] cmd path )
+    } {}
+    ( __push_all cmd args )
+    : s prog ? wrap ( string_data sb ) path
+    ? ! ( file_exists `/usr/bin/timeout` ) { ^ ( process_run prog cmd stdin ) } {}
     : ( Vec s ) targs ( vec_new [s] )
     ( vec_push [s] targs `-k` )
     ( vec_push [s] targs `5` )
-    ( vec_push [s] targs ( string_data secs ) )
-    ( vec_push [s] targs path )
-    : i n ( vec_len [s] args )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] targs a ) F → {} } = k + k 1 }
+    ( vec_push [s] targs secs )
+    ( vec_push [s] targs prog )
+    ( __push_all targs cmd )
     : !Output ProcessErr r ( process_run `/usr/bin/timeout` targs stdin )
     ^ r
 }
@@ -370,9 +494,18 @@ $ `stdlib/core/slice.nu`
     ^ args
 }
 
-@ run_nurlc ( Vec s ) args s source → !Output ProcessErr {
+// nurlc on a request's source, in its build directory `dir`, under the
+// playground's fixed nesting limit — ahead of the caller's flags, so
+// nothing after it can raise it (and the flag allow-list admits none).
+@ run_nurlc s dir ( Vec s ) args s source → !Output ProcessErr {
     : String nurlc ( get_nurlc_path )
-    ^ ( run_tool_in ( string_data nurlc ) args source )
+    : String lim ( string_from `--max-nesting-fixed=` )
+    : String n ( get_playground_max_nesting )
+    ( string_push_str lim ( string_data n ) )
+    : ( Vec s ) full ( vec_new [s] )
+    ( vec_push [s] full ( string_data lim ) )
+    ( __push_all full args )
+    ^ ( run_tool_in dir ( string_data nurlc ) full source )
 }
 
 // A request's `filename` names files in its build directory (the .ll, the
@@ -963,7 +1096,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
 
                     : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
-                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
+                    : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
 
                     ?? nurlc_res {
                         T n_out → {
@@ -980,7 +1113,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 ( vec_push [s] clang_args ( string_data bin_path ) )
                                 ( push_native_runtime_libs clang_args )
 
-                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args )
+                                : !Output ProcessErr clang_res ( run_tool ( string_data build_dir ) `clang` clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -1134,7 +1267,7 @@ i clang_rc s build_stdout s build_stderr → v {
                         // recognized feature for this target" line per
                         // feature.
                         : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
-                        : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
+                        : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
                         ?? nurlc_res {
                             T n_out → {
                                 = n_rc ( output_exit_code n_out )
@@ -1204,7 +1337,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     ? uses_audio { ( vec_push [s] clang_args ( string_data audio_wasm_o ) ) } {}
                     ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
-                    : !Output ProcessErr clang_res ( run_tool ( string_data ( get_wasi_clang ) ) clang_args )
+                    : !Output ProcessErr clang_res ( run_tool ( string_data build_dir ) ( string_data ( get_wasi_clang ) ) clang_args )
 
                     ?? clang_res {
                         T c_out → {
@@ -1231,7 +1364,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 ( vec_push [s] opt_args ( string_data wasm_path ) )
                                 ( vec_push [s] opt_args `-o` )
                                 ( vec_push [s] opt_args ( string_data asyncified_path ) )
-                                : !Output ProcessErr opt_res ( run_tool ( string_data ( get_wasm_opt ) ) opt_args )
+                                : !Output ProcessErr opt_res ( run_tool ( string_data build_dir ) ( string_data ( get_wasm_opt ) ) opt_args )
                                 ?? opt_res {
                                     T o_out → {
                                         : i opt_rc ( output_exit_code o_out )
@@ -1359,7 +1492,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
-                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
+                    : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1387,7 +1520,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args `-o` )
                                 ( vec_push [s] clang_args ( string_data obj_path ) )
-                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args )
+                                : !Output ProcessErr clang_res ( run_tool ( string_data build_dir ) `clang` clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -1462,7 +1595,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                         }
                                         ( vec_push [s] link_args `-o` )
                                         ( vec_push [s] link_args ( string_data bin_path ) )
-                                        : !Output ProcessErr link_res ( run_tool ( string_data ( get_mingw_gcc ) ) link_args )
+                                        : !Output ProcessErr link_res ( run_tool ( string_data build_dir ) ( string_data ( get_mingw_gcc ) ) link_args )
 
                                         ?? link_res {
                                             T l_out → {
@@ -1541,7 +1674,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
-                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
+                    : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1551,7 +1684,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 : ( Vec s ) zig_args ( vec_new [s] )
                                 ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt_lit )
                                 ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data rt_mac_o ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data build_dir ) ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -1712,6 +1845,9 @@ i clang_rc s build_stdout s build_stderr → v {
     ( json_obj_set j `stdlib_available` ( json_bool ( file_exists ( string_data stdlib_dir ) ) ) )
     ( json_obj_set j `stdlib_dir` ( json_str_lit ( string_data stdlib_dir ) ) )
     ( json_obj_set j `stdlib_modules` ( list_stdlib_modules ) )
+    // Whether build tools run confined (see Build sandbox).
+    : String sbs ( sandbox_status )
+    ( json_obj_set j `sandbox_status` ( json_str_lit ( string_data sbs ) ) )
 
     : String body ( json_stringify j )
     : HttpResponse r ( response_text 200 ( string_data body ) ) ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
@@ -3650,7 +3786,7 @@ i clang_rc s build_stdout s build_stderr → v {
                     : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags )
                     : s cpu_flag ( __zig_cpu_flag target )
                     ? > ( nurl_str_len cpu_flag ) 0 { ( vec_push [s] nurlc_args cpu_flag ) } {}
-                    : !Output ProcessErr nurlc_res ( run_nurlc nurlc_args source )
+                    : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -3666,7 +3802,7 @@ i clang_rc s build_stdout s build_stderr → v {
                                 ( vec_push [s] zig_args ( string_data rt_o ) )
                                 ? is_linux { ( vec_push [s] zig_args `-lm` ) ( vec_push [s] zig_args `-lpthread` ) } {}
                                 ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data build_dir ) ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -3889,10 +4025,6 @@ unsafe @ __uk_exit_code s log → i {
         ( string_push_str append `"` )
     } {}
     : ( Vec s ) qa ( vec_new [s] )
-    ( vec_push [s] qa `-k` )
-    ( vec_push [s] qa `5` )
-    ( vec_push [s] qa ( string_data secs ) )
-    ( vec_push [s] qa ( string_data qemu ) )
     ? arm {
         ( vec_push [s] qa `-M` ) ( vec_push [s] qa `virt` )
     } {
@@ -3916,7 +4048,10 @@ unsafe @ __uk_exit_code s log → i {
     } {}
     ( vec_push [s] qa `-kernel` ) ( vec_push [s] qa elf_path )
     ( vec_push [s] qa `-append` ) ( vec_push [s] qa ( string_data append ) )
-    : !Output ProcessErr br ( process_run `/usr/bin/timeout` qa `` )
+    // Under the sandbox like every build tool: qemu reads the image in
+    // the build directory and its firmware under /usr, nothing else.
+    : String boot_dir ( path_dirname elf_path )
+    : !Output ProcessErr br ( run_tool_timed ( string_data boot_dir ) ( string_data secs ) ( string_data qemu ) qa `` )
     ?? br {
         T bout → {
             : i brc ( output_exit_code bout )
@@ -4048,7 +4183,15 @@ unsafe @ __uk_exit_code s log → i {
                     // initfs, so this compile reads the build directory
                     // too — and nothing else outside the toolchain.
                     : String roots ( import_roots_kv ( string_data build_dir ) )
-                    : !Output ProcessErr t_res ( run_tool_env ( string_data roots ) ( string_data script ) targs )
+                    // The script runs nurlc without flags: the playground's
+                    // nesting limit reaches it through the environment.
+                    : String nest ( string_from `NURL_MAX_NESTING=` )
+                    : String nest_n ( get_playground_max_nesting )
+                    ( string_push_str nest ( string_data nest_n ) )
+                    : ( Vec s ) kvs ( vec_new [s] )
+                    ( vec_push [s] kvs ( string_data roots ) )
+                    ( vec_push [s] kvs ( string_data nest ) )
+                    : !Output ProcessErr t_res ( run_tool_env ( string_data build_dir ) kvs ( string_data script ) targs )
 
                     ?? t_res {
                         T t_out → {
@@ -5559,6 +5702,8 @@ unsafe @ gate_free → v {
             ( http_app_use app mw )
 
             ( nurl_print `[boot] registered routes: ` ) ( nurl_print ( nurl_str_int ( router_count r ) ) ) ( nurl_print `\n` )
+            : String sbs ( sandbox_status )
+            ( nurl_print `[boot] build sandbox: ` ) ( nurl_print ( string_data sbs ) ) ( nurl_print `\n` )
             ( nurl_print `NURL API listening on http://0.0.0.0:` )
             ( nurl_print ( nurl_str_int port ) )
             ( nurl_print `/ (workers=` )

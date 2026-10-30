@@ -156,6 +156,14 @@ RUN set -eux; \
 # `clang` itself and never asks for `--split`.
 RUN NURL_SPLIT=0 ./nurl.sh nurlapi/main.nu nurlapi/nurlapi
 
+# The build sandbox (Agora #207): nurlapi runs every build tool under
+# nurl-sandbox, which confines it with Landlock to the toolchain and its
+# own build directory. The test checks what it confines wherever the
+# build host's kernel has Landlock, and says so where it does not.
+RUN clang -O2 -Wall -Wextra -Werror -std=c11 \
+        -o build/nurl-sandbox nurlapi/sandbox/nurl_sandbox.c \
+    && bash nurlapi/sandbox/sandbox_test.sh build/nurl-sandbox
+
 # Stage 2: Final runtime image
 FROM debian:bookworm-slim
 
@@ -241,6 +249,7 @@ ENV NURL_BUILD_ID=${NURL_BUILD_ID}
 # Bring in all cross-compilation artifacts
 RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec /opt/nurl/docs
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc
+COPY --from=builder /src/build/nurl-sandbox      /opt/nurl/build/nurl-sandbox
 COPY --from=builder /src/stdlib                  /opt/nurl/stdlib
 COPY --from=builder /opt/wasi-sdk                /opt/wasi-sdk
 COPY --from=builder /opt/curl-mingw              /opt/curl-mingw
@@ -342,9 +351,14 @@ RUN /opt/nurl/unikernel/measure_capability.sh /opt/nurl/examples \
 # it cannot: a cache gone stale under a newer stdlib bind-mounted by
 # nurlapi.sh, or one the server user could write. Those builds give zig
 # a private cache too; /opt/zig-cache below is the server user's.
+# /app/nurlapi is root's and execute-only: the server user runs it and
+# cannot read it. Exec of an unreadable binary also leaves the process
+# non-dumpable, so its /proc entries (environ, mem) stay closed to every
+# other process of that user — build tools included.
 RUN groupadd -g 10001 nurl \
     && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
     && chown -R nurl:nurl /app/output /opt/zig-cache \
+    && chown root:root /app/nurlapi && chmod 0711 /app/nurlapi \
     && chown -R root:root /opt/unikernel-cache /opt/unikernel-cache-arm64 \
     && chmod -R a-w,a+rX /opt/unikernel-cache /opt/unikernel-cache-arm64
 USER nurl
