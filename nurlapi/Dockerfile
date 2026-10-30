@@ -79,6 +79,9 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/zig.tar.xz \
 
 WORKDIR /src
 COPY . /src
+# The changelog tool serves [Unreleased] too: show the fragments that
+# the next release will fold in (Agora #211) under that heading.
+RUN python3 tools/changelog.py preview > /tmp/CHANGELOG.md && mv /tmp/CHANGELOG.md CHANGELOG.md
 RUN find . -type f \( -name '*.sh' -o -name '*.nu' \) -exec sed -i 's/\r$//' {} +
 
 # Bootstrap nurlc (image build skips tests; they run in CI elsewhere)

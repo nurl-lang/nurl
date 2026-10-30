@@ -466,7 +466,8 @@ function parseHolesCorpus() {
   const content = readFileSync(join(FORMAL_DIR, 'corpus', 'map.tsv'), 'utf8').trim();
   const lines = content.split('\n').slice(1);
   return lines.map((line) => {
-    const [probe, rule, phase, note, nurlc] = line.split('\t');
+    // old_id: the hNNN number from before Agora #212, `-` for a newer probe.
+    const [probe, rule, phase, note, nurlc, oldId] = line.split('\t');
     const nuPath = join(HOLES_DIR, `${probe}.nu`);
     let code = '';
     if (existsSync(nuPath)) {
@@ -474,7 +475,7 @@ function parseHolesCorpus() {
     }
     return {
       probe,
-      id: probe.split('_')[0],
+      id: oldId && oldId !== '-' ? oldId : probe.split('/').pop(),
       rule,
       phase,
       note,

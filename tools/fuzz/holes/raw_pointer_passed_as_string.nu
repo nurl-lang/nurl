@@ -1,0 +1,12 @@
+// raw_pointer_passed_as_string: a Vec's raw data pointer, passed where a string is expected, is read to a NUL its bytes do not have.
+// map: §6.2 | B | rejected | h98 | Vec raw data pointer passed as string; read to missing NUL
+$ `stdlib/core/vec.nu`
+
+@ show s x → v { ( nurl_println x ) }
+
+@ main → i {
+    : ( Vec u ) v ( vec_new [u] )
+    ( vec_push [u] v # u 65 )
+    ( show ( vec_data [u] v ) )
+    ^ 0
+}
