@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+local string
+fresh inout
+fresh y
+fresh x
+7
+7
+field local
+field fresh
+2
+10
+10
+let y
+let x

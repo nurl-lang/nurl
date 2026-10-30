@@ -14853,10 +14853,10 @@ unsafe @ gen_call i lex i syms i cg → s {
             ? ( seq call_name `nurl_free` )
             { ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `stfree##` ( nurl_sym_get syms `__fn_self_name__` ) `##`
                 ( nurl_sym_get syms `__last_ident_name__` ) ) `1` ) } {}
-            = arg_join_own ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
-            // (A block whose tail is a call hands on that call's value:
-            // g_blk_tail_eff, agora #189.)
-            = arg_eff_tt ? & | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_arg_tt
+            // (A block whose tail is a call, or a join, hands on that one's
+            // value: __val_eff_tt, agora #189, #198, #199.)
+            = arg_eff_tt ( __val_eff_tt bck_arg_tt )
+            = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -23901,11 +23901,14 @@ unsafe @ __src_has_raw_ptr s text → b {
 }
 
 // A tried call (`: T x \ ( mk )`) binds the call's payload: whether x owns
-// it is the call's answer, not a borrow's.
+// it is the call's answer, not a borrow's. A block ending in a join is
+// judged by that join (agora #199).
 @ mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
     ? & & == rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` )
     ( seq ( nurl_sym_get syms `__last_try_inner_tt__` ) ( nurl_str_int TT_LPAREN ) )
     { ( __mem_udrop_bind_flag syms cg ptr ty TT_LPAREN rhs_val rhs_borrow ) ^ v } {}
+    ? & == rhs_tt TT_LBRACE | == g_blk_tail_eff TT_QUEST == g_blk_tail_eff TT_QUESTQUEST
+    { ( __mem_udrop_bind_flag syms cg ptr ty g_blk_tail_eff rhs_val rhs_borrow ) ^ v } {}
     ( __mem_udrop_bind_flag syms cg ptr ty rhs_tt rhs_val rhs_borrow )
 }
 
@@ -34425,6 +34428,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             }
         } {}
         : ~ s val ( gen_operand lex syms cg )
+        : i rhs_eff_tt ( __val_eff_tt bck_rhs_tt )
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
         ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
@@ -34985,7 +34989,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // while the caller keeps the value: a copy where it lent, or a
         // refusal when it cannot be copied (agora #196).
         ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) {
-            : i __io_et ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN bck_rhs_tt
+            : i __io_et rhs_eff_tt
             // (…or a field read of a value this frame owns, `= io . w s`:
             // the struct is dropped on the way out, so the field is copied.)
             ? & == bck_rhs_tt TT_DOT ( __froot_lends_frame syms ( nurl_sym_get syms `__last_member_root__` ) ) {
@@ -35029,7 +35033,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // …and by a `?` / `??`: its value is made the caller's own on every
         // path first — a copy where it was lent, also of this very binding
         // (`= t ? c t …`) — and then the caller's old value goes (agora #183).
-        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
+        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST {
             ? & ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) | ( __is_handle_ty vt ) __io_oty {
                 : s __io_jo ( nurl_sym_get syms `__last_join_own__` )
                 ? ! ( seq __io_jo `true` ) {
@@ -35056,7 +35060,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             } {}
         } {}
         ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) __io_oty
-        | == bck_rhs_tt TT_AT & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
+        | == bck_rhs_tt TT_AT & == rhs_eff_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
             : s __io_ro3 ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __io_ro3 ) {
                 ( nurl_print `  call void @__nurl_rawdrop.` ) ( nurl_print ( __rawdrop_request vt ) )
@@ -35171,7 +35175,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // owns what it holds on every path, and the old value goes by its
         // flag as for any other assignment. (A value that cannot be copied
         // is refused there: the owner has to give it up instead.)
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST
         ( nurl_sym_has_word syms `__last_phi_idents__` name ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
             : s __sj_jo ( nurl_sym_get syms `__last_join_own__` )
             ? ! ( seq __sj_jo `true` ) {
@@ -35352,6 +35356,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     : i __fs_sxn0 g_sx_n
     : ~ s __fs_v ( gen_expr lex syms cg )
     : s __fs_ty ( nurl_get_last_type )
+    : i __fs_eff_tt ( __val_eff_tt __fs_tt )
     // A value that may hold views stored into a field of a binding's struct
     // (`= . r name x`): the struct holds those views from here on, so it
     // depends on what they point into (bck_dep_add, through a `vpass` row
@@ -35444,7 +35449,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     } {}
     ? __fs_param_copy { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v `1` ) } {}
     ? & & & ! manual ! __fs_wb ! __fs_moved ! __fs_param_copy
-    { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_tt __fs_val ) ) } {}
+    { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_eff_tt __fs_val ) ) } {}
     // `= . p f . am g` into memory managed by hand, from a local that still
     // owns (and will drop) its field: the hand-managed struct gets its own
     // copy — the local's field stays readable, as the legacy code reads it.
