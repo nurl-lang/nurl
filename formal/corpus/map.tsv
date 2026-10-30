@@ -820,3 +820,8 @@ h859_loop_assign_block_param_lend	§7.6	A2	agora #190: the block's call lending 
 h862_try_call_lend_returned_payload	§7.6	A2	agora #194: `^ @ !String E { T \ ( getr w ) }`: a try over a call lending the local `w` as a returned result's payload	runs-clean
 h863_try_call_lend_sink_arg	§7.6	A2	agora #194: `( keep \ ( getr w ) )`, `keep` taking a `sink`	runs-clean
 h864_try_call_param_lend_guard	§7.6	A2	agora #194: the try over a call lending a parameter: still a lend	runs-clean
+h875_loop_let_block_call_lend	§7.6	A2	agora #193: `: String r { : W w ( mkw ) ( gets w ) }` then `= out r` in a loop: the block's local dies with the loop body, `out` outlives it	runs-clean
+h876_arm_let_block_call_lend	§7.6	A2	agora #193: the same binding and assignment inside a `?` arm	runs-clean
+h877_loop_let_inferred_block_call_lend	§7.6	A2	agora #193: the same with the binding's type inferred	runs-clean
+h878_ret_let_block_call_lend	§7.6	A2	agora #193: the bound block value returned out of the frame that drops the block's local	runs-clean
+h879_let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean

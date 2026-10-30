@@ -25015,6 +25015,27 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
 }
 
+// The arguments of the call just made (a value block's tail call) that
+// are bindings made below scope depth `td`, or (`rmin` ≥ 0) bound at
+// register `%r<rmin>` or later — while the value was being computed —
+// `-` for every other position; `` when the call lends nothing or no
+// argument is such a binding.
+@ mem_blk_tail_deeper_args i syms i td i rmin → s {
+    ? == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_lend_key__` ) ) { ^ `` } {}
+    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
+    : ~ s deeper ``
+    : ~ b any F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ap ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
+        : b dp & != 0 ( nurl_str_len ap ) | > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td
+        & & >= rmin 0 != 0 ( nurl_str_starts ap `%r` ) >= ( nurl_str_to_int ( nurl_str_slice ap 2 ( nurl_str_len ap ) ) ) rmin
+        ? dp { = any T } {}
+        = deeper ? == 0 ( nurl_str_len deeper ) ( nurl_str_cat ? dp nm `-` `` ) ( nurl_str_cat3 deeper ` ` ? dp nm `-` )
+    }
+    ^ ? any deeper ``
+}
+
 // The value of a value block (`= out { : W w … ( gets w ) }`) just stored
 // into `ptr`, a binding of an outer scope, when the block's tail call may
 // lend it out of a binding made below that one — the block's own locals
@@ -25022,23 +25043,11 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // copied in place on those paths, and the binding owns it there. The walk
 // takes such a value for what the block's names held (h216); this makes
 // it so (agora #190). One that cannot be copied is refused.
-@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up → v {
+@ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up i rmin → v {
     ? == 0 ( nurl_str_len up ) { ^ v } {}
-    : i td ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) )
-    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
-    ? == 0 ( nurl_str_len key ) { ^ v } {}
-    : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
-    : ~ s deeper ``
-    : ~ b any F
-    ~ != 0 ( nurl_str_len rest ) {
-        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s ap ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
-        : b dp & != 0 ( nurl_str_len ap ) > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td
-        ? dp { = any T } {}
-        = deeper ? == 0 ( nurl_str_len deeper ) ( nurl_str_cat ? dp nm `-` `` ) ( nurl_str_cat3 deeper ` ` ? dp nm `-` )
-    }
-    ? ! any { ^ v } {}
-    : s lp ( mem_local_lend_of syms cg key deeper )
+    : s deeper ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) rmin )
+    ? == 0 ( nurl_str_len deeper ) { ^ v } {}
+    : s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
     ? == 0 ( nurl_str_len lp ) { ^ v } {}
     ? ! ( __clone_supported ty syms ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty ) ^ v } {}
     : s lt ( nurl_llty ty )
@@ -33674,6 +33683,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
         = g_open_bind_line __ob_line
         = g_open_bind_col __ob_col
+        // (The first register the right-hand side takes: a value block's
+        // own locals are bound from here on — agora #193.)
+        : i __rhs_r0 ( nurl_peek # s cg 0 )
         : ~ s val ( gen_expr lex syms cg )
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
@@ -33899,7 +33911,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // the RHS is a borrow (vec_get / a ret_borrow accessor) — dropping
         // it would double-free the container that still owns the value. The
         // binding inherits `__borrow` so it propagates further.
-        ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow )
+        // A value block whose tail call lends one of the block's own locals
+        // (`: String r { : W w ( mkw ) ( gets w ) }`): those live only to the
+        // end of this scope, while the walk takes the value for what they
+        // held (h216) and lets it outlive them. It is copied in place below
+        // and this binding owns it, so it is no borrow (agora #193).
+        : ~ b __blk_lend F
+        ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
+        ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
             { : s rvt ( __udrop_regty vt )
@@ -33911,6 +33930,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_vget_binding syms name bck_rhs_tt )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt bck_rhs_tt bck_rhs_val rhs_borrow )
+                    ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
                     ( mem_journal_push_userdrop syms cg ptr rvt ) }
                 {}
             }
@@ -34028,6 +34048,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_name ? == bck_rhs_tt TT_BACKSLASH `` name
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
+            : i __rhs_r0 ( nurl_peek # s cg 0 )
             : ~ s val ( gen_expr lex syms cg )
             // (A try over a call binds the call's payload: what follows asks the
             // call, as mem_udrop_bind_flag does — agora #194.)
@@ -34250,7 +34271,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // Phase 2D: User Drop trait. Skip a COMPILER-auto Drop when
             // the RHS is a borrow (would double-free the owner); mark the
             // binding `__borrow` so it propagates.
-            ? & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow )
+            // A value block whose tail call lends one of the block's own locals
+            // (`: String r { : W w ( mkw ) ( gets w ) }`): those live only to the
+            // end of this scope, while the walk takes the value for what they
+            // held (h216) and lets it outlive them. It is copied in place below
+            // and this binding owns it, so it is no borrow (agora #193).
+            : ~ b __blk_lend F
+            ? & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { = __blk_lend != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) ) } {}
+            ? & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend
             { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
             { ? != 0 g_auto_drop_strings
                 { : s rpt ( __udrop_regty ptype )
@@ -34261,6 +34289,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     { = g_udrop_noinit 1
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt bck_rhs_tt bck_rhs_val rhs_borrow )
+                        ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
                         ( mem_journal_push_userdrop syms cg ptr rpt ) }
                     {}
                 }
@@ -35169,7 +35198,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         }
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
-        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr ) } {}
+        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
