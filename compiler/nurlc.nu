@@ -1694,6 +1694,15 @@ unsafe @ agg_field_count i syms s ot → i {
 // rule stores the drop flag itself, so registration only creates it.
 : ~ i g_udrop_noinit 0
 
+// An argument that is `( dyn Trait v )`: the box is a temporary of the
+// call (mem_arg_temps); gen_dyn_construct saves and restores it around
+// its operand's own calls.
+: ~ i g_arg_dyn_box 0
+
+// Set when a literal argument's owned fields wait in `__argtmp_litown__`
+// for mem_arg_temps: the symbol is written and read for a literal only.
+: ~ i g_arg_litown_set 0
+
 // Set when a `?` / `??` argument's ownership bit waits in
 // `__argtmp_joinown__` for mem_arg_temps (agora #174): the symbol is
 // written and read for a join only.
@@ -14769,7 +14778,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             ( nurl_sym_def syms `__deferred_temps__` `` )
             ( nurl_sym_def syms `__deferred_ids__` `` )
             // `( f ( dyn Trait v ) )`: the box dyn allocates is a temporary.
-            ( nurl_sym_def syms `__arg_dyn_box__` ? & == bck_arg_tt TT_LPAREN ( seq ( nurl_lex_peek_val lex ) `dyn` ) `1` `` )
+            = g_arg_dyn_box ? & == bck_arg_tt TT_LPAREN ( seq ( nurl_lex_peek_val lex ) `dyn` ) 1 0
             ( nurl_sym_def syms `__agg_arg_sink__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) `` )
             : s __aac_saved ( nurl_sym_get syms `__agg_arg_call__` )
@@ -16249,7 +16258,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // of it, used after this call returns.
         // What this argument leaves the caller to drop after the call, and
         // whether the result is it (mem_arg_temps).
-        ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own )
+        ? != 0 ( nurl_str_len arg_lit_own ) { ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own ) = g_arg_litown_set 1 } {}
         // (Only a join's: every other argument pays one int test for it.)
         ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 } {}
         ( mem_arg_temps lex syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
@@ -23199,7 +23208,7 @@ unsafe @ mem_path_to_indices s path → s {
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings
-    ( seq ( nurl_sym_get syms `__arg_dyn_box__` ) `1` ) != 0 ( nurl_str_starts at `%dyn.` ) {
+    != 0 g_arg_dyn_box != 0 ( nurl_str_starts at `%dyn.` ) {
         // A trait-object parameter is dropped by a callee that sinks it
         // and kept by one that stores it; otherwise it is only read, and
         // the whole object is dropped here: the boxed value through the
@@ -23210,11 +23219,11 @@ unsafe @ mem_path_to_indices s path → s {
         : s __dw ( nurl_str_cat4 `h|` __dnk ( nurl_str_cat3 `|` at `|` ) av )
         = owned ? == 0 ( nurl_str_len owned ) __dw ( nurl_str_cat3 owned ` ` __dw )
     } {}
-    ( nurl_sym_def syms `__arg_dyn_box__` `` )
+    = g_arg_dyn_box 0
     // The fields a literal argument made or copied (gen_agg_lit): dropped
     // after the call unless the callee consumes or keeps the argument.
-    : ~ s __lo ( nurl_sym_get syms `__argtmp_litown__` )
-    ( nurl_sym_def syms `__argtmp_litown__` `` )
+    : ~ s __lo ? != 0 g_arg_litown_set ( nurl_sym_get syms `__argtmp_litown__` ) ``
+    ? != 0 g_arg_litown_set { ( nurl_sym_def syms `__argtmp_litown__` `` ) = g_arg_litown_set 0 } {}
     ? & & != 0 g_auto_drop_strings == arg_tt TT_AT != 0 ( nurl_str_len __lo ) {
         : s __lnk0 ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
         // A callee that hands the literal back, as for a call's temporary
@@ -61829,8 +61838,8 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     // Whether this object is itself a call's argument (mem_arg_temps drops
     // it after the call): the calls inside the operand reset the marker
     // for their own arguments, so it is restored once the operand is done.
-    : s vdynarg ( nurl_sym_get syms `__arg_dyn_box__` )
-    ( nurl_sym_def syms `__arg_dyn_box__` `` )
+    : i vdynarg g_arg_dyn_box
+    = g_arg_dyn_box 0
     ( nurl_sym_def syms `__in_call_arg__` `1` )
     : i __dsxn0 g_sx_n
     : i __dmp0 g_member_path_on
@@ -61838,7 +61847,7 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     : ~ s val ( gen_operand lex syms cg )
     = g_member_path_on __dmp0
     ( nurl_sym_def syms `__in_call_arg__` `` )
-    ( nurl_sym_def syms `__arg_dyn_box__` vdynarg )
+    = g_arg_dyn_box vdynarg
     : s ct ( nurl_get_last_type )
     // The object holds what the operand was, so it is returned, stored and
     // bound as the operand would be: its stack referent (§2.8), the
