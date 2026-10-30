@@ -1928,6 +1928,10 @@ unsafe @ agg_field_count i syms s ot → i {
 // The block about to be compiled is a closure body whose final value is
 // handed back (gen_closure_expr → gen_block_expr): it returns as `^` does.
 : ~ b g_clo_body_ret F
+// …and a bare `{ … }` block that is its function's fall-off value
+// (gen_ret, from __is_fall_value_stmt): a value block, not a statement
+// that drops at its `}` what it hands back (agora #188).
+: ~ b g_blk_fall_value F
 // `g_fn_reallocs[fname]`: the parameters whose BUFFER the function may move
 // or release (a reallocation, a free) — what ends a view of them (§2.10),
 // as distinct from changing what the buffer holds (g_fn_mutates). Built
@@ -4590,7 +4594,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // deterministically (every-live-arm rule, since the copy-out-of-
     // arms protocol) — so a `^ ? c ( f ) ( g )` return can prove
     // ownership through the same marker a direct call does.
-    : b ret_is_det_join | == ( nurl_lex_type lex ) TT_QUEST
+    : ~ b ret_is_det_join | == ( nurl_lex_type lex ) TT_QUEST
     == ( nurl_lex_type lex ) TT_QUESTQUEST
     // A4c: reset the agg / call struct-ownership side-channels so the
     // return-value analysis below observes only what THIS expression
@@ -4650,6 +4654,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // is copied then, or refused when it cannot be.)
     : b __jmove & == 0 g_defer_count | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     ? __jmove { = g_join_rdepth 0 } {}
+    = g_blk_fall_value & __ret_imp == ret_first_tt TT_LBRACE
     : ~ s val ( gen_operand lex syms cg )
     = g_member_path_on __rsxmp
     // A block whose tail is a field read hands back that field as `^ . x f`
@@ -4661,6 +4666,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
     : ~ i ret_eff_tt ret_first_tt
     ? == ret_first_tt TT_LBRACE { ? != 0 ( nurl_str_len g_blk_froot ) { = ret_eff_tt TT_DOT } {
             ? == g_blk_tail_eff TT_LPAREN { = ret_eff_tt TT_LPAREN = ret_is_direct_call T } {}
+            // (…and one whose tail is a `?` / `??` as that join is; its
+            // arms' locals were not moved out — g_join_rdepth is for a join
+            // `^` itself hands back — so what they lend is copied, or
+            // refused when it cannot be; agora #188.)
+            ? | == g_blk_tail_eff TT_QUEST == g_blk_tail_eff TT_QUESTQUEST { = ret_eff_tt g_blk_tail_eff = ret_is_det_join T } {}
         } } {}
     // A fall-off value that turned out to be none — a call that never
     // returns (`( die … )`), or one returning `v` — is the fall-off's to
@@ -4673,7 +4683,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // …and a join that lent, on some path, a field of a value this frame
     // releases on the way out (g_join_flends; agora #178): copied below
     // when it can be, refused when it cannot.
-    ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST != 0 g_join_flends ! ( __clone_supported ( nurl_get_last_type ) syms ) {
+    ? & & | == ret_eff_tt TT_QUEST == ret_eff_tt TT_QUESTQUEST != 0 g_join_flends ! ( __clone_supported ( nurl_get_last_type ) syms ) {
         ( die_pos lex bck_line __ret_col ( nurl_str_cat3 `this hands back, on one of its paths, a field of a value this function releases, fields and all, on the way out; a '` ( llvm_to_nurl ( nurl_get_last_type ) )
         `' cannot be copied out of it — the field would be released with it under the caller. Keep the value in a binding of its own and hand that back, or hand back the whole of it.` ) )
     } {}
@@ -5130,7 +5140,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // copy on the paths that only lent.
     // (…also for a value that cannot be copied: the arms that own their
     // value say so per call, the others lend the caller's — agora #186.)
-    ? ? & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    ? ? & | == ret_eff_tt TT_QUEST == ret_eff_tt TT_QUESTQUEST
     != 0 ( nurl_sym_len syms `__last_join_own__` ) | ( __clone_supported ( nurl_get_last_type ) syms ) ( __is_hown_ty ( nurl_get_last_type ) ) F {
         : s rty ( nurl_get_last_type )
         : b rcl ( __clone_supported rty syms )
@@ -5169,7 +5179,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     } {}
     // A join none of whose arms owns what it yields lends it — the
     // caller's value; one that lends this frame's own is copied.
-    ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    ? & & | == ret_eff_tt TT_QUEST == ret_eff_tt TT_QUESTQUEST
     == 0 ( nurl_sym_len syms `__last_join_own__` ) ( __is_hown_ty ( nurl_get_last_type ) ) {
         ? ( __phi_lends_params_only syms ) {
             ( mem_hown_mark_dyn syms )
@@ -21507,7 +21517,8 @@ unsafe @ __blk_leave b val → v {
     : s __blk_mark ( nurl_sym_get g_fn_escapes `__arm_body__` )
     : b blk_is_arm ( seq __blk_mark `1` )
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
-    : b blk_is_stmt ( mem_join_heads_stmt lex )
+    : b blk_is_stmt & ! g_blk_fall_value ( mem_join_heads_stmt lex )
+    = g_blk_fall_value F
     // (Its value's source expression: its tail's — __blk_tail_sx — when
     // the value goes anywhere: an arm of a `?` / `??` that is not a
     // statement, a bare block in value position, or anything inside a
@@ -21747,19 +21758,20 @@ unsafe @ __blk_leave b val → v {
     ( __close_dead_block __dead_any )
 }
 
-// Is the statement starting here — a name, a call, a field read or a
-// literal `@ T { … }` — the value its block falls off with: is the next
-// token after it the block's `}`? A name asks the lexer's lookahead; the
-// rest is read off the source text (balanced brackets, backtick strings
-// and `//` comments skipped as the lexer skips them), so nothing is lexed
-// twice.
+// Is the statement starting here — a name, a call, a field read, a
+// literal `@ T { … }` or a bare `{ … }` block — the value its block falls
+// off with: is the next token after it the block's `}`? A name asks the
+// lexer's lookahead; the rest is read off the source text (balanced
+// brackets, backtick strings and `//` comments skipped as the lexer skips
+// them), so nothing is lexed twice. (A block that is the value is one: it
+// does not drop at its `}` what it hands back — agora #188.)
 unsafe @ __is_fall_value_stmt i lex i tt → b {
     ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
-    ? & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT { ^ F } {}
+    ? & & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT != tt TT_LBRACE { ^ F } {}
     : s p # s lex
     : *u src # *u # s ( nurl_peek p LX_SRC )
     : i len ( nurl_peek p LX_LEN )
-    : i e ( __src_operand_end src len ( nurl_lex_cur_start lex ) )
+    : i e ? == tt TT_LBRACE ( __src_group_end src len ( nurl_lex_cur_start lex ) 123 125 ) ( __src_operand_end src len ( nurl_lex_cur_start lex ) )
     ? < e 0 { ^ F } {}
     : i w ( __src_skip_ws src len e )
     ^ & < w len == & # i . src w 255 125
