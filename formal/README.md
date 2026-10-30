@@ -89,7 +89,8 @@ The same modules under `A2/`, extended, and:
 | `Closure` | a call through a package, opened: the environment bound as a borrowed parameter, the captures as `inout` arguments of their own; the context after the opened call says no less than after the call through the package |
 | `Codes` | packages name code of their signature, through every step |
 | `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
-| `DYN_DESIGN.md` | values owned or not per call: the refinement that types them (a mode owned or borrowed per run), not yet in the sources |
+| `DynCell` | values owned or not per call, as the calculus has them: an owner cell the caller provides (an `inout` option the callee fills when the value is fresh) and a borrow of its payload or of the argument; the per-call function checked against its summary (`pick_ok`) and a caller run safe and leak-free by the crown theorems (`main_safe`, `main_no_leak`) |
+| `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
 
 The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
 `A2.no_leak_panic` (`check.sh` prints the axioms of each).
@@ -109,14 +110,19 @@ of its fields: a copy is a borrow, never an `inout` argument,
 parameter: `assign` to an `inout .replace` closure, whose slot is the
 caller's) sit.
 
+Values owned or not per call need no rule of their own. A trait method's
+result, a raw string that may be fresh, and a result lent on one path and
+fresh on another are all, in the calculus, an owner cell and a borrow
+(`DynCell`, `A2/DYN_DESIGN.md`). That nurlc's ownership bit behaves as
+the cell does is phase C / D.
+
 What A2 does not model yet, each a planned refinement of the calculus
-rather than a gap in what it proves: values owned or not per call (a
-trait method's result, a raw string that may be fresh, a result lent on
-one path and fresh on another; designed in `A2/DYN_DESIGN.md`, and the
-`RULES.md` rows of agora #184–#206 that rest on it); a destructor
-written by the program (`% Drop`), whose drop runs code and may panic
-(`CLAIM.md`); `Rc` and its cycle collector, which are the standard
-library's `unsafe` base (phase B).
+rather than a gap in what it proves:
+
+- a destructor written by the program (`% Drop`), whose drop runs code
+  and may panic (`CLAIM.md`);
+- `Rc` and its cycle collector, which are the standard library's `unsafe`
+  base (phase B).
 
 ## How it relates to the rest of the repository
 

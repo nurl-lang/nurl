@@ -1,13 +1,23 @@
-# A2-dyn — values owned or not per call: design
+# A2-dyn — values owned or not per call
 
 ## Status
 
-Design only. Nothing below is in the sources yet, and A2's theorems
-(`memory_safe`, `soundness`, `no_leak_end`, `no_leak_panic`) do not cover
-the shapes it describes. `formal/RULES.md` marks each of them *outside the
-calculus* (agora #184, #185, #186, #203, #205, #206). This note is the
-specification the mechanization follows. It is the refinement `README.md`
-lists as "values owned or not per call".
+**Covered by A2, through an encoding.** No rule of the calculus changes.
+A value nurlc owns or lends per call is, in the calculus, an **owner cell**
+plus a **borrow**. `A2/DynCell.lean` types the encoding with A2's own rules
+and applies the crown theorems to it, on Lean's standard axioms only
+(`../check.sh`):
+
+- `pick_ok`: the per-call function meets its summary (`FnOK`);
+- `main_safe`: a caller run from the empty store never gets stuck
+  (`memory_safe`);
+- `main_no_leak`: when the caller ends, the fresh value, if there was one,
+  is freed (`no_leak_end`).
+
+What is left is the link from nurlc to the encoding (phase C and D): the
+lowering must behave as the encoded program does. Rows in
+`formal/RULES.md` that rest on per-call ownership (agora #184, #185, #186,
+#203, #205, #206) refer here.
 
 ## What nurlc does
 
@@ -18,127 +28,82 @@ value on another answers **per call** whether its result is owned
     @ pick String p b c → String { ^ ? c p ( mk ) }
 
 The callee stores an ownership bit beside the result (`mem_store_hown`;
-`__nc_held_ty` / `__is_hown_ty` say which types carry one). Every consumer
-goes by the bit. Where the result is bound, handed to a call, stored,
-discarded, picked by a join's arm or matched, the fresh value is dropped
-or moved in, and the lent one is copied or left to its owner (#185). A
-`% Drop` value that cannot be copied is moved out on the path that owns it
-and refused where it would have to be copied (#186, #203, #205). A raw
-string handed back answers the same way (`__ret_unowned`, #206).
+`__nc_held_ty` / `__is_hown_ty` say which types carry one), and every
+consumer goes by the bit.
 
-## Why A2 cannot type it
+- Where the result is bound, handed to a call, stored, discarded, picked
+  by a join's arm or matched, a fresh value is dropped or moved in, and a
+  lent one is copied or left to its owner (#185).
+- A `% Drop` value that cannot be copied moves out on the path that owns
+  it, and is refused where it would have to be copied (#186, #203, #205).
+- A raw string handed back answers the same way (`__ret_unowned`, #206).
 
-- `Fn.resOwn : Bool`, so `resMode fn` is `.own` or `.bor` for every call,
-  and `FnOK` requires the result slot's entry to have that one mode.
+## Why A2 cannot type the bit directly
+
+- `Fn.resOwn : Bool`, so `resMode fn` is `.own` or `.bor` for every call.
 - `StmtT.assign` pairs an owner with an owned value and a borrow with a
-  borrowed one, never one binding with both.
-- `StmtT.ite` ends both arms in one context. The arm that assigns
-  `( mk )` and the arm that assigns `p` cannot agree on the result's mode.
-- `SlotOK` ties a slot's run-time flag to its binding's mode:
-  `sl.own = E.mode.ownSlot`.
+  borrowed one. It never gives one binding both.
+- `SlotOK` ties a slot's run-time flag to its binding's mode
+  (`sl.own = E.mode.ownSlot`).
 
-## The semantics already decides it
+The semantics would allow more. `Step.assign` hands a moved-from slot's
+flag on (`EvalR.moveOwn` / `EvalR.copy`), and `DropSlot` frees under the
+flag. But a binding that may own or borrow per run would also break an
+assumption the invariant's proofs make. Once its root's slot holds a
+borrow, that root must be a borrowed parameter whose anchors are frozen
+(`Stability.lean`'s root lemmas). A mode `.dyn` is therefore a deep change
+to the invariant, not a new case. The encoding avoids that change.
 
-No step changes:
+## The encoding
 
-- `Step.assign` evaluates `.var r` by `EvalR.moveOwn` when `r`'s slot is
-  `⟨true, some v⟩` and by `EvalR.copy` when it is `⟨false, some v⟩`, and
-  stores `⟨o, some v⟩`. The target's flag is the source's, per run.
-- `callIn` ends with `assign x (.var r)`, so a call's result takes the
-  flag its body left in the result slot.
-- `DropSlot` frees `⟨true, some t⟩` and leaves `⟨false, v⟩` alone.
-- `OwnedAt`, `HeapOK` and `Covers` are stated over the flag, not the
-  mode, so an owned per-call value is in the heap invariant and the leak
-  invariant already.
+The callee gets one more parameter: the cell. It is an `inout` option the
+caller owns, `none` until the callee fills it. The result is a **borrow**:
 
-What is missing is the typing, and one expression to test the bit.
+    @ pick ( inout ?String ) cell  String p  b c → String {   // lends p, cell
+        ? c { ^ p }                        // lent: the cell stays none
+            { : String y ( mk )
+              = cell @ ?String { T y }     // fresh: it moves into the cell
+              ^ ( payload cell ) }         // and the result borrows it
+    }
 
-## The extension
+In the calculus (`A2/DynCell.lean`) that is `ite`, `assign`, `inr` (the
+move into the cell), and `getr` (the borrow of the payload). `lends` names
+both `p` and the cell, and the two paths' results meet by `StmtT.sub`.
 
-### Syntax and semantics
+| nurlc | the encoding |
+|---|---|
+| the result's ownership bit | "is the caller's cell `some`?" |
+| the caller drops a fresh result at its scope's end | the cell drops its payload at its scope's end (`DropSlot`) |
+| a lent result is the caller's argument's | the result borrows `p` (`lends`) |
+| a fresh result read by the caller | the result borrows the cell's payload (`projE`: depends on the cell) |
+| a consumer moves a fresh result | `taker` on the cell (the payload moves; the borrow, which depends on the cell, ends) |
+| a consumer copies a lent result | a call of the type's clone (B), as for every copy |
+| the result may lend the argument, so a change to it ends the result | the result depends on `p` *and* the cell, on every path |
 
-- `Expr.owned (x : Var)`: 1 when `x`'s slot owns its value, 0 when not.
-  `Eval.ownedT : m.st x = some ⟨true, some v⟩ → Eval m (.owned x) 1`, and
-  `Eval.ownedF` for `⟨false, some v⟩`. This is the bit nurlc reads at a
-  consumer.
-- `Fn.resOwn : Bool` becomes `Fn.res : RMode` with
-  `RMode := own | bor | dyn`, and `letcall` / `callc` bind the result
-  slot as `⟨res = own, none⟩`. The initial flag says nothing: the value
-  is `none` until the body assigns it.
+The last row is the conservative point, and nurlc makes it too. A per-call
+result may lend its argument, so nurlc ends it when the argument changes,
+whichever path the call took. The encoding's join does the same: the
+result depends on both, as `ite` requires one context for both arms.
 
-### Typing
+## What phase C / D has to show
 
-- **`Mode.dyn`**: a binding owned or borrowed per run.
-  `isRoot = true`, `ownSlot = false`.
-- **Its entry**: `path` is what it may lend, as for a borrow. `held` is
-  what its value holds. `vdeps = path ++ held`.
-- **`derive y E k` for a dyn `y`**: `⟨y, rootKind E.ty k⟩ :: E.path.map
-  (comp · k)`. A borrow taken from it ends when `y` is replaced, as from
-  an owner, *and* when what `y` may lend is replaced, as from a borrow.
-- **`SlotOK` for `.dyn`**:
-  `(sl.own = true → the owner's conditions) ∧ (sl.own = false → the
-  borrow's conditions)`. The owner's conditions are `WFv` and `ViewsOK`
-  over `held`. The borrow's are `ValOK` over `path` and `held`.
-- **`RhsT.moveDyn`**: `.var y` with `y` dyn and live gives a dyn entry with
-  `y`'s `path` and `held`, and kills `y` (`kill .replace y`, `y` dead).
-  At run time this is `moveOwn` when the flag is set and `copy` when not.
-  Either way `y` is unusable after it, and its drop flag decides whether
-  its scope's end frees anything.
-- **`StmtT.assign`** gains `Ex.mode = .dyn ∧ (E.mode = .own ∨ E.mode = .bor
-  ∨ E.mode = .dyn)`. The old value is released under its flag
-  (`DropSlot`, as now), and the entry becomes `{ E with mode := .dyn }`.
-- **`StmtT.iteOwn x a b`**: `x` dyn and live; `a` typed with `x` refined
-  to `.own` (path dropped: an owner is reached through its own slot);
-  `b` typed with `x` refined to `.bor`. Both end in one context. Sound
-  because `SlotOK` for `.dyn` under a known flag is exactly `SlotOK` for
-  `.own` or `.bor`. This is how "moved in when fresh, copied when lent"
-  is written: the owning arm moves `x`, the lending arm calls a clone.
-- **`resMode`** maps `dyn ↦ .dyn`. `FnOK` checks the result slot's entry
-  against it, and `callRes` gives the caller a dyn entry depending on
-  what `lends` names.
+nurlc's lowering of a per-call result has to simulate the encoding:
 
-### Where a dyn binding may go
+- the bit is set exactly when the cell would be `some`;
+- the value is the one the borrow reaches;
+- the drop at the scope's end and the move into a consumer happen under
+  the bit.
 
-It may be read (`ExprT`), borrowed from (`borrow`, `view`, `at`, `fst`,
-`snd`, `getl`, `getr`, all through `derive`), and passed as an `in`
-argument (`lendSlot` handles either flag). It may be moved into another
-dyn binding (`moveDyn`) or assigned to one.
-
-Everything that needs an owner refuses it until `iteOwn` has refined it:
-a `sink` or `inout` argument, `PushArg.move`, a literal's field, a
-package's environment, `takel` / `taker`, `unpair`, `free`. This is
-nurlc's rule too: a per-call value reaches a consumer only through the
-bit.
-
-## What the proof has to show
-
-- **Invariant.** `SlotOK` as above. `MInv`, `HeapOK` and `Covers` are
-  unchanged.
-- **New lemmas.**
-  - `SlotOK` refinement under a known flag (`slotOK_dyn_own`,
-    `slotOK_dyn_bor`).
-  - `moveDyn` preservation. The set flag is the `moveOwn` case: the tree
-    moves, `HeapOK` keeps one owner. The clear flag is the `copyBor`
-    case.
-  - Assignment to a dyn binding.
-  - `iteOwn` preservation and progress (`Eval.owned` always steps on a
-    bound slot with a value).
-- **The case splits.** Every case split on `Mode` gains a `.dyn` case,
-  about 400 sites over 28 modules. Most are absurd, because a dyn
-  binding is never an `inout` or `sink` argument, never `rootb`, and
-  never `canDo`. The rest copy the `.bor` case, adding the root dependency
-  that `derive` adds.
-- **Calls and renaming.** `Call.lean`, `CallMem.lean`, `CallInv.lean` and
-  `Rename.lean` take `RMode` for `Bool` in `resOwn`. `Implements` asks
-  `fn.res = sig.res`.
-- **Done when.** `check.sh` passes, with the crown theorems over the
-  extended calculus and standard axioms only. The six `RULES.md` rows move
-  from *outside the calculus* to *done (A2-dyn)*, and `README.md` drops
-  the line from "does not model yet".
+`tools/fuzz/holes/` probes that link today. Its rows for #184–#206 run
+clean under ASan/LSan. Phase C's certificate would name the cell
+explicitly, and a checker would type the encoded program.
 
 ## What stays out
 
-- The copies themselves. A clone of the lent value is a call whose body
-  is the standard library's (B).
-- Destructors as code: a `% Drop` that runs a function and may panic
-  (the next refinement).
+- **The copies.** A clone of the lent value is a call whose body is the
+  standard library's (B).
+- **Destructors as code.** A `% Drop` that runs a function and may panic
+  is the next refinement (`CLAIM.md`).
+- **A direct mode `.dyn`.** It would let a certificate skip the cell, at
+  the price of reproving the invariant's root lemmas. It is worth doing
+  only if phase C needs it.
