@@ -90,6 +90,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An
+  optional `ir` field let a caller hand clang raw LLVM IR in place of
+  nurlc's output, which skipped every check the build surface makes on
+  caller input. Through it, an unauthenticated request could read files
+  the server could see, including other builds' directories. The field is
+  now ignored. `nurlapi/e2e_test.py` checks that a request's `ir` reaches
+  neither the linked IR nor the wasm.
+
 - **nurlapi: every build tool runs in a Landlock sandbox** (Agora #207).
   nurlc, clang, wasm-opt, zig, mingw gcc, the unikernel scripts and the
   QEMU smoke boot now start under `nurl-sandbox` (`nurlapi/sandbox/`).

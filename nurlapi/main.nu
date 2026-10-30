@@ -1244,39 +1244,32 @@ i clang_rc s build_stdout s build_stderr → v {
                     // GPU package's cuda/nvrtc symbols) are resolved as wasm
                     // IMPORTS by the host runtime, not linked natively — so the
                     // native build-time sentinel gate must be skipped here.
-                    // The IR source is either a caller-supplied `ir` field
-                    // (a host nurlc already resolved the package's $-imports —
-                    // the only way to wasm-build a MULTI-FILE package, whose deps
-                    // don't exist in this container) or produced by running
-                    // nurlc on the single uploaded source. The rewrite + link
-                    // tail is shared. --ffi-host-imports skips the native FFI
-                    // sentinel gate (cuda/nvrtc become wasm imports).
-                    : s provided_ir ( get_common_json root `ir` `` )
+                    // The IR always comes from nurlc on the uploaded source.
+                    // A caller-supplied `ir` field used to go to clang as is,
+                    // past every check nurlc and the flag allow-list make: raw
+                    // IR can tell the assembler and linker to pull in files
+                    // the server can read. A request's `ir` is ignored.
                     : ~ String ir ( string_new )
                     : ~ String n_se_s ( string_new )
                     : ~ i n_rc 0
                     : ~ b nok F
                     : ~ b proc_ok T
-                    ? != 0 ( nurl_str_len provided_ir ) {
-                        = ir ( string_from provided_ir ) = nok T
-                    } {
-                        // --no-cpu-dispatch: the `simd` prefix expands to an
-                        // x86-64-v3 clone, and nurlc emits no target triple
-                        // to tell clang this module is bound for wasm32 —
-                        // left on, every marked function draws one "not a
-                        // recognized feature for this target" line per
-                        // feature.
-                        : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
-                        : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
-                        ?? nurlc_res {
-                            T n_out → {
-                                = n_rc ( output_exit_code n_out )
-                                = nok ( output_success n_out )
-                                = n_se_s ( string_from ( output_stderr n_out ) )
-                                ? nok { = ir ( string_from ( output_stdout n_out ) ) } {}
-                            }
-                            F _ → { = proc_ok F }
+                    // --no-cpu-dispatch: the `simd` prefix expands to an
+                    // x86-64-v3 clone, and nurlc emits no target triple
+                    // to tell clang this module is bound for wasm32 —
+                    // left on, every marked function draws one "not a
+                    // recognized feature for this target" line per
+                    // feature.
+                    : ( Vec s ) nurlc_args ( nurlc_stdin_args filename __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
+                    : !Output ProcessErr nurlc_res ( run_nurlc ( string_data build_dir ) nurlc_args source )
+                    ?? nurlc_res {
+                        T n_out → {
+                            = n_rc ( output_exit_code n_out )
+                            = nok ( output_success n_out )
+                            = n_se_s ( string_from ( output_stderr n_out ) )
+                            ? nok { = ir ( string_from ( output_stdout n_out ) ) } {}
                         }
+                        F _ → { = proc_ok F }
                     }
                     ? ! proc_ok {
                         ^ ( response_text 500 `{"error":"nurlc process failed"}\n` )
