@@ -334,7 +334,9 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .rbind _ s => CatchOK m s
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
-      x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
+      x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
+      -- A3.1 (so far): no step changes the counted blocks
+      m.blk = m0.blk ∧ CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on

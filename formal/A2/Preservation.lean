@@ -2027,7 +2027,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst
   | @catchR Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
     intro m m' s' hcd hi hst
-    obtain ⟨hfr, hxs, hnv0, hck⟩ := hi.catchOK
+    obtain ⟨hfr, hxs, hnv0, hb0, hck⟩ := hi.catchOK
     have hlo : ∀ v, v ≠ x → v ∉ F ++ (List.range m0.nv).filter (· ≠ x) → m0.st v = none := by
       intro v hvx hvF
       cases h0 : m0.st v with
@@ -2082,7 +2082,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
           catchOK := by
-            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, hi'.catchOK⟩
+            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, (Step.blk hst').trans hb0, hi'.catchOK⟩
             by_cases hvs : v ∈ s.spine
             · rw [step_gone hst' hck v hvs hv, hlo v hvx (hs.spine_F v hvs)]
             · by_cases hvF : v ∈ F ++ (List.range m0.nv).filter (· ≠ x)
@@ -2106,7 +2106,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
     | catchP hp hx1 =>
       rename_i m1
-      obtain ⟨hout, hin, hh1, hc1, hnv1, _⟩ := panic_unwind hp hi.heap hi.cover hi.spineNd
+      obtain ⟨hout, hin, hh1, hc1, hnv1, _, hblk1⟩ := panic_unwind hp hi.heap hi.cover hi.spineNd
       have hsteq : (m1.set x ⟨false, some (.int 1)⟩).st = (m0.set x ⟨false, some (.int 1)⟩).st := by
         funext v
         by_cases hvx : v = x
@@ -2116,7 +2116,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · rw [hin v hvs, hlo v hvx (hs.spine_F v hvs)]
           · rw [hout v hvs]; exact hfr v hvs hvx
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
-        hM.of_st hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0])
+        hM.of_st hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) (hblk1.trans hi.catchOK.2.2.2.1)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT

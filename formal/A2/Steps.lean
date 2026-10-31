@@ -1798,4 +1798,38 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, h3, h4.of_blk rfl⟩
 
+/-! ### A3.1 (so far): no step changes the counted blocks -/
+
+theorem TakeVal.blk {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.blk = m.blk := by
+  cases h <;> rfl
+
+theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m')) :
+    m'.blk = m.blk := by
+  cases h with
+  | pair h1 h2 => exact (TakeVal.blk h2).trans (TakeVal.blk h1)
+  | inl h1 => exact TakeVal.blk h1
+  | inr h1 => exact TakeVal.blk h1
+  | pack h1 => exact TakeVal.blk h1
+  | _ => rfl
+
+theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (h : BindParams m ps as base i m') : m'.blk = m.blk := by
+  induction h with
+  | nil => rfl
+  | inp _ _ _ ih => exact ih
+  | sink _ _ ih => exact ih
+  | inout _ ih => exact ih
+
+theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r.mem.blk = m.blk := by
+  induction h with
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+    | scopeDIn _ ih => exact ih
+  | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
+  | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
+  | letcall _ _ hb => have := BindParams.blk hb; exact this
+  | callc _ _ _ _ hb => have := BindParams.blk hb; exact this
+  | push ht _ _ _ => have := TakeVal.blk ht; exact this
+  | pushRealloc ht _ _ _ => have := TakeVal.blk ht; exact this
+  | _ => rfl
+
 end A2

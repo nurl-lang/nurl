@@ -8,11 +8,6 @@ are below `nid`. -/
 namespace A3
 open A2
 
-/-- The memory a step leaves. -/
-def _root_.A2.Res.mem : Res → Mem
-  | .ok m _ => m
-  | .panic m => m
-
 /-- From `m` to `m'` nothing was allocated but fresh addresses, and `nid`
     did not go back. -/
 structure Grows (m m' : Mem) : Prop where

@@ -458,7 +458,7 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     anch := fun p E hp hm hps => (hi.anch p E hp hm hps).mono (fun _ h => List.mem_append_left _ h)
     spineNd := hi.spineNd
     spineDom := hi.spineDom
-    catchOK := hi.catchOK.2.2.2
+    catchOK := hi.catchOK.2.2.2.2
     cover := hi.cover
     pinOut := hi.pinOut
     pinIn := hi.pinIn

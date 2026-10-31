@@ -269,7 +269,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
   | seqL _ ih | frozenIn _ ih =>
     cases hr; intro v h h'; exact ih hck rfl v h h'
   | catchIn _ ih =>
-    cases hr; intro v h h'; exact ih hck.2.2.2 rfl v h h'
+    cases hr; intro v h h'; exact ih hck.2.2.2.2 rfl v h h'
   | scopeIn _ ih | rbindIn _ ih | scopeDIn _ ih =>
     cases hr; intro v h h'
     simp only [Stmt.spine, List.mem_cons, not_or] at h h'

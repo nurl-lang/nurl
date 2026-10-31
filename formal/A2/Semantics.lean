@@ -350,6 +350,11 @@ inductive Res where
   | ok (m : Mem) (s : Stmt)
   | panic (m : Mem)
 
+/-- The memory a step leaves. -/
+def Res.mem : Res → Mem
+  | .ok m _ => m
+  | .panic m => m
+
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
   | seqL {m m' : Mem} {a a' b : Stmt} :
