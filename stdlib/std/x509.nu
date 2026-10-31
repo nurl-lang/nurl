@@ -79,6 +79,81 @@ $ `stdlib/std/bytes.nu`
     ^ ( bytes_slice b s end )
 }
 
+// ── strict DER for ECDSA signatures ───────────────────────────────────
+// der_at reads BER as well as DER (a long-form length for a short value,
+// leading zero length bytes) and checks nothing about what follows an
+// element. That is enough to walk a certificate whose bytes are hashed
+// as they stand, but not for a signature: three lax decoders accepted an
+// ECDSA-Sig-Value with bytes after the SEQUENCE, a wrong tag, a non-
+// minimal or negative INTEGER, so one signature had many encodings, and
+// all 310 invalid cases of Wycheproof's DER file ran through them
+// (Agora #217). der_ecdsa_sig_rs is the one decoder they share now.
+
+// One TLV at `pos`, ending no later than `end`, in strict DER: a definite
+// length in its minimal form — the short form below 128, the long form
+// with no leading zero byte and a value of at least 128. ok = 0 otherwise.
+@ __der_strict_at ( Vec u ) b i pos i end → DerTlv {
+    ? > + pos 2 end { ^ @ DerTlv { 0 0 0 0 0 } } {}
+    : i tag ( __x509_bget b pos )
+    : i l0 ( __x509_bget b + pos 1 )
+    ? < l0 128 {
+        : i start + pos 2
+        ? > + start l0 end { ^ @ DerTlv { 0 0 0 0 0 } } {}
+        ^ @ DerTlv { tag 2 l0 start 1 }
+    } {}
+    : i nb & l0 127
+    ? | | == nb 0 > nb 4 > + + pos 2 nb end { ^ @ DerTlv { 0 0 0 0 0 } } {}
+    ? == ( __x509_bget b + pos 2 ) 0 { ^ @ DerTlv { 0 0 0 0 0 } } {}
+    : ~ i len 0
+    : ~ i k 0
+    ~ < k nb { = len | << len 8 ( __x509_bget b + + pos 2 k ) = k + k 1 }
+    : i start + + pos 2 nb
+    ? | < len 128 > + start len end { ^ @ DerTlv { 0 0 0 0 0 } } {}
+    ^ @ DerTlv { tag + 2 nb len start 1 }
+}
+
+// A DER INTEGER as a non-negative magnitude, left-padded to exactly
+// `width` bytes; empty when it is not an INTEGER, is negative (sign bit
+// set), carries a superfluous leading zero, or needs more than `width`.
+@ __der_uint_fixed ( Vec u ) b DerTlv t i width → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] width )
+    ? | | != . t ok 1 != . t tag 2 == . t len 0 { ^ out } {}
+    : ~ i s . t start
+    : i end + s . t len
+    : i b0 ( __x509_bget b s )
+    ? >= b0 128 { ^ out } {}
+    ? & == b0 0 > . t len 1 {
+        ? < ( __x509_bget b + s 1 ) 128 { ^ out } {}
+        = s + s 1
+    } {}
+    : i mag - end s
+    ? > mag width { ^ out } {}
+    : ~ i pad - width mag
+    ~ > pad 0 { ( vec_push [u] out # u 0 ) = pad - pad 1 }
+    ( bytes_extend_bytes out ( bytes_slice b s end ) )
+    ^ out
+}
+
+// An ECDSA-Sig-Value (RFC 3279 §2.2.3, SEC 1 §C.5) — SEQUENCE { INTEGER
+// r, INTEGER s } in strict DER and nothing after it — as r‖s, each
+// left-padded to `width` bytes (32 for P-256, 48 for P-384). Empty on
+// anything else, so a caller's length check rejects it. The range of r
+// and s (1 … n − 1) is the verifier's to check.
+@ der_ecdsa_sig_rs ( Vec u ) sig i width → ( Vec u ) {
+    : i n ( vec_len [u] sig )
+    : DerTlv seq ( __der_strict_at sig 0 n )
+    ? | | != . seq ok 1 != . seq tag 48 != + . seq start . seq len n { ^ ( vec_new [u] ) } {}
+    : DerTlv ri ( __der_strict_at sig . seq start n )
+    ? != . ri ok 1 { ^ ( vec_new [u] ) } {}
+    : DerTlv si ( __der_strict_at sig + . ri start . ri len n )
+    ? | != . si ok 1 != + . si start . si len n { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) r ( __der_uint_fixed sig ri width )
+    : ( Vec u ) s ( __der_uint_fixed sig si width )
+    ? | != ( vec_len [u] r ) width != ( vec_len [u] s ) width { ^ ( vec_new [u] ) } {}
+    ( bytes_extend_bytes r s )
+    ^ r
+}
+
 // Compare an OID element's content bytes to a hex literal.
 @ _der_oid_is ( Vec u ) b DerTlv t s hexoid → b {
     : ( Vec u ) want ?? ( bytes_from_hex hexoid ) { T v → v F _ → ( vec_new [u] ) }

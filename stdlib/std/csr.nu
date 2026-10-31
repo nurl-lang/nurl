@@ -62,47 +62,9 @@ $ `stdlib/std/pkey.nu`
 
 // ── Parsing ───────────────────────────────────────────────────────────
 
-// Convert ECDSA DER signature SEQ{ INTEGER r, INTEGER s } to raw 64-byte r||s.
-@ __csr_sig_der_to_rs ( Vec u ) sig_der → ( Vec u ) {
-    : ( Vec u ) out ( vec_with_cap [u] 64 )
-    : i n ( vec_len [u] sig_der )
-    ? < n 8 { ^ out } {}
-    : DerTlv seq ( der_at sig_der 0 )
-    ? | != . seq ok 1 != . seq tag 48 { ^ out } {}
-    : DerTlv r_elem ( _der_child sig_der seq )
-    ? | != . r_elem ok 1 != . r_elem tag 2 { ^ out } {}
-    : DerTlv s_elem ( _der_next sig_der r_elem )
-    ? | != . s_elem ok 1 != . s_elem tag 2 { ^ out } {}
-
-    : ( Vec u ) r_bytes ( _der_uint sig_der r_elem )
-    : ( Vec u ) s_bytes ( _der_uint sig_der s_elem )
-
-    : i rlen ( vec_len [u] r_bytes )
-    : i slen ( vec_len [u] s_bytes )
-    ? | > rlen 32 > slen 32 {
-        ^ out
-    } {}
-
-    // Pad r to 32 bytes
-    : ~ i pad_r - 32 rlen
-    ~ > pad_r 0 { ( vec_push [u] out # u 0 ) = pad_r - pad_r 1 }
-    : ~ i kr 0
-    ~ < kr rlen {
-        ( vec_push [u] out ?? ( vec_get [u] r_bytes kr ) { T x → x F _ → # u 0 } )
-        = kr + kr 1
-    }
-
-    // Pad s to 32 bytes
-    : ~ i pad_s - 32 slen
-    ~ > pad_s 0 { ( vec_push [u] out # u 0 ) = pad_s - pad_s 1 }
-    : ~ i ks 0
-    ~ < ks slen {
-        ( vec_push [u] out ?? ( vec_get [u] s_bytes ks ) { T x → x F _ → # u 0 } )
-        = ks + ks 1
-    }
-
-    ^ out
-}
+// An ECDSA DER signature SEQ{ INTEGER r, INTEGER s } as raw 64-byte r||s:
+// std/x509's strict decoder, empty on any other encoding (Agora #217).
+@ __csr_sig_der_to_rs ( Vec u ) sig_der → ( Vec u ) { ^ ( der_ecdsa_sig_rs sig_der 32 ) }
 
 // Extract Name attributes (CN, O, C) from subject RDNSequence.
 @ __csr_parse_name ( Vec u ) b DerTlv name_seq → __CsrNames {
