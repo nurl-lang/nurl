@@ -217,19 +217,24 @@ theorem SlotOK.dead {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (hl
   obtain ⟨h1, h2, _⟩ := hown hos
   exact ⟨h1, h2, fun hl' => by rw [hl] at hl'; cases hl'⟩
 
-theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
-    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl := by
+/-- A slot reads memory only through a live entry's dependencies. -/
+theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
+    (hk : E.live = true → ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl := by
   obtain ⟨ho, hown, hbor⟩ := h
   refine ⟨ho, fun hos => ?_, fun hos hl => ?_⟩
   · obtain ⟨h1, h2, h3⟩ := hown hos
     refine ⟨h1, h2, fun hl => ?_⟩
     obtain ⟨T, hT, hv⟩ := h3 hl
-    refine ⟨T, hT, hv.keep fun dep hd => (hk dep ?_).1⟩
+    refine ⟨T, hT, hv.keep fun dep hd => (hk hl dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
-    refine ⟨v, hv, hok.keep (fun dep hd => hk dep ?_) (fun dep hd => hk dep ?_)⟩
+    refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_)⟩
     · simp [Entry.vdeps, hos, hd]
     · simp [Entry.vdeps, hos, hd]
+
+theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
+    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl :=
+  h.keepLive fun _ => hk
 
 /-- What the slot of the changed binding holds afterwards, if anything. -/
 def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Prop
