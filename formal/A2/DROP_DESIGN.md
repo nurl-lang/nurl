@@ -121,6 +121,26 @@ where the view ends.
   preserved, so at `x`'s scope end the value the destructor reads is
   valid however `x` died.
 
+## Staging
+
+The panic-path semantics is the hard part of the proof. `DtorSafe` is a
+separate concern. Two steps keep them apart:
+
+1. **A2-drop.1: destructor types that hold no views**
+   (`Ty.dtor f t` with `t.holdsView = false`).
+   - Such a value has no view inside it. `SlotOK` already guarantees an
+     owned tree's `WFv` whether its binding is live or dead. So the
+     destructor's read is valid however the binding died, and no
+     `DtorSafe` is needed.
+   - This step proves `scopeD`'s four steps, the unwind stopping at a
+     destructor, and the double panic. It covers handle-like destructors:
+     a file, a socket, a database connection, a struct of owned fields.
+2. **A2-drop.2: destructor types that hold views.** `DtorSafe`, a move
+   that clears `held`, the join that keeps it, and `SlotOK`'s
+   `ViewsOK`-whenever-owned. This step covers #224's shape (a `% Drop`
+   struct with a view field), which nurlc's rule refuses wherever the
+   view would end.
+
 ## Done when
 
 - `check.sh` passes, with `memory_safe`, `no_leak_end` and
