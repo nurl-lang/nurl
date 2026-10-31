@@ -9383,6 +9383,23 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #  include <termios.h>
 #endif
 
+/* std/thread.nu's Cond: a condition variable a FIBER can wait on. The
+ * pthread one is for threads; a fiber that waited on it would stop its
+ * worker thread, and with it every fiber on that worker — the one that
+ * would signal included (agora #255). So the runtime keeps the fibers
+ * waiting on it in a list of its own, under a lock of its own (a waker
+ * need not hold the caller's mutex), and parks them instead
+ * (runtime_ffi.c §19, nurl_fcond_*). Laid out here because the NURL side
+ * sizes the block by name (nurl_native_sizeof "nurl_fcond_t"); the
+ * unikernel's pthread_cond_t, which parks its coroutines already, takes
+ * the front of the same block (runtime_bare.c §9). */
+typedef struct NurlFCond {
+    pthread_cond_t cv;        /* threads */
+    int            lk;        /* __atomic spinlock over head/tail */
+    void          *head;      /* parked fibers, oldest first */
+    void          *tail;
+} NurlFCond;
+
 long long nurl_native_sizeof(const char *name) {
     if (!name) return -1;
     /* pthread family — same names on every platform now that Win32
@@ -9390,6 +9407,7 @@ long long nurl_native_sizeof(const char *name) {
      * pthread_*_t struct so a Cell can hold it. */
     if (strcmp(name, "pthread_mutex_t")     == 0) return (long long)sizeof(pthread_mutex_t);
     if (strcmp(name, "pthread_cond_t")      == 0) return (long long)sizeof(pthread_cond_t);
+    if (strcmp(name, "nurl_fcond_t")        == 0) return (long long)sizeof(NurlFCond);
     if (strcmp(name, "pthread_t")           == 0) return (long long)sizeof(pthread_t);
     if (strcmp(name, "pthread_attr_t")      == 0) return (long long)sizeof(pthread_attr_t);
     if (strcmp(name, "pthread_mutexattr_t") == 0) return (long long)sizeof(pthread_mutexattr_t);

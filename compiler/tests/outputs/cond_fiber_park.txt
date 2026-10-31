@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+two_fibers_one_locked=10
+two_fibers_one_permit=10
+thread_and_fiber_one_locked=10
