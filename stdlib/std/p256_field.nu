@@ -796,9 +796,15 @@ raw @ _p256_from_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
 }
 
 // requires: dst holds 4 limbs.
+// 1 in Montgomery form is R mod p = 2^256 − p = 2^224 − 2^192 − 2^96 + 1:
+// written, not computed (it was a to-Montgomery multiply and an
+// allocation for every scalar multiply).
 raw @ _p256_one_mont_d P256Scratch scr ( Vec i ) dst → v {
-    : ( Vec i ) one ( __p256_one )
-    ( _p256_to_mont_d scr dst one )
+    : *i q ( vec_data [i] dst )
+    = . q 0 1
+    = . q 1 # i 0xFFFFFFFF00000000
+    = . q 2 # i 0xFFFFFFFFFFFFFFFF
+    = . q 3 # i 0x00000000FFFFFFFE
 }
 
 // Modular inverse in Montgomery form (_p256_inv_d): a·R ↦ a⁻¹·R mod p,
@@ -1443,6 +1449,52 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
     ^ acc
 }
 
+// k mod n as five little-endian limbs, the fifth 0 (the Booth reader's
+// top window reads into it), from big-endian bytes of any length. Up to 32
+// bytes (every key and nonce) the bytes go straight into limbs and one
+// masked subtraction of n reduces them, since k < 2^256 < 2n. Longer input
+// takes __p256_scalar_mod_n's byte path. Constant time in the scalar.
+@ __p256_scalar_limbs5 ( Vec u ) kbytes → ( Vec i ) {
+    : ( Vec i ) kl ( _magn 5 )
+    : *i kp ( vec_data [i] kl )
+    = . kp 0 0 = . kp 1 0 = . kp 2 0 = . kp 3 0 = . kp 4 0
+    : i len ( vec_len [u] kbytes )
+    ? > len 32 {
+        : ( Vec i ) kl4 ( _p256_be32_to_limbs ( __p256_scalar_mod_n kbytes ) 0 )
+        ( __p256_copy_d kl kl4 )
+        ^ kl
+    } {}
+    // Byte len − 1 − m of the input is bits 8m … 8m + 7 of k. The length
+    // is public; only the bytes are secret.
+    : *u bp ( vec_data [u] kbytes )
+    : ~ i m 0
+    ~ < m len {
+        : i w >> m 3
+        = . kp w | . kp w # i << # u64 . bp - - len 1 m * 8 & m 7
+        = m + m 1
+    }
+    : u64 k0 # u64 . kp 0
+    : u64 k1 # u64 . kp 1
+    : u64 k2 # u64 . kp 2
+    : u64 k3 # u64 . kp 3
+    // d = k − n; keep it where that did not borrow (k ≥ n).
+    : u64 d0 ( nurl_subb_lo k0 0xF3B9CAC2FC632551 0 )
+    : ~ u64 bb ( nurl_subb_hi k0 0xF3B9CAC2FC632551 0 )
+    : u64 d1 ( nurl_subb_lo k1 0xBCE6FAADA7179E84 bb )
+    = bb ( nurl_subb_hi k1 0xBCE6FAADA7179E84 bb )
+    : u64 d2 ( nurl_subb_lo k2 0xFFFFFFFFFFFFFFFF bb )
+    = bb ( nurl_subb_hi k2 0xFFFFFFFFFFFFFFFF bb )
+    : u64 d3 ( nurl_subb_lo k3 0xFFFFFFFF00000000 bb )
+    = bb ( nurl_subb_hi k3 0xFFFFFFFF00000000 bb )
+    : u64 tk - bb 1
+    : u64 nt - # u64 0 bb
+    = . kp 0 # i | & d0 tk & k0 nt
+    = . kp 1 # i | & d1 tk & k1 nt
+    = . kp 2 # i | & d2 tk & k2 nt
+    = . kp 3 # i | & d3 tk & k3 nt
+    ^ kl
+}
+
 // Scalar × affine point → affine (x, y) as 64 big-endian bytes X‖Y, the
 // all-zero encoding for the identity (a scalar ≡ 0 mod n). `kbytes` is
 // the scalar, big-endian, any length; bx/by are the point's affine
@@ -1452,7 +1504,6 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
 // coordinate that is not four limbs gives an empty Vec.
 @ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
     ? | != ( vec_len [i] bx ) 4 != ( vec_len [i] by ) 4 { ^ ( vec_new [u] ) } {}
-    : ( Vec u ) k ( __p256_scalar_mod_n kbytes )
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) onem ( _p256_one_mont_s scr )
     : ( Vec i ) qx ( _p256_to_mont_s scr bx )
@@ -1465,10 +1516,8 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
     // addition handles. For t = 0, P ≤ k + 32 < n + 32, and P = n + d would
     // need n + d ≡ 0 (mod 32); n ≡ 17 makes that d = 15, P = n + 15, and
     // then k = P + d = n + 30 (the doubling case) or k = P − 15 = n (the
-    // negation): neither is below n, which __p256_scalar_mod_n ensures.
-    : ( Vec i ) kl4 ( _p256_be32_to_limbs k 0 )
-    : ( Vec i ) kl ( _magn 5 )
-    ( __p256_copy_d kl kl4 )
+    // negation): neither is below n, which __p256_scalar_limbs5 ensures.
+    : ( Vec i ) kl ( __p256_scalar_limbs5 kbytes )
     : ( Vec i ) zero ( __zeros4 )
     : ( Vec i ) ny ( _mag4 )
     : ( Vec i ) tbl ( _p256_affine_multiples scr qx qy onem )
@@ -1477,7 +1526,6 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
     : ( Vec i ) ex ( _mag4 )
     : ( Vec i ) ey ( _mag4 )
     : *i kp ( vec_data [i] kl )
-    = . kp 4 0
     // Booth digits, five bits each, the most significant window first:
     // 52 additions (64 with unsigned four-bit windows) and five doublings
     // between them — none before the first, which adds to ∞.
@@ -1576,7 +1624,24 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
 }
 
 // 32 big-endian bytes at offset `off` → four little-endian 2^64 limbs.
+// Bytes past the end of src read as 0.
 @ _p256_be32_to_limbs ( Vec u ) src i off → ( Vec i ) {
+    ? & >= off 0 <= + off 32 ( vec_len [u] src ) {
+        // All 32 bytes are there (checked above): read them in place.
+        : ( Vec i ) w ( _mag4 )
+        : *i wp ( vec_data [i] w )
+        : *u sp ( vec_data [u] src )
+        : ~ i q 0
+        ~ < q 4 {
+            : i base + off - 24 * 8 q
+            : ~ u64 acc 0
+            : ~ i j 0
+            ~ < j 8 { = acc | << acc 8 # u64 . sp + base j = j + j 1 }
+            = . wp q # i acc
+            = q + q 1
+        }
+        ^ w
+    } {}
     : ( Vec i ) out ( vec_with_cap [i] 4 )
     : ~ i k 0
     ~ < k 4 {
@@ -1692,12 +1757,8 @@ simd @ __p256_comb_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i w i digit →
 // time in the scalar: 52 windows, each one Booth recode, one masked
 // table scan, one masked negation and one masked mixed addition.
 @ p256ct_scalarmult_base ( Vec u ) kbytes → ( Vec u ) {
-    : ( Vec u ) k ( __p256_scalar_mod_n kbytes )
-    : ( Vec i ) kl4 ( _p256_be32_to_limbs k 0 )
-    : ( Vec i ) kl ( _magn 5 )
+    : ( Vec i ) kl ( __p256_scalar_limbs5 kbytes )
     : *i kp ( vec_data [i] kl )
-    ( __p256_copy_d kl kl4 )
-    = . kp 4 0
     : P256Scratch scr ( _p256_scr_new )
     // Shared, lazily-built table of G multiples — BORROWED from the
     // global cache; must not be freed here.
@@ -1747,14 +1808,19 @@ simd @ __p256_comb_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i w i digit →
 
 // Append a 4-limb field element as 32 big-endian bytes to `out`.
 @ _p256_limbs_to_be ( Vec u ) out ( Vec i ) v → v {
-    : ~ i k 3
-    ~ >= k 0 {
-        : u64 lk # u64 ( __ctl v k )
-        : ~ i sh 56
-        ~ >= sh 0 {
-            ( vec_push [u] out # u & # i >> lk sh 255 )
-            = sh - sh 8
-        }
-        = k - k 1
+    ? < ( vec_len [i] v ) 4 { ^ } {}
+    // Reserve the 32 bytes, write them in place, then commit the length.
+    : i at ( vec_len [u] out )
+    ( vec_reserve [u] out 32 )
+    : *u op ( vec_data [u] out )
+    : *i vp ( vec_data [i] v )
+    : ~ i k 0
+    ~ < k 4 {
+        : u64 lk # u64 . vp - 3 k
+        : i base + at * k 8
+        : ~ i j 0
+        ~ < j 8 { = . op + base j # u & >> lk * 8 - 7 j 255 = j + j 1 }
+        = k + k 1
     }
+    : b _l ( vec_set_len [u] out + at 32 )
 }
