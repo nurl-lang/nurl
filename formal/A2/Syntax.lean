@@ -244,6 +244,10 @@ inductive Stmt where
   | unpair (y x z : Var) (body : Stmt)                    -- a struct moved apart into its fields
   | callc (x c : Var) (j : Nat) (zs : List Var) (body : Stmt)  -- `: x ( m c zs… )`: a call of
                                                           -- method `j` of the package `c`
+  | letd (x : Var) (f : Nat) (r : Rhs) (body : Stmt)      -- `: x r` with the destructor `f`
+                                                          -- of its type (`% Drop`, A2-drop)
+  | scopeD (x : Var) (f : Nat) (body : Stmt)              -- run time: `x` is bound, and its
+                                                          -- destructor runs at the end
 
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is

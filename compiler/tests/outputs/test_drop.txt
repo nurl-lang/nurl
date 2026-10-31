@@ -10,5 +10,5 @@ Dropping id: 2
 Escaping from then-arm
 About to return from get_dropper
 End main
-Dropping id: 3
 Dropping id: 4
+Dropping id: 3

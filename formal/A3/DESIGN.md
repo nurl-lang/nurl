@@ -2,12 +2,12 @@
 
 ## Status
 
-Design, with the statements in Lean. `A3/Defs.lean` defines A3.0's
-configuration (`Thread`, `Cfg`, `Cfg.view`), its steps (`TStep`: a thread
-takes A2's own `Step`; `spawn`), what a step touches (`Touch`), a race
-(`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧ NoLeak` for
-every program A2 types). Those are statements only, built by
-`../check.sh`, with no proof and nothing assumed. This note fixes the
+**A3.0 is proven** (`A3.claim : A3.Claim`, `A3/Claim.lean`). `A3/Defs.lean`
+defines A3.0's configuration (`Thread`, `Cfg`, `Cfg.view`), its steps
+(`TStep`: a thread takes A2's own `Step`; `spawn`), what a step touches
+(`Touch`), a race (`Race`), and the claim (`Claim`: `MemorySafe ∧ RaceFree ∧
+NoLeak` for every program A2 types); `../README.md` lists the modules of
+the proof. A3.1–A3.6 below are design. This note fixes the
 semantics, the theorem statements and the order of work, so the
 mechanization can be cut into tasks (Agora: formal track, F4–F8). The guarantee it targets is the
 "no data race" clause of `CLAIM.md` and `docs/MEMORY.md` §6.2. The rules
@@ -192,10 +192,11 @@ rules.
 
 ## Open questions
 
-- **How much of A2 to copy.** A3 could import A2 and lift its lemmas to
-  views rather than copy them. That keeps one proof of each A2 rule, but
-  needs A2's `Stmt` to take the new statements as parameters. Deciding
-  it is the first task of A3.0.
+- **How much of A2 to copy** (decided in A3.0): none. A3 imports A2 and
+  runs its step on each thread's view; a frame lemma moves the step
+  between the shared address space and the thread's own part, where A2's
+  invariant holds. A3.1–A3.6 add statements for the shared blocks; they
+  will need A2's `Stmt` to take them, or a step of their own beside A2's.
 - **Scoped threads.** A thread that borrows its spawner's data and is
   joined before the frame ends (`par_map_index`) needs the borrow to
   outlive the spawn while the spawner is suspended. That would be A3.7,

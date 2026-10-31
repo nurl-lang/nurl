@@ -7,8 +7,9 @@
 // single blocks after it and a short last block; the sixteen-block wide
 // loops (none to four steps) and their pair-at-a-time tail of every
 // length, odd block counts and short last pairs included. Then a few
-// long messages: a counter whose low byte carries inside a step, and a
-// full TLS record (16384, and 16385 with the content-type byte). AAD
+// long messages: a counter whose low byte carries inside a step, a
+// full TLS record (16384, and 16385 with the content-type byte), and
+// twelve pseudorandom lengths below 64 KiB per key size. AAD
 // runs from 0 to 37 bytes (none, a short block, more than two blocks),
 // and both key sizes. The software key is the oracle — its own vectors
 // are aes_gcm_vectors.nu — so a wrong carry in the reflected GHASH, a
@@ -181,6 +182,19 @@ $ `stdlib/std/aes_gcm.nu`
             = fails + fails ( check_one sw k1 k2 k3 ( big_len b ) 13 # u64 + 3000 b )
             = cases + cases 1
             = b + b 1
+        }
+        // Pseudorandom lengths below 64 KiB with 0 to 40 bytes of AAD:
+        // many wide steps, counters that carry several times, and tails
+        // of every shape, at sizes past one record.
+        : ~ u64 rs # u64 + 4242 klen
+        : ~ i rk 0
+        ~ < rk 12 {
+            = rs ( next rs )
+            : i rn & # i rs 65535
+            : i ra % & # i >> rs 20 1023 41
+            = fails + fails ( check_one sw k1 k2 k3 rn ra # u64 + 6000 rk )
+            = cases + cases 1
+            = rk + rk 1
         }
         // Long AAD — past eight blocks, so its GHASH run reduces in
         // several groups — before every message shape.

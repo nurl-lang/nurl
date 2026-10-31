@@ -134,7 +134,7 @@ structure RhsPost (m m1 : Mem) (Γ Γ1 : Ctx) (F : List Var) : Prop where
 
 theorem RhsPost.same {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) : RhsPost m m Γ Γ F :=
   ⟨hi, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
-    fun x E1 h => ⟨E1, h, rfl, rfl⟩⟩
+    fun _ E1 h => ⟨E1, h, rfl, rfl⟩⟩
 
 /-! ### What values capture by name -/
 
@@ -494,7 +494,7 @@ theorem out_copyBor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} 
 /-- A borrow of a whole binding `y` (`var` of a borrowed parameter, or
     `borrow`): its handle, or its view if it is a slice. -/
 theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {v : Val}
-    (hy : Γ y = some E) (hl : E.live = true) (hnown : E.mode.ownSlot = false ∨ ∃ t, E.ty = .vec t)
+    (hy : Γ y = some E) (hl : E.live = true) (_hnown : E.mode.ownSlot = false ∨ ∃ t, E.ty = .vec t)
     (hv : m.st y = some ⟨false, some v⟩ ∨
       ∃ t c d es, m.st y = some ⟨true, some (.node t c d es)⟩ ∧ v = .href c)
     (hroot : E.mode = .rootb ∨ (E.mode = .own ∧ ∃ t, E.ty = .vec t)) :
@@ -1153,7 +1153,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have hemem : e ∈ es ++ [e] := by simp
   have hnT := hi.heap.nodup y _ hT
   have hsubl : List.Sublist (Val.node t' c d es).ids (Val.node t' c d (es ++ [e])).ids := by
-    simp only [ids_node]; exact ((idsL_sub_append es e).cons₂ d).cons₂ c
+    simp only [ids_node]; exact ((idsL_sub_append es e).cons_cons d).cons_cons c
   have hsube : List.Sublist e.ids (Val.node t' c d (es ++ [e])).ids := by
     simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil]
     exact ((List.sublist_append_right _ _).cons d).cons c
@@ -1257,7 +1257,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun x => ?_, fun x hx => hst x (fun h => hyF (h ▸ hx)), ?_,
     fun x => kill_dom .., fun x E1 h => kill_cmode h⟩, ?_⟩
   · by_cases hxy : x = y
-    · subst hxy; simp [m1, hT]
+    · subst hxy; simp [hT]
     · rw [hst x hxy]
   · intro p Ep hp hpm
     simp only [kill, hp, Option.map_some]

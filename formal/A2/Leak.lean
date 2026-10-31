@@ -127,7 +127,7 @@ theorem covers_remove_bor {m : Mem} (hc : Covers m) {p : Var} {w : Option Val}
 
 /-- A slot that owns nothing is set to another that owns nothing. -/
 theorem covers_set_none {m : Mem} (hc : Covers m) {x : Var} (hx : ∀ T, ¬ OwnedAt m x T)
-    {sl : Slot} (hsl : ∀ T, sl ≠ ⟨true, some T⟩) : Covers (m.set x sl) := by
+    {sl : Slot} (_hsl : ∀ T, sl ≠ ⟨true, some T⟩) : Covers (m.set x sl) := by
   intro i hi
   obtain ⟨o, U, hU, hiU⟩ := hc i hi
   exact ⟨o, U, ownedAt_set.mpr (Or.inr ⟨fun e => by subst e; exact hx U hU, hU⟩), hiU⟩

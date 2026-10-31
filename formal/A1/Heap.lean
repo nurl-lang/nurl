@@ -73,7 +73,7 @@ theorem ownedAt_remove {m : Mem} {x o : Var} {T : Val} :
   unfold OwnedAt
   by_cases h : o = x
   · subst h; simp
-  · simp [upd_ne _ _ h, h]
+  · simp [h]
 
 theorem ownedAt_with {m : Mem} {a : Nat → Bool} {n : Nat} {o : Var} {T : Val} :
     OwnedAt { m with alloc := a, nid := n } o T ↔ OwnedAt m o T := Iff.rfl

@@ -60,7 +60,7 @@ cast_int_to_string	§6.2	B	String forged from an integer by a cast	rejected	h58
 chacha20_scalar_kernel_given_a_range_past_its_data	§3.3d	B	`_chacha20_xor_range_scalar`, the big-endian reference kernel, carries one underscore, so any program could call it, and it reads data[doff, doff + n) through `vec_data` unchecked: 4096 bytes from…	rejected	h454
 chacha20_xor_range_past_its_data	§3.3d	B	`( chacha20_xor_range key ctr nonce data doff n )` with `n` past the end of `data`: the documented entry point left the range to its caller, and the keystream XOR read 4096 bytes from an 8-byte Vec.	runs-clean	h453
 chacha20poly1305_open_in_offset_wraps_its_range_check	§3.3d	B	`( chacha20poly1305_open_in key iv seq buf aad_at data_at end )` with `data_at` near 2^63: the check `data_at + 16 > end` wrapped and passed, and the record was MACed and zeroed from 2^63 bytes…	runs-clean	h449
-chan_send_then_use	§6.5	A3	String sent on channel then read by sender after receiver freed it	rejected	h21
+chan_send_then_use	§6.5	A3	String sent on channel then read by sender after receiver freed it; A3.0: the send moves it (the channel itself is A3.4)	rejected	h21
 clone_through_shared_payload_races	§6.5	A3	threads cloning a handle from a shared Arc payload race on refcount	runs-clean	h211
 closure_argument_capture_used_after_call	§2.11	A2	closure arg moves %Drop capture; frame consumes it after call	rejected	h242
 closure_binding_in_a_literal_handed_back_in_a_loop	§7.5	A2	agora #173: closure binding in a literal handed back in a loop: env copy leaks	runs-clean	h626
@@ -119,7 +119,7 @@ closure_param_in_a_literal_read_and_picked	§7.5	A2	agora #173: closure param in
 closure_payload_enum_literal_to_a_borrower	§7.6	A2	agora #177: an enum literal with a closure payload handed to a borrowing callee	runs-clean	h692
 closure_returned_capturing_owned_string	§2.11	A2	returned closure captures owned local string freed on exit	rejected	h141
 closure_returned_through_a_join_over_a_parameter	§2.11	A2	as h384, through a join of closure literals in the ^	rejected	h386
-closure_run_after_its_thread_copy_took_the_capture	§6.5	A3	closure given to thread and also run in frame: capture moved twice	runs-clean	h244
+closure_run_after_its_thread_copy_took_the_capture	§6.5	A3	closure given to thread and also run in frame: capture moved twice; A3.0: the capture moves once	runs-clean	h244
 closure_sent_on_a_channel_captures_a_kept_handle	§6.5	A3	a closure capturing a PNCounter sent on a channel while the sender kept changing it: keeping a closure beside a handle another thread takes it from moves its captures that are not Sync	rejected	h340
 closure_tail_hands_back_a_capture	§2.11	A2	closure falls off with lent element of capture; caller treats it as owned	runs-clean	h217
 closure_var_chain_through_second_var	§2.11	A2	agora #153: closure_var_chain_through_second_var	rejected	h522
@@ -217,6 +217,23 @@ drop_vec_get_local_join	§7.6	A2	agora #187: the same call as an arm of a return
 drop_vec_get_local_match	§7.6	A2	agora #187: the same element handed out of a returned `??` over the call	rejected	h816
 drop_vec_get_local_returned	§7.6	A2	agora #187: `^ ( vec_get [D] v 0 )`, `v` a local Vec of a `% Drop` value: the element dies with `v`	rejected	h815
 drop_vec_get_scrut_arm	§7.6	A2	agora #203: `?? ( vec_get [Res] xs 0 )` with a `% Drop` payload: the arm dropped the element xs still held	runs-clean	h941
+drop_view_dyn_impl_reads	§7.6	A2	agora #224: a `% Show` object over a type whose `% Drop` reads its view, kept past the String it views	rejected	-
+drop_view_dyn_impl_without_destructor	§7.6	A2	agora #224: a `% Show` object over a struct of views with no `% Drop`, kept past its source and never read	runs-clean	-
+drop_view_holder_declared_first	§7.6	A2	agora #224: `: ~ W w` declared before the String it is given a view of: with LIFO drops the String goes first	rejected	-
+drop_view_holder_first_in_block	§7.6	A2	agora #224: the same inside one inner block	rejected	-
+drop_view_holder_lent_to_callee	§7.6	A2	agora #224: a W handed to a callee, then dropped at the end of main after the String it views	runs-clean	-
+drop_view_holder_map_before_source	§7.6	A2	agora #224: a W kept in a HashMap made before the String it views	rejected	-
+drop_view_holder_vec_after_source	§7.6	A2	agora #224: a String, then a Vec of W holding views of it	runs-clean	-
+drop_view_holder_vec_before_source	§7.6	A2	agora #224: a W kept in a Vec made before the String it views	rejected	-
+drop_view_holder_without_destructor	§7.6	A2	agora #224: a struct of views with no `% Drop` kept past a reallocation of its source: never read, its drop reads nothing	runs-clean	-
+drop_view_slice_holder_declared_first	§7.6	A2	agora #224: a W holding a Slice of a Vec declared after it	rejected	-
+drop_view_slice_source_first	§7.6	A2	agora #224: a Vec, then a W holding a Slice of it	runs-clean	-
+drop_view_source_declared_first	§7.6	A2	agora #224: `: String s` then `: W w @ W { ( string_data s ) }`: the source first, its holder second	runs-clean	-
+drop_view_source_first_in_block	§7.6	A2	agora #224: the same inside one inner block	runs-clean	-
+drop_view_source_inner_scope	§7.6	A2	agora #224: w, declared outside a block, given a view of a String that ends with the block	rejected	-
+drop_view_source_moved	§7.6	A2	agora #224: the same with s handed to a `sink` callee while w views it	rejected	-
+drop_view_source_per_loop_pass	§7.6	A2	agora #224: w, outside a loop, given a view of a String made in each pass	rejected	-
+drop_view_source_reallocated	§7.6	A2	agora #224: `: W w @ W { ( string_data s ) }`, then `( string_push_str s … )` until the buffer moves: W's destructor read the old buffer	rejected	-
 dtor_closure_inside_drop_impl	§7.6	A2	closure inside Drop impl gets receiver's drop glue epilogue	runs-clean	h146
 dtor_disposer_leaks_fields	§7.6	A2	Drop impl hands receiver to sink disposer; fields leak	runs-clean	h147
 dtor_panics_runs_twice	§7.2	A2	Drop impl frees field then panics; unwind drops value again	runs-clean	h148
@@ -651,7 +668,7 @@ put_back_into_another_slot	§3	B	vec_put_back writes element read from slot 0 in
 quic_frame_refused_then_read	§3.3d	B	`quic_frame_parse` refuses a malformed frame with the null QuicFrame, and `quic_frame_type` of it read address 0.	runs-clean	h495
 quic_receive_buffer_state_built_by_hand	§3.3d	B	a `QuicRxBufImpl` literal of the program's own with `base` 16 and `consumed` 0 placed stream offset 0 sixteen bytes before its buffer, and `_quic_rxbuf_add_in` copied there.	rejected	h493
 quic_transport_parameters_refused_then_read	§3.3d	B	`quic_tp_decode` refuses an invalid encoding with the null QuicTp, which safe code could not tell from a good one, and every accessor read through it: the setter after a refused decode wrote to…	runs-clean	h494
-race_shared_vec	§6.5	A3	two threads push into one Vec captured by both closures	rejected	h09
+race_shared_vec	§6.5	A3	two threads push into one Vec captured by both closures; A3.0: the Vec moves to one thread, so no two threads reach it	rejected	h09
 raw_block_built_by_a_literal	§3.3d	B	as h444, `@ RawBlock { `abc` 3 }`: RawBlock's `% Drop` freed the literal's address. Its comment called it sealed, but only a raw-pointer field sealed a struct, and its pointer is an `s`.	rejected	h445
 raw_maybe_fresh_rec_bound_returned	§2.13	A2	the same struct bound first, then handed back: freed under the caller	rejected	h956
 raw_maybe_fresh_rec_returned	§2.13	A2	a raw string a call may hand over fresh, stored in a returned struct: taken for a lend (one path's `^ x`), it leaked	rejected	h955
@@ -737,7 +754,7 @@ slice_after_vec_reassigned	StmtT.assign	A1	Slice read after its Vec binding is r
 slice_after_vec_sunk	CallT.sink	A1	Slice read after its Vec was passed to a sink parameter	rejected	h43
 slice_and_vec_to_grower	CallT.args	A1	Slice and its Vec passed to one fn that grows the Vec then reads Slice	rejected	h63
 slice_captured_by_closure	§2.11	A2	closure captures Slice; Vec freed; closure runs	rejected	h39
-slice_crosses_thread	§6.5	A3	thread closure captures Slice while spawner frees the Vec	rejected	h44
+slice_crosses_thread	§6.5	A3	thread closure captures Slice while spawner frees the Vec; A3.0: a view does not cross (SpawnOK: sink parameters that hold no views)	rejected	h44
 slice_from_raw_bogus_len	§6.4	B	slice_from_raw over Vec buffer with a length it does not have	rejected	h51
 slice_grown_two_calls_deep	CallT.summary	A1	Slice of Vec; helper calls helper that pushes; slice read	rejected	h81
 slice_in_user_struct	§2.12	A2	Slice stored in a user struct; Vec freed; read through struct	rejected	h37
@@ -754,7 +771,7 @@ slice_sub_after_free	derive	A1	sub-slice of a slice read after the root Vec is f
 slice_view_after_free	StmtT.free	A1	Slice of a Vec read after vec_free	rejected	h32
 slice_view_after_grow	StmtT.push	A1	Slice of a Vec read after vec_push reallocates	rejected	h33
 sort_by_with_an_inconsistent_comparator	§3.3d	B	`sort_by` with a comparator that is not consistent (it says "less" for nearly every pair): the Hoare partition's scans stopped only at an element the comparator ranked against the pivot, which the…	runs-clean	h446
-spawned_closure_arm_payload	§6.5	A3	fiber closure only views a match-arm payload released at arm end	runs-clean	h204
+spawned_closure_arm_payload	§6.5	A3	fiber closure only views a match-arm payload released at arm end; A3.0: a view does not cross (SpawnOK)	runs-clean	h204
 sqlite_authorizer_run_after_a_refused_close	§3.3d	B	`sqlite_close` dropped the authorizer closure even when sqlite3_close refused (SQLITE_BUSY: a statement still lives). The statement re-prepared after another connection changed the schema, which…	runs-clean	h481
 sqlite_connection_leaked_by_a_refused_close	§3.3d	B	`sqlite_close` of a connection with a live statement cleared the handle's sqlite3* although sqlite3_close had refused (SQLITE_BUSY): nothing closed the connection after that.	runs-clean	h482
 stale_view_after_push	StmtT.push	A1	string_data view taken, String grown by push_str in loop, view read	rejected	h07
@@ -825,10 +842,10 @@ temporary_argument_it_cannot_copy_leaked	§7.1	A2	%Drop temporary passed to a bo
 temporary_enum_matched_in_a_loop_condition_leaked	§7.1	A2	an enum a call handed over, matched in a loop's condition: each round overwrote the one before in the owner's slot, so every round but the last leaked; each round releases the one before now	runs-clean	h335
 temporary_it_cannot_copy_never_dropped	§7.1	A2	discarded %Drop temporary / field-read temporary never dropped: leak	runs-clean	h232
 terminal_state_built_by_a_literal	§3.3d	B	`( term_raw_disable @ TermState { -1 ( vec_new [u] ) } )`: tcsetattr read a whole struct termios through the data pointer of an empty Vec.	rejected	h501
-thread_captures_owned_string	§6.5	A3	thread closure captures string the spawning function frees on return	rejected	h92
-thread_closure_capture_used_after_spawn	§6.5	A3	thread closure moves %Drop capture; spawning frame also consumes it	rejected	h241
+thread_captures_owned_string	§6.5	A3	thread closure captures string the spawning function frees on return; A3.0: the capture moves to the thread	rejected	h92
+thread_closure_capture_used_after_spawn	§6.5	A3	thread closure moves %Drop capture; spawning frame also consumes it; A3.0: a moved capture is dead in the spawner	rejected	h241
 thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean	h293
-thread_reads_freed	§6.5	A3	spawned thread reads a String the spawning thread frees	rejected	h18
+thread_reads_freed	§6.5	A3	spawned thread reads a String the spawning thread frees; A3.0: the String moves to the thread, so the spawner cannot free it	rejected	h18
 thread_spawn_owned_closure_over_a_stack_binding	§2.11	A2	as h503, `thread_spawn_owned`: only `thread_spawn` was on the list, so the owned form took a closure over a `: ~` local to another thread (the fault depends on the thread running after the frame…	rejected	h505
 tls_attach_until_given_any_handle	§3.3d	B	`( tls_attach_full_until 4096 … )` ran a TLS handshake over the runtime socket record "at" 4096. Every other `tls_attach*` is on the compiler's list of functions that take a raw runtime handle;…	rejected	h486
 tls_connection_state_built_by_hand	§3.3d	B	a `TlsConnImpl` literal of the program's own — a connection state with empty keys and buffers — went to the record layer's `_tls_rec_range_to c out 0 23 data 0 4096`, which sealed 4096 bytes of a…	rejected	h487

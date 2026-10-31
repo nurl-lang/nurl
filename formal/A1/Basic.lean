@@ -122,7 +122,7 @@ theorem head_not_below {ty : Ty} {c d : Nat} {es : List Val} {n : Val}
     (hn : (Val.node ty c d es).ids.Nodup) {e : Val} (he : e ∈ es) (hs : Sub n e) {i : Nat}
     (hi1 : i ∈ (Val.node ty c d es).head) (hi2 : i ∈ n.head) : False := by
   have hin : i ∈ idsL es := mem_idsL he (hs.ids i (Val.head_ids _ i hi2))
-  simp only [Val.head, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hi1
+  simp only [Val.head, List.mem_cons, List.not_mem_nil, or_false] at hi1
   simp only [ids_node, List.nodup_cons, List.mem_cons] at hn
   rcases hi1 with rfl | rfl
   · exact hn.1 (Or.inr hin)

@@ -3,10 +3,10 @@ LINK OK
 EXIT 0
 OUTPUT
 closed 1
-closed 2
 closed 3
+closed 2
 after resource_pair
 plain dropped 1
 after plain_pair
-plain dropped 3
 plain dropped 2
+plain dropped 3

@@ -242,6 +242,40 @@ theorem progress {P : Prog}
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
         exact Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
+  | @letd Γ Γ1 Δ F x f r k E _ hx _ hr _ _ _ _ _ =>
+    intro m hcd hi
+    have hmx : m.st x = none := by
+      have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr
+    cases res with
+    | ok v o m1 => exact Or.inr ⟨_, Step.letd hmx hres⟩
+    | panic => exact Or.inr ⟨_, Step.letdP hres⟩
+  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ ih =>
+    intro m hcd hi
+    obtain ⟨Ex, hx, hmo, _, _⟩ := hxE
+    have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
+    have hiS : Inv m Γ F (.scope x k) := Inv.scopeD_iff.mp hi
+    have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb
+    -- `x` owns its slot: a value, or none once moved
+    have hown : ∀ m' : Mem, m'.st x = m.st x → ∃ val, m'.st x = some ⟨true, val⟩ := by
+      intro m' he
+      obtain ⟨⟨o, val⟩, hsl, _, hso, _⟩ := hi.slot x Ex hx
+      rw [hmo] at hso; simp [Mode.ownSlot] at hso; subst hso; exact ⟨val, by rw [he, hsl]⟩
+    rcases ih hcd hi0 with rfl | ⟨r, hr⟩
+    · obtain ⟨val, hsl⟩ := hown m rfl
+      cases val with
+      | none => exact Or.inr ⟨_, Step.scopeDMoved hsl⟩
+      | some v => exact Or.inr ⟨_, Step.scopeDEnd hsl⟩
+    · cases r with
+      | ok m' k' => exact Or.inr ⟨_, Step.scopeDIn hr⟩
+      | panic m1 =>
+        obtain ⟨hout, _⟩ := panic_unwind hr hi.heap hi.cover hi0.spineNd
+        have hxs : x ∉ k.spine := by
+          have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
+        obtain ⟨val, hsl⟩ := hown m1 (hout x hxs)
+        cases val with
+        | none => exact Or.inr ⟨_, Step.scopeDPMoved hr hsl⟩
+        | some v => exact Or.inr ⟨_, Step.scopeDP hr hsl⟩
   | @rbind Γ Δ1 F p k Ep hp hm hl hroots _ _ _ ih =>
     intro m hcd hi
     have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
