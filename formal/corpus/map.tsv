@@ -1,6 +1,9 @@
 probe	rule	phase	note	nurlc	old_id
 aes_gcm_open_in_offset_wraps_its_range_check	§3.3d	B	`( aes_gcm_open_in key iv seq buf aad_at data_at end )` with `data_at` near 2^63: the check `data_at + 16 > end` wrapped and passed, and GCM ran over (and zeroed) memory 2^63 bytes past the…	runs-clean	h450
+arc_field_of_a_sink_param_returned_in_an_option	§2.12	A2	agora #269: an Arc field of a sink parameter returned in an option	runs-clean	-
+arc_field_returned_in_an_option	§2.12	A2	agora #269: an Arc field bound and returned in an option (no view)	runs-clean	-
 arc_of_a_library_handle_on_two_threads	§6.5	A3	an ( Arc PNCounter ) shared by two threads: each arc_get copy is a share of one counter; under the Sync question a share handle not asserted % Sync is not Sync	rejected	h338
+arc_of_views_field_returned_in_an_option	§2.12	A2	agora #269: an Arc whose payload views a local, returned out of a field	rejected	-
 arc_payload_changed_by_its_maker_while_shared	§6.5	A3	spawner vec_sets Arc payload while worker reads it: race, UAF	rejected	h213
 arc_payload_lent_through_a_struct	§6.5	A3	helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read	rejected	h288
 arc_payload_mutated_without_a_named_view	§6.5	A3	two threads vec_push through arc_get unlocked: data race on payload	rejected	h212
@@ -39,6 +42,7 @@ borrowing_arg_block_join_fresh	§7.6	A2	agora #199: `( slen { : i k 1 ? c ( stri
 bound_closure_handed_back_reached_its_frame	§7.5	A2	bound closure returned, its capture drop flag left in dead frame	runs-clean	h243
 bound_option_enum_payload_nested	§7.6	A2	a nested `??` over a bound option's enum payload: dropped twice	runs-clean	h968
 box_borrow_then_set	StmtT.assign	A1	box_get borrow; box_set replaces the value; borrow read	rejected	h74
+box_field_returned_in_an_option	§2.12	A2	agora #269: a Box field bound and returned in an option	runs-clean	-
 box_ptr_field_copied	§6.2	B	Box literal built from another Box's ptr field: two owners	rejected	h57
 btree_borrow_then_replace	StmtT.assign	A1	btree_get borrow; btree_set replaces key, old dropped; borrow read	rejected	h76
 btree_merge_remove_lost_value	§6.4	B	stdlib BTree remove-with-merge moves emptied slot down: value leaks	runs-clean	h210
