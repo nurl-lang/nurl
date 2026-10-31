@@ -99,7 +99,7 @@ FILE_PRELUDE_OPEN = re.compile(r"^\s*<!--\s*doctest-file-prelude\b(.*)$")
 
 # A line (at the block's own indentation) that starts a top-level item.
 DECL = re.compile(
-    r"^(?:pub\s+)?(?:(?:unsafe|inline|simd|raw|export)\s+)*@\s"  # function
+    r"^(?:pub\s+)?(?:(?:unsafe|inline|simd(?:\s+v4)?|raw|export)\s+)*@\s"  # function
     r"|^(?:pub\s+)?:\s*\|"                                        # enum
     r"|^(?:pub\s+)?:\s*[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)?\{"       # struct
     r"|^%\s"                                                      # trait / impl
