@@ -57,11 +57,22 @@ chmod +x "$output"
 """)
         shutil.copy2(self.root / 'build/nurlc', self.root / 'build/nurlc.exe')
         (self.root / 'stdlib/runtime.o').touch()
+        # XDG_CACHE_HOME: each test gets a cache of its own, so the tests are
+        # hermetic. pwsh keeps a startup profile in
+        # $XDG_CACHE_HOME/powershell/StartupProfileData-NonInteractive (default
+        # ~/.cache), read when it starts and rewritten when it exits, and two
+        # pwsh processes exiting at once can leave it torn
+        # (PowerShell/PowerShell#26528). With ~/.cache shared, every pwsh start
+        # after the two concurrent runners below aborted on CI's ubuntu-26.04
+        # image with "The given assembly name was invalid" (SIGABRT), the
+        # failure that issue describes, and each "must fail" control then
+        # passed on the abort alone (Agora #298).
         self.env = {**os.environ, 'PATH': f'{self.bin}:{os.environ["PATH"]}',
                     'CLANG': str(self.bin / 'clang'), 'NURL_SAN': '0',
                     'NURL_TEST_JOBS': '2', 'NURL_SAN_JOBS': '2',
                     'NURL_COMPILE_TIMEOUT': '0.2', 'FAULT': 'reject',
-                    'NURL_COMPILER_STARTED': str(self.root / 'compiler-started')}
+                    'NURL_COMPILER_STARTED': str(self.root / 'compiler-started'),
+                    'XDG_CACHE_HOME': str(self.root / 'cache')}
         self.fixture('should_fail_probe', '@ main → i { ^ 0 }\n')
 
     def script(self, path, body):
@@ -153,9 +164,13 @@ chmod +x "$output"
                 else:
                     runner = 'run_san_tests.sh' if san else 'run_tests.sh'
                     command = ['bash', str(self.tests / runner), 'runtime_probe']
+                # The two runners run at once, so each has its own cache too
+                # (see XDG_CACHE_HOME in setUp).
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     jobs = [pool.submit(subprocess.run, command,
-                                        env={**env, 'RUNNER_ID': ident}, text=True,
+                                        env={**env, 'RUNNER_ID': ident,
+                                             'XDG_CACHE_HOME': str(self.root / f'cache-{ident}')},
+                                        text=True,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         timeout=30 if san == 'powershell' else 8)
                             for ident in ('a', 'b')]
