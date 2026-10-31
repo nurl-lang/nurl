@@ -1,7 +1,8 @@
 // http_server_tls_extras.nu — SNI + live cert reload + mTLS coverage.
 //
 // Three TLS-stack additions tested live, via the openssl CLI for cert
-// generation + python3 for the client side:
+// generation and as the client (s_client), run with argument vectors and
+// no shell (agora #123):
 //
 //   §1 SNI: register two virtual-host certs, connect with two different
 //      SNI hostnames, verify each negotiation returns the matching cert.
@@ -11,11 +12,12 @@
 //      handshake fails without a cert and succeeds with one, with the
 //      peer subject DN surfaced through tcp_peer_cert_subject.
 //
-// Pre-flight: openssl + python3 + ssl module must be on $PATH.
-// requires: live fibers openssl bash posix-shell
+// Pre-flight: openssl must be on $PATH.
+// requires: live fibers openssl
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
@@ -27,16 +29,14 @@ $ `stdlib/ext/http_server.nu`
     ( nurl_print label ) ( nurl_print `=` ) ( nurl_print value ) ( nurl_print `\n` )
 }
 
-@ shell_quiet s cmd → v {
-    : !Output ProcessErr r ( process_run_shell cmd )
-    ?? r { T o → ( output_free o ) F _ → {} }
-}
-
-@ shell_capture s cmd → String {
-    : !Output ProcessErr r ( process_run_shell cmd )
+// openssl with an argument vector and `input` on its stdin, no shell
+// (agora #123). What it printed: stdout, plus stderr when `with_err`.
+@ openssl_out ( Vec s ) args s input b with_err → String {
+    : !Output ProcessErr r ( process_run `openssl` args input )
     ?? r {
         T o → {
             : String out ( string_from ( output_stdout o ) )
+            ? with_err { ( string_push_str out ( output_stderr o ) ) } {}
             ( output_free o )
             ^ out
         }
@@ -51,47 +51,63 @@ $ `stdlib/ext/http_server.nu`
 @ run_setup → v {
     // Generate three self-signed certs (default + two SNI vhosts) + a
     // mini-CA + a client cert signed by it.
-    ( shell_quiet `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_tls_default.key -out /tmp/nurl_tls_default.crt -subj '/CN=localhost' 2>/dev/null` )
-    ( shell_quiet `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_tls_api.key -out /tmp/nurl_tls_api.crt -subj '/CN=api.example.com' 2>/dev/null` )
-    ( shell_quiet `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_tls_www.key -out /tmp/nurl_tls_www.crt -subj '/CN=www.example.com' 2>/dev/null` )
-    ( shell_quiet `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_tls_reload.key -out /tmp/nurl_tls_reload.crt -subj '/CN=reloaded.example.com' 2>/dev/null` )
+    // All in the working directory, which exists on every host.
+    ( openssl_selfsigned `rsa:2048` `` `nurl_tls_default.key` `nurl_tls_default.crt` `localhost` )
+    ( openssl_selfsigned `rsa:2048` `` `nurl_tls_api.key` `nurl_tls_api.crt` `api.example.com` )
+    ( openssl_selfsigned `rsa:2048` `` `nurl_tls_www.key` `nurl_tls_www.crt` `www.example.com` )
+    ( openssl_selfsigned `rsa:2048` `` `nurl_tls_reload.key` `nurl_tls_reload.crt` `reloaded.example.com` )
     // mTLS CA + client cert (CA self-signed, client cert signed by CA)
-    ( shell_quiet `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_tls_ca.key -out /tmp/nurl_tls_ca.crt -subj '/CN=NURL-Test-CA' 2>/dev/null` )
-    ( shell_quiet `openssl req -nodes -newkey rsa:2048 -keyout /tmp/nurl_tls_client.key -out /tmp/nurl_tls_client.csr -subj '/CN=test-client/O=NURL/C=FI' 2>/dev/null` )
-    ( shell_quiet `openssl x509 -req -days 1 -in /tmp/nurl_tls_client.csr -CA /tmp/nurl_tls_ca.crt -CAkey /tmp/nurl_tls_ca.key -CAcreateserial -out /tmp/nurl_tls_client.crt 2>/dev/null` )
+    ( openssl_selfsigned `rsa:2048` `` `nurl_tls_ca.key` `nurl_tls_ca.crt` `NURL-Test-CA` )
+    : ( Vec s ) csr ( vec_new [s] )
+    ( vec_push [s] csr `req` ) ( vec_push [s] csr `-nodes` ) ( vec_push [s] csr `-newkey` ) ( vec_push [s] csr `rsa:2048` )
+    ( vec_push [s] csr `-keyout` ) ( vec_push [s] csr `nurl_tls_client.key` )
+    ( vec_push [s] csr `-out` ) ( vec_push [s] csr `nurl_tls_client.csr` )
+    ( vec_push [s] csr `-subj` ) ( vec_push [s] csr `/CN=test-client/O=NURL/C=FI` )
+    : String _c ( openssl_out csr `` F )
+    : ( Vec s ) sign ( vec_new [s] )
+    ( vec_push [s] sign `x509` ) ( vec_push [s] sign `-req` ) ( vec_push [s] sign `-days` ) ( vec_push [s] sign `1` )
+    ( vec_push [s] sign `-in` ) ( vec_push [s] sign `nurl_tls_client.csr` )
+    ( vec_push [s] sign `-CA` ) ( vec_push [s] sign `nurl_tls_ca.crt` )
+    ( vec_push [s] sign `-CAkey` ) ( vec_push [s] sign `nurl_tls_ca.key` )
+    ( vec_push [s] sign `-CAcreateserial` )
+    ( vec_push [s] sign `-out` ) ( vec_push [s] sign `nurl_tls_client.crt` )
+    : String _s ( openssl_out sign `` F )
 }
 
-// Returns the CN extracted from a PEM cert returned by openssl s_client.
-// `host` is the SNI we asked for; we shell out to s_client and parse
-// the "subject=CN = X" line from openssl x509's text dump.
+// The subject of the certificate the server presents for SNI `host`:
+// `openssl s_client -showcerts` with an empty stdin (it ends after the
+// handshake), then its output on the stdin of `openssl x509 -noout
+// -subject` ("subject=CN = X"). The pipe is this function, not a shell.
 @ probe_sni_cert i port s host → String {
-    : String cmd ( string_from `bash -c "openssl s_client -connect 127.0.0.1:` )
-    ( string_push_str cmd ( nurl_str_int port ) )
-    ( string_push_str cmd ` -servername ` )
-    ( string_push_str cmd host )
-    ( string_push_str cmd ` -showcerts </dev/null 2>/dev/null | openssl x509 -noout -subject 2>/dev/null"` )
-    : String out ( shell_capture ( string_data cmd ) )
-    ( string_free cmd )
-    ^ out
+    : String target ( string_from `127.0.0.1:` )
+    ( string_push_str target ( nurl_str_int port ) )
+    : s target_v ( string_data target )
+    : ( Vec s ) conn ( vec_new [s] )
+    ( vec_push [s] conn `s_client` ) ( vec_push [s] conn `-connect` ) ( vec_push [s] conn target_v )
+    ( vec_push [s] conn `-servername` ) ( vec_push [s] conn host ) ( vec_push [s] conn `-showcerts` )
+    : String pem ( openssl_out conn `` F )
+    : ( Vec s ) subj ( vec_new [s] )
+    ( vec_push [s] subj `x509` ) ( vec_push [s] subj `-noout` ) ( vec_push [s] subj `-subject` )
+    ^ ( openssl_out subj ( string_data pem ) F )
 }
 
 @ run_sni_section → v {
     ( nurl_print `--- §1 SNI ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18790
-    `/tmp/nurl_tls_default.crt`
-    `/tmp/nurl_tls_default.key` )
+    `nurl_tls_default.crt`
+    `nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : !v NetErr a1 ( tcp_tls_add_sni listener `api.example.com`
-            `/tmp/nurl_tls_api.crt`
-            `/tmp/nurl_tls_api.key` )
+            `nurl_tls_api.crt`
+            `nurl_tls_api.key` )
             ?? a1 {
                 T _ → ( println_label `add_sni_api` `ok` )
                 F e → ( println_label `add_sni_api` ( net_err_name e ) )
             }
             : !v NetErr a2 ( tcp_tls_add_sni listener `www.example.com`
-            `/tmp/nurl_tls_www.crt`
-            `/tmp/nurl_tls_www.key` )
+            `nurl_tls_www.crt`
+            `nurl_tls_www.key` )
             ?? a2 {
                 T _ → ( println_label `add_sni_www` `ok` )
                 F e → ( println_label `add_sni_www` ( net_err_name e ) )
@@ -162,8 +178,8 @@ $ `stdlib/ext/http_server.nu`
 @ run_reload_section → v {
     ( nurl_print `--- §2 live reload ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18791
-    `/tmp/nurl_tls_default.crt`
-    `/tmp/nurl_tls_default.key` )
+    `nurl_tls_default.crt`
+    `nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( tls_handler req ) }
@@ -189,8 +205,8 @@ $ `stdlib/ext/http_server.nu`
 
             // Live swap to reloaded.example.com
             : !v NetErr rr ( tcp_tls_reload listener ``
-            `/tmp/nurl_tls_reload.crt`
-            `/tmp/nurl_tls_reload.key` )
+            `nurl_tls_reload.crt`
+            `nurl_tls_reload.key` )
             ?? rr {
                 T _ → ( println_label `reload_swap` `ok` )
                 F e → ( println_label `reload_swap` ( net_err_name e ) )
@@ -234,12 +250,12 @@ $ `stdlib/ext/http_server.nu`
 @ run_mtls_section → v {
     ( nurl_print `--- §3 mTLS ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18792
-    `/tmp/nurl_tls_default.crt`
-    `/tmp/nurl_tls_default.key` )
+    `nurl_tls_default.crt`
+    `nurl_tls_default.key` )
     ?? lr {
         T listener → {
             : !v NetErr mr ( tcp_tls_require_client_cert listener
-            `/tmp/nurl_tls_ca.crt` T )
+            `nurl_tls_ca.crt` T )
             ?? mr {
                 T _ → {
                     = g_mtls_enforced T
@@ -266,13 +282,18 @@ $ `stdlib/ext/http_server.nu`
             ?? t1 {
                 T th → {
                     ( sleep_ms 100 )
-                    : String r1 ( shell_capture `bash -c "openssl s_client -connect 127.0.0.1:18792 -servername localhost </dev/null 2>&1 | grep -E 'handshake failure|alert certificate required|peer did not return a certificate' | head -n1"` )
+                    : ( Vec s ) a1 ( vec_new [s] )
+                    ( vec_push [s] a1 `s_client` ) ( vec_push [s] a1 `-connect` ) ( vec_push [s] a1 `127.0.0.1:18792` )
+                    ( vec_push [s] a1 `-servername` ) ( vec_push [s] a1 `localhost` )
+                    : String said1 ( openssl_out a1 `` T )
+                    : b refused | | ( string_contains said1 `handshake failure` ) ( string_contains said1 `alert certificate required` )
+                    ( string_contains said1 `peer did not return a certificate` )
+                    ( string_free said1 )
                     ( nurl_print `mtls_no_cert=` )
-                    ( nurl_print ? > ( string_len r1 ) 0 `rejected`
+                    ( nurl_print ? refused `rejected`
                     ? g_mtls_enforced `ENFORCEMENT-BYPASSED`
                     `not-enforced (mTLS unsupported)` )
                     ( nurl_print `\n` )
-                    ( string_free r1 )
                     : i _jr ( thread_join th )
                 }
                 F _ → ( nurl_print `mtls_t1_spawn_err\n` )
@@ -287,11 +308,17 @@ $ `stdlib/ext/http_server.nu`
             ?? t2 {
                 T th → {
                     ( sleep_ms 100 )
-                    : String r2 ( shell_capture `bash -c "echo -e 'GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -connect 127.0.0.1:18792 -servername localhost -cert /tmp/nurl_tls_client.crt -key /tmp/nurl_tls_client.key -quiet 2>/dev/null | grep -E 'mtls-ok|200 OK' | head -n2"` )
+                    : ( Vec s ) a2 ( vec_new [s] )
+                    ( vec_push [s] a2 `s_client` ) ( vec_push [s] a2 `-connect` ) ( vec_push [s] a2 `127.0.0.1:18792` )
+                    ( vec_push [s] a2 `-servername` ) ( vec_push [s] a2 `localhost` )
+                    ( vec_push [s] a2 `-cert` ) ( vec_push [s] a2 `nurl_tls_client.crt` )
+                    ( vec_push [s] a2 `-key` ) ( vec_push [s] a2 `nurl_tls_client.key` ) ( vec_push [s] a2 `-quiet` )
+                    : String said2 ( openssl_out a2 `GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n` F )
+                    : b served | ( string_contains said2 `mtls-ok` ) ( string_contains said2 `200 OK` )
+                    ( string_free said2 )
                     ( nurl_print `mtls_with_cert=` )
-                    ( nurl_print ? > ( string_len r2 ) 0 `ok` `failed` )
+                    ( nurl_print ? served `ok` `failed` )
                     ( nurl_print `\n` )
-                    ( string_free r2 )
                     : i _jr ( thread_join th )
                 }
                 F _ → ( nurl_print `mtls_t2_spawn_err\n` )

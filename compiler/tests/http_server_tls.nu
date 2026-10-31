@@ -1,10 +1,10 @@
 // http_server_tls.nu — Phase 9 acceptance test for tcp_listen_tls.
 //
 // Round-trip:
-//   1. Generate a self-signed cert + key in /tmp via `openssl req
-//      -nodes -x509 -days 1 -newkey rsa:2048`. Idempotent — the
-//      `-nodes` flag means the key has no passphrase, and the cert
-//      is short-lived (1 day) so leaving it on disk does no harm.
+//   1. Generate a self-signed cert + key in the working directory via
+//      `openssl req -nodes -x509 -days 1 -newkey rsa:2048`, run with an
+//      argument vector (no shell: agora #123). The `-nodes` flag means
+//      the key has no passphrase, and the cert is short-lived (1 day).
 //   2. tcp_listen_tls on 127.0.0.1:18772 → HttpServer reuses the
 //      returned TcpListener as if it were a plain socket. The
 //      runtime's NurlTcp handle now carries an SSL_CTX; accept
@@ -18,9 +18,10 @@
 // (stdlib/runtime.openssl absent), tcp_listen_tls returns
 // NetTlsCtxInit and the test prints that fact instead — so the
 // baseline tells us whether the build-host openssl path is wired.
-// requires: live fibers openssl python3 posix-shell
+// requires: live fibers openssl python3
 
 $ `stdlib/std/net.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -37,21 +38,17 @@ $ `stdlib/ext/http_server.nu`
 }
 
 @ run_live_tls_test → v {
-    : s cert `/tmp/nurl_test_tls.crt`
-    : s key `/tmp/nurl_test_tls.key`
-    : s gen_cmd
-    `openssl req -nodes -x509 -days 1 -newkey rsa:2048 -keyout /tmp/nurl_test_tls.key -out /tmp/nurl_test_tls.crt -subj '/CN=localhost' 2>/dev/null`
-    : !Output ProcessErr gen_r ( process_run_shell gen_cmd )
-    ?? gen_r {
-        T go → ( output_free go )
-        F e → ( println_label `cert_gen` ( process_err_name e ) )
-    }
+    // Relative to the working directory, which exists on every host.
+    : s cert `nurl_test_tls.crt`
+    : s key `nurl_test_tls.key`
+    ? ! ( openssl_selfsigned `rsa:2048` `` key cert `localhost` ) { ( println_label `cert_gen` `FAIL` ) } {}
 
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18772 cert key )
     ?? lr {
         T listener → {
-            : s shell_cmd
-            `rm -f /tmp/http_server_tls_client.out /tmp/http_server_tls_client.part; { python3 -c "import ssl,socket,sys
+            // The client is a child process (an argument vector, no shell: agora
+            // #123); it runs while this side accepts and serves.
+            : !ProcChild ProcessErr cr ( py_client_spawn `import ssl,socket,sys
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -66,26 +63,23 @@ while True:
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1].decode('latin-1',errors='replace')
 sys.stdout.write('tls_status='+first+chr(10))
-sys.stdout.write('tls_body='+body)" > /tmp/http_server_tls_client.part 2>&1; mv /tmp/http_server_tls_client.part /tmp/http_server_tls_client.out; } >/dev/null 2>&1 &`
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( println_label `bg_spawn` ( process_err_name e ) )
-            }
-
-            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( tls_echo_handler req ) }
-            : HttpServer srv ( server_new_with_timeout listener handler 3000 )
-            : !v NetErr rr ( server_run_once srv )
-            ?? rr {
-                T _ → ( println_label `serve` `OK` )
-                F e → ( println_label `serve` ( net_err_name e ) )
-            }
-            ( server_stop srv )
-
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_tls_client.out ] && break; sleep 0.05; done; cat /tmp/http_server_tls_client.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
-                F e → ( println_label `wait_client` ( process_err_name e ) )
+sys.stdout.write('tls_body='+body)` )
+            ?? cr {
+                T child → {
+                    : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( tls_echo_handler req ) }
+                    : HttpServer srv ( server_new_with_timeout listener handler 3000 )
+                    : !v NetErr rr ( server_run_once srv )
+                    ?? rr {
+                        T _ → ( println_label `serve` `OK` )
+                        F e → ( println_label `serve` ( net_err_name e ) )
+                    }
+                    ( server_stop srv )
+                    : String client_out ( client_collect child 10000 )
+                    ( nurl_print ( string_data client_out ) ) ( nurl_print `\n` )
+                }
+                F e → {
+                    ( println_label `bg_spawn` ( process_err_name e ) )
+                }
             }
         }
         F e → { ( println_label `tls_listen` ( net_err_name e ) ) }

@@ -15,14 +15,14 @@
 //      one-segment-empty path), then closes.
 //   4. Checks that head‖body is byte-identical to response_serialize,
 //      and that the client saw the whole stream.
-// requires: live fibers python3 posix-shell
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_response.nu`
 
 @ python_client_src → s {
@@ -116,47 +116,44 @@ unsafe @ dump_head ( Vec u ) bytes → v {
     : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18767 4 )
     ?? lr {
         T listener → {
-            : s pyclient ( python_client_src )
-            : s shell_cmd `rm -f /tmp/net_write_pair_client.out /tmp/net_write_pair_client.part; { python3 -c "$NURL_PYCLIENT" > /tmp/net_write_pair_client.part 2> /tmp/net_write_pair_client.err; mv /tmp/net_write_pair_client.part /tmp/net_write_pair_client.out; } >/dev/null 2>&1 &`
-            : !v IoErr _es ( env_set `NURL_PYCLIENT` pyclient )
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( print_label_str `bg_spawn` ( process_err_name e ) )
-            }
+            // The client is a child process (argument vector, no shell; agora #123):
+            // it connects while we block in accept(2).
+            : !ProcChild ProcessErr cr ( py_client_spawn ( python_client_src ) )
+            ?? cr {
+                T child → {
 
-            : !TcpConn NetErr ar ( tcp_accept listener )
-            ?? ar {
-                T conn → {
-                    : ( Vec u ) wire ( vec_with_cap [u] 256 )
+                    : !TcpConn NetErr ar ( tcp_accept listener )
+                    ?? ar {
+                        T conn → {
+                            : ( Vec u ) wire ( vec_with_cap [u] 256 )
 
-                    // Response 1: 3 MB body — head in `wire`, body borrowed from r.
-                    : ( Vec u ) body ( make_body 3145728 )
-                    : HttpResponse r1 ( response_new 200 )
-                    ( response_set_header r1 `Content-Type` `application/octet-stream` )
-                    ( response_set_body_bytes r1 body )
-                    ( vec_free [u] body )
-                    ( write_pair conn `big` r1 wire )
+                            // Response 1: 3 MB body — head in `wire`, body borrowed from r.
+                            : ( Vec u ) body ( make_body 3145728 )
+                            : HttpResponse r1 ( response_new 200 )
+                            ( response_set_header r1 `Content-Type` `application/octet-stream` )
+                            ( response_set_body_bytes r1 body )
+                            ( vec_free [u] body )
+                            ( write_pair conn `big` r1 wire )
 
-                    // Response 2: empty body — the one-segment path of the pair.
-                    : HttpResponse r2 ( response_status_only 204 )
-                    ( write_pair conn `empty` r2 wire )
+                            // Response 2: empty body — the one-segment path of the pair.
+                            : HttpResponse r2 ( response_status_only 204 )
+                            ( write_pair conn `empty` r2 wire )
 
-                    ( vec_free [u] wire )
-                    ( tcp_close_conn conn )
+                            ( vec_free [u] wire )
+                            ( tcp_close_conn conn )
+                        }
+                        F e → ( print_label_str `accept` ( net_err_name e ) )
+                    }
+
+                    ( tcp_close_listener listener )
+
+                    : String client_out ( client_collect child 10000 )
+                    ( print_label_str `client_saw` ( string_data client_out ) )
                 }
-                F e → ( print_label_str `accept` ( net_err_name e ) )
-            }
-
-            ( tcp_close_listener listener )
-
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 400); do [ -f /tmp/net_write_pair_client.out ] && break; sleep 0.05; done; cat /tmp/net_write_pair_client.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → {
-                    ( print_label_str `client_saw` ( output_stdout wo ) )
-                    ( output_free wo )
+                F e → {
+                    ( print_label_str `client_spawn` ( process_err_name e ) )
+                    ( tcp_close_listener listener )
                 }
-                F e → ( print_label_str `wait_client` ( process_err_name e ) )
             }
         }
         F e → ( print_label_str `listen` ( net_err_name e ) )

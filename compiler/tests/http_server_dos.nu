@@ -7,7 +7,7 @@
 //
 // Verification: count how many of the 4 conns receive any data on
 // the read. accepted_count must equal 2 (cap value).
-// requires: live fibers python3 posix-shell
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
@@ -51,8 +51,11 @@ $ `stdlib/ext/http_server.nu`
 
             // Fire 4 simultaneous HTTP/1.0 GETs via python; each conn
             // reports how many bytes it received (rejected conns get 0).
-            : s py
-            `python3 -c "import socket,threading,sys
+            // The client runs synchronously while the four acceptor threads
+            // serve; an argument vector, no shell (agora #123).
+            : ( Vec s ) pyargs ( vec_new [s] )
+            ( vec_push [s] pyargs `-c` )
+            ( vec_push [s] pyargs `import socket,threading,sys
 results=[0]*4
 def go(i):
     try:
@@ -78,8 +81,8 @@ n_accepted = sum(1 for r in results if r>0)
 n_rejected = sum(1 for r in results if r==0)
 print(f'accepted={n_accepted}')
 print(f'rejected={n_rejected}')
-" 2>&1`
-            : !Output ProcessErr pr ( process_run_shell py )
+` )
+            : !Output ProcessErr pr ( process_run `python3` pyargs `` )
             ?? pr {
                 T po → {
                     ( nurl_print ( output_stdout po ) )

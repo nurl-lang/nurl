@@ -25,7 +25,7 @@
 //
 // Server on an OS thread (tcp_accept blocks), client on the main thread,
 // as tls_resume.nu does.
-// requires: live fibers python3 openssl posix-shell
+// requires: live fibers python3 openssl
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -158,8 +158,9 @@ $ `stdlib/std/time.nu`
 
 @ run → v {
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
-    : s cp `/tmp/nurl_tls_alpn_server.crt`
-    : s kp `/tmp/nurl_tls_alpn_server.key`
+    // Relative to the working directory, which exists on every host.
+    : s cp `nurl_tls_alpn_server.crt`
+    : s kp `nurl_tls_alpn_server.key`
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
@@ -196,8 +197,10 @@ $ `stdlib/std/time.nu`
                             ( client_case `client_none` 18931 `` )
                             // 5. OpenSSL client, offer order http/1.1 then h2:
                             //    the SERVER's preference decides → h2
-                            : !Output ProcessErr pr ( process_run_shell
-                            `python3 -c "import ssl,socket
+                            //    (python3 with an argument vector, no shell: agora #123)
+                            : ( Vec s ) pyargs ( vec_new [s] )
+                            ( vec_push [s] pyargs `-c` )
+                            ( vec_push [s] pyargs `import ssl,socket
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -207,7 +210,8 @@ ss=ctx.wrap_socket(s,server_hostname='localhost')
 ss.sendall(b'ping')
 echo=ss.recv(64)
 print('openssl_client=['+str(ss.selected_alpn_protocol())+'] echo='+('T' if echo==b'ping' else 'F'))
-ss.close()" 2>&1` )
+ss.close()` )
+                            : !Output ProcessErr pr ( process_run `python3` pyargs `` )
                             ?? pr {
                                 T po → { ( nurl_print ( output_stdout po ) ) ( output_free po ) }
                                 F e → ( label `openssl_client` ( process_err_name e ) )
@@ -216,10 +220,24 @@ ss.close()" 2>&1` )
                             //    fatal no_application_protocol ALERT (number 120), not
                             //    a bare close. s_client prints the number on every
                             //    OpenSSL version; 3.0's error table has no name for it.
-                            : !Output ProcessErr pr2 ( process_run_shell
-                            `out=$(echo | openssl s_client -connect 127.0.0.1:18931 -alpn spdy/3 2>&1); if printf '%s' "$out" | grep -q 'SSL alert number 120'; then echo openssl_mismatch=alert_120; else echo "openssl_mismatch=other: $out" | head -3; fi` )
+                            //    s_client runs with an argument vector and an empty
+                            //    stdin, which ends it after the handshake (no shell:
+                            //    agora #123); what it prints on stdout and stderr is
+                            //    searched for the alert here.
+                            : ( Vec s ) sargs ( vec_new [s] )
+                            ( vec_push [s] sargs `s_client` )
+                            ( vec_push [s] sargs `-connect` ) ( vec_push [s] sargs `127.0.0.1:18931` )
+                            ( vec_push [s] sargs `-alpn` ) ( vec_push [s] sargs `spdy/3` )
+                            : !Output ProcessErr pr2 ( process_run `openssl` sargs `` )
                             ?? pr2 {
-                                T po → { ( nurl_print ( output_stdout po ) ) ( output_free po ) }
+                                T po → {
+                                    : String said ( string_from ( output_stdout po ) )
+                                    ( string_push_str said ( output_stderr po ) )
+                                    ? ( string_contains said `SSL alert number 120` )
+                                    { ( label `openssl_mismatch` `alert_120` ) }
+                                    { ( label `openssl_mismatch` `other` ) ( nurl_print ( string_data said ) ) }
+                                    ( output_free po )
+                                }
                                 F e → ( label `openssl_mismatch` ( process_err_name e ) )
                             }
                             // 7. our client, list "http/1.1 h2": server preference → h2

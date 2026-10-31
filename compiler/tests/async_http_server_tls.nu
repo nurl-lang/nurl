@@ -14,14 +14,16 @@
 //
 // Flow: EC P-256 self-signed cert (the curve the bench and a modern
 // deployment negotiate) → tcp_listen_tls → server_run_async; a pthread
-// runs a shell client that (1) opens and drops a bare TCP conn, then
-// (2) drives one HTTPS GET via python3/ssl, then stops the server.
-// requires: live fibers openssl python3 posix-shell
+// runs a python3 client (process_run with an argument vector, no shell:
+// agora #123) that (1) opens and drops a bare TCP conn, then (2) drives
+// one HTTPS GET via ssl, then stops the server.
+// requires: live fibers openssl python3
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/process.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -36,17 +38,14 @@ $ `stdlib/core/string.nu`
 }
 
 @ run_async_tls_test → v {
-    : s gen_cmd
-    `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -keyout /tmp/nurl_async_tls.key -out /tmp/nurl_async_tls.crt -subj '/CN=localhost' 2>/dev/null`
-    : !Output ProcessErr gen_r ( process_run_shell gen_cmd )
-    ?? gen_r {
-        T go → ( output_free go )
-        F e → ( tls_async_println `cert_gen` ( process_err_name e ) )
-    }
+    // In the working directory, made by openssl with an argument vector
+    // (no shell: agora #123).
+    ? ! ( openssl_selfsigned `ec` `ec_paramgen_curve:prime256v1` `nurl_async_tls.key` `nurl_async_tls.crt` `localhost` )
+    { ( tls_async_println `cert_gen` `FAIL` ) } {}
 
     ( runtime_init 4 )
 
-    : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18921 `/tmp/nurl_async_tls.crt` `/tmp/nurl_async_tls.key` )
+    : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18921 `nurl_async_tls.crt` `nurl_async_tls.key` )
     ?? lr {
         T listener → {
             : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( tls_async_handler req ) }
@@ -54,11 +53,12 @@ $ `stdlib/core/string.nu`
 
             // Client thread: bare-TCP probe (must NOT kill the accept
             // loop), then one HTTPS GET, then stop the server. Runs on
-            // a pthread so the blocking shell client cannot deadlock a
+            // a pthread so the blocking client process cannot deadlock a
             // fiber worker.
             : ( @ v ) client \ → v {
-                : s client_cmd
-                `python3 -c "import ssl,socket,sys
+                : ( Vec s ) pyargs ( vec_new [s] )
+                ( vec_push [s] pyargs `-c` )
+                ( vec_push [s] pyargs `import ssl,socket,sys
 socket.create_connection(('127.0.0.1',18921)).close()
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
@@ -74,8 +74,8 @@ while True:
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1].decode('latin-1',errors='replace')
 sys.stdout.write('tls_status='+first+chr(10))
-sys.stdout.write('tls_body='+body)" 2>&1`
-                : !Output ProcessErr cr ( process_run_shell client_cmd )
+sys.stdout.write('tls_body='+body)` )
+                : !Output ProcessErr cr ( process_run `python3` pyargs `` )
                 ?? cr {
                     T co → {
                         ( nurl_print ( output_stdout co ) )

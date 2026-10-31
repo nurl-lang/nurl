@@ -1,7 +1,7 @@
 // net_loopback.nu — Phase 1 acceptance test for HTTP_SERVER_PLAN.
-// Opens a real listening socket and shells out to python3 for a
-// client-side connect, so it declares both — skipped on hosts
-// without python3.
+// Opens a real listening socket and runs a python3 client as a child
+// process (an argument vector, no shell: agora #123), so it declares
+// both — skipped on hosts without python3.
 //
 // Round-trip:
 //   1. Listen on 127.0.0.1:18765 (loopback only).
@@ -10,14 +10,14 @@
 //   3. Server accepts, reads "ping", writes "pong", closes the conn.
 //   4. Verifies the captured bytes round-trip end-to-end and that
 //      tcp_peer_addr is non-empty.
-// requires: live fibers python3 posix-shell
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/env.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 
 // Python one-liner that connects to the server, writes "ping",
 // reads back exactly 4 bytes, prints them. Kept inline so the test
@@ -92,64 +92,50 @@ sys.stdout.write(buf.decode())
     : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18765 4 )
     ?? lr {
         T listener → {
-            // 2. Spawn the python client BEFORE accept so it can connect
-            //    while we block in accept(2). process_run is synchronous,
-            //    so we can't actually overlap — we'd deadlock. Use a tiny
-            //    shell wrapper that backgrounds the python and returns
-            //    immediately; we then accept + read/write + reap the bg.
-            //    Capture the bg pid via a temp file the wrapper writes.
-            : s pyclient ( python_client_src )
-            : s shell_cmd ( nurl_str_cat3
-            `rm -f /tmp/net_loopback_client.out /tmp/net_loopback_client.part; { python3 -c "$NURL_PYCLIENT" > /tmp/net_loopback_client.part 2> /tmp/net_loopback_client.err; mv /tmp/net_loopback_client.part /tmp/net_loopback_client.out; } >/dev/null 2>&1 &`
-            ``
-            `` )
-            // Stash python source in env so quoting stays simple.
-            : !v IoErr _es ( env_set `NURL_PYCLIENT` pyclient )
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( print_label_str `bg_spawn` ( process_err_name e ) )
-            }
+            // 2. Start the python client before accept: it is a child
+            //    process, so it connects while we block in accept(2).
+            : !ProcChild ProcessErr cr ( py_client_spawn ( python_client_src ) )
 
-            // 3. Accept the incoming connection.
-            : !TcpConn NetErr ar ( tcp_accept listener )
-            ?? ar {
-                T conn → {
-                    : s peer ( tcp_peer_addr conn )
-                    ( print_label_bool `peer_addr_nonempty` > ( nurl_str_len peer ) 0 )
+            ?? cr {
+                T child → {
+                    // 3. Accept the incoming connection.
+                    : !TcpConn NetErr ar ( tcp_accept listener )
+                    ?? ar {
+                        T conn → {
+                            : s peer ( tcp_peer_addr conn )
+                            ( print_label_bool `peer_addr_nonempty` > ( nurl_str_len peer ) 0 )
 
-                    // 4. Read 4 bytes (= "ping").
-                    : ( Vec u ) buf ( recv_4_bytes conn )
-                    : i nread ( vec_len [u] buf )
-                    ( print_label_int `bytes_read` nread )
-                    : String s_in ( bytes_to_str buf )
-                    ( print_label_str `payload_in` ( string_data s_in ) )
-                    ( string_free s_in )
-                    ( vec_free [u] buf )
+                            // 4. Read 4 bytes (= "ping").
+                            : ( Vec u ) buf ( recv_4_bytes conn )
+                            : i nread ( vec_len [u] buf )
+                            ( print_label_int `bytes_read` nread )
+                            : String s_in ( bytes_to_str buf )
+                            ( print_label_str `payload_in` ( string_data s_in ) )
+                            ( string_free s_in )
+                            ( vec_free [u] buf )
 
-                    // 5. Write "pong" back.
-                    : !v NetErr wr ( tcp_write_str conn `pong` )
-                    ?? wr {
-                        T _ → ( print_label_str `write_pong` `OK` )
-                        F e → ( print_label_str `write_pong` ( net_err_name e ) )
+                            // 5. Write "pong" back.
+                            : !v NetErr wr ( tcp_write_str conn `pong` )
+                            ?? wr {
+                                T _ → ( print_label_str `write_pong` `OK` )
+                                F e → ( print_label_str `write_pong` ( net_err_name e ) )
+                            }
+
+                            ( tcp_close_conn conn )
+                        }
+                        F e → ( print_label_str `accept` ( net_err_name e ) )
                     }
 
-                    ( tcp_close_conn conn )
-                }
-                F e → ( print_label_str `accept` ( net_err_name e ) )
-            }
+                    ( tcp_close_listener listener )
 
-            ( tcp_close_listener listener )
-
-            // 6. Reap the bg client + verify it printed "pong".
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/net_loopback_client.out ] && break; sleep 0.05; done; cat /tmp/net_loopback_client.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → {
-                    : s client_out ( output_stdout wo )
-                    ( print_label_str `client_out` client_out )
-                    ( output_free wo )
+                    // 6. Collect what the client printed ("pong") and reap it.
+                    : String client_out ( client_collect child 5000 )
+                    ( print_label_str `client_out` ( string_data client_out ) )
                 }
-                F e → ( print_label_str `wait_client` ( process_err_name e ) )
+                F e → {
+                    ( print_label_str `client_spawn` ( process_err_name e ) )
+                    ( tcp_close_listener listener )
+                }
             }
         }
         F e → ( print_label_str `listen` ( net_err_name e ) )

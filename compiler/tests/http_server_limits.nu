@@ -14,9 +14,10 @@
 // Needs a loopback socket + python3 (same as http_server_seq /
 // pipelined). Two listeners on adjacent ports so the cases don't
 // interleave.
-// requires: live fibers python3 posix-shell
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/http_request.nu`
@@ -42,10 +43,9 @@ $ `stdlib/ext/http_server.nu`
     : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18770 4 )
     ?? lr {
         T listener → {
-            // Build a request with one large X-Big header that pushes the
-            // head past 256 bytes. python3 client extracts the status line.
-            : s shell_cmd
-            `rm -f /tmp/http_server_limits1.out /tmp/http_server_limits1.part; { python3 -c "import socket,sys
+            // The client is a child process (an argument vector, no shell: agora
+            // #123); it runs while this side accepts and serves.
+            : !ProcChild ProcessErr cr ( py_client_spawn `import socket,sys
 s=socket.socket();s.connect(('127.0.0.1',18770))
 big='X'*600
 req='GET / HTTP/1.1\\r\\nHost: t\\r\\nX-Big: '+big+'\\r\\n\\r\\n'
@@ -57,27 +57,24 @@ while True:
     if not c: break
     buf+=c
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
-sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.part 2>&1; mv /tmp/http_server_limits1.part /tmp/http_server_limits1.out; } >/dev/null 2>&1 &`
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( println_label `case1_bg` ( process_err_name e ) )
-            }
-
-            : HttpLimits lim @ HttpLimits { 256 100 1048576 }
-            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( ok_handler req ) }
-            : HttpServer srv ( server_new_complete listener handler 2000 1000 lim 0 )
-            : !v NetErr rr ( server_run_once srv )
-            ?? rr {
-                T _ → {}
-                F e → ( println_label `case1_serve` ( net_err_name e ) )
-            }
-            ( server_stop srv )
-
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_limits1.out ] && break; sleep 0.05; done; cat /tmp/http_server_limits1.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
-                F e → ( println_label `case1_wait` ( process_err_name e ) )
+sys.stdout.write('case1_status='+first+chr(10))` )
+            ?? cr {
+                T child → {
+                    : HttpLimits lim @ HttpLimits { 256 100 1048576 }
+                    : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( ok_handler req ) }
+                    : HttpServer srv ( server_new_complete listener handler 2000 1000 lim 0 )
+                    : !v NetErr rr ( server_run_once srv )
+                    ?? rr {
+                        T _ → {}
+                        F e → ( println_label `case1_serve` ( net_err_name e ) )
+                    }
+                    ( server_stop srv )
+                    : String client_out ( client_collect child 10000 )
+                    ( nurl_print ( string_data client_out ) ) ( nurl_print `\n` )
+                }
+                F e → {
+                    ( println_label `case1_bg` ( process_err_name e ) )
+                }
             }
         }
         F e → ( println_label `case1_listen` ( net_err_name e ) )
@@ -90,8 +87,9 @@ sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.part
     : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18771 4 )
     ?? lr {
         T listener → {
-            : s shell_cmd
-            `rm -f /tmp/http_server_limits2.out /tmp/http_server_limits2.part; { python3 -c "import socket,sys
+            // The client is a child process (an argument vector, no shell: agora
+            // #123); it runs while this side accepts and serves.
+            : !ProcChild ProcessErr cr ( py_client_spawn `import socket,sys
 s=socket.socket();s.connect(('127.0.0.1',18771))
 s.sendall(b'GET / HTTP/1.1\\r\\nHost: t\\r\\n\\r\\n')
 s.shutdown(socket.SHUT_WR)
@@ -101,27 +99,24 @@ while True:
     if not c: break
     buf+=c
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
-sys.stdout.write('case2_status='+first+chr(10))" > /tmp/http_server_limits2.part 2>&1; mv /tmp/http_server_limits2.part /tmp/http_server_limits2.out; } >/dev/null 2>&1 &`
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( println_label `case2_bg` ( process_err_name e ) )
-            }
-
-            : HttpLimits lim ( http_default_limits )
-            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( slow_handler req ) }
-            : HttpServer srv ( server_new_complete listener handler 2000 1000 lim 100 )
-            : !v NetErr rr ( server_run_once srv )
-            ?? rr {
-                T _ → {}
-                F e → ( println_label `case2_serve` ( net_err_name e ) )
-            }
-            ( server_stop srv )
-
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_limits2.out ] && break; sleep 0.05; done; cat /tmp/http_server_limits2.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
-                F e → ( println_label `case2_wait` ( process_err_name e ) )
+sys.stdout.write('case2_status='+first+chr(10))` )
+            ?? cr {
+                T child → {
+                    : HttpLimits lim ( http_default_limits )
+                    : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( slow_handler req ) }
+                    : HttpServer srv ( server_new_complete listener handler 2000 1000 lim 100 )
+                    : !v NetErr rr ( server_run_once srv )
+                    ?? rr {
+                        T _ → {}
+                        F e → ( println_label `case2_serve` ( net_err_name e ) )
+                    }
+                    ( server_stop srv )
+                    : String client_out ( client_collect child 10000 )
+                    ( nurl_print ( string_data client_out ) ) ( nurl_print `\n` )
+                }
+                F e → {
+                    ( println_label `case2_bg` ( process_err_name e ) )
+                }
             }
         }
         F e → ( println_label `case2_listen` ( net_err_name e ) )
