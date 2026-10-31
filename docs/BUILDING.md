@@ -574,6 +574,17 @@ skips the code gates and builds the docs instead, one that touches only
 `formal/` or `changes/` skips the code gates too, and one that touches
 both code and either of them runs everything.
 
+**A PR's own run is the fast signal.** It runs the build, the corpus and
+the gates, about 35 job-minutes. The platform and sanitizer jobs are
+FreeBSD, ASan/UBSan, the sanitizer corpus and the three unikernel jobs.
+They are 88 of the 123 job-minutes a full run takes, and they run in the
+merge queue on the commit that lands. They also run on a PR labelled
+`ci:full`: add the label, then push. Before queueing an ownership change,
+run the sanitizer gates locally (`./build.sh` then
+`compiler/tests/run_san_tests.sh`), so the queue does not eject it for
+what a local run finds. A skipped required check counts as passed, so
+the PR can join the queue.
+
 **Merging through the queue** (Agora #136). `ci.yml` also answers the
 merge queue's `merge_group` event, and there it runs every job whatever
 the paths. The queue tests `main` + the queued PRs as one commit, merges

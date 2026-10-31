@@ -54,6 +54,15 @@ jobs:
       code: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
       webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
       compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
+      # The platform and sanitizer jobs (FreeBSD, ASan/UBSan, the
+      # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
+      # 123 job-minutes. The merge queue runs them anyway, on the combined
+      # commit that lands, so a PR runs them only when labelled `ci:full`
+      # (add the label, then push). A PR's own run keeps the build, the
+      # corpus and the gates: the fast signal, about 35 job-minutes. A
+      # skipped required check counts as passed, so the PR can still join
+      # the queue. Pushes and the queue always run everything.
+      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
     steps:
       - name: Did the merge queue already test this commit?
         id: queued
@@ -937,7 +946,7 @@ jobs:
   unikernel-nolibc:
     name: "unikernel: the corpus with no libc"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -1006,7 +1015,7 @@ jobs:
   unikernel-qemu:
     name: "unikernel: the guest under QEMU (x86-64, RISC-V, AArch64)"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -1085,7 +1094,7 @@ jobs:
   unikernel-appliance:
     name: "unikernel: nurlc.wasm and the swarm appliance in the guest"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -1120,7 +1129,7 @@ jobs:
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # GitHub has no native FreeBSD runners, so run a real FreeBSD VM inside
@@ -1166,7 +1175,7 @@ jobs:
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     # The whole-corpus run is sanitizers-corpus below, sharded: in one
     # job with these controls it took ~21 min (the corpus 12-14 of
@@ -1319,7 +1328,7 @@ jobs:
   sanitizers-corpus:
     name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/2)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     # Each shard is the --san build (~3 min) plus half the corpus.
     timeout-minutes: 25
