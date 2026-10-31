@@ -1033,7 +1033,8 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
-      fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun h => by simp at h⟩
+      fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun h => by simp at h,
+      fun h => by simp at h⟩
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun x => ?_, fun x hx => hst x (fun h => hyF (h ▸ hx)), ?_, ?_, ?_⟩, ?_⟩
   · by_cases hxy : x = y
     · subst hxy; simp [hT]
@@ -1252,7 +1253,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           by_cases hry : dep.root = y
           · exact Or.inl ⟨hry, by rw [killE_mode, hm]; rfl⟩
           · exact Or.inr ⟨hry, killE .drop t'.holdsView y Er, by simp [A2.kill, hEr],
-              by rw [killE_mode]; exact hroot⟩)⟩
+              by rw [killE_mode]; exact hroot⟩),
+        (fun hd => by rw [killE_dtor] at hd; rw [killE_dbind]; exact hi.wf.arm y E hy hd)⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
       obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr

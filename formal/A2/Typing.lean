@@ -205,6 +205,8 @@ structure CtxWF (Γ : Ctx) : Prop where
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
   dtor : ∀ v E, Γ v = some E → E.dtor = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
     ∀ d ∈ E.vdeps, d.kind.isName = false → ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true
+  /-- ... and only a binding `letd` made may run one. -/
+  arm  : ∀ v E, Γ v = some E → E.dtor = true → E.dbind = true
 
 instance {Γ : Ctx} : CoeFun (CtxWF Γ) (fun _ => ∀ v E, Γ v = some E → E.live = true →
     (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) :=
@@ -326,6 +328,15 @@ def compE (E : Entry) : Ty → Entry
   cases t <;> rfl
 @[simp] theorem compE_dtor (E : Entry) (t : Ty) : (compE E t).dtor = false := by
   cases t <;> rfl
+@[simp] theorem intE_dbind : intE.dbind = false := rfl
+@[simp] theorem elemE_dbind (y : Var) (E : Entry) (t : Ty) : (elemE y E t).dbind = false := by
+  cases t <;> rfl
+@[simp] theorem popE_dbind (y : Var) (E : Entry) (t : Ty) : (popE y E t).dbind = false := by
+  cases t <;> simp [popE]
+@[simp] theorem projE_dbind (y : Var) (E : Entry) (t : Ty) : (projE y E t).dbind = false := by
+  cases t <;> rfl
+@[simp] theorem compE_dbind (E : Entry) (t : Ty) : (compE E t).dbind = false := by
+  cases t <;> rfl
 
 /-- The element type of a `Vec`. -/
 def Ty.elem : Ty → Ty
@@ -380,7 +391,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.mode = .rootb →
       RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ Γ
   | copyBor {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .bor → RhsT Γ F (.var y) E Γ
+      Γ y = some E → E.live = true → E.mode = .bor →
+      RhsT Γ F (.var y) { E with dtor := false, dbind := false } Γ
   | borrow {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t →
       RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ Γ
@@ -432,6 +444,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
 
 /-! ### Calls -/
+
+/-- A2-drop.2: a right-hand side makes a value no binding has made its own
+    yet: it runs no destructor (only `letd` arms a binding). -/
+theorem RhsT.dtor_false {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
+    E.dtor = false ∧ E.dbind = false := by
+  cases h <;> simp
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/
@@ -593,6 +611,8 @@ def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
 
 @[simp] theorem callRes_dtor (Γ : Ctx) (fn : Fn) (args : List Var) : (callRes Γ fn args).dtor = false := rfl
 @[simp] theorem recvRes_dtor (c : Var) (Ec E : Entry) : (recvRes c Ec E).dtor = E.dtor := rfl
+@[simp] theorem callRes_dbind (Γ : Ctx) (fn : Fn) (args : List Var) : (callRes Γ fn args).dbind = false := rfl
+@[simp] theorem recvRes_dbind (c : Var) (Ec E : Entry) : (recvRes c Ec E).dbind = E.dbind := rfl
 
 /-- What `inout` parameter `i` holds views of after the call. -/
 def outHeld (Γ : Ctx) (fn : Fn) (args : List Var) (i : Nat) : List Dep :=

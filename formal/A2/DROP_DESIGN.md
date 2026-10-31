@@ -214,12 +214,19 @@ bound. nurlc's rule is finer: a holder may gain views of older bindings
 only. Covering that needs an age order the calculus does not have, so it
 stays a documented gap.
 
+**A scope's end asks every `letd` binding** (`DbindSafe`, part of
+`EndOK`): no `dbind` owner, armed or not, views the binding that ends.
+A moved-out `letd` binding still lists its old views. If one of their
+scopes ended, a later join could re-arm it with a view of whatever binding
+takes that name next. The check costs nothing: a `letd` binding's views
+are of older bindings, whose scopes enclose its own.
+
 **The invariants.**
-- `CtxWF.dtor`: an armed owner's dependencies in memory are on bound roots,
-  live or dead. It is part of `CtxWF`, so a weaker context (`Weaker`) must
-  keep it too.
+- `CtxWF.dtor`: a `dbind` owner's dependencies in memory are on bound
+  roots, live or dead; `CtxWF.arm`: only a `dbind` binding is armed. Both
+  are part of `CtxWF`, so a weaker context (`Weaker`) keeps them too.
 - `Inv.dtorOut` / `dtorIn` (as `pinOut` / `PinOK` for borrowed parameters):
-  an armed owner depends in memory on no binding of a scope opened after
+  a `dbind` owner depends in memory on no binding of a scope opened after
   it. `MInv.unwind` needs it. It holds when `letd` binds, and stays because
   a `dbind` binding's `held` never grows and the join keeps it.
 - The frame's: for every `scopeD x` frame, whenever `x`'s slot owns a

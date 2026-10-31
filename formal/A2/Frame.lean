@@ -164,7 +164,8 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       -- A2-drop.2: an owner that may run a destructor views only bound roots
       (Ex'.dtor = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
-          (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true))
+          (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
+      (Ex'.dtor = true → Ex'.dbind = true)
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -298,14 +299,23 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hm]; exact hi.noInout v Ex b hx
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [killE_mode]; exact hi.noInout v E b hE
-  · refine ⟨?live, ?dtorc⟩
+  · refine ⟨?live, ?dtorc, ?armc⟩
+    case armc =>
+      intro v E' hv' hd
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm⟩ := hox
+        exact harm hd
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dtor] at hd; rw [killE_dbind]; exact hi.wf.arm v E hE hd
     case dtorc =>
       -- A2-drop.2: a destructor owner's views: the change ended none (`DtorSafe`)
       intro v E' hv' hd hos hnint d hdd hnm
       by_cases hvx : v = x
       · subst hvx
         have := getX E' hv'; subst this
-        obtain ⟨_, _, _, _, hm', _, _, _, _, _, hdwf⟩ := hox
+        obtain ⟨_, _, _, _, hm', _, _, _, _, _, hdwf, _⟩ := hox
         have hnint' : E'.ty ≠ .int := by
           rcases hnint with h | h
           · exact h
@@ -439,7 +449,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases ox with
       | none => rw [show m'.st v = none from hox] at hsl; cases hsl
       | some Ex' =>
-        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk, _⟩ := hox
+        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk, _, _⟩ := hox
         rw [hsl'] at hsl; cases hsl
         exact hpk T hT
     · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
