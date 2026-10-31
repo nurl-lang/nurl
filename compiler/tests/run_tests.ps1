@@ -285,10 +285,41 @@ public static class NurlMergedRun {
         return Marshal.StringToHGlobalUni(sb.ToString());
     }
 
+    // The runner's own fault-injection controls run it under pwsh on Linux
+    // and macOS (tools/tests/test_compiler_runners.py): the same one pipe,
+    // made there by sh's 2>&1; exec keeps the pid (so the kill reaches the
+    // test) and argv[0]. stdin is at EOF, as NUL is on Windows.
+    static object[] RunPosix(string exe, string cwd, int timeoutMs, IDictionary extraEnv) {
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("exec \"$0\" 2>&1");
+        psi.ArgumentList.Add(exe);
+        psi.WorkingDirectory = cwd;
+        psi.UseShellExecute = false;
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.StandardOutputEncoding = new UTF8Encoding(false);
+        if (extraEnv != null) foreach (DictionaryEntry e in extraEnv) psi.Environment[(string)e.Key] = (string)e.Value;
+        using (var p = Process.Start(psi)) {
+            p.StandardInput.Close();
+            Task<string> o = p.StandardOutput.ReadToEndAsync();
+            int code;
+            if (!p.WaitForExit(timeoutMs)) {
+                try { p.Kill(true); } catch (Exception) { }
+                p.WaitForExit();
+                code = 124;
+            } else {
+                code = p.ExitCode;
+            }
+            return new object[] { code, o.Result };
+        }
+    }
+
     // Run `exe` in `cwd` with its stdout and stderr on ONE pipe. Returns
     // { exit code, or 124 when it ran past `timeoutMs` and was killed with
     // its whole tree; everything it wrote, decoded as UTF-8 }.
     public static object[] Run(string exe, string cwd, int timeoutMs, IDictionary extraEnv) {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunPosix(exe, cwd, timeoutMs, extraEnv);
         var sa = new SECURITY_ATTRIBUTES {
             nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), bInheritHandle = 1 };
         IntPtr rd, wr;
