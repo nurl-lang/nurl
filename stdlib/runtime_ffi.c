@@ -8484,6 +8484,19 @@ static NurlReactorWait *nurl__np_probe_all_locked(NurlReactorWait *batch) {
 
 #define NURL_NP_LOCAL_SHARE 8
 
+/* `f` runs next on worker `w`: the head of w's own queue, stamped the
+ * oldest, so nothing queued before it goes first (Admission, under
+ * "Service order"). */
+static void nurl__np_run_next(NurlWorker *w, NurlFiber *f) {
+    f->rseq = NURL_RSEQ_ADMIT;
+    pthread_mutex_lock(&w->rq_lock);
+    f->next = w->rq_head;
+    w->rq_head = f;
+    if (!w->rq_tail) w->rq_tail = f;
+    __atomic_fetch_add(&w->rq_len, 1, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&w->rq_lock);
+}
+
 /* Recycle a consumed wake batch onto the freelist and hand the fibers
  * out. On an idle worker the FIRST fiber is returned to run right now;
  * the next NP_LOCAL_SHARE (oldest first) go to this worker's OWN local
@@ -8593,15 +8606,7 @@ static NurlFiber *nurl__np_hand_out(NurlWorker *w, NurlReactorWait *batch) {
         /* The fiber an idle worker would have run first is the oldest
          * woken: it goes at the head of this worker's queue, to run
          * right after the accept. */
-        if (direct) {
-            direct->rseq = NURL_RSEQ_ADMIT;
-            pthread_mutex_lock(&w->rq_lock);
-            direct->next = w->rq_head;
-            w->rq_head = direct;
-            if (!w->rq_tail) w->rq_tail = direct;
-            __atomic_fetch_add(&w->rq_len, 1, __ATOMIC_RELAXED);
-            pthread_mutex_unlock(&w->rq_lock);
-        }
+        if (direct) nurl__np_run_next(w, direct);
         return admit;
     }
     return direct;
@@ -8766,6 +8771,7 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
     if (!wt) return;
     NurlFiber *fb = wt->fiber;
     long long dl = wt->deadline_ms;
+    int admit = wt->admit;
     int verdict = -1;   /* -1 parked; 0/1 wake now with that result */
     pthread_mutex_lock(&nurl__np.lock);
     if (wt->fd >= 0) {
@@ -8799,6 +8805,20 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
     pthread_mutex_unlock(&nurl__np.lock);
     if (verdict >= 0) {
         fb->last_park_result = verdict;
+        /* An accept whose listener was ready before the park took hold
+         * (the edge was banked between its EAGAIN and this activation)
+         * runs next, as one polled ready does (nurl__np_hand_out) — an
+         * unpark stamped it the newest and queued it behind every fiber
+         * already waiting: one whole pass of the run queue late (64
+         * dispatches of sched_accept_admission's 64 yielders on the
+         * Windows CI runner, agora #266). This runs on the worker that
+         * swapped the fiber out. */
+        NurlWorker *w = nurl__tls_worker;
+        if (admit && w) {
+            fb->state = NF_RUNNABLE;
+            nurl__np_run_next(w, fb);
+            return;
+        }
         nurl_fiber_unpark((long long)(uintptr_t)fb);
         return;
     }
