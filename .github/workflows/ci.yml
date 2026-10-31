@@ -1211,6 +1211,12 @@ jobs:
         # spends most of its 20 minutes on the corpus.
         run: ./unikernel/run_sim_tests.sh
 
+      - name: nurlpkg test --sim (seed sweeps and exact replays)
+        # agora #261, DST 3/4: on tools/nurlpkg/sim-fixture/, a correct
+        # test passes every seed, a racy one fails under some seeds and
+        # not all, and the replay line it prints fails 10/10, identically.
+        run: ./tools/nurlpkg/test-sim.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     needs: changes
