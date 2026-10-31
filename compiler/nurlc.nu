@@ -14817,7 +14817,11 @@ unsafe @ gen_call i lex i syms i cg → s {
             = __arg0_bind ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ``
             // A container call that drops or hands out some of its
             // elements: what was stored into it may be one of them.
-            ? & != 0 ( nurl_str_len __arg0_bind ) ( bck_is_elem_dropper fname_bare )
+            // (Replacing one plain number drops nothing, as the walk's own
+            // bck_callee_drops_elems says: a view of the container still
+            // reads it — packages/mlp's minmax_apply, once a `?` arm's
+            // reads were checked.)
+            ? & & != 0 ( nurl_str_len __arg0_bind ) ( bck_is_elem_dropper fname_bare ) ! & ( str_contains_word `slice_put vec_put vec_set` fname_bare ) ( __inst_of_scalar call_name )
             { ( bck_stash_fieldset_by __arg0_bind ( nurl_lex_line lex ) fname_bare ) } {}
         } {}
         // A method its receiver's type dispatches statically IS a call of
