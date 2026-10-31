@@ -45,7 +45,9 @@ the implementation (B–D) follow once the rules have stopped moving.
 ```
 formal/
   README.md        this file
-  BLUEPRINT.md     visual architecture, Mermaid theorem/module graphs, and Eff.kills lattice
+  BLUEPRINT.md     visual architecture, Mermaid theorem/module graphs, and Eff.kills lattice;
+                   its counts, A2 module graph and index, and crown theorems are
+                   generated (node webdocs/scripts/gen-formal-data.mjs; CI checks)
   CLAIM.md         the theorem in words, its scope per phase, and the trusted base
   RULES.md         every ownership rule of docs/MEMORY.md → its formal rule and status
   corpus/map.tsv   every hole probe → the formal rule that rejects it, or its phase,
