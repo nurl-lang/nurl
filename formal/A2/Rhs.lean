@@ -88,11 +88,11 @@ theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : Ro
   rw [h]; exact hn
 
 theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
-    (hnv : m.nv ≤ m'.nv) : MInv m' Γ where
+    (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk := by rfl) : MInv m' Γ where
   dom v := by rw [h]; exact hi.dom v
   slot v E hv := by
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
-    refine ⟨sl, by rw [h]; exact hsl, hok, hslot.keep fun dep _ => ?_⟩
+    refine ⟨sl, by rw [h]; exact hsl, hok, hslot.keep (fun dep _ => ?_) hb⟩
     have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn
     exact ⟨hk.vkeep, hk.hkeep⟩
   heap := hh
@@ -106,6 +106,11 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
     (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn).vkeep
+  shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
+  blocks k bl hk := by
+    rw [hb] at hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, h3, h4.of_blk hb⟩
 
 /-- What a right-hand side hands to the binding that takes it. -/
 structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop where
@@ -622,50 +627,51 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
     ∀ {P : List Dep},
     (∀ t c d es, Top (.node t c d es) e →
       ∃ dep ∈ P, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0) →
-    ViewsOK m τ e H → NamesIn e H → (∀ s, τ = .slice s → ViewsOK m τ e P) →
+    ViewsOK m τ e H → NamesIn e H → SharesOK m τ e → (∀ s, τ = .slice s → ViewsOK m τ e P) →
     ValOK m τ (lendOf e) P H := by
   revert hpk
   induction hw generalizing H with
-  | int => intro _ P _ _ _ _; exact .int
+  | int => intro _ P _ _ _ _ _; exact .int
+  | arc => intro _ P _ _ _ hsh _; exact .arc hsh.here
   | @view t d o l =>
-    intro _ P _ _ _ hs
+    intro _ P _ _ _ _ hs
     obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hs t rfl t _ ViewIn.here
     cases hv
     exact .view ⟨dep, hd, ha⟩
   | @node t c d es hes =>
-    intro _ P hn hv hnm _
+    intro _ P hn hv hnm _ _
     obtain ⟨dep, hd, n0, hr, hl⟩ := hn t c d es (Top.refl _)
     exact .href ⟨dep, hd, n0, d, es, hr, hl, WFv.node hes, hv, hnm⟩
   | @pair a b v w _ _ ihv ihw =>
-    intro hpk P hn hvs hnm _
+    intro hpk P hn hvs hnm hsh _
     have hn' : ∀ t c d es, Top (.node t c d es) (.pair v w) →
         ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 := by
       intro t c d es hs
       obtain ⟨dep, hd, rest⟩ := hn t c d es hs
       exact ⟨dep, List.mem_append_left _ hd, rest⟩
     refine .pair (ihv (hpk.sub (Sub.fst (Sub.refl _))) (fun t c d es hs => hn' t c d es (Top.fst hs)) (fun s x hin => hvs s x
-      (ViewIn.fst hin)) ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_left _ hx)) (fun s _ => ?_))
+      (ViewIn.fst hin)) ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_left _ hx)) hsh.fst (fun s _ => ?_))
       (ihw (hpk.sub (Sub.snd (Sub.refl _))) (fun t c d es hs => hn' t c d es (Top.snd hs))
       (fun s x hin => hvs s x (ViewIn.snd hin))
-      ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_right _ hx)) (fun s _ => ?_))
+      ((hnm.sub fun x hx => by simp only [Val.names]; exact List.mem_append_right _ hx)) hsh.snd (fun s _ => ?_))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.fst hin))
     · exact ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.snd hin))
   | @inl a b v _ ihv =>
-    intro hpk P hn hvs hnm _
+    intro hpk P hn hvs hnm hsh _
     refine .inl (ihv (hpk.sub (Sub.inl (Sub.refl _))) (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inl hin))
-      ((hnm.sub fun x hx => by simp only [Val.names]; exact hx))
+      ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inl
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inl hin))))
     obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.inl hs)
     exact ⟨dep, List.mem_append_left _ hd, rest⟩
   | @inr a b v _ ihv =>
-    intro hpk P hn hvs hnm _
+    intro hpk P hn hvs hnm hsh _
     refine .inr (ihv (hpk.sub (Sub.inr (Sub.refl _))) (fun t c d es hs => ?_) (fun s x hin => hvs s x (ViewIn.inr hin))
-      ((hnm.sub fun x hx => by simp only [Val.names]; exact hx))
+      ((hnm.sub fun x hx => by simp only [Val.names]; exact hx)) hsh.inr
       (fun s _ => ViewsOK.mono (List.subset_append_right _ _) (fun s x hin => hvs s x (ViewIn.inr hin))))
     obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.inr hs)
     exact ⟨dep, List.mem_append_left _ hd, rest⟩
   | @pkg fs te ms v cs _ ihv =>
-    intro hpk P hn hvs hnm _
+    intro hpk P hn hvs hnm hsh _
     -- what the environment holds by name is no change of one of this
     -- package's own captures (one captured again inside is only read)
     have hdis := (hpk fs te ms v cs (Sub.refl _)).2.2
@@ -682,16 +688,17 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
       · right; simpa [List.contains_iff_mem] using hin
     refine .pkg (ihv (hpk.sub (Sub.pkg (Sub.refl _))) (fun t c d es hs => ?_) hvr
       (fun c' hc' => mem_envDeps.mpr ⟨hnm c' (by simp only [Val.names]; exact List.mem_append_right _ hc'), hown c' hc'⟩)
-      (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
+      hsh.pkg (fun s _ => ViewsOK.mono (List.subset_append_right _ _) hvr))
     obtain ⟨dep, hd, rest⟩ := hn t c d es (Top.pkg hs)
     exact ⟨dep, List.mem_append_left _ hd, rest⟩
 
 theorem lend_valOK {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e) (hpk : PkgsOK e) {P : List Dep}
     (hn : ∀ t c d es, Sub (.node t c d es) e →
       ∃ dep ∈ P, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0)
-    (hv : ViewsOK m τ e H) (hnm : NamesIn e H) (hs : ∀ s, τ = .slice s → ViewsOK m τ e P) :
+    (hv : ViewsOK m τ e H) (hnm : NamesIn e H) (hsh : SharesOK m τ e)
+    (hs : ∀ s, τ = .slice s → ViewsOK m τ e P) :
     ValOK m τ (lendOf e) P H :=
-  lend_valOK' hw hpk (fun t c d es ht => hn t c d es ht.sub) hv hnm hs
+  lend_valOK' hw hpk (fun t c d es ht => hn t c d es ht.sub) hv hnm hsh hs
 
 theorem lands_rootKind_self (t : Ty) (n : Val) : Lands (rootKind t .self) n n := by
   cases t <;> first | exact Or.inl ⟨rfl, rfl⟩ | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
@@ -701,6 +708,7 @@ theorem lands_rootKind_self (t : Ty) (n : Val) : Lands (rootKind t .self) n n :=
 theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) : lendOf v = v := by
   induction h with
   | int => rfl
+  | arc => rfl
   | href => rfl
   | view => rfl
   | pair _ _ ihx ihy => simp [lendOf, ihx, ihy]

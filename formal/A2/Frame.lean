@@ -299,7 +299,9 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
           (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
       (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true) ∧
-      ArmOK m' Ex' sl
+      ArmOK m' Ex' sl ∧
+      -- A3.1: the shares its tree holds name live blocks
+      (sl.own = true → ∀ T, sl.val = some T → SharesOK m' Ex'.ty T)
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -593,7 +595,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
-      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm⟩ := hox
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm, _⟩ := hox
       rw [hsl'] at hsl; cases hsl; exact harm
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [hst v hvx] at hsl
@@ -610,5 +612,19 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)).vkeep
+  · -- A3.1: an owned tree's shares name live blocks; no change here touches a block
+    intro v E' sl T hv' hsl hown hT
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, hsh⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact hsh hown T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      rw [killE_ty]; exact (hi.shares v E sl T hE hsl hown hT).of_blk hblk
+  · intro k bl hk
+    rw [hblk] at hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, h3, h4.of_blk hblk⟩
 
 end A2

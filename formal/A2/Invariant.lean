@@ -61,6 +61,26 @@ inductive ArcIn : Ty → Val → Ty → Nat → Prop
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop :=
   ∀ u k, ArcIn τ T u k → ∃ bl, m.blk k = some bl ∧ bl.ty = u
 
+theorem SharesOK.of_blk {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : m'.blk = m.blk) :
+    SharesOK m' τ T := fun u k ha => by rw [hb]; exact h u k ha
+
+theorem SharesOK.fst {m : Mem} {a b : Ty} {x y : Val} (h : SharesOK m (.prod a b) (.pair x y)) :
+    SharesOK m a x := fun u k ha => h u k (.fst ha)
+theorem SharesOK.snd {m : Mem} {a b : Ty} {x y : Val} (h : SharesOK m (.prod a b) (.pair x y)) :
+    SharesOK m b y := fun u k ha => h u k (.snd ha)
+theorem SharesOK.inl {m : Mem} {a b : Ty} {x : Val} (h : SharesOK m (.sum a b) (.inl x)) :
+    SharesOK m a x := fun u k ha => h u k (.inl ha)
+theorem SharesOK.inr {m : Mem} {a b : Ty} {x : Val} (h : SharesOK m (.sum a b) (.inr x)) :
+    SharesOK m b x := fun u k ha => h u k (.inr ha)
+theorem SharesOK.elem {m : Mem} {t t' : Ty} {c d : Nat} {es : List Val} {e : Val}
+    (h : SharesOK m (.vec t) (.node t' c d es)) (he : e ∈ es) : SharesOK m t e :=
+  fun u k ha => h u k (.child he ha)
+theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
+    {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
+  fun u k ha => h u k (.pkg ha)
+theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.arc t) (.arc k)) :
+    ∃ bl, m.blk k = some bl ∧ bl.ty = t := h t k .here
+
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
 inductive Child : Val → Val → Prop
