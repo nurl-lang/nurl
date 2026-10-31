@@ -6,14 +6,15 @@ namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
   refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
-    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), (fun _ => by simp_all)⟩
+    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
   obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1⟩ := h1
   obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2⟩ := h2
   refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_, b2.trans b1, fun h => ?_,
-    fun h => (k2 (b1 ▸ h)).trans (k1 h)⟩
+    fun h hos hn d hnm => (k2 (by rw [b1]; exact h) (by rw [m1]; exact hos) (by rw [t1, m1]; exact hn) d hnm).trans
+      (k1 h hos hn d hnm)⟩
   rotate_right
   · rcases a2 h with h2 | h2
     · exact a1 h2
@@ -218,15 +219,15 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
     refine hi.dtorOut v E hE hd0 hos0 hn0 hvs d ?_ hnm
     simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
-    rw [← hwe.dheld hd0]; exact hdd
+    exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
   dtorIn := hi.dtorIn.of_dbind fun v E' hv hd hos hn => by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
     have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
     have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
-    refine ⟨E, hE, hd0, hos0, hn0, fun d hdd => ?_⟩
+    refine ⟨E, hE, hd0, hos0, hn0, fun d hdd hnm => ?_⟩
     simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
-    rw [← hwe.dheld hd0]; exact hdd
+    exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

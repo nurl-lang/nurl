@@ -221,11 +221,13 @@ structure EntryWeaker (E E' : Entry) : Prop where
       its slot may still own its value on the other. -/
   dtor  : E.dtor = true → E'.dtor = true ∧ E.held ⊆ E'.held
   /-- ... it is the same binding, made by `letd` or not; only one made by
-      `letd` may be armed again (the maybe-moved join), and what it views
-      is the value `letd` gave it, so no weakening adds to it. -/
+      `letd` may be armed again (the maybe-moved join), and what it views in
+      memory is what the value `letd` gave it views, so no weakening adds to
+      it. -/
   dbind : E'.dbind = E.dbind
   raise : E'.dtor = true → E.dtor = true ∨ E.dbind = true
-  dheld : E.dbind = true → E'.held = E.held
+  dheld : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+            ∀ d, d.kind.isName = false → (d ∈ E'.held ↔ d ∈ E.held)
 
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.)  A2-drop.2: so does, in
@@ -706,9 +708,11 @@ def CallDtorSafe (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) : Prop :
     (ps[i].1 = .sink → DtorSafe Γ .replace false (args.getD i 0)) ∧
     (∀ b, ps[i].1 = .inout b → DtorSafe Γ b ps[i].2.elem.holdsView (args.getD i 0))) ∧
   (∀ d ∈ mutNames Γ args, DtorSafe Γ d.kind.bound false d.root) ∧
-  -- a destructor binding gains no view: as an `inout` argument, it holds none
+  -- a binding `letd` made is not handed over `inout`: the call's renaming
+  -- gives an argument the callee's parameter entry back, which is no such
+  -- binding (A2-drop.2; a gap of the claim, nurlc allows it)
   (∀ i (h : i < ps.length) b, ps[i].1 = .inout b → ∀ Ea, Γ (args.getD i 0) = some Ea →
-    Ea.dbind = true → ps[i].2.holdsView = false)
+    Ea.dbind = false)
 
 /-- With no binding that runs a destructor, every call is safe. -/
 theorem CallDtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false)
@@ -716,7 +720,7 @@ theorem CallDtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor =
   ⟨fun _ _ => ⟨fun _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _,
       fun _ _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _⟩,
     fun _ _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _,
-    fun _ _ _ _ Ea hEa hd => by rw [(h _ Ea hEa).2] at hd; cases hd⟩
+    fun _ _ _ _ Ea hEa => (h _ Ea hEa).2⟩
 
 /-- A call that only borrows, and kills nothing by name, is safe. -/
 theorem CallDtorSafe.of_inp {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var}
