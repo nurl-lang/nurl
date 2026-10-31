@@ -1,0 +1,5 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+wycheproof ecdsa p384 sha384 der: 504 cases, 194 valid, 0 failures

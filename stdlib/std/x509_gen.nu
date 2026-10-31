@@ -29,6 +29,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
+$ `stdlib/std/x509.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/mldsa.nu`
@@ -251,41 +252,10 @@ $ `stdlib/std/time.nu`
 }
 
 // The inverse helper for consumers that need raw r||s back out of a DER
-// ECDSA-Sig-Value (e.g. verifying with ecdsa_p256_verify). Returns a
-// 64-byte r||s, or an empty vector on malformed input.
-@ x509_ecdsa_sig_rs ( Vec u ) sig_der → ( Vec u ) {
-    : ( Vec u ) out ( vec_new [u] )
-    : i n ( vec_len [u] sig_der )
-    ? < n 8 { ^ out } {}
-    // SEQ hdr (assume 2-byte or 1-byte-extended length), then two INTEGERs.
-    : ~ i pos 2
-    : i b1 ?? ( vec_get [u] sig_der 1 ) { T x → # i x F _ → 0 }
-    ? == b1 129 { = pos 3 } {}
-    : ~ i comp 0
-    ~ & < comp 2 < + pos 2 n {
-        : i tag ?? ( vec_get [u] sig_der pos ) { T x → # i x F _ → 0 }
-        : i len ?? ( vec_get [u] sig_der + pos 1 ) { T x → # i x F _ → 0 }
-        ? != tag 2 { = comp 2 = pos n } {
-            : ~ i s + pos 2
-            : ~ i l len
-            // strip the sign pad; left-pad short values to 32
-            ~ & > l 32 == ?? ( vec_get [u] sig_der s ) { T x → # i x F _ → 1 } 0 { = s + s 1 = l - l 1 }
-            ? > l 32 { = comp 2 = pos n } {
-                : ~ i pad - 32 l
-                ~ > pad 0 { ( vec_push [u] out # u 0 ) = pad - pad 1 }
-                : ~ i k 0
-                ~ < k l {
-                    ( vec_push [u] out ?? ( vec_get [u] sig_der + s k ) { T x → x F _ → # u 0 } )
-                    = k + k 1
-                }
-                = pos + + pos 2 len
-                = comp + comp 1
-            }
-        }
-    }
-    ? == ( vec_len [u] out ) 64 { ^ out } {}
-    ^ ( vec_new [u] )
-}
+// ECDSA-Sig-Value (e.g. verifying with ecdsa_p256_verify): a 64-byte r||s,
+// or an empty vector on anything but the one strict DER encoding — std/
+// x509's der_ecdsa_sig_rs (Agora #217).
+@ x509_ecdsa_sig_rs ( Vec u ) sig_der → ( Vec u ) { ^ ( der_ecdsa_sig_rs sig_der 32 ) }
 
 // Deterministic core: caller supplies the private scalar (32 bytes,
 // 1 <= d < n), the serial magnitude, the CN and the validity instants.
