@@ -27,7 +27,7 @@ bad=$(awk '
     }' "$SRC")
 
 if [ -n "$bad" ]; then
-    echo "check_bck_writes: g_bck written directly, past the walk logs:"
+    echo "check_bck_writes: g_bck written directly, past the fact digest:"
     printf '%s\n' "$bad" | sed 's/^/    /'
     echo
     echo "  Write g_bck through bck_put (set), bck_add_word or bck_add (append)."
