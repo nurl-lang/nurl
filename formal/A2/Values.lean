@@ -43,7 +43,7 @@ theorem hrefAt_iff {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} :
     HrefAt m dep c t H ↔ ∃ n0 d es, RootNode m dep.root n0 ∧
       Lands dep.kind (.node t c d es) n0 ∧
       WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
-      NamesIn (.node t c d es) H := Iff.rfl
+      NamesIn (.node t c d es) H ∧ SharesOK m (.vec t) (.node t c d es) := Iff.rfl
 
 theorem viewAt_iff {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} :
     ViewAt m dep d o l t ↔ ∃ n0 c es, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧
@@ -71,7 +71,7 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
       (E.mode.isRoot = true → RootNode m y (.node t c d es)) ∧
       (E.mode = .bor → ∃ dep ∈ E.path, ∃ n0, RootNode m dep.root n0 ∧
         Lands dep.kind (.node t c d es) n0) ∧
-      NamesIn (.node t c d es) E.held := by
+      NamesIn (.node t c d es) E.held ∧ SharesOK m (.vec t) (.node t c d es) := by
   rcases hi.mode_cases hy with hm | hm | hm
   · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
     obtain ⟨T, hT, hw, hv⟩ := hi.own_val hy hl hos
@@ -82,20 +82,21 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
       have ha := hi.heap.alloc y _ hT
       refine ⟨c, d, es, ⟨(ha c (by simp)).1, (ha d (by simp)).1, Or.inl hT⟩, WFv.node hes, hv,
         fun _ => Or.inl ⟨_, hT, Top.refl _⟩, (fun h => by rw [hm] at h; cases h),
-        hi.held y E _ _ hy hl hT rfl⟩
+        hi.held y E _ _ hy hl hT rfl,
+        by have := hi.shares y E _ _ hy hT rfl rfl; rw [ht] at this; exact this⟩
   all_goals
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
     obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
     rw [ht] at hok
     obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
-    obtain ⟨n0, d, es, hr, hla, hw, hvs, hns⟩ := hh
+    obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
     obtain ⟨o, T, hoT, hsT⟩ := hr.owned
     have hsub : Sub (.node t c d es) n0 := hla.sub
     have hna : NodeAt m c (.node t c d es) := ⟨o, T, hoT, hsub.trans hsT, t, d, es, rfl⟩
     have ha := hi.heap.alloc o T hoT
     refine ⟨c, d, es, ⟨(ha c ((hsub.trans hsT).ids c (by simp))).1,
       (ha d ((hsub.trans hsT).ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
-      fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns⟩
+      fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns, hsh⟩
 
 /-- The buffer a live slice binding views. -/
 theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
