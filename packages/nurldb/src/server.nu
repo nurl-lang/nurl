@@ -107,23 +107,45 @@ $ `exec.nu`
 // Serve `d` on `port` until the process is stopped.
 @ serve Db d s host i port → !v String {
     : TcpListener l ?? ( tcp_listen host port ) { T x → x F e → { ^ @ !v String { F ( string_concat ( string_from `nurldb: cannot listen: ` ) ( string_from ( net_err_name e ) ) ) } } }
+    ^ ( serve_on d l )
+}
+
+// Serve `d` on a listener the caller made — tcp_listen's, or a node's of
+// a simulated network (std/net_sim.nu's netsim_listen) — until it stops
+// accepting: closed, or its node crashed (netsim_crash). It returns once
+// the connections it accepted have ended too (a crashed node's end at
+// once), and the checkpointer with them, so nothing is using `d` then: a
+// test can crash it (db_crash) and reopen the directory as a restarted
+// server would. The checkpointer takes no last checkpoint on the way out
+// — what is committed is in the log, and a crash would not have taken one.
+@ serve_on Db d TcpListener l → !v String {
     : Atomic stop ( atomic_new 0 )
     : !Thread ThreadErr ck ( thread_spawn \ → v {
         ~ == ( atomic_load stop ) 0 {
             : ~ i k 0
             ~ & < k 300 == ( atomic_load stop ) 0 { ( sleep_ms 100 ) = k + k 1 }
-            ( db_checkpoint d )
+            ? == ( atomic_load stop ) 0 { ( db_checkpoint d ) } {}
         }
     } )
+    // The connections being served.
+    : ( Locked i ) live ( locked_new [i] 0 )
     ~ T {
         ?? ( tcp_accept l ) {
             T c → {
-                : !Thread ThreadErr t ( thread_spawn \ → v { ( __serve_conn d c ) } )
-                ?? t { T h → { ( thread_detach h ) } F _ → {} }
+                ( locked_update [i] live \ inout i n → v { = n + n 1 } )
+                : !Thread ThreadErr t ( thread_spawn \ → v {
+                    ( __serve_conn d c )
+                    ( locked_update [i] live \ inout i n → v { = n - n 1 } )
+                } )
+                ?? t {
+                    T h → { ( thread_detach h ) }
+                    F _ → { ( locked_update [i] live \ inout i n → v { = n - n 1 } ) }
+                }
             }
             F _ → { break }
         }
     }
+    : i _quiet ( locked_await [i i] live \ inout i n → ?i { ^ ? == n 0 @ ?i { T 0 } @ ?i { F 0 } } )
     ( atomic_store stop 1 )
     ?? ck { T h → { ( thread_join h ) } F _ → {} }
     ^ @ !v String { T 0 }
@@ -136,8 +158,13 @@ $ `exec.nu`
     LineReader r
 }
 
-@ client_connect s host i port → !Client String {
-    : TcpConn c ?? ( tcp_connect host port ) { T x → x F e → { ^ @ !Client String { F ( string_concat ( string_from `nurldb: cannot connect: ` ) ( string_from ( net_err_name e ) ) ) } } }
+@ client_connect s host i port → !Client String { ^ ( client_connect_with ( net_dialer_kernel ) host port ) }
+
+// The same, dialed through `dl` (std/net's NetDialer): the kernel's, or
+// a node of a simulated network (netsim_dialer), so a client runs over it
+// unchanged.
+@ client_connect_with NetDialer dl s host i port → !Client String {
+    : TcpConn c ?? ( net_dial dl host port 0 ) { T x → x F e → { ^ @ !Client String { F ( string_concat ( string_from `nurldb: cannot connect: ` ) ( string_from ( net_err_name e ) ) ) } } }
     ^ @ !Client String { T @ Client { ( mem_dup c ) ( line_reader c ) } }
 }
 
@@ -160,5 +187,12 @@ $ `exec.nu`
     }
     ^ @ !String String { T out }
 }
+
+// Every read and write of a statement waits at most `ms` (0: no limit,
+// the default). A statement whose answer does not come in time fails as
+// a lost connection — a server that crashed with the statement in hand
+// sends nothing more, and its peer would otherwise wait forever. The
+// connection is not used again: what it carries next is unknown.
+@ client_set_timeout inout Client cl i ms → v { ( tcp_set_timeout . cl c ms ) }
 
 @ client_close inout Client cl → v { ( tcp_close_conn . cl c ) }

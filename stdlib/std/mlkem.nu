@@ -600,28 +600,59 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 // One batch of `count` consecutive-nonce CBD polynomials into dst,
 // starting at nonce `n0`, four streams per sponge.
 simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
-    : ( Vec u ) o0 ( vec_new [u] )
-    : ( Vec u ) o1 ( vec_new [u] )
-    : ( Vec u ) o2 ( vec_new [u] )
-    : ( Vec u ) o3 ( vec_new [u] )
+    : i olen * 64 eta
+    : ( Vec u ) o0 ( vec_zeroed [u] olen )
+    : ( Vec u ) o1 ( vec_zeroed [u] olen )
+    : ( Vec u ) o2 ( vec_zeroed [u] olen )
+    : ( Vec u ) o3 ( vec_zeroed [u] olen )
+    // PRF_η(s, N) is SHAKE256(s ‖ N): 33 bytes in, 64·η out. Where the
+    // output fits one rate block (η = 2: every ML-KEM-768 and -1024
+    // stream) a group of four is ONE four-way permutation, run by
+    // shake256x4_block on a state and a stage made once for the batch,
+    // instead of a sponge object, its two lane vectors and four nonce
+    // vectors per group.
+    : b one & <= olen 136 == ( vec_len [u] seed ) 32
+    : ( Vec u64 ) st ( vec_zeroed [u64] ? one 100 0 )
+    : ( Vec u64 ) scr ( vec_zeroed [u64] ? one 100 0 )
+    : ( Vec u ) stage ( vec_with_cap [u] ? one 132 0 )
+    ? one {
+        : ~ i w 0
+        ~ < w 4 { ( bytes_extend_bytes stage seed ) ( vec_push [u] stage # u 0 ) = w + w 1 }
+    } {}
     : ~ i g 0
     ~ < g count {
-        : b z0 ( vec_set_len [u] o0 0 )
-        : b z1 ( vec_set_len [u] o1 0 )
-        : b z2 ( vec_set_len [u] o2 0 )
-        : b z3 ( vec_set_len [u] o3 0 )
-        ? ! & & & z0 z1 z2 z3 { = g count } {
-            : i m1 ? < + g 1 count + g 1 - count 1
-            : i m2 ? < + g 2 count + g 2 - count 1
-            : i m3 ? < + g 3 count + g 3 - count 1
+        : i m1 ? < + g 1 count + g 1 - count 1
+        : i m2 ? < + g 2 count + g 2 - count 1
+        : i m3 ? < + g 3 count + g 3 - count 1
+        ? one {
+            : b s0 ( vec_set [u] stage 32 # u + n0 g )
+            : b s1 ( vec_set [u] stage 65 # u + n0 m1 )
+            : b s2 ( vec_set [u] stage 98 # u + n0 m2 )
+            : b s3 ( vec_set [u] stage 131 # u + n0 m3 )
+            ( __cbd_prf_block st scr stage o0 o1 o2 o3 olen )
+        } {
+            : b z0 ( vec_set_len [u] o0 0 )
+            : b z1 ( vec_set_len [u] o1 0 )
+            : b z2 ( vec_set_len [u] o2 0 )
+            : b z3 ( vec_set_len [u] o3 0 )
             ( __mlkem_prf_x4 seed + n0 g + n0 m1 + n0 m2 + n0 m3 eta o0 o1 o2 o3 )
-            ( __cbd dst * 256 g o0 eta )
-            ? < + g 1 count { ( __cbd dst * 256 + g 1 o1 eta ) } {}
-            ? < + g 2 count { ( __cbd dst * 256 + g 2 o2 eta ) } {}
-            ? < + g 3 count { ( __cbd dst * 256 + g 3 o3 eta ) } {}
-            = g + g 4
         }
+        ( __cbd dst * 256 g o0 eta )
+        ? < + g 1 count { ( __cbd dst * 256 + g 1 o1 eta ) } {}
+        ? < + g 2 count { ( __cbd dst * 256 + g 2 o2 eta ) } {}
+        ? < + g 3 count { ( __cbd dst * 256 + g 3 o3 eta ) } {}
+        = g + g 4
     }
+}
+
+// The four 33-byte PRF inputs staged at `stage` (seed ‖ nonce, 33 bytes
+// apart) through one four-way SHAKE256 permutation into o0 … o3, `olen`
+// (≤ 136) bytes each; all the buffers are __cbd_batch's.
+unsafe @ __cbd_prf_block ( Vec u64 ) st ( Vec u64 ) scr ( Vec u ) stage ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 i olen → v {
+    : *u sp ( vec_data [u] stage )
+    ( shake256x4_block ( vec_data [u64] st ) ( vec_data [u64] scr ) ( keccak_rc_shared )
+    sp # *u + # i sp 33 # *u + # i sp 66 # *u + # i sp 99 33
+    ( vec_data [u] o0 ) ( vec_data [u] o1 ) ( vec_data [u] o2 ) ( vec_data [u] o3 ) olen )
 }
 
 // SamplePolyCBD_η (FIPS 203 Algorithm 8): each coefficient is the

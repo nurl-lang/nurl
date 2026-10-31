@@ -84,6 +84,24 @@ theorem catchOK_wrap {m : Mem} (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base 
     obtain ⟨pm, t⟩ := p
     cases pm <;> simp [wrapParams, CatchOK, ih]
 
+/-- A2-drop.2: a statement whose running scopes bind no `letd` binding
+    keeps every frame's destructor views: there is none. -/
+theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
+    (h : ∀ v ∈ s.spine, ∀ E, Γ v = some E → E.dbind = false) : DtorPinOK Γ s := by
+  have hin : ∀ x k, (∀ E, Γ x = some E → E.dbind = false) → DtorIn Γ x k :=
+    fun x k hx E hE hd => by rw [hx E hE] at hd; cases hd
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope x k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | scopeD x _ k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | rbind p k ih =>
+    exact ⟨hin p k (h p (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | _ => trivial
+
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {m : Mem}
 
@@ -91,6 +109,48 @@ theorem body_spine (h : CallH P Γ F x fn args m.nv) :
     (fn.body.rename (callRen fn.params args m.nv)).spine = [] := by
   obtain ⟨hsrc, _⟩ := h.fnok
   exact src_spine (by rw [RSetup.src_rename]; exact hsrc)
+
+/-- A caller binding other than `x` is none of the call's running scopes. -/
+theorem not_spine (h : CallH P Γ F x fn args m.nv) {k : Stmt} {r : Var} (hrlt : r < m.nv) (hrx : r ≠ x) :
+    r ∉ (callStmt fn args m.nv x k).spine := by
+  intro hrs
+  rw [callStmt_spine, h.body_spine, List.append_nil] at hrs
+  rcases List.mem_cons.mp hrs with h1 | h1
+  · exact hrx h1
+  rcases List.mem_cons.mp h1 with h2 | h2
+  · rw [h2] at hrlt; exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hrlt)
+  · obtain ⟨k', _, _, _, he⟩ := mem_wrapSpine h2
+    rw [he] at hrlt
+    exact Nat.lt_irrefl _
+      (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_add_right m.nv 0) (Nat.le_add_right _ k')) hrlt)
+
+/-- The call's running scopes bind none that `letd` made. -/
+theorem spine_dbind (h : CallH P Γ F x fn args m.nv) {k : Stmt} :
+    ∀ v ∈ (callStmt fn args m.nv x k).spine, ∀ E,
+      (callS Γ F fn args m.nv x).canon (sigCtx fn) v = some E → E.dbind = false := by
+  intro v hv E hE
+  cases hd : E.dbind with
+  | false => rfl
+  | true =>
+    exfalso
+    obtain ⟨hren, hvx, _⟩ := h.dbind_frame hE hd
+    rw [callStmt_spine, h.body_spine, List.append_nil] at hv
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact hvx rfl
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact hren fn.params.length (ren_res fn args m.nv)
+    · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
+      apply hren k'
+      unfold callRen; rw [hk']
+      obtain ⟨pm, t⟩ := p
+      cases pm with
+      | inout b => exact absurd rfl (hp b)
+      | _ => simp
+
+/-- A2-drop.2: the call gives no binding `letd` made a new view. -/
+theorem post_dkeep (h : CallH P Γ F x fn args m.nv) : DKeep Γ (callPost Γ fn args) [] :=
+  (DKeep.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DKeep.refl Γ [])
+    fun j hj b hb Ea ha hd => absurd hd (by rw [h.dsafe.2.2 j hj b hb Ea ha]; simp)).killNames _
 
 theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) : Covers (callMem m m1 fn x) := by
@@ -125,6 +185,14 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
   pinIn := by
     show PinOK _ (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
     exact pinOK_wrap (h.minv hi.toMInv hb).rootbLt (PinOK.of_spine_nil h.body_spine) h.body_spine _ _ _
+  dtorIn := DtorPinOK.of_spine_dbind h.spine_dbind
+  dtorOut v E hv hd hos hn _ d hdd hnm := by
+    -- a caller binding: what it views in memory is bound in the caller
+    obtain ⟨_, _, E1, h1, rfl⟩ := h.dbind_frame hv hd
+    rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos
+    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+    obtain ⟨Er, hEr, _⟩ := h.postwf.dtor v E1 h1 hd hos hn1 d (Entry.clean_vdeps_sub hdd) hnm
+    exact h.not_spine (h.post_lt hEr) (h.post_ne_x hEr)
   pinOut p E hp hrb hns r hr hrs := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
         ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
@@ -146,15 +214,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       obtain ⟨Er, hEr, _⟩ := h.wf p E1' h0 (hi.rootbLive p E1' h0 (hm ▸ hrb)) (Or.inr (hm ▸ hrb)) r hr
       have hrlt : r < m.nv := hi.nvSt r (by rw [← hi.dom r, hEr]; rfl)
       have hrx : r ≠ x := fun e => by subst e; rw [h.fresh] at hEr; cases hEr
-      rw [callStmt_spine, h.body_spine, List.append_nil] at hrs
-      rcases List.mem_cons.mp hrs with h1 | h1
-      · exact hrx h1
-      rcases List.mem_cons.mp h1 with h2 | h2
-      · rw [h2] at hrlt; exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hrlt)
-      · obtain ⟨k', _, _, _, he⟩ := mem_wrapSpine h2
-        rw [he] at hrlt
-        exact Nat.lt_irrefl _
-          (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_add_right m.nv 0) (Nat.le_add_right _ k')) hrlt)
+      exact h.not_spine hrlt hrx hrs
   nvS v hv := by
     obtain ⟨_, hnv, hvars, _⟩ := h.fnok
     show v < m.nv + fn.nvars
@@ -241,7 +301,7 @@ theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     · exact Or.inr (Nat.le_add_right _ _)
     · obtain ⟨_, _, _, _, rfl⟩ := mem_wrapSpine hv
       exact Or.inr (by omega)
-  refine ⟨fun v E hv _ => ⟨fun hs => ?_, ?_⟩, fun v E' hv hs => ⟨by simp [Stmt.spine], ?_⟩⟩
+  refine ⟨fun v E hv _ => ⟨fun hs => ?_, ?_⟩, fun v E' hv hs => ⟨by simp [Stmt.spine], ?_⟩, ?_⟩
   · rcases hspine v hs with rfl | hle
     · rw [h.fresh] at hv; cases hv
     · exact absurd (h.domlt v E hv) (Nat.not_lt.mpr hle)
@@ -287,6 +347,13 @@ theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
       have := h.postdm.1 v; rw [h1] at this
       exact Option.isSome_iff_exists.mp this.symm
     · rw [hc] at hv; cases hv
+  · -- a binding `letd` made is a caller's, viewing no more than before the call
+    intro v E' hv hd hos hn _
+    obtain ⟨_, _, E1, h1, rfl⟩ := h.dbind_frame hv hd
+    rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos
+    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+    obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h.post_dkeep v E1 h1 hd hos hn1 (by simp)
+    exact ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => hs0 d (Entry.clean_vdeps_sub hdd) hnm⟩
 
 end CallH
 
@@ -411,9 +478,10 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   obtain ⟨hn1, hEn, _⟩ := CallT.names hP hc hi.names
   have hx1 : callPost Γ fn args x = none := by
     have := hdm.1 x; rw [hx] at this; cases h' : callPost Γ fn args x <;> simp_all
-  obtain ⟨fn', hf', hlen, hargs, hnf, _⟩ := hc
+  obtain ⟨fn', hf', hlen, hargs, hnf, hds, _⟩ := hc
   rw [hf] at hf'; cases hf'
   exact {
+    dsafe := hds
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen
@@ -442,10 +510,10 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
   cases hst with
   | letcall hf hmx hb =>
     rename_i m1 fn
-    obtain ⟨fn', hf', hlen, hargs, hnf, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
-      ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
     have h := callH_of hP hf hx hxF hc' hi
     exact ⟨_, h.typed hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
 
@@ -475,12 +543,12 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
   | letrec hf' _ hmx =>
     rename_i fn'
     rw [hf] at hf'; cases hf'
-    obtain ⟨fn', hf'', hlen, hargs, hnf, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf'', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
     rw [hf] at hf''; cases hf''
     have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) :=
-      ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
-      hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial trivial
+      hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial trivial trivial
     have h := callH_of hP hf hx hxF hc' hi'
     have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
     have hI := h.inv hi' hb
@@ -535,7 +603,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           exact absurd hr (resMode_ne' fn)
         · have hvs' : v ∉ (callStmt fn [] m.nv x k).spine := by
             simp only [callStmt, Stmt.spine, List.mem_cons, not_or]; exact ⟨hvx, hvs⟩
-          obtain ⟨_, E0, h0⟩ := hkeep.2 v Ev hv hvs'
+          obtain ⟨_, E0, h0⟩ := hkeep.2.1 v Ev hv hvs'
           obtain ⟨_, E1, h1, hm1, ht1, hrb1⟩ := hkeep.1 v E0 h0 (by simp [Stmt.spine])
           rw [hv] at h1; cases h1
           refine ⟨E0, by simp [setE, upd_ne _ _ hvx, h0], hm1.symm, ht1.symm, fun hr => ?_⟩
@@ -547,13 +615,21 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           obtain ⟨hvs, E1, h1, _⟩ := hkeep.1 v Ev hv (by simp [Stmt.spine])
           refine ⟨fun hm => hvs ?_, E1, h1⟩
           simp only [callStmt, Stmt.spine, List.mem_cons]; exact Or.inr hm
+    -- A2-drop.2: a caller binding `letd` made is one where the frame returns
+    have hDS : DStay ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))
+        (callIn fn [] m.nv x).spine := by
+      intro v Ev hv hd hos _
+      obtain ⟨_, hvx, E1, h1, rfl⟩ := h.dbind_frame hv hd
+      rw [hpost] at h1
+      exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
+        by rwa [clean_mode] at hos⟩
     have hcatch : StmtT P ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
-      StmtT.catchR hxF hIn hM hanchΔ hKO
+      StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩
-      hI.pinIn
+      hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv
       · simp [callStmt, Stmt.vars]

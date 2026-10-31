@@ -105,14 +105,14 @@ The report is written to `TORTURE_RESULTS.md`; the scratch directory
 `tls_resume.py` are the two probes bash can't express; `lib.py` extracts
 the oha JSON fields.
 
-## Whose numbers are in `TORTURE_RESULTS.md`
+## Whose numbers are in [`TORTURE_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/http_torture/TORTURE_RESULTS.md)
 
-The committed table is whatever the **`http-torture` GitHub Action** last
-wrote: a full run on an `ubuntu-latest` runner (4 vCPUs — servers on
-cores 0-1, the generator on 2-3), committed to `main` the same way
-`bench/HTTP_RESULTS.md` and `bench/PQ_RESULTS.md` are. Its header names
+The published table is whatever the **`http-torture` GitHub Action** last
+wrote: a full run of main on an `ubuntu-latest` runner (4 vCPUs — servers
+on cores 0-1, the generator on 2-3), published to the `bench-data` branch
+the same way `bench/HTTP_RESULTS.md` and `bench/PQ_RESULTS.md` are. Its header names
 the host and links the run. Absolute numbers there are a fraction of a
 workstation's; read the two servers against each other on the same
 cores. Workstation runs (12 threads, servers on 0-5 / generator on 6-11)
 are posted in the pull requests that changed the numbers (#1053, #1054,
-#1055), not committed. When citing a cell, say which host produced it.
+#1055), not published. When citing a cell, say which host produced it.

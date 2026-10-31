@@ -5,19 +5,29 @@ import A2.Basic
 namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
-  refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩⟩
+  refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
+    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
-  obtain ⟨t1, m1, r1, l1⟩ := h1
-  obtain ⟨t2, m2, r2, l2⟩ := h2
-  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_⟩
+  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1⟩ := h1
+  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2⟩ := h2
+  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_, b2.trans b1, fun h => ?_,
+    fun h hos hn d hnm => (k2 (by rw [b1]; exact h) (by rw [m1]; exact hos) (by rw [t1, m1]; exact hn) d hnm).trans
+      (k1 h hos hn d hnm)⟩
+  rotate_right
+  · rcases a2 h with h2 | h2
+    · exact a1 h2
+    · exact Or.inr (b1 ▸ h2)
   · have e12 := r1 h; subst e12; exact r2 h
   · obtain ⟨a2, p2, h2'⟩ := l2 h
     obtain ⟨a1, p1, h1'⟩ := l1 a2
     refine ⟨a1, fun ho => ?_, h1'.trans h2'⟩
     have ho2 : E2.mode.ownSlot = false := by rw [m1]; exact ho
     exact (p1 ho).trans (p2 ho2)
+  · obtain ⟨h2d, h12⟩ := d1 h
+    obtain ⟨h3d, h23⟩ := d2 h2d
+    exact ⟨h3d, h12.trans h23⟩
 
 theorem Weaker.refl {Γ : Ctx} (h : CtxWF Γ) (hn : NameWF Γ) : Weaker Γ Γ := by
   refine ⟨fun v => ⟨Iff.rfl, fun E E' h1 h2 => ?_⟩, h, hn⟩
@@ -149,7 +159,29 @@ theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) 
 
 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
-    (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.2.1 hw.2.2.2
+    (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.mode hw.live
+
+theorem ArmOK.of_none {m : Mem} {E : Entry} {sl : Slot} (h : sl.val = none) : ArmOK m E sl :=
+  fun _ _ T hT => by rw [h] at hT; cases hT
+
+theorem ArmOK.of_dbind {m : Mem} {E : Entry} {sl : Slot} (h : E.dbind = false) : ArmOK m E sl :=
+  fun hd => by rw [h] at hd; cases hd
+
+/-- An entry that is the same binding, of the same type and mode, armed when
+    the other is and viewing at least what it views in memory, keeps it. -/
+theorem ArmOK.entry {m : Mem} {E E' : Entry} {sl : Slot} (hdb : E'.dbind = E.dbind) (ht : E'.ty = E.ty)
+    (hm : E'.mode = E.mode) (hdt : E.dtor = true → E'.dtor = true) (hh : A2.memDeps E.held ⊆ E'.held)
+    (h : ArmOK m E sl) : ArmOK m E' sl := by
+  intro hd hos T hT
+  obtain ⟨h1, h2⟩ := h (by rw [← hdb]; exact hd) (by rw [← hm]; exact hos) T hT
+  exact ⟨hdt h1, by rw [ht]; exact h2.memDeps.mono hh⟩
+
+theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E') (h : ArmOK m E sl) :
+    ArmOK m E' sl := by
+  intro hd hos T hT
+  obtain ⟨hdt, hv⟩ := h (by rw [← hw.dbind]; exact hd) (by rw [← hw.mode]; exact hos) T hT
+  obtain ⟨hdt', hsub⟩ := hw.dtor hdt
+  exact ⟨hdt', by rw [hw.ty]; exact hv.mono hsub⟩
 
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
@@ -161,22 +193,25 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   nvSt := hi.nvSt
   noInout v E' b hv := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    rw [hwe.2.1]; exact hi.noInout v E b hE
+    rw [hwe.mode]; exact hi.noInout v E b hE
   wf := hw.wf
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLive p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.rootbLive p E hE hm'
   rootbLt p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLt p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.rootbLt p E hE hm'
   names := hw.names
   held v E' sl T hv hl hsl hT := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    obtain ⟨hl0, _, hh⟩ := hwe.2.2.2 hl
+    obtain ⟨hl0, _, hh⟩ := hwe.live hl
     exact (hi.held v E sl T hE hl0 hsl hT).mono hh
   pkgs := hi.pkgs
+  armed v E' sl hv hsl := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact (hi.armed v E sl hE hsl).weaker hwe
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where
@@ -185,8 +220,8 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   nvF := hi.nvF
   anch p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.anch p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.anch p E hE hm'
   spineNd := hi.spineNd
   spineDom v hv := by
     obtain ⟨E, hE⟩ := hi.spineDom v hv
@@ -196,12 +231,28 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   cover := hi.cover
   pinOut p E' hp hm hps := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.pinOut p E hE hm' hps
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.pinOut p E hE hm' hps
   pinIn := hi.pinIn.of_rootb fun p E' hp hm => by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hE
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hE
+  dtorOut v E' hv hd hos hn hvs d hdd hnm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
+    have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+    have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
+    refine hi.dtorOut v E hE hd0 hos0 hn0 hvs d ?_ hnm
+    simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
+    exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
+  dtorIn := hi.dtorIn.of_dbind fun v E' hv hd hos hn => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
+    have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+    have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
+    refine ⟨E, hE, hd0, hos0, hn0, fun d hdd hnm => ?_⟩
+    simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
+    exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

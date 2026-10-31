@@ -875,5 +875,15 @@ $ `btree.nu`
     ( wal_close . . ( db_impl d ) st wal )
 }
 
+// The database as a killed process leaves it: the log's flusher writes
+// what it was handed and stops, nothing is checkpointed, and the pages
+// the buffer pool holds dirty are never written. db_open on the
+// directory then recovers from the log, as after a crash — inside one
+// process, for a test that crashes a server on a simulated network
+// (std/net_sim.nu's netsim_crash) and restarts it. Consumes this handle;
+// no session may still be using a copy (serve_on returns only once its
+// connections have ended).
+@ db_crash sink Db d → v { ( wal_close . . ( db_impl d ) st wal ) }
+
 // Statements run under the checkpoint latch, shared.
 @ db_stmt_latch Db d → ( RGuard i ) { ^ ( rw_read [i] . ( db_impl d ) ckpt ) }

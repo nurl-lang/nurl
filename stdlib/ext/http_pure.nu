@@ -27,9 +27,14 @@
 //     it reusable (framed body fully read, no `Connection: close`, no
 //     stray bytes) — the pool an HTTP client builds on.
 //   * Timeouts: `hp_conn_set_timeout` puts a read/write deadline on the
-//     socket (SO_RCVTIMEO/SO_SNDTIMEO through nurl_tcp_set_timeout), and
-//     a deadline that fires surfaces as error 2 (timeout), distinct from
-//     a dead peer.
+//     connection (tcp_set_timeout; the TLS socket's own on https), and a
+//     deadline that fires surfaces as error 2 (timeout), distinct from a
+//     dead peer.
+//   * Dialing: a plaintext transport is a std/net TcpConn that a
+//     NetDialer made (`hp_conn_open_with`; `hp_conn_open` is the kernel's
+//     dialer), so the same client runs over a simulated network
+//     (std/net_sim.nu's netsim_dialer). TLS is the kernel's only, until a
+//     TLS connection can run over a dialed one (#250).
 //
 // Error codes are the NURL_HTTP_ERR_* integers from stdlib/runtime.c §14
 // (0 ok, 1 connect, 2 timeout, 3 tls, 4 dns, 5 invalid-url, 6 other,
@@ -48,24 +53,22 @@ $ `stdlib/core/rcbox.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/mem.nu`
 
-// nurl_tcp_connect/read/write/close are compiler builtins (declared by
-// nurlc); tls_* come from tls.nu; the rest (malloc/strdup/nurl_*) are
-// builtins too.
-& `libc` @ nurl_tcp_connect s host i port → i
+// tls_* come from tls.nu; the rest (malloc/strdup/nurl_*) are builtins.
 
 // ── Transport ───────────────────────────────────────────────────────
 
-// Sealed (`raw`): `fd` is a runtime socket handle its drop closes.
+// Sealed (`raw`): `tcp` and `tc` may be null handles (the other kind's).
 raw : HttpConnImpl {
     i is_tls
-    i fd  // plaintext socket; 0 once closed
+    TcpConn tcp  // plaintext connection; a null handle on TLS
+    b live  // the plaintext connection is open (hp_conn_close ends it)
     TlsConn tc  // TLS connection; a null handle on plaintext / once closed
     String skey  // "host:port" — the session-cache key for this transport
 }
 
 // The last owner closes a transport nobody closed (hp_conn_close).
 % Drop HttpConnImpl {
-    @ drop HttpConnImpl x → v { ( __hp_conn_shut . x is_tls . x fd . x tc . x skey ) }
+    @ drop HttpConnImpl x → v { ( __hp_conn_shut . x is_tls . x tcp . x live . x tc . x skey ) }
 }
 
 // An HttpConn is a handle on its transport in an rcbox
@@ -82,9 +85,13 @@ raw : HttpConnImpl {
 
 @ __HttpConn_ptr HttpConn h → *HttpConnImpl { ^ ( shared_ptr [HttpConnImpl] . h ctl ) }
 
-@ __hp_conn_new i is_tls i fd sink TlsConn tc String skey → HttpConn {
-    ^ @ HttpConn { ( shared_new [HttpConnImpl] @ HttpConnImpl { is_tls fd tc skey } ) }
+@ __hp_conn_new i is_tls sink TcpConn tcp sink TlsConn tc String skey → HttpConn {
+    ^ @ HttpConn { ( shared_new [HttpConnImpl] @ HttpConnImpl { is_tls tcp == is_tls 0 tc skey } ) }
 }
+
+@ __hp_no_tcp → TcpConn { ^ @ TcpConn { ( shared_null [TcpConnImpl] ) } }
+
+@ __hp_no_tls → TlsConn { ^ @ TlsConn { ( shared_null [TlsConnImpl] ) } }
 
 // ── TLS session cache ───────────────────────────────────────────────
 //
@@ -191,28 +198,46 @@ raw : HttpConnImpl {
 // Open a transport to host:port. is_https selects the TLS stack; verify
 // chooses verify-full vs the insecure (no cert check) escape hatch.
 @ hp_conn_open i is_https s host i port s sni i verify → !HttpConn i {
+    ^ ( hp_conn_open_with ( net_dialer_kernel ) is_https host port sni verify )
+}
+
+// The same, the transport dialed through `d` (std/net NetDialer) — the
+// kernel's, or a simulated network's. https runs over what `d` dials too
+// (TLS over std/net's transports, agora #250).
+@ hp_conn_open_with NetDialer d i is_https s host i port s sni i verify → !HttpConn i {
     : String skey ( __hp_sess_key host port )
     ? != is_https 0 {
         // Offer the cached session, if any: an empty blob is exactly
         // the full handshake, a declined one falls back to it.
         : ( Vec u ) sess ( __hp_sess_get skey )
-        : !TlsConn TlsErr r ? != verify 0
+        : !TlsConn TlsErr r ? ( net_dialer_is_kernel d ) ? != verify 0
         ( tls_connect_resume host port sni sess )
-        ( tls_connect_insecure_resume host port sni sess )
+        ( tls_connect_insecure_resume host port sni sess ) ( __hp_tls_dialed d host port sni sess verify )
         ?? r {
             F e → ^ @ !HttpConn i { F ( __hp_tls_err # i e ) }
             T tc → ^ @ !HttpConn i { T ( __hp_conn_new 1 0 tc skey ) }
         }
     } {}
-    : i fd ( nurl_tcp_connect host port )
-    ? <= fd 0 { ^ @ !HttpConn i { F 1 } } {}
-    // A failed connect still hands back a handle — carrying the error,
-    // with no socket. Reading it used to report "closed" one call later.
-    ? != ( nurl_tcp_err_kind fd ) 0 {
-        ( nurl_tcp_close fd )
-        ^ @ !HttpConn i { F 1 }
-    } {}
-    ^ @ !HttpConn i { T ( __hp_conn_new 0 fd @ TlsConn { ( shared_null [TlsConnImpl] ) } skey ) }
+    ?? ( net_dial d host port 0 ) {
+        T tcp → { ^ @ !HttpConn i { T ( __hp_conn_new 0 tcp ( __hp_no_tls ) skey ) } }
+        F _ → { ^ @ !HttpConn i { F 1 } }
+    }
+}
+
+// TLS to host:port over a connection `d` dials (not the kernel's).
+@ __hp_tls_dialed NetDialer d s host i port s sni ( Vec u ) sess i verify → !TlsConn TlsErr {
+    ?? ( net_dial d host port 0 ) {
+        T conn → { ^ ( tls_attach_conn conn sni `` sess != verify 0 0 ) }
+        F _ → { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } }
+    }
+}
+
+// A TLS write or read failed: 1 when it was the deadline. A connection
+// over another transport has no socket to ask, and reports its timeouts
+// as failures.
+@ __hp_tls_timed_out TlsConn tc → b {
+    : i fd ( tls_socket tc )
+    ^ & > fd 0 == ( nurl_tcp_err_kind fd ) 7
 }
 
 // Wrap a TLS connection the caller established itself (for instance
@@ -220,7 +245,7 @@ raw : HttpConnImpl {
 // ticket it receives is cached for host:port when the conn closes, like
 // the ones hp_conn_open opens.
 @ hp_conn_from_tls TlsConn tc s host i port → HttpConn {
-    ^ ( __hp_conn_new 1 0 tc ( __hp_sess_key host port ) )
+    ^ ( __hp_conn_new 1 ( __hp_no_tcp ) tc ( __hp_sess_key host port ) )
 }
 
 // The cached resumption session for host:port (empty when none): what a
@@ -243,8 +268,12 @@ raw : HttpConnImpl {
 // 2 (timeout) from hp_conn_read_some / the stream state.
 @ hp_conn_set_timeout HttpConn c__h i ms → v {
     : *HttpConnImpl c ( __HttpConn_ptr c__h )
-    : i fd ? != . c is_tls 0 ( tls_socket . c tc ) . c fd
-    ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } {}
+    ? != . c is_tls 0 {
+        : i fd ( tls_socket . c tc )
+        ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } { ( tls_transport_set_timeout . c tc ms ) }
+        ^ v
+    } {}
+    ? . c live { ( tcp_set_timeout . c tcp ms ) } {}
 }
 
 // Write all of `data` to the transport. Returns 0 on success, else a
@@ -254,14 +283,16 @@ raw : HttpConnImpl {
     ? != . c is_tls 0 {
         ?? ( tls_write . c tc data ) {
             T _ → ^ 0
-            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 2 6
+            F _ → ^ ? ( __hp_tls_timed_out . c tc ) 2 6
         }
     } {}
-    // Context-aware (tls.nu's plaintext writer): on a fiber an EAGAIN
-    // parks on the reactor instead of blocking the worker.
-    : i fd . c fd
-    ? ( _tls_sock_write fd data ) { ^ 0 } {}
-    ^ ? == ( nurl_tcp_err_kind fd ) 7 2 6
+    // std/net's writer is context-aware: on a fiber an EAGAIN parks on
+    // the reactor instead of blocking the worker.
+    ? ! . c live { ^ 6 } {}
+    ?? ( tcp_write_all . c tcp data ) {
+        T _ → { ^ 0 }
+        F e → { ^ ?? e { NetTimeout → 2 _ → 6 } }
+    }
 }
 
 // Read one chunk from the transport, appending to `acc`. Returns:
@@ -273,7 +304,7 @@ raw : HttpConnImpl {
     : *HttpConnImpl c ( __HttpConn_ptr c__h )
     ? != . c is_tls 0 {
         ?? ( tls_read . c tc 16384 ) {
-            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 -2 -1
+            F _ → ^ ? ( __hp_tls_timed_out . c tc ) -2 -1
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ? > got 0 { ( bytes_extend_bytes acc chunk ) } {}
@@ -281,27 +312,14 @@ raw : HttpConnImpl {
             }
         }
     } {}
-    : i fd . c fd
-    // Straight into acc's spare capacity: no scratch buffer, no copy.
-    ( vec_reserve [u] acc 16384 )
-    : i len ( vec_len [u] acc )
-    : *u dp ( vec_data [u] acc )
-    // Context-aware, as tls.nu's record reader: on a fiber the socket is
-    // non-blocking and an EAGAIN parks on the reactor (honouring the
-    // hp_conn_set_timeout deadline) — a plain blocking read here held
-    // the worker, and every fiber queued on it, until the server spoke.
-    : b on_fiber != ( nurl_fiber_current ) 0
-    ? on_fiber { ( nurl_tcp_set_nonblock fd 1 ) } {}
-    : ~ i n ( nurl_tcp_read fd # s + # i dp len 16384 )
-    ~ & on_fiber & < n 0 == ( nurl_tcp_err_kind fd ) 7 {
-        ? ( _tls_io_wait fd 0 ) {
-            = n ( nurl_tcp_read fd # s + # i dp len 16384 )
-        } { ^ -2 }
+    // Straight into acc's spare capacity (tcp_read_into), context-aware:
+    // on a fiber an EAGAIN parks on the reactor, honouring the
+    // hp_conn_set_timeout deadline, instead of holding the worker.
+    ? ! . c live { ^ -1 } {}
+    ?? ( tcp_read_into . c tcp acc 16384 ) {
+        T n → { ^ ? > n 0 1 0 }
+        F e → { ^ ?? e { NetClosed → 0 NetTimeout → -2 _ → -1 } }
     }
-    ? < n 0 { ^ ? == ( nurl_tcp_err_kind fd ) 7 -2 -1 } {}
-    ? == n 0 { ^ 0 } {}
-    ( vec_set_len [u] acc + len n )
-    ^ 1
 }
 
 // Close the transport now (every copy of the handle sees it closed)
@@ -309,14 +327,14 @@ raw : HttpConnImpl {
 @ hp_conn_close HttpConn c__h → v {
     ? == 0 # i . c__h ctl { ^ v } {}
     : *HttpConnImpl c ( __HttpConn_ptr c__h )
-    ( __hp_conn_shut . c is_tls . c fd . c tc . c skey )
-    = . c fd 0
+    ( __hp_conn_shut . c is_tls . c tcp . c live . c tc . c skey )
+    = . c live F
     // the closed TLS connection leaves the transport (a store through the
     // pointer drops nothing, so it is taken out first)
-    = . c tc @ TlsConn { ( shared_null [TlsConnImpl] ) }
+    = . c tc ( __hp_no_tls )
 }
 
-@ __hp_conn_shut i is_tls i fd TlsConn tc String skey → v {
+@ __hp_conn_shut i is_tls TcpConn tcp b live TlsConn tc String skey → v {
     ? != is_tls 0 {
         ? != # i . tc ctl 0 {
             // Keep the ticket this connection received for the next one.
@@ -325,7 +343,7 @@ raw : HttpConnImpl {
             ( tls_close tc )
         } {}
     } {
-        ? > fd 0 { ( nurl_tcp_close fd ) } {}
+        ? live { ( tcp_close_conn tcp ) } {}
     }
 }
 

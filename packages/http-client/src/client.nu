@@ -159,6 +159,7 @@ $ `stdlib/core/slice.nu`
     // Evidence from the most recent request.
     i last_proto  // 1 h1, 2 h2, 3 h3, 0 none yet
     i last_pq  // 1 = post-quantum key exchange
+    NetDialer dialer  // how a plaintext origin is reached (std/net); the kernel's by default
 }
 
 // An HttpClient is a handle on its state in a Locked (stdlib/std/thread.nu):
@@ -177,7 +178,7 @@ $ `stdlib/core/slice.nu`
 @ http_client_new → HttpClient {
     ^ @ HttpClient { ( locked_new [HttpClientImpl] @ HttpClientImpl {
             ( cookie_jar_new ) ( vec_new [HcOriginImpl] ) 1 1 10 30000 1 0
-            ( string_from `nurl-http-client/0.1` ) 0 0 0 1 } ) }
+            ( string_from `nurl-http-client/0.1` ) 0 0 0 1 ( net_dialer_kernel ) } ) }
 }
 
 // ── Configuration (chainable-by-mutation) ─────────────────────────────
@@ -200,6 +201,19 @@ $ `stdlib/core/slice.nu`
 @ http_client_set_max_redirects HttpClient c__h i n → v {
     : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c max_redirects n
+    ( locked_restore [HttpClientImpl] . c__h l c )
+}
+
+// Reach plaintext origins through `d` (std/net NetDialer) instead of the
+// kernel's TCP — say, a node of a simulated network (std/net_sim.nu's
+// netsim_dialer), so the same client runs over it unchanged. Connections
+// the client already holds stay as they are. https runs over the dialed
+// connection too (TLS over std/net's transports, agora #250), as HTTP/1.1
+// for now; HTTP/3 (UDP) is not tried through another dialer — never a
+// quiet detour over the real network.
+@ http_client_set_dialer HttpClient c__h NetDialer d → v {
+    : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
+    = . c dialer ( NetDialer_share d )
     ( locked_restore [HttpClientImpl] . c__h l c )
 }
 
@@ -342,6 +356,14 @@ $ `stdlib/core/slice.nu`
 
 // ── Establishing a connection for an origin ───────────────────────────
 
+// TLS to host:port over a connection `d` dials (not the kernel's).
+@ __hc_tls_dialed NetDialer d s host i port ( Vec u ) sess i verify → !TlsConn TlsErr {
+    ?? ( net_dial d host port 0 ) {
+        T conn → { ^ ( tls_attach_conn conn host `http/1.1` sess != verify 0 0 ) }
+        F _ → { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } }
+    }
+}
+
 // Ensure the origin has a usable connection, negotiating the protocol on
 // first contact. Returns 0 on success, else an HttpClientErr-shaped code
 // (mapped by __hc_conn_err). An https origin is dialled with ALPN
@@ -351,7 +373,10 @@ $ `stdlib/core/slice.nu`
     ? | ( opt_is_some [H2Client] . o h2 ) ( opt_is_some [HttpConn] . o h1 ) { ^ 0 } {}
     ? != . o is_https 0 {
         : ( Vec u ) sess ? != . c resume 0 ( hp_session_lookup ( string_data . o host ) . o port ) ( vec_new [u] )
-        : !TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
+        // Through another dialer the handshake runs over the connection it
+        // made (agora #250, #289). HTTP/2's reader polls a socket handle, so
+        // there only http/1.1 is offered.
+        : !TlsConn TlsErr tr ? ( net_dialer_is_kernel . c dialer ) ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify ) ( __hc_tls_dialed . c dialer ( string_data . o host ) . o port sess . c verify )
         ( vec_free [u] sess )
         ?? tr {
             F e → { ^ ?? e { TlsBadCert → 3 TlsConnect → 1 _ → 3 } }
@@ -379,8 +404,8 @@ $ `stdlib/core/slice.nu`
             }
         }
     } {}
-    // Plaintext HTTP/1.1.
-    : !HttpConn i co ( hp_conn_open 0 ( string_data . o host ) . o port ( string_data . o host ) 0 )
+    // Plaintext HTTP/1.1, dialed through the client's dialer.
+    : !HttpConn i co ( hp_conn_open_with . c dialer 0 ( string_data . o host ) . o port ( string_data . o host ) 0 )
     ?? co {
         F e → { ^ ? == e 1 1 6 }
         T conn → {
@@ -457,7 +482,7 @@ $ `stdlib/core/slice.nu`
 @ __hc_do inout HttpClientImpl c inout HcOriginImpl o s method s path ( Vec Header ) user ( Vec u ) body → !HttpResponse HttpClientErr {
     // HTTP/3 first when the origin advertised it (or QUIC-first was asked
     // for), unless a QUIC attempt already failed here.
-    ? & & != . o is_https 0 != . c h3_mode 2 == . o h3_failed 0 {
+    ? & & & != . o is_https 0 != . c h3_mode 2 == . o h3_failed 0 ( net_dialer_is_kernel . c dialer ) {
         : b want | == . c h3_mode 1 & > . o alt_h3_port 0 > . o alt_h3_until ( now_seconds )
         ? & want ! ( opt_is_some [H3Client] . o h3 ) { ( __hc_h3_connect c o ) } {}
         ? & want ( opt_is_some [H3Client] . o h3 ) {

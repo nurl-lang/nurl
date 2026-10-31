@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the TLS handshake with the HttpApp's listener: ok
+GET /hello/sim over HTTPS on the simulated wire: ok
+a second request on the same TLS connection: ok
+the server stops cleanly: ok

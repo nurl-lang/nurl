@@ -9,8 +9,10 @@ which piece to work on next.
 Each report leads with **Where to focus**: every headline metric as
 NURL's share of Rust's, worst first, each with what the measurements say
 the gap is made of. Everything below that table is the evidence for it.
-There is one report per **CPU family** (below); `TLS_RESULTS.md` is the
-index that sets the families side by side.
+There is one report per **CPU family** (below);
+[`TLS_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/tls_bench/TLS_RESULTS.md) is the
+index that sets the families side by side. The reports and the recorded
+runs live on the `bench-data` branch.
 
 ## What it measures
 
@@ -65,7 +67,9 @@ STORE=1 MODE=full bench/tls_bench/run_tls.sh
 ```
 
 The run's own report goes to `$MD_OUT` (default: the scratch directory);
-only `STORE=1` touches the committed files.
+only `STORE=1` writes the per-family store (`runs/` and the reports) in
+this checkout; the workflow records into the same store on the `bench-data`
+branch.
 
 Needs `cargo` (and `cmake`, for aws-lc-rs), `openssl`, `curl`, `taskset`,
 `python3` and a built NURL toolchain (`./build.sh`). The raw results and
@@ -111,7 +115,7 @@ until the pool lands on it again. Each report states its date and commit,
 so a stale family shows as stale.
 
 **On the runner** — when a perf task's DONE WHEN says "on the runner", it
-means on **every family in `TLS_RESULTS.md`**. The pull request that
+means on **every family in [`TLS_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/tls_bench/TLS_RESULTS.md)**. The pull request that
 closes the task quotes the rows of each family, and says which families
 were re-measured after the change; a family whose run predates the change
 is either re-run (`tls-bench` again, until the pool lands on it) or named
@@ -121,6 +125,6 @@ as unmeasured.
 
 Whatever the **`tls-bench` GitHub Action** (`.github/workflows/tls-bench.yml`,
 manual) last recorded in `full` mode on an `ubuntu-latest` runner of each
-family; each report's header names the CPU and links the run. Workstation
-runs are posted in the pull requests that change the numbers, not
-committed. When citing a cell, say which family and which run produced it.
+family, on the `bench-data` branch; each report's header names the CPU
+and links the run. Workstation runs are posted in the pull requests that
+change the numbers, not published. When citing a cell, say which family and which run produced it.

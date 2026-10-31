@@ -6,7 +6,8 @@ name: wasm-bench
 # external reference wasmtime (Cranelift JIT) and on packages/nwasm
 # (`nwasm`, the runtime written in pure NURL) — on a fixed `ubuntu-latest`
 # runner,
-# and commits the refreshed report back to the repository:
+# and publishes the refreshed report to the bench-data branch
+# (tools/bench_data.sh):
 #
 #   bench/results/wasm-latest.json   machine-readable
 #   bench/WASMRESULTS.md             the same run rendered for humans
@@ -44,7 +45,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for committing the refreshed report to main
+  contents: write          # to publish the report to the bench-data branch
 
 jobs:
   wasm-bench:
@@ -61,8 +62,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so the results commit can be pushed onto the
-          # upstream tip without a rejected non-fast-forward.
+          # Full history and tags: the report header's NURL version is
+          # `git describe` (tools/version.sh).
           fetch-depth: 0
 
       - name: Install build deps (clang + FFI libs)
@@ -193,7 +194,7 @@ jobs:
           BENCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # A row whose implementations print different lines makes
         # wasmbench.sh exit non-zero after writing the report: the timings
-        # would be comparing different computations. The commit step below
+        # would be comparing different computations. The publish step below
         # is not `if: always()`, so such a run publishes nothing.
         run: |
           args=()
@@ -227,82 +228,17 @@ jobs:
             ${{ env.REPORT_MD }}
           retention-days: 90
 
-      - name: Commit the refreshed report to main
+      - name: Publish the report to the bench-data branch
+        # Measured numbers live on the bench-data branch, not on main
+        # (tools/bench_data.sh, Agora #290): every push to main outside the
+        # merge queue made the queue rebuild and re-run each group in flight.
+        # Only a run of main's code publishes; a run of a branch leaves its
+        # report in the run summary and the artifact.
         # Skipped for a --quick run: 1 repetition per cell is a harness
-        # smoke test, not a measurement, and committing it would replace
-        # the published table with numbers nobody should quote. The
-        # artifact and the run summary above still carry it.
-        if: ${{ inputs.quick != true }}
-        # Same mechanism as bench.yml's results commit: push straight to
-        # main (a manual re-measure keeps the published table current),
-        # bypassing the PR ruleset with BENCH_PUSH_TOKEN when present.
-        env:
-          GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
+        # smoke test, not a measurement. The artifact and the run summary
+        # above still carry it.
+        if: inputs.quick != true && github.ref == 'refs/heads/main'
         run: |
-          # a xN report may be new: add it before asking whether it changed
-          git add -N -- "$REPORT_JSON" "$REPORT_MD"
-          if git diff --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
-            echo "report unchanged — nothing to commit."
-            exit 0
-          fi
           scale_tag=""
           [[ "$BENCH_SCALE" == 1 ]] || scale_tag=" x$BENCH_SCALE"
-
-          today="$(date -u +%Y-%m-%d)"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # actions/checkout stores an Authorization header for GITHUB_TOKEN
-          # in the local git config, and that header WINS over credentials
-          # embedded in the remote URL. Drop it so the URL's token (the
-          # bypass PAT, when set) is the one that authenticates.
-          git config --unset-all http.https://github.com/.extraheader || true
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          git fetch origin main
-          keep_pre="$(mktemp -d)"
-          cp "$REPORT_JSON" "$keep_pre/report.json"
-          cp "$REPORT_MD" "$keep_pre/report.md"
-          git reset -q -- "$REPORT_JSON" "$REPORT_MD"
-          git checkout -f -B main origin/main
-          mkdir -p "$(dirname "$REPORT_JSON")"
-          cp "$keep_pre/report.json" "$REPORT_JSON"
-          cp "$keep_pre/report.md" "$REPORT_MD"
-
-          # [skip ci] because this commit is two data files and nothing
-          # else — no need to spin up the full CI matrix against unchanged
-          # code. The report was produced by a run that passed the
-          # correctness gate before committing.
-          git add -- "$REPORT_JSON" "$REPORT_MD"
-          git commit -m "bench: refresh WASMRESULTS$scale_tag ($today) [skip ci]"
-
-          # Keep the measured files OUTSIDE the worktree for the replay
-          # below. Stashing them cannot work there: by that point they are
-          # committed, so `git stash push -- <paths>` finds nothing to save
-          # and the replay would silently drop the run's results.
-          keep="$(mktemp -d)"
-          cp "$REPORT_JSON" "$keep/report.json"
-          cp "$REPORT_MD" "$keep/report.md"
-
-          # The suite takes hours; another merge can land in that window.
-          # Replay the two files onto the new tip rather than failing — the
-          # report is a pure overwrite, so there is nothing to reconcile.
-          for attempt in 1 2 3; do
-            git push origin main && exit 0
-            echo "push refused (attempt $attempt) — replaying onto the new tip"
-            git fetch origin main
-            git reset --hard origin/main
-            cp "$keep/report.json" "$REPORT_JSON"
-            cp "$keep/report.md" "$REPORT_MD"
-            git add -- "$REPORT_JSON" "$REPORT_MD"
-            if git diff --cached --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
-              echo "the new tip already carries this report — nothing to do."
-              exit 0
-            fi
-            git commit -m "bench: refresh WASMRESULTS$scale_tag ($today) [skip ci]"
-          done
-          echo "::error::could not push refreshed report after 3 attempts."
-          echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"
-          echo "::error::'Protect main' ruleset bypass list."
-          exit 1
+          tools/bench_data.sh publish "bench: refresh WASMRESULTS$scale_tag ($(date -u +%Y-%m-%d))" "$REPORT_JSON" "$REPORT_MD"

@@ -125,6 +125,46 @@ raw @ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
     ^ T
 }
 
+// ── transports ───────────────────────────────────────────────────
+//
+// A connection need not run over a runtime socket: one made over a
+// TlsTransport (_tls_conn_over, tls_attach_over, tls_accept_over) reads
+// and writes its records through it — std/net.nu adapts its transports
+// to this, so TLS runs over a simulated network's sockets (std/net_sim.nu)
+// as over the kernel's, without this file importing std/net.nu. Such a
+// connection has no socket handle (tls_socket is 0) and never hands its
+// keys to the kernel (kTLS); everything above the record layer — the
+// handshakes, the ciphers, the session state — is the same code.
+% TlsTransport [T] : Send Sync {
+    // Append up to `max` bytes to `buf`: how many (> 0); 0 when the peer
+    // has closed; < 0 for an error, for the timeout, and — with `wait`
+    // F — when nothing is there yet.
+    @ tt_read T self ( Vec u ) buf i max b wait → i
+    // All of `bytes`, or F.
+    @ tt_write T self ( Vec u ) bytes → b
+    // The read timeout in ms (0: none) and the write deadline, absolute
+    // monotonic ns (0: none) — what the handshake's deadline sets.
+    @ tt_set_timeout T self i ms → v
+    @ tt_set_write_deadline T self i ns → v
+    @ tt_close T self → v
+    // The peer's address, "ip:port" — lent for as long as the transport.
+    @ tt_peer T self → s
+}
+
+: TlsTransportBox { % TlsTransport t }
+
+// requires: the word is given back, once, with __tt_release; the
+// transport holds nothing that can reach the TlsConn over it.
+// TODO(#248): the same known compromise as std/net's transport word.
+raw @ __tt_word sink %TlsTransport t → i {
+    ^ ( shared_into_word [TlsTransportBox] ( shared_new [TlsTransportBox] @ TlsTransportBox { t } ) )
+}
+
+// requires: `w` came from __tt_word and is given back only this once.
+raw @ __tt_release i w → v { : ( Shared TlsTransportBox ) _back ( shared_from_word [TlsTransportBox] w ) }
+
+@ __tt i w → %TlsTransport { ^ . ( rcbox_ptr [TlsTransportBox] w ) t }
+
 & `c` @ nurl_ktls_supported → i
 
 & `c` @ nurl_ktls_set i conn i dir i cipher *u key *u iv i seq → i
@@ -175,6 +215,7 @@ unsafe & `c` @ nurl_tcp_write2 i conn *u b1 i n1 *u b2 i n2 → i
 raw : TlsConnImpl {
     i fd
     i owns_fd  // 1 until tls_close closes the socket
+    i tw  // a TlsTransport's word when the connection runs over one; 0: over `fd`
     i read_nowait  // one try-read call must not park on partial records
     ( Vec u ) rxbuf  // raw socket bytes not yet split into records
     ( Vec u ) hsbuf  // decrypted handshake bytes not yet a full message
@@ -238,7 +279,12 @@ raw : TlsConnImpl {
 // tls_close's, said at a point of the caller's choosing).
 % Drop TlsConnImpl {
     @ drop TlsConnImpl c → v {
-        ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) } {}
+        ? != . c tw 0 {
+            ( tt_close ( __tt . c tw ) )
+            ( __tt_release . c tw )
+        } {
+            ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) } {}
+        }
     }
 }
 
@@ -313,6 +359,55 @@ raw @ _tls_conn_new i raw → TlsConn {
     = . c tk_received_ms 0
     = . c owns_fd ? > raw 0 1 0
     ^ @ TlsConn { c__box }
+}
+
+// A connection over transport `t`, which it now owns: tls_close closes
+// it, or else the last owner does (tt_close, then the transport goes).
+@ _tls_conn_over sink %TlsTransport t → TlsConn {
+    : TlsConn h ( _tls_conn_new 0 )
+    = . ( __TlsConn_ptr h ) tw ( __tt_word t )
+    ^ h
+}
+
+// The connection's I/O knobs, through its transport or on its socket.
+@ __tls_io_timeout TlsConnImpl c i ms → v {
+    ? != . c tw 0 { ( tt_set_timeout ( __tt . c tw ) ms ) } { ( nurl_tcp_set_timeout . c fd ms ) }
+}
+
+@ __tls_io_write_deadline TlsConnImpl c i ns → v {
+    ? != . c tw 0 { ( tt_set_write_deadline ( __tt . c tw ) ns ) } { ( nurl_tcp_set_write_deadline . c fd ns ) }
+}
+
+// Over a transport rather than a socket (std/net.nu asks, to send a
+// connection's knobs the right way).
+@ tls_over_transport TlsConn c__h → b { ^ != . ( __TlsConn_ptr c__h ) tw 0 }
+
+// The read timeout of a connection over a transport (ms; 0 = none).
+@ tls_transport_set_timeout TlsConn c__h i ms → v {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
+    ? != . c tw 0 { ( tt_set_timeout ( __tt . c tw ) ms ) } {}
+}
+
+// The peer of a connection over a transport ("" over a socket).
+@ tls_transport_peer TlsConn c__h → s {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
+    ? != . c tw 0 { ^ ( tt_peer ( __tt . c tw ) ) } {}
+    ^ ``
+}
+
+// All of `data` out: through the transport, or to the socket.
+@ _tls_send TlsConnImpl c ( Vec u ) data → b {
+    ? != . c tw 0 { ^ ( tt_write ( __tt . c tw ) data ) } {}
+    ^ ( _tls_sock_write . c fd data )
+}
+
+// `head` then `body` out, as one stream.
+@ _tls_send2 TlsConnImpl c ( Vec u ) head ( Vec u ) body → b {
+    ? != . c tw 0 {
+        : %TlsTransport t ( __tt . c tw )
+        ^ & ( tt_write t head ) ( tt_write t body )
+    } {}
+    ^ ( _tls_sock_write2 . c fd head body )
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -446,7 +541,24 @@ raw @ _tls_conn_new i raw → TlsConn {
 // of pinning one worker per idle keep-alive conn. Off a fiber the raw
 // blocking read is what a synchronous client wants (SO_RCVTIMEO still
 // bounds it; the reactor deadline mirrors that via _tls_io_wait).
+// __fill over a transport: the same deadline, the same answers.
+@ __fill_tt inout TlsConnImpl c i n → !i TlsErr {
+    : %TlsTransport t ( __tt . c tw )
+    ? > . c hs_deadline_ns 0 {
+        : i left_ns - . c hs_deadline_ns ( nurl_monotonic_ns )
+        ? <= left_ns 0 { ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
+        ( tt_set_timeout t + / + left_ns 999999 1000000 1 )
+    } {}
+    ~ < ( vec_len [u] . c rxbuf ) n {
+        : i got ( tt_read t . c rxbuf 16384 == . c read_nowait 0 )
+        ? < got 0 { ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
+        ? == got 0 { ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
+    }
+    ^ @ !i TlsErr { T 1 }
+}
+
 @ __fill inout TlsConnImpl c i n → !i TlsErr {
+    ? != . c tw 0 { ^ ( __fill_tt c n ) } {}
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
     // A handshake under a deadline: every read gets what is left of it
@@ -894,7 +1006,7 @@ unsafe @ _tls_ktls_send inout TlsConnImpl c i ct * u p i n → b {
 // 1 the write side, 2 the read side, 3 both, 0 neither (no ULP, an older
 // kernel, TLS 1.2, a closed connection — the record layer here stays).
 @ _tls_ktls_in inout TlsConnImpl c → i {
-    ? | | != . c version 13 != . c established 1 != . c closed 0 { ^ 0 } {}
+    ? | | | != . c version 13 != . c established 1 != . c closed 0 != . c tw 0 { ^ 0 } {}
     = . c ktls_want 1
     : i wdir ? == . c server 1 0 1
     : i rdir - 1 wdir
@@ -1031,7 +1143,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
 // Write `buf` to the socket and empty it; a failure closes the
 // connection.
 @ _tls_tx_flush inout TlsConnImpl c ( Vec u ) buf → !v TlsErr {
-    : b written ( _tls_sock_write . c fd buf )
+    : b written ( _tls_send c buf )
     ( vec_clear [u] buf )
     ? ! written { = . c closed 1 } {}
     ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
@@ -1047,7 +1159,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     ( vec_push [u] rec # u 3 )
     ( _tls_u16 rec ( vec_len [u] body ) )
     ( _tls_cat rec body )
-    : b w ( _tls_sock_write . c fd rec )
+    : b w ( _tls_send c rec )
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
@@ -1552,7 +1664,7 @@ unsafe @ _tls_ktls_read_into inout TlsConnImpl c i peer ( Vec u ) dst i max → 
     ? & == . c update_pending 0 == . c fatal_alert 0 { ^ @ !v TlsErr { T 0 } } {}
     : ( Vec u ) wire ( vec_new [u] )
     ( _tls_control_to c wire dir )
-    : b sent ( _tls_sock_write . c fd wire )
+    : b sent ( _tls_send c wire )
     ? ! sent { = . c closed 1 ^ @ !v TlsErr { F TlsWrite } } {}
     ^ @ !v TlsErr { T 0 }
 }
@@ -2275,12 +2387,18 @@ raw : CliHsImpl {
     // that failed is closed with it (it used to be left open).
     : TlsConn c__h ( _tls_conn_new raw )
     ? != ( nurl_tcp_err_kind raw ) 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+    ^ ( __tls_handshake_on c__h server_name alpn sess deadline_ns )
+}
+
+// The client handshake on a connection made over a socket or a
+// transport: its I/O knobs go to whichever it has.
+@ __tls_handshake_on sink TlsConn c__h s server_name s alpn ( Vec u ) sess i deadline_ns → !TlsConn TlsErr {
     : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
     ? > deadline_ns 0 {
         = . c hs_deadline_ns deadline_ns
-        ( nurl_tcp_set_write_deadline raw deadline_ns )
+        ( __tls_io_write_deadline . c 0 deadline_ns )
     } {
-        ( nurl_tcp_set_timeout raw 20000 )
+        ( __tls_io_timeout . c 0 20000 )
     }
     // The handshake machine goes with this scope, on every path out of it.
     : CliHs hs__h ( _cli_hs_new server_name alpn sess )
@@ -2290,16 +2408,29 @@ raw : CliHsImpl {
         T _ → {
             // The established connection keeps no handshake deadline. (A
             // failed handshake has already closed the socket — touching
-            // `raw` then would be a use after free.)
+            // it then would be a use after free.)
             ? > deadline_ns 0 {
                 = . c hs_deadline_ns 0
-                ( nurl_tcp_set_write_deadline raw 0 )
-                ( nurl_tcp_set_timeout raw 20000 )
+                ( __tls_io_write_deadline . c 0 0 )
+                ( __tls_io_timeout . c 0 20000 )
             } {}
             ^ @ !TlsConn TlsErr { T c__h }
         }
         F e → ^ @ !TlsConn TlsErr { F e }
     }
+}
+
+// The client side of a handshake over transport `t` — std/net's adapter
+// of a socket that is not the kernel's, a simulated network's — with
+// every knob of tls_attach_full_until: the ALPN list ("" = none), a
+// resumption session (empty = none), verification of the chain and the
+// host name when `verify` is non-zero, and a deadline over the whole
+// handshake (absolute monotonic ns; 0 = none). The connection owns `t`
+// from here, on every path.
+@ tls_attach_over sink %TlsTransport t s server_name s alpn ( Vec u ) sess i verify i deadline_ns → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( __tls_handshake_on ( _tls_conn_over t ) server_name alpn sess deadline_ns )
+    ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
+    ^ r
 }
 
 // The record layer around the machine: ClientHello out, the server's
@@ -2663,7 +2794,7 @@ raw @ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i
     ? != 0 ( _tls_ktls_of c dir ) {
         // The kernel cuts and seals the records: the plaintext goes to
         // the socket as it is, both buffers in one sendmsg.
-        : b written ? single ( _tls_sock_write . c fd head ) ( _tls_sock_write2 . c fd head body )
+        : b written ? single ( _tls_send c head ) ( _tls_send2 c head body )
         ? ! written { = . c closed 1 ^ @ !v TlsErr { F TlsWrite } } {}
         ^ @ !v TlsErr { T 0 }
     } {}
@@ -2828,7 +2959,9 @@ raw @ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i
         = . c closed 1
     } {}
     // The socket goes now; the state goes with the handle's last owner.
-    ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) = . c owns_fd 0 } {}
+    ? != . c tw 0 { ( tt_close ( __tt . c tw ) ) } {
+        ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) = . c owns_fd 0 } {}
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2918,7 +3051,7 @@ raw @ tls_attach_full_until i raw s server_name s alpn ( Vec u ) sess i verify i
 @ __send_record_12 inout TlsConnImpl c i rtype ( Vec u ) content → !v TlsErr {
     : ( Vec u ) record ( vec_new [u] )
     ( _tls_record12_to c record rtype content )
-    : b written ( _tls_sock_write . c fd record )
+    : b written ( _tls_send c record )
     ? ! written { = . c closed 1 } {}
     ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }

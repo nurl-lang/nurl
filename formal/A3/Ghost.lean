@@ -68,13 +68,26 @@ theorem GhostRel.pinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : PinOK 
   | frozen _ _ ih => exact ih hp
   | catchR _ _ _ _ _ _ ih => exact ih hp
 
+theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : DtorPinOK Γ s) :
+    DtorPinOK Γ s' := by
+  have hin : ∀ {x : Var} {k k' : Stmt}, GhostRel k k' → DtorIn Γ x k → DtorIn Γ x k' :=
+    fun hg hx E hE hd hos hn d hdd hnm => by rw [hg.spine]; exact hx E hE hd hos hn d hdd hnm
+  induction h with
+  | refl => exact hp
+  | seq _ _ ih => exact ih hp
+  | scope _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | scopeD _ _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | rbind _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | frozen _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ ih => exact ih hp
+
 theorem GhostRel.closed {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hc : Closed Γ s) : Closed Γ s' :=
   fun v hv => by rw [h.spine]; exact hc v hv
 
 theorem inv_ghost {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hg : GhostRel s s') : Inv m Γ F s' :=
   hi.respine hg.spine (fun v hv => by rw [hg.vars] at hv; exact hv) (hg.catchOK hi.catchOK)
-    (hg.pinOK hi.pinIn)
+    (hg.pinOK hi.pinIn) (hg.dtorPinOK hi.dtorIn)
 
 /-! ### Typing, frame by frame
 
@@ -123,8 +136,8 @@ theorem StmtT.scopeD_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Na
     StmtT P Γ F (.scopeD x f s') Δ := by
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD hE hx hb hp hk hw hn _ =>
-    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn
+  | scopeD hE hx hb hp hk hw hn hΔ _ =>
+    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hΔ
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs
 
@@ -138,14 +151,14 @@ theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : M
     StmtT P Γ F (.catchR x m0' s') Δ := by
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
-  | catchR hx hb hmi hra hk _ =>
+  | catchR hx hb hmi hra hk hds _ =>
     cases hs
     have hst' : (m0'.set x ⟨false, some (.int 1)⟩).st = (m0.set x ⟨false, some (.int 1)⟩).st := by
       simp only [Mem.set, hst]
     have hmi' : MInv (m0'.set x ⟨false, some (.int 1)⟩) _ :=
       hmi.of_st hst' (heapOK_grow hmi.heap hst' hal (by simp only [Mem.set, hnid]; exact Nat.le_refl _))
         (by simp only [Mem.set, hnv]; exact Nat.le_refl _)
-    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk)
+    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds)
     rw [hnv]; exact hrep hb
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs

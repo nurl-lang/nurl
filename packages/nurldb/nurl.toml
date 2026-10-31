@@ -1,6 +1,6 @@
 [package]
 name = "nurldb"
-version = "0.1.1"
+version = "0.2.0"
 nurl-version = "0.75.0"
 description = "A relational database in pure NURL, multi-threaded throughout and with no unsafe function: SQL (CREATE TABLE / INDEX, INSERT, SELECT with WHERE, JOIN, GROUP BY / HAVING, ORDER BY, LIMIT, DISTINCT, UPDATE, DELETE, BEGIN / COMMIT / ROLLBACK, EXPLAIN) over B+tree-indexed tables. 8 KiB checksummed pages in a buffer pool of reader-writer-latched frames (atomic pins, clock eviction, the WAL rule); a write-ahead log with group commit (one flusher thread, many committers per fdatasync); snapshot-isolation transactions (MVCC) with a lock manager, FIFO waits, deadlock detection and serialization failures; B+tree indexes with latch crabbing; crash recovery (torn-tail cut, redo, unfinished transactions aborted) with full-page images; aggregation over a table scan run on four threads; a TCP server with a thread per connection. Use it as a library (db_open, session_exec) or as a CLI: a shell, -c, serve, client and bench."
 license = "MIT OR Apache-2.0"

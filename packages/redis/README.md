@@ -87,6 +87,7 @@ closes the socket (or TLS session), and replies, `RedisStr`,
 | --- | --- |
 | `redis_connect host port` | `!RedisConn RedisErr` |
 | `redis_connect_tls host port server_name verify` | `!RedisConn RedisErr` — `verify != 0` ⇒ verify-full |
+| `redis_connect_with dialer host port` | `!RedisConn RedisErr` — plaintext through a std/net `NetDialer` (the kernel's, or a simulated network's `netsim_dialer`) |
 | `redis_auth conn user password` | `!v RedisErr` — empty `user` ⇒ legacy single-arg AUTH |
 | `redis_select conn db` | `!v RedisErr` |
 | `redis_close conn` | `v` — early release (optional) |

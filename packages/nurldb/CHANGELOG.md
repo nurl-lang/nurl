@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0] — unreleased
+
+Requires the NURL with std/net's `NetDialer` and std/net_sim.nu's `netsim_crash`.
+
+### Added
+
+- `serve_on db listener` — serve a listener the caller made: `tcp_listen`'s, or a node's of a simulated network (`netsim_listen`). It returns once the listener stops accepting (closed, or its node crashed) and the connections it accepted have ended; `serve` is `serve_on` over `tcp_listen`.
+- `client_connect_with dialer host port` — the client dialed through a std/net `NetDialer`: the kernel's, or a simulated network's node (`netsim_dialer`).
+- `client_set_timeout client ms` — each read and write of a statement waits at most `ms`, so a server that crashed with the statement in hand fails the statement instead of holding its client forever (found by the DST flagship scenario, NURL agora #262).
+- `db_crash db` — the database dropped as a killed process leaves it: the log's flusher stopped, no checkpoint, dirty pages lost. `db_open` on the directory then recovers from the log, so a test can crash and restart a server inside one process.
+
+### Changed
+
+- The checkpointer takes no last checkpoint when its server stops. What is committed is in the log, and recovery replays it.
+
 ## [0.1.1] — 2026-10-26
 
 ### Fixed
