@@ -239,6 +239,45 @@ def CatchOK (m : Mem) : Stmt → Prop
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
   | _ => True
 
+/-- A borrowed parameter depends only on what was bound before its call: on
+    no binding of a run-time scope the call's body has opened. A panic that
+    unwinds those scopes therefore leaves its dependencies bound. -/
+def PinOK (Γ : Ctx) : Stmt → Prop
+  | .seq a _ => PinOK Γ a
+  | .scope _ s => PinOK Γ s
+  | .scopeD _ _ s => PinOK Γ s
+  | .rbind p s => (∀ E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∉ s.spine) ∧ PinOK Γ s
+  | .frozen _ s => PinOK Γ s
+  | .catchR _ _ s => PinOK Γ s
+  | _ => True
+
+/-- `PinOK` reads only borrowed parameters: a context that keeps them keeps it. -/
+theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
+    {s : Stmt} (hp : PinOK Γ s) : PinOK Γ' s := by
+  induction s with
+  | seq a _ iha _ => exact iha hp
+  | scope _ k ih => exact ih hp
+  | scopeD _ _ k ih => exact ih hp
+  | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
+  | frozen _ k ih => exact ih hp
+  | catchR _ _ k ih => exact ih hp
+  | _ => trivial
+
+/-- A statement inside no run-time scope is inside no call either. -/
+theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s := by
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope _ _ _ => simp [Stmt.spine] at h
+  | scopeD _ _ _ _ => simp [Stmt.spine] at h
+  | rbind _ _ _ => simp [Stmt.spine] at h
+  | _ => trivial
+
+theorem pinOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine :=
+  fun _ _ _ _ _ _ _ hr => by rw [h] at hr; cases hr
+
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
     bound.  (What those closures may change is pinned: no rule replaces it,
@@ -280,6 +319,11 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
   cover     : Covers m
+  /-- A borrowed parameter bound outside the running scopes depends on none
+      of their bindings, and each one bound inside depends on none of the
+      scopes opened inside its call (`PinOK`). -/
+  pinOut    : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine
+  pinIn     : PinOK Γ s
 
 /-! ### Typing of statements
 
