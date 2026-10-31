@@ -44047,7 +44047,9 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
 //    outer binding is captured as before; never early.
 //  - bindings `L.name`: in scope until level L closes, or an arm's until
 //    its arm ends.
-//  - match blocks `L.P`: the arm phase at level L (__cs_mphase).
+//  - match blocks `L.P`: the arm phase at level L — 1 a variant is next,
+//    2 its payload names, a `?` guard or the `→`, 3 in the guard, 4 in the
+//    result, 5 lost (the scan stopped following this block's arms).
 
 // The level of a list's innermost word, -1 for an empty list.
 @ __cs_lvl s list → i {
@@ -44106,20 +44108,6 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
     ^ F
 }
 
-// The arm phase of the match block at level `l` — 1 a variant is next,
-// 2 its payload names, a `?` guard or the `→`, 3 in the guard, 4 in the
-// result, 5 lost (the scan stopped following this block's arms) — or 0
-// when `l` is not a match block's level.
-@ __cs_mphase s ms i l → i {
-    ? != ( __cs_lvl ms ) l { ^ 0 } {}
-    ^ ( nurl_str_to_int ( __cs_tail ms ) )
-}
-
-@ __cs_mset s ms i l i p → s {
-    : s rest ? == ( __cs_lvl ms ) l ( str_skip_word ms ) ( nurl_str_cat ms `` )
-    ^ ( __cs_push rest l ( nurl_str_int p ) )
-}
-
 // How many operands the parser reads after token `tt` in a value
 // (__gen_expr_level), once the scan has skipped the type a `#`, `@`, `\`
 // or `Z` carries; -1 for a token that does not start one. A `(`, `{` or
@@ -44141,7 +44129,8 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
 // Does the closure's capture of `name` hang on its scope: an outer local
 // or parameter of that name?
 @ __cs_outer i outer_syms s name → b {
-    ^ | != 0 ( nurl_sym_len2 outer_syms name `__ptr` ) != 0 ( nurl_sym_len2 outer_syms name `__param` )
+    ? != 0 ( nurl_sym_len2 outer_syms name `__ptr` ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len2 outer_syms name `__param` )
 }
 
 unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
@@ -44161,24 +44150,30 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s ctx ( nurl_str_cat `{` `` )
     : ~ i prev1 TT_LBRACE
     : ~ i prev2 TT_EOF
-    // (The name the token before this one spelled, when it was a name.)
-    : ~ s prev1_name ``
-    : ~ s cur_name ``
+    // (The name after the last `.`, for the name after it: a field?)
+    : ~ s dot_obj ``
     = g_clo_scan_structs ( nurl_str_cat `` `` )
     : ~ b held F
     // The names the body binds itself (the capture scan's scopes, above):
-    // its frames, its bindings, its match blocks, the level whose next `{`
-    // opens a match's arms, and a nested closure's parameters with the
-    // level its body opens at.
+    // its frames (the innermost one's level, need and meaning held apart,
+    // `ft_*`, so following a token touches no list), its bindings, its
+    // match blocks (the innermost one's level and phase apart, `mt_*`), the
+    // level whose next `{` opens a match's arms, and a nested closure's
+    // parameters with the level its body opens at.
     : ~ s fr ``
+    : ~ i ft_l -1
+    : ~ i ft_n 0
+    : ~ s ft_a ``
     : ~ s bl ``
     : ~ s ms ``
+    : ~ i mt_l -1
+    : ~ i mt_p 0
     : ~ i mbrace -1
     : ~ s pbind ``
     : ~ i pblvl -1
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
-        = cur_name ? | == tt TT_IDENT == tt TT_TYPE_KW ( nurl_lex_val lex ) ``
+        ? & == tt TT_IDENT == prev1 TT_DOT { = dot_obj ( nurl_lex_val lex ) } {}
         = held F
 
         // Unbalanced braces used to spin this loop at EOF forever — the
@@ -44192,7 +44187,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         // token is a pattern's own name (no read), and the level an operand
         // ends at with it.
         : i lvl ( nurl_str_len ctx )
-        : ~ i mph ( __cs_mphase ms lvl )
+        : i mph0 ? == mt_l lvl mt_p 0
+        : ~ i mph mph0
         : ~ b pat F
         : ~ i cpl -1
         ? & != mbrace -1 != tt TT_LBRACE { = mbrace -1 } {}
@@ -44205,11 +44201,11 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 = mph ? | | ( is_ident_tok tt ) == tt TT_BOOL == tt TT_INT 2 5
             } {
                 ? ( is_ident_tok tt ) {
-                    ? ( __cs_outer outer_syms cur_name ) { = bl ( __cs_push bl lvl cur_name ) } {}
+                    ? ( __cs_outer outer_syms ( nurl_lex_val lex ) ) { = bl ( __cs_push bl lvl ( nurl_lex_val lex ) ) } {}
                 } {
                     ? == tt TT_PIPE { = mph 1 } {
                         ? == tt TT_QUEST { = mph 3 } {
-                            ? == tt TT_ARROW { = fr ( __cs_frame fr lvl 1 `r` ) = mph 4 } {
+                            ? == tt TT_ARROW { ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `r` = mph 4 } {
                                 ? != tt TT_INT { = mph 5 } {}
                             }
                         }
@@ -44218,22 +44214,25 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             }
         } {
             // (A guard ends at the `→` at its arm's level.)
-            ? & == mph 3 == tt TT_ARROW { = pat T = fr ( __cs_frame fr lvl 1 `r` ) = mph 4 } {}
+            ? & == mph 3 == tt TT_ARROW { = pat T ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `r` = mph 4 } {}
             // (A result is an expression here: a statement the scan cannot
             // follow, or a `:` binding, loses the block.)
-            ? & & == mph 4 == ( __cs_lvl fr ) lvl & ( seq ( __cs_act fr ) `r` ) == ( __cs_need fr ) 1 {
-                ? | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE | == tt TT_BREAK == tt TT_CONTINUE { = mph 5 } {}
+            ? & & == mph 4 == ft_l lvl == ft_n 1 {
+                ? & ( seq ft_a `r` ) | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE | == tt TT_BREAK == tt TT_CONTINUE { = mph 5 } {}
             } {}
         }
-        ? != mph 0 {
-            ? == mph 5 { = bl ( __cs_cut bl lvl F ) = fr ( __cs_cut fr lvl F ) } {}
-            = ms ( __cs_mset ms lvl mph )
+        ? != mph mph0 {
+            ? == mph 5 { ? >= ( __cs_lvl bl ) lvl { = bl ( __cs_cut bl lvl F ) } {} ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) } } {}
+            = mt_p mph
         } {}
         ? == tt TT_LBRACE
         {
             = brace_depth + brace_depth 1 = ctx ( nurl_str_cat ctx `{` )
             : i nl + lvl 1
-            ? == mbrace lvl { = ms ( __cs_mset ms nl 1 ) = mbrace -1 } {}
+            ? == mbrace lvl {
+                ? != mt_l -1 { = ms ( __cs_push ms mt_l ( nurl_str_int mt_p ) ) } {}
+                = mt_l nl = mt_p 1 = mbrace -1
+            } {}
             ? == pblvl lvl {
                 : ~ s pr ( nurl_str_cat pbind `` )
                 ~ != 0 ( nurl_str_len pr ) {
@@ -44248,7 +44247,9 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
             {
                 = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 )
                 : i nl ( nurl_str_len ctx )
-                = bl ( __cs_cut bl nl T ) = fr ( __cs_cut fr nl T ) = ms ( __cs_cut ms nl T )
+                ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
+                ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
+                ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
                 ? > brace_depth 0 { = cpl nl } {}
             }
             {
@@ -44256,7 +44257,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 ? == tt TT_EQ
                 {
                     // (A statement: what this level was following is over.)
-                    = fr ( __cs_cut fr lvl F )
+                    ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                     ( nurl_lex_advance lex )  // consume '='
                     // (A target that is not a name — `= . p f v` — is read
                     // as the expression it is.)
@@ -44285,12 +44286,12 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                             // body emits `store … %rNN` referencing the
                             // outer's alloca register directly, producing
                             // invalid IR (use of undefined value).
-                            : b is_clo_param_t ( str_contains closure_params target_var )
+                            : b is_clo_param_t ( str_contains_word closure_params target_var )
                             ? ! is_clo_param_t {
                                 ? ! ( str_contains_word assigned target_var ) {
                                     = assigned ( nurl_str_cat3 assigned ` ` target_var )
                                 } {}
-                                ? ! ( str_contains captured_vars target_var ) {
+                                ? ! ( str_contains_word captured_vars target_var ) {
                                     = captured_vars ? == 0 captured_count
                                     target_var
                                     ( nurl_str_cat ( nurl_str_cat captured_vars ` ` ) target_var )
@@ -44309,58 +44310,67 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     // token after it.
                     : i skt ( __clo_scan_skip_type lex outer_syms tt prev1 prev2 ctx )
                     = held != 0 skt
-                    : i ctxn ( nurl_str_len ctx )
                     ? == skt 2 { = ctx ( nurl_str_cat ctx `[` ) } {}
                     ? == tt TT_LPAREN { = ctx ( nurl_str_cat ctx `(` ) } {}
                     ? == tt TT_RPAREN { = ctx ( __clo_ctx_pop ctx 40 ) } {}
                     ? == tt TT_RBRACK { = ctx ( __clo_ctx_pop ctx 91 ) } {}
                     // Where the token stands in the expressions the scan
                     // follows (the capture scan's scopes, above).
-                    ? < ( nurl_str_len ctx ) ctxn {
+                    ? < ( nurl_str_len ctx ) lvl {
                         // (A group closed: one operand of the level it
                         // stood in.)
                         : i nl ( nurl_str_len ctx )
-                        = bl ( __cs_cut bl nl T ) = fr ( __cs_cut fr nl T ) = ms ( __cs_cut ms nl T )
+                        ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
+                        ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
+                        ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
                         = cpl nl
                     } {
                         ? & & == tt TT_COLON == mph 0 == skt 1 {
                             // A `:` binding: its name is bound once its
                             // value ends.
-                            = fr ( __cs_cut fr lvl F )
+                            ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                             ? & != 0 ( nurl_str_len g_clo_scan_decl ) ( __cs_outer outer_syms g_clo_scan_decl )
-                            { = fr ( __cs_frame fr lvl 1 ( nurl_str_cat `l` g_clo_scan_decl ) ) } {}
+                            { ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a ( nurl_str_cat `l` g_clo_scan_decl ) } {}
                         } {
                             ? == tt TT_QUESTQUEST {
                                 // A match: its scrutinee, then its arms.
                                 // (A select's arms follow at once.)
                                 ? == ( nurl_lex_peek_type lex ) TT_LBRACE {
-                                    ? == ( __cs_lvl fr ) lvl { = fr ( __cs_frame fr lvl 1 `o` ) } {}
+                                    ? == ft_l lvl { ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `o` } {}
                                 } {
-                                    = fr ( __cs_frame ( __cs_frame fr lvl 2 `o` ) lvl 1 `s` )
+                                    // (The match as one operand of an expression
+                                    // this level follows: only when there is one.)
+                                    ? == ft_l lvl { ? == ft_n 1 { = ft_n 2 } { = fr ( __cs_frame fr ft_l ft_n ft_a ) = ft_n 2 = ft_a `o` } } {}
+                                    ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `s`
                                 }
                             } {
                                 ? & & ! pat ! targs ! | == tt TT_LPAREN == skt 2 {
-                                    ? == ( __cs_lvl fr ) lvl {
+                                    ? == ft_l lvl {
                                         // (A `[ T ]` the skip took whole is an
                                         // empty slice literal.)
                                         : i ar ? == tt TT_LBRACK 0 ( __cs_arity lex tt )
                                         ? < ar 0 {
-                                            = fr ( __cs_cut fr lvl F )
-                                            ? != mph 0 { = bl ( __cs_cut bl lvl F ) = ms ( __cs_mset ms lvl 5 ) } {}
-                                        } { ? == ar 0 { = cpl lvl } { = fr ( __cs_frame fr lvl ar `o` ) } }
+                                            ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
+                                            ? != mph 0 { ? >= ( __cs_lvl bl ) lvl { = bl ( __cs_cut bl lvl F ) } {} = mt_p 5 } {}
+                                        } {
+                                            // (An operator that is the last operand
+                                            // its frame is owed ends with it: the
+                                            // frame is owed its operands instead.)
+                                            ? == ar 0 { = cpl lvl } { ? == ft_n 1 { = ft_n ar } { = fr ( __cs_frame fr ft_l ft_n ft_a ) = ft_n ar = ft_a `o` } }
+                                        }
                                     } {}
                                 } {}
                             }
                         }
                         // A nested closure's parameters are its own.
-                        ? & == tt TT_BACKSLASH != 0 ( nurl_str_len g_clo_scan_decl ) {
-                            = pbind `` = pblvl lvl
-                            : ~ s pr ( nurl_str_cat g_clo_scan_decl `` )
-                            ~ != 0 ( nurl_str_len pr ) {
-                                : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
-                                ? ( __cs_outer outer_syms pw ) { = pbind ? == 0 ( nurl_str_len pbind ) ( nurl_str_cat pw `` ) ( nurl_str_cat3 pbind ` ` pw ) } {}
-                            }
-                        } {}
+                        ? == tt TT_BACKSLASH { ? != 0 ( nurl_str_len g_clo_scan_decl ) {
+                                = pbind `` = pblvl lvl
+                                : ~ s pr ( nurl_str_cat g_clo_scan_decl `` )
+                                ~ != 0 ( nurl_str_len pr ) {
+                                    : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
+                                    ? ( __cs_outer outer_syms pw ) { = pbind ? == 0 ( nurl_str_len pbind ) ( nurl_str_cat pw `` ) ( nurl_str_cat3 pbind ` ` pw ) } {}
+                                }
+                            } {} } {}
                     }
                     // A binding handed to an `inout` parameter is changed.
                     ? == tt TT_LPAREN {
@@ -44377,24 +44387,19 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         // Skip closure parameters, a field name — `. j fo`
                         // over a struct j reads j's field `fo`, not a binding
                         // fo — and a name the body bound itself (agora #125).
-                        : b is_clo_param | | ( str_contains closure_params var_name )
-                        & & == prev2 TT_DOT == prev1 TT_IDENT ( __clo_scan_struct_obj outer_syms prev1_name )
-                        ( __cs_bound bl var_name )
-                        ? ! is_clo_param
+                        : ~ b is_clo_param | ( str_contains_word closure_params var_name ) ( __cs_bound bl var_name )
+                        ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
+                        // Capture locals (have __ptr) and outer fn params (have
+                        // __param), each once: a name already captured is not
+                        // looked up again.
+                        ? & ! is_clo_param ! ( str_contains_word captured_vars var_name )
                         {
-                            // Capture locals (have __ptr) and outer fn params (have __param)
-                            : s outer_ptr ( nurl_sym_get2 outer_syms var_name `__ptr` )
-                            : s outer_param ( nurl_sym_get2 outer_syms var_name `__param` )
-                            ? | != 0 ( nurl_str_len outer_ptr ) != 0 ( nurl_str_len outer_param )
+                            ? ( __cs_outer outer_syms var_name )
                             {
-                                ? ! ( str_contains captured_vars var_name )
-                                {
-                                    = captured_vars ? == 0 captured_count
-                                    ( nurl_str_cat var_name `` )
-                                    ( nurl_str_cat ( nurl_str_cat captured_vars ` ` ) var_name )
-                                    = captured_count + captured_count 1
-                                }
-                                {}
+                                = captured_vars ? == 0 captured_count
+                                ( nurl_str_cat var_name `` )
+                                ( nurl_str_cat ( nurl_str_cat captured_vars ` ` ) var_name )
+                                = captured_count + captured_count 1
                             }
                             {}
                         }
@@ -44407,16 +44412,13 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         // An operand ended at level `cpl`: so may the expressions it was
         // owed to, and with them a binding's value, a match's scrutinee, an
         // arm's result.
-        ~ & >= cpl 0 == ( __cs_lvl fr ) cpl {
-            ? > ( __cs_need fr ) 1 {
-                = fr ( __cs_frame ( str_skip_word fr ) cpl - ( __cs_need fr ) 1 ( __cs_act fr ) )
-                = cpl -1
-            } {
-                : s act ( __cs_act fr )
-                = fr ( str_skip_word fr )
+        ~ & >= cpl 0 == ft_l cpl {
+            ? > ft_n 1 { = ft_n - ft_n 1 = cpl -1 } {
+                : s act ( nurl_str_cat ft_a `` )
+                = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr )
                 ? == ( nurl_str_get act 0 ) 108 { = bl ( __cs_push bl cpl ( nurl_str_slice act 1 - ( nurl_str_len act ) 1 ) ) } {}
                 ? ( seq act `s` ) { = mbrace cpl } {}
-                ? ( seq act `r` ) { = bl ( __cs_cut bl cpl F ) = ms ( __cs_mset ms cpl 1 ) } {}
+                ? ( seq act `r` ) { ? >= ( __cs_lvl bl ) cpl { = bl ( __cs_cut bl cpl F ) } {} = mt_p 1 } {}
             }
         }
 
@@ -44425,7 +44427,6 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         { ? ! held { ( nurl_lex_advance lex ) } {} }
         = prev2 prev1
         = prev1 tt
-        = prev1_name cur_name
     }
     // Lexer is now positioned after closing brace
     = g_clo_scan_assigned assigned
