@@ -30,6 +30,11 @@
 #  for the IR-equivalence check by listing them in $SKIP_IR. They
 #  still go through idempotence.
 #
+#  When it is worth running: while changing the formatter, on the tree
+#  as it is BEFORE the repo-wide `nurlfmt --write` pass. On a canonical
+#  tree (what nurlfmt_check.sh enforces in CI) fmt(x) is x and both
+#  invariants hold trivially, so CI does not run it (ci.yml says why).
+#
 #  Exit codes:
 #    0 — both invariants hold on every covered file
 #    1 — at least one violation; full diff printed to stdout
@@ -130,31 +135,52 @@ for rel in "${FILES[@]}"; do
     IR_ORIG="$TMPDIR/orig.ll"
     IR_FMT="$TMPDIR/fmt.ll"
 
-    if ! "$NURLC" "$rel"   >"$IR_ORIG" 2>/dev/null; then
-        # The original itself doesn't compile standalone (probably a
-        # fragment). Skip the IR pass without flagging.
-        SKIPPED_IR=$((SKIPPED_IR + 1))
-        continue
-    fi
-    # The formatted copy keeps its original path under $TMPDIR/tree. A
-    # standard-library file is trusted to use raw memory outside `unsafe`
-    # only inside a stdlib tree (the `stdlib/` its imports resolve into),
-    # so a stdlib file is compiled from inside a copy of that tree, with
-    # the formatted text standing in for the original.
+    # Both sides are compiled by the SAME path from the same directory, so
+    # that only the content differs: the IR names its source file — a
+    # checked index lowers to vec_at_loc(…, "file:line:col") — and an
+    # original compiled as `examples/x.nu` against a copy compiled as
+    # `/tmp/…/tree/examples/x.nu` differed in every file that indexes,
+    # whatever the formatter did (63 false failures, agora #263).
+    # A standard-library file is trusted to use raw memory outside
+    # `unsafe` only inside a stdlib tree (the `stdlib/` its imports
+    # resolve into), so it is compiled as `stdlib/…` — the original from
+    # the repository, the formatted text from inside a copy of the tree.
+    # Every other file is compiled by its copy's path under
+    # $TMPDIR/tree, first with the original text, then the formatted one.
     FMT_SRC="$TMPDIR/tree/$rel"
     if [[ "$rel" == stdlib/* ]]; then
+        if ! "$NURLC" "$rel" >"$IR_ORIG" 2>/dev/null; then
+            # The original itself doesn't compile standalone (probably a
+            # fragment). Skip the IR pass without flagging.
+            SKIPPED_IR=$((SKIPPED_IR + 1))
+            continue
+        fi
         if [[ ! -d "$TMPDIR/tree/stdlib" ]]; then
             (cd "$ROOT_DIR" && find stdlib -name '*.nu' -print0 |
                 while IFS= read -r -d '' f; do
                     mkdir -p "$TMPDIR/tree/$(dirname "$f")" && cp "$f" "$TMPDIR/tree/$f"
                 done)
+            # …and the build's FFI sentinels (stdlib/runtime.<lib>, which
+            # nurlc's FFI-library check looks up by that relative path): a
+            # copy without them refused stdlib/ext/sqlite.nu's formatted
+            # text where the repository compiled the original.
+            for f in stdlib/runtime.*; do
+                case "$f" in *.c|*.h|*.o) ;; *) [[ -f "$f" ]] && cp "$f" "$TMPDIR/tree/$f" ;; esac
+            done
         fi
         cp "$PASS1" "$FMT_SRC"
         FMT_OK=1
         (cd "$TMPDIR/tree" && "$NURLC" "$rel" >"$IR_FMT" 2>/dev/null) || FMT_OK=0
         cp "$ROOT_DIR/$rel" "$FMT_SRC"
     else
-        mkdir -p "$(dirname "$FMT_SRC")" && cp "$PASS1" "$FMT_SRC"
+        mkdir -p "$(dirname "$FMT_SRC")" && cp "$ROOT_DIR/$rel" "$FMT_SRC"
+        if ! "$NURLC" "$FMT_SRC" >"$IR_ORIG" 2>/dev/null; then
+            # The original does not compile standalone from there (a
+            # fragment, or a file that imports a sibling): skip, as above.
+            SKIPPED_IR=$((SKIPPED_IR + 1))
+            continue
+        fi
+        cp "$PASS1" "$FMT_SRC"
         FMT_OK=1
         "$NURLC" "$FMT_SRC" >"$IR_FMT" 2>/dev/null || FMT_OK=0
     fi
