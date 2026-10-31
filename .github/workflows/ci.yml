@@ -579,9 +579,17 @@ jobs:
         # this is a cheap in-memory reformat-and-compare with no
         # extra compilation. bench/ is excluded — those .nu files are
         # recorded model outputs from the generation-accuracy study
-        # and must keep the exact bytes the model emitted. The
-        # repo-wide --write pass that made this pass also keeps
-        # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
+        # and must keep the exact bytes the model emitted.
+        #
+        # compiler/tests/nurlfmt_idempotent.sh (fmt is a fixed point, and
+        # nurlc(fmt(x)) == nurlc(x)) does NOT run here, on purpose: once
+        # this step passes, every file it covers is canonical, fmt(x) is
+        # x byte for byte, and both of its invariants hold trivially —
+        # in CI it could only ever report a false failure (agora #263:
+        # it reported 63, all a path difference). It finds something on
+        # a tree that is not canonical yet: run it while changing the
+        # formatter, against the old tree, BEFORE the repo-wide --write
+        # pass, to show that pass changes no IR.
         run: ./compiler/tests/nurlfmt_check.sh
 
       - name: strict-arity gate (the n-ary '&'/'|' trap)
