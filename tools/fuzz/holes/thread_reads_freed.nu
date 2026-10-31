@@ -1,5 +1,5 @@
 // thread_reads_freed: a thread reads a String the spawning thread frees.
-// map: §6.5 | A3 | rejected | h18 | spawned thread reads a String the spawning thread frees
+// map: §6.5 | A3 | rejected | h18 | spawned thread reads a String the spawning thread frees; A3.0: the String moves to the thread, so the spawner cannot free it
 $ `stdlib/core/string.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
