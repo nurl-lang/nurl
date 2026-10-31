@@ -89,6 +89,12 @@ docs/MEMORY.md §7.6) is inside the calculus for a type that holds no views
 - `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
+- The calculus puts the destructor on the binding `letd` makes, not on
+  the type. A value moved out of that binding, into a `sink` parameter,
+  another binding or a field, is released where it ends by `DropSlot`,
+  which runs no code. nurlc runs the destructor there too, and that run
+  is outside the calculus until the destructor moves to the type
+  (A2-drop.2, Agora #241).
 
 A destructor of a type that holds views is A2-drop.2. It needs a typing
 rule nurlc lacks today (`DtorSafe`, Agora #224): a drop reads the value,

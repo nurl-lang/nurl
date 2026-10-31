@@ -20,6 +20,12 @@ f t` checks that `f` takes one `in` parameter of `x`'s type `t`, returns an
 integer, and lends, holds and stores nothing. What follows reads `Ty.dtor f
 t` as that binding.
 
+So in A2-drop.1 a destructor runs only at the end of the binding `letd`
+made. A value moved out of it (a `sink` argument, another binding, a field)
+is released by `DropSlot` where it ends, while nurlc runs the destructor
+there as well. A2-drop.2 has to close that, with the destructor on the
+type, or with a destructor binding at every place the value can land.
+
 ## What nurlc does
 
 `% Drop T { @ drop T self → v { … } }`. Whenever an owned `T` reaches the
