@@ -1,8 +1,8 @@
 [package]
 name = "psql"
-version = "0.5.1"
+version = "0.6.0"
 nurl-version = "0.78.0"
-description = "Pure-NURL PostgreSQL client — v3 wire protocol (simple and extended: typed parameters, binary results, a prepared-statement cache), a connection pool, SCRAM-SHA-256 / MD5 auth, and TLS (pure-NURL, X25519 + P-256) with no libpq and no OpenSSL. Connects securely from a host with nothing installed."
+description = "Pure-NURL PostgreSQL client — v3 wire protocol (simple and extended: typed parameters, binary results, a prepared-statement cache), implicit pipelining (many fibers keep many queries in flight on one connection), a connection pool, SCRAM-SHA-256 / MD5 auth, and TLS (pure-NURL, X25519 + P-256) with no libpq and no OpenSSL. Connects securely from a host with nothing installed."
 license = "MIT OR Apache-2.0"
 
 [dependencies]

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] — unreleased
+
+Requires NURL 0.78.0.
+
+### Added
+
+- **Implicit pipelining.** The copies of one `PgConn` — on any number of fibers or threads — now use it at the same time: each request is queued with its own Sync and the answers come back in the order the requests went out, so N callers keep up to N queries in flight on one socket. Measured on one connection (loopback PostgreSQL 16, `SELECT $1::int4 + 1`, `tests/pipeline_bench.nu`, one runtime worker): 1 fiber 33.7k queries/s; 2 fibers 122k; 32 fibers 131k; 128 fibers 150k — where 0.5.1 carried one query at a time (26k/s at best) and DEADLOCKED with two fibers on one worker.
+- Whoever queues a request while nobody drives the socket drives it: it writes what is queued (everything queued while it waited leaves in one write), reads, and hands each answer to its request through a one-shot channel until its own is in, then hands the socket on. No thread per connection, no lock held during I/O; a waiting fiber parks and a waiting thread blocks.
+- `tests/pipeline_bench.nu`: queries per second on one connection for 1..N fibers.
+
+### Fixed
+
+- **Fibers sharing a connection no longer deadlock.** 0.5.1 checked the whole connection out of a `Locked` for each round trip; a fiber that parked on the socket while holding it blocked every other fiber's worker in `locked_take` (two fibers on one worker hung forever; with 4 workers, 8 fibers hung). The send side is now held only between I/O.
+- An error ends only its own request (one Sync each); a lost stream fails every request on its way with `PgConnFail`, and the next request fails at once.
+- The statement cache is consistent under concurrent use: a lookup and the Bind it queues happen under one hold, so no Close another request queues can overtake that Bind on the wire; two requests preparing the same SQL at once keep one and close the other. With the cache off, each execution prepares a statement under its own name and closes it in the same request (an unnamed statement could be replaced by another request's Parse between the two round trips).
+
 ## [0.5.1] — 2026-10-27
 
 Requires NURL 0.78.0.
