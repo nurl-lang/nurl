@@ -1551,13 +1551,11 @@ unsafe @ agg_field_count i syms s ot → i {
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
 
-// The walk's fact journal (bck_note, bck_log_open / bck_log_close): `<level>|<key>` → the key's
-// value hash when that level's log first saw it, `#<level>|` → its keys, `pin` → the innermost prefix.
-: ~ i g_bck_jt 0
-// Open walk logs (walks a loop's fixpoint is watching), innermost last.
-: ~ i g_bck_jn 0
-// g_bck writes the journal could not record (a key with a space); each counts as a change (bck_fp).
-: ~ i g_bck_jopaque 0
+// A digest of g_bck's content, kept while a loop is walked (bck_put): the XOR of
+// one hash per key and value, so equal digests mean equal facts (bck_loop).
+: ~ i g_bck_dg 0
+// Loops being walked, nesting included; g_bck_dg follows writes only while > 0.
+: ~ i g_bck_watch 0
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
 : ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
@@ -30478,16 +30476,14 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             // is a borrow of the argument, which stays the
                             // owner. The binding the statement binds it to is
                             // the next `let` / `assign` on this line.
-                            : s pl ( nurl_sym_get g_bck `plend` )
                             : s pe ( nurl_str_cat3 pvn `:` pcal )
-                            ( bck_put `plend` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat pe `` ) ( nurl_str_cat3 pl ` ` pe ) )
-                            ( bck_put `plend_line` ( bck_field rec 3 ) )
+                            ( bck_plend_note pe ( bck_field rec 3 ) )
                             // (Lent through an Arc parameter: a view of the
                             // payload, §6.5.)
                             ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) {
-                                ( bck_add_word `plarc` pe )
-                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` pcal ) paix ) { ( bck_add_word `plfrz` pe ) } {}
-                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` pcal ) paix ) { ( bck_add_word `plfrh` pe ) } {}
+                                ( bck_add_word_once `plarc` pe )
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` pcal ) paix ) { ( bck_add_word_once `plfrz` pe ) } {}
+                                ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` pcal ) paix ) { ( bck_add_word_once `plfrh` pe ) } {}
                             } {}
                         } {
                             = st ( bck_st_set st pvid
@@ -30586,9 +30582,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( bck_field rec 3 ) )
                     ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) {
-                        ( bck_add_word `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
-                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
-                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                        ( bck_add_word_once `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
+                        ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                     } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
                 ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
@@ -31413,10 +31409,25 @@ unsafe @ bck_sx_is_id s e → b {
 // when only its pointer result points into it): the binding the line
 // binds takes it (bck_take_plend).
 @ bck_plend_add s id s callee s tag s line → v {
-    : s pl ( nurl_sym_get g_bck `plend` )
-    : s pe ( nurl_str_cat4 id `:` callee tag )
-    ( bck_put `plend` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat pe `` ) ( nurl_str_cat3 pl ` ` pe ) )
+    ( bck_plend_note ( nurl_str_cat4 id `:` callee tag ) line )
+}
+
+// The pending lends are a set (bck_take_plend reads each entry once). A
+// loop walks its body more than once, and an entry each walk added again
+// grew the list without end: no fixpoint (agora #210), and memory for
+// nothing.
+@ bck_plend_note s pe s line → v {
+    ? ! ( nurl_sym_has_word g_bck `plend` pe ) {
+        : s pl ( nurl_sym_get g_bck `plend` )
+        ( bck_put `plend` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat pe `` ) ( nurl_str_cat3 pl ` ` pe ) )
+    } {}
     ( bck_put `plend_line` line )
+}
+
+// `w` into the word list `k` unless it is there already (the Arc / frozen
+// lends that go with `plend`, which is a set for the same reason).
+@ bck_add_word_once s k s w → v {
+    ? ! ( nurl_sym_has_word g_bck k w ) { ( bck_add_word k w ) } {}
 }
 
 // A call on this line handed back what may be an argument's handle
@@ -32978,92 +32989,77 @@ unsafe @ bck_loop_mask s pre s post → s {
 // ── The walk's facts (agora #210) ─────────────────────────────────
 // A walk is not a function of its state string alone. It also reads
 // the facts it and earlier walks wrote into g_bck (a borrow's source,
-// `bv_`; what a view depends on, `vds_`; the warnings already given)
-// and a few counters (interned paths, errors, the has-* flags). A
-// loop's fixpoint is reached only when its state stops changing AND
-// a walk of its body leaves those facts as it found them. Then
-// walking the body again on the same state would repeat that walk
-// exactly. h118's use-after-free shows only on the walk that sees the
+// `bs_` / `bv_`; what a view depends on, `vds_`; the warnings already
+// given) and a few counters (interned paths, errors, the has-* flags,
+// bck_fp). h118's use-after-free shows only on the walk that sees the
 // first walk's facts: a `rest` given an owned value one iteration and
-// freed the next.
+// freed the next. So a loop's fixpoint compares facts as well as the
+// state: a walk is determined by (state, facts, counters), and once
+// those repeat, every walk from there on repeats one already made.
 //
-// Every write to g_bck goes through bck_put / bck_add_word / bck_add,
-// which note the key in each open log first. A log keeps, per key,
-// the hash of its value when the log first saw it. bck_log_close
-// reports whether any of those values, or the counters (bck_fp), are
-// different now. Facts a walk sets and restores (a statement's
-// pending lists) are no change. Logs nest with the loops; a key a log
-// has noted, every log outside it has noted too.
+// Every write to g_bck goes through bck_put / bck_add_word / bck_add
+// (tools/check_bck_writes.sh). While a loop is walked, each write
+// takes its key's old pair out of g_bck_dg and puts the new one in, so
+// g_bck_dg names the whole table's content. A fact a walk sets and
+// restores (a statement's pending lists) leaves it as it was. The
+// hash covers every byte of the key and of the value: __sym_hash
+// samples three windows, which is enough for a bucket and blind to a
+// change in the middle of a long value.
 
 @ bck_fp → i {
-    ^ + * g_bck_inn 1000003 + * g_bck_errors 7919 + g_bck_has_borrow + * g_bck_ab_any 2 + * g_bck_has_cursor 4 + * g_bck_has_deps 8 + * g_bck_has_paths 16 + * g_bck_nch_any 32 * g_bck_jopaque 64
+    ^ + * g_bck_inn 1000003 + * g_bck_errors 7919 + g_bck_has_borrow + * g_bck_ab_any 2 + * g_bck_has_cursor 4 + * g_bck_has_deps 8 + * g_bck_has_paths 16 * g_bck_nch_any 32
 }
 
-@ bck_vhash s v → s {
-    ^ ( nurl_str_cat `h` ( nurl_str_int ( __sym_hash v ) ) )
-}
-
-@ bck_note s k → v {
-    // (A loop's own `break` / `continue` accumulators are the walk's
-    // output, reset before every walk: no fact a later walk reads.)
-    ? | ( seq k `lbrk` ) ( seq k `lcnt` ) { ^ v } {}
-    ? >= ( nurl_str_find k ` ` ) 0 { = g_bck_jopaque + g_bck_jopaque 1 ^ v } {}
-    : ~ i lv - g_bck_jn 1
-    ~ >= lv 0 {
-        : s pre ? == lv - g_bck_jn 1 ( nurl_sym_get g_bck_jt `pin` ) ( nurl_sym_get g_bck_jt ( nurl_str_cat `p` ( nurl_str_int lv ) ) )
-        // Noted here, so noted by every log outside this one as well.
-        ? != 0 ( nurl_sym_len2 g_bck_jt pre k ) { ^ v } {}
-        ( nurl_sym_set g_bck_jt ( nurl_str_cat pre k ) ( bck_vhash ( nurl_sym_get g_bck k ) ) )
-        ( nurl_sym_append_word g_bck_jt ( nurl_str_cat `#` pre ) k )
-        = lv - lv 1
+// Every byte of `v`, eight at a time.
+@ bck_hash_all s v → i {
+    : i n ( nurl_str_len v )
+    : ~ i h + 1469598103934665603 n
+    : ~ i k 0
+    ~ < k n {
+        : i c ? > - n k 8 8 - n k
+        = h * ^^ h ( __sym_w8 v k c ) 1099511628211
+        = h ^^ h >> h 29
+        = k + k 8
     }
+    ^ h
 }
 
-@ bck_put s k s v → v {
-    ? != 0 g_bck_jn { ( bck_note k ) } {}
-    ( nurl_sym_set g_bck k v )
+@ bck_kv_hash s k s v → i {
+    : ~ i h ^^ ( bck_hash_all v ) * ( bck_hash_all k ) 6364136223846793005
+    = h * ^^ h >> h 31 2685821657736338717
+    ^ ^^ h >> h 29
+}
+
+// (A loop's own `break` / `continue` accumulators are the walk's
+// output, reset before every walk: no fact a later walk reads.)
+@ bck_dg_follows s k → b {
+    ^ & != 0 g_bck_watch ! | ( seq k `lbrk` ) ( seq k `lcnt` )
+}
+
+@ bck_put s k s val → v {
+    ? ! ( bck_dg_follows k ) { ( nurl_sym_set g_bck k val ) ^ v } {}
+    : i ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
+    ( nurl_sym_set g_bck k val )
+    = g_bck_dg ^^ ^^ g_bck_dg ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
 }
 
 @ bck_add_word s k s w → v {
-    ? != 0 g_bck_jn { ( bck_note k ) } {}
+    ? ! ( bck_dg_follows k ) { ( nurl_sym_append_word g_bck k w ) ^ v } {}
+    : i ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
     ( nurl_sym_append_word g_bck k w )
+    = g_bck_dg ^^ ^^ g_bck_dg ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
 }
 
 @ bck_add s k s x → v {
-    ? != 0 g_bck_jn { ( bck_note k ) } {}
+    ? ! ( bck_dg_follows k ) { ( nurl_sym_append g_bck k x ) ^ v } {}
+    : i ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
     ( nurl_sym_append g_bck k x )
+    = g_bck_dg ^^ ^^ g_bck_dg ho ( bck_kv_hash k ( nurl_sym_get g_bck k ) )
 }
 
-@ bck_log_open → v {
-    : s pre ( nurl_str_cat ( nurl_str_int g_bck_jn ) `|` )
-    ( nurl_sym_set g_bck_jt ( nurl_str_cat `p` ( nurl_str_int g_bck_jn ) ) pre )
-    ( nurl_sym_set g_bck_jt ( nurl_str_cat `#` pre ) `` )
-    ( nurl_sym_set g_bck_jt ( nurl_str_cat `f` pre ) ( nurl_str_int ( bck_fp ) ) )
-    ( nurl_sym_set g_bck_jt `pin` pre )
-    = g_bck_jn + g_bck_jn 1
-}
-
-// Closes the innermost log: T when the walk it watched changed a fact.
-// Its entries are cleared, so the next log at this level starts empty.
-@ bck_log_close → b {
-    = g_bck_jn - g_bck_jn 1
-    : s pre ( nurl_sym_get g_bck_jt ( nurl_str_cat `p` ( nurl_str_int g_bck_jn ) ) )
-    : ~ b changed ! ( seq ( nurl_sym_get g_bck_jt ( nurl_str_cat `f` pre ) ) ( nurl_str_int ( bck_fp ) ) )
-    : s lk ( nurl_str_cat `#` pre )
-    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck_jt lk ) `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s k ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s jk ( nurl_str_cat pre k )
-        ? ! changed {
-            ? ! ( seq ( nurl_sym_get g_bck_jt jk ) ( bck_vhash ( nurl_sym_get g_bck k ) ) ) { = changed T } {}
-        } {}
-        ( nurl_sym_set g_bck_jt jk `` )
-    }
-    ( nurl_sym_set g_bck_jt lk `` )
-    ? > g_bck_jn 0 {
-        ( nurl_sym_set g_bck_jt `pin` ( nurl_sym_get g_bck_jt ( nurl_str_cat `p` ( nurl_str_int - g_bck_jn 1 ) ) ) )
-    } {}
-    ^ changed
+// What a walk starts from besides its state: `<digest>:<counters>`.
+@ bck_facts_tok → s {
+    ^ ( nurl_str_cat3 ( nurl_str_int g_bck_dg ) `:` ( nurl_str_int ( bck_fp ) ) )
 }
 
 // `~` loop — the body carries a back-edge, so re-enter it until the
@@ -33083,6 +33079,9 @@ unsafe @ bck_loop_mask s pre s post → s {
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
     : ~ b done F
+    // Reached by a cycle of facts (more than one walk around it): the
+    // walks were all made, but not the walk of the final facts.
+    : ~ b cyc F
     // This loop's own `break` / `continue` accumulators; the enclosing
     // loop's are put back on the way out.
     : s outer_brk ( nurl_sym_get g_bck `lbrk` )
@@ -33091,12 +33090,16 @@ unsafe @ bck_loop_mask s pre s post → s {
     // The converged body-exit state: the walk of the iteration whose
     // head the fixpoint settled on.
     : ~ s back ``
+    // The facts each walk started from since `head` last changed.
+    : ~ s seen ``
+    = g_bck_watch + g_bck_watch 1
     ~ & ! done < iter 16 {
         ( bck_put `lbrk` `` )
         ( bck_put `lcnt` `` )
-        ( bck_log_open )
+        : s tok0 ( bck_facts_tok )
+        = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat tok0 `` ) ( nurl_str_cat3 seen ` ` tok0 )
         : s post0 ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
-        : b learned ( bck_log_close )
+        : s tok1 ( bck_facts_tok )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
         // What reaches the next iteration: the body's end and every
@@ -33109,27 +33112,40 @@ unsafe @ bck_loop_mask s pre s post → s {
         // not released as a call temporary.)
         : s carried ( bck_loop_mask pre post )
         : s merged ( bck_join_state head carried )
+        // Converged when the next walk would repeat one already made: the
+        // state is where this walk started, and the facts are where this
+        // walk started (it changed none) or where an earlier walk on the
+        // same state started (a cycle: a swap of two loop-carried
+        // bindings moves a borrow between them every iteration). The
+        // state lattice only grows, so a cycle never spans two heads.
         // Copy `merged` into `head` — aliasing the loop-local `merged`
         // would double-free it (iteration drop + function-exit drop).
-        // Converged: the state is where this walk started and the walk
-        // left every fact as it found it, so another walk would repeat
-        // this one exactly.
-        ? & ( seq merged head ) ! learned { = done T = back ( nurl_str_cat post0 `` ) } { = head ( nurl_str_cat merged `` ) }
+        ? ( seq merged head ) {
+            ? ( seq tok1 tok0 ) { = done T = back ( nurl_str_cat post0 `` ) } {
+                ? ( str_contains_word seen tok1 ) { = done T = cyc T } {}
+            }
+        } {
+            = head ( nurl_str_cat merged `` )
+            = seen ``
+        }
         = iter + iter 1
     }
+    = g_bck_watch - g_bck_watch 1
     // Loop-carried verification. `back` is the converged body-exit
     // state; `verif` is the back-edge seed it implies. The condition is
     // re-evaluated before each body, so check its reads first, then
     // walk the body once more under the carried state.
     //
-    // At the fixpoint the last walk ran on `head` and changed no fact,
-    // so its exit already is the walk of `head`, and a verification
-    // seed equal to `head` would repeat that walk. Walking the body
-    // again in either case repeated work, and nested loops paid for the
-    // repeat at every level: 3^depth walks of the innermost body, 33 s
-    // for 15 nested `~` (agora #210). Only a fixpoint the iteration cap
-    // cut short still needs the walk of its final head.
-    ? ! done { = back ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
+    // At a fixpoint reached in one step the last walk ran on `head` and
+    // changed no fact, so its exit already is the walk of `head`; and a
+    // verification seed equal to `head` would repeat a walk already made
+    // (on a cycle, the one that started from the facts it would start
+    // from). Walking the body again in either case repeated work, and
+    // nested loops paid for the repeat at every level: 3^depth walks of
+    // the innermost body, 32 s for 15 nested `~` (agora #210). A cycle,
+    // or a fixpoint the iteration cap cut short, still walks `head` for
+    // its exit.
+    ? | ! done cyc { = back ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
     : s verif ( bck_loop_carry_seed pre back )
     ( bck_check_moved_reads cond_reads cond_line verif )
     ? | ! done ! ( seq verif head ) {
@@ -33158,10 +33174,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     = g_bck_ab_any 0
     = g_bck_nch_any 0
     ? != 0 g_arcp_any { ( bck_put `plarc` `` ) } {}
-    // The fact journal is per walk; a function starts it empty.
-    ? != 0 g_bck_jt { ( nurl_sym_free g_bck_jt ) } {}
-    = g_bck_jt ( nurl_sym_new )
-    = g_bck_jn 0
+    = g_bck_watch 0
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
     ? != 0 g_bck_has_paths { ( bck_paths_release ) } {}
