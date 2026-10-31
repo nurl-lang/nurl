@@ -421,6 +421,13 @@ jobs:
         # other function calls __errno_location directly.
         run: ./tools/check_errno_fiber_safe.sh
 
+      - name: borrow-checker side tables are written through the walk logs
+        # bck_loop's fixpoint (agora #210) stops once a walk of the body
+        # changes no state and no fact in g_bck; the facts it sees are the
+        # ones bck_put / bck_add_word / bck_add note. A direct write could
+        # end a loop's analysis a walk too early.
+        run: ./tools/check_bck_writes.sh
+
       - name: nolibc covers every libc symbol the runtime core calls
         # unikernel/nolibc/ exists to supply exactly the libc surface of
         # stdlib/runtime_core.c — a hand-synced pair, and this repo's
