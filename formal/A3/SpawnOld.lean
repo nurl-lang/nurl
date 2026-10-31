@@ -322,18 +322,19 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       (∀ q ∈ ps, q.1 = .sink) → ps.length = as.length → as.Nodup →
       (∀ a ∈ as, Γc a = some (argE Γ0 a) ∧ (argE Γ0 a).live = true ∧ (argE Γ0 a).mode = .own ∧
         a ∉ F ∧ NoPin Γc a) →
+      (∀ a ∈ as, DtorSafe Γc .replace false a) →
       (∀ a ∈ as, ∀ a' ∈ as, a ≠ a' → ∀ d ∈ (argE Γ0 a').vdeps, d.root ≠ a) →
       Γc x = none → CtxWF Γc → NoPin Γc x →
       StmtT P (callPostAux Γ0 fn args ps as i Γc) F L Δ → StmtT P Γc F (dropSeq x as L) Δ := by
   intro ps
   induction ps with
   | nil =>
-    intro as i Γc _ hlen _ _ _ _ _ _ ht
+    intro as i Γc _ hlen _ _ _ _ _ _ _ ht
     cases as with
     | nil => exact ht
     | cons _ _ => simp at hlen
   | cons q ps ih =>
-    intro as i Γc hsk hlen hnd hargs hdep hx hwf hnx ht
+    intro as i Γc hsk hlen hnd hargs hds0 hdep hx hwf hnx ht
     cases as with
     | nil => simp at hlen
     | cons a as =>
@@ -356,6 +357,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
           (dropSeq x as L) Δ := by
         refine ih as (i + 1) _ (fun q hq => hsk q (List.mem_cons_of_mem _ hq)) (by simpa using hlen)
           hnd'.2 (fun a' ha' => ?_)
+          (fun a' ha' => ((hds0 a' (List.mem_cons_of_mem _ ha')).kill _ _ _).setE_off rfl)
           (fun b hb b' hb' => hdep b (List.mem_cons_of_mem _ hb) b' (List.mem_cons_of_mem _ hb'))
           hx1 hwf1 (noPin_of_rbFrom hrb hnx) ht
         have ha'a : a' ≠ a := fun e => hnd'.1 (e ▸ ha')
@@ -366,7 +368,8 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       -- `a` moves into `x`, and `x`'s scope ends
       have hlet : StmtT P Γc F (.letv x (.var a) .skip)
           (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) := by
-        have h := StmtT.letv (P := P) (s := .skip) rfl hx hxF (RhsT.moveOwn hca hl hmo haF hpa)
+        have h := StmtT.letv (P := P) (s := .skip) rfl hx hxF
+          (RhsT.moveOwn hca hl hmo haF hpa (hds0 a List.mem_cons_self))
           StmtT.skip (noPin_of_rbFrom (hrb.trans (rbFrom_setE _ (by simp))) hnx)
         rwa [exitScope_setE_fresh hwf1 hx1] at h
       exact StmtT.seq (dropSeq_src hL as) hlet ht1
@@ -400,10 +403,10 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
   induction ht with
   | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ =>
     cases hS'
-    obtain ⟨fn', hf', hlen, hargs, hnf, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
-      ⟨fn, hf, hlen, hargs, hnf, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
     have h := callH_of hP hf hx hxF hc' hi
     have hsk : ∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink :=
       fun i hi => (hall _ (List.getElem_mem hi)).1
@@ -420,6 +423,10 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       obtain ⟨_, hmo, _⟩ := hok
       rw [hae]
       exact ⟨hEa, hl, hmo, (hmv (by rw [hs]; rfl)).1, hpn (Or.inl hs)⟩
+    have hdsa : ∀ a ∈ args, DtorSafe Γ .replace false a := by
+      intro a ha
+      obtain ⟨i, hi', rfl⟩ := mem_args ha
+      exact (hds.1 i (hlen ▸ hi')).1 (hsk i (hlen ▸ hi'))
     have hdep : ∀ a ∈ args, ∀ a' ∈ args, a ≠ a' → ∀ d ∈ (argE Γ a').vdeps, d.root ≠ a := by
       intro a ha a' ha' _ d hd hda
       obtain ⟨i, hi', rfl⟩ := mem_args ha
@@ -477,7 +484,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
         (exitScope x Δ) :=
       StmtT.letv hsrc hGx hxF (RhsT.expr ExprT.lit) (StmtT.weakenIn hW hk) hpin
     exact drops_typed (L := .letv x (.expr (.lit 0)) k) hsrc hxF fn.params args 0 Γ
-      (fun q hq => (hall q hq).1) hlen.symm hnd hargs' hdep hx hi.wf hnx hlast
+      (fun q hq => (hall q hq).1) hlen.symm hnd hargs' hdsa hdep hx hi.wf hnx hlast
   | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS' (hi.weaker hw)) ho
   | _ => cases hS'
 

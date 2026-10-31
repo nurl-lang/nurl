@@ -48,6 +48,26 @@ theorem killE_dtor (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x E
 theorem killE_vdeps (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).vdeps = E.vdeps := by
   simp [Entry.vdeps, killE_mode, killE_path, killE_held]
+/-- A2-drop.2: a kill and a binding that runs no destructor keep an
+    effect safe. -/
+theorem DtorSafe.kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
+    (e' : Eff) (hv' : Bool) (y : Var) : DtorSafe (A2.kill e' hv' y Γ) e hv x := by
+  intro v E hE hd
+  simp only [A2.kill] at hE
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
+  rw [killE_dtor] at hd
+  have := h v E0 h0 hd
+  unfold hitsMem at this ⊢
+  rw [killE_ty, killE_mode, killE_vdeps]; exact this
+
+theorem DtorSafe.setE_off {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
+    {y : Var} {E : Entry} (hE : E.dtor = false) : DtorSafe (A2.setE Γ y E) e hv x := by
+  intro v E' hv' hd
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    rw [hE] at hd; cases hd
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd
+
 theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).live = (E.live && !hits e hv x E) := by
   unfold killE; split <;> simp_all

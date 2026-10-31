@@ -430,13 +430,33 @@ theorem mutNames_clean (Γ : Ctx) (args : List Var) : mutNames (cleanC Γ) args 
   simp only [mutNames, List.mem_filter] at hd ⊢
   exact ⟨argNames_clean Γ args hd.1, hd.2⟩
 
+/-- Cleaning keeps whether a binding runs a destructor, and forgets
+    dependencies only. -/
+theorem DtorSafe.clean {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x) :
+    DtorSafe (cleanC Γ) e hv x := by
+  intro v E hE hd
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
+  rw [Entry.clean_dtor] at hd
+  have h1 := h v E0 h0 hd
+  unfold hitsMem at h1 ⊢
+  rw [clean_ty, clean_mode]
+  simp only [Bool.and_eq_false_iff, List.any_eq_false] at h1 ⊢
+  rcases h1 with h1 | h1
+  · exact Or.inl h1
+  · exact Or.inr fun d hd => h1 d (clean_vdeps_sub _ hd)
+
+theorem CallDtorSafe.clean {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var}
+    (h : CallDtorSafe Γ ps args) : CallDtorSafe (cleanC Γ) ps args :=
+  ⟨fun i hi => ⟨fun hs => ((h.1 i hi).1 hs).clean, fun b hb => ((h.1 i hi).2 b hb).clean⟩,
+    fun d hd => (h.2 d (mutNames_clean Γ args hd)).clean⟩
+
 /-- A call checked in a context is checked in its cleaned form. -/
 theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
     (hc : CallT P Γ F f args E Γ1) {fn : Fn} (hf : P[f]? = some fn) :
     CallT P (cleanC Γ) F f args (callRes (cleanC Γ) fn args) (callPost (cleanC Γ) fn args) := by
-  obtain ⟨fn', hf', hlen, hargs, hnf, _, _⟩ := hc
+  obtain ⟨fn', hf', hlen, hargs, hnf, hds, _, _⟩ := hc
   rw [hf] at hf'; cases hf'
-  refine ⟨fn, hf, hlen, fun i hi => ?_, fun d hd => ?_, rfl, rfl⟩
+  refine ⟨fn, hf, hlen, fun i hi => ?_, fun d hd => ?_, hds.clean, rfl, rfl⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
     obtain ⟨hcan, hvec, hnF, hnA, huniq⟩ := hnf d (mutNames_clean Γ args hd)
@@ -1679,7 +1699,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       (callPost (setE Γ m.nv (envE c Ec te cs)) fn (m.nv :: zs ++ cs.map (·.1))) := by
   have hlc : Ec.live = true := callT_recv_live hcT hc
   have hcT0 := hcT
-  obtain ⟨sig', hσ', hlen, hargs, hnf, _, _⟩ := hcT
+  obtain ⟨sig', hσ', hlen, hargs, hnf, hds, _, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
   obtain ⟨rest, hsp⟩ : ∃ rest, sig.params = (.inp, .fn ms) :: rest := by
     cases h : sig.params with
@@ -1888,7 +1908,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         rw [hdc, hae, htc] at hts; cases hts
       · have := hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d (by rw [hae]; exact hdv) hdr.symm
         exact hbd (this ▸ hb)
-  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, rfl, rfl⟩
+  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl⟩
   · simp [hplen]; omega
   rotate_left
   · -- what the opened call's closures may change is changed by it
@@ -1967,6 +1987,55 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       · rw [hargE a (hze a ha)] at hty hd''
         exact hoth a (List.mem_cons_of_mem _ ha) hty d' hd'' hdr
       · rw [hargE _ (hkne ci hci), hcapv ci hci] at hd''; cases hd''
+  · -- A2-drop.2: what the opened call moves, changes and kills by name, the
+    -- call through the package did; the environment runs no destructor
+    have hlift : ∀ {e : Eff} {hv : Bool} {a : Var}, DtorSafe Γ e hv a →
+        DtorSafe (setE Γ m.nv (envE c Ec te cs)) e hv a := by
+      intro e hv a hs v E hv' hd
+      by_cases hve : v = m.nv
+      · subst hve; simp only [setE, upd_same, Option.some.injEq] at hv'; subst hv'
+        simp [envE] at hd
+      · rw [hΓe v hve] at hv'; exact hs v E hv' hd
+    refine ⟨fun i hil => ?_, fun d hd => hlift (hds.2 d (hmo d hd))⟩
+    have hil' := hil
+    rw [hplen] at hil'
+    rcases openArgs_cases hil' with rfl | ⟨j, hjz, rfl⟩ | ⟨k, hk, rfl⟩
+    · have hp0 : fn.params[0] = (.inp, te) := by simp [hps]
+      rw [hp0]; exact ⟨fun h => (by simp at h), fun b h => (by simp at h)⟩
+    · have hjl : j + 1 < sig.params.length := by rw [hsp]; simp; omega
+      have hpe : fn.params[j + 1]'hil = sig.params[j + 1] := by
+        have h1 := openParams_z (p0 := (.inp, te)) (cps := cs.map (·.2)) (show j < rest.length by omega)
+        rw [← hps] at h1
+        have h2 : sig.params[j + 1]? = rest[j]? := by rw [hsp]; simp
+        rw [← h2, List.getElem?_eq_getElem hil, List.getElem?_eq_getElem hjl] at h1
+        exact Option.some.inj h1
+      rw [hpe, openArgs_z _ _ hjz]
+      obtain ⟨h1, h2⟩ := hds.1 (j + 1) hjl
+      simp only [List.getD_cons_succ] at h1 h2
+      exact ⟨fun hs => hlift (h1 hs), fun b hb => hlift (h2 b hb)⟩
+    · have hpc : fn.params[zs.length + 1 + k]'hil = (cs[k]'hk).2 := by
+        have h1 := openParams_c (p0 := (.inp, te)) (rest := rest) hk
+        rw [← hps, show rest.length = zs.length by omega, List.getElem?_eq_getElem hil] at h1
+        exact Option.some.inj h1
+      rw [hpc, openArgs_c _ _ hk]
+      obtain ⟨_, _, _, _, _, _, _, hhv, hmd⟩ := hcap _ (hck k hk)
+      refine ⟨fun hs => ?_, fun b hb => ?_⟩
+      · rcases hmd with h | ⟨b', h, _⟩ <;> rw [hs] at h <;> cases h
+      · -- the package holds the capture by name, of the parameter's bound
+        have hbn : b ≠ .none := by
+          rcases hmd with h | ⟨b', h, hbn', _⟩
+          · rw [hb] at h; cases h
+          · rw [hb] at h; cases h; exact hbn'
+        have hin := pkg_cap_root hi.toMInv hc hlc hslot (hck k hk)
+        rw [hb] at hin
+        have hmn : (⟨(cs[k]'hk).1, .name b (cs[k]'hk).2.2⟩ : Dep) ∈ mutNames Γ (c :: zs) := by
+          simp only [mutNames, argNames, List.mem_filter, List.mem_flatMap, List.mem_cons]
+          refine ⟨⟨c, Or.inl rfl, ?_⟩, by simp [Kind.bound, hbn]⟩
+          rw [hae, ite_eq_right (fun h => hnint h)]
+          simp only [nameDeps, List.mem_filter]
+          exact ⟨by unfold Entry.vdeps; exact List.mem_append_right _ hin, rfl⟩
+        rw [elem_holdsView, hhv]
+        exact hlift (hds.2 _ hmn)
   -- each argument
   rw [hplen] at hil
   rcases openArgs_cases hil with rfl | ⟨i, hiz, rfl⟩ | ⟨k, hk, rfl⟩
@@ -2281,10 +2350,10 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       rw [RSetup.canon_frame _ hρ, h.frame_of hρ hxe.symm, h.post_rootb hEe rfl]
       simp [Ee, envE, Entry.clean]
     -- the static context after the call
-    obtain ⟨sig', hσ', hlen, hargs, hnf, rfl, rfl⟩ := hcT
+    obtain ⟨sig', hσ', hlen, hargs, hnf, hds, rfl, rfl⟩ := hcT
     rw [hσ] at hσ'; cases hσ'
     have hcT0 : CallT P Γ F σ (c :: zs) (callRes Γ sig (c :: zs)) (callPost Γ sig (c :: zs)) :=
-      ⟨sig, hσ, hlen, hargs, hnf, rfl, rfl⟩
+      ⟨sig, hσ, hlen, hargs, hnf, hds, rfl, rfl⟩
     obtain ⟨hw1, hdm, hE⟩ := hcT0.wf hP hi.wf
     obtain ⟨hn1, hEn, _⟩ := hcT0.names hP hi.names
     have hx1 : callPost Γ sig (c :: zs) x = none := by

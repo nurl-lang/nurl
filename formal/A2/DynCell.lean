@@ -172,6 +172,18 @@ theorem ctxL_noPin {R L : Entry} (hR : R.mode ≠ .rootb) (hL : L.mode ≠ .root
   · exact absurd hm hR
   · exact absurd hm hL
 
+/-- No binding of the example runs a destructor (A2-drop.2). -/
+theorem ctx_dtor {R : Entry} (hR : R.dtor = false) : ∀ v E, ctx R v = some E → E.dtor = false := by
+  intro v E hE
+  rcases v with _ | _ | _ | _ | v <;> simp [ctx] at hE <;> subst hE <;> first | rfl | exact hR
+
+theorem ctxL_dtor {R L : Entry} (hR : R.dtor = false) (hL : L.dtor = false) :
+    ∀ v E, ctxL R L v = some E → E.dtor = false := by
+  intro v E hE
+  by_cases h4 : v = 4
+  · subst h4; simp [ctxL, setE, upd] at hE; subst hE; exact hL
+  · simp only [ctxL, setE, upd_ne _ _ h4] at hE; exact ctx_dtor hR v E hE
+
 /-- The path that makes a fresh String: it goes into the cell, and the
     result borrows the cell's payload. -/
 theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false⟩) []
@@ -181,6 +193,7 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false⟩) []
   have hpush : PushArg (ctxL R0 Enew) [] 4 Enew Enew.ty Enew.held
       (setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false, dtor := false }) :=
     PushArg.move (by simp [Enew, str, Ty.owning]) rfl (by simp) (ctxL_noPin (by simp [R0]) (by simp [Enew]) _)
+      (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _)
   have h1 : setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false, dtor := false } = ctxL R0 EnewD := by
     funext v
     rcases v with _ | _ | _ | _ | _ | v <;>
@@ -239,7 +252,7 @@ theorem body_typed : StmtT P (sigCtx pick) [] pick.body (ctx ErJ) := by
 /-- `pick` meets its summary: it lends `p` and the cell, nothing else. -/
 theorem pick_ok : FnOK P pick := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [pick], ?_, ?_, by simp [pick], by simp [pick], ?_,
-    by simp [pick], ctx ErJ, body_typed, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
+    by simp [pick], ctx ErJ, body_typed, ctx_dtor rfl, ⟨ErJ, by simp [ctx, pick], rfl, rfl, rfl, ?_, by simp [ErJ],
       by simp [pick]⟩, ?_⟩
   · intro pt hpt
     simp only [pick, List.mem_cons, List.mem_nil_iff, or_false] at hpt
@@ -347,7 +360,9 @@ theorem callPost_eq : callPost K4 pick [1, 2, 3] = K4 := by
 
 /-- The call: `cell` is handed `inout`, `s` and `c` are lent. -/
 theorem call_ok : CallT P K4 [] 0 [1, 2, 3] Ex K4 := by
-  refine ⟨pick, rfl, rfl, ?_, ?_, callRes_eq.symm, callPost_eq.symm⟩
+  refine ⟨pick, rfl, rfl, ?_, ?_, CallDtorSafe.of_none (fun v E hE => by
+      rcases v with _ | _ | _ | _ | v <;> simp [K4, A2.setE, upd] at hE <;> subst hE <;> rfl) _ _,
+    callRes_eq.symm, callPost_eq.symm⟩
   · intro i hi
     rcases i with _ | _ | _ | i
     · refine ⟨Ecl, by simp [K4, A2.setE, upd], rfl, ⟨rfl, Or.inl rfl, rfl⟩, fun _ => ?_,

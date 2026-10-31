@@ -753,7 +753,8 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   have hnm : mutNames Γ0 [x] = [] := by
     simp [mutNames, argNames, argE, hx, nameDeps, Entry.vdeps, hos, hheld]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γ0 := by
-    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, rfl, (callPost_dtor hps hnm).symm⟩
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_,
+      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun h => ?_, fun h => ?_⟩
@@ -1191,7 +1192,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hcall : CallT P (setE Γ x { Ex with live := true, held := [] }) F f [x]
           (callRes (setE Γ x { Ex with live := true, held := [] }) fn [x])
           (setE Γ x { Ex with live := true, held := [] }) := by
-        refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, rfl, (callPost_dtor hps hnm).symm⟩
+        refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_,
+      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm⟩
         · have hi0 : i = 0 := by simp [hps] at hi; omega
           subst hi0
           refine ⟨{ Ex with live := true, held := [] }, by simp [setE], rfl, ?_, fun h => ?_, fun h => ?_⟩

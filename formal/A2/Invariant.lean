@@ -453,6 +453,9 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
+    -- A2-drop.2: the body's own destructor bindings have ended, and no
+    -- parameter or result runs a destructor
+    (∀ v E, Δ v = some E → E.dtor = false) ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
       (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
