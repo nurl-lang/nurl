@@ -163,6 +163,12 @@ const MODULE_LAYERS = {
     summaryFi: 'Sulkeuma- ja piirreoliokutsujen (callc, cloCase, cloProgress) avaaminen ja nimikaappausten tarkistus.',
     summaryEn: 'Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness.',
   },
+  SrcKeep: {
+    layer: 2,
+    category: 'Memory Invariant',
+    summaryFi: 'Lähdekoodin tyypitys säilyttää lainatun parametrin merkinnän (StmtT.ctxRel), joten destruktorin kehys saa rungoltaan KeepOut-, CtxWF- ja NameWF-tiedot ilman letd:n premissejä (srcCase).',
+    summaryEn: 'Source typing keeps a borrowed parameter\'s entry (StmtT.ctxRel), so a destructor\'s frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase).',
+  },
   Codes: {
     layer: 4,
     category: 'Calls & Closures',
