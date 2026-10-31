@@ -76,7 +76,13 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
     · rw [killE_held, killE_held]; exact hh
 
 theorem CtxWF.kill {Γ : Ctx} (h : CtxWF Γ) (e : Eff) (hv : Bool) (x : Var) : CtxWF (kill e hv x Γ) := by
-  refine ⟨?live, fun v E' hv' hd hos hn d hdd hnm => ?_⟩
+  refine ⟨?live, fun v E' hv' hd hos hn d hdd hnm => ?_, ?armc⟩
+  case armc =>
+    intro v E' hv' hd
+    obtain ⟨E, hE, _, _⟩ := kill_cmode hv'
+    simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'
+    subst hv'
+    rw [killE_dtor] at hd; rw [killE_dbind]; exact h.arm v E hE hd
   case live =>
     intro v E' hv' hl hn r hr
     obtain ⟨E, hE, hm, _⟩ := kill_cmode hv'
@@ -135,7 +141,12 @@ theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) (hds : Dt
   · by_cases hvx : v = x
     · subst hvx; simp [A2.exitScope]
     · simp only [A2.exitScope, upd_ne _ _ hvx]; exact hk.1 v
-  refine ⟨?live, ?dtorc⟩
+  refine ⟨?live, ?dtorc, ?armc⟩
+  case armc =>
+    intro v E hv' hd
+    have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
+    simp only [A2.exitScope, upd_ne _ _ hvx] at hv'
+    exact hk.2.1.arm v E hv' hd
   case dtorc =>
     intro v E hv' hd hos hn d hdd hnm
     have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
@@ -194,7 +205,13 @@ theorem CtxWF.exitRoot {Γ' : Ctx} (h : CtxWF Γ') (p : Var) (D : List Dep)
       ∃ Er, A2.exitRoot p D Γ' r = some Er ∧ Er.mode.isRoot = true := by
     intro r ⟨Er, hEr, hro⟩ hrp
     exact ⟨rerootE p D Er, by simp [A2.exitRoot, upd_ne _ _ hrp, hEr], hro⟩
-  refine ⟨?live, ?dtorc⟩
+  refine ⟨?live, ?dtorc, ?armc⟩
+  case armc =>
+    intro v E hv' hd
+    have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
+    simp only [A2.exitRoot, upd_ne _ _ hvp] at hv'
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv'
+    exact h.arm v E0 h0 hd
   case dtorc =>
     intro v E hv' hd hos hn dep hdd hnm
     have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
