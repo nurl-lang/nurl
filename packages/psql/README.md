@@ -47,6 +47,15 @@ needs nothing from the host either.
     `pg_query`, text results, the last statement's rows kept.
   Backend `ErrorResponse`s are surfaced with their SQLSTATE, message,
   detail and hint; the transaction status is tracked.
+* **Implicit pipelining** — the copies of one `PgConn` on any number of
+  fibers or threads use it at the same time: every request is queued with
+  its own Sync and each answer comes back to the request that asked, so N
+  callers keep up to N queries in flight on one socket (one connection,
+  loopback, one runtime worker: 33.7k queries/s for one fiber, 150k for
+  128). An error ends only its own request; a lost stream fails every
+  request on its way. The transaction status is the session's: BEGIN …
+  COMMIT through copies used at the same time interleaves with their other
+  requests — take a pooled connection (below) for a transaction.
 * **A connection pool** — `pg_pool_new` over the standard library's
   `Pool` (`stdlib/std/pool.nu`): connections made on demand up to a
   bound, a checkout that waits (bounded) when all are lent — parking the
