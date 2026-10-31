@@ -457,6 +457,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
+      -- A2-drop.2: ... and no binding `letd` made viewing more than it did
+      DKeep Γ Δ [] →
       StmtT P Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
