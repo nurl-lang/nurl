@@ -22195,6 +22195,10 @@ unsafe @ __bck_take_back_expr i line → v {
         : b __bt_los & & != 0 g_auto_drop_strings ( seq ( nurl_llty __bt_vt ) `i8*` ) ( nurl_sym_has_word syms `__owned_strings__` __bt_ptr )
         : b __bt_lsl & ( mem_is_slice_ty __bt_vt ) ( nurl_sym_has_word syms `__owned_slices__` __bt_to )
         ( __bck_take_back_expr __bt_line )
+        // (A tail that is a binding is read by the assignment, as on its
+        // own path: one its path already moved is a use after move, agora
+        // #274 — its statement recorded no read.)
+        ? ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
         = g_bt_assign T
         = last ( __assign_after lex syms cg __bt_to last __bt_line __bt_vt __bt_ptr `` __bt_los __bt_lsl __tail_tt __tail_tv g_bt_src_env g_bt_sxn0 g_bt_sxmp0 )
         = g_bt_assign F
@@ -25639,13 +25643,22 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ __ra_deep_locals i syms s name → s {
     : s up ( mem_udrop_ptr_of syms name )
     ? == 0 ( nurl_str_len up ) { ^ `` } {}
-    : ~ s rest ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) -1 )
+    ^ ( __ra_deeper_of syms name ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) -1 ) )
+}
+
+// The names in `words` (`-` skipped) bound below `name`'s scope depth that
+// own their value (agora #222, rule (A)).
+@ __ra_deeper_of i syms s name s words → s {
+    : s up ( mem_udrop_ptr_of syms name )
+    ? | == 0 ( nurl_str_len up ) == 0 ( nurl_str_len words ) { ^ `` } {}
+    : i td ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) )
+    : ~ s rest ( nurl_str_cat words `` )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ! ( seq nm `-` ) {
             : s ap ( mem_udrop_ptr_of syms nm )
-            ? & != 0 ( nurl_str_len ap ) | == 0 ( nurl_sym_len2 syms ap `__pname` ) ( __param_owned_slot syms ap ) {
+            ? & & != 0 ( nurl_str_len ap ) > ( nurl_str_to_int ( nurl_sym_get2 syms ap `__depth` ) ) td | == 0 ( nurl_sym_len2 syms ap `__pname` ) ( __param_owned_slot syms ap ) {
                 = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 out ` ` nm )
             } {}
         } {}
@@ -25677,6 +25690,22 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     : s m2 ( nurl_str_cat4 `', which ends before '` bn `' does, and a '` tshow )
     : s m3 ( nurl_str_cat3 `' holds a view: a copy of it would still view '` w `'. Declare '` )
     : s m4 ( nurl_str_cat4 w `' where '` bn `' is declared, or hand back a value that holds no view of it (copy the bytes it views: slice_to_vec, string_from).` )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
+    ( nurl_str_cat4 m1 m2 m3 m4 ) )
+}
+
+// A value block's value lent out of one of its own locals, of a type that
+// cannot be copied (a `% Drop` of its own, a field that cannot be): refused,
+// with the fix (agora #222, rule (A)).
+@ __ra_copy_die i syms s name s ty s deeper → v {
+    : s rec ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) )
+    : s r1 ( str_skip_word rec )
+    : s w ( str_first_word deeper )
+    : s tshow ( llvm_to_nurl ty )
+    : s m1 ( nurl_str_cat4 `the value given to '` name `' is lent out of '` w )
+    : s m2 ( nurl_str_cat4 `', which ends before '` name `' does, and a '` tshow )
+    : s m3 ( nurl_str_cat3 `' cannot be copied out of it. Declare '` w `' where '` )
+    : s m4 ( nurl_str_cat3 name `' is declared, so that '` ( nurl_str_cat3 name `' can take it over.` `` ) )
     ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
     ( nurl_str_cat4 m1 m2 m3 m4 ) )
 }
@@ -35612,6 +35641,18 @@ unsafe @ __assign_after i lex i syms i cg s name s val_in i bck_line s vt s ptr 
     ? != 0 ( nurl_str_len __ra_deep ) {
         ( nurl_sym_def syms `__last_phi_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_phi_idents__` ) __ra_deep ) )
         ( nurl_sym_def syms `__last_call_lend_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_call_lend_idents__` ) __ra_deep ) )
+    } {}
+    // …and a tail that is a join selecting the block's own locals: they
+    // are not the arms' (gen_cond judged them at the block's depth), so the
+    // join lends them, and the value is copied in where it does
+    // (mem_join_copy_slot); the walk's alias rows leave them out.
+    : b __ra_jon & g_bt_assign | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST
+    : s __ra_jdeep ? __ra_jon ( __ra_deeper_of syms name ( nurl_sym_get syms `__last_phi_idents__` ) ) ``
+    ? != 0 ( nurl_str_len __ra_jdeep ) {
+        ? | ( __nc_drop_ty vt ) ! ( __clone_supported vt syms ) { ( __ra_copy_die syms name vt __ra_jdeep ) } {}
+        ? ( __ty_holds_view vt 0 ) { ( __ra_view_die syms ( mem_udrop_ptr_of syms name ) vt __ra_jdeep ) } {}
+        ( nurl_sym_def syms `__last_phi_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_phi_idents__` ) __ra_jdeep ) )
+        = g_join_deep 1
     } {}
     ( __nc_bind_lend_note syms name bck_rhs_tt T )
     = g_member_path_on __sxmp0
