@@ -647,8 +647,11 @@ never borrows what it is given.
 
 ### 2.11 Closures hold their captures
 
-A closure holds every value it captured for as long as it can run.
-Invoking a closure reads all of its captures, so releasing a capture
+A closure holds every value it captured for as long as it can run. A
+closure that gives one capture a view of another (`= w @ V { (
+string_data b ) }` in its body) makes that capture hold the view where
+the closure runs, as a callee storing into an `inout` argument does
+(§2.10). Invoking a closure reads all of its captures, so releasing a capture
 through its original name and then invoking the closure is a use after
 move:
 
@@ -794,6 +797,15 @@ $ `stdlib/core/string.nu`
                                 //        dropped later, and its destructor
                                 //        may read that view
 ```
+
+A holder moved on some paths only — handed to a `sink` in one branch of a
+`?` or one arm of a `??` — is still dropped on the others, so it counts as
+one that lives: only a holder moved on every path is gone before its
+source ends. And such a holder gains views only of bindings declared
+before it: given a view of a younger one — by an assignment, or pushed
+into a container of them — it is refused where it gains the view, even
+if it is pointed back before the younger one ends, because a panic in
+between unwinds them newest first too.
 
 Bind the holder after its source in the same scope, end it first in a
 block of its own, or have it hold a copy that owns its data. A value with
@@ -949,12 +961,12 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Two holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name) and #252 (a `% Drop` holder moved on only one
-branch). Agora #247 (a closure consuming one capture released another) is
-closed in 0.83.0.
-[`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
-until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
+**The holes known open are listed in [`LIMITATIONS.md`](LIMITATIONS.md)**,
+one entry each with its shape and how to stay clear of it until its fix
+ships (one file each in [`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/),
+so two PRs never edit the same list). Agora #247
+(a closure consuming one capture released another) and #252 (a holder
+moved on only one branch) are closed in 0.83.0. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first
 (reallocated, moved to a `sink`, or released at a scope end, which ran
 drops in declaration order) it read freed memory. Scope-end drops now run

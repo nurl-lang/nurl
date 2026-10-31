@@ -62,6 +62,11 @@ described in prose somewhere that no test covers:
   actively wrong, and the `docs/` tree ships **inside the toolchain
   archive** (the nurl-mcp `nurl_docs` tool serves it), so a stale
   sentence is installed on every user's machine.
+- The open soundness holes: `python3 tools/fuzz/holes/open_list.py --write`
+  regenerates the list in `docs/LIMITATIONS.md` from
+  `tools/fuzz/holes/open/t<N>.md`, one file per hole, which PRs add and
+  delete instead of editing the list (Agora #136). release.yml checks it
+  on the tag. Ask in Agora whether a hole open on `main` has no file yet.
 - `formal/*.md` and `formal/corpus/map.tsv` — shipped as `docs/formal/`
   and served by `nurl_docs` the same way. The prose carries no probe
   counts any more (they went stale with every closed hole, and every
@@ -93,15 +98,25 @@ Tag the merge commit on `main`, never the branch: the tag is what users
 download, and it should name a commit that passed CI in the state it
 was merged.
 
+**Every change in the tag is in its `[X.Y.Z]` section.** In the merge
+queue, a PR queued ahead of the release PR lands first, after the fold,
+and its fragment stays in `changes/unreleased/`. In 0.83.0, two did.
+`verify-ci` fails a tag whose commit still holds a fragment. Fold it
+into `[X.Y.Z]` with a follow-up PR (`tools/changelog.py fold X.Y.Z
+--into`, which adds each entry to its section of the existing release),
+and tag that PR's commit. Regenerate the open-hole list in the same PR
+(`tools/fuzz/holes/open_list.py --write`).
+
 **The release needs a green macOS run on that commit** (Agora #213).
 release.yml's first job, `verify-ci`, waits for both `ci.yml` and
 `macos-tests.yml` on the tagged commit to finish, and publishes nothing
 unless both passed. Pull requests run macOS only when labelled
 `ci:macos`, because the macOS pool is often empty and a job that never
 got a runner shows as a red X. `main` runs it on every push, so the
-release commit gets its own run when the release PR merges. Keep other
-merges out until the tag is out: a later push to `main` cancels the
-release commit's macOS run, and a run that never got a runner is
+release commit gets its own run when the release PR merges. A main run
+that has started is never cancelled (Agora #251), but one still PENDING
+behind another main run is replaced by the next push. So keep other
+merges out until the tag is out. A run that never got a runner is
 cancelled as well. Either way `verify-ci` fails and says so. Run
 macos-tests on the tag by hand (Actions → macos-tests → Run workflow,
 "Use workflow from" = the tag), then re-run the failed `verify-ci` job.

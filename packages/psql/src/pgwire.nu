@@ -30,6 +30,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/arc.nu`
 
 // ── type OIDs (pg_type.oid) ───────────────────────────────────────
 : i PG_BOOL 16
@@ -80,14 +81,19 @@ $ `stdlib/std/floatbits.nu`
 }
 
 // Row-major result table. Cell (r, c) is the span at index 2*(r*ncols+c)
-// in `spans`: an offset into `data` and a length, -1 for NULL.
+// in `spans`: an offset into `data` and a length, -1 for NULL. The
+// columns are shared, frozen, with the statement that made them — every
+// result of a cached statement holds the one description — and the
+// CommandComplete tag is a span of `data` too: a result is its two
+// buffers and nothing else to allocate.
 : PgResult {
     i ncols
     i nrows
-    ( Vec PgCol ) cols
+    ( Arc ( Vec PgCol ) ) cols
     ( Vec u ) data
     ( Vec i ) spans
-    String tag  // CommandComplete (e.g. "SELECT 3", "INSERT 0 1")
+    i tag_off  // CommandComplete's tag (e.g. "SELECT 3", "INSERT 0 1"):
+    i tag_len  // bytes [tag_off, tag_off + tag_len) of data
 }
 
 // An ErrorResponse / NoticeResponse, the fields a caller acts on.
@@ -100,8 +106,18 @@ $ `stdlib/std/floatbits.nu`
 }
 
 @ pg_result_empty → PgResult {
-    ^ @ PgResult { 0 0 ( vec_new [PgCol] ) ( vec_new [u] ) ( vec_new [i] ) ( string_new ) }
+    ^ ( pgw_result_with ( arc_new [( Vec PgCol )] ( vec_new [PgCol] ) ) )
 }
+
+// An empty result whose rows will come in these columns (one share more
+// of them, not a copy).
+@ pgw_result_with ( Arc ( Vec PgCol ) ) cols → PgResult {
+    : i n ( vec_len [PgCol] ( arc_get [( Vec PgCol )] cols ) )
+    ^ @ PgResult { n 0 ( arc_clone [( Vec PgCol )] cols ) ( vec_new [u] ) ( vec_new [i] ) 0 0 }
+}
+
+// The result's columns, lent.
+@ _pg_cols PgResult r → ( Vec PgCol ) { ^ ( arc_get [( Vec PgCol )] . r cols ) }
 
 @ pgw_notice_empty → PgNotice {
     ^ @ PgNotice { ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) }
@@ -413,6 +429,16 @@ $ `stdlib/std/floatbits.nu`
     ^ n
 }
 
+@ pgw_notice_clone PgNotice n → PgNotice {
+    ^ @ PgNotice {
+        ( string_clone . n severity )
+        ( string_clone . n code )
+        ( string_clone . n message )
+        ( string_clone . n detail )
+        ( string_clone . n hint )
+    }
+}
+
 // "[SQLSTATE] message" — the one-line form lasterr keeps.
 @ pgw_notice_text PgNotice n → String {
     : String out ( string_with_cap + 16 ( string_len . n message ) )
@@ -459,26 +485,26 @@ $ `stdlib/std/floatbits.nu`
 // ── the answer to one request ─────────────────────────────────────
 // What the backend says between a request and its ReadyForQuery, folded
 // as it arrives. rc: 0 ok, 3 the server reported an error (`err`), 1 the
-// stream broke (a message out of place, a row of the wrong width).
+// stream broke (a message out of place, a row of the wrong width). What
+// only some answers carry — an error, a statement's parameter types — is
+// absent until one does, so an answer costs its result's buffers alone.
 : PgCollect {
     PgResult res
-    ( Vec i ) param_oids  // ParameterDescription (a Describe of a statement)
+    ? ( Vec i ) param_oids  // ParameterDescription (a Describe of a statement)
     b described  // a RowDescription or NoData answered a Describe
     i rc
-    PgNotice err
+    ? PgNotice err  // the ErrorResponse, when rc is 3
     i txn  // ReadyForQuery's status: 73 'I' idle, 84 'T' in a transaction, 69 'E' failed one
     b done
 }
 
-@ pgw_collect_new → PgCollect {
-    ^ @ PgCollect { ( pg_result_empty ) ( vec_new [i] ) F 0 ( pgw_notice_empty ) 0 F }
-}
+@ pgw_collect_new → PgCollect { ^ ( pgw_collect_for ( pg_result_empty ) ) }
 
-// The result's columns are already known (a cached statement, executed
-// without a Describe): rows arrive in `fmts` (one per column).
-@ pgw_collect_preset inout PgCollect c ( Vec PgCol ) cols → v {
-    = . . c res ncols ( vec_len [PgCol] cols )
-    = . . c res cols ( vec_clone [PgCol] cols )
+// An answer whose rows come in the columns `res` already has — a cached
+// statement, executed without a Describe (pgw_result_with) — or in the
+// columns its own RowDescription will say.
+@ pgw_collect_for sink PgResult res → PgCollect {
+    ^ @ PgCollect { res @ ?( Vec i ) { F # ( Vec i ) 0 } F 0 @ ?PgNotice { F # PgNotice 0 } 0 F }
 }
 
 // One backend message, type `mtype`, body [off, end) of `buf`.
@@ -490,16 +516,16 @@ $ `stdlib/std/floatbits.nu`
     ? == mtype 84 {
         // RowDescription: a new result set (the simple protocol runs each
         // statement of a script in turn; the last one's rows are kept).
-        : ( Vec PgCol ) cols ( pgw_row_desc buf off end )
-        = . c res ( pg_result_empty )
-        = . . c res ncols ( vec_len [PgCol] cols )
-        = . . c res cols cols
+        = . c res ( pgw_result_with ( arc_new [( Vec PgCol )] ( pgw_row_desc buf off end ) ) )
         = . c described T
         ^
     } {}
     ? == mtype 67 {
-        : ( Slice u ) b ( slice_from_vec [u] buf )
-        = . . c res tag ( __pgw_str b off ( __pgw_cstr_end b off end ) )
+        // The tag goes onto the table's buffer, after the rows it counts.
+        : i e ( __pgw_cstr_end ( slice_from_vec [u] buf ) off end )
+        = . . c res tag_off ( vec_len [u] . . c res data )
+        = . . c res tag_len - e off
+        ( vec_extend_range [u] . . c res data buf off - e off )
         ^
     } {}
     ? == mtype 90 {
@@ -508,11 +534,11 @@ $ `stdlib/std/floatbits.nu`
         ^
     } {}
     ? == mtype 69 {
-        = . c err ( pgw_notice buf off end )
+        = . c err @ ?PgNotice { T ( pgw_notice buf off end ) }
         = . c rc 3
         ^
     } {}
-    ? == mtype 116 { = . c param_oids ( pgw_param_desc buf off end ) ^ } {}
+    ? == mtype 116 { = . c param_oids @ ?( Vec i ) { T ( pgw_param_desc buf off end ) } ^ } {}
     ? == mtype 110 { = . c described T ^ } {}
     // 49 ParseComplete, 50 BindComplete, 51 CloseComplete, 73
     // EmptyQueryResponse, 115 PortalSuspended, 78 NoticeResponse, 83
@@ -560,12 +586,16 @@ $ `stdlib/std/floatbits.nu`
 @ pg_result_nrows PgResult r → i { ^ . r nrows }
 
 // CommandComplete's tag ("SELECT 3", "UPDATE 2", …).
-@ pg_result_tag PgResult r → String { ^ ( string_clone . r tag ) }
+@ pg_result_tag PgResult r → String {
+    : String out ( string_with_cap . r tag_len )
+    ? > . r tag_len 0 { ( string_push_window out ( slice_from_vec [u] . r data ) . r tag_off . r tag_len ) } {}
+    ^ out
+}
 
 // The rows a command touched or returned — the tag's last number, 0 when
 // it has none (CREATE TABLE).
 @ pg_result_affected PgResult r → i {
-    : ( Slice u ) b ( string_bytes . r tag )
+    : ( Slice u ) b ( slice_window [u] ( slice_from_vec [u] . r data ) . r tag_off . r tag_len )
     : i n ( slice_len [u] b )
     : ~ i k n
     ~ & > k 0 & >= ( slice_byte b - k 1 ) 48 <= ( slice_byte b - k 1 ) 57 { = k - k 1 }
@@ -574,20 +604,26 @@ $ `stdlib/std/floatbits.nu`
 }
 
 @ pg_result_col PgResult r i col → String {
-    ?? ( vec_get [PgCol] . r cols col ) { T c → ^ ( string_clone . c name ) F → ^ ( string_new ) }
+    ?? ( vec_get [PgCol] ( _pg_cols r ) col ) { T c → ^ ( string_clone . c name ) F → ^ ( string_new ) }
 }
 
 // The column's type OID (PG_INT4, PG_TEXT, …), 0 out of range.
 @ pg_result_col_type PgResult r i col → i {
-    ?? ( vec_get [PgCol] . r cols col ) { T c → ^ . c oid F → ^ 0 }
+    ?? ( vec_get [PgCol] ( _pg_cols r ) col ) { T c → ^ . c oid F → ^ 0 }
+}
+
+// The format the column's cells came in: 0 text, 1 binary (-1 out of range).
+@ pg_result_col_fmt PgResult r i col → i {
+    ?? ( vec_get [PgCol] ( _pg_cols r ) col ) { T c → ^ . c fmt F → ^ -1 }
 }
 
 // The index of the column called `name`, F when there is none.
 @ pg_result_col_index PgResult r s name → ?i {
-    : i n ( vec_len [PgCol] . r cols )
+    : ( Vec PgCol ) cols ( _pg_cols r )
+    : i n ( vec_len [PgCol] cols )
     : ~ i k 0
     ~ < k n {
-        ? ( nurl_str_eq ( string_data . ( vec_at [PgCol] . r cols k ) name ) name ) { ^ @ ?i { T k } } {}
+        ? ( nurl_str_eq ( string_data . ( vec_at [PgCol] cols k ) name ) name ) { ^ @ ?i { T k } } {}
         = k + k 1
     }
     ^ @ ?i { F 0 }
@@ -608,7 +644,7 @@ $ `stdlib/std/floatbits.nu`
 
 @ __pg_off PgResult r i row i col → i { ^ ( vec_at [i] . r spans ( __pg_span r row col ) ) }
 
-@ __pg_fmt PgResult r i col → i { ^ . ( vec_at [PgCol] . r cols col ) fmt }
+@ __pg_fmt PgResult r i col → i { ^ . ( vec_at [PgCol] ( _pg_cols r ) col ) fmt }
 
 // T for a NULL — and for a cell outside the table.
 @ pg_row_is_null PgResult r i row i col → b { ^ < ( __pg_len r row col ) 0 }
@@ -630,7 +666,7 @@ $ `stdlib/std/floatbits.nu`
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
     ? == ( __pg_fmt r col ) 1 {
-        : i oid . ( vec_at [PgCol] . r cols col ) oid
+        : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
         ? & == oid PG_INT2 == n 2 { ^ @ ?i { T ( pgw_i16 b off ) } } {}
         ? & == oid PG_INT4 == n 4 { ^ @ ?i { T ( pgw_i32 b off ) } } {}
         ? & == oid PG_OID == n 4 { ^ @ ?i { T ( pgw_u32 b off ) } } {}
@@ -649,7 +685,7 @@ $ `stdlib/std/floatbits.nu`
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
     ? == ( __pg_fmt r col ) 1 {
-        : i oid . ( vec_at [PgCol] . r cols col ) oid
+        : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
         ? & == oid PG_FLOAT8 == n 8 { ^ @ ?f { T ( bits_to_f64 ( pgw_i64 b off ) ) } } {}
         ? & == oid PG_FLOAT4 == n 4 { ^ @ ?f { T # f ( bits_to_f32 ( pgw_u32 b off ) ) } } {}
         ?? ( pg_row_i r row col ) { T x → { ^ @ ?f { T # f x } } F → { ^ @ ?f { F 0.0 } } }
@@ -664,7 +700,7 @@ $ `stdlib/std/floatbits.nu`
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
     ? == ( __pg_fmt r col ) 1 {
-        ? & == . ( vec_at [PgCol] . r cols col ) oid PG_BOOL == n 1 { ^ @ ?b { T != 0 ( slice_byte b off ) } } {}
+        ? & == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_BOOL == n 1 { ^ @ ?b { T != 0 ( slice_byte b off ) } } {}
         ^ @ ?b { F F }
     } {}
     : i c0 ( slice_byte b off )
@@ -681,7 +717,7 @@ $ `stdlib/std/floatbits.nu`
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
     ? == ( __pg_fmt r col ) 1 {
-        ^ @ ?String { T ( pgw_render . ( vec_at [PgCol] . r cols col ) oid ( slice_window [u] b off n ) ) }
+        ^ @ ?String { T ( pgw_render . ( vec_at [PgCol] ( _pg_cols r ) col ) oid ( slice_window [u] b off n ) ) }
     } {}
     ^ @ ?String { T ( __pgw_str b off + off n ) }
 }
@@ -694,7 +730,7 @@ $ `stdlib/std/floatbits.nu`
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
     : ( Slice u ) w ( slice_window [u] b off n )
-    ? & == ( __pg_fmt r col ) 0 == . ( vec_at [PgCol] . r cols col ) oid PG_BYTEA {
+    ? & == ( __pg_fmt r col ) 0 == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_BYTEA {
         ? & >= n 2 & == ( slice_byte w 0 ) 92 == ( slice_byte w 1 ) 120 {
             : ( Vec u ) out ( vec_with_cap [u] / - n 2 2 )
             : ~ i k 2
@@ -715,7 +751,7 @@ $ `stdlib/std/floatbits.nu`
     ? < n 0 { ^ @ ?i { F 0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
-    : i oid . ( vec_at [PgCol] . r cols col ) oid
+    : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
     ? == ( __pg_fmt r col ) 1 {
         ? & | == oid PG_TIMESTAMP == oid PG_TIMESTAMPTZ == n 8 { ^ @ ?i { T + ( pgw_i64 b off ) PG_EPOCH_US } } {}
         ? & == oid PG_DATE == n 4 { ^ @ ?i { T * + ( pgw_i32 b off ) PG_EPOCH_DAYS 86400000000 } } {}
@@ -730,7 +766,7 @@ $ `stdlib/std/floatbits.nu`
     ? < n 0 { ^ @ ?i { F 0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
     : i off ( __pg_off r row col )
-    ? & & == ( __pg_fmt r col ) 1 == . ( vec_at [PgCol] . r cols col ) oid PG_DATE == n 4 {
+    ? & & == ( __pg_fmt r col ) 1 == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_DATE == n 4 {
         ^ @ ?i { T + ( pgw_i32 b off ) PG_EPOCH_DAYS }
     } {}
     ?? ( pg_row_ts r row col ) {

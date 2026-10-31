@@ -21,9 +21,14 @@ on:
   workflow_dispatch:
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
+# On main a run is never cancelled part-way (Agora #251): 20 of 35 main
+# runs used to be cancelled by the next merge, a quarter of all ci.yml
+# job-minutes thrown away, and the commit left untested. A main run that
+# is in progress finishes; GitHub keeps only the newest pending one behind
+# it. A PR's older run is still cancelled by its next push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
@@ -33,11 +38,80 @@ jobs:
     # of a main that moved since they were tested, so the queue is no
     # place to save minutes by path: running too much is always correct
     # there, and running too little is not.
+    #
+    # On a push to main, nothing runs when the merge queue already tested
+    # the commit. The queue lands exactly the commit its merge_group run
+    # tested (same sha), so a second full run of it is pure cost: it used
+    # a third of ci.yml's runner time and held slots of the 20-job limit
+    # that queued PRs waited for. release.yml's verify-ci accepts the
+    # merge_group run, since it looks up ci.yml runs by sha. A push that did not come
+    # through the queue (none should) still runs everything.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
     outputs:
-      code: ${{ github.event_name == 'merge_group' && 'true' || steps.code.outputs.code }}
-      webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.webdocs }}
-      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.compiler }}
+      # `md`: Markdown outside changes/, webdocs/ and formal/ changed. A
+      # change that is nothing but such Markdown runs only the two gate
+      # jobs: they hold every check that reads a .md file (the doc examples
+      # compile, nurlapi's and nurl-mcp's docs tools, the protobuf doc
+      # examples, the generated COMPILER_INTERNALS appendix). The corpus,
+      # FreeBSD, the sanitizers and the unikernel jobs read no Markdown.
+      # That is about 24 job-minutes instead of 123.
+      code: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      md: ${{ github.event_name == 'merge_group' && steps.group.outputs.md || steps.queued.outputs.tested == 'true' && 'false' || steps.md.outputs.md }}
+      webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
+      compiler: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
+      # The platform and sanitizer jobs (FreeBSD, ASan/UBSan, the
+      # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
+      # 123 job-minutes. The merge queue runs them anyway, on the combined
+      # commit that lands, so a PR runs them only when labelled `ci:full`
+      # (add the label, then push). A PR's own run keeps the build, the
+      # corpus and the gates: the fast signal, about 35 job-minutes. A
+      # skipped required check counts as passed, so the PR can still join
+      # the queue. Pushes and the queue always run everything.
+      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
     steps:
+      # The merge queue rebuilds its groups whenever one fails or main moves,
+      # and deletes the old group branches. Their ci.yml runs go on,
+      # though: each is a full run (~123 job-minutes) whose result nothing
+      # reads, and it holds slots of the 20-job limit that the new groups
+      # wait for. On 2026-10-31, three to five of them were running at once
+      # after every rebuild. A new group's run cancels the queue runs whose
+      # branch is gone: only a 404 for the branch counts, so an API error
+      # cancels nothing.
+      - name: Cancel queue runs whose group the queue dropped
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF: ${{ github.run_id }}
+        run: |
+          for s in queued in_progress; do
+            gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&status=$s&per_page=100" \
+              --jq '.workflow_runs[] | "\(.id) \(.head_branch)"' || true
+          done | while read -r id ref; do
+            [ "$id" = "$SELF" ] && continue
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/git/ref/heads/$ref" || echo 000)"
+            if [ "$code" = 404 ]; then
+              echo "::notice::cancelled run $id: its queue group $ref is gone"
+              gh api -X POST "repos/$REPO/actions/runs/$id/cancel" --silent || true
+            fi
+          done
+      - name: Did the merge queue already test this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n="$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?event=merge_group&head_sha=${{ github.sha }}" --jq '.total_count' 2>/dev/null || echo 0)"
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::the merge queue tested ${{ github.sha }} (ci.yml merge_group run); this push runs nothing"
+          else
+            echo "tested=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout
         uses: actions/checkout@v4
       # Docs-only PRs (webdocs/**) skip the compiler jobs below and run
@@ -105,6 +179,36 @@ jobs:
               - '!formal/**'
               - '!CHANGELOG.md'
               - '!changes/**'
+              - '!**/*.md'
+      - uses: dorny/paths-filter@v3
+        id: md
+        if: github.event_name != 'merge_group'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            md:
+              - '**/*.md'
+              - '!changes/**'
+              - '!webdocs/**'
+              - '!formal/**'
+              - '!CHANGELOG.md'
+      # The queue classifies the whole group against the main it builds on.
+      # A group of nothing but Markdown runs the gates only, like a PR.
+      # Anything else, or a diff that cannot be computed, runs everything.
+      # main itself passed all of it.
+      - name: What the queue group changes
+        id: group
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if git fetch --no-tags --depth=1 origin "$BASE" && files="$(git diff --name-only "$BASE" HEAD)" &&
+             [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '\.md$'; then
+            printf '%s\n' "$files" | sed 's/^/  md only: /'
+            { echo code=false; echo md=true; } >> "$GITHUB_OUTPUT"
+          else
+            { echo code=true; echo md=false; } >> "$GITHUB_OUTPUT"
+          fi
 
   # Files every pull request used to edit by hand, and so conflict over
   # (Agora #211, #212): the hole-probe table and the changelog. Both are
@@ -168,6 +272,13 @@ jobs:
         # Python over fixture runs, no toolchain.
         shell: bash
         run: python3 tools/tests/test_tls_bench_report.py
+      - name: HTTP torture cell helper controls
+        # bench/http_torture/lib.py splits each cell's errors into harness
+        # artefacts and server-attributable ones and marks steal (†) and a
+        # saturated generator (‡) (Agora #120). Pure Python over real oha
+        # JSON fixtures, no toolchain.
+        shell: bash
+        run: python3 tools/tests/test_http_torture_lib.py
       - name: Generated RSA-2048 ADX kernels are current
         # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
         # between markers; a hand edit or a stale block fails here.
@@ -258,8 +369,15 @@ jobs:
       - name: Compile and link the whole runtime against msvcrt
         run: ./tools/check_mingw_cross.sh
 
-  build-test:
-    name: build + bootstrap fixed point + test corpus
+  # build-test is split in three jobs that run at once (Agora #251, part 2):
+  # as one job it ran 34 min p50 and was CI's critical path. build-corpus is
+  # ./build.sh itself (the bootstrap fixed point and the test corpus);
+  # build-gates and build-gates-2 build the toolchain with --no-tests
+  # (~1.6 min) and run every gate that used to follow it, in the same order.
+  # The required check keeps its name: `build-test` below is that check,
+  # and it passes only when all three parts did.
+  build-corpus:
+    name: "build + bootstrap fixed point + test corpus (build.sh)"
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -311,6 +429,43 @@ jobs:
         # type for function argument"). Checks every module the corpus
         # just emitted, so this runner's older clang still catches it.
         run: python3 tools/check_ir_type_order.py "$(ls -td build/tests/run.* | head -1)"/*.ll
+
+      - name: Retain complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
+
+  build-gates:
+    name: "build gates: probes, controls, packaging"
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
+    runs-on: ubuntu-latest
+    # The gates of the old single job (see build-corpus above). Measure
+    # before raising this: the next gate added here comes with a time.
+    timeout-minutes: 30
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: clang --version | head -1
+
+      - name: Build the toolchain (the corpus runs in build-corpus)
+        run: ./build.sh --no-tests
 
       - name: Soundness hole probes (every one rejected, or clean under ASan/LSan)
         # tools/fuzz/holes: each probe is a way safe code once broke the
@@ -382,13 +537,6 @@ jobs:
           python3 tools/tests/test_package_runners.py
           python3 tools/tests/test_resolver.py
           ./tools/nurlpkg/test-install-tool.sh
-
-      - name: Retain complete build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: build/logs/
 
       - name: self-compile peak-RSS gate
         # Peak memory to compile the compiler is its existential
@@ -573,15 +721,53 @@ jobs:
         # differ only in case.
         run: ./tools/check_windows_paths.sh
 
+  build-gates-2:
+    name: "build gates: formatting, diagnostics, tooling, protocols, codecs, coverage"
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
+    runs-on: ubuntu-latest
+    # The gates of the old single job (see build-corpus above). Measure
+    # before raising this: the next gate added here comes with a time.
+    timeout-minutes: 30
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: clang --version | head -1
+
+      - name: Build the toolchain (the corpus runs in build-corpus)
+        run: ./build.sh --no-tests
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so
         # this is a cheap in-memory reformat-and-compare with no
         # extra compilation. bench/ is excluded — those .nu files are
         # recorded model outputs from the generation-accuracy study
-        # and must keep the exact bytes the model emitted. The
-        # repo-wide --write pass that made this pass also keeps
-        # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
+        # and must keep the exact bytes the model emitted.
+        #
+        # compiler/tests/nurlfmt_idempotent.sh (fmt is a fixed point, and
+        # nurlc(fmt(x)) == nurlc(x)) does NOT run here, on purpose: once
+        # this step passes, every file it covers is canonical, fmt(x) is
+        # x byte for byte, and both of its invariants hold trivially —
+        # in CI it could only ever report a false failure (agora #263:
+        # it reported 63, all a path difference). It finds something on
+        # a tree that is not canonical yet: run it while changing the
+        # formatter, against the old tree, BEFORE the repo-wide --write
+        # pass, to show that pass changes no IR.
         run: ./compiler/tests/nurlfmt_check.sh
 
       - name: strict-arity gate (the n-ary '&'/'|' trap)
@@ -810,10 +996,32 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  build-test:
+    name: build + bootstrap fixed point + test corpus
+    needs: [changes, build-corpus, build-gates, build-gates-2]
+    # Skipped exactly when its parts are (a docs-only change), so the
+    # required check reads as satisfied then, as before. Otherwise it waits
+    # for all three and fails unless every one succeeded. A Markdown-only
+    # change runs the two gate jobs and no corpus: both gates must pass.
+    if: ${{ always() && (needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: build.sh and both gate jobs passed
+        env:
+          CORPUS: ${{ needs.build-corpus.result }}
+          GATES: ${{ needs.build-gates.result }}
+          GATES2: ${{ needs.build-gates-2.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2 code=$CODE"
+          [ "$GATES" = success ] && [ "$GATES2" = success ] || exit 1
+          if [ "$CODE" = true ]; then [ "$CORPUS" = success ]; else [ "$CORPUS" = skipped ]; fi
+
   unikernel-nolibc:
     name: "unikernel: the corpus with no libc"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -882,7 +1090,7 @@ jobs:
   unikernel-qemu:
     name: "unikernel: the guest under QEMU (x86-64, RISC-V, AArch64)"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -961,7 +1169,7 @@ jobs:
   unikernel-appliance:
     name: "unikernel: nurlc.wasm and the swarm appliance in the guest"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -993,10 +1201,20 @@ jobs:
           NURL_ZIG: /opt/zig/zig
         run: ./unikernel/tests/swarm_gate.sh
 
+      - name: Deterministic simulation (build_nolibc.sh --sim)
+        # The no-libc runtime with a virtual clock, seeded entropy and a
+        # seeded schedule (agora #260): each program prints its hosted
+        # golden under five seeds, repeats itself byte for byte under
+        # one, explores (where it has a choice to make, seeds give
+        # different schedules), and simulates more time than it takes.
+        # Here rather than beside the no-libc corpus: that job already
+        # spends most of its 20 minutes on the corpus.
+        run: ./unikernel/run_sim_tests.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # GitHub has no native FreeBSD runners, so run a real FreeBSD VM inside
@@ -1042,7 +1260,7 @@ jobs:
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     # The whole-corpus run is sanitizers-corpus below, sharded: in one
     # job with these controls it took ~21 min (the corpus 12-14 of
@@ -1177,7 +1395,7 @@ jobs:
         run: python3 tools/tests/test_compiler_cleanup.py
 
       - name: metamorphic reclamation gate (§7.2, runtime axis)
-        # The compile-verdict classes run in the build-test job; this one
+        # The compile-verdict classes run in the build-gates job; this one
         # cannot, because its verdict is an LSan RUN rather than anything
         # nurlc says. The panic-unwind journal is a runtime mechanism:
         # the same abandoned allocation, spelled N ways inside a recover
@@ -1195,7 +1413,7 @@ jobs:
   sanitizers-corpus:
     name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/2)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     # Each shard is the --san build (~3 min) plus half the corpus.
     timeout-minutes: 25
@@ -1267,7 +1485,7 @@ jobs:
       - name: next build
         run: pnpm run build
 
-# nurlfmt --check now runs as a step in the build-test job above
+# nurlfmt --check now runs as a step in the build-gates job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that
 # canonicalised the tree landed alongside it, so the gate the README
 # pins is live: every first-party .nu file must be canonical to merge.

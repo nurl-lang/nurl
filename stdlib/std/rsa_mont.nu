@@ -14,8 +14,8 @@
 // on a CPU with ADX, rows of nurl_mac_row with two carry chains in
 // flight — and on one with AVX-512 IFMA the two halves of an RSA-2048
 // CRT signature run at once in radix 2^52 (below, docs/adr/0002-ifma-
-// rsa.md); exponentiation is a fixed 4-bit window whose table entry is
-// picked by scanning all sixteen under a mask. For a given
+// rsa.md); exponentiation is a fixed 5-bit window whose table entry is
+// picked by scanning all 32 under a mask. For a given
 // modulus size every operation runs the same instruction sequence whatever
 // the key and the message: no branch and no memory index depends on a
 // secret.
@@ -1934,15 +1934,73 @@ raw @ _rm_leave RsaMont c RsaTmp w ( Vec i ) a → ( Vec i ) {
     ^ out
 }
 
+// out[0 .. n) = the table entry `dig` (0 ≤ dig < 32, SECRET), entries n
+// limbs apart from `tb`, by a masked scan of all 32: the same loads and
+// the same arithmetic whatever the digit. `mk` is 32 words of scratch:
+// the masks are made once a digit — all ones for the entry wanted, zero
+// for the rest — and the scan is then two loads, an AND and an OR per
+// four limbs and entry, on v256 lanes in the x86-64-v3 clone; a width
+// not a multiple of four finishes one limb at a time.
+unsafe simd @ __rm_sel32 * i tb i n u64 dig * i mk * i out → v {
+    : ~ i k 0
+    ~ < k 32 {
+        // all-ones exactly when k == dig, without a branch
+        : u64 dz - ^^ # u64 k dig 1
+        = . mk k - 0 # i >> dz 63
+        = k + k 1
+    }
+    : i n4 & n -4
+    : ~ i j 0
+    ~ < j n4 {
+        : ~ v256 acc ( nurl_v256_zero )
+        = k 0
+        ~ < k 32 {
+            : v256 t ( nurl_v256_ld # s + # i tb * 8 + * k n j )
+            = acc ( nurl_v256_or acc ( nurl_v256_and t ( nurl_v256_bcast64 . mk k ) ) )
+            = k + k 1
+        }
+        ( nurl_v256_st # s + # i out * 8 j acc )
+        = j + j 4
+    }
+    ~ < j n {
+        : ~ i x 0
+        = k 0
+        ~ < k 32 { = x | x & . mk k . tb + * k n j = k + k 1 }
+        = . out j x
+        = j + j 1
+    }
+}
+
+// Five exponent bits from bit `at` of e's first en limbs (bits past them
+// read as 0). The position is public; only the bits are secret.
+@ __rm_bits5 ( Vec i ) e i en i at → u64 {
+    : i li >> at 6
+    : i sh & at 63
+    ? >= li en { ^ 0 } {}
+    : ~ u64 x >> # u64 ( __rm_limb e li ) # u64 sh
+    ? & > sh 59 < + li 1 en { = x | x << # u64 ( __rm_limb e + li 1 ) # u64 - 64 sh } {}
+    ^ & x 31
+}
+
+// Limb k of v (0 past its end).
+@ __rm_limb ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 } }
+
 // base^e for a SECRET exponent: base in Montgomery form, e as en limbs
-// (little-endian). Fixed 4-bit windows over all en limbs, table entry
-// chosen by a masked scan of all sixteen: the same work for every e of
-// that width. Result in Montgomery form.
+// (little-endian). Fixed 5-bit windows over all 64·en bits — the top one
+// short when 5 does not divide that — each entry chosen by a masked scan
+// of all 32 (__rm_sel32): the same work for every e of that width. The
+// table holds base^0 … base^31, the even powers by squaring the half
+// power. Result in Montgomery form.
+//
+// Five bits, not four: an RSA-2048 half exponent (1088 bits, blinded)
+// takes 218 window multiplies and 30 for the table instead of 272 and 14,
+// and the vector scan of twice the entries costs less than the scalar
+// scan of sixteen did.
 // requires: c from _rm_ctx, w from _rm_tmp c, base . c n limbs and
 // 0 ≤ en ≤ vec_len e.
 raw @ _rm_pow_ct RsaMont c RsaTmp w ( Vec i ) base ( Vec i ) e i en → ( Vec i ) {
     : i n . c n
-    : ( Vec i ) tbl ( __rm_zeros * 16 n )
+    : ( Vec i ) tbl ( __rm_zeros * 32 n )
     : *i tb ( vec_data [i] tbl )
     : *i op ( vec_data [i] . c one )
     : *i bp ( vec_data [i] base )
@@ -1953,44 +2011,41 @@ raw @ _rm_pow_ct RsaMont c RsaTmp w ( Vec i ) base ( Vec i ) e i en → ( Vec i 
     : *i pp ( vec_data [i] prev )
     : *i cp ( vec_data [i] cur )
     : ~ i wi 2
-    ~ < wi 16 {
+    ~ < wi 32 {
+        // base^wi: the square of base^(wi/2) when wi is even, else
+        // base^(wi−1)·base
+        : b even == & wi 1 0
+        : i from ? even >> wi 1 - wi 1
         = j 0
-        ~ < j n { = . pp j . tb + * - wi 1 n j = j + j 1 }
-        ( _rm_mul_d c w cur prev base )
+        ~ < j n { = . pp j . tb + * from n j = j + j 1 }
+        ? even { ( _rm_sqr_d c w cur prev ) } { ( _rm_mul_d c w cur prev base ) }
         = j 0
         ~ < j n { = . tb + * wi n j . cp j = j + j 1 }
         = wi + wi 1
     }
     : ( Vec i ) acc ( __rm_zeros n )
-    ( __rm_copy_d acc . c one n )
     : ( Vec i ) sel ( __rm_zeros n )
+    : ( Vec i ) mk ( __rm_zeros 32 )
+    : *i ap ( vec_data [i] acc )
     : *i sp ( vec_data [i] sel )
-    : *i ep ( vec_data [i] e )
-    : ~ i li - en 1
-    ~ >= li 0 {
-        : u64 limb # u64 . ep li
-        : ~ i nib 15
-        ~ >= nib 0 {
-            ( _rm_sqr_d c w acc acc )
-            ( _rm_sqr_d c w acc acc )
-            ( _rm_sqr_d c w acc acc )
-            ( _rm_sqr_d c w acc acc )
-            : u64 dig & >> limb # u64 * nib 4 15
-            = j 0
-            ~ < j n { = . sp j 0 = j + j 1 }
-            : ~ i k 0
-            ~ < k 16 {
-                // all-ones exactly when k == dig, without a branch
-                : u64 dz - ^^ # u64 k dig 1
-                : i mask - 0 # i >> dz 63
-                = j 0
-                ~ < j n { = . sp j | . sp j & mask . tb + * k n j = j + j 1 }
-                = k + k 1
-            }
-            ( _rm_mul_d c w acc acc sel )
-            = nib - nib 1
-        }
-        = li - li 1
+    : *i mp ( vec_data [i] mk )
+    // windows t = W−1 … 0 cover bits [5t, 5t + 5)
+    : ~ i t - / + * 64 en 4 5 1
+    ? < t 0 {
+        ( __rm_copy_d acc . c one n )
+        ^ acc
+    } {}
+    ( __rm_sel32 tb n ( __rm_bits5 e en * 5 t ) mp ap )
+    = t - t 1
+    ~ >= t 0 {
+        ( _rm_sqr_d c w acc acc )
+        ( _rm_sqr_d c w acc acc )
+        ( _rm_sqr_d c w acc acc )
+        ( _rm_sqr_d c w acc acc )
+        ( _rm_sqr_d c w acc acc )
+        ( __rm_sel32 tb n ( __rm_bits5 e en * 5 t ) mp sp )
+        ( _rm_mul_d c w acc acc sel )
+        = t - t 1
     }
     ^ acc
 }
@@ -2059,7 +2114,7 @@ raw @ _rm_pow_pub RsaMont c RsaTmp w ( Vec i ) base ( Vec u ) e → ( Vec i ) {
 // in the other's vector latency. Measured on an i7-11850H, a 1024-bit
 // AMM costs 88 ns this way against 203 ns for the ADX rows.
 //
-// Exponentiation keeps the fixed 4-bit window and the masked scan of
+// Exponentiation here keeps a fixed 4-bit window and the masked scan of
 // all sixteen table entries; values stay in the AMM domain (x·R' mod m,
 // below 2m) from entry to exit, and only the result is reduced. Moduli
 // of other widths and CPUs without IFMA take _rm_pow_ct.

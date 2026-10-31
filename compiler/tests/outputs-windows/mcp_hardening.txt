@@ -1,9 +1,0 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-ok: success tool returned real result
-ok: tool panic returned isError
-ok: forged reverse-RPC response rejected
-ok: pending reverse-RPC response settled
-[mcp] tool handler panicked: kaboom

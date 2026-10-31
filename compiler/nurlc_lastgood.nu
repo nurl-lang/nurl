@@ -3846,6 +3846,8 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s owner ( nurl_cg_reg cg )
     ( nurl_sym_def syms `__ret_owner_slot__` owner )
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = alloca i8*\n` )
+    // (No return has handed back an owned string yet: mem_save_return_proof.)
+    ( nurl_sym_def syms `__ret_owner_any__` `` )
 }
 
 // A dynamic owner slot can hold null; escaping that slot does not prove
@@ -3864,6 +3866,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     } {}
     ( nurl_print `  store i8* ` ) ( nurl_print returned_owner )
     ( nurl_print `, i8** ` ) ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+    ? ! ( seq returned_owner `null` ) { ( nurl_sym_set_deep syms `__ret_owner_any__` `1` ) } {}
     : s proof ? | ( mem_static_return_slot syms skip )
     & direct ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) `1` `0`
     : s guard ? direct ( nurl_sym_get syms `__last_call_guard__` )
@@ -4220,10 +4223,17 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_publish_return_proof i syms i cg s ty → v {
     ( mem_publish_hown syms )
     ? | == 0 g_auto_drop_strings ! ( seq ( nurl_llty ty ) `i8*` ) { ^ } {}
-    : s owner ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
-    ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
-    ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    // The returned string leaves the panic journal: the caller owns it now.
+    // (Not when no return so far handed back an owned one — the slot then
+    // holds null on every path that reaches here, and the call, external
+    // and never elided, was paid by every `→ s` and `→ *T` function:
+    // vec_data in every encoder; agora #282.)
+    ? != 0 ( nurl_sym_len syms `__ret_owner_any__` ) {
+        : s owner ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    } {}
     // A named function returning a raw pointer (`→ *T`) has no reader: its
     // direct callers take the result as never owned (__ret_never_owned, the
     // same __fn_raw_ret answer), a `dyn` thunk answers for its impl
@@ -9309,6 +9319,11 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     // unreleased — h203.)
     ? | ! | | | | | ( is_ident_tok rhs_tt ) == rhs_tt TT_LPAREN == rhs_tt TT_DOT == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST == rhs_tt TT_LBRACE ! ( seq ( nurl_llty vt ) `i8*` ) { ^ v } {}
     ? | != 0 ( nurl_sym_len syms `__last_call_guard__` ) != 0 ( nurl_sym_len syms `__last_call_ret_owned__` ) { ^ v } {}
+    // (A raw pointer a call hands back — `: ~ *u dst ( vec_data [u] v )` —
+    // is no string: what is assigned to it later is raw memory unsafe code
+    // manages by hand. With a slot it freed and journaled null at every
+    // such binding; agora #282.)
+    ? & == rhs_tt TT_LPAREN ( __fn_raw_ret syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
     : s slot ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
     ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
@@ -9513,7 +9528,11 @@ unsafe @ origin_guard_retained i root → b {
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms cn `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms cn `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms cn `__opt_nurl_t` ) )
-    ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms cn ) )
+    // (A raw pointer, `vec_data [u]`'s, is no string a binding owns:
+    // registered as one, every `: *u dst ( vec_data … )` freed and
+    // journaled a slot that held null; agora #282.)
+    : s __ro ( __ret_owned_of syms cn )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ? & != 0 ( nurl_str_len __ro ) ( __fn_raw_ret syms cn ) ( nurl_str_cat `` `` ) __ro )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get2 syms cn `__ret_owned_fields` ) )
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
@@ -21197,6 +21216,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s elem_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print elem_ptr )
     ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty elem_ty ) ) ( nurl_print `\n` )
+    // The element is the loop's own: bound in a scope the loop's exit
+    // closes. Bound in the enclosing one, it outlived the loop — read
+    // after the container was cleared (a use after free) or after an empty
+    // loop (never written) — and replaced an outer binding of its name
+    // (agora #245).
+    ( nurl_sym_push syms )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
     // Labels
@@ -21341,6 +21366,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat le `:` ) )
+    ( nurl_sym_pop syms )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_set_last_type `void` )
@@ -30963,6 +30989,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         } {}
     }
     ( bck_put ( bck_bkey `bs_` bids ) set )
+    ( __bs_note bids )
     // A borrow of an Arc's payload stays one, through borrows of it
     // (bck_sx_name, §6.5). (A new value clears it: the let / assign row.)
     ? != g_sxe_arc -1 {
@@ -31037,7 +31064,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // drop is a use of freed memory: refused here, where the source ends
 // (Rust's dropck rule). A holder with no such destructor only becomes
 // unreadable (bck_diag_invalid), and its drop reads nothing.
-@ bck_drop_view_diag i d i src i line s why → v {
+@ bck_drop_view_diag i d i src i line s why b maybe → v {
     : i r ( bck_path_root d )
     : s rs ( nurl_str_int r )
     ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` rs ) ) `1` ) { ^ v } {}
@@ -31051,7 +31078,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` rs ) )
     : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int src ) ) )
     : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` sn `' ends here — ` ) why ( nurl_str_cat3 ` — while '` dn `' still holds a view of it. '` ) `` )
-    : s m2 ( nurl_str_cat3 dn `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` dn )
+    // (Moved on some paths only: dropped on the others.)
+    : s later ? maybe ( nurl_str_cat `' is moved on some paths only, so on the others it is still dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` ) ( nurl_str_cat `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` )
+    : s m2 ( nurl_str_cat3 dn later dn )
     // (Ended with its scope: values are dropped newest first, so declaring
     // the holder after its source is enough.)
     : b order | != 0 ( nurl_str_starts why `it went out of scope` ) != 0 ( nurl_str_starts why `the return drops` )
@@ -31098,7 +31127,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
                 : i x ( bck_path_root ( nurl_str_to_int xs ) )
                 ? ( str_contains_word gone ( nurl_str_int x ) ) {
-                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) )
+                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) == BCK_MAYBE_MOVED ( bck_st_get st ( nurl_str_to_int ds ) ) )
                 } {}
             }
         } {}
@@ -32474,14 +32503,17 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i b ( nurl_str_to_int bs )
+        : b ends & ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids ) | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) )
+        // (One whose drop reads views, moved on some paths only: dropped on
+        // the others, agora #252.)
+        ? & ends == BCK_MAYBE_MOVED ( bck_st_get out b ) { ( bck_drop_view_diag b sid line why T ) } {}
         // (A field viewer, `fborrow`, holds the field's handle: elements
         // dropped or replaced inside what it reaches leave that handle where
         // it is — it reads them as they are now. A replaced field ends it.)
-        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
-        | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) ) {
+        ? & ends == BCK_BORROWED_SHARED ( bck_st_get out b ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
-            ( bck_drop_view_diag b sid line why )
+            ( bck_drop_view_diag b sid line why F )
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -32503,13 +32535,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ds ( str_first_word rest ) = rest ( str_skip_word rest )
         : i d ( nurl_str_to_int ds )
+        : i dv ( bck_st_get out d )
+        : b holds & & ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids )
+        // (A holder moved on some paths only is still dropped on the others,
+        // its destructor reading the view: the drop check asks it as one
+        // that lives — formal's DtorSafe join rule, agora #252.)
+        ? & holds == dv BCK_MAYBE_MOVED { ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why T ) } {}
         // (Not bound on this path — never yet, or its block left — it holds
         // nothing to end.)
-        ? & & & & ! ( bck_dead_state ( bck_st_get out d ) ) != BCK_UNINIT ( bck_st_get out d ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids ) {
+        ? & & holds ! ( bck_dead_state dv ) != BCK_UNINIT dv {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
-            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why )
+            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why F )
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out d line ( nurl_str_cat3 `what it holds views of ended (` why `)` ) + depth 1 ) } {}
@@ -33391,6 +33429,50 @@ unsafe @ bck_loop_mask s pre s post → s {
 // use of freed memory. Seeding the verification walk only with the
 // carried Moved state (definite, not MaybeMoved) keeps it
 // false-positive-free, exactly like the straight-line move rule.
+// The borrow bindings that have recorded sources (`bs_`) in this walk's
+// function: what a loop head joins (bck_loop, agora #229).
+// (Through the digest's wrapper: a loop's walks compare these facts too.)
+@ __bs_note s bids → v {
+    ( bck_add_word_once ( bck_bkey `bsids` `` ) bids )
+}
+
+// Every borrow binding's sources now, one `id:sources` line each.
+@ __bs_snapshot → s {
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsids` `` ) )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s id ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s line ( nurl_str_cat3 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
+    }
+    ^ out
+}
+
+// A loop head is reached from before the loop and from the end of its body:
+// a binding borrows there from what it borrowed on either path (`snap` the
+// head's, the walk's own now) — the union, as the state string's join keeps
+// a maybe-borrowed binding (bck_join_state). Overwritten per walk instead,
+// a binding that may borrow from either of two sources was tracked as
+// borrowing from one, and the period-2 swap of a cursor pair never settled
+// (stdlib/ext/regex.nu's `= cur nxt = nxt tmp`, agora #229).
+@ __bs_join s snap → v {
+    : ~ s rest ( nurl_str_cat snap `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s line ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i c ( nurl_str_find line `:` )
+        ? > c 0 {
+            : s id ( nurl_str_slice line 0 c )
+            : s hs ( nurl_str_slice line + c 1 - - ( nurl_str_len line ) c 1 )
+            : s k ( bck_bkey `bs_` id )
+            : s cur ( nurl_sym_get g_bck k )
+            : s u ( __word_union hs cur )
+            ? ! ( seq u cur ) { ( bck_put k u ) } {}
+        } {}
+    }
+}
+
 @ bck_loop i lo i hi s pre s cond_reads i cond_line → s {
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
@@ -33414,7 +33496,10 @@ unsafe @ bck_loop_mask s pre s post → s {
         ( bck_put `lcnt` `` )
         : s tok0 ( bck_facts_tok )
         = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat tok0 `` ) ( nurl_str_cat3 seen ` ` tok0 )
+        : s bsnap ( __bs_snapshot )
         : s post0 ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
+        // (The head's borrow sources: what both paths into it borrow from.)
+        ( __bs_join bsnap )
         : s tok1 ( bck_facts_tok )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
@@ -33447,6 +33532,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         = iter + iter 1
     }
     = g_bck_watch - g_bck_watch 1
+    : s bhead ( __bs_snapshot )
     // Loop-carried verification. `back` is the converged body-exit
     // state; `verif` is the back-edge seed it implies. The condition is
     // re-evaluated before each body, so check its reads first, then
@@ -33468,6 +33554,8 @@ unsafe @ bck_loop_mask s pre s post → s {
         : s vend ( bck_walk_seq lo hi verif )
         ? != 0 ( nurl_str_len vend ) {} {}
     } {}
+    // (The loop is left from its head: its borrow sources hold after it.)
+    ( __bs_join bhead )
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     // The loop is left at its condition (the head state) or by a `break`.
