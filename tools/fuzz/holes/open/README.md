@@ -1,6 +1,12 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** The last class, agora #150, is closed and graduated as
+**Six, as of 0.83.0**: agora #242, #254, #259, #264, #267 and #274.
+[`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) gives each one's
+shape and how to stay clear of it until its fix ships. Their probes live
+in the tasks until the fix lands with them in `tools/fuzz/holes/`, as
+named probes (`// map:` line), not here.
+
+The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
 (`( string_free . ( box_get b ) name )`) went over as is, and the owner
 released it again; the callee is handed a copy now.

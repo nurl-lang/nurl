@@ -10,7 +10,7 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Three soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+**Six soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
 Each is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
@@ -32,6 +32,26 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   lives: once `b` ends, `w` still points into it. Until the fix ships,
   give a value a view by assigning it in the function that owns the view's
   source.
+- **agora #264: a payload moved out of an enum that was itself taken out
+  of an Option is dropped again with the enum.** `?? ( make ) { T m → {
+  ?? m { MSome v → { ^ v } … } } … }`, with `make` returning a `?Msg`,
+  hands `v` on and then drops `m` with `v`'s storage in it. The same
+  holds for an enum received from `chan_recv` and for one first bound to
+  a local out of the Option. Matching an enum returned by a call
+  directly, or one built in place, is sound. Until the fix ships, keep
+  such a payload in a struct, or match the enum where a call returns it.
+- **agora #267: a field read out of an element borrow outlives the
+  elements' drop.** `: S e ( vec_at [S] vs 0 )` then `: String f . e
+  name`, then `( vec_clear [S] vs )`: `f` still points into the String
+  that the clear freed. A view of the container's own fields is sound.
+  Until the fix ships, read an element's field again after the
+  container's elements change, or copy it out before.
+- **agora #274: a block arm of a join whose tail names an owner already
+  moved.** `( consume a )` followed by `: String u ? c { : i z 1 a } { b }`
+  hands on the freed `a`: a block arm's tail is not checked for a move
+  the way a bare arm is. Until the fix ships, never name an owner that a
+  path has moved as a block arm's last value (bind the arm's work before
+  the join, then select by name).
 
 Every other safe program found accepted and faulting is closed, and held
 by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
