@@ -11968,13 +11968,14 @@ unsafe @ nurl_lex_val i h → s {
     ^ # s ( nurl_strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
 }
 
-// The text of the token in the slot at `base`, as an owned string.
+// The text of the token in the slot at `base`, as a string its caller
+// owns (and drops): the same contract as the nurl_str_cat copy below.
 unsafe @ __tok_text s p i base → s {
     ? == 3 ( nurl_peek p + base TF_VALID ) {
-        // (Copied from its own start: nurl_str_slice measures its
-        // argument up to the end of the slice, here the whole file
-        // before the token.)
-        ^ # s ( nurl_strdup_n # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + base TF_START ) ( nurl_peek p + base TF_VAL ) )
+        // (Sliced from the token's own start: nurl_str_slice measures its
+        // argument up to the end of the slice, and from the file's start
+        // that is the whole file before the token.)
+        ^ ( nurl_str_slice # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + base TF_START ) 0 ( nurl_peek p + base TF_VAL ) )
     } {}
     ^ ( nurl_str_cat # s ( nurl_peek p + base TF_VAL ) `` )
 }
