@@ -62,6 +62,11 @@ described in prose somewhere that no test covers:
   actively wrong, and the `docs/` tree ships **inside the toolchain
   archive** (the nurl-mcp `nurl_docs` tool serves it), so a stale
   sentence is installed on every user's machine.
+- The open soundness holes: `python3 tools/fuzz/holes/open_list.py --write`
+  regenerates the list in `docs/LIMITATIONS.md` from
+  `tools/fuzz/holes/open/t<N>.md`, one file per hole, which PRs add and
+  delete instead of editing the list (Agora #136). release.yml checks it
+  on the tag. Ask in Agora whether a hole open on `main` has no file yet.
 - `formal/*.md` and `formal/corpus/map.tsv` — shipped as `docs/formal/`
   and served by `nurl_docs` the same way. The prose carries no probe
   counts any more (they went stale with every closed hole, and every
@@ -92,6 +97,12 @@ git push origin vX.Y.Z
 Tag the merge commit on `main`, never the branch: the tag is what users
 download, and it should name a commit that passed CI in the state it
 was merged.
+
+**Every change in the tag is in its `[X.Y.Z]` section.** In the merge
+queue, a PR queued ahead of the release PR lands first, after the fold,
+and its fragment stays in `changes/unreleased/`. In 0.83.0, two did.
+`verify-ci` fails a tag whose commit still holds a fragment. Fold it
+into `[X.Y.Z]` with a follow-up PR, and tag that PR's commit.
 
 **The release needs a green macOS run on that commit** (Agora #213).
 release.yml's first job, `verify-ci`, waits for both `ci.yml` and

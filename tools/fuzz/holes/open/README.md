@@ -1,20 +1,23 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**Nine elaborated twins** ([`twins.txt`](twins.txt), agora #242). Every
-probe is closed, and since #242 `check.sh` also runs each probe's
-elaborated twin (`elab.py`): the producer form bound by `:` first, the
-consumer reading the binding. On main 360531b7, 24 of 58 twins faulted.
-#242 closed 15: a `:` binding of a join takes the owner its arm selects
-(docs/MEMORY.md §2.2) and gives it back where it dies; an `inout`
-parameter takes a binding owned per path with its flag; a block ending in
-a fresh call hands over the call's result; and a binding that cannot be
-copied is handed back with a per-call answer. The nine left share one
-gap: a binding does not inherit what its producer lends (a call in an arm
-lending a local, a field or a view of an inner local, a value a `;` defer
-releases). That is what #222's elaboration closes at the source, stage by
-stage (docs/dev/ELABORATION.md).
+**One file per hole known open**, `t<N>.md` after its Agora task: one
+paragraph, `**agora #N: <shape>.** <what happens>. Until the fix ships,
+<how to stay clear of it>.` A PR that finds a hole it does not fix adds
+the file, and the PR that closes the hole deletes it, so no two PRs edit
+the same file (Agora #136). `open_list.py --write` turns them into the
+list in [`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) at release time
+(RELEASING.md step 2), and release.yml checks the list on the tag. The
+probes live in the tasks until the fix lands them in `tools/fuzz/holes/`
+as named probes (`// map:` line).
 
-Before them, the last class, agora #150, closed and graduated as
+**Elaborated twins** ([`twins.txt`](twins.txt)): `check.sh` also runs each
+probe's elaborated twin (`elab.py`), its producer form bound by `:` first
+and the consumer reading the binding (agora #242). A twin known to fault
+is listed in `twins.txt` with its reason and is not run. What the listed
+ones share is agora #242's open shape (`t242.md`), which #222's
+elaboration closes at the source.
+
+The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
 (`( string_free . ( box_get b ) name )`) went over as is, and the owner
 released it again; the callee is handed a copy now.

@@ -240,6 +240,18 @@ itself.
   change lives in a `( Locked T )`, an `( RwLocked T )` or an `Atomic`, or
   goes through a `Channel`, and an `Arc` shares a value nobody changes ([`MEMORY.md` §6.5](MEMORY.md); see
   [Operational caveats](#operational-caveats)).
+- **A fiber that waits parks; its worker runs on.** Every blocking wait
+  in `std/thread.nu` and `std/channel.nu` — a `Cond`, so a `Locked`
+  whose value another fiber has checked out (`locked_take`),
+  `locked_await`, `sem_acquire`; `chan_recv`; `pool_get` — parks the
+  waiting fiber and lets its worker run the others, the one it waits
+  for included; on a thread it sleeps the thread. Fibers and threads
+  may share each of them. (A `Cond` used to be a plain
+  `pthread_cond_t`: a fiber waiting on one stopped its worker, and two
+  fibers sharing a `Locked` on one worker deadlocked — agora #255.)
+  A `Mutex` itself is still the OS mutex: hold it for a few
+  instructions, never across I/O or a sleep — `locked_take` /
+  `locked_restore` are the way to keep a value across a park.
 
 ## 5. Platform support
 
