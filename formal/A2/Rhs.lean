@@ -1092,7 +1092,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
-      fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl⟩
+      fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl, fun _ T h => by simp at h⟩
     obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor y E hy hd hos (Or.inl hn) dep hdd hnm
     by_cases hry : dep.root = y
     · exact Or.inl ⟨hry, Mode.isRoot_of_ownSlot hos⟩
@@ -1241,6 +1241,11 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · exact hnT.2.2.2.2 i hiS i hie rfl
   let m1 := m.set y ⟨true, some (.node t' c d es)⟩
   have hst : ∀ o, o ≠ y → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
+  -- A3.1: the shrunk tree's shares, and the popped element's, are the old tree's
+  have hshT : SharesOK m (.vec t') (.node t' c d (es ++ [e])) := by
+    have := hi.shares y E _ _ hy hT rfl rfl; rwa [hty] at this
+  have hshS : SharesOK m1 (.vec t') (.node t' c d es) :=
+    hshT.node_sub (fun x hx => List.mem_append_left _ hx) rfl
   have hown1 : ∀ o U, OwnedAt m1 o U → (o = y ∧ U = .node t' c d es) ∨ (o ≠ y ∧ OwnedAt m o U) := by
     intro o U hU
     rcases ownedAt_set.mp hU with ⟨h1, h2⟩ | h
@@ -1287,7 +1292,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       obtain ⟨rfl, hhv⟩ := hk'
       refine ⟨fun d' o l s ha => absurd (viewAt_iff.mp ha).choose_spec.choose_spec.choose_spec.2.1
         (by simp), ?_⟩
-      exact Evolve.self_hkeep ⟨hT, by simp [m1], hwS⟩ hhv
+      exact Evolve.self_hkeep ⟨hT, by simp [m1], hwS⟩ hhv hshS
     · refine ⟨⟨true, some (.node t' c d es)⟩, by simp [m1], by rw [killE_ty, hty]; exact hi.tyok (E := E) hy ▸ (by rw [hty]),
         ⟨by rw [killE_mode, hm]; rfl, fun _ => ⟨by rw [killE_ty, hty]; rfl,
           fun U hU => by cases hU; rw [killE_ty, hty]; exact hwS,
@@ -1327,7 +1332,9 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           rw [killE_ty, killE_held, hty]
           exact hvsT.keep_except hT hsfT (fun s w h => by
             cases h with
-            | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF)⟩
+            | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF),
+        fun _ T hT' => by
+          simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
       obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr
@@ -1441,6 +1448,18 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           rcases hown1 x U hU with ⟨_, rfl⟩ | ⟨hxy, h⟩
           · exact hsep i hi' hiU
           · exact hi.heap.disj y x _ U (Ne.symm hxy) hT h i (hsube.subset hi') hiU
-
-    | arc a => cases hwe
+    | arc a =>
+      have hsumwf := hwe
+      cases hwe with
+      | arc =>
+        have hok := hi.tyok hy; rw [hty] at hok
+        show RhsOut _ _ ⟨.arc a, .own, true, [], E.held, false, false⟩ _ true
+        refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
+          ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+        · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
+        · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
+        · exact List.nodup_nil
+        · intro i hi'; nomatch hi'
+        · intro x U hU i hi'; nomatch hi'
 end A2

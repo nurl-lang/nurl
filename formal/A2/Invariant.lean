@@ -91,6 +91,25 @@ theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} (h : ArcIn τ T u k)
   | inr _ ih => simp [Ty.hasArc, ih]
   | pkg _ _ => rfl
 
+/-- A node whose elements are among another's, where the blocks are as
+    they were (a `Vec` that shrank, or that was copied). -/
+theorem SharesOK.node_sub {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es es' : List Val}
+    (h : SharesOK m (.vec t) (.node t1 c d es)) (hsub : ∀ e ∈ es', e ∈ es) (hb : m'.blk = m.blk) :
+    SharesOK m' (.vec t) (.node t2 c' d' es') := fun u k ha => by
+  cases ha with
+  | child he ha' => rw [hb]; exact h u k (.child (hsub _ he) ha')
+
+/-- ... and a `Vec` with one element more (`vec_push`). -/
+theorem SharesOK.node_push {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es : List Val} {v : Val}
+    (h : SharesOK m (.vec t) (.node t1 c d es)) (hv : SharesOK m t v) (hb : m'.blk = m.blk) :
+    SharesOK m' (.vec t) (.node t2 c' d' (es ++ [v])) := fun u k ha => by
+  cases ha with
+  | child he ha' =>
+    rw [hb]
+    rcases List.mem_append.mp he with he | he
+    · exact h u k (.child he ha')
+    · rw [List.mem_singleton] at he; subst he; exact hv u k ha'
+
 /-- A tree of a type that holds no share holds none to check. -/
 theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
   fun _ _ ha => by rw [ha.hasArc] at h; cases h

@@ -1040,7 +1040,7 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       fun h => (by simp [hos] at h)⟩
   refine ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
     (fun h => by simp at h), (fun T h => by simp at h), fun hd _ hn dep hdd hnm => ?_, fun h => by simp at h,
-    fun hd => hi.wf.view x E hx hd, ArmOK.of_none rfl⟩
+    fun hd => hi.wf.view x E hx hd, ArmOK.of_none rfl, fun _ T h => by simp at h⟩
   obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor x E hx hd hos (Or.inl hn) dep hdd hnm
   by_cases hrx : dep.root = x
   · exact Or.inl ⟨hrx, Mode.isRoot_of_ownSlot hos⟩

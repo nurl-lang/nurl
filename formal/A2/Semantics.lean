@@ -127,6 +127,7 @@ def Val.owns : Val → Bool
   | .inl .. => true
   | .inr .. => true
   | .pkg .. => true
+  | .arc _ => true   -- A3.1: a share is owned; dropping it is what counts
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
