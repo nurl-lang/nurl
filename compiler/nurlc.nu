@@ -1665,8 +1665,10 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_use_clear_if 0
 : ~ i g_use_argxfer 0
 : ~ i g_use_hown 0
-// Set around a returned closure literal's env generation: its String / Vec
-// / owning-struct captures move into (are owned by) the env.
+// Set around a returned closure literal's env generation (1): its String /
+// Vec / owning-struct captures move into (are owned by) the env. 2 for a
+// closure whose body releases some captures itself: only those move in
+// (g_env_released), with what a spawn takes over (g_env_moved).
 : ~ i g_env_owns_handles 0
 // …and, for a closure that releases some captures itself, which (their
 // env field is not dropped again).
@@ -41819,7 +41821,10 @@ unsafe @ __bck_made_from s name → s {
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
         : b __shared_cap & & ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms )
-        : b __owned_cap | __shared_cap & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        // (A returned closure's env owns every one; any other only those
+        // the spawn takes over, g_env_moved — not every handle because the
+        // body releases one of them, agora #247.)
+        : b __owned_cap | __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         ? & & & & ! __owned_cap ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( str_contains_word g_env_released var ) ( __clone_supported vty syms )
         { : s ht ( nurl_llty vty )
@@ -42064,7 +42069,13 @@ unsafe @ __bck_made_from s name → s {
             : s ncup ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len ncup ) { ( mem_udrop_flag_set syms cg ncup `0` ) } {}
         } {}
-        ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
+        // Moved in: every handle a returned closure captures, and of any
+        // other closure those the body releases (g_env_released) or the
+        // spawn takes over (g_env_moved). One the frame still uses after
+        // the spawn stays a view: the spawn's adopt copies or shares it.
+        // Moved because the body released another, it was dropped by the
+        // thread under the spawner (agora #247).
+        ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
                 // Owned by the binding, or — a cursor over an option
