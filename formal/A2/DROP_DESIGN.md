@@ -159,6 +159,59 @@ separate concern. Two steps keep them apart:
    struct with a view field), which nurlc's rule refuses wherever the
    view would end.
 
+## A2-drop.2's mechanization (Agora #241)
+
+What the design above leaves open, settled against A2's code and against
+github#1380, nurlc's side of #224.
+
+**Which bindings run a destructor.** `Entry.dtor`. `letd` sets it on its
+binding, and every other rule makes entries with `dtor = false`. Only the
+typing reads it: `DtorSafe`, the join and `SlotOK` below.
+
+**A move ends the protection.** A binding moved out owns nothing, so it
+runs no destructor (`scopeDMoved`). The moved-from entry becomes
+`{ E with live := false, dtor := false }`, and from then on its sources
+may change. That is the unconditional move nurlc accepts.
+
+**The join keeps it** (the hole github#1380 had, dev #820). `EntryWeaker`
+may turn `dtor` from false to true, never back: `E.dtor = true →
+E'.dtor = true ∧ E.held ⊆ E'.held`, live or not. A binding moved on one
+path only is, after the join, dead but still a destructor binding, with
+the other path's `held`. Its slot may still own a value, so its sources
+stay protected.
+
+**`DtorSafe Γ e hv x`**: `∀ v E, Γ v = some E → E.dtor = true →
+hits e hv x E = false`. It is a premise of every rule whose context change
+kills through dependencies: `moveOwn`, `pop`, `takel` / `taker`,
+`PushArg.move`, `assign`, `push`, `free`, `unpair`, a call's `callPost`
+for its moved and changed arguments, and every scope's end (`exitScope`,
+beside its `NoPin`, and `exitRoot`). It asks every destructor entry, live
+or dead.
+
+**`SlotOK`**: a destructor binding's slot, whenever it owns a value, has
+that value's views valid (`ViewsOK` over `held`), live entry or not.
+`DtorSafe` keeps it across every kill, a move clears `dtor` with the
+value, and the join keeps `held`. So at `scopeDEnd` the destructor reads
+valid views however the binding died, and a dead destructor entry whose
+slot owns is revived for the call (`MInv.revive`, now with views).
+
+**The panic path.** An unwind ends the scopes inside the frame early, so a
+destructor binding must not view a binding younger than itself at any
+point, not only at that binding's normal end. That is an invariant of the
+configuration, as `Inv.pinOut` / `PinOK` are for borrowed parameters: a
+destructor binding views only bindings outside the scopes opened inside
+its own frame. It holds when `letd` binds (its value is made from what is
+already bound). A rule that gives a destructor binding new views must keep
+it: `assign`, `push`, an `inout` argument's `outHeld`. Whether those are
+typed in A2-drop.2, or wait for A2-drop.3, where an assignment also runs
+the old value's destructor, decides how much of nurlc's accepted code
+A2-drop.2 covers.
+
+**What stays for A2-drop.3.** The destructor on the type, run wherever
+the value is dropped: a field (drop glue), a `Vec` element, a `sink`
+parameter in its callee, the old value of an assignment. Until then
+`CLAIM.md` says where the calculus runs a destructor.
+
 ## The panic step's proof (A2-drop.1, done)
 
 `scopeDP` turns a panic into a normal step, so preservation must type what
