@@ -373,7 +373,22 @@ field_reader_rebound_string_returned	§7.6	A2	agora #268: a String field reader 
 field_reader_rebound_twice_returned	§7.6	A2	agora #268: a field reader re-bound twice and returned (UAF)	runs-clean	-
 field_reader_rebound_vec_returned_in_an_option	§7.6	A2	agora #268: a Vec field reader re-bound and returned inside an option (UAF)	runs-clean	-
 field_reassign_old_alias	§2.10	A2	view of a struct's String field read after the field is reassigned	rejected	h25
+field_replaced_in_a_loop_reader_pushed_before_it	§7.6	A2	agora #265: a field replaced in a loop below a push of its reader	runs-clean	-
+field_replaced_in_a_loop_reader_returned_before_it	§7.6	A2	agora #265: a field replaced in a loop below a return of its reader (leak)	runs-clean	-
+field_replaced_on_one_branch_under_its_reader	§7.6	A2	agora #265: a field replaced on one branch under its reader (UAF)	runs-clean	-
+field_replaced_reader_handed_to_a_sink	§7.6	A2	agora #265: a field replaced under its reader, the reader handed to a sink (new value lost)	runs-clean	-
+field_replaced_reader_kept_in_an_option	§7.6	A2	agora #265: a field replaced under its reader, the reader kept in an option (leak)	runs-clean	-
+field_replaced_reader_pushed	§7.6	A2	agora #265: a field replaced under its reader, the reader pushed (UAF)	runs-clean	-
+field_replaced_reader_pushed_from_a_local	§7.6	A2	agora #265: a field of a local replaced under its reader, the reader pushed	runs-clean	-
+field_replaced_reader_returned	§7.6	A2	agora #265: a field replaced under its reader, the reader returned (leak)	runs-clean	-
+field_replaced_reader_returned_in_an_option	§7.6	A2	agora #265: a field replaced under its reader, the reader returned in an option (leak)	runs-clean	-
+field_replaced_twice_under_its_reader	§7.6	A2	agora #265: a field replaced twice under its reader (UAF)	runs-clean	-
+field_replaced_under_a_reader_holding_an_arc_copy	§2.12	A2	agora #265: a reader owning an Arc copy is not handed a replaced field's old value	runs-clean	-
 field_replaced_under_borrow	§2.12	A2	element borrowed via struct field; field reassigned; borrow read	rejected	h85
+field_replaced_under_its_reader_arc_first	§7.6	A2	agora #265: a field replaced under its reader, an Arc first (UAF)	runs-clean	-
+field_replaced_under_its_reader_arc_only	§7.6	A2	agora #265: a field replaced under its reader, an Arc its only handle (UAF)	runs-clean	-
+field_replaced_vec_reader_kept_in_an_option	§7.6	A2	agora #265: a Vec field replaced under its reader, the reader kept in an option (leak)	runs-clean	-
+field_replaced_vec_reader_pushed	§7.6	A2	agora #265: a Vec field replaced under its reader, the reader pushed (UAF)	runs-clean	-
 field_store_block_join_local	§7.6	A2	agora #199: `= . h s { : i k 1 ? c ( gets w ) ( string_from … ) }` over `inout H h`: fresh arm copied as if lent, the original leaked	runs-clean	h921
 field_view_outlives_replace	§2.10	A2	binding read from struct field outlives reassignment of that field	runs-clean	h196
 field_viewer_of_a_parameter_taken_then_read	CallT.sink	A1	as h389, through a field viewer of the parameter taken whole	rejected	h391
