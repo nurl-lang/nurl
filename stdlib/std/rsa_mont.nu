@@ -2000,6 +2000,17 @@ raw @ _rm_pow_pub RsaMont c RsaTmp w ( Vec i ) base ( Vec u ) e → ( Vec i ) {
     ^ == diff 0
 }
 
+// The kernel an RSA-2048 CRT signature's two exponentiations run on this
+// CPU, by name: `ifma` (both 1024-bit halves at once, below), `adx` (rows
+// of nurl_mac_row, one half after the other) or `portable` (the CIOS
+// forms). Other key sizes take `adx` or `portable` — the IFMA tier is
+// built for 16-limb halves. NURL_CPU_IFMA=0 / NURL_CPU_ADX=0 mask the
+// first two. For reports and diagnostics.
+@ rsa_cpu_tier → s {
+    ? ( nurl_cpu_has_ifma ) { ^ `ifma` } {}
+    ^ ? ( nurl_cpu_has_adx ) `adx` `portable`
+}
+
 // ── the IFMA tier: both CRT halves at once, radix 2^52 ──────────────
 //
 // On a CPU with AVX-512 IFMA (nurl_cpu_has_ifma: Ice Lake, Zen 4 and

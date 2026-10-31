@@ -496,6 +496,17 @@ simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op 
     ^ off
 }
 
+// The kernels a long AEAD runs on this CPU, by name: `avx2` (eight-block
+// ChaCha20 over v256 and the vector Poly1305 — the x86-64-v3 clone),
+// `v128` (four-block ChaCha20, scalar Poly1305), `v128-narrow` (no
+// native 128-bit vectors: two blocks a pass) or `scalar` (a big-endian
+// host). NURL_CPU_V3=0 masks the first. For reports and diagnostics.
+@ chacha20poly1305_cpu_tier → s {
+    ? == 0 ( __le_words ) { ^ `scalar` } {}
+    ? == 0 ( nurl_simd128_native ) { ^ `v128-narrow` } {}
+    ^ ? != 0 # i ( nurl_cpu_x86_v3 ) `avx2` `v128`
+}
+
 // out[0..n) = data[doff..doff+n) XOR ChaCha20(key, counter, nonce).
 //
 // Dispatches to the vector kernels on a little-endian host — every

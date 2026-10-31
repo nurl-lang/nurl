@@ -6,10 +6,11 @@ deploys — rustls on aws-lc-rs (assembly AES-GCM and X25519, the
 X25519MLKEM768 hybrid), hyper on tokio, reqwest — so the report can say
 which piece to work on next.
 
-The report (`TLS_RESULTS.md`) leads with **Where to focus**: every headline
-metric as NURL's share of Rust's, worst first, each with what the
-measurements say the gap is made of. Everything below that table is the
-evidence for it.
+Each report leads with **Where to focus**: every headline metric as
+NURL's share of Rust's, worst first, each with what the measurements say
+the gap is made of. Everything below that table is the evidence for it.
+There is one report per **CPU family** (below); `TLS_RESULTS.md` is the
+index that sets the families side by side.
 
 ## What it measures
 
@@ -58,7 +59,13 @@ MODE=full bench/tls_bench/run_tls.sh
 
 # a subset
 DIMS="handshake latency" MODE=full bench/tls_bench/run_tls.sh
+
+# record the run as its CPU family's latest (what the workflow does)
+STORE=1 MODE=full bench/tls_bench/run_tls.sh
 ```
+
+The run's own report goes to `$MD_OUT` (default: the scratch directory);
+only `STORE=1` touches the committed files.
 
 Needs `cargo` (and `cmake`, for aws-lc-rs), `openssl`, `curl`, `taskset`,
 `python3` and a built NURL toolchain (`./build.sh`). The raw results and
@@ -69,15 +76,51 @@ server logs stay in the scratch directory printed at the end.
 | File | |
 |---|---|
 | `run_tls.sh` | the driver: builds, makes the certificates, runs every cell, writes the report |
-| `gen_tls_results.py` | raw results → `TLS_RESULTS.md` |
-| `prims.nu` | the NURL primitives |
+| `gen_tls_results.py` | raw results → a run's report; `--store` / `--render`: the per-family reports and the index |
+| `runs/<family>.tsv` | the raw results of each CPU family's latest full run (generated) |
+| `TLS_RESULTS.<family>.md`, `TLS_RESULTS.md` | each family's report, and the index (generated) |
+| `prims.nu` | the NURL primitives; `prims --tiers` prints NURL's CPU probes and each primitive's kernel |
 | `client.nu` | the NURL client rows, on `packages/http-client` |
 | `rust/` | `tls_server`, `tls_load`, `tls_prims`, `tls_client` (reqwest) |
 
-## Whose numbers are in `TLS_RESULTS.md`
+## CPU families
+
+The `ubuntu-latest` pool is not one machine. Runs have landed on AMD EPYC
+7763 (Zen 3: AVX2, ADX, SHA-NI, 256-bit VAES, no AVX-512), AMD EPYC 9V45
+(Zen 5: AVX-512 with IFMA and 512-bit VAES) and Intel Xeon 8370C (Ice
+Lake: likewise), and the ratios move with the machine, not with the code:
+AES-128-GCM sealing ran at 179 % of aws-lc on Zen 3 and 83 % on Zen 5, and
+aws-lc signs RSA-2048 on its IFMA path on the AVX-512 hosts and on its ADX
+path on Zen 3. Both sides pick kernels by CPUID, so a ratio is a property
+of a family.
+
+A run's **family** is its CPU vendor and flags — never its model string:
+`<vendor>-<vector ISA>[-vaes][-sha][-adx]`, the vector ISA being
+`avx512ifma`, `avx512`, `avx2` (AArch64: `sve`, `neon`). Zen 3 is
+`amd-avx2-vaes-sha-adx`, Zen 4/5 `amd-avx512ifma-vaes-sha-adx`, Ice Lake
+`intel-avx512ifma-vaes-sha-adx`. Every run records what decides it and
+what NURL did with it: `cpu_vendor` and `cpu_flags` (the crypto-relevant
+flags present), NURL's CPU probes and the kernel each primitive engaged
+(`prims --tiers`, from each module's `*_cpu_tier`), any `NURL_CPU_*`
+masking and aws-lc's `OPENSSL_ia32cap`. A run missing any of them is
+refused by the generator rather than reported without them.
+
+A full run replaces only its own family's `runs/<family>.tsv`; every
+report is re-rendered from `runs/`, so each family keeps its latest run
+until the pool lands on it again. Each report states its date and commit,
+so a stale family shows as stale.
+
+**On the runner** — when a perf task's DONE WHEN says "on the runner", it
+means on **every family in `TLS_RESULTS.md`**. The pull request that
+closes the task quotes the rows of each family, and says which families
+were re-measured after the change; a family whose run predates the change
+is either re-run (`tls-bench` again, until the pool lands on it) or named
+as unmeasured.
+
+## Whose numbers are in `TLS_RESULTS*.md`
 
 Whatever the **`tls-bench` GitHub Action** (`.github/workflows/tls-bench.yml`,
-manual) last wrote in `full` mode on an `ubuntu-latest` runner; its header
-names the host and links the run. Workstation runs are posted in the pull
-requests that change the numbers, not committed. When citing a cell, say
-which host produced it.
+manual) last recorded in `full` mode on an `ubuntu-latest` runner of each
+family; each report's header names the CPU and links the run. Workstation
+runs are posted in the pull requests that change the numbers, not
+committed. When citing a cell, say which family and which run produced it.

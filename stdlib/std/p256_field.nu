@@ -190,6 +190,18 @@ inline @ __p256_mul_p * i op * i ap * i bp → v { ? ( nurl_p256_mulm op ap bp )
 
 inline @ __p256_sqr_p * i op * i ap → v { ? ( nurl_p256_sqrm op ap ) {} { ( __p256_sqr_port_p op ap ) } }
 
+// The field kernel P-256's scalar multiplies run on this CPU, by name:
+// `adx` (mulx with adcx/adox), `mulq` (x86-64 without ADX) or `portable`
+// (the CIOS below: a target with no kernel). The kernel answers for
+// itself — a multiply of zeros says whether a block ran it — and
+// NURL_CPU_ADX=0 masks `adx`. For reports and diagnostics.
+@ p256_cpu_tier → s {
+    : ( Vec i ) z ( __zeros4 )
+    : *i zp ( vec_data [i] z )
+    ? ! ( nurl_p256_mulm zp zp zp ) { ^ `portable` } {}
+    ^ ? ( nurl_cpu_has_adx ) `adx` `mulq`
+}
+
 // requires: every field-element operand (dst included) holds 4 limbs.
 raw @ _p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     // The register kernel where the target has one (x86-64: the ADX tier

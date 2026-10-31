@@ -17,6 +17,14 @@
 //
 // Names stay in lockstep with rust/src/bin/tls_prims.rs; the report
 // joins on them. Usage: prims <rsa2048-key.pem>
+//
+// `prims --tiers` measures nothing: it prints what this CPU makes NURL
+// run, so a report can say which code its numbers are from — the CPU
+// answers every dispatch asks (after any NURL_CPU_*=0 masking), then,
+// per primitive row, the kernel its module says it engages:
+//
+//     PROBE\t<v3|aes|vaes|vaes512|sha|adx|ifma>\t<0|1>
+//     TIER\t<row name>\t<kernel>
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -160,10 +168,45 @@ $ `stdlib/std/chacha20poly1305.nu`
     } ) )
 }
 
+@ __probe s name b on → v {
+    ( nurl_print `PROBE\t` ) ( nurl_print name ) ( nurl_print ? on `\t1\n` `\t0\n` )
+}
+
+@ __tier s row s kernel → v {
+    ( nurl_print `TIER\t` ) ( nurl_print row ) ( nurl_print `\t` ) ( nurl_print kernel ) ( nurl_print `\n` )
+}
+
+// The CPU's answers and each row's kernel (see the header).
+@ __tiers → v {
+    ( __probe `v3` != 0 # i ( nurl_cpu_x86_v3 ) )
+    ( __probe `aes` ( nurl_cpu_has_aes ) )
+    ( __probe `vaes` ( nurl_cpu_has_vaes ) )
+    ( __probe `vaes512` ( nurl_cpu_has_vaes512 ) )
+    ( __probe `sha` ( nurl_cpu_has_sha ) )
+    ( __probe `adx` ( nurl_cpu_has_adx ) )
+    ( __probe `ifma` ( nurl_cpu_has_ifma ) )
+    ( __tier `X25519 keygen` ( x25519_cpu_tier ) )
+    ( __tier `X25519 shared` ( x25519_cpu_tier ) )
+    ( __tier `P-256 ECDH keygen` ( p256_cpu_tier ) )
+    ( __tier `P-256 ECDH shared` ( p256_cpu_tier ) )
+    ( __tier `ML-KEM-768 encaps` ( mlkem_cpu_tier ) )
+    ( __tier `ECDSA P-256 sign` ( p256_cpu_tier ) )
+    ( __tier `ECDSA P-256 verify` ( p256_cpu_tier ) )
+    ( __tier `RSA-2048 PSS sign` ( rsa_cpu_tier ) )
+    ( __tier `HKDF-Expand-Label` ( sha256_cpu_tier ) )
+    ( __tier `SHA-256 16 KB` ( sha256_cpu_tier ) )
+    ( __tier `AES-128-GCM seal 16 KB` ( aes_gcm_cpu_tier ) )
+    ( __tier `ChaCha20-Poly1305 seal 16 KB` ( chacha20poly1305_cpu_tier ) )
+}
+
 @ main → i {
     ? < ( nurl_argv_count ) 2 {
-        ( nurl_eprintln `usage: prims <rsa2048-key.pem>` )
+        ( nurl_eprintln `usage: prims <rsa2048-key.pem> | prims --tiers` )
         ^ 2
+    } {}
+    ? ( nurl_str_eq ( nurl_argv_get 1 ) `--tiers` ) {
+        ( __tiers )
+        ^ 0
     } {}
     ( __kx )
     ( __sig ( nurl_argv_get 1 ) )
