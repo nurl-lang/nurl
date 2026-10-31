@@ -158,7 +158,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
-    have h1 : DomTy Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+    have h1 : DomTy Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
       ((DomTy.refl Γ).kill .replace false y).setE ⟨E, hy, rfl, rfl⟩
     refine DomTy.exitScope_fresh hx h1 (DomTy.exitScope_fresh ?_ (DomTy.refl _) (ih hks))
     simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
@@ -472,7 +472,7 @@ theorem callPostAux_frame {Γ0 : Ctx} {fn : Fn} {args : List Var} {y : Var} :
 
 /-- What the context after the call says of a moved or changed argument. -/
 def postEnt (Γ0 : Ctx) (fn : Fn) (args : List Var) (i : Nat) (a : Var) (t : Ty) : PMode → Entry
-  | .sink => { argE Γ0 a with live := false }
+  | .sink => { argE Γ0 a with live := false, dtor := false }
   | .inout _ => { argE Γ0 a with held := if t.holdsView then
       (argE Γ0 a).held ++ outHeld Γ0 fn args i ++ heldOfArgs Γ0 args else (argE Γ0 a).held }
   | .inp => argE Γ0 a
@@ -576,6 +576,11 @@ theorem clean_id {E : Entry} (h : E.ty ≠ .int ∨ E.mode = .rootb) (hl : E.liv
     · exact h h2
     · exact h1 (Or.inl h)
   · rw [hl] at h2; cases h2
+
+/-- Moving a binding out (`live` and `dtor` cleared) keeps whether it is
+    fixed: that is its mode and type. -/
+theorem fixed_moveOut (E : Entry) : ({E with live := false, dtor := false} : Entry).fixed ↔ E.fixed := by
+  simp [Entry.fixed]
 
 theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
     r ∈ callR Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ r ∈ roots (memDeps (argE Γ a).held) := by
@@ -2056,7 +2061,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
     (hfin : ∀ Γ3, (Γ3 = setE (A2.kill .replace false x
           (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length)
               (exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
-            (base + fn.params.length) { Er' with live := false }
+            (base + fn.params.length) { Er' with live := false, dtor := false }
            else exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
           x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false⟩ : Entry) with mode := resMode fn }
              else { Er' with mode := resMode fn })) →
@@ -2100,7 +2105,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         (.assign x (.var (base + fn.params.length))))
       (setE (A2.kill .replace false x
           (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
-            (base + fn.params.length) { Er' with live := false } else Γb))
+            (base + fn.params.length) { Er' with live := false, dtor := false } else Γb))
         x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false⟩ : Entry) with mode := resMode fn }
            else { Er' with mode := resMode fn })) := by
     cases ho : fn.resOwn with
@@ -2532,7 +2537,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
               (exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
             (base + fn.params.length)
               { rrE fn.params base 0 (callPe Γ fn.params args)
-                  ((callS Γ F fn args base x).liftE fn.params.length Er) with live := false }
+                  ((callS Γ F fn args base x).liftE fn.params.length Er) with live := false, dtor := false }
            else exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
           x (if fn.resOwn then { (⟨(rrE fn.params base 0 (callPe Γ fn.params args)
                 ((callS Γ F fn args base x).liftE fn.params.length Er)).ty, .own, true, [],
@@ -2555,7 +2560,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
   have hother : ∀ y, y ≠ x → y ≠ base + fn.params.length →
       exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
-          (base + fn.params.length) { Er' with live := false } else Γb)) x
+          (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
         (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn })) y =
       (Γb y).map (fun E => killE .replace false (base + fn.params.length) (killE .replace false x
@@ -2565,13 +2570,13 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
       simp [A2.exitScope, setE, upd_ne _ _ hyx, upd_ne _ _ hyr, A2.kill, Option.map_map, Function.comp_def]
   have key : ∀ y, (exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
-          (base + fn.params.length) { Er' with live := false } else Γb)) x
+          (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
         (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn })) y = none ∧
         setE (callPost Γ fn args) x (callRes Γ fn args) y = none) ∨
       ∃ Eo Et, exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
-          (base + fn.params.length) { Er' with live := false } else Γb)) x
+          (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
         (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn })) y = some Eo ∧
         setE (callPost Γ fn args) x (callRes Γ fn args) y = some Et ∧ EntryWeaker Eo Et := by

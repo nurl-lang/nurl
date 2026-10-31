@@ -178,9 +178,9 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false⟩) []
   let R0 : Entry := ⟨str, .bor, false, [], [], false⟩
   -- `= cell ( some y )`: the fresh String moves into the cell
   have hpush : PushArg (ctxL R0 Enew) [] 4 Enew Enew.ty Enew.held
-      (setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false }) :=
+      (setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false, dtor := false }) :=
     PushArg.move (by simp [Enew, str, Ty.owning]) rfl (by simp) (ctxL_noPin (by simp [R0]) (by simp [Enew]) _)
-  have h1 : setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false } = ctxL R0 EnewD := by
+  have h1 : setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false, dtor := false } = ctxL R0 EnewD := by
     funext v
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, Enew, EnewD, R0, Entry.vdeps, Mode.ownSlot]

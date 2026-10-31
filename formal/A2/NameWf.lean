@@ -136,7 +136,7 @@ theorem DepsNamed.of_held {Γ : Ctx} {E : Entry} (h : NameOK Γ E) : DepsNamed �
 /-- What a value moved out of `y` holds by name, in the context after. -/
 theorem moved_named {Γ : Ctx} (hn : NameWF Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
     (hl : E.live = true) (hnint : E.ty ≠ .int) :
-    DepsNamed (setE (kill .replace false y Γ) y { E with live := false }) E.held := by
+    DepsNamed (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) E.held := by
   have hN := (hn y E hy hl (Or.inl hnint)).held
   refine hN.keeps (((Keeps.refl Γ []).kill _ _ _).setX fun E0 h0 => by rw [hy] at h0; cases h0; exact ⟨rfl, rfl⟩)
     fun d hd hk h => ?_
@@ -174,12 +174,12 @@ theorem NameWF.replaced {Γ : Ctx} (hn : NameWF Γ) {y : Var} {E : Entry}
     (fun _ _ _ => Or.inr ⟨fun _ _ _ hv hl hn' d hd _ => kill_ends hv hl hn' d hd, hself⟩) hE
 
 theorem NameWF.moved {Γ : Ctx} (hn : NameWF Γ) {y : Var} {E : Entry} (hy : Γ y = some E) :
-    NameWF (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+    NameWF (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
   hn.replaced (fun Ex h => by rw [hy] at h; cases h; exact ⟨rfl, rfl⟩) (fun hl => by simp at hl)
     (fun hl => by simp at hl)
 
 theorem Keeps.moved (Γ : Ctx) {y : Var} {E : Entry} (hy : Γ y = some E) :
-    Keeps Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) [y] :=
+    Keeps Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) [y] :=
   ((Keeps.refl Γ []).kill _ _ _).setX fun E0 h0 => by rw [hy] at h0; cases h0; exact ⟨rfl, rfl⟩
 
 theorem PushArg.names {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
@@ -672,7 +672,7 @@ theorem recvRes_named {Γ : Ctx} {c : Var} {Ec E : Entry}
 theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .prod a b) (hx : Γ x = none)
     (hz : Γ z = none) (hxz : x ≠ z) :
-    NameWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x
+    NameWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x
       (compE E a)) z (compE E b)) := by
     have hn1 := hn.moved hy
     have hH := moved_named hn hy hl (by rw [hty]; simp)
@@ -685,14 +685,14 @@ theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b
         | (show DepsNamed Γ' (E.held ++ E.held); exact h.append h)
         | exact own_named h
         | exact own_named (h.sub (ownHeld_sub _ _ _))
-    have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false } x = none := by
+    have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
       simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
     have hn2 := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) (fun _ _ => hcomp _ a hH)
-    have hz2 : A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a) z
+    have hz2 : A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a) z
         = none := by
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
-    have hk2 : Keeps (A2.setE (A2.kill .replace false y Γ) y { E with live := false })
-        (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a)) [] :=
+    have hk2 : Keeps (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false })
+        (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) [] :=
       (Keeps.refl _ []).setE fun E0 h => by rw [hx1] at h; cases h
     have hn3 := NameWF.setE hn2 (fun Ex h => by rw [hz2] at h; cases h) (fun Ex h => by rw [hz2] at h; cases h)
       (fun _ _ => hcomp _ b (hH.keeps' hk2))

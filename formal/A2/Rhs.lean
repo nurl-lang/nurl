@@ -1012,8 +1012,8 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {y : Var} {E : Entry} {v : Val} (hy : Γ y = some E) (hl : E.live = true) (hos : E.mode.ownSlot = true)
     (hyF : y ∉ F)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y) (hv : m.st y = some ⟨true, some v⟩) :
-    RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false }) F ∧
-    RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false })
+    RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) F ∧
+    RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
       ⟨E.ty, .own, true, [], E.held, false⟩ v true := by
   have hrb : E.mode ≠ .rootb := fun h => by rw [h] at hos; cases hos
   obtain ⟨T, hT, hwT, hvsT⟩ := hi.own_val hy hl hos
@@ -1026,7 +1026,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rcases ownedAt_set.mp hU with ⟨_, h⟩ | h
       · cases h
       · exact h) (fun _ _ => rfl) (Nat.le_refl _)
-  have hinv : MInv (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false }) := by
+  have hinv : MInv (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) := by
     refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb)
       hrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
@@ -1067,7 +1067,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · have hr' : r ∈ roots E.held := by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr
       obtain ⟨Er, hEr, hroot⟩ := wf_held hi hy hl hn r hr'
       by_cases hry : r = y
-      · subst hry; exact ⟨{ E with live := false }, by simp [setE], by
+      · subst hry; exact ⟨{ E with live := false, dtor := false }, by simp [setE], by
           show E.mode.isRoot = true; revert hos; cases E.mode <;> simp [Mode.isRoot, Mode.ownSlot]⟩
       · exact ⟨killE .replace false y Er, by simp [setE, upd_ne _ _ hry, kill, hEr],
           by rw [killE_mode]; exact hroot⟩
@@ -1087,8 +1087,8 @@ theorem rhs_move {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {y : Var} {E : Entry} {v : Val} (hy : Γ y = some E) (hl : E.live = true) (hm : E.mode = .own)
     (hyF : y ∉ F)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y) (hv : m.st y = some ⟨true, some v⟩) :
-    RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false }) F ∧
-    RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false })
+    RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) F ∧
+    RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
       ⟨E.ty, .own, true, [], E.held, false⟩ v true :=
   rhs_move' hi hanch hy hl (by rw [hm]; rfl) hyF hmn hv
 

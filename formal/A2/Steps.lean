@@ -963,7 +963,7 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {t : Val} (ht : m.st x = some ⟨true, some t⟩) {a' : Nat → Bool} (hf : Frees m.alloc t a')
     (hpin : NoPin Γ x) :
     MInv ({ m with alloc := a' }.set x ⟨true, none⟩)
-      (setE (kill .replace false x Γ) x { E with live := false }) := by
+      (setE (kill .replace false x Γ) x { E with live := false, dtor := false }) := by
   obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot x E hx
   rw [ht] at hsl; cases hsl
   have hos : E.mode.ownSlot = true := by rw [hm]; rfl
@@ -973,7 +973,7 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (by rw [hm]; simp) (fun o ho => by simp [upd_ne _ _ ho])
     (hi.heap.release ht (DropSlot.owned hf) ⟨true, none⟩ (fun _ T hT => by cases hT)) rfl
     (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
-  have hs : SlotOK ({ m with alloc := a' }.set x ⟨true, none⟩) { E with live := false } ⟨true, none⟩ :=
+  have hs : SlotOK ({ m with alloc := a' }.set x ⟨true, none⟩) { E with live := false, dtor := false } ⟨true, none⟩ :=
     ⟨by simp [hos], fun _ => ⟨hvec, fun T h => (by cases h), fun h => (by simp at h)⟩,
       fun h => (by simp [hos] at h)⟩
   exact ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
