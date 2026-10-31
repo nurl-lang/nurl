@@ -380,6 +380,13 @@ raw @ tcp_listener_over sink %NetTransport t → TcpListener {
 }
 
 // A connection's transport, when it has one (kind 3).
+// Close a transport by its owner word. tcp_close_conn hands over the
+// word rather than a view of the conn: it writes the conn's fields
+// afterwards on its other paths, and a transport method called on a
+// view of that same state made the borrow checker take every caller's
+// result for a view of the conn.
+@ __nt_close_word i w → v { ( nt_close ( __nt w ) ) }
+
 @ __tc_is_nt TcpConn c → b { ^ == . ( __tci c ) kind 3 }
 
 @ __tc_nt TcpConn c → %NetTransport { ^ ( __nt . ( __tci c ) tlsh ) }
@@ -1121,7 +1128,7 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     : *TcpConnImpl p ( __tci c )
     // Another transport closes its socket and the state stays as it is
     // (see TcpConnImpl): every copy then reads a closed socket.
-    ? == . p kind 3 { ( nt_close ( __nt . p tlsh ) ) ^ v } {}
+    ? == . p kind 3 { ( __nt_close_word . p tlsh ) ^ v } {}
     ? . p owns { ( __tcp_conn_close_parts . p raw . p kind . p tlsh ) } {}
     = . p owns F
     = . p raw 0
