@@ -206,6 +206,173 @@ if (@($names | Select-Object -Unique).Count -ne $names.Count) { throw 'Duplicate
 
 $updateFlag = [bool]$Update
 
+# ── one pipe for a test's stdout AND stderr (agora #256) ────────
+# run_tests.sh runs a test as `./name > out 2>&1`: both streams are one
+# pipe, so the record holds the lines in the order the program wrote
+# them. .NET's Process can only give a child two pipes, and joining them
+# afterwards put every stderr line after all of stdout — eight Windows
+# goldens recorded that reordering instead of the program's output
+# (stdout_flush_order, the check of the runtime's flush order, among
+# them). So a test starts the way cmd's `2>&1` starts it: CreateProcess
+# with ONE pipe as both hStdOutput and hStdError, stdin NUL. Loaded once
+# here; the parallel workers share the process, and so the type.
+if (-not ('NurlMergedRun' -as [type])) {
+    Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
+
+public static class NurlMergedRun {
+    [StructLayout(LayoutKind.Sequential)]
+    struct SECURITY_ATTRIBUTES { public int nLength; public IntPtr lpSecurityDescriptor; public int bInheritHandle; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct STARTUPINFO {
+        public int cb; public IntPtr lpReserved, lpDesktop, lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct STARTUPINFOEX { public STARTUPINFO StartupInfo; public IntPtr lpAttributeList; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CreatePipe(out IntPtr r, out IntPtr w, ref SECURITY_ATTRIBUTES sa, int size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetHandleInformation(IntPtr h, uint mask, uint flags);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, ref SECURITY_ATTRIBUTES sa,
+                                     uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attr, IntPtr value,
+                                                 IntPtr size, IntPtr prev, IntPtr retSize);
+    [DllImport("kernel32.dll")]
+    static extern void DeleteProcThreadAttributeList(IntPtr list);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateProcessW(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit,
+                                      uint flags, IntPtr env, string cwd, ref STARTUPINFOEX si,
+                                      out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+
+    const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000, CREATE_UNICODE_ENVIRONMENT = 0x00000400,
+               CREATE_NO_WINDOW = 0x08000000, STARTF_USESTDHANDLES = 0x00000100,
+               WAIT_TIMEOUT = 0x102, HANDLE_FLAG_INHERIT = 1;
+    static readonly IntPtr PROC_THREAD_ATTRIBUTE_HANDLE_LIST = (IntPtr)0x00020002;
+
+    // The child's environment block: the runner's own plus `extra`, sorted
+    // the way Windows wants it (case-insensitive by name).
+    static IntPtr EnvBlock(IDictionary extra) {
+        var env = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DictionaryEntry e in Environment.GetEnvironmentVariables()) env[(string)e.Key] = (string)e.Value;
+        if (extra != null) foreach (DictionaryEntry e in extra) env[(string)e.Key] = (string)e.Value;
+        var sb = new StringBuilder();
+        foreach (var kv in env) sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\0');
+        sb.Append('\0');
+        return Marshal.StringToHGlobalUni(sb.ToString());
+    }
+
+    // Run `exe` in `cwd` with its stdout and stderr on ONE pipe. Returns
+    // { exit code, or 124 when it ran past `timeoutMs` and was killed with
+    // its whole tree; everything it wrote, decoded as UTF-8 }.
+    public static object[] Run(string exe, string cwd, int timeoutMs, IDictionary extraEnv) {
+        var sa = new SECURITY_ATTRIBUTES {
+            nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), bInheritHandle = 1 };
+        IntPtr rd, wr;
+        if (!CreatePipe(out rd, out wr, ref sa, 0)) throw new Win32Exception();
+        // The read end is ours alone.
+        SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+        IntPtr nul = CreateFileW("NUL", 0x80000000 /* GENERIC_READ */, 3 /* share r|w */, ref sa,
+                                 3 /* OPEN_EXISTING */, 0, IntPtr.Zero);
+        if (nul == (IntPtr)(-1)) { CloseHandle(rd); CloseHandle(wr); throw new Win32Exception(); }
+        var reader = new FileStream(new SafeFileHandle(rd, true), FileAccess.Read, 65536);
+        Task<byte[]> drain = Task.Run(() => {
+            var ms = new MemoryStream();
+            reader.CopyTo(ms);
+            return ms.ToArray();
+        });
+
+        IntPtr size = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        IntPtr attrs = Marshal.AllocHGlobal(size);
+        IntPtr handles = Marshal.AllocHGlobal(2 * IntPtr.Size);
+        IntPtr envBlock = EnvBlock(extraEnv);
+        bool listMade = false;
+        PROCESS_INFORMATION pi;
+        try {
+            if (!InitializeProcThreadAttributeList(attrs, 1, 0, ref size)) throw new Win32Exception();
+            listMade = true;
+            // The only handles the child inherits: sixteen workers create
+            // inheritable pipes at once, and a sibling's write end leaked
+            // into this child would hold that sibling's read open until
+            // this child exits.
+            Marshal.WriteIntPtr(handles, 0, wr);
+            Marshal.WriteIntPtr(handles, IntPtr.Size, nul);
+            if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                                           (IntPtr)(2 * IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                throw new Win32Exception();
+            var si = new STARTUPINFOEX();
+            si.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+            si.StartupInfo.dwFlags = (int)STARTF_USESTDHANDLES;
+            si.StartupInfo.hStdInput = nul;
+            si.StartupInfo.hStdOutput = wr;
+            si.StartupInfo.hStdError = wr;
+            si.lpAttributeList = attrs;
+            // argv[0] is the full path, as Process.Start gave it.
+            var cmd = new StringBuilder("\"" + exe + "\"");
+            if (!CreateProcessW(exe, cmd, IntPtr.Zero, IntPtr.Zero, true,
+                                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+                                envBlock, cwd, ref si, out pi)) {
+                string why = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                CloseHandle(wr);
+                CloseHandle(nul);
+                drain.Wait();
+                reader.Dispose();
+                return new object[] { -1, "run failed: " + why + "\n" };
+            }
+        } finally {
+            if (listMade) DeleteProcThreadAttributeList(attrs);
+            Marshal.FreeHGlobal(attrs);
+            Marshal.FreeHGlobal(handles);
+            Marshal.FreeHGlobal(envBlock);
+        }
+        // Only the child (and whatever it hands the pipe on to) holds the
+        // write end now: the read ends when the last of them exits.
+        CloseHandle(wr);
+        CloseHandle(nul);
+        CloseHandle(pi.hThread);
+        int code;
+        if (WaitForSingleObject(pi.hProcess, (uint)timeoutMs) == WAIT_TIMEOUT) {
+            try { Process.GetProcessById(pi.dwProcessId).Kill(true); } catch (Exception) { }
+            WaitForSingleObject(pi.hProcess, 0xFFFFFFFF);
+            code = 124;
+        } else {
+            uint c;
+            GetExitCodeProcess(pi.hProcess, out c);
+            code = unchecked((int)c);
+        }
+        CloseHandle(pi.hProcess);
+        byte[] bytes = drain.Result;
+        reader.Dispose();
+        return new object[] { code, new UTF8Encoding(false).GetString(bytes) };
+    }
+}
+'@
+}
+
 # ── run in parallel ─────────────────────────────────────────────
 # Each worker is self-contained: it compiles, links, runs, then
 # compares/updates its own golden and returns a verdict object.
@@ -301,44 +468,19 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $rest  = $nl - $MaxOutLines
         return ($kept + "`n[... $rest more lines truncated ...]`n")
     }
-    # Run a native exe to completion, with timeout, capturing combined
-    # stdout+stderr in memory and the exit code (124 on timeout, matching
-    # `timeout`). Full-path FileName + WorkingDirectory: argv[0] is the
+    # Run a native exe to completion, with timeout: its stdout and stderr
+    # through ONE pipe, in the order it wrote them (`2>&1` in
+    # run_tests.sh; NurlMergedRun above), decoded as UTF-8 as the NURL
+    # runtime writes it, and the exit code (124 on timeout, matching
+    # `timeout`). Full-path launch + working directory: argv[0] is the
     # absolute path, which Strip-Root rewrites to a repo-relative form.
     function Invoke-WithTimeout([string]$exe, [string]$cwd, [int]$secs) {
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName               = $exe
-        $psi.WorkingDirectory       = $cwd
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError  = $true
-        # Same reason as Run-Proc: the NURL runtime writes UTF-8 bytes to
-        # the pipe, so read them back as UTF-8 and not as CP850/CP437.
-        $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
-        $psi.StandardErrorEncoding  = [System.Text.UTF8Encoding]::new($false)
-        $psi.UseShellExecute        = $false
-        $psi.CreateNoWindow         = $true
         # Windows auto-flags exes whose name contains "install"/"setup"/etc.
         # as requiring UAC elevation (installer-detection heuristic), which
-        # makes Process.Start throw for e.g. pkg_install_e2e.exe. RunAsInvoker
+        # makes the launch fail for e.g. pkg_install_e2e.exe. RunAsInvoker
         # suppresses that so the test runs unprivileged like on Linux.
-        $psi.Environment['__COMPAT_LAYER'] = 'RunAsInvoker'
-        try {
-            $proc = [System.Diagnostics.Process]::Start($psi)
-        } catch {
-            # Couldn't even launch (e.g. still blocked by policy). Record it
-            # as a run failure instead of crashing the whole worker.
-            return @{ Code = -1; Out = "run failed: $($_.Exception.Message)`n" }
-        }
-        $o = $proc.StandardOutput.ReadToEndAsync()
-        $e = $proc.StandardError.ReadToEndAsync()
-        if (-not $proc.WaitForExit($secs * 1000)) {
-            try { $proc.Kill($true) } catch {}
-            try { $proc.WaitForExit() } catch {}
-            $code = 124
-        } else {
-            $code = $proc.ExitCode
-        }
-        return @{ Code = $code; Out = ($o.Result + $e.Result) }
+        $r = [NurlMergedRun]::Run($exe, $cwd, $secs * 1000, @{ '__COMPAT_LAYER' = 'RunAsInvoker' })
+        return @{ Code = [int]$r[0]; Out = [string]$r[1] }
     }
 
     # ── per-test scratch paths ──────────────────────────────────
