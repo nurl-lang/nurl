@@ -27786,8 +27786,17 @@ unsafe @ resolve_arc_mut → v {
 @ bck_bind_class0 s lty → i {
     // (3: an owner that may also hold views — a Vec of them, a struct
     // with a view field: what it holds points into storage it does not
-    // own, so it depends on that storage.)
-    ? ( bck_is_heap_lty lty ) { ^ ? & ( bck_sound ) ( __ty_holds_view lty 0 ) 3 0 } {}
+    // own, so it depends on that storage. Asked precisely: a library
+    // handle holds what its type arguments can — an `( Arc i )` field
+    // views nothing, and a struct holding one is no view-holder whose
+    // fields handed back read as views of it, agora #269.)
+    ? ( bck_is_heap_lty lty ) {
+        ? ! ( bck_sound ) { ^ 0 } {}
+        = g_thv_precise 1
+        : b hv ( __ty_holds_view lty 0 )
+        = g_thv_precise 0
+        ^ ? hv 3 0
+    } {}
     // (4: a closure — a scalar to the borrow rules, its captures tracked as
     // such — that depends on what the views it captured point into.)
     ? ( __is_closure_ty lty ) { ^ ? ( bck_sound ) 4 1 } {}
