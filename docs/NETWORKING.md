@@ -171,6 +171,44 @@ standard library's transports keep and a program's own must vouch for in
 stack runs over a runtime socket handle, and `tcp_starttls` /
 `tls_accept_conn` on a simulated connection refuse.
 
+### Clients: a dialer chosen at construction
+
+A server is handed its listener; a client dials by itself, so it takes a
+**`NetDialer`** (`std/net`) when it is made: how it reaches a server. The
+kernel's (`net_dialer_kernel`, the default — `tcp_connect_timeout`,
+allocating nothing) or a node of a simulated network (`netsim_dialer net
+node`). The client code is the same either way:
+
+```nurl
+$ `stdlib/std/net_sim.nu`
+$ `packages/http-client/src/http_client.nu`
+$ `packages/psql/src/pg.nu`
+
+@ main → i {
+    : NetSim net ( netsim_new 3 11 0 1 0 )
+    // … an HttpApp served on node 1 (http_app_serve), a PostgreSQL on node 2 …
+    : HttpClient hc ( http_client_new )
+    ( http_client_set_dialer hc ( netsim_dialer net 0 ) )
+    : !HttpResponse HttpClientErr r ( http_client_get hc `http://10.0.0.2/hello/sim` )
+    : !PgConn PgErr pc ( pg_connect_with ( netsim_dialer net 0 ) `10.0.0.3` 5432 `u` `` `d` 1 )
+    ^ 0
+}
+```
+
+`http_client_set_dialer` (packages/http-client), `pg_connect_with` /
+`pg_connect_url_with` (packages/psql) and `redis_connect_with`
+(packages/redis) take one; `net_dial d host port timeout_ms` is the call
+underneath. A dialer is plaintext until TLS can run over a dialed
+connection (agora #250): through anything but the kernel's dialer an
+`https` request fails with `HcTls` (and HTTP/3 is not tried), psql's
+sslmode `prefer` goes plaintext without asking the server and `require` /
+`verify-full` is `PgTls` — never a quiet detour over the real network.
+`net_dialer_over` makes a dialer of any `% NetDialer` implementation; like
+`tcp_conn_over` it is `raw` (the dialer is held in a word until agora #248
+lets a thread-shared handle hold the trait object itself).
+`compiler/tests/net_sim_clients.nu` runs http-client and psql (against a
+minimal PostgreSQL server) over a NetSim with no socket opened.
+
 ## MQTT 5.0 client — `stdlib/ext/mqtt.nu`
 
 A production-grade MQTT 5.0 client built on the TCP/TLS layer. The whole

@@ -1,0 +1,15 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+http-client over the sim: 200 hello sim: ok
+a second request on the client's connection: ok
+https through the sim dialer is refused (#250): ok
+psql connects over the sim, plaintext: ok
+sslmode prefer asked the server nothing: ok
+pg_query_params over the sim: ok
+pg_query_many over the sim, in order: ok
+the statement was parsed once (the cache): ok
+a simple query over the sim: ok
+sslmode require through the sim dialer is PgTls: ok
+net_sim_clients: all ok

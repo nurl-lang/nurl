@@ -782,3 +782,26 @@ $ `stdlib/dist/sim.nu`
     ( __ns_unlock w )
     ^ @ !TcpConn NetErr { F # NetErr NetOther }
 }
+
+// ── a dialer ─────────────────────────────────────────────────────
+// Node `node`'s view of the network as a NetDialer (std/net.nu): a client
+// made with it — http_client_set_dialer, pg_connect_with, redis_connect_with
+// — dials from that node, so it runs over the simulated wire unchanged.
+// Hosts are nodes' addresses (netsim_node_ip), or 127.0.0.1 for the node
+// itself; the dialer keeps the network alive while it lives.
+: NsDialer {
+    NetSim w
+    i node
+}
+
+% NetDialer NsDialer {
+    @ nd_dial NsDialer self s host i port i timeout_ms → !TcpConn NetErr {
+        ^ ( netsim_connect . self w . self node host port timeout_ms )
+    }
+}
+
+@ netsim_dialer NetSim h i node → NetDialer {
+    // A NetSim reaches no TcpConn or NetDialer (its nodes are sans-IO
+    // stacks; a NsSock holds the network, not the reverse).
+    ^ ( net_dialer_over ( dyn NetDialer @ NsDialer { ( NetSim_share h ) node } ) )
+}

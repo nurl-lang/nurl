@@ -173,6 +173,8 @@ API:
 ```
 ( pg_connect host port user password database sslmode ) → !PgConn PgErr
 ( pg_connect_url url )                    → !PgConn PgErr     postgres://user:pw@host:port/db?sslmode=…
+( pg_connect_with dialer host port user password database sslmode ) / ( pg_connect_url_with dialer url )
+                                          → !PgConn PgErr     through a std/net NetDialer (a simulated network's)
 ( pg_query conn sql )                     → !PgResult PgErr   simple protocol, scripts
 ( pg_query_params conn sql params )       → !PgResult PgErr   ( Vec PgVal ) params
 ( pg_query_many conn sql sets )           → !( Vec PgResult ) PgErr   ( Vec ( Vec PgVal ) ) sets:

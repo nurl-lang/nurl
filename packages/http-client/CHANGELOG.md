@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.7] — unreleased
+
+Requires the NURL with std/net's `NetDialer` (`net_dial`, std/net_sim.nu's `netsim_dialer`) and stdlib/ext/http_pure.nu's `hp_conn_open_with`.
+
+### Added
+
+- `http_client_set_dialer c d` — plaintext origins are reached through a std/net `NetDialer`: the kernel's (the default) or a node of a simulated network (`netsim_dialer net node`), so the same client runs over the simulated wire unchanged (agora #249). TLS needs the kernel's dialer until it can run over a dialed connection (agora #250): through any other an `https` request fails with `HcTls` and HTTP/3 is not tried, never a quiet detour over the real network.
+
+### Changed
+
+- The plaintext transport underneath (http_pure's `HttpConn`) is a std/net `TcpConn` instead of a raw runtime socket handle. Measured on keep-alive GETs to a local hyper server: callgrind +144 instructions per request (+0.35 %, the std/net dispatch and the runtime's ownership check visiting the new handle fields), the same syscalls and allocations; wall clock within this VM's noise (median of 6: 21.5k → 21.9k requests/s).
+
 ## [0.3.6] — 2026-10-23
 
 Requires NURL 0.73.0.

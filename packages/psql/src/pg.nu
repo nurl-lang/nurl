@@ -7,6 +7,9 @@
 //   ( pg_connect host port user password database sslmode ) → !PgConn PgErr
 //   ( pg_connect_url url )                    → !PgConn PgErr  the same from a
 //                                                postgres:// URI (DATABASE_URL)
+//   ( pg_connect_with dialer host … sslmode ) / ( pg_connect_url_with dialer url )
+//                                             → !PgConn PgErr  dialed through a
+//                                                std/net NetDialer (a simulated network's)
 //   ( pg_query conn sql )                   → !PgResult PgErr  simple protocol:
 //                                                any number of statements, text cells
 //   ( pg_query_params conn sql params )       → !PgResult PgErr  extended protocol:
@@ -796,14 +799,28 @@ $ `stdlib/std/arc.nu`
 }
 
 @ pg_connect s host i port s user s password s database i sslmode → !PgConn PgErr {
-    : TcpConn conn ?? ( tcp_connect host port ) {
+    ^ ( pg_connect_with ( net_dialer_kernel ) host port user password database sslmode )
+}
+
+// The same, the socket dialed through `d` (std/net NetDialer): the
+// kernel's, or a node of a simulated network (std/net_sim.nu's
+// netsim_dialer), so the same client runs over it unchanged. TLS runs over
+// the kernel's sockets only, until it can run over a dialed connection
+// (agora #250): through another dialer sslmode prefer goes plaintext — as
+// when a server declines, a password then only through SCRAM — and require
+// or verify-full is PgTls.
+@ pg_connect_with NetDialer d s host i port s user s password s database i sslmode → !PgConn PgErr {
+    // TLS a dialed connection cannot carry is refused before dialing.
+    : b can_tls ( net_dialer_is_kernel d )
+    ? & >= sslmode 2 ! can_tls { ^ @ !PgConn PgErr { F # PgErr PgTls } } {}
+    : TcpConn conn ?? ( net_dial d host port 0 ) {
         T c → c
         F _ → { ^ @ !PgConn PgErr { F # PgErr PgConnFail } }
     }
     // ── optional TLS upgrade (SSLRequest → pure-NURL TLS, in place) ──
     : ~ i tls 0
-    : ~ b plain_fallback F
-    ? > sslmode 0 {
+    : ~ b plain_fallback & > sslmode 0 ! can_tls
+    ? & > sslmode 0 can_tls {
         : i resp ( __pg_ssl_request conn )
         ? == resp 83 {
             ?? ( tcp_starttls conn host >= sslmode 3 ) {
@@ -895,7 +912,10 @@ $ `stdlib/std/arc.nu`
 // pg_connect implements — disable, prefer (the default, as libpq's),
 // require, verify-full. Another scheme, no host, or any other query
 // parameter is PgBadUrl: a setting the caller wrote is never ignored.
-@ pg_connect_url s url → !PgConn PgErr {
+@ pg_connect_url s url → !PgConn PgErr { ^ ( pg_connect_url_with ( net_dialer_kernel ) url ) }
+
+// The same, dialed through `d` (pg_connect_with).
+@ pg_connect_url_with NetDialer d s url → !PgConn PgErr {
     : Url u ?? ( url_parse url ) {
         T x → x
         F → { ^ @ !PgConn PgErr { F # PgErr PgBadUrl } }
@@ -929,7 +949,7 @@ $ `stdlib/std/arc.nu`
         = k + k 1
     }
     : i port ? < . u port 0 5432 . u port
-    ^ ( pg_connect ( string_data . u host ) port ( string_data user ) ( string_data password ) ( string_data database ) sslmode )
+    ^ ( pg_connect_with d ( string_data . u host ) port ( string_data user ) ( string_data password ) ( string_data database ) sslmode )
 }
 
 // libpq's name for an sslmode pg_connect implements, as its number; -1 for

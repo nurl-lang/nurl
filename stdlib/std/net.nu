@@ -896,6 +896,80 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     ^ ( tls_session_export # TlsConn tp )
 }
 
+// ── Dialers ────────────────────────────────────────────────────────
+// How a client reaches a server, chosen when the client is made rather
+// than by a switch anything else can flip: the kernel's TCP
+// (net_dialer_kernel, the default — tcp_connect_timeout), or any network
+// that hands out TcpConns, such as a simulated one (std/net_sim.nu's
+// netsim_dialer). A client library takes a NetDialer at construction and
+// dials through it, so the same client runs over the real network and a
+// simulated one unchanged.
+//
+//   ( net_dialer_kernel )                  → NetDialer   the default; allocates nothing
+//   ( net_dial d host port timeout_ms )    → !TcpConn NetErr
+//   ( net_dialer_is_kernel d )             → b
+//   raw ( net_dialer_over d )              → NetDialer   any `% NetDialer`
+//
+// A dialer is plaintext: TLS over a dialed connection is #250, so a
+// client asked for TLS through anything but the kernel's dialer says so
+// rather than quietly using the real network.
+
+% NetDialer [T] : Send Sync {
+    // A connection to host:port, waiting at most `timeout_ms` (<= 0: no
+    // deadline) — NetDns, NetConnect, NetTimeout as tcp_connect_timeout.
+    @ nd_dial T self s host i port i timeout_ms → !TcpConn NetErr
+}
+
+: NetDialerBox { % NetDialer d }
+
+// requires: as __nt_word — given back once (__nd_release), and the dialer
+// holds nothing that can reach a TcpConn or a NetDialer.
+// TODO(#248): the same known compromise as the transport seam's word.
+raw @ __nd_word sink %NetDialer d → i {
+    ^ ( shared_into_word [NetDialerBox] ( shared_new [NetDialerBox] @ NetDialerBox { d } ) )
+}
+
+// requires: `w` came from __nd_word and is given back only this once.
+raw @ __nd_release i w → v { : ( Shared NetDialerBox ) _back ( shared_from_word [NetDialerBox] w ) }
+
+@ __nd i w → %NetDialer { ^ . ( rcbox_ptr [NetDialerBox] w ) d }
+
+// The dialer's state: the owner word of its box.
+: NetDialerImpl { i w }
+
+% Drop NetDialerImpl {
+    @ drop NetDialerImpl x → v { ? != . x w 0 { ( __nd_release . x w ) } {} }
+}
+
+// A dialer is a handle: every copy is the same one, the last owner lets it
+// go. The kernel's has no state at all (a null handle).
+: NetDialer { ( Shared NetDialerImpl ) ctl }
+
+// Every copy may be used from any thread: its state is set once, at
+// construction, and only read after; the dialer it holds is Sync (the
+// trait's bound), and dialing changes nothing in it.
+% Sync NetDialer {}
+
+@ NetDialer_share NetDialer h → NetDialer { ^ @ NetDialer { ( shared_clone [NetDialerImpl] . h ctl ) } }
+
+@ NetDialer_drop sink NetDialer h → v {}
+
+@ net_dialer_kernel → NetDialer { ^ @ NetDialer { ( shared_null [NetDialerImpl] ) } }
+
+@ net_dialer_is_kernel NetDialer d → b { ^ == 0 ( shared_addr [NetDialerImpl] . d ctl ) }
+
+// A dialer over `d`, which it now owns.
+// requires: `d` holds nothing that can reach a TcpConn or a NetDialer.
+raw @ net_dialer_over sink %NetDialer d → NetDialer {
+    ^ @ NetDialer { ( shared_new [NetDialerImpl] @ NetDialerImpl { ( __nd_word d ) } ) }
+}
+
+@ net_dial NetDialer d s host i port i timeout_ms → !TcpConn NetErr {
+    ? ( net_dialer_is_kernel d ) { ^ ( tcp_connect_timeout host port timeout_ms ) } {}
+    : *NetDialerImpl p ( shared_ptr [NetDialerImpl] . d ctl )
+    ^ ( nd_dial ( __nd . p w ) host port timeout_ms )
+}
+
 // Register a per-hostname cert/key pair on a TLS listener for Server
 // Name Indication (RFC 6066 §3). NOT YET SUPPORTED on the pure-NURL TLS
 // server (tls_server.nu serves a single default cert) — returns NetOther
