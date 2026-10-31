@@ -35,7 +35,7 @@ $ `stdlib/std/panic.nu`
 
 % Bump Holder {
     @ bump Holder h i k → i {
-        ( pncounter_inc . h c 1 1 )
+        ( pncounter_inc . h c k 1 )
         ^ k
     }
 }
