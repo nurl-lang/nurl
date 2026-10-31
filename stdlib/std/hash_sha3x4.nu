@@ -68,12 +68,11 @@ $ `stdlib/core/rcbox.nu`
 // second buffer is if anything stronger here, because AVX2 has 16
 // vector registers and the naive shape wants 35 values live.
 //
-// The `simd` prefix (docs/spec.md §3.3b) is what makes this worth
-// writing. Without it nurlc compiles for baseline x86-64, where LLVM
-// legalises every <4 x i64> into a pair of SSE2 operations — correct,
-// and about as fast as the scalar sponge, i.e. pointless. With it the
-// wide clone gets real vpxor / vpsllq / vpandn and the baseline clone
-// stays behind for machines that need it.
+// The `simd` prefix (docs/spec.md §3.3b) gives it an x86-64-v3 clone
+// with real vpxor / vpsllq / vpandn. The baseline clone, where LLVM
+// legalises every <4 x i64> into a pair of SSE2 operations, still pays
+// its way: four scalar permutations, one per lane, are 36 % slower than
+// it (ML-KEM-768 encaps +17 % under NURL_CPU_V3=0; Agora #287).
 
 @ __k4_ld * u64 p i lane → v256 { ^ ( nurl_v256_ld # s + # i p * lane 32 ) }
 
