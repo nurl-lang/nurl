@@ -26,11 +26,13 @@
   answers `nurl_signal_pending` (no signal is ever pending) and
   `nurl_signal_install_shutdown` (there is nothing to arm) — the two
   symbols `net_sim_http` was missing under `run_nolibc_tests.sh`.
-- **`runtime_run` on the freestanding runtime waits for the spawned
-  fibers, as the hosted one does, and may be called from a thread**
-  (Agora #273). It waited for every coroutine, threads included, and
-  drove the scheduler even when called from a coroutine: a thread that
-  runs a fiber server (`http_app_async` inside `thread_spawn`) is itself
-  live, so the count never reached zero and the server never finished
-  (`net_sim_http_async` hung under `run_nolibc_tests.sh`). From a
-  coroutine it now parks, and the last fiber to end wakes it.
+- **`runtime_run` may be called from a thread on the freestanding
+  runtime** (Agora #273). Called from a coroutine — a thread that runs a
+  fiber server, `http_app_async` inside `thread_spawn` — it drove the
+  scheduler as the main context does, nested inside the coroutine and
+  waiting for a count that included the caller itself, so the server
+  never finished (`net_sim_http_async` hung under
+  `run_nolibc_tests.sh`). From a coroutine it now waits for the spawned
+  fibers — what the hosted runtime's `runtime_run` waits for — parked
+  until the last one ends; from the main context it still runs every
+  coroutine, detached threads included, to the end.

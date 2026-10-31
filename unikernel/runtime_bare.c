@@ -962,17 +962,20 @@ void nurl_runtime_init(long long worker_count) {
     nb_initialized = 1;
 }
 
-static int nb_no_fibers(void *unused) { (void)unused; return nb_fibers_live <= 0; }
+static int nb_no_live(void *unused) { (void)unused; return nb_live <= 0; }
 
-/* Until every spawned FIBER has ended — what the hosted runtime's
- * runtime_run waits for (its pending count); a thread is waited for by
- * joining it. It used to wait for every coroutine, threads included,
- * and only from the main context: a thread that runs a fiber server
- * (http_app_async inside thread_spawn) is itself a live coroutine, so
- * the count it waited for never reached zero, and the drive it started
- * nested the scheduler inside a coroutine — the server never finished
- * (agora #273). From a coroutine it now parks, and the last fiber to
- * end wakes it. */
+/* From the main context: until every coroutine has ended, detached
+ * threads included — on one thread they run only while main is parked,
+ * so a runtime_run that returned before them would let the program
+ * exit with them never run (unikernel/tests/sched_gate.c pins it).
+ *
+ * From a coroutine — a thread that runs a fiber server: http_app_async
+ * inside thread_spawn — until every spawned FIBER has ended, what the
+ * hosted runtime's runtime_run waits for (its pending count). The
+ * coroutine parks, and the last fiber to end wakes it. It used to drive
+ * the scheduler from there as main does: the scheduler nested inside a
+ * coroutine, waiting for a count that included the caller itself, and
+ * the server never finished (agora #273). */
 void nurl_runtime_run(void) {
     if (!nb_initialized) nurl_runtime_init(0);
     if (nb_current) {
@@ -983,7 +986,7 @@ void nurl_runtime_run(void) {
         }
         return;
     }
-    nb_drive_until(nb_no_fibers, 0, "runtime_run");
+    nb_drive_until(nb_no_live, 0, "runtime_run");
 }
 
 void nurl_runtime_shutdown(void) {
