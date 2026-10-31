@@ -91,8 +91,8 @@ theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H
 
 theorem HrefAt.mono {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H H' : List Dep} (hs : H ⊆ H')
     (h : HrefAt m dep c t H) : HrefAt m dep c t H' := by
-  obtain ⟨n0, d, es, hr, hk, hw, hv, hn⟩ := h
-  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs⟩
+  obtain ⟨n0, d, es, hr, hk, hw, hv, hn, hsh⟩ := h
+  exact ⟨n0, d, es, hr, hk, hw, hv.mono hs, hn.mono hs, hsh⟩
 
 theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
     ∀ {P' H' : List Dep}, P ⊆ P' → H ⊆ H' → ValOK m τ v P' H' := by

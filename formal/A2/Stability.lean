@@ -15,7 +15,7 @@ def VKeep (m m' : Mem) (dep : Dep) : Prop :=
   ∀ d o l s, ViewAt m dep d o l s → ViewAt m' dep d o l s
 
 def HKeep (m m' : Mem) (dep : Dep) : Prop :=
-  ∀ c t H, (∀ h ∈ H, VKeep m m' h) → HrefAt m dep c t H → HrefAt m' dep c t H
+  ∀ c t H, (∀ h ∈ H, VKeep m m' h) → m'.blk = m.blk → HrefAt m dep c t H → HrefAt m' dep c t H
 
 /-- A dependency by name reaches no memory: nothing changes what it keeps. -/
 theorem vkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : VKeep m m' ⟨r, .name b t⟩ := by
@@ -23,7 +23,7 @@ theorem vkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : VKeep m m' ⟨r, 
   rcases hk with ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
 
 theorem hkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : HKeep m m' ⟨r, .name b t⟩ := by
-  intro c t H _ ⟨_, _, _, _, hl, _⟩
+  intro c t H _ _ ⟨_, _, _, _, hl, _⟩
   rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : VKeep m m' dep := by
@@ -46,8 +46,8 @@ theorem ArmOK.keep {m m' : Mem} {E : Entry} {sl : Slot}
   exact ⟨h1, (h2.memDeps.keep (hk h1 hd hos)).mono (fun d hd => (List.mem_filter.mp hd).1)⟩
 
 theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : HKeep m m' dep := by
-  intro c t H hH ⟨n0, d, es, hr, hk, hw, hv, hn⟩
-  exact ⟨n0, d, es, h n0 hr, hk, hw, hv.keep hH, hn⟩
+  intro c t H hH hb ⟨n0, d, es, hr, hk, hw, hv, hn, hsh⟩
+  exact ⟨n0, d, es, h n0 hr, hk, hw, hv.keep hH, hn, hsh.of_blk hb⟩
 
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
@@ -57,7 +57,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
   | arc h => obtain ⟨bl, hbl, ht⟩ := h; exact .arc ⟨bl, by rw [hb]; exact hbl, ht⟩
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
-    exact .href ⟨dep, hd, (hp dep hd).2 _ _ _ (fun h hh' => (hh h hh').1) ha⟩
+    exact .href ⟨dep, hd, (hp dep hd).2 _ _ _ (fun h hh' => (hh h hh').1) hb ha⟩
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .view ⟨dep, hd, (hp dep hd).1 _ _ _ _ ha⟩
@@ -500,10 +500,10 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
   | int => exact .int
   | arc h => exact .arc h
   | @href t c P H h =>
-    obtain ⟨dep, hd, n0, d, es, hr, hk, hw', hv, hn⟩ := h
+    obtain ⟨dep, hd, n0, d, es, hr, hk, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by
       rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
-    refine .href ⟨dep, List.mem_filter.mpr ⟨hd, hkm⟩, n0, d, es, hr, hk, hw', hv.memDeps, ?_⟩
+    refine .href ⟨dep, List.mem_filter.mpr ⟨hd, hkm⟩, n0, d, es, hr, hk, hw', hv.memDeps, ?_, hsh⟩
     intro c' hc'
     rw [hw'.names_nil_fn hf] at hc'; cases hc'
   | view h =>
@@ -612,32 +612,34 @@ theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
 
 theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
     (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind}
-    (hk : k = .self → t.holdsView = false) (hkv : k ≠ .view) : HKeep m m' ⟨x, k⟩ := by
-  intro c2 t2 H hH ⟨n0, d2, es2, hr, hkk, hw, hv, hn⟩
+    (hk : k = .self → t.holdsView = false) (hkv : k ≠ .view)
+    (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨x, k⟩ := by
+  intro c2 t2 H hH hb ⟨n0, d2, es2, hr, hkk, hw, hv, hn, hsh⟩
   have := rootNode_node hev.before hr
   subst this
   rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hb⟩
   · cases heq
     exact ⟨_, d', es', Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨hs, rfl⟩, hev.wf, no_views (hk hs) _ _ _,
-      no_names hev.wf (hk hs) _⟩
+      no_names hev.wf (hk hs) _, hsh'⟩
   · exact absurd hvw hkv
   · obtain ⟨e, hc, hs⟩ := hb
     cases hc with
     | elem he =>
       exact ⟨_, d2, es2, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩),
-        hw, hv.keep hH, hn⟩
+        hw, hv.keep hH, hn, hsh.of_blk hb⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/
 theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
-    (hev : Evolve m m' x t c d d' es es') (ht : t.holdsView = false) : HKeep m m' ⟨x, .self⟩ := by
-  intro c2 t2 H hH ⟨n0, d2, es2, hr, hkk, hw, hv, _⟩
+    (hev : Evolve m m' x t c d d' es es') (ht : t.holdsView = false)
+    (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨x, .self⟩ := by
+  intro c2 t2 H hH _ ⟨n0, d2, es2, hr, hkk, hw, hv, _⟩
   have := rootNode_node hev.before hr
   subst this
   rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
   · cases heq
     exact ⟨_, d', es', Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨rfl, rfl⟩, hev.wf, no_views ht _ _ _,
-      no_names hev.wf ht _⟩
+      no_names hev.wf ht _, hsh'⟩
   · cases hin
   · cases hin
 

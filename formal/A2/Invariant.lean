@@ -144,7 +144,7 @@ def PkgsOK (T : Val) : Prop :=
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
   ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
     WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
-    NamesIn (.node t c d es) H
+    NamesIn (.node t c d es) H ∧ SharesOK m (.vec t) (.node t c d es)
 
 /-- A borrowed value of type `τ`, depending on `P` and holding `H`.  The parts
     of a borrowed struct are valid through what it depends on or holds. -/
