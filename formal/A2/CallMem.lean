@@ -270,17 +270,17 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
     (y = m.nv + fn.params.length ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
       some ⟨fn.resTy, resMode fn, false, if (resMode fn).ownSlot then [] else (callS Γ F fn args m.nv x).A,
-        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false⟩) ∨
+        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.inp, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
@@ -577,11 +577,17 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot y E0 h0
     refine ⟨sl, by rw [h.st_other hb hu, hsl], by rw [clean_ty, ht0]; exact hok, ?_⟩
     have hs1 := (hslot.weakLive ht0 hm0 hp0 hh0 (fun hl => (hsv (hl2 hl).1).1)).clean
-    refine hs1.keep fun dep hd => ?_
+    refine hs1.keepLive fun hlv dep hd => ?_
     -- what it depends on is untouched: a dependency on a moved argument ended it
-    unfold Entry.clean at hd
+    -- (a dead binding `letd` made keeps its views, but reads no memory)
+    unfold Entry.clean at hd hlv
     split at hd
     · simp [Entry.vdeps] at hd
+      rename_i hcl
+      rw [if_pos hcl] at hlv
+      rcases hcl.2 with ht | hl0
+      · exact absurd ht hd.1.2.2
+      · simp [hl0] at hlv
     · rename_i hcl
       have hrootb : E1.fixed → E1.mode = .rootb := by
         rintro hf

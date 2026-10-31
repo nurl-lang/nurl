@@ -84,6 +84,30 @@ theorem catchOK_wrap {m : Mem} (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base 
     obtain ⟨pm, t⟩ := p
     cases pm <;> simp [wrapParams, CatchOK, ih]
 
+/-- A2-drop.2: a statement whose running scopes bind no `letd` binding
+    keeps every frame's destructor views: there is none. -/
+theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
+    (h : ∀ v ∈ s.spine, ∀ E, Γ v = some E → E.dbind = false) : DtorPinOK Γ s := by
+  have hin : ∀ x k, (∀ E, Γ x = some E → E.dbind = false) → DtorIn Γ x k :=
+    fun x k hx E hE hd => by rw [hx E hE] at hd; cases hd
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope x k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | scopeD x _ k ih =>
+    exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | rbind p k ih =>
+    exact ⟨hin p k (h p (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
+  | _ => trivial
+
+theorem callPe_dbind (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
+    (callPe Γ ps args v).dbind = false := by
+  unfold callPe; split
+  · split <;> rfl
+  · rfl
+
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {m : Mem}
 
@@ -91,6 +115,41 @@ theorem body_spine (h : CallH P Γ F x fn args m.nv) :
     (fn.body.rename (callRen fn.params args m.nv)).spine = [] := by
   obtain ⟨hsrc, _⟩ := h.fnok
   exact src_spine (by rw [RSetup.src_rename]; exact hsrc)
+
+/-- A caller binding other than `x` is none of the call's running scopes. -/
+theorem not_spine (h : CallH P Γ F x fn args m.nv) {k : Stmt} {r : Var} (hrlt : r < m.nv) (hrx : r ≠ x) :
+    r ∉ (callStmt fn args m.nv x k).spine := by
+  intro hrs
+  rw [callStmt_spine, h.body_spine, List.append_nil] at hrs
+  rcases List.mem_cons.mp hrs with h1 | h1
+  · exact hrx h1
+  rcases List.mem_cons.mp h1 with h2 | h2
+  · rw [h2] at hrlt; exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hrlt)
+  · obtain ⟨k', _, _, _, he⟩ := mem_wrapSpine h2
+    rw [he] at hrlt
+    exact Nat.lt_irrefl _
+      (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_add_right m.nv 0) (Nat.le_add_right _ k')) hrlt)
+
+/-- A2-drop.2: the call's own bindings are none `letd` made: only a caller
+    binding the call does not rename may be one. -/
+theorem dbind_frame (h : CallH P Γ F x fn args m.nv) {y : Var} {E : Entry}
+    (hy : (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some E) (hd : E.dbind = true) :
+    (∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
+      ∃ E1, callPost Γ fn args y = some E1 ∧ E = E1.clean := by
+  rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+      ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+  · simp [callX] at hd
+  · simp at hd
+  · rw [callPe_dbind] at hd; cases hd
+  · simp at hd
+  · simp at hd
+  · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+    exact ⟨hy', hyx, E1, h1, rfl⟩
+
+/-- A2-drop.2: the call gives no binding `letd` made a new view. -/
+theorem post_dkeep (h : CallH P Γ F x fn args m.nv) : DKeep Γ (callPost Γ fn args) [] :=
+  (DKeep.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DKeep.refl Γ [])
+    fun j hj b hb Ea ha hd => absurd hd (by rw [h.dsafe.2.2 j hj b hb Ea ha]; simp)).killNames _
 
 theorem covers (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) (hc : Covers m) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) : Covers (callMem m m1 fn x) := by
@@ -125,6 +184,31 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
   pinIn := by
     show PinOK _ (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
     exact pinOK_wrap (h.minv hi.toMInv hb).rootbLt (PinOK.of_spine_nil h.body_spine) h.body_spine _ _ _
+  dtorIn := DtorPinOK.of_spine_dbind fun v hv E hE => by
+    cases hd : E.dbind with
+    | false => rfl
+    | true =>
+      exfalso
+      obtain ⟨hren, hvx, _⟩ := h.dbind_frame hE hd
+      rw [callStmt_spine, h.body_spine, List.append_nil] at hv
+      rcases List.mem_cons.mp hv with rfl | hv
+      · exact hvx rfl
+      rcases List.mem_cons.mp hv with rfl | hv
+      · exact hren fn.params.length (ren_res fn args m.nv)
+      · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
+        apply hren k'
+        unfold callRen; rw [hk']
+        obtain ⟨pm, t⟩ := p
+        cases pm with
+        | inout b => exact absurd rfl (hp b)
+        | _ => simp
+  dtorOut v E hv hd hos hn _ d hdd hnm := by
+    -- a caller binding: what it views in memory is bound in the caller
+    obtain ⟨_, _, E1, h1, rfl⟩ := h.dbind_frame hv hd
+    rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos
+    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+    obtain ⟨Er, hEr, _⟩ := h.postwf.dtor v E1 h1 hd hos hn1 d (Entry.clean_vdeps_sub hdd) hnm
+    exact h.not_spine (h.post_lt hEr) (h.post_ne_x hEr)
   pinOut p E hp hrb hns r hr hrs := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
         ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
@@ -146,15 +230,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       obtain ⟨Er, hEr, _⟩ := h.wf p E1' h0 (hi.rootbLive p E1' h0 (hm ▸ hrb)) (Or.inr (hm ▸ hrb)) r hr
       have hrlt : r < m.nv := hi.nvSt r (by rw [← hi.dom r, hEr]; rfl)
       have hrx : r ≠ x := fun e => by subst e; rw [h.fresh] at hEr; cases hEr
-      rw [callStmt_spine, h.body_spine, List.append_nil] at hrs
-      rcases List.mem_cons.mp hrs with h1 | h1
-      · exact hrx h1
-      rcases List.mem_cons.mp h1 with h2 | h2
-      · rw [h2] at hrlt; exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt (Nat.le_add_right _ _) hrlt)
-      · obtain ⟨k', _, _, _, he⟩ := mem_wrapSpine h2
-        rw [he] at hrlt
-        exact Nat.lt_irrefl _
-          (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_add_right m.nv 0) (Nat.le_add_right _ k')) hrlt)
+      exact h.not_spine hrlt hrx hrs
   nvS v hv := by
     obtain ⟨_, hnv, hvars, _⟩ := h.fnok
     show v < m.nv + fn.nvars
@@ -241,7 +317,7 @@ theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     · exact Or.inr (Nat.le_add_right _ _)
     · obtain ⟨_, _, _, _, rfl⟩ := mem_wrapSpine hv
       exact Or.inr (by omega)
-  refine ⟨fun v E hv _ => ⟨fun hs => ?_, ?_⟩, fun v E' hv hs => ⟨by simp [Stmt.spine], ?_⟩⟩
+  refine ⟨fun v E hv _ => ⟨fun hs => ?_, ?_⟩, fun v E' hv hs => ⟨by simp [Stmt.spine], ?_⟩, ?_⟩
   · rcases hspine v hs with rfl | hle
     · rw [h.fresh] at hv; cases hv
     · exact absurd (h.domlt v E hv) (Nat.not_lt.mpr hle)
@@ -287,6 +363,13 @@ theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
       have := h.postdm.1 v; rw [h1] at this
       exact Option.isSome_iff_exists.mp this.symm
     · rw [hc] at hv; cases hv
+  · -- a binding `letd` made is a caller's, viewing no more than before the call
+    intro v E' hv hd hos hn _
+    obtain ⟨_, _, E1, h1, rfl⟩ := h.dbind_frame hv hd
+    rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos
+    have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := by rwa [clean_ty, clean_mode] at hn
+    obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h.post_dkeep v E1 h1 hd hos hn1 (by simp)
+    exact ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => hs0 d (Entry.clean_vdeps_sub hdd) hnm⟩
 
 end CallH
 
@@ -536,7 +619,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           exact absurd hr (resMode_ne' fn)
         · have hvs' : v ∉ (callStmt fn [] m.nv x k).spine := by
             simp only [callStmt, Stmt.spine, List.mem_cons, not_or]; exact ⟨hvx, hvs⟩
-          obtain ⟨_, E0, h0⟩ := hkeep.2 v Ev hv hvs'
+          obtain ⟨_, E0, h0⟩ := hkeep.2.1 v Ev hv hvs'
           obtain ⟨_, E1, h1, hm1, ht1, hrb1⟩ := hkeep.1 v E0 h0 (by simp [Stmt.spine])
           rw [hv] at h1; cases h1
           refine ⟨E0, by simp [setE, upd_ne _ _ hvx, h0], hm1.symm, ht1.symm, fun hr => ?_⟩
