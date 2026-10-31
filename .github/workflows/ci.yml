@@ -145,6 +145,11 @@ jobs:
         # Python over fixture runs, no toolchain.
         shell: bash
         run: python3 tools/tests/test_tls_bench_report.py
+      - name: Generated RSA-2048 ADX kernels are current
+        # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
+        # between markers; a hand edit or a stale block fails here.
+        shell: bash
+        run: python3 tools/gen_rsa_adx16.py --check
 
   installer-controls:
     # tools/get-nurl.sh is classed with the web docs (nurl-lang.org serves
