@@ -510,6 +510,47 @@ theorem callPostAux_frame {Γ0 : Ctx} {fn : Fn} {args : List Var} {y : Var} :
           unfold hits at this ⊢
           rwa [killE_ty, killE_mode, killE_vdeps] at this
 
+/-- ... and keeps its flags: a call changes them only where it moves a
+    binding or hands it over. -/
+theorem callPostAux_frame_flags {Γ0 : Ctx} {fn : Fn} {args : List Var} {y : Var} :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),
+      (∀ pa ∈ ps.zip as, pa.1.1.moves = true → pa.2 ≠ y) →
+      ∀ E, callPostAux Γ0 fn args ps as i Γ y = some E →
+        ∃ E0, Γ y = some E0 ∧ E.dtor = E0.dtor ∧ E.dbind = E0.dbind := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro as i Γ _ E hE
+    cases as <;> exact ⟨E, by simpa [callPostAux] using hE, rfl, rfl⟩
+  | cons p ps ih =>
+    intro as i Γ hy E hE
+    obtain ⟨pm, t⟩ := p
+    cases as with
+    | nil => cases pm <;> exact ⟨E, by simpa [callPostAux] using hE, rfl, rfl⟩
+    | cons a as =>
+      have hy' : ∀ pa ∈ ps.zip as, pa.1.1.moves = true → pa.2 ≠ y :=
+        fun pa hpa => hy pa (by simp [hpa])
+      cases pm with
+      | inp => exact ih as (i + 1) Γ hy' E hE
+      | sink =>
+        have hay : a ≠ y := hy ((.sink, t), a) (by simp) rfl
+        obtain ⟨E1, h0, h1, h2⟩ := ih as (i + 1) _ hy' E hE
+        simp only [setE, upd_ne _ _ hay.symm, A2.kill] at h0
+        cases hE0 : Γ y with
+        | none => rw [hE0] at h0; cases h0
+        | some E0 =>
+          rw [hE0] at h0; simp only [Option.map_some, Option.some.injEq] at h0; subst h0
+          exact ⟨E0, rfl, by rw [h1, killE_dtor], by rw [h2, killE_dbind]⟩
+      | inout b =>
+        have hay : a ≠ y := hy ((.inout b, t), a) (by simp) rfl
+        obtain ⟨E1, h0, h1, h2⟩ := ih as (i + 1) _ hy' E hE
+        simp only [setE, upd_ne _ _ hay.symm, A2.kill] at h0
+        cases hE0 : Γ y with
+        | none => rw [hE0] at h0; cases h0
+        | some E0 =>
+          rw [hE0] at h0; simp only [Option.map_some, Option.some.injEq] at h0; subst h0
+          exact ⟨E0, rfl, by rw [h1, killE_dtor], by rw [h2, killE_dbind]⟩
+
 /-- A2-drop.2: a call arms nothing. A binding armed after it was armed
     before, with its mode and type, and views in memory no more: a `sink` is
     disarmed, and an `inout` binding `letd` made holds no views
@@ -811,6 +852,15 @@ theorem post_dbind (_h : CallH P Γ F x fn args base) {y : Var} {E1 : Entry}
   rw [hb] at hd
   exact callPostAux_dbind fn.params args 0 Γ (fun y E1 hy hd => ⟨E1, hy, hd⟩) y E2 h2 hd
 
+/-- A caller binding the call neither moves nor hands over keeps its flags. -/
+theorem post_frame_flags (_h : CallH P Γ F x fn args base) {y : Var}
+    (hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y) {E1 : Entry}
+    (h1 : callPost Γ fn args y = some E1) : ∃ E0, Γ y = some E0 ∧ E1.dtor = E0.dtor ∧ E1.dbind = E0.dbind := by
+  unfold callPost at h1
+  obtain ⟨E2, h2, hdt, _, _, _, hb⟩ := killNames_flags _ h1
+  obtain ⟨E0, h0, hd0, hb0⟩ := callPostAux_frame_flags fn.params args 0 Γ hmv E2 h2
+  exact ⟨E0, h0, hdt.trans hd0, hb.trans hb0⟩
+
 /-- `hitsMem` reads only memory views, by kind: fewer of them, no more hits. -/
 theorem hitsMem_sub {e : Eff} {hv : Bool} {r : Var} {E E0 : Entry} (hm : E.mode = E0.mode) (ht : E.ty = E0.ty)
     (hs : ∀ d ∈ E.vdeps, d.kind.isName = false → d ∈ E0.vdeps) (h0 : hitsMem e hv r E0 = false) :
@@ -825,18 +875,6 @@ theorem hitsMem_sub {e : Eff} {hv : Bool} {r : Var} {E E0 : Entry} (hm : E.mode 
     intro d hd hk
     simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at hk
     exact h0 d (hs d hd (by simpa using hk.1.2)) (by simp [hk.1.1, hk.1.2, hk.2])
-
-/-- ... and a memory view of `r` that `hitsMem` does not hit is one `e` spares. -/
-theorem hitsMem_kills {e : Eff} {hv : Bool} {r : Var} {E : Entry} (h : hitsMem e hv r E = false)
-    (hg : E.ty ≠ .int ∨ E.mode = .rootb) {d : Dep} (hd : d ∈ E.vdeps) (hr : d.root = r)
-    (hnm : d.kind.isName = false) : e.kills hv d.kind = false := by
-  unfold hitsMem at h
-  have hg' : (E.ty != .int || E.mode == .rootb) = true := by rcases hg with h' | h' <;> simp [h']
-  rw [hg', Bool.true_and, List.any_eq_false] at h
-  have := h d hd
-  cases hk : e.kills hv d.kind
-  · rfl
-  · exact absurd (by simp [hr, hnm, hk]) this
 
 /-- Roots reached from an argument are outside the callee and stay roots in the frame. -/
 theorem post_root (h : CallH P Γ F x fn args base) {r : Var} {Er : Entry} (hr : Γ r = some Er)

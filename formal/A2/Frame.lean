@@ -251,7 +251,8 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       (Ex'.dbind = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
           (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
-      (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true)
+      (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true) ∧
+      ArmOK m' Ex' sl
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -305,6 +306,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
+    (hds : DtorSafe Γ e hv x)
     (hdb : ox = none → DbindSafe Γ x)
     (hrem : ox = none → e = .replace)
     (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
@@ -392,7 +394,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       by_cases hvx : v = x
       · subst hvx
         have := getX E' hv'; subst this
-        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm, _⟩ := hox
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm, _, _⟩ := hox
         exact harm hd
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
         rw [killE_dtor] at hd; rw [killE_dbind]; exact hi.wf.arm v E hE hd
@@ -401,7 +403,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       by_cases hvx : v = x
       · subst hvx
         have := getX E' hv'; subst this
-        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hview⟩ := hox
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hview, _⟩ := hox
         exact hview hd
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
         rw [killE_dbind] at hd; rw [killE_ty]; exact hi.wf.view v E hE hd
@@ -538,5 +540,27 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rw [hsl'] at hsl; cases hsl
         exact hpk T hT
     · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
+  · -- A2-drop.2: no view of an armed binding is one the change ends (`DtorSafe`)
+    intro v E' sl hv' hsl
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact harm
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
+        (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
+      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
+      have hdm' := List.mem_filter.mp hdm
+      have hnm : dep.kind.isName = false := by simpa using hdm'.2
+      have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
+      have hnint : E.ty ≠ .int := fun h => by have := hi.wf.view v E hE hd; rw [h] at this; cases this
+      by_cases hr : dep.root = x
+      · obtain ⟨r, k⟩ := dep
+        simp only at hr; subst hr
+        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
+      · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
+        exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)).vkeep
 
 end A2

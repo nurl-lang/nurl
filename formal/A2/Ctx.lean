@@ -161,6 +161,28 @@ theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
     (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.mode hw.live
 
+theorem ArmOK.of_none {m : Mem} {E : Entry} {sl : Slot} (h : sl.val = none) : ArmOK m E sl :=
+  fun _ _ T hT => by rw [h] at hT; cases hT
+
+theorem ArmOK.of_dbind {m : Mem} {E : Entry} {sl : Slot} (h : E.dbind = false) : ArmOK m E sl :=
+  fun hd => by rw [h] at hd; cases hd
+
+/-- An entry that is the same binding, of the same type and mode, armed when
+    the other is and viewing at least what it views in memory, keeps it. -/
+theorem ArmOK.entry {m : Mem} {E E' : Entry} {sl : Slot} (hdb : E'.dbind = E.dbind) (ht : E'.ty = E.ty)
+    (hm : E'.mode = E.mode) (hdt : E.dtor = true → E'.dtor = true) (hh : A2.memDeps E.held ⊆ E'.held)
+    (h : ArmOK m E sl) : ArmOK m E' sl := by
+  intro hd hos T hT
+  obtain ⟨h1, h2⟩ := h (by rw [← hdb]; exact hd) (by rw [← hm]; exact hos) T hT
+  exact ⟨hdt h1, by rw [ht]; exact h2.memDeps.mono hh⟩
+
+theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E') (h : ArmOK m E sl) :
+    ArmOK m E' sl := by
+  intro hd hos T hT
+  obtain ⟨hdt, hv⟩ := h (by rw [← hw.dbind]; exact hd) (by rw [← hw.mode]; exact hos) T hT
+  obtain ⟨hdt', hsub⟩ := hw.dtor hdt
+  exact ⟨hdt', by rw [hw.ty]; exact hv.mono hsub⟩
+
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
@@ -187,6 +209,9 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨hl0, _, hh⟩ := hwe.live hl
     exact (hi.held v E sl T hE hl0 hsl hT).mono hh
   pkgs := hi.pkgs
+  armed v E' sl hv hsl := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact (hi.armed v E sl hE hsl).weaker hwe
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where
