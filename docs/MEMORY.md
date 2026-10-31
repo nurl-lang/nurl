@@ -954,24 +954,12 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Twelve holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name), #254 (a `% Drop` holder given a view of a
-younger binding, then a panic), #257 (a field of a `sink` struct
-parameter handed back inside a literal), #259 (a view gained through an
-`inout` callee or a closure's assignment of a capture is not tracked),
-#264 (a payload moved out of an enum taken out of an Option is dropped
-again with the enum), #265 (a struct field bound to a local, then the
-field replaced), #267 (a field read out of an element borrow outlives the
-elements' drop), #268 (a field reader re-bound, then handed back), #274
-(a block arm of a join whose tail names an owner already moved), #279 (an
-enum payload lent by `vec_get` out of a local Vec, handed back from a
-nested match), #280 (a field handed to a `sink` stays usable) and #284
-(an `inout` callee points the caller's `% Drop` holder at its own local,
-then panics). Agora #247
+**The holes known open are listed in [`LIMITATIONS.md`](LIMITATIONS.md)**,
+one entry each with its shape and how to stay clear of it until its fix
+ships (one file each in [`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/),
+so two PRs never edit the same list). Agora #247
 (a closure consuming one capture released another) and #252 (a holder
-moved on only one branch) are closed in 0.83.0.
-[`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
-until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
+moved on only one branch) are closed in 0.83.0. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first
 (reallocated, moved to a `sink`, or released at a scope end, which ran
 drops in declaration order) it read freed memory. Scope-end drops now run

@@ -1,11 +1,14 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**Twelve, as of 0.83.0**: agora #242, #254, #257, #259, #264, #265, #267,
-#268, #274, #279, #280 and #284.
-[`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) gives each one's
-shape and how to stay clear of it until its fix ships. Their probes live
-in the tasks until the fix lands with them in `tools/fuzz/holes/`, as
-named probes (`// map:` line), not here.
+**One file per hole known open**, `t<N>.md` after its Agora task: one
+paragraph, `**agora #N: <shape>.** <what happens>. Until the fix ships,
+<how to stay clear of it>.` A PR that finds a hole it does not fix adds
+the file, and the PR that closes the hole deletes it, so no two PRs edit
+the same file (Agora #136). `open_list.py --write` turns them into the
+list in [`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) at release time
+(RELEASING.md step 2), and release.yml checks the list on the tag. The
+probes live in the tasks until the fix lands them in `tools/fuzz/holes/`
+as named probes (`// map:` line).
 
 The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
