@@ -207,6 +207,13 @@ jobs:
         # Python over fixture runs, no toolchain.
         shell: bash
         run: python3 tools/tests/test_tls_bench_report.py
+      - name: HTTP torture cell helper controls
+        # bench/http_torture/lib.py splits each cell's errors into harness
+        # artefacts and server-attributable ones and marks steal (†) and a
+        # saturated generator (‡) (Agora #120). Pure Python over real oha
+        # JSON fixtures, no toolchain.
+        shell: bash
+        run: python3 tools/tests/test_http_torture_lib.py
       - name: Generated RSA-2048 ADX kernels are current
         # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
         # between markers; a hand edit or a stale block fails here.
