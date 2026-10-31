@@ -41,7 +41,7 @@ theorem spawn_param {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.
 
 /-- Its entry: an owner that depends on nothing. -/
 theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.sink, t))
-    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], []⟩ := by
+    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], [], false, false⟩ := by
   rw [sigCtx_of hp]
   simp [paramE, hasFn_of_holdsView ht]
 
@@ -49,8 +49,8 @@ theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.si
     its result's. -/
 theorem sigCtx_spawn {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
     {v : Nat} {E : Entry} (hv : sigCtx fn v = some E) :
-    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], []⟩) ∨
-    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], []⟩) := by
+    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], [], false, false⟩) ∨
+    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], [], false, false⟩) := by
   rcases Nat.lt_trichotomy v fn.params.length with h | h | h
   · obtain ⟨t, hp, ht⟩ := spawn_param hpar h
     rw [sigCtx_sink hp ht] at hv
@@ -115,7 +115,7 @@ theorem spawnSt_val {fn : Fn} {vs : List Val} {v : Nat} {sl : Slot} {T : Val}
 theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false) :
     ∃ Δ, StmtT P (sigCtx fn) [] (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) Δ := by
-  obtain ⟨hsrc, -, -, -, -, -, -, -, -, -, -, Δb, hbody, -⟩ := hok
+  obtain ⟨hsrc, -, -, -, -, -, -, -, -, -, -, Δb, hbody, hfl, -⟩ := hok
   have hrb : ∀ p E, sigCtx fn p = some E → E.mode ≠ .rootb := fun p E h =>
     (sigCtx_spawn_mode hpar h).1
   -- the body binds nothing new, so its end has no borrowed parameter either
@@ -125,7 +125,17 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     exact hrb p E0 h0 (hm0.symm.trans hm)
   have hsc : StmtT P (sigCtx fn) [] (.scope fn.params.length fn.body) (exitScope fn.params.length Δb) :=
     StmtT.scope ⟨_, sigCtx_res fn, resMode_ne' fn⟩ (fun h => by cases h) hbody
-      (fun p E hp hm => absurd hm (hrbΔ p E hp))
+      ⟨fun p E hp hm => absurd hm (hrbΔ p E hp), DtorSafe.of_none (fun v E h => (hfl v E h).1) _ _ _,
+        DbindSafe.of_none (fun v E h => (hfl v E h).2) _⟩
+  -- (and no binding of its end runs a destructor)
+  have hfl' : ∀ v E, exitScope fn.params.length Δb v = some E → E.dtor = false ∧ E.dbind = false := by
+    intro v E hv
+    by_cases hvn : v = fn.params.length
+    · subst hvn; simp [exitScope] at hv
+    · rw [exitScope, upd_ne _ _ hvn] at hv
+      simp only [A2.kill] at hv
+      obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+      rw [killE_dtor, killE_dbind]; exact hfl v E0 h0
   have hq0 : RbQ (· < 0) Δb := fun p E hp hm => absurd hm (hrbΔ p E hp)
   have hq : RbQ (· < 0) (exitScope fn.params.length Δb) := by
     intro p E hp
@@ -134,7 +144,8 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     · rw [exitScope, upd_ne _ _ hpn] at hp
       exact (hq0.kill .replace false _) p E hp
   refine ⟨_, wrap_typed (base := 0) (pe := fun _ => intE) hsc (fun _ d hd => by simp [intE] at hd)
-    (fun _ d hd => by simp [intE] at hd) hq fn.params 0 (fun k p hk => ?_)⟩
+    (fun _ d hd => by simp [intE] at hd) hq (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).1]; simp))
+    (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).2]; simp)) fn.params 0 (fun k p hk => ?_)⟩
   obtain ⟨h1, ht⟩ := hpar p (List.mem_of_getElem? hk)
   obtain ⟨pm, t⟩ := p
   simp only at h1 ht
@@ -231,6 +242,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
         cases hc
       · cases hl
     pkgs := fun v sl T hsl hT => hpk T (hmem hsl hT)
+    armed := fun v E sl hv _ => ArmOK.of_dbind (sigCtx_flags hv).2
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv
@@ -271,7 +283,9 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hv
       exact ⟨j, v, spawnSt_of hlen hj, hiv⟩
     pinOut := fun p E hp hm => absurd hm (hrb p E hp)
-    pinIn := pinOK_noRootb hrb _ }
+    pinIn := pinOK_noRootb hrb _
+    dtorOut := fun v E hv hd => absurd hd (by rw [(sigCtx_flags hv).2]; simp)
+    dtorIn := DtorPinOK.of_spine_dbind fun v _ E hE => (sigCtx_flags hE).2 }
 
 /-- **The thread a spawn starts satisfies A2's invariant**, on its own part of
     the address space (the moved trees' addresses) and at the shared `nid`. -/

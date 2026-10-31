@@ -270,17 +270,17 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
     (y = m.nv + fn.params.length ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
       some ⟨fn.resTy, resMode fn, false, if (resMode fn).ownSlot then [] else (callS Γ F fn args m.nv x).A,
-        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A⟩) ∨
+        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.inp, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
@@ -577,11 +577,17 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot y E0 h0
     refine ⟨sl, by rw [h.st_other hb hu, hsl], by rw [clean_ty, ht0]; exact hok, ?_⟩
     have hs1 := (hslot.weakLive ht0 hm0 hp0 hh0 (fun hl => (hsv (hl2 hl).1).1)).clean
-    refine hs1.keep fun dep hd => ?_
+    refine hs1.keepLive fun hlv dep hd => ?_
     -- what it depends on is untouched: a dependency on a moved argument ended it
-    unfold Entry.clean at hd
+    -- (a dead binding `letd` made keeps its views, but reads no memory)
+    unfold Entry.clean at hd hlv
     split at hd
     · simp [Entry.vdeps] at hd
+      rename_i hcl
+      rw [ite_eq_left hcl] at hlv
+      rcases hcl.2 with ht | hl0
+      · exact absurd ht hd.1.2.2
+      · simp [hl0] at hlv
     · rename_i hcl
       have hrootb : E1.fixed → E1.mode = .rootb := by
         rintro hf
@@ -637,6 +643,83 @@ theorem param_ok (h : CallH P Γ F x fn args m.nv) {k : Nat} {p : PMode × Ty} (
   | inp => exact absurd rfl hne
   | sink => exact hsink rfl
   | inout b => exact hio b rfl
+
+theorem callPe_dbind (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
+    (callPe Γ ps args v).dbind = false := by
+  unfold callPe; split
+  · split <;> rfl
+  · rfl
+
+/-- A2-drop.2: the call's own bindings are none `letd` made: only a caller
+    binding the call does not rename may be one. -/
+theorem dbind_frame (h : CallH P Γ F x fn args m.nv) {y : Var} {E : Entry}
+    (hy : (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some E) (hd : E.dbind = true) :
+    (∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
+      ∃ E1, callPost Γ fn args y = some E1 ∧ E = E1.clean := by
+  rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+      ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+  · simp [callX] at hd
+  · simp at hd
+  · rw [callPe_dbind] at hd; cases hd
+  · simp at hd
+  · simp at hd
+  · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+    exact ⟨hy', hyx, E1, h1, rfl⟩
+
+/-- A2-drop.2: an armed caller binding keeps its value's views: it views no
+    moved argument in memory (`CallDtorSafe`), and the call leaves the rest. -/
+theorem armed_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) {y : Var} (hy : ∀ v, callRen fn.params args m.nv v ≠ y)
+    (hyx : y ≠ x) {E1 : Entry} (h1 : callPost Γ fn args y = some E1) {sl : Slot}
+    (hsl : (callMem m m1 fn x).st y = some sl) : ArmOK (callMem m m1 fn x) E1.clean sl := by
+  by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+  · obtain ⟨k, t, hk, rfl⟩ := hs
+    rw [h.st_sinkArg hb hk] at hsl; cases hsl
+    exact ArmOK.of_none rfl
+  have hu := h.frame_untouched hy hyx (fun k t hk he => hs ⟨k, t, hk, he⟩)
+  rw [h.st_other hb hu] at hsl
+  have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
+    intro pa hpa hm he
+    obtain ⟨k, hk, hka, rfl⟩ := RSetup.mem_zip_getD hpa
+    simp only at hm he
+    have hget : fn.params[k]? = some fn.params[k] := List.getElem?_eq_getElem hk
+    generalize hp : fn.params[k] = p at hm hget
+    obtain ⟨pm, t⟩ := p
+    cases pm with
+    | inp => cases hm
+    | sink => exact hs ⟨k, t, hget, he⟩
+    | inout b => exact hy k (by unfold callRen; rw [hget]; exact he)
+  obtain ⟨E0, h0, hdt0, hdb0⟩ := h.post_frame_flags hmv h1
+  obtain ⟨E2, h2, ht2, hm2, _, hh2, _⟩ := killNames_get _ h1
+  obtain ⟨E0', h0', ht0, hm0, _, hh0, _⟩ := callPostAux_frame fn.params args 0 Γ hmv E2 h2
+  rw [h0] at h0'; cases h0'
+  intro hd hos T hT
+  rw [Entry.clean_dbind, hdb0] at hd; rw [clean_mode, hm2, hm0] at hos
+  obtain ⟨hdt, hvs⟩ := hi.armed y E0 sl h0 hsl hd hos T hT
+  have hnint : E0.ty ≠ .int := fun h' => by have := hi.wf.view y E0 h0 hd; rw [h'] at this; cases this
+  -- what it views in memory is untouched: no moved argument
+  have hk : ∀ dep ∈ memDeps E0.held, VKeep m (callMem m m1 fn x) dep := by
+    intro dep hdm
+    have hdm' := List.mem_filter.mp hdm
+    have hnm : dep.kind.isName = false := by simpa using hdm'.2
+    have hdv : dep ∈ E0.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
+    obtain ⟨Er, hEr, _⟩ := hi.wf.dtor y E0 h0 hd hos (Or.inl hnint) dep hdv hnm
+    refine (h.rootKeep hi hb ?_).vkeep
+    refine h.untouched_lt (h.domlt _ _ hEr) (fun e => by rw [e, h.fresh] at hEr; cases hEr) ?_
+    intro k t hk he
+    have hds := (h.dsafe.1 k (lt_of_get hk)).1 (by rw [get_of hk])
+    exact DtorSafe.root_ne hds h0 hdt hos (Or.inl hnint) hdv hnm he.symm
+  refine ⟨by rw [Entry.clean_dtor, hdt0]; exact hdt, ?_⟩
+  have hdb1 : E1.dbind = true := by rw [hdb0]; exact hd
+  have hos1 : E1.mode.ownSlot = true := by rw [hm2, hm0]; exact hos
+  have hty1 : E1.ty = E0.ty := by rw [ht2, ht0]
+  have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := Or.inl (by rw [hty1]; exact hnint)
+  rw [clean_ty, hty1]
+  refine (hvs.memDeps.keep hk).mono fun d hd' => ?_
+  have hd'' := List.mem_filter.mp hd'
+  have hnm : d.kind.isName = false := by simpa using hd''.2
+  refine (Entry.clean_vdeps_mem hdb1 hos1 hn1 hnm).mpr ?_
+  rw [hh2, hh0]; exact hd''.1
 
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
@@ -895,6 +978,13 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       exact hsa ⟨k, t, hk, Option.some.inj he⟩
     rw [h.st_other hb hu] at hst
     exact hi.pkgs y sl T hst hT
+  armed y E sl hy hsl := by
+    -- only a caller binding is one `letd` made
+    cases hdb : E.dbind with
+    | false => exact ArmOK.of_dbind hdb
+    | true =>
+      obtain ⟨hren, hyx, E1, h1, rfl⟩ := h.dbind_frame hy hdb
+      exact h.armed_frame hi hb hren hyx h1 hsl
   rootbLive p E hp hrb := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)

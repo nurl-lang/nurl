@@ -213,6 +213,13 @@ def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
   (E.mode.ownSlot = false →
     (E.live = true → ∃ v, sl.val = some v ∧ ValOK m E.ty v E.path E.held))
 
+/-- A2-drop.2: a binding `letd` made whose slot owns a value is armed, and
+    the value's views are valid, whether its entry is live or not: the
+    destructor reads them where the scope ends (after a join on which one
+    path moved it, the entry is dead but the slot may own). -/
+def ArmOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
+  E.dbind = true → E.mode.ownSlot = true → ∀ T, sl.val = some T → E.dtor = true ∧ ViewsOK m E.ty T E.held
+
 /-- The bindings of the run-time scopes a statement is inside of, innermost
     last: they are bound for as long as the statement runs. -/
 def Stmt.spine : Stmt → List Var
@@ -250,6 +257,58 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .frozen _ s => PinOK Γ s
   | .catchR _ _ s => PinOK Γ s
   | _ => True
+
+/-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
+    a run-time scope opened inside its own frame, so a panic that unwinds
+    those scopes leaves its views bound (nurlc #254). -/
+def DtorIn (Γ : Ctx) (x : Var) (s : Stmt) : Prop :=
+  ∀ E, Γ x = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ s.spine
+
+def DtorPinOK (Γ : Ctx) : Stmt → Prop
+  | .seq a _ => DtorPinOK Γ a
+  | .scope x s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .scopeD x _ s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .rbind p s => DtorIn Γ p s ∧ DtorPinOK Γ s
+  | .frozen _ s => DtorPinOK Γ s
+  | .catchR _ _ s => DtorPinOK Γ s
+  | _ => True
+
+/-- A statement inside no run-time scope pins nothing. -/
+theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPinOK Γ s := by
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope _ _ _ => simp [Stmt.spine] at h
+  | scopeD _ _ _ _ => simp [Stmt.spine] at h
+  | rbind _ _ _ => simp [Stmt.spine] at h
+  | _ => trivial
+
+/-- `DtorPinOK` reads only what the `letd` bindings view: a context that
+    keeps them, or views less, keeps it. -/
+theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → E'.dbind = true → E'.mode.ownSlot = true →
+      (E'.ty ≠ .int ∨ E'.mode = .rootb) → ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧
+        (E.ty ≠ .int ∨ E.mode = .rootb) ∧ ∀ d ∈ E'.vdeps, d.kind.isName = false → d ∈ E.vdeps)
+    {s : Stmt} (hp : DtorPinOK Γ s) : DtorPinOK Γ' s := by
+  have hin : ∀ x k, DtorIn Γ x k → DtorIn Γ' x k := by
+    intro x k hx E' hE' hd hos hn d hdd hnm
+    obtain ⟨E, hE, hd0, hos0, hn0, hsub⟩ := h x E' hE' hd hos hn
+    exact hx E hE hd0 hos0 hn0 d (hsub d hdd hnm) hnm
+  induction s with
+  | seq a _ iha _ => exact iha hp
+  | scope x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
+  | scopeD x _ k ih => exact ⟨hin x k hp.1, ih hp.2⟩
+  | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
+  | frozen _ k ih => exact ih hp
+  | catchR _ _ k ih => exact ih hp
+  | _ => trivial
+
+theorem dtorOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
+    ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+      v ∉ s.spine → ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ s.spine :=
+  fun _ _ _ _ _ _ _ _ _ _ hr => by rw [h] at hr; cases hr
 
 /-- `PinOK` reads only borrowed parameters: a context that keeps them keeps it. -/
 theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
@@ -308,6 +367,7 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
+  armed     : ∀ v E sl, Γ v = some E → m.st v = some sl → ArmOK m E sl
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -324,6 +384,12 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
       scopes opened inside its call (`PinOK`). -/
   pinOut    : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine
   pinIn     : PinOK Γ s
+  /-- A2-drop.2: so for a binding `letd` made, in memory (the panic path,
+      nurlc #254). -/
+  dtorOut   : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true →
+                (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
+                d.kind.isName = false → d.root ∉ s.spine
+  dtorIn    : DtorPinOK Γ s
 
 /-! ### Typing of statements
 
@@ -349,13 +415,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → NoPin Δ x →
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
@@ -372,6 +438,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
         Ex.mode = .bor ∧ E.mode = .bor) →
       RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome → NoPin Γ x →
+      DtorSafe Γ1 .replace false x →
+      -- A2-drop.2: a binding `letd` made gains no view (nurlc #254; its rule,
+      -- views of older bindings only, needs an age the calculus lacks)
+      Ex.dbind = false →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
       a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
@@ -382,12 +452,14 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = some Ex → Ex.live = true → Ex.ty = .vec t → canDo Ex.mode .realloc → x ∉ F →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
       PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
-      Γ1 x = some Ex1 → Ex1.live = true →
+      Γ1 x = some Ex1 → Ex1.live = true → DtorSafe Γ1 .realloc t.holdsView x →
+      -- A2-drop.2: a destructor binding gains no view
+      (Ex.dbind = true → t.holdsView = false) →
       StmtT P Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
-      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → NoPin Γ x →
-      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
+      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → EndOK Γ x →
+      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
   | panic {Γ Δ : Ctx} {F : List Var} :
@@ -396,19 +468,24 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
+      -- A2-drop.2: ... and no binding `letd` made viewing more than it did,
+      -- nor any no longer `letd`'s
+      DKeep Γ Δ [] → DStay Γ Δ [] →
       StmtT P Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
   | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
       -- (an `inout` struct that may be replaced is taken apart too: a field
       -- replaced in place is the struct taken apart and assigned again)
       s.src = true → Γ y = some E → E.live = true → canDo E.mode .replace → E.ty = .prod a b → y ∉ F →
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
-      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
+      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ →
-      NoPin Γ y → NoPin Δ z → NoPin (exitScope z Δ) x →
+      -- `y` is replaced, not ended: what borrows it by name, and a destructor
+      -- that views it, are what replacing it ends
+      NoPin Γ y → DtorSafe Γ .replace false y → EndOK Δ z → EndOK (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
@@ -419,23 +496,29 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- handed to the code as an `inout` argument of its own)
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      NoPin Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
       (RootbAnch Δ F) →
-      KeepOut Γ Δ s.spine →
+      KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P Γ F (.catchR x m0 s) Δ
   /-- A2-drop.1: a binding with a destructor, of a type that holds no views
       (its value is valid however the binding died). -/
-  | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry} :
+  | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry}
+      {H : List Dep} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
-      E.ty.holdsView = false → DtorOK P f E.ty → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+      E.ty.hasFn = false → DtorOK P f E.ty →
+      -- A2-drop.2: the binding, armed, views what the value does, or more
+      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with held := H })) F s Δ →
+      EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.holdsView = false ∧ DtorOK P f E.ty) → x ∉ F →
-      StmtT P Γ F s Δ → NoPin Δ x →
+      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
+      StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      -- A2-drop.2: the binding is `letd`'s when its type holds views (its
+      -- destructor reads them)
+      (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
 
 /-- A function is well-typed when its body is, from its own view of the
@@ -453,6 +536,9 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
+    -- A2-drop.2: the body's own destructor bindings have ended, and no
+    -- parameter or result runs a destructor
+    (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
       (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
