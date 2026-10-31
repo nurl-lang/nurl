@@ -46,7 +46,7 @@ def liftE (v : Var) (E : Entry) : Entry :=
   if E.mode = .rootb then { S.pe v with live := E.live } else
     ⟨E.ty, liftMode E.mode, E.live,
      rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor⟩
+     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind⟩
 
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
@@ -2813,7 +2813,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hf' : S.liftE x E =
         ⟨E.ty, liftMode E.mode, E.live,
          rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor⟩ := by
+         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind⟩ := by
       simp [liftE, hrbE]
     rw [hf, hmx']
     rw [hf'] at hw'
