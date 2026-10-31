@@ -13496,6 +13496,17 @@ unsafe @ __has_pct_token s ll s name → b {
 // coerces or the opaque-pointer call type papers over it) and the callee
 // would read reinterpreted bytes.
 @ __arg_param_checks i lex s fname i arg_idx s at s pllvm → v {
+    // A trait object declared, something else passed: no value becomes one
+    // implicitly — it is built with its vtable by `dyn` (agora #275).
+    ? & != 0 ( nurl_str_starts pllvm `%dyn.` ) ! ( seq at pllvm ) {
+        : s tn ( nurl_str_slice pllvm 5 - ( nurl_str_len pllvm ) 5 )
+        ? == 0 ( nurl_str_starts at `%dyn.` ) {
+            ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': a '` ( llvm_to_nurl at ) `' passed where the parameter is a '%` tn )
+            ( nurl_str_cat4 `' object — a value is a trait object only once it is boxed with its vtable. Pass ( dyn ` tn ` value ) (the type must implement '` tn )
+            `'), or make the parameter that type itself.` ) )
+        } {}
+    } {}
     // A number where a struct is expected by value (`( use 0 )` with a `(
     // Vec i )` parameter): the callee would read the integer as the
     // struct's bytes — for a String, a Vec or a handle, as its control
@@ -64819,6 +64830,17 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
         ^ ( scan_skip_type lex ) }
     {}
     ? == tt TT_LPAREN { ^ ( scan_skip_paren lex ) } {}
+    // A trait object, `%Trait`. Refused here, the whole roster of a
+    // function taking one was abandoned and no call to it was checked: a
+    // struct passed where the trait object is declared reached clang as
+    // invalid IR, or ran with its second field taken for the vtable
+    // (agora #275).
+    ? == tt TT_PERCENT {
+        ( nurl_lex_advance lex )
+        ? ! ( is_ident_tok ( nurl_lex_type lex ) ) { ^ 0 } {}
+        ( nurl_lex_advance lex )
+        ^ 1
+    } {}
     ? ( is_ident_tok tt ) { ( nurl_lex_advance lex ) ^ 1 } {}
     // `T` / `F` lex as boolean literals, but at a TYPE position they can
     // only be a type word — the canonical generic tparam `[T] T x`, or a
