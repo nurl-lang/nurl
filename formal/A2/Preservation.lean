@@ -358,7 +358,8 @@ theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout
   refine ⟨hout.own, hout.mode, hout.live, hout.tyok, fun hn r hr => ?_, fun hm => ?_, fun hm => ?_,
     fun hn => (hout.names hn).transport (fun r Er _ hr hl hh _ => ⟨Er, by
       have hrx : r ≠ x := fun h => by rw [h, hx] at hr; cases hr
-      simp [setE, upd_ne _ _ hrx, hr], hl, hh, rfl, rfl⟩) (List.Subset.refl _), hout.held, hout.pkgs⟩
+      simp [setE, upd_ne _ _ hrx, hr], hl, hh, rfl, rfl⟩) (List.Subset.refl _), hout.held, hout.pkgs,
+    fun h => (hout.shares h).of_blk rfl⟩
   · obtain ⟨Er, hEr, hro⟩ := hout.wf hn r hr
     have hrx : r ≠ x := fun h => by rw [h, hx] at hEr; cases hEr
     exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
@@ -799,7 +800,8 @@ theorem unwindCtx_same {sp : List Var} {x v : Var} {Γ : Ctx} {E : Entry}
 /-- A slot keeps its meaning when every root its entry depends on reaches
     the same memory; an integer's depends on none. -/
 theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E sl)
-    (hk : E.ty ≠ .int → ∀ dep ∈ E.vdeps, VKeep m m1 dep ∧ HKeep m m1 dep) : SlotOK m1 E sl := by
+    (hk : E.ty ≠ .int → ∀ dep ∈ E.vdeps, VKeep m m1 dep ∧ HKeep m m1 dep)
+    (hb : m1.blk = m.blk := by rfl) : SlotOK m1 E sl := by
   obtain ⟨h1, h2, h3⟩ := hs
   by_cases hty : E.ty = .int
   · refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
@@ -818,7 +820,7 @@ theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E s
       exact ⟨T, hT, hvs.keep fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
     · obtain ⟨v, hv, hok⟩ := h3 ho hl
       exact ⟨v, hv, hok.keep (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))
-        (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))⟩
+        (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd])) hb⟩
 
 /-- What a panic leaves at a destructor's frame satisfies the memory
     invariant, in the unwind context: the unwound scopes owned trees
