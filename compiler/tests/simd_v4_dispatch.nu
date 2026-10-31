@@ -7,9 +7,7 @@
 $ `stdlib/core/vec.nu`
 
 // A rotate-heavy lane loop: VPROLD in the v4 clone, shift pairs below.
-simd v4
-
-@ mix ( Vec u32 ) v → u32 {
+simd v4 @ mix ( Vec u32 ) v → u32 {
     : ~ u32 acc 0
     : ~ i k 0
     ~ < k ( vec_len [u32] v ) {
@@ -21,18 +19,14 @@ simd v4
     ^ acc
 }
 
-pub simd v4
-
-@ twice i x → i { ^ * x 2 }
+pub simd v4 @ twice i x → i { ^ * x 2 }
 
 // The CPU level, asked from inside each clone. The probes its dispatcher
 // already answered fold to constants there (v3 and v4 in `.x86v4`, v3 in
 // `.x86v3`, both in `.base`), and must still say what the runtime says
 // outside. A plain `simd` `.x86v3` also runs on a v4 CPU: its v4 probe
 // stays a call.
-simd v4
-
-@ level → i { ^ + # i ( nurl_cpu_x86_v3 ) * 2 # i ( nurl_cpu_x86_v4 ) }
+simd v4 @ level → i { ^ + # i ( nurl_cpu_x86_v3 ) * 2 # i ( nurl_cpu_x86_v4 ) }
 
 simd @ level3 → i { ^ + # i ( nurl_cpu_x86_v3 ) * 2 # i ( nurl_cpu_x86_v4 ) }
 

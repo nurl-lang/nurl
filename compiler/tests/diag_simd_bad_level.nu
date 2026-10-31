@@ -4,8 +4,6 @@
 // named back, with the valid level and what the bare prefix keeps, so
 // the reader does not have to look up which levels there are.
 
-simd v5
-
-@ f i x → i { ^ + x 1 }
+simd v5 @ f i x → i { ^ + x 1 }
 
 @ main → i { ^ ( f 1 ) }

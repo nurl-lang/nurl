@@ -521,9 +521,7 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
 // only where v128 is native: a wasm module (whose v128 scalarises) carries
 // it but its JIT never compiles it, and the caller stays small enough for
 // a register allocator to keep its two-block loop in registers.
-simd v4
-
-@ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
+simd v4 @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
     : i k0 ( __ld32 key 0 )
     : i k1 ( __ld32 key 4 )
     : i k2 ( __ld32 key 8 )
