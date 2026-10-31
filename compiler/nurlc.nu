@@ -5102,8 +5102,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? & & != 0 g_etake_n ( is_ident_tok ret_first_tt ) ! ret_field_copy {
         : s __ert ( __etake_rec syms ret_first_val )
         ? != 0 ( nurl_str_len __ert ) {
-            ( mem_enum_take cg __ert )
-            = hbit ( nurl_str_cat `true` `` )
+            = hbit ( mem_enum_take syms cg __ert )
             = ret_field_copy T
         } {}
     } {}
@@ -25134,7 +25133,12 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // inferred sink owns only when its flag says so stays lent.)
     : s eo ( nurl_sym_get2 syms name `__enum_owner` )
     : s u ? != 0 ( nurl_str_len u0 ) ( nurl_str_cat u0 `` ) ? & != 0 ( nurl_str_len eo ) == 0 ( nurl_sym_len2 syms eo `__sinkflag` ) ( nurl_str_cat eo `` ) ( nurl_str_cat `` `` )
-    ? | | == 0 ( nurl_str_len u ) != 0 ( nurl_sym_len2 syms u `__sborrow` ) != 0 ( nurl_sym_len2 syms u `__outer_owned` ) { ^ 0 } {}
+    // (One whose flag says whether it owns its value — `dyn`, bound from a
+    // forward call or an option's payload — gives it up on the paths where
+    // it does: mem_enum_take. Refused, a payload handed out of it was lent
+    // while the enum was dropped under it, agora #264.)
+    : s usb ( nurl_sym_get2 syms u `__sborrow` )
+    ? | | == 0 ( nurl_str_len u ) & != 0 ( nurl_str_len usb ) ! ( seq usb `dyn` ) != 0 ( nurl_sym_len2 syms u `__outer_owned` ) { ^ 0 } {}
     ? & != 0 ( nurl_sym_len2 syms u `__pname` ) ! ( __param_owned_slot syms u ) { ^ 0 } {}
     ? ! | ( __is_autodrop_enum ty syms ) ( __is_handle_enum ty ) { ^ 0 } {}
     ? | ( str_contains_word g_clo_caps_now name ) ! ( nurl_sym_has_word syms `__user_drops__` u ) { ^ 0 } {}
@@ -25194,25 +25198,42 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
 
 // Take a payload out of the enum in `slot`: its i64 slot is zeroed (a zero
 // slot is moved out — the enum's drop and copy skip it), and a heap box it
-// was in is freed, its value already loaded into the payload binding.
-@ mem_enum_take i cg s rec → v {
+// was in is freed, its value already loaded into the payload binding. An
+// enum binding that owns its value only where its flag says (`dyn`) gives
+// it up there alone: elsewhere it is lent, and so is the payload. Answers
+// whether the payload is now owned: `true`, or that flag.
+@ mem_enum_take i syms i cg s rec → s {
     : s slot ( str_first_word rec )
     : s r1 ( str_skip_word rec )
     : s fidx ( str_first_word r1 )
     : s r2 ( str_skip_word r1 )
     : s storage ( str_first_word r2 )
     : s ety ( str_skip_word r2 )
+    : s c ? ( seq ( nurl_sym_get2 syms slot `__sborrow` ) `dyn` ) ( mem_udrop_flag_get syms cg slot ) ( nurl_str_cat `true` `` )
+    : b cond ! ( seq c `true` )
     : s gp ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print gp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty ety ) )
     ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print fidx ) ( nurl_print `\n` )
     ? ( seq storage `3` ) {
         : s bx ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print bx ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
-        : s bp ( nurl_cg_reg cg )
+        : ~ s bp ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print bx ) ( nurl_print ` to i8*\n` )
+        ? cond {
+            : s bs ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print bs ) ( nurl_print ` = select i1 ` ) ( nurl_print c ) ( nurl_print `, i8* ` ) ( nurl_print bp ) ( nurl_print `, i8* null\n` )
+            = bp bs
+        } {}
         ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print bp ) ( nurl_print `)\n` )
     } {}
-    ( nurl_print `  store i64 0, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+    ? cond {
+        : s ov ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+        : s nv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print nv ) ( nurl_print ` = select i1 ` ) ( nurl_print c ) ( nurl_print `, i64 0, i64 ` ) ( nurl_print ov ) ( nurl_print `\n` )
+        ( nurl_print `  store i64 ` ) ( nurl_print nv ) ( nurl_print `, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+    } { ( nurl_print `  store i64 0, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` ) }
+    ^ c
 }
 
 // `name` is a payload binding whose scrutinees (`__plend`) lead, through an
@@ -57625,9 +57646,9 @@ unsafe @ __clo_take_capture i syms s name → v {
         ? & ( is_ident_tok tt0 ) ( seq v0 retid ) {
             : s rec ( __etake_rec syms retid )
             ? != 0 ( nurl_str_len rec ) {
-                ( mem_enum_take cg rec )
+                : s tk ( mem_enum_take syms cg rec )
                 ( bck_note_payload_taken syms ( str_first_word rec ) g_stmt_line )
-                ^ ( nurl_str_cat `true` `` )
+                ^ tk
             } {}
         } {}
     } {}
