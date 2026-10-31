@@ -10,6 +10,14 @@ on:
     branches: [main, Improvements]
   pull_request:
     branches: [main]
+  # The merge queue (Agora #136): main's ruleset can require the queue,
+  # which tests main + the queued PRs together and merges exactly the
+  # commit it tested. The required checks (build + corpus, FreeBSD,
+  # ASan + UBSan) all live in this workflow, so this is the only
+  # workflow that has to answer a merge_group event. A group always runs
+  # everything (see `changes`).
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
@@ -21,10 +29,14 @@ jobs:
   changes:
     name: classify changed paths
     runs-on: ubuntu-latest
+    # In the merge queue, every class runs. A group is several PRs on top
+    # of a main that moved since they were tested, so the queue is no
+    # place to save minutes by path: running too much is always correct
+    # there, and running too little is not.
     outputs:
-      code: ${{ steps.code.outputs.code }}
-      webdocs: ${{ steps.filter.outputs.webdocs }}
-      compiler: ${{ steps.filter.outputs.compiler }}
+      code: ${{ github.event_name == 'merge_group' && 'true' || steps.code.outputs.code }}
+      webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.webdocs }}
+      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.compiler }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +48,7 @@ jobs:
       # blocked forever. A PR touching both classes runs everything.
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           filters: |
             webdocs:
@@ -76,6 +89,7 @@ jobs:
       # into "matches all of them".
       - uses: dorny/paths-filter@v3
         id: code
+        if: github.event_name != 'merge_group'
         with:
           predicate-quantifier: 'every'
           filters: |
@@ -504,8 +518,8 @@ jobs:
         # must keep the twin identical. The pre-commit hook auto-copies;
         # this is the same rule for whoever skipped the hook.
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.before }}" || true
-          ./tools/check_golden_twins.sh "${{ github.event.pull_request.base.sha || github.event.before }}"
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}" || true
+          ./tools/check_golden_twins.sh "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}"
 
       - name: package imports resolve once installed (no packages/… self-imports, every deps/ import declared)
         # In this repo every build runs from the root, so a
