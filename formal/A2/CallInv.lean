@@ -146,6 +146,29 @@ theorem dbind_frame (h : CallH P Γ F x fn args m.nv) {y : Var} {E : Entry}
   · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
     exact ⟨hy', hyx, E1, h1, rfl⟩
 
+/-- The call's running scopes bind none that `letd` made. -/
+theorem spine_dbind (h : CallH P Γ F x fn args m.nv) {k : Stmt} :
+    ∀ v ∈ (callStmt fn args m.nv x k).spine, ∀ E,
+      (callS Γ F fn args m.nv x).canon (sigCtx fn) v = some E → E.dbind = false := by
+  intro v hv E hE
+  cases hd : E.dbind with
+  | false => rfl
+  | true =>
+    exfalso
+    obtain ⟨hren, hvx, _⟩ := h.dbind_frame hE hd
+    rw [callStmt_spine, h.body_spine, List.append_nil] at hv
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact hvx rfl
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact hren fn.params.length (ren_res fn args m.nv)
+    · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
+      apply hren k'
+      unfold callRen; rw [hk']
+      obtain ⟨pm, t⟩ := p
+      cases pm with
+      | inout b => exact absurd rfl (hp b)
+      | _ => simp
+
 /-- A2-drop.2: the call gives no binding `letd` made a new view. -/
 theorem post_dkeep (h : CallH P Γ F x fn args m.nv) : DKeep Γ (callPost Γ fn args) [] :=
   (DKeep.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DKeep.refl Γ [])
@@ -184,24 +207,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
   pinIn := by
     show PinOK _ (wrapParams fn.params m.nv 0 (fn.body.rename (callRen fn.params args m.nv)))
     exact pinOK_wrap (h.minv hi.toMInv hb).rootbLt (PinOK.of_spine_nil h.body_spine) h.body_spine _ _ _
-  dtorIn := DtorPinOK.of_spine_dbind fun v hv E hE => by
-    cases hd : E.dbind with
-    | false => rfl
-    | true =>
-      exfalso
-      obtain ⟨hren, hvx, _⟩ := h.dbind_frame hE hd
-      rw [callStmt_spine, h.body_spine, List.append_nil] at hv
-      rcases List.mem_cons.mp hv with rfl | hv
-      · exact hvx rfl
-      rcases List.mem_cons.mp hv with rfl | hv
-      · exact hren fn.params.length (ren_res fn args m.nv)
-      · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
-        apply hren k'
-        unfold callRen; rw [hk']
-        obtain ⟨pm, t⟩ := p
-        cases pm with
-        | inout b => exact absurd rfl (hp b)
-        | _ => simp
+  dtorIn := DtorPinOK.of_spine_dbind h.spine_dbind
   dtorOut v E hv hd hos hn _ d hdd hnm := by
     -- a caller binding: what it views in memory is bound in the caller
     obtain ⟨_, _, E1, h1, rfl⟩ := h.dbind_frame hv hd
