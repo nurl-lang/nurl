@@ -224,6 +224,11 @@ drop_view_holder_declared_first	§7.6	A2	agora #224: `: ~ W w` declared before t
 drop_view_holder_first_in_block	§7.6	A2	agora #224: the same inside one inner block	rejected	-
 drop_view_holder_lent_to_callee	§7.6	A2	agora #224: a W handed to a callee, then dropped at the end of main after the String it views	runs-clean	-
 drop_view_holder_map_before_source	§7.6	A2	agora #224: a W kept in a HashMap made before the String it views	rejected	-
+drop_view_holder_moved_in_one_arm	§7.6	A2	agora #252: the same with the W moved in one arm of a `??`	rejected	-
+drop_view_holder_moved_on_every_path	§7.6	A2	agora #252: a W moved to a `sink` unconditionally before its source is reallocated: dropped by the callee while the view was good	runs-clean	-
+drop_view_holder_moved_on_one_path_inner_scope	§7.6	A2	agora #252: a W outside a block, given a view of the block's String and moved on one branch inside it	rejected	-
+drop_view_holder_moved_on_one_path_realloc	§7.6	A2	agora #252: a W moved to a `sink` on one branch of a `?`, its String source reallocated after the join	rejected	-
+drop_view_holder_moved_on_one_path_sink	§7.6	A2	agora #252: the same with the source handed to a `sink` after the join	rejected	-
 drop_view_holder_vec_after_source	§7.6	A2	agora #224: a String, then a Vec of W holding views of it	runs-clean	-
 drop_view_holder_vec_before_source	§7.6	A2	agora #224: a W kept in a Vec made before the String it views	rejected	-
 drop_view_holder_without_destructor	§7.6	A2	agora #224: a struct of views with no `% Drop` kept past a reallocation of its source: never read, its drop reads nothing	runs-clean	-
