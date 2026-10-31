@@ -11,6 +11,7 @@ theorem Frees.other {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   match h with
   | .int => rfl
   | .view => rfl
+  | .arc => rfl
   | .node _ _ hl =>
     simp only [ids_node, List.mem_cons, not_or] at hi
     rw [FreesL.other hl hi.2.2, upd_ne _ _ hi.2.1, upd_ne _ _ hi.1]

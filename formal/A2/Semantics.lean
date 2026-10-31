@@ -50,6 +50,9 @@ mutual
 inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | int {a : Nat → Bool} {n : Nat} : Frees a (.int n) a
   | view {a : Nat → Bool} {d o l : Nat} : Frees a (.view d o l) a
+  /-- A3.1: a share frees nothing by itself; the step's sweep frees a block
+      no share reaches. -/
+  | arc {a : Nat → Bool} {k : Nat} : Frees a (.arc k) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →

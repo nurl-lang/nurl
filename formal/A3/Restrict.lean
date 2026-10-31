@@ -165,6 +165,7 @@ theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : 
   match h with
   | .int => exact .int
   | .view => exact .view
+  | .arc => exact .arc
   | @Frees.node _ _ _ c d _ hc hd hl =>
     have hdc : d ≠ c := by
       intro e; subst e; simp [upd] at hd

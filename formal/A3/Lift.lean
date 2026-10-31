@@ -133,6 +133,7 @@ theorem Frees.lift {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : Nat 
   match h with
   | .int => exact Frees.int
   | .view => exact Frees.view
+  | .arc => exact Frees.arc
   | @Frees.node _ _ _ c d _ hc hdd hl =>
     have hdc : d ≠ c := fun e => by subst e; simp [upd] at hdd
     have had : a d = true := by rw [upd_ne _ _ hdc] at hdd; exact hdd
