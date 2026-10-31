@@ -443,6 +443,7 @@ inout_param_given_a_field_read	§7.6	A2	an inout parameter given a binding read 
 inout_struct_and_borrow	CallT.args	A1	inout container and borrow of its element in one call; callee clears	rejected	h66
 iterator_chain_over_a_temporary	§2.11	A2	iter_map over a temporary iter_from_vec: the sink combinator's result held nothing of the Vec (retcap)	rejected	h305
 join_arm_copies_guarded_call	§7.1	A2	?-join copies a call arm that handed a fresh string over: string leaks	runs-clean	h194
+join_arm_selects_a_consumed_owner	§2.1	A1	agora #242: a `?` arm selecting an owner already consumed	rejected	-
 join_copies_a_nested_join_for_its_condition	§7.1	A2	?-join copies a nested ?-join arm for its condition's ident: the inner owner leaks	runs-clean	h602
 join_copies_a_nested_join_on_the_then_side	§7.1	A2	?-join copies a nested ?-join then-arm: the inner join's owner leaks	runs-clean	h603
 join_initialised_string_cursor_leaks	§7.1	A2	string cursor from ?-join has no owner slot: each assigned fresh string leaks	runs-clean	h203
@@ -456,7 +457,18 @@ lend_returned_through_a_ternary	§7.6	A2	h311 through a ? ternary	rejected	h312
 lent_element_handed_to_a_sink	CallT.sink	A1	vec_at element borrow passed to sink param; Vec still holds freed elem	runs-clean	h228
 lent_payload_handed_out_of_a_match	§7.6	A2	match on option field hands %Drop payload to a binding; double owner	rejected	h227
 lent_value_it_cannot_copy_stored	§2.12	A2	lent %Drop element stored into struct literal: two owners	rejected	h230
+let_block_fresh_tail	§7.6	A2	agora #242: a value block ending in a fresh call, bound by `:`: taken for a borrow, the String leaked	runs-clean	-
+let_block_join_to_inout	§2.4	A2	agora #242: a value block ending in a `?` of fresh Strings, bound by `:` and assigned to an `inout` parameter	runs-clean	-
 let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean	h879
+let_join_drop_locals	§2.2	A2	agora #242: a `?` over two `% Drop` locals bound by an inferred `:`: released through both names	runs-clean	-
+let_join_drop_param_or_local_returned	§7.6	A2	agora #242: a `?` over a borrowed `% Drop` parameter and a local, bound by `:` and handed back by name	runs-clean	-
+let_join_fresh_to_inout	§2.4	A2	agora #242: a `?` of fresh Strings bound by `:` and assigned to an `inout` parameter: stored as is and still released	runs-clean	-
+let_join_locals_returned	§2.2	A2	agora #242: a `?` over two local Strings bound by `:` and handed back by name: the selected owner was left releasing it	runs-clean	-
+let_join_outer_owner_in_loop	§2.2	A2	agora #242: a loop body's `:` binding of a `?` over owners made before the loop, every pass	runs-clean	-
+let_join_sunk_then_reselected	§2.2	A2	agora #242: a `:` join's binding consumed, its owner selected by a second join	rejected	-
+let_join_sunk_then_selected_again_in_loop	§2.2	A2	agora #242: a `:` join's binding sunk on one pass, its owner selected again on a later pass	rejected	-
+let_match_join_outer_owner_in_loop_read_after	§2.2	A2	agora #242: a loop body's `:` match join over outer owners, the owner read after the loop	runs-clean	-
+let_match_join_sunk_then_selected_again_in_loop	§2.2	A2	agora #242: a `:` match join's binding sunk on one pass, its owner selected again on a later pass	rejected	-
 library_handle_captured_by_a_thread_and_kept	§6.5	A3	a thread's closure captured a library handle whose copies are one state (a PNCounter) and the spawner kept changing its own: a detached closure moves a share handle not asserted % Sync, as it moves a Vec	rejected	h336
 library_handle_field_copy_on_two_threads	§6.5	A3	a library handle read out of a struct's field kept by the spawner while the struct went to a thread: two threads changed one state; the field read is a borrow the move ends (agora #66's shape)	rejected	h333
 library_handle_field_read_taken_by_a_thread	§6.5	A3	a binding read out of a library handle field captured by a thread while its struct stayed usable: the thread takes the field and its struct along	rejected	h356
@@ -529,6 +541,7 @@ match_arm_block_call_lend_returned	§7.6	A2	agora #191: the same through a retur
 match_arm_block_local_field_bound	§7.6	A2	agora #180: a `??` arm block's tail field of the arm's own struct, bound by a `:`	runs-clean	h751
 match_arm_block_local_field_returned	§7.6	A2	agora #180: a `??` arm block's tail field of the arm's own struct, returned	runs-clean	h749
 match_arm_call_fresh_handle	§7.6	A2	a ?? arm whose value was a call's fresh handle made from the payload (an arc_clone) never dropped the payload; parked drops now run when the callee's lend summary rules the arm's locals out of the result	runs-clean	h321
+match_arm_selects_a_consumed_owner	§2.1	A1	agora #242: a `??` arm selecting an owner already consumed	rejected	-
 match_bound_payload_wrap	§7.6	A2	agora #195: `: String s ?? ( getr w ) { T x → x … }  ^ @ !String E { T s }`	runs-clean	h898
 match_on_a_lent_option_released_its_payload	§7.6	A2	match on borrowed option param makes %Drop payload owned; released	runs-clean	h226
 match_on_a_temporary_enum_leaked_it	§7.1	A2	match on enum returned by call: enum and payload never dropped	runs-clean	h233

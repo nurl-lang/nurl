@@ -3591,7 +3591,9 @@ typedef struct {
     const unsigned char *flag;
     uint64_t sequence;
 } NurlSlotEntry;
-static __thread NurlSlotEntry *nurl__jslot = NULL;
+/* (A hidden name, not `static`: nurl_journal_forget_slot's inline top-of-
+ * stack test reads it through NURL_TLS_LD.) */
+NURL_TLS_HOT NurlSlotEntry *nurl__jslot = NULL;
 NURL_TLS_HOT size_t nurl__jslot_len = 0;
 static __thread size_t nurl__jslot_cap = 0;
 
@@ -3817,7 +3819,17 @@ static void nurl__jslot_forget_slow(void *slot) {
     nurl__jslot_pop_nulls();
 }
 NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
-    if (!slot || __builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1)) return;
+    size_t n;
+    if (!slot || __builtin_expect(!(n = NURL_TLS_LD(size_t, nurl__jslot_len)), 1)) return;
+    /* Bindings end in the reverse of their start, so the registration
+     * ending is the newest: popped here, inline, when nothing below it
+     * was ended out of order (a null the slow path would pop too). A call
+     * per binding exit was a tenth of a handler's instructions (#283). */
+    NurlSlotEntry *s = NURL_TLS_LD(NurlSlotEntry *, nurl__jslot);
+    if (s[n - 1].slot == slot && (n == 1 || s[n - 2].slot)) {
+        NURL_TLS_ST(nurl__jslot_len, n - 1);
+        return;
+    }
     nurl__jslot_forget_slow(slot);
 }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }

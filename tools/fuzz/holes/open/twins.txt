@@ -1,0 +1,20 @@
+# Elaborated twins known to fault (tools/fuzz/holes/elab.py, Agora #242).
+#
+# Each line names a probe whose twin — the producer form bound by `:` first,
+# the consumer reading the binding — is still a hole on main, though the
+# probe itself is closed. They share one gap: a binding does not inherit
+# what its producer lends (a call in an arm lending a local, a field or a
+# view of an inner local, a value a `;` defer releases), so handing the
+# binding on is not judged as handing the form on is. That is what #222's
+# elaboration closes at the source; each stage takes its lines out of here.
+#
+# probe                                                   what the twin does
+defer_reads_block_returned.nu                             a block's tail `l`, bound then handed back, read by a `;` defer after the caller has it
+defer_releases_block_returned.nu                          the same with the defer handing `l` to a `sink`: the probe is rejected, its twin is not
+drop_join_arm_result_returned.nu                          a `% Drop` payload a call in an arm lends out of a local, bound then handed back
+drop_ret_block_join_local.nu                              a block ending in a join over a `% Drop` local, bound then handed back
+drop_vec_get_local_match.nu                               a `vec_get` element of a local Vec through a `??`, bound then handed back
+inner_payload_field_through_a_match_assigned_outward.nu   a field of an inner block's enum payload through a `??`, bound then assigned outward
+inner_struct_field_through_a_cond_assigned_outward.nu     a field of an inner block's struct through a `?`, bound then assigned outward
+inner_view_through_a_cond_assigned_outward.nu             a view of an inner block's struct field through a `?`, bound then assigned outward
+raw_view_block_tail.nu                                    a raw view of a block's own local as its tail, bound then handed back
