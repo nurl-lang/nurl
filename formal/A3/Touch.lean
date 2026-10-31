@@ -13,7 +13,7 @@ it is in both their trees, which the configuration invariant rules out. -/
 namespace A3
 open A2
 
-theorem OwnedId.of_st {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.st) : OwnedId m' i := by
+theorem OwnedId.st_eq {m m' : Mem} {i : Nat} (h : OwnedId m i) (hst : m'.st = m.st) : OwnedId m' i := by
   obtain ⟨x, t, hx, hi⟩ := h
   exact ⟨x, t, by unfold OwnedAt at *; rw [hst]; exact hx, hi⟩
 
@@ -214,7 +214,7 @@ theorem rTouch_owned {m m1 : Mem} {r : Rhs} {i : Nat} {w : Bool} (h : RTouch m r
   | view hv => exact (vecOf_owned hv).1
   | sat hv =>
     obtain ⟨Γ, E, t, hi, hy, hl, ht⟩ := hsat _ _ rfl
-    exact (sat_owned hi hy hl ht (by rw [hst]; exact hv)).of_st hst.symm
+    exact (sat_owned hi hy hl ht (by rw [hst]; exact hv)).st_eq hst.symm
   | satI he => exact eReads_owned he
   | popC hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
   | popD hy => exact ⟨_, _, hy, by simp [Val.ids]⟩
