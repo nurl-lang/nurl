@@ -92,6 +92,21 @@ PROGRAMS=(
 PARTS=${NURL_SPLIT_TEST_PARTS:-4}
 fails=0
 
+# The parts nurlc wrote, <prefix>.0.ll … <prefix>.<N-1>.ll, found by
+# index, not by a glob (Agora #234). nurlc writes them in order, 0 to
+# N-1, so the first missing index ends the list. A glob reads the
+# directory, and every build here writes into $WORK at once: clang's temp
+# files come and go beside the parts. On FreeBSD's UFS, an entry added to
+# a directory block can move the block's other entries, so a readdir in
+# progress skips one that existed the whole time (POSIX leaves readdir
+# unspecified under concurrent changes). That is how simd_dispatch's part
+# 0 went missing four times: step 2's record showed the compile loop never
+# saw it, while the file was whole and identical to a rerun's.
+parts_of() {  # parts_of <prefix> <ext>   → one path per line, in order
+    local k=0
+    while [[ -e "$1.$k.$2" ]]; do printf '%s\n' "$1.$k.$2"; k=$((k + 1)); done
+}
+
 build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     local src="$1" out="$2" n="$3" p objs=()
     if (( n == 0 )); then
@@ -106,12 +121,12 @@ build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     # partitioning this particular program would pay for itself.
     "$NURLC" "--split=$n" "--split-out=$out" --split-min=1 "$src" > "$out.ll" 2>"$out.cerr" || return 1
     local pids=() rcs=() rc=0 i o sz
-    for p in "$out".[0-9]*.ll; do
+    while IFS= read -r p; do
         # shellcheck disable=SC2086
         "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" &
         pids+=($!)
         objs+=("${p%.ll}.o")
-    done
+    done < <(parts_of "$out" ll)
     for i in "${!pids[@]}"; do wait "${pids[$i]}"; rcs[i]=$?; done
     # Each compile's exit code and what its object holds as the link
     # starts, kept for split_diag (Agora #234): an object gone or empty
@@ -154,7 +169,8 @@ wait
 #     measured 60% more instructions).
 check_structure() {  # check_structure <name>
     local base="$WORK/$1.split" nm holder callee bad=0
-    local parts=("$base".[0-9]*.ll)
+    local parts=() x
+    while IFS= read -r x; do parts+=("$x"); done < <(parts_of "$base" ll)
     for nm in $(grep -o '^@[^ ]* = linkonce' "$base.ll" | cut -d' ' -f1); do
         if grep -qF "$nm = external" "${parts[@]}"; then
             echo "FAIL $1 — $nm is linkonce but a part declares it external"
@@ -197,16 +213,17 @@ split_diag() {  # split_diag <src> <out> <parts>
     local src="$1" out="$2" n="$3" f again nmtool syms
     nmtool="$(command -v llvm-nm || command -v nm || true)"
     echo "  parts nurlc wrote (bytes, cksum, defines):"
-    for f in "$out".[0-9]*.ll; do
-        [[ -e "$f" ]] || { echo "    none"; break; }
+    [[ -e "$out.0.ll" ]] || echo "    none"
+    for f in $(parts_of "$out" ll); do
         printf '    %s %s %s %s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')" \
             "$(cksum < "$f" | cut -d' ' -f1)" "$(grep -c '^define ' "$f")"
     done
     echo "  objects as the link started (clang exit code, bytes):"
     if [[ -s "$out.objs" ]]; then cat "$out.objs"; else echo "    not recorded (nurlc failed)"; fi
     echo "  objects now (bytes, defined symbols):"
+    [[ -e "$out.0.o" ]] || echo "    none (no part 0 object)"
     for f in "$out".[0-9]*.o; do
-        [[ -e "$f" ]] || { echo "    none"; break; }
+        [[ -e "$f" ]] || break
         if [[ -n "$nmtool" ]] && syms="$("$nmtool" --defined-only "$f" 2>/dev/null)"; then
             syms="$(printf '%s' "$syms" | grep -c .)"
         else
@@ -217,8 +234,7 @@ split_diag() {  # split_diag <src> <out> <parts>
     again="$(mktemp -d)"
     "$NURLC" "--split=$n" "--split-out=$again/p" --split-min=1 "$src" > "$again/p.ll" 2>"$again/p.cerr"
     echo "  the same nurlc command again: rc $?, against what was consumed:"
-    for f in "$out".[0-9]*.ll; do
-        [[ -e "$f" ]] || break
+    for f in $(parts_of "$out" ll); do
         if cmp -s "$f" "$again/p.${f##*.split.}"; then
             echo "    ${f##*/} identical"
         else
