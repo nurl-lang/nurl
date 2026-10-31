@@ -111,7 +111,7 @@ theorem PushArg.wf {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty}
     · obtain ⟨Er, hEr, hro⟩ := h y Ey hy hl hn r (by
         simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hr ⊢; exact Or.inr hr)
       by_cases hry : r = y
-      · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | int => exact ⟨h, fun _ => rfl, same, fun r hr => by simp [roots] at hr⟩
@@ -168,7 +168,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | expr _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩
   | new _ => exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | @moveOwn y Ey hy hl hm _ _ =>
-    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false }) :=
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
       (h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
         fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
     refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -183,7 +183,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := by rcases hn with h' | h' <;> simp_all
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       by_cases hry : r = y
-      · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | @copyRoot y Ey hy hl hm =>
@@ -344,7 +344,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
       · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
   | @takel y Ey a b hy hl hm hty _ _ =>
-    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false }) :=
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
       (h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
         fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
     refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -369,11 +369,11 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       by_cases hry : r = y
-      · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | @taker y Ey a b hy hl hm hty _ _ =>
-    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false }) :=
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
       (h.kill .replace false y).setE ⟨killE .replace false y Ey, by simp [A2.kill, hy],
         fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
     refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -398,7 +398,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [hty]; simp)
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl hn' r hr'
       by_cases hry : r = y
-      · subst hry; exact ⟨{ Ey with live := false }, by simp [A2.setE], by rw [hm]; rfl⟩
+      · subst hry; exact ⟨{ Ey with live := false, dtor := false }, by simp [A2.setE], by rw [hm]; rfl⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
 
@@ -702,21 +702,21 @@ theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var
 theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : Ty} (hy : Γ y = some E)
     (hl : E.live = true) (hm : E.mode.ownSlot = true) (hty : E.ty = .prod a b) (hx : Γ x = none) (hz : Γ z = none)
     (hxz : x ≠ z) :
-    CtxWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a))
+    CtxWF (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a))
       z (compE E b)) := by
   have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
   have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
-  have hw1 : CtxWF (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+  have hw1 : CtxWF (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
     (h.kill .replace false y).setE ⟨killE .replace false y E, by simp [A2.kill, hy],
       fun hr => by rw [killE_mode] at hr; exact hr⟩ (fun hl' => by simp at hl')
   have hheld : ∀ r ∈ roots E.held, ∃ Er, A2.setE (A2.kill .replace false y Γ) y
-      { E with live := false } r = some Er ∧ Er.mode.isRoot = true := by
+      { E with live := false, dtor := false } r = some Er ∧ Er.mode.isRoot = true := by
     intro r hr
     have hn : E.ty ≠ .int ∨ E.mode = .rootb := Or.inl (by rw [hty]; simp)
     obtain ⟨Er, hEr, hro⟩ := h y E hy hl hn r (by
       simpa [roots, Entry.vdeps, hm] using hr)
     by_cases hry : r = y
-    · subst hry; exact ⟨{ E with live := false }, by simp [A2.setE], Mode.isRoot_of_ownSlot hm⟩
+    · subst hry; exact ⟨{ E with live := false, dtor := false }, by simp [A2.setE], Mode.isRoot_of_ownSlot hm⟩
     · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
       exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   have hcomp : ∀ (Γ' : Ctx) (t : Ty), (∀ r ∈ roots E.held, ∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) →
@@ -733,13 +733,13 @@ theorem CtxWF.unpair {Γ : Ctx} (h : CtxWF Γ) {y x z : Var} {E : Entry} {a b : 
     | prod a b => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
     | sum a b => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
     | fn a => exact hH r (ownHeld_roots (by simpa [compE, Entry.vdeps, Mode.ownSlot] using hr))
-  have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false } x = none := by
+  have hx1 : A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
     simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
   have hw2 := hw1.add hx1 (hcomp _ a hheld)
-  have hz2 : A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a) z
+  have hz2 : A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a) z
       = none := by simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
   have hheld2 : ∀ r ∈ roots E.held, ∃ Er, A2.setE (A2.setE (A2.kill .replace false y Γ) y
-      { E with live := false }) x (compE E a) r = some Er ∧ Er.mode.isRoot = true := by
+      { E with live := false, dtor := false }) x (compE E a) r = some Er ∧ Er.mode.isRoot = true := by
     intro r hr
     obtain ⟨Er, hEr, hro⟩ := hheld r hr
     have hrx : r ≠ x := fun e => by rw [e, hx1] at hEr; cases hEr

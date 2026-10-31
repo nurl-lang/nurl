@@ -344,15 +344,15 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       have hax : a ≠ x := fun e => by rw [e, hx] at hca; cases hca
       have hnd' := List.nodup_cons.mp hnd
       -- the context after `a` moved out
-      have hrb : RbFrom Γc (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false }) :=
+      have hrb : RbFrom Γc (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) :=
         (rbFrom_kill Γc _ _ a).trans (rbFrom_setE _ (by simp [hmo]))
-      have hx1 : A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false } x = none := by
+      have hx1 : A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false } x = none := by
         simp [A2.setE, upd_ne _ _ hax.symm, A2.kill, hx]
-      have hwf1 : CtxWF (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false }) :=
+      have hwf1 : CtxWF (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) :=
         CtxWF.setE (hwf.kill .replace false a)
           ⟨killE .replace false a (argE Γ0 a), by simp [A2.kill, hca], fun _ => by simp [hmo, Mode.isRoot]⟩
           (fun hl' => by simp at hl')
-      have ht1 : StmtT P (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false }) F
+      have ht1 : StmtT P (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) F
           (dropSeq x as L) Δ := by
         refine ih as (i + 1) _ (fun q hq => hsk q (List.mem_cons_of_mem _ hq)) (by simpa using hlen)
           hnd'.2 (fun a' ha' => ?_)
@@ -365,7 +365,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
         simp [A2.setE, upd_ne _ _ ha'a, A2.kill, hca', killE_nohit hno]
       -- `a` moves into `x`, and `x`'s scope ends
       have hlet : StmtT P Γc F (.letv x (.var a) .skip)
-          (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false }) := by
+          (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) := by
         have h := StmtT.letv (P := P) (s := .skip) rfl hx hxF (RhsT.moveOwn hca hl hmo haF hpa)
           StmtT.skip (noPin_of_rbFrom (hrb.trans (rbFrom_setE _ (by simp))) hnx)
         rwa [exitScope_setE_fresh hwf1 hx1] at h

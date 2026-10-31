@@ -250,7 +250,7 @@ def Ty.elem : Ty → Ty
 inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List Dep → Ctx → Prop
   | move {t : Ty} :
       t.owning = true → E.mode = .own → y ∉ F → NoPin Γ y →
-      PushArg Γ F y E t E.held (setE (kill .replace false y Γ) y { E with live := false })
+      PushArg Γ F y E t E.held (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | int : PushArg Γ F y E .int [] Γ
   | slice {s : Ty} :
       (E.mode = .bor ∨ E.mode = .rootb) →
@@ -288,7 +288,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | moveOwn {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y →
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false⟩
-        (setE (kill .replace false y Γ) y { E with live := false })
+        (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | copyRoot {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .rootb →
       RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held, false⟩ Γ
@@ -330,10 +330,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
-      RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false })
+      RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | taker {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
-      RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false })
+      RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
       {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
@@ -512,7 +512,7 @@ def callPostAux (Γ0 : Ctx) (fn : Fn) (args : List Var) :
     List (PMode × Ty) → List Var → Nat → Ctx → Ctx
   | (.sink, _) :: ps, a :: as, i, Γ =>
       callPostAux Γ0 fn args ps as (i + 1)
-        (setE (kill .replace false a Γ) a { argE Γ0 a with live := false })
+        (setE (kill .replace false a Γ) a { argE Γ0 a with live := false, dtor := false })
   | (.inout b, t) :: ps, a :: as, i, Γ =>
       callPostAux Γ0 fn args ps as (i + 1)
         (setE (kill b t.elem.holdsView a Γ) a

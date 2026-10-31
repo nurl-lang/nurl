@@ -283,7 +283,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     (hsrc : s.src = true) (hy : Γ y = some E) (hl : E.live = true) (hm : canDo E.mode .replace)
     (hty : E.ty = .prod a b) (hyF : y ∉ F) (hx : Γ x = none) (hz : Γ z = none) (hxz : x ≠ z)
     (hxF : x ∉ F) (hzF : z ∉ F)
-    (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
+    (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
       (compE E b)) F s Δ) (hpy : NoPin Γ y) (hpz : NoPin Δ z) (hpx : NoPin (exitScope z Δ) x)
     {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s')) :
     ∃ Γ', StmtT P Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
@@ -296,9 +296,9 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hpy hvy
     have hxy : x ≠ y := fun h => by rw [h, hy] at hx; cases hx
     have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
-    have hx1 : setE (kill .replace false y Γ) y { E with live := false } x = none := by
+    have hx1 : setE (kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
       simp [setE, upd_ne _ _ hxy, kill, hx]
-    have hz1 : setE (kill .replace false y Γ) y { E with live := false } z = none := by
+    have hz1 : setE (kill .replace false y Γ) y { E with live := false, dtor := false } z = none := by
       simp [setE, upd_ne _ _ hzy, kill, hz]
     have hτ : E.ty ≠ .int := by rw [hty]; simp
     obtain ⟨_, hwT, _, hnd, _, _, _⟩ := out.valOwn rfl
@@ -322,7 +322,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       exact fun i hi hi' => hnd.2.2 i hi' i hi rfl
     have hmx1 : (m.set y ⟨true, none⟩).st x = none := by simp [upd_ne _ _ hxy, hmx]
     have outz' := outz.add (E1 := compE E a) (o1 := v.owns) hx1 hmx1 hdisj
-    have hz2 : setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a) z = none := by
+    have hz2 : setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a) z = none := by
       simp [setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, kill, hz]
     have hi3 := hi2.add hz2 hzn outz'
     have hrel := post.rel
@@ -1004,7 +1004,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | free ht hf =>
       have hanch := hi.leafAnch rfl
       have hinv := step_free hi.toMInv hanch hx hm hxF ht hf hpin
-      have hrel : CtxRel Γ (setE (kill .replace false x Γ) x { E with live := false }) :=
+      have hrel : CtxRel Γ (setE (kill .replace false x Γ) x { E with live := false, dtor := false }) :=
         (CtxRel.kill hanch hxF .replace false
           (hpin.kills _ _)).trans
         (CtxRel.setE (x := x) (Ex := killE .replace false x E) (by simp [A2.kill, hx])

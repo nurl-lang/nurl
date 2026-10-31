@@ -327,6 +327,12 @@ theorem liftE_dead (v : Var) (E : Entry) :
     S.liftE v { E with live := false } = { S.liftE v E with live := false } := by
   unfold liftE; split <;> simp_all
 
+/-- A binding moved out (`live` and `dtor` cleared; never a borrowed
+    parameter, which no rule moves). -/
+theorem liftE_moved (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) :
+    S.liftE v { E with live := false, dtor := false } = { S.liftE v E with live := false, dtor := false } := by
+  unfold liftE; split <;> simp_all
+
 theorem killE_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
     {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) :
     killE e hv (S.ρ x) (S.liftE v E) = S.liftE v (killE e hv x E) := by
@@ -1080,9 +1086,9 @@ theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey
   cases hp with
   | move ho hm hyF _ =>
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
     rw [hctx]
     refine ⟨_, PushArg.move ho (by rw [liftE_mode y hrb, hm]; rfl) (h.Fcout y)
       (NoPin.lift h hab (bnd_own hab hy hm)), held_lift h hab hy, fun hty => ?_⟩
@@ -1121,9 +1127,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @moveOwn y Ey hy hl hm hyF _ =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
     rw [hctx]
     refine ⟨_, RhsT.moveOwn hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm)), fun x => ?_⟩
@@ -1273,9 +1279,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @takel y Ey a b hy hl hm hty hyF _ =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
     rw [hctx]
     exact ⟨_, RhsT.takel hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (by rw [liftE_ty' h hab hy]; exact hty) (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm)),
@@ -1283,9 +1289,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @taker y Ey a b hy hl hm hty hyF _ =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_dead]
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
     rw [hctx]
     exact ⟨_, RhsT.taker hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (by rw [liftE_ty' h hab hy]; exact hty) (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm)),
@@ -1978,7 +1984,7 @@ theorem callPostAux_lift (h : S.OK) (hab0 : S.AbsOK Γa) {fn : Fn} {args : List 
           rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
         · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2 a bh hb
           rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
-      · rw [canon_setE h, canon_kill h hab (allowed_own hab0 hEa hm _ _), hae, hae0, liftE_dead]
+      · rw [canon_setE h, canon_kill h hab (allowed_own hab0 hEa hm _ _), hae, hae0, liftE_moved _ hrb]
         exact PW.setE (hpw.kill _ _ _) (EntryWeaker.refl _)
     | inout b =>
       obtain ⟨ht, hcan, _⟩ := hpo
@@ -2755,7 +2761,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     intro _ hab _ _
     have hrb : E.mode ≠ .rootb := by rw [hm]; simp
     refine ⟨?_, (hab.kill _ _ _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [hm]))⟩
-    rw [canon_setE h, canon_kill h hab (allowed_own hab hx hm _ _), liftE_dead]
+    rw [canon_setE h, canon_kill h hab (allowed_own hab hx hm _ _), liftE_moved _ hrb]
     exact StmtT.free (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
       (by rw [liftE_mode x hrb, hm]; rfl) (by rw [liftE_ty' h hab hx]; exact hty) (h.Fcout x)
       (NoPin.lift h hab (bnd_own hab hx hm))
@@ -2765,7 +2771,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hrb : E.mode ≠ .rootb := by rcases hrep with h1 | h1 <;> rw [h1] <;> simp
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
-    have hab1 : S.AbsOK (setE (kill .replace false y Γ) y { E with live := false }) :=
+    have hab1 : S.AbsOK (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) :=
       (hab.kill _ _ _).setE' hab hy rfl rfl hrb (fun hf => absurd hf (by
         rcases hrep with h1 | h1 <;> simp [h1]))
     have hcm : ∀ t, (compE E t).mode = .own ∨ (compE E t).mode = .bor := by
@@ -2789,7 +2795,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact Or.inl h1
       · exact Or.inr (Or.inr h1)) false
     rw [canon_setE h, canon_setE h, canon_setE h, canon_kill h hab hal,
-      liftE_dead] at hwc hnc tk
+      liftE_moved _ hrb] at hwc hnc tk
     have hxz' : S.ρ x ≠ S.ρ z := fun e => hxz (h.inj _ _ e)
     refine StmtT.unpair (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl)
       (by rw [liftE_live]; exact hl) (by

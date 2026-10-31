@@ -387,7 +387,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → NoPin Γ x →
-      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false })
+      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
   | panic {Γ Δ : Ctx} {F : List Var} :
@@ -406,7 +406,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- replaced in place is the struct taken apart and assigned again)
       s.src = true → Γ y = some E → E.live = true → canDo E.mode .replace → E.ty = .prod a b → y ∉ F →
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
-      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false }) x (compE E a)) z
+      StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ →
       NoPin Γ y → NoPin Δ z → NoPin (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))

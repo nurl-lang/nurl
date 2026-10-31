@@ -571,7 +571,7 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
         refine ih as (i + 1) _ _ (by omega) has' hrb' ((h.kill _ _ a).set hae ?_ ?_)
         · rw [hcl]
           exact RSetup.EntryWeaker.mk' (by simp [clean_ty]) (by simp [clean_mode])
-            (by rw [fixed_setLive, clean_fixed_iff]; exact hrba (by simp)) rfl
+            (by rw [fixed_moveOut, clean_fixed_iff]; exact hrba (by simp)) rfl
             (fun _ => clean_path_sub _) (clean_held_sub _)
         · exact fun d hd => hne d (by simpa [Entry.vdeps] using hd)
       | inout b =>

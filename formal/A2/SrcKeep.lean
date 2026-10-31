@@ -22,7 +22,7 @@ theorem CtxRel.domTy {Γ Γ' : Ctx} (h : CtxRel Γ Γ') : DomTy Γ Γ' := ⟨h.d
 /-- A binding moved out: `A2.kill` ends what borrows it, and it is dead. -/
 theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {y : Var} {E : Entry}
     (hy : Γ y = some E) (hm : E.mode ≠ .rootb) (hyF : y ∉ F) (hpin : NoPin Γ y) :
-    CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+    CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
   (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
     (CtxRel.setE (Ex := killE .replace false y E) (by simp [A2.kill, hy]) (by simp [killE_mode])
       (by simp [killE_ty]) (by simp [killE_mode, hm]))
@@ -176,13 +176,13 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
   | @unpair Γ Δ F y x z k E a b hks hy hl hcan hty hyF hx hz hxz hxF hzF _ hpy hpz hpx ih =>
     intro _ hanch hn
     have hnrbE : E.mode ≠ .rootb := by rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp
-    have h0 : CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) :=
+    have h0 : CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
       CtxRel.moved hanch hy hnrbE hyF hpy
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
-    have hx0 : (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x = none := by
+    have hx0 : (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x = none := by
       simp [A2.setE, upd_ne _ _ hxy, A2.kill, hx]
-    have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false }) x (compE E a)) z = none := by
+    have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z = none := by
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
     have hn2 := hn.unpair hy hl hty hx hz hxz
     exact h0.trans (CtxRel.bind (h0.anch hanch) hx0 hxF (CtxRel.refl _) (compE_mode_ne E a)
