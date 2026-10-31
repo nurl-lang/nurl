@@ -2931,6 +2931,7 @@ unsafe @ note_unsafe_item s pos s what → v {
 // of before that row (bck_br_event): the rows that follow decide among
 // themselves, weighed against that.
 : ~ i g_bck_brev_id -1
+// (-2: not read yet — read at the event's first mark, bck_br_set.)
 : ~ i g_bck_brev_prev -1
 : ~ i g_bck_pvpass_n 0
 // The field path the last member read named (`. . s a h` → `s.a.h`; an
@@ -30345,27 +30346,28 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // what its initialiser read (bck_note_borrow) — and of what
                 // a pending call on its line lent it (bck_take_plend, the
                 // field of a binding handed to that call): the two add up.
-                : i bwid ( bck_field_int rec 1 )
-                : s bprior ? == BCK_BORROWED_SHARED ( bck_st_get st bwid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( bck_field rec 1 ) ) ) ``
+                : s bws ( bck_field rec 1 )
+                : i bwid ( nurl_str_to_int bws )
+                : s bprior ? == BCK_BORROWED_SHARED ( bck_st_get st bwid ) ( nurl_sym_get g_bck ( bck_bkey `bs_` bws ) ) ``
                 : s bsrcs ( bck_field rec 2 )
                 // (What its bytes are a copy of, told from the state its
                 // source is in before the borrow begins: bck_byte_root. A
                 // lend its line's call made it first — what that source
                 // borrows from, or the source itself — is the same one;
                 // anything else makes it a borrow of more than one.)
-                : s bkind ( bck_field rec 0 )
-                = g_bck_br_next ? | | ( seq bkind `vborrow` ) ( seq bkind `fborrow` ) ( seq bkind `fborrowh` ) ? ( __words_within bprior ( bck_borrow_owners bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
+                // (The kind by its prefix: no copy of it per visit.)
+                : b bfvh != 0 ( nurl_str_starts rec `fborrowh\t` )
+                : b bfv | bfvh != 0 ( nurl_str_starts rec `fborrow\t` )
+                = g_bck_br_next ? | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
                 = g_bck_br_next -1
                 // (A field viewer, `fborrow` — bck_note_borrow — and the one
                 // field it views, before its sources were flattened to owners.)
-                : b bfvh ( seq ( bck_field rec 0 ) `fborrowh` )
-                : b bfv | ( seq ( bck_field rec 0 ) `fborrow` ) bfvh
-                ( bck_put ( bck_bkey `fb_` ( bck_field rec 1 ) ) ? bfvh `h` ? bfv `1` `` )
-                ( bck_put ( bck_bkey `fp_` ( bck_field rec 1 ) ) ? bfv ( nurl_str_cat bsrcs `` ) `` )
+                ( bck_put ( bck_bkey `fb_` bws ) ? bfvh `h` ? bfv `1` `` )
+                ( bck_put ( bck_bkey `fp_` bws ) ? bfv ( nurl_str_cat bsrcs `` ) `` )
                 // (`tborrow`: it holds the drop of the local it copies —
                 // bck_let_alias — which a replacing `inout` call hands it.)
-                ( bck_put ( bck_bkey `tk_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 0 ) `tborrow` ) ( nurl_str_cat bsrcs `` ) `` )
+                ( bck_put ( bck_bkey `tk_` bws ) ? != 0 ( nurl_str_starts rec `tborrow\t` ) ( nurl_str_cat bsrcs `` ) `` )
                 = p + p 1
                 = done T
             } {}
@@ -30410,7 +30412,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     ( bck_put ( bck_bkey `fb_` ( bck_field rec 1 ) ) `` )
                     ( bck_put ( bck_bkey `fp_` ( bck_field rec 1 ) ) `` )
                 } {}
-                ( bck_br_event ( bck_field rec 1 ) )
+                ( bck_br_event ( bck_field_int rec 1 ) )
                 // A join or a block (`n` with no call of its own): its source
                 // expression names each arm's sources, a call in an arm by
                 // that callee's summary — the line's other calls (the
@@ -30453,7 +30455,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow { ( bck_put ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
-                ( bck_br_event ( bck_field rec 1 ) )
+                ( bck_br_event asid )
                 // (A join or a block with no call of its own: the line's other calls
                 // lend to its arms, not to it — as for a `let`.)
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
@@ -31854,6 +31856,20 @@ unsafe @ bck_sx_is_id s e → b {
     ^ -1
 }
 
+// Does `s` name one binding — a call that lends one argument, the only
+// kind whose result can be that argument's value (g_bck_rhs_whole)? (It
+// may name it twice: `vs vs`, the call's lend and its handed-back alias.)
+@ __one_word s s → b {
+    ? == 0 ( nurl_str_len s ) { ^ F } {}
+    : s w ( str_first_word s )
+    : ~ s rest ( str_skip_word s )
+    ~ != 0 ( nurl_str_len rest ) {
+        ? ! ( seq ( str_first_word rest ) w ) { ^ F } {}
+        = rest ( str_skip_word rest )
+    }
+    ^ T
+}
+
 // Is every word of `a` one of `b`'s?
 @ __words_within s a s b → b {
     : ~ s rest ( nurl_str_cat a `` )
@@ -31879,17 +31895,22 @@ unsafe @ bck_sx_is_id s e → b {
 // that way, so a loop's walks settle (the loop's digest follows `br_`).
 @ bck_br_set s bids i r → v {
     : s k ( bck_bkey `br_` bids )
-    : i prev ? == g_bck_brev_id ( nurl_str_to_int bids ) g_bck_brev_prev ( bck_br_get bids )
-    : s nv ( nurl_str_int ? | < prev 0 == prev r r * ( nurl_str_to_int bids ) 2 )
-    ? ( seq ( nurl_sym_get g_bck k ) nv ) { ^ v } {}
+    : s cur ( nurl_sym_get g_bck k )
+    : i bid ( nurl_str_to_int bids )
+    // (The event's first mark reads what the binding was before it.)
+    ? & == g_bck_brev_id bid == g_bck_brev_prev -2 { = g_bck_brev_prev ? == 0 ( nurl_str_len cur ) -1 ( nurl_str_to_int cur ) } {}
+    : i prev ? == g_bck_brev_id bid g_bck_brev_prev ? == 0 ( nurl_str_len cur ) -1 ( nurl_str_to_int cur )
+    : s nv ( nurl_str_int ? | < prev 0 == prev r r * bid 2 )
+    ? ( seq cur nv ) { ^ v } {}
     ( bck_put k nv )
 }
 
-// The walk reached a `let` / `=` row of binding `ids`.
-// (Before the function's first borrow, nothing was a copy of anything.)
-@ bck_br_event s ids → v {
-    = g_bck_brev_id ( nurl_str_to_int ids )
-    = g_bck_brev_prev ? == 0 g_bck_has_borrow -1 ( bck_br_get ids )
+// The walk reached a `let` / `=` row of binding `id`. (What it was is
+// read only if this event marks it: bck_br_set. Before the function's
+// first borrow, nothing was a copy of anything.)
+@ bck_br_event i id → v {
+    = g_bck_brev_id id
+    = g_bck_brev_prev ? == 0 g_bck_has_borrow -1 -2
 }
 
 // Only elements changed (g_bck_end_eonly): does borrow `bs` of `sids` still
@@ -34605,7 +34626,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
-        = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN != 0 g_borrowck ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+        = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
         // (A `( mem_dup … )` copy binds no call that lends: the line's other
@@ -34964,7 +34985,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
             // Borrow checker: record this binding (typed path).
             = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
-            = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN != 0 g_borrowck ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+            = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
             : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
             = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
             // (A `( mem_dup … )` copy binds no call that lends: the line's other
@@ -35407,7 +35428,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // first and the sources move second (a self-referential
         // `= a ? f a …` is skipped inside, not ordered around).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
-        = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN != 0 g_borrowck ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+        = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
         // (A `( mem_dup … )` copy binds no call that lends: the line's other
