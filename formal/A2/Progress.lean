@@ -242,7 +242,7 @@ theorem progress {P : Prog}
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
         exact Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
-  | @letd Γ Γ1 Δ F x f r k E _ hx _ hr _ _ _ _ _ _ _ _ =>
+  | @letd Γ Γ1 Δ F x f r k E _ hx _ hr _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all

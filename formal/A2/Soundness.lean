@@ -1,4 +1,5 @@
 import A2.Codes
+import A2.SrcKeep
 
 /-! A2 — soundness: a well-typed program never reaches a configuration that
 is about to touch memory it may not.  Every step checks allocation and
@@ -19,7 +20,7 @@ namespace A2
 theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P Γ F s Δ) {m m' : Mem} {s' : Stmt} (hcd : MemCodes P m) (hi : Inv m Γ F s)
     (hst : Step P m s (.ok m' s')) : ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' := by
-  obtain ⟨Γ', ht', hi', _, hk, _⟩ := preserve (callCase hP) (recCase hP) (cloCase hP) ht hcd hi hst
+  obtain ⟨Γ', ht', hi', _, hk, _⟩ := preserve (callCase hP) (recCase hP) (cloCase hP) (srcCase hP) ht hcd hi hst
   exact ⟨Γ', ht', hi', hk⟩
 
 /-- Progress, with the call cases discharged. -/

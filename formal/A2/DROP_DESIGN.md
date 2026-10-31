@@ -180,21 +180,19 @@ follows it. That needed three things A2 did not have:
    the context outside the body's spine. Nothing proved that for a run-time
    body, so the frame carries it, as `StmtT.catchR` already does:
    - `StmtT.scopeD` takes `KeepOut Γ Δ s.spine`, `CtxWF Δ` and `NameWF Δ`;
-   - `StmtT.letd` takes the same for its source body;
-   - a step inside the body keeps `KeepOut` (`KeepOut.step`, from `Keep`);
-   - renaming keeps all three (`keepOut_canon`, `canon_wf`,
-     `canon_names`).
+   - `StmtT.letd` takes nothing for them: its body is source code, and
+     source typing keeps every binding with its mode and type, and an
+     anchored borrowed parameter with its entry (`StmtT.ctxRel`,
+     `A2/SrcKeep.lean`), so the step to `scopeD` derives all three
+     (`srcCase`, the `SrcCase` hypothesis of `preserve`);
+   - a step inside the body keeps `KeepOut` (`KeepOut.step`, from `Keep`).
 
    A fixed entry of the post-panic context is a borrowed parameter, since
    `MInv` has no `inout` entry. The unwind and the body's typing both left
    it as it was.
 
-`letd`'s new premises restrict which programs the calculus types: a body
-whose typing changed a binding's mode, or a borrowed parameter's entry,
-would not be typed. Every typing rule keeps both, so this is no loss in
-practice. Proving it once for every source derivation (`StmtT.domTy`,
-`StmtT.wf`, `StmtT.names` cover all but the borrowed parameters) would let
-the premises go.
+So `letd` types every body the other rules type (Agora #243): no premise
+on the body's typing restricts which programs the calculus covers.
 
 ## Done when
 

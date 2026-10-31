@@ -210,6 +210,14 @@ def CloCase (P : Prog) : Prop :=
     ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callc x c j zs k) s' ∧ Frz F m m'
 
+/-- What a destructor's frame needs of its body's typing, proven separately
+    (`SrcKeep.lean`): source typing keeps every binding with its mode and
+    type, and a borrowed parameter whose sources are lent out with its entry,
+    and keeps the context well-formed and what it holds by name valid. -/
+def SrcCase (P : Prog) : Prop :=
+  ∀ {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}, StmtT P Γ F s Δ → s.src = true →
+    RootbAnch Γ F → CtxWF Γ → NameWF Γ → KeepOut Γ Δ [] ∧ CtxWF Δ ∧ NameWF Δ
+
 /-- A borrowed parameter outside the step's scopes was there before,
     unchanged: it keeps its anchors. -/
 theorem Keep.anchOut {Γ Γ' : Ctx} {s s' : Stmt} {F : List Var} (hk : Keep Γ Γ' s s')
@@ -768,8 +776,9 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   exact StmtT.scope ⟨E, hx, by simp [hmo]⟩ hxF hlc hpin
 
 /-- Preservation: every step of a well-typed configuration, given the call
-    case. -/
-theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    cases and what source typing keeps. -/
+theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) (hsk : SrcCase P)
+    {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
     ∀ {m m' : Mem} {s' : Stmt}, MemCodes P m → Inv m Γ F s → Step P m s (.ok m' s') →
       ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧ Keep Γ Γ' s s' ∧ Frz F m m' := by
@@ -851,7 +860,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @letd Γ Γ1 Δ F x f r k E hsrc hx hxF hr hmo hview hdtor hs hpx hKOd hWd hNd _ =>
+  | @letd Γ Γ1 Δ F x f r k E hsrc hx hxF hr hmo hview hdtor hs hpx _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | letd hmx he =>
@@ -864,6 +873,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hm := post.inv.add hx1 hxn out
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
+      have hanchx : RootbAnch (setE Γ1 x E) F := fun p Ep hp hmp => by
+        by_cases hpx : p = x
+        · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
+          exact absurd hmp hnrb
+        · simp only [setE, upd_ne _ _ hpx] at hp; exact hanch1 p Ep hp hmp
+      obtain ⟨hKOd, hWd, hNd⟩ := hsk hs hsrc hanchx hm.wf hm.names
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scopeD ⟨E, by simp [setE], hmo, hview, hdtor⟩ hxF hs hpx (by rw [hsp]; exact hKOd) hWd hNd, ?_, by simp [post.nv], ?_,
         fun v hv => ?_⟩

@@ -150,7 +150,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | seq _ _ _ iha ihb =>
     intro hs; simp only [Stmt.src, Bool.and_eq_true] at hs; exact (iha hs.1).trans (ihb hs.2)
   | letv hks hx _ hr _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
-  | letd hks hx _ hr _ _ _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
+  | letd hks hx _ hr _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
@@ -280,11 +280,10 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   N := (argNames Γ args).filter (fun d => !(inoutArgs fn.params args).contains d.root)
   sym := symNames fn.params
 
-/-- What a well-typed call, in a well-formed configuration, gives. -/
-structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args : List Var) (base : Nat) :
-    Prop where
-  prog    : ProgOK P
-  fnok    : FnOK P fn
+/-- What a call's typing says of its arguments, with the caller's names and
+    its borrowed parameters' anchors: the part of `CallH` that no run-time
+    frame enters into, so source typing has it at every call (`CallT.toA`). -/
+structure CallA (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) : Prop where
   len     : args.length = fn.params.length
   arg     : ∀ i (h : i < fn.params.length), ∃ Ea, Γ (args.getD i 0) = some Ea ∧ Ea.live = true ∧
               paramOK fn.params[i].1 fn.params[i].2 Ea ∧
@@ -302,6 +301,13 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
               (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))
   nfree   : NamesFree Γ F fn.params args
   names   : NameWF Γ
+  anch    : RootbAnch Γ F
+
+/-- What a well-typed call, in a well-formed configuration, gives. -/
+structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args : List Var) (base : Nat) :
+    Prop extends CallA Γ F fn args where
+  prog    : ProgOK P
+  fnok    : FnOK P fn
   postdt  : DomTy Γ (callPost Γ fn args)
   resnames : NameWF (setE (callPost Γ fn args) x (callRes Γ fn args))
   fresh   : Γ x = none
@@ -313,7 +319,6 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
   wf      : CtxWF Γ
   noInout : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   rbLive  : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
-  anch    : RootbAnch Γ F
   postwf  : CtxWF (callPost Γ fn args)
   postdm  : DomMode Γ (callPost Γ fn args)
   reswf   : ∀ r ∈ roots (callRes Γ fn args).vdeps, ∃ Er, callPost Γ fn args r = some Er ∧ Er.mode.isRoot = true
@@ -615,7 +620,7 @@ theorem held_memDeps_vdeps {E : Entry} {r : Var} (h : r ∈ roots (memDeps E.hel
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {base : Nat}
 
-theorem argE_eq (h : CallH P Γ F x fn args base) {i : Nat} (hi : i < fn.params.length) :
+theorem _root_.A2.CallA.argE_eq (h : CallA Γ F fn args) {i : Nat} (hi : i < fn.params.length) :
     ∃ Ea, Γ (args.getD i 0) = some Ea ∧ argE Γ (args.getD i 0) = Ea := by
   obtain ⟨Ea, hEa, _⟩ := h.arg i hi; exact ⟨Ea, hEa, by unfold argE; rw [hEa]; rfl⟩
 
@@ -726,7 +731,7 @@ theorem hits_clean {e : Eff} {hv : Bool} {r : Var} {E : Entry} (hl : E.live = tr
   · rfl
 
 /-- What the arguments hold by name: names in a live, non-integer argument. -/
-theorem argNames_mem (h : CallH P Γ F x fn args base) {d : Dep} (hd : d ∈ argNames Γ args) :
+theorem _root_.A2.CallA.argNames_mem (h : CallA Γ F fn args) {d : Dep} (hd : d ∈ argNames Γ args) :
     ∃ j < fn.params.length, ∃ Ea, Γ (args.getD j 0) = some Ea ∧ Ea.live = true ∧ Ea.ty ≠ .int ∧
       d ∈ Ea.vdeps ∧ d.kind.isName = true := by
   simp only [argNames, List.mem_flatMap] at hd
@@ -743,13 +748,13 @@ theorem argNames_mem (h : CallH P Γ F x fn args base) {d : Dep} (hd : d ∈ arg
     obtain ⟨hdv, hdn⟩ := List.mem_filter.mp hda
     exact ⟨j, hjp, Ea, hEa, hl, hn, hdv, hdn⟩
 
-theorem argNames_named (h : CallH P Γ F x fn args base) {d : Dep} (hd : d ∈ argNames Γ args) :
+theorem _root_.A2.CallA.argNames_named (h : CallA Γ F fn args) {d : Dep} (hd : d ∈ argNames Γ args) :
     DepsNamed Γ [d] := by
   obtain ⟨j, _, Ea, hEa, hl, hn, hdv, _⟩ := h.argNames_mem hd
   exact DepsNamed.sub (h.names _ Ea hEa hl (Or.inl hn)) (fun d' hd' => by
     simp only [List.mem_singleton] at hd'; subst hd'; exact hdv)
 
-theorem argNames_bound (h : CallH P Γ F x fn args base) {d : Dep} (hd : d ∈ argNames Γ args)
+theorem _root_.A2.CallA.argNames_bound (h : CallA Γ F fn args) {d : Dep} (hd : d ∈ argNames Γ args)
     (hb : d.kind.bound ≠ .none) : d.kind.bound ≠ .replace := by
   obtain ⟨r, k⟩ := d
   cases k with
@@ -953,7 +958,7 @@ theorem callPostAux_rootb {Γ0 : Ctx} {fn : Fn} {args : List Var} {p : Var} {Ep 
     change: what it borrows and reads by name is lent out, what the call
     moves or changes is not, and what the call's closures change it reaches
     only by name. -/
-theorem post_rootb (h : CallH P Γ F x fn args base) {p : Var} {Ep : Entry} (hp : Γ p = some Ep)
+theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entry} (hp : Γ p = some Ep)
     (hrb : Ep.mode = .rootb) : callPost Γ fn args p = some Ep := by
   have hanch := h.anch p Ep hp hrb
   have haux : callPostAux Γ fn args fn.params args 0 Γ p = some Ep := by
