@@ -41,6 +41,31 @@ $ `src/pg.nu`
     ^ ( pg_connect ( string_data . d host ) . d port ( string_data . d user ) ( string_data . d password ) ( string_data . d db ) sslmode )
 }
 
+// The DSN as a postgres:// URI, user and password percent-encoded.
+@ dsn_url Dsn d s sslmode → String {
+    : String u ( string_from `postgres://` )
+    ( string_append u ( url_percent_encode ( string_data . d user ) ) )
+    ( string_push_str u `:` )
+    ( string_append u ( url_percent_encode ( string_data . d password ) ) )
+    ( string_push_str u `@` )
+    ( string_append u . d host )
+    ( string_push_str u `:` )
+    ( string_push_int u . d port )
+    ( string_push_str u `/` )
+    ( string_append u ( url_percent_encode ( string_data . d db ) ) )
+    ( string_push_str u `?sslmode=` )
+    ( string_push_str u sslmode )
+    ^ u
+}
+
+// T when pg_connect_url refuses `url` as PgBadUrl (before any connection).
+@ bad_url s url → b {
+    ?? ( pg_connect_url url ) {
+        T _ → { ^ F }
+        F e → { ^ != 0 ( nurl_str_eq ( pg_err_name e ) `PgBadUrl` ) }
+    }
+}
+
 @ q PgConn c s sql → b {
     ?? ( pg_query c sql ) {
         T _ → { ^ T }
@@ -71,6 +96,27 @@ $ `src/pg.nu`
     ^ v
 }
 
+// Parameter sets {start}, {start+1}, … — n of them, one integer each.
+@ int_sets i start i n → ( Vec ( Vec PgVal ) ) {
+    : ( Vec ( Vec PgVal ) ) sets ( vec_with_cap [( Vec PgVal )] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [( Vec PgVal )] sets ( params1 ( ival + start k ) ) ) = k + k 1 }
+    ^ sets
+}
+
+// How many of `rs` hold (start + k) * f, k their place: every one when
+// each result is its own run's, in order.
+@ count_times ( Vec PgResult ) rs i start i f → i {
+    : i n ( vec_len [PgResult] rs )
+    : ~ i good 0
+    : ~ i k 0
+    ~ < k n {
+        ? ( opt_i_is ( pg_row_i ( vec_at [PgResult] rs k ) 0 0 ) * + start k f ) { = good + good 1 } {}
+        = k + k 1
+    }
+    ^ good
+}
+
 // The value of a one-cell query, as an integer (-1 on failure).
 @ one_int PgConn c s sql ( Vec PgVal ) ps → i {
     ?? ( pg_query_params c sql ps ) {
@@ -88,6 +134,20 @@ $ `src/pg.nu`
         ( env_or `PSQL_TEST_PASSWORD` `` )
         ( env_or `PSQL_TEST_DB` `postgres` )
     }
+
+    // ── connection URI ──
+    ?? ( pg_connect_url ( string_data ( dsn_url d `require` ) ) ) {
+        T c → { ( ok `url: a postgres:// URI connects, sslmode=require over TLS` & == ( pg_conn_tls c ) 1 == ( one_int c `SELECT 7` ( vec_new [PgVal] ) ) 7 ) }
+        F e → { ( ok `url: a postgres:// URI connects, sslmode=require over TLS` F ) ( nurl_print ( pg_err_name e ) ) ( nurl_print `\n` ) }
+    }
+    ?? ( pg_connect_url ( string_data ( dsn_url d `disable` ) ) ) {
+        T c → { ( ok `url: sslmode=disable stays plaintext` == ( pg_conn_tls c ) 0 ) }
+        F e → { ( ok `url: sslmode=disable stays plaintext` F ) }
+    }
+    ( ok `url: another scheme is refused` ( bad_url `mysql://127.0.0.1/db` ) )
+    ( ok `url: no host is refused` ( bad_url `postgres:///db` ) )
+    ( ok `url: a parameter it would ignore is refused` ( bad_url `postgres://127.0.0.1/db?connect_timeout=5` ) )
+    ( ok `url: an sslmode this client lacks is refused` ( bad_url `postgres://127.0.0.1/db?sslmode=verify-ca` ) )
 
     // ── sslmode, SCRAM ──
     ?? ( connect d 0 ) {
@@ -171,8 +231,8 @@ $ `src/pg.nu`
             ( ok `numeric comes as text` ( opt_s_is ( pg_row_s r 0 12 ) `12345678901234` ) )
             ( ok `numeric as a float` ?? ( pg_row_f r 0 12 ) { T x → == x 12345678901234.0 F → F } )
             ( ok `NULL varchar` ( pg_row_is_null r 0 13 ) )
-            ( ok `binary formats were asked for` & == ( pg_result_col_type r 0 ) PG_INT4 == . ( vec_at [PgCol] . r cols 0 ) fmt 1 )
-            ( ok `text format for numeric` == . ( vec_at [PgCol] . r cols 12 ) fmt 0 )
+            ( ok `binary formats were asked for` & == ( pg_result_col_type r 0 ) PG_INT4 == ( pg_result_col_fmt r 0 ) 1 )
+            ( ok `text format for numeric` == ( pg_result_col_fmt r 12 ) 0 )
         }
         F _ → { ( ok `select with a parameter` F ) ( nurl_print ( string_data ( pg_conn_lasterr c ) ) ) ( nurl_print `\n` ) }
     }
@@ -204,6 +264,17 @@ $ `src/pg.nu`
     ?? ( pg_query_params c `SELECT * FROM nurl_s WHERE a = $1` ( params1 ( ival 5 ) ) ) {
         T r → { ( ok `stale: re-prepared, new shape` & == . r ncols 2 ( opt_s_is ( pg_row_s r 0 1 ) `x` ) ) }
         F _ → { ( ok `stale: re-prepared, new shape` F ) ( nurl_print ( string_data ( pg_conn_lasterr c ) ) ) ( nurl_print `\n` ) }
+    }
+    // The same for a batch: every run of the stale statement failed alike,
+    // so the batch is prepared afresh and run again, whole.
+    ?? ( pg_query_many c `SELECT * FROM nurl_s WHERE a = $1` ( int_sets 5 2 ) ) {
+        T rs → { ( ok `stale many: first batch` & == ( vec_len [PgResult] rs ) 2 == . ( vec_at [PgResult] rs 0 ) ncols 2 ) }
+        F _ → { ( ok `stale many: first batch` F ) }
+    }
+    ( ok `stale many: alter` ( q c `ALTER TABLE nurl_s ADD COLUMN c int4 DEFAULT 9` ) )
+    ?? ( pg_query_many c `SELECT * FROM nurl_s WHERE a = $1` ( int_sets 5 2 ) ) {
+        T rs → { ( ok `stale many: re-prepared, new shape` & == ( vec_len [PgResult] rs ) 2 & == . ( vec_at [PgResult] rs 0 ) ncols 3 ( opt_i_is ( pg_row_i ( vec_at [PgResult] rs 0 ) 0 2 ) 9 ) ) }
+        F _ → { ( ok `stale many: re-prepared, new shape` F ) ( nurl_print ( string_data ( pg_conn_lasterr c ) ) ) ( nurl_print `\n` ) }
     }
     ( ok `DEALLOCATE ALL under the cache` ( q c `DEALLOCATE ALL` ) )
     ( ok `…prepared again` == ( one_int c `SELECT $1::int8 + 100` ( params1 ( ival 3 ) ) ) 103 )
@@ -344,6 +415,50 @@ $ `src/pg.nu`
     ( ok `pipeline: interleaved with errors, every good query answered` == ( atomic_load good_ok ) 80 )
     ( ok `pipeline: every failing query fails alone` == ( atomic_load bad_failed ) 80 )
     ( ok `pipeline: the connection is still fine` & ( pg_conn_ok shared ) == ( one_int shared `SELECT $1::int8` ( params1 ( ival 7 ) ) ) 7 )
+
+    // ── many runs of one statement, pipelined ──
+    ?? ( pg_query_many shared `SELECT $1::int8 * 3` ( int_sets 0 50 ) ) {
+        T rs → { ( ok `many: 50 runs, 50 results in order` & == ( vec_len [PgResult] rs ) 50 == ( count_times rs 0 3 ) 50 ) }
+        F _ → { ( ok `many: 50 runs, 50 results in order` F ) }
+    }
+    ?? ( pg_query_many shared `SELECT $1::int8 * 3` ( vec_new [( Vec PgVal )] ) ) {
+        T rs → { ( ok `many: no sets, no results` == ( vec_len [PgResult] rs ) 0 ) }
+        F _ → { ( ok `many: no sets, no results` F ) }
+    }
+    // -2 … 2: the third run divides by zero.
+    ?? ( pg_query_many shared `SELECT 10 / $1::int4` ( int_sets -2 5 ) ) {
+        T _ → { ( ok `many: a failing run fails the call` F ) }
+        F e → { ( ok `many: a failing run fails the call` != 0 ( nurl_str_eq ( pg_err_name e ) `PgServerError` ) ) }
+    }
+    ( ok `many: the connection is still fine` == ( one_int shared `SELECT $1::int8` ( params1 ( ival 5 ) ) ) 5 )
+    : Atomic many_ok ( atomic_new 0 )
+    = pf 0
+    ~ < pf 8 {
+        : i base * pf 100
+        : PgConn sc ( PgConn_share shared )
+        : Atomic mk ( Atomic_share many_ok )
+        ( spawn \ → v {
+            ?? ( pg_query_many sc `SELECT $1::int8 * 3` ( int_sets base 20 ) ) {
+                T rs → { : i _n ( atomic_add mk ( count_times rs base 3 ) ) }
+                F _ → {}
+            }
+        } )
+        = pf + pf 1
+    }
+    ( runtime_run )
+    ( ok `many: 8 fibers x 20 runs at once, every result its own` == ( atomic_load many_ok ) 160 )
+    // With the cache off: prepared, run, and closed by the last run — and
+    // what the cache held closed with it (the server's own count).
+    ( pg_conn_set_stmt_cache shared 0 )
+    ?? ( pg_query_many shared `SELECT $1::int8 + 100` ( int_sets 0 10 ) ) {
+        T rs → { ( ok `many: no cache — prepared, run, closed` & == ( vec_len [PgResult] rs ) 10 == ( count_times rs 100 1 ) 10 ) }
+        F _ → { ( ok `many: no cache — prepared, run, closed` F ) }
+    }
+    ?? ( pg_query shared `SELECT count(*) FROM pg_prepared_statements` ) {
+        T r → { ( ok `many: no cache — nothing left prepared on the server` ( opt_i_is ( pg_row_i r 0 0 ) 0 ) ) }
+        F _ → { ( ok `many: no cache — nothing left prepared on the server` F ) }
+    }
+    ( pg_conn_set_stmt_cache shared 64 )
 
     // The server ends the session while requests are queued on it.
     : i victim ( one_int shared `SELECT pg_backend_pid()::int8` ( vec_new [PgVal] ) )

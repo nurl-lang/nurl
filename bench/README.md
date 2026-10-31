@@ -232,6 +232,12 @@ exactly that.
   benchmark, driven by [`run_http.sh`](run_http.sh) with `oha` as the
   load generator; results in [`HTTP_RESULTS.md`](HTTP_RESULTS.md). It
   measures requests per second, not wall clock, so it has its own runner.
+  `run_http.sh --suite db` runs the same two servers' database endpoints
+  — TechEmpower's `/json` `/db` `/queries` `/fortunes` `/updates` and
+  HttpArena's `/async-db`, over [`http_db_schema.sql`](http_db_schema.sql)
+  — NURL (packages/psql) against Rust (tokio-postgres), with a throwaway
+  PostgreSQL pinned to cores of its own unless `DATABASE_URL` names one;
+  results in [`HTTP_DB_RESULTS.md`](HTTP_DB_RESULTS.md).
 * `pq_compare.nu` + `rust_pq/` are the post-quantum crypto peer
   benchmark (ML-KEM, ML-DSA, SLH-DSA, SHAKE128 — pure-NURL stdlib vs
   pure-Rust RustCrypto), driven by [`run_pq.sh`](run_pq.sh); results in

@@ -23,33 +23,22 @@ name: bench
 # with no way for a reader to check them.
 
 on:
-  # Any commit on main that touches the benchmark corpus, the compiler or
-  # the runtime re-measures AND commits the refreshed numbers. Keeping main
-  # continuously current is what makes a release tag correct by
-  # construction: the alternative — measuring at the tag — cannot work,
-  # because a tag is immutable and the suite finishes long after it is cut.
-  #
-  # This does not re-trigger itself: the results files are excluded from the
-  # paths filter below. The cost is that runner noise (a few per cent
-  # run-to-run) puts a diff in latest.json on most merges, so read a single
-  # diff as noise and a sustained shift as a regression.
+  # main is re-measured once a night, not after every merge (Agora #136,
+  # #290). With the merge queue, a merge comes every few minutes. The run
+  # after each one held a runner for up to two hours, and its direct
+  # commit to main moved main outside the queue. That made the queue
+  # rebuild every group in flight and run its full CI again: the v0.83.0
+  # release group ran three times. One run a night keeps the published
+  # table a day fresh at most. Runner noise of a few per cent made a
+  # per-merge diff unreadable anyway, and a sustained shift shows the same.
+  # The commit still goes straight to main until #290 moves the numbers to a
+  # data branch, but at an hour the queue is quiet.
+  schedule:
+    - cron: '17 2 * * *'
   push:
-    branches: [main]
     # Release tags: every vX.Y.Z also refreshes the committed numbers, so
     # a release always ships with a table measured at exactly that tag.
-    # (GitHub does not evaluate the paths filter for tag pushes, so the
-    # filter below only narrows the branch runs.)
     tags: ['v*']
-    paths:
-      - 'bench/**'
-      # The results files are what this workflow itself commits back —
-      # excluded so a results merge doesn't spin up another full run.
-      - '!bench/results/**'
-      - '!bench/RESULTS.md'
-      - '!bench/RESULTS-x*.md'
-      - 'compiler/**'
-      - 'stdlib/**'
-      - '.github/workflows/bench.yml'
 
   # Manual runs also commit the refreshed numbers — for re-measuring
   # between releases (runner microarchitecture drift, toolchain bumps,

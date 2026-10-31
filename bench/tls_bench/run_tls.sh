@@ -112,18 +112,11 @@ certs() {
   [ -s "$SCRATCH/ec.crt" ] && [ -s "$SCRATCH/rsa.crt" ] || die "openssl could not make the test certificates"
 }
 
-# The crypto-relevant CPU flags present, in a fixed order: every flag a
-# NURL or aws-lc kernel is chosen by. x86 reports them in `flags`,
-# AArch64 in `Features`.
-cpu_flags() {
-  local have; have=" $(grep -m1 -E '^(flags|Features)' /proc/cpuinfo 2>/dev/null | sed 's/.*: //') "
-  local f out=""
-  for f in aes pclmulqdq avx avx2 bmi2 adx sha_ni vaes vpclmulqdq gfni avx512f avx512vl avx512bw avx512ifma avx512vbmi \
-           asimd pmull sha2 sha512 sve sve2; do
-    case "$have" in *" $f "*) out="$out $f";; esac
-  done
-  printf '%s' "${out# }"
-}
+# The vendor and the crypto-relevant CPU flags present, in a fixed order:
+# every flag a NURL or aws-lc kernel is chosen by (bench/cpu_env.py, shared
+# with the other runner-measured reports).
+cpu_vendor() { python3 "$ROOT/bench/cpu_env.py" vendor; }
+cpu_flags() { python3 "$ROOT/bench/cpu_env.py" flags; }
 
 # ── servers ─────────────────────────────────────────────────────────
 # start IMPL CERT(ec|rsa|plain) → echoes the PID once the server answers.
@@ -275,7 +268,7 @@ main() {
     # the crypto-relevant flags present (x86 `flags`, AArch64 `Features`),
     # NURL's own CPU answers and per-primitive kernels (prims --tiers),
     # and any masking of either side's CPUID.
-    printf 'ENV\tcpu_vendor\t%s\n' "$(grep -m1 -E '^(vendor_id|CPU implementer)' /proc/cpuinfo 2>/dev/null | sed 's/.*: //')"
+    printf 'ENV\tcpu_vendor\t%s\n' "$(cpu_vendor)"
     printf 'ENV\tcpu_flags\t%s\n' "$(cpu_flags)"
     printf 'ENV\tnurl_cpu_mask\t%s\n' "$(env | grep -E '^NURL_CPU_[A-Z0-9]+=' | sort | tr '\n' ' ' | sed 's/ $//' | grep . || echo none)"
     printf 'ENV\topenssl_ia32cap\t%s\n' "${OPENSSL_ia32cap:-unset}"

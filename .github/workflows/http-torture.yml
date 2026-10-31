@@ -13,8 +13,12 @@ name: http-torture
 #                                           has with run_http.sh.
 #
 # Deliberately MANUAL, like http-bench.yml and pq-bench.yml: no push/tag
-# trigger. A full run is ~80 minutes and its cells are load numbers on a
-# shared VM — opt in when you want a fresh runner-measured table.
+# trigger. A full run stays under 60 minutes from checkout to the results
+# commit (the report's "Wall time per dimension" table says where it went:
+# two 600 s soaks are 20 of them), and its cells are load numbers on a
+# shared VM — opt in when you want a fresh runner-measured table. Only a
+# full run on main commits its report; a run on a branch, or a smoke run,
+# leaves it in the run summary and the artifact.
 #
 # Two things differ from the workstation runs the table was born on:
 #   * ubuntu-latest has 4 vCPUs. The harness derives its core split from
@@ -28,14 +32,20 @@ name: http-torture
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'full = the real run; smoke = short cells that exercise every column'
+        required: false
+        default: 'full'
+        type: choice
+        options: [full, smoke]
       soak_sec:
-        description: 'Seconds per soak (600 = the real thing; 60 for a quick re-measure)'
+        description: 'Seconds per soak (600 = the real thing; 60 for a quick re-measure; empty = the mode default)'
         required: false
         default: '600'
       dims:
-        description: 'Dimensions to run (space-separated subset of: capacity loadlevels cpu churn slowloris keepalive tls_resume soak)'
+        description: 'Dimensions to run (space-separated subset of: capacity loadlevels churn slowloris keepalive tls_resume soak; cpu = loadlevels, for one release)'
         required: false
-        default: 'capacity loadlevels cpu churn slowloris keepalive tls_resume soak'
+        default: 'capacity loadlevels churn slowloris keepalive tls_resume soak'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,7 +58,8 @@ jobs:
   http-torture:
     name: NURL vs Rust hyper/rustls — open-loop torture
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # The budget is 60 minutes; the margin is for a cold cache.
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -94,9 +105,28 @@ jobs:
           /tmp/rustup-init -y --default-toolchain stable --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      # oha is built from source by `cargo install`, minutes of every run
+      # for the same pinned version: the binary is cached by that version.
+      - name: Restore oha
+        id: oha-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/oha
+          key: oha-1.8.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install oha (load generator)
         # Pinned to the version the report header records.
+        if: steps.oha-cache.outputs.cache-hit != 'true'
         run: cargo install oha --version 1.8.0 --locked
+
+      # The Rust peer's dependencies are pinned by its Cargo.lock; cargo
+      # rebuilds whatever a newer stable rustc or a changed source needs.
+      - name: Restore the Rust peer's build
+        uses: actions/cache@v4
+        with:
+          path: bench/http_torture/rust/target
+          key: http-torture-rust-${{ runner.os }}-${{ hashFiles('bench/http_torture/rust/Cargo.lock', 'bench/http_torture/rust/Cargo.toml', 'bench/http_torture/rust/src/**') }}
+          restore-keys: http-torture-rust-${{ runner.os }}-
 
       - name: Record toolchain versions
         run: |
@@ -111,7 +141,7 @@ jobs:
 
       - name: Run the torture harness
         env:
-          MODE: full
+          MODE: ${{ github.event.inputs.mode || 'full' }}
           SOAK_SEC: ${{ github.event.inputs.soak_sec }}
           DIMS: ${{ github.event.inputs.dims }}
           # Read by run_torture.sh and written into the report header so
@@ -141,7 +171,10 @@ jobs:
       - name: Commit the refreshed report to main
         # Same mechanism as http-bench.yml's results commit: push straight
         # to main, bypassing the PR ruleset with BENCH_PUSH_TOKEN when
-        # present.
+        # present. Only a full run of main's own harness: a branch run
+        # measures a harness main does not have yet, and a smoke run's
+        # cells are too short to stand for the servers.
+        if: github.ref == 'refs/heads/main' && (github.event.inputs.mode || 'full') == 'full'
         env:
           GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
         run: |
