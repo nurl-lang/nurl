@@ -13,9 +13,10 @@
 // The python client reads to EOF and prints the body length plus a
 // content check (repeating '0123456789' pattern), both deterministic.
 // Needs a loopback socket + python3, like http_server_tls.nu.
-// requires: live fibers python3 posix-shell
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
@@ -44,8 +45,9 @@ $ `stdlib/ext/http_server.nu`
 @ run_live_test → v {
     // pure-NURL self-signed cert (EC P-256 → the pure tls_accept path)
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
-    : s cp `/tmp/nurl_tls_large_record.crt`
-    : s kp `/tmp/nurl_tls_large_record.key`
+    // Relative to the working directory, which exists on every host.
+    : s cp `nurl_tls_large_record.crt`
+    : s kp `nurl_tls_large_record.key`
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( println_label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( println_label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
@@ -53,8 +55,9 @@ $ `stdlib/ext/http_server.nu`
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18774 cp kp )
     ?? lr {
         T listener → {
-            : s shell_cmd
-            `rm -f /tmp/nurl_tls_large_record.out /tmp/nurl_tls_large_record.part; { python3 -c "import ssl,socket,sys
+            // The client is a child process (an argument vector, no shell: agora
+            // #123); it runs while this side accepts and serves.
+            : !ProcChild ProcessErr cr ( py_client_spawn `import ssl,socket,sys
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -68,26 +71,23 @@ while True:
     buf+=c
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1]
 sys.stdout.write('body_len='+str(len(body))+chr(10))
-sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))" > /tmp/nurl_tls_large_record.part 2>&1; mv /tmp/nurl_tls_large_record.part /tmp/nurl_tls_large_record.out; } >/dev/null 2>&1 &`
-            : !Output ProcessErr bg ( process_run_shell shell_cmd )
-            ?? bg {
-                T bgo → ( output_free bgo )
-                F e → ( println_label `bg_spawn` ( process_err_name e ) )
-            }
-
-            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( big_body_handler req ) }
-            : HttpServer srv ( server_new_with_timeout listener handler 5000 )
-            : !v NetErr rr ( server_run_once srv )
-            ?? rr {
-                T _ → ( println_label `serve` `OK` )
-                F e → ( println_label `serve` ( net_err_name e ) )
-            }
-            ( server_stop srv )
-
-            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/nurl_tls_large_record.out ] && break; sleep 0.05; done; cat /tmp/nurl_tls_large_record.out 2>/dev/null` )
-            ?? wait_r {
-                T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
-                F e → ( println_label `wait_client` ( process_err_name e ) )
+sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))` )
+            ?? cr {
+                T child → {
+                    : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse { ^ ( big_body_handler req ) }
+                    : HttpServer srv ( server_new_with_timeout listener handler 5000 )
+                    : !v NetErr rr ( server_run_once srv )
+                    ?? rr {
+                        T _ → ( println_label `serve` `OK` )
+                        F e → ( println_label `serve` ( net_err_name e ) )
+                    }
+                    ( server_stop srv )
+                    : String client_out ( client_collect child 10000 )
+                    ( nurl_print ( string_data client_out ) ) ( nurl_print `\n` )
+                }
+                F e → {
+                    ( println_label `bg_spawn` ( process_err_name e ) )
+                }
             }
         }
         F e → { ( println_label `tls_listen` ( net_err_name e ) ) }
