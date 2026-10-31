@@ -30963,6 +30963,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         } {}
     }
     ( bck_put ( bck_bkey `bs_` bids ) set )
+    ( __bs_note bids )
     // A borrow of an Arc's payload stays one, through borrows of it
     // (bck_sx_name, §6.5). (A new value clears it: the let / assign row.)
     ? != g_sxe_arc -1 {
@@ -33391,6 +33392,52 @@ unsafe @ bck_loop_mask s pre s post → s {
 // use of freed memory. Seeding the verification walk only with the
 // carried Moved state (definite, not MaybeMoved) keeps it
 // false-positive-free, exactly like the straight-line move rule.
+// The borrow bindings that have recorded sources (`bs_`) in this walk's
+// function: what a loop head joins (bck_loop, agora #229).
+@ __bs_note s bids → v {
+    : s k ( bck_bkey `bsids` `` )
+    : s cur ( nurl_sym_get g_bck k )
+    ? ( str_contains_word cur bids ) { ^ v } {}
+    ( nurl_sym_set g_bck k ? == 0 ( nurl_str_len cur ) ( nurl_str_cat bids `` ) ( nurl_str_cat3 cur ` ` bids ) )
+}
+
+// Every borrow binding's sources now, one `id:sources` line each.
+@ __bs_snapshot → s {
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsids` `` ) )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s id ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s line ( nurl_str_cat3 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
+    }
+    ^ out
+}
+
+// A loop head is reached from before the loop and from the end of its body:
+// a binding borrows there from what it borrowed on either path (`snap` the
+// head's, the walk's own now) — the union, as the state string's join keeps
+// a maybe-borrowed binding (bck_join_state). Overwritten per walk instead,
+// a binding that may borrow from either of two sources was tracked as
+// borrowing from one, and the period-2 swap of a cursor pair never settled
+// (stdlib/ext/regex.nu's `= cur nxt = nxt tmp`, agora #229).
+@ __bs_join s snap → v {
+    : ~ s rest ( nurl_str_cat snap `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s line ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i c ( nurl_str_find line `:` )
+        ? > c 0 {
+            : s id ( nurl_str_slice line 0 c )
+            : s hs ( nurl_str_slice line + c 1 - - ( nurl_str_len line ) c 1 )
+            : s k ( bck_bkey `bs_` id )
+            : s cur ( nurl_sym_get g_bck k )
+            : s u ( __word_union hs cur )
+            ? ! ( seq u cur ) { ( bck_put k u ) } {}
+        } {}
+    }
+}
+
 @ bck_loop i lo i hi s pre s cond_reads i cond_line → s {
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
@@ -33414,7 +33461,10 @@ unsafe @ bck_loop_mask s pre s post → s {
         ( bck_put `lcnt` `` )
         : s tok0 ( bck_facts_tok )
         = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat tok0 `` ) ( nurl_str_cat3 seen ` ` tok0 )
+        : s bsnap ( __bs_snapshot )
         : s post0 ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
+        // (The head's borrow sources: what both paths into it borrow from.)
+        ( __bs_join bsnap )
         : s tok1 ( bck_facts_tok )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
@@ -33447,6 +33497,7 @@ unsafe @ bck_loop_mask s pre s post → s {
         = iter + iter 1
     }
     = g_bck_watch - g_bck_watch 1
+    : s bhead ( __bs_snapshot )
     // Loop-carried verification. `back` is the converged body-exit
     // state; `verif` is the back-edge seed it implies. The condition is
     // re-evaluated before each body, so check its reads first, then
@@ -33468,6 +33519,8 @@ unsafe @ bck_loop_mask s pre s post → s {
         : s vend ( bck_walk_seq lo hi verif )
         ? != 0 ( nurl_str_len vend ) {} {}
     } {}
+    // (The loop is left from its head: its borrow sources hold after it.)
+    ( __bs_join bhead )
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     // The loop is left at its condition (the head state) or by a `break`.

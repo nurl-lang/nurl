@@ -502,6 +502,7 @@ loop_let_block_call_lend	§7.6	A2	agora #193: `: String r { : W w ( mkw ) ( gets
 loop_let_inferred_block_call_lend	§7.6	A2	agora #193: the same with the binding's type inferred	runs-clean	h877
 loop_local_vec_join_to_inout_param	§7.6	A2	agora #183: a loop body's Vec handed through a `?` to an `inout` parameter	runs-clean	h767
 loop_locals_through_a_nested_cond_assigned_outward	§7.6	A2	agora #179: a loop body's Strings handed through a nested `?` to a binding outside the loop	runs-clean	h743
+loop_swapped_cursor_read_after_its_other_source_replaced	§2.6	A1	agora #229: a loop-carried cursor pair swapped every pass, read after the field it may hold on this pass was replaced	rejected	-
 lru_cache_state_built_by_a_literal	§3.3d	B	`@ ( LruCache i ) { ( string_data k ) … }`: the cache kept its three control words behind a raw `s ctl` pointer into its `meta` Vec, and a literal pointed it at a one-byte string; every accessor…	runs-clean	h500
 lru_get_value_released	§7.6	A2	h311 through lru_get: releasing the cached value freed what the cache held	rejected	h313
 lru_value_read_after_eviction	§2.10	A2	a value lru_get lent, read after an lru_put that evicted it	rejected	h314
