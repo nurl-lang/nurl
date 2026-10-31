@@ -39,7 +39,7 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
   by_cases hns : v ∈ s'.spine
   · exact hns
   · obtain ⟨E', hE'⟩ := Option.isSome_iff_exists.mp hv
-    obtain ⟨hns0, E, hE⟩ := hk.2 v E' hE' hns
+    obtain ⟨hns0, E, hE⟩ := hk.2.1 v E' hE' hns
     exact absurd (hc v (by rw [hE]; rfl)) hns0
 
 /-- Every configuration a well-typed one reaches is well-typed. -/
