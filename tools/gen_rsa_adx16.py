@@ -200,6 +200,21 @@ def multiply(n):
     return out
 
 
+def constant_time(lines):
+    """The blocks must be straight-line with fixed addresses: no branch
+    (a jump, a loop, a conditional move on data would all show here) and
+    no indexed operand — every address is a constant offset from t, a,
+    b, m or the n0 slot, so neither control flow nor the address stream
+    can depend on the operands' values."""
+    for ln in lines:
+        op = ln.split()[0]
+        if op.startswith("j") or op.startswith("cmov") or op in ("loop", "call", "ret") or op.startswith("set"):
+            raise SystemExit(f"gen_rsa_adx16: non-straight-line instruction: {ln}")
+        if re.search(r"\(%[^)]*,", ln):
+            raise SystemExit(f"gen_rsa_adx16: indexed addressing: {ln}")
+    return lines
+
+
 def c_asm(lines, indent):
     pad = " " * indent
     return "\n".join(f'{pad}"{ln}\\n\\t"' for ln in lines)
@@ -210,8 +225,8 @@ OUTS = ('"=&r"(w0), "=&r"(w1), "=&r"(w2), "=&r"(w3), "=&r"(w4), "=&r"(w5), "=&r"
 
 
 def block():
-    sq = c_asm(square(N), 8)
-    mu = c_asm(multiply(N), 8)
+    sq = c_asm(constant_time(square(N)), 8)
+    mu = c_asm(constant_time(multiply(N)), 8)
     return f"""{BEGIN}
 /* RSA-2048's 16-limb CRT halves on the ADX tier: a Montgomery square and
  * multiply as one straight-line block each (tools/gen_rsa_adx16.py says

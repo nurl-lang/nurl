@@ -770,6 +770,35 @@ else
     bad "rsa_mont_kernels: builds" "$(head -2 "$WORK/rk.err")"
 fi
 
+# RSA-2048's halves take the runtime's straight-line ADX blocks
+# (nurl_rsa16_sqrm_adx / nurl_rsa16_mulm_adx, tools/gen_rsa_adx16.py) on
+# this tier and std/rsa_mont's FIPS kernels without it: both must hold
+# rsa16_kernel_agree's golden (every product checked against std/bigint,
+# edge-shaped moduli and operands), and the linked program must carry the
+# blocks' ADCX / ADOX — straight-line, no branch inside them.
+R16_SRC="$SCRIPT_DIR/rsa16_kernel_agree.nu"
+if "$NURLC" "$R16_SRC" > "$WORK/r16.ll" 2> "$WORK/r16.err" &&
+        command -v "$CLANG" >/dev/null 2>&1 &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/r16.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/r16" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/rsa16_kernel_agree.txt" | tail -n +2)
+    for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+        got=$(env "$e" "$WORK/r16" 2>&1)
+        if [ "$got" = "$want" ]; then ok "rsa16_kernel_agree with $e" "golden"
+        else bad "rsa16_kernel_agree with $e" "${got:0:80}"; fi
+    done
+    if command -v objdump >/dev/null 2>&1; then
+        sq=$(objdump -d "$WORK/r16" 2>/dev/null | awk '/<nurl_rsa16_sqrm_adx>:/,/^$/')
+        nsq=$(printf '%s\n' "$sq" | grep -cE '\badcxq?\b')
+        if [ "$nsq" -gt 400 ]; then ok "nurl_rsa16_sqrm_adx: linked, ADCX chains" "$nsq adcx"
+        else bad "nurl_rsa16_sqrm_adx: linked, ADCX chains" "$nsq adcx"; fi
+    else
+        note "nurl_rsa16_sqrm_adx machine code" "skipped (no objdump)"
+    fi
+else
+    bad "rsa16_kernel_agree: builds" "$(head -2 "$WORK/r16.err")"
+fi
+
 # Off x86 there is no ADX tier: a constant false and no asm.
 "$NURLC" --no-cpu-dispatch --no-dce "$MR_SRC" > "$WORK/mr.off.ll" 2>/dev/null
 "$NURLC" --target=aarch64 --no-dce "$MR_SRC" > "$WORK/mr.a64.ll" 2>/dev/null
