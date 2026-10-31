@@ -230,7 +230,7 @@ optimisation levels nurlc builds with.
 | stage | content | proof |
 |---|---|---|
 | 0 | Infrastructure, no behaviour change: `elab_operand` (returns at once for every form), `nurl_lex_push_name`, statement temporaries on the call-temporary journal, the `rv_` display phrase | `tools/tree_sweep.sh`: byte-identical IR on the whole tree; self-compile instructions within the noise floor |
-| 1 | **Value blocks** (the prototype): `^`, the fall-off value, `=`, call arguments, literal fields, `:` | holes `check.sh`: 0 holes and every verdict in `map.tsv` unchanged; corpus unchanged; self-compile instructions no worse; the value-block helpers in §5 deleted |
+| 1 | **Value blocks** (the prototype): `^`, the fall-off value, `=`, call arguments, literal fields, `:`. First the let-then-name path is made sound for blocks (the twins below), then the consumers switch over. | the value-block twins agree with their probes; holes `check.sh`: 0 holes and every verdict in `map.tsv` unchanged; corpus unchanged; self-compile instructions no worse; the value-block helpers in §5 deleted |
 | 2 | Joins `?` / `??` | as stage 1; the joins inventory deleted; cost gate above |
 | 3 | Tries `\` | as stage 1 |
 | 4 | Defers: the returned value is bound before cleanup | as stage 1 (h-probes of #197 and the `defer_*` goldens) |
@@ -239,6 +239,40 @@ Every stage also runs the usual gates: `./build.sh`, memgate, dcegate,
 leakgate, `run_san_tests.sh` and `tools/metamorph/spellings.py`. A stage
 deletes the consumer cases it makes dead in the same PR, so no stage leaves
 two paths deciding the same thing.
+
+### The oracle: elaborated twins of every probe
+
+The elaborated program can be written in source, so each stage has a
+mechanical oracle. `tools/fuzz/holes/elab.py` rewrites every probe whose
+`^` or `=` consumes a producer form into its elaborated twin:
+
+```
+^ <form>      →   : __el <form>
+                  ^ __el
+= x <form>    →   : __el <form>
+                  = x __el
+```
+
+The twin must get the same verdict as the probe. A twin that differs is a
+gap in the let-then-name path. That is the path every consumer goes
+through after elaboration, so a stage switches its consumers over only
+once the twins of its form agree with the originals.
+
+The first run (main 8946e8d1, the 27 probes whose `^` or `=` takes a value
+block or a simple join) found 8 twins that differ, all from safe to
+**HOLE**, and all 8 are heap use-after-frees. Minimising them also turned
+up a leak:
+
+- `: String t { … ( string_from … ) }` leaks the String: the binding
+  never takes the tail call's ownership bit. `mem_udrop_bind_flag` looks
+  through a block's tail only when that tail is a join.
+- `: String t ? c ( string_from … ) ( string_from … )`, then `= o t` with
+  `o` an `inout` parameter, is a use-after-free: `t` is still dropped after
+  `o` took its buffer.
+
+These are holes in today's compiler, filed on their own. They are also
+the N×M pattern seen from the other side: the pairs fixed for `^ {…}`
+and `= o {…}` were never fixed for `: t {…}` followed by `^ t` or `= o t`.
 
 ## 8. Phase C
 
