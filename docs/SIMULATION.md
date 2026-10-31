@@ -14,7 +14,7 @@ harness of its own:
 | piece | what it gives | where |
 |---|---|---|
 | `NetSim` | nodes with whole TCP/IP stacks over a seeded bus: drops, latency, jitter, partitions | `stdlib/std/net_sim.nu`, [NETWORKING.md](NETWORKING.md#simulated-network--stdlibstdnet_simnu) |
-| the transport seam | `TcpListener` / `TcpConn` over a simulated socket, so `HttpApp`, `HttpServer` and any protocol client run unchanged | `stdlib/std/net.nu` |
+| the transport seam | `TcpListener` / `TcpConn` over a simulated socket, so `HttpApp`, `HttpServer` and any protocol client run unchanged; TLS too (`netsim_listen_tls`, `tcp_starttls`) | `stdlib/std/net.nu`, `stdlib/std/tls.nu` |
 | dialers | clients that dial through a `NetDialer` chosen at construction: http-client, psql, redis, nurldb | [NETWORKING.md](NETWORKING.md#clients-a-dialer-chosen-at-construction) |
 | `netsim_crash` | a node crashes and reboots empty: every socket gone at once, no FIN | `stdlib/std/net_sim.nu` |
 | `serve_on`, `db_crash` | nurldb served on a simulated listener; dropped as a killed process leaves it, reopened from its log | `packages/nurldb/src/server.nu`, `db.nu` |

@@ -397,6 +397,17 @@ raw @ tcp_listener_over sink %NetTransport t sink String local → TcpListener {
     ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { 0 0 0 ( __nt_word t local ) } ) }
 }
 
+// A TLS listener over `t`: as tcp_listener_over, and its connections are
+// handshaken as tcp_listen_tls's are — identity `id` (tls_ident_pem, …),
+// ALPN list `alpn_protocols` ("h2 http/1.1"; "" = none) — the TLS running
+// over the transport (agora #250).
+// requires: as tcp_listener_over.
+raw @ tcp_listener_over_tls sink %NetTransport t sink String local ( Arc TlsIdent ) id s alpn_protocols → TcpListener {
+    ( _tls_ticket_key_ensure )
+    : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { id @ ?( Arc TlsIdent ) { F } ( tls_alpn_pack alpn_protocols ) } )
+    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { 0 1 ( __tls_lcreds_add creds ) ( __nt_word t local ) } ) }
+}
+
 // A connection's transport, when it has one (kind 3).
 // Close a transport by its owner word. tcp_close_conn hands over the
 // word rather than a view of the conn: it writes the conn's fields
@@ -436,6 +447,13 @@ raw @ tcp_listener_over sink %NetTransport t sink String local → TcpListener {
     @ tt_set_timeout NtTlsStream self i ms → v { ( nt_set_timeout ( __nt . self w ) ms ) }
     @ tt_set_write_deadline NtTlsStream self i ns → v { ( nt_set_write_deadline ( __nt . self w ) ns ) }
     @ tt_close NtTlsStream self → v { ( nt_close ( __nt . self w ) ) }
+    @ tt_peer NtTlsStream self → s { ^ ( __nt_addr . self w ) }
+}
+
+// A TLS conn whose TlsConn runs over a transport (not a runtime socket).
+@ __tc_tls_tt TcpConn c → b {
+    : i tp ( __conn_tlsptr c )
+    ^ & != tp 0 ( tls_over_transport # TlsConn tp )
 }
 
 // The transport of kind-3 conn `c`, taken over: the word is the caller's
@@ -1240,7 +1258,26 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
 // a slow client parks this fiber instead of blocking the worker.
 @ tcp_conn_complete_tls TcpListener l TcpConn c → !TcpConn NetErr {
     ? == . ( __tli l ) is_tls 0 { ^ @ !TcpConn NetErr { T c } } {}
+    ? ( __tc_is_nt c ) { ^ ( __tls_accept_handshake_nt l c ) } {}
     ^ ( __tls_accept_handshake l ( __tcp_conn_release c ) )
+}
+
+// The listener's handshake on a connection of another transport: its
+// transport moves into the server's TlsConn (agora #250).
+@ __tls_accept_handshake_nt TcpListener l TcpConn c → !TcpConn NetErr {
+    ?? ( __tls_lcreds_get . ( __tli l ) creds ) {
+        T a → {
+            : *TlsCreds cr ( arc_ptr [TlsCreds] a )
+            : i w ( __tc_take_nt c )
+            ? == w 0 { ^ @ !TcpConn NetErr { F # NetErr NetClosed } } {}
+            : !TlsConn TlsErr r ( tls_accept_over ( dyn TlsTransport @ NtTlsStream { w } ) ( arc_clone [TlsIdent] . cr id ) . cr alpn )
+            ?? r {
+                F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
+                T tc → ^ @ !TcpConn NetErr { T ( __tcp_conn_make 0 2 ( _tls_word tc ) T ) }
+            }
+        }
+        F → { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } }
+    }
 }
 
 @ tcp_accept TcpListener l → !TcpConn NetErr {
@@ -1251,7 +1288,7 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
     : !TcpConn NetErr acc ( tcp_accept_transport l )
     ? == . ( __tli l ) is_tls 0 { ^ acc } {}
     ?? acc {
-        T rawc → ^ ( __tls_accept_handshake l ( __tcp_conn_release rawc ) )
+        T rawc → ^ ( tcp_conn_complete_tls l rawc )
         F e → ^ @ !TcpConn NetErr { F e }
     }
 }
@@ -1296,12 +1333,19 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
 // SNI + (when verify) certificate validation. Used by SMTP STARTTLS,
 // IMAP/POP STLS, etc. The conn keeps its identity — no new TcpConn is
 // returned, so callers holding the conn by value see the upgrade.
-@ tcp_starttls TcpConn c s server_name b verify → !v NetErr {
-    ? ( __tc_is_nt c ) { ^ ( __starttls_over c server_name verify ) } {}
+@ tcp_starttls TcpConn c s server_name b verify → !v NetErr { ^ ( tcp_starttls_until c server_name verify 0 ) }
+
+// tcp_starttls with the whole handshake bounded by `deadline_ns` (absolute
+// monotonic ns, std/time.nu's monotonic_ns; 0 = none — then each read
+// waits up to 20 s): a deadline that passes fails it with NetTimeout, over
+// a runtime socket or another transport alike. A failed handshake leaves
+// the conn closed.
+@ tcp_starttls_until TcpConn c s server_name b verify i deadline_ns → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ ( __starttls_over c server_name verify deadline_ns ) } {}
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
     : i fd . ( __tci c ) raw
-    : !TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
+    : !TlsConn TlsErr r ? > deadline_ns 0 ( __starttls_fd_until fd server_name verify deadline_ns ) ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
     ?? r {
         F _ → {
             // A failed handshake (or a certificate refused) closed the
@@ -1311,7 +1355,7 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
             : *TcpConnImpl p ( __tci c )
             = . p owns F
             = . p raw 0
-            ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+            ^ @ !v NetErr { F ( __starttls_err deadline_ns ) }
         }
         T tc → {
             ( __starttls_register fd ( _tls_word tc ) )
@@ -1320,14 +1364,25 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
     }
 }
 
+// tls_attach_full_until over the conn's own socket (no ALPN, no session).
+@ __starttls_fd_until i fd s server_name b verify i deadline_ns → !TlsConn TlsErr {
+    ^ ( tls_attach_full_until fd server_name `` ( vec_new [u] ) ? verify 1 0 deadline_ns )
+}
+
+// A failed handshake's error: NetTimeout once its deadline has passed.
+@ __starttls_err i deadline_ns → NetErr {
+    ? & > deadline_ns 0 >= ( nurl_monotonic_ns ) deadline_ns { ^ # NetErr NetTimeout } {}
+    ^ # NetErr NetTlsHandshake
+}
+
 // tcp_starttls on a connection of another transport: the handshake runs
 // over its transport, which the TLS connection takes over, and the conn
 // becomes a TLS client conn holding it — every copy sees the upgrade, as
 // over a runtime socket. A failed handshake has closed the transport.
-@ __starttls_over TcpConn c s server_name b verify → !v NetErr {
+@ __starttls_over TcpConn c s server_name b verify i deadline_ns → !v NetErr {
     : i w ( __tc_take_nt c )
     ? == w 0 { ^ @ !v NetErr { F # NetErr NetClosed } } {}
-    : !TlsConn TlsErr r ( tls_attach_over ( dyn TlsTransport @ NtTlsStream { w } ) server_name `` ( vec_new [u] ) ? verify 1 0 0 )
+    : !TlsConn TlsErr r ( tls_attach_over ( dyn TlsTransport @ NtTlsStream { w } ) server_name `` ( vec_new [u] ) ? verify 1 0 deadline_ns )
     ?? r {
         T tc → {
             : *TcpConnImpl p ( __tci c )
@@ -1336,12 +1391,13 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
             = . p owns T
             ^ @ !v NetErr { T 0 }
         }
-        F _ → { ^ @ !v NetErr { F # NetErr NetTlsHandshake } }
+        F _ → { ^ @ !v NetErr { F ( __starttls_err deadline_ns ) } }
     }
 }
 
 @ tcp_peer_addr TcpConn c → s {
     ? ( __tc_is_nt c ) { ^ ( __nt_addr . ( __tci c ) tlsh ) } {}
+    ? ( __tc_tls_tt c ) { ^ ( tls_transport_peer # TlsConn ( __conn_tlsptr c ) ) } {}
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
@@ -1363,6 +1419,7 @@ unsafe & `c` @ nurl_tcp_local_addr i handle → sink s
 
 @ tcp_set_timeout TcpConn c i ms → v {
     ? ( __tc_is_nt c ) { ( nt_set_timeout ( __tc_nt c ) ms ) ^ v } {}
+    ? ( __tc_tls_tt c ) { ( tls_transport_set_timeout # TlsConn ( __conn_tlsptr c ) ms ) ^ v } {}
     ( nurl_tcp_set_timeout ( __conn_fd c ) ms )
 }
 

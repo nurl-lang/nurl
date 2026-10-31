@@ -147,6 +147,8 @@ raw @ _tls_sock_write2 i fd ( Vec u ) head ( Vec u ) body → b {
     @ tt_set_timeout T self i ms → v
     @ tt_set_write_deadline T self i ns → v
     @ tt_close T self → v
+    // The peer's address, "ip:port" — lent for as long as the transport.
+    @ tt_peer T self → s
 }
 
 : TlsTransportBox { % TlsTransport t }
@@ -374,6 +376,23 @@ raw @ _tls_conn_new i raw → TlsConn {
 
 @ __tls_io_write_deadline TlsConnImpl c i ns → v {
     ? != . c tw 0 { ( tt_set_write_deadline ( __tt . c tw ) ns ) } { ( nurl_tcp_set_write_deadline . c fd ns ) }
+}
+
+// Over a transport rather than a socket (std/net.nu asks, to send a
+// connection's knobs the right way).
+@ tls_over_transport TlsConn c__h → b { ^ != . ( __TlsConn_ptr c__h ) tw 0 }
+
+// The read timeout of a connection over a transport (ms; 0 = none).
+@ tls_transport_set_timeout TlsConn c__h i ms → v {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
+    ? != . c tw 0 { ( tt_set_timeout ( __tt . c tw ) ms ) } {}
+}
+
+// The peer of a connection over a transport ("" over a socket).
+@ tls_transport_peer TlsConn c__h → s {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
+    ? != . c tw 0 { ^ ( tt_peer ( __tt . c tw ) ) } {}
+    ^ ``
 }
 
 // All of `data` out: through the transport, or to the socket.

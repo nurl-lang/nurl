@@ -167,9 +167,20 @@ must hold nothing that can reach a `TcpConn` or `TcpListener` (a
 connection is stored into thread-shared handles such as the HTTP server's
 drain table, and a cycle through it would never be freed), which the
 standard library's transports keep and a program's own must vouch for in
-`unsafe` code. TLS over a simulated network is not wired yet: the TLS
-stack runs over a runtime socket handle, and `tcp_starttls` /
-`tls_accept_conn` on a simulated connection refuse.
+`unsafe` code.
+
+TLS runs over a simulated network as over the kernel's sockets. std/tls.nu
+reads and writes its records through a `TlsTransport` when a connection
+has no runtime socket, and std/net adapts its transports to it, so the
+handshakes, the ciphers and the sessions are the same code.
+`netsim_listen_tls net node port id alpn` is a TLS listener (identity
+`id` from `tls_ident_pem`, in memory). Hand it to `http_app_serve` and an
+HttpApp answers HTTPS on the simulated wire. `tcp_starttls` upgrades a
+simulated connection in place, and `tcp_starttls_until` bounds the whole
+handshake by a deadline (`NetTimeout` when it passes, which is how a
+partition mid-handshake shows). `tls_accept_conn_ident` takes the server
+side of one. Such a connection never hands its keys to the kernel
+(kTLS), and `tls_socket` is 0 for it.
 
 A node can also crash: `netsim_crash net node` takes every socket it has
 at once, with no FIN, and the node is straight back up, empty, as a host

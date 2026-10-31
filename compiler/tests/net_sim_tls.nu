@@ -7,6 +7,9 @@
 // handshake (tls_accept_conn_ident, an identity generated in memory and
 // loaded with tls_ident_pem); node 1 dials and upgrades its connection in
 // place (tcp_starttls). An echo crosses in both directions, encrypted.
+// Then the link is cut after the TCP connection is up: a handshake bounded
+// by a deadline (tcp_starttls_until) fails with NetTimeout when it passes,
+// and once the link heals a new connection's handshake goes through.
 $ `stdlib/core/io.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/thread.nu`
@@ -14,6 +17,7 @@ $ `stdlib/std/atomic.nu`
 $ `stdlib/std/net_sim.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/tls_server.nu`
+$ `stdlib/std/time.nu`
 
 @ check s label b ok → v {
     ( nurl_print label )
@@ -21,9 +25,11 @@ $ `stdlib/std/tls_server.nu`
 }
 
 // One accepted connection: the TLS server side, then echo what arrives.
+// A handshake the network cut off ends with the read timeout.
 @ serve_one TcpListener l ( Arc TlsIdent ) id Atomic shook → v {
     ?? ( tcp_accept l ) {
         T c → {
+            ( tcp_set_timeout c 1000 )
             ?? ( tls_accept_conn_ident c id ( vec_new [u] ) ) {
                 T tc → {
                     : i _s ( atomic_add shook 1 )
@@ -84,5 +90,57 @@ $ `stdlib/std/tls_server.nu`
         F _ → {}
     }
     ( check `the server's side of the handshake` == ( atomic_load shook ) 1 )
+
+    // ── a partition mid-handshake ──
+    : TcpListener l2 ?? ( netsim_listen net 0 8443 ) {
+        T x → x
+        F _ → {
+            ( nurl_print `listen: FAILED\n` )
+            ^ 1
+        }
+    }
+    : Atomic shook2 ( atomic_new 0 )
+    : Atomic sh2 ( Atomic_share shook2 )
+    : !Thread ThreadErr srv2 ( thread_spawn \ → v {
+        ( serve_one ( TcpListener_share l2 ) ( arc_clone [TlsIdent] id ) ( Atomic_share sh2 ) )
+        ( serve_one ( TcpListener_share l2 ) ( arc_clone [TlsIdent] id ) ( Atomic_share sh2 ) )
+    } )
+    : TcpConn cut ?? ( netsim_connect net 1 `10.0.0.1` 8443 5000 ) {
+        T x → x
+        F _ → {
+            ( nurl_print `connect: FAILED\n` )
+            ^ 1
+        }
+    }
+    ( netsim_partition net 0 1 )
+    : i t0 ( monotonic_ns )
+    : !v NetErr cut_r ( tcp_starttls_until cut `localhost` F + t0 300000000 )
+    : i spent_ms / - ( monotonic_ns ) t0 1000000
+    ( check `cut off mid-handshake, the deadline ends it: NetTimeout` ?? cut_r { T _ → F F e → ?? e { NetTimeout → T _ → F } } )
+    ( check `…when it passes, not later` & >= spent_ms 299 < spent_ms 2000 )
+    ( netsim_heal net 0 1 )
+    : TcpConn again ?? ( netsim_connect net 1 `10.0.0.1` 8443 5000 ) {
+        T x → x
+        F _ → {
+            ( nurl_print `connect after the heal: FAILED\n` )
+            ^ 1
+        }
+    }
+    ( check `healed, a new handshake goes through` ?? ( tcp_starttls_until again `localhost` F + ( monotonic_ns ) 5000000000 ) { T _ → T F _ → F } )
+    : ( Vec u ) ping ( bytes_from_str `after the heal` )
+    : !v NetErr _pw ( tcp_write_all again ping )
+    : ( Vec u ) back ( vec_new [u] )
+    ~ < ( vec_len [u] back ) ( vec_len [u] ping ) {
+        ?? ( tcp_read_into again back 1024 ) {
+            T _ → {}
+            F _ → { break }
+        }
+    }
+    ( check `and carries an echo` ( slice_bytes_eq ( slice_from_vec [u] back ) ( slice_from_vec [u] ping ) ) )
+    ?? srv2 {
+        T h → { : i _j ( thread_join h ) }
+        F _ → {}
+    }
+    ( check `the server: the cut handshake ended, the second completed` == ( atomic_load shook2 ) 1 )
     ^ 0
 }

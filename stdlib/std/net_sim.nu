@@ -14,6 +14,7 @@
 //
 //   ( netsim_new      i nodes i seed i drop_pct i latency_ms i jitter_ms ) → NetSim
 //   ( netsim_listen   NetSim n i node i port )                  → !TcpListener NetErr
+//   ( netsim_listen_tls NetSim n i node i port id alpn )        → !TcpListener NetErr  HTTPS on the sim
 //   ( netsim_connect  NetSim n i node s host i port i ms )      → !TcpConn NetErr
 //   ( netsim_node_ip  NetSim n i node )                         → String   "10.0.0.<node+1>"
 //   ( netsim_partition NetSim n i a i b ) / ( netsim_heal NetSim n i a i b )
@@ -724,6 +725,19 @@ $ `stdlib/dist/sim.nu`
 // Listen on `port` of node `node` (0: a free port, read back with
 // tcp_local_addr). A taken port is NetAddrInUse, as bind(2) says.
 @ netsim_listen NetSim h i node i port → !TcpListener NetErr {
+    ^ ( __ns_listen h node port @ ?( Arc TlsIdent ) { F } `` )
+}
+
+// netsim_listen, its connections handshaken as tcp_listen_tls's are: with
+// identity `id` (tls_ident_pem, an identity generated in memory, …) and
+// the ALPN list `alpn_protocols` ("h2 http/1.1"; "" = none). The TLS runs
+// over the simulated sockets (agora #250), so an HTTPS server — an
+// HttpApp handed this listener — is served on the simulated network.
+@ netsim_listen_tls NetSim h i node i port ( Arc TlsIdent ) id s alpn_protocols → !TcpListener NetErr {
+    ^ ( __ns_listen h node port @ ?( Arc TlsIdent ) { T id } alpn_protocols )
+}
+
+@ __ns_listen NetSim h i node i port ? ( Arc TlsIdent ) tls s alpn_protocols → !TcpListener NetErr {
     : *NetSimImpl w ( __ns_lock h )
     ? | < node 0 >= node ( __ns_count w ) {
         ( __ns_unlock w )
@@ -740,7 +754,10 @@ $ `stdlib/dist/sim.nu`
     : i sid ( __ns_claim w node fd )
     : String local ( __ns_addr_string ( __ns_ip node ) ( sock_local_port st fd ) )
     ( __ns_unlock w )
-    ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid } ) local ) }
+    ?? tls {
+        T id → { ^ @ !TcpListener NetErr { T ( tcp_listener_over_tls ( dyn NetTransport @ NsSock { h node fd sid } ) local id alpn_protocols ) } }
+        F → { ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid } ) local ) } }
+    }
 }
 
 // The node a dialled address names, from `node`'s point of view: one of

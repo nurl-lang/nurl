@@ -7,3 +7,8 @@ the client's handshake over the simulated wire: ok
 an encrypted write: ok
 the echo comes back decrypted: ok
 the server's side of the handshake: ok
+cut off mid-handshake, the deadline ends it: NetTimeout: ok
+…when it passes, not later: ok
+healed, a new handshake goes through: ok
+and carries an echo: ok
+the server: the cut handshake ended, the second completed: ok
