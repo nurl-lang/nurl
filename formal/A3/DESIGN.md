@@ -199,7 +199,8 @@ reference (as `Rc` is in Rust), and nurlc's single-threaded code already
 uses `Arc` widely.
 
 **In A2.**
-- `Mem.blk : Nat → Option Blk`, with `Blk := ⟨rc, pay⟩`. A block's payload
+- `Mem.blk : Nat → Option Blk`, with `Blk := ⟨ty, pay⟩` (the count is
+  ghost, below). A block's payload
   tree is owned by the block: `HeapOK`'s one owner per allocation counts
   blocks next to slots, and `Covers` counts them too.
 - `Val.arc k`, a leaf: a share of block `k`. `Ty.arc t` is owning, it
@@ -250,14 +251,20 @@ step.
    types (mechanical, but it touches every module).
 2. A2: the three rules and the drop, with `memory_safe` / `no_leak_end` /
    `no_leak_panic` re-proven.
-   - `Frees` and `FreesL` carry the blocks: `Frees (a, b) v (a', b')`.
-     - A share with `rc ≥ 2` decrements its block.
-     - The last share removes the block and frees the payload's tree, in
-       the same relation, so a payload's own shares cascade. They are a
-       DAG: a payload holds only older shares.
-     - `DropSlot` passes the blocks through.
-   - Not a lazy "collect dead blocks" step: that would free later than
-     the runtime does, and the model would no longer be nurl's.
+   - The count is ghost: `rc k` is the number of `Val.arc k` leaves in
+     the store (slot trees and live payloads). A share frees nothing by
+     itself (`Frees.arc`), so `Frees` keeps its footprint (`other` / `le`
+     / `freed`, and A3's `lift` / `restrict`) unchanged.
+   - Every step ends with a `Sweep`: a block that no share reaches is
+     removed and its payload tree freed. That repeats, since a payload's
+     own shares may have been the last of theirs; a payload holds only
+     older shares, so this terminates.
+   - The runtime frees at the last drop, inside the same step, and no
+     read follows a drop within one step, so the two agree at every step
+     boundary.
+   - In A3 the sweep is a configuration step over all threads, since the
+     count is over all of them. The refcount word that a clone and a drop
+     change is marked atomic in `Touch`.
 3. A3: the blocks in `Cfg`, the frame lemma with payload reads,
    `Touch` / `Race` with atomic `rc`, and `A3.claim` again.
 4. Probes h211 h212 h213 h288 h289 h338 to A3.1; CLAIM.md and README.md.

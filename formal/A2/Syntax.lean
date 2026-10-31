@@ -211,10 +211,10 @@ structure Slot where
   own : Bool
   val : Option Val
 
-/-- A3.1: a counted block (`Arc`): how many shares it has, and its
-    payload, a tree of type `ty` that no one writes. -/
+/-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
+    one writes.  How many shares it has is the number of `Val.arc` leaves
+    naming it (ghost): when none is left, the step's sweep frees it. -/
 structure Blk where
-  rc  : Nat
   ty  : Ty
   pay : Val
 
