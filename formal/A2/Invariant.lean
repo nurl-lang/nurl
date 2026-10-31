@@ -28,8 +28,9 @@ inductive WFv : Ty → Val → Prop
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
       WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
-  /-- A3.1: a share; its block, in memory, holds the payload it carries. -/
-  | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → WFv (.arc t) (.arc k p)
+  /-- A3.1: a share; its block, in memory, holds the payload it carries (in
+      the first cut, one that holds no view). -/
+  | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -231,9 +232,10 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
-  /-- A3.1: a share lent: its block holds the payload it carries, of its type. -/
+  /-- A3.1: a share lent: its block holds the payload it carries, of its
+      type (in the first cut, one that holds no view). -/
   | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
-      m.blk k = some ⟨t, p⟩ → ValOK m (.arc t) (.arc k p) P H
+      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → ValOK m (.arc t) (.arc k p) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -347,7 +349,15 @@ def Stmt.spine : Stmt → List Var
   | .catchR _ _ s => s.spine
   | _ => []
 
-/-- Nothing leaks: every live address is in a tree some binding owns. -/
+/-- A3.1: every share an owned tree holds (a slot's, or a block's payload)
+    carries the payload its block holds. It follows from `MInv`
+    (`MInv.sharesHeld`), and lets a borrow that reaches into a payload
+    through a share find that payload's nodes in memory (`SubS.loc`). -/
+def SharesHeld (m : Mem) : Prop :=
+  ∀ T, TreeAt m T → ∀ k p, Sub (.arc k p) T → ∃ u, m.blk k = some ⟨u, p⟩
+
+/-- Nothing leaks: every live address is in a tree some binding owns, or
+    (A3.1) is a block's or its payload's. -/
 def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true →
   (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ (∃ k bl, m.blk k = some bl ∧ i ∈ k :: bl.pay.ids)
 

@@ -617,7 +617,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
         · rw [slot_val_eq hv hw]
           rw [hty] at hok
           cases hok with
-          | arc h => exact .arc h
+          | arc h hw hv => exact .arc h hw hv
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
   names hn := by

@@ -289,6 +289,90 @@ theorem treeAt_unique {m : Mem} (hh : HeapOK m) {t u n1 n2 : Val} (ht : TreeAt m
     · exact absurd (List.mem_cons_of_mem _ hi2')
         (hh.bdisj2 k k' _ _ hkk hk hk' i (List.mem_cons_of_mem _ hi1'))
 
+/-- A share a well-formed tree holds is one at some type. -/
+theorem WFv.arcIn {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {p : Val} (hs : Sub (.arc k p) T) :
+    ∃ u, ArcIn τ T u k p := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | node _ ih =>
+    cases hs with
+    | child he hs' => obtain ⟨u, ha⟩ := ih _ he hs'; exact ⟨u, .child he ha⟩
+  | pair _ _ ihv ihw =>
+    cases hs with
+    | fst hs' => obtain ⟨u, ha⟩ := ihv hs'; exact ⟨u, .fst ha⟩
+    | snd hs' => obtain ⟨u, ha⟩ := ihw hs'; exact ⟨u, .snd ha⟩
+  | inl _ ih => cases hs with | inl hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .inl ha⟩
+  | inr _ ih => cases hs with | inr hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .inr ha⟩
+  | pkg _ ih => cases hs with | pkg hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .pkg ha⟩
+  | arc => cases hs; exact ⟨_, .here⟩
+
+/-- An owned tree holds no handle, even in a payload it reaches through a
+    share. -/
+theorem WFv.not_top_href {τ : Ty} {T : Val} (hw : WFv τ T) {c : Nat} (ht : Top (.href c) T) : False := by
+  induction hw with
+  | int => cases ht
+  | view => cases ht
+  | node _ _ => cases ht
+  | pair _ _ ihv ihw => cases ht with | fst h => exact ihv h | snd h => exact ihw h
+  | inl _ ih => cases ht with | inl h => exact ih h
+  | inr _ ih => cases ht with | inr h => exact ih h
+  | pkg _ ih => cases ht with | pkg h => exact ih h
+  | arc _ _ ih => cases ht with | arc h => exact ih h
+
+/-- A tree of a type that holds no view holds none at its top. -/
+theorem WFv.not_top_view {τ : Ty} {T : Val} (hw : WFv τ T) (hv : τ.holdsView = false) {d o l : Nat}
+    (ht : Top (.view d o l) T) : False := by
+  induction hw with
+  | int => cases ht
+  | view => simp [Ty.holdsView] at hv
+  | node _ _ => cases ht
+  | pair _ _ ihv ihw =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases ht with | fst h => exact ihv hv.1 h | snd h => exact ihw hv.2 h
+  | inl _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases ht with | inl h => exact ih hv.1 h
+  | inr _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases ht with | inr h => exact ih hv.2 h
+  | pkg _ _ => simp [Ty.holdsView] at hv
+  | arc _ _ ih => cases ht with | arc h => exact ih hv h
+
+/-- What an owned tree reaches through its shares lies in it, or in some
+    block's payload. -/
+theorem SubS.loc {m : Mem} (hs : SharesHeld m) {n T : Val} (h : SubS n T) :
+    TreeAt m T → Sub n T ∨ ∃ k u p, m.blk k = some ⟨u, p⟩ ∧ Sub n p := by
+  induction h with
+  | sub h => exact fun _ => Or.inl h
+  | arc hk _ ih =>
+    intro hT
+    obtain ⟨u, hb⟩ := hs _ hT _ _ hk
+    rcases ih (Or.inr ⟨_, u, hb⟩) with h | h
+    · exact Or.inr ⟨_, u, _, hb, h⟩
+    · exact Or.inr h
+
+theorem SubS.tree {m : Mem} (hs : SharesHeld m) {n T : Val} (hT : TreeAt m T) (h : SubS n T) :
+    ∃ T', TreeAt m T' ∧ Sub n T' := by
+  rcases h.loc hs hT with h | ⟨k, u, p, hb, h⟩
+  · exact ⟨T, hT, h⟩
+  · exact ⟨p, Or.inr ⟨k, u, hb⟩, h⟩
+
+/-- The invariant ties every share in memory to its block. -/
+theorem MInv.sharesHeld {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : SharesHeld m := by
+  intro T hT k p hs
+  rcases hT with ⟨x, hx⟩ | ⟨kb, u, hk⟩
+  · have hd := hi.dom x
+    rw [hx] at hd
+    obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hd
+    obtain ⟨sl, hsl, _, hso, hown, _⟩ := hi.slot x E hE
+    rw [hx] at hsl; cases hsl
+    obtain ⟨u, ha⟩ := ((hown hso.symm).2.1 T rfl).arcIn hs
+    exact ⟨u, hi.shares x E _ T hE hx rfl rfl u k p ha⟩
+  · obtain ⟨_, _, hw, hsh⟩ := hi.blocks kb ⟨u, T⟩ hk
+    obtain ⟨u', ha⟩ := hw.arcIn hs
+    exact ⟨u', hsh u' k p ha⟩
+
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by
   obtain ⟨t, ht, hs1, ty1, d1, es1, rfl⟩ := h1

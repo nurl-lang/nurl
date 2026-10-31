@@ -1529,7 +1529,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     intro D P H; simp [reroot, List.flatMap_append]
   induction hv with
   | int => intro _ _ _ _ _; exact .int
-  | arc h => intro _ _ _ _ _; exact .arc h
+  | arc h hw hv => intro _ _ _ _ _; exact .arc h hw hv
   | pair _ _ ihx ihy =>
     intro D hDs hDm hlt hnp
     have hx := ihx hDs hDm hlt hnp; have hy := ihy hDs hDm hlt hnp
