@@ -1325,6 +1325,11 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       · exact viewAt_not_in hi hanch hxF hT (hp.root dep.root (List.mem_map_of_mem hd)) hne ha
           u' c' es' hs'
       · exact hp.sf _ o0 l0 h u c0 es0 hs'
+  -- A3.1: the grown tree's shares are the old tree's and the pushed value's
+  have hshN : SharesOK m' (.vec t') (.node t' c d' (es ++ [v])) := by
+    have h0 := hi.shares x Ex _ _ hx hT rfl rfl
+    rw [hty] at h0
+    exact h0.node_push hp.sh rfl
   refine hi.change hanch hx hxF (fun _ _ _ _ ⟨r, k⟩ _ hb hk => by cases k <;> simp_all [Kind.bound, Eff.kills])
     (by rw [hm]; simp) hst (hi.heap.grow hT hp.nd hp.al hp.dis hre hsfn) rfl ?_ ?_ hds (fun h => by cases h) (by simp)
     (fun _ Ex' hx' hl0 hh0 hhv => by
@@ -1336,7 +1341,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     have hpre : ∀ e ∈ es, e ∈ es ++ [v] := fun e he => List.mem_append_left _ he
     have hkv : k ≠ .view := by intro h; subst h; simp [Eff.kills] at hk
     exact ⟨hev.grow_vkeep hpre hkv, hev.grow_hkeep hpre (fun h => by subst h; simpa [Eff.kills] using hk)
-      hkv⟩
+      hkv hshN⟩
   · refine ⟨⟨true, some (.node t' c d' (es ++ [v]))⟩, by simp [m'], by rw [hty]; exact hi.tyok hx ▸ (by
         rw [hty]), ⟨by simp [hos], fun _ => ⟨by rw [hty]; rfl, fun U hU => by cases hU; rw [hty]; exact hwT',
         fun _ => ⟨_, rfl, ?_⟩⟩, fun h => by simp [hos] at h⟩, rfl, fun hl' hn r hr => ?_, rfl,
@@ -1345,7 +1350,8 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         -- (a binding `letd` made gains no view: none is pushed into)
         fun hd => absurd (hdbv hd) (by
           have h := hi.wf.view x Ex hx hd
-          rw [hty] at h; simp only [Ty.holdsView] at h; rw [h]; simp)⟩
+          rw [hty] at h; simp only [Ty.holdsView] at h; rw [h]; simp),
+        fun _ T hT => by cases hT; rw [hty]; exact hshN⟩
     rotate_right
     · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, List.mem_append] at hdd
       by_cases hrx : dep.root = x
@@ -1523,6 +1529,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     intro D P H; simp [reroot, List.flatMap_append]
   induction hv with
   | int => intro _ _ _ _ _; exact .int
+  | arc h => intro _ _ _ _ _; exact .arc h
   | pair _ _ ihx ihy =>
     intro D hDs hDm hlt hnp
     have hx := ihx hDs hDm hlt hnp; have hy := ihy hDs hDm hlt hnp
@@ -1558,7 +1565,7 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
     exact .view ⟨dep', hd', ha'⟩
   | @href t c P H h =>
     intro D hDs hDm hlt hnp
-    obtain ⟨dep, hd, n0, d, es, hr, hl, hw, hvs, hns⟩ := h
+    obtain ⟨dep, hd, n0, d, es, hr, hl, hw, hvs, hns, hsh⟩ := h
     have hvs' := reroot_views hh hp hok hDs hDm hlt hvs
     have hns' := hns.reroot D hnp
     by_cases hrp : dep.root = p
@@ -1567,9 +1574,9 @@ theorem reroot_valOK_gen (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩
       obtain ⟨d', hd', n1, hr1, hl1⟩ := rootb_lands hh hp hok hr
       have hdD := hDm d' hd' (lands_notName hl1)
       exact .href ⟨⟨d'.root, comp d'.kind k⟩, mem_reroot_of_eq hd hdD, n1, d, es,
-        rootKeep_rmbor hp (hlt d' hdD) n1 hr1, lands_comp' hl1 hl, hw, hvs', hns'⟩
+        rootKeep_rmbor hp (hlt d' hdD) n1 hr1, lands_comp' hl1 hl, hw, hvs', hns', hsh.of_blk rfl⟩
     · exact .href ⟨dep, mem_reroot_of_ne hd hrp, n0, d, es, rootKeep_rmbor hp hrp n0 hr, hl, hw, hvs',
-        hns'⟩
+        hns', hsh.of_blk rfl⟩
 
 theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     (hok : ValOK m Ep.ty w Ep.path Ep.held) (hlt : ∀ d' ∈ Ep.path ++ Ep.held, d'.root ≠ p)
@@ -1781,5 +1788,14 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     intro hd hos' T hT
     obtain ⟨hdt, hvs⟩ := hi.armed v E sl hE hsl0 hd hos' T hT
     exact ⟨hdt, reroot_views hi.heap hw hok (List.Subset.refl _) (fun d hd _ => hd) hlt hvs⟩
+  · -- A3.1: the slots that own are as they were, and so are the blocks
+    intro v E' sl T hv' hsl hown hT
+    have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
+    obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
+    have hsl0 : m.st v = some sl := by simpa [Mem.remove_st, upd_ne _ _ hvp] using hsl
+    exact (hi.shares v E sl T hE hsl0 hown hT).of_blk rfl
+  · intro k bl hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, h3, h4.of_blk rfl⟩
 
 end A2
