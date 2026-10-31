@@ -647,8 +647,11 @@ never borrows what it is given.
 
 ### 2.11 Closures hold their captures
 
-A closure holds every value it captured for as long as it can run.
-Invoking a closure reads all of its captures, so releasing a capture
+A closure holds every value it captured for as long as it can run. A
+closure that gives one capture a view of another (`= w @ V { (
+string_data b ) }` in its body) makes that capture hold the view where
+the closure runs, as a callee storing into an `inout` argument does
+(§2.10). Invoking a closure reads all of its captures, so releasing a capture
 through its original name and then invoking the closure is a use after
 move:
 
@@ -958,13 +961,13 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Two holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name) and #259 (a view gained through an `inout`
-callee or a closure's assignment of a capture is not tracked). Agora #247
-(a closure consuming one capture released another), #252 (a holder moved
-on only one branch) and #254 (a holder given a view of a younger binding,
-then a panic) are closed in 0.83.0.
-[`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
+**One hole is known open**: agora #242 (a join or value block bound by
+`:` and handed on by name). Agora #247 (a closure consuming one capture
+released another), #252 (a holder moved on only one branch), #254 (a
+holder given a view of a younger binding, then a panic) and #259 (a view
+gained through an `inout` callee or a closure's assignment of a capture)
+are closed in 0.83.0.
+[`LIMITATIONS.md`](LIMITATIONS.md) describes it and how to stay clear of it
 until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first
 (reallocated, moved to a `sink`, or released at a scope end, which ran

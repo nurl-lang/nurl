@@ -15296,7 +15296,9 @@ unsafe @ gen_call i lex i syms i cg → s {
             : i __sx_c0 ( bck_walk_class ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at )
             ? != __sx_c0 1 { = __sx_naddr + __sx_naddr 1 } {}
             ? & | == __sx_c0 0 == __sx_c0 3 | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT { = __sx_nown + __sx_nown 1 } {}
-            ? == arg_idx 0 { = __sx_arg0 ? | == __sx_c0 0 == __sx_c0 3 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) `` `` } {}
+            // (…and so is an `inout` struct of views: the callee may store
+            // into its fields, agora #259.)
+            ? == arg_idx 0 { = __sx_arg0 ? | | == __sx_c0 0 == __sx_c0 3 & is_inout_arg == __sx_c0 2 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_str_cat ( nurl_sym_get syms `__last_member_root__` ) `` ) `` `` } {}
             : b __sx_cand | | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare ) & ! is_inout_arg != 0 ( nurl_str_len callee_inout )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
@@ -15306,7 +15308,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : i __sx_dt ( nurl_str_find arg_sx `.` )
                 ? > __sx_dt 0 { = __sx_arg0 ( nurl_str_slice arg_sx 0 __sx_dt ) } {}
             } {}
-            ? & & > arg_idx 0 is_inout_arg & == 0 ( nurl_str_len __sx_iown ) | == __sx_c0 0 == __sx_c0 3 {
+            ? & & > arg_idx 0 is_inout_arg & == 0 ( nurl_str_len __sx_iown ) | | == __sx_c0 0 == __sx_c0 3 == __sx_c0 2 {
                 ? ( is_ident_tok bck_arg_tt ) { = __sx_iown ( nurl_str_cat bck_arg_val `` ) } {
                     : i __sx_dt2 ( nurl_str_find arg_sx `.` )
                     ? & == bck_arg_tt TT_DOT > __sx_dt2 0 { = __sx_iown ( nurl_str_slice arg_sx 0 __sx_dt2 ) } {}
@@ -26222,6 +26224,12 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // Inside a closure body: `name` (a binding or a field path) goes to
 // `callee` as argument `aix` — an effect of running the closure when it is
 // one of its captures.
+// Can source expression `sx` ride in a closure effect word (`name:callee:aix`,
+// space-separated)? Neither a space nor a `:` in it.
+@ __clo_sx_word s sx → b {
+    ^ & & != 0 ( nurl_str_len sx ) < ( nurl_str_find sx ` ` ) 0 < ( nurl_str_find sx `:` ) 0
+}
+
 unsafe @ __clo_effect_note s name s callee i aix → v {
     ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
@@ -26270,7 +26278,11 @@ unsafe @ __clo_assign_note i syms s path s ty → v {
         : i c2 ( nurl_str_find tail `:` )
         : s cal ( nurl_str_slice tail 0 c2 )
         : i aix ( nurl_str_to_int ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 ) )
-        ( bck_stash_pending_kind nm line cal aix `` `pendeff` )
+        // (`@vp=SX`: the capture is given a value viewing what SX reads —
+        // kept in it, as `=.` keeps a field's value: a `vpass` row.)
+        ? != 0 ( nurl_str_starts cal `@vp=` ) { ( bck_stash_vpass nm line `=.` 1 ( nurl_str_slice cal 4 - ( nurl_str_len cal ) 4 ) ) } {
+            ( bck_stash_pending_kind nm line cal aix `` `pendeff` )
+        }
         // (Run inside another closure's body: its effect too.)
         ( __clo_effect_note nm cal aix )
     }
@@ -35384,6 +35396,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         = g_bck_rhs_sx ? __asn_fresh ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx F ) } {}
+        // Inside a closure body: a capture given a value that views another
+        // capture (`= w @ V { ( string_data b ) }`) holds that view where the
+        // closure runs — an effect of running it, as a callee storing into
+        // an `inout` argument would be (bck_closure_effects_run, agora #259).
+        ? & & & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 ( __clo_sx_word g_bck_rhs_sx ) ( __sx_names_capture syms g_bck_rhs_sx ) { ( __clo_effect_note name ( nurl_str_cat `@vp=` g_bck_rhs_sx ) 0 ) } {}
         // (A closure that does not own its env — `= g . s f` — borrows from
         // what it read, as the `:` spelling does, h283.)
         : i __acbc0 ( bck_walk_class vt )
@@ -50686,6 +50703,12 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__origin_escape__` ( nurl_str_int ( origin_summary g_fn_escapes fname ) ) )
     ( __own_sink_str_params syms cg fname sink_acc )
     : ~ s last ( gen_block_ret lex syms cg )
+    // Raw pointer parameters a literal took in the body's last statement
+    // (`= w @ V { v }`, w an `inout` parameter) that no `:` binding claimed:
+    // kept, as the next statement would have decided (__gen_stmt_level) —
+    // there is none, and the caller never learned that its argument now
+    // views what it passed (agora #259).
+    ? & != 0 g_rawlit_pending == 0 g_did_ret { ( mem_rawlit_unclaimed syms cg ) } {}
     // Type of the value the body actually falls off with. A body whose
     // tail is a `die` block (or that returned on every path) produces
     // NO fall-off value — its type is void — and must not be judged by

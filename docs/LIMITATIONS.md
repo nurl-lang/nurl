@@ -10,8 +10,8 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Two soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
-Each is a heap-use-after-free in safe code, with a fix in progress:
+**One soundness hole is known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+It is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
   by name.** `: String t ? c a b` followed by `^ t`, with `a` and `b`
@@ -19,13 +19,6 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   binding assigned to an `inout` parameter, or a block whose tail is a
   fresh call, also faults. Until the fix ships, hand the join on
   directly (`^ ? c a b`) instead of through a binding.
-- **agora #259: a view gained through an `inout` callee or through a
-  closure that assigns one of its captures is not tracked.** `( point w
-  ( string_data b ) )` with `@ point inout V w s v → v { = w @ V { v } }`,
-  or a closure `\ → v { = w @ V { ( string_data b ) } }` called while `b`
-  lives: once `b` ends, `w` still points into it. Until the fix ships,
-  give a value a view by assigning it in the function that owns the view's
-  source.
 
 Every other safe program found accepted and faulting is closed, and held
 by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
