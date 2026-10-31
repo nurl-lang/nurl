@@ -190,12 +190,12 @@ is_skipped() {
         # Its black hole is Linux dropping SYNs to a full accept queue;
         # FreeBSD answers the same connect another way.
         net_connect_fiber_timeout) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
-        # Its bound holds where a busy worker polls I/O itself (Linux's
-        # netpoller). Elsewhere a dedicated reactor thread polls, and the
-        # delay is that thread's wait for a time slice: 4070 dispatches
-        # on the FreeBSD CI VM, nothing to do with the run queue (agora
-        # #137).
-        sched_accept_admission) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
+        # Its bound holds where a busy worker polls I/O itself: the
+        # netpoller (Linux, macOS, FreeBSD, Windows). Under the poll(2)
+        # reactor thread the other hosts run, the delay is that thread's
+        # wait for a time slice — 4070 dispatches on the FreeBSD CI VM
+        # before the netpoller ran there — not the run queue (agora #137).
+        sched_accept_admission) case "$(uname -s)" in Linux|Darwin|FreeBSD) ;; *) echo skip; return ;; esac ;;
         # Hundreds of sockets open at once: past macOS's default limit of
         # 256 descriptors per process.
         reactor_many_waiters|udp_bind_ephemeral_distinct) [[ "$(uname -s)" != "Darwin" ]] || { echo skip; return; } ;;
