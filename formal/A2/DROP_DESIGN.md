@@ -188,12 +188,17 @@ for its moved and changed arguments, and every scope's end (`exitScope`,
 beside its `NoPin`, and `exitRoot`). It asks every destructor entry, live
 or dead.
 
-**`SlotOK`**: a destructor binding's slot, whenever it owns a value, has
-that value's views valid (`ViewsOK` over `held`), live entry or not.
-`DtorSafe` keeps it across every kill, a move clears `dtor` with the
-value, and the join keeps `held`. So at `scopeDEnd` the destructor reads
-valid views however the binding died, and a dead destructor entry whose
-slot owns is revived for the call (`MInv.revive`, now with views).
+**The frame's invariant, not `SlotOK`'s.** For every `scopeD x` frame
+in the running statement, whenever `x`'s slot owns a value, `x`'s entry
+has `dtor = true` and that value's views are valid (`ViewsOK` over
+`held`), live entry or not. It sits on the frames rather than in `SlotOK`
+for every `dtor` entry. The join may raise `dtor` on a binding killed on
+another path, so a spurious flag only adds protection, and only a frame's
+binding runs a destructor. `DtorSafe` keeps the invariant across every
+kill, a move empties the slot (`scopeDMoved` then runs nothing), and the
+join keeps `held`. So at `scopeDEnd` the destructor reads valid views
+however the binding died, and a dead destructor entry whose slot owns is
+revived for the call (`MInv.revive`, now with views).
 
 **The panic path.** An unwind ends the scopes inside the frame early, so a
 destructor binding must not view a binding younger than itself at any
