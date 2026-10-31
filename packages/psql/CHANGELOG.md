@@ -11,6 +11,7 @@ Requires NURL 0.78.0.
 - `tests/pipeline_bench.nu`: queries per second on one connection for 1..N fibers (`PSQL_BENCH_WORKERS` runtime workers).
 - `pg_connect_url url` — the same connection from a `postgres://[user[:password]@]host[:port][/database][?sslmode=…]` URI (`postgresql://` too), the form `DATABASE_URL` and hosting dashboards hand out. User, password and database are percent-decoded; the port defaults to 5432, the user to `postgres`, the database to the user's name; sslmode is `disable`, `prefer` (the default), `require` or `verify-full`. Another scheme, no host, or any other query parameter is the new `PgBadUrl`: a setting the caller wrote is never ignored.
 - `pg_result_col_fmt r col` — the format a column's cells came in (0 text, 1 binary).
+- `pg_query_many conn sql sets` — the same statement once per parameter set, every run queued in one hold and so in one write: N runs cost one round trip, not N (what a request that needs N rows by key wants). The statement cache and its stale-statement retry are `pg_query_params'`; each run keeps its own Sync, so a failed run ends only itself and the call fails with the first one that did. Measured on the bench's `/queries?queries=20` (two workers, 64 connections): 315 → 218 µs of server CPU per request (hyper + tokio-postgres `try_join_all`: 215).
 
 ### Changed
 

@@ -175,6 +175,8 @@ API:
 ( pg_connect_url url )                    → !PgConn PgErr     postgres://user:pw@host:port/db?sslmode=…
 ( pg_query conn sql )                     → !PgResult PgErr   simple protocol, scripts
 ( pg_query_params conn sql params )       → !PgResult PgErr   ( Vec PgVal ) params
+( pg_query_many conn sql sets )           → !( Vec PgResult ) PgErr   ( Vec ( Vec PgVal ) ) sets:
+                                            one run per set, all pipelined — one round trip
     PgVal: PgNull | PgInt i | PgFloat f | PgBool b | PgText String
          | PgBytes ( Vec u ) | PgTimestamp i (µs since 1970 UTC) | PgDate i (days since 1970)
 ( pg_result_nrows r ) ( pg_result_ncols r ) → i        (also the fields . r nrows / . r ncols)

@@ -21,7 +21,8 @@
 // the TechEmpower database tests plus HttpArena's async-db profile:
 //
 //   /db                one random World row as JSON
-//   /queries?queries=N N random World rows (N absent or bad → 1, clamped to 1..500)
+//   /queries?queries=N N random World rows (N absent or bad → 1, clamped to 1..500),
+//                      one query each, all N pipelined in one round trip
 //   /fortunes          the Fortune table plus one row added at request time,
 //                      sorted by message, as an escaped HTML table
 //   /updates?queries=N N random World rows, each given a new random number
@@ -123,18 +124,59 @@ $ `packages/psql/src/pg.nu`
     }
 }
 
-@ h_queries PgConn c Rng g i n → HttpResponse {
-    : ( Vec Json ) rows ( vec_with_cap [Json] n )
+// `n` random World ids, and their lookups' parameters.
+@ world_ids Rng g i n → ( Vec i ) {
+    : ( Vec i ) ids ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [i] ids ( world_id g ) ) = k + k 1 }
+    ^ ids
+}
+
+@ world_params ( Vec i ) ids → ( Vec ( Vec PgVal ) ) {
+    : i n ( vec_len [i] ids )
+    : ( Vec ( Vec PgVal ) ) sets ( vec_with_cap [( Vec PgVal )] n )
     : ~ i k 0
     ~ < k n {
-        : i id ( world_id g )
-        ?? ( world_get c id ) {
-            T rn → { ( vec_push [Json] rows ( world_json id rn ) ) }
-            F e → { ^ ( db_error e ) }
-        }
+        : ( Vec PgVal ) ps ( vec_with_cap [PgVal] 1 )
+        ( vec_push [PgVal] ps @ PgVal { PgInt ( vec_at [i] ids k ) } )
+        ( vec_push [( Vec PgVal )] sets ps )
         = k + k 1
     }
-    ^ ( response_json 200 ( json_arr rows ) )
+    ^ sets
+}
+
+// The rows of `ids`, looked up one query each — all of them pipelined in
+// one round trip (pg_query_many) — their randomNumbers in order.
+@ worlds_get PgConn c ( Vec i ) ids → !( Vec i ) PgErr {
+    ?? ( pg_query_many c `SELECT id, randomnumber FROM world WHERE id = $1` ( world_params ids ) ) {
+        T rs → {
+            : i n ( vec_len [PgResult] rs )
+            : ( Vec i ) rns ( vec_with_cap [i] n )
+            : ~ i k 0
+            ~ < k n {
+                ( vec_push [i] rns ?? ( pg_row_i ( vec_at [PgResult] rs k ) 0 1 ) { T v → v F → 0 } )
+                = k + k 1
+            }
+            ^ @ !( Vec i ) PgErr { T rns }
+        }
+        F e → { ^ @ !( Vec i ) PgErr { F e } }
+    }
+}
+
+@ h_queries PgConn c Rng g i n → HttpResponse {
+    : ( Vec i ) ids ( world_ids g n )
+    ?? ( worlds_get c ids ) {
+        T rns → {
+            : ( Vec Json ) rows ( vec_with_cap [Json] n )
+            : ~ i k 0
+            ~ < k n {
+                ( vec_push [Json] rows ( world_json ( vec_at [i] ids k ) ( vec_at [i] rns k ) ) )
+                = k + k 1
+            }
+            ^ ( response_json 200 ( json_arr rows ) )
+        }
+        F e → { ^ ( db_error e ) }
+    }
 }
 
 // `{a,b,c}`: a Postgres array literal, sent as text and cast in the SQL.
@@ -153,25 +195,14 @@ $ `packages/psql/src/pg.nu`
 }
 
 @ h_updates PgConn c Rng g i n → HttpResponse {
-    : ( Vec i ) ids ( vec_with_cap [i] n )
-    : ( Vec i ) rns ( vec_with_cap [i] n )
+    : ( Vec i ) ids ( world_ids g n )
+    ?? ( worlds_get c ids ) { T _ → {} F e → { ^ ( db_error e ) } }
+    : ( Vec i ) rns ( world_ids g n )
     : ~ i k 0
-    ~ < k n {
-        : i id ( world_id g )
-        ?? ( world_get c id ) {
-            T _ → {
-                ( vec_push [i] ids id )
-                ( vec_push [i] rns ( world_id g ) )
-            }
-            F e → { ^ ( db_error e ) }
-        }
-        = k + k 1
-    }
     // One statement for the lot, its rows in id order: two requests
     // updating overlapping rows then lock them in the same order and
     // cannot deadlock each other.
     : ( Vec i ) order ( vec_with_cap [i] n )
-    = k 0
     ~ < k n { ( vec_push [i] order k ) = k + k 1 }
     ( sort_by [i] order \ i a i b → i { ^ - ( vec_at [i] ids a ) ( vec_at [i] ids b ) } )
     : ( Vec i ) sids ( vec_with_cap [i] n )

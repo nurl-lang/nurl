@@ -14,6 +14,9 @@
 //                                                parameters, binary cells where exact,
 //                                                the statement prepared once per
 //                                                connection (the statement cache)
+//   ( pg_query_many conn sql sets )           → !( Vec PgResult ) PgErr  the same
+//                                                statement once per parameter set,
+//                                                all pipelined: one round trip
 //   ( pg_pool_new host port user password database sslmode cfg ) → ( Pool PgConn PgErr )
 //   ( pg_pool_get pool )                      → !( Pooled PgConn PgErr ) PgErr
 //   ( pg_close conn )                         → v   early release (optional)
@@ -1169,6 +1172,137 @@ $ `stdlib/std/arc.nu`
         }
     }
     ^ @ !PgResult PgErr { F # PgErr PgProtocol }
+}
+
+// ── many runs of one statement, pipelined ─────────────────────────
+// `sql` once for each parameter set in `sets`, every run queued in one hold
+// and so in one write: N runs cost one round trip for the lot, not N —
+// what a request that needs N rows by key wants (TechEmpower's /queries).
+// The statement cache is pg_query_params'. Each run is its own request
+// with its own Sync, so a failed run ends only itself: the results come
+// back in the order of `sets`, and the call fails with the first run that
+// did (the runs after it ran all the same). No sets, no results.
+@ pg_query_many PgConn h s sql ( Vec ( Vec PgVal ) ) sets → !( Vec PgResult ) PgErr {
+    : i n ( vec_len [( Vec PgVal )] sets )
+    : ( Vec PgResult ) out ( vec_with_cap [PgResult] n )
+    ? == n 0 { ^ @ !( Vec PgResult ) PgErr { T out } } {}
+    : i hsh ( __pg_hash sql )
+    : ~ i tries 0
+    ~ T {
+        // One channel for the lot: the answers come back in order.
+        : ( Channel PgReply ) ch ( chan_new [PgReply] )
+        : ~ PgTx t ( locked_take [PgTx] . h tx )
+        ? . t broken {
+            ( locked_restore [PgTx] . h tx t )
+            ^ @ !( Vec PgResult ) PgErr { F # PgErr PgConnFail }
+        } {}
+        = . t clock + . t clock 1
+        : i at ? > . t stmt_cap 0 ( __pg_stmt_find t sql hsh ) -1
+        ? >= at 0 {
+            : ~ PgStmt st ?? ( vec_remove [PgStmt] . t stmts at ) {
+                T x → x
+                F → {
+                    ( locked_restore [PgTx] . h tx t )
+                    ^ @ !( Vec PgResult ) PgErr { F # PgErr PgProtocol }
+                }
+            }
+            = . st used . t clock
+            : i first . t next_id
+            : ~ i k 0
+            ~ < k n {
+                ( pgw_bind . t buf `` ( string_data . st name ) ( vec_at [( Vec PgVal )] sets k ) . st param_oids . st rfmts )
+                ( pgw_execute . t buf `` 0 )
+                ( pgw_sync . t buf )
+                : i _id ( __pg_slot t ch . st cols )
+                = k + k 1
+            }
+            : i sseq . st seq
+            ( vec_push [PgStmt] . t stmts st )
+            : b drive ( __pg_claim t )
+            ( locked_restore [PgTx] . h tx t )
+            ?? ( __pg_wait_all h ch first n drive == tries 0 out ) {
+                T retry → {
+                    ? ! retry { ^ @ !( Vec PgResult ) PgErr { T out } } {}
+                    // A stale statement failed every run before any did
+                    // anything: close it, prepare afresh, run them again.
+                    = tries 1
+                    ( __pg_forget h ( __pg_stmt_name sseq ) )
+                }
+                F e → { ^ @ !( Vec PgResult ) PgErr { F e } }
+            }
+        } {
+            : i seq . t stmt_seq
+            = . t stmt_seq + seq 1
+            ( locked_restore [PgTx] . h tx t )
+            : PgStmt st ?? ( __pg_prepare h sql seq ) {
+                T x → x
+                F e → { ^ @ !( Vec PgResult ) PgErr { F e } }
+            }
+            : ~ PgTx t2 ( locked_take [PgTx] . h tx )
+            ? . t2 broken {
+                ( locked_restore [PgTx] . h tx t2 )
+                ^ @ !( Vec PgResult ) PgErr { F # PgErr PgConnFail }
+            } {}
+            // Into the cache, as pg_query_params does — or, with no room or
+            // a twin prepared meanwhile, closed by the last run, before its
+            // Sync.
+            : b keep & > . t2 stmt_cap 0 < ( __pg_stmt_find t2 sql hsh ) 0
+            : i first . t2 next_id
+            : ~ i k 0
+            ~ < k n {
+                ( pgw_bind . t2 buf `` ( string_data . st name ) ( vec_at [( Vec PgVal )] sets k ) . st param_oids . st rfmts )
+                ( pgw_execute . t2 buf `` 0 )
+                ? & ! keep == k - n 1 {
+                    ( pgw_close . t2 buf 83 ( string_data . st name ) )
+                    ? <= . t2 stmt_cap 0 { ( __pg_stmt_trim t2 1 ) } {}
+                } {}
+                ( pgw_sync . t2 buf )
+                : i _id ( __pg_slot t2 ch . st cols )
+                = k + k 1
+            }
+            ? keep {
+                ( __pg_stmt_trim t2 . t2 stmt_cap )
+                ( vec_push [PgStmt] . t2 stmts st )
+            } {}
+            : b drive ( __pg_claim t2 )
+            ( locked_restore [PgTx] . h tx t2 )
+            ?? ( __pg_wait_all h ch first n drive F out ) {
+                T _ → { ^ @ !( Vec PgResult ) PgErr { T out } }
+                F e → { ^ @ !( Vec PgResult ) PgErr { F e } }
+            }
+        }
+    }
+    ^ @ !( Vec PgResult ) PgErr { F # PgErr PgProtocol }
+}
+
+// The answers to requests first … first + n - 1, queued on `ch` (`drive` T
+// when the caller took the socket), every one waited for — a request
+// nobody waits for could be handed the socket and strand it. Successes go
+// into `out` in order until a run fails; then the first failure is the
+// answer (F, its error kept as the connection's last). T T when the first
+// run failed on a stale statement outside a transaction and `may_retry`:
+// every run then failed the same way, before doing anything.
+@ __pg_wait_all PgConn h ( Channel PgReply ) ch i first i n b drive b may_retry ( Vec PgResult ) out → !b PgErr {
+    : ~ b failed F
+    : ~ PgErr ferr # PgErr PgConnFail
+    : ~ b stale F
+    : ~ i k 0
+    ~ < k n {
+        : PgCollect col ( __pg_wait h ch + first k & drive == k 0 )
+        ? == . col rc 0 {
+            ? ! failed { ( vec_push [PgResult] out . col res ) } {}
+        } {
+            ? & & & may_retry == k 0 == . col rc 3 & == . col txn 73 ( __pg_stale_err . col err ) { = stale T } {}
+            ? ! failed {
+                = failed T
+                = ferr ( __pg_fail h col )
+            } {}
+        }
+        = k + k 1
+    }
+    ? stale { ^ @ !b PgErr { T T } } {}
+    ? failed { ^ @ !b PgErr { F ferr } } {}
+    ^ @ !b PgErr { T F }
 }
 
 // ── connection pool ───────────────────────────────────────────────

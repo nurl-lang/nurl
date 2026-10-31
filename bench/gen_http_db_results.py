@@ -22,7 +22,7 @@ DAGGER = "‡"  # a closed-loop-starved latency cell
 WHAT = {
     "/json": "a `{\"message\":\"Hello, World!\"}` object serialised per request — no database",
     "/db": "one random `world` row by primary key, as JSON",
-    "/queries": "N random `world` rows, one query each, as a JSON array",
+    "/queries": "N random `world` rows, one query each — all N sent together — as a JSON array",
     "/fortunes": "every `fortune` row plus one added at request time, sorted by message, as an escaped HTML table",
     "/updates": "N random `world` rows read one query each, each given a new random number, written back by ONE `UPDATE … FROM unnest(…)`, as JSON",
     "/async-db": "up to `limit` `items` rows with `price BETWEEN min AND max` (no index: a scan), as `{\"items\":[…],\"count\":n}` with a nested `rating` and a JSONB `tags` array",
@@ -95,7 +95,9 @@ def main():
         "`bench/http_server.nu` (the `packages/http` HttpApp facade in "
         "`http_app_async` mode, the database through `packages/psql`: one "
         "connection that every fiber's queries are pipelined on, statements "
-        "prepared once) and by the Rust peer `bench/rust_http_server` "
+        "prepared once, and the N queries of one `/queries` or `/updates` "
+        "request sent together with `pg_query_many`) and by the Rust peer "
+        "`bench/rust_http_server` "
         "(hyper on tokio's multi-thread runtime, the database through "
         "`tokio-postgres`: one client every task's queries are pipelined on, "
         "statements prepared once, and the N queries of one `/queries` or "
