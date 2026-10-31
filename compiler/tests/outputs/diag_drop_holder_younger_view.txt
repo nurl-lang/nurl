@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_drop_holder_younger_view.nu:19:9: error: 'w' is given a view of 'b', which was declared after it, and 'w''s type has a destructor (% Drop) that may read the view. Values are dropped newest first — where their scopes end, and by a panic's unwind — so 'b' would be freed before 'w''s destructor reads it. Give 'w' views only of bindings declared before it, or have it hold a copy that owns its data (string_from, slice_to_vec).
+        = w @ W { ( string_data b ) }
+        ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
