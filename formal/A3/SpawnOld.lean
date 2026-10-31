@@ -125,6 +125,26 @@ theorem Redex.pinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx
   | catchR _ ih => exact ih hp'
   | scopeD _ ih => exact ih hp'
 
+theorem Redex.dtorPinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx} {y y' : Stmt}
+    (hy : y.spine = y'.spine) (hp : DtorPinOK Γ y) (hp' : DtorPinOK Γ (K y')) : DtorPinOK Γ (K y) := by
+  induction h with
+  | here => exact hp
+  | seq _ ih => exact ih hp'
+  | scope h ih =>
+    obtain ⟨h1, h2⟩ := hp'
+    exact ⟨fun E hE hd hos hn d hdd hnm => by
+      rw [Redex.spine_eq h hy]; exact h1 E hE hd hos hn d hdd hnm, ih h2⟩
+  | rbind h ih =>
+    obtain ⟨h1, h2⟩ := hp'
+    exact ⟨fun E hE hd hos hn d hdd hnm => by
+      rw [Redex.spine_eq h hy]; exact h1 E hE hd hos hn d hdd hnm, ih h2⟩
+  | frozen _ ih => exact ih hp'
+  | catchR _ ih => exact ih hp'
+  | scopeD h ih =>
+    obtain ⟨h1, h2⟩ := hp'
+    exact ⟨fun E hE hd hos hn d hdd hnm => by
+      rw [Redex.spine_eq h hy]; exact h1 E hE hd hos hn d hdd hnm, ih h2⟩
+
 theorem Redex.codesOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog} {y y' : Stmt}
     (hy : y.codesOK P) (hy' : (K y').codesOK P) : (K y).codesOK P := by
   induction h with
@@ -350,9 +370,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       have hx1 : A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false } x = none := by
         simp [A2.setE, upd_ne _ _ hax.symm, A2.kill, hx]
       have hwf1 : CtxWF (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) :=
-        CtxWF.setE (hwf.kill .replace false a)
-          ⟨killE .replace false a (argE Γ0 a), by simp [A2.kill, hca], fun _ => by simp [hmo, Mode.isRoot]⟩
-          (fun hl' => by simp at hl')
+        hwf.moveOut hca .replace false
       have ht1 : StmtT P (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) F
           (dropSeq x as L) Δ := by
         refine ih as (i + 1) _ (fun q hq => hsk q (List.mem_cons_of_mem _ hq)) (by simpa using hlen)
@@ -370,7 +388,8 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
           (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) := by
         have h := StmtT.letv (P := P) (s := .skip) rfl hx hxF
           (RhsT.moveOwn hca hl hmo haF hpa (hds0 a List.mem_cons_self))
-          StmtT.skip (noPin_of_rbFrom (hrb.trans (rbFrom_setE _ (by simp))) hnx)
+          StmtT.skip ⟨noPin_of_rbFrom (hrb.trans (rbFrom_setE _ (by simp))) hnx,
+            (DtorSafe.of_fresh hwf1 hx1 _ _).setE_off rfl, (DbindSafe.of_fresh hwf1 hx1).setE_off rfl⟩
         rwa [exitScope_setE_fresh hwf1 hx1] at h
       exact StmtT.seq (dropSeq_src hL as) hlet ht1
 
@@ -474,7 +493,8 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
     have hEW : EntryWeaker intE (callRes Γ fn args) := by
       refine ⟨by simp [callRes, intE, hres], by simp [callRes, intE, resMode, hro], fun hfx => ?_,
         fun _ => ⟨rfl, fun _ => List.nil_subset _, List.nil_subset _⟩,
-      by intro h; simp_all⟩
+        fun h => by simp [intE] at h, by simp [callRes, intE], fun h => by simp [callRes] at h,
+        fun h => by simp [intE] at h⟩
       exfalso; simp [Entry.fixed, intE] at hfx
     have hW : Weaker (A2.setE (callPostAux Γ fn args fn.params args 0 Γ) x intE)
         (A2.setE (callPost Γ fn args) x (callRes Γ fn args)) :=
@@ -681,7 +701,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   have ht' := hR.plug hDsp (spawn_hole hP hS hsp hf hmv.nodup) Γ F Δ ht hi
   have hi' : Inv m Γ F (K (dropSeq x args (.letv x (.expr (.lit 0)) k))) := by
     refine hi.respine hsp' (hR.vars_sub fun v hv => ?_) (hR.catchOK hDsp ?_ hi.catchOK)
-      (hR.pinOK hDsp ?_ hi.pinIn)
+      (hR.pinOK hDsp ?_ hi.pinIn) (hR.dtorPinOK hDsp ?_ hi.dtorIn)
     · have hv' : v = x ∨ v ∈ args ∨ v ∈ k.vars := by
         rcases dropSeq_vars args v hv with h | h | h
         · exact .inl h
@@ -690,6 +710,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
           exact h.imp_right .inr
       simp only [Stmt.vars, List.mem_cons, List.mem_append]
       exact or_assoc.mpr hv'
+    · cases args <;> exact trivial
     · cases args <;> exact trivial
     · cases args <;> exact trivial
   have hsc' : (K (dropSeq x args (.letv x (.expr (.lit 0)) k))).codesOK P :=

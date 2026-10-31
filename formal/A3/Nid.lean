@@ -52,7 +52,7 @@ theorem inv_of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m 
     nvF := fun v hv => by rw [hnv]; exact hi.nvF v hv
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
     catchOK := CatchOK.of_st hst (by rw [hnv]; exact Nat.le_refl _) hi.catchOK
-    cover := hc, pinOut := hi.pinOut, pinIn := hi.pinIn }
+    cover := hc, pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut, dtorIn := hi.dtorIn }
 
 /-- **Another thread allocated**: a later `nid` keeps every per-thread fact. -/
 theorem inv_nid_le {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {n : Nat}

@@ -68,13 +68,26 @@ theorem GhostRel.pinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : PinOK 
   | frozen _ _ ih => exact ih hp
   | catchR _ _ _ _ _ _ ih => exact ih hp
 
+theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : DtorPinOK Γ s) :
+    DtorPinOK Γ s' := by
+  have hin : ∀ {x : Var} {k k' : Stmt}, GhostRel k k' → DtorIn Γ x k → DtorIn Γ x k' :=
+    fun hg hx E hE hd hos hn d hdd hnm => by rw [hg.spine]; exact hx E hE hd hos hn d hdd hnm
+  induction h with
+  | refl => exact hp
+  | seq _ _ ih => exact ih hp
+  | scope _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | scopeD _ _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | rbind _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
+  | frozen _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ ih => exact ih hp
+
 theorem GhostRel.closed {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hc : Closed Γ s) : Closed Γ s' :=
   fun v hv => by rw [h.spine]; exact hc v hv
 
 theorem inv_ghost {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hg : GhostRel s s') : Inv m Γ F s' :=
   hi.respine hg.spine (fun v hv => by rw [hg.vars] at hv; exact hv) (hg.catchOK hi.catchOK)
-    (hg.pinOK hi.pinIn)
+    (hg.pinOK hi.pinIn) (hg.dtorPinOK hi.dtorIn)
 
 /-! ### Typing, frame by frame
 
