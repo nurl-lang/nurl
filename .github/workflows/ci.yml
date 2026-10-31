@@ -1092,6 +1092,16 @@ jobs:
           NURL_ZIG: /opt/zig/zig
         run: ./unikernel/tests/swarm_gate.sh
 
+      - name: Deterministic simulation (build_nolibc.sh --sim)
+        # The no-libc runtime with a virtual clock, seeded entropy and a
+        # seeded schedule (agora #260): each program prints its hosted
+        # golden under five seeds, repeats itself byte for byte under
+        # one, explores (where it has a choice to make, seeds give
+        # different schedules), and simulates more time than it takes.
+        # Here rather than beside the no-libc corpus: that job already
+        # spends most of its 20 minutes on the corpus.
+        run: ./unikernel/run_sim_tests.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     needs: changes

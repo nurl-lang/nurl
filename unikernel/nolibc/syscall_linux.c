@@ -233,6 +233,10 @@ int   truncate(const char *p, long long len)        { return (int)nl_ret(nl_sysc
 int   fdatasync(int fd)                             { return (int)nl_ret(nl_syscall6(SYS_fdatasync_, fd, 0, 0, 0, 0, 0)); }
 int   ftruncate(int fd, long long len)              { return (int)nl_ret(nl_syscall6(SYS_ftruncate_, fd, (long)len, 0, 0, 0, 0)); }
 int   mprotect(void *p, unsigned long len, int prot) { return (int)nl_ret(nl_syscall6(SYS_mprotect_, (long)p, (long)len, prot, 0, 0, 0)); }
+/* Time and entropy. A simulation build (build_nolibc.sh --sim) takes
+ * these three from sim.c instead: a virtual clock and a seeded stream,
+ * so a run is a function of the program and its seed (agora #260). */
+#ifndef NURL_SIM
 /* The kernel's own CSPRNG. runtime_bare.c's nurl_rand_fill is the only
  * caller and it treats any failure as fatal, so nothing here needs a
  * /dev/urandom fallback — a source that cannot answer is a machine that
@@ -243,4 +247,5 @@ long long getrandom(void *buf, unsigned long len, unsigned int flags) {
 }
 int   nanosleep(const void *req, void *rem)         { return (int)nl_ret(nl_syscall6(SYS_nanosleep_, (long)req, (long)rem, 0, 0, 0, 0)); }
 int   clock_gettime(int clk, void *ts)              { return (int)nl_ret(nl_syscall6(SYS_clock_gettime_, clk, (long)ts, 0, 0, 0, 0)); }
+#endif
 void  _exit(int code)                               { nl_exit_group(code); for (;;) { } }
