@@ -555,7 +555,8 @@ without an `unsafe` function of its own is memory-safe and leak-free**
 (docs/MEMORY.md §6.2 — the ownership rules of the single-threaded
 language, `A2.memory_safe` and `A2.no_leak_end`, are mechanically proven
 sound in Lean 4 under `formal/`, and every hole found so far
-is closed and held by a probe in `tools/fuzz/holes/`).
+is closed and held by a probe in `tools/fuzz/holes/`, or listed in
+`docs/LIMITATIONS.md` while it is open).
 
 The same word marks the one assertion about a type the compiler takes on
 trust (grammar v2.11). `% Send T { }` and `% Sync T { }` stop the
@@ -2861,7 +2862,8 @@ its own is memory-safe and leak-free ([`docs/MEMORY.md` §6.2](MEMORY.md)):
 the ownership rules of the single-threaded language (`A2.memory_safe`,
 `A2.no_leak_end`) are mechanically proven sound in Lean 4
 ([`formal/`](../formal/)), and every hole found so far is
-closed and held by a probe in `tools/fuzz/holes/`; a handle whose copies
+closed and held by a probe in `tools/fuzz/holes/` (or listed in
+[`LIMITATIONS.md`](LIMITATIONS.md) while it is open); a handle whose copies
 are one state is checked where it crosses to another thread
 (docs/MEMORY.md §6.5).
 The pre-production hardening closed the exception 0.71.0 named: a `Slice`
