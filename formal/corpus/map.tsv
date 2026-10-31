@@ -365,6 +365,13 @@ field_of_a_lent_call_result_handed_to_a_sink	CallT.sink	A1	a field of box_get's 
 field_of_a_parameter_taken_then_the_caller_read_the_struct	CallT.sink	A1	a field of a by-value struct parameter handed to string_free: the function took the parameter over (kept) and dropped the rest, but the caller read the struct after the call (UAF); a parameter whose field is taken is an inferred sink	rejected	h389
 field_of_call_result_leaks	§7.1	A2	owned field read from a call result; rest of temporary never dropped	runs-clean	h266
 field_read_into_owned_string	§2.13	A2	owning s binding assigned struct field pointer; frees field (bad free)	runs-clean	h121
+field_reader_assigned_then_returned	§7.6	A2	agora #268: a field reader assigned to a binding that is returned (UAF)	runs-clean	-
+field_reader_rebound_assigned_out_of_its_block	§7.6	A2	agora #268: a field reader re-bound in an inner block and assigned out of it (UAF)	runs-clean	-
+field_reader_rebound_returned	§7.6	A2	agora #268: a field reader re-bound and returned (UAF)	runs-clean	-
+field_reader_rebound_returned_in_a_result	§7.6	A2	agora #268: a field reader re-bound and returned inside a result (UAF)	runs-clean	-
+field_reader_rebound_string_returned	§7.6	A2	agora #268: a String field reader re-bound and returned (UAF)	runs-clean	-
+field_reader_rebound_twice_returned	§7.6	A2	agora #268: a field reader re-bound twice and returned (UAF)	runs-clean	-
+field_reader_rebound_vec_returned_in_an_option	§7.6	A2	agora #268: a Vec field reader re-bound and returned inside an option (UAF)	runs-clean	-
 field_reassign_old_alias	§2.10	A2	view of a struct's String field read after the field is reassigned	rejected	h25
 field_replaced_under_borrow	§2.12	A2	element borrowed via struct field; field reassigned; borrow read	rejected	h85
 field_store_block_join_local	§7.6	A2	agora #199: `= . h s { : i k 1 ? c ( gets w ) ( string_from … ) }` over `inout H h`: fresh arm copied as if lent, the original leaked	runs-clean	h921
@@ -771,6 +778,7 @@ sink_arg_block_join_lend	§7.6	A2	the same join as a block's tail	runs-clean	h93
 sink_arg_join_fresh_path_guard	§7.6	A2	the sink join taking its fresh arm: moved, nothing copied	runs-clean	h936
 sink_arg_join_lend	§7.6	A2	a join whose arm lends a local, handed to a `sink` parameter: the callee freed the local's string	runs-clean	h934
 sink_enum_payload_field_returned	§7.6	A2	agora #178: a field of a `sink` enum parameter's payload returned through a `??` arm	runs-clean	h716
+sink_param_field_reader_rebound_returned_in_a_result	§7.6	A2	agora #268: a sink parameter's field reader re-bound and returned inside a result (UAF)	runs-clean	-
 sink_param_field_returned_in_a_result	§7.6	A2	agora #257: a sink parameter's field returned directly inside a result (leak)	runs-clean	-
 sink_param_field_returned_in_a_result_bound	§7.6	A2	agora #257: a sink parameter's field bound and returned inside a result (UAF)	runs-clean	-
 sink_param_field_returned_in_a_struct_literal	§7.6	A2	agora #257: a sink parameter's field returned inside a struct literal (UAF)	runs-clean	-
