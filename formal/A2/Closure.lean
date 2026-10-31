@@ -184,7 +184,7 @@ theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} 
   exact ⟨fs[j], fn, hfs, hf, h⟩
 
 theorem memDeps_mono {a b : List Dep} (h : a ⊆ b) : memDeps a ⊆ memDeps b :=
-  fun d hd => List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
+  fun _ hd => List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
 
 theorem roots_subset {a b : List Dep} (h : a ⊆ b) : roots a ⊆ roots b := List.map_subset _ h
 
@@ -208,7 +208,7 @@ theorem envE_vdeps (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × 
 theorem derive_name_vdeps {c : Var} {Ec : Entry} {d : Dep} (hd : d ∈ derive c Ec .self)
     (hn : d.kind.isName = true) : d ∈ Ec.vdeps := by
   by_cases hr : Ec.mode.isRoot
-  · unfold derive at hd; rw [if_pos hr] at hd
+  · unfold derive at hd; rw [ite_eq_left hr] at hd
     simp only [List.mem_singleton] at hd; subst hd
     exact absurd hn (by cases Ec.ty <;> simp [rootKind, Kind.isName])
   · rw [derive_bor_self (by simpa using hr)] at hd
@@ -320,12 +320,12 @@ theorem argE_clean (Γ : Ctx) (a : Var) : argE (cleanC Γ) a = (argE Γ a).clean
 
 theorem clean_clean (E : Entry) : E.clean.clean = E.clean := by
   by_cases h : ¬ E.fixed ∧ (E.ty = .int ∨ E.live = false)
-  · have h1 : E.clean = { E with path := [], held := [] } := by unfold Entry.clean; rw [if_pos h]
+  · have h1 : E.clean = { E with path := [], held := [] } := by unfold Entry.clean; rw [ite_eq_left h]
     rw [h1]; unfold Entry.clean
-    rw [if_pos (show ¬ ({ E with path := [], held := [] } : Entry).fixed ∧
+    rw [ite_eq_left (show ¬ ({ E with path := [], held := [] } : Entry).fixed ∧
       (({ E with path := [], held := [] } : Entry).ty = .int ∨
         ({ E with path := [], held := [] } : Entry).live = false) from h)]
-  · have h1 : E.clean = E := by unfold Entry.clean; rw [if_neg h]
+  · have h1 : E.clean = E := by unfold Entry.clean; rw [ite_eq_right h]
     rw [h1, h1]
 
 theorem cleanC_clean {Γ : Ctx} : ∀ v E, cleanC Γ v = some E → E.clean = E := fun _ _ h => by
@@ -420,7 +420,7 @@ theorem argNames_clean (Γ : Ctx) (args : List Var) : argNames (cleanC Γ) args 
   rw [argE_clean, clean_ty] at hda
   split at hda
   · simp at hda
-  · rename_i hne; rw [if_neg hne]
+  · rename_i hne; rw [ite_eq_right hne]
     simp only [nameDeps, List.mem_filter] at hda ⊢
     exact ⟨clean_vdeps_sub _ hda.1, hda.2⟩
 
@@ -582,13 +582,13 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
             (fun _ => clean_path_sub _) ?_
           intro d hd
           by_cases hvv : t.holdsView = true
-          · rw [if_pos hvv] at hd ⊢
+          · rw [ite_eq_left hvv] at hd ⊢
             simp only [List.mem_append] at hd ⊢
             rcases hd with (hd | hd) | hd
             · exact Or.inl (Or.inl (clean_held_sub _ hd))
             · exact Or.inl (Or.inr ((hout i hi).1 hd))
             · exact Or.inr (hheld.1 hd)
-          · rw [if_neg hvv] at hd ⊢
+          · rw [ite_eq_right hvv] at hd ⊢
             exact clean_held_sub _ hd
         · intro d hd
           have hv : ∀ d' ∈ (argE Γe a).vdeps, d'.root ≠ e := hne
@@ -724,7 +724,7 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
         refine ⟨?_, ?_⟩
         · simp only [argNames, List.flatMap_cons, List.mem_append]
           refine Or.inl ?_
-          simp only [hEc, htc, Ne, reduceCtorEq, not_false_eq_true, ↓reduceIte]; exact hdh
+          simp only [hEc, htc, ↓reduceIte]; exact hdh
         · intro hre
           obtain ⟨Er, hEr, _⟩ := hw c Ec hc hlc (Or.inl htc) d.root
             (List.mem_map_of_mem (f := Dep.root) (List.mem_filter.mp hdh).1)
@@ -736,7 +736,7 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
         refine Or.inr (List.mem_flatMap.mpr ⟨a, ha, ?_⟩)
         split at hda
         · simp at hda
-        · rename_i hnt; rw [if_neg hnt]
+        · rename_i hnt; rw [ite_eq_right hnt]
           simp only [nameDeps, List.mem_filter] at hda ⊢
           exact ⟨clean_vdeps_sub _ hda.1, hda.2⟩
       · split at hda
@@ -783,7 +783,7 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
           split at hkj
           · simp at hkj
           · unfold derive at hkj
-            rw [if_pos (by simp [envE, Mode.isRoot])] at hkj
+            rw [ite_eq_left (by simp [envE, Mode.isRoot])] at hkj
             simp only [List.mem_singleton, Dep.mk.injEq] at hkj
             rw [hkj.2, rootKind_isName]; exact hLn jk hjk
         · exact absurd rfl ((argDeps_open hw hrl hni he hzs hj0).2 ⟨e, k⟩ hkj)
@@ -804,13 +804,13 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
       simp only [argNames, List.flatMap_cons, List.mem_append]
       refine Or.inl ?_
       have hci : argE Γ c = Ec := by simp [argE, hc]
-      simp only [hci, htc, Ne, reduceCtorEq, not_false_eq_true, ↓reduceIte, nameDeps, List.mem_filter]
+      simp only [hci, htc, ↓reduceIte, nameDeps, List.mem_filter]
       exact ⟨hdEc, hnm⟩
     · refine List.mem_append_right _ (RSetup.mem_allKinds_iff.mpr
         ⟨?_, by
           have hd'n : d'.kind.isName = false := by simpa using hnm
           cases hdk : d'.kind <;> cases hkk : k <;>
-            simp_all [comp, Kind.isName, hkn]⟩)
+            simp_all [comp, Kind.isName]⟩)
       show d'.root ∈ recvRoots c Ec
       unfold recvRoots
       have hd'm : d' ∈ memDeps (derive c Ec .self) ∨ d' ∈ memDeps Ec.held := by
@@ -865,7 +865,7 @@ theorem res_open {fn sig : Fn} (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E →
     refine reroot_ownHeld ?_
     refine (deps_open hw hrl hni he hzs hc hlc htc hr hrn).trans ?_
     intro d hd
-    simp only [callRes, List.append_assoc] at hd ⊢
+    simp only [List.append_assoc] at hd ⊢
     rcases List.mem_append.mp hd with h1 | h1
     · exact List.mem_append_left _ h1
     · exact List.mem_append_right _ h1
@@ -1043,7 +1043,7 @@ theorem killAll_fixed {ds : List Dep} {E : Entry} : (RSetup.killAll ds E).fixed 
 
 theorem killAll_id {ds : List Dep} {E : Entry} (h : ∀ d ∈ ds, hits d.kind.bound false d.root E = false) :
     RSetup.killAll ds E = E := by
-  unfold RSetup.killAll; rw [if_neg]
+  unfold RSetup.killAll; rw [ite_eq_right]
   intro hany
   obtain ⟨d, hd, hh⟩ := List.any_eq_true.mp hany
   rw [h d hd] at hh; cases hh
@@ -1054,7 +1054,7 @@ theorem killAll_live {ds : List Dep} {E : Entry} (h : (RSetup.killAll ds E).live
   split at h
   · simp at h
   · rename_i hn
-    refine ⟨fun d hd => ?_, by rw [if_neg hn]⟩
+    refine ⟨fun d hd => ?_, by rw [ite_eq_right hn]⟩
     cases hh : hits d.kind.bound false d.root E
     · rfl
     · exact absurd (List.any_eq_true.mpr ⟨d, hd, hh⟩) hn
@@ -1439,7 +1439,7 @@ theorem pkg_cap_mutName {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : En
   unfold mutNames argNames
   refine List.mem_filter.mpr ⟨List.mem_flatMap.mpr ⟨c, List.mem_cons_self, ?_⟩, ?_⟩
   · have hae : argE Γ c = Ec := by unfold argE; rw [hc]; rfl
-    rw [hae, if_neg (by rw [ht]; simp)]
+    rw [hae, ite_eq_right (by rw [ht]; simp)]
     exact List.mem_filter.mpr ⟨by unfold Entry.vdeps; exact List.mem_append_right _ hin, rfl⟩
   · simp [Kind.bound, hbn]
 
@@ -1496,7 +1496,7 @@ theorem envE_cap_out {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : L
   have hdv : d ∈ Ec.vdeps := by
     rcases hd with hd | hd
     · by_cases hrt : Ec.mode.isRoot
-      · unfold derive at hd; rw [if_pos hrt] at hd
+      · unfold derive at hd; rw [ite_eq_left hrt] at hd
         simp only [List.mem_singleton] at hd; subst hd
         exact absurd (show ci.1 ∈ c :: zs by
           rw [← (show c = ci.1 from hdr)]; exact List.mem_cons_self) hA
@@ -1515,7 +1515,7 @@ theorem envE_cap_out {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : L
       rw [hdr]
       simp only [capRootsW, List.mem_map, List.mem_filter]
       exact ⟨ci, ⟨hci, by rw [hb]; simp⟩, rfl⟩
-    simp [List.contains_iff_mem, hin] at hb0
+    simp [hin] at hb0
 
 /-! ### The arguments of an opened package call: environment, arguments, captures -/
 
@@ -1561,7 +1561,7 @@ theorem heldN_sub (Γe : Ctx) (ps : List (PMode × Ty)) (args : List Var) (base 
 
 theorem mem_heldN {Γe : Ctx} {ps : List (PMode × Ty)} {args : List Var} {base x v : Nat} :
     v ∈ heldN Γe ps args base x ↔ v ∈ heldFor ps args base x ∧ v ∉ roots (mutNames Γe args) := by
-  simp [heldN, List.mem_filter, List.contains_iff_mem]
+  simp [heldN, List.mem_filter]
 
 /-- What the environment's names are held through: the package's own
     change of a capture is no part of it (one captured again inside is
@@ -1635,7 +1635,7 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
     · cases hda
     · obtain ⟨hdv, hdn⟩ := List.mem_filter.mp hda
       refine ⟨c, List.mem_cons_self, ?_⟩
-      rw [hae, if_neg hnint]
+      rw [hae, ite_eq_right hnint]
       refine List.mem_filter.mpr ⟨?_, hdn⟩
       rcases envE_dep_vdeps hdv with ⟨rfl, _⟩ | hdv
       · exfalso; revert hdn; cases Ec.ty <;> simp [rootKind, Kind.isName]
@@ -2036,7 +2036,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           rcases hs with h' | h' <;> rw [h'] <;> rfl
         obtain ⟨_, _, _, _, hdist⟩ := hmva hmoves
         obtain ⟨hne0, _, hns0, hnb0⟩ := hdist 0 (by rw [hsp]; simp) (by omega)
-        simp only [List.getD_cons_zero, List.getD_cons_succ] at hne0 hns0 hnb0
+        simp only [List.getD_cons_zero] at hne0 hns0 hnb0
         rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv
         · exact hne0 hdr
         · rcases hs with hs | hs
@@ -2105,7 +2105,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
                 rw [hz'] at hd hti; simp only [Option.getD_some] at hd hti
                 have hcz := hcl _ _ hz'
                 unfold Entry.clean at hcz
-                rw [if_pos ⟨fun hf => by
+                rw [ite_eq_left ⟨fun hf => by
                     rcases hf with h | ⟨b', h, _⟩
                     · exact hti.2 h
                     · exact hi.noInout _ _ b' hz' h, Or.inl hti.1⟩] at hcz

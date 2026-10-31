@@ -200,7 +200,7 @@ theorem head_not_below {t : Val} (hn : t.ids.Nodup) {e : Val} (hc : Child e t) {
   cases hc with
   | elem he =>
     have hin : i ∈ idsL _ := mem_idsL he (hs.ids i (Val.head_ids _ i hi2))
-    simp only [Val.head, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hi1
+    simp only [Val.head, List.mem_cons, List.not_mem_nil, or_false] at hi1
     simp only [ids_node, List.nodup_cons, List.mem_cons] at hn
     rcases hi1 with rfl | rfl
     · exact hn.1 (Or.inr hin)
