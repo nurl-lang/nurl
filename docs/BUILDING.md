@@ -567,12 +567,23 @@ limits — `-O0` would slow down the thing that is already slowest.
 
 Every pull request, and every push to `main`, runs
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — plus, in
-parallel, the two host-platform workflows
-[`windows-tests.yml`](../.github/workflows/windows-tests.yml) and
-[`macos-tests.yml`](../.github/workflows/macos-tests.yml). A PR that
-touches only `webdocs/**` skips the code gates and builds the docs
-instead, one that touches only `formal/` skips the code gates too, and
-one that touches both code and either of them runs everything.
+parallel, [`windows-tests.yml`](../.github/workflows/windows-tests.yml),
+and [`macos-tests.yml`](../.github/workflows/macos-tests.yml) on `main`
+and on PRs labelled `ci:macos`. A PR that touches only `webdocs/**`
+skips the code gates and builds the docs instead, one that touches only
+`formal/` or `changes/` skips the code gates too, and one that touches
+both code and either of them runs everything.
+
+**Merging through the queue** (Agora #136). `ci.yml` also answers the
+merge queue's `merge_group` event, and there it runs every job whatever
+the paths. The queue tests `main` + the queued PRs as one commit, merges
+exactly that commit (still one squash per PR), and splits a failing
+group to find the PR that broke it. So a PR whose code does not conflict
+with `main` never has to be rebased and re-run because `main` moved:
+queue it once its own checks are green (`gh pr merge <N> --squash
+--auto`), and it merges when its group passes. A PR in textual conflict
+still needs a rebase; the changelog fragments and named probes (#211,
+#212) keep those rare.
 
 | Job / step | What it checks |
 |---|---|

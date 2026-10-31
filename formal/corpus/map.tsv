@@ -885,8 +885,12 @@ vec_set_len_uninit	§6.4	B	vec_set_len exposes uninitialised String elements	rej
 vec_with_cap_overflow	§6.2	B	vec_with_cap capacity byte size wraps; pushes write past buffer	runs-clean	h77
 vec_zeroed_overflow	§6.2	B	vec_zeroed length byte size wraps; length set over tiny buffer	runs-clean	h79
 vector_result_keeps_its_temporary	§7.1	A2	a call returning a v128 was taken for a possible view of its temporary argument; the temporary's drop waited for a consumer, and a binding is none (leak)	runs-clean	h316
+vget_drop_payload_returned_bare	§7.6	A2	a `% Drop` element of a local Vec handed back bare	runs-clean	-
 vget_payload_in_local_struct	§7.6	A2	a `vec_get` payload moved into a local struct: the struct and the Vec both dropped it	runs-clean	h959
 vget_payload_in_struct_param_vec	§7.6	A2	the same out of a parameter's Vec	runs-clean	h960
+vget_payload_returned_bare	§7.6	A2	agora #209: a `vec_get` payload of a local Vec handed back bare: freed with the Vec on the way out	runs-clean	-
+vget_payload_returned_in_struct	§7.6	A2	the same as a returned struct's field	runs-clean	-
+vget_payload_returned_wrapped	§7.6	A2	the same rewrapped in a returned option	runs-clean	-
 vget_payload_rewrapped_local_vec	§7.6	A2	the same out of a local Vec, dropped on the way out	runs-clean	h958
 vget_payload_rewrapped_param_vec	§7.6	A2	agora #204: a `vec_get` payload moved into a returned option stayed in the parameter's slot: freed twice	runs-clean	h957
 view_across_closure_assign	§2.11	A2	agora #151: view_across_closure_assign	rejected	h523
