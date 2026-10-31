@@ -102,12 +102,6 @@ theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
     exact ⟨hin p k (h p (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
   | _ => trivial
 
-theorem callPe_dbind (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
-    (callPe Γ ps args v).dbind = false := by
-  unfold callPe; split
-  · split <;> rfl
-  · rfl
-
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {m : Mem}
 
@@ -129,22 +123,6 @@ theorem not_spine (h : CallH P Γ F x fn args m.nv) {k : Stmt} {r : Var} (hrlt :
     rw [he] at hrlt
     exact Nat.lt_irrefl _
       (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_add_right m.nv 0) (Nat.le_add_right _ k')) hrlt)
-
-/-- A2-drop.2: the call's own bindings are none `letd` made: only a caller
-    binding the call does not rename may be one. -/
-theorem dbind_frame (h : CallH P Γ F x fn args m.nv) {y : Var} {E : Entry}
-    (hy : (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some E) (hd : E.dbind = true) :
-    (∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
-      ∃ E1, callPost Γ fn args y = some E1 ∧ E = E1.clean := by
-  rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
-      ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
-  · simp [callX] at hd
-  · simp at hd
-  · rw [callPe_dbind] at hd; cases hd
-  · simp at hd
-  · simp at hd
-  · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
-    exact ⟨hy', hyx, E1, h1, rfl⟩
 
 /-- The call's running scopes bind none that `letd` made. -/
 theorem spine_dbind (h : CallH P Γ F x fn args m.nv) {k : Stmt} :

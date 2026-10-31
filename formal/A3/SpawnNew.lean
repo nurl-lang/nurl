@@ -242,6 +242,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
         cases hc
       · cases hl
     pkgs := fun v sl T hsl hT => hpk T (hmem hsl hT)
+    armed := fun v E sl hv _ => ArmOK.of_dbind (sigCtx_flags hv).2
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv

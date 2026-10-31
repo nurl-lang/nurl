@@ -150,6 +150,14 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl
       simp only [Option.some.injEq] at hT; subst hT; exact hvpkgs
     · rw [Mem.set_st, upd_ne _ _ hwx] at hsl; exact hi.pkgs w sl T hsl hT
+  · intro w Ew sl hw hsl
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      exact ArmOK.of_dbind hdb
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      rw [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact (hi.armed w Ew sl hw hsl).keep fun _ _ _ dep _ => (rootKeep_ext hext dep.root).vkeep
 
 /-- The receiver of a call through a package is live. -/
 theorem callT_recv_live {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c : Var} {zs : List Var}
@@ -376,6 +384,17 @@ theorem CtxWF.clean {Γ : Ctx} (hw : CtxWF Γ) : CtxWF (cleanC Γ) where
 
 theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) where
   names := cleanC_names hi.names
+  armed v E sl hv hsl := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    intro hd hos T hT
+    rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos
+    obtain ⟨hdt, hvs⟩ := hi.armed v E0 sl h0 hsl hd hos T hT
+    have hnint : E0.ty ≠ .int := fun h' => by have := hi.wf.view v E0 h0 hd; rw [h'] at this; cases this
+    refine ⟨by rw [Entry.clean_dtor]; exact hdt, ?_⟩
+    rw [clean_ty]
+    refine hvs.memDeps.mono fun d hd' => ?_
+    have hd'' := List.mem_filter.mp hd'
+    exact (Entry.clean_vdeps_mem hd hos (Or.inl hnint) (by simpa using hd''.2)).mpr hd''.1
   held v E sl T hv hl hsl hT := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [clean_live] at hl

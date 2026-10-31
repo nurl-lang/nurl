@@ -147,6 +147,18 @@ theorem DtorSafe.root_ne {Γ : Ctx} {hv : Bool} {x : Var} (h : DtorSafe Γ .repl
   rw [hrx, hnm] at this
   cases hk : d.kind <;> simp_all [Eff.kills]
 
+/-- A memory view of `r` that `hitsMem` does not hit is one `e` spares. -/
+theorem hitsMem_kills {e : Eff} {hv : Bool} {r : Var} {E : Entry} (h : hitsMem e hv r E = false)
+    (hg : E.ty ≠ .int ∨ E.mode = .rootb) {d : Dep} (hd : d ∈ E.vdeps) (hr : d.root = r)
+    (hnm : d.kind.isName = false) : e.kills hv d.kind = false := by
+  unfold hitsMem at h
+  have hg' : (E.ty != .int || E.mode == .rootb) = true := by rcases hg with h' | h' <;> simp [h']
+  rw [hg', Bool.true_and, List.any_eq_false] at h
+  have := h d hd
+  cases hk : e.kills hv d.kind
+  · rfl
+  · exact absurd (by simp [hr, hnm, hk]) this
+
 /-- A2-drop.2: no binding `letd` made, armed or not, views `x` in memory:
     what a scope's end asks, so that a moved-out destructor binding keeps
     no view of a binding that is gone (a join may arm it again). -/

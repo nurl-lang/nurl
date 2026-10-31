@@ -213,6 +213,13 @@ def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
   (E.mode.ownSlot = false →
     (E.live = true → ∃ v, sl.val = some v ∧ ValOK m E.ty v E.path E.held))
 
+/-- A2-drop.2: a binding `letd` made whose slot owns a value is armed, and
+    the value's views are valid, whether its entry is live or not: the
+    destructor reads them where the scope ends (after a join on which one
+    path moved it, the entry is dead but the slot may own). -/
+def ArmOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
+  E.dbind = true → E.mode.ownSlot = true → ∀ T, sl.val = some T → E.dtor = true ∧ ViewsOK m E.ty T E.held
+
 /-- The bindings of the run-time scopes a statement is inside of, innermost
     last: they are bound for as long as the statement runs. -/
 def Stmt.spine : Stmt → List Var
@@ -360,6 +367,7 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
+  armed     : ∀ v E sl, Γ v = some E → m.st v = some sl → ArmOK m E sl
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
