@@ -15,3 +15,6 @@ import A3.Assemble
 import A3.SpawnPres
 import A3.Restrict
 import A3.SpawnOld
+import A3.Lift
+import A3.SpawnNew
+import A3.Claim
