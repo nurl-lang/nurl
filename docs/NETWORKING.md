@@ -5,8 +5,9 @@ NURL reaches the network through a pure-POSIX socket layer in the C runtime
 at this layer. (The stdlib HTTP *client* `ext/http.nu` and the reverse proxy
 are separate, optional libcurl bridges.) Four primitives, every one
 dual-stack IPv4/IPv6 and integrated with the fiber scheduler's I/O layer
-for async I/O — the `epoll` netpoller on Linux, a reactor thread
-elsewhere (`poll(2)`, `WSAPoll` on Windows; see [`ASYNC.md`](ASYNC.md)).
+for async I/O — the netpoller (`epoll` on Linux, `kqueue` on macOS and
+FreeBSD, an I/O completion port on Windows), a `poll(2)` reactor thread on
+the other POSIX hosts (see [`ASYNC.md`](ASYNC.md)).
 
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
   HTTP server stack on top (`stdlib/ext/http_*` — HTTP/1.1 **and HTTP/2 on
@@ -95,6 +96,80 @@ next generation and resets that direction's sequence. A terminal write
 error requires closing the connection.
 These APIs work on native sockets, the WASI socket provider, and the
 freestanding socket layer.
+
+## Simulated network — `stdlib/std/net_sim.nu`
+
+A `TcpListener` or `TcpConn` need not be an operating-system socket.
+`std/net` has a **transport seam**: a handle made over an object of a
+type that implements the `NetTransport` trait sends every `tcp_*`
+operation to that object, and everything written against the handles —
+`HttpServer`, the `HttpApp` facade, a protocol client that takes a
+`TcpConn` — runs over it unchanged. The simulated network is the
+transport the standard library ships: a `NetSim` is a set of nodes, each
+a whole sans-IO TCP/IP stack (`stdlib/net/`: Ethernet, ARP, IPv4, TCP and
+the socket layer), whose frames travel between the nodes over the seeded
+bus of `stdlib/dist/sim.nu` — with its drops, latency, jitter and
+partitions. No socket is opened (`strace` shows none). An HTTP server
+is served the same way: hand the listener to `http_app_serve`
+(packages/http) or `server_new`, on a thread or a fiber of its own.
+
+```nurl
+$ `stdlib/std/net_sim.nu`
+
+@ main → i {
+    // 2 nodes, seed 7, no loss, 1 ms latency, no jitter
+    : NetSim net ( netsim_new 2 7 0 1 0 )
+    : TcpListener l ?? ( netsim_listen net 0 80 ) { T x → x F _ → { ^ 1 } }
+    ?? ( netsim_connect net 1 `10.0.0.1` 80 2000 ) {
+        T c → {
+            ?? ( tcp_accept l ) {
+                T s → {
+                    : !v NetErr w ( tcp_write_str c `ping` )
+                    : ( Vec u ) got ( vec_new [u] )
+                    // "ping", over the simulated wire
+                    : !i NetErr r ( tcp_read_into s got 64 )
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ( netsim_partition net 0 1 )  // every frame between the nodes is lost
+    ( netsim_heal net 0 1 )  // TCP's own retransmission carries on
+    ^ 0
+}
+```
+
+Node `k` answers to `10.0.0.<k+1>`. `netsim_listen net node port`
+(port 0 picks a free one) and `netsim_connect net node host port ms`
+give the same results and the same `NetErr`s as the kernel's sockets:
+a taken port is `NetAddrInUse`, a refused connect `NetClosed`, a deadline
+`NetTimeout`, a peer's close `NetClosed` after everything it sent was
+read. `http_app_serve app listener` (packages/http) serves a listener the
+caller made, so a test serves the very app `main` builds.
+
+Waiting is the runtime's: a fiber parks and a thread blocks, for as long
+as the next thing that can change the answer — the bus's next delivery, a
+node's next TCP timer, or the caller's deadline — and whoever waits moves
+the network (delivers what is due, runs the timers that fired). The clock
+is the runtime's monotonic clock, so today a simulated exchange runs in
+real time (a partition healed after 300 ms costs one 200 ms retransmit);
+under a runtime whose clock and scheduler are themselves simulated (the
+DST work: a seeded scheduler and timers on a virtual clock) the same code
+runs on virtual time, reproducibly by seed.
+
+The seam costs a program that never makes a simulated network nothing:
+`std/net` does not import the simulator, the handles keep their layout
+(the transport rides in the word a TLS handle uses), and the plaintext
+path tests the connection kind where it tested the TLS handle. The
+constructors `tcp_conn_over` / `tcp_listener_over` are `raw`: a transport
+must hold nothing that can reach a `TcpConn` or `TcpListener` (a
+connection is stored into thread-shared handles such as the HTTP server's
+drain table, and a cycle through it would never be freed), which the
+standard library's transports keep and a program's own must vouch for in
+`unsafe` code. TLS over a simulated network is not wired yet: the TLS
+stack runs over a runtime socket handle, and `tcp_starttls` /
+`tls_accept_conn` on a simulated connection refuse.
 
 ## MQTT 5.0 client — `stdlib/ext/mqtt.nu`
 

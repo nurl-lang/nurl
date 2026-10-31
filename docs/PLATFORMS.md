@@ -34,6 +34,18 @@ system clang uses — the two ABIs cannot share an object. Compression is
 not affected either way: gzip, deflate and zstd are all pure NURL and
 link nothing.
 
+A program that does **async socket I/O** — a fiber waiting on a socket,
+which is how `packages/http`'s servers and every `*_async` network call
+run — needs **Windows build 20348 or later: Windows 11 or Windows Server
+2022**. The fiber runtime's I/O readiness is the netpoller, which on
+Windows is an I/O completion port fed by `ProcessSocketNotifications`,
+and Windows 10 does not have that call ([`ASYNC.md`](ASYNC.md), agora
+#137). The runtime looks it up when it starts, so every program still
+starts on Windows 10, and fibers, timers, sleeps, channels and blocking
+socket I/O work there; the first socket wait from a fiber panics with a
+message that says so. Before v1.0 this replaced the `WSAPoll` reactor
+thread, whose wake waited for that thread's time slice.
+
 There is a THIRD Windows toolchain, and for two releases nothing tested
 it: the distro `mingw-w64` (`x86_64-w64-mingw32-gcc`), which the hosted
 playground's `/build_windows` cross-compiles with. It targets the older

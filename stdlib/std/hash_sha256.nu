@@ -91,37 +91,68 @@ inline @ __sha256_rotr u32 x i c → u32 {
 // schedule in registers too, the transform was 10 KB of code, slower than
 // this, and every program that hashes compiled a third of a second longer.
 
-inline @ __sha256_be32 * u p i o → u32 {
-    ^ | | | << # u32 . p o # u32 24 << # u32 . p + o 1 # u32 16
-    << # u32 . p + o 2 # u32 8 # u32 . p + o 3
-}
-
-// One round: T1 = h + Σ1(e) + Ch(e, f, g) + k + w, T2 = Σ0(a) + Maj(a, b, c);
+// One round: T1 = h + Σ1(e) + Ch(e, f, g) + (k + w), T2 = Σ0(a) + Maj(a, b, c);
 // d += T1, h = T1 + T2 — the next round sees h as a, d as e.
-inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 h u32 k u32 w → v {
+inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 h u32 wk inout u32 bc → v {
     : u32 s1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
     : u32 ch ^^ g & e ^^ f g
-    : u32 t1 + + + + h s1 ch k w
+    : u32 t1 + + + h s1 ch wk
     : u32 s0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
-    : u32 mj ^^ & a b & c ^^ a b
+    // Maj(a, b, c) = b ^ ((a ^ b) & (b ^ c)), and this round's a ^ b is
+    // the next round's b ^ c: one operation fewer a round.
+    : u32 ab ^^ a b
+    : u32 mj ^^ b & ab bc
+    = bc ab
     = d + d t1
     = h + t1 + s0 mj
 }
 
-@ __sha256_transform_sw * u32 sp * u bp * u32 kp * u32 mp → v {
-    : ~ i wi 0
-    ~ < wi 16 {
-        = . mp wi ( __sha256_be32 bp * wi 4 )
-        = wi + wi 1
-    }
-    ~ < wi 64 {
-        : u32 m15 . mp - wi 15
-        : u32 m2 . mp - wi 2
-        : u32 s0 ^^ ^^ ( __sha256_rotr m15 7 ) ( __sha256_rotr m15 18 ) >> m15 # u32 3
-        : u32 s1 ^^ ^^ ( __sha256_rotr m2 17 ) ( __sha256_rotr m2 19 ) >> m2 # u32 10
-        = . mp wi + + + . mp - wi 16 s0 . mp - wi 7 s1
-        = wi + wi 1
-    }
+// σ0 and σ1 of the message schedule on four words at once. A right
+// rotate by n is a left one by 32 − n, and a shift right by n the left
+// rotate by 32 − n with its top n bits masked off.
+@ __sha256_s0x4 v128 x → v128 {
+    : v128 sh ( nurl_v128_and ( nurl_v128_rotl32 x 29 ) ( nurl_v128_bcast32 536870911 ) )
+    ^ ( nurl_v128_xor ( nurl_v128_xor ( nurl_v128_rotl32 x 25 ) ( nurl_v128_rotl32 x 14 ) ) sh )
+}
+
+@ __sha256_s1x4 v128 x → v128 {
+    : v128 sh ( nurl_v128_and ( nurl_v128_rotl32 x 22 ) ( nurl_v128_bcast32 4194303 ) )
+    ^ ( nurl_v128_xor ( nurl_v128_xor ( nurl_v128_rotl32 x 15 ) ( nurl_v128_rotl32 x 13 ) ) sh )
+}
+
+// One step of the message schedule on v128: from x0..x3 = W[t−16..t−1]
+// the four words W[t..t+3] = W[t−16] + σ0(W[t−15]) + W[t−7] + σ1(W[t−2]).
+// The last two σ1 terms are of the step's own first two words, so σ1
+// runs twice on half the lanes. The window moves on by four, and
+// W[t..t+3] + K[t..t+3] goes to mp at byte offset `o` for the rounds.
+unsafe inline @ __sha256_step4 inout v128 x0 inout v128 x1 inout v128 x2 inout v128 x3 * u32 kp * u32 mp i o → v {
+    : v128 base ( nurl_v128_add32 ( nurl_v128_add32 x0 ( nurl_v128_alignr4 x3 x2 ) ) ( __sha256_s0x4 ( nurl_v128_alignr4 x1 x0 ) ) )
+    : v128 n01 ( nurl_v128_add32 base ( nurl_v128_and ( __sha256_s1x4 ( nurl_v128_unpackhi64 x3 x3 ) ) ( nurl_v128_set32 -1 -1 0 0 ) ) )
+    : v128 nw ( nurl_v128_add32 n01 ( nurl_v128_and ( __sha256_s1x4 ( nurl_v128_unpacklo64 n01 n01 ) ) ( nurl_v128_set32 0 0 -1 -1 ) ) )
+    = x0 x1
+    = x1 x2
+    = x2 x3
+    = x3 nw
+    ( nurl_v128_st # s + # i mp o ( nurl_v128_add32 nw ( nurl_v128_ld # s + # i kp o ) ) )
+}
+
+// The rounds read W[t] + K[t] from mp and add nothing to it. The
+// schedule runs eight words ahead, inside the round loop, so its vector
+// arithmetic fills the issue slots that the rounds' dependency chain
+// leaves idle. Run as a separate pass before the rounds, the same
+// arithmetic added about three cycles a round, and the scalar schedule
+// before it cost as much. Not `simd`: the baseline SSE2 lowering is
+// within 3 % of an x86-64-v3 clone, and a second copy of the transform
+// would make every program that hashes compile slower.
+unsafe @ __sha256_transform_sw * u32 sp * u bp * u32 kp * u32 mp → v {
+    : ~ v128 x0 ( nurl_v128_bswap32 ( nurl_v128_ld # s bp ) )
+    : ~ v128 x1 ( nurl_v128_bswap32 ( nurl_v128_ld # s + # i bp 16 ) )
+    : ~ v128 x2 ( nurl_v128_bswap32 ( nurl_v128_ld # s + # i bp 32 ) )
+    : ~ v128 x3 ( nurl_v128_bswap32 ( nurl_v128_ld # s + # i bp 48 ) )
+    ( nurl_v128_st # s mp ( nurl_v128_add32 x0 ( nurl_v128_ld # s kp ) ) )
+    ( nurl_v128_st # s + # i mp 16 ( nurl_v128_add32 x1 ( nurl_v128_ld # s + # i kp 16 ) ) )
+    ( nurl_v128_st # s + # i mp 32 ( nurl_v128_add32 x2 ( nurl_v128_ld # s + # i kp 32 ) ) )
+    ( nurl_v128_st # s + # i mp 48 ( nurl_v128_add32 x3 ( nurl_v128_ld # s + # i kp 48 ) ) )
 
     : ~ u32 a . sp 0
     : ~ u32 b . sp 1
@@ -131,19 +162,25 @@ inline @ __sha256_rnd u32 a u32 b u32 c inout u32 d u32 e u32 f u32 g inout u32 
     : ~ u32 f . sp 5
     : ~ u32 g . sp 6
     : ~ u32 h . sp 7
+    : ~ u32 bc ^^ b c
 
     // Eight rounds a pass: eight rounds rotate a..h back to their own
-    // names, so no round moves a word.
+    // names, so no round moves a word. Passes 0..5 also make
+    // W[ri+16..ri+23], which pass 2 and later read.
     : ~ i ri 0
     ~ < ri 64 {
-        ( __sha256_rnd a b c d e f g h . kp ri . mp ri )
-        ( __sha256_rnd h a b c d e f g . kp + ri 1 . mp + ri 1 )
-        ( __sha256_rnd g h a b c d e f . kp + ri 2 . mp + ri 2 )
-        ( __sha256_rnd f g h a b c d e . kp + ri 3 . mp + ri 3 )
-        ( __sha256_rnd e f g h a b c d . kp + ri 4 . mp + ri 4 )
-        ( __sha256_rnd d e f g h a b c . kp + ri 5 . mp + ri 5 )
-        ( __sha256_rnd c d e f g h a b . kp + ri 6 . mp + ri 6 )
-        ( __sha256_rnd b c d e f g h a . kp + ri 7 . mp + ri 7 )
+        ? < ri 48 {
+            ( __sha256_step4 x0 x1 x2 x3 kp mp * + ri 16 4 )
+            ( __sha256_step4 x0 x1 x2 x3 kp mp * + ri 20 4 )
+        } {}
+        ( __sha256_rnd a b c d e f g h . mp ri bc )
+        ( __sha256_rnd h a b c d e f g . mp + ri 1 bc )
+        ( __sha256_rnd g h a b c d e f . mp + ri 2 bc )
+        ( __sha256_rnd f g h a b c d e . mp + ri 3 bc )
+        ( __sha256_rnd e f g h a b c d . mp + ri 4 bc )
+        ( __sha256_rnd d e f g h a b c . mp + ri 5 bc )
+        ( __sha256_rnd c d e f g h a b . mp + ri 6 bc )
+        ( __sha256_rnd b c d e f g h a . mp + ri 7 bc )
         = ri + ri 8
     }
 
