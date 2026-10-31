@@ -512,12 +512,18 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
 
 // The wide passes over n bytes from dp to op, block counter ctr: eight
 // blocks a pass over v256 lanes in the x86-64-v3 clone, four over v128
-// lanes after that. Returns the bytes done — a multiple of 256, the rest
-// left to the caller's narrower kernels. A function of its own, called
+// lanes after that. `simd v4` adds an x86-64-v4 clone of the same body:
+// with AVX-512VL every lane rotate is one VPROLD (the v3 clone rotates by
+// 16 and 8 with a byte shuffle, by 12 and 7 with shift, shift, or), and
+// its 32 registers keep most of the eight-block state off the stack.
+// Returns the bytes done — a multiple of 256, the rest left to the
+// caller's narrower kernels. A function of its own, called
 // only where v128 is native: a wasm module (whose v128 scalarises) carries
 // it but its JIT never compiles it, and the caller stays small enough for
 // a register allocator to keep its two-block loop in registers.
-simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
+simd v4
+
+@ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op i n → i {
     : i k0 ( __ld32 key 0 )
     : i k1 ( __ld32 key 4 )
     : i k2 ( __ld32 key 8 )
@@ -543,14 +549,17 @@ simd @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u op 
     ^ off
 }
 
-// The kernels a long AEAD runs on this CPU, by name: `avx2` (eight-block
-// ChaCha20 over v256 and the vector Poly1305 — the x86-64-v3 clone),
-// `v128` (four-block ChaCha20, scalar Poly1305), `v128-narrow` (no
-// native 128-bit vectors: two blocks a pass) or `scalar` (a big-endian
-// host). NURL_CPU_V3=0 masks the first. For reports and diagnostics.
+// The kernels a long AEAD runs on this CPU, by name: `avx512` (the
+// eight-block ChaCha20 of the x86-64-v4 clone, VPROLD rotates, and the
+// vector Poly1305), `avx2` (eight-block ChaCha20 over v256 and the vector
+// Poly1305 — the x86-64-v3 clone), `v128` (four-block ChaCha20, scalar
+// Poly1305), `v128-narrow` (no native 128-bit vectors: two blocks a pass)
+// or `scalar` (a big-endian host). NURL_CPU_V4=0 masks the first,
+// NURL_CPU_V3=0 the first two. For reports and diagnostics.
 @ chacha20poly1305_cpu_tier → s {
     ? == 0 ( __le_words ) { ^ `scalar` } {}
     ? == 0 ( nurl_simd128_native ) { ^ `v128-narrow` } {}
+    ? != 0 # i ( nurl_cpu_x86_v4 ) { ^ `avx512` } {}
     ^ ? != 0 # i ( nurl_cpu_x86_v3 ) `avx2` `v128`
 }
 
@@ -1286,9 +1295,12 @@ inline @ __pv_step inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout
 // powers that put every block where its position says: block 4g + b of
 // N blocks ends up multiplied by r^(N − 4g − b). An odd group count
 // starts with one group alone by r^4. Callers ask __poly_wide_ok first,
-// so the x86-64-v3 clone is the one that runs (the baseline clone is the
-// same arithmetic in SSE2 halves: correct, never chosen).
+// so the x86-64-v3 clone is the one that runs. The kernel asks the same
+// question itself and consumes nothing without v3: in the baseline clone
+// that answer is the constant 0, so the clone is a bare return instead of
+// this arithmetic in SSE2 halves that never ran.
 unsafe simd @ __poly_wide * u st * u p i n → i {
+    ? == 0 # i ( nurl_cpu_x86_v3 ) { ^ 0 } {}
     : *u64 sp # *u64 st
     : i t + # i st 32
     // the accumulator so far, in lane 0 of A

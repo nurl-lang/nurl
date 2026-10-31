@@ -767,7 +767,8 @@ unsafe @ __path_to_uri s path → String {
                                         ? & == depth 0 != at_line_start 0 {
                                             // Decl-start scan. A declaration may
                                             // carry any run of the `pub` (v2.0),
-                                            // `simd` (v2.6), `inline` (v2.7) and
+                                            // `simd` (v2.6, `simd v4` v2.12),
+                                            // `inline` (v2.7) and
                                             // `unsafe` (v2.8) prefixes, in any
                                             // order, so consume
                                             // whatever run precedes the sigil.
@@ -793,6 +794,17 @@ unsafe @ __path_to_uri s path → String {
                                                     ? | | | != 0 ( nurl_str_eq td `pub` ) != 0 ( nurl_str_eq td `simd` ) != 0 ( nurl_str_eq td `inline` ) != 0 ( nurl_str_eq td `unsafe` ) {
                                                         = p ( __skip_ws content_v ie n )
                                                         = more T
+                                                        // `simd v4` (v2.12): the level is
+                                                        // part of the prefix.
+                                                        ? != 0 ( nurl_str_eq td `simd` ) {
+                                                            : i le ( __scan_ident content_v p n )
+                                                            ? > le p {
+                                                                : String lv ( __substr_v content_v p le )
+                                                                ? != 0 ( nurl_str_eq ( string_data lv ) `v4` ) {
+                                                                    = p ( __skip_ws content_v le n )
+                                                                } {}
+                                                            } {}
+                                                        } {}
                                                     } {}
                                                 } {}
                                             }

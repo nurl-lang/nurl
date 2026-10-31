@@ -233,12 +233,14 @@ for name in "${DRIVERS[@]}"; do
     # rather than leaving it to run_tests.sh to notice separately.
     want_exit=$(sed -n 's/^EXIT //p' "$gold" | head -1)
     sed -n '/^OUTPUT$/,$p' "$gold" | tail -n +2 > "$WORK/$name.gold.out"
+    on_lvl=x86-64-v3
+    grep -qE '^define .*\.x86v4\(' "$WORK/$name.on.ll" && on_lvl="x86-64-v3, v4 where marked,"
     for leg in on off; do
         ( cd "$WORK" && "./$name.$leg" > "$name.$leg.out" 2>&1 )
         got_exit=$?
         sed 's/\r$//' "$WORK/$name.$leg.out" > "$WORK/$name.$leg.nrm"
         mv -f "$WORK/$name.$leg.nrm" "$WORK/$name.$leg.out"
-        label="$name ($([[ $leg == off ]] && echo baseline || echo x86-64-v3) lowering)"
+        label="$name ($([[ $leg == off ]] && echo baseline || echo "$on_lvl") lowering)"
         if [[ "$got_exit" != "${want_exit:-0}" ]]; then
             bad "$label" "exit $got_exit, golden says ${want_exit:-0}"
         elif cmp -s "$WORK/$name.$leg.out" "$WORK/$name.gold.out"; then
@@ -248,6 +250,24 @@ for name in "${DRIVERS[@]}"; do
             diff -u "$WORK/$name.gold.out" "$WORK/$name.$leg.out" | head -20
         fi
     done
+
+    # A `simd v4` function has a third clone, and on an x86-64-v4 host
+    # the `on` leg ran that one: its x86-64-v3 clone did not run. Run
+    # the same binary again with the v4 answer masked off, so it does.
+    if grep -qE '^define .*\.x86v4\(' "$WORK/$name.on.ll"; then
+        ( cd "$WORK" && NURL_CPU_V4=0 "./$name.on" > "$name.v3.out" 2>&1 )
+        got_exit=$?
+        sed -i 's/\r$//' "$WORK/$name.v3.out"
+        label="$name (x86-64-v3 lowering of its simd v4 functions, NURL_CPU_V4=0)"
+        if [[ "$got_exit" != "${want_exit:-0}" ]]; then
+            bad "$label" "exit $got_exit, golden says ${want_exit:-0}"
+        elif cmp -s "$WORK/$name.v3.out" "$WORK/$name.gold.out"; then
+            ok "$label" "$(wc -l < "$WORK/$name.v3.out" | tr -d ' ') lines match the golden"
+        else
+            bad "$label" "output differs from the golden"
+            diff -u "$WORK/$name.gold.out" "$WORK/$name.v3.out" | head -20
+        fi
+    fi
 done
 
 # ── 3. Coverage: no marked function without a driver ────────────────
@@ -256,7 +276,7 @@ done
 # the stem and let the suffix be whatever privacy produced — the same
 # rule simd_dispatch_ir.sh applies.
 mapfile -t MARKED < <(
-    grep -rhE '^[[:space:]]*((pub|unsafe|inline)[[:space:]]+)*simd[[:space:]]+((pub|unsafe|inline)[[:space:]]+)*@' stdlib/ |
+    grep -rhE '^[[:space:]]*((pub|unsafe|inline)[[:space:]]+)*simd([[:space:]]+v4)?[[:space:]]+((pub|unsafe|inline)[[:space:]]+)*@' stdlib/ |
         sed -E 's/.*@[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' | sort -u
 )
 if (( ${#MARKED[@]} == 0 )); then

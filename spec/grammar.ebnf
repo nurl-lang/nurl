@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.11 — complete language specification
+   Grammar v2.12 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -67,7 +67,8 @@ decl = import_decl                 (*  $                             *)
 (* A function declaration may carry any of these prefixes, in any order
    (`simd` grammar v2.6, `inline` v2.7, `unsafe` v2.8, `raw` v2.9; FFI
    parameter markers and a foreach over a field v2.10; `unsafe` on a
-   `% Send` / `% Sync` impl and the `v512` type keyword v2.11).
+   `% Send` / `% Sync` impl and the `v512` type keyword v2.11; the `v4`
+   level after `simd` v2.12).
    `simd` and `inline` are accepted ONLY on `@`, and `unsafe` only on `@`,
    on a foreign declaration (`unsafe & …`: only `unsafe` code may call
    it) and on a `% Send` / `% Sync` impl (an assertion the compiler takes
@@ -99,8 +100,18 @@ decl = import_decl                 (*  $                             *)
    `raw` is no reserved word — it is the prefix only right before `@` or
    `:` at the top level, and an import's alias is never a `raw` that `@`
    or `:` follows. It is refused on an `impl` method (a `dyn` call has no caller
-   to check), a const, an enum and a generic struct. *)
-decl_prefix = 'pub' | 'simd' | 'inline' | 'unsafe' | 'raw' ;
+   to check), a const, an enum and a generic struct.
+
+   `simd` may name a level (v2.12, docs/spec.md §3.3b). Bare `simd` emits
+   the baseline and x86-64-v3 clones; `simd v4` adds an x86-64-v4 one
+   (AVX-512 F/BW/CD/DQ/VL: 32 vector registers, VPROLD, masks), picked
+   where the CPU has it. A third clone costs code and a wrong pick costs
+   time, so the level is per function and asked for only where it
+   measures faster. `v4` is the only level; any other word after `simd`
+   is a diagnostic that names it. `v4` is no reserved word: it is the
+   level only right after `simd`. *)
+decl_prefix = 'pub' | simd_prefix | 'inline' | 'unsafe' | 'raw' ;
+simd_prefix = 'simd' ( 'v4' )? ;
 
 
 (* $ `path` IDENT?

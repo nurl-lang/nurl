@@ -842,10 +842,11 @@ raw @ _tls_conn_new i raw → TlsConn {
 // the kernel (runtime: nurl_ktls_*): application data is then plain
 // write / recv on the socket — the kernel seals and opens the records,
 // and sendfile produces records too — while alerts and post-handshake
-// messages travel as records of their own type. It pays for bulk and
-// sendfile traffic; for small API responses the userspace record layer
-// is as fast (docs/NETWORKING.md), hence opt-in: NURL_KTLS=1 in the
-// environment, tls_ktls_default T, or tls_ktls on one connection.
+// messages travel as records of their own type. It pays for sendfile
+// traffic and NIC TLS offload; from memory the userspace record layer is
+// faster, bulk included (docs/NETWORKING.md, agora #94), hence opt-in:
+// NURL_KTLS=1 in the environment, tls_ktls_default T, or tls_ktls on one
+// connection.
 
 // Is key direction `dir` (0 the server's write keys, 1 the client's)
 // protected by the kernel? 0, or 1 (as TX) / 2 (as RX).

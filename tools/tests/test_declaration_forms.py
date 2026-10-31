@@ -109,6 +109,14 @@ DECLARATIONS = [
     # hand-written spelling had found it; deleting one token did.
     ("generic_fn_bound",      "@ g [T : Send] T x → i { ^ 0 }", "compiles"),
     ("generic_fn_bound_no_body", "@ g [T : Send] T x → i   ^ 0 }", "rejects"),
+    # `simd` takes one level word, `v4` (grammar v2.12); any other word in
+    # that place names a level that does not exist, and says so.
+    ("simd_fn",               "simd @ f i x → i { ^ x }",       "compiles"),
+    ("simd_v4_fn",            "simd v4 @ f i x → i { ^ x }",    "compiles"),
+    ("simd_v4_prefixes",      "pub simd v4 unsafe @ f i x → i { ^ x }", "compiles"),
+    ("simd_v4_raw",           "simd v4 raw @ f i x → i { ^ x }", "compiles"),
+    ("simd_bad_level",        "simd v5 @ f i x → i { ^ x }",    "rejects"),
+    ("simd_level_no_simd",    "v4 @ f i x → i { ^ x }",         "rejects"),
     # ── '&' / '%' / '$' ──────────────────────────────────────────────
     ("ffi_complete",          "& `libm` @ cbrt f x → f",        "compiles"),
     ("trait_empty",           "% Show { }",                     "compiles"),
@@ -228,6 +236,7 @@ IMPORTS = [
     ("import_empty_path",    "$ ``",                  "rejects"),
     ("import_pub",           "pub $ `lib.nu`",        "rejects"),
     ("import_simd",          "simd $ `lib.nu`",       "rejects"),
+    ("import_simd_v4",       "simd v4 $ `lib.nu`",    "rejects"),
     ("import_inline",        "inline $ `lib.nu`",     "rejects"),
 ]
 

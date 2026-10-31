@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_simd_bad_level.nu:7:1: error: 'simd v5' names no level: the one level is 'v4'. 'simd v4 @ f' adds an x86-64-v4 clone (AVX-512 F/BW/CD/DQ/VL) to the baseline and x86-64-v3 ones, picked where the CPU has it; a bare 'simd @ f' keeps those two
+simd v5 @ f i x → i { ^ + x 1 }
+^

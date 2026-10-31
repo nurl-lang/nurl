@@ -31094,7 +31094,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // drop is a use of freed memory: refused here, where the source ends
 // (Rust's dropck rule). A holder with no such destructor only becomes
 // unreadable (bck_diag_invalid), and its drop reads nothing.
-@ bck_drop_view_diag i d i src i line s why → v {
+@ bck_drop_view_diag i d i src i line s why b maybe → v {
     : i r ( bck_path_root d )
     : s rs ( nurl_str_int r )
     ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` rs ) ) `1` ) { ^ v } {}
@@ -31108,7 +31108,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` rs ) )
     : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int src ) ) )
     : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` sn `' ends here — ` ) why ( nurl_str_cat3 ` — while '` dn `' still holds a view of it. '` ) `` )
-    : s m2 ( nurl_str_cat3 dn `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` dn )
+    // (Moved on some paths only: dropped on the others.)
+    : s later ? maybe ( nurl_str_cat `' is moved on some paths only, so on the others it is still dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` ) ( nurl_str_cat `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` )
+    : s m2 ( nurl_str_cat3 dn later dn )
     // (Ended with its scope: values are dropped newest first, so declaring
     // the holder after its source is enough.)
     : b order | != 0 ( nurl_str_starts why `it went out of scope` ) != 0 ( nurl_str_starts why `the return drops` )
@@ -31155,7 +31157,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
                 : i x ( bck_path_root ( nurl_str_to_int xs ) )
                 ? ( str_contains_word gone ( nurl_str_int x ) ) {
-                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) )
+                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) == BCK_MAYBE_MOVED ( bck_st_get st ( nurl_str_to_int ds ) ) )
                 } {}
             }
         } {}
@@ -32531,14 +32533,17 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i b ( nurl_str_to_int bs )
+        : b ends & ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids ) | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) )
+        // (One whose drop reads views, moved on some paths only: dropped on
+        // the others, agora #252.)
+        ? & ends == BCK_MAYBE_MOVED ( bck_st_get out b ) { ( bck_drop_view_diag b sid line why T ) } {}
         // (A field viewer, `fborrow`, holds the field's handle: elements
         // dropped or replaced inside what it reaches leave that handle where
         // it is — it reads them as they are now. A replaced field ends it.)
-        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
-        | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) ) {
+        ? & ends == BCK_BORROWED_SHARED ( bck_st_get out b ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
-            ( bck_drop_view_diag b sid line why )
+            ( bck_drop_view_diag b sid line why F )
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -32560,13 +32565,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ds ( str_first_word rest ) = rest ( str_skip_word rest )
         : i d ( nurl_str_to_int ds )
+        : i dv ( bck_st_get out d )
+        : b holds & & ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids )
+        // (A holder moved on some paths only is still dropped on the others,
+        // its destructor reading the view: the drop check asks it as one
+        // that lives — formal's DtorSafe join rule, agora #252.)
+        ? & holds == dv BCK_MAYBE_MOVED { ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why T ) } {}
         // (Not bound on this path — never yet, or its block left — it holds
         // nothing to end.)
-        ? & & & & ! ( bck_dead_state ( bck_st_get out d ) ) != BCK_UNINIT ( bck_st_get out d ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids ) {
+        ? & & holds ! ( bck_dead_state dv ) != BCK_UNINIT dv {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
-            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why )
+            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why F )
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out d line ( nurl_str_cat3 `what it holds views of ended (` why `)` ) + depth 1 ) } {}
@@ -49852,7 +49863,7 @@ unsafe @ __ir_cut_all s h0 s pat → s {
 // the clone. They keep calling `@f`, i.e. they re-enter through the
 // dispatcher — one correctly-predicted branch per recursion, against
 // the alternative of rewriting call sites inside IR text.
-unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
+unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto i slvl → v {
     // Everything from "\nentry:\n" onwards is the body, verbatim. The
     // header is rebuilt rather than patched: the caller still holds the
     // three pieces it was printed from, so there is nothing to parse.
@@ -49908,14 +49919,22 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // once a process, so the constant is exact, and LLVM drops the path
     // the clone never takes: the v256 kernel compiled for SSE2 in `.base`
     // was a tenth of clang's time on a program using ChaCha20.
+    //
+    // `nurl_cpu_x86_v4` likewise (`simd v4`, grammar v2.12; v4 implies v3,
+    // the runtime makes it so): 1 in `.x86v4`; 0 in `.base` where v3 is,
+    // and in a `simd v4` `.x86v3`, which runs only where v4 said 0 (with
+    // the tier, for a crypto body: a v4 CPU with the tier took `.x86v4`).
+    // A plain `simd` `.x86v3` also runs on a v4 CPU, so it keeps the call.
     : s v3q `call i32 @nurl_cpu_x86_v3()`
-    : s body_w ( __ir_subst_all body v3q `add i32 0, 1` )
+    : s v4q `call i32 @nurl_cpu_x86_v4()`
+    : s body_w3 ( __ir_subst_all body v3q `add i32 0, 1` )
+    : s body_w ? == slvl 4 ( __ir_subst_all body_w3 v4q `add i32 0, 0` ) ( nurl_str_cat body_w3 `` )
 
     // Both clones stay calls: the dispatcher picks one at run time, and
     // a clone compiled for more than the baseline must never be merged
     // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
     : s base_attrs ? > crypto 0 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs crypto ) ) ``
-    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( __ir_subst_all body v3q `add i32 0, 0` )
+    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( __ir_subst_all ( __ir_subst_all body v3q `add i32 0, 0` ) v4q `add i32 0, 0` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
@@ -49927,6 +49946,18 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_w body_w ) )
 
+    // `simd v4` (grammar v2.12): the same body once more for x86-64-v4,
+    // AVX-512 F/BW/CD/DQ/VL on top of v3 — 32 vector registers, VPROLD,
+    // VPTERNLOG on the v128/v256 code — with the tier's features as the
+    // `.x86v3` has them. LLVM keeps to 256-bit vectors there unless the
+    // body uses v512.
+    ? == slvl 4 {
+        : s hdr_4 ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
+        ( nurl_str_cat3 lname `.x86v4(` ( nurl_str_cat4 cparams
+        `) noinline "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl` wide_feat `" {` ) ) )
+        ( emit_hoisted ( nurl_str_cat hdr_4 ( __ir_subst_all body_w3 v4q `add i32 0, 1` ) ) )
+    } {}
+
     // The dispatcher. `params` doubles as the argument list: it is
     // already `<type> %<name>` pairs, which is exactly a call's operand
     // syntax, so forwarding needs no reconstruction — and so does the
@@ -49937,6 +49968,34 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     ? vsig { ( nurl_print ` alwaysinline` ) } {}
     ( nurl_print ` {\nentry:\n` )
     ? vsig { : s sp ( __vabi_spills params rv ) ( nurl_print sp ) } {}
+    // A `simd v4` dispatcher asks for x86-64-v4 first (and the tier, as
+    // the v3 test below does), and falls through to that test.
+    ? == slvl 4 {
+        ( nurl_print `  %__mv4r = call i32 @nurl_cpu_x86_v4()\n` )
+        : ~ s m4 `%__mv4r`
+        ? != 0 & crypto 1 {
+            ( nurl_print `  %__mv4a0 = call i32 @nurl_cpu_x86_aes()\n` )
+            ( nurl_print `  %__mv4a = and i32 %__mv4r, %__mv4a0\n` )
+            = m4 `%__mv4a`
+        } {}
+        ? != 0 & crypto 8 {
+            ( nurl_print `  %__mv4s0 = call i32 @nurl_cpu_x86_sha()\n` )
+            ( nurl_print `  %__mv4s = and i32 ` ) ( nurl_print m4 ) ( nurl_print `, %__mv4s0\n` )
+            = m4 `%__mv4s`
+        } {}
+        ( nurl_print `  %__mv4c = icmp ne i32 ` ) ( nurl_print m4 ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 %__mv4c, label %__mv_v4, label %__mv_v3chk\n` )
+        ( nurl_print `__mv_v4:\n` )
+        ? is_void
+        { ( nurl_print `  call void @` ) ( nurl_print lname )
+            ( nurl_print `.x86v4(` ) ( nurl_print cparams ) ( nurl_print `)\n` )
+            ? vret { ( nurl_print `  br label %__mv_out\n` ) } { ( nurl_print `  ret void\n` ) } }
+        { ( nurl_print `  %__mvw4 = call ` ) ( nurl_print ret_ll )
+            ( nurl_print ` @` ) ( nurl_print lname )
+            ( nurl_print `.x86v4(` ) ( nurl_print cparams ) ( nurl_print `)\n  ret ` )
+            ( nurl_print ret_ll ) ( nurl_print ` %__mvw4\n` ) }
+        ( nurl_print `__mv_v3chk:\n` )
+    } {}
     ? > crypto 0
     { ( nurl_print `  %__mv3 = call i32 @nurl_cpu_x86_v3()\n` )
         : s mv ? != 0 & crypto 1 `%__mva` `%__mv3`
@@ -51122,7 +51181,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // the crypto tier through what it calls (flush_simd_deferred), so it
     // waits for the end of the module there too.
     ? & & != __fn_simd 0 | != g_cpu_dispatch 0 == g_crypto_target 2 == g_dbg_enabled 0
-    { ( defer_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str ) }
+    { ( defer_multiversion __fn_ir lname ( nurl_llty ret_ty ) params_str __fn_simd ) }
     { ( emit_fn_ir __fn_ir ) }
     // Clear DWARF state — subsequent module-scope code (string globals,
     // closure defs, the next function's metadata) must not inherit
@@ -58607,9 +58666,11 @@ unsafe @ __jpb_note i cg s up → v {
                         }
                         { ? & == depth 0 | | | == tt TT_PUB == tt TT_SIMD == tt TT_INLINE == tt TT_UNSAFE
                             {  // `pub` / `simd` / `inline` prefix on any decl — skip the
-                                // keyword, the following decl will be picked up
-                                // by its own branch on the next iteration.
+                                // keyword (and a `simd` level), the following decl
+                                // will be picked up by its own branch on the next
+                                // iteration.
                                 ( nurl_lex_advance lx )
+                                ? & == tt TT_SIMD & ( is_ident_tok ( nurl_lex_type lx ) ) ( seq ( nurl_lex_val lx ) `v4` ) { ( nurl_lex_advance lx ) } {}
                             }
                             { ? & == depth 0 == tt TT_COLON
                                 { ( nurl_lex_advance lx )  // consume ':'
@@ -60718,8 +60779,9 @@ unsafe @ __ir_calls_level s ir i set → i {
 // the crypto tier depends on what it calls, and its callees — a library
 // file's functions above all, compiled only once something refers to
 // them — are generated after it. flush_simd_deferred emits it then.
-@ defer_multiversion s fn_ir s lname s ret_ll s params → v {
+@ defer_multiversion s fn_ir s lname s ret_ll s params i slvl → v {
     : s k ( nurl_str_int g_simd_defer_n )
+    ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.v` ) ( nurl_str_int slvl ) )
     ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.ir` ) fn_ir )
     ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.n` ) lname )
     ( nurl_sym_def g_simd_defer ( nurl_str_cat k `.r` ) ret_ll )
@@ -60773,7 +60835,8 @@ unsafe @ __ir_calls_level s ir i set → i {
         : i lvl | own called
         : s ir ? > lvl 0 ( __ir_tier_calls ir0 lvl ) ( nurl_str_cat ir0 `` )
         ( emit_multiversion ir ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.n` ) )
-        ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.r` ) ) ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.p` ) ) lvl )
+        ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.r` ) ) ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.p` ) ) lvl
+        ( nurl_str_to_int ( nurl_sym_get g_simd_defer ( nurl_str_cat k `.v` ) ) ) )
         = i + i 1
     }
     = g_simd_defer_n 0
@@ -60836,6 +60899,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     // module trapped on the signature mismatch, and wasmbuilder's fold of
     // `call i32 @nurl_cpu_x86_v3()` to 0 never matched it.
     ( nurl_sym_def syms `nurl_cpu_x86_v3` `i32` )
+    ( nurl_sym_def syms `nurl_cpu_x86_v4` `i32` )
     ( nurl_sym_def syms `nurl_v256_aesenc` `v256` )
     ( nurl_sym_def syms `nurl_v256_aesenclast` `v256` )
     ( nurl_sym_def syms `nurl_v256_aesdec` `v256` )
@@ -61497,6 +61561,7 @@ unsafe @ __ir_calls_level s ir i set → i {
     // gets right every time. Always declared: with no marked function in
     // the module it is unreferenced and the optimiser drops it.
     ( __emit_rt_decl syms `declare i32  @nurl_cpu_x86_v3()` )
+    ( __emit_rt_decl syms `declare i32  @nurl_cpu_x86_v4()` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr) "nurl.raw"="1"` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push_drop2(ptr, ptr, ptr) "nurl.raw"="1"` )
@@ -64698,7 +64763,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
                             ? == ( nurl_lex_type lex ) TT_PUB
                             { = g_pending_pub 1 }
                             { ? == ( nurl_lex_type lex ) TT_SIMD
-                                { = g_pending_simd 1 }
+                                { = g_pending_simd ( __simd_level lex ) }
                                 { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } } }
                         ( nurl_lex_advance lex )
                     }
@@ -65345,6 +65410,20 @@ unsafe @ priv_resolve i lex i syms s fname → s {
 
 // One top-level declaration — the body of parse_program's loop, split out
 // so the multi-error recovery frame can wrap exactly one declaration.
+// The level of a `simd` prefix, asked at the `simd` token (grammar
+// v2.12): 4 for `simd v4` — the `simd` is consumed here, so the caller's
+// advance moves past the `v4` — and 1 for a bare `simd`. `raw` after
+// `simd` is the next prefix, not a level; any other word in that place
+// names a level that does not exist.
+@ __simd_level i lex → i {
+    ? ! ( is_ident_tok ( nurl_lex_peek_type lex ) ) { ^ 1 } {}
+    : s w ( nurl_lex_peek_val lex )
+    ? ( seq w `v4` ) { ( nurl_lex_advance lex ) ^ 4 } {}
+    ? ( seq w `raw` ) { ^ 1 } {}
+    ( die lex ( nurl_str_cat3 `'simd ` w `' names no level: the one level is 'v4'. 'simd v4 @ f' adds an x86-64-v4 clone (AVX-512 F/BW/CD/DQ/VL) to the baseline and x86-64-v3 ones, picked where the CPU has it; a bare 'simd @ f' keeps those two` ) )
+    ^ 1
+}
+
 @ parse_toplevel_decl i lex i syms i cg → v {
     // Grammar v2.0: consume an optional `pub` visibility prefix
     // before dispatching to the matching decl handler. The pending
@@ -65362,7 +65441,7 @@ unsafe @ priv_resolve i lex i syms s fname → s {
             ? == ( nurl_lex_type lex ) TT_PUB
             { = g_pending_pub 1 }
             { ? == ( nurl_lex_type lex ) TT_SIMD
-                { = g_pending_simd 1 }
+                { = g_pending_simd ( __simd_level lex ) }
                 { ? == ( nurl_lex_type lex ) TT_UNSAFE { = g_pending_unsafe 1 } { = g_pending_inline 1 } } } }
         ( nurl_lex_advance lex )
     }
@@ -68364,6 +68443,7 @@ unsafe @ __sp_pin_simd i n → i {
         ( __sp_pin_name nm )
         ( __sp_pin_name ( nurl_str_cat nm `.base` ) )
         ( __sp_pin_name ( nurl_str_cat nm `.x86v3` ) )
+        ( __sp_pin_name ( nurl_str_cat nm `.x86v4` ) )
     }
     : ~ i qh 0
     ~ < qh g_sp_pqn {

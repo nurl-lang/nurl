@@ -8,7 +8,7 @@ Anything marked done here has a regression test in
 point.
 
 _Last reviewed: 2026-10-31 · Current release: **0.82.0** · Language: **Grammar
-v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+v2.12** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -24,7 +24,7 @@ validation rather than new language surface — see *Toward 1.0* below.
 
 What is solid today:
 
-### Language (Grammar v2.11)
+### Language (Grammar v2.12)
 
 Sum types (`|`) and product types (structs),
 generics over structs and functions (incl. generics over option/result
@@ -177,7 +177,7 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.11** (snapshots through v2.2 in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.12** (snapshots through v2.2 in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
@@ -187,7 +187,8 @@ A high-level map of what exists. Dates and per-feature detail are in
   **`unsafe` raw-memory prefix** (v2.8); the **`raw` caller-vouched
   prefix** (v2.9); **FFI parameter markers** (`in`, `sync`, `nocapture`)
   and a foreach over a field (v2.10); **`unsafe % Send` / `unsafe % Sync`**
-  and the **`v512`** lane type of the AVX-512 VAES crypto tier (v2.11); and locked the prefix-arity
+  and the **`v512`** lane type of the AVX-512 VAES crypto tier (v2.11); the
+  **`simd v4`** level, a third clone for x86-64-v4 (v2.12); and locked the prefix-arity
   grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the

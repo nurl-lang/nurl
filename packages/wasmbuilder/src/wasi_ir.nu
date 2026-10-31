@@ -463,6 +463,8 @@ $ `stdlib/core/slice.nu`
     = res r1b
     : String r1c ( string_replace res `call i32 @nurl_cpu_x86_v3()` `add i32 0, 0` )
     = res r1c
+    : String r1d ( string_replace res `call i32 @nurl_cpu_x86_v4()` `add i32 0, 0` )
+    = res r1d
 
     // 2. Prepend WASM triple and datalayout.
     : String head ( string_from `target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"\ntarget triple = "wasm32-unknown-wasi"\n` )
