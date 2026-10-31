@@ -250,6 +250,14 @@ step.
    types (mechanical, but it touches every module).
 2. A2: the three rules and the drop, with `memory_safe` / `no_leak_end` /
    `no_leak_panic` re-proven.
+   - `Frees` and `FreesL` carry the blocks: `Frees (a, b) v (a', b')`.
+     - A share with `rc ≥ 2` decrements its block.
+     - The last share removes the block and frees the payload's tree, in
+       the same relation, so a payload's own shares cascade. They are a
+       DAG: a payload holds only older shares.
+     - `DropSlot` passes the blocks through.
+   - Not a lazy "collect dead blocks" step: that would free later than
+     the runtime does, and the model would no longer be nurl's.
 3. A3: the blocks in `Cfg`, the frame lemma with payload reads,
    `Touch` / `Race` with atomic `rc`, and `A3.claim` again.
 4. Probes h211 h212 h213 h288 h289 h338 to A3.1; CLAIM.md and README.md.
