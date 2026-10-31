@@ -10212,11 +10212,11 @@ unsafe @ __sym_cw8 s base i bl s suffix i off i cnt → i {
 : ~ i g_in_pos 0
 : ~ i g_in_end 0
 
-// Room in the arena for a string of `n` bytes: its 31-bit hash in the
-// four bytes before it (what a probe compares first), the bytes, a NUL.
-// Each starts four-byte aligned.
+// Room in the arena for a string of `n` bytes: its length in the four
+// bytes before it (what a probe compares first), the bytes, a NUL. Each
+// starts four-byte aligned.
 unsafe @ __in_room i n → s {
-    : i need + n 8
+    : i need + n 5
     = g_in_pos & + g_in_pos 3 -4
     ? > + g_in_pos need g_in_end {
         : i sz ? > + need 8 1048576 + need 8 1048576
@@ -10231,10 +10231,23 @@ unsafe @ __in_room i n → s {
     ^ # s at
 }
 
-// The hash stored before an interned string.
+// The length stored before an interned string. A probe compares it
+// before it reads a byte of the string (agora #304): a probe used to
+// compare n bytes of an entry whose hash matched and only then look for
+// the entry's NUL at n, so a shorter entry at the end of its arena chunk
+// was read past the chunk; and an entry with a NUL inside matched a
+// shorter key. With the length first, a compare reads only the entry's
+// own bytes and is exact.
+unsafe inline @ __in_len i a → i {
+    : *i32 lp # *i32 # s - a 4
+    ^ # i . lp 0
+}
+
+// The table's hash of an interned string, from its own bytes. Only a grow
+// asks for it: a probe tells entries apart by length, then bytes, so the
+// arena keeps the length (which the compare needs) and not the hash.
 unsafe inline @ __in_hash i a → i {
-    : *i32 hp # *i32 # s - a 4
-    ^ # i . hp 0
+    ^ & ( __sym_hash_n # s a ( __in_len a ) ) 2147483647
 }
 
 // Twice the slots, every string re-placed (open addressing, linear probe).
@@ -10263,6 +10276,9 @@ unsafe @ __in_grow → v {
 // The interned copy of bytes [p, p + n): a view valid for the compile.
 unsafe @ nurl_intern_n s p i n → s {
     ? == n 0 { ^ `` } {}
+    // The stored length is four bytes; a longer string could match an
+    // entry whose length was cut to 32 bits.
+    ? > n 2147483647 { ( nurl_eprintln `nurlc: a name or type of 2 GiB or more cannot be interned` ) ( nurl_exit 1 ) } {}
     ? >= * 4 + g_in_n 1 * 3 g_in_cap { ( __in_grow ) } {}
     : i hh & ( __sym_hash_n p n ) 2147483647
     : *i tb # *i # s g_in_tab
@@ -10270,15 +10286,14 @@ unsafe @ nurl_intern_n s p i n → s {
     : ~ i j & hh mask
     ~ != . tb j 0 {
         : i a . tb j
-        ? == ( __in_hash a ) hh {
-            : *u ap # *u # s a
-            ? & == 0 # i ( memcmp # s a p n ) == 0 & # i . ap n 255 { ^ # s a } {}
+        ? == ( __in_len a ) n {
+            ? == 0 # i ( memcmp # s a p n ) { ^ # s a } {}
         } {}
         = j & + j 1 mask
     }
     : s cp ( __in_room n )
     : *i32 hp # *i32 # s - # i cp 4
-    = . hp 0 # i32 hh
+    = . hp 0 # i32 n
     ( memcpy cp p n )
     : *u cu # *u cp
     = . cu n # u 0
