@@ -305,6 +305,7 @@ elem_across_closure_field_assign	§2.11	A2	agora #151: elem_across_closure_field
 elem_across_inline_closure_assign	§2.11	A2	agora #151: elem_across_inline_closure_assign	rejected	h531
 element_grows_through_borrow	StmtT.push	A1	view of element's buffer; element grows through its borrow; view read	rejected	h94
 element_of_rc_payload_then_cleared_through_rc_get	§2.11	A2	agora #169: element_of_rc_payload_then_cleared_through_rc_get	rejected	h588
+element_or_whole_copy_by_arm_after_clear	§2.10	A1	agora #118: a binding that is an element on one arm and a whole copy on the other, read after the elements were cleared	rejected	-
 element_view_after_clear	RhsT.pop	A1	view of element's buffer; Vec cleared; view read	rejected	h95
 else_arm_block_call_lend_loop	§7.6	A2	agora #191: the same in the else arm	runs-clean	h847
 empty_drop_hook_recurses	§7.6	A2	empty drop hook drops its sink receiver via drop glue, recursing forever	runs-clean	h190
@@ -405,6 +406,8 @@ field_replaced_vec_reader_pushed	§7.6	A2	agora #265: a Vec field replaced under
 field_store_block_join_local	§7.6	A2	agora #199: `= . h s { : i k 1 ? c ( gets w ) ( string_from … ) }` over `inout H h`: fresh arm copied as if lent, the original leaked	runs-clean	h921
 field_view_outlives_replace	§2.10	A2	binding read from struct field outlives reassignment of that field	runs-clean	h196
 field_viewer_of_a_parameter_taken_then_read	CallT.sink	A1	as h389, through a field viewer of the parameter taken whole	rejected	h391
+field_viewer_of_an_element_after_clear	§2.10	A1	agora #267: a field viewer of a vector element read after the vector was cleared	rejected	-
+field_viewer_of_an_element_after_clear_through_a_borrow	§2.10	A1	agora #267: a field viewer of a vector element read after a clear through another borrow of the vector	rejected	-
 file_closed_twice	§3	B	FFI FILE handle typed as s, fclose called twice from safe code	rejected	h100
 fire_and_forget_fiber_joined	§3.3d	B	fiber_join on a plain spawn's handle after the fiber ended read its freed block; a non-joinable handle never touches the runtime (agora #168).	runs-clean	h613
 first_arm_statement_reads_what_the_scrutinee_ended	§2.10	A2	a match scrutinee call's effects were recorded after the first arm statement, which read a borrow the call had ended	rejected	h315

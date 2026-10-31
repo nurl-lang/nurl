@@ -1542,9 +1542,16 @@ The rules that carry it:
   read, a match payload of a borrowed value, and a call result the callee
   lends all borrow from their source. A borrow can be read and passed on,
   never released, stored as an owner or sent. It ends when its source is
-  moved, released, reassigned, has the field replaced, or is handed to a
-  call that may drop its elements; any read after that is an error. A
-  borrow of a borrow borrows from the original owner.
+  moved, released, reassigned or has the field replaced; any read after
+  that is an error. A borrow of a borrow borrows from the original owner.
+  Handed to a call that may drop its elements, the source ends the
+  borrows of what was read out of them, and of anything else it cannot
+  tell apart. A copy of a binding's own value (a field of it, or all of
+  it handed back by a call such as `( id v )`), or of the value the call
+  went through (`: LogBuf b ( wguard_get g )` beside the field viewer
+  `. b buf` that the push goes through), still reads what it did: its
+  handles stay where they were (agora #118). A field viewer of an element
+  is not one: the handle it copied went with the element (#267).
 - **A view also ends at reallocation.** `string_data`, a `Slice` and
   whatever holds one are views of the buffer and end at any mutation that
   may reallocate it (§2.10), wherever the view has travelled.
