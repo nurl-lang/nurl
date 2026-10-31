@@ -198,7 +198,7 @@ A test passes when every seed passes (exit 0 and its
 reports how many seeds it passed, the first seed it failed under, and the
 line that replays it:
 
-```
+```text
   PASS atomic_counter (40/40 seeds)
   FAIL racy_counter (15/40 seeds) — first failing seed 1 (output mismatch)
     replay: nurlpkg test --sim --seed 1 tests/racy_counter.nu
