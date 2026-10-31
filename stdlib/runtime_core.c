@@ -4535,6 +4535,34 @@ static int nurl__cpu_arm_aes_detect(void) {
 #endif
 }
 
+/* FEAT_SHA256: SHA256H / SHA256H2 / SHA256SU0 / SHA256SU1. */
+static int nurl__cpu_arm_sha2_detect(void) {
+#if defined(__APPLE__)
+    int sha = 0;
+    size_t n = sizeof sha;
+    /* Absent before macOS 12; every Apple Silicon CPU has it. */
+    if (sysctlbyname("hw.optional.arm.FEAT_SHA256", &sha, &n, 0, 0) != 0) return 1;
+    return sha != 0;
+#elif defined(_WIN32)
+    /* PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE: AES, PMULL, SHA1, SHA2. */
+    return IsProcessorFeaturePresent(30) != 0;
+#elif defined(__linux__) && !(defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
+    /* HWCAP_SHA2 (bit 6). */
+    return (getauxval(AT_HWCAP) & (1ul << 6)) != 0;
+#elif defined(__FreeBSD__)
+    unsigned long hw = 0;
+    if (elf_aux_info(AT_HWCAP, &hw, sizeof hw) != 0) return 0;
+    return (hw & (1ul << 6)) != 0;
+#elif defined(__GNUC__) || defined(__clang__)
+    /* ID_AA64ISAR0_EL1.SHA2, bits 15:12: 1 = SHA-256, 2 = and SHA-512. */
+    unsigned long long isar0;
+    __asm__ __volatile__("mrs %0, ID_AA64ISAR0_EL1" : "=r"(isar0));
+    return ((isar0 >> 12) & 0xf) >= 1;
+#else
+    return 0;
+#endif
+}
+
 static int nurl__cpu_env_off(const char *name) {
     const char *e = getenv(name);
     return e && e[0] == '0' && e[1] == '\0';
@@ -4545,7 +4573,7 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_vaes = 0;
     nurl__cpu_vaes512 = 0;
     nurl__cpu_aes = nurl__cpu_arm_aes_detect() && !nurl__cpu_env_off("NURL_CPU_AES");
-    nurl__cpu_sha = 0;
+    nurl__cpu_sha = nurl__cpu_arm_sha2_detect() && !nurl__cpu_env_off("NURL_CPU_SHA");
     nurl__cpu_adx = 0;
     nurl__cpu_ifma = 0;
     nurl__cpu_v4 = 0;
@@ -4600,6 +4628,15 @@ int nurl_cpu_x86_aes(void) {
 int nurl_cpu_arm_aes(void) {
     if (nurl__cpu_aes < 0) nurl__cpu_detect();
     return nurl__cpu_aes;
+}
+
+/* Does this CPU have the AArch64 SHA tier — FEAT_SHA256 (above)? The
+ * gate and nurl_cpu_has_sha_arm of a module nurlc built for AArch64 ask
+ * this, as an x86-64 module's nurl_cpu_has_sha asks nurl_cpu_x86_sha;
+ * the same cache answers both, so NURL_CPU_SHA=0 takes either away. */
+int nurl_cpu_arm_sha2(void) {
+    if (nurl__cpu_sha < 0) nurl__cpu_detect();
+    return nurl__cpu_sha;
 }
 
 /* Does this CPU have the VAES tier — x86-64-v3 + AES-NI + PCLMULQDQ +
