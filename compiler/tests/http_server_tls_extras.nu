@@ -35,7 +35,7 @@ $ `stdlib/ext/http_server.nu`
     : !Output ProcessErr r ( process_run `openssl` args input )
     ?? r {
         T o → {
-            : String out ( string_from ( output_stdout o ) )
+            : String out ( client_text ( output_stdout o ) )
             ? with_err { ( string_push_str out ( output_stderr o ) ) } {}
             ( output_free o )
             ^ out
@@ -77,7 +77,8 @@ $ `stdlib/ext/http_server.nu`
 // The subject of the certificate the server presents for SNI `host`:
 // `openssl s_client -showcerts` with an empty stdin (it ends after the
 // handshake), then its output on the stdin of `openssl x509 -noout
-// -subject` ("subject=CN = X"). The pipe is this function, not a shell.
+// -subject -nameopt RFC2253` ("subject=CN=X"). The pipe is this function,
+// not a shell.
 @ probe_sni_cert i port s host → String {
     : String target ( string_from `127.0.0.1:` )
     ( string_push_str target ( nurl_str_int port ) )
@@ -87,7 +88,10 @@ $ `stdlib/ext/http_server.nu`
     ( vec_push [s] conn `-servername` ) ( vec_push [s] conn host ) ( vec_push [s] conn `-showcerts` )
     : String pem ( openssl_out conn `` F )
     : ( Vec s ) subj ( vec_new [s] )
+    // RFC 2253 names print as `CN=X` on every OpenSSL version (3.0's
+    // default is `CN = X`, newer ones `CN=X`).
     ( vec_push [s] subj `x509` ) ( vec_push [s] subj `-noout` ) ( vec_push [s] subj `-subject` )
+    ( vec_push [s] subj `-nameopt` ) ( vec_push [s] subj `RFC2253` )
     ^ ( openssl_out subj ( string_data pem ) F )
 }
 

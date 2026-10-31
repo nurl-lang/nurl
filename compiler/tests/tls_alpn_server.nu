@@ -31,6 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
+$ `compiler/tests/loopback_client_mod.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/x509_gen.nu`
@@ -198,9 +199,7 @@ $ `stdlib/std/time.nu`
                             // 5. OpenSSL client, offer order http/1.1 then h2:
                             //    the SERVER's preference decides → h2
                             //    (python3 with an argument vector, no shell: agora #123)
-                            : ( Vec s ) pyargs ( vec_new [s] )
-                            ( vec_push [s] pyargs `-c` )
-                            ( vec_push [s] pyargs `import ssl,socket
+                            : String out ( py_run `import ssl,socket
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -210,12 +209,8 @@ ss=ctx.wrap_socket(s,server_hostname='localhost')
 ss.sendall(b'ping')
 echo=ss.recv(64)
 print('openssl_client=['+str(ss.selected_alpn_protocol())+'] echo='+('T' if echo==b'ping' else 'F'))
-ss.close()` )
-                            : !Output ProcessErr pr ( process_run `python3` pyargs `` )
-                            ?? pr {
-                                T po → { ( nurl_print ( output_stdout po ) ) ( output_free po ) }
-                                F e → ( label `openssl_client` ( process_err_name e ) )
-                            }
+ss.close()` `openssl_client` )
+                            ( nurl_print ( string_data out ) )
                             // 6. OpenSSL client with nothing in common must see the
                             //    fatal no_application_protocol ALERT (number 120), not
                             //    a bare close. s_client prints the number on every

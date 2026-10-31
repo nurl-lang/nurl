@@ -56,9 +56,7 @@ $ `stdlib/core/string.nu`
             // a pthread so the blocking client process cannot deadlock a
             // fiber worker.
             : ( @ v ) client \ → v {
-                : ( Vec s ) pyargs ( vec_new [s] )
-                ( vec_push [s] pyargs `-c` )
-                ( vec_push [s] pyargs `import ssl,socket,sys
+                : String out ( py_run `import ssl,socket,sys
 socket.create_connection(('127.0.0.1',18921)).close()
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
@@ -74,15 +72,8 @@ while True:
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1].decode('latin-1',errors='replace')
 sys.stdout.write('tls_status='+first+chr(10))
-sys.stdout.write('tls_body='+body)` )
-                : !Output ProcessErr cr ( process_run `python3` pyargs `` )
-                ?? cr {
-                    T co → {
-                        ( nurl_print ( output_stdout co ) )
-                        ( output_free co )
-                    }
-                    F e → ( tls_async_println `client` ( process_err_name e ) )
-                }
+sys.stdout.write('tls_body='+body)` `client` )
+                ( nurl_print ( string_data out ) )
                 ( server_stop srv )
             }
             : !Thread ThreadErr ct ( thread_spawn client )

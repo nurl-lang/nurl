@@ -79,3 +79,31 @@ $ `stdlib/core/vec.nu`
         F _ → { ^ F }
     }
 }
+
+// What a program printed, with the CRLF line ends of a text-mode stdout
+// on Windows (python3, openssl) read as the '\n' the golden compares.
+@ client_text s raw → String {
+    : String t ( string_from raw )
+    ^ ( string_replace t `\r\n` `\n` )
+}
+
+// Run `python3 -c <src>` to completion (the server runs on other threads
+// meanwhile); what it printed, as client_text reads it. A failed start
+// is printed as `<label>=<error>` and reads as nothing.
+@ py_run s src s label → String {
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-c` )
+    ( vec_push [s] args src )
+    : !Output ProcessErr r ( process_run `python3` args `` )
+    ?? r {
+        T o → {
+            : String t ( client_text ( output_stdout o ) )
+            ( output_free o )
+            ^ t
+        }
+        F e → {
+            ( nurl_print label ) ( nurl_print `=` ) ( nurl_print ( process_err_name e ) ) ( nurl_print `\n` )
+            ^ ( string_new )
+        }
+    }
+}

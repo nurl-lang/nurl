@@ -147,7 +147,7 @@ unsafe @ dump_head ( Vec u ) bytes → v {
 
                     ( tcp_close_listener listener )
 
-                    : String client_out ( client_collect child 10000 )
+                    : String client_out ( client_collect child 30000 )
                     ( print_label_str `client_saw` ( string_data client_out ) )
                 }
                 F e → {
