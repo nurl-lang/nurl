@@ -10,6 +10,465 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.83.0] — 2026-10-31
+
+### Added
+
+- **psql 0.6.0 pipelines** (Agora #40). The copies of one `PgConn` on any number of fibers or threads use it at the same time — each request queued with its own Sync, each answer handed back to the request that asked — so N callers keep up to N queries in flight on one socket: one connection, one runtime worker, 33.7k queries/s for one fiber and 150k for 128, where 0.5.1 carried one query at a time and deadlocked with two fibers on one worker (it held the connection's `Locked` across the socket wait). An error ends only its own request; a lost stream fails every request on its way.
+
+- **`simd v4 @ f`: a third clone for x86-64-v4** (Agora #227, grammar
+  v2.12). `simd` takes an optional level word. `simd v4` compiles the
+  body a third time for x86-64-v4 (AVX-512 F/BW/CD/DQ/VL on top of v3),
+  beside the baseline and x86-64-v3 clones. The dispatcher picks it where
+  the CPU has it: Skylake-SP, Ice Lake and later Intel servers, and
+  Zen 4 and later. The code keeps v128/v256 vectors, but gets 32
+  registers, VPROLD and VPTERNLOG. A bare `simd` is unchanged. Any other
+  word after `simd` is an error that names the one level there is. The
+  runtime's answer is `nurl_cpu_x86_v4()`. `NURL_CPU_V4=0` takes it away,
+  and so does `NURL_CPU_V3=0`. Inside each clone, a `nurl_cpu_x86_v4()`
+  whose answer its dispatcher already knows is a constant, as
+  `nurl_cpu_x86_v3()` already was. nurlfmt keeps the level on the
+  prefix's line, and the language server indexes `simd v4` functions.
+
+- **formal: A3.0, threads that only move, is proven (`A3.claim`, Agora
+  #228).** The first data-race theorem over A2's own step: a program A2
+  types, whose spawned functions take only `sink` parameters of types that
+  hold no views, has no thread stuck on memory, no data race, and nothing
+  left allocated once every thread has finished, on every interleaving
+  (`formal/check.sh`, Lean 4.35.0, standard axioms only; carried to the
+  C11 / LLVM memory model by DRF-SC, which `formal/CLAIM.md` lists in the
+  trusted base). Each thread keeps A2's invariant on its own part of the
+  address space: a step on the shared address space is a step on that part
+  and leaves the others as they were, and a spawn cuts the spawner's part in
+  two. What threads share (`Arc`, locks, `RwLocked`, atomics and channels)
+  is A3.1–A3.6.
+
+- **A simulated network behind `TcpListener` / `TcpConn`** (Agora #240, DST 1/4). `std/net` has a transport seam: a handle made over a `NetTransport` object sends every `tcp_*` operation to it, so `HttpServer`, the `HttpApp` facade and anything else written against the handles run over it unchanged. `stdlib/std/net_sim.nu` is the first transport: `netsim_new nodes seed drop_pct latency_ms jitter_ms` makes a set of nodes, each a whole sans-IO TCP/IP stack (`stdlib/net/`), whose frames cross the seeded bus of `stdlib/dist/sim.nu` with its drops, latency, jitter and partitions (`netsim_partition` / `netsim_heal`); `netsim_listen` and `netsim_connect` make the handles, with the kernel's `NetErr`s. No operating-system socket is opened. Waiting uses the runtime's clock and its fiber park / thread block, so a runtime with a simulated clock and scheduler (DST 2/4) makes it reproducible by seed without touching the seam. A program that makes no simulated network pays nothing: `std/net` does not import it, the handles keep their layout and the plaintext path takes no extra test. `sim_next_due` (dist/sim.nu) tells when the bus's next message is due. packages/http 0.7.10 adds `http_app_serve app listener`, which serves a listener the caller made.
+
+### Changed
+
+- **Windows test records keep the program's output order** (Agora #256,
+  github#1396). `run_tests.ps1` read stdout and stderr on two pipes and
+  concatenated them, so every stderr line landed after all of stdout. A
+  test now gets one pipe for both, as `2>&1` does (CreateProcess on
+  Windows, `/bin/sh -c 'exec "$0" 2>&1'` under pwsh elsewhere). The nine
+  `outputs-windows/` goldens that recorded only that reordering are
+  deleted; the POSIX goldens hold.
+
+- **`nurlfmt_idempotent.sh` compiles both sides by the same path** (Agora
+  #263, github#1409): 66 false IR failures to 0. The original and the
+  formatted copy were compiled under different file names, which every
+  checked index embeds in the IR.
+
+- **`formal/BLUEPRINT.md` is generated where it can drift** (Agora #246,
+  github#1390). Its headline counts, the A2 module DAG and index, and the
+  crown theorems' statements and line ranges come from
+  `webdocs/scripts/gen-formal-data.mjs`; `--check` fails CI's "shared
+  files are generated" job when they are stale. 24 of its 28 hand-kept
+  rows no longer matched the files.
+
+- **The proof builds without a warning on Lean 4.35** (Agora #244,
+  github#1388). 159 warnings (deprecated names, unused simp arguments,
+  unused binders) are fixed with the linter's own edits; no statement
+  changes, and every theorem rests on the standard axioms as before.
+
+- **`docs/dev/ELABORATION.md`: the design for the h740–h974 hole family**
+  (Agora #222, github#1377). Each producer (a join, a value block, a
+  call, a try) lands once in a statement temporary that the consumer
+  reads by name, instead of N consumers × M producer forms fixed pair by
+  pair. Its oracle, the elaborated twin of every hole probe, found the
+  24 faulting twins filed as #242.
+
+- **A failed split build says which step lost the code** (Agora #234
+  step 1, github#1382). `compiler/tests/split_equivalence.sh` prints each
+  part's size, checksum and define count, each object's defined symbols,
+  and whether a rerun of nurlc gives the same parts.
+
+- **Why kTLS stays opt-in, measured on a VAES CPU** (Agora #94).
+  `docs/NETWORKING.md` said kTLS pays for bulk traffic and that a CPU
+  whose kernel AES-GCM uses VAES might make it the faster path. On a
+  Tiger Lake laptop (Linux 6.18, `aes_gcm_enc_update_vaes_avx10_256`)
+  the tls-bench bulk cell runs at 2 030–2 200 MB/s under kTLS against
+  3 100–3 290 MB/s in the userspace record layer. The kernel's TLS
+  `sendmsg` holds the socket lock for the whole 1 MB body, so the ACKs
+  that would open the window wait in the backlog (rwnd-limited 36–67 %
+  of the time); in 64 KB calls the stall goes (0.1 %) and the server
+  runs out of CPU instead, because the kernel's send path costs
+  0.46–0.49 ns per byte against the userspace path's 0.27–0.29. The
+  section now carries the measurements and the breakdown, and the
+  `std/tls.nu` comment no longer says kTLS pays for bulk.
+
+- **The HTTP and TLS server tests run on Windows: no test shells out
+  any more** (Agora #123). Twelve server/client tests wrote POSIX shell
+  into `process_run_shell`: a background `{ python3 -c … > /tmp/x; mv …; } &`,
+  a `for … sleep 0.05; cat /tmp/…` loop, `openssl … | grep`. On Windows that
+  shell is cmd.exe, so the HTTP server, the TLS servers, the per-IP DoS
+  caps, pipelining, panic isolation, SNI, mTLS, ALPN and large TLS records
+  were never exercised there. The tests:
+  async_http_server_tls, http_server_dos, http_server_limits,
+  http_server_panic, http_server_pipelined, http_server_seq,
+  http_server_tls, http_server_tls_extras, net_loopback, net_write_pair,
+  tls_alpn_server, tls_large_record.
+  - The client (python3, curl or openssl) is a child process started with
+    an argument vector (`process_spawn` / `process_run`), so there is no
+    quoting.
+  - What the client prints comes back over its stdout pipe
+    (`compiler/tests/loopback_client_mod.nu`), so there are no temp files
+    and no polling. A client still running at the timeout is killed, so
+    the test fails on its output instead of hanging.
+  - Certificates are written to the test's working directory, not
+    `/tmp`, by openssl run the same way.
+  - The `posix-shell` requirement token is gone from test_skips.sh and
+    run_tests.ps1.
+  - The POSIX goldens are unchanged.
+
+- **Breaking (Windows): async socket I/O needs Windows build 20348 or
+  later — Windows 11 or Windows Server 2022** (Agora #137). A fiber's
+  socket wait now runs on the netpoller, which on Windows is an I/O
+  completion port fed by `ProcessSocketNotifications`, a call Windows 10
+  does not have. Every program still starts on Windows 10, and fibers,
+  timers, sleeps, channels and blocking socket I/O work there; the first
+  socket wait from a fiber panics with a message that names the
+  requirement and what still works.
+
+- **formal: a `% Drop` destructor runs as code inside the calculus (A2,
+  Agora #221).** A2's drops ran no program code, so `formal/CLAIM.md`
+  listed every user destructor as outside the proof. A binding with a
+  destructor (`letd`, scoped by `scopeD`) now runs it at the scope's end,
+  on the binding lent, before the drop glue frees the tree. A panic that
+  reaches the frame runs it once, frees the binding and raises again, so a
+  destructor that panics during an unwind is covered too. Proving the
+  panic path took a new invariant: no borrowed parameter depends on a
+  scope opened inside its call (`Inv.pinOut`). `A2.memory_safe`,
+  `A2.soundness`, `A2.no_leak_end` and `A2.no_leak_panic` are re-proven
+  over the new statements (`formal/check.sh`, Lean 4.35.0, standard axioms
+  only). This covers destructors of types that hold no views. Those that
+  hold one need the `DtorSafe` rule (Agora #224) and are still listed in
+  CLAIM.md.
+
+- **A scope drops its values newest first** (Agora #224). Scope-end
+  drops ran in declaration order; they now run in the reverse order, as
+  in Rust and C++. A value bound after another is dropped before it, so a
+  value built from a view of another (a struct holding `( string_data s
+  )`, a `Slice` of a Vec) is dropped before what it views. Destructors
+  with side effects run in the new order: tests that print from `% Drop`
+  impls at a scope's end print in reverse.
+
+- **The lexer no longer copies a token's text to the heap** (Agora #236).
+  Every token got a freshly allocated copy of its spelling, written into
+  the token window and freed again when the slot was reused: `(`, `:`,
+  `+` and every name alike. That was about a third of the lexer's time.
+  Now a fixed spelling (an operator, a bracket, `→`) points at a literal,
+  and a name's text is its own span of the source, copied only when the
+  parser asks for it. Only numbers, string literals and merged `a::b`
+  names still own text. The self-compile runs 2.1 % fewer instructions,
+  `nurlapi/main.nu` 1.9 % and a closure-heavy file 3.2 %, with
+  byte-identical output.
+
+- **Compiling a program with many calls no longer spends a tenth of its
+  time copying lists** (Agora #237). The module-end passes that emit the
+  ownership flag constants (`emit_sink_flags`, `mem_emit_arg_flags`,
+  `mem_emit_dtor_flags`, `mem_emit_env_flags`, `mem_emit_scratch_flags`)
+  walked their lists with `str_first_word` / `str_skip_word`, and each
+  step copied the whole rest of the list: quadratic in the number of call
+  sites. They walk with a cursor now. `nurlapi/main.nu` compiles in 13 %
+  fewer instructions, with byte-identical output.
+
+- **formal: a binding with a destructor takes no premise on its body's
+  typing (Agora #243).** A2-drop.1's `StmtT.letd` asked of its body's
+  typing what the panic step needs (`KeepOut`, `CtxWF`, `NameWF`). That
+  restricted which programs the calculus typed. Now one lemma gives all
+  three for every source body: source typing keeps every binding with its
+  mode and type, and a borrowed parameter whose sources are lent out with
+  its entry (`StmtT.ctxRel`, `formal/A2/SrcKeep.lean`). `letd` types every
+  body the other rules type, and `memory_safe`, `no_leak_end` and
+  `no_leak_panic` still rest on the standard axioms only.
+
+- **CI's longest job runs as three jobs at once** (Agora #251, part 2).
+  `build + bootstrap fixed point + test corpus` took 34 minutes (p50) and
+  was the critical path of every PR. It is now three parallel jobs:
+  - `build-corpus` runs ./build.sh: the bootstrap fixed point and the
+    test corpus.
+  - `build-gates` and `build-gates-2` each build the toolchain with
+    `--no-tests` and run the gates that used to follow it: every gate,
+    unchanged and in the same order.
+  A fourth job under the old name passes only when all three passed, so
+  the required check and the merge queue see the same name, with nothing
+  dropped or loosened.
+
+- **The hole-probe gate checks probes in parallel** (Agora #251, part 1).
+  `tools/fuzz/holes/check.sh` compiled the ~960 probes one at a time,
+  each twice (plain and under ASan): 6.6 minutes of CI's critical path.
+  It now fans them out over the CPUs (`HOLES_JOBS`, default all of them).
+  Each probe's verdict goes to its own file, and the report prints them in
+  the order the probes were given, so the output is the same at any
+  parallelism. #232's verdict rules are unchanged: REJECTED needs a
+  located compile error, and UNCHECKED counts as a failure. A probe whose
+  check printed nothing is UNCHECKED too.
+
+- **CI on main is no longer thrown away part-way** (Agora #251, part 3).
+  20 of 35 push-to-main runs were cancelled by the next merge, which was a
+  quarter of all ci.yml job-minutes and left those commits untested.
+  ci.yml, windows-tests and macos-tests now cancel an in-progress run
+  only on a PR branch. On main a started run finishes, and GitHub keeps
+  only the newest pending run behind it. The release commit's macOS run
+  is therefore not cancelled by a later merge once it has started.
+
+### Performance
+
+- **ChaCha20's vector kernels run their quarter-rounds in lockstep**
+  (Agora #103). The four quarter-rounds of a half round were written one
+  after another, and the backend kept that order: each half round waited
+  on the whole latency chain of the last one, with spilled state on it.
+  Written as one step of all four, then the next, they run side by side.
+  On Haswell the eight-block double round went from 62 to 55 cycles, the
+  same as clang's C intrinsics, and ChaCha20 over 16 KB went from 680 to
+  654 cycles per 512 bytes (OpenSSL's AVX2 code: 637). The four-block SSE2
+  kernel went from 1614 to 1432. ChaCha20-Poly1305 sealing 16 KB went from
+  8486 to 8082 ns on Haswell and from 9251 to 9044 ns on Skylake.
+- **A `simd` clone answers its own `nurl_cpu_x86_v3` question** (Agora
+  #103). `.x86v3` runs only where the dispatcher's probe said 1 and `.base`
+  only where it said 0, so a body that asks the probe itself gets the
+  constant. LLVM then drops the path the clone never takes. A crypto
+  `.base` still asks, because a v3 CPU without the tier runs it too. For a
+  program using ChaCha20, the eight-block kernel that `.base` compiled for
+  SSE2 and could never run is gone: clang takes 6.9 % fewer instructions
+  than before this change and the code is 5.4 % smaller.
+
+- **AES-GCM on AVX-512 VAES CPUs: a 16 KB TLS record seals 6–8 % faster,
+  and 1 KB or less about 20 % faster** (Agora #115). Ice Lake server,
+  Sapphire Rapids and Zen 4/5 run this zmm kernel. The kernel had two
+  costs that aws-lc's does not:
+  - Sealing read each sixteen-block step's ciphertext back from the
+    output buffer for GHASH, a few dozen cycles after storing it. A TLS
+    record's payload starts 5 bytes into its buffer, so those 64-byte
+    stores straddle two cache lines. A split store cannot forward to a
+    load, so every read-back waited for its store to reach L1, and so
+    did the final fold after the last step. The ciphertext now stays in
+    the four registers that produced it.
+  - Each step's GHASH reduction added up all three accumulators' lanes
+    and then reduced on xmm, 22 vector operations. It now reduces on all
+    four lanes and adds two of them, 16 operations.
+
+    While 512-bit work is in flight, port 1 runs no vector operations,
+    so the loop is bound by its vector operations on ports 0 and 5.
+    Each one removed saves half a cycle a step.
+
+  Measured on a Sapphire Rapids class Xeon, `aes_gcm_seal_in` with the
+  payload 5 bytes into its buffer. Each figure is the best of three
+  interleaved runs of seven passes; aws-lc is aws-lc-rs's
+  `seal_in_place_separate_tag` on the same layout:
+
+  | Payload | Before | After | aws-lc |
+  |---|---|---|---|
+  | 256 B | 87 ns | 67 ns | 125 ns |
+  | 1 KB | 130 ns | 107 ns | 184 ns |
+  | 4 KB | 327 ns | 304 ns | 359 ns |
+  | 16 KB | 1 213 ns | 1 116 ns | 1 155 ns |
+  | 64 KB | 4 570 ns | 4 441 ns | 4 506 ns |
+
+  In tls-bench on the same host, the AES-128-GCM seal 16 KB row is at
+  102 % of aws-lc, and 1 MB bulk over AES-128-GCM is at 110 % of rustls.
+
+  The ymm (VAES) and xmm (AES-NI) kernels are unchanged. New gates:
+  - `compiler/tests/aes_gcm_wycheproof` runs Wycheproof's 133 AES-GCM
+    cases on the software key and on every hardware tier, sealing both
+    into a fresh Vec and in place.
+  - `aes_gcm_hw_agree` adds twelve pseudorandom lengths below 64 KiB
+    per key size.
+  - `crypto_tier_ir.sh` checks that each wide kernel's GHASH is
+    VPCLMULQDQ at its own width, and runs the Wycheproof test with each
+    tier masked off in turn.
+
+- **The netpoller runs on Windows, macOS and FreeBSD, not only Linux**
+  (Agora #137). Those hosts ran a dedicated `poll(2)`/`WSAPoll` reactor
+  thread, and a ready socket waited until the OS gave that one thread a
+  time slice: under load an accept came 1 820 dispatches late on the
+  Windows CI runner, 4 070 on the FreeBSD CI VM, and 88 to 1 673 on a
+  16-thread Windows laptop running 16 CPU hogs, where the bound is 16.
+  Now, as on Linux, an idle worker blocks in the kernel's readiness queue
+  and a busy one drains it every 16th dispatch: kqueue (`EV_CLEAR` +
+  `EVFILT_USER`) on macOS and FreeBSD, a completion port with persistent
+  edge-triggered `ProcessSocketNotifications` registrations on Windows.
+  On that laptop `sched_accept_admission`'s worst delay is 16 idle and
+  16 under the same load, and the test runs on Windows, macOS and FreeBSD
+  instead of being skipped. A park no longer costs a wake-socket send,
+  an O(waiters) `WSAPoll` rebuild and a cross-thread wake; a socket is
+  registered once per lifetime.
+
+- **P-256 ECDH shared is 7 % faster, ECDSA verify 5 %** (Agora #225).
+  Every Jacobian doubling does ten modular additions, and their final
+  step sat on the doubling's critical path. That step chooses between
+  `a + b` and `a + b − p` without a branch. It derived its choice from
+  the carry and the borrow through a signed difference, a comparison
+  and two masks, and LLVM turned that into a seven-instruction chain
+  ending in `cmov`, `and` and `or`.
+
+  The choice now comes from one more borrow, out of the fifth word of
+  `(carry : a + b) − p`, and one XOR-AND-XOR per limb picks the result. A
+  doubling went from 191 to 175 ns. The mixed addition also forms 2V
+  while H³ is still being multiplied, so X3 = R² − H³ − 2V waits on H³
+  for two subtractions instead of three.
+
+  Measured on a Sapphire Rapids class Xeon (min of 9, interleaved):
+
+  | Operation | Before | After |
+  |---|---|---|
+  | ECDH shared | 78.8 µs | 73.1 µs |
+  | ECDSA verify | 77.4 µs | 73.3 µs |
+
+  Keygen and sign run the fixed-base comb, which has no doublings, and
+  do not change.
+
+- **ChaCha20-Poly1305 is 19 % faster on AVX-512 CPUs** (Agora #227).
+  ChaCha20's eight-block pass is `simd v4`. Every lane rotate is one
+  VPROLD there; the v3 clone rotates by 16 and 8 with a byte shuffle,
+  and by 12 and 7 with shift, shift, or. The 32 registers keep the
+  eight-block state off the stack: 12 ymm stack accesses in the
+  function, down from 110. On a Sapphire Rapids class Xeon, best of six
+  interleaved runs, 16 KB:
+
+  | | ChaCha20 | Seal |
+  |---|---|---|
+  | x86-64-v3 clone (before; `NURL_CPU_V4=0`) | 7.27 µs | 10.33 µs |
+  | x86-64-v4 clone | 5.24 µs | 8.40 µs |
+  | aws-lc | | 9.34 µs |
+
+  `chacha20poly1305_cpu_tier()` now says `avx512` on these CPUs.
+
+- **The third clone costs no compile time**: Poly1305's four-way kernel
+  now asks `nurl_cpu_x86_v3()` itself and consumes nothing without v3, as
+  its callers already ensured. In its baseline clone that answer is the
+  constant 0, so the 11.5 KB of v256 arithmetic in SSE2 halves, which
+  never ran, is now a bare return. A program that imports
+  `chacha20poly1305` compiles as fast as before (LLVM, median of 11:
+  1223 ms before, 1230 ms after). Its object is 6 KB smaller.
+
+- **SHA-256 without SHA-NI is 16 % faster** (Agora #230). These are hosts
+  such as Skylake-SP and Cascade Lake cloud instances; HMAC, HKDF and
+  every TLS transcript hash run on it there. The message schedule now
+  runs four words at a time on `v128` (SSE2, NEON, or wasm SIMD128,
+  whatever the target has), and it runs inside the round loop, eight
+  words ahead of the rounds. Its vector work fills the issue slots that
+  the rounds' dependency chain leaves idle, and each round reads
+  W[t] + K[t] with one load and no add. Maj(a, b, c) is computed as
+  b ^ ((a ^ b) & (b ^ c)) with a ^ b carried to the next round, where it
+  is b ^ c: one operation fewer a round.
+
+  The rounds themselves already matched aws-lc's under llvm-mca. The
+  scalar schedule, run as a separate pass, was the ~3 cycles a round of
+  difference. The transform is not marked `simd`: its baseline lowering
+  is within 3 % of an x86-64-v3 clone, and a second copy of it would
+  make every program that hashes compile slower (measured: unchanged at
+  about 400 ms against 460–540 ms with the clone).
+
+  Measured on a Sapphire Rapids class Xeon with `NURL_CPU_SHA=0`, 16 KB
+  per hash, best of three interleaved runs:
+
+  | Implementation | Time |
+  |---|---|
+  | Before | 65.3 µs |
+  | After | 54.7 µs |
+  | aws-lc, SHA extensions masked | 49.6 µs |
+
+  That is 89–91 % of aws-lc across runs, up from 76 %. CPUs with SHA-NI
+  keep their kernel unchanged.
+
+### Fixed
+
+- **An accept already ready when its park takes hold runs next** (Agora
+  #266, github#1408). `nurl__reactor_activate` woke a fiber whose fd was
+  ready at activation time at the tail of the global queue, with the
+  newest stamp. For an accept that undid Admission: on Windows, where the
+  first registration's probe banks a connection that arrived before it,
+  `sched_accept_admission` saw a whole pass of its 64-fiber queue. The
+  admitted fiber now goes to the head of its worker's own queue, stamped
+  the oldest, as a polled ready one does.
+
+- **A destructor's drop is a use of the views it may read** (Agora #224,
+  probes drop_view_*). A value whose type has a `% Drop` of the program's
+  own that may read a view it holds (in a field, an element, or a trait
+  object's boxed value) read freed memory when its drop ran after the
+  view's source ended. That happened when the source was reallocated or
+  moved while the holder lived, when the source ended with an inner block
+  or a loop pass the holder outlived, and when the source was dropped
+  first at the end of their scope, which was the natural "source first,
+  holder second" order. The order is now safe by itself, and a source
+  that would still end first is refused where it ends. The message names
+  the holder and says how to fix it: bind the holder after its source,
+  end it first in a block, or have it hold a copy that owns its data. A
+  value with no destructor of its own, and a value lent by a call, are
+  not affected.
+
+- **A closure no longer captures an outer binding that a select arm's
+  result name or a foreach's element shadows** (Agora #238, after #125).
+  `?? { [i] ch → w { … } }` and `~ w xs { … }` bind `w` for their block.
+  The closure capture scan took that `w` for the outer one. A thread's
+  closure then moved a Vec it never touched, and the spawner's next use
+  was rejected. The outer binding is still captured wherever the body
+  reads it.
+
+- **A foreach's element no longer stays bound after its loop** (Agora
+  #245). `~ s xs { … }` defined `s` in the enclosing scope, so the
+  element could still be read after the loop. If the Vec had been
+  cleared, it was a view of a released slot; if the loop never ran, it
+  had never been written. Both were memory errors in safe code. It also
+  replaced an outer binding of the same name. The element is now bound
+  for the body only: after the loop the name is the outer binding again,
+  or undefined.
+
+- **A closure that releases one capture takes over only that one**
+  (Agora #247, probes thread_consumes_one_capture_frees_shared_atomic,
+  _arc, fiber_consumes_one_capture_frees_shared_atomic and
+  closure_consumes_one_capture_frees_kept_vec). A closure whose body handed
+  one capture to a `sink` moved EVERY handle it captured into its env. An
+  Atomic or an `Arc` the spawner read after `thread_join`, or a Vec the
+  frame read after calling the closure, was freed when the thread (or the
+  closure) ended: heap-use-after-free in safe code. Only the released
+  capture, and what a spawn takes over, moves in now. A handle the frame
+  still uses stays its own, and the spawn's copy of the env shares or
+  copies it, as for a closure that releases nothing.
+
+- **A `% Drop` holder moved on only one path still protects its views**
+  (Agora #252, probes drop_view_holder_moved_on_one_path_realloc, _sink,
+  _inner_scope and drop_view_holder_moved_in_one_arm). #224's drop check
+  took a holder moved in one branch of a `?` (or one arm of a `??`) as gone
+  after the join. On the other path it was still owned, and its
+  destructor read the view after the view's source was reallocated, moved
+  or ended. A maybe-moved holder now counts as one that lives, as
+  formal's DtorSafe join rule says. Only a holder moved on every path is
+  gone before its source ends.
+
+### Security
+
+- **The JavaScript dependency audit is green again: no package pulls a
+  minimatch older than 11.0.1** (Agora #239, GHSA-g3hv-75wg-m249,
+  denial of service through glob-pattern amplification). The audit failed
+  on every PR touching webdocs/ or tooling/vscode-nurl/.
+  - The VS Code extension, where minimatch ships at run time, moves to
+    vscode-languageclient 11. That needs VS Code 1.91 or newer. minimatch
+    is pinned to ^11.0.1 with an `overrides` entry until the client depends
+    on it itself; the client only uses `Minimatch`, whose API is unchanged.
+  - webdocs drops ESLint and eslint-config-next. No workflow ran
+    `pnpm lint`, and Next 16's build does not lint. Its React, import and
+    a11y plugins still require minimatch 3, have no fixed release, and do
+    not support ESLint 10, so the whole unused chain goes: 324 fewer
+    packages in the lockfile, and no other version changed.
+
+### Known issues
+
+- **Six soundness holes are open, each with a fix in progress**:
+  agora #242 (a join or value block bound by `:` and handed on by name),
+  #254 (a `% Drop` holder given a view of a younger binding, then a
+  panic), #259 (a view gained through an `inout` callee or a closure's
+  assignment of a capture), #264 (a payload moved out of an enum that was
+  itself taken out of an Option is dropped again with the enum), #267 (a
+  field read out of an element borrow outlives the elements' drop) and
+  #274 (a block arm of a join whose tail names an owner already moved).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Agora #224, #245, #247 and #252 are closed in this release. A
+  release does not say "no hole is known open" while one is.
+
 ## [0.82.0] — 2026-10-31
 
 ### Added

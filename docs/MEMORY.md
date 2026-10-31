@@ -954,10 +954,14 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Three holes are known open**: agora #242 (a join or value block bound by
+**Six holes are known open**: agora #242 (a join or value block bound by
 `:` and handed on by name), #254 (a `% Drop` holder given a view of a
-younger binding, then a panic) and #259 (a view gained through an `inout`
-callee or a closure's assignment of a capture is not tracked). Agora #247
+younger binding, then a panic), #259 (a view gained through an `inout`
+callee or a closure's assignment of a capture is not tracked), #264 (a
+payload moved out of an enum taken out of an Option is dropped again with
+the enum), #267 (a field read out of an element borrow outlives the
+elements' drop) and #274 (a block arm of a join whose tail names an owner
+already moved). Agora #247
 (a closure consuming one capture released another) and #252 (a holder
 moved on only one branch) are closed in 0.83.0.
 [`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
