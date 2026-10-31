@@ -145,6 +145,11 @@ jobs:
         # Python over fixture runs, no toolchain.
         shell: bash
         run: python3 tools/tests/test_tls_bench_report.py
+      - name: Generated RSA-2048 ADX kernels are current
+        # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
+        # between markers; a hand edit or a stale block fails here.
+        shell: bash
+        run: python3 tools/gen_rsa_adx16.py --check
 
   installer-controls:
     # tools/get-nurl.sh is classed with the web docs (nurl-lang.org serves
@@ -415,6 +420,13 @@ jobs:
         # function pointer; this compiles it to IR and requires that no
         # other function calls __errno_location directly.
         run: ./tools/check_errno_fiber_safe.sh
+
+      - name: borrow-checker side tables are written through the walk logs
+        # bck_loop's fixpoint (agora #210) stops once a walk of the body
+        # changes no state and no fact in g_bck; the facts it sees are the
+        # ones bck_put / bck_add_word / bck_add note. A direct write could
+        # end a loop's analysis a walk too early.
+        run: ./tools/check_bck_writes.sh
 
       - name: nolibc covers every libc symbol the runtime core calls
         # unikernel/nolibc/ exists to supply exactly the libc surface of
