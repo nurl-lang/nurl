@@ -66,6 +66,7 @@ jobs:
               - '!webdocs/**'
               - '!formal/**'
               - '!CHANGELOG.md'
+              - '!changes/**'
 
   windows:
     needs: changes

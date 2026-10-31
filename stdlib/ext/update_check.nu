@@ -13,8 +13,9 @@
 //     that is not a clean release tag).
 //
 // The version oracle is GitHub's releases/latest for nurl-lang/nurl — the same
-// source the installer resolves "latest" from — read once a day with a User-
-// Agent (GitHub rejects requests without one). nurlc can adopt the same notice
+// source the installer resolves "latest" from: the tag its redirect names,
+// and the REST API (with a User-Agent, which GitHub requires) only when the
+// redirect names none — read once a day. nurlc can adopt the same notice
 // by calling update_check_notice( nurl_version ) at startup.
 
 $ `stdlib/core/io.nu`
@@ -91,8 +92,47 @@ $ `stdlib/core/slice.nu`
     ^ gt
 }
 
-// GET the latest release tag from GitHub (None on any failure)
-@ __uc_fetch_latest → ?String {
+// The tag a release URL names: `…/releases/tag/<tag>` → <tag>, up to the
+// first `/`, `?` or `#`. None unless it reads as a version (`v` and a digit).
+@ __uc_tag_of_url s url → ?String {
+    : i n ( nurl_str_len url )
+    : s needle `/releases/tag/`
+    : i m ( nurl_str_len needle )
+    : ~ i at -1
+    : ~ i k 0
+    ~ & < at 0 <= + k m n {
+        : ~ b same T
+        : ~ i j 0
+        ~ & same < j m {
+            ? != ( nurl_str_at url n + k j ) ( nurl_str_at needle m j ) { = same F } {}
+            = j + j 1
+        }
+        ? same { = at + k m } {}
+        = k + k 1
+    }
+    ? < at 0 { ^ @ ?String { F } } {}
+    : ~ i e at
+    : ~ b go T
+    ~ & go < e n {
+        : i c ( nurl_str_at url n e )
+        ? | | == c 47 == c 63 == c 35 { = go F } { = e + e 1 }
+    }
+    ? < - e at 2 { ^ @ ?String { F } } {}
+    ? != ( nurl_str_at url n at ) 118 { ^ @ ?String { F } } {}
+    : i d ( nurl_str_at url n + at 1 )
+    ? | < d 48 > d 57 { ^ @ ?String { F } } {}
+    : String tag ( string_with_cap + - e at 1 )
+    : ~ i q at
+    ~ < q e {
+        ( string_push_char tag ( nurl_str_at url n q ) )
+        = q + q 1
+    }
+    ^ @ ?String { T tag }
+}
+
+// The newest release's tag from the GitHub REST API (None on any failure,
+// a 403 included: 60 unauthenticated requests an hour per IP).
+@ __uc_fetch_latest_api → ?String {
     : String hb ( string_new )
     ( string_push_str hb `User-Agent: nurl-update-check\r\nAccept: application/vnd.github+json\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `GET` `https://api.github.com/repos/nurl-lang/nurl/releases/latest` `` ( string_data hb ) )
@@ -115,6 +155,25 @@ $ `stdlib/core/slice.nu`
         }
         F _ → { ^ @ ?String { F } }
     }
+}
+
+// The latest release tag (None on any failure). github.com's
+// releases/latest redirect names it in its Location
+// (…/releases/tag/vX.Y.Z), and that page is not under the REST API's rate
+// limit, which answers 403 to every request past 60 an hour from one IP:
+// CI runners, cloud sandboxes and NAT gateways share theirs (Agora #218).
+// The API is the fallback, asked once.
+@ __uc_fetch_latest → ?String {
+    ?? ( httpc_redirect_location `https://github.com/nurl-lang/nurl/releases/latest` ) {
+        T loc → {
+            ?? ( __uc_tag_of_url ( string_data loc ) ) {
+                T tag → { ^ @ ?String { T tag } }
+                F → {}
+            }
+        }
+        F → {}
+    }
+    ^ ( __uc_fetch_latest_api )
 }
 
 // write { "checked": <secs>, "latest": "<ver-or-dash>" }

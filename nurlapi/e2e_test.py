@@ -561,7 +561,8 @@ def t_tools_call_docs(c: Client) -> None:
                 and "formal/CLAIM.md" in _tool_text(env), _tool_text(env)[:200])
     env = _tool_call(c, "nurl_docs", {"name": "formal/corpus/map.tsv", "query": "h274"})
     text = _tool_text(env)
-    assert_true("table query returns the probe row", "probe=h274_" in text and "nurlc=" in text, text[:300])
+    # (By its old id: probes have had names since Agora #212.)
+    assert_true("table query returns the probe row", "old_id=h274" in text and "probe=closure_view_beside_growing_closure" in text and "nurlc=" in text, text[:300])
 
     # nurl_read_roadmap reads by heading like nurl_docs.
     env = _tool_call(c, "nurl_read_roadmap", {"outline": True})

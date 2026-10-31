@@ -96,6 +96,7 @@ jobs:
               - '!webdocs/**'
               - '!formal/**'
               - '!CHANGELOG.md'
+              - '!changes/**'
       # A second filter, because the one above needs 'every' and this
       # one needs 'some' (any listed path).
       - uses: dorny/paths-filter@v3

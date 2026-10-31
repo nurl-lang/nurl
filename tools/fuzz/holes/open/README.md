@@ -161,9 +161,12 @@ field of a struct that outlives it, was found and closed on the way:
 ## Graduating a probe
 
 When a fix makes a probe REJECTED, or makes it run clean under the
-sanitizers, move it to `tools/fuzz/holes/` as the next free number
-(`ls ../h*.nu` for the highest in use), with a one-line `// H<NNN>: …`
-header in the style of the others. The CI step "Soundness hole probes"
+sanitizers, move it to `tools/fuzz/holes/` under a name that says what it
+breaks (`lower_snake_case.nu`, no number to claim). Its first line is
+`// <name>: …` in the style of the others, and its leading comment block
+ends with `// map: <rule> | <phase> | <nurlc> | - | <note>` (`-`: it has
+no hNNN id from before Agora #212). Then run `tools/fuzz/holes/map.py
+--write`, which adds its row to `formal/corpus/map.tsv`. The CI step "Soundness hole probes"
 (`./tools/fuzz/holes/check.sh`) then holds it: a later change that reopens
 the hole fails the build. Then update this README and the open-hole lists in
 `docs/MEMORY.md` §6.2 and `docs/LIMITATIONS.md`.

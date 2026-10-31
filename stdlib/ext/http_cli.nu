@@ -17,6 +17,7 @@
 // API (drop-in subset):
 //   ( httpc_get          s url )                                  → !HttpcResp HttpcErr
 //   ( httpc_request      s method s url s body s headers_blob )   → !HttpcResp HttpcErr
+//   ( httpc_redirect_location s url )                             → ?String  a redirect's Location, unfollowed
 //   ( httpc_request_bytes s method s url ( Vec u ) body s headers_blob ) → !HttpcResp HttpcErr
 //   ( httpc_status       HttpcResp r )                             → i
 //   ( httpc_body_str     HttpcResp r )                             → s   borrowed, NUL-terminated
@@ -446,6 +447,51 @@ $ `stdlib/core/slice.nu`
 // the caller does not control (a registry's tarball, agora #163).
 @ httpc_get_max s url i max_bytes → !HttpcResp HttpcErr {
     ^ ( __httpc_exec_t `GET` url `` `` ( httpc_default_max_time ) max_bytes )
+}
+
+// Where `url` redirects to, without following it: one GET, its body
+// discarded, and the redirect's `Location` (curl's %{redirect_url}).
+// None when the answer is no redirect, or curl cannot run. `nurl upgrade`
+// reads the newest release from GitHub's releases/latest redirect with it:
+// that page is not under the REST API's rate limit (Agora #218).
+@ httpc_redirect_location s url → ?String {
+    ? ! ( httpc_url_is_http url ) { ^ @ ?String { F } } {}
+    : String tdir ( __httpc_tmpdir )
+    : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
+    ?? rf {
+        F _ → ^ @ ?String { F }
+        T respfile → {
+            : ( Vec s ) a ( vec_new [s] )
+            ( vec_push [s] a `-s` )
+            // HTTP(S) only, and no URL globbing (`[]` `{}`); no -L: the
+            // redirect is the answer.
+            ( vec_push [s] a `-g` )
+            ( vec_push [s] a `--proto` )
+            ( vec_push [s] a `=http,https` )
+            ( vec_push [s] a `--connect-timeout` )
+            ( vec_push [s] a `10` )
+            ( vec_push [s] a `--max-time` )
+            ( vec_push [s] a `30` )
+            ( vec_push [s] a `-o` )
+            ( vec_push [s] a ( string_data respfile ) )
+            ( vec_push [s] a `-w` )
+            ( vec_push [s] a `%{redirect_url}` )
+            // (`--`: the URL is never read as one of curl's options.)
+            ( vec_push [s] a `--` )
+            ( vec_push [s] a url )
+            : ~ ? String loc @ ?String { F }
+            ?? ( process_run `curl` a `` ) {
+                F _ → {}
+                T out → {
+                    ? & == ( output_exit_code out ) 0 > ( nurl_str_len ( output_stdout out ) ) 0 {
+                        = loc @ ?String { T ( string_from ( output_stdout out ) ) }
+                    } {}
+                }
+            }
+            ( unlink ( string_data respfile ) )
+            ^ loc
+        }
+    }
 }
 
 @ httpc_request s method s url s body s headers_blob → !HttpcResp HttpcErr {

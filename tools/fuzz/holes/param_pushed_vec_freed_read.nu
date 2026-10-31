@@ -1,0 +1,17 @@
+// param_pushed_vec_freed_read: agora #152 — a parameter handed to a container that keeps it (param_pushed_vec_freed_read).
+// Closed: the store row now covers parameters (agora #152).
+// v0.80.0: accepted; AddressSanitizer reported a fault.
+// map: §2.12 | A2 | rejected | h506 | agora #152: param_pushed_vec_freed_read
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+@ mk → String { ^ ( string_from `a string long enough to own a heap buffer here` ) }
+
+@ use_str String s → v {
+    : ( Vec String ) out ( vec_new [String] )
+    ( vec_push [String] out s )
+    ( vec_free [String] out )
+    ( nurl_println ( string_data s ) )
+}
+
+@ main → i { : String s ( mk ) ( use_str s ) ^ 0 }
