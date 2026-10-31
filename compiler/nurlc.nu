@@ -7266,24 +7266,36 @@ unsafe @ dyn_subst_parts s declTrait s m s to → s {
 // so a middleware-shaped type — takes a handler, returns a handler —
 // had its arity and parameter types read off its own return value, and
 // `( mw h )` was rejected as passing a closure where an `i` was
-// declared. The parameter list's paren is the first one at the OUTER
-// nesting level: inside the closure struct's `{ … }` for a closure
-// type, at top level for a bare fn-ptr.
+// declared. The parameter list's paren is at the OUTER nesting level:
+// at top level for a bare fn-ptr, inside the closure struct's `{ … }`
+// for a closure type (which has no top-level paren at all).
+//
+// Which kind a type is cannot be read off its first byte: a bare fn-ptr
+// whose RETURN is a closure starts with that closure's `{` too —
+//
+//   { void (i8*)*, i8* } (i8*, %String*)*   (a dyn method → ( @ v ))
+//
+// — and a closure type's paren was taken from inside the return value
+// again: `( make d t )` was refused as passing 1 argument to a method
+// that takes 0 (agora #148). And within the level it is the LAST paren:
+// the return type comes first, and a fn-ptr return carries a parameter
+// list at the same level (`void (i8*)* (i8*, i64)*`).
 unsafe @ __fnty_param_paren s t → i {
     : i n ( nurl_str_len t )
     : *u t_p # *u t
     ? == n 0 { ^ -1 } {}
-    : i base ? == ( nurl_str_at t_p n 0 ) 123 1 0
     : ~ i depth 0
+    : ~ i last0 -1
+    : ~ i last1 -1
     : ~ i p 0
     ~ < p n {
         : i c ( nurl_str_at t_p n p )
-        ? & == c 40 == depth base { ^ p } {}
+        ? == c 40 { ? == depth 0 { = last0 p } { ? == depth 1 { = last1 p } {} } } {}
         ? | == c 40 == c 123 { = depth + depth 1 }
         { ? | == c 41 == c 125 { = depth - depth 1 } {} }
         = p + p 1
     }
-    ^ -1
+    ^ ? >= last0 0 last0 ? == ( nurl_str_at t_p n 0 ) 123 last1 -1
 }
 
 unsafe @ __fnty_paren_commas s t → i {
