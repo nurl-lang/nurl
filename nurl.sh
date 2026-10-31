@@ -184,6 +184,7 @@ CLI_OPT=""
 # looked like a suspiciously good score.
 NURLC_DIAG=""
 STDIN_NAME=""
+SIM=0
 
 while [ $# -gt 0 ]; do
     case "${1:-}" in
@@ -203,6 +204,10 @@ while [ $# -gt 0 ]; do
         # temp file a tool had to write first. Imports resolve as for a
         # file named NAME in the working directory.
         --stdin)               STDIN_NAME="${2:-}"; shift 2 ;;
+        # A deterministic simulation of the program (agora #260/#261):
+        # the cooperative no-libc runtime with a virtual clock, seeded
+        # entropy and a seeded schedule. Run it with NURL_SIM=<seed>.
+        --sim)                 SIM=1; shift ;;
         *) break ;;
     esac
 done
@@ -219,6 +224,7 @@ if [ $# -eq 0 ]; then
     echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug | --coverage" >&2
     echo "         --no-borrowck | --strict-borrowck | --strict-arity | --no-strict-arity" >&2
     echo "         --no-dce | --keep=a,b | --stdin NAME (source on stdin, known as NAME)" >&2
+    echo "         --sim (a deterministic simulation: run it with NURL_SIM=<seed>)" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
@@ -239,6 +245,25 @@ if [ $# -ge 2 ]; then
     OUTBASE="$2"
 else
     OUTBASE="${SRCFILE%.nu}"
+fi
+
+if [ "$SIM" = 1 ]; then
+    # The simulation runs on the no-libc runtime, whose bottom edge is
+    # Linux x86_64 system calls (unikernel/nolibc/syscall_linux.c), and is
+    # built by a toolchain checkout's unikernel/build_nolibc.sh.
+    if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+        echo "nurl: --sim builds for Linux x86_64 (the simulation runs on the no-libc runtime's Linux system-call edge); this is $(uname -s) $(uname -m)" >&2
+        exit 2
+    fi
+    if [ ! -x "$SCRIPT_DIR/unikernel/build_nolibc.sh" ]; then
+        echo "nurl: --sim needs a toolchain checkout: $SCRIPT_DIR/unikernel/build_nolibc.sh is not there" >&2
+        exit 2
+    fi
+    if [ -n "$STDIN_NAME" ]; then
+        echo "nurl: --sim builds a source file, not --stdin" >&2
+        exit 2
+    fi
+    exec "$SCRIPT_DIR/unikernel/build_nolibc.sh" --sim "$SRCFILE" -o "$OUTBASE"
 fi
 
 LLFILE="${OUTBASE}.ll"
