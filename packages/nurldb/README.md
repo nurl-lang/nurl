@@ -33,6 +33,17 @@ $ `deps/nurldb/src/nurldb.nu`
 A `Db` is shared by every thread that uses it; each thread works through
 a `Session` of its own.
 
+The server and its client take the network from the caller as well:
+`serve_on db listener` serves any `TcpListener` (`tcp_listen`'s, or a
+node's of a simulated network, std/net_sim.nu) and returns once it stops
+accepting and its connections have ended; `client_connect_with dialer
+host port` dials through a std/net `NetDialer`; `client_set_timeout` bounds
+how long a statement may wait for its answer. `db_crash` drops a database
+as a killed process leaves it, so a test can crash a server and reopen
+its directory inside one process — the DST flagship scenario
+(`compiler/tests/dst_flagship.nu`, NURL's docs/SIMULATION.md) runs nurldb
+under a partition and a crash-restart that way.
+
 ## SQL
 
 ```

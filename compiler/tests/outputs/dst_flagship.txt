@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+schema: ok
+faults: the service cut off from the database for 300 ms, then the database crashed and restarted
+every client finished: ok
+none applied twice: the balance is the number of receipts: ok
+every acknowledged operation is there after the crash: ok

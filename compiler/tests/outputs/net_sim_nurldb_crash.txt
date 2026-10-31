@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+create a table over the simulated network: ok
+two rows committed: ok
+a third in a transaction left open: ok
+the next statement fails, not hangs: ok
+the server's loop and its connection ended: ok
+after recovery:
+k | v 
+--+---
+1 | 10
+2 | 20
+(2 rows)
+writes go on after the restart: ok
+count
+-----
+3    
+(1 row)

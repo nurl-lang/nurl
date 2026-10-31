@@ -56,7 +56,15 @@ $ `deps/http-client/src/http_client.nu`
 ( http_client_set_body_max c 1048576 )   // cap the decoded body; larger → HcTooLarge
 ( http_client_set_user_agent c `myapp/1.0` )
 ( http_client_set_resume c F )           // never offer a cached TLS session: every connection is a full handshake
+( http_client_set_dialer c ( net_dialer_kernel ) )  // how plaintext origins are reached (std/net NetDialer)
 ```
+
+`http_client_set_dialer` takes any `NetDialer` — the kernel's (the
+default), or a node of a simulated network (`netsim_dialer net node`,
+`stdlib/std/net_sim.nu`), which runs the same client over the simulated
+wire unchanged — `https` included: the handshake runs over the dialed
+connection (agora #250, #289), offering HTTP/1.1 there; HTTP/3 is not
+tried through another dialer.
 
 ## Verbs
 

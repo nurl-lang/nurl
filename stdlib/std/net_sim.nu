@@ -14,10 +14,12 @@
 //
 //   ( netsim_new      i nodes i seed i drop_pct i latency_ms i jitter_ms ) → NetSim
 //   ( netsim_listen   NetSim n i node i port )                  → !TcpListener NetErr
+//   ( netsim_listen_tls NetSim n i node i port id alpn )        → !TcpListener NetErr  HTTPS on the sim
 //   ( netsim_connect  NetSim n i node s host i port i ms )      → !TcpConn NetErr
 //   ( netsim_node_ip  NetSim n i node )                         → String   "10.0.0.<node+1>"
 //   ( netsim_partition NetSim n i a i b ) / ( netsim_heal NetSim n i a i b )
 //   ( netsim_heal_all NetSim n )
+//   ( netsim_crash    NetSim n i node )      every socket of the node gone at once, no FIN
 //   ( netsim_delivered NetSim n ) / ( netsim_dropped NetSim n ) → i  frames
 //
 // Node k answers to 10.0.0.<k+1>/24 (MAC 02:00:00:00:00:<k+1>), so at
@@ -115,6 +117,7 @@ $ `stdlib/dist/sim.nu`
     SockTab st
     ( Vec i ) sids
     ( Vec i ) wshut  // 1 = the write side was shut (nt_shutdown both)
+    i epoch  // how many times the node crashed (netsim_crash)
 }
 
 : NetSimImpl {
@@ -125,6 +128,7 @@ $ `stdlib/dist/sim.nu`
     SimNet bus
     ( Vec ( Box NsNode ) ) nodes  // a block each, so a node's address stays put
     i next_sid
+    i seed
 }
 
 : NetSim { ( Shared NetSimImpl ) ctl }
@@ -159,6 +163,25 @@ $ `stdlib/dist/sim.nu`
 
 @ __ns_count * NetSimImpl w → i { ^ ( vec_len [( Box NsNode )] . w nodes ) }
 
+// Node k of n, its stack fresh: its own MAC and address, every
+// neighbour's MAC already known (no connect waits a retransmit for ARP),
+// and initial sequence numbers from the seed — the same seed, the same
+// segments — and from how many times the node has crashed, so a node
+// that comes back does not reuse its last life's numbers.
+@ __ns_node_new i k i n i seed i epoch i now → NsNode {
+    : NetStack net ( stack_new ( __ns_mac k ) ( __ns_ip k ) ( __ns_mask ) 0 )
+    : TcpStack ts ( tstack_new net + * seed 7919 + * k 104729 + 1 * epoch 15485863 )
+    : SockTab st ( sock_new ts ( __ns_ip k ) )
+    ( sock_seed_self st now )
+    ( sock_seed_addr st ( __ns_loopback ) now )
+    : ~ i j 0
+    ~ < j n {
+        ? != j k { ( arp_cache_insert ( stack_arp net ) ( __ns_ip j ) ( __ns_mac j ) now ) } {}
+        = j + j 1
+    }
+    ^ @ NsNode { net ts st ( vec_new [i] ) ( vec_new [i] ) epoch }
+}
+
 // A network of `nodes` stacks (1..254) over a bus seeded with `seed`:
 // each frame is lost with probability drop_pct/100, and the rest arrive
 // latency_ms plus 0..jitter_ms later (so out of order when jitter > 0).
@@ -168,21 +191,7 @@ $ `stdlib/dist/sim.nu`
     : ( Vec ( Box NsNode ) ) list ( vec_with_cap [( Box NsNode )] n )
     : ~ i k 0
     ~ < k n {
-        : NetStack net ( stack_new ( __ns_mac k ) ( __ns_ip k ) ( __ns_mask ) 0 )
-        // The initial sequence numbers come from the seed too: the same
-        // seed, the same segments.
-        : TcpStack ts ( tstack_new net + * seed 7919 + * k 104729 1 )
-        : SockTab st ( sock_new ts ( __ns_ip k ) )
-        // An interface knows its own MAC, and on this network it knows
-        // every neighbour's: no connect waits a retransmit for ARP.
-        ( sock_seed_self st now )
-        ( sock_seed_addr st ( __ns_loopback ) now )
-        : ~ i j 0
-        ~ < j n {
-            ? != j k { ( arp_cache_insert ( stack_arp net ) ( __ns_ip j ) ( __ns_mac j ) now ) } {}
-            = j + j 1
-        }
-        ( vec_push [( Box NsNode )] list ( box_new [NsNode] @ NsNode { net ts st ( vec_new [i] ) ( vec_new [i] ) } ) )
+        ( vec_push [( Box NsNode )] list ( box_new [NsNode] ( __ns_node_new k n seed 0 now ) ) )
         = k + k 1
     }
     ^ @ NetSim { ( shared_new [NetSimImpl] @ NetSimImpl {
@@ -193,6 +202,7 @@ $ `stdlib/dist/sim.nu`
             ( sim_net_new n seed drop_pct latency_ms jitter_ms )
             list
             1
+            seed
         } ) }
 }
 
@@ -221,6 +231,27 @@ $ `stdlib/dist/sim.nu`
     : *NetSimImpl w ( __ns_lock h )
     ( sim_heal_all . w bus )
     ( __ns_wake_all w )
+    ( __ns_unlock w )
+}
+
+// Node `node` crashes and is straight back up, empty — a host that lost
+// power and rebooted: every socket it had, listeners and connections, is
+// gone at once and with no FIN, so an operation through one finds it
+// closed (NetClosed) and a server's accept loop on it ends. Its peers
+// learn of it as peers do: a reset when they next send to it, or their
+// own timeouts while it is partitioned. Frames already on their way to
+// it arrive at the new stack (which resets what it does not know); the
+// frames it had not sent yet are lost with it. It can listen and dial
+// again at once.
+@ netsim_crash NetSim h i node → v {
+    : *NetSimImpl w ( __ns_lock h )
+    : i n ( __ns_count w )
+    ? & >= node 0 < node n {
+        : i epoch + . ( __ns_node w node ) epoch 1
+        : b _put ( vec_set [( Box NsNode )] . w nodes node ( box_new [NsNode] ( __ns_node_new node n . w seed epoch ( __ns_now ) ) ) )
+        // Whoever waits on one of its sockets wakes to find it gone.
+        ( __ns_wake_all w )
+    } {}
     ( __ns_unlock w )
 }
 
@@ -694,6 +725,19 @@ $ `stdlib/dist/sim.nu`
 // Listen on `port` of node `node` (0: a free port, read back with
 // tcp_local_addr). A taken port is NetAddrInUse, as bind(2) says.
 @ netsim_listen NetSim h i node i port → !TcpListener NetErr {
+    ^ ( __ns_listen h node port @ ?( Arc TlsIdent ) { F } `` )
+}
+
+// netsim_listen, its connections handshaken as tcp_listen_tls's are: with
+// identity `id` (tls_ident_pem, an identity generated in memory, …) and
+// the ALPN list `alpn_protocols` ("h2 http/1.1"; "" = none). The TLS runs
+// over the simulated sockets (agora #250), so an HTTPS server — an
+// HttpApp handed this listener — is served on the simulated network.
+@ netsim_listen_tls NetSim h i node i port ( Arc TlsIdent ) id s alpn_protocols → !TcpListener NetErr {
+    ^ ( __ns_listen h node port @ ?( Arc TlsIdent ) { T id } alpn_protocols )
+}
+
+@ __ns_listen NetSim h i node i port ? ( Arc TlsIdent ) tls s alpn_protocols → !TcpListener NetErr {
     : *NetSimImpl w ( __ns_lock h )
     ? | < node 0 >= node ( __ns_count w ) {
         ( __ns_unlock w )
@@ -710,7 +754,10 @@ $ `stdlib/dist/sim.nu`
     : i sid ( __ns_claim w node fd )
     : String local ( __ns_addr_string ( __ns_ip node ) ( sock_local_port st fd ) )
     ( __ns_unlock w )
-    ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid } ) local ) }
+    ?? tls {
+        T id → { ^ @ !TcpListener NetErr { T ( tcp_listener_over_tls ( dyn NetTransport @ NsSock { h node fd sid } ) local id alpn_protocols ) } }
+        F → { ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid } ) local ) } }
+    }
 }
 
 // The node a dialled address names, from `node`'s point of view: one of
@@ -781,4 +828,27 @@ $ `stdlib/dist/sim.nu`
     }
     ( __ns_unlock w )
     ^ @ !TcpConn NetErr { F # NetErr NetOther }
+}
+
+// ── a dialer ─────────────────────────────────────────────────────
+// Node `node`'s view of the network as a NetDialer (std/net.nu): a client
+// made with it — http_client_set_dialer, pg_connect_with, redis_connect_with
+// — dials from that node, so it runs over the simulated wire unchanged.
+// Hosts are nodes' addresses (netsim_node_ip), or 127.0.0.1 for the node
+// itself; the dialer keeps the network alive while it lives.
+: NsDialer {
+    NetSim w
+    i node
+}
+
+% NetDialer NsDialer {
+    @ nd_dial NsDialer self s host i port i timeout_ms → !TcpConn NetErr {
+        ^ ( netsim_connect . self w . self node host port timeout_ms )
+    }
+}
+
+@ netsim_dialer NetSim h i node → NetDialer {
+    // A NetSim reaches no TcpConn or NetDialer (its nodes are sans-IO
+    // stacks; a NsSock holds the network, not the reverse).
+    ^ ( net_dialer_over ( dyn NetDialer @ NsDialer { ( NetSim_share h ) node } ) )
 }
