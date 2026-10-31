@@ -121,7 +121,9 @@ def main():
     args = sys.argv[1:]
     if len(args) < 3:
         sys.exit('usage: tools/sweep_classify.py SWEEP_OUT BASE_BIN NEW_BIN [--fn FILE FUNC]')
-    sweep_out, base_bin, new_bin = args[:3]
+    # (A package compiles from its pkgroot, so a relative compiler path
+    # would name nothing there.)
+    sweep_out, base_bin, new_bin = (os.path.abspath(a) for a in args[:3])
     ir = {w: os.path.join(sweep_out, 'ir', w) for w in ('base', 'new')}
     for d in ir.values():
         os.makedirs(d, exist_ok=True)

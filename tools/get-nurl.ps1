@@ -53,11 +53,42 @@ $repo = "nurl-lang/nurl"
 $target = "windows-x86_64"
 
 # -- Resolve version (latest release tag if unset) ----------------------
+# "latest" is read from github.com's releases/latest redirect: its Location
+# names the tag (.../releases/tag/vX.Y.Z), and it is not under the REST
+# API's rate limit. The API allows 60 unauthenticated requests an hour per
+# IP and answers 403 past that, and CI runners, cloud sandboxes and NAT
+# gateways share their IP: an install there used to die on the 403. The API
+# is now the fallback, asked once, for when the redirect names no tag.
+function Get-LatestFromRedirect {
+    $loc = $null
+    try {
+        $req = [System.Net.WebRequest]::Create("https://github.com/$repo/releases/latest")
+        $req.Method = "HEAD"
+        $req.AllowAutoRedirect = $false
+        $resp = $req.GetResponse()
+        try { $loc = $resp.Headers["Location"] } finally { $resp.Close() }
+    } catch {
+        # Some .NET versions report the unfollowed 302 as an exception that
+        # still carries the response.
+        $e = $_.Exception
+        while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
+        if ($e -and $e.Response) { $loc = $e.Response.Headers["Location"]; $e.Response.Close() }
+    }
+    if ("$loc" -match '/releases/tag/([^/?#\s]+)') { return $Matches[1] }
+    return $null
+}
+function Get-LatestFromApi {
+    try { return (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name }
+    catch { return $null }
+}
 if (-not $Version) {
     Write-Host "resolving latest release..."
-    $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
-    $Version = $rel.tag_name
-    if (-not $Version) { throw "could not determine the latest release tag; pass -Version vX.Y.Z." }
+    $Version = Get-LatestFromRedirect
+    if ("$Version" -notmatch '^v[0-9]') { $Version = Get-LatestFromApi }
+    if ("$Version" -notmatch '^v[0-9]') {
+        throw ("could not determine the latest release tag: neither github.com/$repo/releases/latest nor the GitHub API (which answers 403 when this IP is over its rate limit) named one. " +
+               "Pass a tag instead: -Version vX.Y.Z (or `$env:NURL_VERSION = 'vX.Y.Z'); the tags are listed at https://github.com/$repo/releases.")
+    }
 }
 
 # GitHub answers an occasional 5xx for a release asset (seen right after a

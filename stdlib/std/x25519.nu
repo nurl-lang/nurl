@@ -1125,6 +1125,17 @@ raw @ _x25519_base_r ( Vec u ) scalar → ( Vec u ) { ^ ( __xe_base_r scalar ) }
     ^ ( __scalarmult scalar point )
 }
 
+// The field kernel x25519 and x25519_base run on this CPU, by name: `adx`
+// (the compiler's mulx/adcx/adox blocks, nurl_x25519_mulm) or `portable`
+// (the register form above: no ADX, or not x86-64). The kernel answers
+// for itself: a multiply of zeros says whether a block ran it.
+// NURL_CPU_ADX=0 masks `adx`. For reports and diagnostics.
+@ x25519_cpu_tier → s {
+    : ( Vec u64 ) z ( vec_zeroed [u64] 4 )
+    : *u64 zp ( vec_data [u64] z )
+    ^ ? ( nurl_x25519_mulm zp zp zp ) `adx` `portable`
+}
+
 // ── fixed-base: scalar · 9, on Edwards ────────────────────────────
 // scalar·9 on the Montgomery curve is scalar·B on the birationally
 // equivalent Ed25519 curve (B ↦ u = 9, u = (1 + y)/(1 − y)), and

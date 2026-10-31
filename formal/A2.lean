@@ -25,3 +25,4 @@ import A2.CallInv
 import A2.Closure
 import A2.Codes
 import A2.Soundness
+import A2.DynCell

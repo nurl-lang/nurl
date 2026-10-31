@@ -100,11 +100,31 @@ dl_stdout() {
 }
 
 # ── Resolve version (latest release tag if unset) ──────────────────────
+# "latest" is read from github.com's releases/latest redirect: its Location
+# names the tag (…/releases/tag/vX.Y.Z), and it is not under the REST API's
+# rate limit. The API allows 60 unauthenticated requests an hour per IP and
+# answers 403 past that, and CI runners, cloud sandboxes and NAT gateways
+# share their IP: an install there used to die on the 403, after retries
+# that only spent more of the quota. The API is now the fallback, asked
+# once, for when the redirect names no tag.
+latest_from_redirect() {
+    if have curl; then
+        curl -fsSI "https://github.com/$REPO/releases/latest" 2>/dev/null
+    else
+        wget -S --spider "https://github.com/$REPO/releases/latest" 2>&1
+    fi | tr -d '\r' \
+       | sed -n 's|^ *[Ll]ocation: *[^ ]*/releases/tag/\([^/?[:space:]]*\).*|\1|p' | tail -n1
+}
+latest_from_api() {
+    dl_stdout1 "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1
+}
+is_tag() { case "$1" in v[0-9]*) return 0 ;; *) return 1 ;; esac; }
 if [ -z "$VERSION" ]; then
     info "resolving latest release…"
-    VERSION="$(dl_stdout "https://api.github.com/repos/$REPO/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
-    [ -n "$VERSION" ] || err "could not determine the latest release tag; pass --version vX.Y.Z."
+    VERSION="$(latest_from_redirect)"
+    is_tag "$VERSION" || VERSION="$(latest_from_api)"
+    is_tag "$VERSION" || err "could not determine the latest release tag: neither github.com/$REPO/releases/latest nor the GitHub API (which answers 403 when this IP is over its rate limit) named one. Pass a tag instead: --version vX.Y.Z (or NURL_VERSION=vX.Y.Z); the tags are listed at https://github.com/$REPO/releases."
 fi
 
 archive="nurl-${VERSION}-${target}.tar.gz"

@@ -35,7 +35,7 @@ the implementation (B–D) follow once the rules have stopped moving.
 |---|---|---|
 | **A1** | Core calculus: owned values, moves and drop flags, borrows and views, a `Vec` that reallocates (§2.10), `inout`, `sink`. Single-threaded, no panics. Soundness: progress and preservation. | **done** |
 | **A2** | A1 plus structs and their fields, enum and option payloads, closures and trait objects (packages: code on an environment, called through an interface) with captures by handle and by name, panics with unwinding and `recover`, the drop journal — and **leak freedom**. Generics add nothing to the memory model (a template is instantiated before it is checked). | **done** — see below for what A2 does not model yet |
-| **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and its frozen read guards (`% Frozen`), `Atomic`, channels, M:N fibers, foreign functions marked `sync`. Data-race freedom against the LLVM / C11 memory model. | planned |
+| **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and its frozen read guards (`% Frozen`), `Atomic`, channels, M:N fibers, foreign functions marked `sync`. Data-race freedom against the LLVM / C11 memory model. | designed: [`A3/DESIGN.md`](A3/DESIGN.md) (semantics, theorems, milestones A3.0–A3.6) |
 | **B** | The standard library's `unsafe` base proven to meet the semantic types it is given: `Vec`, `String`, `HashMap`, `Rc` and the cycle collector, `Arc`, channels. | later |
 | **C** | nurlc implements the rules: the compiler emits a certificate for each accepted program and a small verified checker validates it. | later |
 | **D** | Code generation preserves the semantics: drop insertion, drop flags and the panic journal, by translation validation. | later |
@@ -52,9 +52,11 @@ formal/
                    and nurlc's verdict (rejected, or compiles and runs clean
                    under ASan/LSan: `tools/fuzz/holes/check.sh` finds 0 holes)
   check.sh         builds the proof and checks it has no sorry and no new axiom
-  lean-toolchain, lakefile.toml, A1.lean, A2.lean, Check.lean
+  lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
   A2/              the A2 proof, same layout, plus the modules below
+  A3/              threads: DESIGN.md, and Defs.lean, A3.0's semantics and
+                   claim stated over A2's own step (no proof yet)
 ```
 
 ### A1 — the modules
@@ -89,8 +91,11 @@ The same modules under `A2/`, extended, and:
 | `Closure` | a call through a package, opened: the environment bound as a borrowed parameter, the captures as `inout` arguments of their own; the context after the opened call says no less than after the call through the package |
 | `Codes` | packages name code of their signature, through every step |
 | `CAPTURES_DESIGN.md` | by-name captures: the rules a closure that changes a binding is under, and why each is what the renaming lemma needs |
+| `DynCell` | values owned or not per call, as the calculus has them: an owner cell the caller provides (an `inout` option the callee fills when the value is fresh) and a borrow of its payload or of the argument; the per-call function checked against its summary (`pick_ok`) and a caller run safe and leak-free by the crown theorems (`main_safe`, `main_no_leak`) |
+| `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
 
-The theorems, `A2.memory_safe`, `A2.soundness` and `A2.no_leak_end`.
+The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
+`A2.no_leak_panic` (`check.sh` prints the axioms of each).
 
 An `inout` parameter may have any owning type — a `Vec`, a struct, an
 enum, a closure (`paramOK`, `FnOK`) — and a field of a struct is replaced
@@ -107,12 +112,21 @@ of its fields: a copy is a borrow, never an `inout` argument,
 parameter: `assign` to an `inout .replace` closure, whose slot is the
 caller's) sit.
 
+Values owned or not per call need no rule of their own. A result lent on
+one path and fresh on another is, in the calculus, an owner cell and a
+borrow. `DynCell` types it for a direct call. A call through a package,
+which is how a trait method's result comes back, takes the cell as one
+more `inout` argument the same way. A raw string that may be fresh is
+the same shape over a `Vec` of bytes. That nurlc's ownership bit behaves
+as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
+
 What A2 does not model yet, each a planned refinement of the calculus
-rather than a gap in what it proves: values owned or not per call (a
-trait method's result, a raw string that may be fresh); a destructor
-written by the program (`% Drop`), whose drop runs code and may panic
-(`CLAIM.md`); `Rc` and its cycle collector, which are the standard
-library's `unsafe` base (phase B).
+rather than a gap in what it proves:
+
+- a destructor written by the program (`% Drop`), whose drop runs code
+  and may panic (`CLAIM.md`);
+- `Rc` and its cycle collector, which are the standard library's `unsafe`
+  base (phase B).
 
 ## How it relates to the rest of the repository
 

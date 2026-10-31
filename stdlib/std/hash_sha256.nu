@@ -243,6 +243,11 @@ unsafe @ __sha256_blocks_ni * u32 sp * u bp i nblk * u32 kp → v {
     }
 }
 
+// The block function __sha256_blocks runs on this CPU, by name: `sha-ni`
+// or `portable` (NURL_CPU_SHA=0 masks the first). HMAC-SHA-256, HKDF and
+// every TLS transcript hash run on it too.
+@ sha256_cpu_tier → s { ^ ? ( nurl_cpu_has_sha ) `sha-ni` `portable` }
+
 // One block.
 @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {
     ( __sha256_blocks sp bp 1 kp mp )

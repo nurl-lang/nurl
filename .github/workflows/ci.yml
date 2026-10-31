@@ -121,6 +121,30 @@ jobs:
         # here rather than behind the compiler build.
         shell: bash
         run: python3 tools/tests/test_release_artifacts.py
+      - name: TLS benchmark per-CPU-family report controls
+        # bench/tls_bench/gen_tls_results.py keeps each runner CPU
+        # family's latest tls-bench run and refuses a run that does not say
+        # which CPU and which NURL kernels produced it (Agora #112). Pure
+        # Python over fixture runs, no toolchain.
+        shell: bash
+        run: python3 tools/tests/test_tls_bench_report.py
+
+  installer-controls:
+    # tools/get-nurl.sh is classed with the web docs (nurl-lang.org serves
+    # it), so an installer-only PR runs no `code` job: these controls run
+    # for either class. They need python3, curl and tar, serve a release
+    # over file:// and stand in for GitHub, and take seconds.
+    name: installer controls (latest tag, unpack)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.webdocs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: The latest tag resolves when the GitHub API answers 403
+        run: python3 tools/tests/test_installer_latest.py
+      - name: An install never leaves the prefix without a toolchain
+        run: python3 tools/tests/test_installer_unpack.py
 
   build-failure-controls:
     name: required tools fail the complete build
