@@ -49,11 +49,19 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
+      actions: write
     outputs:
-      code: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      # `md`: Markdown outside changes/, webdocs/ and formal/ changed. A
+      # change that is nothing but such Markdown runs only the two gate
+      # jobs: they hold every check that reads a .md file (the doc examples
+      # compile, nurlapi's and nurl-mcp's docs tools, the protobuf doc
+      # examples, the generated COMPILER_INTERNALS appendix). The corpus,
+      # FreeBSD, the sanitizers and the unikernel jobs read no Markdown.
+      # That is about 24 job-minutes instead of 123.
+      code: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      md: ${{ github.event_name == 'merge_group' && steps.group.outputs.md || steps.queued.outputs.tested == 'true' && 'false' || steps.md.outputs.md }}
       webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
-      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
+      compiler: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
       # The platform and sanitizer jobs (FreeBSD, ASan/UBSan, the
       # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
       # 123 job-minutes. The merge queue runs them anyway, on the combined
@@ -64,6 +72,33 @@ jobs:
       # the queue. Pushes and the queue always run everything.
       full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
     steps:
+      # The merge queue rebuilds its groups whenever one fails or main moves,
+      # and deletes the old group branches. Their ci.yml runs go on,
+      # though: each is a full run (~123 job-minutes) whose result nothing
+      # reads, and it holds slots of the 20-job limit that the new groups
+      # wait for. On 2026-10-31, three to five of them were running at once
+      # after every rebuild. A new group's run cancels the queue runs whose
+      # branch is gone: only a 404 for the branch counts, so an API error
+      # cancels nothing.
+      - name: Cancel queue runs whose group the queue dropped
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF: ${{ github.run_id }}
+        run: |
+          for s in queued in_progress; do
+            gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&status=$s&per_page=100" \
+              --jq '.workflow_runs[] | "\(.id) \(.head_branch)"' || true
+          done | while read -r id ref; do
+            [ "$id" = "$SELF" ] && continue
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/git/ref/heads/$ref" || echo 000)"
+            if [ "$code" = 404 ]; then
+              echo "::notice::cancelled run $id: its queue group $ref is gone"
+              gh api -X POST "repos/$REPO/actions/runs/$id/cancel" --silent || true
+            fi
+          done
       - name: Did the merge queue already test this commit?
         id: queued
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -144,6 +179,36 @@ jobs:
               - '!formal/**'
               - '!CHANGELOG.md'
               - '!changes/**'
+              - '!**/*.md'
+      - uses: dorny/paths-filter@v3
+        id: md
+        if: github.event_name != 'merge_group'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            md:
+              - '**/*.md'
+              - '!changes/**'
+              - '!webdocs/**'
+              - '!formal/**'
+              - '!CHANGELOG.md'
+      # The queue classifies the whole group against the main it builds on.
+      # A group of nothing but Markdown runs the gates only, like a PR.
+      # Anything else, or a diff that cannot be computed, runs everything.
+      # main itself passed all of it.
+      - name: What the queue group changes
+        id: group
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if git fetch --no-tags --depth=1 origin "$BASE" && files="$(git diff --name-only "$BASE" HEAD)" &&
+             [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '\.md$'; then
+            printf '%s\n' "$files" | sed 's/^/  md only: /'
+            { echo code=false; echo md=true; } >> "$GITHUB_OUTPUT"
+          else
+            { echo code=true; echo md=false; } >> "$GITHUB_OUTPUT"
+          fi
 
   # Files every pull request used to edit by hand, and so conflict over
   # (Agora #211, #212): the hole-probe table and the changelog. Both are
@@ -207,6 +272,13 @@ jobs:
         # Python over fixture runs, no toolchain.
         shell: bash
         run: python3 tools/tests/test_tls_bench_report.py
+      - name: HTTP torture cell helper controls
+        # bench/http_torture/lib.py splits each cell's errors into harness
+        # artefacts and server-attributable ones and marks steal (†) and a
+        # saturated generator (‡) (Agora #120). Pure Python over real oha
+        # JSON fixtures, no toolchain.
+        shell: bash
+        run: python3 tools/tests/test_http_torture_lib.py
       - name: Generated RSA-2048 ADX kernels are current
         # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
         # between markers; a hand edit or a stale block fails here.
@@ -368,7 +440,7 @@ jobs:
   build-gates:
     name: "build gates: probes, controls, packaging"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
     runs-on: ubuntu-latest
     # The gates of the old single job (see build-corpus above). Measure
     # before raising this: the next gate added here comes with a time.
@@ -652,7 +724,7 @@ jobs:
   build-gates-2:
     name: "build gates: formatting, diagnostics, tooling, protocols, codecs, coverage"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
     runs-on: ubuntu-latest
     # The gates of the old single job (see build-corpus above). Measure
     # before raising this: the next gate added here comes with a time.
@@ -929,8 +1001,9 @@ jobs:
     needs: [changes, build-corpus, build-gates, build-gates-2]
     # Skipped exactly when its parts are (a docs-only change), so the
     # required check reads as satisfied then, as before. Otherwise it waits
-    # for all three and fails unless every one succeeded.
-    if: ${{ always() && needs.changes.outputs.code == 'true' }}
+    # for all three and fails unless every one succeeded. A Markdown-only
+    # change runs the two gate jobs and no corpus: both gates must pass.
+    if: ${{ always() && (needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -939,9 +1012,11 @@ jobs:
           CORPUS: ${{ needs.build-corpus.result }}
           GATES: ${{ needs.build-gates.result }}
           GATES2: ${{ needs.build-gates-2.result }}
+          CODE: ${{ needs.changes.outputs.code }}
         run: |
-          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2"
-          [ "$CORPUS" = success ] && [ "$GATES" = success ] && [ "$GATES2" = success ]
+          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2 code=$CODE"
+          [ "$GATES" = success ] && [ "$GATES2" = success ] || exit 1
+          if [ "$CODE" = true ]; then [ "$CORPUS" = success ]; else [ "$CORPUS" = skipped ]; fi
 
   unikernel-nolibc:
     name: "unikernel: the corpus with no libc"
@@ -1125,6 +1200,16 @@ jobs:
         env:
           NURL_ZIG: /opt/zig/zig
         run: ./unikernel/tests/swarm_gate.sh
+
+      - name: Deterministic simulation (build_nolibc.sh --sim)
+        # The no-libc runtime with a virtual clock, seeded entropy and a
+        # seeded schedule (agora #260): each program prints its hosted
+        # golden under five seeds, repeats itself byte for byte under
+        # one, explores (where it has a choice to make, seeds give
+        # different schedules), and simulates more time than it takes.
+        # Here rather than beside the no-libc corpus: that job already
+        # spends most of its 20 minutes on the corpus.
+        run: ./unikernel/run_sim_tests.sh
 
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)

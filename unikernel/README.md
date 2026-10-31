@@ -38,8 +38,45 @@ Decided by coupling, not convenience:
 | `demos/` | the programs that only make sense in the guest: devices, DHCP, a filesystem, a server, an MCP endpoint, TLS — and the two that are about failure, `fault.nu` and `soak.nu` |
 | `k8s/` | the guest as an ordinary Kubernetes workload: an HTTP server, a container that carries a hypervisor and the image, and the manifests — unprivileged, no `/dev/kvm`, [its own README](k8s/README.md) |
 | `tests/` | the unit gates — differentials against glibc for strings, float formatting and libm; two allocator fuzzers; the scheduler's schedule and its deadlock detector |
-| `build_nolibc.sh` | build one `.nu` program against nolibc with `-nostdlib` |
+| `build_nolibc.sh` | build one `.nu` program against nolibc with `-nostdlib`; `--sim` builds a deterministic simulation of it (below) |
 | `run_nolibc_tests.sh` | build and run the **whole corpus** that way |
+| `run_sim_tests.sh` | the simulation gate: right under several seeds, byte-identical under one, seeds that explore, faster than the time simulated |
+
+## Deterministic simulation (`build_nolibc.sh --sim`)
+
+The runtime here is already a simulator's: one OS thread, threads and
+fibers as coroutines, cooperative mutexes and condition variables,
+timers, and a report instead of a hang when nothing can run
+(`runtime_bare.c`). `--sim` closes the last three doors to the outside
+world (`nolibc/sim.c`, agora #260, DST 2/4):
+
+- **time** is virtual: it moves when the program sleeps and jumps to the
+  earliest timer when nothing is runnable, so a 300 ms read deadline or
+  TCP's retransmission timer costs no wall-clock time (each reading also
+  moves it 1 µs, so a busy-wait on the clock still ends);
+- **randomness** — `getrandom`, and with it `std/random`, TLS keys and
+  TCP sequence numbers — is a stream from the seed;
+- **the schedule**: the next runnable coroutine is picked by the seed
+  (`NURL_SIM=0` keeps FIFO).
+
+So a run is a function of the program and `NURL_SIM=<seed>`: one seed
+replays a failure exactly, and a sweep of seeds tries interleavings FIFO
+never would. `NURL_SIM_TRACE=1` prints the seed, the number of
+scheduling picks and choice points, a hash of the schedule and the
+virtual time at exit; `NURL_SIM_LIMIT_MS` (default one hour) stops a run
+that never finishes — in a simulation a hang races through virtual hours
+in wall-clock seconds rather than looking like one. Nothing in the real
+runtime changes: a simulation is a different link.
+
+    unikernel/build_nolibc.sh --sim compiler/tests/net_sim_http.nu -o /tmp/sim
+    NURL_SIM=7 NURL_SIM_TRACE=1 /tmp/sim
+
+`compiler/tests/net_sim_http.nu` — an HTTP server thread and a client
+over the simulated network, through a partition and a heal — simulates
+660 ms in about 2 ms of wall-clock time, prints the hosted golden under
+every seed and repeats itself byte for byte under one;
+`net_sim_http_async.nu` does the same with HttpApp's fiber server
+inside a thread and four client threads.
 
 ## The rule this directory is built on
 

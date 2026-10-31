@@ -185,9 +185,15 @@ struct NbCoro {
                                    * one such list at a time           */
     void        *pending_unlock;  /* NbMutex* released after swap-out  */
     int          last_park_result;
+#ifdef NURL_SIM
+    unsigned long long sim_id;    /* creation number: the trace's name for it */
+#endif
     int          wake_pending;    /* an unpark that arrived before the
                                    * park — consumed by the next park   */
     int          owns_env;        /* free env after the body returns    */
+    int          is_fiber;        /* spawned through the fiber API: what
+                                   * runtime_run waits for (threads are
+                                   * not — as in the hosted runtime)    */
     void        *rctx[NURL_RCTX_WORDS];  /* recover chain + journal    */
 };
 
@@ -212,6 +218,9 @@ static NbCoro   *nb_timers;            /* sorted ascending by wake_at   */
 static nurl_ctx_t nb_loop_ctx;         /* the main context, mid-step    */
 static NbCoro   *nb_current;           /* NULL ⇒ running on main        */
 static long long nb_live;              /* spawned and not yet reaped    */
+static long long nb_fibers_live;       /* …of which spawned as fibers   */
+static NbCoro   *nb_drain_waiters;     /* coroutines in runtime_run, via
+                                        * ->next, until no fiber is live */
 static int       nb_initialized;
 
 /* Coroutines allocated minus coroutines freed. There is no LSan in a
@@ -277,6 +286,31 @@ static void nb_rq_push_front(NbCoro *c) {
     if (!nb_rq_tail) nb_rq_tail = c;
 }
 
+#ifdef NURL_SIM
+/* A simulation (build_nolibc.sh --sim, unikernel/nolibc/sim.c) picks the
+ * next coroutine with the seed's stream instead of taking the head: FIFO
+ * is one order the program must survive, not the only one, and a seed
+ * names the order it ran in so a failure replays exactly (agora #260).
+ * Admission's front-of-queue push is an ordering preference, so under a
+ * seed it is one more candidate. */
+unsigned long nurl__sim_pick(unsigned long n);
+void          nurl__sim_note(unsigned long long id);
+
+static NbCoro *nb_rq_pop(void) {
+    if (!nb_rq_head) return 0;
+    unsigned long n = 0;
+    for (NbCoro *q = nb_rq_head; q; q = q->next) n++;
+    unsigned long k = nurl__sim_pick(n);
+    NbCoro *prev = 0, *c = nb_rq_head;
+    while (k-- > 0) { prev = c; c = c->next; }
+    if (prev) prev->next = c->next;
+    else      nb_rq_head = c->next;
+    if (nb_rq_tail == c) nb_rq_tail = prev;
+    c->next = 0;
+    nurl__sim_note(c->sim_id);
+    return c;
+}
+#else
 static NbCoro *nb_rq_pop(void) {
     NbCoro *c = nb_rq_head;
     if (!c) return 0;
@@ -285,6 +319,7 @@ static NbCoro *nb_rq_pop(void) {
     c->next = 0;
     return c;
 }
+#endif
 
 static void nb_timer_add(NbCoro *c, long long at) {
     c->wake_at_ms = at;
@@ -383,6 +418,10 @@ static void nb_entry(void *arg) {
 static NbCoro *nb_coro_new(void *fn, void *env, int joinable) {
     NbCoro *c = (NbCoro *)calloc(1, sizeof(NbCoro));
     if (!c) return 0;
+#ifdef NURL_SIM
+    static unsigned long long sim_next_id;
+    c->sim_id = ++sim_next_id;
+#endif
 
     unsigned long guard  = (NB_GUARD_BYTES + NB_PAGE - 1) / NB_PAGE * NB_PAGE;
     unsigned long usable = (NB_STACK_BYTES + NB_PAGE - 1) / NB_PAGE * NB_PAGE;
@@ -441,6 +480,20 @@ void *nurl__bare_stack_lo(void) {
 }
 
 /* Wake everything blocked in join() on `c`. */
+/* A fiber ended: runtime_run's waiters go on once none is left. */
+static void nb_fiber_ended(void) {
+    if (--nb_fibers_live > 0) return;
+    NbCoro *w = nb_drain_waiters;
+    nb_drain_waiters = 0;
+    while (w) {
+        NbCoro *n = w->next;
+        w->next = 0;
+        w->state = NB_RUNNABLE;
+        nb_rq_push(w);
+        w = n;
+    }
+}
+
 static void nb_wake_joiners(NbCoro *c) {
     NbCoro *j = c->joiners;
     c->joiners = 0;
@@ -522,6 +575,7 @@ static int nb_step_bounded(long long budget_ms) {
     if (c->state == NB_DONE) {
         nb_wake_joiners(c);
         nb_live--;
+        if (c->is_fiber) nb_fiber_ended();
         if (!c->joinable) nb_coro_free(c);
         /* joinable: the joiner frees it, so the handle stays valid */
     } else if (c->state == NB_PARKED) {
@@ -921,8 +975,28 @@ void nurl_runtime_init(long long worker_count) {
 
 static int nb_no_live(void *unused) { (void)unused; return nb_live <= 0; }
 
+/* From the main context: until every coroutine has ended, detached
+ * threads included — on one thread they run only while main is parked,
+ * so a runtime_run that returned before them would let the program
+ * exit with them never run (unikernel/tests/sched_gate.c pins it).
+ *
+ * From a coroutine — a thread that runs a fiber server: http_app_async
+ * inside thread_spawn — until every spawned FIBER has ended, what the
+ * hosted runtime's runtime_run waits for (its pending count). The
+ * coroutine parks, and the last fiber to end wakes it. It used to drive
+ * the scheduler from there as main does: the scheduler nested inside a
+ * coroutine, waiting for a count that included the caller itself, and
+ * the server never finished (agora #273). */
 void nurl_runtime_run(void) {
     if (!nb_initialized) nurl_runtime_init(0);
+    if (nb_current) {
+        while (nb_fibers_live > 0) {
+            nb_current->next = nb_drain_waiters;
+            nb_drain_waiters = nb_current;
+            nb_park();
+        }
+        return;
+    }
     nb_drive_until(nb_no_live, 0, "runtime_run");
 }
 
@@ -955,6 +1029,7 @@ void nurl_runtime_shutdown(void) {
         t = n;
     }
     nb_live = 0;
+    nb_fibers_live = 0;
     nb_initialized = 0;
 }
 
@@ -986,7 +1061,9 @@ long long nurl_fiber_spawn(void *fn, void *env) {
     NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 0);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
+    c->is_fiber = 1;
     nb_live++;
+    nb_fibers_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
 }
@@ -1003,7 +1080,9 @@ long long nurl_fiber_spawn_owned(void *fn, void *env) {
     NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 0);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
+    c->is_fiber = 1;
     nb_live++;
+    nb_fibers_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
 }
@@ -1014,7 +1093,9 @@ long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     NbCoro *c = nb_coro_new(fn, nurl_closure_own_copy(env), 1);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
+    c->is_fiber = 1;
     nb_live++;
+    nb_fibers_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
 }
@@ -1277,4 +1358,21 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
         got += (unsigned long)r;
     }
     return 1;
+}
+
+/* ── §14  Signals ─────────────────────────────────────────────────
+ *
+ * There are none: a freestanding guest has no POSIX signal delivery, and
+ * a simulation (build_nolibc.sh --sim) runs one thread whose outside
+ * world is its seed. So no signal is ever pending, and arming the soft
+ * shutdown an HTTP server asks for on SIGINT/SIGTERM arms nothing —
+ * those are the true answers here, not stubs: such a server stops the
+ * way it does without a signal, when its listener is closed. */
+long long nurl_signal_pending(long long signum) {
+    (void)signum;
+    return 0;
+}
+
+void nurl_signal_install_shutdown(long long listener) {
+    (void)listener;
 }

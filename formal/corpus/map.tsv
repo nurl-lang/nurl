@@ -177,6 +177,8 @@ drop_field_getter_fall_off	§7.6	A2	agora #187: the same call as the function's 
 drop_field_getter_local	§7.6	A2	agora #187: `^ ( getd w )`, a getter lending a `% Drop` field of the local `w`	rejected	h818
 drop_field_getter_param	§7.6	A2	agora #187: the same over a borrowed parameter: a lend of the caller's own, still answered as a lend	runs-clean	h821
 drop_field_getter_sink	§7.6	A2	agora #187: the same over a `sink` parameter, which the function drops too	rejected	h820
+drop_holder_pushed_younger_view_then_panics	§7.6	A2	agora #254: a W with a view of a younger String pushed into a Vec of W, then a panic	rejected	-
+drop_holder_views_inner_then_panics	§7.6	A2	agora #254: a W re-pointed to a view of a younger String, then a panic before it is pointed back: the unwind frees the String first	rejected	-
 drop_inout_assign_call_lend	§7.6	A2	agora #196: the same with a `% Drop` value: it cannot be copied	rejected	h868
 drop_inout_assign_local_field	§7.6	A2	agora #196: the same with a `% Drop` field: it cannot be copied	rejected	h871
 drop_join_arm_result_returned	§7.6	A2	agora #198: `^ ? c ( getr h ) ( okd )` with a `% Drop` payload lent out of the local `h`: it cannot be copied	rejected	h893
@@ -313,7 +315,11 @@ enum_payload_closure_guard	§2.11	A2	agora #129: a closure of the declared signa
 enum_payload_closure_signature	§2.11	A2	agora #129: the same closure as an enum variant's payload	rejected	h914
 enum_payload_handed_to_a_sink	§7.6	A2	enum payload String handed to sink in arm; enum drops it again	runs-clean	h231
 enum_payload_named_struct	§2.12	A2	agora #129: an enum variant declared to carry an `A` given a `B`: the arm reads B's int as A's String	rejected	h915
+enum_payload_returned_out_of_a_channel_reply	§7.6	A2	agora #264: an enum payload returned out of a channel reply (UAF)	runs-clean	-
+enum_payload_returned_out_of_an_enum_bound_from_a_reply	§7.6	A2	agora #264: an enum payload returned out of an enum bound from a channel reply (UAF)	runs-clean	-
+enum_payload_returned_out_of_an_option_payload	§7.6	A2	agora #264: an enum payload returned out of an option payload (UAF)	runs-clean	-
 enum_result_payload_read_from_a_vec	§7.6	A2	agora #155: enums with result payloads in a Vec, matched through vec_get	runs-clean	h647
+enum_struct_payload_returned_out_of_an_option_payload	§7.6	A2	agora #264: a boxed struct payload returned out of an option payload's enum (UAF)	runs-clean	-
 enum_temp_matched_before_a_break	§7.6	A2	agora #155: the same with a break in the arm	runs-clean	h652
 enum_temp_matched_before_a_continue	§7.6	A2	agora #155: the same with a continue in the arm	runs-clean	h651
 enum_temp_matched_in_a_loop_body	§7.6	A2	agora #155: a call's enum matched unbound in a loop body: the next round released it again	runs-clean	h650
@@ -764,6 +770,10 @@ sink_arg_block_join_lend	§7.6	A2	the same join as a block's tail	runs-clean	h93
 sink_arg_join_fresh_path_guard	§7.6	A2	the sink join taking its fresh arm: moved, nothing copied	runs-clean	h936
 sink_arg_join_lend	§7.6	A2	a join whose arm lends a local, handed to a `sink` parameter: the callee freed the local's string	runs-clean	h934
 sink_enum_payload_field_returned	§7.6	A2	agora #178: a field of a `sink` enum parameter's payload returned through a `??` arm	runs-clean	h716
+sink_param_field_returned_in_a_result	§7.6	A2	agora #257: a sink parameter's field returned directly inside a result (leak)	runs-clean	-
+sink_param_field_returned_in_a_result_bound	§7.6	A2	agora #257: a sink parameter's field bound and returned inside a result (UAF)	runs-clean	-
+sink_param_field_returned_in_a_struct_literal	§7.6	A2	agora #257: a sink parameter's field returned inside a struct literal (UAF)	runs-clean	-
+sink_param_field_returned_in_an_option	§7.6	A2	agora #257: a sink parameter's field bound and returned inside an option (UAF)	runs-clean	-
 sink_param_field_through_a_cond_returned	§7.6	A2	agora #178: a `sink` parameter's field returned through a `?`	runs-clean	h714
 sink_parameter_handed_back	§7.6	A2	sink struct param copied and returned by builder; result leaked	runs-clean	h108
 slhdsa_keygen_seeds_of_the_wrong_size	§3.3d	B	`( slhdsa_keygen_derand 129 a b c )` with one-byte seeds: the hypertree's hashes read SK.seed and PK.seed as n = 16 bytes through `vec_data`, past the end of each Vec.	runs-clean	h468

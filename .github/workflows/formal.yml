@@ -6,7 +6,12 @@ name: formal
 # changes.
 
 on:
+  # main only: a push to a PR branch is already covered by its pull_request
+  # run, and the merge queue's temporary gh-readonly-queue/* branches are
+  # tested by ci.yml. Without the filter every such push ran the proof a
+  # second time.
   push:
+    branches: [main]
     paths: ['formal/**', '.github/workflows/formal.yml']
   pull_request:
     paths: ['formal/**', '.github/workflows/formal.yml']
