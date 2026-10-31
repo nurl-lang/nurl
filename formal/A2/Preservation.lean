@@ -613,6 +613,12 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
     { dom := fun w => ?_
       slot := fun w E hw => ?_
       heap := hi.heap
+      shares := fun w E sl T hw hsw hown hT => by
+        by_cases hwx : w = x
+        · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+          exact hi.shares w Ex sl T hx hsw hown hT
+        · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.shares w E sl T hw hsw hown hT
+      blocks := hi.blocks
       nvSt := hi.nvSt
       noInout := fun w E b hw => ?_
       wf := ⟨fun w E hw hl hni r hr => ?_, fun w E hw hd hos' hni dep hdd hnm => ?_, fun w E hw ha => ?_,
@@ -832,7 +838,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     (hfn : Ex.ty.hasFn = false) (hdbv : Ex.ty.holdsView = true → Ex.dbind = true) (hxk : x ∉ k.spine)
     (hout : ∀ v, v ∉ k.spine → m1.st v = m.st v) (hin : ∀ v ∈ k.spine, m1.st v = none)
     (hh1 : HeapOK m1) (hnv : m1.nv = m.nv) (hsl : m1.st x = some ⟨true, some v0⟩)
-    (hkF : ∀ v ∈ k.spine, v ∉ F) : MInv m1 (unwindCtx k.spine x Γ) := by
+    (hkF : ∀ v ∈ k.spine, v ∉ F) (hblk : m1.blk = m.blk) : MInv m1 (unwindCtx k.spine x Γ) := by
   have hnx : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
     rw [h, hx] at hp; cases hp; simp [hmo] at hm
   have hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → Anchored E F :=
@@ -891,7 +897,9 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := fun w sl T hsw hT => ?_
-      armed := fun w E sl hw hsw => ?_ }
+      armed := fun w E sl hw hsw => ?_
+      shares := fun w E sl T hw hsw hown hT => ?_
+      blocks := fun k' bl hk' => ?_ }
   · by_cases hwk : w ∈ k.spine
     · rw [unwindCtx_sp hwk, hin w hwk]; rfl
     by_cases hwx : w = x
@@ -916,7 +924,7 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
           obtain ⟨hown, hwf', _⟩ := h2 ho
           exact ⟨hown, hwf', fun hl => by cases hl⟩
         · by_cases hl : E0.live = true
-          · exact hslot.keepRoots (hkeep w E0 h0 hl hns)
+          · exact hslot.keepRoots (hkeep w E0 h0 hl hns) hblk
           · obtain ⟨h1, h2, _⟩ := hslot
             refine ⟨h1, fun ho => ?_, fun _ hl' => absurd hl' hl⟩
             obtain ⟨hown, hwf', _⟩ := h2 ho
@@ -1037,6 +1045,23 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
       · exact hE0.entry rfl rfl rfl (fun h => h) (fun d hd => (List.mem_filter.mp hd).1)
       · exact hE0
+  · -- A3.1: an owned slot outside the frame is as it was, and so are the blocks
+    by_cases hwk : w ∈ k.spine
+    · rw [unwindCtx_sp hwk] at hw; cases hw
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      rw [hwx, hsl] at hsw; cases hsw
+      cases hT
+      exact (hi.shares x Ex _ v0 hx hslm rfl rfl).of_blk hblk
+    · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      rw [hout w hwk] at hsw
+      have h := (hi.shares w E0 sl T h0 hsw hown hT).of_blk hblk
+      rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+      · exact h
+      · exact h
+  · rw [hblk] at hk'
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k' bl hk'
+    exact ⟨h1, h2, h3, h4.of_blk hblk⟩
 
 /-- What a panic leaves at a destructor's frame `x`: no binding `letd`
     made views `x` in memory (`dtorOut`), so `x`'s destructor may run and
@@ -1703,9 +1728,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨fn, hfn, hps, _, hro, _, _, _⟩ := hdtor
       have hkn : k.spine.Nodup := by
         have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
-      obtain ⟨hout, hin, hh1, hc1, hnv1, _⟩ := panic_unwind hp hiS.heap hiS.cover hkn
+      obtain ⟨hout, hin, hh1, hc1, hnv1, _, hblk1⟩ := panic_unwind hp hiS.heap hiS.cover hkn
       have hkF : ∀ v ∈ k.spine, v ∉ F := hs.spine_F
-      have hMu := MInv.unwind hiS hx hmo hhf hdbv hxsp hout hin hh1 hnv1 hsl hkF
+      have hMu := MInv.unwind hiS hx hmo hhf hdbv hxsp hout hin hh1 hnv1 hsl hkF hblk1
       have hux : unwindCtx k.spine x Γ x = some (Ex.revive x) := by
         rw [unwindCtx_x hxsp, hx]; rfl
       -- a borrowed parameter the unwind left is the old one, outside the frame

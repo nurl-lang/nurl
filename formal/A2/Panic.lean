@@ -15,19 +15,19 @@ theorem HeapOK.remove_bor {m : Mem} (hh : HeapOK m) {p : Var} {w : Option Val}
 theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic m1))
     (hh : HeapOK m) (hc : Covers m) (hnd : s.spine.Nodup) :
     (∀ v, v ∉ s.spine → m1.st v = m.st v) ∧ (∀ v ∈ s.spine, m1.st v = none) ∧
-    HeapOK m1 ∧ Covers m1 ∧ m1.nv = m.nv ∧ m1.nid = m.nid := by
+    HeapOK m1 ∧ Covers m1 ∧ m1.nv = m.nv ∧ m1.nid = m.nid ∧ m1.blk = m.blk := by
   generalize hr : Res.panic m1 = r at hst
   induction hst generalizing m1 with
-  | letvP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl⟩
-  | assignP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl⟩
-  | panic => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl⟩
+  | letvP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
+  | assignP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
+  | panic => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
   | seqP _ ih => cases hr; exact ih hnd rfl
   | scopeP _ hsl hd ih =>
     rename_i x _ _ _ _
     cases hr
     simp only [Stmt.spine, List.nodup_cons] at hnd
-    obtain ⟨h1, h2, hh1, hc1, hnv, hnid⟩ := ih hnd.2 rfl
-    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove hsl hd, covers_remove hc1 hsl hd, hnv, hnid⟩
+    obtain ⟨h1, h2, hh1, hc1, hnv, hnid, hblk⟩ := ih hnd.2 rfl
+    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove hsl hd, covers_remove hc1 hsl hd, hnv, hnid, hblk⟩
     · simp only [Stmt.spine, List.mem_cons, not_or] at hv
       simp [Mem.remove, upd_ne _ _ hv.1, h1 v hv.2]
     · simp only [Stmt.spine, List.mem_cons] at hv
@@ -39,8 +39,8 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
     rename_i p _ _ _
     cases hr
     simp only [Stmt.spine, List.nodup_cons] at hnd
-    obtain ⟨h1, h2, hh1, hc1, hnv, hnid⟩ := ih hnd.2 rfl
-    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove_bor hp, covers_remove_bor hc1 hp, hnv, hnid⟩
+    obtain ⟨h1, h2, hh1, hc1, hnv, hnid, hblk⟩ := ih hnd.2 rfl
+    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove_bor hp, covers_remove_bor hc1 hp, hnv, hnid, hblk⟩
     · simp only [Stmt.spine, List.mem_cons, not_or] at hv
       simp [Mem.remove, upd_ne _ _ hv.1, h1 v hv.2]
     · simp only [Stmt.spine, List.mem_cons] at hv
@@ -49,14 +49,14 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
       · have hvp : v ≠ p := fun e => hnd.1 (e ▸ hv)
         simp [Mem.remove, upd_ne _ _ hvp, h2 v hv]
   | frozenP _ ih => cases hr; exact ih hnd rfl
-  | letdP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl⟩
+  | letdP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, rfl⟩
   | scopeDPMoved _ hsl ih =>
     rename_i x _ _ _
     cases hr
     simp only [Stmt.spine, List.nodup_cons] at hnd
-    obtain ⟨h1, h2, hh1, hc1, hnv, hnid⟩ := ih hnd.2 rfl
+    obtain ⟨h1, h2, hh1, hc1, hnv, hnid, hblk⟩ := ih hnd.2 rfl
     refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove hsl DropSlot.moved,
-      covers_remove hc1 hsl DropSlot.moved, hnv, hnid⟩
+      covers_remove hc1 hsl DropSlot.moved, hnv, hnid, hblk⟩
     · simp only [Stmt.spine, List.mem_cons, not_or] at hv
       simp [Mem.remove, upd_ne _ _ hv.1, h1 v hv.2]
     · simp only [Stmt.spine, List.mem_cons] at hv
