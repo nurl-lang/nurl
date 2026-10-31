@@ -281,23 +281,24 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro Γ F Δ ht hi
     generalize hS : Stmt.catchR x m0 s = S at ht hi
     induction ht with
-    | catchR hxF hs hM hanch hKO _ =>
+    | catchR hxF hs hM hanch hKO hDS _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       exact StmtT.catchR hxF (ih hsp hhole _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
+        (by rw [hsp']; exact hDS)
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scopeD x f s r K h ih =>
     intro Γ F Δ ht hi
     generalize hS : Stmt.scopeD x f s = S at ht hi
     induction ht with
-    | scopeD hxE hxF hs hpx hKO hWd hNd _ =>
+    | scopeD hxE hxF hs hpx hKO hWd hNd hΔd _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, hx, hmo, hrest⟩ := hxE
       exact StmtT.scopeD ⟨Ex, hx, hmo, hrest⟩ hxF
         (ih hsp hhole _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
-        (by rw [hsp']; exact hKO) hWd hNd
+        (by rw [hsp']; exact hKO) hWd hNd hΔd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 

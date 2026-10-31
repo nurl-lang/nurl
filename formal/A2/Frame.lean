@@ -111,6 +111,51 @@ theorem DKeep.exitScope {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) (x 
   simp only [A2.exitScope, upd_ne _ _ hvx] at hv
   exact (h.kill .replace false x) v E hv hd hos hn hvs
 
+/-- Binding an entry that views nothing of `x` keeps both checks on `x`. -/
+theorem DtorSafe.setE_noroot {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
+    {y : Var} {E : Entry} (hE : ∀ d ∈ E.vdeps, d.root ≠ x) : DtorSafe (A2.setE Γ y E) e hv x := by
+  intro v E' hv' hd hos
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    unfold hitsMem
+    simp only [Bool.and_eq_false_iff, List.any_eq_false]
+    right; intro d hdd hk
+    simp only [Bool.and_eq_true, beq_iff_eq] at hk
+    exact hE d hdd hk.1.1
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos
+
+theorem DbindSafe.setE_noroot {Γ : Ctx} {x : Var} (h : DbindSafe Γ x) {y : Var} {E : Entry}
+    (hE : ∀ d ∈ E.vdeps, d.root ≠ x) : DbindSafe (A2.setE Γ y E) x := by
+  intro v E' hv' hd hos hn d hdd
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    exact fun _ => hE d hdd
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos hn d hdd
+
+theorem DStay.setE {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) {y : Var} {E : Entry}
+    (hE : ∀ E0, Γ y = some E0 → E0.dbind = true → E0.mode.ownSlot = true → y ∉ sp →
+      E.dbind = true ∧ E.mode.ownSlot = true) :
+    DStay Γ (A2.setE Γ' y E) sp := fun v E0 hv hd hos hvs => by
+  by_cases hvy : v = y
+  · subst hvy
+    obtain ⟨h1, h2⟩ := hE E0 hv hd hos hvs
+    exact ⟨E, by simp [A2.setE], h1, h2⟩
+  · obtain ⟨E', h', hd', hos'⟩ := h v E0 hv hd hos hvs
+    exact ⟨E', by simp [A2.setE, upd_ne _ _ hvy, h'], hd', hos'⟩
+
+theorem DStay.kill {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) (e : Eff) (hv : Bool) (x : Var) :
+    DStay Γ (A2.kill e hv x Γ') sp := fun v E hE hd hos hvs => by
+  obtain ⟨E', h', hd', hos'⟩ := h v E hE hd hos hvs
+  exact ⟨killE e hv x E', by simp [A2.kill, h'], by rw [killE_dbind]; exact hd', by rw [killE_mode]; exact hos'⟩
+
+/-- A scope's end keeps every other binding `letd` made. -/
+theorem DStay.exitScope {Γ Γ' : Ctx} {sp : List Var} {x : Var} (h : DStay Γ Γ' sp) :
+    DStay Γ (A2.exitScope x Γ') (x :: sp) := fun v E hv hd hos hvs => by
+  have hvx : v ≠ x := fun e => hvs (by simp [e])
+  obtain ⟨E', h', hd', hos'⟩ := h v E hv hd hos (fun hm => hvs (List.mem_cons_of_mem _ hm))
+  exact ⟨killE .replace false x E', by simp [A2.exitScope, upd_ne _ _ hvx, A2.kill, h'],
+    by rw [killE_dbind]; exact hd', by rw [killE_mode]; exact hos'⟩
+
 /-- Setting an entry: one no `letd` made, or one that views no more than
     the old entry of a `letd` binding. -/
 theorem DKeep.setE {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) {y : Var} {E : Entry}

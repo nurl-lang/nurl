@@ -150,7 +150,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | seq _ _ _ iha ihb =>
     intro hs; simp only [Stmt.src, Bool.and_eq_true] at hs; exact (iha hs.1).trans (ihb hs.2)
   | letv hks hx _ hr _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
-  | letd hks hx _ hr _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
+  | letd hks hx _ hr _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
@@ -2679,7 +2679,8 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       have hX : (callX fn).mode = .own := by simp [callX, resMode, ho]
       refine StmtT.seq rfl hfz (StmtT.assign hbx h.xF (Or.inl ⟨hX, rfl⟩) hrhs
         (by simp [callX, hrt]) ?_ (by simp [setE, upd_ne _ _ hxr', A2.kill, hbx])
-        (hQb.noPin fun hq => by simp [h.fresh] at hq) (((hDb.kill _ _ _).setE_off rfl).dtorSafe hxq _ _))
+        (hQb.noPin fun hq => by simp [h.fresh] at hq) (((hDb.kill _ _ _).setE_off rfl).dtorSafe hxq _ _)
+        (by simp [callX]))
       have hv : (⟨Er'.ty, .own, true, [], Er'.held, false, false⟩ : Entry).vdeps = Er'.vdeps := by
         simp [Entry.vdeps, hm, Mode.ownSlot]
       rw [hv]; exact hxr
@@ -2690,7 +2691,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       exact StmtT.seq rfl hfz (StmtT.assign (E := { Er' with dtor := false, dbind := false }) hbx h.xF
         (Or.inr (Or.inr ⟨hX, hm⟩)) hrhs
         (by simp [callX, hrt]) hxr (by simp [hbx]) (hQb.noPin fun hq => by simp [h.fresh] at hq)
-        (hDb.dtorSafe hxq _ _))
+        (hDb.dtorSafe hxq _ _) (by simp [callX]))
   have hscr := StmtT.scope (⟨_, by
       rw [show base + fn.params.length = callRen fn.params args base fn.params.length from
         (ren_res fn args base).symm]

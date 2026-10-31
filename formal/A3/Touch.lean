@@ -176,7 +176,7 @@ theorem TypedAt.letd_sat {P : Prog} {m : Mem} {x : Var} {f : Nat} {r : Rhs} {s :
   obtain ⟨Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.letd x f r s = s0 at ht
   induction ht with
-  | letd _ _ _ hr _ _ _ _ _ _ => cases hs; exact rhsT_satLive hi hr
+  | letd _ _ _ hr _ _ _ _ _ _ _ => cases hs; exact rhsT_satLive hi hr
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 

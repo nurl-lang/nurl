@@ -160,7 +160,7 @@ theorem then_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
     (RhsT.copyRoot (E := Ep) (by simp [ctx]) rfl rfl) rfl
     (by simp [derive, Ep, roots, Entry.vdeps, Mode.isRoot, Mode.ownSlot, rootKind, str])
     (by simp [ctx]) (ctx_noPin (by simp) _)
-    (DtorSafe.of_none (fun v E h => (ctx_flags ⟨rfl, rfl⟩ v E h).1) _ _ _)
+    (DtorSafe.of_none (fun v E h => (ctx_flags ⟨rfl, rfl⟩ v E h).1) _ _ _) rfl
   have he : setE (kill .replace false 3 (ctx ⟨str, .bor, false, [], [], false, false⟩)) 3
       { (⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false⟩ : Entry) with mode := Mode.bor } = ctx ErT := by
     funext v
@@ -219,7 +219,7 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
     (by simp [ctxL, ctx, setE, upd]) (by simp) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hinr
     (by simp [Enew, Ecell, opt, str]) (by simp [Enew, roots, Entry.vdeps, Mode.ownSlot])
     (by simp [ctxL, ctx, setE, upd]) (ctxL_noPin (by simp [R0]) (by simp [Enew]) _)
-    (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _)
+    (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _) rfl
   have h2 : setE (kill .replace false 0 (ctxL R0 EnewD)) 0
       { (⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false⟩ : Entry) with mode := Ecell.mode } = ctxL R0 EnewD := by
     funext v
@@ -234,7 +234,7 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
     (RhsT.getr (E := Ecell) (a := .int) (b := str) (by simp [ctxL, ctx, setE, upd]) rfl rfl) rfl
     (by simp [projE, projDeps, Ecell, str, roots, Entry.vdeps, Mode.ownSlot])
     (by simp [ctxL, ctx, setE, upd]) (ctxL_noPin (by simp [R0]) (by simp [EnewD]) _)
-    (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _)
+    (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _) rfl
   have h3 : setE (kill .replace false 3 (ctxL R0 EnewD)) 3 { projE 0 Ecell str with mode := R0.mode } =
       ctxL ErF EnewD := by
     funext v

@@ -439,6 +439,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
         Ex.mode = .bor ∧ E.mode = .bor) →
       RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome → NoPin Γ x →
       DtorSafe Γ1 .replace false x →
+      -- A2-drop.2: a binding `letd` made gains no view (nurlc #254; its rule,
+      -- views of older bindings only, needs an age the calculus lacks)
+      Ex.dbind = false →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
       a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
@@ -465,8 +468,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
-      -- A2-drop.2: ... and no binding `letd` made viewing more than it did
-      DKeep Γ Δ [] →
+      -- A2-drop.2: ... and no binding `letd` made viewing more than it did,
+      -- nor any no longer `letd`'s
+      DKeep Γ Δ [] → DStay Γ Δ [] →
       StmtT P Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
@@ -497,18 +501,24 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
       (RootbAnch Δ F) →
-      KeepOut Γ Δ s.spine →
+      KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P Γ F (.catchR x m0 s) Δ
   /-- A2-drop.1: a binding with a destructor, of a type that holds no views
       (its value is valid however the binding died). -/
-  | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry} :
+  | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry}
+      {H : List Dep} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
-      E.ty.holdsView = false → DtorOK P f E.ty → StmtT P (setE Γ1 x E) F s Δ →
+      E.ty.hasFn = false → DtorOK P f E.ty →
+      -- A2-drop.2: the binding, armed, views what the value does, or more
+      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with held := H })) F s Δ →
       EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.holdsView = false ∧ DtorOK P f E.ty) → x ∉ F →
+      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.hasFn = false ∧ DtorOK P f E.ty) → x ∉ F →
       StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      -- A2-drop.2: the binding is `letd`'s when its type holds views (its
+      -- destructor reads them)
+      (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
 
 /-- A function is well-typed when its body is, from its own view of the

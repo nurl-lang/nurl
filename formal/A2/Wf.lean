@@ -925,13 +925,13 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @scope Γ Δ F x k _ hxF _ _ ih | @scopeD Γ Δ F x _ k _ hxF _ _ _ _ _ ih =>
+  | @scope Γ Δ F x k _ hxF _ _ ih | @scopeD Γ Δ F x _ k _ hxF _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2]⟩
-  | @letd Γ Γ1 Δ F x _ r0 k E0 _ hx hxF hrh _ _ _ _ _ ih =>
+  | @letd Γ Γ1 Δ F x _ r0 k E0 _ _ hx hxF hrh _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hrh.domMode.get h
@@ -1027,14 +1027,20 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2])))).exitScope
       x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
-  | scopeD _ _ _ hpx _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
-  | @letd Γ Γ1 Δ F x _ r k E _ hx _ hr _ _ _ _ hpx ih =>
+  | scopeD _ _ _ hpx _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | @letd Γ Γ1 Δ F x _ r k E H _ hx _ hr hmo _ _ hH _ hpx ih =>
     intro h
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h
     have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
-    exact (ih (hw1.add hx1 hE (fun hd => absurd hd (by simp [hr.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2])))).exitScope
-      x hpx.2.2
+    -- the armed binding views what `letd` records: bound roots
+    have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
+    have hv1 : (Entry.arm { E with held := H }).vdeps = H := by simp [Entry.vdeps, Entry.arm, hos]
+    have hroot := fun ht => hH.root hmo (hE hr.out.2 ht)
+    exact (ih (hw1.add hx1 (E := Entry.arm { E with held := H })
+      (fun _ ht r hr' => by
+        rw [hv1] at hr'; obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr'; exact hroot ht d hd)
+      (fun _ _ ht d hd _ => by rw [hv1] at hd; exact hroot ht d hd)
+      (fun h => h) (fun h => h))).exitScope x hpx.2.2
   | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h

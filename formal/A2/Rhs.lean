@@ -142,6 +142,23 @@ theorem RhsOut.setDtor {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
     (h : RhsOut m1 Γ1 E v o) (b c : Bool) : RhsOut m1 Γ1 { E with dtor := b, dbind := c } v o :=
   ⟨h.own, h.mode, h.live, h.tyok, h.wf, h.valOwn, h.valBor, h.names, h.held, h.pkgs⟩
 
+/-- ... nor on whether it records an owned value as viewing more memory, of
+    bound roots, than the value does (`HeldUp`). -/
+theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (h : RhsOut m1 Γ1 E v o) (hmo : E.mode = .own) {H : List Dep} (hH : HeldUp Γ1 E H) :
+    RhsOut m1 Γ1 { E with held := H } v o := by
+  have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
+  have hv1 : ({ E with held := H } : Entry).vdeps = H := by simp [Entry.vdeps, hos]
+  refine ⟨h.own, h.mode, h.live, h.tyok, fun ht r hr => ?_, fun hm => ?_, fun hb => ?_,
+    fun hn => (h.names hn).widen hmo hH, h.held.mono hH.1, h.pkgs⟩
+  · rw [hv1] at hr
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+    exact hH.root hmo (h.wf ht) d hd
+  · obtain ⟨a, b, c, d, e, f, g⟩ := h.valOwn hm
+    exact ⟨a, b, c.mono hH.1, d, e, f, g⟩
+  · have hb' : E.mode = .bor := hb
+    rw [hmo] at hb'; cases hb'
+
 theorem RhsPost.same {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) : RhsPost m m Γ Γ F :=
   ⟨hi, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl, fun _ _ h _ => h, fun _ => rfl,
     fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl Γ []⟩

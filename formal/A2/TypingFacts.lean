@@ -436,8 +436,8 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact hpF
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
-  | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
-  | scopeD _ hxF _ _ _ _ _ ih =>
+  | catchR _ _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | scopeD _ hxF _ _ _ _ _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
@@ -699,11 +699,147 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
   | callc hk _ _ _ _ _ _ _ _ hc _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
-  | catchR _ _ _ _ _ ih => exact ih
-  | letd hs _ _ hr _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
-  | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ ih =>
+  | catchR _ _ _ _ _ _ ih => exact ih
+  | letd hs _ _ hr _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
+  | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
+
+/-! ### A2-drop.2: a binding `letd` made stays one -/
+
+theorem DStay.weaker_left {Γ Γ0 Γ' : Ctx} {sp : List Var} (hw : Weaker Γ Γ0) (h : DStay Γ0 Γ' sp) :
+    DStay Γ Γ' sp := by
+  intro v E hv hd hos hvs
+  cases h0 : Γ0 v with
+  | none => exact absurd ((hw.1 v).1.mpr h0) (by rw [hv]; simp)
+  | some E0 =>
+    have hwe := (hw.1 v).2 E E0 hv h0
+    exact h v E0 h0 (by rw [hwe.dbind]; exact hd) (by rw [hwe.mode]; exact hos) hvs
+
+theorem DStay.weaker_right {Γ Δ0 Δ : Ctx} {sp : List Var} (hw : Weaker Δ0 Δ) (h : DStay Γ Δ0 sp) :
+    DStay Γ Δ sp := by
+  intro v E hv hd hos hvs
+  obtain ⟨E0, h0, hd0, hos0⟩ := h v E hv hd hos hvs
+  cases h1 : Δ v with
+  | none => exact absurd ((hw.1 v).1.mpr h1) (by rw [h0]; simp)
+  | some E1 =>
+    have hwe := (hw.1 v).2 E0 E1 h0 h1
+    exact ⟨E1, rfl, by rw [hwe.dbind]; exact hd0, by rw [hwe.mode]; exact hos0⟩
+
+theorem DStay.exitRoot {Γ Δ : Ctx} {p : Var} {sp : List Var} (D : List Dep) (h : DStay Γ Δ sp) :
+    DStay Γ (A2.exitRoot p D Δ) (p :: sp) := fun v E hv hd hos hvs => by
+  have hvp : v ≠ p := fun e => hvs (by simp [e])
+  obtain ⟨E', h', hd', hos'⟩ := h v E hv hd hos (fun hm => hvs (List.mem_cons_of_mem _ hm))
+  exact ⟨rerootE p D E', by simp [A2.exitRoot, upd_ne _ _ hvp, h'], hd', hos'⟩
+
+/-- A binding the statement opens and ends: outside it, what its parts keep. -/
+theorem DStay.bind {Γ Γ1 Δ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none) (h1 : DStay Γ Γ1 [])
+    (h2 : DStay (A2.setE Γ1 x E) Δ []) : DStay Γ (A2.exitScope x Δ) [] := by
+  intro v E0 hv hd hos _
+  have hvx : v ≠ x := fun e => by rw [e, hx] at hv; cases hv
+  have h12 : DStay Γ (A2.setE Γ1 x E) [] := h1.setE fun E0 h0 _ _ _ => by rw [hx] at h0; cases h0
+  exact ((h12.trans h2 fun _ h => h).exitScope (x := x)) v E0 hv hd hos (by simp [hvx])
+
+theorem DStay.moveOut {Γ : Ctx} {y : Var} {E : Entry} (hy : Γ y = some E) (e : Eff) (hv : Bool) :
+    DStay Γ (A2.setE (A2.kill e hv y Γ) y { E with live := false, dtor := false }) [] :=
+  ((DStay.refl Γ []).kill e hv y).setE fun E0 h0 hd hos _ => by
+    rw [hy] at h0; cases h0; exact ⟨hd, hos⟩
+
+theorem PushArg.dstay {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} {D : List Dep}
+    {Γ1 : Ctx} (hy : Γ y = some E) (h : PushArg Γ F y E t D Γ1) : DStay Γ Γ1 [] := by
+  cases h with
+  | move => exact DStay.moveOut hy _ _
+  | int => exact DStay.refl Γ []
+  | slice => exact DStay.refl Γ []
+
+theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
+    DStay Γ Γ1 [] := by
+  cases h with
+  | moveOwn hy => exact DStay.moveOut hy _ _
+  | pop => exact (DStay.refl Γ []).kill _ _ _
+  | pair hy _ hp1 hz _ hp2 _ => exact (hp1.dstay hy).trans (hp2.dstay hz) fun _ h => h
+  | inl hy _ hp _ => exact hp.dstay hy
+  | inr hy _ hp _ => exact hp.dstay hy
+  | takel hy => exact DStay.moveOut hy _ _
+  | taker hy => exact DStay.moveOut hy _ _
+  | pack hy _ _ hp _ => exact hp.dstay hy
+  | _ => exact DStay.refl Γ []
+
+theorem DStay.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DStay Γ Γ' sp) :
+    ∀ ds, DStay Γ (A2.killNames ds Γ') sp
+  | [] => h
+  | d :: ds => show DStay Γ (A2.kill d.kind.bound false d.root (A2.killNames ds Γ')) sp from
+      (DStay.killNames h ds).kill _ _ _
+
+/-- A call moves a `sink` argument and changes an `inout` one as it is. -/
+theorem DStay.callPostAux {Γ0 : Ctx} {fn : Fn} {args : List Var} :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx), DStay Γ0 Γ [] →
+      DStay Γ0 (A2.callPostAux Γ0 fn args ps as i Γ) [] := by
+  intro ps
+  induction ps with
+  | nil => intro as i Γ h; cases as <;> simpa [A2.callPostAux] using h
+  | cons p ps ih =>
+    intro as i Γ h
+    obtain ⟨pm, t⟩ := p
+    cases as with
+    | nil => cases pm <;> simpa [A2.callPostAux] using h
+    | cons a as =>
+      cases pm with
+      | inp => simpa [A2.callPostAux] using ih as (i + 1) Γ h
+      | sink =>
+        simp only [A2.callPostAux]
+        refine ih as (i + 1) _ ((h.kill _ _ _).setE fun E0 h0 hd hos _ => ?_)
+        simp only [argE, h0, Option.getD_some]; exact ⟨hd, hos⟩
+      | inout b =>
+        simp only [A2.callPostAux]
+        refine ih as (i + 1) _ ((h.kill _ _ _).setE fun E0 h0 hd hos _ => ?_)
+        simp only [argE, h0, Option.getD_some]; exact ⟨hd, hos⟩
+
+theorem CallT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
+    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') : DStay Γ Γ' [] := by
+  obtain ⟨fn, _, _, _, _, _, _, rfl⟩ := h
+  exact (DStay.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DStay.refl Γ [])).killNames _
+
+/-- A2-drop.2: a statement's typing keeps every binding `letd` made outside
+    the running scopes: its flag never changes. -/
+theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P Γ F s Δ) :
+    DStay Γ Δ s.spine := by
+  have src0 : ∀ {Γ Δ : Ctx} {s : Stmt}, s.src = true → DStay Γ Δ s.spine → DStay Γ Δ [] :=
+    fun hs h => by rwa [src_spine hs] at h
+  induction h with
+  | skip => exact DStay.refl _ _
+  | seq hb _ _ iha ihb => exact iha.trans (src0 hb ihb) fun _ _ h => by cases h
+  | letv hs hx _ hr _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
+  | letcall hs hx _ hc _ _ ih => exact DStay.bind hx hc.dstay (src0 hs ih)
+  | scope _ _ _ _ ih => exact ih.exitScope
+  | rbind _ _ _ _ _ _ _ ih => exact ih.exitRoot _
+  | frozen _ _ ih => exact ih
+  | assign hx _ _ hr _ _ _ _ _ hdb =>
+    exact (hr.dstay.kill _ _ _).setE fun E0 h0 hd _ _ => by rw [hx] at h0; cases h0; rw [hdb] at hd; cases hd
+  | ite ha _ _ _ _ iha _ => exact src0 ha iha
+  | «while» => exact DStay.refl _ _
+  | push hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ _ =>
+    refine ((hpa.dstay hy).kill _ _ _).setE fun E0 h0 hd hos _ => ?_
+    obtain ⟨E1, h1, hd1, hos1⟩ := (hpa.dstay hy) _ E0 h0 hd hos (by simp)
+    rw [hx1] at h1; cases h1
+    exact ⟨hd1, hos1⟩
+  | free hx => exact DStay.moveOut hx _ _
+  | sub hw _ hw' ih =>
+    rcases hw' with rfl | hw'
+    · exact ih.weaker_left hw
+    · exact (ih.weaker_right hw').weaker_left hw
+  | panic _ _ _ _ _ hst => exact hst
+  | letrec hs hx _ _ _ _ _ hc _ _ ih => exact DStay.bind hx hc.dstay (src0 hs ih)
+  | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ _ ih =>
+    have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
+    have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x
+        (compE E a)) z = none := by
+      simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
+    exact DStay.bind hx (DStay.moveOut hy _ _) (DStay.bind hz1 (DStay.refl _ []) (src0 hks ih))
+  | callc hk hx _ _ _ _ _ _ _ hc _ _ _ ih => exact DStay.bind hx hc.dstay (src0 hk ih)
+  | catchR _ _ _ _ _ hst _ => exact hst
+  | letd hs hx _ hr _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
+  | scopeD _ _ _ _ _ _ _ _ ih => exact ih.exitScope
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by
