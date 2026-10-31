@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_let_block_view_of_its_local.nu:18:9: error: the value given to 'v' is lent out of 'w', which ends before 'v' does, and a 'V' holds a view: a copy of it would still view 'w'. Declare 'w' where 'v' is declared, or hand back a value that holds no view of it (copy the bytes it views: slice_to_vec, string_from).
+        ( view_of w )
+        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

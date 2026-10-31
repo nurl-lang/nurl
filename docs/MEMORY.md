@@ -421,6 +421,18 @@ the same way: an owner moves, a borrow is copied.
 - A call whose callee may return one of its arguments takes that argument
   as `sink` (§1), so the caller's binding is consumed rather than
   aliased.
+- A value that lends a binding ending before the name it is given to is
+  copied into that name where it lends it, so the name owns it: a value
+  block's tail (`: String r { : W w ( mkw ) ( gets w ) }`, where `w` ends
+  at the `}`), a join's arm lending what the arm or the block bound. A
+  value that cannot be copied, or whose type holds a view (a copy would
+  still view what ends), is refused, and the message says where to
+  declare the binding instead (agora #222). The copy is made only there,
+  where the value would otherwise outlive its source: a program accepted
+  before keeps its code. A direct call (`= out ( gets w )` with `w` a loop
+  body's) is not copied: `out` stays a borrow of `w`, refused where it is
+  read after `w` ends (copy it there, `string_from`, or declare `w` where
+  `out` is).
 
 So two live names can never both own one buffer.
 
@@ -2093,6 +2105,12 @@ goes:
 - A `sink` argument clears the caller's flag, and the callee drops the
   value unless it moves it on.
 - `= a ( make … )` drops the value `a` held first.
+- A typed binding of a value block (`: T t { stmts tail }`) is the
+  calculus's `: T t` then `{ stmts = t tail }`: `t` is declared first,
+  owning nothing, and the tail is assigned to it before the block's names
+  end. Where the tail lends one of the block's own locals, the value is
+  copied into `t` on the paths it lends it (§2.2), and `t`'s flag says it
+  owns it there (agora #222).
 
 **Drop glue.** A `% Drop` impl releases what only it knows how to (a raw
 buffer, an OS resource). The fields the compiler manages (`String`,

@@ -452,9 +452,14 @@ lend_returned_through_a_ternary	§7.6	A2	h311 through a ? ternary	rejected	h312
 lent_element_handed_to_a_sink	CallT.sink	A1	vec_at element borrow passed to sink param; Vec still holds freed elem	runs-clean	h228
 lent_payload_handed_out_of_a_match	§7.6	A2	match on option field hands %Drop payload to a binding; double owner	rejected	h227
 lent_value_it_cannot_copy_stored	§2.12	A2	lent %Drop element stored into struct literal: two owners	rejected	h230
+let_block_drop_local_selected	§7.6	A2	agora #222: a typed binding of a block whose tail selects its own `% Drop` local: it cannot be copied	rejected	-
 let_block_fresh_tail	§7.6	A2	agora #242: a value block ending in a fresh call, bound by `:`: taken for a borrow, the String leaked	runs-clean	-
+let_block_join_locals_returned	§7.6	A2	agora #222: a typed binding of a block whose tail is a join over its own locals, handed back	runs-clean	-
 let_block_join_to_inout	§2.4	A2	agora #242: a value block ending in a `?` of fresh Strings, bound by `:` and assigned to an `inout` parameter	runs-clean	-
 let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean	h879
+let_block_tail_picks_inner_or_outer	§7.6	A2	agora #222: a block's tail call lending its own local or an outer binding (precision pin)	runs-clean	-
+let_block_tail_picks_inner_or_outer_then_moved	§7.6	A2	agora #222: a block's tail call lending its own local or an outer binding, the outer one then moved	rejected	-
+let_block_view_of_its_local	§7.6	A2	agora #222: a typed binding of a block whose tail call lends a value holding a view of the block's own local	rejected	-
 let_join_drop_locals	§2.2	A2	agora #242: a `?` over two `% Drop` locals bound by an inferred `:`: released through both names	runs-clean	-
 let_join_drop_param_or_local_returned	§7.6	A2	agora #242: a `?` over a borrowed `% Drop` parameter and a local, bound by `:` and handed back by name	runs-clean	-
 let_join_fresh_to_inout	§2.4	A2	agora #242: a `?` of fresh Strings bound by `:` and assigned to an `inout` parameter: stored as is and still released	runs-clean	-

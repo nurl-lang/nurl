@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_let_block_drop_local_selected.nu:15:9: error: the value given to 't' is lent out of 'l', which ends before 't' does, and a 'D' cannot be copied out of it. Declare 'l' where 't' is declared, so that 't' can take it over.
+        ? c l @ D { ( string_from `another string long enough for a heap buffer` ) }
+        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -1,7 +1,14 @@
 # Elaboration — producers land in a binding before anything consumes them
 
-Status: **design, under review** (Agora #222). Nothing here is implemented
-yet. Read [`COMPILER_INTERNALS.md`](COMPILER_INTERNALS.md) first: this note
+Status: **stages 0 and 1 implemented** (Agora #222). Stage 0 split
+gen_assign's binding half into `__assign_after`. Stage 1 elaborates a typed
+`:` binding of a value block (`: T t { stmts tail }` → `: T t` ·
+`{ stmts = t tail }`, `__elab_block_let`), with rule (A) at the tail: a call
+or a join lending the block's own locals is copied into `t` where it does,
+or refused when it cannot be (a `% Drop` local, a type that holds a view). An
+untyped binding, the other consumers and the other producers are the later
+stages. The tool side: `tools/fuzz/holes/elab.py` writes a typed twin of each
+value-block probe, so the elaborated path is checked on every probe. Read [`COMPILER_INTERNALS.md`](COMPILER_INTERNALS.md) first: this note
 assumes its picture of the fused walk.
 
 ## 1. Why
