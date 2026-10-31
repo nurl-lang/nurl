@@ -21,9 +21,14 @@ on:
   workflow_dispatch:
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
+# On main a run is never cancelled part-way (Agora #251): 20 of 35 main
+# runs used to be cancelled by the next merge, a quarter of all ci.yml
+# job-minutes thrown away, and the commit left untested. A main run that
+# is in progress finishes; GitHub keeps only the newest pending one behind
+# it. A PR's older run is still cancelled by its next push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:

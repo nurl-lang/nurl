@@ -63,10 +63,12 @@ on:
 # macOS runners are the scarcest minutes in the repo; do not leave a
 # superseded run burning them. A `labeled` event for any other label
 # gets a group of its own (its run id), so it cannot cancel a macOS run
-# that is in progress. Its macos job is skipped anyway.
+# that is in progress. Its macos job is skipped anyway. On main a run
+# finishes (Agora #251), so the release commit's run is never cancelled
+# by a later merge.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
