@@ -471,7 +471,9 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ →
-      EndOK Γ y → EndOK Δ z → EndOK (exitScope z Δ) x →
+      -- `y` is replaced, not ended: what borrows it by name, and a destructor
+      -- that views it, are what replacing it ends
+      NoPin Γ y → DtorSafe Γ .replace false y → EndOK Δ z → EndOK (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :

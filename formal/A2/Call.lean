@@ -154,7 +154,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | letcall hks hx _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
-  | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ ih =>
+  | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ _ ih =>
     intro _
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
@@ -196,6 +196,9 @@ noncomputable def Entry.clean (E : Entry) : Entry :=
   if ¬ E.fixed ∧ (E.ty = .int ∨ E.live = false) then { E with path := [], held := [] } else E
 
 @[simp] theorem Entry.clean_dtor (E : Entry) : E.clean.dtor = E.dtor := by
+  unfold Entry.clean; split <;> rfl
+
+@[simp] theorem Entry.clean_dbind (E : Entry) : E.clean.dbind = E.dbind := by
   unfold Entry.clean; split <;> rfl
 
 /-- The roots of what the arguments hold views of. -/
@@ -1279,6 +1282,20 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     unfold callPe; split
     · split <;> rfl
     · rfl
+  pe_dbind v := by
+    show (callPe Γ fn.params args v).dbind = false
+    unfold callPe; split
+    · split <;> rfl
+    · rfl
+  Φarm y E hy ha := by
+    obtain ⟨_, E1, h1, rfl⟩ := h.frame_some hy
+    rw [Entry.clean_dtor] at ha
+    rw [Entry.clean_dbind]
+    by_cases hyx : y = x
+    · subst hyx; simp only [setE, upd_same, Option.some.injEq] at h1; subst h1
+      simp [callX] at ha
+    · simp only [setE, upd_ne _ _ hyx] at h1
+      exact h.postwf.arm y E1 h1 ha
   Φdead y E hy hl := by
     obtain ⟨_, E1, h1, rfl⟩ := h.frame_some hy
     rw [clean_live] at hl

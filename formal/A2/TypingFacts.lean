@@ -658,7 +658,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     · exact (h0.weaker_right hw').weaker_left hw
   | panic _ _ _ _ hdk => exact fun _ _ => hdk
   | letrec hs _ _ _ _ _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
-  | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
+  | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
   | callc hk _ _ _ _ _ _ _ _ hc _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
   | catchR _ _ _ _ _ ih => exact ih
