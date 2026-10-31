@@ -3846,6 +3846,8 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s owner ( nurl_cg_reg cg )
     ( nurl_sym_def syms `__ret_owner_slot__` owner )
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = alloca i8*\n` )
+    // (No return has handed back an owned string yet: mem_save_return_proof.)
+    ( nurl_sym_def syms `__ret_owner_any__` `` )
 }
 
 // A dynamic owner slot can hold null; escaping that slot does not prove
@@ -3864,6 +3866,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     } {}
     ( nurl_print `  store i8* ` ) ( nurl_print returned_owner )
     ( nurl_print `, i8** ` ) ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+    ? ! ( seq returned_owner `null` ) { ( nurl_sym_set_deep syms `__ret_owner_any__` `1` ) } {}
     : s proof ? | ( mem_static_return_slot syms skip )
     & direct ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) `1` `0`
     : s guard ? direct ( nurl_sym_get syms `__last_call_guard__` )
@@ -4220,10 +4223,17 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_publish_return_proof i syms i cg s ty → v {
     ( mem_publish_hown syms )
     ? | == 0 g_auto_drop_strings ! ( seq ( nurl_llty ty ) `i8*` ) { ^ } {}
-    : s owner ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
-    ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
-    ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    // The returned string leaves the panic journal: the caller owns it now.
+    // (Not when no return so far handed back an owned one — the slot then
+    // holds null on every path that reaches here, and the call, external
+    // and never elided, was paid by every `→ s` and `→ *T` function:
+    // vec_data in every encoder; agora #282.)
+    ? != 0 ( nurl_sym_len syms `__ret_owner_any__` ) {
+        : s owner ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    } {}
     // A named function returning a raw pointer (`→ *T`) has no reader: its
     // direct callers take the result as never owned (__ret_never_owned, the
     // same __fn_raw_ret answer), a `dyn` thunk answers for its impl
@@ -9309,6 +9319,11 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     // unreleased — h203.)
     ? | ! | | | | | ( is_ident_tok rhs_tt ) == rhs_tt TT_LPAREN == rhs_tt TT_DOT == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST == rhs_tt TT_LBRACE ! ( seq ( nurl_llty vt ) `i8*` ) { ^ v } {}
     ? | != 0 ( nurl_sym_len syms `__last_call_guard__` ) != 0 ( nurl_sym_len syms `__last_call_ret_owned__` ) { ^ v } {}
+    // (A raw pointer a call hands back — `: ~ *u dst ( vec_data [u] v )` —
+    // is no string: what is assigned to it later is raw memory unsafe code
+    // manages by hand. With a slot it freed and journaled null at every
+    // such binding; agora #282.)
+    ? & == rhs_tt TT_LPAREN ( __fn_raw_ret syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
     : s slot ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
     ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
@@ -9513,7 +9528,11 @@ unsafe @ origin_guard_retained i root → b {
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms cn `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms cn `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms cn `__opt_nurl_t` ) )
-    ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms cn ) )
+    // (A raw pointer, `vec_data [u]`'s, is no string a binding owns:
+    // registered as one, every `: *u dst ( vec_data … )` freed and
+    // journaled a slot that held null; agora #282.)
+    : s __ro ( __ret_owned_of syms cn )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ? & != 0 ( nurl_str_len __ro ) ( __fn_raw_ret syms cn ) ( nurl_str_cat `` `` ) __ro )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get2 syms cn `__ret_owned_fields` ) )
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
