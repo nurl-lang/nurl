@@ -411,9 +411,10 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   obtain ⟨hn1, hEn, _⟩ := CallT.names hP hc hi.names
   have hx1 : callPost Γ fn args x = none := by
     have := hdm.1 x; rw [hx] at this; cases h' : callPost Γ fn args x <;> simp_all
-  obtain ⟨fn', hf', hlen, hargs, hnf, _⟩ := hc
+  obtain ⟨fn', hf', hlen, hargs, hnf, hds, _⟩ := hc
   rw [hf] at hf'; cases hf'
   exact {
+    dsafe := hds
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen
