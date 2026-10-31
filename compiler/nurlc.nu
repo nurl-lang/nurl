@@ -4076,6 +4076,64 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ^ acc
 }
 
+// The same question for a `??` payload binding `name`: may the call its
+// match was over (`__pljk`, the arguments' roots `__pljr`) have lent it out
+// of a binding this frame owns? An i1 operand, or `` when no argument is
+// such a binding (agora #209).
+// Only a root that owns its value counts. One that is itself a view (a
+// field of a parameter bound by name, `: ( Vec T ) as . n attrs`, a cursor:
+// `__sborrow`, `__alias`) lends what its owner keeps, and taking from it
+// would empty the caller's slot. A binding of a call that answers per call
+// (`__sborrow` `@slot`, __mem_bind_call_bit) owns its value on the runs
+// that slot says so.
+@ mem_payload_local_lend i syms i cg s name → s {
+    : s key ( nurl_sym_get2 syms name `__pljk` )
+    ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s roots0 ( nurl_sym_get2 syms name `__pljr` )
+    : i nroots ( count_words roots0 )
+    : ~ s roots ( nurl_str_cat roots0 `` )
+    : ~ s acc ``
+    : ~ s lends ``
+    : ~ i idx 0
+    ~ != 0 ( nurl_str_len roots ) {
+        : s r ( str_first_word roots ) = roots ( str_skip_word roots )
+        : s up ( mem_udrop_ptr_of syms r )
+        : s sb ( nurl_sym_get2 syms up `__sborrow` )
+        : b dynown & != 0 ( nurl_str_len sb ) == ( nurl_str_get sb 0 ) 64
+        ? & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__alias` ) | == 0 ( nurl_str_len sb ) dynown {
+            // This root alone, every other position `-`.
+            : ~ s one ``
+            : ~ i j 0
+            ~ < j nroots {
+                = one ( nurl_str_cat3 one ? == j 0 `` ` ` ? == j idx r `-` )
+                = j + j 1
+            }
+            : ~ s l ( mem_local_lend_of syms cg key one )
+            : s tri ( nurl_sym_get syms `__last_local_lend__` )
+            ? != 0 ( nurl_str_len l ) {
+                = lends ( nurl_str_cat3 lends ? == 0 ( nurl_str_len lends ) `` ` ` tri )
+                ? dynown {
+                    : s bw ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print bw ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice sb 1 - ( nurl_str_len sb ) 1 ) ) ( nurl_print `\n` )
+                    : s ow ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print ow ) ( nurl_print ` = xor i1 ` ) ( nurl_print bw ) ( nurl_print `, 1\n` )
+                    : s la ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print la ) ( nurl_print ` = and i1 ` ) ( nurl_print l ) ( nurl_print `, ` ) ( nurl_print ow ) ( nurl_print `\n` )
+                    = l la
+                } {}
+                ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat l `` ) } {
+                    : s o ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print l ) ( nurl_print `\n` )
+                    = acc o
+                }
+            } {}
+        } {}
+        = idx + idx 1
+    }
+    ( nurl_sym_def syms `__last_local_lend__` lends )
+    ^ acc
+}
+
 // …and a raw string this frame owns (an owned string local, a `sink s`
 // parameter), which it frees on the way out.
 @ __call_lends_local_str i syms → b {
@@ -4828,6 +4886,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // rule below says otherwise.
     : ~ s hbit ( nurl_str_cat `true` `` )
     : ~ b ret_call_copied F
+    // (A `??` payload copied where its call lent out of a local: owned on
+    // those runs, answered per call — agora #209.)
+    : ~ b ret_pl_copied F
     // (A binding of a value that cannot be copied which a call may lend:
     // owned exactly when that call's answer said so — its flag, as for `^ (
     // g x )` the call's bit; agora #200.)
@@ -5045,9 +5106,36 @@ unsafe @ gen_ret i lex i syms i cg → s {
         } {}
     } {}
     // `^ x` of a `??` payload: what its matched call lent (h270).
+    // (…and when that call lends out of a local of this frame, dropped on
+    // the way out — `?? ( vec_get [String] xs 0 ) { T e → ^ e }`, xs a
+    // local — the caller gets a copy where it lent, as `^ ( g t )` does; one
+    // that cannot be copied is refused at module end. A payload that owns
+    // its value has an owner slot and leaves as one: agora #209.)
     ? & ( is_ident_tok ret_first_tt ) ! ret_field_copy {
         ? != 0 ( nurl_sym_len2 syms ret_first_val `__pljk` ) {
             ( mem_ret_param_lend_via syms ( nurl_sym_get2 syms ret_first_val `__pljk` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) )
+            // (A `vec_get` element has an owner slot when it cannot be
+            // copied, #203 — flag 0: the Vec owns it until it is taken.)
+            ? | == 0 ( nurl_str_len ( mem_udrop_ptr_of syms ret_first_val ) ) != 0 ( nurl_sym_len2 syms ret_first_val `__vget` ) {
+                : s __pll ( mem_payload_local_lend syms cg ret_first_val )
+                ? != 0 ( nurl_str_len __pll ) {
+                    : s __plt ( nurl_get_last_type )
+                    // (A `vec_get` element of a Vec this frame drops is taken
+                    // out of its slot rather than copied: no allocation, and
+                    // a value that cannot be copied leaves too.)
+                    : b __plv != 0 ( nurl_sym_len2 syms ret_first_val `__vget` )
+                    ? | __plv ( __clone_supported __plt syms ) {
+                        ? __plv { ( mem_vget_consume syms cg ret_first_val __pll ) } { = val ( mem_emit_cloneif cg __plt val __pll ) }
+                        : s __plo ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __plo ) ( nurl_print ` = or i1 ` ) ( nurl_print hbit ) ( nurl_print `, ` ) ( nurl_print __pll ) ( nurl_print `\n` )
+                        = hbit __plo
+                        = ret_pl_copied T
+                        ( mem_hown_dyn_lend syms ( nurl_sym_get syms `__last_local_lend__` ) )
+                    } { ? ( __nc_held_ty __plt ) {
+                            ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __plt )
+                        } {} }
+                } {}
+            } {}
         } {}
     } {}
     // `^ p` of a String / Vec parameter, or of one that cannot be copied:
@@ -5177,7 +5265,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
         } {}
         // A local that owns nothing at all (never registered: bound to a
         // literal that carries nothing, then assigned a borrow) likewise.
-        ? & & & == 0 ( nurl_str_len cup ) ( __clone_supported cty syms )
+        // (A `??` payload copied where its call lent a local has its answer
+        // already: ret_pl_copied.)
+        ? & & & & ! ret_pl_copied == 0 ( nurl_str_len cup ) ( __clone_supported cty syms )
         < ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
         != 0 ( nurl_sym_len2 syms ret_first_val `__ptr` ) {
             : s self ( nurl_sym_get syms `__fn_self_name__` )
@@ -5565,7 +5655,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
-    ? & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied
+    ? & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
         ? ! ( mem_ret_borrow_of_params syms ret_first_tt ) { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
         = hbit ( nurl_str_cat `false` `` ) }
@@ -39098,10 +39188,24 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // String s ( gets w )`, w dropped on the way out): copied, as `^ s`
         // copies it (agora #195).
         ? & & & & agg_moves_fields ( seq fld_lent `1` ) ( is_ident_tok fld_first_tt ) == g_bck_closure_depth 0 ( __clone_supported fty syms ) {
-            ? ( __bind_lends_local syms ( mem_udrop_ptr_of syms fld_first_val ) ) {
+            : s __fup ( mem_udrop_ptr_of syms fld_first_val )
+            ? ( __bind_lends_local syms __fup ) {
                 = fval ( mem_emit_cloneif cg fty fval `1` )
                 = fld_lent ``
-            } {}
+            } {
+                // (…and a `??` payload whose call lends out of such a local:
+                // copied where it lent, lent as before where it did not —
+                // agora #209.)
+                : s __fpl ? == 0 ( nurl_str_len __fup ) ( mem_payload_local_lend syms cg fld_first_val ) ``
+                ? != 0 ( nurl_str_len __fpl ) {
+                    // (A `vec_get` element of a Vec this frame drops is taken
+                    // out of its slot, as `^ e` takes it.)
+                    ? != 0 ( nurl_sym_len2 syms fld_first_val `__vget` ) { ( mem_vget_consume syms cg fld_first_val __fpl ) } {
+                        = fval ( mem_emit_cloneif cg fty fval __fpl ) }
+                    = fld_lent ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print fld_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __fpl ) ( nurl_print `, 1\n` )
+                } {}
+            }
         } {}
         ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
