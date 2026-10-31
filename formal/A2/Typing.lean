@@ -112,6 +112,8 @@ def reroot (p : Var) (D : List Dep) (ds : List Dep) : List Dep :=
 def rerootE (p : Var) (D : List Dep) (E : Entry) : Entry :=
   { E with path := reroot p D E.path, held := reroot p D E.held }
 
+@[simp] theorem rerootE_dtor (p : Var) (D : List Dep) (E : Entry) : (rerootE p D E).dtor = E.dtor := rfl
+
 def exitRoot (p : Var) (D : List Dep) (Γ : Ctx) : Ctx :=
   upd (fun v => (Γ v).map (rerootE p D)) p none
 
@@ -134,6 +136,10 @@ structure EntryWeaker (E E' : Entry) : Prop where
   fixed : E.fixed → E' = E
   live  : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧
             E.held ⊆ E'.held
+  /-- A2-drop.2: a binding that may run a destructor stays one and keeps
+      what it views, live or not: after a join where one path moved it,
+      its slot may still own its value on the other. -/
+  dtor  : E.dtor = true → E'.dtor = true ∧ E.held ⊆ E'.held
 
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.) -/
@@ -240,6 +246,18 @@ def compE (E : Entry) : Ty → Entry
   | .int => intE
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false⟩
   | t => ⟨t, .own, true, [], ownHeld true t E.held, false⟩
+
+/-! The entries the rules build run no destructor (A2-drop.2: only `letd`
+    makes one that does). -/
+@[simp] theorem intE_dtor : intE.dtor = false := rfl
+@[simp] theorem elemE_dtor (y : Var) (E : Entry) (t : Ty) : (elemE y E t).dtor = false := by
+  cases t <;> rfl
+@[simp] theorem popE_dtor (y : Var) (E : Entry) (t : Ty) : (popE y E t).dtor = false := by
+  cases t <;> simp [popE]
+@[simp] theorem projE_dtor (y : Var) (E : Entry) (t : Ty) : (projE y E t).dtor = false := by
+  cases t <;> rfl
+@[simp] theorem compE_dtor (E : Entry) (t : Ty) : (compE E t).dtor = false := by
+  cases t <;> rfl
 
 /-- The element type of a `Vec`. -/
 def Ty.elem : Ty → Ty
@@ -501,6 +519,9 @@ def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
   ⟨fn.resTy, resMode fn, true,
    fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args,
    ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args), false⟩
+
+@[simp] theorem callRes_dtor (Γ : Ctx) (fn : Fn) (args : List Var) : (callRes Γ fn args).dtor = false := rfl
+@[simp] theorem recvRes_dtor (c : Var) (Ec E : Entry) : (recvRes c Ec E).dtor = E.dtor := rfl
 
 /-- What `inout` parameter `i` holds views of after the call. -/
 def outHeld (Γ : Ctx) (fn : Fn) (args : List Var) (i : Nat) : List Dep :=

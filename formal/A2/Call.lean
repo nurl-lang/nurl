@@ -195,6 +195,9 @@ noncomputable def Entry.clean (E : Entry) : Entry :=
   open Classical in
   if ¬ E.fixed ∧ (E.ty = .int ∨ E.live = false) then { E with path := [], held := [] } else E
 
+@[simp] theorem Entry.clean_dtor (E : Entry) : E.clean.dtor = E.dtor := by
+  unfold Entry.clean; split <;> rfl
+
 /-- The roots of what the arguments hold views of. -/
 def callR (Γ : Ctx) (args : List Var) : List Var :=
   args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held))
@@ -2443,7 +2446,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     · rw [exits_at h.pe_lt fn.params 0 _ hc hyk (fun d hd => by rw [hce, hv0] at hd; cases hd)]
     · rw [hrr, hv0]; intro d hd; cases hd
     · rw [hrr]
-      exact ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
+      exact ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩,
+      by intro h; simp_all⟩
   · have hce : E1.clean = E1 := by unfold Entry.clean; rw [ite_eq_right hcl]
     have hl : E1.live = true := by
       by_cases hrb : E1.fixed
@@ -2484,7 +2488,10 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
         exact absurd this (Nat.not_lt.mpr (Nat.le_add_right _ k)))]
     · rw [hce, hvd]; exact fun d hd => (hroots d hd).1
     · rw [hce]
-      refine ⟨rfl, rfl, fun hrb => ?_, fun _ => ⟨hl, fun ho => ?_, ?_⟩⟩
+      refine ⟨rfl, rfl, fun hrb => ?_, fun _ => ⟨hl, fun ho => ?_, ?_⟩,
+      fun hd => ⟨hd, by
+        show rrL fn.params base 0 (callPe Γ fn.params args) E1.held ⊆ E1.held
+        rw [hheld]; exact List.Subset.refl _⟩⟩
       · have hrb' : E1.mode = .rootb := by
           rcases hrb with hrb | ⟨b, hb, _⟩
           · exact hrb
@@ -2549,6 +2556,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
   obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh hEr0
   generalize hE' : rrE fn.params base 0 (callPe Γ fn.params args)
     ((callS Γ F fn args base x).liftE fn.params.length Er) = Er' at hl' hm' ht' hp' hh' hΓ3
+  have hrd : Er'.dtor = false := by rw [← hE']; simp [rrE, RSetup.liftE, hErm, resMode_ne']
   generalize hΓb : exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) = Γb
     at hΓ3
   subst hΓ3
@@ -2616,6 +2624,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
         exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
           (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes, hl']) (fun _ d hd => (hp' hos d hd).2) (fun d hd => (hh' d hd).2)
+          (fun hd => absurd hd (by simp [hrd]))
       · exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
           (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes]) (fun _ d hd => by simp at hd) (fun d hd => (hh' d hd).2)
@@ -2671,7 +2680,8 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
         refine Or.inr ⟨rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).liftE v Ei),
           Et, by rw [hat, Option.map_some, h.chain_id hvd], hEt, ?_⟩
         refine ⟨?_, ?_, fun hr => by simp [rrE, liftE_eq _ hrb, hm0, liftMode] at hr,
-          fun _ => ⟨by simp [rrE, liftE_eq _ hrb, hEil], fun ho => ?_, fun d hd => ?_⟩⟩
+          fun _ => ⟨by simp [rrE, liftE_eq _ hrb, hEil], fun ho => ?_, fun d hd => ?_⟩,
+          fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb])⟩
         · rw [hpt, hty]; simp [rrE, liftE_eq _ hrb, ht0]
         · rw [hpm, hown]; simp [rrE, liftE_eq _ hrb, hm0, liftMode]
         · simp [rrE, liftE_eq _ hrb, hm0, liftMode, Mode.ownSlot] at ho

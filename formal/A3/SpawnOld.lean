@@ -466,7 +466,8 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       exact (hlive (h.rbLive v E0 h0 hrb0)).2 d hd
     have hEW : EntryWeaker intE (callRes Γ fn args) := by
       refine ⟨by simp [callRes, intE, hres], by simp [callRes, intE, resMode, hro], fun hfx => ?_,
-        fun _ => ⟨rfl, fun _ => List.nil_subset _, List.nil_subset _⟩⟩
+        fun _ => ⟨rfl, fun _ => List.nil_subset _, List.nil_subset _⟩,
+      by intro h; simp_all⟩
       exfalso; simp [Entry.fixed, intE] at hfx
     have hW : Weaker (A2.setE (callPostAux Γ fn args fn.params args 0 Γ) x intE)
         (A2.setE (callPost Γ fn args) x (callRes Γ fn args)) :=

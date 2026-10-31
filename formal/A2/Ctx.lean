@@ -5,19 +5,23 @@ import A2.Basic
 namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
-  refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩⟩
+  refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
+    fun h => ⟨h, List.Subset.refl _⟩⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
-  obtain ⟨t1, m1, r1, l1⟩ := h1
-  obtain ⟨t2, m2, r2, l2⟩ := h2
-  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_⟩
+  obtain ⟨t1, m1, r1, l1, d1⟩ := h1
+  obtain ⟨t2, m2, r2, l2, d2⟩ := h2
+  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_⟩
   · have e12 := r1 h; subst e12; exact r2 h
   · obtain ⟨a2, p2, h2'⟩ := l2 h
     obtain ⟨a1, p1, h1'⟩ := l1 a2
     refine ⟨a1, fun ho => ?_, h1'.trans h2'⟩
     have ho2 : E2.mode.ownSlot = false := by rw [m1]; exact ho
     exact (p1 ho).trans (p2 ho2)
+  · obtain ⟨h2d, h12⟩ := d1 h
+    obtain ⟨h3d, h23⟩ := d2 h2d
+    exact ⟨h3d, h12.trans h23⟩
 
 theorem Weaker.refl {Γ : Ctx} (h : CtxWF Γ) (hn : NameWF Γ) : Weaker Γ Γ := by
   refine ⟨fun v => ⟨Iff.rfl, fun E E' h1 h2 => ?_⟩, h, hn⟩

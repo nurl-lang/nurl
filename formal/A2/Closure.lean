@@ -252,7 +252,8 @@ theorem clean_weaker (E : Entry) : EntryWeaker E.clean E := by
   unfold Entry.clean; split
   · rename_i h
     exact ⟨rfl, rfl, fun hr => absurd (by simpa [Entry.fixed_def] using hr) h.1,
-      fun hl => ⟨hl, fun _ => List.nil_subset _, List.nil_subset _⟩⟩
+      fun hl => ⟨hl, fun _ => List.nil_subset _, List.nil_subset _⟩,
+      by intro h; simp_all⟩
   · exact EntryWeaker.refl E
 
 theorem clean_path_sub (E : Entry) : E.clean.path ⊆ E.path := by
@@ -881,8 +882,9 @@ theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E 
     reroot_id fun d hd => hne d (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
   have hp : E.mode.ownSlot = false → reroot p D E.path = E.path := fun ho =>
     reroot_id fun d hd => hne d (by unfold Entry.vdeps; rw [ho]; exact List.mem_append_left _ hd)
-  obtain ⟨ht, hm, hrb, hl⟩ := hw
-  refine ⟨ht, hm, fun h => ?_, fun h' => ?_⟩
+  obtain ⟨ht, hm, hrb, hl, hd⟩ := hw
+  refine ⟨ht, hm, fun h => ?_, fun h' => ?_,
+      fun h => ⟨(hd h).1, by show reroot p D E.held ⊆ E'.held; rw [hh]; exact (hd h).2⟩⟩
   · have hf : E.fixed := by simp only [Entry.fixed_def] at h ⊢; rw [rerootE] at h; exact h
     have := hrb hf
     rw [this]; unfold rerootE
@@ -1083,10 +1085,14 @@ theorem weaker_killAll_more {Mc M : List Dep} {Ed Es : Entry} (hw : EntryWeaker 
       rcases hsub d hd with h | h
       · exact hM d h
       · rw [h]; exact hits_none
-  obtain ⟨ht, hm, hfx, hlv⟩ := hw
+  obtain ⟨ht, hm, hfx, hlv, hdw⟩ := hw
   have hkt : ∀ (ds : List Dep) (E : Entry), (RSetup.killAll ds E).ty = E.ty ∧ (RSetup.killAll ds E).mode = E.mode :=
     fun ds E => by unfold RSetup.killAll; split <;> exact ⟨rfl, rfl⟩
-  refine ⟨by rw [(hkt _ _).1, (hkt _ _).1, ht], by rw [(hkt _ _).2, (hkt _ _).2, hm], fun hf => ?_, fun hl => ?_⟩
+  have hkd : ∀ (ds : List Dep) (E : Entry), (RSetup.killAll ds E).dtor = E.dtor ∧ (RSetup.killAll ds E).held = E.held :=
+    fun ds E => by unfold RSetup.killAll; split <;> exact ⟨rfl, rfl⟩
+  refine ⟨by rw [(hkt _ _).1, (hkt _ _).1, ht], by rw [(hkt _ _).2, (hkt _ _).2, hm], fun hf => ?_, fun hl => ?_,
+      fun h => by
+        rw [(hkd _ _).1] at h; rw [(hkd _ _).1, (hkd _ _).2, (hkd _ _).2]; exact hdw h⟩
   · have hf' := killAll_fixed.mp hf
     have hM := hfix hf'
     rw [hfx hf', hMc hM, killAll_id hM]
@@ -1095,7 +1101,8 @@ theorem weaker_killAll_more {Mc M : List Dep} {Ed Es : Entry} (hw : EntryWeaker 
     have hM : ∀ d ∈ M, hits d.kind.bound false d.root Ed = false := fun d hd => by
       cases hh : hits d.kind.bound false d.root Ed
       · rfl
-      · have := hits_mono ⟨ht, hm, hfx, hlv⟩ hl hh
+      · have := hits_mono ⟨ht, hm, hfx, hlv,
+      by intro h; simp_all⟩ hl hh
         rw [hno d hd] at this; cases this
     rw [hMc hM]; exact hlv hl
 

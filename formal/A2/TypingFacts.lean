@@ -57,8 +57,9 @@ theorem hits_mono {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryWeak
 theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryWeaker E E') :
     EntryWeaker (killE e hv x E) (killE e hv x E') := by
   have hw' := hw
-  obtain ⟨ht, hm, hr, hlv⟩ := hw
-  refine ⟨by rw [killE_ty, killE_ty, ht], by rw [killE_mode, killE_mode, hm], fun h => ?_, fun h => ?_⟩
+  obtain ⟨ht, hm, hr, hlv, hd⟩ := hw
+  refine ⟨by rw [killE_ty, killE_ty, ht], by rw [killE_mode, killE_mode, hm], fun h => ?_, fun h => ?_,
+      fun h => by rw [killE_dtor] at h ⊢; rw [killE_held, killE_held]; exact hd h⟩
   · unfold Entry.fixed at h; rw [killE_mode, killE_ty] at h; rw [hr h]
   · rw [killE_live] at h
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
@@ -156,8 +157,9 @@ theorem reroot_subset {p : Var} {D a b : List Dep} (h : a ⊆ b) : reroot p D a 
 
 theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E E') :
     EntryWeaker (rerootE p D E) (rerootE p D E') := by
-  obtain ⟨ht, hm, hr, hlv⟩ := hw
-  refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_⟩
+  obtain ⟨ht, hm, hr, hlv, hd⟩ := hw
+  refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_,
+      fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩⟩
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 
