@@ -311,6 +311,112 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       have huz : u ≠ z := fun h => hzF (h ▸ hu)
       simp [upd_ne _ _ huy, upd_ne _ _ hux, upd_ne _ _ huz]
 
+/-- A2-drop: an owner of a type that holds no views, whose slot still holds
+    its value, may be made live again, holding nothing, for its destructor.
+    Its tree is well-formed whether the binding died or not (`SlotOK`), and
+    it holds no view and no name. -/
+theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry} (hx : Γ x = some Ex)
+    (hmo : Ex.mode = .own) (hview : Ex.ty.holdsView = false) {v : Val}
+    (hsl : m.st x = some ⟨true, some v⟩) :
+    MInv m (setE Γ x { Ex with live := true, held := [] }) := by
+  obtain ⟨sl0, hsl0, hok0, hslot0⟩ := hi.slot x Ex hx
+  rw [hsl] at hsl0; cases hsl0
+  obtain ⟨_, hown0, _⟩ := hslot0
+  have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
+  obtain ⟨howning, hwf, _⟩ := hown0 hos
+  have hwfv : WFv Ex.ty v := hwf v rfl
+  refine
+    { dom := fun w => ?_
+      slot := fun w E hw => ?_
+      heap := hi.heap
+      nvSt := hi.nvSt
+      noInout := fun w E b hw => ?_
+      wf := ?_
+      rootbLive := fun p E hp hm => ?_
+      rootbLt := fun p E hp hm => ?_
+      names := ?_
+      held := fun w E sl T hw hl hsw hT => ?_
+      pkgs := hi.pkgs }
+  · by_cases hwx : w = x
+    · subst hwx; simp [setE, hsl]
+    · simp only [setE, upd_ne _ _ hwx]; exact hi.dom w
+  · by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      refine ⟨⟨true, some v⟩, hsl, hok0, ?_, fun _ => ⟨howning, fun T hT => ?_, fun _ => ⟨v, rfl, ViewsOK.none hview v []⟩⟩,
+        fun h => by simp [hos] at h⟩
+      · simp [hmo, Mode.ownSlot]
+      · cases hT; exact hwfv
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.slot w E hw
+  · by_cases hwx : w = x
+    · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; simp [hmo]
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w E b hw
+  · intro w E hw hl hni r hr
+    by_cases hwx : w = x
+    · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      simp [Entry.vdeps, hos, roots] at hr
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      obtain ⟨Er, hEr, hro⟩ := hi.wf w E hw hl hni r hr
+      by_cases hrx : r = x
+      · subst hrx; rw [hx] at hEr; cases hEr
+        exact ⟨{ Ex with live := true, held := [] }, by simp [setE], by simp [hmo, Mode.isRoot]⟩
+      · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
+  · by_cases hpx : p = x
+    · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp; simp [hmo] at hm
+    · simp only [setE, upd_ne _ _ hpx] at hp; exact hi.rootbLive p E hp hm
+  · by_cases hpx : p = x
+    · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp; simp [hmo] at hm
+    · simp only [setE, upd_ne _ _ hpx] at hp; exact hi.rootbLt p E hp hm
+  · intro w E hw hl hni d hd b t hk
+    by_cases hwx : w = x
+    · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      simp [Entry.vdeps, hos] at hd
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      obtain ⟨Er, hEr, hlr, hhr, htr, hor, hbr, htv⟩ := hi.names w E hw hl hni d hd b t hk
+      by_cases hrx : d.root = x
+      · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
+        exact ⟨{ Ex with live := true, held := [] }, by rw [hrx]; simp [setE], rfl, rfl, htr,
+          by simp [hos], hbr, htv⟩
+      · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hlr, hhr, htr, hor, hbr, htv⟩
+  · by_cases hwx : w = x
+    · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      rw [hsl] at hsw; cases hsw; cases hT
+      intro c hc; rw [WFv.names_nil hwfv hview] at hc; cases hc
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.held w E sl T hw hl hsw hT
+
+/-- A destructor's call changes nothing in its caller's context: its one
+    parameter is borrowed, and its argument hands it no closure. -/
+theorem callPost_dtor {Γ : Ctx} {fn : Fn} {t : Ty} {x : Var} (hps : fn.params = [(.inp, t)])
+    (hnm : mutNames Γ [x] = []) : callPost Γ fn [x] = Γ := by
+  simp [callPost, hnm, killNames, hps, callPostAux]
+
+/-- Binding a fresh variable and ending its scope at once leaves a context
+    as it was: nothing live depends on a variable it does not bind. -/
+theorem exitScope_setE_fresh {Γ : Ctx} (hw : CtxWF Γ) {r : Var} (hr : Γ r = none) (E : Entry) :
+    exitScope r (setE Γ r E) = Γ := by
+  funext v
+  by_cases hvr : v = r
+  · subst hvr; simp [exitScope, hr]
+  · simp only [exitScope, upd_ne _ _ hvr, A2.kill, setE]
+    cases hE : Γ v with
+    | none => rfl
+    | some Ev =>
+      simp only [Option.map_some, Option.some.injEq]
+      unfold killE
+      split
+      · rename_i hhit
+        cases hl : Ev.live with
+        | false => cases Ev; simp_all
+        | true =>
+          exfalso
+          simp only [hits, Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq,
+            List.any_eq_true] at hhit
+          obtain ⟨hni, d, hd, hdr, _⟩ := hhit
+          obtain ⟨Er, hEr, _⟩ := hw v Ev hE hl hni r (by
+            simp only [roots, List.mem_map]; exact ⟨d, hd, by simpa using hdr⟩)
+          rw [hr] at hEr; cases hEr
+      · rfl
+
 /-- Preservation: every step of a well-typed configuration, given the call
     case. -/
 theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
@@ -676,7 +782,100 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
-    | scopeDEnd hsl => sorry
+    | scopeDEnd hsl =>
+      obtain ⟨fn, hfn, hps, _, hro, _, _, _⟩ := hdtor
+      have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
+      have hm1 := hiS.toMInv.revive hx hmo hview hsl
+      -- the destructor's result goes to a fresh variable
+      have hxn : x < m.nv := hiS.nvS x (by simp [Stmt.vars])
+      have hmr : m.st m.nv = none := by
+        cases h : m.st m.nv with
+        | none => rfl
+        | some sl => exact absurd (hiS.nvSt m.nv (by rw [h]; rfl)) (Nat.lt_irrefl _)
+      have hne : m.nv ≠ x := Nat.ne_of_gt hxn
+      have hrΓ' : setE Γ x { Ex with live := true, held := [] } m.nv = none := by
+        have := hiS.dom m.nv; rw [hmr] at this
+        simp only [setE, upd_ne _ _ hne]
+        cases h : Γ m.nv <;> simp_all
+      have hrF : m.nv ∉ F := fun h => Nat.lt_irrefl _ (hiS.nvF _ h)
+      have hnm : mutNames (setE Γ x { Ex with live := true, held := [] }) [x] = [] := by
+        simp [mutNames, argNames, argE, setE, nameDeps, Entry.vdeps, hos]
+      have hcall : CallT P (setE Γ x { Ex with live := true, held := [] }) F f [x]
+          (callRes (setE Γ x { Ex with live := true, held := [] }) fn [x])
+          (setE Γ x { Ex with live := true, held := [] }) := by
+        refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, rfl, (callPost_dtor hps hnm).symm⟩
+        · have hi0 : i = 0 := by simp [hps] at hi; omega
+          subst hi0
+          refine ⟨{ Ex with live := true, held := [] }, by simp [setE], rfl, ?_, fun h => ?_, fun h => ?_⟩
+          · simp [hps, paramOK]
+          · simp [hps, PMode.moves] at h
+          · simp [hps] at h
+        · rw [hnm] at hd; cases hd
+      have hNoPinΓ : NoPin Γ x := by
+        rcases skip_inv hs with rfl | hw
+        · exact hpx
+        · exact hpx.weaker hw
+      have hNoPinΓ' : NoPin (setE Γ x { Ex with live := true, held := [] }) x := by
+        intro p E hp hm d hd hb
+        by_cases hpx' : p = x
+        · subst hpx'; simp [setE] at hp; subst hp; simp [hmo] at hm
+        · simp only [setE, upd_ne _ _ hpx'] at hp; exact hNoPinΓ p E hp hm d hd hb
+      have hNoPinR : NoPin (setE (setE Γ x { Ex with live := true, held := [] }) m.nv
+          (callRes (setE Γ x { Ex with live := true, held := [] }) fn [x])) m.nv := by
+        intro p E hp hm d hd _
+        by_cases hpr : p = m.nv
+        · subst hpr; simp [setE] at hp; subst hp; simp [callRes, resMode, hro] at hm
+        · simp only [setE, upd_ne _ _ hpr] at hp
+          have hlt := hm1.rootbLt p E hp hm d.root (List.mem_map_of_mem hd)
+          have hpn : p < m.nv := hiS.nvSt p (by
+            have := hm1.dom p; simp only [setE] at this; rw [hp] at this; exact this.symm)
+          intro h; rw [h] at hlt; exact absurd hpn (Nat.lt_asymm hlt)
+      have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
+        rfl hrΓ' hrF hcall StmtT.skip hNoPinR
+      rw [exitScope_setE_fresh hm1.wf hrΓ'] at hlc
+      have hsc := StmtT.scope (P := P) (F := F) (x := x) (s := .letcall m.nv f [x] .skip)
+        ⟨{ Ex with live := true, held := [] }, by simp [setE], by simp [hmo]⟩ hxF hlc hNoPinΓ'
+      have hex : exitScope x (setE Γ x { Ex with live := true, held := [] }) = exitScope x Γ := by
+        funext w
+        by_cases hwx : w = x
+        · subst hwx; simp [exitScope]
+        · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
+      rw [hex] at hsc
+      have hfin : StmtT P (setE Γ x { Ex with live := true, held := [] }) F
+          (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Δ1) := by
+        rcases skip_inv hs with rfl | hw
+        · exact hsc
+        · exact hsc.weakenOut hm1.wf hm1.names (Or.inr (hw.exitScope x))
+      have hm' : MInv { m with nv := m.nv + 1 } (setE Γ x { Ex with live := true, held := [] }) :=
+        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self⟩ (Nat.le_succ _)
+      refine ⟨setE Γ x { Ex with live := true, held := [] }, hfin, ?_, Nat.le_succ _, ⟨?_, ?_⟩,
+        fun _ _ => rfl⟩
+      · exact
+        { toMInv := hm'
+          nvS := fun w hw => by
+            simp only [Stmt.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
+            show w < m.nv + 1
+            rcases hw with h | h | h
+            · rw [h]; exact Nat.lt_succ_of_lt hxn
+            · rw [h]; exact Nat.lt_succ_self _
+            · rw [h]; exact Nat.lt_succ_of_lt hxn
+          nvF := fun w hw => Nat.lt_succ_of_lt (hiS.nvF w hw)
+          anch := fun p E hp hm hps => by
+            have hpx' : p ≠ x := fun h => by subst h; simp [setE] at hp; subst hp; simp [hmo] at hm
+            simp only [setE, upd_ne _ _ hpx'] at hp
+            exact hiS.anch p E hp hm (by simp [Stmt.spine, hpx'])
+          spineNd := by simp [Stmt.spine]
+          spineDom := fun w hw => by
+            simp [Stmt.spine] at hw; subst hw; exact ⟨{ Ex with live := true, held := [] }, by simp [setE]⟩
+          catchOK := by simp [CatchOK]
+          cover := hiS.cover }
+      · intro w E hw hws
+        have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
+        exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
+      · intro w E' hw hws
+        have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
+        simp only [setE, upd_ne _ _ hwx] at hw
+        exact ⟨by simp [Stmt.spine, hwx], E', hw⟩
     | scopeDP hp hsl => sorry
   | @rbind Γ Δ1 F p k Ep hp hm hl hroots hpF hs hrr ihs =>
     intro m m' s' hcd hi hst
