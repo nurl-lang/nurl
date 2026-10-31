@@ -325,7 +325,7 @@ theorem DbindSafe.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : Dbin
   have hn' : E'.ty ≠ .int ∨ E'.mode = .rootb := by rw [hwe.ty, hwe.mode]; exact hn
   refine h v E' h' hd' hos' hn' d ?_ hnm
   simp only [Entry.vdeps, hos, hos', ↓reduceIte, List.nil_append] at hdd ⊢
-  rw [hwe.dheld hd]; exact hdd
+  exact (hwe.dheld hd hos hn d hnm).mpr hdd
 
 theorem EndOK.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : EndOK Γ' x) : EndOK Γ x :=
   ⟨NoPin.weaker hw h.1, DtorSafe.weaker hw h.2.1, DbindSafe.weaker hw h.2.2⟩

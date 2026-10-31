@@ -283,12 +283,12 @@ theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPi
 theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
     (h : ∀ v E', Γ' v = some E' → E'.dbind = true → E'.mode.ownSlot = true →
       (E'.ty ≠ .int ∨ E'.mode = .rootb) → ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧
-        (E.ty ≠ .int ∨ E.mode = .rootb) ∧ E'.vdeps ⊆ E.vdeps)
+        (E.ty ≠ .int ∨ E.mode = .rootb) ∧ ∀ d ∈ E'.vdeps, d.kind.isName = false → d ∈ E.vdeps)
     {s : Stmt} (hp : DtorPinOK Γ s) : DtorPinOK Γ' s := by
   have hin : ∀ x k, DtorIn Γ x k → DtorIn Γ' x k := by
     intro x k hx E' hE' hd hos hn d hdd hnm
     obtain ⟨E, hE, hd0, hos0, hn0, hsub⟩ := h x E' hE' hd hos hn
-    exact hx E hE hd0 hos0 hn0 d (hsub hdd) hnm
+    exact hx E hE hd0 hos0 hn0 d (hsub d hdd hnm) hnm
   induction s with
   | seq a _ iha _ => exact iha hp
   | scope x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
@@ -520,7 +520,7 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
     -- A2-drop.2: the body's own destructor bindings have ended, and no
     -- parameter or result runs a destructor
-    (∀ v E, Δ v = some E → E.dtor = false) ∧
+    (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
       (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧

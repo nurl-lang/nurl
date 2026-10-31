@@ -61,7 +61,9 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
   refine ⟨by rw [killE_ty, killE_ty, ht], by rw [killE_mode, killE_mode, hm], fun h => ?_, fun h => ?_,
       fun h => by rw [killE_dtor] at h ⊢; rw [killE_held, killE_held]; exact hd h,
       by rw [killE_dbind, killE_dbind, hb], fun h => by rw [killE_dtor] at h; rw [killE_dtor, killE_dbind]; exact ha h,
-      fun h => by rw [killE_dbind] at h; rw [killE_held, killE_held]; exact hk h⟩
+      fun h hos hn d hnm => by
+        rw [killE_dbind] at h; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
+        rw [killE_held, killE_held]; exact hk h hos hn d hnm⟩
   · unfold Entry.fixed at h; rw [killE_mode, killE_ty] at h; rw [hr h]
   · rw [killE_live] at h
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
@@ -190,11 +192,29 @@ theorem reroot_subset {p : Var} {D a b : List Dep} (h : a ⊆ b) : reroot p D a 
   obtain ⟨d0, hd0, hin⟩ := List.mem_flatMap.mp hd
   exact List.mem_flatMap.mpr ⟨d0, h hd0, hin⟩
 
+/-- Rerooting lists with the same memory views gives the same memory views:
+    a memory view after it comes from one before it (a name stays a name). -/
+theorem reroot_mem_congr {p : Var} {D L L' : List Dep}
+    (h : ∀ d, d.kind.isName = false → (d ∈ L' ↔ d ∈ L)) {d : Dep} (hnm : d.kind.isName = false) :
+    d ∈ reroot p D L' ↔ d ∈ reroot p D L := by
+  have hcn : ∀ a b : Kind, b.isName = true → (comp a b).isName = true := by
+    intro a b; cases a <;> cases b <;> simp [comp, Kind.isName]
+  have key : ∀ {L1 L2 : List Dep}, (∀ d, d.kind.isName = false → d ∈ L1 → d ∈ L2) →
+      d ∈ reroot p D L1 → d ∈ reroot p D L2 := by
+    intro L1 L2 hs hd
+    rcases mem_reroot hd with ⟨hin, hne⟩ | ⟨k, d', hk, hd', rfl⟩
+    · exact mem_reroot_of_ne (hs d hnm hin) hne
+    · cases hkn : k.isName with
+      | true => rw [hcn _ _ hkn] at hnm; cases hnm
+      | false => exact mem_reroot_of_eq (hs ⟨p, k⟩ hkn hk) hd'
+  exact ⟨key fun d hn hd => (h d hn).mp hd, key fun d hn hd => (h d hn).mpr hd⟩
+
 theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E E') :
     EntryWeaker (rerootE p D E) (rerootE p D E') := by
   obtain ⟨ht, hm, hr, hlv, hd, hb, ha, hk⟩ := hw
   refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_,
-      fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩, hb, ha, fun h => by simp only [rerootE]; rw [hk h]⟩
+      fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩, hb, ha,
+      fun h hos hn d hnm => reroot_mem_congr (hk h hos hn) hnm⟩
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 
@@ -451,25 +471,26 @@ theorem DtorOut.inner {Γ : Ctx} {x : Var} {k : Stmt} (ho : DtorOut Γ (x :: k.s
 theorem Weaker.dbind_back {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {v : Var} {E' : Entry} (hv : Γ' v = some E')
     (hd : E'.dbind = true) (hos : E'.mode.ownSlot = true) (hn : E'.ty ≠ .int ∨ E'.mode = .rootb) :
     ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧ (E.ty ≠ .int ∨ E.mode = .rootb) ∧
-      E'.vdeps = E.vdeps := by
+      ∀ d ∈ E'.vdeps, d.kind.isName = false → d ∈ E.vdeps := by
   obtain ⟨E, hE, hwe⟩ := hw.get' hv
   have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
   have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
-  refine ⟨E, hE, hd0, hos0, by rw [← hwe.ty, ← hwe.mode]; exact hn, ?_⟩
-  simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append]
-  exact hwe.dheld hd0
+  have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
+  refine ⟨E, hE, hd0, hos0, hn0, fun d hdd hnm => ?_⟩
+  simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
+  exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
 
 theorem DtorOut.weaker {Γ Γ' : Ctx} {sp : List Var} (hw : Weaker Γ Γ') (h : DtorOut Γ sp) :
     DtorOut Γ' sp := by
   intro v E' hv hd hos hn hvs d hdd hnm
   obtain ⟨E, hE, hd0, hos0, hn0, heq⟩ := hw.dbind_back hv hd hos hn
-  exact h v E hE hd0 hos0 hn0 hvs d (by rw [← heq]; exact hdd) hnm
+  exact h v E hE hd0 hos0 hn0 hvs d (heq d hdd hnm) hnm
 
 theorem DtorPinOK.weaker {Γ Γ' : Ctx} {s : Stmt} (hw : Weaker Γ Γ') (h : DtorPinOK Γ s) :
     DtorPinOK Γ' s :=
   h.of_dbind fun _ _ hv hd hos hn => by
     obtain ⟨E, hE, hd0, hos0, hn0, heq⟩ := hw.dbind_back hv hd hos hn
-    exact ⟨E, hE, hd0, hos0, hn0, fun d hdd => by rw [← heq]; exact hdd⟩
+    exact ⟨E, hE, hd0, hos0, hn0, heq⟩
 
 /-- A weaker context keeps a `letd` binding's views as they are, so what
     it does not gain from the weaker, it does not gain from the stronger. -/
@@ -478,14 +499,14 @@ theorem DKeep.weaker_left {Γ Γ0 Γ' : Ctx} {sp : List Var} (hw : Weaker Γ Γ0
   intro v E' hv hd hos hn hvs
   obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h v E' hv hd hos hn hvs
   obtain ⟨E, hE, hdE, hosE, hnE, heq⟩ := hw.dbind_back h0 hd0 hos0 hn0
-  exact ⟨E, hE, hdE, hosE, hnE, fun d hdd hnm => by rw [← heq]; exact hs0 d hdd hnm⟩
+  exact ⟨E, hE, hdE, hosE, hnE, fun d hdd hnm => heq d (hs0 d hdd hnm) hnm⟩
 
 theorem DKeep.weaker_right {Γ Δ0 Δ : Ctx} {sp : List Var} (hw : Weaker Δ0 Δ) (h : DKeep Γ Δ0 sp) :
     DKeep Γ Δ sp := by
   intro v E' hv hd hos hn hvs
   obtain ⟨E1, h1, hd1, hos1, hn1, heq⟩ := hw.dbind_back hv hd hos hn
   obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h v E1 h1 hd1 hos1 hn1 hvs
-  exact ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by rw [← heq]; exact hdd) hnm⟩
+  exact ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => hs0 d (heq d hdd hnm) hnm⟩
 
 theorem DKeep.exitScope_cons {Γ Γ' : Ctx} {sp : List Var} {x : Var} (h : DKeep Γ Γ' (x :: sp)) :
     DKeep Γ (A2.exitScope x Γ') sp := by
@@ -579,7 +600,7 @@ theorem CallT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List 
     {Γ' : Ctx} (h : CallT P Γ F f args E Γ') : DKeep Γ Γ' [] := by
   obtain ⟨fn, _, _, _, _, hds, _, rfl⟩ := h
   exact (DKeep.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DKeep.refl Γ [])
-    hds.2.2).killNames _
+    fun j hj b hb Ea ha hd => absurd hd (by rw [hds.2.2 j hj b hb Ea ha]; simp)).killNames _
 
 /-- At a borrowed parameter's end, what depended on it depends on what it
     borrowed (`reroot`). A binding `letd` made gains no view by it: a

@@ -81,7 +81,22 @@ structure RSetup.OK (S : RSetup) : Prop where
   pe_dbind : ∀ v, (S.pe v).dbind = false
   -- only a binding `letd` made may run a destructor, in the frame too
   Φarm   : ∀ y E, S.Φ y = some E → E.dtor = true → E.dbind = true
-  Φdead  : ∀ y E, S.Φ y = some E → E.live = false → E.vdeps = []
+  Φdead  : ∀ y E, S.Φ y = some E → E.live = false → E.dbind = false → E.vdeps = []
+  -- A2-drop.2: a frame binding `letd` made keeps what it views, live or
+  -- dead: of the callee's bindings only an `inout` argument, else a frame root
+  Φdb    : ∀ y E, S.Φ y = some E → E.dbind = true → E.mode.ownSlot = true →
+             (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ d ∈ E.vdeps, d.kind.isName = false →
+               (∃ v bh, S.ρ v = d.root ∧ S.bnd v = some bh) ∨
+               ((∀ v, S.ρ v ≠ d.root) ∧ ∃ Er, S.Φ d.root = some Er ∧ Er.mode.isRoot = true)
+  -- … an armed one views an `inout` argument only as its bound spares
+  -- (`CallDtorSafe`), live or dead
+  Φdt    : ∀ y E, S.Φ y = some E → E.dtor = true → E.mode.ownSlot = true →
+             (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ d ∈ E.vdeps, d.kind.isName = false →
+               ∀ v, S.ρ v = d.root → ∃ b hv, S.bnd v = some (b, hv) ∧ b.kills hv d.kind = false
+  -- … and what a closure handed to the call may change by name ends none of
+  -- its views
+  ΦN     : ∀ y E, S.Φ y = some E → E.dtor = true → E.mode.ownSlot = true →
+             ∀ d ∈ S.N, d.kind.bound ≠ .none → hitsMem d.kind.bound false d.root E = false
   -- what a borrowed parameter holds: what the arguments held, or (when its
   -- type can hold a closure) an `inout` argument by name, as the callee's
   -- symbolic name says
@@ -158,6 +173,14 @@ theorem canon_cases (h : S.OK) (Γa : Ctx) (y : Var) :
 
 theorem mem_rds {ρ : Var → Var} {ds : List Dep} {d : Dep} : d ∈ rds ρ ds ↔ ∃ d0 ∈ ds, d = d0.ren ρ := by
   simp [rds, eq_comm]
+
+/-- Renaming lists with the same memory views gives the same memory views. -/
+theorem rds_mem_congr {ρ : Var → Var} {L L' : List Dep}
+    (h : ∀ d, d.kind.isName = false → (d ∈ L' ↔ d ∈ L)) {d : Dep} (hnm : d.kind.isName = false) :
+    d ∈ rds ρ L' ↔ d ∈ rds ρ L := by
+  constructor <;> intro hd <;> obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
+  · exact mem_rds.mpr ⟨d0, (h d0 (by simpa [Dep.ren] using hnm)).mp hd0, rfl⟩
+  · exact mem_rds.mpr ⟨d0, (h d0 (by simpa [Dep.ren] using hnm)).mpr hd0, rfl⟩
 
 theorem mem_allKinds {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root ∈ rs := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
@@ -429,8 +452,21 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
       cases hh : hits e hv (S.ρ x) E with
       | false => exact hitsMem_of_hits hh
       | true => rw [hh] at this; simp only [↓reduceIte] at this; rw [← this] at hl; cases hl
-    · have hv0 := h.Φdead y E hy (by simpa using hl)
-      unfold hitsMem; simp [hv0]
+    · -- dead and armed (a maybe-moved one): what it views of the callee's is
+      -- an `inout` argument its bound spares (`Φdt`), as for a live one
+      unfold hitsMem
+      cases hg : (E.ty != .int || E.mode == .rootb) with
+      | false => rfl
+      | true =>
+        have hg' : E.ty ≠ .int ∨ E.mode = .rootb := by
+          simpa only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] using hg
+        simp only [Bool.true_and, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+        intro d hdd hr hk
+        obtain ⟨b, hb1, hbx, hkb⟩ := h.Φdt y E hy hdt hos hg' d hdd (by simpa using hr.2) x hr.1.symm
+        rcases ha with ha | ⟨b', hb2, hbx', hkill⟩
+        · rw [ha] at hbx; cases hbx
+        · rw [hbx'] at hbx; cases hbx
+          rw [hkill d.kind hk] at hkb; cases hkb
 
 theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
     (ha : Allowed S e hv x) : S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
@@ -503,7 +539,16 @@ theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
         rw [hm, ht]; exact append_sub (rds_subset hh) (List.Subset.refl _),
       by simp only [liftE, hrb, hrb', ↓reduceIte]; exact hdb,
       fun h => by simp only [liftE, hrb, hrb', ↓reduceIte] at h ⊢; exact hra h,
-      fun h => by simp only [liftE, hrb, hrb', ↓reduceIte] at h ⊢; rw [hdh h, hm, ht]⟩
+      fun h hos hn d hnm => by
+        simp only [liftE, hrb, hrb', ↓reduceIte] at h hos hn ⊢
+        have hos0 : E.mode.ownSlot = true := by rwa [liftMode_ownSlot] at hos
+        have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by
+          rcases hn with h' | h'
+          · exact Or.inl h'
+          · exact absurd (liftMode_rootb.mp h') hrb
+        rw [hm, ht]
+        simp only [List.mem_append]
+        rw [rds_mem_congr (hdh h hos0 hn0) hnm]⟩
     rw [liftE_live] at hl'
     obtain ⟨hl0, hp, hh⟩ := hl hl'
     refine ⟨by rw [liftE_live]; exact hl0, fun ho => ?_, ?_⟩
@@ -597,16 +642,10 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
             exact canon_root h hEr hro
           · exact canon_frameRoot h (A_out h ha) (A_root h ha)
     · rw [hc] at hy
-      cases hlv : E'.live with
-      | false => rw [h.Φdead y E' hy hlv] at hdd; cases hdd
-      | true =>
-        by_cases hrr : ∃ v, S.ρ v = d.root
-        · obtain ⟨v, hv⟩ := hrr
-          obtain ⟨b, hv', hb, _⟩ := h.Φsat y E' hy hlv hn d hdd v hv
-          obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2 v (b, hv') hb
-          rw [← hv]; exact canon_root h hEv (by rw [hm]; rfl)
-        · have hout : ∀ v, S.ρ v ≠ d.root := fun v hv => hrr ⟨v, hv⟩
-          exact canon_frameRoot h hout (h.Φwf y E' hy hlv hn d.root (List.mem_map_of_mem hdd) hout)
+      rcases h.Φdb y E' hy hd hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, hex⟩
+      · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2 v bh hb
+        rw [← hv]; exact canon_root h hEv (by rw [hm]; rfl)
+      · exact canon_frameRoot h hout hex
   · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
     · rw [hc] at hy
       cases hE : Γa v with
@@ -780,7 +819,8 @@ theorem EntryWeaker.mk' {E E' : Entry} (ht : E'.ty = E.ty) (hm : E'.mode = E.mod
     (hdb : E'.dbind = E.dbind := by simp_all [RSetup.liftE_dbind])
     (hra : E'.dtor = true → E.dtor = true ∨ E.dbind = true := by
       intro hh; simp_all [RSetup.liftE_dtor'])
-    (hdh : E.dbind = true → E'.held = E.held := by intro hh; simp_all [RSetup.liftE]) :
+    (hdh : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+      ∀ d, d.kind.isName = false → (d ∈ E'.held ↔ d ∈ E.held) := by intro hh; simp_all [RSetup.liftE]) :
     EntryWeaker E E' :=
   ⟨ht, hm, fun h' => absurd h' hrb, fun h' => ⟨by rw [← hl]; exact h', hp, hh⟩, fun h => ⟨hd h, hh⟩,
     hdb, hra, hdh⟩
@@ -1139,11 +1179,9 @@ theorem DbindSafe.canon (h : S.OK) {x : Var} (hbx : S.bnd x = none) (hd : DbindS
       · exact hd v Ea hEa hdb hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm) (h.inj _ _ hdx)
       · exact A_out h ha x hdx.symm
   · rw [hc] at hy
-    cases hlv : E.live with
-    | false => rw [h.Φdead y E hy hlv] at hdd; cases hdd
-    | true =>
-      obtain ⟨b, hv, hb, _⟩ := h.Φsat y E hy hlv hn d hdd x hdx.symm
-      rw [hbx] at hb; cases hb
+    rcases h.Φdb y E hy hdb hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, _⟩
+    · have := h.inj _ _ (hv.trans hdx); subst this; rw [hbx] at hb; cases hb
+    · exact hout x hdx.symm
 
 /-- What follows a panic may assume no `letd` binding views more, where the
     call places it too: a binding keeps its mode and type, so its lifted
@@ -1852,10 +1890,11 @@ theorem killAll_weaker {M ds : List Dep} {E E' : Entry} (hw : EntryWeaker E E')
         have hkdb : ∀ {Ms : List Dep} {E0 : Entry}, (killAll Ms E0).dbind = E0.dbind := by
           intro Ms E0; unfold killAll; split <;> rfl
         rw [hkdt] at h ⊢; rw [hkdb]; exact hw.raise h,
-      fun h => by
+      fun h hos hn d hnm => by
         have hkdb : ∀ {Ms : List Dep} {E0 : Entry}, (killAll Ms E0).dbind = E0.dbind := by
           intro Ms E0; unfold killAll; split <;> rfl
-        rw [hkdb] at h; rw [hkM.2.2.2, hkd.2.2.2]; exact hw.dheld h⟩
+        rw [hkdb] at h; rw [hkM.2.1] at hos; rw [hkM.1, hkM.2.1] at hn
+        rw [hkM.2.2.2, hkd.2.2.2]; exact hw.dheld h hos hn d hnm⟩
     have hl0 : E'.live = true ∧ ds.any (fun d => hits d.kind.bound false d.root E') = false := by
       unfold killAll at hl'; split at hl'
       · simp at hl'
@@ -1963,7 +2002,7 @@ theorem DtorSafe.canon_N (h : S.OK) {d : Dep} (hN : d ∈ S.N) (hb : d.kind.boun
     DtorSafe (S.canon Γa) d.kind.bound false d.root := by
   obtain ⟨_, hR, _, _, _, hlive⟩ := h.N_mut d hN hb
   have hout := (h.N_out d hN).1
-  intro y E hy hdt _
+  intro y E hy hdt hos
   rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨_, hc⟩
   · rw [hc] at hy
     obtain ⟨Ea, _, rfl⟩ := Option.map_eq_some_iff.mp hy
@@ -1981,8 +2020,7 @@ theorem DtorSafe.canon_N (h : S.OK) {d : Dep} (hN : d ∈ S.N) (hb : d.kind.boun
   · rw [hc] at hy
     by_cases hl : E.live = true
     · exact hitsMem_of_hits (hlive y E hy hl)
-    · have hv0 := h.Φdead y E hy (by simpa using hl)
-      unfold hitsMem; simp [hv0]
+    · exact h.ΦN y E hy hdt hos d hN hb
 
 /-- A2-drop.2: a call's moves, changes and kills by name stay safe where
     the call places the callee's body. -/
@@ -1991,7 +2029,7 @@ theorem CallDtorSafe.canon (h : S.OK) (hab : S.AbsOK Γa) {ps : List (PMode × T
     (hok : ∀ i (hi : i < ps.length), ∃ Ea, Γa (args.getD i 0) = some Ea ∧ paramOK ps[i].1 ps[i].2 Ea)
     (hal : ∀ d ∈ mutNames Γa args, Allowed S d.kind.bound false d.root)
     (hds : CallDtorSafe Γa ps args) : CallDtorSafe (S.canon Γa) ps (args.map S.ρ) := by
-  refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_, fun i hi b hb Ea hEa hd => ?_⟩
+  refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_, fun i hi b hb Ea hEa => ?_⟩
   · obtain ⟨Ea, hEa, hpo⟩ := hok i hi
     rw [hs] at hpo
     rw [getD_map (hlen ▸ hi)]
@@ -2012,10 +2050,10 @@ theorem CallDtorSafe.canon (h : S.OK) (hab : S.AbsOK Γa) {ps : List (PMode × T
     rw [getD_map (hlen ▸ hi), canon_ρ h, hEa0] at hEa
     simp only [Option.map_some, Option.some.injEq] at hEa
     subst hEa
-    rw [liftE_dbind h] at hd
-    split at hd
-    · cases hd
-    · exact hds.2.2 i hi b hb Ea0 hEa0 hd
+    rw [liftE_dbind h]
+    split
+    · rfl
+    · exact hds.2.2 i hi b hb Ea0 hEa0
 
 /-- What a closure handed to a call may change is changed by the call, where
     the call places it. -/
@@ -2642,7 +2680,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
         Ea.dbind = true → pa.1.2.holdsView = false := by
       intro pa hpa b hb Ea hEa hd
       obtain ⟨k, hk, _, rfl⟩ := mem_zip_getD hpa
-      exact hds.2.2 k hk b hb Ea hEa hd
+      exact absurd hd (by rw [hds.2.2 k hk b hb Ea hEa]; simp)
     refine PW.killNames' (callPostAux_lift h hab hou hex fn.params args 0 Γa _ hz hdv hab (PW.refl _))
       (fun d hd => ?_) (fun d hd => ?_)
     · rcases mutNames_canon_sub h hab hexA d hd with hd | ⟨w, b, t, rfl, hbw, hbr⟩
@@ -3023,9 +3061,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       simp [liftE, hrbE]
     rw [hf, hmx']
     rw [hf'] at hw'
+    have hdbw : E'.dbind = E.dbind := by have := hw'.dbind; simpa using this.symm
     obtain ⟨_, _, _, hlv, hdv⟩ := hw'
     refine EntryWeaker.mk' hty'.symm rfl (not_fixed_liftMode rfl hrbx) ?_ (fun ho => ?_) ?_
-      (fun hd => (hdv hd).1)
+      (fun hd => (hdv hd).1) (hdh := fun hh => by
+        have : E'.dbind = true := hh
+        rw [hdbw, hr.dtor_false.2] at this; cases this)
     · show E.live = E'.live
       rw [hlive]; exact ((hlv hlive).1).symm
     · have ho' : E.mode.ownSlot = false := by
