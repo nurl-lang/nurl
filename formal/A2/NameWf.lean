@@ -521,7 +521,7 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     {args : List Var} {E : Entry} (hc : CallT P Γ F f args E Γ1) (hn : NameWF Γ) :
     NameWF Γ1 ∧ (E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ1 E) ∧
       ∃ X, Keeps Γ Γ1 X := by
-  obtain ⟨fn, hf, hlen, hargs, _, rfl, rfl⟩ := hc
+  obtain ⟨fn, hf, hlen, hargs, _, _, rfl, rfl⟩ := hc
   have hfn : FnOK P fn := hP fn (List.mem_of_getElem? hf)
   obtain ⟨_, _, _, _, _, _, hlends, hrholds, houts, _⟩ := hfn
   have hargN : ∀ j < fn.params.length, (argE Γ (args.getD j 0)).ty ≠ .int →

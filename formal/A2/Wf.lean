@@ -529,7 +529,7 @@ theorem roots_memDeps {ds : List Dep} {r : Var} (h : r ∈ roots (memDeps ds)) :
 theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var}
     {E : Entry} (hc : CallT P Γ F f args E Γ1) (h : CtxWF Γ) :
     CtxWF Γ1 ∧ DomMode Γ Γ1 ∧ (∀ r ∈ roots E.vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true) := by
-  obtain ⟨fn, hf, hlen, hargs, _, rfl, rfl⟩ := hc
+  obtain ⟨fn, hf, hlen, hargs, _, _, rfl, rfl⟩ := hc
   have hfn : FnOK P fn := hP fn (List.mem_of_getElem? hf)
   obtain ⟨_, _, _, _, _, _, hlends, hrholds, houts, _⟩ := hfn
   have hent : ∀ j < fn.params.length, ∃ Ea, Γ (args.getD j 0) = some Ea ∧ Ea.live = true := by
@@ -665,7 +665,7 @@ theorem callPostAux_domMode {Γ0 : Ctx} {fn : Fn} {args : List Var} :
 
 theorem CallT.domMode {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var}
     {E : Entry} (hc : CallT P Γ F f args E Γ1) : DomMode Γ Γ1 := by
-  obtain ⟨fn, _, hlen, hargs, _, _, rfl⟩ := hc
+  obtain ⟨fn, _, hlen, hargs, _, _, _, rfl⟩ := hc
   refine DomMode.killNames (callPostAux_domMode _ _ _ _ (fun a ha => ?_) (DomMode.refl Γ)) _
   obtain ⟨i, hi, rfl⟩ := mem_args ha
   obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi)

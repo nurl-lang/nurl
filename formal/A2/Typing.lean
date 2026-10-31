@@ -101,12 +101,28 @@ def killE (e : Eff) (hv : Bool) (x : Var) (E : Entry) : Entry :=
 def kill (e : Eff) (hv : Bool) (x : Var) (Γ : Ctx) : Ctx :=
   fun v => (Γ v).map (killE e hv x)
 
+/-- `hits`, of what an entry depends on in memory: its views, not the
+    names of closures it holds. A destructor reads views; a binding that
+    runs one holds no closure (A2-drop.2). -/
+def hitsMem (e : Eff) (hv : Bool) (x : Var) (E : Entry) : Bool :=
+  (E.ty != .int || E.mode == .rootb) &&
+    E.vdeps.any (fun d => d.root == x && !d.kind.isName && e.kills hv d.kind)
+
+theorem hitsMem_of_hits {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e hv x E = false) :
+    hitsMem e hv x E = false := by
+  unfold hits at h; unfold hitsMem
+  simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and,
+    Bool.not_eq_true'] at h ⊢
+  rcases h with h | h
+  · exact Or.inl h
+  · exact Or.inr fun d hd hr => h d hd hr.1
+
 /-- A2-drop.2: effect `e` on `x` ends no view a binding that may run a
     destructor holds, live or not. A rule that kills through dependencies
     takes it, so a destructor never reads a view whose source ended
     (github#1380's rule, with the maybe-moved join). -/
 def DtorSafe (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
-  ∀ v E, Γ v = some E → E.dtor = true → hits e hv x E = false
+  ∀ v E, Γ v = some E → E.dtor = true → hitsMem e hv x E = false
 
 /-- With no binding that runs a destructor, every effect is safe. -/
 theorem DtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
@@ -280,7 +296,7 @@ def Ty.elem : Ty → Ty
     copied with what it depends on (`D`, which the container then holds). -/
 inductive PushArg (Γ : Ctx) (F : List Var) (y : Var) (E : Entry) : Ty → List Dep → Ctx → Prop
   | move {t : Ty} :
-      t.owning = true → E.mode = .own → y ∉ F → NoPin Γ y →
+      t.owning = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
       PushArg Γ F y E t E.held (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | int : PushArg Γ F y E .int [] Γ
   | slice {s : Ty} :
@@ -317,7 +333,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
   | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false⟩ Γ
   | moveOwn {y : Var} {E : Entry} :
-      Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y →
+      Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
       RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false⟩
         (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | copyRoot {y : Var} {E : Entry} :
@@ -339,6 +355,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.sat y i) (elemE y E t) Γ
   | pop {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
+      DtorSafe Γ .drop t.holdsView y →
       RhsT Γ F (.pop y) (popE y E t) (kill .drop t.holdsView y Γ)
   | pair {y z : Var} {Ey Ez : Entry} {Γ1 Γ2 : Ctx} {Dy Dz : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
@@ -361,9 +378,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
+      DtorSafe Γ .replace false y →
       RhsT Γ F (.takel y) (compE E a) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | taker {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own → E.ty = .sum a b → y ∉ F → NoPin Γ y →
+      DtorSafe Γ .replace false y →
       RhsT Γ F (.taker y) (compE E b) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | pack {fs : List Nat} {te : Ty} {ms : List Nat} {y : Var} {cs : List (Var × PMode × Ty)} {Ey : Entry}
       {Γ1 : Ctx} {D : List Dep} :
@@ -587,6 +606,30 @@ def paramOK : PMode → Ty → Entry → Prop
   | .sink, t, E => E.ty = t ∧ E.mode = .own ∧ t.owning = true
   | .inout b, t, E => E.ty = t ∧ canDo E.mode b ∧ t.owning = true
 
+/-- A2-drop.2: what a call moves (a `sink` argument), changes (an `inout`
+    one, by its bound) and kills by name (`killNames`) ends no view a
+    binding that may run a destructor holds: `DtorSafe` for each of
+    `callPost`'s kills. -/
+def CallDtorSafe (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) : Prop :=
+  (∀ i (h : i < ps.length),
+    (ps[i].1 = .sink → DtorSafe Γ .replace false (args.getD i 0)) ∧
+    (∀ b, ps[i].1 = .inout b → DtorSafe Γ b ps[i].2.elem.holdsView (args.getD i 0))) ∧
+  (∀ d ∈ mutNames Γ args, DtorSafe Γ d.kind.bound false d.root)
+
+/-- With no binding that runs a destructor, every call is safe. -/
+theorem CallDtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
+    (ps : List (PMode × Ty)) (args : List Var) : CallDtorSafe Γ ps args :=
+  ⟨fun _ _ => ⟨fun _ => DtorSafe.of_none h _ _ _, fun _ _ => DtorSafe.of_none h _ _ _⟩,
+    fun _ _ => DtorSafe.of_none h _ _ _⟩
+
+/-- A call that only borrows, and kills nothing by name, is safe. -/
+theorem CallDtorSafe.of_inp {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var}
+    (hp : ∀ q ∈ ps, q.1 = .inp) (hn : mutNames Γ args = []) : CallDtorSafe Γ ps args := by
+  refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_⟩
+  · have := hp _ (List.getElem_mem hi); rw [hs] at this; cases this
+  · have := hp _ (List.getElem_mem hi); rw [hb] at this; cases this
+  · rw [hn] at hd; cases hd
+
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
     and reaches the callee through no other argument (§2.1, §2.4). -/
@@ -612,7 +655,8 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
             (∀ b, fn.params[i].1 = .inout b → ∀ d ∈ (argE Γ (args.getD j 0)).vdeps,
               d.root = args.getD i 0 → d.kind.bound = b ∧ b ≠ .none)) ∧
         (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))) ∧
-    NamesFree Γ F fn.params args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
+    NamesFree Γ F fn.params args ∧ CallDtorSafe Γ fn.params args ∧
+    E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
 
 /-! ### Statements -/
 
