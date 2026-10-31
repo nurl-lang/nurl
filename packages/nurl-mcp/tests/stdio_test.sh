@@ -81,7 +81,8 @@ check("run: inline source builds and runs", e is not True and "hi-from-mcp" in t
 e, t = res.get(4, (None, ""))
 check("fmt: canonical form", e is not True and "@ main → i { ^ 0 }" in t, t)
 e, t = res.get(5, (None, ""))
-check("docs: probe table row", "probe=h274_" in t and "nurlc=" in t, t)
+# A probe named before Agora #212 is still found by its old id.
+check("docs: probe table row", "old_id=h274" in t and "probe=closure_view_beside_growing_closure" in t and "nurlc=" in t, t)
 e, t = res.get(6, (None, ""))
 check("docs: the docs' ../formal/ link resolves", e is not True and t.startswith("formal/RULES.md"), t)
 e, t = res.get(7, (None, ""))
