@@ -60,6 +60,8 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
       Redex s K r → Redex (.frozen z s) (fun y => .frozen z (K y)) r
   | catchR {x : Var} {m0 : Mem} {s r : Stmt} {K : Stmt → Stmt} :
       Redex s K r → Redex (.catchR x m0 s) (fun y => .catchR x m0 (K y)) r
+  | scopeD {x : Var} {f : Nat} {s r : Stmt} {K : Stmt → Stmt} :
+      Redex s K r → Redex (.scopeD x f s) (fun y => .scopeD x f (K y)) r
 
 /-- A spawned function: every parameter is a `sink` of a type that holds no
     views, and it returns an integer. -/
@@ -145,6 +147,12 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
   | seq {a b : Stmt} {i : Nat} {w : Bool} : Touch P m a i w → Touch P m (.seq a b) i w
   | letv {x : Var} {r : Rhs} {s : Stmt} {i : Nat} {w : Bool} :
       RTouch m r i w → Touch P m (.letv x r s) i w
+  | letd {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {i : Nat} {w : Bool} :
+      RTouch m r i w → Touch P m (.letd x f r s) i w
+  /-- A destructor's scope: its body's step. Its end runs the destructor's
+      call first, and `scope x` frees the tree after it (`scopeEnd`). -/
+  | scopeD {x : Var} {f : Nat} {s : Stmt} {i : Nat} {w : Bool} :
+      Touch P m s i w → Touch P m (.scopeD x f s) i w
   | assign {x : Var} {r : Rhs} {i : Nat} {w : Bool} : RTouch m r i w → Touch P m (.assign x r) i w
   /-- An assignment releases the binding's old value. -/
   | assignDrop {x : Var} {r : Rhs} {t : Val} {i : Nat} :
