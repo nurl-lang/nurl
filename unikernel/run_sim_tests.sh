@@ -51,14 +51,18 @@ bad() { echo "  FAIL $1: $2"; fail=$((fail + 1)); }
 golden_output() { sed -n '/^OUTPUT$/,$p' "$TESTS/outputs/$1.txt" | tail -n +2; }
 golden_exit()   { sed -n 's/^EXIT \(.*\)$/\1/p' "$TESTS/outputs/$1.txt"; }
 
+# The first build compiles the simulation runtime; the rest link the
+# same objects (build_nolibc.sh --reuse-runtime).
+reuse=""
 for name in "${names[@]}"; do
     src="$TESTS/$name.nu"
     bin="$OUT/$name"
     [ -f "$src" ] || { bad "$name" "no such test"; continue; }
-    if ! "$ROOT/unikernel/build_nolibc.sh" --sim "$src" -o "$bin" >"$OUT/$name.build.log" 2>&1; then
+    if ! "$ROOT/unikernel/build_nolibc.sh" --sim $reuse "$src" -o "$bin" >"$OUT/$name.build.log" 2>&1; then
         bad "$name" "build failed ($OUT/$name.build.log)"
         continue
     fi
+    reuse="--reuse-runtime"
     want="$(golden_output "$name")"
     want_exit="$(golden_exit "$name")"
 

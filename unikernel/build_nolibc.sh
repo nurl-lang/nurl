@@ -36,15 +36,22 @@ CC="${CC:-clang}"
 SRC=""
 OUT=""
 SIM=0
+REUSE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) OUT="$2"; shift 2 ;;
         --sim) SIM=1; shift ;;
+        # Link against the runtime objects an earlier build of this kind
+        # left in the output directory instead of compiling them again —
+        # for a caller that builds several programs from one tree in a
+        # row (run_sim_tests.sh). They are the same objects the first
+        # build compiled; most of a build's time is runtime_core.c.
+        --reuse-runtime) REUSE=1; shift ;;
         *)  SRC="$1"; shift ;;
     esac
 done
-[ -n "$SRC" ] || { echo "usage: build_nolibc.sh [--sim] prog.nu [-o out]" >&2; exit 2; }
+[ -n "$SRC" ] || { echo "usage: build_nolibc.sh [--sim] [--reuse-runtime] prog.nu [-o out]" >&2; exit 2; }
 if [ "$SIM" = 1 ]; then
     OUTDIR="${NURL_NOLIBC_OUT:-$ROOT/build/nolibc-sim}"
     SIMFLAG="-DNURL_SIM"
@@ -76,6 +83,11 @@ OUT="${OUT:-$OUTDIR/$base}"
 #      runtime_core.c — the bootstrap half, byte-for-byte the hosted one
 #      runtime_ctx.c  — the stackful switch, likewise shared verbatim
 #      runtime_bare.c — the cooperative twin of runtime_ffi.c
+if [ "$REUSE" = 1 ]; then
+    for o in runtime_core runtime_ctx runtime_bare nl_syscall_linux; do
+        [ -f "$OUTDIR/$o.o" ] || { echo "build_nolibc.sh: --reuse-runtime, but $OUTDIR/$o.o was never built" >&2; exit 2; }
+    done
+else
 "$CC" -O2 -c "$ROOT/stdlib/runtime_core.c" -o "$OUTDIR/runtime_core.o"
 "$CC" -O2 -c "$ROOT/stdlib/runtime_ctx.c"  -o "$OUTDIR/runtime_ctx.o"
 "$CC" -O2 -ffreestanding -fno-stack-protector $SIMFLAG \
@@ -90,6 +102,7 @@ done
 for f in start_x86_64 setjmp_x86_64; do
     "$CC" -c "$NOLIBC/$f.S" -o "$OUTDIR/nl_$f.o"
 done
+fi
 
 # 5. Link with no libc, no crt, no dynamic loader. (No -no-pie:
 # -static already makes the driver skip -pie, and clang 18 warns the
