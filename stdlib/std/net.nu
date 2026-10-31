@@ -1364,6 +1364,53 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
     }
 }
 
+// The client side of a handshake over `c` — a runtime socket or another
+// transport's — as a TlsConn of its own (what a caller that keeps the
+// TLS state itself, an HTTP client's connection, holds): the conn gives
+// its socket or transport to it and is left closed. Every knob of
+// tls_attach_full_until: the ALPN list ("" = none), a resumption session
+// (empty = none), verification of the chain and the host name, a
+// deadline over the whole handshake (absolute monotonic ns; 0 = none).
+@ tls_attach_conn TcpConn c s server_name s alpn ( Vec u ) sess b verify i deadline_ns → !TlsConn TlsErr {
+    ? ( __tc_is_nt c ) {
+        : i w ( __tc_take_nt c )
+        ? == w 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+        ^ ( tls_attach_over ( dyn TlsTransport @ NtTlsStream { w } ) server_name alpn sess ? verify 1 0 deadline_ns )
+    } {}
+    : i fd ( __tcp_conn_release c )
+    ? == fd 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+    ^ ( tls_attach_full_until fd server_name alpn sess ? verify 1 0 deadline_ns )
+}
+
+// The server side of an in-place upgrade — STARTTLS as a server speaks it
+// (PostgreSQL's SSLRequest, SMTP's STARTTLS): the handshake runs over the
+// conn's socket or transport with identity `id` and ALPN list
+// `alpn_prefs` (wire form; empty = none), and the conn — every copy of it
+// — reads and writes through TLS afterwards, as an accepted TLS conn
+// does. A failed handshake leaves it closed.
+@ tcp_starttls_server TcpConn c ( Arc TlsIdent ) id ( Vec u ) alpn_prefs → !v NetErr {
+    ? != ( __conn_tlsptr c ) 0 { ^ @ !v NetErr { T 0 } } {}
+    : !TlsConn TlsErr r ( tls_accept_conn_ident c id alpn_prefs )
+    ?? r {
+        T tc → {
+            : *TcpConnImpl p ( __tci c )
+            = . p raw 0
+            = . p kind 2
+            = . p tlsh ( _tls_word tc )
+            = . p owns T
+            ^ @ !v NetErr { T 0 }
+        }
+        F _ → {
+            // The TLS layer closed the socket with its state: the conn must
+            // not reach that handle again (its number may be reused).
+            : *TcpConnImpl p ( __tci c )
+            = . p raw 0
+            = . p owns F
+            ^ @ !v NetErr { F # NetErr NetTlsHandshake }
+        }
+    }
+}
+
 // tls_attach_full_until over the conn's own socket (no ALPN, no session).
 @ __starttls_fd_until i fd s server_name b verify i deadline_ns → !TlsConn TlsErr {
     ^ ( tls_attach_full_until fd server_name `` ( vec_new [u] ) ? verify 1 0 deadline_ns )

@@ -6,7 +6,7 @@ Requires the NURL with std/net's `NetDialer` (`net_dial`, std/net_sim.nu's `nets
 
 ### Added
 
-- `http_client_set_dialer c d` — plaintext origins are reached through a std/net `NetDialer`: the kernel's (the default) or a node of a simulated network (`netsim_dialer net node`), so the same client runs over the simulated wire unchanged (agora #249). TLS needs the kernel's dialer until it can run over a dialed connection (agora #250): through any other an `https` request fails with `HcTls` and HTTP/3 is not tried, never a quiet detour over the real network.
+- `http_client_set_dialer c d` — origins are reached through a std/net `NetDialer`: the kernel's (the default) or a node of a simulated network (`netsim_dialer net node`), so the same client runs over the simulated wire unchanged (agora #249). `https` too: the handshake runs over the dialed connection (agora #250, #289), offering HTTP/1.1 there (HTTP/2's reader polls a socket handle); HTTP/3 is not tried through another dialer, never a quiet detour over the real network.
 
 ### Changed
 

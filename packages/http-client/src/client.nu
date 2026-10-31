@@ -207,10 +207,10 @@ $ `stdlib/core/slice.nu`
 // Reach plaintext origins through `d` (std/net NetDialer) instead of the
 // kernel's TCP — say, a node of a simulated network (std/net_sim.nu's
 // netsim_dialer), so the same client runs over it unchanged. Connections
-// the client already holds stay as they are. TLS needs the kernel's
-// dialer until it can run over a dialed connection (#250): through any
-// other an https request fails with HcTls, and HTTP/3 is not tried —
-// never a quiet detour over the real network.
+// the client already holds stay as they are. https runs over the dialed
+// connection too (TLS over std/net's transports, agora #250), as HTTP/1.1
+// for now; HTTP/3 (UDP) is not tried through another dialer — never a
+// quiet detour over the real network.
 @ http_client_set_dialer HttpClient c__h NetDialer d → v {
     : ~ HttpClientImpl c ( locked_take [HttpClientImpl] . c__h l )
     = . c dialer ( NetDialer_share d )
@@ -356,6 +356,14 @@ $ `stdlib/core/slice.nu`
 
 // ── Establishing a connection for an origin ───────────────────────────
 
+// TLS to host:port over a connection `d` dials (not the kernel's).
+@ __hc_tls_dialed NetDialer d s host i port ( Vec u ) sess i verify → !TlsConn TlsErr {
+    ?? ( net_dial d host port 0 ) {
+        T conn → { ^ ( tls_attach_conn conn host `http/1.1` sess != verify 0 0 ) }
+        F _ → { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } }
+    }
+}
+
 // Ensure the origin has a usable connection, negotiating the protocol on
 // first contact. Returns 0 on success, else an HttpClientErr-shaped code
 // (mapped by __hc_conn_err). An https origin is dialled with ALPN
@@ -364,10 +372,11 @@ $ `stdlib/core/slice.nu`
 @ __hc_ensure_conn HttpClientImpl c inout HcOriginImpl o → i {
     ? | ( opt_is_some [H2Client] . o h2 ) ( opt_is_some [HttpConn] . o h1 ) { ^ 0 } {}
     ? != . o is_https 0 {
-        // TLS runs over the kernel's sockets only, until #250.
-        ? ! ( net_dialer_is_kernel . c dialer ) { ^ 3 } {}
         : ( Vec u ) sess ? != . c resume 0 ( hp_session_lookup ( string_data . o host ) . o port ) ( vec_new [u] )
-        : !TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
+        // Through another dialer the handshake runs over the connection it
+        // made (agora #250, #289). HTTP/2's reader polls a socket handle, so
+        // there only http/1.1 is offered.
+        : !TlsConn TlsErr tr ? ( net_dialer_is_kernel . c dialer ) ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify ) ( __hc_tls_dialed . c dialer ( string_data . o host ) . o port sess . c verify )
         ( vec_free [u] sess )
         ?? tr {
             F e → { ^ ?? e { TlsBadCert → 3 TlsConnect → 1 _ → 3 } }

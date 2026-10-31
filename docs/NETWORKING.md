@@ -215,11 +215,14 @@ $ `packages/psql/src/pg.nu`
 `http_client_set_dialer` (packages/http-client), `pg_connect_with` /
 `pg_connect_url_with` (packages/psql) and `redis_connect_with`
 (packages/redis) take one; `net_dial d host port timeout_ms` is the call
-underneath. A dialer is plaintext until TLS can run over a dialed
-connection (agora #250): through anything but the kernel's dialer an
-`https` request fails with `HcTls` (and HTTP/3 is not tried), psql's
-sslmode `prefer` goes plaintext without asking the server and `require` /
-`verify-full` is `PgTls` — never a quiet detour over the real network.
+underneath. TLS runs over a dialed connection too (agora #250, #289): an
+`https` request through http-client goes over what the dialer connected
+(HTTP/1.1 there; HTTP/3 is not tried through another dialer — never a
+quiet detour over the real network), and psql's SSLRequest and upgrade run
+over it as over a socket. `tls_attach_conn conn name alpn sess verify
+deadline` is the client handshake over any connection, returning its
+`TlsConn`; `tcp_starttls_server conn id alpn` is the server's side of an
+in-place upgrade.
 `net_dialer_over` makes a dialer of any `% NetDialer` implementation; like
 `tcp_conn_over` it is `raw` (the dialer is held in a word until agora #248
 lets a thread-shared handle hold the trait object itself).

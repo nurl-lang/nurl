@@ -6,7 +6,7 @@ Requires the NURL with std/net's `NetDialer`.
 
 ### Added
 
-- `redis_connect_with dialer host port` — plaintext, dialed through a std/net `NetDialer`: the kernel's, or a node of a simulated network (`netsim_dialer`), so the same client runs over it unchanged (agora #249). TLS needs the kernel's dialer until it can run over a dialed connection (agora #250).
+- `redis_connect_with dialer host port` — plaintext, dialed through a std/net `NetDialer`: the kernel's, or a node of a simulated network (`netsim_dialer`), so the same client runs over it unchanged (agora #249). `redis_connect_tls` still dials the kernel.
 
 ## [0.3.6] — 2026-10-29
 

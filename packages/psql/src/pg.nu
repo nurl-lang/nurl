@@ -804,23 +804,18 @@ $ `stdlib/std/arc.nu`
 
 // The same, the socket dialed through `d` (std/net NetDialer): the
 // kernel's, or a node of a simulated network (std/net_sim.nu's
-// netsim_dialer), so the same client runs over it unchanged. TLS runs over
-// the kernel's sockets only, until it can run over a dialed connection
-// (agora #250): through another dialer sslmode prefer goes plaintext — as
-// when a server declines, a password then only through SCRAM — and require
-// or verify-full is PgTls.
+// netsim_dialer), so the same client runs over it unchanged — TLS
+// included: the upgrade runs over whatever the dialer connected (agora
+// #250, #289).
 @ pg_connect_with NetDialer d s host i port s user s password s database i sslmode → !PgConn PgErr {
-    // TLS a dialed connection cannot carry is refused before dialing.
-    : b can_tls ( net_dialer_is_kernel d )
-    ? & >= sslmode 2 ! can_tls { ^ @ !PgConn PgErr { F # PgErr PgTls } } {}
     : TcpConn conn ?? ( net_dial d host port 0 ) {
         T c → c
         F _ → { ^ @ !PgConn PgErr { F # PgErr PgConnFail } }
     }
     // ── optional TLS upgrade (SSLRequest → pure-NURL TLS, in place) ──
     : ~ i tls 0
-    : ~ b plain_fallback & > sslmode 0 ! can_tls
-    ? & > sslmode 0 can_tls {
+    : ~ b plain_fallback F
+    ? > sslmode 0 {
         : i resp ( __pg_ssl_request conn )
         ? == resp 83 {
             ?? ( tcp_starttls conn host >= sslmode 3 ) {

@@ -201,20 +201,18 @@ raw : HttpConnImpl {
     ^ ( hp_conn_open_with ( net_dialer_kernel ) is_https host port sni verify )
 }
 
-// The same, a plaintext transport dialed through `d` (std/net NetDialer) —
-// the kernel's, or a simulated network's. https needs the kernel's dialer
-// until TLS can run over a dialed connection (#250): through another it
-// is error 3 (TLS), never a quiet detour over the real network.
+// The same, the transport dialed through `d` (std/net NetDialer) — the
+// kernel's, or a simulated network's. https runs over what `d` dials too
+// (TLS over std/net's transports, agora #250).
 @ hp_conn_open_with NetDialer d i is_https s host i port s sni i verify → !HttpConn i {
     : String skey ( __hp_sess_key host port )
     ? != is_https 0 {
-        ? ! ( net_dialer_is_kernel d ) { ^ @ !HttpConn i { F 3 } } {}
         // Offer the cached session, if any: an empty blob is exactly
         // the full handshake, a declined one falls back to it.
         : ( Vec u ) sess ( __hp_sess_get skey )
-        : !TlsConn TlsErr r ? != verify 0
+        : !TlsConn TlsErr r ? ( net_dialer_is_kernel d ) ? != verify 0
         ( tls_connect_resume host port sni sess )
-        ( tls_connect_insecure_resume host port sni sess )
+        ( tls_connect_insecure_resume host port sni sess ) ( __hp_tls_dialed d host port sni sess verify )
         ?? r {
             F e → ^ @ !HttpConn i { F ( __hp_tls_err # i e ) }
             T tc → ^ @ !HttpConn i { T ( __hp_conn_new 1 0 tc skey ) }
@@ -224,6 +222,22 @@ raw : HttpConnImpl {
         T tcp → { ^ @ !HttpConn i { T ( __hp_conn_new 0 tcp ( __hp_no_tls ) skey ) } }
         F _ → { ^ @ !HttpConn i { F 1 } }
     }
+}
+
+// TLS to host:port over a connection `d` dials (not the kernel's).
+@ __hp_tls_dialed NetDialer d s host i port s sni ( Vec u ) sess i verify → !TlsConn TlsErr {
+    ?? ( net_dial d host port 0 ) {
+        T conn → { ^ ( tls_attach_conn conn sni `` sess != verify 0 0 ) }
+        F _ → { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } }
+    }
+}
+
+// A TLS write or read failed: 1 when it was the deadline. A connection
+// over another transport has no socket to ask, and reports its timeouts
+// as failures.
+@ __hp_tls_timed_out TlsConn tc → b {
+    : i fd ( tls_socket tc )
+    ^ & > fd 0 == ( nurl_tcp_err_kind fd ) 7
 }
 
 // Wrap a TLS connection the caller established itself (for instance
@@ -256,7 +270,7 @@ raw : HttpConnImpl {
     : *HttpConnImpl c ( __HttpConn_ptr c__h )
     ? != . c is_tls 0 {
         : i fd ( tls_socket . c tc )
-        ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } {}
+        ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } { ( tls_transport_set_timeout . c tc ms ) }
         ^ v
     } {}
     ? . c live { ( tcp_set_timeout . c tcp ms ) } {}
@@ -269,7 +283,7 @@ raw : HttpConnImpl {
     ? != . c is_tls 0 {
         ?? ( tls_write . c tc data ) {
             T _ → ^ 0
-            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 2 6
+            F _ → ^ ? ( __hp_tls_timed_out . c tc ) 2 6
         }
     } {}
     // std/net's writer is context-aware: on a fiber an EAGAIN parks on
@@ -290,7 +304,7 @@ raw : HttpConnImpl {
     : *HttpConnImpl c ( __HttpConn_ptr c__h )
     ? != . c is_tls 0 {
         ?? ( tls_read . c tc 16384 ) {
-            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 -2 -1
+            F _ → ^ ? ( __hp_tls_timed_out . c tc ) -2 -1
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ? > got 0 { ( bytes_extend_bytes acc chunk ) } {}

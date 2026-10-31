@@ -62,9 +62,9 @@ $ `deps/http-client/src/http_client.nu`
 `http_client_set_dialer` takes any `NetDialer` — the kernel's (the
 default), or a node of a simulated network (`netsim_dialer net node`,
 `stdlib/std/net_sim.nu`), which runs the same client over the simulated
-wire unchanged. TLS needs the kernel's dialer until it can run over a
-dialed connection (agora #250): through any other an `https` request
-fails with `HcTls` and HTTP/3 is not tried.
+wire unchanged — `https` included: the handshake runs over the dialed
+connection (agora #250, #289), offering HTTP/1.1 there; HTTP/3 is not
+tried through another dialer.
 
 ## Verbs
 
