@@ -44148,6 +44148,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     // The open brackets (__clo_ctx_top), the two tokens before this one, and
     // whether the type skip already left the lexer on the next token.
     : ~ s ctx ( nurl_str_cat `{` `` )
+    // (Its length: the bracket level a token stands at.)
+    : ~ i clen 1
     : ~ i prev1 TT_LBRACE
     : ~ i prev2 TT_EOF
     // (The name after the last `.`, for the name after it: a field?)
@@ -44186,7 +44188,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         // The level this token stands at, the arm phase there, whether the
         // token is a pattern's own name (no read), and the level an operand
         // ends at with it.
-        : i lvl ( nurl_str_len ctx )
+        : i lvl clen
         : i mph0 ? == mt_l lvl mt_p 0
         : ~ i mph mph0
         : ~ b pat F
@@ -44227,7 +44229,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         } {}
         ? == tt TT_LBRACE
         {
-            = brace_depth + brace_depth 1 = ctx ( nurl_str_cat ctx `{` )
+            = brace_depth + brace_depth 1 = ctx ( nurl_str_cat ctx `{` ) = clen + clen 1
             : i nl + lvl 1
             ? == mbrace lvl {
                 ? != mt_l -1 { = ms ( __cs_push ms mt_l ( nurl_str_int mt_p ) ) } {}
@@ -44245,8 +44247,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         {
             ? == tt TT_RBRACE
             {
-                = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 )
-                : i nl ( nurl_str_len ctx )
+                = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 ) = clen ( nurl_str_len ctx )
+                : i nl clen
                 ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
                 ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                 ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
@@ -44314,12 +44316,13 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     ? == tt TT_LPAREN { = ctx ( nurl_str_cat ctx `(` ) } {}
                     ? == tt TT_RPAREN { = ctx ( __clo_ctx_pop ctx 40 ) } {}
                     ? == tt TT_RBRACK { = ctx ( __clo_ctx_pop ctx 91 ) } {}
+                    ? | | | == skt 2 == tt TT_LPAREN == tt TT_RPAREN == tt TT_RBRACK { = clen ( nurl_str_len ctx ) } {}
                     // Where the token stands in the expressions the scan
                     // follows (the capture scan's scopes, above).
-                    ? < ( nurl_str_len ctx ) lvl {
+                    ? < clen lvl {
                         // (A group closed: one operand of the level it
                         // stood in.)
-                        : i nl ( nurl_str_len ctx )
+                        : i nl clen
                         ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
                         ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                         ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
@@ -44387,7 +44390,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         // Skip closure parameters, a field name — `. j fo`
                         // over a struct j reads j's field `fo`, not a binding
                         // fo — and a name the body bound itself (agora #125).
-                        : ~ b is_clo_param | ( str_contains_word closure_params var_name ) ( __cs_bound bl var_name )
+                        : ~ b is_clo_param ( str_contains_word closure_params var_name )
+                        ? & ! is_clo_param != 0 ( nurl_str_len bl ) { = is_clo_param ( __cs_bound bl var_name ) } {}
                         ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
                         // Capture locals (have __ptr) and outer fn params (have
                         // __param), each once: a name already captured is not
