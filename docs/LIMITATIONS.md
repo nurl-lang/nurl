@@ -10,9 +10,19 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**No soundness hole is known open** ([`MEMORY.md` §6.2](MEMORY.md)).
-Every safe program found accepted and faulting is closed, and held by
-a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). One
+**One soundness hole is known open: agora #224** ([`MEMORY.md` §6.2](MEMORY.md)).
+A value whose type has a user `% Drop` can hold a view (a `s` of a String,
+say) whose source ends first: the source is reallocated, moved to a
+`sink`, or released at the end of an inner scope or, because scope-end
+drops run in declaration order, at the end of the same scope. The
+checker ends the holder correctly, but its destructor still runs at the
+holder's scope end and reads the view: a use after free. Until the fix
+ships (scope-end drops in reverse declaration order, and a drop of such a
+value counted as a use of what it views), a `% Drop` type whose
+destructor reads a view must not outlive what it views: declare the
+source first, or store an owned copy. Every other safe program found
+accepted and faulting is closed, and held by a probe in
+[`tools/fuzz/holes/`](../tools/fuzz/holes/). One
 of them is closed at run time rather than at compile time: a handle
 whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the

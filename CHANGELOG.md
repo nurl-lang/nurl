@@ -10,6 +10,469 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.82.0] — 2026-10-31
+
+### Added
+
+- **ECDSA P-256 has the gates its fixed-base comb was waiting for**
+  (Agora #86). `compiler/tests/ecdsa_p256_wycheproof`: all 262 ECDSA
+  P-256 / SHA-256 cases of Project Wycheproof in P1363 form (173 valid, 89
+  invalid: arithmetic edges of GF(n) and GF(p), special-case digests,
+  edge-case public keys, point duplication, range checks, signature size).
+  `ecdsa_p256_sign_vectors`: sign-then-verify over 48 keys — 1, 2, 3, the
+  Booth-digit edges 15‥17 and 31‥33, n − 1, n − 2, (n ± 1)/2, 2^255, 2^128 ± 1,
+  bit patterns, then pseudo-random ones — each public key and signature
+  equal byte for byte to an independent RFC 6979 signer's (checked against
+  RFC 6979 A.2.5, every signature verified by OpenSSL), each verifying, and
+  each rejected with one bit of s flipped. `ecdsa_p256_verify_edges`: 19
+  signatures whose public key is solved so that the verify pass's mixed
+  addition meets the accumulator EQUAL to the table entry (the doubling
+  case) or its NEGATION (the sum is ∞), on the u1·G and the u2·Q addition,
+  at the first, middle and last windows. Random signatures reach those
+  branches with probability ~2^-256 and Wycheproof's cases miss them in
+  this window layout; a verify that turned either branch into the other
+  passed every earlier test and fails 9 or 10 of these.
+
+- **The proof catches up with the compiler: a RULES.md audit through
+  #214, per-call ownership typed, and A3's design** (Agora #104, #219,
+  #220; github#1360, #1361). `formal/RULES.md` has a row for every
+  ownership change from #165 to #214 and #205, each marked with what it
+  does to the proof. A2 now types the results whose ownership a call
+  decides at run time (retdyn / the hown bit; #184 #185 #186 #203 #205
+  #206) as an owner cell, in `formal/A2/DynCell.lean`. `formal/Check.lean`
+  prints `A2.no_leak_panic`'s axioms too: standard axioms only.
+  `formal/A3/` holds the design for data-race freedom over A2's own step,
+  with the claim stated in Lean (statements only; `check.sh` builds them).
+
+- `aes_gcm_cpu_tier`, `chacha20poly1305_cpu_tier`, `sha256_cpu_tier`,
+  `rsa_cpu_tier`, `p256_cpu_tier`, `x25519_cpu_tier` and `mlkem_cpu_tier`
+  name the kernel each module runs on this CPU (`vaes512`, `adx`, `sha-ni`,
+  `ifma`, `avx2`, `portable`, …), after any `NURL_CPU_*=0` masking — each
+  sits next to the dispatch it describes. The P-256 and X25519 answers
+  come from the compiler's field kernels themselves, so they hold on every
+  target. `bench/tls_bench/prims.nu --tiers` prints them.
+
+- **nurlc stops at a nesting limit instead of overflowing its stack**
+  (Agora #207). A program nested deep enough (about 5 400 nested `?`
+  statements, 6 600 nested calls) ran nurlc out of stack: SIGSEGV, no
+  diagnostic. Past 1000 levels of expressions, blocks and types inside one
+  another it now stops with a diagnostic that says how to raise the limit:
+  `--max-nesting=N` or `NURL_MAX_NESTING=N`, 0 turns it off.
+  `--max-nesting-fixed=N` sets the limit for good, for a service compiling
+  other people's code. Compile time and the IR are unchanged (the
+  self-compile measures the same, and its IR is byte-identical).
+  `compiler/tests/nesting_limit.sh` and `diag_nesting_limit` cover it.
+
+- **Hunt tools for contributors** (Agora #215; github#1351, #1357).
+  - `tools/sweep_classify.py` groups a tree sweep's IR differences by
+    function, and is dead-code aware.
+  - `tools/ci_wait.sh <PR>` waits for a PR's checks and tells a job that
+    never got a runner (`infra:`) from one that failed.
+  - `tools/merge_announce.sh <PR>` drafts the merge post.
+
+### Changed
+
+- **tls-bench keeps one result per CPU family, and every run says which
+  CPU and which NURL kernels produced it** (Agora #112). The runner pool
+  hands out AMD Zen 3, AMD Zen 5 and Intel Ice Lake machines, and NURL's
+  share of aws-lc's speed flips with the family — AES-128-GCM sealing at
+  179 % on Zen 3 and 83 % on Zen 5 — while each run overwrote the one
+  report. Now a full run is recorded as its family's latest
+  (`bench/tls_bench/runs/<family>.tsv`), every family has its own
+  `TLS_RESULTS.<family>.md`, and `TLS_RESULTS.md` is an index that sets
+  the families side by side, worst metric first, marking each metric
+  whose verdict differs between them. The family is the CPU's vendor and
+  flags (`amd-avx2-vaes-sha-adx`, `amd-avx512ifma-vaes-sha-adx`,
+  `intel-avx512ifma-vaes-sha-adx`, …), never its model string. Each run
+  records the crypto-relevant CPU flags, NURL's CPU probes, the kernel
+  each primitive engaged, and any `NURL_CPU_*` / `OPENSSL_ia32cap`
+  masking; the generator refuses a run missing any of them. A perf task
+  "on the runner" now means on every family in the index
+  (bench/tls_bench/README.md). Gate: `tools/tests/test_tls_bench_report.py`
+  in CI. A local `run_tls.sh` no longer overwrites the committed report;
+  `STORE=1` records a run.
+
+- **ci.yml answers the merge queue** (Agora #136, phase 1). With `main`'s
+  ruleset requiring the merge queue, a green PR is queued (`gh pr merge
+  <N> --squash --auto`) instead of rebased and re-run each time `main`
+  moves. The queue tests `main` plus the queued PRs as one commit,
+  merges exactly that commit, and splits a failing group to find the
+  culprit. In a `merge_group` run every job runs, whatever the paths,
+  and the golden-twin gate diffs against the group's base. The required
+  checks (build + corpus, FreeBSD, ASan + UBSan) all live in ci.yml, so
+  windows-tests and macos-tests stay out of the queue (macOS runners are
+  too scarce to gate it).
+
+- **Pull requests no longer conflict over shared files: changelog
+  fragments, hole probes with names, a generated probe table** (Agora
+  #211, #212). On 2026-10-30 every parallel PR conflicted in the same
+  places, though each changed different code. The places were the
+  CHANGELOG's `[Unreleased]` section, the end of
+  `formal/corpus/map.tsv`, about ten docs with hand-typed probe counts,
+  and probe numbers claimed by post (h918–h923 were taken twice). Each
+  rebase cost a CI run of about 40 minutes.
+  - A changelog entry is now a fragment,
+    `changes/unreleased/<task>.md`, and the release folds the fragments
+    in with `tools/changelog.py fold X.Y.Z`.
+  - The 930 hole probes are named for what they break
+    (`hNNN_escape_inside_block_detached.nu` → `escape_inside_block_detached.nu`).
+    Each probe carries its own row as a `// map: rule | phase | nurlc |
+    old id | note` header line, and `tools/fuzz/holes/map.py` generates
+    `map.tsv` from those lines, sorted by name. The old hNNN id stays in
+    the `old_id` column, so `grep h941 formal/corpus/map.tsv` still finds
+    a probe named in history.
+  - The docs no longer carry probe counts; `map.py --counts` gives them.
+  - A new CI job, *shared files are generated*, fails a PR that edits
+    `[Unreleased]` or `map.tsv` by hand. Fragment-only changes skip the
+    compiler jobs, as CHANGELOG.md edits already did.
+
+- **The macOS gate runs where it can finish: on `main`, on labelled PRs
+  and on every release** (Agora #213). macOS runners are scarce. On
+  github#1347–#1349 the arm64 job never got one: every attempt was
+  cancelled with 0 steps, and the PRs showed a red X for code that had
+  passed everything. A pull request now runs macos-tests only when it
+  carries the `ci:macos` label. A PR that touches Darwin-sensitive files
+  (the C runtime, build.sh, nurl.sh, the installers, run_tests.sh) gets a
+  notice pointing at the label. Every push to `main` still runs the gate.
+  release.yml's `verify-ci` now waits for a green `macos-tests.yml` run
+  on the tagged commit, as well as `ci.yml`, and stops the release
+  without one (RELEASING.md, step 4).
+
+### Performance
+
+- **RSA-2048 signs about a fifth faster on x86-64 without AVX-512 IFMA**
+  (Agora #117). Before this change, on the ADX tier a 16-limb Montgomery
+  square cost as much as a multiply (304 against 307 ns), although a
+  square has 392 products and a multiply 512. Two things wasted the
+  difference:
+  - The square's cross-product rows are 15 … 1 limbs long, and each one
+    paid row setup plus a one-product loop for its `n mod 4` leftovers.
+  - The reduction reloaded t after every row.
+
+  RSA-2048's halves now run two straight-line blocks in the C runtime:
+  every product is written out, and the reduction runs eight rows at a
+  time with eight words of t held in registers. The blocks are
+  `nurl_rsa16_sqrm_adx` and `nurl_rsa16_mulm_adx`, generated by
+  `tools/gen_rsa_adx16.py`, and a CI step checks that the generated code
+  is current. Measured on a Cascade Lake class Xeon:
+
+  | Operation | Before | After |
+  |---|---|---|
+  | Square | 289 ns | 215 ns |
+  | Multiply | 293 ns | 259 ns |
+  | RSA-2048 PSS sign (tls-bench prims) | 917 µs | 729 µs |
+
+  That sign time is 89 % of aws-lc's speed, up from 72 %. Every other key
+  width, every CPU without BMI2 and ADX, and `NURL_CPU_ADX=0` keep the
+  previous kernels. A new gate, `compiler/tests/rsa16_kernel_agree`,
+  checks 6 640 products and squares against std/bigint on moduli shaped
+  to walk the carry paths: 2^1024 − 1, 2^1023 + 1, all-ones low limbs and
+  2^1024 − 189. A dropped carry in the blocks fails 34 of these products;
+  the existing modexp test, `rsa_mont_kernels`, caught that bug in only
+  one case of its 15.
+
+- **ECDSA P-256 verify is about 11 % faster** (Agora #225): 89 → 79 µs
+  on a Cascade Lake class Xeon. The verify pass still shares its 256
+  doublings between u1·G and u2·Q, but it now adds along each scalar's
+  width-w NAF instead of its 4-bit windows:
+  - u1 uses width 7 against 1·G … 127·G, built once per process.
+  - u2 uses width 5 against 1·Q … 15·Q, built per verify from one
+    doubling, seven additions and one batch inversion.
+
+  A width-w NAF has a non-zero digit about once every w + 1 positions, so
+  a verify makes about 32 + 43 point additions instead of about 120. It
+  also no longer needs a field inversion at the end: x(R) ≡ r (mod n) is
+  checked as X = r·Z², or (r + n)·Z² when r + n < p.
+  `compiler/tests/ecdsa_p256_verify_edges` is rebuilt for the new layout:
+  its 12 solved signatures drive `_p256_jmadd_vt`'s acc = entry and
+  acc = −entry branches on both the G and the Q additions, early in the
+  pass, in the middle and at the last addition. Either branch mutated
+  into the other fails 6 of them, while all 262 Wycheproof cases still
+  pass with that mutation.
+
+### Fixed
+
+- **A name a closure body binds itself no longer captures the outer
+  binding it shadows** (Agora #125). The closure capture scan had no
+  scopes: after `: i w 3`, in an arm `T w → …`, or inside a nested
+  closure `\ i w → i { … }`, a `w` the body read was taken for the outer
+  `w`. A thread's closure then moved the spawner's Vec it never touched
+  (the spawner's next use was refused: "use of moved value 'w' — consumed
+  by the closure that 'thread_spawn' runs"), a closure that stays local
+  copied it into its environment for nothing, and `= w …` on the inner
+  binding was refused as "cannot mutate immutable variable 'w'" when the
+  outer one was immutable. The scan now follows the expressions it walks:
+  a `:` binding's name is bound once its value ends (`: i w + w 1` still
+  reads the outer `w`), an arm's payload names in its guard and result,
+  and a nested closure's parameters in its body. Where it cannot follow an
+  expression it captures, as before.
+
+- **The impls of a `dyn` method no longer "disagree" on a scalar
+  argument** (Agora #134). An `i` parameter that one impl handed on to a
+  callee storing it (`( pncounter_inc . h c k 1 )`, which pushes `k` into
+  a `( Vec i )`) was summarised as *kept*, so `( bump d 1 )` through a
+  `%Bump` object was refused: "disagree on argument 2 … the argument would
+  leak". In safe code an integer, a float, a `b` or a SIMD vector cannot
+  hold a pointer, and a scalar slot drops nothing, so a parameter of one of
+  those types is no longer recorded as kept or stored there, whatever
+  callee it reaches. That is the rule raw pointer parameters already
+  followed, and the one a `sink` of a scalar already obeyed (it is a copy).
+  Consumption is still followed: `unsafe` code that carries a pointer in an
+  `i` and frees it consumes what it was handed. Parameters that own
+  something (a String, a Vec, a handle, a closure, a struct with a drop)
+  are compared as before.
+
+- **A bulk send over the no-libc socket layer runs at the speed of its
+  bytes, not of a timer** (Agora #143). Without a libc (the unikernel,
+  and `unikernel/run_nolibc_tests.sh` on Linux) the TCP is the NURL
+  socket layer, `unikernel/net/sockets.nu`, and both ends of a loopback
+  connection run as coroutines on one thread. A socket wait drove the
+  stack once, and then blocked, with the frames that drive had just
+  queued still undelivered: the ACK a segment is owed, the data a window
+  update releases. Nothing else delivers them, so the scheduler slept
+  until the sender's retransmit deadline. Every RTT sample held that
+  sleep, so the deadline grew 1.6× a window. `net_sendfile` took 26–33 s
+  instead of 0.25 s, and hit the corpus runner's 60 s limit once under CI
+  load. A wait now blocks only once its own drives leave no frame queued.
+  The new corpus test `net_bulk_no_stall` streams 1 MB from a server
+  thread to the main thread and bounds the time: 19 ms with no libc,
+  11 ms hosted.
+
+- **A `dyn` method that returns a closure can be called** (Agora #148).
+  `( make d t )` through a trait object was refused as "passes 1
+  argument(s) but the declared closure/function type takes 0". The
+  vtable slot's function type starts with the returned closure's `{`
+  (`{ void (i8*)*, i8* } (i8*, %String*)*`), and the arity check read the
+  parameter list from inside the return type. The parameter list is now
+  the last paren at the type's outer level: top level for a function
+  pointer, inside the braces for a closure. The call type-checks, and the
+  closure it hands back is a view of what it captured, as for a direct
+  call: releasing `t` before the closure runs is refused.
+
+- **A try over a binding, a field or a block leaves the function as `^`
+  does** (Agora #202, h929–h933, h937–h940). `: i v \ o`, `\ . p o` and `\ { ? c o p }`
+  failed with a bare `ret`, so every local the function owned leaked. Under
+  a `;` defer, a local result tried with `\ r` had its error freed by the
+  defer chain under the caller. The fail path now drops what the function
+  owns, as `^ <operand>` would. The tried binding is skipped, as `^ r` skips
+  it. A failure that owns its error goes to the caller as the caller's own,
+  so it is now copied wherever it was lent: by the tried call (`\ ( gete w
+  )` handing back a field of `w`, a local or a parameter), by a binding that
+  does not own it, or as a field or a join's pick. The caller used to get
+  an error that a local released on the way out, or that its own argument
+  still held.
+
+- **A `% Drop` value that cannot be copied, handed back by a call that
+  lends it, is lent to a `??` arm** (Agora #203, h941–h951). `?? (
+  vec_get [Res] xs 0 ) { T e → … }` dropped the element `xs` still held at
+  the end of the arm. So did `?? ( pass r )` with `pass` = `^ q`, an
+  accessor `^ . h o`, an `!i Res` result's `F e` arm, and a value-position
+  `??`. The arms are now lent the payload. A `vec_get` element can still be
+  taken by a consumer, which empties its slot. `^ p` of a parameter of
+  such a type now answers per call, as a String or a Vec does. A function
+  that hands back the parameter on one path and a fresh value on another
+  used to fail both ways. `? c { ^ q } {}  ^ ( mkres )` handed the caller
+  its own argument as owned, and the caller dropped it twice. `? c { ^ (
+  mkres ) } {}  ^ q` leaked the fresh value, which was taken for a view of
+  the argument.
+
+- **A `vec_get` element moved into a literal is taken out of its slot**
+  (Agora #204, h957–h960). Handed to a consumer call (`vec_push [T] ys
+  e`), a `vec_get` payload was already taken, its slot emptied. Moved into
+  a literal, it stayed where it was: `?? ( vec_get [Res] xs 0 ) { T e → {
+  ^ @ ?Res { T e } } … }`, or `: Hold h @ Hold { e 1 }` inside the arm. The
+  Vec and the literal then both freed it. A payload that cannot be copied
+  (a `% Drop` struct) is now taken the way a consumer argument is. One
+  that can be copied is still copied.
+
+- **A try hands on an error it cannot copy as the caller's own only when
+  it owned it** (Agora #205, h970–h974). A try whose error cannot be copied
+  (a `% Drop` struct) went to the caller as owned even when it was only lent
+  out of the caller's argument. That happened over a parameter (`\ q`), a
+  parameter's field, a join of two parameters, a call lending a parameter's
+  field (`\ ( getr b )`), and a binding of such a call. The caller then freed
+  its argument's error twice. The fail path now tells the caller per call
+  whether it owns the error, and records what the error is part of, as `^
+  <operand>` does. An `!T E` result whose error cannot be copied now counts
+  as one that cannot be copied.
+
+- **A parameter handed back from inside a block is summarised**
+  (Agora #206, h952–h956). The returned-parameter records
+  (bck_record_ret_param, bck_record_ret_alias) were written into the
+  scope of the block holding the `^`, and that block's pop discarded
+  them. So `? c { ^ cb } {}`, or a `^ cb` in a loop body or a `??` arm,
+  never told callers that the result may be their argument. A closure
+  that captures a local by pointer then escaped `make` through `^ ( pick
+  T f )`, a stack-use-after-scope. The records now go to the function's
+  own summary. Two rules that had been relying on the loss are now exact.
+  A `??` payload that holds no address (a truth value, a float, or an
+  enum with no payloads) carries none of its scrutinee's parameters. A raw
+  string handed back by a NURL body may be handed over unless no path of
+  the body does (`__ret_unowned`). Before, a `^ x` on one path made `(
+  maybe_fresh a 1 )` look like a lend, and a fresh string stored in a
+  struct leaked or was freed under the caller. A temporary that a call
+  lends back is now judged by the call's per-call answer, even when the
+  call is summarised as handing back a parameter.
+
+- **A `??` over a name that owns nothing lends its arms the payload, and
+  a fresh `?E` owns its enum** (Agora #208, h962–h968). `?? ( vec_get [E]
+  xs 0 ) { T e → { ?? e { EV r → … } } }`, with E holding a `% Drop`
+  value, dropped r in the inner arm while xs still held it. So did the same
+  shape over an option element, and over a call lending a parameter's
+  field. The outer payload e owns nothing, so a match over it now lends
+  its payloads, as a match over a parameter or an owning binding already
+  did. `?? ( mke ) { T e → … }`, with mke handing over a fresh `?E`,
+  registered e with no owner, and it leaked. It is now owned by the call's
+  bit, as a String payload is.
+
+- **A `vec_get` element of a local Vec handed back leaves the Vec**
+  (Agora #209, probes vget_payload_returned_bare, _wrapped, _in_struct
+  and vget_drop_payload_returned_bare). `?? ( vec_get [String] xs 0 ) {
+  T e → { ^ e } }`, with xs a local, handed the caller a String that xs
+  then freed on the way out. So did the same value rewrapped (`^ @
+  ?String { T e }`), in a returned struct, and as a `% Drop` element. A
+  `??` payload whose call lends out of a local of the frame is now taken
+  out of its `vec_get` slot (no copy, so a value that cannot be copied
+  leaves too), or copied where another call lent it, and the function
+  answers per call whether its result is owned. An element of a
+  parameter's Vec is still lent back.
+
+- **Nested `~` loops compile in linear time** (Agora #210). The borrow
+  checker walked a loop body three or four times at every level of
+  nesting, so compile time grew about ×3 per nested `~`: 15 levels took
+  32 s and 20 passed the playground's 120 s timeout. A walk reads facts
+  earlier walks wrote beside the state string, so those walks could not
+  simply be dropped. A loop's fixpoint now compares the facts too,
+  through a digest of the borrow checker's tables that every write keeps
+  in step. Once the next walk would repeat one already made (same state,
+  same facts: no change, or a cycle such as a swap of two loop-carried
+  bindings), it stops, and the back and verification walks that would
+  repeat it are skipped. 200 nested loops compile in under 0.1 s. Every
+  file in the tree compiles byte-identically to before. The self-compile
+  runs 3.4 % fewer instructions. The pending-lend lists are sets now; an
+  entry each walk added again grew them without end.
+  `tools/check_bck_writes.sh` (CI) keeps every write to those tables
+  going through the digest.
+
+- **Every function summary written inside a block survives the block**
+  (Agora #214, h969). #206 found that the returned-parameter records were
+  written into the scope of the block holding the `^`, and lost when that
+  block ended. The same was true of four more summaries. They are the
+  inferred escape (a callee handing its closure parameter to
+  `thread_spawn` inside `? go { … }` let a caller pass a closure that
+  captures its local by pointer, which then ran after the frame was gone),
+  the returned struct's owned fields (`? c { ^ ( mk ) } { ^ ( mk ) }` leaked
+  the fields), the builds-a-view flag, and the set of parameters read as
+  values. All of them now write the function's own record. Recording them
+  showed `par_map_index` taking its closure into its threads. That made a
+  false capture visible: the closure capture scan took a field name for a
+  binding (`. j fo` over a struct `j` read as a use of the outer `fo`).
+  This rejected the iforest and anomaly packages, and a thread's closure
+  moved a Vec it never touched. A name after `. obj` is now a field
+  whenever `obj` is a struct value (agora #125, the field-name shape).
+
+- **The installers find the latest release when the GitHub API refuses
+  them** (Agora #216). `install.sh` and `install.ps1` resolved "latest"
+  only through `api.github.com`. Unauthenticated, that API allows 60
+  requests an hour per IP and answers 403 past that, and CI runners, cloud
+  sandboxes and NAT gateways share their IP. An install there stopped with
+  "could not determine the latest release tag", after three retries that
+  only spent more of the quota. Both installers now read the tag from
+  github.com's `releases/latest` redirect, which is not rate-limited, and
+  ask the API once, as the fallback. When neither names a tag, the error
+  says how to pin one (`--version vX.Y.Z`, `NURL_VERSION`).
+  `tools/tests/test_installer_latest.py` stands in for GitHub (the API
+  answering 403) and now runs in CI with the unpack controls of
+  `test_installer_unpack.py`, which no job had run.
+
+- **`nurl upgrade` finds the latest release when the GitHub API refuses
+  it** (Agora #218). `nurl upgrade` and the once-a-day update notice
+  (`stdlib/ext/update_check.nu`) asked only `api.github.com`, which allows
+  60 unauthenticated requests an hour per IP and answers 403 past that.
+  On a shared IP (a CI runner, a cloud sandbox, a NAT gateway) the upgrade
+  then said "could not reach the release index (offline?)". The tag now
+  comes from github.com's `releases/latest` redirect, which is not
+  rate-limited, through the new `httpc_redirect_location` (one request,
+  not followed, the redirect's `Location`). The API is asked once, as the
+  fallback. When neither names a tag, the message says both reasons it
+  can fail and how to pin a version. The installers did the same in
+  Agora #216. `tools/tests/test_update_check_latest.py` stands in for
+  GitHub and runs in CI.
+
+- **The hole-probe gate no longer counts "could not tell" as a pass**
+  (Agora #232). `tools/fuzz/holes/check.sh` counted a probe whose build
+  failed for any reason as REJECTED, and a probe whose sanitizer build
+  produced no binary, or whose run hit the time limit, as "ran clean". So
+  a machine without the ASan runtime (`libclang_rt.asan`), or a tree
+  without `stdlib/runtime.o`, reported `holes: 0` with real holes in the
+  corpus: in a fresh worktree all 935 probes "passed" in 7 s. Those cases
+  are now UNCHECKED, and the exit status counts them with the holes
+  (capped at 255). REJECTED now requires one of nurlc's diagnostics, an
+  error located in a source file (`f.nu:LINE:COL: error:`); a missing
+  runtime object or a linker failure is not one.
+  `HOLES_TIMEOUT` sets the run limit (default 60 s).
+  `tools/tests/test_holes_check.py` stands in for the toolchain and runs
+  in CI.
+
+### Security
+
+- **nurlapi: `/build_wasm` builds only from `source`** (Agora #207). An
+  optional `ir` field let a caller hand clang raw LLVM IR in place of
+  nurlc's output, which skipped every check the build surface makes on
+  caller input. Through it, an unauthenticated request could read files
+  the server could see, including other builds' directories. The field is
+  now ignored. `nurlapi/e2e_test.py` checks that a request's `ir` reaches
+  neither the linked IR nor the wasm.
+
+- **nurlapi: every build tool runs in a Landlock sandbox** (Agora #207).
+  nurlc, clang, wasm-opt, zig, mingw gcc, the unikernel scripts and the
+  QEMU smoke boot now start under `nurl-sandbox` (`nurlapi/sandbox/`).
+  The tool reads the system and toolchain trees and writes only its own
+  build directory. It cannot see the server binary, other builds'
+  directories or `/tmp`, and has no TCP. `NURL_SANDBOX=auto|required|off`
+  picks the policy (`auto` runs unconfined where the kernel lacks
+  Landlock), and `GET /health` reports it as `sandbox_status`. In the image
+  `/app/nurlapi` is root's and execute-only, so the server's `/proc`
+  entries are closed to the processes it starts. The playground compiles
+  every request under `--max-nesting-fixed=200`
+  (`NURL_PLAYGROUND_MAX_NESTING`).
+
+- **An ECDSA signature has exactly one accepted DER encoding** (Agora #217).
+  Three decoders read the ECDSA-Sig-Value in front of `ecdsa_p256_verify`
+  and `ecdsa_p384_verify`:
+  - TLS CertificateVerify and X.509 chain checks (`std/tls_verify`)
+  - `x509_ecdsa_sig_rs` (`std/x509_gen`, used by the PKI server)
+  - CSR self-signatures (`std/csr`)
+
+  Each of them also accepted encodings that strict DER refuses:
+  - bytes after the SEQUENCE, or after s inside it
+  - BER long-form or zero-padded lengths
+  - a wrong tag
+  - a negative INTEGER, or one with a superfluous leading zero
+
+  So one signature had many encodings. This is malleability, not forgery:
+  the r and s that came out still had to verify. Of Wycheproof's 310
+  invalid DER cases, the TLS decoder accepted 35 and the x509_gen one 28.
+  All three now call one strict decoder, `der_ecdsa_sig_rs` in
+  `std/x509`. It accepts exactly `SEQUENCE { INTEGER r, INTEGER s }` in
+  minimal DER with nothing after it. New gates:
+  `compiler/tests/ecdsa_p256_wycheproof_der` and
+  `ecdsa_p384_wycheproof_der` run all of Wycheproof's ECDSA DER cases
+  through the decoder and verify: 484 for P-256 / SHA-256 and 504 for
+  P-384 / SHA-384.
+
+### Known issues
+
+- **A `% Drop` destructor can read a view whose source ended** (Agora
+  #224, open; also in 0.81.0 and earlier). A value whose type has a user
+  `% Drop` can hold a view, and its source can end first: reallocated,
+  moved to a `sink`, or released at a scope end, since scope-end drops run
+  in declaration order. The checker ends the holder, but its destructor
+  still runs and reads freed memory. The fix (reverse-order scope-end drops
+  and a drop counted as a use of what it views) ships in the next release.
+  Until then, declare a view's source before a `% Drop` value that views
+  it, or store an owned copy. `docs/LIMITATIONS.md` has the details.
+
 ## [0.81.0] — 2026-10-30
 
 ### Changed
