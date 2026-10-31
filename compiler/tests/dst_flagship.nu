@@ -32,6 +32,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/atomic.nu`
 $ `stdlib/std/time.nu`
@@ -156,7 +157,10 @@ $ `packages/nurldb/src/server.nu`
 }
 
 @ main → i {
-    : String dir ?? ( fs_tempdir `/tmp` `nurl_dst` ) {
+    // TEMP on Windows: there `/tmp` is \tmp on the current drive, which
+    // exists only if an earlier test happened to make it.
+    : String troot ( env_var_or `TEMP` `/tmp` )
+    : String dir ?? ( fs_tempdir ( string_data troot ) `nurl_dst` ) {
         T x → x
         F _ → {
             ( nurl_print `no temporary directory\n` )

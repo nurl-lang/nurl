@@ -14,6 +14,7 @@
 // rebooted node serves again on the same port, and the client reconnects.
 $ `stdlib/core/io.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/net_sim.nu`
 $ `packages/nurldb/src/server.nu`
@@ -42,7 +43,10 @@ $ `packages/nurldb/src/server.nu`
 }
 
 @ main → i {
-    : String dir ?? ( fs_tempdir `/tmp` `nurldb_sim` ) {
+    // TEMP on Windows: there `/tmp` is \tmp on the current drive, which
+    // exists only if an earlier test happened to make it.
+    : String troot ( env_var_or `TEMP` `/tmp` )
+    : String dir ?? ( fs_tempdir ( string_data troot ) `nurldb_sim` ) {
         T x → x
         F _ → {
             ( nurl_print `no temporary directory\n` )
