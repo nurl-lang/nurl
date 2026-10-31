@@ -128,11 +128,12 @@ def Entry.fixed (E : Entry) : Prop :=
 /-- `E'` says no more than `E`: it may be dead where `E` is live, and depend
     on more.  A fixed entry stays as it is; an owner's `path` says nothing
     (an owner is reached through its own slot). -/
-def EntryWeaker (E E' : Entry) : Prop :=
-  E'.ty = E.ty ∧ E'.mode = E.mode ∧
-  (E.fixed → E' = E) ∧
-  (E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧
-    E.held ⊆ E'.held)
+structure EntryWeaker (E E' : Entry) : Prop where
+  ty    : E'.ty = E.ty
+  mode  : E'.mode = E.mode
+  fixed : E.fixed → E' = E
+  live  : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧
+            E.held ⊆ E'.held
 
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.) -/

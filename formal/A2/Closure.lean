@@ -1354,7 +1354,7 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
         | none => exact absurd (hn.mpr h) (by rw [hv]; simp)
         | some Es => exact ⟨Es, rfl⟩
       obtain ⟨hw', _⟩ := hwk Ed Es hv hs1
-      have hEs := hw'.2.2.1 hf
+      have hEs := hw'.fixed hf
       have hrbE : Ed.mode = .rootb := by
         rcases hf with h | ⟨b, h, _⟩
         · exact h
@@ -1389,7 +1389,7 @@ theorem weaker_open {Γ : Ctx} {e c x : Var} {Ec : Entry} {te t0 : Ty} {zs : Lis
       obtain ⟨Ed0, hd0, rfl⟩ := Option.map_eq_some_iff.mp h1
       obtain ⟨hw', hne⟩ := hwk Ed0 Es hd0 h2
       refine rerootE_noE hw' (fun b hb => ?_) hne
-      exact callPost_noInout hni sig (c :: zs) v Es b h2 (hw'.2.1 ▸ hb)
+      exact callPost_noInout hni sig (c :: zs) v Es b h2 (hw'.mode ▸ hb)
 
 /-! ### The captures of an opened package -/
 

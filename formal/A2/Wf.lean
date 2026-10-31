@@ -887,9 +887,9 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E0, h0, hw0⟩ := hw.get h
     obtain ⟨E1, h1, hm1⟩ := ih r hr E0 h0
     rcases ho with rfl | ho
-    · exact ⟨E1, h1, hm1.trans hw0.2.1⟩
+    · exact ⟨E1, h1, hm1.trans hw0.mode⟩
     · obtain ⟨E2, h2, hw2⟩ := ho.get h1
-      exact ⟨E2, h2, hw2.2.1.trans (hm1.trans hw0.2.1)⟩
+      exact ⟨E2, h2, hw2.mode.trans (hm1.trans hw0.mode)⟩
 
 /-- Every rule keeps a well-formed context well-formed. -/
 theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
