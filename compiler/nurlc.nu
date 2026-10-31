@@ -8235,11 +8235,15 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // The env-drop constants, emitted at module end where every generic
 // instantiation has compiled and `g_fn_invoke_only` is final.
 @ mem_emit_env_flags → v {
-    : ~ s rest ( nurl_sym_get g_pending_impl `envdrops` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (Cursor walks: a first/skip_word step copied the whole rest of
+    // the list, quadratic in its length — agora #237.)
+    : s envdrops ( nurl_sym_get g_pending_impl `envdrops` )
+    : i envdrops_n ( nurl_str_len envdrops )
+    : ~ i envdrops_p 0
+    ~ < envdrops_p envdrops_n {
+        : i envdrops_e0 ( __word_end envdrops envdrops_n envdrops_p ) : s number ( __span_dup envdrops envdrops_p envdrops_e0 ) = envdrops_p + envdrops_e0 1
+        : i envdrops_e1 ( __word_end envdrops envdrops_n envdrops_p ) : s callee ( __span_dup envdrops envdrops_p envdrops_e1 ) = envdrops_p + envdrops_e1 1
+        : i envdrops_e2 ( __word_end envdrops envdrops_n envdrops_p ) : s index ( __span_dup envdrops envdrops_p envdrops_e2 ) = envdrops_p + envdrops_e2 1
         ( nurl_print `@.__nurl_envdrop.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( nurl_sym_has_word g_fn_invoke_only callee index )
@@ -8934,11 +8938,15 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
 @ mem_emit_arg_flags i syms → v {
     = g_summaries_final 1
     ( __dump_summary syms )
-    : ~ s rest ( nurl_sym_get g_pending_impl `retownflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (Cursor walks: a first/skip_word step copied the whole rest of
+    // the list, quadratic in its length — agora #237.)
+    : s retownflags ( nurl_sym_get g_pending_impl `retownflags` )
+    : i retownflags_n ( nurl_str_len retownflags )
+    : ~ i retownflags_p 0
+    ~ < retownflags_p retownflags_n {
+        : i retownflags_e0 ( __word_end retownflags retownflags_n retownflags_p ) : s number ( __span_dup retownflags retownflags_p retownflags_e0 ) = retownflags_p + retownflags_e0 1
+        : i retownflags_e1 ( __word_end retownflags retownflags_n retownflags_p ) : s callee ( __span_dup retownflags retownflags_p retownflags_e1 ) = retownflags_p + retownflags_e1 1
+        : i retownflags_e2 ( __word_end retownflags retownflags_n retownflags_p ) : s generic ( __span_dup retownflags retownflags_p retownflags_e2 ) = retownflags_p + retownflags_e2 1
         : b lent ( __callee_lent syms callee generic )
         ( nurl_print `@.__nurl_retown.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? lent `false` `true` ) ( nurl_print `\n` )
@@ -8948,36 +8956,42 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `argdrops` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s argdrops ( nurl_sym_get g_pending_impl `argdrops` )
+    : i argdrops_n ( nurl_str_len argdrops )
+    : ~ i argdrops_p 0
+    ~ < argdrops_p argdrops_n {
+        : i argdrops_e0 ( __word_end argdrops argdrops_n argdrops_p ) : s number ( __span_dup argdrops argdrops_p argdrops_e0 ) = argdrops_p + argdrops_e0 1
+        : i argdrops_e1 ( __word_end argdrops argdrops_n argdrops_p ) : s callee ( __span_dup argdrops argdrops_p argdrops_e1 ) = argdrops_p + argdrops_e1 1
+        : i argdrops_e2 ( __word_end argdrops argdrops_n argdrops_p ) : s generic ( __span_dup argdrops argdrops_p argdrops_e2 ) = argdrops_p + argdrops_e2 1
+        : i argdrops_e3 ( __word_end argdrops argdrops_n argdrops_p ) : s index ( __span_dup argdrops argdrops_p argdrops_e3 ) = argdrops_p + argdrops_e3 1
         ( nurl_print `@.__nurl_argdrop.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( mem_consumer_arg_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
         ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `viewflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s clo ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s viewflags ( nurl_sym_get g_pending_impl `viewflags` )
+    : i viewflags_n ( nurl_str_len viewflags )
+    : ~ i viewflags_p 0
+    ~ < viewflags_p viewflags_n {
+        : i viewflags_e0 ( __word_end viewflags viewflags_n viewflags_p ) : s number ( __span_dup viewflags viewflags_p viewflags_e0 ) = viewflags_p + viewflags_e0 1
+        : i viewflags_e1 ( __word_end viewflags viewflags_n viewflags_p ) : s callee ( __span_dup viewflags viewflags_p viewflags_e1 ) = viewflags_p + viewflags_e1 1
+        : i viewflags_e2 ( __word_end viewflags viewflags_n viewflags_p ) : s generic ( __span_dup viewflags viewflags_p viewflags_e2 ) = viewflags_p + viewflags_e2 1
+        : i viewflags_e3 ( __word_end viewflags viewflags_n viewflags_p ) : s index ( __span_dup viewflags viewflags_p viewflags_e3 ) = viewflags_p + viewflags_e3 1
+        : i viewflags_e4 ( __word_end viewflags viewflags_n viewflags_p ) : s clo ( __span_dup viewflags viewflags_p viewflags_e4 ) = viewflags_p + viewflags_e4 1
         ( nurl_print `@.__nurl_view.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( __view_flag_value syms callee generic ( nurl_str_to_int index ) ( seq clo `1` ) ) `true` `false` )
         ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `lends` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s lends ( nurl_sym_get g_pending_impl `lends` )
+    : i lends_n ( nurl_str_len lends )
+    : ~ i lends_p 0
+    ~ < lends_p lends_n {
+        : i lends_e0 ( __word_end lends lends_n lends_p ) : s number ( __span_dup lends lends_p lends_e0 ) = lends_p + lends_e0 1
+        : i lends_e1 ( __word_end lends lends_n lends_p ) : s kind ( __span_dup lends lends_p lends_e1 ) = lends_p + lends_e1 1
+        : i lends_e2 ( __word_end lends lends_n lends_p ) : s callee ( __span_dup lends lends_p lends_e2 ) = lends_p + lends_e2 1
+        : i lends_e3 ( __word_end lends lends_n lends_p ) : s generic ( __span_dup lends lends_p lends_e3 ) = lends_p + lends_e3 1
+        : i lends_e4 ( __word_end lends lends_n lends_p ) : s index ( __span_dup lends lends_p lends_e4 ) = lends_p + lends_e4 1
         // A generic instance's summaries are its own once compiled.
         : s who ? != 0 ( nurl_sym_len2 syms callee `__body_done` ) callee generic
         : i k ( mem_fn_lend_kind syms who ( nurl_str_to_int index ) )
@@ -8986,12 +9000,14 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
         ( nurl_print ? == k ? ( seq kind `one` ) 1 2 `true` `false` )
         ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `hdrops` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s hdrops ( nurl_sym_get g_pending_impl `hdrops` )
+    : i hdrops_n ( nurl_str_len hdrops )
+    : ~ i hdrops_p 0
+    ~ < hdrops_p hdrops_n {
+        : i hdrops_e0 ( __word_end hdrops hdrops_n hdrops_p ) : s number ( __span_dup hdrops hdrops_p hdrops_e0 ) = hdrops_p + hdrops_e0 1
+        : i hdrops_e1 ( __word_end hdrops hdrops_n hdrops_p ) : s callee ( __span_dup hdrops hdrops_p hdrops_e1 ) = hdrops_p + hdrops_e1 1
+        : i hdrops_e2 ( __word_end hdrops hdrops_n hdrops_p ) : s generic ( __span_dup hdrops hdrops_p hdrops_e2 ) = hdrops_p + hdrops_e2 1
+        : i hdrops_e3 ( __word_end hdrops hdrops_n hdrops_p ) : s index ( __span_dup hdrops hdrops_p hdrops_e3 ) = hdrops_p + hdrops_e3 1
         ( nurl_print `@.__nurl_hdrop.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( mem_handle_temp_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
@@ -37854,12 +37870,12 @@ unsafe @ gen_cast i lex i syms i cg → s {
                                 // `{ s ctl }`) takes the word at its innermost
                                 // slot; anything else is a zero-initialised
                                 // whole struct.
-                                : s __w1 ( __word_into_ty f0_ty val syms cg )
-                                ? != 0 ( nurl_str_len __w1 ) {
+                                : s storeflags ( __word_into_ty f0_ty val syms cg )
+                                ? != 0 ( nurl_str_len storeflags ) {
                                     ( nurl_print `  ` ) ( nurl_print res )
                                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
                                     ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty f0_ty ) )
-                                    ( nurl_print ` ` ) ( nurl_print __w1 ) ( nurl_print `, 0\n` )
+                                    ( nurl_print ` ` ) ( nurl_print storeflags ) ( nurl_print `, 0\n` )
                                     ( nurl_set_last_type dt )
                                     ^ res
                                 } {}
@@ -46057,10 +46073,14 @@ unsafe @ bck_scalar_lty s t → b {
 }
 
 @ mem_emit_scratch_flags → v {
-    : ~ s rest ( nurl_sym_get g_pending_impl `scrflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s n ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (Cursor walks: a first/skip_word step copied the whole rest of
+    // the list, quadratic in its length — agora #237.)
+    : s scrflags ( nurl_sym_get g_pending_impl `scrflags` )
+    : i scrflags_n ( nurl_str_len scrflags )
+    : ~ i scrflags_p 0
+    ~ < scrflags_p scrflags_n {
+        : i scrflags_e0 ( __word_end scrflags scrflags_n scrflags_p ) : s n ( __span_dup scrflags scrflags_p scrflags_e0 ) = scrflags_p + scrflags_e0 1
+        : i scrflags_e1 ( __word_end scrflags scrflags_n scrflags_p ) : s v ( __span_dup scrflags scrflags_p scrflags_e1 ) = scrflags_p + scrflags_e1 1
         ( nurl_print `@.__nurl_scr.` ) ( nurl_print n ) ( nurl_print ` = private constant i1 ` ) ( nurl_print v ) ( nurl_print `\n` )
     }
 }
@@ -46070,11 +46090,15 @@ unsafe @ bck_scalar_lty s t → b {
 }
 
 @ mem_emit_dtor_flags → v {
-    : ~ s rest ( nurl_sym_get g_pending_impl `dtorflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (Cursor walks: a first/skip_word step copied the whole rest of
+    // the list, quadratic in its length — agora #237.)
+    : s dtorflags ( nurl_sym_get g_pending_impl `dtorflags` )
+    : i dtorflags_n ( nurl_str_len dtorflags )
+    : ~ i dtorflags_p 0
+    ~ < dtorflags_p dtorflags_n {
+        : i dtorflags_e0 ( __word_end dtorflags dtorflags_n dtorflags_p ) : s number ( __span_dup dtorflags dtorflags_p dtorflags_e0 ) = dtorflags_p + dtorflags_e0 1
+        : i dtorflags_e1 ( __word_end dtorflags dtorflags_n dtorflags_p ) : s callee ( __span_dup dtorflags dtorflags_p dtorflags_e1 ) = dtorflags_p + dtorflags_e1 1
+        : i dtorflags_e2 ( __word_end dtorflags dtorflags_n dtorflags_p ) : s index ( __span_dup dtorflags dtorflags_p dtorflags_e2 ) = dtorflags_p + dtorflags_e2 1
         ( nurl_print `@.__nurl_dtor.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `dtorparam##` callee `##` index ) )
@@ -46123,24 +46147,30 @@ unsafe @ bck_scalar_lty s t → b {
 }
 
 @ emit_sink_flags → v {
-    : ~ s srest ( nurl_sym_get g_pending_impl `storeflags` )
-    ~ != 0 ( nurl_str_len srest ) {
-        : s number ( str_first_word srest ) = srest ( str_skip_word srest )
-        : s callee ( str_first_word srest ) = srest ( str_skip_word srest )
-        : s generic ( str_first_word srest ) = srest ( str_skip_word srest )
-        : s index ( str_first_word srest ) = srest ( str_skip_word srest )
+    // (Cursor walks: a first/skip_word step copied the whole rest of
+    // the list, quadratic in its length — agora #237.)
+    : s storeflags ( nurl_sym_get g_pending_impl `storeflags` )
+    : i storeflags_n ( nurl_str_len storeflags )
+    : ~ i storeflags_p 0
+    ~ < storeflags_p storeflags_n {
+        : i storeflags_e0 ( __word_end storeflags storeflags_n storeflags_p ) : s number ( __span_dup storeflags storeflags_p storeflags_e0 ) = storeflags_p + storeflags_e0 1
+        : i storeflags_e1 ( __word_end storeflags storeflags_n storeflags_p ) : s callee ( __span_dup storeflags storeflags_p storeflags_e1 ) = storeflags_p + storeflags_e1 1
+        : i storeflags_e2 ( __word_end storeflags storeflags_n storeflags_p ) : s generic ( __span_dup storeflags storeflags_p storeflags_e2 ) = storeflags_p + storeflags_e2 1
+        : i storeflags_e3 ( __word_end storeflags storeflags_n storeflags_p ) : s index ( __span_dup storeflags storeflags_p storeflags_e3 ) = storeflags_p + storeflags_e3 1
         : ~ s st ( nurl_sym_get g_fn_stores callee )
         ? == 0 ( nurl_str_len st ) { = st ( nurl_sym_get g_fn_stores generic ) } {}
         ( nurl_print `@.__nurl_store.` ) ( nurl_print number ) ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( str_contains_word st index ) `true` `false` ) ( nurl_print `\n` )
         ? ( str_contains_word st index ) { ( __nc_store_check number ) } {}
     }
-    : ~ s rest ( nurl_sym_get g_pending_impl `sinkflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s flag ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s sinkflags ( nurl_sym_get g_pending_impl `sinkflags` )
+    : i sinkflags_n ( nurl_str_len sinkflags )
+    : ~ i sinkflags_p 0
+    ~ < sinkflags_p sinkflags_n {
+        : i sinkflags_e0 ( __word_end sinkflags sinkflags_n sinkflags_p ) : s flag ( __span_dup sinkflags sinkflags_p sinkflags_e0 ) = sinkflags_p + sinkflags_e0 1
+        : i sinkflags_e1 ( __word_end sinkflags sinkflags_n sinkflags_p ) : s callee ( __span_dup sinkflags sinkflags_p sinkflags_e1 ) = sinkflags_p + sinkflags_e1 1
+        : i sinkflags_e2 ( __word_end sinkflags sinkflags_n sinkflags_p ) : s generic ( __span_dup sinkflags sinkflags_p sinkflags_e2 ) = sinkflags_p + sinkflags_e2 1
+        : i sinkflags_e3 ( __word_end sinkflags sinkflags_n sinkflags_p ) : s index ( __span_dup sinkflags sinkflags_p sinkflags_e3 ) = sinkflags_p + sinkflags_e3 1
         : ~ s sinks ( nurl_sym_get g_fn_sink callee )
         ? == 0 ( nurl_str_len sinks ) { = sinks ( nurl_sym_get g_fn_sink generic ) } {}
         : ~ s keeps ( nurl_sym_get g_fn_keeps callee )
@@ -46148,12 +46178,14 @@ unsafe @ bck_scalar_lty s t → b {
         ( nurl_print flag ) ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? | ( str_contains_word sinks index ) ( str_contains_word keeps index ) `true` `false` ) ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `consumeflags` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    : s consumeflags ( nurl_sym_get g_pending_impl `consumeflags` )
+    : i consumeflags_n ( nurl_str_len consumeflags )
+    : ~ i consumeflags_p 0
+    ~ < consumeflags_p consumeflags_n {
+        : i consumeflags_e0 ( __word_end consumeflags consumeflags_n consumeflags_p ) : s number ( __span_dup consumeflags consumeflags_p consumeflags_e0 ) = consumeflags_p + consumeflags_e0 1
+        : i consumeflags_e1 ( __word_end consumeflags consumeflags_n consumeflags_p ) : s callee ( __span_dup consumeflags consumeflags_p consumeflags_e1 ) = consumeflags_p + consumeflags_e1 1
+        : i consumeflags_e2 ( __word_end consumeflags consumeflags_n consumeflags_p ) : s generic ( __span_dup consumeflags consumeflags_p consumeflags_e2 ) = consumeflags_p + consumeflags_e2 1
+        : i consumeflags_e3 ( __word_end consumeflags consumeflags_n consumeflags_p ) : s index ( __span_dup consumeflags consumeflags_p consumeflags_e3 ) = consumeflags_p + consumeflags_e3 1
         : ~ s sinks ( nurl_sym_get g_fn_sink callee )
         ? == 0 ( nurl_str_len sinks ) { = sinks ( nurl_sym_get g_fn_sink generic ) } {}
         : ~ s keeps ( nurl_sym_get g_fn_keeps callee )
