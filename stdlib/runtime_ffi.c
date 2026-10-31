@@ -6471,13 +6471,16 @@ void      nurl_runtime_shutdown(void);
 #endif
 
 /* Netpoller gate (§25). Where the kernel has a readiness QUEUE that any
- * thread can drain — epoll on Linux, a completion port fed by
- * ProcessSocketNotifications on Windows — there is no reactor thread: an
- * idle worker blocks in the queue itself and a busy one drains it every
- * 16th dispatch, so a ready socket never waits for some other OS thread
- * to be scheduled (agora #137). kqueue (macOS, FreeBSD) is the third such
- * queue. The other hosts run §25's poll(2) reactor thread. */
-#if defined(NURL_HAVE_FIBERS) && (defined(__linux__) || defined(_WIN32) ||                                   defined(__APPLE__) || defined(__FreeBSD__))
+ * thread can drain — epoll on Linux, kqueue on macOS and FreeBSD, a
+ * completion port fed by ProcessSocketNotifications on Windows — there is
+ * no reactor thread: an idle worker blocks in the queue itself and a busy
+ * one drains it every 16th dispatch, so a ready socket never waits for
+ * some other OS thread to be scheduled (agora #137). The other hosts run
+ * §25's poll(2) reactor thread. */
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__) || defined(__FreeBSD__)
+#  define NURL_NP_HOST 1
+#endif
+#if defined(NURL_HAVE_FIBERS) && defined(NURL_NP_HOST)
 #  define NURL_NETPOLLER 1
 #  if defined(__APPLE__) || defined(__FreeBSD__)
 #    define NURL_NP_KQUEUE 1
@@ -6891,7 +6894,7 @@ static void nurl__rq_push_global_chain(NurlFiber *head, NurlFiber *tail, int n) 
 #if !defined(NURL_NETPOLLER)
 /* An admitted fiber at the head of the global queue, stamped as the
  * oldest: the next worker to look runs it before anything it holds.
- * (The poll(2) reactor's path; Linux's netpoller runs it at once.) */
+ * (The poll(2) reactor's path; the netpoller runs it at once.) */
 static void nurl__rq_push_global_front(NurlFiber *f) {
     f->rseq = NURL_RSEQ_ADMIT;
     pthread_mutex_lock(&nurl__sched.global_lock);
@@ -6994,7 +6997,7 @@ static NurlFiber *nurl__rq_pop_oldest(NurlWorker *w) {
 /* Wake one parked worker (if any). Cheap when idle_waiters is 0.
  * Under the netpoller an idle worker may be parked inside the kernel's
  * readiness queue rather than on idle_cv — when nobody is on the cv,
- * poke the poller (eventfd / completion packet) so
+ * poke the poller (eventfd / EVFILT_USER / completion packet) so
  * new runnable work (a spawn, a channel unpark) is picked up without
  * waiting for the next I/O event. Declared here, defined in §25. */
 #if defined(NURL_NETPOLLER)
@@ -7571,9 +7574,9 @@ static unsigned nurl__rng_next(unsigned *st) {
     return x;
 }
 
-/* Netpoller hooks (Linux, Windows): an idle worker BECOMES the I/O
+/* Netpoller hooks (NURL_NETPOLLER): an idle worker BECOMES the I/O
  * poller — it takes the poll lease and blocks in the kernel's readiness
- * queue (epoll_wait / GetQueuedCompletionStatusEx) itself, and a ready
+ * queue (epoll_wait / kevent / GetQueuedCompletionStatusEx) itself, and a ready
  * fiber is resumed directly on that worker with no queue hop, no
  * cross-thread wake chain and no core migration. Definitions live in
  * §25; declared here because the worker loop precedes it. */
@@ -7585,7 +7588,7 @@ static void       nurl__np_poke_if_sleeping(void);
 
 /* Next runnable for `w`: the oldest of its own queue and the global
  * queue → steal up to 2×worker_count peers → global → block in the
- * netpoller (Linux, Windows; one worker at a time) → park on idle_cv.
+ * netpoller (NURL_NETPOLLER; one worker at a time) → park on idle_cv.
  * NULL on shutdown. */
 static NurlFiber *nurl__worker_next(NurlWorker *w) {
     for (;;) {
@@ -7883,10 +7886,10 @@ static int nurl__rw_in_fiber(void) { return 0; }
  * readiness (or deadline) the fiber is unparked and the entry dropped.
  * sleep_ms registers without an fd — just a deadline.
  *
- * Two backends. Linux and Windows run the NETPOLLER (NURL_NETPOLLER):
- * the workers themselves drain the kernel's readiness queue — epoll, or
- * the completion port ProcessSocketNotifications feeds. FreeBSD, macOS
- * and the other POSIX hosts run one reactor THREAD over poll(2).
+ * Two backends. Linux, macOS, FreeBSD and Windows run the NETPOLLER
+ * (NURL_NETPOLLER): the workers themselves drain the kernel's readiness
+ * queue — epoll, kqueue, or the completion port ProcessSocketNotifications
+ * feeds. The other POSIX hosts run one reactor THREAD over poll(2).
  * WASI falls through to the stub block.
  *
  * ABI: nurl_reactor_wait_read(fd, timeout_ms) → 1 ready / 0 timeout /
@@ -7916,12 +7919,12 @@ long long nurl_fiber_sleep_ms(long long ms);
 #include <errno.h>
 
 #if defined(NURL_NETPOLLER)
-/* ── The netpoller (Linux: epoll; Windows: a completion port) ────────
+/* ── The netpoller (epoll; kqueue; Windows: a completion port) ───────
  *
- * There is no reactor THREAD on Linux or Windows. The old design ran a
- * dedicated poll(2) thread: every I/O park cost a pipe poke to the
- * reactor, a full O(waiters) rebuild of the pollfd array, a second
- * walk to match revents, a global-queue push and a cond-var wake of
+ * There is no reactor THREAD on Linux, macOS, FreeBSD or Windows. The
+ * old design ran a dedicated poll(2) thread: every I/O park cost a pipe
+ * poke to the reactor, a full O(waiters) rebuild of the pollfd array, a
+ * second walk to match revents, a global-queue push and a cond-var wake of
  * some worker — measured at ~4.5 futex calls, ~1.5 wake-pipe
  * reads/writes and 0.44 CPU MIGRATIONS per HTTP request, because the
  * woken fiber resumed on whichever worker won the global queue.
@@ -7977,15 +7980,19 @@ long long nurl_fiber_sleep_ms(long long ms);
  * (a 16-thread laptop with 16 CPU hogs) late, where a busy worker here
  * polls within 16 (agora #137). Four things differ from epoll:
  *   - a SOCKET is a kernel handle, a multiple of 4; its slot is
- *     byfd[SOCKET / 4] (nurl__np_index);
+ *     byfd[SOCKET / 4] (nurl__np_slot);
  *   - closesocket drops the registration, but "already-queued
  *     notifications might still be delivered" and a handle value is
  *     reused, so a notification names its slot AND the slot's
  *     generation (nurl__np_key), which a close advances: a stale one is
  *     dropped, never matched to the socket that inherited the value;
  *   - an edge registration does not report a state that is already true
- *     (epoll's ADD does), so a socket's first registration is followed
- *     by one zero-timeout probe that banks it (nurl__np_register_fd);
+ *     (epoll's ADD does; measured: bytes already queued raise nothing),
+ *     so a socket's first registration is followed by one zero-timeout
+ *     probe that banks it (nurl__np_register_fd). Later edges are
+ *     stricter than EPOLLET too — more bytes on top of unread ones raise
+ *     none, a recv re-arms — which the waits' contract already covers:
+ *     every one follows an EAGAIN;
  *   - Winsock reports a receive-side shutdown to nobody, so the slot
  *     keeps it (`shut`): a reader parked on it wakes, a later one does
  *     not park (nurl__reactor_read_shut). */
@@ -8811,10 +8818,11 @@ static int nurl__reactor_wait_k(nurl_np_fd_t fd, short events, long long timeout
     if (!nurl__np.started) return -1;
 #if defined(_WIN32)
     if (fd >= 0 && !nurl__np.psn)
-        nurl_panic("waiting on a socket from a fiber needs Windows build 20348 or "
-                   "later (Windows 11, Windows Server 2022): this ws2_32.dll has no "
-                   "ProcessSocketNotifications, which the fiber runtime's socket "
-                   "readiness is built on");
+        nurl_panic("async socket I/O needs Windows build 20348 or later (Windows 11, "
+                   "Windows Server 2022): this Windows has no ProcessSocketNotifications, "
+                   "which a fiber's socket wait is built on. On this Windows, fibers, "
+                   "timers, sleeps and channels still work, and so does socket I/O "
+                   "outside a fiber (the blocking calls, or a thread per connection)");
 #endif
 
     /* Spin-then-park (nurl__spin_ready); every way out of this wait
