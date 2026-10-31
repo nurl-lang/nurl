@@ -138,6 +138,13 @@ jobs:
         # here rather than behind the compiler build.
         shell: bash
         run: python3 tools/tests/test_release_artifacts.py
+      - name: Hole-probe gate verdict controls
+        # tools/fuzz/holes/check.sh against a stand-in nurl.sh: a build
+        # that failed without a compile error, a sanitizer build with no
+        # binary and a run past its limit are UNCHECKED, never rejected or
+        # clean (Agora #232). No toolchain.
+        shell: bash
+        run: python3 tools/tests/test_holes_check.py
       - name: TLS benchmark per-CPU-family report controls
         # bench/tls_bench/gen_tls_results.py keeps each runner CPU
         # family's latest tls-bench run and refuses a run that does not say
