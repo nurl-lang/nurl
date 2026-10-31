@@ -101,6 +101,18 @@ def killE (e : Eff) (hv : Bool) (x : Var) (E : Entry) : Entry :=
 def kill (e : Eff) (hv : Bool) (x : Var) (Γ : Ctx) : Ctx :=
   fun v => (Γ v).map (killE e hv x)
 
+/-- A2-drop.2: effect `e` on `x` ends no view a binding that may run a
+    destructor holds, live or not. A rule that kills through dependencies
+    takes it, so a destructor never reads a view whose source ended
+    (github#1380's rule, with the maybe-moved join). -/
+def DtorSafe (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
+  ∀ v E, Γ v = some E → E.dtor = true → hits e hv x E = false
+
+/-- With no binding that runs a destructor, every effect is safe. -/
+theorem DtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
+    (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
+  fun v E hE hd => by rw [h v E hE] at hd; cases hd
+
 /-- The end of `x`'s scope: what borrows from it ends, and it is gone. -/
 def exitScope (x : Var) (Γ : Ctx) : Ctx := upd (kill .replace false x Γ) x none
 
