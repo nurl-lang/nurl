@@ -124,7 +124,7 @@ $ `packages/psql/src/pg.nu`
     }
 }
 
-// `n` random World ids, and their lookups' parameters.
+// `n` random World ids.
 @ world_ids Rng g i n → ( Vec i ) {
     : ( Vec i ) ids ( vec_with_cap [i] n )
     : ~ i k 0
@@ -132,6 +132,7 @@ $ `packages/psql/src/pg.nu`
     ^ ids
 }
 
+// Their lookups' parameters: one set of one id each.
 @ world_params ( Vec i ) ids → ( Vec ( Vec PgVal ) ) {
     : i n ( vec_len [i] ids )
     : ( Vec ( Vec PgVal ) ) sets ( vec_with_cap [( Vec PgVal )] n )

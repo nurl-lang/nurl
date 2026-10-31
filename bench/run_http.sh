@@ -613,47 +613,57 @@ except Exception as e:
 PY
     }
 
-    # One server: start it pinned, check it, then every (path, c) cell.
-    # Args: <name> <port> -- <command...>; the server reads DATABASE_URL.
-    run_db_server() {
+    # Both servers run at once, pinned to the same cores — an idle one
+    # costs nothing — and their cells alternate (NURL's, then Rust's, for
+    # each path and concurrency): a noisy minute on a shared VM then lands
+    # on both peers instead of on whichever was being measured.
+    # Args: <name> <port> -- <command...>; prints the pid. The server reads
+    # DATABASE_URL.
+    start_db_server() {
         local name="$1" port="$2"; shift 2
         [[ "$1" == "--" ]] && shift
         "${srv_pin[@]}" "${srv_env[@]}" "DATABASE_URL=$DATABASE_URL" "$@" \
             > "$BENCH/_build/${name}-db.stdout.log" 2> "$BENCH/_build/${name}-db.stderr.log" &
-        local pid=$!
-        trap 'kill -TERM '"$pid"' 2>/dev/null; exit' INT TERM
-        trap 'kill -TERM '"$pid"' 2>/dev/null' EXIT
-        local path c verdict="ok"
-        if ! kill -0 "$pid" 2>/dev/null || ! wait_listen "$port"; then
-            verdict="did not start"
-        else
-            sleep "$(python3 -c "print($SETTLE_MS / 1000.0)")"
-            kill -0 "$pid" 2>/dev/null || verdict="exited at startup (port $port in use?)"
-            [[ "$verdict" == ok ]] && verdict="$(db_check "$port")"
+        echo $!
+    }
+    # `ok`, or why this server will not be measured.
+    db_ready() {
+        local pid="$1" port="$2"
+        if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null || ! wait_listen "$port"; then
+            echo "did not start"; return
         fi
-        echo "DBCHECK $name $verdict"
-        for path in $DB_PATHS; do
-            for c in $DB_CONCURRENCIES; do
-                if [[ "$verdict" == ok ]]; then
-                    echo "DBROW $path $name $c $(measure_cell http "$port" "$c" "$pid" "$path")"
-                else
-                    echo "DBROW $path $name $c FAIL FAIL FAIL FAIL FAIL"
-                fi
-            done
-        done
-        stop_pid "$pid"
+        sleep "$(python3 -c "print($SETTLE_MS / 1000.0)")"
+        kill -0 "$pid" 2>/dev/null || { echo "exited at startup (port $port in use?)"; return; }
+        db_check "$port"
     }
 
     echo "# db suite: duration=${DURATION}s iters=${ITERS} paths=\"$DB_PATHS\" concurrencies=\"$DB_CONCURRENCIES\"" >&2
     results=()
-    collect() { while read -r line; do results+=("$line"); done; }
-    na_db() {
-        local name="$1" path c
-        results+=("DBCHECK $name n/a")
-        for path in $DB_PATHS; do for c in $DB_CONCURRENCIES; do results+=("DBROW $path $name $c n/a n/a n/a n/a n/a"); done; done
-    }
-    if prep_nurl; then collect < <(run_db_server nurl 18080 -- "$NURL_BIN"); else na_db nurl; fi
-    if prep_rust; then collect < <(run_db_server rust 18081 -- "$RUST_BIN"); else na_db rust; fi
+    declare -A db_pid=() db_port=([nurl]=18080 [rust]=18081) db_verdict=()
+    prep_nurl && db_pid[nurl]="$(start_db_server nurl 18080 -- "$NURL_BIN")"
+    prep_rust && db_pid[rust]="$(start_db_server rust 18081 -- "$RUST_BIN")"
+    trap 'for p in "${db_pid[@]}"; do kill -TERM "$p" 2>/dev/null; done; db_stop' EXIT
+    trap 'exit 130' INT TERM
+    for name in nurl rust; do
+        if [[ -n "${db_pid[$name]:-}" ]]; then db_verdict[$name]="$(db_ready "${db_pid[$name]}" "${db_port[$name]}")"
+        else db_verdict[$name]="n/a"; fi
+        results+=("DBCHECK $name ${db_verdict[$name]}")
+    done
+    steal0="$(awk '/^cpu /{print $9; exit}' /proc/stat)"; total0="$(awk '/^cpu /{s=0; for(i=2;i<=NF;i++) s+=$i; print s; exit}' /proc/stat)"
+    for path in $DB_PATHS; do
+        for c in $DB_CONCURRENCIES; do
+            for name in nurl rust; do
+                case "${db_verdict[$name]}" in
+                    ok)  results+=("DBROW $path $name $c $(measure_cell http "${db_port[$name]}" "$c" "${db_pid[$name]}" "$path")") ;;
+                    n/a) results+=("DBROW $path $name $c n/a n/a n/a n/a n/a") ;;
+                    *)   results+=("DBROW $path $name $c FAIL FAIL FAIL FAIL FAIL") ;;
+                esac
+            done
+        done
+    done
+    steal1="$(awk '/^cpu /{print $9; exit}' /proc/stat)"; total1="$(awk '/^cpu /{s=0; for(i=2;i<=NF;i++) s+=$i; print s; exit}' /proc/stat)"
+    DB_STEAL="$(python3 -c "print('%.2f' % (100.0 * ($steal1 - $steal0) / max(1, $total1 - $total0)))")"
+    for name in nurl rust; do [[ -n "${db_pid[$name]:-}" ]] && stop_pid "${db_pid[$name]}"; done
 
     {
         printf 'ENV\tnow\t%s\n' "$NOW"
@@ -675,6 +685,7 @@ PY
         printf 'ENV\tsrv_cores\t%s\n' "${SRV_CORES:-n/a}"
         printf 'ENV\tgen_cores\t%s\n' "${GEN_CORES:-n/a}"
         printf 'ENV\tdb\t%s\n' "$DB_PLACEMENT"
+        printf 'ENV\tsteal\t%s\n' "$DB_STEAL"
         printf 'ENV\tworkers\t%s\n' "$SRV_WORKERS"
         printf 'ENV\tload\t%s\n' "$LOAD_AT_START"
         printf 'ENV\tmax_load\t%s\n' "$BENCH_MAX_LOAD"

@@ -142,7 +142,10 @@ def main():
     w("|---|---|")
     w(
         f"| Each cell | median of {env.get('iters', '3')} x "
-        f"{env.get('duration', '10')} s closed-loop runs, keep-alive |"
+        f"{env.get('duration', '10')} s closed-loop runs, keep-alive; both "
+        "servers up for the whole run, their cells alternating (NURL's, then "
+        "Rust's, per path and concurrency) so a noisy stretch of a shared "
+        "machine lands on both |"
     )
     w(f"| Concurrencies | {' , '.join(concs)} |")
     if env.get("pinned") == "yes":
@@ -157,6 +160,13 @@ def main():
         f"| Worker threads | {env.get('workers', '?')} per server "
         "(`NURL_WORKERS` / `TOKIO_WORKER_THREADS`) |"
     )
+    steal = num(env.get("steal"))
+    if steal is not None:
+        w(
+            f"| CPU steal | {steal:.2f} % of the machine's time over the "
+            "measured cells (a VM's host taking its cores back"
+            + ("" if steal < 1.0 else " — enough to move these figures") + ") |"
+        )
     load, maxload = num(env.get("load")), num(env.get("max_load"))
     if load is not None and maxload is not None and load > maxload:
         w(
