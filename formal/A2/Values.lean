@@ -90,12 +90,12 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     rw [ht] at hok
     obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
     obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
-    obtain ⟨T, hoT, hsT⟩ := hr.owned
-    have hsub : Sub (.node t c d es) T := hla.sub.trans hsT
-    have hna : NodeAt m c (.node t c d es) := ⟨T, hoT, hsub, t, d, es, rfl⟩
-    have ha := hi.heap.treeAt_alloc hoT
-    refine ⟨c, d, es, ⟨(ha c (hsub.ids c (by simp))).1,
-      (ha d (hsub.ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
+    obtain ⟨o, T, hoT, hsT⟩ := hr.owned
+    have hsub : Sub (.node t c d es) n0 := hla.sub
+    have hna : NodeAt m c (.node t c d es) := ⟨o, T, hoT, hsub.trans hsT, t, d, es, rfl⟩
+    have ha := hi.heap.alloc o T hoT
+    refine ⟨c, d, es, ⟨(ha c ((hsub.trans hsT).ids c (by simp))).1,
+      (ha d ((hsub.trans hsT).ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
       fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns, hsh⟩
 
 /-- The buffer a live slice binding views. -/
@@ -117,11 +117,11 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     rw [ht] at hok
     obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := valOK_slice.mp hok
     obtain ⟨n0, c, es, hr, hk, hla, hlen, hw⟩ := viewAt_iff.mp hh
-    obtain ⟨T, hoT, hsT⟩ := hr.owned
-    have hsub : Sub (.node t c d es) T := hla.sub.trans hsT
-    have hda : DataAt m d (.node t c d es) := ⟨T, hoT, hsub, t, c, es, rfl⟩
-    have ha := hi.heap.treeAt_alloc hoT
-    exact ⟨d, o, l, c, es, hv, hda, (ha d (hsub.ids d (by simp))).1, hlen, hw,
+    obtain ⟨o', T, hoT, hsT⟩ := hr.owned
+    have hsub : Sub (.node t c d es) n0 := hla.sub
+    have hda : DataAt m d (.node t c d es) := ⟨o', T, hoT, hsub.trans hsT, t, c, es, rfl⟩
+    have ha := hi.heap.alloc o' T hoT
+    exact ⟨d, o, l, c, es, hv, hda, (ha d ((hsub.trans hsT).ids d (by simp))).1, hlen, hw,
       fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
 
 theorem lands_comp' {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :

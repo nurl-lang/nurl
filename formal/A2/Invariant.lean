@@ -69,12 +69,6 @@ def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
 /-- `SharesIn` over a memory's blocks. -/
 def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
 
-/-- A3.1: every block of the store `B` holds a well-formed tree of a type
-    that holds no views, and the shares it holds name blocks of `B` too. -/
-def BlocksOK (B : Nat → Option Blk) : Prop :=
-  ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
-    SharesIn B bl.ty bl.pay
-
 theorem SharesOK.of_blk {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : m'.blk = m.blk) :
     SharesOK m' τ T := fun u k p ha => by rw [hb]; exact h u k p ha
 
@@ -303,6 +297,13 @@ def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some 
 def SelfFree (T : Val) : Prop :=
   ∀ d o l, Sub (.view d o l) T → ∀ u c es, ¬ Sub (.node u c d es) T
 
+/-- A3.1: every block of the store `B` holds a well-formed tree of a type
+    that holds no views, the shares it holds name blocks of `B` too, and (the
+    first cut) it owns no address. -/
+def BlocksOK (B : Nat → Option Blk) : Prop :=
+  ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
+    SharesIn B bl.ty bl.pay ∧ bl.pay.ids = []
+
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
 structure HeapOK (m : Mem) : Prop where
@@ -340,13 +341,6 @@ def Stmt.spine : Stmt → List Var
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
   | _ => []
-
-/-- A3.1: every share an owned tree holds (a slot's, or a block's payload)
-    carries the payload its block holds. It follows from `MInv`
-    (`MInv.sharesHeld`), and lets a borrow that reaches into a payload
-    through a share find that payload's nodes in memory (`SubS.loc`). -/
-def SharesHeld (m : Mem) : Prop :=
-  ∀ T, TreeAt m T → ∀ k p, Sub (.arc k p) T → ∃ u, m.blk k = some ⟨u, p⟩
 
 /-- Nothing leaks: every live address is in a tree some binding owns. -/
 def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x t ∧ i ∈ t.ids

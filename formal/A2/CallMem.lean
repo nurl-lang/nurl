@@ -23,17 +23,15 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/
 theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T) {r : Var}
-    (hr : m'.st r = m.st r) (hb : m'.blk = m.blk := by rfl) : RootKeep m m' r := by
-  have htr : ∀ T, TreeAt m T → TreeAt m' T := fun T hT => by
-    rcases hT with ⟨o, ho⟩ | ⟨k, u, hk⟩
-    · obtain ⟨o2, h2⟩ := hown o T ho; exact Or.inl ⟨o2, h2⟩
-    · exact Or.inr ⟨k, u, by rw [hb]; exact hk⟩
+    (hr : m'.st r = m.st r) : RootKeep m m' r := by
   intro n hn
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, T, hT, hs, hnode⟩ |
-      ⟨v, d, o', l, hc, ht, T, hT, hs, hdata⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ |
+      ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
-  · exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, T, htr T hT, hs, hnode⟩)
-  · exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, T, htr T hT, hs, hdata⟩)
+  · obtain ⟨o2, h2⟩ := hown o T hT
+    exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, o2, T, h2, hs, hnode⟩)
+  · obtain ⟨o2, h2⟩ := hown o T hT
+    exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, o2, T, h2, hs, hdata⟩)
 
 theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : SlotOK m E.clean sl := by
   unfold Entry.clean
@@ -254,7 +252,7 @@ theorem heap (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
 theorem rootKeep (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) {r : Var} (hu : Untouched fn args m.nv x r) :
     RootKeep m (callMem m m1 fn x) r :=
-  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu) hb.blk
+  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu)
 
 theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
     (callPe Γ ps args v).live = true := by

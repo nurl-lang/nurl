@@ -24,7 +24,7 @@ theorem lendOf_ids : (v : Val) → (lendOf v).ids = []
   | .inl a => by simp only [lendOf, Val.ids, lendOf_ids a]
   | .inr a => by simp only [lendOf, Val.ids, lendOf_ids a]
   | .pkg _ _ _ a _ => by simp only [lendOf, Val.ids, lendOf_ids a]
-  | .arc _ => rfl
+  | .arc _ _ => rfl
 
 /-- A slot that is owned, or borrowed with an address-free value. -/
 def SlotFree (sl : Slot) : Prop := sl.own = false → ∀ v, sl.val = some v → v.ids = []

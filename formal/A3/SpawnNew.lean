@@ -226,7 +226,8 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       nodup := fun x t h => hnd t (hmem h rfl)
       disj := fun x y t u hne h1 h2 => hdisj x y t u hne (spawnSt_val h1 rfl).1 (spawnSt_val h2 rfl).1
       alloc := fun x t h i hi => ⟨(hpart i).mpr ⟨t, hmem h rfl, hi⟩, hlt t (hmem h rfl) i hi⟩
-      self := fun x t h => hself t (hmem h rfl) }
+      self := fun x t h => hself t (hmem h rfl)
+      bpay := fun k bl hk => (hB k bl hk).2.2.2.2 }
     nvSt := fun v hv => by
       have h1 : v ≤ fn.params.length := Nat.not_lt.mp fun h => by
         have h2 : (spawnSt fn vs v).isSome = true := hv
@@ -250,7 +251,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · exact hsh v T _ (spawnSt_val hsl hT).1 hp
       · have h0 : spawnSt fn vs fn.params.length = some sl := hsl
         rw [spawnSt_res] at h0; cases h0; cases hT
-    blocks := hB
+    blocks := fun k bl hk => ⟨(hB k bl hk).1, (hB k bl hk).2.1, (hB k bl hk).2.2.1, (hB k bl hk).2.2.2.1⟩
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv

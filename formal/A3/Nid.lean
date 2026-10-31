@@ -10,7 +10,8 @@ open A2
 
 /-- More allocated and a later `nid`: the same owned trees stay valid. -/
 theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
-    (ha : ∀ i, m.alloc i = true → m'.alloc i = true) (hn : m.nid ≤ m'.nid) : HeapOK m' where
+    (ha : ∀ i, m.alloc i = true → m'.alloc i = true) (hn : m.nid ≤ m'.nid) (hb : m'.blk = m.blk := by rfl) :
+    HeapOK m' where
   nodup x t h := hh.nodup x t (by unfold OwnedAt at *; rw [← hst]; exact h)
   disj x y t u hne h1 h2 := hh.disj x y t u hne (by unfold OwnedAt at *; rw [← hst]; exact h1)
     (by unfold OwnedAt at *; rw [← hst]; exact h2)
@@ -19,6 +20,7 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     obtain ⟨h1, h2⟩ := hh.alloc x t h' i hi
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s

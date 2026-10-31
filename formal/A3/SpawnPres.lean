@@ -124,7 +124,9 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact memCodes_iff.mp hcds a0 true v h0)
-    hpart (fun v hv k hk => (hids v hv k hk).2) hsh hinv.blocks
+    hpart (fun v hv k hk => (hids v hv k hk).2) hsh
+    (fun k bl hk => ⟨(hinv.blocks k bl hk).1, (hinv.blocks k bl hk).2.1, (hinv.blocks k bl hk).2.2.1,
+      (hinv.blocks k bl hk).2.2.2, hinv.heap.bpay k bl hk⟩)
   -- the spawner keeps `a'`, the new thread gets `aN`
   have ha'a : ∀ k, a' k = true → a k = true := fun k hk => FreesL.le hfr hk
   have haNa : ∀ k, aN k = true → a k = true := fun k hk => minus_le k hk

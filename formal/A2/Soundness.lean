@@ -52,7 +52,7 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
   | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hi.heap hcd hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
@@ -67,7 +67,7 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
   | refl => cases hr
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hi.heap hcd hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr

@@ -156,7 +156,7 @@ theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : M
     have hst' : (m0'.set x ⟨false, some (.int 1)⟩).st = (m0.set x ⟨false, some (.int 1)⟩).st := by
       simp only [Mem.set, hst]
     have hmi' : MInv (m0'.set x ⟨false, some (.int 1)⟩) _ :=
-      hmi.of_st hst' (heapOK_grow hmi.heap hst' hal (by simp only [Mem.set, hnid]; exact Nat.le_refl _))
+      hmi.of_st hst' (heapOK_grow hmi.heap hst' hal (by simp only [Mem.set, hnid]; exact Nat.le_refl _) hblk)
         (by simp only [Mem.set, hnv]; exact Nat.le_refl _) hblk
     refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds)
     rw [hnv]; exact hrep hb

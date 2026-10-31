@@ -6,21 +6,21 @@ namespace A2
 
 /-- A slot that was there before keeps its contents: every root reaches the
     same memory. -/
-theorem rootKeep_ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o) (r : Var)
-    (hb : m'.blk = m.blk := by rfl) : RootKeep m m' r := by
+theorem rootKeep_ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o) (r : Var) :
+    RootKeep m m' r := by
   intro n hn
   have hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T := fun o T hT => by
     unfold OwnedAt at *; rw [h o (by rw [hT]; simp)]; exact hT
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, T, hT, hs, hnode⟩ |
-      ⟨v, d, o', l, hc, ht, T, hT, hs, hdata⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ |
+      ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
   · exact Or.inl ⟨T0, by rw [h r (by rw [hn]; simp)]; exact hn, ht⟩
-  · exact Or.inr (Or.inl ⟨v, c, by rw [h r (by rw [hc]; simp)]; exact hc, ht, T, hT.keep hown hb, hs, hnode⟩)
-  · exact Or.inr (Or.inr ⟨v, d, o', l, by rw [h r (by rw [hc]; simp)]; exact hc, ht, T, hT.keep hown hb, hs,
+  · exact Or.inr (Or.inl ⟨v, c, by rw [h r (by rw [hc]; simp)]; exact hc, ht, o, T, hown o T hT, hs, hnode⟩)
+  · exact Or.inr (Or.inr ⟨v, d, o', l, by rw [h r (by rw [hc]; simp)]; exact hc, ht, o, T, hown o T hT, hs,
       hdata⟩)
 
 theorem SlotOK.ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o) {E : Entry} {sl : Slot}
     (hs : SlotOK m E sl) (hb : m'.blk = m.blk := by rfl) : SlotOK m' E sl :=
-  hs.keep (fun dep _ => ⟨(rootKeep_ext h dep.root hb).vkeep, (rootKeep_ext h dep.root hb).hkeep⟩) hb
+  hs.keep (fun dep _ => ⟨(rootKeep_ext h dep.root).vkeep, (rootKeep_ext h dep.root).hkeep⟩) hb
 
 /-- Binding a fresh variable to what a right-hand side produced. -/
 theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = none) (hxn : x < m.nv)
@@ -470,28 +470,26 @@ theorem WFv.sub_view {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub
       | pkg => obtain ⟨s, h⟩ := ih hs'; exact ⟨s, ViewIn.pkg h⟩
 
 /-- A valid view points into a buffer some owner holds. -/
-theorem ViewAt.owned {m : Mem} (hh : HeapOK m) {dep : Dep} {d o l : Nat} {s : Ty}
-    (h : ViewAt m dep d o l s) : ∃ x T, OwnedAt m x T ∧ d ∈ T.ids := by
+theorem ViewAt.owned {m : Mem} {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l s) :
+    ∃ x T, OwnedAt m x T ∧ d ∈ T.ids := by
   obtain ⟨n0, c, es, hr, hk, _, _⟩ := h
-  obtain ⟨T, hT, hs⟩ := hr.owned
+  obtain ⟨x, T, hT, hs⟩ := hr.owned
   have hsub : Sub (.node s c d es) n0 := by
     rcases hk with ⟨_, h⟩ | ⟨_, h⟩
     · rw [h]; exact Sub.refl _
     · exact h.sub
-  have hd : d ∈ T.ids := (hsub.trans hs).ids d (by simp)
-  obtain ⟨x, hx⟩ := hT.owned_of_mem hh hd
-  exact ⟨x, T, hx, hd⟩
+  exact ⟨x, T, hT, (hsub.trans hs).ids d (by simp)⟩
 
 /-- A tree whose views all point into memory owners hold, put together with
     one whose addresses no owner holds, does not view itself across them. -/
-theorem selfFree_apart {m : Mem} (hh : HeapOK m) {τ : Ty} {v w : Val} (hw : WFv τ v) {H : List Dep}
+theorem selfFree_apart {m : Mem} {τ : Ty} {v w : Val} (hw : WFv τ v) {H : List Dep}
     (hvs : ViewsOK m τ v H) (hdis : ∀ o U, OwnedAt m o U → ∀ i ∈ w.ids, i ∉ U.ids) :
     ∀ d o l, Sub (.view d o l) v → ∀ u c es, ¬ Sub (.node u c d es) w := by
   intro d o l hv u c es hn
   obtain ⟨s, hin⟩ := hw.sub_view hv
   obtain ⟨d', o', l', hvv, dep, _, ha⟩ := hvs s _ hin
   cases hvv
-  obtain ⟨x, T, hT, hd⟩ := ha.owned hh
+  obtain ⟨x, T, hT, hd⟩ := ha.owned
   exact hdis x T hT d (hn.ids d (by simp)) hd
 
 /-- A struct literal: its fields, taken from their bindings, owned by the
@@ -585,8 +583,8 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     · cases h
     cases hc1 <;> cases hc2
     · exact pu1.sf d o l hs1 u c es hs2
-    · exact selfFree_apart post2.inv.heap pu1.wf hvs1 pu2.dis d o l hs1 u c es hs2
-    · exact selfFree_apart post2.inv.heap pu2.wf pu2.vs (fun o U hU i hi => pu1.dis o U (hown21 o U hU) i hi)
+    · exact selfFree_apart pu1.wf hvs1 pu2.dis d o l hs1 u c es hs2
+    · exact selfFree_apart pu2.wf pu2.vs (fun o U hU i hi => pu1.dis o U (hown21 o U hU) i hi)
         d o l hs1 u c es hs2
     · exact pu2.sf d o l hs1 u c es hs2
   · intro c hc
@@ -1313,7 +1311,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     · obtain ⟨s, hin⟩ := hwT.sub_view h
       obtain ⟨d1, o1, l1, hv1, dep, hd, ha⟩ := hvsT s _ hin
       cases hv1
-      obtain ⟨ox, U, hU, hdU⟩ := ha.owned hi.heap
+      obtain ⟨ox, U, hU, hdU⟩ := ha.owned
       rcases hnode with ⟨rfl, _⟩ | ⟨u', c', es', hs'⟩ | hs'
       · exact hfresh U ox hU hdU rfl
       · exact hsfT _ o0 l0 h u' c' es' hs'
@@ -1323,7 +1321,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       cases hv1
       have hne : dep.root ≠ x := fun heq => hxD (heq ▸ List.mem_map_of_mem hd)
       rcases hnode with ⟨rfl, _⟩ | ⟨u', c', es', hs'⟩ | hs'
-      · obtain ⟨ox, U, hU, hdU⟩ := ha.owned hi.heap
+      · obtain ⟨ox, U, hU, hdU⟩ := ha.owned
         exact hfresh U ox hU hdU rfl
       · exact viewAt_not_in hi hanch hxF hT (hp.root dep.root (List.mem_map_of_mem hd)) hne ha
           u' c' es' hs'
@@ -1432,10 +1430,10 @@ theorem rootKeep_rmbor {m : Mem} {p : Var} {w : Option Val} (hp : m.st p = some 
     refine ownedAt_remove.mpr ⟨fun h => ?_, hT⟩
     subst h; unfold OwnedAt at hT; rw [hp] at hT; cases hT
   intro n hn
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, T, hT, hs, hnode⟩ | ⟨v, d, o', l, hc, ht, T, hT, hs, hdata⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ | ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
   · exact Or.inl ⟨T0, by simp [upd_ne _ _ hr, hn], ht⟩
-  · exact Or.inr (Or.inl ⟨v, c, by simp [upd_ne _ _ hr, hc], ht, T, hT.keep hown rfl, hs, hnode⟩)
-  · exact Or.inr (Or.inr ⟨v, d, o', l, by simp [upd_ne _ _ hr, hc], ht, T, hT.keep hown rfl, hs, hdata⟩)
+  · exact Or.inr (Or.inl ⟨v, c, by simp [upd_ne _ _ hr, hc], ht, o, T, hown o T hT, hs, hnode⟩)
+  · exact Or.inr (Or.inr ⟨v, d, o', l, by simp [upd_ne _ _ hr, hc], ht, o, T, hown o T hT, hs, hdata⟩)
 
 theorem mem_reroot_of_ne {p : Var} {D ds : List Dep} {dep : Dep} (hd : dep ∈ ds) (hne : dep.root ≠ p) :
     dep ∈ reroot p D ds := by

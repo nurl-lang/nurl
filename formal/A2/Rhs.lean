@@ -82,10 +82,10 @@ theorem ViewsOK.none {m : Mem} {t : Ty} (ht : t.holdsView = false) (T : Val) (H 
   have := hin.holdsView
   rw [ht] at this; cases this
 
-theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : RootNode m r n)
-    (hb : m'.blk = m.blk := by rfl) : RootNode m' r n := by
-  unfold RootNode NodeAt DataAt TreeAt at *
-  rw [h, hb]; exact hn
+theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : RootNode m r n) :
+    RootNode m' r n := by
+  unfold RootNode NodeAt DataAt at *
+  rw [h]; exact hn
 
 theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (hh : HeapOK m')
     (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk := by rfl) : MInv m' Γ where
@@ -93,7 +93,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   slot v E hv := by
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hv
     refine ⟨sl, by rw [h]; exact hsl, hok, hslot.keep (fun dep _ => ?_) hb⟩
-    have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn hb
+    have hk : RootKeep m m' dep.root := fun n hn => rootNode_st h hn
     exact ⟨hk.vkeep, hk.hkeep⟩
   heap := hh
   nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
@@ -105,7 +105,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
-    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn hb).vkeep
+    (show RootKeep m m' dep.root from fun n hn => rootNode_st h hn).vkeep
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
     rw [hb] at hk
@@ -423,23 +423,15 @@ theorem PkgsOK.elem {t : Ty} {c d : Nat} {es : List Val} {e : Val} (h : PkgsOK (
     (he : e ∈ es) : PkgsOK e :=
   h.sub (Sub.child he (Sub.refl _))
 
-/-- A tree some owner holds is well-formed in its packages: a slot's by the
-    invariant, a block's payload because it holds none. -/
-theorem MInv.treeAt_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {T : Val} (hT : TreeAt m T) : PkgsOK T := by
-  rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
-  · exact hi.pkgs x _ T hx rfl
-  · obtain ⟨_, hv, hw, _⟩ := hi.blocks k ⟨u, T⟩ hk
-    exact fun _ _ _ _ _ hs => (hw.no_pkg hv hs).elim
-
 theorem MInv.nodeAt_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Nat} {n : Val} (h : NodeAt m c n) :
     PkgsOK n := by
-  obtain ⟨T, hT, hs, _⟩ := h
-  exact (hi.treeAt_pkgs hT).sub hs
+  obtain ⟨x, T, hx, hs, _⟩ := h
+  exact (hi.pkgs x _ T hx rfl).sub hs
 
 theorem MInv.dataAt_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {d : Nat} {n : Val} (h : DataAt m d n) :
     PkgsOK n := by
-  obtain ⟨T, hT, hs, _⟩ := h
-  exact (hi.treeAt_pkgs hT).sub hs
+  obtain ⟨x, T, hx, hs, _⟩ := h
+  exact (hi.pkgs x _ T hx rfl).sub hs
 
 theorem MInv.vecOf_pkgs {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {t : Ty} {c d : Nat}
     {es : List Val} (h : VecOf m y t c d es) : PkgsOK (.node t c d es) := by

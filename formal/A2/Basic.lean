@@ -111,23 +111,6 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
   | inr _ ih => exact Sub.inr ih
   | pkg _ ih => exact Sub.pkg ih
 
-/-! ### Reaching through shares (A3.1) -/
-
-theorem SubS.trans_sub {a b c : Val} (h1 : SubS a b) (h2 : Sub b c) : SubS a c := by
-  cases h1 with
-  | sub h => exact .sub (h.trans h2)
-  | arc hk hp => exact .arc (hk.trans h2) hp
-
-theorem SubS.of_sub {a b c : Val} (h1 : Sub a b) (h2 : SubS b c) : SubS a c := by
-  induction h2 with
-  | sub h => exact .sub (h1.trans h)
-  | arc hk _ ih => exact .arc hk ih
-
-theorem SubS.trans {a b c : Val} (h1 : SubS a b) (h2 : SubS b c) : SubS a c := by
-  induction h2 with
-  | sub h => exact h1.trans_sub h
-  | arc hk _ ih => exact .arc hk ih
-
 theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
   obtain ⟨e, hc, hs⟩ := h
   exact hc.sub hs
@@ -269,126 +252,16 @@ theorem owned_unique {m : Mem} (hh : HeapOK m) {x y : Var} {t u n1 n2 : Val}
   subst htu
   exact ⟨rfl, sub_unique (hh.nodup x t hx) h1 h2 hi1 hi2⟩
 
-/-- Two subtrees of owned trees (a slot's, or a block's payload) sharing a
-    head address are the same. -/
-theorem treeAt_unique {m : Mem} (hh : HeapOK m) {t u n1 n2 : Val} (ht : TreeAt m t) (hu : TreeAt m u)
-    (h1 : Sub n1 t) (h2 : Sub n2 u) {i : Nat} (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
-  have hi1' := h1.ids i (Val.head_ids _ i hi1)
-  have hi2' := h2.ids i (Val.head_ids _ i hi2)
-  rcases ht with ⟨x, hx⟩ | ⟨k, a, hk⟩
-  · rcases hu with ⟨y, hy⟩ | ⟨k', b, hk'⟩
-    · exact (owned_unique hh hx hy h1 h2 hi1 hi2).2
-    · have := hh.bpay k' _ hk'; simp only at this; rw [this] at hi2'; cases hi2'
-  · have := hh.bpay k _ hk; simp only at this; rw [this] at hi1'; cases hi1'
-
-/-- A share a well-formed tree holds is one at some type. -/
-theorem WFv.arcIn {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {p : Val} (hs : Sub (.arc k p) T) :
-    ∃ u, ArcIn τ T u k p := by
-  induction hw with
-  | int => cases hs
-  | view => cases hs
-  | node _ ih =>
-    cases hs with
-    | child he hs' => obtain ⟨u, ha⟩ := ih _ he hs'; exact ⟨u, .child he ha⟩
-  | pair _ _ ihv ihw =>
-    cases hs with
-    | fst hs' => obtain ⟨u, ha⟩ := ihv hs'; exact ⟨u, .fst ha⟩
-    | snd hs' => obtain ⟨u, ha⟩ := ihw hs'; exact ⟨u, .snd ha⟩
-  | inl _ ih => cases hs with | inl hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .inl ha⟩
-  | inr _ ih => cases hs with | inr hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .inr ha⟩
-  | pkg _ ih => cases hs with | pkg hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .pkg ha⟩
-  | arc => cases hs; exact ⟨_, .here⟩
-
-/-- A tree of a type that holds no view holds no closure either (a closure's
-    type holds views). -/
-theorem WFv.no_pkg {τ : Ty} {T : Val} (hw : WFv τ T) (hv : τ.holdsView = false) {fs : List Nat}
-    {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) T) :
-    False := by
-  induction hw with
-  | int => cases hs
-  | view => simp [Ty.holdsView] at hv
-  | node _ ih =>
-    cases hs with
-    | child he hs' => exact ih _ he (by simpa [Ty.holdsView] using hv) hs'
-  | pair _ _ ihv ihw =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases hs with | fst h => exact ihv hv.1 h | snd h => exact ihw hv.2 h
-  | inl _ ih =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases hs with | inl h => exact ih hv.1 h
-  | inr _ ih =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases hs with | inr h => exact ih hv.2 h
-  | pkg _ _ => simp [Ty.holdsView] at hv
-  | arc _ _ _ => cases hs
-
-/-- What an owned tree reaches through its shares lies in it, or in some
-    block's payload. -/
-theorem SubS.loc {m : Mem} (hs : SharesHeld m) {n T : Val} (h : SubS n T) :
-    TreeAt m T → Sub n T ∨ ∃ k u p, m.blk k = some ⟨u, p⟩ ∧ Sub n p := by
-  induction h with
-  | sub h => exact fun _ => Or.inl h
-  | arc hk _ ih =>
-    intro hT
-    obtain ⟨u, hb⟩ := hs _ hT _ _ hk
-    rcases ih (Or.inr ⟨_, u, hb⟩) with h | h
-    · exact Or.inr ⟨_, u, _, hb, h⟩
-    · exact Or.inr h
-
-theorem SubS.tree {m : Mem} (hs : SharesHeld m) {n T : Val} (hT : TreeAt m T) (h : SubS n T) :
-    ∃ T', TreeAt m T' ∧ Sub n T' := by
-  rcases h.loc hs hT with h | ⟨k, u, p, hb, h⟩
-  · exact ⟨T, hT, h⟩
-  · exact ⟨p, Or.inr ⟨k, u, hb⟩, h⟩
-
-/-- The invariant ties every share in memory to its block. -/
-theorem MInv.sharesHeld {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : SharesHeld m := by
-  intro T hT k p hs
-  rcases hT with ⟨x, hx⟩ | ⟨kb, u, hk⟩
-  · have hd := hi.dom x
-    rw [hx] at hd
-    obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hd
-    obtain ⟨sl, hsl, _, hso, hown, _⟩ := hi.slot x E hE
-    rw [hx] at hsl; cases hsl
-    obtain ⟨u, ha⟩ := ((hown hso.symm).2.1 T rfl).arcIn hs
-    exact ⟨u, hi.shares x E _ T hE hx rfl rfl u k p ha⟩
-  · obtain ⟨_, _, hw, hsh⟩ := hi.blocks kb ⟨u, T⟩ hk
-    obtain ⟨u', ha⟩ := hw.arcIn hs
-    exact ⟨u', hsh u' k p ha⟩
-
-/-- Every address of an owned tree (a slot's, or a block's payload) is live. -/
-theorem HeapOK.treeAt_alloc {m : Mem} (hh : HeapOK m) {T : Val} (hT : TreeAt m T) :
-    ∀ i ∈ T.ids, m.alloc i = true ∧ i < m.nid := by
-  rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
-  · exact hh.alloc x T hx
-  · intro i hi; have := hh.bpay k _ hk; simp only at this; rw [this] at hi; cases hi
-
-/-- An owned tree stays one where the slots that held trees hold them still
-    and the blocks are as they were. -/
-theorem TreeAt.keep {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T) (hb : m'.blk = m.blk)
-    {T : Val} (h : TreeAt m T) : TreeAt m' T := by
-  rcases h with ⟨x, hx⟩ | ⟨k, u, hk⟩
-  · exact Or.inl ⟨x, hown x T hx⟩
-  · exact Or.inr ⟨k, u, by rw [hb]; exact hk⟩
-
-/-- A node of an owned tree that owns an address is a slot's: a payload owns
-    none (A3.1's first cut). -/
-theorem TreeAt.owned_of_mem {m : Mem} (hh : HeapOK m) {T : Val} (hT : TreeAt m T) {i : Nat}
-    (hi : i ∈ T.ids) : ∃ x, OwnedAt m x T := by
-  rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
-  · exact ⟨x, hx⟩
-  · have := hh.bpay k _ hk; simp only at this; rw [this] at hi; cases hi
-
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by
-  obtain ⟨t, ht, hs1, ty1, d1, es1, rfl⟩ := h1
-  obtain ⟨u, hu, hs2, ty2, d2, es2, rfl⟩ := h2
-  exact treeAt_unique hh ht hu hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])
+  obtain ⟨x, t, hx, hs1, ty1, d1, es1, rfl⟩ := h1
+  obtain ⟨y, u, hy, hs2, ty2, d2, es2, rfl⟩ := h2
+  exact (owned_unique hh hx hy hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])).2
 
 theorem dataAt_unique {m : Mem} (hh : HeapOK m) {d : Nat} {n1 n2 : Val}
     (h1 : DataAt m d n1) (h2 : DataAt m d n2) : n1 = n2 := by
-  obtain ⟨t, ht, hs1, ty1, c1, es1, rfl⟩ := h1
-  obtain ⟨u, hu, hs2, ty2, c2, es2, rfl⟩ := h2
-  exact treeAt_unique hh ht hu hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])
+  obtain ⟨x, t, hx, hs1, ty1, c1, es1, rfl⟩ := h1
+  obtain ⟨y, u, hy, hs2, ty2, c2, es2, rfl⟩ := h2
+  exact (owned_unique hh hx hy hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])).2
 
 end A2

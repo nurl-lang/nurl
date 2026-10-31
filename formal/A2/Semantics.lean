@@ -37,24 +37,13 @@ inductive Sub : Val → Val → Prop
   | pkg {v e : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Sub v e → Sub v (.pkg fs te ms e cs)
 
-/-- A3.1: `v` is `t`, inside it, or inside the payload of a share `t` holds:
-    where a borrow of `t` can reach. (`Sub` is the tree `t` owns: a share
-    owns none of its payload; the block does.) -/
-inductive SubS : Val → Val → Prop
-  | sub {v t : Val} : Sub v t → SubS v t
-  | arc {v t p : Val} {k : Nat} : Sub (.arc k p) t → SubS v p → SubS v t
-
-/-- A tree someone owns: an owned slot's, or (A3.1) a block's payload. -/
-def TreeAt (m : Mem) (t : Val) : Prop :=
-  (∃ x, m.st x = some ⟨true, some t⟩) ∨ (∃ k u, m.blk k = some ⟨u, t⟩)
-
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
-  ∃ t, TreeAt m t ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
+  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
 
 /-- The node whose element buffer is `d`, found in an owned tree. -/
 def DataAt (m : Mem) (d : Nat) (n : Val) : Prop :=
-  ∃ t, TreeAt m t ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es
+  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es
 
 -- Releasing a tree: each address must be live when it is freed.
 mutual
