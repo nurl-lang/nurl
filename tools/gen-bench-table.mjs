@@ -1,6 +1,8 @@
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Generate webdocs' static benchmark table from the committed measurement run.
+// Generate webdocs' static benchmark table from the latest measurement run:
+// bench/results/latest.json, which bench.yml publishes to the bench-data
+// branch and webdocs' prebuild fetches (tools/bench_data.sh, Agora #290).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +29,7 @@ try {
   results = JSON.parse(readFileSync(RESULTS, 'utf8'));
 } catch (err) {
   console.error(`gen-bench-table: cannot read ${RESULTS}: ${err.message}`);
+  console.error('gen-bench-table: the numbers live on the bench-data branch: tools/bench_data.sh fetch bench/results/latest.json');
   process.exit(1);
 }
 

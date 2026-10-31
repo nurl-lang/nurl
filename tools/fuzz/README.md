@@ -4,8 +4,9 @@ Four fuzzers, all run weekly (and on demand) by
 [`.github/workflows/fuzz.yml`](../../.github/workflows/fuzz.yml), never as a
 per-PR gate. Any finding fails the run and uploads its reproducer inputs
 from `failures/` as an artifact. After every run the workflow renders
-[`FUZZRESULTS.md`](../../FUZZRESULTS.md) via `report.py` and commits it to
-main (the same publish-the-evidence flow `bench.yml` uses); the curated log
+[`FUZZRESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/FUZZRESULTS.md) via `report.py` and publishes it to
+the `bench-data` branch (the same publish-the-evidence flow `bench.yml`
+uses); the curated log
 of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
 
 1. **Differential miscompile fuzzer, integer** (`fuzz.sh` + `gen.py`) —

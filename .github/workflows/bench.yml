@@ -2,7 +2,8 @@ name: bench
 
 # Runs the whole benchmark suite — 20 benchmarks in NURL, C and Rust, 15 of
 # them also in Node and Python (bench/manifest.tsv) — on a fixed
-# `ubuntu-latest` runner and commits the result back to the repository:
+# `ubuntu-latest` runner and publishes the result to the bench-data branch
+# (tools/bench_data.sh):
 #
 #   bench/results/latest.json   machine-readable; webdocs' build step
 #                               (tools/gen-bench-table.mjs) renders the
@@ -25,22 +26,21 @@ name: bench
 on:
   # main is re-measured once a night, not after every merge (Agora #136,
   # #290). With the merge queue, a merge comes every few minutes. The run
-  # after each one held a runner for up to two hours, and its direct
-  # commit to main moved main outside the queue. That made the queue
-  # rebuild every group in flight and run its full CI again: the v0.83.0
-  # release group ran three times. One run a night keeps the published
-  # table a day fresh at most. Runner noise of a few per cent made a
-  # per-merge diff unreadable anyway, and a sustained shift shows the same.
-  # The commit still goes straight to main until #290 moves the numbers to a
-  # data branch, but at an hour the queue is quiet.
+  # after each one held a runner for up to two hours. One run a night
+  # keeps the published table a day fresh at most. Runner noise of a few
+  # per cent made a per-merge diff unreadable anyway, and a sustained shift
+  # shows the same. (Its numbers go to the bench-data branch, not to main:
+  # a direct commit to main moved main outside the queue and made it
+  # rebuild every group in flight; the v0.83.0 release group ran three
+  # times.)
   schedule:
     - cron: '17 2 * * *'
   push:
-    # Release tags: every vX.Y.Z also refreshes the committed numbers, so
+    # Release tags: every vX.Y.Z also refreshes the published numbers, so
     # a release always ships with a table measured at exactly that tag.
     tags: ['v*']
 
-  # Manual runs also commit the refreshed numbers — for re-measuring
+  # Manual runs of main also publish the refreshed numbers — for re-measuring
   # between releases (runner microarchitecture drift, toolchain bumps,
   # noise-floor changes) without waiting for the next tag.
   #
@@ -62,7 +62,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for committing the refreshed results to main
+  contents: write          # to publish the results to the bench-data branch
 
 jobs:
   bench:
@@ -78,8 +78,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so the results commit can be pushed onto the
-          # upstream tip without a rejected non-fast-forward.
+          # Full history and tags: the report header's NURL version is
+          # `git describe` (tools/version.sh).
           fetch-depth: 0
 
       - name: Install build deps (clang + FFI libs)
@@ -200,110 +200,19 @@ jobs:
             ${{ env.REPORT_MD }}
           retention-days: 90
 
-      - name: Commit the refreshed results to main
-        # Every triggering event commits: merges to main keep the numbers
-        # current, so a release tag already carries them.
-        #
-        # Committed straight to main, not routed through a PR. The PR
-        # detour is what broke the published table: on a `v*` tag this
-        # workflow and the site deploy start together, the deploy checks
-        # out the TAG, and a tag can never contain results measured after
-        # it was cut. The numbers landed on main minutes-to-hours later
-        # and nothing redeployed, so nurl-lang.org kept publishing the
-        # previous release's table.
-        #
-        # main carries a ruleset requiring pull requests, so this push
-        # needs an actor allowed to bypass it: set BENCH_PUSH_TOKEN to a
-        # PAT whose account is in the ruleset's bypass list. Without it
-        # the push is declined with GH013 and this step fails loudly —
-        # which is the honest outcome, because a silent fallback is
-        # exactly how the table went stale unnoticed.
-        env:
-          GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
+      - name: Publish the report to the bench-data branch
+        # Measured numbers live on the bench-data branch, not on main
+        # (tools/bench_data.sh, Agora #290): every push to main outside the
+        # merge queue made the queue rebuild and re-run each group in flight.
+        # Only a run of main's code publishes; a run of a branch leaves its
+        # report in the run summary and the artifact.
+        # On a `v*` tag the site deploy used to check out the TAG, which can
+        # never contain numbers measured after it was cut, so nurl-lang.org
+        # kept the previous release's table. The deploy now reads the table
+        # from bench-data and runs again when this workflow completes
+        # (webdocs-deploy.yml, workflow_run).
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         run: |
-          # a xN report may be new: add it before asking whether it changed
-          git add -N -- "$REPORT_JSON" "$REPORT_MD"
-          if git diff --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
-            echo "results unchanged — nothing to commit."
-            exit 0
-          fi
           scale_tag=""
           [[ "$BENCH_SCALE" == 1 ]] || scale_tag=" x$BENCH_SCALE"
-
-          today="$(date -u +%Y-%m-%d)"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # actions/checkout stores an Authorization header for GITHUB_TOKEN
-          # in the local git config, and that header WINS over credentials
-          # embedded in the remote URL. Leaving it in place is why the first
-          # run of this step still pushed as github-actions[bot] — and was
-          # refused with GH013 — despite BENCH_PUSH_TOKEN being set. Drop it
-          # so the URL's token is the one that authenticates.
-          git config --unset-all http.https://github.com/.extraheader || true
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # A tag build has a detached HEAD; commit onto main explicitly so
-          # the results land where the site reads them from.
-          # Carry the measured files across the switch to main outside the
-          # worktree: a xN report is untracked, which `git stash` would
-          # leave behind.
-          git fetch origin main
-          keep_pre="$(mktemp -d)"
-          cp "$REPORT_JSON" "$keep_pre/report.json"
-          cp "$REPORT_MD" "$keep_pre/report.md"
-          git reset -q -- "$REPORT_JSON" "$REPORT_MD"
-          git checkout -f -B main origin/main
-          mkdir -p "$(dirname "$REPORT_JSON")"
-          cp "$keep_pre/report.json" "$REPORT_JSON"
-          cp "$keep_pre/report.md" "$REPORT_MD"
-
-          # [skip ci] because this commit is two data files and nothing
-          # else. ci.yml and windows-tests.yml have no paths filter, so
-          # every results commit would otherwise fire the three required
-          # checks — one of them a FreeBSD VM — plus the Windows suite,
-          # against code that did not change. bench.yml itself already
-          # excludes the results files from its own paths filter, so there
-          # was never a loop; there was a second full CI round per merge,
-          # which is pure waste. The numbers were produced by a run that
-          # passed the correctness gate and chaincheck before committing.
-          git add -- "$REPORT_JSON" "$REPORT_MD"
-          git commit -m "bench: refresh measured numbers$scale_tag ($today) [skip ci]"
-
-          # Keep the measured files OUTSIDE the worktree for the replay
-          # below. Stashing them cannot work there: by that point they are
-          # committed, so `git stash push -- <paths>` finds nothing to save,
-          # leaves no stash@{0}, and the replay silently drops the run's
-          # results instead of publishing them.
-          keep="$(mktemp -d)"
-          cp "$REPORT_JSON" "$keep/report.json"
-          cp "$REPORT_MD" "$keep/report.md"
-
-          # The suite takes tens of minutes; another merge can land in that
-          # window. Replay the two files onto the new tip rather than failing
-          # — results are a pure overwrite, so there is nothing to reconcile.
-          #
-          # Replay means: keep the files, move to the new tip, commit afresh.
-          # `commit --amend` here would rewrite the tip commit that arrived
-          # while we ran, which the remote then refuses as a non-fast-forward
-          # — the retry loop's own first version did exactly that and turned
-          # one refusal into three.
-          for attempt in 1 2 3; do
-            git push origin main && exit 0
-            echo "push refused (attempt $attempt) — replaying onto the new tip"
-            git fetch origin main
-            git reset --hard origin/main
-            cp "$keep/report.json" "$REPORT_JSON"
-            cp "$keep/report.md" "$REPORT_MD"
-            git add -- "$REPORT_JSON" "$REPORT_MD"
-            if git diff --cached --quiet -- "$REPORT_JSON" "$REPORT_MD"; then
-              echo "the new tip already carries these numbers — nothing to do."
-              exit 0
-            fi
-            git commit -m "bench: refresh measured numbers$scale_tag ($today) [skip ci]"
-          done
-          echo "::error::could not push refreshed results after 3 attempts."
-          echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"
-          echo "::error::'Protect main' ruleset bypass list (currently: Repository admin)."
-          exit 1
+          tools/bench_data.sh publish "bench: refresh measured numbers$scale_tag ($(date -u +%Y-%m-%d))" "$REPORT_JSON" "$REPORT_MD"

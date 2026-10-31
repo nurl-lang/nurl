@@ -7,8 +7,8 @@ name: tls-bench
 # and the rest, unloaded handshake latency, the record layer on small
 # keep-alive requests, bulk throughput per cipher suite (and NURL with
 # kTLS), the client side (packages/http-client vs reqwest) and the
-# primitives underneath — on an `ubuntu-latest` runner, and commits the
-# run back to the repository as its CPU family's latest:
+# primitives underneath — on an `ubuntu-latest` runner, and publishes the
+# run to the bench-data branch (tools/bench_data.sh) as its CPU family's latest:
 #
 #   bench/tls_bench/runs/<family>.tsv       the raw results of the family's
 #                                           latest full run
@@ -50,7 +50,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for committing the refreshed report to main
+  contents: write          # to publish the report to the bench-data branch
 
 jobs:
   tls-bench:
@@ -62,8 +62,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so the results commit can be pushed onto the
-          # upstream tip without a rejected non-fast-forward.
+          # Full history and tags: the report header's NURL version is
+          # `git describe` (tools/version.sh).
           fetch-depth: 0
 
       - name: Install build deps (clang + FFI libs + openssl + cmake)
@@ -151,60 +151,25 @@ jobs:
             ${{ runner.temp }}/tls-bench/results.tsv
           retention-days: 90
 
-      - name: Commit the run to main as its CPU family's latest
-        # Same mechanism as pq-bench.yml's results commit: push straight
-        # to main, bypassing the PR ruleset with BENCH_PUSH_TOKEN when
-        # present. A smoke run is a pipeline check, not a measurement, and
-        # is never committed.
-        if: github.event.inputs.mode == 'full'
-        env:
-          GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
+      - name: Publish the run to the bench-data branch as its CPU family's latest
+        # Measured numbers live on the bench-data branch, not on main
+        # (tools/bench_data.sh, Agora #290): every push to main outside the
+        # merge queue made the queue rebuild and re-run each group in flight.
+        # Only a run of main's code publishes; a run of a branch leaves its
+        # report in the run summary and the artifact.
+        # A smoke run is a pipeline check, not a measurement, and is never
+        # published.
+        if: github.event.inputs.mode == 'full' && github.ref == 'refs/heads/main'
         run: |
           d=bench/tls_bench
           raw="$RUNNER_TEMP/tls-bench/results.tsv"
           fam="$(python3 "$d/gen_tls_results.py" --family < "$raw")"
-          today="$(date -u +%Y-%m-%d)"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # actions/checkout stores an Authorization header for GITHUB_TOKEN
-          # in the local git config, and that header WINS over credentials
-          # embedded in the remote URL. Drop it so the URL's token (the
-          # bypass PAT, when set) is the one that authenticates.
-          git config --unset-all http.https://github.com/.extraheader || true
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # Record this run on the tip of main: its family's raw results
-          # replace the family's previous ones, and every report is
-          # re-rendered from runs/ — the other families' results are the
-          # tip's, untouched. Replayable, because everything committed is
-          # derived from runs/.
-          record() {
-            git fetch origin main
-            git checkout -f -B main origin/main
-            mkdir -p "$d/runs"
-            cp "$raw" "$d/runs/$fam.tsv"
-            python3 "$d/gen_tls_results.py" --render "$d"
-            git add -A "$d/runs" "$d"/TLS_RESULTS*.md
-            if git diff --cached --quiet; then
-              echo "main already carries this run — nothing to commit."
-              return 1
-            fi
-            # [skip ci] because this commit is data and nothing else. The
-            # reports were produced by a completed benchmark run.
-            git commit -m "bench: refresh TLS_RESULTS for $fam ($today) [skip ci]"
-          }
-
-          record || exit 0
-          # Another merge can land while the benchmark runs; record the
-          # run again onto the new tip rather than failing.
-          for attempt in 1 2 3; do
-            git push origin main && exit 0
-            echo "push refused (attempt $attempt) — recording onto the new tip"
-            record || exit 0
-          done
-          echo "::error::could not push the refreshed results after 3 attempts."
-          echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"
-          echo "::error::'Protect main' ruleset bypass list."
-          exit 1
+          mkdir -p "$d/runs"
+          cp "$raw" "$d/runs/$fam.tsv"
+          # This run replaces its family's recorded run; the reports, the
+          # index setting every family side by side among them, are
+          # rendered on bench-data from every family recorded there — on
+          # each publish attempt, so a replay onto a newer tip renders
+          # what that tip holds.
+          BENCH_DATA_RENDER="python3 '$GITHUB_WORKSPACE/$d/gen_tls_results.py' --render $d" \
+            tools/bench_data.sh publish "bench: refresh TLS_RESULTS for $fam ($(date -u +%Y-%m-%d))" "$d/runs/$fam.tsv"

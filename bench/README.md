@@ -32,8 +32,8 @@ It writes two files:
 
 | File | For | Contents |
 |---|---|---|
-| [`results/latest.json`](results/latest.json) | machines | Run times, compile times, checksums, host and toolchain versions. The landing page's benchmark table is generated from this file at publish time by `tools/gen-bench-table.mjs`. |
-| [`RESULTS.md`](RESULTS.md) | humans | The same run rendered: run times, compile times, the correctness gate, and the process-start-up floor. |
+| [`results/latest.json`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/results/latest.json) | machines | Run times, compile times, checksums, host and toolchain versions. The landing page's benchmark table is generated from this file at publish time by `tools/gen-bench-table.mjs`. |
+| [`RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/RESULTS.md) | humans | The same run rendered: run times, compile times, the correctness gate, and the process-start-up floor. |
 
 Both are refreshed by [`.github/workflows/bench.yml`](../.github/workflows/bench.yml)
 on a fixed `ubuntu-latest` runner — weekly, and on demand from the Actions
@@ -230,18 +230,18 @@ exactly that.
   stop describing the task they were measured against.
 * `http_server.{nu,js}` + `rust_http_server/` are the HTTP-server peer
   benchmark, driven by [`run_http.sh`](run_http.sh) with `oha` as the
-  load generator; results in [`HTTP_RESULTS.md`](HTTP_RESULTS.md). It
+  load generator; results in [`HTTP_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP_RESULTS.md). It
   measures requests per second, not wall clock, so it has its own runner.
   `run_http.sh --suite db` runs the same two servers' database endpoints
   — TechEmpower's `/json` `/db` `/queries` `/fortunes` `/updates` and
   HttpArena's `/async-db`, over [`http_db_schema.sql`](http_db_schema.sql)
   — NURL (packages/psql) against Rust (tokio-postgres), with a throwaway
   PostgreSQL pinned to cores of its own unless `DATABASE_URL` names one;
-  results in [`HTTP_DB_RESULTS.md`](HTTP_DB_RESULTS.md).
+  results in [`HTTP_DB_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP_DB_RESULTS.md).
 * `pq_compare.nu` + `rust_pq/` are the post-quantum crypto peer
   benchmark (ML-KEM, ML-DSA, SLH-DSA, SHAKE128 — pure-NURL stdlib vs
   pure-Rust RustCrypto), driven by [`run_pq.sh`](run_pq.sh); results in
-  [`PQ_RESULTS.md`](PQ_RESULTS.md). `pq.nu` is the NURL-only variant of
+  [`PQ_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/PQ_RESULTS.md). `pq.nu` is the NURL-only variant of
   the same measurements with the scheme authors' reference-C and AVX2
   numbers recorded in its header.
 * `tls_bench/` is the TLS peer benchmark — handshakes (full, resumed,
@@ -249,7 +249,7 @@ exactly that.
   rest), the record layer, bulk throughput and the client side, NURL
   against rustls / aws-lc-rs, hyper and reqwest — driven by
   [`tls_bench/run_tls.sh`](tls_bench/run_tls.sh); results in
-  [`tls_bench/TLS_RESULTS.md`](tls_bench/TLS_RESULTS.md) — an index of
+  [`tls_bench/TLS_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/tls_bench/TLS_RESULTS.md) — an index of
   one report per CPU family of the runner pool, each led by a worst-first
   focus list. See [`tls_bench/README.md`](tls_bench/README.md).
 * `stdlib_hotpath.nu` is a NURL-only profiling probe with no peers.
@@ -300,8 +300,8 @@ external reference `wasmtime` (Cranelift JIT) and
 pure NURL. Ten timed cells per row, all gated on printing the
 same line as the native NURL binary — the interpreter is *inside* the
 gate, because a runtime that gets the wrong answer quickly is not a fast
-runtime. Results: [`WASMRESULTS.md`](WASMRESULTS.md) and
-[`results/wasm-latest.json`](results/wasm-latest.json).
+runtime. Results: [`WASMRESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/WASMRESULTS.md) and
+[`results/wasm-latest.json`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/results/wasm-latest.json).
 
 The tenth cell is the NURL module relinked with `--no-gc-sections` —
 `wasmbuilder`'s pre-0.1.4 default, kept measured so the price of its
@@ -333,12 +333,13 @@ cannot collide. The report's environment table still names both runtimes,
 so check it if a run looks odd.
 
 [`.github/workflows/wasm-bench.yml`](../.github/workflows/wasm-bench.yml)
-runs all of the above on a fixed `ubuntu-latest` runner and commits the
-refreshed report, the same way `bench.yml` does for `RESULTS.md`. It is
+runs all of the above on a fixed `ubuntu-latest` runner and publishes the
+refreshed report to the `bench-data` branch, the same way `bench.yml` does
+for `RESULTS.md`. It is
 manual-only — trigger it from the Actions tab, as with `http-bench` and
 `pq-bench` — because the interpreter column makes a full run hours long.
 Its `quick` input smoke-tests the harness at one repetition per cell and
-skips the commit; its `scale` input runs the suite at xN and commits
+publishes nothing; its `scale` input runs the suite at xN and publishes
 `WASMRESULTS-xN.md` beside the x1 report.
 
 ## Beyond wall clock

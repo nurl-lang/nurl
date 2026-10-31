@@ -51,6 +51,11 @@ void nurl__rctx_swap(void *ctx);
 void nurl__rctx_swap(void *ctx) { (void)ctx; }
 void nurl__rctx_release(void *ctx);
 void nurl__rctx_release(void *ctx) { (void)ctx; }
+void nurl_panic(const char *msg);
+void nurl_panic(const char *msg) {
+    fprintf(stderr, "pthread_layout: nurl_panic reached (%s)\n", msg);
+    abort();
+}
 
 int main(void) {
     int bad = 0;
