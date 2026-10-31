@@ -1,4 +1,4 @@
-### Documentation
+### Changed
 
 - **Why kTLS stays opt-in, measured on a VAES CPU** (Agora #94).
   `docs/NETWORKING.md` said kTLS pays for bulk traffic and that a CPU
