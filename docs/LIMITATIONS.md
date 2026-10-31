@@ -10,22 +10,37 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**One soundness hole is known open: agora #242** ([`MEMORY.md` §6.2](MEMORY.md)).
-A producer — a `?` / `??`, a value block — bound by `:` and then handed
-on by name is not always judged as the same producer handed on directly.
-Nine such shapes still fault, each the elaborated twin of a closed probe
-([`tools/fuzz/holes/open/twins.txt`](../tools/fuzz/holes/open/twins.txt)):
-the binding does not inherit what its producer lends — a call in an arm
-lending a local, a field or a view of an inner local, a value a `;` defer
-releases. Until #222 closes them, hand such a value back or outward
-directly (`^ ? c a b`), not through a `:` binding of it.
+**Three soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+Each is a heap-use-after-free in safe code, with a fix in progress:
+
+- **agora #242: a join or a value block bound by `:` and then handed on
+  by name, in nine remaining shapes.** The common ones are closed: a `:`
+  binding of a join takes the owner its arm selects, an `inout`
+  parameter takes a binding owned per path, a block ending in a fresh
+  call owns its result. Nine shapes still fault, each the elaborated twin
+  of a closed probe
+  ([`tools/fuzz/holes/open/twins.txt`](../tools/fuzz/holes/open/twins.txt)):
+  the binding does not inherit what its producer lends — a call in an arm
+  lending a local, a field or a view of an inner local, a value a `;`
+  defer releases. Until #222 closes them, hand such a value on directly
+  (`^ ? c a b`) instead of through a binding.
+- **agora #247: a `thread_spawn` closure that consumes one capture
+  releases another capture when the thread ends.** A closure that moves
+  `owned` into a `sink` and also uses an `Atomic` (or an `Arc`, a
+  channel, a listener) that the parent keeps frees that handle under the
+  parent. Until the fix ships, move a clone (`string_clone`) into the
+  closure instead of the capture itself.
+- **agora #252: a `% Drop` value that holds a view, moved on only one
+  branch of a `?`.** On the other branch it is still owned, and its
+  destructor reads the view after the view's source was reallocated or
+  moved. (#224's rule covers an unconditional move.) Until the fix
+  ships, move such a value on every path, or on none.
 
 Every other safe program found accepted and faulting is closed, and held
-by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). The last one
-before #242, agora #224 (a `% Drop` destructor reading a view whose source
-ended first), is closed in 0.83.0: scope-end drops run newest first, and
-such a drop is a use of what the view points into ([`MEMORY.md`
-§2.14](MEMORY.md)). One
+by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
+`% Drop` destructor reading a view whose source ended first) is closed
+in 0.83.0: scope-end drops run newest first, and such a drop is a use of
+what the view points into ([`MEMORY.md` §2.14](MEMORY.md)). One
 of them is closed at run time rather than at compile time: a handle
 whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the
