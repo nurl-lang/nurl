@@ -2,11 +2,12 @@
 
 ## Status
 
-**A2-drop.1 is mechanized** (Agora #221): destructors of a type that holds
-no views, on the normal path and the panic path. `formal/check.sh` passes,
-and `memory_safe`, `no_leak_end` and `no_leak_panic` cover `letd` /
-`scopeD` on the standard axioms. A2-drop.2 (types that hold views, the
-`DtorSafe` rule of Agora #224) is the next step.
+**A2-drop.1 and A2-drop.2 are mechanized** (Agora #221, #241): destructors
+of every type a destructor can have, views included, on the normal path and
+the panic path. `formal/check.sh` passes, and `memory_safe`, `no_leak_end`
+and `no_leak_panic` cover `letd` / `scopeD` on the standard axioms, with
+the `DtorSafe` rule of Agora #224. A2-drop.3 (the destructor on the type,
+Agora #253) is the next step.
 
 Before this, a user destructor was outside the calculus. A2's drops ran no
 program code: `DropSlot` frees a tree and cannot fail. This note fixes the
@@ -20,11 +21,11 @@ f t` checks that `f` takes one `in` parameter of `x`'s type `t`, returns an
 integer, and lends, holds and stores nothing. What follows reads `Ty.dtor f
 t` as that binding.
 
-So in A2-drop.1 a destructor runs only at the end of the binding `letd`
-made. A value moved out of it (a `sink` argument, another binding, a field)
-is released by `DropSlot` where it ends, while nurlc runs the destructor
-there as well. A2-drop.2 has to close that, with the destructor on the
-type, or with a destructor binding at every place the value can land.
+So a destructor runs only at the end of the binding `letd` made. A value
+moved out of it (a `sink` argument, another binding, a field) is released
+by `DropSlot` where it ends, while nurlc runs the destructor there as
+well. A2-drop.3 (Agora #253) closes that, with the destructor on the
+type.
 
 ## What nurlc does
 
@@ -159,6 +160,137 @@ separate concern. Two steps keep them apart:
    struct with a view field), which nurlc's rule refuses wherever the
    view would end.
 
+## A2-drop.2's mechanization (Agora #241)
+
+What the design above leaves open, settled against A2's code and against
+github#1380, nurlc's side of #224.
+
+**Which bindings run a destructor: two flags.** `Entry.dtor` says the
+binding may own a value whose destructor will run (it is *armed*).
+`Entry.dbind` says the binding was made by `letd`, and never changes. Both
+are needed. A move disarms a binding (`dtor := false`), while `dbind`
+remembers that an assignment would re-arm it. `letd` sets both when its
+type holds views (`Entry.arm`): a destructor of a type that holds no views
+reads only what its binding owns, so such a binding needs no care. Every
+other rule makes entries with both false.
+
+**A move ends the protection.** A binding moved out owns nothing, so it
+runs no destructor (`scopeDMoved`). The moved-from entry becomes
+`{ E with live := false, dtor := false }`, and from then on its sources
+may change. That is the unconditional move nurlc accepts.
+
+**The join keeps it** (the hole github#1380 had, dev #820, fixed in nurlc
+by #252). `EntryWeaker` may raise `dtor` from false to true on a `dbind`
+binding only, never lower it, and keeps a `dbind` binding's `held` as it
+is. A binding moved on one path only is, after the join, dead but armed,
+with the other path's `held`. Its slot may still own a value, so its
+sources stay protected.
+
+**`DtorSafe Γ e hv x`**: no armed owner has a dependency in memory
+(`hitsMem`: views, not closure names) that effect `e` on `x` ends, live or
+dead. It is a premise of every rule whose context change kills through
+dependencies:
+- the moves: `moveOwn`, `PushArg.move`, `takel` / `taker`;
+- `pop`, `assign`, `push`, `free`, `unpair`;
+- every call, for its moved and changed arguments and `killNames`
+  (`CallDtorSafe`);
+- every scope's end (`EndOK` = `NoPin` ∧ `DtorSafe .replace`, in place of
+  `NoPin` in `letv`, `letcall`, `letrec`, `callc`, `scope`, `letd`,
+  `scopeD`, `unpair`, `free`).
+
+Names are left out because a destructor reads views, and a destructor
+binding's type holds no closure (`letd` asks `hasFn = false`). Renaming
+needs that: a callee's binding may additionally hold the arguments'
+closures' names (`A`), though it holds none of them.
+
+**A destructor binding gains no view** (the panic path, nurlc #254). An
+unwind ends the scopes inside a frame early. So a binding that may run a
+destructor must view nothing those scopes bound, at any point, not only
+at their normal end. In A2-drop.2 a `dbind` binding of a view-holding type
+gains no view at all:
+- `assign` to it is refused;
+- `push` into it needs elements that hold no views;
+- it is no `inout` argument.
+
+Its `held` is then the one `letd` gave it, made from what was already
+bound. nurlc's rule is finer: a holder may gain views of older bindings
+only. Covering that needs an age order the calculus does not have, so it
+stays a documented gap.
+
+The third point is a rule, not a convenience. A callee may point an
+`inout` parameter at a view of its own local and back again before it
+returns. A panic in between unwinds the callee's local first, and then the
+caller's destructor reads it. nurlc checks the parameter only at the
+callee's end, so this shape is open there (public #1030).
+
+**A scope's end asks every `letd` binding** (`DbindSafe`, part of
+`EndOK`): no `dbind` owner, armed or not, views the binding that ends.
+A moved-out `letd` binding still lists its old views. If one of their
+scopes ended, a later join could re-arm it with a view of whatever binding
+takes that name next. The check costs nothing: a `letd` binding's views
+are of older bindings, whose scopes enclose its own.
+
+**The invariants.**
+- `CtxWF.dtor`: a `dbind` owner's dependencies in memory are on bound
+  roots, live or dead; `CtxWF.arm`: only a `dbind` binding is armed. Both
+  are part of `CtxWF`, so a weaker context (`Weaker`) keeps them too.
+- `Inv.dtorOut` / `dtorIn` (as `pinOut` / `PinOK` for borrowed parameters):
+  a `dbind` owner depends in memory on no binding of a scope opened after
+  it. `MInv.unwind` needs it. It holds when `letd` binds, and stays because
+  a `dbind` binding's `held` never grows and the join keeps it.
+- The frame's: for every `scopeD x` frame, whenever `x`'s slot owns a
+  value, `x`'s entry is armed and that value's views are valid (`ViewsOK`
+  over `held`), live entry or not. `DtorSafe` keeps it across every kill.
+  A move empties the slot (`scopeDMoved` then runs nothing). So at
+  `scopeDEnd` the destructor reads valid views however the binding died,
+  and an armed dead entry whose slot owns is revived for the call
+  (`MInv.revive`, now with views).
+
+**Calls.** `liftE` keeps both flags. A borrowed parameter's entry is
+neither (`pe_dtor`). A function's typing ends with no flag set (`FnOK`):
+its own destructor bindings have ended, and a parameter or the result runs
+none. So inside a call, every armed binding is the caller's (`canon_dtq`),
+and the result's move back is safe.
+
+**What the proof needed beyond the design.**
+- `CtxWF.view`: only a binding of a type that holds views is `letd`'s. A
+  closure's capture is then never one (`letd` asks `hasFn = false`).
+- `MInv.armed` (`ArmOK`): whenever a `letd` binding's slot owns a value,
+  the binding is armed and the value's views are valid (`ViewsOK` over
+  `held`), live entry or not. `DtorSafe` keeps it across every kill, and
+  a move empties the slot.
+- `DStay`: a binding `letd` made stays one through every rule. It is a
+  premise of `panic` and `catchR`, as `DKeep` is, so the unwind finds every
+  destructor binding still marked.
+- `scopeD` asks the same of its body's output: the binding is `letd`'s
+  there when its type holds views. That is how re-typing a `scopeD` frame
+  keeps the flag.
+- `Entry.revive`: at `scopeDEnd` and in the unwind, an armed dead binding
+  whose slot owns is revived for the destructor's call. It keeps its views
+  in memory, minus any of itself, which `SelfFree` rules out
+  (`ViewsOK.dropSelf`).
+- `HeldUp`: `letd` may record its binding as viewing more memory than the
+  value does, of bound roots. Where a call places a callee's body, the
+  callee's binding is read as viewing anything the arguments held (`A`),
+  while the renamed value views exactly its own. Recording the larger set
+  keeps the binding's views exact under `EntryWeaker.dheld`. nurlc
+  records exactly the value's views.
+
+**Mechanization status.** Done (Agora #241), with no `sorry` and the
+standard axioms only:
+- the flags and `Entry.arm`;
+- `EntryWeaker` (`dtor` / `dbind` / `raise` / `dheld`);
+- `hitsMem`, `DtorSafe`, `DbindSafe`, `EndOK`, `CallDtorSafe` on every rule above;
+- `CtxWF` (`live` / `dtor` / `arm` / `view`);
+- `Inv.dtorOut` / `DtorPinOK`, `MInv.armed`, `DKeep` / `DStay`;
+- `MInv.revive` and `MInv.unwind` with views, and `dtorCall_typed` with views;
+- the call, closure and A3 modules.
+
+**What stays for A2-drop.3.** The destructor on the type, run wherever
+the value is dropped: a field (drop glue), a `Vec` element, a `sink`
+parameter in its callee, the old value of an assignment. Until then
+`CLAIM.md` says where the calculus runs a destructor.
+
 ## The panic step's proof (A2-drop.1, done)
 
 `scopeDP` turns a panic into a normal step, so preservation must type what
@@ -202,7 +334,8 @@ on the body's typing restricts which programs the calculus covers.
 
 ## Done when
 
-For A2-drop.1, the first two hold (Agora #221). The third is A2-drop.2's.
+All three hold: the first two since A2-drop.1 (Agora #221), the third
+since A2-drop.2 (Agora #241).
 
 - `check.sh` passes, with `memory_safe`, `no_leak_end` and
   `no_leak_panic` over `Ty.dtor` / `scopeD`, standard axioms only;

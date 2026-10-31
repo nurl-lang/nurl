@@ -39,7 +39,7 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
   by_cases hns : v ∈ s'.spine
   · exact hns
   · obtain ⟨E', hE'⟩ := Option.isSome_iff_exists.mp hv
-    obtain ⟨hns0, E, hE⟩ := hk.2 v E' hE' hns
+    obtain ⟨hns0, E, hE⟩ := hk.2.1 v E' hE' hns
     exact absurd (hc v (by rw [hE]; rfl)) hns0
 
 /-- Every configuration a well-typed one reaches is well-typed. -/
@@ -105,12 +105,14 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
     fun _ _ h => (by cases h)⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
-  wf _ _ h := by cases h
+  wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
+    fun _ _ h => (by cases h)⟩
   rootbLive _ _ h := by cases h
   rootbLt _ _ h := by cases h
   names _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
+  armed _ _ _ h := by cases h
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h
@@ -120,6 +122,8 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   cover _ h := by cases h
   pinOut _ _ h := by cases h
   pinIn := PinOK.of_spine_nil (src_spine hs)
+  dtorOut _ _ h := by cases h
+  dtorIn := DtorPinOK.of_spine_nil (src_spine hs)
 
 theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by cases h
 

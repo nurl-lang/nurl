@@ -36,6 +36,15 @@ theorem ViewsOK.keep {m m' : Mem} {τ : Ty} {T : Val} {H : List Dep} (hk : ∀ h
   obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v hin
   exact ⟨d, o, l, rfl, dep, hd, hk dep hd d o l s ha⟩
 
+/-- An armed binding's value stays valid where what it views in memory
+    stays. -/
+theorem ArmOK.keep {m m' : Mem} {E : Entry} {sl : Slot}
+    (hk : E.dtor = true → E.dbind = true → E.mode.ownSlot = true → ∀ dep ∈ memDeps E.held, VKeep m m' dep)
+    (h : ArmOK m E sl) : ArmOK m' E sl := by
+  intro hd hos T hT
+  obtain ⟨h1, h2⟩ := h hd hos T hT
+  exact ⟨h1, (h2.memDeps.keep (hk h1 hd hos)).mono (fun d hd => (List.mem_filter.mp hd).1)⟩
+
 theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : HKeep m m' dep := by
   intro c t H hH ⟨n0, d, es, hr, hk, hw, hv, hn⟩
   exact ⟨n0, d, es, h n0 hr, hk, hw, hv.keep hH, hn⟩

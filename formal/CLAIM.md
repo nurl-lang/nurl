@@ -76,8 +76,8 @@ library, the compiler and the code generator are part of the trusted base.
 ## Destructors, and a panic while a panic unwinds
 
 A destructor written by the program (`% Drop T { @ drop … }`,
-docs/MEMORY.md §7.6) is inside the calculus for a type that holds no views
-(A2-drop.1, `A2/DROP_DESIGN.md`).
+docs/MEMORY.md §7.6) is inside the calculus for every type, views included
+(A2-drop.1 and A2-drop.2, `A2/DROP_DESIGN.md`).
 - A binding with a destructor (`StmtT.letd`) is scoped by `scopeD`.
 - At its end, while it still owns its value, the destructor runs as a call
   of the program's function, on the binding lent (`Step.scopeDEnd`). Then
@@ -86,20 +86,27 @@ docs/MEMORY.md §7.6) is inside the calculus for a type that holds no views
   frees the binding, and raises again (`Step.scopeDP`). The frame is gone,
   so a panic inside the destructor does not run it again, and `scope x`
   still frees the fields.
+- A destructor of a type that holds views reads them, so what they point
+  into outlives the binding while it may own its value (#224's rule,
+  `DtorSafe`). No rule ends such a view on any path, the panic path
+  included. A binding `letd` made gains no view: it is assigned nothing,
+  pushed no view, and is no `inout` argument.
 - `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
 - The calculus puts the destructor on the binding `letd` makes, not on
   the type. A value moved out of that binding, into a `sink` parameter,
-  another binding or a field, is released where it ends by `DropSlot`,
-  which runs no code. nurlc runs the destructor there too, and that run
-  is outside the calculus until the destructor moves to the type
-  (A2-drop.2, Agora #241).
+  another binding or a field, is released by `DropSlot` where it ends,
+  which runs no code. nurlc runs the destructor there too. Putting the
+  destructor on the type is A2-drop.3 (Agora #253).
 
-A destructor of a type that holds views is A2-drop.2. It needs a typing
-rule nurlc lacks today (`DtorSafe`, Agora #224): a drop reads the value,
-so what the value views must outlive every path where it is not
-definitely moved.
+The rules are stricter than nurlc's in two places, both for a binding of
+a type whose destructor may read a view:
+- nurlc lets it gain views of older bindings;
+- nurlc lets it be an `inout` argument, and checks the callee only at its
+  end. That is open there: a callee that points it at its own local and
+  back, and panics in between, gives the destructor a freed view
+  (public #1030).
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:
