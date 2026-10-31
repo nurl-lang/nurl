@@ -255,9 +255,25 @@ $ `stdlib/std/bytes.nu`
 
 // ── Parser state ─────────────────────────────────────────────────────
 //
-// Heap-allocated so that recursive descent calls can mutate `pos`
-// without threading state through return tuples. It lives in
-// json_parse_n's frame; the parser reaches it through its place.
+// The parser lives in json_parse_n's frame; every step reaches it through
+// its place (`*JsonParser`) and answers whether it succeeded, a `b`:
+//
+//   - A value a step parses goes onto `stack`: the values read and not
+//     yet in their container. An array or object notes where its members
+//     start on the stack, and at its closing bracket moves them into a
+//     Vec of exactly their count whose buffer shares its handle's
+//     allocation (vec_split_off_packed): one allocation per container
+//     and no spare room. Growing each container from a guess cost two
+//     allocations and its slack, and a reallocation past eight members.
+//     The stack itself is one allocation for the whole parse, room for
+//     sixteen values in its handle's own block (vec_with_cap_packed),
+//     released with the parser.
+//   - A failure records its kind and the byte it points at (`ekind`,
+//     `epos`, __jp_fail) and answers F, which every caller hands straight
+//     up. The line and column are worked out once, at the root. A
+//     `!Json JsonError` per step carried a value and an error side by
+//     side, written whole at every return and copied at every level:
+//     most of what a small document cost.
 //
 // `depth` is bumped/decremented around array/object recursion to enforce
 // a hard cap (`JSON_MAX_DEPTH`) and prevent stack overflow from hostile
@@ -270,6 +286,9 @@ $ `stdlib/std/bytes.nu`
     i len
     i pos
     i depth
+    ( Vec Json ) stack
+    ParseErr ekind
+    i epos
 }
 
 @ __jp_eof * JsonParser p → b {
@@ -299,31 +318,24 @@ $ `stdlib/std/bytes.nu`
     ^ & 255 # i . bp . p pos
 }
 
-@ __jp_bump * JsonParser p → i {
-    : i c ( __jp_peek p )
-    = . p pos + . p pos 1
-    ^ c
-}
-
 @ __jp_skip_ws * JsonParser p → v {
     : s raw . p src
     : *u bp # *u raw
     : i n . p len
     : ~ i k . p pos
-    : ~ b more T
-    ~ & more < k n {
+    ~ < k n {
         : i c & 255 # i . bp k
-        ? | | | == c 32 == c 9 == c 10 == c 13
-        { = k + k 1 }
-        { = more F }
+        // Most calls start on a token (compact JSON has no whitespace at
+        // all): one compare finds that.
+        ? > c 32 { break } {}
+        ? | | | == c 32 == c 9 == c 10 == c 13 { = k + k 1 } { break }
     }
     = . p pos k
 }
 
-// Match a literal keyword (e.g. `null`, `true`, `false`). Advances pos
-// on success; leaves pos untouched on failure.
-@ __jp_match_kw * JsonParser p s kw → b {
-    : i n ( nurl_str_len kw )
+// Match a literal keyword `n` bytes long (`null`, `true`, `false`).
+// Advances pos on success; leaves pos untouched on failure.
+@ __jp_match_kw * JsonParser p s kw i n → b {
     ? > + . p pos n . p len { ^ F } {}
     : s raw . p src
     : *u bp # *u raw
@@ -342,14 +354,20 @@ $ `stdlib/std/bytes.nu`
 
 // ── Error construction ──────────────────────────────────────────────
 //
-// All parser failures route through `__jp_err`, which captures the
-// current `pos` and walks `src` from byte 0 to compute (line, col). The
-// returned `JsonError` carries all the diagnostic state — there are no
-// globals, so nested or threaded parses don't clobber each other.
-//
-// Use `__jp_err_at` when the failure should point at a specific byte
-// (e.g. the opening `"` of an unterminated string, not the EOF byte
-// where the parser actually stopped).
+// Every failure goes through `__jp_fail`, which records its kind and the
+// byte it points at: the current `pos`, or a byte of its own (the opening
+// `"` of an unterminated string, not the EOF byte where the parser
+// stopped). At the root `__jp_err_at` walks `src` from byte 0 to that byte
+// for (line, col). The `JsonError` carries all the diagnostic state —
+// there are no globals, so nested or threaded parses don't clobber each
+// other.
+
+// Record a failure at byte `at` and answer F, for the caller to return.
+@ __jp_fail * JsonParser p i at ParseErr kind → b {
+    = . p ekind kind
+    = . p epos at
+    ^ F
+}
 
 @ __jp_err_at * JsonParser p i pos_override ParseErr kind → JsonError {
     : i n . p len
@@ -374,10 +392,6 @@ $ `stdlib/std/bytes.nu`
     ^ @ JsonError { kind target line col }
 }
 
-@ __jp_err * JsonParser p ParseErr kind → JsonError {
-    ^ ( __jp_err_at p . p pos kind )
-}
-
 // ── Number ───────────────────────────────────────────────────────────
 //
 // Strict JSON number grammar (RFC 8259):
@@ -388,7 +402,7 @@ $ `stdlib/std/bytes.nu`
 // reformatting. The error position points at the first digit so that
 // the diagnostic highlights the offending token, not a trailing byte.
 
-@ __jp_parse_number * JsonParser p → !Json JsonError {
+@ __jp_number * JsonParser p → b {
     : i token_start . p pos
     ? == ( __jp_peek p ) 45 { = . p pos + . p pos 1 } {}
 
@@ -400,13 +414,13 @@ $ `stdlib/std/bytes.nu`
     }
 
     ? == digit_count 0 {
-        ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+        ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
     } {}
 
     // RFC 8259: leading zero is only allowed when the integer part is
     // exactly `0` (so `0.5`, `0e2`, `0` ok; `01`, `007` rejected).
     ? & >= digit_count 2 == ( __jp_byte_at p first_digit_pos ) 48 {
-        ^ @ !Json JsonError { F ( __jp_err_at p first_digit_pos @ ParseErr { BadFormat } ) }
+        ^ ( __jp_fail p first_digit_pos @ ParseErr { BadFormat } )
     } {}
 
     // Optional fractional part.
@@ -418,7 +432,7 @@ $ `stdlib/std/bytes.nu`
             = frac_count + frac_count 1
         }
         ? == frac_count 0 {
-            ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+            ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
         } {}
     } {}
 
@@ -437,7 +451,7 @@ $ `stdlib/std/bytes.nu`
                 = exp_count + exp_count 1
             }
             ? == exp_count 0 {
-                ^ @ !Json JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
             } {}
         } {}
     } {}
@@ -446,8 +460,8 @@ $ `stdlib/std/bytes.nu`
     : s src_raw . p src
     : *u src_bp # *u src_raw
     : *u start_ptr # *u + # i src_bp token_start
-    : String raw ( string_from_bytes_packed start_ptr n_bytes )
-    ^ @ !Json JsonError { T @ Json { JNum raw } }
+    ( vec_push [Json] . p stack @ Json { JNum ( string_from_bytes_packed start_ptr n_bytes ) } )
+    ^ T
 }
 
 // ── String ───────────────────────────────────────────────────────────
@@ -527,18 +541,24 @@ $ `stdlib/std/bytes.nu`
     ^ acc
 }
 
-// A byte that ends a verbatim string body: the closing quote, a
-// backslash, or a raw control byte (RFC 8259 §7: U+0000..U+001F must be
-// escaped inside a string — a raw one makes the document invalid).
-@ __jp_special i c → b { ^ | | == c 34 == c 92 < c 32 }
+// Bit j set: byte j of the 16 in `blk` is one a string's body cannot
+// hold verbatim — the quote, a backslash or a byte below 32 (unsigned, so
+// UTF-8's high bytes pass; RFC 8259 §7: U+0000..U+001F must be escaped
+// inside a string, a raw one makes the document invalid). The parser's scan for a string's end and the
+// writer's escaper both step sixteen bytes at a time on it, the shape of
+// std/simd.nu's scanners: one compare per byte class per block, and
+// `nurl_ctz` names the first byte.
+@ __json_special16 v128 blk → i {
+    : i q ( nurl_v128_eqmask8 blk ( nurl_v128_bcast8 34 ) )
+    : i bs ( nurl_v128_eqmask8 blk ( nurl_v128_bcast8 92 ) )
+    ^ | | q bs ( nurl_v128_ltmask8 blk ( nurl_v128_bcast8 32 ) )
+}
 
-// The offset of the first such byte in [span, span+n), or -1 — one pass
-// where the fast path used to take three (memchr for the quote, memchr
-// for a backslash, a byte walk for control bytes). Eight bytes a step
-// (SWAR): a byte equal to b leaves a zero byte in w ^ (b × 0x0101…), and
-// (x - k × 0x0101…) & ~x & 0x8080… lights the high bit of every byte of x
-// below k (k = 1: the zero bytes). A borrow can light only bytes after the
-// first true hit, so the lowest lit byte is the answer.
+// The offset of the first such byte in [span, span+n), or -1. Sixteen
+// bytes a step; the last 1..15 come in through nurl_v128_ldn, which reads
+// no byte past them and pads with zeros that the mask then leaves out —
+// so a short string, the common one, is a single step whatever its
+// alignment, with no byte loop at either end.
 //
 // The walk reads through a raw pointer: `span` points into the middle of
 // the document, so `nurl_str_get`'s per-call strlen would run to the
@@ -546,34 +566,23 @@ $ `stdlib/std/bytes.nu`
 // conformance fix did exactly that and took json_parse from fastest in
 // the benchmark table (8.8 ms) to slowest (42 ms).
 @ __jp_span_special s span i n → i {
-    : *u p # *u span
     : ~ i k 0
-    // byte by byte up to an 8-byte boundary, so every word load is aligned
-    // (a misaligned one traps into emulation on some targets)
-    : i head & - 0 # i span 7
-    ~ & < k head < k n { ? ( __jp_special & # i . p k 255 ) { ^ k } {} = k + k 1 }
-    ~ <= + k 8 n {
-        : *u64 wp # *u64 + # i p k
-        : u64 w . wp 0
-        : u64 q ^^ w # u64 2459565876494606882  // '"' × 8
-        : u64 bs ^^ w # u64 6655295901103053916  // '\' × 8
-        : u64 ones # u64 72340172838076673
-        : u64 hi # u64 -9187201950435737472
-        : u64 m | | & & - q ones ^^ q # u64 -1 hi & & - bs ones ^^ bs # u64 -1 hi & & - w # u64 2314885530818453536 ^^ w # u64 -1 hi
-        ? != m # u64 0 {
-            : ~ i j k
-            ~ < j + k 8 { ? ( __jp_special & # i . p j 255 ) { ^ j } {} = j + j 1 }
-        } {}
-        = k + k 8
+    ~ < k n {
+        : i r - n k
+        : i lim ? < r 16 r 16
+        : i m & ( __json_special16 ( nurl_v128_ldn # s + # i span k lim ) ) - << 1 lim 1
+        ? != m 0 { ^ + k # i ( nurl_ctz # u64 m ) } {}
+        = k + k 16
     }
-    ~ < k n { ? ( __jp_special & # i . p k 255 ) { ^ k } {} = k + k 1 }
     ^ -1
 }
 
-@ __jp_parse_string * JsonParser p → !String JsonError {
+// The string at pos, pushed onto the stack as a JStr: a value, or an
+// object's key (its entry before the value's).
+@ __jp_string * JsonParser p → b {
     : i token_start . p pos
     ? != ( __jp_peek p ) 34 {
-        ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+        ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
     } {}
     = . p pos + . p pos 1
 
@@ -598,9 +607,9 @@ $ `stdlib/std/bytes.nu`
     ? >= stop 0 {
         ? == 34 & # i . bp + body_start stop 255 {
             : *u from # *u body_start_ptr
-            : String fs ( string_from_bytes_packed from stop )
             = . p pos + + body_start stop 1
-            ^ @ !String JsonError { T fs }
+            ( vec_push [Json] . p stack @ Json { JStr ( string_from_bytes_packed from stop ) } )
+            ^ T
         } {}
     } {}
     // Else a backslash, a raw control byte or EOF before any close: the
@@ -611,7 +620,7 @@ $ `stdlib/std/bytes.nu`
     : ~ b done F
     ~ ! done {
         ? ( __jp_eof p ) {
-            ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+            ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
         } {}
         : i c ( __jp_peek p )
         ? == c 34 {
@@ -621,7 +630,7 @@ $ `stdlib/std/bytes.nu`
             ? == c 92 {
                 = . p pos + . p pos 1
                 ? ( __jp_eof p ) {
-                    ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                    ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
                 } {}
                 : i esc ( __jp_peek p )
                 = . p pos + . p pos 1
@@ -652,7 +661,7 @@ $ `stdlib/std/bytes.nu`
                                                     // pairs the clef. The i_ conformance class pins the policy.
                                                     : i h ( __jp_read_hex4 p )
                                                     ? < h 0 {
-                                                        ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                                                        ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
                                                     } {}
                                                     : ~ i cur h
                                                     : ~ b done F
@@ -663,7 +672,7 @@ $ `stdlib/std/bytes.nu`
                                                             = . p pos + . p pos 2
                                                             : i l ( __jp_read_hex4 p )
                                                             ? < l 0 {
-                                                                ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                                                                ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
                                                             } {}
                                                             ? & >= l 56320 <= l 57343 {
                                                                 ( __jp_push_utf8 out + + 65536 << - cur 55296 10 - l 56320 )
@@ -678,196 +687,111 @@ $ `stdlib/std/bytes.nu`
                                                         }
                                                     }
                                                 } {
-                                                    ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
+                                                    ^ ( __jp_fail p token_start @ ParseErr { BadFormat } )
                                                 } } } } } } } } }
             } {
                 // The other half of the §7 check: a string that DOES
                 // carry an escape falls through to this loop, so the
                 // fast path's scan never sees it.
                 ? < c 32 {
-                    ^ @ !String JsonError { F ( __jp_err_at p . p pos @ ParseErr { BadFormat } ) }
+                    ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } )
                 } {}
                 ( string_push_char out c )
                 = . p pos + . p pos 1
             }
         }
     }
-    ^ @ !String JsonError { T out }
+    ( vec_push [Json] . p stack @ Json { JStr out } )
+    ^ T
 }
 
 // ── Top-level dispatch (forward declaration via mutual recursion) ────
 
-@ __jp_parse_value * JsonParser p → !Json JsonError {
+// One value at pos (after any whitespace), pushed onto the stack.
+@ __jp_value * JsonParser p → b {
     ( __jp_skip_ws p )
-    ? ( __jp_eof p ) {
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Empty } ) }
+    : i c ( __jp_peek p )  // -1 at the end
+    ? == c 34 { ^ ( __jp_string p ) } {}
+    ? == c 91 { ^ ( __jp_array p ) } {}
+    ? == c 123 { ^ ( __jp_object p ) } {}
+    ? | == c 45 & >= c 48 <= c 57 { ^ ( __jp_number p ) } {}
+    ? & == c 110 ( __jp_match_kw p `null` 4 ) {
+        ( vec_push [Json] . p stack @ Json { JNull } )
+        ^ T
     } {}
-    : i c ( __jp_peek p )
-
-    ? == c 110 {
-        ? ( __jp_match_kw p `null` ) {
-            ^ @ !Json JsonError { T @ Json { JNull } }
-        } {}
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
+    ? & == c 116 ( __jp_match_kw p `true` 4 ) {
+        ( vec_push [Json] . p stack @ Json { JBool T } )
+        ^ T
     } {}
-
-    ? == c 116 {
-        ? ( __jp_match_kw p `true` ) {
-            ^ @ !Json JsonError { T @ Json { JBool T } }
-        } {}
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
+    ? & == c 102 ( __jp_match_kw p `false` 5 ) {
+        ( vec_push [Json] . p stack @ Json { JBool F } )
+        ^ T
     } {}
-
-    ? == c 102 {
-        ? ( __jp_match_kw p `false` ) {
-            ^ @ !Json JsonError { T @ Json { JBool F } }
-        } {}
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-    } {}
-
-    ? == c 34 {
-        : !String JsonError sr ( __jp_parse_string p )
-        ^ ?? sr {
-            T s → @ !Json JsonError { T @ Json { JStr s } }
-            F e → @ !Json JsonError { F # JsonError e }
-        }
-    } {}
-
-    ? == c 91 { ^ ( __jp_parse_array p ) } {}
-    ? == c 123 { ^ ( __jp_parse_object p ) } {}
-
-    ? | == c 45 != 0 ( is_digit c ) {
-        ^ ( __jp_parse_number p )
-    } {}
-
-    ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
+    ? < c 0 { ^ ( __jp_fail p . p pos @ ParseErr { Empty } ) } {}
+    ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } )
 }
 
-// Array / object are split into an outer wrapper (depth bump + decrement,
-// guaranteed paired across all success AND failure paths) and an inner
-// body. This keeps the depth counter accurate even if a future refactor
-// reuses a single JsonParser across multiple parses.
-
-@ __jp_parse_array * JsonParser p → !Json JsonError {
-    ? >= . p depth JSON_MAX_DEPTH {
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Overflow } ) }
-    } {}
+// An array or object closes: the members it pushed since `base` move
+// into a Vec of exactly their count (one allocation, core/vec.nu), and the
+// container takes their place on the stack.
+@ __jp_array * JsonParser p → b {
+    ? >= . p depth JSON_MAX_DEPTH { ^ ( __jp_fail p . p pos @ ParseErr { Overflow } ) } {}
     = . p depth + . p depth 1
-    : !Json JsonError r ( __jp_parse_array_body p )
-    = . p depth - . p depth 1
-    ^ r
-}
-
-@ __jp_parse_array_body * JsonParser p → !Json JsonError {
     = . p pos + . p pos 1  // consume '['
-    // Start at capacity 8: a non-empty array almost always outgrows the
-    // default 0->4->8 doubling walk, and each step of that walk is a
-    // realloc on the parser's hottest path.
-    : ( Vec Json ) elems ( vec_with_cap [Json] 8 )
+    : i base ( vec_len [Json] . p stack )
     ( __jp_skip_ws p )
-    ? ( __jp_eof p ) {
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-    } {}
-    ? == ( __jp_peek p ) 93 {  // empty array
-        = . p pos + . p pos 1
-        ^ @ !Json JsonError { T @ Json { JArr elems } }
-    } {}
-
-    : ~ b more T
-    ~ more {
-        : !Json JsonError child ( __jp_parse_value p )
-        ?? child {
-            T jv → ( vec_push [Json] elems jv )
-            F e → {
-                ^ @ !Json JsonError { F # JsonError e }
-            }
-        }
-        ( __jp_skip_ws p )
-        ? ( __jp_eof p ) {
-            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-        } {}
-        : i nc ( __jp_peek p )
-        ? == nc 44 {  // ','
-            = . p pos + . p pos 1
+    : i first ( __jp_peek p )
+    ? < first 0 { ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } ) } {}
+    ? != first 93 {
+        : ~ b more T
+        ~ more {
+            ? ! ( __jp_value p ) { ^ F } {}
             ( __jp_skip_ws p )
-        } {
-            ? == nc 93 {  // ']'
-                = . p pos + . p pos 1
+            : i nc ( __jp_peek p )
+            ? == nc 44 { = . p pos + . p pos 1 } {
+                ? != nc 93 { ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } ) } {}
                 = more F
-            } {
-                ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }
-    }
-    ^ @ !Json JsonError { T @ Json { JArr elems } }
-}
-
-@ __jp_parse_object * JsonParser p → !Json JsonError {
-    ? >= . p depth JSON_MAX_DEPTH {
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { Overflow } ) }
     } {}
-    = . p depth + . p depth 1
-    : !Json JsonError r ( __jp_parse_object_body p )
+    = . p pos + . p pos 1  // consume ']'
     = . p depth - . p depth 1
-    ^ r
+    ( vec_push [Json] . p stack @ Json { JArr ( vec_split_off_packed [Json] . p stack base ) } )
+    ^ T
 }
 
-@ __jp_parse_object_body * JsonParser p → !Json JsonError {
+// The members alternate on the stack, key (a JStr) then value — JObj's
+// own layout, so closing the object is the array's move.
+@ __jp_object * JsonParser p → b {
+    ? >= . p depth JSON_MAX_DEPTH { ^ ( __jp_fail p . p pos @ ParseErr { Overflow } ) } {}
+    = . p depth + . p depth 1
     = . p pos + . p pos 1  // consume '{'
-    // Capacity 8 = four key/value pairs before the first realloc; see
-    // the array body above.
-    : ( Vec Json ) kvs ( vec_with_cap [Json] 8 )
+    : i base ( vec_len [Json] . p stack )
     ( __jp_skip_ws p )
-    ? ( __jp_eof p ) {
-        ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-    } {}
-    ? == ( __jp_peek p ) 125 {  // empty object
-        = . p pos + . p pos 1
-        ^ @ !Json JsonError { T @ Json { JObj kvs } }
-    } {}
-
-    : ~ b more T
-    ~ more {
-        ( __jp_skip_ws p )
-        ? != ( __jp_peek p ) 34 {
-            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-        } {}
-        : !String JsonError ks ( __jp_parse_string p )
-        ?? ks {
-            T s → ( vec_push [Json] kvs @ Json { JStr s } )
-            F e → {
-                ^ @ !Json JsonError { F # JsonError e }
-            }
-        }
-        ( __jp_skip_ws p )
-        ? != ( __jp_peek p ) 58 {  // ':'
-            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-        } {}
-        = . p pos + . p pos 1
-        : !Json JsonError vv ( __jp_parse_value p )
-        ?? vv {
-            T jv → ( vec_push [Json] kvs jv )
-            F e → {
-                ^ @ !Json JsonError { F # JsonError e }
-            }
-        }
-        ( __jp_skip_ws p )
-        ? ( __jp_eof p ) {
-            ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
-        } {}
-        : i nc ( __jp_peek p )
-        ? == nc 44 {
+    : i first ( __jp_peek p )
+    ? < first 0 { ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } ) } {}
+    ? != first 125 {
+        : ~ b more T
+        ~ more {
+            ( __jp_skip_ws p )
+            // The key: anything but a string fails there, BadFormat at pos.
+            ? ! ( __jp_string p ) { ^ F } {}
+            ( __jp_skip_ws p )
+            ? != ( __jp_peek p ) 58 { ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } ) } {}  // ':'
             = . p pos + . p pos 1
-        } {
-            ? == nc 125 {
-                = . p pos + . p pos 1
+            ? ! ( __jp_value p ) { ^ F } {}
+            ( __jp_skip_ws p )
+            : i nc ( __jp_peek p )
+            ? == nc 44 { = . p pos + . p pos 1 } {
+                ? != nc 125 { ^ ( __jp_fail p . p pos @ ParseErr { BadFormat } ) } {}
                 = more F
-            } {
-                ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }
-    }
-    ^ @ !Json JsonError { T @ Json { JObj kvs } }
+    } {}
+    = . p pos + . p pos 1  // consume '}'
+    = . p depth - . p depth 1
+    ( vec_push [Json] . p stack @ Json { JObj ( vec_split_off_packed [Json] . p stack base ) } )
+    ^ T
 }
 
 // Byte-buffer entry: parse exactly the buffer's bytes (a network
@@ -909,26 +833,33 @@ $ `stdlib/std/bytes.nu`
         }
         ^ @ !Json JsonError { F e }
     } {}
-    : ~ JsonParser jp @ JsonParser { # s src len 0 0 }
+    : ~ JsonParser jp @ JsonParser {
+        # s src
+        len
+        0
+        0
+        ( vec_with_cap_packed [Json] 16 )
+        @ ParseErr { BadFormat }
+        0
+    }
     ^ ( __jp_parse_root jp )
 }
 
 @ __jp_parse_root inout JsonParser jp → !Json JsonError {
     : *JsonParser p ( mem_addr jp )
-    : !Json JsonError r ( __jp_parse_value p )
-    ?? r {
-        T j → {
-            ( __jp_skip_ws p )
-            ? ! ( __jp_eof p ) {
-                : JsonError e ( __jp_err p @ ParseErr { TrailingGarbage } )
-                ^ @ !Json JsonError { F e }
-            } {}
-            ^ @ !Json JsonError { T j }
+    : ~ b ok ( __jp_value p )
+    ? ok {
+        ( __jp_skip_ws p )
+        ? < . p pos . p len { = ok ( __jp_fail p . p pos @ ParseErr { TrailingGarbage } ) } {}
+    } {}
+    ? ok {
+        // The one value left on the stack is the document.
+        ?? ( vec_pop [Json] . p stack ) {
+            T j → { ^ @ !Json JsonError { T j } }
+            F _ → {}
         }
-        F e → {
-            ^ @ !Json JsonError { F # JsonError e }
-        }
-    }
+    } {}
+    ^ @ !Json JsonError { F ( __jp_err_at p . p epos . p ekind ) }
 }
 
 // Format a parse failure as "<kind> at line L col C". Caller owns the
@@ -945,7 +876,7 @@ $ `stdlib/std/bytes.nu`
 
 // ── Stringify ────────────────────────────────────────────────────────
 //
-// Compact serialization with the inverse of __jp_parse_string's escape
+// Compact serialization with the inverse of __jp_string's escape
 // table, appended to a byte buffer: json_write onto one the caller has
 // (an HttpResponse body), json_stringify onto a fresh one it hands over
 // as a String (no copy). Output is always valid JSON: the parser only
@@ -962,28 +893,56 @@ $ `stdlib/std/bytes.nu`
 // Emitted through a cursor, as core/string.nu's "Bulk emission cursor"
 // emits a String: the room for the quotes and every byte as it is is
 // reserved once and written straight through the buffer, and the length
-// committed at the end. An escape is up to six bytes where one was
+// committed at the end. The text goes sixteen bytes a step
+// (__json_special16): the run up to the next byte that needs an escape
+// is one partial vector store, so a key or value with nothing to escape
+// — nearly all of them, and most under sixteen bytes — is one load, one
+// mask and one store. An escape is up to six bytes where one was
 // reserved, so it first commits what is written and reserves the room
 // for itself, the rest of the text and the closing quote. Invariant
-// before byte k: the room past `w` holds the n - k bytes left and the
-// closing quote. (A per-byte push re-reads the buffer's control block
-// for every byte; a copy per run paid a reserve and a call for each of a
-// document's many short keys and values.)
-@ __json_escape ( Vec u ) out ( Slice u ) text → v {
-    : i n ( slice_len [u] text )
-    : *u src ( slice_data [u] text )
+// before byte k: the room past `w` holds the n - k bytes left, the
+// closing quote and a tail byte. (A per-byte push re-reads the buffer's control block
+// for every byte; a memcpy per run paid a call for each of a document's
+// many short keys and values.)
+@ __json_escape ( Vec u ) out ( Slice u ) text → v { ( __json_str out text 0 0 ) }
+
+// …with `lead` and `tail`, when not 0, a byte before the opening quote and
+// one after the closing quote — a member's comma, a key's colon — in the
+// same reservation and the same length commit as the string.
+@ __json_str ( Vec u ) out ( Slice u ) text i lead i tail → v {
+    : i n . text len
+    : *u src . text data
     : ~ i w ( vec_len [u] out )
-    ( vec_reserve [u] out + n 2 )
-    : ~ * u dst ( vec_data [u] out )
+    ( vec_reserve [u] out + n 4 )
+    // The buffer's address read from its control block, as core/string.nu's
+    // string_reserve_at reads it: a pointer handed back by a call and held
+    // in a binding is one the compiler must assume owned (a release of the
+    // old value at each reassignment, a journal entry).
+    : ~ * u dst # *u ( nurl_peek . out ctl 0 )
+    ? > lead 0 {
+        = . dst w # u lead
+        = w + w 1
+    } {}
     = . dst w # u 34
     = w + w 1
     : ~ i k 0
     ~ < k n {
-        : i c & # i . src k 255
-        ? | | < c 32 == c 34 == c 92 {
+        // Sixteen bytes a step (the last 1..15 zero-padded, the padding
+        // masked off): the run before the first byte that needs an escape
+        // goes out as it came, in one partial store.
+        : i r - n k
+        : i lim ? < r 16 r 16
+        : v128 blk ( nurl_v128_ldn # s + # i src k lim )
+        : i m & ( __json_special16 blk ) - << 1 lim 1
+        : i run ? == m 0 lim # i ( nurl_ctz # u64 m )
+        ( nurl_v128_stn # s + # i dst w run blk )
+        = w + w run
+        = k + k run
+        ? != m 0 {
+            : i c & # i . src k 255
             : b _held ( vec_set_len [u] out w )
-            ( vec_reserve [u] out + - n k 7 )
-            = dst ( vec_data [u] out )
+            ( vec_reserve [u] out + - n k 8 )
+            = dst # *u ( nurl_peek . out ctl 0 )
             = . dst w # u 92
             : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
             ? > named 0 {
@@ -999,14 +958,16 @@ $ `stdlib/std/bytes.nu`
                 = . dst + w 5 # u ? < lo 10 + 48 lo + 87 lo
                 = w + w 6
             }
-        } {
-            = . dst w # u c
-            = w + w 1
-        }
-        = k + k 1
+            = k + k 1
+        } {}
     }
     = . dst w # u 34
-    : b _done ( vec_set_len [u] out + w 1 )
+    = w + w 1
+    ? > tail 0 {
+        = . dst w # u tail
+        = w + w 1
+    } {}
+    : b _done ( vec_set_len [u] out w )
 }
 
 // A finite double's JSON text onto `out`: the shortest digits that read
@@ -1217,17 +1178,26 @@ $ `stdlib/std/bytes.nu`
     ^ @ JsonWriter { st }
 }
 
+// Where a value may go: the separator its place wants (44, a comma after
+// an earlier element; else 0) with the state moved on, or -1 with the
+// writer marked bad.
+@ __jw_slot JsonWriter w → i {
+    : i at - ( vec_len [u] . w st ) 1
+    : i s # i ( vec_at [u] . w st at )
+    ? == s 5 { ^ 44 } {}
+    ? == s 2 { ( vec_set [u] . w st at # u 3 ) ^ 0 } {}
+    ? == s 4 { ( vec_set [u] . w st at # u 5 ) ^ 0 } {}
+    ? == s 0 { ( vec_set [u] . w st at # u 7 ) ^ 0 } {}
+    ( vec_set [u] . w st at # u 6 )
+    ^ -1
+}
+
 // A value may go here: write the separator its place wants and say T; or
 // mark the writer bad and say F.
 @ __jw_value JsonWriter w ( Vec u ) out → b {
-    : i at - ( vec_len [u] . w st ) 1
-    : i s # i ( vec_at [u] . w st at )
-    ? == s 5 { ( vec_push [u] out # u 44 ) ^ T } {}
-    ? == s 2 { ( vec_set [u] . w st at # u 3 ) ^ T } {}
-    ? == s 4 { ( vec_set [u] . w st at # u 5 ) ^ T } {}
-    ? == s 0 { ( vec_set [u] . w st at # u 7 ) ^ T } {}
-    ( vec_set [u] . w st at # u 6 )
-    ^ F
+    : i sep ( __jw_slot w )
+    ? > sep 0 { ( vec_push [u] out # u sep ) } {}
+    ^ >= sep 0
 }
 
 @ jw_obj JsonWriter w ( Vec u ) out → v {
@@ -1256,30 +1226,31 @@ $ `stdlib/std/bytes.nu`
     : ?u _closed ( vec_pop [u] . w st )
 }
 
+// A key is the separator, the quoted key and its colon in one write.
 @ jw_key JsonWriter w ( Vec u ) out s key → v {
     : i at - ( vec_len [u] . w st ) 1
     : i s # i ( vec_at [u] . w st at )
-    ? == s 3 { ( vec_push [u] out # u 44 ) } {
-        ? != s 1 {
-            ( vec_set [u] . w st at # u 6 )
-            ^ v
-        } {}
-    }
+    ? & != s 3 != s 1 {
+        ( vec_set [u] . w st at # u 6 )
+        ^ v
+    } {}
     ( vec_set [u] . w st at # u 2 )
-    ( __json_escape out ( slice_of_str key ) )
-    ( vec_push [u] out # u 58 )
+    ( __json_str out ( slice_of_str key ) ? == s 3 44 0 58 )
 }
 
 @ jw_str JsonWriter w ( Vec u ) out s value → v {
-    ? ( __jw_value w out ) { ( __json_escape out ( slice_of_str value ) ) } {}
+    : i sep ( __jw_slot w )
+    ? >= sep 0 { ( __json_str out ( slice_of_str value ) sep 0 ) } {}
 }
 
 @ jw_string JsonWriter w ( Vec u ) out String value → v {
-    ? ( __jw_value w out ) { ( __json_escape out ( string_bytes value ) ) } {}
+    : i sep ( __jw_slot w )
+    ? >= sep 0 { ( __json_str out ( string_bytes value ) sep 0 ) } {}
 }
 
 @ jw_str_slice JsonWriter w ( Vec u ) out ( Slice u ) value → v {
-    ? ( __jw_value w out ) { ( __json_escape out value ) } {}
+    : i sep ( __jw_slot w )
+    ? >= sep 0 { ( __json_str out value sep 0 ) } {}
 }
 
 @ jw_int JsonWriter w ( Vec u ) out i n → v {

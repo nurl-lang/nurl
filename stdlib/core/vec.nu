@@ -89,6 +89,14 @@
 //                                                dst (deep for owned elements)
 //   ( vec_append [A] dst src )     → v          MOVE every element of src onto
 //                                                dst; src is consumed (any A)
+//   ( vec_split_off_packed [A] v at ) → ( Vec A ) MOVE [at, len) into a Vec
+//                                                of exactly that count, its
+//                                                buffer in its handle's
+//                                                allocation; raw (A aligned
+//                                                to at most 8)
+//   ( vec_with_cap_packed [A] n )  → ( Vec A )   empty, room for n in the
+//                                                handle's own allocation;
+//                                                raw (as above)
 //
 //   Equality (closure-based, mirrors HashMap eq_fn convention):
 //   ( vec_contains [A] v target eq_fn ) → b     eq_fn : (@ b A A)
@@ -778,6 +786,11 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     : s ctl . v ctl
     // Not our buffer to resize or free.
     ? ( __vec_is_borrowed ctl ) { ^ } {}
+    // A packed buffer (vec_split_off_packed, string_from_bytes_packed) is
+    // the tail of the handle's own block: already exact, and not a block
+    // realloc or free may be handed.
+    : s pdata ( __vec_data_raw ctl )
+    ? & != 0 # i pdata == # i pdata + # i ctl 24 { ^ } {}
     : i len ( __vec_len_raw ctl )
     : i cap ( __vec_cap_raw ctl )
     ? == len 0 {
@@ -880,6 +893,53 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ( __vec_extend_move [A] dst src )
     // The elements live in `dst` now; `src` leaves empty.
     ( nurl_vctl_set . src ctl 1 0 )
+}
+
+// The elements [at, len) of `v` moved into a new Vec of exactly their
+// count; `v` keeps [0, at) and its capacity. Nothing is cloned or dropped.
+// The new Vec's buffer shares one allocation with its handle: the packed
+// layout of core/string.nu's string_from_bytes_packed, which every
+// release and growth path here and in the runtime knows (the first growth
+// moves the elements out to a buffer of their own). That is one
+// allocation and no spare room, where a handle, a buffer and the
+// doubling's slack are two and up to half again. It is for a container
+// assembled on a scratch stack and closed once its count is known, as
+// ext/json.nu's parser closes an array or object.
+//
+// `raw` (requires: A's alignment is at most 8 — the buffer starts 24
+// bytes into the block, where a SIMD vector element would sit
+// misaligned). An `at` outside [0, len) moves nothing and gives an empty
+// Vec, as does a borrowed view, which owns no element to move.
+raw @ vec_split_off_packed [A] ( Vec A ) v i at → ( Vec A ) {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | | < at 0 >= at len ( __vec_is_borrowed ctl ) { ^ ( vec_new [A] ) } {}
+    : i n - len at
+    : s pack ( __vec_pack_new [A] n n )
+    ( nurl_memcpy ( __vec_data_raw pack ) # s + # i ( __vec_data_raw ctl ) * Z A at * Z A n )
+    // The elements live in the new Vec now; `v` ends before them.
+    ( nurl_vctl_set ctl 1 at )
+    ^ @ ( Vec A ) { pack }
+}
+
+// An empty Vec with room for `n` elements in its handle's own allocation
+// (the packed layout above): one allocation instead of two, for a scratch
+// Vec that lives for one call, as ext/json.nu's parse stack does. Growth
+// past `n` moves the elements to a buffer of their own. `raw` (requires:
+// A's alignment is at most 8).
+raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
+    ? <= n 0 { ^ ( vec_new [A] ) } {}
+    ^ @ ( Vec A ) { ( __vec_pack_new [A] n 0 ) }
+}
+
+// A packed control block: room for `n` elements right after its own 24
+// bytes, `len` of them counted live (the caller fills them).
+@ __vec_pack_new [A] i n i len → s {
+    : s pack ( nurl_alloc ( alloc_count_add 24 ( alloc_size Z A n ) ) )
+    ( nurl_vctl_set pack 0 + # i pack 24 )
+    ( nurl_vctl_set pack 1 len )
+    ( nurl_vctl_set pack 2 n )
+    ^ pack
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────

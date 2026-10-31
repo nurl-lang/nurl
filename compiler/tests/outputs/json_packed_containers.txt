@@ -1,0 +1,24 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+["tag3", "tag5"]  made / kept / left: 4 / 3 / 0
+{"id":17,"tags":["a","b"],"r":{}}  made / kept / left: 10 / 9 / 0
+[]  made / kept / left: 2 / 1 / 0
+"x"  made / kept / left: 2 / 1 / 0
+[[[[1]]]]  made / kept / left: 6 / 5 / 0
+[1,  made / kept / left: 2 / -1 / 0
+taken apart: [0,1,2,3,4]
+json_arr_push onto a parsed array: ok
+…and again, past its room: ok
+json_obj_set on a parsed object: ok
+…and a member it did not have: ok
+{"a":["x","y",null],"b":true,"c":[]}
+nothing left behind: ok
+split at 2: kept / moved / room: 2 / 3 / 3
+split past the end: kept / moved / room: 2 / 0 / 0
+scratch: left / moved / room: 0 / 5 / 5
+tail: s2 s3 s4 s5
+the packed constructors leave nothing behind: ok
+0 9 10 99 100 -1 -10 9223372036854775807 -9223372036854775808
+abc-42 abc

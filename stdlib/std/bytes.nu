@@ -124,24 +124,33 @@ $ `stdlib/core/slice.nu`
 // intermediate string to allocate, measure and free. The loop works on
 // the non-positive magnitude so the minimum i64 needs no special case
 // (its negation overflows).
+//
+// Through the buffer's control block, as core/string.nu's bulk emitters
+// write (a JSON body is mostly small integers): one capacity check and
+// one length commit, and the address read from the block rather than
+// taken from vec_data — a pointer a call hands back costs its binding a
+// journal entry.
 @ bytes_push_int ( Vec u ) v i n → v {
     : i m ? < n 0 n - 0 n
     : ~ i nd 1
     : ~ i t m
     ~ <= t -10 { = t / t 10 = nd + nd 1 }
     : i sign ? < n 0 1 0
-    ( vec_reserve [u] v + nd sign )
-    : *u data ( vec_data [u] v )
-    : i len ( vec_len [u] v )
+    : i w + nd sign
+    : s ctl . v ctl
+    : i len ( nurl_peek ctl 1 )
+    // (A view's capacity is -1: the reserve detaches it.)
+    ? < - ( nurl_peek ctl 2 ) len w { ( vec_reserve [u] v w ) } {}
+    : *u data # *u ( nurl_peek ctl 0 )
     ? == sign 1 { = . data len # u 45 } {}
-    : ~ i k + + len sign - nd 1
+    : ~ i k - + len w 1
     = t m
     ~ >= k + len sign {
         = . data k # u + 48 - 0 % t 10
         = t / t 10
         = k - k 1
     }
-    ( vec_set_len [u] v + + len sign nd )
+    ( nurl_poke ctl 1 + len w )
 }
 
 // Bulk-append every byte of `src` to `v` via `nurl_memcpy`. Same shape
