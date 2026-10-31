@@ -110,3 +110,24 @@ Measurements are on an i7-11850H.
   suggests: 376 products against 512, yet 203 ns against 211 ns. The
   cross-product rows are short, so their per-row setup and the doubling
   pass take most of the difference.
+  - **Measured and acted on (Agora #117):** on a Cascade Lake class Xeon
+    without IFMA, a 16-limb square split as cross-product rows 97 ns for
+    120 products (0.81 ns a product, against 0.50 in full rows), doubling
+    and diagonal 33 ns, and reduction 147 ns for 256 products — the
+    reduction reloads t after every row, so each row's q = t[k]·n0 waits on
+    a store-to-load forward. RSA-2048's halves now run two fixed-width
+    blocks instead (`nurl_rsa16_sqrm_adx` / `nurl_rsa16_mulm_adx`, generated
+    by `tools/gen_rsa_adx16.py`): every product written out, and the
+    reduction blocked eight rows at a time with eight words of t in
+    registers and each q parked in the column it zeroes. Square 289 →
+    215 ns, multiply 293 → 259 ns, RSA-2048 PSS sign 917 → 729 µs (aws-lc
+    648 µs on the same machine). This departs from §1 and §2 for one width
+    only, and on purpose. A fixed 16-limb pair is about 4 000
+    instructions, so it is not a compiler primitive emitted into every
+    module. It is two functions in the C runtime: x86-64 inline asm
+    behind the runtime's ADX answer, 0 everywhere else, where the rows
+    take over. ThinLTO drops them from programs without RSA. Every other
+    width keeps the rows. A blocked reduction of this shape is port-bound
+    (ADCX/ADOX share two ports on Intel, llvm-mca); what is left to aws-lc
+    is mostly operation count (a 64-bit exponent blind and a 4-bit
+    window).
