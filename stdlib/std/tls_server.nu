@@ -545,7 +545,7 @@ $ `stdlib/std/arc.nu`
     ( vec_push [u] body # u desc )
     : ( Vec u ) rec ( vec_with_cap [u] 7 )
     ( __srv_plain_rec_to rec 21 body )
-    : b _w ( _tls_sock_write . c fd rec )
+    : b _w ( _tls_send c rec )
     ^ ( __srv_abort c )
 }
 
@@ -1150,7 +1150,11 @@ raw : SrvHsImpl {
 
 @ __tls_accept_impl i raw ( Arc TlsIdent ) id ? ( Arc TlsIdent ) pq ( Vec u ) alpn_prefs → !TlsConn TlsErr {
     ? <= raw 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
-    : TlsConn c__h ( _tls_conn_new raw )
+    ^ ( __tls_accept_on ( _tls_conn_new raw ) id pq alpn_prefs )
+}
+
+// The server handshake on a connection made over a socket or a transport.
+@ __tls_accept_on sink TlsConn c__h ( Arc TlsIdent ) id ? ( Arc TlsIdent ) pq ( Vec u ) alpn_prefs → !TlsConn TlsErr {
     : ~ * TlsConnImpl c ( _tls_ptr c__h )
     // The machine goes with this scope, on every path out of it.
     : SrvHs hs__h ( _srv_hs_new id alpn_prefs )
@@ -1198,7 +1202,7 @@ raw : SrvHsImpl {
     ( _set_keys c 1 . hs c_hs )
     = . c enc_read 1
     ( __srv_enc_msgs_to c flight . hs out_hs )
-    : b fw ( _tls_sock_write . c fd flight )
+    : b fw ( _tls_send c flight )
     ? fw {} { ( nurl_eprintln `tls: server flight write failed` ) }
 
     // ── client Finished (under client handshake keys) ──
@@ -1273,6 +1277,16 @@ raw : SrvHsImpl {
 // big-endian. `cert_chain` is a tls_cert_entry-framed certificate_list.
 // The key is prepared per call and without its factors; a server keeps a
 // tls_ident_rsa of std/pkey.nu's rsa_priv_sign_key instead.
+// The server side of a handshake over transport `t` — std/net's adapter
+// of a socket that is not the kernel's, a simulated network's — with a
+// prepared identity (tls_ident_ec, tls_ident_rsa, tls_ident_mldsa) and an
+// ALPN preference list in wire form (empty: no ALPN). The connection owns
+// `t` from here, on every path.
+@ tls_accept_over sink %TlsTransport t ( Arc TlsIdent ) id ( Vec u ) alpn_prefs → !TlsConn TlsErr {
+    : ?( Arc TlsIdent ) nopq @ ?( Arc TlsIdent ) { F }
+    ^ ( __tls_accept_on ( _tls_conn_over t ) id nopq alpn_prefs )
+}
+
 @ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !TlsConn TlsErr {
     : ( Vec u ) noalpn ( vec_new [u] )
     : !TlsConn TlsErr r ( tls_accept_rsa_alpn raw cert_chain rsa_n rsa_e rsa_d noalpn )

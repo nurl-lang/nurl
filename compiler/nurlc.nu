@@ -31354,6 +31354,14 @@ unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
                 ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
                 : s hn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` hs ) )
                 : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int x ) ) )
+                // (The holder an `inout` parameter: the caller's value, which
+                // outlives every local here — agora #284.)
+                ? != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` hs ) ) {
+                    : s p1 ( nurl_str_cat4 ( nurl_str_cat3 `'` hn `' is an 'inout' parameter — its value is the caller's and outlives this function — and is given a view of '` ) sn ( nurl_str_cat3 `', a local here, while '` hn `''s type has a destructor (% Drop) that may read the view. ` ) `` )
+                    : s p2 ( nurl_str_cat4 `A panic before '` hn ( nurl_str_cat3 `' is pointed back drops '` sn `' first, and the destructor then reads it. Give '` ) hn )
+                    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 p1 p2 `' views only of what the caller passed in, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
+                    ^ v
+                } {}
                 : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` hn `' is given a view of '` ) sn ( nurl_str_cat3 `', which was declared after it, and '` hn `''s type has a destructor (% Drop) that may read the view. ` ) `` )
                 : s m2 ( nurl_str_cat4 `Values are dropped newest first — where their scopes end, and by a panic's unwind — so '` sn ( nurl_str_cat3 `' would be freed before '` hn `''s destructor reads it. Give '` ) hn )
                 ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 `' views only of bindings declared before it, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
@@ -34075,6 +34083,13 @@ unsafe @ bck_loop_mask s pre s post → s {
         // (…or any other value it drops: a String, a Vec, a `% Drop` value.)
         ? ( str_contains_word g_bck_own_params ( nurl_str_cat `!` pn ) ) {
             ( bck_put ( bck_bkey `po_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
+        } {}
+        // (…and an `inout` one whose drop may read the views it holds: a
+        // holder older than every local, bck_younger_view_check — agora
+        // #284.)
+        ? ( str_contains_word g_bck_own_params ( nurl_str_cat `^` pn ) ) {
+            ( bck_put ( bck_bkey `vdu_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
+            = g_bck_udrop_any 1
         } {}
     }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
@@ -52184,6 +52199,19 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         ? & & & ! __raw ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` )
         | | ( __type_needs_drop __pty syms ) ( __nc_drop_ty __pty ) ( __is_closure_ty __pty ) {
             ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `!` name ) )
+        } {}
+        // An `inout` parameter whose drop may read the views it holds is
+        // the caller's holder: given a view of a local of this function,
+        // even for a moment, a panic before it is pointed back drops the
+        // local first and the destructor reads it (`^name`: the walk's
+        // `vdu_` holder, older than every local; agora #284).
+        ? != 0 ( nurl_sym_len2 syms name `__inout` ) {
+            : s __ity ( nurl_llty __pty )
+            : i __il ( nurl_str_len __ity )
+            : s __ivt ? & > __il 0 == ( nurl_str_get __ity - __il 1 ) 42 ( nurl_str_slice __ity 0 - __il 1 ) ( nurl_str_cat __ity `` )
+            ? ( __drop_may_read_view __ivt 0 ) {
+                ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `^` name ) )
+            } {}
         } {}
         = index + index 1
     }

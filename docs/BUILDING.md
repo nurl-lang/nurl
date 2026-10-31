@@ -627,7 +627,7 @@ runners.
 | unikernel: the guest under QEMU | the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — devices, network demos, TLS, DNS, disk |
 | unikernel: nurlc.wasm and the swarm appliance | `wasmc_gate.sh` (the compiler as wasm, in the guest, byte-identical IR) and `swarm_gate.sh` (the swarm-mcp appliance) |
 | Windows x86_64 (`windows-latest`) | `build.bat` — bootstrap fixed point + the Windows golden corpus (`compiler/tests/outputs-windows/`), then `nurl.bat` builds and runs a program with the bundled zig *and* with clang, and builds piped source with `nurl.bat --stdin NAME` (diagnostics name NAME) |
-| macOS ARM64 (`macos-14`, Apple Silicon) | `./build.sh` — stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` frontend gate |
+| macOS ARM64 (`macos-15`, Apple Silicon) | `./build.sh` — stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` frontend gate |
 
 A local `./build.sh` reproduces the first two gates; `./build.sh --san` then
 `./compiler/tests/run_san_tests.sh` reproduces the sanitizer gate; and

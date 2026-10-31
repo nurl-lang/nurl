@@ -179,6 +179,9 @@ drop_field_getter_param	§7.6	A2	agora #187: the same over a borrowed parameter:
 drop_field_getter_sink	§7.6	A2	agora #187: the same over a `sink` parameter, which the function drops too	rejected	h820
 drop_holder_closure_younger_view_then_panics	§2.14	A2	agora #259: a `% Drop` holder given a view of a younger String by a closure, then a panic	rejected	-
 drop_holder_given_younger_view_through_inout	§2.14	A2	agora #259: a `% Drop` holder given a view of a younger String by an `inout` callee	rejected	-
+drop_holder_inout_param_given_a_callee_local_then_panics	§2.14	A2	agora #284: an inout Drop holder given a callee local's view, then a panic	rejected	-
+drop_holder_inout_param_given_another_param	§2.14	A2	agora #284: an inout Drop holder given a view of another parameter	runs-clean	-
+drop_holder_inout_struct_field_given_a_callee_local_then_panics	§2.14	A2	agora #284: an inout struct's Drop-holder field given a callee local's view	rejected	-
 drop_holder_inout_younger_view_then_panics	§2.14	A2	agora #259: the same, then a panic before the holder is pointed back	rejected	-
 drop_holder_pushed_younger_view_then_panics	§7.6	A2	agora #254: a W with a view of a younger String pushed into a Vec of W, then a panic	rejected	-
 drop_holder_views_inner_then_panics	§7.6	A2	agora #254: a W re-pointed to a view of a younger String, then a panic before it is pointed back: the unwind frees the String first	rejected	-

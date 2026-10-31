@@ -174,6 +174,45 @@ deps follow the newest published version, path deps the local copy's
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
 
+### `nurlpkg test --sim`: the same tests under many schedules
+
+```bash
+nurlpkg test --sim                       # every tests/*.nu under seeds 1..20
+nurlpkg test --sim --seeds 1000          # …1..1000
+nurlpkg test --sim --seeds 500..600      # …a range
+nurlpkg test --sim --seed 37 tests/x.nu  # one run, exactly as it went (a replay)
+```
+
+`--sim` builds each test once as a **deterministic simulation**
+(`nurl --sim`): the program runs on NURL's cooperative runtime with a
+virtual clock, entropy drawn from a seed, and the next runnable fiber or
+thread picked by the seed (`unikernel/README.md`, "Deterministic
+simulation"). A run is then a function of the test and its seed: the
+schedule, every timeout and every random byte follow from the seed, so a
+failure found under seed S happens again, byte for byte, under seed S.
+Each seed's run takes virtual time — a 300 ms timeout or a TCP
+retransmission costs nothing — so sweeping many seeds is cheap.
+
+A test passes when every seed passes (exit 0 and its
+`tests/outputs/<name>.txt` golden, as without `--sim`); one that fails
+reports how many seeds it passed, the first seed it failed under, and the
+line that replays it:
+
+```text
+  PASS atomic_counter (40/40 seeds)
+  FAIL racy_counter (15/40 seeds) — first failing seed 1 (output mismatch)
+    replay: nurlpkg test --sim --seed 1 tests/racy_counter.nu
+```
+
+A simulated network (`netsim_new` in `stdlib/std/net_sim.nu`) created with
+seed `0` takes the run's seed too, so its drops, jitter and sequence
+numbers vary with the sweep and replay with the seed; a test that passes
+its own seed keeps exactly that network. `--sim` builds for Linux x86_64
+from a toolchain checkout (it links the no-libc runtime). The gate for
+this command is `tools/nurlpkg/test-sim.sh`, over the fixture package in
+`tools/nurlpkg/sim-fixture/`: a race that only some schedules expose, and
+the same counter done with one atomic step.
+
 Packages can declare the compiler, standard library and runtime release they
 were written against:
 

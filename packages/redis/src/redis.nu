@@ -6,6 +6,8 @@
 //
 //   ( redis_connect host port )                  → !RedisConn RedisErr
 //   ( redis_connect_tls host port sni verify )    → !RedisConn RedisErr
+//   ( redis_connect_with dialer host port )       → !RedisConn RedisErr  dialed through a
+//                                                   std/net NetDialer (a simulated network's)
 //   ( redis_auth conn user password )             → !v RedisErr
 //   ( redis_command conn args )                   → !RedisReply RedisErr   (raw)
 //   ( redis_get conn key ) / ( redis_set … ) …    → typed helpers
@@ -311,6 +313,20 @@ $ `stdlib/std/thread.nu`
 
 @ redis_connect s host i port → !RedisConn RedisErr {
     ^ ( __redis_open host port 0 `` )
+}
+
+// Plaintext, dialed through `d` (std/net NetDialer): the kernel's, or a
+// node of a simulated network (netsim_dialer), so the same client runs
+// over it unchanged. TLS needs the kernel's dialer until it can run over a
+// dialed connection (agora #250).
+@ redis_connect_with NetDialer d s host i port → !RedisConn RedisErr {
+    ?? ( net_dial d host port 0 ) {
+        T conn → {
+            : RedisConnImpl c @ RedisConnImpl { conn 0 ( vec_new [u] ) ( string_new ) ( string_from host ) port 0 }
+            ^ @ !RedisConn RedisErr { T @ RedisConn { ( locked_new [RedisConnImpl] c ) } }
+        }
+        F _ → { ^ @ !RedisConn RedisErr { F # RedisErr RedisConnFail } }
+    }
 }
 
 // verify != 0 → verify-full (chain + hostname); verify == 0 → encrypt only.

@@ -412,6 +412,10 @@ it and pay zero overhead. `lease_new` / `lease_admit(key, epoch, idem)` /
 
 ### `dist/sim.nu` — the chaos-simulation harness
 
+(The same bus carries whole TCP/IP stacks in `std/net_sim.nu`, so HTTP
+services and databases are tested the same way:
+[SIMULATION.md](SIMULATION.md).)
+
 How you *really* test all of the above: not flaky multi-process socket runs, but
 the **real logic inside a deterministic simulated world** — the approach
 FoundationDB / TigerBeetle / `madsim` use, and the reason every layer was built
