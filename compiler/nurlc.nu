@@ -28954,6 +28954,22 @@ unsafe @ bck_rec i idx → s {
     ^ # s ( nurl_strdup_n r ( nurl_peek # s g_bck_rlen idx ) )
 }
 
+// Does row `idx` read anything (its field 2)? Asked without copying the
+// row: a `?`'s edge rows mostly read nothing (bck_handle_cond).
+unsafe @ bck_row_reads_any i idx → b {
+    ? | < idx 0 >= idx g_bck_nrows { ^ F } {}
+    : *u p # *u ( nurl_peek # s g_bck_rows idx )
+    : i n ( nurl_peek # s g_bck_rlen idx )
+    : ~ i k 0
+    : ~ i tabs 0
+    ~ & < k n < tabs 2 {
+        ? == # i . p k 9 { = tabs + tabs 1 } {}
+        = k + k 1
+    }
+    ? | != tabs 2 >= k n { ^ F } {}
+    ^ != # i . p k 9
+}
+
 // …and its kind as a number (bck_kind_code), read without the row.
 unsafe @ bck_kc i idx → i {
     ? | < idx 0 >= idx g_bck_nrows { ^ 0 } {}
@@ -32934,8 +32950,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     // — which neither arm's walk visits, nor the walk past the `?`: read
     // each where its arm ends. Unread, `( consume a )` then `: String u ?
     // c a b` handed the freed `a` on (agora #242, formal's review).
-    ? & < middle ec ! ( seq s_then `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec middle ) 2 ) ( bck_field_int ( bck_rec middle ) 3 ) s_then ) } {}
-    ? ! ( seq s_else `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec ec ) 2 ) ( bck_field_int ( bck_rec ec ) 3 ) s_else ) } {}
+    ? & & < middle ec ( bck_row_reads_any middle ) ! ( seq s_then `!` ) {
+        : s mrec ( bck_rec middle )
+        ( bck_check_moved_reads ( bck_field mrec 2 ) ( bck_field_int mrec 3 ) s_then )
+    } {}
+    ? & ( bck_row_reads_any ec ) ! ( seq s_else `!` ) {
+        : s erec ( bck_rec ec )
+        ( bck_check_moved_reads ( bck_field erec 2 ) ( bck_field_int erec 3 ) s_else )
+    } {}
     ^ ( bck_join_state s_then s_else )
 }
 
@@ -33075,7 +33097,10 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // (A value arm that is a binding reads it on its
             // `endmatch-arm-edge` row, which the arm's walk does not visit:
             // read here, from the arm's own state — gen_match.)
-            ? ! ( seq armwalk `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec end ) 2 ) ( bck_field_int ( bck_rec end ) 3 ) armwalk ) } {}
+            ? & ( bck_row_reads_any end ) ! ( seq armwalk `!` ) {
+                : s aerec ( bck_rec end )
+                ( bck_check_moved_reads ( bck_field aerec 2 ) ( bck_field_int aerec 3 ) armwalk )
+            } {}
             : s armfinal ( bck_ids_end ids armwalk ( bck_field_int ( bck_rec - end 1 ) 3 ) )
             // (A cursor payload is gone with its arm: the option it matched
             // ending later ends nothing of it.)
