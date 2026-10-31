@@ -121,6 +121,8 @@ jobs:
         run: python3 tools/fuzz/holes/map.py --check
       - name: changelog fragments are well formed; [Unreleased] holds none
         run: python3 tools/changelog.py check
+      - name: formal/BLUEPRINT.md's counts, module DAG and index are the sources'
+        run: node webdocs/scripts/gen-formal-data.mjs --check
 
   runner-controls:
     name: compiler runner fault-injection controls
