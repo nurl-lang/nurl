@@ -188,7 +188,7 @@ one:
 | Linux x86_64 | `ubuntu-latest` | Fixed point + full corpus, `examples/` frontend gate, `nurlfmt` canonical-format gate, and ~20 targeted gates (soundness hole probes, CRC-32, XXH64, Zstandard against the `zstd` CLI, DWARF, HTTP per-request leak, HTTP/2 conformance with h2spec, HTTP/3 + QUIC conformance with h3spec, diagnostic coverage) |
 | FreeBSD 14.2 | real VM | The same corpus on a second OS |
 | **Windows x86_64** | `windows-latest` | `build.bat` fixed point + the Windows golden corpus, then `nurl.bat` builds and runs a program with both the bundled zig and clang |
-| **macOS ARM64** | `macos-14` (Apple Silicon) | `./build.sh` stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` gate |
+| **macOS ARM64** | `macos-15` (Apple Silicon) | `./build.sh` stage1 ≡ stage2 fixed point + the full corpus against the **same goldens as Linux**, plus the `examples/` gate |
 | **Unikernel** | QEMU, in CI | The corpus with no libc at all, then the guest booted on x86_64, AArch64 **and** RISC-V64 — plus the PVH image under cloud-hypervisor |
 | Sanitizers | `ubuntu-latest` | The whole corpus under AddressSanitizer + UndefinedBehaviorSanitizer |
 
