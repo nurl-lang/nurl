@@ -30,18 +30,18 @@ theorem derive_hrefAt {m : Mem} {y : Var} {E : Entry} {N : Val}
     (hrk : rootKind E.ty k = k)
     {t : Ty} {c d : Nat} {es : List Val} (hl : Lands k (.node t c d es) N)
     (hw : WFv (.vec t) (.node t c d es)) {H : List Dep} (hv : ViewsOK m (.vec t) (.node t c d es) H)
-    (hn : NamesIn (.node t c d es) H) :
+    (hn : NamesIn (.node t c d es) H) (hsh : SharesOK m (.vec t) (.node t c d es)) :
     ∃ dep ∈ derive y E k, HrefAt m dep c t H := by
   unfold derive
   cases h : E.mode.isRoot with
   | true =>
     simp only [↓reduceIte, List.mem_singleton, exists_eq_left]
-    exact ⟨N, d, es, hroot h, by rw [hrk]; exact hl, hw, hv, hn⟩
+    exact ⟨N, d, es, hroot h, by rw [hrk]; exact hl, hw, hv, hn, hsh⟩
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
     have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
     obtain ⟨dep, hd, n0, hr, hld⟩ := hbor hb
-    exact ⟨_, ⟨dep, hd, rfl⟩, n0, d, es, hr, lands_comp' hld hl, hw, hv, hn⟩
+    exact ⟨_, ⟨dep, hd, rfl⟩, n0, d, es, hr, lands_comp' hld hl, hw, hv, hn, hsh⟩
 
 /-- A view taken from `y` in way `k`. -/
 theorem derive_viewAt {m : Mem} {y : Var} {E : Entry} {N : Val}
@@ -558,14 +558,14 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
         · rw [hv] at hw; cases hw
       · rw [ht] at hty; cases hty
     | vec t =>
-      obtain ⟨c, d, es, hvec, hw, hvs, hroot', _, hns⟩ := hi.vec_node hy hl hty
+      obtain ⟨c, d, es, hvec, hw, hvs, hroot', _, hns, hshv⟩ := hi.vec_node hy hl hty
       have hvc : v = .href c := by
         obtain ⟨_, _, hvec⟩ := hvec
         rcases hv with hv | ⟨_, _, _, _, hv, rfl⟩ <;> rcases hvec with h | ⟨h, _⟩ <;>
           rw [hv] at h <;> cases h <;> rfl
       refine valOK_vec.mpr ⟨c, hvc, ?_⟩
       exact derive_hrefAt (hroot' ·) (fun h => by rw [h] at hisroot; cases hisroot)
-        (by rw [hty]; rfl) (Or.inl ⟨rfl, rfl⟩) hw hvs hns
+        (by rw [hty]; rfl) (Or.inl ⟨rfl, rfl⟩) hw hvs hns hshv
     | slice t =>
       obtain ⟨d, o, l, c, es, hs, _, _, hlen, hw, hroot', _⟩ := hi.slice_node hy hl hty
       have hvv : v = .view d o l := by
@@ -749,7 +749,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | arc a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
-    obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor, hns⟩ := hi.vec_node hy hl hty
+    obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor, hns, hshv⟩ := hi.vec_node hy hl hty
     have heq := VecOf.unique hi.heap hvec0 hvec
     cases heq
     have hmem : es[n] ∈ es := List.getElem_mem hn
@@ -770,7 +770,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
       | node hes =>
         rename_i c1 d1 es1
         exact .href (derive_hrefAt (hroot ·) hbor (by rw [hty]; rfl)
-          (Lands.elem hmem) (WFv.node hes) (hvs.elem hmem) (hns.sub (names_elem hmem)))
+          (Lands.elem hmem) (WFv.node hes) (hvs.elem hmem) (hns.sub (names_elem hmem)) (hshv.elem hmem))
     | prod a b =>
       refine lend_valOK hwe hpke (fun t' c' d' es' hs => ?_) (hvs.elem hmem) (hns.sub (names_elem hmem))
         (fun s h => by cases h)
@@ -798,7 +798,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | arc a => cases hwe
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
-    obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns⟩ := hi.vec_node hy hl hty
+    obtain ⟨c0, d0, es0, hvec0, hw, _, _, _, hns, hshv⟩ := hi.vec_node hy hl hty
     have heq := VecOf.unique hi.heap hvec0 hvec
     cases heq
     have hmem : es[n] ∈ es := List.getElem_mem hn
@@ -823,7 +823,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
     exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by cases h
   valBor _ := by
-    obtain ⟨c0, d0, es0, hvec0, hw, _, hroot, hbor, hns⟩ := hi.vec_node hy hl hty
+    obtain ⟨c0, d0, es0, hvec0, hw, _, hroot, hbor, hns, hshv⟩ := hi.vec_node hy hl hty
     have heq := VecOf.unique hi.heap hvec0 hvec
     cases heq
     refine .view (derive_viewAt (hroot ·) ?_ (by decide) (by rw [hty]; rfl)
@@ -888,8 +888,9 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
       | node hes =>
         rename_i c1 d1 es1
         refine .href (derive_hrefAt (hroot ·) ?_ (by rw [hty]; rfl)
-          (Lands.elem hmem) (WFv.node hes) (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
-          (no_names (WFv.node hes) (by simpa [Ty.holdsView] using hok.2) _))
+          (Lands.elem hmem) (WFv.node hes) (ViewsOK.none (by simpa [Ty.holdsView] using hok.1.2) _ _)
+          (no_names (WFv.node hes) (by simpa [Ty.holdsView] using hok.1.2) _)
+          (SharesOK.of_noArc (by simpa [Ty.hasArc] using hok.2)))
         intro hb
         obtain ⟨dep, hd, n0, hr, _, hla⟩ := hbor hb
         exact ⟨dep, hd, n0, hr, hla⟩

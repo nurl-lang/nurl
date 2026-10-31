@@ -81,6 +81,20 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Va
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.arc t) (.arc k)) :
     ∃ bl, m.blk k = some bl ∧ bl.ty = t := h t k .here
 
+theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} (h : ArcIn τ T u k) : τ.hasArc = true := by
+  induction h with
+  | here => rfl
+  | child _ _ ih => exact ih
+  | fst _ ih => simp [Ty.hasArc, ih]
+  | snd _ ih => simp [Ty.hasArc, ih]
+  | inl _ ih => simp [Ty.hasArc, ih]
+  | inr _ ih => simp [Ty.hasArc, ih]
+  | pkg _ _ => rfl
+
+/-- A tree of a type that holds no share holds none to check. -/
+theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
+  fun _ _ ha => by rw [ha.hasArc] at h; cases h
+
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
 inductive Child : Val → Val → Prop

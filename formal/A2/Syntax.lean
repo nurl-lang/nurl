@@ -42,13 +42,24 @@ def Ty.holdsView : Ty → Bool
   | .fn _ => true     -- what the environment holds is not part of the type
   | .arc t => t.holdsView
 
+/-- A3.1: may a value of this type hold a share (an `Arc`)?  A closure's
+    environment may. -/
+def Ty.hasArc : Ty → Bool
+  | .int => false
+  | .vec t => t.hasArc
+  | .slice t => t.hasArc
+  | .prod a b => a.hasArc || b.hasArc
+  | .sum a b => a.hasArc || b.hasArc
+  | .fn _ => true
+  | .arc _ => true
+
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
-    carry views). -/
+    carry views), and, in A3.1's first cut, no shares. -/
 def Ty.ok : Ty → Bool
   | .int => true
   | .vec t => t.ok
-  | .slice t => t.ok && !t.holdsView
+  | .slice t => t.ok && !t.holdsView && !t.hasArc
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ => true
