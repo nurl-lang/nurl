@@ -123,13 +123,7 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
     obtain ⟨ha, hlt⟩ := hh.alloc o U hU' i hi
     exact ⟨by rw [halloc i hni]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
   self o U hU := hh.self o U (hown o U hU).2
-  bnodup k bl hk := hh.bnodup k bl (by rw [← hb]; exact hk)
-  bdisj k bl o U hk hU := hh.bdisj k bl o U (by rw [← hb]; exact hk) (hown o U hU).2
-  bdisj2 k k' bl bl' hne hk hk' := hh.bdisj2 k k' bl bl' hne (by rw [← hb]; exact hk) (by rw [← hb]; exact hk')
-  balloc k bl hk i hi := by
-    rw [hb] at hk
-    obtain ⟨ha, hlt⟩ := hh.balloc k bl hk i hi
-    exact ⟨by rw [halloc i (hh.bdisj k bl x T hk hx i hi)]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
@@ -138,8 +132,6 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     (hT : T.ids.Nodup) (hTs : SelfFree T) (hTa : ∀ i ∈ T.ids, m'.alloc i = true ∧ i < m'.nid)
     (hTd : ∀ o U, OwnedAt m o U → ∀ i ∈ T.ids, i ∉ U.ids)
     (halloc : ∀ o U, OwnedAt m o U → ∀ i ∈ U.ids, m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid)
-    (hTb : ∀ k bl, m.blk k = some bl → ∀ i ∈ k :: bl.pay.ids, i ∉ T.ids)
-    (hballoc : ∀ k bl, m.blk k = some bl → ∀ i ∈ k :: bl.pay.ids, m'.alloc i = m.alloc i)
     (hb : m'.blk = m.blk := by rfl) :
     HeapOK m' where
   nodup o U hU := by
@@ -161,17 +153,7 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hTs
     · exact hh.self o U h
-  bnodup k bl hk := hh.bnodup k bl (by rw [← hb]; exact hk)
-  bdisj k bl o U hk hU := by
-    rw [hb] at hk
-    rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
-    · exact hTb k bl hk
-    · exact hh.bdisj k bl o U hk h
-  bdisj2 k k' bl bl' hne hk hk' := hh.bdisj2 k k' bl bl' hne (by rw [← hb]; exact hk) (by rw [← hb]; exact hk')
-  balloc k bl hk i hi := by
-    rw [hb] at hk
-    obtain ⟨ha, hlt⟩ := hh.balloc k bl hk i hi
-    exact ⟨by rw [hballoc k bl hk i hi]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-! ### Trees that do not view themselves -/
 

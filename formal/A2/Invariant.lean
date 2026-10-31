@@ -310,13 +310,9 @@ structure HeapOK (m : Mem) : Prop where
   disj  : ∀ x y t u, x ≠ y → OwnedAt m x t → OwnedAt m y u → ∀ i ∈ t.ids, i ∉ u.ids
   alloc : ∀ x t, OwnedAt m x t → ∀ i ∈ t.ids, m.alloc i = true ∧ i < m.nid
   self  : ∀ x t, OwnedAt m x t → SelfFree t
-  -- A3.1: a block owns its own address and its payload's, as a slot owns
-  -- its tree's: distinct, live, and no other owner's
-  bnodup : ∀ k bl, m.blk k = some bl → (k :: bl.pay.ids).Nodup
-  bdisj  : ∀ k bl x t, m.blk k = some bl → OwnedAt m x t → ∀ i ∈ k :: bl.pay.ids, i ∉ t.ids
-  bdisj2 : ∀ k k' bl bl', k ≠ k' → m.blk k = some bl → m.blk k' = some bl' →
-             ∀ i ∈ k :: bl.pay.ids, i ∉ k' :: bl'.pay.ids
-  balloc : ∀ k bl, m.blk k = some bl → ∀ i ∈ k :: bl.pay.ids, m.alloc i = true ∧ i < m.nid
+  -- A3.1's first cut: a payload owns no address (it holds no allocation),
+  -- and a block's key is no address either (taken from `nid`, never live)
+  bpay  : ∀ k bl, m.blk k = some bl → bl.pay.ids = []
 
 /-- A binding's slot agrees with its entry. -/
 def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
@@ -352,10 +348,8 @@ def Stmt.spine : Stmt → List Var
 def SharesHeld (m : Mem) : Prop :=
   ∀ T, TreeAt m T → ∀ k p, Sub (.arc k p) T → ∃ u, m.blk k = some ⟨u, p⟩
 
-/-- Nothing leaks: every live address is in a tree some binding owns, or
-    (A3.1) is a block's or its payload's. -/
-def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true →
-  (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ (∃ k bl, m.blk k = some bl ∧ i ∈ k :: bl.pay.ids)
+/-- Nothing leaks: every live address is in a tree some binding owns. -/
+def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x t ∧ i ∈ t.ids
 
 /-- A `recover` frame returns to its caller's store: every binding outside
     the frames it has opened (and its result `x`) is as the caller left it. -/

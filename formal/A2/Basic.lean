@@ -275,16 +275,11 @@ theorem treeAt_unique {m : Mem} (hh : HeapOK m) {t u n1 n2 : Val} (ht : TreeAt m
     (h1 : Sub n1 t) (h2 : Sub n2 u) {i : Nat} (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
   have hi1' := h1.ids i (Val.head_ids _ i hi1)
   have hi2' := h2.ids i (Val.head_ids _ i hi2)
-  rcases ht with ⟨x, hx⟩ | ⟨k, a, hk⟩ <;> rcases hu with ⟨y, hy⟩ | ⟨k', b, hk'⟩
-  · exact (owned_unique hh hx hy h1 h2 hi1 hi2).2
-  · exact absurd hi1' (hh.bdisj k' _ x _ hk' hx i (List.mem_cons_of_mem _ hi2'))
-  · exact absurd hi2' (hh.bdisj k _ y _ hk hy i (List.mem_cons_of_mem _ hi1'))
-  · by_cases hkk : k = k'
-    · subst hkk
-      rw [hk] at hk'; cases hk'
-      exact sub_unique (List.nodup_cons.mp (hh.bnodup k _ hk)).2 h1 h2 hi1 hi2
-    · exact absurd (List.mem_cons_of_mem _ hi2')
-        (hh.bdisj2 k k' _ _ hkk hk hk' i (List.mem_cons_of_mem _ hi1'))
+  rcases ht with ⟨x, hx⟩ | ⟨k, a, hk⟩
+  · rcases hu with ⟨y, hy⟩ | ⟨k', b, hk'⟩
+    · exact (owned_unique hh hx hy h1 h2 hi1 hi2).2
+    · have := hh.bpay k' _ hk'; simp only at this; rw [this] at hi2'; cases hi2'
+  · have := hh.bpay k _ hk; simp only at this; rw [this] at hi1'; cases hi1'
 
 /-- A share a well-formed tree holds is one at some type. -/
 theorem WFv.arcIn {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {p : Val} (hs : Sub (.arc k p) T) :
@@ -366,7 +361,23 @@ theorem HeapOK.treeAt_alloc {m : Mem} (hh : HeapOK m) {T : Val} (hT : TreeAt m T
     ∀ i ∈ T.ids, m.alloc i = true ∧ i < m.nid := by
   rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
   · exact hh.alloc x T hx
-  · exact fun i hi => hh.balloc k ⟨u, T⟩ hk i (List.mem_cons_of_mem _ hi)
+  · intro i hi; have := hh.bpay k _ hk; simp only at this; rw [this] at hi; cases hi
+
+/-- An owned tree stays one where the slots that held trees hold them still
+    and the blocks are as they were. -/
+theorem TreeAt.keep {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T) (hb : m'.blk = m.blk)
+    {T : Val} (h : TreeAt m T) : TreeAt m' T := by
+  rcases h with ⟨x, hx⟩ | ⟨k, u, hk⟩
+  · exact Or.inl ⟨x, hown x T hx⟩
+  · exact Or.inr ⟨k, u, by rw [hb]; exact hk⟩
+
+/-- A node of an owned tree that owns an address is a slot's: a payload owns
+    none (A3.1's first cut). -/
+theorem TreeAt.owned_of_mem {m : Mem} (hh : HeapOK m) {T : Val} (hT : TreeAt m T) {i : Nat}
+    (hi : i ∈ T.ids) : ∃ x, OwnedAt m x T := by
+  rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
+  · exact ⟨x, hx⟩
+  · have := hh.bpay k _ hk; simp only at this; rw [this] at hi; cases hi
 
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by

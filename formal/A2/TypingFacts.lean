@@ -849,6 +849,6 @@ theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     · exact h
   exact ⟨fun o U h => hh.nodup o U (hown o U h),
     fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1) (hown o2 U2 h2),
-    fun o U h => hh.alloc o U (hown o U h), fun o U h => hh.self o U (hown o U h)⟩
+    fun o U h => hh.alloc o U (hown o U h), fun o U h => hh.self o U (hown o U h), hh.bpay⟩
 
 end A2

@@ -1904,7 +1904,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         · exact List.mem_append_right _ (envDeps_sub _ _ hd)
   let mn : Mem := { m with nv := m.nv + 1 }
   have hin : MInv mn Γ :=
-    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self⟩ (Nat.le_succ _)
+    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.bpay⟩ (Nat.le_succ _)
   have hval : ValOK mn te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
     have hk : ∀ dep : Dep, VKeep m mn dep ∧ HKeep m mn dep := fun dep => by
       have hr : RootKeep m mn dep.root := fun n hn => rootNode_st rfl hn

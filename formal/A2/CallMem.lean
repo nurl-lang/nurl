@@ -9,7 +9,7 @@ namespace A2
 theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (hn : m'.nid = m.nid)
     (hsrc : ∀ o T, OwnedAt m' o T → ∃ p, OwnedAt m p T)
     (hinj : ∀ o1 o2 T1 T2, o1 ≠ o2 → OwnedAt m' o1 T1 → OwnedAt m' o2 T2 →
-      ∃ p1 p2, p1 ≠ p2 ∧ OwnedAt m p1 T1 ∧ OwnedAt m p2 T2) : HeapOK m' where
+      ∃ p1 p2, p1 ≠ p2 ∧ OwnedAt m p1 T1 ∧ OwnedAt m p2 T2) (hb : m'.blk = m.blk := by rfl) : HeapOK m' where
   nodup o T hT := by obtain ⟨p, hp⟩ := hsrc o T hT; exact hh.nodup p T hp
   disj o1 o2 T1 T2 hne h1 h2 := by
     obtain ⟨p1, p2, hp, hp1, hp2⟩ := hinj o1 o2 T1 T2 hne h1 h2
@@ -18,19 +18,22 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
     obtain ⟨p, hp⟩ := hsrc o T hT
     rw [ha, hn]; exact hh.alloc p T hp i hi
   self o T hT := by obtain ⟨p, hp⟩ := hsrc o T hT; exact hh.self p T hp
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/
 theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T) {r : Var}
-    (hr : m'.st r = m.st r) : RootKeep m m' r := by
+    (hr : m'.st r = m.st r) (hb : m'.blk = m.blk := by rfl) : RootKeep m m' r := by
+  have htr : ∀ T, TreeAt m T → TreeAt m' T := fun T hT => by
+    rcases hT with ⟨o, ho⟩ | ⟨k, u, hk⟩
+    · obtain ⟨o2, h2⟩ := hown o T ho; exact Or.inl ⟨o2, h2⟩
+    · exact Or.inr ⟨k, u, by rw [hb]; exact hk⟩
   intro n hn
-  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, o, T, hT, hs, hnode⟩ |
-      ⟨v, d, o', l, hc, ht, o, T, hT, hs, hdata⟩
+  rcases hn with ⟨T0, hn, ht⟩ | ⟨v, c, hc, ht, T, hT, hs, hnode⟩ |
+      ⟨v, d, o', l, hc, ht, T, hT, hs, hdata⟩
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
-  · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, o2, T, h2, hs, hnode⟩)
-  · obtain ⟨o2, h2⟩ := hown o T hT
-    exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, o2, T, h2, hs, hdata⟩)
+  · exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, T, htr T hT, hs, hnode⟩)
+  · exact Or.inr (Or.inr ⟨v, d, o', l, by rw [hr]; exact hc, ht, T, htr T hT, hs, hdata⟩)
 
 theorem SlotOK.clean {m : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) : SlotOK m E.clean sl := by
   unfold Entry.clean
@@ -235,7 +238,7 @@ theorem heap (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) : HeapOK (callMem m m1 fn x) := by
   obtain ⟨ha, hn, _, _⟩ := h.bind hb
   refine hi.heap.relabel (by simp [callMem, ha]) (by simp [callMem, hn]) (fun o T hT => ?_)
-    (fun o1 o2 T1 T2 hne h1 h2 => ?_)
+    (fun o1 o2 T1 T2 hne h1 h2 => ?_) hb.blk
   · rcases h.own_src hi hb hT with ⟨k, t, _, _, hT'⟩ | ⟨hT', _⟩
     · exact ⟨_, hT'⟩
     · exact ⟨_, hT'⟩
@@ -251,7 +254,7 @@ theorem heap (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
 theorem rootKeep (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) {r : Var} (hu : Untouched fn args m.nv x r) :
     RootKeep m (callMem m m1 fn x) r :=
-  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu)
+  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu) hb.blk
 
 theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
     (callPe Γ ps args v).live = true := by

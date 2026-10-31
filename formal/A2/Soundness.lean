@@ -52,7 +52,7 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
   | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hi.heap hcd hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
@@ -67,7 +67,7 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
   | refl => cases hr
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
-    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hsc).1 _ _ rfl
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hi.heap hcd hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr
@@ -102,7 +102,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   dom _ := rfl
   slot _ _ h := by cases h
   heap := ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
-    fun _ _ h => (by cases h)⟩
+    fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
   wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),

@@ -1059,14 +1059,7 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
         obtain ⟨ha, hlt⟩ := hi.heap.alloc o U hU i hi'
         exact ⟨by rw [hold o U hU i hi']; exact ha, by show i < m.nid + 2; omega⟩
       self := fun o U hU => hi.heap.self o U hU
-      bnodup := fun k bl hk => hi.heap.bnodup k bl hk
-      bdisj := fun k bl o U hk hU => hi.heap.bdisj k bl o U hk hU
-      bdisj2 := fun k k' bl bl' hne hk hk' => hi.heap.bdisj2 k k' bl bl' hne hk hk'
-      balloc := fun k bl hk i hi' => by
-        obtain ⟨ha, hlt⟩ := hi.heap.balloc k bl hk i hi'
-        refine ⟨?_, by show i < m.nid + 2; omega⟩
-        show upd (upd m.alloc m.nid true) (m.nid + 1) true i = true
-        rw [upd_ne _ _ (by omega), upd_ne _ _ (by omega)]; exact ha }
+      bpay := hi.heap.bpay }
   refine ⟨⟨hi.of_st rfl hheap (Nat.le_refl _), rfl, by show m.nid ≤ m.nid + 2; omega, fun _ => rfl, fun _ _ => rfl,
     fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, rfl⟩, ?_⟩
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
@@ -1298,13 +1291,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
         · exact (hi.heap.self y _ hT).shrink (fun x hx => List.mem_append_left _ hx)
         · exact hi.heap.self o U h
-      bnodup := hi.heap.bnodup
-      bdisj := fun k bl o U hk hU => by
-        rcases hown1 o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
-        · exact fun i hi' hi'' => hi.heap.bdisj k bl y _ hk hT i hi' (hsubl.subset hi'')
-        · exact hi.heap.bdisj k bl o U hk h
-      bdisj2 := hi.heap.bdisj2
-      balloc := hi.heap.balloc }
+      bpay := hi.heap.bpay }
   have hsfT := hi.heap.self y _ hT
   have hkeepF : ∀ dep ∈ E.held, dep.root ≠ y → VKeep m m1 dep := by
     intro dep hd hne
