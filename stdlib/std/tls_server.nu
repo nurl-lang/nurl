@@ -115,7 +115,7 @@ $ `stdlib/std/arc.nu`
 //   7  CRC-32 slicing-by-8 tables (std/deflate.nu)
 //   8, 9  base64 decode tables, standard and URL alphabets (std/encode.nu)
 //   10  Keccak-f[1600] round constants (std/hash_sha3.nu)
-//   11  P-256 affine table 0·G … 15·G for signature verification (std/ecdsa_p256.nu)
+//   11  P-256 affine odd multiples 1·G, 3·G … 127·G for signature verification (std/ecdsa_p256.nu)
 //   12  ML-KEM NTT zeta tables, scalar and per-lane (std/mlkem.nu)
 
 @ _tls_ticket_key_ensure → v {

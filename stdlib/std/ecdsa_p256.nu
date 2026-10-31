@@ -145,11 +145,14 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 // key, the signature's r/s, a message digest), so it needs no
 // operand-independent timing — it needs speed, because a TLS client pays
 // one verify per certificate in the chain and a JWT server one per
-// request. P-256 computes u1·G + u2·Q as ONE Straus–Shamir pass: the 256
-// doublings are shared, and each 4-bit window adds a digit of u1 from an
-// affine table of G (built once per process) and a digit of u2 from an
-// affine table of Q (built per verify, one batch inversion). Digit 0
-// adds nothing.
+// request. P-256 computes u1·G + u2·Q as ONE interleaved pass over the
+// two scalars' width-w NAFs: the 256 doublings are shared, and a non-zero
+// digit adds ± an odd multiple of its point from an affine table. A NAF
+// of width w has a non-zero digit about once every w + 1 positions, so
+// G's digits (width 7, a table of 1·G … 127·G built once per process) cost
+// about 32 additions and Q's (width 5, 1·Q … 15·Q built per verify with
+// one batch inversion) about 43 — against about 120 for the 4-bit windows
+// this replaces, whose fifteen-in-sixteen digits were non-zero.
 //
 // The scalars come out of r and s, which an attacker chooses, so the
 // additions must be right for every relation between the accumulator
@@ -159,25 +162,109 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 
 : ~ i g_p256_gtbl 0
 
-// 0, G, 2G, …, 15G as an affine Montgomery table; built on first use and
-// shared through publish-once slot 11 (registry: stdlib/std/tls_server.nu).
-// G is a public constant, so caching it leaks nothing.
+// The affine odd multiples 1·P, 3·P, …, (2k − 1)·P of a Montgomery affine
+// point P of order n, entry j at [8j, 8j + 8) as x‖y: P, 2P by one
+// doubling, then (2j + 1)·P = (2j − 1)·P + 2P by Jacobian additions — never
+// ±2P or ∞ for k ≤ 64, since 2j − 1 ≢ ±2 (mod n) — and ONE batch
+// inversion for all of them. P is public in every use.
+// requires: px, py and onem hold 4 limbs; 1 ≤ k ≤ 64.
+@ __p256_odd_tbl P256Scratch scr ( Vec i ) px ( Vec i ) py ( Vec i ) onem i k → ( Vec i ) {
+    : ( Vec i ) jac ( _magn * k 12 )
+    : P256Pt p ( _p256_pt_mag )
+    : P256Pt d ( _p256_pt_mag )
+    ( __ec_set4 . p x ( vec_data [i] px ) ) ( __ec_set4 . p y ( vec_data [i] py ) ) ( __ec_set4 . p z ( vec_data [i] onem ) )
+    ( __ec_set4 . d x ( vec_data [i] px ) ) ( __ec_set4 . d y ( vec_data [i] py ) ) ( __ec_set4 . d z ( vec_data [i] onem ) )
+    ( _p256_tbl_put jac 0 p )
+    ( _p256_jdbl_d scr d )
+    : ~ i j 1
+    ~ < j k {
+        ( _p256_jadd_d scr p d )
+        ( _p256_tbl_put jac j p )
+        = j + j 1
+    }
+    : ( Vec i ) tbl ( _magn * k 8 )
+    ( _p256_batch_affine scr jac k tbl 0 onem )
+    ^ tbl
+}
+
+// 1·G, 3·G, …, 127·G (64 entries) as an affine Montgomery table; built on
+// first use and shared through publish-once slot 11 (registry:
+// stdlib/std/tls_server.nu). G is a public constant, so caching it leaks
+// nothing.
 @ __p256_g_tbl → ( Vec i ) {
     ? == g_p256_gtbl 0 {
         : P256Scratch scr ( _p256_scr_new )
         : ( Vec i ) gx ( _p256_to_mont_s scr ( _p256_gx_plain ) )
         : ( Vec i ) gy ( _p256_to_mont_s scr ( _p256_gy_plain ) )
         : ( Vec i ) onem ( _p256_one_mont_s scr )
-        : ( Vec i ) tbl ( _p256_affine_multiples scr gx gy onem )
+        : ( Vec i ) tbl ( __p256_odd_tbl scr gx gy onem 64 )
         = g_p256_gtbl ( vec_publish_once [i] 11 tbl )
     } {}
     ^ @ ( Vec i ) { # s g_p256_gtbl }
 }
 
-// Nibble `w` (0 = most significant) of a 32-byte big-endian scalar.
-@ __p256_nib ( Vec u ) k i w → i {
-    : i bv ?? ( vec_get [u] k / w 2 ) { T b → # i b F _ → 0 }
-    ^ ? == % w 2 0 & 15 >> bv 4 & 15 bv
+// The width-w NAF of a 32-byte big-endian scalar: 257 digits, digit i the
+// coefficient of 2^i, each 0 or odd with |d| < 2^(w−1), and no two
+// non-zero digits within w positions of each other. Variable time: for
+// public scalars only (verify's u1 and u2).
+@ __p256_wnaf ( Vec u ) k i w → ( Vec i ) {
+    : ( Vec i ) d ( vec_zeroed [i] 257 )
+    : *i dp ( vec_data [i] d )
+    : ( Vec i ) kl ( _p256_be32_to_limbs k 0 )
+    : *i kp ( vec_data [i] kl )
+    : ~ u64 l0 # u64 . kp 0
+    : ~ u64 l1 # u64 . kp 1
+    : ~ u64 l2 # u64 . kp 2
+    : ~ u64 l3 # u64 . kp 3
+    : ~ u64 l4 0
+    : i full << 1 w
+    : i half << 1 - w 1
+    : ~ i at 0
+    ~ & < at 257 != 0 | | | | l0 l1 l2 l3 l4 {
+        ? != 0 & l0 1 {
+            : ~ i dd # i & l0 # u64 - full 1
+            ? >= dd half { = dd - dd full } {}
+            = . dp at dd
+            // k −= dd: dd > 0 borrows up, dd < 0 carries up
+            ? > dd 0 {
+                : u64 s # u64 dd
+                : ~ u64 bb ( nurl_subb_hi l0 s 0 )
+                = l0 ( nurl_subb_lo l0 s 0 )
+                : u64 n1 ( nurl_subb_lo l1 0 bb )
+                = bb ( nurl_subb_hi l1 0 bb )
+                = l1 n1
+                : u64 n2 ( nurl_subb_lo l2 0 bb )
+                = bb ( nurl_subb_hi l2 0 bb )
+                = l2 n2
+                : u64 n3 ( nurl_subb_lo l3 0 bb )
+                = bb ( nurl_subb_hi l3 0 bb )
+                = l3 n3
+                = l4 ( nurl_subb_lo l4 0 bb )
+            } {
+                : u64 s # u64 - 0 dd
+                : ~ u64 cc ( nurl_addc_hi l0 s 0 )
+                = l0 ( nurl_addc_lo l0 s 0 )
+                : u64 n1 ( nurl_addc_lo l1 0 cc )
+                = cc ( nurl_addc_hi l1 0 cc )
+                = l1 n1
+                : u64 n2 ( nurl_addc_lo l2 0 cc )
+                = cc ( nurl_addc_hi l2 0 cc )
+                = l2 n2
+                : u64 n3 ( nurl_addc_lo l3 0 cc )
+                = cc ( nurl_addc_hi l3 0 cc )
+                = l3 n3
+                = l4 ( nurl_addc_lo l4 0 cc )
+            }
+        } {}
+        // k >>= 1
+        = l0 | >> l0 1 << l1 63
+        = l1 | >> l1 1 << l2 63
+        = l2 | >> l2 1 << l3 63
+        = l3 | >> l3 1 << l4 63
+        = l4 >> l4 1
+        = at + at 1
+    }
+    ^ d
 }
 
 // Entry `d` of an affine table into (ex, ey).
@@ -185,6 +272,29 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : *i tp ( vec_data [i] tbl )
     ( __ec_set4 ex # *i + # i tp * * d 8 8 )
     ( __ec_set4 ey # *i + # i tp * + * d 8 4 8 )
+}
+
+// y ← p − y, for a y in [1, p − 1] (a point of P-256 never has y = 0:
+// the group has odd order, so no point is its own negation).
+@ __ec_negy ( Vec i ) y → v {
+    : *i yp ( vec_data [i] y )
+    : u64 d0 ( nurl_subb_lo 0xffffffffffffffff # u64 . yp 0 0 )
+    : ~ u64 bb ( nurl_subb_hi 0xffffffffffffffff # u64 . yp 0 0 )
+    : u64 d1 ( nurl_subb_lo 0x00000000ffffffff # u64 . yp 1 bb )
+    = bb ( nurl_subb_hi 0x00000000ffffffff # u64 . yp 1 bb )
+    : u64 d2 ( nurl_subb_lo 0 # u64 . yp 2 bb )
+    = bb ( nurl_subb_hi 0 # u64 . yp 2 bb )
+    : u64 d3 ( nurl_subb_lo 0xffffffff00000001 # u64 . yp 3 bb )
+    = . yp 0 # i d0 = . yp 1 # i d1 = . yp 2 # i d2 = . yp 3 # i d3
+}
+
+// acc += digit · (odd-multiple table), for a non-zero NAF digit: entry
+// (|digit| − 1)/2, its y negated for a negative digit.
+@ __p256_wnaf_add P256Scratch scr P256Pt acc ( Vec i ) tbl i digit ( Vec i ) ex ( Vec i ) ey ( Vec i ) onem → v {
+    : i mag ? < digit 0 - 0 digit digit
+    ( __p256_atbl_at ex ey tbl >> - mag 1 1 )
+    ? < digit 0 { ( __ec_negy ey ) } {}
+    ( _p256_jmadd_vt scr acc ex ey onem )
 }
 
 // The P-256 verify core: u1 = z·s⁻¹, u2 = r·s⁻¹ over GF(n), R = u1·G +
@@ -200,39 +310,52 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : ( Vec i ) gtbl ( __p256_g_tbl )
     : ( Vec i ) qx ( _p256_to_mont_s scr qxl )
     : ( Vec i ) qy ( _p256_to_mont_s scr qyl )
-    : ( Vec i ) qtbl ( _p256_affine_multiples scr qx qy onem )
+    : ( Vec i ) qtbl ( __p256_odd_tbl scr qx qy onem 8 )
+    : ( Vec i ) dg ( __p256_wnaf u1 7 )
+    : ( Vec i ) dq ( __p256_wnaf u2 5 )
+    : *i gp ( vec_data [i] dg )
+    : *i qp ( vec_data [i] dq )
     : P256Pt acc ( _p256_pt_mag )
     ( _p256_set_identity_d scr acc )
     : ( Vec i ) ex ( _mag4 )
     : ( Vec i ) ey ( _mag4 )
-    : ~ i wi 0
-    ~ < wi 64 {
-        ? == ( _p256_zmask . acc z ) 0 {
-            ( _p256_jdbl_d scr acc ) ( _p256_jdbl_d scr acc )
-            ( _p256_jdbl_d scr acc ) ( _p256_jdbl_d scr acc )
-        } {}
-        : i d1 ( __p256_nib u1 wi )
-        ? != d1 0 {
-            ( __p256_atbl_at ex ey gtbl d1 )
-            ( _p256_jmadd_vt scr acc ex ey onem )
-        } {}
-        : i d2 ( __p256_nib u2 wi )
-        ? != d2 0 {
-            ( __p256_atbl_at ex ey qtbl d2 )
-            ( _p256_jmadd_vt scr acc ex ey onem )
-        } {}
-        = wi + wi 1
+    // from the highest non-zero digit down; doublings of ∞ are skipped
+    : ~ i at 256
+    ~ & >= at 0 == 0 | . gp at . qp at { = at - at 1 }
+    ~ >= at 0 {
+        ? == ( _p256_zmask . acc z ) 0 { ( _p256_jdbl_d scr acc ) } {}
+        : i a . gp at
+        ? != a 0 { ( __p256_wnaf_add scr acc gtbl a ex ey onem ) } {}
+        : i b . qp at
+        ? != b 0 { ( __p256_wnaf_add scr acc qtbl b ex ey onem ) } {}
+        = at - at 1
     }
     ? != ( _p256_zmask . acc z ) 0 { ^ F } {}
-    // x(R) = X / Z², compared with r mod n.
-    : ( Vec i ) zinv ( _mag4 )
-    ( _p256_inv_d scr zinv . acc z )
-    ( _p256_sqr_d scr zinv zinv )
-    ( _p256_mul_d scr . acc x . acc x zinv )
-    ( _p256_from_mont_d scr . acc x . acc x )
-    : ( Vec u ) xb ( vec_with_cap [u] 32 )
-    ( _p256_limbs_to_be xb . acc x )
-    ^ ( bytes_eq ( p256n_reduce_be xb ) rb )
+    // x(R) = X/Z² ≡ r (mod n) ⇔ X = r'·Z² for r' = r or, when r + n < p,
+    // r' = r + n (x(R) < p < 2n): compared in the field, so no inversion.
+    : ( Vec i ) z2 ( _mag4 )
+    ( _p256_sqr_d scr z2 . acc z )
+    : ( Vec i ) rl ( _p256_be32_to_limbs rb 0 )
+    : ( Vec i ) rm ( _p256_to_mont_s scr rl )
+    : ( Vec i ) t ( _mag4 )
+    ( _p256_mul_d scr t rm z2 )
+    ? ( _p256_eq t . acc x ) { ^ T } {}
+    // r + n, plain limbs (r < n, so it fits 256 bits only when small)
+    : *i rp ( vec_data [i] rl )
+    : u64 s0 ( nurl_addc_lo # u64 . rp 0 0xf3b9cac2fc632551 0 )
+    : ~ u64 cc ( nurl_addc_hi # u64 . rp 0 0xf3b9cac2fc632551 0 )
+    : u64 s1 ( nurl_addc_lo # u64 . rp 1 0xbce6faada7179e84 cc )
+    = cc ( nurl_addc_hi # u64 . rp 1 0xbce6faada7179e84 cc )
+    : u64 s2 ( nurl_addc_lo # u64 . rp 2 0xffffffffffffffff cc )
+    = cc ( nurl_addc_hi # u64 . rp 2 0xffffffffffffffff cc )
+    : u64 s3 ( nurl_addc_lo # u64 . rp 3 0xffffffff00000000 cc )
+    = cc ( nurl_addc_hi # u64 . rp 3 0xffffffff00000000 cc )
+    ? != cc 0 { ^ F } {}
+    = . rp 0 # i s0 = . rp 1 # i s1 = . rp 2 # i s2 = . rp 3 # i s3
+    ? ! ( _p256_lt_p rl ) { ^ F } {}
+    : ( Vec i ) rm2 ( _p256_to_mont_s scr rl )
+    ( _p256_mul_d scr t rm2 z2 )
+    ^ ( _p256_eq t . acc x )
 }
 
 // A DER-decoded integer (big-endian, any leading zeros) as exactly 32
