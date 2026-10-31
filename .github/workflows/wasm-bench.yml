@@ -194,7 +194,7 @@ jobs:
           BENCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # A row whose implementations print different lines makes
         # wasmbench.sh exit non-zero after writing the report: the timings
-        # would be comparing different computations. The commit step below
+        # would be comparing different computations. The publish step below
         # is not `if: always()`, so such a run publishes nothing.
         run: |
           args=()

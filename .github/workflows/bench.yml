@@ -36,11 +36,11 @@ on:
   schedule:
     - cron: '17 2 * * *'
   push:
-    # Release tags: every vX.Y.Z also refreshes the committed numbers, so
+    # Release tags: every vX.Y.Z also refreshes the published numbers, so
     # a release always ships with a table measured at exactly that tag.
     tags: ['v*']
 
-  # Manual runs also commit the refreshed numbers — for re-measuring
+  # Manual runs of main also publish the refreshed numbers — for re-measuring
   # between releases (runner microarchitecture drift, toolchain bumps,
   # noise-floor changes) without waiting for the next tag.
   #

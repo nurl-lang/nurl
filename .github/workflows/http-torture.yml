@@ -13,11 +13,11 @@ name: http-torture
 #                                           has with run_http.sh.
 #
 # Deliberately MANUAL, like http-bench.yml and pq-bench.yml: no push/tag
-# trigger. A full run stays under 60 minutes from checkout to the results
-# commit (the report's "Wall time per dimension" table says where it went:
+# trigger. A full run stays under 60 minutes from checkout to the published
+# report (its "Wall time per dimension" table says where it went:
 # two 600 s soaks are 20 of them), and its cells are load numbers on a
 # shared VM — opt in when you want a fresh runner-measured table. Only a
-# full run on main commits its report; a run on a branch, or a smoke run,
+# full run on main publishes its report; a run on a branch, or a smoke run,
 # leaves it in the run summary and the artifact.
 #
 # Two things differ from the workstation runs the table was born on:
