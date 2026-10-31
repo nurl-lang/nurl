@@ -3688,18 +3688,36 @@ NURL_TLS_WRAP void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
  * top: no hashing, no bucket chain. The sequence numbers are the pointer
  * journal's, so a drain or truncate still walks both newest-first. */
 
-__attribute__((noinline))
-static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+/* The stack full, or the sequence exhausted: grow it (or stop), then
+ * push. Out of line and tail-called, so the registration every owned
+ * binding makes inside a recover extent stays a leaf: with the realloc in
+ * its body it saved and restored six callee-saved registers on every
+ * push, a third of its instructions (agora #283). */
+__attribute__((noinline, cold))
+static void nurl__jslot_push_grow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+    if (nurl__jrnl_sequence == UINT64_MAX) {
+        fputs("nurl: panic journal sequence exhausted\n", stderr);
+        abort();
+    }
     if (nurl__jslot_len == nurl__jslot_cap) {
         size_t cap = nurl__jslot_cap ? nurl__jslot_cap * 2 : 64;
         nurl__jslot = realloc(nurl__jslot, cap * sizeof(NurlSlotEntry));
         nurl__jslot_cap = cap;
     }
-    if (nurl__jrnl_sequence == UINT64_MAX) {
-        fputs("nurl: panic journal sequence exhausted\n", stderr);
-        abort();
-    }
     NurlSlotEntry *e = &nurl__jslot[nurl__jslot_len++];
+    e->slot = slot; e->drop = drop; e->flag = flag;
+    e->sequence = ++nurl__jrnl_sequence;
+}
+
+__attribute__((noinline))
+static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+    size_t len = nurl__jslot_len;
+    if (__builtin_expect(len == nurl__jslot_cap || nurl__jrnl_sequence == UINT64_MAX, 0)) {
+        nurl__jslot_push_grow(slot, drop, flag);
+        return;
+    }
+    NurlSlotEntry *e = &nurl__jslot[len];
+    nurl__jslot_len = len + 1;
     e->slot = slot; e->drop = drop; e->flag = flag;
     e->sequence = ++nurl__jrnl_sequence;
 }
