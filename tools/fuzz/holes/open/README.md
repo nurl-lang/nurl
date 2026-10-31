@@ -1,6 +1,20 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**None.** The last class, agora #150, is closed and graduated as
+**Nine elaborated twins** ([`twins.txt`](twins.txt), agora #242). Every
+probe is closed, and since #242 `check.sh` also runs each probe's
+elaborated twin (`elab.py`): the producer form bound by `:` first, the
+consumer reading the binding. On main 360531b7, 24 of 58 twins faulted.
+#242 closed 15: a `:` binding of a join takes the owner its arm selects
+(docs/MEMORY.md §2.2) and gives it back where it dies; an `inout`
+parameter takes a binding owned per path with its flag; a block ending in
+a fresh call hands over the call's result; and a binding that cannot be
+copied is handed back with a per-call answer. The nine left share one
+gap: a binding does not inherit what its producer lends (a call in an arm
+lending a local, a field or a view of an inner local, a value a `;` defer
+releases). That is what #222's elaboration closes at the source, stage by
+stage (docs/dev/ELABORATION.md).
+
+Before them, the last class, agora #150, closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
 (`( string_free . ( box_get b ) name )`) went over as is, and the owner
 released it again; the callee is handed a copy now.

@@ -911,13 +911,21 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One hole is known open: agora #224.** A destructor (`% Drop`) runs at
+**Two holes are known open: agora #224 and agora #242.** A destructor (`% Drop`) runs at
 its value's scope end and may read a view the value holds, but the
 checker does not count that drop as a use: when what the view reads ends
 first (reallocated, moved to a `sink`, or released at a scope end, which
 today runs drops in declaration order), the destructor reads freed
 memory. [`LIMITATIONS.md`](LIMITATIONS.md) says how to stay clear of it
 until the fix (reverse-order scope-end drops and a dropck rule) ships.
+
+And a producer (a `?` / `??`, a value block) bound by `:` and then
+handed on by name is not always judged as the producer handed on
+directly: nine elaborated twins of closed probes still fault
+([`tools/fuzz/holes/open/twins.txt`](../tools/fuzz/holes/open/twins.txt)),
+where the binding does not inherit what its producer lends. The rest of
+#242 is closed: a `:` binding of a join takes the owner its arm selects
+(§2.2) and gives it back where it dies while the owner lives on.
 
 Every other hole found is closed (0.81.0 and 0.82.0; old ids h426–h974,
 named probes since then). Most were one shape in many contexts: a value lent out of one
