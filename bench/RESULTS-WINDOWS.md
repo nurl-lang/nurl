@@ -6,8 +6,8 @@ The machine-readable form of this same run is
 [`results/latest-windows.json`](results/latest-windows.json).
 
 These are **not** the numbers the landing page publishes: that table comes
-from the Linux CI run in [`RESULTS.md`](RESULTS.md) /
-[`results/latest.json`](results/latest.json). Two things differ beyond the
+from the Linux CI run in [`RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/RESULTS.md) /
+[`results/latest.json`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/results/latest.json). Two things differ beyond the
 host — NURL links without `-flto` here, because `build.bat` does not compile
 `stdlib/runtime.o` to bitcode, and the link names `-lwinhttp` instead of
 `-lm -lpthread`. Both match what a real `nurl.bat` build does on this

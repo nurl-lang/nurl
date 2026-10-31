@@ -8,7 +8,7 @@
 
 The cause is **out-of-distribution fragmentation**, not verbosity alone. Every public BPE was trained on Python/Rust/JS corpora, so `def `, `for i in range`, `let mut`, `+=`, `=>` are pre-merged into one token each, while NURL's glyph-and-prefix surface (`@`, `→`, `^`, `~`, `: ~ i`, `??`, `*i`) has never been seen and decomposes to near-character granularity. Note the bytes-on-disk table below: on several benches NURL is *fewer characters* than Python yet *more tokens* — character-count was the wrong proxy all along.
 
-**Implication for the project copy:** the raw token-count claim does not survive measurement and should be dropped. The defensible LLM-native arguments are (a) grammar *regularity* — a one-page LL(k≤4) grammar with local semantics — and (b) *first-pass compile success*, which this study does not measure. See `bench/RESULTS.md` and the ROADMAP's "generation-accuracy comparison" item.
+**Implication for the project copy:** the raw token-count claim does not survive measurement and should be dropped. The defensible LLM-native arguments are (a) grammar *regularity* — a one-page LL(k≤4) grammar with local semantics — and (b) *first-pass compile success*, which this study does not measure. See [`bench/RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/RESULTS.md) and the ROADMAP's "generation-accuracy comparison" item.
 
 Encoders used:
 

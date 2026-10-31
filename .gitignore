@@ -124,6 +124,27 @@ bench/rust_http2_server/target/
 bench/rust_pq/target/
 bench/tls_bench/rust/target/
 
+# Measured numbers live on the bench-data branch, not on main (Agora #290;
+# tools/bench_data.sh publishes and fetches them). A local run writes them
+# here; they are not part of a commit to main.
+/FUZZRESULTS.md
+bench/RESULTS.md
+bench/RESULTS-x*.md
+bench/results/latest.json
+bench/results/x*.json
+bench/results/wasm-latest.json
+bench/results/wasm-x*.json
+bench/HTTP_RESULTS.md
+bench/HTTP_DB_RESULTS.md
+bench/HTTP2_RESULTS.md
+bench/HTTP3_RESULTS.md
+bench/PQ_RESULTS.md
+bench/WASMRESULTS.md
+bench/WASMRESULTS-x*.md
+bench/http_torture/TORTURE_RESULTS.md
+bench/tls_bench/TLS_RESULTS*.md
+bench/tls_bench/runs/
+
 # Development notes & helpers
 TODO.md
 critic.md

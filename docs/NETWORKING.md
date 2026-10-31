@@ -416,7 +416,7 @@ Conformance is a CI gate, not a claim: `tools/h2spec_gate.sh` runs h2spec
 §3.5/2 pinned by name), then confirms the negotiated protocol with curl.
 `compiler/tests/http2_in_http_server.nu` proves the same with the in-repo
 client. Performance is measured separately in
-[`bench/HTTP2_RESULTS.md`](../bench/HTTP2_RESULTS.md) (`bench/run_http2.sh`),
+[`bench/HTTP2_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP2_RESULTS.md) (`bench/run_http2.sh`),
 next to the HTTP/1.1 report.
 
 Limits: the handler runs synchronously inside the connection's frame loop,
@@ -471,7 +471,7 @@ Conformance is a CI gate, not a claim: `tools/h3spec_gate.sh` runs h3spec
 the HttpApp TLS listener (**49/49**) and checks `Alt-Svc` on the TCP
 responses; locally it also drives one `curl --http3-only` request through
 the `ymuski/curl-http3` docker image. Performance is measured separately in
-[`bench/HTTP3_RESULTS.md`](../bench/HTTP3_RESULTS.md) (`bench/run_http3.sh`,
+[`bench/HTTP3_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP3_RESULTS.md) (`bench/run_http3.sh`,
 `h2load --h3` from an nghttp2 image built with ngtcp2 + nghttp3), next to
 the HTTP/1.1 and HTTP/2 reports.
 

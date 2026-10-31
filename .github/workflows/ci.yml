@@ -127,7 +127,6 @@ jobs:
           filters: |
             webdocs:
               - 'webdocs/**'
-              - 'bench/results/latest.json'
               - 'tools/get-nurl.sh'
               - 'tools/get-nurl.ps1'
               - 'tools/gen-site-facts.sh'
@@ -169,7 +168,6 @@ jobs:
           filters: |
             code:
               - '!webdocs/**'
-              - '!bench/results/latest.json'
               - '!tools/get-nurl.sh'
               - '!tools/get-nurl.ps1'
               - '!tools/gen-site-facts.sh'
@@ -279,6 +277,14 @@ jobs:
         # JSON fixtures, no toolchain.
         shell: bash
         run: python3 tools/tests/test_http_torture_lib.py
+      - name: Measured numbers go to the bench-data branch
+        # tools/bench_data.sh is how every benchmark and fuzz workflow
+        # publishes, so main moves only through the merge queue (Agora
+        # #290): orphan creation, replay after a concurrent push, the
+        # tls-bench render hook, fetch. Throwaway git repositories, no
+        # toolchain.
+        shell: bash
+        run: python3 tools/tests/test_bench_data.py
       - name: Generated RSA-2048 ADX kernels are current
         # stdlib/runtime_core.c carries tools/gen_rsa_adx16.py's output
         # between markers; a hand edit or a stale block fails here.

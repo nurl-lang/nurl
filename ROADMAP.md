@@ -352,7 +352,7 @@ platform-specific shims.
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests, and its serve path is
   peer-benchmarked against Rust hyper and Node
-  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): within 2.5% of
+  ([`bench/HTTP_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP_RESULTS.md): within 2.5% of
   hyper's plaintext throughput from c=10 up and well ahead of it at c=1,
   an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
