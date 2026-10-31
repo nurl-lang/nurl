@@ -67,6 +67,13 @@ described in prose somewhere that no test covers:
   `tools/fuzz/holes/open/t<N>.md`, one file per hole, which PRs add and
   delete instead of editing the list (Agora #136). release.yml checks it
   on the tag. Ask in Agora whether a hole open on `main` has no file yet.
+- The proof's change table: `python3 tools/formal_rules.py --write`
+  regenerates the table "Changes to MEMORY.md and what they do to the
+  proof" in `formal/RULES.md` from `formal/rules/t<N>.md`, one file per
+  change, which ownership PRs add or edit instead of the table (Agora
+  #299). release.yml checks it on the tag. It prints any row the table
+  has and no file holds: one a file has since revised goes, as it
+  should; one written into the table by hand belongs in a file first.
 - `formal/*.md` and `formal/corpus/map.tsv` — shipped as `docs/formal/`
   and served by `nurl_docs` the same way. The prose carries no probe
   counts any more (they went stale with every closed hole, and every
@@ -104,8 +111,9 @@ and its fragment stays in `changes/unreleased/`. In 0.83.0, two did.
 `verify-ci` fails a tag whose commit still holds a fragment. Fold it
 into `[X.Y.Z]` with a follow-up PR (`tools/changelog.py fold X.Y.Z
 --into`, which adds each entry to its section of the existing release),
-and tag that PR's commit. Regenerate the open-hole list in the same PR
-(`tools/fuzz/holes/open_list.py --write`).
+and tag that PR's commit. Regenerate the open-hole list and the proof's
+change table in the same PR (`tools/fuzz/holes/open_list.py --write`,
+`tools/formal_rules.py --write`).
 
 **The release needs a green macOS run on that commit** (Agora #213).
 release.yml's first job, `verify-ci`, waits for both `ci.yml` and

@@ -1,0 +1,3 @@
+### Changed
+
+- **`formal/RULES.md`'s change rows are one file per change** (Agora #299). Every ownership PR used to add its row at the end of the table "Changes to MEMORY.md and what they do to the proof", so any two of them conflicted there. Each row now lives in `formal/rules/t<N>.md` after its Agora task (`t0.md` for the changes that had none), and `tools/formal_rules.py --write` writes the table from them in task order at release time, beside `open_list.py`. release.yml checks the table on the tag (`--check`), and CI's shared-files job lints the files on every PR (`--lint`). The 91 existing rows moved into 57 files verbatim.

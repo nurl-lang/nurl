@@ -111,6 +111,9 @@ jobs:
           # tools/fuzz/holes/open/t*.md say: no hole a release ships with goes
           # unlisted, and none closed is still listed.
           python3 tools/fuzz/holes/open_list.py --check
+          # formal/RULES.md's change table is what formal/rules/t*.md say:
+          # every ownership change the release ships has its row.
+          python3 tools/formal_rules.py --check
       - name: Require successful ci.yml and macos-tests.yml runs for this SHA
         uses: actions/github-script@v7
         with:
