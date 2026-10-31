@@ -27,7 +27,7 @@
 #
 # A probe is named for what it breaks (lower_snake_case, no number), and
 # its leading comment block carries a `// map: rule | phase | nurlc | old id
-# | note` line: tools/fuzz/holes/map.py builds formal/corpus/map.tsv from
+# | note` line: tools/fuzz/holes/map.sh writes formal/corpus/map.tsv from
 # those lines (Agora #212). A new probe needs no number claimed anywhere.
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"

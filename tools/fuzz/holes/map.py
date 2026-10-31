@@ -19,13 +19,17 @@ line in its leading comment block:
           (h918–h923 each name two probes: two PRs claimed the same range.)
   note    one line: what broke
 
-map.tsv is that table, sorted by probe name, so two pull requests that each
-add a probe insert rows in different places and do not conflict. No PR
-edits map.tsv by hand: write the `// map:` line and run `--write`.
+map.tsv is that table, sorted by probe name. It is generated where it is
+read and never committed (Agora #307): build.sh, tools/install-toolchain.sh
+and the nurlapi image write it with tools/fuzz/holes/map.sh (POSIX sh +
+awk, since build.sh needs no Python), and webdocs reads the `// map:` lines
+itself. A pull request that adds a probe adds its `// map:` line and nothing
+else, so two such PRs never conflict. CI's shared-files job runs `--lint`
+and requires this script and map.sh to print the same table.
 
     tools/fuzz/holes/map.py            # print the table
-    tools/fuzz/holes/map.py --write    # regenerate formal/corpus/map.tsv
-    tools/fuzz/holes/map.py --check    # CI: exit 1 if map.tsv is stale
+    tools/fuzz/holes/map.py --lint     # CI: every probe's `// map:` line is well formed
+    tools/fuzz/holes/map.py --write    # write formal/corpus/map.tsv here (git-ignored)
     tools/fuzz/holes/map.py --counts   # totals per phase and verdict
 """
 import os
@@ -99,17 +103,10 @@ def main(argv):
         with open(MAP, 'w', encoding='utf-8') as fh:
             fh.write(text)
         print(f'map.py: wrote {len(rs)} probes to formal/corpus/map.tsv')
-    elif mode == '--check':
-        try:
-            with open(MAP, encoding='utf-8') as fh:
-                have = fh.read()
-        except FileNotFoundError:
-            have = ''
-        if have != text:
-            print('map.py: formal/corpus/map.tsv is not what the probes\' `// map:` lines say. '
-                  'Run tools/fuzz/holes/map.py --write and commit the result.', file=sys.stderr)
-            return 1
-        print(f'map.py: map.tsv matches the {len(rs)} probes')
+    elif mode in ('--lint', '--check'):
+        # (`--check` is the old name: the table it compared against is no
+        # longer committed, so the lint is all there is to check.)
+        print(f'map.py: the {len(rs)} probes each have a well-formed `// map:` line')
     elif mode == '--counts':
         print(f'probes: {len(rs)}')
         for p in PHASES:

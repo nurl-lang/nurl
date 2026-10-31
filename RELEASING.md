@@ -71,8 +71,10 @@ described in prose somewhere that no test covers:
   and served by `nurl_docs` the same way. The prose carries no probe
   counts any more (they went stale with every closed hole, and every
   probe PR edited them); `tools/fuzz/holes/map.py --counts` gives the
-  totals, and map.tsv is generated from the probes (`map.py --check`
-  runs in CI).
+  totals. map.tsv is not in the tree at all (Agora #307):
+  `tools/install-toolchain.sh` writes it into the prefix from the probes'
+  `// map:` lines (`tools/fuzz/holes/map.sh`), as build.sh does for a
+  checkout, and CI lints those lines (`map.py --lint`).
 
 ### 3. Branch and PR
 

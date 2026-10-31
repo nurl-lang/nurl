@@ -220,8 +220,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: formal/corpus/map.tsv matches the probes' `// map:` lines
-        run: python3 tools/fuzz/holes/map.py --check
+      # formal/corpus/map.tsv is generated where it is read and never
+      # committed (Agora #307), so what a PR can get wrong is a probe's
+      # `// map:` line. map.sh writes the table for build.sh (which needs no
+      # Python) and the installers; it must print what map.py does.
+      - name: every probe has a well-formed `// map:` line; map.sh and map.py agree
+        shell: bash
+        run: |
+          python3 tools/fuzz/holes/map.py --lint
+          diff <(python3 tools/fuzz/holes/map.py) <(sh tools/fuzz/holes/map.sh)
       - name: changelog fragments are well formed; [Unreleased] holds none
         run: python3 tools/changelog.py check
       - name: formal/BLUEPRINT.md's counts, module DAG and index are the sources'

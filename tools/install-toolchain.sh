@@ -81,7 +81,8 @@ cp -a "$ROOT/docs/." "$PREFIX/docs/"
 # upgrade, which replaces docs/ wholesale, carries them too.
 mkdir -p "$PREFIX/docs/formal/corpus"
 cp -a "$ROOT"/formal/*.md "$PREFIX/docs/formal/"
-cp -a "$ROOT/formal/corpus/map.tsv" "$PREFIX/docs/formal/corpus/"
+# (The probe table is generated from the probes, not committed: Agora #307.)
+sh "$ROOT/tools/fuzz/holes/map.sh" --write "$PREFIX/docs/formal/corpus/map.tsv"
 
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"
