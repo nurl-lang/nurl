@@ -320,7 +320,7 @@ manually from Actions.
   (bootstrap fixed point + the full corpus against the same `outputs/`
   goldens as Linux) on every push to `main`, on every PR labelled
   `ci:macos`, and as a gate on every release tag. Adding a release
-  leg means `macos-14` (arm64) only — the Intel `macos-13` image never left
+  leg means `macos-15` (arm64) only — the Intel `macos-13` image never left
   GitHub's queue across ten attempted runs, which is why that leg was
   removed rather than left permanently pending (see
   [`docs/PLATFORMS.md`](docs/PLATFORMS.md)).

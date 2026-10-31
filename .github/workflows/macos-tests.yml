@@ -141,8 +141,16 @@ jobs:
     # learn to ignore is not a gate. docs/PLATFORMS.md therefore lists
     # macOS ARM64 as tier 1 and macOS x86_64 as tier 3, which is what is
     # actually true. Restore the leg when Intel capacity comes back.
+    #
+    # The image is pinned, never `macos-latest`: the image decides which
+    # macOS and which Xcode SDK the gate links against, so moving it is a
+    # reviewed change that also updates the docs naming it (README.md,
+    # docs/BUILDING.md, docs/PLATFORMS.md, RELEASING.md). `macos-14` was
+    # retired on 2026-11-02 (actions/runner-images#13518); its scheduled
+    # brownouts before that cancelled every run, so main had no macOS
+    # coverage at all until this moved to `macos-15` (Agora #302).
     name: build + bootstrap fixed point + test corpus (arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
 
     steps:
