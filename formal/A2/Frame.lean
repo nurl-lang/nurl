@@ -45,6 +45,8 @@ theorem killE_held (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x E
   unfold killE; split <;> rfl
 theorem killE_dtor (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x E).dtor = E.dtor := by
   unfold killE; split <;> rfl
+theorem killE_dbind (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x E).dbind = E.dbind := by
+  unfold killE; split <;> rfl
 theorem killE_vdeps (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).vdeps = E.vdeps := by
   simp [Entry.vdeps, killE_mode, killE_path, killE_held]

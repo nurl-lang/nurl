@@ -6,13 +6,18 @@ namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
   refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
-    fun h => ⟨h, List.Subset.refl _⟩⟩
+    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), (fun _ => by simp_all)⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
-  obtain ⟨t1, m1, r1, l1, d1⟩ := h1
-  obtain ⟨t2, m2, r2, l2, d2⟩ := h2
-  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_⟩
+  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1⟩ := h1
+  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2⟩ := h2
+  refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_, b2.trans b1, fun h => ?_,
+    fun h => (k2 (b1 ▸ h)).trans (k1 h)⟩
+  rotate_right
+  · rcases a2 h with h2 | h2
+    · exact a1 h2
+    · exact Or.inr (b1 ▸ h2)
   · have e12 := r1 h; subst e12; exact r2 h
   · obtain ⟨a2, p2, h2'⟩ := l2 h
     obtain ⟨a1, p1, h1'⟩ := l1 a2

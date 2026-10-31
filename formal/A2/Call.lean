@@ -2454,7 +2454,7 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
 theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
       rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor⟩ := by
+      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind⟩ := by
   simp [RSetup.liftE, hrb]
 
 /-- The callee's result, where the exits leave it. -/
