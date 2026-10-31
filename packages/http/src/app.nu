@@ -571,6 +571,30 @@ $ `stdlib/std/atomic.nu`
     }
 }
 
+// Serve a listener the caller made — any TcpListener, the kernel's or
+// one of another transport's (a simulated network's, stdlib/std/net_sim.nu,
+// so a test serves the very app main() builds over the simulated wire).
+// Same glue and same return as http_app_listen; MOVES `listener`, and
+// returns once it is closed (tcp_close_listener on a copy the caller
+// kept, or the shutdown signal for a kernel socket) — plaintext only.
+@ http_app_serve HttpApp a__h sink TcpListener listener → i {
+    : HttpAppImpl a ( rc_get [HttpAppImpl] . a__h a )
+    // "ip:port", for the banner: the host before the last ':', the port
+    // after it.
+    : String where ( tcp_local_addr listener )
+    : i n ( string_len where )
+    : ~ i colon n
+    : ~ i k 0
+    ~ < k n {
+        ? == 58 ( string_get where k ) { = colon k } {}
+        = k + k 1
+    }
+    : String host ( string_substr where 0 colon )
+    : ~ i port 0
+    ?? ( string_to_int ( string_substr where + colon 1 - - n colon 1 ) ) { T x → { = port x } F _ → {} }
+    ^ ( __httpapp_serve a listener `http` ( string_data host ) port `` `` )
+}
+
 // Same, over TLS. `cert`/`key` are PEM paths (EC, RSA or ML-DSA leaf,
 // auto-detected; a fullchain PEM is accepted for `cert`). With
 // `http_app_set_pq_cert` an ML-DSA pair is served beside this one.

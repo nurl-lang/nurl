@@ -1,0 +1,29 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+node 1 answers to 10.0.0.2: ok
+the listener reports its address: ok
+a second listener on the port is refused: ok
+nothing listening on a port refuses the connect: ok
+an address no node has is NetOther: ok
+connect from node 1: ok
+accept: ok
+the server sees node 1: ok
+the client sees the server: ok
+the client's write: ok
+reaches the server intact: ok
+write_all2 sends head and body: ok
+a short read takes what it asked for: ok
+and the rest follows in order: ok
+a read past its deadline is NetTimeout: ok
+what the peer sent before closing arrives: ok
+then its close is NetClosed: ok
+a closed conn reads as closed: ok
+a partition times the connect out: ok
+and the bus counted the loss: ok
+after the heal the connect goes through: ok
+and is accepted: ok
+a closed listener's accept is NetAccept: ok
+frames crossed the bus: ok
+net_sim_seam: all ok

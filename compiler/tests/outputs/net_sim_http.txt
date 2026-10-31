@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the client connects over the bus: ok
+25 requests on one connection, 25 right answers: ok
+a write into the partition is accepted: ok
+the read across the partition times out: ok
+and the bus dropped what was sent into it: ok
+after the heal the same request is answered: ok
+and the connection keeps serving: ok
+closing the listener stops http_app_serve cleanly: ok
+net_sim_http: all ok

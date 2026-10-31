@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.10] — unreleased
+
+Requires the NURL with std/net's transport seam (`tcp_listener_over`, stdlib/std/net_sim.nu).
+
+### Added
+
+- `http_app_serve a listener` serves a `TcpListener` the caller made, with the same glue as `http_app_listen` — the kernel's, or a simulated network's (`netsim_listen`), so a test can serve the very app `main` builds over a simulated wire with drops, latency and partitions, and no socket opened.
+
 ## [0.7.9] — 2026-10-22
 
 Requires the NURL with `path_rel_ok` / `path_within` (std/path.nu).

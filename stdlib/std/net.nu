@@ -27,6 +27,16 @@
 //   ( tcp_local_addr      TcpListener l )                   → String OWNED
 //   ( tcp_set_timeout     TcpConn c i ms )                  → v
 //   ( net_err_name        NetErr e )                        → s    diagnostic
+//   ( tcp_conn_over       %NetTransport t String peer )     → TcpConn      over a transport
+//   ( tcp_listener_over   %NetTransport t String local )    → TcpListener  that is not an OS socket
+//
+// Transports: a TcpListener or TcpConn is a socket of the operating
+// system (a runtime handle), or a socket of a network that is not the
+// operating system's — a NetTransport object (see "The transport seam"
+// below). The simulated network of stdlib/std/net_sim.nu is one: the
+// sans-IO TCP/IP stack over a seeded bus with drops, latency and
+// partitions, so a server built on these handles runs in a test
+// unchanged. Every tcp_* operation works on either.
 //
 // Memory model:
 //
@@ -134,7 +144,7 @@ $ `stdlib/std/thread.nu`
 // does not negotiate ALPN. The listener is a plain value every accepting
 // worker copies, so the material lives in a table of the module's
 // (g_tls_lcreds below) and `creds` names its slot (0 on a plaintext
-// listener); `keytype` is the identity's (tls_ident_keytype).
+// listener).
 : TlsCreds {
     ( Arc TlsIdent ) id
     ? ( Arc TlsIdent ) pq
@@ -142,16 +152,22 @@ $ `stdlib/std/thread.nu`
 }
 
 // The listener's state: the runtime socket handle, and for a TLS
-// listener its key type and credentials slot. None of it changes once
-// made: an early tcp_close_listener stops the runtime socket (closing its
-// fd) and empties the slot, and the last owner releases the handle.
-// Sealed (`raw`): `raw` is a runtime socket handle its drop closes.
-raw : TcpListenerImpl { i raw i is_tls i keytype i creds }
+// listener its credentials slot — or, for a listener of another
+// transport, one owner of that transport as a word (`nt`, see "The
+// transport seam"; `raw` is 0 then, and `nt` is 0 on an OS socket). None
+// of it changes once made: an early tcp_close_listener stops the socket
+// (closing a runtime fd) and empties the slot, and the last owner
+// releases the handle and gives the transport back, whose own drop
+// closes its socket.
+// Sealed (`raw`): `raw` is a runtime socket handle, `nt` a transport
+// owner, both given back by its drop.
+raw : TcpListenerImpl { i raw i is_tls i creds i nt }
 
 % Drop TcpListenerImpl {
     @ drop TcpListenerImpl l → v {
         ( nurl_tcp_close . l raw )
         ? != . l creds 0 { ( __tls_lcreds_close . l creds ) } {}
+        ? != . l nt 0 { ( __nt_release . l nt ) } {}
     }
 }
 
@@ -179,8 +195,8 @@ raw : TcpListenerImpl { i raw i is_tls i keytype i creds }
 
 @ __tli TcpListener l → *TcpListenerImpl { ^ ( shared_ptr [TcpListenerImpl] . l ctl ) }
 
-@ __tcp_listener_make i raw i is_tls i keytype i creds → TcpListener {
-    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { raw is_tls keytype creds } ) }
+@ __tcp_listener_make i raw i is_tls i creds → TcpListener {
+    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { raw is_tls creds 0 } ) }
 }
 
 // The runtime handle behind a listener.
@@ -229,9 +245,13 @@ raw : TcpListenerImpl { i raw i is_tls i keytype i creds }
     ( mutex_unlock g_tls_lcreds_mu )
 }
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
-// client, 2 = pure TLS server. For kinds 1/2 `tlsh` is one owner of the
-// TlsConn as a word (`_tls_word`; tcp_close_conn gives it back) and
-// reads/writes dispatch to the pure stack.
+// client, 2 = pure TLS server, 3 = another transport's socket. For kinds
+// 1/2 `tlsh` is one owner of the TlsConn as a word (`_tls_word`;
+// tcp_close_conn gives it back) and reads/writes dispatch to the pure
+// stack. For kind 3 `tlsh` is one owner of the transport as a word (see
+// "The transport seam"), `raw` is 0, and nothing here ever changes — so
+// another thread's tcp_conn_shutdown can read it while its owner closes
+// it; the drop gives the transport back.
 // Sealed (`raw`): `raw` and `tlsh` are runtime handles its drop closes.
 raw : TcpConnImpl { i raw i kind i tlsh b owns }
 
@@ -260,6 +280,135 @@ raw : TcpConnImpl { i raw i kind i tlsh b owns }
     ^ @ TcpConn { ( shared_new [TcpConnImpl] @ TcpConnImpl { raw kind tlsh owns } ) }
 }
 
+// ── The transport seam ─────────────────────────────────────────────
+//
+// A socket that is not the operating system's: an object of a type that
+// implements NetTransport, owned by a TcpConn (kind 3) or TcpListener
+// (`nt` set) made over it with tcp_conn_over / tcp_listener_over. Every
+// tcp_* operation on such a handle goes to the object's methods. The
+// simulated network of stdlib/std/net_sim.nu is the transport this was
+// made for; nothing in this file links it in, so a program that never
+// makes one pays nothing for it — no code, no compile time, no bytes (the
+// state keeps its layout: a listener's transport takes the slot of a key
+// type nothing read, a connection's the TLS handle's word), and on the
+// plaintext path no extra test: the transport `kind` is tested first,
+// where the TLS handle was.
+//
+// The methods answer in the tcp_* functions' own results, so the
+// operations here hand them straight back and every conversion lives in
+// the transport — code a program that never makes one does not compile.
+// Blocking is the transport's own business and has to be context-aware
+// like the rest of this file: a method that waits parks a fiber and
+// blocks a thread, as long as the socket's timeout says (nt_set_timeout;
+// 0 = no deadline). What never changes about a socket — the address
+// tcp_peer_addr / tcp_local_addr report — is not asked of the transport
+// at all: the handle keeps it beside the transport (NetTransportBox), so
+// the string is a plain field view, not a call's result. The object is
+// the socket: its drop closes it, so nothing is closed by hand, and
+// nt_close is the early close (idempotent — the drop that follows it
+// closes nothing). Several threads may hold one (a listener's workers,
+// the HTTP server's drain shutting a connection down), hence Send Sync.
+//
+// The handle holds its transport as ONE OWNER IN A WORD, as it holds a
+// TlsConn, not as a typed field. A trait object in TcpConn's type would
+// make every TcpConn a value whose captures the compiler cannot follow,
+// and storing one into a handle shared across threads — the HTTP
+// server's drain table does, for every connection — is then refused
+// (docs/MEMORY.md §7.7: it might close a cycle of counts nothing frees).
+// What makes the word sound is the contract on the two constructors: a
+// transport holds nothing that can reach a TcpConn or TcpListener — so
+// no cycle can pass through one — which is why they are `raw`: the
+// standard library's transports keep it (net_sim's socket holds its
+// network: stacks, a bus, a lock), and a program's own needs `unsafe`.
+% NetTransport [T] : Send Sync {
+    // The next connection on a listening socket, waiting for one for as
+    // long as it takes (an accept has no deadline; tcp_close_listener
+    // ends the wait with NetAccept).
+    @ nt_accept T self → !TcpConn NetErr
+    // Append up to `max` received bytes to `buf`. `wait` T is
+    // tcp_read_into: Ok(n > 0), the peer's end of stream NetClosed, a
+    // deadline NetTimeout. `wait` F is tcp_try_read_into: Ok(0) when
+    // nothing is there yet.
+    @ nt_read_into T self ( Vec u ) buf i max b wait → !i NetErr
+    // All of `bytes` (tcp_write_all): NetTimeout when the write deadline
+    // or the timeout passed first.
+    @ nt_write T self ( Vec u ) bytes → !v NetErr
+    // `head` then `body`, all of both, as one stream (tcp_write_all2).
+    @ nt_write_all T self ( Vec u ) head ( Vec u ) body → !v NetErr
+    // What of `wire` from `off` fits now (tcp_try_write_wire): Ok(n),
+    // Ok(0) when nothing does.
+    @ nt_try_write T self ( Vec u ) wire i off → !i NetErr
+    // 1 when readable / writable as asked, 0 when `timeout_ms` passed
+    // first (0 = poll, < 0 = no deadline), -1 when neither was asked.
+    @ nt_wait_io T self b readable b writable i timeout_ms → i
+    @ nt_close T self → v
+    // A connection: its read side (a blocked read returns), with `both`
+    // its write side too. A listener: accepting stops.
+    @ nt_shutdown T self b both → v
+    @ nt_set_timeout T self i ms → v
+    @ nt_timeout_ms T self → i
+    @ nt_set_write_deadline T self i ns → v
+    @ nt_write_deadline T self → i
+    @ nt_set_nonblock T self b on → v
+}
+
+// The transport in a counted block, with the socket's address ("ip:port"
+// of the peer for a connection, its own for a listener): its owner
+// travels as the block's address (one word), and the last owner drops
+// both.
+: NetTransportBox {
+    % NetTransport t
+    String addr
+}
+
+// requires: the word is given back, once, with __nt_release; and the
+// transport holds nothing that can reach a TcpConn or TcpListener.
+// TODO(#248): a known compromise. Once the §7.7 store rule judges a trait
+// object by its impls' types, the handles hold a typed field instead of
+// this word, and tcp_conn_over / tcp_listener_over stop being raw.
+raw @ __nt_word sink %NetTransport t sink String addr → i {
+    ^ ( shared_into_word [NetTransportBox] ( shared_new [NetTransportBox] @ NetTransportBox { t addr } ) )
+}
+
+// requires: `w` came from __nt_word and is given back only this once.
+raw @ __nt_release i w → v { : ( Shared NetTransportBox ) _back ( shared_from_word [NetTransportBox] w ) }
+
+// The transport an owner word names, lent for as long as that owner —
+// the handle's state, alive while any copy of the handle is — lives.
+@ __nt i w → %NetTransport { ^ . ( rcbox_ptr [NetTransportBox] w ) t }
+
+// Its address, lent the same way.
+@ __nt_addr i w → s { ^ ( string_data . ( rcbox_ptr [NetTransportBox] w ) addr ) }
+
+// A connection over `t`, which it now owns, to the peer at `peer`
+// ("ip:port", what tcp_peer_addr reports): its last owner drops `t`
+// (closing the socket); tcp_close_conn closes it early, for every copy.
+// requires: `t` holds nothing that can reach a TcpConn or TcpListener
+// (see "The transport seam").
+raw @ tcp_conn_over sink %NetTransport t sink String peer → TcpConn {
+    ^ @ TcpConn { ( shared_new [TcpConnImpl] @ TcpConnImpl { 0 3 ( __nt_word t peer ) T } ) }
+}
+
+// A listener over `t`, bound to `local` ("ip:port", what tcp_local_addr
+// reports): tcp_accept takes its connections (nt_accept),
+// tcp_close_listener stops it, the last owner drops `t`.
+// requires: as tcp_conn_over.
+raw @ tcp_listener_over sink %NetTransport t sink String local → TcpListener {
+    ^ @ TcpListener { ( shared_new [TcpListenerImpl] @ TcpListenerImpl { 0 0 0 ( __nt_word t local ) } ) }
+}
+
+// A connection's transport, when it has one (kind 3).
+// Close a transport by its owner word. tcp_close_conn hands over the
+// word rather than a view of the conn: it writes the conn's fields
+// afterwards on its other paths, and a transport method called on a
+// view of that same state made the borrow checker take every caller's
+// result for a view of the conn.
+@ __nt_close_word i w → v { ( nt_close ( __nt w ) ) }
+
+@ __tc_is_nt TcpConn c → b { ^ == . ( __tci c ) kind 3 }
+
+@ __tc_nt TcpConn c → %NetTransport { ^ ( __nt . ( __tci c ) tlsh ) }
+
 // A connection on runtime socket handle `raw`, which the TcpConn now owns:
 // its last owner (or tcp_close_conn) closes it.
 @ tcp_conn_adopt i raw → TcpConn { ^ ( __tcp_conn_make raw 0 0 T ) }
@@ -277,6 +426,9 @@ raw : TcpConnImpl { i raw i kind i tlsh b owns }
 // conn — and every copy of it — no longer closes.
 @ __tcp_conn_release TcpConn c → i {
     : *TcpConnImpl p ( __tci c )
+    // Another transport has no runtime handle to hand over: 0, which the
+    // TLS layer refuses, and the conn keeps (and closes) its own socket.
+    ? == . p kind 3 { ^ 0 } {}
     = . p owns F
     ^ . p raw
 }
@@ -374,7 +526,7 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
         ( nurl_tcp_close raw )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
-    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 0 0 0 ) }
+    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 0 0 ) }
 }
 
 // Convenience: tcp_listen_with and the default options
@@ -505,10 +657,9 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
     // listener seals and opens tickets under the same key.
     ( _tls_ticket_key_ensure )
     // The identities move into the listener's shared credentials.
-    : i keytype ( tls_ident_keytype id )
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
     : ( Arc TlsCreds ) creds ( arc_new [TlsCreds] @ TlsCreds { id pq alpn } )
-    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 1 keytype ( __tls_lcreds_add creds ) ) }
+    ^ @ !TcpListener NetErr { T ( __tcp_listener_make raw 1 ( __tls_lcreds_add creds ) ) }
 }
 
 @ tcp_listen_tls s host i port s cert_path s key_path → !TcpListener NetErr {
@@ -787,6 +938,9 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // (tcp_listener_retain) still releases it.
 @ tcp_close_listener TcpListener l → v {
     : *TcpListenerImpl p ( __tli l )
+    // (Another network's listener stops the same way; its socket goes
+    // with the last owner, as the runtime handle's does.)
+    ? != . p nt 0 { ( nt_shutdown ( __nt . p nt ) T ) ^ v } {}
     ( nurl_tcp_shutdown . p raw )
     ? != . p creds 0 { ( __tls_lcreds_close . p creds ) } {}
 }
@@ -796,7 +950,9 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // `server_run_pool`'s shutdown thread stops its workers so; the last
 // owner releases the rest.
 @ tcp_shutdown_listener TcpListener l → v {
-    : s rp # s . ( __tli l ) raw
+    : *TcpListenerImpl p ( __tli l )
+    ? != . p nt 0 { ( nt_shutdown ( __nt . p nt ) T ) ^ v } {}
+    : s rp # s . p raw
     : i raw # i rp
     ( nurl_tcp_shutdown raw )
 }
@@ -856,11 +1012,16 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 
 // Resolve a TcpConn's TlsConn (as its word), or 0 if the conn is plaintext.
 // kinds 1/2 carry it inline in `tlsh`; a STARTTLS-upgraded kind-0 conn
-// is found via the fd registry.
+// is found via the fd registry; a kind-3 conn (another transport) has
+// none. The kind is tested first: on the plaintext path that is the one
+// test this takes before the registry's (which a process that never
+// upgrades answers with its count), and it is what lets each operation
+// below test for kind 3 without adding a compare to that path.
 @ __conn_tlsptr TcpConn c → i {
-    ? != . ( __tci c ) tlsh 0 { ^ . ( __tci c ) tlsh } {}
-    ? == . ( __tci c ) kind 0 { ^ ( __starttls_lookup . ( __tci c ) raw ) } {}
-    ^ 0
+    : *TcpConnImpl p ( __tci c )
+    ? == . p kind 0 { ^ ( __starttls_lookup . p raw ) } {}
+    ? == . p kind 3 { ^ 0 } {}
+    ^ . p tlsh
 }
 
 // The fd backing a TcpConn — the runtime handle for plaintext, or the
@@ -915,9 +1076,13 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // CONNECTION's fiber run `tcp_conn_complete_tls`, so handshakes
 // proceed concurrently instead of serialising on the accept loop.
 @ tcp_accept_transport TcpListener l → !TcpConn NetErr {
+    // Another network's listener: its transport accepts (and waits as
+    // the context it runs in allows).
+    : *TcpListenerImpl lp ( __tli l )
+    ? != . lp nt 0 { ^ ( nt_accept ( __nt . lp nt ) ) } {}
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 { ^ ( tcp_accept_async l ) } {}
-    : i lraw . ( __tli l ) raw
+    : i lraw . lp raw
     : i craw ( nurl_tcp_accept lraw )
     ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind craw )
@@ -955,6 +1120,11 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 
 // Close `raw` / its TLS connection (kind, tlsh as in TcpConnImpl).
 @ __tcp_conn_close_parts i raw i kind i tlsh → v {
+    // Another transport's owner goes back; its drop closes the socket.
+    ? == kind 3 {
+        ? != tlsh 0 { ( __nt_release tlsh ) } {}
+        ^ v
+    } {}
     : i tp ? != tlsh 0 tlsh ? == kind 0 ( __starttls_lookup raw ) 0
     ? != tp 0 {
         ( __starttls_unregister raw )
@@ -971,6 +1141,9 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // sees it closed; a view closes nothing.
 @ tcp_close_conn TcpConn c → v {
     : *TcpConnImpl p ( __tci c )
+    // Another transport closes its socket and the state stays as it is
+    // (see TcpConnImpl): every copy then reads a closed socket.
+    ? == . p kind 3 { ( __nt_close_word . p tlsh ) ^ v } {}
     ? . p owns { ( __tcp_conn_close_parts . p raw . p kind . p tlsh ) } {}
     = . p owns F
     = . p raw 0
@@ -986,6 +1159,9 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // IMAP/POP STLS, etc. The conn keeps its identity — no new TcpConn is
 // returned, so callers holding the conn by value see the upgrade.
 @ tcp_starttls TcpConn c s server_name b verify → !v NetErr {
+    // The TLS stack runs over a runtime socket handle; a connection of
+    // another transport has none to hand it.
+    ? ( __tc_is_nt c ) { ^ @ !v NetErr { F # NetErr NetOther } } {}
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
     : i fd . ( __tci c ) raw
@@ -1009,6 +1185,7 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 }
 
 @ tcp_peer_addr TcpConn c → s {
+    ? ( __tc_is_nt c ) { ^ ( __nt_addr . ( __tci c ) tlsh ) } {}
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
 }
 
@@ -1023,10 +1200,13 @@ unsafe & `c` @ nurl_tcp_local_addr i handle → sink s
 // BORROWED view cached on the handle: there is no cached local address,
 // so this one is computed and owned. Same shape as `udp_local_addr`.
 @ tcp_local_addr TcpListener l → String {
-    ^ ( string_adopt ( nurl_tcp_local_addr . ( __tli l ) raw ) )
+    : *TcpListenerImpl p ( __tli l )
+    ? != . p nt 0 { ^ ( string_from ( __nt_addr . p nt ) ) } {}
+    ^ ( string_adopt ( nurl_tcp_local_addr . p raw ) )
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {
+    ? ( __tc_is_nt c ) { ( nt_set_timeout ( __tc_nt c ) ms ) ^ v } {}
     ( nurl_tcp_set_timeout ( __conn_fd c ) ms )
 }
 
@@ -1036,6 +1216,7 @@ unsafe & `c` @ nurl_tcp_set_send_buffer i handle i bytes → i
 // The operating system may adjust this value. TLS uses the same underlying
 // socket; providers without native buffer tuning return NetOther.
 @ tcp_set_send_buffer TcpConn c i bytes → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ @ !v NetErr { F # NetErr NetOther } } {}
     : i error ( nurl_tcp_set_send_buffer ( __conn_fd c ) bytes )
     ? != error 0 { ^ @ !v NetErr { F ( _net_err_of error ) } } {}
     ^ @ !v NetErr { T 0 }
@@ -1051,16 +1232,19 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 // way. Windows always shuts both sides; a provider with no way to shut a
 // socket does nothing.
 @ tcp_conn_shutdown TcpConn c b both → v {
+    ? ( __tc_is_nt c ) { ( nt_shutdown ( __tc_nt c ) both ) ^ v } {}
     ( nurl_tcp_conn_shutdown ( __conn_fd c ) ? both 1 0 )
 }
 
 // Absolute monotonic nanoseconds; zero clears the write bound. Unlike
 // the idle timeout this survives partial writes and every TLS record.
 @ tcp_set_write_deadline TcpConn c i ns → v {
+    ? ( __tc_is_nt c ) { ( nt_set_write_deadline ( __tc_nt c ) ns ) ^ v } {}
     ( nurl_tcp_set_write_deadline ( __conn_fd c ) ns )
 }
 
 @ tcp_write_deadline TcpConn c → i {
+    ? ( __tc_is_nt c ) { ^ ( nt_write_deadline ( __tc_nt c ) ) } {}
     ^ ( nurl_tcp_write_deadline ( __conn_fd c ) )
 }
 
@@ -1104,6 +1288,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 
 // with a clean peer shutdown. Caller frees the Vec on the Ok path.
 @ tcp_read_chunk TcpConn c i max → !( Vec u ) NetErr {
+    ? ( __tc_is_nt c ) { ^ ( __nt_read_chunk c max ) } {}
     ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_read_net c max ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
@@ -1142,6 +1327,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 // deadline overrun Err(NetTimeout) — identical to tcp_read_chunk.
 @ tcp_read_into TcpConn c ( Vec u ) buf i max → !i NetErr {
     ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
+    ? ( __tc_is_nt c ) { ^ ( nt_read_into ( __tc_nt c ) buf max T ) } {}
     ? != ( __conn_tlsptr c ) 0 {
         // TLS: records are opened in place in the connection's record
         // buffer and the plaintext copied once, straight into `buf`.
@@ -1194,6 +1380,15 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
         }
     }
     ^ @ !i NetErr { F # NetErr NetOther }
+}
+
+// tcp_read_chunk over a transport: one read into a Vec of its own.
+@ __nt_read_chunk TcpConn c i max → !( Vec u ) NetErr {
+    : ( Vec u ) v ( vec_with_cap [u] max )
+    ?? ( nt_read_into ( __tc_nt c ) v max T ) {
+        T _ → ^ @ !( Vec u ) NetErr { T v }
+        F e → ^ @ !( Vec u ) NetErr { F e }
+    }
 }
 
 // Queue-ready I/O: encoding and socket progress are separate. Prepared
@@ -1261,6 +1456,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
     : i size ( vec_len [u] wire )
     ? | < offset 0 > offset size { ^ @ !i NetErr { F NetOther } } {}
     ? == offset size { ^ @ !i NetErr { T 0 } } {}
+    ? ( __tc_is_nt c ) { ^ ( nt_try_write ( __tc_nt c ) wire offset ) } {}
     : i raw ( __conn_fd c )
     : i wrote ( nurl_tcp_write_nowait raw # s + # i ( vec_data [u] wire ) offset - size offset )
     ? > wrote 0 { ^ @ !i NetErr { T wrote } } {}
@@ -1275,6 +1471,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 // without producing plaintext, and never force a blocking read for the next.
 @ tcp_try_read_into TcpConn c ( Vec u ) bytes i max → !i NetErr {
     ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
+    ? ( __tc_is_nt c ) { ^ ( nt_read_into ( __tc_nt c ) bytes max F ) } {}
     : i raw ( __conn_fd c )
     : i tls ( __conn_tlsptr c )
     ? != tls 0 {
@@ -1325,6 +1522,7 @@ unsafe & `c` @ nurl_tcp_conn_shutdown i handle i both → v
 }
 
 @ tcp_wait_io TcpConn c b readable b writable i timeout_ms → i {
+    ? ( __tc_is_nt c ) { ^ ( nt_wait_io ( __tc_nt c ) readable writable timeout_ms ) } {}
     ? & readable ( __tcp_buffered_read c ) { ^ 1 } {}
     : i events + ? readable 1 0 ? writable 2 0
     ? == events 0 { ^ -1 } {}
@@ -1395,6 +1593,7 @@ unsafe & `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
 }
 
 @ tcp_write_all TcpConn c ( Vec u ) bytes → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ ( nt_write ( __tc_nt c ) bytes ) } {}
     ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net c bytes ) } {}
     // Context-aware dispatch — see tcp_accept's note.
     : i fcur ( nurl_fiber_current )
@@ -1416,7 +1615,9 @@ unsafe & `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
 @ tcp_sendfile TcpConn c PFile f i off i len → !i NetErr {
     ? <= len 0 { ^ @ !i NetErr { T 0 } } {}
     : i tls ( __conn_tlsptr c )
-    : b kernel ? == tls 0 T ( tls_ktls_tx_ready # TlsConn tls )
+    // Another transport has no kernel to copy from the page cache: it
+    // takes the read-and-write path below.
+    : b kernel ? ( __tc_is_nt c ) F ? == tls 0 T ( tls_ktls_tx_ready # TlsConn tls )
     : ~ i sent 0
     ? kernel {
         // The socket's runtime handle: a TLS connection's own (__conn_fd),
@@ -1464,6 +1665,7 @@ unsafe & `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
 // On TLS the record layer seals the pair straight from the two buffers.
 // Both inputs are BORROWED, as for tcp_write_all.
 @ tcp_write_all2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ ( nt_write_all ( __tc_nt c ) head body ) } {}
     ? != ( __conn_tlsptr c ) 0 { ^ ( __tls_write_net2 c head body ) } {}
     : s rp # s . ( __tci c ) raw
     : i raw # i rp
@@ -1480,6 +1682,7 @@ unsafe & `c` @ nurl_tcp_sendfile i conn i fd i off i n → i
 // status-line case). The bytes [0..len) are sent — the trailing NUL is
 // NOT transmitted.
 @ tcp_write_str TcpConn c s text → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ ( nt_write ( __tc_nt c ) ( bytes_from_str text ) ) } {}
     ? != ( __conn_tlsptr c ) 0 {
         : ( Vec u ) b ( bytes_from_str text )
         : !v NetErr r ( __tls_write_net c b )
@@ -1545,6 +1748,7 @@ unsafe & `c` @ nurl_tcp_unref i handle → v
 }
 
 @ tcp_set_nonblock_conn TcpConn c i on → v {
+    ? ( __tc_is_nt c ) { ( nt_set_nonblock ( __tc_nt c ) != on 0 ) ^ v } {}
     : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ( nurl_tcp_set_nonblock raw on )
@@ -1564,6 +1768,8 @@ unsafe & `c` @ nurl_tcp_unref i handle → v
 // wait_readable returns -1 immediately and we fall back to the
 // existing sync `tcp_accept` (which blocks on the kernel).
 @ tcp_accept_async TcpListener l → !TcpConn NetErr {
+    // (A transport's accept is context-aware already.)
+    ? != . ( __tli l ) nt 0 { ^ ( tcp_accept_transport l ) } {}
     : s lrp # s . ( __tli l ) raw
     : i lraw # i lrp
     ( nurl_tcp_set_nonblock lraw 1 )
@@ -1603,6 +1809,7 @@ unsafe & `c` @ nurl_tcp_unref i handle → v
 // Non-blocking single recv. Same shape as tcp_read_chunk; loops on
 // EAGAIN via the reactor.
 @ tcp_read_chunk_async TcpConn c i max → !( Vec u ) NetErr {
+    ? ( __tc_is_nt c ) { ^ ( __nt_read_chunk c max ) } {}
     : s rp # s . ( __tci c ) raw
     : i raw # i rp
     ( nurl_tcp_set_nonblock raw 1 )
@@ -1651,6 +1858,7 @@ unsafe & `c` @ nurl_tcp_unref i handle → v
 // is delivered, parking on wait_writable when the kernel returns
 // EAGAIN.
 @ tcp_write_all_async TcpConn c ( Vec u ) bytes → !v NetErr {
+    ? ( __tc_is_nt c ) { ^ ( nt_write ( __tc_nt c ) bytes ) } {}
     : s rp # s . ( __tci c ) raw
     : i raw # i rp
     : *u p ( vec_data [u] bytes )
