@@ -1734,7 +1734,9 @@ order:
 ```
 
 In a foreach, the element binding is a *borrow* from the iterated
-slice. It is not owned and is not dropped at iteration end. Mutating
+slice. It is not owned and is not dropped at iteration end. It is bound
+for the body only: after the loop the name is the outer binding it
+shadowed, if any. Mutating
 the iterated container from inside the loop body is rejected by the
 borrow checker (§9.5).
 
