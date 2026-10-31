@@ -123,8 +123,9 @@
 //   Overflow        — nesting depth exceeded `JSON_MAX_DEPTH`
 //
 // Notes / limits:
-//   - Max nesting depth is `JSON_MAX_DEPTH` (1024) — guards against
-//     stack-blowing payloads like `[[[[[[…]]]]]]`.
+//   - Max nesting depth is `JSON_MAX_DEPTH` (256, as XML_MAX_DEPTH and
+//     YAML_MAX_DEPTH) — guards against stack-blowing payloads like
+//     `[[[[[[…]]]]]]`, sized for a fiber's 64 KB stack (see below).
 //   - `json_get` paths split on `.`. A purely-numeric segment ALWAYS
 //     means array index — there is no escape syntax to reach a numeric
 //     key in an object via path; use `json_obj_get` directly for those.
@@ -277,9 +278,18 @@ $ `stdlib/std/bytes.nu`
 //
 // `depth` is bumped/decremented around array/object recursion to enforce
 // a hard cap (`JSON_MAX_DEPTH`) and prevent stack overflow from hostile
-// payloads like `[[[[[[...]]]]]]`.
+// payloads like `[[[[[[...]]]]]]`. Every walk of a Json recurses once per
+// level: this parser (64 bytes a level), json_stringify / json_write /
+// json_pretty (__json_emit, 128) and the value's drop (64, nurl_vec_drop).
+// The cap is what keeps them inside the stack they run on, and a fiber's
+// is 64 KB (an async HTTP server's handler parses its body on one): 256
+// levels is 32 KB at the worst, the rest left to the handler. Under the
+// old cap of 1024, a body of 250 `[` then 250 `]` crashed the whole
+// server: a SIGSEGV on the fiber's guard page, in the parse while it took
+// 352 bytes a level, and in json_stringify from 550 levels after that
+// (agora #297; compiler/tests/json_deep_fiber.nu).
 
-: i JSON_MAX_DEPTH 1024
+: i JSON_MAX_DEPTH 256
 
 : JsonParser {
     s src
