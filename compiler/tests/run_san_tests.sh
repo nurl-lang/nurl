@@ -148,6 +148,14 @@ mkdir -p "$WORKDIR" "$LOGDIR"
 # concurrent sanitizer links, so a bound tight enough to be "useful"
 # would only ever buy flaky red. A real deadlock never finishes.
 TIMEOUT="${TIMEOUT:-120}"
+# The compile bound is the same kind of bound, for the compiler: the
+# nurlc built by `build.sh --san` runs ~14× slower than the normal one
+# (an allocation-heavy program under ASan), so test_harness.sh's 60 s —
+# sized for the normal compiler — passed a large test as a hang.
+# dst_flagship takes 3.9 s to compile normally and 54.6 s sanitized on
+# an idle 4-vCPU machine, net_sim_clients 3.5 s and 42.3 s; with four
+# workers on a CI runner the first went past 60 s in every merge group.
+export NURL_COMPILE_TIMEOUT="${NURL_COMPILE_TIMEOUT:-300}"
 JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # Leak detection on by default — see file header.
