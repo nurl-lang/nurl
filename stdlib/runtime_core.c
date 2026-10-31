@@ -9125,9 +9125,15 @@ __attribute__((weak)) long long wgpu_launch(long long pipeline, long long total,
  * free, including the packed-string layout (data sits at ctl+24) where
  * the data buffer must NOT be freed separately. NULL ctl is a no-op so
  * an empty/None-derived handle is safe. Used by the auto-generated
- * Drop functions for boxed-payload enum trees. */
-void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
-    if (!ctl) return;
+ * Drop functions for boxed-payload enum trees.
+ *
+ * Two halves (Agora #296). The element loop holds six values across its
+ * calls, so a body that contains it saves six callee-saved registers on
+ * entry, before it has looked at `elem_drop`. Most drops have no element
+ * to drop: a String, a ( Vec u ), a Json leaf. So nurl_vec_drop handles
+ * that case itself, keeping only `ctl` across one call, and tail-calls
+ * nurl__vec_drop_elems, the general body, when there is an `elem_drop`. */
+__attribute__((noinline)) static void nurl__vec_drop_elems(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     long long *c = (long long*)ctl;
     void *data = (void*)(intptr_t)c[0];
     long long len = c[1];
@@ -9136,13 +9142,23 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
      * it. nurl_free, not free: an owned handle may sit in the panic
      * journal, and only nurl_free takes it out. */
     if (c[2] < 0) { nurl_free(ctl); return; }
-    if (elem_drop && data && elem_size > 0) {
+    if (data && elem_size > 0) {
         char *base = (char*)data;
         nurl__cc_batch++;
         for (long long i = 0; i < len; i++) elem_drop(base + i*elem_size);
         if (--nurl__cc_batch == 0) nurl__cc_batch_end();
     }
     if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
+    nurl_free(ctl);
+}
+void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
+    if (!ctl) return;
+    if (elem_drop) { nurl__vec_drop_elems(ctl, elem_drop, elem_size); return; }
+    long long *c = (long long*)ctl;
+    void *data = (void*)(intptr_t)c[0];
+    /* The buffer goes unless the handle is a view (cap < 0: it owns only
+     * the control block) or a packed String (data at ctl+24, inside it). */
+    if (c[2] >= 0 && data && data != (void*)((char*)ctl + 24)) nurl_free(data);
     nurl_free(ctl);
 }
 
