@@ -90,6 +90,23 @@ jobs:
               - '!.github/workflows/webdocs-deploy.yml'
               - '!formal/**'
               - '!CHANGELOG.md'
+              - '!changes/**'
+
+  # Files every pull request used to edit by hand, and so conflict over
+  # (Agora #211, #212): the hole-probe table and the changelog. Both are
+  # now generated from per-change files. This job fails a PR that edits
+  # them by hand or leaves them stale. It needs no toolchain and runs in
+  # seconds, so it runs on every event, docs-only PRs included.
+  shared-files:
+    name: shared files are generated (map.tsv, changelog fragments)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: formal/corpus/map.tsv matches the probes' `// map:` lines
+        run: python3 tools/fuzz/holes/map.py --check
+      - name: changelog fragments are well formed; [Unreleased] holds none
+        run: python3 tools/changelog.py check
 
   runner-controls:
     name: compiler runner fault-injection controls

@@ -37,7 +37,6 @@ agora="$(grep -oP '#\d+' <<<"$title" | grep -v "^#$PR\$" | paste -sd' ' -)"
 
 rebase=""
 grep -q '^compiler/nurlc_lastgood\.' <<<"$paths" && rebase="bootstrap snapshot refreshed (compiler/nurlc_lastgood.*): rebuild with ./build.sh; "
-[[ -n "$probes" ]] && rebase="${rebase}you add hole probes (these are taken now); "
 grep -q '^compiler/nurlc\.nu$' <<<"$paths" && rebase="${rebase}you edit compiler/nurlc.nu; "
 
 echo "merged: github#$PR $title — main is now ${sha:-<sha>}"

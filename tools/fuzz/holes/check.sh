@@ -10,17 +10,23 @@
 #               fault, or the fault is timing-dependent; inspect).
 # Exit status = the number of HOLEs.
 #
-#   tools/fuzz/holes/check.sh            # all probes
-#   tools/fuzz/holes/check.sh h07_*.nu   # some
+#   tools/fuzz/holes/check.sh                 # all probes
+#   tools/fuzz/holes/check.sh drop_try_*.nu   # some
+#
+# A probe is named for what it breaks (lower_snake_case, no number), and
+# its leading comment block carries a `// map: rule | phase | nurlc | old id
+# | note` line: tools/fuzz/holes/map.py builds formal/corpus/map.tsv from
+# those lines (Agora #212). A new probe needs no number claimed anywhere.
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 DIR="$ROOT/tools/fuzz/holes"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 holes=0
 cd "$DIR"
-# (stdlib/: a probe that must sit in a directory named `stdlib` — h178,
-# a program's own code there is not the trusted standard library.)
-files=("$@"); [ ${#files[@]} -eq 0 ] && files=(h*.nu stdlib/h*.nu)
+# (stdlib/: a probe that must sit in a directory named `stdlib` —
+# trusted_by_path_substring, a program's own code there is not the trusted
+# standard library.)
+files=("$@"); [ ${#files[@]} -eq 0 ] && files=(*.nu stdlib/*.nu)
 for f in "${files[@]}"; do
     b="$TMP/$(basename "$f" .nu)"
     out=$(cd "$ROOT" && ./nurl.sh "$DIR/$f" "$b" 2>&1); rc=$?

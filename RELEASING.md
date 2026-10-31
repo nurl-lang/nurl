@@ -24,23 +24,30 @@ superseded.
 
 ### 1. Make `CHANGELOG.md` describe everything since the last tag
 
+Between releases no pull request edits `CHANGELOG.md`. Each adds a
+fragment, `changes/unreleased/<task>.md` (Agora #211; the format is in
+[`changes/unreleased/README.md`](changes/unreleased/README.md)), so
+parallel PRs never conflict over the `[Unreleased]` spot. The release
+folds the fragments in:
+
 ```bash
 git fetch origin --tags
 git log --oneline $(git describe --tags --abbrev=0)..origin/main
+ls changes/unreleased/
+tools/changelog.py fold X.Y.Z            # writes `## [X.Y.Z] — today`, git-rms the fragments
 ```
 
-Read that list against the `[Unreleased]` section and close the gaps.
-**This is not a formality** — merged PRs go undocumented routinely,
-because the CHANGELOG entry is written by whoever remembers to write
+Read the log against the new section and close the gaps by editing
+that section. **This is not a formality** — merged PRs go undocumented
+routinely, because the entry is written by whoever remembers to write
 one, and the release is where that gets noticed or never does. Ignore
 the `bench: refresh measured numbers [skip ci]` commits; they are
 automation.
 
-Then rename `[Unreleased]` to `[X.Y.Z] — YYYY-MM-DD`, newest first.
 Choose the number the usual way: a new capability is a minor bump, a
-fix-only run is a patch. The version is read from this heading by
-`tools/gen-site-facts.sh`, so the heading IS the released version as far
-as `nurl-lang.org` is concerned.
+fix-only run is a patch. The `[X.Y.Z]` heading is the released version
+as far as `nurl-lang.org` and the playground's changelog tool are
+concerned.
 
 ### 2. Check `ROADMAP.md` and `docs/`
 
@@ -56,8 +63,11 @@ described in prose somewhere that no test covers:
   archive** (the nurl-mcp `nurl_docs` tool serves it), so a stale
   sentence is installed on every user's machine.
 - `formal/*.md` and `formal/corpus/map.tsv` — shipped as `docs/formal/`
-  and served by `nurl_docs` the same way; their hand-typed probe and
-  rule counts go stale with every closed hole.
+  and served by `nurl_docs` the same way. The prose carries no probe
+  counts any more (they went stale with every closed hole, and every
+  probe PR edited them); `tools/fuzz/holes/map.py --counts` gives the
+  totals, and map.tsv is generated from the probes (`map.py --check`
+  runs in CI).
 
 ### 3. Branch and PR
 
