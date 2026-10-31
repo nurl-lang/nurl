@@ -37,6 +37,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
   induction hw with
   | int => exact fun a _ _ => ⟨a, Frees.int⟩
   | view => exact fun a _ _ => ⟨a, Frees.view⟩
+  | arc => exact fun a _ _ => ⟨a, Frees.arc⟩
   | node hes ih =>
     rename_i t c d es
     intro a hn ha

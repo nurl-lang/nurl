@@ -28,6 +28,8 @@ inductive WFv : Ty → Val → Prop
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
       WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
+  /-- A3.1: a share; its block, in memory, holds the payload. -/
+  | arc {t : Ty} {k : Nat} : WFv (.arc t) (.arc k)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop

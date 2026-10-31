@@ -476,6 +476,7 @@ theorem WFv.names_nil_fn {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.hasFn = fal
   induction h with
   | int => rfl
   | view => rfl
+  | arc => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.hasFn, Bool.or_eq_false_iff] at ht
@@ -536,6 +537,7 @@ theorem WFv.names_nil {τ : Ty} {v : Val} (h : WFv τ v) (ht : τ.holdsView = fa
   induction h with
   | int => rfl
   | view => rfl
+  | arc => rfl
   | node _ ih => exact namesL_nil fun e he => ih e he ht
   | pair _ _ iha ihb =>
     simp only [Ty.holdsView, Bool.or_eq_false_iff] at ht
