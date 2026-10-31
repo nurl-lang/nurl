@@ -57,17 +57,20 @@ $ `stdlib/core/vec.nu`
 // stores it whole, which is only the same bytes on a little-endian
 // machine. Every target NURL builds for is one, but this file is where
 // getting it wrong would mean silently wrong ciphertext rather than a
-// build error, so it asks instead of assuming — once, into a global, not
-// once per record. (Two threads racing here both write the same answer.)
-: ~ i g_cc_le -1
-
+// build error, so it asks instead of assuming.
+//
+// It asks the compiler, not the running machine: the byte order is the
+// target's, fixed when the program is built. A v128's lanes lie in
+// memory order, so four 32-bit words 1, 0, 0, 0 read back as a 64-bit
+// lane are 1 exactly where the low byte comes first (2^32 where it
+// comes last). That is a constant expression LLVM folds with the
+// target's byte order. On a little-endian target every branch on it is
+// decided at build time, and the big-endian reference kernel
+// (_chacha20_xor_range_scalar) is not compiled into the program. Asked
+// at run time, through memory, the kernel cost every program importing
+// this module 12 % of its build time and 8 KB of code that never ran.
 @ __le_words → i {
-    ? >= g_cc_le 0 { ^ g_cc_le } {}
-    : ( Vec u ) w ( vec_zeroed [u] 8 )
-    : *u p ( vec_data [u] w )
-    ( nurl_poke # s p 0 1 )
-    = g_cc_le ? == # i . p 0 1 1 0
-    ^ g_cc_le
+    ^ ? == 1 # i ( nurl_v128_get64 ( nurl_v128_set32 1 0 0 0 ) 0 ) 1 0
 }
 
 // The output Vec of the XOR kernels, `n` long, with room after it for
@@ -510,12 +513,141 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
     ( __cc_x32 src dst 480 ( nurl_v256_permhi128 x11 x15 ) )
 }
 
-// The wide passes over n bytes from dp to op, block counter ctr: eight
-// blocks a pass over v256 lanes in the x86-64-v3 clone, four over v128
-// lanes after that. `simd v4` adds an x86-64-v4 clone of the same body:
-// with AVX-512VL every lane rotate is one VPROLD (the v3 clone rotates by
-// 16 and 8 with a byte shuffle, by 12 and 7 with shift, shift, or), and
-// its 32 registers keep most of the eight-block state off the stack.
+// ── Sixteen blocks over v512 lanes (the x86-64-v4 clone) ──────────────
+// The eight-block layout with twice the lanes: word w of block j in lane
+// j of x_w. With AVX-512 every rotate is one VPROLD, and the sixteen
+// state vectors plus their copies fit the 32 zmm registers.
+
+// __cc_half8 one register wider: a half round's four quarter-rounds in
+// lockstep, step k of all four before step k+1.
+inline @ __cc_half16 inout v512 a0 inout v512 b0 inout v512 c0 inout v512 d0 inout v512 a1 inout v512 b1 inout v512 c1 inout v512 d1 inout v512 a2 inout v512 b2 inout v512 c2 inout v512 d2 inout v512 a3 inout v512 b3 inout v512 c3 inout v512 d3 → v {
+    = a0 ( nurl_v512_add32 a0 b0 )
+    = a1 ( nurl_v512_add32 a1 b1 )
+    = a2 ( nurl_v512_add32 a2 b2 )
+    = a3 ( nurl_v512_add32 a3 b3 )
+    = d0 ( nurl_v512_rotl32 ( nurl_v512_xor d0 a0 ) 16 )
+    = d1 ( nurl_v512_rotl32 ( nurl_v512_xor d1 a1 ) 16 )
+    = d2 ( nurl_v512_rotl32 ( nurl_v512_xor d2 a2 ) 16 )
+    = d3 ( nurl_v512_rotl32 ( nurl_v512_xor d3 a3 ) 16 )
+    = c0 ( nurl_v512_add32 c0 d0 )
+    = c1 ( nurl_v512_add32 c1 d1 )
+    = c2 ( nurl_v512_add32 c2 d2 )
+    = c3 ( nurl_v512_add32 c3 d3 )
+    = b0 ( nurl_v512_rotl32 ( nurl_v512_xor b0 c0 ) 12 )
+    = b1 ( nurl_v512_rotl32 ( nurl_v512_xor b1 c1 ) 12 )
+    = b2 ( nurl_v512_rotl32 ( nurl_v512_xor b2 c2 ) 12 )
+    = b3 ( nurl_v512_rotl32 ( nurl_v512_xor b3 c3 ) 12 )
+    = a0 ( nurl_v512_add32 a0 b0 )
+    = a1 ( nurl_v512_add32 a1 b1 )
+    = a2 ( nurl_v512_add32 a2 b2 )
+    = a3 ( nurl_v512_add32 a3 b3 )
+    = d0 ( nurl_v512_rotl32 ( nurl_v512_xor d0 a0 ) 8 )
+    = d1 ( nurl_v512_rotl32 ( nurl_v512_xor d1 a1 ) 8 )
+    = d2 ( nurl_v512_rotl32 ( nurl_v512_xor d2 a2 ) 8 )
+    = d3 ( nurl_v512_rotl32 ( nurl_v512_xor d3 a3 ) 8 )
+    = c0 ( nurl_v512_add32 c0 d0 )
+    = c1 ( nurl_v512_add32 c1 d1 )
+    = c2 ( nurl_v512_add32 c2 d2 )
+    = c3 ( nurl_v512_add32 c3 d3 )
+    = b0 ( nurl_v512_rotl32 ( nurl_v512_xor b0 c0 ) 7 )
+    = b1 ( nurl_v512_rotl32 ( nurl_v512_xor b1 c1 ) 7 )
+    = b2 ( nurl_v512_rotl32 ( nurl_v512_xor b2 c2 ) 7 )
+    = b3 ( nurl_v512_rotl32 ( nurl_v512_xor b3 c3 ) 7 )
+}
+
+// __cc_tr8 per 128-bit lane: x0..x3 hold words w..w+3 of the sixteen
+// blocks; afterwards 128-bit lane L of x_m holds those words of block
+// 4L + m.
+inline @ __cc_tr16 inout v512 x0 inout v512 x1 inout v512 x2 inout v512 x3 → v {
+    : v512 t0 ( nurl_v512_unpacklo32 x0 x1 )
+    : v512 t1 ( nurl_v512_unpacklo32 x2 x3 )
+    : v512 t2 ( nurl_v512_unpackhi32 x0 x1 )
+    : v512 t3 ( nurl_v512_unpackhi32 x2 x3 )
+    = x0 ( nurl_v512_unpacklo64 t0 t1 )
+    = x1 ( nurl_v512_unpackhi64 t0 t1 )
+    = x2 ( nurl_v512_unpacklo64 t2 t3 )
+    = x3 ( nurl_v512_unpackhi64 t2 t3 )
+}
+
+// dst[at .. at+64) = src[at .. at+64) XOR v.
+inline @ __cc_x64 * u src * u dst i at v512 v → v {
+    ( nurl_v512_st # s + # i dst at ( nurl_v512_xor ( nurl_v512_ld # s + # i src at ) v ) )
+}
+
+// Blocks m, 4+m, 8+m and 12+m, whose words 0-3, 4-7, 8-11 and 12-15 are
+// in a, b, c and d (lane L: block 4L + m, __cc_tr16): the 4x4 transpose
+// of those 128-bit lanes makes each block one register, in order.
+inline @ __cc_out4 * u src * u dst i m v512 a v512 b v512 c v512 d → v {
+    : v512 t0 ( nurl_v512_even128 a b )
+    : v512 t1 ( nurl_v512_odd128 a b )
+    : v512 t2 ( nurl_v512_even128 c d )
+    : v512 t3 ( nurl_v512_odd128 c d )
+    ( __cc_x64 src dst * 64 m ( nurl_v512_even128 t0 t2 ) )
+    ( __cc_x64 src dst * 64 + 4 m ( nurl_v512_even128 t1 t3 ) )
+    ( __cc_x64 src dst * 64 + 8 m ( nurl_v512_odd128 t0 t2 ) )
+    ( __cc_x64 src dst * 64 + 12 m ( nurl_v512_odd128 t1 t3 ) )
+}
+
+// dst[0..1024) = src[0..1024) XOR the keystream of blocks ctr..ctr+15.
+inline @ __chacha20_xor16_v512 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0 i n1 i n2 * u src * u dst → v {
+    // 0..15 in the sixteen 32-bit lanes (two per 64-bit lane, low first)
+    : v512 ct ( nurl_v512_add32 ( nurl_v512_bcast32 ctr ) ( nurl_v512_join256
+    ( nurl_v256_set64 4294967296 12884901890 21474836484 30064771078 )
+    ( nurl_v256_set64 38654705672 47244640266 55834574860 64424509454 ) ) )
+    : ~ v512 x0 ( nurl_v512_bcast32 1634760805 )
+    : ~ v512 x1 ( nurl_v512_bcast32 857760878 )
+    : ~ v512 x2 ( nurl_v512_bcast32 2036477234 )
+    : ~ v512 x3 ( nurl_v512_bcast32 1797285236 )
+    : ~ v512 x4 ( nurl_v512_bcast32 k0 )
+    : ~ v512 x5 ( nurl_v512_bcast32 k1 )
+    : ~ v512 x6 ( nurl_v512_bcast32 k2 )
+    : ~ v512 x7 ( nurl_v512_bcast32 k3 )
+    : ~ v512 x8 ( nurl_v512_bcast32 k4 )
+    : ~ v512 x9 ( nurl_v512_bcast32 k5 )
+    : ~ v512 x10 ( nurl_v512_bcast32 k6 )
+    : ~ v512 x11 ( nurl_v512_bcast32 k7 )
+    : ~ v512 x12 ct
+    : ~ v512 x13 ( nurl_v512_bcast32 n0 )
+    : ~ v512 x14 ( nurl_v512_bcast32 n1 )
+    : ~ v512 x15 ( nurl_v512_bcast32 n2 )
+    : ~ i r 0
+    ~ < r 10 {
+        ( __cc_half16 x0 x4 x8 x12 x1 x5 x9 x13 x2 x6 x10 x14 x3 x7 x11 x15 )
+        ( __cc_half16 x0 x5 x10 x15 x1 x6 x11 x12 x2 x7 x8 x13 x3 x4 x9 x14 )
+        = r + r 1
+    }
+    = x0 ( nurl_v512_add32 x0 ( nurl_v512_bcast32 1634760805 ) )
+    = x1 ( nurl_v512_add32 x1 ( nurl_v512_bcast32 857760878 ) )
+    = x2 ( nurl_v512_add32 x2 ( nurl_v512_bcast32 2036477234 ) )
+    = x3 ( nurl_v512_add32 x3 ( nurl_v512_bcast32 1797285236 ) )
+    = x4 ( nurl_v512_add32 x4 ( nurl_v512_bcast32 k0 ) )
+    = x5 ( nurl_v512_add32 x5 ( nurl_v512_bcast32 k1 ) )
+    = x6 ( nurl_v512_add32 x6 ( nurl_v512_bcast32 k2 ) )
+    = x7 ( nurl_v512_add32 x7 ( nurl_v512_bcast32 k3 ) )
+    = x8 ( nurl_v512_add32 x8 ( nurl_v512_bcast32 k4 ) )
+    = x9 ( nurl_v512_add32 x9 ( nurl_v512_bcast32 k5 ) )
+    = x10 ( nurl_v512_add32 x10 ( nurl_v512_bcast32 k6 ) )
+    = x11 ( nurl_v512_add32 x11 ( nurl_v512_bcast32 k7 ) )
+    = x12 ( nurl_v512_add32 x12 ct )
+    = x13 ( nurl_v512_add32 x13 ( nurl_v512_bcast32 n0 ) )
+    = x14 ( nurl_v512_add32 x14 ( nurl_v512_bcast32 n1 ) )
+    = x15 ( nurl_v512_add32 x15 ( nurl_v512_bcast32 n2 ) )
+    ( __cc_tr16 x0 x1 x2 x3 )
+    ( __cc_tr16 x4 x5 x6 x7 )
+    ( __cc_tr16 x8 x9 x10 x11 )
+    ( __cc_tr16 x12 x13 x14 x15 )
+    ( __cc_out4 src dst 0 x0 x4 x8 x12 )
+    ( __cc_out4 src dst 1 x1 x5 x9 x13 )
+    ( __cc_out4 src dst 2 x2 x6 x10 x14 )
+    ( __cc_out4 src dst 3 x3 x7 x11 x15 )
+}
+
+// The wide passes over n bytes from dp to op, block counter ctr: sixteen
+// blocks a pass over v512 lanes in the x86-64-v4 clone, eight over v256
+// lanes in it and in the x86-64-v3 clone, four over v128 lanes after
+// that. In the v4 clone every lane rotate is one VPROLD (the v3 clone
+// rotates by 16 and 8 with a byte shuffle, by 12 and 7 with shift,
+// shift, or), and its 32 registers hold the state.
 // Returns the bytes done — a multiple of 256, the rest left to the
 // caller's narrower kernels. A function of its own, called
 // only where v128 is native: a wasm module (whose v128 scalarises) carries
@@ -532,7 +664,16 @@ simd v4 @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u 
     : i k7 ( __ld32 key 28 )
     : ~ i ctr ctr0
     : ~ i off 0
-    ? & >= n 512 != 0 # i ( nurl_cpu_x86_v3 ) {
+    // Sixteen blocks a pass where x86-64-v4 runs this (its clone: the
+    // probe is a constant there, and the other clones drop the loop).
+    ? & >= n 1024 != 0 # i ( nurl_cpu_x86_v4 ) {
+        ~ <= + off 1024 n {
+            ( __chacha20_xor16_v512 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
+            = ctr + ctr 16
+            = off + off 1024
+        }
+    } {}
+    ? & >= - n off 512 != 0 # i ( nurl_cpu_x86_v3 ) {
         ~ <= + off 512 n {
             ( __chacha20_xor8_v256 k0 k1 k2 k3 k4 k5 k6 k7 ctr nn0 nn1 nn2 # *u + # i dp off # *u + # i op off )
             = ctr + ctr 8
@@ -547,10 +688,10 @@ simd v4 @ __chacha20_xor_wide ( Vec u ) key i ctr0 i nn0 i nn1 i nn2 * u dp * u 
     ^ off
 }
 
-// The kernels a long AEAD runs on this CPU, by name: `avx512` (the
-// eight-block ChaCha20 of the x86-64-v4 clone, VPROLD rotates, and the
-// vector Poly1305), `avx2` (eight-block ChaCha20 over v256 and the vector
-// Poly1305 — the x86-64-v3 clone), `v128` (four-block ChaCha20, scalar
+// The kernels a long AEAD runs on this CPU, by name: `avx512`
+// (sixteen-block ChaCha20 and eight-lane Poly1305 over v512, the
+// x86-64-v4 clones), `avx2` (eight-block ChaCha20 over v256 and the
+// four-lane Poly1305 — the x86-64-v3 clones), `v128` (four-block ChaCha20, scalar
 // Poly1305), `v128-narrow` (no native 128-bit vectors: two blocks a pass)
 // or `scalar` (a big-endian host). NURL_CPU_V4=0 masks the first,
 // NURL_CPU_V3=0 the first two. For reports and diagnostics.
@@ -1293,12 +1434,16 @@ inline @ __pv_step inout v256 d0 inout v256 d1 inout v256 d2 inout v256 d3 inout
 // powers that put every block where its position says: block 4g + b of
 // N blocks ends up multiplied by r^(N − 4g − b). An odd group count
 // starts with one group alone by r^4. Callers ask __poly_wide_ok first,
-// so the x86-64-v3 clone is the one that runs. The kernel asks the same
-// question itself and consumes nothing without v3: in the baseline clone
-// that answer is the constant 0, so the clone is a bare return instead of
-// this arithmetic in SSE2 halves that never ran.
-unsafe simd @ __poly_wide * u st * u p i n → i {
+// so one of the vector clones is the one that runs: x86-64-v4's hands the
+// work to the eight-lane kernel (__poly_wide8), x86-64-v3's runs this
+// one, and each drops the other's code, its v4 probe being a constant.
+// The kernel asks the v3 question itself and consumes nothing without
+// v3: in the baseline clone that answer is the constant 0, so the clone
+// is a bare return instead of this arithmetic in SSE2 halves that never
+// ran.
+unsafe simd v4 @ __poly_wide * u st * u p i n → i {
     ? == 0 # i ( nurl_cpu_x86_v3 ) { ^ 0 } {}
+    ? != 0 # i ( nurl_cpu_x86_v4 ) { ^ ( __poly_wide8 st p n ) } {}
     : *u64 sp # *u64 st
     : i t + # i st 32
     // the accumulator so far, in lane 0 of A
@@ -1339,12 +1484,14 @@ unsafe simd @ __poly_wide * u st * u p i n → i {
     }
     ( __pv_norm a0 a1 a2 a3 a4 )
     ( __pv_norm b0 b1 b2 b3 b4 )
-    = a0 ( nurl_v256_add64 a0 b0 )
-    = a1 ( nurl_v256_add64 a1 b1 )
-    = a2 ( nurl_v256_add64 a2 b2 )
-    = a3 ( nurl_v256_add64 a3 b3 )
-    = a4 ( nurl_v256_add64 a4 b4 )
-    // add the lanes up, back to radix 2^64
+    ( __pv_out sp ( nurl_v256_add64 a0 b0 ) ( nurl_v256_add64 a1 b1 ) ( nurl_v256_add64 a2 b2 )
+    ( nurl_v256_add64 a3 b3 ) ( nurl_v256_add64 a4 b4 ) )
+    ^ used
+}
+
+// Carried column vectors' lanes added up, back to radix 2^64, into the
+// accumulator at `sp`, its top word below 8 again.
+unsafe inline @ __pv_out * u64 sp v256 a0 v256 a1 v256 a2 v256 a3 v256 a4 → v {
     : u64 t0 + + + ( nurl_v256_get64 a0 0 ) ( nurl_v256_get64 a0 1 ) ( nurl_v256_get64 a0 2 ) ( nurl_v256_get64 a0 3 )
     : u64 t1 + + + ( nurl_v256_get64 a1 0 ) ( nurl_v256_get64 a1 1 ) ( nurl_v256_get64 a1 2 ) ( nurl_v256_get64 a1 3 )
     : u64 t2 + + + ( nurl_v256_get64 a2 0 ) ( nurl_v256_get64 a2 1 ) ( nurl_v256_get64 a2 2 ) ( nurl_v256_get64 a2 3 )
@@ -1364,6 +1511,140 @@ unsafe simd @ __poly_wide * u st * u p i n → i {
     : u64 k0 ( nurl_addc_hi w0 f 0 )
     = . sp 1 ( nurl_addc_lo w1 0 k0 )
     = . sp 2 + & w2 3 ( nurl_addc_hi w1 0 k0 )
+}
+
+// ── Poly1305, eight blocks at a time ────────────────────────────────
+// The four-lane kernel on v512 lanes, for the x86-64-v4 clone: one chain
+// of eight lanes, H ← (H + M) · r^8 per 128-byte group and the last group
+// by r^8 … r^1 per lane. Half the multiply instructions per block of the
+// four-lane form's two chains, and on cores with two 512-bit multipliers
+// half its cycles. A group is loaded as blocks 0, 1, 4, 5 and 2, 3, 6, 7,
+// so interleaving the two by 64-bit halves puts blocks 0, 2, 1, 3, 4, 6,
+// 5, 7 in lanes 0 … 7: each half is __pv_msg's order. The multipliers are
+// then the four-lane table's own sets side by side (__poly_wide_key): r^8
+// in both halves, and r^8, r^6, r^7, r^5 beside r^4, r^2, r^3, r^1 for the
+// last group. One table serves both kernels. The limb bounds are the
+// four-lane form's.
+
+inline @ __pz_carry inout v512 from inout v512 into → v {
+    = into ( nurl_v512_add64 into ( nurl_v512_shr64 from 26 ) )
+    = from ( nurl_v512_and from ( nurl_v512_bcast64 67108863 ) )
+}
+
+// __pv_norm on eight lanes.
+inline @ __pz_norm inout v512 d0 inout v512 d1 inout v512 d2 inout v512 d3 inout v512 d4 → v {
+    ( __pz_carry d3 d4 )
+    ( __pz_carry d0 d1 )
+    : v512 c4 ( nurl_v512_shr64 d4 26 )
+    = d4 ( nurl_v512_and d4 ( nurl_v512_bcast64 67108863 ) )
+    = d0 ( nurl_v512_add64 d0 ( nurl_v512_add64 c4 ( nurl_v512_shl64 c4 2 ) ) )
+    ( __pz_carry d1 d2 )
+    ( __pz_carry d2 d3 )
+    ( __pz_carry d0 d1 )
+    ( __pz_carry d3 d4 )
+}
+
+// __pv_prod on eight lanes.
+inline @ __pz_prod inout v512 d0 inout v512 d1 inout v512 d2 inout v512 d3 inout v512 d4 v512 h0 v512 h1 v512 h2 v512 h3 v512 h4 v512 k0 v512 k1 v512 k2 v512 k3 v512 k4 v512 s1 v512 s2 v512 s3 v512 s4 → v {
+    = d0 ( nurl_v512_mul32u h0 k0 )
+    = d1 ( nurl_v512_mul32u h0 k1 )
+    = d2 ( nurl_v512_mul32u h0 k2 )
+    = d3 ( nurl_v512_mul32u h0 k3 )
+    = d4 ( nurl_v512_mul32u h0 k4 )
+    = d0 ( nurl_v512_add64 d0 ( nurl_v512_mul32u h1 s4 ) )
+    = d1 ( nurl_v512_add64 d1 ( nurl_v512_mul32u h1 k0 ) )
+    = d2 ( nurl_v512_add64 d2 ( nurl_v512_mul32u h1 k1 ) )
+    = d3 ( nurl_v512_add64 d3 ( nurl_v512_mul32u h1 k2 ) )
+    = d4 ( nurl_v512_add64 d4 ( nurl_v512_mul32u h1 k3 ) )
+    = d0 ( nurl_v512_add64 d0 ( nurl_v512_mul32u h2 s3 ) )
+    = d1 ( nurl_v512_add64 d1 ( nurl_v512_mul32u h2 s4 ) )
+    = d2 ( nurl_v512_add64 d2 ( nurl_v512_mul32u h2 k0 ) )
+    = d3 ( nurl_v512_add64 d3 ( nurl_v512_mul32u h2 k1 ) )
+    = d4 ( nurl_v512_add64 d4 ( nurl_v512_mul32u h2 k2 ) )
+    = d0 ( nurl_v512_add64 d0 ( nurl_v512_mul32u h3 s2 ) )
+    = d1 ( nurl_v512_add64 d1 ( nurl_v512_mul32u h3 s3 ) )
+    = d2 ( nurl_v512_add64 d2 ( nurl_v512_mul32u h3 s4 ) )
+    = d3 ( nurl_v512_add64 d3 ( nurl_v512_mul32u h3 k0 ) )
+    = d4 ( nurl_v512_add64 d4 ( nurl_v512_mul32u h3 k1 ) )
+    = d0 ( nurl_v512_add64 d0 ( nurl_v512_mul32u h4 s1 ) )
+    = d1 ( nurl_v512_add64 d1 ( nurl_v512_mul32u h4 s2 ) )
+    = d2 ( nurl_v512_add64 d2 ( nurl_v512_mul32u h4 s3 ) )
+    = d3 ( nurl_v512_add64 d3 ( nurl_v512_mul32u h4 s4 ) )
+    = d4 ( nurl_v512_add64 d4 ( nurl_v512_mul32u h4 k0 ) )
+}
+
+// One group, as __pv_step: carry d to limbs, add the blocks in `a` and
+// `b` (loaded as above) with the 2^128 bits in `pad`, and multiply lanes
+// 0 … 3 by the four-lane set at `lo`, lanes 4 … 7 by the one at `hi`.
+inline @ __pz_step inout v512 d0 inout v512 d1 inout v512 d2 inout v512 d3 inout v512 d4 v512 a v512 b v512 pad i lo i hi → v {
+    ( __pz_norm d0 d1 d2 d3 d4 )
+    : v512 l ( nurl_v512_unpacklo64 a b )
+    : v512 u ( nurl_v512_unpackhi64 a b )
+    : v512 mk ( nurl_v512_bcast64 67108863 )
+    : v512 h0 ( nurl_v512_add64 d0 ( nurl_v512_and l mk ) )
+    : v512 h1 ( nurl_v512_add64 d1 ( nurl_v512_and ( nurl_v512_shr64 l 26 ) mk ) )
+    : v512 h2 ( nurl_v512_add64 d2 ( nurl_v512_and ( nurl_v512_or ( nurl_v512_shr64 l 52 ) ( nurl_v512_shl64 u 12 ) ) mk ) )
+    : v512 h3 ( nurl_v512_add64 d3 ( nurl_v512_and ( nurl_v512_shr64 u 14 ) mk ) )
+    : v512 h4 ( nurl_v512_add64 d4 ( nurl_v512_or ( nurl_v512_shr64 u 40 ) pad ) )
+    ( __pz_prod d0 d1 d2 d3 d4 h0 h1 h2 h3 h4
+    ( __pz_set lo hi 0 ) ( __pz_set lo hi 32 ) ( __pz_set lo hi 64 )
+    ( __pz_set lo hi 96 ) ( __pz_set lo hi 128 )
+    ( __pz_set lo hi 160 ) ( __pz_set lo hi 192 ) ( __pz_set lo hi 224 )
+    ( __pz_set lo hi 256 ) )
+}
+
+// Vector `o` (a byte offset) of the four-lane sets at `lo` and `hi`,
+// side by side.
+inline @ __pz_set i lo i hi i o → v512 {
+    ^ ( nurl_v512_join256 ( nurl_v256_ld # s + lo o ) ( nurl_v256_ld # s + hi o ) )
+}
+
+// Blocks 0, 1, 4, 5 and 2, 3, 6, 7 of the 128 bytes at `p`.
+inline @ __pz_lda i p → v512 { ^ ( nurl_v512_join256 ( nurl_v256_ld # s p ) ( nurl_v256_ld # s + p 64 ) ) }
+
+inline @ __pz_ldb i p → v512 { ^ ( nurl_v512_join256 ( nurl_v256_ld # s + p 32 ) ( nurl_v256_ld # s + p 96 ) ) }
+
+// __poly_wide's work in eight lanes, under the four-lane table at
+// `st + 32`: the whole 128-byte groups of the `n` bytes at `p`. It returns
+// the bytes consumed, a multiple of 128, and the caller's scalar blocks
+// take what is left (64 bytes at most, besides any partial block). A
+// third copy of the step for an odd 64-byte group would cost the clone
+// more to compile than those four blocks cost to run.
+unsafe inline @ __poly_wide8 * u st * u p i n → i {
+    : *u64 sp # *u64 st
+    : i t + # i st 32
+    : ~ u64 q0 0
+    : ~ u64 q1 0
+    : ~ u64 q2 0
+    : ~ u64 q3 0
+    : ~ u64 q4 0
+    ( __pv_limbs . sp 0 . sp 1 . sp 2 q0 q1 q2 q3 q4 )
+    : i g / n 128
+    ? == g 0 { ^ 0 } {}
+    : i used * g 128
+    : i base # i p
+    : v256 z4 ( nurl_v256_zero )
+    : v256 p4 ( nurl_v256_bcast64 16777216 )
+    : v512 pad ( nurl_v512_join256 p4 p4 )
+    // the accumulator so far, in lane 0 (block 0 of the first group)
+    : ~ v512 d0 ( nurl_v512_join256 ( nurl_v256_set64 # i q0 0 0 0 ) z4 )
+    : ~ v512 d1 ( nurl_v512_join256 ( nurl_v256_set64 # i q1 0 0 0 ) z4 )
+    : ~ v512 d2 ( nurl_v512_join256 ( nurl_v256_set64 # i q2 0 0 0 ) z4 )
+    : ~ v512 d3 ( nurl_v512_join256 ( nurl_v256_set64 # i q3 0 0 0 ) z4 )
+    : ~ v512 d4 ( nurl_v512_join256 ( nurl_v256_set64 # i q4 0 0 0 ) z4 )
+    : ~ i off 0
+    ~ < + off 128 used {
+        ( __pz_step d0 d1 d2 d3 d4 ( __pz_lda + base off ) ( __pz_ldb + base off ) pad + t 288 + t 288 )
+        = off + off 128
+    }
+    ( __pz_step d0 d1 d2 d3 d4 ( __pz_lda + base off ) ( __pz_ldb + base off ) pad + t 576 + t 864 )
+    ( __pz_norm d0 d1 d2 d3 d4 )
+    ( __pv_out sp
+    ( nurl_v256_add64 ( nurl_v512_lo256 d0 ) ( nurl_v512_hi256 d0 ) )
+    ( nurl_v256_add64 ( nurl_v512_lo256 d1 ) ( nurl_v512_hi256 d1 ) )
+    ( nurl_v256_add64 ( nurl_v512_lo256 d2 ) ( nurl_v512_hi256 d2 ) )
+    ( nurl_v256_add64 ( nurl_v512_lo256 d3 ) ( nurl_v512_hi256 d3 ) )
+    ( nurl_v256_add64 ( nurl_v512_lo256 d4 ) ( nurl_v512_hi256 d4 ) ) )
     ^ used
 }
 

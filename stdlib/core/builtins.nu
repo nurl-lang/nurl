@@ -498,12 +498,14 @@
 // directly when you have written two kernels by hand and want to pick
 // between them yourself.
 //
-// Always 0 off x86-64, so a fallback path is never dead code.
+// Always 0 off x86-64, and compiled as that constant there: the x86
+// path drops out and the fallback is the code.
 & `c` @ nurl_cpu_x86_v3 → i32
 
 // Does the CPU have x86-64-v4 (AVX-512 F/BW/CD/DQ/VL, its state saved by
-// the OS)? What a `simd v4` dispatcher asks first. Always 0 off x86-64;
-// NURL_CPU_V4=0 (or NURL_CPU_V3=0) makes it 0 here too.
+// the OS)? What a `simd v4` dispatcher asks first. Always 0 off x86-64,
+// where nurlc compiles it as the constant; NURL_CPU_V4=0 (or
+// NURL_CPU_V3=0) makes it 0 here too.
 & `c` @ nurl_cpu_x86_v4 → i32
 
 // libc: print a string + newline to stdout.
