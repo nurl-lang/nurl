@@ -51,9 +51,17 @@ jobs:
       pull-requests: read
       actions: write
     outputs:
-      code: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      # `md`: Markdown outside changes/, webdocs/ and formal/ changed. A
+      # change that is nothing but such Markdown runs only the two gate
+      # jobs: they hold every check that reads a .md file (the doc examples
+      # compile, nurlapi's and nurl-mcp's docs tools, the protobuf doc
+      # examples, the generated COMPILER_INTERNALS appendix). The corpus,
+      # FreeBSD, the sanitizers and the unikernel jobs read no Markdown.
+      # That is about 24 job-minutes instead of 123.
+      code: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      md: ${{ github.event_name == 'merge_group' && steps.group.outputs.md || steps.queued.outputs.tested == 'true' && 'false' || steps.md.outputs.md }}
       webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
-      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
+      compiler: ${{ github.event_name == 'merge_group' && steps.group.outputs.code || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
       # The platform and sanitizer jobs (FreeBSD, ASan/UBSan, the
       # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
       # 123 job-minutes. The merge queue runs them anyway, on the combined
@@ -171,6 +179,36 @@ jobs:
               - '!formal/**'
               - '!CHANGELOG.md'
               - '!changes/**'
+              - '!**/*.md'
+      - uses: dorny/paths-filter@v3
+        id: md
+        if: github.event_name != 'merge_group'
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            md:
+              - '**/*.md'
+              - '!changes/**'
+              - '!webdocs/**'
+              - '!formal/**'
+              - '!CHANGELOG.md'
+      # The queue classifies the whole group against the main it builds on.
+      # A group of nothing but Markdown runs the gates only, like a PR.
+      # Anything else, or a diff that cannot be computed, runs everything.
+      # main itself passed all of it.
+      - name: What the queue group changes
+        id: group
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if git fetch --no-tags --depth=1 origin "$BASE" && files="$(git diff --name-only "$BASE" HEAD)" &&
+             [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qv '\.md$'; then
+            printf '%s\n' "$files" | sed 's/^/  md only: /'
+            { echo code=false; echo md=true; } >> "$GITHUB_OUTPUT"
+          else
+            { echo code=true; echo md=false; } >> "$GITHUB_OUTPUT"
+          fi
 
   # Files every pull request used to edit by hand, and so conflict over
   # (Agora #211, #212): the hole-probe table and the changelog. Both are
@@ -395,7 +433,7 @@ jobs:
   build-gates:
     name: "build gates: probes, controls, packaging"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
     runs-on: ubuntu-latest
     # The gates of the old single job (see build-corpus above). Measure
     # before raising this: the next gate added here comes with a time.
@@ -679,7 +717,7 @@ jobs:
   build-gates-2:
     name: "build gates: formatting, diagnostics, tooling, protocols, codecs, coverage"
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true'
     runs-on: ubuntu-latest
     # The gates of the old single job (see build-corpus above). Measure
     # before raising this: the next gate added here comes with a time.
@@ -956,8 +994,9 @@ jobs:
     needs: [changes, build-corpus, build-gates, build-gates-2]
     # Skipped exactly when its parts are (a docs-only change), so the
     # required check reads as satisfied then, as before. Otherwise it waits
-    # for all three and fails unless every one succeeded.
-    if: ${{ always() && needs.changes.outputs.code == 'true' }}
+    # for all three and fails unless every one succeeded. A Markdown-only
+    # change runs the two gate jobs and no corpus: both gates must pass.
+    if: ${{ always() && (needs.changes.outputs.code == 'true' || needs.changes.outputs.md == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -966,9 +1005,11 @@ jobs:
           CORPUS: ${{ needs.build-corpus.result }}
           GATES: ${{ needs.build-gates.result }}
           GATES2: ${{ needs.build-gates-2.result }}
+          CODE: ${{ needs.changes.outputs.code }}
         run: |
-          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2"
-          [ "$CORPUS" = success ] && [ "$GATES" = success ] && [ "$GATES2" = success ]
+          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2 code=$CODE"
+          [ "$GATES" = success ] && [ "$GATES2" = success ] || exit 1
+          if [ "$CODE" = true ]; then [ "$CORPUS" = success ]; else [ "$CORPUS" = skipped ]; fi
 
   unikernel-nolibc:
     name: "unikernel: the corpus with no libc"
