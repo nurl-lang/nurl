@@ -911,8 +911,16 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last ones are closed (0.81.0,
-h426–h936). Most were one shape in many contexts: a value lent out of one
+**One hole is known open: agora #224.** A destructor (`% Drop`) runs at
+its value's scope end and may read a view the value holds, but the
+checker does not count that drop as a use: when what the view reads ends
+first (reallocated, moved to a `sink`, or released at a scope end, which
+today runs drops in declaration order), the destructor reads freed
+memory. [`LIMITATIONS.md`](LIMITATIONS.md) says how to stay clear of it
+until the fix (reverse-order scope-end drops and a dropck rule) ships.
+
+Every other hole found is closed (0.81.0 and 0.82.0; old ids h426–h974,
+named probes since then). Most were one shape in many contexts: a value lent out of one
 of the function's own locals, by a call, a try, a join's arm, a value
 block's tail or a binding of any of them, was handed back, stored,
 assigned to an `inout` parameter or given to a `sink` as if it were the
