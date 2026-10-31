@@ -429,7 +429,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     (hz : Γ1 z = some Ez) (hlz : Ez.live = true) (hbz : Ez.ty = b)
     (hpa2 : PushArg Γ1 F z Ez b Dz Γ2) (htk2 : TakeVal m1 z w m2)
     (hzd : Ez.mode.ownSlot = true → z ∉ roots Dy) (hok : a.ok = true ∧ b.ok = true) :
-    RhsOut m2 Γ2 ⟨.prod a b, .own, true, [], Dy ++ Dz⟩ (.pair v w) true := by
+    RhsOut m2 Γ2 ⟨.prod a b, .own, true, [], Dy ++ Dz, false⟩ (.pair v w) true := by
   -- an owned slot holds a value of an owning type
   have own_ty : ∀ {x : Val}, m1.st z = some ⟨true, some x⟩ → b.owning = true := by
     intro x hx
@@ -528,7 +528,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
 
 /-- A field of a struct in flight, handed to the binding that takes it. -/
 theorem out_part {m : Mem} {Γ : Ctx} {E : Entry} {τ t : Ty} {T x : Val}
-    (hout : RhsOut m Γ ⟨τ, .own, true, [], E.held⟩ T true) (hτ : τ ≠ .int) (hwx : WFv t x)
+    (hout : RhsOut m Γ ⟨τ, .own, true, [], E.held, false⟩ T true) (hτ : τ ≠ .int) (hwx : WFv t x)
     (hsub : Sub x T) (hvin : ∀ s v, ViewIn t x s v → ViewIn τ T s v) (hids : List.Sublist x.ids T.ids)
     (htok : t.ok = true) : RhsOut m Γ (compE E t) x x.owns := by
   obtain ⟨_, _, hvsT, hnd, hal, hdis, hsf⟩ := hout.valOwn rfl
@@ -592,7 +592,7 @@ theorem out_wrap {m1 : Mem} {Γ1 : Ctx} {a : Ty} {D : List Dep} {v : Val} (pu : 
     {D' : List Dep} (hDD : D ⊆ D')
     (hroot : ∀ r ∈ roots D', ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     (hnok : DepsNamed Γ1 D') (hnin : NamesIn w D') (hpk : PkgsOK w) :
-    RhsOut m1 Γ1 ⟨τ, .own, true, [], D'⟩ w true := by
+    RhsOut m1 Γ1 ⟨τ, .own, true, [], D', false⟩ w true := by
   have hsub : ∀ {n : Val}, Sub n w → n = w ∨ Sub n v := by
     intro n hn
     rcases hn.cases' with h | ⟨e, hc, hs⟩
@@ -614,7 +614,7 @@ theorem out_inj {m1 : Mem} {Γ1 : Ctx} {a t : Ty} {D : List Dep} {v : Val} (pu :
     (ht : t.ok = true) {w : Val} (hwv : w = .inl v ∨ w = .inr v) {τ : Ty} (hτ : τ = .sum a t ∨ τ = .sum t a)
     (hwτ : WFv τ w) (hvin : ∀ s x, ViewIn a v s x → ViewIn τ w s x)
     (hvin' : ∀ s x, ViewIn τ w s x → ViewIn a v s x) (hok : a.ok = true) :
-    RhsOut m1 Γ1 ⟨τ, .own, true, [], D⟩ w true := by
+    RhsOut m1 Γ1 ⟨τ, .own, true, [], D, false⟩ w true := by
   have hsub : ∀ {n : Val}, Sub n w → n = w ∨ Sub n v := by
     intro n hn
     rcases hn.cases' with h | ⟨e, hc, hs⟩
@@ -718,9 +718,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
           conv => rhs; rw [← List.map_id E.path]
           congr; funext dep; cases dep with | mk r k => cases k <;> rfl
         refine ⟨RhsPost.same hi, ?_⟩
-        have hE : (⟨E.ty, .bor, true, derive y E .self, E.held⟩ : Entry) = E := by
+        have hE : (⟨E.ty, .bor, true, derive y E .self, E.held, false⟩ : Entry) = { E with dtor := false } := by
           rw [hder]; cases E; simp_all
-        rw [hE]; exact out_copyBor hi hy hl h hv
+        rw [hE]; exact (out_copyBor hi hy hl h hv).setDtor false
   | «at» hy hl ht hx =>
     cases he with
     | «at» hn hvec _ => exact ⟨RhsPost.same hi, out_at hi hy hl ht hn hvec⟩

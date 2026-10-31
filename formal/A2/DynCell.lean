@@ -51,22 +51,22 @@ def P : Prog := [pick]
 
 /-! ### The callee's contexts -/
 
-def Ecell : Entry := ⟨opt, .inout .replace, true, [], []⟩
-def Ep : Entry := ⟨str, .rootb, true, [], []⟩
-def Ec : Entry := ⟨.int, .rootb, true, [], []⟩
-def Enew : Entry := ⟨str, .own, true, [], []⟩
+def Ecell : Entry := ⟨opt, .inout .replace, true, [], [], false⟩
+def Ep : Entry := ⟨str, .rootb, true, [], [], false⟩
+def Ec : Entry := ⟨.int, .rootb, true, [], [], false⟩
+def Enew : Entry := ⟨str, .own, true, [], [], false⟩
 
 /-- What the result slot ends as on each path, and at the join. -/
-def ErT : Entry := ⟨str, .bor, true, [⟨1, .self⟩], []⟩
-def ErF : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], []⟩
-def ErJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨0, .inner⟩], []⟩
+def ErT : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false⟩
+def ErF : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], [], false⟩
+def ErJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨0, .inner⟩], [], false⟩
 
 /-- The callee's context with the result slot `r3`. -/
 def ctx (r3 : Entry) : Ctx := fun v =>
   if v = 0 then some Ecell else if v = 1 then some Ep else if v = 2 then some Ec
   else if v = 3 then some r3 else none
 
-theorem sig_eq : sigCtx pick = ctx ⟨str, .bor, false, [], []⟩ := by
+theorem sig_eq : sigCtx pick = ctx ⟨str, .bor, false, [], [], false⟩ := by
   funext v
   simp only [sigCtx, ctx, pick, paramE, resMode]
   rcases v with _ | _ | _ | _ | v <;> simp [Ecell, Ep, Ec, opt, str, Ty.hasFn]
@@ -119,7 +119,7 @@ theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R
     · refine ⟨ht, hm, fun hf => ?_, fun hl' => ⟨hl hl', fun _ => hp, hh⟩⟩
       simp [Entry.fixed, hb] at hf
 
-theorem roots_R0 : RootsOK ⟨str, .bor, false, [], []⟩ := by
+theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false⟩ := by
   constructor <;> simp [roots, Entry.vdeps, Mode.ownSlot]
 theorem roots_ErT : RootsOK ErT := by
   constructor <;> simp [ErT, roots, Entry.vdeps, Mode.ownSlot, Kind.isName]
@@ -140,16 +140,16 @@ theorem ctx_noPin {R : Entry} (hR : R.mode ≠ .rootb) (x : Var) : NoPin (ctx R)
 /-! ### The callee: both paths, and the join -/
 
 /-- The path that lends `p`. -/
-theorem then_arm : StmtT P (ctx ⟨str, .bor, false, [], []⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
-  have h := StmtT.assign (P := P) (Γ := ctx ⟨str, .bor, false, [], []⟩) (F := []) (x := 3)
-    (r := .var 1) (Ex := ⟨str, .bor, false, [], []⟩)
-    (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held⟩) (Γ1 := ctx ⟨str, .bor, false, [], []⟩)
+theorem then_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
+  have h := StmtT.assign (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false⟩) (F := []) (x := 3)
+    (r := .var 1) (Ex := ⟨str, .bor, false, [], [], false⟩)
+    (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held, false⟩) (Γ1 := ctx ⟨str, .bor, false, [], [], false⟩)
     (by simp [ctx]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.copyRoot (E := Ep) (by simp [ctx]) rfl rfl) rfl
     (by simp [derive, Ep, roots, Entry.vdeps, Mode.isRoot, Mode.ownSlot, rootKind, str])
     (by simp [ctx]) (ctx_noPin (by simp) _)
-  have he : setE (kill .replace false 3 (ctx ⟨str, .bor, false, [], []⟩)) 3
-      { (⟨str, .bor, true, derive 1 Ep .self, Ep.held⟩ : Entry) with mode := Mode.bor } = ctx ErT := by
+  have he : setE (kill .replace false 3 (ctx ⟨str, .bor, false, [], [], false⟩)) 3
+      { (⟨str, .bor, true, derive 1 Ep .self, Ep.held, false⟩ : Entry) with mode := Mode.bor } = ctx ErT := by
     funext v
     rcases v with _ | _ | _ | _ | v <;>
       simp [ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, ErT, derive, Mode.isRoot, rootKind, str,
@@ -159,7 +159,7 @@ theorem then_arm : StmtT P (ctx ⟨str, .bor, false, [], []⟩) [] (.assign 3 (.
 /-- The fresh-value path's contexts: the callee's, with the local 4. -/
 def ctxL (R L : Entry) : Ctx := setE (ctx R) 4 L
 
-def EnewD : Entry := ⟨str, .own, false, [], []⟩
+def EnewD : Entry := ⟨str, .own, false, [], [], false⟩
 
 theorem ctxL_noPin {R L : Entry} (hR : R.mode ≠ .rootb) (hL : L.mode ≠ .rootb) (x : Var) :
     NoPin (ctxL R L) x := by
@@ -173,9 +173,9 @@ theorem ctxL_noPin {R L : Entry} (hR : R.mode ≠ .rootb) (hL : L.mode ≠ .root
 
 /-- The path that makes a fresh String: it goes into the cell, and the
     result borrows the cell's payload. -/
-theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], []⟩) []
+theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false⟩) []
     (.letv 4 (.new .int) (.seq (.assign 0 (.inr .int 4)) (.assign 3 (.getr 0)))) (ctx ErF) := by
-  let R0 : Entry := ⟨str, .bor, false, [], []⟩
+  let R0 : Entry := ⟨str, .bor, false, [], [], false⟩
   -- `= cell ( some y )`: the fresh String moves into the cell
   have hpush : PushArg (ctxL R0 Enew) [] 4 Enew Enew.ty Enew.held
       (setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false }) :=
@@ -185,16 +185,16 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], []⟩) []
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, Enew, EnewD, R0, Entry.vdeps, Mode.ownSlot]
   rw [h1] at hpush
-  have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held⟩
+  have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false⟩
       (ctxL R0 EnewD) :=
     RhsT.inr (by simp [ctxL, setE, upd]) rfl hpush rfl
   have ha := StmtT.assign (P := P) (Γ := ctxL R0 Enew) (F := []) (x := 0) (r := .inr .int 4)
-    (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held⟩) (Γ1 := ctxL R0 EnewD)
+    (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false⟩) (Γ1 := ctxL R0 EnewD)
     (by simp [ctxL, ctx, setE, upd]) (by simp) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hinr
     (by simp [Enew, Ecell, opt, str]) (by simp [Enew, roots, Entry.vdeps, Mode.ownSlot])
     (by simp [ctxL, ctx, setE, upd]) (ctxL_noPin (by simp [R0]) (by simp [Enew]) _)
   have h2 : setE (kill .replace false 0 (ctxL R0 EnewD)) 0
-      { (⟨.sum .int Enew.ty, .own, true, [], Enew.held⟩ : Entry) with mode := Ecell.mode } = ctxL R0 EnewD := by
+      { (⟨.sum .int Enew.ty, .own, true, [], Enew.held, false⟩ : Entry) with mode := Ecell.mode } = ctxL R0 EnewD := by
     funext v
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, Enew, EnewD, R0, opt, str, Entry.vdeps,
@@ -320,8 +320,8 @@ theorem NoRootb.exitScope {Γ : Ctx} (h : NoRootb Γ) (x : Var) : NoRootb (A2.ex
   · cases h'
   · exact h.kill .replace false x v E' h'
 
-def Ecl : Entry := ⟨opt, .own, true, [], []⟩
-def Ex : Entry := ⟨str, .bor, true, [⟨2, .self⟩, ⟨1, .inner⟩], []⟩
+def Ecl : Entry := ⟨opt, .own, true, [], [], false⟩
+def Ex : Entry := ⟨str, .bor, true, [⟨2, .self⟩, ⟨1, .inner⟩], [], false⟩
 
 /-- The caller's context at the call. -/
 def K4 : Ctx := A2.setE (A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew) 3 intE

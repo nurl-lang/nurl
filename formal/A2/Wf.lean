@@ -260,7 +260,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @fst y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -277,7 +277,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @snd y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -312,7 +312,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @getl y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -329,7 +329,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @getr y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl

@@ -46,7 +46,7 @@ def liftE (v : Var) (E : Entry) : Entry :=
   if E.mode = .rootb then { S.pe v with live := E.live } else
     ⟨E.ty, liftMode E.mode, E.live,
      rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A⟩
+     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, false⟩
 
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
@@ -775,7 +775,7 @@ theorem canDo_lift {m : Mode} {e : Eff} (h : canDo m e) : canDo (liftMode m) e :
   rcases h with rfl | ⟨b, rfl, _⟩ <;> exact Or.inl rfl
 
 theorem intE_lift (x : Var) : EntryWeaker intE (S.liftE x intE) := by
-  have he : S.liftE x intE = ⟨.int, .bor, true, S.A, S.A⟩ := by
+  have he : S.liftE x intE = ⟨.int, .bor, true, S.A, S.A, false⟩ := by
     simp [liftE, intE, liftMode, rds, Mode.ownSlot, ownHeld_false]
   rw [he]
   exact EntryWeaker.mk' rfl rfl (by simp [intE]) rfl (fun _ => by simp [intE]) (by simp [intE])
@@ -1127,8 +1127,8 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     rw [hctx]
     refine ⟨_, RhsT.moveOwn hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm)), fun x => ?_⟩
-    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held⟩ =
-        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held⟩ := by
+    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false⟩ =
+        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false⟩ := by
       simp [liftE, hm, liftMode, rds, Mode.ownSlot]
     rw [he]; exact EntryWeaker.refl _
   | @copyRoot y Ey hy hl hm =>
@@ -1921,7 +1921,7 @@ theorem liftE_callRes (Γ : Ctx) (fn : Fn) (args : List Var) (x : Var) :
        rds S.ρ (fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args) ++
          (if (resMode fn).ownSlot then [] else S.A),
        rds S.ρ (ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args)) ++
-         ownHeld fn.resOwn fn.resTy S.A⟩ := by
+         ownHeld fn.resOwn fn.resTy S.A, false⟩ := by
   simp only [liftE, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode, resMode_ownSlot]
 
 theorem callRes_lift (h : S.OK) (hab : S.AbsOK Γa) {fn : Fn} {args : List Var}
@@ -2666,12 +2666,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hf : S.liftE x { E with mode := Ex.mode } =
         ⟨E.ty, liftMode Ex.mode, E.live,
          rds S.ρ E.path ++ (if Ex.mode.ownSlot then [] else S.A),
-         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty S.A⟩ := by
+         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty S.A, false⟩ := by
       simp [liftE, hrbx]
     have hf' : S.liftE x E =
         ⟨E.ty, liftMode E.mode, E.live,
          rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A⟩ := by
+         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, false⟩ := by
       simp [liftE, hrbE]
     rw [hf, hmx']
     rw [hf'] at hw'

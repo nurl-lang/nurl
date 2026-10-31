@@ -44,6 +44,9 @@ structure Entry where
   live : Bool
   path : List Dep
   held : List Dep
+  /-- A2-drop.2: the binding runs a destructor when it is dropped, so what
+      it holds views of must outlive it while it may still own its value. -/
+  dtor : Bool
 deriving DecidableEq, Repr
 
 abbrev Ctx := Var → Option Entry
@@ -181,7 +184,7 @@ def Weaker (Γ Γ' : Ctx) : Prop :=
 def NoPin (Γ : Ctx) (x : Var) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ x
 
-def intE : Entry := ⟨.int, .bor, true, [], []⟩
+def intE : Entry := ⟨.int, .bor, true, [], [], false⟩
 
 inductive ExprT (Γ : Ctx) : Expr → Prop
   | lit {n : Nat} : ExprT Γ (.lit n)
@@ -200,19 +203,19 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
     `Vec` is lent. -/
 def elemE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
-  | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held⟩
-  | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held⟩
-  | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held⟩
-  | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held⟩
+  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false⟩
+  | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held, false⟩
+  | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held, false⟩
+  | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false⟩
+  | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
 def popE (y : Var) (E : Entry) : Ty → Entry
-  | .vec s => ⟨.vec s, .own, true, [], E.held⟩
-  | .prod a b => ⟨.prod a b, .own, true, [], E.held⟩
-  | .sum a b => ⟨.sum a b, .own, true, [], E.held⟩
-  | .fn ms => ⟨.fn ms, .own, true, [], E.held⟩
+  | .vec s => ⟨.vec s, .own, true, [], E.held, false⟩
+  | .prod a b => ⟨.prod a b, .own, true, [], E.held, false⟩
+  | .sum a b => ⟨.sum a b, .own, true, [], E.held, false⟩
+  | .fn ms => ⟨.fn ms, .own, true, [], E.held, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -225,7 +228,7 @@ def projDeps (y : Var) (E : Entry) : List Dep :=
     is copied with what it depends on). -/
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held⟩
+  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false⟩
 
 /-- What an owned value holds: nothing, if its type holds no views (no view
     and no closure lies inside it, so what it was made from says nothing). -/
@@ -234,8 +237,8 @@ def ownHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep := if o && !t.holdsVie
 /-- A field moved out of a struct that is taken apart. -/
 def compE (E : Entry) : Ty → Entry
   | .int => intE
-  | .slice s => ⟨.slice s, .bor, true, E.held, E.held⟩
-  | t => ⟨t, .own, true, [], ownHeld true t E.held⟩
+  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false⟩
+  | t => ⟨t, .own, true, [], ownHeld true t E.held, false⟩
 
 /-- The element type of a `Vec`. -/
 def Ty.elem : Ty → Ty
@@ -281,25 +284,25 @@ def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × 
 
 inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
-  | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], []⟩ Γ
+  | new {t : Ty} : t.ok = true → RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false⟩ Γ
   | moveOwn {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y →
-      RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held⟩
+      RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false⟩
         (setE (kill .replace false y Γ) y { E with live := false })
   | copyRoot {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .rootb →
-      RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held⟩ Γ
+      RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held, false⟩ Γ
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor → RhsT Γ F (.var y) E Γ
   | borrow {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t →
-      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held⟩ Γ
+      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false⟩ Γ
   | at {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → ExprT Γ i →
       RhsT Γ F (.at y i) (elemE y E t) Γ
   | view {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
-      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held⟩ Γ
+      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
       RhsT Γ F (.sat y i) (elemE y E t) Γ
@@ -310,17 +313,17 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
-      RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz⟩ Γ2
+      RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
-      RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D⟩ Γ1
+      RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false⟩ Γ1
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
-      RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D⟩ Γ1
+      RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false⟩ Γ1
   | getl {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
   | getr {y : Var} {E : Entry} {a b : Ty} :
@@ -336,7 +339,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = te → PushArg Γ F y Ey te D Γ1 → CapsOK Γ1 F D cs →
       -- (a closure the environment holds that may change a binding by name:
       -- running this package changes it, its name is among what it holds)
-      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs⟩ Γ1
+      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms, .own, true, [], D ++ capDeps cs, false⟩ Γ1
 
 /-! ### Calls -/
 
@@ -496,7 +499,7 @@ def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
 def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
   ⟨fn.resTy, resMode fn, true,
    fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args,
-   ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args)⟩
+   ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args), false⟩
 
 /-- What `inout` parameter `i` holds views of after the call. -/
 def outHeld (Γ : Ctx) (fn : Fn) (args : List Var) (i : Nat) : List Dep :=
@@ -684,16 +687,16 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
     see; every parameter whose type may hold a closure holds the symbolic
     names (what it was handed may change any `inout` parameter). -/
 def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
-  | (.inp, t) => ⟨t, .rootb, true, [], if t.hasFn then symNames ps else []⟩
-  | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else []⟩
-  | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else []⟩
+  | (.inp, t) => ⟨t, .rootb, true, [], if t.hasFn then symNames ps else [], false⟩
+  | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false⟩
+  | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false⟩
 
 /-- The callee's own view of its parameters: they depend on nothing it can
     see, but a closure it is handed, which may change its `inout`
     parameters.  The result slot starts empty. -/
 def sigCtx (fn : Fn) : Ctx := fun v =>
   if h : v < fn.params.length then some (paramE fn.params fn.params[v])
-  else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], []⟩
+  else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false⟩
   else none
 
 /-- A summary pair names a parameter the caller still has after the call. -/
