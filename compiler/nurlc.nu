@@ -49587,6 +49587,20 @@ unsafe @ __ir_cut_all s h0 s pat → s {
     ^ h
 }
 
+// `h` with every occurrence of `pat` replaced by `rep`.
+@ __ir_subst_all s h s pat s rep → s {
+    : i pl ( strlen pat )
+    : ~ s rest ( nurl_str_cat h `` )
+    : ~ s out ``
+    : ~ i at ( nurl_str_find rest pat )
+    ~ >= at 0 {
+        = out ( nurl_str_cat3 out ( nurl_str_slice rest 0 at ) rep )
+        = rest ( nurl_str_slice rest + at pl - - ( strlen rest ) at pl )
+        = at ( nurl_str_find rest pat )
+    }
+    ^ ( nurl_str_cat out rest )
+}
+
 // `noinline`, whatever the source asked (`inline @`, or a vector
 // signature's alwaysinline from gen_fn_decl's __fn_vecsig): a caller
 // that has the tier calls the `.tier` copy (__ir_tier_calls), so this
@@ -49689,11 +49703,22 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // that masks it) or without SHA (Haswell … Cascade Lake) falls to
     // the gated base rather than to SIGILL.
 
+    // Each clone answers its body's own `nurl_cpu_x86_v3` question
+    // (std/chacha20poly1305.nu asks it before an eight-block v256 pass).
+    // `.x86v3` runs only where the dispatcher's probe said 1, and `.base`
+    // only where it said 0 — unless the dispatch also asks a crypto tier,
+    // when a v3 CPU without the tier runs `.base` too. The probe answers
+    // once a process, so the constant is exact, and LLVM drops the path
+    // the clone never takes: the v256 kernel compiled for SSE2 in `.base`
+    // was a tenth of clang's time on a program using ChaCha20.
+    : s v3q `call i32 @nurl_cpu_x86_v3()`
+    : s body_w ( __ir_subst_all body v3q `add i32 0, 1` )
+
     // Both clones stay calls: the dispatcher picks one at run time, and
     // a clone compiled for more than the baseline must never be merged
     // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
     : s base_attrs ? > crypto 0 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs crypto ) ) ``
-    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( nurl_str_cat body `` )
+    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( __ir_subst_all body v3q `add i32 0, 0` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
@@ -49703,7 +49728,7 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 cparams
     `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
-    ( emit_hoisted ( nurl_str_cat hdr_w body ) )
+    ( emit_hoisted ( nurl_str_cat hdr_w body_w ) )
 
     // The dispatcher. `params` doubles as the argument list: it is
     // already `<type> %<name>` pairs, which is exactly a call's operand
