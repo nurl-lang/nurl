@@ -12,8 +12,8 @@ OUTPUT
   between
   drop b
 3. left by return
-  drop outer
   drop inner
+  drop outer
 1
 4. fall through
   block end

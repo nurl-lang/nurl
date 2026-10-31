@@ -194,6 +194,14 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     exact ⟨E', hE'⟩
   catchOK := hi.catchOK
   cover := hi.cover
+  pinOut p E' hp hm hps := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
+    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.pinOut p E hE hm' hps
+  pinIn := hi.pinIn.of_rootb fun p E' hp hm => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
+    rw [hwe.2.2.1 (Or.inl hm')]; exact hE
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

@@ -1,5 +1,5 @@
 // thread_captures_owned_string: a thread closure captures an owned string that the spawning function releases on return.
-// map: §6.5 | A3 | rejected | h92 | thread closure captures string the spawning function frees on return
+// map: §6.5 | A3 | rejected | h92 | thread closure captures string the spawning function frees on return; A3.0: the capture moves to the thread
 $ `stdlib/core/string.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`

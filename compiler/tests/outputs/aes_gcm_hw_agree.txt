@@ -3,4 +3,4 @@ LINK OK
 EXIT 0
 OUTPUT
 path: hardware vs software
-cases 2934, failures 0
+cases 2958, failures 0

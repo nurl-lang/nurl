@@ -3,6 +3,6 @@ LINK OK
 EXIT 0
 OUTPUT
 end
-drop first tags=1
-drop second tags=1
 drop in-a-vec tags=1
+drop second tags=1
+drop first tags=1

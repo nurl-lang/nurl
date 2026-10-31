@@ -218,6 +218,7 @@ def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
 def Stmt.spine : Stmt → List Var
   | .seq a _ => a.spine
   | .scope x s => x :: s.spine
+  | .scopeD x _ s => x :: s.spine
   | .rbind p s => p :: s.spine
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
@@ -231,11 +232,51 @@ def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → ∃ x t, OwnedAt m x 
 def CatchOK (m : Mem) : Stmt → Prop
   | .seq a _ => CatchOK m a
   | .scope _ s => CatchOK m s
+  | .scopeD _ _ s => CatchOK m s
   | .rbind _ s => CatchOK m s
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
   | _ => True
+
+/-- A borrowed parameter depends only on what was bound before its call: on
+    no binding of a run-time scope the call's body has opened. A panic that
+    unwinds those scopes therefore leaves its dependencies bound. -/
+def PinOK (Γ : Ctx) : Stmt → Prop
+  | .seq a _ => PinOK Γ a
+  | .scope _ s => PinOK Γ s
+  | .scopeD _ _ s => PinOK Γ s
+  | .rbind p s => (∀ E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r ∉ s.spine) ∧ PinOK Γ s
+  | .frozen _ s => PinOK Γ s
+  | .catchR _ _ s => PinOK Γ s
+  | _ => True
+
+/-- `PinOK` reads only borrowed parameters: a context that keeps them keeps it. -/
+theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
+    {s : Stmt} (hp : PinOK Γ s) : PinOK Γ' s := by
+  induction s with
+  | seq a _ iha _ => exact iha hp
+  | scope _ k ih => exact ih hp
+  | scopeD _ _ k ih => exact ih hp
+  | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
+  | frozen _ k ih => exact ih hp
+  | catchR _ _ k ih => exact ih hp
+  | _ => trivial
+
+/-- A statement inside no run-time scope is inside no call either. -/
+theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s := by
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope _ _ _ => simp [Stmt.spine] at h
+  | scopeD _ _ _ _ => simp [Stmt.spine] at h
+  | rbind _ _ _ => simp [Stmt.spine] at h
+  | _ => trivial
+
+theorem pinOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine :=
+  fun _ _ _ _ _ _ _ hr => by rw [h] at hr; cases hr
 
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
@@ -278,6 +319,11 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
   cover     : Covers m
+  /-- A borrowed parameter bound outside the running scopes depends on none
+      of their bindings, and each one bound inside depends on none of the
+      scopes opened inside its call (`PinOK`). -/
+  pinOut    : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine
+  pinIn     : PinOK Γ s
 
 /-! ### Typing of statements
 
@@ -290,6 +336,12 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
   (∀ v E, Γ v = some E → v ∉ sp →
     ∃ E', Δ v = some E' ∧ E'.mode = E.mode ∧ E'.ty = E.ty ∧ (E.mode = .rootb → E' = E)) ∧
   (∀ v E', Δ v = some E' → v ∉ sp ∧ ∃ E, Γ v = some E)
+
+/-- `f` is a destructor for values of type `t`: it takes one borrowed `t`,
+    returns an integer and lends, holds and stores nothing. -/
+def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
+  ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧
+    fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = []
 
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
@@ -374,6 +426,17 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (RootbAnch Δ F) →
       KeepOut Γ Δ s.spine →
       StmtT P Γ F (.catchR x m0 s) Δ
+  /-- A2-drop.1: a binding with a destructor, of a type that holds no views
+      (its value is valid however the binding died). -/
+  | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry} :
+      s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
+      E.ty.holdsView = false → DtorOK P f E.ty → StmtT P (setE Γ1 x E) F s Δ →
+      NoPin Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+  | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
+      (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.holdsView = false ∧ DtorOK P f E.ty) → x ∉ F →
+      StmtT P Γ F s Δ → NoPin Δ x →
+      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows
@@ -442,6 +505,8 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .catchR _ _ s => s.codesOK P
   | .unpair _ _ _ s => s.codesOK P
   | .callc _ _ _ _ s => s.codesOK P
+  | .letd _ _ r s => r.codeOK P ∧ s.codesOK P
+  | .scopeD _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

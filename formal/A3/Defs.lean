@@ -60,6 +60,8 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
       Redex s K r → Redex (.frozen z s) (fun y => .frozen z (K y)) r
   | catchR {x : Var} {m0 : Mem} {s r : Stmt} {K : Stmt → Stmt} :
       Redex s K r → Redex (.catchR x m0 s) (fun y => .catchR x m0 (K y)) r
+  | scopeD {x : Var} {f : Nat} {s r : Stmt} {K : Stmt → Stmt} :
+      Redex s K r → Redex (.scopeD x f s) (fun y => .scopeD x f (K y)) r
 
 /-- A spawned function: every parameter is a `sink` of a type that holds no
     views, and it returns an integer. -/
@@ -91,14 +93,17 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
       TStep P spawn C (C.put i m' s')
   /-- A spawn: the arguments move to a new thread, which runs the body in
-      its parameters' scopes; the spawner's result is `0`. -/
+      its parameters' scopes and its result's (variable `n`, the number of
+      parameters, as in the body's own numbering — so its end drops the
+      result); the spawner's result is `0`. -/
   | spawn {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
       t.st x = none → MoveArgs t.st args vs st' →
       TStep P spawn C
         { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
-                        [⟨spawnSt fn vs, fn.nvars, wrapParams fn.params 0 0 fn.body⟩] }
+                        [⟨spawnSt fn vs, fn.nvars,
+                          wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }
 
 inductive Reach (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | refl {C : Cfg} : Reach P spawn C C
@@ -145,6 +150,12 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
   | seq {a b : Stmt} {i : Nat} {w : Bool} : Touch P m a i w → Touch P m (.seq a b) i w
   | letv {x : Var} {r : Rhs} {s : Stmt} {i : Nat} {w : Bool} :
       RTouch m r i w → Touch P m (.letv x r s) i w
+  | letd {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {i : Nat} {w : Bool} :
+      RTouch m r i w → Touch P m (.letd x f r s) i w
+  /-- A destructor's scope: its body's step. Its end runs the destructor's
+      call first, and `scope x` frees the tree after it (`scopeEnd`). -/
+  | scopeD {x : Var} {f : Nat} {s : Stmt} {i : Nat} {w : Bool} :
+      Touch P m s i w → Touch P m (.scopeD x f s) i w
   | assign {x : Var} {r : Rhs} {i : Nat} {w : Bool} : RTouch m r i w → Touch P m (.assign x r) i w
   /-- An assignment releases the binding's old value. -/
   | assignDrop {x : Var} {r : Rhs} {t : Val} {i : Nat} :

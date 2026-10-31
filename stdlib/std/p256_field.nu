@@ -645,13 +645,13 @@ inline @ __p256_add_p * i op * i ap * i bp → v {
     = bb ( nurl_subb_hi t2 0 bb )
     : u64 d3 ( nurl_subb_lo t3 18446744069414584321 bb )
     = bb ( nurl_subb_hi t3 18446744069414584321 bb )
-    : i topb - # i cc # i bb
-    : u64 mask ? < topb 0 0 18446744073709551615
-    : u64 imask ^^ mask 18446744073709551615
-    = . op 0 # i | & mask d0 & imask t0
-    = . op 1 # i | & mask d1 & imask t1
-    = . op 2 # i | & mask d2 & imask t2
-    = . op 3 # i | & mask d3 & imask t3
+    // The fifth word's borrow: 1 exactly when cc:t < p, i.e. t is the sum.
+    : u64 keep ( nurl_subb_hi cc 0 bb )
+    : u64 m - 0 keep
+    = . op 0 # i ^^ d0 & m ^^ d0 t0
+    = . op 1 # i ^^ d1 & m ^^ d1 t1
+    = . op 2 # i ^^ d2 & m ^^ d2 t2
+    = . op 3 # i ^^ d3 & m ^^ d3 t3
 }
 
 @ __p256_add_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_add_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
@@ -1036,14 +1036,16 @@ raw @ _p256_jmadd_d P256Scratch scr P256Pt acc ( Vec i ) x2 ( Vec i ) y2 ( Vec i
     ( __p256_sub_p rreg rreg Y1 )
     // Z3 = Z1·H (into its own register — acc stays whole until commit)
     ( __p256_mul_p z3 Z1 hreg )
-    // hh = H²; V = X1·hh; X3 = R² − H³ − 2V
+    // hh = H²; V = X1·hh; X3 = R² − H³ − 2V. 2V is formed while H³ is
+    // still being multiplied (t is free between s2 and Y1·H³), so X3
+    // waits on H³ for two subtractions, not three.
     ( __p256_sqr_p hh hreg )
     ( __p256_mul_p vv X1 hh )
+    ( __p256_add_p t vv vv )
     ( __p256_sqr_p x3 rreg )
     ( __p256_mul_p hh hreg hh )
     ( __p256_sub_p x3 x3 hh )
-    ( __p256_sub_p x3 x3 vv )
-    ( __p256_sub_p x3 x3 vv )
+    ( __p256_sub_p x3 x3 t )
     // Y3 = R·(V − X3) − Y1·H³
     ( __p256_sub_p vv vv x3 )
     ( __p256_mul_p vv rreg vv )

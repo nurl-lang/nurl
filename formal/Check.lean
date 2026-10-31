@@ -1,5 +1,6 @@
 import A1
 import A2
+import A3
 /-! Run by `check.sh`: the axioms the main theorems rest on. -/
 #print axioms A1.memory_safe
 #print axioms A1.soundness
@@ -11,3 +12,5 @@ import A2
 #print axioms A2.DynCell.pick_ok
 #print axioms A2.DynCell.main_safe
 #print axioms A2.DynCell.main_no_leak
+-- threads that only move (A3/Claim.lean)
+#print axioms A3.claim

@@ -1,19 +1,21 @@
 # The claim
 
-> **Status: A1 and A2 are proven** (`A1.memory_safe`, `A2.memory_safe`,
-> `A2.no_leak_end`, [`README.md`](README.md)); A3 and B–D are the
-> statement the proof is working towards, not one it has reached.
+> **Status: A1, A2 and A3.0 are proven** (`A1.memory_safe`,
+> `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md));
+> A3.1–A3.6 and B–D are the statement the proof is working towards, not one
+> it has reached.
 
 ## Statement
 
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
 functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
-language as the calculus models them; the data-race clause is A3, and the
-link from the rules to nurlc and its code is B–D* (below): no use after
-free, no double free, no read through a dangling view, no out-of-bounds
-access, no data race, and everything it allocated is released — on the
-panic path as much as the normal one.
+language as the calculus models them, and (A3.0) for threads that share
+nothing but what they move; the data-race clause for what threads share is
+A3.1–A3.6, and the link from the rules to nurlc and its code is B–D*
+(below): no use after free, no double free, no read through a dangling
+view, no out-of-bounds access, no data race, and everything it allocated
+is released — on the panic path as much as the normal one.
 
 This is the guarantee of [`docs/MEMORY.md` §6.2](../docs/MEMORY.md),
 stated as a theorem. "Memory model" here means NURL's ownership model:
@@ -49,6 +51,20 @@ the LLVM / C11 memory model rather than redefining it.
   Carried to C11 / LLVM by the DRF-SC theorem (below). The statement is
   `A3.Claim` in `A3/Defs.lean`, and `A3/DESIGN.md` gives the semantics
   and the milestones.
+  - **A3.0** *(proven)* — threads that only move. A function the program
+    marks is called on a new thread; its parameters are `sink` and of
+    types that hold no views (`SpawnOK`), so what crosses is trees the
+    spawner gives up. Every thread runs A2's own step on the shared
+    address space. In Lean: `A3.claim : A3.Claim` — no thread of a
+    reachable configuration is stuck, no two threads race, and when every
+    thread has finished nothing is allocated — on the standard axioms
+    only. The proof gives each thread its own part of the address space,
+    on which A2's invariant holds: a step on the shared space is a step on
+    the part and leaves the other parts as they were, and a spawn cuts the
+    spawner's part in two.
+  - **A3.1–A3.6** — what threads share: `Arc`, `Locked` / `Mutex`,
+    `RwLocked` and `% Frozen` read guards, `Atomic` and channels, library
+    handles whose copies are one state, module globals. Not proven.
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.
@@ -59,16 +75,34 @@ library, the compiler and the code generator are part of the trusted base.
 
 ## Destructors, and a panic while a panic unwinds
 
-In the calculus a drop releases what a value owns and runs no code of the
-program's: a scope's exit, a `free`, a replaced value and a panic's
-unwinding all release by `DropSlot`, which cannot fail. A destructor
-written by the program (`% Drop T { @ drop … }`, docs/MEMORY.md §7.6) is
-code the calculus does not have yet — its body is an ordinary function the
-rules check, and A2's theorem covers it as a call, not as part of a drop.
-So a *double panic* — a destructor that panics while a panic's journal
-drains — is outside the calculus, and is a property of the runtime
-(`stdlib/runtime_core.c`, `nurl_panic`), stated here so the claim does not
-hide it:
+A destructor written by the program (`% Drop T { @ drop … }`,
+docs/MEMORY.md §7.6) is inside the calculus for a type that holds no views
+(A2-drop.1, `A2/DROP_DESIGN.md`).
+- A binding with a destructor (`StmtT.letd`) is scoped by `scopeD`.
+- At its end, while it still owns its value, the destructor runs as a call
+  of the program's function, on the binding lent (`Step.scopeDEnd`). Then
+  the scope frees the tree: the drop glue after the impl.
+- A panic that unwinds to the frame stops there. It runs the destructor,
+  frees the binding, and raises again (`Step.scopeDP`). The frame is gone,
+  so a panic inside the destructor does not run it again, and `scope x`
+  still frees the fields.
+- `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
+  the standard axioms. That includes a *double panic*: a destructor that
+  panics while a panic unwinds.
+- The calculus puts the destructor on the binding `letd` makes, not on
+  the type. A value moved out of that binding, into a `sink` parameter,
+  another binding or a field, is released where it ends by `DropSlot`,
+  which runs no code. nurlc runs the destructor there too, and that run
+  is outside the calculus until the destructor moves to the type
+  (A2-drop.2, Agora #241).
+
+A destructor of a type that holds views is A2-drop.2. It needs a typing
+rule nurlc lacks today (`DtorSafe`, Agora #224): a drop reads the value,
+so what the value views must outlive every path where it is not
+definitely moved.
+
+How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
+is stated here so the claim does not hide it:
 
 - the second panic is caught by the same `recover` frame as the first;
   the drain it starts releases what the journal still holds (each entry
@@ -82,9 +116,8 @@ hide it:
   with it.
 
 Test: `compiler/tests/panic_in_drop_while_unwinding.nu` (clean under
-AddressSanitizer and LeakSanitizer). Modelling destructors in the calculus
-— a drop that runs a function, and may panic — is a planned refinement
-(`README.md`).
+AddressSanitizer and LeakSanitizer). That the journal's drain does what
+`Step.scopeDP` does is phase C / D.
 
 ## Trusted base
 

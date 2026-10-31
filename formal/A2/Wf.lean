@@ -512,7 +512,7 @@ end A2
 namespace A2
 
 theorem roots_allKinds {rs : List Var} {r : Var} (h : r ∈ roots (allKinds rs)) : r ∈ rs := by
-  simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons, List.mem_singleton,
+  simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons,
     List.not_mem_nil, or_false] at h
   obtain ⟨d, ⟨r', hr', hd⟩, rfl⟩ := h
   rcases hd with rfl | rfl | rfl <;> exact hr'
@@ -810,12 +810,19 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @scope Γ Δ F x k _ hxF _ _ ih =>
+  | @scope Γ Δ F x k _ hxF _ _ ih | @scopeD Γ Δ F x _ k _ hxF _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2]⟩
+  | @letd Γ Γ1 Δ F x _ r0 k E0 _ hx hxF hrh _ _ _ _ _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E1, h1, hm1⟩ := hrh.domMode.get h
+    obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
+    exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
+      by rw [killE_mode, hm2, hm1]⟩
   | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -901,6 +908,12 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE))).exitScope x
   | scope _ _ _ _ ih => exact fun h => (ih h).exitScope _
+  | scopeD _ _ _ _ _ _ _ ih => exact fun h => (ih h).exitScope _
+  | @letd Γ Γ1 Δ F x _ r k E _ hx _ hr _ _ _ _ _ ih =>
+    intro h
+    obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h
+    have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
+    exact (ih (hw1.add hx1 hE)).exitScope x
   | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h

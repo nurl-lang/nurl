@@ -19,6 +19,7 @@ import A2.Progress
 import A2.Wf
 import A2.Rename
 import A2.Call
+import A2.SrcKeep
 import A2.Bind
 import A2.CallMem
 import A2.CallInv

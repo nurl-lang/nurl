@@ -6,7 +6,7 @@ close b-direct
 note replaced
 recovered: in hook
 end
+note replaced
 impl a-scope-exit
 closure 1
 close a-scope-exit
-note replaced

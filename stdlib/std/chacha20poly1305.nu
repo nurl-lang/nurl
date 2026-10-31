@@ -291,15 +291,49 @@ $ `stdlib/core/vec.nu`
 // stall on one block's chain where this one has four in flight. The words
 // come back to block order through 4×4 transposes (__cc_xor4) on the way
 // out.
-inline @ __cc_qr4 inout v128 a inout v128 b inout v128 c inout v128 d → v {
-    = a ( nurl_v128_add32 a b )
-    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 16 )
-    = c ( nurl_v128_add32 c d )
-    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 12 )
-    = a ( nurl_v128_add32 a b )
-    = d ( nurl_v128_rotl32 ( nurl_v128_xor d a ) 8 )
-    = c ( nurl_v128_add32 c d )
-    = b ( nurl_v128_rotl32 ( nurl_v128_xor b c ) 7 )
+//
+// A half round is four quarter-rounds (a_q, b_q, c_q, d_q), q = 0..3,
+// written in lockstep: each step for all four, then the next step. Written
+// one quarter-round after another, the backend keeps that order. The next
+// half round then waits on the whole latency chain of the last
+// quarter-round, and the state that does not fit in sixteen registers is
+// spilled onto that chain. In lockstep the four chains run side by side.
+// On Haswell that took the eight-block double round from 62 to 55 cycles
+// (clang's C intrinsics in lockstep: 56) and this four-block kernel's SSE2
+// clone from 1602 to 1434 cycles per 512 bytes.
+inline @ __cc_half4 inout v128 a0 inout v128 b0 inout v128 c0 inout v128 d0 inout v128 a1 inout v128 b1 inout v128 c1 inout v128 d1 inout v128 a2 inout v128 b2 inout v128 c2 inout v128 d2 inout v128 a3 inout v128 b3 inout v128 c3 inout v128 d3 → v {
+    = a0 ( nurl_v128_add32 a0 b0 )
+    = a1 ( nurl_v128_add32 a1 b1 )
+    = a2 ( nurl_v128_add32 a2 b2 )
+    = a3 ( nurl_v128_add32 a3 b3 )
+    = d0 ( nurl_v128_rotl32 ( nurl_v128_xor d0 a0 ) 16 )
+    = d1 ( nurl_v128_rotl32 ( nurl_v128_xor d1 a1 ) 16 )
+    = d2 ( nurl_v128_rotl32 ( nurl_v128_xor d2 a2 ) 16 )
+    = d3 ( nurl_v128_rotl32 ( nurl_v128_xor d3 a3 ) 16 )
+    = c0 ( nurl_v128_add32 c0 d0 )
+    = c1 ( nurl_v128_add32 c1 d1 )
+    = c2 ( nurl_v128_add32 c2 d2 )
+    = c3 ( nurl_v128_add32 c3 d3 )
+    = b0 ( nurl_v128_rotl32 ( nurl_v128_xor b0 c0 ) 12 )
+    = b1 ( nurl_v128_rotl32 ( nurl_v128_xor b1 c1 ) 12 )
+    = b2 ( nurl_v128_rotl32 ( nurl_v128_xor b2 c2 ) 12 )
+    = b3 ( nurl_v128_rotl32 ( nurl_v128_xor b3 c3 ) 12 )
+    = a0 ( nurl_v128_add32 a0 b0 )
+    = a1 ( nurl_v128_add32 a1 b1 )
+    = a2 ( nurl_v128_add32 a2 b2 )
+    = a3 ( nurl_v128_add32 a3 b3 )
+    = d0 ( nurl_v128_rotl32 ( nurl_v128_xor d0 a0 ) 8 )
+    = d1 ( nurl_v128_rotl32 ( nurl_v128_xor d1 a1 ) 8 )
+    = d2 ( nurl_v128_rotl32 ( nurl_v128_xor d2 a2 ) 8 )
+    = d3 ( nurl_v128_rotl32 ( nurl_v128_xor d3 a3 ) 8 )
+    = c0 ( nurl_v128_add32 c0 d0 )
+    = c1 ( nurl_v128_add32 c1 d1 )
+    = c2 ( nurl_v128_add32 c2 d2 )
+    = c3 ( nurl_v128_add32 c3 d3 )
+    = b0 ( nurl_v128_rotl32 ( nurl_v128_xor b0 c0 ) 7 )
+    = b1 ( nurl_v128_rotl32 ( nurl_v128_xor b1 c1 ) 7 )
+    = b2 ( nurl_v128_rotl32 ( nurl_v128_xor b2 c2 ) 7 )
+    = b3 ( nurl_v128_rotl32 ( nurl_v128_xor b3 c3 ) 7 )
 }
 
 // Words w..w+3 of the four blocks (x0..x3: word w+k of block j in lane j),
@@ -339,14 +373,8 @@ inline @ __chacha20_xor4_v128 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
     : ~ v128 x15 ( nurl_v128_bcast32 n2 )
     : ~ i r 0
     ~ < r 10 {
-        ( __cc_qr4 x0 x4 x8 x12 )
-        ( __cc_qr4 x1 x5 x9 x13 )
-        ( __cc_qr4 x2 x6 x10 x14 )
-        ( __cc_qr4 x3 x7 x11 x15 )
-        ( __cc_qr4 x0 x5 x10 x15 )
-        ( __cc_qr4 x1 x6 x11 x12 )
-        ( __cc_qr4 x2 x7 x8 x13 )
-        ( __cc_qr4 x3 x4 x9 x14 )
+        ( __cc_half4 x0 x4 x8 x12 x1 x5 x9 x13 x2 x6 x10 x14 x3 x7 x11 x15 )
+        ( __cc_half4 x0 x5 x10 x15 x1 x6 x11 x12 x2 x7 x8 x13 x3 x4 x9 x14 )
         = r + r 1
     }
     ( __cc_xor4 ( nurl_v128_add32 x0 ( nurl_v128_bcast32 1634760805 ) ) ( nurl_v128_add32 x1 ( nurl_v128_bcast32 857760878 ) ) ( nurl_v128_add32 x2 ( nurl_v128_bcast32 2036477234 ) ) ( nurl_v128_add32 x3 ( nurl_v128_bcast32 1797285236 ) ) src dst 0 )
@@ -360,16 +388,41 @@ inline @ __chacha20_xor4_v128 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
 // registers (on a CPU without AVX2 every v256 operation is two SSE2 ones
 // and sixteen live state vectors no longer fit), so chacha20_xor_range
 // runs it only where nurl_cpu_x86_v3 says the AVX2 clone is the one
-// running.
-inline @ __cc_qr8 inout v256 a inout v256 b inout v256 c inout v256 d → v {
-    = a ( nurl_v256_add32 a b )
-    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 16 )
-    = c ( nurl_v256_add32 c d )
-    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 12 )
-    = a ( nurl_v256_add32 a b )
-    = d ( nurl_v256_rotl32 ( nurl_v256_xor d a ) 8 )
-    = c ( nurl_v256_add32 c d )
-    = b ( nurl_v256_rotl32 ( nurl_v256_xor b c ) 7 )
+// running. Its half round runs the four quarter-rounds in lockstep, as
+// __cc_half4 does.
+inline @ __cc_half8 inout v256 a0 inout v256 b0 inout v256 c0 inout v256 d0 inout v256 a1 inout v256 b1 inout v256 c1 inout v256 d1 inout v256 a2 inout v256 b2 inout v256 c2 inout v256 d2 inout v256 a3 inout v256 b3 inout v256 c3 inout v256 d3 → v {
+    = a0 ( nurl_v256_add32 a0 b0 )
+    = a1 ( nurl_v256_add32 a1 b1 )
+    = a2 ( nurl_v256_add32 a2 b2 )
+    = a3 ( nurl_v256_add32 a3 b3 )
+    = d0 ( nurl_v256_rotl32 ( nurl_v256_xor d0 a0 ) 16 )
+    = d1 ( nurl_v256_rotl32 ( nurl_v256_xor d1 a1 ) 16 )
+    = d2 ( nurl_v256_rotl32 ( nurl_v256_xor d2 a2 ) 16 )
+    = d3 ( nurl_v256_rotl32 ( nurl_v256_xor d3 a3 ) 16 )
+    = c0 ( nurl_v256_add32 c0 d0 )
+    = c1 ( nurl_v256_add32 c1 d1 )
+    = c2 ( nurl_v256_add32 c2 d2 )
+    = c3 ( nurl_v256_add32 c3 d3 )
+    = b0 ( nurl_v256_rotl32 ( nurl_v256_xor b0 c0 ) 12 )
+    = b1 ( nurl_v256_rotl32 ( nurl_v256_xor b1 c1 ) 12 )
+    = b2 ( nurl_v256_rotl32 ( nurl_v256_xor b2 c2 ) 12 )
+    = b3 ( nurl_v256_rotl32 ( nurl_v256_xor b3 c3 ) 12 )
+    = a0 ( nurl_v256_add32 a0 b0 )
+    = a1 ( nurl_v256_add32 a1 b1 )
+    = a2 ( nurl_v256_add32 a2 b2 )
+    = a3 ( nurl_v256_add32 a3 b3 )
+    = d0 ( nurl_v256_rotl32 ( nurl_v256_xor d0 a0 ) 8 )
+    = d1 ( nurl_v256_rotl32 ( nurl_v256_xor d1 a1 ) 8 )
+    = d2 ( nurl_v256_rotl32 ( nurl_v256_xor d2 a2 ) 8 )
+    = d3 ( nurl_v256_rotl32 ( nurl_v256_xor d3 a3 ) 8 )
+    = c0 ( nurl_v256_add32 c0 d0 )
+    = c1 ( nurl_v256_add32 c1 d1 )
+    = c2 ( nurl_v256_add32 c2 d2 )
+    = c3 ( nurl_v256_add32 c3 d3 )
+    = b0 ( nurl_v256_rotl32 ( nurl_v256_xor b0 c0 ) 7 )
+    = b1 ( nurl_v256_rotl32 ( nurl_v256_xor b1 c1 ) 7 )
+    = b2 ( nurl_v256_rotl32 ( nurl_v256_xor b2 c2 ) 7 )
+    = b3 ( nurl_v256_rotl32 ( nurl_v256_xor b3 c3 ) 7 )
 }
 
 // x0..x3 hold words w..w+3 of the eight blocks (block j in lane j); the
@@ -413,14 +466,8 @@ inline @ __chacha20_xor8_v256 i k0 i k1 i k2 i k3 i k4 i k5 i k6 i k7 i ctr i n0
     : ~ v256 x15 ( nurl_v256_bcast32 n2 )
     : ~ i r 0
     ~ < r 10 {
-        ( __cc_qr8 x0 x4 x8 x12 )
-        ( __cc_qr8 x1 x5 x9 x13 )
-        ( __cc_qr8 x2 x6 x10 x14 )
-        ( __cc_qr8 x3 x7 x11 x15 )
-        ( __cc_qr8 x0 x5 x10 x15 )
-        ( __cc_qr8 x1 x6 x11 x12 )
-        ( __cc_qr8 x2 x7 x8 x13 )
-        ( __cc_qr8 x3 x4 x9 x14 )
+        ( __cc_half8 x0 x4 x8 x12 x1 x5 x9 x13 x2 x6 x10 x14 x3 x7 x11 x15 )
+        ( __cc_half8 x0 x5 x10 x15 x1 x6 x11 x12 x2 x7 x8 x13 x3 x4 x9 x14 )
         = r + r 1
     }
     = x0 ( nurl_v256_add32 x0 ( nurl_v256_bcast32 1634760805 ) )

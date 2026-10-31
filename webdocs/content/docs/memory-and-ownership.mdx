@@ -10,7 +10,11 @@ NURL has no garbage collector, and ordinary values are not
 reference-counted: shared ownership is opt-in, through `Rc` and `Arc`.
 NURL uses **single-owner auto-drop** to manage heap memory. The compiler
 tracks which binding owns each heap allocation and inserts the matching
-free at the end of that binding's scope.
+free at the end of that binding's scope. A scope drops its values newest
+first, as Rust and C++ do, so a value built from a view of another is
+dropped before what it views. A `% Drop` destructor that may read such a
+view counts as a use of it, and the borrow checker rejects a source that
+would end first (`docs/MEMORY.md` §2.14).
 
 ## Ownership
 

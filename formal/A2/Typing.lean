@@ -600,6 +600,8 @@ def Stmt.src : Stmt → Bool
   | .catchR _ _ _ => false
   | .unpair _ _ _ s => s.src
   | .callc _ _ _ _ s => s.src
+  | .letd _ _ _ s => s.src
+  | .scopeD _ _ _ => false
 
 /-! ### Functions -/
 
@@ -764,6 +766,8 @@ def Stmt.vars : Stmt → List Var
   | .catchR x _ s => x :: s.vars
   | .unpair y x z s => y :: x :: z :: s.vars
   | .callc x c _ zs s => x :: c :: zs ++ s.vars
+  | .letd x _ r s => x :: r.vars ++ s.vars
+  | .scopeD x _ s => x :: s.vars
 
 
 
