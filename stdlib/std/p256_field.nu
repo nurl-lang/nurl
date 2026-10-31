@@ -654,6 +654,29 @@ inline @ __p256_add_p * i op * i ap * i bp → v {
     = . op 3 # i ^^ d3 & m ^^ d3 t3
 }
 
+// a / 2 mod p, constant-time: a + p when a is odd (an even sum, below
+// 2^257), then one bit right across five words — p added under a mask of
+// a's low bit, no branch. `dst` may alias a.
+inline @ __p256_half_p * i op * i ap → v {
+    : u64 a0 # u64 . ap 0
+    : u64 a1 # u64 . ap 1
+    : u64 a2 # u64 . ap 2
+    : u64 a3 # u64 . ap 3
+    : u64 m - 0 & a0 1
+    : u64 t0 ( nurl_addc_lo a0 m 0 )
+    : ~ u64 cc ( nurl_addc_hi a0 m 0 )
+    : u64 t1 ( nurl_addc_lo a1 & m 4294967295 cc )
+    = cc ( nurl_addc_hi a1 & m 4294967295 cc )
+    : u64 t2 ( nurl_addc_lo a2 0 cc )
+    = cc ( nurl_addc_hi a2 0 cc )
+    : u64 t3 ( nurl_addc_lo a3 & m 18446744069414584321 cc )
+    = cc ( nurl_addc_hi a3 & m 18446744069414584321 cc )
+    = . op 0 # i | >> t0 1 << t1 63
+    = . op 1 # i | >> t1 1 << t2 63
+    = . op 2 # i | >> t2 1 << t3 63
+    = . op 3 # i | >> t3 1 << cc 63
+}
+
 @ __p256_add_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v { ( __p256_add_p ( vec_data [i] dst ) ( vec_data [i] a ) ( vec_data [i] b ) ) }
 
 // (a − b) mod p, constant-time: a − b, and if it borrows add p back.
@@ -927,14 +950,14 @@ raw @ _p256_set_identity_d P256Scratch scr P256Pt dst → v {
 // ── Jacobian fixed-base machinery ──────────────────────────────────────
 // The FIXED-BASE comb (k·G: ECDSA nonce, ECDH keygen) runs on Jacobian
 // coordinates (x = X/Z², y = Y/Z³, ∞ ⇔ Z = 0) with an AFFINE table of
-// G-multiples: doubling is 3M+5S (dbl-2001-b, a = −3) and mixed addition
+// G-multiples: doubling is 4M+4S (a = −3) and mixed addition
 // 8M+3S, against the complete projective formula's 14 multiplies for
 // BOTH. The completeness the RCB formula buys is replaced case by case:
 //
 //   * acc = ∞  (leading zero teeth): the mixed add's result is fixed up
 //     by a constant-time select of (x2, y2, 1) — Z1 = 0 is detected with
 //     a branch-free mask, and the doubling formula keeps Z = 0 on its
-//     own (Z3 = (Y+Z)² − Y² − Z² = 0 when Z = 0).
+//     own (Z3 = 2·Y·Z = 0 when Z = 0).
 //   * digit = 0 (no affine entry exists for ∞): the caller keeps the
 //     old accumulator through the same masked select — the add still
 //     RUNS, against the table's zero entry, so the trace is identical.
@@ -948,48 +971,49 @@ raw @ _p256_set_identity_d P256Scratch scr P256Pt dst → v {
 // All limb traffic stays masked and fixed-count: same constant-time
 // discipline as the projective path.
 
-// Jacobian doubling in place, a = −3 (dbl-2001-b): 3M+5S.
-// Registers: g0=delta g1=gamma g2=beta g3=alpha g4/g5=temps.
+// Jacobian doubling in place, a = −3: 4M+4S and eleven additions,
+// subtractions and halvings —
+//   S = 4·X·Y², M = 3·(X + Z²)·(X − Z²),
+//   X3 = M² − 2S, Y3 = M·(S − X3) − 8·Y⁴, Z3 = 2·Y·Z,
+// with 8·Y⁴ = (4·Y²)²/2. dbl-2001-b's 3M+5S spends eighteen additions on
+// the same point (its 8·β and 8·γ² are three each), and an addition costs
+// a third of a multiply here: the extra multiply is the cheaper side.
+// Registers: g0=Z² g1=S g2=M g3=temp.
 // requires: scr from _p256_scr_new, its registers unshrunk; pt's coordinates
 // hold 4 limbs.
 raw @ _p256_jdbl_d P256Scratch scr P256Pt pt → v {
     : *i xr ( vec_data [i] . pt x )
     : *i yr ( vec_data [i] . pt y )
     : *i zr ( vec_data [i] . pt z )
-    : *i delta ( vec_data [i] . scr g0 )
-    : *i gamma ( vec_data [i] . scr g1 )
-    : *i beta ( vec_data [i] . scr g2 )
-    : *i alpha ( vec_data [i] . scr g3 )
-    : *i t4 ( vec_data [i] . scr g4 )
-    : *i t5 ( vec_data [i] . scr g5 )
-    ( __p256_sqr_p delta zr )
-    ( __p256_sqr_p gamma yr )
-    ( __p256_mul_p beta xr gamma )
-    // alpha = 3·(xr − delta)·(xr + delta)
-    ( __p256_sub_p t4 xr delta )
-    ( __p256_add_p t5 xr delta )
-    ( __p256_mul_p alpha t4 t5 )
-    ( __p256_add_p t4 alpha alpha )
-    ( __p256_add_p alpha t4 alpha )
-    // Z3 = (yr + zr)² − gamma − delta   (before xr/yr are overwritten)
-    ( __p256_add_p t4 yr zr )
-    ( __p256_sqr_p t4 t4 )
-    ( __p256_sub_p t4 t4 gamma )
-    ( __p256_sub_p zr t4 delta )
-    // X3 = alpha² − 8·beta
-    ( __p256_sqr_p t4 alpha )
-    ( __p256_add_p t5 beta beta )
-    ( __p256_add_p t5 t5 t5 )
-    ( __p256_add_p delta t5 t5 )
-    ( __p256_sub_p xr t4 delta )
-    // Y3 = alpha·(4·beta − X3) − 8·gamma²
-    ( __p256_sub_p t4 t5 xr )
-    ( __p256_mul_p t4 alpha t4 )
-    ( __p256_sqr_p t5 gamma )
-    ( __p256_add_p t5 t5 t5 )
-    ( __p256_add_p t5 t5 t5 )
-    ( __p256_add_p t5 t5 t5 )
-    ( __p256_sub_p yr t4 t5 )
+    : *i zz ( vec_data [i] . scr g0 )
+    : *i s ( vec_data [i] . scr g1 )
+    : *i m ( vec_data [i] . scr g2 )
+    : *i t ( vec_data [i] . scr g3 )
+    // S = (2Y)² = 4Y²; Z² while Z is whole
+    ( __p256_add_p s yr yr )
+    ( __p256_sqr_p zz zr )
+    ( __p256_sqr_p s s )
+    // Z3 = 2·Y·Z   (Y and Z are read here for the last time)
+    ( __p256_mul_p t zr yr )
+    ( __p256_add_p zr t t )
+    // M = 3·(X + Z²)·(X − Z²)
+    ( __p256_add_p m xr zz )
+    ( __p256_sub_p zz xr zz )
+    // 8Y⁴ = S²/2, into Y's place
+    ( __p256_sqr_p yr s )
+    ( __p256_half_p yr yr )
+    ( __p256_mul_p m m zz )
+    ( __p256_add_p t m m )
+    ( __p256_add_p m t m )
+    // S = 4·X·Y²; X3 = M² − 2S   (X is read here for the last time)
+    ( __p256_mul_p s s xr )
+    ( __p256_add_p t s s )
+    ( __p256_sqr_p xr m )
+    ( __p256_sub_p xr xr t )
+    // Y3 = M·(S − X3) − 8Y⁴
+    ( __p256_sub_p s s xr )
+    ( __p256_mul_p s s m )
+    ( __p256_sub_p yr s yr )
 }
 
 // Branch-free "all four limbs zero" mask: −1 when v == 0, else 0.
@@ -1620,36 +1644,25 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
 // zero) into (ex, ey). `digit` comes from the secret scalar: every one of
 // the sixteen entries is read, every time, and merged under a mask that
 // is all-ones exactly on the match — arithmetic, not a comparison (see
-// _p256_atbl_get_d). The address stream depends on w alone.
-@ __p256_comb_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i w i digit → v {
-    : *i tp # *i + # i ( vec_data [i] tbl ) * * w 128 8
-    : ~ i x0 0
-    : ~ i x1 0
-    : ~ i x2 0
-    : ~ i x3 0
-    : ~ i y0 0
-    : ~ i y1 0
-    : ~ i y2 0
-    : ~ i y3 0
+// _p256_atbl_get_d). The address stream depends on w alone. An entry is
+// 64 bytes, x then y: two 32-byte loads in the x86-64-v3 clone, against
+// eight word loads — the scan is a sixth of keygen's time otherwise, and
+// the window's mixed addition waits on it.
+simd @ __p256_comb_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i w i digit → v {
+    : i tb + # i ( vec_data [i] tbl ) * * w 128 8
+    : ~ v256 xa ( nurl_v256_zero )
+    : ~ v256 ya ( nurl_v256_zero )
     : ~ i s 0
     ~ < s 16 {
         : u64 z ^^ # u64 + s 1 # u64 digit
-        : i mask - 0 # i >> - z 1 63
-        : i b * s 8
-        = x0 | x0 & mask . tp b
-        = x1 | x1 & mask . tp + b 1
-        = x2 | x2 & mask . tp + b 2
-        = x3 | x3 & mask . tp + b 3
-        = y0 | y0 & mask . tp + b 4
-        = y1 | y1 & mask . tp + b 5
-        = y2 | y2 & mask . tp + b 6
-        = y3 | y3 & mask . tp + b 7
+        : v256 mv ( nurl_v256_bcast64 - 0 # i >> - z 1 63 )
+        : i at + tb * s 64
+        = xa ( nurl_v256_or xa ( nurl_v256_and mv ( nurl_v256_ld # s at ) ) )
+        = ya ( nurl_v256_or ya ( nurl_v256_and mv ( nurl_v256_ld # s + at 32 ) ) )
         = s + s 1
     }
-    : *i xp ( vec_data [i] ex )
-    : *i yp ( vec_data [i] ey )
-    = . xp 0 x0 = . xp 1 x1 = . xp 2 x2 = . xp 3 x3
-    = . yp 0 y0 = . yp 1 y1 = . yp 2 y2 = . yp 3 y3
+    ( nurl_v256_st # s ( vec_data [i] ex ) xa )
+    ( nurl_v256_st # s ( vec_data [i] ey ) ya )
 }
 
 // scalar · G → 64 bytes X‖Y (all zero for a scalar ≡ 0 mod n), constant
