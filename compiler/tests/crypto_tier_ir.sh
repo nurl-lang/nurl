@@ -774,8 +774,9 @@ fi
 # (nurl_rsa16_sqrm_adx / nurl_rsa16_mulm_adx, tools/gen_rsa_adx16.py) on
 # this tier and std/rsa_mont's FIPS kernels without it: both must hold
 # rsa16_kernel_agree's golden (every product checked against std/bigint,
-# edge-shaped moduli and operands), and the linked program must carry the
-# blocks' ADCX / ADOX — straight-line, no branch inside them.
+# edge-shaped moduli and operands), and the blocks must run exactly when
+# the runtime answers ADX. (Their straight-line shape is the generator's
+# to check: tools/gen_rsa_adx16.py --check.)
 R16_SRC="$SCRIPT_DIR/rsa16_kernel_agree.nu"
 if "$NURLC" "$R16_SRC" > "$WORK/r16.ll" 2> "$WORK/r16.err" &&
         command -v "$CLANG" >/dev/null 2>&1 &&
@@ -787,13 +788,34 @@ if "$NURLC" "$R16_SRC" > "$WORK/r16.ll" 2> "$WORK/r16.err" &&
         if [ "$got" = "$want" ]; then ok "rsa16_kernel_agree with $e" "golden"
         else bad "rsa16_kernel_agree with $e" "${got:0:80}"; fi
     done
-    if command -v objdump >/dev/null 2>&1; then
-        sq=$(objdump -d "$WORK/r16" 2>/dev/null | awk '/<nurl_rsa16_sqrm_adx>:/,/^$/')
-        nsq=$(printf '%s\n' "$sq" | grep -cE '\badcxq?\b')
-        if [ "$nsq" -gt 400 ]; then ok "nurl_rsa16_sqrm_adx: linked, ADCX chains" "$nsq adcx"
-        else bad "nurl_rsa16_sqrm_adx: linked, ADCX chains" "$nsq adcx"; fi
+    # The blocks run exactly when the runtime answers ADX (never under
+    # NURL_CPU_ADX=0), whether or not LTO inlined them into the caller.
+    cat > "$WORK/r16e.nu" <<'NU'
+$ `stdlib/core/vec.nu`
+& `c` @ nurl_rsa16_sqrm_adx *i t in *i a in *i m u64 n0 → i32
+unsafe @ main → i {
+    : ( Vec i ) t ( vec_zeroed [i] 33 )
+    : ( Vec i ) a ( vec_zeroed [i] 16 )
+    : ( Vec i ) m ( vec_zeroed [i] 16 )
+    ( vec_put [i] m 0 1 )
+    : i32 ran ( nurl_rsa16_sqrm_adx ( vec_data [i] t ) ( vec_data [i] a ) ( vec_data [i] m ) 1 )
+    ( nurl_print ? != 0 # i ran `ran=1` `ran=0` )
+    ( nurl_print ? ( nurl_cpu_has_adx ) ` adx=1\n` ` adx=0\n` )
+    ^ 0
+}
+NU
+    if "$NURLC" "$WORK/r16e.nu" > "$WORK/r16e.ll" 2> "$WORK/r16e.err" &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/r16e.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/r16e" -lm -lpthread 2>/dev/null; then
+        for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+            got=$(env "$e" "$WORK/r16e" 2>&1)
+            case "$got" in
+                "ran=1 adx=1"|"ran=0 adx=0") ok "nurl_rsa16_sqrm_adx runs iff ADX, $e" "$got" ;;
+                *) bad "nurl_rsa16_sqrm_adx runs iff ADX, $e" "$got" ;;
+            esac
+        done
     else
-        note "nurl_rsa16_sqrm_adx machine code" "skipped (no objdump)"
+        bad "nurl_rsa16_sqrm_adx engagement probe: builds" "$(head -2 "$WORK/r16e.err")"
     fi
 else
     bad "rsa16_kernel_agree: builds" "$(head -2 "$WORK/r16.err")"
