@@ -30,6 +30,7 @@ on:
       - 'tools/get-nurl.ps1'
       - 'tools/gen-site-facts.sh'
       - 'tools/gen-bench-table.mjs'
+      - 'tools/bench_data.sh'
       - 'tools/gen-contributors.mjs'
       - '.github/workflows/webdocs-deploy.yml'
   # The benchmark table's numbers live on the bench-data branch

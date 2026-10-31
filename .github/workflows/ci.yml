@@ -132,6 +132,7 @@ jobs:
               - 'tools/gen-site-facts.sh'
               - 'tools/gen-bench-table.mjs'
               - 'tools/gen-contributors.mjs'
+              - 'tools/bench_data.sh'
               - '.github/workflows/webdocs-deploy.yml'
             # The self-compile leak gate (in the sanitizers job) runs when
             # the compiler source itself changes — that is what owns the
