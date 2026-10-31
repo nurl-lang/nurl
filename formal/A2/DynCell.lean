@@ -108,7 +108,8 @@ theorem ctx_names {R : Entry} (hR : RootsOK R) : NameWF (ctx R) := by
 /-- A result slot that may lend more is weaker: the join of the two paths. -/
 theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R'.mode = R.mode)
     (hb : R.mode = .bor) (hl : R'.live = true → R.live = true)
-    (hp : R.path ⊆ R'.path) (hh : R.held ⊆ R'.held) : Weaker (ctx R) (ctx R') := by
+    (hp : R.path ⊆ R'.path) (hh : R.held ⊆ R'.held) (hd : R'.dtor = R.dtor) :
+    Weaker (ctx R) (ctx R') := by
   refine ⟨fun v => ⟨?_, ?_⟩, ctx_wf hR', ctx_names hR'⟩
   · rcases v with _ | _ | _ | _ | v <;> simp [ctx]
   · intro E E' h h'
@@ -116,7 +117,7 @@ theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R
     · exact EntryWeaker.refl _
     · exact EntryWeaker.refl _
     · exact EntryWeaker.refl _
-    · refine ⟨ht, hm, fun hf => ?_, fun hl' => ⟨hl hl', fun _ => hp, hh⟩⟩
+    · refine ⟨ht, hm, fun hf => ?_, fun hl' => ⟨hl hl', fun _ => hp, hh⟩, fun h => ⟨hd.trans h, hh⟩⟩
       simp [Entry.fixed, hb] at hf
 
 theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false⟩ := by
@@ -231,9 +232,9 @@ theorem body_typed : StmtT P (sigCtx pick) [] pick.body (ctx ErJ) := by
   have hw := Weaker.refl (ctx_wf roots_R0) (ctx_names roots_R0)
   refine StmtT.ite rfl rfl (ExprT.var (E := Ec) (by simp [ctx]) rfl rfl) ?_ ?_
   · exact StmtT.sub hw then_arm (Or.inr (ctx_weaker roots_ErJ rfl rfl rfl (fun _ => rfl)
-      (by simp [ErT, ErJ]) (by simp [ErT, ErJ])))
+      (by simp [ErT, ErJ]) (by simp [ErT, ErJ]) rfl))
   · exact StmtT.sub hw else_arm (Or.inr (ctx_weaker roots_ErJ rfl rfl rfl (fun _ => rfl)
-      (by simp [ErF, ErJ]) (by simp [ErF, ErJ])))
+      (by simp [ErF, ErJ]) (by simp [ErF, ErJ]) rfl))
 
 /-- `pick` meets its summary: it lends `p` and the cell, nothing else. -/
 theorem pick_ok : FnOK P pick := by
