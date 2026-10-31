@@ -258,10 +258,13 @@ gap in the let-then-name path. That is the path every consumer goes
 through after elaboration, so a stage switches its consumers over only
 once the twins of its form agree with the originals.
 
-The first run (main 8946e8d1, the 27 probes whose `^` or `=` takes a value
-block or a simple join) found 8 twins that differ, all from safe to
-**HOLE**, and all 8 are heap use-after-frees. Minimising them also turned
-up a leak:
+The first run covered the 58 probes whose `^` or `=` takes a value block,
+a `?` or a `??`. It found 24 twins that go from safe to **HOLE**, all heap
+use-after-frees, on both 8946e8d1 and 360531b7 (Agora #242). The simplest
+case is `: String t ? c a b` then `^ t`, with `a` and `b` local Strings.
+MEMORY.md §2.2 says the selected owner moves on its path; the let leaves
+`t` lending it instead, and only some consumers of a name check that.
+Minimising also turned up a leak and one more use-after-free:
 
 - `: String t { … ( string_from … ) }` leaks the String: the binding
   never takes the tail call's ownership bit. `mem_udrop_bind_flag` looks
@@ -270,7 +273,7 @@ up a leak:
   `o` an `inout` parameter, is a use-after-free: `t` is still dropped after
   `o` took its buffer.
 
-These are holes in today's compiler, filed on their own. They are also
+These are holes in today's compiler, filed on their own as #242. They are also
 the N×M pattern seen from the other side: the pairs fixed for `^ {…}`
 and `= o {…}` were never fixed for `: t {…}` followed by `^ t` or `= o t`.
 
