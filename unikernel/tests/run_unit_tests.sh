@@ -139,6 +139,10 @@ expect_signal deadlock-run   134 "runtime_run with a stuck fiber reported"
 expect_signal stack-overflow 139 "coroutine stack overflow faults"
 expect_signal guard-write    139 "one byte below the stack faults — the guard page is armed"
 expect_signal entropy-fault  134 "a refusing entropy source ends the program"
+expect_signal deadlock-rwlock 134 "main queued behind a writer that never lets go reported"
+expect_signal rwlock-reread    3 "an RwLocked its holder writes, asked to read: a panic, not a wait"
+expect_signal rwlock-rewrite   3 "an RwLocked its holder writes, asked to write: a panic, not a wait"
+expect_signal rwlock-reupgrade 3 "an RwLocked its holder reads, asked to write: a panic, not a wait"
 
 # 5. libm, against glibc, in one process — the nolibc names renamed so
 #    both implementations are callable. Several seeds: the ranges are

@@ -67,6 +67,14 @@ void nurl__rctx_swap(void *ctx) { (void)ctx; }
 void nurl__rctx_release(void *ctx);
 void nurl__rctx_release(void *ctx) { (void)ctx; }
 
+/* runtime_bare.c §9b panics through runtime_core.c's nurl_panic when a
+ * holder asks for an RwLocked it already has. Here the panic ends the
+ * process with its message and exit status 3: the rwlock-relock
+ * scenario tells that apart from a deadlock (abort, 134), which is what
+ * a missing check would turn into. */
+void nurl_panic(const char *msg);
+void nurl_panic(const char *msg) { printf("%s\n", msg); exit(3); }
+
 long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long h);
@@ -80,6 +88,15 @@ void      nurl_runtime_init(long long workers);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 long long nurl_rand_fill(unsigned char *buf, long long n);
+long long nurl_rwlock_size(void);
+void      nurl_rwlock_init(void *l);
+void      nurl_rwlock_destroy(void *l);
+void      nurl_rwlock_rdlock(void *l);
+void      nurl_rwlock_rdunlock(void *l);
+void      nurl_rwlock_wrlock(void *l);
+void      nurl_rwlock_wrunlock(void *l);
+long long nurl_rwlock_tryrdlock(void *l);
+long long nurl_rwlock_trywrlock(void *l);
 extern long long nurl__bare_live_coros;
 void     *nurl__bare_stack_lo(void);
 
@@ -88,6 +105,9 @@ void     *nurl__bare_stack_lo(void);
  * a NURL program does. pthread_layout.c is the gate on those numbers. */
 typedef struct { long long slot[5]; } mutex_store;   /* 40 bytes */
 typedef struct { long long slot[6]; } cond_store;    /* 48 bytes */
+/* An RwLocked's block is nurl_rwlock_size() bytes, asked at run time;
+ * test_rwlock checks it fits this. */
+typedef struct { long long slot[8]; } rw_store;
 
 static int failures;
 static int checks;
@@ -399,6 +419,91 @@ static void test_park_unpark(void) {
     ck_str(trace, "pu", "unpark resumes it");
 }
 
+/* ── 6b. reader-writer lock: FIFO, readers in a batch, main queues ──
+ *
+ * Fairness has no NURL spelling either: rwlock_basic.nu passes whether
+ * a writer waited behind one reader or behind every reader that came
+ * after it. So the schedule is the value again. A reader that arrives
+ * while a writer waits queues behind it (a stream of readers cannot
+ * starve a writer); an unlock lets in the whole run of readers at the
+ * head (b and c inside together); the main context, which cannot park,
+ * takes its turn in the same queue. */
+static rw_store rw1;
+
+static void rw_reader(void *env) {
+    char id = (char)(long)env;
+    nurl_rwlock_rdlock(&rw1);
+    mark(id);
+    nurl_fiber_yield();                  /* still reading */
+    mark((char)(id - 'a' + 'A'));
+    nurl_rwlock_rdunlock(&rw1);
+}
+static void rw_writer(void *env) {
+    char id = (char)(long)env;
+    nurl_rwlock_wrlock(&rw1);
+    mark(id);
+    nurl_fiber_yield();                  /* still writing */
+    mark((char)(id - 'a' + 'A'));
+    nurl_rwlock_wrunlock(&rw1);
+}
+static void rw_slow_reader(void *env) {
+    char id = (char)(long)env;
+    nurl_rwlock_rdlock(&rw1);
+    mark(id);
+    nurl_fiber_sleep_ms(5);              /* reading, off the run queue */
+    mark((char)(id - 'a' + 'A'));
+    nurl_rwlock_rdunlock(&rw1);
+}
+
+static void test_rwlock(void) {
+    ck(nurl_rwlock_size() <= (long long)sizeof(rw_store), "an rwlock fits its block");
+    nurl_rwlock_init(&rw1);
+
+    /* a reads; w queues behind it; b and c arrive while w waits, so
+     * they queue behind w even though a only reads. a's unlock lets w
+     * in alone; w's lets b and c in together. */
+    trace_reset();
+    nurl_fiber_spawn(rw_reader, (void *)'a');
+    nurl_fiber_spawn(rw_writer, (void *)'w');
+    nurl_fiber_spawn(rw_reader, (void *)'b');
+    nurl_fiber_spawn(rw_reader, (void *)'c');
+    nurl_runtime_run();
+    ck_str(trace, "aAwWbcBC", "rwlock FIFO: later readers wait behind a writer, then enter together");
+
+    /* main asks to write while a reads: it queues, and b, arriving
+     * after it, waits behind main. */
+    trace_reset();
+    nurl_fiber_spawn(rw_slow_reader, (void *)'a');
+    nurl_fiber_yield();                  /* a takes it and sleeps */
+    nurl_fiber_spawn(rw_reader, (void *)'b');
+    nurl_rwlock_wrlock(&rw1);
+    mark('M');
+    nurl_rwlock_wrunlock(&rw1);
+    nurl_runtime_run();
+    ck_str(trace, "aAMbB", "main waits its turn to write, and holds later readers off");
+
+    /* The try forms: a holder's own re-read is counted; a writer that
+     * waits refuses a new reader too. */
+    trace_reset();
+    nurl_rwlock_rdlock(&rw1);
+    ck(nurl_rwlock_tryrdlock(&rw1) == 1, "tryrdlock of a lock its holder reads: counted");
+    ck(nurl_rwlock_trywrlock(&rw1) == 0, "trywrlock of a lock its holder reads: refused");
+    nurl_rwlock_rdunlock(&rw1);
+    nurl_rwlock_rdunlock(&rw1);
+    nurl_fiber_spawn(rw_slow_reader, (void *)'a');
+    nurl_fiber_spawn(rw_writer, (void *)'w');
+    nurl_fiber_yield();                  /* one step from main: a reads and sleeps */
+    nurl_fiber_yield();                  /* and w queues */
+    ck(nurl_rwlock_tryrdlock(&rw1) == 0, "tryrdlock refuses while a writer waits");
+    ck(nurl_rwlock_trywrlock(&rw1) == 0, "trywrlock refuses while it is read");
+    nurl_runtime_run();
+    ck_str(trace, "aAwW", "the waiting writer gets it next");
+    ck(nurl_rwlock_trywrlock(&rw1) == 1, "trywrlock of a free lock");
+    ck(nurl_rwlock_tryrdlock(&rw1) == 0, "tryrdlock while main writes");
+    nurl_rwlock_wrunlock(&rw1);
+    nurl_rwlock_destroy(&rw1);
+}
+
 /* ── 7. entropy ─────────────────────────────────────────────────── */
 
 static void test_entropy(void) {
@@ -425,6 +530,13 @@ static void blocked_forever(void *env) {
     pthread_mutex_lock(&dm);
     pthread_cond_wait(&dc, &dm);     /* nobody ever signals */
     pthread_mutex_unlock(&dm);
+}
+
+static rw_store drw;
+static void writes_forever(void *env) {
+    (void)env;
+    nurl_rwlock_wrlock(&drw);
+    blocked_forever(0);              /* and never lets go */
 }
 
 int main(int argc, char **argv) {
@@ -464,6 +576,34 @@ int main(int argc, char **argv) {
         pthread_cond_init(&dc, 0);
         nurl_fiber_spawn(blocked_forever, 0);
         nurl_runtime_run();
+        printf("unreachable\n");
+        return 1;
+    }
+    if (strcmp(scenario, "deadlock-rwlock") == 0) {
+        /* Main queues to read behind a writer that never lets go: its
+         * node in the queue must not hide that nothing can grant it. */
+        pthread_mutex_init(&dm, 0);
+        pthread_cond_init(&dc, 0);
+        nurl_rwlock_init(&drw);
+        nurl_fiber_spawn(writes_forever, 0);
+        nurl_fiber_yield();              /* it takes the lock, then parks for good */
+        nurl_rwlock_rdlock(&drw);
+        printf("unreachable\n");
+        return 1;
+    }
+    int reread    = strcmp(scenario, "rwlock-reread") == 0;
+    int rewrite   = strcmp(scenario, "rwlock-rewrite") == 0;
+    int reupgrade = strcmp(scenario, "rwlock-reupgrade") == 0;
+    if (reread || rewrite || reupgrade) {
+        /* A holder asking for a lock it already has would wait for
+         * itself: a panic (nurl_panic: exit 3 here), not a deadlock
+         * (134). Each of the three ways: write then read, write then
+         * write, read then write. */
+        nurl_rwlock_init(&drw);
+        if (reupgrade) nurl_rwlock_rdlock(&drw);
+        else           nurl_rwlock_wrlock(&drw);
+        if (reread)    nurl_rwlock_rdlock(&drw);
+        else           nurl_rwlock_wrlock(&drw);
         printf("unreachable\n");
         return 1;
     }
@@ -510,6 +650,7 @@ int main(int argc, char **argv) {
     test_sleep_order();
     test_timer_vs_poller();
     test_park_unpark();
+    test_rwlock();
     test_entropy();
     nurl_runtime_shutdown();
 
