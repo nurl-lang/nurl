@@ -155,6 +155,26 @@ theorem DbindSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dbind = f
     DbindSafe Γ x :=
   fun v E hE hd => by rw [h v E hE] at hd; cases hd
 
+/-- A2-drop.2: every binding `letd` made in `Γ'`, outside `sp`, was one in
+    `Γ`, and views no more in memory: a destructor binding gains no view. -/
+def DKeep (Γ Γ' : Ctx) (sp : List Var) : Prop :=
+  ∀ v E', Γ' v = some E' → E'.dbind = true → E'.mode.ownSlot = true → (E'.ty ≠ .int ∨ E'.mode = .rootb) →
+    v ∉ sp → ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧
+      (E.ty ≠ .int ∨ E.mode = .rootb) ∧ ∀ d ∈ E'.vdeps, d.kind.isName = false → d ∈ E.vdeps
+
+theorem DKeep.refl (Γ : Ctx) (sp : List Var) : DKeep Γ Γ sp :=
+  fun v E hv hd hos hn _ => ⟨E, hv, hd, hos, hn, fun _ h _ => h⟩
+
+theorem DKeep.trans {Γ1 Γ2 Γ3 : Ctx} {sp sp' : List Var} (h1 : DKeep Γ1 Γ2 sp) (h2 : DKeep Γ2 Γ3 sp')
+    (hsp : ∀ v, v ∉ sp' → v ∉ sp) : DKeep Γ1 Γ3 sp' := by
+  intro v E3 hv hd hos hn hvs
+  obtain ⟨E2, h2', hd2, hos2, hn2, hs2⟩ := h2 v E3 hv hd hos hn hvs
+  obtain ⟨E1, h1', hd1, hos1, hn1, hs1⟩ := h1 v E2 h2' hd2 hos2 hn2 (hsp v hvs)
+  exact ⟨E1, h1', hd1, hos1, hn1, fun d hdd hnm => hs1 d (hs2 d hdd hnm) hnm⟩
+
+theorem DKeep.mono {Γ Γ' : Ctx} {sp sp' : List Var} (h : DKeep Γ Γ' sp) (hsp : ∀ v, v ∉ sp' → v ∉ sp) :
+    DKeep Γ Γ' sp' := fun v E hv hd hos hn hvs => h v E hv hd hos hn (hsp v hvs)
+
 /-- With no binding that runs a destructor, every effect is safe. -/
 theorem DtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
     (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
@@ -685,21 +705,27 @@ def CallDtorSafe (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) : Prop :
   (∀ i (h : i < ps.length),
     (ps[i].1 = .sink → DtorSafe Γ .replace false (args.getD i 0)) ∧
     (∀ b, ps[i].1 = .inout b → DtorSafe Γ b ps[i].2.elem.holdsView (args.getD i 0))) ∧
-  (∀ d ∈ mutNames Γ args, DtorSafe Γ d.kind.bound false d.root)
+  (∀ d ∈ mutNames Γ args, DtorSafe Γ d.kind.bound false d.root) ∧
+  -- a destructor binding gains no view: as an `inout` argument, it holds none
+  (∀ i (h : i < ps.length) b, ps[i].1 = .inout b → ∀ Ea, Γ (args.getD i 0) = some Ea →
+    Ea.dbind = true → ps[i].2.holdsView = false)
 
 /-- With no binding that runs a destructor, every call is safe. -/
-theorem CallDtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
+theorem CallDtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false)
     (ps : List (PMode × Ty)) (args : List Var) : CallDtorSafe Γ ps args :=
-  ⟨fun _ _ => ⟨fun _ => DtorSafe.of_none h _ _ _, fun _ _ => DtorSafe.of_none h _ _ _⟩,
-    fun _ _ => DtorSafe.of_none h _ _ _⟩
+  ⟨fun _ _ => ⟨fun _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _,
+      fun _ _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _⟩,
+    fun _ _ => DtorSafe.of_none (fun v E hE => (h v E hE).1) _ _ _,
+    fun _ _ _ _ Ea hEa hd => by rw [(h _ Ea hEa).2] at hd; cases hd⟩
 
 /-- A call that only borrows, and kills nothing by name, is safe. -/
 theorem CallDtorSafe.of_inp {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var}
     (hp : ∀ q ∈ ps, q.1 = .inp) (hn : mutNames Γ args = []) : CallDtorSafe Γ ps args := by
-  refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_⟩
+  refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_, fun i hi b hb => ?_⟩
   · have := hp _ (List.getElem_mem hi); rw [hs] at this; cases this
   · have := hp _ (List.getElem_mem hi); rw [hb] at this; cases this
   · rw [hn] at hd; cases hd
+  · have := hp _ (List.getElem_mem hi); rw [hb] at this; cases this
 
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen

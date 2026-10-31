@@ -354,6 +354,7 @@ theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : Rh
     obtain ⟨E1, h1', hm1, ht1⟩ := h2.cmode x E2 h
     obtain ⟨E0, h0, hm0, ht0⟩ := h1.cmode x E1 h1'
     exact ⟨E0, h0, hm1.trans hm0, ht1.trans ht0⟩
+  dkeep := h1.dkeep.trans h2.dkeep (fun _ h => h)
 
 theorem RhsPost.root {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (h : RhsPost m m1 Γ Γ1 F) {r : Var}
     (hr : ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) : ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
@@ -962,7 +963,8 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     · cases hT; exact out.held
     · cases hT; exact out.pkgs
   refine ⟨hinv, post.nv, post.nid, fun y => ?_, fun y hy => ?_, fun p Ep hp hpm => ?_, fun y => ?_,
-    fun y E1 h => ?_⟩
+    fun y E1 h => ?_, (post.dkeep.kill .replace false x).setE
+      (fun hd => absurd hd (by simp [(RhsT.dtor_false hr).2]))⟩
   · by_cases hyx : y = x
     · subst hyx; simp; rw [← post.dom y, hsl]; rfl
     · rw [hst y hyx]; exact post.dom y
