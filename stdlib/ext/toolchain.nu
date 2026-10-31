@@ -141,7 +141,8 @@ $ `stdlib/ext/update_check.nu`
     ?? ( update_check_latest ) {
         T v → { ^ v }
         F → {
-            ( nurl_eprintln `nurl upgrade: could not reach the release index (offline?).` )
+            ( nurl_eprintln `nurl upgrade: could not find the latest release. github.com/nurl-lang/nurl/releases/latest` )
+            ( nurl_eprintln `  named no tag, and the GitHub API gave none (offline, or this IP is over GitHub's rate limit).` )
             ( nurl_eprintln `  Retry later, or pin a version:  nurl upgrade --version vX.Y.Z` )
         }
     }

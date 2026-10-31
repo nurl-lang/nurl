@@ -276,6 +276,12 @@ jobs:
       - name: Driver paths through split lowering
         run: python3 tools/tests/test_driver_paths.py
 
+      - name: nurl upgrade finds the latest release when the GitHub API answers 403
+        # stdlib/ext/update_check.nu reads the tag from github.com's
+        # releases/latest redirect and asks the rate-limited API once, as
+        # the fallback (Agora #218). A stand-in curl, no network.
+        run: python3 tools/tests/test_update_check_latest.py
+
       - name: NURL_SAN=1 never builds through the bundled zig
         # zig cc has no ASan runtime: it drops -fsanitize=address and
         # exits 0. A sanitized build must use a clang with compiler-rt,
