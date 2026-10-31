@@ -105,14 +105,25 @@ build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     # what is under test is the partition's structure, not whether
     # partitioning this particular program would pay for itself.
     "$NURLC" "--split=$n" "--split-out=$out" --split-min=1 "$src" > "$out.ll" 2>"$out.cerr" || return 1
-    local pids=() rc=0
+    local pids=() rcs=() rc=0 i o sz
     for p in "$out".[0-9]*.ll; do
         # shellcheck disable=SC2086
         "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" &
         pids+=($!)
         objs+=("${p%.ll}.o")
     done
-    for p in "${pids[@]}"; do wait "$p" || rc=1; done
+    for i in "${!pids[@]}"; do wait "${pids[$i]}"; rcs[i]=$?; done
+    # Each compile's exit code and what its object holds as the link
+    # starts, kept for split_diag (Agora #234): an object gone or empty
+    # here with rc 0 lost its code in the compile, a full one here that
+    # split_diag later finds missing lost it during or after the link.
+    : > "$out.objs"
+    for i in "${!objs[@]}"; do
+        o="${objs[$i]}"
+        if [[ -e "$o" ]]; then sz="$(wc -c < "$o" | tr -d ' ') bytes"; else sz="no object file"; fi
+        printf '    %s rc %s, %s\n' "${o##*/}" "${rcs[$i]}" "$sz" >> "$out.objs"
+        (( rcs[i] == 0 )) || rc=1
+    done
     (( rc == 0 )) || return 1
     # shellcheck disable=SC2086
     "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module $AS_NEEDED "${objs[@]}" \
@@ -174,8 +185,9 @@ check_structure() {  # check_structure <name>
 # simd_dispatch's parts reported only "undefined symbol: main" or one
 # of part 3's functions, nurlc exited 0 and printed nothing, and the
 # rerun passed). Each part is printed with its size, checksum and
-# `define` count, and each object with its size and defined-symbol
-# count. Then the same nurlc command runs again into a fresh prefix and
+# `define` count. Each object is printed twice: with clang's exit code and
+# its size as the link started (build_one's record), and with its size and
+# defined-symbol count now. Then the same nurlc command runs again into a fresh prefix and
 # is compared part by part with what was consumed, followed by the disk
 # and the kernel log. An empty part with an identical rerun points at
 # nurlc's write; a full part whose object defines nothing points at the
@@ -190,7 +202,9 @@ split_diag() {  # split_diag <src> <out> <parts>
         printf '    %s %s %s %s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')" \
             "$(cksum < "$f" | cut -d' ' -f1)" "$(grep -c '^define ' "$f")"
     done
-    echo "  objects clang made (bytes, defined symbols):"
+    echo "  objects as the link started (clang exit code, bytes):"
+    if [[ -s "$out.objs" ]]; then cat "$out.objs"; else echo "    not recorded (nurlc failed)"; fi
+    echo "  objects now (bytes, defined symbols):"
     for f in "$out".[0-9]*.o; do
         [[ -e "$f" ]] || { echo "    none"; break; }
         if [[ -n "$nmtool" ]] && syms="$("$nmtool" --defined-only "$f" 2>/dev/null)"; then
