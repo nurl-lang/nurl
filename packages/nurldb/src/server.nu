@@ -188,4 +188,11 @@ $ `exec.nu`
     ^ @ !String String { T out }
 }
 
+// Every read and write of a statement waits at most `ms` (0: no limit,
+// the default). A statement whose answer does not come in time fails as
+// a lost connection — a server that crashed with the statement in hand
+// sends nothing more, and its peer would otherwise wait forever. The
+// connection is not used again: what it carries next is unknown.
+@ client_set_timeout inout Client cl i ms → v { ( tcp_set_timeout . cl c ms ) }
+
 @ client_close inout Client cl → v { ( tcp_close_conn . cl c ) }

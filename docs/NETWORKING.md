@@ -171,6 +171,12 @@ standard library's transports keep and a program's own must vouch for in
 stack runs over a runtime socket handle, and `tcp_starttls` /
 `tls_accept_conn` on a simulated connection refuse.
 
+A node can also crash: `netsim_crash net node` takes every socket it has
+at once, with no FIN, and the node is straight back up, empty, as a host
+that rebooted. [SIMULATION.md](SIMULATION.md) puts the pieces together:
+a web service and its database under a partition and a crash-restart,
+checked by invariants.
+
 ### Clients: a dialer chosen at construction
 
 A server is handed its listener; a client dials by itself, so it takes a
