@@ -36,10 +36,11 @@ on:
         default: false
 
 # The Windows leg is the slowest runner in the repo; do not leave a
-# superseded run burning it.
+# superseded PR run burning it. On main a run finishes (Agora #251): a
+# cancelled main run is minutes spent for no verdict.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:

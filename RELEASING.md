@@ -99,9 +99,10 @@ release.yml's first job, `verify-ci`, waits for both `ci.yml` and
 unless both passed. Pull requests run macOS only when labelled
 `ci:macos`, because the macOS pool is often empty and a job that never
 got a runner shows as a red X. `main` runs it on every push, so the
-release commit gets its own run when the release PR merges. Keep other
-merges out until the tag is out: a later push to `main` cancels the
-release commit's macOS run, and a run that never got a runner is
+release commit gets its own run when the release PR merges. A main run
+that has started is never cancelled (Agora #251), but one still PENDING
+behind another main run is replaced by the next push. So keep other
+merges out until the tag is out. A run that never got a runner is
 cancelled as well. Either way `verify-ci` fails and says so. Run
 macos-tests on the tag by hand (Actions → macos-tests → Run workflow,
 "Use workflow from" = the tag), then re-run the failed `verify-ci` job.

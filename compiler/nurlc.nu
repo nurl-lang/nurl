@@ -31080,7 +31080,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // drop is a use of freed memory: refused here, where the source ends
 // (Rust's dropck rule). A holder with no such destructor only becomes
 // unreadable (bck_diag_invalid), and its drop reads nothing.
-@ bck_drop_view_diag i d i src i line s why → v {
+@ bck_drop_view_diag i d i src i line s why b maybe → v {
     : i r ( bck_path_root d )
     : s rs ( nurl_str_int r )
     ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` rs ) ) `1` ) { ^ v } {}
@@ -31094,7 +31094,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` rs ) )
     : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int src ) ) )
     : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` sn `' ends here — ` ) why ( nurl_str_cat3 ` — while '` dn `' still holds a view of it. '` ) `` )
-    : s m2 ( nurl_str_cat3 dn `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` dn )
+    // (Moved on some paths only: dropped on the others.)
+    : s later ? maybe ( nurl_str_cat `' is moved on some paths only, so on the others it is still dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` ) ( nurl_str_cat `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` `` )
+    : s m2 ( nurl_str_cat3 dn later dn )
     // (Ended with its scope: values are dropped newest first, so declaring
     // the holder after its source is enough.)
     : b order | != 0 ( nurl_str_starts why `it went out of scope` ) != 0 ( nurl_str_starts why `the return drops` )
@@ -31141,7 +31143,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
                 : i x ( bck_path_root ( nurl_str_to_int xs ) )
                 ? ( str_contains_word gone ( nurl_str_int x ) ) {
-                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) )
+                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) == BCK_MAYBE_MOVED ( bck_st_get st ( nurl_str_to_int ds ) ) )
                 } {}
             }
         } {}
@@ -32626,15 +32628,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i b ( nurl_str_to_int bs )
+        : b inb ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
+        : b ends & inb | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) )
+        // (One whose drop reads views, moved on some paths only: dropped on
+        // the others, agora #252.)
+        ? & ends == BCK_MAYBE_MOVED ( bck_st_get out b ) { ( bck_drop_view_diag b sid line why T ) } {}
         // (Only elements dropped or replaced: a borrow of bytes they leave
         // as they were — a field viewer holding the field's handle, a copy
         // of what the owner holds itself — reads them as they are now,
         // bck_br_survives. A replaced field ends it.)
-        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
-        | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
+        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) inb | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
-            ( bck_drop_view_diag b sid line why )
+            ( bck_drop_view_diag b sid line why F )
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -32656,13 +32662,19 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s ds ( str_first_word rest ) = rest ( str_skip_word rest )
         : i d ( nurl_str_to_int ds )
+        : i dv ( bck_st_get out d )
+        : b holds & & ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids )
+        // (A holder moved on some paths only is still dropped on the others,
+        // its destructor reading the view: the drop check asks it as one
+        // that lives — formal's DtorSafe join rule, agora #252.)
+        ? & holds == dv BCK_MAYBE_MOVED { ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why T ) } {}
         // (Not bound on this path — never yet, or its block left — it holds
         // nothing to end.)
-        ? & & & & ! ( bck_dead_state ( bck_st_get out d ) ) != BCK_UNINIT ( bck_st_get out d ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) sids ) ! & moved ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ! & hnd_lives ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdh_` ds ) ) sids ) {
+        ? & & holds ! ( bck_dead_state dv ) != BCK_UNINIT dv {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
-            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why )
+            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why F )
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out d line ( nurl_str_cat3 `what it holds views of ended (` why `)` ) + depth 1 ) } {}
