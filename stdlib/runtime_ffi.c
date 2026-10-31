@@ -1486,7 +1486,13 @@ static void nurl__udpaddr_format(const unsigned char *a, char *out, size_t cap) 
 #    include <ws2tcpip.h>          /* getaddrinfo — client-side connect */
 typedef SOCKET nurl_sockfd_t;
 #    define NURL_INVALID_SOCK INVALID_SOCKET
-#    define nurl_close_sock(fd) closesocket(fd)
+/* Every socket close goes through the netpoller, as on Linux (below):
+ * it resets the socket's slot and closes it as one step under its lock,
+ * and moves the slot's generation on, so that a readiness notification
+ * still queued for the old socket is not taken for the next one to get
+ * the handle value. Defined in §25 (the fiber-less build: a closesocket). */
+extern int nurl__np_close(nurl_sockfd_t fd);
+#    define nurl_close_sock(fd) nurl__np_close(fd)
 #  else
 #    include <sys/socket.h>
 #    include <sys/uio.h>            /* struct iovec — nurl_tcp_write2 */
@@ -1505,8 +1511,8 @@ typedef SOCKET nurl_sockfd_t;
 #    endif
 typedef int nurl_sockfd_t;
 #    define NURL_INVALID_SOCK (-1)
-#    if defined(__linux__)
-/* Closing a socket silently drops its epoll registration and orphans
+#    if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+/* Closing a socket silently drops its epoll/kqueue registration and orphans
  * its netpoller state (ready bits, parked waiters) — route every
  * socket close through the netpoller, which resets the per-fd slot and
  * closes the fd as one step under its lock, so waiters wake and no
@@ -1608,12 +1614,11 @@ static void nurl__tcp_apply_timeo(NurlTcp *h);
 void nurl__reactor_wake_if_started(void);
 
 #ifdef _WIN32
-/* Winsock's half of a receive-side shutdown, which WSAPoll does not
- * report (see nurl_tcp_conn_shutdown): the reactor wakes the fibers
+/* Winsock's half of a receive-side shutdown, which no readiness interface
+ * reports (see nurl_tcp_conn_shutdown): the netpoller wakes the fibers
  * waiting to read `fd`, and any that waits on it later, until the socket
- * is closed and forgotten. Defined with the reactor (§25). */
+ * is closed. Defined with the netpoller (§25). */
 void nurl__reactor_read_shut(long long fd);
-void nurl__reactor_forget_fd(long long fd);
 #endif
 
 
@@ -3563,7 +3568,6 @@ void nurl_tcp_set_nonblock(long long handle, long long on) {
 static void nurl__tcp_destroy(NurlTcp *h) {
     if (h->fd != NURL_INVALID_SOCK) {
 #ifdef _WIN32
-        if (h->read_shut) nurl__reactor_forget_fd((long long)h->fd);
         if (h->rd_wake != NURL_INVALID_SOCK) {
             nurl__signal_close(h->rd_wake, h->rd_wake);
             h->rd_wake = NURL_INVALID_SOCK;
@@ -6466,6 +6470,20 @@ void      nurl_runtime_shutdown(void);
 #  endif
 #endif
 
+/* Netpoller gate (§25). Where the kernel has a readiness QUEUE that any
+ * thread can drain — epoll on Linux, a completion port fed by
+ * ProcessSocketNotifications on Windows — there is no reactor thread: an
+ * idle worker blocks in the queue itself and a busy one drains it every
+ * 16th dispatch, so a ready socket never waits for some other OS thread
+ * to be scheduled (agora #137). kqueue (macOS, FreeBSD) is the third such
+ * queue. The other hosts run §25's poll(2) reactor thread. */
+#if defined(NURL_HAVE_FIBERS) && (defined(__linux__) || defined(_WIN32) ||                                   defined(__APPLE__) || defined(__FreeBSD__))
+#  define NURL_NETPOLLER 1
+#  if defined(__APPLE__) || defined(__FreeBSD__)
+#    define NURL_NP_KQUEUE 1
+#  endif
+#endif
+
 #ifdef NURL_HAVE_FIBERS
 #ifndef NURL_FIBER_OWN_CTX
 #if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
@@ -6870,7 +6888,7 @@ static void nurl__rq_push_global_chain(NurlFiber *head, NurlFiber *tail, int n) 
     pthread_mutex_unlock(&nurl__sched.global_lock);
 }
 
-#if !defined(__linux__)
+#if !defined(NURL_NETPOLLER)
 /* An admitted fiber at the head of the global queue, stamped as the
  * oldest: the next worker to look runs it before anything it holds.
  * (The poll(2) reactor's path; Linux's netpoller runs it at once.) */
@@ -6974,11 +6992,12 @@ static NurlFiber *nurl__rq_pop_oldest(NurlWorker *w) {
 }
 
 /* Wake one parked worker (if any). Cheap when idle_waiters is 0.
- * On Linux an idle worker may be parked inside epoll_wait rather than
- * on idle_cv — when nobody is on the cv, poke the poller's eventfd so
+ * Under the netpoller an idle worker may be parked inside the kernel's
+ * readiness queue rather than on idle_cv — when nobody is on the cv,
+ * poke the poller (eventfd / completion packet) so
  * new runnable work (a spawn, a channel unpark) is picked up without
  * waiting for the next I/O event. Declared here, defined in §25. */
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
 static void nurl__np_poke_if_sleeping(void);
 #endif
 static void nurl__wake_one(void) {
@@ -6986,7 +7005,7 @@ static void nurl__wake_one(void) {
     int waiters = nurl__sched.idle_waiters;
     if (waiters > 0) pthread_cond_signal(&nurl__sched.idle_cv);
     pthread_mutex_unlock(&nurl__sched.idle_lock);
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
     if (waiters == 0) nurl__np_poke_if_sleeping();
 #endif
 }
@@ -6998,7 +7017,7 @@ static void nurl__wake_n(int n) {
     if (n > waiters) n = waiters;
     for (int i = 0; i < n; i++) pthread_cond_signal(&nurl__sched.idle_cv);
     pthread_mutex_unlock(&nurl__sched.idle_lock);
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
     if (waiters == 0) nurl__np_poke_if_sleeping();
 #endif
 }
@@ -7337,7 +7356,7 @@ void nurl_fiber_unpark(long long fiber_h) {
     nurl__wake_one();
 }
 
-#if !defined(__linux__)
+#if !defined(NURL_NETPOLLER)
 /* nurl_fiber_unpark for a fiber parked in an accept: it runs next
  * (Admission, under "Service order"). */
 static void nurl__fiber_unpark_admit(NurlFiber *f) {
@@ -7552,12 +7571,13 @@ static unsigned nurl__rng_next(unsigned *st) {
     return x;
 }
 
-/* Netpoller hooks (Linux): an idle worker BECOMES the I/O poller —
- * it takes the poll lease and blocks in epoll_wait itself, and a ready
+/* Netpoller hooks (Linux, Windows): an idle worker BECOMES the I/O
+ * poller — it takes the poll lease and blocks in the kernel's readiness
+ * queue (epoll_wait / GetQueuedCompletionStatusEx) itself, and a ready
  * fiber is resumed directly on that worker with no queue hop, no
  * cross-thread wake chain and no core migration. Definitions live in
  * §25; declared here because the worker loop precedes it. */
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
 static NurlFiber *nurl__np_poll(NurlWorker *w, int *held);
 static NurlFiber *nurl__np_poll_nowait(NurlWorker *w);
 static void       nurl__np_poke_if_sleeping(void);
@@ -7565,14 +7585,14 @@ static void       nurl__np_poke_if_sleeping(void);
 
 /* Next runnable for `w`: the oldest of its own queue and the global
  * queue → steal up to 2×worker_count peers → global → block in the
- * netpoller (Linux; one worker at a time) → park on idle_cv. NULL on
- * shutdown. */
+ * netpoller (Linux, Windows; one worker at a time) → park on idle_cv.
+ * NULL on shutdown. */
 static NurlFiber *nurl__worker_next(NurlWorker *w) {
     for (;;) {
         if (nurl__sched.shutdown) return NULL;
         unsigned tick = ++w->tick;
-#if defined(__linux__)
-        /* Cadence poll: drain the epoll instance every 16th dispatch
+#if defined(NURL_NETPOLLER)
+        /* Cadence poll: drain the readiness queue every 16th dispatch
          * whatever is queued. I/O that is ready but not yet polled has
          * no place in the service order at all, and everything that
          * becomes runnable meanwhile goes ahead of it; polling only once
@@ -7591,7 +7611,7 @@ static NurlFiber *nurl__worker_next(NurlWorker *w) {
 #endif
         NurlFiber *f = nurl__rq_pop_oldest(w);
         if (f) return f;
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
         {
             NurlFiber *nf = nurl__np_poll_nowait(w);
             if (nf) return nf;
@@ -7620,7 +7640,7 @@ static NurlFiber *nurl__worker_next(NurlWorker *w) {
         }
         f = nurl__rq_take_global_batch(w);
         if (f) return f;
-#if defined(__linux__)
+#if defined(NURL_NETPOLLER)
         {
             /* Try to become the poller. Held-but-empty (a wake poke, a
              * timer pass) loops back to re-check the queues; lease
@@ -7858,14 +7878,15 @@ static int nurl__rw_in_fiber(void) { return 0; }
 
 /* ── §25  I/O reactor + timer wheel ─────────────────────────────── */
 /*
- * One reactor thread runs poll(2) over a dynamic (fd, events) list.
  * Async wrappers on EAGAIN/EWOULDBLOCK call nurl_reactor_wait_*, which
- * registers (fd, events, deadline) → current fiber, pokes the wake
- * pipe, and parks. On readiness (or deadline) the reactor unparks the
- * fiber and drops the entry. sleep_ms registers without an fd — just a
- * deadline; poll's timeout is min(next_deadline, INFINITE).
+ * registers (fd, events, deadline) → current fiber and parks. On
+ * readiness (or deadline) the fiber is unparked and the entry dropped.
+ * sleep_ms registers without an fd — just a deadline.
  *
- * poll(2), or WSAPoll on Windows. kqueue/IOCP wait for a real 10 K+ consumer.
+ * Two backends. Linux and Windows run the NETPOLLER (NURL_NETPOLLER):
+ * the workers themselves drain the kernel's readiness queue — epoll, or
+ * the completion port ProcessSocketNotifications feeds. FreeBSD, macOS
+ * and the other POSIX hosts run one reactor THREAD over poll(2).
  * WASI falls through to the stub block.
  *
  * ABI: nurl_reactor_wait_read(fd, timeout_ms) → 1 ready / 0 timeout /
@@ -7894,10 +7915,10 @@ long long nurl_fiber_sleep_ms(long long ms);
 #endif
 #include <errno.h>
 
-#if defined(__linux__)
-/* ── Linux backend: the epoll netpoller ──────────────────────────────
+#if defined(NURL_NETPOLLER)
+/* ── The netpoller (Linux: epoll; Windows: a completion port) ────────
  *
- * There is no reactor THREAD on Linux any more. The old design ran a
+ * There is no reactor THREAD on Linux or Windows. The old design ran a
  * dedicated poll(2) thread: every I/O park cost a pipe poke to the
  * reactor, a full O(waiters) rebuild of the pollfd array, a second
  * walk to match revents, a global-queue push and a cond-var wake of
@@ -7935,12 +7956,54 @@ long long nurl_fiber_sleep_ms(long long ms);
  * and armed by the worker loop AFTER swap-out completes
  * (nurl__reactor_activate), which closes the unpark-before-park
  * double-execution race exactly as before — with epoll the "arm" IS
- * the activation, so an event physically cannot fire early. */
+ * the activation, so an event physically cannot fire early.
+ *
+ * MACOS, FREEBSD. The same design over kqueue: EVFILT_READ/EVFILT_WRITE
+ * with EV_CLEAR are the edge trigger, a filter per direction added the
+ * first time a wait asks for it; the wake is an EVFILT_USER event; a
+ * close drops the fd's filters with whatever they had pending, as with
+ * epoll. Before this both ran the poll(2) reactor thread, and an accept
+ * on a loaded FreeBSD VM waited 4 070 dispatches for it (agora #137).
+ *
+ * WINDOWS. The same design over the kernel interface Windows has for it:
+ * ProcessSocketNotifications (build 20348+: Windows 11, Server 2022)
+ * posts socket readiness to an I/O completion port, and a registration
+ * may be PERSISTENT and EDGE-triggered — EPOLLET with one registration
+ * per socket lifetime. The idle poller blocks in
+ * GetQueuedCompletionStatusEx; the wake is a posted completion packet.
+ * Before this the Windows runtime ran the poll(2) reactor thread over
+ * WSAPoll, and a ready socket waited until the OS gave that one thread a
+ * time slice: under load an accept came 36 ms (CI) to 1 673 dispatches
+ * (a 16-thread laptop with 16 CPU hogs) late, where a busy worker here
+ * polls within 16 (agora #137). Four things differ from epoll:
+ *   - a SOCKET is a kernel handle, a multiple of 4; its slot is
+ *     byfd[SOCKET / 4] (nurl__np_index);
+ *   - closesocket drops the registration, but "already-queued
+ *     notifications might still be delivered" and a handle value is
+ *     reused, so a notification names its slot AND the slot's
+ *     generation (nurl__np_key), which a close advances: a stale one is
+ *     dropped, never matched to the socket that inherited the value;
+ *   - an edge registration does not report a state that is already true
+ *     (epoll's ADD does), so a socket's first registration is followed
+ *     by one zero-timeout probe that banks it (nurl__np_register_fd);
+ *   - Winsock reports a receive-side shutdown to nobody, so the slot
+ *     keeps it (`shut`): a reader parked on it wakes, a later one does
+ *     not park (nurl__reactor_read_shut). */
+#if defined(_WIN32)
+/* A SOCKET, signed so that -1 (INVALID_SOCKET) is the pure-timer mark
+ * the shared code tests with `fd >= 0`. */
+typedef long long nurl_np_fd_t;
+#elif defined(NURL_NP_KQUEUE)
+#include <sys/event.h>
+typedef int nurl_np_fd_t;
+#else
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+typedef int nurl_np_fd_t;
+#endif
 
 typedef struct NurlReactorWait {
-    int                     fd;          /* -1 = pure timer */
+    nurl_np_fd_t            fd;          /* -1 = pure timer */
     short                   events;      /* POLLIN | POLLOUT */
     long long               deadline_ms; /* absolute; -1 = none */
     NurlFiber              *fiber;
@@ -7972,13 +8035,51 @@ typedef struct NurlReactorWait {
  * time, so the next readiness transition is a fresh edge. */
 typedef struct NurlNpFd {
     unsigned         ready;       /* POLLIN|POLLOUT edges not yet consumed */
-    int              registered;  /* fd is in the epoll set */
+    int              registered;  /* fd is in the epoll set / registered */
     NurlReactorWait *chain;       /* parked waiters */
+#if defined(_WIN32)
+    unsigned         gen;         /* advanced by each close (nurl__np_key) */
+    int              shut;        /* read side shut: reads never park */
+#endif
 } NurlNpFd;
 
+#if defined(_WIN32)
+/* ProcessSocketNotifications' ABI (winsock2.h, build 20348+), spelled out
+ * here: older SDK headers do not declare it, and it is looked up at run
+ * time (nurl__np_init_once_impl) so that a program that never waits on a
+ * socket still starts on a Windows without it. */
+typedef struct {
+    SOCKET   socket;
+    PVOID    completionKey;
+    UINT16   eventFilter;
+    UINT8    operation;
+    UINT8    triggerFlags;
+    DWORD    registrationResult;
+} nurl__sock_notify_reg;
+#define NURL_SN_EVENT_IN       0x01
+#define NURL_SN_EVENT_OUT      0x02
+#define NURL_SN_EVENT_HANGUP   0x04
+#define NURL_SN_EVENT_ERR      0x40
+#define NURL_SN_OP_ENABLE      0x01
+#define NURL_SN_TRIGGER_PERSISTENT 0x02
+#define NURL_SN_TRIGGER_EDGE   0x08
+typedef DWORD (WSAAPI *nurl__psn_fn)(HANDLE, UINT32, nurl__sock_notify_reg *,
+                                     UINT32, ULONG, OVERLAPPED_ENTRY *, UINT32 *);
+/* The wake packet's completion key; no slot's key (nurl__np_key) is it. */
+#define NURL_NP_KEY_WAKE (~(ULONG_PTR)0)
+#endif
+
 static struct {
+#if defined(_WIN32)
+    HANDLE            iocp;          /* the readiness queue */
+    nurl__psn_fn      psn;           /* ProcessSocketNotifications */
+    int               poked;         /* __atomic_*: a wake packet is queued */
+#elif defined(NURL_NP_KQUEUE)
+    int               kq;            /* kqueue; the wake is its EVFILT_USER 0 */
+#else
     int               ep;            /* epoll instance */
     int               evfd;          /* wake eventfd (in the epoll set) */
+#endif
     pthread_mutex_t   lock;          /* slots, heap, freelist, rescan */
     NurlNpFd         *byfd;          /* fd → slot */
     int               byfd_cap;
@@ -7989,9 +8090,15 @@ static struct {
     int               started;
     volatile int      shutdown;
     int               lease;         /* __atomic_*: one poller at a time */
-    int               sleeping;      /* __atomic_*: poller inside epoll_wait */
+    int               sleeping;      /* __atomic_*: poller blocked in the queue */
     long long         sleep_deadline;/* __atomic_*: its timeout target; -1 inf */
+#if defined(_WIN32)
+} nurl__np = { .iocp = NULL };
+#elif defined(NURL_NP_KQUEUE)
+} nurl__np = { .kq = -1 };
+#else
 } nurl__np = { .ep = -1, .evfd = -1 };
+#endif
 
 static long long nurl__now_ms_internal(void) {
     struct timespec ts;
@@ -7999,6 +8106,28 @@ static long long nurl__now_ms_internal(void) {
     return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000L);
 }
 
+#if defined(_WIN32)
+/* One wake packet at a time, as eventfd's counter coalesces pokes: a
+ * completion packet per poke would queue one for every wake_one while the
+ * poller sleeps. The poller clears `poked` as it dequeues the packet, and
+ * re-checks the run queues after every pass, so a poke coalesced into the
+ * queued packet is never lost. */
+static void nurl__np_poke(void) {
+    if (!nurl__np.iocp) return;
+    if (__atomic_exchange_n(&nurl__np.poked, 1, __ATOMIC_ACQ_REL)) return;
+    if (!PostQueuedCompletionStatus(nurl__np.iocp, 0, NURL_NP_KEY_WAKE, NULL))
+        __atomic_store_n(&nurl__np.poked, 0, __ATOMIC_RELEASE);
+}
+#elif defined(NURL_NP_KQUEUE)
+/* EVFILT_USER with EV_CLEAR: triggers coalesce until the poller takes
+ * the event, as eventfd's counter does. */
+static void nurl__np_poke(void) {
+    if (nurl__np.kq < 0) return;
+    struct kevent ev;
+    EV_SET(&ev, 0, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    (void)kevent(nurl__np.kq, &ev, 1, NULL, 0, NULL);
+}
+#else
 static void nurl__np_poke(void) {
     if (nurl__np.evfd >= 0) {
         unsigned long long one = 1;
@@ -8006,6 +8135,7 @@ static void nurl__np_poke(void) {
         (void)r;
     }
 }
+#endif
 
 static void nurl__np_poke_if_sleeping(void) {
     if (nurl__np.started &&
@@ -8013,6 +8143,33 @@ static void nurl__np_poke_if_sleeping(void) {
         nurl__np_poke();
 }
 
+#if defined(_WIN32)
+static void nurl__np_init_once_impl(void) {
+    pthread_mutex_init(&nurl__np.lock, NULL);
+    if (!nurl__net_wsa_init()) return;
+    /* No concurrency cap: the lease lets one worker at a time dequeue, and
+     * a cap at the CPU count would hold that one back whenever more
+     * workers than CPUs (runtime_init N) were running. */
+    nurl__np.iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0x7fffffff);
+    if (!nurl__np.iocp) return;
+    /* Absent before build 20348; only a socket wait needs it (timers and
+     * mutex parks run without), and that wait says so (nurl__reactor_wait_k). */
+    HMODULE ws2 = GetModuleHandleA("ws2_32.dll");
+    if (ws2) nurl__np.psn = (nurl__psn_fn)(void (*)(void))GetProcAddress(ws2, "ProcessSocketNotifications");
+    nurl__np.started = 1;
+}
+#elif defined(NURL_NP_KQUEUE)
+static void nurl__np_init_once_impl(void) {
+    pthread_mutex_init(&nurl__np.lock, NULL);
+    nurl__np.kq = kqueue();
+    if (nurl__np.kq < 0) return;
+    fcntl(nurl__np.kq, F_SETFD, FD_CLOEXEC);
+    struct kevent ev;
+    EV_SET(&ev, 0, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (kevent(nurl__np.kq, &ev, 1, NULL, 0, NULL) == 0)
+        nurl__np.started = 1;
+}
+#else
 static void nurl__np_init_once_impl(void) {
     pthread_mutex_init(&nurl__np.lock, NULL);
     nurl__np.ep   = epoll_create1(EPOLL_CLOEXEC);
@@ -8025,6 +8182,7 @@ static void nurl__np_init_once_impl(void) {
             nurl__np.started = 1;
     }
 }
+#endif
 
 static void nurl__np_start_if_needed(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
@@ -8088,17 +8246,48 @@ static void nurl__np_heap_remove(NurlReactorWait *w) {
 }
 
 /* ── fd slots (lock held) ── */
-static NurlNpFd *nurl__np_slot(int fd, int grow) {
+#if defined(_WIN32)
+/* Does `fd` name a socket? A number that does not (agora #133) earns no
+ * slot, and its waiter wakes at once, as poll(2) answers POLLNVAL. */
+static int nurl__win_is_socket(nurl_np_fd_t fd) {
+    int type = 0;
+    int len = (int)sizeof type;
+    return getsockopt((SOCKET)fd, SOL_SOCKET, SO_TYPE, (char *)&type, &len) == 0;
+}
+
+/* The fd slot `ix` serves, and a notification's key for it: the index
+ * and the slot's generation, so a notification queued before a close
+ * never reaches the socket that reuses the handle value. */
+static nurl_np_fd_t nurl__np_fd_of(int ix) { return (nurl_np_fd_t)ix << 2; }
+static ULONG_PTR nurl__np_key(int ix, unsigned gen) {
+    return ((ULONG_PTR)gen << 32) | (ULONG_PTR)(unsigned)ix;
+}
+#else
+static nurl_np_fd_t nurl__np_fd_of(int ix) { return ix; }
+#endif
+
+static NurlNpFd *nurl__np_slot(nurl_np_fd_t fd, int grow) {
     if (fd < 0) return NULL;
-    if (fd >= nurl__np.byfd_cap) {
+#if defined(_WIN32)
+    /* A SOCKET is a kernel handle, a multiple of 4: byfd[fd / 4]. */
+    if ((fd & 3) != 0 || fd / 4 > INT_MAX - 64) return NULL;
+    int ix = (int)(fd >> 2);
+#else
+    int ix = fd;
+#endif
+    if (ix >= nurl__np.byfd_cap) {
         if (!grow) return NULL;
         /* Only an open descriptor earns a slot (agora #133): the table is
          * indexed by fd, and a number that names nothing — a handle passed
          * where its fd belonged — grew it to that number, gigabytes for one
          * wait. The caller answers an unpollable fd "ready" either way. */
+#if defined(_WIN32)
+        if (!nurl__win_is_socket(fd)) return NULL;
+#else
         if (fcntl(fd, F_GETFD) < 0) return NULL;
+#endif
         int nc = nurl__np.byfd_cap * 2;
-        if (nc < fd + 64) nc = fd + 64;
+        if (nc < ix + 64) nc = ix + 64;
         NurlNpFd *nb =
             (NurlNpFd*)realloc(nurl__np.byfd, (size_t)nc * sizeof *nb);
         if (!nb) return NULL;
@@ -8107,7 +8296,30 @@ static NurlNpFd *nurl__np_slot(int fd, int grow) {
         nurl__np.byfd = nb;
         nurl__np.byfd_cap = nc;
     }
-    return &nurl__np.byfd[fd];
+    return &nurl__np.byfd[ix];
+}
+
+/* poll(2)/WSAPoll revents in the slots' POLLIN/POLLOUT spelling: ERR and
+ * HUP are both directions — the waiter's own read or write says what. */
+static unsigned nurl__np_bits(unsigned revents) {
+    unsigned pr = 0;
+    if (revents & (POLLIN  | POLLERR | POLLHUP | POLLNVAL)) pr |= POLLIN;
+    if (revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL)) pr |= POLLOUT;
+    return pr;
+}
+
+/* Readiness a wait for `events` finds already there (lock held): edges
+ * banked while nobody waited, which it consumes — and on Windows a shut
+ * read side, which stays (it is the socket's state, not an edge). */
+static int nurl__np_take_ready(NurlNpFd *s, short events) {
+    if (s->ready & (unsigned)events) {
+        s->ready &= (unsigned)~events;
+        return 1;
+    }
+#if defined(_WIN32)
+    if (s->shut && (events & POLLIN)) return 1;
+#endif
+    return 0;
 }
 
 static void nurl__np_chain_remove(NurlReactorWait *w) {
@@ -8123,7 +8335,54 @@ static void nurl__np_chain_remove(NurlReactorWait *w) {
  * 0 on success; -1 when the fd cannot be polled (closed, or a plain
  * file) — the caller wakes the waiter instead, the answer poll(2)
  * gave for the same fds (POLLNVAL / always-ready). */
-static int nurl__np_register_fd(NurlNpFd *s, int fd) {
+#if defined(_WIN32)
+static int nurl__np_register_fd(NurlNpFd *s, nurl_np_fd_t fd, short events) {
+    (void)events;
+    if (s->registered) return 0;
+    if (!nurl__np.psn) return -1;   /* the wait panicked first (wait_k) */
+    int ix = (int)(s - nurl__np.byfd);
+    nurl__sock_notify_reg r;
+    memset(&r, 0, sizeof r);
+    r.socket = (SOCKET)fd;
+    r.completionKey = (PVOID)nurl__np_key(ix, s->gen);
+    r.eventFilter = NURL_SN_EVENT_IN | NURL_SN_EVENT_OUT | NURL_SN_EVENT_HANGUP;
+    r.operation = NURL_SN_OP_ENABLE;
+    r.triggerFlags = NURL_SN_TRIGGER_PERSISTENT | NURL_SN_TRIGGER_EDGE;
+    if (nurl__np.psn(nurl__np.iocp, 1, &r, 0, 0, NULL, NULL) != ERROR_SUCCESS ||
+        r.registrationResult != ERROR_SUCCESS)
+        return -1;
+    s->registered = 1;
+    /* An edge registration reports nothing that is already true, and the
+     * caller's EAGAIN came before it: a byte or a connection that arrived
+     * in between would raise no edge, ever. One probe banks it. */
+    nurl_pollfd_t p;
+    p.fd = (SOCKET)fd;
+    p.events = POLLIN | POLLOUT;
+    p.revents = 0;
+    if (nurl__poll(&p, 1, 0) > 0) s->ready |= nurl__np_bits((unsigned)p.revents);
+    return 0;
+}
+#elif defined(NURL_NP_KQUEUE)
+/* A filter per direction, added the first time a wait asks for that
+ * direction (`registered` holds POLLIN/POLLOUT bits): the read end of a
+ * pipe never gets an EVFILT_WRITE it could refuse. EV_CLEAR is the edge
+ * trigger; a filter added while its condition holds reports it at once,
+ * as epoll's ADD does. */
+static int nurl__np_register_fd(NurlNpFd *s, nurl_np_fd_t fd, short events) {
+    struct kevent ch[2];
+    int n = 0;
+    if ((events & POLLIN) && !(s->registered & POLLIN))
+        EV_SET(&ch[n++], fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if ((events & POLLOUT) && !(s->registered & POLLOUT))
+        EV_SET(&ch[n++], fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (n == 0) return 0;
+    if (kevent(nurl__np.kq, ch, n, NULL, 0, NULL) != 0) return -1;
+    s->registered |= events & (POLLIN | POLLOUT);
+    return 0;
+}
+#else
+static int nurl__np_register_fd(NurlNpFd *s, nurl_np_fd_t fd, short events) {
+    (void)events;
     if (s->registered) return 0;
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
@@ -8133,6 +8392,33 @@ static int nurl__np_register_fd(NurlNpFd *s, int fd) {
         return -1;
     s->registered = 1;
     return 0;
+}
+#endif
+
+/* Readiness `pr` (POLLIN/POLLOUT spelling) arrived on slot `s` (lock
+ * held). A parked waiter for a direction consumes that edge; a
+ * direction nobody waits on is banked in the ready bits for the fast
+ * path (the next wait returns without parking). */
+static NurlReactorWait *nurl__np_deliver_locked(NurlNpFd *s, unsigned pr,
+                                                NurlReactorWait *batch) {
+    unsigned unclaimed = pr;
+    NurlReactorWait **pp = &s->chain;
+    while (*pp) {
+        NurlReactorWait *wt = *pp;
+        if (wt->events & pr) {
+            unclaimed &= (unsigned)~wt->events;
+            *pp = wt->fd_next;
+            wt->fd_next = NULL;
+            nurl__np_heap_remove(wt);
+            wt->result = 1;
+            wt->wake_next = batch;
+            batch = wt;
+        } else {
+            pp = &wt->fd_next;
+        }
+    }
+    s->ready |= unclaimed;
+    return batch;
 }
 
 /* Move expired timers onto the wake batch (lock held). */
@@ -8155,19 +8441,23 @@ static NurlReactorWait *nurl__np_expire_locked(long long now,
 
 /* Zero-timeout probe of every registered fd — the close/shutdown
  * rescue path (lock held). poll(2) still answers for an fd epoll has
- * silently dropped: POLLNVAL, and ERR/HUP wake everything. */
+ * silently dropped: POLLNVAL, and ERR/HUP wake everything. (WSAPoll
+ * fails the call for a handle that is no socket any more: POLLNVAL.) */
 static NurlReactorWait *nurl__np_probe_all_locked(NurlReactorWait *batch) {
-    for (int fd = 0; fd < nurl__np.byfd_cap; fd++) {
-        NurlReactorWait *head = nurl__np.byfd[fd].chain;
+    for (int ix = 0; ix < nurl__np.byfd_cap; ix++) {
+        NurlReactorWait *head = nurl__np.byfd[ix].chain;
         if (!head) continue;
-        struct pollfd p;
-        p.fd = fd;
+        nurl_pollfd_t p;
+        p.fd = (nurl_sockfd_t)nurl__np_fd_of(ix);
         p.events = 0;
         for (NurlReactorWait *w = head; w; w = w->fd_next) p.events |= w->events;
         p.revents = 0;
-        int pr = poll(&p, 1, 0);
+        int pr = nurl__poll(&p, 1, 0);
+#if defined(_WIN32)
+        if (pr < 0) { p.revents = POLLNVAL; pr = 1; }
+#endif
         if (pr <= 0) continue;
-        NurlReactorWait **pp = &nurl__np.byfd[fd].chain;
+        NurlReactorWait **pp = &nurl__np.byfd[ix].chain;
         while (*pp) {
             NurlReactorWait *w = *pp;
             if (p.revents & (w->events | POLLERR | POLLHUP | POLLNVAL)) {
@@ -8342,17 +8632,74 @@ static NurlFiber *nurl__np_poll_at(NurlWorker *w, int *held, int block) {
             timeout = (int)d;
         }
         if (!block) timeout = 0;   /* opportunistic pass — never sleep */
+#if defined(_WIN32)
+        OVERLAPPED_ENTRY evs[128];
+        ULONG n = 0;
+#elif defined(NURL_NP_KQUEUE)
+        struct kevent evs[128];
+        int n = 0;
+#else
         struct epoll_event evs[128];
+        int n = 0;
+#endif
         __atomic_store_n(&nurl__np.sleep_deadline, next, __ATOMIC_RELEASE);
         if (block)
             __atomic_store_n(&nurl__np.sleeping, 1, __ATOMIC_RELEASE);
-        int n = 0;
-        if (!nurl__np.shutdown && !nurl__sched.shutdown)
+        if (!nurl__np.shutdown && !nurl__sched.shutdown) {
+#if defined(_WIN32)
+            if (!GetQueuedCompletionStatusEx(nurl__np.iocp, evs, 128, &n,
+                                             timeout < 0 ? INFINITE : (DWORD)timeout,
+                                             FALSE))
+                n = 0;
+#elif defined(NURL_NP_KQUEUE)
+            struct timespec ts;
+            ts.tv_sec = timeout / 1000;
+            ts.tv_nsec = (long)(timeout % 1000) * 1000000L;
+            n = kevent(nurl__np.kq, NULL, 0, evs, 128, timeout < 0 ? NULL : &ts);
+            if (n < 0) n = 0;   /* EINTR: the pass is empty */
+#else
             n = epoll_wait(nurl__np.ep, evs, 128, timeout);
+#endif
+        }
         if (block)
             __atomic_store_n(&nurl__np.sleeping, 0, __ATOMIC_RELEASE);
 
         pthread_mutex_lock(&nurl__np.lock);
+#if defined(_WIN32)
+        for (ULONG i = 0; i < n; i++) {
+            ULONG_PTR key = evs[i].lpCompletionKey;
+            if (key == NURL_NP_KEY_WAKE) {
+                /* An exchange, not a store: it reads the poke that found
+                 * this packet queued, so what that poker queued is seen
+                 * by the run-queue check after this pass. */
+                (void)__atomic_exchange_n(&nurl__np.poked, 0, __ATOMIC_ACQ_REL);
+                continue;
+            }
+            unsigned ix = (unsigned)(key & 0xffffffffu);
+            if (ix >= (unsigned)nurl__np.byfd_cap) continue;
+            NurlNpFd *s = &nurl__np.byfd[ix];
+            /* Queued before its socket was closed: the slot has moved on. */
+            if (!s->registered || s->gen != (unsigned)(key >> 32)) continue;
+            unsigned got = (unsigned)evs[i].dwNumberOfBytesTransferred;
+            unsigned pr = 0;
+            if (got & (NURL_SN_EVENT_IN  | NURL_SN_EVENT_ERR | NURL_SN_EVENT_HANGUP)) pr |= POLLIN;
+            if (got & (NURL_SN_EVENT_OUT | NURL_SN_EVENT_ERR | NURL_SN_EVENT_HANGUP)) pr |= POLLOUT;
+            if (pr) batch = nurl__np_deliver_locked(s, pr, batch);
+        }
+#elif defined(NURL_NP_KQUEUE)
+        for (int i = 0; i < n; i++) {
+            /* The wake: EV_CLEAR has already reset it. */
+            if (evs[i].filter == EVFILT_USER) continue;
+            /* EV_EOF stays in its filter's direction: a peer that shut its
+             * write side leaves this side writable, and an RST raises both
+             * filters on its own. */
+            unsigned pr = evs[i].filter == EVFILT_READ  ? POLLIN
+                        : evs[i].filter == EVFILT_WRITE ? POLLOUT : 0;
+            NurlNpFd *s = nurl__np_slot((int)evs[i].ident, 0);
+            if (!s || !pr) continue;
+            batch = nurl__np_deliver_locked(s, pr, batch);
+        }
+#else
         for (int i = 0; i < n; i++) {
             int fd = evs[i].data.fd;
             if (fd == nurl__np.evfd) {
@@ -8366,29 +8713,11 @@ static NurlFiber *nurl__np_poll_at(NurlWorker *w, int *held, int block) {
             if (got & (EPOLLOUT | EPOLLERR | EPOLLHUP)) pr |= POLLOUT;
             NurlNpFd *s = nurl__np_slot(fd, 0);
             if (!s) continue;
-            /* A parked waiter for a direction consumes that edge; a
-             * direction nobody waits on is banked in the ready bits
-             * for the fast path (the next wait returns without
-             * parking). ERR/HUP wake both directions — the waiter's
-             * own read/write reports the story. */
-            unsigned unclaimed = pr;
-            NurlReactorWait **pp = &s->chain;
-            while (*pp) {
-                NurlReactorWait *wt = *pp;
-                if (wt->events & pr) {
-                    unclaimed &= (unsigned)~wt->events;
-                    *pp = wt->fd_next;
-                    wt->fd_next = NULL;
-                    nurl__np_heap_remove(wt);
-                    wt->result = 1;
-                    wt->wake_next = batch;
-                    batch = wt;
-                } else {
-                    pp = &wt->fd_next;
-                }
-            }
-            s->ready |= unclaimed;
+            /* ERR/HUP wake both directions — the waiter's own
+             * read/write reports the story. */
+            batch = nurl__np_deliver_locked(s, pr, batch);
         }
+#endif
         if (nurl__np.rescan) {
             nurl__np.rescan = 0;
             batch = nurl__np_probe_all_locked(batch);
@@ -8434,16 +8763,15 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
     pthread_mutex_lock(&nurl__np.lock);
     if (wt->fd >= 0) {
         NurlNpFd *s = nurl__np_slot(wt->fd, 1);
-        if (!s || nurl__np_register_fd(s, wt->fd) != 0) {
+        if (!s || nurl__np_register_fd(s, wt->fd, wt->events) != 0) {
             /* Unpollable fd (closed / plain file / table OOM): answer
              * "ready" now, the verdict poll(2) returned for these —
              * the caller's next read/write reports the real story. */
             verdict = 1;
-        } else if (s->ready & (unsigned)wt->events) {
+        } else if (nurl__np_take_ready(s, wt->events)) {
             /* The edge already arrived (between the fiber's EAGAIN and
              * this activation, or banked from earlier) — consume it
              * and skip the park entirely. */
-            s->ready &= (unsigned)~wt->events;
             verdict = 1;
         } else {
             wt->fd_next = s->chain;
@@ -8476,11 +8804,18 @@ void nurl__reactor_activate(NurlReactorWait *wt) {
 }
 
 __attribute__((noinline))
-static int nurl__reactor_wait_k(int fd, short events, long long timeout_ms, int admit) {
+static int nurl__reactor_wait_k(nurl_np_fd_t fd, short events, long long timeout_ms, int admit) {
     NurlWorker *w = nurl__tls_worker;
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__np_start_if_needed();
     if (!nurl__np.started) return -1;
+#if defined(_WIN32)
+    if (fd >= 0 && !nurl__np.psn)
+        nurl_panic("waiting on a socket from a fiber needs Windows build 20348 or "
+                   "later (Windows 11, Windows Server 2022): this ws2_32.dll has no "
+                   "ProcessSocketNotifications, which the fiber runtime's socket "
+                   "readiness is built on");
+#endif
 
     /* Spin-then-park (nurl__spin_ready); every way out of this wait
      * reports its length to the fiber's estimate. */
@@ -8496,8 +8831,7 @@ static int nurl__reactor_wait_k(int fd, short events, long long timeout_ms, int 
      * request lands while the previous response is being written. */
     if (fd >= 0) {
         NurlNpFd *s = nurl__np_slot(fd, 0);
-        if (s && (s->ready & (unsigned)events)) {
-            s->ready &= (unsigned)~events;
+        if (s && nurl__np_take_ready(s, events)) {
             pthread_mutex_unlock(&nurl__np.lock);
             if (spin_cap > 0) nurl__spin_observe(w->current, nurl_monotonic_ns() - t0, spin_cap);
             return 1;
@@ -8535,7 +8869,7 @@ static int nurl__reactor_wait_k(int fd, short events, long long timeout_ms, int 
     return cur->last_park_result;
 }
 
-static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
+static int nurl__reactor_wait(nurl_np_fd_t fd, short events, long long timeout_ms) {
     return nurl__reactor_wait_k(fd, events, timeout_ms, 0);
 }
 
@@ -8545,9 +8879,14 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
  * INT_MAX, which narrowed onto an unrelated fd (agora #133) — is
  * unpollable, and answers "ready" at once, as poll(2) does an fd it cannot
  * poll; the caller's read or write then says what the fd is. -1 off a
- * fiber, as every wait. */
+ * fiber, as every wait. (A Windows SOCKET is a pointer-sized handle:
+ * only INVALID_SOCKET, -1 here, names nothing.) */
 static int nurl__wait_fd_bad(long long fd, long long *verdict) {
+#if defined(_WIN32)
+    if (fd >= 0) return 0;
+#else
     if (fd >= 0 && fd <= INT_MAX) return 0;
+#endif
     NurlWorker *w = nurl__tls_worker;
     *verdict = (w && w->current) ? 1 : -1;
     return 1;
@@ -8556,20 +8895,20 @@ static int nurl__wait_fd_bad(long long fd, long long *verdict) {
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     long long v;
     if (nurl__wait_fd_bad(fd, &v)) return v;
-    return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
+    return (long long)nurl__reactor_wait((nurl_np_fd_t)fd, POLLIN, timeout_ms);
 }
 
 /* nurl_reactor_wait_read for an accept on listener `fd` (Admission). */
 NURL_TLS_FN long long nurl_reactor_wait_accept(long long fd, long long timeout_ms) {
     long long v;
     if (nurl__wait_fd_bad(fd, &v)) return v;
-    return (long long)nurl__reactor_wait_k((int)fd, POLLIN, timeout_ms, 1);
+    return (long long)nurl__reactor_wait_k((nurl_np_fd_t)fd, POLLIN, timeout_ms, 1);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     long long v;
     if (nurl__wait_fd_bad(fd, &v)) return v;
-    return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
+    return (long long)nurl__reactor_wait((nurl_np_fd_t)fd, POLLOUT, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
@@ -8577,7 +8916,7 @@ NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long 
     if (!mask) return -1;
     long long v;
     if (nurl__wait_fd_bad(fd, &v)) return v;
-    return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
+    return (long long)nurl__reactor_wait((nurl_np_fd_t)fd, mask, timeout_ms);
 }
 
 NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
@@ -8696,9 +9035,24 @@ void nurl__reactor_shutdown(void) {
  * number is never added to the epoll set — its first park never wakes.
  * Observed: server_stop closing a listener from another thread while
  * its accept fiber re-parked left the next listener's accept fiber
- * asleep forever. */
-int nurl__np_close(int fd) {
-    if (!nurl__np.started) return close(fd);
+ * asleep forever.
+ *
+ * On Windows the close also advances the slot's generation: a readiness
+ * notification for the old socket may still sit in the completion port
+ * (closesocket drops the registration, not what it already queued), and
+ * the generation is what tells it from one for the socket that gets the
+ * handle value next. */
+static void nurl__np_wake_batch(NurlReactorWait *batch);
+
+int nurl__np_close(nurl_sockfd_t sock) {
+#if defined(_WIN32)
+#  define NURL__NP_CLOSE(fd) closesocket((SOCKET)(fd))
+    nurl_np_fd_t fd = (nurl_np_fd_t)sock;
+#else
+#  define NURL__NP_CLOSE(fd) close(fd)
+    nurl_np_fd_t fd = sock;
+#endif
+    if (!nurl__np.started) return NURL__NP_CLOSE(fd);
     NurlReactorWait *batch = NULL;
     pthread_mutex_lock(&nurl__np.lock);
     NurlNpFd *s = nurl__np_slot(fd, 0);
@@ -8707,6 +9061,10 @@ int nurl__np_close(int fd) {
         s->chain = NULL;
         s->ready = 0;
         s->registered = 0;
+#if defined(_WIN32)
+        s->gen++;
+        s->shut = 0;
+#endif
         while (w) {
             NurlReactorWait *n = w->fd_next;
             w->fd_next = NULL;
@@ -8717,8 +9075,16 @@ int nurl__np_close(int fd) {
             w = n;
         }
     }
-    int rc = close(fd);
+    int rc = NURL__NP_CLOSE(fd);
+#undef NURL__NP_CLOSE
     pthread_mutex_unlock(&nurl__np.lock);
+    nurl__np_wake_batch(batch);
+    return rc;
+}
+
+/* Recycle the entries of a batch taken off the slots and unpark their
+ * fibers, ready (result 1). Called WITHOUT the lock. */
+static void nurl__np_wake_batch(NurlReactorWait *batch) {
     while (batch) {
         NurlReactorWait *n = batch->wake_next;
         NurlFiber *f = batch->fiber;
@@ -8734,15 +9100,56 @@ int nurl__np_close(int fd) {
         }
         batch = n;
     }
-    return rc;
 }
+
+#if defined(_WIN32)
+/* Winsock's half of a receive-side shutdown, which no readiness
+ * interface reports (nurl_tcp_conn_shutdown): every fiber parked to
+ * read `fd` wakes, and the slot keeps `shut`, so one whose EAGAIN came
+ * just before the shutdown does not park on it after. The close resets
+ * it. Started here if need be: that fiber may be about to start it. */
+void nurl__reactor_read_shut(long long fd) {
+    nurl__np_start_if_needed();
+    if (!nurl__np.started) return;
+    NurlReactorWait *batch = NULL;
+    pthread_mutex_lock(&nurl__np.lock);
+    NurlNpFd *s = nurl__np_slot((nurl_np_fd_t)fd, 1);
+    if (s) {
+        s->shut = 1;
+        NurlReactorWait **pp = &s->chain;
+        while (*pp) {
+            NurlReactorWait *w = *pp;
+            if (w->events & POLLIN) {
+                *pp = w->fd_next;
+                w->fd_next = NULL;
+                nurl__np_heap_remove(w);
+                w->result = 1;
+                w->wake_next = batch;
+                batch = w;
+            } else {
+                pp = &w->fd_next;
+            }
+        }
+    }
+    pthread_mutex_unlock(&nurl__np.lock);
+    nurl__np_wake_batch(batch);
+}
+#endif
 
 void nurl__reactor_cleanup(void) {
     if (!nurl__np.started) return;
     nurl__np.started = 0;
+#if defined(_WIN32)
+    CloseHandle(nurl__np.iocp);
+    nurl__np.iocp = NULL;
+#elif defined(NURL_NP_KQUEUE)
+    close(nurl__np.kq);
+    nurl__np.kq = -1;
+#else
     close(nurl__np.ep);
     close(nurl__np.evfd);
     nurl__np.ep = nurl__np.evfd = -1;
+#endif
     for (int fd = 0; fd < nurl__np.byfd_cap; fd++) {
         NurlReactorWait *w = nurl__np.byfd[fd].chain;
         while (w) { NurlReactorWait *n = w->fd_next; free(w); w = n; }
@@ -8762,7 +9169,7 @@ void nurl__reactor_cleanup(void) {
     pthread_mutex_destroy(&nurl__np.lock);
 }
 
-#else /* !__linux__ — portable poll(2) reactor thread (WSAPoll on Windows) */
+#else /* !NURL_NETPOLLER — the portable poll(2) reactor thread */
 
 typedef struct NurlReactorWait {
     long long               fd;          /* -1 = pure timer */
@@ -8779,9 +9186,6 @@ typedef struct NurlReactorWait {
      * activation. Lock held for both. */
     int                     mutex_park;
     int                     park_state;
-    /* Windows: the read side of `fd` was shut (nurl__reactor_read_shut),
-     * which WSAPoll never reports — wake as ready, so the reader sees EOF. */
-    int                     forced;
     /* An accept's wait (Admission, under "Service order"). */
     int                     admit;
     /* Its index in the poll round's set (0: not in it). Read only when
@@ -8791,8 +9195,7 @@ typedef struct NurlReactorWait {
 
 typedef struct NurlReactor {
     pthread_t        thread;
-    /* [0] = read, [1] = write (nurl__signal_open; one socket, both
-     * slots, on Windows). */
+    /* [0] = read, [1] = write (nurl__signal_open). */
     nurl_sockfd_t    wake_pipe[2];
     pthread_mutex_t  lock;           /* protects `waits` and `freelist` */
     NurlReactorWait *waits;
@@ -8809,69 +9212,6 @@ typedef struct NurlReactor {
 
 static NurlReactor nurl__reactor;
 
-#ifdef _WIN32
-/* The sockets whose read side nurl_tcp_conn_shutdown shut, until each is
- * closed (nurl__reactor_forget_fd): a fiber that starts waiting to read
- * one after the shutdown is woken at once, like one already waiting.
- * Its own lock, statically initialised, so a drain on a program that
- * never started the reactor needs nothing of it; taken after the
- * reactor's lock, never before. */
-static pthread_mutex_t nurl__shut_lock = PTHREAD_MUTEX_INITIALIZER;
-static long long      *nurl__shut_fds;
-static int             nurl__shut_n, nurl__shut_cap;
-
-/* Does `fd` name a socket? A wait on a number that does not (agora #133)
- * must not join the WSAPoll set: Windows can hold the whole call to its
- * timeout before saying so, and every other waiter with it. Asked once per
- * park, beside the cross-thread wakes a park costs anyway. */
-static int nurl__win_is_socket(long long fd) {
-    int type = 0;
-    int len = (int)sizeof type;
-    return getsockopt((SOCKET)fd, SOL_SOCKET, SO_TYPE, (char *)&type, &len) == 0;
-}
-
-static int nurl__shut_has(long long fd) {
-    int hit = 0;
-    pthread_mutex_lock(&nurl__shut_lock);
-    for (int i = 0; i < nurl__shut_n; i++) if (nurl__shut_fds[i] == fd) { hit = 1; break; }
-    pthread_mutex_unlock(&nurl__shut_lock);
-    return hit;
-}
-
-static void nurl__reactor_wake(void);
-
-void nurl__reactor_read_shut(long long fd) {
-    pthread_mutex_lock(&nurl__shut_lock);
-    int have = 0;
-    for (int i = 0; i < nurl__shut_n; i++) if (nurl__shut_fds[i] == fd) { have = 1; break; }
-    if (!have) {
-        if (nurl__shut_n == nurl__shut_cap) {
-            int cap = nurl__shut_cap ? nurl__shut_cap * 2 : 16;
-            long long *grown = (long long *)realloc(nurl__shut_fds, (size_t)cap * sizeof *grown);
-            if (!grown) { pthread_mutex_unlock(&nurl__shut_lock); abort(); }
-            nurl__shut_fds = grown;
-            nurl__shut_cap = cap;
-        }
-        nurl__shut_fds[nurl__shut_n++] = fd;
-    }
-    pthread_mutex_unlock(&nurl__shut_lock);
-    /* Then the readers already parked. One registering in between finds
-     * the fd in the set (nurl__reactor_wait), so none is missed. */
-    if (!nurl__reactor.started) return;
-    pthread_mutex_lock(&nurl__reactor.lock);
-    for (NurlReactorWait *w = nurl__reactor.waits; w; w = w->next)
-        if (w->fd == fd && (w->events & POLLIN)) w->forced = 1;
-    pthread_mutex_unlock(&nurl__reactor.lock);
-    nurl__reactor_wake();
-}
-
-void nurl__reactor_forget_fd(long long fd) {
-    pthread_mutex_lock(&nurl__shut_lock);
-    for (int i = 0; i < nurl__shut_n; i++)
-        if (nurl__shut_fds[i] == fd) { nurl__shut_fds[i] = nurl__shut_fds[--nurl__shut_n]; break; }
-    pthread_mutex_unlock(&nurl__shut_lock);
-}
-#endif
 
 static long long nurl__now_ms_internal(void) {
     struct timespec ts;
@@ -8879,9 +9219,8 @@ static long long nurl__now_ms_internal(void) {
     return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000L);
 }
 
-/* The wake channel is nurl__signal_open's (§18-r): a pipe here, a
- * self-connected loopback UDP socket on Windows. Best-effort pokes;
- * several coalesce, and the loop drains them all after its poll. */
+/* The wake channel is nurl__signal_open's (§18-r): a pipe. Best-effort
+ * pokes; several coalesce, and the loop drains them all after its poll. */
 static void nurl__reactor_wake(void) {
     nurl__signal_raise(nurl__reactor.wake_pipe[0], nurl__reactor.wake_pipe[1]);
 }
@@ -8932,10 +9271,7 @@ static void *nurl__reactor_loop(void *arg) {
                 if (min_deadline < 0 || w->deadline_ms < min_deadline)
                     min_deadline = w->deadline_ms;
             }
-            /* (A forced entry wakes without being polled: a Windows
-             * socket whose read side was shut, or a number that names no
-             * socket, which would hold WSAPoll to its timeout.) */
-            if (w->fd >= 0 && !w->forced) {
+            if (w->fd >= 0) {
                 fds[nfds].fd = (nurl_sockfd_t)w->fd;
                 fds[nfds].events = w->events;
                 fds[nfds].revents = 0;
@@ -8956,11 +9292,8 @@ static void *nurl__reactor_loop(void *arg) {
 
         int r = nurl__poll(fds, nfds, timeout);
         if (r < 0) {
-#ifndef _WIN32
             if (errno == EINTR) continue;
-#endif
-            /* One fd the call would not take (a number that is no socket:
-             * WSAPoll may fail the whole call for it) must not end the
+            /* One fd the call would not take must not end the
              * reactor — this thread is the only one that wakes a fiber
              * waiting on an fd, and every such fiber would hang. Each fd is
              * asked on its own instead, and one that cannot be polled is
@@ -9008,7 +9341,6 @@ static void *nurl__reactor_loop(void *arg) {
                     wake = 1; result = 1;
                 }
             }
-            if (!wake && w->forced) { wake = 1; result = 1; }
             if (!wake && w->deadline_ms >= 0 && now >= w->deadline_ms) {
                 wake = 1; result = 0;
                 /* The deadline claims a timed mutex park: a later
@@ -9146,14 +9478,7 @@ static int nurl__reactor_wait_k(long long fd, short events, long long timeout_ms
     wt->active = 0;
     wt->mutex_park = 0;
     wt->park_state = 0;
-    wt->forced = 0;
     wt->admit = admit;
-#ifdef _WIN32
-    if ((events & POLLIN) && fd >= 0 && nurl__shut_has(fd)) wt->forced = 1;
-    /* …and so is one on a number that names no socket: ready, as poll(2)
-     * answers POLLNVAL, without ever reaching WSAPoll. */
-    if (fd >= 0 && !nurl__win_is_socket(fd)) wt->forced = 1;
-#endif
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     pthread_mutex_unlock(&nurl__reactor.lock);
@@ -9176,17 +9501,12 @@ static int nurl__reactor_wait(long long fd, short events, long long timeout_ms) 
 }
 
 /* An I/O wait's fd that cannot name a descriptor answers "ready" at once
- * (the Linux backend's nurl__wait_fd_bad, agora #133): a negative one,
- * which the reactor would take for a pure timer, and on POSIX one past
- * INT_MAX, which pollfd's int would narrow onto an unrelated fd. (A
- * Windows SOCKET is a pointer-sized handle: only INVALID_SOCKET, -1 here,
- * names nothing.) -1 off a fiber, as every wait. */
+ * (the netpoller's nurl__wait_fd_bad, agora #133): a negative one, which
+ * the reactor would take for a pure timer, and one past INT_MAX, which
+ * pollfd's int would narrow onto an unrelated fd. -1 off a fiber, as
+ * every wait. */
 static int nurl__wait_fd_bad(long long fd, long long *verdict) {
-#ifdef _WIN32
-    if (fd >= 0) return 0;
-#else
     if (fd >= 0 && fd <= INT_MAX) return 0;
-#endif
     NurlWorker *w = nurl__tls_worker;
     *verdict = (w && w->current) ? 1 : -1;
     return 1;
@@ -9252,7 +9572,6 @@ NURL_TLS_FN long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long
     wt->active = 0;
     wt->mutex_park = 1;
     wt->park_state = 0;
-    wt->forced = 0;
     wt->admit = 0;
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
@@ -9311,7 +9630,7 @@ void nurl__reactor_shutdown(void) {
 
 void nurl__reactor_cleanup(void) {}
 
-#endif /* __linux__ */
+#endif /* NURL_NETPOLLER */
 
 #else  /* WASI — Phase 5 stubs */
 
@@ -9320,7 +9639,10 @@ void nurl__reactor_wake_if_started(void) {}
 #ifdef _WIN32
 /* Windows with no fiber backend (no Win64 x64 switch): nothing parks. */
 void nurl__reactor_read_shut(long long fd) { (void)fd; }
-void nurl__reactor_forget_fd(long long fd) { (void)fd; }
+int nurl__np_close(nurl_sockfd_t fd) { return closesocket(fd); }
+#elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+/* nurl_close_sock's netpoller route, on a build with no fibers. */
+int nurl__np_close(int fd) { return close(fd); }
 #endif
 
 NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
