@@ -20,6 +20,12 @@ harness of its own:
 | `serve_on`, `db_crash` | nurldb served on a simulated listener; dropped as a killed process leaves it, reopened from its log | `packages/nurldb/src/server.nu`, `db.nu` |
 | the simulation runtime | virtual time, seeded entropy and a seeded schedule: one seed, one run | `unikernel/build_nolibc.sh --sim` (agora #260) |
 
+<!-- doctest-file-prelude
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/net_sim.nu`
+$ `packages/nurldb/src/server.nu`
+-->
+
 ## Faults
 
 ```nurl
@@ -43,15 +49,27 @@ A process restart is the program's part. nurldb's `serve_on` returns once
 its listener stops accepting and its connections have ended. `db_crash`
 then drops the database without a checkpoint, losing the dirty pages a
 killed process loses, and `db_open` on the same directory recovers from
-the write-ahead log:
+the write-ahead log. With node 2 serving `d` on `l` from a thread
+(`serve_thread`, which runs `serve_on d l` there, as
+`compiler/tests/net_sim_nurldb_crash.nu` does):
 
+<!-- doctest-prelude
+@ serve_thread Db d TcpListener l → !Thread ThreadErr {
+    ^ ( thread_spawn \ → v { : !v String _r ( serve_on d l ) } )
+}
+: NetSim net ( netsim_new 3 262 0 1 1 )
+: String dir ( string_from `/tmp/nurldb_doc` )
+: Db d ?? ( db_open ( string_data dir ) ( db_default_opts ) ) { T x → x F _ → { ^ 1 } }
+: TcpListener l ?? ( netsim_listen net 2 5433 ) { T x → x F _ → { ^ 1 } }
+: !Thread ThreadErr srv ( serve_thread ( Db_share d ) l )
+-->
 ```nurl
 ( netsim_crash net 2 )
 ?? srv { T h → { : i _j ( thread_join h ) } F _ → {} }  // serve_on returned
 ( db_crash d )
-= d ?? ( db_open ( string_data dir ) ( db_default_opts ) ) { T x → x F e → { ^ 1 } }
+: Db d2 ?? ( db_open ( string_data dir ) ( db_default_opts ) ) { T x → x F _ → { ^ 1 } }
 : TcpListener l2 ?? ( netsim_listen net 2 5433 ) { T x → x F _ → { ^ 1 } }
-// …and serve_on d l2 on a thread again
+: !Thread ThreadErr srv2 ( serve_thread ( Db_share d2 ) l2 )  // serving again
 ```
 
 Unsynced writes survive this crash: the files are the host's, and a
