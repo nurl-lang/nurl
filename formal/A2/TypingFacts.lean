@@ -220,7 +220,9 @@ theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m �
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := hi.pinOut
+    pinIn := hi.pinIn }
 
 theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry}
     (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F k :=
@@ -235,7 +237,29 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
     catchOK := hi.catchOK
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := fun p E hp hm hps r hr hrk => by
+      have hpx : p ≠ x := fun h => by subst h; rw [hx] at hp; cases hp; exact hnrb hm
+      exact hi.pinOut p E hp hm (by simp [Stmt.spine, hpx, hps]) r hr (by simp [Stmt.spine, hrk])
+    pinIn := hi.pinIn }
+
+/-- A destructor scope binds, names and catches as a plain scope does, and
+    the invariant reads a statement only through those. -/
+theorem Inv.scopeD_iff {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {k : Stmt} :
+    Inv m Γ F (.scopeD x f k) ↔ Inv m Γ F (.scope x k) := by
+  constructor <;> intro hi <;> exact
+    { toMInv := hi.toMInv
+      nvS := fun v hv => hi.nvS v (by simpa [Stmt.vars] using hv)
+      nvF := hi.nvF
+      anch := fun p E hp hm hps => hi.anch p E hp hm (by simpa [Stmt.spine] using hps)
+      spineNd := by simpa [Stmt.spine] using hi.spineNd
+      spineDom := fun v hv => hi.spineDom v (by simpa [Stmt.spine] using hv)
+      catchOK := by simpa [CatchOK] using hi.catchOK
+      cover := hi.cover
+      pinOut := fun p E hp hm hps r hr => by
+        have := hi.pinOut p E hp hm (by simpa [Stmt.spine] using hps) r hr
+        simpa [Stmt.spine] using this
+      pinIn := hi.pinIn }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
     (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F) :
@@ -251,7 +275,12 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
     spineDom := fun v hv => hi.spineDom v (by simp [Stmt.spine, hv])
     catchOK := hi.catchOK
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := fun q E hq hmq hqs r hr hrk => by
+      by_cases hqp : q = p
+      · subst hqp; exact hi.pinIn.1 E hq hmq r hr hrk
+      · exact hi.pinOut q E hq hmq (by simp [Stmt.spine, hqp, hqs]) r hr (by simp [Stmt.spine, hrk])
+    pinIn := hi.pinIn.2 }
 
 theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))
     (hz : ∀ v ∈ z', v ∈ z) : Inv m Γ (F ++ z') k :=
@@ -265,7 +294,9 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : I
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := hi.pinOut
+    pinIn := hi.pinIn }
 
 
 /-- A run-time scope never binds what is lent out. -/
@@ -288,6 +319,12 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | scopeD _ hxF _ _ _ _ _ ih =>
+    intro v hv
+    simp only [Stmt.spine, List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact hxF
+    · exact ih v hv
   | _ => intro v hv; simp [Stmt.spine] at hv
 
 
@@ -304,7 +341,9 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     spineNd := hi.spineNd
     spineDom := hi.spineDom
     catchOK := hi.catchOK.2.2.2
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := hi.pinOut
+    pinIn := hi.pinIn }
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by

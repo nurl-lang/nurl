@@ -199,10 +199,12 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   induction s with
   | seq a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letv x r s ih => simp only [Stmt.rename, Stmt.codesOK, ih, Rhs.codeOK_rename]
+  | letd x f r s ih => simp only [Stmt.rename, Stmt.codesOK, ih, Rhs.codeOK_rename]
   | assign x r => simp only [Stmt.rename, Stmt.codesOK, Rhs.codeOK_rename]
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
-  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih => simp only [Stmt.rename, Stmt.codesOK, ih]
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih =>
+    simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
 theorem wrapParams_codes {P : Prog} {s : Stmt} (hs : s.codesOK P) :
@@ -313,6 +315,28 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     have hT := hm.slot hy
     exact ⟨((hm.set (fun _ e => by cases e)).set (fun V e => by cases e; exact hT.child Child.fst)).set
       (fun V e => by cases e; exact hT.child Child.snd), hs⟩
+  | letd _ he =>
+    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := he.codes hm hs.1
+    exact ⟨hm1.set (fun V e => by cases e; exact hv), hs.2⟩
+  | letdP _ =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact hm
+  | scopeDIn _ ih =>
+    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨h1, h2⟩ := (ih hm hs).1 _ _ rfl; exact ⟨h1, h2⟩
+  | scopeDEnd _ =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm.of_st rfl, trivial⟩
+  | scopeDMoved _ =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm.remove _, trivial⟩
+  | scopeDP _ _ ih =>
+    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨((ih hm hs).2 _ rfl).of_st rfl, trivial, trivial⟩
+  | scopeDPMoved _ _ ih =>
+    intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ((ih hm hs).2 _ rfl).remove _
   | callc hslot _ hf _ hb =>
     intro hm hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     have hT := hm.slot hslot

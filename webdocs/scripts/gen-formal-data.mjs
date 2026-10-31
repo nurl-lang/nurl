@@ -187,6 +187,12 @@ const MODULE_LAYERS = {
     summaryFi: 'Päälauseet: soundness, memory_safe, no_leak_end ja no_leak_panic.',
     summaryEn: 'Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic.',
   },
+  DynCell: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryFi: 'Kutsukohtainen omistajuus omistajasolun kautta: esimerkki pick tyypitetään A2:n säännöillä, ja memory_safe sekä no_leak_end sovelletaan siihen (pick_ok, main_safe, main_no_leak).',
+    summaryEn: 'Per-call ownership through an owner cell: the pick example typed with A2\'s rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak).',
+  },
 };
 
 function cleanComment(raw) {

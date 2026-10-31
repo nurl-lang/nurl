@@ -397,7 +397,13 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
       obtain ⟨E, hE⟩ := hi.spineDom v hv
       exact ⟨_, cleanC_of hE⟩
     catchOK := hi.catchOK
-    cover := hi.cover }
+    cover := hi.cover
+    pinOut := fun p E hp hm hs => by
+      obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+      rw [clean_mode] at hm; rw [clean_rootb hm]; exact hi.pinOut p E0 h0 hm hs
+    pinIn := hi.pinIn.of_rootb fun p E hp hm => by
+      obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+      rw [clean_mode] at hm; rw [clean_rootb hm]; exact h0 }
 
 theorem derive_clean_sub (y : Var) (E : Entry) (k : Kind) : derive y E.clean k ⊆ derive y E k := by
   unfold derive; rw [clean_mode, clean_ty]
@@ -2251,7 +2257,9 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
           have ho : o' ≠ m.nv := fun e => by
             subst e; unfold OwnedAt at hT
             have := hi.dom m.nv; rw [hΓe0, hT] at this; cases this
-          exact ⟨o', T, by unfold OwnedAt at hT ⊢; simp [envMem, Mem.set, upd_ne _ _ ho, hT], hiT⟩ }
+          exact ⟨o', T, by unfold OwnedAt at hT ⊢; simp [envMem, Mem.set, upd_ne _ _ ho, hT], hiT⟩
+        pinOut := pinOut_nil rfl
+        pinIn := trivial }
     have h := callH_of hP hf hxe' hxF' hcT' hIe
     have hI := h.inv hIe hb
     -- the environment's binding, where the call leaves it
@@ -2479,7 +2487,54 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                 · exact ⟨_, hΓ'e⟩
                 · exact hdom _ (List.mem_cons_of_mem _ hv)
               catchOK := hI.catchOK
-              cover := hI.cover }
+              cover := hI.cover
+              pinOut := fun p Ep hp hm hs r hr hrs => by
+                have hs' : p ≠ m.nv ∧ p ∉ (callStmt fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x k).spine :=
+                  ⟨fun e => hs ((hssp p).mpr (Or.inl e)), fun h' => hs ((hssp p).mpr (Or.inr h'))⟩
+                rcases (hssp r).mp hrs with hre | hrc
+                · -- the package's environment is bound after anything a borrowed
+                  -- parameter outside the call depends on
+                  rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+                      ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;>
+                      (try cases hp)
+                  · exact absurd hm (resMode_ne' fn)
+                  · exact absurd hm (resMode_ne' fn)
+                  · exfalso; apply hs'.2
+                    rw [callStmt_spine]
+                    exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
+                      (mem_wrapSpine_of hk' (fun b h => by cases h))))
+                  · cases hm
+                  · cases hm
+                  · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+                    rw [clean_mode] at hm
+                    obtain ⟨E0, h0, hm0⟩ := h.postdm.2 p E1' h1'
+                    have := h.post_rootb h0 (hm0 ▸ hm)
+                    rw [h1'] at this; cases this
+                    simp only [Γe, setE, upd_ne _ _ hs'.1] at h0
+                    obtain ⟨E2, h2, rfl⟩ := cleanC_some h0
+                    have hm2 : E2.mode = .rootb := by rw [← clean_mode]; exact hm
+                    rw [clean_rootb hm, clean_rootb hm2] at hr
+                    have hlt := hi.rootbLt p E2 h2 hm2 r hr
+                    have hpl : p < m.nv := hi.nvSt p (by rw [← hi.dom p, h2]; rfl)
+                    rw [hre] at hlt
+                    exact Nat.lt_irrefl _ (Nat.lt_trans hlt hpl)
+                · exact hI.pinOut p Ep hp hm hs'.2 r hr hrc
+              pinIn := ⟨fun E hE hm r hr hrs => by
+                -- the environment depends on what is older than it, and every
+                -- frame the call opens is younger
+                have hlt := hI.rootbLt _ E hE hm r hr
+                have hbs : (fn.body.rename (callRen fn.params (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1))).spine =
+                    [] := h.body_spine
+                rw [callIn_spine, hbs, List.append_nil] at hrs
+                rcases List.mem_cons.mp hrs with he | he
+                · rw [he] at hlt
+                  exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hlt
+                    (Nat.le_trans (Nat.le_succ _) (Nat.le_add_right _ _)))
+                · obtain ⟨k', _, _, _, he⟩ := mem_wrapSpine he
+                  rw [he] at hlt
+                  exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hlt
+                    (Nat.le_trans (Nat.le_succ _) (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ _)))),
+                hI.pinIn⟩ }
     · have hve : v ≠ m.nv := fun e => by rw [e, hΓe0] at hv; cases hv
       have hv' : Γe v = some E.clean := by simp only [Γe, setE, upd_ne _ _ hve]; exact cleanC_of hv
       obtain ⟨hns, E', h', hm', ht', hrb'⟩ := hkeep.1 v E.clean hv' (by simp [Stmt.spine])

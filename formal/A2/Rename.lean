@@ -391,6 +391,59 @@ theorem canon_setE (h : S.OK) (Γa : Ctx) (x : Var) (E : Entry) :
     S.canon (setE Γa x E) = setE (S.canon Γa) (S.ρ x) (S.liftE x E) := by
   unfold setE; rw [canon_upd h]; rfl
 
+/-- A body's typing that keeps its context's bindings keeps them renamed:
+    `liftE` gives a borrowed parameter's entry as a function of the
+    parameter, and any other entry's mode and type as a function of its own. -/
+theorem keepOut_canon (h : S.OK) {Γa Δa : Ctx} (hk : KeepOut Γa Δa []) :
+    KeepOut (S.canon Γa) (S.canon Δa) [] := by
+  refine ⟨fun y E0 hy _ => ?_, fun y E' hy => ⟨by simp, ?_⟩⟩
+  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      obtain ⟨Ea, hEa, rfl⟩ := Option.map_eq_some_iff.mp hy
+      obtain ⟨Ed, hEd, hmd, htd, hrbd⟩ := hk.1 v Ea hEa (by simp)
+      refine ⟨S.liftE v Ed, by rw [canon_ρ h, hEd]; rfl, ?_, ?_, ?_⟩
+      · by_cases hrb : Ea.mode = .rootb
+        · rw [hrbd hrb]
+        · have hrb' : Ed.mode ≠ .rootb := by rw [hmd]; exact hrb
+          simp [liftE, hrb, hrb', hmd]
+      · by_cases hrb : Ea.mode = .rootb
+        · rw [hrbd hrb]
+        · have hrb' : Ed.mode ≠ .rootb := by rw [hmd]; exact hrb
+          simp [liftE, hrb, hrb', htd]
+      · intro hl
+        by_cases hrb : Ea.mode = .rootb
+        · rw [hrbd hrb]
+        · exfalso; simp [liftE, hrb] at hl; exact hrb (liftMode_rootb.mp hl)
+    · rw [hc] at hy
+      exact ⟨E0, by rw [canon_frame Δa hyf]; exact hy, rfl, rfl, fun _ => rfl⟩
+  · rcases canon_cases h Δa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      obtain ⟨Ed, hEd, rfl⟩ := Option.map_eq_some_iff.mp hy
+      obtain ⟨_, Ea, hEa⟩ := hk.2 v Ed hEd
+      exact ⟨S.liftE v Ea, by rw [canon_ρ h, hEa]; rfl⟩
+    · rw [hc] at hy
+      exact ⟨E', by rw [canon_frame Γa hyf]; exact hy⟩
+
+/-- `KeepOut` asks only a binding's mode and type, and leaves an entry that
+    is no borrowed parameter free otherwise. -/
+theorem KeepOut.setE_same {Γ Δ : Ctx} {sp : List Var} {y : Var} {E1 E2 : Entry}
+    (hk : KeepOut (setE Γ y E1) Δ sp) (hm : E2.mode = E1.mode) (ht : E2.ty = E1.ty)
+    (hnr : E1.mode ≠ .rootb) : KeepOut (setE Γ y E2) Δ sp := by
+  refine ⟨fun v E hv hvs => ?_, fun v E' hv => ?_⟩
+  · by_cases hvy : v = y
+    · subst hvy
+      simp only [setE, upd_same, Option.some.injEq] at hv; subst hv
+      obtain ⟨E', h', hm', ht', _⟩ := hk.1 v E1 (by simp [setE]) hvs
+      refine ⟨E', h', hm'.trans hm.symm, ht'.trans ht.symm, fun h => ?_⟩
+      rw [hm] at h; exact absurd h hnr
+    · simp only [setE, upd_ne _ _ hvy] at hv
+      exact hk.1 v E (by simp only [setE, upd_ne _ _ hvy]; exact hv) hvs
+  · obtain ⟨hvs, E0, h0⟩ := hk.2 v E' hv
+    by_cases hvy : v = y
+    · subst hvy; exact ⟨hvs, E2, by simp [setE]⟩
+    · simp only [setE, upd_ne _ _ hvy] at h0
+      exact ⟨hvs, E0, by simp only [setE, upd_ne _ _ hvy]; exact h0⟩
+
 theorem canon_exitScope (h : S.OK) (hab : S.AbsOK Γa) {x : Var} (ha : Allowed S .replace false x) :
     S.canon (exitScope x Γa) = exitScope (S.ρ x) (S.canon Γa) := by
   unfold exitScope
@@ -2502,6 +2555,36 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letv (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
+  | @letd Γ Γ1 Δ F x f r k E hks hx hxF hr hown hview hdtor hk _ hKOd hWd hNd ih =>
+    intro _ hab hw hn
+    obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
+    obtain ⟨hn1, hEn, _⟩ := hr.names hn
+    have hab1 := RhsT.absOK (S := S) hr hab
+    obtain ⟨hmo, _⟩ := RhsT.out hr
+    obtain ⟨hw1, hdom, _, hEr⟩ := hr.wf hw
+    have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
+    have hwx := hw1.add hx1 hEr
+    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
+    have habx := hab.add hab1 hx hmo
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    have hbx := hab.fresh hx
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habx hwx
+    have hnc := canon_names h habx hnx
+    rw [canon_setE h] at hwc hnc tk
+    have hl := (hE' x).1
+    have hm := (hE' x).2.1
+    have hKOc : KeepOut (setE (S.canon Γ1) (S.ρ x) E') (S.canon Δ) [] := by
+      have := keepOut_canon h hKOd
+      rw [canon_setE h] at this
+      exact KeepOut.setE_same this (hE' x).2.1.symm (hE' x).1.symm (by simp [liftE, hown, liftMode])
+    simp only [liftE, hown, reduceCtorEq, if_false, liftMode] at hl hm
+    exact StmtT.letd (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
+      hm.symm (by rw [← hl]; exact hview) (by rw [← hl]; exact hdtor)
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
+      (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
+      hKOc (canon_wf h abk hWd) (canon_names h abk hNd)
   | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk _ ih =>
     intro _ hab hw hn
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT
@@ -2561,6 +2644,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
   | scope => intro hs; simp [Stmt.src] at hs
+  | scopeD => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
   | panic hwf hnΔ hdom hm =>
