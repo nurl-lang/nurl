@@ -21197,6 +21197,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s elem_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print elem_ptr )
     ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty elem_ty ) ) ( nurl_print `\n` )
+    // The element is the loop's own: bound in a scope the loop's exit
+    // closes. Bound in the enclosing one, it outlived the loop — read
+    // after the container was cleared (a use after free) or after an empty
+    // loop (never written) — and replaced an outer binding of its name
+    // (agora #245).
+    ( nurl_sym_push syms )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
     // Labels
@@ -21341,6 +21347,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat le `:` ) )
+    ( nurl_sym_pop syms )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_set_last_type `void` )

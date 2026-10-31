@@ -360,6 +360,8 @@ file_closed_twice	§3	B	FFI FILE handle typed as s, fclose called twice from saf
 fire_and_forget_fiber_joined	§3.3d	B	fiber_join on a plain spawn's handle after the fiber ended read its freed block; a non-joinable handle never touches the runtime (agora #168).	runs-clean	h613
 first_arm_statement_reads_what_the_scrutinee_ended	§2.10	A2	a match scrutinee call's effects were recorded after the first arm statement, which read a borrow the call had ended	rejected	h315
 float_passed_as_a_struct	§6.2	B	float passed where a Slice struct parameter is expected (type confusion)	rejected	h262
+foreach_element_after_empty_loop	§1	A1	agora #245: a foreach element read after a loop that never ran: the slot was never written	rejected	-
+foreach_element_after_loop_cleared	§1	A1	agora #245: a foreach element read after its loop, once the Vec it viewed was cleared	rejected	-
 foreign_write_into_a_frozen_view	§6.5	A3	unsafe helper preads into a slice it is handed; caller hands it a view of an Arc payload	rejected	h289
 forged_runtime_handle_closed_by_a_builtin	§3	B	builtin nurl_tcp_close called with a forged handle number	rejected	h250
 forged_runtime_handle_through_a_conn_view	§3	B	tcp_conn_view wraps a made-up number as a socket handle	rejected	h249
