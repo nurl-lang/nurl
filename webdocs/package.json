@@ -8,6 +8,7 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
+    "pretypes:check": "bash ../tools/gen-site-facts.sh && node scripts/gen-formal-data.mjs",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
     "deploy": "pnpm run build && wrangler deploy"
