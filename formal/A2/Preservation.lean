@@ -89,14 +89,16 @@ theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi 
     catchOK := hck
     cover := hc
     pinOut := pinOut_nil hs'
-    pinIn := PinOK.of_spine_nil hs' }
+    pinIn := PinOK.of_spine_nil hs'
+    dtorOut := dtorOut_nil hs'
+    dtorIn := DtorPinOK.of_spine_nil hs' }
 
 theorem vars_sub {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {s' : Stmt}
     (h : ∀ v ∈ s'.vars, v ∈ s.vars) : ∀ v ∈ s'.vars, v < m.nv := fun v hv => hi.nvS v (h v hv)
 
 theorem Inv.respine {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {s' : Stmt}
     (hsp : s'.spine = s.spine) (hvs : ∀ v ∈ s'.vars, v ∈ s.vars) (hck : CatchOK m s')
-    (hpin : PinOK Γ s') : Inv m Γ F s' :=
+    (hpin : PinOK Γ s') (hdpin : DtorPinOK Γ s') : Inv m Γ F s' :=
   { toMInv := hi.toMInv
     nvS := fun v h => hi.nvS v (hvs v h)
     nvF := hi.nvF
@@ -107,7 +109,10 @@ theorem Inv.respine {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m �
     cover := hi.cover
     pinOut := fun p E hp hm hps r hr hrs =>
       hi.pinOut p E hp hm (by rw [← hsp]; exact hps) r hr (by rw [← hsp]; exact hrs)
-    pinIn := hpin }
+    pinIn := hpin
+    dtorOut := fun v E hv hd hos hn hvs d hdd hnm hds =>
+      hi.dtorOut v E hv hd hos hn (by rw [← hsp]; exact hvs) d hdd hnm (by rw [← hsp]; exact hds)
+    dtorIn := hdpin }
 
 /-- A run-time scope binds what was unbound, and a borrowed parameter
     depends only on what is bound: it depends on no scope a step opens. -/
@@ -121,6 +126,24 @@ theorem pinOut_fresh {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ)
   rw [← hv0] at hr
   obtain ⟨Er, hEr, _⟩ := hi.wf p E0 h0 (hi.rootbLive p E0 h0 hm0) (Or.inr hm0) r hr
   rw [hsp r hrs] at hEr; cases hEr
+
+/-- A2-drop.2: a run-time scope binds what was unbound, and a `letd`
+    binding views only what is bound: it views no scope a step opens. -/
+theorem dtorOut_fresh {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) {s : Stmt}
+    (hb : ∀ v E, Γ' v = some E → E.dbind = true → E.mode.ownSlot = true →
+      (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∃ E0, Γ v = some E0 ∧ E0.dbind = true ∧
+        E0.mode.ownSlot = true ∧ (E0.ty ≠ .int ∨ E0.mode = .rootb) ∧ E.vdeps ⊆ E0.vdeps)
+    (hsp : ∀ v ∈ s.spine, Γ v = none) :
+    ∀ v E, Γ' v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+      v ∉ s.spine → ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ s.spine := by
+  intro v E hv hd hos hn hvs d hdd hnm hds
+  obtain ⟨E0, h0, hd0, hos0, hn0, hsub⟩ := hb v E hv hd hos hn hvs
+  obtain ⟨Er, hEr, _⟩ := hi.wf.dtor v E0 h0 hd0 hos0 hn0 d (hsub hdd) hnm
+  rw [hsp d.root hds] at hEr; cases hEr
+
+/-- A binding no `letd` made pins nothing. -/
+theorem DtorIn.of_off {Γ : Ctx} {x : Var} {s : Stmt} (h : ∀ E, Γ x = some E → E.dbind = false) :
+    DtorIn Γ x s := fun E hE hd => by rw [h E hE] at hd; cases hd
 
 /-- A borrowed parameter outside the new running scopes was outside the old
     ones, with the same entry. -/
@@ -383,6 +406,26 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
             · exact hx
             · exact hz))
         (show PinOK _ s from PinOK.of_spine_nil (src_spine hsrc))
+        (dtorOut_fresh hi.toMInv (fun v Ev hv hd hos hn hvs => by
+          have hvz : v ≠ z := fun h => hvs (by simp [Stmt.spine, h])
+          have hvx : v ≠ x := fun h => hvs (by simp [Stmt.spine, h])
+          simp only [setE, upd_ne _ _ hvz, upd_ne _ _ hvx] at hv
+          by_cases hvy : v = y
+          · subst hvy; simp only [upd_same, Option.some.injEq] at hv; subst hv
+            exact ⟨E, hy, hd, hos, hn, List.Subset.refl _⟩
+          · simp only [upd_ne _ _ hvy, kill] at hv
+            obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hv
+            rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
+            exact ⟨E0, h0, hd, hos, hn, by rw [killE_vdeps]; exact List.Subset.refl _⟩)
+          (fun v hv => by
+            simp only [Stmt.spine, src_spine hsrc, List.mem_cons, List.not_mem_nil, or_false] at hv
+            rcases hv with rfl | rfl
+            · exact hx
+            · exact hz))
+        ⟨DtorIn.of_off (fun E0 h0 => by
+            simp [setE, upd_ne _ _ hxz] at h0; subst h0; simp),
+          DtorIn.of_off (fun E0 h0 => by simp [setE] at h0; subst h0; simp),
+          DtorPinOK.of_spine_nil (src_spine hsrc)⟩
       · simp only [Stmt.vars, List.mem_cons] at hu
         simp only [Mem.set_nv]
         rcases hu with rfl | rfl | hu
@@ -851,7 +894,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · exact hb
         · exact hb.weakenIn hw
       · exact hi.respine (by rw [src_spine hbsrc]; rfl) (fun v hv => by simp [Stmt.vars, hv])
-          (catchOK_src hbsrc) (PinOK.of_spine_nil (src_spine hbsrc))
+          (catchOK_src hbsrc) (PinOK.of_spine_nil (src_spine hbsrc)) (DtorPinOK.of_spine_nil (src_spine hbsrc))
     | seqL hst' =>
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := iha hcd hi.seqIn hst'
       refine ⟨Γ', StmtT.seq hbsrc ht' hb,
@@ -891,6 +934,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
               rw [hv]; exact hx))
           (show PinOK _ k from PinOK.of_spine_nil hsp)
+          (dtorOut_fresh post.inv (fun v Ev hv hd hos hn hvs => by
+            have hvx : v ≠ x := fun h => hvs (by simp [Stmt.spine, h])
+            simp only [setE, upd_ne _ _ hvx] at hv
+            exact ⟨Ev, hv, hd, hos, hn, List.Subset.refl _⟩)
+            (fun v hv => by
+              simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
+              rw [hv]; exact hx1))
+          ⟨fun _ _ _ _ _ _ _ _ hdk => (by rw [hsp] at hdk; cases hdk), DtorPinOK.of_spine_nil hsp⟩
         · simp only [Mem.set_nv, post.nv]
           simp only [Stmt.vars, List.mem_cons] at hv
           rcases hv with rfl | hv
@@ -949,6 +1000,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
               rw [hv]; exact hx))
           (show PinOK _ k from PinOK.of_spine_nil hsp)
+          (dtorOut_fresh post.inv (fun v Ev hv hd hos hn hvs => by
+            have hvx : v ≠ x := fun h => hvs (by simp [Stmt.spine, h])
+            simp only [setE, upd_ne _ _ hvx] at hv
+            exact ⟨Ev, hv, hd, hos, hn, List.Subset.refl _⟩)
+            (fun v hv => by
+              simp only [Stmt.spine, hsp, List.mem_cons, List.not_mem_nil, or_false] at hv
+              rw [hv]; exact hx1))
+          ⟨fun _ _ _ _ _ _ _ _ hdk => (by rw [hsp] at hdk; cases hdk), DtorPinOK.of_spine_nil hsp⟩
         · simp only [Mem.set_nv, post.nv]
           simp only [Stmt.vars, List.mem_cons] at hv
           rcases hv with rfl | hv
@@ -989,17 +1048,18 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     cases hst with
     | iteT _ _ =>
       exact ⟨_, ha, hi.respine (by rw [src_spine hsa]; rfl) (fun v hv => by
-        simp [Stmt.vars, hv]) (catchOK_src hsa) (PinOK.of_spine_nil (src_spine hsa)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa), fun _ _ => rfl⟩
+        simp [Stmt.vars, hv]) (catchOK_src hsa) (PinOK.of_spine_nil (src_spine hsa)) (DtorPinOK.of_spine_nil (src_spine hsa)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa), fun _ _ => rfl⟩
     | iteF _ =>
       exact ⟨_, hb, hi.respine (by rw [src_spine hsb]; rfl) (fun v hv => by
-        simp [Stmt.vars, hv]) (catchOK_src hsb) (PinOK.of_spine_nil (src_spine hsb)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb), fun _ _ => rfl⟩
+        simp [Stmt.vars, hv]) (catchOK_src hsb) (PinOK.of_spine_nil (src_spine hsb)) (DtorPinOK.of_spine_nil (src_spine hsb)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb), fun _ _ => rfl⟩
   | «while» hsrc hc hs _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | «while» =>
       refine ⟨_, StmtT.ite (by simp [Stmt.src, hsrc]) rfl hc
         (StmtT.seq (by simp [Stmt.src, hsrc]) hs (StmtT.while hsrc hc hs)) StmtT.skip,
-        hi.respine rfl (fun v hv => ?_) (catchOK_src (by simp [Stmt.src, hsrc])) (PinOK.of_spine_nil rfl),
+        hi.respine rfl (fun v hv => ?_) (catchOK_src (by simp [Stmt.src, hsrc])) (PinOK.of_spine_nil rfl)
+          (DtorPinOK.of_spine_nil rfl),
         Nat.le_refl _,
         (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl⟩
       simp only [Stmt.vars, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
@@ -1553,7 +1613,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     intro m m' s' hcd hi hst
     cases hst with
     | frozenSkip =>
-      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial, Nat.le_refl _,
+      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
         (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
@@ -1656,7 +1716,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinOut := pinOut_cong (b := []) rfl rfl hk hi'.pinOut hi.pinOut
           pinIn := hi'.pinIn }
     | catchSkip =>
-      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial, Nat.le_refl _,
+      refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
         (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip

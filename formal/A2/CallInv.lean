@@ -480,7 +480,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
     have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) :=
       ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
-      hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial trivial
+      hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial trivial trivial
     have h := callH_of hP hf hx hxF hc' hi'
     have hb : BindParams m fn.params [] m.nv 0 m := by rw [hp]; exact BindParams.nil
     have hI := h.inv hi' hb
@@ -553,7 +553,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩
-      hI.pinIn
+      hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv
       · simp [callStmt, Stmt.vars]
