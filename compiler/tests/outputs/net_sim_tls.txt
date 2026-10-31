@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+an identity from PEM text in memory: ok
+the client's handshake over the simulated wire: ok
+an encrypted write: ok
+the echo comes back decrypted: ok
+the server's side of the handshake: ok

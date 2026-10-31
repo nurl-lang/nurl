@@ -409,6 +409,48 @@ raw @ tcp_listener_over sink %NetTransport t sink String local → TcpListener {
 
 @ __tc_nt TcpConn c → %NetTransport { ^ ( __nt . ( __tci c ) tlsh ) }
 
+// ── TLS over a transport (agora #250) ──
+//
+// A connection of another transport (kind 3) carries TLS like a runtime
+// socket does: its transport moves into the TLS connection, whose record
+// layer reads and writes it (std/tls.nu's TlsTransport), and the conn
+// becomes a TLS conn (tcp_starttls) or hands the TLS state to the server
+// that accepted it (tls_accept_conn).
+
+// The bytes under TLS: a NetTransport, by its owner word, which this owns.
+: NtTlsStream { i w }
+
+% Drop NtTlsStream {
+    @ drop NtTlsStream x → v { ? != . x w 0 { ( __nt_release . x w ) } {} }
+}
+
+% TlsTransport NtTlsStream {
+    @ tt_read NtTlsStream self ( Vec u ) buf i max b wait → i {
+        ^ ?? ( nt_read_into ( __nt . self w ) buf max wait ) {
+            // (Nothing there yet, when not waiting: not the end of stream.)
+            T n → ? & ! wait == n 0 -1 n
+            F e → ?? e { NetClosed → 0 _ → -1 }
+        }
+    }
+    @ tt_write NtTlsStream self ( Vec u ) bytes → b { ^ ?? ( nt_write ( __nt . self w ) bytes ) { T _ → T F _ → F } }
+    @ tt_set_timeout NtTlsStream self i ms → v { ( nt_set_timeout ( __nt . self w ) ms ) }
+    @ tt_set_write_deadline NtTlsStream self i ns → v { ( nt_set_write_deadline ( __nt . self w ) ns ) }
+    @ tt_close NtTlsStream self → v { ( nt_close ( __nt . self w ) ) }
+}
+
+// The transport of kind-3 conn `c`, taken over: the word is the caller's
+// to own, and the conn — every copy — is left closed, as tcp_close_conn
+// leaves one. 0 when it has none any more.
+@ __tc_take_nt TcpConn c → i {
+    : *TcpConnImpl p ( __tci c )
+    : i w ? == . p kind 3 . p tlsh 0
+    = . p owns F
+    = . p raw 0
+    = . p kind 0
+    = . p tlsh 0
+    ^ w
+}
+
 // A connection on runtime socket handle `raw`, which the TcpConn now owns:
 // its last owner (or tcp_close_conn) closes it.
 @ tcp_conn_adopt i raw → TcpConn { ^ ( __tcp_conn_make raw 0 0 T ) }
@@ -438,7 +480,19 @@ raw @ tcp_listener_over sink %NetTransport t sink String local → TcpListener {
 // the socket over, and `c` — every copy of it — no longer closes it. On a
 // failed handshake the TLS layer has closed the socket.
 @ tls_accept_conn TcpConn c ( Vec u ) cert_chain ( Vec u ) priv → !TlsConn TlsErr {
-    ^ ( tls_accept ( __tcp_conn_release c ) cert_chain priv )
+    ^ ( tls_accept_conn_ident c ( tls_ident_ec cert_chain priv ) ( vec_new [u] ) )
+}
+
+// tls_accept_conn with a prepared identity (tls_ident_pem, tls_ident_ec,
+// …) and an ALPN preference list in wire form (empty: none), over a
+// runtime socket or another transport's — a simulated network's — alike.
+@ tls_accept_conn_ident TcpConn c ( Arc TlsIdent ) id ( Vec u ) alpn_prefs → !TlsConn TlsErr {
+    ? ( __tc_is_nt c ) {
+        : i w ( __tc_take_nt c )
+        ? == w 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+        ^ ( tls_accept_over ( dyn TlsTransport @ NtTlsStream { w } ) id alpn_prefs )
+    } {}
+    ^ ( tls_accept_ident ( __tcp_conn_release c ) id alpn_prefs )
 }
 
 // Render a NetErr variant name as a raw `s` for log lines.
@@ -590,9 +644,19 @@ unsafe & `c` @ nurl_tcp_listen_opts s host i port i backlog i flags → i
 // encodings.
 @ _load_tls_ident s cert_path s key_path → !( Arc TlsIdent ) NetErr {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
+    : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
+    ^ ( tls_ident_pem certpem keypem )
+}
+
+// A server identity from its PEM text in memory — the certificate chain
+// (leaf first) and the private key (EC P-256, RSA or ML-DSA, PKCS#8 or
+// the key's own form): what a TLS listener loads from its files, for a
+// server whose identity is not in files (a generated one, a test's, one
+// from a secret store). NetTlsCertLoad when no certificate parses,
+// NetTlsKeyLoad when the key does not.
+@ tls_ident_pem String certpem String keypem → !( Arc TlsIdent ) NetErr {
     : ( Vec u ) chain ( __net_cert_chain certpem )
     ? == ( vec_len [u] chain ) 0 { ^ @ !( Arc TlsIdent ) NetErr { F ( _net_err_of 10 ) } } {}
-    : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
     // EC first; on failure try RSA (the parsers reject foreign encodings).
     ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
         T sc → { ^ @ !( Arc TlsIdent ) NetErr { T ( tls_ident_ec chain sc ) } }
@@ -1233,9 +1297,7 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
 // IMAP/POP STLS, etc. The conn keeps its identity — no new TcpConn is
 // returned, so callers holding the conn by value see the upgrade.
 @ tcp_starttls TcpConn c s server_name b verify → !v NetErr {
-    // The TLS stack runs over a runtime socket handle; a connection of
-    // another transport has none to hand it.
-    ? ( __tc_is_nt c ) { ^ @ !v NetErr { F # NetErr NetOther } } {}
+    ? ( __tc_is_nt c ) { ^ ( __starttls_over c server_name verify ) } {}
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
     : i fd . ( __tci c ) raw
@@ -1255,6 +1317,26 @@ raw @ net_dialer_over sink %NetDialer d → NetDialer {
             ( __starttls_register fd ( _tls_word tc ) )
             ^ @ !v NetErr { T 0 }
         }
+    }
+}
+
+// tcp_starttls on a connection of another transport: the handshake runs
+// over its transport, which the TLS connection takes over, and the conn
+// becomes a TLS client conn holding it — every copy sees the upgrade, as
+// over a runtime socket. A failed handshake has closed the transport.
+@ __starttls_over TcpConn c s server_name b verify → !v NetErr {
+    : i w ( __tc_take_nt c )
+    ? == w 0 { ^ @ !v NetErr { F # NetErr NetClosed } } {}
+    : !TlsConn TlsErr r ( tls_attach_over ( dyn TlsTransport @ NtTlsStream { w } ) server_name `` ( vec_new [u] ) ? verify 1 0 0 )
+    ?? r {
+        T tc → {
+            : *TcpConnImpl p ( __tci c )
+            = . p tlsh ( _tls_word tc )
+            = . p kind 1
+            = . p owns T
+            ^ @ !v NetErr { T 0 }
+        }
+        F _ → { ^ @ !v NetErr { F # NetErr NetTlsHandshake } }
     }
 }
 
