@@ -41,6 +41,31 @@ $ `src/pg.nu`
     ^ ( pg_connect ( string_data . d host ) . d port ( string_data . d user ) ( string_data . d password ) ( string_data . d db ) sslmode )
 }
 
+// The DSN as a postgres:// URI, user and password percent-encoded.
+@ dsn_url Dsn d s sslmode → String {
+    : String u ( string_from `postgres://` )
+    ( string_append u ( url_percent_encode ( string_data . d user ) ) )
+    ( string_push_str u `:` )
+    ( string_append u ( url_percent_encode ( string_data . d password ) ) )
+    ( string_push_str u `@` )
+    ( string_append u . d host )
+    ( string_push_str u `:` )
+    ( string_push_int u . d port )
+    ( string_push_str u `/` )
+    ( string_append u ( url_percent_encode ( string_data . d db ) ) )
+    ( string_push_str u `?sslmode=` )
+    ( string_push_str u sslmode )
+    ^ u
+}
+
+// T when pg_connect_url refuses `url` as PgBadUrl (before any connection).
+@ bad_url s url → b {
+    ?? ( pg_connect_url url ) {
+        T _ → { ^ F }
+        F e → { ^ != 0 ( nurl_str_eq ( pg_err_name e ) `PgBadUrl` ) }
+    }
+}
+
 @ q PgConn c s sql → b {
     ?? ( pg_query c sql ) {
         T _ → { ^ T }
@@ -88,6 +113,20 @@ $ `src/pg.nu`
         ( env_or `PSQL_TEST_PASSWORD` `` )
         ( env_or `PSQL_TEST_DB` `postgres` )
     }
+
+    // ── connection URI ──
+    ?? ( pg_connect_url ( string_data ( dsn_url d `require` ) ) ) {
+        T c → { ( ok `url: a postgres:// URI connects, sslmode=require over TLS` & == ( pg_conn_tls c ) 1 == ( one_int c `SELECT 7` ( vec_new [PgVal] ) ) 7 ) }
+        F e → { ( ok `url: a postgres:// URI connects, sslmode=require over TLS` F ) ( nurl_print ( pg_err_name e ) ) ( nurl_print `\n` ) }
+    }
+    ?? ( pg_connect_url ( string_data ( dsn_url d `disable` ) ) ) {
+        T c → { ( ok `url: sslmode=disable stays plaintext` == ( pg_conn_tls c ) 0 ) }
+        F e → { ( ok `url: sslmode=disable stays plaintext` F ) }
+    }
+    ( ok `url: another scheme is refused` ( bad_url `mysql://127.0.0.1/db` ) )
+    ( ok `url: no host is refused` ( bad_url `postgres:///db` ) )
+    ( ok `url: a parameter it would ignore is refused` ( bad_url `postgres://127.0.0.1/db?connect_timeout=5` ) )
+    ( ok `url: an sslmode this client lacks is refused` ( bad_url `postgres://127.0.0.1/db?sslmode=verify-ca` ) )
 
     // ── sslmode, SCRAM ──
     ?? ( connect d 0 ) {
@@ -171,8 +210,8 @@ $ `src/pg.nu`
             ( ok `numeric comes as text` ( opt_s_is ( pg_row_s r 0 12 ) `12345678901234` ) )
             ( ok `numeric as a float` ?? ( pg_row_f r 0 12 ) { T x → == x 12345678901234.0 F → F } )
             ( ok `NULL varchar` ( pg_row_is_null r 0 13 ) )
-            ( ok `binary formats were asked for` & == ( pg_result_col_type r 0 ) PG_INT4 == . ( vec_at [PgCol] . r cols 0 ) fmt 1 )
-            ( ok `text format for numeric` == . ( vec_at [PgCol] . r cols 12 ) fmt 0 )
+            ( ok `binary formats were asked for` & == ( pg_result_col_type r 0 ) PG_INT4 == ( pg_result_col_fmt r 0 ) 1 )
+            ( ok `text format for numeric` == ( pg_result_col_fmt r 12 ) 0 )
         }
         F _ → { ( ok `select with a parameter` F ) ( nurl_print ( string_data ( pg_conn_lasterr c ) ) ) ( nurl_print `\n` ) }
     }

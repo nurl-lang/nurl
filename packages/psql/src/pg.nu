@@ -5,7 +5,9 @@
 // a secure connection works on a host with nothing installed.
 //
 //   ( pg_connect host port user password database sslmode ) → !PgConn PgErr
-//   ( pg_query conn sql )                     → !PgResult PgErr  simple protocol:
+//   ( pg_connect_url url )                    → !PgConn PgErr  the same from a
+//                                                postgres:// URI (DATABASE_URL)
+//   ( pg_query conn sql )                   → !PgResult PgErr  simple protocol:
 //                                                any number of statements, text cells
 //   ( pg_query_params conn sql params )       → !PgResult PgErr  extended protocol:
 //                                                `$1 … $n` bound to typed PgVal
@@ -49,6 +51,8 @@ $ `stdlib/std/pool.nu`
 $ `stdlib/std/channel.nu`
 $ `stdlib/std/async_ffi.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/url.nu`
+$ `stdlib/std/arc.nu`
 
 : | PgErr {
     PgConnFail  // could not open the TCP socket, or the connection broke
@@ -61,6 +65,7 @@ $ `stdlib/core/slice.nu`
     PgInsecureAuth  // sslmode=prefer fell back to plaintext and the server asked for the password in the clear or as MD5
     PgPoolTimeout  // pg_pool_get waited its wait_ms and no connection came back
     PgPoolClosed  // the pool was closed
+    PgBadUrl  // pg_connect_url: not a postgres:// URL, or a setting it cannot honour
 }
 
 @ pg_err_name PgErr e → s {
@@ -75,6 +80,7 @@ $ `stdlib/core/slice.nu`
         PgInsecureAuth → `PgInsecureAuth`
         PgPoolTimeout → `PgPoolTimeout`
         PgPoolClosed → `PgPoolClosed`
+        PgBadUrl → `PgBadUrl`
     }
 }
 
@@ -83,15 +89,27 @@ $ `stdlib/core/slice.nu`
 : PgStmt {
     String sql
     i hash  // of sql, compared before the text
+    i seq  // its name is __pg_stmt_name seq
     String name
     ( Vec i ) param_oids
-    ( Vec PgCol ) cols  // fmt = the format asked for (pgw_result_fmt)
+    ( Arc ( Vec PgCol ) ) cols  // fmt = the format asked for (pgw_result_fmt); every result shares them
     ( Vec i ) rfmts  // Bind's result-format codes for cols
     i used  // the connection's clock when last executed (LRU)
 }
 
+// The name a statement the connection prepares is given.
+@ __pg_stmt_name i seq → String {
+    : String name ( string_with_cap 24 )
+    ( string_push_str name `nurl_s` )
+    ( string_push_int name seq )
+    ^ name
+}
+
 // How many prepared statements a connection keeps by default.
 : i PG_STMT_CACHE 64
+
+// The most a connection's send buffers keep between writes.
+: i PG_BUF_KEEP 65536
 
 // ── the connection ────────────────────────────────────────────────
 //
@@ -139,8 +157,7 @@ $ `stdlib/core/slice.nu`
     i started  // 1 once the StartupMessage went out: say Terminate on close
     b broken  // an I/O or protocol failure: the stream is lost
     i txn  // ReadyForQuery's status at the end of startup
-    PgCollect cur  // the answer being read for the head of `pending`
-    b reading  // `cur` holds part of one
+    ( Vec PgCollect ) partial  // the answer being read for the head of `pending`, when one is begun (at most one)
 }
 
 // Its last owner says goodbye — a best-effort Terminate, once the server
@@ -156,20 +173,23 @@ $ `stdlib/core/slice.nu`
     }
 }
 
-// What a waiting request is handed: its answer, or (`lead`) the socket.
+// What a waiting request is handed: its answer, or (`lead`) the socket —
+// with an empty collector then, two buffers' worth. (A struct and not an
+// enum: a payload moved out of an enum received from a Channel is
+// dropped again with it today, agora #264.)
 : PgReply {
     b lead
     PgCollect col
 }
 
-// A request on its way: where its answer goes, and — for an Execute of a
-// cached statement, which sends no Describe — the formats it asked for
-// (`preset`; F: the answer's own RowDescription says).
+// A request on its way: where its answer goes, and the columns its rows
+// come in — for an Execute of a cached statement, which sends no
+// Describe, the statement's own description (shared); for any other
+// request none, and the answer's own RowDescription says.
 : PgSlot {
     i id
     ( Channel PgReply ) ch
-    b preset
-    ( Vec PgCol ) cols
+    ( Arc ( Vec PgCol ) ) cols
 }
 
 // The send side: every copy's, held only between I/O.
@@ -191,6 +211,7 @@ $ `stdlib/core/slice.nu`
     String db_name  // connection identity, for the banner and \conninfo
     String user_name
     String host_name
+    ( Arc ( Vec PgCol ) ) nocols  // the description of a request that brings its own
 }
 
 // A PgConn is a handle on both halves: every copy is the same connection,
@@ -356,10 +377,18 @@ $ `stdlib/core/slice.nu`
 // A request goes on `pending` as its bytes go on `buf`, under one hold of
 // the send side, so the wire's order and pending's agree. Its id says
 // which answer is whose; the answer comes on `ch`.
-@ __pg_slot inout PgTx t ( Channel PgReply ) ch b preset ( Vec PgCol ) cols → i {
+@ __pg_slot inout PgTx t ( Channel PgReply ) ch ( Arc ( Vec PgCol ) ) cols → i {
     : i id . t next_id
     = . t next_id + id 1
-    ( vec_push [PgSlot] . t pending @ PgSlot { id ( Channel_share [PgReply] ch ) preset ( vec_clone [PgCol] cols ) } )
+    ( vec_push [PgSlot] . t pending @ PgSlot { id ( Channel_share [PgReply] ch ) ( arc_clone [( Vec PgCol )] cols ) } )
+    ^ id
+}
+
+// …for a request whose answer describes its own rows.
+@ __pg_slot_plain inout PgTx t ( Channel PgReply ) ch → i {
+    : i id . t next_id
+    = . t next_id + id 1
+    ( vec_push [PgSlot] . t pending @ PgSlot { id ( Channel_share [PgReply] ch ) ( arc_clone [( Vec PgCol )] . t nocols ) } )
     ^ id
 }
 
@@ -396,19 +425,40 @@ $ `stdlib/core/slice.nu`
     ^ ( __pg_lost )
 }
 
-// The answer folded so far, handed over: a fresh one takes its place.
-@ __pg_take_cur inout PgConnImpl c → PgCollect {
-    : PgCollect got . c cur
-    = . c cur ( pgw_collect_new )
-    = . c reading F
-    ^ got
+// Queued requests go out. They are copied into the driver's buffer
+// under the send side's lock and written outside it: a request is tens of
+// bytes, so the copy costs less than the fresh buffer the send side was
+// given before, and neither buffer is ever moved. A buffer a very large
+// batch grew is let go, so its size is not kept for the connection's
+// life. F when the write failed.
+@ __pg_send_queued PgConn h inout PgConnImpl c → b {
+    : ~ PgTx t ( locked_take [PgTx] . h tx )
+    ( bytes_extend_bytes . c txbuf . t buf )
+    ( vec_clear [u] . t buf )
+    ? > ( vec_cap [u] . t buf ) PG_BUF_KEEP { = . t buf ( vec_with_cap [u] 1024 ) } {}
+    ( locked_restore [PgTx] . h tx t )
+    : ~ b ok T
+    ? > ( vec_len [u] . c txbuf ) 0 {
+        ?? ( tcp_write_all . c conn . c txbuf ) { T _ → {} F _ → { = ok F } }
+    } {}
+    ( vec_clear [u] . c txbuf )
+    ? > ( vec_cap [u] . c txbuf ) PG_BUF_KEEP { = . c txbuf ( vec_with_cap [u] 1024 ) } {}
+    ^ ok
 }
 
 // Drive the socket until the answer to request `id` is in: write what is
 // queued — everything queued while the driver waited leaves in one write
-// — read, and fold each answer for the head of `pending`, handing it to
-// its request. Then the socket goes to the next waiting request (or
-// nobody drives). A lost stream fails every request on its way.
+// — read, and hand each answer to the request at the head of `pending`.
+// Then the socket goes to the next waiting request (or nobody drives). A
+// lost stream fails every request on its way.
+//
+// Every complete answer already read is handed over before the driver
+// leaves, not only those up to its own: one read brings the answers of a
+// whole batch, and stopping at its own made each of the others wait for
+// the socket to change hands — a wake-up and a write per request rather
+// than per batch. An answer is folded in a collector made when its first
+// message is in (__pg_next_answer); one a read cut short waits in
+// `partial` for whoever drives next.
 @ __pg_drive PgConn h i id → PgCollect {
     : ~ PgConnImpl c ( locked_take [PgConnImpl] . h io )
     // A connection a fiber used has a non-blocking socket (std/net.nu's
@@ -417,72 +467,36 @@ $ `stdlib/core/slice.nu`
     // fibers and threads, so a thread driving it puts it back first
     // (memoised in the runtime: no syscall when it already is).
     ? == ( nurl_fiber_current ) 0 { ( tcp_set_nonblock_conn . c conn 0 ) } {}
-    : ~ PgCollect mine ( pgw_collect_new )
+    : ~ ? PgCollect mine @ ?PgCollect { F # PgCollect 0 }
     : ~ b have F
     : ~ b lost . c broken
     ~ & ! have ! lost {
-        // Every whole message already read, to the answer it belongs to.
+        // Every answer already read, to its request.
         : ~ b more T
-        ~ & & more ! have ! lost {
-            : i n ( pgw_frame . c rxbuf . c rpos )
-            ? < n 0 { = lost T } {
-                ? == n 0 { = more F } {
-                    ? ! . c reading {
-                        // A new answer begins: the head of `pending` says
-                        // which formats its rows come in.
-                        : ~ PgTx t ( locked_take [PgTx] . h tx )
-                        : ~ PgCollect fresh ( pgw_collect_new )
-                        : ~ b known F
-                        ?? ( vec_get [PgSlot] . t pending 0 ) {
-                            T sl → {
-                                = known T
-                                ? . sl preset { ( pgw_collect_preset fresh . sl cols ) } {}
+        ~ & more ! lost {
+            ?? ( __pg_next_answer h c ) {
+                T got → {
+                    // The head's answer is complete: it leaves `pending`
+                    // and goes to its request.
+                    : ~ PgTx t ( locked_take [PgTx] . h tx )
+                    = . t txn . got txn
+                    : ?PgSlot head ( vec_remove [PgSlot] . t pending 0 )
+                    ( locked_restore [PgTx] . h tx t )
+                    ?? head {
+                        T sl → {
+                            ? == . sl id id { = mine @ ?PgCollect { T got } = have T } {
+                                : b _sent ( chan_send [PgReply] . sl ch @ PgReply { F got } )
                             }
-                            F → {}
                         }
-                        ( locked_restore [PgTx] . h tx t )
-                        // An answer nobody asked for: the stream is not
-                        // what this side thinks it is.
-                        ? ! known { = lost T } {
-                            = . c cur fresh
-                            = . c reading T
-                        }
-                    } {}
-                    ? ! lost {
-                        : i at . c rpos
-                        : i mtype ( __bget . c rxbuf at )
-                        ( pgw_collect_feed . c cur mtype . c rxbuf + at 5 + at n )
-                        = . c rpos + at n
-                        ? . . c cur done {
-                            // The head's answer is complete: it leaves
-                            // `pending` and goes to its request.
-                            : PgCollect got ( __pg_take_cur c )
-                            : ~ PgTx t ( locked_take [PgTx] . h tx )
-                            = . t txn . got txn
-                            : ?PgSlot head ( vec_remove [PgSlot] . t pending 0 )
-                            ( locked_restore [PgTx] . h tx t )
-                            ?? head {
-                                T sl → {
-                                    ? == . sl id id { = mine got = have T } {
-                                        : b _sent ( chan_send [PgReply] . sl ch @ PgReply { F got } )
-                                    }
-                                }
-                                F → { = lost T }
-                            }
-                        } {}
-                    } {}
+                        F → { = lost T }
+                    }
                 }
+                F st → { ? < st 0 { = lost T } { = more F } }
             }
         }
         ? & ! have ! lost {
             // What was queued goes out, then the next answer is read.
-            : ~ PgTx t ( locked_take [PgTx] . h tx )
-            : ( Vec u ) out . t buf
-            = . t buf ( vec_with_cap [u] 1024 )
-            ( locked_restore [PgTx] . h tx t )
-            ? > ( vec_len [u] out ) 0 {
-                ?? ( tcp_write_all . c conn out ) { T _ → {} F _ → { = . c broken T = lost T } }
-            } {}
+            ? ! ( __pg_send_queued h c ) { = . c broken T = lost T } {}
             ? ! lost { ? ! ( __pg_fill c ) { = lost T } {} } {}
         } {}
     }
@@ -490,13 +504,7 @@ $ `stdlib/core/slice.nu`
     // first, so the next requests are on the wire while the socket
     // changes hands rather than after.
     ? & have ! lost {
-        : ~ PgTx t ( locked_take [PgTx] . h tx )
-        : ( Vec u ) out . t buf
-        = . t buf ( vec_with_cap [u] 1024 )
-        ( locked_restore [PgTx] . h tx t )
-        ? > ( vec_len [u] out ) 0 {
-            ?? ( tcp_write_all . c conn out ) { T _ → {} F _ → { = . c broken T = lost T } }
-        } {}
+        ? ! ( __pg_send_queued h c ) { = . c broken T = lost T } {}
     } {}
     ? lost { = . c broken T } {}
     ( locked_restore [PgConnImpl] . h io c )
@@ -509,39 +517,92 @@ $ `stdlib/core/slice.nu`
         ~ > ( vec_len [PgSlot] . t pending ) 0 {
             ?? ( vec_remove [PgSlot] . t pending 0 ) {
                 T sl → {
-                    ? == . sl id id { = mine ( __pg_lost ) } {
+                    ? != . sl id id {
                         : b _sent ( chan_send [PgReply] . sl ch @ PgReply { F ( __pg_lost ) } )
-                    }
+                    } {}
                 }
                 F → {}
             }
         }
-        ? ! have { = mine ( __pg_lost ) } {}
     } {
         ?? ( vec_get [PgSlot] . t pending 0 ) {
-            T sl → { : b _sent ( chan_send [PgReply] . sl ch @ PgReply { T ( pgw_collect_new ) } ) }
+            T sl → { : b _sent ( chan_send [PgReply] . sl ch @ PgReply { T ( pgw_collect_for ( pgw_result_with . t nocols ) ) } ) }
             F → { = . t driving F }
         }
     }
     ( locked_restore [PgTx] . h tx t )
-    ^ mine
+    // Its own answer — or, when the stream was lost before it came, the
+    // lost stream's.
+    ^ ?? mine { T x → x F → ( __pg_lost ) }
 }
 
-// A request's answer as the caller's result: the rows, the server's error
-// (kept as the connection's last), or the lost stream.
-@ __pg_answer PgConn h sink PgCollect answer → !PgResult PgErr {
-    // Rebound to a local before a field leaves it: a field of a sink
-    // parameter handed back inside a result is lost today (agora #257).
-    : ~ PgCollect col answer
-    ? == . col rc 0 { ^ @ !PgResult PgErr { T . col res } } {}
+// The collector for request `sl`'s answer: in its statement's columns when
+// it was a cached one's Execute (one share more of them), else in what
+// its own RowDescription will say.
+@ __pg_collect_for PgSlot sl → PgCollect {
+    ^ ( pgw_collect_for ( pgw_result_with . sl cols ) )
+}
+
+// The collector for the answer of the head of `pending` — F when nobody is
+// waiting for one, and an answer then means the stream is not what this
+// side thinks it is.
+@ __pg_head_collect inout PgTx t → ?PgCollect {
+    ?? ( vec_get [PgSlot] . t pending 0 ) {
+        T sl → { ^ @ ?PgCollect { T ( __pg_collect_for sl ) } }
+        F → { ^ @ ?PgCollect { F # PgCollect 0 } }
+    }
+}
+
+// The next answer, folded from the messages already read: the one begun
+// before (held in `partial`), or a new one when a message of it is in. T
+// with it when it is complete; F 0 when more must be read (what was
+// folded so far waits in `partial`); F -1 when the stream is lost.
+@ __pg_next_answer PgConn h inout PgConnImpl c → !PgCollect i {
+    : i n0 ( pgw_frame . c rxbuf . c rpos )
+    ? < n0 0 { ^ @ !PgCollect i { F -1 } } {}
+    ? == n0 0 { ^ @ !PgCollect i { F 0 } } {}
+    : ~ PgCollect col ?? ( vec_pop [PgCollect] . c partial ) {
+        T x → x
+        F → {
+            : ~ PgTx t ( locked_take [PgTx] . h tx )
+            : ?PgCollect fresh ( __pg_head_collect t )
+            ( locked_restore [PgTx] . h tx t )
+            ?? fresh { T x → x F → { ^ @ !PgCollect i { F -1 } } }
+        }
+    }
+    ~ T {
+        : i n ( pgw_frame . c rxbuf . c rpos )
+        ? < n 0 { ^ @ !PgCollect i { F -1 } } {}
+        ? == n 0 {
+            ( vec_push [PgCollect] . c partial col )
+            ^ @ !PgCollect i { F 0 }
+        } {}
+        : i at . c rpos
+        ( pgw_collect_feed col ( __bget . c rxbuf at ) . c rxbuf + at 5 + at n )
+        = . c rpos + at n
+        ? . col done { ^ @ !PgCollect i { T col } } {}
+    }
+    ^ @ !PgCollect i { F -1 }
+}
+
+// A failed answer as its PgErr: the server's error (rc 3), kept as the
+// connection's last, or the lost stream. The answer is lent: a caller
+// whose answer succeeded moves its rows out itself (`. col res`), so a
+// result is never copied on its way to the caller.
+@ __pg_fail PgConn h PgCollect col → PgErr {
     ? == . col rc 3 {
         : ~ PgTx t ( locked_take [PgTx] . h tx )
-        = . t lasterr ( pgw_notice_text . col err )
-        = . t err . col err
+        ?? . col err {
+            T e → {
+                = . t lasterr ( pgw_notice_text e )
+                = . t err ( pgw_notice_clone e )
+            }
+            F → {}
+        }
         ( locked_restore [PgTx] . h tx t )
-        ^ @ !PgResult PgErr { F # PgErr PgServerError }
+        ^ # PgErr PgServerError
     } {}
-    ^ @ !PgResult PgErr { F # PgErr PgConnFail }
+    ^ # PgErr PgConnFail
 }
 
 // The next whole message during startup, its payload copied out.
@@ -769,8 +830,7 @@ $ `stdlib/core/slice.nu`
         0
         F
         0
-        ( pgw_collect_new )
-        F
+        ( vec_with_cap [PgCollect] 1 )
     }
 
     // ── StartupMessage ──
@@ -816,8 +876,68 @@ $ `stdlib/core/slice.nu`
         ( string_from database )
         ( string_from user )
         ( string_from host )
+        ( arc_new [( Vec PgCol )] ( vec_new [PgCol] ) )
     }
     ^ @ !PgConn PgErr { T @ PgConn { ( locked_new [PgTx] t ) ( locked_new [PgConnImpl] c ) } }
+}
+
+// ── connection URI ────────────────────────────────────────────────
+// The URI that libpq, DATABASE_URL and hosting dashboards hand out:
+//
+//   postgres://[user[:password]@]host[:port][/database][?sslmode=…]
+//
+// (`postgresql://` too). User, password and database are percent-decoded;
+// the port defaults to 5432, the user to `postgres` and the database to the
+// user's name (the server's own default). sslmode is one of the four modes
+// pg_connect implements — disable, prefer (the default, as libpq's),
+// require, verify-full. Another scheme, no host, or any other query
+// parameter is PgBadUrl: a setting the caller wrote is never ignored.
+@ pg_connect_url s url → !PgConn PgErr {
+    : Url u ?? ( url_parse url ) {
+        T x → x
+        F → { ^ @ !PgConn PgErr { F # PgErr PgBadUrl } }
+    }
+    : b pg_scheme | == 1 ( nurl_str_eq ( string_data . u scheme ) `postgres` ) == 1 ( nurl_str_eq ( string_data . u scheme ) `postgresql` )
+    ? | ! pg_scheme == 0 ( string_len . u host ) { ^ @ !PgConn PgErr { F # PgErr PgBadUrl } } {}
+    : ~ String user ( string_from `postgres` )
+    : ~ String password ( string_new )
+    : i ulen ( string_len . u userinfo )
+    ? > ulen 0 {
+        ?? ( string_index_of . u userinfo `:` ) {
+            T at → {
+                = user ( url_percent_decode ( string_data ( string_substr . u userinfo 0 at ) ) )
+                = password ( url_percent_decode ( string_data ( string_substr . u userinfo + at 1 ulen ) ) )
+            }
+            F → { = user ( url_percent_decode ( string_data . u userinfo ) ) }
+        }
+    } {}
+    : ~ String database ( string_clone user )
+    : i plen ( string_len . u path )
+    ? > plen 1 { = database ( url_percent_decode ( string_data ( string_substr . u path 1 plen ) ) ) } {}
+    : ~ i sslmode 1
+    : ( Vec UrlParam ) ps ( url_query_decode ( string_data . u query ) )
+    : i n ( vec_len [UrlParam] ps )
+    : ~ i k 0
+    ~ < k n {
+        : UrlParam p ( vec_at [UrlParam] ps k )
+        : i m ? == 1 ( nurl_str_eq ( string_data . p key ) `sslmode` ) ( __pg_sslmode ( string_data . p val ) ) -1
+        ? < m 0 { ^ @ !PgConn PgErr { F # PgErr PgBadUrl } } {}
+        = sslmode m
+        = k + k 1
+    }
+    : i port ? < . u port 0 5432 . u port
+    ^ ( pg_connect ( string_data . u host ) port ( string_data user ) ( string_data password ) ( string_data database ) sslmode )
+}
+
+// libpq's name for an sslmode pg_connect implements, as its number; -1 for
+// any other (allow and verify-ca are libpq modes this client does not
+// offer, so they are refused rather than mapped to something else).
+@ __pg_sslmode s name → i {
+    ? == 1 ( nurl_str_eq name `disable` ) { ^ 0 } {}
+    ? == 1 ( nurl_str_eq name `prefer` ) { ^ 1 } {}
+    ? == 1 ( nurl_str_eq name `require` ) { ^ 2 } {}
+    ? == 1 ( nurl_str_eq name `verify-full` ) { ^ 3 } {}
+    ^ -1
 }
 
 // ── simple query ──────────────────────────────────────────────────
@@ -831,19 +951,12 @@ $ `stdlib/core/slice.nu`
         ^ @ !PgResult PgErr { F # PgErr PgConnFail }
     } {}
     ( pgw_query . t buf sql )
-    : i id ( __pg_slot t ch F ( vec_new [PgCol] ) )
+    : i id ( __pg_slot_plain t ch )
     : b drive ( __pg_claim t )
     ( locked_restore [PgTx] . h tx t )
-    ^ ( __pg_answer h ( __pg_wait h ch id drive ) )
-}
-
-// A failed answer as its PgErr — the server's error kept as the
-// connection's last.
-@ __pg_failure PgConn h sink PgCollect col → PgErr {
-    ?? ( __pg_answer h col ) {
-        T _ → ^ # PgErr PgProtocol
-        F e → ^ e
-    }
+    : PgCollect col ( __pg_wait h ch id drive )
+    ? == . col rc 0 { ^ @ !PgResult PgErr { T . col res } } {}
+    ^ @ !PgResult PgErr { F ( __pg_fail h col ) }
 }
 
 // ── extended query: parameters, binary cells, the statement cache ──
@@ -900,30 +1013,32 @@ $ `stdlib/core/slice.nu`
 
 // Parse + Describe + Sync under `name`: the statement as the server sees
 // it, the formats its results will be asked in decided from the columns.
-@ __pg_prepare PgConn h s sql s name → !PgStmt PgErr {
+@ __pg_prepare PgConn h s sql i seq → !PgStmt PgErr {
+    : String name ( __pg_stmt_name seq )
     : ( Channel PgReply ) ch ( chan_new [PgReply] )
     : ~ PgTx t ( locked_take [PgTx] . h tx )
     ? . t broken {
         ( locked_restore [PgTx] . h tx t )
         ^ @ !PgStmt PgErr { F # PgErr PgConnFail }
     } {}
-    ( pgw_parse . t buf name sql )
-    ( pgw_describe . t buf 83 name )
+    ( pgw_parse . t buf ( string_data name ) sql )
+    ( pgw_describe . t buf 83 ( string_data name ) )
     ( pgw_sync . t buf )
-    : i id ( __pg_slot t ch F ( vec_new [PgCol] ) )
+    : i id ( __pg_slot_plain t ch )
     : b drive ( __pg_claim t )
     : i clock . t clock
     ( locked_restore [PgTx] . h tx t )
     : PgCollect col ( __pg_wait h ch id drive )
-    ? != . col rc 0 { ^ @ !PgStmt PgErr { F ( __pg_failure h col ) } } {}
+    ? != . col rc 0 { ^ @ !PgStmt PgErr { F ( __pg_fail h col ) } } {}
     // The columns, each in the format it will be asked in.
-    : i nc ( vec_len [PgCol] . . col res cols )
+    : ( Vec PgCol ) desc ( _pg_cols . col res )
+    : i nc ( vec_len [PgCol] desc )
     : ( Vec PgCol ) cols ( vec_with_cap [PgCol] nc )
     : ( Vec i ) fmts ( vec_with_cap [i] nc )
     : ~ i nbin 0
     : ~ i k 0
     ~ < k nc {
-        : PgCol d ( vec_at [PgCol] . . col res cols k )
+        : PgCol d ( vec_at [PgCol] desc k )
         : i f ( pgw_result_fmt . d oid )
         = nbin + nbin f
         ( vec_push [PgCol] cols @ PgCol { ( string_clone . d name ) . d oid f } )
@@ -935,12 +1050,14 @@ $ `stdlib/core/slice.nu`
     ? & > nbin 0 == nbin nc { ( vec_push [i] rfmts 1 ) } {
         ? > nbin 0 { ( vec_extend [i] rfmts fmts ) } {}
     }
+    : ( Vec i ) poids ?? . col param_oids { T v → ( vec_clone [i] v ) F → ( vec_new [i] ) }
     ^ @ !PgStmt PgErr { T @ PgStmt {
             ( string_from sql )
             ( __pg_hash sql )
-            ( string_from name )
-            ( vec_clone [i] . col param_oids )
-            cols
+            seq
+            name
+            poids
+            ( arc_new [( Vec PgCol )] cols )
             rfmts
             clock
         } }
@@ -949,9 +1066,14 @@ $ `stdlib/core/slice.nu`
 // The server no longer has the statement as it was described: it was
 // deallocated (26000, DISCARD ALL / DEALLOCATE), or a table it reads
 // changed shape under it (0A000, "cached plan must not change result type").
-@ __pg_stale_err PgNotice e → b {
-    : s code ( string_data . e code )
-    ^ | != 0 ( nurl_str_eq code `26000` ) != 0 ( nurl_str_eq code `0A000` )
+@ __pg_stale_err ? PgNotice err → b {
+    ?? err {
+        T e → {
+            : s code ( string_data . e code )
+            ^ | != 0 ( nurl_str_eq code `26000` ) != 0 ( nurl_str_eq code `0A000` )
+        }
+        F → { ^ F }
+    }
 }
 
 // Take statement `name` out of the cache, its Close queued: the request
@@ -996,8 +1118,8 @@ $ `stdlib/core/slice.nu`
             ( pgw_bind . t buf `` ( string_data . st name ) params . st param_oids . st rfmts )
             ( pgw_execute . t buf `` 0 )
             ( pgw_sync . t buf )
-            : i id ( __pg_slot t ch T . st cols )
-            : String sname ( string_clone . st name )
+            : i id ( __pg_slot t ch . st cols )
+            : i sseq . st seq
             ( vec_push [PgStmt] . t stmts st )
             : b drive ( __pg_claim t )
             ( locked_restore [PgTx] . h tx t )
@@ -1006,26 +1128,27 @@ $ `stdlib/core/slice.nu`
             // anything: close it, prepare it afresh and run it once more.
             ? & & == tries 0 == . col rc 3 & == . col txn 73 ( __pg_stale_err . col err ) {
                 = tries 1
-                ( __pg_forget h sname )
-            } { ^ ( __pg_answer h col ) }
+                ( __pg_forget h ( __pg_stmt_name sseq ) )
+            } {
+                ? == . col rc 0 { ^ @ !PgResult PgErr { T . col res } } {}
+                ^ @ !PgResult PgErr { F ( __pg_fail h col ) }
+            }
         } {
             // Not cached, or no cache: prepare under a name of its own (an
             // unnamed statement could be replaced by another request's
             // Parse between the two round trips), then run.
-            : String name ( string_with_cap 24 )
-            ( string_push_str name `nurl_s` )
-            ( string_push_int name . t stmt_seq )
-            = . t stmt_seq + . t stmt_seq 1
+            : i seq . t stmt_seq
+            = . t stmt_seq + seq 1
             ( locked_restore [PgTx] . h tx t )
-            : PgStmt st \ ( __pg_prepare h sql ( string_data name ) )
+            : PgStmt st \ ( __pg_prepare h sql seq )
             : ~ PgTx t2 ( locked_take [PgTx] . h tx )
             ? . t2 broken {
                 ( locked_restore [PgTx] . h tx t2 )
                 ^ @ !PgResult PgErr { F # PgErr PgConnFail }
             } {}
-            ( pgw_bind . t2 buf `` ( string_data name ) params . st param_oids . st rfmts )
+            ( pgw_bind . t2 buf `` ( string_data . st name ) params . st param_oids . st rfmts )
             ( pgw_execute . t2 buf `` 0 )
-            : i id ( __pg_slot t2 ch T . st cols )
+            : i id ( __pg_slot t2 ch . st cols )
             // Into the cache — unless it has no room for any, or another
             // request prepared the same SQL meanwhile: then this one is
             // closed after its run, in the same request.
@@ -1033,14 +1156,16 @@ $ `stdlib/core/slice.nu`
                 ( __pg_stmt_trim t2 . t2 stmt_cap )
                 ( vec_push [PgStmt] . t2 stmts st )
             } {
-                ( pgw_close . t2 buf 83 ( string_data name ) )
+                ( pgw_close . t2 buf 83 ( string_data . st name ) )
                 // No cache any more: what it still holds goes too.
                 ? <= . t2 stmt_cap 0 { ( __pg_stmt_trim t2 1 ) } {}
             }
             ( pgw_sync . t2 buf )
             : b drive ( __pg_claim t2 )
             ( locked_restore [PgTx] . h tx t2 )
-            ^ ( __pg_answer h ( __pg_wait h ch id drive ) )
+            : PgCollect col ( __pg_wait h ch id drive )
+            ? == . col rc 0 { ^ @ !PgResult PgErr { T . col res } } {}
+            ^ @ !PgResult PgErr { F ( __pg_fail h col ) }
         }
     }
     ^ @ !PgResult PgErr { F # PgErr PgProtocol }
