@@ -106,6 +106,8 @@ def comp : Kind → Kind → Kind
   | .view, .view => .view
   | .name b t, _ => .name b t
   | _, .name b t => .name b t
+  | .share, _ => .share   -- A3.1: what a payload borrow reaches is the payload's
+  | _, .share => .share
   | _, _ => .inner
 
 /-- The handle of a borrowed slice parameter is a view. -/

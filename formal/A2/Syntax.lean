@@ -115,6 +115,8 @@ inductive Kind where
   | inner
   | view
   | name (b : Eff) (t : Ty)
+  /-- A3.1: inside a payload a share reaches (`arcGet`): through shares. -/
+  | share
 deriving DecidableEq, Repr
 
 def Kind.isName : Kind → Bool
@@ -143,6 +145,7 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .realloc, .view => true
   | .realloc, .inner => false
   | .realloc, .self => hv
+  | .realloc, .share => false   -- A3.1: a payload never moves
   | .drop, .self => hv
   | .replace, _ => true
   | _, .name _ _ => false

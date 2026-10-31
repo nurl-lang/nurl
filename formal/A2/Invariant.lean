@@ -155,9 +155,8 @@ inductive Child : Val → Val → Prop
   | pkg {v : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Child v (.pkg fs te ms v cs)
 
-/-- `n` lies strictly inside `t`: in it, or (A3.1) in the payload of a share
-    it holds. -/
-def Below (n t : Val) : Prop := ∃ e, Child e t ∧ SubS n e
+/-- `n` lies strictly inside `t`. -/
+def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
 
 /-- `n` is `v` or one of its parts through struct fields and enum payloads
     (never through a `Vec`'s elements): what a binding holds directly. -/
@@ -169,9 +168,6 @@ inductive Top : Val → Val → Prop
   | inr {n a : Val} : Top n a → Top n (.inr a)
   | pkg {n a : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Top n a → Top n (.pkg fs te ms a cs)
-  /-- A3.1: a share holds its payload directly: a borrow reaches it through
-      the share. -/
-  | arc {n p : Val} {k : Nat} : Top n p → Top n (.arc k p)
 
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles). -/
@@ -193,7 +189,9 @@ def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
 def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0 ∨
+  -- A3.1: a payload borrow: in a payload a share in the root's node reaches
+  k = .share ∧ ThruS n n0
 
 /-- What a value captured by name (the closures in it) is held, by name,
     in `H`. -/

@@ -128,26 +128,23 @@ theorem SubS.trans {a b c : Val} (h1 : SubS a b) (h2 : SubS b c) : SubS a c := b
   | sub h => exact h1.trans_sub h
   | arc hk _ ih => exact .arc hk ih
 
-theorem Below.subS {n t : Val} (h : Below n t) : SubS n t := by
+theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
   obtain ⟨e, hc, hs⟩ := h
-  exact hs.trans_sub (hc.sub (Sub.refl _))
+  exact hc.sub hs
 
-theorem Below.of_subS_below {a b c : Val} (h1 : SubS a b) (h2 : Below b c) : Below a c := by
+theorem Below.of_sub_below {a b c : Val} (h1 : Sub a b) (h2 : Below b c) : Below a c := by
   obtain ⟨e, hc, hs⟩ := h2
   exact ⟨e, hc, h1.trans hs⟩
-
-theorem Below.of_sub_below {a b c : Val} (h1 : Sub a b) (h2 : Below b c) : Below a c :=
-  Below.of_subS_below (.sub h1) h2
 
 theorem Sub.of_below_sub {a b c : Val} (h1 : Below a b) (h2 : Sub b c) : Below a c := by
   induction h2 with
   | refl => exact h1
-  | child he _ ih => exact ⟨_, Child.elem he, ih.subS⟩
-  | fst _ ih => exact ⟨_, Child.fst, ih.subS⟩
-  | snd _ ih => exact ⟨_, Child.snd, ih.subS⟩
-  | inl _ ih => exact ⟨_, Child.inl, ih.subS⟩
-  | inr _ ih => exact ⟨_, Child.inr, ih.subS⟩
-  | pkg _ ih => exact ⟨_, Child.pkg, ih.subS⟩
+  | child he _ ih => exact ⟨_, Child.elem he, ih.sub⟩
+  | fst _ ih => exact ⟨_, Child.fst, ih.sub⟩
+  | snd _ ih => exact ⟨_, Child.snd, ih.sub⟩
+  | inl _ ih => exact ⟨_, Child.inl, ih.sub⟩
+  | inr _ ih => exact ⟨_, Child.inr, ih.sub⟩
+  | pkg _ ih => exact ⟨_, Child.pkg, ih.sub⟩
 
 theorem nodup_idsL_same {es : List Val} (hn : (idsL es).Nodup) {e1 e2 : Val}
     (h1 : e1 ∈ es) (h2 : e2 ∈ es) {i : Nat} (hi1 : i ∈ e1.ids) (hi2 : i ∈ e2.ids) : e1 = e2 := by
@@ -307,38 +304,6 @@ theorem WFv.arcIn {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {p : Val} (hs : 
   | pkg _ ih => cases hs with | pkg hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .pkg ha⟩
   | arc => cases hs; exact ⟨_, .here⟩
 
-/-- An owned tree holds no handle, even in a payload it reaches through a
-    share. -/
-theorem WFv.not_top_href {τ : Ty} {T : Val} (hw : WFv τ T) {c : Nat} (ht : Top (.href c) T) : False := by
-  induction hw with
-  | int => cases ht
-  | view => cases ht
-  | node _ _ => cases ht
-  | pair _ _ ihv ihw => cases ht with | fst h => exact ihv h | snd h => exact ihw h
-  | inl _ ih => cases ht with | inl h => exact ih h
-  | inr _ ih => cases ht with | inr h => exact ih h
-  | pkg _ ih => cases ht with | pkg h => exact ih h
-  | arc _ _ ih => cases ht with | arc h => exact ih h
-
-/-- A tree of a type that holds no view holds none at its top. -/
-theorem WFv.not_top_view {τ : Ty} {T : Val} (hw : WFv τ T) (hv : τ.holdsView = false) {d o l : Nat}
-    (ht : Top (.view d o l) T) : False := by
-  induction hw with
-  | int => cases ht
-  | view => simp [Ty.holdsView] at hv
-  | node _ _ => cases ht
-  | pair _ _ ihv ihw =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases ht with | fst h => exact ihv hv.1 h | snd h => exact ihw hv.2 h
-  | inl _ ih =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases ht with | inl h => exact ih hv.1 h
-  | inr _ ih =>
-    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
-    cases ht with | inr h => exact ih hv.2 h
-  | pkg _ _ => simp [Ty.holdsView] at hv
-  | arc _ _ ih => cases ht with | arc h => exact ih hv h
-
 /-- What an owned tree reaches through its shares lies in it, or in some
     block's payload. -/
 theorem SubS.loc {m : Mem} (hs : SharesHeld m) {n T : Val} (h : SubS n T) :
@@ -372,6 +337,13 @@ theorem MInv.sharesHeld {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : SharesHeld m := 
   · obtain ⟨_, _, hw, hsh⟩ := hi.blocks kb ⟨u, T⟩ hk
     obtain ⟨u', ha⟩ := hw.arcIn hs
     exact ⟨u', hsh u' k p ha⟩
+
+/-- Every address of an owned tree (a slot's, or a block's payload) is live. -/
+theorem HeapOK.treeAt_alloc {m : Mem} (hh : HeapOK m) {T : Val} (hT : TreeAt m T) :
+    ∀ i ∈ T.ids, m.alloc i = true ∧ i < m.nid := by
+  rcases hT with ⟨x, hx⟩ | ⟨k, u, hk⟩
+  · exact hh.alloc x T hx
+  · exact fun i hi => hh.balloc k ⟨u, T⟩ hk i (List.mem_cons_of_mem _ hi)
 
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by

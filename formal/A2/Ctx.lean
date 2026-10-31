@@ -129,7 +129,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
     intro P' hp
     obtain ⟨dep, hd, n0, d, es, hr, hk, hrest⟩ := h
     refine .href ⟨dep, hp dep hd ?_, n0, d, es, hr, hk, hrest⟩
-    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
+    rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> simp [hk, Kind.bound]
   | view h =>
     intro P' hp
     obtain ⟨dep, hd, ha⟩ := h

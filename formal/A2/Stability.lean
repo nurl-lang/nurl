@@ -24,7 +24,7 @@ theorem vkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : VKeep m m' ⟨r, 
 
 theorem hkeep_name (m m' : Mem) (r : Var) (b : Eff) (t : Ty) : HKeep m m' ⟨r, .name b t⟩ := by
   intro c t H _ _ ⟨_, _, _, _, hl, _⟩
-  rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
+  rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : VKeep m m' dep := by
   intro d o l s ⟨n0, c, es, hr, hk, hl, hw⟩
@@ -122,20 +122,20 @@ theorem dataAt_of_tree {m : Mem} {T n : Val} (ho : TreeAt m T) (hs : Sub n T)
   ⟨T, ho, hs, t, c, es, hn⟩
 
 theorem Lands.subS {k : Kind} {n n0 : Val} (h : Lands k n n0) : SubS n n0 := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, hs⟩
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩ | ⟨_, hs⟩
   · exact .sub (Sub.refl _)
   · exact .sub (Sub.refl _)
-  · exact hs.trans_sub (hc.sub (Sub.refl _))
+  · exact .sub hb.sub
+  · exact hs.subS
 
-theorem Top.subS {n v : Val} (h : Top n v) : SubS n v := by
+theorem Top.sub {n v : Val} (h : Top n v) : Sub n v := by
   induction h with
-  | refl => exact .sub (Sub.refl _)
-  | fst _ ih => exact ih.trans_sub (Sub.fst (Sub.refl _))
-  | snd _ ih => exact ih.trans_sub (Sub.snd (Sub.refl _))
-  | inl _ ih => exact ih.trans_sub (Sub.inl (Sub.refl _))
-  | inr _ ih => exact ih.trans_sub (Sub.inr (Sub.refl _))
-  | pkg _ ih => exact ih.trans_sub (Sub.pkg (Sub.refl _))
-  | arc _ ih => exact .arc (Sub.refl _) ih
+  | refl => exact Sub.refl _
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
+  | pkg _ ih => exact Sub.pkg ih
 
 theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   induction h2 with
@@ -145,20 +145,19 @@ theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   | inl _ ih => exact Top.inl ih
   | inr _ ih => exact Top.inr ih
   | pkg _ ih => exact Top.pkg ih
-  | arc _ ih => exact Top.arc ih
 
 theorem Top.node {n : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Top n (.node t c d es)) :
     n = .node t c d es := by
   cases h; rfl
 
-/-- Every node a root reaches is inside some owned tree, or (A3.1) in the
-    payload of a share one holds. -/
+/-- Every node a root reaches is inside some owned tree (A3.1: a slot's, or
+    a block's payload). -/
 theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
-    ∃ T, TreeAt m T ∧ SubS n T := by
+    ∃ T, TreeAt m T ∧ Sub n T := by
   rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, T, hT, hs, _⟩ | ⟨_, d, _, _, _, _, T, hT, hs, _⟩
-  · exact ⟨T, Or.inl ⟨r, h⟩, ht.subS⟩
-  · exact ⟨T, hT, .sub hs⟩
-  · exact ⟨T, hT, .sub hs⟩
+  · exact ⟨T, Or.inl ⟨r, h⟩, ht.sub⟩
+  · exact ⟨T, hT, hs⟩
+  · exact ⟨T, hT, hs⟩
 
 theorem append_assoc_sub {P H : List Dep} : (P ++ H) ++ H ⊆ P ++ H := by
   intro d hd
@@ -190,13 +189,13 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) (hs : SharesHeld m) {c : Nat} {n : 
     ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0 := by
   induction hok with
   | int => cases ht
-  | arc _ hw _ => cases ht with | arc h => exact (hw.not_top_href h).elim
+  | arc _ _ _ => cases ht
   | view _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, n1, d, es, hr1, hl, _, _⟩ := h
     cases ht
     obtain ⟨T, hT, hsT⟩ := hr1.owned
-    obtain ⟨T', hT', hs'⟩ := SubS.tree hs hT (hl.subS.trans hsT)
+    obtain ⟨T', hT', hs'⟩ := SubS.tree hs hT (hl.subS.trans_sub hsT)
     have := nodeAt_unique hh hn ⟨T', hT', hs', t, d, es, rfl⟩
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hl⟩
@@ -221,7 +220,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) (hs : SharesHeld m) {d o l : Nat} {
     ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧ Lands dep.kind n n0 := by
   induction hok with
   | int => cases ht
-  | arc _ hw hv => cases ht with | arc h => exact (hw.not_top_view hv h).elim
+  | arc _ _ _ => cases ht
   | href _ => cases ht
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, n1, c, es, hr1, hk, _, _⟩ := h
@@ -229,10 +228,10 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) (hs : SharesHeld m) {d o l : Nat} {
     have hl' : Lands dep.kind (.node t c d es) n1 := by
       rcases hk with ⟨h1, h2⟩ | ⟨h1, h2⟩
       · exact Or.inr (Or.inl ⟨h1, h2⟩)
-      · exact Or.inr (Or.inr ⟨h1, h2⟩)
+      · exact Or.inr (Or.inr (Or.inl ⟨h1, h2⟩))
     have hks : dep.kind ≠ .self := by rcases hk with ⟨h1, _⟩ | ⟨h1, _⟩ <;> rw [h1] <;> decide
     obtain ⟨T, hT, hsT⟩ := hr1.owned
-    obtain ⟨T', hT', hs'⟩ := SubS.tree hs hT (hl'.subS.trans hsT)
+    obtain ⟨T', hT', hs'⟩ := SubS.tree hs hT (hl'.subS.trans_sub hsT)
     have := dataAt_unique hh hn ⟨T', hT', hs', t, c, es, rfl⟩
     subst this
     exact ⟨dep, List.mem_append_left _ hd, n1, hr1, hks, hl'⟩
@@ -262,7 +261,7 @@ theorem valOK_via {m : Mem} (hs : SharesHeld m) {y : Var} {T : Val} (hy : m.st y
     intro Q ht hq
     obtain ⟨dep, hd, n1, d, es, hr1, hl, hw, hv⟩ := h
     obtain ⟨T', hoT, hsT⟩ := hr1.owned
-    obtain ⟨T'', hT'', hs''⟩ := SubS.tree hs hoT (hl.subS.trans hsT)
+    obtain ⟨T'', hT'', hs''⟩ := SubS.tree hs hoT (hl.subS.trans_sub hsT)
     exact .href ⟨_, hq, _, d, es,
       Or.inr (Or.inl ⟨T, c, hy, ht, T'', hT'', hs'', t, d, es, rfl⟩),
       Or.inr (Or.inl ⟨rfl, rfl⟩), hw, hv⟩
@@ -272,9 +271,9 @@ theorem valOK_via {m : Mem} (hs : SharesHeld m) {y : Var} {T : Val} (hy : m.st y
     have hsub : SubS (.node t c d es) n1 := by
       rcases hk with ⟨_, h⟩ | ⟨_, h⟩
       · rw [h]; exact .sub (Sub.refl _)
-      · exact h.subS
+      · exact .sub h.sub
     obtain ⟨T', hoT, hsT⟩ := hr1.owned
-    obtain ⟨T'', hT'', hs''⟩ := SubS.tree hs hoT (hsub.trans hsT)
+    obtain ⟨T'', hT'', hs''⟩ := SubS.tree hs hoT (hsub.trans_sub hsT)
     exact .view ⟨_, hq, _, c, es,
       Or.inr (Or.inr ⟨T, d, o, l, hy, ht, T'', hT'', hs'', t, c, es, rfl⟩),
       Or.inl ⟨rfl, rfl⟩, hlen, hw⟩
@@ -308,7 +307,7 @@ theorem bor_lands {m : Mem} (hh : HeapOK m) (hs : SharesHeld m) {p : Var} {τ : 
 /-- What a dependency reaches in memory is reached through one of the
     three kinds that reach memory. -/
 theorem lands_bound {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.bound = .none := by
-  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
 
 /-- Every borrowed parameter reaches memory inside a frozen owner's tree. -/
 
@@ -342,7 +341,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
   rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
-  · exact ⟨dep.root, T, hF, hown, hl.subS.trans ht.subS⟩
+  · exact ⟨dep.root, T, hF, hown, hl.subS.trans_sub ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
     obtain ⟨slr, hslr, _, hsor, _, _⟩ := hi.slot dep.root Er hEr
@@ -424,7 +423,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
       cases h1 <;> cases ht
   obtain ⟨Er, hEr, hroot⟩ := hi.wf p E hp hlive (Or.inl hnint) dep.root hdv
   rcases hr with ⟨T, hown, ht⟩ | ⟨w, c, hc, ht, hn⟩ | ⟨w, d, o, l, hc, ht, hn⟩
-  · exact ⟨dep.root, T, hF, hown, hl.subS.trans ht.subS⟩
+  · exact ⟨dep.root, T, hF, hown, hl.subS.trans_sub ht.sub⟩
   all_goals
     have hlt := hi.rootbLt p E hp hm dep.root hdv
     obtain ⟨slr, hslr, _, hsor, _, _⟩ := hi.slot dep.root Er hEr
@@ -527,7 +526,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
   | @href t c P H h =>
     obtain ⟨dep, hd, n0, d, es, hr, hk, hw', hv, hn, hsh⟩ := h
     have hkm : (!dep.kind.isName) = true := by
-      rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+      rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
     refine .href ⟨dep, List.mem_filter.mpr ⟨hd, hkm⟩, n0, d, es, hr, hk, hw', hv.memDeps, ?_, hsh⟩
     intro c' hc'
     rw [hw'.names_nil_fn hf] at hc'; cases hc'
@@ -642,16 +641,24 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   intro c2 t2 H hH hb ⟨n0, d2, es2, hr, hkk, hw, hv, hn, hsh⟩
   have := rootNode_node hev.before hr
   subst this
-  rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hb⟩
+  rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hb'⟩ | ⟨hsk, kk, p, hk', hsp⟩
   · cases heq
     exact ⟨_, d', es', Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨hs, rfl⟩, hev.wf, no_views (hk hs) _ _ _,
       no_names hev.wf (hk hs) _, hsh'⟩
   · exact absurd hvw hkv
-  · obtain ⟨e, hc, hs⟩ := hb
+  · obtain ⟨e, hc, hs⟩ := hb'
     cases hc with
     | elem he =>
-      exact ⟨_, d2, es2, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩),
-        hw, hv.keep hH, hn, hsh.of_blk hb⟩
+      exact ⟨_, d2, es2, Or.inl ⟨_, hev.after, Top.refl _⟩,
+        Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hpre e he), hs⟩)), hw, hv.keep hH, hn, hsh.of_blk hb⟩
+  · -- A3.1: through a share in an element: the payload is as it was
+    rcases hk'.cases' with h | ⟨e, hc, hs⟩
+    · cases h
+    · cases hc with
+      | elem he =>
+        exact ⟨_, d2, es2, Or.inl ⟨_, hev.after, Top.refl _⟩,
+          Or.inr (Or.inr (Or.inr ⟨hsk, kk, p, Sub.child (hpre e he) hs, hsp⟩)), hw, hv.keep hH, hn,
+          hsh.of_blk hb⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/
@@ -661,10 +668,11 @@ theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   intro c2 t2 H hH _ ⟨n0, d2, es2, hr, hkk, hw, hv, _⟩
   have := rootNode_node hev.before hr
   subst this
-  rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
+  rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
   · cases heq
     exact ⟨_, d', es', Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨rfl, rfl⟩, hev.wf, no_views ht _ _ _,
       no_names hev.wf ht _, hsh'⟩
+  · cases hin
   · cases hin
   · cases hin
 
@@ -674,17 +682,23 @@ theorem comp_self_left (k : Kind) : comp .self k = k := by cases k <;> rfl
 
 /-- What lands in `p`'s node with kind `k` lands in the node `p` borrows
     from, with the composed kind. -/
-theorem lands_comp {n0 n1 N : Val} {kp k : Kind}
-    (hp : kp = .self ∧ n0 = n1 ∨ kp = .view ∧ n0 = n1 ∨ kp = .inner ∧ Below n0 n1)
-    (hk : k = .self ∧ N = n0 ∨ k = .view ∧ N = n0 ∨ k = .inner ∧ Below N n0) :
-    comp kp k = .self ∧ N = n1 ∨ comp kp k = .view ∧ N = n1 ∨ comp kp k = .inner ∧ Below N n1 := by
-  rcases hp with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb⟩ <;>
-    rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb'⟩
+theorem lands_comp {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :
+    Lands (comp kp k) N n1 := by
+  rcases hp with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb⟩ | ⟨rfl, hth⟩ <;>
+    rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb'⟩ | ⟨rfl, hth'⟩
   all_goals first
     | exact Or.inl ⟨rfl, rfl⟩
     | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
-    | exact Or.inr (Or.inr ⟨rfl, hb'⟩)
-    | exact Or.inr (Or.inr ⟨rfl, hb⟩)
-    | exact Or.inr (Or.inr ⟨rfl, Below.of_subS_below hb'.subS hb⟩)
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, hb'⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, hb⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, Below.of_sub_below hb'.sub hb⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨rfl, hth'⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨rfl, hth⟩))
+    | (obtain ⟨kk, p, hk1, hs1⟩ := hth'
+       exact Or.inr (Or.inr (Or.inr ⟨rfl, kk, p, hk1.trans hb.sub, hs1⟩)))
+    | (obtain ⟨kk, p, hk1, hs1⟩ := hth
+       exact Or.inr (Or.inr (Or.inr ⟨rfl, kk, p, hk1, SubS.of_sub hb'.sub hs1⟩)))
+    | (obtain ⟨kk, p, hk1, hs1⟩ := hth
+       exact Or.inr (Or.inr (Or.inr ⟨rfl, kk, p, hk1, hth'.subS.trans hs1⟩)))
 
 end A2
