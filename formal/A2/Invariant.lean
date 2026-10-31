@@ -189,9 +189,7 @@ def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
 def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0 ∨
-  -- A3.1: a payload borrow: in a payload a share in the root's node reaches
-  k = .share ∧ ThruS n n0
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
 
 /-- What a value captured by name (the closures in it) is held, by name,
     in `H`. -/

@@ -44,13 +44,6 @@ inductive SubS : Val → Val → Prop
   | sub {v t : Val} : Sub v t → SubS v t
   | arc {v t p : Val} {k : Nat} : Sub (.arc k p) t → SubS v p → SubS v t
 
-/-- A3.1: `v` lies in the payload of a share `t` holds: reached through it. -/
-def ThruS (v t : Val) : Prop := ∃ k p, Sub (.arc k p) t ∧ SubS v p
-
-theorem ThruS.subS {v t : Val} (h : ThruS v t) : SubS v t := by
-  obtain ⟨_, _, hk, hs⟩ := h
-  exact .arc hk hs
-
 /-- A tree someone owns: an owned slot's, or (A3.1) a block's payload. -/
 def TreeAt (m : Mem) (t : Val) : Prop :=
   (∃ x, m.st x = some ⟨true, some t⟩) ∨ (∃ k u, m.blk k = some ⟨u, t⟩)

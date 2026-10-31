@@ -213,22 +213,30 @@ uses `Arc` widely.
   `SharesOK` ties the copy to the block: `m.blk k = some ⟨u, p⟩`. A
   payload is frozen, so the copy never goes stale. `Ty.arc t` is
   owning, it holds a view exactly when `t` does, and it is never copied.
-- **A payload borrow has its own kind of dependency, `Kind.share`.** It
-  lands through shares, `SubS`: in the root's tree, or in the payload of a
-  share the tree holds, recursively. Anything taken from a payload borrow
-  (a field, an element, a payload's share) stays `.share` (`comp`).
-  Replacing the root or dropping its elements ends it, since the share may
-  go with them. Reallocating them leaves it, since a payload never moves.
-  Only this kind looks through shares, which is why `Top` and `Below` can
-  stay structural. If a tree's *views* could land through its own shares,
-  a struct holding a share `a` and a view of the same block taken through
-  another share `b` would view memory its own share reaches. That breaks
-  `SelfFree`, which A2 needs (`ViewsOK.dropSelf`, `keep_except`), since
-  `liftE` can put a binding's own root into what it holds.
-- **The first cut takes no view of a payload**: `RhsT.view` asks that the
-  slice's dependencies hold no `.share`. h288 and h289, the probes that
-  view a payload, are rejected by nurlc for the write they make. A read-only
-  view of a payload is a later step, the same one as a view-holding payload.
+- **The first cut's payload holds no allocation** (`Ty.plain`): integers,
+  structs and enums of them, and shares (`Arc (Arc i)`, h211). `arcGet`
+  lends the payload as it is (`lendOf p = p`), with no handle into it, so
+  no borrow ever lands inside a block. `Top`, `Below` and `Lands` stay
+  exactly A2's, and a block owns only its own address. What this cut
+  proves is what is new about `Arc`: counted shares, clone and drop, the
+  sweep, the count across threads.
+- **Why a `Vec` payload is the second cut.** A borrow into a payload has
+  to reach it through a share that can sit anywhere in its root's tree.
+  Two ways to model that were tried, and each runs into the same problem.
+  - *A share-transparent `Top` / `Below`.* A struct may hold a share `a`
+    and a view of the same block taken through another share `b`. Typing
+    allows it, and it is safe, since `b` keeps the block alive. But the
+    struct then views memory its own share reaches, so `SelfFree` fails.
+    A2 needs `SelfFree` (`ViewsOK.dropSelf`, `keep_except`), because
+    `liftE` can put a binding's own root into what it holds.
+  - *A kind of its own (`Kind.share`) that alone looks through shares.*
+    Banning views of a payload is then not local. A callee that returns a
+    view of a borrowed parameter, called with a payload borrow, comes back
+    with a `.share` view after the reroot.
+  The second cut needs one of two fixes. One: a view of a payload is valid
+  while its block exists, and the sweep keeps every block a live view
+  reaches. Two: an invariant that a stored view never depends on its
+  holder's own share.
 - `RhsT.arcNew y`: `y`'s tree moves into a fresh block with `rc = 1`. The
   share is owned and holds what `y` held, since the payload views what `y`
   viewed (nothing, in the first cut below).

@@ -91,9 +91,9 @@ theorem MInv.vec_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
     obtain ⟨c, rfl, dep, hd, hh⟩ := valOK_vec.mp hok
     obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
     obtain ⟨T, hoT, hsT⟩ := hr.owned
-    obtain ⟨T', hT', hsub⟩ := SubS.tree hi.sharesHeld hoT (hla.subS.trans hsT)
-    have hna : NodeAt m c (.node t c d es) := ⟨T', hT', hsub, t, d, es, rfl⟩
-    have ha := hi.heap.treeAt_alloc hT'
+    have hsub : Sub (.node t c d es) T := hla.sub.trans hsT
+    have hna : NodeAt m c (.node t c d es) := ⟨T, hoT, hsub, t, d, es, rfl⟩
+    have ha := hi.heap.treeAt_alloc hoT
     refine ⟨c, d, es, ⟨(ha c (hsub.ids c (by simp))).1,
       (ha d (hsub.ids d (by simp))).1, Or.inr ⟨hv, hna⟩⟩, hw, hvs,
       fun _ => Or.inr (Or.inl ⟨_, c, hv, Top.refl _, hna⟩), fun _ => ⟨dep, hd, n0, hr, hla⟩, hns, hsh⟩
@@ -118,9 +118,9 @@ theorem MInv.slice_node {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     obtain ⟨d, o, l, rfl, dep, hd, hh⟩ := valOK_slice.mp hok
     obtain ⟨n0, c, es, hr, hk, hla, hlen, hw⟩ := viewAt_iff.mp hh
     obtain ⟨T, hoT, hsT⟩ := hr.owned
-    obtain ⟨T', hT', hsub⟩ := SubS.tree hi.sharesHeld hoT (hla.subS.trans hsT)
-    have hda : DataAt m d (.node t c d es) := ⟨T', hT', hsub, t, c, es, rfl⟩
-    have ha := hi.heap.treeAt_alloc hT'
+    have hsub : Sub (.node t c d es) T := hla.sub.trans hsT
+    have hda : DataAt m d (.node t c d es) := ⟨T, hoT, hsub, t, c, es, rfl⟩
+    have ha := hi.heap.treeAt_alloc hoT
     exact ⟨d, o, l, c, es, hv, hda, (ha d (hsub.ids d (by simp))).1, hlen, hw,
       fun _ => Or.inr (Or.inr ⟨_, d, o, l, hv, Top.refl _, hda⟩), fun _ => ⟨dep, hd, n0, hr, hk, hla⟩⟩
 
