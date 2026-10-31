@@ -26,13 +26,40 @@ numbers are.
 | Dimension | Question it answers |
 |---|---|
 | `capacity` | The highest offered rate the server sustains with achieved ≥ 97% of target **and** p99 ≤ `KNEE_MS` — the real ceiling, found by a doubling-then-bisection knee search (body-size agnostic: works at 1 MB's few-thousand req/s and 1 KB's past-200k alike). |
-| `loadlevels` | p50 / p99 / p99.9 at **50 / 80 / 95 %** of that capacity — how the tail behaves as you approach the ceiling. |
-| `cpu` | CPU seconds per request (`/proc/<pid>/stat` utime+stime over a fixed run) — the efficiency number, independent of concurrency. |
+| `loadlevels` | p50 / p99 / p99.9 at **50 / 80 / 95 %** of that capacity — how the tail behaves as you approach the ceiling — and the server's **CPU µs per request** at each of the three (`/proc/<pid>/stat` utime+stime around the cell, divided by the exact response count). The 80 % cell of 1 KB and 16 KB runs `TAIL_RUNS` (3) times and reports median [min–max], so no single 20 s sample carries a tail claim. `cpu`, the separate CPU dimension this replaced, is accepted as an alias of `loadlevels` for one release. |
 | `churn` | Connection churn: a fresh TCP connection per request (no keep-alive) — accept + teardown cost. |
 | `slowloris` | Many byte-at-a-time clients held open while a fast client is measured — does slow-client resource capture starve normal traffic? |
 | `keepalive` | Many concurrent keep-alive connections — per-connection state cost at scale. |
 | `tls_resume` | Does a TLS 1.3 reconnect skip the full handshake? (openssl issues a real request, stays connected for the post-handshake ticket, then reconnects with `-sess_in`.) |
-| `soak` | A 10-minute open-loop run at 80 % — latency drift and RSS growth over time. |
+| `soak` | A 10-minute open-loop run at 80 % — one continuous oha run, sampled every 10 s beside it for the server's RSS, CPU, open fds and the VM's steal: RSS start→end (max) and slope per minute, fds start→end (max), and the windows whose steal passed 2 %. |
+
+## Why a cell looks the way it does
+
+Every cell is one or more oha runs, and each run leaves its oha JSON plus
+the environment around it (`lib.py`, controls in
+`tools/tests/test_http_torture_lib.py`):
+
+- **errors** — oha's `errorDistribution`, split. *Harness artefacts* are
+  errors the measurement makes: `aborted due to deadline` (a request still
+  in flight when `-z` ends; oha leaves those out of its success rate too —
+  an open-loop run at rate q with latency L has about q·L of them),
+  `Too many open files` and `Cannot assign requested address` (the
+  generator's own fd or port limits). Every other message counts against
+  the server, so the expected server count is 0 and anything else is a
+  finding. The cell shows the server count and its commonest type, the
+  artefacts in brackets; *Errors by type* at the end lists every message
+  per cell and server.
+- **†** — the VM's steal passed 2 % of the cell's window (from
+  `/proc/stat`). Coordinated-omission correction back-charges such a stall
+  to whichever server was being measured.
+- **‡** — the generator used ≥ 90 % of its cores (`GEN_CORES`) over the
+  cell: the rate is oha's ceiling, not the server's. On a capacity cell
+  the mark comes from the two ramp runs at the knee.
+- *Environment per cell* lists the steal, iowait and generator CPU behind
+  the marks; *Wall time per dimension* says where the run's time went.
+- The header records the CPU family and flags (`bench/cpu_env.py`, the
+  same helper the TLS bench keys its per-family reports on), the Rust
+  peer's rustc / hyper / rustls / tokio versions and oha's.
 
 ## Fairness
 
@@ -49,9 +76,12 @@ numbers are.
   hyper 1.x on tokio's multi-thread runtime with tokio-rustls for TLS (a
   ticketer installed, so it genuinely resumes) — the stack `axum`/`warp`
   build on.
-- The generator is **verified not to be the bottleneck**: the ramp only
-  trusts a rate where achieved tracked target, and the two servers plateau
-  at *different* rates (proof the ceiling is the server, not `oha`).
+- Whether the generator is the bottleneck is **measured per cell**: oha's
+  own CPU time over the cell against its cores, marked ‡ at ≥ 90 % (see
+  below). The ramp only trusts a rate where achieved tracked target.
+- **Which server goes first alternates per body size** (1 KB NURL first,
+  16 KB Rust first, …), so the first cell after the settle, the one a
+  still-warm box biases, is not the same server's every time.
 
 ## Running
 
@@ -59,7 +89,8 @@ numbers are.
 # smoke (short, ~a few minutes; validates the pipeline)
 bench/http_torture/run_torture.sh
 
-# the real run (~80 min: a 120 s settle after the build, then every cell incl. two 10-min soaks)
+# the real run (under 60 min on the CI runner, build and two 10-min soaks
+# included; the report's "Wall time per dimension" says where it went)
 MODE=full bench/http_torture/run_torture.sh
 
 # a subset

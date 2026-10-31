@@ -41,11 +41,12 @@ cd "$DIR"
 # standard library.)
 files=("$@"); [ ${#files[@]} -eq 0 ] && files=(*.nu stdlib/*.nu)
 
-# check_one INDEX PROBE: print exactly one verdict line for PROBE.
+# check_one INDEX SOURCE LABEL: print exactly one verdict line for the probe
+# at SOURCE, named LABEL (a probe's own name, or `twin:` and its name).
 check_one() {
-    local f="$2" b out rc sout r rr k
-    b="$TMP/$1.$(basename "$f" .nu)"
-    out=$(cd "$ROOT" && ./nurl.sh "$DIR/$f" "$b" 2>&1); rc=$?
+    local src="$2" f="$3" b out rc sout r rr k
+    b="$TMP/$1.$(basename "$src" .nu)"
+    out=$(cd "$ROOT" && ./nurl.sh "$src" "$b" 2>&1); rc=$?
     if [ $rc -ne 0 ]; then
         # Rejected means the compiler refused it: nurlc names the place in
         # a source file (`f.nu:LINE:COL: error:`). A build that failed
@@ -59,7 +60,7 @@ check_one() {
         fi
         return
     fi
-    sout=$(cd "$ROOT" && NURL_SAN=1 ./nurl.sh "$DIR/$f" "${b}_san" 2>&1)
+    sout=$(cd "$ROOT" && NURL_SAN=1 ./nurl.sh "$src" "${b}_san" 2>&1)
     # A sanitizer build that produced no binary is no verdict either. Without
     # the ASan runtime the missing binary was run, printed no fault, and the
     # probe was counted clean.
@@ -79,16 +80,32 @@ check_one() {
 export -f check_one
 export ROOT DIR TMP limit
 
+# Every probe, then each one's elaborated twin (elab.py): its producer form
+# bound by `:` first, the consumer reading the binding — the calculus's
+# shape, and the path every consumer takes once producers are elaborated
+# (Agora #222). A twin that faults is a hole like any other (Agora #242);
+# the ones known open are listed in open/twins.txt and not run.
+srcs=(); labels=()
+for f in "${files[@]}"; do srcs+=("$DIR/$f"); labels+=("$f"); done
+elab_failed=0
+if [ -f "$DIR/elab.py" ]; then
+    if twins=$(python3 "$DIR/elab.py" "$TMP/twins" "${files[@]}"); then
+        for t in $twins; do srcs+=("$TMP/twins/$t"); labels+=("twin:$t"); done
+    else
+        elab_failed=1
+    fi
+fi
 mkdir -p "$TMP/v"
-for i in "${!files[@]}"; do printf '%s\t%s\0' "$i" "${files[$i]}"; done \
-    | xargs -0 -P "$jobs" -n 1 bash -c 'IFS=$'"'"'\t'"'"' read -r i f <<<"$1"; check_one "$i" "$f" > "$TMP/v/$i"' _
+for i in "${!srcs[@]}"; do printf '%s\t%s\t%s\0' "$i" "${srcs[$i]}" "${labels[$i]}"; done \
+    | xargs -0 -P "$jobs" -n 1 bash -c 'IFS=$'"'"'\t'"'"' read -r i s f <<<"$1"; check_one "$i" "$s" "$f" > "$TMP/v/$i"' _
 holes=0
 unchecked=0
-for i in "${!files[@]}"; do
+[ $elab_failed -eq 0 ] || { echo "UNCHECKED elab.py failed: no twin was checked"; unchecked=$((unchecked+1)); }
+for i in "${!srcs[@]}"; do
     if [ -s "$TMP/v/$i" ]; then
         line=$(cat "$TMP/v/$i")
     else
-        line="UNCHECKED ${files[$i]}: the check itself printed no verdict"
+        line="UNCHECKED ${labels[$i]}: the check itself printed no verdict"
     fi
     echo "$line"
     case "$line" in
