@@ -97,7 +97,9 @@ int  *__errno_location(void);
  * and hoping the two declarations of `stderr` agree. */
 struct nl_file;
 void *calloc(nb_size_t n, nb_size_t sz);
+void *realloc(void *p, nb_size_t n);
 void  free(void *p);
+void  nurl_panic(const char *msg);       /* runtime_core.c */
 int   fprintf(struct nl_file *stream, const char *fmt, ...);
 void  abort(void);
 void  exit(int code);
@@ -163,6 +165,7 @@ void nurl__rctx_swap(void *ctx);
 void nurl__rctx_release(void *ctx);
 
 typedef struct NbCoro NbCoro;
+typedef struct NbRwHolder NbRwHolder;
 struct NbCoro {
     nurl_ctx_t   ctx;
     void        *stack_base;      /* mmap origin: guard page + usable  */
@@ -194,6 +197,10 @@ struct NbCoro {
     int          is_fiber;        /* spawned through the fiber API: what
                                    * runtime_run waits for (threads are
                                    * not — as in the hosted runtime)    */
+    int          rw_want;         /* in an rwlock's queue: what for (§9b);
+                                   * 0 once an unlock has granted it    */
+    NbRwHolder  *rwh;             /* the RwLocked locks it reads (§9b),
+                                   * allocated on its first             */
     void        *rctx[NURL_RCTX_WORDS];  /* recover chain + journal    */
 };
 
@@ -460,9 +467,12 @@ static NbCoro *nb_coro_new(void *fn, void *env, int joinable) {
     return c;
 }
 
+static void nb_rw_holder_free(NbRwHolder *h);
+
 static void nb_coro_free(NbCoro *c) {
     if (!c) return;
     nurl__rctx_release(c->rctx);
+    nb_rw_holder_free(c->rwh);
     if (c->stack_base) munmap(c->stack_base, c->stack_total);
     free(c);
     nurl__bare_live_coros--;
@@ -853,6 +863,214 @@ int nurl_fcond_destroy(void *cp)                         { return pthread_cond_d
 int nurl_fcond_wait_ms(void *cp, void *mp, long long ms) { return nurl_cond_wait_ms(cp, mp, ms); }
 int nurl_fcond_signal(void *cp)                          { return pthread_cond_signal(cp); }
 int nurl_fcond_broadcast(void *cp)                       { return pthread_cond_broadcast(cp); }
+
+/* ── §9b  Reader-writer locks (stdlib/std/rwlock.nu) ──────────────
+ *
+ * runtime_ffi.c §19b's nurl_rwlock_* on the cooperative scheduler, with
+ * its semantics: many readers or one writer; a second read guard of a
+ * lock its holder already reads is counted, not taken again; asking for
+ * a lock its holder already has (for writing, or for reading and then
+ * for writing) panics with the hosted message instead of waiting for
+ * itself; the try forms take the lock only when that needs no waiting.
+ *
+ * A holder is the running coroutine or the main context. Waiters queue
+ * in arrival order, and an unlock lets in what the head of the queue can
+ * have: one writer, or the run of readers up to the next writer. It
+ * grants for them: a waiter wakes holding the lock, so nothing that runs
+ * first can take it from under it. A reader that arrives while anyone
+ * waits queues too, so a stream of readers cannot starve a writer. That
+ * is why the counted re-read above matters: a holder that queued for a
+ * lock it already reads would wait behind a writer that waits for it.
+ * The main context cannot park, so its place in a queue is a node of its
+ * own (nb_rw_main) and it drives the scheduler until an unlock grants
+ * it, the shape §8 and §9 give it.
+ *
+ * The lock is a block of nurl_rwlock_size() zeroed bytes the NURL side
+ * allocates; zeroed is free, with nobody waiting. */
+#define NB_RW_READ   1
+#define NB_RW_WRITE  2
+#define NB_RW_INLINE 4
+
+typedef struct { void *l; long long c; } NbRwEnt;
+struct NbRwHolder {
+    int      n, cap;              /* entries held; capacity of `more`  */
+    NbRwEnt  in[NB_RW_INLINE];
+    NbRwEnt *more;                /* entries past the inline ones      */
+};
+
+typedef struct NbRw {
+    int         readers;          /* holders reading                   */
+    int         writing;          /* a writer has it                   */
+    NbRwHolder *writer;           /* who: the self-deadlock check      */
+    NbCoro     *wq_head;          /* waiters in arrival order, ->next  */
+    NbCoro     *wq_tail;
+} NbRw;
+
+static NbRwHolder nb_rw_main_rec;     /* the main context's read locks  */
+static NbCoro     nb_rw_main;         /* its place in a queue           */
+
+static void nb_rw_holder_free(NbRwHolder *h) {
+    if (!h) return;
+    free(h->more);
+    free(h);
+}
+
+__attribute__((noinline, cold)) static void nb_rw_oom(void) {
+    fprintf(stderr, "nurl: out of memory for an RwLocked holder record\n");
+    abort();
+}
+
+/* The running holder's record (a coroutine's, allocated on its first
+ * lock and freed with it). Its address is the holder's identity. */
+static NbRwHolder *nb_rw_me(void) {
+    NbCoro *c = nb_current;
+    if (!c) return &nb_rw_main_rec;
+    if (!c->rwh) {
+        c->rwh = (NbRwHolder *)calloc(1, sizeof(NbRwHolder));
+        if (!c->rwh) nb_rw_oom();
+    }
+    return c->rwh;
+}
+
+static NbRwEnt *nb_rw_ent(NbRwHolder *h, int k) {
+    return k < NB_RW_INLINE ? &h->in[k] : &h->more[k - NB_RW_INLINE];
+}
+
+/* Newest first: guards go in reverse order, so a release and a re-read
+ * find the lock taken last at once. */
+static NbRwEnt *nb_rw_find(NbRwHolder *h, void *l) {
+    for (int k = h->n - 1; k >= 0; k--) {
+        NbRwEnt *e = nb_rw_ent(h, k);
+        if (e->l == l) return e;
+    }
+    return 0;
+}
+
+static void nb_rw_add(NbRwHolder *h, void *l) {
+    if (h->n >= NB_RW_INLINE + h->cap) {
+        int cap = h->cap ? h->cap * 2 : NB_RW_INLINE;
+        NbRwEnt *more = (NbRwEnt *)realloc(h->more, (nb_size_t)cap * sizeof *more);
+        if (!more) nb_rw_oom();
+        h->more = more;
+        h->cap = cap;
+    }
+    NbRwEnt *e = nb_rw_ent(h, h->n++);
+    e->l = l;
+    e->c = 1;
+}
+
+static void nb_rw_drop(NbRwHolder *h, NbRwEnt *e) {
+    *e = *nb_rw_ent(h, --h->n);
+    if (h->n <= NB_RW_INLINE && h->more) { free(h->more); h->more = 0; h->cap = 0; }
+}
+
+__attribute__((noinline, cold)) static void nb_rw_failed(const char *msg) { nurl_panic(msg); }
+#define NB_RW_RD_HAS_W "nurl: cannot take an RwLocked for reading: this thread already holds it for writing (it would wait for itself)"
+#define NB_RW_WR_HAS_W "nurl: cannot take an RwLocked for writing: this thread already holds it for writing (it would wait for itself)"
+#define NB_RW_WR_HAS_R "nurl: cannot take an RwLocked for writing: this thread already holds it for reading (it would wait for itself)"
+
+/* Let in what the head of the queue can have. */
+static void nb_rw_grant(NbRw *r) {
+    NbCoro *c;
+    while ((c = r->wq_head) != 0) {
+        int write = c->rw_want == NB_RW_WRITE;
+        if (r->writing || (write && r->readers)) return;
+        nb_wq_pop(&r->wq_head, &r->wq_tail);
+        if (write) r->writing = 1;
+        else       r->readers++;
+        c->rw_want = 0;
+        if (c != &nb_rw_main) { c->state = NB_RUNNABLE; nb_rq_push(c); }
+        if (write) return;
+    }
+}
+
+static int nb_rw_main_granted(void *u) { (void)u; return nb_rw_main.rw_want == 0; }
+
+/* Queue for `want` and return holding it. A coroutine re-parks until
+ * the grant, whatever else wakes it. */
+static void nb_rw_wait(NbRw *r, int want) {
+    NbCoro *c = nb_current ? nb_current : &nb_rw_main;
+    c->rw_want = want;
+    nb_wq_push(&r->wq_head, &r->wq_tail, c);
+    if (nb_current) {
+        while (c->rw_want) nb_park();
+    } else {
+        nb_drive_until(nb_rw_main_granted, 0,
+                       want == NB_RW_WRITE ? "rwlock_wrlock" : "rwlock_rdlock");
+    }
+}
+
+long long nurl_rwlock_size(void) { return (long long)sizeof(NbRw); }
+
+void nurl_rwlock_init(void *l) {
+    NbRw *r = (NbRw *)l;
+    r->readers = 0;
+    r->writing = 0;
+    r->writer = 0;
+    r->wq_head = r->wq_tail = 0;
+}
+
+void nurl_rwlock_destroy(void *l) { (void)l; }
+
+void nurl_rwlock_rdlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    NbRwHolder *me = nb_rw_me();
+    NbRwEnt *e = nb_rw_find(me, l);
+    if (e) { e->c++; return; }
+    if (r->writer == me) nb_rw_failed(NB_RW_RD_HAS_W);
+    if (!r->writing && !r->wq_head) r->readers++;
+    else                            nb_rw_wait(r, NB_RW_READ);
+    nb_rw_add(me, l);
+}
+
+void nurl_rwlock_rdunlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    NbRwHolder *me = nb_rw_me();
+    NbRwEnt *e = nb_rw_find(me, l);
+    if (e) {
+        if (--e->c > 0) return;
+        nb_rw_drop(me, e);
+    }
+    if (r->readers > 0 && --r->readers == 0) nb_rw_grant(r);
+}
+
+void nurl_rwlock_wrlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    NbRwHolder *me = nb_rw_me();
+    if (r->writer == me) nb_rw_failed(NB_RW_WR_HAS_W);
+    if (nb_rw_find(me, l)) nb_rw_failed(NB_RW_WR_HAS_R);
+    if (!r->writing && !r->readers && !r->wq_head) r->writing = 1;
+    else                                           nb_rw_wait(r, NB_RW_WRITE);
+    r->writer = me;
+}
+
+void nurl_rwlock_wrunlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    r->writer = 0;
+    r->writing = 0;
+    nb_rw_grant(r);
+}
+
+/* Take it when that needs no waiting: 1 taken, 0 not. */
+long long nurl_rwlock_tryrdlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    NbRwHolder *me = nb_rw_me();
+    NbRwEnt *e = nb_rw_find(me, l);
+    if (e) { e->c++; return 1; }
+    if (r->writing || r->wq_head) return 0;
+    r->readers++;
+    nb_rw_add(me, l);
+    return 1;
+}
+
+long long nurl_rwlock_trywrlock(void *l) {
+    NbRw *r = (NbRw *)l;
+    NbRwHolder *me = nb_rw_me();
+    if (r->writing || r->readers || r->wq_head || nb_rw_find(me, l)) return 0;
+    r->writing = 1;
+    r->writer = me;
+    return 1;
+}
 
 /* ── §10  Threads ─────────────────────────────────────────────────
  *
