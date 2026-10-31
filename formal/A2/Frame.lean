@@ -162,7 +162,7 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       (Ex'.live = true → ∀ T, sl.val = some T → NamesIn T Ex'.held) ∧
       (∀ T, sl.val = some T → PkgsOK T) ∧
       -- A2-drop.2: an owner that may run a destructor views only bound roots
-      (Ex'.dtor = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
+      (Ex'.dbind = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
           (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
       (Ex'.dtor = true → Ex'.dbind = true)
@@ -215,10 +215,11 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
-    (hxr : Ex.mode ≠ .rootb) (hds : DtorSafe Γ e hv x)
+    (hxr : Ex.mode ≠ .rootb)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
+    (hdb : ox = none → DbindSafe Γ x)
     (hrem : ox = none → e = .replace)
     (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
       Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = []) :
@@ -324,24 +325,13 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · exact ⟨E', by rw [hrx]; simp, hroot⟩
         · exact ⟨Er, by rw [upd_ne _ _ hrx]; exact hEr, hroot⟩
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
-        rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hnint
+        rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hnint
         rw [killE_vdeps] at hdd
         obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos hnint d hdd hnm
         by_cases hrx : d.root = x
-        · -- a view of `x` that the change keeps: `x` is still bound
-          have hk : e.kills hv d.kind = false := by
-            have h1 := hds v E hE hd hos
-            unfold hitsMem at h1
-            have hg : (E.ty != .int || E.mode == .rootb) = true := by
-              rcases hnint with h | h <;> simp [h]
-            rw [hg, Bool.true_and, List.any_eq_false] at h1
-            have := h1 d hdd
-            simp only [hrx, beq_self_eq_true, hnm, Bool.not_false, Bool.true_and] at this
-            simpa using this
+        · -- a view of `x`: `x` is still bound, or no destructor binding views it
           cases ox with
-          | none =>
-            exfalso; rw [hrem rfl] at hk
-            cases hdk : d.kind <;> rw [hdk] at hk hnm <;> simp_all [Eff.kills, Kind.isName]
+          | none => exact absurd hrx (hdb rfl v E hE hd hos hnint d hdd hnm)
           | some Ex' =>
             obtain ⟨_, _, _, _, hm, _⟩ := hox
             rw [hrx, hx] at hEr; cases hEr
