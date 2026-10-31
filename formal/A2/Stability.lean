@@ -107,26 +107,35 @@ theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : Li
 
 theorem nodeAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs : Sub n T)
     {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : NodeAt m c n :=
-  ⟨o, T, ho, hs, t, d, es, hn⟩
+  ⟨T, Or.inl ⟨o, ho⟩, hs, t, d, es, hn⟩
 
 theorem dataAt_of_owned {m : Mem} {o : Var} {T n : Val} (ho : OwnedAt m o T) (hs : Sub n T)
     {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : DataAt m d n :=
-  ⟨o, T, ho, hs, t, c, es, hn⟩
+  ⟨T, Or.inl ⟨o, ho⟩, hs, t, c, es, hn⟩
 
-theorem Lands.sub {k : Kind} {n n0 : Val} (h : Lands k n n0) : Sub n n0 := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩
-  · exact Sub.refl _
-  · exact Sub.refl _
-  · exact hb.sub
+theorem nodeAt_of_tree {m : Mem} {T n : Val} (ho : TreeAt m T) (hs : Sub n T)
+    {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : NodeAt m c n :=
+  ⟨T, ho, hs, t, d, es, hn⟩
 
-theorem Top.sub {n v : Val} (h : Top n v) : Sub n v := by
+theorem dataAt_of_tree {m : Mem} {T n : Val} (ho : TreeAt m T) (hs : Sub n T)
+    {t : Ty} {c d : Nat} {es : List Val} (hn : n = .node t c d es) : DataAt m d n :=
+  ⟨T, ho, hs, t, c, es, hn⟩
+
+theorem Lands.subS {k : Kind} {n n0 : Val} (h : Lands k n n0) : SubS n n0 := by
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, hs⟩
+  · exact .sub (Sub.refl _)
+  · exact .sub (Sub.refl _)
+  · exact hs.trans_sub (hc.sub (Sub.refl _))
+
+theorem Top.subS {n v : Val} (h : Top n v) : SubS n v := by
   induction h with
-  | refl => exact Sub.refl _
-  | fst _ ih => exact Sub.fst ih
-  | snd _ ih => exact Sub.snd ih
-  | inl _ ih => exact Sub.inl ih
-  | inr _ ih => exact Sub.inr ih
-  | pkg _ ih => exact Sub.pkg ih
+  | refl => exact .sub (Sub.refl _)
+  | fst _ ih => exact ih.trans_sub (Sub.fst (Sub.refl _))
+  | snd _ ih => exact ih.trans_sub (Sub.snd (Sub.refl _))
+  | inl _ ih => exact ih.trans_sub (Sub.inl (Sub.refl _))
+  | inr _ ih => exact ih.trans_sub (Sub.inr (Sub.refl _))
+  | pkg _ ih => exact ih.trans_sub (Sub.pkg (Sub.refl _))
+  | arc _ ih => exact .arc (Sub.refl _) ih
 
 theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   induction h2 with
@@ -136,18 +145,20 @@ theorem Top.trans {a b c : Val} (h1 : Top a b) (h2 : Top b c) : Top a c := by
   | inl _ ih => exact Top.inl ih
   | inr _ ih => exact Top.inr ih
   | pkg _ ih => exact Top.pkg ih
+  | arc _ ih => exact Top.arc ih
 
 theorem Top.node {n : Val} {t : Ty} {c d : Nat} {es : List Val} (h : Top n (.node t c d es)) :
     n = .node t c d es := by
   cases h; rfl
 
-/-- Every node a root reaches is inside some owned tree. -/
+/-- Every node a root reaches is inside some owned tree, or (A3.1) in the
+    payload of a share one holds. -/
 theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
-    ∃ o T, OwnedAt m o T ∧ Sub n T := by
-  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, o, T, hT, hs, _⟩ | ⟨_, d, _, _, _, _, o, T, hT, hs, _⟩
-  · exact ⟨r, T, h, ht.sub⟩
-  · exact ⟨o, T, hT, hs⟩
-  · exact ⟨o, T, hT, hs⟩
+    ∃ T, TreeAt m T ∧ SubS n T := by
+  rcases h with ⟨T, h, ht⟩ | ⟨_, c, _, _, T, hT, hs, _⟩ | ⟨_, d, _, _, _, _, T, hT, hs, _⟩
+  · exact ⟨T, Or.inl ⟨r, h⟩, ht.subS⟩
+  · exact ⟨T, hT, .sub hs⟩
+  · exact ⟨T, hT, .sub hs⟩
 
 theorem append_assoc_sub {P H : List Dep} : (P ++ H) ++ H ⊆ P ++ H := by
   intro d hd

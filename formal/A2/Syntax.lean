@@ -213,7 +213,9 @@ inductive Val where
                                                -- a package: its methods' code, its environment
                                                -- (of the ghost type `te`) inline, its interfaces,
                                                -- and the bindings it captured by name
-  | arc (k : Nat)                                -- A3.1: a share of block `k`; the payload is the block's
+  | arc (k : Nat) (p : Val)                      -- A3.1: a share of block `k`, carrying the block's
+                                               -- payload `p` as ghost data (a borrow reaches it
+                                               -- through the share; the block owns its addresses)
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end

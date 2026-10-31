@@ -111,23 +111,43 @@ theorem Sub.trans {a b c : Val} (h1 : Sub a b) (h2 : Sub b c) : Sub a c := by
   | inr _ ih => exact Sub.inr ih
   | pkg _ ih => exact Sub.pkg ih
 
-theorem Below.sub {n t : Val} (h : Below n t) : Sub n t := by
-  obtain ⟨e, hc, hs⟩ := h
-  exact hc.sub hs
+/-! ### Reaching through shares (A3.1) -/
 
-theorem Below.of_sub_below {a b c : Val} (h1 : Sub a b) (h2 : Below b c) : Below a c := by
+theorem SubS.trans_sub {a b c : Val} (h1 : SubS a b) (h2 : Sub b c) : SubS a c := by
+  cases h1 with
+  | sub h => exact .sub (h.trans h2)
+  | arc hk hp => exact .arc (hk.trans h2) hp
+
+theorem SubS.of_sub {a b c : Val} (h1 : Sub a b) (h2 : SubS b c) : SubS a c := by
+  induction h2 with
+  | sub h => exact .sub (h1.trans h)
+  | arc hk _ ih => exact .arc hk ih
+
+theorem SubS.trans {a b c : Val} (h1 : SubS a b) (h2 : SubS b c) : SubS a c := by
+  induction h2 with
+  | sub h => exact h1.trans_sub h
+  | arc hk _ ih => exact .arc hk ih
+
+theorem Below.subS {n t : Val} (h : Below n t) : SubS n t := by
+  obtain ⟨e, hc, hs⟩ := h
+  exact hs.trans_sub (hc.sub (Sub.refl _))
+
+theorem Below.of_subS_below {a b c : Val} (h1 : SubS a b) (h2 : Below b c) : Below a c := by
   obtain ⟨e, hc, hs⟩ := h2
   exact ⟨e, hc, h1.trans hs⟩
+
+theorem Below.of_sub_below {a b c : Val} (h1 : Sub a b) (h2 : Below b c) : Below a c :=
+  Below.of_subS_below (.sub h1) h2
 
 theorem Sub.of_below_sub {a b c : Val} (h1 : Below a b) (h2 : Sub b c) : Below a c := by
   induction h2 with
   | refl => exact h1
-  | child he _ ih => exact ⟨_, Child.elem he, ih.sub⟩
-  | fst _ ih => exact ⟨_, Child.fst, ih.sub⟩
-  | snd _ ih => exact ⟨_, Child.snd, ih.sub⟩
-  | inl _ ih => exact ⟨_, Child.inl, ih.sub⟩
-  | inr _ ih => exact ⟨_, Child.inr, ih.sub⟩
-  | pkg _ ih => exact ⟨_, Child.pkg, ih.sub⟩
+  | child he _ ih => exact ⟨_, Child.elem he, ih.subS⟩
+  | fst _ ih => exact ⟨_, Child.fst, ih.subS⟩
+  | snd _ ih => exact ⟨_, Child.snd, ih.subS⟩
+  | inl _ ih => exact ⟨_, Child.inl, ih.subS⟩
+  | inr _ ih => exact ⟨_, Child.inr, ih.subS⟩
+  | pkg _ ih => exact ⟨_, Child.pkg, ih.subS⟩
 
 theorem nodup_idsL_same {es : List Val} (hn : (idsL es).Nodup) {e1 e2 : Val}
     (h1 : e1 ∈ es) (h2 : e2 ∈ es) {i : Nat} (hi1 : i ∈ e1.ids) (hi2 : i ∈ e2.ids) : e1 = e2 := by
@@ -252,16 +272,33 @@ theorem owned_unique {m : Mem} (hh : HeapOK m) {x y : Var} {t u n1 n2 : Val}
   subst htu
   exact ⟨rfl, sub_unique (hh.nodup x t hx) h1 h2 hi1 hi2⟩
 
+/-- Two subtrees of owned trees (a slot's, or a block's payload) sharing a
+    head address are the same. -/
+theorem treeAt_unique {m : Mem} (hh : HeapOK m) {t u n1 n2 : Val} (ht : TreeAt m t) (hu : TreeAt m u)
+    (h1 : Sub n1 t) (h2 : Sub n2 u) {i : Nat} (hi1 : i ∈ n1.head) (hi2 : i ∈ n2.head) : n1 = n2 := by
+  have hi1' := h1.ids i (Val.head_ids _ i hi1)
+  have hi2' := h2.ids i (Val.head_ids _ i hi2)
+  rcases ht with ⟨x, hx⟩ | ⟨k, a, hk⟩ <;> rcases hu with ⟨y, hy⟩ | ⟨k', b, hk'⟩
+  · exact (owned_unique hh hx hy h1 h2 hi1 hi2).2
+  · exact absurd hi1' (hh.bdisj k' _ x _ hk' hx i (List.mem_cons_of_mem _ hi2'))
+  · exact absurd hi2' (hh.bdisj k _ y _ hk hy i (List.mem_cons_of_mem _ hi1'))
+  · by_cases hkk : k = k'
+    · subst hkk
+      rw [hk] at hk'; cases hk'
+      exact sub_unique (List.nodup_cons.mp (hh.bnodup k _ hk)).2 h1 h2 hi1 hi2
+    · exact absurd (List.mem_cons_of_mem _ hi2')
+        (hh.bdisj2 k k' _ _ hkk hk hk' i (List.mem_cons_of_mem _ hi1'))
+
 theorem nodeAt_unique {m : Mem} (hh : HeapOK m) {c : Nat} {n1 n2 : Val}
     (h1 : NodeAt m c n1) (h2 : NodeAt m c n2) : n1 = n2 := by
-  obtain ⟨x, t, hx, hs1, ty1, d1, es1, rfl⟩ := h1
-  obtain ⟨y, u, hy, hs2, ty2, d2, es2, rfl⟩ := h2
-  exact (owned_unique hh hx hy hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+  obtain ⟨t, ht, hs1, ty1, d1, es1, rfl⟩ := h1
+  obtain ⟨u, hu, hs2, ty2, d2, es2, rfl⟩ := h2
+  exact treeAt_unique hh ht hu hs1 hs2 (i := c) (by simp [Val.head]) (by simp [Val.head])
 
 theorem dataAt_unique {m : Mem} (hh : HeapOK m) {d : Nat} {n1 n2 : Val}
     (h1 : DataAt m d n1) (h2 : DataAt m d n2) : n1 = n2 := by
-  obtain ⟨x, t, hx, hs1, ty1, c1, es1, rfl⟩ := h1
-  obtain ⟨y, u, hy, hs2, ty2, c2, es2, rfl⟩ := h2
-  exact (owned_unique hh hx hy hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])).2
+  obtain ⟨t, ht, hs1, ty1, c1, es1, rfl⟩ := h1
+  obtain ⟨u, hu, hs2, ty2, c2, es2, rfl⟩ := h2
+  exact treeAt_unique hh ht hu hs1 hs2 (i := d) (by simp [Val.head]) (by simp [Val.head])
 
 end A2

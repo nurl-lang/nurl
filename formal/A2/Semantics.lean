@@ -37,13 +37,24 @@ inductive Sub : Val → Val → Prop
   | pkg {v e : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Sub v e → Sub v (.pkg fs te ms e cs)
 
+/-- A3.1: `v` is `t`, inside it, or inside the payload of a share `t` holds:
+    where a borrow of `t` can reach. (`Sub` is the tree `t` owns: a share
+    owns none of its payload; the block does.) -/
+inductive SubS : Val → Val → Prop
+  | sub {v t : Val} : Sub v t → SubS v t
+  | arc {v t p : Val} {k : Nat} : Sub (.arc k p) t → SubS v p → SubS v t
+
+/-- A tree someone owns: an owned slot's, or (A3.1) a block's payload. -/
+def TreeAt (m : Mem) (t : Val) : Prop :=
+  (∃ x, m.st x = some ⟨true, some t⟩) ∨ (∃ k u, m.blk k = some ⟨u, t⟩)
+
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
-  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
+  ∃ t, TreeAt m t ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
 
 /-- The node whose element buffer is `d`, found in an owned tree. -/
 def DataAt (m : Mem) (d : Nat) (n : Val) : Prop :=
-  ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es
+  ∃ t, TreeAt m t ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es
 
 -- Releasing a tree: each address must be live when it is freed.
 mutual
@@ -52,7 +63,7 @@ inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | view {a : Nat → Bool} {d o l : Nat} : Frees a (.view d o l) a
   /-- A3.1: a share frees nothing by itself; the step's sweep frees a block
       no share reaches. -/
-  | arc {a : Nat → Bool} {k : Nat} : Frees a (.arc k) a
+  | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
@@ -127,7 +138,7 @@ def Val.owns : Val → Bool
   | .inl .. => true
   | .inr .. => true
   | .pkg .. => true
-  | .arc _ => true   -- A3.1: a share is owned; dropping it is what counts
+  | .arc _ _ => true   -- A3.1: a share is owned; dropping it is what counts
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is

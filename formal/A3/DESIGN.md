@@ -203,16 +203,28 @@ uses `Arc` widely.
   ghost, below). A block's payload
   tree is owned by the block: `HeapOK`'s one owner per allocation counts
   blocks next to slots, and `Covers` counts them too.
-- `Val.arc k`, a leaf: a share of block `k`. `Ty.arc t` is owning, it
-  holds a view exactly when `t` does, and it is never copied.
+- `Val.arc k p`: a share of block `k`. It carries the block's payload `p`
+  as ghost data, so a borrow reaches the payload through the share. The
+  share can sit anywhere in a tree: a field (h288), an element, or another
+  payload (h211's `Arc (Arc i)`). `Top` and `Below` step into `p`, which
+  lets `RootNode`, `Lands` and the kills (`Eff.kills`) work unchanged. A
+  share owns none of its payload's addresses (`ids (arc k p) = []`) and
+  `Sub` does not enter `p`, so ownership stays with the block.
+  `SharesOK` ties the copy to the block: `m.blk k = some ⟨u, p⟩`. A
+  payload is frozen, so the copy never goes stale. `Ty.arc t` is
+  owning, it holds a view exactly when `t` does, and it is never copied.
 - `RhsT.arcNew y`: `y`'s tree moves into a fresh block with `rc = 1`. The
   share is owned and holds what `y` held, since the payload views what `y`
   viewed (nothing, in the first cut below).
 - `RhsT.arcClone a`: a read of share `a` that adds a new share, `rc + 1`.
   It holds what `a` holds.
-- `RhsT.arcGet a`: the payload, lent. Its entry is a borrow rooted at `a`
-  (`derive a … .view`), holding `a`'s `held`, so it ends with `a` like any
-  borrow.
+- `RhsT.arcGet a`: the payload, lent: `lendOf p`, read from the share
+  itself. Its entry is a borrow rooted where `a` is (`derive a … .self`),
+  holding `a`'s `held`, so it ends with `a` like any borrow. A payload node
+  lands through the share: at the top for `.self`, below for `.inner`.
+  So a field of a payload is the payload's, and so is an element of one.
+  Dropping the root's elements ends it, since the share may go with them.
+  Reallocating them leaves it, since the payload does not move.
 - **Dropping a share is part of freeing a tree.** Every `DropSlot` / `Frees`
   that meets `Val.arc k` does `rc − 1`, and at 0 drops the payload tree in
   turn. A share is then released correctly wherever it lands (a field, a
