@@ -28918,6 +28918,14 @@ unsafe @ bck_join_state s a s b → s {
         : i va ? < i na - # i . ap i 48 BCK_UNINIT
         : i vb ? < i nb - # i . bp i 48 BCK_UNINIT
         : ~ i jv ( bck_join va vb )
+        // (A borrow on one path met a binding consumed, stored or ended on
+        // the other: it may hold nothing here. Remembered as the reason a
+        // later use names — none was, and the use printed an empty source
+        // and line, agora #278.)
+        ? & & == jv BCK_INVALID != va BCK_INVALID != vb BCK_INVALID {
+            : s bk ( bck_bkey `bv_` ( nurl_str_int i ) )
+            ? == 0 ( nurl_sym_len g_bck bk ) { ( bck_put bk `0 0 !join` ) } {}
+        } {}
         // (Stored on one path as a closure's capture only — not an owner's
         // value: owned, as on the other path. agora #160.)
         ? & == jv BCK_MAYBE_MOVED | & == va BCK_STORED | == vb BCK_OWNED == vb BCK_UNINIT & == vb BCK_STORED | == va BCK_OWNED == va BCK_UNINIT {
@@ -32672,6 +32680,15 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s d2 ( nurl_str_cat4 `', and '` sname `' ended at line ` ( nurl_str_cat3 ln ` — ` dwhy ) )
         : s d3 ( nurl_str_cat4 `. Running that closure now would read freed memory. End '` sname ( nurl_str_cat3 `' only after '` name `' is done with the closure, or have the closure capture a copy of its own: ( mem_dup ` ) ( nurl_str_cat sname ` ) bound to a separate name.` ) )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat3 d1 d2 d3 ) )
+        ^ v
+    } {}
+    // (No source to name — a join of paths that disagree: one where it
+    // still borrows, one where it was consumed, stored or its source ended.
+    // Never an empty name or line.)
+    ? | | ( seq ( str_first_word info ) `!join` ) == 0 ( nurl_str_len sname ) | == 0 ( nurl_str_len ln ) ( seq ln `0` ) {
+        : s j1 ( nurl_str_cat3 `'` name `' is used here, but on a path that reaches this line — an earlier round of a loop around it, or one branch of a '?' or '??' — it was consumed, stored or its source ended, while on another it still borrows: here it may hold nothing. ` )
+        : s j2 ( nurl_str_cat4 `Use '` name `' only where it surely still holds its value (inside the branch, or before the loop hands it on), give it a fresh value before this line, or take a copy that lives on its own where it is bound: ( mem_dup ` ( nurl_str_cat name ` ).` ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat j1 j2 ) )
         ^ v
     } {}
     : s m1 ( nurl_str_cat4 `'` name `' borrows from '` sname )
