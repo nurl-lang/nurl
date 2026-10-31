@@ -484,7 +484,7 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Known issues
 
-- **Nine soundness holes are open, each with a fix in progress**:
+- **Twelve soundness holes are open, each with a fix in progress**:
   agora #242 (a join or value block bound by `:` and handed on by name),
   #254 (a `% Drop` holder given a view of a younger binding, then a
   panic), #257 (a field of a `sink` struct parameter handed back inside a
@@ -493,9 +493,12 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   moved out of an enum that was itself taken out of an Option is dropped
   again with the enum), #265 (a struct field bound to a local, then the
   field replaced), #267 (a field read out of an element borrow outlives
-  the elements' drop), #268 (a field reader re-bound, then handed back)
-  and #274 (a block arm of a join whose tail names an owner already
-  moved). `docs/LIMITATIONS.md` gives each one's shape and how to stay
+  the elements' drop), #268 (a field reader re-bound, then handed back),
+  #274 (a block arm of a join whose tail names an owner already moved),
+  #279 (an enum payload lent by `vec_get` out of a local Vec, handed back
+  from a nested match), #280 (a Vec or String field handed to a `sink`
+  stays usable) and #284 (an `inout` callee points the caller's `% Drop`
+  holder at its own local, then panics). `docs/LIMITATIONS.md` gives each one's shape and how to stay
   clear of it. Agora #224, #229, #245, #247 and #252 are closed in
   this release. A release does not say "no hole is known open" while one is.
 

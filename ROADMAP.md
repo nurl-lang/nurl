@@ -644,7 +644,7 @@ new language features.
   #229, a loop-carried borrow tracked only to the source the last walk
   saw; #245, a foreach's element used after the loop; #247, a closure that
   consumes one capture releasing another; and #252, a `% Drop` holder
-  moved on only one path. Nine are open, each with a fix in progress
+  moved on only one path. Twelve are open, each with a fix in progress
   ([`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait

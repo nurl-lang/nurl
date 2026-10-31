@@ -10,8 +10,8 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Nine soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
-Each is a heap-use-after-free in safe code, with a fix in progress:
+**Twelve soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+Each is a use of freed or moved-out memory in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
   by name.** `: String t ? c a b` followed by `^ t`, with `a` and `b`
@@ -68,6 +68,24 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   the way a bare arm is. Until the fix ships, never name an owner that a
   path has moved as a block arm's last value (bind the arm's work before
   the join, then select by name).
+- **agora #279: an enum payload lent by `vec_get` out of a local Vec,
+  handed back from a nested match.** `?? ( vec_get [Msg] ms 0 ) { T m → {
+  ?? m { MSome v → { ^ v } … } } … }` with `ms` a local hands `v` back
+  lent, and `ms` is dropped on the return. Until the fix ships, hand back
+  a copy (`^ ( vec_clone [i] v )`), or match the element one level only.
+- **agora #280: a Vec or String field handed to a `sink` stays usable.**
+  `( take . h buf )` moves the field out and leaves a null handle, and a
+  later `( vec_push [u] . h buf … )` faults (a local in the same place is
+  refused as a use of a moved value). Until the fix ships, do not touch a
+  field again after handing it to a `sink`: hand over the whole struct,
+  or keep the value in a local of its own.
+- **agora #284: an `inout` callee points the caller's `% Drop` view
+  holder at its own local, puts it back before returning, and panics in
+  between.** The callee's check looks only at the state it returns in;
+  the unwind frees the local and then the holder's destructor reads it.
+  Until the fix ships, a function handed a `% Drop` value that reads a
+  view gives it views only of what its caller passed in, never of its own
+  locals, not even for a moment.
 
 Every other safe program found accepted and faulting is closed, and held
 by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
