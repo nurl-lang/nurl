@@ -1635,21 +1635,32 @@ unsafe simd @ __gcm_vaes_run * u hk i nr * u nonce * u aadp i aadlen * u inp i n
 // it is (round keys broadcast from the narrow schedule; the power
 // table's 64-byte rows), and the ymm kernel's fold and tail.
 
-// The two halves' sums of a quadruple fold added together, reduced as
-// __ghw2_finish does (spelled out for the same reason).
+// A quadruple fold's four lanes reduced and added together: the value
+// __ghw2_finish's reduction gives for the lanes' sum, by fewer vector
+// operations. With 512-bit work in flight, port 1 runs no vector
+// operations, so every one this saves is half a cycle a step.
+//
+// That reduction, for the sum's lo, md, hi, is
+//     t0 = lo ^ (md.0 into qword 1),  t1 = hi ^ (md.1 into qword 0)
+//     u  = t0.0·Q,                   w  = t0 ^ swap(u)
+//     r  = t1 ^ w ^ w.1·Q
+// (Q = 0xC2 << 56, swap exchanges a lane's two qwords). Write m for
+// md ^ u. Then w.1 = lo.1 ^ m.0 and r = hi ^ lo ^ swap(m) ^ (lo.1 ^
+// m.0)·Q. Every term but swap(m) is a product or an XOR, so it is
+// computed on all four lanes in place. A lane sum commutes with swap,
+// so m is swapped only once, after its lanes are added. The lanes are
+// added twice (r's terms and m) where __ghw2_finish adds three
+// accumulators.
 @ __ghw4_finish v512 lo4 v512 hi4 v512 md4 → v128 {
-    : v256 l2 ( nurl_v256_xor ( nurl_v512_lo256 lo4 ) ( nurl_v512_hi256 lo4 ) )
-    : v256 h2 ( nurl_v256_xor ( nurl_v512_lo256 hi4 ) ( nurl_v512_hi256 hi4 ) )
-    : v256 m2 ( nurl_v256_xor ( nurl_v512_lo256 md4 ) ( nurl_v512_hi256 md4 ) )
-    : v128 lo ( nurl_v128_xor ( nurl_v256_lo128 l2 ) ( nurl_v256_hi128 l2 ) )
-    : v128 hi ( nurl_v128_xor ( nurl_v256_lo128 h2 ) ( nurl_v256_hi128 h2 ) )
-    : v128 md ( nurl_v128_xor ( nurl_v256_lo128 m2 ) ( nurl_v256_hi128 m2 ) )
-    : v128 z ( nurl_v128_zero )
-    : v128 t0 ( nurl_v128_xor lo ( nurl_v128_unpacklo64 z md ) )
-    : v128 t1 ( nurl_v128_xor hi ( nurl_v128_unpackhi64 md z ) )
-    : v128 q ( nurl_v128_set64 0xC200000000000000 0 )
-    : v128 w ( nurl_v128_xor t0 ( nurl_v128_rotlanes2 ( nurl_v128_clmul_ll t0 q ) ) )
-    ^ ( nurl_v128_xor ( nurl_v128_xor t1 w ) ( nurl_v128_clmul_hl w q ) )
+    : v512 q4 ( nurl_v512_bcast128 ( nurl_v128_set64 0xC200000000000000 0 ) )
+    : v512 m ( nurl_v512_xor md4 ( nurl_v512_clmul_ll lo4 q4 ) )
+    : v512 v ( nurl_v512_xor ( nurl_v512_clmul_hl lo4 q4 ) ( nurl_v512_clmul_ll m q4 ) )
+    : v512 r ( nurl_v512_xor ( nurl_v512_xor hi4 lo4 ) v )
+    : v256 r2 ( nurl_v256_xor ( nurl_v512_lo256 r ) ( nurl_v512_hi256 r ) )
+    : v256 m2 ( nurl_v256_xor ( nurl_v512_lo256 m ) ( nurl_v512_hi256 m ) )
+    : v128 r1 ( nurl_v128_xor ( nurl_v256_lo128 r2 ) ( nurl_v256_hi128 r2 ) )
+    : v128 m1 ( nurl_v128_xor ( nurl_v256_lo128 m2 ) ( nurl_v256_hi128 m2 ) )
+    ^ ( nurl_v128_xor r1 ( nurl_v128_rotlanes2 m1 ) )
 }
 
 // One AES round on sixteen blocks, four per register.
@@ -1669,6 +1680,21 @@ unsafe @ __ghw4_acc v512 x * u g inout v512 lo inout v512 hi inout v512 md → v
     = md ( nurl_v512_xor md ( nurl_v512_xor ( nurl_v512_clmul_lh x gv ) ( nurl_v512_clmul_hl x gv ) ) )
 }
 
+// Sixteen blocks held in four registers, folded into `acc` with one
+// reduction: quadruple j times the four powers at entry 4j.
+unsafe @ __ghw4_fold v128 acc v512 c0 v512 c1 v512 c2 v512 c3 * u gp → v128 {
+    : v512 z ( nurl_v512_zero )
+    : ~ v512 lo z
+    : ~ v512 hi z
+    : ~ v512 md z
+    : v512 a4 ( nurl_v512_join256 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ( nurl_v256_zero ) )
+    ( __ghw4_acc ( nurl_v512_xor ( nurl_v512_bswap128 c0 ) a4 ) gp lo hi md )
+    ( __ghw4_acc ( nurl_v512_bswap128 c1 ) # *u + # i gp 64 lo hi md )
+    ( __ghw4_acc ( nurl_v512_bswap128 c2 ) # *u + # i gp 128 lo hi md )
+    ( __ghw4_acc ( nurl_v512_bswap128 c3 ) # *u + # i gp 192 lo hi md )
+    ^ ( __ghw4_finish lo hi md )
+}
+
 // Counter quadruple c+j .. c+j+3 from quadruple c's `cb` by a byte add,
 // valid while no low byte carries (__ctr2_add).
 @ __ctr4_add v512 cb i j → v512 { ^ ( nurl_v512_add32 cb ( nurl_v512_bcast128 ( nurl_v128_set32 0 0 0 << j 24 ) ) ) }
@@ -1677,11 +1703,20 @@ unsafe @ __ghw4_acc v512 x * u g inout v512 lo inout v512 hi inout v512 md → v
 @ __ctr4_blk i n0 i n1 i n2 i c → v512 { ^ ( nurl_v512_join256 ( __ctr2_blk n0 n1 n2 c ) ( __ctr2_blk n0 n1 n2 + c 2 ) ) }
 
 // __gcm_vaes_stitch16 on zmm, with its unconditional fold and carried
-// counters: sixteen CTR blocks and the fold of the step before's
-// sixteen, the fold's four quadruples in rounds 2, 4, 6 and — the one
+// counters: sixteen CTR blocks and the fold of the sixteen blocks in
+// c0 .. c3, the fold's four quadruples in rounds 2, 4, 6 and — the one
 // carrying the accumulator — 8. The round keys come from the narrow
-// schedule at `rk`, broadcast to all four lanes.
-unsafe @ __gcm_vaes512_stitch16 * u rk i nr i n0 i n1 i n2 i ctr inout v512 cb * u inp * u op v128 acc * u prev * u gp → v128 {
+// schedule at `rk`, broadcast to all four lanes. On return c0 .. c3
+// hold the sixteen blocks written to `op`.
+//
+// The blocks to fold come in registers, not from memory. Sealing, they
+// are the step before's ciphertext, and reading that back from `op`
+// means loading 64 bytes that were stored a few dozen cycles earlier.
+// A TLS record's payload starts 5 bytes into its buffer, so each of
+// those stores straddles two cache lines. A split store cannot forward
+// to a load, so every load waited for its store to reach L1, and that
+// cost 3–7 % of a sealed 16 KB record on Sapphire Rapids.
+unsafe @ __gcm_vaes512_stitch16 * u rk i nr i n0 i n1 i n2 i ctr inout v512 cb * u inp * u op v128 acc inout v512 c0 inout v512 c1 inout v512 c2 inout v512 c3 * u gp → v128 {
     : v512 k0 ( nurl_v512_bcast128 ( nurl_v128_ld # s rk ) )
     : ~ v512 b0 cb
     : ~ v512 b1 b0
@@ -1710,7 +1745,7 @@ unsafe @ __gcm_vaes512_stitch16 * u rk i nr i n0 i n1 i n2 i ctr inout v512 cb *
         ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk * r 16 ) ) b0 b1 b2 b3 )
         ? == 0 & r 1 {
             : i j ? == r 8 0 / r 2
-            : v512 x0 ( nurl_v512_bswap128 ( nurl_v512_ld # s + # i prev * j 64 ) )
+            : v512 x0 ( nurl_v512_bswap128 ? == j 0 c0 ? == j 1 c1 ? == j 2 c2 c3 )
             : v512 x ? == j 0 ( nurl_v512_xor x0 ( nurl_v512_join256 ( nurl_v256_join128 acc ( nurl_v128_zero ) ) ( nurl_v256_zero ) ) ) x0
             ( __ghw4_acc x # *u + # i gp * j 64 lo hi md )
         } {}
@@ -1726,10 +1761,14 @@ unsafe @ __gcm_vaes512_stitch16 * u rk i nr i n0 i n1 i n2 i ctr inout v512 cb *
         ( __aes_round16x4 ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk 208 ) ) b0 b1 b2 b3 )
     } {}
     : v512 kl ( nurl_v512_bcast128 ( nurl_v128_ld # s + # i rk * nr 16 ) )
-    ( nurl_v512_st # s op ( nurl_v512_xor ( nurl_v512_aesenclast b0 kl ) ( nurl_v512_ld # s inp ) ) )
-    ( nurl_v512_st # s + # i op 64 ( nurl_v512_xor ( nurl_v512_aesenclast b1 kl ) ( nurl_v512_ld # s + # i inp 64 ) ) )
-    ( nurl_v512_st # s + # i op 128 ( nurl_v512_xor ( nurl_v512_aesenclast b2 kl ) ( nurl_v512_ld # s + # i inp 128 ) ) )
-    ( nurl_v512_st # s + # i op 192 ( nurl_v512_xor ( nurl_v512_aesenclast b3 kl ) ( nurl_v512_ld # s + # i inp 192 ) ) )
+    = c0 ( nurl_v512_xor ( nurl_v512_aesenclast b0 kl ) ( nurl_v512_ld # s inp ) )
+    = c1 ( nurl_v512_xor ( nurl_v512_aesenclast b1 kl ) ( nurl_v512_ld # s + # i inp 64 ) )
+    = c2 ( nurl_v512_xor ( nurl_v512_aesenclast b2 kl ) ( nurl_v512_ld # s + # i inp 128 ) )
+    = c3 ( nurl_v512_xor ( nurl_v512_aesenclast b3 kl ) ( nurl_v512_ld # s + # i inp 192 ) )
+    ( nurl_v512_st # s op c0 )
+    ( nurl_v512_st # s + # i op 64 c1 )
+    ( nurl_v512_st # s + # i op 128 c2 )
+    ( nurl_v512_st # s + # i op 192 c3 )
     ^ ( __ghw4_finish lo hi md )
 }
 
@@ -1748,14 +1787,29 @@ unsafe simd @ __gcm_vaes512_run * u hk i nr * u nonce * u aadp i aadlen * u inp 
     : ~ i off 0
     : ~ i ctr 2
     : ~ v512 cb ( __ctr4_blk n0 n1 n2 2 )
+    // The blocks a step folds: sealing, the step before's output, which
+    // the stitch leaves here (all zero before the first step, whose fold
+    // is then dropped); opening, the step's own input, read before any
+    // store, so `op` may be `inp`.
+    : v512 z ( nurl_v512_zero )
+    : ~ v512 c0 z
+    : ~ v512 c1 z
+    : ~ v512 c2 z
+    : ~ v512 c3 z
     ~ <= + off 256 n {
-        : *u prev ? & == sealing 1 > off 0 # *u + # i op - off 256 # *u + # i inp off
-        : v128 a2 ( __gcm_vaes512_stitch16 hk nr n0 n1 n2 ctr cb # *u + # i inp off # *u + # i op off acc prev gp )
+        : *u ip # *u + # i inp off
+        ? == sealing 0 {
+            = c0 ( nurl_v512_ld # s ip )
+            = c1 ( nurl_v512_ld # s + # i ip 64 )
+            = c2 ( nurl_v512_ld # s + # i ip 128 )
+            = c3 ( nurl_v512_ld # s + # i ip 192 )
+        } {}
+        : v128 a2 ( __gcm_vaes512_stitch16 hk nr n0 n1 n2 ctr cb ip # *u + # i op off acc c0 c1 c2 c3 gp )
         = acc ? | == sealing 0 > off 0 a2 acc
         = off + off 256
         = ctr + ctr 16
     }
-    ? & == sealing 1 > off 0 { = acc ( __ghw_fold16 acc # *u + # i op - off 256 gp ) } {}
+    ? & == sealing 1 > off 0 { = acc ( __ghw4_fold acc c0 c1 c2 c3 gp ) } {}
     ? < off n {
         = acc ( __gcm_vaes_tail rk2 nr n0 n1 n2 ctr # *u + # i inp off # *u + # i op off sealing - n off acc gp pad )
     } {}

@@ -11154,16 +11154,25 @@ unsafe @ __suggest_ident i syms s name → s {
 //   29-34: peek4 token + valid  — lookahead 4
 //
 // Token field offsets (relative to token base):
-//   0: type  1: val (i8*)  2: inum  3: line  4: start  5: valid
+//   0: type  1: val (i8*)  2: inum  3: line  4: start
+//   5: valid — 0 empty, 1 holds a val the lexer owns, 2 holds a val it
+//      does not (a fixed spelling: an operator, a bracket, `→`, EOF's
+//      empty text — a literal that lives as long as the program), 3 the
+//      text is the token's source span and val holds its length (a name)
 //
 // `fnum` is NOT stored (the C version's field was dead — every parser
 // callsite reads `nurl_lex_val` and emits the string form into the
 // LLVM IR directly, never going through `nurl_lex_fnum`). Saves a slot
 // per token + removes the float-bitcast bridge.
 //
-// The token `val` field is a `strdup`'d copy owned by the lexer; the
-// lexer overwrites/leaks it on advance — same lifetime contract as
-// the C version, which never freed token vals either.
+// The token `val` field is owned by the lexer when the slot's valid
+// field is 1 (a number, a string literal, a merged `a::b` name: heap text
+// built from the source), and released when the slot is overwritten or
+// the lexer freed. Most tokens copy nothing: a fixed spelling points at a
+// literal (valid 2), a name at its own bytes of the source (valid 3).
+// Half of all tokens are operators and brackets, most of the rest names,
+// and a heap copy apiece, written and freed again, was a third of the
+// lexer's time (agora #236).
 //
 // `nurl_lex_val` returns a fresh `strdup` of the current token's val
 // so callers can stash a stable copy across `nurl_lex_advance` calls.
@@ -11255,8 +11264,25 @@ unsafe @ __suggest_ident i syms s name → s {
 
 // Write a complete token into slot at `base`. `val` is taken
 // ownership of (caller must pass an i8* the lexer can hold; usually
-// from strdup or an inline malloc). Marks the slot valid.
+// from strdup or an inline malloc). Marks the slot valid (1: owned).
 unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
+    ( __tok_put lex base type val inum line start 1 )
+}
+
+// …a token whose text is a fixed spelling, a literal the lexer does not
+// own (valid 2): nothing is copied, nothing freed.
+unsafe @ __tok_fixed i lex i base i type s val i line i start → v {
+    ( __tok_put lex base type val 0 line start 2 )
+}
+
+// …a token whose text is its `n` bytes of source from `start` (valid 3):
+// the val field holds `n`, and the text is copied only when asked for
+// (__tok_text, nurl_lex_val).
+unsafe @ __tok_span i lex i base i type i n i inum i line i start → v {
+    ( __tok_put lex base type # s n inum line start 3 )
+}
+
+unsafe @ __tok_put i lex i base i type s val i inum i line i start i valid → v {
     : s p # s lex
     // Every slot val is a fresh heap string (strdup'd operator spelling
     // or malloc'd ident/number/str buffer) — release the one this write
@@ -11264,7 +11290,7 @@ unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
     // (~500k strings per self-compile). Gated on TF_VALID: an invalid
     // slot's val pointer is stale (already owned by another slot after
     // a __tok_shift).
-    ? != 0 ( nurl_peek p + base TF_VALID ) {
+    ? == 1 ( nurl_peek p + base TF_VALID ) {
         : i __oldv ( nurl_peek p + base TF_VAL )
         ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
@@ -11273,7 +11299,7 @@ unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
     ( nurl_poke p + base TF_INUM inum )
     ( nurl_poke p + base TF_LINE line )
     ( nurl_poke p + base TF_START start )
-    ( nurl_poke p + base TF_VALID 1 )
+    ( nurl_poke p + base TF_VALID valid )
 }
 
 // Copy a token from src_base into dst_base within the same lexer.
@@ -11286,7 +11312,7 @@ unsafe @ __tok_shift i lex i src_base i dst_base → v {
     // whole cascade (PEEK→CUR, PEEK2→PEEK, …), and with the source
     // left valid the NEXT shift's destination-free would free the
     // pointer the previous shift just moved forward.
-    ? != 0 ( nurl_peek p + dst_base TF_VALID ) {
+    ? == 1 ( nurl_peek p + dst_base TF_VALID ) {
         : i __oldv ( nurl_peek p + dst_base TF_VAL )
         ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
@@ -11295,7 +11321,7 @@ unsafe @ __tok_shift i lex i src_base i dst_base → v {
     ( nurl_poke p + dst_base TF_INUM ( nurl_peek p + src_base TF_INUM ) )
     ( nurl_poke p + dst_base TF_LINE ( nurl_peek p + src_base TF_LINE ) )
     ( nurl_poke p + dst_base TF_START ( nurl_peek p + src_base TF_START ) )
-    ( nurl_poke p + dst_base TF_VALID 1 )
+    ( nurl_poke p + dst_base TF_VALID ( nurl_peek p + src_base TF_VALID ) )
     // Exactly one valid slot owns the moved val pointer from here on.
     ( nurl_poke p + src_base TF_VALID 0 )
 }
@@ -11468,7 +11494,7 @@ unsafe @ __lex_one i lex i base → v {
 
     // ── EOF ──
     ? >= pos len {
-        ( __tok_write lex base TT_EOF ( nurl_strdup `` ) 0 line start )
+        ( __tok_fixed lex base TT_EOF `` line start )
         = done T
     } {}
 
@@ -11479,7 +11505,7 @@ unsafe @ __lex_one i lex i base → v {
         == & # i . src + pos 1 255 134
         == & # i . src + pos 2 255 146 {
             = pos + pos 3
-            ( __tok_write lex base TT_ARROW ( nurl_strdup `→` ) 0 line start )
+            ( __tok_fixed lex base TT_ARROW `→` line start )
             = done T
         } {}
     } {}
@@ -11694,32 +11720,42 @@ unsafe @ __lex_one i lex i base → v {
             // Namespace `::` merge — a::b[::c...] becomes a__b[__c...].
             // Each `::` is exactly two ASCII bytes followed by an
             // ident-start char (alpha or _).
+            : ~ b merged F
             ~ & & < + pos 2 len
             & == & # i . src pos 255 58
             == & # i . src + pos 1 255 58
             ( __lx_is_alpha_us & # i . src + pos 2 255 ) {
-                = pos + pos 2
+                = pos + pos 2 = merged T
                 ~ & < pos len ( __lx_is_ident_cont & # i . src pos 255 ) { = pos + pos 1 }
             }
-            // Materialise the identifier text.
+            // The identifier's text is its source span (__tok_span), read
+            // in place; only a merged `a::b`, whose text is not in the
+            // source, is materialised.
             : i n - pos id_start
-            : s id # s ( nurl_alloc + n 1 )
-            ( memcpy id # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
-            : *u idp # *u id
-            // Rewrite any `::` (two colons) found in `id` to `__`.
-            : ~ i k 0
-            ~ < k n {
-                ? & == & # i . idp k 255 58
-                & < + k 1 n
-                == & # i . idp + k 1 255 58 {
-                    = . idp k # u 95
-                    = . idp + k 1 # u 95
-                    = k + k 2
-                } {
-                    = k + k 1
+            : ~ * u idp # *u + # i src id_start
+            // (The merged text, as the address the token takes over: a
+            // raw buffer, never a string binding the scope would drop.)
+            : ~ i idw 0
+            ? merged {
+                : *u idb # *u ( nurl_alloc + n 1 )
+                ( memcpy # s idb # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
+                = idp idb
+                = idw # i idb
+                // Rewrite any `::` (two colons) found in `id` to `__`.
+                : ~ i k 0
+                ~ < k n {
+                    ? & == & # i . idp k 255 58
+                    & < + k 1 n
+                    == & # i . idp + k 1 255 58 {
+                        = . idp k # u 95
+                        = . idp + k 1 # u 95
+                        = k + k 2
+                    } {
+                        = k + k 1
+                    }
                 }
-            }
-            = . idp n # u 0
+                = . idp n # u 0
+            } {}
             : ~ i ttype TT_IDENT
             : ~ i inum 0
             // Bool literals, sizeof, pub, base type kws (`i u f b s v`),
@@ -11845,7 +11881,7 @@ unsafe @ __lex_one i lex i base → v {
                     = ttype TT_SIMD
                 } {}
             } {}
-            ( __tok_write lex base ttype id inum line start )
+            ? merged { ( __tok_write lex base ttype # s idw inum line start ) } { ( __tok_span lex base ttype n inum line start ) }
             = done T
         } {}
     } {}
@@ -11857,7 +11893,7 @@ unsafe @ __lex_one i lex i base → v {
         & == & # i . src + pos 1 255 46
         == & # i . src + pos 2 255 46 {
             = pos + pos 3
-            ( __tok_write lex base TT_ELLIPSIS ( nurl_strdup `...` ) 0 line start )
+            ( __tok_fixed lex base TT_ELLIPSIS `...` line start )
             = done T
         } {}
     } {}
@@ -11867,16 +11903,16 @@ unsafe @ __lex_one i lex i base → v {
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( nurl_strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( nurl_strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( nurl_strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( nurl_strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( nurl_strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( nurl_strdup `>>` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( nurl_strdup `??` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( nurl_strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( nurl_strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( nurl_strdup `&&` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_EQEQ `==` line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_NE `!=` line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_LE `<=` line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_GE `>=` line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_fixed lex base TT_SHL `<<` line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_fixed lex base TT_SHR `>>` line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_fixed lex base TT_QUESTQUEST `??` line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_fixed lex base TT_CARETCARET `^^` line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_fixed lex base TT_OROR `||` line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_fixed lex base TT_ANDAND `&&` line start ) = done T } {}
         } {}
     } {}
 
@@ -11884,12 +11920,12 @@ unsafe @ __lex_one i lex i base → v {
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64 { ( __tok_write lex base TT_AT ( nurl_strdup `@` ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( nurl_strdup `:` ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( nurl_strdup `=` ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( nurl_strdup `^` ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( nurl_strdup `?` ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( nurl_strdup `~` ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_fixed lex base TT_AT `@` line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_fixed lex base TT_COLON `:` line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_fixed lex base TT_EQ `=` line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_fixed lex base TT_CARET `^` line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_fixed lex base TT_QUEST `?` line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_fixed lex base TT_TILDE `~` line start ) = done T } {}
         ? & ! done == c 40 {
             : i pv ( __lx_pkg_version_end lex pos )
             ? >= pv 0 {
@@ -11901,29 +11937,29 @@ unsafe @ __lex_one i lex i base → v {
                 } {}
                 = pos pv
                 ( __tok_write lex base TT_STR ( nurl_strdup ver ) 0 line start )
-            } { ( __tok_write lex base TT_LPAREN ( nurl_strdup `(` ) 0 line start ) }
+            } { ( __tok_fixed lex base TT_LPAREN `(` line start ) }
             = done T
         } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( nurl_strdup `)` ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( nurl_strdup `{` ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( nurl_strdup `}` ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( nurl_strdup `.` ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( nurl_strdup `#` ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( nurl_strdup `!` ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( nurl_strdup `+` ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( nurl_strdup `-` ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( nurl_strdup `*` ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( nurl_strdup `/` ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( nurl_strdup `%` ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( nurl_strdup `&` ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( nurl_strdup `|` ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( nurl_strdup `<` ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( nurl_strdup `>` ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( nurl_strdup `[` ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( nurl_strdup `]` ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( nurl_strdup `;` ) 0 line start ) = done T } {}
-        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( nurl_strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( nurl_strdup `$` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_fixed lex base TT_RPAREN `)` line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_fixed lex base TT_LBRACE `{` line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_fixed lex base TT_RBRACE `}` line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_fixed lex base TT_DOT `.` line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_fixed lex base TT_HASH `#` line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_fixed lex base TT_BANG `!` line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_fixed lex base TT_PLUS `+` line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_fixed lex base TT_MINUS `-` line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_fixed lex base TT_STAR `*` line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_fixed lex base TT_SLASH `/` line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_fixed lex base TT_PERCENT `%` line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_fixed lex base TT_AMP `&` line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_fixed lex base TT_PIPE `|` line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_fixed lex base TT_LT `<` line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_fixed lex base TT_GT `>` line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_fixed lex base TT_LBRACK `[` line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_fixed lex base TT_RBRACK `]` line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_fixed lex base TT_SEMICOL `;` line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_fixed lex base TT_BACKSLASH `\\` line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_fixed lex base TT_DOLLAR `$` line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
             : s buf # s ( nurl_alloc 4 )
@@ -12011,7 +12047,7 @@ unsafe @ nurl_lex_free sink i h → v {
     ? != following 0 { ( nurl_poke # s following 37 previous ) } {}
     : ~ i b LX_CUR
     ~ <= b LX_PEEK4 {
-        ? != 0 ( nurl_peek p + b TF_VALID ) {
+        ? == 1 ( nurl_peek p + b TF_VALID ) {
             : i tv ( nurl_peek p + b TF_VAL )
             ? != 0 tv { ( nurl_free # s tv ) } {}
         } {}
@@ -12035,7 +12071,22 @@ unsafe @ nurl_lex_type i h → i {
 
 unsafe @ nurl_lex_val i h → s {
     : s p # s h
+    ? == 3 ( nurl_peek p + LX_CUR TF_VALID ) {
+        ^ # s ( nurl_strdup_n # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + LX_CUR TF_START ) ( nurl_peek p + LX_CUR TF_VAL ) )
+    } {}
     ^ # s ( nurl_strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
+}
+
+// The text of the token in the slot at `base`, as a string its caller
+// owns (and drops): the same contract as the nurl_str_cat copy below.
+unsafe @ __tok_text s p i base → s {
+    ? == 3 ( nurl_peek p + base TF_VALID ) {
+        // (Sliced from the token's own start: nurl_str_slice measures its
+        // argument up to the end of the slice, and from the file's start
+        // that is the whole file before the token.)
+        ^ ( nurl_str_slice # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + base TF_START ) 0 ( nurl_peek p + base TF_VAL ) )
+    } {}
+    ^ ( nurl_str_cat # s ( nurl_peek p + base TF_VAL ) `` )
 }
 
 unsafe @ nurl_lex_inum i h → i {
@@ -12049,6 +12100,8 @@ unsafe @ nurl_lex_inum i h → i {
 // backward-compat with any external code that may declare it.
 unsafe @ nurl_lex_fnum i h → f {
     : s p # s h
+    // (A float's text is always its own: a name's is a span, no float.)
+    ? != 1 ( nurl_peek p + LX_CUR TF_VALID ) { ^ 0.0 } {}
     : s v # s ( nurl_peek p + LX_CUR TF_VAL )
     ^ ( atof v )
 }
@@ -12186,11 +12239,11 @@ unsafe @ nurl_lex_set_pos i h i new_pos → v {
     // lookahead tokens' text.
     : ~ i __ib LX_PEEK
     ~ <= __ib LX_PEEK4 {
-        ? != 0 ( nurl_peek p + __ib TF_VALID ) {
+        ? == 1 ( nurl_peek p + __ib TF_VALID ) {
             : i __iv ( nurl_peek p + __ib TF_VAL )
             ? != 0 __iv { ( nurl_free # s __iv ) } {}
-            ( nurl_poke p + __ib TF_VALID 0 )
         } {}
+        ( nurl_poke p + __ib TF_VALID 0 )
         = __ib + __ib 6
     }
     // Line = 1 + the number of newlines strictly before np. Binary
@@ -12259,7 +12312,7 @@ unsafe @ nurl_lex_peek_val i h → s {
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
         ( __lex_one # i p LX_PEEK )
     } {}
-    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK TF_VAL ) `` )
+    ^ ( __tok_text p LX_PEEK )
 }
 
 unsafe @ nurl_lex_peek2_type i h → i {
@@ -12278,7 +12331,7 @@ unsafe @ nurl_lex_peek2_val i h → s {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
     ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
-    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK2 TF_VAL ) `` )
+    ^ ( __tok_text p LX_PEEK2 )
 }
 
 unsafe @ nurl_lex_peek3_type i h → i {

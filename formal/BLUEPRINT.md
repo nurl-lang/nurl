@@ -3,7 +3,7 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom):** **28 modules**, **20,757 lines of Lean 4**, **926 theorems**, **1160 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors of view-free types):** **29 modules**, **22,563 lines of Lean 4**, **981 theorems**, **1241 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** every hole probe in `tools/fuzz/holes/`, with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines; `tools/fuzz/holes/map.py --counts` gives the totals
 

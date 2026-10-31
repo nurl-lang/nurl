@@ -59,16 +59,28 @@ library, the compiler and the code generator are part of the trusted base.
 
 ## Destructors, and a panic while a panic unwinds
 
-In the calculus a drop releases what a value owns and runs no code of the
-program's: a scope's exit, a `free`, a replaced value and a panic's
-unwinding all release by `DropSlot`, which cannot fail. A destructor
-written by the program (`% Drop T { @ drop … }`, docs/MEMORY.md §7.6) is
-code the calculus does not have yet — its body is an ordinary function the
-rules check, and A2's theorem covers it as a call, not as part of a drop.
-So a *double panic* — a destructor that panics while a panic's journal
-drains — is outside the calculus, and is a property of the runtime
-(`stdlib/runtime_core.c`, `nurl_panic`), stated here so the claim does not
-hide it:
+A destructor written by the program (`% Drop T { @ drop … }`,
+docs/MEMORY.md §7.6) is inside the calculus for a type that holds no views
+(A2-drop.1, `A2/DROP_DESIGN.md`).
+- A binding with a destructor (`StmtT.letd`) is scoped by `scopeD`.
+- At its end, while it still owns its value, the destructor runs as a call
+  of the program's function, on the binding lent (`Step.scopeDEnd`). Then
+  the scope frees the tree: the drop glue after the impl.
+- A panic that unwinds to the frame stops there. It runs the destructor,
+  frees the binding, and raises again (`Step.scopeDP`). The frame is gone,
+  so a panic inside the destructor does not run it again, and `scope x`
+  still frees the fields.
+- `memory_safe`, `no_leak_end` and `no_leak_panic` cover all of this, on
+  the standard axioms. That includes a *double panic*: a destructor that
+  panics while a panic unwinds.
+
+A destructor of a type that holds views is A2-drop.2. It needs a typing
+rule nurlc lacks today (`DtorSafe`, Agora #224): a drop reads the value,
+so what the value views must outlive every path where it is not
+definitely moved.
+
+How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
+is stated here so the claim does not hide it:
 
 - the second panic is caught by the same `recover` frame as the first;
   the drain it starts releases what the journal still holds (each entry
@@ -82,9 +94,8 @@ hide it:
   with it.
 
 Test: `compiler/tests/panic_in_drop_while_unwinding.nu` (clean under
-AddressSanitizer and LeakSanitizer). Modelling destructors in the calculus
-— a drop that runs a function, and may panic — is a planned refinement
-(`README.md`).
+AddressSanitizer and LeakSanitizer). That the journal's drain does what
+`Step.scopeDP` does is phase C / D.
 
 ## Trusted base
 

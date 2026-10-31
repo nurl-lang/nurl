@@ -117,6 +117,8 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   spineDom v h := by rw [src_spine hs] at h; cases h
   catchOK := catchOK_src hs
   cover _ h := by cases h
+  pinOut _ _ h := by cases h
+  pinIn := PinOK.of_spine_nil (src_spine hs)
 
 theorem closed_empty (s : Stmt) : Closed (fun _ => none) s := fun _ h => by cases h
 
