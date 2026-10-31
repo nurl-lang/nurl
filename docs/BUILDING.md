@@ -573,6 +573,11 @@ and on PRs labelled `ci:macos`. A PR that touches only `webdocs/**`
 skips the code gates and builds the docs instead, one that touches only
 `formal/` or `changes/` skips the code gates too, and one that touches
 both code and either of them runs everything.
+A change that is nothing but Markdown (outside `changes/`, `webdocs/`
+and `formal/`) runs the two gate jobs and nothing else. Every check that
+reads a `.md` file is there: the doc examples compile, nurlapi's and
+nurl-mcp's docs tools, and the protobuf doc examples. That holds in the
+merge queue too, judged on the whole group against `main`.
 
 **A PR's own run is the fast signal.** It runs the build, the corpus and
 the gates, about 35 job-minutes. The platform and sanitizer jobs are
@@ -598,6 +603,10 @@ still needs a rebase; the changelog fragments and named probes (#211,
 runs no `ci.yml` jobs. The queue's `merge_group` run already tested that
 exact commit, and `release.yml` accepts that run. A push that did not
 come through the queue still runs everything.
+When the queue rebuilds its groups (one failed, or main moved), it
+deletes the old group branches. The first job of each new group's run
+cancels the queue runs whose branch is gone, so they stop holding
+runners.
 
 | Job / step | What it checks |
 |---|---|
