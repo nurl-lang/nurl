@@ -28,6 +28,7 @@ inductive Ty where
   | fn (ms : List Nat) -- a closure or a trait object: code with an environment it owns; method `j`
                         -- has the interface `ms[j]` (a function of the program whose first parameter
                         -- is the receiver); the environment's type is not part of the type
+  | arc (t : Ty)      -- A3.1: a share of a counted block whose payload, a `t`, is frozen
 deriving DecidableEq, Repr
 
 /-- Does a value of this type hold views (so that storing one into a
@@ -39,6 +40,7 @@ def Ty.holdsView : Ty → Bool
   | .prod a b => a.holdsView || b.holdsView
   | .sum a b => a.holdsView || b.holdsView
   | .fn _ => true     -- what the environment holds is not part of the type
+  | .arc t => t.holdsView
 
 /-- A2 types: a view's element type holds no views of its own (a view of a
     container of views is left to A2, with the other aggregates that
@@ -50,6 +52,7 @@ def Ty.ok : Ty → Bool
   | .prod a b => a.ok && b.ok
   | .sum a b => a.ok && b.ok
   | .fn _ => true
+  | .arc t => t.ok && !t.holdsView   -- A3.1's first cut: a payload holds no views (nor a closure)
 
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
@@ -58,6 +61,7 @@ def Ty.owning : Ty → Bool
   | .prod _ _ => true
   | .sum _ _ => true
   | .fn _ => true
+  | .arc _ => true
   | _ => false
 
 /-- What an operation does to a container, ordered by what it ends.
@@ -198,6 +202,7 @@ inductive Val where
                                                -- a package: its methods' code, its environment
                                                -- (of the ghost type `te`) inline, its interfaces,
                                                -- and the bindings it captured by name
+  | arc (k : Nat)                                -- A3.1: a share of block `k`; the payload is the block's
 deriving Repr, Inhabited
 
 /-- A binding's storage: whether it owns its value (it is dropped at the end

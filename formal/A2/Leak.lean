@@ -81,6 +81,7 @@ end
 
 theorem ids_nonNode {v : Val} (h : v.owns = false) : v.ids = [] := by
   cases v <;> simp_all [Val.owns]
+  rfl
 
 theorem TakeVal.alloc {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) : m1.alloc = m.alloc := by
   cases ht <;> rfl

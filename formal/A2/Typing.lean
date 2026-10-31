@@ -389,6 +389,7 @@ def elemE (y : Var) (E : Entry) : Ty → Entry
   | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held, false, false⟩
   | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
@@ -397,6 +398,7 @@ def popE (y : Var) (E : Entry) : Ty → Entry
   | .prod a b => ⟨.prod a b, .own, true, [], E.held, false, false⟩
   | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false⟩
   | .fn ms => ⟨.fn ms, .own, true, [], E.held, false, false⟩
+  | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
   | t => elemE y E t
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -941,6 +943,7 @@ def Ty.hasFn : Ty → Bool
   | .prod a b => a.hasFn || b.hasFn
   | .sum a b => a.hasFn || b.hasFn
   | .fn _ => true
+  | .arc t => t.hasFn
 
 theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
   induction t with
@@ -956,6 +959,7 @@ theorem hasFn_holdsView {t : Ty} (h : t.hasFn = true) : t.holdsView = true := by
     simp only [Ty.holdsView, Bool.or_eq_true]
     exact h.imp iha ihb
   | fn _ => rfl
+  | arc t ih => exact ih h
 
 /-- A parameter's entry: a borrowed one depends on nothing the callee can
     see; every parameter whose type may hold a closure holds the symbolic
