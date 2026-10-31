@@ -236,6 +236,27 @@ theorem NoPin.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : NoPin Γ
   rw [hwe.fixed (Or.inl hm)] at h'
   exact h p E h' hm
 
+/-- A2-drop.2: a weaker context flags every binding the stronger one does,
+    with what it views; so an effect safe there is safe here. -/
+theorem DtorSafe.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {e : Eff} {hv : Bool} {x : Var}
+    (h : DtorSafe Γ' e hv x) : DtorSafe Γ e hv x := by
+  intro v E hE hd hos
+  obtain ⟨E', h', hwe⟩ := hw.get hE
+  obtain ⟨hd', hh⟩ := hwe.dtor hd
+  have hos' : E'.mode.ownSlot = true := by rw [hwe.mode]; exact hos
+  have h1 := h v E' h' hd' hos'
+  unfold hitsMem at h1 ⊢
+  rw [hwe.ty, hwe.mode] at h1
+  simp only [Bool.and_eq_false_iff, List.any_eq_false] at h1 ⊢
+  rcases h1 with h1 | h1
+  · exact Or.inl h1
+  · refine Or.inr fun d hdd => h1 d ?_
+    simp only [Entry.vdeps, hos, hos', ↓reduceIte, List.nil_append] at hdd ⊢
+    exact hh hdd
+
+theorem EndOK.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : EndOK Γ' x) : EndOK Γ x :=
+  ⟨NoPin.weaker hw h.1, DtorSafe.weaker hw h.2⟩
+
 theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : Keep Γ0 Γ' s s') :
     Keep Γ Γ' s s' := by
   refine ⟨fun v E hv hs => ?_, fun v E' hv hs => ?_⟩
@@ -284,7 +305,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     (hty : E.ty = .prod a b) (hyF : y ∉ F) (hx : Γ x = none) (hz : Γ z = none) (hxz : x ≠ z)
     (hxF : x ∉ F) (hzF : z ∉ F)
     (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
-      (compE E b)) F s Δ) (hpy : NoPin Γ y) (hpz : NoPin Δ z) (hpx : NoPin (exitScope z Δ) x)
+      (compE E b)) F s Δ) (hpy : EndOK Γ y) (hpz : EndOK Δ z) (hpx : EndOK (exitScope z Δ) x)
     {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s')) :
     ∃ Γ', StmtT P Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
@@ -293,7 +314,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     rename_i v w
     have hanch := hi.leafAnch rfl
     have hos : E.mode.ownSlot = true := by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl
-    obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hpy hvy
+    obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hpy.1 hvy hpy.2
     have hxy : x ≠ y := fun h => by rw [h, hy] at hx; cases hx
     have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
     have hx1 : setE (kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
@@ -449,7 +470,19 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   · by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; simp [hmo]
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w E b hw
-  · intro w E hw hl hni r hr
+  · refine ⟨?live, ?dtorc⟩
+    case dtorc =>
+      intro w E hw hd hos' hni dep hdd hnm
+      by_cases hwx : w = x
+      · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+        simp [Entry.vdeps, hos] at hdd
+      · simp only [setE, upd_ne _ _ hwx] at hw
+        obtain ⟨Er, hEr, hro⟩ := hi.wf.dtor w E hw hd hos' hni dep hdd hnm
+        by_cases hrx : dep.root = x
+        · rw [hrx, hx] at hEr; cases hEr
+          exact ⟨{ Ex with live := true, held := [] }, by rw [hrx]; simp [setE], by simp [hmo, Mode.isRoot]⟩
+        · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
+    intro w E hw hl hni r hr
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
       simp [Entry.vdeps, hos, roots] at hr

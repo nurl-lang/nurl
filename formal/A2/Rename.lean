@@ -410,7 +410,7 @@ theorem hitsMem_lift (h : S.OK) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) 
     nothing. -/
 theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
     (ha : Allowed S e hv x) (hd : DtorSafe Γa e hv x) : DtorSafe (S.canon Γa) e hv (S.ρ x) := by
-  intro y E hy hdt
+  intro y E hy hdt hos
   rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
   · rw [hc] at hy
     obtain ⟨Ea, hEa, rfl⟩ := Option.map_eq_some_iff.mp hy
@@ -418,6 +418,7 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
     · simp only [liftE, hrb, ↓reduceIte, h.pe_dtor] at hdt; cases hdt
     · rw [hitsMem_lift h hrb]
       exact hd v Ea hEa (by simpa [liftE, hrb] using hdt)
+        (by rw [liftE_mode v hrb, liftMode_ownSlot] at hos; exact hos)
   · rw [hc] at hy
     by_cases hl : E.live = true
     · have := killE_frame h ha hy
@@ -1798,7 +1799,7 @@ theorem DtorSafe.canon_N (h : S.OK) {d : Dep} (hN : d ∈ S.N) (hb : d.kind.boun
     DtorSafe (S.canon Γa) d.kind.bound false d.root := by
   obtain ⟨_, hR, _, _, _, hlive⟩ := h.N_mut d hN hb
   have hout := (h.N_out d hN).1
-  intro y E hy hdt
+  intro y E hy hdt _
   rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨_, hc⟩
   · rw [hc] at hy
     obtain ⟨Ea, _, rfl⟩ := Option.map_eq_some_iff.mp hy

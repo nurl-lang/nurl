@@ -1537,7 +1537,7 @@ theorem DtQ.kill {Q : Var → Prop} {Γ : Ctx} (h : DtQ Q Γ) (e : Eff) (hv : Bo
 /-- An effect on a binding no destructor binding depends on is safe. -/
 theorem DtQ.dtorSafe {Q : Var → Prop} {Γ : Ctx} (h : DtQ Q Γ) {x : Var} (hx : ¬ Q x) (e : Eff)
     (hv : Bool) : DtorSafe Γ e hv x := by
-  intro v E hE hd
+  intro v E hE hd _
   unfold hitsMem
   cases hg : (E.ty != .int || E.mode == .rootb) with
   | false => rfl
