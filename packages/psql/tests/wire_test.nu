@@ -250,9 +250,14 @@ $ `stdlib/core/slice.nu`
     : PgCollect c4 ( collect w4 )
     ( ok `error: rc 3` == . c4 rc 3 )
     ( ok `error: failed transaction` == . c4 txn 69 )
-    ( ok `error: SQLSTATE` ( str_is . . c4 err code `42P01` ) )
-    ( ok `error: hint` ( str_is . . c4 err hint `check the name` ) )
-    ( ok `error: one line` ( str_is ( pgw_notice_text . c4 err ) `[42P01] relation "nope" does not exist` ) )
+    ?? . c4 err {
+        T e → {
+            ( ok `error: SQLSTATE` ( str_is . e code `42P01` ) )
+            ( ok `error: hint` ( str_is . e hint `check the name` ) )
+            ( ok `error: one line` ( str_is ( pgw_notice_text e ) `[42P01] relation "nope" does not exist` ) )
+        }
+        F → { ( ok `error: the notice is there` F ) }
+    }
 
     // ParameterDescription + RowDescription answer a Describe.
     : ( Vec u ) w5 ( vec_new [u] )
@@ -264,7 +269,7 @@ $ `stdlib/core/slice.nu`
     ( backend w5 110 one )
     ( backend w5 90 zz )
     : PgCollect c5 ( collect w5 )
-    ( ok `describe: parameter types` & == ( vec_len [i] . c5 param_oids ) 2 == ( vec_at [i] . c5 param_oids 0 ) PG_INT8 )
+    ( ok `describe: parameter types` ?? . c5 param_oids { T po → & == ( vec_len [i] po ) 2 == ( vec_at [i] po 0 ) PG_INT8 F → F } )
     ( ok `describe: NoData` & . c5 described == ( pg_result_ncols . c5 res ) 0 )
 
     // ── binary decoders and renderers ──
