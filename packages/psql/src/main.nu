@@ -113,7 +113,7 @@ $ `stdlib/core/slice.nu`
     : i nc . r ncols
     : i nr . r nrows
     ? == nc 0 {
-        ( nurl_print ( string_data . r tag ) ) ( nurl_print `\n` )
+        ( nurl_print ( string_data ( pg_result_tag r ) ) ) ( nurl_print `\n` )
         ^ v
     } {}
 
