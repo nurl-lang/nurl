@@ -420,8 +420,18 @@ if [ "$SPLIT_N" -gt 0 ]; then
         set -- "$@" "--split-min=$NURL_SPLIT_MIN"
     fi
     # A previous build may have left MORE parts than this one writes;
-    # linking a stale one in would resurrect the code it holds.
-    rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
+    # linking a stale one in would resurrect the code it holds. Every
+    # index a part can have goes, 0 to 63 (nurlc caps --split at 64), each
+    # by name: a glob reads the directory, and on FreeBSD's UFS a readdir
+    # can skip an entry while other files are created beside it (Agora
+    # #234). `[ -e ]` is a builtin, so only a part that exists costs an rm.
+    _k=0
+    while [ "$_k" -lt 64 ]; do
+        if [ -e "$OUTBASE.$_k.ll" ] || [ -e "$OUTBASE.$_k.o" ]; then
+            rm -f -- "$OUTBASE.$_k.ll" "$OUTBASE.$_k.o"
+        fi
+        _k=$((_k + 1))
+    done
 fi
 if [ -n "$STDIN_NAME" ]; then
     "$NURLC" "$@" --stdin "$SRCFILE" > "$LLFILE"
@@ -1085,13 +1095,20 @@ if [ "$SPLIT_N" -gt 0 ]; then
     # was doing, though measurably not all of it (see the note above).
     # Its backend is parallel too, so the link is faster than the
     # full-LTO one it replaces even before the parallel -c.
+    # The parts by index, 0 to N-1 in the order nurlc wrote them, not by
+    # a glob: a readdir can miss one while other files come and go in the
+    # same directory (FreeBSD UFS; Agora #234), and a part missed here is
+    # code missing from the binary ("undefined symbol: main").
     set --
     SPLIT_PIDS=""
-    for _part in "$OUTBASE".[0-9]*.ll; do
-        _pobj="${_part%.ll}.o"
+    _k=0
+    while [ -f "$OUTBASE.$_k.ll" ]; do
+        _part="$OUTBASE.$_k.ll"
+        _pobj="$OUTBASE.$_k.o"
         set -- "$@" "$_pobj"
         cc_c_cached "$_part" "$_pobj" &
         SPLIT_PIDS="$SPLIT_PIDS $!"
+        _k=$((_k + 1))
     done
     SPLIT_RC=0
     for _pid in $SPLIT_PIDS; do
@@ -1105,7 +1122,9 @@ if [ "$SPLIT_N" -gt 0 ]; then
     cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS "$@" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$LINK_OUTPUT" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
-    rm -f -- "$@" "$OUTBASE".[0-9]*.ll
+    _k=0
+    while [ -e "$OUTBASE.$_k.ll" ]; do rm -f -- "$OUTBASE.$_k.ll"; _k=$((_k + 1)); done
+    rm -f -- "$@"
 elif [ -n "$OBJ_CACHE_DIR" ]; then
     # Cached-path variant of the one-shot below: compile the module
     # through the object cache first, then link the (possibly copied)

@@ -421,7 +421,9 @@ take. ChaCha20's wide pass runs its eight-block v256 loop only where
 `nurl_cpu_x86_v3()` holds, and its `.base` clone does not compile that
 loop at all. The probes keep their meaning: a crypto `.base` also runs
 on a v3 CPU without the tier, and a plain `simd` `.x86v3` on a v4 one, so
-those calls stay calls.
+those calls stay calls. In a module for any other architecture (AArch64,
+RISC-V, `--target=`), both probes are the constant 0 in every function,
+marked or not, so no x86 path is compiled there at all.
 
 Generic functions may not be marked: a generic is monomorphised after the
 whole program is parsed, so the prefix would not survive to its
@@ -1243,8 +1245,9 @@ register (the VAES tier, §4.1b): `nurl_v256_join128(lo, hi) → v256`,
 
 `v512` is `<8 x i64>`: what an AVX-512 zmm register holds, and two ymm
 or four xmm registers anywhere else. It exists for the AVX-512 VAES
-tier (§4.1b) — four AES blocks per instruction — and has only what a
-block cipher in that shape needs; like `v256` it is correct on any
+tier (§4.1b) — four AES blocks per instruction — and for the x86-64-v4
+clone of a `simd v4` function (§3.3b), where sixteen-block ChaCha20
+runs; it has only what those need. Like `v256` it is correct on any
 target and fast only where the hardware is that wide.
 
 | Group | Primitives |
@@ -1254,6 +1257,10 @@ target and fast only where the hardware is that wide.
 | extract | `nurl_v512_lo256(v) → v256`, `_hi256(v) → v256` |
 | bitwise | `nurl_v512_xor`, `_and`, `_or` |
 | lane arithmetic | `nurl_v512_add32`, `_add64` |
+| 32-bit lanes | `nurl_v512_bcast32(i)` (a word in all sixteen lanes), `_rotl32(v, n)` (one VPROLD with AVX-512) |
+| 64-bit lanes | `nurl_v512_bcast64(i)`, `_mul32u(a, b)` (each lane's low 32-bit halves multiplied to 64 bits: one VPMULUDQ), `_shl64(v, n)`, `_shr64(v, n)` (the count masked to the lane) |
+| interleave | `nurl_v512_unpacklo32`, `_unpackhi32`, `_unpacklo64`, `_unpackhi64` — v256's, per 128-bit lane |
+| 128-bit lanes | `nurl_v512_even128(a, b)` (a's lanes 0, 2, then b's lanes 0, 2), `_odd128(a, b)` (lanes 1, 3): two rounds of them transpose four registers' lanes |
 | byte order | `nurl_v512_bswap128(v)` — the sixteen bytes of each lane reversed |
 | crypto (AVX-512 VAES tier) | `nurl_v512_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v512_clmul_ll/_hl/_lh/_hh` |
 

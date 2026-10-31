@@ -330,6 +330,21 @@ if "$NURLC" --cpu-dispatch "$V4SRC" > "$WORK/v4.ll" 2> "$WORK/v4.err"; then
         awk -v f="$1" -v c="$2" '$0 ~ "^define .*@__nurl_fn\\." f "(__fp[0-9]+)?\\." c "\\(" {p=1} p && /^}/ {p=0} p' "$WORK/v4.ll" |
             grep -oE 'call i32 @nurl_cpu_x86_v[34]\(\)' | sed -E 's/.*_(v[34]).*/\1/' | sort | paste -sd, -
     }
+    # Off x86-64 both probes answer 0 on every CPU, and are compiled as
+    # that constant in every function; an x86-64 module built without
+    # clones still asks.
+    if "$NURLC" --target=aarch64 "$V4SRC" > "$WORK/v4a64.ll" 2>/dev/null &&
+            "$NURLC" --no-cpu-dispatch "$V4SRC" > "$WORK/v4nd.ll" 2>/dev/null; then
+        na=$(grep -c 'call i32 @nurl_cpu_x86_v[34]()' "$WORK/v4a64.ll")
+        nn=$(grep -c 'call i32 @nurl_cpu_x86_v[34]()' "$WORK/v4nd.ll")
+        if [ "$na" -eq 0 ] && [ "$nn" -gt 0 ]; then
+            ok "x86 level probes: constant 0 off x86-64, calls without clones" "aarch64 0, --no-cpu-dispatch $nn"
+        else
+            bad "x86 level probes: constant 0 off x86-64, calls without clones" "aarch64 $na (want 0), --no-cpu-dispatch $nn (want > 0)"
+        fi
+    else
+        bad "simd_v4_dispatch: compiles for aarch64 and without dispatch" "nurlc failed"
+    fi
     pf="$(probes level base)/$(probes level x86v3)/$(probes level x86v4)/$(probes level3 base)/$(probes level3 x86v3)"
     if [ "$pf" = "////v4" ]; then ok "simd clones fold the probes their dispatcher answered" "only level3.x86v3 asks v4"
     else bad "simd clones fold the probes their dispatcher answered" "left: $pf (want ////v4)"; fi
@@ -356,6 +371,29 @@ if "$NURLC" --cpu-dispatch "$V4SRC" > "$WORK/v4.ll" 2> "$WORK/v4.err"; then
             c4=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c 'vprold')
             if [ "$c4" -gt 0 ]; then ok "__chacha20_xor_wide: an x86-64-v4 clone with VPROLD" "$c4"
             else bad "__chacha20_xor_wide: an x86-64-v4 clone with VPROLD" "none"; fi
+            # The sixteen-block pass (Agora #116) is zmm code in the v4
+            # clone, and only there: the other clones fold its
+            # nurl_cpu_x86_v4 guard to 0 and drop it.
+            z4=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -cE 'vprold[[:space:]].*%zmm')
+            zs=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c 'vshufi64x2')
+            zo=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.(x86v3|base)>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c '%zmm')
+            if [ "$z4" -gt 0 ] && [ "$zs" -gt 0 ] && [ "$zo" -eq 0 ]; then
+                ok "chacha20 sixteen-block pass: zmm in the v4 clone only" "$z4 VPROLD zmm, $zs VSHUFI64X2; 0 zmm elsewhere"
+            else
+                bad "chacha20 sixteen-block pass: zmm in the v4 clone only" "v4: $z4 VPROLD zmm, $zs VSHUFI64X2; other clones: $zo zmm"
+            fi
+            # Eight-lane Poly1305 (Agora #116) is the same: zmm VPMULUDQ
+            # in __poly_wide's v4 clone, one a product (no 32-bit split),
+            # and no zmm in its other clones.
+            pz=$(awk '/^[0-9a-f]+ <[^>]*__poly_wide[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s")
+            pm4=$(printf '%s\n' "$pz" | grep -cE 'vpmuludq[[:space:]].*%zmm')
+            px4=$(printf '%s\n' "$pz" | grep -cE 'vps(ll|rl)q[[:space:]]+\$0x20')
+            po=$(awk '/^[0-9a-f]+ <[^>]*__poly_wide[a-z0-9_]*\.(x86v3|base)>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c '%zmm')
+            if [ "$pm4" -gt 0 ] && [ "$px4" -eq 0 ] && [ "$po" -eq 0 ]; then
+                ok "poly1305 eight-lane pass: zmm in the v4 clone only" "$pm4 VPMULUDQ zmm, no 32-bit split; 0 zmm elsewhere"
+            else
+                bad "poly1305 eight-lane pass: zmm in the v4 clone only" "v4: $pm4 VPMULUDQ zmm, $px4 split shifts; other clones: $po zmm"
+            fi
         fi
     else
         note "simd v4 machine code and run" "skipped (not x86-64, or no objdump / build)"

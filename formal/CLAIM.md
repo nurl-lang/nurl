@@ -103,10 +103,12 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
 The rules are stricter than nurlc's in two places, both for a binding of
 a type whose destructor may read a view:
 - nurlc lets it gain views of older bindings;
-- nurlc lets it be an `inout` argument, and checks the callee only at its
-  end. That is open there: a callee that points it at its own local and
-  back, and panics in between, gives the destructor a freed view
-  (public #1030).
+- nurlc lets it be an `inout` argument, whose callee may give it views
+  only of what the caller passed in: a view of the callee's own local is
+  refused where it is given, even for a moment (#284). One shape is still
+  open there: a callee that stores into it a view of a String
+  parameter's buffer (`string_data src`) is not tracked at the call
+  (#301).
 
 How the runtime carries this out (`stdlib/runtime_core.c`, `nurl_panic`)
 is stated here so the claim does not hide it:

@@ -1,5 +1,5 @@
-// x25519_base_agree.nu — the fixed-base public key (x25519_base: ref10's
-// signed radix-16 digits over an Edwards table, then the birational map)
+// x25519_base_agree.nu — the fixed-base public key (x25519_base: signed
+// radix-32 digits over an Edwards table, then the birational map)
 // against the Montgomery ladder at u = 9, for 300 scalars: seven chosen
 // to walk the digit recoding's edges — all-zero, all-0xff, all-0x88 and
 // all-0x77 (every digit ±8, every carry taken or none), 0x80 and 0x08
@@ -18,6 +18,23 @@ $ `stdlib/std/x25519.nu`
     : ( Vec u ) v ( vec_with_cap [u] 32 )
     : ~ i q 0
     ~ < q 32 { ( vec_push [u] v # u byte ) = q + q 1 }
+    ^ v
+}
+
+// Every five-bit chunk of the 256 bits set to c: the radix-32 digit
+// recoding's edges (16 is −16 with a carry, 15 is the largest digit
+// without one).
+@ chunks i c → ( Vec u ) {
+    : ( Vec u ) v ( vec_zeroed [u] 32 )
+    : ~ i b 0
+    ~ < b 256 {
+        ? != 0 & >> c % b 5 1 {
+            : i k >> b 3
+            : i old ?? ( vec_get [u] v k ) { T x → # i x F _ → 0 }
+            ( vec_set [u] v k # u | old << 1 & b 7 )
+        } {}
+        = b + b 1
+    }
     ^ v
 }
 
@@ -60,6 +77,17 @@ $ `stdlib/std/x25519.nu`
         = i + i 1
     }
     ( nurl_print `base vs ladder: 300 scalars, ` ) ( nurl_print_int bad ) ( nurl_print ` disagree\n` )
+    : ~ i bad5 0
+    : ( Vec i ) cs ( vec_new [i] )
+    ( vec_push [i] cs 16 ) ( vec_push [i] cs 15 ) ( vec_push [i] cs 31 ) ( vec_push [i] cs 17 ) ( vec_push [i] cs 1 )
+    : ~ i ci 0
+    ~ < ci 5 {
+        : ( Vec u ) k ( chunks ?? ( vec_get [i] cs ci ) { T x → x F _ → 0 } )
+        ? ! ( bytes_eq ( x25519_base k ) ( x25519 k nine ) ) { = bad5 + bad5 1 } {}
+        = ci + ci 1
+    }
+    ( nurl_print `radix-32 edges: 5 scalars, ` ) ( nurl_print_int bad5 ) ( nurl_print ` disagree\n` )
+    = bad + bad bad5
     : String h ( bytes_to_hex acc )
     ( nurl_print `chain ` ) ( nurl_print ( string_data h ) ) ( nurl_print `\n` )
     ( string_free h )

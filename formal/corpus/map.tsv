@@ -1,6 +1,9 @@
 probe	rule	phase	note	nurlc	old_id
 aes_gcm_open_in_offset_wraps_its_range_check	§3.3d	B	`( aes_gcm_open_in key iv seq buf aad_at data_at end )` with `data_at` near 2^63: the check `data_at + 16 > end` wrapped and passed, and GCM ran over (and zeroed) memory 2^63 bytes past the…	runs-clean	h450
+arc_field_of_a_sink_param_returned_in_an_option	§2.12	A2	agora #269: an Arc field of a sink parameter returned in an option	runs-clean	-
+arc_field_returned_in_an_option	§2.12	A2	agora #269: an Arc field bound and returned in an option (no view)	runs-clean	-
 arc_of_a_library_handle_on_two_threads	§6.5	A3	an ( Arc PNCounter ) shared by two threads: each arc_get copy is a share of one counter; under the Sync question a share handle not asserted % Sync is not Sync	rejected	h338
+arc_of_views_field_returned_in_an_option	§2.12	A2	agora #269: an Arc whose payload views a local, returned out of a field	rejected	-
 arc_payload_changed_by_its_maker_while_shared	§6.5	A3	spawner vec_sets Arc payload while worker reads it: race, UAF	rejected	h213
 arc_payload_lent_through_a_struct	§6.5	A3	helper takes a struct holding an Arc and lends the payload; caller writes through the view while threads read	rejected	h288
 arc_payload_mutated_without_a_named_view	§6.5	A3	two threads vec_push through arc_get unlocked: data race on payload	rejected	h212
@@ -39,6 +42,7 @@ borrowing_arg_block_join_fresh	§7.6	A2	agora #199: `( slen { : i k 1 ? c ( stri
 bound_closure_handed_back_reached_its_frame	§7.5	A2	bound closure returned, its capture drop flag left in dead frame	runs-clean	h243
 bound_option_enum_payload_nested	§7.6	A2	a nested `??` over a bound option's enum payload: dropped twice	runs-clean	h968
 box_borrow_then_set	StmtT.assign	A1	box_get borrow; box_set replaces the value; borrow read	rejected	h74
+box_field_returned_in_an_option	§2.12	A2	agora #269: a Box field bound and returned in an option	runs-clean	-
 box_ptr_field_copied	§6.2	B	Box literal built from another Box's ptr field: two owners	rejected	h57
 btree_borrow_then_replace	StmtT.assign	A1	btree_get borrow; btree_set replaces key, old dropped; borrow read	rejected	h76
 btree_merge_remove_lost_value	§6.4	B	stdlib BTree remove-with-merge moves emptied slot down: value leaks	runs-clean	h210
@@ -320,10 +324,16 @@ enum_option_payload_reassigned_in_a_loop	§7.6	A2	agora #155: an enum binding wi
 enum_payload_closure_guard	§2.11	A2	agora #129: a closure of the declared signature as an enum payload: accepted	runs-clean	h917
 enum_payload_closure_signature	§2.11	A2	agora #129: the same closure as an enum variant's payload	rejected	h914
 enum_payload_handed_to_a_sink	§7.6	A2	enum payload String handed to sink in arm; enum drops it again	runs-clean	h231
+enum_payload_lent_by_a_parameter_vec_returned	§7.6	A2	agora #279: an enum payload lent by a parameter's Vec, returned (lent back)	runs-clean	-
+enum_payload_lent_out_of_a_local_vec_returned	§7.6	A2	agora #279: an enum payload lent out of a local Vec, returned (UAF)	runs-clean	-
+enum_payload_lent_out_of_a_local_vec_returned_in_an_option	§7.6	A2	agora #279: an enum payload lent out of a local Vec, returned in an option (UAF)	runs-clean	-
 enum_payload_named_struct	§2.12	A2	agora #129: an enum variant declared to carry an `A` given a `B`: the arm reads B's int as A's String	rejected	h915
+enum_payload_of_a_bound_lent_option_returned	§7.6	A2	agora #279: an enum payload under a bound lent option, returned (UAF)	runs-clean	-
+enum_payload_of_a_bound_owned_option_returned	§7.6	A2	agora #279: an enum payload under a bound owned option, returned (UAF)	runs-clean	-
 enum_payload_returned_out_of_a_channel_reply	§7.6	A2	agora #264: an enum payload returned out of a channel reply (UAF)	runs-clean	-
 enum_payload_returned_out_of_an_enum_bound_from_a_reply	§7.6	A2	agora #264: an enum payload returned out of an enum bound from a channel reply (UAF)	runs-clean	-
 enum_payload_returned_out_of_an_option_payload	§7.6	A2	agora #264: an enum payload returned out of an option payload (UAF)	runs-clean	-
+enum_payload_three_levels_lent_out_of_a_local_vec	§7.6	A2	agora #279: a payload three matches deep, lent out of a local Vec, returned (UAF)	runs-clean	-
 enum_result_payload_read_from_a_vec	§7.6	A2	agora #155: enums with result payloads in a Vec, matched through vec_get	runs-clean	h647
 enum_struct_payload_returned_out_of_an_option_payload	§7.6	A2	agora #264: a boxed struct payload returned out of an option payload's enum (UAF)	runs-clean	-
 enum_temp_matched_before_a_break	§7.6	A2	agora #155: the same with a break in the arm	runs-clean	h652
@@ -630,6 +640,8 @@ omitted_enum_payload	§6.2	B	enum literal omits Vec payload: arm binds zero Vec,
 omitted_handle_field	§6.2	B	struct literal omits Rc field: zero handle, rc_get reads null block	rejected	h181
 omitted_vec_field	§6.2	B	struct literal omits Vec field: zero Vec with null control block, push writes null	rejected	h180
 one_of_two_payloads_returned_out_of_an_enum	§7.6	A2	agora #175: one of a variant's two payloads returned, the other dropped with the enum	runs-clean	h664
+option_bound_from_a_local_vec_get_payload_returned	§7.6	A2	agora #279: an option bound from a local Vec's vec_get, its payload returned (UAF)	runs-clean	-
+option_bound_from_a_local_vec_get_string_returned	§7.6	A2	agora #279: an option of a String bound from a local Vec's vec_get, its payload returned (UAF)	runs-clean	-
 option_captured_by_a_returned_closure	§2.11	A2	a returned closure over an option-of-String parameter was not recorded as lending it; the caller gave the option a new value, then called the closure	rejected	h302
 option_field_replaced_leaks	§7.1	A2	replacing an option struct field does not drop old payload: leak	runs-clean	h198
 option_join_to_inout_param	§7.6	A2	agora #183: an option `?` assigned to an `inout ?String`	runs-clean	h766

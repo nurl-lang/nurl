@@ -3125,6 +3125,14 @@ unsafe @ note_unsafe_item s pos s what → v {
 // they turn g_cpu_dispatch (x86-only by construction) off and on.
 : ~ i g_crypto_target 1
 
+// Is the module for x86-64? The native default is the host's
+// architecture, `--target=` names another, `--cpu-dispatch` says x86-64;
+// `--no-cpu-dispatch` leaves it (an x86-64 module without clones still
+// asks the CPU). Elsewhere the ISA-level probes nurl_cpu_x86_v3 and
+// nurl_cpu_x86_v4 answer 0 on every CPU, and emit_fn_ir makes them the
+// constant they are (__ir_x86_levels_off).
+: ~ i g_target_x86 1
+
 // Unused-symbol lint (opt-in via `--lint`). Default OFF so ordinary
 // builds — and the compiler's own bootstrap, which never passes
 // `--lint` — emit byte-identical IR and stay at their fixed point.
@@ -4054,6 +4062,19 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     }
 }
 
+// A `:` binding of a call's option or result (`: ?String o ( vec_get
+// [String] vs 0 )`) remembers the call it came out of, as a `??` over the
+// call itself does for its payload (h270): a payload handed back out of it
+// later (`?? o { T e → ^ e }`, at any depth) is copied where the call lends
+// out of a local of this frame. Without it the payload was lent out of the
+// frame (agora #279). (A `: ~` binding may be given another value: not
+// followed.)
+@ mem_note_bound_lend i syms s name b is_mutable i rhs_tt s vt → v {
+    : b on & & & ! is_mutable == rhs_tt TT_LPAREN != 0 ( nurl_str_starts vt `{ i1, ` ) != 0 ( nurl_sym_len syms `__last_call_lend_key__` )
+    ( nurl_sym_def syms ( nurl_str_cat name `__pljk` ) ? on ( nurl_sym_get syms `__last_call_lend_key__` ) `` )
+    ( nurl_sym_def syms ( nurl_str_cat name `__pljr` ) ? on ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` ) `` )
+}
+
 @ mem_ret_local_lend i syms i cg → s {
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     : s args ( nurl_sym_get syms `__last_call_args__` )
@@ -4917,6 +4938,8 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // (A `??` payload copied where its call lent out of a local: owned on
     // those runs, answered per call — agora #209.)
     : ~ b ret_pl_copied F
+    : ~ s ret_pl_own ``
+    : ~ s ret_pl_taken ``
     // (A binding of a value that cannot be copied which a call may lend:
     // owned exactly when that call's answer said so — its flag, as for `^ (
     // g x )` the call's bit; agora #200.)
@@ -5129,7 +5152,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
         : s __ert ( __etake_rec syms ret_first_val )
         ? != 0 ( nurl_str_len __ert ) {
             = hbit ( mem_enum_take syms cg __ert )
-            = ret_field_copy T
+            // (Taken on some paths only — an enum lent where it owns
+            // nothing: the lend below answers the others.)
+            ? ( seq hbit `true` ) { = ret_field_copy T } { = ret_pl_taken ( nurl_str_cat hbit `` ) }
         } {}
     } {}
     // `^ x` of a `??` payload: what its matched call lent (h270).
@@ -5144,7 +5169,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
             // (A `vec_get` element has an owner slot when it cannot be
             // copied, #203 — flag 0: the Vec owns it until it is taken.)
             ? | == 0 ( nurl_str_len ( mem_udrop_ptr_of syms ret_first_val ) ) != 0 ( nurl_sym_len2 syms ret_first_val `__vget` ) {
-                : s __pll ( mem_payload_local_lend syms cg ret_first_val )
+                : ~ s __pll ( mem_payload_local_lend syms cg ret_first_val )
+                // (Not where it was taken out of its enum above: owned there.)
+                ? & != 0 ( nurl_str_len __pll ) != 0 ( nurl_str_len ret_pl_taken ) {
+                    : s __ptn ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ptn ) ( nurl_print ` = xor i1 ` ) ( nurl_print ret_pl_taken ) ( nurl_print `, 1\n` )
+                    : s __pl2 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __pl2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __pll ) ( nurl_print `, ` ) ( nurl_print __ptn ) ( nurl_print `\n` )
+                    = __pll __pl2
+                } {}
                 ? != 0 ( nurl_str_len __pll ) {
                     : s __plt ( nurl_get_last_type )
                     // (A `vec_get` element of a Vec this frame drops is taken
@@ -5157,6 +5190,7 @@ unsafe @ gen_ret i lex i syms i cg → s {
                         ( nurl_print `  ` ) ( nurl_print __plo ) ( nurl_print ` = or i1 ` ) ( nurl_print hbit ) ( nurl_print `, ` ) ( nurl_print __pll ) ( nurl_print `\n` )
                         = hbit __plo
                         = ret_pl_copied T
+                        = ret_pl_own __pll
                         ( mem_hown_dyn_lend syms ( nurl_sym_get syms `__last_local_lend__` ) )
                     } { ? ( __nc_held_ty __plt ) {
                             ( __park_nc_local_lend lex ( nurl_sym_get syms `__last_local_lend__` ) ( nurl_sym_get2 syms ret_first_val `__pljr` ) __plt )
@@ -5165,6 +5199,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
             } {}
         } {}
     } {}
+    // (A payload taken out of its enum on some paths and copied above where
+    // lent out of a local has its answer: no rule below re-asks it.)
+    ? != 0 ( nurl_str_len ret_pl_taken ) { = ret_field_copy T } {}
     // `^ p` of a String / Vec parameter, or of one that cannot be copied:
     // the caller's own value comes back — lent, unless this function keeps
     // p (retlend, resolved at module end in mem_emit_arg_flags).
@@ -5288,6 +5325,14 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     = acc o
                 } {}
             }
+            // (…and a `??` payload of a cursor over a bound option, copied
+            // or taken above where its call lent out of a local: its own
+            // on those runs, agora #279.)
+            ? ret_pl_copied {
+                : s po ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print po ) ( nurl_print ` = or i1 ` ) ( nurl_print acc ) ( nurl_print `, ` ) ( nurl_print ret_pl_own ) ( nurl_print `\n` )
+                = acc po
+            } {}
             : s nb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print nb ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, 1\n` )
             : s c ( nurl_cg_reg cg )
@@ -20165,10 +20210,18 @@ unsafe @ gen_match i lex i syms i cg → s {
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
                 // …and the call it came out of, should it be handed back (h270).
+                // (…or the one its scrutinee came out of, a payload itself:
+                // `?? ( vec_get … ) { T m → ?? m { MSome v → ^ v } }` — v is
+                // part of what that call lent, and handed back it is copied
+                // where the call lends out of a local of this frame. Without
+                // it v was lent out of the frame, agora #279.)
                 ? != 0 ( nurl_str_len __m_lkey ) {
                     ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljk` ) __m_lkey )
                     ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljr` ) __m_lroots )
-                } {}
+                } { ? & ( is_ident_tok match_first_tt ) != 0 ( nurl_sym_len2 syms match_var_name `__pljk` ) {
+                        ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljk` ) ( nurl_sym_get2 syms match_var_name `__pljk` ) )
+                        ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljr` ) ( nurl_sym_get2 syms match_var_name `__pljr` ) )
+                    } {} }
                 // A payload of a `vec_get` result reads that Vec slot.
                 ? & pt0_is_opt_bool != 0 ( nurl_sym_len2 syms match_var_name `__vget` )
                 { ( nurl_sym_def syms ( nurl_str_cat pv0 `__vget` ) ( nurl_sym_get2 syms match_var_name `__vget` ) )
@@ -25328,11 +25381,47 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     : s r2 ( str_skip_word r1 )
     : s storage ( str_first_word r2 )
     : s ety ( str_skip_word r2 )
-    : s c ? ( seq ( nurl_sym_get2 syms slot `__sborrow` ) `dyn` ) ( mem_udrop_flag_get syms cg slot ) ( nurl_str_cat `true` `` )
-    : b cond ! ( seq c `true` )
+    : ~ s c ? ( seq ( nurl_sym_get2 syms slot `__sborrow` ) `dyn` ) ( mem_udrop_flag_get syms cg slot ) ( nurl_str_cat `true` `` )
     : s gp ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print gp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty ety ) )
     ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print fidx ) ( nurl_print `\n` )
+    // A cursor over an option binding's payload (`: ?E om …  ?? om { T m →
+    // ?? m { V v → ^ v } }`) holds a copy: the payload sits in the option's
+    // own slot too, and the option drops it. It goes from there, where the
+    // option owns it and holds this very payload, and the payload is owned
+    // exactly there; the cursor's own flag says nothing. (Taken from the
+    // cursor's copy alone, the option freed what was handed out, agora
+    // #279.)
+    : s al ( nurl_sym_get2 syms slot `__alias` )
+    ? != 0 ( nurl_str_len al ) {
+        : s mine ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print mine ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
+        : s oty ( nurl_str_cat3 `{ i1, ` ( nurl_llty ety ) ` }` )
+        : ~ s took ( nurl_str_cat `false` `` )
+        : ~ s rest ( nurl_str_cat al `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+            ? & & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms w `__udty` ) `%__opt.` ) {
+                : s og ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print og ) ( nurl_print ` = getelementptr ` ) ( nurl_print oty ) ( nurl_print `, ptr ` ) ( nurl_print w ) ( nurl_print `, i32 0, i32 1, i32 ` ) ( nurl_print fidx ) ( nurl_print `\n` )
+                : s ov ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print ov ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print og ) ( nurl_print `\n` )
+                : s same ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print mine ) ( nurl_print `\n` )
+                : s wf ( mem_udrop_flag_get syms cg w )
+                : s tw ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print tw ) ( nurl_print ` = and i1 ` ) ( nurl_print same ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+                : s nw ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = select i1 ` ) ( nurl_print tw ) ( nurl_print `, i64 0, i64 ` ) ( nurl_print ov ) ( nurl_print `\n` )
+                ( nurl_print `  store i64 ` ) ( nurl_print nw ) ( nurl_print `, ptr ` ) ( nurl_print og ) ( nurl_print `\n` )
+                : s t2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print t2 ) ( nurl_print ` = or i1 ` ) ( nurl_print took ) ( nurl_print `, ` ) ( nurl_print tw ) ( nurl_print `\n` )
+                = took t2
+            } {}
+        }
+        = c took
+    } {}
+    : b cond ! ( seq c `true` )
     ? ( seq storage `3` ) {
         : s bx ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print bx ) ( nurl_print ` = load i64, ptr ` ) ( nurl_print gp ) ( nurl_print `\n` )
@@ -27703,8 +27792,17 @@ unsafe @ resolve_arc_mut → v {
 @ bck_bind_class0 s lty → i {
     // (3: an owner that may also hold views — a Vec of them, a struct
     // with a view field: what it holds points into storage it does not
-    // own, so it depends on that storage.)
-    ? ( bck_is_heap_lty lty ) { ^ ? & ( bck_sound ) ( __ty_holds_view lty 0 ) 3 0 } {}
+    // own, so it depends on that storage. Asked precisely: a library
+    // handle holds what its type arguments can — an `( Arc i )` field
+    // views nothing, and a struct holding one is no view-holder whose
+    // fields handed back read as views of it, agora #269.)
+    ? ( bck_is_heap_lty lty ) {
+        ? ! ( bck_sound ) { ^ 0 } {}
+        = g_thv_precise 1
+        : b hv ( __ty_holds_view lty 0 )
+        = g_thv_precise 0
+        ^ ? hv 3 0
+    } {}
     // (4: a closure — a scalar to the borrow rules, its captures tracked as
     // such — that depends on what the views it captured point into.)
     ? ( __is_closure_ty lty ) { ^ ? ( bck_sound ) 4 1 } {}
@@ -35018,6 +35116,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len impl_mangle_key )
                 { = g_udrop_noinit 1
                     ( mem_note_vget_binding syms name bck_rhs_tt )
+                    ( mem_note_bound_lend syms name is_mutable bck_rhs_tt vt )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
                     ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
@@ -35389,6 +35488,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
                     { = g_udrop_noinit 1
+                        ( mem_note_bound_lend syms name is_mutable bck_rhs_tt ptype )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
                         ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
@@ -50224,7 +50324,8 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto i slvl →
     // or calls into it, as it is otherwise. The AArch64 vector ABI does
     // not change with `+aes`, so a wide signature crosses as it stands.
     ? == g_cpu_dispatch 0 {
-        ? > crypto 0 { : s gated ( __crypto_fn_ir fn_ir T crypto ) ( emit_hoisted gated ) } { ( emit_hoisted fn_ir ) }
+        : s one ? == g_target_x86 0 ( __ir_x86_levels_off fn_ir ) ( nurl_str_cat fn_ir `` )
+        ? > crypto 0 { : s gated ( __crypto_fn_ir one T crypto ) ( emit_hoisted gated ) } { ( emit_hoisted one ) }
         ^ v
     } {}
     // A body of a VAES or IFMA tier (crypto has bit 2 or 16: it uses a
@@ -60619,12 +60720,86 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( emit `  %zh.r = shufflevector <8 x i64> %a, <8 x i64> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>` )
     ( emit `  ret <4 x i64> %zh.r` )
     ( emit `}` )
+    // The 32-bit group, for sixteen-block ChaCha20 in a `simd v4` clone:
+    // a word in all sixteen lanes, a lane rotate (one VPROLD with
+    // AVX-512), the in-lane interleaves of v256's, per 128-bit lane, and
+    // two 128-bit lane shuffles across a pair (VSHUFI64X2): `_even128 a b`
+    // is a's lanes 0, 2 then b's lanes 0, 2, `_odd128` lanes 1, 3. Two
+    // rounds of them transpose four registers' 128-bit lanes.
+    ( emit `define linkonce_odr <8 x i64> @nurl_v512_bcast32(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %zc.t = trunc i64 %x to i32` )
+    ( emit `  %zc.0 = insertelement <16 x i32> poison, i32 %zc.t, i32 0` )
+    ( emit `  %zc.s = shufflevector <16 x i32> %zc.0, <16 x i32> poison, <16 x i32> zeroinitializer` )
+    ( emit `  %zc.r = bitcast <16 x i32> %zc.s to <8 x i64>` )
+    ( emit `  ret <8 x i64> %zc.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <8 x i64> @nurl_v512_rotl32(<8 x i64> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %zt.a = bitcast <8 x i64> %a to <16 x i32>` )
+    ( emit `  %zt.t = trunc i64 %n to i32` )
+    ( emit `  %zt.m = and i32 %zt.t, 31` )
+    ( emit `  %zt.0 = insertelement <16 x i32> poison, i32 %zt.m, i32 0` )
+    ( emit `  %zt.s = shufflevector <16 x i32> %zt.0, <16 x i32> poison, <16 x i32> zeroinitializer` )
+    ( emit `  %zt.f = call <16 x i32> @llvm.fshl.v16i32(<16 x i32> %zt.a, <16 x i32> %zt.a, <16 x i32> %zt.s)` )
+    ( emit `  %zt.r = bitcast <16 x i32> %zt.f to <8 x i64>` )
+    ( emit `  ret <8 x i64> %zt.r` )
+    ( emit `}` )
+    ( emit `declare <16 x i32> @llvm.fshl.v16i32(<16 x i32>, <16 x i32>, <16 x i32>)` )
+    // The 64-bit group, for eight-lane Poly1305 in a `simd v4` clone: a
+    // word in all eight lanes, the 32×32→64 product of each lane's low
+    // halves (one VPMULUDQ), and shifts by a count masked to the lane.
+    ( emit `define linkonce_odr <8 x i64> @nurl_v512_bcast64(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %zq.0 = insertelement <8 x i64> poison, i64 %x, i32 0` )
+    ( emit `  %zq.s = shufflevector <8 x i64> %zq.0, <8 x i64> poison, <8 x i32> zeroinitializer` )
+    ( emit `  ret <8 x i64> %zq.s` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <8 x i64> @nurl_v512_mul32u(<8 x i64> %a, <8 x i64> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %zu.x = and <8 x i64> %a, <i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295>` )
+    ( emit `  %zu.y = and <8 x i64> %b, <i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295>` )
+    ( emit `  %zu.r = mul <8 x i64> %zu.x, %zu.y` )
+    ( emit `  ret <8 x i64> %zu.r` )
+    ( emit `}` )
+    ( __emit_v512_shift `nurl_v512_shl64` `shl` )
+    ( __emit_v512_shift `nurl_v512_shr64` `lshr` )
+    ( __emit_v512_shuf32 `nurl_v512_unpacklo32` `<i32 0, i32 16, i32 1, i32 17, i32 4, i32 20, i32 5, i32 21, i32 8, i32 24, i32 9, i32 25, i32 12, i32 28, i32 13, i32 29>` )
+    ( __emit_v512_shuf32 `nurl_v512_unpackhi32` `<i32 2, i32 18, i32 3, i32 19, i32 6, i32 22, i32 7, i32 23, i32 10, i32 26, i32 11, i32 27, i32 14, i32 30, i32 15, i32 31>` )
+    ( __emit_v512_bin `nurl_v512_unpacklo64` `shufflevector <8 x i64> %a, <8 x i64> %b, <8 x i32> <i32 0, i32 8, i32 2, i32 10, i32 4, i32 12, i32 6, i32 14>` )
+    ( __emit_v512_bin `nurl_v512_unpackhi64` `shufflevector <8 x i64> %a, <8 x i64> %b, <8 x i32> <i32 1, i32 9, i32 3, i32 11, i32 5, i32 13, i32 7, i32 15>` )
+    ( __emit_v512_bin `nurl_v512_even128` `shufflevector <8 x i64> %a, <8 x i64> %b, <8 x i32> <i32 0, i32 1, i32 4, i32 5, i32 8, i32 9, i32 12, i32 13>` )
+    ( __emit_v512_bin `nurl_v512_odd128` `shufflevector <8 x i64> %a, <8 x i64> %b, <8 x i32> <i32 2, i32 3, i32 6, i32 7, i32 10, i32 11, i32 14, i32 15>` )
     ( emit `define linkonce_odr <8 x i64> @nurl_v512_bswap128(<8 x i64> %a) alwaysinline {` )
     ( emit `entry:` )
     ( emit `  %zr.a = bitcast <8 x i64> %a to <64 x i8>` )
     ( emit `  %zr.s = shufflevector <64 x i8> %zr.a, <64 x i8> poison, <64 x i32> <i32 15, i32 14, i32 13, i32 12, i32 11, i32 10, i32 9, i32 8, i32 7, i32 6, i32 5, i32 4, i32 3, i32 2, i32 1, i32 0, i32 31, i32 30, i32 29, i32 28, i32 27, i32 26, i32 25, i32 24, i32 23, i32 22, i32 21, i32 20, i32 19, i32 18, i32 17, i32 16, i32 47, i32 46, i32 45, i32 44, i32 43, i32 42, i32 41, i32 40, i32 39, i32 38, i32 37, i32 36, i32 35, i32 34, i32 33, i32 32, i32 63, i32 62, i32 61, i32 60, i32 59, i32 58, i32 57, i32 56, i32 55, i32 54, i32 53, i32 52, i32 51, i32 50, i32 49, i32 48>` )
     ( emit `  %zr.r = bitcast <64 x i8> %zr.s to <8 x i64>` )
     ( emit `  ret <8 x i64> %zr.r` )
+    ( emit `}` )
+}
+
+// A v512 shift of every 64-bit lane by one count, masked to the lane.
+@ __emit_v512_shift s name s op → v {
+    ( emit ( nurl_str_cat3 `define linkonce_odr <8 x i64> @` name `(<8 x i64> %a, i64 %n) alwaysinline {` ) )
+    ( emit `entry:` )
+    ( emit `  %zk.m = and i64 %n, 63` )
+    ( emit `  %zk.0 = insertelement <8 x i64> poison, i64 %zk.m, i32 0` )
+    ( emit `  %zk.s = shufflevector <8 x i64> %zk.0, <8 x i64> poison, <8 x i32> zeroinitializer` )
+    ( emit ( nurl_str_cat3 `  %zk.r = ` op ` <8 x i64> %a, %zk.s` ) )
+    ( emit `  ret <8 x i64> %zk.r` )
+    ( emit `}` )
+}
+
+// A v512 shuffle of 32-bit lanes from a and b by the mask `m`.
+@ __emit_v512_shuf32 s name s m → v {
+    ( emit ( nurl_str_cat3 `define linkonce_odr <8 x i64> @` name `(<8 x i64> %a, <8 x i64> %b) alwaysinline {` ) )
+    ( emit `entry:` )
+    ( emit `  %zs.a = bitcast <8 x i64> %a to <16 x i32>` )
+    ( emit `  %zs.b = bitcast <8 x i64> %b to <16 x i32>` )
+    ( emit ( nurl_str_cat3 `  %zs.s = shufflevector <16 x i32> %zs.a, <16 x i32> %zs.b, <16 x i32> ` m `` ) )
+    ( emit `  %zs.r = bitcast <16 x i32> %zs.s to <8 x i64>` )
+    ( emit `  ret <8 x i64> %zs.r` )
     ( emit `}` )
 }
 
@@ -61015,7 +61190,20 @@ unsafe @ __rt_decl_ptypes s region → s {
 // back to the end of the module (flush_simd_deferred) with the `simd`
 // functions: which of its calls can be inlined depends on functions not
 // generated yet.
+// Off x86-64 the ISA-level probes are the constant 0 they answer there,
+// so a body that picks a path on one keeps only the portable path, and
+// LLVM neither compiles nor carries the x86 one (ChaCha20's sixteen- and
+// eight-block passes in an AArch64 module).
+@ __ir_x86_levels_off s ir → s {
+    ^ ( __ir_subst_all ( __ir_subst_all ir `call i32 @nurl_cpu_x86_v3()` `add i32 0, 0` ) `call i32 @nurl_cpu_x86_v4()` `add i32 0, 0` )
+}
+
 @ emit_fn_ir s ir → v {
+    ? == g_target_x86 0 { ( __emit_fn_ir ( __ir_x86_levels_off ir ) ) ^ v } {}
+    ( __emit_fn_ir ir )
+}
+
+@ __emit_fn_ir s ir → v {
     : i lvl ? != g_crypto_target 0 ( __ir_crypto_level ir ) 0
     ? > lvl 0
     { : s nm ( __ir_fn_name ir )
@@ -61317,6 +61505,18 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v512_lo256` `v256` )
     ( nurl_sym_def syms `nurl_v512_hi256` `v256` )
     ( nurl_sym_def syms `nurl_v512_bswap128` `v512` )
+    ( nurl_sym_def syms `nurl_v512_bcast32` `v512` )
+    ( nurl_sym_def syms `nurl_v512_rotl32` `v512` )
+    ( nurl_sym_def syms `nurl_v512_bcast64` `v512` )
+    ( nurl_sym_def syms `nurl_v512_mul32u` `v512` )
+    ( nurl_sym_def syms `nurl_v512_shl64` `v512` )
+    ( nurl_sym_def syms `nurl_v512_shr64` `v512` )
+    ( nurl_sym_def syms `nurl_v512_unpacklo32` `v512` )
+    ( nurl_sym_def syms `nurl_v512_unpackhi32` `v512` )
+    ( nurl_sym_def syms `nurl_v512_unpacklo64` `v512` )
+    ( nurl_sym_def syms `nurl_v512_unpackhi64` `v512` )
+    ( nurl_sym_def syms `nurl_v512_even128` `v512` )
+    ( nurl_sym_def syms `nurl_v512_odd128` `v512` )
     ( nurl_sym_def syms `nurl_v512_aesenc` `v512` )
     ( nurl_sym_def syms `nurl_v512_aesenclast` `v512` )
     ( nurl_sym_def syms `nurl_v512_aesdec` `v512` )
@@ -69344,17 +69544,18 @@ unsafe @ main → i {
     // architecture of a cross build, `--cpu-dispatch` x86-64. A wasm
     // nurlc keeps the native default (nurl_host_arch, runtime_core.c).
     : i __host_arch ( nurl_host_arch )
-    ? == __host_arch 0 { = g_cpu_dispatch 0 = g_crypto_target 0 } {}
-    ? == __host_arch 2 { = g_cpu_dispatch 0 = g_crypto_target 2 } {}
+    ? == __host_arch 0 { = g_cpu_dispatch 0 = g_crypto_target 0 = g_target_x86 0 } {}
+    ? == __host_arch 2 { = g_cpu_dispatch 0 = g_crypto_target 2 = g_target_x86 0 } {}
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
         ? options_done { = path a = path_count + path_count 1 = ai + ai 1 continue } {}
         ? ( seq a `--` ) { = options_done T = ai + ai 1 continue } {}
-        ? ( seq a `--cpu-dispatch` ) { = g_cpu_dispatch 1 = g_crypto_target 1 = ai + ai 1 continue } {}
+        ? ( seq a `--cpu-dispatch` ) { = g_cpu_dispatch 1 = g_crypto_target 1 = g_target_x86 1 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--target=` ) {
             : i ta ( __target_arch ( nurl_str_slice a 9 - ( nurl_str_len a ) 9 ) )
             = g_cpu_dispatch ? == ta 1 1 0
             = g_crypto_target ta
+            = g_target_x86 ? == ta 1 1 0
             = ai + ai 1 continue
         } {}
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
