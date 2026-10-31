@@ -39,41 +39,12 @@ $ `stdlib/std/x509.nu`
     ^ acc
 }
 
-// Strip leading zeros, then left-pad to `n` bytes (for ECDSA r/s).
-@ __v_leftn ( Vec u ) v i width → ( Vec u ) {
-    : i n ( vec_len [u] v )
-    : ~ i s 0
-    ~ & < s n == ( __v_bget v s ) 0 { = s + s 1 }
-    : i mag - n s
-    : ( Vec u ) out ( vec_with_cap [u] width )
-    : ~ i pad - width mag
-    ~ > pad 0 { ( vec_push [u] out # u 0 ) = pad - pad 1 }
-    : ~ i i s
-    ~ < i n { ( vec_push [u] out # u ( __v_bget v i ) ) = i + i 1 }
-    ^ out
-}
+// A DER ECDSA signature as r‖s: std/x509's strict decoder (one
+// encoding per signature — trailing bytes, BER lengths, wrong tags,
+// negative or padded INTEGERs are refused), empty otherwise.
+@ __v_ecdsa_rs ( Vec u ) sig → ( Vec u ) { ^ ( der_ecdsa_sig_rs sig 32 ) }
 
-// Parse an ECDSA DER signature SEQ{ INTEGER r, INTEGER s } → r||s, each
-// left-padded to `clen` bytes (2*clen total). Empty on malformed input.
-@ __v_ecdsa_rs_n ( Vec u ) sig i clen → ( Vec u ) {
-    : DerTlv seq ( der_at sig 0 )
-    ? != . seq ok 1 { ^ ( vec_new [u] ) } {}
-    : DerTlv ri ( der_at sig . seq start )
-    : DerTlv si ( der_at sig + . ri start . ri len )
-    ? | != . ri ok 1 != . si ok 1 { ^ ( vec_new [u] ) } {}
-    : ( Vec u ) rraw ( bytes_slice sig . ri start + . ri start . ri len )
-    : ( Vec u ) sraw ( bytes_slice sig . si start + . si start . si len )
-    : ( Vec u ) rp ( __v_leftn rraw clen )
-    : ( Vec u ) sp ( __v_leftn sraw clen )
-    : ( Vec u ) out ( vec_with_cap [u] * 2 clen )
-    ( bytes_extend_bytes out rp )
-    ( bytes_extend_bytes out sp )
-    ^ out
-}
-
-@ __v_ecdsa_rs ( Vec u ) sig → ( Vec u ) { ^ ( __v_ecdsa_rs_n sig 32 ) }
-
-@ __v_ecdsa_rs96 ( Vec u ) sig → ( Vec u ) { ^ ( __v_ecdsa_rs_n sig 48 ) }
+@ __v_ecdsa_rs96 ( Vec u ) sig → ( Vec u ) { ^ ( der_ecdsa_sig_rs sig 48 ) }
 
 // Verify `sig` over `msg` using issuer `iss` and the given algorithm code
 // (1 rsa_pkcs1_sha256 · 4 ecdsa_p256_sha256 · 6 rsa_pss_sha256).
