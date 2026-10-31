@@ -408,7 +408,7 @@ no linear memory at all. A function it cannot lower falls to tier 7.
 ## Performance
 
 Numbers are measured and refreshed by `bench/wasmbench.sh` in the NURL repo;
-the current report is [`bench/WASMRESULTS.md`](../../bench/WASMRESULTS.md),
+the current report is [`bench/WASMRESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/WASMRESULTS.md),
 which compares this runtime against the reference Cranelift JIT over the same
 wasm modules. Two figures worth stating here:
 

@@ -41,10 +41,11 @@ name: fuzz
 # one worth moving: a weekly run pinned at seed 1 re-tests the same programs
 # forever, while walking the start covers ground no run has seen.
 #
-# Every run also renders FUZZRESULTS.md (tools/fuzz/report.py) and commits it
-# to main — the same publish-the-evidence flow bench.yml uses for RESULTS.md —
-# so the repo always carries the latest fuzzing status + the curated findings
-# log (tools/fuzz/FINDINGS.json).
+# Every run also renders FUZZRESULTS.md (tools/fuzz/report.py) and publishes
+# it to the bench-data branch (tools/bench_data.sh) — the same
+# publish-the-evidence flow bench.yml uses for RESULTS.md — so the latest
+# fuzzing status is always one link away. The curated findings log
+# (tools/fuzz/FINDINGS.json) is source and stays on main.
 
 on:
   schedule:
@@ -96,7 +97,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write              # for committing FUZZRESULTS.md to main
+  contents: write              # to publish FUZZRESULTS.md to the bench-data branch
 
 jobs:
   fuzz:
@@ -104,8 +105,6 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0       # full history so the results commit can be pushed onto main
 
       - name: Install build deps (clang + optional FFI libs)
         run: |
@@ -242,49 +241,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Commit the refreshed results to main
-        # Committed straight to main (no PR detour) for the same reason
-        # bench.yml does it: the report is one generated file produced by a
-        # run that just executed on this exact commit. main carries a ruleset
-        # requiring pull requests, so this push needs an actor allowed to
-        # bypass it — BENCH_PUSH_TOKEN (shared with bench.yml). Without it
-        # the push is declined with GH013 and this step fails loudly, which
-        # is the honest outcome.
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
+      - name: Publish the results to the bench-data branch
+        # Measured numbers live on the bench-data branch, not on main
+        # (tools/bench_data.sh, Agora #290): every push to main outside the
+        # merge queue made the queue rebuild and re-run each group in flight.
+        # Only a run of main's code publishes; a run of a branch leaves its
+        # report in the run summary and the artifact.
+        # always(): a fuzz run that found something still publishes its
+        # report, which is how the finding gets seen.
+        if: always() && github.ref == 'refs/heads/main'
         run: |
-          today="$(date -u +%Y-%m-%d)"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # actions/checkout stores an Authorization header for GITHUB_TOKEN
-          # in the local git config, and that header WINS over credentials
-          # embedded in the remote URL (see bench.yml for the war story).
-          git config --unset-all http.https://github.com/.extraheader || true
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # Keep the rendered report OUTSIDE the worktree; the fuzz run takes
-          # tens of minutes, so replay it onto whatever main's tip is now —
-          # the report is a pure overwrite, nothing to reconcile.
-          keep="$(mktemp -d)"
-          cp FUZZRESULTS.md "$keep/FUZZRESULTS.md"
-
-          for i in 1 2 3; do
-            git fetch origin main
-            git checkout -B main origin/main
-            cp "$keep/FUZZRESULTS.md" FUZZRESULTS.md
-            if git diff --quiet -- FUZZRESULTS.md && \
-               git ls-files --error-unmatch FUZZRESULTS.md >/dev/null 2>&1; then
-              echo "results unchanged — nothing to commit."
-              exit 0
-            fi
-            git add FUZZRESULTS.md
-            # [skip ci]: this commit is one generated markdown file; the run
-            # that produced it already executed against a CI-green commit.
-            git commit -m "fuzz: refresh FUZZRESULTS.md ($today) [skip ci]"
-            if git push origin main; then exit 0; fi
-          done
-          echo "could not push FUZZRESULTS.md after 3 attempts" >&2
-          exit 1
+          tools/bench_data.sh publish "fuzz: refresh FUZZRESULTS.md ($(date -u +%Y-%m-%d))" FUZZRESULTS.md

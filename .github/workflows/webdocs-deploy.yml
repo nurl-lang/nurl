@@ -25,18 +25,27 @@ on:
     paths:
       - 'webdocs/**'
       - 'formal/**'
-      - 'bench/results/latest.json'
       - 'CHANGELOG.md'
       - 'tools/get-nurl.sh'
       - 'tools/get-nurl.ps1'
       - 'tools/gen-site-facts.sh'
       - 'tools/gen-bench-table.mjs'
+      - 'tools/bench_data.sh'
       - 'tools/gen-contributors.mjs'
       - '.github/workflows/webdocs-deploy.yml'
+  # The benchmark table's numbers live on the bench-data branch
+  # (tools/bench_data.sh, Agora #290); the build reads them from there
+  # (webdocs/package.json prebuild). A bench run that published new numbers
+  # rebuilds the site when it completes — including after a release tag,
+  # whose deploy started before that tag's numbers existed.
+  workflow_run:
+    workflows: [bench]
+    types: [completed]
   workflow_dispatch: {}
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     # `secrets` can't be used in an `if:` directly, so derive a boolean in
     # job-level `env` (which may read secrets) and gate each step on it.
