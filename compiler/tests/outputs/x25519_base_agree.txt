@@ -3,4 +3,5 @@ LINK OK
 EXIT 0
 OUTPUT
 base vs ladder: 300 scalars, 0 disagree
+radix-32 edges: 5 scalars, 0 disagree
 chain 5f7b593183e1c5d18fff1ed92260047e58f4e06994e99057125c8cab53e00501

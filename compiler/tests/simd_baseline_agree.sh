@@ -110,8 +110,11 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 # rsa_pow2_agree: the `on` leg runs it on an IFMA CPU, the `off` leg
 # the scalar exponentiation, against one golden. P-256's fixed-base table
 # scan (__p256_comb_get_d, v256 in its x86-64-v3 clone) is driven by
-# p256_comb_agree: the comb against the variable-base ladder.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep rsa_pow2_agree p256_comb_agree)
+# p256_comb_agree: the comb against the variable-base ladder. X25519's
+# fixed-base row scan (__xe_pick_w, v256 in its x86-64-v3 clone) is
+# driven by x25519_base_agree: keygen against the variable-base ladder
+# on random scalars.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep rsa_pow2_agree p256_comb_agree x25519_base_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the
