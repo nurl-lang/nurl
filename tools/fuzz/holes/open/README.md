@@ -1,6 +1,7 @@
 # tools/fuzz/holes/open — soundness holes known open
 
-**Six, as of 0.83.0**: agora #242, #254, #259, #264, #267 and #274.
+**Nine, as of 0.83.0**: agora #242, #254, #257, #259, #264, #265, #267, #268
+and #274.
 [`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) gives each one's
 shape and how to stay clear of it until its fix ships. Their probes live
 in the tasks until the fix lands with them in `tools/fuzz/holes/`, as

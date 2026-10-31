@@ -93,6 +93,12 @@ Tag the merge commit on `main`, never the branch: the tag is what users
 download, and it should name a commit that passed CI in the state it
 was merged.
 
+**Every change in the tag is in its `[X.Y.Z]` section.** In the merge
+queue, a PR queued ahead of the release PR lands first, after the fold,
+and its fragment stays in `changes/unreleased/`. In 0.83.0, two did.
+`verify-ci` fails a tag whose commit still holds a fragment. Fold it
+into `[X.Y.Z]` with a follow-up PR, and tag that PR's commit.
+
 **The release needs a green macOS run on that commit** (Agora #213).
 release.yml's first job, `verify-ci`, waits for both `ci.yml` and
 `macos-tests.yml` on the tagged commit to finish, and publishes nothing

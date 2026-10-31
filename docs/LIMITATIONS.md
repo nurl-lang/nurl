@@ -10,7 +10,7 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Six soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+**Nine soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
 Each is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
@@ -25,6 +25,11 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   before `w` is pointed back at an older value unwinds the journal newest
   first, so `b` is freed and then `w`'s destructor reads it. Until the
   fix ships, give such a value views only of bindings declared before it.
+- **agora #257: a field of a `sink` struct parameter handed back inside a
+  result, an option or a struct literal.** Bound to a local first, it is
+  read freed in the caller; handed back directly, it leaks. Until the fix
+  ships, rebind the parameter to a local first (`: ~ C col col0`) and
+  take the field from that.
 - **agora #259: a view gained through an `inout` callee or through a
   closure that assigns one of its captures is not tracked.** `( point w
   ( string_data b ) )` with `@ point inout V w s v → v { = w @ V { v } }`,
@@ -40,12 +45,23 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   a local out of the Option. Matching an enum returned by a call
   directly, or one built in place, is sound. Until the fix ships, keep
   such a payload in a struct, or match the enum where a call returns it.
+- **agora #265: a struct field bound to a local, then the field
+  replaced.** When the struct's first or only handle is an `Arc`, the
+  binding reads freed memory; when the binding then goes into an option,
+  a literal, a push or the return, it leaks or gains a second owner.
+  Until the fix ships, do not bind a field you are about to replace: take
+  the old value out with the replacement instead.
 - **agora #267: a field read out of an element borrow outlives the
   elements' drop.** `: S e ( vec_at [S] vs 0 )` then `: String f . e
   name`, then `( vec_clear [S] vs )`: `f` still points into the String
   that the clear freed. A view of the container's own fields is sound.
   Until the fix ships, read an element's field again after the
   container's elements change, or copy it out before.
+- **agora #268: a binding read out of a field, re-bound, then handed
+  back.** `: R a . col res` then `: R b a` (or `= b a`) and `^ b`, bare or
+  inside a result or an option: the struct drops the field under the
+  caller, a local struct too. Until the fix ships, hand back `a` itself,
+  not a re-bound copy.
 - **agora #274: a block arm of a join whose tail names an owner already
   moved.** `( consume a )` followed by `: String u ? c { : i z 1 a } { b }`
   hands on the freed `a`: a block arm's tail is not checked for a move
