@@ -23,17 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Nested `~` loops compile in linear time** (Agora #210). The borrow
-  checker walked a loop body three or four times at every level of
-  nesting, so compile time grew about ×3 per nested `~`: 15 levels took
-  32 s and 20 passed the playground's 120 s timeout. A loop's fixpoint
-  now also tracks the facts a walk records beside its state (bck_put
-  notes every write; bck_log_close reports whether a walk changed one).
-  Once a walk changes neither the state nor a fact, the walk it would
-  repeat is skipped. 200 nested loops compile in 64 ms. Every file in the
-  tree compiles byte-identically to before. The self-compile runs 1.9 %
-  fewer instructions. `tools/check_bck_writes.sh` (CI) keeps every write
-  to the borrow checker's tables going through the journal.
 - **A try over a binding, a field or a block leaves the function as `^`
   does** (Agora #202, h929–h933, h937–h940). `: i v \ o`, `\ . p o` and `\ { ? c o p }`
   failed with a bare `ret`, so every local the function owned leaked. Under
