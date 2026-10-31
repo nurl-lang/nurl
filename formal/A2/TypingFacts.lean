@@ -319,7 +319,7 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
-  | scopeD _ hxF _ _ ih =>
+  | scopeD _ hxF _ _ _ _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv

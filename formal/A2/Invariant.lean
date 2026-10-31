@@ -431,10 +431,16 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
       E.ty.holdsView = false → DtorOK P f E.ty → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+      NoPin Δ x →
+      -- what the panic path needs of the body's typing: it keeps the
+      -- bindings, their modes and types, and the borrowed parameters
+      KeepOut (setE Γ1 x E) Δ [] → CtxWF Δ → NameWF Δ →
+      StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.holdsView = false ∧ DtorOK P f E.ty) → x ∉ F →
-      StmtT P Γ F s Δ → NoPin Δ x → StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
+      StmtT P Γ F s Δ → NoPin Δ x →
+      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows

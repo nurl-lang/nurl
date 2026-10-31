@@ -152,6 +152,22 @@ theorem pinOut_cong {Γ Γ' : Ctx} {k k' S S' : Stmt} {b : List Var}
     · exact hpk h
   · exact hin p E hp hm hpk' r hr hrk
 
+/-- What a run-time frame's typing asks of its body's output, outside the
+    running scopes, survives a step of the body. -/
+theorem KeepOut.step {Γ Γ' Δ : Ctx} {k k' : Stmt} (hKO : KeepOut Γ Δ k.spine) (hk : Keep Γ Γ' k k') :
+    KeepOut Γ' Δ k'.spine := by
+  refine ⟨fun v E' hv hvs => ?_, fun v E' hv => ?_⟩
+  · obtain ⟨hvs0, E0, h0⟩ := hk.2 v E' hv hvs
+    obtain ⟨_, E1, h1, hm1, ht1, hrb1⟩ := hk.1 v E0 h0 hvs0
+    rw [hv] at h1; cases h1
+    obtain ⟨E'', h'', hm'', ht'', hrb''⟩ := hKO.1 v E0 h0 hvs0
+    refine ⟨E'', h'', hm''.trans hm1.symm, ht''.trans ht1.symm, fun hr => ?_⟩
+    have hr0 : E0.mode = .rootb := hm1 ▸ hr
+    rw [hrb'' hr0, hrb1 hr0]
+  · obtain ⟨hvs0, E0, h0⟩ := hKO.2 v E' hv
+    obtain ⟨hvs', E1, h1, _⟩ := hk.1 v E0 h0 hvs0
+    exact ⟨hvs', E1, h1⟩
+
 theorem CtxRel.rootb_back {Γ Γ1 : Ctx} (h : CtxRel Γ Γ1) {p : Var} {E : Entry} (hp : Γ1 p = some E)
     (hm : E.mode = .rootb) : Γ p = some E := by
   obtain ⟨E0, h0, hm0, _⟩ := h.mode p E hp
@@ -575,7 +591,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @letd Γ Γ1 Δ F x f r k E hsrc hx hxF hr hmo hview hdtor hs hpx _ =>
+  | @letd Γ Γ1 Δ F x f r k E hsrc hx hxF hr hmo hview hdtor hs hpx hKOd hWd hNd _ =>
     intro m m' s' hcd hi hst
     cases hst with
     | letd hmx he =>
@@ -589,7 +605,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hsp : k.spine = [] := src_spine hsrc
-      refine ⟨setE Γ1 x E, StmtT.scopeD ⟨E, by simp [setE], hmo, hview, hdtor⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
+      refine ⟨setE Γ1 x E, StmtT.scopeD ⟨E, by simp [setE], hmo, hview, hdtor⟩ hxF hs hpx (by rw [hsp]; exact hKOd) hWd hNd, ?_, by simp [post.nv], ?_,
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -798,7 +814,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.2 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
-  | @scopeD Γ Δ1 F x f k hxE hxF hs hpx ihs =>
+  | @scopeD Γ Δ1 F x f k hxE hxF hs hpx hKO hWd hNd ihs =>
     intro m m' s' hcd hi hst
     obtain ⟨Ex, hx, hmo, hview, hdtor⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
@@ -811,7 +827,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hcd hi0 hst'
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scopeD ⟨Ex', hx', by rw [hm', hmo], by rw [ht'', hview],
-          by rw [ht'']; exact hdtor⟩ hxF ht' hpx, Inv.scopeD_iff.mpr ?_, hnv, ⟨?_, ?_⟩, hfz⟩
+          by rw [ht'']; exact hdtor⟩ hxF ht' hpx (hKO.step hk) hWd hNd, Inv.scopeD_iff.mpr ?_, hnv, ⟨?_, ?_⟩, hfz⟩
       · exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
