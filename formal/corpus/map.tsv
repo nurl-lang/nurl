@@ -815,6 +815,11 @@ struct_field_of_a_struct_param_through_a_cond	§7.6	A2	agora #178: a struct fiel
 struct_field_option_of_closure	§7.5	A2	struct literal handed back with an option of a closure in a field; env freed by the frame	runs-clean	h282
 struct_field_result_with_an_option_error_matched	§7.6	A2	agora #158: struct_field_result_with_an_option_error_matched	runs-clean	h571
 struct_global_torn_between_threads	§6.5	A3	mutable struct global written/read by two threads non-atomically	rejected	h272
+struct_holding_owner_and_a_view_of_another_keeps_compiling	§2.10	A2	agora #294: a value holding an owner of its own beside a view of ANOTHER binding (precision pin)	runs-clean	-
+struct_holding_owner_and_its_view_field_replaced	§2.10	A2	agora #294: the owner field replaced, `= . o buf ( vec_new [u] )`, then `o.v` read	rejected	-
+struct_holding_owner_and_its_view_fields_reversed	§2.10	A2	agora #294: the same with the owner field first, `@ S2 { b sv }`	rejected	-
+struct_holding_owner_and_its_view_grown	§2.10	A2	agora #294: `: S o @ S { sv b }` with `sv` a slice of `b`, then `o.buf` grown and `o.v` read	rejected	-
+struct_holding_string_and_its_bytes_grown	§2.10	A2	agora #294: a String and a view of its bytes in one value, the String grown by `string_push_str`	rejected	-
 struct_literal_field_handed_back_by_its_callee	CallT.summary	A1	agora #171: struct_literal_field_handed_back_by_its_callee	runs-clean	h579
 struct_literal_handed_back_and_read_unbound	CallT.summary	A1	agora #171: struct_literal_handed_back_and_read_unbound	runs-clean	h583
 struct_literal_handed_back_by_a_generic	CallT.summary	A1	agora #171: struct_literal_handed_back_by_a_generic	runs-clean	h581

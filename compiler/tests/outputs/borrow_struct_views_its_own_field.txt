@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_struct_views_its_own_field.nu:13:5: error: 'o' would hold both 'b' and a view of 'b': a value that views its own field breaks the moment that field grows or is replaced — the view would read the freed buffer. Build 'o' without the view and take it from the field afterwards (a slice of '. o <field>'), or store a copy of the bytes it views (slice_to_vec, string_from) instead of the view.
+    : S o @ S { sv b }
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

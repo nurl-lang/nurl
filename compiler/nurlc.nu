@@ -29755,6 +29755,32 @@ unsafe @ bck_emit_error s file i line s msg → v {
     }
 }
 
+// Does binding `oids` hold a view of binding `svid` or of a part of it (its
+// view sources, `vds_`) — not merely a copy of its handle (`vdh_`)?
+@ bck_views_part s oids i svid → b {
+    : s hnd ( nurl_sym_get g_bck ( bck_bkey `vdh_` oids ) )
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `vds_` oids ) )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & == svid ( bck_path_root ( nurl_str_to_int w ) ) ! ( str_contains_word hnd w ) { ^ T } {}
+    }
+    ^ F
+}
+
+// `oid` takes `sid` while it holds a view of it (bck_views_part): a value
+// that views its own field (agora #294).
+@ bck_diag_self_view i oid i sid i line → v {
+    : s tag ( nurl_str_cat4 `sv:` ( nurl_str_int line ) `:` ( nurl_str_int sid ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s oname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int oid ) )
+    : s sname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int sid ) )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line
+    ( nurl_str_cat4 `'` oname ( nurl_str_cat4 `' would hold both '` sname `' and a view of '` sname )
+    ( nurl_str_cat4 `': a value that views its own field breaks the moment that field grows or is replaced — the view would read the freed buffer. ` `Build '` oname ( nurl_str_cat3 `' without the view and take it from the field afterwards (a slice of '. ` oname ` <field>'), or store a copy of the bytes it views (slice_to_vec, string_from) instead of the view.` ) ) ) )
+}
+
 // A read of a binding whose value was stored into an owner (an aggregate
 // or Option literal, a container a keeping call like vec_push was handed).
 // The value moved there: the name no longer reaches it soundly, because the
@@ -30615,6 +30641,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // (The container's spelling rides on the row: bck_xlate_row1.)
                         ? == ( nurl_str_get s_own 0 ) 61 {
                             : s oids ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 )
+                            // (A value that holds a view of what it takes —
+                            // `@ S { sv b }`, `sv` a view of `b` — would view
+                            // its own field: growing or replacing that field
+                            // frees what the view reads. Refused where it is
+                            // built: A2's SelfFree, agora #294.)
+                            ? ( bck_views_part oids svid ) { ( bck_diag_self_view ( nurl_str_to_int oids ) svid ( bck_field_int rec 3 ) ) } {}
                             ( bck_put ( bck_so_key svn ) oids )
                             = g_bck_sx_gen g_bck_gen
                             : s sxk ( bck_sx_key oids )
