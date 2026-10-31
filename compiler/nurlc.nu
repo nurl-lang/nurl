@@ -44385,6 +44385,9 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
 //  - match blocks `L.P`: the arm phase at level L — 1 a variant is next,
 //    2 its payload names, a `?` guard or the `→`, 3 in the guard, 4 in the
 //    result, 5 lost (the scan stopped following this block's arms).
+// A nested closure's parameters, a select arm's result name (`→ o {`, in
+// a block a `?? {` opened: the list `sl`) and a foreach's element (`~ x
+// xs {`) are bound for the block that opens next (`pbind`; agora #238).
 
 // The level of a list's innermost word, -1 for an empty list.
 @ __cs_lvl s list → i {
@@ -44508,6 +44511,12 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ i mbrace -1
     : ~ s pbind ``
     : ~ i pblvl -1
+    // …and a select's arms: the level whose next `{` opens them, the
+    // levels open as select blocks, and a foreach's element name until
+    // its body opens (agora #238).
+    : ~ i sbrace -1
+    : ~ s sl ``
+    : ~ s fe_name ``
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
         ? & == tt TT_IDENT == prev1 TT_DOT { = dot_obj ( nurl_lex_val lex ) } {}
@@ -44530,6 +44539,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         : ~ i cpl -1
         ? & != mbrace -1 != tt TT_LBRACE { = mbrace -1 } {}
         ? & != pblvl -1 != tt TT_LBRACE { = pbind `` = pblvl -1 } {}
+        ? & != sbrace -1 != tt TT_LBRACE { = sbrace -1 } {}
         // An arm's pattern (gen_match): a variant, then its payload — names
         // it binds, numbers it compares — then a `?` guard or the `→`.
         ? & | == mph 1 == mph 2 != tt TT_RBRACE {
@@ -44558,6 +44568,23 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 ? & ( seq ft_a `r` ) | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE | == tt TT_BREAK == tt TT_CONTINUE { = mph 5 } {}
             } {}
         }
+        // A select arm's result name (`[T] ch → o { … }`) and a foreach's
+        // element (`~ x xs { … }`, at a statement: `~ cond {` binds
+        // nothing) are the block's own, as a nested closure's parameters
+        // are: bound for the `{` that follows, and no read (agora #238).
+        ? & & == tt TT_IDENT == mph 0 == ( nurl_lex_peek_type lex ) TT_LBRACE {
+            ? & == prev1 TT_ARROW == ( __cs_lvl sl ) lvl {
+                = pat T
+                ? ( __cs_outer outer_syms ( nurl_lex_val lex ) ) { = pbind ( nurl_lex_val lex ) = pblvl lvl } {}
+            } {}
+            ? & & == prev1 TT_IDENT == prev2 TT_TILDE != 0 ( nurl_str_len fe_name ) { = pbind fe_name = pblvl lvl = fe_name `` } {}
+        } {}
+        ? & & & == tt TT_IDENT == mph 0 == prev1 TT_TILDE != prev2 TT_COLON {
+            ? & == ( nurl_lex_peek_type lex ) TT_IDENT == ( nurl_lex_peek2_type lex ) TT_LBRACE {
+                = pat T
+                = fe_name ? ( __cs_outer outer_syms ( nurl_lex_val lex ) ) ( nurl_lex_val lex ) ``
+            } {}
+        } {}
         ? != mph mph0 {
             ? == mph 5 { ? >= ( __cs_lvl bl ) lvl { = bl ( __cs_cut bl lvl F ) } {} ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) } } {}
             = mt_p mph
@@ -44578,6 +44605,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 }
                 = pbind `` = pblvl -1
             } {}
+            ? == sbrace lvl { = sl ( __cs_push sl nl `s` ) = sbrace -1 } {}
+            = fe_name ``
         }
         {
             ? == tt TT_RBRACE
@@ -44585,6 +44614,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 ) = clen ( nurl_str_len ctx )
                 : i nl clen
                 ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
+                ? > ( __cs_lvl sl ) nl { = sl ( __cs_cut sl nl T ) } {}
                 ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                 ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
                 ? > brace_depth 0 { = cpl nl } {}
@@ -44675,6 +44705,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                                 // (A select's arms follow at once.)
                                 ? == ( nurl_lex_peek_type lex ) TT_LBRACE {
                                     ? == ft_l lvl { ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `o` } {}
+                                    = sbrace lvl
                                 } {
                                     // (The match as one operand of an expression
                                     // this level follows: only when there is one.)
