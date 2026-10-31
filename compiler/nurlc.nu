@@ -33401,11 +33401,9 @@ unsafe @ bck_loop_mask s pre s post → s {
 // false-positive-free, exactly like the straight-line move rule.
 // The borrow bindings that have recorded sources (`bs_`) in this walk's
 // function: what a loop head joins (bck_loop, agora #229).
+// (Through the digest's wrapper: a loop's walks compare these facts too.)
 @ __bs_note s bids → v {
-    : s k ( bck_bkey `bsids` `` )
-    : s cur ( nurl_sym_get g_bck k )
-    ? ( str_contains_word cur bids ) { ^ v } {}
-    ( nurl_sym_set g_bck k ? == 0 ( nurl_str_len cur ) ( nurl_str_cat bids `` ) ( nurl_str_cat3 cur ` ` bids ) )
+    ( bck_add_word_once ( bck_bkey `bsids` `` ) bids )
 }
 
 // Every borrow binding's sources now, one `id:sources` line each.
