@@ -10,13 +10,32 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**No soundness hole is known open** ([`MEMORY.md` §6.2](MEMORY.md)).
-Every safe program found accepted and faulting is closed, and held by a
-probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). The last one,
-agora #224 (a `% Drop` destructor reading a view whose source ended
-first), is closed in 0.83.0: scope-end drops run newest first, and such a
-drop is a use of what the view points into ([`MEMORY.md`
-§2.14](MEMORY.md)). One
+**Three soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+Each is a heap-use-after-free in safe code, with a fix in progress:
+
+- **agora #242: a join or a value block bound by `:` and then handed on
+  by name.** `: String t ? c a b` followed by `^ t`, with `a` and `b`
+  locals, returns `a`'s buffer and drops it on the way out. The same
+  binding assigned to an `inout` parameter, or a block whose tail is a
+  fresh call, also faults. Until the fix ships, hand the join on
+  directly (`^ ? c a b`) instead of through a binding.
+- **agora #247: a `thread_spawn` closure that consumes one capture
+  releases another capture when the thread ends.** A closure that moves
+  `owned` into a `sink` and also uses an `Atomic` (or an `Arc`, a
+  channel, a listener) that the parent keeps frees that handle under the
+  parent. Until the fix ships, move a clone (`string_clone`) into the
+  closure instead of the capture itself.
+- **agora #252: a `% Drop` value that holds a view, moved on only one
+  branch of a `?`.** On the other branch it is still owned, and its
+  destructor reads the view after the view's source was reallocated or
+  moved. (#224's rule covers an unconditional move.) Until the fix
+  ships, move such a value on every path, or on none.
+
+Every other safe program found accepted and faulting is closed, and held
+by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
+`% Drop` destructor reading a view whose source ended first) is closed
+in 0.83.0: scope-end drops run newest first, and such a drop is a use of
+what the view points into ([`MEMORY.md` §2.14](MEMORY.md)). One
 of them is closed at run time rather than at compile time: a handle
 whose copies are one state (a `PNCounter`, a `TcpConn`, a `Cell`)
 crossing to another thread while a copy of it stays behind panics at the
