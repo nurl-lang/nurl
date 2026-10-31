@@ -38,11 +38,36 @@ jobs:
     # of a main that moved since they were tested, so the queue is no
     # place to save minutes by path: running too much is always correct
     # there, and running too little is not.
+    #
+    # On a push to main, nothing runs when the merge queue already tested
+    # the commit. The queue lands exactly the commit its merge_group run
+    # tested (same sha), so a second full run of it is pure cost: it used
+    # a third of ci.yml's runner time and held slots of the 20-job limit
+    # that queued PRs waited for. release.yml's verify-ci accepts the
+    # merge_group run, since it looks up ci.yml runs by sha. A push that did not come
+    # through the queue (none should) still runs everything.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     outputs:
-      code: ${{ github.event_name == 'merge_group' && 'true' || steps.code.outputs.code }}
-      webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.webdocs }}
-      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.compiler }}
+      code: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
+      webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
+      compiler: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.compiler }}
     steps:
+      - name: Did the merge queue already test this commit?
+        id: queued
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n="$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?event=merge_group&head_sha=${{ github.sha }}" --jq '.total_count' 2>/dev/null || echo 0)"
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::the merge queue tested ${{ github.sha }} (ci.yml merge_group run); this push runs nothing"
+          else
+            echo "tested=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout
         uses: actions/checkout@v4
       # Docs-only PRs (webdocs/**) skip the compiler jobs below and run

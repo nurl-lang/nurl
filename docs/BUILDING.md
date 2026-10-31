@@ -583,7 +583,10 @@ with `main` never has to be rebased and re-run because `main` moved:
 queue it once its own checks are green (`gh pr merge <N> --squash
 --auto`), and it merges when its group passes. A PR in textual conflict
 still needs a rebase; the changelog fragments and named probes (#211,
-#212) keep those rare.
+#212) keep those rare. The push to `main` that lands a queued commit
+runs no `ci.yml` jobs. The queue's `merge_group` run already tested that
+exact commit, and `release.yml` accepts that run. A push that did not
+come through the queue still runs everything.
 
 | Job / step | What it checks |
 |---|---|
