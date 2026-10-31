@@ -798,7 +798,11 @@ $ `stdlib/core/string.nu`
 A holder moved on some paths only — handed to a `sink` in one branch of a
 `?` or one arm of a `??` — is still dropped on the others, so it counts as
 one that lives: only a holder moved on every path is gone before its
-source ends.
+source ends. And such a holder gains views only of bindings declared
+before it: given a view of a younger one — by an assignment, or pushed
+into a container of them — it is refused where it gains the view, even
+if it is pointed back before the younger one ends, because a panic in
+between unwinds them newest first too.
 
 Bind the holder after its source in the same scope, end it first in a
 block of its own, or have it hold a copy that owns its data. A value with
@@ -954,12 +958,12 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Three holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name), #254 (a `% Drop` holder given a view of a
-younger binding, then a panic) and #259 (a view gained through an `inout`
+**Two holes are known open**: agora #242 (a join or value block bound by
+`:` and handed on by name) and #259 (a view gained through an `inout`
 callee or a closure's assignment of a capture is not tracked). Agora #247
-(a closure consuming one capture released another) and #252 (a holder
-moved on only one branch) are closed in 0.83.0.
+(a closure consuming one capture released another), #252 (a holder moved
+on only one branch) and #254 (a holder given a view of a younger binding,
+then a panic) are closed in 0.83.0.
 [`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
 until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first

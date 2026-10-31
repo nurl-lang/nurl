@@ -30426,6 +30426,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
+                // A holder whose drop reads views given a view of a younger
+                // binding: dropped after it, newest first (agora #254).
+                ? & != 0 g_bck_udrop_any ! ( seq asrcs `*` ) { ( bck_younger_view_check asid asrcs p ( bck_field_int rec 3 ) ) } {}
                 // A global outlives every binding of this function.
                 ? & != 0 amk ( bck_id_is_global asid ) { ( bck_global_view_check st asid ( bck_field_int rec 3 ) ) } {}
                 = p + p 1
@@ -30770,6 +30773,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         ? ! ( seq vs `*` ) {
                             : i vroot ( bck_path_root ( nurl_str_to_int vc ) )
                             ( bck_dep_add vroot vs )
+                            ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
                             // (Where it was stored: what a diagnostic about
                             // the dependency points at, bck_caller_view_diag.)
                             : ~ s vrest ( __src_plain vs )
@@ -31073,6 +31077,60 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // mem_own_add_user_drop). An owner whose drop may read views (`vdu_`)
 // dropped after a binding it holds a view of would read freed memory:
 // asked here without changing `st` — the path ends at the return.
+// Was walk id `src` declared after `holder`, as seen from row `p`? A
+// frame opened inside the holder's (bck_id_dser) is younger; in the same
+// frame, the later of their `let`s (a parameter's or a global's is none:
+// older than any local). Values are dropped newest first, at a scope's end
+// and by a panic's unwind alike, so a younger one goes first.
+unsafe @ __bck_younger i src i holder i p → b {
+    : i ds ( bck_id_dser src )
+    : i dh ( bck_id_dser holder )
+    ? != ds dh { ^ > ds dh } {}
+    ^ > ( __bck_decl_row src p ) ( __bck_decl_row holder p )
+}
+
+// The row of the `let` that last declared walk id `id` before row `p`, or
+// -1 (a parameter, a global, a match arm's payload).
+unsafe @ __bck_decl_row i id i p → i {
+    : ~ i j - p 1
+    ~ >= j 0 {
+        : s r ( bck_rec j )
+        ? & != 0 ( nurl_str_starts r `let\t` ) == ( bck_field_int r 1 ) id { ^ j } {}
+        = j - j 1
+    }
+    ^ -1
+}
+
+// A holder whose drop may read the views it holds (`vdu_`) gains views
+// of `srcs` at row `p`: one of a binding declared after it is refused here.
+// Whatever ends the two — the end of their scopes, newest first, or a
+// panic's unwind, which drains them in the same order — frees that binding
+// first, and the destructor then reads it. Checked where the view is
+// gained, not where the source ends: a re-pointing in between (back to an
+// older value) hid it from that check, and a panic before it did not
+// (agora #254, formal's DtorSafe).
+unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
+    : s hs ( nurl_str_int holder )
+    ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` hs ) ) `1` ) { ^ v } {}
+    : ~ s rest ( __src_plain srcs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i x ( bck_path_root ( nurl_str_to_int xs ) )
+        ? & != x holder ( __bck_younger x holder p ) {
+            : s tag ( nurl_str_cat4 `dy:` hs `:` ( nurl_str_cat3 ( nurl_str_int x ) `:` ( nurl_str_int line ) ) )
+            : s ws ( nurl_sym_get g_bck `warnset` )
+            ? ! ( str_contains_word ws tag ) {
+                ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                : s hn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` hs ) )
+                : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int x ) ) )
+                : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` hn `' is given a view of '` ) sn ( nurl_str_cat3 `', which was declared after it, and '` hn `''s type has a destructor (% Drop) that may read the view. ` ) `` )
+                : s m2 ( nurl_str_cat4 `Values are dropped newest first — where their scopes end, and by a panic's unwind — so '` sn ( nurl_str_cat3 `' would be freed before '` hn `''s destructor reads it. Give '` ) hn )
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 `' views only of bindings declared before it, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
+            } {}
+        } {}
+    }
+}
+
 unsafe @ bck_ret_drop_check s st i line → v {
     ? | == 0 g_bck_udrop_any ( seq st `!` ) { ^ v } {}
     // (Not the owner handed back by name, gen_ret: the caller drops it.)
