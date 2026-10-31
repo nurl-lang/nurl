@@ -7,6 +7,6 @@
   Now a fixed spelling (an operator, a bracket, `→`) points at a literal,
   and a name's text is its own span of the source, copied only when the
   parser asks for it. Only numbers, string literals and merged `a::b`
-  names still own text. The self-compile runs 1.9 % fewer instructions,
-  `nurlapi/main.nu` 1.8 % and a closure-heavy file 3.0 %, with
+  names still own text. The self-compile runs 2.1 % fewer instructions,
+  `nurlapi/main.nu` 1.9 % and a closure-heavy file 3.2 %, with
   byte-identical output.
