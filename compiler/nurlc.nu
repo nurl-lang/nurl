@@ -35636,7 +35636,9 @@ unsafe @ __assign_after i lex i syms i cg s name s val_in i bck_line s vt s ptr 
     // paths it is lent from them (mem_blk_tail_copy_slot, below) and the
     // binding borrows none of them — rule (A) of agora #222 stage 1. The
     // walk is told the same: those locals leave the call's lend sources.
-    : b __ra_on & g_bt_assign == bck_rhs_tt TT_LPAREN
+    // (A tail that is itself a block or a try ending in a call is that
+    // call's value, as mem_blk_tail_copy_slot reads it.)
+    : b __ra_on & g_bt_assign | == bck_rhs_tt TT_LPAREN & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN
     : s __ra_deep ? __ra_on ( __ra_deep_locals syms name ) ``
     ? != 0 ( nurl_str_len __ra_deep ) {
         ( nurl_sym_def syms `__last_phi_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_phi_idents__` ) __ra_deep ) )
