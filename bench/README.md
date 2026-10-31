@@ -237,7 +237,11 @@ exactly that.
   HttpArena's `/async-db`, over [`http_db_schema.sql`](http_db_schema.sql)
   — NURL (packages/psql) against Rust (tokio-postgres), with a throwaway
   PostgreSQL pinned to cores of its own unless `DATABASE_URL` names one;
-  results in [`HTTP_DB_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP_DB_RESULTS.md).
+  results in [`HTTP_DB_RESULTS.md`](https://github.com/nurl-lang/nurl/blob/bench-data/bench/HTTP_DB_RESULTS.md). Both write their
+  JSON bodies value by value with no tree in between (json.nu's streaming
+  writer; serde's derive) and take text columns from the row without a
+  copy; `/async-db`'s jsonb `tags` go through a parsed value on both
+  sides (`Json`; `serde_json::Value`).
 * `pq_compare.nu` + `rust_pq/` are the post-quantum crypto peer
   benchmark (ML-KEM, ML-DSA, SLH-DSA, SHAKE128 — pure-NURL stdlib vs
   pure-Rust RustCrypto), driven by [`run_pq.sh`](run_pq.sh); results in

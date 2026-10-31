@@ -142,7 +142,7 @@ $ `stdlib/std/fmt.nu`
 
 // Push one hex nibble (0..15) as its ASCII char into `out`. Lowercase
 // ('0'..'9' / 'a'..'f') so the output matches stdlib/ext/json.nu's
-// `__js_emit_str` convention.
+// `__json_escape` convention.
 @ __log_json_hex String out i n → v {
     : i c ? < n 10 + n 48 + n 87
     ( string_push_char out c )

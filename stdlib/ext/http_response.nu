@@ -243,14 +243,15 @@ raw @ response_set_body_borrowed_bytes HttpResponse r ( Vec u ) bytes → v {
     ( response_set_body_borrowed r ( vec_data [u] bytes ) ( vec_len [u] bytes ) )
 }
 
-// JSON convenience: serialises `j`, copies into the body, and sets
+// JSON convenience: serialises `j` straight into the body (json_write —
+// no String in between), and sets
 // `Content-Type: application/json; charset=utf-8` IF no Content-Type
 // header has been pinned yet (case-insensitive scan). Caller still
-// owns `j` — we never consume it.
+// owns `j` — we never consume it. A body built value by value, with no
+// Json at all: json.nu's streaming writer onto `. r body`.
 @ response_set_body_json HttpResponse r Json j → v {
-    : String s ( json_stringify j )
     ( vec_clear [u] . r body )
-    ( bytes_extend_str . r body ( string_data s ) )
+    ( json_write . r body j )
     ? ( __has_header_ci . r headers `Content-Type` ) {} {
         ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
     }

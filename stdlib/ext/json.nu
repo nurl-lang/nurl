@@ -70,9 +70,19 @@
 //                                       entry — an embedded NUL is rejected, not truncated);
 //                                       raw as *u: `unsafe` code only (safe: json_parse_bytes)
 //   ( json_parse_bytes buf )          → ! Json JsonError   ( Vec u ), borrowed
+//   ( json_parse_slice text )         → ! Json JsonError   ( Slice u ): a window, a db cell
 //   ( json_stringify j )              → String  compact (always valid JSON)
+//   ( json_write out j )              → v       the same text appended to a ( Vec u )
 //   ( json_pretty    j )              → String  2-space indented
 //   ( json_format_error e )           → String  "<kind> at line L col C" (caller owns)
+//
+// Streaming writer (no Json values: straight into a ( Vec u ) — see
+// "Streaming writer" below):
+//   ( json_writer )                   → JsonWriter
+//   ( jw_obj w out ) / jw_arr / jw_end / ( jw_key w out key )
+//   ( jw_str w out s ) / jw_string / jw_str_slice / jw_int / jw_float /
+//   jw_bool / jw_null / ( jw_json w out j ) / jw_raw / jw_raw_slice
+//   ( jw_ok w )                       → b       one whole value, no misuse
 //
 // Iteration:
 //   ( json_arr_each  j f )            → v    f : (@ v Json)
@@ -124,6 +134,8 @@
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/slice.nu`
+$ `stdlib/std/bytes.nu`
 
 : | Json {
     JNull
@@ -173,27 +185,9 @@ $ `stdlib/core/vec.nu`
     // nothing at all. The value that is not a number is `null` — what
     // JavaScript's JSON.stringify writes for the same double.
     ? | != 0 ( nurl_is_nan x ) != 0 ( nurl_is_inf x ) { ^ @ Json { JNull } } {}
-    : s raw ( nurl_str_float x )
-    : String s ( string_from raw )
-    // An integral double prints as bare digits (`85.0` → `85`), which a
-    // strictly typed consumer reads as an integer field — real schema
-    // drift when the value happens to land on a whole number. Keep the
-    // float-ness in the text: when the raw form is digits (with an
-    // optional leading `-`) and nothing else, append `.0`. Anything
-    // with a `.` or an exponent already reads as a float and passes
-    // through untouched.
-    : i n ( nurl_str_len raw )
-    : *u bp # *u raw
-    : ~ b plain > n 0
-    : ~ i k 0
-    ~ < k n {
-        : i c # i . bp k
-        : b ok | != 0 ( is_digit c ) & == c 45 == k 0
-        ? ok {} { = plain F }
-        = k + k 1
-    }
-    ? plain { ( string_push_str s `.0` ) } {}
-    ^ @ Json { JNum s }
+    : ( Vec u ) digits ( vec_with_cap [u] 24 )
+    ( __json_float_digits digits x )
+    ^ @ Json { JNum ( string_from_vec digits ) }
 }
 
 // Empty array / object — shorter than `( json_arr ( vec_new [Json] ) )`.
@@ -883,6 +877,14 @@ $ `stdlib/core/vec.nu`
     ^ ( json_parse_n # s ( vec_data [u] buf ) ( vec_len [u] buf ) )
 }
 
+// View entry: parse exactly the bytes `text` views — a window of a
+// buffer, a database cell (psql's pg_row_view), a String's bytes — with
+// no copy of them first. The Json owns everything it holds; the view
+// stays the caller's.
+@ json_parse_slice ( Slice u ) text → !Json JsonError {
+    ^ ( json_parse_n ( slice_data [u] text ) ( slice_len [u] text ) )
+}
+
 // C-string entry: the document ends at the first NUL. A payload that
 // may legitimately carry stray NUL bytes (a network buffer, a file
 // read as bytes) must go through json_parse_bytes (json_parse_n in
@@ -944,104 +946,145 @@ $ `stdlib/core/vec.nu`
 // ── Stringify ────────────────────────────────────────────────────────
 //
 // Compact serialization with the inverse of __jp_parse_string's escape
-// table. Returns a fresh String the caller owns. Output is always valid
-// JSON: the parser only accepts spec-conformant numbers (no leading
-// zeros), and any byte below 0x20 without a named escape (\b \t \n \f
-// \r) is encoded as `\u00XX`. The result round-trips through any
-// strict JSON parser (including jq, Python, JavaScript).
+// table, appended to a byte buffer: json_write onto one the caller has
+// (an HttpResponse body), json_stringify onto a fresh one it hands over
+// as a String (no copy). Output is always valid JSON: the parser only
+// accepts spec-conformant numbers (no leading zeros), and any byte below
+// 0x20 without a named escape (\b \t \n \f \r) is encoded as `\u00XX`.
+// The result round-trips through any strict JSON parser (including jq,
+// Python, JavaScript). The streaming writer below emits through the same
+// helpers, so a document written either way is the same text.
 
-// Append a single ASCII hex digit (0..15) to `out`. Used by the
-// `\u00XX` control-char escape path.
-@ __js_hex_nibble String out i v → v {
-    ? < v 10 {
-        ( string_push_char out + 48 v )  // '0'..'9'
-    } {
-        ( string_push_char out + 87 v )  // 'a'..'f' (87 = 'a' - 10)
-    }
-}
-
-@ __js_emit_str String out String s → v {
-    ( string_push_char out 34 )
-    : i n ( string_len s )
+// `text` as a JSON string, quoted and escaped onto `out`: `"` and `\` and
+// the control bytes with a named escape as that, the other control bytes
+// as \u00XX, every other byte as it is (UTF-8 passes through).
+//
+// Emitted through a cursor, as core/string.nu's "Bulk emission cursor"
+// emits a String: the room for the quotes and every byte as it is is
+// reserved once and written straight through the buffer, and the length
+// committed at the end. An escape is up to six bytes where one was
+// reserved, so it first commits what is written and reserves the room
+// for itself, the rest of the text and the closing quote. Invariant
+// before byte k: the room past `w` holds the n - k bytes left and the
+// closing quote. (A per-byte push re-reads the buffer's control block
+// for every byte; a copy per run paid a reserve and a call for each of a
+// document's many short keys and values.)
+@ __json_escape ( Vec u ) out ( Slice u ) text → v {
+    : i n ( slice_len [u] text )
+    : *u src ( slice_data [u] text )
+    : ~ i w ( vec_len [u] out )
+    ( vec_reserve [u] out + n 2 )
+    : ~ * u dst ( vec_data [u] out )
+    = . dst w # u 34
+    = w + w 1
     : ~ i k 0
     ~ < k n {
-        : i c ( string_get s k )
-        ? == c 34 { ( string_push_char out 92 ) ( string_push_char out 34 ) } {
-            ? == c 92 { ( string_push_char out 92 ) ( string_push_char out 92 ) } {
-                ? == c 10 { ( string_push_char out 92 ) ( string_push_char out 110 ) } {
-                    ? == c 9 { ( string_push_char out 92 ) ( string_push_char out 116 ) } {
-                        ? == c 13 { ( string_push_char out 92 ) ( string_push_char out 114 ) } {
-                            ? == c 8 { ( string_push_char out 92 ) ( string_push_char out 98 ) } {
-                                ? == c 12 { ( string_push_char out 92 ) ( string_push_char out 102 ) } {
-                                    ? & >= c 0 < c 32 {
-                                        // Remaining control bytes (0x00..0x1F without a named
-                                        // escape) → `\u00XX`. Required for strict-parser safety.
-                                        ( string_push_char out 92 )  // '\\'
-                                        ( string_push_char out 117 )  // 'u'
-                                        ( string_push_char out 48 )  // '0'
-                                        ( string_push_char out 48 )  // '0'
-                                        ( __js_hex_nibble out & >> c 4 15 )
-                                        ( __js_hex_nibble out & c 15 )
-                                    } {
-                                        ( string_push_char out c )
-                                    }
-                                } } } } } } }
+        : i c & # i . src k 255
+        ? | | < c 32 == c 34 == c 92 {
+            : b _held ( vec_set_len [u] out w )
+            ( vec_reserve [u] out + - n k 7 )
+            = dst ( vec_data [u] out )
+            = . dst w # u 92
+            : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
+            ? > named 0 {
+                = . dst + w 1 # u named
+                = w + w 2
+            } {
+                : i hi >> c 4
+                : i lo & c 15
+                = . dst + w 1 # u 117
+                = . dst + w 2 # u 48
+                = . dst + w 3 # u 48
+                = . dst + w 4 # u ? < hi 10 + 48 hi + 87 hi
+                = . dst + w 5 # u ? < lo 10 + 48 lo + 87 lo
+                = w + w 6
+            }
+        } {
+            = . dst w # u c
+            = w + w 1
+        }
         = k + k 1
     }
-    ( string_push_char out 34 )
+    = . dst w # u 34
+    : b _done ( vec_set_len [u] out + w 1 )
 }
 
-@ __js_emit_value String out Json j → v {
+// A finite double's JSON text onto `out`: the shortest digits that read
+// back as the same double. One that prints as bare digits (`85.0` → `85`)
+// gets `.0`, or a strictly typed consumer reads it as an integer field —
+// real schema drift when the value happens to land on a whole number.
+// Anything with a `.` or an exponent already reads as a float.
+@ __json_float_digits ( Vec u ) out f x → v {
+    : s raw ( nurl_str_float x )
+    : ( Slice u ) d ( slice_of_str raw )
+    ( bytes_extend_slice out d )
+    : i n ( slice_len [u] d )
+    : ~ b plain > n 0
+    : ~ i k 0
+    ~ & plain < k n {
+        : i c ( slice_byte d k )
+        = plain | != 0 ( is_digit c ) & == c 45 == k 0
+        = k + k 1
+    }
+    ? plain { ( bytes_extend_str out `.0` ) } {}
+}
+
+@ __json_emit ( Vec u ) out Json j → v {
     ?? j {
-        JNull → ( string_push_str out `null` )
-        JBool b → ( string_push_str out ? b `true` `false` )
-        JNum s → ( string_push_str out ( string_data s ) )
-        JStr s → ( __js_emit_str out s )
+        JNull → ( bytes_extend_str out `null` )
+        JBool b → ( bytes_extend_str out ? b `true` `false` )
+        JNum s → ( bytes_extend_slice out ( string_bytes s ) )
+        JStr s → ( __json_escape out ( string_bytes s ) )
         JArr v → {
-            ( string_push_char out 91 )
+            ( vec_push [u] out # u 91 )
             : i n ( vec_len [Json] v )
             : ~ i k 0
             ~ < k n {
-                ? > k 0 { ( string_push_char out 44 ) } {}
+                ? > k 0 { ( vec_push [u] out # u 44 ) } {}
                 : ?Json e ( vec_get [Json] v k )
                 ?? e {
-                    T jv → ( __js_emit_value out jv )
+                    T jv → ( __json_emit out jv )
                     F → {}
                 }
                 = k + k 1
             }
-            ( string_push_char out 93 )
+            ( vec_push [u] out # u 93 )
         }
         JObj v → {
-            ( string_push_char out 123 )
+            ( vec_push [u] out # u 123 )
             : i n ( vec_len [Json] v )
             : ~ i k 0
             ~ < k n {
-                ? > k 0 { ( string_push_char out 44 ) } {}
+                ? > k 0 { ( vec_push [u] out # u 44 ) } {}
                 : ?Json ek ( vec_get [Json] v k )
                 ?? ek {
-                    T jk → ( __js_emit_value out jk )
+                    T jk → ( __json_emit out jk )
                     F → {}
                 }
                 ? < + k 1 n {
-                    ( string_push_char out 58 )
+                    ( vec_push [u] out # u 58 )
                     : ?Json ev ( vec_get [Json] v + k 1 )
                     ?? ev {
-                        T jv → ( __js_emit_value out jv )
+                        T jv → ( __json_emit out jv )
                         F → {}
                     }
                 } {}
                 = k + k 2
             }
-            ( string_push_char out 125 )
+            ( vec_push [u] out # u 125 )
         }
     }
 }
 
+// `j`'s compact text appended to `out` — json_stringify's text, written
+// where it is wanted (a response body, a file's buffer) with no String in
+// between. `j` stays the caller's.
+@ json_write ( Vec u ) out Json j → v { ( __json_emit out j ) }
+
 @ json_stringify Json j → String {
-    : String out ( string_with_cap 32 )
-    ( __js_emit_value out j )
-    ^ out
+    : ( Vec u ) out ( vec_with_cap [u] 32 )
+    ( __json_emit out j )
+    ^ ( string_from_vec out )
 }
 
 // ── Pretty serialization ────────────────────────────────────────────
@@ -1052,87 +1095,228 @@ $ `stdlib/core/vec.nu`
 // helper threads `depth` (current nesting level) so each value's
 // children indent one extra step.
 
-@ __js_indent String out i depth → v {
+@ __json_indent ( Vec u ) out i depth → v {
     : ~ i k 0
     ~ < k depth {
-        ( string_push_char out 32 )
-        ( string_push_char out 32 )
+        ( bytes_extend_str out `  ` )
         = k + k 1
     }
 }
 
-@ __js_emit_pretty_value String out Json j i depth → v {
+@ __json_emit_pretty ( Vec u ) out Json j i depth → v {
     ?? j {
-        JNull → ( string_push_str out `null` )
-        JBool b → ( string_push_str out ? b `true` `false` )
-        JNum s → ( string_push_str out ( string_data s ) )
-        JStr s → ( __js_emit_str out s )
         JArr v → {
             : i n ( vec_len [Json] v )
             ? == n 0 {
-                ( string_push_str out `[]` )
+                ( bytes_extend_str out `[]` )
             } {
-                ( string_push_char out 91 )  // '['
-                ( string_push_char out 10 )  // '\n'
+                ( bytes_extend_str out `[\n` )
                 : ~ i k 0
                 ~ < k n {
-                    ( __js_indent out + depth 1 )
+                    ( __json_indent out + depth 1 )
                     : ?Json e ( vec_get [Json] v k )
                     ?? e {
-                        T jv → ( __js_emit_pretty_value out jv + depth 1 )
+                        T jv → ( __json_emit_pretty out jv + depth 1 )
                         F → {}
                     }
-                    : i k_next + k 1
-                    ? < k_next n { ( string_push_char out 44 ) } {}
-                    ( string_push_char out 10 )
+                    ? < + k 1 n { ( vec_push [u] out # u 44 ) } {}
+                    ( vec_push [u] out # u 10 )
                     = k + k 1
                 }
-                ( __js_indent out depth )
-                ( string_push_char out 93 )  // ']'
+                ( __json_indent out depth )
+                ( vec_push [u] out # u 93 )
             }
         }
         JObj v → {
             : i n ( vec_len [Json] v )
             ? == n 0 {
-                ( string_push_str out `{}` )
+                ( bytes_extend_str out `{}` )
             } {
-                ( string_push_char out 123 )  // '{'
-                ( string_push_char out 10 )
+                ( bytes_extend_str out `{\n` )
                 : ~ i k 0
                 ~ < k n {
-                    ( __js_indent out + depth 1 )
+                    ( __json_indent out + depth 1 )
                     : ?Json ek ( vec_get [Json] v k )
                     ?? ek {
-                        T jk → ( __js_emit_pretty_value out jk + depth 1 )
+                        T jk → ( __json_emit_pretty out jk + depth 1 )
                         F → {}
                     }
-                    : i k_v + k 1
-                    ? < k_v n {
-                        ( string_push_str out `: ` )  // ": "
-                        : ?Json ev ( vec_get [Json] v k_v )
+                    ? < + k 1 n {
+                        ( bytes_extend_str out `: ` )
+                        : ?Json ev ( vec_get [Json] v + k 1 )
                         ?? ev {
-                            T jv → ( __js_emit_pretty_value out jv + depth 1 )
+                            T jv → ( __json_emit_pretty out jv + depth 1 )
                             F → {}
                         }
                     } {}
-                    // Trailing comma between entries (every other index).
-                    : i k_after + k 2
-                    ? < k_after n { ( string_push_char out 44 ) } {}
-                    ( string_push_char out 10 )
+                    // A comma between entries (every other index).
+                    ? < + k 2 n { ( vec_push [u] out # u 44 ) } {}
+                    ( vec_push [u] out # u 10 )
                     = k + k 2
                 }
-                ( __js_indent out depth )
-                ( string_push_char out 125 )  // '}'
+                ( __json_indent out depth )
+                ( vec_push [u] out # u 125 )
             }
         }
+        _ → ( __json_emit out j )
     }
 }
 
 @ json_pretty Json j → String {
-    : String out ( string_with_cap 64 )
-    ( __js_emit_pretty_value out j 0 )
-    ^ out
+    : ( Vec u ) out ( vec_with_cap [u] 64 )
+    ( __json_emit_pretty out j 0 )
+    ^ ( string_from_vec out )
 }
+
+// ── Streaming writer ────────────────────────────────────────────────
+//
+// JSON written straight into a byte buffer the caller owns — an
+// HttpResponse body, a file's buffer — with no Json values in between: no
+// allocation per value, and the text json_stringify would produce for the
+// same document (the same escaper and number spelling). Like the protobuf
+// and hpack encoders, every call names the buffer it appends to; the
+// writer itself keeps only the nesting, so the separators are its
+// business. A misuse — a value where an object wants a key, an end with
+// nothing open, a key with no value, a second top-level value — writes
+// nothing and marks the writer bad (jw_ok F) rather than emitting text
+// that is not JSON.
+//
+//   : JsonWriter w ( json_writer )
+//   ( jw_obj w out ) ( jw_arr w out )   open an object / an array (as a value)
+//   ( jw_end w out )                    close the innermost one
+//   ( jw_key w out key )                in an object, before each value
+//   ( jw_str w out s )                  a string: s, a String (jw_string) or
+//   ( jw_string w out str )             a ( Slice u ) of UTF-8 (jw_str_slice) —
+//   ( jw_str_slice w out bytes )        quoted and escaped
+//   ( jw_int w out n ) ( jw_float w out x ) ( jw_bool w out b ) ( jw_null w out )
+//   ( jw_json w out j )                 a Json value, as json_write writes it
+//   ( jw_raw w out json )               text that already is one JSON value (a
+//   ( jw_raw_slice w out bytes )        jsonb cell): copied as it is — the writer
+//                                       checks where it goes, not what it says
+//   ( jw_ok w )                         → b  one whole value, nothing left open,
+//                                       no misuse
+//
+//   : HttpResponse r ( response_new 200 )
+//   : JsonWriter w ( json_writer )
+//   ( jw_obj w . r body )
+//   ( jw_key w . r body `id` ) ( jw_int w . r body 7 )
+//   ( jw_end w . r body )
+// The writer's state is one byte per level — [0] the top level, then
+// one per open container — and every call reads and writes only the
+// last: 0 the top level, empty; 7 the top level, one whole value; 1 an
+// object with no member yet; 2 an object after a key; 3 an object after
+// a member; 4 an array with no element yet; 5 an array after an
+// element; 6 a misuse (sticky: it is never popped or overwritten).
+: JsonWriter {
+    ( Vec u ) st
+}
+
+@ json_writer → JsonWriter {
+    : ( Vec u ) st ( vec_with_cap [u] 8 )
+    ( vec_push [u] st # u 0 )
+    ^ @ JsonWriter { st }
+}
+
+// A value may go here: write the separator its place wants and say T; or
+// mark the writer bad and say F.
+@ __jw_value JsonWriter w ( Vec u ) out → b {
+    : i at - ( vec_len [u] . w st ) 1
+    : i s # i ( vec_at [u] . w st at )
+    ? == s 5 { ( vec_push [u] out # u 44 ) ^ T } {}
+    ? == s 2 { ( vec_set [u] . w st at # u 3 ) ^ T } {}
+    ? == s 4 { ( vec_set [u] . w st at # u 5 ) ^ T } {}
+    ? == s 0 { ( vec_set [u] . w st at # u 7 ) ^ T } {}
+    ( vec_set [u] . w st at # u 6 )
+    ^ F
+}
+
+@ jw_obj JsonWriter w ( Vec u ) out → v {
+    ? ( __jw_value w out ) {
+        ( vec_push [u] out # u 123 )
+        ( vec_push [u] . w st # u 1 )
+    } {}
+}
+
+@ jw_arr JsonWriter w ( Vec u ) out → v {
+    ? ( __jw_value w out ) {
+        ( vec_push [u] out # u 91 )
+        ( vec_push [u] . w st # u 4 )
+    } {}
+}
+
+@ jw_end JsonWriter w ( Vec u ) out → v {
+    : i at - ( vec_len [u] . w st ) 1
+    : i s # i ( vec_at [u] . w st at )
+    ? | == s 1 == s 3 { ( vec_push [u] out # u 125 ) } {
+        ? | == s 4 == s 5 { ( vec_push [u] out # u 93 ) } {
+            ( vec_set [u] . w st at # u 6 )
+            ^ v
+        }
+    }
+    : ?u _closed ( vec_pop [u] . w st )
+}
+
+@ jw_key JsonWriter w ( Vec u ) out s key → v {
+    : i at - ( vec_len [u] . w st ) 1
+    : i s # i ( vec_at [u] . w st at )
+    ? == s 3 { ( vec_push [u] out # u 44 ) } {
+        ? != s 1 {
+            ( vec_set [u] . w st at # u 6 )
+            ^ v
+        } {}
+    }
+    ( vec_set [u] . w st at # u 2 )
+    ( __json_escape out ( slice_of_str key ) )
+    ( vec_push [u] out # u 58 )
+}
+
+@ jw_str JsonWriter w ( Vec u ) out s value → v {
+    ? ( __jw_value w out ) { ( __json_escape out ( slice_of_str value ) ) } {}
+}
+
+@ jw_string JsonWriter w ( Vec u ) out String value → v {
+    ? ( __jw_value w out ) { ( __json_escape out ( string_bytes value ) ) } {}
+}
+
+@ jw_str_slice JsonWriter w ( Vec u ) out ( Slice u ) value → v {
+    ? ( __jw_value w out ) { ( __json_escape out value ) } {}
+}
+
+@ jw_int JsonWriter w ( Vec u ) out i n → v {
+    ? ( __jw_value w out ) { ( bytes_push_int out n ) } {}
+}
+
+// A float as json_float spells one; NaN and the infinities, which JSON
+// cannot, as null.
+@ jw_float JsonWriter w ( Vec u ) out f x → v {
+    ? ( __jw_value w out ) {
+        ? | != 0 ( nurl_is_nan x ) != 0 ( nurl_is_inf x ) { ( bytes_extend_str out `null` ) } {
+            ( __json_float_digits out x )
+        }
+    } {}
+}
+
+@ jw_bool JsonWriter w ( Vec u ) out b value → v {
+    ? ( __jw_value w out ) { ( bytes_extend_str out ? value `true` `false` ) } {}
+}
+
+@ jw_null JsonWriter w ( Vec u ) out → v {
+    ? ( __jw_value w out ) { ( bytes_extend_str out `null` ) } {}
+}
+
+@ jw_json JsonWriter w ( Vec u ) out Json j → v {
+    ? ( __jw_value w out ) { ( __json_emit out j ) } {}
+}
+
+@ jw_raw JsonWriter w ( Vec u ) out s json → v {
+    ? ( __jw_value w out ) { ( bytes_extend_str out json ) } {}
+}
+
+@ jw_raw_slice JsonWriter w ( Vec u ) out ( Slice u ) json → v {
+    ? ( __jw_value w out ) { ( bytes_extend_slice out json ) } {}
+}
+
+@ jw_ok JsonWriter w → b { ^ & == ( vec_len [u] . w st ) 1 == ( vec_at [u] . w st 0 ) 7 }
 
 // ── Accessors ────────────────────────────────────────────────────────
 

@@ -1,0 +1,26 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+written: {"id":9223372036854775807,"text":"say \"hi\" \\ \t\n\r\b\f\u0001\u001f\u0000<DEL> é 😀","key with \"quote\"":true,"tags":["a",-42,85.0,0.001,null,false,[],{}]}
+one whole value (jw_ok): ok
+same bytes as json_stringify: ok
+parses back to the same Json: ok
+json_write appends: ok
+mixed document whole: ok
+a window as a string: ok
+a String holding JSON stays a string: ok
+a Json value embedded: ok
+NaN and -inf as null: ok
+an open array is not whole: ok
+closed, it is: ok
+closed: [1]
+2000 strings of every byte: the reference's bytes, parsed back whole: ok
+value where a key goes: {  jw_ok F, nothing after the misuse
+key in an array: [  jw_ok F, nothing after the misuse
+key at the top level:   jw_ok F, nothing after the misuse
+end with nothing open:   jw_ok F, nothing after the misuse
+key after a key: {"a":  jw_ok F, nothing after the misuse
+end after a key: {"a":  jw_ok F, nothing after the misuse
+second top-level value: 1  jw_ok F, nothing after the misuse
+end past the top: []  jw_ok F, nothing after the misuse

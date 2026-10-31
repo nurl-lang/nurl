@@ -18,6 +18,7 @@
 //   ( bytes_eq a b )           → b                 byte-by-byte equality
 //   ( bytes_find_byte v t )    → ? i               first index of byte t
 //   ( bytes_extend_str v raw ) → v                 append from NUL string
+//   ( bytes_extend_slice v s ) → v                 append the bytes a ( Slice u ) views
 //
 //   ( bytes_read_u16_be v off ) → ? u16             load 2 bytes, big-endian
 //   ( bytes_read_u16_le v off ) → ? u16             load 2 bytes, little-endian
@@ -51,6 +52,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Construction from raw / String ─────────────────────────────────
 
@@ -107,6 +109,14 @@ $ `stdlib/core/errors.nu`
         ( nurl_memcpy dst_at src n )
         ( vec_set_len [u] v + len n )
     } {}
+}
+
+// Append the bytes `s` views onto `v`, in one copy: a window of a String
+// (string_bytes, slice_of_str) or of another buffer (slice_window), with
+// no pointer in the caller's hands.
+@ bytes_extend_slice ( Vec u ) v ( Slice u ) s → v {
+    : i n ( slice_len [u] s )
+    ? > n 0 { ( bytes_extend_raw v ( slice_data [u] s ) n ) } {}
 }
 
 // Append the decimal-text bytes of `n` onto `v` (no leading zeros, '-' for
