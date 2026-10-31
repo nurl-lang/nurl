@@ -177,6 +177,9 @@ drop_field_getter_fall_off	§7.6	A2	agora #187: the same call as the function's 
 drop_field_getter_local	§7.6	A2	agora #187: `^ ( getd w )`, a getter lending a `% Drop` field of the local `w`	rejected	h818
 drop_field_getter_param	§7.6	A2	agora #187: the same over a borrowed parameter: a lend of the caller's own, still answered as a lend	runs-clean	h821
 drop_field_getter_sink	§7.6	A2	agora #187: the same over a `sink` parameter, which the function drops too	rejected	h820
+drop_holder_closure_younger_view_then_panics	§2.14	A2	agora #259: a `% Drop` holder given a view of a younger String by a closure, then a panic	rejected	-
+drop_holder_given_younger_view_through_inout	§2.14	A2	agora #259: a `% Drop` holder given a view of a younger String by an `inout` callee	rejected	-
+drop_holder_inout_younger_view_then_panics	§2.14	A2	agora #259: the same, then a panic before the holder is pointed back	rejected	-
 drop_holder_pushed_younger_view_then_panics	§7.6	A2	agora #254: a W with a view of a younger String pushed into a Vec of W, then a panic	rejected	-
 drop_holder_views_inner_then_panics	§7.6	A2	agora #254: a W re-pointed to a view of a younger String, then a panic before it is pointed back: the unwind frees the String first	rejected	-
 drop_inout_assign_call_lend	§7.6	A2	agora #196: the same with a `% Drop` value: it cannot be copied	rejected	h868
@@ -936,8 +939,14 @@ view_in_owned_field_handed_back	§2.8	A2	view of local String stored in struct f
 view_in_struct_literal	§2.12	A2	string view stored in struct literal; String freed; field read	rejected	h46
 view_into_a_nested_field_then_the_field_taken	§2.12	A2	a view into a nested field read after the field holding it was handed to a sink (UAF)	rejected	h403
 view_into_aliased_param_vec	FnOK	A1	view of local pushed via alias of caller's Vec param; caller reads	rejected	h171
+view_into_capture_by_closure_outlives_source	§2.11	A2	agora #259: a closure assigning a by-reference capture a view of another capture, read after that one ended	rejected	-
+view_into_capture_by_passed_closure_outlives_source	§2.11	A2	agora #259: a closure literal handed to a function that runs it, assigning a by-reference capture a view of a block-local String	rejected	-
 view_into_field_of_outer_struct	§2.13	A2	loop-body raw string view stored into outer struct field, read after string freed	rejected	h179
+view_into_inout_assign_then_more_outlives_source	§2.10	A2	agora #259: the same with the assignment followed by another statement in the callee	rejected	-
+view_into_inout_field_outlives_source	§2.10	A2	agora #259: the same with the callee storing into a field of the `inout` struct of views	rejected	-
+view_into_inout_second_argument_outlives_source	§2.10	A2	agora #259: the same with the `inout` struct of views the callee's second parameter	rejected	-
 view_into_inout_struct_field	§2.13	A2	view of local stored into s field of inout struct; caller reads	rejected	h172
+view_into_inout_whole_assign_outlives_source	§2.10	A2	agora #259: a struct of views given a view of a block-local String by an `inout` callee that assigns its whole parameter, read after the block	rejected	-
 view_into_owned_field	§2.13	A2	owned s field assigned a view of a String; double free	rejected	h123
 view_into_param_container	FnOK	A1	view of local pushed into caller's Vec s param; local freed	rejected	h173
 view_kept_by_forward_fn	CallT.summary	A1	later-defined callee stores view into arg; owner dies at block end	rejected	h29
