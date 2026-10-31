@@ -108,8 +108,10 @@ bad()  { note "$1" "FAIL — $2"; fails=$((fails + 1)); }
 # the scalar blocks throughout, against one golden. RSA's IFMA kernel
 # (__rm_pow2_52, one body of the IFMA tier) is driven by
 # rsa_pow2_agree: the `on` leg runs it on an IFMA CPU, the `off` leg
-# the scalar exponentiation, against one golden.
-DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep rsa_pow2_agree)
+# the scalar exponentiation, against one golden. P-256's fixed-base table
+# scan (__p256_comb_get_d, v256 in its x86-64-v3 clone) is driven by
+# p256_comb_agree: the comb against the variable-base ladder.
+DRIVERS=(mlkem_vectors mldsa_vectors sha3x4_vectors chacha20_simd_agree aes_gcm_vectors chacha20poly1305_sweep rsa_pow2_agree p256_comb_agree)
 
 # ── 0. What this host will actually dispatch to ─────────────────────
 # Without this the whole script is theatre on an AVX2-less machine: the

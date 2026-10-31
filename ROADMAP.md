@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-31 · Current release: **0.82.0** · Language: **Grammar
+_Last reviewed: 2026-10-31 · Current release: **0.83.0** · Language: **Grammar
 v2.12** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -640,15 +640,23 @@ new language features.
   `vec_get` element handed back out of a local Vec, and a capture scan
   that took a shadowed name for the outer one; and (0.83.0) agora #224,
   a destructor reading a view whose source ended: scope-end drops run
-  newest first, and such a drop is a use of what the view points into.
+  newest first, and such a drop is a use of what the view points into;
+  #229, a loop-carried borrow tracked only to the source the last walk
+  saw; #245, a foreach's element used after the loop; #247, a closure that
+  consumes one capture releasing another; and #252, a `% Drop` holder
+  moved on only one path. The open ones are listed, each with a fix in progress, in
+  [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4
   as of 0.74.0 (`A2.memory_safe`, `A2.no_leak_end`); 0.82.0 adds per-call
   ownership (an owner cell, `formal/A2/DynCell.lean`), `A2.no_leak_panic`
   in the checked theorems, and A3's design with its claim stated in Lean
-  (`formal/A3/`). Open: A3 (threads,
-  data-race freedom), B (the standard library's `unsafe` base), C (nurlc
+  (`formal/A3/`); 0.83.0 proves A3.0 (threads that only move values are
+  memory-safe, race-free and leak-free), runs the destructors of
+  view-free types as code inside the calculus (A2-drop.1), and builds
+  without a warning on Lean 4.35. Open: the rest of A3 (threads that
+  share, data-race freedom), B (the standard library's `unsafe` base), C (nurlc
   implements the rules, by certificate) and D (code generation).
 
 ### Evidence for the "LLM-native" thesis

@@ -954,14 +954,12 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**Three holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name), #254 (a `% Drop` holder given a view of a
-younger binding, then a panic) and #259 (a view gained through an `inout`
-callee or a closure's assignment of a capture is not tracked). Agora #247
+**The holes known open are listed in [`LIMITATIONS.md`](LIMITATIONS.md)**,
+one entry each with its shape and how to stay clear of it until its fix
+ships (one file each in [`tools/fuzz/holes/open/`](../tools/fuzz/holes/open/),
+so two PRs never edit the same list). Agora #247
 (a closure consuming one capture released another) and #252 (a holder
-moved on only one branch) are closed in 0.83.0.
-[`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
-until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
+moved on only one branch) are closed in 0.83.0. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first
 (reallocated, moved to a `sink`, or released at a scope end, which ran
 drops in declaration order) it read freed memory. Scope-end drops now run
