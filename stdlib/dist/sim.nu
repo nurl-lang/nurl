@@ -209,6 +209,28 @@ $ `stdlib/core/rcbox.nu`
     ^ ( vec_len [SimMsg] . net inflight )
 }
 
+// The earliest virtual time a message in flight is due, or -1 when
+// nothing is in flight. A driver with nothing else to do waits until
+// then — the bus's own next event, beside its nodes' timers.
+@ sim_next_due SimNet net__h → i {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    : ( Vec SimMsg ) q . net inflight
+    : i m ( vec_len [SimMsg] q )
+    : ~ i best -1
+    : ~ i k 0
+    ~ < k m {
+        ?? ( vec_get [SimMsg] q k ) {
+            T msg → {
+                : i at ( sim_msg_at msg )
+                ? || < best 0 < at best { = best at } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ best
+}
+
 @ sim_delivered SimNet net__h → i {
     : *SimNetImpl net ( __SimNet_ptr net__h )
     ^ . net delivered

@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+40 requests from 4 nodes at once, right answers: 40
+the fiber server stops cleanly: ok
