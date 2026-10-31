@@ -507,6 +507,266 @@ theorem exitScope_setE_fresh {Γ : Ctx} (hw : CtxWF Γ) {r : Var} (hr : Γ r = n
           rw [hr] at hEr; cases hEr
       · rfl
 
+/-! ### A2-drop.1: what a panic leaves at a destructor's frame -/
+
+/-- An entry depends on one of the bindings `sp`. -/
+def HitsSp (sp : List Var) (E : Entry) : Prop := ∃ r ∈ roots E.vdeps, r ∈ sp
+
+instance (sp : List Var) (E : Entry) : Decidable (HitsSp sp E) := by
+  unfold HitsSp; infer_instance
+
+/-- A binding that depended on an unwound scope is dead. -/
+def unwE (sp : List Var) (E : Entry) : Entry := if HitsSp sp E then { E with live := false } else E
+
+theorem unwE_mode (sp : List Var) (E : Entry) : (unwE sp E).mode = E.mode := by
+  unfold unwE; split <;> rfl
+
+theorem unwE_ty (sp : List Var) (E : Entry) : (unwE sp E).ty = E.ty := by
+  unfold unwE; split <;> rfl
+
+theorem unwE_of_not {sp : List Var} {E : Entry} (h : ¬ HitsSp sp E) : unwE sp E = E := by
+  simp [unwE, h]
+
+/-- The context a panic leaves at a destructor's frame `x`, once it has
+    unwound the scopes `sp` inside: their bindings are gone, a binding that
+    depended on one of them is dead, and `x` is live again, holding nothing,
+    for its destructor. -/
+def unwindCtx (sp : List Var) (x : Var) (Γ : Ctx) : Ctx := fun v =>
+  if v ∈ sp then none
+  else if v = x then (Γ x).map (fun E => { E with live := true, held := [] })
+  else (Γ v).map (unwE sp)
+
+theorem unwindCtx_sp {sp : List Var} {x v : Var} {Γ : Ctx} (h : v ∈ sp) :
+    unwindCtx sp x Γ v = none := by simp [unwindCtx, h]
+
+theorem unwindCtx_x {sp : List Var} {x : Var} {Γ : Ctx} (h : x ∉ sp) :
+    unwindCtx sp x Γ x = (Γ x).map (fun E => { E with live := true, held := [] }) := by
+  simp [unwindCtx, h]
+
+theorem unwindCtx_other {sp : List Var} {x v : Var} {Γ : Ctx} (h : v ∉ sp) (hvx : v ≠ x) :
+    unwindCtx sp x Γ v = (Γ v).map (unwE sp) := by
+  simp [unwindCtx, h, hvx]
+
+/-- Away from the frame, an entry is the old one, or the old one dead. -/
+theorem unwindCtx_cases {sp : List Var} {x v : Var} {Γ : Ctx} {E : Entry}
+    (h : unwindCtx sp x Γ v = some E) (hvx : v ≠ x) : v ∉ sp ∧ ∃ E0, Γ v = some E0 ∧
+      ((HitsSp sp E0 ∧ { E0 with live := false } = E) ∨ (¬ HitsSp sp E0 ∧ E0 = E)) := by
+  by_cases hv : v ∈ sp
+  · rw [unwindCtx_sp hv] at h; cases h
+  · rw [unwindCtx_other hv hvx] at h
+    obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp h
+    refine ⟨hv, E0, h0, ?_⟩
+    by_cases hh : HitsSp sp E0
+    · exact Or.inl ⟨hh, by simp [unwE, hh]⟩
+    · exact Or.inr ⟨hh, by simp [unwE, hh]⟩
+
+/-- A slot keeps its meaning when every root its entry depends on reaches
+    the same memory; an integer's depends on none. -/
+theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E sl)
+    (hk : E.ty ≠ .int → ∀ dep ∈ E.vdeps, VKeep m m1 dep ∧ HKeep m m1 dep) : SlotOK m1 E sl := by
+  obtain ⟨h1, h2, h3⟩ := hs
+  by_cases hty : E.ty = .int
+  · refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
+    · obtain ⟨hown, hwf, hv⟩ := h2 ho
+      refine ⟨hown, hwf, fun hl => ?_⟩
+      obtain ⟨T, hT, _⟩ := hv hl
+      exact ⟨T, hT, ViewsOK.none (by rw [hty]; rfl) T _⟩
+    · obtain ⟨v, hv, hok⟩ := h3 ho hl
+      refine ⟨v, hv, ?_⟩
+      rw [hty] at hok ⊢; cases hok; exact .int
+  · have hk' := hk hty
+    refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
+    · obtain ⟨hown, hwf, hv⟩ := h2 ho
+      refine ⟨hown, hwf, fun hl => ?_⟩
+      obtain ⟨T, hT, hvs⟩ := hv hl
+      exact ⟨T, hT, hvs.keep fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
+    · obtain ⟨v, hv, hok⟩ := h3 ho hl
+      exact ⟨v, hv, hok.keep (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))
+        (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))⟩
+
+/-- What a panic leaves at a destructor's frame satisfies the memory
+    invariant, in the unwind context: the unwound scopes owned trees
+    disjoint from every other binding's, a binding that viewed one of them
+    is dead, and what survives reaches the same memory (`pinOut`,
+    `rootKeep_frame_sp`). -/
+theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry} {v0 : Val}
+    (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hmo : Ex.mode = .own)
+    (hview : Ex.ty.holdsView = false) (hxk : x ∉ k.spine)
+    (hout : ∀ v, v ∉ k.spine → m1.st v = m.st v) (hin : ∀ v ∈ k.spine, m1.st v = none)
+    (hh1 : HeapOK m1) (hnv : m1.nv = m.nv) (hsl : m1.st x = some ⟨true, some v0⟩)
+    (hkF : ∀ v ∈ k.spine, v ∉ F) : MInv m1 (unwindCtx k.spine x Γ) := by
+  have hnx : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
+    rw [h, hx] at hp; cases hp; simp [hmo] at hm
+  have hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → Anchored E F :=
+    fun p E hp hm hps => hi.anch p E hp hm (by simp [Stmt.spine, hnx p E hp hm, hps])
+  have hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → ∀ r ∈ roots E.vdeps, r ∉ k.spine :=
+    fun p E hp hm hps r hr hrk =>
+      hi.pinOut p E hp hm (by simp [Stmt.spine, hnx p E hp hm, hps]) r hr (by simp [Stmt.spine, hrk])
+  have hF : ∀ o ∈ F, m1.st o = m.st o := fun o ho => hout o (fun h => hkF o h ho)
+  have hrbk : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → ¬ HitsSp k.spine E :=
+    fun p E hp hm hps ⟨r, hr, hrk⟩ => hpin p E hp hm hps r hr hrk
+  have hkeep : ∀ w E, Γ w = some E → E.live = true → ¬ HitsSp k.spine E → E.ty ≠ .int →
+      ∀ dep ∈ E.vdeps, VKeep m m1 dep ∧ HKeep m m1 dep := fun w E hw hl hns hty dep hd => by
+    have hr : dep.root ∈ roots E.vdeps := List.mem_map_of_mem hd
+    obtain ⟨Er, hEr, hro⟩ := hi.wf w E hw hl (Or.inl hty) dep.root hr
+    have hrs : dep.root ∉ k.spine := fun h => hns ⟨dep.root, hr, h⟩
+    have hrk := rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs)
+    exact ⟨hrk.vkeep, hrk.hkeep⟩
+  obtain ⟨sl0, hsl0, hok0, hslot0⟩ := hi.slot x Ex hx
+  rw [← hout x hxk, hsl] at hsl0; cases hsl0
+  obtain ⟨_, hown0, _⟩ := hslot0
+  have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
+  obtain ⟨howning, hwf, _⟩ := hown0 hos
+  have hwfv : WFv Ex.ty v0 := hwf v0 rfl
+  have hux : unwindCtx k.spine x Γ x = some { Ex with live := true, held := [] } := by
+    rw [unwindCtx_x hxk, hx]; rfl
+  refine
+    { dom := fun w => ?_
+      slot := fun w E hw => ?_
+      heap := hh1
+      nvSt := fun w hw => ?_
+      noInout := fun w E b hw => ?_
+      wf := ?_
+      rootbLive := fun p E hp hm => ?_
+      rootbLt := fun p E hp hm => ?_
+      names := ?_
+      held := fun w E sl T hw hl hsw hT => ?_
+      pkgs := fun w sl T hsw hT => ?_ }
+  · by_cases hwk : w ∈ k.spine
+    · rw [unwindCtx_sp hwk, hin w hwk]; rfl
+    by_cases hwx : w = x
+    · rw [hwx, hux, hsl]; rfl
+    · rw [unwindCtx_other hwk hwx, hout w hwk, Option.isSome_map]; exact hi.dom w
+  · by_cases hwk : w ∈ k.spine
+    · rw [unwindCtx_sp hwk] at hw; cases hw
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      rw [hwx]
+      refine ⟨⟨true, some v0⟩, hsl, hok0, ?_, fun _ => ⟨howning, fun T hT => ?_,
+        fun _ => ⟨v0, rfl, ViewsOK.none hview v0 []⟩⟩, fun h => by simp [hos] at h⟩
+      · simp [hmo, Mode.ownSlot]
+      · cases hT; exact hwfv
+    · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      obtain ⟨sl, hsw, hok, hslot⟩ := hi.slot w E0 h0
+      refine ⟨sl, by rw [hout w hwk]; exact hsw, ?_, ?_⟩
+      · rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hok
+      · rcases hc with ⟨_, rfl⟩ | ⟨hns, rfl⟩
+        · obtain ⟨h1, h2, _⟩ := hslot
+          refine ⟨h1, fun ho => ?_, fun _ hl => by cases hl⟩
+          obtain ⟨hown, hwf', _⟩ := h2 ho
+          exact ⟨hown, hwf', fun hl => by cases hl⟩
+        · by_cases hl : E0.live = true
+          · exact hslot.keepRoots (hkeep w E0 h0 hl hns)
+          · obtain ⟨h1, h2, _⟩ := hslot
+            refine ⟨h1, fun ho => ?_, fun _ hl' => absurd hl' hl⟩
+            obtain ⟨hown, hwf', _⟩ := h2 ho
+            exact ⟨hown, hwf', fun hl' => absurd hl' hl⟩
+  · by_cases hwk : w ∈ k.spine
+    · rw [hin w hwk] at hw; cases hw
+    · rw [hout w hwk] at hw; rw [hnv]; exact hi.nvSt w hw
+  · by_cases hwk : w ∈ k.spine
+    · rw [unwindCtx_sp hwk] at hw; cases hw
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw; simp [hmo]
+    · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.noInout w E0 b h0
+  · intro w E hw hl hn r hr
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      simp [Entry.vdeps, hos, roots] at hr
+    · obtain ⟨hwk, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      rcases hc with ⟨_, rfl⟩ | ⟨hns, rfl⟩
+      · cases hl
+      · obtain ⟨Er, hEr, hro⟩ := hi.wf w E0 h0 hl hn r hr
+        have hrk : r ∉ k.spine := fun h => hns ⟨r, hr, h⟩
+        by_cases hrx : r = x
+        · rw [hrx] at hEr ⊢; rw [hx] at hEr; cases hEr
+          exact ⟨_, hux, by simp [hmo, Mode.isRoot]⟩
+        · rw [unwindCtx_other hrk hrx, hEr]
+          exact ⟨_, rfl, by rw [unwE_mode]; exact hro⟩
+  · by_cases hpx : p = x
+    · rw [hpx, hux] at hp; cases hp; simp [hmo] at hm
+    · obtain ⟨hpk, E0, h0, hc⟩ := unwindCtx_cases hp hpx
+      rcases hc with ⟨hh, rfl⟩ | ⟨_, rfl⟩
+      · exact absurd hh (hrbk p E0 h0 hm hpk)
+      · exact hi.rootbLive p E0 h0 hm
+  · by_cases hpx : p = x
+    · rw [hpx, hux] at hp; cases hp; simp [hmo] at hm
+    · obtain ⟨hpk, E0, h0, hc⟩ := unwindCtx_cases hp hpx
+      rcases hc with ⟨hh, rfl⟩ | ⟨_, rfl⟩
+      · exact absurd hh (hrbk p E0 h0 hm hpk)
+      · exact hi.rootbLt p E0 h0 hm
+  · intro w E hw hl hn d hd b t hkd
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      simp [Entry.vdeps, hos] at hd
+    · obtain ⟨hwk, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      rcases hc with ⟨_, rfl⟩ | ⟨hns, rfl⟩
+      · cases hl
+      · obtain ⟨Er, hEr, hlr, hhr, htr, hor, hbr, htv⟩ := hi.names w E0 h0 hl hn d hd b t hkd
+        have hrk : d.root ∉ k.spine := fun h => hns ⟨d.root, List.mem_map_of_mem hd, h⟩
+        by_cases hrx : d.root = x
+        · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
+          exact ⟨{ Ex with live := true, held := [] }, by rw [hrx]; exact hux, rfl, rfl, htr,
+            by simp [hos], hbr, htv⟩
+        · have hnr : ¬ HitsSp k.spine Er := fun ⟨r, hr, _⟩ => by
+            simp [Entry.vdeps, hor, hhr, roots] at hr
+          exact ⟨Er, by rw [unwindCtx_other hrk hrx, hEr, Option.map_some, unwE_of_not hnr], hlr, hhr, htr,
+            hor, hbr, htv⟩
+  · by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      rw [hwx, hsl] at hsw; cases hsw; cases hT
+      intro c hc; rw [WFv.names_nil hwfv hview] at hc; cases hc
+    · obtain ⟨hwk, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+      · cases hl
+      · exact hi.held w E0 sl T h0 hl (by rw [← hout w hwk]; exact hsw) hT
+  · by_cases hwk : w ∈ k.spine
+    · rw [hin w hwk] at hsw; cases hsw
+    · exact hi.pkgs w sl T (by rw [← hout w hwk]; exact hsw) hT
+
+/-- A destructor's call on `x`, from any context where `x` owns a value of a
+    type that holds no views and holds nothing: the destructor lends, holds
+    and stores nothing, so the call changes no binding, and `x`'s scope ends
+    after it. -/
+theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var} {f : Nat}
+    {E : Entry} {fn : Fn} (hm : MInv m Γ0) (hx : Γ0 x = some E) (hmo : E.mode = .own)
+    (hlive : E.live = true) (hheld : E.held = []) (hfn : P[f]? = some fn) (hps : fn.params = [(.inp, E.ty)])
+    (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : NoPin Γ0 x) :
+    StmtT P Γ0 F (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Γ0) := by
+  have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
+  have hmr : m.st m.nv = none := by
+    cases h : m.st m.nv with
+    | none => rfl
+    | some sl => exact absurd (hm.nvSt m.nv (by rw [h]; rfl)) (Nat.lt_irrefl _)
+  have hrΓ : Γ0 m.nv = none := by
+    have := hm.dom m.nv; rw [hmr] at this
+    cases h : Γ0 m.nv <;> simp_all
+  have hnm : mutNames Γ0 [x] = [] := by
+    simp [mutNames, argNames, argE, hx, nameDeps, Entry.vdeps, hos, hheld]
+  have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γ0 := by
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, rfl, (callPost_dtor hps hnm).symm⟩
+    · have hi0 : i = 0 := by simp [hps] at hi; omega
+      subst hi0
+      refine ⟨E, by simp [hx], hlive, ?_, fun h => ?_, fun h => ?_⟩
+      · simp [hps, paramOK]
+      · simp [hps, PMode.moves] at h
+      · simp [hps] at h
+    · rw [hnm] at hd; cases hd
+  have hNoPinR : NoPin (setE Γ0 m.nv (callRes Γ0 fn [x])) m.nv := by
+    intro p Ep hp hmp d hd _
+    by_cases hpr : p = m.nv
+    · subst hpr; simp [setE] at hp; subst hp; simp [callRes, resMode, hro] at hmp
+    · simp only [setE, upd_ne _ _ hpr] at hp
+      have hlt := hm.rootbLt p Ep hp hmp d.root (List.mem_map_of_mem hd)
+      have hpn : p < m.nv := hm.nvSt p (by
+        have := hm.dom p; rw [hp] at this; exact this.symm)
+      intro h; rw [h] at hlt; exact absurd hpn (Nat.lt_asymm hlt)
+  have hlc := StmtT.letcall (P := P) (F := F) (x := m.nv) (f := f) (args := [x]) (s := .skip)
+    rfl hrΓ hnF hcall StmtT.skip hNoPinR
+  rw [exitScope_setE_fresh hm.wf hrΓ] at hlc
+  exact StmtT.scope ⟨E, hx, by simp [hmo]⟩ hxF hlc hpin
+
 /-- Preservation: every step of a well-typed configuration, given the call
     case. -/
 theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) {Γ : Ctx} {F : List Var} {s : Stmt}
@@ -995,7 +1255,126 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         simp only [setE, upd_ne _ _ hwx] at hw
         exact ⟨by simp [Stmt.spine, hwx], E', hw⟩
-    | scopeDP hp hsl => sorry
+    | scopeDP hp hsl =>
+      rename_i m1 v0
+      obtain ⟨fn, hfn, hps, _, hro, _, _, _⟩ := hdtor
+      have hkn : k.spine.Nodup := by
+        have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
+      obtain ⟨hout, hin, hh1, hc1, hnv1, _⟩ := panic_unwind hp hiS.heap hiS.cover hkn
+      have hkF : ∀ v ∈ k.spine, v ∉ F := hs.spine_F
+      have hMu := MInv.unwind hiS hx hmo hview hxsp hout hin hh1 hnv1 hsl hkF
+      have hux : unwindCtx k.spine x Γ x = some { Ex with live := true, held := [] } := by
+        rw [unwindCtx_x hxsp, hx]; rfl
+      -- a borrowed parameter the unwind left is the old one, outside the frame
+      have hrbU : ∀ p E, unwindCtx k.spine x Γ p = some E → E.mode = .rootb →
+          p ≠ x ∧ p ∉ k.spine ∧ Γ p = some E := by
+        intro p E hp hm
+        have hpx : p ≠ x := fun h => by
+          rw [h, hux] at hp; cases hp; simp [hmo] at hm
+        obtain ⟨hpk, E0, h0, hc⟩ := unwindCtx_cases hp hpx
+        rcases hc with ⟨hh, rfl⟩ | ⟨_, rfl⟩
+        · exfalso
+          obtain ⟨r, hr, hrk⟩ := hh
+          exact hiS.pinOut p E0 h0 hm (by simp [Stmt.spine, hpx, hpk]) r hr (by simp [Stmt.spine, hrk])
+        · exact ⟨hpx, hpk, h0⟩
+      have hpinU : NoPin (unwindCtx k.spine x Γ) x := by
+        intro p E hp hm d hd _ hdx
+        obtain ⟨hpx, hpk, h0⟩ := hrbU p E hp hm
+        exact hiS.pinOut p E h0 hm (by simp [Stmt.spine, hpx, hpk]) d.root (List.mem_map_of_mem hd)
+          (by simp [Stmt.spine, hdx])
+      have hnF : m1.nv ∉ F := fun h => by
+        have := hiS.nvF _ h; rw [hnv1] at this; exact Nat.lt_irrefl _ this
+      have hsc := dtorCall_typed hMu hux (by simp [hmo]) rfl rfl hfn hps hro hxF hnF hpinU
+      -- the panic is raised again: the body's typing kept what the unwind kept
+      have hpan : StmtT P (exitScope x (unwindCtx k.spine x Γ)) F .panic (exitScope x Δ1) := by
+        have hwk := (Weaker.refl hWd hNd).exitScope x
+        refine StmtT.panic hwk.2.1 hwk.2.2 (fun v => ?_) (fun v E hv => ?_)
+        · by_cases hvx : v = x
+          · rw [hvx]; simp [exitScope]
+          · simp only [exitScope, upd_ne _ _ hvx, A2.kill, Option.isSome_map]
+            by_cases hvk : v ∈ k.spine
+            · rw [unwindCtx_sp hvk]
+              cases hd : Δ1 v with
+              | none => rfl
+              | some Ed => exact absurd hvk (hKO.2 v Ed hd).1
+            · rw [unwindCtx_other hvk hvx, Option.isSome_map]
+              cases hg : Γ v with
+              | none =>
+                cases hd : Δ1 v with
+                | none => rfl
+                | some Ed =>
+                  obtain ⟨_, E0, h0⟩ := hKO.2 v Ed hd
+                  rw [hg] at h0; cases h0
+              | some Eg =>
+                obtain ⟨Ed, hd, _⟩ := hKO.1 v Eg hg hvk
+                rw [hd]; rfl
+        · have hvx : v ≠ x := fun h => by rw [h] at hv; simp [exitScope] at hv
+          simp only [exitScope, upd_ne _ _ hvx, A2.kill] at hv
+          obtain ⟨Ed, hd, rfl⟩ := Option.map_eq_some_iff.mp hv
+          obtain ⟨hvk, Eg, hg⟩ := hKO.2 v Ed hd
+          obtain ⟨Ed', hd', hmd, htd, hrbd⟩ := hKO.1 v Eg hg hvk
+          rw [hd] at hd'; cases hd'
+          have hu := unwindCtx_other (x := x) (Γ := Γ) hvk hvx
+          rw [hg] at hu
+          refine ⟨killE .replace false x (unwE k.spine Eg), ?_, ?_, ?_, ?_⟩
+          · simp only [exitScope, upd_ne _ _ hvx, A2.kill, hu, Option.map_some]
+          · rw [killE_mode, killE_mode, unwE_mode]; exact hmd
+          · rw [killE_ty, killE_ty, unwE_ty]; exact htd
+          · intro hfx
+            -- a fixed entry here is a borrowed parameter (the invariant has no
+            -- `inout` entry): the unwind and the body's typing both left it
+            have hrb : Eg.mode = .rootb := by
+              rcases hfx with h | ⟨b, h, _⟩
+              · rw [killE_mode, unwE_mode] at h; exact h
+              · rw [killE_mode, unwE_mode] at h; exact absurd h (hiS.noInout v Eg b hg)
+            have hnh : ¬ HitsSp k.spine Eg := fun ⟨r, hr, hrk⟩ =>
+              hiS.pinOut v Eg hg hrb (by simp [Stmt.spine, hvx, hvk]) r hr (by simp [Stmt.spine, hrk])
+            rw [hrbd hrb, unwE_of_not hnh]
+      refine ⟨unwindCtx k.spine x Γ, StmtT.seq rfl hsc hpan, ?_,
+        by show m.nv ≤ m1.nv + 1; rw [hnv1]; exact Nat.le_succ _, ⟨?_, ?_⟩, ?_⟩
+      · exact
+        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self⟩
+            (Nat.le_succ _)
+          nvS := fun w hw => by
+            simp only [Stmt.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
+            show w < m1.nv + 1
+            have hxl : x < m1.nv := by rw [hnv1]; exact hiS.nvS x (by simp [Stmt.vars])
+            rcases hw with h | h | h <;> rw [h]
+            · exact Nat.lt_succ_of_lt hxl
+            · exact Nat.lt_succ_self _
+            · exact Nat.lt_succ_of_lt hxl
+          nvF := fun w hw => by
+            show w < m1.nv + 1; rw [hnv1]; exact Nat.lt_succ_of_lt (hiS.nvF w hw)
+          anch := fun p E hp hm _ => by
+            obtain ⟨hpx, hpk, h0⟩ := hrbU p E hp hm
+            exact hiS.anch p E h0 hm (by simp [Stmt.spine, hpx, hpk])
+          spineNd := by simp [Stmt.spine]
+          spineDom := fun w hw => by
+            simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at hw
+            rw [hw]; exact ⟨_, hux⟩
+          catchOK := by simp [CatchOK]
+          cover := hc1
+          pinOut := fun p E hp hm _ r hr hrs => by
+            obtain ⟨hpx, hpk, h0⟩ := hrbU p E hp hm
+            simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false] at hrs
+            exact hiS.pinOut p E h0 hm (by simp [Stmt.spine, hpx, hpk]) r hr (by simp [Stmt.spine, hrs])
+          pinIn := trivial }
+      · intro w E hw hws
+        have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
+        have hwk : w ∉ k.spine := fun h => hws (by simp [Stmt.spine, h])
+        refine ⟨by simp [Stmt.spine, hwx], ?_⟩
+        rw [unwindCtx_other hwk hwx, hw]
+        refine ⟨_, rfl, unwE_mode .., unwE_ty .., fun hrb => ?_⟩
+        have hnh : ¬ HitsSp k.spine E := fun ⟨r, hr, hrk⟩ =>
+          hiS.pinOut w E hw hrb (by simp [Stmt.spine, hwx, hwk]) r hr (by simp [Stmt.spine, hrk])
+        exact unwE_of_not hnh
+      · intro w E' hw hws
+        have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
+        obtain ⟨hwk, E0, h0, _⟩ := unwindCtx_cases hw hwx
+        exact ⟨by simp [Stmt.spine, hwx, hwk], E0, h0⟩
+      · intro w hw
+        show m1.st w = m.st w
+        exact hout w (fun h => hkF w h hw)
   | @rbind Γ Δ1 F p k Ep hp hm hl hroots hpF hs hrr ihs =>
     intro m m' s' hcd hi hst
     have hpsp : p ∉ k.spine := by
