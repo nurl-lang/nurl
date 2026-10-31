@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-10-30 · Current release: **0.81.0** · Language: **Grammar
+_Last reviewed: 2026-10-31 · Current release: **0.82.0** · Language: **Grammar
 v2.11** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -232,7 +232,7 @@ A high-level map of what exists. Dates and per-feature detail are in
   and `--debug` builds at the default -O2. Since 0.71.0 the rules are a
   guarantee — every program accepted without an `unsafe` function of its
   own is memory-safe and leak-free (MEMORY.md §6.2; every hole found
-  is closed and held by a probe; the rules for
+  is closed and held by a probe, or listed in LIMITATIONS.md while open; the rules for
   single-threaded code are proven sound in Lean 4, `formal/` phases A1–A2,
   0.74.0) — `Rc` cycles
   are collected by a cycle
@@ -633,11 +633,19 @@ new language features.
   tries and bindings handing back or storing a lend of a local (a part of
   one, a `% Drop` value a call lent, a join's arm), a value of another
   shape in a literal field, and raw strings an early return left in a
-  loop's slots. None is open.
+  loop's slots; and h937–h974 plus the first named probes (0.82.0): a
+  try handing on an error it only borrowed, `% Drop` payloads lent to a
+  `??` arm or a literal, function summaries written inside a block, a
+  `vec_get` element handed back out of a local Vec, and a capture scan
+  that took a shadowed name for the outer one. One is open: agora #224
+  (a destructor reading a view whose source ended; LIMITATIONS.md).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4
-  as of 0.74.0 (`A2.memory_safe`, `A2.no_leak_end`). Open: A3 (threads,
+  as of 0.74.0 (`A2.memory_safe`, `A2.no_leak_end`); 0.82.0 adds per-call
+  ownership (an owner cell, `formal/A2/DynCell.lean`), `A2.no_leak_panic`
+  in the checked theorems, and A3's design with its claim stated in Lean
+  (`formal/A3/`). Open: A3 (threads,
   data-race freedom), B (the standard library's `unsafe` base), C (nurlc
   implements the rules, by certificate) and D (code generation).
 

@@ -15,7 +15,7 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers in `unsafe` code inherit LLVM semantics — spec §4.2, §6.1; out-of-range shifts are rejected at compile time or panic at runtime.)
-- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): the ownership rules of the single-threaded language (`A2.memory_safe`, `A2.no_leak_end`) are mechanically proven sound in Lean 4 ([`formal/`](formal/)), every hole found across the tree is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/), and nothing is released by hand.
+- **Single-owner memory, checked ownership rules** — auto-drop at scope exit; owned values move, reads borrow, and raw memory lives only in `unsafe` functions. Every program accepted without an `unsafe` function of its own is memory-safe and leak-free, data races included ([`docs/MEMORY.md`](docs/MEMORY.md) §6.2): the ownership rules of the single-threaded language (`A2.memory_safe`, `A2.no_leak_end`) are mechanically proven sound in Lean 4 ([`formal/`](formal/)), every hole found across the tree is closed and held by a probe in [`tools/fuzz/holes/`](tools/fuzz/holes/) or, while it is open, listed in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md), and nothing is released by hand.
 - **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. The messages do the work a gotchas document used to, and CI fails a change that adds a diagnostic no test makes the compiler print (`tools/check_diag_coverage.sh`).
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
@@ -166,7 +166,7 @@ threads as hard compile errors, without ever changing generated code: every
 program accepted without an `unsafe` function of its own is memory-safe
 and leak-free (`docs/MEMORY.md` §6.2; the rules for single-threaded code —
 `A2.memory_safe`, `A2.no_leak_end` — are mechanically proven
-in Lean 4 under [`formal/`](formal/), and every hole found so far is closed). The
+in Lean 4 under [`formal/`](formal/), and every hole found so far is closed, or listed in `docs/LIMITATIONS.md` while it is open). The
 one remaining source-level trap, the
 n-ary `&`/`|` foot-gun, is a hard error by default; `--no-strict-arity`
 demotes it to a warning for trees that need to keep building.
