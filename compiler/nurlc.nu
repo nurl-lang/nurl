@@ -22216,6 +22216,12 @@ unsafe @ __blk_leave b val → v {
     } {}
     : i __rb_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    // (A value block whose tail is a binding reads it where the block
+    // ends, as a `?` arm's edge row does: its statement's reads are gone by
+    // now, and the walk checks this one against the block's own state —
+    // a binding its path already moved is a use after move, not a value
+    // to hand on. Agora #274.)
+    ? & & & blk_val any == 0 g_did_ret ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
     ( bck_block_exit __rb_line )
     // Exits the tail statement handed up. An arm body leaves them to its
     // `?`/`??`; a bare block that is itself a block's tail hands them on;
@@ -31213,7 +31219,16 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // before its locals leave scope, as fn_cleanup does: a
                         // value they read or release is still tracked.
                         // Replayed once — a site's flag clears.)
-                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers ( bck_walk_seq + p 1 eb st ) ) ( bck_walk_seq + p 1 eb st ) ( bck_field_int ( bck_rec eb ) 3 ) )
+                        : s bwalk ( bck_walk_seq + p 1 eb st )
+                        // (A value block whose tail is a binding reads it on its
+                        // `endblock` row, which the block's walk does not visit:
+                        // read here, from the block's own state, before its scope
+                        // closes and a body's defers run — gen_block_expr, #274.)
+                        ? & ( bck_row_reads_any eb ) ! ( seq bwalk `!` ) {
+                            : s ebrec ( bck_rec eb )
+                            ( bck_check_moved_reads ( bck_field ebrec 2 ) ( bck_field_int ebrec 3 ) bwalk )
+                        } {}
+                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk ) bwalk ( bck_field_int ( bck_rec eb ) 3 ) )
                     }
                     = g_bck_sc_n - g_bck_sc_n 1
                 }

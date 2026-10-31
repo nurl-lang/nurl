@@ -485,6 +485,7 @@ inout_struct_and_borrow	CallT.args	A1	inout container and borrow of its element 
 iterator_chain_over_a_temporary	§2.11	A2	iter_map over a temporary iter_from_vec: the sink combinator's result held nothing of the Vec (retcap)	rejected	h305
 join_arm_copies_guarded_call	§7.1	A2	?-join copies a call arm that handed a fresh string over: string leaks	runs-clean	h194
 join_arm_selects_a_consumed_owner	§2.1	A1	agora #242: a `?` arm selecting an owner already consumed	rejected	-
+join_block_arm_selects_a_consumed_owner	§2.1	A1	agora #274: a `?` block arm whose tail selects an owner already consumed	rejected	-
 join_copies_a_nested_join_for_its_condition	§7.1	A2	?-join copies a nested ?-join arm for its condition's ident: the inner owner leaks	runs-clean	h602
 join_copies_a_nested_join_on_the_then_side	§7.1	A2	?-join copies a nested ?-join then-arm: the inner join's owner leaks	runs-clean	h603
 join_initialised_string_cursor_leaks	§7.1	A2	string cursor from ?-join has no owner slot: each assigned fresh string leaks	runs-clean	h203
@@ -583,6 +584,7 @@ match_arm_block_local_field_bound	§7.6	A2	agora #180: a `??` arm block's tail f
 match_arm_block_local_field_returned	§7.6	A2	agora #180: a `??` arm block's tail field of the arm's own struct, returned	runs-clean	h749
 match_arm_call_fresh_handle	§7.6	A2	a ?? arm whose value was a call's fresh handle made from the payload (an arc_clone) never dropped the payload; parked drops now run when the callee's lend summary rules the arm's locals out of the result	runs-clean	h321
 match_arm_selects_a_consumed_owner	§2.1	A1	agora #242: a `??` arm selecting an owner already consumed	rejected	-
+match_block_arm_selects_a_consumed_owner	§2.1	A1	agora #274: a `??` block arm whose tail selects an owner already consumed	rejected	-
 match_bound_payload_wrap	§7.6	A2	agora #195: `: String s ?? ( getr w ) { T x → x … }  ^ @ !String E { T s }`	runs-clean	h898
 match_on_a_lent_option_released_its_payload	§7.6	A2	match on borrowed option param makes %Drop payload owned; released	runs-clean	h226
 match_on_a_temporary_enum_leaked_it	§7.1	A2	match on enum returned by call: enum and payload never dropped	runs-clean	h233
@@ -959,6 +961,7 @@ uncopyable_temp_arg_leaks	§7.1	A2	non-copyable struct temporary passed to call 
 unjournaled_drop_skipped_by_a_panic	§7.2	A2	panic past a struct holding a lock guard (or a Drop impl defined later): its drop was never journaled — lock held, leak, Drop not run	runs-clean	h291
 user_wrapper_drops_elements	CallT.sink	A1	String pushed (moved) into Vec, user fn clears Vec, original name read	rejected	h03
 utf8_decode_at_a_negative_position	§3.3d	B	`( utf8_decode_at b -2 )` and `( utf8_decode s -40 )`: the only range test was `pos >= n`, so a negative position read before the buffer.	runs-clean	h443
+value_block_tail_is_a_consumed_owner	§2.1	A1	agora #274: a value block whose tail is an owner already consumed	rejected	-
 vec_at_copy_field_taken_then_vec_freed	§7.6	A2	a field of a vec_at copy handed to string_free: only the copy was emptied, the Vec released it again (double free); a field emptied only in a borrowing binding's copy may not be taken	rejected	h394
 vec_at_copy_field_viewer_taken_then_vec_freed	§7.6	A2	as h394, through a field viewer of the copy taken whole	rejected	h395
 vec_at_copy_handed_to_a_field_taker	CallT.sink	A1	a vec_at copy handed whole to a function that takes a field of its parameter: kept only, so the borrow went over and the Vec released the field again; the parameter is a sink now	rejected	h396
