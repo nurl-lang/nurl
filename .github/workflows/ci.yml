@@ -263,8 +263,15 @@ jobs:
       - name: Compile and link the whole runtime against msvcrt
         run: ./tools/check_mingw_cross.sh
 
-  build-test:
-    name: build + bootstrap fixed point + test corpus
+  # build-test is split in three jobs that run at once (Agora #251, part 2):
+  # as one job it ran 34 min p50 and was CI's critical path. build-corpus is
+  # ./build.sh itself (the bootstrap fixed point and the test corpus);
+  # build-gates and build-gates-2 build the toolchain with --no-tests
+  # (~1.6 min) and run every gate that used to follow it, in the same order.
+  # The required check keeps its name: `build-test` below is that check,
+  # and it passes only when all three parts did.
+  build-corpus:
+    name: "build + bootstrap fixed point + test corpus (build.sh)"
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -316,6 +323,43 @@ jobs:
         # type for function argument"). Checks every module the corpus
         # just emitted, so this runner's older clang still catches it.
         run: python3 tools/check_ir_type_order.py "$(ls -td build/tests/run.* | head -1)"/*.ll
+
+      - name: Retain complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
+
+  build-gates:
+    name: "build gates: probes, packaging, formatting, diagnostics"
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The gates of the old single job (see build-corpus above). Measure
+    # before raising this: the next gate added here comes with a time.
+    timeout-minutes: 30
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: clang --version | head -1
+
+      - name: Build the toolchain (the corpus runs in build-corpus)
+        run: ./build.sh --no-tests
 
       - name: Soundness hole probes (every one rejected, or clean under ASan/LSan)
         # tools/fuzz/holes: each probe is a way safe code once broke the
@@ -387,13 +431,6 @@ jobs:
           python3 tools/tests/test_package_runners.py
           python3 tools/tests/test_resolver.py
           ./tools/nurlpkg/test-install-tool.sh
-
-      - name: Retain complete build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: build/logs/
 
       - name: self-compile peak-RSS gate
         # Peak memory to compile the compiler is its existential
@@ -629,6 +666,36 @@ jobs:
         # for 'Fruit'. Reads the committed goldens' error/warning lines.
         run: ./tools/check_diag_nurl_types.sh
 
+  build-gates-2:
+    name: "build gates: tooling, protocols, codecs, coverage"
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The gates of the old single job (see build-corpus above). Measure
+    # before raising this: the next gate added here comes with a time.
+    timeout-minutes: 30
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: clang --version | head -1
+
+      - name: Build the toolchain (the corpus runs in build-corpus)
+        run: ./build.sh --no-tests
+
       - name: nurl-mcp over stdio (inline source, formal/ docs, stdlib root)
         # The local MCP server as an agent drives it: inline source is
         # named by its `filename` in every diagnostic (never a temp path),
@@ -814,6 +881,25 @@ jobs:
           path: build/template-coverage.html
           retention-days: 7
           if-no-files-found: error
+
+  build-test:
+    name: build + bootstrap fixed point + test corpus
+    needs: [changes, build-corpus, build-gates, build-gates-2]
+    # Skipped exactly when its parts are (a docs-only change), so the
+    # required check reads as satisfied then, as before. Otherwise it waits
+    # for all three and fails unless every one succeeded.
+    if: ${{ always() && needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: build.sh and both gate jobs passed
+        env:
+          CORPUS: ${{ needs.build-corpus.result }}
+          GATES: ${{ needs.build-gates.result }}
+          GATES2: ${{ needs.build-gates-2.result }}
+        run: |
+          echo "build-corpus=$CORPUS build-gates=$GATES build-gates-2=$GATES2"
+          [ "$CORPUS" = success ] && [ "$GATES" = success ] && [ "$GATES2" = success ]
 
   unikernel-nolibc:
     name: "unikernel: the corpus with no libc"
@@ -1182,7 +1268,7 @@ jobs:
         run: python3 tools/tests/test_compiler_cleanup.py
 
       - name: metamorphic reclamation gate (§7.2, runtime axis)
-        # The compile-verdict classes run in the build-test job; this one
+        # The compile-verdict classes run in the build-gates job; this one
         # cannot, because its verdict is an LSan RUN rather than anything
         # nurlc says. The panic-unwind journal is a runtime mechanism:
         # the same abandoned allocation, spelled N ways inside a recover
@@ -1272,7 +1358,7 @@ jobs:
       - name: next build
         run: pnpm run build
 
-# nurlfmt --check now runs as a step in the build-test job above
+# nurlfmt --check now runs as a step in the build-gates job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that
 # canonicalised the tree landed alongside it, so the gate the README
 # pins is live: every first-party .nu file must be canonical to merge.
