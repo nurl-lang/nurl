@@ -11623,12 +11623,15 @@ unsafe @ __lex_one i lex i base → v {
             // in place; only a merged `a::b`, whose text is not in the
             // source, is materialised.
             : i n - pos id_start
-            : ~ s id ``
             : ~ * u idp # *u + # i src id_start
+            // (The merged text, as the address the token takes over: a
+            // raw buffer, never a string binding the scope would drop.)
+            : ~ i idw 0
             ? merged {
-                = id # s ( nurl_alloc + n 1 )
-                ( memcpy id # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
-                = idp # *u id
+                : *u idb # *u ( nurl_alloc + n 1 )
+                ( memcpy # s idb # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
+                = idp idb
+                = idw # i idb
                 // Rewrite any `::` (two colons) found in `id` to `__`.
                 : ~ i k 0
                 ~ < k n {
@@ -11769,7 +11772,7 @@ unsafe @ __lex_one i lex i base → v {
                     = ttype TT_SIMD
                 } {}
             } {}
-            ? merged { ( __tok_write lex base ttype id inum line start ) } { ( __tok_span lex base ttype n inum line start ) }
+            ? merged { ( __tok_write lex base ttype # s idw inum line start ) } { ( __tok_span lex base ttype n inum line start ) }
             = done T
         } {}
     } {}
