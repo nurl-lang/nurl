@@ -403,9 +403,9 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     have hok := hi.tyok hy; rw [hty] at hok
     simp only [Ty.ok, Bool.and_eq_true] at hok
     have outx := out_part out hτ hwa (Sub.fst (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.fst h)
-      (by simp only [ids_pair]; exact List.sublist_append_left _ _) hok.1
+      (by simp only [ids_pair]; exact List.sublist_append_left _ _) hok.1 (fun u k h => by rw [hty]; exact ArcIn.fst h)
     have outz := out_part out hτ hwb (Sub.snd (Sub.refl _)) (fun s u h => by rw [hty]; exact ViewIn.snd h)
-      (by simp only [ids_pair]; exact List.sublist_append_right _ _) hok.2
+      (by simp only [ids_pair]; exact List.sublist_append_right _ _) hok.2 (fun u k h => by rw [hty]; exact ArcIn.snd h)
     have hvars : ∀ u ∈ (Stmt.unpair y x z s).vars, u < m.nv := hi.nvS
     have hxn : x < (m.set y ⟨true, none⟩).nv := by simpa using hvars x (by simp [Stmt.vars])
     have hzn : z < ((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).nv := by
