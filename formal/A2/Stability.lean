@@ -51,9 +51,10 @@ theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : H
 
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
-    (h : ValOK m τ v P H) : ValOK m' τ v P H := by
+    (h : ValOK m τ v P H) (hb : m'.blk = m.blk := by rfl) : ValOK m' τ v P H := by
   induction h with
   | int => exact .int
+  | arc h => obtain ⟨bl, hbl, ht⟩ := h; exact .arc ⟨bl, by rw [hb]; exact hbl, ht⟩
   | href h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .href ⟨dep, hd, (hp dep hd).2 _ _ _ (fun h hh' => (hh h hh').1) ha⟩
@@ -178,6 +179,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
     ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ Lands dep.kind n n0 := by
   induction hok with
   | int => cases ht
+  | arc _ => cases ht
   | view _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, n1, d, es, hr1, hl, _, _⟩ := h
@@ -207,6 +209,7 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
     ∃ dep ∈ P ++ H, ∃ n0, RootNode m dep.root n0 ∧ dep.kind ≠ .self ∧ Lands dep.kind n n0 := by
   induction hok with
   | int => cases ht
+  | arc _ => cases ht
   | href _ => cases ht
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, n1, c, es, hr1, hk, _, _⟩ := h
@@ -241,6 +244,7 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
     ∀ {Q : List Dep}, Top w T → ⟨y, .view⟩ ∈ Q → ValOK m τ w Q H := by
   induction hok with
   | int => intro _ _ _; exact .int
+  | arc h => intro _ _ _; exact .arc h
   | @href t c P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, n1, d, es, hr1, hl, hw, hv⟩ := h
@@ -494,6 +498,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
     List.filter_append _ _
   induction h with
   | int => exact .int
+  | arc h => exact .arc h
   | @href t c P H h =>
     obtain ⟨dep, hd, n0, d, es, hr, hk, hw', hv, hn⟩ := h
     have hkm : (!dep.kind.isName) = true := by
@@ -522,6 +527,7 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
     (hf : τ.hasFn = false) : v.names = [] := by
   induction h with
   | int => rfl
+  | arc => rfl
   | href => rfl
   | view => rfl
   | pair _ _ iha ihb =>

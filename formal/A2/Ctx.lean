@@ -109,6 +109,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
   | pkg _ ih =>
     intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs))
+  | arc h => intro _ _ _ _; exact .arc h
 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
@@ -139,6 +140,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))
   | pkg _ ih => intro P' hp; exact .pkg (ih (app hp))
+  | arc h => intro _ _; exact .arc h
 
 theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
     (hl : E'.live = true → E.live = true ∧ (E.mode.ownSlot = false → E.path ⊆ E'.path) ∧ E.held ⊆ E'.held)
@@ -212,6 +214,10 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   armed v E' sl hv hsl := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     exact (hi.armed v E sl hE hsl).weaker hwe
+  shares v E' sl T hv hsl hown hT := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
+  blocks := hi.blocks
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

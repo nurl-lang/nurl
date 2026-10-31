@@ -264,7 +264,8 @@ theorem SlotOK.dead {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (hl
 
 /-- A slot reads memory only through a live entry's dependencies. -/
 theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
-    (hk : E.live = true → ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl := by
+    (hk : E.live = true → ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep)
+    (hb : m'.blk = m.blk := by rfl) : SlotOK m' E sl := by
   obtain ⟨ho, hown, hbor⟩ := h
   refine ⟨ho, fun hos => ?_, fun hos hl => ?_⟩
   · obtain ⟨h1, h2, h3⟩ := hown hos
@@ -273,13 +274,14 @@ theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     refine ⟨T, hT, hv.keep fun dep hd => (hk hl dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
-    refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_)⟩
+    refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_) hb⟩
     · simp [Entry.vdeps, hos, hd]
     · simp [Entry.vdeps, hos, hd]
 
 theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
-    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl :=
-  h.keepLive fun _ => hk
+    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) (hb : m'.blk = m.blk := by rfl) :
+    SlotOK m' E sl :=
+  h.keepLive (fun _ => hk) hb
 
 /-- What the slot of the changed binding holds afterwards, if anything. -/
 def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Prop
@@ -355,7 +357,8 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hdb : ox = none → DbindSafe Γ x)
     (hrem : ox = none → e = .replace)
     (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
-      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = []) :
+      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [])
+    (hblk : m'.blk = m.blk := by rfl) :
     MInv m' (upd (kill e hv x Γ) x ox) := by
   have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
       ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep := by
@@ -413,7 +416,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             rw [hint] at ht; cases ht
           · obtain ⟨w, hw, hok'⟩ := hbor hos hl'
             exact ⟨w, hw, by rw [hint] at hok' ⊢; obtain ⟨n, rfl⟩ := valOK_int.mp hok'; exact .int⟩
-        · refine hslot.keep fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd
+        · refine hslot.keep (fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd) hblk
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb
         · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead

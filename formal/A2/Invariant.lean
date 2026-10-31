@@ -43,6 +43,24 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
 
+/-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
+    a `u`. -/
+inductive ArcIn : Ty → Val → Ty → Nat → Prop
+  | here {u : Ty} {k : Nat} : ArcIn (.arc u) (.arc k) u k
+  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} :
+      e ∈ es → ArcIn t e u k → ArcIn (.vec t) (.node t' c d es) u k
+  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} : ArcIn a x u k → ArcIn (.prod a b) (.pair x y) u k
+  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} : ArcIn b y u k → ArcIn (.prod a b) (.pair x y) u k
+  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} : ArcIn a x u k → ArcIn (.sum a b) (.inl x) u k
+  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} : ArcIn b x u k → ArcIn (.sum a b) (.inr x) u k
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
+      {k : Nat} : ArcIn te x u k → ArcIn (.fn ms) (.pkg fs te ms x cs) u k
+
+/-- A3.1: every share a tree holds names a block whose payload is of the
+    share's type (the block lives while a share of it is owned). -/
+def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop :=
+  ∀ u k, ArcIn τ T u k → ∃ bl, m.blk k = some bl ∧ bl.ty = u
+
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
 inductive Child : Val → Val → Prop
@@ -127,6 +145,9 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
+  /-- A3.1: a share lent: its block holds a payload of its type. -/
+  | arc {t : Ty} {k : Nat} {P H : List Dep} :
+      (∃ bl, m.blk k = some bl ∧ bl.ty = t) → ValOK m (.arc t) (.arc k) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -370,6 +391,13 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
   armed     : ∀ v E sl, Γ v = some E → m.st v = some sl → ArmOK m E sl
+  /-- A3.1: every share an owned tree holds names a live block of its type. -/
+  shares    : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.own = true → sl.val = some T →
+                SharesOK m E.ty T
+  /-- A3.1: a block's payload is a well-formed tree of a type that holds no
+      views, and the shares it holds name blocks too. -/
+  blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
+                WFv bl.ty bl.pay ∧ SharesOK m bl.ty bl.pay
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
