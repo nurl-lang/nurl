@@ -304,6 +304,29 @@ theorem WFv.arcIn {τ : Ty} {T : Val} (hw : WFv τ T) {k : Nat} {p : Val} (hs : 
   | pkg _ ih => cases hs with | pkg hs' => obtain ⟨u, ha⟩ := ih hs'; exact ⟨u, .pkg ha⟩
   | arc => cases hs; exact ⟨_, .here⟩
 
+/-- A tree of a type that holds no view holds no closure either (a closure's
+    type holds views). -/
+theorem WFv.no_pkg {τ : Ty} {T : Val} (hw : WFv τ T) (hv : τ.holdsView = false) {fs : List Nat}
+    {te : Ty} {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) T) :
+    False := by
+  induction hw with
+  | int => cases hs
+  | view => simp [Ty.holdsView] at hv
+  | node _ ih =>
+    cases hs with
+    | child he hs' => exact ih _ he (by simpa [Ty.holdsView] using hv) hs'
+  | pair _ _ ihv ihw =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases hs with | fst h => exact ihv hv.1 h | snd h => exact ihw hv.2 h
+  | inl _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases hs with | inl h => exact ih hv.1 h
+  | inr _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hv
+    cases hs with | inr h => exact ih hv.2 h
+  | pkg _ _ => simp [Ty.holdsView] at hv
+  | arc _ _ _ => cases hs
+
 /-- What an owned tree reaches through its shares lies in it, or in some
     block's payload. -/
 theorem SubS.loc {m : Mem} (hs : SharesHeld m) {n T : Val} (h : SubS n T) :
