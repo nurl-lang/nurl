@@ -5440,6 +5440,165 @@ int nurl_cond_wait_ms(void *cv, void *m, long long ms) {
 #  endif
 }
 
+/* std/thread.nu's Cond (NurlFCond, runtime_core.c): a condition variable
+ * a fiber can wait on. A fiber that waited on the pthread condvar would
+ * stop its worker thread — and every fiber on that worker, the one that
+ * would signal included: two fibers sharing a Locked on one worker
+ * deadlocked as soon as the holder parked on I/O (agora #255). So a
+ * fiber parks instead, the way the unikernel's pthread_cond_wait already
+ * parks its coroutines (runtime_bare.c §9), and threads keep the pthread
+ * condvar; fibers and threads may wait on one Cond.
+ *
+ * The parked fibers are a FIFO of nodes on their own stacks, under a
+ * spinlock of the Cond's own: a waker need not hold the caller's mutex
+ * (POSIX lets cond_signal run without it), so the caller's mutex cannot
+ * guard the list. The park is the race-safe timed one
+ * (nurl_fiber_park_with_mutex_ms): the caller's mutex is released after
+ * the swap-out, a wake that comes before the park completes is not lost,
+ * and a deadline and a wake race for the fiber in the runtime, which
+ * makes it runnable exactly once. A waker takes a node off the list and
+ * wakes its fiber with the spinlock held, and a waiter takes the spinlock
+ * before it leaves, so a node — and its fiber — are alive for as long as
+ * any waker can reach them. Nothing waits on a lock while holding the
+ * spinlock except the runtime's own park lock inside nurl_fiber_wake,
+ * which never takes this one. */
+long long nurl_fiber_park_with_mutex_ms(long long mutex_h, long long timeout_ms);
+long long nurl_fiber_wake(long long fiber_h);
+
+typedef struct NurlFCondWaiter {
+    long long               fiber;
+    struct NurlFCondWaiter *next, *prev;
+    int                     queued;   /* on the list; cleared by its waker */
+} NurlFCondWaiter;
+
+/* Held for a few pointer moves and a wake. Spin briefly, then give the
+ * CPU back: the holder's thread may have been descheduled by the OS. */
+static void nurl__fcond_lock(NurlFCond *c) {
+    int spins = 0;
+    while (__atomic_exchange_n(&c->lk, 1, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&c->lk, __ATOMIC_RELAXED)) {
+            if (++spins < 64) {
+#if defined(__x86_64__) || defined(__i386__)
+                __builtin_ia32_pause();
+#elif defined(__aarch64__)
+                __asm__ __volatile__("yield");
+#endif
+            } else {
+#ifdef _WIN32
+                SwitchToThread();
+#else
+                sched_yield();
+#endif
+            }
+        }
+    }
+}
+
+static void nurl__fcond_unlock(NurlFCond *c) {
+    __atomic_store_n(&c->lk, 0, __ATOMIC_RELEASE);
+}
+
+/* Lock held. head is also read without it (nurl__fcond_has_fibers). */
+static void nurl__fcond_unlink(NurlFCond *c, NurlFCondWaiter *w) {
+    if (w->prev) w->prev->next = w->next;
+    else         __atomic_store_n(&c->head, (void *)w->next, __ATOMIC_RELEASE);
+    if (w->next) w->next->prev = w->prev;
+    else         c->tail = w->prev;
+    w->next = w->prev = NULL;
+    w->queued = 0;
+}
+
+/* Is a fiber waiting? Read without the lock: a waiter queues itself with
+ * the caller's mutex held, so a waker that holds it too cannot miss one,
+ * and one that does not is not promised to (POSIX's own rule). The
+ * common signal, with no fiber waiting, costs this one load. */
+static int nurl__fcond_has_fibers(NurlFCond *c) {
+    return __atomic_load_n(&c->head, __ATOMIC_ACQUIRE) != NULL;
+}
+
+int nurl_fcond_init(void *cp) {
+    NurlFCond *c = (NurlFCond *)cp;
+    if (!c) return 22;
+    c->lk = 0;
+    c->head = c->tail = NULL;
+    return pthread_cond_init(&c->cv, NULL);
+}
+
+int nurl_fcond_destroy(void *cp) {
+    NurlFCond *c = (NurlFCond *)cp;
+    if (!c) return 22;
+    return pthread_cond_destroy(&c->cv);
+}
+
+/* Wait on `cp` with the caller's mutex `mp` held, for at most `ms`
+ * milliseconds (< 0: no bound); `mp` is held again on return. 1 woken
+ * (or spuriously — the caller loops on its predicate), 0 timed out. */
+NURL_TLS_FN int nurl_fcond_wait_ms(void *cp, void *mp, long long ms) {
+    NurlFCond *c = (NurlFCond *)cp;
+    long long f = nurl_fiber_current();
+    if (f) {
+        NurlFCondWaiter w;
+        w.fiber = f;
+        w.next = NULL;
+        w.queued = 1;
+        nurl__fcond_lock(c);
+        w.prev = (NurlFCondWaiter *)c->tail;
+        if (w.prev) w.prev->next = &w;
+        else        __atomic_store_n(&c->head, (void *)&w, __ATOMIC_RELEASE);
+        c->tail = &w;
+        nurl__fcond_unlock(c);
+        long long rc = nurl_fiber_park_with_mutex_ms((long long)(uintptr_t)mp, ms);
+        /* Woken: the waker took the node off. Timed out: it is still on —
+         * unless a waker took it and lost the race to the deadline, in
+         * which case that waker is inside this lock now, and the node
+         * must outlive it. */
+        nurl__fcond_lock(c);
+        if (w.queued) nurl__fcond_unlink(c, &w);
+        nurl__fcond_unlock(c);
+        if (rc >= 0) {
+            pthread_mutex_lock((pthread_mutex_t *)mp);
+            return rc > 0;
+        }
+        /* -1: no fiber backend after all; the mutex is still held. */
+    }
+    return nurl_cond_wait_ms(&c->cv, mp, ms);
+}
+
+/* Wake the oldest fiber waiting, if one is; 1 when one woke. One whose
+ * deadline claimed it first is on its way back anyway, and the wake goes
+ * to the next. Lock held. */
+static int nurl__fcond_wake_fiber(NurlFCond *c) {
+    NurlFCondWaiter *w;
+    while ((w = (NurlFCondWaiter *)c->head) != NULL) {
+        nurl__fcond_unlink(c, w);
+        if (nurl_fiber_wake(w->fiber)) return 1;
+    }
+    return 0;
+}
+
+int nurl_fcond_signal(void *cp) {
+    NurlFCond *c = (NurlFCond *)cp;
+    if (!c) return 22;
+    if (nurl__fcond_has_fibers(c)) {
+        nurl__fcond_lock(c);
+        int woke = nurl__fcond_wake_fiber(c);
+        nurl__fcond_unlock(c);
+        if (woke) return 0;
+    }
+    return pthread_cond_signal(&c->cv);
+}
+
+int nurl_fcond_broadcast(void *cp) {
+    NurlFCond *c = (NurlFCond *)cp;
+    if (!c) return 22;
+    if (nurl__fcond_has_fibers(c)) {
+        nurl__fcond_lock(c);
+        while (nurl__fcond_wake_fiber(c)) {}
+        nurl__fcond_unlock(c);
+    }
+    return pthread_cond_broadcast(&c->cv);
+}
+
 #elif defined(__wasm_atomics__)  /* WASI + the threads proposal */
 /*
  * wasi-threads, guest side. wasi-libc ships no pthread implementation
@@ -5827,6 +5986,15 @@ void nurl_runtime_run(void) {
 
 void nurl_runtime_shutdown(void) {}
 
+
+/* std/thread.nu's Cond (NurlFCond): no fibers here, so the front of the
+ * block is the condvar and the rest stays unused. */
+int nurl_fcond_init(void *cp)                        { return pthread_cond_init(cp, 0); }
+int nurl_fcond_destroy(void *cp)                     { return pthread_cond_destroy(cp); }
+int nurl_fcond_wait_ms(void *cp, void *mp, long long ms) { return nurl_cond_wait_ms(cp, mp, ms); }
+int nurl_fcond_signal(void *cp)                      { return pthread_cond_signal(cp); }
+int nurl_fcond_broadcast(void *cp)                   { return pthread_cond_broadcast(cp); }
+
 #else  /* WASI without atomics — no threading. */
 
 int  pthread_create(void *t, void *a, void *s, void *arg) {
@@ -5845,6 +6013,11 @@ int nurl_cond_wait_ms(void *c, void *m, long long ms) { (void)c; (void)m; (void)
 int pthread_cond_signal(void *c)           { (void)c; return 0; }
 int pthread_cond_broadcast(void *c)        { (void)c; return 0; }
 int pthread_cond_destroy(void *c)          { (void)c; return 0; }
+int nurl_fcond_init(void *c)               { (void)c; return 0; }
+int nurl_fcond_destroy(void *c)            { (void)c; return 0; }
+int nurl_fcond_wait_ms(void *c, void *m, long long ms) { (void)c; (void)m; (void)ms; return 0; }
+int nurl_fcond_signal(void *c)             { (void)c; return 0; }
+int nurl_fcond_broadcast(void *c)          { (void)c; return 0; }
 
 #endif
 

@@ -17,7 +17,12 @@
 //
 //   * `Mutex { s p }` — a `[ owners ][ pthread_mutex_t ]` block, the
 //     native part sized via `nurl_native_sizeof("pthread_mutex_t")`.
-//   * `Cond  { s p }` — same pattern, "pthread_cond_t".
+//   * `Cond  { s p }` — same pattern, "nurl_fcond_t": the runtime's
+//     condition variable, a pthread_cond_t for the threads that wait
+//     on it plus the fibers parked on it (runtime_ffi.c §19). A fiber
+//     that waits parks — its worker runs other fibers meanwhile —
+//     where a pthread_cond_wait would stop the worker thread, and every
+//     fiber on it, the one that would signal included (agora #255).
 //   * `Thread { s p }` — a `[ owners ][ settled ][ pthread_t ]` block,
 //     the pthread_t sized via `nurl_native_sizeof("pthread_t")`.
 //
@@ -125,6 +130,18 @@ $ `stdlib/core/rcbox.nu`
 // runtime_ffi.c §19). 1 signalled (or spuriously woken), 0 timed out.
 & `c` @ nurl_cond_wait_ms sync *u cv sync *u m i ms → i32
 
+// The Cond's own primitives (runtime_ffi.c §19): a wait on a fiber parks
+// the fiber; ms < 0 is no bound. 1 woken (or spuriously), 0 timed out.
+& `c` @ nurl_fcond_init *u cv → i32
+
+& `c` @ nurl_fcond_destroy *u cv → i32
+
+& `c` @ nurl_fcond_wait_ms sync *u cv sync *u m i ms → i32
+
+& `c` @ nurl_fcond_signal sync *u cv → i32
+
+& `c` @ nurl_fcond_broadcast sync *u cv → i32
+
 // pthread_create's start_routine signature is `void *(*)(void *)`.
 // NURL closures compile to `void(*)(void *env)` — same arg shape; the
 // return is discarded at the OS layer because the runtime trampolines
@@ -190,7 +207,7 @@ $ `stdlib/core/rcbox.nu`
 
 : CondImpl { RawBlock blk }
 
-% Drop CondImpl { unsafe @ drop CondImpl c → v { ( pthread_cond_destroy ( raw_block_ptr . c blk ) ) } }
+% Drop CondImpl { unsafe @ drop CondImpl c → v { ( nurl_fcond_destroy ( raw_block_ptr . c blk ) ) } }
 
 : Mutex { ( Shared MutexImpl ) ctl }
 : Cond { ( Shared CondImpl ) ctl }
@@ -399,8 +416,9 @@ $ `stdlib/core/rcbox.nu`
     // other operation waits on `cv` until it is restored.
     b taken
     Cond cv
-    // Threads asleep in cond_wait on `cv`: a restore with nobody waiting
-    // skips the broadcast (changed only with `mu` held).
+    // Threads and fibers waiting on `cv` (a fiber parks, its worker runs
+    // on): a restore with nobody waiting skips the broadcast (changed
+    // only with `mu` held).
     i waiters
 }
 
@@ -565,21 +583,25 @@ $ `stdlib/core/rcbox.nu`
 // ── Condition variable ────────────────────────────────────────────
 
 @ cond_new → Cond {
-    : RawBlock b ( __sync_block `pthread_cond_t` )
-    ( pthread_cond_init ( raw_block_ptr b ) # *u 0 )
+    : RawBlock b ( __sync_block `nurl_fcond_t` )
+    ( nurl_fcond_init ( raw_block_ptr b ) )
     ^ @ Cond { ( shared_new [CondImpl] @ CondImpl { b } ) }
 }
 
-@ cond_wait Cond c Mutex m → v { ( pthread_cond_wait ( __cond_obj c ) ( __mutex_obj m ) ) }
+// Wait on `c` with `m` held (held again on return). On a fiber the fiber
+// parks and its worker runs other fibers; on a thread the thread sleeps.
+// Woken by cond_signal / cond_broadcast — or spuriously: loop on the
+// predicate.
+@ cond_wait Cond c Mutex m → v { ( nurl_fcond_wait_ms ( __cond_obj c ) ( __mutex_obj m ) -1 ) }
 
 // cond_wait for at most `ms` milliseconds (ms < 0: no bound). F when the
 // time ran out, T when signalled — or woken spuriously, as cond_wait may
 // be: the caller loops on its predicate and its own deadline either way.
-@ cond_wait_ms Cond c Mutex m i ms → b { ^ != 0 ( nurl_cond_wait_ms ( __cond_obj c ) ( __mutex_obj m ) ms ) }
+@ cond_wait_ms Cond c Mutex m i ms → b { ^ != 0 ( nurl_fcond_wait_ms ( __cond_obj c ) ( __mutex_obj m ) ms ) }
 
-@ cond_signal Cond c → v { ( pthread_cond_signal ( __cond_obj c ) ) }
+@ cond_signal Cond c → v { ( nurl_fcond_signal ( __cond_obj c ) ) }
 
-@ cond_broadcast Cond c → v { ( pthread_cond_broadcast ( __cond_obj c ) ) }
+@ cond_broadcast Cond c → v { ( nurl_fcond_broadcast ( __cond_obj c ) ) }
 
 @ Cond_share Cond c → Cond { ^ @ Cond { ( shared_clone [CondImpl] . c ctl ) } }
 
