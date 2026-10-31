@@ -110,6 +110,21 @@ theorem SharesOK.node_push {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es : L
     · exact h u k (.child he ha')
     · rw [List.mem_singleton] at he; subst he; exact hv u k ha'
 
+theorem SharesOK.mk_pair {m : Mem} {a b : Ty} {x y : Val} (hx : SharesOK m a x) (hy : SharesOK m b y) :
+    SharesOK m (.prod a b) (.pair x y) := fun u k ha => by
+  cases ha with
+  | fst h => exact hx u k h
+  | snd h => exact hy u k h
+theorem SharesOK.mk_inl {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m a x) :
+    SharesOK m (.sum a b) (.inl x) := fun u k ha => by cases ha with | inl h => exact hx u k h
+theorem SharesOK.mk_inr {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m b x) :
+    SharesOK m (.sum a b) (.inr x) := fun u k ha => by cases ha with | inr h => exact hx u k h
+theorem SharesOK.mk_pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
+    {cs : List (Var × PMode × Ty)} (hx : SharesOK m te x) : SharesOK m (.fn ms) (.pkg fs te ms x cs) :=
+  fun u k ha => by cases ha with | pkg h => exact hx u k h
+theorem SharesOK.nil_node {m : Mem} {t t1 : Ty} {c d : Nat} : SharesOK m (.vec t) (.node t1 c d []) :=
+  fun u k ha => by cases ha with | child he _ => cases he
+
 /-- A tree of a type that holds no share holds none to check. -/
 theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
   fun _ _ ha => by rw [ha.hasArc] at h; cases h

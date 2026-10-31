@@ -126,6 +126,8 @@ structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop 
   names  : (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ1 E
   held   : NamesIn v E.held
   pkgs   : PkgsOK v
+  /-- A3.1: an owned value's shares name live blocks. -/
+  shares : E.mode.ownSlot = true → SharesOK m1 E.ty v
 
 /-- The context and memory after a right-hand side, and how they relate to
     before. -/
@@ -145,7 +147,7 @@ structure RhsPost (m m1 : Mem) (Γ Γ1 : Ctx) (F : List Var) : Prop where
     entry runs a destructor (A2-drop.2). -/
 theorem RhsOut.setDtor {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
     (h : RhsOut m1 Γ1 E v o) (b c : Bool) : RhsOut m1 Γ1 { E with dtor := b, dbind := c } v o :=
-  ⟨h.own, h.mode, h.live, h.tyok, h.wf, h.valOwn, h.valBor, h.names, h.held, h.pkgs⟩
+  ⟨h.own, h.mode, h.live, h.tyok, h.wf, h.valOwn, h.valBor, h.names, h.held, h.pkgs, h.shares⟩
 
 /-- ... nor on whether it records an owned value as viewing more memory, of
     bound roots, than the value does (`HeldUp`). -/
@@ -155,7 +157,7 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
   have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
   have hv1 : ({ E with held := H } : Entry).vdeps = H := by simp [Entry.vdeps, hos]
   refine ⟨h.own, h.mode, h.live, h.tyok, fun ht r hr => ?_, fun hm => ?_, fun hb => ?_,
-    fun hn => (h.names hn).widen hmo hH, h.held.mono hH.1, h.pkgs⟩
+    fun hn => (h.names hn).widen hmo hH, h.held.mono hH.1, h.pkgs, h.shares⟩
   · rw [hv1] at hr
     obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
     exact hH.root hmo (h.wf ht) d hd
@@ -449,6 +451,7 @@ theorem NamesIn.noView {t : Ty} {e : Val} (hw : WFv t e) (ht : t.holdsView = fal
   rw [hw.names_nil ht] at this; cases this
 
 theorem intE_out {m : Mem} {Γ : Ctx} (n : Nat) : RhsOut m Γ intE (.int n) false where
+  shares _ := SharesOK.of_noArc rfl
   own := rfl
   mode := Or.inr rfl
   live := rfl
@@ -516,6 +519,7 @@ theorem slot_val_eq {m : Mem} {y : Var} {o : Bool} {v w : Val}
 theorem out_copyBor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {v : Val}
     (hy : Γ y = some E) (hl : E.live = true) (hm : E.mode = .bor)
     (hv : m.st y = some ⟨false, some v⟩) : RhsOut m Γ E v false where
+  shares h := by rw [hm] at h; cases h
   own := by rw [hm]; rfl
   mode := Or.inr hm
   live := hl
@@ -537,6 +541,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
       ∃ t c d es, m.st y = some ⟨true, some (.node t c d es)⟩ ∧ v = .href c)
     (hroot : E.mode = .rootb ∨ (E.mode = .own ∧ ∃ t, E.ty = .vec t)) :
     RhsOut m Γ ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ v false where
+  shares h := nomatch h
   own := rfl
   mode := Or.inr rfl
   live := rfl
@@ -728,6 +733,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
     {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length) (hvec : VecOf m y t' c d es) :
     RhsOut m Γ (elemE y E t) (lendOf es[n]) false where
+  shares h := by rw [elemE_mode] at h; cases h
   own := by rw [elemE_mode]; rfl
   mode := Or.inr (elemE_mode ..)
   live := by cases t <;> rfl
@@ -817,6 +823,7 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
     (hha : t.hasArc = false)
     {t' : Ty} {c d : Nat} {es : List Val} (hvec : VecOf m y t' c d es) :
     RhsOut m Γ ⟨.slice t, .bor, true, derive y E .view, E.held, false, false⟩ (.view d 0 es.length) false where
+  shares h := nomatch h
   own := rfl
   mode := Or.inr rfl
   live := rfl
@@ -848,6 +855,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     {t' : Ty} {c d o l n : Nat} {es : List Val} (hn : o + n < es.length)
     (hv : m.st y = some ⟨false, some (.view d o l)⟩) (hda : DataAt m d (.node t' c d es)) :
     RhsOut m Γ (elemE y E t) (lendOf es[o + n]) false where
+  shares h := by rw [elemE_mode] at h; cases h
   own := by rw [elemE_mode]; rfl
   mode := Or.inr (elemE_mode ..)
   live := by cases t <;> rfl
@@ -993,7 +1001,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
         show DepsNamed Γ ((projDeps y E ++ E.held) ++ E.held)
         exact ((projDeps_named h).append h.held).append h.held,
       ((hi.held y E _ T hy hl hv rfl).sub (names_child hc)).lendOf,
-      ((hi.pkgs y _ T hv rfl).sub (hc.sub (Sub.refl _))).lendOf⟩
+      ((hi.pkgs y _ T hv rfl).sub (hc.sub (Sub.refl _))).lendOf, fun h => nomatch h⟩
     rw [bor_vdeps _ rfl] at hr
     refine wf_append (wf_append ?_ (wf_held hi hy hl hnint)) (wf_held hi hy hl hnint) r hr
     unfold projDeps
@@ -1046,7 +1054,8 @@ theorem rhs_new {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {t : Ty} (h
   refine ⟨rfl, Or.inl rfl, rfl, ht, fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr,
     fun _ => ⟨rfl, WFv.node (fun e he => by simp at he), fun s v hin => ?_, ?_, ?_, ?_, ?_⟩,
     (fun h => by cases h), (fun _ _ hd => by cases hd), NamesIn.nil _ rfl,
-    PkgsOK.leaf (fun _ h => by cases h with | elem he => cases he) (fun _ _ _ _ _ h => by cases h)⟩
+    PkgsOK.leaf (fun _ h => by cases h with | elem he => cases he) (fun _ _ _ _ _ h => by cases h),
+    fun _ => SharesOK.nil_node⟩
   · cases hin with | child he _ => simp at he
   · simp
   · intro i hi'
@@ -1124,7 +1133,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       hi.heap.self y v hT⟩, (fun h => by cases h),
       fun _ => (hi.names y E hy hl (Or.inl hnint')).transport (fun r Er hrE hr hl' hh' ho' => ?_)
         (fun _ hd => List.mem_append_right _ hd),
-      hi.held y E _ v hy hl hT rfl, hi.pkgs y _ v hT rfl⟩
+      hi.held y E _ v hy hl hT rfl, hi.pkgs y _ v hT rfl, fun _ => (hi.shares y E _ v hy hT rfl rfl).of_blk rfl⟩
     rotate_left 5
     · by_cases hry : r = y
       · subst hry; rw [hy] at hr; cases hr
@@ -1372,6 +1381,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         have htok : (Ty.slice s).ok = true := by simpa [Ty.ok] using hok
         refine RhsOut.mk rfl (Or.inr rfl) rfl htok (fun _ => ?_) (fun h => nomatch h) (fun _ => ?_)
           (fun _ => hNk _ (hHeld _ (List.append_subset.mpr ⟨List.Subset.refl _, List.Subset.refl _⟩))) hNi hPk
+          (fun h => nomatch h)
         · show ∀ r ∈ roots (E.held ++ E.held), _
           exact wf_append hwfH hwfH
         · obtain ⟨d', o', l', hv', dep, hd, ha⟩ := hvsT s _ (ViewIn.child hemem ViewIn.here)
@@ -1389,7 +1399,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         show RhsOut _ _ ⟨.vec s, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.node hes, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
-          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
         · exact hnT.sublist hsube
@@ -1405,7 +1415,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         show RhsOut _ _ ⟨.prod a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, WFv.pair hwa hwb, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
-          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
         · exact hnT.sublist hsube
@@ -1422,7 +1432,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         show RhsOut _ _ ⟨.sum a b, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
-          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
         · exact hnT.sublist hsube
@@ -1439,7 +1449,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         show RhsOut _ _ ⟨.fn ms, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
-          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
         · exact hnT.sublist hsube
@@ -1456,7 +1466,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         show RhsOut _ _ ⟨.arc a, .own, true, [], E.held, false, false⟩ _ true
         refine ⟨rfl, Or.inl rfl, rfl, hok, fun _ r hr => ?_, fun _ => ⟨rfl, hsumwf, ?_, ?_,
           ?_, ?_, hsfT.sub (Sub.child hemem (Sub.refl _))⟩, (fun h => by cases h),
-          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk⟩
+          fun _ => hNk _ (hHeld _ (List.Subset.refl _)), hNi, hPk, fun _ => (hshT.elem hemem).of_blk rfl⟩
         · exact hwfH r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr)
         · exact hvsT.keep_except hT hsfT (fun s' w h => ViewIn.child hemem h) hkeepF
         · exact List.nodup_nil

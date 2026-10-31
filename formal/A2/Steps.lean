@@ -19,8 +19,8 @@ theorem rootKeep_ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st
       hdata⟩)
 
 theorem SlotOK.ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o) {E : Entry} {sl : Slot}
-    (hs : SlotOK m E sl) : SlotOK m' E sl :=
-  hs.keep fun dep _ => ⟨(rootKeep_ext h dep.root).vkeep, (rootKeep_ext h dep.root).hkeep⟩
+    (hs : SlotOK m E sl) (hb : m'.blk = m.blk := by rfl) : SlotOK m' E sl :=
+  hs.keep (fun dep _ => ⟨(rootKeep_ext h dep.root).vkeep, (rootKeep_ext h dep.root).hkeep⟩) hb
 
 /-- Binding a fresh variable to what a right-hand side produced. -/
 theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = none) (hxn : x < m.nv)
