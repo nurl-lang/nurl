@@ -596,7 +596,8 @@ unsafe @ __drive i now → i {
 // the stack wakes it. On the main context — which cannot park inside
 // the scheduler it is — it drives the scheduler a step at a time, and a
 // step that runs nothing, with no frames queued and no device, is the
-// end of the road for this wait.
+// end of the road for this wait. Either way it blocks only once its own
+// drives have left no frame queued.
 //
 // `admit` 1 is an accept's wait: woken, it runs ahead of everything
 // queued (nurl_reactor_wait_accept).
@@ -620,16 +621,28 @@ unsafe @ __wait_k i fd i for_write i timeout_ms i admit → i {
             : i now ( __ms )
             : i moved ( __drive now )
             ? ( __ready fd for_write ) { = rc 1 = again F } {
-                ? >= slot 0 {
-                    : i unused ( nurl_bare_park_ms ( __park_ms now timeout_ms start ) )
-                } {
-                    ? == ( nurl_bare_poll ) 0 {
-                        ? && == 0 ( sock_pending_frames ( __tab ) ) == 0 . ( __shim ) has_device {
-                            = rc -1
-                            = again F
+                // Block only on a quiet stack. Delivering a frame queues
+                // the answer to it: the ACK a segment is owed, the data
+                // a window update releases. Those frames are what can
+                // make this fd ready, and blocking with them queued
+                // sleeps until the next TIMER while they wait for a
+                // drive nobody else will make. Measured (Agora #143):
+                // every window of a loopback bulk send then waited for
+                // the sender's park to run out. Each RTT sample held that
+                // wait, so the RTO, and with it the next wait, grew 1.6×
+                // a window: 13 s for a 4 MB send that takes 0.2 s hosted.
+                ? == 0 ( sock_pending_frames ( __tab ) ) {
+                    ? >= slot 0 {
+                        : i unused ( nurl_bare_park_ms ( __park_ms now timeout_ms start ) )
+                    } {
+                        ? == ( nurl_bare_poll ) 0 {
+                            ? == 0 . ( __shim ) has_device {
+                                = rc -1
+                                = again F
+                            } {}
                         } {}
-                    } {}
-                }
+                    }
+                } {}
                 ? && again > timeout_ms 0 {
                     ? >= - ( __ms ) start timeout_ms { = rc 0 = again F } {}
                 } {}

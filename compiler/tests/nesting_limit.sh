@@ -20,6 +20,11 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NURLC="${NURLC:-$ROOT/build/nurlc}"
 [ -x "$NURLC" ] || { echo "nesting_limit: $NURLC not found — run ./build.sh" >&2; exit 2; }
 
+# GNU timeout, or Homebrew's gtimeout on macOS (as test_harness.sh picks).
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD=timeout
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD=gtimeout
+else echo "nesting_limit: needs timeout (on macOS: brew install coreutils)" >&2; exit 2; fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fails=0
@@ -39,7 +44,9 @@ run() {
     local envs=()
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
-    timeout 60 env "${envs[@]}" "$NURLC" "$@" "$WORK/p.nu" > /dev/null 2> "$WORK/err"
+    # ${envs[@]+…}: an empty array under `set -u` is "unbound" to bash 3.2
+    # (macOS's /bin/bash), which aborted the script there.
+    "$TIMEOUT_CMD" 60 env ${envs[@]+"${envs[@]}"} "$NURLC" "$@" "$WORK/p.nu" > /dev/null 2> "$WORK/err"
     local rc=$?
     case "$want" in
         ok) [ $rc -eq 0 ] && ok "$label" || bad "$label" "rc=$rc: $(head -1 "$WORK/err")" ;;

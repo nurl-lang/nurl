@@ -770,6 +770,57 @@ else
     bad "rsa_mont_kernels: builds" "$(head -2 "$WORK/rk.err")"
 fi
 
+# RSA-2048's halves take the runtime's straight-line ADX blocks
+# (nurl_rsa16_sqrm_adx / nurl_rsa16_mulm_adx, tools/gen_rsa_adx16.py) on
+# this tier and std/rsa_mont's FIPS kernels without it: both must hold
+# rsa16_kernel_agree's golden (every product checked against std/bigint,
+# edge-shaped moduli and operands), and the blocks must run exactly when
+# the runtime answers ADX. (Their straight-line shape is the generator's
+# to check: tools/gen_rsa_adx16.py --check.)
+R16_SRC="$SCRIPT_DIR/rsa16_kernel_agree.nu"
+if "$NURLC" "$R16_SRC" > "$WORK/r16.ll" 2> "$WORK/r16.err" &&
+        command -v "$CLANG" >/dev/null 2>&1 &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/r16.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/r16" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/rsa16_kernel_agree.txt" | tail -n +2)
+    for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+        got=$(env "$e" "$WORK/r16" 2>&1)
+        if [ "$got" = "$want" ]; then ok "rsa16_kernel_agree with $e" "golden"
+        else bad "rsa16_kernel_agree with $e" "${got:0:80}"; fi
+    done
+    # The blocks run exactly when the runtime answers ADX (never under
+    # NURL_CPU_ADX=0), whether or not LTO inlined them into the caller.
+    cat > "$WORK/r16e.nu" <<'NU'
+$ `stdlib/core/vec.nu`
+& `c` @ nurl_rsa16_sqrm_adx *i t in *i a in *i m u64 n0 → i32
+unsafe @ main → i {
+    : ( Vec i ) t ( vec_zeroed [i] 33 )
+    : ( Vec i ) a ( vec_zeroed [i] 16 )
+    : ( Vec i ) m ( vec_zeroed [i] 16 )
+    ( vec_put [i] m 0 1 )
+    : i32 ran ( nurl_rsa16_sqrm_adx ( vec_data [i] t ) ( vec_data [i] a ) ( vec_data [i] m ) 1 )
+    ( nurl_print ? != 0 # i ran `ran=1` `ran=0` )
+    ( nurl_print ? ( nurl_cpu_has_adx ) ` adx=1\n` ` adx=0\n` )
+    ^ 0
+}
+NU
+    if "$NURLC" "$WORK/r16e.nu" > "$WORK/r16e.ll" 2> "$WORK/r16e.err" &&
+            "$CLANG" -O2 -flto -Wno-override-module "$WORK/r16e.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/r16e" -lm -lpthread 2>/dev/null; then
+        for e in NURL_CPU_ADX=1 NURL_CPU_ADX=0; do
+            got=$(env "$e" "$WORK/r16e" 2>&1)
+            case "$got" in
+                "ran=1 adx=1"|"ran=0 adx=0") ok "nurl_rsa16_sqrm_adx runs iff ADX, $e" "$got" ;;
+                *) bad "nurl_rsa16_sqrm_adx runs iff ADX, $e" "$got" ;;
+            esac
+        done
+    else
+        bad "nurl_rsa16_sqrm_adx engagement probe: builds" "$(head -2 "$WORK/r16e.err")"
+    fi
+else
+    bad "rsa16_kernel_agree: builds" "$(head -2 "$WORK/r16.err")"
+fi
+
 # Off x86 there is no ADX tier: a constant false and no asm.
 "$NURLC" --no-cpu-dispatch --no-dce "$MR_SRC" > "$WORK/mr.off.ll" 2>/dev/null
 "$NURLC" --target=aarch64 --no-dce "$MR_SRC" > "$WORK/mr.a64.ll" 2>/dev/null

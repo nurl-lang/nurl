@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+2^1024 - 1: 562 products, 0 wrong
+2^1023 + 1: 562 products, 0 wrong
+2^1023 + 2^960 - 1: 562 products, 0 wrong
+2^1024 - 189: 562 products, 0 wrong
+random: 822 products, 0 wrong
+random: 822 products, 0 wrong
+random: 822 products, 0 wrong
+random: 822 products, 0 wrong
+rsa16 kernels: all agree
