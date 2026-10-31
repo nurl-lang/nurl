@@ -243,6 +243,24 @@ its own destructor bindings have ended, and a parameter or the result runs
 none. So inside a call, every armed binding is the caller's (`canon_dtq`),
 and the result's move back is safe.
 
+**Mechanization status (WIP branch, Agora #241).**
+
+Done:
+- `Entry.dtor` / `dbind`.
+- `EntryWeaker` with `dtor` / `dbind` / `raise` / `dheld`.
+- `hitsMem`, `DtorSafe`, `DbindSafe`, `EndOK`, `CallDtorSafe`, on every rule above.
+- `CtxWF` with `live` / `dtor` (dbind-guarded) / `arm`, through `MInv.change`, `NewSlot`, the step lemmas and `TypingFacts`.
+- `RhsT.dtor_false` (copyBor clears both flags).
+- `FnOK`'s flag-free output; `DtQ` (inside a call only the caller's bindings are armed).
+- `Inv.dtorOut` / `DtorPinOK` (`DtorIn`, also on `rbind`), with `Inv.weaker`, the frame-stripping lemmas, `ofLeaf` / `respine`, `dtorOut_fresh` and the unpair / letv / letd steps.
+
+Next, in order:
+1. `Keep` and `CtxRel` gain `dkeep`: a `dbind` owner outside the step's scopes views no more than before. That needs the no-new-views premises now: `push` (`Ex.dbind → t.holdsView = false`) and an `inout` argument (`Ea.dbind → its type holds no views`, in `CallDtorSafe`).
+2. `dtorOut_cong` (as `pinOut_cong`) for the congruence steps; `MInv.unwind` and `scopeDP` from `dtorOut` / `DtorIn`.
+3. The later modules: CallInv, CallMem, Closure, Soundness, A3.
+4. `letd` arms its binding (`dtor := true`, `dbind := true`), asks `hasFn = false`, allows view-holding types. `assign` keeps `dbind` and re-arms (`dtor := Ex.dbind`), and is refused into a view-holding `dbind` binding.
+5. The frame invariant (views of an armed `scopeD` binding are valid), `MInv.revive` with views, `dtorCall_typed` with views; CLAIM.md, RULES.md, BLUEPRINT regenerated.
+
 **What stays for A2-drop.3.** The destructor on the type, run wherever
 the value is dropped: a field (drop glue), a `Vec` element, a `sink`
 parameter in its callee, the old value of an assignment. Until then
