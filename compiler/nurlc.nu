@@ -26839,6 +26839,9 @@ unsafe @ __callee_decl_name s cn → s {
 // through it (mem_fn_lends_params): a borrow of its result is that
 // argument's own value (bck_note_borrow's `vborrow`).
 : ~ b g_bck_rhs_whole F
+// …or whether it is a binding's name: a copy of that binding's own value
+// (`= cur nxt`, a cursor pair swapped — bck_note_borrow's `vborrow`).
+: ~ b g_bck_rhs_ident F
 
 // The names in `reads` whose values own something (a String, a Vec, an
 // owning struct or option): what a borrow can borrow from. An index or a
@@ -27248,11 +27251,12 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     // holds none of — a String or a Vec left empty is one, a null PNCounter
     // or HashMap is not. Taken over, the field is gone: h348.)
     : b hfield & & taker ( __is_libh bt ) == 0 ( nurl_str_starts bt `%Vec__` )
-    // (`vborrow`: a copy of a binding's own value — a field of it, or an
-    // argument a call hands back whole — holding no view: what it reads is
-    // that binding's bytes, so elements changing inside what their handles
-    // reach leave it as it was: bck_byte_root, #118.)
-    : b vb ? | raw taker F ? ? ( seq g_bck_rhs_lend `-` ) fpath g_bck_rhs_whole ! ( __ty_holds_view bt 0 ) F
+    // (`vborrow`: a copy of a binding's own value — a field of it, all of
+    // it by name, or an argument a call hands back whole — holding no
+    // view: what it reads is that binding's bytes, so elements changing
+    // inside what their handles reach leave it as it was: bck_byte_root,
+    // #118.)
+    : b vb ? | raw taker F ? ? ( seq g_bck_rhs_lend `-` ) | fpath g_bck_rhs_ident g_bck_rhs_whole ! ( __ty_holds_view bt 0 ) F
     ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
     ( bck_put `reads` saved )
 }
@@ -30523,7 +30527,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             // argument's handle a call handed back: that name
                             // borrows from it (from its sources, if a borrow).
                             : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
+                            // (Handed over by name — `= cur nxt`, a cursor pair
+                            // swapped — it is a copy of that borrow's own value,
+                            // so a copy of what that one is a copy of; not an
+                            // argument a call handed back: bck_byte_root.)
+                            = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
                             = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
+                            = g_bck_br_next -1
                         } {
                             // An owner's handle: an assignment moved it
                             // (definitely); one of several a `?` / `??` may
@@ -34690,6 +34700,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // Borrow checker: record this binding (inference path).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+        = g_bck_rhs_ident ( is_ident_tok bck_rhs_tt )
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
         // (A `( mem_dup … )` copy binds no call that lends: the line's other
@@ -35049,6 +35060,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // Borrow checker: record this binding (typed path).
             = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
             = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+            = g_bck_rhs_ident ( is_ident_tok bck_rhs_tt )
             : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
             = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
             // (A `( mem_dup … )` copy binds no call that lends: the line's other
@@ -35492,6 +35504,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // `= a ? f a …` is skipped inside, not ordered around).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
         = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
+        = g_bck_rhs_ident ( is_ident_tok bck_rhs_tt )
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
         = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
         // (A `( mem_dup … )` copy binds no call that lends: the line's other
