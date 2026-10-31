@@ -2906,6 +2906,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and whether it has bound a `??` arm's payload as a cursor over the
 // option binding it matched (bck_handle_match, `cu_` keys).
 : ~ i g_bck_has_cursor 0
+// Set once a `:` binding of a `?` / `??` took an owner (bck_join_giveback).
+: ~ i g_bck_jgb_any 0
 // …and the ids a row may concern them through (bck_cursor_watch): up to
 // four in `g_bck_cw0`…`g_bck_cw3` (`g_bck_cwn` of them), more in the `cuw`
 // key (`g_bck_cwn` 5).
@@ -20483,6 +20485,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                 = m_sx_any T
                 ( __sx_publish __sx_mme m_sx )
             } {}
+            // (A value arm that is exactly a binding reads it where the arm
+            // ends, as a `?` arm's edge row does: its statement's reads are
+            // gone by now, and bck_handle_match checks this one against the
+            // arm's own state — a binding the arm's path already moved is a
+            // use after move, not a value to hand on.)
+            ? & & & m_val == 0 g_did_ret ( is_ident_tok arm_tt0 ) ( seq arm_v0 ( nurl_sym_get syms `__last_ident_name__` ) ) { ( bck_note_read arm_v0 ) } {}
             ( bck_record `endmatch-arm-edge` `` bck_mline )
             ? == g_did_ret 0 {
                 ( bck_save_expr_carriers syms `__last_match_params__` arm_tt0 arm_v0 )
@@ -27825,7 +27833,10 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // fresh one, leaving `a` the sole owner — marking it moved there would
 // reject correct code. The channel is consume-once, cleared by the
 // caller before the RHS is generated.
-@ bck_alias_from_phi i syms b dest_moves s dest s vt i line → v {
+// `gives`: a `:` binding of a `?` / `??` itself, which gives the owner it
+// took back where it dies still holding it (__jpb_putback): its rows say so
+// (`:g`), and the walk puts the owner back there (bck_join_giveback).
+@ bck_alias_from_phi i syms b dest_moves s dest s vt i line b gives → v {
     ? | ! dest_moves ! ( bck_is_heap_lty vt ) { ^ v } {}
     : s ids ( nurl_sym_get syms `__last_phi_idents__` )
     ? == 0 ( nurl_str_len ids ) { ^ v } {}
@@ -27853,7 +27864,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
             // `:c` — the handle came back out of a call (a returned
             // argument), not a `?` / `??` selection: the sound rules read
             // that as a borrow of the argument.
-            { ( bck_stash_maybe_alias nm line why ? != 0 ( nurl_str_starts why0 `it was passed to '` ) ( nurl_str_cat dest `:c` ) dest ) } }
+            { ( bck_stash_maybe_alias nm line why ? != 0 ( nurl_str_starts why0 `it was passed to '` ) ( nurl_str_cat dest `:c` ) ? gives ( nurl_str_cat dest `:g` ) dest ) } }
     }
 }
 
@@ -28319,9 +28330,10 @@ unsafe @ bck_swap_char s str i from i to → s {
             = arest ( str_skip_word arest )
             : b acall & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:c` )
             : b aasg & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:a` )
-            : s apn ? | acall aasg ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
+            : b agiv & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:g` )
+            : s apn ? | | acall aasg agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
             : s apf ? ( seq apn `-` ) `-` ( nurl_str_cat `=` apn )
-            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` `0` )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? agiv `g` `0` )
         }
         ~ != 0 ( nurl_str_len frest ) {
             : s fnm ( str_first_word frest )
@@ -30526,6 +30538,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                             // (definitely); one of several a `?` / `??` may
                             // have selected moved on the paths that selected it.
                             = st ( bck_st_set st avid ? ( seq ( bck_field rec 6 ) `a` ) BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
+                            // (A `:` binding of the join gives it back where it
+                            // dies still holding it: bck_join_giveback.)
+                            ? ( seq ( bck_field rec 6 ) `g` ) {
+                                ( bck_add_word_once ( bck_bkey `jt_` ( nurl_str_int apid ) ) avn )
+                                = g_bck_jgb_any 1
+                            } {}
                             ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                             ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
                         }
@@ -32896,6 +32914,13 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     }
     : s s_then ( bck_walk_seq + ci 1 middle state )
     : s s_else ( bck_walk_seq + middle 1 ec state )
+    // A value-producing `?` reads its arms' values on its edge rows — the
+    // then arm's on the `cond-else-edge`, the else arm's on the `endcond`
+    // — which neither arm's walk visits, nor the walk past the `?`: read
+    // each where its arm ends. Unread, `( consume a )` then `: String u ?
+    // c a b` handed the freed `a` on (agora #242, formal's review).
+    ? & < middle ec ! ( seq s_then `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec middle ) 2 ) ( bck_field_int ( bck_rec middle ) 3 ) s_then ) } {}
+    ? ! ( seq s_else `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec ec ) 2 ) ( bck_field_int ( bck_rec ec ) 3 ) s_else ) } {}
     ^ ( bck_join_state s_then s_else )
 }
 
@@ -33031,7 +33056,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
             // (What a payload still holds is released at the arm's end.)
-            : s armfinal ( bck_ids_end ids ( bck_walk_seq + j 1 end entry ) ( bck_field_int ( bck_rec - end 1 ) 3 ) )
+            : s armwalk ( bck_walk_seq + j 1 end entry )
+            // (A value arm that is a binding reads it on its
+            // `endmatch-arm-edge` row, which the arm's walk does not visit:
+            // read here, from the arm's own state — gen_match.)
+            ? ! ( seq armwalk `!` ) { ( bck_check_moved_reads ( bck_field ( bck_rec end ) 2 ) ( bck_field_int ( bck_rec end ) 3 ) armwalk ) } {}
+            : s armfinal ( bck_ids_end ids armwalk ( bck_field_int ( bck_rec - end 1 ) 3 ) )
             // (A cursor payload is gone with its arm: the option it matched
             // ending later ends nothing of it.)
             ~ != 0 ( nurl_str_len cursors ) {
@@ -33124,9 +33154,10 @@ unsafe @ bck_scope_leave s st i line → s {
 // borrows taken from it end (reading one after is an error naming the
 // line). Not one moved or stored away — its value lives on elsewhere.
 @ bck_scope_end i lo i hi s st i line → s {
-    ? | == 0 g_bck_has_borrow ( seq st `!` ) { ^ st } {}
-    : ~ s out st
+    ? ( seq st `!` ) { ^ st } {}
+    ? == 0 g_bck_has_borrow { ^ ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st ( __bck_scope_lets lo hi ) ) } {}
     : s lets ( __bck_scope_lets lo hi )
+    : ~ s out ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st lets )
     = out ( bck_scope_drop out lets line )
     // (Gone from here on — until a `let` binds it again: a later change to
     // what it borrowed from no longer concerns it.)
@@ -33134,6 +33165,34 @@ unsafe @ bck_scope_leave s st i line → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
+    }
+    ^ out
+}
+
+// A scope's end and its `let`s (rows `lets`): a `:` binding of a `?` /
+// `??` that still holds its value there on every path gives back the owner
+// its arm took (__jpb_putback), so each owner it may have taken (`jt_`,
+// the join's maybealias rows) is its own again — on the paths that
+// selected it given back, on the others never taken. Where the binding
+// moved on some path (a `sink`, `^ t`), the owner stays maybe-moved, and a
+// later read of it — the next pass's `? c a b` included — is an error
+// (agora #242; A2: `letv t (var a)` is `moveOwn`, the give-back `= a t`).
+@ bck_join_giveback s st s lets → s {
+    : ~ s out ( nurl_str_cat st `` )
+    : ~ s rest ( nurl_str_cat lets `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : s took ( nurl_sym_get g_bck ( bck_bkey `jt_` ( nurl_str_int id ) ) )
+        ? & != 0 ( nurl_str_len took ) == BCK_OWNED ( bck_st_get out id ) {
+            : ~ s orest ( nurl_str_cat took `` )
+            ~ != 0 ( nurl_str_len orest ) {
+                : s os ( str_first_word orest ) = orest ( str_skip_word orest )
+                : i o ( nurl_str_to_int os )
+                : i ov ( bck_st_get out o )
+                ? | == ov BCK_MAYBE_MOVED == ov BCK_MOVED { = out ( bck_st_set out o BCK_OWNED ) } {}
+            }
+        } {}
     }
     ^ out
 }
@@ -33197,6 +33256,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
     // (Newest first, as its values are dropped: one declared after another
     // is gone — its state put back — before that one ends.)
     : s lets ( __bck_scope_lets lo hi )
+    ? != 0 g_bck_jgb_any { = out ( bck_join_giveback out lets ) } {}
     ? ends { = out ( bck_scope_drop out lets line ) } {}
     : ~ s rest ( nurl_str_cat lets `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -33539,6 +33599,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     = g_bck_has_paths 0
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
+    = g_bck_jgb_any 0
     // The parameters are the outermost frame's bindings (bck_xl_declare_id).
     ( bck_xl_reset )
     : ~ s xps ( nurl_str_cat params `` )
@@ -34552,7 +34613,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( mem_note_clo_bind_lend syms name vt bck_rhs_tt bck_rhs_val rhs_closure_caps )
         ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
-        ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
+        ( bck_alias_from_phi syms ! is_mutable name vt bck_line ? is_mutable F | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
         // buffer to this binding (gen_slice_literal / gen_cond set the flag).
@@ -34915,7 +34976,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( mem_note_clo_bind_lend syms name vt bck_rhs_tt bck_rhs_val rhs_closure_caps )
             ? != 0 g_rawlit_pending { ( mem_note_rawlit syms name ) } {}
             ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
-            ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
+            ( bck_alias_from_phi syms ! is_mutable name vt bck_line ? is_mutable F | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST )
             : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
             // A `?`-ternary whose live arms are all fresh owned slices
             // hands the buffer to this binding (see the inference path).
@@ -35379,7 +35440,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_bck_rhs_sx ``
         ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name vt __rp_reads bck_rhs_tt T ) } {}
         ( bck_assign_alias syms bck_rhs_tt bck_rhs_val name vt bck_line )
-        ( bck_alias_from_phi syms T name vt bck_line )
+        ( bck_alias_from_phi syms T name vt bck_line F )
         // Escape analysis: re-target `name`. If the RHS is a stack
         // reference into a region deeper than `name`'s own, the
         // reference outlives its referent — an escape.
