@@ -251,6 +251,58 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .catchR _ _ s => PinOK Γ s
   | _ => True
 
+/-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
+    a run-time scope opened inside its own frame, so a panic that unwinds
+    those scopes leaves its views bound (nurlc #254). -/
+def DtorIn (Γ : Ctx) (x : Var) (s : Stmt) : Prop :=
+  ∀ E, Γ x = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ s.spine
+
+def DtorPinOK (Γ : Ctx) : Stmt → Prop
+  | .seq a _ => DtorPinOK Γ a
+  | .scope x s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .scopeD x _ s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .rbind p s => DtorIn Γ p s ∧ DtorPinOK Γ s
+  | .frozen _ s => DtorPinOK Γ s
+  | .catchR _ _ s => DtorPinOK Γ s
+  | _ => True
+
+/-- A statement inside no run-time scope pins nothing. -/
+theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPinOK Γ s := by
+  induction s with
+  | seq a _ iha _ => exact iha h
+  | frozen _ k ih => exact ih h
+  | catchR _ _ k ih => exact ih h
+  | scope _ _ _ => simp [Stmt.spine] at h
+  | scopeD _ _ _ _ => simp [Stmt.spine] at h
+  | rbind _ _ _ => simp [Stmt.spine] at h
+  | _ => trivial
+
+/-- `DtorPinOK` reads only what the `letd` bindings view: a context that
+    keeps them, or views less, keeps it. -/
+theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → E'.dbind = true → E'.mode.ownSlot = true →
+      (E'.ty ≠ .int ∨ E'.mode = .rootb) → ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧
+        (E.ty ≠ .int ∨ E.mode = .rootb) ∧ E'.vdeps ⊆ E.vdeps)
+    {s : Stmt} (hp : DtorPinOK Γ s) : DtorPinOK Γ' s := by
+  have hin : ∀ x k, DtorIn Γ x k → DtorIn Γ' x k := by
+    intro x k hx E' hE' hd hos hn d hdd hnm
+    obtain ⟨E, hE, hd0, hos0, hn0, hsub⟩ := h x E' hE' hd hos hn
+    exact hx E hE hd0 hos0 hn0 d (hsub hdd) hnm
+  induction s with
+  | seq a _ iha _ => exact iha hp
+  | scope x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
+  | scopeD x _ k ih => exact ⟨hin x k hp.1, ih hp.2⟩
+  | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
+  | frozen _ k ih => exact ih hp
+  | catchR _ _ k ih => exact ih hp
+  | _ => trivial
+
+theorem dtorOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
+    ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+      v ∉ s.spine → ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ s.spine :=
+  fun _ _ _ _ _ _ _ _ _ _ hr => by rw [h] at hr; cases hr
+
 /-- `PinOK` reads only borrowed parameters: a context that keeps them keeps it. -/
 theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
     {s : Stmt} (hp : PinOK Γ s) : PinOK Γ' s := by
@@ -324,6 +376,12 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
       scopes opened inside its call (`PinOK`). -/
   pinOut    : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine
   pinIn     : PinOK Γ s
+  /-- A2-drop.2: so for a binding `letd` made, in memory (the panic path,
+      nurlc #254). -/
+  dtorOut   : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true →
+                (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
+                d.kind.isName = false → d.root ∉ s.spine
+  dtorIn    : DtorPinOK Γ s
 
 /-! ### Typing of statements
 

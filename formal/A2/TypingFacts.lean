@@ -283,7 +283,9 @@ theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m �
     catchOK := hi.catchOK
     cover := hi.cover
     pinOut := hi.pinOut
-    pinIn := hi.pinIn }
+    pinIn := hi.pinIn
+    dtorOut := hi.dtorOut
+    dtorIn := hi.dtorIn }
 
 theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry}
     (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F k :=
@@ -302,7 +304,13 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
     pinOut := fun p E hp hm hps r hr hrk => by
       have hpx : p ≠ x := fun h => by subst h; rw [hx] at hp; cases hp; exact hnrb hm
       exact hi.pinOut p E hp hm (by simp [Stmt.spine, hpx, hps]) r hr (by simp [Stmt.spine, hrk])
-    pinIn := hi.pinIn }
+    pinIn := hi.pinIn
+    dtorOut := fun v E hv hd hos hn hvs d hdd hnm hdk => by
+      by_cases hvx : v = x
+      · subst hvx; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
+      · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvx, hvs]) d hdd hnm
+          (by simp [Stmt.spine, hdk])
+    dtorIn := hi.dtorIn.2 }
 
 /-- A destructor scope binds, names and catches as a plain scope does, and
     the invariant reads a statement only through those. -/
@@ -320,7 +328,11 @@ theorem Inv.scopeD_iff {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {
       pinOut := fun p E hp hm hps r hr => by
         have := hi.pinOut p E hp hm (by simpa [Stmt.spine] using hps) r hr
         simpa [Stmt.spine] using this
-      pinIn := hi.pinIn }
+      pinIn := hi.pinIn
+      dtorOut := fun v E hv hd hos hn hvs d hdd hnm => by
+        have := hi.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
+        simpa [Stmt.spine] using this
+      dtorIn := hi.dtorIn }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
     (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F) :
@@ -341,7 +353,13 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
       by_cases hqp : q = p
       · subst hqp; exact hi.pinIn.1 E hq hmq r hr hrk
       · exact hi.pinOut q E hq hmq (by simp [Stmt.spine, hqp, hqs]) r hr (by simp [Stmt.spine, hrk])
-    pinIn := hi.pinIn.2 }
+    pinIn := hi.pinIn.2
+    dtorOut := fun v E hv hd hos hn hvs d hdd hnm hdk => by
+      by_cases hvp : v = p
+      · subst hvp; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
+      · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvp, hvs]) d hdd hnm
+          (by simp [Stmt.spine, hdk])
+    dtorIn := hi.dtorIn.2 }
 
 theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))
     (hz : ∀ v ∈ z', v ∈ z) : Inv m Γ (F ++ z') k :=
@@ -357,7 +375,9 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : I
     catchOK := hi.catchOK
     cover := hi.cover
     pinOut := hi.pinOut
-    pinIn := hi.pinIn }
+    pinIn := hi.pinIn
+    dtorOut := hi.dtorOut
+    dtorIn := hi.dtorIn }
 
 
 /-- A run-time scope never binds what is lent out. -/
@@ -404,7 +424,9 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     catchOK := hi.catchOK.2.2.2
     cover := hi.cover
     pinOut := hi.pinOut
-    pinIn := hi.pinIn }
+    pinIn := hi.pinIn
+    dtorOut := hi.dtorOut
+    dtorIn := hi.dtorIn }
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by

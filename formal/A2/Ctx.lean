@@ -211,6 +211,22 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
     rw [hwe.fixed (Or.inl hm')]; exact hE
+  dtorOut v E' hv hd hos hn hvs d hdd hnm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
+    have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+    have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
+    refine hi.dtorOut v E hE hd0 hos0 hn0 hvs d ?_ hnm
+    simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
+    rw [← hwe.dheld hd0]; exact hdd
+  dtorIn := hi.dtorIn.of_dbind fun v E' hv hd hos hn => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
+    have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+    have hn0 : E.ty ≠ .int ∨ E.mode = .rootb := by rw [← hwe.ty, ← hwe.mode]; exact hn
+    refine ⟨E, hE, hd0, hos0, hn0, fun d hdd => ?_⟩
+    simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
+    rw [← hwe.dheld hd0]; exact hdd
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names
