@@ -507,6 +507,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.at y i) (elemE y E t) Γ
   | view {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
+      -- A3.1's first cut: a slice holds no shares
+      t.hasArc = false →
       RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
