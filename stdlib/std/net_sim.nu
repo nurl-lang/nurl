@@ -83,6 +83,7 @@ $ `stdlib/net/tcp.nu`
 $ `stdlib/net/tcpstack.nu`
 $ `stdlib/net/socket.nu`
 $ `stdlib/dist/sim.nu`
+$ `stdlib/std/random.nu`
 
 // ── addresses ────────────────────────────────────────────────────
 
@@ -185,7 +186,13 @@ $ `stdlib/dist/sim.nu`
 // A network of `nodes` stacks (1..254) over a bus seeded with `seed`:
 // each frame is lost with probability drop_pct/100, and the rest arrive
 // latency_ms plus 0..jitter_ms later (so out of order when jitter > 0).
-@ netsim_new i nodes i seed i drop_pct i latency_ms i jitter_ms → NetSim {
+// Seed 0 is the run's own: it is drawn from the entropy source, which a
+// simulation (nurl --sim, NURL_SIM=<seed>) draws from its seed — so
+// `nurlpkg test --sim --seeds N` varies the network's drops, jitter and
+// sequence numbers with the run's seed, and replays them with it. A
+// test that passes its own seed keeps exactly that network.
+@ netsim_new i nodes i seed_arg i drop_pct i latency_ms i jitter_ms → NetSim {
+    : i seed ? == seed_arg 0 | & ( rand_u64 ) 2147483647 1 seed_arg
     : i n ? < nodes 1 1 ? > nodes ( __ns_max_nodes ) ( __ns_max_nodes ) nodes
     : i now ( __ns_now )
     : ( Vec ( Box NsNode ) ) list ( vec_with_cap [( Box NsNode )] n )

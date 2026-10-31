@@ -450,10 +450,17 @@ Usage: nurlpkg remove <name>
     ? != 0 ( nurl_str_eq cmd `test` ) {
         ( nurl_print `nurlpkg test — build + run every tests/*.nu
 
-Usage: nurlpkg test   (optional tests/outputs/ goldens; exit 0 = pass)
+Usage: nurlpkg test [tests/x.nu …]   (optional tests/outputs/ goldens; exit 0 = pass)
+       nurlpkg test --sim [--seeds N | --seeds A..B | --seed S] [tests/x.nu …]
 
 Compiles with the installed nurl (a toolchain checkout's ./nurl.sh wins when
 you run from one); $NURL_CC overrides with your own <flags> <src> <out> driver.
+
+--sim builds each test once as a deterministic simulation (nurl --sim: a
+virtual clock, seeded entropy and a seeded schedule; Linux x86_64) and runs
+it under seeds 1..20, or the ones --seeds names. A test passes when every
+seed does; a failing one prints its first failing seed and the replay line,
+nurlpkg test --sim --seed S tests/x.nu, which reruns that run exactly.
 ` )
         ^ T
     } {}
@@ -3843,8 +3850,138 @@ unsafe @ __golden_match s goldp Output o → b {
     ^ result
 }
 
-// Owns `files` (the fs_glob result): runs each, reports.
-@ __run_tests ( Vec String ) files → i {
+// ── simulation runs (agora #261, DST 3/4) ─────────────────────────
+//
+// `nurlpkg test --sim` builds each test as a deterministic simulation
+// (`nurl --sim`: the program on the cooperative no-libc runtime with a
+// virtual clock, seeded entropy and a seeded schedule — unikernel/
+// README.md) and runs it once per seed, NURL_SIM=s. A seed is the whole
+// outside world of a run, so a run is a function of the test and its
+// seed: a test passes when every seed does, and one that fails names the
+// first seed it failed under and the command that replays exactly that
+// run. Builds once per test; a seed's run takes virtual time, so a
+// thousand seeds of a networked test take seconds.
+
+// The seeds asked for: "N" is 1..N, "A..B" is A..B. ok F when the
+// spec is neither.
+: SimSeeds { b ok i lo i hi }
+
+@ __sim_seeds String spec → SimSeeds {
+    : SimSeeds bad @ SimSeeds { F 1 0 }
+    ?? ( string_index_of spec `..` ) {
+        T at → {
+            : String a ( string_substr spec 0 at )
+            : String b ( string_substr spec + at 2 - - ( string_len spec ) at 2 )
+            ?? ( string_to_int a ) {
+                T lo → {
+                    ?? ( string_to_int b ) {
+                        T hi → { ? & >= lo 0 >= hi lo { ^ @ SimSeeds { T lo hi } } {} }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            ^ bad
+        }
+        F → {}
+    }
+    ?? ( string_to_int spec ) {
+        T n → { ? >= n 1 { ^ @ SimSeeds { T 1 n } } {} }
+        F _ → {}
+    }
+    ^ bad
+}
+
+// Does one finished run pass: exit 0, and stdout equal to the golden
+// when there is one? `why` gets the reason when it does not.
+@ __test_run_ok String name Output out String why → b {
+    ? != ( output_exit_code out ) 0 {
+        ( string_push_str why `(nonzero exit ` )
+        ( string_push_str why ( nurl_str_int ( output_exit_code out ) ) )
+        ( string_push_str why `)` )
+        ^ F
+    } {}
+    : String goldp ( string_with_cap 64 )
+    ( string_push_str goldp `tests/outputs/` )
+    ( string_push_str goldp ( string_data name ) )
+    ( string_push_str goldp `.txt` )
+    ? ( file_exists ( string_data goldp ) ) {
+        ? ( __golden_match ( string_data goldp ) out ) {} {
+            ( string_push_str why `(output mismatch)` )
+            ^ F
+        }
+    } {}
+    ^ T
+}
+
+// Build `src` once as a simulation and run it under every seed in
+// [lo, hi]. 0 when every seed passed.
+@ __run_one_sim s src s driver s directory i lo i hi → i {
+    : String name ( __test_basename src )
+    : String bin ( path_join directory ( string_data name ) )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `--sim` )
+    ( vec_push [s] args src )
+    ( vec_push [s] args ( string_data bin ) )
+    ? == ( __spawn driver args `test compile (--sim)` ) 0 {
+        ( __test_report name `FAIL` `(compile error)` )
+        ^ 1
+    } {}
+    : ~ i passed 0
+    : ~ i failed 0
+    : ~ i first_bad -1
+    : ~ String first_why ( string_new )
+    : ~ String first_err ( string_new )
+    : ~ i seed lo
+    ~ <= seed hi {
+        : String sv ( string_from ( nurl_str_int seed ) )
+        ?? ( env_set `NURL_SIM` ( string_data sv ) ) { T _ → {} F _ → {} }
+        ?? ( process_run0 ( string_data bin ) ) {
+            T out → {
+                : String why ( string_new )
+                ? ( __test_run_ok name out why ) { = passed + passed 1 } {
+                    = failed + failed 1
+                    ? < first_bad 0 {
+                        = first_bad seed
+                        = first_why why
+                        = first_err ( string_from ( output_stderr out ) )
+                    } {}
+                }
+            }
+            F _ → {
+                = failed + failed 1
+                ? < first_bad 0 { = first_bad seed ( string_push_str first_why `(could not run)` ) } {}
+            }
+        }
+        = seed + seed 1
+    }
+    ?? ( env_unset `NURL_SIM` ) { T _ → {} F _ → {} }
+    : String detail ( string_from `(` )
+    ( string_push_str detail ( nurl_str_int passed ) )
+    ( string_push_str detail `/` )
+    ( string_push_str detail ( nurl_str_int + passed failed ) )
+    ( string_push_str detail ` seeds)` )
+    ? == failed 0 {
+        ( __test_report name `PASS` ( string_data detail ) )
+        ^ 0
+    } {}
+    ( string_push_str detail ` — first failing seed ` )
+    ( string_push_str detail ( nurl_str_int first_bad ) )
+    ( string_push_str detail ` ` )
+    ( string_push_str detail ( string_data first_why ) )
+    ( __test_report name `FAIL` ( string_data detail ) )
+    ( nurl_print `    replay: nurlpkg test --sim --seed ` )
+    ( nurl_print ( nurl_str_int first_bad ) )
+    ( nurl_print ` ` )
+    ( nurl_print src )
+    ( nurl_print `\n` )
+    ( nurl_eprint ( string_data first_err ) )
+    ^ 1
+}
+
+// Owns `files` (the fs_glob result): runs each, reports — as a
+// simulation under seeds [lo, hi] when `sim`.
+@ __run_tests ( Vec String ) files b sim i lo i hi → i {
     : ~ String directory ( string_new )
     ?? ( __test_workspace ) {
         T made → { = directory made }
@@ -3862,7 +3999,8 @@ unsafe @ __golden_match s goldp Output o → b {
     ~ < k ( vec_len [String] files ) {
         ?? ( vec_get [String] files k ) {
             T src → {
-                ? == ( __run_one ( string_data src ) ( string_data driver ) ( string_data directory ) ) 0 { = pass + pass 1 } { = fail + fail 1 }
+                : i rc ? sim ( __run_one_sim ( string_data src ) ( string_data driver ) ( string_data directory ) lo hi ) ( __run_one ( string_data src ) ( string_data driver ) ( string_data directory ) )
+                ? == rc 0 { = pass + pass 1 } { = fail + fail 1 }
             }
             F _ → {}
         }
@@ -3875,12 +4013,30 @@ unsafe @ __golden_match s goldp Output o → b {
     ^ ? == fail 0 0 1
 }
 
-@ __cmd_test → i {
+// `only`: the tests named on the command line (a replay names one), all
+// of tests/*.nu when empty.
+@ __cmd_test ( Vec String ) only b sim i lo i hi → i {
     // Resolve deps/ first, exactly like `build` and `install` do — a test that
     // imports `deps/<pkg>/src/...` cannot compile without it, and requiring a
     // separate `nurlpkg install` made `test` the odd one out.
     ? ( file_exists `nurl.toml` ) {
         ? != ( __cmd_install ) 0 { ^ 1 } {}
+    } {}
+    ? > ( vec_len [String] only ) 0 {
+        : ~ i k 0
+        ~ < k ( vec_len [String] only ) {
+            ?? ( vec_get [String] only k ) {
+                T f → {
+                    ? ( file_exists ( string_data f ) ) {} {
+                        ( nurl_eprint `nurlpkg: no such test: ` ) ( nurl_eprintln ( string_data f ) )
+                        ^ 1
+                    }
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        ^ ( __run_tests only sim lo hi )
     } {}
     ^ ?? ( fs_glob `tests/*.nu` ) {
         F _ → { ( nurl_eprintln `nurlpkg: no tests/ directory (expected tests/*.nu)` ) 1 }
@@ -3889,7 +4045,7 @@ unsafe @ __golden_match s goldp Output o → b {
                 ( nurl_eprintln `nurlpkg: no tests found (expected tests/*.nu)` )
                 1
             } {
-                ( __run_tests files )
+                ( __run_tests files sim lo hi )
             }
         }
     }
@@ -4230,7 +4386,54 @@ unsafe @ __run_bench_one s src s driver s directory → i {
         ^ ( __cmd_verify )
     } {}
     ? != 0 ( nurl_str_eq s_sub `test` ) {
-        ^ ( __cmd_test )
+        // nurlpkg test [--sim [--seeds N|A..B] [--seed S]] [tests/x.nu …]
+        : ( Vec String ) only ( vec_new [String] )
+        : ~ b sim F
+        : ~ i lo 1
+        : ~ i hi 20
+        : ~ i ai 2
+        ~ < ai argc {
+            : String a ( env_arg ai )
+            : s a_s ( string_data a )
+            : i nx + ai 1
+            ? != 0 ( nurl_str_eq a_s `--sim` ) { = sim T } {
+                ? | != 0 ( nurl_str_eq a_s `--seeds` ) != 0 ( nurl_str_eq a_s `--seed` ) {
+                    ? >= nx argc {
+                        ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint a_s ) ( nurl_eprintln ` needs a value` )
+                        ^ 2
+                    } {}
+                    : String v ( env_arg nx )
+                    : b single != 0 ( nurl_str_eq a_s `--seed` )
+                    ? single {
+                        ?? ( string_to_int v ) {
+                            T sv → { = lo sv = hi sv }
+                            F _ → {
+                                ( nurl_eprint `nurlpkg: --seed takes a number, not ` ) ( nurl_eprintln ( string_data v ) )
+                                ^ 2
+                            }
+                        }
+                    } {
+                        : SimSeeds ss ( __sim_seeds v )
+                        ? . ss ok { = lo . ss lo = hi . ss hi } {
+                            ( nurl_eprint `nurlpkg: --seeds takes N (seeds 1..N) or A..B, not ` ) ( nurl_eprintln ( string_data v ) )
+                            ^ 2
+                        }
+                    }
+                    = ai nx
+                } {
+                    ? & >= ( nurl_str_len a_s ) 2 == ( nurl_str_get a_s 0 ) 45 {
+                        ( nurl_eprint `nurlpkg: unknown option ` ) ( nurl_eprint a_s )
+                        ( nurl_eprintln ` for test — nothing was done` )
+                        ( nurl_eprintln `hint: nurlpkg test --help` )
+                        ^ 2
+                    } {
+                        ( vec_push [String] only a )
+                    }
+                }
+            }
+            = ai + ai 1
+        }
+        ^ ( __cmd_test only sim lo hi )
     } {}
     ? != 0 ( nurl_str_eq s_sub `bench` ) {
         ^ ( __cmd_bench )
