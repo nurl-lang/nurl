@@ -598,6 +598,10 @@ still needs a rebase; the changelog fragments and named probes (#211,
 runs no `ci.yml` jobs. The queue's `merge_group` run already tested that
 exact commit, and `release.yml` accepts that run. A push that did not
 come through the queue still runs everything.
+When the queue rebuilds its groups (one failed, or main moved), it
+deletes the old group branches. The first job of each new group's run
+cancels the queue runs whose branch is gone, so they stop holding
+runners.
 
 | Job / step | What it checks |
 |---|---|

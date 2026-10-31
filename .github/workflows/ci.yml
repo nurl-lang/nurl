@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
+      actions: write
     outputs:
       code: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.code.outputs.code }}
       webdocs: ${{ github.event_name == 'merge_group' && 'true' || steps.queued.outputs.tested == 'true' && 'false' || steps.filter.outputs.webdocs }}
@@ -64,6 +64,33 @@ jobs:
       # the queue. Pushes and the queue always run everything.
       full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
     steps:
+      # The merge queue rebuilds its groups whenever one fails or main moves,
+      # and deletes the old group branches. Their ci.yml runs go on,
+      # though: each is a full run (~123 job-minutes) whose result nothing
+      # reads, and it holds slots of the 20-job limit that the new groups
+      # wait for. On 2026-10-31, three to five of them were running at once
+      # after every rebuild. A new group's run cancels the queue runs whose
+      # branch is gone: only a 404 for the branch counts, so an API error
+      # cancels nothing.
+      - name: Cancel queue runs whose group the queue dropped
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF: ${{ github.run_id }}
+        run: |
+          for s in queued in_progress; do
+            gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&status=$s&per_page=100" \
+              --jq '.workflow_runs[] | "\(.id) \(.head_branch)"' || true
+          done | while read -r id ref; do
+            [ "$id" = "$SELF" ] && continue
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/git/ref/heads/$ref" || echo 000)"
+            if [ "$code" = 404 ]; then
+              echo "::notice::cancelled run $id: its queue group $ref is gone"
+              gh api -X POST "repos/$REPO/actions/runs/$id/cancel" --silent || true
+            fi
+          done
       - name: Did the merge queue already test this commit?
         id: queued
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
