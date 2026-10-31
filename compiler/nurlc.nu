@@ -2922,6 +2922,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 // bytes are a copy of (bck_byte_root): a borrow of the same bytes still
 // reads what it did (bck_br_survives). -1 for none.
 : ~ i g_bck_end_wroot -1
+// …and that borrow itself (bck_br_survives): -1 for none.
+: ~ i g_bck_end_wid -1
 // What the borrow a borrow row begins is a copy of (bck_byte_root), handed
 // to bck_borrow_begin; -1 for none known.
 : ~ i g_bck_br_next -1
@@ -31890,14 +31892,20 @@ unsafe @ bck_sx_is_id s e → b {
     = g_bck_brev_prev ? == 0 g_bck_has_borrow -1 ( bck_br_get ids )
 }
 
-// Only elements changed (g_bck_end_eonly): does borrow `bs` still read what
-// it did? It does when its bytes are a binding's own, or part of the same
-// value as the borrow the change went through (g_bck_end_wroot): the
-// handles in them stay where they are, and elements changing reach only
+// Only elements changed (g_bck_end_eonly): does borrow `bs` of `sids` still
+// read what it did? It does when its bytes are a binding's own, or part of
+// the same value as the borrow the change went through (g_bck_end_wroot):
+// the handles in them stay where they are, and elements changing reach only
 // what those handles point to. A value read out of the elements (any other
 // value read through a handle) may be what was dropped, and every handle
 // it copied with it — a field viewer of a vector's element included (#267).
-@ bck_br_survives s bs → b {
+// (The borrow the change went through ends with the rest and is given its
+// state back — bck_borrow_sweep's `keep` — and one that holds a view of
+// `sids` is left to the views' rules, bck_deps_end, as a field viewer
+// always was.)
+@ bck_br_survives s bs s sids → b {
+    ? == ( nurl_str_to_int bs ) g_bck_end_wid { ^ F } {}
+    ? ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdd_` sids ) ) bs ) { ^ != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) ) } {}
     : i r ( bck_br_get bs )
     ? < r 0 { ^ F } {}
     ? == 1 & r 1 { ^ T } {}
@@ -32257,6 +32265,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // (What the borrow it went through is a copy of: a borrow of the
             // same bytes holds the same handles — bck_br_survives.)
             = g_bck_end_wroot ( bck_br_get ( nurl_str_int wroot ) )
+            = g_bck_end_wid wroot
             : i keep ( bck_st_get out wroot )
             : ~ s orest ( nurl_str_cat wsrc `` )
             ~ != 0 ( nurl_str_len orest ) {
@@ -32274,6 +32283,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             = out ( bck_st_set out wroot keep )
             = g_bck_end_eonly 0
             = g_bck_end_wroot -1
+            = g_bck_end_wid -1
         } {}
     } {}
     // A borrow released by its own name: never its to release. (A field
@@ -32600,7 +32610,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // of what the owner holds itself — reads them as they are now,
         // bck_br_survives. A replaced field ends it.)
         ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
-        | == 0 g_bck_end_eonly ! ( bck_br_survives bs ) {
+        | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
             ( bck_drop_view_diag b sid line why )
