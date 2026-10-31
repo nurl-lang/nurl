@@ -13456,8 +13456,8 @@ unsafe @ __has_pct_token s ll s name → b {
         : s tn ( nurl_str_slice pllvm 5 - ( nurl_str_len pllvm ) 5 )
         ? == 0 ( nurl_str_starts at `%dyn.` ) {
             ( die lex ( nurl_str_cat4 ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-            ( nurl_str_cat4 `': a '` ( llvm_to_nurl at ) `' passed where the parameter is the trait object '%` tn )
-            ( nurl_str_cat4 `' — a value is not a trait object until it is boxed with its vtable. Pass ( dyn ` tn ` value ) (the type must implement '` tn )
+            ( nurl_str_cat4 `': a '` ( llvm_to_nurl at ) `' passed where the parameter is a '%` tn )
+            ( nurl_str_cat4 `' object — a value is a trait object only once it is boxed with its vtable. Pass ( dyn ` tn ` value ) (the type must implement '` tn )
             `'), or make the parameter that type itself.` ) )
         } {}
     } {}

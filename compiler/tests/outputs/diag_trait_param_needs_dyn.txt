@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_trait_param_needs_dyn.nu:21:41: error: argument 1 to 'hear': a 'Dog' passed where the parameter is the trait object '%Speak' — a value is not a trait object until it is boxed with its vtable. Pass ( dyn Speak value ) (the type must implement 'Speak'), or make the parameter that type itself.
+compiler/tests/diag_trait_param_needs_dyn.nu:21:41: error: argument 1 to 'hear': a 'Dog' passed where the parameter is a '%Speak' object — a value is a trait object only once it is boxed with its vtable. Pass ( dyn Speak value ) (the type must implement 'Speak'), or make the parameter that type itself.
     ( nurl_print_int ( hear @ Dog { 4 } ) )
                                         ^
 error: aborting due to 1 previous error
