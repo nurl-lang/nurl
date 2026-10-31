@@ -428,6 +428,245 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     dtorOut := hi.dtorOut
     dtorIn := hi.dtorIn }
 
+/-! ### A2-drop.2: typing gives no `letd` binding a new view
+
+What a panic's unwind and a `recover` frame need of the context a body's
+typing ends in: every binding `letd` made outside the running scopes views,
+in memory, no more there than it does now (`StmtT.dkeep`). -/
+
+/-- What `Inv.dtorOut` says: no binding `letd` made outside the scopes `sp`
+    views one of their bindings in memory. -/
+def DtorOut (Γ : Ctx) (sp : List Var) : Prop :=
+  ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    v ∉ sp → ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ∉ sp
+
+/-- Inside the scope of `x`: `x` itself, by `DtorIn`. -/
+theorem DtorOut.inner {Γ : Ctx} {x : Var} {k : Stmt} (ho : DtorOut Γ (x :: k.spine))
+    (hin : DtorIn Γ x k) : DtorOut Γ k.spine := fun v E hv hd hos hn hvs d hdd hnm hr => by
+  by_cases hvx : v = x
+  · subst hvx; exact hin E hv hd hos hn d hdd hnm hr
+  · exact ho v E hv hd hos hn (by simp [hvx, hvs]) d hdd hnm (List.mem_cons_of_mem _ hr)
+
+/-- A weaker context keeps what a binding `letd` made views (`dheld`). -/
+theorem Weaker.dbind_back {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {v : Var} {E' : Entry} (hv : Γ' v = some E')
+    (hd : E'.dbind = true) (hos : E'.mode.ownSlot = true) (hn : E'.ty ≠ .int ∨ E'.mode = .rootb) :
+    ∃ E, Γ v = some E ∧ E.dbind = true ∧ E.mode.ownSlot = true ∧ (E.ty ≠ .int ∨ E.mode = .rootb) ∧
+      E'.vdeps = E.vdeps := by
+  obtain ⟨E, hE, hwe⟩ := hw.get' hv
+  have hd0 : E.dbind = true := by rw [← hwe.dbind]; exact hd
+  have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+  refine ⟨E, hE, hd0, hos0, by rw [← hwe.ty, ← hwe.mode]; exact hn, ?_⟩
+  simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append]
+  exact hwe.dheld hd0
+
+theorem DtorOut.weaker {Γ Γ' : Ctx} {sp : List Var} (hw : Weaker Γ Γ') (h : DtorOut Γ sp) :
+    DtorOut Γ' sp := by
+  intro v E' hv hd hos hn hvs d hdd hnm
+  obtain ⟨E, hE, hd0, hos0, hn0, heq⟩ := hw.dbind_back hv hd hos hn
+  exact h v E hE hd0 hos0 hn0 hvs d (by rw [← heq]; exact hdd) hnm
+
+theorem DtorPinOK.weaker {Γ Γ' : Ctx} {s : Stmt} (hw : Weaker Γ Γ') (h : DtorPinOK Γ s) :
+    DtorPinOK Γ' s :=
+  h.of_dbind fun _ _ hv hd hos hn => by
+    obtain ⟨E, hE, hd0, hos0, hn0, heq⟩ := hw.dbind_back hv hd hos hn
+    exact ⟨E, hE, hd0, hos0, hn0, fun d hdd => by rw [← heq]; exact hdd⟩
+
+/-- A weaker context keeps a `letd` binding's views as they are, so what
+    it does not gain from the weaker, it does not gain from the stronger. -/
+theorem DKeep.weaker_left {Γ Γ0 Γ' : Ctx} {sp : List Var} (hw : Weaker Γ Γ0) (h : DKeep Γ0 Γ' sp) :
+    DKeep Γ Γ' sp := by
+  intro v E' hv hd hos hn hvs
+  obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h v E' hv hd hos hn hvs
+  obtain ⟨E, hE, hdE, hosE, hnE, heq⟩ := hw.dbind_back h0 hd0 hos0 hn0
+  exact ⟨E, hE, hdE, hosE, hnE, fun d hdd hnm => by rw [← heq]; exact hs0 d hdd hnm⟩
+
+theorem DKeep.weaker_right {Γ Δ0 Δ : Ctx} {sp : List Var} (hw : Weaker Δ0 Δ) (h : DKeep Γ Δ0 sp) :
+    DKeep Γ Δ sp := by
+  intro v E' hv hd hos hn hvs
+  obtain ⟨E1, h1, hd1, hos1, hn1, heq⟩ := hw.dbind_back hv hd hos hn
+  obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h v E1 h1 hd1 hos1 hn1 hvs
+  exact ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by rw [← heq]; exact hdd) hnm⟩
+
+theorem DKeep.exitScope_cons {Γ Γ' : Ctx} {sp : List Var} {x : Var} (h : DKeep Γ Γ' (x :: sp)) :
+    DKeep Γ (A2.exitScope x Γ') sp := by
+  intro v E hv hd hos hn hvs
+  have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv
+  exact (h.exitScope x) v E hv hd hos hn (by simp [hvx, hvs])
+
+/-- A binding a statement opens and ends: outside it, the statement keeps
+    what its parts keep. -/
+theorem DKeep.bind {Γ Γ1 Δ : Ctx} {x : Var} {E : Entry} (h1 : DKeep Γ Γ1 [])
+    (h2 : DKeep (A2.setE Γ1 x E) Δ []) : DKeep Γ (A2.exitScope x Δ) [] :=
+  (((h1.mono fun _ _ h => by cases h).setE (y := x) (E := E)
+    fun _ _ _ h => absurd (List.mem_singleton_self x) h).trans
+    (h2.mono fun _ _ h => by cases h) fun _ h => h).exitScope_cons
+
+/-- Moving `y` out leaves its entry, dead and disarmed, with what it views. -/
+theorem DKeep.moveOut {Γ : Ctx} {y : Var} {E : Entry} (hy : Γ y = some E) (e : Eff) (hv : Bool) :
+    DKeep Γ (A2.setE (A2.kill e hv y Γ) y { E with live := false, dtor := false }) [] :=
+  ((DKeep.refl Γ []).kill e hv y).setE fun hd hos hn _ => ⟨E, hy, hd, hos, hn, fun _ h _ => h⟩
+
+theorem PushArg.dkeep {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} {D : List Dep}
+    {Γ1 : Ctx} (hy : Γ y = some E) (h : PushArg Γ F y E t D Γ1) : DKeep Γ Γ1 [] := by
+  cases h with
+  | move => exact DKeep.moveOut hy _ _
+  | int => exact DKeep.refl Γ []
+  | slice => exact DKeep.refl Γ []
+
+/-- A right-hand side gives no `letd` binding a new view: it only kills, and
+    moves a binding out as it is. -/
+theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
+    DKeep Γ Γ1 [] := by
+  cases h with
+  | moveOwn hy => exact DKeep.moveOut hy _ _
+  | pop => exact (DKeep.refl Γ []).kill _ _ _
+  | pair hy _ hp1 hz _ hp2 _ => exact (hp1.dkeep hy).trans (hp2.dkeep hz) fun _ h => h
+  | inl hy _ hp _ => exact hp.dkeep hy
+  | inr hy _ hp _ => exact hp.dkeep hy
+  | takel hy => exact DKeep.moveOut hy _ _
+  | taker hy => exact DKeep.moveOut hy _ _
+  | pack hy _ _ hp _ => exact hp.dkeep hy
+  | _ => exact DKeep.refl Γ []
+
+theorem DKeep.killNames {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) :
+    ∀ ds, DKeep Γ (A2.killNames ds Γ') sp
+  | [] => h
+  | d :: ds => show DKeep Γ (A2.kill d.kind.bound false d.root (A2.killNames ds Γ')) sp from
+      (DKeep.killNames h ds).kill _ _ _
+
+/-- A call moves a `sink` argument as it is, and changes an `inout` one that
+    `letd` made only if it holds no views (`CallDtorSafe`): what it views
+    stays. -/
+theorem DKeep.callPostAux {Γ0 : Ctx} {fn : Fn} {args : List Var} :
+    ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx), DKeep Γ0 Γ [] →
+      (∀ j (hj : j < ps.length) b, ps[j].1 = .inout b → ∀ Ea, Γ0 (as.getD j 0) = some Ea →
+        Ea.dbind = true → ps[j].2.holdsView = false) →
+      DKeep Γ0 (A2.callPostAux Γ0 fn args ps as i Γ) [] := by
+  intro ps
+  induction ps with
+  | nil => intro as i Γ h _; cases as <;> simpa [A2.callPostAux] using h
+  | cons p ps ih =>
+    intro as i Γ h hv
+    obtain ⟨pm, t⟩ := p
+    cases as with
+    | nil => cases pm <;> simpa [A2.callPostAux] using h
+    | cons a as =>
+      have hv' : ∀ j (hj : j < ps.length) b, ps[j].1 = .inout b → ∀ Ea, Γ0 (as.getD j 0) = some Ea →
+          Ea.dbind = true → ps[j].2.holdsView = false := fun j hj b hb Ea ha hd => by
+        have := hv (j + 1) (by simp; omega) b (by simpa using hb) Ea (by simpa using ha) hd
+        simpa using this
+      cases pm with
+      | inp => simpa [A2.callPostAux] using ih as (i + 1) Γ h hv'
+      | sink =>
+        simp only [A2.callPostAux]
+        refine ih as (i + 1) _ ((h.kill _ _ _).setE fun hd hos hn _ => ?_) hv'
+        cases ha : Γ0 a with
+        | none => simp [argE, ha, intE] at hd
+        | some Ea =>
+          simp only [argE, ha, Option.getD_some] at hd hos hn
+          exact ⟨Ea, rfl, hd, hos, hn, fun d hdd _ => by simpa [Entry.vdeps, argE, ha] using hdd⟩
+      | inout b =>
+        simp only [A2.callPostAux]
+        refine ih as (i + 1) _ ((h.kill _ _ _).setE fun hd hos hn _ => ?_) hv'
+        cases ha : Γ0 a with
+        | none => simp [argE, ha, intE] at hd
+        | some Ea =>
+          simp only [argE, ha, Option.getD_some] at hd hos hn
+          have ht : t.holdsView = false := hv 0 (by simp) b rfl Ea (by simpa using ha) hd
+          exact ⟨Ea, rfl, hd, hos, hn, fun d hdd _ => by simpa [Entry.vdeps, argE, ha, ht] using hdd⟩
+
+theorem CallT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
+    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') : DKeep Γ Γ' [] := by
+  obtain ⟨fn, _, _, _, _, hds, _, rfl⟩ := h
+  exact (DKeep.callPostAux (fn := fn) (args := args) fn.params args 0 Γ (DKeep.refl Γ [])
+    hds.2.2).killNames _
+
+/-- At a borrowed parameter's end, what depended on it depends on what it
+    borrowed (`reroot`). A binding `letd` made gains no view by it: a
+    dependency by name stays one, and none depends on the parameter in
+    memory. -/
+theorem DKeep.exitRoot {Γ Δ : Ctx} {p : Var} {sp : List Var} (D : List Dep) (h : DKeep Γ Δ sp)
+    (hno : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true →
+      (E.ty ≠ .int ∨ E.mode = .rootb) → v ≠ p → v ∉ sp → ∀ d ∈ E.vdeps, d.kind.isName = false →
+        d.root ≠ p) :
+    DKeep Γ (A2.exitRoot p D Δ) sp := by
+  intro v E' hv hd hos hn hvs
+  have hvp : v ≠ p := fun e => by subst e; simp [A2.exitRoot] at hv
+  simp only [A2.exitRoot, upd_ne _ _ hvp] at hv
+  obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hv
+  have hos1 : E1.mode.ownSlot = true := hos
+  obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := h v E1 h1 hd hos1 hn hvs
+  refine ⟨E0, h0, hd0, hos0, hn0, fun d hdd hnm => ?_⟩
+  simp only [Entry.vdeps, rerootE, hos1, ↓reduceIte, List.nil_append] at hdd
+  have hin1 : ∀ d', d' ∈ E1.held → d' ∈ E1.vdeps := fun d' h => by
+    simp only [Entry.vdeps, hos1, ↓reduceIte, List.nil_append]; exact h
+  have hcn : ∀ a b : Kind, b.isName = true → (comp a b).isName = true := by
+    intro a b; cases a <;> cases b <;> simp [comp, Kind.isName]
+  rcases mem_reroot hdd with ⟨h1', _⟩ | ⟨k, d', hk, _, rfl⟩
+  · exact hs0 d (hin1 d h1') hnm
+  · exfalso
+    cases hkn : k.isName with
+    | true => rw [hcn _ _ hkn] at hnm; cases hnm
+    | false => exact hno v E0 h0 hd0 hos0 hn0 hvp hvs ⟨p, k⟩ (hs0 ⟨p, k⟩ (hin1 _ hk) hkn) hkn rfl
+
+theorem DKeep.of_src {Γ Δ : Ctx} {s : Stmt} (hs : s.src = true)
+    (ih : DtorOut Γ s.spine → DtorPinOK Γ s → DKeep Γ Δ s.spine) : DKeep Γ Δ [] := by
+  have h := ih (fun _ _ _ _ _ _ _ _ _ _ hr => by rw [src_spine hs] at hr; cases hr)
+    (DtorPinOK.of_spine_nil (src_spine hs))
+  rwa [src_spine hs] at h
+
+/-- A2-drop.2: a statement's typing gives no binding `letd` made, outside the
+    running scopes, a new view. The one rule that could, a borrowed
+    parameter's end (`reroot`), meets none that views the parameter in
+    memory (`DtorOut`, which every frame passes inward by `DtorIn`). -/
+theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P Γ F s Δ) :
+    DtorOut Γ s.spine → DtorPinOK Γ s → DKeep Γ Δ s.spine := by
+  induction h with
+  | skip => exact fun _ _ => DKeep.refl _ _
+  | seq hb _ _ iha ihb =>
+    intro ho hp
+    exact (iha ho hp).trans ((DKeep.of_src hb ihb).mono fun _ _ h => by cases h) fun _ h => h
+  | letv hs _ _ hr _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
+  | letcall hs _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
+  | @scope Γ Δ F x k _ _ _ _ ih =>
+    intro ho hp
+    exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
+  | @rbind Γ Δ F p k E _ _ _ _ _ _ _ ih =>
+    intro ho hp
+    refine ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitRoot _
+      fun v E hv hd hos hn _ hvs d hdd hnm h => ?_
+    exact ho v E hv hd hos hn hvs d hdd hnm (by simp [Stmt.spine, h])
+  | frozen _ _ ih => exact ih
+  | assign _ _ _ hr =>
+    intro _ _
+    exact (hr.dkeep.kill _ _ _).setE fun hd => absurd hd (by simp [hr.dtor_false.2])
+  | ite ha _ _ _ _ iha _ => exact fun _ _ => DKeep.of_src ha iha
+  | «while» => exact fun _ _ => DKeep.refl _ _
+  | push hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ hdb =>
+    intro _ _
+    refine ((hpa.dkeep hy).kill _ _ _).setE fun hd hos hn _ => ?_
+    obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := (hpa.dkeep hy) _ _ hx1 hd hos hn (by simp)
+    rw [hx] at h0; cases h0
+    have ht := hdb hd0
+    exact ⟨_, hx, hd0, hos0, hn0, fun d hdd hnm => hs0 d (by simpa [Entry.vdeps, ownHeld, ht] using hdd) hnm⟩
+  | free hx => exact fun _ _ => DKeep.moveOut hx _ _
+  | sub hw _ hw' ih =>
+    intro ho hp
+    have h0 := ih (ho.weaker hw) (hp.weaker hw)
+    rcases hw' with rfl | hw'
+    · exact h0.weaker_left hw
+    · exact (h0.weaker_right hw').weaker_left hw
+  | panic _ _ _ _ hdk => exact fun _ _ => hdk
+  | letrec hs _ _ _ _ _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
+  | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
+    exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
+  | callc hk _ _ _ _ _ _ _ _ hc _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
+  | catchR _ _ _ _ _ ih => exact ih
+  | letd hs _ _ hr _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
+  | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ ih =>
+    intro ho hp
+    exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
+
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by
   have hown : ∀ o U, OwnedAt (m.set x ⟨false, w⟩) o U → OwnedAt m o U := fun o U h => by

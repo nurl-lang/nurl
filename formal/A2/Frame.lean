@@ -104,6 +104,13 @@ theorem DKeep.kill {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) (e : Eff
   obtain ⟨E1, h1, hd1, hos1, hn1, hs1⟩ := h v E0 h0 hd hos hn hvs
   exact ⟨E1, h1, hd1, hos1, hn1, fun d hdd hnm => hs1 d (by rwa [killE_vdeps] at hdd) hnm⟩
 
+theorem DKeep.exitScope {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) (x : Var) :
+    DKeep Γ (A2.exitScope x Γ') sp := by
+  intro v E hv hd hos hn hvs
+  have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv
+  simp only [A2.exitScope, upd_ne _ _ hvx] at hv
+  exact (h.kill .replace false x) v E hv hd hos hn hvs
+
 /-- Setting an entry: one no `letd` made, or one that views no more than
     the old entry of a `letd` binding. -/
 theorem DKeep.setE {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) {y : Var} {E : Entry}
@@ -124,7 +131,9 @@ theorem DbindSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = non
   obtain ⟨Er, hEr, _⟩ := hw.dtor v E hE hd hos hn d hdd hnm
   rw [hdx, hx] at hEr; cases hEr
 
-theorem DtorSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none) (e : Eff) (hv : Bool) :
+/-- Only a binding `letd` made may be armed, so when none views `x` no
+    effect on `x` reaches a destructor. -/
+theorem DtorSafe.of_dbind {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (h : DbindSafe Γ x) (e : Eff) (hv : Bool) :
     DtorSafe Γ e hv x := by
   intro v E hE hd hos
   have hdb := hw.arm v E hE hd
@@ -136,7 +145,11 @@ theorem DtorSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none
       simpa only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] using hg
     simp only [Bool.true_and, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
     intro d hdd hr _
-    exact DbindSafe.of_fresh hw hx v E hE hdb hos hg' d hdd (by simpa using hr.2) hr.1
+    exact h v E hE hdb hos hg' d hdd (by simpa using hr.2) hr.1
+
+theorem DtorSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none) (e : Eff) (hv : Bool) :
+    DtorSafe Γ e hv x :=
+  DtorSafe.of_dbind hw (DbindSafe.of_fresh hw hx) e hv
 
 theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).live = (E.live && !hits e hv x E) := by
