@@ -1463,9 +1463,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     exact ⟨_, RhsT.at hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
       (exprT_ren h hab hi), fun x => elemE_lift h hab hy t x⟩
-  | @view y Ey t hy hl ht hhv =>
+  | @view y Ey t hy hl ht hhv hha =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    refine ⟨_, RhsT.view hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv,
+    refine ⟨_, RhsT.view hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv hha,
       fun x => ?_⟩
     refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode])
       (by simp) (by simp [liftE]) (fun _ => ?_) ?_

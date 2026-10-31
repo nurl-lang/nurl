@@ -455,7 +455,8 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         simp [derive, hm, Mode.isRoot]
       rw [hd]
       refine lend_valOK' hw (hi.pkgs _ _ T hT rfl) (fun t c d es ht => ⟨_, List.mem_singleton_self _, _,
-        Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl) (fun s hs => ?_)
+        Or.inl ⟨T, hT, ht⟩, lands_rootKind_self _ _⟩) hvs (hi.held _ Ea _ T hEa hl hT rfl)
+        (hi.shares _ Ea _ T hEa hT rfl rfl) (fun s hs => ?_)
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyRoot (F := F) hEa hl hm
@@ -498,6 +499,7 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         have hk' := h.rootKeep hi hb (hu _ (hdep rfl))
         exact ⟨hk'.vkeep, hk'.hkeep⟩
     have hok1 := hok0.keep (fun dep hd => hkeep dep fun hdn => ?_) (fun dep hd => hkeep dep fun hdn => ?_)
+      hb.blk
     · cases hf : Ea.ty.hasFn
       · rw [typedDeps_noFn hf, typedDeps_noFn hf]; exact hok1.memDeps hf
       · rw [typedDeps_hasFn hf, typedDeps_hasFn hf]; exact hok1
@@ -577,7 +579,7 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot y E0 h0
     refine ⟨sl, by rw [h.st_other hb hu, hsl], by rw [clean_ty, ht0]; exact hok, ?_⟩
     have hs1 := (hslot.weakLive ht0 hm0 hp0 hh0 (fun hl => (hsv (hl2 hl).1).1)).clean
-    refine hs1.keepLive fun hlv dep hd => ?_
+    refine hs1.keepLive (fun hlv dep hd => ?_) hb.blk
     -- what it depends on is untouched: a dependency on a moved argument ended it
     -- (a dead binding `letd` made keeps its views, but reads no memory)
     unfold Entry.clean at hd hlv
@@ -985,6 +987,51 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     | true =>
       obtain ⟨hren, hyx, E1, h1, rfl⟩ := h.dbind_frame hy hdb
       exact h.armed_frame hi hb hren hyx h1 hsl
+  shares y E sl T hy hst hown hT := by
+    rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+    · rw [h.st_x] at hst; cases hst; cases hT
+    · rw [st_r] at hst; cases hst; cases hT
+    · rw [h.st_inp hb hk] at hst; cases hst; cases hown
+    · -- a `sink` parameter: the argument's value, moved
+      rw [h.st_sink hb hk] at hst; cases hst
+      have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hm, _⟩ := hok
+      simp only at hty
+      obtain ⟨T', hT', _⟩ := h.slot_ownArg hi hb hkl hEa hla hm
+      rw [hT'] at hT; cases hT
+      show SharesOK _ t _; rw [← hty]; exact (hi.shares _ Ea _ _ hEa hT' rfl rfl).of_blk hb.blk
+    · -- an `inout` parameter: the argument itself
+      have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hcan, _⟩ := hok
+      simp only at hty
+      have hm : Ea.mode = .own := by
+        rcases hcan with hm | ⟨b', hm, _⟩
+        · exact hm
+        · exact absurd hm (h.noInout _ Ea b' hEa)
+      obtain ⟨T', hT', _⟩ := h.slot_ownArg hi hb hkl hEa hla hm
+      have hu := h.untouched_lt (h.argLt hkl) (h.arg_ne hkl).1 (fun k' t' hk' he => by
+        have := h.moving (lt_of_get hk') hkl (by rw [get_of hk']; rfl) he.symm
+        subst this; rw [hk] at hk'; cases hk')
+      rw [h.st_other hb hu, hT'] at hst; cases hst
+      simp only [Option.some.injEq] at hT; subst hT
+      show SharesOK _ t _; rw [← hty]; exact (hi.shares _ Ea _ _ hEa hT' rfl rfl).of_blk hb.blk
+    · -- the frame: a caller binding's value, as it was
+      obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
+      obtain ⟨E0, h0, _, ht0⟩ := h.postdt.2 y E1' h1'
+      by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+      · obtain ⟨k, t, hk, rfl⟩ := hs
+        rw [h.st_sinkArg hb hk] at hst; cases hst; cases hT
+      · rw [h.st_other hb (h.frame_untouched hy' hyx (fun k t hk he => hs ⟨k, t, hk, he⟩))] at hst
+        rw [clean_ty, ht0]; exact (hi.shares y E0 sl T h0 hst hown hT).of_blk hb.blk
+  blocks k bl hk := by
+    rw [show (callMem m m1 fn x).blk = m.blk from hb.blk] at hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, h3, h4.of_blk hb.blk⟩
   rootbLive p E hp hrb := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
