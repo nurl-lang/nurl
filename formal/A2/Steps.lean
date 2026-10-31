@@ -882,7 +882,7 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     (hr : RhsT Γ F r E Γ1) (hty : E.ty = Ex.ty) (hxd : x ∉ roots E.vdeps)
     {v : Val} {o : Bool} (he : EvalR m r (.ok v o m1)) {sl : Slot} (hsl : m1.st x = some sl)
     {a' : Nat → Bool} (hd : DropSlot m1.alloc sl a') (hpin : NoPin Γ x)
-    (hds : DtorSafe Γ1 .replace false x) :
+    (_hds : DtorSafe Γ1 .replace false x) :
     RhsPost m ({ m1 with alloc := a' }.set x ⟨o, some v⟩) Γ
       (setE (kill .replace false x Γ1) x { E with mode := Ex.mode }) F := by
   obtain ⟨post, out⟩ := rhs_pres hi hanch hr he
@@ -937,8 +937,8 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         · simp [Entry.vdeps, hE, Mode.ownSlot, hd']
   have hinv : MInv m' (setE (kill .replace false x Γ1) x { E with mode := Ex.mode }) := by
     refine post.inv.change hanch1 hx1 hxF
-      (hpin1.kills _ _) hnrb hds hst hheap rfl
-      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
+      (hpin1.kills _ _) hnrb hst hheap rfl
+      (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (fun h => by cases h) (by simp) (fun h => absurd rfl h)
     refine ⟨⟨o, some v⟩, by simp [m'], out.tyok, hslot, hm1.symm, fun hl hn r hr' => Or.inr ?_,
       by rw [ht1]; exact hty, fun _ hn => ?_, fun _ T hT => ?_, fun T hT => ?_,
       fun _ _ hn d hdd _ => Or.inr ?_, fun hd => absurd hd (by simp [(RhsT.dtor_false hr).1])⟩
@@ -1000,14 +1000,18 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   obtain ⟨_, hown, _⟩ := hslot
   obtain ⟨hvec, _, _⟩ := hown hos
   refine hi.change hanch hx hxF (hpin.1.kills _ _)
-    (by rw [hm]; simp) hpin.2 (fun o ho => by simp [upd_ne _ _ ho])
+    (by rw [hm]; simp) (fun o ho => by simp [upd_ne _ _ ho])
     (hi.heap.release ht (DropSlot.owned hf) ⟨true, none⟩ (fun _ T hT => by cases hT)) rfl
-    (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (by simp) (fun h => absurd rfl h)
+    (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (fun h => by cases h) (by simp) (fun h => absurd rfl h)
   have hs : SlotOK ({ m with alloc := a' }.set x ⟨true, none⟩) { E with live := false, dtor := false } ⟨true, none⟩ :=
     ⟨by simp [hos], fun _ => ⟨hvec, fun T h => (by cases h), fun h => (by simp at h)⟩,
       fun h => (by simp [hos] at h)⟩
-  exact ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
-    (fun h => by simp at h), (fun T h => by simp at h), (fun h => by simp at h), fun h => by simp at h⟩
+  refine ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
+    (fun h => by simp at h), (fun T h => by simp at h), fun hd _ hn dep hdd hnm => ?_, fun h => by simp at h⟩
+  obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor x E hx hd hos (Or.inl hn) dep hdd hnm
+  by_cases hrx : dep.root = x
+  · exact Or.inl ⟨hrx, Mode.isRoot_of_ownSlot hos⟩
+  · exact Or.inr ⟨hrx, killE .replace false x Er, by simp [A2.kill, hEr], by rw [killE_mode]; exact hroot⟩
 
 theorem HeapOK.remove {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.st x = some sl)
     {a' : Nat → Bool} (hd : DropSlot m.alloc sl a') : HeapOK ({ m with alloc := a' }.remove x) := by
@@ -1031,9 +1035,9 @@ theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {sl : Slot} (hsl : m.st x = some sl) {a' : Nat → Bool} (hd : DropSlot m.alloc sl a')
     (hpin : EndOK Γ x) :
     MInv ({ m with alloc := a' }.remove x) (exitScope x Γ) :=
-  hi.change hanch hx hxF (hpin.1.kills _ _) hnrb hpin.2 (fun o ho => by simp [upd_ne _ _ ho])
+  hi.change hanch hx hxF (hpin.1.kills _ _) hnrb (fun o ho => by simp [upd_ne _ _ ho])
     (hi.heap.remove hsl hd) rfl
-    (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) (fun _ => rfl)
+    (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) (fun _ => hpin.2.2) (fun _ => rfl)
     (fun _ _ h => by cases h)
 
 /-- Growing a tree by one element, its buffer moving or not. -/
@@ -1181,7 +1185,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hD : t.holdsView = false → D = []) {d' : Nat} {A' : Nat → Bool} {N' : Nat}
     (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
       (d' = m1.nid ∧ A' = upd (upd m1.alloc d false) m1.nid true ∧ N' = m1.nid + 1))
-    (hds : DtorSafe Γ1 .realloc t.holdsView x) :
+    (_hds : DtorSafe Γ1 .realloc t.holdsView x) :
     MInv ({ m1 with alloc := A', nid := N' }.set x ⟨true, some (.node t' c d' (es ++ [v]))⟩)
       (setE (kill .realloc t.holdsView x Γ1) x { Ex with held := Ex.held ++ D }) := by
   have hm : Ex.mode = .own := by
@@ -1252,7 +1256,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
           u' c' es' hs'
       · exact hp.sf _ o0 l0 h u c0 es0 hs'
   refine hi.change hanch hx hxF (fun _ _ _ _ ⟨r, k⟩ _ hb hk => by cases k <;> simp_all [Kind.bound, Eff.kills])
-    (by rw [hm]; simp) hds hst (hi.heap.grow hT hp.nd hp.al hp.dis hre hsfn) rfl ?_ ?_ (by simp)
+    (by rw [hm]; simp) hst (hi.heap.grow hT hp.nd hp.al hp.dis hre hsfn) rfl ?_ ?_ (fun h => by cases h) (by simp)
     (fun _ Ex' hx' hl0 hh0 hhv => by
       simp only [Option.some.injEq] at hx'; subst hx'
       rw [hty] at hhv

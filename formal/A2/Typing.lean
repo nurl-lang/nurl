@@ -144,6 +144,17 @@ theorem DtorSafe.root_ne {Γ : Ctx} {hv : Bool} {x : Var} (h : DtorSafe Γ .repl
   rw [hrx, hnm] at this
   cases hk : d.kind <;> simp_all [Eff.kills]
 
+/-- A2-drop.2: no binding `letd` made, armed or not, views `x` in memory:
+    what a scope's end asks, so that a moved-out destructor binding keeps
+    no view of a binding that is gone (a join may arm it again). -/
+def DbindSafe (Γ : Ctx) (x : Var) : Prop :=
+  ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    ∀ d ∈ E.vdeps, d.kind.isName = false → d.root ≠ x
+
+theorem DbindSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dbind = false) (x : Var) :
+    DbindSafe Γ x :=
+  fun v E hE hd => by rw [h v E hE] at hd; cases hd
+
 /-- With no binding that runs a destructor, every effect is safe. -/
 theorem DtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
     (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
@@ -203,7 +214,7 @@ structure EntryWeaker (E E' : Entry) : Prop where
 structure CtxWF (Γ : Ctx) : Prop where
   live : ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
-  dtor : ∀ v E, Γ v = some E → E.dtor = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+  dtor : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
     ∀ d ∈ E.vdeps, d.kind.isName = false → ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true
   /-- ... and only a binding `letd` made may run one. -/
   arm  : ∀ v E, Γ v = some E → E.dtor = true → E.dbind = true
@@ -259,7 +270,7 @@ def NoPin (Γ : Ctx) (x : Var) : Prop :=
 /-- What ending or replacing `x` asks of the context it happens in: no
     borrowed parameter changes `x` by name (`NoPin`), and no binding that
     may run a destructor views it (`DtorSafe`, A2-drop.2). -/
-def EndOK (Γ : Ctx) (x : Var) : Prop := NoPin Γ x ∧ DtorSafe Γ .replace false x
+def EndOK (Γ : Ctx) (x : Var) : Prop := NoPin Γ x ∧ DtorSafe Γ .replace false x ∧ DbindSafe Γ x
 
 def intE : Entry := ⟨.int, .bor, true, [], [], false, false⟩
 

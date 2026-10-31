@@ -96,7 +96,7 @@ theorem CtxWF.kill {Γ : Ctx} (h : CtxWF Γ) (e : Eff) (hv : Bool) (x : Var) : C
   obtain ⟨E, hE, hm, _⟩ := kill_cmode hv'
   simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'
   subst hv'
-  rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn; rw [killE_vdeps] at hdd
+  rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn; rw [killE_vdeps] at hdd
   obtain ⟨Er, hEr, hro⟩ := h.dtor v E hE hd hos hn d hdd hnm
   exact kill_root hEr hro
 
@@ -134,7 +134,7 @@ theorem NameWF.exitScope {Γ : Ctx} (h : NameWF Γ) (x : Var) : NameWF (exitScop
     exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hdx, A2.kill, hEr, killE_nil (root_vdeps ho hh)],
       hlr, hh, ht, ho, hc⟩
 
-theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) (hds : DtorSafe Γ' .replace false x) :
+theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) (hdb : DbindSafe Γ' x) :
     Weaker (exitScope x Γ) (exitScope x Γ') := by
   have hk := hw.kill .replace false x
   refine ⟨fun v => ?_, ?_, hw.names.exitScope x⟩
@@ -156,9 +156,9 @@ theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) (hds : Dt
       obtain ⟨E0, hE0, _, _⟩ := kill_cmode hv'
       simp only [A2.kill, hE0, Option.map_some, Option.some.injEq] at hv'
       subst hv'
-      rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
+      rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
       rw [killE_vdeps] at hdd
-      exact hds.root_ne hE0 hd hos hn hdd hnm
+      exact hdb v E0 hE0 hd hos hn d hdd hnm
     exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hrx, hEr], hro⟩
   · intro v E hv' hl hn r hr
     have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
