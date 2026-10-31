@@ -1109,14 +1109,15 @@ raw @ _p256_atbl_put ( Vec i ) tbl i d ( Vec i ) ax ( Vec i ) ay → v {
     = . tp + base 7 . yp 3
 }
 
-// Constant-time masked read of entry `digit` into (ex, ey). `digit` is
-// four bits of a SECRET scalar, so this must not become an indexed load:
-// it reads all sixteen entries, every time, and merges each one under a
-// mask that is all-ones exactly when d == digit. The mask is arithmetic,
-// not a comparison — `d ^ digit` is zero only on a match, and subtracting
-// one from zero borrows into the top bit, which nothing else can set for
-// a 4-bit value. No branch, and the address stream is identical for every
-// possible digit.
+// Constant-time masked read of digit·Q into (ex, ey), slot d holding
+// (d + 1)·Q (_p256_affine_multiples); digit 0 matches no slot and reads
+// all zero. `digit` (0 … 16) comes from a SECRET scalar, so this must not
+// become an indexed load: it reads all sixteen entries, every time, and
+// merges each one under a mask that is all-ones exactly when d + 1 ==
+// digit. The mask is arithmetic, not a comparison — `(d + 1) ^ digit` is
+// zero only on a match, and subtracting one from zero borrows into the
+// top bit, which nothing else can set for a 5-bit value. No branch, and
+// the address stream is identical for every possible digit.
 // requires: ex and ey hold 4 limbs, and tbl holds 16 entries (128 limbs).
 raw @ _p256_atbl_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i digit → v {
     : *i tp ( vec_data [i] tbl )
@@ -1126,7 +1127,7 @@ raw @ _p256_atbl_get_d ( Vec i ) ex ( Vec i ) ey ( Vec i ) tbl i digit → v {
     = . yp 0 0 = . yp 1 0 = . yp 2 0 = . yp 3 0
     : ~ i d 0
     ~ < d 16 {
-        : u64 z ^^ # u64 d # u64 digit
+        : u64 z ^^ # u64 + d 1 # u64 digit
         : i mask - 0 # i >> - z 1 63
         : i base * d 8
         : ~ i j 0
@@ -1403,24 +1404,21 @@ raw @ _p256_batch_affine P256Scratch scr ( Vec i ) jac i count ( Vec i ) tbl i a
 // requires: scr from _p256_scr_new, its registers unshrunk; qx, qy and one_m
 // hold 4 limbs.
 raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i ) one_m → ( Vec i ) {
-    // Jacobian 1·Q … 15·Q, flat x‖y‖z, 12 limbs each, at index d − 1.
-    : ( Vec i ) jac ( _magn 180 )
+    // Jacobian 1·Q … 16·Q, flat x‖y‖z, 12 limbs each, at index d − 1.
+    : ( Vec i ) jac ( _magn 192 )
     : P256Pt p ( _p256_pt_mag )
     ( __p256_copy_d . p x qx ) ( __p256_copy_d . p y qy ) ( __p256_copy_d . p z one_m )
     ( _p256_tbl_put jac 0 p )
     ( _p256_jdbl_d scr p )
     ( _p256_tbl_put jac 1 p )
     : ~ i d 3
-    ~ < d 16 {
+    ~ < d 17 {
         ( _p256_jmadd_d scr p qx qy one_m 0 )
         ( _p256_tbl_put jac - d 1 p )
         = d + d 1
     }
     : ( Vec i ) tbl ( _magn 128 )
-    : *i tp ( vec_data [i] tbl )
-    : ~ i k 0
-    ~ < k 8 { = . tp k 0 = k + k 1 }
-    ( _p256_batch_affine scr jac 15 tbl 1 one_m )
+    ( _p256_batch_affine scr jac 16 tbl 0 one_m )
     ^ tbl
 }
 
@@ -1459,26 +1457,51 @@ raw @ _p256_affine_multiples P256Scratch scr ( Vec i ) qx ( Vec i ) qy ( Vec i )
     : ( Vec i ) onem ( _p256_one_mont_s scr )
     : ( Vec i ) qx ( _p256_to_mont_s scr bx )
     : ( Vec i ) qy ( _p256_to_mont_s scr by )
+    // No addition below meets the doubling case (acc = the entry). Before
+    // window t's digit d (|d| ≤ 16) the accumulator is P·Q with P a
+    // multiple of 32 and 0 ≤ P ≤ k/32^t + 32, the Booth prefix being
+    // ⌊k/32^(t+1)⌋ or one more. For t ≥ 1 that is below n/32 + 32, so
+    // P ≡ ±d (mod n) only at P = 0: the accumulator ∞, which the mixed
+    // addition handles. For t = 0, P ≤ k + 32 < n + 32, and P = n + d would
+    // need n + d ≡ 0 (mod 32); n ≡ 17 makes that d = 15, P = n + 15, and
+    // then k = P + d = n + 30 (the doubling case) or k = P − 15 = n (the
+    // negation): neither is below n, which __p256_scalar_mod_n ensures.
+    : ( Vec i ) kl4 ( _p256_be32_to_limbs k 0 )
+    : ( Vec i ) kl ( _magn 5 )
+    ( __p256_copy_d kl kl4 )
+    : ( Vec i ) zero ( __zeros4 )
+    : ( Vec i ) ny ( _mag4 )
     : ( Vec i ) tbl ( _p256_affine_multiples scr qx qy onem )
     : P256Pt acc ( _p256_pt_mag )
     ( _p256_set_identity_d scr acc )
     : ( Vec i ) ex ( _mag4 )
     : ( Vec i ) ey ( _mag4 )
-    // MSB-first nibbles: window 0 is byte 0's high nibble.
-    : ~ i w 0
-    ~ < w 64 {
-        ( _p256_jdbl_d scr acc )
-        ( _p256_jdbl_d scr acc )
-        ( _p256_jdbl_d scr acc )
-        ( _p256_jdbl_d scr acc )
-        : i bv ?? ( vec_get [u] k / w 2 ) { T b → # i b F _ → 0 }
-        // `w` is public: choosing the nibble by its parity leaks nothing.
-        : i digit ? == % w 2 0 & 15 >> bv 4 & 15 bv
+    : *i kp ( vec_data [i] kl )
+    = . kp 4 0
+    // Booth digits, five bits each, the most significant window first:
+    // 52 additions (64 with unsigned four-bit windows) and five doublings
+    // between them — none before the first, which adds to ∞.
+    : ~ i w 51
+    ~ >= w 0 {
+        ? < w 51 {
+            ( _p256_jdbl_d scr acc )
+            ( _p256_jdbl_d scr acc )
+            ( _p256_jdbl_d scr acc )
+            ( _p256_jdbl_d scr acc )
+            ( _p256_jdbl_d scr acc )
+        } {}
+        // `w` is public; the window's bits and the digit are not.
+        : i inb ( __p256_booth_bits kp w )
+        : i neg - 0 >> inb 5
+        : i dd | & - 63 inb neg & inb ^^ neg - 0 1
+        : i digit + >> dd 1 & dd 1
         // keep-mask: −1 exactly when the digit is 0 (branch-free).
         : i keep - # i >> # u64 | digit - 0 digit 63 1
         ( _p256_atbl_get_d ex ey tbl digit )
+        ( __p256_sub_d scr ny zero ey )
+        ( __p256_lmerge_d ey neg ^^ neg - 0 1 ny ey )
         ( _p256_jmadd_d scr acc ex ey onem keep )
-        = w + w 1
+        = w - w 1
     }
     // Jacobian → affine: x = X/Z², y = Y/Z³ (Z = 0 → zinv = 0 → all-zero).
     : ( Vec i ) zinv ( _mag4 )
