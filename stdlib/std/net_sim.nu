@@ -468,16 +468,15 @@ $ `stdlib/dist/sim.nu`
 
 // ── the transport ────────────────────────────────────────────────
 
-// One socket of the network: which node, which fd there, the id it was
-// given for that fd, and — for a connection — the peer's "ip:port".
-// Never changes once made; what changes is in the network, under its
-// lock.
+// One socket of the network: which node, which fd there, and the id it
+// was given for that fd. Never changes once made; what changes is in the
+// network, under its lock. (Its address rides beside it in the handle:
+// tcp_conn_over / tcp_listener_over.)
 : NsSock {
     NetSim w
     i node
     i fd
     i sid
-    String peer
 }
 
 % Drop NsSock {
@@ -501,7 +500,50 @@ $ `stdlib/dist/sim.nu`
 }
 
 @ __ns_sock NetSim h i node i fd i sid sink String peer → TcpConn {
-    ^ ( tcp_conn_over ( dyn NetTransport @ NsSock { h node fd sid peer } ) )
+    ^ ( tcp_conn_over ( dyn NetTransport @ NsSock { h node fd sid } ) peer )
+}
+
+// A socket-layer count (`- err` below 0) as a NetErr result.
+@ __ns_count_result i n → !i NetErr {
+    ? >= n 0 { ^ @ !i NetErr { T n } } {}
+    ^ @ !i NetErr { F ( _net_err_of - 0 n ) }
+}
+
+// `len` bytes of `src` from `off` into the socket: `wait` T sends them
+// all (or fails, `- again` when the write deadline or the timeout passed
+// first); F takes what fits now, possibly 0. A count, or `- err`.
+@ __ns_write NsSock k ( Vec u ) src i off i len b wait → i {
+    ? <= len 0 { ^ 0 } {}
+    : *NetSimImpl w ( __ns_lock . k w )
+    : ~ i r - 0 ( sock_err_closed )
+    : ~ i sent 0
+    ~ ( __ns_holds w . k node . k fd . k sid ) {
+        ? ( __ns_wshut w . k node . k fd ) { = r - 0 ( sock_err_closed ) break } {}
+        : SockTab st . ( __ns_node w . k node ) st
+        ? >= sent len { = r sent break } {}
+        : i n ( sock_write st . k fd src + off sent - len sent ( __ns_now ) )
+        ? > n 0 {
+            = sent + sent n
+            // Out of the door now: the peer cannot answer bytes that are
+            // still queued here.
+            ( __ns_settle w )
+            ? | ! wait ( sock_is_nonblock st . k fd ) { = r sent break } {}
+        } {
+            ? != n - 0 ( sock_err_again ) { = r n break } {}
+            ? | ! wait ( sock_is_nonblock st . k fd ) { = r sent break } {}
+            // The send queue is full: wait for room, as long as the write
+            // deadline and the socket's timeout allow. Running out ends
+            // the write even after part of it went — the caller must
+            // retire a connection holding half a message.
+            : i ms ( sock_write_wait_ms st . k fd ( monotonic_ns ) )
+            ? == ms 0 { = r - 0 ( sock_err_again ) break } {}
+            ? == ( __ns_wait w . k node . k fd . k sid 1 ms ) 0 { = r - 0 ( sock_err_again ) break } {}
+            = r - 0 ( sock_err_closed )
+        }
+    }
+    ( __ns_settle w )
+    ( __ns_unlock w )
+    ^ r
 }
 
 % NetTransport NsSock {
@@ -534,7 +576,8 @@ $ `stdlib/dist/sim.nu`
         ^ @ !TcpConn NetErr { F # NetErr NetOther }
     }
 
-    @ nt_read_into NsSock k ( Vec u ) buf i max b wait → i {
+    @ nt_read_into NsSock k ( Vec u ) buf i max b wait → !i NetErr {
+        ? <= max 0 { ^ @ !i NetErr { T 0 } } {}
         : *NetSimImpl w ( __ns_lock . k w )
         : ~ i r - 0 ( sock_err_closed )
         ~ ( __ns_holds w . k node . k fd . k sid ) {
@@ -544,9 +587,8 @@ $ `stdlib/dist/sim.nu`
             ? != n - 0 ( sock_err_again ) { break } {}
             ? | ! wait ( sock_is_nonblock st . k fd ) { break } {}
             // Not there yet: wait as long as the socket's timeout says
-            // (0 = none set = for ever). A deadline that passes is the
-            // "again" already in `r`, which the caller reads as
-            // NetTimeout.
+            // (0 = none set = for ever). A deadline that passes leaves the
+            // "again" in `r`: NetTimeout.
             : i tmo ( sock_timeout st . k fd )
             ? == ( __ns_wait w . k node . k fd . k sid 0 ? > tmo 0 tmo -1 ) 0 { break } {}
             = r - 0 ( sock_err_closed )
@@ -554,40 +596,30 @@ $ `stdlib/dist/sim.nu`
         // A read opens the window: the update it queued goes out.
         ( __ns_settle w )
         ( __ns_unlock w )
-        ^ r
+        // tcp_read_into's results: data, the end of the stream as
+        // NetClosed — and, not waiting, "nothing yet" as Ok(0).
+        ? > r 0 { ^ @ !i NetErr { T r } } {}
+        ? == r 0 { ^ @ !i NetErr { F # NetErr NetClosed } } {}
+        ? & ! wait == r - 0 ( sock_err_again ) { ^ @ !i NetErr { T 0 } } {}
+        ^ @ !i NetErr { F ( _net_err_of - 0 r ) }
     }
 
-    @ nt_write NsSock k ( Vec u ) src i off i len b wait → i {
-        : *NetSimImpl w ( __ns_lock . k w )
-        : ~ i r - 0 ( sock_err_closed )
-        : ~ i sent 0
-        ~ ( __ns_holds w . k node . k fd . k sid ) {
-            ? ( __ns_wshut w . k node . k fd ) { = r - 0 ( sock_err_closed ) break } {}
-            : SockTab st . ( __ns_node w . k node ) st
-            ? >= sent len { = r sent break } {}
-            : i n ( sock_write st . k fd src + off sent - len sent ( __ns_now ) )
-            ? > n 0 {
-                = sent + sent n
-                // Out of the door now: the peer cannot answer bytes
-                // that are still queued here.
-                ( __ns_settle w )
-                ? | ! wait ( sock_is_nonblock st . k fd ) { = r sent break } {}
-            } {
-                ? != n - 0 ( sock_err_again ) { = r n break } {}
-                ? | ! wait ( sock_is_nonblock st . k fd ) { = r sent break } {}
-                // The send queue is full: wait for room, as long as the
-                // write deadline and the socket's timeout allow. Running
-                // out ends the write even after part of it went — the
-                // caller must retire a connection holding half a message.
-                : i ms ( sock_write_wait_ms st . k fd ( monotonic_ns ) )
-                ? == ms 0 { = r - 0 ( sock_err_again ) break } {}
-                ? == ( __ns_wait w . k node . k fd . k sid 1 ms ) 0 { = r - 0 ( sock_err_again ) break } {}
-                = r - 0 ( sock_err_closed )
-            }
-        }
-        ( __ns_settle w )
-        ( __ns_unlock w )
-        ^ r
+    @ nt_write NsSock k ( Vec u ) bytes → !v NetErr {
+        : i r ( __ns_write k bytes 0 ( vec_len [u] bytes ) T )
+        ? < r 0 { ^ @ !v NetErr { F ( _net_err_of - 0 r ) } } {}
+        ^ @ !v NetErr { T 0 }
+    }
+
+    @ nt_write_all NsSock k ( Vec u ) head ( Vec u ) body → !v NetErr {
+        : i r1 ( __ns_write k head 0 ( vec_len [u] head ) T )
+        ? < r1 0 { ^ @ !v NetErr { F ( _net_err_of - 0 r1 ) } } {}
+        : i r2 ( __ns_write k body 0 ( vec_len [u] body ) T )
+        ? < r2 0 { ^ @ !v NetErr { F ( _net_err_of - 0 r2 ) } } {}
+        ^ @ !v NetErr { T 0 }
+    }
+
+    @ nt_try_write NsSock k ( Vec u ) wire i off → !i NetErr {
+        ^ ( __ns_count_result ( __ns_write k wire off - ( vec_len [u] wire ) off F ) )
     }
 
     @ nt_wait_io NsSock k b readable b writable i timeout_ms → i {
@@ -655,15 +687,6 @@ $ `stdlib/dist/sim.nu`
         ( __ns_unlock w )
     }
 
-    @ nt_peer_addr NsSock k → s { ^ ( string_data . k peer ) }
-
-    @ nt_local_addr NsSock k → String {
-        : *NetSimImpl w ( __ns_lock . k w )
-        : SockTab st . ( __ns_node w . k node ) st
-        : i port ? ( __ns_holds w . k node . k fd . k sid ) ( sock_local_port st . k fd ) 0
-        ( __ns_unlock w )
-        ^ ( __ns_addr_string ( __ns_ip . k node ) port )
-    }
 }
 
 // ── listen and connect ───────────────────────────────────────────
@@ -685,8 +708,9 @@ $ `stdlib/dist/sim.nu`
         ^ @ !TcpListener NetErr { F ( _net_err_of err ) }
     } {}
     : i sid ( __ns_claim w node fd )
+    : String local ( __ns_addr_string ( __ns_ip node ) ( sock_local_port st fd ) )
     ( __ns_unlock w )
-    ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid ( string_new ) } ) ) }
+    ^ @ !TcpListener NetErr { T ( tcp_listener_over ( dyn NetTransport @ NsSock { h node fd sid } ) local ) }
 }
 
 // The node a dialled address names, from `node`'s point of view: one of
