@@ -332,7 +332,7 @@ jobs:
           path: build/logs/
 
   build-gates:
-    name: "build gates: probes, packaging, formatting, diagnostics"
+    name: "build gates: probes, controls, packaging"
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -615,6 +615,36 @@ jobs:
         # differ only in case.
         run: ./tools/check_windows_paths.sh
 
+  build-gates-2:
+    name: "build gates: formatting, diagnostics, tooling, protocols, codecs, coverage"
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The gates of the old single job (see build-corpus above). Measure
+    # before raising this: the next gate added here comes with a time.
+    timeout-minutes: 30
+    container:
+      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
+      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
+      # /opt/zig, all pre-installed. Exists because the runner pool's
+      # apt mirror degraded repeatedly (2026-08-19) and every job whose
+      # first step was `apt-get update` burned its whole timeout there.
+      # Pin the DATED tag; :latest is never referenced from CI.
+      image: nurllang/ci:ubuntu24-20260821
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: clang --version | head -1
+
+      - name: Build the toolchain (the corpus runs in build-corpus)
+        run: ./build.sh --no-tests
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so
@@ -665,36 +695,6 @@ jobs:
         # '{ i1, i64 }' where they wrote '?i', 'i64*' for '*i', '%Fruit'
         # for 'Fruit'. Reads the committed goldens' error/warning lines.
         run: ./tools/check_diag_nurl_types.sh
-
-  build-gates-2:
-    name: "build gates: tooling, protocols, codecs, coverage"
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    # The gates of the old single job (see build-corpus above). Measure
-    # before raising this: the next gate added here comes with a time.
-    timeout-minutes: 30
-    container:
-      # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
-      # qemu + grub for the unikernel gates, gdb, zstd, and zig at
-      # /opt/zig, all pre-installed. Exists because the runner pool's
-      # apt mirror degraded repeatedly (2026-08-19) and every job whose
-      # first step was `apt-get update` burned its whole timeout there.
-      # Pin the DATED tag; :latest is never referenced from CI.
-      image: nurllang/ci:ubuntu24-20260821
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Toolchain versions
-        run: clang --version | head -1
-
-      - name: Build the toolchain (the corpus runs in build-corpus)
-        run: ./build.sh --no-tests
 
       - name: nurl-mcp over stdio (inline source, formal/ docs, stdlib root)
         # The local MCP server as an agent drives it: inline source is
