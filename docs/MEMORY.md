@@ -28,7 +28,8 @@ specified in spec §3.3d.
   the bodies of `unsafe` functions is memory-safe and leak-free, data
   races and the panic path included. Each hole found so far is a probe in
   `tools/fuzz/holes/` that CI holds rejected or clean under the
-  sanitizers; none is known open. A view is tracked wherever it goes (§2.10).
+  sanitizers; the ones known open are listed in LIMITATIONS.md while
+  their fix is in progress. A view is tracked wherever it goes (§2.10).
 - **Conservative, with a fix.** A program the rules cannot prove safe is
   rejected. Each diagnostic names the rule and a concrete change that
   satisfies it (§6.3).
@@ -948,15 +949,18 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**No hole is known open.** The last one, agora #224, is closed in
-0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
+**Three holes are known open**: agora #242 (a join or value block bound by
+`:` and handed on by name), #247 (a thread closure consuming one capture
+releases another) and #252 (a `% Drop` holder moved on only one branch).
+[`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
+until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first
 (reallocated, moved to a `sink`, or released at a scope end, which ran
 drops in declaration order) it read freed memory. Scope-end drops now run
 newest first (§1), and such a drop is a use of what the view points into
 (§2.14).
 
-Every hole found is closed (0.81.0 to 0.83.0; old ids h426–h974,
+Every other hole found is closed (0.81.0 to 0.83.0; old ids h426–h974,
 named probes since then). Most were one shape in many contexts: a value lent out of one
 of the function's own locals, by a call, a try, a join's arm, a value
 block's tail or a binding of any of them, was handed back, stored,
