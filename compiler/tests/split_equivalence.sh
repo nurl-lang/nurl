@@ -169,6 +169,53 @@ check_structure() {  # check_structure <name>
     return "$bad"
 }
 
+# What a failed split build consumed, so one failure names the step
+# that lost code (Agora #234: three times on FreeBSD the link of
+# simd_dispatch's parts reported only "undefined symbol: main" or one
+# of part 3's functions, nurlc exited 0 and printed nothing, and the
+# rerun passed). Each part is printed with its size, checksum and
+# `define` count, and each object with its size and defined-symbol
+# count. Then the same nurlc command runs again into a fresh prefix and
+# is compared part by part with what was consumed, followed by the disk
+# and the kernel log. An empty part with an identical rerun points at
+# nurlc's write; a full part whose object defines nothing points at the
+# compile; a part that differs from its rerun means something changed
+# it between the write and the read.
+split_diag() {  # split_diag <src> <out> <parts>
+    local src="$1" out="$2" n="$3" f again nmtool syms
+    nmtool="$(command -v llvm-nm || command -v nm || true)"
+    echo "  parts nurlc wrote (bytes, cksum, defines):"
+    for f in "$out".[0-9]*.ll; do
+        [[ -e "$f" ]] || { echo "    none"; break; }
+        printf '    %s %s %s %s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')" \
+            "$(cksum < "$f" | cut -d' ' -f1)" "$(grep -c '^define ' "$f")"
+    done
+    echo "  objects clang made (bytes, defined symbols):"
+    for f in "$out".[0-9]*.o; do
+        [[ -e "$f" ]] || { echo "    none"; break; }
+        if [[ -n "$nmtool" ]] && syms="$("$nmtool" --defined-only "$f" 2>/dev/null)"; then
+            syms="$(printf '%s' "$syms" | grep -c .)"
+        else
+            syms="unreadable"
+        fi
+        printf '    %s %s %s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')" "$syms"
+    done
+    again="$(mktemp -d)"
+    "$NURLC" "--split=$n" "--split-out=$again/p" --split-min=1 "$src" > "$again/p.ll" 2>"$again/p.cerr"
+    echo "  the same nurlc command again: rc $?, against what was consumed:"
+    for f in "$out".[0-9]*.ll; do
+        [[ -e "$f" ]] || break
+        if cmp -s "$f" "$again/p.${f##*.split.}"; then
+            echo "    ${f##*/} identical"
+        else
+            echo "    ${f##*/} DIFFERS (rerun: $(wc -c < "$again/p.${f##*.split.}" 2>/dev/null | tr -d ' ') bytes)"
+        fi
+    done
+    rm -rf "$again"
+    echo "  disk: $(df -k "$WORK" | tail -1)"
+    dmesg 2>/dev/null | tail -3 | sed 's/^/  kernel: /'
+}
+
 for src in "${PROGRAMS[@]}"; do
     name="$(basename "$src" .nu)"
     if [[ ! -f "$WORK/$name.mono.built" ]]; then
@@ -178,6 +225,7 @@ for src in "${PROGRAMS[@]}"; do
     if [[ ! -f "$WORK/$name.split.built" ]]; then
         echo "FAIL $name — split build failed"
         tail -5 "$WORK/$name.split.cerr" "$WORK/$name.split.lerr" 2>/dev/null
+        split_diag "$src" "$WORK/$name.split" "$PARTS"
         fails=$((fails + 1))
         continue
     fi
@@ -219,6 +267,7 @@ if [[ -f "$WORK/nurlc.split.built" ]]; then
 else
     echo "FAIL nurlc — split build failed"
     tail -5 "$WORK/nurlc.split.cerr" "$WORK/nurlc.split.lerr" 2>/dev/null
+    split_diag compiler/nurlc.nu "$WORK/nurlc.split" "$PARTS"
     fails=$((fails + 1))
 fi
 
