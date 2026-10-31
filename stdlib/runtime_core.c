@@ -4280,8 +4280,9 @@ long long nurl_umulhi(long long a, long long b) {
  * std/rsa_mont's Montgomery multiply runs on. Not on the AES chain
  * either: Cannon Lake has IFMA without VAES.
  *
- * Seven environment variables can only ever take an answer AWAY, never
+ * Eight environment variables can only ever take an answer AWAY, never
  * grant one the CPU lacks: NURL_CPU_V3=0 makes nurl_cpu_x86_v3 answer 0,
+ * NURL_CPU_V4=0 does the same for nurl_cpu_x86_v4,
  * NURL_CPU_AES=0 does the same for nurl_cpu_x86_aes, NURL_CPU_VAES=0 for
  * nurl_cpu_x86_vaes, NURL_CPU_VAES512=0 for nurl_cpu_x86_vaes512 and
  * NURL_CPU_SHA=0 for nurl_cpu_x86_sha, NURL_CPU_ADX=0 for
@@ -4299,6 +4300,7 @@ static int nurl__cpu_vaes512 = -1;
 static int nurl__cpu_sha = -1;
 static int nurl__cpu_adx = -1;
 static int nurl__cpu_ifma = -1;
+static int nurl__cpu_v4 = -1;
 
 #if (defined(__x86_64__) || defined(_M_X64)) && \
     (defined(__GNUC__) || defined(__clang__))
@@ -4438,6 +4440,12 @@ static void nurl__cpu_detect(void) {
     }
     if (nurl__cpu_env_off("NURL_CPU_IFMA")) ifma = 0;
     nurl__cpu_ifma = ifma;
+    /* x86-64-v4 for `simd v4` clones: the AVX-512 bits and their XCR0
+     * state on top of v3 (asked only after it, as above), so taking v3
+     * away takes v4 with it. */
+    int v4 = nurl__cpu_v3 && nurl__cpu_avx512_bits();
+    if (nurl__cpu_env_off("NURL_CPU_V4")) v4 = 0;
+    nurl__cpu_v4 = v4;
     nurl__cpu_aes = aes;
     nurl__cpu_vaes = vaes;
     nurl__cpu_vaes512 = vaes512;
@@ -4510,11 +4518,12 @@ static void nurl__cpu_detect(void) {
     nurl__cpu_sha = 0;
     nurl__cpu_adx = 0;
     nurl__cpu_ifma = 0;
+    nurl__cpu_v4 = 0;
 }
 
 #else
 
-static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; nurl__cpu_adx = 0; nurl__cpu_ifma = 0; }
+static void nurl__cpu_detect(void) { nurl__cpu_v3 = 0; nurl__cpu_aes = 0; nurl__cpu_vaes = 0; nurl__cpu_vaes512 = 0; nurl__cpu_sha = 0; nurl__cpu_adx = 0; nurl__cpu_ifma = 0; nurl__cpu_v4 = 0; }
 
 #endif
 
@@ -4527,6 +4536,17 @@ __attribute__((constructor)) static void nurl__cpu_ctor(void) {
 int nurl_cpu_x86_v3(void) {
     if (nurl__cpu_v3 < 0) nurl__cpu_detect();
     return nurl__cpu_v3;
+}
+
+/* Does this CPU have x86-64-v4 — x86-64-v3 plus AVX-512 F/BW/CD/DQ/VL,
+ * with the OS saving the opmask and ZMM state? The dispatcher of a
+ * `simd v4 @` function asks it before the v3 answer and picks the
+ * `.x86v4` clone on 1: Skylake-SP, Ice Lake and later Intel server
+ * parts, Zen 4 and later AMD. NURL_CPU_V4=0 takes it away, and so does
+ * NURL_CPU_V3=0. */
+int nurl_cpu_x86_v4(void) {
+    if (nurl__cpu_v4 < 0) nurl__cpu_detect();
+    return nurl__cpu_v4;
 }
 
 /* Does this CPU have the crypto tier — x86-64-v2 + AES-NI + PCLMULQDQ?

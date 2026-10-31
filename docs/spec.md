@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.11. This document is the
+**Status:** language specification, grammar v2.12. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -413,10 +413,48 @@ second time with `--no-cpu-dispatch` and requires the baseline lowering
 to produce the same goldens, and it reads the marked set out of
 `stdlib/` so a newly marked function with no driver fails by name.
 
+A marked body may pick its path on `nurl_cpu_x86_v3()` (or
+`nurl_cpu_x86_v4()`, below) and pay nothing for it. Inside each clone, a
+probe whose answer its dispatcher already knows is a constant: the CPU is
+asked once, and v4 implies v3. So each clone keeps only the path it can
+take. ChaCha20's wide pass runs its eight-block v256 loop only where
+`nurl_cpu_x86_v3()` holds, and its `.base` clone does not compile that
+loop at all. The probes keep their meaning: a crypto `.base` also runs
+on a v3 CPU without the tier, and a plain `simd` `.x86v3` on a v4 one, so
+those calls stay calls.
+
 Generic functions may not be marked: a generic is monomorphised after the
 whole program is parsed, so the prefix would not survive to its
 instantiations. nurlc rejects `simd` there rather than accept a prefix
 that does nothing.
+
+#### `simd v4`: a third clone, for x86-64-v4 (grammar v2.12)
+
+`simd v4 @ f` asks for one more clone, `@f.x86v4`, compiled for
+x86-64-v4 (AVX-512 F/BW/CD/DQ/VL), and a dispatcher that tries it first:
+`nurl_cpu_x86_v4()` (the v3 answer plus the AVX-512 bits and the OS
+saving their state; `NURL_CPU_V4=0` takes it away, and so does
+`NURL_CPU_V3=0`), then the v3 answer, then the baseline. The body is
+the same source. AVX-512VL brings 32 vector registers, a one-instruction
+lane rotate (VPROLD) and three-input logic (VPTERNLOG) to 128- and
+256-bit vectors, and LLVM keeps to 256-bit vectors in the clone unless
+the body uses `v512`.
+
+The level is opt-in, per function, because a third clone is not free:
+it is code, and a body that does not gain from the wider ISA loses a
+little to the dispatch it adds. Measured when the level was introduced
+(Agora #227): ChaCha20's 16 KB pass 26 % faster in the v4 clone, while
+the same clone on ML-KEM keygen was 3 % slower, so only the former is
+marked. Mark a function `simd v4` when its v4 clone measures faster on
+an AVX-512 host, and keep it plain `simd` otherwise.
+
+`v4` is the only level. Any other word after `simd` (`simd v5 @`) is a
+diagnostic that names the valid one, and `v4` is not reserved: it is
+the level only right after `simd`. Everything above holds for the third
+clone too: it is tested by `compiler/tests/simd_dispatch_ir.sh`
+(machine code with VPROLD in it, and the golden under `NURL_CPU_V4=0`),
+it is kept whole with the others by `--split`, and a crypto-tier body
+gets the tier's features in it as in its `.x86v3`.
 
 ### 3.3c `inline` always-inline (grammar v2.7)
 
@@ -2970,7 +3008,8 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.11** (`unsafe % Send` /
+This document corresponds to **grammar v2.12** (the `simd v4` level,
+§3.3b; v2.11 `unsafe % Send` /
 `unsafe % Sync`, §3.3d, and the `v512` lane type, §4.1d; v2.10 foreign-parameter markers
 `in` / `sync` / `nocapture`, §7.2, and a foreach over a field, §5.4; v2.9
 the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §3.3d; v2.7 added the `inline` always-inline prefix, §3.3c; v2.6 added the `simd` CPU-dispatch prefix, §3.3b, and the
@@ -2979,7 +3018,7 @@ the `raw` caller-vouched prefix, §3.3e; v2.8 the `unsafe` raw-memory prefix, §
 [`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
 tracked in that file's prelude.
 
-A compiler is "v2.11 conformant" if it accepts every program the EBNF
+A compiler is "v2.12 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
 the semantics defined here. A program is "v2.11 portable" if it relies
 only on features documented in this spec or in

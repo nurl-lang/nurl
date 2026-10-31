@@ -279,6 +279,15 @@ if [ "$(uname -m)" = "x86_64" ] && command -v objdump >/dev/null 2>&1 &&
     else
         bad "__poly_wide: one vpmuludq a product" "$n_mul vpmuludq, $n_x32 split shifts"
     fi
+    # Its baseline clone never runs (callers ask __poly_wide_ok, and the
+    # kernel asks v3 itself), so it folds to `ret 0`: no multiply left in
+    # the binary (the LTO link usually inlines the clone away entirely).
+    n_bb=$(awk '/^[0-9a-f]+ <[^>]*__poly_wide[a-z0-9_]*\.base>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c 'pmuludq')
+    if [ "$n_bb" -eq 0 ]; then
+        ok "__poly_wide: the baseline clone does no arithmetic" "no pmuludq in its code"
+    else
+        bad "__poly_wide: the baseline clone does no arithmetic" "$n_bb pmuludq in its code"
+    fi
     cw=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v3>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s")
     n_sh=$(printf '%s\n' "$cw" | grep -cE 'vpshufb[[:space:]].*%ymm')
     n_xo=$(printf '%s\n' "$cw" | grep -cE 'vpxor[[:space:]].*%ymm')
@@ -289,6 +298,96 @@ if [ "$(uname -m)" = "x86_64" ] && command -v objdump >/dev/null 2>&1 &&
     fi
 else
     note "ChaCha20-Poly1305 v256 lowering" "skipped (not x86-64, or no objdump / build)"
+fi
+
+# ── 9. `simd v4`: the third clone (grammar v2.12) ────────────────────
+# simd_v4_dispatch.nu marks two functions `simd v4`. Each gets an
+# `.x86v4` clone compiled for x86-64-v4, beside its `.base` / `.x86v3`,
+# and a dispatcher that asks nurl_cpu_x86_v4 first. The v4 clone must
+# really be AVX-512 code (VPROLD on the rotates), ChaCha20's wide pass
+# too, the golden must hold with the third clone taken away
+# (NURL_CPU_V4=0), the CPU probes a clone's dispatcher already answered
+# must be constants inside it, and the runtime's v4 answer must agree
+# with /proc/cpuinfo.
+V4SRC="$SCRIPT_DIR/simd_v4_dispatch.nu"
+if "$NURLC" --cpu-dispatch "$V4SRC" > "$WORK/v4.ll" 2> "$WORK/v4.err"; then
+    n4=$(grep -cE '^define .*@__nurl_fn\.(mix|twice)[a-z0-9_]*\.x86v4\(.*"target-cpu"="x86-64-v4".*\+avx512vl' "$WORK/v4.ll")
+    n3=$(grep -cE '^define .*@__nurl_fn\.(mix|twice)[a-z0-9_]*\.x86v3\(' "$WORK/v4.ll")
+    nb=$(grep -cE '^define .*@__nurl_fn\.(mix|twice)[a-z0-9_]*\.base\(' "$WORK/v4.ll")
+    if [ "$n4" -eq 2 ] && [ "$n3" -eq 2 ] && [ "$nb" -eq 2 ]; then
+        ok "simd v4: base, x86v3 and x86-64-v4 clones" "2 of each"
+    else
+        bad "simd v4: base, x86v3 and x86-64-v4 clones" "base=$nb v3=$n3 v4=$n4 (want 2 each)"
+    fi
+    nq=$(grep -c '%__mv4r = call i32 @nurl_cpu_x86_v4()' "$WORK/v4.ll")
+    if [ "$nq" -eq 3 ]; then ok "simd v4: each dispatcher asks nurl_cpu_x86_v4" "$nq"
+    else bad "simd v4: each dispatcher asks nurl_cpu_x86_v4" "$nq calls (want 3)"; fi
+    # Inside a clone, the probes its dispatcher answered are constants:
+    # `level` asks none in any of its three clones, while plain-`simd`
+    # `level3` still asks v4 in its `.x86v3` (which a v4 CPU runs) and
+    # nothing in its `.base`.
+    probes() {  # probes <fn> <clone>: CPU probe calls left in that body
+        awk -v f="$1" -v c="$2" '$0 ~ "^define .*@__nurl_fn\\." f "(__fp[0-9]+)?\\." c "\\(" {p=1} p && /^}/ {p=0} p' "$WORK/v4.ll" |
+            grep -oE 'call i32 @nurl_cpu_x86_v[34]\(\)' | sed -E 's/.*_(v[34]).*/\1/' | sort | paste -sd, -
+    }
+    pf="$(probes level base)/$(probes level x86v3)/$(probes level x86v4)/$(probes level3 base)/$(probes level3 x86v3)"
+    if [ "$pf" = "////v4" ]; then ok "simd clones fold the probes their dispatcher answered" "only level3.x86v3 asks v4"
+    else bad "simd clones fold the probes their dispatcher answered" "left: $pf (want ////v4)"; fi
+    # A plain `simd` function asks no v4 question.
+    n0=$(grep -c 'nurl_cpu_x86_v4()' "$WORK/on.ll" | tr -d ' ')
+    nd=$(grep -c '^declare i32  @nurl_cpu_x86_v4()' "$WORK/on.ll" | tr -d ' ')
+    if [ $((n0 - nd)) -eq 0 ]; then ok "plain simd: no v4 dispatch" "0 calls"
+    else bad "plain simd: no v4 dispatch" "$((n0 - nd)) calls"; fi
+    if [ "$(uname -m)" = "x86_64" ] && command -v objdump >/dev/null 2>&1 &&
+            clang -O2 -flto -Wno-override-module "$WORK/v4.ll" "$ROOT/stdlib/runtime.o" \
+                -o "$WORK/v4" -lm -lpthread 2>/dev/null; then
+        objdump -d --no-show-raw-insn "$WORK/v4" > "$WORK/v4.s" 2>/dev/null
+        r4=$(awk '/^[0-9a-f]+ <[^>]*__nurl_fn\.mix[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/v4.s" | grep -c 'vprold')
+        r3=$(awk '/^[0-9a-f]+ <[^>]*__nurl_fn\.mix[a-z0-9_]*\.x86v3>:/{p=1} /^$/{p=0} p' "$WORK/v4.s" | grep -c 'vprold')
+        if [ "$r4" -gt 0 ] && [ "$r3" -eq 0 ]; then ok "simd v4: VPROLD in the v4 clone only" "$r4 vs $r3"
+        else bad "simd v4: VPROLD in the v4 clone only" "v4=$r4 v3=$r3"; fi
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/simd_v4_dispatch.txt" | tail -n +2)
+        for e in "NURL_CPU_V4=1" "NURL_CPU_V4=0" "NURL_CPU_V3=0"; do
+            got=$(env $e "$WORK/v4" 2>&1)
+            if [ "$got" = "$want" ]; then ok "simd_v4_dispatch with $e" "golden"
+            else bad "simd_v4_dispatch with $e" "${got:0:80}"; fi
+        done
+        if [ -f "$WORK/ccp.s" ]; then
+            c4=$(awk '/^[0-9a-f]+ <[^>]*__chacha20_xor_wide[a-z0-9_]*\.x86v4>:/{p=1} /^$/{p=0} p' "$WORK/ccp.s" | grep -c 'vprold')
+            if [ "$c4" -gt 0 ]; then ok "__chacha20_xor_wide: an x86-64-v4 clone with VPROLD" "$c4"
+            else bad "__chacha20_xor_wide: an x86-64-v4 clone with VPROLD" "none"; fi
+        fi
+    else
+        note "simd v4 machine code and run" "skipped (not x86-64, or no objdump / build)"
+    fi
+else
+    bad "simd_v4_dispatch: compiles" "$(head -2 "$WORK/v4.err")"
+fi
+if [ -r /proc/cpuinfo ] && [ "$(uname -m)" = "x86_64" ] && command -v clang >/dev/null 2>&1; then
+    want4=0
+    fl=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    have=1
+    for f in avx2 bmi2 fma avx512f avx512bw avx512cd avx512dq avx512vl; do
+        case "$fl" in *" $f "*) ;; *) have=0 ;; esac
+    done
+    want4=$have
+    cat > "$WORK/cpu4.c" <<'CEOF'
+#include <stdio.h>
+int nurl_cpu_x86_v4(void);
+int main(void) { printf("%d\n", nurl_cpu_x86_v4()); return 0; }
+CEOF
+    if clang -O0 "$WORK/cpu4.c" "$ROOT/stdlib/runtime.native.o" -o "$WORK/cpu4" \
+            -lm -lpthread -ldl -lsqlite3 2>/dev/null; then
+        got=$("$WORK/cpu4" 2>/dev/null)
+        off=$(NURL_CPU_V4=0 "$WORK/cpu4" 2>/dev/null)
+        if [ "$got" = "$want4" ] && [ "$off" = 0 ]; then
+            ok "runtime x86-64-v4 CPUID agrees with /proc/cpuinfo" "both say $got; NURL_CPU_V4=0 → 0"
+        else
+            bad "runtime x86-64-v4 CPUID agrees with /proc/cpuinfo" "runtime $got (masked $off), /proc/cpuinfo $want4"
+        fi
+    else
+        note "runtime x86-64-v4 CPUID cross-check" "skipped (could not link runtime.native.o)"
+    fi
 fi
 
 echo ""

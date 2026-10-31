@@ -441,8 +441,14 @@ unsafe @ __pp_next_is_decl FmtToks ts i k i n → b {
                     // at depth 0 so the following decl-starter knows
                     // to glue. `pub` inside a comment/string never
                     // reaches this path (those are non-IDENT kinds).
+                    // A word right after `simd` is its level (`v4`, grammar
+                    // v2.12) and still the prefix, so the `@` after it glues
+                    // too. Any word: `simd` is a keyword, so nothing else can
+                    // follow it there, and a misspelt level keeps its line
+                    // for the compiler's diagnostic.
+                    : b simd_lvl & == kind TT_FMT_IDENT ( __pp_text_eq prev_text `simd` )
                     ? & & == bd 0 == pd 0
-                    | | | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) ( __pp_text_eq text `unsafe` ) raw_pfx {
+                    | | | | | ( __pp_text_eq text `pub` ) ( __pp_text_eq text `simd` ) ( __pp_text_eq text `inline` ) ( __pp_text_eq text `unsafe` ) raw_pfx simd_lvl {
                         = prev_was_pub T
                     } {
                         = prev_was_pub F
