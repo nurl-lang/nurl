@@ -42,6 +42,10 @@ import re
 import statistics
 import sys
 
+# The CPU family, shared with every runner-measured report (bench/cpu_env.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from cpu_env import family_of  # noqa: E402
+
 IMPLS = ("NURL", "RUST")
 PROBES = ("v3", "aes", "vaes", "vaes512", "sha", "adx", "ifma")
 MIN_OPS = 50  # below this, work still in flight at the window's end skews CPU per operation
@@ -105,32 +109,6 @@ class Run:
         not a missing measurement."""
         c = self.cells.get((sec, case, impl))
         return bool(c) and c.get("elapsed_ns", 0) > 0 and c.get("ok", 0) == 0 and c.get("err", 0) == 0
-
-
-def family_of(env):
-    """The CPU family a run belongs to, from its vendor and flags alone."""
-    vendor_raw = env.get("cpu_vendor", "").strip()
-    vendor = {"AuthenticAMD": "amd", "GenuineIntel": "intel"}.get(vendor_raw)
-    if vendor is None:
-        vendor = re.sub(r"[^a-z0-9]+", "", vendor_raw.lower()) or "unknown"
-    flags = set(env.get("cpu_flags", "").split())
-    if {"avx512f", "avx512ifma"} <= flags:
-        vec = "avx512ifma"
-    elif "avx512f" in flags:
-        vec = "avx512"
-    elif "avx2" in flags:
-        vec = "avx2"
-    elif "sve" in flags:
-        vec = "sve"
-    elif "asimd" in flags:
-        vec = "neon"
-    else:
-        vec = "base"
-    parts = [vendor, vec]
-    for flag, tag in (("vaes", "vaes"), ("sha_ni", "sha"), ("sha2", "sha"), ("adx", "adx")):
-        if flag in flags and tag not in parts:
-            parts.append(tag)
-    return "-".join(parts)
 
 
 # ── numbers ──────────────────────────────────────────────────────────

@@ -27,6 +27,10 @@ release folds them into CHANGELOG.md and deletes them (RELEASING.md step 1).
     tools/changelog.py fold X.Y.Z [DATE]  # the release: a `## [X.Y.Z] — DATE`
                                           # section from the fragments, then
                                           # `git rm` them
+    tools/changelog.py fold X.Y.Z --into  # fragments that landed after the
+                                          # release PR's fold go into the
+                                          # existing [X.Y.Z] section, before
+                                          # the tag (RELEASING.md step 4)
 """
 import datetime
 import os
@@ -112,6 +116,39 @@ def split_changelog():
     return text[:i], text[i:j], text[j:]
 
 
+def fold_into(text, version, frags):
+    """text with each fragment's entries appended to its `### Section` of the
+    existing `## [version]` section, a missing heading added in SECTIONS order."""
+    start = text.find(f'\n## [{version}]')
+    if start < 0:
+        sys.exit(f'changelog.py: CHANGELOG.md has no `## [{version}]` section to fold into')
+    start += 1
+    end = text.find('\n## [', start + 1)
+    end = len(text) if end < 0 else end + 1
+    sec = text[start:end]
+    first = sec.find('\n### ')
+    pre, body = (sec, '') if first < 0 else (sec[:first + 1], sec[first + 1:])
+    chunks = {}
+    order = []
+    for part in re.split(r'(?m)^(?=### )', body):
+        if not part.strip():
+            continue
+        name = re.match(r'### (.+)', part).group(1).strip()
+        order.append(name)
+        chunks[name] = part.rstrip('\n')
+    for sname in SECTIONS:
+        entries = [b[sname] for _, b in frags if sname in b]
+        if not entries:
+            continue
+        if sname not in chunks:
+            chunks[sname] = f'### {sname}'
+            order.append(sname)
+        chunks[sname] += '\n\n' + '\n\n'.join(entries)
+    order.sort(key=lambda n: SECTIONS.index(n) if n in SECTIONS else len(SECTIONS))
+    new = pre.rstrip('\n') + '\n\n' + '\n\n'.join(chunks[n] for n in order) + '\n\n'
+    return text[:start] + new + text[end:]
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ''
     if cmd == 'check':
@@ -132,17 +169,21 @@ def main(argv):
         return 0
     if cmd == 'fold':
         if len(argv) < 3 or not re.match(r'\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$', argv[2]):
-            print('usage: tools/changelog.py fold X.Y.Z [YYYY-MM-DD]', file=sys.stderr)
+            print('usage: tools/changelog.py fold X.Y.Z [YYYY-MM-DD | --into]', file=sys.stderr)
             return 2
         version = argv[2]
-        date = argv[3] if len(argv) > 3 else datetime.date.today().isoformat()
+        into = len(argv) > 3 and argv[3] == '--into'
+        date = argv[3] if len(argv) > 3 and not into else datetime.date.today().isoformat()
         frags = fragments()
         if not frags:
             print('changelog.py: no fragments in changes/unreleased/: nothing to release', file=sys.stderr)
             return 1
-        head, unrel, rest = split_changelog()
-        text = (head + UNRELEASED + '\n\n' + UNRELEASED_NOTE + '\n\n'
-                + f'## [{version}] — {date}\n\n' + render(frags) + '\n\n' + rest)
+        if into:
+            text = fold_into(open(CHANGELOG, encoding='utf-8').read(), version, frags)
+        else:
+            head, unrel, rest = split_changelog()
+            text = (head + UNRELEASED + '\n\n' + UNRELEASED_NOTE + '\n\n'
+                    + f'## [{version}] — {date}\n\n' + render(frags) + '\n\n' + rest)
         paths = [os.path.join(FRAG_DIR, n) for n, _ in frags]
         # Tracked or not, staged or not: the fragments leave the tree and
         # the index together, before CHANGELOG.md is rewritten.
@@ -152,7 +193,7 @@ def main(argv):
                 os.remove(p)
         with open(CHANGELOG, 'w', encoding='utf-8') as fh:
             fh.write(text)
-        print(f'changelog.py: folded {len(frags)} fragment(s) into [{version}] — {date}')
+        print(f'changelog.py: folded {len(frags)} fragment(s) into [{version}]' + ('' if into else f' — {date}'))
         return 0
     print(__doc__, file=sys.stderr)
     return 2

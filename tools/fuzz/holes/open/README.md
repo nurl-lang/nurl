@@ -10,6 +10,13 @@ list in [`docs/LIMITATIONS.md`](../../../../docs/LIMITATIONS.md) at release time
 probes live in the tasks until the fix lands them in `tools/fuzz/holes/`
 as named probes (`// map:` line).
 
+**Elaborated twins** ([`twins.txt`](twins.txt)): `check.sh` also runs each
+probe's elaborated twin (`elab.py`), its producer form bound by `:` first
+and the consumer reading the binding (agora #242). A twin known to fault
+is listed in `twins.txt` with its reason and is not run. What the listed
+ones share is agora #242's open shape (`t242.md`), which #222's
+elaboration closes at the source.
+
 The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
 (`( string_free . ( box_get b ) name )`) went over as is, and the owner

@@ -3591,7 +3591,9 @@ typedef struct {
     const unsigned char *flag;
     uint64_t sequence;
 } NurlSlotEntry;
-static __thread NurlSlotEntry *nurl__jslot = NULL;
+/* (A hidden name, not `static`: nurl_journal_forget_slot's inline top-of-
+ * stack test reads it through NURL_TLS_LD.) */
+NURL_TLS_HOT NurlSlotEntry *nurl__jslot = NULL;
 NURL_TLS_HOT size_t nurl__jslot_len = 0;
 static __thread size_t nurl__jslot_cap = 0;
 
@@ -3688,18 +3690,36 @@ NURL_TLS_WRAP void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
  * top: no hashing, no bucket chain. The sequence numbers are the pointer
  * journal's, so a drain or truncate still walks both newest-first. */
 
-__attribute__((noinline))
-static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+/* The stack full, or the sequence exhausted: grow it (or stop), then
+ * push. Out of line and tail-called, so the registration every owned
+ * binding makes inside a recover extent stays a leaf: with the realloc in
+ * its body it saved and restored six callee-saved registers on every
+ * push, a third of its instructions (agora #283). */
+__attribute__((noinline, cold))
+static void nurl__jslot_push_grow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+    if (nurl__jrnl_sequence == UINT64_MAX) {
+        fputs("nurl: panic journal sequence exhausted\n", stderr);
+        abort();
+    }
     if (nurl__jslot_len == nurl__jslot_cap) {
         size_t cap = nurl__jslot_cap ? nurl__jslot_cap * 2 : 64;
         nurl__jslot = realloc(nurl__jslot, cap * sizeof(NurlSlotEntry));
         nurl__jslot_cap = cap;
     }
-    if (nurl__jrnl_sequence == UINT64_MAX) {
-        fputs("nurl: panic journal sequence exhausted\n", stderr);
-        abort();
-    }
     NurlSlotEntry *e = &nurl__jslot[nurl__jslot_len++];
+    e->slot = slot; e->drop = drop; e->flag = flag;
+    e->sequence = ++nurl__jrnl_sequence;
+}
+
+__attribute__((noinline))
+static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+    size_t len = nurl__jslot_len;
+    if (__builtin_expect(len == nurl__jslot_cap || nurl__jrnl_sequence == UINT64_MAX, 0)) {
+        nurl__jslot_push_grow(slot, drop, flag);
+        return;
+    }
+    NurlSlotEntry *e = &nurl__jslot[len];
+    nurl__jslot_len = len + 1;
     e->slot = slot; e->drop = drop; e->flag = flag;
     e->sequence = ++nurl__jrnl_sequence;
 }
@@ -3799,7 +3819,17 @@ static void nurl__jslot_forget_slow(void *slot) {
     nurl__jslot_pop_nulls();
 }
 NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
-    if (!slot || __builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1)) return;
+    size_t n;
+    if (!slot || __builtin_expect(!(n = NURL_TLS_LD(size_t, nurl__jslot_len)), 1)) return;
+    /* Bindings end in the reverse of their start, so the registration
+     * ending is the newest: popped here, inline, when nothing below it
+     * was ended out of order (a null the slow path would pop too). A call
+     * per binding exit was a tenth of a handler's instructions (#283). */
+    NurlSlotEntry *s = NURL_TLS_LD(NurlSlotEntry *, nurl__jslot);
+    if (s[n - 1].slot == slot && (n == 1 || s[n - 2].slot)) {
+        NURL_TLS_ST(nurl__jslot_len, n - 1);
+        return;
+    }
     nurl__jslot_forget_slow(slot);
 }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }

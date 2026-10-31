@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_borrow_lost_on_a_loop_round.nu:21:9: error: 'got' is used here, but on a path that reaches this line — an earlier round of a loop around it, or one branch of a '?' or '??' — it was consumed, stored or its source ended, while on another it still borrows: here it may hold nothing. Use 'got' only where it surely still holds its value (inside the branch, or before the loop hands it on), give it a fresh value before this line, or take a copy that lives on its own where it is bound: ( mem_dup got ).
+        ? == n 2 { = s + s ( eat got ) } {}
+        ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
