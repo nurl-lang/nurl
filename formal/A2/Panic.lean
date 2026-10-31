@@ -49,6 +49,21 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
       · have hvp : v ≠ p := fun e => hnd.1 (e ▸ hv)
         simp [Mem.remove, upd_ne _ _ hvp, h2 v hv]
   | frozenP _ ih => cases hr; exact ih hnd rfl
+  | letdP _ => cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl⟩
+  | scopeDPMoved _ hsl ih =>
+    rename_i x _ _ _
+    cases hr
+    simp only [Stmt.spine, List.nodup_cons] at hnd
+    obtain ⟨h1, h2, hh1, hc1, hnv, hnid⟩ := ih hnd.2 rfl
+    refine ⟨fun v hv => ?_, fun v hv => ?_, hh1.remove hsl DropSlot.moved,
+      covers_remove hc1 hsl DropSlot.moved, hnv, hnid⟩
+    · simp only [Stmt.spine, List.mem_cons, not_or] at hv
+      simp [Mem.remove, upd_ne _ _ hv.1, h1 v hv.2]
+    · simp only [Stmt.spine, List.mem_cons] at hv
+      rcases hv with rfl | hv
+      · simp [Mem.remove]
+      · have hvx : v ≠ x := fun e => hnd.1 (e ▸ hv)
+        simp [Mem.remove, upd_ne _ _ hvx, h2 v hv]
   | _ => cases hr
 
 end A2

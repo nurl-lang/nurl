@@ -251,6 +251,8 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .catchR x m0 s => .catchR (ρ x) m0 (s.rename ρ)
   | .unpair y x z s => .unpair (ρ y) (ρ x) (ρ z) (s.rename ρ)
   | .callc x c j zs s => .callc (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
+  | .letd x f r s => .letd (ρ x) f (r.rename ρ) (s.rename ρ)
+  | .scopeD x f s => .scopeD (ρ x) f (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -432,6 +434,33 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | catchP {m m1 : Mem} {x : Var} {m0 : Mem} {s : Stmt} :
       Step P m s (.panic m1) → (m1.st x).isSome →
       Step P m (.catchR x m0 s) (.ok (m1.set x ⟨false, some (.int 1)⟩) .skip)
+  -- A2-drop: a binding whose type has a destructor (`% Drop`).
+  | letd {m m' : Mem} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {v : Val} {o : Bool} :
+      m.st x = none → EvalR m r (.ok v o m') →
+      Step P m (.letd x f r s) (.ok (m'.set x ⟨o, some v⟩) (.scopeD x f s))
+  | letdP {m : Mem} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} :
+      EvalR m r .panic → Step P m (.letd x f r s) (.panic m)
+  | scopeDIn {m m' : Mem} {x : Var} {f : Nat} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.scopeD x f s) (.ok m' (.scopeD x f s'))
+  /-- The scope's end with `x` owning its value: the destructor runs on `x`
+      lent (its result in a fresh variable), then `scope x` frees the tree —
+      the drop glue after the impl. -/
+  | scopeDEnd {m : Mem} {x : Var} {f : Nat} {v : Val} :
+      m.st x = some ⟨true, some v⟩ →
+      Step P m (.scopeD x f .skip) (.ok { m with nv := m.nv + 1 } (.scope x (.letcall m.nv f [x] .skip)))
+  /-- A moved binding runs no destructor. -/
+  | scopeDMoved {m : Mem} {x : Var} {f : Nat} :
+      m.st x = some ⟨true, none⟩ → Step P m (.scopeD x f .skip) (.ok (m.remove x) .skip)
+  /-- A panic stops at the frame: the destructor runs, `x` is freed, and the
+      panic goes on. The frame is gone, so a panic in the destructor does not
+      run it again, and `scope x` still frees the fields. -/
+  | scopeDP {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} {v : Val} :
+      Step P m s (.panic m1) → m1.st x = some ⟨true, some v⟩ →
+      Step P m (.scopeD x f s)
+        (.ok { m1 with nv := m1.nv + 1 } (.seq (.scope x (.letcall m1.nv f [x] .skip)) .panic))
+  | scopeDPMoved {m m1 : Mem} {x : Var} {f : Nat} {s : Stmt} :
+      Step P m s (.panic m1) → m1.st x = some ⟨true, none⟩ →
+      Step P m (.scopeD x f s) (.panic (m1.remove x))
 
 /-- Reachability. -/
 inductive Steps (P : Prog) : Mem → Stmt → Res → Prop

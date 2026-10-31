@@ -237,6 +237,20 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
     catchOK := hi.catchOK
     cover := hi.cover }
 
+/-- A destructor scope binds, names and catches as a plain scope does, and
+    the invariant reads a statement only through those. -/
+theorem Inv.scopeD_iff {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {k : Stmt} :
+    Inv m Γ F (.scopeD x f k) ↔ Inv m Γ F (.scope x k) := by
+  constructor <;> intro hi <;> exact
+    { toMInv := hi.toMInv
+      nvS := fun v hv => hi.nvS v (by simpa [Stmt.vars] using hv)
+      nvF := hi.nvF
+      anch := fun p E hp hm hps => hi.anch p E hp hm (by simpa [Stmt.spine] using hps)
+      spineNd := by simpa [Stmt.spine] using hi.spineNd
+      spineDom := fun v hv => hi.spineDom v (by simpa [Stmt.spine] using hv)
+      catchOK := by simpa [CatchOK] using hi.catchOK
+      cover := hi.cover }
+
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
     (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F) :
     Inv m Γ F k :=
@@ -288,6 +302,12 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | scopeD _ hxF _ _ ih =>
+    intro v hv
+    simp only [Stmt.spine, List.mem_cons] at hv
+    rcases hv with rfl | hv
+    · exact hxF
+    · exact ih v hv
   | _ => intro v hv; simp [Stmt.spine] at hv
 
 
