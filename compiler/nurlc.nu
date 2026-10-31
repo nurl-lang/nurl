@@ -2976,6 +2976,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 // value block assigns its tail to, and what gen_assign would have snapshot
 // before the tail's value (__assign_pre_stmt).
 : ~ s g_blk_tail_to ``
+// …and it is that tail being assigned now (__assign_after: rule (A)).
+: ~ b g_bt_assign F
 : ~ b g_bt_src_env F
 : ~ i g_bt_sxn0 0
 : ~ i g_bt_sxmp0 0
@@ -22193,7 +22195,14 @@ unsafe @ __bck_take_back_expr i line → v {
         : b __bt_los & & != 0 g_auto_drop_strings ( seq ( nurl_llty __bt_vt ) `i8*` ) ( nurl_sym_has_word syms `__owned_strings__` __bt_ptr )
         : b __bt_lsl & ( mem_is_slice_ty __bt_vt ) ( nurl_sym_has_word syms `__owned_slices__` __bt_to )
         ( __bck_take_back_expr __bt_line )
+        = g_bt_assign T
         = last ( __assign_after lex syms cg __bt_to last __bt_line __bt_vt __bt_ptr `` __bt_los __bt_lsl __tail_tt __tail_tv g_bt_src_env g_bt_sxn0 g_bt_sxmp0 )
+        = g_bt_assign F
+        // (What the assignment stashed — the tail's lends to the binding,
+        // its moves — goes in here, while the block's names still exist:
+        // flushed at the `let`'s end, after the `}`, a lend of a block
+        // local named a binding that was gone, and the walk dropped it.)
+        ( bck_flush_moves )
     } {}
     ? __blk_scope {
         ? == g_did_ret 0 {
@@ -22240,7 +22249,9 @@ unsafe @ __bck_take_back_expr i line → v {
     // now, and the walk checks this one against the block's own state —
     // a binding its path already moved is a use after move, not a value
     // to hand on. Agora #274.)
-    ? & & & blk_val any == 0 g_did_ret ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
+    // (A tail assigned to the binding the block elaborates into was read by
+    // that assignment, which may have moved it: nothing to read here.)
+    ? & & & & blk_val ! __bt_on any == 0 g_did_ret ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
     ( bck_block_exit __rb_line )
     // Exits the tail statement handed up. An arm body leaves them to its
     // `?`/`??`; a bare block that is itself a block's tail hands them on;
@@ -25610,6 +25621,38 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ^ ? any deeper ``
 }
 
+// `a b c` as `a,b,c`.
+@ __words_commas s ws → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ws `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat x `` ) ( nurl_str_cat3 out `,` x )
+    }
+    ^ out
+}
+
+// The arguments of the call just made that are bindings below `name`'s
+// scope depth and own their value: what a value block's tail call may lend
+// out of the block's own locals, copied in by mem_blk_tail_copy_slot
+// (mem_local_lend_of asks the same of each). `` for none (agora #222).
+@ __ra_deep_locals i syms s name → s {
+    : s up ( mem_udrop_ptr_of syms name )
+    ? == 0 ( nurl_str_len up ) { ^ `` } {}
+    : ~ s rest ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) -1 )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq nm `-` ) {
+            : s ap ( mem_udrop_ptr_of syms nm )
+            ? & != 0 ( nurl_str_len ap ) | == 0 ( nurl_sym_len2 syms ap `__pname` ) ( __param_owned_slot syms ap ) {
+                = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 out ` ` nm )
+            } {}
+        } {}
+    }
+    ^ out
+}
+
 // The value of a value block (`= out { : W w … ( gets w ) }`) just stored
 // into `ptr`, a binding of an outer scope, when the block's tail call may
 // lend it out of a binding made below that one — the block's own locals
@@ -25617,6 +25660,27 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // copied in place on those paths, and the binding owns it there. The walk
 // takes such a value for what the block's names held (h216); this makes
 // it so (agora #190). One that cannot be copied is refused.
+// A value block's value that holds a view of one of the block's own locals
+// would outlive them (mem_blk_tail_copy_slot): refused, with the fix.
+@ __ra_view_die i syms s up s ty s deeper → v {
+    : s rec ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) )
+    : s r1 ( str_skip_word rec )
+    : s bn ( nurl_sym_get2 syms up `__bname` )
+    : ~ s w ``
+    : ~ s rest ( nurl_str_cat deeper `` )
+    ~ & == 0 ( nurl_str_len w ) != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq nm `-` ) { = w ( nurl_str_cat nm `` ) } {}
+    }
+    : s tshow ( llvm_to_nurl ty )
+    : s m1 ( nurl_str_cat4 `the value given to '` bn `' is lent out of '` w )
+    : s m2 ( nurl_str_cat4 `', which ends before '` bn `' does, and a '` tshow )
+    : s m3 ( nurl_str_cat3 `' holds a view: a copy of it would still view '` w `'. Declare '` )
+    : s m4 ( nurl_str_cat4 w `' where '` bn `' is declared, or hand back a value that holds no view of it (copy the bytes it views: slice_to_vec, string_from).` )
+    ( die_file_pos ( str_first_word rec ) ( nurl_str_to_int ( str_first_word r1 ) ) ( nurl_str_to_int ( str_first_word ( str_skip_word r1 ) ) )
+    ( nurl_str_cat4 m1 m2 m3 m4 ) )
+}
+
 @ mem_blk_tail_copy_slot i syms i cg s ptr s ty s up i rmin → v {
     ? == 0 ( nurl_str_len up ) { ^ v } {}
     : s deeper ( mem_blk_tail_deeper_args syms ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) rmin )
@@ -25624,6 +25688,11 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     : s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
     ? == 0 ( nurl_str_len lp ) { ^ v } {}
     ? ! ( __clone_supported ty syms ) { ( __nc_copy_die ( nurl_sym_get syms `__fn_self_name__` ) ty ) ^ v } {}
+    // (A value whose type holds a view keeps viewing what it was lent
+    // from after the copy: refused, as formal's rule (A) has it — a copy
+    // is a value that depends on nothing that ends only for a view-free
+    // type. Agora #222.)
+    ? ( __ty_holds_view ty 0 ) { ( __ra_view_die syms up ty deeper ) ^ v } {}
     : s lt ( nurl_llty ty )
     : s cur ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -29526,7 +29595,8 @@ unsafe @ bck_sx_ids s sx → s {
     // …and a `let` / `assign` its scalar mark and the call it binds — and
     // a view's what it read and its source expression.
     ? __bind {
-        : s lf6 ( bck_field rec 6 )
+        : s lf6r ( bck_field rec 6 )
+        : s lf6 ? < ( nurl_str_find lf6r `!` ) 0 lf6r ( __bck_callee_ids lf6r )
         // (A mark followed by `u`, a binding whose drop may read the views
         // it holds: its id is marked `vdu_`, and the walk reads the mark.)
         : s f5r ( bck_field rec 5 )
@@ -31923,6 +31993,24 @@ unsafe @ bck_sx_is_id s e → b {
     ( bck_plend_note ( nurl_str_cat4 id `:` callee tag ) line )
 }
 
+// The call a `let` / `assign` binds (field 6), with what it lends of the
+// block locals the value was copied out of (`callee!w,v`, rule (A) of
+// agora #222) as ids, as the walk names them (bck_take_plend skips those).
+@ __bck_callee_ids s f6 → s {
+    : i bang ( nurl_str_find f6 `!` )
+    : ~ s rest ( nurl_str_slice f6 + bang 1 - - ( nurl_str_len f6 ) bang 1 )
+    : ~ s out ( nurl_str_slice f6 0 + bang 1 )
+    : ~ b first T
+    ~ != 0 ( nurl_str_len rest ) {
+        : i c ( nurl_str_find rest `,` )
+        : s nm ? < c 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 c )
+        = rest ? < c 0 `` ( nurl_str_slice rest + c 1 - - ( nurl_str_len rest ) c 1 )
+        = out ( nurl_str_cat3 out ? first `` `,` ( nurl_str_int ( bck_intern ( bck_xl_resolve nm ) ) ) )
+        = first F
+    }
+    ^ out
+}
+
 // The pending lends are a set (bck_take_plend reads each entry once). A
 // loop walks its body more than once, and an entry each walk added again
 // grew the list without end: no fixpoint (agora #210), and memory for
@@ -31943,8 +32031,13 @@ unsafe @ bck_sx_is_id s e → b {
 
 // A call on this line handed back what may be an argument's handle
 // (bck `plend`): the binding it is bound to borrows from that argument.
-@ bck_take_plend s st i wid s line s callee → s {
+@ bck_take_plend s st i wid s line s callee0 → s {
     ? == 0 ( nurl_sym_len g_bck `plend` ) { ^ st } {}
+    // (`callee!id,id`: the bound call's arguments the value was copied out
+    // of where they lend it — rule (A), agora #222: no source of it.)
+    : i cbang ( nurl_str_find callee0 `!` )
+    : s callee ? < cbang 0 ( nurl_str_cat callee0 `` ) ( nurl_str_slice callee0 0 cbang )
+    : s cnot ? < cbang 0 `` ( nurl_str_cat3 `,` ( nurl_str_slice callee0 + cbang 1 - - ( nurl_str_len callee0 ) cbang 1 ) `,` )
     : s pl ( nurl_sym_get g_bck `plend` )
     ( bck_put `plend` `` )
     : ~ s plarc ``
@@ -31983,6 +32076,7 @@ unsafe @ bck_sx_is_id s e → b {
         // A field (`s.items`) is as alive as its binding; a field of a borrow
         // borrows what that borrow does.
         : i wr ( bck_path_root ( nurl_str_to_int w ) )
+        ? & != 0 ( nurl_str_len cnot ) >= ( nurl_str_find cnot ( nurl_str_cat3 `,` ( nurl_str_int wr ) `,` ) ) 0 { continue } {}
         : i v ( bck_st_get st wr )
         // (Lent through an Arc parameter, or a borrow of a payload lending
         // on: the binding is a view of the payload, §6.5.)
@@ -35507,6 +35601,18 @@ unsafe @ __assign_after i lex i syms i cg s name s val_in i bck_line s vt s ptr 
     // (A try over a call binds the call's payload: what follows asks the
     // call, as mem_udrop_bind_flag does — agora #194.)
     ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
+    // A value block's tail call assigned to the binding the block
+    // elaborates into, lending one of the block's own locals: they end at
+    // its `}`, before the binding does, so the value is copied in on the
+    // paths it is lent from them (mem_blk_tail_copy_slot, below) and the
+    // binding borrows none of them — rule (A) of agora #222 stage 1. The
+    // walk is told the same: those locals leave the call's lend sources.
+    : b __ra_on & g_bt_assign == bck_rhs_tt TT_LPAREN
+    : s __ra_deep ? __ra_on ( __ra_deep_locals syms name ) ``
+    ? != 0 ( nurl_str_len __ra_deep ) {
+        ( nurl_sym_def syms `__last_phi_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_phi_idents__` ) __ra_deep ) )
+        ( nurl_sym_def syms `__last_call_lend_idents__` ( __word_drop_all ( nurl_sym_get syms `__last_call_lend_idents__` ) __ra_deep ) )
+    } {}
     ( __nc_bind_lend_note syms name bck_rhs_tt T )
     = g_member_path_on __sxmp0
     = g_bck_rhs_path ? & == bck_rhs_tt TT_DOT != 0 g_borrowck ( nurl_str_cat g_member_path `` ) ``
@@ -35647,13 +35753,18 @@ unsafe @ __assign_after i lex i syms i cg s name s val_in i bck_line s vt s ptr 
     // AFTER the `assign` row so the walk revives `name` to Owned
     // first and the sources move second (a self-referential
     // `= a ? f a …` is skipped inside, not ordered around).
-    = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
+    = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( __word_drop_all ( bck_call_lend_srcs syms ) __ra_deep ) `-`
     : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
     = g_bck_rhs_callee ? | == bck_rhs_tt TT_LPAREN & == bck_rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) ( nurl_sym_get syms `__last_call_name__` ) ``
     // (A `( mem_dup … )` copy binds no call that lends: the line's other
     // calls lend to what it copied, not to the copy — bck_take_plend takes
     // only the bound call's.)
     ? & == bck_rhs_tt TT_LPAREN ( seq val ( nurl_sym_get syms `__last_fresh_reg__` ) ) { = g_bck_rhs_callee `mem_dup` } {}
+    // (Rule (A): what the value is copied out of where it lends it is no
+    // source of it — `callee!w,v`, bck_take_plend.)
+    ? & != 0 ( nurl_str_len __ra_deep ) != 0 ( nurl_str_len g_bck_rhs_callee ) {
+        = g_bck_rhs_callee ( nurl_str_cat3 g_bck_rhs_callee `!` ( __words_commas __ra_deep ) )
+    } {}
     // What the copy rules below make of this `s` (the walk's row says
     // it): a tracked owned one takes a fresh value or its own copy of
     // any other; a guarded one owns an owned call's value, a copy of a
@@ -36313,7 +36424,9 @@ unsafe @ __assign_after i lex i syms i cg s name s val_in i bck_line s vt s ptr 
     }
     // A value block whose tail call may lend what was bound below
     // `name`, which dies first: copied in place, owned (agora #190).
-    ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
+    // (…and a value block's tail call, assigned to the binding the block
+    // elaborates into: rule (A), agora #222 stage 1.)
+    ? & != 0 ( nurl_str_len ptr ) | __ra_on & | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 ) } {}
     // Replacing a tracked binding releases its previous registration via
     // nurl_free. Register the new owner, including copied/branch results.
     ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
