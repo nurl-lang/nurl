@@ -573,6 +573,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
         wf := fun h0 => absurd hEty h0
         valOwn := fun h0 => by rw [hEc] at h0; cases h0
         valBor := fun _ => by rw [hEty]; exact .int
+        shares := fun h0 => by rw [hEc] at h0; cases h0
         names := fun hn => by rcases hn with hn | hn
                               · exact absurd hEty hn
                               · rw [hEc] at hn; cases hn
@@ -628,7 +629,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
-    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩
+    refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, rfl, h.catchOK _ k⟩
       hI.pinIn hI.dtorIn
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv
