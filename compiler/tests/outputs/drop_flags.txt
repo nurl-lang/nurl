@@ -14,7 +14,7 @@ use 6
 [drop 10]
 [drop 11]
 end
-[drop 1]
-[drop 4]
-[drop 6]
 [drop 8]
+[drop 6]
+[drop 4]
+[drop 1]

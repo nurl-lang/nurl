@@ -217,6 +217,23 @@ drop_vec_get_local_join	§7.6	A2	agora #187: the same call as an arm of a return
 drop_vec_get_local_match	§7.6	A2	agora #187: the same element handed out of a returned `??` over the call	rejected	h816
 drop_vec_get_local_returned	§7.6	A2	agora #187: `^ ( vec_get [D] v 0 )`, `v` a local Vec of a `% Drop` value: the element dies with `v`	rejected	h815
 drop_vec_get_scrut_arm	§7.6	A2	agora #203: `?? ( vec_get [Res] xs 0 )` with a `% Drop` payload: the arm dropped the element xs still held	runs-clean	h941
+drop_view_dyn_impl_reads	§7.6	A2	agora #224: a `% Show` object over a type whose `% Drop` reads its view, kept past the String it views	rejected	-
+drop_view_dyn_impl_without_destructor	§7.6	A2	agora #224: a `% Show` object over a struct of views with no `% Drop`, kept past its source and never read	runs-clean	-
+drop_view_holder_declared_first	§7.6	A2	agora #224: `: ~ W w` declared before the String it is given a view of: with LIFO drops the String goes first	rejected	-
+drop_view_holder_first_in_block	§7.6	A2	agora #224: the same inside one inner block	rejected	-
+drop_view_holder_lent_to_callee	§7.6	A2	agora #224: a W handed to a callee, then dropped at the end of main after the String it views	runs-clean	-
+drop_view_holder_map_before_source	§7.6	A2	agora #224: a W kept in a HashMap made before the String it views	rejected	-
+drop_view_holder_vec_after_source	§7.6	A2	agora #224: a String, then a Vec of W holding views of it	runs-clean	-
+drop_view_holder_vec_before_source	§7.6	A2	agora #224: a W kept in a Vec made before the String it views	rejected	-
+drop_view_holder_without_destructor	§7.6	A2	agora #224: a struct of views with no `% Drop` kept past a reallocation of its source: never read, its drop reads nothing	runs-clean	-
+drop_view_slice_holder_declared_first	§7.6	A2	agora #224: a W holding a Slice of a Vec declared after it	rejected	-
+drop_view_slice_source_first	§7.6	A2	agora #224: a Vec, then a W holding a Slice of it	runs-clean	-
+drop_view_source_declared_first	§7.6	A2	agora #224: `: String s` then `: W w @ W { ( string_data s ) }`: the source first, its holder second	runs-clean	-
+drop_view_source_first_in_block	§7.6	A2	agora #224: the same inside one inner block	runs-clean	-
+drop_view_source_inner_scope	§7.6	A2	agora #224: w, declared outside a block, given a view of a String that ends with the block	rejected	-
+drop_view_source_moved	§7.6	A2	agora #224: the same with s handed to a `sink` callee while w views it	rejected	-
+drop_view_source_per_loop_pass	§7.6	A2	agora #224: w, outside a loop, given a view of a String made in each pass	rejected	-
+drop_view_source_reallocated	§7.6	A2	agora #224: `: W w @ W { ( string_data s ) }`, then `( string_push_str s … )` until the buffer moves: W's destructor read the old buffer	rejected	-
 dtor_closure_inside_drop_impl	§7.6	A2	closure inside Drop impl gets receiver's drop glue epilogue	runs-clean	h146
 dtor_disposer_leaks_fields	§7.6	A2	Drop impl hands receiver to sink disposer; fields leak	runs-clean	h147
 dtor_panics_runs_twice	§7.2	A2	Drop impl frees field then panics; unwind drops value again	runs-clean	h148

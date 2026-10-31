@@ -86,6 +86,12 @@ produced is dropped.
 A closure body is its own scope. It drops the values it creates and never
 the enclosing frame's.
 
+A scope drops its values newest first, in the reverse of the order they
+were bound in, as Rust and C++ do. A value made from a view of another —
+a struct holding `( string_data s )`, a `Slice` of a Vec — is bound after
+its source, so it is dropped before it, and a destructor that reads the
+view reads it while it is good (§2.14).
+
 ### Temporaries
 
 An allocating call used directly as another call's argument is a
@@ -764,6 +770,36 @@ adopts it (`string_adopt`, §1). `unsafe` code and the standard library
 manage raw strings by hand, and there a field a struct literal gave a
 fresh string is the struct's to release.
 
+### 2.14 A destructor's drop is a use
+
+A value whose type has a `% Drop` of the program's own runs that code when
+it is dropped, and the code may read the views the value holds — directly,
+or in a field, an element or a trait object's boxed value. So its drop is
+a use of what those views point into, as in Rust's drop check. A source of
+its views that ends first is refused where it ends: reallocated or moved
+while the holder lives, ended with an inner block the holder outlives, or
+dropped before the holder because it was bound after it (§1: newest first):
+
+<!-- doctest-prelude
+$ `stdlib/core/string.nu`
+: W { s v }
+% Drop W { @ drop W self → v { ( nurl_println . self v ) } }
+-->
+```nurl expect-error="'w' still holds a view of it"
+: ~ String s ( string_from `a heap string` )
+: W w @ W { ( string_data s ) }
+( string_push_str s `, grown` ) // error: 's' ends here — … — while 'w'
+                                //        still holds a view of it; 'w' is
+                                //        dropped later, and its destructor
+                                //        may read that view
+```
+
+Bind the holder after its source in the same scope, end it first in a
+block of its own, or have it hold a copy that owns its data. A value with
+no destructor of its own — a struct of views, a `Slice` — reads nothing
+when it is dropped and is not affected. A value lent by a call
+(`arc_get`, a field accessor) is dropped by its owner, not here.
+
 ## 3. Outside the rules
 
 The rules cover all safe code. What they do not check is a stated
@@ -864,6 +900,7 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | Mutating a container while iterating it | §2.5 |
 | Consuming an outer binding in a loop | §2.6 |
 | Stale view after reallocation, wherever the view was put | §2.10 |
+| A destructor reading a view whose source ended first | §2.14 |
 | A container changed by a call while a view of it is another argument | §2.4 |
 | A closure run that changes a capture with live views | §2.11 |
 | A closure that changes a capture, beside another route to it in one call | §2.11 |
@@ -911,15 +948,15 @@ much as the normal one (§7.2). Rc cycles are collected (§7.7).
 as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
-**One hole is known open: agora #224.** A destructor (`% Drop`) runs at
-its value's scope end and may read a view the value holds, but the
-checker does not count that drop as a use: when what the view reads ends
-first (reallocated, moved to a `sink`, or released at a scope end, which
-today runs drops in declaration order), the destructor reads freed
-memory. [`LIMITATIONS.md`](LIMITATIONS.md) says how to stay clear of it
-until the fix (reverse-order scope-end drops and a dropck rule) ships.
+**No hole is known open.** The last one, agora #224, is closed in
+0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
+read a view the value holds, and when what the view reads ended first
+(reallocated, moved to a `sink`, or released at a scope end, which ran
+drops in declaration order) it read freed memory. Scope-end drops now run
+newest first (§1), and such a drop is a use of what the view points into
+(§2.14).
 
-Every other hole found is closed (0.81.0 and 0.82.0; old ids h426–h974,
+Every hole found is closed (0.81.0 to 0.83.0; old ids h426–h974,
 named probes since then). Most were one shape in many contexts: a value lent out of one
 of the function's own locals, by a call, a try, a join's arm, a value
 block's tail or a binding of any of them, was handed back, stored,
