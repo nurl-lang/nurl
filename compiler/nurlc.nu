@@ -24543,7 +24543,7 @@ unsafe @ __src_has_raw_ptr s text → b {
         // with hs a payload inside the arm): the field moves out, since
         // its struct is dropped first — see mem_udrop_field_move.
         ? & & & == rhs_tt TT_DOT ( __is_handle_ty ty ) != 0 ( nurl_str_len rfp )
-        & ( nurl_sym_has_word syms `__user_drops__` rfp ) == 0 ( nurl_sym_len2 syms rfp `__pname` )
+        ( __fn_owns_struct syms rfp )
         { ? > ( nurl_str_to_int ( nurl_sym_get2 syms rfp `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
                 ( mem_udrop_field_move syms cg ptr ( nurl_sym_get syms `__last_field_read__` ) )
                 ^ v } {} } {}
@@ -24551,11 +24551,11 @@ unsafe @ __src_has_raw_ptr s text → b {
         // leaves no empty state behind): the binding would go on borrowing
         // it after its struct's block released it (h328).
         ? & & & == rhs_tt TT_DOT ( __nc_drop_ty ty ) != 0 ( nurl_str_len rfp )
-        & ( nurl_sym_has_word syms `__user_drops__` rfp ) == 0 ( nurl_sym_len2 syms rfp `__pname` )
+        ( __fn_owns_struct syms rfp )
         { ? > ( nurl_str_to_int ( nurl_sym_get2 syms rfp `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
                 ( __nc_outlive_die syms ptr ty ) } {} } {}
         ? & & == rhs_tt TT_DOT != 0 ( nurl_str_len rfp )
-        & ( nurl_sym_has_word syms `__user_drops__` rfp ) == 0 ( nurl_sym_len2 syms rfp `__pname` )
+        ( __fn_owns_struct syms rfp )
         { ( __sb syms ptr `local` ) }
         // Read through a pointer (`: item . p k`): an element of a buffer.
         { ( __sb syms ptr ? & == rhs_tt TT_DOT == 0 ( nurl_str_len rfp ) `elem` `1` ) }
@@ -39290,12 +39290,11 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
             // and may still use the field, the literal takes a copy and the
             // struct keeps its own (h189).
             : b __fs_defer & & != 0 g_defer_count ( __is_handle_ty fs_fty ) ( __clone_supported fs_fty syms )
-            ? & & __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr ) == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) {
+            ? & __fs_defer ( __fn_owns_struct syms fs_ptr ) {
                 = fval ( mem_emit_cloneif cg fty fval `1` )
                 = fld_lent ``
             } {}
-            ? & & & ! __fs_defer ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
-            == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) | ( __is_handle_ty fs_fty ) ( __is_closure_llty fs_fty )
+            ? & & ! __fs_defer ( __fn_owns_struct syms fs_ptr ) | ( __is_handle_ty fs_fty ) ( __is_closure_llty fs_fty )
             { ( mem_udrop_takeover_opt syms cg fs_ptr ( nurl_lex_line lex ) )
                 : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
                 ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty __tk )
@@ -41662,6 +41661,19 @@ unsafe @ __l2n_list s lst → s {
     : i pi ( nurl_sym_word_index syms `__fn_param_names__` var )
     ? < pi 0 { ^ F } {}
     ^ ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
+}
+
+// Does this function own the struct at alloca `ptr` and drop it on its way
+// out: a binding of its own, or a `sink` parameter, whose caller handed the
+// value over? A field read out of it is this function's to move — taken
+// out where it is handed on, as from a local (agora #257: a `sink`
+// parameter's field returned inside a result was dropped with the
+// parameter under the caller, or never dropped at all).
+@ __fn_owns_struct i syms s ptr → b {
+    ? ! ( nurl_sym_has_word syms `__user_drops__` ptr ) { ^ F } {}
+    : s pn ( nurl_sym_get2 syms ptr `__pname` )
+    ? == 0 ( nurl_str_len pn ) { ^ T } {}
+    ^ ( __capture_sinkp pn syms )
 }
 
 // The names a source expression holds as written (`v`, a closure's

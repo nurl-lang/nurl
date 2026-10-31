@@ -743,6 +743,10 @@ sink_arg_block_join_lend	§7.6	A2	the same join as a block's tail	runs-clean	h93
 sink_arg_join_fresh_path_guard	§7.6	A2	the sink join taking its fresh arm: moved, nothing copied	runs-clean	h936
 sink_arg_join_lend	§7.6	A2	a join whose arm lends a local, handed to a `sink` parameter: the callee freed the local's string	runs-clean	h934
 sink_enum_payload_field_returned	§7.6	A2	agora #178: a field of a `sink` enum parameter's payload returned through a `??` arm	runs-clean	h716
+sink_param_field_returned_in_a_result	§7.6	A2	agora #257: a sink parameter's field returned directly inside a result (leak)	runs-clean	-
+sink_param_field_returned_in_a_result_bound	§7.6	A2	agora #257: a sink parameter's field bound and returned inside a result (UAF)	runs-clean	-
+sink_param_field_returned_in_a_struct_literal	§7.6	A2	agora #257: a sink parameter's field returned inside a struct literal (UAF)	runs-clean	-
+sink_param_field_returned_in_an_option	§7.6	A2	agora #257: a sink parameter's field bound and returned inside an option (UAF)	runs-clean	-
 sink_param_field_through_a_cond_returned	§7.6	A2	agora #178: a `sink` parameter's field returned through a `?`	runs-clean	h714
 sink_parameter_handed_back	§7.6	A2	sink struct param copied and returned by builder; result leaked	runs-clean	h108
 slhdsa_keygen_seeds_of_the_wrong_size	§3.3d	B	`( slhdsa_keygen_derand 129 a b c )` with one-byte seeds: the hypertree's hashes read SK.seed and PK.seed as n = 16 bytes through `vec_data`, past the end of each Vec.	runs-clean	h468
