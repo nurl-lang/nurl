@@ -20,17 +20,17 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     exact ⟨ha i h1, Nat.lt_of_lt_of_le h2 hn⟩
   self x t h := hh.self x t (by unfold OwnedAt at *; rw [← hst]; exact h)
 
-theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) :
+theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (hb : m'.blk = m.blk) :
     ∀ {s : Stmt}, CatchOK m s → CatchOK m' s
-  | .seq a _, h => CatchOK.of_st hst hnv (s := a) h
-  | .scope _ k, h => CatchOK.of_st hst hnv (s := k) h
-  | .scopeD _ _ k, h => CatchOK.of_st hst hnv (s := k) h
-  | .rbind _ k, h => CatchOK.of_st hst hnv (s := k) h
-  | .frozen _ k, h => CatchOK.of_st hst hnv (s := k) h
+  | .seq a _, h => CatchOK.of_st hst hnv hb (s := a) h
+  | .scope _ k, h => CatchOK.of_st hst hnv hb (s := k) h
+  | .scopeD _ _ k, h => CatchOK.of_st hst hnv hb (s := k) h
+  | .rbind _ k, h => CatchOK.of_st hst hnv hb (s := k) h
+  | .frozen _ k, h => CatchOK.of_st hst hnv hb (s := k) h
   | .catchR x m0 k, h => by
-    obtain ⟨h1, h2, h3, h4⟩ := h
-    exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv,
-      CatchOK.of_st hst hnv (s := k) h4⟩
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv, by rw [hb]; exact h4,
+      CatchOK.of_st hst hnv hb (s := k) h5⟩
   | .skip, _ => trivial
   | .letv .., _ => trivial
   | .letcall .., _ => trivial
@@ -46,12 +46,13 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) :
   | .letd .., _ => trivial
 
 theorem inv_of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
-    (hst : m'.st = m.st) (hnv : m'.nv = m.nv) (hh : HeapOK m') (hc : Covers m') : Inv m' Γ F s :=
-  { toMInv := hi.toMInv.of_st hst hh (by rw [hnv]; exact Nat.le_refl _)
+    (hst : m'.st = m.st) (hnv : m'.nv = m.nv) (hh : HeapOK m') (hc : Covers m')
+    (hb : m'.blk = m.blk := by rfl) : Inv m' Γ F s :=
+  { toMInv := hi.toMInv.of_st hst hh (by rw [hnv]; exact Nat.le_refl _) hb
     nvS := fun v hv => by rw [hnv]; exact hi.nvS v hv
     nvF := fun v hv => by rw [hnv]; exact hi.nvF v hv
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
-    catchOK := CatchOK.of_st hst (by rw [hnv]; exact Nat.le_refl _) hi.catchOK
+    catchOK := CatchOK.of_st hst (by rw [hnv]; exact Nat.le_refl _) hb hi.catchOK
     cover := hc, pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut, dtorIn := hi.dtorIn }
 
 /-- **Another thread allocated**: a later `nid` keeps every per-thread fact. -/

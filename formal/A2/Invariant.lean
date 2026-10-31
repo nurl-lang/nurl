@@ -56,10 +56,20 @@ inductive ArcIn : Ty → Val → Ty → Nat → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
       {k : Nat} : ArcIn te x u k → ArcIn (.fn ms) (.pkg fs te ms x cs) u k
 
-/-- A3.1: every share a tree holds names a block whose payload is of the
-    share's type (the block lives while a share of it is owned). -/
-def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop :=
-  ∀ u k, ArcIn τ T u k → ∃ bl, m.blk k = some bl ∧ bl.ty = u
+/-- A3.1: every share a tree holds names a block of the store `B` whose
+    payload is of the share's type (the block lives while a share of it is
+    owned). -/
+def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
+  ∀ u k, ArcIn τ T u k → ∃ bl, B k = some bl ∧ bl.ty = u
+
+/-- `SharesIn` over a memory's blocks. -/
+def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
+
+/-- A3.1: every block of the store `B` holds a well-formed tree of a type
+    that holds no views, and the shares it holds name blocks of `B` too. -/
+def BlocksOK (B : Nat → Option Blk) : Prop :=
+  ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
+    SharesIn B bl.ty bl.pay
 
 theorem SharesOK.of_blk {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : m'.blk = m.blk) :
     SharesOK m' τ T := fun u k ha => by rw [hb]; exact h u k ha

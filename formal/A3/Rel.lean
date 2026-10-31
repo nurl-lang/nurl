@@ -40,7 +40,7 @@ inductive GhostRel : Stmt → Stmt → Prop
   | rbind (p : Var) {s s' : Stmt} : GhostRel s s' → GhostRel (.rbind p s) (.rbind p s')
   | frozen (z : List Var) {s s' : Stmt} : GhostRel s s' → GhostRel (.frozen z s) (.frozen z s')
   | catchR (x : Var) {m0 m0' : Mem} {s s' : Stmt} :
-      m0'.st = m0.st → m0'.nv = m0.nv → m0'.nid = m0.nid →
+      m0'.st = m0.st → m0'.nv = m0.nv → m0'.nid = m0.nid → m0'.blk = m0.blk →
       (∀ i, m0.alloc i = true → m0'.alloc i = true) →
       GhostRel s s' → GhostRel (.catchR x m0 s) (.catchR x m0' s')
 

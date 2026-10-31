@@ -27,6 +27,8 @@ def SpawnArgsLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     Redex s K (.letcall x f args k) → spawn f = true → P[f]? = some fn → MoveArgs m.st args vs st' →
     vs.length = fn.params.length ∧
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt → WFv pt.2 v) ∧
+    (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      SharesOK m pt.2 v) ∧
     (∀ (j : Nat) (v : Val), vs[j]? = some v → ∃ a, args[j]? = some a ∧ m.st a = some ⟨true, some v⟩) ∧
     (∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w → ∀ i ∈ v.ids, i ∉ w.ids)
 
@@ -40,6 +42,8 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     (∀ v ∈ vs, SelfFree v) → (∀ v ∈ vs, PkgsOK v) → (∀ v ∈ vs, PkgOK P v) →
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
     ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
+    (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      SharesIn B pt.2 v) → BlocksOK B →
     ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
@@ -92,7 +96,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
   have hilen' : i < ps.length := by rw [hlen]; exact hilen
   obtain ⟨Γ, F, Δ, _, hinv, hcds, _, _⟩ := id hto
   obtain ⟨a', hfr, hto'⟩ := hSO hto hK hsp hf hx hmv
-  obtain ⟨hvlen, hwf, hslots, hvdisj⟩ := hSA hto hK hsp hf hmv
+  obtain ⟨hvlen, hwf, hsh, hslots, hvdisj⟩ := hSA hto hK hsp hf hmv
   -- the moved trees: owned slots of the spawner
   have hown : ∀ v ∈ vs, ∃ a0, t.st a0 = some ⟨true, some v⟩ := fun v hv => by
     obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hv
@@ -120,7 +124,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact memCodes_iff.mp hcds a0 true v h0)
-    hpart (fun v hv k hk => (hids v hv k hk).2)
+    hpart (fun v hv k hk => (hids v hv k hk).2) hsh hinv.blocks
   -- the spawner keeps `a'`, the new thread gets `aN`
   have ha'a : ∀ k, a' k = true → a k = true := fun k hk => FreesL.le hfr hk
   have haNa : ∀ k, aN k = true → a k = true := fun k hk => minus_le k hk

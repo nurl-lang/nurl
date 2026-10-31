@@ -107,9 +107,9 @@ theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Me
   | rbind _ ih => exact ih hc'
   | frozen _ ih => exact ih hc'
   | catchR h ih =>
-    obtain ⟨h1, h2, h3, h4⟩ := hc'
+    obtain ⟨h1, h2, h3, h4, h5⟩ := hc'
     have hsp := Redex.spine_eq h hy
-    exact ⟨by rw [hsp]; exact h1, by rw [hsp]; exact h2, h3, ih h4⟩
+    exact ⟨by rw [hsp]; exact h1, by rw [hsp]; exact h2, h3, h4, ih h5⟩
   | scopeD _ ih => exact ih hc'
 
 theorem Redex.pinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx} {y y' : Stmt}
@@ -666,13 +666,13 @@ theorem letcall_call {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {x f : Nat} 
 
 /-- An owned tree is well-formed at its binding's type. -/
 theorem owned_wf {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {t : Val}
-    (hy : m.st y = some ⟨true, some t⟩) : ∃ E, Γ y = some E ∧ WFv E.ty t := by
+    (hy : m.st y = some ⟨true, some t⟩) : ∃ E, Γ y = some E ∧ WFv E.ty t ∧ SharesOK m E.ty t := by
   have hd := hi.dom y
   rw [hy] at hd
   obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hd
   obtain ⟨sl, hsl, _, ho, hown, _⟩ := hi.slot y E hE
   rw [hy] at hsl; cases hsl
-  exact ⟨E, hE, (hown ho.symm).2.1 t rfl⟩
+  exact ⟨E, hE, (hown ho.symm).2.1 t rfl, hi.shares y E _ t hE hy rfl rfl⟩
 
 /-- **The spawner after a spawn**: the moved trees are freed from its own
     part of the address space, in argument order, and A2 knows of what is
@@ -689,7 +689,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   have hown : ∀ y t, m.st y = some ⟨true, some t⟩ →
       (∃ τ, WFv τ t) ∧ t.ids.Nodup ∧ ∀ i ∈ t.ids, m.alloc i = true := by
     intro y t hy
-    obtain ⟨E, _, hw⟩ := owned_wf hi.toMInv hy
+    obtain ⟨E, _, hw, -⟩ := owned_wf hi.toMInv hy
     exact ⟨⟨_, hw⟩, hi.heap.nodup y t hy, fun i hi' => (hi.heap.alloc y t hy i hi').1⟩
   obtain ⟨a', hfl⟩ := hmv.frees m.alloc hown (fun y z t u hne hy hz => hi.heap.disj y z t u hne hy hz)
   refine ⟨a', hfl, ?_⟩
@@ -741,6 +741,8 @@ theorem spawn_args {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
     vs.length = fn.params.length ∧
     (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
       WFv pt.2 v) ∧
+    (∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      SharesOK m pt.2 v) ∧
     (∀ (j : Nat) (v : Val), vs[j]? = some v →
       ∃ a, args[j]? = some a ∧ m.st a = some ⟨true, some v⟩) ∧
     (∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w →
@@ -751,17 +753,22 @@ theorem spawn_args {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
   obtain ⟨fn', hf', hlen, hargs, -⟩ := hc
   rw [hf] at hf'; cases hf'
   obtain ⟨-, -, hall⟩ := spawn_fn hP hS hsp hf
-  refine ⟨hmv.length.trans hlen, fun j v pt hv hpt => ?_, hmv.get, fun j k v w hjk hv hw => ?_⟩
-  · obtain ⟨a, ha, hav⟩ := hmv.get j v hv
+  -- a moved tree is an owned argument's, of the parameter's type
+  have hval : ∀ (j : Nat) (v : Val) (pt : PMode × Ty), vs[j]? = some v → fn.params[j]? = some pt →
+      WFv pt.2 v ∧ SharesOK m pt.2 v := by
+    intro j v pt hv hpt
+    obtain ⟨a, ha, hav⟩ := hmv.get j v hv
     obtain ⟨hj, hptj⟩ := List.getElem?_eq_some_iff.mp hpt
     obtain ⟨Ea, hEa, -, hok, -⟩ := hargs j hj
     have hgd : args.getD j 0 = a := by simp [List.getD, ha]
     rw [hgd] at hEa
     rw [hptj, (hall pt (List.mem_of_getElem? hpt)).1] at hok
     obtain ⟨hty, -, -⟩ := hok
-    obtain ⟨E', hE', hw⟩ := owned_wf hm0 hav
+    obtain ⟨E', hE', hw, hsh⟩ := owned_wf hm0 hav
     rw [hEa] at hE'; cases hE'
-    rw [← hty]; exact hw
+    rw [← hty]; exact ⟨hw, hsh⟩
+  refine ⟨hmv.length.trans hlen, fun j v pt hv hpt => (hval j v pt hv hpt).1,
+    fun j v pt hv hpt => (hval j v pt hv hpt).2, hmv.get, fun j k v w hjk hv hw => ?_⟩
   · obtain ⟨a, ha, hav⟩ := hmv.get j v hv
     obtain ⟨b, hb, hbw⟩ := hmv.get k w hw
     have hab : a ≠ b := by

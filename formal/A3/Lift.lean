@@ -235,15 +235,16 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.refl _, Step.free (m := liftMem a2 m) hx (Frees.lift hfr hd)⟩
   | panic => exact Step.panic
   | letrec hfn hp hx =>
-    refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
+    refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
       Step.letrec (m := liftMem a2 m) hfn hp hx⟩
+    · rfl
     · rfl
     · rfl
     · rfl
     · exact fun _ h => union_true a2 h
   | catchIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
-    exact ⟨_, GhostRel.catchR _ rfl rfl rfl (fun _ h => h) hg, Step.catchIn hs⟩
+    exact ⟨_, GhostRel.catchR _ rfl rfl rfl rfl (fun _ h => h) hg, Step.catchIn hs⟩
   | catchSkip => exact ⟨_, GhostRel.refl _, Step.catchSkip⟩
   | unpair hy hx hz hne =>
     exact ⟨_, GhostRel.refl _, Step.unpair (m := liftMem a2 m) hy hx hz hne⟩
