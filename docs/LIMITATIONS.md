@@ -10,7 +10,7 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Three soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+**Two soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
 Each is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
@@ -24,12 +24,6 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   lending a local, a field or a view of an inner local, a value a `;`
   defer releases. Until #222 closes them, hand such a value on directly
   (`^ ? c a b`) instead of through a binding.
-- **agora #247: a `thread_spawn` closure that consumes one capture
-  releases another capture when the thread ends.** A closure that moves
-  `owned` into a `sink` and also uses an `Atomic` (or an `Arc`, a
-  channel, a listener) that the parent keeps frees that handle under the
-  parent. Until the fix ships, move a clone (`string_clone`) into the
-  closure instead of the capture itself.
 - **agora #252: a `% Drop` value that holds a view, moved on only one
   branch of a `?`.** On the other branch it is still owned, and its
   destructor reads the view after the view's source was reallocated or

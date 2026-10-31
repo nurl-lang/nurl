@@ -25,13 +25,6 @@
 #                 switch backend; every hosted runner has one). ON by
 #                 default here; NURL_FIBER_TESTS=0 turns it off.
 #                 Declare it ONLY for that server/client shape.
-#     posix-shell process_run_shell runs the command through a POSIX
-#                 /bin/sh — the test writes sh syntax (`&`, `$(…)`,
-#                 /tmp paths) into it. Every host this runner runs on;
-#                 not Windows, where process_run_shell is cmd.exe by
-#                 design (run_tests.ps1 skips it there). Not the `sh`
-#                 command token: Git for Windows puts an sh.exe on
-#                 PATH, and process_run_shell still does not use it.
 #     internet    contacts a third-party host over the public network.
 #                 OFF by default; NURL_HTTP_TESTS=1 or NURL_NET_TESTS=1
 #                 turns it on.
@@ -190,12 +183,12 @@ is_skipped() {
         # Its black hole is Linux dropping SYNs to a full accept queue;
         # FreeBSD answers the same connect another way.
         net_connect_fiber_timeout) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
-        # Its bound holds where a busy worker polls I/O itself (Linux's
-        # netpoller). Elsewhere a dedicated reactor thread polls, and the
-        # delay is that thread's wait for a time slice: 4070 dispatches
-        # on the FreeBSD CI VM, nothing to do with the run queue (agora
-        # #137).
-        sched_accept_admission) [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
+        # Its bound holds where a busy worker polls I/O itself: the
+        # netpoller (Linux, macOS, FreeBSD, Windows). Under the poll(2)
+        # reactor thread the other hosts run, the delay is that thread's
+        # wait for a time slice — 4070 dispatches on the FreeBSD CI VM
+        # before the netpoller ran there — not the run queue (agora #137).
+        sched_accept_admission) case "$(uname -s)" in Linux|Darwin|FreeBSD) ;; *) echo skip; return ;; esac ;;
         # Hundreds of sockets open at once: past macOS's default limit of
         # 256 descriptors per process.
         reactor_many_waiters|udp_bind_ephemeral_distinct) [[ "$(uname -s)" != "Darwin" ]] || { echo skip; return; } ;;
@@ -212,8 +205,6 @@ is_skipped() {
             live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
             fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
             internet) [[ "$ENABLE_INTERNET_TESTS" == "1" ]] || { echo skip; return; } ;;
-            # process_run_shell is /bin/sh -c on every host this runs on.
-            posix-shell) ;;
             # Anything else names an external command the test shells out
             # to. Absent tool → skip, so a stripped host (the FreeBSD CI
             # VM installs neither python3 nor curl) degrades to running

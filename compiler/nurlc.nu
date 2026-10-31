@@ -1665,8 +1665,10 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ i g_use_clear_if 0
 : ~ i g_use_argxfer 0
 : ~ i g_use_hown 0
-// Set around a returned closure literal's env generation: its String / Vec
-// / owning-struct captures move into (are owned by) the env.
+// Set around a returned closure literal's env generation (1): its String /
+// Vec / owning-struct captures move into (are owned by) the env. 2 for a
+// closure whose body releases some captures itself: only those move in
+// (g_env_released), with what a spawn takes over (g_env_moved).
 : ~ i g_env_owns_handles 0
 // …and, for a closure that releases some captures itself, which (their
 // env field is not dropped again).
@@ -21221,6 +21223,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s elem_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print elem_ptr )
     ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty elem_ty ) ) ( nurl_print `\n` )
+    // The element is the loop's own: bound in a scope the loop's exit
+    // closes. Bound in the enclosing one, it outlived the loop — read
+    // after the container was cleared (a use after free) or after an empty
+    // loop (never written) — and replaced an outer binding of its name
+    // (agora #245).
+    ( nurl_sym_push syms )
     ( nurl_sym_def syms var_name elem_ty )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__ptr` ) elem_ptr )
     // Labels
@@ -21365,6 +21373,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_print `, i64* ` ) ( nurl_print idx_ptr ) ( nurl_print `\n` )
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat le `:` ) )
+    ( nurl_sym_pop syms )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot` ) fe_eslot_saved )
     ( nurl_set_last_type `void` )
@@ -41874,7 +41883,10 @@ unsafe @ __bck_made_from s name → s {
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
         : b __shared_cap & & ( str_contains_word g_env_shared var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms )
-        : b __owned_cap | __shared_cap & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        // (A returned closure's env owns every one; any other only those
+        // the spawn takes over, g_env_moved — not every handle because the
+        // body releases one of them, agora #247.)
+        : b __owned_cap | __shared_cap & & & & | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         ? & & & & ! __owned_cap ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( str_contains_word g_env_released var ) ( __clone_supported vty syms )
         { : s ht ( nurl_llty vty )
@@ -42119,7 +42131,13 @@ unsafe @ __bck_made_from s name → s {
             : s ncup ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len ncup ) { ( mem_udrop_flag_set syms cg ncup `0` ) } {}
         } {}
-        ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
+        // Moved in: every handle a returned closure captures, and of any
+        // other closure those the body releases (g_env_released) or the
+        // spawn takes over (g_env_moved). One the frame still uses after
+        // the spawn stays a view: the spawn's adopt copies or shares it.
+        // Moved because the body released another, it was dropped by the
+        // thread under the spawner (agora #247).
+        ? & & & & | | == g_env_owns_handles 1 ( str_contains_word g_env_moved var ) ( str_contains_word g_env_released var ) ! ( str_contains_word g_env_shared var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
                 // Owned by the binding, or — a cursor over an option
@@ -44440,6 +44458,9 @@ unsafe @ __clo_scan_skip_type i lex i outer_syms i tt i prev1 i prev2 s ctx → 
 //  - match blocks `L.P`: the arm phase at level L — 1 a variant is next,
 //    2 its payload names, a `?` guard or the `→`, 3 in the guard, 4 in the
 //    result, 5 lost (the scan stopped following this block's arms).
+// A nested closure's parameters, a select arm's result name (`→ o {`, in
+// a block a `?? {` opened: the list `sl`) and a foreach's element (`~ x
+// xs {`) are bound for the block that opens next (`pbind`; agora #238).
 
 // The level of a list's innermost word, -1 for an empty list.
 @ __cs_lvl s list → i {
@@ -44563,6 +44584,12 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ i mbrace -1
     : ~ s pbind ``
     : ~ i pblvl -1
+    // …and a select's arms: the level whose next `{` opens them, the
+    // levels open as select blocks, and a foreach's element name until
+    // its body opens (agora #238).
+    : ~ i sbrace -1
+    : ~ s sl ``
+    : ~ s fe_name ``
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
         ? & == tt TT_IDENT == prev1 TT_DOT { = dot_obj ( nurl_lex_val lex ) } {}
@@ -44585,6 +44612,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         : ~ i cpl -1
         ? & != mbrace -1 != tt TT_LBRACE { = mbrace -1 } {}
         ? & != pblvl -1 != tt TT_LBRACE { = pbind `` = pblvl -1 } {}
+        ? & != sbrace -1 != tt TT_LBRACE { = sbrace -1 } {}
         // An arm's pattern (gen_match): a variant, then its payload — names
         // it binds, numbers it compares — then a `?` guard or the `→`.
         ? & | == mph 1 == mph 2 != tt TT_RBRACE {
@@ -44613,6 +44641,23 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 ? & ( seq ft_a `r` ) | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE | == tt TT_BREAK == tt TT_CONTINUE { = mph 5 } {}
             } {}
         }
+        // A select arm's result name (`[T] ch → o { … }`) and a foreach's
+        // element (`~ x xs { … }`, at a statement: `~ cond {` binds
+        // nothing) are the block's own, as a nested closure's parameters
+        // are: bound for the `{` that follows, and no read (agora #238).
+        ? & & == tt TT_IDENT == mph 0 == ( nurl_lex_peek_type lex ) TT_LBRACE {
+            ? & == prev1 TT_ARROW == ( __cs_lvl sl ) lvl {
+                = pat T
+                ? ( __cs_outer outer_syms ( nurl_lex_val lex ) ) { = pbind ( nurl_lex_val lex ) = pblvl lvl } {}
+            } {}
+            ? & & == prev1 TT_IDENT == prev2 TT_TILDE != 0 ( nurl_str_len fe_name ) { = pbind fe_name = pblvl lvl = fe_name `` } {}
+        } {}
+        ? & & & == tt TT_IDENT == mph 0 == prev1 TT_TILDE != prev2 TT_COLON {
+            ? & == ( nurl_lex_peek_type lex ) TT_IDENT == ( nurl_lex_peek2_type lex ) TT_LBRACE {
+                = pat T
+                = fe_name ? ( __cs_outer outer_syms ( nurl_lex_val lex ) ) ( nurl_lex_val lex ) ``
+            } {}
+        } {}
         ? != mph mph0 {
             ? == mph 5 { ? >= ( __cs_lvl bl ) lvl { = bl ( __cs_cut bl lvl F ) } {} ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) } } {}
             = mt_p mph
@@ -44633,6 +44678,8 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 }
                 = pbind `` = pblvl -1
             } {}
+            ? == sbrace lvl { = sl ( __cs_push sl nl `s` ) = sbrace -1 } {}
+            = fe_name ``
         }
         {
             ? == tt TT_RBRACE
@@ -44640,6 +44687,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                 = brace_depth - brace_depth 1 = ctx ( __clo_ctx_pop ctx 123 ) = clen ( nurl_str_len ctx )
                 : i nl clen
                 ? > ( __cs_lvl bl ) nl { = bl ( __cs_cut bl nl T ) } {}
+                ? > ( __cs_lvl sl ) nl { = sl ( __cs_cut sl nl T ) } {}
                 ~ > ft_l nl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                 ~ > mt_l nl { = mt_l ( __cs_lvl ms ) = mt_p ( nurl_str_to_int ( __cs_tail ms ) ) = ms ( str_skip_word ms ) }
                 ? > brace_depth 0 { = cpl nl } {}
@@ -44730,6 +44778,7 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                                 // (A select's arms follow at once.)
                                 ? == ( nurl_lex_peek_type lex ) TT_LBRACE {
                                     ? == ft_l lvl { ? != ft_l -1 { = fr ( __cs_frame fr ft_l ft_n ft_a ) } {} = ft_l lvl = ft_n 1 = ft_a `o` } {}
+                                    = sbrace lvl
                                 } {
                                     // (The match as one operand of an expression
                                     // this level follows: only when there is one.)

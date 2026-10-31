@@ -49,8 +49,7 @@
 #  (the fiber runtime runs on Win64's own context switch, docs/ASYNC.md).
 #
 #  The differences from the POSIX side are capability facts, not policy:
-#  `posix-shell` is never met here (process_run_shell is cmd.exe on
-#  Windows by design), `ktls` neither (a Linux kernel facility), and the
+#  `ktls` is never met here (a Linux kernel facility), and the
 #  CPU tiers are answered by the runtime's own CPUID gates — Windows has
 #  no /proc/cpuinfo, so the runner links a probe against runtime.o and
 #  asks nurl_cpu_x86_*, NURL_CPU_* overrides included.
@@ -410,10 +409,6 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # answering a SYN to a closed port with RST — Windows retries the SYN
     # for about two seconds first.
     elseif ($name -eq 'net_connect_fiber_timeout') { $skip = $true }
-    # Linux-only in test_skips.sh too: the WSAPoll reactor is a thread of
-    # its own, and its wait for a time slice (1820 dispatches on the CI
-    # runner) is what the test would measure, not admission (agora #137).
-    elseif ($name -eq 'sched_accept_admission') { $skip = $true }
     # fs_glob_symlink builds a symlinked directory under /tmp and globs
     # through it. Windows has neither an unprivileged symlink() nor /tmp.
     # It first declared `requires: ln` as a capability probe, on the
@@ -441,8 +436,6 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 'cpu-vaes512' { if (-not $CpuTiers['cpu-vaes512']) { $skip = $true } }
                 'cpu-ifma'    { if (-not $CpuTiers['cpu-ifma'])    { $skip = $true } }
                 'ktls'     { $skip = $true }
-                # process_run_shell is cmd.exe here (test_skips.sh).
-                'posix-shell' { $skip = $true }
                 'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
                 # Anything else names an external command the test shells
                 # out to. Absent tool → skip, so a stripped host degrades

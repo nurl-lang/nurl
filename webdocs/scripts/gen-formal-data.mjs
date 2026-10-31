@@ -6,6 +6,11 @@
 // (formal/corpus/map.tsv + tools/fuzz/holes/*.nu) into:
 //   1. webdocs/lib/formal-data.generated.ts (compact typed metadata, module DAGs, blueprint, rules, holes)
 //   2. webdocs/public/formal-decls.json (all 1,766 declarations across A1 & A2 for the code browser)
+//   3. formal/BLUEPRINT.md's counts, A2 module DAG, A2 module index and crown
+//      theorem statements (the regions between its `BEGIN generated` markers)
+//
+// `--check` writes nothing: it exits 1 when formal/BLUEPRINT.md is not what
+// the sources give (CI's "shared files are generated" job, Agora #246).
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,6 +22,8 @@ const FORMAL_DIR = join(ROOT, 'formal');
 const HOLES_DIR = join(ROOT, 'tools', 'fuzz', 'holes');
 const OUTPUT_TS = join(ROOT, 'webdocs', 'lib', 'formal-data.generated.ts');
 const OUTPUT_JSON = join(ROOT, 'webdocs', 'public', 'formal-decls.json');
+const BLUEPRINT_MD = join(FORMAL_DIR, 'BLUEPRINT.md');
+const CHECK = process.argv.includes('--check');
 
 const MODULE_LAYERS = {
   Syntax: {
@@ -960,11 +967,104 @@ export interface FormalData {
 }
 `;
 
+// ── formal/BLUEPRINT.md ─────────────────────────────────────────────
+// Its counts, A2 module DAG, A2 module index and crown theorem statements
+// come from the sources, so a formal PR never edits them by hand.
+
+const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+function bpHeadline(text, phase, st) {
+  const re = new RegExp(
+    `(\\* \\*\\*Phase ${phase} \\([^\\n]*?\\):\\*\\* )\\*\\*[\\d,]+ modules\\*\\*, \\*\\*[\\d,]+ lines of Lean 4\\*\\*, ` +
+      `\\*\\*[\\d,]+ theorems\\*\\*, \\*\\*[\\d,]+ total declarations\\*\\*`,
+  );
+  if (!re.test(text)) throw new Error(`formal/BLUEPRINT.md: no Phase ${phase} headline to update`);
+  return text.replace(
+    re,
+    `$1**${st.modules} modules**, **${st.lines.toLocaleString('en-US')} lines of Lean 4**, ` +
+      `**${st.theorems} theorems**, **${st.totalDecls} total declarations**`,
+  );
+}
+
+function bpRegion(text, name, body) {
+  const begin = `<!-- BEGIN generated: ${name} (webdocs/scripts/gen-formal-data.mjs) -->`;
+  const end = `<!-- END generated: ${name} -->`;
+  const i = text.indexOf(begin);
+  const j = text.indexOf(end);
+  if (i < 0 || j < i) throw new Error(`formal/BLUEPRINT.md: the "${name}" markers are missing`);
+  return `${text.slice(0, i + begin.length)}\n${body}\n${text.slice(j)}`;
+}
+
+function bpDag(mods) {
+  const names = new Set(mods.map((m) => m.name));
+  const sorted = [...mods].sort(byName);
+  const out = [`## 4. Phase A2 Module Dependency DAG (${mods.length} Modules)`, '', '```mermaid', 'flowchart BT'];
+  for (const m of sorted) out.push(`  ${m.name}["${m.name}<br/>(${m.lineCount}L, ${m.counts.theorem} thms)"]`);
+  for (const m of sorted) for (const imp of m.imports) if (names.has(imp)) out.push(`  ${imp} --> ${m.name}`);
+  out.push('```');
+  return out.join('\n');
+}
+
+function bpIndex(mods) {
+  const cat = (a, b) => (a.category < b.category ? -1 : a.category > b.category ? 1 : 0);
+  const rows = [...mods].sort((a, b) => a.layer - b.layer || cat(a, b) || byName(a, b));
+  const out = ['| Layer | Module | Lines | Theorems | Defs / Types | Summary |', '|---|---|---:|---:|---:|---|'];
+  for (const m of rows) {
+    const defs = m.counts.def + m.counts.inductive + m.counts.structure;
+    const link = `[\`A2/${m.name}.lean\`](A2/${m.name}.lean)`;
+    out.push(`| ${m.layer}. ${m.category} | ${link} | ${m.lineCount} | ${m.counts.theorem} | ${defs} | ${m.summaryEn} |`);
+  }
+  return out.join('\n');
+}
+
+// A crown theorem: its doc comment and statement (up to `:=`), with the
+// line range they span.
+function bpCrown() {
+  const file = 'A2/Soundness.lean';
+  const src = readFileSync(join(FORMAL_DIR, file), 'utf8').split('\n');
+  const out = ['## 6. Crown Theorem Statements in Lean 4'];
+  for (const name of ['memory_safe', 'no_leak_end', 'no_leak_panic']) {
+    const t = src.findIndex((l) => l.startsWith(`theorem ${name} `));
+    if (t < 0) throw new Error(`formal/${file}: no theorem ${name}`);
+    let a = t;
+    if (a > 0 && /-\/\s*$/.test(src[a - 1])) {
+      a -= 1;
+      while (a > 0 && !src[a].trimStart().startsWith('/--')) a -= 1;
+    }
+    let b = t;
+    while (b < src.length - 1 && !/:=(\s*by)?\s*$/.test(src[b])) b += 1;
+    const body = src.slice(a, b + 1);
+    body[body.length - 1] = body[body.length - 1].replace(/\s*:=(\s*by)?\s*$/, '');
+    const range = `L${a + 1}-L${b + 1}`;
+    out.push('', `### \`A2.${name}\` ([\`${file}#${range}\`](${file}#${range}))`, '```lean', ...body, '```');
+  }
+  return out.join('\n');
+}
+
+let blueprint = readFileSync(BLUEPRINT_MD, 'utf8');
+blueprint = bpHeadline(blueprint, 'A2', stats.a2);
+blueprint = bpHeadline(blueprint, 'A1', stats.a1);
+blueprint = bpRegion(blueprint, 'A2 module DAG', bpDag(a2Modules));
+blueprint = bpRegion(blueprint, 'A2 module index', bpIndex(a2Modules));
+blueprint = bpRegion(blueprint, 'A2 crown theorems', bpCrown());
+
+if (CHECK) {
+  if (readFileSync(BLUEPRINT_MD, 'utf8') !== blueprint) {
+    console.error(
+      'formal/BLUEPRINT.md is not what the sources give: run `node webdocs/scripts/gen-formal-data.mjs` and commit it.',
+    );
+    process.exit(1);
+  }
+  console.log('gen-formal-data: formal/BLUEPRINT.md matches the sources');
+  process.exit(0);
+}
+
 writeFileSync(OUTPUT_TS, `${typesHeader}\nexport const formalData: FormalData = ${JSON.stringify(tsPayload)};\n`);
 writeFileSync(OUTPUT_JSON, JSON.stringify(jsonPayload));
+writeFileSync(BLUEPRINT_MD, blueprint);
 
 console.log(
-  `formal data → ${OUTPUT_TS} & ${OUTPUT_JSON}\n` +
+  `formal data → ${OUTPUT_TS}, ${OUTPUT_JSON} & ${BLUEPRINT_MD}\n` +
     `  A2: ${stats.a2.modules} modules, ${stats.a2.lines.toLocaleString('en-US')} lines, ${stats.a2.theorems} theorems, ${stats.a2.totalDecls} total declarations\n` +
     `  A1: ${stats.a1.modules} modules, ${stats.a1.lines.toLocaleString('en-US')} lines, ${stats.a1.theorems} theorems, ${stats.a1.totalDecls} total declarations\n` +
     `  Holes: ${stats.holesCount} soundness probes (A1=${stats.holesByPhase.A1}, A2=${stats.holesByPhase.A2}, A3=${stats.holesByPhase.A3}, B=${stats.holesByPhase.B})`

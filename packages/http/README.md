@@ -76,6 +76,7 @@ Construction & serving:
 | --- | --- |
 | `( http_app_new )` → `HttpApp` | create an app (a handle: released by its last owner; `http_app_free` is an optional early release) |
 | `( http_app_listen a host port )` → `i` | bind + serve until closed (SIGINT/SIGTERM drain gracefully, see `http_app_drain_ms`; or an error); HTTP/1.1 and HTTP/2 (prior knowledge) on the same port |
+| `( http_app_serve a listener )` → `i` | serve a `TcpListener` the caller made — the kernel's, or a simulated network's (`stdlib/std/net_sim.nu`), so a test serves the very app `main` builds over a simulated wire with drops, latency and partitions; returns once the listener is closed (plaintext) |
 | `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC, RSA or ML-DSA leaf, auto-detected); ALPN `h2 http/1.1`, so HTTP/2-capable clients get HTTP/2; **HTTP/3 (QUIC) on the same port over UDP**, announced with `Alt-Svc` on the TCP responses |
 | `( http_app_set_http3 a 0 )` → `v` | keep a TLS listener TCP-only (no UDP socket, no Alt-Svc); default 1 |
 | `( http_app_set_pq_cert a cert key )` → `v` | a second, **post-quantum identity** (ML-DSA-44/65/87 chain + PKCS#8 key) served beside the classical pair; each client is shown the one its `signature_algorithms` can verify — see [Capabilities](#capabilities) |

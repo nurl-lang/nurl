@@ -49,9 +49,9 @@ $ `stdlib/std/async.nu`
   `compiler/tests/sched_ready_order` measured the order itself (a
   reader overtaken by 55 of 99 later ones before, none after).
 - **Admission.** A fiber parked in an accept runs as soon as its
-  listener is polled ready, ahead of everything queued: the Linux
-  netpoller hands it back to run now, the poll(2) reactor puts it at the
-  head of the global queue with the oldest stamp, and the unikernel's
+  listener is polled ready, ahead of everything queued: the netpoller
+  hands it back to run now, the poll(2) reactor puts it at the head of
+  the global queue with the oldest stamp, and the unikernel's
   socket layer wakes it to the head of the bare runtime's run queue.
   Accepting is how the connections waiting in the kernel's queue enter
   the service order (each one's fiber is stamped when it is spawned),
@@ -70,11 +70,15 @@ $ `stdlib/std/async.nu`
   (resumed, 1.85 before); rustls's ratio moved between 1.42 and 2.05 on
   that host. `compiler/tests/sched_accept_admission` holds the bound: a
   connection is accepted within half a pass of a 64-fiber queue (before:
-  never, a full pass and more). On the poll(2) targets the reactor is a
-  thread of its own, and the wake waits for that thread's time slice
-  first: tens of milliseconds on a loaded FreeBSD or Windows host, where
-  the test is skipped (agora #137).
-- **Netpoller (Linux).** There is no reactor thread on Linux: an IDLE
+  never, a full pass and more). The bound needs a busy worker to poll
+  I/O itself, which the netpoller's workers do (Linux, macOS, FreeBSD,
+  Windows). Where the reactor is a thread of its own (the poll(2)
+  fallback), the wake waits for that thread's time slice first: before
+  the netpoller ran there, 4 070 dispatches on the loaded FreeBSD CI VM
+  and 88–1 673 on a Windows laptop with 16 CPU hogs, where the
+  netpoller holds it at 16 (agora #137).
+- **Netpoller (Linux, macOS, FreeBSD, Windows).** There is no reactor
+  thread on these hosts: an IDLE
   WORKER becomes the I/O poller (the Go netpoller / tokio driver
   shape). It takes the poll lease and blocks in `epoll_wait` itself; a
   ready fiber resumes directly on that worker — no queue hop, no
@@ -104,12 +108,26 @@ $ `stdlib/std/async.nu`
   is always a fresh edge. Closing a socket routes through the
   netpoller (`nurl_close_sock`), which wakes any parked waiter and
   resets the per-fd slot before the fd number can be reused.
-- **Reactor (other POSIX, Windows).** Elsewhere a dedicated thread
-  runs the portable `poll(2)` loop (`WSAPoll` on Windows) plus a timer
-  wheel: a fiber that
-  would block registers the fd and parks; the reactor unparks it when
-  the fd is ready or the timeout fires. (A `kqueue` netpoller is the
-  matching upgrade path for macOS/BSD.)
+  The same design runs over three kernel queues. **macOS and FreeBSD:**
+  `kqueue`, with `EVFILT_READ`/`EVFILT_WRITE` under `EV_CLEAR` as the
+  edge trigger (a filter per direction, added the first time a wait
+  asks for it) and an `EVFILT_USER` event as the wake. **Windows:**
+  `ProcessSocketNotifications` (Windows 11 / Server 2022, build 20348
+  and later) posts socket readiness to an I/O completion port with a
+  persistent, edge-triggered registration — `EPOLLET` in Winsock's
+  terms — and the idle poller blocks in `GetQueuedCompletionStatusEx`.
+  A socket's slot is its handle value / 4; a close advances the slot's
+  generation, which every notification carries, so one still queued
+  for a closed socket never reaches the socket that reuses the handle
+  value; and since an edge registration does not report a state that
+  is already true, a socket's first registration is followed by one
+  zero-timeout probe. On an older Windows a socket wait from a fiber
+  panics with that explanation; timers and channel parks still work.
+- **Reactor (other POSIX).** NetBSD, DragonFly and any other host
+  without one of those queues run a dedicated thread with the portable
+  `poll(2)` loop plus a timer wheel: a fiber that would block registers
+  the fd and parks; the reactor unparks it when the fd is ready or the
+  timeout fires.
 
 ## 2. API surface (`stdlib/std/async.nu`)
 
@@ -251,11 +269,12 @@ has two backends:
 | OpenBSD | stubbed (removed `swapcontext`) |
 | Windows arm64, WASI | stubbed |
 
-The I/O backend is the `epoll` netpoller on Linux and a `poll(2)`
-reactor thread elsewhere — `WSAPoll` on Windows, where the reactor's wake
-channel and the resolver pool's completion signal are self-connected
-loopback UDP sockets (`WSAPoll` waits on sockets only). It starts only
-where fibers are enabled.
+The I/O backend is the netpoller — `epoll` on Linux, `kqueue` on macOS
+and FreeBSD, a completion port fed by `ProcessSocketNotifications` on
+Windows (build 20348+) — and a `poll(2)` reactor thread on the other
+POSIX hosts. On Windows the resolver pool's completion signal is a
+self-connected loopback UDP socket (`WSAPoll` waits on sockets only). It
+starts only where fibers are enabled.
 
 **What "stubbed" means, precisely.** The `*_async` I/O calls do degrade
 to their blocking forms and stay correct. `spawn` does **not**: with no
