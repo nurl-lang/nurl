@@ -296,6 +296,78 @@ $ `src/pg.nu`
     ( ok `pool on threads: every query` == ( atomic_load good ) 280 )
     ( ok `pool: never more than max` <= ( pool_live [PgConn PgErr] pool ) 3 )
 
+    // ── pipelining: one connection, many fibers at once ──
+    // Every fiber's answers are its own, an error stays with the request
+    // that caused it, and a lost stream fails every request on its way.
+    : PgConn shared ?? ( connect d 2 ) {
+        T x → x
+        F _ → { ( nurl_print `connect failed\n` ) ^ 1 }
+    }
+    : Atomic mine_ok ( atomic_new 0 )
+    : ~ i pf 0
+    ~ < pf 16 {
+        : i me + pf 1000
+        : PgConn sc ( PgConn_share shared )
+        : Atomic mo ( Atomic_share mine_ok )
+        ( spawn \ → v {
+            : ~ i k 0
+            ~ < k 25 {
+                : i x + * me 100 k
+                ? == ( one_int sc `SELECT $1::int8 * 2` ( params1 ( ival x ) ) ) * x 2 { ( atomic_add mo 1 ) } {}
+                = k + k 1
+            }
+        } )
+        = pf + pf 1
+    }
+    ( runtime_run )
+    ( ok `pipeline: 16 fibers on one connection, every answer its own` == ( atomic_load mine_ok ) 400 )
+
+    : Atomic good_ok ( atomic_new 0 )
+    : Atomic bad_failed ( atomic_new 0 )
+    = pf 0
+    ~ < pf 8 {
+        : i me pf
+        : PgConn sc ( PgConn_share shared )
+        : Atomic go ( Atomic_share good_ok )
+        : Atomic bf ( Atomic_share bad_failed )
+        ( spawn \ → v {
+            : ~ i k 0
+            ~ < k 10 {
+                ? == ( one_int sc `SELECT $1::int8 + 1` ( params1 ( ival + * me 10 k ) ) ) + + * me 10 k 1 { ( atomic_add go 1 ) } {}
+                ?? ( pg_query sc `SELECT 1 / 0` ) { T _ → {} F e → { ? != 0 ( nurl_str_eq ( pg_err_name e ) `PgServerError` ) { ( atomic_add bf 1 ) } {} } }
+                = k + k 1
+            }
+        } )
+        = pf + pf 1
+    }
+    ( runtime_run )
+    ( ok `pipeline: interleaved with errors, every good query answered` == ( atomic_load good_ok ) 80 )
+    ( ok `pipeline: every failing query fails alone` == ( atomic_load bad_failed ) 80 )
+    ( ok `pipeline: the connection is still fine` & ( pg_conn_ok shared ) == ( one_int shared `SELECT $1::int8` ( params1 ( ival 7 ) ) ) 7 )
+
+    // The server ends the session while requests are queued on it.
+    : i victim ( one_int shared `SELECT pg_backend_pid()::int8` ( vec_new [PgVal] ) )
+    : Atomic lost_n ( atomic_new 0 )
+    = pf 0
+    ~ < pf 6 {
+        : PgConn sc ( PgConn_share shared )
+        : Atomic ln ( Atomic_share lost_n )
+        ( spawn \ → v {
+            ?? ( pg_query sc `SELECT pg_sleep(0.3)` ) { T _ → {} F _ → { ( atomic_add ln 1 ) } }
+        } )
+        = pf + pf 1
+    }
+    : PgConn killer ( PgConn_share c )
+    ( spawn \ → v {
+        ( sleep_ms 100 )
+        : ( Vec PgVal ) kp ( params1 ( ival victim ) )
+        ?? ( pg_query_params killer `SELECT pg_terminate_backend($1::int4)` kp ) { T _ → {} F _ → {} }
+    } )
+    ( runtime_run )
+    ( ok `pipeline: a lost stream fails every request on it` == ( atomic_load lost_n ) 6 )
+    ( ok `pipeline: and the connection says so` ! ( pg_conn_ok shared ) )
+    ( ok `pipeline: a request after it fails at once` ?? ( pg_query shared `SELECT 1` ) { T _ → F F e → != 0 ( nurl_str_eq ( pg_err_name e ) `PgConnFail` ) } )
+
     // A connection given back inside a transaction is rolled back.
     ?? ( pg_pool_get pool ) {
         T g → { ( ok `pool: begin and leave` ( q ( pooled_get [PgConn PgErr] g ) `BEGIN` ) ) }
