@@ -439,6 +439,33 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   formal's DtorSafe join rule says. Only a holder moved on every path is
   gone before its source ends.
 
+- **A loop-carried borrow is tracked to every source it may have at the
+  loop head** (Agora #229). The checker kept each borrow binding's sources
+  as a fact that every walk of a loop body overwrote, so a binding that
+  borrows from one source on some passes and another on the rest (a
+  cursor pair swapped each pass, as in `stdlib/ext/regex.nu`'s matcher)
+  was tracked as borrowing from whichever source the last walk saw. Ending
+  the other source and then reading through the binding compiled, and was
+  a use-after-free. The loop head now joins the sources of both paths into
+  it. Loops also settle without the cycle detector, which no file in the
+  tree reaches now.
+
+- **A fiber that waits on a `Cond` parks instead of stopping its worker
+  thread** (Agora #255). `std/thread.nu`'s `Cond` was a raw
+  `pthread_cond_t`, so every wait on one from a fiber — a `Locked` whose
+  value another fiber had checked out (`locked_take`), `sem_acquire`,
+  `locked_await`, nurldb's WAL flush wait — put the whole worker thread
+  to sleep. Two fibers sharing a `Locked` on one worker deadlocked as
+  soon as the one holding the value parked on I/O; with more workers each
+  waiter pinned one (4 fibers on a shared psql connection ran at half the
+  throughput of 1). The `Cond` is now the runtime's: a `pthread_cond_t`
+  for threads plus a FIFO of parked fibers under a lock of its own, woken
+  with the runtime's race-safe timed park, so a waker need not hold the
+  caller's mutex. Fibers and threads may wait on one `Cond`, as they
+  already could on the unikernel. The common signal with no fiber waiting
+  costs one atomic load more; a thread ping-pong over channels and a
+  4-thread `Locked` counter measured the same before and after.
+
 ### Security
 
 - **The JavaScript dependency audit is green again: no package pulls a
@@ -457,17 +484,23 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Known issues
 
-- **Six soundness holes are open, each with a fix in progress**:
+- **Twelve soundness holes are open, each with a fix in progress**:
   agora #242 (a join or value block bound by `:` and handed on by name),
   #254 (a `% Drop` holder given a view of a younger binding, then a
-  panic), #259 (a view gained through an `inout` callee or a closure's
-  assignment of a capture), #264 (a payload moved out of an enum that was
-  itself taken out of an Option is dropped again with the enum), #267 (a
-  field read out of an element borrow outlives the elements' drop) and
-  #274 (a block arm of a join whose tail names an owner already moved).
-  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
-  it. Agora #224, #245, #247 and #252 are closed in this release. A
-  release does not say "no hole is known open" while one is.
+  panic), #257 (a field of a `sink` struct parameter handed back inside a
+  result, option or struct literal), #259 (a view gained through an
+  `inout` callee or a closure's assignment of a capture), #264 (a payload
+  moved out of an enum that was itself taken out of an Option is dropped
+  again with the enum), #265 (a struct field bound to a local, then the
+  field replaced), #267 (a field read out of an element borrow outlives
+  the elements' drop), #268 (a field reader re-bound, then handed back),
+  #274 (a block arm of a join whose tail names an owner already moved),
+  #279 (an enum payload lent by `vec_get` out of a local Vec, handed back
+  from a nested match), #280 (a Vec or String field handed to a `sink`
+  stays usable) and #284 (an `inout` callee points the caller's `% Drop`
+  holder at its own local, then panics). `docs/LIMITATIONS.md` gives each one's shape and how to stay
+  clear of it. Agora #224, #229, #245, #247 and #252 are closed in
+  this release. A release does not say "no hole is known open" while one is.
 
 ## [0.82.0] — 2026-10-31
 
