@@ -1,5 +1,5 @@
 // chan_send_then_use: a String sent on a channel, then used by the sender.
-// map: §6.5 | A3 | rejected | h21 | String sent on channel then read by sender after receiver freed it
+// map: §6.5 | A3 | rejected | h21 | String sent on channel then read by sender after receiver freed it; A3.0: the send moves it (the channel itself is A3.4)
 $ `stdlib/core/string.nu`
 $ `stdlib/std/channel.nu`
 

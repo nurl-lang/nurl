@@ -1,19 +1,21 @@
 # The claim
 
-> **Status: A1 and A2 are proven** (`A1.memory_safe`, `A2.memory_safe`,
-> `A2.no_leak_end`, [`README.md`](README.md)); A3 and B–D are the
-> statement the proof is working towards, not one it has reached.
+> **Status: A1, A2 and A3.0 are proven** (`A1.memory_safe`,
+> `A2.memory_safe`, `A2.no_leak_end`, `A3.claim`, [`README.md`](README.md));
+> A3.1–A3.6 and B–D are the statement the proof is working towards, not one
+> it has reached.
 
 ## Statement
 
 **Every program the NURL compiler accepts, outside the bodies of `unsafe`
 functions and its `unsafe` assertions, is memory-safe and leak-free** —
 *proven so far (A1, A2) for the ownership rules of the single-threaded
-language as the calculus models them; the data-race clause is A3, and the
-link from the rules to nurlc and its code is B–D* (below): no use after
-free, no double free, no read through a dangling view, no out-of-bounds
-access, no data race, and everything it allocated is released — on the
-panic path as much as the normal one.
+language as the calculus models them, and (A3.0) for threads that share
+nothing but what they move; the data-race clause for what threads share is
+A3.1–A3.6, and the link from the rules to nurlc and its code is B–D*
+(below): no use after free, no double free, no read through a dangling
+view, no out-of-bounds access, no data race, and everything it allocated
+is released — on the panic path as much as the normal one.
 
 This is the guarantee of [`docs/MEMORY.md` §6.2](../docs/MEMORY.md),
 stated as a theorem. "Memory model" here means NURL's ownership model:
@@ -49,6 +51,20 @@ the LLVM / C11 memory model rather than redefining it.
   Carried to C11 / LLVM by the DRF-SC theorem (below). The statement is
   `A3.Claim` in `A3/Defs.lean`, and `A3/DESIGN.md` gives the semantics
   and the milestones.
+  - **A3.0** *(proven)* — threads that only move. A function the program
+    marks is called on a new thread; its parameters are `sink` and of
+    types that hold no views (`SpawnOK`), so what crosses is trees the
+    spawner gives up. Every thread runs A2's own step on the shared
+    address space. In Lean: `A3.claim : A3.Claim` — no thread of a
+    reachable configuration is stuck, no two threads race, and when every
+    thread has finished nothing is allocated — on the standard axioms
+    only. The proof gives each thread its own part of the address space,
+    on which A2's invariant holds: a step on the shared space is a step on
+    the part and leaves the other parts as they were, and a spawn cuts the
+    spawner's part in two.
+  - **A3.1–A3.6** — what threads share: `Arc`, `Locked` / `Mutex`,
+    `RwLocked` and `% Frozen` read guards, `Atomic` and channels, library
+    handles whose copies are one state, module globals. Not proven.
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.

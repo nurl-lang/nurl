@@ -1,5 +1,5 @@
 // race_shared_vec: two threads mutate one Vec captured by both closures.
-// map: §6.5 | A3 | rejected | h09 | two threads push into one Vec captured by both closures
+// map: §6.5 | A3 | rejected | h09 | two threads push into one Vec captured by both closures; A3.0: the Vec moves to one thread, so no two threads reach it
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
