@@ -102,7 +102,10 @@ was merged.
 queue, a PR queued ahead of the release PR lands first, after the fold,
 and its fragment stays in `changes/unreleased/`. In 0.83.0, two did.
 `verify-ci` fails a tag whose commit still holds a fragment. Fold it
-into `[X.Y.Z]` with a follow-up PR, and tag that PR's commit.
+into `[X.Y.Z]` with a follow-up PR (`tools/changelog.py fold X.Y.Z
+--into`, which adds each entry to its section of the existing release),
+and tag that PR's commit. Regenerate the open-hole list in the same PR
+(`tools/fuzz/holes/open_list.py --write`).
 
 **The release needs a green macOS run on that commit** (Agora #213).
 release.yml's first job, `verify-ci`, waits for both `ci.yml` and
