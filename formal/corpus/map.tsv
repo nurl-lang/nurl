@@ -80,6 +80,7 @@ closure_bound_then_returned_over_a_parameter	§2.11	A2	a closure literal bound t
 closure_call_fresh_temp_string	§7.5	A2	fresh temp string passed to closure-value call never released	runs-clean	h145
 closure_called_with_growing_closure	§2.11	A2	closure holding a view of its capture called with the closure that grows it	rejected	h276
 closure_clears_borrowed_vec	§2.11	A2	closure clearing a Vec runs while an element borrow is live	rejected	h69
+closure_consumes_one_capture_frees_kept_vec	§7.5	A2	agora #247: a closure called in its own frame, consuming one capture, freed a Vec it only read: the frame read the Vec after the closure ended	runs-clean	-
 closure_drop_capture_field_join	§7.6	A2	agora #186: a closure handing back a `% Drop` field of a capture through a `?`	rejected	h809
 closure_drop_capture_join	§7.6	A2	agora #186: a closure handing back a `% Drop` capture through `^ ?`: it keeps the capture for its next call	rejected	h806
 closure_drop_capture_join_fall	§7.6	A2	agora #186: the same as the closure's fall-off value	rejected	h807
@@ -326,6 +327,7 @@ fall_off_match_scrutinee_lend	§7.6	A2	agora #198: `?? ( getr w ) { T x → x �
 fall_off_scrutinee_param_lend	§7.6	A2	agora #198: a fall-off `??` lending a parameter: its callers are told, and one handing it back over its own local copies	runs-clean	h888
 fatfs_write_range_that_wraps	§3.3d	B	`( fatfs_write h src 8 9223372036854775800 )` wrote far past the 16-byte source: the range test `off + n > len` wrapped negative and passed.	runs-clean	h483
 fiber_closure_over_a_stack_binding	§2.11	A2	`( spawn \ → v { = . c n + . c n 1 } )` with `c` a `: ~` local of the spawning function: the closure reached `c` by pointer, and the fiber ran after the frame was gone. thread_spawn was refused…	rejected	h503
+fiber_consumes_one_capture_frees_shared_atomic	§6.5	A3	agora #247: the same in a `spawn_owned` fiber	runs-clean	-
 fiber_handle_built_by_a_literal	§3.3d	B	`( fiber_join @ Fiber { ( string_data k ) } )`: the join waited on and freed any address; Fiber is a sealed `raw` struct (agora #168).	rejected	h615
 fiber_handle_copy_joined_twice	§2.1	A2	as h610 through a copy `: Fiber b a`, each copy joined once (agora #168).	rejected	h611
 fiber_joined_twice	§2.1	A2	`( fiber_join f ) ( fiber_join f )` on one spawn_joinable handle: the second join freed the fiber's control block again (agora #168). Fiber is move-only and fiber_join takes it.	rejected	h610
@@ -837,6 +839,8 @@ temporary_it_cannot_copy_never_dropped	§7.1	A2	discarded %Drop temporary / fiel
 terminal_state_built_by_a_literal	§3.3d	B	`( term_raw_disable @ TermState { -1 ( vec_new [u] ) } )`: tcsetattr read a whole struct termios through the data pointer of an empty Vec.	rejected	h501
 thread_captures_owned_string	§6.5	A3	thread closure captures string the spawning function frees on return; A3.0: the capture moves to the thread	rejected	h92
 thread_closure_capture_used_after_spawn	§6.5	A3	thread closure moves %Drop capture; spawning frame also consumes it; A3.0: a moved capture is dead in the spawner	rejected	h241
+thread_consumes_one_capture_frees_shared_arc	§6.5	A3	agora #247: the same with an `( Arc i )` the spawner reads after the join	runs-clean	-
+thread_consumes_one_capture_frees_shared_atomic	§6.5	A3	agora #247: a thread closure consuming one capture freed the spawner's Atomic at thread end: the spawner read it after the join	runs-clean	-
 thread_panic_message_outlives_the_thread	§7.2	A2	a thread's last panic message (kept for PanicInfo) was never released when the thread ended — leak per thread	runs-clean	h293
 thread_reads_freed	§6.5	A3	spawned thread reads a String the spawning thread frees; A3.0: the String moves to the thread, so the spawner cannot free it	rejected	h18
 thread_spawn_owned_closure_over_a_stack_binding	§2.11	A2	as h503, `thread_spawn_owned`: only `thread_spawn` was on the list, so the owned form took a closure over a `: ~` local to another thread (the fault depends on the thread running after the frame…	rejected	h505
