@@ -637,8 +637,9 @@ new language features.
   try handing on an error it only borrowed, `% Drop` payloads lent to a
   `??` arm or a literal, function summaries written inside a block, a
   `vec_get` element handed back out of a local Vec, and a capture scan
-  that took a shadowed name for the outer one. One is open: agora #224
-  (a destructor reading a view whose source ended; LIMITATIONS.md).
+  that took a shadowed name for the outer one; and (0.83.0) agora #224,
+  a destructor reading a view whose source ended: scope-end drops run
+  newest first, and such a drop is a use of what the view points into.
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus) and A2 (structs, enums, closures and trait
   objects, panics, the drop journal, leak freedom) are proven in Lean 4
