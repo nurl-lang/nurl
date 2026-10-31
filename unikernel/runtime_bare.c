@@ -789,6 +789,17 @@ int nurl_cond_wait_ms(void *cp, void *mp, long long ms) {
     return fired;
 }
 
+/* std/thread.nu's Cond. On the hosted runtime it is a condvar a fiber
+ * can wait on without stopping its worker (runtime_ffi.c §19,
+ * nurl_fcond_*); here every condvar already is — a coroutine parks on
+ * its queue — so the Cond is one, at the front of the larger block the
+ * NURL side sizes from nurl_native_sizeof("nurl_fcond_t"). */
+int nurl_fcond_init(void *cp)                            { return pthread_cond_init(cp, 0); }
+int nurl_fcond_destroy(void *cp)                         { return pthread_cond_destroy(cp); }
+int nurl_fcond_wait_ms(void *cp, void *mp, long long ms) { return nurl_cond_wait_ms(cp, mp, ms); }
+int nurl_fcond_signal(void *cp)                          { return pthread_cond_signal(cp); }
+int nurl_fcond_broadcast(void *cp)                       { return pthread_cond_broadcast(cp); }
+
 /* ── §10  Threads ─────────────────────────────────────────────────
  *
  * A NURL thread is a coroutine that nobody runs until someone blocks.
