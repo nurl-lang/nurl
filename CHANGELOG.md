@@ -45,6 +45,26 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 - **A simulated network behind `TcpListener` / `TcpConn`** (Agora #240, DST 1/4). `std/net` has a transport seam: a handle made over a `NetTransport` object sends every `tcp_*` operation to it, so `HttpServer`, the `HttpApp` facade and anything else written against the handles run over it unchanged. `stdlib/std/net_sim.nu` is the first transport: `netsim_new nodes seed drop_pct latency_ms jitter_ms` makes a set of nodes, each a whole sans-IO TCP/IP stack (`stdlib/net/`), whose frames cross the seeded bus of `stdlib/dist/sim.nu` with its drops, latency, jitter and partitions (`netsim_partition` / `netsim_heal`); `netsim_listen` and `netsim_connect` make the handles, with the kernel's `NetErr`s. No operating-system socket is opened. Waiting uses the runtime's clock and its fiber park / thread block, so a runtime with a simulated clock and scheduler (DST 2/4) makes it reproducible by seed without touching the seam. A program that makes no simulated network pays nothing: `std/net` does not import it, the handles keep their layout and the plaintext path takes no extra test. `sim_next_due` (dist/sim.nu) tells when the bus's next message is due. packages/http 0.7.10 adds `http_app_serve app listener`, which serves a listener the caller made.
 
+- **Deterministic simulation: `unikernel/build_nolibc.sh --sim`** (Agora
+  #260, DST 2/4). A program built with `--sim` runs on the cooperative
+  runtime the unikernel uses — threads and fibers as coroutines,
+  cooperative mutexes and condition variables, a report instead of a
+  hang — with the three doors to the outside world closed by a seed:
+  time is virtual (it moves when the program sleeps and jumps to the
+  earliest timer when nothing is runnable), `getrandom` is a seeded
+  stream, and the next runnable coroutine is picked by the seed
+  (`NURL_SIM=0` keeps FIFO). One seed replays a run byte for byte; a sweep
+  of seeds tries interleavings FIFO never would. `NURL_SIM_TRACE=1`
+  prints the schedule's hash and the virtual time at exit, and
+  `NURL_SIM_LIMIT_MS` stops a run that never finishes.
+  `compiler/tests/net_sim_http.nu` — a server thread and a client over
+  the simulated network, through a partition and a heal — simulates
+  660 ms in about 2 ms. `unikernel/run_sim_tests.sh` gates it in CI:
+  the hosted golden under five seeds, byte-identical runs under one,
+  different schedules across seeds where there is a choice to make, and
+  more time simulated than taken. The real runtime is untouched (a
+  simulation is a different link).
+
 ### Changed
 
 - **Windows test records keep the program's output order** (Agora #256,
@@ -465,6 +485,21 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   already could on the unikernel. The common signal with no fiber waiting
   costs one atomic load more; a thread ping-pong over channels and a
   4-thread `Locked` counter measured the same before and after.
+
+- **An HTTP server links on the freestanding runtime**: `runtime_bare.c`
+  answers `nurl_signal_pending` (no signal is ever pending) and
+  `nurl_signal_install_shutdown` (there is nothing to arm) — the two
+  symbols `net_sim_http` was missing under `run_nolibc_tests.sh`.
+- **`runtime_run` may be called from a thread on the freestanding
+  runtime** (Agora #273). Called from a coroutine — a thread that runs a
+  fiber server, `http_app_async` inside `thread_spawn` — it drove the
+  scheduler as the main context does, nested inside the coroutine and
+  waiting for a count that included the caller itself, so the server
+  never finished (`net_sim_http_async` hung under
+  `run_nolibc_tests.sh`). From a coroutine it now waits for the spawned
+  fibers — what the hosted runtime's `runtime_run` waits for — parked
+  until the last one ends; from the main context it still runs every
+  coroutine, detached threads included, to the end.
 
 ### Security
 
