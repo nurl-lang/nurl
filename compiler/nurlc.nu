@@ -2969,6 +2969,16 @@ unsafe @ note_unsafe_item s pos s what → v {
 // while the join's arms are compiled; `g_jpb_list` collects what moved,
 // as `owner slot` pairs, the slot true on the paths that moved it
 // (__jpb_note, __jpb_putback; agora #242).
+// A value block bound by a typed `:` is elaborated as the calculus has it
+// (docs/dev/ELABORATION.md, stage 1 of agora #222): the binding is declared
+// first, owning nothing, and the block's tail is assigned to it before the
+// block's own names end (gen_block_expr → __assign_after). The name the next
+// value block assigns its tail to, and what gen_assign would have snapshot
+// before the tail's value (__assign_pre_stmt).
+: ~ s g_blk_tail_to ``
+: ~ b g_bt_src_env F
+: ~ i g_bt_sxn0 0
+: ~ i g_bt_sxmp0 0
 : ~ i g_jpb_on 0
 : ~ s g_jpb_list ``
 : ~ i g_jpb_depth0 0
@@ -21977,6 +21987,103 @@ unsafe @ __blk_leave b val → v {
     ? val { = g_blk_val_depth - g_blk_val_depth 1 } {}
 }
 
+// May `: T name { … }` be elaborated (stage 1 of agora #222)? A type whose
+// value a drop owns (a String, a Vec, a struct with a `% Drop` …): that is
+// what the tail's assignment decides. A number or a flag holds nothing.
+@ __elab_block_ok i syms s ptype → b {
+    ? == 0 g_auto_drop_strings { ^ F } {}
+    : s rpt ( __udrop_regty ptype )
+    ^ != 0 ( nurl_sym_len g_impl_name_syms ( nurl_str_cat `drop##` rpt ) )
+}
+
+// `: T name { stmts tail }` as `: T name` (owning nothing) then `{ stmts
+// = name tail }`: the tail is judged as an assignment to a binding of the
+// enclosing scope while the block's own names are still in scope — copied
+// where it lends of them, moved where it selects one — and the block's
+// locals end at its `}` (docs/dev/ELABORATION.md §2, agora #222).
+unsafe @ __elab_block_let i lex i syms i cg s name s ptype b mutable i bck_line → s {
+    : s lt ( nurl_llty ptype )
+    : s ptr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ptr ) ( nurl_print ` = alloca ` ) ( nurl_print lt ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( emit_dbg_line_eol bck_line )
+    ( dbg_declare_local name ptr ptype ( nurl_lex_line lex ) 0 syms )
+    ( nurl_sym_def syms name ptype )
+    ( rec_decl_loc syms name bck_line lex )
+    ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
+    ? mutable { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) } {}
+    : s rpt ( __udrop_regty ptype )
+    ( __handle_drop_ensure rpt )
+    = g_udrop_noinit 1
+    ( mem_own_add_user_drop syms cg ptr rpt )
+    ( mem_udrop_flag_set syms cg ptr `0` )
+    ( mem_journal_push_userdrop syms cg ptr rpt )
+    // The walk: a binding that holds nothing yet; the tail's `assign` row
+    // gives it its value.
+    ( bck_record_binding `let` name bck_line ( bck_bind_class lt ) lt )
+    = g_blk_tail_to ( nurl_str_cat name `` )
+    : s val ( gen_expr lex syms cg )
+    = g_blk_tail_to ``
+    ^ val
+}
+
+// Before each statement of a block whose tail is assigned to `name`: what
+// gen_assign does before compiling a value (its side channels cleared, the
+// value's first token's snapshots), since which statement is the tail is
+// known only once it is compiled (agora #222, stage 1).
+unsafe @ __assign_pre_stmt i lex i syms s name → v {
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    : s vt ( nurl_sym_get syms name )
+    : i tt ( nurl_lex_type lex )
+    : s tv ( nurl_lex_val lex )
+    : b los & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) ( nurl_sym_has_word syms `__owned_strings__` ptr )
+    : b lsl & ( mem_is_slice_ty vt ) ( nurl_sym_has_word syms `__owned_slices__` name )
+    ? | los lsl { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) ( nurl_sym_def syms `__last_slice_owned__` `` ) } {}
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+    ( nurl_sym_def syms `__last_call_guard__` `` )
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
+    ( nurl_sym_def syms `__last_phi_cause__` `` )
+    ( nurl_sym_def syms `__last_phi_definite__` `` )
+    ( nurl_sym_def syms `__last_closure_env__` `` )
+    ( __clo_tmp_set `` )
+    ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` ) ( nurl_sym_def syms `__last_closure_effects__` `` ) ( nurl_sym_def syms `__last_closure_assigns__` `` )
+    ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+    ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
+    ( nurl_sym_def syms `__last_value_borrow__` `` )
+    = g_bt_src_env & ( is_ident_tok tt ) ( nurl_sym_has_word syms `__owned_closure_envs__` tv )
+    = g_bt_sxn0 g_sx_n
+    = g_bt_sxmp0 g_member_path_on
+    = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == tt TT_DOT 1 g_member_path_on
+    = g_last_alloc_reg ``
+}
+
+// The tail's `expr` row (a call statement records one at its end), taken
+// back with what it read: those reads are the assignment's (agora #222).
+unsafe @ __bck_take_back_expr i line → v {
+    ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ v } {}
+    : s st ( nurl_sym_get g_bck `stmts` )
+    : i n ( nurl_str_len st )
+    ? == n 0 { ^ v } {}
+    : *u sp # *u st
+    : ~ i k - n 1
+    ~ & >= k 0 != # i . sp k 10 { = k - k 1 }
+    : i b + k 1
+    : s row ( nurl_str_slice st b - n b )
+    // `expr\t\t<reads>\t<line>\t<depth>`
+    ? == 0 ( nurl_str_starts row `expr\t\t` ) { ^ v } {}
+    : s rest ( nurl_str_slice row 6 - ( nurl_str_len row ) 6 )
+    : i t1 ( nurl_str_find rest `\t` )
+    ? < t1 0 { ^ v } {}
+    : s rds ( nurl_str_slice rest 0 t1 )
+    : s after ( nurl_str_slice rest + t1 1 - - ( nurl_str_len rest ) t1 1 )
+    : i t2 ( nurl_str_find after `\t` )
+    : s lnum ? < t2 0 ( nurl_str_cat after `` ) ( nurl_str_slice after 0 t2 )
+    ? != ( nurl_str_to_int lnum ) line { ^ v } {}
+    ( bck_put `stmts` ? < k 0 `` ( nurl_str_slice st 0 k ) )
+    : s cur ( nurl_sym_get g_bck `reads` )
+    ( bck_put `reads` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat rds `` ) ( nurl_str_cat3 rds ` ` cur ) )
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     // A `?`/`??` arm body (mem_arm_body_mark) leaves the exits its tail
@@ -22007,7 +22114,14 @@ unsafe @ __blk_leave b val → v {
     // value is a scalar, which cannot point into what the block bound.
     : b __blk_scalar_val & & blk_val ! blk_is_arm != 0 g_blk_scalar_let
     = g_blk_scalar_let 0
-    : b __blk_scope | & & ! blk_is_arm blk_is_stmt ! blk_val __blk_scalar_val
+    // A block whose tail is assigned to a binding of the enclosing scope
+    // (__elab_block_let): a scope of its own, as in the calculus — what the
+    // tail needs of its names is copied or moved into the binding before
+    // they end at the `}` (agora #222, stage 1).
+    : s __bt_to ( nurl_str_cat g_blk_tail_to `` )
+    = g_blk_tail_to ``
+    : b __bt_on & != 0 ( nurl_str_len __bt_to ) ! blk_is_arm
+    : b __blk_scope | | & & ! blk_is_arm blk_is_stmt ! blk_val __blk_scalar_val __bt_on
     : ~ s old_strs_bb ``
     : ~ s old_structs_bb ( nurl_str_cat `` `` )
     : ~ s old_user_bb ( nurl_str_cat `` `` )
@@ -22025,6 +22139,7 @@ unsafe @ __blk_leave b val → v {
     } {}
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
+    : ~ i __bt_line 0
     : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
     : ~ i __tail_sxn0 0
@@ -22051,7 +22166,9 @@ unsafe @ __blk_leave b val → v {
         = __tail_sxn0 g_sx_n
         = __nstmt + __nstmt 1
         ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __bt_on { ( __assign_pre_stmt lex syms __bt_to ) = __bt_line ( nurl_lex_line lex ) } {}
         = last ( gen_stmt lex syms cg )
+        ? & __bt_on != ( nurl_lex_type lex ) TT_RBRACE { = g_member_path_on g_bt_sxmp0 } {}
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
         { ? & blk_is_arm & == ( nurl_lex_peek_type lex ) TT_LBRACE == ( nurl_lex_peek2_type lex ) TT_RBRACE
             { ( mem_arm_tail_own syms cg last __tail_tt ) } {} }
@@ -22067,6 +22184,17 @@ unsafe @ __blk_leave b val → v {
     ? & any == __tail_tt TT_DOT { ( __blk_froot_set ( nurl_sym_get syms `__last_member_root__` ) ) } { ? & any == __tail_tt TT_LBRACE {} { = g_blk_froot `` } }
     = g_blk_tail_eff ? == __tail_tt TT_LBRACE g_blk_tail_eff ? & == __tail_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN __tail_tt
     ? & blk_val != 0 __sx_bme { ( __sx_publish __sx_bme ( __blk_tail_sx syms any __nstmt __tail_tt __tail_tv __tail_sxn0 ) ) } {}
+    // The tail, assigned to the binding the block elaborates into, while
+    // the block's names are still in scope (__assign_after: gen_assign's
+    // own rules for a binding of an enclosing scope; agora #222).
+    ? & & __bt_on any == g_did_ret 0 {
+        : s __bt_ptr ( nurl_sym_get2 syms __bt_to `__ptr` )
+        : s __bt_vt ( nurl_sym_get syms __bt_to )
+        : b __bt_los & & != 0 g_auto_drop_strings ( seq ( nurl_llty __bt_vt ) `i8*` ) ( nurl_sym_has_word syms `__owned_strings__` __bt_ptr )
+        : b __bt_lsl & ( mem_is_slice_ty __bt_vt ) ( nurl_sym_has_word syms `__owned_slices__` __bt_to )
+        ( __bck_take_back_expr __bt_line )
+        = last ( __assign_after lex syms cg __bt_to last __bt_line __bt_vt __bt_ptr `` __bt_los __bt_lsl __tail_tt __tail_tv g_bt_src_env g_bt_sxn0 g_bt_sxmp0 )
+    } {}
     ? __blk_scope {
         ? == g_did_ret 0 {
             ? != 0 g_auto_drop_strings {
@@ -34935,6 +35063,13 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : i __sxmp0 g_member_path_on
             = g_member_path_on ? & | != 0 g_srcx_on != 0 g_borrowck == bck_rhs_tt TT_DOT 1 g_member_path_on
             = g_last_alloc_reg ``
+            // A value block of a type a drop owns is elaborated: the binding
+            // first, owning nothing, then the block with its tail assigned to
+            // it (docs/dev/ELABORATION.md, agora #222 stage 1).
+            ? & == bck_rhs_tt TT_LBRACE ( __elab_block_ok syms ptype ) {
+                = g_member_path_on __sxmp0
+                ^ ( __elab_block_let lex syms cg name ptype is_mutable bck_line )
+            } {}
             // A block computing a number or a flag (`: i n { … }`) is a scope
             // of its own: what it binds goes at its `}` (gen_block_expr).
             = g_blk_scalar_let ? == bck_rhs_tt TT_LBRACE ? ( __plain_scalar_lty ( nurl_llty ptype ) ) 1 0 0
