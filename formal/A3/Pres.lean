@@ -89,13 +89,13 @@ theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Rest
           obtain ⟨b, hb, hbk⟩ := (hall k).mp hCk
           obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
           have hji : i ≠ j := fun he => by subst he; rw [ha] at hj; cases hj; rw [hbk] at hak; cases hak
-          exact ⟨b, List.mem_of_getElem? (by rw [list_set_get hilen', if_neg hji]; exact hj), hbk⟩
+          exact ⟨b, List.mem_of_getElem? (by rw [list_set_get hilen', ite_eq_right hji]; exact hj), hbk⟩
       · rintro ⟨b, hb, hbk⟩
         obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
         rw [list_set_get hilen'] at hj
         by_cases hji : i = j
-        · rw [if_pos hji] at hj; cases hj; rw [hm1] at hbk; exact minus_le k hbk
-        · rw [if_neg hji] at hj
+        · rw [ite_eq_left hji] at hj; cases hj; rw [hm1] at hbk; exact minus_le k hbk
+        · rw [ite_eq_right hji] at hj
           have hCk := part_sub hall hj k hbk
           have hak : a k = false := hdisj j i b a (Ne.symm hji) hj ha k hbk
           have ho : minus C.alloc a k = true := by simp [minus, hCk, hak]
@@ -105,32 +105,32 @@ theorem CInv.thread_of {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Rest
       intro j k b c hjk hj hk x hx
       rw [list_set_get hilen'] at hj hk
       by_cases hij : i = j
-      · rw [if_pos hij] at hj; cases hj
-        rw [if_neg (by omega)] at hk
+      · rw [ite_eq_left hij] at hj; cases hj
+        rw [ite_eq_right (by omega)] at hk
         cases hc : c x with
         | false => rfl
         | true =>
           have hCx := part_sub hall hk x hc
           have hax : a x = false := hdisj k i c a (by omega) hk ha x hc
           rw [hm1] at hx; simp [minus, hCx, hax] at hx
-      · rw [if_neg hij] at hj
+      · rw [ite_eq_right hij] at hj
         by_cases hik : i = k
-        · rw [if_pos hik] at hk; cases hk
+        · rw [ite_eq_left hik] at hk; cases hk
           have hCx := part_sub hall hj x hx
           have hax : a x = false := hdisj j i b a (by omega) hj ha x hx
           rw [hm1]; simp [minus, hCx, hax]
-        · rw [if_neg hik] at hk; exact hdisj j k b c hjk hj hk x hx
+        · rw [ite_eq_right hik] at hk; exact hdisj j k b c hjk hj hk x hx
     · -- every thread keeps its facts
       intro j tj b htj hb
       simp only [Cfg.put] at htj
       rw [list_set_get hilen'] at hb
       rw [list_set_get hilen] at htj
       by_cases hij : i = j
-      · rw [if_pos hij] at hb htj; cases hb; cases htj
+      · rw [ite_eq_left hij] at hb htj; cases hb; cases htj
         have hm : ownView (C.put i m' s') ⟨m'.st, m'.nv, s'⟩ m1.alloc = m1 := by
           rw [hm1]; rfl
         rw [hm]; exact ⟨hto1, hbo1⟩
-      · rw [if_neg hij] at hb htj
+      · rw [ite_eq_right hij] at hb htj
         obtain ⟨htoj, hboj⟩ := hok j tj b htj hb
         have hn : C.nid ≤ m'.nid := hgrow.nid
         exact ⟨ThreadOK.nid_le htoj hn, hboj.of_st rfl⟩

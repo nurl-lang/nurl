@@ -33,7 +33,7 @@ theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
     show upd (upd m.alloc m.nid true) (m.nid + 1) true i = m.alloc i
     have h1 : i ≠ m.nid + 1 := fun he => by rw [hf i (by omega)] at hi; cases hi
     have h2 : i ≠ m.nid := fun he => by rw [hf i (by omega)] at hi; cases hi
-    simp only [upd, if_neg h1, if_neg h2]
+    simp only [upd, ite_eq_right h1, ite_eq_right h2]
   | pair h1 h2 => rw [TakeVal.alloc h2, TakeVal.alloc h1]
   | inl h1 => rw [TakeVal.alloc h1]
   | inr h1 => rw [TakeVal.alloc h1]
@@ -85,7 +85,7 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
     have h2 : i ≠ d := fun he => by
       have := hav1 d ⟨x, _, hx, by simp [Val.ids]⟩
       rw [← he, hi] at this; cases this
-    simp only [upd, if_neg h1, if_neg h2]
+    simp only [upd, ite_eq_right h1, ite_eq_right h2]
     exact congrFun (TakeVal.alloc ht) i
   | free hx hf' =>
     intro i hi

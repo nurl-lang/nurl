@@ -36,15 +36,15 @@ theorem BorFree.set {m : Mem} (h : BorFree m) (x : Var) {sl : Slot} (hsl : SlotF
   intro y v hy
   simp only [Mem.set, upd] at hy
   by_cases hyx : y = x
-  · rw [if_pos hyx] at hy; cases hy; exact hsl rfl v rfl
-  · rw [if_neg hyx] at hy; exact h y v hy
+  · rw [ite_eq_left hyx] at hy; cases hy; exact hsl rfl v rfl
+  · rw [ite_eq_right hyx] at hy; exact h y v hy
 
 theorem BorFree.remove {m : Mem} (h : BorFree m) (x : Var) : BorFree (m.remove x) := by
   intro y v hy
   simp only [Mem.remove, upd] at hy
   by_cases hyx : y = x
-  · rw [if_pos hyx] at hy; cases hy
-  · rw [if_neg hyx] at hy; exact h y v hy
+  · rw [ite_eq_left hyx] at hy; cases hy
+  · rw [ite_eq_right hyx] at hy; exact h y v hy
 
 theorem SlotFree.own (v : Option Val) : SlotFree ⟨true, v⟩ := fun h => by cases h
 

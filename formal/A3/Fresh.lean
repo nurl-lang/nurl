@@ -57,7 +57,7 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     · exact .inr (by omega)
     · by_cases h2 : i = m.nid
       · exact .inr (by omega)
-      · simp only [upd, if_neg h1, if_neg h2] at hi; exact .inl hi
+      · simp only [upd, ite_eq_right h1, ite_eq_right h2] at hi; exact .inl hi
   | pair h1 h2 => exact (TakeVal.grows h1).trans (TakeVal.grows h2)
   | inl h1 => exact TakeVal.grows h1
   | inr h1 => exact TakeVal.grows h1
@@ -101,10 +101,10 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     change upd (upd m1.alloc d false) m1.nid true i = true at hi
     by_cases h1 : i = m1.nid
     · exact .inr (by omega)
-    · simp only [upd, if_neg h1] at hi
+    · simp only [upd, ite_eq_right h1] at hi
       by_cases h2 : i = d
-      · rw [if_pos h2] at hi; cases hi
-      · rw [if_neg h2] at hi; exact .inl hi
+      · rw [ite_eq_left h2] at hi; cases hi
+      · rw [ite_eq_right h2] at hi; exact .inl hi
   | free _ hf => exact Grows.shrink (Frees.le hf) rfl
   | panic => exact Grows.refl _
   | letrec _ _ _ => exact Grows.of_eq rfl rfl

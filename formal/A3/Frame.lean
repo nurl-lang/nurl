@@ -34,7 +34,7 @@ theorem split_alloc {a a1 a2 : Nat → Bool} (hs : Split a a1 a2) {n : Nat} (h2 
   intro i
   by_cases hin : i = n
   · subst hin; simp [upd, h2]
-  · simp only [upd, if_neg hin]; exact hs i
+  · simp only [upd, ite_eq_right hin]; exact hs i
 
 /-- Freeing one of the thread's own addresses frees it in the thread's part. -/
 theorem split_free {a a1 a2 : Nat → Bool} (hs : Split a a1 a2) {n : Nat} (h1 : a1 n = true) :
@@ -42,6 +42,6 @@ theorem split_free {a a1 a2 : Nat → Bool} (hs : Split a a1 a2) {n : Nat} (h1 :
   intro i
   by_cases hin : i = n
   · subst hin; simp [upd, hs.not_right h1]
-  · simp only [upd, if_neg hin]; exact hs i
+  · simp only [upd, ite_eq_right hin]; exact hs i
 
 end A3

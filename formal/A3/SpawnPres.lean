@@ -59,11 +59,11 @@ theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List 
 theorem list_append_get {α : Type} {l : List α} {y : α} {j : Nat} :
     (l ++ [y])[j]? = if j < l.length then l[j]? else if j = l.length then some y else none := by
   by_cases h : j < l.length
-  · rw [if_pos h, List.getElem?_append_left h]
-  · rw [if_neg h, List.getElem?_append_right (by omega)]
+  · rw [ite_eq_left h, List.getElem?_append_left h]
+  · rw [ite_eq_right h, List.getElem?_append_right (by omega)]
     by_cases he : j = l.length
     · subst he; simp
-    · rw [if_neg he]; simp; omega
+    · rw [ite_eq_right he]; simp; omega
 
 /-- A list with one element replaced and one appended, by index. -/
 theorem get_set_append {α : Type} {l : List α} {i : Nat} {x y : α} (hi : i < l.length) (j : Nat) :
@@ -72,8 +72,8 @@ theorem get_set_append {α : Type} {l : List α} {i : Nat} {x y : α} (hi : i < 
   rw [list_append_get]
   simp only [List.length_set]
   by_cases hj : j < l.length
-  · rw [if_pos hj, if_pos hj, list_set_get hi]
-  · rw [if_neg hj, if_neg hj]
+  · rw [ite_eq_left hj, ite_eq_left hj, list_set_get hi]
+  · rw [ite_eq_right hj, ite_eq_right hj]
 
 /-- **A spawn keeps the configuration invariant.** -/
 theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P spawn)
@@ -143,19 +143,19 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
           show (a k && !a' k) = true
           rw [hbk, ha']; rfl
       · have hjl : j < ps.length := (List.getElem?_eq_some_iff.mp hj).1
-        exact ⟨b, List.mem_of_getElem? (i := j) (by rw [get_set_append hilen', if_pos hjl, if_neg hji]; exact hj), hbk⟩
+        exact ⟨b, List.mem_of_getElem? (i := j) (by rw [get_set_append hilen', ite_eq_left hjl, ite_eq_right hji]; exact hj), hbk⟩
     · rintro ⟨b, hb, hbk⟩
       obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hb
       rw [get_set_append hilen'] at hj
       by_cases hjl : j < ps.length
-      · rw [if_pos hjl] at hj
+      · rw [ite_eq_left hjl] at hj
         by_cases hji : i = j
-        · rw [if_pos hji] at hj; cases hj; exact hsub k (ha'a k hbk)
-        · rw [if_neg hji] at hj; exact part_sub hall hj k hbk
-      · rw [if_neg hjl] at hj
+        · rw [ite_eq_left hji] at hj; cases hj; exact hsub k (ha'a k hbk)
+        · rw [ite_eq_right hji] at hj; exact part_sub hall hj k hbk
+      · rw [ite_eq_right hjl] at hj
         by_cases hje : j = ps.length
-        · rw [if_pos hje] at hj; cases hj; exact hsub k (haNa k hbk)
-        · rw [if_neg hje] at hj; cases hj
+        · rw [ite_eq_left hje] at hj; cases hj; exact hsub k (haNa k hbk)
+        · rw [ite_eq_right hje] at hj; cases hj
   · -- the parts are disjoint
     intro j j' b c hjj hj hj' z hz
     rw [get_set_append hilen'] at hj hj'
@@ -165,14 +165,14 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
         (q = i ∧ e = a') ∨ (q = ps.length ∧ e = aN) ∨ (q ≠ i ∧ q < ps.length ∧ ps[q]? = some e) := by
       intro q e he
       by_cases hq : q < ps.length
-      · rw [if_pos hq] at he
+      · rw [ite_eq_left hq] at he
         by_cases hiq : i = q
-        · rw [if_pos hiq] at he; cases he; exact .inl ⟨hiq.symm, rfl⟩
-        · rw [if_neg hiq] at he; exact .inr (.inr ⟨Ne.symm hiq, hq, he⟩)
-      · rw [if_neg hq] at he
+        · rw [ite_eq_left hiq] at he; cases he; exact .inl ⟨hiq.symm, rfl⟩
+        · rw [ite_eq_right hiq] at he; exact .inr (.inr ⟨Ne.symm hiq, hq, he⟩)
+      · rw [ite_eq_right hq] at he
         by_cases hq' : q = ps.length
-        · rw [if_pos hq'] at he; cases he; exact .inr (.inl ⟨hq', rfl⟩)
-        · rw [if_neg hq'] at he; cases he
+        · rw [ite_eq_left hq'] at he; cases he; exact .inr (.inl ⟨hq', rfl⟩)
+        · rw [ite_eq_right hq'] at he; cases he
     rcases side j b hj with ⟨hji, hbe⟩ | ⟨hjl, hbe⟩ | ⟨hji, _, hjp⟩ <;>
     rcases side j' c hj' with ⟨hji', hce⟩ | ⟨hjl', hce⟩ | ⟨hji', _, hjp'⟩
     · exact absurd (hji.trans hji'.symm) hjj
@@ -199,9 +199,9 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
     rw [get_set_append hilen'] at hb
     rw [list_append_get, hlen', list_set_get hilen] at ht0
     by_cases hjl : j < ps.length
-    · rw [if_pos hjl] at hb ht0
+    · rw [ite_eq_left hjl] at hb ht0
       by_cases hij : i = j
-      · rw [if_pos hij] at hb ht0; cases hb; cases ht0
+      · rw [ite_eq_left hij] at hb ht0; cases hb; cases ht0
         refine ⟨hto', fun y v hy => ?_⟩
         simp only [ownView, upd] at hy
         split at hy
@@ -209,11 +209,11 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
         · rcases MoveArgs.slot hmv y _ hy with h0 | h0
           · exact hbo y v h0
           · cases h0
-      · rw [if_neg hij] at hb ht0
+      · rw [ite_eq_right hij] at hb ht0
         exact hok j t0 b ht0 hb
-    · rw [if_neg hjl] at hb ht0
+    · rw [ite_eq_right hjl] at hb ht0
       by_cases hje : j = ps.length
-      · rw [if_pos hje] at hb ht0; cases hb; cases ht0
+      · rw [ite_eq_left hje] at hb ht0; cases hb; cases ht0
         refine ⟨htoN, fun y v hy => ?_⟩
         simp only [ownView, spawnSt] at hy
         split at hy
@@ -221,7 +221,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
         · cases hv : vs[y]? with
           | none => rw [hv] at hy; cases hy
           | some w => rw [hv] at hy; cases hy
-      · rw [if_neg hje] at hb; cases hb
+      · rw [ite_eq_right hje] at hb; cases hb
 
 /-- **A3.0**, given the two frame lemmas and the spawn case's three. -/
 theorem claim_from (hR : ∀ P, RestrictLemma P) (hL : ∀ P, LiftLemma P)
