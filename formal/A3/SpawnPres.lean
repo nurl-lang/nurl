@@ -228,7 +228,7 @@ theorem claim_from (hR : ∀ P, RestrictLemma P) (hL : ∀ P, LiftLemma P)
     (hSO : ∀ P spawn, ProgOK P → ProgCodes P → SpawnOK P spawn → SpawnerLemma P spawn)
     (hSA : ∀ P spawn, ProgOK P → SpawnOK P spawn → SpawnArgsLemma P spawn)
     (hNT : ∀ P spawn, ProgOK P → ProgCodes P → SpawnOK P spawn → NewThreadLemma P spawn) : Claim :=
-  claim_of hR hL fun P spawn hP hPc hS h hi hK hsp hf hx hmv =>
+  claim_of hR hL fun P spawn hP hPc hS {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv =>
     CInv.spawn_of (hSO P spawn hP hPc hS) (hSA P spawn hP hS) (hNT P spawn hP hPc hS) h hi hK hsp hf hx hmv
 
 end A3
