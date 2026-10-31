@@ -18,6 +18,10 @@
 //                                                          path + query)
 //   ( parse_query s qs )                    → ( Vec QueryPair )
 //   ( query_pairs_free ( Vec QueryPair ) v ) → v   early release (optional)
+//   ( query_value ( Slice u ) qs s key )    → ?( Slice u )  first value of
+//                                                          key: raw view,
+//                                                          no allocation
+//   ( request_query_int HttpRequest req s key ) → ?i   …as an integer
 //
 // Note on shape: query parameters use a dedicated `QueryPair { String
 // key, String value }` struct. `( Vec ( Pair String String ) )` is
@@ -566,6 +570,47 @@ $ `stdlib/std/simd.nu`
 }
 
 @ query_pairs_free sink ( Vec QueryPair ) v → v {}
+
+// The first value of `key` in a query string, as a view of `qs`'s bytes:
+// raw (not percent-decoded) and nothing allocated, where parse_query
+// decodes every pair into Strings of its own. A pair with no `=` has the
+// empty value. F when no pair's key is `key`, byte for byte.
+@ query_value ( Slice u ) qs s key → ?( Slice u ) {
+    : ( Slice u ) kb ( slice_of_str key )
+    : i kn ( slice_len [u] kb )
+    : i n ( slice_len [u] qs )
+    : ~ i start 0
+    ~ < start n {
+        : ~ i end start
+        ~ & < end n != ( slice_byte qs end ) 38 { = end + end 1 }
+        : ~ i eq start
+        ~ & < eq end != ( slice_byte qs eq ) 61 { = eq + eq 1 }
+        ? == - eq start kn {
+            ? ( slice_bytes_eq ( slice_window [u] qs start kn ) kb ) {
+                : i from ? < eq end + eq 1 end
+                ^ @ ?( Slice u ) { T ( slice_window [u] qs from - end from ) }
+            } {}
+        } {}
+        = start + end 1
+    }
+    ^ @ ?( Slice u ) { F ( slice_empty [u] ) }
+}
+
+// The first value of `key` in the request's query as an integer (an
+// optional sign and decimal digits, all of the value): F when the query
+// has no such key or its value is not one. Nothing is allocated — a
+// handler's `?limit=50` read with no Vec of decoded pairs behind it.
+@ request_query_int HttpRequest req s key → ?i {
+    ?? ( query_value ( string_bytes . req query ) key ) {
+        T v → {
+            ?? ( slice_to_int v ) {
+                T x → { ^ @ ?i { T x } }
+                F _ → { ^ @ ?i { F 0 } }
+            }
+        }
+        F → { ^ @ ?i { F 0 } }
+    }
+}
 
 // ── Internal request-line parts ───────────────────────────────────────
 //

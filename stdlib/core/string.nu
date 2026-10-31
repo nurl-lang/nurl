@@ -47,6 +47,7 @@
 //   ( string_contains s n )    → b           substring check
 //   ( string_substr s from len ) → String    owned copy of [from, from+len)
 //   ( string_to_int s )        → ! i ParseErr  strict decimal parse with sign
+//   ( slice_to_int b )         → ! i ParseErr  …of the bytes a ( Slice u ) views
 //   ( string_to_float s )      → ?f            strict decimal float
 //   ( string_index_of s p )    → ?i            byte index of first occurrence
 //   ( string_split s sep )     → ( Vec String ) split on sep occurrences
@@ -851,6 +852,12 @@ raw @ string_commit String str i n → v {
 // Use the String's full byte length: embedded NUL cannot hide a suffix.
 @ string_to_int String str → !i ParseErr {
     ^ ( _string_parse_decimal ( string_data str ) ( string_len str ) )
+}
+
+// …the same over a view (a query value, a field of a buffer): all of its
+// bytes, nothing copied first.
+@ slice_to_int ( Slice u ) b → !i ParseErr {
+    ^ ( _string_parse_decimal # s ( slice_data [u] b ) ( slice_len [u] b ) )
 }
 
 // First byte index at which `needle` occurs in `str`. Empty needle

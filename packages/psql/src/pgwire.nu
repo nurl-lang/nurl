@@ -629,42 +629,41 @@ $ `stdlib/std/arc.nu`
     ^ @ ?i { F 0 }
 }
 
-// The span of cell (row, col): [offset, length]; length -1 = NULL, -2 =
-// no such cell.
-@ __pg_span PgResult r i row i col → i {
-    ? | | < row 0 >= row . r nrows | < col 0 >= col . r ncols { ^ -1 } {}
-    ^ * 2 + * row . r ncols col
-}
+// Where cell (row, col) lies in the result's bytes: [off, off + len),
+// len -1 for a NULL and -2 for a cell outside the table. One bounds check
+// and one span read, shared by every accessor (each read both the length
+// and the offset, and computed the span for each).
+: PgCellAt { i off i len }
 
-@ __pg_len PgResult r i row i col → i {
-    : i at ( __pg_span r row col )
-    ? < at 0 { ^ -2 } {}
-    ^ ( vec_at [i] . r spans + at 1 )
+@ __pg_cell PgResult r i row i col → PgCellAt {
+    ? | | < row 0 >= row . r nrows | < col 0 >= col . r ncols { ^ @ PgCellAt { 0 -2 } } {}
+    : i at * 2 + * row . r ncols col
+    ^ @ PgCellAt { ( vec_at [i] . r spans at ) ( vec_at [i] . r spans + at 1 ) }
 }
-
-@ __pg_off PgResult r i row i col → i { ^ ( vec_at [i] . r spans ( __pg_span r row col ) ) }
 
 @ __pg_fmt PgResult r i col → i { ^ . ( vec_at [PgCol] ( _pg_cols r ) col ) fmt }
 
 // T for a NULL — and for a cell outside the table.
-@ pg_row_is_null PgResult r i row i col → b { ^ < ( __pg_len r row col ) 0 }
+@ pg_row_is_null PgResult r i row i col → b { ^ < . ( __pg_cell r row col ) len 0 }
 
 // The cell's raw bytes, a view of the result (text, or the type's binary
 // form — pg_result_col_type says which type, and pg_row_s renders
 // either). F for NULL.
 @ pg_row_view PgResult r i row i col → ?( Slice u ) {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?( Slice u ) { F ( slice_empty [u] ) } } {}
-    ^ @ ?( Slice u ) { T ( slice_window [u] ( slice_from_vec [u] . r data ) ( __pg_off r row col ) n ) }
+    ^ @ ?( Slice u ) { T ( slice_window [u] ( slice_from_vec [u] . r data ) . at off n ) }
 }
 
 // An integer: int2 / int4 / int8 / oid (bool as 0 / 1), or a text cell
 // that is one.
 @ pg_row_i PgResult r i row i col → ?i {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?i { F 0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     ? == ( __pg_fmt r col ) 1 {
         : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
         ? & == oid PG_INT2 == n 2 { ^ @ ?i { T ( pgw_i16 b off ) } } {}
@@ -680,10 +679,11 @@ $ `stdlib/std/arc.nu`
 // A float: float4 / float8, an integer column, or a text cell that is a
 // number (numeric included — to the nearest double).
 @ pg_row_f PgResult r i row i col → ?f {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?f { F 0.0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     ? == ( __pg_fmt r col ) 1 {
         : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
         ? & == oid PG_FLOAT8 == n 8 { ^ @ ?f { T ( bits_to_f64 ( pgw_i64 b off ) ) } } {}
@@ -695,10 +695,11 @@ $ `stdlib/std/arc.nu`
 
 // A bool: bool, or a text cell `t` / `f` (`true` / `false`).
 @ pg_row_b PgResult r i row i col → ?b {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?b { F F } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     ? == ( __pg_fmt r col ) 1 {
         ? & == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_BOOL == n 1 { ^ @ ?b { T != 0 ( slice_byte b off ) } } {}
         ^ @ ?b { F F }
@@ -712,10 +713,11 @@ $ `stdlib/std/arc.nu`
 // The cell as text: a text cell as it came, a binary one rendered as
 // PostgreSQL writes its type (a timestamptz in UTC, `+00`).
 @ pg_row_s PgResult r i row i col → ?String {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?String { F } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     ? == ( __pg_fmt r col ) 1 {
         ^ @ ?String { T ( pgw_render . ( vec_at [PgCol] ( _pg_cols r ) col ) oid ( slice_window [u] b off n ) ) }
     } {}
@@ -725,10 +727,11 @@ $ `stdlib/std/arc.nu`
 // The cell's bytes: a bytea's value (binary, or decoded from its `\x`
 // text form), a uuid's 16 bytes, any other cell's text.
 @ pg_row_bytes PgResult r i row i col → ?( Vec u ) {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?( Vec u ) { F } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     : ( Slice u ) w ( slice_window [u] b off n )
     ? & == ( __pg_fmt r col ) 0 == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_BYTEA {
         ? & >= n 2 & == ( slice_byte w 0 ) 92 == ( slice_byte w 1 ) 120 {
@@ -747,10 +750,11 @@ $ `stdlib/std/arc.nu`
 // A timestamp / timestamptz as microseconds since 1970-01-01 00:00 UTC
 // (a date as its midnight), binary or text (`YYYY-MM-DD[ HH:MM:SS[.f]][±HH[:MM]]`).
 @ pg_row_ts PgResult r i row i col → ?i {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?i { F 0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     : i oid . ( vec_at [PgCol] ( _pg_cols r ) col ) oid
     ? == ( __pg_fmt r col ) 1 {
         ? & | == oid PG_TIMESTAMP == oid PG_TIMESTAMPTZ == n 8 { ^ @ ?i { T + ( pgw_i64 b off ) PG_EPOCH_US } } {}
@@ -762,10 +766,11 @@ $ `stdlib/std/arc.nu`
 
 // A date as days since 1970-01-01 (a timestamp's day), binary or text.
 @ pg_row_date PgResult r i row i col → ?i {
-    : i n ( __pg_len r row col )
+    : PgCellAt at ( __pg_cell r row col )
+    : i n . at len
     ? < n 0 { ^ @ ?i { F 0 } } {}
     : ( Slice u ) b ( slice_from_vec [u] . r data )
-    : i off ( __pg_off r row col )
+    : i off . at off
     ? & & == ( __pg_fmt r col ) 1 == . ( vec_at [PgCol] ( _pg_cols r ) col ) oid PG_DATE == n 4 {
         ^ @ ?i { T + ( pgw_i32 b off ) PG_EPOCH_DAYS }
     } {}

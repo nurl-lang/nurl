@@ -1,0 +1,35 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+query_value
+  max in "min=10&max=50&limit=5": "50"
+  limit in "min=10&max=50&limit=5": "5"
+  name in "name=a%20b+c": "a%20b+c"
+  flag in "flag&x=1": ""
+  limit in "limitx=1&xlimit=2&limit=3": "3"
+  a in "a=b=c": "b=c"
+  k in "k=1&k=2": "1"
+  k in "&&k=7&": "7"
+  k in "k=": ""
+  k in "": none
+  k in "kk=1": none
+request_query_int
+  queries in "queries=20": 20
+  queries in "x=1&queries=-3": -3
+  queries in "queries=+7": 7
+  queries in "queries=foo": none
+  queries in "queries=": none
+  queries in "queries": none
+  queries in "queries=12x": none
+  queries in "queries=9223372036854775807": 9223372036854775807
+  queries in "queries=9223372036854775808": none
+  queries in "other=1": none
+slice_to_int
+  "123": 123
+  "-45": -45
+  "": Empty
+  "+": Empty
+  "1 2": BadFormat
+  "-9223372036854775808": -9223372036854775808
+  "-9223372036854775809": Overflow

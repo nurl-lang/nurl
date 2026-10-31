@@ -57,19 +57,10 @@ $ `packages/psql/src/pg.nu`
 // ── request parameters ────────────────────────────────────────────────
 
 // The integer value of query parameter `key`, or `dflt` when it is absent
-// or not an integer.
+// or not an integer — read in place, as the Rust peer's split does, with
+// no decoded pairs allocated.
 @ query_int HttpRequest req s key i dflt → i {
-    : ( Vec QueryPair ) ps ( parse_query ( string_data . req query ) )
-    : i n ( vec_len [QueryPair] ps )
-    : ~ i k 0
-    ~ < k n {
-        : QueryPair p ( vec_at [QueryPair] ps k )
-        ? == 1 ( nurl_str_eq ( string_data . p key ) key ) {
-            ^ ?? ( string_to_int . p value ) { T x → x F _ → dflt }
-        } {}
-        = k + k 1
-    }
-    ^ dflt
+    ^ ?? ( request_query_int req key ) { T x → x F → dflt }
 }
 
 @ clamp i x i lo i hi → i {
