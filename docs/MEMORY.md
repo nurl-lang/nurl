@@ -647,8 +647,11 @@ never borrows what it is given.
 
 ### 2.11 Closures hold their captures
 
-A closure holds every value it captured for as long as it can run.
-Invoking a closure reads all of its captures, so releasing a capture
+A closure holds every value it captured for as long as it can run. A
+closure that gives one capture a view of another (`= w @ V { (
+string_data b ) }` in its body) makes that capture hold the view where
+the closure runs, as a callee storing into an `inout` argument does
+(§2.10). Invoking a closure reads all of its captures, so releasing a capture
 through its original name and then invoking the closure is a use after
 move:
 

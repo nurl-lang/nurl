@@ -45,6 +45,29 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 - **A simulated network behind `TcpListener` / `TcpConn`** (Agora #240, DST 1/4). `std/net` has a transport seam: a handle made over a `NetTransport` object sends every `tcp_*` operation to it, so `HttpServer`, the `HttpApp` facade and anything else written against the handles run over it unchanged. `stdlib/std/net_sim.nu` is the first transport: `netsim_new nodes seed drop_pct latency_ms jitter_ms` makes a set of nodes, each a whole sans-IO TCP/IP stack (`stdlib/net/`), whose frames cross the seeded bus of `stdlib/dist/sim.nu` with its drops, latency, jitter and partitions (`netsim_partition` / `netsim_heal`); `netsim_listen` and `netsim_connect` make the handles, with the kernel's `NetErr`s. No operating-system socket is opened. Waiting uses the runtime's clock and its fiber park / thread block, so a runtime with a simulated clock and scheduler (DST 2/4) makes it reproducible by seed without touching the seam. A program that makes no simulated network pays nothing: `std/net` does not import it, the handles keep their layout and the plaintext path takes no extra test. `sim_next_due` (dist/sim.nu) tells when the bus's next message is due. packages/http 0.7.10 adds `http_app_serve app listener`, which serves a listener the caller made.
 
+- **The HTTP peer benchmark measures the database endpoints** (Agora #43). `bench/run_http.sh --suite db` runs TechEmpower's five tests (`/json`, `/db`, `/queries`, `/fortunes`, `/updates`) and HttpArena's `async-db` profile against PostgreSQL — `bench/http_server.nu` over `packages/psql` against hyper + `tokio-postgres`, every endpoint checked on both before a request is timed, with the plaintext suite's lock, pinning and CPU-per-request method — and writes `bench/HTTP_DB_RESULTS.md`. Without `DATABASE_URL` it starts a throwaway cluster of its own, pinned to cores the server and the generator do not use.
+- **psql `pg_connect_url`** — a connection from a `postgres://` URI (`DATABASE_URL`), anything it cannot honour refused as `PgBadUrl` — and **`pg_query_many`**: one statement, N parameter sets, every run in one write and one round trip.
+
+- **Deterministic simulation: `unikernel/build_nolibc.sh --sim`** (Agora
+  #260, DST 2/4). A program built with `--sim` runs on the cooperative
+  runtime the unikernel uses — threads and fibers as coroutines,
+  cooperative mutexes and condition variables, a report instead of a
+  hang — with the three doors to the outside world closed by a seed:
+  time is virtual (it moves when the program sleeps and jumps to the
+  earliest timer when nothing is runnable), `getrandom` is a seeded
+  stream, and the next runnable coroutine is picked by the seed
+  (`NURL_SIM=0` keeps FIFO). One seed replays a run byte for byte; a sweep
+  of seeds tries interleavings FIFO never would. `NURL_SIM_TRACE=1`
+  prints the schedule's hash and the virtual time at exit, and
+  `NURL_SIM_LIMIT_MS` stops a run that never finishes.
+  `compiler/tests/net_sim_http.nu` — a server thread and a client over
+  the simulated network, through a partition and a heal — simulates
+  660 ms in about 2 ms. `unikernel/run_sim_tests.sh` gates it in CI:
+  the hosted golden under five seeds, byte-identical runs under one,
+  different schedules across seeds where there is a choice to make, and
+  more time simulated than taken. The real runtime is untouched (a
+  simulation is a different link).
+
 ### Changed
 
 - **Windows test records keep the program's output order** (Agora #256,
@@ -214,6 +237,70 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   only the newest pending run behind it. The release commit's macOS run
   is therefore not cancelled by a later merge once it has started.
 
+- **The HTTP torture report says why a cell looks the way it does, and
+  the whole workflow fits in an hour** (Agora #120).
+  - Every cell's errors are split into harness artefacts and
+    server-attributable ones; the artefacts are a request still in flight
+    when oha's `-z` ends, and the generator's own fd and port limits.
+    Every distinct message is listed per cell. The soak's "1 to 9 errors,
+    never 0" were all `aborted due to deadline`: requests in flight when
+    the run ended, which oha itself leaves out of its success rate. Server
+    errors on a smoke run of every dimension: 0.
+  - **†** marks a cell whose window lost more than 2 % to the VM's steal.
+    **‡** marks one whose generator used ≥ 90 % of its cores. This replaces
+    the "1 KB is generator-bound" prose with a measurement.
+  - The server's CPU per request is reported at 50, 80 and 95 % load, and
+    the separate `cpu` dimension is gone (`cpu` remains an alias of
+    `loadlevels` for one release).
+  - The 1 KB and 16 KB 80 % cell runs three times and reports p99 and
+    p99.9 as median [min–max].
+  - Which server goes first alternates per body size.
+  - The soak, still one continuous run, is sampled every 10 s for RSS (and
+    its slope per minute), CPU, open fds and steal.
+  - The header records the CPU family and flags (`bench/cpu_env.py`, now
+    shared with tls-bench), the Rust peer's rustc / hyper / rustls / tokio
+    versions, and the wall time per dimension.
+  - The workflow caches oha and the Rust peer's build. It has a `mode`
+    input, and commits its report only from a full run on main.
+
+- **A borrow lost at a join names its cause** (Agora #278, test
+  diag_borrow_lost_on_a_loop_round). A binding that still borrows on one
+  path into a point and was consumed, stored or lost its source on another
+  (an earlier round of a loop, one branch of a `?`) was reported as
+  "'got' borrows from '', which ended at line  — .": the join that made it
+  unusable recorded no reason, and the message was formatted from nothing.
+  The join now records one and the message says what happened. No
+  borrow-end diagnostic prints an empty name or line any more.
+
+- **No panic-journal call on a pointer that is null on every path**
+  (Agora #282, test journal_null_ir). A function handing back a raw
+  pointer (`vec_data [u]`, any `→ *T`) loaded its owner slot, which held
+  null on every path, and called `nurl_journal_forget` with it at every
+  return. A raw-pointer binding of such a call (`: ~ *u dst ( vec_data …
+  )`) was given a string owner slot, which it freed and journaled. The
+  calls are external whenever the runtime is not inlined (`NURL_LTO=full`,
+  split builds), and every Vec-heavy encoder paid them: an encoder
+  microbenchmark under `NURL_LTO=full` runs 8.8 % fewer instructions
+  (385.6 M → 351.6 M), and bench/http_server.nu's IR has 275 fewer
+  `nurl_journal_forget` calls (276 → 1).
+
+- **A binding's panic-journal registration ends inline** (Agora #283,
+  part 1b). Bindings end in the reverse of their start, so the
+  registration a scope exit forgets is the newest one on the slot stack.
+  `nurl_journal_forget_slot` now pops it inline, with no call, unless
+  something below it was ended out of order. On the handler-shaped
+  microbenchmark this is another 6.4 % fewer instructions (219.2 M → 205.2 M),
+  10.6 % with part 1.
+
+- **A binding's panic-journal registration is cheaper** (Agora #283, part
+  1). Inside a recover extent (every HttpApp handler), every owned binding
+  registers its slot with the drop journal. The registration's body also
+  held the rare grow-the-stack path, so it saved and restored six
+  callee-saved registers on every call. The grow path is now a cold
+  tail-call of its own, and the registration is a leaf. A handler-shaped
+  microbenchmark (owned structs, Vecs and Strings in a loop under
+  `recover`) runs 4.4 % fewer instructions (229.4 M → 219.2 M).
+
 ### Performance
 
 - **ChaCha20's vector kernels run their quarter-rounds in lockstep**
@@ -374,6 +461,58 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   That is 89–91 % of aws-lc across runs, up from 76 %. CPUs with SHA-NI
   keep their kernel unchanged.
 
+- **psql hands over every answer a read brought, and allocates about seven times less per query** (Agora #43). On the bench's `/db` (two workers, loopback PostgreSQL 16) 55k → 86k requests/s and 30.5 → 19.8 µs of server CPU per request, against hyper + tokio-postgres' 19.1; `/queries?queries=20` 315 → 218 µs (Rust: 215) with `pg_query_many`. One connection shared by fibers on two workers: 39–44k → 69–118k queries/s. (On a single worker the server becomes the bottleneck and the one-connection bench reads 93–110k where it read 117–145k: the server spends more per query when its client idles between batches — see packages/psql/CHANGELOG.md.)
+
+- **RSA-2048 signing is 8 % faster on CPUs without AVX-512 IFMA**
+  (Agora #117). The constant-time exponentiation of each CRT half uses
+  fixed 5-bit windows instead of 4-bit ones. A blinded 1088-bit half
+  exponent takes 218 window multiplies and 30 table ones instead of 272
+  and 14. The entry is still chosen by a masked scan of the whole table,
+  now 32 entries, done on v256 lanes in an x86-64-v3 clone
+  (`__rm_sel32`). That costs less than the scalar scan of sixteen did.
+  The table's even powers are squarings. On a Sapphire Rapids class Xeon
+  with `NURL_CPU_IFMA=0` (the ADX tier, what Zen 3 runs), best of seven
+  min-of-seven runs: 792 → 729 µs, against aws-lc's 696 µs with IFMA
+  masked. The table is 4 KB a half during a signature instead of 2 KB.
+  The IFMA tier is unchanged.
+
+- **P-256 ECDH and ECDSA verify are 12 % faster** (Agora #225). A
+  Jacobian doubling now costs 4M+4S and eleven additions, subtractions
+  and halvings, where it cost 3M+5S and eighteen:
+  S = 4·X·Y², M = 3·(X + Z²)·(X − Z²), X3 = M² − 2S,
+  Y3 = M·(S − X3) − 8·Y⁴ and Z3 = 2·Y·Z. The formula is the one aws-lc's
+  `ecp_nistz256_point_double` uses, with 8·Y⁴ = (4·Y²)²/2 by a new
+  constant-time halving mod p. dbl-2001-b's 8·β and 8·γ² were three
+  additions each, and an addition costs about a third of a multiply here,
+  so one squaring traded for a multiply is the cheaper side. Variable-base
+  multiplication is 256 doublings, so ECDH shared and ECDSA verify move
+  with them. On a Sapphire Rapids class Xeon, best of six interleaved
+  runs:
+
+  | | Before | After | aws-lc |
+  |---|---|---|---|
+  | doubling | 172 ns | 138 ns | |
+  | ECDH shared | 73.3 µs | 64.4 µs | 54.3 µs |
+  | ECDSA verify | 73.8 µs | 65.2 µs | 69.9 µs |
+
+- **P-256 keygen and ECDSA sign are 3 % faster** (Agora #225). The
+  fixed-base comb scans each window's sixteen entries 32 bytes at a time
+  in an x86-64-v3 clone of `__p256_comb_get_d`, two loads an entry
+  instead of eight. The scan was about a sixth of keygen, and the
+  window's mixed addition waits on it. Keygen 14.4 → 14.0 µs, sign
+  19.5 → 19.1 µs (best of six, same host, another load level).
+
+- **P-256 ECDH shared is 5 % faster again** (Agora #225). The
+  variable-base multiplication runs signed five-bit Booth windows: 52
+  mixed additions where unsigned four-bit windows made 64, over an
+  affine table of 1·Q … 16·Q, the entry negated by mask for a negative
+  digit. No doublings are spent on ∞ before the first window. The mixed
+  addition still never meets the doubling case: the code comment carries
+  the argument (n ≡ 17 mod 32 is what closes the last window).
+  `p256_comb_agree` adds 27 edge scalars around (n − 1)/2, n, the digit
+  boundaries and powers of two. ECDH shared 56.7 → 53.8 µs, best of six;
+  aws-lc measures 49.6–55.6 µs in the same runs.
+
 ### Fixed
 
 - **An accept already ready when its park takes hold runs next** (Agora
@@ -466,6 +605,95 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   costs one atomic load more; a thread ping-pong over channels and a
   4-thread `Locked` counter measured the same before and after.
 
+- **A `?` / `??` or a value block bound by `:` and then handed on by name
+  is no longer a use-after-free or a leak** (Agora #242). The
+  probes covered each producer handed on directly (`^ ? c a b`); their
+  elaborated twins (`: t ? c a b` then `^ t`) were not covered, and 24 of
+  58 faulted. Found by a new oracle: `tools/fuzz/holes/check.sh` now runs
+  each probe's elaborated twin too (`tools/fuzz/holes/elab.py`).
+  - A `:` binding of a join takes the owner its arm selects on that path,
+    as docs/MEMORY.md §2.2 says and `^` already did. It gives the owner
+    back where it dies still holding it while the owner lives on, as a
+    loop body's binding of an owner made before the loop does. The
+    checker models the give-back too. Where the binding moved on some
+    path (handed to a `sink`, returned), the owner stays maybe-moved, so
+    the next pass's `? c a b` selecting it is an error. Where it did not,
+    the owner is its own again after the binding's block.
+  - A `?` / `??` arm that is a binding is read where its arm ends.
+    `( consume a )` then `: String u ? c a b` (or `?? o { T _ → a F → b }`)
+    was accepted and handed the freed `a` on: the arms' values were read
+    on rows no walk visited.
+  - An `inout` parameter assigned a binding that owns its value on some
+    paths takes it with its flag. It used to be stored as is while the
+    binding still released it.
+  - A value block ending in a fresh call, bound by `:`, owns the call's
+    result. It used to leak.
+  - A `% Drop` value bound from a join over a borrowed parameter and a
+    local is handed back with a per-call answer.
+
+  Nine twins remain open: the binding does not inherit what its producer
+  lends. They are listed in `tools/fuzz/holes/open/twins.txt`, and the
+  elaboration of #222 closes them.
+
+- **A `% Drop` holder may view only bindings declared before it**
+  (Agora #254, probes drop_holder_views_inner_then_panics and
+  drop_holder_pushed_younger_view_then_panics). A holder whose destructor
+  may read its views could be pointed at a view of a younger binding
+  (`= w @ W { ( string_data b ) }`, with b local to an inner block) and
+  pointed back before b ended, which hid it from #224's check. A panic in
+  between unwound them newest first, so b was freed and then W's
+  destructor read it. The holder is now refused where it gains a view of
+  a younger binding, by an assignment or a push into it, whatever happens
+  later.
+
+- **A field of a `sink` struct parameter moves out where it is handed on**
+  (Agora #257, probes sink_param_field_returned_in_*). A function given
+  a struct by `sink` owns it as it owns a binding of its own, but a field
+  read out of the parameter was treated as a borrow of the caller's value.
+  Bound first and returned inside a result, an option or a struct literal
+  (`: R res . col res` then `^ @ !R i { T res }`), the field's buffer was
+  dropped with the parameter and the caller read it freed:
+  heap-use-after-free in safe code. Returned directly
+  (`^ @ !R i { T . col res }`), it was copied and never dropped: a leak.
+  The field is now taken out of the parameter, as from a local.
+
+- **An HTTP server links on the freestanding runtime**: `runtime_bare.c`
+  answers `nurl_signal_pending` (no signal is ever pending) and
+  `nurl_signal_install_shutdown` (there is nothing to arm) — the two
+  symbols `net_sim_http` was missing under `run_nolibc_tests.sh`.
+- **`runtime_run` may be called from a thread on the freestanding
+  runtime** (Agora #273). Called from a coroutine — a thread that runs a
+  fiber server, `http_app_async` inside `thread_spawn` — it drove the
+  scheduler as the main context does, nested inside the coroutine and
+  waiting for a count that included the caller itself, so the server
+  never finished (`net_sim_http_async` hung under
+  `run_nolibc_tests.sh`). From a coroutine it now waits for the spawned
+  fibers — what the hosted runtime's `runtime_run` waits for — parked
+  until the last one ends; from the main context it still runs every
+  coroutine, detached threads included, to the end.
+
+- **A payload handed out of an enum that came out of an option leaves
+  the enum** (Agora #264, probes enum_payload_returned_out_of_* and
+  enum_struct_payload_returned_out_of_an_option_payload). `?? ( make ) {
+  T m → ?? m { MSome v → ^ v } }` — and the same over a `chan_recv`
+  reply, nested or first bound to a local — returned `v` as lent while
+  `m`, which owned it, was dropped with it on the way out: a
+  heap-use-after-free in safe code. An enum binding that owns its value
+  where its flag says (an option's payload, a forward call's result) now
+  gives the payload up on those paths, and the payload handed out is
+  owned there.
+
+- **A value passed for a trait-object parameter must be one** (Agora
+  #275, tests diag_trait_param_needs_dyn, _raw). The compiler's pre-pass
+  could not skip a `%Trait` parameter type. It abandoned the whole
+  parameter roster of any function taking one, so no call to it was
+  checked: a struct passed where `%Speak` is declared reached clang as
+  invalid IR. Through a `raw` callee, with a two-word struct, it compiled
+  and read the struct's second field as the vtable (SEGV). Such a call is
+  now refused, naming the fix: `( dyn Speak value )`. Calls to functions
+  with trait-object parameters now get the same arity and argument-type
+  checks as every other call.
+
 ### Security
 
 - **The JavaScript dependency audit is green again: no package pulls a
@@ -484,23 +712,22 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Known issues
 
-- **Twelve soundness holes are open, each with a fix in progress**:
-  agora #242 (a join or value block bound by `:` and handed on by name),
-  #254 (a `% Drop` holder given a view of a younger binding, then a
-  panic), #257 (a field of a `sink` struct parameter handed back inside a
-  result, option or struct literal), #259 (a view gained through an
-  `inout` callee or a closure's assignment of a capture), #264 (a payload
-  moved out of an enum that was itself taken out of an Option is dropped
-  again with the enum), #265 (a struct field bound to a local, then the
-  field replaced), #267 (a field read out of an element borrow outlives
-  the elements' drop), #268 (a field reader re-bound, then handed back),
-  #274 (a block arm of a join whose tail names an owner already moved),
-  #279 (an enum payload lent by `vec_get` out of a local Vec, handed back
-  from a nested match), #280 (a Vec or String field handed to a `sink`
-  stays usable) and #284 (an `inout` callee points the caller's `% Drop`
-  holder at its own local, then panics). `docs/LIMITATIONS.md` gives each one's shape and how to stay
-  clear of it. Agora #224, #229, #245, #247 and #252 are closed in
-  this release. A release does not say "no hole is known open" while one is.
+- **Ten soundness holes are open, each with a fix in progress**:
+  agora #242 (a join or value block bound by `:` and handed on by name,
+  in nine remaining shapes), #259 (a view gained through an `inout`
+  callee or a closure's assignment of a capture), #265 (a struct field
+  bound to a local, then the field replaced), #267 (a field read out of
+  an element borrow outlives the elements' drop), #268 (a field reader
+  re-bound, then handed back), #274 (a block arm of a join whose tail
+  names an owner already moved), #279 (an enum payload lent by `vec_get`
+  out of a local Vec, handed back from a nested match), #280 (a Vec or
+  String field handed to a `sink` stays usable), #284 (an `inout` callee
+  points the caller's `% Drop` holder at its own local, then panics) and
+  #288 (a handle parameter not declared `sink`, handed back inside a
+  result literal, leaks). `docs/LIMITATIONS.md` gives each one's shape
+  and how to stay clear of it. Closed in this release: agora #224, #229,
+  #245, #247, #252, #254, #257 and #264, and the common shapes of #242.
+  A release does not say "no hole is known open" while one is.
 
 ## [0.82.0] — 2026-10-31
 
