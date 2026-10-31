@@ -82,34 +82,50 @@ $ `stdlib/core/vec.nu`
 // path/generic component). url_query_decode handles the
 // form-urlencoded '+'→space rule for query strings.
 
-// Reads the input through a raw pointer with the length hoisted once.
-// `nurl_str_get` re-runs strlen per call, and the `string_push_char`
-// in this loop stores, so LLVM cannot hoist that strlen out — the byte
-// walk was O(n²) in the length of every decoded URL / query value.
-@ url_percent_decode s in → String {
-    : i n ( nurl_str_len in )
-    : *u p # *u in
+// Bytes [from, to) of `in` percent-decoded into a new String, '+' read
+// as a space when `plus` (the form-urlencoded rule). The input is read
+// through a raw pointer with the length hoisted (`nurl_str_get` re-runs
+// strlen per call, which made the walk O(n²)), and the output goes
+// through a reserved cursor: decoding never lengthens, so `to − from`
+// bytes are reserved once and the true length committed. A component
+// costs one allocation and no per-byte push.
+@ __url_decode_range s in i from i to b plus → String {
+    : i n - to from
     : String out ( string_with_cap + n 1 )
-    : ~ i k 0
-    ~ < k n {
-        : i c & # i . p k 255
-        ? & == c 37 <= + k 2 - n 1 {
-            : i hi ( __url_hex_val & # i . p + k 1 255 )
-            : i lo ( __url_hex_val & # i . p + k 2 255 )
-            ? & >= hi 0 >= lo 0 {
-                ( string_push_char out + * hi 16 lo )
-                = k + k 3
-            } {
-                ( string_push_char out c )
-                = k + k 1
+    ? > n 0 {
+        : *u p # *u in
+        : *u w ( string_reserve_at out n )
+        : ~ i k from
+        : ~ i o 0
+        ~ < k to {
+            : i c & # i . p k 255
+            : ~ i v c
+            : ~ i step 1
+            ? & plus == c 43 { = v 32 } {
+                ? & == c 37 <= + k 2 - to 1 {
+                    : i hi ( __url_hex_val & # i . p + k 1 255 )
+                    : i lo ( __url_hex_val & # i . p + k 2 255 )
+                    ? & >= hi 0 >= lo 0 { = v + * hi 16 lo = step 3 } {}
+                } {}
             }
-        } {
-            ( string_push_char out c )
-            = k + k 1
+            = . w o # u v
+            = o + o 1
+            = k + k step
         }
-    }
+        ( string_commit out o )
+    } {}
     ^ out
 }
+
+// Bytes [from, to) of `in`, copied once into a new String.
+@ __url_span s in i from i to → String {
+    : i n - to from
+    : String out ( string_with_cap + n 1 )
+    ? > n 0 { ( string_push_bytes out # *u + # i in from n ) } {}
+    ^ out
+}
+
+@ url_percent_decode s in → String { ^ ( __url_decode_range in 0 ( nurl_str_len in ) F ) }
 
 // Same hoisted-length / raw-pointer walk as url_percent_decode, and the
 // output goes through a reserved cursor: each input byte yields either
@@ -172,21 +188,26 @@ $ `stdlib/core/vec.nu`
 @ url_parse s in → ?Url {
     : i n ( nurl_str_len in )
     // scheme: letters/digits/+/-/. up to "://"
+    : *u ip # *u in
     : ~ i pos 0
-    : String scheme ( string_with_cap 8 )
     : ~ b ok_scheme F
     ~ & < pos n != ( nurl_str_at in n pos ) 58 {
         : i c ( nurl_str_at in n pos )
         // scheme char = ALPHA / DIGIT / '+' / '-' / '.'  (RFC 3986 §3.1)
         : b sc | ( __url_is_alpha c ) | ( __url_is_digit c ) | == c 43 | == c 45 == c 46
-        ? sc {
-            ( string_push_char scheme ( __url_lower c ) )
-            = pos + pos 1
-        } {
+        ? sc { = pos + pos 1 } {
             // illegal scheme char before ':' → not a scheme-prefixed URL
             ^ @ ?Url { F # Url 0 }
         }
     }
+    // the scheme, lowercased, in one reserved write
+    : String scheme ( string_with_cap + pos 1 )
+    ? > pos 0 {
+        : *u sw ( string_reserve_at scheme pos )
+        : ~ i si 0
+        ~ < si pos { = . sw si # u ( __url_lower & # i . ip si 255 ) = si + si 1 }
+        ( string_commit scheme pos )
+    } {}
     // require "://"
     ? & & < + pos 2 n == ( nurl_str_at in n pos ) 58
     & == ( nurl_str_at in n + pos 1 ) 47 == ( nurl_str_at in n + pos 2 ) 47
@@ -208,30 +229,24 @@ $ `stdlib/core/vec.nu`
         ? == ( nurl_str_at in n scan ) 64 { = at scan } {}
         = scan + scan 1
     }
-    : String userinfo ( string_with_cap 1 )
-    : ~ i host_start auth_start
-    ? >= at 0 {
-        : ~ i ui auth_start
-        ~ < ui at { ( string_push_char userinfo ( nurl_str_at in n ui ) ) = ui + ui 1 }
-        = host_start + at 1
-    } {}
+    : String userinfo ( __url_span in auth_start ? >= at 0 at auth_start )
+    : i host_start ? >= at 0 + at 1 auth_start
     // host: bracketed IPv6 [..]  OR  up to ':' (port) / authority end
-    : String host ( string_with_cap 16 )
     : ~ i hp host_start
+    : ~ i h0 host_start
+    : ~ i h1 host_start
     ? & < hp auth_end == ( nurl_str_at in n hp ) 91 {
-        // [IPv6] — copy inside the brackets, skip past ']'
+        // [IPv6] — the bytes inside the brackets, then past ']'
         = hp + hp 1
-        ~ & < hp auth_end != ( nurl_str_at in n hp ) 93 {
-            ( string_push_char host ( nurl_str_at in n hp ) )
-            = hp + hp 1
-        }
+        = h0 hp
+        ~ & < hp auth_end != ( nurl_str_at in n hp ) 93 { = hp + hp 1 }
+        = h1 hp
         ? & < hp auth_end == ( nurl_str_at in n hp ) 93 { = hp + hp 1 } {}
     } {
-        ~ & < hp auth_end != ( nurl_str_at in n hp ) 58 {
-            ( string_push_char host ( nurl_str_at in n hp ) )
-            = hp + hp 1
-        }
+        ~ & < hp auth_end != ( nurl_str_at in n hp ) 58 { = hp + hp 1 }
+        = h1 hp
     }
+    : String host ( __url_span in h0 h1 )
     ? == 0 ( string_len host ) {
         ^ @ ?Url { F # Url 0 }
     } {}
@@ -262,26 +277,21 @@ $ `stdlib/core/vec.nu`
     = pos auth_end
 
     // path: up to '?' or '#'
-    : String path ( string_with_cap 16 )
-    ~ & < pos n & != ( nurl_str_at in n pos ) 63 != ( nurl_str_at in n pos ) 35 {
-        ( string_push_char path ( nurl_str_at in n pos ) )
-        = pos + pos 1
-    }
+    : i p0 pos
+    ~ & < pos n & != ( nurl_str_at in n pos ) 63 != ( nurl_str_at in n pos ) 35 { = pos + pos 1 }
+    : String path ( __url_span in p0 pos )
     // query: '?' up to '#'
-    : String query ( string_with_cap 8 )
+    : ~ i q0 pos
     ? & < pos n == ( nurl_str_at in n pos ) 63 {
         = pos + pos 1
-        ~ & < pos n != ( nurl_str_at in n pos ) 35 {
-            ( string_push_char query ( nurl_str_at in n pos ) )
-            = pos + pos 1
-        }
+        = q0 pos
+        ~ & < pos n != ( nurl_str_at in n pos ) 35 { = pos + pos 1 }
     } {}
+    : String query ( __url_span in q0 pos )
     // fragment: '#' to end
-    : String fragment ( string_with_cap 8 )
-    ? & < pos n == ( nurl_str_at in n pos ) 35 {
-        = pos + pos 1
-        ~ < pos n { ( string_push_char fragment ( nurl_str_at in n pos ) ) = pos + pos 1 }
-    } {}
+    : ~ i f0 pos
+    ? & < pos n == ( nurl_str_at in n pos ) 35 { = f0 + pos 1 = pos n } {}
+    : String fragment ( __url_span in f0 pos )
 
     ^ @ ?Url { T @ Url { scheme userinfo host port path query fragment } }
 }
@@ -310,26 +320,6 @@ $ `stdlib/core/vec.nu`
 // (`a&b=1`) yields an empty value. Returns an OWNED Vec[UrlParam];
 // free with url_params_free.
 
-@ __url_form_decode s in → String {
-    // like url_percent_decode but '+' → space (form-urlencoded)
-    : i n ( nurl_str_len in )
-    : *u p # *u in
-    : String out ( string_with_cap + n 1 )
-    : ~ i k 0
-    ~ < k n {
-        : i c & # i . p k 255
-        ? == c 43 { ( string_push_char out 32 ) = k + k 1 } {
-            ? & == c 37 <= + k 2 - n 1 {
-                : i hi ( __url_hex_val & # i . p + k 1 255 )
-                : i lo ( __url_hex_val & # i . p + k 2 255 )
-                ? & >= hi 0 >= lo 0 { ( string_push_char out + * hi 16 lo ) = k + k 3 }
-                { ( string_push_char out c ) = k + k 1 }
-            } { ( string_push_char out c ) = k + k 1 }
-        }
-    }
-    ^ out
-}
-
 @ url_query_decode s query → ( Vec UrlParam ) {
     : ( Vec UrlParam ) out ( vec_new [UrlParam] )
     : i n ( nurl_str_len query )
@@ -345,16 +335,9 @@ $ `stdlib/core/vec.nu`
             ~ & < eq e ! has_eq {
                 ? == ( nurl_str_at query n eq ) 61 { = has_eq T } { = eq + eq 1 }
             }
-            : String kraw ( string_with_cap + - eq start 1 )
-            : ~ i ki start
-            ~ < ki eq { ( string_push_char kraw ( nurl_str_at query n ki ) ) = ki + ki 1 }
-            : String vraw ( string_with_cap 8 )
-            ? has_eq {
-                : ~ i vi + eq 1
-                ~ < vi e { ( string_push_char vraw ( nurl_str_at query n vi ) ) = vi + vi 1 }
-            } {}
-            : String key ( __url_form_decode ( string_data kraw ) )
-            : String val ( __url_form_decode ( string_data vraw ) )
+            // each half decoded straight from its bytes of `query`
+            : String key ( __url_decode_range query start eq T )
+            : String val ( __url_decode_range query ? has_eq + eq 1 e e T )
             ( vec_push [UrlParam] out @ UrlParam { key val } )
         } {}
         = start + e 1
