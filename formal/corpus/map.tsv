@@ -369,6 +369,7 @@ field_replaced_reader_pushed_from_a_local	§7.6	A2	agora #265: a field of a loca
 field_replaced_reader_returned	§7.6	A2	agora #265: a field replaced under its reader, the reader returned (leak)	runs-clean	-
 field_replaced_reader_returned_in_an_option	§7.6	A2	agora #265: a field replaced under its reader, the reader returned in an option (leak)	runs-clean	-
 field_replaced_twice_under_its_reader	§7.6	A2	agora #265: a field replaced twice under its reader (UAF)	runs-clean	-
+field_replaced_under_a_reader_holding_an_arc_copy	§2.12	A2	agora #265: a reader owning an Arc copy is not handed a replaced field's old value	runs-clean	-
 field_replaced_under_borrow	§2.12	A2	element borrowed via struct field; field reassigned; borrow read	rejected	h85
 field_replaced_under_its_reader_arc_first	§7.6	A2	agora #265: a field replaced under its reader, an Arc first (UAF)	runs-clean	-
 field_replaced_under_its_reader_arc_only	§7.6	A2	agora #265: a field replaced under its reader, an Arc its only handle (UAF)	runs-clean	-
