@@ -1,6 +1,6 @@
-# bench/rust_http_server/Cargo.toml — minimal Cargo manifest for the
-# hyper-based hello-world server. Kept in its own subdir so the bench
-# Rust dep tree stays out of the main build path.
+# bench/rust_http_server/Cargo.toml — Cargo manifest for the hyper-based
+# peer server (plaintext, TLS, and the database routes). Kept in its own
+# subdir so the bench Rust dep tree stays out of the main build path.
 #
 # Build:
 #     cargo build --release --manifest-path bench/rust_http_server/Cargo.toml
@@ -24,6 +24,13 @@ bytes = "1"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
+# The database routes: tokio-postgres (jsonb as serde_json::Value for
+# /async-db's tags), serde for the JSON bodies, try_join_all to send one
+# request's queries together.
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3

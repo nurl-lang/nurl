@@ -23,6 +23,19 @@
 #   DURATION=20 CONCURRENCY=200 bench/run_http.sh
 #   bench/run_http.sh --concurrencies "1 10 100 200"
 #   bench/run_http.sh --md /tmp/out.md       # write elsewhere
+#   bench/run_http.sh --suite db             # the database suite (below)
+#
+# `--suite db` measures the database-backed endpoints instead — the
+# TechEmpower tests (/json /db /queries /fortunes /updates) and HttpArena's
+# async-db profile — NURL against Rust (hyper + tokio-postgres; Node has no
+# database peer here), with the same lock, pinning and CPU-per-request
+# method, and writes bench/HTTP_DB_RESULTS.md. The database is the one
+# $DATABASE_URL names (schema: bench/http_db_schema.sql, loaded by hand
+# there — the harness never drops tables it did not create), or, without
+# it, a throwaway cluster the harness starts with the PostgreSQL server
+# binaries it finds (initdb / pg_ctl on PATH or under
+# /usr/lib/postgresql/*/bin), loads, pins to cores of its own and removes
+# afterwards. DB_PATHS and DB_CONCURRENCIES shape the cells.
 #
 # Tools detected: nurlc (./build/), cargo (rust hyper), node, oha,
 # openssl (for the self-signed TLS cert). Missing tools are reported
@@ -40,16 +53,25 @@ KILL_WAIT="${KILL_WAIT:-1}"             # post-bench grace before SIGKILL
 ITERS="${ITERS:-3}"                      # measurement runs per cell, median wins
 HS_REQS="${HS_REQS:-20000}"             # connections for the setup-rate cell
 HS_CONC="${HS_CONC:-20}"                # its concurrency (kept low to bound TIME_WAIT)
-MD_OUT="${MD_OUT:-$BENCH/HTTP_RESULTS.md}"
+MD_OUT="${MD_OUT:-}"
+SUITE="${SUITE:-plain}"                  # plain (HTTP + TLS) | db
+DB_PATHS="${DB_PATHS:-/json /db /queries?queries=20 /fortunes /updates?queries=20 /async-db?limit=50}"
+DB_CONCURRENCIES="${DB_CONCURRENCIES:-64 256}"
 
 while (( $# > 0 )); do
     case "$1" in
         --concurrencies) CONCURRENCIES="$2"; shift 2 ;;
         --duration)      DURATION="$2"; shift 2 ;;
         --md)            MD_OUT="$2"; shift 2 ;;
+        --suite)         SUITE="$2"; shift 2 ;;
         *)               echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+case "$SUITE" in
+    plain) [[ -n "$MD_OUT" ]] || MD_OUT="$BENCH/HTTP_RESULTS.md" ;;
+    db)    [[ -n "$MD_OUT" ]] || MD_OUT="$BENCH/HTTP_DB_RESULTS.md" ;;
+    *)     echo "unknown suite: $SUITE (plain | db)" >&2; exit 2 ;;
+esac
 
 # ── tool detection ──────────────────────────────────────────────────
 NURLC="$ROOT/build/nurlc"
@@ -63,6 +85,9 @@ if [[ -z "$OHA" || ! -x "$OHA" ]]; then
 fi
 OHA_VERSION="$($OHA --version 2>&1 | head -1)"
 echo "# oha: $OHA_VERSION" >&2
+# The JSON report: `-j` up to oha 1.x's early releases (CI pins 1.8.0),
+# `--output-format json` once `-j` was dropped.
+if "$OHA" --help 2>&1 | grep -q -- '--output-format'; then OHA_JSON=(--output-format json); else OHA_JSON=(-j); fi
 
 have_nurl=0; [[ -x "$NURLC" && -f "$RUNTIME" ]] && have_nurl=1
 have_rs=0;   command -v cargo >/dev/null && have_rs=1
@@ -138,10 +163,20 @@ fi
 PIN=0
 SRV_CORES="${SRV_CORES:-}"
 GEN_CORES="${GEN_CORES:-}"
+DB_CORES="${DB_CORES:-}"
 if command -v taskset >/dev/null && (( HOST_NPROC >= 4 )); then
     half=$(( HOST_NPROC / 2 ))
     [[ -z "$SRV_CORES" ]] && SRV_CORES="0-$((half - 1))"
-    [[ -z "$GEN_CORES" ]] && GEN_CORES="$half-$((HOST_NPROC - 1))"
+    if [[ "$SUITE" == db ]]; then
+        # The database is a third process on the critical path: it gets a
+        # quarter of the cores (at least one) out of the generator's half,
+        # so neither the server nor oha shares a core with it.
+        quarter=$(( HOST_NPROC / 4 )); (( quarter < 1 )) && quarter=1
+        [[ -z "$DB_CORES" ]] && DB_CORES="$half-$((half + quarter - 1))"
+        [[ -z "$GEN_CORES" ]] && GEN_CORES="$((half + quarter))-$((HOST_NPROC - 1))"
+    else
+        [[ -z "$GEN_CORES" ]] && GEN_CORES="$half-$((HOST_NPROC - 1))"
+    fi
     PIN=1
 fi
 SRV_WORKERS="${SRV_WORKERS:-}"
@@ -223,7 +258,7 @@ stop_pid() {
     wait "$pid" 2>/dev/null || true
 }
 
-# Parse an oha `-j` report into `<rps> <p50_ms> <p99_ms> <mean_ms>`, or
+# Parse an oha JSON report into `<rps> <p50_ms> <p99_ms> <mean_ms>`, or
 # `FAIL FAIL FAIL FAIL` on a failed run. The mean latency is what the
 # effective-concurrency check (Little's law, N ≈ rps × mean) uses to flag
 # a closed-loop cell whose latency reflects fewer connections than were
@@ -269,8 +304,9 @@ cpu_ticks() {
 }
 
 run_oha() {
-    local scheme="$1" port="$2" concurrency="$3" pid="${4:-}"
-    local report="$BENCH/_build/oha-$scheme-$port-c$concurrency.json"
+    local scheme="$1" port="$2" concurrency="$3" pid="${4:-}" path="${5:-/}"
+    local tag; tag="$(printf '%s' "$path" | tr -c 'A-Za-z0-9' '_')"
+    local report="$BENCH/_build/oha-$scheme-$port-c$concurrency$tag.json"
     local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
     mkdir -p "$BENCH/_build"
 
@@ -279,11 +315,11 @@ run_oha() {
     # alive by default; we don't pass --disable-keepalive. Deliberately
     # OUTSIDE the CPU window below — warmup CPU is not per-request cost.
     "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" -n 1000 -c "$concurrency" \
-        "$scheme://127.0.0.1:$port/" >/dev/null 2>&1 || true
+        "$scheme://127.0.0.1:$port$path" >/dev/null 2>&1 || true
 
     local t0 t1; t0="$(cpu_ticks "$pid")"
-    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" -j -z "${DURATION}s" -c "$concurrency" \
-        "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
+    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" "${OHA_JSON[@]}" -z "${DURATION}s" -c "$concurrency" \
+        "$scheme://127.0.0.1:$port$path" > "$report" 2>/dev/null \
         || { echo "FAIL FAIL FAIL FAIL FAIL FAIL"; return; }
     t1="$(cpu_ticks "$pid")"
 
@@ -307,7 +343,7 @@ run_oha_conn() {
     local scheme="$1" port="$2"
     local report="$BENCH/_build/ohaconn-$scheme-$port.json"
     local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
-    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" --disable-keepalive -j -n "$HS_REQS" -c "$HS_CONC" \
+    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" --disable-keepalive "${OHA_JSON[@]}" -n "$HS_REQS" -c "$HS_CONC" \
         "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
         || { echo "FAIL"; return; }
     _parse_oha "$report" | awk '{print $1}'
@@ -372,6 +408,50 @@ prep_js() {
     [[ -f "$JS_FILE" ]]
 }
 
+# ── one cell: ITERS runs of one (server, path, concurrency) ─────────
+# Echoes `<rps> <p50> <p99> <mean_ms> <us_req>` — the median of rps (and
+# of each latency) over ITERS runs — or five FAILs. CPU per request is NOT
+# a median: ticks and requests are summed over every iteration and
+# divided once, so the figure is the true cost over the whole measured
+# window.
+measure_cell() {
+    local scheme="$1" port="$2" c="$3" pid="$4" path="${5:-/}"
+    local rps_list=() p50_list=() p99_list=() mean_list=() i
+    local ticks_sum=0 reqs_sum=0 cpu_ok=1
+    for i in $(seq 1 "$ITERS"); do
+        local r rps p50 p99 mean reqs ticks
+        r=$(run_oha "$scheme" "$port" "$c" "$pid" "$path")
+        read -r rps p50 p99 mean reqs ticks <<<"$r"
+        if [[ "$rps" == "FAIL" ]]; then
+            echo "FAIL FAIL FAIL FAIL FAIL"
+            return
+        fi
+        rps_list+=("$rps"); p50_list+=("$p50"); p99_list+=("$p99"); mean_list+=("$mean")
+        if [[ "$ticks" == "FAIL" || "$reqs" == "0" || -z "$reqs" ]]; then
+            cpu_ok=0
+        else
+            ticks_sum=$(( ticks_sum + ticks )); reqs_sum=$(( reqs_sum + reqs ))
+        fi
+    done
+    local rps_med p50_med p99_med mean_med
+    rps_med=$(python3 -c "
+import sys
+vals=sorted(float(x) for x in sys.argv[1:])
+m=vals[len(vals)//2] if len(vals)%2 else (vals[len(vals)//2-1]+vals[len(vals)//2])/2
+print(int(round(m)))" "${rps_list[@]}")
+    p50_med=$(median3 "${p50_list[@]}")
+    p99_med=$(median3 "${p99_list[@]}")
+    mean_med=$(median3 "${mean_list[@]}")
+    local us_req="n/a"
+    if (( cpu_ok )) && (( reqs_sum > 0 )); then
+        us_req=$(python3 -c "
+import os
+hz = os.sysconf('SC_CLK_TCK')
+print('%.2f' % ($ticks_sum / hz / $reqs_sum * 1e6))")
+    fi
+    echo "$rps_med $p50_med $p99_med $mean_med $us_req"
+}
+
 # ── one server, all concurrency cells ───────────────────────────────
 # Args: <label> <scheme> <port> -- <command...>
 # Env prefix for the command (e.g. TLS_CERT=...) is set by the caller.
@@ -430,45 +510,7 @@ run_server() {
     fi
 
     for c in $CONCURRENCIES; do
-        # Run ITERS measurements at each cell, pick the median of rps.
-        # CPU per request is NOT a median: ticks and requests are summed
-        # over every iteration and divided once, so the figure is the
-        # true cost over the whole measured window.
-        local rps_list=() p50_list=() p99_list=() mean_list=() i
-        local ticks_sum=0 reqs_sum=0 cpu_ok=1
-        for i in $(seq 1 "$ITERS"); do
-            local r rps p50 p99 mean reqs ticks
-            r=$(run_oha "$scheme" "$port" "$c" "$pid")
-            read -r rps p50 p99 mean reqs ticks <<<"$r"
-            if [[ "$rps" == "FAIL" ]]; then
-                echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL FAIL"
-                rps_list=(); break
-            fi
-            rps_list+=("$rps"); p50_list+=("$p50"); p99_list+=("$p99"); mean_list+=("$mean")
-            if [[ "$ticks" == "FAIL" || "$reqs" == "0" || -z "$reqs" ]]; then
-                cpu_ok=0
-            else
-                ticks_sum=$(( ticks_sum + ticks )); reqs_sum=$(( reqs_sum + reqs ))
-            fi
-        done
-        (( ${#rps_list[@]} == 0 )) && continue
-        local rps_med p50_med p99_med mean_med
-        rps_med=$(python3 -c "
-import sys
-vals=sorted(float(x) for x in sys.argv[1:])
-m=vals[len(vals)//2] if len(vals)%2 else (vals[len(vals)//2-1]+vals[len(vals)//2])/2
-print(int(round(m)))" "${rps_list[@]}")
-        p50_med=$(median3 "${p50_list[@]}")
-        p99_med=$(median3 "${p99_list[@]}")
-        mean_med=$(median3 "${mean_list[@]}")
-        local us_req="n/a"
-        if (( cpu_ok )) && (( reqs_sum > 0 )); then
-            us_req=$(python3 -c "
-import os
-hz = os.sysconf('SC_CLK_TCK')
-print('%.2f' % ($ticks_sum / hz / $reqs_sum * 1e6))")
-        fi
-        echo "ROW $scheme $name $c $rps_med $p50_med $p99_med $mean_med $us_req"
+        echo "ROW $scheme $name $c $(measure_cell "$scheme" "$port" "$c" "$pid" /)"
     done
 
     # Connection-setup rate (one bounded run, this server still up): plain
@@ -479,6 +521,168 @@ print('%.2f' % ($ticks_sum / hz / $reqs_sum * 1e6))")
 
     stop_pid "$pid"
 }
+
+# ── the db suite ────────────────────────────────────────────────────
+# Its own run and its own report: the endpoints a framework deploys over a
+# database (TechEmpower's five, HttpArena's async-db), NURL vs Rust. Every
+# endpoint is checked on both servers before a single request is timed —
+# a peer that answers the wrong thing fast is not measured.
+if [[ "$SUITE" == db ]]; then
+    db_cluster=""
+    DB_PLACEMENT="\$DATABASE_URL (not placed by the harness)"
+    as_pg() {
+        if [ "$(id -u)" = 0 ]; then setpriv --reuid="${BENCH_PG_USER:-postgres}" --regid="${BENCH_PG_USER:-postgres}" --init-groups "$@"
+        else "$@"; fi
+    }
+    db_stop() {
+        if [[ -n "$db_cluster" ]]; then
+            as_pg "$PG_BIN/pg_ctl" -D "$db_cluster/data" -m immediate stop >/dev/null 2>&1 || true
+            rm -rf "$db_cluster"
+        fi
+    }
+    trap db_stop EXIT
+    PG_BIN="$(dirname "$(command -v initdb 2>/dev/null || ls -d /usr/lib/postgresql/*/bin/initdb 2>/dev/null | sort -V | tail -1)")"
+    PSQL_CLI="$PG_BIN/psql"; [[ -x "$PSQL_CLI" ]] || PSQL_CLI="$(command -v psql 2>/dev/null || true)"
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        if [[ ! -x "$PG_BIN/initdb" || -z "$PSQL_CLI" ]]; then
+            echo "ERROR: --suite db needs DATABASE_URL, or the PostgreSQL server binaries (initdb, pg_ctl, psql) to start its own" >&2
+            exit 2
+        fi
+        DB_PORT="${DB_PORT:-55444}"
+        db_cluster="$(mktemp -d /tmp/nurl-bench-pg.XXXXXX)"
+        chmod 755 "$db_cluster"
+        [ "$(id -u)" = 0 ] && chown "${BENCH_PG_USER:-postgres}" "$db_cluster"
+        echo bench > "$db_cluster/pw"; chmod 644 "$db_cluster/pw"
+        as_pg "$PG_BIN/initdb" -D "$db_cluster/data" -U bench --pwfile="$db_cluster/pw" \
+            --auth=scram-sha-256 -E UTF8 >/dev/null || { echo "ERROR: initdb failed" >&2; exit 2; }
+        # Durability off: the comparison is the frameworks', not the disk's
+        # (a throwaway cluster; /updates would otherwise time fsyncs).
+        as_pg sh -c "printf '%s\n' \"port = $DB_PORT\" \"listen_addresses = '127.0.0.1'\" \"unix_socket_directories = '$db_cluster'\" 'fsync = off' 'synchronous_commit = off' 'full_page_writes = off' >> '$db_cluster/data/postgresql.conf'"
+        db_pin=(); (( PIN )) && db_pin=(taskset -c "$DB_CORES")
+        "${db_pin[@]}" bash -c "$(declare -f as_pg); as_pg '$PG_BIN/pg_ctl' -D '$db_cluster/data' -l '$db_cluster/log' -w start" >/dev/null \
+            || { echo "ERROR: pg_ctl start failed" >&2; sed -n '1,20p' "$db_cluster/log" >&2; exit 2; }
+        export DATABASE_URL="postgres://bench:bench@127.0.0.1:$DB_PORT/postgres?sslmode=disable"
+        "$PSQL_CLI" "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$BENCH/http_db_schema.sql" >/dev/null 2>&1 \
+            || { echo "ERROR: loading bench/http_db_schema.sql failed" >&2; exit 2; }
+        DB_VERSION="$("$PSQL_CLI" "$DATABASE_URL" -tAc 'SHOW server_version' 2>/dev/null)"
+        if (( PIN )); then DB_PLACEMENT="throwaway PostgreSQL $DB_VERSION on cores \`$DB_CORES\` (\`taskset\`), durability off"
+        else DB_PLACEMENT="throwaway PostgreSQL $DB_VERSION, unpinned, durability off"; fi
+    fi
+    echo "# db: $DB_PLACEMENT" >&2
+
+    # The endpoint contract, checked on a live server: `db_check port`
+    # prints `ok` or the first broken check.
+    db_check() {
+        python3 - "$1" <<'PY'
+import json, sys, urllib.request
+base = f"http://127.0.0.1:{sys.argv[1]}"
+def get(path):
+    with urllib.request.urlopen(base + path, timeout=10) as r:
+        return r.status, r.headers.get("Content-Type", ""), r.read()
+def world(o):
+    return isinstance(o, dict) and set(o) == {"id", "randomNumber"} and 1 <= o["id"] <= 10000 and isinstance(o["randomNumber"], int)
+def check():
+    s, ct, b = get("/json")
+    if s != 200 or "application/json" not in ct or json.loads(b) != {"message": "Hello, World!"}: return "/json"
+    s, ct, b = get("/db")
+    if s != 200 or "application/json" not in ct or not world(json.loads(b)): return "/db"
+    for q, n in (("20", 20), ("0", 1), ("foo", 1), ("501", 500)):
+        s, ct, b = get("/queries?queries=" + q)
+        v = json.loads(b)
+        if s != 200 or not isinstance(v, list) or len(v) != n or not all(map(world, v)): return "/queries?queries=" + q
+    s, ct, b = get("/fortunes")
+    h = b.decode("utf-8")
+    if s != 200 or "text/html" not in ct or h.count("<tr>") != 14: return "/fortunes rows"
+    if "<td>11</td><td>&lt;script&gt;alert(&quot;This should not be displayed in a browser alert box.&quot;);&lt;/script&gt;</td>" not in h: return "/fortunes escaping"
+    if "<td>0</td><td>Additional fortune added at request time.</td>" not in h or "フレームワークのベンチマーク" not in h: return "/fortunes content"
+    rows = [r.split("</td><td>")[1].split("</td>")[0] for r in h.split("<tr>")[2:]]
+    if rows != sorted(rows, key=lambda t: t.encode("utf-8")): return "/fortunes order"
+    s, ct, b = get("/updates?queries=5")
+    v = json.loads(b)
+    if s != 200 or not isinstance(v, list) or len(v) != 5 or not all(map(world, v)): return "/updates"
+    s, ct, b = get("/async-db?min=10&max=50&limit=5")
+    v = json.loads(b)
+    if s != 200 or "application/json" not in ct or v.get("count") != 5 or len(v.get("items", [])) != 5: return "/async-db"
+    for it in v["items"]:
+        if not (10 <= it["price"] <= 50 and isinstance(it["tags"], list) and set(it["rating"]) == {"score", "count"}): return "/async-db item"
+    return "ok"
+try:
+    print(check())
+except Exception as e:
+    print(f"error: {e}")
+PY
+    }
+
+    # One server: start it pinned, check it, then every (path, c) cell.
+    # Args: <name> <port> -- <command...>; the server reads DATABASE_URL.
+    run_db_server() {
+        local name="$1" port="$2"; shift 2
+        [[ "$1" == "--" ]] && shift
+        "${srv_pin[@]}" "${srv_env[@]}" "DATABASE_URL=$DATABASE_URL" "$@" \
+            > "$BENCH/_build/${name}-db.stdout.log" 2> "$BENCH/_build/${name}-db.stderr.log" &
+        local pid=$!
+        trap 'kill -TERM '"$pid"' 2>/dev/null; exit' INT TERM
+        trap 'kill -TERM '"$pid"' 2>/dev/null' EXIT
+        local path c verdict="ok"
+        if ! kill -0 "$pid" 2>/dev/null || ! wait_listen "$port"; then
+            verdict="did not start"
+        else
+            sleep "$(python3 -c "print($SETTLE_MS / 1000.0)")"
+            kill -0 "$pid" 2>/dev/null || verdict="exited at startup (port $port in use?)"
+            [[ "$verdict" == ok ]] && verdict="$(db_check "$port")"
+        fi
+        echo "DBCHECK $name $verdict"
+        for path in $DB_PATHS; do
+            for c in $DB_CONCURRENCIES; do
+                if [[ "$verdict" == ok ]]; then
+                    echo "DBROW $path $name $c $(measure_cell http "$port" "$c" "$pid" "$path")"
+                else
+                    echo "DBROW $path $name $c FAIL FAIL FAIL FAIL FAIL"
+                fi
+            done
+        done
+        stop_pid "$pid"
+    }
+
+    echo "# db suite: duration=${DURATION}s iters=${ITERS} paths=\"$DB_PATHS\" concurrencies=\"$DB_CONCURRENCIES\"" >&2
+    results=()
+    collect() { while read -r line; do results+=("$line"); done; }
+    na_db() {
+        local name="$1" path c
+        results+=("DBCHECK $name n/a")
+        for path in $DB_PATHS; do for c in $DB_CONCURRENCIES; do results+=("DBROW $path $name $c n/a n/a n/a n/a n/a"); done; done
+    }
+    if prep_nurl; then collect < <(run_db_server nurl 18080 -- "$NURL_BIN"); else na_db nurl; fi
+    if prep_rust; then collect < <(run_db_server rust 18081 -- "$RUST_BIN"); else na_db rust; fi
+
+    {
+        printf 'ENV\tnow\t%s\n' "$NOW"
+        printf 'ENV\thost\t%s\n' "$HOST_LABEL"
+        printf 'ENV\tkernel\t%s\n' "$HOST_KERNEL"
+        printf 'ENV\tcpu\t%s\n' "$HOST_CPU"
+        printf 'ENV\tcores\t%s\n' "$HOST_CORES"
+        printf 'ENV\tmem_kb\t%s\n' "$HOST_MEM_KB"
+        printf 'ENV\tcommit\t%s\n' "$COMMIT"
+        printf 'ENV\trun_url\t%s\n' "$RUN_URL"
+        printf 'ENV\tnurl\t%s\n' "$NURL_VERSION"
+        printf 'ENV\trust\t%s\n' "$RUSTC_VERSION"
+        printf 'ENV\toha\t%s\n' "$OHA_VERSION"
+        printf 'ENV\tduration\t%s\n' "$DURATION"
+        printf 'ENV\titers\t%s\n' "$ITERS"
+        printf 'ENV\tpaths\t%s\n' "$DB_PATHS"
+        printf 'ENV\tconcurrencies\t%s\n' "$DB_CONCURRENCIES"
+        printf 'ENV\tpinned\t%s\n' "$( (( PIN )) && echo yes || echo no )"
+        printf 'ENV\tsrv_cores\t%s\n' "${SRV_CORES:-n/a}"
+        printf 'ENV\tgen_cores\t%s\n' "${GEN_CORES:-n/a}"
+        printf 'ENV\tdb\t%s\n' "$DB_PLACEMENT"
+        printf 'ENV\tworkers\t%s\n' "$SRV_WORKERS"
+        printf 'ENV\tload\t%s\n' "$LOAD_AT_START"
+        printf 'ENV\tmax_load\t%s\n' "$BENCH_MAX_LOAD"
+        for row in "${results[@]}"; do printf '%s\n' "$row"; done
+    } | python3 "$BENCH/gen_http_db_results.py" > "$MD_OUT"
+    echo "wrote $MD_OUT" >&2
+    exit 0
+fi
 
 # ── run every (server × scheme) combination ─────────────────────────
 # Plaintext ports 1808x; TLS ports 1844x. run_server emits its own
