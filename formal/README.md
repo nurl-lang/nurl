@@ -123,8 +123,9 @@ as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:
 
-- a destructor written by the program (`% Drop`), whose drop runs code
-  and may panic (`CLAIM.md`);
+- a destructor (`% Drop`) of a type that holds views (A2-drop.2, Agora
+  #224's `DtorSafe`). A destructor of a type that holds none is in the
+  calculus, on the normal path and the panic path (A2-drop.1, `CLAIM.md`);
 - `Rc` and its cycle collector, which are the standard library's `unsafe`
   base (phase B).
 

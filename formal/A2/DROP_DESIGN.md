@@ -2,11 +2,23 @@
 
 ## Status
 
-Design (Agora #221). Today a user destructor is outside the calculus
-(`CLAIM.md`, *Destructors*). A2's drops run no program code: `DropSlot`
-frees a tree and cannot fail. This note fixes the semantics and the typing
-that bring `% Drop` bodies inside the calculus. It also fixes the rule the
-typing needs, which nurlc lacks today: the hole of Agora #224.
+**A2-drop.1 is mechanized** (Agora #221): destructors of a type that holds
+no views, on the normal path and the panic path. `formal/check.sh` passes,
+and `memory_safe`, `no_leak_end` and `no_leak_panic` cover `letd` /
+`scopeD` on the standard axioms. A2-drop.2 (types that hold views, the
+`DtorSafe` rule of Agora #224) is the next step.
+
+Before this, a user destructor was outside the calculus. A2's drops ran no
+program code: `DropSlot` frees a tree and cannot fail. This note fixes the
+semantics and the typing that bring `% Drop` bodies inside the calculus.
+It also fixes the rule the typing needs, which nurlc lacks today: the hole
+of Agora #224.
+
+The mechanization puts the destructor on the binding rather than on a type
+`Ty.dtor f t`: `letd x f r s` binds `x` with destructor `f`, and `DtorOK P
+f t` checks that `f` takes one `in` parameter of `x`'s type `t`, returns an
+integer, and lends, holds and stores nothing. What follows reads `Ty.dtor f
+t` as that binding.
 
 ## What nurlc does
 
@@ -141,37 +153,52 @@ separate concern. Two steps keep them apart:
    struct with a view field), which nurlc's rule refuses wherever the
    view would end.
 
-## The panic step's proof (A2-drop.1, in progress)
+## The panic step's proof (A2-drop.1, done)
 
 `scopeDP` turns a panic into a normal step, so preservation must type what
-follows it. Three facts are needed, and A2 had none of them:
+follows it. That needed three things A2 did not have:
 
-1. **The context after the unwind.** The scopes the panic unwound are gone
-   from the store. A binding that depended on one of them is dead, `x` is
-   live again (it holds no views), and the rest is unchanged. For that to
-   satisfy `MInv`, no borrowed parameter outside those scopes may depend on
-   them. That is the new invariant `Inv.pinOut` / `PinOK` (done, every module
-   builds). With it, `rootKeep_frame_sp` (done) shows that every surviving
-   view still reaches the same memory.
-2. **The destructor's call** in that context: as on the normal path (done,
-   `scopeDEnd`). `NoPin` for `x` follows from `pinOut`, because `x` is in the
-   frame's own spine.
+1. **The context after the unwind** (`unwindCtx`, `MInv.unwind`). The
+   scopes the panic unwound are gone from the store. A binding that
+   depended on one of them is dead, `x` is live again (it holds no views),
+   and the rest is unchanged. For that to satisfy `MInv`, no borrowed
+   parameter outside those scopes may depend on them. That is the new
+   invariant `Inv.pinOut` / `PinOK`, which every step keeps:
+   - a new scope binds what was unbound, while a borrowed parameter depends
+     only on what is bound;
+   - a call's frames are fresh, and a parameter depends only on what is
+     older than it (`rootbLt`).
+
+   With it, `rootKeep_frame_sp` shows that every surviving view reaches the
+   same memory.
+2. **The destructor's call** in that context (`dtorCall_typed`), as on the
+   normal path. `NoPin` for `x` follows from `pinOut`, because `x` is in
+   the frame's own spine.
 3. **The re-raised panic.** `StmtT.panic` relates its input to its output:
    same bindings, modes and types, and fixed entries unchanged. Its output
-   is the frame's original output `exitScope x Δ1`. So `Δ1` must agree with
-   the context outside the body's spine. That holds for every derivation in
-   practice, but nothing proves it for a run-time body. The plan:
-   - `StmtT.scopeD` takes `KeepOut Γ Δ s.spine`, `CtxWF Δ` and `NameWF Δ`
-     as premises, as `StmtT.catchR` already does. A step inside the body
-     keeps them (the `catchIn` argument, from `Keep`).
-   - At `letd`, the body is source code: `StmtT.domTy`, `StmtT.wf` and
-     `StmtT.names` give the domain, modes and well-formedness. A new lemma,
-     that source typing leaves an anchored borrowed parameter's entry as it
-     is, gives the rest. These live after `Preservation.lean`, so `letd`'s
-     step becomes a hypothesis of `preserve` (`LetdCase`), as calls already
-     are.
+   is the frame's original output `exitScope x Δ1`, so `Δ1` must agree with
+   the context outside the body's spine. Nothing proved that for a run-time
+   body, so the frame carries it, as `StmtT.catchR` already does:
+   - `StmtT.scopeD` takes `KeepOut Γ Δ s.spine`, `CtxWF Δ` and `NameWF Δ`;
+   - `StmtT.letd` takes the same for its source body;
+   - a step inside the body keeps `KeepOut` (`KeepOut.step`, from `Keep`);
+   - renaming keeps all three (`keepOut_canon`, `canon_wf`,
+     `canon_names`).
+
+   A fixed entry of the post-panic context is a borrowed parameter, since
+   `MInv` has no `inout` entry. The unwind and the body's typing both left
+   it as it was.
+
+`letd`'s new premises restrict which programs the calculus types: a body
+whose typing changed a binding's mode, or a borrowed parameter's entry,
+would not be typed. Every typing rule keeps both, so this is no loss in
+practice. Proving it once for every source derivation (`StmtT.domTy`,
+`StmtT.wf`, `StmtT.names` cover all but the borrowed parameters) would let
+the premises go.
 
 ## Done when
+
+For A2-drop.1, the first two hold (Agora #221). The third is A2-drop.2's.
 
 - `check.sh` passes, with `memory_safe`, `no_leak_end` and
   `no_leak_panic` over `Ty.dtor` / `scopeD`, standard axioms only;
