@@ -950,9 +950,10 @@ as a view of it (hole probe `tools/fuzz/holes/h32`). It is closed: views
 are now values (§2.10), tracked through every place one can be put.
 
 **Two holes are known open**: agora #242 (a join or value block bound by
-`:` and handed on by name) and #252 (a `% Drop` holder moved on only one
-branch). Agora #247 (a closure consuming one capture released another) is
-closed in 0.83.0.
+`:` and handed on by name: nine shapes remain, listed in
+`tools/fuzz/holes/open/twins.txt`) and #252 (a `% Drop` holder moved on
+only one branch). Agora #247 (a closure consuming one capture released
+another) is closed in 0.83.0.
 [`LIMITATIONS.md`](LIMITATIONS.md) describes each and how to stay clear of it
 until its fix ships. Agora #224 is closed in 0.83.0: a destructor (`% Drop`) runs at its value's scope end and may
 read a view the value holds, and when what the view reads ended first

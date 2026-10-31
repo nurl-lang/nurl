@@ -14,11 +14,16 @@ limitations — they live with each module (the `stdlib/**` file headers and
 Each is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
-  by name.** `: String t ? c a b` followed by `^ t`, with `a` and `b`
-  locals, returns `a`'s buffer and drops it on the way out. The same
-  binding assigned to an `inout` parameter, or a block whose tail is a
-  fresh call, also faults. Until the fix ships, hand the join on
-  directly (`^ ? c a b`) instead of through a binding.
+  by name, in nine remaining shapes.** The common ones are closed: a `:`
+  binding of a join takes the owner its arm selects, an `inout`
+  parameter takes a binding owned per path, a block ending in a fresh
+  call owns its result. Nine shapes still fault, each the elaborated twin
+  of a closed probe
+  ([`tools/fuzz/holes/open/twins.txt`](../tools/fuzz/holes/open/twins.txt)):
+  the binding does not inherit what its producer lends — a call in an arm
+  lending a local, a field or a view of an inner local, a value a `;`
+  defer releases. Until #222 closes them, hand such a value on directly
+  (`^ ? c a b`) instead of through a binding.
 - **agora #252: a `% Drop` value that holds a view, moved on only one
   branch of a `?`.** On the other branch it is still owned, and its
   destructor reads the view after the view's source was reallocated or

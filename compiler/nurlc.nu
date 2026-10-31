@@ -2960,6 +2960,19 @@ unsafe @ note_unsafe_item s pos s what → v {
 // when that binding is assigned (`= t ? …`, gen_assign): what the join's
 // arms bound below it dies before it does (agora #179). -1: none.
 : ~ i g_join_rdepth -1
+// A `:` binding of a `?` / `??` (docs/MEMORY.md §2.2): the owner an arm
+// selects moves into the binding on that path (g_join_rdepth 0), and the
+// binding gives it back where it dies still holding it while the owner
+// lives on (a loop body's binding of an owner made before the loop). Set
+// while the join's arms are compiled; `g_jpb_list` collects what moved,
+// as `owner slot` pairs, the slot true on the paths that moved it
+// (__jpb_note, __jpb_putback; agora #242).
+: ~ i g_jpb_on 0
+: ~ s g_jpb_list ``
+: ~ i g_jpb_depth0 0
+// What the `:` binding being made took over from its join, while it is
+// registered: those owners are its own now, no lend (__phi_lends_params_only).
+: ~ s g_jpb_last ``
 // Did an arm of the join that last published its ownership
 // (`__last_join_own__`) lend what it yields — the constant `false`, not a
 // call's answer or a moved binding's flag? (A closure cannot answer per
@@ -4186,8 +4199,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         // with the arm, mem_arm_hown.)
         ? ! ( str_contains_word pnames id ) {
             : s up ( mem_udrop_ptr_of syms id )
-            ? & & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__pname` ) == 0 ( nurl_sym_len2 syms up `__optparam` )
-            ( nurl_sym_has_word syms `__user_drops__` up ) {
+            // (…unless a `:` binding's join moved it in: §2.2, agora #242.)
+            ? & & & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__pname` ) == 0 ( nurl_sym_len2 syms up `__optparam` )
+            ( nurl_sym_has_word syms `__user_drops__` up ) ! ( __jpb_moved up ) {
                 : ~ s al ( nurl_sym_get2 syms up `__alias` )
                 ? == 0 ( nurl_str_len al ) { ^ F } {}
                 ~ != 0 ( nurl_str_len al ) {
@@ -5172,8 +5186,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
         // A payload of an option / result parameter: handing it back
         // keeps the parameter (the caller hands the option over).
         ? != 0 ( nurl_sym_len2 syms rup `__optparam` ) { ( mem_udrop_optparam_taken syms rup ) } {}
+        // (…or one that cannot be copied, owned per path and lending on the
+        // others only what is not this frame's — a `:` binding of a join over
+        // a borrowed parameter and a local, which moved in on its path: the
+        // per-call answer alone says whose it is. Handed back as owned, the
+        // caller released its own argument; agora #242.)
+        : b __rcl ( __clone_supported rty syms )
+        : b __rdyn_nc & & ! __rcl ( seq rsb `dyn` ) == 0 ( nurl_sym_len2 syms rup `__llocal` )
         ? & & & & & != 0 ( nurl_str_len rup ) == 0 ( nurl_sym_len2 syms rup `__pname` ) == 0 ( nurl_sym_len2 syms rup `__optparam` )
-        == 0 ( nurl_sym_len2 syms rup `__alias` ) ( __clone_supported rty syms )
+        == 0 ( nurl_sym_len2 syms rup `__alias` ) | __rcl __rdyn_nc
         // Only a binding that may hold ANOTHER LOCAL's value — a join, a
         // field of a local struct. A payload or element alias keeps the
         // older contract (its owner is not tracked here).
@@ -5181,10 +5202,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ? ( seq ( nurl_sym_get2 syms rup `__sborrow` ) `local` )
             { = val ( mem_emit_cloneif cg rty val `1` ) }
             { : s rf ( mem_udrop_flag_get syms cg rup )
-                : s rb ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print rf ) ( nurl_print `, 1\n` )
-                // Per-call answer: hand back what this binding holds.
-                = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
+                ? __rcl {
+                    : s rb ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print rf ) ( nurl_print `, 1\n` )
+                    // Per-call answer: hand back what this binding holds.
+                    = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
+                } {
+                    // (Its flag is the answer, which differs per call.)
+                    ( mem_hown_mark_dyn syms )
+                }
                 = hbit rf }
         } {}
     } {}
@@ -25461,6 +25487,11 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     : s nf ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print lp ) ( nurl_print `\n` )
     ( mem_udrop_flag_set syms cg up nf )
+    // (A binding taken for a borrow owns its value now on the copied paths:
+    // per path, as a join's that phis its arms — handed to an `inout`
+    // parameter as a borrow, it was stored as is and released here; agora
+    // #242.)
+    ? ( seq ( nurl_sym_get2 syms up `__sborrow` ) `1` ) { ( __sb syms up `dyn` ) } {}
 }
 
 // A payload binding `pv` of the match numbered `ser`: what it may point
@@ -26053,6 +26084,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         {  // Forget the value's journal entry before its destructor runs,
             // so neither a later panic in this function nor one inside the
             // destructor itself replays it.
+            ( __jpb_putback syms cg ptr old_list )
             ( mem_journal_forget_userdrop cg ptr vt )
             ( mem_emit_gated_drop syms cg ptr vt )
         }
@@ -34369,7 +34401,15 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (The first register the right-hand side takes: a value block's
         // own locals are bound from here on — agora #193.)
         : i __rhs_r0 ( nurl_peek # s cg 0 )
+        // (A join's selected owners move into this binding: §2.2, agora #242.)
+        : i __jpb_on0 g_jpb_on
+        : s __jpb_l0 ( nurl_str_cat g_jpb_list `` )
+        ( __jpb_begin syms is_mutable bck_rhs_tt )
         : ~ s val ( gen_expr lex syms cg )
+        : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
+        = g_jpb_last ( nurl_str_cat __jpb_mine `` )
+        = g_jpb_on __jpb_on0
+        = g_jpb_list ( nurl_str_cat __jpb_l0 `` )
         // (A try over a call binds the call's payload: what follows asks the
         // call, as mem_udrop_bind_flag does — agora #194.)
         ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
@@ -34616,9 +34656,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 { = g_udrop_noinit 1
                     ( mem_note_vget_binding syms name bck_rhs_tt )
                     ( mem_own_add_user_drop syms cg ptr rvt )
-                    ( mem_udrop_bind_flag syms cg ptr rvt bck_rhs_tt bck_rhs_val rhs_borrow )
+                    ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
                     ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 ) } {}
-                    ( mem_journal_push_userdrop syms cg ptr rvt ) }
+                    ( mem_journal_push_userdrop syms cg ptr rvt )
+                    ( __jpb_attach syms ptr __jpb_mine ) }
                 {}
             }
             {} }
@@ -34626,6 +34667,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // TEMPORARILY DISABLED: ? had_mutability_check
         //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
         //   {}
+        = g_jpb_last ``
         ^ val
     }
     // Explicit type annotation.
@@ -34736,7 +34778,15 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_open_bind_line __ob_line
             = g_open_bind_col __ob_col
             : i __rhs_r0 ( nurl_peek # s cg 0 )
+            // (A join's selected owners move into this binding: §2.2, agora #242.)
+            : i __jpb_on0 g_jpb_on
+            : s __jpb_l0 ( nurl_str_cat g_jpb_list `` )
+            ( __jpb_begin syms is_mutable bck_rhs_tt )
             : ~ s val ( gen_expr lex syms cg )
+            : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
+            = g_jpb_last ( nurl_str_cat __jpb_mine `` )
+            = g_jpb_on __jpb_on0
+            = g_jpb_list ( nurl_str_cat __jpb_l0 `` )
             // (A try over a call binds the call's payload: what follows asks the
             // call, as mem_udrop_bind_flag does — agora #194.)
             ? & & == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` ) { = bck_rhs_tt TT_LPAREN } {}
@@ -34977,9 +35027,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ? != 0 ( nurl_str_len impl_mangle_key )
                     { = g_udrop_noinit 1
                         ( mem_own_add_user_drop syms cg ptr rpt )
-                        ( mem_udrop_bind_flag syms cg ptr rpt bck_rhs_tt bck_rhs_val rhs_borrow )
+                        ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt bck_rhs_tt __blk_lend ) bck_rhs_val rhs_borrow )
                         ? __blk_lend { ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 ) } {}
-                        ( mem_journal_push_userdrop syms cg ptr rpt ) }
+                        ( mem_journal_push_userdrop syms cg ptr rpt )
+                        ( __jpb_attach syms ptr __jpb_mine ) }
                     {}
                 }
                 {} }
@@ -34987,6 +35038,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // TEMPORARILY DISABLED: ? had_mutability_check
             //   { ( nurl_sym_def syms ( nurl_str_cat name `__newsyntax` ) `1` ) }
             //   {}
+            = g_jpb_last ``
             ^ val
         }
         { ? == ( nurl_lex_type lex ) TT_PUB
@@ -35787,7 +35839,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : ~ b __io_move & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) | ( __is_handle_ty vt ) __io_oty
         & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
         & & != 0 ( nurl_str_len __io_src ) | == 0 ( nurl_sym_len2 syms __io_src `__pname` ) ( __param_owned_slot syms __io_src )
-        & | == 0 ( nurl_sym_len2 syms __io_src `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms __io_src `__sborrow` ) `@` )
+        // (…also one that owns per path, `dyn`: its flag says where it is
+        // copied instead — stored as is, it was still released here, under
+        // the caller; agora #242.)
+        & | | == 0 ( nurl_sym_len2 syms __io_src `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms __io_src `__sborrow` ) `@` ) ( seq ( nurl_sym_get2 syms __io_src `__sborrow` ) `dyn` )
         == 0 ( nurl_sym_len2 syms __io_src `__alias` )
         // (…and a cursor over part of a local — `: String s ( gets w )`:
         // copied unless it owns its value, w still drops all of itself;
@@ -57506,6 +57561,112 @@ unsafe @ __clo_take_capture i syms s name → v {
     ^ ( nurl_str_cat own `` )
 }
 
+// What a `:` binding of a value block takes its ownership from: a block
+// ending in a call that lends none of the block's own locals hands over
+// that call's result, as the call bound directly would — taken for a
+// borrow, a fresh value leaked (agora #242). One that may lend them is
+// copied in place instead (`blk_lend`, mem_blk_tail_copy_slot, #193).
+@ __blk_bind_tt i tt b blk_lend → i {
+    ? & & == tt TT_LBRACE == g_blk_tail_eff TT_LPAREN ! blk_lend { ^ TT_LPAREN } {}
+    ^ tt
+}
+
+// A `:` binding (immutable: a `: ~` one is a cursor, which only borrows)
+// of a `?` / `??`: the owner an arm selects moves into it on that path
+// (docs/MEMORY.md §2.2, as `^` hands one back: g_join_rdepth 0). Left
+// lending instead, the binding handed back, assigned outward or to an
+// `inout` parameter gave away a buffer its owner still released (agora
+// #242).
+unsafe @ __jpb_begin i syms b mutable i tt → v {
+    = g_jpb_list ``
+    = g_jpb_on 0
+    ? | mutable ! | == tt TT_QUEST == tt TT_QUESTQUEST { ^ v } {}
+    = g_join_rdepth 0
+    = g_jpb_on 1
+    // (The depth the binding is made at: an owner with cursors over it
+    // moves only out of the arm's own scope, as before — what the cursors
+    // hold with it could not be given back.)
+    = g_jpb_depth0 ( nurl_peek # s syms 1 )
+}
+
+// The depth below which an arm's owner `up` moves into the join's value:
+// `jdepth`, except for a `:` binding's join (0) over an owner with
+// cursors over it — that one moves only out of the arm's own scope.
+@ __jpb_jdepth i syms s up i jdepth → i {
+    ? | | == 0 g_jpb_on != jdepth 0 == 0 ( nurl_str_len up ) { ^ jdepth } {}
+    ? == 0 ( nurl_sym_len2 syms up `__alias` ) { ^ jdepth } {}
+    ^ g_jpb_depth0
+}
+
+// An arm moved owner `up` into the binding being made (mem_arm_hown): a
+// slot of its own says so on this path — false on the others, the
+// hoister clears it at entry and __jpb_putback after every use.
+unsafe @ __jpb_note i cg s up → v {
+    : ~ s slot ``
+    : ~ s rest ( nurl_str_cat g_jpb_list `` )
+    ~ & != 0 ( nurl_str_len rest ) == 0 ( nurl_str_len slot ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sl ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq w up ) { = slot ( nurl_str_cat sl `` ) } {}
+    }
+    ? == 0 ( nurl_str_len slot ) {
+        = slot ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i1, align 1\n` )
+        = g_jpb_list ? == 0 ( nurl_str_len g_jpb_list ) ( nurl_str_cat3 up ` ` slot ) ( nurl_str_cat4 g_jpb_list ` ` up ( nurl_str_cat ` ` slot ) )
+    } {}
+    ( nurl_print `  store i1 true, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+}
+
+// Did the `:` binding being registered take owner `up` over from its join?
+@ __jpb_moved s up → b {
+    ? == 0 ( nurl_str_len g_jpb_last ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat g_jpb_last `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq w up ) { ^ T } {}
+    }
+    ^ F
+}
+
+// The binding `ptr` is registered: what its join moved into it.
+@ __jpb_attach i syms s ptr s moved → v {
+    ? == 0 ( nurl_str_len moved ) { ^ v } {}
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__jpb` ) moved )
+}
+
+// `ptr` leaves its scope (mem_drop_new_user_drops; `old_list` is what
+// lives on). An owner its join moved into it that lives on takes the value
+// back on the paths where `ptr` still holds it — the binding only borrowed
+// it for its own lifetime, which the walk checks (bck_alias_from_phi). An
+// owner that dies here too needs nothing: `ptr` releases the value itself.
+// The slots start over for the next round of a loop.
+@ __jpb_putback i syms i cg s ptr s old_list → v {
+    : ~ s rest ( nurl_sym_get2 syms ptr `__jpb` )
+    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s src ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s slot ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word old_list src ) {
+            : s f ( mem_udrop_flag_get syms cg ptr )
+            : s held ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print held ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+            : s back ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print back ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print held ) ( nurl_print `\n` )
+            : s sf ( mem_udrop_flag_get syms cg src )
+            : s so ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print so ) ( nurl_print ` = or i1 ` ) ( nurl_print sf ) ( nurl_print `, ` ) ( nurl_print back ) ( nurl_print `\n` )
+            ( mem_udrop_flag_set syms cg src so )
+            : s nb ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nb ) ( nurl_print ` = xor i1 ` ) ( nurl_print back ) ( nurl_print `, 1\n` )
+            : s nf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print nb ) ( nurl_print `\n` )
+            ( mem_udrop_flag_set syms cg ptr nf )
+        } {}
+        ( nurl_print `  store i1 false, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    }
+}
+
 @ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
     // A payload of an enum this function owns, as the value of a join
     // that is taken: this path takes it out of the enum, which is moved on
@@ -57541,9 +57702,11 @@ unsafe @ __clo_take_capture i syms s name → v {
         } {}
         // (…or a `sink` parameter: this function's own, it moves out too —
         // `^ ?? o { T v → v F → dflt }` dropped `dflt` under the caller.)
-        ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth ( __param_owned_slot syms up ) {
+        : i hjd ( __jpb_jdepth syms up jdepth )
+        ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) hjd ( __param_owned_slot syms up ) {
             : ~ s r ( mem_udrop_flag_get syms cg up )
             ( mem_udrop_flag_set syms cg up `0` )
+            ? & != 0 g_jpb_on == hjd 0 { ( __jpb_note cg up ) } {}
             // A cursor (`T s → s` over an option binding): the values it
             // is a cursor over leave with it — the option is moved on this
             // path, as one whose field was taken (read again after the
@@ -57584,9 +57747,11 @@ unsafe @ __clo_take_capture i syms s name → v {
         : s ids ( nurl_sym_get syms `__last_phi_idents__` )
         ? & != 0 ( nurl_str_len ids ) == 0 ( nurl_str_len ( str_skip_word ids ) ) {
             : s up ( mem_udrop_ptr_of syms ids )
-            ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth {
+            : i hjd ( __jpb_jdepth syms up jdepth )
+            ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) hjd {
                 : ~ s r ( mem_udrop_flag_get syms cg up )
                 ( mem_udrop_flag_set syms cg up `0` )
+                ? & != 0 g_jpb_on == hjd 0 { ( __jpb_note cg up ) } {}
                 : ~ s al ( nurl_sym_get2 syms up `__alias` )
                 ~ != 0 ( nurl_str_len al ) {
                     : s w ( str_first_word al ) = al ( str_skip_word al )

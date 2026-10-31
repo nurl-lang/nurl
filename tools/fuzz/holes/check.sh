@@ -35,9 +35,10 @@ cd "$DIR"
 # trusted_by_path_substring, a program's own code there is not the trusted
 # standard library.)
 files=("$@"); [ ${#files[@]} -eq 0 ] && files=(*.nu stdlib/*.nu)
-for f in "${files[@]}"; do
-    b="$TMP/$(basename "$f" .nu)"
-    out=$(cd "$ROOT" && ./nurl.sh "$DIR/$f" "$b" 2>&1); rc=$?
+check_one() {
+    local src="$1" f="$2" b out rc sout r rr k
+    b="$TMP/bin/$(basename "$f" .nu)"
+    out=$(cd "$ROOT" && ./nurl.sh "$src" "$b" 2>&1); rc=$?
     if [ $rc -ne 0 ]; then
         # Rejected means the compiler refused it: nurlc names the place in
         # a source file (`f.nu:LINE:COL: error:`). A build that failed
@@ -50,15 +51,15 @@ for f in "${files[@]}"; do
             echo "UNCHECKED $f: the build failed without a compile error: $(grep -m1 -v '^\s*$' <<<"$out" | cut -c1-110)"
             unchecked=$((unchecked+1))
         fi
-        continue
+        return
     fi
-    sout=$(cd "$ROOT" && NURL_SAN=1 ./nurl.sh "$DIR/$f" "${b}_san" 2>&1)
+    sout=$(cd "$ROOT" && NURL_SAN=1 ./nurl.sh "$src" "${b}_san" 2>&1)
     # A sanitizer build that produced no binary is no verdict either. Without
     # the ASan runtime the missing binary was run, printed no fault, and the
     # probe was counted clean.
     if [ ! -x "${b}_san" ]; then
         echo "UNCHECKED $f: the sanitizer build failed: $(grep -m1 -v '^\s*$' <<<"$sout" | cut -c1-110)"
-        unchecked=$((unchecked+1)); continue
+        unchecked=$((unchecked+1)); return
     fi
     # (A frame handed out lives on ASan's fake stack: without
     # detect_stack_use_after_return a read through it after the return
@@ -68,7 +69,18 @@ for f in "${files[@]}"; do
     if [ -n "$k" ]; then echo "HOLE      $f: $k"; holes=$((holes+1))
     elif [ $rr -eq 124 ]; then echo "UNCHECKED $f: still running under ASan after ${limit} s"; unchecked=$((unchecked+1))
     else echo "ACCEPTED  $f: ran clean"; fi
-done
+}
+mkdir -p "$TMP/bin"
+for f in "${files[@]}"; do check_one "$DIR/$f" "$f"; done
+# Each probe's elaborated twin (elab.py): its producer form bound by `:`
+# first, the consumer reading the binding — the calculus's shape, and the
+# path every consumer takes once producers are elaborated (Agora #222).
+# A twin that faults is a hole like any other (Agora #242); the ones known
+# open are listed in open/twins.txt and not run.
+if [ -f "$DIR/elab.py" ]; then
+    twins=$(python3 "$DIR/elab.py" "$TMP/twins" "${files[@]}") || { echo "UNCHECKED elab.py failed"; unchecked=$((unchecked+1)); twins=""; }
+    for t in $twins; do check_one "$TMP/twins/$t" "twin:$t"; done
+fi
 echo "holes: $holes"
 [ $unchecked -eq 0 ] || echo "unchecked: $unchecked (no verdict: see the UNCHECKED lines)"
 # (An exit status is one byte: 256 failures would read as success.)

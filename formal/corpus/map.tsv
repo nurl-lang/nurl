@@ -445,7 +445,14 @@ lend_returned_through_a_ternary	§7.6	A2	h311 through a ? ternary	rejected	h312
 lent_element_handed_to_a_sink	CallT.sink	A1	vec_at element borrow passed to sink param; Vec still holds freed elem	runs-clean	h228
 lent_payload_handed_out_of_a_match	§7.6	A2	match on option field hands %Drop payload to a binding; double owner	rejected	h227
 lent_value_it_cannot_copy_stored	§2.12	A2	lent %Drop element stored into struct literal: two owners	rejected	h230
+let_block_fresh_tail	§7.6	A2	agora #242: a value block ending in a fresh call, bound by `:`: taken for a borrow, the String leaked	runs-clean	-
+let_block_join_to_inout	§2.4	A2	agora #242: a value block ending in a `?` of fresh Strings, bound by `:` and assigned to an `inout` parameter	runs-clean	-
 let_block_outer_lend_guard	§7.6	A2	agora #193: the block's call lending a binding made before the block: still a lend, no copy	runs-clean	h879
+let_join_drop_locals	§2.2	A2	agora #242: a `?` over two `% Drop` locals bound by an inferred `:`: released through both names	runs-clean	-
+let_join_drop_param_or_local_returned	§7.6	A2	agora #242: a `?` over a borrowed `% Drop` parameter and a local, bound by `:` and handed back by name	runs-clean	-
+let_join_fresh_to_inout	§2.4	A2	agora #242: a `?` of fresh Strings bound by `:` and assigned to an `inout` parameter: stored as is and still released	runs-clean	-
+let_join_locals_returned	§2.2	A2	agora #242: a `?` over two local Strings bound by `:` and handed back by name: the selected owner was left releasing it	runs-clean	-
+let_join_outer_owner_in_loop	§2.2	A2	agora #242: a loop body's `:` binding of a `?` over owners made before the loop, every pass	runs-clean	-
 library_handle_captured_by_a_thread_and_kept	§6.5	A3	a thread's closure captured a library handle whose copies are one state (a PNCounter) and the spawner kept changing its own: a detached closure moves a share handle not asserted % Sync, as it moves a Vec	rejected	h336
 library_handle_field_copy_on_two_threads	§6.5	A3	a library handle read out of a struct's field kept by the spawner while the struct went to a thread: two threads changed one state; the field read is a borrow the move ends (agora #66's shape)	rejected	h333
 library_handle_field_read_taken_by_a_thread	§6.5	A3	a binding read out of a library handle field captured by a thread while its struct stayed usable: the thread takes the field and its struct along	rejected	h356
