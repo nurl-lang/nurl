@@ -363,6 +363,9 @@ raw : TcpConnImpl { i raw i kind i tlsh b owns }
 
 // requires: the word is given back, once, with __nt_release; and the
 // transport holds nothing that can reach a TcpConn or TcpListener.
+// TODO(#248): a known compromise. Once the §7.7 store rule judges a trait
+// object by its impls' types, the handles hold a typed field instead of
+// this word, and tcp_conn_over / tcp_listener_over stop being raw.
 raw @ __nt_word sink %NetTransport t sink String addr → i {
     ^ ( shared_into_word [NetTransportBox] ( shared_new [NetTransportBox] @ NetTransportBox { t addr } ) )
 }
