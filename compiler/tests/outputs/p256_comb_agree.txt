@@ -3,3 +3,4 @@ LINK OK
 EXIT 0
 OUTPUT
 comb == ladder: 500/500
+edges: 27/27
