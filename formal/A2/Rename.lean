@@ -2502,6 +2502,31 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact StmtT.letv (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
+  | @letd Γ Γ1 Δ F x f r k E hks hx hxF hr hown hview hdtor hk _ ih =>
+    intro _ hab hw hn
+    obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
+    obtain ⟨hn1, hEn, _⟩ := hr.names hn
+    have hab1 := RhsT.absOK (S := S) hr hab
+    obtain ⟨hmo, _⟩ := RhsT.out hr
+    obtain ⟨hw1, hdom, _, hEr⟩ := hr.wf hw
+    have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
+    have hwx := hw1.add hx1 hEr
+    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
+    have habx := hab.add hab1 hx hmo
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    have hbx := hab.fresh hx
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habx hwx
+    have hnc := canon_names h habx hnx
+    rw [canon_setE h] at hwc hnc tk
+    have hl := (hE' x).1
+    have hm := (hE' x).2.1
+    simp only [liftE, hown, reduceCtorEq, if_false, liftMode] at hl hm
+    exact StmtT.letd (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
+      hm.symm (by rw [← hl]; exact hview) (by rw [← hl]; exact hdtor)
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
+      (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
   | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk _ ih =>
     intro _ hab hw hn
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT
@@ -2561,6 +2586,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨PW.setE hpw (hE' x), hwc, hnc⟩ tk)
       (NoPin.lift h abk (fun bh hb => by rw [hbx] at hb; cases hb))
   | scope => intro hs; simp [Stmt.src] at hs
+  | scopeD => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
   | panic hwf hnΔ hdom hm =>
