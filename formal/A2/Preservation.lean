@@ -233,7 +233,7 @@ theorem Keep.anchOut {Γ Γ' : Ctx} {s s' : Stmt} {F : List Var} (hk : Keep Γ �
 theorem NoPin.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {x : Var} (h : NoPin Γ' x) : NoPin Γ x := by
   intro p E hp hm
   obtain ⟨E', h', hwe⟩ := hw.get hp
-  rw [hwe.2.2.1 (Or.inl hm)] at h'
+  rw [hwe.fixed (Or.inl hm)] at h'
   exact h p E h' hm
 
 theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : Keep Γ0 Γ' s s') :
@@ -241,8 +241,8 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
   refine ⟨fun v E hv hs => ?_, fun v E' hv hs => ?_⟩
   · obtain ⟨E0, h0, hw0⟩ := hw.get hv
     obtain ⟨hs', E', h', hm, hty, hrb⟩ := h.1 v E0 h0 hs
-    refine ⟨hs', E', h', hm.trans hw0.2.1, hty.trans hw0.1, fun hr => ?_⟩
-    rw [hrb (hw0.2.1 ▸ hr), hw0.2.2.1 (Or.inl hr)]
+    refine ⟨hs', E', h', hm.trans hw0.mode, hty.trans hw0.1, fun hr => ?_⟩
+    rw [hrb (hw0.mode ▸ hr), hw0.fixed (Or.inl hr)]
   · obtain ⟨hs', E0, h0⟩ := h.2 v E' hv hs
     obtain ⟨E, hE, _⟩ := hw.get' h0
     exact ⟨hs', E, hE⟩
@@ -1427,10 +1427,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             (fun d hd => ?_) (fun Ep' h => ?_) (fun d hd b t hk => ?_)))
           rotate_left
           · obtain ⟨E1, h1, hw1⟩ := hw.get hp
-            rw [h] at h1; cases h1; rw [hw1.2.2.1 (Or.inl hm), hm]; rfl
+            rw [h] at h1; cases h1; rw [hw1.fixed (Or.inl hm), hm]; rfl
           · -- `p` is as it was in the weaker context, which names what it holds
             obtain ⟨E1, h1, hw1⟩ := hw.get hp
-            rw [hw1.2.2.1 (Or.inl hm)] at h1
+            rw [hw1.fixed (Or.inl hm)] at h1
             exact hw.2.2 p Ep h1 hl (Or.inr hm) d
               (by simp [Entry.vdeps, hos]; exact List.mem_append.mp hd) b t hk
           have hdv : d.root ∈ roots Ep.vdeps := by
@@ -1440,7 +1440,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · have := hi.rootbLt p Ep hp hm d.root hdv; rw [h] at this; exact Nat.lt_irrefl _ this
           · obtain ⟨Er, hEr, hro⟩ := hi.wf p Ep hp hl (Or.inr hm) d.root hdv
             obtain ⟨Er', hEr', hw'⟩ := hw.get hEr
-            exact ⟨Er', hEr', by rw [hw'.2.1]; exact hro⟩
+            exact ⟨Er', hEr', by rw [hw'.mode]; exact hro⟩
       · intro q E' hq hmq
         obtain ⟨_, E, hE, rfl⟩ := hrel q E' hq
         have hmq' : E.mode = .rootb := hmq

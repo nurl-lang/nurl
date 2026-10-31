@@ -75,7 +75,7 @@ theorem killNames_get {Γ : Ctx} {y : Var} : ∀ (ds : List Dep) {E : Entry}, ki
 theorem DomTy.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : DomTy Γ Γ' := by
   refine ⟨fun x => (hw.isSome x).symm, fun x E h => ?_⟩
   obtain ⟨E0, h0, hw0⟩ := hw.get' h
-  exact ⟨E0, h0, hw0.2.1, hw0.1⟩
+  exact ⟨E0, h0, hw0.mode, hw0.1⟩
 
 theorem PushArg.domTy {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
     (hy : Γ y = some Ey) (hp : PushArg Γ F y Ey t D Γ1) : DomTy Γ Γ1 := by

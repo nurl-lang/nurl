@@ -149,7 +149,7 @@ theorem SlotOK.weaker' {m : Mem} {E E' : Entry} {sl : Slot} (ht : E'.ty = E.ty) 
 
 
 theorem SlotOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E')
-    (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.2.1 hw.2.2.2
+    (h : SlotOK m E sl) : SlotOK m E' sl := h.weaker' hw.1 hw.mode hw.live
 
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
@@ -161,20 +161,20 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   nvSt := hi.nvSt
   noInout v E' b hv := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    rw [hwe.2.1]; exact hi.noInout v E b hE
+    rw [hwe.mode]; exact hi.noInout v E b hE
   wf := hw.wf
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLive p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.rootbLive p E hE hm'
   rootbLt p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.rootbLt p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.rootbLt p E hE hm'
   names := hw.names
   held v E' sl T hv hl hsl hT := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    obtain ⟨hl0, _, hh⟩ := hwe.2.2.2 hl
+    obtain ⟨hl0, _, hh⟩ := hwe.live hl
     exact (hi.held v E sl T hE hl0 hsl hT).mono hh
   pkgs := hi.pkgs
 
@@ -185,8 +185,8 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   nvF := hi.nvF
   anch p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.anch p E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.anch p E hE hm'
   spineNd := hi.spineNd
   spineDom v hv := by
     obtain ⟨E, hE⟩ := hi.spineDom v hv
@@ -196,12 +196,12 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   cover := hi.cover
   pinOut p E' hp hm hps := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hi.pinOut p E hE hm' hps
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.pinOut p E hE hm' hps
   pinIn := hi.pinIn.of_rootb fun p E' hp hm => by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hE
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hE
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

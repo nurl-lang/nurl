@@ -595,15 +595,15 @@ theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : Ct
 theorem AbsOK.weaker {Γa Γa' : Ctx} (hab : S.AbsOK Γa) (hw : Weaker Γa Γa') : S.AbsOK Γa' := by
   refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_⟩
   · obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    have hm' : E.mode = .rootb := by rw [← hwe.2.1]; exact hm
-    rw [hwe.2.2.1 (Or.inl hm')]; exact hab.1 v E hE hm'
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hab.1 v E hE hm'
   · obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    rw [hwe.1]; exact hab.2.1 v E b hE (by rw [← hwe.2.1]; exact hm)
+    rw [hwe.1]; exact hab.2.1 v E b hE (by rw [← hwe.mode]; exact hm)
   · obtain ⟨E, hE, hm, ht, hfx⟩ := hab.2.2 v bh hb
     obtain ⟨E', hE', hwe⟩ := hw.get hE
-    refine ⟨E', hE', by rw [hwe.2.1]; exact hm, by rw [hwe.1]; exact ht, fun hf => ?_⟩
-    have hf0 : E.fixed := by simp only [Entry.fixed_def] at hf ⊢; rw [hwe.2.1, hwe.1] at hf; exact hf
-    rw [hwe.2.2.1 hf0]; exact hfx hf0
+    refine ⟨E', hE', by rw [hwe.mode]; exact hm, by rw [hwe.1]; exact ht, fun hf => ?_⟩
+    have hf0 : E.fixed := by simp only [Entry.fixed_def] at hf ⊢; rw [hwe.mode, hwe.1] at hf; exact hf
+    rw [hwe.fixed hf0]; exact hfx hf0
 
 theorem AbsOK.kill {Γa : Ctx} (hab : S.AbsOK Γa) (e : Eff) (hv : Bool) (x : Var) :
     S.AbsOK (A2.kill e hv x Γa) := by
@@ -1568,7 +1568,7 @@ theorem killNames_eq : ∀ (ds : List Dep) (Γ : Ctx) (v : Var),
 theorem hits_mono {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryWeaker E E')
     (hl : E'.live = true) (hh : hits e hv x E = true) : hits e hv x E' = true := by
   unfold hits at hh ⊢
-  rw [hw.1, hw.2.1]
+  rw [hw.1, hw.mode]
   simp only [Bool.and_eq_true] at hh ⊢
   refine ⟨hh.1, ?_⟩
   obtain ⟨d, hd, hdd⟩ := List.any_eq_true.mp hh.2
@@ -1599,7 +1599,7 @@ theorem killAll_weaker {M ds : List Dep} {E E' : Entry} (hw : EntryWeaker E E')
         rw [hn] at this; cases this
       · rw [hq hl] at hh'; cases hh'
   by_cases hrb : E.fixed
-  · have he := hw.2.2.1 hrb
+  · have he := hw.fixed hrb
     rw [he] at hnoM ⊢
     -- the same entry: `M` and `ds` hit it alike
     have hsame : killAll M E = killAll ds E := by
@@ -1618,14 +1618,14 @@ theorem killAll_weaker {M ds : List Dep} {E E' : Entry} (hw : EntryWeaker E E')
             · rw [hq hrb hl] at hh; cases hh
           unfold killAll; rw [hm, hn]
     rw [hsame]; exact EntryWeaker.refl _
-  · refine ⟨by rw [hkd.1, hkM.1, hw.1], by rw [hkd.2.1, hkM.2.1, hw.2.1],
+  · refine ⟨by rw [hkd.1, hkM.1, hw.1], by rw [hkd.2.1, hkM.2.1, hw.mode],
       fun e => absurd (by simp only [Entry.fixed_def] at e ⊢; rw [hkM.2.1, hkM.1] at e; exact e) hrb,
       fun hl' => ?_⟩
     have hl0 : E'.live = true ∧ ds.any (fun d => hits d.kind.bound false d.root E') = false := by
       unfold killAll at hl'; split at hl'
       · simp at hl'
       · rename_i hn; exact ⟨hl', by simpa using hn⟩
-    obtain ⟨hlE, hp, hh⟩ := hw.2.2.2 hl0.1
+    obtain ⟨hlE, hp, hh⟩ := hw.live hl0.1
     refine ⟨?_, fun ho => ?_, ?_⟩
     · unfold killAll; rw [hnoM hl0.1 hl0.2]; exact hlE
     · rw [hkM.2.2.1, hkd.2.2.1]; exact hp (by rw [← hkM.2.1]; exact ho)
@@ -2527,7 +2527,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnc := canon_names h habx hnx
     rw [canon_setE h] at hwc hnc tk
     have hl := (hE' x).1
-    have hm := (hE' x).2.1
+    have hm := (hE' x).mode
     simp only [liftE, hown, reduceCtorEq, ite_false, liftMode] at hl hm
     exact StmtT.letd (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x) hr'
       hm.symm (by rw [← hl]; exact hview) (by rw [← hl]; exact hdtor)
@@ -2632,7 +2632,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hos : Ex.mode.ownSlot = E.mode.ownSlot := by
       rcases hmodes with ⟨h1, h2⟩ | ⟨h1, h2⟩ | ⟨h1, h2⟩ <;> rw [h1, h2] <;> rfl
     have hw' := hE' x
-    have hm' : E'.mode = liftMode E.mode := by rw [← hw'.2.1, liftE_mode x hrbE]
+    have hm' : E'.mode = liftMode E.mode := by rw [← hw'.mode, liftE_mode x hrbE]
     have hty' : E'.ty = E.ty := by rw [← hw'.1, liftE_ty x hrbE]
     have hmx' : (S.liftE x Ex).mode = liftMode Ex.mode := liftE_mode x hrbx
     have hal : Allowed S .replace false x := allowed_replace hab hx (by

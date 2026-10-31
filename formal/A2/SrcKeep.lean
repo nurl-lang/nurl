@@ -92,7 +92,7 @@ theorem CtxRel.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CtxRel Γ Γ' := by
   cases hp' : Γ' p with
   | none => exact absurd ((hw.1 p).1.mpr hp') (by rw [hp]; simp)
   | some E' =>
-    have := ((hw.1 p).2 Ep E' hp hp').2.2.1 (Or.inl hrb)
+    have := ((hw.1 p).2 Ep E' hp hp').fixed (Or.inl hrb)
     rw [this]
 
 /-- A binding with an entry other than a borrowed parameter's keeps every
