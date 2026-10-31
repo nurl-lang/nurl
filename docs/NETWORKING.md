@@ -252,10 +252,39 @@ CPU µs per keep-alive response over TLS (AES-128-GCM):
 With `write()` the kernel copies the plaintext in and seals it into
 separate pages, which costs more than NURL sealing in place; with
 sendfile it ties the in-memory userspace path and beats reading the file
-into the process. The kernel's own AES-GCM is what decides it: on a CPU
-where the kernel uses VAES / AVX-512 (Linux 6.11+, Ice Lake / Zen 3 and
-later), or with NIC TLS offload, kTLS + sendfile is the faster path for
-large files — measure on the deployment hardware before turning it on.
+into the process.
+
+**A VAES CPU does not change the bulk verdict** (agora #94). i7-11850H
+(Tiger Lake, AVX-512 VAES), Linux 6.18, the kernel's AES-GCM being
+`aes_gcm_enc_update_vaes_avx10_256`; `bench/tls_bench` bulk cell (one
+keep-alive connection downloading 1 MB bodies from memory, AES-128-GCM,
+server on 4 cores, 3 × 5 s):
+
+| server | MB/s | server CPU | server ns/byte | rwnd-limited |
+|---|---:|---:|---:|---:|
+| userspace record layer | 3 100–3 290 | 89 % | 0.27–0.29 | 0 % |
+| kTLS, the body in one `sendmsg` (as shipped) | 2 030–2 200 | 64–72 % | 0.31–0.35 | 36–67 % |
+| kTLS, the body in 64 KB `sendmsg`s (experiment) | 1 950–2 040 | 94–95 % | 0.46–0.49 | 0.1 % |
+
+Why the kernel path idles: the kernel's TLS `sendmsg` holds the socket
+lock for the whole call, and the ACKs and window updates that arrive
+meanwhile wait in the socket's backlog until it returns. With a 1 MB body
+in one call the connection transmits on a window that cannot open
+(`ss -ti`: rwnd-limited 36–67 % of its busy time), the client starves,
+then gets the rest in a burst — server and client take turns instead of
+overlapping, and both sit a third idle. Handing the body over in 64 KB
+calls, as the userspace record layer writes, removes the stall (0.1 %)
+but not the gap: the server then runs out of CPU, because the kernel's
+send path costs more per byte than NURL's. Per byte (perf, inclusive):
+the AEAD 0.098 ns in the kernel against 0.077 for NURL's 512-bit VAES
+GCM; the encrypted-record pages 0.044–0.051; and pushing each 16 KB
+record to TCP on its own 0.08 ns in one call, 0.23 ns in 64 KB calls
+(on loopback the receiver's TCP work runs on the sender's CPU, per
+segment) — against 0.09 for the userspace path's 64 KB TCP writes.
+`MSG_MORE` on the batches moves it by 5 %. Neither layer is NURL's to fix,
+so kTLS stays opt-in: it is for sendfile, which a userspace record layer
+cannot do without reading the file into the process, and for NIC TLS
+offload — measure on the deployment hardware before turning it on.
 
 ## HTTP/2
 
