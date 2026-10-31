@@ -413,7 +413,7 @@ theorem clean_mode (E : Entry) : E.clean.mode = E.mode := by unfold Entry.clean;
 theorem clean_ty (E : Entry) : E.clean.ty = E.ty := by unfold Entry.clean; split <;> rfl
 theorem clean_live (E : Entry) : E.clean.live = E.live := by unfold Entry.clean; split <;> rfl
 theorem clean_id {E : Entry} (h : E.ty ≠ .int ∨ E.mode = .rootb) (hl : E.live = true) : E.clean = E := by
-  unfold Entry.clean; rw [if_neg]; rintro ⟨h1, h2 | h2⟩
+  unfold Entry.clean; rw [ite_eq_right]; rintro ⟨h1, h2 | h2⟩
   · rcases h with h | h <;> contradiction
   · rw [hl] at h2; cases h2
 
@@ -425,7 +425,7 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
   · rintro ⟨a, ha, hr⟩; split at hr
     · simp at hr
     · exact ⟨a, ha, by assumption, hr⟩
-  · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [if_neg hn]; exact hr⟩
+  · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hr⟩
 
 theorem hits_false_dep {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e hv x E = false)
     (hn : E.ty ≠ .int ∨ E.mode = .rootb) (d : Dep) (hd : d ∈ E.vdeps) (hr : d.root = x) :
@@ -483,7 +483,7 @@ theorem ren_inj (h : CallH P Γ F x fn args base) (v w : Nat)
   · exact Nat.add_left_cancel he
 
 /-- What the callee may name through `ρ` is either fresh or an `inout` argument. -/
-theorem ren_dom (h : CallH P Γ F x fn args base) {v : Nat} {r : Var} (hr : callRen fn.params args base v = r)
+theorem ren_dom (_h : CallH P Γ F x fn args base) {v : Nat} {r : Var} (hr : callRen fn.params args base v = r)
     (hlt : r < base) : ∃ b t, fn.params[v]? = some (.inout b, t) ∧ args.getD v 0 = r := by
   rcases callRen_cases fn.params args base v with ⟨b, t, hv, hrv⟩ | ⟨_, hrv⟩
   · exact ⟨b, t, hv, hrv ▸ hr⟩
@@ -496,7 +496,7 @@ theorem notRen_root (h : CallH P Γ F x fn args base) {j : Nat} (hj : j < fn.par
   obtain ⟨b, t, hwp, rfl⟩ := h.ren_dom hw hrlt
   exact h.moving_root (lt_of_get hwp) hj (by rw [get_of hwp]; rfl) hr
 
-theorem frame_some (h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
+theorem frame_some (_h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
     (hy : (callS Γ F fn args base x).Φ y = some E) :
     (∀ v, callRen fn.params args base v ≠ y) ∧ ∃ E1, setE (callPost Γ fn args) x (callX fn) y = some E1 ∧
       E = E1.clean := by
@@ -509,10 +509,10 @@ theorem frame_some (h : CallH P Γ F x fn args base) {y : Var} {E : Entry}
     | none => rw [h1] at hy; cases hy
     | some E1 => rw [h1] at hy; cases hy; exact ⟨E1, rfl, rfl⟩
 
-theorem frame_of (h : CallH P Γ F x fn args base) {y : Var} (hy : ∀ v, callRen fn.params args base v ≠ y)
+theorem frame_of (_h : CallH P Γ F x fn args base) {y : Var} (hy : ∀ v, callRen fn.params args base v ≠ y)
     (hyx : y ≠ x) : (callS Γ F fn args base x).Φ y = (callPost Γ fn args y).map Entry.clean := by
   simp only [callS]
-  rw [if_neg (fun ⟨v, hv⟩ => hy v hv)]
+  rw [ite_eq_right (fun ⟨v, hv⟩ => hy v hv)]
   simp [setE, upd_ne _ _ hyx]
 
 theorem post_lt (h : CallH P Γ F x fn args base) {y : Var} {E : Entry} (hy : callPost Γ fn args y = some E) :
@@ -660,7 +660,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     obtain ⟨Er, hEr, hro⟩ := h.postwf y E1 h1 hl hn1 r hr
     rw [h.frame_of hout (h.post_ne_x hEr)]
     exact ⟨Er.clean, by rw [hEr]; rfl, by rw [clean_mode]; exact hro⟩
-  Φρ v := by simp only [callS]; rw [if_pos ⟨v, rfl⟩]
+  Φρ v := by simp only [callS]; rw [ite_eq_left ⟨v, rfl⟩]
   pe_held v := by
     show (callPe Γ fn.params args v).held ⊆ allKinds (callR Γ args)
     unfold callPe
@@ -806,7 +806,7 @@ theorem exits_at {base : Nat} {pe : Var → Entry} (hpe : ∀ j, ∀ d ∈ (pe j
       simp only [exitsP, A1.exitScope, upd_ne _ _ hne, A1.kill, hin, Option.map_some]
       congr 1
       unfold killE
-      rw [if_neg]
+      rw [ite_eq_right]
       · rfl
       · intro hh
         unfold hits at hh
@@ -826,9 +826,9 @@ theorem exits_at {base : Nat} {pe : Var → Entry} (hpe : ∀ j, ∀ d ∈ (pe j
         rcases List.mem_append.mp hdv with h1 | h1
         · have hm : (rrE ps base (i + 1) pe E).mode = E.mode := rfl
           cases ho : E.mode.ownSlot
-          · simp only [hm, ho, Bool.false_eq_true, ↓reduceIte] at h1
+          · simp only [ho, Bool.false_eq_true, ↓reduceIte] at h1
             exact hL E.path (fun d0 h0 => by simp [Entry.vdeps, ho, h0]) h1
-          · simp [hm, ho] at h1
+          · simp [ho] at h1
         · exact hL E.held (fun d0 h0 => by simp [Entry.vdeps, h0]) h1
     | inout b =>
       simp only [exitsP]; rw [hin]; rfl
@@ -881,12 +881,12 @@ theorem exits_slot {base : Nat} {pe : Var → Entry} :
         simp only [exitsP, exitRoot]
         by_cases hy : base + i + (k + 1) = base + i
         · omega
-        · simp [upd_ne _ _ hy, hin]
+        · simp [hin]
       | sink =>
         simp only [exitsP, A1.exitScope]
         by_cases hy : base + i + (k + 1) = base + i
         · omega
-        · simp [upd_ne _ _ hy, A1.kill, hin]
+        · simp [A1.kill, hin]
       | inout b => exact hin
 
 theorem rrL_id {base : Nat} {pe : Var → Entry} :
@@ -916,7 +916,7 @@ theorem killE_dead {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : E.live = fal
 
 theorem killE_nohit {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : ∀ d ∈ E.vdeps, d.root ≠ x) :
     killE e hv x E = E := by
-  unfold killE; rw [if_neg]
+  unfold killE; rw [ite_eq_right]
   intro hh; unfold hits at hh
   simp only [Bool.and_eq_true, List.any_eq_true, beq_iff_eq] at hh
   obtain ⟨_, d, hd, hr, _⟩ := hh
@@ -1015,7 +1015,7 @@ theorem canon_x (h : CallH P Γ F x fn args base) (Γa : Ctx) :
     (callS Γ F fn args base x).canon Γa x = some (callX fn) := by
   rw [RSetup.canon_frame Γa (fun v => h.x_notRen v)]
   simp only [callS]
-  rw [if_neg (fun ⟨v, hv⟩ => h.x_notRen v hv)]
+  rw [ite_eq_right (fun ⟨v, hv⟩ => h.x_notRen v hv)]
   simp [setE, Entry.clean, callX]
 
 theorem ren_res (fn : Fn) (args : List Var) (base : Nat) :
@@ -1050,7 +1050,7 @@ theorem frame_lt (h : CallH P Γ F x fn args base) {r : Var} {E : Entry}
   · rw [hrx]; exact h.xlt
   · simp only [setE, upd_ne _ _ hrx] at h1; exact h.post_lt h1
 
-theorem notRen_z (h : CallH P Γ F x fn args base) {r : Var} (hout : ∀ w, callRen fn.params args base w ≠ r)
+theorem notRen_z (_h : CallH P Γ F x fn args base) {r : Var} (hout : ∀ w, callRen fn.params args base w ≠ r)
     (hlt : r < base) : r ∈ zOf fn args base := by
   simp only [zOf, List.mem_filter, List.mem_range, Bool.not_eq_eq_eq_not, Bool.not_true,
     List.contains_eq_mem, decide_eq_false_iff_not]
@@ -1250,7 +1250,7 @@ theorem rr_sub (h : CallH P Γ F x fn args base) {L T : List Dep}
           · exact absurd hm (h.noInout _ Ea b' hEa)
         refine ⟨by show (Γ (callRen fn.params args base j)).isSome = true; rw [hρ, hEa]; rfl, hsub ?_⟩
         unfold argDeps
-        rw [hae, if_neg (by rw [hty, hs]; simp)]
+        rw [hae, ite_eq_right (by rw [hty, hs]; simp)]
         simp [derive, hown, Mode.isRoot, hρ, rootKind, hty, hs]
   · -- reached through the `in` parameter `k`
     have hkd : (⟨base + 0 + k, kd0⟩ : Dep) ∈ L := hkL
@@ -1276,7 +1276,7 @@ theorem rr_sub (h : CallH P Γ F x fn args base) {L T : List Dep}
       split at hd''
       · simp at hd''
       · rename_i hn
-        rw [if_neg hn]
+        rw [ite_eq_right hn]
         exact derive_comp hd'' kd
 
 /-- A lifted list of the callee's dependencies on lendable parameters, as
@@ -1396,7 +1396,7 @@ end CallH
     change: what it reaches is lent out, and what the call moves or changes
     is not. -/
 theorem callPostAux_rootb {Γ0 : Ctx} {fn : Fn} {args : List Var} {F : List Var} {p : Var} {Ep : Entry}
-    (hrb : Ep.mode = .rootb) (hanch : ∀ r ∈ roots Ep.vdeps, r ∈ F) :
+    (_hrb : Ep.mode = .rootb) (hanch : ∀ r ∈ roots Ep.vdeps, r ∈ F) :
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),
       (∀ pa ∈ ps.zip as, pa.1.1.moves = true → pa.2 ∉ F ∧ pa.2 ≠ p) →
       Γ p = some Ep → callPostAux Γ0 fn args ps as i Γ p = some Ep := by
@@ -1417,7 +1417,7 @@ theorem callPostAux_rootb {Γ0 : Ctx} {fn : Fn} {args : List Var} {F : List Var}
         obtain ⟨haF, _⟩ := hz ((pm, t), a) (by simp) hm
         simp only [A1.kill, hp, Option.map_some, Option.some.injEq]
         unfold killE
-        rw [if_neg]
+        rw [ite_eq_right]
         intro hh
         unfold hits at hh
         simp only [Bool.and_eq_true, List.any_eq_true, beq_iff_eq] at hh
@@ -1481,7 +1481,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     rw [he] at hylt
     exact absurd hylt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
   by_cases hcl : E1.mode ≠ .rootb ∧ (E1.ty = .int ∨ E1.live = false)
-  · have hce : E1.clean = { E1 with path := [], held := [] } := by unfold Entry.clean; rw [if_pos hcl]
+  · have hce : E1.clean = { E1 with path := [], held := [] } := by unfold Entry.clean; rw [ite_eq_left hcl]
     have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
       rw [hce]; simp [rrE, rrL_nil]
     have hv0 : ({ E1 with path := [], held := [] } : Entry).vdeps = [] := by
@@ -1491,7 +1491,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     · rw [hrr, hv0]; intro d hd; cases hd
     · rw [hrr]
       exact ⟨rfl, rfl, fun hm => absurd hm hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩⟩
-  · have hce : E1.clean = E1 := by unfold Entry.clean; rw [if_neg hcl]
+  · have hce : E1.clean = E1 := by unfold Entry.clean; rw [ite_eq_right hcl]
     have hl : E1.live = true := by
       by_cases hrb : E1.mode = .rootb
       · exact h.post_live_rootb h1 hrb
@@ -1513,8 +1513,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
     have hvd : (rrE fn.params base 0 (callPe Γ fn.params args) E1).vdeps = E1.vdeps := by
       unfold Entry.vdeps rrE
       cases ho : E1.mode.ownSlot
-      · simp only [ho, Bool.false_eq_true, ↓reduceIte]; rw [hpath ho, hheld]
-      · simp only [ho, ↓reduceIte]; rw [hheld]
+      · simp only [Bool.false_eq_true, ↓reduceIte]; rw [hpath ho, hheld]
+      · simp only [↓reduceIte]; rw [hheld]
     refine ⟨?_, ?_, ?_⟩
     · rw [exits_at h.pe_lt fn.params 0 _ hc hyk (fun d hd k t hk he => by
         rw [hce] at hd

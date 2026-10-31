@@ -249,7 +249,7 @@ theorem heap (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
 theorem rootKeep (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) {r : Var} (hu : Untouched fn args m.nv x r) :
     RootKeep m (callMem m m1 fn x) r :=
-  rootKeep_move (fun o T hT => h.own_dst hi hb hT) (h.st_other hb hu)
+  rootKeep_move (fun _ _ hT => h.own_dst hi hb hT) (h.st_other hb hu)
 
 theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
     (callPe Γ ps args v).live = true := by

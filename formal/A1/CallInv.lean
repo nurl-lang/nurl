@@ -136,7 +136,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
     show v < m.nv + fn.nvars
     have hlt : ∀ w, w < m.nv → w < m.nv + fn.nvars := fun w hw => Nat.lt_of_lt_of_le hw (Nat.le_add_right _ _)
     rw [callStmt_vars] at hv
-    simp only [List.mem_cons, List.mem_append, List.mem_map, List.mem_singleton] at hv
+    simp only [List.mem_cons, List.mem_append, List.mem_map] at hv
     rcases hv with (rfl | (rfl | hz | hw | ⟨w, hw, rfl⟩) | rfl | rfl | hnil) | hk
     · exact hlt _ h.xlt
     · exact Nat.add_lt_add_left hnv _

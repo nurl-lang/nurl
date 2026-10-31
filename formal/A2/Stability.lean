@@ -87,7 +87,7 @@ theorem ViewIn.holdsView {τ T s v} (h : ViewIn τ T s v) : τ.holdsView = true 
   | snd _ ih => simp [Ty.holdsView, ih]
   | inl _ ih => simp [Ty.holdsView, ih]
   | inr _ ih => simp [Ty.holdsView, ih]
-  | pkg _ ih => simp [Ty.holdsView, ih]
+  | pkg _ ih => simp [Ty.holdsView]
 
 theorem no_views {t : Ty} (ht : t.holdsView = false) (m : Mem) (T : Val) (H : List Dep) :
     ViewsOK m (.vec t) T H := by

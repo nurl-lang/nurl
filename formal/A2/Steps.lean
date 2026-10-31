@@ -928,13 +928,13 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         (by rw [vdeps_mode hos]; exact List.Subset.refl _)
       by_cases hrx : r = x
       · rw [vdeps_mode hos] at hrE; exact absurd (hrx ▸ hrE) hxd
-      · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
+      · exact ⟨Er, by simp [upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
     · cases hT; exact out.held
     · cases hT; exact out.pkgs
   refine ⟨hinv, post.nv, post.nid, fun y => ?_, fun y hy => ?_, fun p Ep hp hpm => ?_, fun y => ?_,
     fun y E1 h => ?_⟩
   · by_cases hyx : y = x
-    · subst hyx; simp [m', hsl.symm ▸ post.dom y]; rw [← post.dom y, hsl]; rfl
+    · subst hyx; simp; rw [← post.dom y, hsl]; rfl
     · rw [hst y hyx]; exact post.dom y
   · rw [hst y (fun h => hxF (h ▸ hy))]; exact post.frz y hy
   · have hpx : p ≠ x := fun h => by
@@ -1275,10 +1275,9 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         · exact hp.nok d hd
       · by_cases hrx : r = x
         · subst hrx; rw [hx] at hr; cases hr
-          simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, hh', roots, List.map_append,
-            List.mem_append, List.map_nil, List.not_mem_nil, false_or] at hrE
+          simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, hh', roots] at hrE
           exact absurd hrE hxD
-        · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
+        · exact ⟨Er, by simp [upd_ne _ _ hrx, kill, hr, killE_nil (root_vdeps ho' hh')], hl', hh', rfl, rfl⟩
     · simp only [Option.some.injEq] at hT; subst hT
       intro c hc
       simp only [Val.names, namesL_append, List.mem_append] at hc
@@ -1365,7 +1364,7 @@ theorem lands_notName {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.isName = fa
 /-- What depended on `p` in way `k` now depends on what `p` borrowed: of it,
     what `p` reaches in memory (`D`) is enough. -/
 theorem reroot_vkeep (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
-    (hok : ValOK m Ep.ty w Ep.path Ep.held) {D : List Dep} (hDs : D ⊆ Ep.path ++ Ep.held)
+    (hok : ValOK m Ep.ty w Ep.path Ep.held) {D : List Dep} (_hDs : D ⊆ Ep.path ++ Ep.held)
     (hDm : ∀ d ∈ Ep.path ++ Ep.held, d.kind.isName = false → d ∈ D) (hlt : ∀ d' ∈ D, d'.root ≠ p)
     {ds : List Dep} {dep : Dep} (hd : dep ∈ ds) {d o l : Nat} {s : Ty}
     (ha : ViewAt m dep d o l s) : ∃ dep' ∈ reroot p D ds, ViewAt (m.remove p) dep' d o l s := by
@@ -1456,7 +1455,7 @@ theorem reroot_valOK (hh : HeapOK m) (hp : m.st p = some ⟨false, some w⟩)
     {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H)
     (hnp : ∀ d ∈ H, d.kind.isName = true → d.root ≠ p) :
     ValOK (m.remove p) τ v (reroot p (Ep.path ++ Ep.held) P) (reroot p (Ep.path ++ Ep.held) H) :=
-  reroot_valOK_gen hh hp hok hv (List.Subset.refl _) (fun d hd _ => hd) hlt hnp
+  reroot_valOK_gen hh hp hok hv (List.Subset.refl _) (fun _ hd _ => hd) hlt hnp
 
 end rbind
 

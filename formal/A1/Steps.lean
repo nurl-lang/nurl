@@ -268,7 +268,7 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
   refine ⟨hinv, post.nv, post.nid, fun y => ?_, fun y hy => ?_, fun p Ep hp hpm => ?_, fun y => ?_,
     fun y E1 h => ?_⟩
   · by_cases hyx : y = x
-    · subst hyx; simp [m', hsl.symm ▸ post.dom y]; rw [← post.dom y, hsl]; rfl
+    · subst hyx; simp; rw [← post.dom y, hsl]; rfl
     · rw [hst y hyx]; exact post.dom y
   · rw [hst y (fun h => hxF (h ▸ hy))]; exact post.frz y hy
   · have hpx : p ≠ x := fun h => by

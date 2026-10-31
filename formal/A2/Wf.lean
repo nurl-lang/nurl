@@ -512,7 +512,7 @@ end A2
 namespace A2
 
 theorem roots_allKinds {rs : List Var} {r : Var} (h : r ∈ roots (allKinds rs)) : r ∈ rs := by
-  simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons, List.mem_singleton,
+  simp only [roots, allKinds, List.mem_map, List.mem_flatMap, List.mem_cons,
     List.not_mem_nil, or_false] at h
   obtain ⟨d, ⟨r', hr', hd⟩, rfl⟩ := h
   rcases hd with rfl | rfl | rfl <;> exact hr'
