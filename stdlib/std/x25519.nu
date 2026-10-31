@@ -1141,20 +1141,22 @@ raw @ _x25519_base_r ( Vec u ) scalar → ( Vec u ) { ^ ( __xe_base_r scalar ) }
 // equivalent Ed25519 curve (B ↦ u = 9, u = (1 + y)/(1 − y)), and
 // twisted-Edwards addition is COMPLETE (d is not a square), so a
 // fixed-base method needs no exceptional case. This is ref10's
-// ge_scalarmult_base: the clamped scalar as 64 signed radix-16 digits
-// e_i ∈ [−8, 8], and a table of j·256^k·B (k < 32, 1 ≤ j ≤ 8) in affine
-// niels form (y + x, y − x, 2d·x·y). Then
+// ge_scalarmult_base with five-bit digits: the clamped scalar as 52
+// signed radix-32 digits e_i ∈ [−16, 16], and a table of j·1024^k·B
+// (k < 26, 1 ≤ j ≤ 16) in affine niels form (y + x, y − x, 2d·x·y). Then
 //
-//     Σ e_i 16^i B = 16 · Σ_{i odd} e_i 16^(i−1) B + Σ_{i even} e_i 16^i B
+//     Σ e_i 32^i B = 32 · Σ_{i odd} e_i 32^(i−1) B + Σ_{i even} e_i 32^i B
 //
-// is 64 mixed additions (7M each), each against one entry chosen by a
-// constant-time scan of its row's eight (negated by mask for a negative
-// digit), and FOUR doublings — where the 4-tooth comb this replaces
-// doubled once per window, 64 times, and scanned sixteen entries. The
-// result maps back to u = (Z + Y)/(Z − Y) with one inversion.
+// is 52 mixed additions (7M each), each against one entry chosen by a
+// constant-time scan of its row's sixteen (negated by mask for a negative
+// digit), and FIVE doublings. ref10's four-bit digits make it 64
+// additions and four doublings: the scan of twice the entries hides
+// behind the additions' multiply chain, so twelve fewer additions are
+// what the wider digit buys. The result maps back to u = (Z + Y)/(Z − Y)
+// with one inversion.
 
-// One table: 32 rows × 8 entries × (y + x, y − x, 2d·x·y) × 4 words —
-// 24 KB, built once per process (__xe_tbl_build) and shared through
+// One table: 26 rows × 16 entries × (y + x, y − x, 2d·x·y) × 4 words —
+// 39 KB, built once per process (__xe_tbl_build) and shared through
 // publish-once slot 4 (registry: stdlib/std/tls_server.nu).
 : ~ i g_xe_tbl 0
 
@@ -1231,11 +1233,11 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     ( __f4_mul w0 w1 w2 w3 s0 s1 s2 s3 h0 h1 h2 h3 ) = . o 12 w0 = . o 13 w1 = . o 14 w2 = . o 15 w3
 }
 
-// The 256 table points j·256^k·B in extended coordinates, then ONE field
-// inversion for all 256 Z (Montgomery's batch trick: prefix products, the
+// The 416 table points j·1024^k·B in extended coordinates, then ONE field
+// inversion for all 416 Z (Montgomery's batch trick: prefix products, the
 // inverse of the last, and back down), then the affine niels triples.
 @ __xe_tbl_build → v {
-    : ( Vec u64 ) pts ( vec_zeroed [u64] * 256 16 )
+    : ( Vec u64 ) pts ( vec_zeroed [u64] * 416 16 )
     : *u64 pp ( vec_data [u64] pts )
     : ( Vec u64 ) cur ( vec_zeroed [u64] 16 )
     : *u64 cp ( vec_data [u64] cur )
@@ -1250,26 +1252,26 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     ( __f4_mul w0 w1 w2 w3 . cp 0 . cp 1 . cp 2 . cp 3 . cp 4 . cp 5 . cp 6 . cp 7 )
     = . cp 12 w0 = . cp 13 w1 = . cp 14 w2 = . cp 15 w3
     : ~ i k 0
-    ~ < k 32 {
-        // row k: 1·Q … 8·Q for Q = 256^k·B (in cur)
-        : *u64 row # *u64 + # i pp * * k 8 128
+    ~ < k 26 {
+        // row k: 1·Q … 16·Q for Q = 1024^k·B (in cur)
+        : *u64 row # *u64 + # i pp * * k 16 128
         ( nurl_memcpy # s row # s cp 128 )
         : ~ i j 1
-        ~ < j 8 {
+        ~ < j 16 {
             ( __xe_add # *u64 + # i row * j 128 # *u64 + # i row * - j 1 128 cp )
             = j + j 1
         }
-        // Q ← 256·Q: eight doublings, as additions to itself (complete).
+        // Q ← 1024·Q: ten doublings, as additions to itself (complete).
         : ~ i dbl 0
-        ~ < dbl 8 { ( __xe_add cp cp cp ) = dbl + dbl 1 }
+        ~ < dbl 10 { ( __xe_add cp cp cp ) = dbl + dbl 1 }
         = k + k 1
     }
-    // Batch inversion of the 256 Z: pre[e] = Z_0 ⋯ Z_e.
-    : ( Vec u64 ) pre ( vec_zeroed [u64] * 256 4 )
+    // Batch inversion of the 416 Z: pre[e] = Z_0 ⋯ Z_e.
+    : ( Vec u64 ) pre ( vec_zeroed [u64] * 416 4 )
     : *u64 rp ( vec_data [u64] pre )
     = . rp 0 . pp 8 = . rp 1 . pp 9 = . rp 2 . pp 10 = . rp 3 . pp 11
     : ~ i e 1
-    ~ < e 256 {
+    ~ < e 416 {
         : i zo + * e 16 8
         ( __f4_mul w0 w1 w2 w3 . rp * - e 1 4 . rp + * - e 1 4 1 . rp + * - e 1 4 2 . rp + * - e 1 4 3 . pp zo . pp + zo 1 . pp + zo 2 . pp + zo 3 )
         = . rp * e 4 w0 = . rp + * e 4 1 w1 = . rp + * e 4 2 w2 = . rp + * e 4 3 w3
@@ -1279,8 +1281,8 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     : ~ u64 v1 0
     : ~ u64 v2 0
     : ~ u64 v3 0
-    ( __f4_inv v0 v1 v2 v3 . rp 1020 . rp 1021 . rp 1022 . rp 1023 )
-    : ( Vec i ) tbl ( vec_zeroed [i] * 256 12 )
+    ( __f4_inv v0 v1 v2 v3 . rp 1660 . rp 1661 . rp 1662 . rp 1663 )
+    : ( Vec i ) tbl ( vec_zeroed [i] * 416 12 )
     : *u64 tp # *u64 ( vec_data [i] tbl )
     : ~ u64 d20 0
     : ~ u64 d21 0
@@ -1299,7 +1301,7 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     : ~ u64 y1 0
     : ~ u64 y2 0
     : ~ u64 y3 0
-    = e 255
+    = e 415
     ~ >= e 0 {
         : i po * e 16
         // 1/Z_e = v · pre[e − 1]; then v ← v · Z_e for the entries below.
@@ -1330,35 +1332,45 @@ inline @ __xe_d2 inout u64 o0 inout u64 o1 inout u64 o2 inout u64 o3 → v {
     ^ @ ( Vec i ) { # s g_xe_tbl }
 }
 
-// The clamped scalar's 64 signed radix-16 digits, e_i ∈ [−8, 8]
-// (e_63 ≤ 8: bit 255 is clear and bit 254 set).
+// Byte k of the clamped scalar (0 past the end): bits 0 … 2 clear, bit
+// 255 clear and bit 254 set. Which byte is public; its value is not, and
+// only reaches masks.
+@ __xe_cbyte * u sb i k → i {
+    ? > k 31 { ^ 0 } {}
+    : i by # i . sb k
+    ? == k 0 { ^ & by 248 } {}
+    ? == k 31 { ^ | & by 127 64 } {}
+    ^ by
+}
+
+// The clamped scalar's 52 signed radix-32 digits, e_i ∈ [−16, 16]
+// (e_51 ≤ 1: bit 255 is clear).
 @ __xe_digits ( Vec u ) scalar → ( Vec i ) {
-    : ( Vec i ) dig ( vec_zeroed [i] 64 )
+    : ( Vec i ) dig ( vec_zeroed [i] 52 )
     : *i dp ( vec_data [i] dig )
     : *u sb ( vec_data [u] scalar )
+    // bits 5q … 5q + 4, read through the byte they start in and the next
     : ~ i q 0
-    ~ < q 32 {
-        : ~ i by # i . sb q
-        ? == q 0 { = by & by 248 } {}
-        ? == q 31 { = by | & by 127 64 } {}
-        = . dp * q 2 & by 15
-        = . dp + * q 2 1 & >> by 4 15
+    ~ < q 52 {
+        : i bit * q 5
+        : i k >> bit 3
+        : i two | ( __xe_cbyte sb k ) << ( __xe_cbyte sb + k 1 ) 8
+        = . dp q & >> two & bit 7 31
         = q + q 1
     }
     : ~ i carry 0
     = q 0
-    ~ < q 63 {
+    ~ < q 51 {
         : i ev + . dp q carry
-        = carry >> + ev 8 4
-        = . dp q - ev << carry 4
+        = carry >> + ev 16 5
+        = . dp q - ev << carry 5
         = q + q 1
     }
-    = . dp 63 + . dp 63 carry
-
+    = . dp 51 + . dp 51 carry
     ^ dig
 }
 
-// The entry for digit ev of the row at rb (eight entries of y + x,
+// The entry for digit ev of the row at rb (sixteen entries of y + x,
 // y − x, 2d·x·y, 96 bytes each): every entry read, six 16-byte vectors
 // at a time, and ORed in under a mask that is all ones for the one that
 // is |e| — then the identity (1, 1, 0) where |e| = 0, and −(x, y) =
@@ -1369,41 +1381,35 @@ inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout
     // |e| and its sign, branch-free
     : u64 neg >> # u64 ev 63
     : u64 ab # u64 - ev << & - 0 # i neg ev 1
-    : ~ v128 v0 ( nurl_v128_zero )
-    : ~ v128 v1 ( nurl_v128_zero )
-    : ~ v128 v2 ( nurl_v128_zero )
-    : ~ v128 v3 ( nurl_v128_zero )
-    : ~ v128 v4 ( nurl_v128_zero )
-    : ~ v128 v5 ( nurl_v128_zero )
+    : ~ v256 v0 ( nurl_v256_zero )
+    : ~ v256 v1 ( nurl_v256_zero )
+    : ~ v256 v2 ( nurl_v256_zero )
     : i base # i rb
     : ~ i j 0
-    ~ < j 8 {
+    ~ < j 16 {
         : u64 z ^^ ab # u64 + j 1
         : u64 m - # u64 0 >> - z 1 63
-        : v128 mv ( nurl_v128_set64 # i m # i m )
+        : v256 mv ( nurl_v256_bcast64 # i m )
         : i o + base * j 96
-        = v0 ( nurl_v128_or v0 ( nurl_v128_and mv ( nurl_v128_ld # s o ) ) )
-        = v1 ( nurl_v128_or v1 ( nurl_v128_and mv ( nurl_v128_ld # s + o 16 ) ) )
-        = v2 ( nurl_v128_or v2 ( nurl_v128_and mv ( nurl_v128_ld # s + o 32 ) ) )
-        = v3 ( nurl_v128_or v3 ( nurl_v128_and mv ( nurl_v128_ld # s + o 48 ) ) )
-        = v4 ( nurl_v128_or v4 ( nurl_v128_and mv ( nurl_v128_ld # s + o 64 ) ) )
-        = v5 ( nurl_v128_or v5 ( nurl_v128_and mv ( nurl_v128_ld # s + o 80 ) ) )
+        = v0 ( nurl_v256_or v0 ( nurl_v256_and mv ( nurl_v256_ld # s o ) ) )
+        = v1 ( nurl_v256_or v1 ( nurl_v256_and mv ( nurl_v256_ld # s + o 32 ) ) )
+        = v2 ( nurl_v256_or v2 ( nurl_v256_and mv ( nurl_v256_ld # s + o 64 ) ) )
         = j + j 1
     }
     // |e| = 0 matched none: the identity
     : u64 one & >> - ab 1 63 1
-    = yp0 | ( nurl_v128_get64 v0 0 ) one
-    = yp1 ( nurl_v128_get64 v0 1 )
-    = yp2 ( nurl_v128_get64 v1 0 )
-    = yp3 ( nurl_v128_get64 v1 1 )
-    = ym0 | ( nurl_v128_get64 v2 0 ) one
-    = ym1 ( nurl_v128_get64 v2 1 )
-    = ym2 ( nurl_v128_get64 v3 0 )
-    = ym3 ( nurl_v128_get64 v3 1 )
-    = xy0 ( nurl_v128_get64 v4 0 )
-    = xy1 ( nurl_v128_get64 v4 1 )
-    = xy2 ( nurl_v128_get64 v5 0 )
-    = xy3 ( nurl_v128_get64 v5 1 )
+    = yp0 | # u64 ( nurl_v256_get64 v0 0 ) one
+    = yp1 # u64 ( nurl_v256_get64 v0 1 )
+    = yp2 # u64 ( nurl_v256_get64 v0 2 )
+    = yp3 # u64 ( nurl_v256_get64 v0 3 )
+    = ym0 | # u64 ( nurl_v256_get64 v1 0 ) one
+    = ym1 # u64 ( nurl_v256_get64 v1 1 )
+    = ym2 # u64 ( nurl_v256_get64 v1 2 )
+    = ym3 # u64 ( nurl_v256_get64 v1 3 )
+    = xy0 # u64 ( nurl_v256_get64 v2 0 )
+    = xy1 # u64 ( nurl_v256_get64 v2 1 )
+    = xy2 # u64 ( nurl_v256_get64 v2 2 )
+    = xy3 # u64 ( nurl_v256_get64 v2 3 )
     : u64 nm - # u64 0 neg
     ( __f4_cswap yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 nm )
     : ~ u64 n0 0
@@ -1412,6 +1418,29 @@ inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout
     : ~ u64 n3 0
     ( __f4_sub n0 n1 n2 n3 0 0 0 0 xy0 xy1 xy2 xy3 )
     ( __f4_cswap xy0 xy1 xy2 xy3 n0 n1 n2 n3 nm )
+}
+
+// __xe_pick into o[0 … 11] (y + x, y − x, 2d·x·y), for the kernels'
+// walk. The scan is the one part of the walk that gains from v256, so
+// it alone has the x86-64-v3 clone: a clone of the whole walk would copy
+// its field arithmetic and inversion for nothing.
+simd @ __xe_pick_w * u64 o * u64 rb i ev → v {
+    : ~ u64 yp0 0
+    : ~ u64 yp1 0
+    : ~ u64 yp2 0
+    : ~ u64 yp3 0
+    : ~ u64 ym0 0
+    : ~ u64 ym1 0
+    : ~ u64 ym2 0
+    : ~ u64 ym3 0
+    : ~ u64 xy0 0
+    : ~ u64 xy1 0
+    : ~ u64 xy2 0
+    : ~ u64 xy3 0
+    ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 rb ev )
+    = . o 0 yp0 = . o 1 yp1 = . o 2 yp2 = . o 3 yp3
+    = . o 4 ym0 = . o 5 ym1 = . o 6 ym2 = . o 7 ym3
+    = . o 8 xy0 = . o 9 xy1 = . o 10 xy2 = . o 11 xy3
 }
 
 // The register walk: scalar·B → 32-byte little-endian Montgomery u.
@@ -1464,14 +1493,14 @@ inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout
     : ~ u64 f2 0
     : ~ u64 f3 0
 
-    // Steps 0 … 31 add the odd digits, 32 … 63 the even ones; between
-    // them h is multiplied by 16. The order is public.
+    // Steps 0 … 25 add the odd digits, 26 … 51 the even ones; between
+    // them h is multiplied by 32. The order is public.
     : ~ i st 0
-    ~ < st 64 {
-        ? == st 32 {
-            // h ← 16·h: four doublings (dbl-2008-hwcd), 4S + 4M each.
+    ~ < st 52 {
+        ? == st 26 {
+            // h ← 32·h: five doublings (dbl-2008-hwcd), 4S + 4M each.
             : ~ i dn 0
-            ~ < dn 4 {
+            ~ < dn 5 {
                 ( __f4_sq_in a0 a1 a2 a3 px0 px1 px2 px3 )
                 ( __f4_sq_in b0 b1 b2 b3 py0 py1 py2 py3 )
                 ( __f4_sq_in e0 e1 e2 e3 pz0 pz1 pz2 pz3 )
@@ -1493,7 +1522,7 @@ inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout
                 = dn + dn 1
             }
         } {}
-        : i di ? < st 32 + * st 2 1 * - st 32 2
+        : i di ? < st 26 + * st 2 1 * - st 26 2
         : ~ u64 yp0 0
         : ~ u64 yp1 0
         : ~ u64 yp2 0
@@ -1506,7 +1535,7 @@ inline @ __xe_pick inout u64 yp0 inout u64 yp1 inout u64 yp2 inout u64 yp3 inout
         : ~ u64 xy1 0
         : ~ u64 xy2 0
         : ~ u64 xy3 0
-        ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 # *u64 + # i tb * / di 2 768 . dp di )
+        ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 # *u64 + # i tb * / di 2 1536 . dp di )
 
         // h ← h + entry (ge_madd, 7M): A = (Y + X)(y + x), B = (Y − X)(y − x),
         // C = T · 2dxy, D = 2Z; X = (A − B)(D − C), Y = (A + B)(D + C),
@@ -1567,11 +1596,11 @@ inline @ __xk_cp * u64 o * u64 a → v { = . o 0 . a 0 = . o 1 . a 1 = . o 2 . a
     // h = the identity (0 : 1 : 1 : 0)
     = . py 0 1 = . pz 0 1
     : ~ i st 0
-    ~ < st 64 {
-        ? == st 32 {
-            // h ← 16·h: four doublings (dbl-2008-hwcd), 4S + 4M each.
+    ~ < st 52 {
+        ? == st 26 {
+            // h ← 32·h: five doublings (dbl-2008-hwcd), 4S + 4M each.
             : ~ i dn 0
-            ~ < dn 4 {
+            ~ < dn 5 {
                 ( __xk_sq a px )
                 ( __xk_sq b py )
                 ( __xk_sq e pz )
@@ -1593,23 +1622,9 @@ inline @ __xk_cp * u64 o * u64 a → v { = . o 0 . a 0 = . o 1 . a 1 = . o 2 . a
                 = dn + dn 1
             }
         } {}
-        : i di ? < st 32 + * st 2 1 * - st 32 2
-        : ~ u64 yp0 0
-        : ~ u64 yp1 0
-        : ~ u64 yp2 0
-        : ~ u64 yp3 0
-        : ~ u64 ym0 0
-        : ~ u64 ym1 0
-        : ~ u64 ym2 0
-        : ~ u64 ym3 0
-        : ~ u64 xy0 0
-        : ~ u64 xy1 0
-        : ~ u64 xy2 0
-        : ~ u64 xy3 0
-        ( __xe_pick yp0 yp1 yp2 yp3 ym0 ym1 ym2 ym3 xy0 xy1 xy2 xy3 # *u64 + # i tb * / di 2 768 . dp di )
-        = . yp 0 yp0 = . yp 1 yp1 = . yp 2 yp2 = . yp 3 yp3
-        = . ym 0 ym0 = . ym 1 ym1 = . ym 2 ym2 = . ym 3 ym3
-        = . xy 0 xy0 = . xy 1 xy1 = . xy 2 xy2 = . xy 3 xy3
+        : i di ? < st 26 + * st 2 1 * - st 26 2
+        // yp, ym and xy are elements 10 … 12 of w: one 12-word run
+        ( __xe_pick_w yp # *u64 + # i tb * / di 2 1536 . dp di )
         // h ← h + entry (ge_madd, 7M): A = (Y + X)(y + x), B = (Y − X)(y − x),
         // C = T · 2dxy, D = 2Z; X = (A − B)(D − C), Y = (A + B)(D + C),
         // Z = (D + C)(D − C), T = (A − B)(A + B).
