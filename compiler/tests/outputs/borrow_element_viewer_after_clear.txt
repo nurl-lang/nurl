@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_element_viewer_after_clear.nu:19:5: error: 'f' borrows from 'vs', which ended at line 18 — it was passed to 'vec_clear', which may drop or replace what it holds. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'f' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup f ).
+    ^ ( string_len f )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

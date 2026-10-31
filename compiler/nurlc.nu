@@ -30407,8 +30407,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     ( bck_put ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` )
                     ( bck_put ( bck_bkey `fb_` ( bck_field rec 1 ) ) `` )
                     ( bck_put ( bck_bkey `fp_` ( bck_field rec 1 ) ) `` )
-                    ( bck_br_event ( bck_field rec 1 ) )
                 } {}
+                ( bck_br_event ( bck_field rec 1 ) )
                 // A join or a block (`n` with no call of its own): its source
                 // expression names each arm's sources, a call in an arm by
                 // that callee's summary — the line's other calls (the
@@ -30450,10 +30450,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // bck_sx_name — one key per row, not a key per question).
                 ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
-                ? != 0 g_bck_has_borrow {
-                    ( bck_put ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` )
-                    ( bck_br_event ( bck_field rec 1 ) )
-                } {}
+                ? != 0 g_bck_has_borrow { ( bck_put ( bck_bkey `bs_` ( bck_field rec 1 ) ) `` ) } {}
+                ( bck_br_event ( bck_field rec 1 ) )
                 // (A join or a block with no call of its own: the line's other calls
                 // lend to its arms, not to it — as for a `let`.)
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
@@ -31886,9 +31884,10 @@ unsafe @ bck_sx_is_id s e → b {
 }
 
 // The walk reached a `let` / `=` row of binding `ids`.
+// (Before the function's first borrow, nothing was a copy of anything.)
 @ bck_br_event s ids → v {
     = g_bck_brev_id ( nurl_str_to_int ids )
-    = g_bck_brev_prev ( bck_br_get ids )
+    = g_bck_brev_prev ? == 0 g_bck_has_borrow -1 ( bck_br_get ids )
 }
 
 // Only elements changed (g_bck_end_eonly): does borrow `bs` still read what
