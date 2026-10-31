@@ -141,6 +141,36 @@ separate concern. Two steps keep them apart:
    struct with a view field), which nurlc's rule refuses wherever the
    view would end.
 
+## The panic step's proof (A2-drop.1, in progress)
+
+`scopeDP` turns a panic into a normal step, so preservation must type what
+follows it. Three facts are needed, and A2 had none of them:
+
+1. **The context after the unwind.** The scopes the panic unwound are gone
+   from the store. A binding that depended on one of them is dead, `x` is
+   live again (it holds no views), and the rest is unchanged. For that to
+   satisfy `MInv`, no borrowed parameter outside those scopes may depend on
+   them. That is the new invariant `Inv.pinOut` / `PinOK` (done, every module
+   builds). With it, `rootKeep_frame_sp` (done) shows that every surviving
+   view still reaches the same memory.
+2. **The destructor's call** in that context: as on the normal path (done,
+   `scopeDEnd`). `NoPin` for `x` follows from `pinOut`, because `x` is in the
+   frame's own spine.
+3. **The re-raised panic.** `StmtT.panic` relates its input to its output:
+   same bindings, modes and types, and fixed entries unchanged. Its output
+   is the frame's original output `exitScope x Δ1`. So `Δ1` must agree with
+   the context outside the body's spine. That holds for every derivation in
+   practice, but nothing proves it for a run-time body. The plan:
+   - `StmtT.scopeD` takes `KeepOut Γ Δ s.spine`, `CtxWF Δ` and `NameWF Δ`
+     as premises, as `StmtT.catchR` already does. A step inside the body
+     keeps them (the `catchIn` argument, from `Keep`).
+   - At `letd`, the body is source code: `StmtT.domTy`, `StmtT.wf` and
+     `StmtT.names` give the domain, modes and well-formedness. A new lemma,
+     that source typing leaves an anchored borrowed parameter's entry as it
+     is, gives the rest. These live after `Preservation.lean`, so `letd`'s
+     step becomes a hypothesis of `preserve` (`LetdCase`), as calls already
+     are.
+
 ## Done when
 
 - `check.sh` passes, with `memory_safe`, `no_leak_end` and
