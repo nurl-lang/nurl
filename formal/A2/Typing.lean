@@ -48,8 +48,11 @@ structure Entry where
       is armed), so what it holds views of must outlive it. A move disarms
       it. -/
   dtor : Bool
-  /-- A2-drop.2: the binding was made by `letd`: it runs a destructor
-      whenever it owns a value. It never changes. -/
+  /-- A2-drop.2: the binding was made by `letd`, of a type that holds
+      views: it runs a destructor whenever it owns a value, and the
+      destructor reads what the value views.  (One of a type that holds no
+      views reads only what the binding owns: it needs no care.)  It never
+      changes. -/
   dbind : Bool
 deriving DecidableEq, Repr
 
@@ -163,7 +166,7 @@ def DKeep (Γ Γ' : Ctx) (sp : List Var) : Prop :=
       (E.ty ≠ .int ∨ E.mode = .rootb) ∧ ∀ d ∈ E'.vdeps, d.kind.isName = false → d ∈ E.vdeps
 
 theorem DKeep.refl (Γ : Ctx) (sp : List Var) : DKeep Γ Γ sp :=
-  fun v E hv hd hos hn _ => ⟨E, hv, hd, hos, hn, fun _ h _ => h⟩
+  fun _ E hv hd hos hn _ => ⟨E, hv, hd, hos, hn, fun _ h _ => h⟩
 
 theorem DKeep.trans {Γ1 Γ2 Γ3 : Ctx} {sp sp' : List Var} (h1 : DKeep Γ1 Γ2 sp) (h2 : DKeep Γ2 Γ3 sp')
     (hsp : ∀ v, v ∉ sp' → v ∉ sp) : DKeep Γ1 Γ3 sp' := by
@@ -238,8 +241,10 @@ structure CtxWF (Γ : Ctx) : Prop where
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
   dtor : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
     ∀ d ∈ E.vdeps, d.kind.isName = false → ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true
-  /-- ... and only a binding `letd` made may run one. -/
+  /-- ... and only a binding `letd` made may run one ... -/
   arm  : ∀ v E, Γ v = some E → E.dtor = true → E.dbind = true
+  /-- ... of a type that holds views. -/
+  view : ∀ v E, Γ v = some E → E.dbind = true → E.ty.holdsView = true
 
 instance {Γ : Ctx} : CoeFun (CtxWF Γ) (fun _ => ∀ v E, Γ v = some E → E.live = true →
     (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) :=

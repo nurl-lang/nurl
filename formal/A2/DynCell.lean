@@ -84,7 +84,8 @@ theorem ctx_flags {R : Entry} (hR : R.dtor = false ∧ R.dbind = false) :
 
 theorem ctx_wf {R : Entry} (hR : RootsOK R) (hRf : R.dtor = false ∧ R.dbind = false) : CtxWF (ctx R) := by
   refine ⟨fun v E hv _ _ r hr => ?_, fun v E hv hd => absurd hd (by rw [(ctx_flags hRf v E hv).2]; simp),
-    fun v E hv ha => absurd ha (by rw [(ctx_flags hRf v E hv).1]; simp)⟩
+    fun v E hv ha => absurd ha (by rw [(ctx_flags hRf v E hv).1]; simp),
+    fun v E hv hd => absurd hd (by rw [(ctx_flags hRf v E hv).2]; simp)⟩
   simp only [ctx] at hv
   split at hv
   · cases hv; simp [roots, Entry.vdeps, Ecell, Mode.ownSlot] at hr

@@ -566,13 +566,19 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   · by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; simp [hmo]
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w E b hw
-  · refine ⟨?live, ?dtorc, ?armc⟩
+  · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro w E hw hd
       by_cases hwx : w = x
       · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
         exact hi.wf.arm _ Ex hx hd
       · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.arm w E hw hd
+    case viewc =>
+      intro w E hw hd
+      by_cases hwx : w = x
+      · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+        exact hi.wf.view _ Ex hx hd
+      · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.view w E hw hd
     case dtorc =>
       intro w E hw hd hos' hni dep hdd hnm
       by_cases hwx : w = x
@@ -828,7 +834,8 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
     · rw [hwx, hux] at hw; cases hw; simp [hmo]
     · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
       rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.noInout w E0 b h0
-  · refine ⟨fun w E hw hl hn r hr => ?_, fun w E hw hd hos' hn d hdd hnm => ?_, fun w E hw ha => ?_⟩
+  · refine ⟨fun w E hw hl hn r hr => ?_, fun w E hw hd hos' hn d hdd hnm => ?_, fun w E hw ha => ?_,
+      fun w E hw hd => ?_⟩
     · by_cases hwx : w = x
       · rw [hwx, hux] at hw; cases hw
         simp [Entry.vdeps, hos, roots] at hr
@@ -861,6 +868,10 @@ theorem MInv.unwind {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} 
       · rw [hwx, hux] at hw; cases hw; exact hi.wf.arm x Ex hx ha
       · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
         rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.wf.arm w E0 h0 ha
+    · by_cases hwx : w = x
+      · rw [hwx, hux] at hw; cases hw; exact hi.wf.view x Ex hx hd
+      · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+        rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.wf.view w E0 h0 hd
   · by_cases hpx : p = x
     · rw [hpx, hux] at hp; cases hp; simp [hmo] at hm
     · obtain ⟨hpk, E0, h0, hc⟩ := unwindCtx_cases hp hpx
@@ -1016,6 +1027,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         have := post.cdom x; rw [hx] at this; cases h : Γ1 x <;> simp_all
       have hxn : x < m1.nv := by rw [post.nv]; exact hi.nvS x (by simp [Stmt.vars])
       have hm := post.inv.add hx1 hxn out (fun h => by rw [(RhsT.dtor_false hr).1] at h; cases h)
+        (fun h => by rw [(RhsT.dtor_false hr).2] at h; cases h)
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hsp : k.spine = [] := src_spine hsrc
@@ -1078,6 +1090,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         have := post.cdom x; rw [hx] at this; cases h : Γ1 x <;> simp_all
       have hxn : x < m1.nv := by rw [post.nv]; exact hi.nvS x (by simp [Stmt.vars])
       have hm := post.inv.add hx1 hxn out (fun h => by rw [(RhsT.dtor_false hr).1] at h; cases h)
+        (fun h => by rw [(RhsT.dtor_false hr).2] at h; cases h)
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anch hanch
       have hanchx : RootbAnch (setE Γ1 x E) F := fun p Ep hp hmp => by

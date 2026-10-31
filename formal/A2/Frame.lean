@@ -251,7 +251,7 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       (Ex'.dbind = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
           (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
-      (Ex'.dtor = true → Ex'.dbind = true)
+      (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true)
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -386,16 +386,25 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hm]; exact hi.noInout v Ex b hx
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [killE_mode]; exact hi.noInout v E b hE
-  · refine ⟨?live, ?dtorc, ?armc⟩
+  · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro v E' hv' hd
       by_cases hvx : v = x
       · subst hvx
         have := getX E' hv'; subst this
-        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm⟩ := hox
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm, _⟩ := hox
         exact harm hd
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
         rw [killE_dtor] at hd; rw [killE_dbind]; exact hi.wf.arm v E hE hd
+    case viewc =>
+      intro v E' hv' hd
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hview⟩ := hox
+        exact hview hd
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dbind] at hd; rw [killE_ty]; exact hi.wf.view v E hE hd
     case dtorc =>
       -- A2-drop.2: a destructor owner's views: the change ended none (`DtorSafe`)
       intro v E' hv' hd hos hnint d hdd hnm

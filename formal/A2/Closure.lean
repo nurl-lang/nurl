@@ -75,7 +75,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     (hwf : ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true)
     (hlt : ∀ r ∈ roots E.vdeps, r < x)
     (hvnames : NamesIn v E.held) (hvpkgs : PkgsOK v) (hnameOK : NameOK (setE Γ x E) E)
-    (hdt : E.dtor = false := by rfl) :
+    (hdt : E.dtor = false := by rfl) (hdb : E.dbind = false := by rfl) :
     MInv (m.set x ⟨false, some v⟩) (setE Γ x E) := by
   have hmx : m.st x = none := by
     have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -114,7 +114,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       subst hw; rw [hm]; simp
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w Ew b hw
   · exact hi.wf.add hx (fun _ _ r hr => hwf r hr) (fun _ hos => by rw [hm] at hos; cases hos)
-      (fun h => by rw [hdt] at h; cases h)
+      (fun h => by rw [hdt] at h; cases h) (fun h => by rw [hdb] at h; cases h)
   · intro p Ep hp hm'
     by_cases hpx : p = x
     · subst hpx
@@ -323,14 +323,14 @@ theorem clean_clean (E : Entry) : E.clean.clean = E.clean := by
   have key : ∀ E : Entry, (¬ E.fixed ∧ (E.ty = .int ∨ E.live = false)) →
       E.clean =
         { E with path := [], held := if E.dbind = true ∧ E.mode.ownSlot = true ∧ E.ty ≠ .int then memDeps E.held else [] } :=
-    fun E h => by unfold Entry.clean; rw [if_pos h]
+    fun E h => by unfold Entry.clean; rw [ite_eq_left h]
   by_cases h : ¬ E.fixed ∧ (E.ty = .int ∨ E.live = false)
   · have h' : ¬ E.clean.fixed ∧ (E.clean.ty = .int ∨ E.clean.live = false) := by
       rwa [clean_fixed_iff, clean_ty, clean_live]
     rw [key E.clean h', Entry.clean_dbind, clean_mode, clean_ty, key E h]
     by_cases hc : E.dbind = true ∧ E.mode.ownSlot = true ∧ E.ty ≠ .int
-    · simp only [if_pos hc, memDeps, List.filter_filter, Bool.and_self]
-    · simp only [if_neg hc, memDeps, List.filter_nil]
+    · simp only [ite_eq_left hc, memDeps, List.filter_filter, Bool.and_self]
+    · simp only [ite_eq_right hc, memDeps, List.filter_nil]
   · have h1 : E.clean = E := by unfold Entry.clean; rw [ite_eq_right h]
     rw [h1, h1]
 
@@ -370,6 +370,9 @@ theorem CtxWF.clean {Γ : Ctx} (hw : CtxWF Γ) : CtxWF (cleanC Γ) where
   arm v E hv ha := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [Entry.clean_dtor] at ha; rw [Entry.clean_dbind]; exact hw.arm v E0 h0 ha
+  view v E hv hd := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    rw [Entry.clean_dbind] at hd; rw [clean_ty]; exact hw.view v E0 h0 hd
 
 theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) where
   names := cleanC_names hi.names
@@ -2037,7 +2040,39 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       · subst hve; simp only [setE, upd_same, Option.some.injEq] at hv'; subst hv'
         simp [envE] at hd
       · rw [hΓe v hve] at hv'; exact hs v E hv' hd hos
-    refine ⟨fun i hil => ?_, fun d hd => hlift (hds.2.1 d (hmo d hd)), fun i hil b hb Ea ha => sorry⟩
+    -- ... and hands `inout` no binding `letd` made: an argument of the call
+    -- through the package was none, and a capture holds no views
+    have hio3 : ∀ i (hil : i < fn.params.length) b, (fn.params[i]'hil).1 = .inout b → ∀ Ea,
+        setE Γ m.nv (envE c Ec te cs) ((m.nv :: zs ++ cs.map (·.1)).getD i 0) = some Ea →
+          Ea.dbind = false := by
+      intro i hil b hb Ea ha
+      have hil' := hil
+      rw [hplen] at hil'
+      rcases openArgs_cases hil' with rfl | ⟨j, hjz, rfl⟩ | ⟨k, hk, rfl⟩
+      · have hp0 : fn.params[0] = (.inp, te) := by simp [hps]
+        rw [hp0] at hb; cases hb
+      · have hjl : j + 1 < sig.params.length := by rw [hsp]; simp; omega
+        have hpe : fn.params[j + 1]'hil = sig.params[j + 1] := by
+          have h1 := openParams_z (p0 := (.inp, te)) (cps := cs.map (·.2)) (show j < rest.length by omega)
+          rw [← hps] at h1
+          have h2 : sig.params[j + 1]? = rest[j]? := by rw [hsp]; simp
+          rw [← h2, List.getElem?_eq_getElem hil, List.getElem?_eq_getElem hjl] at h1
+          exact Option.some.inj h1
+        rw [hpe] at hb
+        rw [openArgs_z _ _ hjz, hΓe _ (hze _ (hzs j hjz))] at ha
+        exact hds.2.2 (j + 1) hjl b hb Ea (by simpa using ha)
+      · have hpc : fn.params[zs.length + 1 + k]'hil = (cs[k]'hk).2 := by
+          have h1 := openParams_c (p0 := (.inp, te)) (rest := rest) hk
+          rw [← hps, show rest.length = zs.length by omega, List.getElem?_eq_getElem hil] at h1
+          exact Option.some.inj h1
+        rw [openArgs_c _ _ hk, hΓe _ (hkne _ (hck k hk))] at ha
+        obtain ⟨Ev, hEv, _, _, htv, _, _, hhv, _⟩ := hcap _ (hck k hk)
+        rw [hEv] at ha
+        rw [← Option.some.inj ha]
+        cases hd : Ev.dbind with
+        | false => rfl
+        | true => have := hi.wf.view _ Ev hEv hd; rw [htv, hhv] at this; cases this
+    refine ⟨fun i hil => ?_, fun d hd => hlift (hds.2.1 d (hmo d hd)), hio3⟩
     have hil' := hil
     rw [hplen] at hil'
     rcases openArgs_cases hil' with rfl | ⟨j, hjz, rfl⟩ | ⟨k, hk, rfl⟩
@@ -2496,6 +2531,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hbo : ∀ o ∈ sig.outHolds, o.2.1 < zs.length + 1 := fun o h' => by
       obtain ⟨⟨hj', _⟩, _⟩ := hsouts o h'; rw [hsl] at hj'; exact hj'
     have hwf := hw1.add hx1 (fun _ _ => recvRes_roots hi.wf hdm hc hlc hnint hE)
+      (hV := fun hd => absurd hd (by simp [callRes]))
     have hnf' := NameWF.setE hn1 (fun Ex h' => by rw [hx1] at h'; cases h')
       (fun Ex h' => by rw [hx1] at h'; cases h') (recvRes_named (c := c) (Ec := Ec) hEn)
     -- what the opened call's closures may change, the call through the
