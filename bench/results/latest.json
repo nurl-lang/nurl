@@ -1,17 +1,17 @@
 {
   "schema": 1,
-  "generated_utc": "2026-10-31T00:35:40Z",
-  "commit": "9f7dd29dfe91369b984a0d3f32cd6fb620849250",
-  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/41150475934",
+  "generated_utc": "2026-10-31T00:56:59Z",
+  "commit": "cc500c7b1658a7844046e271d6ef80268c5d6558",
+  "run_url": "https://github.com/nurl-lang/nurl/actions/runs/41152359656",
   "host": {
     "label": "GitHub Actions ubuntu-latest runner",
     "kernel": "Linux 7.0.0-1017-azure x86_64",
     "cpu": "AMD EPYC 7763 64-Core Processor",
     "cores": 4,
-    "mem_kb": 16366640
+    "mem_kb": 16366644
   },
   "toolchains": {
-    "nurl": "v0.81.0-27-g9f7dd29d",
+    "nurl": "v0.81.0-30-gcc500c7b",
     "c": "Ubuntu clang version 21.1.8 (6ubuntu1)",
     "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
     "node": "v24.22.1",
@@ -25,8 +25,8 @@
     "compile_reps": 3,
     "workload_scale": 1
   },
-  "floor_ms": { "nurl": 3.472, "c": 3.426, "rust": 3.711, "node": 30.836, "python": 15.305 },
-  "floor_compile_ms": { "nurl_frontend": 7.023, "nurl": 132.867, "nurl_warm": 71.409, "c": 88.141, "rust": 68.719 },
+  "floor_ms": { "nurl": 3.479, "c": 3.549, "rust": 3.741, "node": 30.050, "python": 16.694 },
+  "floor_compile_ms": { "nurl_frontend": 7.123, "nurl": 130.825, "nurl_warm": 70.849, "c": 85.479, "rust": 65.843 },
   "benchmarks": [
     {
       "name": "lcg",
@@ -35,9 +35,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "-7585129161289236796",
       "verified": true,
-      "run_ms": { "nurl": 41.464, "c": 41.383, "rust": 41.683, "node": 1796.043, "python": 4865.316 },
+      "run_ms": { "nurl": 41.743, "c": 41.690, "rust": 41.922, "node": 1803.741, "python": 4915.726 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 4, "python": 1 },
-      "compile_ms": { "nurl_frontend": 6.940, "nurl": 138.494, "nurl_warm": 66.631, "c": 96.760, "rust": 76.810 }
+      "compile_ms": { "nurl_frontend": 7.337, "nurl": 138.871, "nurl_warm": 68.046, "c": 96.804, "rust": 73.818 }
     },
     {
       "name": "packet_classifier",
@@ -46,9 +46,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "4205972061",
       "verified": true,
-      "run_ms": { "nurl": 58.803, "c": 58.729, "rust": 59.280, "node": 168.876, "python": 4074.691 },
-      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 7.283, "nurl": 142.650, "nurl_warm": 71.112, "c": 102.427, "rust": 80.320 }
+      "run_ms": { "nurl": 58.853, "c": 58.776, "rust": 58.998, "node": 169.221, "python": 3982.860 },
+      "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
+      "compile_ms": { "nurl_frontend": 7.057, "nurl": 139.072, "nurl_warm": 67.812, "c": 96.272, "rust": 75.680 }
     },
     {
       "name": "ring_write",
@@ -57,9 +57,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "8299504528805184357",
       "verified": true,
-      "run_ms": { "nurl": 45.359, "c": 45.055, "rust": 45.173, "node": 73.306, "python": 6165.506 },
+      "run_ms": { "nurl": 45.039, "c": 44.971, "rust": 45.122, "node": 72.883, "python": 6134.152 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 17.707, "nurl": 157.799, "nurl_warm": 80.106, "c": 105.082, "rust": 79.972 }
+      "compile_ms": { "nurl_frontend": 17.987, "nurl": 154.110, "nurl_warm": 79.491, "c": 99.773, "rust": 75.688 }
     },
     {
       "name": "histogram_bins",
@@ -68,9 +68,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "1215643728",
       "verified": true,
-      "run_ms": { "nurl": 42.268, "c": 43.308, "rust": 43.430, "node": 73.114, "python": 5583.272 },
+      "run_ms": { "nurl": 42.112, "c": 43.246, "rust": 43.662, "node": 72.314, "python": 5641.322 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 18.120, "nurl": 157.964, "nurl_warm": 81.327, "c": 146.950, "rust": 86.391 }
+      "compile_ms": { "nurl_frontend": 17.928, "nurl": 155.465, "nurl_warm": 78.699, "c": 142.331, "rust": 83.615 }
     },
     {
       "name": "prefix_scan",
@@ -79,9 +79,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "492982549",
       "verified": true,
-      "run_ms": { "nurl": 24.273, "c": 24.238, "rust": 24.392, "node": 70.200, "python": 4142.041 },
+      "run_ms": { "nurl": 24.002, "c": 24.025, "rust": 24.165, "node": 71.017, "python": 4067.976 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 18.624, "nurl": 158.923, "nurl_warm": 81.821, "c": 108.183, "rust": 86.095 }
+      "compile_ms": { "nurl_frontend": 17.879, "nurl": 153.170, "nurl_warm": 78.817, "c": 104.305, "rust": 80.268 }
     },
     {
       "name": "binary_search",
@@ -90,9 +90,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "805907445",
       "verified": true,
-      "run_ms": { "nurl": 42.388, "c": 40.916, "rust": 44.061, "node": 113.936, "python": 5902.087 },
+      "run_ms": { "nurl": 42.076, "c": 40.787, "rust": 43.383, "node": 111.421, "python": 6085.127 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 18.818, "nurl": 157.062, "nurl_warm": 81.661, "c": 107.208, "rust": 82.469 }
+      "compile_ms": { "nurl_frontend": 17.874, "nurl": 149.391, "nurl_warm": 76.718, "c": 97.033, "rust": 82.339 }
     },
     {
       "name": "sort_window",
@@ -101,9 +101,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "2815490238",
       "verified": true,
-      "run_ms": { "nurl": 29.243, "c": 29.343, "rust": 29.647, "node": 200.688, "python": 12099.221 },
+      "run_ms": { "nurl": 29.294, "c": 29.294, "rust": 29.516, "node": 200.593, "python": 12087.191 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 1 },
-      "compile_ms": { "nurl_frontend": 18.254, "nurl": 158.116, "nurl_warm": 80.422, "c": 111.990, "rust": 90.995 }
+      "compile_ms": { "nurl_frontend": 18.136, "nurl": 154.508, "nurl_warm": 78.385, "c": 108.446, "rust": 89.085 }
     },
     {
       "name": "bloom_filter",
@@ -112,9 +112,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "2351703",
       "verified": true,
-      "run_ms": { "nurl": 18.969, "c": 20.014, "rust": 20.591, "node": 2860.036, "python": 7188.756 },
+      "run_ms": { "nurl": 18.994, "c": 20.224, "rust": 20.690, "node": 2861.071, "python": 7351.138 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 2, "python": 1 },
-      "compile_ms": { "nurl_frontend": 18.779, "nurl": 156.790, "nurl_warm": 80.170, "c": 111.181, "rust": 84.692 }
+      "compile_ms": { "nurl_frontend": 18.894, "nurl": 157.933, "nurl_warm": 78.718, "c": 109.035, "rust": 82.075 }
     },
     {
       "name": "hash_join",
@@ -123,9 +123,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "6152419568754618368",
       "verified": true,
-      "run_ms": { "nurl": 29.305, "c": 29.109, "rust": 31.906, "node": 3399.071, "python": 7657.615 },
+      "run_ms": { "nurl": 29.374, "c": 28.869, "rust": 31.898, "node": 3407.747, "python": 7559.987 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 2, "python": 1 },
-      "compile_ms": { "nurl_frontend": 22.095, "nurl": 295.242, "nurl_warm": 83.291, "c": 230.763, "rust": 130.641 }
+      "compile_ms": { "nurl_frontend": 22.470, "nurl": 296.534, "nurl_warm": 81.908, "c": 224.213, "rust": 130.260 }
     },
     {
       "name": "sieve",
@@ -134,9 +134,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "664579",
       "verified": true,
-      "run_ms": { "nurl": 29.048, "c": 28.846, "rust": 28.878, "node": 76.570, "python": 3114.105 },
+      "run_ms": { "nurl": 27.844, "c": 27.682, "rust": 27.687, "node": 77.797, "python": 3050.197 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 18.948, "nurl": 159.994, "nurl_warm": 84.229, "c": 114.821, "rust": 99.448 }
+      "compile_ms": { "nurl_frontend": 18.033, "nurl": 151.511, "nurl_warm": 78.729, "c": 107.831, "rust": 89.607 }
     },
     {
       "name": "fib",
@@ -145,9 +145,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "9227465",
       "verified": true,
-      "run_ms": { "nurl": 28.075, "c": 32.690, "rust": 32.716, "node": 139.419, "python": 1103.325 },
+      "run_ms": { "nurl": 27.694, "c": 32.317, "rust": 32.535, "node": 138.905, "python": 1122.746 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 7.360, "nurl": 142.951, "nurl_warm": 70.333, "c": 101.396, "rust": 82.488 }
+      "compile_ms": { "nurl_frontend": 7.112, "nurl": 137.387, "nurl_warm": 67.753, "c": 94.768, "rust": 76.820 }
     },
     {
       "name": "collatz",
@@ -156,9 +156,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "350",
       "verified": true,
-      "run_ms": { "nurl": 14.998, "c": 14.889, "rust": 14.920, "node": 56.224, "python": 688.972 },
+      "run_ms": { "nurl": 14.673, "c": 14.780, "rust": 15.125, "node": 57.133, "python": 692.805 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 7.566, "nurl": 146.097, "nurl_warm": 70.446, "c": 103.854, "rust": 80.956 }
+      "compile_ms": { "nurl_frontend": 7.351, "nurl": 142.144, "nurl_warm": 68.837, "c": 99.394, "rust": 76.439 }
     },
     {
       "name": "matmul",
@@ -167,9 +167,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "393199",
       "verified": true,
-      "run_ms": { "nurl": 36.307, "c": 36.106, "rust": 36.477, "node": 81.366, "python": 2850.291 },
+      "run_ms": { "nurl": 36.501, "c": 36.576, "rust": 36.617, "node": 77.826, "python": 3197.970 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 19.860, "nurl": 159.660, "nurl_warm": 82.436, "c": 115.706, "rust": 104.507 }
+      "compile_ms": { "nurl_frontend": 20.253, "nurl": 159.961, "nurl_warm": 82.836, "c": 117.174, "rust": 103.328 }
     },
     {
       "name": "json_parse",
@@ -178,9 +178,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "20",
       "verified": true,
-      "run_ms": { "nurl": 10.659, "c": 13.820, "rust": 18.990, "node": 41.570, "python": 36.921 },
+      "run_ms": { "nurl": 11.071, "c": 13.868, "rust": 19.068, "node": 42.210, "python": 38.947 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 5 },
-      "compile_ms": { "nurl_frontend": 55.187, "nurl": 527.049, "nurl_warm": 119.561, "c": 165.480, "rust": 182.618 }
+      "compile_ms": { "nurl_frontend": 54.124, "nurl": 523.764, "nurl_warm": 115.838, "c": 165.847, "rust": 186.067 }
     },
     {
       "name": "nbody",
@@ -189,9 +189,9 @@
       "languages": ["nurl", "c", "rust", "node", "python"],
       "checksum": "4595260366167553674",
       "verified": true,
-      "run_ms": { "nurl": 26.949, "c": 42.564, "rust": 27.678, "node": 106.364, "python": 3023.938 },
+      "run_ms": { "nurl": 26.724, "c": 42.509, "rust": 28.147, "node": 108.850, "python": 2956.488 },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 5, "python": 2 },
-      "compile_ms": { "nurl_frontend": 20.401, "nurl": 162.812, "nurl_warm": 79.533, "c": 137.442, "rust": 121.113 }
+      "compile_ms": { "nurl_frontend": 21.097, "nurl": 163.498, "nurl_warm": 82.448, "c": 134.038, "rust": 115.914 }
     },
     {
       "name": "chacha20",
@@ -200,9 +200,9 @@
       "languages": ["nurl", "c", "rust"],
       "checksum": "3720502699256473595",
       "verified": true,
-      "run_ms": { "nurl": 9.735, "c": 43.811, "rust": 36.073, "node": null, "python": null },
+      "run_ms": { "nurl": 9.644, "c": 43.971, "rust": 36.414, "node": null, "python": null },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 0, "python": 0 },
-      "compile_ms": { "nurl_frontend": 61.091, "nurl": 860.418, "nurl_warm": 122.610, "c": 153.497, "rust": 128.160 }
+      "compile_ms": { "nurl_frontend": 61.561, "nurl": 868.314, "nurl_warm": 123.988, "c": 149.815, "rust": 136.698 }
     },
     {
       "name": "poly1305",
@@ -211,9 +211,9 @@
       "languages": ["nurl", "c", "rust"],
       "checksum": "2498856793803813402",
       "verified": true,
-      "run_ms": { "nurl": 13.785, "c": 34.097, "rust": 23.291, "node": null, "python": null },
+      "run_ms": { "nurl": 13.974, "c": 34.356, "rust": 23.686, "node": null, "python": null },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 0, "python": 0 },
-      "compile_ms": { "nurl_frontend": 47.816, "nurl": 568.846, "nurl_warm": 113.079, "c": 157.865, "rust": 143.893 }
+      "compile_ms": { "nurl_frontend": 48.000, "nurl": 577.647, "nurl_warm": 110.219, "c": 153.091, "rust": 143.113 }
     },
     {
       "name": "blake2b",
@@ -222,9 +222,9 @@
       "languages": ["nurl", "c", "rust"],
       "checksum": "8590291023788228918",
       "verified": true,
-      "run_ms": { "nurl": 46.856, "c": 67.205, "rust": 71.889, "node": null, "python": null },
+      "run_ms": { "nurl": 46.690, "c": 67.181, "rust": 71.725, "node": null, "python": null },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 0, "python": 0 },
-      "compile_ms": { "nurl_frontend": 41.584, "nurl": 390.456, "nurl_warm": 103.419, "c": 160.743, "rust": 136.551 }
+      "compile_ms": { "nurl_frontend": 42.997, "nurl": 389.409, "nurl_warm": 105.624, "c": 152.007, "rust": 143.658 }
     },
     {
       "name": "sha512",
@@ -233,9 +233,9 @@
       "languages": ["nurl", "c", "rust"],
       "checksum": "7091519178481951668",
       "verified": true,
-      "run_ms": { "nurl": 50.102, "c": 50.285, "rust": 52.472, "node": null, "python": null },
+      "run_ms": { "nurl": 49.965, "c": 50.096, "rust": 51.999, "node": null, "python": null },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 0, "python": 0 },
-      "compile_ms": { "nurl_frontend": 42.875, "nurl": 515.523, "nurl_warm": 106.999, "c": 153.400, "rust": 126.442 }
+      "compile_ms": { "nurl_frontend": 42.469, "nurl": 510.670, "nurl_warm": 105.243, "c": 148.106, "rust": 136.292 }
     },
     {
       "name": "x25519",
@@ -244,9 +244,9 @@
       "languages": ["nurl", "c", "rust"],
       "checksum": "6127485567278337128",
       "verified": true,
-      "run_ms": { "nurl": 33.673, "c": 51.391, "rust": 51.950, "node": null, "python": null },
+      "run_ms": { "nurl": 34.094, "c": 51.405, "rust": 51.658, "node": null, "python": null },
       "reps": { "nurl": 5, "c": 5, "rust": 5, "node": 0, "python": 0 },
-      "compile_ms": { "nurl_frontend": 58.176, "nurl": 1639.361, "nurl_warm": 126.866, "c": 1280.038, "rust": 521.584 }
+      "compile_ms": { "nurl_frontend": 57.427, "nurl": 1636.347, "nurl_warm": 119.787, "c": 1270.532, "rust": 519.158 }
     }
   ]
 }
