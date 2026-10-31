@@ -924,11 +924,7 @@ $ `stdlib/std/bytes.nu`
     : *u src . text data
     : ~ i w ( vec_len [u] out )
     ( vec_reserve [u] out + n 4 )
-    // The buffer's address read from its control block, as core/string.nu's
-    // string_reserve_at reads it: a pointer handed back by a call and held
-    // in a binding is one the compiler must assume owned (a release of the
-    // old value at each reassignment, a journal entry).
-    : ~ * u dst # *u ( nurl_peek . out ctl 0 )
+    : ~ * u dst ( vec_data [u] out )
     ? > lead 0 {
         = . dst w # u lead
         = w + w 1
@@ -952,7 +948,7 @@ $ `stdlib/std/bytes.nu`
             : i c & # i . src k 255
             : b _held ( vec_set_len [u] out w )
             ( vec_reserve [u] out + - n k 8 )
-            = dst # *u ( nurl_peek . out ctl 0 )
+            = dst ( vec_data [u] out )
             = . dst w # u 92
             : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
             ? > named 0 {

@@ -127,9 +127,8 @@ $ `stdlib/core/slice.nu`
 //
 // Through the buffer's control block, as core/string.nu's bulk emitters
 // write (a JSON body is mostly small integers): one capacity check and
-// one length commit, and the address read from the block rather than
-// taken from vec_data — a pointer a call hands back costs its binding a
-// journal entry.
+// one length commit, where vec_reserve, vec_data, vec_len and
+// vec_set_len each read the block again (~22 instructions an integer).
 @ bytes_push_int ( Vec u ) v i n → v {
     : i m ? < n 0 n - 0 n
     : ~ i nd 1
