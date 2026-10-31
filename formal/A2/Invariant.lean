@@ -349,13 +349,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → NoPin Δ x →
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
@@ -372,6 +372,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
         Ex.mode = .bor ∧ E.mode = .bor) →
       RhsT Γ F r E Γ1 → E.ty = Ex.ty → x ∉ roots E.vdeps → (Γ1 x).isSome → NoPin Γ x →
+      DtorSafe Γ1 .replace false x →
       StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
       a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
@@ -382,11 +383,11 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = some Ex → Ex.live = true → Ex.ty = .vec t → canDo Ex.mode .realloc → x ∉ F →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
       PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
-      Γ1 x = some Ex1 → Ex1.live = true →
+      Γ1 x = some Ex1 → Ex1.live = true → DtorSafe Γ1 .realloc t.holdsView x →
       StmtT P Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
-      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → NoPin Γ x →
+      Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → EndOK Γ x →
       StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
       Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
@@ -400,7 +401,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
       fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
   | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty} :
       -- (an `inout` struct that may be replaced is taken apart too: a field
       -- replaced in place is the struct taken apart and assigned again)
@@ -408,7 +409,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ x = none → Γ z = none → x ≠ z → x ∉ F → z ∉ F →
       StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ →
-      NoPin Γ y → NoPin Δ z → NoPin (exitScope z Δ) x →
+      EndOK Γ y → EndOK Δ z → EndOK (exitScope z Δ) x →
       StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {σ : Nat} {sig : Fn} :
@@ -419,7 +420,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- handed to the code as an `inout` argument of its own)
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      NoPin Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -431,10 +432,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | letd {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {r : Rhs} {s : Stmt} {E : Entry} :
       s.src = true → Γ x = none → x ∉ F → RhsT Γ F r E Γ1 → E.mode = .own →
       E.ty.holdsView = false → DtorOK P f E.ty → StmtT P (setE Γ1 x E) F s Δ →
-      NoPin Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+      EndOK Δ x → StmtT P Γ F (.letd x f r s) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty.holdsView = false ∧ DtorOK P f E.ty) → x ∉ F →
-      StmtT P Γ F s Δ → NoPin Δ x →
+      StmtT P Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
 

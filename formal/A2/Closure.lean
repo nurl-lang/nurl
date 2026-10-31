@@ -434,10 +434,10 @@ theorem mutNames_clean (Γ : Ctx) (args : List Var) : mutNames (cleanC Γ) args 
     dependencies only. -/
 theorem DtorSafe.clean {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x) :
     DtorSafe (cleanC Γ) e hv x := by
-  intro v E hE hd
+  intro v E hE hd hos
   obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
-  rw [Entry.clean_dtor] at hd
-  have h1 := h v E0 h0 hd
+  rw [Entry.clean_dtor] at hd; rw [clean_mode] at hos
+  have h1 := h v E0 h0 hd hos
   unfold hitsMem at h1 ⊢
   rw [clean_ty, clean_mode]
   simp only [Bool.and_eq_false_iff, List.any_eq_false] at h1 ⊢
@@ -1991,11 +1991,11 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     -- call through the package did; the environment runs no destructor
     have hlift : ∀ {e : Eff} {hv : Bool} {a : Var}, DtorSafe Γ e hv a →
         DtorSafe (setE Γ m.nv (envE c Ec te cs)) e hv a := by
-      intro e hv a hs v E hv' hd
+      intro e hv a hs v E hv' hd hos
       by_cases hve : v = m.nv
       · subst hve; simp only [setE, upd_same, Option.some.injEq] at hv'; subst hv'
         simp [envE] at hd
-      · rw [hΓe v hve] at hv'; exact hs v E hv' hd
+      · rw [hΓe v hve] at hv'; exact hs v E hv' hd hos
     refine ⟨fun i hil => ?_, fun d hd => hlift (hds.2 d (hmo d hd))⟩
     have hil' := hil
     rw [hplen] at hil'

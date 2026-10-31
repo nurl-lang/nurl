@@ -74,14 +74,22 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
     · rw [killE_held, killE_held]; exact hh
 
 theorem CtxWF.kill {Γ : Ctx} (h : CtxWF Γ) (e : Eff) (hv : Bool) (x : Var) : CtxWF (kill e hv x Γ) := by
-  intro v E' hv' hl hn r hr
+  refine ⟨?live, fun v E' hv' hd hos hn d hdd hnm => ?_⟩
+  case live =>
+    intro v E' hv' hl hn r hr
+    obtain ⟨E, hE, hm, _⟩ := kill_cmode hv'
+    simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'
+    subst hv'
+    rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+    rw [killE_ty, killE_mode] at hn
+    rw [killE_vdeps] at hr
+    obtain ⟨Er, hEr, hro⟩ := h v E hE hl.1 hn r hr
+    exact kill_root hEr hro
   obtain ⟨E, hE, hm, _⟩ := kill_cmode hv'
   simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'
   subst hv'
-  rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-  rw [killE_ty, killE_mode] at hn
-  rw [killE_vdeps] at hr
-  obtain ⟨Er, hEr, hro⟩ := h v E hE hl.1 hn r hr
+  rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn; rw [killE_vdeps] at hdd
+  obtain ⟨Er, hEr, hro⟩ := h.dtor v E hE hd hos hn d hdd hnm
   exact kill_root hEr hro
 
 theorem Weaker.kill {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (e : Eff) (hv : Bool) (x : Var) :
@@ -118,13 +126,27 @@ theorem NameWF.exitScope {Γ : Ctx} (h : NameWF Γ) (x : Var) : NameWF (exitScop
     exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hdx, A2.kill, hEr, killE_nil (root_vdeps ho hh)],
       hlr, hh, ht, ho, hc⟩
 
-theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) :
+theorem Weaker.exitScope {Γ Γ' : Ctx} (hw : Weaker Γ Γ') (x : Var) (hds : DtorSafe Γ' .replace false x) :
     Weaker (exitScope x Γ) (exitScope x Γ') := by
   have hk := hw.kill .replace false x
   refine ⟨fun v => ?_, ?_, hw.names.exitScope x⟩
   · by_cases hvx : v = x
     · subst hvx; simp [A2.exitScope]
     · simp only [A2.exitScope, upd_ne _ _ hvx]; exact hk.1 v
+  refine ⟨?live, ?dtorc⟩
+  case dtorc =>
+    intro v E hv' hd hos hn d hdd hnm
+    have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
+    simp only [A2.exitScope, upd_ne _ _ hvx] at hv'
+    obtain ⟨Er, hEr, hro⟩ := hk.2.1.dtor v E hv' hd hos hn d hdd hnm
+    have hrx : d.root ≠ x := by
+      obtain ⟨E0, hE0, _, _⟩ := kill_cmode hv'
+      simp only [A2.kill, hE0, Option.map_some, Option.some.injEq] at hv'
+      subst hv'
+      rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
+      rw [killE_vdeps] at hdd
+      exact hds.root_ne hE0 hd hos hn hdd hnm
+    exact ⟨Er, by simp [A2.exitScope, upd_ne _ _ hrx, hEr], hro⟩
   · intro v E hv' hl hn r hr
     have hvx : v ≠ x := fun h => by subst h; simp [A2.exitScope] at hv'
     simp only [A2.exitScope, upd_ne _ _ hvx] at hv'
@@ -166,6 +188,24 @@ theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker
 theorem CtxWF.exitRoot {Γ' : Ctx} (h : CtxWF Γ') (p : Var) (D : List Dep)
     (hD : ∀ d ∈ D, d.root ≠ p ∧ ∃ Er, Γ' d.root = some Er ∧ Er.mode.isRoot = true) :
     CtxWF (exitRoot p D Γ') := by
+  have hroot : ∀ r, (∃ Er, Γ' r = some Er ∧ Er.mode.isRoot = true) → r ≠ p →
+      ∃ Er, A2.exitRoot p D Γ' r = some Er ∧ Er.mode.isRoot = true := by
+    intro r ⟨Er, hEr, hro⟩ hrp
+    exact ⟨rerootE p D Er, by simp [A2.exitRoot, upd_ne _ _ hrp, hEr], hro⟩
+  refine ⟨?live, ?dtorc⟩
+  case dtorc =>
+    intro v E hv' hd hos hn dep hdd hnm
+    have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
+    simp only [A2.exitRoot, upd_ne _ _ hvp] at hv'
+    cases hE : Γ' v with
+    | none => rw [hE] at hv'; cases hv'
+    | some E0 =>
+      rw [hE] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
+      rw [vdeps_reroot] at hdd
+      rcases mem_reroot hdd with ⟨hd0, hne⟩ | ⟨k, d', _, hd', rfl⟩
+      · exact hroot _ (h.dtor v E0 hE hd hos hn dep hd0 hnm) hne
+      · obtain ⟨hne, hex⟩ := hD d' hd'
+        exact hroot _ hex hne
   intro v E hv' hl hn r hr
   have hvp : v ≠ p := fun h => by subst h; simp [A2.exitRoot] at hv'
   simp only [A2.exitRoot, upd_ne _ _ hvp] at hv'

@@ -52,21 +52,21 @@ theorem killE_vdeps (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     effect safe. -/
 theorem DtorSafe.kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
     (e' : Eff) (hv' : Bool) (y : Var) : DtorSafe (A2.kill e' hv' y Γ) e hv x := by
-  intro v E hE hd
+  intro v E hE hd hos
   simp only [A2.kill] at hE
   obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
-  rw [killE_dtor] at hd
-  have := h v E0 h0 hd
+  rw [killE_dtor] at hd; rw [killE_mode] at hos
+  have := h v E0 h0 hd hos
   unfold hitsMem at this ⊢
   rw [killE_ty, killE_mode, killE_vdeps]; exact this
 
 theorem DtorSafe.setE_off {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
     {y : Var} {E : Entry} (hE : E.dtor = false) : DtorSafe (A2.setE Γ y E) e hv x := by
-  intro v E' hv' hd
+  intro v E' hv' hd hos
   by_cases hvy : v = y
   · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
     rw [hE] at hd; cases hd
-  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos
 
 theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).live = (E.live && !hits e hv x E) := by
@@ -158,7 +158,11 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       Ex'.ty = Ex.ty ∧
       (Ex'.live = true → (Ex'.ty ≠ .int ∨ Ex'.mode = .rootb) → NameOK (upd Γ0 x (some Ex')) Ex') ∧
       (Ex'.live = true → ∀ T, sl.val = some T → NamesIn T Ex'.held) ∧
-      (∀ T, sl.val = some T → PkgsOK T)
+      (∀ T, sl.val = some T → PkgsOK T) ∧
+      -- A2-drop.2: an owner that may run a destructor views only bound roots
+      (Ex'.dtor = true → Ex'.mode.ownSlot = true → Ex'.ty ≠ .int → ∀ d ∈ Ex'.vdeps,
+        d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
+          (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true))
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -208,7 +212,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
-    (hxr : Ex.mode ≠ .rootb)
+    (hxr : Ex.mode ≠ .rootb) (hds : DtorSafe Γ e hv x)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
@@ -292,7 +296,47 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hm]; exact hi.noInout v Ex b hx
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [killE_mode]; exact hi.noInout v E b hE
-  · intro v E' hv' hl hnint r hr
+  · refine ⟨?live, ?dtorc⟩
+    case dtorc =>
+      -- A2-drop.2: a destructor owner's views: the change ended none (`DtorSafe`)
+      intro v E' hv' hd hos hnint d hdd hnm
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, hm', _, _, _, _, _, hdwf⟩ := hox
+        have hnint' : E'.ty ≠ .int := by
+          rcases hnint with h | h
+          · exact h
+          · exact absurd (hm' ▸ h) hxr
+        rcases hdwf hd hos hnint' d hdd hnm with ⟨hrx, hroot⟩ | ⟨hrx, Er, hEr, hroot⟩
+        · exact ⟨E', by rw [hrx]; simp, hroot⟩
+        · exact ⟨Er, by rw [upd_ne _ _ hrx]; exact hEr, hroot⟩
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dtor] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hnint
+        rw [killE_vdeps] at hdd
+        obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos hnint d hdd hnm
+        by_cases hrx : d.root = x
+        · -- a view of `x` that the change keeps: `x` is still bound
+          have hk : e.kills hv d.kind = false := by
+            have h1 := hds v E hE hd hos
+            unfold hitsMem at h1
+            have hg : (E.ty != .int || E.mode == .rootb) = true := by
+              rcases hnint with h | h <;> simp [h]
+            rw [hg, Bool.true_and, List.any_eq_false] at h1
+            have := h1 d hdd
+            simp only [hrx, beq_self_eq_true, hnm, Bool.not_false, Bool.true_and] at this
+            simpa using this
+          cases ox with
+          | none =>
+            exfalso; rw [hrem rfl] at hk
+            cases hdk : d.kind <;> rw [hdk] at hk hnm <;> simp_all [Eff.kills, Kind.isName]
+          | some Ex' =>
+            obtain ⟨_, _, _, _, hm, _⟩ := hox
+            rw [hrx, hx] at hEr; cases hEr
+            exact ⟨Ex', by rw [hrx]; simp, by rw [hm]; exact hroot⟩
+        · refine ⟨killE e hv x Er, ?_, by rw [killE_mode]; exact hroot⟩
+          rw [upd_ne _ _ hrx]; unfold kill; rw [hEr]; rfl
+    intro v E' hv' hl hnint r hr
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
@@ -393,7 +437,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases ox with
       | none => rw [show m'.st v = none from hox] at hsl; cases hsl
       | some Ex' =>
-        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk⟩ := hox
+        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk, _⟩ := hox
         rw [hsl'] at hsl; cases hsl
         exact hpk T hT
     · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT

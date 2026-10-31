@@ -122,12 +122,28 @@ theorem hitsMem_of_hits {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e 
     takes it, so a destructor never reads a view whose source ended
     (github#1380's rule, with the maybe-moved join). -/
 def DtorSafe (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
-  ∀ v E, Γ v = some E → E.dtor = true → hitsMem e hv x E = false
+  ∀ v E, Γ v = some E → E.dtor = true → E.mode.ownSlot = true → hitsMem e hv x E = false
+
+/-- What `replace` asks: no owner that may run a destructor views `x` in
+    memory at all. -/
+theorem DtorSafe.root_ne {Γ : Ctx} {hv : Bool} {x : Var} (h : DtorSafe Γ .replace hv x) {v : Var}
+    {E : Entry} (hE : Γ v = some E) (hd : E.dtor = true) (hos : E.mode.ownSlot = true)
+    (hn : E.ty ≠ .int ∨ E.mode = .rootb) {d : Dep} (hdd : d ∈ E.vdeps) (hnm : d.kind.isName = false) :
+    d.root ≠ x := by
+  intro hrx
+  have h1 := h v E hE hd hos
+  unfold hitsMem at h1
+  have hg : (E.ty != .int || E.mode == .rootb) = true := by
+    rcases hn with h | h <;> simp [h]
+  rw [hg, Bool.true_and, List.any_eq_false] at h1
+  have := h1 d hdd
+  rw [hrx, hnm] at this
+  cases hk : d.kind <;> simp_all [Eff.kills]
 
 /-- With no binding that runs a destructor, every effect is safe. -/
 theorem DtorSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dtor = false)
     (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
-  fun v E hE hd => by rw [h v E hE] at hd; cases hd
+  fun v E hE hd _ => by rw [h v E hE] at hd; cases hd
 
 /-- The end of `x`'s scope: what borrows from it ends, and it is gone. -/
 def exitScope (x : Var) (Γ : Ctx) : Ctx := upd (kill .replace false x Γ) x none
@@ -170,10 +186,18 @@ structure EntryWeaker (E E' : Entry) : Prop where
   dtor  : E.dtor = true → E'.dtor = true ∧ E.held ⊆ E'.held
 
 /-- A context's live entries depend only on roots it has.  (An integer's
-    dependencies say nothing: it holds no memory.) -/
-def CtxWF (Γ : Ctx) : Prop :=
-  ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps,
+    dependencies say nothing: it holds no memory.)  A2-drop.2: so does, in
+    memory, an owner that may run a destructor, live or not: its views are
+    what the destructor will read. -/
+structure CtxWF (Γ : Ctx) : Prop where
+  live : ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps,
     ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true
+  dtor : ∀ v E, Γ v = some E → E.dtor = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
+    ∀ d ∈ E.vdeps, d.kind.isName = false → ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true
+
+instance {Γ : Ctx} : CoeFun (CtxWF Γ) (fun _ => ∀ v E, Γ v = some E → E.live = true →
+    (E.ty ≠ .int ∨ E.mode = .rootb) → ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) :=
+  ⟨CtxWF.live⟩
 
 /-- May a binding in this mode undergo effect `e`? -/
 def canDo (m : Mode) (e : Eff) : Prop :=
@@ -218,6 +242,11 @@ def Weaker (Γ Γ' : Ctx) : Prop :=
     keep changing a binding that is gone. -/
 def NoPin (Γ : Ctx) (x : Var) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ x
+
+/-- What ending or replacing `x` asks of the context it happens in: no
+    borrowed parameter changes `x` by name (`NoPin`), and no binding that
+    may run a destructor views it (`DtorSafe`, A2-drop.2). -/
+def EndOK (Γ : Ctx) (x : Var) : Prop := NoPin Γ x ∧ DtorSafe Γ .replace false x
 
 def intE : Entry := ⟨.int, .bor, true, [], [], false⟩
 
