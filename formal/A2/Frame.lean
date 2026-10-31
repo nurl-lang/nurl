@@ -95,6 +95,28 @@ theorem DbindSafe.setE_nil {Γ : Ctx} {x : Var} (h : DbindSafe Γ x) {y : Var} {
     rw [hE] at hdd; cases hdd
   · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos hn d hdd
 
+theorem DKeep.kill {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) (e : Eff) (hv : Bool) (x : Var) :
+    DKeep Γ (A2.kill e hv x Γ') sp := by
+  intro v E hE hd hos hn hvs
+  simp only [A2.kill] at hE
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
+  rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hn
+  obtain ⟨E1, h1, hd1, hos1, hn1, hs1⟩ := h v E0 h0 hd hos hn hvs
+  exact ⟨E1, h1, hd1, hos1, hn1, fun d hdd hnm => hs1 d (by rwa [killE_vdeps] at hdd) hnm⟩
+
+/-- Setting an entry: one no `letd` made, or one that views no more than
+    the old entry of a `letd` binding. -/
+theorem DKeep.setE {Γ Γ' : Ctx} {sp : List Var} (h : DKeep Γ Γ' sp) {y : Var} {E : Entry}
+    (hE : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) → y ∉ sp →
+      ∃ E0, Γ y = some E0 ∧ E0.dbind = true ∧ E0.mode.ownSlot = true ∧ (E0.ty ≠ .int ∨ E0.mode = .rootb) ∧
+        ∀ d ∈ E.vdeps, d.kind.isName = false → d ∈ E0.vdeps := by intro h; simp_all) :
+    DKeep Γ (A2.setE Γ' y E) sp := by
+  intro v E' hv hd hos hn hvs
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv
+    exact hE hd hos hn hvs
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv; exact h v E' hv hd hos hn hvs
+
 /-- A2-drop.2: in a well-formed context no `letd` binding views an unbound
     variable, so ending a fresh one is safe. -/
 theorem DbindSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none) : DbindSafe Γ x := by

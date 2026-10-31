@@ -442,6 +442,8 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
       PushArg Γ F y Ey t D Γ1 → x ∉ roots D →
       Γ1 x = some Ex1 → Ex1.live = true → DtorSafe Γ1 .realloc t.holdsView x →
+      -- A2-drop.2: a destructor binding gains no view
+      (Ex.dbind = true → t.holdsView = false) →
       StmtT P Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
