@@ -190,13 +190,71 @@ A3.0 carries the architecture: views, write-back, global `HeapOK` and the
 race definition. Each later step adds one kind of shared block and its
 rules.
 
+## A3.1's mechanization (Agora #285)
+
+A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
+so a shared block has to live somewhere A2's step can read. For `Arc` the
+block goes into A2 itself. Single-threaded, an `Arc` is a counted
+reference (as `Rc` is in Rust), and nurlc's single-threaded code already
+uses `Arc` widely.
+
+**In A2.**
+- `Mem.blk : Nat → Option Blk`, with `Blk := ⟨rc, pay⟩`. A block's payload
+  tree is owned by the block: `HeapOK`'s one owner per allocation counts
+  blocks next to slots, and `Covers` counts them too.
+- `Val.arc k`, a leaf: a share of block `k`. `Ty.arc t` is owning, it
+  holds a view exactly when `t` does, and it is never copied.
+- `RhsT.arcNew y`: `y`'s tree moves into a fresh block with `rc = 1`. The
+  share is owned and holds what `y` held, since the payload views what `y`
+  viewed.
+- `RhsT.arcClone a`: a read of share `a` that adds a new share, `rc + 1`.
+  It holds what `a` holds.
+- `RhsT.arcGet a`: the payload, lent. Its entry is a borrow rooted at `a`
+  (`derive a … .view`), holding `a`'s `held`, so it ends with `a` like any
+  borrow.
+- **Dropping a share is part of freeing a tree.** Every `DropSlot` / `Frees`
+  that meets `Val.arc k` does `rc − 1`, and at 0 drops the payload tree in
+  turn. A share is then released correctly wherever it lands (a field, a
+  `Vec` element, a `sink` parameter, an assignment's old value) with no
+  drop glue, so A3.1 does not wait for A2-drop.3 (#253).
+- **Frozen is typing.** No rule writes through an `arc t`: it is no
+  `push` / `assign` / take-out target, and `arcGet` lends a borrow, which
+  `canDo` refuses every write.
+- **Counted is an invariant.** `rc k` is the number of `Val.arc k` leaves in
+  slot trees and payloads. A payload holds only shares made before it, so
+  shares form no cycle, and when every share has been dropped every block
+  has been freed (`no_leak`).
+
+**In A3.**
+- `Cfg` gets the blocks next to `alloc` and `nid`, shared by every thread.
+  A thread's part is its own trees. The payloads are in no part.
+- Every holder reads them: the frame lemma runs a step on a thread's part
+  plus the blocks.
+- A payload address is only read (frozen), so two threads meeting there
+  is no race.
+- `rc` is a word that `arcClone` and a share's drop change atomically.
+  They are marked atomic in `Touch`, as nurl's runtime's refcount is.
+- Send: `Ty.arc t` crosses when `t` holds no views. That is A3.0's
+  `SpawnOK` question asked of the parameter's type, unchanged.
+
+**Order.**
+1. A2: `Blk`, `Val.arc`, `Ty.arc` through every function on values and
+   types (mechanical, but it touches every module).
+2. A2: the three rules and the drop, with `memory_safe` / `no_leak_end` /
+   `no_leak_panic` re-proven.
+3. A3: the blocks in `Cfg`, the frame lemma with payload reads,
+   `Touch` / `Race` with atomic `rc`, and `A3.claim` again.
+4. Probes h211 h212 h213 h288 h289 h338 to A3.1; CLAIM.md and README.md.
+
 ## Open questions
 
 - **How much of A2 to copy** (decided in A3.0): none. A3 imports A2 and
   runs its step on each thread's view; a frame lemma moves the step
   between the shared address space and the thread's own part, where A2's
-  invariant holds. A3.1–A3.6 add statements for the shared blocks; they
-  will need A2's `Stmt` to take them, or a step of their own beside A2's.
+  invariant holds. A3.1–A3.6 add the shared blocks. For `Arc` they go into
+  A2 (above). `Locked`, `RwLocked`, `Atomic` and channels have no
+  single-threaded meaning beyond A2's, so for them a step beside A2's may
+  fit better; A3.2 decides.
 - **Scoped threads.** A thread that borrows its spawner's data and is
   joined before the frame ends (`par_map_index`) needs the borrow to
   outlive the spawn while the spawner is suspended. That would be A3.7,
