@@ -615,9 +615,17 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           obtain ⟨hvs, E1, h1, _⟩ := hkeep.1 v Ev hv (by simp [Stmt.spine])
           refine ⟨fun hm => hvs ?_, E1, h1⟩
           simp only [callStmt, Stmt.spine, List.mem_cons]; exact Or.inr hm
+    -- A2-drop.2: a caller binding `letd` made is one where the frame returns
+    have hDS : DStay ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))
+        (callIn fn [] m.nv x).spine := by
+      intro v Ev hv hd hos _
+      obtain ⟨_, hvx, E1, h1, rfl⟩ := h.dbind_frame hv hd
+      rw [hpost] at h1
+      exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
+        by rwa [clean_mode] at hos⟩
     have hcatch : StmtT P ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
-      StmtT.catchR hxF hIn hM hanchΔ hKO
+      StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, h.catchOK _ k⟩

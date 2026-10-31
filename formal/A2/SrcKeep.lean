@@ -136,16 +136,17 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
-    have hnrb : E.mode ≠ .rootb := by rcases (RSetup.RhsT.out hr).1 with h | h <;> rw [h] <;> simp
+    have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @letd Γ Γ1 Δ F x f r k E hks hx hxF hr hmo _ _ _ hpin ih =>
+  | @letd Γ Γ1 Δ F x f r k E H hks hx hxF hr hmo _ _ hH _ hpin ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
-    have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
-      (fun Ex h => by rw [hx1] at h; cases h) hE
-    exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) (by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
+    have hnx := NameWF.setE hn1 (E := Entry.arm { E with held := H }) (fun Ex h => by rw [hx1] at h; cases h)
+      (fun Ex h => by rw [hx1] at h; cases h) (fun hl ht => (hE hl ht).widen hmo hH)
+    exact CtxRel.bind (E := Entry.arm { E with held := H }) hanch hx hxF (hr.ctxRel hanch)
+      (show E.mode ≠ .rootb by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
   | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc _ hpin ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn

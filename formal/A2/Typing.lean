@@ -69,7 +69,34 @@ def Mode.ownSlot : Mode → Bool
     so only what it holds counts. -/
 def Entry.vdeps (E : Entry) : List Dep := (if E.mode.ownSlot then [] else E.path) ++ E.held
 
+/-- A2-drop.2: the binding `letd` makes. It is armed, and remembered as
+    `letd`'s, when its type holds views: its destructor reads them. (A
+    destructor of a type that holds no views reads only what its binding
+    owns, so such a binding needs no care.) -/
+def Entry.arm (E : Entry) : Entry := { E with dtor := E.ty.holdsView, dbind := E.ty.holdsView }
+
 def roots (ds : List Dep) : List Var := ds.map (·.root)
+
+/-- A2-drop.2: what `letd` may record its binding as viewing: what the
+    value views, and perhaps more memory, of roots bound in `Γ`.  (Where a
+    call places a callee's body, its bindings are read as viewing anything
+    the arguments held; the checker records exactly what the value views.) -/
+def HeldUp (Γ : Ctx) (E : Entry) (H : List Dep) : Prop :=
+  E.held ⊆ H ∧ ∀ d ∈ H, d ∈ E.held ∨
+    (d.kind.isName = false ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true)
+
+theorem HeldUp.refl (Γ : Ctx) (E : Entry) : HeldUp Γ E E.held :=
+  ⟨List.Subset.refl _, fun _ h => Or.inl h⟩
+
+/-- ... so an owner records only roots its value's views have, or bound ones. -/
+theorem HeldUp.root {Γ : Ctx} {E : Entry} {H : List Dep} (hH : HeldUp Γ E H) (hmo : E.mode = .own)
+    (hr : ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) :
+    ∀ d ∈ H, ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true := by
+  have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
+  intro d hd
+  rcases hH.2 d hd with hd | ⟨_, hex⟩
+  · exact hr d.root (by simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append]; exact List.mem_map_of_mem hd)
+  · exact hex
 
 /-- Composing a dependency (how `p` reaches a root, `a`) with how a value
     reaches `p` (`b`). -/
@@ -169,6 +196,23 @@ def DbindSafe (Γ : Ctx) (x : Var) : Prop :=
 theorem DbindSafe.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.dbind = false) (x : Var) :
     DbindSafe Γ x :=
   fun v E hE hd => by rw [h v E hE] at hd; cases hd
+
+/-- A2-drop.2: ... and every one in `Γ`, outside `sp`, is one in `Γ'`: a
+    binding never stops being `letd`'s. -/
+def DStay (Γ Γ' : Ctx) (sp : List Var) : Prop :=
+  ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true → v ∉ sp →
+    ∃ E', Γ' v = some E' ∧ E'.dbind = true ∧ E'.mode.ownSlot = true
+
+theorem DStay.refl (Γ : Ctx) (sp : List Var) : DStay Γ Γ sp :=
+  fun _ E hv hd hos _ => ⟨E, hv, hd, hos⟩
+
+theorem DStay.trans {Γ1 Γ2 Γ3 : Ctx} {sp sp' : List Var} (h1 : DStay Γ1 Γ2 sp) (h2 : DStay Γ2 Γ3 sp')
+    (hsp : ∀ v, v ∉ sp → v ∉ sp') : DStay Γ1 Γ3 sp := fun v E hv hd hos hvs => by
+  obtain ⟨E2, h2v, hd2, hos2⟩ := h1 v E hv hd hos hvs
+  exact h2 v E2 h2v hd2 hos2 (hsp v hvs)
+
+theorem DStay.mono {Γ Γ' : Ctx} {sp sp' : List Var} (h : DStay Γ Γ' sp) (hsp : ∀ v, v ∉ sp' → v ∉ sp) :
+    DStay Γ Γ' sp' := fun v E hv hd hos hvs => h v E hv hd hos (hsp v hvs)
 
 /-- A2-drop.2: every binding `letd` made in `Γ'`, outside `sp`, was one in
     `Γ`, and views no more in memory: a destructor binding gains no view. -/
@@ -294,6 +338,16 @@ def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
 
 def NameWF (Γ : Ctx) : Prop :=
   ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ E
+
+/-- What `letd` may add to what its binding records views no closure by name. -/
+theorem NameOK.widen {Γ : Ctx} {E : Entry} {H : List Dep} (h : NameOK Γ E) (hmo : E.mode = .own)
+    (hH : HeldUp Γ E H) : NameOK Γ { E with held := H } := by
+  have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
+  intro d hd b t hk
+  have hd' : d ∈ H := by simpa [Entry.vdeps, hos] using hd
+  rcases hH.2 d hd' with hd | ⟨hnm, _⟩
+  · exact h d (by simp [Entry.vdeps, hos, hd]) b t hk
+  · rw [hk] at hnm; simp [Kind.isName] at hnm
 
 def Weaker (Γ Γ' : Ctx) : Prop :=
   (∀ v, (Γ v = none ↔ Γ' v = none) ∧
@@ -500,6 +554,30 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
 theorem RhsT.dtor_false {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
     E.dtor = false ∧ E.dbind = false := by
   cases h <;> simp
+
+theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
+    (E.mode = .own ∨ E.mode = .bor) ∧ E.live = true := by
+  cases hr with
+  | expr => exact ⟨Or.inr rfl, rfl⟩
+  | new => exact ⟨Or.inl rfl, rfl⟩
+  | moveOwn => exact ⟨Or.inl rfl, rfl⟩
+  | copyRoot => exact ⟨Or.inr rfl, rfl⟩
+  | copyBor _ hl hm => exact ⟨Or.inr hm, hl⟩
+  | borrow => exact ⟨Or.inr rfl, rfl⟩
+  | @«at» _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
+  | view => exact ⟨Or.inr rfl, rfl⟩
+  | @sat _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
+  | @pop _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | pair => exact ⟨Or.inl rfl, rfl⟩
+  | @fst _ _ a => cases a <;> exact ⟨Or.inr rfl, rfl⟩
+  | @snd _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
+  | inl => exact ⟨Or.inl rfl, rfl⟩
+  | inr => exact ⟨Or.inl rfl, rfl⟩
+  | pack => exact ⟨Or.inl rfl, rfl⟩
+  | @getl _ _ a => cases a <;> exact ⟨Or.inr rfl, rfl⟩
+  | @getr _ _ _ b => cases b <;> exact ⟨Or.inr rfl, rfl⟩
+  | @takel _ _ a => cases a <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
+  | @taker _ _ _ b => cases b <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
     lends nothing. -/

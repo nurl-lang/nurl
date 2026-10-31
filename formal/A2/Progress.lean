@@ -242,7 +242,7 @@ theorem progress {P : Prog}
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
         exact Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
-  | @letd Γ Γ1 Δ F x f r k E _ hx _ hr _ _ _ _ _ =>
+  | @letd Γ Γ1 Δ F x f r k E _ _ hx _ hr _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -250,7 +250,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr ⟨_, Step.letdP hres⟩
-  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ ih =>
+  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hmo, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
@@ -353,7 +353,7 @@ theorem progress {P : Prog}
   | callc _ hx hxF hc htc hj hσ hhd _ hcT hnz _ _ _ =>
     intro m hcd hi
     exact Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
-  | @catchR Γ Δ F x m0 s _ _ hM _ hKO ih =>
+  | @catchR Γ Δ F x m0 s _ _ hM _ hKO _ ih =>
     intro m hcd hi
     rcases ih hcd hi.catchIn with rfl | ⟨r, hr⟩
     · exact Or.inr ⟨_, Step.catchSkip⟩
