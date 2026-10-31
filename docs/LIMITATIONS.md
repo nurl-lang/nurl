@@ -10,7 +10,7 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-**Four soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
+**Three soundness holes are known open** ([`MEMORY.md` §6.2](MEMORY.md)).
 Each is a heap-use-after-free in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
@@ -37,11 +37,6 @@ Each is a heap-use-after-free in safe code, with a fix in progress:
   lives: once `b` ends, `w` still points into it. Until the fix ships,
   give a value a view by assigning it in the function that owns the view's
   source.
-- **agora #274: a block arm of a `?` / `??` whose tail selects an owner
-  already moved.** `( consume a )` then `: String u ? c { … a } { b }`
-  hands the freed `a` on: a bare arm's value is checked (#242), a block
-  arm's tail is not yet. Until the fix ships, end such an arm with a fresh
-  value or hand the owner on before it is moved.
 
 Every other safe program found accepted and faulting is closed, and held
 by a probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/). agora #224 (a
