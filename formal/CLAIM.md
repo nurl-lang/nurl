@@ -44,7 +44,11 @@ the LLVM / C11 memory model rather than redefining it.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
 - **A3** — the theorem with threads: a well-typed program has no data
-  race.
+  race. Proven under sequential consistency, where a race is two threads'
+  next steps touching one address, one of them writing, not both atomic.
+  Carried to C11 / LLVM by the DRF-SC theorem (below). The statement is
+  `A3.Claim` in `A3/Defs.lean`, and `A3/DESIGN.md` gives the semantics
+  and the milestones.
 - **B** — the `unsafe` base of the standard library is semantically
   well-typed, so safe code built on it inherits the theorem.
 - **C** — every program nurlc accepts is well-typed in the formal rules.
@@ -102,4 +106,10 @@ Even when every phase is done, these remain trusted rather than proven
   `% NotSend`, `% NotSync` and `% Frozen` it must not leave out
   (`% Frozen RGuard {}` in `stdlib/std/rwlock.nu`: what a read guard lends
   is read-only);
+- the DRF-SC theorem of the C11 / LLVM memory model: a program none of
+  whose sequentially consistent runs has a data race behaves as under
+  sequential consistency (Boehm & Adve, PLDI 2008; Batty et al., POPL
+  2011). It is cited, not mechanized. It applies because safe NURL's
+  atomics are all `seq_cst` (`nurl_atomic_i64_*`) and its locks are the
+  runtime's;
 - the C runtime, LLVM, the linker and the operating system.
