@@ -543,10 +543,15 @@ if "$NURLC" "$SCRIPT_DIR/aes_gcm_hw_agree.nu" > "$WORK/gcm.ll" 2>/dev/null &&
             -o "$WORK/gcm" -lm -lpthread 2>/dev/null; then
     for k in "vaes_run:ymm" "vaes512_run:zmm"; do
         fnk=${k%%:*}; reg=${k##*:}
-        n=$(objdump -d "$WORK/gcm" 2>/dev/null |
-            awk -v f="$fnk" '$0 ~ "^[0-9a-f]+ <[^>]*__gcm_" f "[a-z0-9_]*>:"{p=1} /^$/{p=0} p' | grep -cE "vaesenc[[:space:]].*%$reg")
+        dis=$(objdump -d "$WORK/gcm" 2>/dev/null |
+            awk -v f="$fnk" '$0 ~ "^[0-9a-f]+ <[^>]*__gcm_" f "[a-z0-9_]*>:"{p=1} /^$/{p=0} p')
+        n=$(printf '%s\n' "$dis" | grep -cE "vaesenc[[:space:]].*%$reg")
         if [ "$n" -gt 0 ]; then ok "__gcm_$fnk: VAESENC on $reg" "$n"
         else bad "__gcm_$fnk: VAESENC on $reg" "none"; fi
+        # GHASH too: its products are VPCLMULQDQ on the same width.
+        n=$(printf '%s\n' "$dis" | grep -cE "vpclmul[a-z]*[[:space:]].*%$reg")
+        if [ "$n" -gt 0 ]; then ok "__gcm_$fnk: VPCLMULQDQ on $reg" "$n"
+        else bad "__gcm_$fnk: VPCLMULQDQ on $reg" "none"; fi
     done
     if grep -qw aes /proc/cpuinfo 2>/dev/null; then
         want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/aes_gcm_hw_agree.txt" | tail -n +2)
@@ -558,6 +563,20 @@ if "$NURLC" "$SCRIPT_DIR/aes_gcm_hw_agree.nu" > "$WORK/gcm.ll" 2>/dev/null &&
     fi
 else
     bad "aes_gcm_hw_agree: builds" "nurlc or the link failed"
+fi
+# Wycheproof's vectors with each tier taken away in turn, down to the
+# software key alone: the same golden every time.
+if "$NURLC" "$SCRIPT_DIR/aes_gcm_wycheproof.nu" > "$WORK/gwp.ll" 2>/dev/null &&
+        "$CLANG" -O2 -flto -Wno-override-module "$WORK/gwp.ll" "$ROOT/stdlib/runtime.o" \
+            -o "$WORK/gwp" -lm -lpthread 2>/dev/null; then
+    want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/aes_gcm_wycheproof.txt" | tail -n +2)
+    for e in NURL_CPU_VAES512=0 NURL_CPU_VAES=0 NURL_CPU_AES=0; do
+        got=$(env "$e" "$WORK/gwp" 2>&1)
+        if [ "$got" = "$want" ]; then ok "aes_gcm_wycheproof with $e" "golden"
+        else bad "aes_gcm_wycheproof with $e" "${got:0:80}"; fi
+    done
+else
+    bad "aes_gcm_wycheproof: builds" "nurlc or the link failed"
 fi
 
 # ── 10. The runtime's wide answers match an independent one ─────────
