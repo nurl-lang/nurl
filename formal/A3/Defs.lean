@@ -93,14 +93,17 @@ inductive TStep (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
       C.ths[i]? = some t → ¬ SpawnRedex spawn t.s → Step P (C.view t) t.s (.ok m' s') →
       TStep P spawn C (C.put i m' s')
   /-- A spawn: the arguments move to a new thread, which runs the body in
-      its parameters' scopes; the spawner's result is `0`. -/
+      its parameters' scopes and its result's (variable `n`, the number of
+      parameters, as in the body's own numbering — so its end drops the
+      result); the spawner's result is `0`. -/
   | spawn {C : Cfg} {i : Nat} {t : Thread} {K : Stmt → Stmt} {x f : Nat} {args : List Var}
       {k : Stmt} {fn : Fn} {vs : List Val} {st' : Var → Option Slot} :
       C.ths[i]? = some t → Redex t.s K (.letcall x f args k) → spawn f = true → P[f]? = some fn →
       t.st x = none → MoveArgs t.st args vs st' →
       TStep P spawn C
         { C with ths := C.ths.set i ⟨upd st' x (some ⟨false, some (.int 0)⟩), t.nv, K (.scope x k)⟩ ++
-                        [⟨spawnSt fn vs, fn.nvars, wrapParams fn.params 0 0 fn.body⟩] }
+                        [⟨spawnSt fn vs, fn.nvars,
+                          wrapParams fn.params 0 0 (.scope fn.params.length fn.body)⟩] }
 
 inductive Reach (P : Prog) (spawn : Nat → Bool) : Cfg → Cfg → Prop
   | refl {C : Cfg} : Reach P spawn C C
