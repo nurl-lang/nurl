@@ -39,8 +39,8 @@ def NewThreadLemma (P : Prog) (spawn : Nat → Bool) : Prop :=
     (∀ (j k : Nat) (v w : Val), j ≠ k → vs[j]? = some v → vs[k]? = some w → ∀ i ∈ v.ids, i ∉ w.ids) →
     (∀ v ∈ vs, SelfFree v) → (∀ v ∈ vs, PkgsOK v) → (∀ v ∈ vs, PkgOK P v) →
     ∀ {part : Nat → Bool}, (∀ i, part i = true ↔ ∃ v ∈ vs, i ∈ v.ids) →
-    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) →
-    ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs }
+    ∀ {N : Nat}, (∀ v ∈ vs, ∀ i ∈ v.ids, i < N) → ∀ {B : Nat → Option Blk},
+    ThreadOK P { alloc := part, nid := N, nv := fn.nvars, st := spawnSt fn vs, blk := B }
       (wrapParams fn.params 0 0 (.scope fn.params.length fn.body))
 
 theorem MoveArgs.slot {st st' : Var → Option Slot} {as : List Var} {vs : List Val}
@@ -115,7 +115,7 @@ theorem CInv.spawn_of {P : Prog} {spawn : Nat → Bool} (hSO : SpawnerLemma P sp
       have h1 := (hids v hv k hk).1
       have h2 := FreesL.freed hfr (mem_idsL_iff.mpr ⟨v, hv, hk⟩)
       simp only [aN, minus, h1, h2]; rfl
-  have htoN := hNT hsp hf hvlen hwf
+  have htoN := hNT (B := C.blk) hsp hf hvlen hwf
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.nodup a0 v h0) hvdisj
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.heap.self a0 v h0)
     (fun v hv => by obtain ⟨a0, h0⟩ := hown v hv; exact hinv.pkgs a0 _ v h0 rfl)

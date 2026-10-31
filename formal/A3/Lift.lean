@@ -80,7 +80,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | expr he => exact EvalR.expr (Eval.lift he a2)
   | new =>
     show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st⟩)
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk⟩)
     rw [union_alloc2]
     exact EvalR.new
   | moveOwn hy => exact EvalR.moveOwn hy
@@ -226,7 +226,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hdd)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
+      m1.nv, m1.st, m1.blk⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
     rw [union_realloc had]
     exact Step.pushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) hx (union_true a2 hc)
       (union_true a2 hdd)

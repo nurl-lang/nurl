@@ -95,7 +95,7 @@ theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F :
   · exact hno r hr'
 
 /-- The empty store, with variables numbered from `nv` still fresh. -/
-def emptyMem (nv : Nat) : Mem := ⟨fun _ => false, 0, nv, fun _ => none⟩
+def emptyMem (nv : Nat) : Mem := ⟨fun _ => false, 0, nv, fun _ => none, fun _ => none⟩
 
 theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.vars, v < nv) :
     Inv (emptyMem nv) (fun _ => none) [] s where

@@ -211,11 +211,19 @@ structure Slot where
   own : Bool
   val : Option Val
 
+/-- A3.1: a counted block (`Arc`): how many shares it has, and its
+    payload, a tree of type `ty` that no one writes. -/
+structure Blk where
+  rc  : Nat
+  ty  : Ty
+  pay : Val
+
 structure Mem where
   alloc : Nat → Bool
   nid   : Nat                 -- next fresh address
   nv    : Nat                 -- next fresh variable
   st    : Var → Option Slot
+  blk   : Nat → Option Blk    -- A3.1: the counted blocks
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α :=
   fun i => if i = k then v else f i
