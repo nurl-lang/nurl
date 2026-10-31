@@ -70,6 +70,52 @@ theorem DtorSafe.setE_off {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSa
     rw [hE] at hd; cases hd
   · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos
 
+theorem DbindSafe.setE_off {Γ : Ctx} {x : Var} (h : DbindSafe Γ x) {y : Var} {E : Entry}
+    (hE : E.dbind = false) : DbindSafe (A2.setE Γ y E) x := by
+  intro v E' hv' hd
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    rw [hE] at hd; cases hd
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd
+
+/-- Binding an entry that depends on nothing keeps both checks. -/
+theorem DtorSafe.setE_nil {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : DtorSafe Γ e hv x)
+    {y : Var} {E : Entry} (hE : E.vdeps = []) : DtorSafe (A2.setE Γ y E) e hv x := by
+  intro v E' hv' hd hos
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    unfold hitsMem; simp [hE]
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos
+
+theorem DbindSafe.setE_nil {Γ : Ctx} {x : Var} (h : DbindSafe Γ x) {y : Var} {E : Entry}
+    (hE : E.vdeps = []) : DbindSafe (A2.setE Γ y E) x := by
+  intro v E' hv' hd hos hn d hdd
+  by_cases hvy : v = y
+  · subst hvy; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'
+    rw [hE] at hdd; cases hdd
+  · simp only [A2.setE, upd_ne _ _ hvy] at hv'; exact h v E' hv' hd hos hn d hdd
+
+/-- A2-drop.2: in a well-formed context no `letd` binding views an unbound
+    variable, so ending a fresh one is safe. -/
+theorem DbindSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none) : DbindSafe Γ x := by
+  intro v E hE hd hos hn d hdd hnm hdx
+  obtain ⟨Er, hEr, _⟩ := hw.dtor v E hE hd hos hn d hdd hnm
+  rw [hdx, hx] at hEr; cases hEr
+
+theorem DtorSafe.of_fresh {Γ : Ctx} (hw : CtxWF Γ) {x : Var} (hx : Γ x = none) (e : Eff) (hv : Bool) :
+    DtorSafe Γ e hv x := by
+  intro v E hE hd hos
+  have hdb := hw.arm v E hE hd
+  unfold hitsMem
+  cases hg : (E.ty != .int || E.mode == .rootb) with
+  | false => rfl
+  | true =>
+    have hg' : E.ty ≠ .int ∨ E.mode = .rootb := by
+      simpa only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] using hg
+    simp only [Bool.true_and, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+    intro d hdd hr _
+    exact DbindSafe.of_fresh hw hx v E hE hdb hos hg' d hdd (by simpa using hr.2) hr.1
+
 theorem killE_live (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).live = (E.live && !hits e hv x E) := by
   unfold killE; split <;> simp_all
