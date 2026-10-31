@@ -110,11 +110,13 @@ of its fields: a copy is a borrow, never an `inout` argument,
 parameter: `assign` to an `inout .replace` closure, whose slot is the
 caller's) sit.
 
-Values owned or not per call need no rule of their own. A trait method's
-result, a raw string that may be fresh, and a result lent on one path and
-fresh on another are all, in the calculus, an owner cell and a borrow
-(`DynCell`, `A2/DYN_DESIGN.md`). That nurlc's ownership bit behaves as
-the cell does is phase C / D.
+Values owned or not per call need no rule of their own. A result lent on
+one path and fresh on another is, in the calculus, an owner cell and a
+borrow. `DynCell` types it for a direct call. A call through a package,
+which is how a trait method's result comes back, takes the cell as one
+more `inout` argument the same way. A raw string that may be fresh is
+the same shape over a `Vec` of bytes. That nurlc's ownership bit behaves
+as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
 
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:
