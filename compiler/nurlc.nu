@@ -24378,6 +24378,18 @@ unsafe @ __src_has_raw_ptr s text → b {
                 ( nurl_sym_set_deep syms ( nurl_str_cat src `__fsrc` ) `` )
                 ( __sb syms src `1` )
                 ^ v } {}
+            // …and to one the struct outlives (`: R a . col res  : R b a`):
+            // this binding reads that same field, so handed on it takes the
+            // field out of the struct as the source would — not a cursor
+            // over a source that owns nothing to hand over, whose struct
+            // then dropped the field under the caller (agora #268).
+            ? != 0 ( nurl_str_len fsp ) {
+                : s f ( mem_udrop_flag_get syms cg src )
+                ( mem_udrop_flag_set syms cg ptr f )
+                ( mem_udrop_flag_set syms cg src `0` )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__fsrc` ) fsrc )
+                ( __sb syms ptr `local` )
+                ^ v } {}
         } {}
         // A String / Vec is a freely aliased handle: `: ~ ( Vec T ) cur
         // root` is a cursor, not a transfer — root keeps its value, cur
