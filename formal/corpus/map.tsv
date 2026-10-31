@@ -769,7 +769,10 @@ slice_literal_bogus_len	§6.2	B	Slice literal forged in safe code with bogus len
 slice_move_to_a_negative_index	§3.3d	B	`( slice_move [i] s 0 -6 8 )`: the range test compared `to + n` with the length, and -6 + 8 is in range, so the move wrote 48 bytes before the slice.	runs-clean	h441
 slice_null_with_len	§6.2	B	null-data Slice literal with nonzero length	rejected	h54
 slice_of_element_vec	derive	A1	Slice of a borrowed inner Vec read after the outer Vec is freed	rejected	h45
+slice_of_field_after_realloc_through_field_viewer	§2.10	A1	agora #293: a slice of a struct's field read after its buffer moved through a field viewer	rejected	-
 slice_of_local_returned	FnOK	A1	function returns a Slice of its own local Vec	rejected	h36
+slice_of_owner_after_growth_through_identity_copy	§2.10	A1	agora #293: a slice of an owner read after pushes through an identity copy grew its buffer	rejected	-
+slice_of_owner_after_realloc_through_identity_copy	§2.10	A1	agora #293: a slice of an owner read after its buffer moved through an identity copy of its handle	rejected	-
 slice_of_replaced_field	§2.10	A2	Slice of a struct's Vec field read after field gets a new Vec	rejected	h41
 slice_returned_by_user_fn	CallT.summary	A1	callee returns Slice of its parameter; Vec freed; slice read	rejected	h35
 slice_stored_in_vec	PushArg	A1	Slice pushed into Vec of Slices; source Vec freed; element read	rejected	h40
@@ -956,6 +959,11 @@ view_of_rc_payload_then_pushed_through_a_clone	§2.11	A2	agora #169: view_of_rc_
 view_of_rc_payload_then_pushed_through_rc_get	§2.11	A2	agora #169: view_of_rc_payload_then_pushed_through_rc_get	rejected	h586
 view_of_value_moved_into_cleared_arena	RhsT.pop	A1	view kept; String moved into Vec; Vec cleared; view read	rejected	h93
 view_of_view_call	derive	A1	slice_sub of slice_from_vec result read after Vec freed	rejected	h89
+view_pushed_through_element_borrow_outlives_its_source	PushArg	A1	agora #292: a view pushed through an element borrow, read after its source ended	rejected	-
+view_pushed_through_element_copy_field_viewer_outlives_its_source	PushArg	A1	agora #292: a view pushed through a field viewer of an element copy, read through another	rejected	-
+view_pushed_through_field_viewer_outlives_its_source	PushArg	A1	agora #292: a view pushed through a field viewer, read after its source ended	rejected	-
+view_pushed_through_identity_copy_outlives_its_source	PushArg	A1	agora #292: a view pushed through an identity copy of a vector, read after its source ended	rejected	-
+view_pushed_through_older_source_borrow_keeps_compiling	PushArg	A1	agora #292: a view of an older binding pushed through an identity copy keeps compiling	runs-clean	-
 view_returned_by_user_fn	CallT.summary	A1	callee returns view of its String param; String freed; view read	rejected	h48
 view_stored_in_global	§2.10	A2	view of a local String stored into a global; String dies; global read	rejected	h47
 view_stored_in_map	PushArg	A1	string view stored as map key; String freed; map read	rejected	h26

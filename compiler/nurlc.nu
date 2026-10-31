@@ -30814,13 +30814,30 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         : s vs ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
                         ? ! ( seq vs `*` ) {
                             : i vroot ( bck_path_root ( nurl_str_to_int vc ) )
-                            ( bck_dep_add vroot vs )
-                            // (Where it was stored: what a diagnostic about
-                            // the dependency points at, bck_caller_view_diag.)
-                            : ~ s vrest ( __src_plain vs )
-                            ~ != 0 ( nurl_str_len vrest ) {
-                                : s vw ( str_first_word vrest ) = vrest ( str_skip_word vrest )
-                                ( bck_put ( bck_bkey `vdl_` ( nurl_str_cat3 ( nurl_str_int vroot ) `:` vw ) ) ( bck_field rec 3 ) )
+                            // (Kept through a borrow — `( id vs )`, `. o kids`,
+                            // an element — it is kept in what that borrow
+                            // flattens to: those owners hold the view too, and
+                            // their borrows that reach it end where theirs do.
+                            // Agora #292.)
+                            : s vowners ? == BCK_BORROWED_SHARED ( bck_st_get st vroot ) ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int vroot ) ) ) ``
+                            : ~ s vtgts ( nurl_str_int vroot )
+                            : ~ s orest ( nurl_str_cat vowners `` )
+                            ~ != 0 ( nurl_str_len orest ) {
+                                : s ow ( str_first_word orest ) = orest ( str_skip_word orest )
+                                : s oroot ( nurl_str_int ( bck_path_root ( nurl_str_to_int ow ) ) )
+                                ? ! ( str_contains_word vtgts oroot ) { = vtgts ( nurl_str_cat3 vtgts ` ` oroot ) } {}
+                            }
+                            : ~ s trest ( nurl_str_cat vtgts `` )
+                            ~ != 0 ( nurl_str_len trest ) {
+                                : s tw ( str_first_word trest ) = trest ( str_skip_word trest )
+                                ( bck_dep_add ( nurl_str_to_int tw ) vs )
+                                // (Where it was stored: what a diagnostic about
+                                // the dependency points at, bck_caller_view_diag.)
+                                : ~ s vrest ( __src_plain vs )
+                                ~ != 0 ( nurl_str_len vrest ) {
+                                    : s vw ( str_first_word vrest ) = vrest ( str_skip_word vrest )
+                                    ( bck_put ( bck_bkey `vdl_` ( nurl_str_cat3 tw `:` vw ) ) ( bck_field rec 3 ) )
+                                }
                             }
                         } {}
                     } {}
@@ -32288,6 +32305,26 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // the buffers of those owners' elements ends — not the owners'
         // own, nor element handles.
         ? & & == 0 ( nurl_str_len bwhy ) | | | == kc 9 == kc 12 == kc 13 == kc 32 ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+            // (…but a borrow whose bytes are a binding's own value — `( id
+            // vs )`, `. o buf`: its code is odd, bck_byte_root — is that
+            // binding's handle: the buffer that moves is that binding's own,
+            // and the views of it end, as when the call names it. Agora
+            // #293.)
+            : i wbr ( bck_br_get ( nurl_str_int wroot ) )
+            ? & >= wbr 0 == 1 & wbr 1 {
+                : i xo >> wbr 1
+                : s xwhy ( nurl_str_cat4 `'` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', a copy of its handle, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move or free its buffer` ) )
+                = out ( bck_view_end out xo ( bck_field_int rec 3 ) xwhy )
+                ? != 0 g_bck_has_paths {
+                    // (…and of every field of it a view was taken from.)
+                    : ~ s prest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                    ~ != 0 ( nurl_str_len prest ) {
+                        : s p2 ( str_first_word prest ) = prest ( str_skip_word prest )
+                        : i o2 ( nurl_str_to_int p2 )
+                        ? & != o2 xo ( bck_paths_overlap xo o2 ) { = out ( bck_view_end out o2 ( bck_field_int rec 3 ) xwhy ) } {}
+                    }
+                } {}
+            } {}
             : s rwhy ( nurl_str_cat4 `an element of it, through '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move its buffer` ) )
             : ~ s irest ( nurl_str_cat wsrc `` )
             ~ != 0 ( nurl_str_len irest ) {
