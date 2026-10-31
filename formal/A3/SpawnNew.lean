@@ -41,7 +41,7 @@ theorem spawn_param {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.
 
 /-- Its entry: an owner that depends on nothing. -/
 theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.sink, t))
-    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], []⟩ := by
+    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], [], false⟩ := by
   rw [sigCtx_of hp]
   simp [paramE, hasFn_of_holdsView ht]
 
@@ -49,8 +49,8 @@ theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.si
     its result's. -/
 theorem sigCtx_spawn {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
     {v : Nat} {E : Entry} (hv : sigCtx fn v = some E) :
-    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], []⟩) ∨
-    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], []⟩) := by
+    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], [], false⟩) ∨
+    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], [], false⟩) := by
   rcases Nat.lt_trichotomy v fn.params.length with h | h | h
   · obtain ⟨t, hp, ht⟩ := spawn_param hpar h
     rw [sigCtx_sink hp ht] at hv

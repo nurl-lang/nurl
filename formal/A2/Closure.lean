@@ -60,7 +60,7 @@ theorem pkg_caps {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (h
     but its changes by name — its by-name captures are handed to the call as
     arguments of their own, and the environment never names them. -/
 def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
-  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held⟩
+  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false⟩
 
 theorem derive_bor_self {y : Var} {E : Entry} (h : E.mode.isRoot = false) : derive y E .self = E.path := by
   unfold derive

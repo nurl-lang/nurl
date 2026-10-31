@@ -270,17 +270,17 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
     (y = m.nv + fn.params.length ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
       some ⟨fn.resTy, resMode fn, false, if (resMode fn).ownSlot then [] else (callS Γ F fn args m.nv x).A,
-        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A⟩) ∨
+        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false⟩) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.inp, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
