@@ -206,7 +206,7 @@ uses `Arc` widely.
   holds a view exactly when `t` does, and it is never copied.
 - `RhsT.arcNew y`: `y`'s tree moves into a fresh block with `rc = 1`. The
   share is owned and holds what `y` held, since the payload views what `y`
-  viewed.
+  viewed (nothing, in the first cut below).
 - `RhsT.arcClone a`: a read of share `a` that adds a new share, `rc + 1`.
   It holds what `a` holds.
 - `RhsT.arcGet a`: the payload, lent. Its entry is a borrow rooted at `a`
@@ -224,6 +224,14 @@ uses `Arc` widely.
   slot trees and payloads. A payload holds only shares made before it, so
   shares form no cycle, and when every share has been dropped every block
   has been freed (`no_leak`).
+
+**The first cut** asks the payload's type to hold no views and no
+closure (`t.holdsView = false`, `t.hasFn = false`). A payload is then
+valid as long as it is owned (`WFv`, no `ViewsOK`), and a share holds
+nothing (`held = []`). All six probes are of this shape: Vecs, structs and
+a library handle. A view-holding payload (`Arc` of a struct of views)
+needs every share to keep the payload's sources alive, which is a later
+step.
 
 **In A3.**
 - `Cfg` gets the blocks next to `alloc` and `nid`, shared by every thread.
