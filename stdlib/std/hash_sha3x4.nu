@@ -95,7 +95,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ( nurl_v256_xor a ( nurl_v256_andnot b c ) )
 }
 
-simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
+simd v4 @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
     : ~ i rnd 0
     ~ < rnd 24 {
         : b even == % rnd 2 0
