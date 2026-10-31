@@ -230,7 +230,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
       show DepsNamed Γ (derive _ _ .self ++ _); exact (derive_named hN rfl).append hN.held,
       ⟨[], Keeps.refl Γ []⟩⟩
   | copyBor hy hl hm =>
-    exact ⟨hn, fun _ h => hn _ _ hy hl (Or.inl (nonint h (Or.inl hm))), ⟨[], Keeps.refl Γ []⟩⟩
+    exact ⟨hn, fun _ h => (hn _ _ hy hl (Or.inl (nonint h (Or.inl hm))) :), ⟨[], Keeps.refl Γ []⟩⟩
   | borrow hy hl ht =>
     have hN := hn _ _ hy hl (Or.inl (by rw [ht]; simp))
     exact ⟨hn, fun _ _ => by
@@ -742,7 +742,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       have := (hcT.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       (recvRes_named hE))).exitScope x
-  | @unpair Γ Δ F y x z k E a b hks hy hl _ hty _ hx hz hxz _ _ _ _ _ _ ih =>
+  | @unpair Γ Δ F y x z k E a b hks hy hl _ hty _ hx hz hxz _ _ _ _ _ _ _ ih =>
     intro _ hn
     exact ((ih hks (hn.unpair hy hl hty hx hz hxz)).exitScope z).exitScope x
   | @assign Γ Γ1 F x r Ex E hx _ hmodes hr hty hxd _ _ =>

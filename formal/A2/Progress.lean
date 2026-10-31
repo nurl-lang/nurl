@@ -367,7 +367,7 @@ theorem progress {P : Prog}
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
         exact Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
 
-  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ =>
+  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl hty
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)

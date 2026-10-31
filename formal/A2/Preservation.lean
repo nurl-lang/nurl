@@ -378,7 +378,8 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     (hty : E.ty = .prod a b) (hyF : y ∉ F) (hx : Γ x = none) (hz : Γ z = none) (hxz : x ≠ z)
     (hxF : x ∉ F) (hzF : z ∉ F)
     (hs : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
-      (compE E b)) F s Δ) (hpy : EndOK Γ y) (hpz : EndOK Δ z) (hpx : EndOK (exitScope z Δ) x)
+      (compE E b)) F s Δ) (hny : NoPin Γ y) (hdy : DtorSafe Γ .replace false y) (hpz : EndOK Δ z)
+    (hpx : EndOK (exitScope z Δ) x)
     {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s')) :
     ∃ Γ', StmtT P Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
@@ -387,7 +388,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     rename_i v w
     have hanch := hi.leafAnch rfl
     have hos : E.mode.ownSlot = true := by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl
-    obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hpy.1 hvy hpy.2.1
+    obtain ⟨post, out⟩ := rhs_move' hi.toMInv hanch hy hl hos hyF hny hvy hdy
     have hxy : x ≠ y := fun h => by rw [h, hy] at hx; cases hx
     have hzy : z ≠ y := fun h => by rw [h, hy] at hz; cases hz
     have hx1 : setE (kill .replace false y Γ) y { E with live := false, dtor := false } x = none := by
@@ -1919,8 +1920,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
-  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hpy hpz hpx _ =>
+  | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ =>
     intro m m' s' hcd hi hst
-    exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hpy hpz hpx hi hst
+    exact pres_unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst
 
 end A2
