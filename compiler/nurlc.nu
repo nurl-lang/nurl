@@ -42814,6 +42814,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // checks against the closure's OWN params, not the enclosing
     // function's. Restored on sym_pop at the bottom of this function.
     ( nurl_sym_def body_syms `__fn_param_names__` `` )
+    ( nurl_sym_def body_syms `__fn_scalar_params__` `` )
     // Lifted bodies have their own parameter numbering and effect nodes.
     // Captures are hidden inputs following the explicit parameters; their
     // origins must never reuse an enclosing function's parameter index.
@@ -42937,6 +42938,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         {}
         : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) ( nurl_str_cat bpname `` ) ( nurl_str_cat3 c_name_roster ` ` bpname )
         ( nurl_sym_def body_syms `__fn_param_names__` c_name_next )
+        // (One nothing is kept through, as for a function: __scalar_params.)
+        ? & & == 0 g_in_unsafe ! ( __is_clo_inout_ty bptype ) ( __scalar_ty bptype )
+        { ( nurl_sym_def body_syms `__fn_scalar_params__` ( __word_union ( nurl_sym_get body_syms `__fn_scalar_params__` ) ( nurl_str_int bpi ) ) ) } {}
         ( origin_parameter body_syms bpname bpi )
         = bp_types ( seplist_rest bp_types )
         = bp_names ( str_skip_word bp_names )
@@ -44802,7 +44806,7 @@ unsafe @ str_word_index s list s word → i {
     // judged as a store of that call's result, agora #200.)
     ? != 0 g_ncl_n { ( __nc_bind_store_park syms g_stmt_lex g_stmt_line name ( nurl_sym_get syms name ) `=` 0 `` ) } {}
     ( mem_record_kept_param syms name )
-    ? ! ( __self_param_raw syms name ) {
+    ? ! ( __self_param_keeps_nothing syms name ) {
         ? owned_store { ( __record_param_idx syms `__fn_inferred_store__` name ) }
         { ( __record_param_idx syms `__fn_inferred_handkeep__` name ) }
     } {}
@@ -44856,16 +44860,15 @@ unsafe @ str_word_index s list s word → i {
 }
 
 @ mem_record_kept_param i syms s name → v {
-    ? ( __self_param_raw syms name ) { ^ v } {}
+    ? ( __self_param_keeps_nothing syms name ) { ^ v } {}
     ( __record_param_idx syms `__fn_inferred_keep__` name )
 }
 
-// Parameter `idx` of `fname` is a raw pointer (`*T`, not a closure type):
-// no ownership travels through one, so nothing handed to it is kept,
-// stored or consumed. A `*u` text stored in a parser's scratch struct is
-// the raw code's own business — taken for a keep, it made `json_parse`
-// keep its text, every caller hand its temporary over, and the temporary
-// leak (tools/fuzz/holes h109).
+// Parameter `idx` of `fname` is a raw pointer (`*T`, not a closure type).
+// A `*u` text stored in a parser's scratch struct is the raw code's own
+// business — taken for a keep, it made `json_parse` keep its text, every
+// caller hand its temporary over, and the temporary leak
+// (tools/fuzz/holes/json_parse_keeps_its_text.nu).
 @ __fn_param_raw i syms s fname i idx → b {
     ? < idx 0 { ^ F } {}
     : ~ s src ( nurl_sym_get2 syms fname `__ptypes_src` )
@@ -44874,10 +44877,48 @@ unsafe @ str_word_index s list s word → i {
     ^ & >= ( nurl_str_find span `*` ) 0 < ( nurl_str_find span `( @` ) 0
 }
 
-// …asked of the function being compiled, by parameter name.
-@ __self_param_raw i syms s name → b {
-    : i idx ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) name )
+// Nothing handed to parameter `idx` of the function or closure being
+// compiled is kept through it (stored, by an owner or by hand): a raw
+// pointer (__fn_param_raw), or a scalar of safe code (__fn_scalar_params__).
+// Safe code cannot cast an integer into a pointer, so a scalar there is a
+// value and a scalar slot drops nothing: a `sink` of one is already a copy.
+// Taken for a keep, an `i` one impl of a `dyn` method pushed into a
+// `( Vec i )` made the impls "disagree" on an argument that cannot leak
+// (agora #134). Consuming one is still recorded (bck_record_inferred_sink):
+// `unsafe` code can carry a pointer in an `i` and free it, and a safe
+// function handing that `i` on to it consumes what it was handed.
+@ __param_keeps_nothing i syms i idx → b {
+    ? < idx 0 { ^ F } {}
+    ? ( nurl_sym_has_word syms `__fn_scalar_params__` ( nurl_str_int idx ) ) { ^ T } {}
     ^ ( __fn_param_raw syms ( nurl_sym_get syms `__fn_self_name__` ) idx )
+}
+
+// …by parameter name.
+@ __self_param_keeps_nothing i syms s name → b {
+    ^ ( __param_keeps_nothing syms ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) name ) )
+}
+
+// An internal type whose value owns nothing at all: an integer, a float,
+// `b`, a SIMD vector.
+@ __scalar_ty s t → b {
+    ^ ( str_contains_word `i1 i8 i16 i32 i64 u8 u16 u32 u64 float double v128 v256 v512` t )
+}
+
+// The indices of the function's by-value parameters of a scalar type,
+// named once per safe function (`__fn_scalar_params__`,
+// gen_fn_decl_concrete).
+@ __scalar_params i syms → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ( __scalar_ty ( nurl_sym_get syms w ) ) == 0 ( nurl_sym_len2 syms w `__inout` ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_int k ) ( nurl_str_cat3 out ` ` ( nurl_str_int k ) )
+        } {}
+        = k + k 1
+    }
+    ^ out
 }
 
 // Add parameter `name`'s index to the per-function index list `key`.
@@ -49734,6 +49775,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // function the provenance store records for, and the one a mutation
     // edge leaves.
     ? != 0 g_borrowck { ( nurl_sym_def syms `__fn_storage_params__` ( __rprov_storage_params syms ) ) } { ( nurl_sym_def syms `__fn_storage_params__` `` ) }
+    // The scalar ones of safe code, through which nothing is kept
+    // (__param_keeps_nothing): read by the ownership summaries, so named with
+    // or without the checker.
+    ( nurl_sym_def syms `__fn_scalar_params__` ? == 0 g_in_unsafe ( __scalar_params syms ) `` )
     // …and safe code whose result is a view (a Slice, an `s`, a struct of
     // one): what it hands back may point into a parameter (retptr), which
     // the caller's view of the result borrows.
