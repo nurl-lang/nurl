@@ -584,7 +584,7 @@ theorem slot_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     split at hd
     · simp [Entry.vdeps] at hd
       rename_i hcl
-      rw [if_pos hcl] at hlv
+      rw [ite_eq_left hcl] at hlv
       rcases hcl.2 with ht | hl0
       · exact absurd ht hd.1.2.2
       · simp [hl0] at hlv

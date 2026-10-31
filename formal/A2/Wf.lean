@@ -13,7 +13,8 @@ theorem CtxWF.setE {Γ : Ctx} (h : CtxWF Γ) {x : Var} {E : Entry} (hx : ∃ Ex,
       ∀ d ∈ E.vdeps, d.kind.isName = false →
         (d.root = x ∧ E.mode.isRoot = true) ∨ (d.root ≠ x ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true) := by
       intro h; simp_all)
-    (hA : E.dtor = true → E.dbind = true := by intro h; simp_all) :
+    (hA : E.dtor = true → E.dbind = true := by intro h; simp_all)
+    (hV : E.dbind = true → E.ty.holdsView = true := by intro h; simp_all) :
     CtxWF (A2.setE Γ x E) := by
   obtain ⟨Ex, hEx, hrt⟩ := hx
   have hroot : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
@@ -22,7 +23,8 @@ theorem CtxWF.setE {Γ : Ctx} (h : CtxWF Γ) {x : Var} {E : Entry} (hx : ∃ Ex,
     by_cases hrx : r = x
     · subst hrx; rw [hEx] at hEr; cases hEr; exact ⟨E, by simp [A2.setE], hrt hro⟩
     · exact ⟨Er, by simp [A2.setE, upd_ne _ _ hrx, hEr], hro⟩
-  refine ⟨fun v E' hv hl hn r hr => ?_, fun v E' hv hd hos hn d hdd hnm => ?_, fun v E' hv ha => ?_⟩
+  refine ⟨fun v E' hv hl hn r hr => ?_, fun v E' hv hd hos hn d hdd hnm => ?_, fun v E' hv ha => ?_,
+    fun v E' hv hd => ?_⟩
   · by_cases hvx : v = x
     · subst hvx
       simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv
@@ -42,6 +44,9 @@ theorem CtxWF.setE {Γ : Ctx} (h : CtxWF Γ) {x : Var} {E : Entry} (hx : ∃ Ex,
   · by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hA ha
     · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h.arm v E' hv ha
+  · by_cases hvx : v = x
+    · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hV hd
+    · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h.view v E' hv hd
 
 /-- A fresh binding. -/
 theorem CtxWF.add {Γ : Ctx} (h : CtxWF Γ) {x : Var} (hx : Γ x = none) {E : Entry}
@@ -50,13 +55,15 @@ theorem CtxWF.add {Γ : Ctx} (h : CtxWF Γ) {x : Var} (hx : Γ x = none) {E : En
     (hD : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
       ∀ d ∈ E.vdeps, d.kind.isName = false → ∃ Er, Γ d.root = some Er ∧ Er.mode.isRoot = true := by
       intro h; simp_all)
-    (hA : E.dtor = true → E.dbind = true := by intro h; simp_all) : CtxWF (A2.setE Γ x E) := by
+    (hA : E.dtor = true → E.dbind = true := by intro h; simp_all)
+    (hV : E.dbind = true → E.ty.holdsView = true := by intro h; simp_all) : CtxWF (A2.setE Γ x E) := by
   have hroot : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
       ∃ Er, A2.setE Γ x E r = some Er ∧ Er.mode.isRoot = true := by
     intro r ⟨Er, hEr, hro⟩
     have hrx : r ≠ x := fun h => by subst h; rw [hx] at hEr; cases hEr
     exact ⟨Er, by simp [A2.setE, upd_ne _ _ hrx, hEr], hro⟩
-  refine ⟨fun v E' hv hl hn r hr => ?_, fun v E' hv hd hos hn d hdd hnm => ?_, fun v E' hv ha => ?_⟩
+  refine ⟨fun v E' hv hl hn r hr => ?_, fun v E' hv hd hos hn d hdd hnm => ?_, fun v E' hv ha => ?_,
+    fun v E' hv hd => ?_⟩
   · by_cases hvx : v = x
     · subst hvx
       simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv
@@ -72,12 +79,16 @@ theorem CtxWF.add {Γ : Ctx} (h : CtxWF Γ) {x : Var} (hx : Γ x = none) {E : En
   · by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hA ha
     · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h.arm v E' hv ha
+  · by_cases hvx : v = x
+    · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv; exact hV hd
+    · simp only [A2.setE, upd_ne _ _ hvx] at hv; exact h.view v E' hv hd
 
 /-- A2-drop.2: ending `x` asks that no binding `letd` made views it in memory
     (`DbindSafe`, part of `EndOK`). -/
 theorem CtxWF.exitScope {Γ : Ctx} (h : CtxWF Γ) (x : Var) (hdb : DbindSafe Γ x) :
     CtxWF (exitScope x Γ) := by
-  refine ⟨fun v E hv' hl hn r hr => ?_, fun v E hv' hd hos hn d hdd hnm => ?_, fun v E hv' ha => ?_⟩
+  refine ⟨fun v E hv' hl hn r hr => ?_, fun v E hv' hd hos hn d hdd hnm => ?_, fun v E hv' ha => ?_,
+    fun v E hv' hd => ?_⟩
   · have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
     simp only [A2.exitScope, upd_ne _ _ hvx] at hv'
     obtain ⟨Er, hEr, hro⟩ := (h.kill .replace false x) v E hv' hl hn r hr
@@ -113,6 +124,10 @@ theorem CtxWF.exitScope {Γ : Ctx} (h : CtxWF Γ) (x : Var) (hdb : DbindSafe Γ 
     simp only [A2.exitScope, upd_ne _ _ hvx, A2.kill] at hv'
     obtain ⟨E0, hE0, rfl⟩ := Option.map_eq_some_iff.mp hv'
     rw [killE_dbind]; exact h.arm v E0 hE0 (by rwa [killE_dtor] at ha)
+  · have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
+    simp only [A2.exitScope, upd_ne _ _ hvx, A2.kill] at hv'
+    obtain ⟨E0, hE0, rfl⟩ := Option.map_eq_some_iff.mp hv'
+    rw [killE_ty]; exact h.view v E0 hE0 (by rwa [killE_dbind] at hd)
 
 /-- Moving `y` out: its entry stays, dead and disarmed, viewing what it did. -/
 theorem CtxWF.moveOut {Γ : Ctx} (h : CtxWF Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey) (e : Eff)
@@ -121,6 +136,7 @@ theorem CtxWF.moveOut {Γ : Ctx} (h : CtxWF Γ) {y : Var} {Ey : Entry} (hy : Γ 
   have hky : A2.kill e hv y Γ y = some (killE e hv y Ey) := by simp [A2.kill, hy]
   refine hk.setE ⟨killE e hv y Ey, hky, fun hr => by rw [killE_mode] at hr; exact hr⟩
     (fun hl' => by simp at hl') (fun hd hos hn d hdd hnm => ?_) (fun ha => by simp at ha)
+    (fun hd => h.view y Ey hy hd)
   obtain ⟨Er, hEr, hro⟩ := hk.dtor y (killE e hv y Ey) hky (by rw [killE_dbind]; exact hd)
     (by rw [killE_mode]; exact hos) (by rw [killE_ty, killE_mode]; exact hn) d
     (by rw [killE_vdeps]; exact hdd) hnm
@@ -510,6 +526,7 @@ theorem DomMode.killNames {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) : ∀ ds, DomMode 
 
 theorem callPostAux_wf {Γ0 : Ctx} {fn : Fn} {args : List Var}
     (harm : ∀ v E, Γ0 v = some E → E.dtor = true → E.dbind = true)
+    (hview : ∀ v E, Γ0 v = some E → E.dbind = true → E.ty.holdsView = true)
     (hroots : ∀ r ∈ roots (heldOfArgs Γ0 args), ∃ Er, Γ0 r = some Er ∧ Er.mode.isRoot = true)
     (hout : ∀ i, ∀ r ∈ roots (outHeld Γ0 fn args i), ∃ Er, Γ0 r = some Er ∧ Er.mode.isRoot = true) :
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),
@@ -545,6 +562,9 @@ theorem callPostAux_wf {Γ0 : Ctx} {fn : Fn} {args : List Var}
           rw [h0] at h0'; cases h0'
           refine (hw.kill .replace false a).setE ⟨Ex, hEx, fun h => ?_⟩ (fun hl => by simp at hl)
             (fun _ _ hn d hdd _ => ?_) (fun ha => by simp at ha)
+            (fun hd => by
+              show (argE Γ0 a).ty.holdsView = true
+              rw [hargE]; exact hview a E0 h0 (by simpa [hargE] using hd))
           · show (argE Γ0 a).mode.isRoot = true
             rw [hargE, ← hm']; exact h
           · -- what a moved argument views in memory stays bound
@@ -565,7 +585,9 @@ theorem callPostAux_wf {Γ0 : Ctx} {fn : Fn} {args : List Var}
         · have hdk := hd.kill b t.elem.holdsView a
           obtain ⟨Ea, hEa, hra⟩ := hdk.root ⟨E0, h0, hroot⟩
           refine (hw.kill b t.elem.holdsView a).setE ⟨Ea, hEa, fun _ => by rw [hargE]; exact hroot⟩
-            ?_ ?_ ?_
+            ?_ ?_ ?_ (fun hd => by
+              show (argE Γ0 a).ty.holdsView = true
+              rw [hargE]; exact hview a E0 h0 (by simpa [hargE] using hd))
           · intro hl hn r hr
             by_cases hra' : r = a
             · exact Or.inl ⟨hra', by rw [hargE]; exact hroot⟩
@@ -672,7 +694,7 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     obtain ⟨d, ⟨o, ⟨ho, _⟩, hd⟩, rfl⟩ := hr
     obtain ⟨⟨hj, _⟩, _⟩ := houts o ho
     exact hargDeps _ hj d.root (List.mem_map_of_mem hd)
-  have hpost := callPostAux_wf (fn := fn) (args := args) h.arm hheld hout fn.params args 0 Γ
+  have hpost := callPostAux_wf (fn := fn) (args := args) h.arm h.view hheld hout fn.params args 0 Γ
     (fun a ha => by
       obtain ⟨i, hi, rfl⟩ := mem_args ha
       obtain ⟨Ea, hEa, hl⟩ := hent i (hlen ▸ hi)
@@ -995,13 +1017,15 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h
     have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 hE (fun hd => absurd hd (by simp [hr.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hr.dtor_false.1])))).exitScope x hpx.2.2
+      (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2])))).exitScope
+      x hpx.2.2
   | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ hpx ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hc.dtor_false.1])))).exitScope x hpx.2.2
+      (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2])))).exitScope
+      x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | scopeD _ _ _ hpx _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | @letd Γ Γ1 Δ F x _ r k E _ hx _ hr _ _ _ _ hpx ih =>
@@ -1009,7 +1033,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h
     have hx1 : Γ1 x = none := by have := hdom x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 hE (fun hd => absurd hd (by simp [hr.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hr.dtor_false.1])))).exitScope x hpx.2.2
+      (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2])))).exitScope
+      x hpx.2.2
   | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h
@@ -1020,7 +1045,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       simp only [List.getD_cons_zero] at hEa; rw [hc] at hEa; cases hEa; exact hl
     exact (ih (hw1.add hx1 (fun _ _ => recvRes_roots h hdm hc hlc (by rw [htc]; simp) hE)
       (fun hd => absurd hd (by simp [hcT.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hcT.dtor_false.1])))).exitScope x hpx.2.2
+      (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hcT.dtor_false.2])))).exitScope
+      x hpx.2.2
   | @rbind Γ Δ F p k E hp hm hl hroots hpF hk hrr ih =>
     intro h
     have hos : E.mode.ownSlot = false := by rw [hm]; rfl
@@ -1046,6 +1072,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     obtain ⟨Ex1, hEx1⟩ := Option.isSome_iff_exists.mp hsome
     refine (hw1.kill .replace false x).setE ⟨Ex1, hEx1, fun hro => ?_⟩ (fun hl hn r hr' => Or.inr ?_)
       (fun hd => absurd hd (by simp [hr.dtor_false.2])) (fun ha => absurd ha (by simp [hr.dtor_false.1]))
+      (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     · obtain ⟨E1, h1, hm1, _⟩ := kill_cmode hEx1
       obtain ⟨E0, h0, hm0⟩ := hmode x E1 h1
       rw [hx] at h0; cases h0
@@ -1099,7 +1126,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hnint : Ex1.ty ≠ .int := by rw [hty1, hty]; simp
     refine (hw1.kill .realloc t.holdsView x).setE ⟨killE .realloc t.holdsView x Ex1,
       by simp [A2.kill, hx1], fun _ => hroot⟩ (fun hl' hn r hr => ?_) (fun hd _ _ d hdd hnm => ?_)
-      (fun ha => hw1.arm x Ex1 hx1 ha)
+      (fun ha => hw1.arm x Ex1 hx1 ha) (fun hd => hw1.view x Ex1 hx1 hd)
     · by_cases hrx : r = x
       · exact Or.inl ⟨hrx, hroot⟩
       · refine Or.inr ⟨hrx, ?_⟩
@@ -1128,7 +1155,8 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact (ih (hw1.add hx1 (fun _ _ => hE) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
-      (fun ha => absurd ha (by simp [hc.dtor_false.1])))).exitScope x hpx.2.2
+      (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2])))).exitScope
+      x hpx.2.2
   | catchR _ _ hM _ _ _ => exact fun _ => hM.wf
   | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ hpz hpx ih =>
     exact fun h => ((ih (h.unpair hy hl hm.ownSlot hty hx hz hxz)).exitScope z hpz.2.2).exitScope x hpx.2.2

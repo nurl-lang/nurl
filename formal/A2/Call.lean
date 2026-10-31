@@ -228,7 +228,7 @@ theorem Entry.clean_vdeps_mem {E : Entry} (hd : E.dbind = true) (hos : E.mode.ow
     · rw [h] at hos; cases hos
   unfold Entry.clean
   split
-  · simp only [show E.dbind = true ∧ E.mode.ownSlot = true ∧ E.ty ≠ .int from ⟨hd, hos, hn'⟩, if_true]
+  · simp only [show E.dbind = true ∧ E.mode.ownSlot = true ∧ E.ty ≠ .int from ⟨hd, hos, hn'⟩]
     simp [memDeps, List.mem_filter, hnm, hn']
   · exact Iff.rfl
 
@@ -804,7 +804,7 @@ theorem post_armed (h : CallH P Γ F x fn args base) {y : Var} {E1 : Entry}
     (fun j hj b hb Ea ha hd => absurd hd (by rw [h.dsafe.2.2 j hj b hb Ea ha]; simp)) y E2 h2 hd
   exact ⟨E0, h0, hd0, hm.trans hm0, ht.trans ht0, fun d hdd hnm => hs0 d (hvd ▸ hdd) hnm⟩
 
-theorem post_dbind (h : CallH P Γ F x fn args base) {y : Var} {E1 : Entry}
+theorem post_dbind (_h : CallH P Γ F x fn args base) {y : Var} {E1 : Entry}
     (hy : callPost Γ fn args y = some E1) (hd : E1.dbind = true) : ∃ E0, Γ y = some E0 ∧ E0.dbind = true := by
   unfold callPost at hy
   obtain ⟨E2, h2, _, _, _, _, hb⟩ := killNames_flags _ hy
@@ -1493,6 +1493,15 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
       simp [callX] at ha
     · simp only [setE, upd_ne _ _ hyx] at h1
       exact h.postwf.arm y E1 h1 ha
+  Φview y E hy hd := by
+    obtain ⟨_, E1, h1, rfl⟩ := h.frame_some hy
+    rw [Entry.clean_dbind] at hd
+    rw [clean_ty]
+    by_cases hyx : y = x
+    · subst hyx; simp only [setE, upd_same, Option.some.injEq] at h1; subst h1
+      simp [callX] at hd
+    · simp only [setE, upd_ne _ _ hyx] at h1
+      exact h.postwf.view y E1 h1 hd
   Φdead y E hy hl hdb := by
     obtain ⟨_, E1, h1, rfl⟩ := h.frame_some hy
     rw [clean_live] at hl
@@ -2220,7 +2229,8 @@ theorem sigCtx_flags {fn : Fn} {v : Var} {E : Entry} (hv : sigCtx fn v = some E)
 
 theorem sigCtx_wf (fn : Fn) : CtxWF (sigCtx fn) := by
   refine ⟨?_, fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).2]),
-    fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).1])⟩
+    fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).1]),
+    fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).2])⟩
   intro v E hv _ _ r hr
   unfold sigCtx at hv
   split at hv
@@ -2531,8 +2541,8 @@ theorem canon_dbq (h : CallH P Γ F x fn args base) {Δa : Ctx}
       rw [hE] at hp; simp only [Option.map_some, Option.some.injEq] at hp; subst hp
       exfalso
       by_cases hrb : E0.mode = .rootb
-      · rw [RSetup.liftE_dbind h.sOK, if_pos hrb] at hd; cases hd
-      · rw [RSetup.liftE_dbind h.sOK, if_neg hrb] at hd
+      · rw [RSetup.liftE_dbind h.sOK, ite_eq_left hrb] at hd; cases hd
+      · rw [RSetup.liftE_dbind h.sOK, ite_eq_right hrb] at hd
         refine hΔb v E0 hE hd ?_ ?_
         · rwa [RSetup.liftE_mode _ hrb, RSetup.liftMode_ownSlot] at hos
         · rcases hg with h' | h'
@@ -2967,7 +2977,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
   · by_cases hdk : E1.dbind = true ∧ E1.mode.ownSlot = true ∧ E1.ty ≠ .int
     · -- a dead binding `letd` made: what it views in memory stays, bound in the caller
       have hce : E1.clean = { E1 with path := [], held := memDeps E1.held } := by
-        unfold Entry.clean; rw [ite_eq_left hcl, if_pos hdk]
+        unfold Entry.clean; rw [ite_eq_left hcl, ite_eq_left hdk]
       have hroots : ∀ d ∈ memDeps E1.held, (Γ d.root).isSome ∧ d.root < base + 0 := by
         intro d hd
         have hd' := List.mem_filter.mp hd
@@ -2994,7 +3004,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
           fun hd => ⟨hd, fun d h => (List.mem_filter.mp h).1⟩, rfl, fun hd => Or.inl hd,
           fun _ _ _ d hnm => by simp [memDeps, List.mem_filter, hnm]⟩
     · have hce : E1.clean = { E1 with path := [], held := [] } := by
-        unfold Entry.clean; rw [ite_eq_left hcl, if_neg hdk]
+        unfold Entry.clean; rw [ite_eq_left hcl, ite_eq_right hdk]
       have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
         rw [hce]; simp [rrE, rrL_nil]
       have hv0 : ({ E1 with path := [], held := [] } : Entry).vdeps = [] := by
@@ -3188,7 +3198,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
         exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
           (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes, hl']) (fun _ d hd => (hp' hos d hd).2) (fun d hd => (hh' d hd).2)
-          (fun hd => absurd hd (by simp [hrd]))
+          (fun hd => absurd hd (by simp))
       · exact RSetup.EntryWeaker.mk' (by simp [callRes, ht']) (by simp [callRes])
           (by simp [resMode_ne' fn, resMode_inout fn])
           (by simp [callRes]) (fun _ d hd => by simp at hd) (fun d hd => (hh' d hd).2)

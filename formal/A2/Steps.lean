@@ -25,7 +25,8 @@ theorem SlotOK.ext {m m' : Mem} (h : ∀ o, m.st o ≠ none → m'.st o = m.st o
 /-- Binding a fresh variable to what a right-hand side produced. -/
 theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = none) (hxn : x < m.nv)
     {E : Entry} {v : Val} {o : Bool} (hout : RhsOut m Γ E v o)
-    (harm : E.dtor = true → E.dbind = true := by intro h; simp_all) :
+    (harm : E.dtor = true → E.dbind = true := by intro h; simp_all)
+    (hview : E.dbind = true → E.ty.holdsView = true := by intro h; simp_all) :
     MInv (m.set x ⟨o, some v⟩) (setE Γ x E) := by
   have hmx : m.st x = none := by
     have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -107,12 +108,17 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
       subst hw
       rcases hout.mode with h | h <;> rw [h] <;> simp
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w Ew b hw
-  · refine ⟨?live, ?dtorc, ?armc⟩
+  · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro w Ew hw hd
       by_cases hwx : w = x
       · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; exact harm hd
       · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.arm w Ew hw hd
+    case viewc =>
+      intro w Ew hw hd
+      by_cases hwx : w = x
+      · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; exact hview hd
+      · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.wf.view w Ew hw hd
     case dtorc =>
       intro w Ew hw hd hos hn d hdd hnm
       by_cases hwx : w = x
@@ -942,7 +948,8 @@ theorem step_assign {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ (fun h => by cases h) (by simp) (fun h => absurd rfl h)
     refine ⟨⟨o, some v⟩, by simp [m'], out.tyok, hslot, hm1.symm, fun hl hn r hr' => Or.inr ?_,
       by rw [ht1]; exact hty, fun _ hn => ?_, fun _ T hT => ?_, fun T hT => ?_,
-      fun _ _ hn d hdd _ => Or.inr ?_, fun hd => absurd hd (by simp [(RhsT.dtor_false hr).1])⟩
+      fun _ _ hn d hdd _ => Or.inr ?_, fun hd => absurd hd (by simp [(RhsT.dtor_false hr).1]),
+      fun hd => absurd hd (by simp [(RhsT.dtor_false hr).2])⟩
     rotate_right
     · rw [vdeps_mode hos] at hdd
       have hr' := List.mem_map_of_mem (f := Dep.root) hdd
@@ -1009,7 +1016,8 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     ⟨by simp [hos], fun _ => ⟨hvec, fun T h => (by cases h), fun h => (by simp at h)⟩,
       fun h => (by simp [hos] at h)⟩
   refine ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
-    (fun h => by simp at h), (fun T h => by simp at h), fun hd _ hn dep hdd hnm => ?_, fun h => by simp at h⟩
+    (fun h => by simp at h), (fun T h => by simp at h), fun hd _ hn dep hdd hnm => ?_, fun h => by simp at h,
+    fun hd => hi.wf.view x E hx hd⟩
   obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor x E hx hd hos (Or.inl hn) dep hdd hnm
   by_cases hrx : dep.root = x
   · exact Or.inl ⟨hrx, Mode.isRoot_of_ownSlot hos⟩
@@ -1273,7 +1281,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         rw [hty]), ⟨by simp [hos], fun _ => ⟨by rw [hty]; rfl, fun U hU => by cases hU; rw [hty]; exact hwT',
         fun _ => ⟨_, rfl, ?_⟩⟩, fun h => by simp [hos] at h⟩, rfl, fun hl' hn r hr => ?_, rfl,
         fun _ _ => ?_, fun _ T hT => ?_, fun T hT => ?_, fun _ _ _ dep hdd _ => ?_,
-        fun hd => hi.wf.arm x Ex hx hd⟩
+        fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd⟩
     rotate_right
     · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, List.mem_append] at hdd
       by_cases hrx : dep.root = x
@@ -1640,12 +1648,17 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         ∃ Er, exitRoot p (Ep.path ++ Ep.held) Γ r = some Er ∧ Er.mode.isRoot = true := by
       intro r ⟨Er, hEr, hro⟩ hrp
       exact ⟨rerootE p (Ep.path ++ Ep.held) Er, by simp [exitRoot, upd_ne _ _ hrp, hEr], hro⟩
-    refine ⟨?live, ?dtorc, ?armc⟩
+    refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro v E' hv' hd
       have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
       obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
       exact hi.wf.arm v E hE hd
+    case viewc =>
+      intro v E' hv' hd
+      have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
+      obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
+      exact hi.wf.view v E hE hd
     case dtorc =>
       -- A2-drop.2: what depended on `p` depends on what `p` borrowed
       intro v E' hv' hd hos hn dep hdd hnm
