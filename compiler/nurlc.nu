@@ -11138,16 +11138,25 @@ unsafe @ __suggest_ident i syms s name → s {
 //   29-34: peek4 token + valid  — lookahead 4
 //
 // Token field offsets (relative to token base):
-//   0: type  1: val (i8*)  2: inum  3: line  4: start  5: valid
+//   0: type  1: val (i8*)  2: inum  3: line  4: start
+//   5: valid — 0 empty, 1 holds a val the lexer owns, 2 holds a val it
+//      does not (a fixed spelling: an operator, a bracket, `→`, EOF's
+//      empty text — a literal that lives as long as the program), 3 the
+//      text is the token's source span and val holds its length (a name)
 //
 // `fnum` is NOT stored (the C version's field was dead — every parser
 // callsite reads `nurl_lex_val` and emits the string form into the
 // LLVM IR directly, never going through `nurl_lex_fnum`). Saves a slot
 // per token + removes the float-bitcast bridge.
 //
-// The token `val` field is a `strdup`'d copy owned by the lexer; the
-// lexer overwrites/leaks it on advance — same lifetime contract as
-// the C version, which never freed token vals either.
+// The token `val` field is owned by the lexer when the slot's valid
+// field is 1 (a number, a string literal, a merged `a::b` name: heap text
+// built from the source), and released when the slot is overwritten or
+// the lexer freed. Most tokens copy nothing: a fixed spelling points at a
+// literal (valid 2), a name at its own bytes of the source (valid 3).
+// Half of all tokens are operators and brackets, most of the rest names,
+// and a heap copy apiece, written and freed again, was a third of the
+// lexer's time (agora #236).
 //
 // `nurl_lex_val` returns a fresh `strdup` of the current token's val
 // so callers can stash a stable copy across `nurl_lex_advance` calls.
@@ -11239,8 +11248,25 @@ unsafe @ __suggest_ident i syms s name → s {
 
 // Write a complete token into slot at `base`. `val` is taken
 // ownership of (caller must pass an i8* the lexer can hold; usually
-// from strdup or an inline malloc). Marks the slot valid.
+// from strdup or an inline malloc). Marks the slot valid (1: owned).
 unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
+    ( __tok_put lex base type val inum line start 1 )
+}
+
+// …a token whose text is a fixed spelling, a literal the lexer does not
+// own (valid 2): nothing is copied, nothing freed.
+unsafe @ __tok_fixed i lex i base i type s val i line i start → v {
+    ( __tok_put lex base type val 0 line start 2 )
+}
+
+// …a token whose text is its `n` bytes of source from `start` (valid 3):
+// the val field holds `n`, and the text is copied only when asked for
+// (__tok_text, nurl_lex_val).
+unsafe @ __tok_span i lex i base i type i n i inum i line i start → v {
+    ( __tok_put lex base type # s n inum line start 3 )
+}
+
+unsafe @ __tok_put i lex i base i type s val i inum i line i start i valid → v {
     : s p # s lex
     // Every slot val is a fresh heap string (strdup'd operator spelling
     // or malloc'd ident/number/str buffer) — release the one this write
@@ -11248,7 +11274,7 @@ unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
     // (~500k strings per self-compile). Gated on TF_VALID: an invalid
     // slot's val pointer is stale (already owned by another slot after
     // a __tok_shift).
-    ? != 0 ( nurl_peek p + base TF_VALID ) {
+    ? == 1 ( nurl_peek p + base TF_VALID ) {
         : i __oldv ( nurl_peek p + base TF_VAL )
         ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
@@ -11257,7 +11283,7 @@ unsafe @ __tok_write i lex i base i type s val i inum i line i start → v {
     ( nurl_poke p + base TF_INUM inum )
     ( nurl_poke p + base TF_LINE line )
     ( nurl_poke p + base TF_START start )
-    ( nurl_poke p + base TF_VALID 1 )
+    ( nurl_poke p + base TF_VALID valid )
 }
 
 // Copy a token from src_base into dst_base within the same lexer.
@@ -11270,7 +11296,7 @@ unsafe @ __tok_shift i lex i src_base i dst_base → v {
     // whole cascade (PEEK→CUR, PEEK2→PEEK, …), and with the source
     // left valid the NEXT shift's destination-free would free the
     // pointer the previous shift just moved forward.
-    ? != 0 ( nurl_peek p + dst_base TF_VALID ) {
+    ? == 1 ( nurl_peek p + dst_base TF_VALID ) {
         : i __oldv ( nurl_peek p + dst_base TF_VAL )
         ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
@@ -11279,7 +11305,7 @@ unsafe @ __tok_shift i lex i src_base i dst_base → v {
     ( nurl_poke p + dst_base TF_INUM ( nurl_peek p + src_base TF_INUM ) )
     ( nurl_poke p + dst_base TF_LINE ( nurl_peek p + src_base TF_LINE ) )
     ( nurl_poke p + dst_base TF_START ( nurl_peek p + src_base TF_START ) )
-    ( nurl_poke p + dst_base TF_VALID 1 )
+    ( nurl_poke p + dst_base TF_VALID ( nurl_peek p + src_base TF_VALID ) )
     // Exactly one valid slot owns the moved val pointer from here on.
     ( nurl_poke p + src_base TF_VALID 0 )
 }
@@ -11452,7 +11478,7 @@ unsafe @ __lex_one i lex i base → v {
 
     // ── EOF ──
     ? >= pos len {
-        ( __tok_write lex base TT_EOF ( nurl_strdup `` ) 0 line start )
+        ( __tok_fixed lex base TT_EOF `` line start )
         = done T
     } {}
 
@@ -11463,7 +11489,7 @@ unsafe @ __lex_one i lex i base → v {
         == & # i . src + pos 1 255 134
         == & # i . src + pos 2 255 146 {
             = pos + pos 3
-            ( __tok_write lex base TT_ARROW ( nurl_strdup `→` ) 0 line start )
+            ( __tok_fixed lex base TT_ARROW `→` line start )
             = done T
         } {}
     } {}
@@ -11678,32 +11704,42 @@ unsafe @ __lex_one i lex i base → v {
             // Namespace `::` merge — a::b[::c...] becomes a__b[__c...].
             // Each `::` is exactly two ASCII bytes followed by an
             // ident-start char (alpha or _).
+            : ~ b merged F
             ~ & & < + pos 2 len
             & == & # i . src pos 255 58
             == & # i . src + pos 1 255 58
             ( __lx_is_alpha_us & # i . src + pos 2 255 ) {
-                = pos + pos 2
+                = pos + pos 2 = merged T
                 ~ & < pos len ( __lx_is_ident_cont & # i . src pos 255 ) { = pos + pos 1 }
             }
-            // Materialise the identifier text.
+            // The identifier's text is its source span (__tok_span), read
+            // in place; only a merged `a::b`, whose text is not in the
+            // source, is materialised.
             : i n - pos id_start
-            : s id # s ( nurl_alloc + n 1 )
-            ( memcpy id # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
-            : *u idp # *u id
-            // Rewrite any `::` (two colons) found in `id` to `__`.
-            : ~ i k 0
-            ~ < k n {
-                ? & == & # i . idp k 255 58
-                & < + k 1 n
-                == & # i . idp + k 1 255 58 {
-                    = . idp k # u 95
-                    = . idp + k 1 # u 95
-                    = k + k 2
-                } {
-                    = k + k 1
+            : ~ * u idp # *u + # i src id_start
+            // (The merged text, as the address the token takes over: a
+            // raw buffer, never a string binding the scope would drop.)
+            : ~ i idw 0
+            ? merged {
+                : *u idb # *u ( nurl_alloc + n 1 )
+                ( memcpy # s idb # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
+                = idp idb
+                = idw # i idb
+                // Rewrite any `::` (two colons) found in `id` to `__`.
+                : ~ i k 0
+                ~ < k n {
+                    ? & == & # i . idp k 255 58
+                    & < + k 1 n
+                    == & # i . idp + k 1 255 58 {
+                        = . idp k # u 95
+                        = . idp + k 1 # u 95
+                        = k + k 2
+                    } {
+                        = k + k 1
+                    }
                 }
-            }
-            = . idp n # u 0
+                = . idp n # u 0
+            } {}
             : ~ i ttype TT_IDENT
             : ~ i inum 0
             // Bool literals, sizeof, pub, base type kws (`i u f b s v`),
@@ -11829,7 +11865,7 @@ unsafe @ __lex_one i lex i base → v {
                     = ttype TT_SIMD
                 } {}
             } {}
-            ( __tok_write lex base ttype id inum line start )
+            ? merged { ( __tok_write lex base ttype # s idw inum line start ) } { ( __tok_span lex base ttype n inum line start ) }
             = done T
         } {}
     } {}
@@ -11841,7 +11877,7 @@ unsafe @ __lex_one i lex i base → v {
         & == & # i . src + pos 1 255 46
         == & # i . src + pos 2 255 46 {
             = pos + pos 3
-            ( __tok_write lex base TT_ELLIPSIS ( nurl_strdup `...` ) 0 line start )
+            ( __tok_fixed lex base TT_ELLIPSIS `...` line start )
             = done T
         } {}
     } {}
@@ -11851,16 +11887,16 @@ unsafe @ __lex_one i lex i base → v {
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( nurl_strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( nurl_strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( nurl_strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( nurl_strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( nurl_strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( nurl_strdup `>>` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( nurl_strdup `??` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( nurl_strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( nurl_strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( nurl_strdup `&&` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_EQEQ `==` line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_NE `!=` line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_LE `<=` line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_fixed lex base TT_GE `>=` line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_fixed lex base TT_SHL `<<` line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_fixed lex base TT_SHR `>>` line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_fixed lex base TT_QUESTQUEST `??` line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_fixed lex base TT_CARETCARET `^^` line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_fixed lex base TT_OROR `||` line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_fixed lex base TT_ANDAND `&&` line start ) = done T } {}
         } {}
     } {}
 
@@ -11868,12 +11904,12 @@ unsafe @ __lex_one i lex i base → v {
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64 { ( __tok_write lex base TT_AT ( nurl_strdup `@` ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( nurl_strdup `:` ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( nurl_strdup `=` ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( nurl_strdup `^` ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( nurl_strdup `?` ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( nurl_strdup `~` ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_fixed lex base TT_AT `@` line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_fixed lex base TT_COLON `:` line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_fixed lex base TT_EQ `=` line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_fixed lex base TT_CARET `^` line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_fixed lex base TT_QUEST `?` line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_fixed lex base TT_TILDE `~` line start ) = done T } {}
         ? & ! done == c 40 {
             : i pv ( __lx_pkg_version_end lex pos )
             ? >= pv 0 {
@@ -11885,29 +11921,29 @@ unsafe @ __lex_one i lex i base → v {
                 } {}
                 = pos pv
                 ( __tok_write lex base TT_STR ( nurl_strdup ver ) 0 line start )
-            } { ( __tok_write lex base TT_LPAREN ( nurl_strdup `(` ) 0 line start ) }
+            } { ( __tok_fixed lex base TT_LPAREN `(` line start ) }
             = done T
         } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( nurl_strdup `)` ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( nurl_strdup `{` ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( nurl_strdup `}` ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( nurl_strdup `.` ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( nurl_strdup `#` ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( nurl_strdup `!` ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( nurl_strdup `+` ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( nurl_strdup `-` ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( nurl_strdup `*` ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( nurl_strdup `/` ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( nurl_strdup `%` ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( nurl_strdup `&` ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( nurl_strdup `|` ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( nurl_strdup `<` ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( nurl_strdup `>` ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( nurl_strdup `[` ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( nurl_strdup `]` ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( nurl_strdup `;` ) 0 line start ) = done T } {}
-        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( nurl_strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( nurl_strdup `$` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_fixed lex base TT_RPAREN `)` line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_fixed lex base TT_LBRACE `{` line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_fixed lex base TT_RBRACE `}` line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_fixed lex base TT_DOT `.` line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_fixed lex base TT_HASH `#` line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_fixed lex base TT_BANG `!` line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_fixed lex base TT_PLUS `+` line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_fixed lex base TT_MINUS `-` line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_fixed lex base TT_STAR `*` line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_fixed lex base TT_SLASH `/` line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_fixed lex base TT_PERCENT `%` line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_fixed lex base TT_AMP `&` line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_fixed lex base TT_PIPE `|` line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_fixed lex base TT_LT `<` line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_fixed lex base TT_GT `>` line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_fixed lex base TT_LBRACK `[` line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_fixed lex base TT_RBRACK `]` line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_fixed lex base TT_SEMICOL `;` line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_fixed lex base TT_BACKSLASH `\\` line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_fixed lex base TT_DOLLAR `$` line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
             : s buf # s ( nurl_alloc 4 )
@@ -11995,7 +12031,7 @@ unsafe @ nurl_lex_free sink i h → v {
     ? != following 0 { ( nurl_poke # s following 37 previous ) } {}
     : ~ i b LX_CUR
     ~ <= b LX_PEEK4 {
-        ? != 0 ( nurl_peek p + b TF_VALID ) {
+        ? == 1 ( nurl_peek p + b TF_VALID ) {
             : i tv ( nurl_peek p + b TF_VAL )
             ? != 0 tv { ( nurl_free # s tv ) } {}
         } {}
@@ -12019,7 +12055,22 @@ unsafe @ nurl_lex_type i h → i {
 
 unsafe @ nurl_lex_val i h → s {
     : s p # s h
+    ? == 3 ( nurl_peek p + LX_CUR TF_VALID ) {
+        ^ # s ( nurl_strdup_n # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + LX_CUR TF_START ) ( nurl_peek p + LX_CUR TF_VAL ) )
+    } {}
     ^ # s ( nurl_strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
+}
+
+// The text of the token in the slot at `base`, as a string its caller
+// owns (and drops): the same contract as the nurl_str_cat copy below.
+unsafe @ __tok_text s p i base → s {
+    ? == 3 ( nurl_peek p + base TF_VALID ) {
+        // (Sliced from the token's own start: nurl_str_slice measures its
+        // argument up to the end of the slice, and from the file's start
+        // that is the whole file before the token.)
+        ^ ( nurl_str_slice # s + ( nurl_peek p LX_SRC ) ( nurl_peek p + base TF_START ) 0 ( nurl_peek p + base TF_VAL ) )
+    } {}
+    ^ ( nurl_str_cat # s ( nurl_peek p + base TF_VAL ) `` )
 }
 
 unsafe @ nurl_lex_inum i h → i {
@@ -12033,6 +12084,8 @@ unsafe @ nurl_lex_inum i h → i {
 // backward-compat with any external code that may declare it.
 unsafe @ nurl_lex_fnum i h → f {
     : s p # s h
+    // (A float's text is always its own: a name's is a span, no float.)
+    ? != 1 ( nurl_peek p + LX_CUR TF_VALID ) { ^ 0.0 } {}
     : s v # s ( nurl_peek p + LX_CUR TF_VAL )
     ^ ( atof v )
 }
@@ -12170,11 +12223,11 @@ unsafe @ nurl_lex_set_pos i h i new_pos → v {
     // lookahead tokens' text.
     : ~ i __ib LX_PEEK
     ~ <= __ib LX_PEEK4 {
-        ? != 0 ( nurl_peek p + __ib TF_VALID ) {
+        ? == 1 ( nurl_peek p + __ib TF_VALID ) {
             : i __iv ( nurl_peek p + __ib TF_VAL )
             ? != 0 __iv { ( nurl_free # s __iv ) } {}
-            ( nurl_poke p + __ib TF_VALID 0 )
         } {}
+        ( nurl_poke p + __ib TF_VALID 0 )
         = __ib + __ib 6
     }
     // Line = 1 + the number of newlines strictly before np. Binary
@@ -12243,7 +12296,7 @@ unsafe @ nurl_lex_peek_val i h → s {
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
         ( __lex_one # i p LX_PEEK )
     } {}
-    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK TF_VAL ) `` )
+    ^ ( __tok_text p LX_PEEK )
 }
 
 unsafe @ nurl_lex_peek2_type i h → i {
@@ -12262,7 +12315,7 @@ unsafe @ nurl_lex_peek2_val i h → s {
     : s p # s h
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) { ( __lex_one # i p LX_PEEK ) } {}
     ? == 0 ( nurl_peek p + LX_PEEK2 TF_VALID ) { ( __lex_one # i p LX_PEEK2 ) } {}
-    ^ ( nurl_str_cat # s ( nurl_peek p + LX_PEEK2 TF_VAL ) `` )
+    ^ ( __tok_text p LX_PEEK2 )
 }
 
 unsafe @ nurl_lex_peek3_type i h → i {
@@ -24615,11 +24668,15 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     ( nurl_sym_def syms ( nurl_str_cat ptr `__depth` ) ( nurl_str_int ( nurl_peek # s syms 1 ) ) )
     // …and the innermost loop it was made in (__clo_detach_moves).
     ( nurl_sym_def syms ( nurl_str_cat ptr `__lserial` ) ( nurl_sym_get syms `__loop_depth__` ) )
+    // Newest first: every scope end walks the list from its head, so the
+    // values with a destructor are dropped in the reverse of the order they
+    // were made, as a stack — one made from a view of another is dropped
+    // before it (bck_scope_end walks the scope the same way).
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
     : s new ? == 0 ( nurl_str_len cur )
     ( nurl_str_cat entry `` )
-    ( nurl_str_cat3 cur ` ` entry )
+    ( nurl_str_cat3 entry ` ` cur )
     ( nurl_sym_def syms `__user_drops__` new )
     ? != 0 g_udrop_tmpown { = g_udrop_tmpown 0 ^ v } {}
     ( mem_journal_push_handle syms cg ptr vt )
@@ -26305,6 +26362,21 @@ unsafe @ bck_add_cap_name s name → v {
 : ~ i g_bck_bind_scalar 0
 // …and 1 when that view owns nothing (field 5 `w`, bck_record_binding).
 : ~ i g_bck_bind_wview 0
+// …and 1 when an owner that may hold views (class 3) holds a value with a
+// `% Drop` of the program's own that may read them (field 5's mark
+// followed by `u`): its drop runs that code, so the drop is a use of what
+// the views point into (bck_drop_view_diag).
+: ~ i g_bck_bind_udrop 0
+// …and 1 once a row of the function being walked marks one (bck_xlate_row):
+// only then does a return ask its drop order (bck_ret_drop_check).
+: ~ i g_bck_udrop_any 0
+// …and 1 while gen_let records a binding that owns its value — not one a
+// call lent it (g_bck_rhs_lend), whose drop stays with its owner — so its
+// drop is registered and runs where its scope ends.
+: ~ i g_bck_bind_owns 0
+// The ids a scope's end has released so far, as it releases them
+// (bck_scope_drop): dropped already, not after what they hold views of.
+: ~ s g_bck_ending ``
 // …and 1 when it is an `s` that owns the buffer it points at (field 5
 // `o`): a tracked owned string, every assignment to which stores a fresh
 // value or a copy, or a guarded one, which may own its value. A copy of
@@ -26351,7 +26423,7 @@ unsafe @ __sx_nested s sx → b {
         : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
         : ~ s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
         // Field 5: the binding's class mark (bck_record_binding).
-        ? != 0 g_bck_bind_scalar { = rec ( nurl_str_cat rec ? == g_bck_bind_scalar 1 `\ts` ? == g_bck_bind_scalar 2 ? != 0 g_bck_bind_wview `\tw` ? != 0 g_bck_bind_sown `\to` `\tv` ? == g_bck_bind_scalar 3 `\td` ? == g_bck_bind_scalar 5 `\tk` `\tc` ) } {}
+        ? != 0 g_bck_bind_scalar { = rec ( nurl_str_cat rec ? == g_bck_bind_scalar 1 `\ts` ? == g_bck_bind_scalar 2 ? != 0 g_bck_bind_wview `\tw` ? != 0 g_bck_bind_sown `\to` `\tv` ? == g_bck_bind_scalar 3 `\td` ? == g_bck_bind_scalar 5 `\tk` `\tc` ) ? != 0 g_bck_bind_udrop { = rec ( nurl_str_cat rec `u` ) } {} } {}
         // Field 6 the call a `let` / `assign` binds; 7 what a view's
         // right-hand side read, 8 its source expression.
         : b __rc_call & __bind != 0 ( nurl_str_len g_bck_rhs_callee )
@@ -27455,6 +27527,10 @@ unsafe @ resolve_arc_mut → v {
     // (4: a closure — a scalar to the borrow rules, its captures tracked as
     // such — that depends on what the views it captured point into.)
     ? ( __is_closure_ty lty ) { ^ ? ( bck_sound ) 4 1 } {}
+    // (…and so is a value with a destructor of the program's own that may
+    // read the views it holds: it is moved, never copied, and dropped where
+    // its scope ends — a view no longer, h: #224.)
+    ? & ( bck_sound ) ( __drop_may_read_view lty 0 ) { ^ 3 } {}
     ? & ( bck_sound ) ( __ty_holds_addr lty 0 ) { ^ 2 } {}
     ^ 1
 }
@@ -28243,6 +28319,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     // (A view that owns nothing — a struct of views, a Slice — is marked
     // `w`: no storage of its own for a result to point into.)
     = g_bck_bind_wview ? & == cls 2 ! ( __view_may_own lty ) 1 0
+    = g_bck_bind_udrop ? & == cls 3 != 0 g_bck_bind_owns ? ( __drop_may_read_view lty 0 ) 1 0 0
     // A view's row carries what its right-hand side read (field 7): the
     // borrows among those it copies (bck_view_from_reads).
     // (The checker's table exists only when it runs.)
@@ -28264,6 +28341,8 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     ? & != 0 g_borrowck == 0 g_bck_rec_off { ( bck_put `lastreads` rhs_reads ) } {}
     = g_bck_bind_scalar 0
     = g_bck_bind_sown 0
+    = g_bck_bind_udrop 0
+    = g_bck_bind_owns 0
     ? != 0 ( nurl_str_len held ) { ( bck_emit_owner_stores held name ) } {}
 }
 
@@ -29225,9 +29304,16 @@ unsafe @ bck_sx_ids s sx → s {
     // a view's what it read and its source expression.
     ? __bind {
         : s lf6 ( bck_field rec 6 )
-        ? != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat4 `\t` lf6 `\t` ( nurl_str_cat3 lf7 `\t` lf8 ) ) ) } {}
-        ? != 0 ( nurl_str_len lf7 ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat4 `\t` lf6 `\t` lf7 ) ) } {}
-        ? != 0 ( nurl_str_len lf6 ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t` lf6 ) ) } {}
+        // (A mark followed by `u`, a binding whose drop may read the views
+        // it holds: its id is marked `vdu_`, and the walk reads the mark.)
+        : s f5r ( bck_field rec 5 )
+        : b udr & == ( nurl_str_len f5r ) 2 == ( nurl_str_get f5r 1 ) 117
+        ? udr { ( bck_put ( bck_bkey `vdu_` w2 ) `1` ) = g_bck_udrop_any 1 } {}
+        : s f5 ? udr ( nurl_str_slice f5r 0 1 ) f5r
+        ? != 0 ( nurl_str_len lf8 ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat4 `\t` lf6 `\t` ( nurl_str_cat3 lf7 `\t` lf8 ) ) ) } {}
+        ? != 0 ( nurl_str_len lf7 ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat4 `\t` lf6 `\t` lf7 ) ) } {}
+        ? != 0 ( nurl_str_len lf6 ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat `\t` lf6 ) ) } {}
+        ? udr { ^ ( nurl_str_cat3 five `\t` f5 ) } {}
         ? ( seq ( bck_field rec 5 ) `s` ) { ^ ( nurl_str_cat five `\ts` ) } {}
         ? ( seq ( bck_field rec 5 ) `v` ) { ^ ( nurl_str_cat five `\tv` ) } {}
         ? ( seq ( bck_field rec 5 ) `w` ) { ^ ( nurl_str_cat five `\tw` ) } {}
@@ -29364,6 +29450,7 @@ unsafe @ bck_explode → i {
     : ~ i k 0
     ~ < k g_bck_nrows { ( nurl_free # s ( nurl_peek # s g_bck_rows k ) ) = k + k 1 }
     = g_bck_nrows 0
+    = g_bck_udrop_any 0
     ~ < pos len {
         ? == # i . tp pos 10 {
             // (Sliced from the row's own start: a slice from the text's
@@ -30149,6 +30236,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 : s after_defers ( bck_apply_defers st )
                 = g_bck_ret_guard -1
                 ? & >= rto 0 != BCK_OWNED ( bck_st_get after_defers rto ) { ( bck_diag_defer_releases_returned rto ( bck_field_int rec 3 ) ) } {}
+                // (…and then what the scopes still hold is dropped: an owner
+                // whose drop reads a view, after what that view points into.)
+                ( bck_ret_drop_check after_defers ( bck_field_int rec 3 ) )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -30921,6 +31011,81 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     : s m1 ( nurl_str_cat4 `'` dn `' is storage the caller holds (a parameter, or what one points into), and this stores into it a view of '` sn )
     : s m2 ( nurl_str_cat4 `', which is released when this function returns (or its scope ends): the caller would read freed memory through '` dn `'. Store a value that owns its data — a String (string_from) in a ( Vec String ) or a String field — or take '` sn )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat3 m1 m2 `' as a parameter so the caller owns what is viewed.` ) )
+}
+
+// A source of the views `d` holds ends at `line` (`why`) while `d` lives
+// on, and `d`'s type runs a destructor of the program's own that may read
+// them (`vdu_`, __drop_may_read_view). `d` is dropped after this, so its
+// drop is a use of freed memory: refused here, where the source ends
+// (Rust's dropck rule). A holder with no such destructor only becomes
+// unreadable (bck_diag_invalid), and its drop reads nothing.
+@ bck_drop_view_diag i d i src i line s why → v {
+    : i r ( bck_path_root d )
+    : s rs ( nurl_str_int r )
+    ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` rs ) ) `1` ) { ^ v } {}
+    // (Its own scope already ended, or it was dropped first at this one:
+    // it read the view while it was good.)
+    ? | != 0 ( nurl_sym_len g_bck ( bck_bkey `oos_` rs ) ) ( str_contains_word g_bck_ending rs ) { ^ v } {}
+    : s tag ( nurl_str_cat4 `dv:` rs `:` ( nurl_str_cat3 ( nurl_str_int src ) `:` ( nurl_str_int line ) ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` rs ) )
+    : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int src ) ) )
+    : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` sn `' ends here — ` ) why ( nurl_str_cat3 ` — while '` dn `' still holds a view of it. '` ) `` )
+    : s m2 ( nurl_str_cat3 dn `' is dropped later, and its type has a destructor (% Drop) that may read that view: a drop is a use, so it would read freed memory. Let '` dn )
+    // (Ended with its scope: values are dropped newest first, so declaring
+    // the holder after its source is enough.)
+    : b order | != 0 ( nurl_str_starts why `it went out of scope` ) != 0 ( nurl_str_starts why `the return drops` )
+    : s m3 ? order ( nurl_str_cat3 `' end first — declare it after '` sn `' (values are dropped newest first), or in a block that closes before this line — or have it hold a copy that owns its data (string_from, slice_to_vec).` ) ( nurl_str_cat `' end first — in a block that closes before this line — or have it hold a copy that owns its data (string_from, slice_to_vec).` `` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
+// A return at `line` drops what every enclosing scope still holds,
+// innermost scope first and each scope newest first (gen_ret_term,
+// mem_own_add_user_drop). An owner whose drop may read views (`vdu_`)
+// dropped after a binding it holds a view of would read freed memory:
+// asked here without changing `st` — the path ends at the return.
+unsafe @ bck_ret_drop_check s st i line → v {
+    ? | == 0 g_bck_udrop_any ( seq st `!` ) { ^ v } {}
+    // (Not the owner handed back by name, gen_ret: the caller drops it.)
+    : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int line ) ) )
+    : i rto ? != 0 ( nurl_str_len rtn ) ( bck_intern rtn ) -1
+    // The bindings still holding their values, in the order they drop.
+    : ~ s order ``
+    : ~ i k - g_bck_sc_n 1
+    ~ >= k 0 {
+        : i b * k 3
+        : ~ s rest ( __bck_scope_lets ( nurl_peek # s g_bck_sc b ) ( nurl_peek # s g_bck_sc + b 1 ) )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+            : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+            : i v ( bck_st_get st id )
+            // (One whose drop reads views is dropped borrowing too: it owns
+            // the value its destructor runs on, `vdu_`.)
+            : b udr ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` ( nurl_str_int id ) ) ) `1` )
+            ? & != id rto | | == v BCK_OWNED == v BCK_MAYBE_MOVED & udr | == v BCK_BORROWED_SHARED == v BCK_BORROWED_MUT { = order ? == 0 ( nurl_str_len order ) ( nurl_str_int id ) ( nurl_str_cat3 order ` ` ( nurl_str_int id ) ) } {}
+        }
+        = k - k 1
+    }
+    : ~ s gone ``
+    : ~ s rest2 ( nurl_str_cat order `` )
+    ~ != 0 ( nurl_str_len rest2 ) {
+        : s ds ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        ? ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` ds ) ) `1` ) {
+            // (What it holds views of: an owner's dependencies, a borrow's
+            // sources.)
+            : ~ s srcs ( nurl_str_cat3 ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) ` ` ( nurl_sym_get g_bck ( bck_bkey `bs_` ds ) ) )
+            ~ != 0 ( nurl_str_len srcs ) {
+                : s xs ( str_first_word srcs ) = srcs ( str_skip_word srcs )
+                : i x ( bck_path_root ( nurl_str_to_int xs ) )
+                ? ( str_contains_word gone ( nurl_str_int x ) ) {
+                    ( bck_drop_view_diag ( nurl_str_to_int ds ) x line ( nurl_str_cat3 `the return drops it before '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) ) `', which was declared before it` ) )
+                } {}
+            }
+        } {}
+        = gone ? == 0 ( nurl_str_len gone ) ( nurl_str_cat ds `` ) ( nurl_str_cat3 gone ` ` ds )
+    }
 }
 
 // At a way out of the function: every view the caller's storage holds must
@@ -32296,6 +32461,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         // it is — it reads them as they are now. A replaced field ends it.)
         ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
         | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) ) {
+            // (A borrower is not dropped — unless it owns a value with a
+            // destructor the borrow rules see as a view, `vdu_`.)
+            ( bck_drop_view_diag b sid line why )
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -32323,6 +32491,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
+            ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why )
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out d line ( nurl_str_cat3 `what it holds views of ended (` why `)` ) + depth 1 ) } {}
@@ -32900,17 +33069,53 @@ unsafe @ bck_scope_leave s st i line → s {
 @ bck_scope_end i lo i hi s st i line → s {
     ? | == 0 g_bck_has_borrow ( seq st `!` ) { ^ st } {}
     : ~ s out st
+    : s lets ( __bck_scope_lets lo hi )
+    = out ( bck_scope_drop out lets line )
+    // (Gone from here on — until a `let` binds it again: a later change to
+    // what it borrowed from no longer concerns it.)
+    : ~ s rest ( nurl_str_cat lets `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
+    }
+    ^ out
+}
+
+// What a scope's end does to its `let`s (rows `lets`, newest first): each
+// one still holding its value is released, in that order, and the borrows
+// of it end. All of them end before any is marked gone, so a binding that
+// holds a view of a later one is still asked when that one ends — the
+// caller's storage it aliases outlives it (bck_caller_view_diag) — and
+// g_bck_ending tells a destructor's drop that already ran from one still
+// to come (bck_drop_view_diag). (`unsafe` for that global, a scratch the
+// single-threaded walk sets and empties within this call.)
+unsafe @ bck_scope_drop s st s lets i line → s {
+    : ~ s out st
+    : ~ s rest ( nurl_str_cat lets `` )
+    = g_bck_ending ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i v ( bck_st_get out id )
+        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
+        = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
+    }
+    = g_bck_ending ``
+    ^ out
+}
+
+// The rows in [lo, hi) of the `let`s a scope declares directly (not inside
+// a nested block, cond or match — those scope their own), newest first:
+// the order its values are dropped in at its end (mem_own_add_user_drop),
+// so one declared after another ends before it.
+@ __bck_scope_lets i lo i hi → s {
+    : ~ s out ``
     : ~ i j lo
     ~ < j hi {
         : s rec ( bck_rec j )
         // (The kind by its prefix: no copy of it per row.)
         ? != 0 ( nurl_str_starts rec `let\t` ) {
-            : i id ( bck_field_int rec 1 )
-            : i v ( bck_st_get out id )
-            ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
-            // (Gone from here on — until a `let` binds it again: a later
-            // change to what it borrowed from no longer concerns it.)
-            ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_int j ) ( nurl_str_cat3 ( nurl_str_int j ) ` ` out )
             = j + j 1
         } {
             ? != 0 ( nurl_str_starts rec `cond\t` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
@@ -32932,29 +33137,17 @@ unsafe @ bck_scope_leave s st i line → s {
     ? ( seq post `!` ) { ^ ( nurl_str_cat `!` `` ) } {}
     : ~ s out ( nurl_str_cat post `` )
     : b ends != 0 g_bck_has_borrow
-    : ~ i j lo
-    ~ < j hi {
-        : s rec ( bck_rec j )
-        // (The kind by its prefix: no copy of it per row.)
-        ? != 0 ( nurl_str_starts rec `let\t` ) {
-            : i id ( bck_field_int rec 1 )
-            ? ends {
-                : i v ( bck_st_get out id )
-                ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
-                ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` )
-            } {}
-            = out ( bck_st_set out id ( bck_st_get pre id ) )
-            ( bck_partner_unlink id )
-            = j + j 1
-        } {
-            ? != 0 ( nurl_str_starts rec `cond\t` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
-                ? != 0 ( nurl_str_starts rec `match\t` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
-                    ? != 0 ( nurl_str_starts rec `block\t` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
-                        = j + j 1
-                    }
-                }
-            }
-        }
+    // (Newest first, as its values are dropped: one declared after another
+    // is gone — its state put back — before that one ends.)
+    : s lets ( __bck_scope_lets lo hi )
+    ? ends { = out ( bck_scope_drop out lets line ) } {}
+    : ~ s rest ( nurl_str_cat lets `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s js ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        ? ends { ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` ) } {}
+        = out ( bck_st_set out id ( bck_st_get pre id ) )
+        ( bck_partner_unlink id )
     }
     ^ out
 }
@@ -34281,6 +34474,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
         : i __cbc ( __clo_bind_class syms vt val rhs_closure_env __src_owned_env bck_rhs_tt )
         : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
+        // (Its own value unless a call lends it one — `arc_get`'s payload,
+        // a field accessor's: that value's drop stays its owner's.)
+        = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
         ( bck_record_binding `let` name bck_line __cbc vt )
         ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
         = g_bck_rhs_callee ``
@@ -34633,6 +34829,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
             : i __cbc ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
+            = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
             ( bck_record_binding `let` name bck_line __cbc ( nurl_llty ptype ) )
             ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
             = g_bck_rhs_callee ``
@@ -41502,7 +41699,9 @@ unsafe @ __bck_made_from s name → s {
         ? ( seq ( bck_field row 1 ) name ) {
             : s k ( bck_field row 0 )
             ? | ( seq k `let` ) ( seq k `assign` ) {
-                : s cls ( bck_field row 5 )
+                : s cls0 ( bck_field row 5 )
+                // (A trailing `u` marks a drop that may read the views.)
+                : s cls ? & == ( nurl_str_len cls0 ) 2 == ( nurl_str_get cls0 1 ) 117 ( nurl_str_slice cls0 0 1 ) cls0
                 ? | | | | ( seq cls `v` ) ( seq cls `w` ) ( seq cls `d` ) ( seq cls `k` ) ( seq cls `c` ) {
                     = out ( __words_join out ( __sx_names ( bck_field row 7 ) ) )
                     = out ( __words_join out ( __sx_names ( bck_field row 8 ) ) )
@@ -49419,6 +49618,20 @@ unsafe @ __ir_cut_all s h0 s pat → s {
     ^ h
 }
 
+// `h` with every occurrence of `pat` replaced by `rep`.
+@ __ir_subst_all s h s pat s rep → s {
+    : i pl ( strlen pat )
+    : ~ s rest ( nurl_str_cat h `` )
+    : ~ s out ``
+    : ~ i at ( nurl_str_find rest pat )
+    ~ >= at 0 {
+        = out ( nurl_str_cat3 out ( nurl_str_slice rest 0 at ) rep )
+        = rest ( nurl_str_slice rest + at pl - - ( strlen rest ) at pl )
+        = at ( nurl_str_find rest pat )
+    }
+    ^ ( nurl_str_cat out rest )
+}
+
 // `noinline`, whatever the source asked (`inline @`, or a vector
 // signature's alwaysinline from gen_fn_decl's __fn_vecsig): a caller
 // that has the tier calls the `.tier` copy (__ir_tier_calls), so this
@@ -49521,11 +49734,22 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     // that masks it) or without SHA (Haswell … Cascade Lake) falls to
     // the gated base rather than to SIGILL.
 
+    // Each clone answers its body's own `nurl_cpu_x86_v3` question
+    // (std/chacha20poly1305.nu asks it before an eight-block v256 pass).
+    // `.x86v3` runs only where the dispatcher's probe said 1, and `.base`
+    // only where it said 0 — unless the dispatch also asks a crypto tier,
+    // when a v3 CPU without the tier runs `.base` too. The probe answers
+    // once a process, so the constant is exact, and LLVM drops the path
+    // the clone never takes: the v256 kernel compiled for SSE2 in `.base`
+    // was a tenth of clang's time on a program using ChaCha20.
+    : s v3q `call i32 @nurl_cpu_x86_v3()`
+    : s body_w ( __ir_subst_all body v3q `add i32 0, 1` )
+
     // Both clones stay calls: the dispatcher picks one at run time, and
     // a clone compiled for more than the baseline must never be merged
     // into it (__ir_hdr_noinline says why LLVM alone does not ensure it).
     : s base_attrs ? > crypto 0 ( nurl_str_cat ` noinline` ( __crypto_tier_attrs crypto ) ) ``
-    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( nurl_str_cat body `` )
+    : s base_body ? > crypto 0 ( nurl_str_cat3 `\nentry:\n` ( __crypto_gate_line crypto ) ( nurl_str_slice body 8 - ( strlen body ) 8 ) ) ( __ir_subst_all body v3q `add i32 0, 0` )
     : s hdr_b ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.base(` ( nurl_str_cat4 cparams `)` base_attrs ` {` ) ) )
     ( emit_hoisted ( nurl_str_cat hdr_b base_body ) )
@@ -49535,7 +49759,7 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto → v {
     : s hdr_w ( nurl_str_cat ( nurl_str_cat3 `define ` cret ` @` )
     ( nurl_str_cat3 lname `.x86v3(` ( nurl_str_cat4 cparams
     `) noinline "target-cpu"="x86-64-v3" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave` wide_feat `" {` ) ) )
-    ( emit_hoisted ( nurl_str_cat hdr_w body ) )
+    ( emit_hoisted ( nurl_str_cat hdr_w body_w ) )
 
     // The dispatcher. `params` doubles as the argument list: it is
     // already `<type> %<name>` pairs, which is exactly a call's operand
@@ -53023,6 +53247,76 @@ unsafe @ __hmemo_close s key i mark b r → v {
         // and every R in it leaked).
         ? ( __holds_user_drop ft 0 ) { ^ T } {}
         = i + i 1
+    }
+    ^ F
+}
+
+// Does dropping a value of `ty` run a destructor that may read a view —
+// a value somewhere inside it (as __holds_user_drop finds them) with a
+// `% Drop` of the program's own whose own fields may hold one? Its drop
+// is then a use of what those views point into (bck_deps_end). A
+// library handle's destructor reads only what it owns.
+@ __drop_may_read_view s ty i depth → b {
+    ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    // A trait object runs the destructor of what it boxes: one of the
+    // trait's impls (`implsof##`, known from the signature scan).
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __dyn_drop_may_read_view ( nurl_str_slice ty 5 - ( nurl_str_len ty ) 5 ) depth ) } {}
+    ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
+        ^ ( __drop_may_read_view ( __vec_elem_llvm ty ) + depth 1 )
+    } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __drop_may_read_view ( __opt_payload ty ) + depth 1 ) } {}
+    // A library handle's own destructor (a map's, a channel's) reads only
+    // what it owns: what it holds of the program's — its type arguments,
+    // `libhta##` — is asked instead.
+    ? ( __is_libh ty ) {
+        : ~ s rest ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+            : s dy ? != 0 ( nurl_str_starts w `dyn_` ) ( __dyn_unslug w ) ``
+            ? ( __drop_may_read_view ? != 0 ( nurl_str_len dy ) dy ( nurl_str_cat `%` w ) + depth 1 ) { ^ T } {}
+        }
+        ^ F
+    } {}
+    ? & ( __has_user_drop ty ) ( __ty_holds_view ty 0 ) { ^ T } {}
+    ? | == 0 g_root_syms != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i k 0
+            ~ < k pc {
+                ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) + depth 1 ) { ^ T } {}
+                = k + k 1
+            }
+        }
+        ^ F
+    } {}
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
+    : ~ i j 0
+    ~ < j fc {
+        ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) + depth 1 ) { ^ T } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// May dropping a `% Trait` object read a view — does one of the types
+// implementing `tname` (`implsof##` its first method) have a destructor
+// that may (__drop_may_read_view)? With no impl known, any type may be one.
+@ __dyn_drop_may_read_view s tname i depth → b {
+    : s m ( str_first_word ( nurl_sym_get2 g_trait_syms tname `__methods` ) )
+    ? == 0 ( nurl_str_len m ) { ^ T } {}
+    : ~ s lls ( nurl_sym_get g_impl_trait_syms ( nurl_str_cat4 `implsof##` tname `##` m ) )
+    ? == 0 ( nurl_str_len lls ) { ^ T } {}
+    ~ != 0 ( nurl_str_len lls ) {
+        : s ll ( str_first_word lls ) = lls ( str_skip_word lls )
+        ? ( __drop_may_read_view ll + depth 1 ) { ^ T } {}
     }
     ^ F
 }

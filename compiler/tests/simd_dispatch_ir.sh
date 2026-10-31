@@ -216,6 +216,44 @@ else
     bad "a program's nurl_cpu_x86_v3 call is i32" "nurlc failed: $(head -1 "$WORK/ask.err")"
 fi
 
+# ── 8b. A clone answers its body's own CPUID question ───────────────
+# `.x86v3` runs only where the dispatcher's probe said 1 and `.base`
+# only where it said 0, so each folds the body's call to that constant
+# and LLVM drops the path it never takes (the eight-block v256 pass in
+# __chacha20_xor_wide's `.base`). A crypto `.base` also runs on a v3 CPU
+# without the tier, so it keeps the call; the dispatcher always asks.
+cat > "$WORK/fold.nu" <<'NEOF'
+simd @ pick i n → i {
+    ? != 0 # i ( nurl_cpu_x86_v3 ) { ^ + n 1 } {}
+    ^ n
+}
+simd @ pick_aes v128 k v128 x → v128 {
+    ? != 0 # i ( nurl_cpu_x86_v3 ) { ^ ( nurl_v128_aesenc x k ) } {}
+    ^ ( nurl_v128_aesenclast x k )
+}
+@ main → i {
+    ( nurl_println_int ( pick 1 ) )
+    : v128 c ( pick_aes ( nurl_v128_bcast32 1 ) ( nurl_v128_bcast32 2 ) )
+    ^ 0
+}
+NEOF
+if "$NURLC" --cpu-dispatch "$WORK/fold.nu" > "$WORK/fold.ll" 2> "$WORK/fold.err"; then
+    fn_ir() { awk -v f="$1" 'index($0, "define") == 1 && index($0, f) { p = 1 } p { print } p && /^}/ { exit }' "$WORK/fold.ll"; }
+    w=$(fn_ir 'pick.x86v3(' | grep -c 'add i32 0, 1')
+    b=$(fn_ir 'pick.base(' | grep -c 'add i32 0, 0')
+    left=$( { fn_ir 'pick.x86v3('; fn_ir 'pick.base('; } | grep -c '@nurl_cpu_x86_v3()')
+    d=$(fn_ir 'pick(' | grep -c 'call i32 @nurl_cpu_x86_v3()')
+    cw=$(fn_ir 'pick_aes.x86v3(' | grep -c 'call i32 @nurl_cpu_x86_v3()')
+    cb=$(fn_ir 'pick_aes.base(' | grep -c 'call i32 @nurl_cpu_x86_v3()')
+    if [ "$w" -eq 1 ] && [ "$b" -eq 1 ] && [ "$left" -eq 0 ] && [ "$d" -eq 1 ] && [ "$cw" -eq 0 ] && [ "$cb" -eq 1 ]; then
+        ok "each clone answers its own nurl_cpu_x86_v3" "x86v3 1, base 0, crypto base asks"
+    else
+        bad "each clone answers its own nurl_cpu_x86_v3" "x86v3=$w base=$b unfolded=$left dispatcher=$d crypto x86v3 call=$cw crypto base call=$cb"
+    fi
+else
+    bad "each clone answers its own nurl_cpu_x86_v3" "nurlc failed: $(head -1 "$WORK/fold.err")"
+fi
+
 # ── The v256 lowering ChaCha20-Poly1305 depends on ────────────────────
 # Two things LLVM gets wrong from the obvious IR, each worth a tenth or
 # more of the AEAD, invisible to any behavioural test:

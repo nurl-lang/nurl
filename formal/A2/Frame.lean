@@ -157,7 +157,7 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
   unfold killE
   have : hits e hv x E = false := by
     unfold hits
-    simp only [Bool.and_eq_false_iff, bne_eq_false_iff_eq, List.any_eq_false, Bool.and_eq_true,
+    simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true,
       beq_iff_eq, not_and, Bool.not_eq_true]
     refine Or.inr fun dep hd hr => ?_
     by_cases hb : dep.kind.bound = .none

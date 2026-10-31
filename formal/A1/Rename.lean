@@ -84,13 +84,13 @@ variable {S : RSetup} {Γa : Ctx}
 theorem inv_ρ (h : S.OK) (v : Var) : S.inv (S.ρ v) = some v := by
   unfold inv
   have hex : ∃ w, S.ρ w = S.ρ v := ⟨v, rfl⟩
-  rw [dif_pos hex]
+  rw [dite_eq_left hex]
   congr
   exact h.inj _ _ (Classical.choose_spec hex)
 
 theorem inv_none {y : Var} (hy : ∀ v, S.ρ v ≠ y) : S.inv y = none := by
   unfold inv
-  rw [dif_neg]
+  rw [dite_eq_right]
   exact fun ⟨v, hv⟩ => hy v hv
 
 theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) : S.canon Γa (S.ρ v) = (Γa v).map (S.liftE v) := by
@@ -111,7 +111,7 @@ theorem mem_rds {ρ : Var → Var} {ds : List Dep} {d : Dep} : d ∈ rds ρ ds �
   simp [rds, eq_comm]
 
 theorem mem_allKinds {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root ∈ rs := by
-  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.mem_singleton, List.not_mem_nil,
+  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
     or_false] at h
   obtain ⟨r, hr, hd⟩ := h
   rcases hd with rfl | rfl | rfl <;> exact hr
@@ -271,7 +271,7 @@ theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
     obtain ⟨hl0, hp, hh⟩ := hl hl'
     refine ⟨by rw [liftE_live]; exact hl0, fun ho => ?_, ?_⟩
     · rw [liftE_mode v hrb, liftMode_ownSlot] at ho
-      simp only [liftE, hrb, hrb', ↓reduceIte, hm, ho, Bool.false_eq_true]
+      simp only [liftE, hrb, ↓reduceIte, hm, ho, Bool.false_eq_true]
       exact append_sub (rds_subset (hp ho)) (List.Subset.refl _)
     · simp only [liftE, hrb, hrb', ↓reduceIte]
       exact append_sub (rds_subset hh) (List.Subset.refl _)
@@ -287,7 +287,7 @@ theorem liftE_rootb (h : S.OK) {v : Var} {E : Entry} : (S.liftE v E).mode = .roo
   · simp only [liftE, hrb, ↓reduceIte]; rw [h.pe_rb]; simp
   · rw [liftE_mode v hrb, liftMode_rootb]
 
-theorem liftE_ty' (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E) :
+theorem liftE_ty' (_h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E) :
     (S.liftE v E).ty = E.ty := by
   by_cases hrb : E.mode = .rootb
   · simp [liftE, hrb, (hab.1 v E hE hrb).1]
@@ -297,7 +297,7 @@ theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hr
     ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
   ⟨S.liftE r Er, by rw [canon_ρ h, hEr]; rfl, by rw [liftE_root h]; exact hro⟩
 
-theorem canon_frameRoot (h : S.OK) {r : Var} (hr : ∀ v, S.ρ v ≠ r)
+theorem canon_frameRoot (_h : S.OK) {r : Var} (hr : ∀ v, S.ρ v ≠ r)
     (hex : ∃ Er, S.Φ r = some Er ∧ Er.mode.isRoot = true) :
     ∃ E', S.canon Γa r = some E' ∧ E'.mode.isRoot = true := by
   rw [canon_frame _ hr]; exact hex
@@ -418,7 +418,7 @@ theorem allKinds_comp {R : List Var} (k : Kind) :
   intro d hd
   obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp hd
   have hr := mem_allKinds hd0
-  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.mem_singleton, List.not_mem_nil,
+  simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil,
     or_false]
   exact ⟨d0.root, hr, by cases comp d0.kind k <;> simp⟩
 
@@ -447,7 +447,7 @@ theorem derive_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : 
       exact List.mem_append_left _ (mem_rds.mpr ⟨_, List.mem_map_of_mem hd0, rfl⟩)
     · exact List.mem_append_right _ (allKinds_comp k hd)
 
-theorem held_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) :
+theorem held_lift (h : S.OK) (_hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (_hy : Γa y = some Ey) :
     (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ allKinds S.R := by
   by_cases hrb : Ey.mode = .rootb
   · simp only [liftE, hrb, ↓reduceIte]
@@ -635,7 +635,7 @@ theorem mem_allKinds_iff {L : List Var} {d : Dep} : d ∈ allKinds L ↔ d.root 
   constructor
   · exact mem_allKinds
   · intro hd
-    simp only [allKinds, List.mem_flatMap, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false]
+    simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false]
     exact ⟨d.root, hd, by obtain ⟨r, k⟩ := d; cases k <;> simp⟩
 
 /-- Pointwise: each entry of `Γ` is at least as strong as `Γ'`'s. -/
@@ -686,7 +686,7 @@ theorem sub_rds_append {a b : List Dep} {L : List Dep} (ha : a ⊆ rds S.ρ L ++
 
 theorem sub_mono {a L L' : List Dep} (ha : a ⊆ rds S.ρ L ++ allKinds S.R) (hL : L ⊆ L') :
     a ⊆ rds S.ρ L' ++ allKinds S.R :=
-  fun d hd => append_sub (rds_subset hL) (List.Subset.refl _) (ha hd)
+  fun _ hd => append_sub (rds_subset hL) (List.Subset.refl _) (ha hd)
 
 theorem argDeps_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} {j : Nat} (hj : j < args.length)
     {Ea : Entry} (hEa : Γa (args.getD j 0) = some Ea) (k : Kind) :
@@ -719,7 +719,7 @@ theorem heldOfArgs_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
       refine List.mem_append_left _ (mem_rds.mpr ⟨⟨d0.root, d.kind⟩, ?_, ?_⟩)
       · rw [mem_allKinds_iff]
         simp only [List.mem_flatMap]
-        exact ⟨a, ha, by rw [hae, if_neg hn]; exact List.mem_map_of_mem hd0⟩
+        exact ⟨a, ha, by rw [hae, ite_eq_right hn]; exact List.mem_map_of_mem hd0⟩
       · obtain ⟨r, k⟩ := d; simp only [Dep.ren] at hdr ⊢; rw [← hdr]
     · exact List.mem_append_right _ (mem_allKinds_iff.mpr (hdr ▸ mem_allKinds h1))
 
@@ -856,7 +856,7 @@ theorem mem_zip_getD {ps : List (PMode × Ty)} {as : List Var} {pa : (PMode × T
   refine ⟨k, hk1, hk2, ?_⟩
   rw [← he]; simp [List.getD, hk2]
 
-theorem roots_liftE_ρ (h : S.OK) (hab : S.AbsOK Γa) {v a : Var} {E : Entry} (hE : Γa v = some E)
+theorem roots_liftE_ρ (h : S.OK) (_hab : S.AbsOK Γa) {v a : Var} {E : Entry} (_hE : Γa v = some E)
     (hn : a ∉ roots E.vdeps) : S.ρ a ∉ roots (S.liftE v E).vdeps := by
   intro hr
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr

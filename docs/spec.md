@@ -2549,7 +2549,10 @@ construction.
 ### 8.2 Auto-drop
 
 At the end of an owning binding's scope, the compiler emits the
-matching `nurl_free` / typed-`*_free` / `drop__T`. Reassigning an owned
+matching `nurl_free` / typed-`*_free` / `drop__T`. A scope drops its
+values newest first — the reverse of the order they were bound in, as in
+Rust and C++ — so a value made from a view of another, bound after it,
+is dropped before it. Reassigning an owned
 binding (`= x <owned-call>`) frees the previous value first. Branch-
 local allocations (in a `?` / `??` / `~` arm) that the arm does not
 yield are dropped when control flows out of that arm.
@@ -2561,7 +2564,8 @@ convention: whenever an owned binding of type `T` reaches its
 scope-exit point, the compiler inserts a call to `drop__<T-mangle>(self)`
 before freeing any owned fields of `T`. User `drop` methods MUST NOT
 panic and SHOULD NOT free the self pointer themselves — that
-responsibility belongs to the auto-drop machinery.
+responsibility belongs to the auto-drop machinery. Because the method
+runs at the drop, the drop is a use of the views the value holds (§9.14).
 
 ### 8.4 Closure environments
 
@@ -2643,7 +2647,7 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Thirteen rules are enforced. The semantic level is summarised here; for
+Fourteen rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
@@ -2852,7 +2856,18 @@ fiber) may take a second read guard of an `RwLocked` it already reads; one
 that asks for a lock it already holds for writing, or to write one it reads,
 panics instead of waiting for itself.
 
-### 9.14 What is NOT checked
+### 9.14 Drop check
+
+A value whose type runs a destructor of the program's own that may read
+a view it holds (directly, in a field or element, or in a trait object's
+boxed value) uses that view when it is dropped. A source of its views that
+ends before that drop is rejected where it ends: reallocated or moved
+while the holder lives, ended with a block the holder outlives, or dropped
+first because it was bound after the holder (§8.2). A value lent by a call
+is dropped by its owner and is not checked here
+([`docs/MEMORY.md` §2.14](MEMORY.md)).
+
+### 9.15 What is NOT checked
 
 The body of an `unsafe` (§3.3d) or `raw` (§3.3e) function: raw pointers,
 pointer casts, the raw-memory primitives and foreign calls are its author's
