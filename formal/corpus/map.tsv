@@ -177,6 +177,8 @@ drop_field_getter_fall_off	§7.6	A2	agora #187: the same call as the function's 
 drop_field_getter_local	§7.6	A2	agora #187: `^ ( getd w )`, a getter lending a `% Drop` field of the local `w`	rejected	h818
 drop_field_getter_param	§7.6	A2	agora #187: the same over a borrowed parameter: a lend of the caller's own, still answered as a lend	runs-clean	h821
 drop_field_getter_sink	§7.6	A2	agora #187: the same over a `sink` parameter, which the function drops too	rejected	h820
+drop_holder_pushed_younger_view_then_panics	§7.6	A2	agora #254: a W with a view of a younger String pushed into a Vec of W, then a panic	rejected	-
+drop_holder_views_inner_then_panics	§7.6	A2	agora #254: a W re-pointed to a view of a younger String, then a panic before it is pointed back: the unwind frees the String first	rejected	-
 drop_inout_assign_call_lend	§7.6	A2	agora #196: the same with a `% Drop` value: it cannot be copied	rejected	h868
 drop_inout_assign_local_field	§7.6	A2	agora #196: the same with a `% Drop` field: it cannot be copied	rejected	h871
 drop_join_arm_result_returned	§7.6	A2	agora #198: `^ ? c ( getr h ) ( okd )` with a `% Drop` payload lent out of the local `h`: it cannot be copied	rejected	h893

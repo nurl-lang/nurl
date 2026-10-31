@@ -798,7 +798,11 @@ $ `stdlib/core/string.nu`
 A holder moved on some paths only — handed to a `sink` in one branch of a
 `?` or one arm of a `??` — is still dropped on the others, so it counts as
 one that lives: only a holder moved on every path is gone before its
-source ends.
+source ends. And such a holder gains views only of bindings declared
+before it: given a view of a younger one — by an assignment, or pushed
+into a container of them — it is refused where it gains the view, even
+if it is pointed back before the younger one ends, because a panic in
+between unwinds them newest first too.
 
 Bind the holder after its source in the same scope, end it first in a
 block of its own, or have it hold a copy that owns its data. A value with

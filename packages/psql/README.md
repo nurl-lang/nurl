@@ -50,12 +50,14 @@ needs nothing from the host either.
 * **Implicit pipelining** — the copies of one `PgConn` on any number of
   fibers or threads use it at the same time: every request is queued with
   its own Sync and each answer comes back to the request that asked, so N
-  callers keep up to N queries in flight on one socket (one connection,
-  loopback, one runtime worker: 33.7k queries/s for one fiber, 150k for
-  128). An error ends only its own request; a lost stream fails every
-  request on its way. The transaction status is the session's: BEGIN …
-  COMMIT through copies used at the same time interleaves with their other
-  requests — take a pooled connection (below) for a transaction.
+  callers keep up to N queries in flight on one socket. Whoever drives the
+  socket writes everything queued in one write and hands over every
+  answer a read brought before it lets go (one connection, loopback, two
+  runtime workers: 69k queries/s for 8 fibers, 118k for 128). An error
+  ends only its own request; a lost stream fails every request on its
+  way. The transaction status is the session's: BEGIN … COMMIT through
+  copies used at the same time interleaves with their other requests —
+  take a pooled connection (below) for a transaction.
 * **A connection pool** — `pg_pool_new` over the standard library's
   `Pool` (`stdlib/std/pool.nu`): connections made on demand up to a
   bound, a checkout that waits (bounded) when all are lent — parking the
@@ -170,12 +172,16 @@ API:
 
 ```
 ( pg_connect host port user password database sslmode ) → !PgConn PgErr
+( pg_connect_url url )                    → !PgConn PgErr     postgres://user:pw@host:port/db?sslmode=…
 ( pg_query conn sql )                     → !PgResult PgErr   simple protocol, scripts
 ( pg_query_params conn sql params )       → !PgResult PgErr   ( Vec PgVal ) params
+( pg_query_many conn sql sets )           → !( Vec PgResult ) PgErr   ( Vec ( Vec PgVal ) ) sets:
+                                            one run per set, all pipelined — one round trip
     PgVal: PgNull | PgInt i | PgFloat f | PgBool b | PgText String
          | PgBytes ( Vec u ) | PgTimestamp i (µs since 1970 UTC) | PgDate i (days since 1970)
 ( pg_result_nrows r ) ( pg_result_ncols r ) → i        (also the fields . r nrows / . r ncols)
 ( pg_result_col r col ) → String   ( pg_result_col_type r col ) → i (OID: PG_INT4, PG_TEXT, …)
+( pg_result_col_fmt r col ) → i (0 text, 1 binary)
 ( pg_result_col_index r name ) → ?i   ( pg_result_tag r ) → String   ( pg_result_affected r ) → i
 ( pg_row_i r row col )     → ?i        int2/4/8, oid (bool as 0/1), or a text cell holding one
 ( pg_row_f r row col )     → ?f        float4/8, integers, a numeric's text
@@ -200,9 +206,10 @@ A typed accessor answers `F` for NULL and for a value its type does not
 hold (`pg_row_i` of a text that is no integer); `pg_row_is_null` tells the
 two apart. Nothing is released by hand: a `PgConn` is a handle whose last
 owner sends Terminate and closes the TLS session or socket, a `PgResult`
-is a plain value, a pool checkout a guard. A `PgConn` may be shared by
-threads and fibers (requests take turns on it); a pool is the way to run
-them concurrently.
+is a plain value (its columns shared with the statement that made it),
+a pool checkout a guard. A `PgConn` may be shared by threads and fibers:
+their requests are pipelined on it. A pool is the way to give each its own
+session (a transaction).
 
 The protocol codec (`src/pgwire.nu`) holds no socket and no lock:
 frontend messages are appended to a buffer, backend messages framed out of

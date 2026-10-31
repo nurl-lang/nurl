@@ -3861,6 +3861,8 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s owner ( nurl_cg_reg cg )
     ( nurl_sym_def syms `__ret_owner_slot__` owner )
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = alloca i8*\n` )
+    // (No return has handed back an owned string yet: mem_save_return_proof.)
+    ( nurl_sym_def syms `__ret_owner_any__` `` )
 }
 
 // A dynamic owner slot can hold null; escaping that slot does not prove
@@ -3879,6 +3881,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     } {}
     ( nurl_print `  store i8* ` ) ( nurl_print returned_owner )
     ( nurl_print `, i8** ` ) ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+    ? ! ( seq returned_owner `null` ) { ( nurl_sym_set_deep syms `__ret_owner_any__` `1` ) } {}
     : s proof ? | ( mem_static_return_slot syms skip )
     & direct ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) `1` `0`
     : s guard ? direct ( nurl_sym_get syms `__last_call_guard__` )
@@ -4236,10 +4239,17 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 @ mem_publish_return_proof i syms i cg s ty → v {
     ( mem_publish_hown syms )
     ? | == 0 g_auto_drop_strings ! ( seq ( nurl_llty ty ) `i8*` ) { ^ } {}
-    : s owner ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
-    ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
-    ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    // The returned string leaves the panic journal: the caller owns it now.
+    // (Not when no return so far handed back an owned one — the slot then
+    // holds null on every path that reaches here, and the call, external
+    // and never elided, was paid by every `→ s` and `→ *T` function:
+    // vec_data in every encoder; agora #282.)
+    ? != 0 ( nurl_sym_len syms `__ret_owner_any__` ) {
+        : s owner ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print ( nurl_sym_get syms `__ret_owner_slot__` ) ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print owner ) ( nurl_print `)\n` )
+    } {}
     // A named function returning a raw pointer (`→ *T`) has no reader: its
     // direct callers take the result as never owned (__ret_never_owned, the
     // same __fn_raw_ret answer), a `dyn` thunk answers for its impl
@@ -9337,6 +9347,11 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     // unreleased — h203.)
     ? | ! | | | | | ( is_ident_tok rhs_tt ) == rhs_tt TT_LPAREN == rhs_tt TT_DOT == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST == rhs_tt TT_LBRACE ! ( seq ( nurl_llty vt ) `i8*` ) { ^ v } {}
     ? | != 0 ( nurl_sym_len syms `__last_call_guard__` ) != 0 ( nurl_sym_len syms `__last_call_ret_owned__` ) { ^ v } {}
+    // (A raw pointer a call hands back — `: ~ *u dst ( vec_data [u] v )` —
+    // is no string: what is assigned to it later is raw memory unsafe code
+    // manages by hand. With a slot it freed and journaled null at every
+    // such binding; agora #282.)
+    ? & == rhs_tt TT_LPAREN ( __fn_raw_ret syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ v } {}
     : s slot ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
     ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
@@ -9541,7 +9556,11 @@ unsafe @ origin_guard_retained i root → b {
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms cn `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms cn `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms cn `__opt_nurl_t` ) )
-    ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms cn ) )
+    // (A raw pointer, `vec_data [u]`'s, is no string a binding owns:
+    // registered as one, every `: *u dst ( vec_data … )` freed and
+    // journaled a slot that held null; agora #282.)
+    : s __ro ( __ret_owned_of syms cn )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ? & != 0 ( nurl_str_len __ro ) ( __fn_raw_ret syms cn ) ( nurl_str_cat `` `` ) __ro )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get2 syms cn `__ret_owned_fields` ) )
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
@@ -30490,6 +30509,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ? & == amk0 110 == 0 ( nurl_str_len ( bck_field rec 6 ) ) { ( bck_put `plend` `` ) } {}
                 = st ( bck_bind_row st asid rec asrcs amk )
                 ? == amk0 110 { = st ( bck_nest_borrow st asid anest ) } {}
+                // A holder whose drop reads views given a view of a younger
+                // binding: dropped after it, newest first (agora #254).
+                ? & != 0 g_bck_udrop_any ! ( seq asrcs `*` ) { ( bck_younger_view_check asid asrcs p ( bck_field_int rec 3 ) ) } {}
                 // A global outlives every binding of this function.
                 ? & != 0 amk ( bck_id_is_global asid ) { ( bck_global_view_check st asid ( bck_field_int rec 3 ) ) } {}
                 = p + p 1
@@ -30840,6 +30862,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         ? ! ( seq vs `*` ) {
                             : i vroot ( bck_path_root ( nurl_str_to_int vc ) )
                             ( bck_dep_add vroot vs )
+                            ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
                             // (Where it was stored: what a diagnostic about
                             // the dependency points at, bck_caller_view_diag.)
                             : ~ s vrest ( __src_plain vs )
@@ -31144,6 +31167,60 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // mem_own_add_user_drop). An owner whose drop may read views (`vdu_`)
 // dropped after a binding it holds a view of would read freed memory:
 // asked here without changing `st` — the path ends at the return.
+// Was walk id `src` declared after `holder`, as seen from row `p`? A
+// frame opened inside the holder's (bck_id_dser) is younger; in the same
+// frame, the later of their `let`s (a parameter's or a global's is none:
+// older than any local). Values are dropped newest first, at a scope's end
+// and by a panic's unwind alike, so a younger one goes first.
+unsafe @ __bck_younger i src i holder i p → b {
+    : i ds ( bck_id_dser src )
+    : i dh ( bck_id_dser holder )
+    ? != ds dh { ^ > ds dh } {}
+    ^ > ( __bck_decl_row src p ) ( __bck_decl_row holder p )
+}
+
+// The row of the `let` that last declared walk id `id` before row `p`, or
+// -1 (a parameter, a global, a match arm's payload).
+unsafe @ __bck_decl_row i id i p → i {
+    : ~ i j - p 1
+    ~ >= j 0 {
+        : s r ( bck_rec j )
+        ? & != 0 ( nurl_str_starts r `let\t` ) == ( bck_field_int r 1 ) id { ^ j } {}
+        = j - j 1
+    }
+    ^ -1
+}
+
+// A holder whose drop may read the views it holds (`vdu_`) gains views
+// of `srcs` at row `p`: one of a binding declared after it is refused here.
+// Whatever ends the two — the end of their scopes, newest first, or a
+// panic's unwind, which drains them in the same order — frees that binding
+// first, and the destructor then reads it. Checked where the view is
+// gained, not where the source ends: a re-pointing in between (back to an
+// older value) hid it from that check, and a panic before it did not
+// (agora #254, formal's DtorSafe).
+unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
+    : s hs ( nurl_str_int holder )
+    ? ! ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` hs ) ) `1` ) { ^ v } {}
+    : ~ s rest ( __src_plain srcs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i x ( bck_path_root ( nurl_str_to_int xs ) )
+        ? & != x holder ( __bck_younger x holder p ) {
+            : s tag ( nurl_str_cat4 `dy:` hs `:` ( nurl_str_cat3 ( nurl_str_int x ) `:` ( nurl_str_int line ) ) )
+            : s ws ( nurl_sym_get g_bck `warnset` )
+            ? ! ( str_contains_word ws tag ) {
+                ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                : s hn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` hs ) )
+                : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int x ) ) )
+                : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` hn `' is given a view of '` ) sn ( nurl_str_cat3 `', which was declared after it, and '` hn `''s type has a destructor (% Drop) that may read the view. ` ) `` )
+                : s m2 ( nurl_str_cat4 `Values are dropped newest first — where their scopes end, and by a panic's unwind — so '` sn ( nurl_str_cat3 `' would be freed before '` hn `''s destructor reads it. Give '` ) hn )
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 `' views only of bindings declared before it, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
+            } {}
+        } {}
+    }
+}
+
 unsafe @ bck_ret_drop_check s st i line → v {
     ? | == 0 g_bck_udrop_any ( seq st `!` ) { ^ v } {}
     // (Not the owner handed back by name, gen_ret: the caller drops it.)
