@@ -584,7 +584,10 @@ the gates, about 35 job-minutes. The platform and sanitizer jobs are
 FreeBSD, ASan/UBSan, the sanitizer corpus and the three unikernel jobs.
 They are 88 of the 123 job-minutes a full run takes, and they run in the
 merge queue on the commit that lands. They also run on a PR labelled
-`ci:full`: add the label, then push. A PR that changes the compiler or
+`ci:full`. Adding the label starts that run at once, with no push, and
+replaces a run in progress: ci-full-label.yml dispatches ci.yml as the
+PR's run. Any other label starts and cancels nothing.
+A PR that changes the compiler or
 the runtime also runs the ASan/UBSan job on its own, since that job holds
 nurlc's leak gate. Before queueing an ownership change,
 run the sanitizer gates locally (`./build.sh` then

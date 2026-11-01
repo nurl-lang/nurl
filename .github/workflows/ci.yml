@@ -8,6 +8,12 @@ name: ci
 on:
   push:
     branches: [main, Improvements]
+  # Not `labeled`, deliberately (Agora #324). A run for a label would list
+  # every job here as a check run, skipped where it does not apply, and
+  # GitHub counts a skipped check as passed. On github#1478 one such run
+  # took the PR from `blocked` to `unstable` while its build was still
+  # running. Adding `ci:full` starts the full run through
+  # ci-full-label.yml instead, which dispatches this workflow with `pr`.
   pull_request:
     branches: [main]
   # The merge queue (Agora #136): main's ruleset can require the queue,
@@ -19,15 +25,25 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      pr:
+        description: >-
+          A PR number: run as that PR's full run, in its concurrency group
+          (ci-full-label.yml sets it when the PR is labelled ci:full).
+        required: false
+        default: ''
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
 # On main a run is never cancelled part-way (Agora #251): 20 of 35 main
 # runs used to be cancelled by the next merge, a quarter of all ci.yml
 # job-minutes thrown away, and the commit left untested. A main run that
 # is in progress finishes; GitHub keeps only the newest pending one behind
-# it. A PR's older run is still cancelled by its next push.
+# it. A PR's older run is still cancelled by its next push. A run
+# dispatched with `pr` joins that PR's group (refs/pull/N/merge, the ref
+# its pull_request runs have): the full run replaces the fast one, and
+# the PR's next push replaces the full run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -66,7 +82,7 @@ jobs:
       # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
       # 123 job-minutes. The merge queue runs them anyway, on the combined
       # commit that lands, so a PR runs them only when labelled `ci:full`
-      # (add the label, then push). A PR's own run keeps the build, the
+      # (adding the label starts that run). A PR's own run keeps the build, the
       # corpus and the gates: the fast signal, about 35 job-minutes. A
       # skipped required check counts as passed, so the PR can still join
       # the queue. Pushes and the queue always run everything.
