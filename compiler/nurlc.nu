@@ -17518,9 +17518,6 @@ unsafe @ gen_call i lex i syms i cg → s {
     ? & != 0 ( nurl_str_len __sx_iown ) != 0 g_borrowck { ? > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( bck_vpass_own __sx_vp0 call_name __sx_iown ) } {} } {}
     // (Before the rows reach the list: `-b` names no binding.)
     ? & & != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 >= ( nurl_str_find ( nurl_sym_get g_bck `pvpass` ) `-b ` ) 0 { ( __vbuf_own __sx_vp0 call_name ? & != 0 ( nurl_str_len __sx_iown ) >= __sx_iown_c 2 __sx_iown `-` ) } {}
-    // (Inside a closure body: a capture this call may leave viewing
-    // another capture's storage does so where the closure runs.)
-    ? & & != 0 g_bck_closure_depth != 0 g_borrowck > ( nurl_sym_len g_bck `pvpass` ) __sx_vp0 { ( __clo_vbuf_effects syms __sx_vp0 ) } {}
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
         ( __sx_publish __sx_me ? __callee_shadowed ( __clo_call_sx syms fname call_sx ) ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
@@ -26886,12 +26883,6 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // Inside a closure body: `name` (a binding or a field path) goes to
 // `callee` as argument `aix` — an effect of running the closure when it is
 // one of its captures.
-// Can source expression `sx` ride in a closure effect word (`name:callee:aix`,
-// space-separated)? Neither a space nor a `:` in it.
-@ __clo_sx_word s sx → b {
-    ^ & & != 0 ( nurl_str_len sx ) < ( nurl_str_find sx ` ` ) 0 < ( nurl_str_find sx `:` ) 0
-}
-
 unsafe @ __clo_effect_note s name s callee i aix → v {
     ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
@@ -26926,22 +26917,28 @@ unsafe @ __clo_assign_note i syms s path s ty → v {
     ? | ( __type_needs_drop ty syms ) ( __is_closure_ty ty ) { ( __clo_effect_note path `@assign` 0 ) } {}
 }
 
-// Inside a closure body: the `bK` rows a call stashed from byte `from` of
-// the `vpass` list whose container and owner are both captures — running
-// the closure leaves that capture viewing the other's storage when the
-// callee does (`@vb=CALLEE#K#SX`, bck_closure_effects_run; agora #301).
-unsafe @ __clo_vbuf_effects i syms i from → v {
-    : s all ( nurl_sym_get g_bck `pvpass` )
-    : ~ s rest ( nurl_str_slice all from - ( nurl_str_len all ) from )
+// A closure body's captures, and its own `inout` parameters, whose type
+// can hold a view: a `vpass` row each, callee `@cap` (`@cip` a parameter),
+// before the body's first. The walk refuses giving one of them a view
+// (bck_clo_cap_view_diag, agora #312): nothing where the closure runs sees
+// the view arrive, as A2 has it (CapsOK: a capture a closure changes holds
+// no views; Implements: no interface names what its code stores). Field 6
+// is the class: a capture or a parameter that is a view itself (2; `@cpv`
+// any other parameter) is one to the walk too, though it cannot see what
+// it points into (g_bck_cv_leaf).
+unsafe @ __clo_cap_marks i syms s caps i line → v {
+    : ~ s rest ( nurl_str_cat caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s cal ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s ix ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s sx ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? & & & == 98 ( nurl_str_get ix 0 ) ! ( seq c `-` ) ( __clo_sx_word sx ) ( __sx_names_capture syms sx ) {
-            ( __clo_effect_note c ( nurl_str_cat4 `@vb=` cal ( nurl_str_cat3 `#` ( nurl_str_slice ix 1 - ( nurl_str_len ix ) 1 ) `#` ) sx ) 0 )
-        } {}
+        : i k ( bck_walk_class ( nurl_llty ( nurl_sym_get syms c ) ) )
+        ? >= k 2 { ( bck_record2 `vpass` c line `@cap` ( nurl_str_cat ( nurl_str_int k ) `\t\t-` ) ) } {}
+    }
+    = rest ( nurl_str_cat ( nurl_sym_get syms `__fn_param_names__` ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i k ( bck_walk_class ( nurl_llty ( nurl_sym_get syms c ) ) )
+        : b io ( seq ( nurl_sym_get2 syms c `__inout` ) `1` )
+        ? | & io >= k 2 == k 2 { ( bck_record2 `vpass` c line ? io `@cip` `@cpv` ( nurl_str_cat ( nurl_str_int k ) `\t\t-` ) ) } {}
     }
 }
 
@@ -26959,19 +26956,7 @@ unsafe @ __clo_vbuf_effects i syms i from → v {
         : i c2 ( nurl_str_find tail `:` )
         : s cal ( nurl_str_slice tail 0 c2 )
         : i aix ( nurl_str_to_int ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 ) )
-        // (`@vp=SX`: the capture is given a value viewing what SX reads —
-        // kept in it, as `=.` keeps a field's value: a `vpass` row.)
-        ? != 0 ( nurl_str_starts cal `@vp=` ) { ( bck_stash_vpass nm line `=.` 1 ( nurl_str_slice cal 4 - ( nurl_str_len cal ) 4 ) ) } {
-            // (`@vb=CALLEE#K#SX`: the capture handed to CALLEE beside an
-            // owner SX it may leave the capture viewing — a `bK` row.)
-            ? != 0 ( nurl_str_starts cal `@vb=` ) {
-                : s vb ( nurl_str_slice cal 4 - ( nurl_str_len cal ) 4 )
-                : i h1 ( nurl_str_find vb `#` )
-                : s vbt ( nurl_str_slice vb + h1 1 - - ( nurl_str_len vb ) h1 1 )
-                : i h2 ( nurl_str_find vbt `#` )
-                ( bck_stash_vbuf nm line ( nurl_str_slice vb 0 h1 ) ( nurl_str_to_int ( nurl_str_slice vbt 0 h2 ) ) ( nurl_str_slice vbt + h2 1 - - ( nurl_str_len vbt ) h2 1 ) )
-            } { ( bck_stash_pending_kind nm line cal aix `` `pendeff` ) }
-        }
+        ( bck_stash_pending_kind nm line cal aix `` `pendeff` )
         // (Run inside another closure's body: its effect too.)
         ( __clo_effect_note nm cal aix )
     }
@@ -27118,6 +27103,9 @@ unsafe @ bck_add_cap_name s name → v {
 // The source expression of a `let` / `assign`'s right-hand side (field 8
 // of a view's row, g_srcx_on): its sources, exactly (bck_sx_sources).
 : ~ s g_bck_rhs_sx ``
+// Set while the walk asks what a value stored into a closure's capture
+// views (bck_sx_name's `cv_` leaves; agora #312).
+: ~ i g_bck_cv_leaf 0
 
 // A source expression of a block, `?` or `??` value with a call or a join
 // in it (h216): a bare name is the alias rows' to follow.
@@ -30798,6 +30786,10 @@ unsafe @ bck_sx_skip s e → v {
     : s ids ( nurl_str_int id )
     : i r ( bck_path_root id )
     : s rs ( nurl_str_int r )
+    // (Stored whole into a closure's capture: a capture or a parameter of
+    // the closure that is a view stands for what it points into, which the
+    // closure cannot see — `cv_`, __clo_cap_marks.)
+    ? & & != 0 g_bck_cv_leaf ! arg != 0 ( nurl_sym_len g_bck ( bck_bkey `cv_` rs ) ) { ^ ( nurl_str_cat ids `` ) } {}
     // (A view of an Arc's payload — a borrow of one, or a name it was
     // handed to — is one, §6.5.)
     ? & != 0 g_bck_ab_any == g_sxe_arc -1 {
@@ -31574,6 +31566,17 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 = p + p 1
                 = done T
             } {}
+            ? & & ! done == kc 19 == 64 ( nurl_str_get ( bck_field rec 5 ) 0 ) {
+                // (A closure body's capture, or its `inout` parameter, that
+                // can hold a view: __clo_cap_marks.)
+                : s mk ( bck_field rec 5 )
+                ? | | ( seq mk `@cap` ) ( seq mk `@cip` ) ( seq mk `@cpv` ) {
+                    ? ! ( seq mk `@cpv` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) ? ( seq mk `@cip` ) `p` `c` ) } {}
+                    ? ( seq ( bck_field rec 6 ) `2` ) { ( bck_put ( bck_bkey `cv_` ( bck_field rec 1 ) ) `1` ) } {}
+                    = p + p 1
+                    = done T
+                } {}
+            } {}
             ? & ! done == kc 19 {
                 // A value that may hold views handed to a call (field 8 its
                 // source expression). Run on another thread or fiber, it may
@@ -31617,8 +31620,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // (A closure kept in a container is adopted: what it
                         // held a copy of a handle of, it copies in — `~id`.)
                         // (An owner viewed is its own storage.)
+                        // (Into a closure's capture or `inout` parameter: refused.)
+                        : s vcc ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ) )
+                        = g_bck_cv_leaf ? == 0 ( nurl_str_len vcc ) 0 1
                         : s vs ? vbuf ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ( __src_drop_handles ( bck_sx_sources st ( bck_field rec 8 ) -1 ) )
-                        ? ! ( seq vs `*` ) {
+                        = g_bck_cv_leaf 0
+                        ? & != 0 ( nurl_str_len vcc ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) {
+                            ( bck_clo_cap_view_diag ( bck_path_root ( nurl_str_to_int vc ) ) vs ( bck_field_int rec 3 ) )
+                        } {}
+                        ? & == 0 ( nurl_str_len vcc ) ! ( seq vs `*` ) {
                             : i vroot ( bck_path_root ( nurl_str_to_int vc ) )
                             ( bck_dep_add vroot vs )
                             ? != 0 g_bck_udrop_any { ( bck_younger_view_check vroot vs p ( bck_field_int rec 3 ) ) } {}
@@ -31866,6 +31876,29 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         ? != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int b ) ) ) ) ) { ^ T } {}
     }
     ^ F
+}
+
+// Inside a closure body: `d`, one of its captures or its own `inout`
+// parameter (`cc_`, __clo_cap_marks), is given a value viewing `srcs` (`*`:
+// not known). Where the closure runs, nothing sees the view arrive — a
+// closure's type does not say what running it stores — so what it points
+// into can be released while `d` still points into it. A2 refuses it the
+// same way (CapsOK, Implements); a function's `inout` parameter is followed
+// at every call (agora #312).
+@ bck_clo_cap_view_diag i d s srcs i line → v {
+    : s ds ( nurl_str_int d )
+    : s tag ( nurl_str_cat4 `cc:` ds `:` ( nurl_str_int line ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ds ) )
+    : s s0 ( str_first_word ( __src_plain srcs ) )
+    : b named & ! ( seq srcs `*` ) != 0 ( nurl_str_len s0 )
+    : s sn ? named ( nurl_str_cat3 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` s0 ) ) `'` ) `what it points into`
+    : b prm ( seq ( nurl_sym_get g_bck ( bck_bkey `cc_` ds ) ) `p` )
+    : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `a closure cannot give '` dn `' ` ) ? named ( nurl_str_cat `a view of ` sn ) `a value that may hold a view` ( nurl_str_cat3 `: '` dn ? prm `' is the closure's own inout parameter` `' is captured by the closure` ) `, and a closure's type does not say what running it stores, so nothing where it runs follows the view: ` )
+    : s m2 ( nurl_str_cat4 sn ( nurl_str_cat3 ` can be released while '` dn `' still points into it. Give the view through a function's inout parameter instead, which every call follows (` ) ? prm `make the closure a function with that parameter` ( nurl_str_cat3 `@ keep inout T ` dn ` … → v { … }` ) `), or store a value that owns its data (string_from, slice_to_vec).` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat m1 m2 ) )
 }
 
 // …so a view stored into it of a binding this function releases — on the
@@ -36697,11 +36730,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         = g_bck_rhs_sx ? __asn_fresh ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx F ) } {}
-        // Inside a closure body: a capture given a value that views another
-        // capture (`= w @ V { ( string_data b ) }`) holds that view where the
-        // closure runs — an effect of running it, as a callee storing into
-        // an `inout` argument would be (bck_closure_effects_run, agora #259).
-        ? & & & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 ( __clo_sx_word g_bck_rhs_sx ) ( __sx_names_capture syms g_bck_rhs_sx ) { ( __clo_effect_note name ( nurl_str_cat `@vp=` g_bck_rhs_sx ) 0 ) } {}
+        // Inside a closure body: a capture, or the closure's own `inout`
+        // parameter, given a value that may view something (`= w @ V { (
+        // string_data b ) }`) — refused at the walk, as a field store into
+        // one is (__clo_cap_marks, agora #312).
+        ? & & & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 ! ( seq g_bck_rhs_sx `-` ) | ( __is_clo_capture syms name ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ( bck_stash_vpass name bck_line `=.` 1 g_bck_rhs_sx ) } {}
         // (A closure that does not own its env — `= g . s f` — borrows from
         // what it read, as the `:` spelling does, h283.)
         : i __acbc0 ( bck_walk_class vt )
@@ -45137,7 +45170,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     } {}
     : i __cl_bck_depth g_bck_depth
     ( bck_fn_begin )
-    ? != g_borrowck 0 { ( bck_put `deferred` `` ) } {}
+    ? != g_borrowck 0 { ( bck_put `deferred` `` ) ( __clo_cap_marks body_syms captured_vars ( nurl_lex_line lex ) ) } {}
     // The closure body is not an arm, whatever it sits inside.
     ( nurl_sym_set g_fn_escapes `__arm_body__` `` )
     // (Its final value returns as `^` returns it: gen_block_expr.)

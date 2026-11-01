@@ -653,12 +653,13 @@ never borrows what it is given.
 ### 2.11 Closures hold their captures
 
 A closure holds every value it captured for as long as it can run. A
-closure that gives one capture a view of another (`= w @ V { (
-string_data b ) }` in its body) makes that capture hold the view where
-the closure runs, as a callee storing into an `inout` argument does
-(§2.10). Invoking a closure reads all of its captures, so releasing a capture
-through its original name and then invoking the closure is a use after
-move:
+closure cannot give a capture, or its own `inout` parameter, a value that
+may hold a view (`= w @ V { ( string_data b ) }`, a field store, a push
+that keeps it): a closure's type does not say what running it stores, so
+nothing where it runs would follow the view. A function's `inout`
+parameter does that, and every call follows it (§2.10). Invoking a closure
+reads all of its captures, so releasing a capture through its original
+name and then invoking the closure is a use after move:
 
 ```nurl expect-error="use of moved value 'v'" expect-error="closure 'f' still holds 'v'"
 $ `stdlib/core/vec.nu`
@@ -922,6 +923,7 @@ A panic is not outside the model: what a panic abandons is reclaimed
 | A container changed by a call while a view of it is another argument | §2.4 |
 | A closure run that changes a capture with live views | §2.11 |
 | A closure that changes a capture, beside another route to it in one call | §2.11 |
+| A closure that gives a capture, or its own `inout` parameter, a view | §2.11 |
 | A closure read out of an owner, called after the owner changed | §7.5 |
 | A borrowed part of a temporary that cannot be copied | §6.2 |
 | A view of a temporary kept past the call that uses it | §1 |

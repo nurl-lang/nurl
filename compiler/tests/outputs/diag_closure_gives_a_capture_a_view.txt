@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_gives_a_capture_a_view.nu:14:5: error: a closure cannot give 'w' a view of 'a': 'w' is captured by the closure, and a closure's type does not say what running it stores, so nothing where it runs follows the view: 'a' can be released while 'w' still points into it. Give the view through a function's inout parameter instead, which every call follows (@ keep inout T w … → v { … }), or store a value that owns its data (string_from, slice_to_vec).
+    : ( @ v ) repoint \ → v { = . w v ( string_data a ) }
+    ^
+compiler/tests/diag_closure_gives_a_capture_a_view.nu:16:5: error: a closure cannot give 'x' a view of 'a': 'x' is the closure's own inout parameter, and a closure's type does not say what running it stores, so nothing where it runs follows the view: 'a' can be released while 'x' still points into it. Give the view through a function's inout parameter instead, which every call follows (make the closure a function with that parameter), or store a value that owns its data (string_from, slice_to_vec).
+    : ( @ v inout W ) setw \ inout W x → v { = x @ W { ( string_data a ) } }
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
