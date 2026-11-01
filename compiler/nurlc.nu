@@ -3041,10 +3041,22 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_drop_base 0
 : ~ i g_lib_kind_memo 0
 : ~ i g_drop_edges 0
+// g_fn_ireallocs and its call edges (resolve_irealloc_summaries).
+: ~ i g_irealloc_edges 0
+: ~ i g_fn_ireallocs 0
+// …and the functions that have such an edge, and whether any function has
+// such a summary (the walks ask g_fn_ireallocs only then).
+: ~ s g_irealloc_fns ``
+: ~ i g_irealloc_any 0
 : ~ i g_fn_drops 0
 : ~ i g_fn_safe 0
 : ~ s g_fn_safe_list ``
 : ~ s g_cur_params ``
+// The handle bindings of the safe function compiling now that were read
+// out of a parameter — an element (`( vec_at p 0 )`), a field, a copy of
+// one — with the parameters they were read out of: `ptr=p,q` words, by the
+// binding's slot (__pderiv_note; agora #315).
+: ~ s g_pderiv ``
 // 1 while the call argument being compiled is an aggregate literal its
 // callee may hand back whole (gen_call); gen_agg_lit then asks for its
 // `one` constant (agora #172). A global, not a symbol-table entry: it is
@@ -15510,6 +15522,8 @@ unsafe @ gen_call i lex i syms i cg → s {
         : ~ s arg_join_own ``
         // (What a call made as this argument lends from: bck_call_lend_srcs.)
         : ~ s arg_lend_srcs ``
+        // (…and whether that call reaches into a shared cell: __shared_cell_get.)
+        : ~ b __arg_shared F
         : ~ s arg_fread ``
         // (A field of a call's result: `1` when the object was a call, and
         // the flag that says the field left with the read, if it did.)
@@ -15665,6 +15679,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // compiled yet: asked before the sources are, agora #169.)
             // (A handle the call hands back: only it can be changed in place.)
             = arg_lend_srcs ? & & != 0 g_borrowck == bck_arg_tt TT_LPAREN ( __is_handle_ty ( nurl_get_last_type ) ) ( bck_call_lend_srcs syms ) ``
+            = __arg_shared ? == 0 ( nurl_str_len arg_lend_srcs ) F ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) )
             ? != 0 ( nurl_str_len arg_lend_srcs ) {
                 : s __lix ( nurl_str_int arg_idx )
                 : b __lmut | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) & == 0 ( nurl_sym_len g_fn_compiled call_name ) ( __user_callee syms call_name fname )
@@ -15931,6 +15946,32 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? >= __me_k 0 { ( __mut_edge_note __me_k call_name arg_idx ) } {}
             } {}
         }
+        // Whether this call may move the buffer of an element of a parameter
+        // (g_fn_ireallocs): a handle read out of one — `e` bound to `( vec_at
+        // p 0 )`, a field of it, a call that lends one (agora #315).
+        // (Asked only where a handle was read out of a parameter, or the
+        // argument lends one: most arguments ask two empty strings.)
+        ? | != 0 ( nurl_str_len g_pderiv ) != 0 ( nurl_str_len arg_lend_srcs ) {
+            ? & != 0 ( nurl_str_len g_cur_params ) == 0 g_bck_closure_depth {
+                : ~ s __pr ``
+                ? ( is_ident_tok bck_arg_tt ) { = __pr ( nurl_str_cat bck_arg_val `` ) } {}
+                ? == bck_arg_tt TT_DOT { = __pr ( nurl_sym_get syms `__last_member_root__` ) } {}
+                // (The parameter itself handed on is a mutation edge already:
+                // __mut_edge_note.)
+                ? & != 0 ( nurl_str_len __pr ) ( __rprov_param syms __pr ) {} {
+                    : ~ s __pd ? | == 0 ( nurl_str_len __pr ) == 0 ( nurl_str_len g_pderiv ) `` ( __pderiv_params syms __pr )
+                    : ~ s __pl ? __arg_shared `` ( nurl_str_cat arg_lend_srcs `` )
+                    ~ != 0 ( nurl_str_len __pl ) {
+                        : s __pw ( str_first_word __pl ) = __pl ( str_skip_word __pl )
+                        = __pd ( __word_union __pd ( __pderiv_params syms ( __path_root_name __pw ) ) )
+                    }
+                    ~ != 0 ( nurl_str_len __pd ) {
+                        : s __pn ( str_first_word __pd ) = __pd ( str_skip_word __pd )
+                        ( __irealloc_edge_note syms __pn call_name arg_idx )
+                    }
+                }
+            } {}
+        } {}
         ? & & > arg_idx 0 != 0 __pk_vc | | != 2 __pk_vc == 0 ( nurl_sym_len g_fn_compiled call_name ) | ( nurl_sym_has_word g_fn_keeps call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_escapes call_name ( nurl_str_int arg_idx ) ) { ? ( is_ptr_ty at ) {
                 : s __pk_c0 ( nurl_sym_get syms `__pk_c0__` )
                 : s __pkb ( nurl_sym_get syms `__last_borrow_src__` )
@@ -27606,7 +27647,9 @@ unsafe @ __callee_decl_name s cn → s {
 // it reallocates, 9 on the work list, 10 one past its highest parameter
 // index past 62 (bit 63 stands for those), 11 its first record (the
 // resolver's per-function record list), 12 the lends of 5 that are a value
-// read through what the parameters reach — part of them, never one whole.
+// read through what the parameters reach — part of them, never one whole,
+// 13 the parameters the buffer of an element of which it may move
+// (resolve_irealloc_summaries).
 : ~ i g_rpg_f 0
 : ~ i g_rpg_nfn 0
 : ~ i g_rpg_fcap 0
@@ -27616,9 +27659,9 @@ unsafe @ __callee_decl_name s cn → s {
 : ~ s g_rpg_me_self ``  // the function compiling now and its number (-1: not asked yet)
 : ~ i g_rpg_me_id -1
 
-unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 13 k ) }
+unsafe @ __rpg_fget i f i k → i { ^ ( nurl_peek # s g_rpg_f + * f 14 k ) }
 
-unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 13 k v ) }
+unsafe @ __rpg_fset i f i k i v → v { ( nurl_poke # s g_rpg_f + * f 14 k v ) }
 
 // Function `name`'s number: a fresh row the first time.
 unsafe @ __rpg_fn_id s name → i {
@@ -27628,10 +27671,10 @@ unsafe @ __rpg_fn_id s name → i {
     : i id g_rpg_nfn
     ? >= id g_rpg_fcap {
         = g_rpg_fcap ? == g_rpg_fcap 0 256 * g_rpg_fcap 2
-        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 104 )
+        = g_rpg_f # i ( nurl_realloc # s g_rpg_f * g_rpg_fcap 112 )
     } {}
     : ~ i k 1
-    ~ < k 13 { ( __rpg_fset id k 0 ) = k + k 1 }
+    ~ < k 14 { ( __rpg_fset id k 0 ) = k + k 1 }
     ( __rpg_fset id 0 # i ( nurl_strdup name ) )
     ( nurl_sym_def g_rpg_fid name ( nurl_str_int id ) )
     = g_rpg_nfn + id 1
@@ -33311,14 +33354,79 @@ unsafe @ bck_sx_is_id s e → b {
     ^ k
 }
 
+// An accessor that crosses into a shared cell — an Arc's payload, a lock's
+// value through its guard. What changes past it is the cell's: an Arc's
+// payload is frozen (bck_arc_frozen_check), and a lock's value is reached
+// only through a guard, which the lock makes exclusive at run time (a
+// write lock taken while this thread reads panics). So a handle read past
+// one is no parameter's storage to a caller's borrows (agora #315).
+@ __shared_cell_get s base → b {
+    ^ ( str_contains_word `arc_get rw_read rw_write rguard_get wguard_get` base )
+}
+
+// The parameters binding `name` of the function compiling now is part of:
+// the parameter itself, or those a handle it holds was read out of
+// (g_pderiv).
+@ __pderiv_params i syms s name → s {
+    ? ( __rprov_param syms name ) { ^ ( nurl_str_cat name `` ) } {}
+    ? == 0 ( nurl_str_len g_pderiv ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s key ( nurl_str_cat ptr `=` )
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat g_pderiv `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( nurl_str_starts w key ) { = out ( __word_union out ( bck_swap_char ( nurl_str_slice w ( nurl_str_len key ) - ( nurl_str_len w ) ( nurl_str_len key ) ) 44 32 ) ) } {}
+    }
+    ^ out
+}
+
+// A handle binding `name` (type `vt`) given a value read out of a
+// parameter — an element (`( vec_at p 0 )`, `lend` the call's lend
+// sources), a field (`. p items`), a copy of either — holds that
+// parameter's storage: what changes through it, at a call, changes the
+// parameter (the mutation edges, __drop_note). Without it a callee clearing
+// or growing a parameter's element through a local was summarised as
+// changing nothing, and its caller's borrows of that element's contents
+// read freed memory (agora #315). Safe code only: raw code's are the
+// provenance graph's (__rprov_bind). (`unsafe` for the global it appends
+// to, which only the compiling thread touches, as g_closure_effects.)
+unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend → v {
+    // (A number or a string view holds no handle: most bindings stop here.)
+    ? <= ( nurl_str_len vt ) 1 { ^ v } {}
+    ? | == 0 ( nurl_str_len g_cur_params ) != 0 g_bck_closure_depth { ^ v } {}
+    // (Only a value read through a parameter, or through a handle read out
+    // of one, can be one.)
+    ? == 0 ( nurl_str_len g_pderiv ) { ? == 0 ( nurl_sym_len syms `__fn_storage_params__` ) { ^ v } {} } {}
+    : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ``
+    ? | == 0 ( nurl_str_len srcs ) ( seq srcs `-` ) { ^ v } {}
+    ? ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
+    ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s r ( __path_root_name w )
+        ? | != 0 ( nurl_str_len g_pderiv ) ( __rprov_param syms r ) { = out ( __word_union out ( __pderiv_params syms r ) ) } {}
+    }
+    ? == 0 ( nurl_str_len out ) { ^ v } {}
+    : s ptr ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ v } {}
+    : s e ( nurl_str_cat3 ptr `=` ( bck_swap_char out 32 44 ) )
+    ? ( str_contains_word g_pderiv e ) { ^ v } {}
+    = g_pderiv ? == 0 ( nurl_str_len g_pderiv ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_pderiv ` ` e )
+}
+
 // Inside a safe function: the binding (or a field path of one) `name` goes
 // to `callee` as argument `aix` — a parameter's elements dropped there are
 // this function's to report.
 @ __drop_note s name s callee i aix → v {
     ? | == 0 g_srcx_on == 0 ( nurl_str_len g_cur_params ) { ^ } {}
     : i dot ( nurl_str_find name `.` )
-    : s root ? > dot 0 ( nurl_str_slice name 0 dot ) ( nurl_str_cat name `` )
-    : i k ( str_word_index g_cur_params root )
+    // (Asked of every argument: a name with no field path is its own root,
+    // asked as it is, not copied.)
+    : i k ? > dot 0 ( str_word_index g_cur_params ( nurl_str_slice name 0 dot ) ) ( str_word_index g_cur_params name )
     ? < k 0 { ^ } {}
     : s ks ( nurl_str_int k )
     : s base ( bck_generic_base callee )
@@ -33328,6 +33436,89 @@ unsafe @ bck_sx_is_id s e → b {
     : s e ( nurl_str_cat4 ks `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
     : s cur ( nurl_sym_get g_drop_edges g_rpg_me_self )
     ? ! ( str_contains_word cur e ) { ( nurl_sym_def g_drop_edges g_rpg_me_self ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) ) } {}
+}
+
+// A handle read out of parameter `pn` goes to `callee` as argument `aix`:
+// an edge of g_fn_ireallocs (resolve_irealloc_summaries).
+@ __irealloc_edge_note i syms s pn s callee i aix → v {
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` pn )
+    ? < k 0 { ^ v } {}
+    : s e ( nurl_str_cat4 ( nurl_str_int k ) `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
+    : s cur ( nurl_sym_get g_irealloc_edges g_rpg_me_self )
+    ? ! ( str_contains_word cur e ) {
+        ( nurl_sym_def g_irealloc_edges g_rpg_me_self ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e ) )
+        ? ! ( str_contains_word g_irealloc_fns g_rpg_me_self ) { ( __irealloc_fn_add g_rpg_me_self ) } {}
+    } {}
+}
+
+// (`unsafe` for the global it appends to, as g_closure_effects.)
+unsafe @ __irealloc_fn_add s f → v {
+    = g_irealloc_fns ? == 0 ( nurl_str_len g_irealloc_fns ) ( nurl_str_cat f `` ) ( nurl_str_cat3 g_irealloc_fns ` ` f )
+}
+
+// g_fn_ireallocs[f]: the parameters of f the buffer of an element of which
+// f may move — a grower handed a handle f read out of one (an edge of
+// g_irealloc_edges: the callee reallocates what it is handed, or an element
+// of it), or the parameter handed on to a function that does (a mutation
+// edge, the provenance graph's). Its caller's views into those elements'
+// buffers end at the call, not its views of the parameter's own buffer nor
+// its element handles (bck_view_end_ind, as for a grower given a borrowed
+// element in one function; agora #315). Closed after the mutation
+// summaries, which it reads, as a bit mask per function (field 13); a
+// program with no such handle pays nothing.
+unsafe @ resolve_irealloc_summaries → v {
+    ? == 0 ( nurl_str_len g_irealloc_fns ) { ^ v } {}
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        : ~ s rf ( nurl_str_cat g_irealloc_fns `` )
+        ~ != 0 ( nurl_str_len rf ) {
+            : s f ( str_first_word rf ) = rf ( str_skip_word rf )
+            : i fid ( __rpg_fn_id f )
+            : ~ s es ( nurl_sym_get g_irealloc_edges f )
+            ~ != 0 ( nurl_str_len es ) {
+                : s e ( str_first_word es ) = es ( str_skip_word es )
+                : i c1 ( nurl_str_find e `:` )
+                : i k ( nurl_str_to_int ( nurl_str_slice e 0 c1 ) )
+                : s t1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+                : i c2 ( nurl_str_find t1 `:` )
+                : s cal ( nurl_str_slice t1 0 c2 )
+                : s ax ( nurl_str_slice t1 + c2 1 - - ( nurl_str_len t1 ) c2 1 )
+                : i cid ( __rpg_fn_id cal )
+                : i bk ( __rpg_bit fid k )
+                ? & == 0 & ( __rpg_fget fid 13 ) bk | ( nurl_sym_has_word g_fn_reallocs cal ax ) != 0 & ( __rpg_fget cid 13 ) ( __rpg_bit cid ( nurl_str_to_int ax ) ) {
+                    ( __rpg_fset fid 13 | ( __rpg_fget fid 13 ) bk )
+                    = changed T
+                } {}
+            }
+        }
+        // (A parameter handed on: the mutation summaries' edges.)
+        : s eg # s g_rpg_edge
+        : ~ i i 0
+        // (Most callees have none: one load decides.)
+        ~ < i g_rpg_nedge {
+            : i b * i 4
+            : i cm ( __rpg_fget ( nurl_peek eg + b 2 ) 13 )
+            ? != 0 cm {
+                : i ef ( nurl_peek eg b )
+                : i ebk ( __rpg_bit ef ( nurl_peek eg + b 1 ) )
+                ? != 0 & cm ( __rpg_bit ( nurl_peek eg + b 2 ) ( nurl_peek eg + b 3 ) ) {
+                    ? == 0 & ( __rpg_fget ef 13 ) ebk {
+                        ( __rpg_fset ef 13 | ( __rpg_fget ef 13 ) ebk )
+                        = changed T
+                    } {}
+                } {}
+            } {}
+            = i + i 1
+        }
+    }
+    // (By name, for the walks.)
+    : ~ i f 0
+    ~ < f g_rpg_nfn {
+        : i m ( __rpg_fget f 13 )
+        ? != 0 m { ( nurl_sym_set g_fn_ireallocs ( __rpg_fname f ) ( __rpg_mask_add f `` m ) ) = g_irealloc_any 1 } {}
+        = f + f 1
+    }
 }
 
 // …or one of its storage fields is replaced (the old value dropped).
@@ -33522,6 +33713,15 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             = g_bck_end_eonly 0
         } {}
     }
+    // A callee that may move the buffer of an element of what it is handed
+    // (g_fn_ireallocs): what points into the buffers of its elements ends —
+    // not its own buffer, nor element handles — as for a grower handed a
+    // borrowed element below (agora #315).
+    ? & & != 0 g_irealloc_any >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+        ? ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
+            = out ( bck_view_end_ind out wid ( bck_field_int rec 3 ) ( nurl_str_cat3 `it was passed to '` ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` ) )
+        } {}
+    } {}
     // Dropping elements or replacing a field THROUGH a borrow reaches what
     // it borrows from: the other borrows of those owners end (the borrow
     // used for it still reaches a live value).
@@ -36213,6 +36413,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
         // …and back, for the borrow checker (bck_note_payload_taken).
         ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
+        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
         ? is_mutable
@@ -36590,6 +36791,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
+            ? > ( nurl_str_len ptype ) 1 { ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
             ? is_mutable
@@ -36958,6 +37160,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // first and the sources move second (a self-referential
         // `= a ? f a …` is skipped inside, not ordered around).
         = g_bck_rhs_lend ? == bck_rhs_tt TT_LPAREN ( bck_call_lend_srcs syms ) `-`
+        ? > ( nurl_str_len vt ) 1 { ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend ) } {}
         = g_bck_rhs_whole ? & == bck_rhs_tt TT_LPAREN ( __one_word g_bck_rhs_lend ) ( mem_fn_lends_params syms ( nurl_sym_get syms `__last_call_name__` ) T 0 ) F
         = g_bck_rhs_ident ( is_ident_tok bck_rhs_tt )
         : s __rp_reads ? != 0 g_rpg_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
@@ -52453,6 +52656,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_srcx_on ? & & != 0 g_borrowck ( bck_sound ) ! ( bck_unsafe_ctx ) 1 0
     // (Its drop summary is witnessed as it compiles: __drop_note.)
     = g_cur_params ? != 0 g_srcx_on ( nurl_sym_get syms `__fn_param_names__` ) ``
+    = g_pderiv ``
     ? & != 0 g_srcx_on == 0 ( nurl_sym_len g_fn_safe fname ) {
         ( nurl_sym_def g_fn_safe fname `1` )
         = g_fn_safe_list ? == 0 ( nurl_str_len g_fn_safe_list ) ( nurl_str_cat fname `` ) ( nurl_str_cat3 g_fn_safe_list ` ` fname )
@@ -71139,6 +71343,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( resolve_raw_provenance )
         ( resolve_mutation_summaries )
         ( resolve_drop_summaries )
+        ( resolve_irealloc_summaries )
         ( resolve_retfwd_lends syms )
         // Every function (incl. just-flushed generic instantiations) has now
         // compiled, so the escape summaries are final: replay the deferred
@@ -71423,6 +71628,8 @@ unsafe @ main → i {
     = g_drop_base ( nurl_sym_new )
     = g_lib_kind_memo ( nurl_sym_new )
     = g_drop_edges ( nurl_sym_new )
+    = g_irealloc_edges ( nurl_sym_new )
+    = g_fn_ireallocs ( nurl_sym_new )
     = g_fn_drops ( nurl_sym_new )
     = g_fn_safe ( nurl_sym_new )
     = g_impl_trait_syms ( nurl_sym_new )
