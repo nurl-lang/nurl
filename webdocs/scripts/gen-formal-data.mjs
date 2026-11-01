@@ -3,7 +3,7 @@
 //
 // Extracts Lean 4 module graphs, declarations, theorem dependency graphs,
 // ownership rules (formal/RULES.md), and the soundness hole corpus
-// (formal/corpus/map.tsv + tools/fuzz/holes/*.nu) into:
+// (the probe table of tools/fuzz/holes/map.sh + tools/fuzz/holes/*.nu) into:
 //   1. webdocs/lib/formal-data.generated.ts (compact typed metadata, module DAGs, blueprint, rules, holes)
 //   2. webdocs/public/formal-decls.json (all 1,766 declarations across A1 & A2 for the code browser)
 //   3. formal/BLUEPRINT.md's counts, A2 module DAG, A2 module index and crown
@@ -12,6 +12,7 @@
 // `--check` writes nothing: it exits 1 when formal/BLUEPRINT.md is not what
 // the sources give (CI's "shared files are generated" job, Agora #246).
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -482,7 +483,10 @@ function parseRulesMd() {
 }
 
 function parseHolesCorpus() {
-  const content = readFileSync(join(FORMAL_DIR, 'corpus', 'map.tsv'), 'utf8').trim();
+  // The probe table, from the probes' own `// map:` lines: it is generated,
+  // not committed (Agora #307), by the same script build.sh writes
+  // formal/corpus/map.tsv with.
+  const content = execFileSync('sh', [join(HOLES_DIR, 'map.sh')], { encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
   const lines = content.split('\n').slice(1);
   return lines.map((line) => {
     // old_id: the hNNN number from before Agora #212, `-` for a newer probe.

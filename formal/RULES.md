@@ -3,7 +3,8 @@
 Every ownership rule of [`docs/MEMORY.md`](../docs/MEMORY.md) and the
 phase that formalizes it. A rule is **done** when its typing rule is
 stated, used in the soundness proof, and every hole probe it is meant to
-reject is mapped to it in [`corpus/map.tsv`](corpus/map.tsv).
+reject is mapped to it by its `// map:` line (the table `corpus/map.tsv`,
+written from those lines by [`tools/fuzz/holes/map.sh`](../tools/fuzz/holes/map.sh)).
 
 Formal rules are Lean names in [`A1/`](A1/) and [`A2/`](A2/) (the same
 names, extended): typing rules are constructors of `StmtT`, `RhsT`,

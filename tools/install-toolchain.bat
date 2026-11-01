@@ -79,7 +79,19 @@ xcopy /e /i /y /q "!ROOT!\docs" "!PREFIX!\docs" >nul
 REM ...and the mechanized proof's prose + probe table (nurl_docs formal/).
 if not exist "!PREFIX!\docs\formal\corpus" mkdir "!PREFIX!\docs\formal\corpus"
 copy /y "!ROOT!\formal\*.md" "!PREFIX!\docs\formal\" >nul
-copy /y "!ROOT!\formal\corpus\map.tsv" "!PREFIX!\docs\formal\corpus\" >nul
+REM The probe table is generated from the probes, not committed (Agora #307).
+REM tools\fuzz\holes\map.sh writes it, through Git for Windows' bash. A
+REM checkout where it was already written (build.sh, map.sh) ships that one.
+set "NURL_MAPSH_BASH="
+if exist "%ProgramFiles%\Git\bin\bash.exe" set "NURL_MAPSH_BASH=%ProgramFiles%\Git\bin\bash.exe"
+if not defined NURL_MAPSH_BASH for /f "delims=" %%b in ('where bash 2^>nul') do if not defined NURL_MAPSH_BASH set "NURL_MAPSH_BASH=%%b"
+if defined NURL_MAPSH_BASH (
+  "!NURL_MAPSH_BASH!" "!ROOT!/tools/fuzz/holes/map.sh" --write "!PREFIX!/docs/formal/corpus/map.tsv" || exit /b 1
+) else if exist "!ROOT!\formal\corpus\map.tsv" (
+  copy /y "!ROOT!\formal\corpus\map.tsv" "!PREFIX!\docs\formal\corpus\" >nul
+) else (
+  echo Note: no bash and no formal\corpus\map.tsv - docs\formal ships without the probe table ^(tools\fuzz\holes\map.sh makes it^).
+)
 
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "!ROOT!\nurl.bat" "!PREFIX!\nurl.bat" >nul

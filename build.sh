@@ -47,6 +47,15 @@ if [[ -d .githooks ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; th
     fi
 fi
 
+# The hole-probe table, formal/corpus/map.tsv: generated from the probes'
+# `// map:` lines, never committed (Agora #307), and read by nurl_docs (the
+# nurl-mcp and nurlapi tests) and the docs tree. Written before anything
+# reads it, by a POSIX script: this build needs no Python.
+if ! sh tools/fuzz/holes/map.sh --write; then
+    echo "build.sh: a probe's \`// map:\` line is malformed (python3 tools/fuzz/holes/map.py --lint says which)" >&2
+    exit 1
+fi
+
 # Wall-clock timers (bash $SECONDS, integer). BUILD_T0 marks the start of
 # the whole build; TEST_T0 is set just before the test runner. fmt_dur
 # renders seconds as "1m 20s" / "12s" for the summary line.

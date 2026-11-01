@@ -5,7 +5,7 @@
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **30 modules**, **26,278 lines of Lean 4**, **1136 theorems**, **1414 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
-* **Soundness Corpus ([`corpus/map.tsv`](corpus/map.tsv)):** every hole probe in `tools/fuzz/holes/`, with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines; `tools/fuzz/holes/map.py --counts` gives the totals
+* **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
 ---
 

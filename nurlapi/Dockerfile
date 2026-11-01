@@ -274,6 +274,8 @@ COPY --from=builder /src/docs                    /opt/nurl/docs
 # ../formal/, and nurl_docs serves them as formal/<file>. Not the Lean
 # sources.
 COPY --from=builder /src/formal/*.md             /opt/nurl/formal/
+# (map.tsv is generated, not committed: the builder's ./build.sh wrote it
+# from the probes, Agora #307.)
 COPY --from=builder /src/formal/corpus/map.tsv   /opt/nurl/formal/corpus/map.tsv
 COPY --from=builder /src/bench                   /opt/nurl/bench
 COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
