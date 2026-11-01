@@ -8,8 +8,12 @@ stdlib/runtime.o, a broken linker), a sanitizer build that produced no binary
 counted as REJECTED and the other two as "ran clean", so a box without the
 ASan runtime, or a tree without its runtime objects, reported `holes: 0`.
 
-Each control copies the real check.sh into a scratch tree whose `nurl.sh` is
-a stand-in. The probe's first line picks what the stand-in does.
+Each control copies the real check.sh (and map.sh, the table of what each
+probe's `// map:` line promises) into a scratch tree whose `nurl.sh` is a
+stand-in. The probe's first line picks what the stand-in does; its map line
+says `rejected` for a `rejected` probe and `runs-clean` for any other, unless
+the mode names it (`clean=rejected`). A verdict the map line does not promise
+is a MISMATCH (Agora #318).
 """
 import os
 import shutil
@@ -20,6 +24,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CHECK = os.path.join(ROOT, "tools", "fuzz", "holes", "check.sh")
+MAP = os.path.join(ROOT, "tools", "fuzz", "holes", "map.sh")
 
 STANDIN = r"""#!/bin/bash
 # nurl.sh SRC OUT, as check.sh calls it; the probe's first line decides.
@@ -60,6 +65,7 @@ class HolesCheck(unittest.TestCase):
         self.dir = os.path.join(self.tree, "tools", "fuzz", "holes")
         os.makedirs(self.dir)
         shutil.copy(CHECK, os.path.join(self.dir, "check.sh"))
+        shutil.copy(MAP, os.path.join(self.dir, "map.sh"))
         nurl = os.path.join(self.tree, "nurl.sh")
         with open(nurl, "w") as f:
             f.write(STANDIN)
@@ -68,12 +74,15 @@ class HolesCheck(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tree)
 
-    def run_check(self, *modes, timeout=None):
+    def run_check(self, *modes, timeout=None, map_line=True):
         names = []
-        for i, mode in enumerate(modes):
+        for i, spec in enumerate(modes):
+            mode, _, want = spec.partition("=")
+            want = want or ("rejected" if mode == "rejected" else "runs-clean")
             name = f"p{i}_{mode.replace('-', '_')}.nu"
+            ml = f"// map: §0 | A2 | {want} | - | control: {mode}\n" if map_line else ""
             with open(os.path.join(self.dir, name), "w") as f:
-                f.write(f"// {mode}\n@ main → i {{ ^ 0 }}\n")
+                f.write(f"// {mode}\n{ml}@ main → i {{ ^ 0 }}\n")
             names.append(name)
         env = dict(os.environ)
         env.pop("HOLES_TIMEOUT", None)
@@ -128,6 +137,26 @@ class HolesCheck(unittest.TestCase):
         self.assertEqual(v, ["HOLE", "UNCHECKED", "ACCEPTED", "REJECTED", "UNCHECKED"], out)
         self.assertIn("holes: 1", out)
         self.assertIn("unchecked: 2", out)
+
+    def test_a_guard_refused_is_a_mismatch(self):
+        # A guard the checker starts to refuse (agora #318: two of #265's,
+        # refused on main for a day while CI saw `holes: 0`).
+        rc, v, out = self.run_check("rejected=runs-clean")
+        self.assertEqual((rc, v), (1, ["REJECTED"]), out)
+        self.assertIn("MISMATCH", out)
+        self.assertIn("mismatched: 1", out)
+
+    def test_a_probe_running_clean_where_its_map_says_rejected_is_a_mismatch(self):
+        rc, v, out = self.run_check("clean=rejected")
+        self.assertEqual((rc, v), (1, ["ACCEPTED"]), out)
+        self.assertIn("MISMATCH", out)
+
+    def test_no_map_table_is_no_verdict(self):
+        # A probe without its `// map:` line stops map.sh: no verdict was
+        # compared, which is not a pass.
+        rc, v, out = self.run_check("clean", map_line=False)
+        self.assertEqual((rc, v), (1, ["UNCHECKED", "ACCEPTED"]), out)
+        self.assertIn("map.sh failed", out)
 
 
 if __name__ == "__main__":
