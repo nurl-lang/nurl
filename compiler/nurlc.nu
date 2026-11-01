@@ -32691,8 +32691,11 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : i bi ( nurl_str_to_int b )
                 ? == BCK_BORROWED_SHARED ( bck_st_get st bi ) {
                     : s brs ( nurl_str_int ( bck_path_root bi ) )
-                    ? & & & ( seq ( nurl_sym_get g_bck ( bck_bkey `vw_` b ) ) `1` ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` b ) ) c ) != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` brs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` brs ) ) {
-                        ( bck_caller_view_diag bi r line )
+                    // (A parameter's first: nearly every borrower is a local.)
+                    ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` brs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` brs ) ) {
+                        ? & ( seq ( nurl_sym_get g_bck ( bck_bkey `vw_` b ) ) `1` ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` b ) ) c ) {
+                            ( bck_caller_view_diag bi r line )
+                        } {}
                     } {}
                 } {}
             }
