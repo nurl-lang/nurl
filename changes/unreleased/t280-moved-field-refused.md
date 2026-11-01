@@ -20,4 +20,8 @@
   - a store to the field (`= . h buf …`), or a new value for the struct,
     makes it usable again;
   - the struct's other fields stay usable.
-  Nothing is added at run time.
+  Nothing is added at run time. Some routes are not refused yet: a take
+  inside a loop, the taken field handed back itself (`^ . h buf`), a path
+  under or over the taken one, a few whole hand-ons, closures made after
+  the take, and a `% Drop` destructor that reads the field (Known issues,
+  agora #351).

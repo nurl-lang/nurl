@@ -404,6 +404,12 @@ The struct's other fields stay usable, and its own drop at the end of its
 scope releases what is left. A field taken on only some paths is
 maybe-moved, as a binding is.
 
+Some routes to a taken field are not refused yet (agora #280's open part,
+listed with the known issues): a take inside a loop, the taken field
+handed back itself (`^ . h buf`), a path under or over the taken one, and
+a few others. Give the field a value right after the take to stay clear
+of them.
+
 ```text
 error: use of moved field '. h buf' — it was taken at line N by take, …
 error: use of partly moved value 'h' — its field '. h buf' was taken at
