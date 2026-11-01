@@ -1,0 +1,27 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+case      [http||Example.COM|-1|/A||]
+user      [http|u:p|h|-1|/x||]
+empty user[http||h|-1|/x||]
+two at    [http|a@b|h|81|/||]
+ipv6      [http||::1|-1|||]
+ipv6 port [wss||2001:db8::1|9000|/s|a|b]
+bare colon[http||h|-1|/p||]
+big port  none
+no path   [http||h|-1||q=1|f]
+frag ?    [http||h|-1|||f?x]
+no host   none
+bad schemenone
+digit sch [1x||h|-1|||]
+no sep    none
+trail %   [100%] len 4
+short %4  [a%4] len 3
+bad hex   [%zzA] len 4
+plus      [a+b] len 3
+%%41      [%A] len 2
+nul       [a] len 3
+edges     5 <k%>=<v%2> <=>=<&> <a>=<b=c> <>=<v> <x>=<1>
+plus      1 <a b>=<c d+>
+empty     0

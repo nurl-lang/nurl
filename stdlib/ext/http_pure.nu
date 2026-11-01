@@ -396,15 +396,22 @@ raw : HttpConnImpl {
     ^ -1
 }
 
+// ASCII-lowercased copy of `in`, in one reserved write (a byte per push
+// grew the buffer from nothing, about seven reallocations a request).
 @ __hp_to_lower s in → String {
-    : String out ( string_new )
     : i n ( nurl_str_len in )
-    : ~ i k 0
-    ~ < k n {
-        : i ch ( nurl_str_at in n k )
-        ( string_push_char out ? & >= ch 65 <= ch 90 + ch 32 ch )
-        = k + k 1
-    }
+    : String out ( string_with_cap + n 1 )
+    ? > n 0 {
+        : *u p # *u in
+        : *u w ( string_reserve_at out n )
+        : ~ i k 0
+        ~ < k n {
+            : i ch & # i . p k 255
+            = . w k # u ? & >= ch 65 <= ch 90 + ch 32 ch
+            = k + k 1
+        }
+        ( string_commit out n )
+    } {}
     ^ out
 }
 
@@ -415,22 +422,25 @@ raw : HttpConnImpl {
 // the caller's business, not ours.
 @ _hp_blob_has s blob s lname → b {
     ? | == # i blob 0 == ( nurl_str_len blob ) 0 { ^ F } {}
-    : String lb ( __hp_to_lower blob )
-    : s ld ( string_data lb )
-    : i ln ( nurl_str_len ld )
+    // Compared in place, ASCII case folded per byte, line start by line
+    // start: no lowercased copy of the blob for each name asked.
+    : i ln ( nurl_str_len blob )
     : i nl ( nurl_str_len lname )
+    : *u bp # *u blob
+    : *u np # *u lname
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit <= + k nl ln {
-        ? | == k 0 == ( nurl_str_at ld ln - k 1 ) 10 {
-            : ~ i j 0
-            : ~ b same T
-            ~ & same < j nl {
-                ? != ( nurl_str_at ld ln + k j ) ( nurl_str_at lname nl j ) { = same F } {}
-                = j + j 1
-            }
-            ? & same < + k nl ln { = hit == ( nurl_str_at ld ln + k nl ) 58 } {}
-        } {}
+        : ~ i j 0
+        : ~ b same T
+        ~ & same < j nl {
+            : i ch & # i . bp + k j 255
+            ? != ? & >= ch 65 <= ch 90 + ch 32 ch & # i . np j 255 { = same F } {}
+            = j + j 1
+        }
+        ? & same < + k nl ln { = hit == & # i . bp + k nl 255 58 } {}
+        // to the next line start (index ln is the string's NUL)
+        ~ & < k ln != & # i . bp k 255 10 { = k + k 1 }
         = k + k 1
     }
     ^ hit
