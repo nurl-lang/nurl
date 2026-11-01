@@ -3,7 +3,7 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **30 modules**, **26,278 lines of Lean 4**, **1136 theorems**, **1414 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **31 modules**, **26,497 lines of Lean 4**, **1147 theorems**, **1426 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -134,7 +134,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (30 Modules)
+## 4. Phase A2 Module Dependency DAG (31 Modules)
 
 ```mermaid
 flowchart BT
@@ -156,6 +156,7 @@ flowchart BT
   Preservation["Preservation<br/>(2121L, 50 thms)"]
   Progress["Progress<br/>(382L, 8 thms)"]
   Rename["Rename<br/>(3282L, 160 thms)"]
+  Repl["Repl<br/>(219L, 11 thms)"]
   Rhs["Rhs<br/>(1410L, 77 thms)"]
   Semantics["Semantics<br/>(478L, 0 thms)"]
   Soundness["Soundness<br/>(176L, 12 thms)"]
@@ -187,6 +188,7 @@ flowchart BT
   TypingFacts --> Preservation
   Preservation --> Progress
   NameWf --> Rename
+  Stability --> Repl
   Frame --> Rhs
   Syntax --> Semantics
   Codes --> Soundness
@@ -222,6 +224,7 @@ flowchart BT
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 656 | 48 | 4 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 146 | 10 | 0 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
 | 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1176 | 33 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
+| 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 219 | 11 | 1 |  |
 | 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 612 | 40 | 1 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
 | 3. Step & Unwinding Lemmas | [`A2/Leak.lean`](A2/Leak.lean) | 300 | 18 | 1 | Leak-freedom invariant (Covers): every allocated address is owned by a live binding. |
 | 3. Step & Unwinding Lemmas | [`A2/Panic.lean`](A2/Panic.lean) | 70 | 2 | 0 | Panic unwinding (panic_unwind): every exited scope drops its owned trees via the drop journal. |
