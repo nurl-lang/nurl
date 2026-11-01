@@ -5,7 +5,9 @@
 $ `stdlib/core/string.nu`
 
 : W { s v }
+
 % Drop W { @ drop W self → v { ( nurl_println . self v ) } }
+
 : S1 { W a }
 : S2 { S1 a }
 : S3 { S2 a }

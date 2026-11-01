@@ -6,7 +6,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
 : W { s v }
+
 % Drop W { @ drop W self → v { ( nurl_println . self v ) } }
+
 : T1 { ( Vec W ) a }
 : T2 { T1 a }
 : T3 { T2 a }
