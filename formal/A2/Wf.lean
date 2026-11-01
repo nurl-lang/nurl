@@ -645,7 +645,7 @@ theorem roots_memDeps {ds : List Dep} {r : Var} (h : r ∈ roots (memDeps ds)) :
 theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var}
     {E : Entry} (hc : CallT P Γ F f args E Γ1) (h : CtxWF Γ) :
     CtxWF Γ1 ∧ DomMode Γ Γ1 ∧ (∀ r ∈ roots E.vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true) := by
-  obtain ⟨fn, hf, hlen, hargs, _, _, rfl, rfl⟩ := hc
+  obtain ⟨fn, hf, hlen, hargs, _, _, rfl, rfl, _⟩ := hc
   have hfn : FnOK P fn := hP fn (List.mem_of_getElem? hf)
   obtain ⟨_, _, _, _, _, _, hlends, hrholds, houts, _⟩ := hfn
   have hent : ∀ j < fn.params.length, ∃ Ea, Γ (args.getD j 0) = some Ea ∧ Ea.live = true := by
@@ -781,7 +781,7 @@ theorem callPostAux_domMode {Γ0 : Ctx} {fn : Fn} {args : List Var} :
 
 theorem CallT.domMode {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var}
     {E : Entry} (hc : CallT P Γ F f args E Γ1) : DomMode Γ Γ1 := by
-  obtain ⟨fn, _, hlen, hargs, _, _, _, rfl⟩ := hc
+  obtain ⟨fn, _, hlen, hargs, _, _, _, rfl, _⟩ := hc
   refine DomMode.killNames (callPostAux_domMode _ _ _ _ (fun a ha => ?_) (DomMode.refl Γ)) _
   obtain ⟨i, hi, rfl⟩ := mem_args ha
   obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi)
@@ -938,7 +938,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hcT.domMode.get h
@@ -1041,7 +1041,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
         rw [hv1] at hr'; obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr'; exact hroot ht d hd)
       (fun _ _ ht d hd _ => by rw [hv1] at hd; exact hroot ht d hd)
       (fun h => h) (fun h => h))).exitScope x hpx.2.2
-  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E0 ms σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all

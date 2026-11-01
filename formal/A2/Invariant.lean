@@ -407,7 +407,9 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
     returns an integer and lends, holds and stores nothing. -/
 def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧
-    fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = []
+    fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧
+    -- a destructor changes no elements through a borrow (Agora #295)
+    ¬ ThruFn P f
 
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
@@ -496,7 +498,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- handed to the code as an `inout` argument of its own)
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      EndOK Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      EndOK Δ x →
+      -- the interface is not code that changes elements through a borrow
+      -- (Agora #295; nor is the code that runs: `Implements`)
+      ¬ ThruFn P σ → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -550,6 +555,24 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
+/-- Agora #295, step 4: no rule types a change of elements yet, so a typed
+    statement contains none … -/
+theorem StmtT.hasThru_false {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (h : StmtT P Γ F s Δ) : s.hasThru = false := by
+  induction h <;> simp [Stmt.hasThru, *]
+
+/-- … and a well-typed program has no `ThruFn`: `CallT`'s guard, and the
+    `¬ ThruFn` of destructors, closure interfaces and package codes, hold of
+    every program A2 covers. Step 5's `StmtT.editB` is the first rule that
+    types a change through a borrow. -/
+theorem ProgOK.not_thru {P : Prog} (hP : ProgOK P) {f : Nat} : ¬ ThruFn P f := by
+  intro h
+  induction h with
+  | here hf hb =>
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hbody, _⟩ := hP _ (List.mem_of_getElem? hf)
+    rw [hbody.hasThru_false] at hb; cases hb
+  | call _ _ _ ih => exact ih
+
 /-! ### Packages name code of their signature -/
 
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
@@ -561,7 +584,9 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
     fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
-    fn.outHolds ⊆ sig.outHolds
+    fn.outHolds ⊆ sig.outHolds ∧
+    -- a closure's code changes no elements through a borrow (Agora #295)
+    ¬ ThruFn P f
 
 /-- A package's code implements its interfaces, method by method. -/
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=

@@ -384,11 +384,18 @@ theorem callPost_eq : callPost K4 pick [1, 2, 3] = K4 := by
     simp [argE, K4, A2.setE, upd, A2.kill, killE, hits, Ecl, Enew, intE, Entry.vdeps, Mode.ownSlot, opt, str,
       Ty.holdsView, Ty.elem, nameDeps]
 
+/-- `pick` changes no elements through a borrow and calls nothing. -/
+theorem pick_not_thru : ¬ ThruFn P 0 := by
+  intro h
+  cases h with
+  | here hf hb => simp [P] at hf; subst hf; simp [pick, pickBody, Stmt.hasThru] at hb
+  | call hf hg _ => simp [P] at hf; subst hf; simp [pick, pickBody, Stmt.calls] at hg
+
 /-- The call: `cell` is handed `inout`, `s` and `c` are lent. -/
 theorem call_ok : CallT P K4 [] 0 [1, 2, 3] Ex K4 := by
   refine ⟨pick, rfl, rfl, ?_, ?_, CallDtorSafe.of_none (fun v E hE => by
       rcases v with _ | _ | _ | _ | v <;> simp [K4, A2.setE, upd] at hE <;> subst hE <;> exact ⟨rfl, rfl⟩) _ _,
-    callRes_eq.symm, callPost_eq.symm⟩
+    callRes_eq.symm, callPost_eq.symm, fun h => absurd h pick_not_thru⟩
   · intro i hi
     rcases i with _ | _ | _ | i
     · refine ⟨Ecl, by simp [K4, A2.setE, upd], rfl, ⟨rfl, Or.inl rfl, rfl⟩, fun _ => ?_,

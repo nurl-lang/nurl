@@ -826,6 +826,117 @@ theorem CallDtorSafe.of_inp {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Va
   · rw [hn] at hd; cases hd
   · have := hp _ (List.getElem_mem hi); rw [hb] at this; cases this
 
+/-- The roots of what the arguments hold views of. -/
+def callR (Γ : Ctx) (args : List Var) : List Var :=
+  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held))
+
+theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
+    r ∈ callR Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ r ∈ roots (memDeps (argE Γ a).held) := by
+  unfold callR
+  simp only [List.mem_flatMap]
+  constructor
+  · rintro ⟨a, ha, hr⟩; split at hr
+    · simp at hr
+    · exact ⟨a, ha, by assumption, hr⟩
+  · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hr⟩
+
+/-- Does a statement change a `Vec`'s elements through a borrow
+    (`.edit true`, Agora #295)? The step ignores the flag, so the guard
+    rests on it: no rule may type `.edit false` through a borrow. An owner
+    rule for `.edit false` must ask `canDo` of the target itself. -/
+def Stmt.hasThru : Stmt → Bool
+  | .seq a b => a.hasThru || b.hasThru
+  | .ite _ a b => a.hasThru || b.hasThru
+  | .letv _ _ s => s.hasThru
+  | .letcall _ _ _ s => s.hasThru
+  | .while _ s => s.hasThru
+  | .scope _ s => s.hasThru
+  | .rbind _ s => s.hasThru
+  | .frozen _ s => s.hasThru
+  | .letrec _ _ s => s.hasThru
+  | .catchR _ _ s => s.hasThru
+  | .unpair _ _ _ s => s.hasThru
+  | .callc _ _ _ _ s => s.hasThru
+  | .letd _ _ _ s => s.hasThru
+  | .scopeD _ _ s => s.hasThru
+  | .edit b _ _ => b
+  | _ => false
+
+/-- The functions a statement calls by index: a call, a `recover` body, a
+    destructor (Agora #295). A call through a package is not listed: the
+    code it runs is never a `ThruFn` (`Implements`). -/
+def Stmt.calls : Stmt → List Nat
+  | .seq a b => a.calls ++ b.calls
+  | .ite _ a b => a.calls ++ b.calls
+  | .letv _ _ s => s.calls
+  | .letcall _ f _ s => f :: s.calls
+  | .while _ s => s.calls
+  | .scope _ s => s.calls
+  | .rbind _ s => s.calls
+  | .frozen _ s => s.calls
+  | .letrec _ f s => f :: s.calls
+  | .catchR _ _ s => s.calls
+  | .unpair _ _ _ s => s.calls
+  | .callc _ _ _ _ s => s.calls
+  | .letd _ f _ s => f :: s.calls
+  | .scopeD _ f s => f :: s.calls
+  | _ => []
+
+/-- A function that changes elements through a borrow, or calls one that
+    does (Agora #295). A call into one passes no argument that holds views
+    (`CallT`): inside it, every borrow's memory roots are the callee's own
+    or a parameter's, which is what keeps a change through a borrow sound
+    when the body is lifted into its caller's frame (`Rename`). -/
+inductive ThruFn (P : Prog) : Nat → Prop
+  | here {f : Nat} {fn : Fn} : P[f]? = some fn → fn.body.hasThru = true → ThruFn P f
+  | call {f g : Nat} {fn : Fn} : P[f]? = some fn → g ∈ fn.body.calls → ThruFn P g → ThruFn P f
+
+/-- A statement changes elements through a borrow, or calls a function that
+    may (Agora #295). -/
+def Stmt.Thru (P : Prog) (s : Stmt) : Prop := s.hasThru = true ∨ ∃ g ∈ s.calls, ThruFn P g
+
+theorem ThruFn.of_body {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) :
+    fn.body.Thru P → ThruFn P f
+  | .inl h => .here hf h
+  | .inr ⟨_, hg, ht⟩ => .call hf hg ht
+
+namespace Stmt.Thru
+variable {P : Prog}
+
+/-- What a part of a statement does through a borrow, or calls, the
+    statement does. -/
+theorem mono {s t : Stmt} (hh : s.hasThru = true → t.hasThru = true)
+    (hc : ∀ g ∈ s.calls, g ∈ t.calls) : s.Thru P → t.Thru P
+  | .inl h => .inl (hh h)
+  | .inr ⟨g, hg, ht⟩ => .inr ⟨g, hc g hg, ht⟩
+
+theorem seq_l {a b : Stmt} (h : a.Thru P) : (Stmt.seq a b).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem seq_r {a b : Stmt} (h : b.Thru P) : (Stmt.seq a b).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem ite_l {c : Expr} {a b : Stmt} (h : a.Thru P) : (Stmt.ite c a b).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem ite_r {c : Expr} {a b : Stmt} (h : b.Thru P) : (Stmt.ite c a b).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem wh {c : Expr} {k : Stmt} (h : k.Thru P) : (Stmt.while c k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem letv {x : Var} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letv x r k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem letcall {x : Var} {f : Nat} {args : List Var} {k : Stmt} (h : k.Thru P) :
+    (Stmt.letcall x f args k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem letrec {x : Var} {f : Nat} {k : Stmt} (h : k.Thru P) : (Stmt.letrec x f k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem unpair {y x z : Var} {k : Stmt} (h : k.Thru P) : (Stmt.unpair y x z k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem callc {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} (h : k.Thru P) :
+    (Stmt.callc x c j zs k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+theorem letd {x : Var} {f : Nat} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letd x f r k).Thru P :=
+  h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
+
+end Stmt.Thru
+
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
     and reaches the callee through no other argument (§2.1, §2.4). -/
@@ -852,7 +963,10 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
               d.root = args.getD i 0 → d.kind.bound = b ∧ b ≠ .none)) ∧
         (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))) ∧
     NamesFree Γ F fn.params args ∧ CallDtorSafe Γ fn.params args ∧
-    E = callRes Γ fn args ∧ Γ' = callPost Γ fn args
+    E = callRes Γ fn args ∧ Γ' = callPost Γ fn args ∧
+    -- a call into a function that changes elements through a borrow passes
+    -- no argument that holds views (Agora #295: `ThruFn`)
+    (ThruFn P f → callR Γ args = [])
 
 /-! ### Statements -/
 

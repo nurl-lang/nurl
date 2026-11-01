@@ -2619,12 +2619,60 @@ theorem AbsOK.callPostAux {Γa : Ctx} (hab0 : S.AbsOK Γa) {fn : Fn} {args : Lis
               · rw [ht] at h'; exact h'
             simp [hv0, hl0, hh0]))
 
+/-- Agora #295: a call that passes no views passes none where the call
+    places it, when the outer call passed none either: what the lift adds to
+    an argument is what the outer arguments held — names, when they held no
+    views (`S.R = []`). -/
+theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
+    (hc : callR Γa args = []) : callR (S.canon Γa) (args.map S.ρ) = [] := by
+  -- with no views passed, what the arguments held is names only
+  have hA : ∀ d ∈ S.A, d.kind.isName = true := by
+    intro d hd
+    rcases List.mem_append.mp hd with hd | hd
+    · rw [hR] at hd; simp [allKinds] at hd
+    · exact h.N_name d hd
+  refine List.eq_nil_of_subset_nil fun r hr => ?_
+  obtain ⟨a', ha', hty, hr⟩ := mem_callR.mp hr
+  obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  have hdn : d.kind.isName = false := by simpa using (List.mem_filter.mp hd).2
+  have hdh := (List.mem_filter.mp hd).1
+  cases hE : Γa a with
+  | none =>
+    exfalso; apply hty; unfold argE; rw [canon_ρ h, hE]; rfl
+  | some E =>
+    rw [argE_canon h hE] at hty hdh
+    by_cases hrb : E.mode = .rootb
+    · -- a borrowed parameter: what it holds is what the outer arguments held
+      simp only [RSetup.liftE, hrb, ↓reduceIte] at hdh
+      rcases h.pe_held a d hdh with hdA | ⟨hds, _⟩
+      · rw [hA d hdA] at hdn; cases hdn
+      · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hds
+        obtain ⟨w, b, t, rfl, _⟩ := h.sym_ok d0 hd0
+        simp [Dep.ren, Kind.isName] at hdn
+    · simp only [RSetup.liftE, hrb, ↓reduceIte] at hty hdh
+      rcases List.mem_append.mp hdh with hdr | hdo
+      · -- what the argument held itself, renamed: no memory, by the guard
+        obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdr
+        have hm : d0 ∈ memDeps (argE Γa a).held := by
+          unfold argE; rw [hE]
+          exact List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdn⟩
+        have : d0.root ∈ callR Γa args :=
+          mem_callR.mpr ⟨a, ha, by unfold argE; rw [hE]; exact hty, List.mem_map_of_mem hm⟩
+        rw [hc] at this; cases this
+      · -- what the lift adds: names only
+        unfold ownHeld at hdo
+        split at hdo
+        · cases hdo
+        · rw [hA d hdo] at hdn; cases hdn
+
 /-- A call in the callee's body, where the call places it. -/
 theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa : List Var} {f : Nat}
-    {args : List Var} {E : Entry} {Γa1 : Ctx} (hc : CallT P Γa Fa f args E Γa1) :
+    {args : List Var} {E : Entry} {Γa1 : Ctx} (hc : CallT P Γa Fa f args E Γa1)
+    (hR : ThruFn P f → S.R = []) :
     ∃ E' Γ', CallT P (S.canon Γa) S.Fc f (args.map S.ρ) E' Γ' ∧ PW Γ' (S.canon Γa1) ∧
       ∀ x, EntryWeaker E' (S.liftE x E) := by
-  obtain ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
+  obtain ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
   have hfn : FnOK P fn := hP fn (List.mem_of_getElem? hf)
   obtain ⟨_, _, _, _, _, _, hlends, hrholds, houts, _⟩ := hfn
   have hex : ∀ j < args.length, ∃ Ea, Γa (args.getD j 0) = some Ea := by
@@ -2657,7 +2705,8 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
       rwa [hsv] at this
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
-      obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds, rfl, rfl⟩, ?_,
+      obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds, rfl, rfl,
+      fun ht => callR_canon h (hR ht) (hg ht)⟩, ?_,
     callRes_lift h hab hlr hex⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
@@ -2758,7 +2807,7 @@ theorem RhsT.absOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
 theorem CallT.absOK {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
     (hc : CallT P Γ F f args E Γ1) (hab : S.AbsOK Γ) : S.AbsOK Γ1 ∧ (E.mode = .own ∨ E.mode = .bor) ∧
       E.live = true := by
-  obtain ⟨fn, _, _, hargs, _, _, rfl, rfl⟩ := hc
+  obtain ⟨fn, _, _, hargs, _, _, rfl, rfl, _⟩ := hc
   refine ⟨(AbsOK.callPostAux hab fn.params args 0 Γ (fun pa hpa => ?_) hab).killNames _, ?_, rfl⟩
   · obtain ⟨k, hk, _, rfl⟩ := mem_zip_getD hpa
     obtain ⟨Ea, hEa, _, hok, _⟩ := hargs k hk
@@ -2852,20 +2901,23 @@ theorem canon_same (h : S.OK) {Γa Δa : Ctx} (hab : S.AbsOK Γa)
 
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
-    those contexts. -/
+    those contexts. A statement that may change elements through a borrow
+    is placed by a call that passed no views (`s.Thru P → S.R = []`, from
+    `CallT`'s guard, Agora #295). -/
 theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
     {Δa : Ctx} (hd : StmtT P Γa Fa s Δa) : s.src = true → S.AbsOK Γa → CtxWF Γa → NameWF Γa →
+    (s.Thru P → S.R = []) →
     StmtT P (S.canon Γa) S.Fc (s.rename S.ρ) (S.canon Δa) ∧ S.AbsOK Δa := by
   induction hd with
-  | skip => exact fun _ hab _ _ => ⟨StmtT.skip, hab⟩
+  | skip => exact fun _ hab _ _ _ => ⟨StmtT.skip, hab⟩
   | @seq Γ Γ1 Δ F a b hb ta tb iha ihb =>
-    intro hs hab hw hn
+    intro hs hab hw hn hT
     simp only [Stmt.src, Bool.and_eq_true] at hs
-    obtain ⟨t1, ab1⟩ := iha hs.1 hab hw hn
-    obtain ⟨t2, ab2⟩ := ihb hs.2 ab1 (ta.wf hP hw) (ta.names hP hs.1 hn)
+    obtain ⟨t1, ab1⟩ := iha hs.1 hab hw hn (fun ht => hT ht.seq_l)
+    obtain ⟨t2, ab2⟩ := ihb hs.2 ab1 (ta.wf hP hw) (ta.names hP hs.1 hn) (fun ht => hT ht.seq_r)
     exact ⟨StmtT.seq (by rw [src_rename]; exact hb) t1 t2, ab2⟩
   | @letv Γ Γ1 Δ F x r k E hks hx hxF hr hk hpe ih =>
-    intro _ hab hw hn
+    intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     obtain ⟨hn1, hEn, _⟩ := hr.names hn
     have hab1 := RhsT.absOK (S := S) hr hab
@@ -2876,7 +2928,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letv)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
     rw [canon_exitScope h abk (Or.inl hbx)]
@@ -2887,7 +2939,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @letd Γ Γ1 Δ F x f r k E H hks hx hxF hr hown hview hdtor hH hk hpe ih =>
-    intro _ hab hw hn
+    intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     obtain ⟨hn1, hEn, _⟩ := hr.names hn
     have hab1 := RhsT.absOK (S := S) hr hab
@@ -2905,7 +2957,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnx := NameWF.setE hn1 (E := Entry.arm { E with held := H }) (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl ht => (hEn hl ht).widen hown hH)
     have habx := hab.add hab1 hx (E := Entry.arm { E with held := H }) hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letd)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
     rw [canon_exitScope h abk (Or.inl hbx)]
@@ -2969,9 +3021,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (h.Fcout x) hr' hm' (by rw [← hl]; exact hview) (by rw [← hl]; exact hdtor) hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe ih =>
-    intro _ hab hw hn
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ ih =>
+    intro _ hab hw hn hT
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => absurd ht hnσ)
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT hab
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP hw
@@ -2985,7 +3037,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun hd => absurd hd (by simp [hdb0])) (fun ha => absurd ha (by simp [hcT.dtor_false.1]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) (recvRes_named (c := c) (Ec := Ec) hEn)
     have habx := hab.add hab1 hx (E := recvRes c Ec E) hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callc)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
     rw [canon_exitScope h abk (Or.inl hbx)]
@@ -2996,7 +3048,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc) hj hσ hhd hout hc'
       (fun z hz d hd hb hdr => ?_)
       (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lift h hab hc hmo hdb0 x (hE' x)), hwc, hnc⟩ tk)
-      (EndOK.lift h abk hbx hpe)
+      (EndOK.lift h abk hbx hpe) hnσ
     -- no argument is a binding the receiver may change: in the callee, nor
     -- where the call places it (what the arguments held names the frame; a
     -- symbolic name's image names an `inout` argument the receiver names)
@@ -3010,8 +3062,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact hnz z0 hz0 d0 hd0 hb (h.inj _ _ hdr)
       · exact A_out h ha z0 hdr.symm
   | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe ih =>
-    intro _ hab hw hn
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc
+    intro _ hab hw hn hT
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP hw
@@ -3020,7 +3072,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letcall)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
     rw [canon_exitScope h abk (Or.inl hbx)]
@@ -3035,14 +3087,14 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
   | panic hwf hnΔ hdom hm hdk hst =>
-    intro _ hab _ _
+    intro _ hab _ _ _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.panic (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm' (DKeep.canon h hdk hm)
       (DStay.canon h hst), habΔ⟩
   | @letrec Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
-    intro _ hab hw hn
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc
+    intro _ hab hw hn hT
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
     obtain ⟨hw1, hdm, hE⟩ := hc.wf hP hw
@@ -3051,7 +3103,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letrec)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx⟩
     rw [canon_exitScope h abk (Or.inl hbx)]
@@ -3063,7 +3115,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (EndOK.lift h abk hbx hpe)
   | catchR => intro hs; simp [Stmt.src] at hs
   | @assign Γ Γ1 F x r Ex E hx hxF hmodes hr hty hxd hsome hpin hds hxdb =>
-    intro _ hab hw hn
+    intro _ hab hw hn hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     have hab1 := RhsT.absOK (S := S) hr hab
     obtain ⟨hmo, hlive⟩ := RhsT.out hr
@@ -3137,17 +3189,17 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact (hlv hlive).2.1 (by rw [hm', liftMode_ownSlot]; exact ho')
     · rw [hos]; exact (hlv hlive).2.2
   | @ite Γ Δ F c a b ha hb hc ta tb iha ihb =>
-    intro _ hab hw hn
-    obtain ⟨t1, ab1⟩ := iha ha hab hw hn
-    obtain ⟨t2, _⟩ := ihb hb hab hw hn
+    intro _ hab hw hn hT
+    obtain ⟨t1, ab1⟩ := iha ha hab hw hn (fun ht => hT ht.ite_l)
+    obtain ⟨t2, _⟩ := ihb hb hab hw hn (fun ht => hT ht.ite_r)
     exact ⟨StmtT.ite (by rw [src_rename]; exact ha) (by rw [src_rename]; exact hb)
       (exprT_ren h hab hc) t1 t2, ab1⟩
   | @«while» Γ F c k hk hc tk ih =>
-    intro _ hab hw hn
-    obtain ⟨t, _⟩ := ih hk hab hw hn
+    intro _ hab hw hn hT
+    obtain ⟨t, _⟩ := ih hk hab hw hn (fun ht => hT ht.wh)
     exact ⟨StmtT.while (by rw [src_rename]; exact hk) (exprT_ren h hab hc) t, hab⟩
   | @push Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 hds hdb =>
-    intro _ hab hw hn
+    intro _ hab hw hn hT
     obtain ⟨D', hpa', hD', hD'o⟩ := pushArg_ren h hab hy hpa
     have hab1 := PushArg.absOK (S := S) hy hpa hab
     have hrbx : Ex.mode ≠ .rootb := by rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp
@@ -3211,7 +3263,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       simp only [ownHeld, hv', Bool.not_false, Bool.and_self, ↓reduceIte, List.append_nil]
       exact append_sub (List.Subset.refl _) (List.Subset.refl _)
   | @free Γ F x E t hx hl hm hty hxF hpe =>
-    intro _ hab _ _
+    intro _ hab _ _ _
     have hrb : E.mode ≠ .rootb := by rw [hm]; simp
     have hbx : S.bnd x = none := by
       cases hb : S.bnd x with
@@ -3225,7 +3277,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [liftE_mode x hrb, hm]; rfl) (by rw [liftE_ty' h hab hx]; exact hty) (h.Fcout x)
       (EndOK.lift h hab hbx hpe)
   | @unpair Γ Δ F y x z k E a b hks hy hl hm hty hyF hx hz hxz hxF hzF hk _ hdy hpze hpxe ih =>
-    intro _ hab hw hn
+    intro _ hab hw hn hT
     have hrep := canDo_replace_cases hm
     have hrb : E.mode ≠ .rootb := by rcases hrep with h1 | h1 <;> rw [h1] <;> simp
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
@@ -3239,7 +3291,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have habz := AbsOK.add hab habx hz (hcm b)
     have hw3 := hw.unpair hy hl hm.ownSlot hty hx hz hxz
     have hn3 := hn.unpair hy hl hty hx hz hxz
-    obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3
+    obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3 (fun ht => hT ht.unpair)
     have hbx := hab.fresh hx
     have hbz := hab.fresh hz
     have hpz := EndOK.lift h abk hbz hpze
@@ -3267,9 +3319,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact Or.inl h1
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
   | @sub Γ Γ0 Δ0 Δ F k hw0 tk ho ih =>
-    intro hs hab hw hn
+    intro hs hab hw hn hT
     have hab0 := hab.weaker hw0
-    obtain ⟨t, abΔ0⟩ := ih hs hab0 hw0.2.1 hw0.2.2
+    obtain ⟨t, abΔ0⟩ := ih hs hab0 hw0.2.1 hw0.2.2 hT
     have hwc := canon_weaker h hab0 hw0.2.1 hw0
     rcases ho with rfl | hwo
     · exact ⟨StmtT.weakenIn hwc t, abΔ0⟩

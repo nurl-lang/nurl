@@ -1069,7 +1069,8 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     {E : Entry} {fn : Fn} (hm : MInv m Γ0) (hx : Γ0 x = some E) (hmo : E.mode = .own)
     (hlive : E.live = true) (hnn : ∀ d ∈ E.vdeps, d.kind.isName = false) (hfn : P[f]? = some fn)
     (hps : fn.params = [(.inp, E.ty)])
-    (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : EndOK Γ0 x) :
+    (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : EndOK Γ0 x)
+    (hnt : ¬ ThruFn P f) :
     StmtT P Γ0 F (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Γ0) := by
   have hos : E.mode.ownSlot = true := by rw [hmo]; rfl
   have hmr : m.st m.nv = none := by
@@ -1084,7 +1085,8 @@ theorem dtorCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     simp [mutNames, argNames, argE, hx, hnd]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γ0 := by
     refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_,
-      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm⟩
+      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm,
+      fun h => absurd h hnt⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun h => ?_, fun h => ?_⟩
@@ -1583,7 +1585,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
     | scopeDEnd hsl =>
-      obtain ⟨fn, hfn, hps, _, hro, _, _, _⟩ := hdtor
+      obtain ⟨fn, hfn, hps, _, hro, _, _, _, hnt⟩ := hdtor
       have hm1 := hiS.toMInv.revive hx hmo hhf hdbv hsl
       -- the destructor's result goes to a fresh variable
       have hxn : x < m.nv := hiS.nvS x (by simp [Stmt.vars])
@@ -1605,7 +1607,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (callRes (setE Γ x (Ex.revive x)) fn [x])
           (setE Γ x (Ex.revive x)) := by
         refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_,
-      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm⟩
+      CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm,
+      fun h => absurd h hnt⟩
         · have hi0 : i = 0 := by simp [hps] at hi; omega
           subst hi0
           refine ⟨(Ex.revive x), by simp [setE], rfl, ?_, fun h => ?_, fun h => ?_⟩
@@ -1698,7 +1701,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact ⟨by simp [Stmt.spine, hwx], E', hw⟩
     | scopeDP hp hsl =>
       rename_i m1 v0
-      obtain ⟨fn, hfn, hps, _, hro, _, _, _⟩ := hdtor
+      obtain ⟨fn, hfn, hps, _, hro, _, _, _, hnt⟩ := hdtor
       have hkn : k.spine.Nodup := by
         have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
       obtain ⟨hout, hin, hh1, hc1, hnv1, _⟩ := panic_unwind hp hiS.heap hiS.cover hkn
@@ -1727,7 +1730,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnF : m1.nv ∉ F := fun h => by
         have := hiS.nvF _ h; rw [hnv1] at this; exact Nat.lt_irrefl _ this
       have hsc := dtorCall_typed hMu hux (by simp [Entry.revive, hmo]) rfl
-        (fun d hd => (revive_dep hos hd).2.2.1) hfn hps hro hxF hnF hpinU
+        (fun d hd => (revive_dep hos hd).2.2.1) hfn hps hro hxF hnF hpinU hnt
       -- the panic is raised again: the body's typing kept what the unwind kept
       have hpan : StmtT P (exitScope x (unwindCtx k.spine x Γ)) F .panic (exitScope x Δ1) := by
         have hwk := (Weaker.refl hWd hNd).exitScope x hpx.2.2

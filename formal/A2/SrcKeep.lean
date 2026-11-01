@@ -79,7 +79,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
 theorem CallT.toA {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
     {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnch Γ F) :
     ∃ fn, P[f]? = some fn ∧ CallA Γ F fn args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args := by
-  obtain ⟨fn, hf, hlen, harg, hnf, _, hE, hΓ⟩ := hc
+  obtain ⟨fn, hf, hlen, harg, hnf, _, hE, hΓ, _⟩ := hc
   exact ⟨fn, hf, ⟨hlen, harg, hnf, hn, hanch⟩, hE, hΓ⟩
 
 theorem CallT.ctxRel {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
@@ -167,7 +167,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : E.mode ≠ .rootb := by
       obtain ⟨fn', _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn'
     exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin ih =>
+  | @callc Γ Γ1 Δ F x c j zs k Ec E ms σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by
