@@ -35161,6 +35161,71 @@ unsafe @ bck_loop_mask s pre s post → s {
     ^ out
 }
 
+// …and the field viewers among them (`fb_`, the field `fp_`): one `id:fb:fp`
+// line each.
+@ __fv_snapshot → s {
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsids` `` ) )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s id ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fb ( nurl_sym_get g_bck ( bck_bkey `fb_` id ) )
+        ? != 0 ( nurl_str_len fb ) {
+            : s line ( nurl_str_cat4 id `:` fb ( nurl_str_cat `:` ( nurl_sym_get g_bck ( bck_bkey `fp_` id ) ) ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
+        } {}
+    }
+    ^ out
+}
+
+// The head's field viewers (`snap`) that the path back into it owns
+// outright, `st` its state: a store replacing the field handed the binding
+// the old value (bck_fview_take), so it borrows nothing on that path. One
+// that path bound to something else — a cursor swapped every pass, `= nxt
+// tmp` — still borrows, and is not that field's viewer any more.
+@ __fv_owned s snap s st → s {
+    : ~ s rest ( nurl_str_cat snap `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s line ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i c1 ( nurl_str_find line `:` )
+        ? > c1 0 {
+            : s id ( nurl_str_slice line 0 c1 )
+            ? & & == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` id ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `bs_` id ) ) == BCK_OWNED ( bck_st_get st ( nurl_str_to_int id ) ) {
+                = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
+            } {}
+        } {}
+    }
+    ^ out
+}
+
+// A field viewer at the head that one path into it took the field over
+// on (__fv_owned) still borrows the field from the other (__bs_join): it
+// is the viewer the next replace hands over to, as codegen does by
+// identity at run time (__fview_key). Without its marks it was a plain
+// borrow the replace ended, and a reader replaced in a loop was refused
+// (agora #318).
+@ __fv_join s snap → v {
+    : ~ s rest ( nurl_str_cat snap `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s line ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i c1 ( nurl_str_find line `:` )
+        : s id ( nurl_str_slice line 0 c1 )
+        : s tl ( nurl_str_slice line + c1 1 - - ( nurl_str_len line ) c1 1 )
+        : i c2 ( nurl_str_find tl `:` )
+        : s fb ( nurl_str_slice tl 0 c2 )
+        : s fp ( nurl_str_slice tl + c2 1 - - ( nurl_str_len tl ) c2 1 )
+        // (Only where the joined sources still name that field.)
+        ? & & > c1 0 == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` id ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) fp ) {
+            ( bck_put ( bck_bkey `fb_` id ) fb )
+            ( bck_put ( bck_bkey `fp_` id ) fp )
+        } {}
+    }
+}
+
 // A loop head is reached from before the loop and from the end of its body:
 // a binding borrows there from what it borrowed on either path (`snap` the
 // head's, the walk's own now) — the union, as the state string's join keeps
@@ -35210,10 +35275,8 @@ unsafe @ bck_loop_mask s pre s post → s {
         : s tok0 ( bck_facts_tok )
         = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat tok0 `` ) ( nurl_str_cat3 seen ` ` tok0 )
         : s bsnap ( __bs_snapshot )
+        : s fvsnap ( __fv_snapshot )
         : s post0 ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
-        // (The head's borrow sources: what both paths into it borrow from.)
-        ( __bs_join bsnap )
-        : s tok1 ( bck_facts_tok )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
         // What reaches the next iteration: the body's end and every
@@ -35222,6 +35285,11 @@ unsafe @ bck_loop_mask s pre s post → s {
         // (bck_loop_mask) — carried, a body-local `( string_free x )`
         // read as a free of the NEXT iteration's x.
         : s post ? == 0 ( nurl_str_len cnt ) post0 ( bck_join_state post0 cnt )
+        // (The head's borrow sources: what both paths into it borrow from.)
+        : s fvown ( __fv_owned fvsnap post )
+        ( __bs_join bsnap )
+        ( __fv_join fvown )
+        : s tok1 ( bck_facts_tok )
         // (Bound: a fresh raw string handed straight to a user function is
         // not released as a call temporary.)
         : s carried ( bck_loop_mask pre post )
@@ -35246,6 +35314,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     }
     = g_bck_watch - g_bck_watch 1
     : s bhead ( __bs_snapshot )
+    : s fvhead ( __fv_snapshot )
     // Loop-carried verification. `back` is the converged body-exit
     // state; `verif` is the back-edge seed it implies. The condition is
     // re-evaluated before each body, so check its reads first, then
@@ -35269,6 +35338,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     } {}
     // (The loop is left from its head: its borrow sources hold after it.)
     ( __bs_join bhead )
+    ( __fv_join fvhead )
     ( bck_put `lbrk` outer_brk )
     ( bck_put `lcnt` outer_cnt )
     // The loop is left at its condition (the head state) or by a `break`.

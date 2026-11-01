@@ -13,7 +13,10 @@
 #               build produced no binary (no ASan runtime, libclang_rt.asan),
 #               or the run outlived HOLES_TIMEOUT (default 60 s). Counted as
 #               a failure, never as rejected or clean.
-# Exit status = the number of HOLEs plus the number of UNCHECKED probes
+#   MISMATCH  — the verdict is not the one the probe's `// map:` line
+#               promises (map.sh's table): a guard now refused, or a
+#               probe that runs clean where it should be refused.
+# Exit status = the number of HOLEs, UNCHECKED probes and MISMATCHes
 # (at most 255).
 #
 #   tools/fuzz/holes/check.sh                 # all probes
@@ -100,7 +103,23 @@ for i in "${!srcs[@]}"; do printf '%s\t%s\t%s\0' "$i" "${srcs[$i]}" "${labels[$i
     | xargs -0 -P "$jobs" -n 1 bash -c 'IFS=$'"'"'\t'"'"' read -r i s f <<<"$1"; check_one "$i" "$s" "$f" > "$TMP/v/$i"' _
 holes=0
 unchecked=0
+mismatched=0
 [ $elab_failed -eq 0 ] || { echo "UNCHECKED elab.py failed: no twin was checked"; unchecked=$((unchecked+1)); }
+# The verdict each probe's `// map:` line promises (the table's column 5,
+# `nurlc`: `rejected` or `runs-clean`). A guard the checker starts to
+# refuse, or a probe it stops refusing that still runs clean, is a change
+# in what the language accepts: it fails here, not only in a hand-run
+# comparison (a guard of #265's read REJECTED for a day, agora #318).
+# (Read through map.sh, as the table is generated where it is read: no
+# build has to have written formal/corpus/map.tsv first.)
+declare -A want=()
+if mtable=$(sh "$DIR/map.sh"); then
+    while IFS=$'\t' read -r mname _ _ _ mverdict _; do
+        want["${mname##*/}"]="$mverdict"
+    done < <(tail -n +2 <<<"$mtable")
+else
+    echo "UNCHECKED map.sh failed: no verdict was compared with its map line"; unchecked=$((unchecked+1))
+fi
 for i in "${!srcs[@]}"; do
     if [ -s "$TMP/v/$i" ]; then
         line=$(cat "$TMP/v/$i")
@@ -112,9 +131,17 @@ for i in "${!srcs[@]}"; do
         HOLE*)      holes=$((holes+1)) ;;
         UNCHECKED*) unchecked=$((unchecked+1)) ;;
     esac
+    # (A twin has no row of its own: it is checked for holes only.)
+    case "${labels[$i]}" in twin:*) continue ;; esac
+    w="${want[$(basename "${labels[$i]}" .nu)]:-}"
+    if [[ "$line" == REJECTED* && "$w" == runs-clean ]] || [[ "$line" == ACCEPTED* && "$w" == rejected ]]; then
+        echo "MISMATCH  ${labels[$i]}: ${line%% *}, but its map line says $w"
+        mismatched=$((mismatched+1))
+    fi
 done
 echo "holes: $holes"
 [ $unchecked -eq 0 ] || echo "unchecked: $unchecked (no verdict: see the UNCHECKED lines)"
+[ $mismatched -eq 0 ] || echo "mismatched: $mismatched (a verdict differs from the probe's map line: see the MISMATCH lines)"
 # (An exit status is one byte: 256 failures would read as success.)
-n=$((holes + unchecked)); [ $n -gt 255 ] && n=255
+n=$((holes + unchecked + mismatched)); [ $n -gt 255 ] && n=255
 exit $n
