@@ -54331,7 +54331,30 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // `% Drop` of the program's own whose own fields may hold one? Its drop
 // is then a use of what those views point into (bck_deps_end). A
 // library handle's destructor reads only what it owns.
+//
+// The walk below, through the field types, payloads and elements, is
+// capped at depth 8, and it met the same type again and again on the way
+// down: dst_flagship asked it 494 questions and it made 750,296 calls for
+// 746 distinct (depth, type) pairs (agora #305). Within one question the
+// type tables do not change, so one (depth, type) pair has one answer; a
+// question keeps them in a table of its own, dropped when it is answered.
+: ~ i g_dmrv_memo 0
+
 @ __drop_may_read_view s ty i depth → b {
+    : b top == g_dmrv_memo 0
+    ? top { = g_dmrv_memo ( nurl_sym_new ) } {}
+    : s key ( nurl_str_cat3 ( nurl_str_int depth ) ` ` ty )
+    : i known ( nurl_sym_int g_dmrv_memo key )
+    : ~ b r F
+    ? >= known 0 { = r == known 1 } {
+        = r ( __dmrv_walk ty depth )
+        ( nurl_sym_def g_dmrv_memo key ? r `1` `0` )
+    }
+    ? top { ( nurl_sym_free g_dmrv_memo ) = g_dmrv_memo 0 } {}
+    ^ r
+}
+
+@ __dmrv_walk s ty i depth → b {
     ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     // A trait object runs the destructor of what it boxes: one of the
