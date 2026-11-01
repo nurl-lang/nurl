@@ -4102,14 +4102,15 @@ unsafe @ nurl_cg_lbl i h s hint → s {
 }
 
 // The drop flag of the binding a `??` payload's value is read out of — the
-// matched binding, through payloads of payloads (`__plend`) — as an i1
-// register: the first on the way that has one. `` when none has: a call's
-// result, or a binding that owns its value on every path.
+// matched binding, through payloads of payloads (`__plbind`) — as an i1
+// register: the first on the way that has one. `` when none has: a match
+// over a call (whose `__plend` names what the call lends from, not a slot
+// that holds the payload), or a binding that owns its value on every path.
 @ __payload_owner_flag i syms i cg s name → s {
     : ~ s cur ( nurl_str_cat name `` )
     : ~ i hops 0
     ~ < hops 6 {
-        : s up ( nurl_sym_get2 syms cur `__plend` )
+        : s up ( nurl_sym_get2 syms cur `__plbind` )
         ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { ^ ( nurl_str_cat `` `` ) } {}
         : s uptr ( mem_udrop_ptr_of syms up )
         ? & != 0 ( nurl_str_len uptr ) != 0 ( nurl_sym_len2 syms uptr `__live` ) { ^ ( mem_udrop_flag_get syms cg uptr ) } {}
@@ -20661,6 +20662,10 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // (An enum's payload: lent by the enum, h231.)
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
                 ( mem_note_plend syms pv0 match_first_tt match_var_name __m_ser )
+                // (…and, for a match over a binding, that binding: the slot the
+                // payload is read out of, __payload_owner_flag. A call's match
+                // has none: its `__plend` names what the call lends from.)
+                ? ( is_ident_tok match_first_tt ) { ( nurl_sym_def syms ( nurl_str_cat pv0 `__plbind` ) match_var_name ) } {}
                 // …and the call it came out of, should it be handed back (h270).
                 // (…or the one its scrutinee came out of, a payload itself:
                 // `?? ( vec_get … ) { T m → ?? m { MSome v → ^ v } }` — v is
