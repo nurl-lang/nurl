@@ -10380,6 +10380,10 @@ unsafe @ __sym_buf s t i idx i extra → s {
 // entry relinked oldest-first so each chain stays newest-first. A table
 // that only ever had a fixed bucket count degraded to long chains — the
 // pending-implication table holds tens of thousands of keys.
+// The bucket count is a power of two (4096, then ×4 at each rehash) and a
+// hash is a 32-bit non-negative number, so a bucket is the hash's low bits:
+// `& h - nb 1`, the same bucket `% h nb` named, without a 64-bit divide on
+// every lookup (agora #226).
 unsafe @ __sym_rehash i h → v {
     : s t # s h
     : i count ( nurl_peek t 0 )
@@ -10393,7 +10397,7 @@ unsafe @ __sym_rehash i h → v {
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i k 0
     ~ < k count {
-        : i bh % . hashes k nb
+        : i bh & . hashes k - nb 1
         = . prev k . buckets bh
         = . buckets bh + k 1
         = k + k 1
@@ -10543,7 +10547,7 @@ unsafe @ nurl_sym_def i h s name s type → v {
     : i nl ( nurl_str_len name )
     : i tl ( nurl_str_len type )
     : i hn ( __sym_hash_n name nl )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     // A name defined again in the scope that already holds it (the
     // compiler's side channels — `__last_call_guard__` and the like —
     // are redefined on every call) takes the new value in place: the
@@ -10603,7 +10607,7 @@ unsafe @ nurl_sym_get i h s name → s {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     // Walk this name's bucket chain newest-first. Entries are stored as
     // index+1 (0 = chain end); pop unlinks, so every chained index is < count.
@@ -10641,7 +10645,7 @@ unsafe @ nurl_sym_get2 i h s base s suffix → s {
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10703,7 +10707,7 @@ unsafe @ nurl_sym_set_deep i h s name s value → v {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_get — the entry it would
     // read is the entry we overwrite, so reads and writes cannot disagree.
@@ -10766,7 +10770,7 @@ unsafe @ nurl_sym_append_word i h s name s word → v {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_set_deep, so the entry
     // this grows is the entry nurl_sym_get would read back.
@@ -10805,7 +10809,7 @@ unsafe @ __sym_find_here i h s name → i {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10831,7 +10835,7 @@ unsafe @ nurl_sym_len i h s name → i {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10852,7 +10856,7 @@ unsafe @ nurl_sym_depth_of i h s name → i {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10882,7 +10886,7 @@ unsafe @ nurl_sym_len2 i h s base s suffix → i {
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10910,7 +10914,7 @@ unsafe @ nurl_sym_int i h s name → i {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10933,7 +10937,7 @@ unsafe @ nurl_sym_int2 i h s base s suffix → i {
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10972,7 +10976,7 @@ unsafe @ nurl_sym_tail i h s name i off → s {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -10999,7 +11003,7 @@ unsafe @ nurl_sym_has_word i h s name s word → b {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -11025,7 +11029,7 @@ unsafe @ __sym_peek i h s name → s {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -11048,7 +11052,7 @@ unsafe @ nurl_sym_has_word2 i h s base s suffix s word → b {
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
@@ -11073,7 +11077,7 @@ unsafe @ nurl_sym_word_index i h s name s word → i {
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
-    : i bh % hn ( nurl_peek t 6 )
+    : i bh & hn - ( nurl_peek t 6 ) 1
     : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
