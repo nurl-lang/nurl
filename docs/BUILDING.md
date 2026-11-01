@@ -623,7 +623,7 @@ runners.
 | HTTP leak + HTTP/2 & HTTP/3 conformance | `tools/leakcheck/run.sh`, `tools/h2spec_gate.sh` (h2spec), and `tools/h3spec_gate.sh` (49/49 h3spec over QUIC) |
 | AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan (CI: targeted controls in one job, the corpus in two parallel shards via `NURL_SAN_SHARD=i/n`) |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
-| unikernel: the corpus with no libc | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |
+| unikernel: the corpus with no libc (shard 1/2, 2/2) | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |
 | unikernel: the guest under QEMU | the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — devices, network demos, TLS, DNS, disk |
 | unikernel: nurlc.wasm and the swarm appliance | `wasmc_gate.sh` (the compiler as wasm, in the guest, byte-identical IR) and `swarm_gate.sh` (the swarm-mcp appliance) |
 | Windows x86_64 (`windows-latest`) | `build.bat` — bootstrap fixed point + the Windows golden corpus (`compiler/tests/outputs-windows/`), then `nurl.bat` builds and runs a program with the bundled zig *and* with clang, and builds piped source with `nurl.bat --stdin NAME` (diagnostics name NAME) |
