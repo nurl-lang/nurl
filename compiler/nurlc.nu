@@ -40406,7 +40406,17 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // §2.8: record a field that is exactly a bare parameter of the
         // enclosing function, so `^ @ T { … param … }` propagates that
         // parameter's reference out through the returned aggregate.
-        ? & ( is_ident_tok fld_first_tt )
+        // (Not one the literal copied, `fld_param_copy`, into a value that
+        // holds no views: the field is a value of its own, and the
+        // parameter stays its caller's. Counted as handed back, the caller
+        // kept a temporary it had passed alive for a result that never held
+        // it, and leaked it — agora #288. A copy of a type that holds views
+        // still points where the parameter's did, so it carries them.)
+        // (Asked precisely, as mem_dup asks whether a copy owns its data.)
+        = g_thv_precise 1
+        : b __fpc_own & fld_param_copy ! ( __ty_holds_view ( nurl_llty fty ) 0 )
+        = g_thv_precise 0
+        ? & & ( is_ident_tok fld_first_tt ) ! __fpc_own
         ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         { : s __fc0 ( bck_param_carriers syms fld_first_val )
             : ~ s __fc ( nurl_str_cat __fc0 `` )
