@@ -1790,6 +1790,15 @@ unsafe @ agg_field_count i syms s ot → i {
 // kept by consuming its fields.
 : ~ i g_fn_handkeeps 0
 
+// The parameters whose elements' views a function copies into another
+// container it was handed, or into its result: an element read through a
+// pointer into one parameter's buffer and stored through another pointer
+// (`= . ddata + dlen i ( mem_dup . sdata i )`, vec_extend; vec_clone,
+// slice_to_vec), for an element type that can hold a view. A copy of a
+// view is the same view, so what holds the copy depends on what the
+// argument's elements view (agora #347). Read by the borrow walk only.
+: ~ i g_fn_vcopies 0
+
 // Retention through an unverified foreign or indirect call. Lifetime-only
 // facts; kept separate from diagnostic escape contracts.
 : ~ i g_fn_unverified 0
@@ -9537,6 +9546,7 @@ unsafe @ __clo_tmp_set s v → v { = g_clo_tmp ( nurl_str_cat v `` ) }
     ( nurl_eprintln ( nurl_str_cat4 `summary ` f ` sink=` ( nurl_sym_get g_fn_sink f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  keeps=` ( nurl_sym_get g_fn_keeps f ) ` stores=` ( nurl_sym_get g_fn_stores f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  escapes=` ( nurl_sym_get g_fn_escapes f ) ` handkeeps=` ( nurl_sym_get g_fn_handkeeps f ) ) )
+    ( nurl_eprintln ( nurl_str_cat `  vcopies=` ( nurl_sym_get g_fn_vcopies f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  ret_param=` ( nurl_sym_get g_fn_ret_param f ) ` ret_alias=` ( nurl_sym_get g_fn_ret_alias f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  unverified=` ( nurl_sym_get g_fn_unverified f ) ` lent=` ( mem_fn_lent_params syms f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  body_done=` ( nurl_sym_get2 syms f `__body_done` ) ` ret_owned=` ( nurl_sym_get2 syms f `__ret_owned` ) ) )
@@ -31261,6 +31271,25 @@ unsafe @ bck_sx_skip s e → v {
     }
 }
 
+// What the elements of the values `srcs` names hold views of (each one's
+// `vds_` / `vdi_` / `vdh_`, bck_dep_set): what an element copied out of
+// one of them still views (agora #347). A function's parameter's elements
+// view what its caller holds, which outlives the call: nothing here can end
+// it, so it adds none. A closure's own parameter or capture (`cv_`,
+// __clo_cap_marks) stands for what its elements view: given to a capture,
+// that is refused (bck_clo_cap_view_diag, agora #312).
+@ __src_elem_deps s srcs → s {
+    : ~ s out ``
+    : ~ s rest ( __src_plain srcs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s rs ( nurl_str_int ( bck_path_root ( nurl_str_to_int w ) ) )
+        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `cv_` rs ) ) { = out ( __word_union out w ) } {}
+        = out ( __word_union out ( __src_mark2 ( nurl_sym_get g_bck ( bck_bkey `vds_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdi_` rs ) ) ( nurl_sym_get g_bck ( bck_bkey `vdh_` rs ) ) ) )
+    }
+    ^ out
+}
+
 // The sources a leaf of a source expression stands for: a binding (or a
 // field path, as alive as its binding) that is a borrow stands for what
 // it borrows; any other binding, as a call's argument (`arg`), for its own
@@ -31421,7 +31450,18 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         = g_sxe_vonly T
                         = out ( __word_union out ( __src_drop_handles ( bck_sx_ev st e T ) ) )
                         = g_sxe_vonly __sv
-                    } { ( bck_sx_skip e ) }
+                    } { ? ( nurl_sym_has_word g_fn_vcopies w js ) {
+                            // An argument whose elements the callee copies into
+                            // what it hands back (vec_clone, slice_to_vec — agora
+                            // #347): a copy of an element is the same view, so the
+                            // result holds what the elements view — not the
+                            // argument's own storage, which a Slice of it points
+                            // into and the copy does not.
+                            : b __sv4 g_sxe_vonly
+                            = g_sxe_vonly F
+                            = out ( __word_union out ( __src_elem_deps ( bck_sx_ev st e T ) ) )
+                            = g_sxe_vonly __sv4
+                        } { ( bck_sx_skip e ) } }
                 } }
             ? & < g_sxe_pos n == # i . ep g_sxe_pos 124 { = g_sxe_pos + g_sxe_pos 1 = j + j 1 } {
                 = more F
@@ -32121,7 +32161,7 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         : s vsrc ? == vb0 66 ( nurl_str_cat `!` `` ) ( bck_swap_char ( __src_plain ( bck_sx_arg_sources st ( bck_field rec 8 ) ) ) 32 44 )
                         ( bck_add_word `vkself` ( nurl_str_cat4 ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) `#` ( nurl_str_int ( bck_path_root ( nurl_str_to_int vc ) ) ) ( nurl_str_cat4 `#` ( bck_field rec 3 ) `#` vsrc ) ) )
                     } {}
-                    : b vkept ? vbuf & & ! vself | != 0 ( nurl_sym_len g_fn_inout vcal ) ( nurl_sym_has_word g_fn_mutates vcal `0` ) ( bck_callee_vkeeps vcal ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) ) | ( seq vcal `=.` ) & ( bck_callee_keeps vcal vaix ) | ( nurl_sym_has_word g_fn_mutates vcal `0` ) != 0 ( nurl_sym_len g_fn_inout vcal )
+                    : b vkept ? vbuf & & ! vself | != 0 ( nurl_sym_len g_fn_inout vcal ) ( nurl_sym_has_word g_fn_mutates vcal `0` ) ( bck_callee_vkeeps vcal ( nurl_str_slice vaix 1 - ( nurl_str_len vaix ) 1 ) ) | | ( seq vcal `=.` ) & ( bck_callee_keeps vcal vaix ) | ( nurl_sym_has_word g_fn_mutates vcal `0` ) != 0 ( nurl_sym_len g_fn_inout vcal ) ( nurl_sym_has_word g_fn_vcopies vcal vaix )
                     // (`B`: the owner is a temporary this statement made and
                     // releases after the call — nothing to depend on; one the
                     // callee keeps or takes is the callee's.)
@@ -36699,6 +36739,83 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ^ & != 0 g_generic_struct_syms != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
 }
 
+// Raw provenance (agora #347): the parameters a pointer binding (`s`,
+// `*T`) is derived from — through field reads, casts and calls of them or
+// of such a binding: `: s sctl . src ctl  : *A sdata # *A ( nurl_vctl_data
+// sctl )` — as their indices (`__rawsrc`), from the initializer's text. An
+// element read through one and stored through another pointer copies what
+// those parameters' elements hold (__note_vcopy).
+@ __note_rawsrc i syms s name s lty s text → v {
+    : i n ( nurl_str_len lty )
+    : s k ( nurl_str_cat name `__rawsrc` )
+    : s r ? & > n 0 == ( nurl_str_get lty - n 1 ) 42 ( __rawsrc_of syms text ) ``
+    // (Written only where there is something to say, or something said
+    // of an earlier binding of the name to take back.)
+    ? | != 0 ( nurl_str_len r ) != 0 ( nurl_sym_len syms k ) { ( nurl_sym_def syms k r ) } {}
+}
+
+// …the parameters (indices) a piece of source text names in a value
+// position, directly or through a binding derived from them. A type
+// argument (`[ s ]`) and a cast's type (`# *A`, `# * s`, `# ( Vec A )`)
+// name no value: a generic instance's text spells its type arguments out,
+// and a parameter may share a type's name (slice_to_vec's `s`).
+@ __rawsrc_of i syms s text → s {
+    : ~ s out ``
+    : ~ s rest ( bck_swap_char ( bck_swap_char text 10 32 ) 9 32 )
+    // 1: in a `[ … ]` type list; 2: a cast's type comes next.
+    : ~ i skip 0
+    : ~ i pdepth 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i wn ( nurl_str_len w )
+        : i c0 ( nurl_str_get w 0 )
+        // (A word of one character: `(` 40, `)` 41, `*` 42, `#` 35.)
+        : i one ? == wn 1 c0 0
+        : b closes == ( nurl_str_get w - wn 1 ) 93
+        : ~ b val F
+        ? > pdepth 0 {
+            = pdepth ? == one 40 + pdepth 1 ? == one 41 - pdepth 1 pdepth
+        } { ? == skip 1 { = skip ? closes 0 1 } { ? == skip 2 {
+                    = pdepth ? == one 40 1 0
+                    = skip ? == one 42 2 0
+                } { ? == c0 91 { = skip ? closes 0 1 } { ? == one 35 { = skip 2 } { = val T } } } } }
+        ? val { = out ( __word_union out ( __rawsrc_word syms w ) ) } {}
+    }
+    ^ out
+}
+
+// …one value word's: a parameter's index, or what a binding derived from
+// parameters was (`__rawsrc`).
+@ __rawsrc_word i syms s w → s {
+    : i pi ( nurl_sym_word_index syms `__fn_param_names__` w )
+    ? >= pi 0 { ^ ( nurl_str_int pi ) } {}
+    ^ ( nurl_sym_get2 syms w `__rawsrc` )
+}
+
+// An element stored through pointer `obj` whose value (`text`, of LLVM type
+// `ty`) reads through a pointer derived from other parameters: where the
+// type can hold a view, this function copies those parameters' elements'
+// views into what `obj` points into, or its result (g_fn_vcopies). A move
+// within one buffer (vec_insert's shift) copies nothing new.
+@ __note_vcopy i syms s obj s ty s text → v {
+    ? | == 0 ( nurl_str_len obj ) == 0 ( nurl_sym_len syms `__fn_param_names__` ) { ^ v } {}
+    : s src ( __rawsrc_of syms text )
+    ? == 0 ( nurl_str_len src ) { ^ v } {}
+    = g_thv_precise 1
+    : b hv ( __ty_holds_view ty 0 )
+    = g_thv_precise 0
+    ? ! hv { ^ v } {}
+    : s dst ( nurl_sym_get2 syms obj `__rawsrc` )
+    : ~ s rest ( nurl_str_cat src `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( str_contains_word dst w ) {
+            : s cur ( nurl_sym_get syms `__fn_inferred_vcopy__` )
+            ? ! ( str_contains_word cur w ) { ( nurl_sym_set_deep syms `__fn_inferred_vcopy__` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat w `` ) ( nurl_str_cat3 cur ` ` w ) ) } {}
+        } {}
+    }
+}
+
 unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
@@ -36803,7 +36920,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : i __jpb_on0 g_jpb_on
         : s __jpb_l0 ( nurl_str_cat g_jpb_list `` )
         ( __jpb_begin syms is_mutable bck_rhs_tt )
+        : i __rs_at ( nurl_lex_cur_start lex )
         : ~ s val ( gen_expr lex syms cg )
+        ( __note_rawsrc syms name ( nurl_get_last_type ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
         : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
         = g_jpb_last ( nurl_str_cat __jpb_mine `` )
         = g_jpb_on __jpb_on0
@@ -37184,7 +37303,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : i __jpb_on0 g_jpb_on
             : s __jpb_l0 ( nurl_str_cat g_jpb_list `` )
             ( __jpb_begin syms is_mutable bck_rhs_tt )
+            : i __rs_at ( nurl_lex_cur_start lex )
             : ~ s val ( gen_expr lex syms cg )
+            ( __note_rawsrc syms name ( nurl_llty ptype ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
             : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
             = g_jpb_last ( nurl_str_cat __jpb_mine `` )
             = g_jpb_on __jpb_on0
@@ -38545,8 +38666,11 @@ unsafe @ gen_assign i lex i syms i cg → s {
     // binding, but a borrowed one is stored as is (g_fn_stores).
     : b manual != 0 ( nurl_sym_len syms `__field_store_manual__` )
     : i __fs_sxn0 g_sx_n
+    : i __fs_at ( nurl_lex_cur_start lex )
     : ~ s __fs_v ( gen_expr lex syms cg )
     : s __fs_ty ( nurl_get_last_type )
+    // (An element copied out of a parameter's buffer: agora #347.)
+    ? indirect { ( __note_vcopy syms ( nurl_sym_get syms `__last_field_obj__` ) __fs_ty ( nurl_lex_src_slice lex __fs_at - ( nurl_lex_cur_start lex ) __fs_at ) ) } {}
     : i __fs_eff_tt ( __val_eff_tt __fs_tt )
     // A value that may hold views stored into a field of a binding's struct
     // (`= . r name x`): the struct holds those views from here on, so it
@@ -45730,6 +45854,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_def body_syms `__fn_pending_keep_impl__` `` )
     ( nurl_sym_def body_syms `__fn_inferred_store__` `` )
     ( nurl_sym_def body_syms `__fn_inferred_handkeep__` `` )
+    ( nurl_sym_def body_syms `__fn_inferred_vcopy__` `` )
     ( nurl_sym_def body_syms `__fn_retlend__` `` )
     ( nurl_sym_def body_syms `__fn_retpart__` `` )
     ( nurl_sym_def body_syms `__fn_retpass__` `` )
@@ -53375,6 +53500,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__fn_scratch_objs__` `` )
     ( nurl_sym_def syms `__fn_inferred_store__` `` )
     ( nurl_sym_def syms `__fn_inferred_handkeep__` `` )
+    ( nurl_sym_def syms `__fn_inferred_vcopy__` `` )
     ( nurl_sym_def syms `__fn_pending_keep_impl__` `` )
     ( nurl_sym_def syms `__agg_lends__` `` )
     ( nurl_sym_def syms `__agg_lends_part__` `` )
@@ -53591,6 +53717,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : s __hk_set ( nurl_sym_get syms `__fn_inferred_handkeep__` )
     ? != 0 ( nurl_str_len __hk_set )
     { ( nurl_sym_def g_fn_handkeeps fname __hk_set ) }
+    {}
+    : s __vc_set ( nurl_sym_get syms `__fn_inferred_vcopy__` )
+    ? != 0 ( nurl_str_len __vc_set )
+    { ( nurl_sym_def g_fn_vcopies fname __vc_set ) }
     {}
     : s __kp_set ( nurl_sym_get syms `__fn_inferred_keep__` )
     ? != 0 ( nurl_str_len __kp_set )
@@ -59629,6 +59759,7 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     ( __merge_word_set g_fn_keeps fname ( nurl_sym_get syms `__fn_inferred_keep__` ) )
     ( __merge_word_set g_fn_stores fname ( nurl_sym_get syms `__fn_inferred_store__` ) )
     ( __merge_word_set g_fn_handkeeps fname ( nurl_sym_get syms `__fn_inferred_handkeep__` ) )
+    ( __merge_word_set g_fn_vcopies fname ( nurl_sym_get syms `__fn_inferred_vcopy__` ) )
     ( __merge_impls syms `__fn_pending_sink_impl__` fname `s` )
     ( __merge_impls syms `__fn_pending_keep_impl__` fname `k` )
     ( __merge_impls syms `__fn_pending_esc_impl__` fname `e` )
@@ -72359,6 +72490,7 @@ unsafe @ main → i {
     = g_fn_vkpend ( nurl_sym_new )
     = g_fn_stores ( nurl_sym_new )
     = g_fn_handkeeps ( nurl_sym_new )
+    = g_fn_vcopies ( nurl_sym_new )
     = g_fn_unverified ( nurl_sym_new )
     = g_type_layouts ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
