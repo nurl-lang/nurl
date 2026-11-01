@@ -67035,6 +67035,14 @@ unsafe @ __fold_at i p s lit i n → b {
     ^ == 0 # i ( memcmp # s + g_dce_mod p lit n )
 }
 
+// Where byte `c` next occurs in the module text's [from, to), or `to`.
+unsafe @ __fold_next i from i to s c → i {
+    ? >= from to { ^ to } {}
+    : i rel ( nurl_memmem_range # s + g_dce_mod from - to from c 1 )
+    ? < rel 0 { ^ to } {}
+    ^ + from rel
+}
+
 unsafe @ __fold_byte i p → i {
     : *u mp # *u # s g_dce_mod
     ^ & # i . mp p 255
@@ -68471,21 +68479,32 @@ unsafe @ __fold_settle_flags i st i en → i {
 @ __fold_put_range i from i to i part i depth → v {
     : ~ i p from
     : ~ i run from
-    : ~ b quoted F
     ~ < p to {
-        : i c ( __fold_byte p )
-        ? == c 34 { = quoted ! quoted = p + p 1 } {
-            ? & & & ! quoted == c 37 < depth 16 ! ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
-                : i r ( __fold_reg p to )
-                : i re g_fold_end
-                ? & >= r 0 != 0 ( __fold_kind r ) {
-                    ( __ir_write_range run p part )
-                    ( __fold_put_reg r part + depth 1 )
-                    = p re
-                    = run p
+        // The stretch up to the next `"` is unquoted: only a `%` in it can
+        // start a register to fold. The search jumps from one to the next;
+        // a byte loop over every line of the function cost more than the
+        // folding did (agora #305).
+        : i qe ( __fold_next p to `"` )
+        ~ < p qe {
+            = p ( __fold_next p qe `%` )
+            ? < p qe {
+                ? & < depth 16 ! ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
+                    : i r ( __fold_reg p to )
+                    : i re g_fold_end
+                    ? & >= r 0 != 0 ( __fold_kind r ) {
+                        ( __ir_write_range run p part )
+                        ( __fold_put_reg r part + depth 1 )
+                        = p re
+                        = run p
+                    } { = p + p 1 }
                 } { = p + p 1 }
-            } { = p + p 1 }
+            } {}
         }
+        // A quoted stretch, written as it is: up to and past its closing `"`.
+        ? < p to {
+            : i ce ( __fold_next + p 1 to `"` )
+            = p ? < ce to + ce 1 to
+        } {}
     }
     ( __ir_write_range run to part )
 }
