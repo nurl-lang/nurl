@@ -30,8 +30,9 @@ permissions:
 jobs:
   start:
     name: ci:full starts the full run
-    # A fork's PR has a read-only token and a head branch this repository
-    # does not have: there, push after labelling.
+    # A fork's PR gets nothing from this job: its token is read-only, so it
+    # could not dispatch, and its head branch is not in this repository. The
+    # job is skipped there; push after labelling, as before.
     if: github.event.label.name == 'ci:full' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 2
