@@ -1710,6 +1710,13 @@ unsafe @ agg_field_count i syms s ot → i {
 // (gen_let_or_struct → gen_block_expr, consumed at the block's `{`).
 : ~ i g_blk_scalar_let 0
 : ~ s g_clo_scan_assigned ``
+// The outer bindings the closure being built stores a FIELD of (`= . w f
+// …`, `= . . h w f …`): captured by reference like an assigned one, so the
+// store lands on the binding and not on a copy in the env (agora #356). Kept
+// apart from g_clo_assigned, which also names what the closure gives a
+// whole new value in its effects: a field store is reported as the field.
+: ~ s g_clo_fld_roots ``
+: ~ s g_clo_scan_fld_roots ``
 // The closure body's own bindings of a plain struct type, as the capture
 // scan meets them: a name after `. <one of them>` is a field (agora #125).
 : ~ s g_clo_scan_structs ``
@@ -43453,6 +43460,8 @@ unsafe @ __l2n_list s lst → s {
     // the closure holds the binding's address instead — and, like any
     // capture by reference, may not outlive its frame (§2.3).
     ? ? == 0 ( nurl_str_len g_clo_assigned ) F ( str_contains_word g_clo_assigned var ) { ^ T } {}
+    // …and one whose field it stores (agora #356).
+    ? ? == 0 ( nurl_str_len g_clo_fld_roots ) F ( str_contains_word g_clo_fld_roots var ) { ^ T } {}
     ? != ( nurl_str_get vt 0 ) 37 { ^ F } {}
     : s tname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
     : s vlist ( nurl_sym_get2 syms tname `__variants` )
@@ -44879,6 +44888,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : s __ncf_saved ( nurl_str_cat g_nc_flag_caps `` )
     : s __nco_saved ( nurl_str_cat g_nc_own_caps `` )
     : s __cla_saved ( nurl_str_cat g_clo_assigned `` )
+    : s __clf_saved ( nurl_str_cat g_clo_fld_roots `` )
     = g_clo_detach 0
     : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
     = g_clo_bind_name ``
@@ -44946,6 +44956,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
     : s captured_vars ( simple_capture_analysis lex syms param_names )
     = g_clo_assigned ( nurl_str_cat g_clo_scan_assigned `` )
+    = g_clo_fld_roots ( nurl_str_cat g_clo_scan_fld_roots `` )
     // A closure bound to a name the rest of the function only calls stays
     // in this frame: it reaches its captures' drop flags there (h236).
     // Any other — handed back, to a thread or a fiber, to a callee, stored —
@@ -46139,6 +46150,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_nc_flag_caps __ncf_saved
     = g_nc_own_caps __nco_saved
     = g_clo_assigned __cla_saved
+    = g_clo_fld_roots __clf_saved
     result2
 }
 
@@ -46456,6 +46468,10 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
     // (The outer locals the body assigns: g_clo_scan_assigned.)
     : ~ s assigned ( nurl_str_cat `` `` )
+    // A field-path target (`= . w f …`, `= . . h w f …`) is being read:
+    // the first name after its dots is the binding the store changes.
+    : ~ b fld_root F
+    : ~ s fld_roots ( nurl_str_cat `` `` )
     : ~ i captured_count 0
     // Anchor for the unclosed-brace diagnostic below: the opening '{'.
     : i sca_open_line ( nurl_lex_line lex )
@@ -46608,8 +46624,12 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                     ~ >= ft_l lvl { = ft_l ( __cs_lvl fr ) = ft_n ( __cs_need fr ) = ft_a ( __cs_act fr ) = fr ( str_skip_word fr ) }
                     ( nurl_lex_advance lex )  // consume '='
                     // (A target that is not a name — `= . p f v` — is read
-                    // as the expression it is.)
+                    // as the expression it is. A field path's root is still
+                    // the binding the store changes: fld_root marks it, so
+                    // the closure takes it by pointer and the store reaches
+                    // it, not a copy in the env — agora #356.)
                     = held ! | == ( nurl_lex_type lex ) TT_IDENT == ( nurl_lex_type lex ) TT_TYPE_KW
+                    = fld_root == ( nurl_lex_type lex ) TT_DOT
                     ? & ! held ! ( __cs_bound bl ( nurl_lex_val lex ) )
                     {
                         : s target_var ( nurl_lex_val lex )
@@ -46740,6 +46760,13 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         : ~ b is_clo_param ( str_contains_word closure_params var_name )
                         ? & ! is_clo_param != 0 ( nurl_str_len bl ) { = is_clo_param ( __cs_bound bl var_name ) } {}
                         ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
+                        // The root of a field-path store target.
+                        ? fld_root {
+                            = fld_root F
+                            ? & & ! is_clo_param ! ( str_contains_word fld_roots var_name ) ( __cs_outer outer_syms var_name ) {
+                                = fld_roots ( nurl_str_cat3 fld_roots ` ` var_name )
+                            } {}
+                        } {}
                         // Capture locals (have __ptr) and outer fn params (have
                         // __param), each once: a name already captured is not
                         // looked up again.
@@ -46776,11 +46803,15 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
         ? == tt TT_EOF
         { = brace_depth 0 }  // Break on EOF
         { ? ! held { ( nurl_lex_advance lex ) } {} }
+        // (A field path's dots lead to its root; anything else ends it —
+        // except the `=` itself, whose turn set it.)
+        ? & & & fld_root != tt TT_EQ != tt TT_DOT ! | == tt TT_IDENT == tt TT_TYPE_KW { = fld_root F } {}
         = prev2 prev1
         = prev1 tt
     }
     // Lexer is now positioned after closing brace
     = g_clo_scan_assigned assigned
+    = g_clo_scan_fld_roots fld_roots
     captured_vars
 }
 
