@@ -1,0 +1,21 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_moved_field.nu:23:5: error: use of moved field '. h buf' — it was taken at line 22 by take, which left the field empty (a handle has exactly one owner, and that call is it now). Give the field a new value before reading it again (= . h buf …), or hand the callee a copy, ( mem_dup . h buf ), and keep the field.
+    ( vec_push [u] . h buf # u 65 )
+    ^
+compiler/tests/diag_moved_field.nu:29:5: error: use of moved field '. h s' — it was taken at line 28 by eat, which left the field empty (a handle has exactly one owner, and that call is it now). Give the field a new value before reading it again (= . h s …), or hand the callee a copy, ( mem_dup . h s ), and keep the field.
+    ( string_push_str . h s `x` )
+    ^
+compiler/tests/diag_moved_field.nu:35:5: error: use of moved field '. h buf' — it was taken at line 34 by take, which left the field empty (a handle has exactly one owner, and that call is it now). Give the field a new value before reading it again (= . h buf …), or hand the callee a copy, ( mem_dup . h buf ), and keep the field.
+    : ( Vec u ) x . h buf
+    ^
+compiler/tests/diag_moved_field.nu:42:5: error: use of partly moved value 'h' — its field '. h buf' was taken at line 41 by take, so the field is empty, and 'h' cannot be handed on whole while it is. Give the field a value first (= . h buf …), or hand on only the fields you still need.
+    ( grow h )
+    ^
+compiler/tests/diag_moved_field.nu:48:5: error: use of partly moved value 'h' — its field '. h buf' was taken at line 47 by take, so the field is empty, and 'h' cannot be handed on whole while it is. Give the field a value first (= . h buf …), or hand on only the fields you still need.
+    ^ h
+    ^
+compiler/tests/diag_moved_field.nu:54:5: error: use of possibly-moved field '. h buf' — it was taken on only some paths, at line 53 by take; on that path the field is empty. Take it on every path, or give it a value again (= . h buf …) on the path that took it
+    ( vec_push [u] . h buf # u 65 )
+    ^
+error: compilation aborted — 6 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
