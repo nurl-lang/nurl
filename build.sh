@@ -698,7 +698,7 @@ if (( RUN_TESTS == 1 )); then
     # nesting_limit: `--max-nesting` / NURL_MAX_NESTING / a fixed limit
     # stop a deeply nested program with a diagnostic, not a stack overflow.
     step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + unsafe report + import roots + nesting limit" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir unsafe_report import_roots nesting_limit
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir journal_slot_cfg_ir unsafe_report import_roots nesting_limit
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

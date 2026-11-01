@@ -431,8 +431,9 @@ raw @ string_stash i kind sink String str i max → v {
     ^ @ String { . tmp ctl }
 }
 
-// string_with_cap for `n` bytes that exist elsewhere (a copy's source,
-// the parts of a concatenation): no check, no panic (_vec_with_room).
+// string_with_cap for a count whose byte size cannot overflow: bytes
+// that exist elsewhere (a copy's source, the parts of a concatenation),
+// or a small constant. No check, no panic (_vec_with_room).
 @ _string_with_room i n → String {
     : ( Vec u ) tmp ( _vec_with_room [u] + ? > n 0 n 0 1 )
     : *u p ( vec_data [u] tmp )

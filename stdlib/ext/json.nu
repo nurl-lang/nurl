@@ -175,7 +175,7 @@ $ `stdlib/std/bytes.nu`
 // Numeric convenience: build a JNum from a primitive int / float. The
 // raw text uses the canonical decimal form (matches `nurl_str_int`).
 @ json_int i n → Json {
-    : String s ( string_with_cap 16 )
+    : String s ( _string_with_room 16 )
     ( string_push_int s n )
     ^ @ Json { JNum s }
 }
@@ -566,9 +566,12 @@ $ `stdlib/std/bytes.nu`
 
 // The offset of the first such byte in [span, span+n), or -1. Sixteen
 // bytes a step; the last 1..15 come in through nurl_v128_ldn, which reads
-// no byte past them and pads with zeros that the mask then leaves out —
-// so a short string, the common one, is a single step whatever its
-// alignment, with no byte loop at either end.
+// no byte past them and pads with zeros. A zero is itself a special byte,
+// so the first special one at or past `lim` means none before it: the
+// test is against `lim`, with no mask (a shift by a computed amount, whose
+// range check made every JSON walk one a panic can leave, agora #283). A
+// short string, the common one, is a single step whatever its alignment,
+// with no byte loop at either end.
 //
 // The walk reads through a raw pointer: `span` points into the middle of
 // the document, so `nurl_str_get`'s per-call strlen would run to the
@@ -580,8 +583,11 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         : i r - n k
         : i lim ? < r 16 r 16
-        : i m & ( __json_special16 ( nurl_v128_ldn # s + # i span k lim ) ) - << 1 lim 1
-        ? != m 0 { ^ + k # i ( nurl_ctz # u64 m ) } {}
+        : i m ( __json_special16 ( nurl_v128_ldn # s + # i span k lim ) )
+        ? != m 0 {
+            : i first # i ( nurl_ctz # u64 m )
+            ? < first lim { ^ + k first } {}
+        } {}
         = k + k 16
     }
     ^ -1
@@ -626,7 +632,7 @@ $ `stdlib/std/bytes.nu`
     // canonical char-by-char loop decodes the escapes, and rejects a
     // control byte or the missing quote at the same position it always has.
 
-    : String out ( string_with_cap 16 )
+    : String out ( _string_with_room 16 )
     : ~ b done F
     ~ ! done {
         ? ( __jp_eof p ) {
@@ -875,7 +881,7 @@ $ `stdlib/std/bytes.nu`
 // Format a parse failure as "<kind> at line L col C". Caller owns the
 // returned String.
 @ json_format_error JsonError e → String {
-    : String out ( string_with_cap 48 )
+    : String out ( _string_with_room 48 )
     ( string_push_str out ( parse_err_msg # ParseErr . e kind ) )
     ( string_push_str out ` at line ` )
     ( string_push_int out . e line )
@@ -923,7 +929,8 @@ $ `stdlib/std/bytes.nu`
     : i n . text len
     : *u src . text data
     : ~ i w ( vec_len [u] out )
-    ( vec_reserve [u] out + n 4 )
+    // (`text`'s bytes, the quotes and a lead/tail byte: _vec_reserve_more.)
+    ( _vec_reserve_more [u] out + n 4 )
     : ~ * u dst ( vec_data [u] out )
     ? > lead 0 {
         = . dst w # u lead
@@ -933,21 +940,23 @@ $ `stdlib/std/bytes.nu`
     = w + w 1
     : ~ i k 0
     ~ < k n {
-        // Sixteen bytes a step (the last 1..15 zero-padded, the padding
-        // masked off): the run before the first byte that needs an escape
-        // goes out as it came, in one partial store.
+        // Sixteen bytes a step (the last 1..15 zero-padded; a zero is a
+        // special byte, so one at or past `lim` is padding): the run before
+        // the first byte that needs an escape goes out as it came, in one
+        // partial store.
         : i r - n k
         : i lim ? < r 16 r 16
         : v128 blk ( nurl_v128_ldn # s + # i src k lim )
-        : i m & ( __json_special16 blk ) - << 1 lim 1
-        : i run ? == m 0 lim # i ( nurl_ctz # u64 m )
+        : i m ( __json_special16 blk )
+        : i first ? == m 0 16 # i ( nurl_ctz # u64 m )
+        : i run ? < first lim first lim
         ( nurl_v128_stn # s + # i dst w run blk )
         = w + w run
         = k + k run
-        ? != m 0 {
+        ? < first lim {
             : i c & # i . src k 255
             : b _held ( vec_set_len [u] out w )
-            ( vec_reserve [u] out + - n k 8 )
+            ( _vec_reserve_more [u] out + - n k 8 )
             = dst ( vec_data [u] out )
             = . dst w # u 92
             : i named ? == c 34 34 ? == c 92 92 ? == c 10 110 ? == c 9 116 ? == c 13 114 ? == c 8 98 ? == c 12 102 0
@@ -1184,12 +1193,24 @@ $ `stdlib/std/bytes.nu`
     ^ @ JsonWriter { st }
 }
 
+// The innermost level's state. The stack always holds the top level's
+// (jw_end pops only containers), so the read never runs off it; if it
+// did, the state is a misuse (6). A read that cannot panic: an indexed one
+// would make every jw_* call one a panic can leave, and journal the
+// values a `recover` extent hands them (agora #283).
+@ __jw_top JsonWriter w → i {
+    ^ ?? ( vec_get [u] . w st - ( vec_len [u] . w st ) 1 ) {
+        T b → # i b
+        F → 6
+    }
+}
+
 // Where a value may go: the separator its place wants (44, a comma after
 // an earlier element; else 0) with the state moved on, or -1 with the
 // writer marked bad.
 @ __jw_slot JsonWriter w → i {
     : i at - ( vec_len [u] . w st ) 1
-    : i s # i ( vec_at [u] . w st at )
+    : i s ( __jw_top w )
     ? == s 5 { ^ 44 } {}
     ? == s 2 { ( vec_set [u] . w st at # u 3 ) ^ 0 } {}
     ? == s 4 { ( vec_set [u] . w st at # u 5 ) ^ 0 } {}
@@ -1222,7 +1243,7 @@ $ `stdlib/std/bytes.nu`
 
 @ jw_end JsonWriter w ( Vec u ) out → v {
     : i at - ( vec_len [u] . w st ) 1
-    : i s # i ( vec_at [u] . w st at )
+    : i s ( __jw_top w )
     ? | == s 1 == s 3 { ( vec_push [u] out # u 125 ) } {
         ? | == s 4 == s 5 { ( vec_push [u] out # u 93 ) } {
             ( vec_set [u] . w st at # u 6 )
@@ -1235,7 +1256,7 @@ $ `stdlib/std/bytes.nu`
 // A key is the separator, the quoted key and its colon in one write.
 @ jw_key JsonWriter w ( Vec u ) out s key → v {
     : i at - ( vec_len [u] . w st ) 1
-    : i s # i ( vec_at [u] . w st at )
+    : i s ( __jw_top w )
     ? & != s 3 != s 1 {
         ( vec_set [u] . w st at # u 6 )
         ^ v
@@ -1293,7 +1314,7 @@ $ `stdlib/std/bytes.nu`
     ? ( __jw_value w out ) { ( bytes_extend_slice out json ) } {}
 }
 
-@ jw_ok JsonWriter w → b { ^ & == ( vec_len [u] . w st ) 1 == ( vec_at [u] . w st 0 ) 7 }
+@ jw_ok JsonWriter w → b { ^ & == ( vec_len [u] . w st ) 1 == ( __jw_top w ) 7 }
 
 // ── Accessors ────────────────────────────────────────────────────────
 
@@ -1518,7 +1539,7 @@ $ `stdlib/std/bytes.nu`
                         ?? jk {
                             JStr ks → {
                                 : i klen ( string_len ks )
-                                : String copy ( string_with_cap klen )
+                                : String copy ( _string_with_room klen )
                                 : ~ i ci 0
                                 ~ < ci klen {
                                     ( string_push_char copy ( string_get ks ci ) )
@@ -1750,7 +1771,7 @@ $ `stdlib/std/bytes.nu`
                 // Empty segment (leading ".", "..") → reject.
                 = miss T
             } {
-                : String seg ( string_with_cap seg_len )
+                : String seg ( _string_with_room seg_len )
                 : ~ i si seg_start
                 ~ < si k {
                     ( string_push_char seg ( nurl_str_at path pn si ) )
