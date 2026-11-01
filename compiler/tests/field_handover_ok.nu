@@ -25,7 +25,12 @@ $ `stdlib/core/vec.nu`
     ( string_free . p a )
 }
 
-@ take_inout inout Pair p → v { ( string_free . p a ) }
+// (…and given a value again before the caller gets it back: an `inout`
+// parameter cannot go back with a field taken, agora #280.)
+@ take_inout inout Pair p → v {
+    ( string_free . p a )
+    = . p a ( string_from `` )
+}
 
 @ main → i {
     // An owned local: its own drop skips the emptied field.
@@ -39,7 +44,8 @@ $ `stdlib/core/vec.nu`
     : Pair r ( pair )
     ( take_sink r )
 
-    // `inout`: emptied in the caller's own struct.
+    // `inout`: emptied in the caller's own struct, and given a value again
+    // before the call returns.
     : ~ Pair w ( pair )
     ( take_inout w )
     ( nurl_println ( string_data . w b ) )

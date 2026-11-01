@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_moved_field_inout.nu:16:5: error: use of partly moved value 'h' — its field '. h buf' is taken here by take, and 'h' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. Give the field a value before returning (= . h buf …), or hand the callee a copy, ( mem_dup . h buf ), and keep the field.
+    : i n ( take . h buf )
+    ^
+compiler/tests/diag_moved_field_inout.nu:21:5: error: use of partly moved value 'h' — its field '. h buf' was taken at line 20 by take on some paths, and 'h' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. Give the field a value before returning (= . h buf …), or hand the callee a copy, ( mem_dup . h buf ), and keep the field.
+    ^ k
+    ^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

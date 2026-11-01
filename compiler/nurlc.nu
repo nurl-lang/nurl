@@ -3074,6 +3074,17 @@ unsafe @ note_unsafe_item s pos s what → v {
 // 1 when it is an owner returned by name — its dependencies (field 5 `d`).
 : ~ s g_bck_ret_sx ``
 : ~ i g_bck_ret_dep 0
+// The bare binding a `^` hands back whole (`^ h`, not `^ . h f`): the ret
+// row's name field, so the walk can ask whether a field of it was taken
+// (agora #280).
+: ~ s g_bck_ret_whole ``
+// Whether a callee took a field path in the function being walked: its
+// ids, one a word, are g_bck's `fmv`, asked when their binding is handed on
+// whole (agora #280).
+: ~ i g_bck_fmv_any 0
+// …and whether it has an `inout` parameter (g_bck's `inp`, their ids): each
+// exit hands those back to the caller whole (agora #280).
+: ~ i g_bck_inp_any 0
 : ~ i g_sx_n 0
 : ~ i g_sx_at 0
 : ~ s g_sx ``
@@ -5899,6 +5910,9 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // Borrow checker: record this return statement (with a view's source
     // expression, field 8).
     = g_bck_ret_sx ( nurl_str_cat __ret_sx `` )
+    // (A bare binding is the whole of it: an expression that starts with an
+    // identifier is that identifier, prefix notation has nothing after it.)
+    = g_bck_ret_whole ? ( is_ident_tok ret_first_tt ) ( nurl_str_cat ret_first_val `` ) ``
     = g_bck_ret_dep ? __ret_dep 1 ? __ret_exp 2 0
     ( bck_flush_vpass )
     // With a `;` defer armed, the chain runs after the value is the
@@ -5911,7 +5925,8 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ( bck_put ( nurl_str_cat4 `rto_` ( nurl_lex_filename lex ) `:` ( nurl_str_int bck_line ) ) __rto )
         } {}
     } {}
-    ( bck_record `ret` `` bck_line )
+    ( bck_record `ret` g_bck_ret_whole bck_line )
+    = g_bck_ret_whole ``
     = g_bck_ret_sx ``
     = g_bck_ret_dep 0
     // Defensive: clear any residual pending flag (gen_expr may have
@@ -30109,7 +30124,9 @@ unsafe @ bck_sx_ids s sx → s {
     } {}
     // (Every `p` row is a pending one: `pendcall`, `pendfield`, …)
     : b __pend ? == __k0 112 != 0 ( nurl_str_starts kind `pend` ) ? == __k0 99 | ( seq kind `cdep` ) ( seq kind `cmove` ) ? == __k0 109 ( seq kind `maybealias` ) ? == __k0 115 ( seq kind `store` ) ? == __k0 120 ( seq kind `xfer` ) F
-    : b __named ? | __pend __bind T ? == __k0 109 | ( seq kind `move` ) ( seq kind `maybemove` ) ? == __k0 98 ( seq kind `borrow` ) ? == __k0 116 | ( seq kind `tborrow` ) ( seq kind `take` ) ? == __k0 102 | | ( seq kind `fborrow` ) ( seq kind `fborrowh` ) ( seq kind `fieldset` ) ? == __k0 118 ( seq kind `vborrow` ) F
+    // (A `ret` row names the bare binding a `^` hands back whole, when it
+    // is one — gen_ret's g_bck_ret_whole, agora #280 — and nothing else.)
+    : b __named ? | __pend __bind T ? == __k0 109 | ( seq kind `move` ) ( seq kind `maybemove` ) ? == __k0 98 ( seq kind `borrow` ) ? == __k0 116 | ( seq kind `tborrow` ) ( seq kind `take` ) ? == __k0 102 | | ( seq kind `fborrow` ) ( seq kind `fborrowh` ) ( seq kind `fieldset` ) ? == __k0 118 ( seq kind `vborrow` ) ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len w ) F
     : s w2 ? ? == __k0 108 ( seq kind `let` ) ? == __k0 102 ( seq kind `fevar` ) F ( nurl_str_int ( bck_xl_declare_id w ) ) ? __named ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) ( nurl_str_cat w `` )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
@@ -30409,10 +30426,20 @@ unsafe @ bck_emit_error s file i line s msg → v {
         : s via ? == 0 ( nurl_str_len via0 ) ( nurl_str_cat `` `` )
         ( nurl_str_cat3 ` The closure '` via0
         ( nurl_str_cat3 `' still holds '` name `', so invoking it reads the freed buffer.` ) )
-        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
-        ( nurl_str_cat4 `use of moved value '` name
-        `' — a heap handle has exactly one owner, and this one was consumed at line ` ( nurl_str_cat3 ml
-        ( nurl_str_cat by ( nurl_str_cat `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` via ) ) `` ) ) )
+        // (A field a callee took is empty where it lives, not dead: it
+        // takes a value again — agora #280.)
+        ? >= ( nurl_str_find name `.` ) 0 {
+            : s fsrc ( __bck_path_src name )
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+            ( nurl_str_cat4 ( nurl_str_cat3 `use of moved field '` fsrc `' — it was taken at line ` ) ml
+            ( nurl_str_cat3 by `, which left the field empty (a handle has exactly one owner, and that call is it now). ` `` )
+            ( nurl_str_cat4 `Give the field a new value before reading it again (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) ) ) )
+        } {
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+            ( nurl_str_cat4 `use of moved value '` name
+            `' — a heap handle has exactly one owner, and this one was consumed at line ` ( nurl_str_cat3 ml
+            ( nurl_str_cat by ( nurl_str_cat `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` via ) ) `` ) ) )
+        }
     }
 }
 
@@ -30466,6 +30493,130 @@ unsafe @ bck_emit_error s file i line s msg → v {
     ^ != 0 ( nurl_sym_len2 g_root_syms ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `__global` )
 }
 
+// A field path as the source spells it: `h.buf` → `. h buf`, `h.a.b` →
+// `. . h a b`.
+@ __bck_path_src s name → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat name `` )
+    : ~ s pre ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : i dot ( nurl_str_find rest `.` )
+        : s part ? < dot 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 dot )
+        = rest ? < dot 0 `` ( nurl_str_slice rest + dot 1 - - ( nurl_str_len rest ) dot 1 )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat part `` ) ( nurl_str_cat3 out ` ` part )
+        ? >= dot 0 { = pre ( nurl_str_cat pre `. ` ) } {}
+    }
+    ^ ( nurl_str_cat pre out )
+}
+
+// A field path read after a callee took it — definitely, or on some paths
+// (agora #280): a use of a moved value, as for a binding.
+@ __bck_fmv_check i id i line s st → v {
+    ? | < id 0 == id ( bck_path_root id ) { ^ v } {}
+    : i fs ( bck_st_get st id )
+    ? == BCK_MOVED fs { ( bck_diag id line ) ^ v } {}
+    ? & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs { ( bck_diag_maybe_read id line ) } {}
+}
+
+// …and a binding given a value as a whole — assigned, or declared again: a
+// `let`, a match arm's payload. Its fields all have one again. (Paths are
+// interned by name, so a second binding of the same name in a sibling
+// scope, `?? o { T t → … }` twice, shares the first one's field paths.)
+@ __bck_fmv_revive s st i rid → s {
+    : ~ s out ( nurl_str_cat st `` )
+    : ~ s rest ( nurl_sym_get g_bck `fmv` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? & != rid pid ( bck_id_holds rid pid ) { = out ( bck_st_set out pid BCK_OWNED ) } {}
+    }
+    ^ out
+}
+
+// …and a binding handed on whole while a field of it is still taken.
+@ __bck_partly_moved_check i rid i line s st → v {
+    ? | == 0 g_bck_fmv_any < rid 0 { ^ v } {}
+    : ~ s rest ( nurl_sym_get g_bck `fmv` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? & != rid pid ( bck_id_holds rid pid ) {
+            : i fs ( bck_st_get st pid )
+            ? | == BCK_MOVED fs & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs {
+                ( bck_diag_partly_moved rid pid line == BCK_MAYBE_MOVED fs )
+                = rest ``
+            } {}
+        } {}
+    }
+}
+
+// …its report.
+@ bck_diag_partly_moved i rid i pid i line b maybe → v {
+    : s tag ( nurl_str_cat4 `pm:` ( nurl_str_int line ) `:` ( nurl_str_int pid ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s rname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid ) )
+    : s fname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int pid ) )
+    : s fsrc ( __bck_path_src fname )
+    : s ml ( nurl_sym_get2 g_bck `ml_` ( nurl_str_int pid ) )
+    : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` fname ml ) )
+    : s by ? == 0 ( nurl_str_len cause ) `` ( nurl_str_cat ` by ` cause )
+    : s some ? maybe ` on some paths` ``
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4
+    ( nurl_str_cat4 `use of partly moved value '` rname `' — its field '` fsrc )
+    ( nurl_str_cat4 `' was taken at line ` ml by some )
+    ( nurl_str_cat3 `, so the field is empty, and '` rname `' cannot be handed on whole while it is. ` )
+    ( nurl_str_cat4 `Give the field a value first (= ` fsrc ` …), or hand on only the fields you still need.` `` ) ) )
+}
+
+// …and an exit — a `^`, or the body's end — while a field of an `inout`
+// parameter is taken: the caller gets the parameter back with that field
+// empty, and its next use of it read a null handle (agora #280: an `inout`
+// callee left the caller's Vec field zeroed, and vec_push faulted there).
+// (`at_end`: the body's end, whose line is its `}`. The report points at
+// the call that took the field instead: the diagnostic anchor gate wants
+// the mistake, and a `}` is none.)
+@ __bck_inout_exit_check s st i line b at_end → v {
+    ? | == 0 g_bck_fmv_any == 0 g_bck_inp_any { ^ v } {}
+    : ~ s prest ( nurl_sym_get g_bck `inp` )
+    ~ != 0 ( nurl_str_len prest ) {
+        : i rid ( nurl_str_to_int ( str_first_word prest ) ) = prest ( str_skip_word prest )
+        : ~ s rest ( nurl_sym_get g_bck `fmv` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+            ? & != rid pid ( bck_id_holds rid pid ) {
+                : i fs ( bck_st_get st pid )
+                ? | == BCK_MOVED fs & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs {
+                    ( bck_diag_inout_exit rid pid line == BCK_MAYBE_MOVED fs at_end )
+                } {}
+            } {}
+        }
+    }
+}
+
+// …its report.
+@ bck_diag_inout_exit i rid i pid i line b maybe b at_end → v {
+    : s ml ( nurl_sym_get2 g_bck `ml_` ( nurl_str_int pid ) )
+    : i at ? & at_end != 0 ( nurl_str_len ml ) ( nurl_str_to_int ml ) line
+    : s tag ( nurl_str_cat4 `ix:` ( nurl_str_int at ) `:` ( nurl_str_int pid ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s rname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid ) )
+    : s fname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int pid ) )
+    : s fsrc ( __bck_path_src fname )
+    : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` fname ml ) )
+    : s by ? == 0 ( nurl_str_len cause ) `` ( nurl_str_cat ` by ` cause )
+    : s some ? maybe ` on some paths` ``
+    : b here_take & at_end != 0 ( nurl_str_len ml )
+    : s taken ? here_take ( nurl_str_cat `' is taken here` `` ) ( nurl_str_cat `' was taken at line ` ml )
+    : s back ? at_end ( nurl_str_cat `' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. ` `` ) ( nurl_str_cat `' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. ` `` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat4
+    ( nurl_str_cat4 `use of partly moved value '` rname `' — its field '` fsrc )
+    ( nurl_str_cat4 taken by some `, and '` )
+    ( nurl_str_cat rname back )
+    ( nurl_str_cat4 `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) ) ) )
+}
+
 // Reading a binding whose state is MAYBE-moved: on the path where the
 // consume ran, the handle names a freed buffer, so the read is a
 // use-after-free there. Same dedup channel as bck_diag_maybe (`mm:`).
@@ -30485,18 +30636,26 @@ unsafe @ bck_emit_error s file i line s msg → v {
         : b stored & == 0 ( nurl_str_len ml0 ) != 0 ( nurl_sym_len2 g_bck `sl_` ids )
         : s ml ? stored ( nurl_sym_get2 g_bck `sl_` ids ) ml0
         : s cause ? stored ( nurl_str_cat `it was stored into an owner (a container, a literal, a callee that keeps it) on only some paths, and that owner may release it,` `` ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
+        // (A field a callee took on some paths is empty on those, and is
+        // given a value again by a store to it: agora #280. Its report
+        // names the call that took it, as the definite one does.)
+        : b isf >= ( nurl_str_find name `.` ) 0
+        : s fcal ? isf ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` name ml ) ) ( nurl_str_cat `` `` )
+        : s fby ? == 0 ( nurl_str_len fcal ) ( nurl_str_cat `` `` ) ( nurl_str_cat ` by ` fcal )
         : s by ? == 0 ( nurl_str_len cause )
-        ( nurl_str_cat ` — it was consumed on only some paths, at line ` `` )
+        ( nurl_str_cat ? isf ` — it was taken on only some paths, at line ` ` — it was consumed on only some paths, at line ` `` )
         ( nurl_str_cat3 ` — ` cause ` at line ` )
         // Parked until the function's walk is done: a loop's fixpoint
         // sees a read as maybe-freed before its verification pass proves
         // it definitely freed, and the definite report (bck_diag) is the
         // one to keep for the same site (bck_emit_maybe_reads).
         : s key ( nurl_str_cat3 ( nurl_str_int useline ) `:` ids )
+        : s shown ? isf ( __bck_path_src name ) ( nurl_str_cat name `` )
         ( bck_put ( nurl_str_cat `pm_` key )
-        ( nurl_str_cat4 `use of possibly-moved value '` name
-        ( nurl_str_cat `'` by ) ( nurl_str_cat3 ml
-        `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` ( nurl_str_cat name ` …) on the path that consumed it` ) ) ) )
+        ( nurl_str_cat4 ? isf `use of possibly-moved field '` `use of possibly-moved value '` shown
+        ( nurl_str_cat `'` by ) ( nurl_str_cat ml
+        ? isf ( nurl_str_cat4 fby `; on that path the field is empty. Take it on every path, or give it a value again (= ` shown ` …) on the path that took it` )
+        ( nurl_str_cat3 `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` name ` …) on the path that consumed it` ) ) ) )
         : s pl ( nurl_sym_get g_bck `pml` )
         ( bck_put `pml` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat key `` ) ( nurl_str_cat3 pl ` ` key ) )
     }
@@ -30997,6 +31156,15 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             ( bck_check_moved_reads ( bck_field rec 2 )
             ( bck_field_int rec 3 ) st )
         } {}
+        // (Field paths a callee took, agora #280: a binding handed on whole
+        // — a consume, a store, a pending call or keep — while one is taken;
+        // a borrow of one; and a binding given a new value, whose fields
+        // all have one again. A `let` gives them one too, below.)
+        ? != 0 g_bck_fmv_any {
+            ? | | | | | | == kc 4 == kc 5 == kc 9 == kc 11 == kc 12 == kc 14 == kc 16 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
+            ? & == kc 7 ( seq ( bck_field rec 0 ) `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
+            ? == kc 3 { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
+        } {}
         // Most rows are plain statements: past their reads, nothing to do —
         // and no dozen kind compares to find that out.
         ? == kc 1 { = p + p 1 } {
@@ -31012,6 +31180,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 = done T
             } {}
             ? & ! done == kc 20 {
+                // (A binding handed back whole while a field of it is taken:
+                // agora #280.)
+                ? & != 0 g_bck_fmv_any != 0 ( nurl_str_len ( bck_field rec 1 ) ) { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
+                // (…and every `inout` parameter goes back to the caller.)
+                ? != 0 g_bck_fmv_any { ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F ) } {}
                 // A view handed back points into what the caller has.
                 ? >= ( __bck_field_off rec 8 ) 0 { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! ( seq ( bck_field rec 5 ) `e` ) ) } {}
                 // The calls in the returned expression: their pending rows
@@ -31022,7 +31195,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     : i rkc ( bck_kc rp )
                     ? | == rkc 9 == rkc 13 {
                         : s rrec ( bck_rec rp )
-                        ? == ( bck_field_int rrec 3 ) ( bck_field_int rec 3 ) { = st ( bck_inout_borrow_check st rrec ) } {}
+                        ? == ( bck_field_int rrec 3 ) ( bck_field_int rec 3 ) {
+                            = st ( bck_inout_borrow_check st rrec )
+                            // (…and a field the returned expression reads
+                            // that a callee took: agora #280.)
+                            ? & == rkc 13 != 0 g_bck_fmv_any { ( __bck_fmv_check ( bck_field_int rrec 1 ) ( bck_field_int rec 3 ) st ) } {}
+                        } {}
                     } {}
                     = rp + rp 1
                 }
@@ -31171,6 +31349,8 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 ( bck_partner_unlink ( bck_field_int rec 1 ) )
                 ( bck_put ( bck_bkey `oos_` ( bck_field rec 1 ) ) `` )
                 = st ( bck_st_set st ( bck_field_int rec 1 ) BCK_OWNED )
+                // (…and its fields, if a callee took one of the name's before.)
+                ? != 0 g_bck_fmv_any { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
                 ? != 0 g_bck_ab_any { ( bck_put ( bck_bkey `ab_` ( bck_field rec 1 ) ) `` ) } {}
                 ( bck_nh_mark rec )
                 // A view (an address into storage another binding owns) —
@@ -31274,6 +31454,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
             ? & ! done == kc 8 {
                 : i fsid ( bck_path_root ( bck_field_int rec 1 ) )
                 ? ( bck_has_stored_in fsid ) { = st ( bck_kill_stored_maybe st fsid ( bck_field_int rec 3 ) ) } {}
+                // (…and a field a callee took has a value again: agora #280.)
+                : i fpid ( bck_field_int rec 1 )
+                ? & != fpid fsid | == BCK_MOVED ( bck_st_get st fpid ) == BCK_MAYBE_MOVED ( bck_st_get st fpid ) { = st ( bck_st_set st fpid BCK_OWNED ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -31675,6 +31858,27 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                     } {}
                 } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( bck_field rec 3 ) ) } {} }
+                // A field a `sink` parameter takes (`( take . h buf )`) is
+                // emptied where it lives: moved, as a binding handed to one
+                // is, until it is given a value again (a `fieldset` row).
+                // Read on, it was a null handle that vec_push faulted on and
+                // vec_reserve spun over (agora #280). Only a field path of a
+                // binding: a field read through a raw pointer (`. p slots`,
+                // `* Pool p`) is recorded as the pointer itself, which the
+                // callee does not take, and whose storage the program frees by
+                // hand.
+                : i fpi0 ( bck_field_int rec 1 )
+                ( __bck_fmv_check fpi0 ( bck_field_int rec 3 ) st )
+                ? & & >= fpi0 0 != fpi0 ( bck_path_root fpi0 ) ( nurl_sym_has_word g_fn_sink fcal ( bck_field rec 6 ) ) {
+                    : s fpid ( bck_field rec 1 )
+                    = st ( bck_st_set st ( nurl_str_to_int fpid ) BCK_MOVED )
+                    ( bck_add_word_once `fmv` fpid )
+                    = g_bck_fmv_any 1
+                    ( bck_put ( nurl_str_cat `ml_` fpid ) ( bck_field rec 3 ) )
+                    // (The callee as the source names it: an instance's
+                    // generic, `take_any`, not `take_any__Vec__String`.)
+                    ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpid ) ( bck_field rec 3 ) ) ( bck_generic_base fcal ) )
+                } {}
                 ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
@@ -34246,6 +34450,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
                 // earlier run handed it to is not its partner now.
                 ( bck_partner_unlink id )
                 = entry ( bck_st_set entry id BCK_OWNED )
+                // (…and its fields: an earlier arm's payload of the same name
+                // may have had one taken, agora #280.)
+                ? != 0 g_bck_fmv_any { = entry ( __bck_fmv_revive entry id ) } {}
                 ? & ( bck_sound ) lent { = entry ( bck_borrow_begin entry id lsrc ) } {}
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
@@ -34860,6 +35067,8 @@ unsafe @ bck_loop_mask s pre s post → s {
     ( bck_put `vkacc` `` )
     ( bck_put `vkself` `` )
     ( bck_put `warnset` `` )
+    ? != 0 g_bck_fmv_any { ( bck_put `fmv` `` ) = g_bck_fmv_any 0 } {}
+    ? != 0 g_bck_inp_any { ( bck_put `inp` `` ) = g_bck_inp_any 0 } {}
     ( bck_put `pml` `` )
     = g_bck_ab_any 0
     = g_bck_nch_any 0
@@ -34929,12 +35138,21 @@ unsafe @ bck_loop_mask s pre s post → s {
             ( bck_put ( bck_bkey `vdu_` ( nurl_str_int ( bck_intern pn ) ) ) `1` )
             = g_bck_udrop_any 1
         } {}
+        // (…and every `inout` one: its caller gets it back at each exit,
+        // __bck_inout_exit_check — agora #280.)
+        ? ( str_contains_word g_bck_own_params ( nurl_str_cat `&` pn ) ) {
+            ( bck_add_word_once `inp` ( nurl_str_int ( bck_intern pn ) ) )
+            = g_bck_inp_any 1
+        } {}
     }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
     ? ! ( seq final `!` ) {
         ? > n 0 { ( bck_param_view_check final ( bck_field_int ( bck_rec - n 1 ) 3 ) ) } {}
         ( bck_note_vkeeps final )
+        // (The body's end hands every `inout` parameter back, as a `^`
+        // does: agora #280.)
+        ? & > n 0 != 0 g_bck_fmv_any { ( __bck_inout_exit_check final ( bck_field_int ( bck_rec - n 1 ) 3 ) T ) } {}
         : s cleanup ( bck_apply_defers final )
     } {}
     // What its parameters were left viewing of each other's storage is
@@ -53306,6 +53524,10 @@ unsafe @ __alloca_struct_params i syms i cg → v {
         // local first and the destructor reads it (`^name`: the walk's
         // `vdu_` holder, older than every local; agora #284).
         ? != 0 ( nurl_sym_len2 syms name `__inout` ) {
+            // (Every `inout` one is handed back at each exit: a field of it
+            // a `sink` took must have a value again by then — `&name`,
+            // agora #280.)
+            ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `&` name ) )
             : s __ity ( nurl_llty __pty )
             : i __il ( nurl_str_len __ity )
             : s __ivt ? & > __il 0 == ( nurl_str_get __ity - __il 1 ) 42 ( nurl_str_slice __ity 0 - __il 1 ) ( nurl_str_cat __ity `` )

@@ -4,7 +4,9 @@
 // loop holds a borrow of the container, so each releases what the loop
 // is still reading. And an `inout` callee that hands a field of its
 // parameter to a callee that takes it empties the caller's field: a
-// borrow of it the caller holds ends at the call.
+// borrow of it the caller holds ends at the call. (That callee is itself
+// refused now: it hands its parameter back with the field taken, agora
+// #280.)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

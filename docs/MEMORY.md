@@ -389,6 +389,27 @@ error: 'm' is moved by argument 1 of 'f' and also used by argument 2
 A value with nothing to release (a struct of scalars, an enum of unit
 variants) is copied, never moved.
 
+A field moves the same way. `( take . h buf )`, where `take`'s parameter
+is a `sink`, takes the field's value and leaves the field empty where it
+lives. Until the field is given a value again (`= . h buf …`), these are
+errors:
+
+- reading `. h buf`, or a field under it;
+- binding it;
+- handing `h` on whole (to a call, into a store, or out of a `^`);
+- leaving the function while `h` is an `inout` parameter: every exit
+  hands it back to the caller whole, so the field needs a value first.
+
+The struct's other fields stay usable, and its own drop at the end of its
+scope releases what is left. A field taken on only some paths is
+maybe-moved, as a binding is.
+
+```text
+error: use of moved field '. h buf' — it was taken at line N by take, …
+error: use of partly moved value 'h' — its field '. h buf' was taken at
+       line N by take, …
+```
+
 ### 2.1b Releasing what the compiler releases
 
 Inside an `unsafe` function, `nurl_free` on a binding the compiler already
