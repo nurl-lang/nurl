@@ -48890,22 +48890,48 @@ unsafe @ __slug_part s w inout i pos → s {
 }
 
 // subst_source: replace whole-word occurrences of 'from' with 'to' in src.
-// Words are space-separated tokens as produced by collect_fn_body.
-@ subst_source s src s from s to → s {
-    : ~ s result ( nurl_str_cat `` `` )
-    : ~ s rest ( nurl_str_cat src `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s word ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        // Both arms owned: a mixed join (borrowed `to` vs tracked
-        // `word`) published "not owned", so the copy the tracked arm
-        // made was never collected — 71k leaks per generic-heavy
-        // compile.
-        = result ( nurl_str_cat result
-        ( nurl_str_cat ? ( seq word from ) ( nurl_str_cat to `` )
-        ( nurl_str_cat word `` ) ` ` ) )
+// Words are space-separated tokens as produced by collect_fn_body. Each is
+// written back followed by one space: the result ends in a space whenever
+// src holds a word, and an empty word between two spaces stays one.
+//
+// One pass sizes the result and one writes it (agora #305). It was built by
+// re-concatenating the whole result for every word while stepping through
+// src by copying all of what was left of it: quadratic in the body's
+// length, for every type parameter of every generic instantiation.
+unsafe @ subst_source s src s from s to → s {
+    : i slen ( nurl_str_len src )
+    : i fl ( nurl_str_len from )
+    : i tl ( nurl_str_len to )
+    : *u sp # *u src
+    : ~ i out 0
+    : ~ i pos 0
+    ~ < pos slen {
+        : ~ i e pos
+        ~ & < e slen != 32 # i . sp e { = e + e 1 }
+        : i wl - e pos
+        ? & == wl fl == 0 # i ( memcmp # s + # i sp pos from fl ) { = out + + out tl 1 } { = out + + out wl 1 }
+        = pos ? < e slen + e 1 e
     }
-    result
+    : *u bp # *u ( nurl_alloc + out 1 )
+    : ~ i w 0
+    = pos 0
+    ~ < pos slen {
+        : ~ i e pos
+        ~ & < e slen != 32 # i . sp e { = e + e 1 }
+        : i wl - e pos
+        ? & == wl fl == 0 # i ( memcmp # s + # i sp pos from fl ) {
+            ( memcpy # s + # i bp w to tl )
+            = w + w tl
+        } {
+            ( memcpy # s + # i bp w # s + # i sp pos wl )
+            = w + w wl
+        }
+        = . bp w # u 32
+        = w + w 1
+        = pos ? < e slen + e 1 e
+    }
+    = . bp w # u 0
+    ^ # s bp
 }
 
 // __assoc_val: look up an associated-type binding by name in an impl's
