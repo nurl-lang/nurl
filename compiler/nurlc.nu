@@ -173,6 +173,7 @@
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is a raw string the compiler manages
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
+: ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
 // The bindings and field paths of the function being walked that hold an
 // `Rc` handle, as `name=type` words (bck_note_rc_arg). Every copy of an Rc
 // is the same value, so a call that may drop or replace what one handle
@@ -33055,7 +33056,9 @@ unsafe @ bck_note_rc_arg s name s ty → v {
     ~ != 0 ( nurl_str_len rest ) {
         : s bs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i b ( nurl_str_to_int bs )
-        : b inb ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
+        // (Only the views among them, where bck_root_end ends a field's.)
+        : b isv ( seq ( nurl_sym_get g_bck ( bck_bkey `vw_` bs ) ) `1` )
+        : b inb & | == 0 g_bck_end_views isv ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `bs_` bs ) ) sids )
         : b ends & inb | == 0 g_bck_end_eonly == 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` bs ) )
         // (One whose drop reads views, moved on some paths only: dropped on
         // the others, agora #252.)
@@ -33068,6 +33071,14 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
             ( bck_drop_view_diag b sid line why F )
+            // (Storage the caller holds — an `inout` struct of views given a
+            // value viewing `sid` whole, `= w @ W { ( string_data b ) }` —
+            // outlives this function: as for one that depends on it,
+            // bck_deps_end; agora #309.)
+            // (A view, not a value codegen copies or takes where it leaves;
+            // and the caller's own — a parameter, not a local view of one.)
+            : s brs ( nurl_str_int ( bck_path_root b ) )
+            ? & & & == 0 g_bck_end_eonly isv != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` brs ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` brs ) ) { ( bck_caller_view_diag b sid line ) } {}
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             ? < depth 8 { = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) + depth 1 ) } {}
@@ -33671,7 +33682,7 @@ unsafe @ bck_note_rc_arg s name s ty → v {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
         : i v ( bck_st_get out id )
-        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its match arm` 0 ) } {}
+        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its match arm` ) } {}
         ( bck_put ( bck_bkey `oos_` w ) `1` )
     }
     ^ out
@@ -33750,6 +33761,30 @@ unsafe @ bck_scope_leave s st i line → s {
     ^ out
 }
 
+// Binding `id` released where its scope ends: the borrows of it end, and
+// those of its fields — a view of `. h name` stored into an outer value is
+// recorded on the field's path (bck_dep_add, bck_borrow_begin), and the
+// field's storage ends with `h` (agora #309). The paths are the sources
+// with a borrow (`bsrcs`) that `id` holds.
+// (A field's reader of an owner type — a String, a Vec read out of `.
+// h name` — is the field-reader family's: codegen takes or copies the field
+// where it outlives `h`. Only the views end: g_bck_end_views. `unsafe` for
+// that global, set and cleared within this call by the single-threaded
+// walk.)
+unsafe @ bck_root_end s st i id i line s why → s {
+    : ~ s out ( bck_borrow_end st id line why 0 )
+    ? == 0 g_bck_has_paths { ^ out } {}
+    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+    = g_bck_end_views 1
+    ~ != 0 ( nurl_str_len rest ) {
+        : s o ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i oi ( nurl_str_to_int o )
+        ? & != oi id == ( bck_path_root oi ) id { = out ( bck_borrow_end out oi line why 0 ) } {}
+    }
+    = g_bck_end_views 0
+    ^ out
+}
+
 // What a scope's end does to its `let`s (rows `lets`, newest first): each
 // one still holding its value is released, in that order, and the borrows
 // of it end. All of them end before any is marked gone, so a binding that
@@ -33766,7 +33801,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
         : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
         : i v ( bck_st_get out id )
-        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_borrow_end out id line `it went out of scope at the end of its block` 0 ) } {}
+        ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }
     = g_bck_ending ``
