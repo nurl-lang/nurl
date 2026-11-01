@@ -58,6 +58,7 @@ $ `stdlib/core/errors.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/ext/env.nu`  // env_temp_dir: where fs_tempfile / fs_tempdir create by default
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -1208,15 +1209,27 @@ unsafe @ __fd_write_all i fd ( Vec u ) v → i {
     { ^ @ !v IoErr { F error } }
 }
 
+// Where fs_tempfile and fs_tempdir create: `dir`, or, when it is empty,
+// the platform's temp directory (env_temp_dir), as Go's os.MkdirTemp("",
+// p) and Python's tempfile.mkstemp() do. Pass `.` for the current
+// directory. (An empty `dir` used to mean the current directory: scratch
+// files landed in a checkout, a home directory, or a service's
+// C:\Windows\System32, agora #322.)
+@ __fs_temp_parent s dir → String {
+    ? == 0 ( nurl_str_len dir ) { ^ ( env_temp_dir ) } {}
+    ^ ( string_from dir )
+}
+
 // Create a fresh, uniquely-named empty file under `dir` whose name
-// begins with `prefix`, and return its path (owned String). `dir` ""
-// defaults to ".". The file exists (0600) and is empty on return; the
-// caller writes through write_file / append_file. Uses mkstemp, so the
-// name cannot collide with a concurrent caller.
+// begins with `prefix`, and return its path (owned String). `dir` "" is
+// the platform's temp directory (env_temp_dir); `.` is the current
+// directory. The file exists (0600) and is empty on return; the caller
+// writes through write_file / append_file. Uses mkstemp, so the name
+// cannot collide with a concurrent caller.
 @ fs_tempfile s dir s prefix → !String IoErr {
-    : s d ? == 0 ( nurl_str_len dir ) `.` dir
-    : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
-    ( string_push_str tmpl d )
+    : String d ( __fs_temp_parent dir )
+    : String tmpl ( string_with_cap + + ( string_len d ) ( nurl_str_len prefix ) 10 )
+    ( string_push_str tmpl ( string_data d ) )
     // No second separator after a root `dir`: `//tmp.XXXXXX` is a
     // different path on some systems and an unopenable one on a
     // filesystem driver that walks components itself.
@@ -1265,15 +1278,16 @@ unsafe @ __fd_write_all i fd ( Vec u ) v → i {
     ^ @ !v IoErr { T 0 }
 }
 
-// Exclusively create a uniquely named directory under `dir` ("" means
-// "."). POSIX permissions are 0700; Windows applies the parent's ACL.
+// Exclusively create a uniquely named directory under `dir` ("" is the
+// platform's temp directory, env_temp_dir; `.` the current directory).
+// POSIX permissions are 0700; Windows applies the parent's ACL.
 // The owned path is returned only after creation succeeds. No temporary
 // file is unlinked to make room, so another process cannot claim the path
 // between allocation and mkdir. Remove the tree with dir_remove_all.
 @ fs_tempdir s dir s prefix → !String IoErr {
-    : s d ? == 0 ( nurl_str_len dir ) `.` dir
-    : String tmpl ( string_with_cap + + ( nurl_str_len d ) ( nurl_str_len prefix ) 10 )
-    ( string_push_str tmpl d )
+    : String d ( __fs_temp_parent dir )
+    : String tmpl ( string_with_cap + + ( string_len d ) ( nurl_str_len prefix ) 10 )
+    ( string_push_str tmpl ( string_data d ) )
     ? ! ( string_ends_with tmpl `/` ) { ( string_push_char tmpl 47 ) } {}
     ( string_push_str tmpl prefix )
     ( string_push_str tmpl `XXXXXX` )

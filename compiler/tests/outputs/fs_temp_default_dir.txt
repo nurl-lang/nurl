@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+tempdir "": under env_temp_dir
+tempdir "": removed
+tempfile "": under env_temp_dir
+tempfile "": exists
+tempfile ".": in the current directory

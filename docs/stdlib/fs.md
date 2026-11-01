@@ -3,16 +3,17 @@
 Import `stdlib/std/fs.nu` for filesystem operations returning `! T IoErr`.
 
 `fs_tempdir(dir, prefix)` exclusively creates a uniquely named directory and
-returns its owned `String` path. An empty `dir` means the current directory.
-POSIX directories start with mode `0700`; Windows inherits the parent directory's
+returns its owned `String` path. An empty `dir` means the platform's temp
+directory, `env_temp_dir()`, as in Go's `os.MkdirTemp("", prefix)` and Python's
+`tempfile.mkdtemp()`; pass `.` for the current directory. POSIX directories start with mode `0700`; Windows inherits the parent directory's
 ACL. Creation uses the directory operation itself, with no intervening unlink.
 WASI creation remains subject to preopened directory capabilities. The nolibc
 provider uses the platform entropy and directory operations; a guest with no
 writable filesystem reports its filesystem error. The caller removes the directory with
 `dir_remove_all`; the path is dropped with its binding.
 
-For scratch space, put it under the platform's temp directory:
-`env_temp_dir()` from `stdlib/ext/env.nu`. On POSIX that is `$TMPDIR` when
+The platform's temp directory is `env_temp_dir()` from `stdlib/ext/env.nu`.
+On POSIX that is `$TMPDIR` when
 set and non-empty, else `/tmp`. On Windows it is what `GetTempPathW` answers:
 `%TMP%`, else `%TEMP%`, else `%USERPROFILE%`, else the Windows directory.
 `TMPDIR` is not read on Windows, because Git Bash exports it as a POSIX path
@@ -21,12 +22,10 @@ trailing separator.
 
 ```nurl
 $ `stdlib/std/fs.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
 @ main → i {
-    : String root ( env_temp_dir )
-    ?? ( fs_tempdir ( string_data root ) `myapp-` ) {
+    ?? ( fs_tempdir `` `myapp-` ) {
         T dir → {
             // … work in dir …
             ?? ( dir_remove_all ( string_data dir ) ) { T _ → {} F _ → {} }
@@ -37,8 +36,8 @@ $ `stdlib/core/string.nu`
 }
 ```
 
-`fs_tempfile(dir, prefix)` similarly creates an empty, uniquely named file.
-To replace a working file or executable, create this temporary file in the
+`fs_tempfile(dir, prefix)` similarly creates an empty, uniquely named file,
+with the same meaning of an empty `dir`. To replace a working file or executable, create this temporary file in the
 **destination directory**, copy the new contents into it, apply any permissions,
 and call `fs_rename(staged, destination)` only after those operations succeed.
 Delete the staged file after any failure. Both POSIX and Windows replacement
