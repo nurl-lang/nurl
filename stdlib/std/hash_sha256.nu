@@ -268,11 +268,77 @@ unsafe @ __sha256_blocks_ni * u32 sp * u bp i nblk * u32 kp → v {
     = . sp 7 # u32 ( nurl_v128_get32 cdgh 0 )
 }
 
+// ── ARMv8's SHA-256 instructions (FEAT_SHA256) ──────────────────────
+//
+// Where the CPU has them (`nurl_cpu_has_sha_arm`: Graviton, Ampere,
+// Apple and every other ARMv8 core with the Cryptographic Extension), a
+// block is 16 SHA256H / SHA256H2 pairs — four rounds each — and 12 + 12
+// SHA256SU0 / SU1 for the schedule. ARM's arrangement (compiler:
+// __emit_sha_a64_prim) keeps the state as (A, B, C, D) and (E, F, G, H),
+// lanes 0..3, which is the state words' own order: H answers the four
+// rounds' new (A, B, C, D) from both halves, H2 the new (E, F, G, H)
+// from the (A, B, C, D) before them. Group g uses m[g mod 4], and while
+// g < 12 rebuilds it for group g + 4: SU0 with the next block of words,
+// then SU1 with the two after it (already rebuilt where they come
+// later). `q` is public — the branch chooses by the round number only.
+unsafe @ __sha256_blocks_ce * u32 sp * u bp i nblk * u32 kp → v {
+    : ~ v128 abcd ( nurl_v128_ld # s sp )
+    : ~ v128 efgh ( nurl_v128_ld # s + # i sp 16 )
+    : ~ i blk 0
+    ~ < blk nblk {
+        : i at + # i bp * blk 64
+        : v128 abcd0 abcd
+        : v128 efgh0 efgh
+        : ~ v128 m0 ( nurl_v128_bswap32 ( nurl_v128_ld # s at ) )
+        : ~ v128 m1 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 16 ) )
+        : ~ v128 m2 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 32 ) )
+        : ~ v128 m3 ( nurl_v128_bswap32 ( nurl_v128_ld # s + at 48 ) )
+        : ~ i q 0
+        ~ < q 4 {
+            : i kq + # i kp * q 64
+            // group 4q: m0
+            : ~ v128 wk ( nurl_v128_add32 m0 ( nurl_v128_ld # s kq ) )
+            : ~ v128 a0 abcd
+            = abcd ( nurl_v128_sha256h abcd efgh wk )
+            = efgh ( nurl_v128_sha256h2 efgh a0 wk )
+            ? < q 3 { = m0 ( nurl_v128_sha256su1 ( nurl_v128_sha256su0 m0 m1 ) m2 m3 ) } {}
+            // group 4q + 1: m1
+            = wk ( nurl_v128_add32 m1 ( nurl_v128_ld # s + kq 16 ) )
+            = a0 abcd
+            = abcd ( nurl_v128_sha256h abcd efgh wk )
+            = efgh ( nurl_v128_sha256h2 efgh a0 wk )
+            ? < q 3 { = m1 ( nurl_v128_sha256su1 ( nurl_v128_sha256su0 m1 m2 ) m3 m0 ) } {}
+            // group 4q + 2: m2
+            = wk ( nurl_v128_add32 m2 ( nurl_v128_ld # s + kq 32 ) )
+            = a0 abcd
+            = abcd ( nurl_v128_sha256h abcd efgh wk )
+            = efgh ( nurl_v128_sha256h2 efgh a0 wk )
+            ? < q 3 { = m2 ( nurl_v128_sha256su1 ( nurl_v128_sha256su0 m2 m3 ) m0 m1 ) } {}
+            // group 4q + 3: m3
+            = wk ( nurl_v128_add32 m3 ( nurl_v128_ld # s + kq 48 ) )
+            = a0 abcd
+            = abcd ( nurl_v128_sha256h abcd efgh wk )
+            = efgh ( nurl_v128_sha256h2 efgh a0 wk )
+            ? < q 3 { = m3 ( nurl_v128_sha256su1 ( nurl_v128_sha256su0 m3 m0 ) m1 m2 ) } {}
+            = q + q 1
+        }
+        = abcd ( nurl_v128_add32 abcd abcd0 )
+        = efgh ( nurl_v128_add32 efgh efgh0 )
+        = blk + blk 1
+    }
+    ( nurl_v128_st # s sp abcd )
+    ( nurl_v128_st # s + # i sp 16 efgh )
+}
+
 // `nblk` consecutive blocks at `bp` into the state at `sp`: the SHA-NI
-// kernel where the CPU has it, the portable rounds otherwise (`mp` is
-// their schedule scratch). NURL_CPU_SHA=0 forces the portable path.
+// kernel where the CPU has it, ARMv8's SHA-256 instructions on AArch64,
+// the portable rounds otherwise (`mp` is their schedule scratch). Each
+// question is a constant false off its own architecture, so a build
+// keeps only its target's kernel. NURL_CPU_SHA=0 forces the portable
+// path on either.
 @ __sha256_blocks * u32 sp * u bp i nblk * u32 kp * u32 mp → v {
     ? ( nurl_cpu_has_sha ) { ( __sha256_blocks_ni sp bp nblk kp ) ^ v } {}
+    ? ( nurl_cpu_has_sha_arm ) { ( __sha256_blocks_ce sp bp nblk kp ) ^ v } {}
     : ~ i b 0
     ~ < b nblk {
         ( __sha256_transform_sw sp # *u + # i bp * b 64 kp mp )
@@ -280,10 +346,10 @@ unsafe @ __sha256_blocks_ni * u32 sp * u bp i nblk * u32 kp → v {
     }
 }
 
-// The block function __sha256_blocks runs on this CPU, by name: `sha-ni`
-// or `portable` (NURL_CPU_SHA=0 masks the first). HMAC-SHA-256, HKDF and
-// every TLS transcript hash run on it too.
-@ sha256_cpu_tier → s { ^ ? ( nurl_cpu_has_sha ) `sha-ni` `portable` }
+// The block function __sha256_blocks runs on this CPU, by name: `sha-ni`,
+// `armv8-sha2` or `portable` (NURL_CPU_SHA=0 masks the first two).
+// HMAC-SHA-256, HKDF and every TLS transcript hash run on it too.
+@ sha256_cpu_tier → s { ^ ? ( nurl_cpu_has_sha ) `sha-ni` ? ( nurl_cpu_has_sha_arm ) `armv8-sha2` `portable` }
 
 // One block.
 @ __sha256_transform * u32 sp * u bp * u32 kp * u32 mp → v {

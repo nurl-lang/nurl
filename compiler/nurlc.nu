@@ -49846,9 +49846,12 @@ unsafe @ __ha_is_ret s line → b {
 // The attributes a function of tier `lvl` is compiled with: exactly
 // what nurl_cpu_x86_aes / _vaes / _vaes512 / _sha test.
 @ __crypto_tier_attrs i lvl → s {
-    // AArch64's one tier: NEON is baseline, `aes` adds AESE/AESD/AESMC/
-    // AESIMC and PMULL (FEAT_AES + FEAT_PMULL; nurl_cpu_arm_aes).
-    ? == g_crypto_target 2 { ^ ` "target-features"="+neon,+aes"` } {}
+    // AArch64: NEON is baseline; `aes` adds AESE/AESD/AESMC/AESIMC and
+    // PMULL (FEAT_AES + FEAT_PMULL; nurl_cpu_arm_aes), `sha2` SHA256H /
+    // H2 / SU0 / SU1 (FEAT_SHA256; nurl_cpu_arm_sha2), bit 8 as on x86.
+    ? == g_crypto_target 2 {
+        ^ ( nurl_str_cat3 ` "target-features"="+neon` ( nurl_str_cat ? != 0 & lvl 1 `,+aes` `` ? != 0 & lvl 8 `,+sha2` `` ) `"` )
+    } {}
     : s sha ? != 0 & lvl 8 `,+sha` ``
     : s ext ( nurl_str_cat ? != 0 & lvl 16 `,+avx512ifma` `` sha )
     ? != 0 & lvl 4 { ^ ( nurl_str_cat3 ` "min-legal-vector-width"="512" "target-cpu"="x86-64-v4" "target-features"="+avx,+avx2,+bmi,+bmi2,+f16c,+fma,+lzcnt,+movbe,+popcnt,+sse4.2,+xsave,+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl,+aes,+pclmul,+vaes,+vpclmulqdq` ext `"` ) } {}
@@ -61183,6 +61186,31 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `}` ) }
 }
 
+// The SHA tier's primitives as ARMv8 lays them out (FEAT_SHA256), for
+// AArch64: `nurl_v128_sha256h abcd efgh wk` runs four SHA-256 rounds
+// and answers the new (A, B, C, D) — lanes 0..3 in that order — and
+// `nurl_v128_sha256h2 efgh abcd wk` the new (E, F, G, H) of the same
+// four rounds, given the (A, B, C, D) from BEFORE them; wk holds the
+// four W+K. `nurl_v128_sha256su0 w0 w1` and `_su1 x w2 w3` are the
+// schedule's two halves: su1 (su0 W[t..t+3] W[t+4..t+7]) W[t+8..t+11]
+// W[t+12..t+15] is W[t+16..t+19]. Intel's instructions split the work
+// differently (__emit_sha_prim), so the two sets are separate and each
+// target's kernel uses its own; elsewhere these are stubs.
+@ __emit_sha_a64_prim s name i nargs s call → v {
+    : s sig ? == nargs 2 `(<4 x i32> %a, <4 x i32> %b)` `(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)`
+    ? == g_crypto_target 2
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline "target-features"="+neon,+sha2" {` ) )
+        ( emit `entry:` )
+        ( emit ( nurl_str_cat `  %cs.r = call <4 x i32> ` call ) )
+        ( emit `  ret <4 x i32> %cs.r` )
+        ( emit `}` ) }
+    { ( emit ( nurl_str_cat4 `define linkonce_odr <4 x i32> @` name sig ` alwaysinline {` ) )
+        ( emit `entry:` )
+        ( emit `  call void @nurl_cpu_sha_missing()` )
+        ( emit `  unreachable` )
+        ( emit `}` ) }
+}
+
 // The IFMA tier's primitives (AVX-512 IFMA on a ymm register, with
 // AVX-512VL): `nurl_v256_madd52lo acc a b` adds to each 64-bit lane of
 // acc the low 52 bits of the 104-bit product of the low 52 bits of a's
@@ -61273,11 +61301,16 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( __emit_crypto_probe `nurl_cpu_has_vaes` `nurl__vaes_gate` `nurl_cpu_x86_vaes` `nurl_cpu_vaes_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_vaes512` `nurl__vaes512_gate` `nurl_cpu_x86_vaes512` `nurl_cpu_vaes512_missing` )
         ( __emit_crypto_probe `nurl_cpu_has_sha` `nurl__sha_gate` `nurl_cpu_x86_sha` `nurl_cpu_sha_missing` )
+        // ARMv8's SHA-256 instructions are AArch64's (above): never here.
+        ( emit `define linkonce_odr i1 @nurl_cpu_has_sha_arm() alwaysinline {` )
+        ( emit `entry:` )
+        ( emit `  ret i1 false` )
+        ( emit `}` )
         ( __emit_crypto_probe `nurl_cpu_has_ifma` `nurl__ifma_gate` `nurl_cpu_x86_ifma` `nurl_cpu_ifma_missing` ) }
-    {  // The SHA tier is x86's alone (for now: ARMv8's SHA2 instructions
-        // split the work differently and are not lowered yet), and so are
-        // the ADX tier (nurl_mac_row's portable loop is AArch64's row)
-        // and the IFMA one (AArch64 has no 52-bit multiply-accumulate).
+    {  // Intel's SHA extensions are x86's alone (AArch64 has its own,
+        // nurl_cpu_has_sha_arm below), and so are the ADX tier
+        // (nurl_mac_row's portable loop is AArch64's row) and the IFMA
+        // one (AArch64 has no 52-bit multiply-accumulate).
         ( emit `define linkonce_odr i1 @nurl_cpu_has_ifma() alwaysinline {` )
         ( emit `entry:` )
         ( emit `  ret i1 false` )
@@ -61298,8 +61331,21 @@ unsafe @ __rt_decl_ptypes s region → s {
         ( emit `declare <16 x i8> @llvm.aarch64.crypto.aesimc(<16 x i8>)` )
         ( emit `declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)` )
         ( __emit_crypto_probe `nurl_cpu_has_aes` `nurl__aes_gate` `nurl_cpu_arm_aes` `nurl_cpu_aes_missing` )
+        ( emit `declare i32 @nurl_cpu_arm_sha2() readnone nounwind willreturn` )
+        ( emit `declare <4 x i32> @llvm.aarch64.crypto.sha256h(<4 x i32>, <4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.aarch64.crypto.sha256h2(<4 x i32>, <4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.aarch64.crypto.sha256su0(<4 x i32>, <4 x i32>)` )
+        ( emit `declare <4 x i32> @llvm.aarch64.crypto.sha256su1(<4 x i32>, <4 x i32>, <4 x i32>)` )
+        ( __emit_crypto_probe `nurl_cpu_has_sha_arm` `nurl__sha_gate` `nurl_cpu_arm_sha2` `nurl_cpu_sha_missing` )
         ( __emit_crypto_prims_a64 ) }
-    {}
+    {
+        ? == g_crypto_target 0 {
+            ( emit `define linkonce_odr i1 @nurl_cpu_has_sha_arm() alwaysinline {` )
+            ( emit `entry:` )
+            ( emit `  ret i1 false` )
+            ( emit `}` )
+        } {}
+    }
     ? != g_crypto_target 1
     { ? == g_crypto_target 0 {
             ( emit `define linkonce_odr i1 @nurl_cpu_has_aes() alwaysinline {` )
@@ -61346,6 +61392,10 @@ unsafe @ __rt_decl_ptypes s region → s {
     ( __emit_sha_prim `nurl_v128_sha256rnds2` 3 `@llvm.x86.sha256rnds2(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
     ( __emit_sha_prim `nurl_v128_sha256msg1` 2 `@llvm.x86.sha256msg1(<4 x i32> %a, <4 x i32> %b)` )
     ( __emit_sha_prim `nurl_v128_sha256msg2` 2 `@llvm.x86.sha256msg2(<4 x i32> %a, <4 x i32> %b)` )
+    ( __emit_sha_a64_prim `nurl_v128_sha256h` 3 `@llvm.aarch64.crypto.sha256h(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
+    ( __emit_sha_a64_prim `nurl_v128_sha256h2` 3 `@llvm.aarch64.crypto.sha256h2(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
+    ( __emit_sha_a64_prim `nurl_v128_sha256su0` 2 `@llvm.aarch64.crypto.sha256su0(<4 x i32> %a, <4 x i32> %b)` )
+    ( __emit_sha_a64_prim `nurl_v128_sha256su1` 3 `@llvm.aarch64.crypto.sha256su1(<4 x i32> %a, <4 x i32> %b, <4 x i32> %c)` )
     ( __emit_ifma_prim `nurl_v256_madd52lo` `@llvm.x86.avx512.vpmadd52l.uq.256(<4 x i64> %c, <4 x i64> %a, <4 x i64> %b)` )
     ( __emit_ifma_prim `nurl_v256_madd52hi` `@llvm.x86.avx512.vpmadd52h.uq.256(<4 x i64> %c, <4 x i64> %a, <4 x i64> %b)` )
 }
@@ -61355,9 +61405,13 @@ unsafe @ __rt_decl_ptypes s region → s {
 // 3 for a v256 one, 1 for a v128 one, with 8 for a SHA one and 16 for
 // an IFMA one; 0 for none.
 @ __ir_crypto_level s ir → i {
-    // (On AArch64 the wide, SHA and IFMA primitives are stubs, so only
-    // the v128 AES ones count.)
-    : i sha | ? & == g_crypto_target 1 >= ( nurl_str_find ir `@nurl_v128_sha256` ) 0 8 0 ? & == g_crypto_target 1 >= ( nurl_str_find ir `@nurl_v256_madd52` ) 0 16 0
+    // (On AArch64 the wide, IFMA and Intel-shaped SHA primitives are
+    // stubs, and on x86-64 the ARM-shaped SHA ones: each target counts
+    // only the SHA primitives it lowers.)
+    : b xsha | >= ( nurl_str_find ir `@nurl_v128_sha256rnds2` ) 0 >= ( nurl_str_find ir `@nurl_v128_sha256msg` ) 0
+    : b asha | >= ( nurl_str_find ir `@nurl_v128_sha256h` ) 0 >= ( nurl_str_find ir `@nurl_v128_sha256su` ) 0
+    : b tsha | & == g_crypto_target 1 xsha & == g_crypto_target 2 asha
+    : i sha | ? tsha 8 0 ? & == g_crypto_target 1 >= ( nurl_str_find ir `@nurl_v256_madd52` ) 0 16 0
     ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v512_aes` ) 0 >= ( nurl_str_find ir `@nurl_v512_clmul_` ) 0 { ^ | 7 sha } {}
     ? & != g_crypto_target 2 | >= ( nurl_str_find ir `@nurl_v256_aes` ) 0 >= ( nurl_str_find ir `@nurl_v256_clmul_` ) 0 { ^ | 3 sha } {}
     ? | >= ( nurl_str_find ir `@nurl_v128_aes` ) 0 >= ( nurl_str_find ir `@nurl_v128_clmul_` ) 0 { ^ | 1 sha } {}
@@ -61709,6 +61763,11 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( nurl_sym_def syms `nurl_v128_sha256msg1` `v128` )
     ( nurl_sym_def syms `nurl_v128_sha256msg2` `v128` )
     ( nurl_sym_def syms `nurl_cpu_has_sha` `i1` )
+    ( nurl_sym_def syms `nurl_cpu_has_sha_arm` `i1` )
+    ( nurl_sym_def syms `nurl_v128_sha256h` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256h2` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256su0` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sha256su1` `v128` )
     ( nurl_sym_def syms `nurl_v256_zero` `v256` )
     ( nurl_sym_def syms `nurl_v256_ld` `v256` )
     ( nurl_sym_def syms `nurl_v256_st` `void` )

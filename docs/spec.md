@@ -1013,6 +1013,7 @@ Ice Lake / Zen 3 and later CPUs have:
 | VAES (2) | `nurl_v256_aesenc`, `_aesenclast`, `_aesdec`, `_aesdeclast`, `nurl_v256_clmul_ll/_hl/_lh/_hh` | x86-64-v3 + AES + PCLMUL + VAES + VPCLMULQDQ | `nurl_cpu_has_vaes()` |
 | AVX-512 VAES (3) | the same as `nurl_v512_*` (§4.1d) | x86-64-v4 + the VAES tier's | `nurl_cpu_has_vaes512()` |
 | SHA | `nurl_v128_sha256rnds2(cdgh, abef, wk)`, `_sha256msg1(a, b)`, `_sha256msg2(a, b)` | x86-64-v2 + SHA | `nurl_cpu_has_sha()` |
+| SHA (AArch64) | `nurl_v128_sha256h(abcd, efgh, wk)`, `_sha256h2(efgh, abcd, wk)`, `_sha256su0(w0, w1)`, `_sha256su1(x, w2, w3)` | NEON + FEAT_SHA256 | `nurl_cpu_has_sha_arm()` |
 | IFMA | `nurl_v256_madd52lo(acc, a, b)`, `_madd52hi(acc, a, b)` | x86-64-v4 + AVX-512 IFMA | `nurl_cpu_has_ifma()` |
 
 `clmul_XY` picks the halves within each lane, as the `v128` form does
@@ -1042,11 +1043,27 @@ inline helpers' `.tier` copies are called only where their set is
 contained, and a `simd @` function that reaches both AES and SHA is
 cloned, gated and dispatched on both. `NURL_CPU_SHA=0` takes the tier
 away. On AArch64 and under `--no-cpu-dispatch` `nurl_cpu_has_sha` is a
-constant false and the primitives are stubs (ARMv8's SHA2 instructions
-divide the rounds differently and are not lowered yet).
-`stdlib/std/hash_sha256.nu` runs SHA-224/256 on it where the CPU has it
-(Goldmont, Ice Lake and later Intel, every Zen): about 7× the portable
-rounds.
+constant false and these primitives are stubs.
+
+ARMv8's SHA-256 instructions divide the rounds differently, so AArch64
+has primitives of its own, with ARM's semantics:
+`sha256h(abcd, efgh, wk)` runs four rounds on the state halves
+(A, B, C, D) and (E, F, G, H) — lanes 0…3 in that order — with the four
+rounds' W + K in `wk`, and returns the new (A, B, C, D);
+`sha256h2(efgh, abcd, wk)` returns the new (E, F, G, H) of the same four
+rounds, given the (A, B, C, D) from before them. `sha256su0(w0, w1)` and
+`sha256su1(x, w2, w3)` are the schedule's two halves:
+`sha256su1(sha256su0(W[t..t+3], W[t+4..t+7]), W[t+8..t+11], W[t+12..t+15])`
+is W[t+16..t+19]. A function using them is compiled with `+neon,+sha2`
+and gated on `nurl_cpu_arm_sha2` (HWCAP_SHA2 / FEAT_SHA256), and
+`NURL_CPU_SHA=0` takes them away too. `nurl_cpu_has_sha_arm` is a
+constant false off AArch64, where these primitives are stubs. Each
+question is false off its own architecture, so a kernel per
+architecture costs a build for the other nothing: the call folds away.
+`stdlib/std/hash_sha256.nu` runs SHA-224/256 on whichever its CPU has
+(SHA-NI: Goldmont, Ice Lake and later Intel, every Zen, about 7× the
+portable rounds; FEAT_SHA256: Graviton, Ampere, Apple and other ARMv8
+cores with the Cryptographic Extension).
 
 **The IFMA tier** is AVX-512 IFMA on a ymm register (with AVX-512VL):
 `nurl_v256_madd52lo(acc, a, b)` adds to each 64-bit lane of `acc` the

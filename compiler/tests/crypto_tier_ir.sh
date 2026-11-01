@@ -138,6 +138,41 @@ a64_checks() {
     else
         note "aarch64 machine-code checks" "skipped (no aarch64-capable clang / objdump)"
     fi
+    # SHA-256 on FEAT_SHA256 (Agora #102): ARM-shaped primitives, a
+    # kernel of its own compiled with +sha2 and gated on
+    # nurl_cpu_arm_sha2; Intel's SHA kernel, its primitives stubs here,
+    # is never asked for (nurl_cpu_has_sha is a constant false).
+    if "$NURLC" --target=aarch64 "$SCRIPT_DIR/sha256_tier_agree.nu" > "$WORK/sha64.ll" 2> "$WORK/sha64.err"; then
+        local shdr sbody
+        shdr=$(grep -E '^define .*@__nurl_fn\.__sha256_blocks_ce[a-z0-9_]*\(' "$WORK/sha64.ll" | head -1)
+        sbody=$(awk -v h="$shdr" '$0==h{p=1;next} p&&/^}/{exit} p' "$WORK/sha64.ll")
+        if case "$shdr" in *'"target-features"="+neon,+sha2"'*) true ;; *) false ;; esac &&
+                printf '%s\n' "$sbody" | grep -q 'call void @nurl__sha_gate()' &&
+                grep -A3 '^define linkonce_odr void @nurl__sha_gate()' "$WORK/sha64.ll" | grep -q '@nurl_cpu_arm_sha2()' &&
+                grep -q 'llvm\.aarch64\.crypto\.sha256h2' "$WORK/sha64.ll" &&
+                ! grep -q 'llvm\.x86\.' "$WORK/sha64.ll"; then
+            ok "aarch64: SHA-256 kernel compiled for +sha2, gated on nurl_cpu_arm_sha2" "__sha256_blocks_ce"
+        else
+            bad "aarch64: SHA-256 kernel compiled for +sha2, gated on nurl_cpu_arm_sha2" "header: ${shdr:0:120}"
+        fi
+        # shellcheck disable=SC2086
+        if [ -n "$OBJDUMP" ] && "$CLANG" $cross -O2 -Wno-override-module -c "$WORK/sha64.ll" -o "$WORK/sha64.o" 2>/dev/null; then
+            local sdis n_h n_h2 n_su0 n_su1
+            sdis=$("$OBJDUMP" -d "$WORK/sha64.o" 2>/dev/null |
+                awk '/^[0-9a-f]+ <[^>]*__sha256_blocks_ce[a-z0-9_]*>:/{p=1} /^$/{p=0} p')
+            n_h=$(printf '%s\n' "$sdis" | grep -cE '\bsha256h\b')
+            n_h2=$(printf '%s\n' "$sdis" | grep -cE '\bsha256h2\b')
+            n_su0=$(printf '%s\n' "$sdis" | grep -cE '\bsha256su0\b')
+            n_su1=$(printf '%s\n' "$sdis" | grep -cE '\bsha256su1\b')
+            if [ "$n_h" -gt 0 ] && [ "$n_h" -eq "$n_h2" ] && [ "$n_su0" -gt 0 ] && [ "$n_su0" -eq "$n_su1" ]; then
+                ok "aarch64: the kernel lowers to SHA256H / H2 / SU0 / SU1" "$n_h h, $n_h2 h2, $n_su0 su0, $n_su1 su1"
+            else
+                bad "aarch64: the kernel lowers to SHA256H / H2 / SU0 / SU1" "$n_h h, $n_h2 h2, $n_su0 su0, $n_su1 su1"
+            fi
+        fi
+    else
+        bad "aarch64: sha256_tier_agree compiles" "$(head -2 "$WORK/sha64.err")"
+    fi
     # Run it: natively, or under qemu-aarch64.
     local runner="" link_ok=0 qemu=""
     case "$HOST_ARCH" in
@@ -207,6 +242,23 @@ a64_checks() {
             bad "aarch64: $t builds" "nurlc or the link failed"
         fi
     done
+    # SHA-256 on the ARM instructions against the golden x86 is held to,
+    # and the portable rounds under NURL_CPU_SHA=0 against the same one.
+    if if [ -n "$runner" ]; then a64_link "$WORK/sha64.ll" "$WORK/sha64"
+            else "$CLANG" -O2 -flto -Wno-override-module "$WORK/sha64.ll" "$ROOT/stdlib/runtime.o" \
+                    -o "$WORK/sha64" -lm -lpthread 2>/dev/null; fi; then
+        want=$(sed -n '/^OUTPUT$/,$p' "$SCRIPT_DIR/outputs/sha256_tier_agree.txt" | tail -n +2)
+        # shellcheck disable=SC2086
+        got=$($runner "$WORK/sha64" 2>&1)
+        if [ "$got" = "$want" ]; then ok "aarch64: sha256_tier_agree agrees with its golden" "SHA256H path"
+        else bad "aarch64: sha256_tier_agree agrees with its golden" "${got:0:80}"; fi
+        # shellcheck disable=SC2086
+        got=$(NURL_CPU_SHA=0 $runner "$WORK/sha64" 2>&1)
+        if [ "$got" = "$want" ]; then ok "aarch64 NURL_CPU_SHA=0: the portable rounds agree too" "golden"
+        else bad "aarch64 NURL_CPU_SHA=0: the portable rounds agree too" "${got:0:80}"; fi
+    else
+        bad "aarch64: sha256_tier_agree builds" "the link failed"
+    fi
 }
 a64_checks
 
