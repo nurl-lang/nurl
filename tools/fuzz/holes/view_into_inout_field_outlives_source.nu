@@ -1,5 +1,5 @@
 // view_into_inout_field_outlives_source: agora #259 — the same with the callee storing into a field of the `inout` struct of views (view_into_inout_field_outlives_source).
-// Closed: a view a callee stores into an `inout` argument (a whole assignment in its last statement, or a field of a struct of views; the argument at any position) and a view a closure gives one of its captures are dependencies of that argument or capture, where the call or the closure runs (mem_rawlit_unclaimed at the body's end, an `inout` struct of views as the keeping container, the closure effect `@vp=`; agora #259).
+// Closed: a view a callee stores into an `inout` argument (a whole assignment in its last statement, or a field of a struct of views; the argument at any position) is a dependency of that argument where the call runs (mem_rawlit_unclaimed at the body's end, an `inout` struct of views as the keeping container; agora #259).
 // main: accepted; AddressSanitizer reported heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #259: the same with the callee storing into a field of the `inout` struct of views
 $ `stdlib/core/string.nu`

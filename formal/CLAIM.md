@@ -43,11 +43,6 @@ the LLVM / C11 memory model rather than redefining it.
   paths, closures and trait objects as packages with captures by handle
   and by name, `inout` of every owning type and a field replaced in place,
   panics with unwinding and `recover`, and the drop journal.
-  A capture by name holds no views. nurlc also accepts a closure that
-  gives a by-reference capture a view (`= w @ W { ( string_data b ) }`,
-  recorded on `w` where the closure runs, #259). The calculus does not
-  model that yet, so such programs are outside the claim until Agora
-  #272 lands.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
   Elements change only through their owner or an `inout` binding. nurlc
