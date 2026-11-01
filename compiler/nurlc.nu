@@ -4144,7 +4144,8 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s ok ( nurl_sym_get2 syms name `__pljk` )
     : s orr ( nurl_sym_get2 syms name `__pljr` )
     : s z0 ( __pairs_zip ok orr )
-    : s z ( __lines_union z0 ( __pairs_zip ks rs ) )
+    : s zn ( __pairs_zip ks rs )
+    : s z ( __lines_union z0 zn )
     ? == ( nurl_str_len z ) ( nurl_str_len z0 ) { ^ v } {}
     ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljk` ) ( __pairs_unzip z F ) )
     ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljr` ) ( __pairs_unzip z T ) )
@@ -4195,7 +4196,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
         : i nl ( nurl_str_find rest `\n` )
         : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
         = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
-        ? < ( nurl_str_find ( nurl_str_cat3 `\n` out `\n` ) ( nurl_str_cat3 `\n` ent `\n` ) ) 0 {
+        ? ! ( str_contains_line out ent ) {
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out `\n` ent )
         } {}
     }
@@ -20526,7 +20527,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                         ? & == match_first_tt TT_DOT != 0 ( nurl_str_len match_scrut_field ) {
                             : s __mfb ( nurl_sym_get2 syms ( str_first_word match_scrut_field ) `__bname` )
                             ? != 0 ( nurl_str_len __mfb ) {
-                                : s __mfz ( __lines_union ( nurl_str_cat3 `__field__` `\t` __mfb ) ( __pairs_zip ( nurl_sym_get2 syms __mfb `__pljk` ) ( nurl_sym_get2 syms __mfb `__pljr` ) ) )
+                                : s __mff ( nurl_str_cat3 `__field__` `\t` __mfb )
+                                : s __mfo ( __pairs_zip ( nurl_sym_get2 syms __mfb `__pljk` ) ( nurl_sym_get2 syms __mfb `__pljr` ) )
+                                : s __mfz ( __lines_union __mff __mfo )
                                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljk` ) ( __pairs_unzip __mfz F ) )
                                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__pljr` ) ( __pairs_unzip __mfz T ) )
                             } {}
@@ -20991,7 +20994,8 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? == 0 g_did_ret {
                 : s __alend ( mem_arm_call_lend syms arm_tt0 arm_v0 arm_type arm_hown )
                 ? != 0 ( nurl_str_len __alend ) {
-                    ? ! & != 0 ( nurl_str_len __m_lkey ) ( seq __alend ( nurl_str_cat3 __m_lkey `\t` __m_lroots ) ) { = m_alends ( __arm_lends_join m_alends __alend ) } {}
+                    : s __msl ( nurl_str_cat3 __m_lkey `\t` __m_lroots )
+                    ? ! & != 0 ( nurl_str_len __m_lkey ) ( seq __alend __msl ) { = m_alends ( __arm_lends_join m_alends __alend ) } {}
                 } {}
             } {}
             : s arm_xhown ? == 0 g_did_ret ? arm_took ( nurl_str_cat `true` `` ) ( mem_arm_call_xhown syms cg arm_type arm_tt0 arm_hown ) ``
