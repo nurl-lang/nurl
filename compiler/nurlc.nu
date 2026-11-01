@@ -25547,24 +25547,16 @@ unsafe @ __src_has_raw_ptr s text → b {
 // struct that is dropped before it: the struct first takes over whatever
 // it is a cursor over (an option binding's payload), then the field is
 // zeroed there and owned here — exactly when the struct held it.
+// (The option is then taken apart for the borrow checker too, as for
+// any field a payload gives up: read again, it reads the handle `ptr`
+// now owns and may already have released — agora #336.)
 @ mem_udrop_field_move i syms i cg s ptr s fr → v {
     : ~ s f ( nurl_str_cat fr `` )
     : s fp ( str_first_word f ) = f ( str_skip_word f )
     : s fsty ( str_first_word f ) = f ( str_skip_word f )
     : s fidx ( str_first_word f ) = f ( str_skip_word f )
     : s ffty ( str_first_word f )
-    : ~ s al ( nurl_sym_get2 syms fp `__alias` )
-    ~ != 0 ( nurl_str_len al ) {
-        : s w ( str_first_word al ) = al ( str_skip_word al )
-        ? & == 0 ( nurl_sym_len2 syms w `__pname` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms w `__udty` ) `%__opt.` ) {
-            : s wf ( mem_udrop_flag_get syms cg w )
-            : s cf ( mem_udrop_flag_get syms cg fp )
-            : s nf ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
-            ( mem_udrop_flag_set syms cg fp nf )
-            ( mem_udrop_flag_set syms cg w `0` )
-        } {}
-    }
+    ( mem_udrop_takeover_opt syms cg fp g_stmt_line )
     : s c ( mem_udrop_flag_get syms cg fp )
     ( mem_zero_field cg fp fsty fidx ffty c )
     ( mem_udrop_flag_set syms cg ptr c )
