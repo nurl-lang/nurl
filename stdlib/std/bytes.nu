@@ -83,7 +83,7 @@ $ `stdlib/core/slice.nu`
 @ bytes_extend_str ( Vec u ) v s raw → v {
     : i n ( nurl_str_len raw )
     ? > n 0 {
-        ( vec_reserve [u] v n )
+        ( _vec_reserve_more [u] v n )
         : *u src # *u raw
         : *u dst ( vec_data [u] v )
         : i len ( vec_len [u] v )
@@ -101,7 +101,7 @@ $ `stdlib/core/slice.nu`
 // `raw` is BORROWED. No-op when `n <= 0`.
 @ bytes_extend_raw ( Vec u ) v * u raw i n → v {
     ? > n 0 {
-        ( vec_reserve [u] v n )
+        ( _vec_reserve_more [u] v n )
         : *u src # *u raw
         : *u dst ( vec_data [u] v )
         : i len ( vec_len [u] v )
@@ -139,7 +139,7 @@ $ `stdlib/core/slice.nu`
     : s ctl . v ctl
     : i len ( nurl_peek ctl 1 )
     // (A view's capacity is -1: the reserve detaches it.)
-    ? < - ( nurl_peek ctl 2 ) len w { ( vec_reserve [u] v w ) } {}
+    ? < - ( nurl_peek ctl 2 ) len w { ( _vec_reserve_more [u] v w ) } {}
     : *u data # *u ( nurl_peek ctl 0 )
     ? == sign 1 { = . data len # u 45 } {}
     : ~ i k - + len w 1
@@ -161,7 +161,7 @@ $ `stdlib/core/slice.nu`
 @ bytes_extend_bytes ( Vec u ) dst ( Vec u ) src → v {
     : i n ( vec_len [u] src )
     ? > n 0 {
-        ( vec_reserve [u] dst n )
+        ( _vec_reserve_more [u] dst n )
         : *u sp ( vec_data [u] src )
         : *u dp ( vec_data [u] dst )
         : i dlen ( vec_len [u] dst )

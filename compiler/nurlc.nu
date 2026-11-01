@@ -69278,19 +69278,26 @@ unsafe @ __sl_key_append i tab i a i b s w → v {
     = . mp b sv
 }
 
-// Drop the registration of every handle binding whose registration no
-// panic can see, with its forgets. Nothing can panic while a slot is
-// registered when, from its registration to the END of the function (a
-// path can leave without reaching any forget — one that ends in a panic,
-// `die` then `unreachable`, is laid out after the last `ret`), there is
-// no call that may panic and no branch back to a label above the
-// registration (a loop header re-run while it is live).
+// Drop the registration of every handle binding that no panic can meet
+// while it is held, with its forgets. A registration is held on exactly
+// the paths from its push to a forget of the same slot, and a panic starts
+// only at a call that may panic. So from each push, a search of the
+// function's control flow (fallthrough, and every label a `br` or `switch`
+// names; both ways of a conditional branch) that stops at a forget or
+// another push of the slot, a `ret` or an `unreachable` decides it: one
+// that meets a call that may panic keeps the registration.
 //
-// One pass over the function's lines builds what every registration asks
-// — which lines may panic, how far up each branch reaches, each slot's
-// forgets — and suffix summaries answer each registration at once. (A
-// scan from every registration to the function's end, and up again for
-// every branch target, made this quadratic in the function's length.)
+// The decision is per slot, all or nothing: a slot's pushes and forgets are
+// blanked only when the search from every push of it meets no such call.
+// Then no registration of the slot is ever made, so a path may stop at any
+// of its forgets or pushes, whichever registration that one belongs to,
+// and no forget another registration still needs is ever removed (that
+// would leave the journal holding a stack slot past its frame).
+//
+// (It replaces a test that kept a registration whenever a call that may
+// panic stood anywhere between its push and the END of the function: in a
+// handler, a value held across a call that cannot panic stayed registered
+// because a bounds-checked read came lines later, agora #283.)
 unsafe @ __jrnl_slot_elide i fi → v {
     : i st ( nurl_peek # s g_dce_start fi )
     : i en ( nurl_peek # s g_dce_end fi )
@@ -69303,113 +69310,142 @@ unsafe @ __jrnl_slot_elide i fi → v {
     ~ < p en { = p + ( __mp_eol p en ) 1 = nl + nl 1 }
     : Buf lst_own @ Buf { # i ( nurl_alloc * + nl 1 8 ) }  // line starts
     : *i lst # *i . lst_own p
-    : Buf kind_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }  // 1 a registration, 2 a forget, 3 a branch
+    // 1 a push, 2 a forget, 3 a branch, 4 a `ret` / `unreachable`, 5 a call
+    // that may panic
+    : Buf kind_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }
     : *i kind # *i . kind_own p
-    : Buf span_own @ Buf { # i ( nurl_zalloc * + nl 2 8 ) }  // a call that may panic, here or below
-    : *i span # *i . span_own p
-    : Buf smin_own @ Buf { # i ( nurl_alloc * + nl 2 8 ) }  // the highest label a branch here or below reaches
-    : *i smin # *i . smin_own p
+    : Buf sid_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }  // a push's or forget's slot number
+    : *i sid # *i . sid_own p
+    : Buf seen_own @ Buf { # i ( nurl_zalloc * + nl 1 8 ) }  // the search that last reached a line, + 1
+    : *i seen # *i . seen_own p
+    : Buf todo_own @ Buf { # i ( nurl_alloc * + nl 1 8 ) }  // the search's worklist
+    : *i todo # *i . todo_own p
     : Tab labels @ Tab { ( nurl_sym_new ) }  // label → its line
-    : Tab fgs @ Tab { ( nurl_sym_new ) }  // slot → its forgets' lines
+    : Tab slots @ Tab { ( nurl_sym_new ) }  // slot → its number
+    : ~ i nslots 0
     = p st
     : ~ i k 0
     ~ < p en {
         : i e ( __mp_eol p en )
         = . lst k p
         : ~ i kd 0
-        : ~ i pz 0
-        : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
-        ? >= cr 0 {
-            : i c ( __mp_callee + + p cr 6 e )
-            ? | == c -2 & >= c 0 != 0 ( nurl_peek # s g_mp c ) { = pz 1 } {}
-        } {}
-        ? ( __fold_at p pp 41 ) { = kd 1 } {
-            ? ( __fold_at p fp 42 ) {
-                = kd 2
-                : i ss + p 42
-                : ~ i se ss
-                ~ & < se e != ( __fold_byte se ) 41 { = se + se 1 }
-                ( __sl_key_append . fgs h ss se ( nurl_str_int k ) )
-            } {
+        : b push ( __fold_at p pp 41 )
+        : b fgt ( __fold_at p fp 42 )
+        ? | push fgt {
+            : i ss + p ? push 41 42
+            : ~ i se ss
+            ~ & < se e & != ( __fold_byte se ) 44 != ( __fold_byte se ) 41 { = se + se 1 }
+            : ~ i id ( __sl_key_int . slots h ss se )
+            ? < id 0 {
+                = id nslots
+                ( __sl_key_def . slots h ss se ( nurl_str_int id ) )
+                = nslots + nslots 1
+            } {}
+            = . sid k id
+            = kd ? push 1 2
+        } {
+            : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
+            ? >= cr 0 {
+                : i c ( __mp_callee + + p cr 6 e )
+                ? | == c -2 & >= c 0 != 0 ( nurl_peek # s g_mp c ) { = kd 5 } {}
+            } {}
+            ? == kd 0 {
                 ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) { = kd 3 } {
-                    // `name:` opening a block
-                    ? ( __dce_ident_byte ( __fold_byte p ) ) {
-                        : ~ i q p
-                        ~ & < q e ( __dce_ident_byte ( __fold_byte q ) ) { = q + q 1 }
-                        ? & < q e == ( __fold_byte q ) 58 { ( __sl_key_def . labels h p q ( nurl_str_int k ) ) } {}
-                    } {}
+                    ? | ( __fold_at p `  ret` 5 ) ( __fold_at p `  unreachable` 13 ) { = kd 4 } {
+                        // `name:` opening a block
+                        ? ( __dce_ident_byte ( __fold_byte p ) ) {
+                            : ~ i q p
+                            ~ & < q e ( __dce_ident_byte ( __fold_byte q ) ) { = q + q 1 }
+                            ? & < q e == ( __fold_byte q ) 58 { ( __sl_key_def . labels h p q ( nurl_str_int k ) ) } {}
+                        } {}
+                    }
                 }
-            }
+            } {}
         }
         = . kind k kd
-        = . span k pz
         = p + e 1
         = k + k 1
     }
-    // From each line to the end: may anything panic, and the highest a
-    // branch reaches (the smallest label line it targets).
-    : i far + nl 1
-    = . smin nl far
-    = k - nl 1
-    ~ >= k 0 {
-        : ~ i up far
-        ? == . kind k 3 {
-            : i lp . lst k
-            : i le ( __mp_eol lp en )
-            : ~ i q lp
-            ~ < q le {
-                : i lr ( nurl_memmem_range # s + g_dce_mod q - le q `label %` 7 )
-                ? < lr 0 { = q le } {
-                    : i ns + + q lr 7
-                    : ~ i ne ns
-                    ~ & < ne le ( __dce_ident_byte ( __fold_byte ne ) ) { = ne + ne 1 }
-                    : i at ( __sl_key_int . labels h ns ne )
-                    ? & >= at 0 < at up { = up at } {}
-                    = q ne
+    // Per slot: 1 while every push of it so far met no call that may panic,
+    // 0 once one did.
+    : Buf ok_own @ Buf { # i ( nurl_alloc * + nslots 1 8 ) }
+    : *i ok # *i . ok_own p
+    : ~ i j 0
+    ~ < j nslots { = . ok j 1 = j + j 1 }
+    = k 0
+    ~ < k nl {
+        : i id . sid k
+        ? & == . kind k 1 != 0 . ok id {
+            // The search from this push: paths stop at the slot's own forget
+            // or push, a ret or an unreachable; a call that may panic, a
+            // switch whose arms go on to later lines, a path off the end, or
+            // more than 4000 lines keeps the registration.
+            : i mark + k 1
+            : ~ i nt 1
+            = . todo 0 + k 1
+            : ~ i steps 0
+            : ~ b bad F
+            ~ & ! bad > nt 0 {
+                = nt - nt 1
+                : i i . todo nt
+                ? >= i nl { = bad T } {
+                    ? != . seen i mark {
+                        = . seen i mark
+                        = steps + steps 1
+                        : i kd . kind i
+                        ? | > steps 4000 == kd 5 { = bad T } {
+                            ? | & | == kd 1 == kd 2 == . sid i id == kd 4 {} {
+                                ? == kd 3 {
+                                    : i lp . lst i
+                                    : i le ( __mp_eol lp en )
+                                    ? & >= ( nurl_memmem_range # s + g_dce_mod lp - le lp `[` 1 ) 0 < ( nurl_memmem_range # s + g_dce_mod lp - le lp `]` 1 ) 0 { = bad T } {
+                                        : ~ i q lp
+                                        ~ & ! bad < q le {
+                                            : i lr ( nurl_memmem_range # s + g_dce_mod q - le q `label %` 7 )
+                                            ? < lr 0 { = q le } {
+                                                : i ns + + q lr 7
+                                                : ~ i ne ns
+                                                ~ & < ne le ( __dce_ident_byte ( __fold_byte ne ) ) { = ne + ne 1 }
+                                                : i at ( __sl_key_int . labels h ns ne )
+                                                ? | < at 0 >= nt nl { = bad T } {
+                                                    = . todo nt at
+                                                    = nt + nt 1
+                                                }
+                                                = q ne
+                                            }
+                                        }
+                                    }
+                                } {
+                                    ? >= nt nl { = bad T } {
+                                        = . todo nt + i 1
+                                        = nt + nt 1
+                                    }
+                                }
+                            }
+                        }
+                    } {}
                 }
             }
+            ? bad { = . ok id 0 } {}
         } {}
-        : i nx . smin + k 1
-        = . smin k ? < up nx up nx
-        = . span k | . span k . span + k 1
-        = k - k 1
+        = k + k 1
+    }
+    // Blank the pushes and forgets of every slot that qualified (a slot is
+    // numbered only once a push or forget names it; one with no push in
+    // this function is left alone).
+    : Buf has_own @ Buf { # i ( nurl_zalloc * + nslots 1 8 ) }
+    : *i has # *i . has_own p
+    = k 0
+    ~ < k nl {
+        ? == . kind k 1 { = . has . sid k 1 } {}
+        = k + k 1
     }
     = k 0
     ~ < k nl {
-        ? == . kind k 1 {
+        : i kd . kind k
+        ? & | == kd 1 == kd 2 & != 0 . has . sid k != 0 . ok . sid k {
             : i lp . lst k
-            : i le ( __mp_eol lp en )
-            : i ss + lp 41
-            : ~ i se ss
-            ~ & < se le != ( __fold_byte se ) 44 { = se + se 1 }
-            ? & & <= - - nl k 1 4000 == 0 . span + k 1 > . smin + k 1 k {
-                // its forgets below it (one there at all: elided before, or never)
-                : *u mp # *u # s g_dce_mod
-                : u sv . mp se
-                = . mp se # u 0
-                : s fl ( nurl_sym_get . fgs h # s + g_dce_mod ss )
-                = . mp se sv
-                : ~ b any F
-                : ~ s ws ( nurl_str_cat fl `` )
-                ~ != 0 ( nurl_str_len ws ) {
-                    : i fk ( nurl_str_to_int ( str_first_word ws ) )
-                    ? & > fk k == . kind fk 2 { = any T } {}
-                    = ws ( str_skip_word ws )
-                }
-                ? any {
-                    = ws ( nurl_str_cat fl `` )
-                    ~ != 0 ( nurl_str_len ws ) {
-                        : i fk ( nurl_str_to_int ( str_first_word ws ) )
-                        ? & > fk k == . kind fk 2 {
-                            : i fs . lst fk
-                            ( __jrnl_blank_line fs ( __mp_eol fs en ) )
-                            = . kind fk 0
-                        } {}
-                        = ws ( str_skip_word ws )
-                    }
-                    ( __jrnl_blank_line lp le )
-                } {}
-            } {}
+            ( __jrnl_blank_line lp ( __mp_eol lp en ) )
         } {}
         = k + k 1
     }
