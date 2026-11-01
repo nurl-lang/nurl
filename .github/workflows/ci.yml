@@ -8,16 +8,14 @@ name: ci
 on:
   push:
     branches: [main, Improvements]
+  # Not `labeled`, deliberately (Agora #324). A run for a label would list
+  # every job here as a check run, skipped where it does not apply, and
+  # GitHub counts a skipped check as passed. On github#1478 one such run
+  # took the PR from `blocked` to `unstable` while its build was still
+  # running. Adding `ci:full` starts the full run through
+  # ci-full-label.yml instead, which dispatches this workflow with `pr`.
   pull_request:
     branches: [main]
-    # `labeled` so that adding `ci:full` starts the full run without a
-    # push (Agora #324). `full` reads the labels the event carries, so a
-    # label added after the PR opened reached no run until the next push,
-    # and a new PR's first run never had the full set: github#1465 went
-    # to the queue unsanitized that way. Any other label starts nothing
-    # and cancels nothing (`concurrency`, and the `if:` of the two jobs
-    # that need no other: `changes` and `shared-files`).
-    types: [opened, synchronize, reopened, labeled]
   # The merge queue (Agora #136): main's ruleset can require the queue,
   # which tests main + the queued PRs together and merges exactly the
   # commit it tested. The required checks (build + corpus, FreeBSD,
@@ -27,27 +25,31 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      pr:
+        description: >-
+          A PR number: run as that PR's full run, in its concurrency group
+          (ci-full-label.yml sets it when the PR is labelled ci:full).
+        required: false
+        default: ''
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
 # On main a run is never cancelled part-way (Agora #251): 20 of 35 main
 # runs used to be cancelled by the next merge, a quarter of all ci.yml
 # job-minutes thrown away, and the commit left untested. A main run that
 # is in progress finishes; GitHub keeps only the newest pending one behind
-# it. A PR's older run is still cancelled by its next push, and by a
-# `ci:full` label, whose full run replaces it. A `labeled` event for any
-# other label gets a group of its own (its run id), as in macos-tests.yml,
-# so it cancels no run in progress; its jobs are all skipped.
+# it. A PR's older run is still cancelled by its next push. A run
+# dispatched with `pr` joins that PR's group (refs/pull/N/merge, the ref
+# its pull_request runs have): the full run replaces the fast one, and
+# the PR's next push replaces the full run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('-{0}', github.run_id) || '' }}
+  group: ${{ github.workflow }}-${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
     name: classify changed paths
     runs-on: ubuntu-latest
-    # A label other than `ci:full` changes nothing a job reads: skipping
-    # this job skips every job that needs it.
-    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     # In the merge queue, every class runs. A group is several PRs on top
     # of a main that moved since they were tested, so the queue is no
     # place to save minutes by path: running too much is always correct
@@ -245,8 +247,6 @@ jobs:
     name: shared files are generated (map.tsv, changelog fragments)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # (As `changes`: a label other than `ci:full` changes no file.)
-    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     steps:
       - uses: actions/checkout@v4
       # formal/corpus/map.tsv is generated where it is read and never
