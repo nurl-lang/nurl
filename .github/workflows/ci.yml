@@ -1461,18 +1461,22 @@ jobs:
         run: ./tools/metamorph/spellings.py --class panic-reclaim
 
   sanitizers-corpus:
-    name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/2)
+    name: ASan + UBSan + LSan corpus (shard ${{ matrix.shard }}/3)
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
-    # Each shard is the --san build (~3 min) plus half the corpus.
+    # Each shard is the --san build (~3 min) plus a third of the corpus.
+    # Two shards took 19.2 / 15.0 min on 2026-11-01, against a 25 min
+    # limit, and the corpus grows by dozens of tests a day: the no-libc
+    # corpus ran into its limit the same way and was cancelled unseen.
+    # Three keep the room and shorten the queue's longest path.
     timeout-minutes: 25
     strategy:
       # One shard's sanitizer report must not cancel the other's: both
       # halves are worth reading on the same push.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     container:
       image: nurllang/ci:ubuntu24-20260821
       credentials:
@@ -1503,7 +1507,7 @@ jobs:
         # Sharded round-robin over the sorted test names
         # (NURL_SAN_SHARD); the shards together are the whole corpus.
         env:
-          NURL_SAN_SHARD: ${{ matrix.shard }}/2
+          NURL_SAN_SHARD: ${{ matrix.shard }}/3
         run: ./compiler/tests/run_san_tests.sh
 
   webdocs-build:
