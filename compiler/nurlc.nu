@@ -11011,6 +11011,32 @@ unsafe @ nurl_sym_has_word i h s name s word → b {
     F
 }
 
+// The value of `name` as the table holds it, for a reader that is done
+// with it before the entry changes. nurl_sym_get hands out a value the
+// table grows in place (an accumulated list) as an interned copy of what it
+// holds right then, kept for the whole compile: the parked implication
+// lists, read whole by the resolvers, were 850 KB of such copies in a
+// self-compile (agora #305).
+unsafe @ __sym_peek i h s name → s {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { ^ `` } {}
+        ? & == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ . types idx } {}
+        = cur . prev idx
+    }
+    ^ ``
+}
+
 // nurl_sym_has_word for a two-part key. See nurl_sym_get2.
 unsafe @ nurl_sym_has_word2 i h s base s suffix s word → b {
     : s t # s h
@@ -46627,6 +46653,7 @@ unsafe @ origin_resolve → b {
                 } {}
             }
             ( nurl_sym_def ( nurl_peek # s node 8 ) # s name after )
+            ( __ic_touch # s name )
             ( nurl_free # s ( nurl_peek # s node 9 ) )
             ( nurl_poke # s node 9 # i ( nurl_strdup after ) )
             ? == ( nurl_peek # s node 8 ) g_origin_returns {
@@ -47228,13 +47255,15 @@ unsafe @ bck_scalar_lty s t → b {
     // Each step adds an index to a finite set. Cycles without a consuming
     // endpoint stay borrowed; arbitrary call-chain lengths need no round cap.
     : ~ b changed T
-    ~ changed { = changed | | | ( __resolve_impl_round `s` g_fn_sink 0 ) ( __resolve_impl_round `s` g_fn_keeps g_fn_sink )
-        ( __resolve_impl_round `k` g_fn_keeps g_fn_sink ) ( __resolve_store_rounds ) }
+    ( __ic_begin )
+    ~ changed { = changed | | | ( __resolve_impl_round `s` g_fn_sink 0 0 ) ( __resolve_impl_round `s` g_fn_keeps g_fn_sink 1 )
+        ( __resolve_impl_round `k` g_fn_keeps g_fn_sink 2 ) ( __resolve_store_rounds ) }
+    ( __ic_free )
 }
 
 @ __resolve_store_rounds → b {
-    : b a ( __resolve_impl_round `s` g_fn_stores 0 )
-    : b b2 ( __resolve_impl_round `k` g_fn_stores 0 )
+    : b a ( __resolve_impl_round `s` g_fn_stores 0 3 )
+    : b b2 ( __resolve_impl_round `k` g_fn_stores 0 4 )
     ^ | a b2
 }
 
@@ -47330,17 +47359,19 @@ unsafe @ bck_scalar_lty s t → b {
 // These summaries drive ownership even when borrow diagnostics are disabled.
 @ resolve_pending_impls → v {
     : ~ b changed T
+    ( __ic_begin )
     ~ changed {
-        : b sc ( __resolve_impl_round `s` g_fn_sink 0 )
-        : b kc | | ( __resolve_impl_round `s` g_fn_keeps g_fn_sink ) ( __resolve_impl_round `k` g_fn_keeps g_fn_sink )
+        : b sc ( __resolve_impl_round `s` g_fn_sink 0 0 )
+        : b kc | | ( __resolve_impl_round `s` g_fn_keeps g_fn_sink 1 ) ( __resolve_impl_round `k` g_fn_keeps g_fn_sink 2 )
         ( __resolve_store_rounds )
         : b hc ( __resolve_handkeep_round )
-        : b ec ( __resolve_impl_round `e` g_fn_escapes 0 )
-        : b rc ( __resolve_impl_round `r` g_fn_ret_param 0 )
+        : b ec ( __resolve_impl_round `e` g_fn_escapes 0 5 )
+        : b rc ( __resolve_impl_round `r` g_fn_ret_param 0 6 )
         : b dc ( __dyn_virtual_round )
         : b oc ( origin_resolve )
         = changed | | | | | | sc kc hc ec rc dc oc
     }
+    ( __ic_free )
 }
 
 // A `dyn` call reaches whichever impl the object holds, so its virtual
@@ -47515,6 +47546,7 @@ unsafe @ __dyn_parts_arity s parts → i {
     : s u ( __word_union cur add )
     ? ( seq u cur ) { ^ F } {}
     ( nurl_sym_def tbl to u )
+    ( __ic_touch to )
     ^ T
 }
 
@@ -47597,7 +47629,8 @@ unsafe @ __dyn_parts_arity s parts → i {
 
 @ __resolve_handkeep_list s key → b {
     : ~ b changed F
-    : s rest ( nurl_sym_get g_pending_impl key )
+    // (Read in place: nothing adds to the list while the resolvers run.)
+    : s rest ( __sym_peek g_pending_impl key )
     : i rn ( nurl_str_len rest )
     : ~ i pos 0
     ~ < pos rn {
@@ -47621,38 +47654,183 @@ unsafe @ __dyn_parts_arity s parts → i {
     changed
 }
 
-// One pass over the implications under `key`, propagating into `dst`.
-// True when anything was added. `also` (or 0) is a second summary whose
-// facts count as the callee's too — a sink parameter is also kept.
-@ __resolve_impl_round s key i dst i also → b {
-    : ~ b changed F
-    : s rest ( nurl_sym_get g_pending_impl key )
-    : i rn ( nurl_str_len rest )
+// ── The implication rounds, semi-naively (agora #305) ────────────
+//
+// The resolvers run their rounds until nothing changes, and a round used
+// to re-read every parked implication: five words of each record parsed
+// and copied, its callee's sets looked up, every record, every round. A
+// chain of forward-defined helpers takes a round per link; dst_flagship's
+// import closure took 23 rounds over 600 KB of records.
+//
+// A record's verdict reads only its callee's sets (the rule's `dst` and
+// `also` under `cn` and `fn`), and those only grow: the rounds, the dyn
+// round's unions and origin_resolve add words, none removes one. So a
+// record whose callee gained nothing since a rule last read it would find
+// what it found then, and that rule skips it: the same state after every
+// round, the same `changed`, the same rounds, without the re-reading.
+// __ic_begin reads each list once, in place, and keeps of each record the
+// three interned words every read needs (cn fn aidx) and where it starts;
+// fnm and pidx are read from the list only when the record fires. Every
+// record starts dirty for every rule (one bit each); a rule clears its bit
+// when it reads the record, and __ic_touch sets all of them again for every
+// record whose callee is a name that just gained a word.
+: ~ i g_ic_rec 0  // i[3 * g_ic_n]: cn fn aidx, interned words
+: ~ i g_ic_off 0  // i32[g_ic_n]: where record k starts in its list
+: ~ i g_ic_n 0
+: ~ i g_ic_cap 0
+: ~ i g_ic_dirty 0  // u8[g_ic_n]: bit r set while rule r has record k to read
+: ~ i g_ic_idx 0  // symbol table: a callee name → its records' numbers
+: ~ i g_ic_lo 0  // i[4]: the first record of list `s` `k` `e` `r`
+: ~ i g_ic_hi 0  // i[4]: one past its last
+: ~ i g_ic_next 0  // __ic_word: where the word after it starts
+// The rules, one per (list, dst, also) the resolvers pass:
+// 0 s→sink, 1 s→keeps (+sink), 2 k→keeps (+sink), 3 s→stores, 4 k→stores,
+// 5 e→escapes, 6 r→ret_param. One mark bit each.
+: i IC_ALL_RULES 127
+
+unsafe @ __ic_free → v {
+    ? != g_ic_rec 0 { ( nurl_free # s g_ic_rec ) } {}
+    ? != g_ic_off 0 { ( nurl_free # s g_ic_off ) } {}
+    ? != g_ic_dirty 0 { ( nurl_free # s g_ic_dirty ) } {}
+    ? != g_ic_lo 0 { ( nurl_free # s g_ic_lo ) } {}
+    ? != g_ic_hi 0 { ( nurl_free # s g_ic_hi ) } {}
+    ? != g_ic_idx 0 { ( nurl_sym_free g_ic_idx ) } {}
+    = g_ic_rec 0
+    = g_ic_off 0
+    = g_ic_dirty 0
+    = g_ic_lo 0
+    = g_ic_hi 0
+    = g_ic_idx 0
+    = g_ic_n 0
+    = g_ic_cap 0
+}
+
+// Word `f` (cn fn aidx) of record `k`.
+unsafe inline @ __ic_kept i k i f → s {
+    ^ # s ( nurl_peek # s g_ic_rec + * k 3 f )
+}
+
+// The interned word that starts at `pos` of `rest` (length `rn`); the
+// next one starts at g_ic_next.
+unsafe @ __ic_word s rest i rn i pos → s {
+    : i e ( __word_end rest rn pos )
+    = g_ic_next + e 1
+    ^ ( nurl_intern_n # s + # i rest pos - e pos )
+}
+
+// Parse the four lists, every record dirty for every rule. Each resolver
+// calls it before its rounds: the lists grow while functions compile.
+unsafe @ __ic_begin → v {
+    ( __ic_free )
+    = g_ic_lo # i ( nurl_zalloc 32 )
+    = g_ic_hi # i ( nurl_zalloc 32 )
+    = g_ic_idx ( nurl_sym_new )
+    : ~ i ks 0
+    ~ < ks 4 {
+        : s key ? == ks 0 `s` ? == ks 1 `k` ? == ks 2 `e` `r`
+        ( nurl_poke # s g_ic_lo ks g_ic_n )
+        // (Read in place: nothing adds to the list while the resolvers run.)
+        : s rest ( __sym_peek g_pending_impl key )
+        : i rn ( nurl_str_len rest )
+        : ~ i pos 0
+        ~ < pos rn {
+            ? >= g_ic_n g_ic_cap {
+                = g_ic_cap ? == g_ic_cap 0 1024 * g_ic_cap 2
+                = g_ic_rec # i ( nurl_realloc # s g_ic_rec * g_ic_cap 24 )
+                = g_ic_off # i ( nurl_realloc # s g_ic_off * g_ic_cap 4 )
+            } {}
+            : *i32 offs # *i32 # s g_ic_off
+            = . offs g_ic_n # i32 pos
+            // Past fnm and pidx; cn fn aidx are kept.
+            = pos + ( __word_end rest rn pos ) 1
+            = pos + ( __word_end rest rn pos ) 1
+            : i base * g_ic_n 3
+            : ~ i f 0
+            ~ < f 3 {
+                ( nurl_poke # s g_ic_rec + base f # i ( __ic_word rest rn pos ) )
+                = pos g_ic_next
+                = f + f 1
+            }
+            : s num ( nurl_str_int g_ic_n )
+            : s cn ( __ic_kept g_ic_n 0 )
+            : s fn ( __ic_kept g_ic_n 1 )
+            ( nurl_sym_append_word g_ic_idx cn num )
+            ? ! ( seq fn cn ) { ( nurl_sym_append_word g_ic_idx fn num ) } {}
+            = g_ic_n + g_ic_n 1
+        }
+        ( nurl_poke # s g_ic_hi ks g_ic_n )
+        = ks + ks 1
+    }
+    : i nb + g_ic_n 1
+    = g_ic_dirty # i ( nurl_alloc nb )
+    : *u d # *u # s g_ic_dirty
+    : ~ i k 0
+    ~ < k nb { = . d k # u IC_ALL_RULES = k + k 1 }
+}
+
+// `name` gained a word in one of the sets a rule reads: every record whose
+// callee it is is dirty again, for every rule.
+unsafe @ __ic_touch s name → v {
+    ? == g_ic_idx 0 { ^ v } {}
+    : s nums ( __sym_peek g_ic_idx name )
+    : i n ( nurl_str_len nums )
+    : *u q # *u nums
+    : *u d # *u # s g_ic_dirty
     : ~ i pos 0
-    ~ < pos rn {
-        : i e1 ( __word_end rest rn pos ) : s fnm ( __span_dup rest pos e1 ) = pos + e1 1
-        : i e2 ( __word_end rest rn pos ) : s pidx ( __span_dup rest pos e2 ) = pos + e2 1
-        : i e3 ( __word_end rest rn pos ) : s cn ( __span_dup rest pos e3 ) = pos + e3 1
-        : i e4 ( __word_end rest rn pos ) : s fn ( __span_dup rest pos e4 ) = pos + e4 1
-        : i e5 ( __word_end rest rn pos ) : s aidx ( __span_dup rest pos e5 ) = pos + e5 1
-        // Mangled name first, then the generic name — the same lookup
-        // order gen_call uses, so a generic callee resolves through its
-        // instantiation or through the template, whichever carries it.
-        : ~ s set ( nurl_sym_get dst cn )
-        ? == 0 ( nurl_str_len set ) { = set ( nurl_sym_get dst fn ) } {}
-        : ~ b hit ( str_contains_word set aidx )
-        ? & ! hit != also 0
-        { = hit | ( nurl_sym_has_word also cn aidx ) ( nurl_sym_has_word also fn aidx ) }
-        {}
-        ? hit
-        { : s cur ( nurl_sym_get dst fnm )
-            ? ! ( str_contains_word cur pidx )
-            { ( nurl_sym_def dst fnm
-                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat pidx `` )
-                ( nurl_str_cat3 cur ` ` pidx ) )
-                = changed T }
-            {} }
-        {}
+    ~ < pos n {
+        : ~ i k 0
+        ~ & < pos n != 32 # i . q pos {
+            = k + * k 10 - # i . q pos 48
+            = pos + pos 1
+        }
+        = . d k # u IC_ALL_RULES
+        = pos + pos 1
+    }
+}
+
+// One pass of `rule` over the implications under `key`, propagating into
+// `dst`. True when anything was added. `also` (or 0) is a second summary
+// whose facts count as the callee's too — a sink parameter is also kept.
+unsafe @ __resolve_impl_round s key i dst i also i rule → b {
+    : ~ b changed F
+    : i ks ? ( seq key `s` ) 0 ? ( seq key `k` ) 1 ? ( seq key `e` ) 2 3
+    : i hi ( nurl_peek # s g_ic_hi ks )
+    : i bit << 1 rule
+    : *u d # *u # s g_ic_dirty
+    : *i32 offs # *i32 # s g_ic_off
+    : s rest ( __sym_peek g_pending_impl key )
+    : i rn ( nurl_str_len rest )
+    : ~ i k ( nurl_peek # s g_ic_lo ks )
+    ~ < k hi {
+        : i marks # i . d k
+        ? != 0 & marks bit {
+            = . d k # u & marks ^^ bit 255
+            : s cn ( __ic_kept k 0 )
+            : s fn ( __ic_kept k 1 )
+            : s aidx ( __ic_kept k 2 )
+            // Mangled name first, then the generic name — the same lookup
+            // order gen_call uses, so a generic callee resolves through its
+            // instantiation or through the template, whichever carries it.
+            : ~ s set ( nurl_sym_get dst cn )
+            ? == 0 ( nurl_str_len set ) { = set ( nurl_sym_get dst fn ) } {}
+            : ~ b hit ( str_contains_word set aidx )
+            ? & ! hit != also 0
+            { = hit | ( nurl_sym_has_word also cn aidx ) ( nurl_sym_has_word also fn aidx ) }
+            {}
+            ? hit
+            { : s fnm ( __ic_word rest rn # i . offs k )
+                : s pidx ( __ic_word rest rn g_ic_next )
+                : s cur ( nurl_sym_get dst fnm )
+                ? ! ( str_contains_word cur pidx )
+                { ( nurl_sym_def dst fnm
+                    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat pidx `` )
+                    ( nurl_str_cat3 cur ` ` pidx ) )
+                    ( __ic_touch fnm )
+                    = changed T }
+                {} }
+            {}
+        } {}
+        = k + k 1
     }
     changed
 }
