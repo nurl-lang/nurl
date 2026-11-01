@@ -12,8 +12,8 @@ on:
   # every job here as a check run, skipped where it does not apply, and
   # GitHub counts a skipped check as passed. On github#1478 one such run
   # took the PR from `blocked` to `unstable` while its build was still
-  # running. Adding `ci:full` starts the full run through
-  # ci-full-label.yml instead, which dispatches this workflow with `pr`.
+  # running. Adding `ci:full` re-runs the PR's own run instead
+  # (ci-full-label.yml), and `changes` reads the label as it is now.
   pull_request:
     branches: [main]
   # The merge queue (Agora #136): main's ruleset can require the queue,
@@ -25,25 +25,15 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
-    inputs:
-      pr:
-        description: >-
-          A PR number: run as that PR's full run, in its concurrency group
-          (ci-full-label.yml sets it when the PR is labelled ci:full).
-        required: false
-        default: ''
 
 # Cancel an older in-flight run when a new commit lands on the same ref.
 # On main a run is never cancelled part-way (Agora #251): 20 of 35 main
 # runs used to be cancelled by the next merge, a quarter of all ci.yml
 # job-minutes thrown away, and the commit left untested. A main run that
 # is in progress finishes; GitHub keeps only the newest pending one behind
-# it. A PR's older run is still cancelled by its next push. A run
-# dispatched with `pr` joins that PR's group (refs/pull/N/merge, the ref
-# its pull_request runs have): the full run replaces the fast one, and
-# the PR's next push replaces the full run.
+# it. A PR's older run is still cancelled by its next push.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -85,8 +75,12 @@ jobs:
       # (adding the label starts that run). A PR's own run keeps the build, the
       # corpus and the gates: the fast signal, about 35 job-minutes. A
       # skipped required check counts as passed, so the PR can still join
-      # the queue. Pushes and the queue always run everything.
-      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+      # the queue. Pushes and the queue always run everything. The label is
+      # read as the PR has it now (step `labels`), not only as the event
+      # had it, so a re-run of a PR's run sees a label added later; that is
+      # how ci-full-label.yml turns the PR's own run into the full set
+      # (Agora #330). The step "the full set runs" says which it is.
+      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') || steps.labels.outputs.full == 'true' }}
     steps:
       # The merge queue rebuilds its groups whenever one fails or main moves,
       # and deletes the old group branches. Their ci.yml runs go on,
@@ -237,6 +231,25 @@ jobs:
           else
             { echo code=true; echo md=false; } >> "$GITHUB_OUTPUT"
           fi
+      # The PR's labels as they are now: a ci:full added after this run's
+      # event re-runs the run (ci-full-label.yml), and the re-run attempt
+      # carries the event it started with.
+      - name: Does the PR carry ci:full now?
+        id: labels
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh api "repos/$REPO/pulls/$PR" --jq '.labels[].name' | grep -qx 'ci:full'; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          fi
+      # (ci-full-label.yml reads this step's conclusion: run, this is the
+      # full set; skipped, it is the fast one. Keep its name.)
+      - name: the full set runs
+        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') || steps.labels.outputs.full == 'true'
+        run: echo "the platform and sanitizer jobs run in this run"
 
   # Files every pull request used to edit by hand, and so conflict over
   # (Agora #211, #212): the hole-probe table and the changelog. Both are
