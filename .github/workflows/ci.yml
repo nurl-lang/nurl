@@ -533,6 +533,17 @@ jobs:
         # 19 s for the 129 probes of the pre-production hardening.
         run: ./tools/fuzz/holes/check.sh
 
+      - name: A fiber's stack holds the deepest JSON in a plain -O0 build
+        # -O0 colours no stack slot, so walking a JSON document at
+        # JSON_MAX_DEPTH needs ~256 KB of stack there: four times what a
+        # fixed 64 KB fiber had. Fiber stacks reserve 1 MB and turn into
+        # memory only as deep as a fiber goes (agora #328).
+        run: |
+          tail -n +5 compiler/tests/outputs/json_deep_fiber.txt > build/json-deep-fiber.expected
+          ./nurl.sh -O0 compiler/tests/json_deep_fiber.nu build/json-deep-fiber-plain-O0
+          ./build/json-deep-fiber-plain-O0 > build/json-deep-fiber-plain-O0.txt
+          diff -u build/json-deep-fiber.expected build/json-deep-fiber-plain-O0.txt
+
       - name: Enum ownership across compiled modules
         run: |
           NURL_SPLIT=4 NURL_SPLIT_MIN=1 ./nurl.sh compiler/tests/sink_enum_owned.nu build/sink-owned-split

@@ -597,6 +597,19 @@ void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
     ctx->sp = (void *)fp;
 }
 
+/* A fresh context's TIB StackLimit and DeallocationStack (the frame
+ * nurl_ctx_init laid out): a fiber stack that commits as it grows sets
+ * them as CreateFiberEx does — StackLimit at the lowest committed byte,
+ * over a PAGE_GUARD page, and DeallocationStack at the reservation's
+ * base — so the kernel commits each next page as the fiber reaches it
+ * and moves StackLimit down (agora #328). */
+void nurl_ctx_set_stack_limits(nurl_ctx_t *ctx, void *limit, void *dealloc)
+{
+    unsigned long long *fp = (unsigned long long *)ctx->sp;
+    fp[22] = (unsigned long long)limit;    /* StackLimit        */
+    fp[23] = (unsigned long long)dealloc;  /* DeallocationStack */
+}
+
 int nurl_ctx_available(void) { return 1; }
 
 #else /* neither x86_64 nor aarch64 — other architectures still use ucontext */

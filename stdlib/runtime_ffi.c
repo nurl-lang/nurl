@@ -6679,16 +6679,31 @@ void      nurl_runtime_shutdown(void);
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
-/* A fiber's usable stack. 64 KB holds an optimised build's recursion with
- * room to spare: a JSON document at JSON_MAX_DEPTH, walked every way
- * json_deep_fiber walks it, needs about 12 KB at -O2. Under
- * AddressSanitizer every frame also carries redzones and its spilled,
- * instrumented locals, and the same walks need about 68 KB at -O2 and
- * 196 KB at -O0. So a sanitized build gets four times the stack: a
- * program must not die under NURL_SAN=1 on input its normal build handles
- * (agora #319). The gate is exact, because runtime_san.o is only ever
- * linked with sanitized code. Normal builds keep 64 KB, so their memory
- * and speed are unchanged. */
+/* A fiber's stack: address space it reserves, and memory only as far as
+ * it goes. How deep a program recurses depends on how it was built — a
+ * JSON document at JSON_MAX_DEPTH, walked every way json_deep_fiber walks
+ * it, needs about 12 KB of stack at -O2, 256 KB at -O0 (which colours no
+ * stack slot), and 196 KB under AddressSanitizer at -O0 — and the runtime
+ * cannot see the program's -O level. So no fixed size fits every build
+ * without paying the largest one's memory in all (agora #328): the stack
+ * is a 1 MB reservation (4 MB under ASan, whose frames are several times
+ * larger; the gate is exact, because runtime_san.o is only ever linked
+ * with sanitized code — agora #319), of which a fiber turns into memory
+ * only the pages it touches.
+ *
+ * - POSIX: the mapping commits on touch (MAP_NORESERVE: no swap is set
+ *   aside for the untouched rest), so an idle fiber costs the few pages
+ *   its frames use, as it did with a fixed 64 KB stack.
+ * - Windows: the top NURL_FIBER_STACK_COMMIT bytes are committed and a
+ *   PAGE_GUARD page sits under them, with the fiber's TIB StackLimit and
+ *   DeallocationStack set as CreateFiberEx sets them, so the kernel
+ *   commits each next page as the fiber reaches it (the thread-stack
+ *   protocol). An idle fiber commits ~20 KB instead of the 68 KB the
+ *   fixed stack committed up front.
+ *
+ * A recycled stack keeps at most its top NURL_FIBER_STACK_KEEP bytes as
+ * memory (nurl__stack_recycle). Overflow past the reservation still dies
+ * on the guard page at its bottom. */
 #if defined(__SANITIZE_ADDRESS__)
 #  define NURL_FIBER_STACK_ASAN 1
 #elif defined(__has_feature)
@@ -6697,10 +6712,14 @@ void      nurl_runtime_shutdown(void);
 #  endif
 #endif
 #ifdef NURL_FIBER_STACK_ASAN
-#  define NURL_FIBER_STACK_BYTES   (4 * 64 * 1024)
+#  define NURL_FIBER_STACK_RESERVE (4 * 1024 * 1024)
 #else
-#  define NURL_FIBER_STACK_BYTES   (64 * 1024)
+#  define NURL_FIBER_STACK_RESERVE (1024 * 1024)
 #endif
+#define NURL_FIBER_STACK_KEEP    (64 * 1024)  /* what a recycled stack keeps as memory */
+#define NURL_FIBER_STACK_COMMIT  (16 * 1024)  /* Windows: committed when the stack is made */
+#define NURL_FIBER_STACK_HDR     64           /* the stack's top: NurlStackHdr */
+#define NURL_FIBER_TRIM_EVERY    64           /* POSIX: recycles between two trims */
 #define NURL_FIBER_GUARD_BYTES   4096
 #define NURL_MAX_WORKERS         64
 
@@ -6734,6 +6753,9 @@ typedef struct NurlFiber {
     size_t           stack_total_sz;
     void            *stack_lo;       /* usable region = base + guard      */
     size_t           stack_usable;
+    /* Windows: the TIB StackLimit the fiber left (the lowest page it had
+     * committed), read as it finishes; NULL when it never finished. */
+    void            *stack_limit_seen;
     /* ASan's per-stack fake stack, parked here across a swap-out. Only
      * the own-ctx backend touches it — ASan annotates swapcontext by
      * interception, so the ucontext backend needs nothing. */
@@ -7242,6 +7264,11 @@ static void nurl__fiber_entry(void *arg) {
     if (f && f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
     nurl_cc_context_end();   /* the fiber's refcount cycles, if any */
     if (f) f->state = NF_DONE;
+#if defined(_WIN32) && defined(__x86_64__)
+    /* How far down this stack is committed: the kernel moved StackLimit
+     * as the guard page went down (nurl__stack_recycle reads it). */
+    if (f) { void *lim; __asm__ volatile("movq %%gs:0x10, %0" : "=r"(lim)); f->stack_limit_seen = lim; }
+#endif
     NurlWorker *w = nurl__tls_worker;
     if (w) {
 #ifdef NURL_FIBER_ASAN
@@ -7276,17 +7303,35 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
  * stack per accepted conn; paying mmap + mprotect on every spawn and
  * munmap on every exit is 3 syscalls plus — dominating on the free
  * side — cross-CPU TLB-shootdown IPIs for the unmap. All stacks share
- * one geometry (guard + usable, fixed at compile time), so a plain
+ * one geometry (guard + reservation, fixed at compile time), so a plain
  * bounded LIFO of base pointers suffices; the freelist link is stored
- * in the (writable) usable area itself, so the cache costs no heap.
- * The guard page of a cached stack stays PROT_NONE — recycled stacks
- * keep their overflow protection. Beyond the cap, stacks fall through
- * to munmap; the cap bounds virtual (not resident) memory at
- * cap × ~68 KB. */
+ * in the stack's own top bytes (NurlStackHdr, in the page every fiber's
+ * first frame uses anyway), so the cache costs no heap and touches no
+ * page a fiber would not. The guard page of a cached stack stays
+ * inaccessible — recycled stacks keep their overflow protection. Beyond
+ * the cap, stacks fall through to munmap; the cap bounds address space
+ * at cap × the reservation, and memory at cap × NURL_FIBER_STACK_KEEP
+ * plus what the stacks trimmed least recently still hold. */
 #define NURL_FIBER_STACK_CACHE_CAP 256
 static pthread_mutex_t nurl__stack_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 static void  *nurl__stack_cache_head = NULL;
 static int    nurl__stack_cache_len  = 0;
+
+/* The top NURL_FIBER_STACK_HDR bytes of a stack, which no frame uses. */
+typedef struct {
+    void    *next;   /* the cache's freelist link while cached         */
+    void    *limit;  /* Windows: the lowest committed byte (StackLimit) */
+    unsigned uses;   /* POSIX: recycles since the stack was made        */
+} NurlStackHdr;
+
+static NurlStackHdr *nurl__stack_hdr(void *base, size_t total) {
+    return (NurlStackHdr *)((char *)base + total - NURL_FIBER_STACK_HDR);
+}
+
+#ifdef _WIN32
+/* runtime_ctx.c: a fresh context's TIB StackLimit and DeallocationStack. */
+void nurl_ctx_set_stack_limits(nurl_ctx_t *ctx, void *limit, void *dealloc);
+#endif
 
 /* A fiber stack's memory: `total` bytes whose lowest `guard` bytes fault
  * on any access, so an overflow dies at a deterministic page instead of
@@ -7312,22 +7357,30 @@ static void nurl__stack_unmap(void *base, size_t total) {
 
 static void *nurl__stack_map(size_t total, size_t guard) {
 #ifdef _WIN32
-    /* Committed whole, like the POSIX mapping: the TIB's StackLimit is
-     * set to the stack's low end while the fiber runs (runtime_ctx.c), so
-     * nothing relies on Windows' grow-on-touch thread-stack protocol. */
-    void *base = VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    /* Reserved whole; the top NURL_FIBER_STACK_COMMIT bytes committed, and
+     * a PAGE_GUARD page under them for the kernel to grow the stack by.
+     * The bottom `guard` bytes stay reserved only: an overflow past the
+     * reservation faults there. */
+    (void)guard;
+    char *base = (char *)VirtualAlloc(NULL, total, MEM_RESERVE, PAGE_READWRITE);
     if (!base) return NULL;
-    DWORD old;
-    if (!VirtualProtect(base, guard, PAGE_NOACCESS, &old)) {
+    long pg = nurl__page_size();
+    char *commit_lo = base + total - NURL_FIBER_STACK_COMMIT;
+    if (!VirtualAlloc(commit_lo, NURL_FIBER_STACK_COMMIT, MEM_COMMIT, PAGE_READWRITE)
+        || !VirtualAlloc(commit_lo - pg, (size_t)pg, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD)) {
         VirtualFree(base, 0, MEM_RELEASE);
         return NULL;
     }
+    nurl__stack_hdr(base, total)->limit = commit_lo;
     return base;
 #else
 #if defined(MAP_ANONYMOUS)
     int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
 #else
     int mflags = MAP_PRIVATE | MAP_ANON;
+#endif
+#ifdef MAP_NORESERVE
+    mflags |= MAP_NORESERVE;
 #endif
     void *base = mmap(NULL, total, PROT_READ | PROT_WRITE, mflags, -1, 0);
     if (base == MAP_FAILED) return NULL;
@@ -7347,7 +7400,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     if (pg <= 0) pg = 4096;
     size_t guard = ((size_t)NURL_FIBER_GUARD_BYTES + (size_t)pg - 1)
                  / (size_t)pg * (size_t)pg;
-    size_t usable = ((size_t)NURL_FIBER_STACK_BYTES + (size_t)pg - 1)
+    size_t usable = ((size_t)NURL_FIBER_STACK_RESERVE + (size_t)pg - 1)
                   / (size_t)pg * (size_t)pg;
     size_t total = guard + usable;
 
@@ -7355,7 +7408,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     pthread_mutex_lock(&nurl__stack_cache_lock);
     if (nurl__stack_cache_head) {
         base = nurl__stack_cache_head;
-        nurl__stack_cache_head = *(void**)((char*)base + guard);
+        nurl__stack_cache_head = nurl__stack_hdr(base, total)->next;
         nurl__stack_cache_len--;
     }
     pthread_mutex_unlock(&nurl__stack_cache_lock);
@@ -7379,8 +7432,12 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     }
 
 #ifdef NURL_FIBER_OWN_CTX
-    nurl_ctx_init(&f->ctx, f->stack_lo, (unsigned long)usable,
+    /* Frames start under the header. */
+    nurl_ctx_init(&f->ctx, f->stack_lo, (unsigned long)(usable - NURL_FIBER_STACK_HDR),
                   nurl__fiber_entry, f);
+#ifdef _WIN32
+    nurl_ctx_set_stack_limits(&f->ctx, nurl__stack_hdr(base, total)->limit, base);
+#endif
 #else
     if (getcontext(&f->ctx) != 0) {
         nurl__stack_unmap(base, total);
@@ -7388,7 +7445,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
         return NULL;
     }
     f->ctx.uc_stack.ss_sp   = f->stack_lo;
-    f->ctx.uc_stack.ss_size = usable;
+    f->ctx.uc_stack.ss_size = usable - NURL_FIBER_STACK_HDR;
     f->ctx.uc_link          = NULL;     /* worker sets loop_ctx at run-time */
     uintptr_t p = (uintptr_t)f;
     unsigned hi = (unsigned)((p >> 32) & 0xFFFFFFFFu);
@@ -7397,6 +7454,49 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
                 (int)hi, (int)lo);
 #endif
     return f;
+}
+
+/* A finished fiber's stack, before it goes back to the cache: no more
+ * than its top NURL_FIBER_STACK_KEEP bytes stay memory, so a deep fiber
+ * once does not leave the cache holding its depth.
+ * - Windows: exact. StackLimit, as the fiber left it, says how far down
+ *   the stack is committed. A stack that went past the kept bytes (or
+ *   whose fiber never finished) goes back to its fresh state: the top
+ *   NURL_FIBER_STACK_COMMIT bytes and a guard page under them. One that
+ *   did not costs a comparison, and keeps what it committed.
+ * - POSIX: nothing says which pages a fiber touched short of a syscall
+ *   (mincore, ~0.9 µs; and a canary word would itself be a page of memory
+ *   in every fiber), so every NURL_FIBER_TRIM_EVERY-th recycle of a stack
+ *   releases everything under the kept bytes: ~300 ns when nothing was
+ *   there, ~5 ns a recycle spread out. A deep fiber's pages stay memory
+ *   for at most that many more reuses of its stack. */
+/* 1 when the stack may be cached, 0 when it must be unmapped. */
+static int nurl__stack_recycle(NurlFiber *f) {
+    char *base = (char *)f->stack_base;
+    char *keep_lo = base + f->stack_total_sz - NURL_FIBER_STACK_KEEP;
+    char *lo = (char *)f->stack_lo;
+    NurlStackHdr *h = nurl__stack_hdr(base, f->stack_total_sz);
+#ifdef _WIN32
+    char *lim = (char *)f->stack_limit_seen;
+    if (lim && lim >= keep_lo) { h->limit = lim; return 1; }
+    long pg = nurl__page_size();
+    char *commit_lo = base + f->stack_total_sz - NURL_FIBER_STACK_COMMIT;
+    VirtualFree(lo, (size_t)(commit_lo - lo), MEM_DECOMMIT);
+    if (!VirtualAlloc(commit_lo - pg, (size_t)pg, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD))
+        return 0;
+    h->limit = commit_lo;
+    return 1;
+#else
+    if (++h->uses % NURL_FIBER_TRIM_EVERY != 0) return 1;
+#  if defined(__linux__)
+    madvise(lo, (size_t)(keep_lo - lo), MADV_DONTNEED);
+#  elif defined(MADV_FREE)
+    madvise(lo, (size_t)(keep_lo - lo), MADV_FREE);
+#  else
+    madvise(lo, (size_t)(keep_lo - lo), MADV_DONTNEED);
+#  endif
+    return 1;
+#endif
 }
 
 static void nurl__fiber_free(NurlFiber *f) {
@@ -7408,11 +7508,12 @@ static void nurl__fiber_free(NurlFiber *f) {
     }
     if (f->stack_base) {
         /* Recycle onto the stack cache (see its header note); the link
-         * lives at stack_lo, the first writable byte past the guard. */
+         * lives in the stack's header, at its top. */
         int cached = 0;
+        int reusable = nurl__stack_recycle(f);
         pthread_mutex_lock(&nurl__stack_cache_lock);
-        if (nurl__stack_cache_len < NURL_FIBER_STACK_CACHE_CAP) {
-            *(void**)f->stack_lo = nurl__stack_cache_head;
+        if (reusable && nurl__stack_cache_len < NURL_FIBER_STACK_CACHE_CAP) {
+            nurl__stack_hdr(f->stack_base, f->stack_total_sz)->next = nurl__stack_cache_head;
             nurl__stack_cache_head = f->stack_base;
             nurl__stack_cache_len++;
             cached = 1;
