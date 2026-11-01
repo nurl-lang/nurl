@@ -53,9 +53,18 @@ $ `stdlib/std/tls.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/std/tls_verify.nu`
 $ `stdlib/std/net.nu`
+$ `stdlib/ext/env.nu`
 
 : ~ i g_served 0
 : ~ i g_srv_scheme 0
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ chk s label b ok → b {
     ( nurl_print label )
@@ -155,6 +164,13 @@ $ `stdlib/std/net.nu`
 }
 
 @ main → i {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_certsel_ec.pem` )
+    : String tp1 ( tmp_path `nurl_certsel_ec.key` )
+    : String tp2 ( tmp_path `nurl_certsel_ml.pem` )
+    : String tp3 ( tmp_path `nurl_certsel_ml.key` )
     : ~ b all T
 
     // ── two identities: an EC P-256 leaf and an ML-DSA-65 leaf ──
@@ -198,10 +214,10 @@ $ `stdlib/std/net.nu`
     ( vec_free [u] ch_classical )
 
     // ── end to end, from PEM files ──
-    : s ecf `/tmp/nurl_certsel_ec.pem`
-    : s eck `/tmp/nurl_certsel_ec.key`
-    : s mlf `/tmp/nurl_certsel_ml.pem`
-    : s mlk `/tmp/nurl_certsel_ml.key`
+    : s ecf ( string_data tp0 )
+    : s eck ( string_data tp1 )
+    : s mlf ( string_data tp2 )
+    : s mlk ( string_data tp3 )
     ?? ( write_file ecf ( string_data . ec cert_pem ) ) { T _ → {} F _e → { ( chk `write               ` F ) ^ 1 } }
     ?? ( write_file eck ( string_data . ec key_pem ) ) { T _ → {} F _e → { ( chk `write               ` F ) ^ 1 } }
     ?? ( write_file mlf ( string_data . ml cert_pem ) ) { T _ → {} F _e → { ( chk `write               ` F ) ^ 1 } }

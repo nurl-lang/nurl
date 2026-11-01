@@ -96,7 +96,7 @@ $ `stdlib/core/slice.nu`
 @ main → i {
     // Portable temp root: %TEMP% on Windows, /tmp elsewhere (a hardcoded
     // /tmp resolves to C:\tmp on Windows, which need not exist).
-    : String tmp ( env_var_or `TEMP` `/tmp` )
+    : String tmp ( env_temp_dir )
     : s tmproot ( string_data tmp )
 
     // ── B6 fs_tempfile (standalone: create, assert, delete, free) ──

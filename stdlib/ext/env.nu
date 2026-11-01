@@ -10,6 +10,8 @@
 //   ( env_var_or name def )  → String         convenience: get-or-default
 //   ( env_home_dir )         → String         the user's home directory; ""
 //                                             when the platform names none
+//   ( env_temp_dir )         → String         where temporary files go on
+//                                             this platform (never "")
 //   ( env_set name value )   → ! v IoErr      Other on failure
 //   ( env_unset name )       → ! v IoErr
 //   ( env_cwd )              → ! String IoErr current working directory
@@ -159,6 +161,48 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
     ? | == ( string_len drive ) 0 == ( string_len hpath ) 0 { ^ ( string_new ) } {}
     ( string_push_str drive ( string_data hpath ) )
     ^ drive
+}
+
+// Where temporary files go, on the platform's own terms: the one place in
+// the stdlib that answers it (agora #306). Never "", and no trailing
+// separator, so a caller joins a name on with one `/`.
+//
+// POSIX: $TMPDIR when set and non-empty, else /tmp.
+//
+// Windows: what GetTempPathW answers. %TMP%, else %TEMP%, else
+// %USERPROFILE%, else the Windows directory (%SystemRoot%): the order
+// Go's os.TempDir and Rust's env::temp_dir follow there. TMPDIR is NOT
+// read on Windows. Git Bash and MSYS export it as a POSIX path
+// (`/c/Users/me/AppData/Local/Temp`), which a native program resolves
+// against the current drive. /tmp, the old fallback, is a directory on
+// the current drive too, one that exists only if something else happened
+// to create it first.
+@ env_temp_dir → String {
+    ? != ( posix_const `PATH_LIST_SEPARATOR` ) 59 {
+        : String t ( __env_nonempty `TMPDIR` )
+        ? > ( string_len t ) 0 { ^ ( __env_dir_trim t ) } {}
+        ^ ( string_from `/tmp` )
+    } {}
+    : String a ( __env_nonempty `TMP` )
+    ? > ( string_len a ) 0 { ^ ( __env_dir_trim a ) } {}
+    : String b ( __env_nonempty `TEMP` )
+    ? > ( string_len b ) 0 { ^ ( __env_dir_trim b ) } {}
+    : String c ( __env_nonempty `USERPROFILE` )
+    ? > ( string_len c ) 0 { ^ ( __env_dir_trim c ) } {}
+    : String d ( __env_nonempty `SystemRoot` )
+    ? > ( string_len d ) 0 { ^ ( __env_dir_trim d ) } {}
+    ^ ( string_from `C:/Windows` )
+}
+
+// `p` without its trailing `/` or `\` separators; a root (`/`, `C:\`)
+// keeps its own.
+@ __env_dir_trim String p → String {
+    : ~ i n ( string_len p )
+    ~ & > n 1 | == ( string_get p - n 1 ) 47 == ( string_get p - n 1 ) 92 {
+        ? & == n 3 == ( string_get p 1 ) 58 { ^ ( string_substr p 0 n ) } {}
+        = n - n 1
+    }
+    ^ ( string_substr p 0 n )
 }
 
 @ env_set s name s value → !v IoErr {

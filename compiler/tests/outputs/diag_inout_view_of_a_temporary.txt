@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_view_of_a_temporary.nu:15:5: error: argument 2 to 'repoint' is a temporary this statement made, and 'repoint' may leave 'w' viewing its storage (a String's buffer, a Vec's elements). The temporary is released when the statement ends, so 'w' would point into freed memory. Bind the argument to a name that outlives 'w' first (': String x ( … )'), or have the callee keep a copy that owns its data (string_from, slice_to_vec).
+    ( repoint w ( string_from `a temporary, released after the call` ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

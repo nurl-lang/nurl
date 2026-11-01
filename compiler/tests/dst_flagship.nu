@@ -157,9 +157,10 @@ $ `packages/nurldb/src/server.nu`
 }
 
 @ main → i {
-    // TEMP on Windows: there `/tmp` is \tmp on the current drive, which
-    // exists only if an earlier test happened to make it.
-    : String troot ( env_var_or `TEMP` `/tmp` )
+    // The platform's temp directory (env_temp_dir). On Windows `/tmp`
+    // is \tmp on the current drive, which exists only if an earlier
+    // test happened to make it.
+    : String troot ( env_temp_dir )
     : String dir ?? ( fs_tempdir ( string_data troot ) `nurl_dst` ) {
         T x → x
         F _ → {

@@ -136,18 +136,13 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    // Temp root from the environment — TMPDIR (posix), then TEMP (Windows),
-    // then /tmp. A hardcoded /tmp only works on Windows for as long as the
-    // C runtime's drive-relative mapping happens to hold, and when it stops
-    // holding the symptom is 404s three layers away.
-    : ~ String tdir ( env_var_or `TMPDIR` `` )
-    ? == ( string_len tdir ) 0 {
-        ( string_free tdir )
-        = tdir ( env_var_or `TEMP` `/tmp` )
-    } {}
+    // The platform's temp directory (env_temp_dir). A hardcoded /tmp only
+    // works on Windows for as long as the C runtime's drive-relative
+    // mapping happens to hold, and when it stops holding the symptom is
+    // 404s three layers away.
+    : String tdir ( env_temp_dir )
     : String base ( string_new )
     ( string_push_str base ( string_data tdir ) )
-    ( string_free tdir )
     ( string_push_str base `/nurl_static_traversal_test` )
     : s b ( string_data base )
 

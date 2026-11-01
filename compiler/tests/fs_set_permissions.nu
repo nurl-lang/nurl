@@ -23,8 +23,17 @@
 $ `stdlib/std/fs.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/posix.nu`
+$ `stdlib/ext/env.nu`
 
 : ~ i g_fail 0
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ ok b cond s what → v {
     ( nurl_print what )
@@ -42,7 +51,11 @@ $ `stdlib/core/posix.nu`
 }
 
 @ main → i {
-    : String dir ( string_from `/tmp/nurl_fsperm_` )
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_fsperm_` )
+    : String dir ( string_from ( string_data tp0 ) )
     ( string_push_int dir ( getpid ) )
     : !v IoErr _md ( dir_create_all ( string_data dir ) )
 
