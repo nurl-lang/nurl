@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_clone_hook_hands_back_its_argument.nu:12:1: error: 'X_clone' hands its argument back, whole or in part: it is the copy hook of the handle 'X', which makes every copy of one, and a copy that is its argument is a second owner of one value, so the copy reads what its caller frees. Return a value of its own: a counted share of the handle's block (shared_clone, arc_clone, rc_clone, rcbox_share), or a copy of each field (vec_clone, string_from).
+@ X_clone X x → X { ^ x }
+^
+compiler/tests/diag_clone_hook_hands_back_its_argument.nu:18:1: error: 'Y_share' hands its argument back, whole or in part: it is the copy hook of the handle 'Y', which makes every copy of one, and a copy that is its argument is a second owner of one value, so the copy reads what its caller frees. Return a value of its own: a counted share of the handle's block (shared_clone, arc_clone, rc_clone, rcbox_share), or a copy of each field (vec_clone, string_from).
+@ Y_share Y y → Y { ^ @ Y { . y w } }
+^
+error: compilation aborted — 2 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

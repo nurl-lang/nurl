@@ -2197,6 +2197,13 @@ are dropped, moved and copied by the same rules:
   keeping parameter is deep-copied, so the new owner and the old never
   share a buffer. A literal returned as is lends instead, and so does a
   field written back where it was read.
+- **A handle's copy hook makes a value of its own.** A library handle's
+  `S_clone` or `S_share` makes every copy of an `S`, so it may not hand
+  back its argument or a part of it (`^ x`, `^ @ S { . x v }`): it
+  returns a counted share of the handle's block (`shared_clone`,
+  `arc_clone`, `rc_clone`, `rcbox_share`) or a copy of each field. A hook
+  that hands its argument back is refused where it is written: every copy
+  would be a second owner of one value (agora #334).
 - **Fields.** A field of an owned struct handed to a consumer is emptied
   in the struct, so the struct's drop skips it — and so is one of a
   `vec_get` element (in its slot), an option's payload (in its owner), a
