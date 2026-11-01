@@ -54,6 +54,9 @@ formal/
                    every hole probe → the formal rule that rejects it, or its phase,
                    and nurlc's verdict (rejected, or compiles and runs clean
                    under ASan/LSan: `tools/fuzz/holes/check.sh` finds 0 holes)
+  rules/t<N>.md    RULES.md's change rows, one file per change (an ownership PR adds
+                   its file, never a row of the table); tools/formal_rules.py writes
+                   the table from them at release (rules/README.md)
   check.sh         builds the proof and checks it has no sorry and no new axiom
   lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)

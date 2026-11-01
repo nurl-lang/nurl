@@ -9,12 +9,13 @@ on:
   # main only: a push to a PR branch is already covered by its pull_request
   # run, and the merge queue's temporary gh-readonly-queue/* branches are
   # tested by ci.yml. Without the filter every such push ran the proof a
-  # second time.
+  # second time. formal/rules/ holds RULES.md's change rows, one file per
+  # change (Agora #299): text, no Lean, so a row alone builds nothing.
   push:
     branches: [main]
-    paths: ['formal/**', '.github/workflows/formal.yml']
+    paths: ['formal/**', '!formal/rules/**', '.github/workflows/formal.yml']
   pull_request:
-    paths: ['formal/**', '.github/workflows/formal.yml']
+    paths: ['formal/**', '!formal/rules/**', '.github/workflows/formal.yml']
   workflow_dispatch:
 
 jobs:
