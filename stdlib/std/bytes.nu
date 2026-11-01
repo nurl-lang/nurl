@@ -18,6 +18,7 @@
 //   ( bytes_eq a b )           → b                 byte-by-byte equality
 //   ( bytes_find_byte v t )    → ? i               first index of byte t
 //   ( bytes_extend_str v raw ) → v                 append from NUL string
+//   ( bytes_extend_slice v s ) → v                 append the bytes a ( Slice u ) views
 //
 //   ( bytes_read_u16_be v off ) → ? u16             load 2 bytes, big-endian
 //   ( bytes_read_u16_le v off ) → ? u16             load 2 bytes, little-endian
@@ -51,6 +52,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
+$ `stdlib/core/slice.nu`
 
 // ── Construction from raw / String ─────────────────────────────────
 
@@ -109,29 +111,45 @@ $ `stdlib/core/errors.nu`
     } {}
 }
 
+// Append the bytes `s` views onto `v`, in one copy: a window of a String
+// (string_bytes, slice_of_str) or of another buffer (slice_window), with
+// no pointer in the caller's hands.
+@ bytes_extend_slice ( Vec u ) v ( Slice u ) s → v {
+    : i n ( slice_len [u] s )
+    ? > n 0 { ( bytes_extend_raw v ( slice_data [u] s ) n ) } {}
+}
+
 // Append the decimal-text bytes of `n` onto `v` (no leading zeros, '-' for
 // negatives). The digits are written straight into `v` — no
 // intermediate string to allocate, measure and free. The loop works on
 // the non-positive magnitude so the minimum i64 needs no special case
 // (its negation overflows).
+//
+// Through the buffer's control block, as core/string.nu's bulk emitters
+// write (a JSON body is mostly small integers): one capacity check and
+// one length commit, where vec_reserve, vec_data, vec_len and
+// vec_set_len each read the block again (~22 instructions an integer).
 @ bytes_push_int ( Vec u ) v i n → v {
     : i m ? < n 0 n - 0 n
     : ~ i nd 1
     : ~ i t m
     ~ <= t -10 { = t / t 10 = nd + nd 1 }
     : i sign ? < n 0 1 0
-    ( vec_reserve [u] v + nd sign )
-    : *u data ( vec_data [u] v )
-    : i len ( vec_len [u] v )
+    : i w + nd sign
+    : s ctl . v ctl
+    : i len ( nurl_peek ctl 1 )
+    // (A view's capacity is -1: the reserve detaches it.)
+    ? < - ( nurl_peek ctl 2 ) len w { ( vec_reserve [u] v w ) } {}
+    : *u data # *u ( nurl_peek ctl 0 )
     ? == sign 1 { = . data len # u 45 } {}
-    : ~ i k + + len sign - nd 1
+    : ~ i k - + len w 1
     = t m
     ~ >= k + len sign {
         = . data k # u + 48 - 0 % t 10
         = t / t 10
         = k - k 1
     }
-    ( vec_set_len [u] v + + len sign nd )
+    ( nurl_poke ctl 1 + len w )
 }
 
 // Bulk-append every byte of `src` to `v` via `nurl_memcpy`. Same shape

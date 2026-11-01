@@ -126,11 +126,13 @@ struct Rating {
     count: i32,
 }
 
+// The text columns are borrowed from the row (no copy), as the NURL side
+// escapes them straight from psql's cell views.
 #[derive(Serialize)]
-struct Item {
+struct Item<'a> {
     id: i32,
-    name: String,
-    category: String,
+    name: &'a str,
+    category: &'a str,
     price: i32,
     quantity: i32,
     active: bool,
@@ -139,8 +141,8 @@ struct Item {
 }
 
 #[derive(Serialize)]
-struct Items {
-    items: Vec<Item>,
+struct Items<'a> {
+    items: Vec<Item<'a>>,
     count: usize,
 }
 
@@ -273,7 +275,7 @@ async fn h_async_db(db: &Db, req: &Request<hyper::body::Incoming>) -> Resp {
     let limit = query_int(req, "limit", 50).clamp(1, 50) as i64;
     // HttpArena: a database that is down answers an empty list.
     let rows = db.client.query(&db.items, &[&lo, &hi, &limit]).await.unwrap_or_default();
-    let items: Vec<Item> = rows
+    let items: Vec<Item<'_>> = rows
         .iter()
         .map(|r| Item {
             id: r.get(0),

@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+the cap: ok
+arrays at the cap, on a fiber: parsed, stringified back the same, pretty-printed, cloned and equal
+objects at the cap, on a fiber: parsed, stringified back the same, pretty-printed, cloned and equal
+arrays one past it: overflow at line 1 col 257
+objects one past it: overflow at line 1 col 1281
+100000 open brackets: overflow at line 1 col 257

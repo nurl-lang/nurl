@@ -57,19 +57,10 @@ $ `packages/psql/src/pg.nu`
 // ── request parameters ────────────────────────────────────────────────
 
 // The integer value of query parameter `key`, or `dflt` when it is absent
-// or not an integer.
+// or not an integer — read in place, as the Rust peer's split does, with
+// no decoded pairs allocated.
 @ query_int HttpRequest req s key i dflt → i {
-    : ( Vec QueryPair ) ps ( parse_query ( string_data . req query ) )
-    : i n ( vec_len [QueryPair] ps )
-    : ~ i k 0
-    ~ < k n {
-        : QueryPair p ( vec_at [QueryPair] ps k )
-        ? == 1 ( nurl_str_eq ( string_data . p key ) key ) {
-            ^ ?? ( string_to_int . p value ) { T x → x F _ → dflt }
-        } {}
-        = k + k 1
-    }
-    ^ dflt
+    ^ ?? ( request_query_int req key ) { T x → x F → dflt }
 }
 
 @ clamp i x i lo i hi → i {
@@ -82,21 +73,53 @@ $ `packages/psql/src/pg.nu`
 @ query_count HttpRequest req → i { ^ ( clamp ( query_int req `queries` 1 ) 1 500 ) }
 
 // ── JSON ──────────────────────────────────────────────────────────────
+//
+// Every JSON body is written as it is read, straight into the response
+// (stdlib/ext/json.nu's streaming writer): no Json values in between,
+// as serde's derive writes the Rust peer's.
 
-@ world_json i id i rn → Json {
-    : ( Vec Json ) kv ( vec_with_cap [Json] 4 )
-    ( vec_push [Json] kv ( json_str_lit `id` ) )
-    ( vec_push [Json] kv ( json_int id ) )
-    ( vec_push [Json] kv ( json_str_lit `randomNumber` ) )
-    ( vec_push [Json] kv ( json_int rn ) )
-    ^ ( json_obj kv )
+// A 200 whose body the caller writes as JSON.
+@ json_response → HttpResponse {
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
+    ^ r
+}
+
+// One World row: {"id":…,"randomNumber":…}.
+@ world_write JsonWriter w ( Vec u ) out i id i rn → v {
+    ( jw_obj w out )
+    ( jw_key w out `id` )
+    ( jw_int w out id )
+    ( jw_key w out `randomNumber` )
+    ( jw_int w out rn )
+    ( jw_end w out )
+}
+
+// The rows `ids` / `rns` as a JSON array.
+@ worlds_response ( Vec i ) ids ( Vec i ) rns → HttpResponse {
+    : HttpResponse r ( json_response )
+    : ( Vec u ) out . r body
+    : JsonWriter w ( json_writer )
+    ( jw_arr w out )
+    : i n ( vec_len [i] ids )
+    : ~ i k 0
+    ~ < k n {
+        ( world_write w out ( vec_at [i] ids k ) ( vec_at [i] rns k ) )
+        = k + k 1
+    }
+    ( jw_end w out )
+    ^ r
 }
 
 @ h_json → HttpResponse {
-    : ( Vec Json ) kv ( vec_with_cap [Json] 2 )
-    ( vec_push [Json] kv ( json_str_lit `message` ) )
-    ( vec_push [Json] kv ( json_str_lit `Hello, World!` ) )
-    ^ ( response_json 200 ( json_obj kv ) )
+    : HttpResponse r ( json_response )
+    : ( Vec u ) out . r body
+    : JsonWriter w ( json_writer )
+    ( jw_obj w out )
+    ( jw_key w out `message` )
+    ( jw_str w out `Hello, World!` )
+    ( jw_end w out )
+    ^ r
 }
 
 @ db_error PgErr e → HttpResponse { ^ ( response_text 500 ( pg_err_name e ) ) }
@@ -119,7 +142,13 @@ $ `packages/psql/src/pg.nu`
 @ h_db PgConn c Rng g → HttpResponse {
     : i id ( world_id g )
     ?? ( world_get c id ) {
-        T rn → { ^ ( response_json 200 ( world_json id rn ) ) }
+        T rn → {
+            : HttpResponse r ( json_response )
+            : ( Vec u ) out . r body
+            : JsonWriter w ( json_writer )
+            ( world_write w out id rn )
+            ^ r
+        }
         F e → { ^ ( db_error e ) }
     }
 }
@@ -167,15 +196,7 @@ $ `packages/psql/src/pg.nu`
 @ h_queries PgConn c Rng g i n → HttpResponse {
     : ( Vec i ) ids ( world_ids g n )
     ?? ( worlds_get c ids ) {
-        T rns → {
-            : ( Vec Json ) rows ( vec_with_cap [Json] n )
-            : ~ i k 0
-            ~ < k n {
-                ( vec_push [Json] rows ( world_json ( vec_at [i] ids k ) ( vec_at [i] rns k ) ) )
-                = k + k 1
-            }
-            ^ ( response_json 200 ( json_arr rows ) )
-        }
+        T rns → { ^ ( worlds_response ids rns ) }
         F e → { ^ ( db_error e ) }
     }
 }
@@ -222,13 +243,7 @@ $ `packages/psql/src/pg.nu`
         T _ → {}
         F e → { ^ ( db_error e ) }
     }
-    : ( Vec Json ) rows ( vec_with_cap [Json] n )
-    = k 0
-    ~ < k n {
-        ( vec_push [Json] rows ( world_json ( vec_at [i] ids k ) ( vec_at [i] rns k ) ) )
-        = k + k 1
-    }
-    ^ ( response_json 200 ( json_arr rows ) )
+    ^ ( worlds_response ids rns )
 }
 
 // HTML-escape `text` onto `out`: & < > " ' — enough for element content
@@ -290,42 +305,51 @@ $ `packages/psql/src/pg.nu`
 
 // ── HttpArena async-db ────────────────────────────────────────────────
 
-// One items row as {"id":…,"name":…,"category":…,"price":…,"quantity":…,
-// "active":…,"tags":[…],"rating":{"score":…,"count":…}}.
-@ item_json PgResult r i k → Json {
-    : ( Vec Json ) kv ( vec_with_cap [Json] 16 )
-    ( vec_push [Json] kv ( json_str_lit `id` ) )
-    ( vec_push [Json] kv ( json_int ?? ( pg_row_i r k 0 ) { T v → v F → 0 } ) )
-    ( vec_push [Json] kv ( json_str_lit `name` ) )
-    ( vec_push [Json] kv ( json_str_lit ( string_data ( pg_result_cell r k 1 ) ) ) )
-    ( vec_push [Json] kv ( json_str_lit `category` ) )
-    ( vec_push [Json] kv ( json_str_lit ( string_data ( pg_result_cell r k 2 ) ) ) )
-    ( vec_push [Json] kv ( json_str_lit `price` ) )
-    ( vec_push [Json] kv ( json_int ?? ( pg_row_i r k 3 ) { T v → v F → 0 } ) )
-    ( vec_push [Json] kv ( json_str_lit `quantity` ) )
-    ( vec_push [Json] kv ( json_int ?? ( pg_row_i r k 4 ) { T v → v F → 0 } ) )
-    ( vec_push [Json] kv ( json_str_lit `active` ) )
-    ( vec_push [Json] kv ( json_bool ?? ( pg_row_b r k 5 ) { T v → v F → F } ) )
-    ( vec_push [Json] kv ( json_str_lit `tags` ) )
-    ( vec_push [Json] kv ?? ( json_parse ( string_data ( pg_result_cell r k 6 ) ) ) { T j → j F _ → ( json_arr_new ) } )
-    : ( Vec Json ) rating ( vec_with_cap [Json] 4 )
-    ( vec_push [Json] rating ( json_str_lit `score` ) )
-    ( vec_push [Json] rating ( json_int ?? ( pg_row_i r k 7 ) { T v → v F → 0 } ) )
-    ( vec_push [Json] rating ( json_str_lit `count` ) )
-    ( vec_push [Json] rating ( json_int ?? ( pg_row_i r k 8 ) { T v → v F → 0 } ) )
-    ( vec_push [Json] kv ( json_str_lit `rating` ) )
-    ( vec_push [Json] kv ( json_obj rating ) )
-    ^ ( json_obj kv )
+// A text cell as a JSON string, escaped straight from the row's bytes;
+// null when the cell is.
+@ cell_str_write JsonWriter w ( Vec u ) out PgResult r i k i col → v {
+    ?? ( pg_row_view r k col ) {
+        T t → ( jw_str_slice w out t )
+        F → ( jw_null w out )
+    }
 }
 
-@ items_json ( Vec Json ) items → Json {
-    : i n ( vec_len [Json] items )
-    : ( Vec Json ) kv ( vec_with_cap [Json] 4 )
-    ( vec_push [Json] kv ( json_str_lit `items` ) )
-    ( vec_push [Json] kv ( json_arr items ) )
-    ( vec_push [Json] kv ( json_str_lit `count` ) )
-    ( vec_push [Json] kv ( json_int n ) )
-    ^ ( json_obj kv )
+// One items row as {"id":…,"name":…,"category":…,"price":…,"quantity":…,
+// "active":…,"tags":[…],"rating":{"score":…,"count":…}}. `tags` is jsonb:
+// parsed into a Json value and written back, as the Rust peer does with
+// a serde_json::Value.
+@ item_write JsonWriter w ( Vec u ) out PgResult r i k → v {
+    ( jw_obj w out )
+    ( jw_key w out `id` )
+    ( jw_int w out ?? ( pg_row_i r k 0 ) { T v → v F → 0 } )
+    ( jw_key w out `name` )
+    ( cell_str_write w out r k 1 )
+    ( jw_key w out `category` )
+    ( cell_str_write w out r k 2 )
+    ( jw_key w out `price` )
+    ( jw_int w out ?? ( pg_row_i r k 3 ) { T v → v F → 0 } )
+    ( jw_key w out `quantity` )
+    ( jw_int w out ?? ( pg_row_i r k 4 ) { T v → v F → 0 } )
+    ( jw_key w out `active` )
+    ( jw_bool w out ?? ( pg_row_b r k 5 ) { T v → v F → F } )
+    ( jw_key w out `tags` )
+    ?? ( pg_row_view r k 6 ) {
+        T t → {
+            ?? ( json_parse_slice t ) {
+                T j → ( jw_json w out j )
+                F _ → ( jw_null w out )
+            }
+        }
+        F → ( jw_null w out )
+    }
+    ( jw_key w out `rating` )
+    ( jw_obj w out )
+    ( jw_key w out `score` )
+    ( jw_int w out ?? ( pg_row_i r k 7 ) { T v → v F → 0 } )
+    ( jw_key w out `count` )
+    ( jw_int w out ?? ( pg_row_i r k 8 ) { T v → v F → 0 } )
+    ( jw_end w out )
+    ( jw_end w out )
 }
 
 @ h_async_db PgConn c HttpRequest req → HttpResponse {
@@ -336,17 +360,27 @@ $ `packages/psql/src/pg.nu`
     ( vec_push [PgVal] ps @ PgVal { PgInt lo } )
     ( vec_push [PgVal] ps @ PgVal { PgInt hi } )
     ( vec_push [PgVal] ps @ PgVal { PgInt limit } )
-    : ( Vec Json ) items ( vec_new [Json] )
+    : HttpResponse resp ( json_response )
+    : ( Vec u ) out . resp body
+    : JsonWriter w ( json_writer )
+    ( jw_obj w out )
+    ( jw_key w out `items` )
+    ( jw_arr w out )
+    : ~ i n 0
     ?? ( pg_query_params c `SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count FROM items WHERE price BETWEEN $1 AND $2 LIMIT $3` ps ) {
         T r → {
-            : i n ( pg_result_nrows r )
+            = n ( pg_result_nrows r )
             : ~ i k 0
-            ~ < k n { ( vec_push [Json] items ( item_json r k ) ) = k + k 1 }
+            ~ < k n { ( item_write w out r k ) = k + k 1 }
         }
         // HttpArena: a database that is down answers an empty list.
         F _ → {}
     }
-    ^ ( response_json 200 ( items_json items ) )
+    ( jw_end w out )
+    ( jw_key w out `count` )
+    ( jw_int w out n )
+    ( jw_end w out )
+    ^ resp
 }
 
 // ── main ──────────────────────────────────────────────────────────────

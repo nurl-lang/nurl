@@ -35,6 +35,7 @@
 //   ( string_eq a b )          → b           content equality
 //
 //   ( string_with_cap n )      → String      empty, cap-preallocated
+//   ( string_from_vec bytes )  → String      takes a ( Vec u ) over, no copy
 //   ( string_unstash kind )    → String      empty, from the per-thread stash
 //   ( string_stash kind s max ) → v          empty s and park it there
 //   ( string_unstash_bytes kind p n ) → String  string_unstash holding p[0..n)
@@ -46,6 +47,7 @@
 //   ( string_contains s n )    → b           substring check
 //   ( string_substr s from len ) → String    owned copy of [from, from+len)
 //   ( string_to_int s )        → ! i ParseErr  strict decimal parse with sign
+//   ( slice_to_int b )         → ! i ParseErr  …of the bytes a ( Slice u ) views
 //   ( string_to_float s )      → ?f            strict decimal float
 //   ( string_index_of s p )    → ?i            byte index of first occurrence
 //   ( string_split s sep )     → ( Vec String ) split on sep occurrences
@@ -472,6 +474,23 @@ raw @ string_stash i kind sink String str i max → v {
     ^ ( string_from_take # *u raw + ( strlen raw ) 1 )
 }
 
+// Take a byte buffer over as a String, with no copy: its buffer becomes
+// the String's, grown once only when it has no room for the NUL a String
+// keeps after its bytes. For text an encoder built in a ( Vec u ) —
+// json_stringify's — and hands on as a String. The Vec is consumed.
+// Embedded NULs stay (string_data ends at the first, as for any String).
+@ string_from_vec sink ( Vec u ) bytes → String {
+    // The String takes a local's ctl, as every constructor here does (a
+    // sink parameter's own field in the literal is Agora #257).
+    : ( Vec u ) buf bytes
+    : i n ( vec_len [u] buf )
+    // The push makes the room (and owns a borrowed view's bytes); the
+    // length goes back to n, the NUL staying at data[n].
+    ( vec_push [u] buf # u 0 )
+    : b _ok ( vec_set_len [u] buf n )
+    ^ @ String { . buf ctl }
+}
+
 // Build an owned String from a raw byte range. `src` is a borrowed
 // pointer into another buffer; `n` bytes are copied verbatim and a NUL
 // terminator is written at offset n. Faster than building a temporary
@@ -833,6 +852,12 @@ raw @ string_commit String str i n → v {
 // Use the String's full byte length: embedded NUL cannot hide a suffix.
 @ string_to_int String str → !i ParseErr {
     ^ ( _string_parse_decimal ( string_data str ) ( string_len str ) )
+}
+
+// …the same over a view (a query value, a field of a buffer): all of its
+// bytes, nothing copied first.
+@ slice_to_int ( Slice u ) b → !i ParseErr {
+    ^ ( _string_parse_decimal # s ( slice_data [u] b ) ( slice_len [u] b ) )
 }
 
 // First byte index at which `needle` occurs in `str`. Empty needle
