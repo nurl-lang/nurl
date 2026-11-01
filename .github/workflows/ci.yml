@@ -1310,7 +1310,14 @@ jobs:
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
+    # On a PR as well when it changes the compiler or the runtime (the
+    # `compiler` class): this job holds nurlc's own leak gate and the
+    # sanitizer controls, and a compiler change that leaks was otherwise
+    # first seen in the merge queue, which ejected it and rebuilt every
+    # group behind it (github#1465, 2026-11-01: 3451 bytes from
+    # nurl_str_cat3 per compile). The corpora and FreeBSD stay
+    # queue-only.
+    if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.compiler == 'true')
     runs-on: ubuntu-latest
     # The whole-corpus run is sanitizers-corpus below, sharded: in one
     # job with these controls it took ~21 min (the corpus 12-14 of
