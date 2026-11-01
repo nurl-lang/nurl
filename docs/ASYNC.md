@@ -25,9 +25,9 @@ $ `stdlib/std/async.nu`
   swapping the callee-saved registers and `rsp` (see §5) — so *any*
   existing function can yield anywhere beneath any call depth. No
   compiler transformation, no state machines, no colouring. The cost is
-  memory per fiber (fixed-size stacks) instead of Go-style movable
-  stacks; the benefit is that every existing nurlc IR pattern works
-  unchanged.
+  address space per fiber (a 1 MiB reservation that becomes memory only
+  as deep as the fiber goes, §5) instead of Go-style movable stacks; the
+  benefit is that every existing nurlc IR pattern works unchanged.
 - **M:N.** `runtime_init workers` starts a pool of OS threads
   (`workers = 0` reads `$NURL_WORKERS`, defaulting to the core count).
   Fibers are scheduled onto whichever worker is free.
