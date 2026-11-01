@@ -51977,12 +51977,58 @@ unsafe @ lazy_flush i syms i cg → v {
         `. A declaration is '@ name params → ret { body }' — parameters are 'type name' pairs and the return type follows '→'. E.g. '@ add i a i b → i { ^ + a b }'. For a generic, the type list goes right after the name: '@ push [A] ( Vec A ) v A x → v { ... }'.` ) ) }
 }
 
+// A function that may be a handle's copy hook (`S_clone`, `S_share`, or an
+// instance of one), kept with where it is written for resolve_clone_hooks.
+@ __clone_hook_note s fname i line s file → v {
+    : s base ( bck_generic_base fname )
+    ? ! | != 0 ( nurl_str_ends base `_clone` ) != 0 ( nurl_str_ends base `_share` ) { ^ } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonehook_n` ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `clonehook#` ( nurl_str_int n ) ) ( nurl_str_cat4 fname ` ` ( nurl_str_int line ) ( nurl_str_cat ` ` file ) ) )
+    ( nurl_sym_def g_pending_impl `clonehook_n` ( nurl_str_int + n 1 ) )
+}
+
+// A handle's copy hook (`S_clone`, `S_share`: docs/MEMORY.md §7.6) is how
+// every copy of an `S` is made, and a copy is a value of its own: a
+// literal that copies a parameter of such a type carries nothing of it
+// (§2.8, fld_param_copy), and the caller drops the temporary it passed. A
+// hook that hands its argument back, whole or in part, makes the copy a
+// second name for that argument, read after the caller frees it. So the
+// hook may lend nothing of its parameter (mem_fn_lent_params), asked once
+// every summary is final (agora #334). One report per hook, however many
+// instances a generic one has.
+@ resolve_clone_hooks i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `clonehook_n` ) )
+    : ~ s seen ``
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_sym_get g_pending_impl ( nurl_str_cat `clonehook#` ( nurl_str_int j ) ) )
+        : s fname ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        // (The rest is the file, spaces and all.)
+        : s base ( bck_generic_base fname )
+        : s sn ( nurl_str_slice base 0 - ( nurl_str_len base ) 6 )
+        : b hook | ( __libh_plain_is ( nurl_str_cat `%` sn ) ) != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_drop` ) `__gsrc` )
+        ? & & hook ! ( str_contains_word seen base ) ( str_contains_word ( mem_fn_lent_params syms fname ) `0` ) {
+            = seen ? == 0 ( nurl_str_len seen ) ( nurl_str_cat base `` ) ( nurl_str_cat3 seen ` ` base )
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
+            ( nurl_str_cat3 `'` base `' hands its argument back, whole or in part: it is the copy hook of the handle '` )
+            ( nurl_str_cat sn `', which makes every copy of one, and a copy that is its argument is a second owner of one value, so the copy reads what its caller frees. ` )
+            `Return a value of its own: a counted share of the handle's block (shared_clone, arc_clone, rc_clone, rcbox_share), `
+            `or a copy of each field (vec_clone, string_from).` ) )
+        } {}
+        = j + j 1
+    }
+}
+
 unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_vctl_seen 0
     ( nurl_cg_reset cg )
     // Where this function starts, for a forward scan of its body
     // (__clo_detach_moves).
     : i __fn_hdr_pos ( nurl_lex_cur_start lex )
+    // (A handle's copy hook, `S_clone` / `S_share`: asked once every summary
+    // is final whether it hands its argument back, resolve_clone_hooks.)
+    ( __clone_hook_note fname ( nurl_lex_line lex ) ( nurl_lex_filename lex ) )
     // Read-and-clear the `simd` prefix here, at the head of the one
     // function it belongs to. Generic functions reach this path from
     // flush_deferred_instantiations long after the prefix was parsed,
@@ -70910,6 +70956,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // interprocedural-escape checks parked for forward / generic calls
         // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
         ( resolve_pending_impls )
+        ( resolve_clone_hooks syms )
         ( __dyn_virtual_check )
         ( resolve_cc_checks syms )
         ( resolve_send_checks syms )
