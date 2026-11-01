@@ -10,17 +10,31 @@
 // functions say so now.
 
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
+$ `stdlib/core/string.nu`
 
 & `libc` @ nurl_alloc_count → i
 
 & `libc` @ nurl_free_count → i
 
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
+
 unsafe @ live → i { ^ - ( nurl_alloc_count ) ( nurl_free_count ) }
 
 @ round i k → i {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_ffi_in_` )
     : ~ i n 0
-    ? ( file_exists ( nurl_str_cat `/tmp/nurl_ffi_in_` ( nurl_str_int k ) ) ) { = n + n 1 } {}
-    ?? ( file_delete ( nurl_str_cat `/tmp/nurl_ffi_in_` ( nurl_str_int k ) ) ) { T _ → { = n + n 1 } F _ → {} }
+    ? ( file_exists ( nurl_str_cat ( string_data tp0 ) ( nurl_str_int k ) ) ) { = n + n 1 } {}
+    ?? ( file_delete ( nurl_str_cat ( string_data tp0 ) ( nurl_str_int k ) ) ) { T _ → { = n + n 1 } F _ → {} }
     ^ n
 }
 

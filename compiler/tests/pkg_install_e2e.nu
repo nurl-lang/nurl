@@ -39,6 +39,17 @@ $ `stdlib/ext/pkg_fetch.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/ext/env.nu`
+
+// `name` under the platform's temp directory (env_temp_dir): on Windows
+// /tmp is a directory on the current drive that exists only if something
+// made it first (agora #306).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ reg_dep s name s req → Dep {
     ^ @ Dep { ( string_from name ) ( string_new ) ( string_from req ) ( string_new ) }
@@ -153,7 +164,10 @@ version = "1.0.0"
     ( vec_free [u] sigbytes )
     ( string_free publine )
 
-    : !v IoErr rm0 ( dir_remove_all `/tmp/nurl_pkg_e2e` )
+    : String w0 ( tmp_path `nurl_pkg_e2e` )
+    : String w1 ( tmp_path `nurl_pkg_e2e_bad` )
+    : String w2 ( tmp_path `nurl_pkg_e2e_nosig` )
+    : !v IoErr rm0 ( dir_remove_all ( string_data w0 ) )
     ?? rm0 { T _ → {} F _ → {} }
 
     : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 18943 )
@@ -190,6 +204,11 @@ version = "1.0.0"
             // no async runtime / shutdown handshake is needed.
             : ( @ v ) client \ → v {
                 ( sleep_ms 300 )
+                : String c0 ( tmp_path `nurl_pkg_e2e` )
+                : String c1 ( tmp_path `nurl_pkg_e2e_bad` )
+                : String c2 ( tmp_path `nurl_pkg_e2e_nosig` )
+                : String c3 ( tmp_path `nurl_pkg_e2e/foo/nurl.toml` )
+                : String c4 ( tmp_path `nurl_pkg_e2e/foo/lib.nu` )
                 : s REG `http://127.0.0.1:18943/`
                 : ( Vec Dep ) roots ( vec_new [Dep] )
                 ( vec_push [Dep] roots ( reg_dep `foo` `^1.0` ) )
@@ -205,12 +224,12 @@ version = "1.0.0"
                                 : s nm ( string_data . p name )
                                 : s ver ( string_data . p version )
                                 : s chk ( string_data . p checksum )
-                                : !i PkgFetchErr ir ( pkg_install_one REG nm ver chk `/tmp/nurl_pkg_e2e` )
+                                : !i PkgFetchErr ir ( pkg_install_one REG nm ver chk ( string_data c0 ) )
                                 ?? ir {
                                     T _ → ( nurl_print `install=ok\n` )
                                     F e → { ( nurl_print `install_err=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
                                 }
-                                : !i PkgFetchErr bad ( pkg_install_one REG nm ver `deadbeef` `/tmp/nurl_pkg_e2e_bad` )
+                                : !i PkgFetchErr bad ( pkg_install_one REG nm ver `deadbeef` ( string_data c1 ) )
                                 ?? bad {
                                     T _ → ( nurl_print `badcheck=accepted(bug)\n` )
                                     F e → { ( nurl_print `badcheck=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
@@ -218,7 +237,7 @@ version = "1.0.0"
                                 // Fail-closed: foo-2.0.0 has no signature ⇒ reject
                                 // The tarball bytes match foo-1.0.0, so the real checksum
                                 // isolates the signature gate.
-                                : !i PkgFetchErr nosig ( pkg_install_one REG nm `2.0.0` chk `/tmp/nurl_pkg_e2e_nosig` )
+                                : !i PkgFetchErr nosig ( pkg_install_one REG nm `2.0.0` chk ( string_data c2 ) )
                                 ?? nosig {
                                     T _ → ( nurl_print `nosig=accepted(bug)\n` )
                                     F e → { ( nurl_print `nosig=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
@@ -230,8 +249,8 @@ version = "1.0.0"
                     }
                 }
                 ( deps_free roots )
-                ? ( file_exists `/tmp/nurl_pkg_e2e/foo/nurl.toml` ) { ( nurl_print `unpacked=T\n` ) } { ( nurl_print `unpacked=F\n` ) }
-                ? ( file_exists `/tmp/nurl_pkg_e2e/foo/lib.nu` ) { ( nurl_print `lib_present=T\n` ) } { ( nurl_print `lib_present=F\n` ) }
+                ? ( file_exists ( string_data c3 ) ) { ( nurl_print `unpacked=T\n` ) } { ( nurl_print `unpacked=F\n` ) }
+                ? ( file_exists ( string_data c4 ) ) { ( nurl_print `lib_present=T\n` ) } { ( nurl_print `lib_present=F\n` ) }
             }
             : !Thread ThreadErr ct ( thread_spawn client )
 
@@ -248,11 +267,11 @@ version = "1.0.0"
         }
         F e → ( nurl_print `listen_fail\n` )
     }
-    : !v IoErr rm1 ( dir_remove_all `/tmp/nurl_pkg_e2e` )
+    : !v IoErr rm1 ( dir_remove_all ( string_data w0 ) )
     ?? rm1 { T _ → {} F _ → {} }
-    : !v IoErr rm2 ( dir_remove_all `/tmp/nurl_pkg_e2e_bad` )
+    : !v IoErr rm2 ( dir_remove_all ( string_data w1 ) )
     ?? rm2 { T _ → {} F _ → {} }
-    : !v IoErr rm3 ( dir_remove_all `/tmp/nurl_pkg_e2e_nosig` )
+    : !v IoErr rm3 ( dir_remove_all ( string_data w2 ) )
     ?? rm3 { T _ → {} F _ → {} }
     // tarball / index / sigtext: the server's handler took them over (it
     // runs on the server's threads); on the path without a server they are

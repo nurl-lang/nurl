@@ -180,7 +180,7 @@ unsafe @ main → i {
     // ── Binary file I/O round-trip — write hello then read it back ──
     // Portable temp root: %TEMP% on Windows, /tmp elsewhere (a hardcoded
     // /tmp resolves to C:\tmp on Windows, which need not exist).
-    : String tmproot ( env_var_or `TEMP` `/tmp` )
+    : String tmproot ( env_temp_dir )
     : String bpath ( string_from ( string_data tmproot ) )
     ( string_push_str bpath `/_nurl_bytes_test.bin` )
     : String mpath ( string_from ( string_data tmproot ) )

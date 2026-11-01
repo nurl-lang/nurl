@@ -10,18 +10,14 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 
-// Temp path from the environment (TMPDIR → TEMP → /tmp) — a hardcoded /tmp
-// works on Windows only while the C runtime's drive-relative mapping holds.
+// Temp path under the platform's temp directory (env_temp_dir): a hardcoded
+// /tmp works on Windows only while the C runtime's drive-relative mapping
+// holds.
 : ~ s TPATH ``
 : ~ s TDIR ``
 
 @ __fswh_tmpdir → String {
-    : ~ String tdir ( env_var_or `TMPDIR` `` )
-    ? == ( string_len tdir ) 0 {
-        ( string_free tdir )
-        = tdir ( env_var_or `TEMP` `/tmp` )
-    } {}
-    ^ tdir
+    ^ ( env_temp_dir )
 }
 
 @ ck b ok s name → v {

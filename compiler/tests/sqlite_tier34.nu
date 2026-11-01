@@ -14,6 +14,16 @@
 // Every handle is a scope-local match-arm binding → auto-dropped.
 
 $ `stdlib/ext/sqlite.nu`
+$ `stdlib/ext/env.nu`
+$ `stdlib/core/string.nu`
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ fail s tag SqliteErr e → v {
     ( nurl_print `FAIL ` ) ( nurl_print tag )
@@ -177,7 +187,11 @@ $ `stdlib/ext/sqlite.nu`
 
 // #13 + #16(WAL) — harden + WAL on a file-backed DB.
 @ test_harden_wal → v {
-    : s path `/tmp/nurl_sqlite_t34.db`
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_sqlite_t34.db` )
+    : s path ( string_data tp0 )
     : !Database SqliteErr op ( sqlite_open path )
     ?? op {
         F e → ( fail `open_wal` e )

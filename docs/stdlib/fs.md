@@ -11,6 +11,32 @@ provider uses the platform entropy and directory operations; a guest with no
 writable filesystem reports its filesystem error. The caller removes the directory with
 `dir_remove_all`; the path is dropped with its binding.
 
+For scratch space, put it under the platform's temp directory:
+`env_temp_dir()` from `stdlib/ext/env.nu`. On POSIX that is `$TMPDIR` when
+set and non-empty, else `/tmp`. On Windows it is what `GetTempPathW` answers:
+`%TMP%`, else `%TEMP%`, else `%USERPROFILE%`, else the Windows directory.
+`TMPDIR` is not read on Windows, because Git Bash exports it as a POSIX path
+that a native program cannot open. The result is never empty and has no
+trailing separator.
+
+```nurl
+$ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
+$ `stdlib/core/string.nu`
+
+@ main → i {
+    : String root ( env_temp_dir )
+    ?? ( fs_tempdir ( string_data root ) `myapp-` ) {
+        T dir → {
+            // … work in dir …
+            ?? ( dir_remove_all ( string_data dir ) ) { T _ → {} F _ → {} }
+        }
+        F _ → { ^ 1 }
+    }
+    ^ 0
+}
+```
+
 `fs_tempfile(dir, prefix)` similarly creates an empty, uniquely named file.
 To replace a working file or executable, create this temporary file in the
 **destination directory**, copy the new contents into it, apply any permissions,

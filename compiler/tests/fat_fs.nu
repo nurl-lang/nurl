@@ -44,12 +44,7 @@ $ `stdlib/fs/fatfmt.nu`
 }
 
 @ __tmpdir → String {
-    : ~ String tdir ( env_var_or `TMPDIR` `` )
-    ? == ( string_len tdir ) 0 {
-        ( string_free tdir )
-        = tdir ( env_var_or `TEMP` `/tmp` )
-    } {}
-    ^ tdir
+    ^ ( env_temp_dir )
 }
 
 @ img_path s tag → String {

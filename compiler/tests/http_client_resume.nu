@@ -23,10 +23,19 @@ $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/http.nu`
+$ `stdlib/ext/env.nu`
 
 : ~ i seen_1 -1
 : ~ i seen_2 -1
 : ~ i seen_3 -1
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ label s k s v → v {
     ( nurl_print k ) ( nurl_print `=` ) ( nurl_print v ) ( nurl_print `\n` )
@@ -70,9 +79,14 @@ $ `stdlib/ext/http.nu`
 }
 
 @ run → v {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_http_client_resume.crt` )
+    : String tp1 ( tmp_path `nurl_http_client_resume.key` )
     : X509SelfSigned cert ( x509_selfsigned_p256 `localhost` 1 )
-    : s cp `/tmp/nurl_http_client_resume.crt`
-    : s kp `/tmp/nurl_http_client_resume.key`
+    : s cp ( string_data tp0 )
+    : s kp ( string_data tp1 )
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )

@@ -72,14 +72,9 @@ $ `stdlib/core/vec.nu`
     ^ w
 }
 
+// Where http_cli stages its files: the platform's temp directory.
 @ test_tmpdir → String {
-    : String t1 ( env_var_or `TMPDIR` `` )
-    ? > ( string_len t1 ) 0 { ^ t1 } {}
-    : String t2 ( env_var_or `TEMP` `` )
-    ? > ( string_len t2 ) 0 { ^ t2 } {}
-    : String t3 ( env_var_or `TMP` `` )
-    ? > ( string_len t3 ) 0 { ^ t3 } {}
-    ^ ( string_from `/tmp` )
+    ^ ( env_temp_dir )
 }
 
 // Inspect the live curl child process while the server handler holds the HTTP
