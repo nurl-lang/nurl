@@ -16,6 +16,15 @@ $ `stdlib/ext/compress.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/ext/env.nu`
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ println_i s prefix i v → v {
     ( nurl_print prefix )
@@ -39,6 +48,12 @@ $ `stdlib/core/string.nu`
 }
 
 unsafe @ main → i {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_tar_test_unsafe` )
+    : String tp1 ( tmp_path `nurl_tar_test` )
+    : String tp2 ( tmp_path `nurl_tar_test/pkg/data.bin` )
     // ── 1. in-memory round-trip ──────────────────────────────────
     ( nurl_print `── round-trip ──\n` )
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
@@ -126,7 +141,7 @@ unsafe @ main → i {
     ?? ec {
         F e → ( println_s `evil_create_err=` ( tar_err_name e ) )
         T earc → {
-            : !i TarErr ur ( tar_unpack earc `/tmp/nurl_tar_test_unsafe` )
+            : !i TarErr ur ( tar_unpack earc ( string_data tp0 ) )
             ?? ur {
                 F e → ( println_s `unsafe=` ( tar_err_name e ) )
                 T cnt → ( println_i `unsafe=ACCEPTED(bug) count=` cnt )
@@ -145,15 +160,15 @@ unsafe @ main → i {
     ?? gc {
         F e → ( println_s `good_create_err=` ( tar_err_name e ) )
         T garc → {
-            : !v IoErr rm ( dir_remove_all `/tmp/nurl_tar_test` )
+            : !v IoErr rm ( dir_remove_all ( string_data tp1 ) )
             ?? rm { T _ → {} F _ → {} }
-            : !i TarErr up ( tar_unpack garc `/tmp/nurl_tar_test` )
+            : !i TarErr up ( tar_unpack garc ( string_data tp1 ) )
             ?? up {
                 F e → ( println_s `unpack_err=` ( tar_err_name e ) )
                 T cnt → {
                     ( println_i `unpacked=` cnt )
                     ( nurl_print `\n` )
-                    : !( Vec u ) IoErr rb ( read_file_bytes `/tmp/nurl_tar_test/pkg/data.bin` )
+                    : !( Vec u ) IoErr rb ( read_file_bytes ( string_data tp2 ) )
                     ?? rb {
                         F _ → ( nurl_print `readback=ERR\n` )
                         T back → {
@@ -167,7 +182,7 @@ unsafe @ main → i {
                     }
                 }
             }
-            : !v IoErr rm2 ( dir_remove_all `/tmp/nurl_tar_test` )
+            : !v IoErr rm2 ( dir_remove_all ( string_data tp1 ) )
             ?? rm2 { T _ → {} F _ → {} }
             ( vec_free [u] garc )
         }

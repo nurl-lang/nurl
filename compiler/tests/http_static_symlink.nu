@@ -70,7 +70,7 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    : String tdir ( env_var_or `TMPDIR` `/tmp` )
+    : String tdir ( env_temp_dir )
     : String base ( cat2 ( string_data tdir ) `/nurl_static_symlink_test` )
     : s b ( string_data base )
     : String pubd ( cat2 b `/pub` )

@@ -15,6 +15,16 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/atomic.nu`
 $ `stdlib/std/pfile.nu`
+$ `stdlib/ext/env.nu`
+$ `stdlib/core/string.nu`
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ show s label i x → v { ( nurl_print label ) ( nurl_println_int x ) }
 
@@ -24,7 +34,11 @@ $ `stdlib/std/pfile.nu`
 }
 
 @ main → i {
-    : s path `/tmp/nurl_pfile_basic.dat`
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_pfile_basic.dat` )
+    : s path ( string_data tp0 )
     : PFile f ?? ( pfile_open path PFILE_TRUNC ) { T h → h F _ → { ( nurl_println `open failed` ) ^ 1 } }
     : ( Vec u ) hello ( bytes_of `hello` )
     : ( Vec u ) world ( bytes_of `world` )

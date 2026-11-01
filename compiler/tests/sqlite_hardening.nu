@@ -16,6 +16,15 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/sqlite.nu`
+$ `stdlib/ext/env.nu`
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ fail s tag SqliteErr e → v {
     ( nurl_print `FAIL ` ) ( nurl_print tag )
@@ -113,7 +122,11 @@ $ `stdlib/ext/sqlite.nu`
 
 // Read-only open must refuse a write rather than create/insert.
 @ test_readonly → v {
-    : s path `/tmp/nurl_sqlite_ro_test.db`
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_sqlite_ro_test.db` )
+    : s path ( string_data tp0 )
     // Set up: create the DB read/write, then it auto-closes.
     : !Database SqliteErr setup ( sqlite_open path )
     ?? setup {

@@ -1,8 +1,8 @@
 // zip_basic.nu — ext/zip.nu acceptance: build an archive, re-open it,
 // extract every entry (CRC-checked), and confirm store-vs-deflate
-// selection. The archive bytes are written to /tmp so an external
-// `unzip -t` cross-check can run out-of-band; the golden itself is the
-// in-NURL round-trip (deterministic: fixed DOS timestamp).
+// selection. The archive bytes are written to the temp directory so an
+// external `unzip -t` cross-check can run out-of-band; the golden itself is
+// the in-NURL round-trip (deterministic: fixed DOS timestamp).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -10,6 +10,15 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/zip.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/ext/env.nu`
+
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
 
 @ mkbytes s in → ( Vec u ) {
     : ( Slice u ) in_v ( slice_of_str in )
@@ -36,6 +45,10 @@ $ `stdlib/core/slice.nu`
 }
 
 unsafe @ main → i {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_ziptest.zip` )
     // ── build ──
     : Zip z ( zip_new )
     : ( Vec u ) d1 ( mkbytes `hello, zip world` )
@@ -58,8 +71,8 @@ unsafe @ main → i {
     : *u ap ( vec_data [u] arc )
     ( nurl_print ? & == # i . ap 0 80 == # i . ap 1 75 `T` `F` ) ( nurl_print `\n` )
 
-    // write to /tmp for an external `unzip -t` cross-check (out of band)
-    : !v IoErr _w ( write_file_bytes `/tmp/nurl_ziptest.zip` arc )
+    // written out for an external `unzip -t` cross-check (out of band)
+    : !v IoErr _w ( write_file_bytes ( string_data tp0 ) arc )
     ?? _w { T _ → {} F _ → {} }
 
     // ── re-open + inspect ──
@@ -104,7 +117,7 @@ unsafe @ main → i {
     : !ZipArchive ZipErr bad ( zip_open junk )
     ?? bad { T za → { ( zip_close za ) ( nurl_print `junk=OPENED(BUG)\n` ) } F er → { ( nurl_print `junk=` ) ( nurl_print ( zip_err_name # ZipErr er ) ) ( nurl_print `\n` ) } }
     ( vec_free [u] junk )
-    : !v IoErr _rm ( file_delete `/tmp/nurl_ziptest.zip` )
+    : !v IoErr _rm ( file_delete ( string_data tp0 ) )
     ?? _rm { T _ → {} F _ → {} }
     ^ 0
 }

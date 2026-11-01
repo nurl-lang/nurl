@@ -53,33 +53,11 @@ $ `stdlib/core/slice.nu`
 // The shared declaration lives in http_cli_types.nu.
 
 // ── Temp directory ──────────────────────────────────────────────────
-// $TMPDIR if set and non-empty, else /tmp.
-// The temp directory, on every platform's own terms. POSIX spells it
-// TMPDIR; Windows spells it TEMP (or TMP) and has no /tmp at all — the
-// old TMPDIR-or-/tmp fallback made EVERY request on Windows die staging
-// its response file, before curl was even spawned, and nurlpkg then
-// reported the silence as "package not found in the registry".
-@ __httpc_tmpdir → String {
-    ?? ( env_get `TMPDIR` ) {
-        T d → {
-            ? > ( string_len d ) 0 { ^ d } {}
-        }
-        F _ → {}
-    }
-    ?? ( env_get `TEMP` ) {
-        T d → {
-            ? > ( string_len d ) 0 { ^ d } {}
-        }
-        F _ → {}
-    }
-    ?? ( env_get `TMP` ) {
-        T d → {
-            ? > ( string_len d ) 0 { ^ d } {}
-        }
-        F _ → {}
-    }
-    ^ ( string_from `/tmp` )
-}
+// Response files are staged in env_temp_dir (stdlib/ext/env.nu): the
+// platform's own temp directory. A TMPDIR-or-/tmp guess once made every
+// request on Windows die staging its response file, before curl was even
+// spawned, and nurlpkg then reported the silence as "package not found in
+// the registry".
 
 // Copy bytes [a, b) of `str` into a fresh owned String.
 @ __httpc_substr s str i a i b → String {
@@ -301,7 +279,7 @@ $ `stdlib/core/slice.nu`
 // refused before it is read into memory (agora #163). 0 = no cap.
 @ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs i max_bytes → !HttpcResp HttpcErr {
     ? ! ( httpc_url_is_http url ) { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther } } {}
-    : String tdir ( __httpc_tmpdir )
+    : String tdir ( env_temp_dir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
     ?? rf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
@@ -415,7 +393,7 @@ $ `stdlib/core/slice.nu`
 
 // Write `body` to a temp file, run the request, then unlink the temp.
 @ __httpc_with_body s method s url ( Vec u ) body s headers_blob → !HttpcResp HttpcErr {
-    : String tdir ( __httpc_tmpdir )
+    : String tdir ( env_temp_dir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
     ?? bf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
@@ -456,7 +434,7 @@ $ `stdlib/core/slice.nu`
 // that page is not under the REST API's rate limit (Agora #218).
 @ httpc_redirect_location s url → ?String {
     ? ! ( httpc_url_is_http url ) { ^ @ ?String { F } } {}
-    : String tdir ( __httpc_tmpdir )
+    : String tdir ( env_temp_dir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
     ?? rf {
         F _ → ^ @ ?String { F }
@@ -507,7 +485,7 @@ $ `stdlib/core/slice.nu`
     } {}
     // Non-empty text body: stage it through a temp file so the byte path
     // and the text path are identical on the wire.
-    : String tdir ( __httpc_tmpdir )
+    : String tdir ( env_temp_dir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
     ?? bf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }

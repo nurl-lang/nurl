@@ -2805,7 +2805,7 @@ unsafe @ __compare_source_files s localdir s pubdir ( Vec String ) locals ( Vec 
 }
 
 @ __dep_drifts s reg s name s ver s checksum s localdir → i {
-    : String troot ( __tmp_root )
+    : String troot ( env_temp_dir )
     : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-drift-` )
     : ~ i result 2
     ?? sr {
@@ -3097,21 +3097,6 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
         F → {}
     }
     ^ w
-}
-
-// Per-platform temp root for the staging dir: %TEMP%/%TMP% on Windows,
-// $TMPDIR else /tmp on POSIX. Returns an OWNED String, no trailing sep.
-@ __tmp_root → String {
-    ? ( __is_windows ) {
-        : ?String t ( env_get `TEMP` )
-        ?? t { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
-        : ?String t2 ( env_get `TMP` )
-        ?? t2 { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
-        ^ ( string_from `.` )
-    } {}
-    : ?String td ( env_get `TMPDIR` )
-    ?? td { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
-    ^ ( string_from `/tmp` )
 }
 
 // Directory binaries are installed into: $NURL_HOME/bin, else the user
@@ -3505,7 +3490,7 @@ unsafe @ __check_pathdep_drift Manifest m s reg → i {
                     T iv → {
                         // Each invocation owns a private directory, including
                         // simultaneous installs of the same package name.
-                        : String troot ( __tmp_root )
+                        : String troot ( env_temp_dir )
                         : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-tool-` )
                         ?? sr {
                             F e → {
@@ -3794,7 +3779,7 @@ unsafe @ __golden_match s goldp Output o → b {
 }
 
 @ __test_workspace → !String IoErr {
-    : String root ( __tmp_root )
+    : String root ( env_temp_dir )
     : !String IoErr created ( fs_tempdir ( string_data root ) `nurlpkg-run-` )
     ^ created
 }

@@ -40,6 +40,14 @@ $ `stdlib/ext/env.nu`
 
 : ~ i g_served 0
 
+// `name` under the platform's temp directory (env_temp_dir).
+@ tmp_path s name → String {
+    : String p ( env_temp_dir )
+    ( string_push_char p 47 )
+    ( string_push_str p name )
+    ^ p
+}
+
 @ chk s label b ok → b {
     ( nurl_print label )
     ( nurl_print ? ok ` ok\n` ` FAIL\n` )
@@ -47,13 +55,18 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
+    // Scratch paths under the platform's temp directory: on Windows /tmp
+    // is a directory on the current drive that exists only if something
+    // made it first (agora #306).
+    : String tp0 ( tmp_path `nurl_sslcf_cert.pem` )
+    : String tp1 ( tmp_path `nurl_sslcf_key.pem` )
     : ~ b all T
 
     // Mint the certificate and write the PEMs where tcp_listen_tls
     // reads them — the same file-based path packages/http uses.
     : X509SelfSigned c ( x509_selfsigned_p256 `localhost` 30 )
-    : s certf `/tmp/nurl_sslcf_cert.pem`
-    : s keyf `/tmp/nurl_sslcf_key.pem`
+    : s certf ( string_data tp0 )
+    : s keyf ( string_data tp1 )
     ?? ( write_file certf ( string_data . c cert_pem ) ) { T _ → {} F _e → { ( chk `write cert          ` F ) ^ 1 } }
     ?? ( write_file keyf ( string_data . c key_pem ) ) { T _ → {} F _e → { ( chk `write key           ` F ) ^ 1 } }
     ( x509_selfsigned_free c )
