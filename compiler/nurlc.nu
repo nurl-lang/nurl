@@ -4165,6 +4165,9 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? == 0 ( nurl_str_len rup ) { ^ F } {}
     ? | | != 0 ( nurl_sym_len2 syms rup `__pname` ) != 0 ( nurl_sym_len2 syms rup `__optparam` ) != 0 ( nurl_sym_len2 syms rup `__alias` ) { ^ F } {}
     ? ! ( __clone_supported rty syms ) { ^ F } {}
+    // A copy of a value that holds views shares them: it still reads what
+    // the parameter's elements view, so the lend stays (formal's #1610).
+    ? ( __ty_holds_view rty 0 ) { ^ F } {}
     : s rsb ( nurl_sym_get2 syms rup `__sborrow` )
     ^ | | == 0 ( nurl_str_len rsb ) ( seq rsb `local` ) ( seq rsb `dyn` )
 }
@@ -21142,7 +21145,12 @@ unsafe @ gen_match i lex i syms i cg → s {
             = g_join_flends 0
             = g_join_deep 0
             = g_join_rdepth ? & < m_jdepth m_jdepth0 | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST m_jdepth -1
+            // An arm's body is conditional, braced or not: a brace-less one
+            // runs no bck_block_enter, so it is counted here, or its `=`
+            // looks straight-line to mem_note_assign_lend (formal's #1610).
+            = g_cg_blk_depth + g_cg_blk_depth 1
             : ~ s arm_result ( gen_stmt lex syms cg )
+            ? > g_cg_blk_depth 0 { = g_cg_blk_depth - g_cg_blk_depth 1 } {}
             : s arm_froot ( __arm_froot syms arm_tt0 )
             : i arm_fl ( __arm_flends syms arm_tt0 arm_froot g_join_flends )
             : i arm_dp0 ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST g_join_deep 0
