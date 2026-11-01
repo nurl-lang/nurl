@@ -555,6 +555,24 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
+/-- Agora #295, step 4: no rule types a change of elements yet, so a typed
+    statement contains none … -/
+theorem StmtT.hasThru_false {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (h : StmtT P Γ F s Δ) : s.hasThru = false := by
+  induction h <;> simp [Stmt.hasThru, *]
+
+/-- … and a well-typed program has no `ThruFn`: `CallT`'s guard, and the
+    `¬ ThruFn` of destructors, closure interfaces and package codes, hold of
+    every program A2 covers. Step 5's `StmtT.editB` is the first rule that
+    types a change through a borrow. -/
+theorem ProgOK.not_thru {P : Prog} (hP : ProgOK P) {f : Nat} : ¬ ThruFn P f := by
+  intro h
+  induction h with
+  | here hf hb =>
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hbody, _⟩ := hP _ (List.mem_of_getElem? hf)
+    rw [hbody.hasThru_false] at hb; cases hb
+  | call _ _ _ ih => exact ih
+
 /-! ### Packages name code of their signature -/
 
 /-- Code `f`, on an environment of type `te`, implements the interface `σ`:
