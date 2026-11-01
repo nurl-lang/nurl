@@ -28326,7 +28326,7 @@ unsafe @ resolve_arc_mut → v {
     // (…and so is a value with a destructor of the program's own that may
     // read the views it holds: it is moved, never copied, and dropped where
     // its scope ends — a view no longer, h: #224.)
-    ? & ( bck_sound ) ( __drop_may_read_view lty 0 ) { ^ 3 } {}
+    ? & ( bck_sound ) ( __drop_may_read_view lty ) { ^ 3 } {}
     ? & ( bck_sound ) ( __ty_holds_addr lty 0 ) { ^ 2 } {}
     ^ 1
 }
@@ -29169,7 +29169,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
     // (A view that owns nothing — a struct of views, a Slice — is marked
     // `w`: no storage of its own for a result to point into.)
     = g_bck_bind_wview ? & == cls 2 ! ( __view_may_own lty ) 1 0
-    = g_bck_bind_udrop ? & == cls 3 != 0 g_bck_bind_owns ? ( __drop_may_read_view lty 0 ) 1 0 0
+    = g_bck_bind_udrop ? & == cls 3 != 0 g_bck_bind_owns ? ( __drop_may_read_view lty ) 1 0 0
     // A view's row carries what its right-hand side read (field 7): the
     // borrows among those it copies (bck_view_from_reads).
     // (The checker's table exists only when it runs.)
@@ -53781,7 +53781,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             : s __ity ( nurl_llty __pty )
             : i __il ( nurl_str_len __ity )
             : s __ivt ? & > __il 0 == ( nurl_str_get __ity - __il 1 ) 42 ( nurl_str_slice __ity 0 - __il 1 ) ( nurl_str_cat __ity `` )
-            ? ( __drop_may_read_view __ivt 0 ) {
+            ? ( __drop_may_read_view __ivt ) {
                 ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `^` name ) )
             } {}
         } {}
@@ -55570,38 +55570,43 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // is then a use of what those views point into (bck_deps_end). A
 // library handle's destructor reads only what it owns.
 //
-// The walk below, through the field types, payloads and elements, is
-// capped at depth 8, and it met the same type again and again on the way
-// down: dst_flagship asked it 494 questions and it made 750,296 calls for
-// 746 distinct (depth, type) pairs (agora #305). Within one question the
-// type tables do not change, so one (depth, type) pair has one answer; a
-// question keeps them in a table of its own, dropped when it is answered.
+// The walk below goes through the field types, payloads and elements,
+// and meets the same type again and again on the way down (dst_flagship
+// asked it 494 questions; agora #305). It is a reachability search: a
+// question keeps a table of its own, dropped when it is answered, of the
+// types it has met. A type is entered as in progress (2) before its walk
+// and answers F to itself while it is, so a type that holds itself ends
+// the search there and no depth is needed. That is exact for the question
+// asked: a T anywhere returns straight up, and an F recorded on the way
+// (a type whose walk met one still in progress) is only ever read within
+// the same question. (A depth cap stood here, and a destructor nine levels
+// down was answered "reads no view" — agora #340.)
 : ~ i g_dmrv_memo 0
 
-@ __drop_may_read_view s ty i depth → b {
+@ __drop_may_read_view s ty → b {
     : b top == g_dmrv_memo 0
     ? top { = g_dmrv_memo ( nurl_sym_new ) } {}
-    : s key ( nurl_str_cat3 ( nurl_str_int depth ) ` ` ty )
-    : i known ( nurl_sym_int g_dmrv_memo key )
+    : i known ( nurl_sym_int g_dmrv_memo ty )
     : ~ b r F
     ? >= known 0 { = r == known 1 } {
-        = r ( __dmrv_walk ty depth )
-        ( nurl_sym_def g_dmrv_memo key ? r `1` `0` )
+        ( nurl_sym_def g_dmrv_memo ty `2` )
+        = r ( __dmrv_walk ty )
+        ( nurl_sym_set g_dmrv_memo ty ? r `1` `0` )
     }
     ? top { ( nurl_sym_free g_dmrv_memo ) = g_dmrv_memo 0 } {}
     ^ r
 }
 
-@ __dmrv_walk s ty i depth → b {
-    ? | > depth 8 == 0 ( nurl_str_len ty ) { ^ F } {}
+@ __dmrv_walk s ty → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     // A trait object runs the destructor of what it boxes: one of the
     // trait's impls (`implsof##`, known from the signature scan).
-    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __dyn_drop_may_read_view ( nurl_str_slice ty 5 - ( nurl_str_len ty ) 5 ) depth ) } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( __dyn_drop_may_read_view ( nurl_str_slice ty 5 - ( nurl_str_len ty ) 5 ) ) } {}
     ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
-        ^ ( __drop_may_read_view ( __vec_elem_llvm ty ) + depth 1 )
+        ^ ( __drop_may_read_view ( __vec_elem_llvm ty ) )
     } {}
-    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __drop_may_read_view ( __opt_payload ty ) + depth 1 ) } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __drop_may_read_view ( __opt_payload ty ) ) } {}
     // A library handle's own destructor (a map's, a channel's) reads only
     // what it owns: what it holds of the program's — its type arguments,
     // `libhta##` — is asked instead.
@@ -55610,7 +55615,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
             : s dy ? != 0 ( nurl_str_starts w `dyn_` ) ( __dyn_unslug w ) ``
-            ? ( __drop_may_read_view ? != 0 ( nurl_str_len dy ) dy ( nurl_str_cat `%` w ) + depth 1 ) { ^ T } {}
+            ? ( __drop_may_read_view ? != 0 ( nurl_str_len dy ) dy ( nurl_str_cat `%` w ) ) { ^ T } {}
         }
         ^ F
     } {}
@@ -55626,7 +55631,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
             : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
             : ~ i k 0
             ~ < k pc {
-                ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) + depth 1 ) { ^ T } {}
+                ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) ) { ^ T } {}
                 = k + k 1
             }
         }
@@ -55636,7 +55641,7 @@ unsafe @ __hmemo_close s key i mark b r → v {
     : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
     : ~ i j 0
     ~ < j fc {
-        ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) + depth 1 ) { ^ T } {}
+        ? ( __drop_may_read_view ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int j ) `__type` ) ) ) ) { ^ T } {}
         = j + j 1
     }
     ^ F
@@ -55645,14 +55650,14 @@ unsafe @ __hmemo_close s key i mark b r → v {
 // May dropping a `% Trait` object read a view — does one of the types
 // implementing `tname` (`implsof##` its first method) have a destructor
 // that may (__drop_may_read_view)? With no impl known, any type may be one.
-@ __dyn_drop_may_read_view s tname i depth → b {
+@ __dyn_drop_may_read_view s tname → b {
     : s m ( str_first_word ( nurl_sym_get2 g_trait_syms tname `__methods` ) )
     ? == 0 ( nurl_str_len m ) { ^ T } {}
     : ~ s lls ( nurl_sym_get g_impl_trait_syms ( nurl_str_cat4 `implsof##` tname `##` m ) )
     ? == 0 ( nurl_str_len lls ) { ^ T } {}
     ~ != 0 ( nurl_str_len lls ) {
         : s ll ( str_first_word lls ) = lls ( str_skip_word lls )
-        ? ( __drop_may_read_view ll + depth 1 ) { ^ T } {}
+        ? ( __drop_may_read_view ll ) { ^ T } {}
     }
     ^ F
 }
