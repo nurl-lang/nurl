@@ -4380,6 +4380,57 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ^ ( nurl_str_cat `` `` )
 }
 
+// Does the call just made lend only out of bindings that own what they
+// hold and are not `name` (agora #317)? `name` is none of its arguments;
+// its summary is final (compiled, with no lend forwarded to module end) —
+// or it is `vec_get`, which lends its vector; and the argument at every
+// position it may lend from is a binding by name: a parameter, or a local
+// that owns its value and views nothing (no alias, field source or
+// `vec_get` slot; an owner by its call's answer only where that call could
+// lend nothing of `name`'s). Then its result is no part of what `name`
+// holds.
+@ __lend_from_other_owners i syms s name → b {
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? == 0 ( nurl_str_len key ) { ^ F } {}
+    ? ( nurl_sym_has_word syms `__last_call_part_idents__` name ) { ^ F } {}
+    : s args ( nurl_sym_get syms `__last_call_args__` )
+    // (`name` handed to the call at all, as itself or as a field path's
+    // root, may be what comes back, through any summary.)
+    ? | ( str_contains_word args name ) ( str_contains_word g_call_roots name ) { ^ F } {}
+    : s cn ( str_first_word key )
+    : b vg ( nurl_str_starts cn `vec_get` )
+    // (A summary that forwards a callee's lends, `retfwd`, is final only at
+    // module end: what it lends from may still grow.)
+    ? & ! vg | == 0 ( nurl_sym_len2 syms cn `__body_done` ) != 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn ) { ^ F } {}
+    : s ix ? vg ( nurl_str_cat `0` `` ) ( mem_fn_lent_params syms cn )
+    ? == 0 ( nurl_str_len ix ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat ix `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i want ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        : ~ s at ( nurl_str_cat args `` )
+        : ~ i k 0
+        ~ < k want { = at ( str_skip_word at ) = k + k 1 }
+        : s w ( str_first_word at )
+        ? | | == 0 ( nurl_str_len w ) ( seq w `-` ) ( seq w name ) { ^ F } {}
+        ? ! ( nurl_sym_has_word syms `__fn_param_names__` w ) {
+            : s up ( mem_udrop_ptr_of syms w )
+            ? == 0 ( nurl_str_len up ) { ^ F } {}
+            ? | | | != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms up `__fsrc` ) != 0 ( nurl_sym_len2 syms up `__alias_part` ) != 0 ( nurl_sym_len2 syms w `__vget` ) { ^ F } {}
+            // (One that owns its value on the runs its call says so — `@slot`,
+            // `: ( Vec Msg ) ms ( vec_new [Msg] )` — counts when that call
+            // could lend nothing of `name`'s: no argument is `name` or an
+            // expression this cannot follow.)
+            : s sb ( nurl_sym_get2 syms up `__sborrow` )
+            ? != 0 ( nurl_str_len sb ) {
+                ? != ( nurl_str_get sb 0 ) 64 { ^ F } {}
+                : s rs ( nurl_sym_get2 syms w `__pljr` )
+                ? | ( str_contains_word rs `-` ) ( str_contains_word rs name ) { ^ F } {}
+            } {}
+        } {}
+    }
+    ^ T
+}
+
 // …and a raw string this frame owns (an owned string local, a `sink s`
 // parameter), which it frees on the way out.
 @ __call_lends_local_str i syms → b {
@@ -36837,7 +36888,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
             } {}
         } {}
         : b __ud_same F
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend ! __ud_same
+        // …and a call that lends only out of other owners (`= om ( vec_get
+        // [Msg] ms 0 )`, ms a local Vec): what it hands back is no part of
+        // the value om holds, which goes by its flag as for any other
+        // assignment. Kept back in case the lend was of it, that value
+        // leaked on every such path (agora #317).
+        : b __ud_other_lend ? & & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self
+        ( __lend_from_other_owners syms name ) F
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend __ud_other_lend ! __ud_same
         {  // (By the type the binding was registered with: an option /
             // result binding's drop is its twin `%__opt.T` — the value type
             // `{ i1, T }` names no drop, and the old value was lost.)
