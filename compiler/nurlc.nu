@@ -17249,9 +17249,13 @@ unsafe @ gen_call i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_call_ref_args__` __fwd_refs )
     : s __fwd_params ( bck_param_arg_pairs syms __fwd_callee arg_idents )
     ( nurl_sym_def syms `__last_call_param_args__` __fwd_params )
-    ( nurl_sym_def syms `__last_phi_cause__`
-    ( nurl_str_cat3 `it was passed to '` fname
-    `', which may hand its handle back as the result` ) )
+    // The cause a join records is a sentence; a call records just its
+    // callee's name (an identifier, so never one of the join sentences,
+    // which start `its handle`), and bck_alias_from_phi words it when it
+    // has an alias to report. Built here, the sentence was a new string
+    // per call and an interned one per callee, all of them hashed alike
+    // (agora #310).
+    ( nurl_sym_def syms `__last_phi_cause__` fname )
     // The first argument's source name, computed ONCE and only when the
     // rule below can use it. `bck_nth_word` returns a fresh
     // string, and gen_call runs for every call in the program: calling
@@ -28104,7 +28108,11 @@ unsafe @ __ty_holds_view s ty i depth → b {
     // diagnosis (the LSan-pinned tests caught it). A `: s` binding is
     // auto-dropped, and passing the NAME is a borrow.
     : s why0 ( nurl_sym_get syms `__last_phi_cause__` )
-    : s why ? == 0 ( nurl_str_len why0 )
+    // A join's cause is its sentence; a call's is its callee's name (gen_call).
+    : b by_call & != 0 ( nurl_str_len why0 ) == 0 ( nurl_str_starts why0 `its handle` )
+    : s why ? by_call
+    ( nurl_str_cat3 `it was passed to '` why0 `', which may hand its handle back as the result` )
+    ? == 0 ( nurl_str_len why0 )
     ( nurl_str_cat `its handle is one of the values a '?' / '??' selected between` `` )
     ( nurl_str_cat why0 `` )
     : s params ( nurl_sym_get syms `__fn_param_names__` )
@@ -28121,7 +28129,7 @@ unsafe @ __ty_holds_view s ty i depth → b {
             // `:c` — the handle came back out of a call (a returned
             // argument), not a `?` / `??` selection: the sound rules read
             // that as a borrow of the argument.
-            { ( bck_stash_maybe_alias nm line why ? != 0 ( nurl_str_starts why0 `it was passed to '` ) ( nurl_str_cat dest `:c` ) ? gives ( nurl_str_cat dest `:g` ) dest ) } }
+            { ( bck_stash_maybe_alias nm line why ? by_call ( nurl_str_cat dest `:c` ) ? gives ( nurl_str_cat dest `:g` ) dest ) } }
     }
 }
 
