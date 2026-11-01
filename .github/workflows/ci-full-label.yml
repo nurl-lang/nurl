@@ -1,11 +1,11 @@
 name: ci-full-label
 
-# Adding `ci:full` to an open PR starts ci.yml's full run on it at once
-# (Agora #324). Before this, `full` read the labels of the push or open
-# that started a run, so a label added later did nothing until the next
-# push. A new PR's first run never had the full set, because the label
-# cannot exist before the PR does: github#1465 reached the merge queue
-# unsanitized that way.
+# Adding `ci:full` to an open PR turns the PR's own ci.yml run into the
+# full set (Agora #324, #330). Before #324, `full` read only the labels of
+# the push or open that started a run, so a label added later did nothing
+# until the next push. A new PR's first run never had the full set, because
+# the label cannot exist before the PR does: github#1465 reached the merge
+# queue unsanitized that way.
 #
 # ci.yml itself does not listen for `labeled`. A run of it for any other
 # label would list every one of its jobs as a skipped check run, and
@@ -14,11 +14,19 @@ name: ci-full-label
 # Here a label other than ci:full skips this one job, whose name no
 # required check carries.
 #
-# For ci:full, the job dispatches ci.yml on the PR's head with `pr` set.
-# A run dispatched that way joins the PR's own concurrency group
-# (refs/pull/N/merge), so the full run replaces the fast one in progress,
-# and the PR's next push, which carries the label, replaces it in turn.
-# Its check runs are on the PR's head commit, so they are the PR's checks.
+# For ci:full the job re-runs the PR's own run; it does not start a second
+# run beside it. #1478 dispatched one, and to stop the duplicate it
+# cancelled the PR's run. That run's always-run aggregator then concluded
+# failure, and GitHub kept counting the failed check in the PR's suite, so
+# the PR stayed blocked after the full run passed (github#1483, #1485,
+# #1486; dev #1455). A re-run is an attempt of the same run, and its checks
+# replace the earlier attempt's. ci.yml's `changes` reads the PR's labels as
+# they are now, so the re-run attempt is the full set.
+#
+# The PR's run may be the full set already (the PR was opened with the
+# label): `changes` says so by running its step "the full set runs", and
+# then there is nothing to do. A fast run still in progress is cancelled
+# first, and re-run once it has stopped.
 on:
   pull_request:
     branches: [main]
@@ -31,22 +39,53 @@ jobs:
   start:
     name: ci:full starts the full run
     # A fork's PR gets nothing from this job: its token is read-only, so it
-    # could not dispatch, and its head branch is not in this repository. The
-    # job is skipped there; push after labelling, as before.
+    # could not re-run anything. The job is skipped there; push after
+    # labelling, as before.
     if: github.event.label.name == 'ci:full' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 15
     permissions:
       actions: write
     steps:
-      - name: dispatch ci.yml on the PR's head, as the PR's run
+      - name: re-run the PR's own ci.yml run as the full set
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_REF: ${{ github.head_ref }}
-          PR: ${{ github.event.pull_request.number }}
-        # A branch from before ci.yml took `pr` refuses the input. It still
-        # gets the full run, beside the fast one instead of in its place.
+          SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          gh workflow run ci.yml --repo "$REPO" --ref "$HEAD_REF" -f pr="$PR" ||
-            gh workflow run ci.yml --repo "$REPO" --ref "$HEAD_REF"
+          set -euo pipefail
+          # The PR's run for its head commit. A PR opened with the label may
+          # not have one yet.
+          run=""
+          for _ in $(seq 1 30); do
+            run="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$SHA&per_page=20" \
+                     --jq '.workflow_runs | sort_by(.run_number) | last | .id // empty' || true)"
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          if [ -z "$run" ]; then
+            echo "::notice::no ci.yml run for $SHA yet: its first run reads the label itself"
+            exit 0
+          fi
+          # Its classification: the step "the full set runs" ran, or was skipped.
+          full=""
+          for _ in $(seq 1 30); do
+            full="$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
+                      --jq '[.jobs[] | select(.name == "classify changed paths") | .steps[]? | select(.name == "the full set runs") | .conclusion // empty] | first // empty' || true)"
+            [ -n "$full" ] && break
+            sleep 10
+          done
+          if [ "$full" = "success" ]; then
+            echo "::notice::run $run is the full set already"
+            exit 0
+          fi
+          # The fast set: stopped if it still runs, then run again.
+          if [ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status)" != "completed" ]; then
+            gh run cancel "$run" --repo "$REPO" || true
+            for _ in $(seq 1 60); do
+              [ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status)" = "completed" ] && break
+              sleep 5
+            done
+          fi
+          gh run rerun "$run" --repo "$REPO"
+          echo "::notice::re-ran run $run as the full set"
