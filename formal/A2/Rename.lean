@@ -2901,7 +2901,9 @@ theorem canon_same (h : S.OK) {Γa Δa : Ctx} (hab : S.AbsOK Γa)
 
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
-    those contexts. -/
+    those contexts. A statement that may change elements through a borrow
+    is placed by a call that passed no views (`s.Thru P → S.R = []`, from
+    `CallT`'s guard, Agora #295). -/
 theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
     {Δa : Ctx} (hd : StmtT P Γa Fa s Δa) : s.src = true → S.AbsOK Γa → CtxWF Γa → NameWF Γa →
     (s.Thru P → S.R = []) →

@@ -841,7 +841,9 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
   · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hr⟩
 
 /-- Does a statement change a `Vec`'s elements through a borrow
-    (`.edit true`, Agora #295)? -/
+    (`.edit true`, Agora #295)? The step ignores the flag, so the guard
+    rests on it: no rule may type `.edit false` through a borrow. An owner
+    rule for `.edit false` must ask `canDo` of the target itself. -/
 def Stmt.hasThru : Stmt → Bool
   | .seq a b => a.hasThru || b.hasThru
   | .ite _ a b => a.hasThru || b.hasThru
@@ -861,8 +863,8 @@ def Stmt.hasThru : Stmt → Bool
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
-    destructor (Agora #295). A call through a package runs code that is
-    never one of these (`Implements`). -/
+    destructor (Agora #295). A call through a package is not listed: the
+    code it runs is never a `ThruFn` (`Implements`). -/
 def Stmt.calls : Stmt → List Nat
   | .seq a b => a.calls ++ b.calls
   | .ite _ a b => a.calls ++ b.calls
