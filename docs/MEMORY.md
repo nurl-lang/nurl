@@ -630,7 +630,12 @@ view of its source and ends with it. Handed to a function that stores it
 into another of its arguments — the first, or one passed `inout`,
 wherever it sits (`( add h ( slice_from_vec [f] v ) )` with `add` pushing
 the slice into `. h fs`) — it makes that argument's value hold the view,
-as a `vec_push` written in place would. The rule applies in `unsafe`
+as a `vec_push` written in place would. So does a function handed an
+owner beside such an argument that leaves the argument viewing the
+owner's own storage (`= w @ W { ( string_data src ) }`, `src` a
+`String` parameter): the caller's argument then holds a view of what it
+passed there, which must outlive it, and a temporary passed there is
+refused — it is released when the statement ends. The rule applies in `unsafe`
 code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
