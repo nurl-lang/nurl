@@ -89,18 +89,24 @@ jobs:
       # With the merge queue, a PR queued ahead of the release PR lands
       # first, and in 0.83.0 two did. Fold it into [X.Y.Z] and tag that
       # commit instead.
+      # (`formal`: formal_rules.py --check reads formal/RULES.md and
+      # formal/rules/, Agora #299. Without it v0.84.0's gate failed on a
+      # missing file. A publishing dispatch checks the tag it builds, the
+      # same way: BUILD_REF.)
       - name: Check out the changelog
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.BUILD_REF }}
           sparse-checkout: |
             changes
             docs
+            formal
             tools/fuzz/holes
       - name: Every change in the tag is in its CHANGELOG section, every open hole in LIMITATIONS
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${NURL_TAG#v}"
           left="$(find changes/unreleased -name '*.md' ! -name README.md | sort)"
           if [ -n "$left" ]; then
             echo "::error::fragments not folded into [$v]: $(echo $left). Fold them (tools/changelog.py) and tag that commit."
