@@ -6679,7 +6679,28 @@ void      nurl_runtime_shutdown(void);
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
-#define NURL_FIBER_STACK_BYTES   (64 * 1024)
+/* A fiber's usable stack. 64 KB holds an optimised build's recursion with
+ * room to spare: a JSON document at JSON_MAX_DEPTH, walked every way
+ * json_deep_fiber walks it, needs about 12 KB at -O2. Under
+ * AddressSanitizer every frame also carries redzones and its spilled,
+ * instrumented locals, and the same walks need about 68 KB at -O2 and
+ * 196 KB at -O0. So a sanitized build gets four times the stack: a
+ * program must not die under NURL_SAN=1 on input its normal build handles
+ * (agora #319). The gate is exact, because runtime_san.o is only ever
+ * linked with sanitized code. Normal builds keep 64 KB, so their memory
+ * and speed are unchanged. */
+#if defined(__SANITIZE_ADDRESS__)
+#  define NURL_FIBER_STACK_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define NURL_FIBER_STACK_ASAN 1
+#  endif
+#endif
+#ifdef NURL_FIBER_STACK_ASAN
+#  define NURL_FIBER_STACK_BYTES   (4 * 64 * 1024)
+#else
+#  define NURL_FIBER_STACK_BYTES   (64 * 1024)
+#endif
 #define NURL_FIBER_GUARD_BYTES   4096
 #define NURL_MAX_WORKERS         64
 
