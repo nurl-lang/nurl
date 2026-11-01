@@ -635,6 +635,11 @@ code too, because it is decided from the program text, not from the
 capacity at run time. A mutation inside one `?` arm does not end a view
 in the other arm, and a function that mutates the container passed to it
 ends views exactly as an inline mutation does, wherever it is defined.
+That holds for an element's buffer too: a function that grows an element
+of its parameter through a handle it read out of it (`: ( Vec u ) e (
+vec_at p 0 )`, then `( vec_push [u] e 1 )`) ends, at the call, the
+caller's views into that element's buffer, as the same push written in
+place does; its handles of the elements stay.
 
 A string binding (`s`) is a view or an owner. One that owns its buffer —
 bound to an allocating call, or a mutable one born from a literal or an
