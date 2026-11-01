@@ -204,7 +204,9 @@ cat > "$WORK/ask.nu" <<'NEOF'
     ^ 0
 }
 NEOF
-if "$NURLC" "$WORK/ask.nu" > "$WORK/ask.ll" 2> "$WORK/ask.err"; then
+# An x86-64 module: the probe is a call there. On any other host nurlc
+# targets that host by default and folds it to 0 (the check below).
+if "$NURLC" --target=x86_64 "$WORK/ask.nu" > "$WORK/ask.ll" 2> "$WORK/ask.err"; then
     n_i32=$(grep -cE '= call i32 @nurl_cpu_x86_v3\(\)' "$WORK/ask.ll")
     n_bad=$(grep -E 'call [^ ]+ @nurl_cpu_x86_v3\(' "$WORK/ask.ll" | grep -vc 'call i32 @')
     if [ "$n_i32" -gt 0 ] && [ "$n_bad" -eq 0 ]; then
@@ -332,9 +334,10 @@ if "$NURLC" --cpu-dispatch "$V4SRC" > "$WORK/v4.ll" 2> "$WORK/v4.err"; then
     }
     # Off x86-64 both probes answer 0 on every CPU, and are compiled as
     # that constant in every function; an x86-64 module built without
-    # clones still asks.
+    # clones still asks. That one names x86-64: on an arm64 host the
+    # default target is arm64, where it would fold as well.
     if "$NURLC" --target=aarch64 "$V4SRC" > "$WORK/v4a64.ll" 2>/dev/null &&
-            "$NURLC" --no-cpu-dispatch "$V4SRC" > "$WORK/v4nd.ll" 2>/dev/null; then
+            "$NURLC" --target=x86_64 --no-cpu-dispatch "$V4SRC" > "$WORK/v4nd.ll" 2>/dev/null; then
         na=$(grep -c 'call i32 @nurl_cpu_x86_v[34]()' "$WORK/v4a64.ll")
         nn=$(grep -c 'call i32 @nurl_cpu_x86_v[34]()' "$WORK/v4nd.ll")
         if [ "$na" -eq 0 ] && [ "$nn" -gt 0 ]; then
