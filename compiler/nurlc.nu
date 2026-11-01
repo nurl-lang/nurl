@@ -4476,6 +4476,19 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ^ ( nurl_str_cat `` `` )
 }
 
+// `0 1 … n-1` for the n words of `args`.
+@ __arg_positions s args → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest ( nurl_str_cat args `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        = rest ( str_skip_word rest )
+        = out ? == k 0 ( nurl_str_int k ) ( nurl_str_cat3 out ` ` ( nurl_str_int k ) )
+        = k + k 1
+    }
+    ^ out
+}
+
 // Does the call just made lend only out of bindings that own what they
 // hold and are not `name` (agora #317)? `name` is none of its arguments;
 // its summary is final (compiled, with no lend forwarded to module end) —
@@ -4495,10 +4508,16 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ? | ( str_contains_word args name ) ( str_contains_word g_call_roots name ) { ^ F } {}
     : s cn ( str_first_word key )
     : b vg ( nurl_str_starts cn `vec_get` )
-    // (A summary that forwards a callee's lends, `retfwd`, is final only at
-    // module end: what it lends from may still grow.)
-    ? & ! vg | == 0 ( nurl_sym_len2 syms cn `__body_done` ) != 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn ) { ^ F } {}
-    : s ix ? vg ( nurl_str_cat `0` `` ) ( mem_fn_lent_params syms cn )
+    ? & ! vg == 0 ( nurl_sym_len2 syms cn `__body_done` ) { ^ F } {}
+    // A summary that forwards a callee's lends (`retfwd`) is final only at
+    // module end: which of its arguments it lends from may still grow. A
+    // lend comes out of an argument, so EVERY argument must then be an owner
+    // other than `name` — which it is, whatever positions the final summary
+    // names. (Answering F there kept `name`'s old value back on every call
+    // to a forwarder compiled before its caller, and it leaked; compiled
+    // after, the call's ownership bit decided — agora #344.)
+    : b fwd & ! vg != 0 ( nurl_sym_len2 g_pending_impl `retfwd##` cn )
+    : s ix ? vg ( nurl_str_cat `0` `` ) ? fwd ( __arg_positions args ) ( mem_fn_lent_params syms cn )
     ? == 0 ( nurl_str_len ix ) { ^ F } {}
     : ~ s rest ( nurl_str_cat ix `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -15755,8 +15774,11 @@ unsafe @ gen_call i lex i syms i cg → s {
                 } {}
             } {}
             // (Only for a callee that may change it — a container mutator, a
-            // summary that says so, or a function of the program's own not
-            // compiled yet: asked before the sources are, agora #169.)
+            // summary that says so, or any NURL function, the program's or
+            // the library's: its summary closes only at module end
+            // (resolve_mutation_summaries), so one compiled before this call
+            // may still grow, and the walk decides from the final summaries,
+            // as it does for one compiled after — agora #169, #352.)
             // (A handle the call hands back: only it can be changed in place.)
             = arg_lend_srcs ? & & != 0 g_borrowck == bck_arg_tt TT_LPAREN ( __is_handle_ty ( nurl_get_last_type ) ) ( bck_call_lend_srcs syms ) ``
             = __arg_shared ? == 0 ( nurl_str_len arg_lend_srcs ) F ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) )
@@ -15773,7 +15795,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             } {}
             ? != 0 ( nurl_str_len arg_lend_srcs ) {
                 : s __lix ( nurl_str_int arg_idx )
-                : b __lmut | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) & == 0 ( nurl_sym_len g_fn_compiled call_name ) ( __user_callee syms call_name fname )
+                : b __lmut | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) ( __user_callee syms call_name fname )
                 ? ! __lmut { = arg_lend_srcs `` } {}
             } {}
             = arg_lit_own ? == bck_arg_tt TT_AT ( nurl_sym_get syms `__agg_arg_own__` ) ``
