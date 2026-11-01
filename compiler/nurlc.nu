@@ -24156,6 +24156,51 @@ unsafe @ mem_path_to_indices s path → s {
     }
 }
 
+// Can mem_udrop_hand_over tell an owner's old value apart from what `ptr`'s
+// live borrowers hold: does mem_handle_key find a key for the owner (an
+// option by its payload's) and for each of them, by its own type? With none
+// to compare, the hand-over gave nothing to a borrower that held the old
+// value, which was then dropped under it — a heap-use-after-free — or it
+// compared against nothing, IR clang rejects (agora #361). An owner with no
+// live borrower hands nothing over: its old value is simply its own to drop.
+@ __ud_hand_over_keyed i syms s ptr s vt → b {
+    : ~ s rest ( nurl_sym_get2 syms ptr `__borrowers` )
+    ? == 0 ( nurl_str_len rest ) { ^ T } {}
+    : s ll ( nurl_llty vt )
+    : b own ? ( __handle_keyed vt ) T ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __handle_keyed ( __wrap_part ll 0 ) ) F
+    ? ! own { ^ F } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s b ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            : s bt0 ( nurl_sym_get2 syms b `__udty` )
+            : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
+            ? ! ( __handle_keyed bt ) { ^ F } {}
+        } {}
+    }
+    ^ T
+}
+
+// Does mem_handle_key find a key for a value of type `ty` that is there
+// whenever the value owns memory: a String's or Vec's buffer, an enum's
+// first payload slot (a variant with none owns nothing), a struct's first
+// handle field's key? Not when that field is an enum: a unit variant there
+// keys nothing while a later field owns memory. Nor an option, a result
+// or a library handle: none of them has a key (agora #361).
+@ __handle_keyed s ty → b {
+    ? | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
+    ? ( __is_handle_enum ty ) { ^ T } {}
+    ? ! ( __is_owned_struct_ty ty ) { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? ( __is_value_handle ft ) { ^ & ! ( __is_handle_enum ft ) ( __handle_keyed ft ) } {}
+        = i + i 1
+    }
+    ^ F
+}
+
 // An i8* that identifies an owned value of type `ty` (register `val`): the
 // buffer of a String / Vec, or of a struct's first String / Vec field; ``
 // when there is none.
@@ -37793,8 +37838,15 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the value om holds, which goes by its flag as for any other
         // assignment. Kept back in case the lend was of it, that value
         // leaked on every such path (agora #317).
+        // (…where the hand-over can tell that value apart from what a live
+        // borrower holds — a `??` payload, a cursor over it. Where the owner
+        // or such a borrower has no key — an option payload, a Box, a record
+        // keyed on an option or a unit-variant enum — it was dropped under
+        // the borrower, a heap-use-after-free, or compared against nothing,
+        // IR clang rejects. Kept back there, as before #317's fix: a leak
+        // until those types have keys, agora #361.)
         : b __ud_other_lend ? & & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self
-        ( __lend_from_other_owners syms name ) F
+        ? ( __lend_from_other_owners syms name ) ( __ud_hand_over_keyed syms __ud_ptr vt ) F F
         ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend __ud_other_lend ! __ud_same
         {  // (By the type the binding was registered with: an option /
             // result binding's drop is its twin `%__opt.T` — the value type
