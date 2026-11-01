@@ -7148,7 +7148,15 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     : i __rtok ( nurl_lex_type lex )
     : s __rvid ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s rv ( gen_operand lex syms cg )
+    // (A subtraction hands on only its left operand's address — `- a n`
+    // is still an address into a's object — never its right one's: `- # i
+    // p # i haystack`, nurl_str_find's index, is a distance, and carries
+    // nothing. Merged, its result was taken to be the haystack itself,
+    // `ret_param`: a caller's temporary handed there was refused as
+    // viewed, or kept alive and never freed — agora #323.)
+    : b __ptrdiff & == tt TT_MINUS != 0 ( nurl_str_len ( bck_let_carrier_src syms __rtok __rvid ) )
     ( bck_merge_expr_carriers syms left_params left_origin __rtok __rvid )
+    ? __ptrdiff { ( nurl_sym_def syms `__last_arith_params__` `` ) ( origin_set syms `__last_arith_params__` 0 ) } {}
     : ~ s rt ( nurl_get_last_type )
     ( die_if_void lex lv `binary operator's left` )
     ( die_if_void lex rv `binary operator's right` )
