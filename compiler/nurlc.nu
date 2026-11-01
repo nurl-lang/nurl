@@ -56577,6 +56577,10 @@ unsafe @ __hmemo_close s key i mark b r → v {
 
 @ __type_needs_drop s ty i syms → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    // A pointer owns nothing it points at — `%Vec__u8*`, the data field of
+    // a `( Slice ( Vec u ) )`, is no Vec: asked by its prefix below, it got
+    // drop glue (`drop__Vec__u8*`) clang rejects (agora #355).
+    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? ( seq ty `%String` ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
     // A `%dyn.Trait` object owns its heap box (and, via the vtable, the boxed
@@ -56585,7 +56589,6 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // An option / result owning its payload (or error): __wrap_twin.
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ != 0 ( nurl_str_len ( __wrap_twin ty ) ) } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
-    ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? ( __is_libh ty ) { ^ T } {}
     // A `% Drop` of the program's own: whatever its fields, dropping the
     // value runs it — as a Vec element or a struct field too.
@@ -60965,6 +60968,9 @@ unsafe @ __jpb_note i cg s up → v {
 }
 
 @ __clone_request s ty → v {
+    // (A pointer copies as itself: no glue — `__nurl_clone_Vec__u8*` is no
+    // LLVM name, and clang rejected the module, agora #355.)
+    ? | == 0 ( nurl_str_len ty ) == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ v } {}
     : s key ( nurl_str_cat `clonereq##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
     ( __libh_walk ty g_root_syms )
@@ -60996,6 +61002,7 @@ unsafe @ __jpb_note i cg s up → v {
 
 // Emit `__nurl_clone_<m>` (and what it needs) once per type.
 @ gen_clone_for_type s ty i syms → v {
+    ? | == 0 ( nurl_str_len ty ) == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ v } {}
     : s m ( __drop_mangle ty )
     : s key ( nurl_str_cat `cgen##` m )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
