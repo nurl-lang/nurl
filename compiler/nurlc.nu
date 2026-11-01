@@ -31860,7 +31860,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     ( bck_add_word_once `fmv` fpid )
                     = g_bck_fmv_any 1
                     ( bck_put ( nurl_str_cat `ml_` fpid ) ( bck_field rec 3 ) )
-                    ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpid ) ( bck_field rec 3 ) ) fcal )
+                    // (The callee as the source names it: an instance's
+                    // generic, `take_any`, not `take_any__Vec__String`.)
+                    ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpid ) ( bck_field rec 3 ) ) ( bck_generic_base fcal ) )
                 } {}
                 ? != 0 g_bck_has_cursor { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1

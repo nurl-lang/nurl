@@ -12,7 +12,7 @@ compiler/tests/diag_loop_container_released_in_body.nu:42:9: error: cannot mutat
 compiler/tests/diag_loop_container_released_in_body.nu:52:9: error: 'h' gives 'xs' a new value when it runs, here inside a '~' loop over it — the loop holds a borrow of the container, and the value it held is released under the loop; run the closure outside the loop body
         ( h )
         ^
-compiler/tests/diag_loop_container_released_in_body.nu:57:1: error: use of partly moved value 'r' — its field '. r xs' was taken at line 57 by take_any__Vec__String, and 'r' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. Give the field a value before returning (= . r xs …), or hand the callee a copy, ( mem_dup . r xs ), and keep the field.
+compiler/tests/diag_loop_container_released_in_body.nu:57:1: error: use of partly moved value 'r' — its field '. r xs' is taken here by take_any, and 'r' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. Give the field a value before returning (= . r xs …), or hand the callee a copy, ( mem_dup . r xs ), and keep the field.
 @ g inout R r → v { ( take_any [( Vec String )] . r xs ) }
 ^
 compiler/tests/diag_loop_container_released_in_body.nu:64:5: error: 'e' borrows from '. r xs', which ended at line 63 — it was passed to 'g', which may give it a new value (an 'inout' parameter it replaces, or a field of one). A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'e' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup e ).
