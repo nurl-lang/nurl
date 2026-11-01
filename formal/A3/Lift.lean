@@ -56,6 +56,10 @@ theorem VecOf.lift {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     (h : VecOf m x t c d es) (a2 : Nat → Bool) : VecOf (liftMem a2 m) x t c d es :=
   ⟨union_true a2 h.1, union_true a2 h.2.1, h.2.2⟩
 
+theorem NodeOf.lift {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}
+    (h : NodeOf m x o T t c d es) (a2 : Nat → Bool) : NodeOf (liftMem a2 m) x o T t c d es :=
+  ⟨union_true a2 h.1, union_true a2 h.2.1, h.2.2.1, h.2.2.2⟩
+
 theorem Eval.lift {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) (a2 : Nat → Bool) :
     Eval (liftMem a2 m) e n := by
   induction h with
@@ -232,6 +236,18 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       (union_true a2 hdd)
   | free hx hfr =>
     exact ⟨_, GhostRel.refl _, Step.free (m := liftMem a2 m) hx (Frees.lift hfr hd)⟩
+  | editPush ht hn hr =>
+    exact ⟨_, GhostRel.refl _, Step.editPush (TakeVal.lift ht a2) (NodeOf.lift hn a2) hr⟩
+  | @editPushRealloc m1 _ x _ o v T T' t c d es ht hn hr =>
+    have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hn.2.1)
+    refine ⟨_, GhostRel.refl _, ?_⟩
+    show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
+      m1.nv, m1.st⟩ o ⟨true, some T'⟩) .skip)
+    rw [union_realloc had]
+    exact Step.editPushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) (NodeOf.lift hn a2) hr
+  | editTrunc he hn hfr hr =>
+    exact ⟨_, GhostRel.refl _, Step.editTrunc (m := liftMem a2 m) (Eval.lift he a2)
+      (NodeOf.lift hn a2) (FreesL.lift hfr hd) hr⟩
   | panic => exact Step.panic
   | letrec hfn hp hx =>
     refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ (GhostRel.refl _))),

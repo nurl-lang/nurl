@@ -879,6 +879,7 @@ def Stmt.src : Stmt → Bool
   | .callc _ _ _ _ s => s.src
   | .letd _ _ _ s => s.src
   | .scopeD _ _ _ => false
+  | .edit _ _ _ => true
 
 /-! ### Functions -/
 
@@ -1025,6 +1026,10 @@ def Rhs.vars : Rhs → List Var
   | .taker y => [y]
   | .pack _ _ _ y cs => y :: cs.map (·.1)
 
+def Edit.vars : Edit → List Var
+  | .push y => [y]
+  | .trunc i => i.vars
+
 def Stmt.vars : Stmt → List Var
   | .skip => []
   | .seq a b => a.vars ++ b.vars
@@ -1045,6 +1050,7 @@ def Stmt.vars : Stmt → List Var
   | .callc x c _ zs s => x :: c :: zs ++ s.vars
   | .letd x _ r s => x :: r.vars ++ s.vars
   | .scopeD x _ s => x :: s.vars
+  | .edit _ x op => x :: op.vars
 
 
 

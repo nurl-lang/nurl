@@ -44,6 +44,7 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) :
   | .unpair .., _ => trivial
   | .callc .., _ => trivial
   | .letd .., _ => trivial
+  | .edit .., _ => trivial
 
 theorem inv_of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hst : m'.st = m.st) (hnv : m'.nv = m.nv) (hh : HeapOK m') (hc : Covers m') : Inv m' Γ F s :=

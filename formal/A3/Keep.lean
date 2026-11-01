@@ -90,6 +90,22 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | free hx hf' =>
     intro i hi
     exact Frees.other hf' (fun hm => by have := hav i ⟨_, _, hx, hm⟩; rw [hi] at this; cases this)
+  | editPush ht _ _ => intro i _; exact congrFun (TakeVal.alloc ht) i
+  | @editPushRealloc m1 _ x _ o _ T _ _ _ d _ ht hn _ =>
+    intro i hi
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    have hn' : m1.nid = m.nid := by cases ht <;> rfl
+    show upd (upd m1.alloc d false) m1.nid true i = m.alloc i
+    have h1 : i ≠ m1.nid := fun he => by rw [hf i (by omega)] at hi; cases hi
+    have h2 : i ≠ d := fun he => by
+      have := hav1 d ⟨o, T, hn.2.2.1, hn.sub.ids d (by simp)⟩
+      rw [← he, hi] at this; cases this
+    simp only [upd, ite_eq_right h1, ite_eq_right h2]
+    exact congrFun (TakeVal.alloc ht) i
+  | editTrunc _ hn hfr _ =>
+    intro i hi
+    exact FreesL.other hfr (fun hm => by
+      have := hav i ⟨_, _, hn.2.2.1, hn.sub.ids i (ids_drop_sub hm)⟩; rw [hi] at this; cases this)
   | panic => intro _ _; rfl
   | letrec _ _ _ => intro _ _; rfl
   | catchIn _ ih => exact ih

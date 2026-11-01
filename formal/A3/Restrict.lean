@@ -58,6 +58,14 @@ theorem VecOf.restrict {m : Mem} {x : Var} {t : Ty} {c d : Nat} {es : List Val}
     · exact ⟨OwnedId.of_slot hy (hs.ids c (by simp)), OwnedId.of_slot hy (hs.ids d (by simp))⟩
   exact ⟨minus_true hc (hav c ho.1), minus_true hd (hav d ho.2), hx⟩
 
+/-- The node a binding names is in an owned tree: its addresses are live
+    on the own part. -/
+theorem NodeOf.restrict {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}
+    (h : NodeOf m x o T t c d es) {a2 : Nat → Bool} (hav : Avoids m a2) :
+    NodeOf { m with alloc := minus m.alloc a2 } x o T t c d es :=
+  ⟨minus_true h.1 (hav c (OwnedId.of_slot h.2.2.1 (h.sub.ids c (by simp)))),
+   minus_true h.2.1 (hav d (OwnedId.of_slot h.2.2.1 (h.sub.ids d (by simp)))), h.2.2.1, h.2.2.2⟩
+
 theorem Eval.restrict {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) {a2 : Nat → Bool}
     (hav : Avoids m a2) : Eval { m with alloc := minus m.alloc a2 } e n := by
   induction h with
@@ -281,6 +289,21 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact ⟨_, h1, rfl, .refl _⟩
   | free hx hfr =>
     exact ⟨_, .free hx (Frees.restrict hfr fun i hi => hav i (OwnedId.of_slot hx hi)), rfl, .refl _⟩
+  | editPush ht hn hr =>
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    exact ⟨_, .editPush (TakeVal.restrict ht a2) (NodeOf.restrict hn hav1) hr, rfl, .refl _⟩
+  | @editPushRealloc m1 b x y o v T T' t c d es ht hn hr =>
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    have h1 : Step P { m with alloc := minus m.alloc a2 } (.edit b x (.push y))
+        (.ok ({ m1 with alloc := upd (upd (minus m1.alloc a2) d false) m1.nid true,
+                        nid := m1.nid + 1 }.set o ⟨true, some T'⟩) .skip) :=
+      .editPushRealloc (TakeVal.restrict ht a2) (NodeOf.restrict hn hav1) hr
+    rw [← minus_upd_false m1.alloc a2 d, ← minus_upd_true (hf m1.nid (TakeVal.grows ht).nid)] at h1
+    exact ⟨_, h1, rfl, .refl _⟩
+  | editTrunc he hn hfr hr =>
+    exact ⟨_, .editTrunc (Eval.restrict he hav) (NodeOf.restrict hn hav)
+      (FreesL.restrict hfr fun i hi => hav i (OwnedId.of_slot hn.2.2.1 (hn.sub.ids i (ids_drop_sub hi))))
+      hr, rfl, .refl _⟩
   | panic => exact ⟨_, .panic, rfl⟩
   | letrec hP hps hx =>
     exact ⟨_, .letrec hP hps hx, rfl,

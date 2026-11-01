@@ -1,4 +1,5 @@
 import A3.Rel
+import A2.Repl
 
 /-! A3.0 — what a step's owned trees hold: addresses the step's start
 owned, or fresh ones.  A step moves trees between slots, takes subtrees out
@@ -210,6 +211,43 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
       · exact .inl (a1 i hi)
     · exact .inl (b1 i hi)
   | free _ _ => exact fun i hi => .inl (OwnedId.set_none hi)
+  | editPush ht hn hr =>
+    obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · rcases hr.mem_ids hiv with hi | hi
+      · rcases mem_ids_push hi with hi | hi
+        · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i hi)))
+        · exact .inl (a1 i hi)
+      · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 hi))
+    · exact .inl (b1 i hi)
+  | editPushRealloc ht hn hr =>
+    obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · rcases hr.mem_ids hiv with hi | hi
+      · rcases mem_ids_push hi with hi | hi
+        · simp only [ids_node, List.mem_cons] at hi
+          rcases hi with hi | hi | hi
+          · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
+          · subst hi; exact .inr (TakeVal.grows ht).nid
+          · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
+        · exact .inl (a1 i hi)
+      · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 hi))
+    · exact .inl (b1 i hi)
+  | editTrunc _ hn _ hr =>
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · rcases hr.mem_ids hiv with hi | hi
+      · refine .inl (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i ?_))
+        simp only [ids_node, List.mem_cons] at hi ⊢
+        rcases hi with hi | hi | hi
+        · exact .inl hi
+        · exact .inr (.inl hi)
+        · obtain ⟨e, he, hie⟩ := mem_idsL_iff.mp hi
+          exact .inr (.inr (mem_idsL (List.mem_of_mem_take he) hie))
+      · exact .inl (OwnedId.of_slot hn.2.2.1 hi)
+    · exact .inl hi
   | panic => exact fun i hi => .inl hi
   | letrec _ _ _ =>
     exact fun i hi => .inl (OwnedId.set_none (OwnedId.set_none (OwnedId.of_nv hi)))

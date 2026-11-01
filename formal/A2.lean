@@ -5,6 +5,7 @@ import A2.Invariant
 import A2.Basic
 import A2.Ctx
 import A2.Stability
+import A2.Repl
 import A2.Heap
 import A2.Values
 import A2.Frame

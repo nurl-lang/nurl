@@ -106,6 +106,17 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       · rw [ite_eq_left h2] at hi; cases hi
       · rw [ite_eq_right h2] at hi; exact .inl hi
   | free _ hf => exact Grows.shrink (Frees.le hf) rfl
+  | editPush ht _ _ => exact (TakeVal.grows ht).trans (Grows.of_eq rfl rfl)
+  | @editPushRealloc m1 _ _ _ _ _ _ _ _ _ d _ ht _ _ =>
+    refine (TakeVal.grows ht).trans ⟨by show m1.nid ≤ m1.nid + 1; omega, fun i hi => ?_⟩
+    change upd (upd m1.alloc d false) m1.nid true i = true at hi
+    by_cases h1 : i = m1.nid
+    · exact .inr (by omega)
+    · simp only [upd, ite_eq_right h1] at hi
+      by_cases h2 : i = d
+      · rw [ite_eq_left h2] at hi; cases hi
+      · rw [ite_eq_right h2] at hi; exact .inl hi
+  | editTrunc _ _ hf _ => exact Grows.shrink (FreesL.le hf) rfl
   | panic => exact Grows.refl _
   | letrec _ _ _ => exact Grows.of_eq rfl rfl
   | catchIn _ ih => exact ih

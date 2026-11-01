@@ -120,6 +120,16 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
   | letdP _ => cases hr; intro v hv; simp [Stmt.spine] at hv
   | _ => cases hr
 
+/-- Writing a slot that is already bound binds no other variable. -/
+theorem Mem.set_bound_none {m : Mem} {o v : Var} {s sl : Slot} (ho : m.st o = some sl)
+    (hv : m.st v = none) : (m.set o s).st v = none := by
+  have hvo : v ≠ o := fun e => by subst e; rw [hv] at ho; cases ho
+  simp [upd_ne _ _ hvo, hv]
+
+/-- ... so a variable bound after such a write was bound before it. -/
+theorem Mem.set_bound_ne_none {m : Mem} {o v : Var} {s sl : Slot} (ho : m.st o = some sl)
+    (h' : (m.set o s).st v ≠ none) : m.st v ≠ none := fun hv => h' (Mem.set_bound_none ho hv)
+
 theorem takeVal_none {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) {x : Var}
     (hx : m.st x = none) : m1.st x = none := by
   cases ht with
@@ -259,6 +269,12 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
     have h0 : (envMem m env).st v = none := by simp [envMem, Mem.set, upd_ne _ _ hve, h]
     exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _
       (List.mem_append_left _ (bind_new hb v h0 h'))))
+  | editPush ht hn _ | editPushRealloc ht hn _ =>
+    cases hr; intro v h h'
+    exact absurd (takeVal_none ht h) (Mem.set_bound_ne_none hn.2.2.1 h')
+  | editTrunc _ hn _ _ =>
+    cases hr; intro v h h'
+    exact absurd h (Mem.set_bound_ne_none hn.2.2.1 h')
   | _ => cases hr
 
 /-- A step unbinds the scopes it leaves. -/

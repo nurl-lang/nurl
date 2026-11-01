@@ -11,8 +11,11 @@ theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.
 theorem Rhs.vars_rename (ρ : Var → Var) (r : Rhs) : (r.rename ρ).vars = r.vars.map ρ := by
   cases r <;> simp [Rhs.rename, Rhs.vars, Expr.vars_rename]
 
+theorem Edit.vars_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).vars = op.vars.map ρ := by
+  cases op <;> simp [Edit.rename, Edit.vars, Expr.vars_rename]
+
 theorem Stmt.vars_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).vars = s.vars.map ρ := by
-  induction s <;> simp_all [Stmt.rename, Stmt.vars, Rhs.vars_rename, Expr.vars_rename]
+  induction s <;> simp_all [Stmt.rename, Stmt.vars, Rhs.vars_rename, Expr.vars_rename, Edit.vars_rename]
 
 theorem callStmt_spine (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) :
     (callStmt fn args base x k).spine =
