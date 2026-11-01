@@ -20,15 +20,6 @@ theorem CtxRel.ofDomTy {Γ Γ' : Ctx} (hd : DomTy Γ Γ')
 
 theorem CtxRel.domTy {Γ Γ' : Ctx} (h : CtxRel Γ Γ') : DomTy Γ Γ' := ⟨h.dom, h.mode⟩
 
-/-- A binding moved out: `A2.kill` ends what borrows it, and it is dead. -/
-theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {y : Var} {E : Entry}
-    (hy : Γ y = some E) (hm : E.mode ≠ .rootb) (hyF : y ∉ F) (hpin : NoPin Γ y) :
-    CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
-  (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
-    (CtxRel.setE (Ex := killE .replace false y E) (by simp [A2.kill, hy]) (by simp [killE_mode])
-      (by simp [killE_ty]) (by simp [killE_mode, hm])
-      fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩)
-
 /-- The end of a scope that the statement opened, around a body whose typing
     keeps the borrowed parameters. -/
 theorem CtxRel.exitScope_fresh {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
@@ -41,13 +32,6 @@ theorem CtxRel.exitScope_fresh {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : E
   have h2p := h2.rootb p Ep (by simp [A2.setE, upd_ne _ _ hpx, h1p]) hrb
   simp only [A2.exitScope, upd_ne _ _ hpx, A2.kill, h2p, Option.map_some]
   rw [killE_rootb hanch hxF .replace false (hpin.kills .replace false) h2p hrb]
-
-theorem PushArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
-    (h : PushArg Γ F y Ey t D Γ1) (hy : Γ y = some Ey) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
-  cases h with
-  | move _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
-  | int => exact CtxRel.refl _
-  | slice _ => exact CtxRel.refl _
 
 theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
     (hr : RhsT Γ F r E Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
@@ -228,6 +212,8 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
         (by simp [killE_mode, hnrb])
         fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by
           rw [killE_vdeps]; simpa [Entry.vdeps, ownHeld, hnv hd] using hdd⟩))
+  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ hthru =>
+    exact fun _ hanch _ => CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
   | @free Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
   | sub hw _ ho ih =>

@@ -840,6 +840,100 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
     · exact ⟨a, ha, by assumption, hr⟩
   · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hr⟩
 
+/-! ### Changes of elements through a borrow (Agora #295) -/
+
+/-- What a change of elements through a borrow does to a root it reaches,
+    by the kind of the borrow's dependency on it: a push through a copy of
+    the root's own handle (`.self`), the root of the borrow's own type
+    (`sameTy`), is the root's own push (the borrowed `Vec` is the root's
+    whole tree): `.realloc`. Anything else may change the elements of any
+    node of the root's tree: `.drop`. -/
+def Edit.effAt : Edit → Kind → Bool → Eff
+  | .push _, k, sameTy => if k = .self ∧ sameTy = true then .realloc else .drop
+  | .trunc _, _, _ => .drop
+
+theorem Edit.effAt_ne_replace (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .replace := by
+  cases op with
+  | push => simp only [Edit.effAt]; split <;> simp
+  | trunc => simp [Edit.effAt]
+
+theorem Edit.effAt_ne_none (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .none := by
+  cases op with
+  | push => simp only [Edit.effAt]; split <;> simp
+  | trunc => simp [Edit.effAt]
+
+theorem Edit.effAt_le_drop (op : Edit) (k : Kind) (s : Bool) : (op.effAt k s).le .drop := by
+  cases op with
+  | push => simp only [Edit.effAt]; split <;> decide
+  | trunc => simp only [Edit.effAt]; decide
+
+/-- What a change does to a root does not depend on what it is handed. -/
+@[simp] theorem Edit.effAt_rename (ρ : Var → Var) (op : Edit) (k : Kind) (s : Bool) :
+    (op.rename ρ).effAt k s = op.effAt k s := by
+  cases op <;> rfl
+
+/-- `.realloc` is a push through a copy of a same-typed root's handle. -/
+theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s : Bool} (h : op.effAt k s = .realloc) :
+    (∃ y, op = .push y) ∧ k = .self ∧ s = true := by
+  cases op with
+  | push y =>
+    simp only [Edit.effAt] at h
+    split at h
+    · rename_i hk; exact ⟨⟨y, rfl⟩, hk.1, hk.2⟩
+    · cases h
+  | trunc _ => simp [Edit.effAt] at h
+
+/-- The per-root effects of a change through a borrow whose path is `P`, of
+    type `tx`: each memory root of `P`, with `Edit.effAt` of its kind, as a
+    dependency by name of that bound (the `.int` is only a tag). `killNames`
+    reads a dependency `⟨r, .name e _⟩` as `kill e false r`: the effect `e`
+    on `r`, whose changed node's elements hold no views. So the kills of a
+    change through a borrow are `killNames`, and its lemmas apply. -/
+def thruDeps (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List Dep :=
+  (memDeps P).map fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γ d.root).ty = tx))) .int⟩
+
+/-- What a change through a borrow (of type `tx`, path `P`) ends: on each
+    memory root, what its effect there ends. -/
+def killThru (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
+  killNames (thruDeps op Γ tx P) Γ
+
+theorem mem_thruDeps {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep} :
+    d ∈ thruDeps op Γ tx P ↔ ∃ d0 ∈ memDeps P, d = ⟨d0.root,
+      .name (op.effAt d0.kind (decide ((argE Γ d0.root).ty = tx))) .int⟩ := by
+  unfold thruDeps
+  simp only [List.mem_map]
+  constructor
+  · rintro ⟨d0, hd0, rfl⟩; exact ⟨d0, hd0, rfl⟩
+  · rintro ⟨d0, hd0, rfl⟩; exact ⟨d0, hd0, rfl⟩
+
+/-- The kills of a change through a borrow are effects below `.replace`,
+    with no views among the elements. -/
+theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
+    (hd : d ∈ thruDeps op Γ tx P) : d.kind.bound ≠ .replace ∧ d.kind.bound ≠ .none ∧
+      d.kind.bound.le .drop ∧ d.kind.isName = true := by
+  obtain ⟨d0, _, rfl⟩ := mem_thruDeps.mp hd
+  exact ⟨Edit.effAt_ne_replace _ _ _, Edit.effAt_ne_none _ _ _, Edit.effAt_le_drop _ _ _, rfl⟩
+
+/-- What a change through a borrow of type `tx`, whose path is `P`, asks of
+    each root `d.root` it reaches in memory, in the context after its
+    argument is handed over: the root is not lent out, is not the value
+    pushed, is live, allows its effect (`Edit.effAt`; so it owns its slot),
+    and that effect ends no view a destructor will read. -/
+def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
+  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op = .push y → d.root ≠ y) ∧
+    ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
+      canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx))) ∧
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root
+
+/-- What a change of elements is handed: the value `vec_push` stores (as
+    `PushArg` takes it; an element `Vec` moves), or the integer expression
+    a truncation evaluates, which only reads. -/
+inductive EditArg (Γ : Ctx) (F : List Var) : Edit → Ty → List Dep → Ctx → Prop
+  | push {y : Var} {Ey : Entry} {t : Ty} {D : List Dep} {Γ1 : Ctx} :
+      Γ y = some Ey → Ey.live = true → Ey.ty = t → PushArg Γ F y Ey t D Γ1 →
+      EditArg Γ F (.push y) t D Γ1
+  | trunc {i : Expr} {t : Ty} : ExprT Γ i → EditArg Γ F (.trunc i) t [] Γ
+
 /-- Does a statement change a `Vec`'s elements through a borrow
     (`.edit true`, Agora #295)? The step ignores the flag, so the guard
     rests on it: no rule may type `.edit false` through a borrow. An owner

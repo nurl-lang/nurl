@@ -194,6 +194,12 @@ theorem PushArg.names {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : 
     have hN := hn y Ey hy hly (Or.inl (by rw [hty]; simp))
     exact ⟨hn, (derive_named hN rfl).append hN.held, Keeps.refl Γ _⟩
 
+theorem EditArg.names {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) (hn : NameWF Γ) : NameWF Γ1 := by
+  cases h with
+  | push hy hly hty hpa => exact (hpa.names hy hly hty hn).1
+  | trunc _ => exact hn
+
 theorem popE_named {Γ : Ctx} {y : Var} {E : Entry} (h : DepsNamed Γ E.held) (t : Ty) :
     NameOK Γ (popE y E t) := by
   cases t <;> first
@@ -795,6 +801,20 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d (List.mem_append_left _ hd)
       · exact hN d (List.mem_append_right _ hd)
       · exact hD d (ownHeld_sub _ _ _ hd)
+  | @editB Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+    intro _ hn
+    have hn1 : NameWF Γ1 := harg.names hn
+    have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+    have hm1 : Ex1.mode = .bor := by rw [hE1, hmx]
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) hx1
+    refine NameWF.setE (hn1.killNames _) (fun Ex' h => ?_) (fun Ex' h hnm => ?_) (fun hl hni => ?_)
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      rcases hE'c with rfl | rfl <;> exact ⟨rfl, rfl⟩
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      have hos := hnm.2.2.1
+      rcases hE'c with rfl | rfl <;> (rw [hm1] at hos; cases hos)
+    · exact (hn1 x Ex1 hx1 hl hni).keeps ((Keeps.refl Γ1 []).killNames (thruDeps op Γ1 Ex.ty Ex1.path))
+        (fun _ _ _ h => by cases h)
   | @free Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx

@@ -84,6 +84,12 @@ theorem PushArg.domTy {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : 
   | int => exact DomTy.refl Γ
   | slice _ => exact DomTy.refl Γ
 
+theorem EditArg.domTy {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) : DomTy Γ Γ1 := by
+  cases h with
+  | push hy _ _ hpa => exact PushArg.domTy hy hpa
+  | trunc _ => exact DomTy.refl Γ
+
 theorem RhsT.domTy {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
     DomTy Γ Γ1 := by
   cases hr with
@@ -179,6 +185,10 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := (hpa.domTy hy).2 x Ex1 hx1
     exact ((hpa.domTy hy).kill _ _ _).setE ⟨E0, h0, hm0, ht0⟩
+  | @editB Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ harg _ hx1 _ _ _ =>
+    intro _
+    obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
+    exact (harg.domTy.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE ⟨E0, h0, hm0, ht0⟩
   | @free Γ F x E t hx _ _ _ _ _ => exact fun _ => ((DomTy.refl Γ).kill _ _ _).setE ⟨E, hx, rfl, rfl⟩
   | sub hw _ ho ih =>
     intro hs

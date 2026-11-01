@@ -181,6 +181,70 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     · exact ⟨_, EvalR.takerP hv⟩
     · exact ⟨_, EvalR.taker hv⟩
 
+/-- A part of a tree whose addresses are distinct has distinct addresses. -/
+theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by
+  induction h with
+  | refl => exact hn
+  | child he _ ih => exact ih (Child.nodup (Child.elem he) hn)
+  | fst _ ih => exact ih (Child.nodup Child.fst hn)
+  | snd _ ih => exact ih (Child.nodup Child.snd hn)
+  | inl _ ih => exact ih (Child.nodup Child.inl hn)
+  | inr _ ih => exact ih (Child.nodup Child.inr hn)
+  | pkg _ ih => exact ih (Child.nodup Child.pkg hn)
+
+/-- Well-formed elements whose addresses are distinct and live can be freed. -/
+theorem freesL_exists {τ : Ty} : ∀ {l : List Val}, (∀ e ∈ l, WFv τ e) → ∀ a : Nat → Bool,
+    (idsL l).Nodup → (∀ i ∈ idsL l, a i = true) → ∃ a', FreesL a l a'
+  | [], _, a, _, _ => ⟨a, FreesL.nil⟩
+  | e :: l, hw, a, hnd, ha => by
+    simp only [idsL_cons, List.nodup_append] at hnd
+    obtain ⟨a1, h1⟩ := frees_exists (hw e (by simp)) a hnd.1 (fun i hi => ha i (by simp [hi]))
+    obtain ⟨a2, h2⟩ := freesL_exists (fun x hx => hw x (by simp [hx])) a1 hnd.2.1 (by
+      intro i hi
+      have hne : i ∉ e.ids := fun h => hnd.2.2 i h i hi rfl
+      rw [h1.other hne]; exact ha i (by simp [hi]))
+    exact ⟨a2, FreesL.cons h1 h2⟩
+
+/-- Agora #295: a change through a borrow finds the node in its owner's tree
+    (`MInv.thru_owner`), and steps. -/
+theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
+    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op = .push y → y ≠ x) (hx1 : Γ1 x = some Ex1)
+    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
+    ∃ r, Step P m (.edit true x op) r := by
+  have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+  rw [hE1] at hx1 hthru
+  have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
+    fun d hd => by
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
+      exact ⟨Er, hEr, hcan.ownSlot⟩
+  cases harg with
+  | push hy hly htyy hpa =>
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    obtain ⟨post, _⟩ := push_take hi hanch hy hly htyy hpa htk
+    obtain ⟨_, _, _, _, c, d, es, _, _, _, _, _, _, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro
+    obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es ++ [v]))
+    exact ⟨_, Step.editPush htk hno hr⟩
+  | trunc hie =>
+    obtain ⟨n, hev⟩ := eval_exists hi hie
+    obtain ⟨dep, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := hi.thru_owner hx1 hmx hl hty hro
+    have hsub := hno.sub
+    have hndT : (Val.node t c d es).ids.Nodup := hsub.nodup (hi.heap.nodup _ _ hT)
+    have hnd : (idsL (es.drop n)).Nodup := by
+      simp only [ids_node, List.nodup_cons] at hndT
+      have h2 := hndT.2.2
+      rw [← List.take_append_drop n es, idsL_append] at h2
+      exact (List.nodup_append.mp h2).2.1
+    have hal : ∀ i ∈ idsL (es.drop n), m.alloc i = true := fun i hi' =>
+      (hi.heap.alloc _ _ hT i (hsub.ids i (ids_drop_sub hi'))).1
+    have hwe : ∀ e ∈ es.drop n, WFv t e := by
+      cases hw with
+      | node hes => exact fun e he => hes e (List.mem_of_mem_drop he)
+    obtain ⟨a', hfr⟩ := freesL_exists hwe m.alloc hnd hal
+    obtain ⟨T', hr⟩ := Repl.exists hsub (.node t c d (es.take n))
+    exact ⟨_, Step.editTrunc hev hno hfr hr⟩
+
 /-- Progress for every statement but a call, given the call case. -/
 theorem progress {P : Prog}
     (hcall : ∀ {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {k : Stmt}
@@ -343,6 +407,9 @@ theorem progress {P : Prog}
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)
     obtain ⟨a', ha⟩ := frees_owned hi.heap hT hwf
     exact Or.inr ⟨_, Step.free hT ha⟩
+  | editB hx hmx hl hty _ _ harg hyx hx1 hl1 _ hthru =>
+    intro m hcd hi
+    exact Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
   | panic => exact fun _ _ => Or.inr ⟨_, Step.panic⟩
   | @letrec Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>

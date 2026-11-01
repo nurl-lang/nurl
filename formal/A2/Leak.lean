@@ -296,4 +296,94 @@ theorem covers_pushRealloc {m : Mem} {v : Val} (hc : CoversBut m v true) {x : Va
     · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hox, hU⟩), hiU⟩
   · exact ⟨x, _, hmine, by simp [idsL_append, hiv]⟩
 
+/-! ### Agora #295: a node of an owned tree rewritten in place -/
+
+theorem covers_editPush {m : Mem} {v : Val} (hc : CoversBut m v true) {o : Var} {T T' : Val}
+    {t : Ty} {c d : Nat} {es : List Val} (hT : m.st o = some ⟨true, some T⟩)
+    (hr : Repl (.node t c d es) (.node t c d (es ++ [v])) T T') :
+    Covers (m.set o ⟨true, some T'⟩) := by
+  obtain ⟨A, B, h1, h2⟩ := hr.ids_split
+  have hmine : OwnedAt (m.set o ⟨true, some T'⟩) o T' := ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩)
+  intro i hi
+  rcases hc i hi with ⟨o', U, hU, hiU⟩ | ⟨_, hiv⟩
+  · by_cases hoo : o' = o
+    · subst hoo; unfold OwnedAt at hU; rw [hT] at hU; cases hU
+      refine ⟨o', T', hmine, ?_⟩
+      rw [h1] at hiU; rw [h2]
+      simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.mem_append,
+        List.mem_cons] at hiU ⊢
+      rcases hiU with (h | h | h | h) | h
+      · exact Or.inl (Or.inl h)
+      · exact Or.inl (Or.inr (Or.inl h))
+      · exact Or.inl (Or.inr (Or.inr (Or.inl h)))
+      · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inl h))))
+      · exact Or.inr h
+    · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoo, hU⟩), hiU⟩
+  · refine ⟨o, T', hmine, ?_⟩
+    rw [h2]
+    simp [idsL_append, hiv]
+
+theorem covers_editPushRealloc {m : Mem} {v : Val} (hc : CoversBut m v true) {o : Var}
+    {T T' : Val} {t : Ty} {c d : Nat} {es : List Val} (hT : m.st o = some ⟨true, some T⟩)
+    (hr : Repl (.node t c d es) (.node t c m.nid (es ++ [v])) T T') :
+    Covers ({ m with alloc := upd (upd m.alloc d false) m.nid true, nid := m.nid + 1 }.set o
+      ⟨true, some T'⟩) := by
+  obtain ⟨A, B, h1, h2⟩ := hr.ids_split
+  have hmine : OwnedAt ({ m with alloc := upd (upd m.alloc d false) m.nid true, nid := m.nid + 1 }.set o
+      ⟨true, some T'⟩) o T' := ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩)
+  intro i hi
+  simp only [Mem.set_alloc] at hi
+  by_cases hn : i = m.nid
+  · subst hn; exact ⟨o, T', hmine, by rw [h2]; simp⟩
+  rw [upd_ne _ _ hn] at hi
+  by_cases hd : i = d
+  · subst hd; simp [upd] at hi
+  rw [upd_ne _ _ hd] at hi
+  rcases hc i hi with ⟨o', U, hU, hiU⟩ | ⟨_, hiv⟩
+  · by_cases hoo : o' = o
+    · subst hoo; unfold OwnedAt at hU; rw [hT] at hU; cases hU
+      refine ⟨o', T', hmine, ?_⟩
+      rw [h1] at hiU; rw [h2]
+      simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.mem_append,
+        List.mem_cons] at hiU ⊢
+      rcases hiU with (h | h | h | h) | h
+      · exact Or.inl (Or.inl h)
+      · exact Or.inl (Or.inr (Or.inl h))
+      · exact absurd h hd
+      · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inl h))))
+      · exact Or.inr h
+    · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoo, hU⟩), hiU⟩
+  · refine ⟨o, T', hmine, ?_⟩
+    rw [h2]
+    simp [idsL_append, hiv]
+
+theorem covers_editTrunc {m : Mem} (hc : Covers m) {o : Var} {T T' : Val} {t : Ty} {c d n : Nat}
+    {es : List Val} (hT : m.st o = some ⟨true, some T⟩) {a' : Nat → Bool}
+    (hf : FreesL m.alloc (es.drop n) a')
+    (hr : Repl (.node t c d es) (.node t c d (es.take n)) T T') :
+    Covers ({ m with alloc := a' }.set o ⟨true, some T'⟩) := by
+  obtain ⟨A, B, h1, h2⟩ := hr.ids_split
+  have hmine : OwnedAt ({ m with alloc := a' }.set o ⟨true, some T'⟩) o T' :=
+    ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩)
+  intro i hi
+  simp only [Mem.set_alloc] at hi
+  have hi0 : m.alloc i = true := hf.le hi
+  have hnd : i ∉ idsL (es.drop n) := fun h => by rw [hf.freed h] at hi; cases hi
+  obtain ⟨o', U, hU, hiU⟩ := hc i hi0
+  by_cases hoo : o' = o
+  · subst hoo; unfold OwnedAt at hU; rw [hT] at hU; cases hU
+    refine ⟨o', T', hmine, ?_⟩
+    rw [h1] at hiU; rw [h2]
+    have hes : idsL es = idsL (es.take n) ++ idsL (es.drop n) := by
+      rw [← idsL_append, List.take_append_drop]
+    simp only [ids_node, hes, List.mem_append, List.mem_cons] at hiU ⊢
+    rcases hiU with (h | h | h | h | h) | h
+    · exact Or.inl (Or.inl h)
+    · exact Or.inl (Or.inr (Or.inl h))
+    · exact Or.inl (Or.inr (Or.inr (Or.inl h)))
+    · exact Or.inl (Or.inr (Or.inr (Or.inr h)))
+    · exact absurd h hnd
+    · exact Or.inr h
+  · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoo, hU⟩), hiU⟩
+
 end A2

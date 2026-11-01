@@ -808,6 +808,18 @@ theorem RhsT.domMode {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
   | @taker y Ey _ _ hy _ _ _ _ _ => exact (DomMode.refl Γ |>.kill .replace false y).setE ⟨Ey, hy, rfl⟩
   | _ => exact DomMode.refl Γ
 
+theorem EditArg.domMode {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) : DomMode Γ Γ1 := by
+  cases h with
+  | push hy _ _ hpa => exact hpa.domMode hy
+  | trunc _ => exact DomMode.refl Γ
+
+theorem EditArg.wf {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) (hw : CtxWF Γ) : CtxWF Γ1 := by
+  cases h with
+  | push hy hly hty hpa => exact (hpa.wf hw hy hly hty).1
+  | trunc _ => exact hw
+
 theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var} (hrx : r ≠ x)
     {E : Entry} (hr : Γ0 r = some E) : ∃ E', exitScope x Γ r = some E' ∧ E'.mode = E.mode := by
   obtain ⟨E', h', hm⟩ := h.get hr
@@ -1005,6 +1017,13 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ⟨E1, h1, hm1.trans hw0.mode⟩
     · obtain ⟨E2, h2, hw2⟩ := ho.get h1
       exact ⟨E2, h2, hw2.mode.trans (hm1.trans hw0.mode)⟩
+  | @editB Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ hxF harg _ _ _ _ _ =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    obtain ⟨E1, h1, hm1⟩ := harg.domMode.get h
+    obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) h1
+    exact ⟨E2, by simp only [A2.setE, upd_ne _ _ hrx]; exact h2,
+      by rcases hE2 with rfl | rfl <;> exact hm1⟩
 
 /-- Every rule keeps a well-formed context well-formed. -/
 theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
@@ -1171,5 +1190,19 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     rcases ho with rfl | ho
     · exact ‹CtxWF _ → CtxWF _› hw.wf
     · exact ho.wf
+  | @editB Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+    intro h
+    have hw1 := harg.wf h
+    have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+    have hm1 : Ex1.mode = .bor := by rw [hE1, hmx]
+    have hk := hw1.killNames (thruDeps op Γ1 Ex.ty Ex1.path)
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) hx1
+    refine hk.setE ⟨E', hE', fun hro => by rcases hE'c with rfl | rfl <;> exact hro⟩
+      (fun _ hn r hr => Or.inr ?_) (fun _ hos => by rw [hm1] at hos; cases hos)
+      (fun ha => hw1.arm x Ex1 hx1 ha) (fun hd => hw1.view x Ex1 hx1 hd)
+    obtain ⟨Er, hEr, hro⟩ := hw1 x Ex1 hx1 hl1 hn r hr
+    have hrx : r ≠ x := fun e => by subst e; rw [hx1] at hEr; cases hEr; rw [hm1] at hro; cases hro
+    obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) hEr
+    exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
 
 end A2

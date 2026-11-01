@@ -50,15 +50,29 @@ the LLVM / C11 memory model rather than redefining it.
   are outside the claim until Agora #332 lands.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
-  Elements change only through their owner or an `inout` binding. nurlc
-  also changes them through other copies of a handle. Two of those read
-  as forms the calculus has (`RULES.md`, phase C): a function that
-  changes a Vec or String it takes as a plain parameter, as the standard
-  library's own mutators take theirs, reads as an `inout` parameter, and
-  a change through a copy of one owner's whole handle (`( id vs )`, a
-  cursor) as that owner's own change. A change through any other borrow
-  (an element of a Vec of Vecs, a field viewer, a join of borrows, a
-  call's lent result) is outside the claim until Agora #295 lands.
+  Elements change through their owner, an `inout` binding, or any borrow
+  of them (Agora #295). A push or a truncation through a borrow — an
+  element of a Vec of Vecs, a field viewer, a join of borrows, a call's
+  lent result — is typed as the strongest change on every owner the
+  borrow's path may reach (`StmtT.editB`): every borrow of those owners'
+  elements ends, and on a push only copies of a same-typed owner's whole
+  handle survive. Two of nurlc's forms read as forms the calculus has
+  (`RULES.md`, phase C): a function that changes a Vec or String it takes
+  as a plain parameter reads as an `inout` parameter, and a change through
+  a copy of one owner's whole handle (`( id vs )`, a cursor) as that
+  owner's own change. Outside the claim still:
+  - a change through a borrow of a Vec whose elements hold views;
+  - a pop, a remove or an element set through a borrow (the steps are
+    push and truncate);
+  - what nurlc keeps beside such a change that the calculus ends: two
+    parts of one value, copies of the changing borrow, a whole copy beside
+    a field viewer (Agora #118, github#1426);
+  - a callee that changes a plain parameter's elements when its caller
+    hands it an element, a field viewer or a call's result rather than an
+    owner;
+  - a closure or a destructor that changes elements through a borrow,
+    directly or through a callee, and a call into a function that does so
+    which passes an argument holding views (`ThruFn`).
 - **A3** — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.
