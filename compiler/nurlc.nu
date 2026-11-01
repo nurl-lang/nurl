@@ -1559,6 +1559,10 @@ unsafe @ agg_field_count i syms s ot → i {
 // Loops being walked, nesting included; g_bck_dg follows writes only while > 0.
 : ~ i g_bck_watch 0
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+// …and the same as code generation sees it, whether or not the borrow walk
+// records (bck_block_enter / exit): an `=` at the depth its binding was bound
+// at is not inside an arm or a loop body of its own (mem_note_assign_lend).
+: ~ i g_cg_blk_depth 0
 : ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_ff_gen 0  // function counter keying the field-owner flags (mem_ff_slot)
 : ~ i g_ff_any 0  // 1 once this function made a field-owner flag
@@ -4169,6 +4173,7 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : s rs ( __lend_pairs_of syms rhs_tt rhs_val T )
     ( nurl_sym_def syms ( nurl_str_cat name `__pljk` ) ks )
     ( nurl_sym_def syms ( nurl_str_cat name `__pljr` ) rs )
+    ( nurl_sym_def syms ( nurl_str_cat name `__pljd` ) ( nurl_str_int g_cg_blk_depth ) )
 }
 
 // …and `= name value`: the binding may hold either value from here on, so
@@ -4187,6 +4192,18 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     // binding held by then, the one of another Vec included — h4.)
     ? != 0 ( nurl_sym_len2 syms name `__vget` ) { ( nurl_sym_set_deep syms ( nurl_str_cat name `__vget` ) `` ) } {}
     : s ks ( __lend_pairs_of syms rhs_tt rhs_val F )
+    // (An `=` at the depth its binding was bound at, in no arm or loop body
+    // of its own, gives the binding that value for good: the old value's
+    // pairs go, and a fresh value leaves none. Kept, a value that cannot be
+    // copied and is owned at the `^` was refused as a lend — agora #335.)
+    : s pd ( nurl_sym_get2 syms name `__pljd` )
+    ? & != 0 ( nurl_str_len pd ) == ( nurl_str_to_int pd ) g_cg_blk_depth {
+        ? | != 0 ( nurl_sym_len2 syms name `__pljk` ) != 0 ( nurl_str_len ks ) {
+            ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljk` ) ks )
+            ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljr` ) ( __lend_pairs_of syms rhs_tt rhs_val T ) )
+        } {}
+        ^ v
+    } {}
     ? == 0 ( nurl_str_len ks ) { ^ v } {}
     : s rs ( __lend_pairs_of syms rhs_tt rhs_val T )
     : s ok ( nurl_sym_get2 syms name `__pljk` )
@@ -23925,6 +23942,19 @@ unsafe @ mem_path_to_indices s path → s {
     } {}
 }
 
+// Is a root of what `name`'s value may be a lend of (`__pljr`, one line a
+// call, its arguments' roots by position) a capture of the closure being
+// compiled?
+@ __pl_roots_capture i syms s name → b {
+    ? == 0 g_bck_closure_depth { ^ F } {}
+    : ~ s rest ( bck_swap_char ( nurl_sym_get2 syms name `__pljr` ) 10 32 )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ! ( seq w `-` ) ( __is_clo_capture syms w ) { ^ T } {}
+    }
+    ^ F
+}
+
 // Does `name`'s `vec_get` slot (`__vget`) still name what it holds, so a
 // take through it may empty the slot? An `=` to the binding it came from
 // ends the slot for the code after it (h4, mem_note_assign_lend), but not
@@ -23935,6 +23965,10 @@ unsafe @ mem_path_to_indices s path → s {
 // copied, or refused where it cannot be copied, as a lent value is.
 @ __vget_live i syms s name → b {
     ? == 0 ( nurl_sym_len2 syms name `__vget` ) { ^ F } {}
+    // (Nor where the Vec is a capture of the closure being compiled: it is
+    // the enclosing frame's, which a take would leave one element short on
+    // the next call — formal's c1e.)
+    ? ( __pl_roots_capture syms name ) { ^ F } {}
     : s l ( nurl_sym_get2 syms name `__vgetl` )
     ? == 0 ( nurl_str_len l ) { ^ T } {}
     ? <= g_loop_nest ( nurl_str_to_int ( str_first_word l ) ) { ^ T } {}
@@ -29277,6 +29311,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
 // reads field, and the armed block kind in the wname field) then
 // descends a level; exit ascends then records `endblock`.
 @ bck_block_enter i line → v {
+    = g_cg_blk_depth + g_cg_blk_depth 1
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s kind ( nurl_sym_get g_bck `pending_kind` )
         ( bck_record `block`
@@ -29293,6 +29328,7 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
 }
 
 @ bck_block_exit i line → v {
+    ? > g_cg_blk_depth 0 { = g_cg_blk_depth - g_cg_blk_depth 1 } {}
     ( lint_free_block_exit )
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
