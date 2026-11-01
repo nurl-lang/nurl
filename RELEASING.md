@@ -67,6 +67,10 @@ described in prose somewhere that no test covers:
   `tools/fuzz/holes/open/t<N>.md`, one file per hole, which PRs add and
   delete instead of editing the list (Agora #136). release.yml checks it
   on the tag. Ask in Agora whether a hole open on `main` has no file yet.
+  `open_list.py --known-issues "agora #A, #B …"` prints the release's
+  Known issues entry from the same files (the argument names the holes
+  the release closed): paste it under `### Known issues` in the new
+  section.
 - The proof's change table: `python3 tools/formal_rules.py --write`
   regenerates the table "Changes to MEMORY.md and what they do to the
   proof" in `formal/RULES.md` from `formal/rules/t<N>.md`, one file per

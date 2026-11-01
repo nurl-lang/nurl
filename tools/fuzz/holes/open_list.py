@@ -19,6 +19,10 @@ checks it on the tag.
 
   open_list.py --write   regenerate the list in docs/LIMITATIONS.md
   open_list.py --check   fail when the list is not what the files say
+  open_list.py --known-issues [CLOSED]
+                         print the release's Known issues entry from the
+                         same files (CLOSED: "agora #224, #229 …", the holes
+                         the release closed), ready for CHANGELOG.md
 """
 import pathlib
 import re
@@ -63,8 +67,39 @@ def render(items):
     return f"{BEGIN}\n{head}\n\n" + "\n".join(bullets) + f"\n{END}"
 
 
+def known_issues(closed):
+    """The CHANGELOG Known issues bullet: every open hole by its shape."""
+    import textwrap
+    items = []
+    for text in holes():
+        flat = " ".join(text.split())
+        m = re.match(r"\*\*agora #(\d+): (.+?)\.?\*\*", flat)
+        shape = m.group(2)
+        items.append((m.group(1), shape[0].lower() + shape[1:]))
+    n = len(items)
+    if n == 0:
+        head = "- **No soundness hole is known open.**"
+        body = ""
+    else:
+        count = WORDS[n] if n < len(WORDS) else str(n)
+        verb = "hole is" if n == 1 else "holes are"
+        parts = [f"#{k} ({s})" for k, s in items]
+        parts[0] = "agora " + parts[0]
+        lst = parts[0] if n == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+        head = f"- **{count} soundness {verb} open, each with a fix in progress**:"
+        body = (f" {lst}. `docs/LIMITATIONS.md` gives each one's shape and how to"
+                " stay clear of it.")
+    tail = f" Closed in this release: {closed}." if closed else ""
+    tail += ' A release does not say "no hole is known open" while one is.' if n else ""
+    return textwrap.fill(head + body + tail, 72, subsequent_indent="  ",
+                         break_long_words=False, break_on_hyphens=False)
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
+    if mode == "--known-issues":
+        print(known_issues(sys.argv[2] if len(sys.argv) > 2 else ""))
+        return
     doc = DOC.read_text()
     if BEGIN not in doc or END not in doc:
         sys.exit("open_list.py: docs/LIMITATIONS.md has no BEGIN/END open holes markers")
