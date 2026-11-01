@@ -137,7 +137,14 @@ void nurl_ctx_asan_finish_switch(void *fake_save, const void **bottom_old,
 #define NB_CLOCK_MONOTONIC 1
 
 #define NB_PAGE          4096u
-#define NB_STACK_BYTES   (64 * 1024)
+/* As the hosted runtime's NURL_FIBER_STACK_BYTES (agora #319): a sanitized
+ * frame is several times a normal one, so a sanitized build gets four
+ * times the stack. */
+#ifdef NURL_BARE_ASAN
+#  define NB_STACK_BYTES   (4 * 64 * 1024)
+#else
+#  define NB_STACK_BYTES   (64 * 1024)
+#endif
 #define NB_GUARD_BYTES   4096
 
 /* ── §1  Coroutines ───────────────────────────────────────────────

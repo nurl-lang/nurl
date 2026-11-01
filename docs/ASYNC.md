@@ -311,7 +311,10 @@ and abort, the way the runtime already aborts when `malloc` fails — a
 fiber's stack is an allocation like any other, and "this machine is too
 small for this program" is a thing to say rather than to hide. Budget
 **68 KiB per fiber** (a 64 KiB stack and a 4 KiB guard page) when
-sizing a machine.
+sizing a machine. A `NURL_SAN=1` build gives each fiber a 256 KiB stack,
+because AddressSanitizer's frames are several times larger: a program
+that runs in its normal build must not overflow a fiber under the
+sanitizer.
 
 ## 6. Design lineage
 

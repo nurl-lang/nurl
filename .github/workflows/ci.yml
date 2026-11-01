@@ -1419,6 +1419,19 @@ jobs:
       - name: Temporaries a callee lends back
         run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh lend_back_temps ownership_results_and_temps
 
+      - name: A fiber's stack holds the deepest JSON under NURL_SAN=1
+        # run_san_tests.sh compiles at -O1, where an instrumented frame
+        # happens to fit a 64 KB fiber. Before agora #319, -O2 (nurl.sh's
+        # default) and -O0 (a debug build) overflowed it. This step builds
+        # the way a user's sanitized build does.
+        run: |
+          tail -n +5 compiler/tests/outputs/json_deep_fiber.txt > build/json-deep-fiber.expected
+          for o in -O2 -O0; do
+            NURL_SAN=1 ./nurl.sh "$o" compiler/tests/json_deep_fiber.nu "build/json-deep-fiber$o"
+            "./build/json-deep-fiber$o" > "build/json-deep-fiber$o.txt"
+            diff -u build/json-deep-fiber.expected "build/json-deep-fiber$o.txt"
+          done
+
       - name: Publication gate resource cleanup
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
