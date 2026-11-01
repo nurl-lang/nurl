@@ -15524,6 +15524,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         : ~ s arg_lend_srcs ``
         // (…and whether that call reaches into a shared cell: __shared_cell_get.)
         : ~ b __arg_shared F
+        // (…and whether those are the bindings a `?` / `??` argument's arms
+        // select: agora #314.)
+        : ~ b __arg_join F
         : ~ s arg_fread ``
         // (A field of a call's result: `1` when the object was a call, and
         // the flag that says the field left with the read, if it did.)
@@ -15680,6 +15683,17 @@ unsafe @ gen_call i lex i syms i cg → s {
             // (A handle the call hands back: only it can be changed in place.)
             = arg_lend_srcs ? & & != 0 g_borrowck == bck_arg_tt TT_LPAREN ( __is_handle_ty ( nurl_get_last_type ) ) ( bck_call_lend_srcs syms ) ``
             = __arg_shared ? == 0 ( nurl_str_len arg_lend_srcs ) F ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) )
+            // A `?` / `??` join as the argument hands the callee what one of
+            // its arms selects: the callee changes that binding as if it were
+            // the argument itself, as it does a join bound first (`: ( Vec S )
+            // j ? c vs vt`, then `( vec_clear [S] j )`). Without rows of its
+            // own the call ended no borrow of either arm's owner (agora #314).
+            ? | == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST {
+                ? & != 0 g_borrowck ( __is_handle_ty ( nurl_get_last_type ) ) {
+                    = arg_lend_srcs ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
+                    = __arg_join T
+                } {}
+            } {}
             ? != 0 ( nurl_str_len arg_lend_srcs ) {
                 : s __lix ( nurl_str_int arg_idx )
                 : b __lmut | | | | ( bck_is_container_mutator ( bck_generic_base call_name ) ) ( nurl_sym_has_word g_fn_mutates call_name __lix ) ( nurl_sym_has_word g_fn_reallocs call_name __lix ) ( nurl_sym_has_word g_fn_sink call_name __lix ) & == 0 ( nurl_sym_len g_fn_compiled call_name ) ( __user_callee syms call_name fname )
@@ -16879,7 +16893,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 : i __ld ( nurl_str_find __ln `.` )
                 : s __lb ? > __ld 0 ( nurl_str_slice __ln 0 __ld ) ( nurl_str_cat __ln `` )
                 ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms __lb ) ) ) {
-                    ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) call_name arg_idx `` `pendlend` )
+                    ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) call_name arg_idx `` ? __arg_join `pendjoin` `pendlend` )
                     ( __clo_effect_note __ln call_name arg_idx )
                 } {}
             }
@@ -29775,7 +29789,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 0 } {}
@@ -33648,9 +33662,12 @@ unsafe @ bck_note_rc_arg s name s ty → v {
             } {}
             ? | | | == kc 9 == kc 12 == kc 13 == kc 32 {
                 // (`pendeff`: a closure that runs here does it.)
-                // (`pendlend`: a value lent from it handed to the callee.)
+                // (`pendlend`: a value lent from it handed to the callee;
+                // `pendjoin`: it, as one of the values a `?` / `??` argument
+                // chose between — agora #314.)
                 : b plend & == kc 32 ( seq ( bck_field rec 0 ) `pendlend` )
-                : s pw0 ? plend `a value lent from it was passed to '` ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
+                : b pjoin & == kc 32 ( seq ( bck_field rec 0 ) `pendjoin` )
+                : s pw0 ? plend `a value lent from it was passed to '` ? pjoin `it was one of the values a '?' / '??' argument chose between, passed to '` ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
                 // (`@assign`: a closure that runs here gives it, or a field of
                 // it, a new value — __clo_assign_note — as a `= x …` here
                 // would, agora #151.)
