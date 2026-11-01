@@ -10,6 +10,14 @@ on:
     branches: [main, Improvements]
   pull_request:
     branches: [main]
+    # `labeled` so that adding `ci:full` starts the full run without a
+    # push (Agora #324). `full` reads the labels the event carries, so a
+    # label added after the PR opened reached no run until the next push,
+    # and a new PR's first run never had the full set: github#1465 went
+    # to the queue unsanitized that way. Any other label starts nothing
+    # and cancels nothing (`concurrency`, and the `if:` of the two jobs
+    # that need no other: `changes` and `shared-files`).
+    types: [opened, synchronize, reopened, labeled]
   # The merge queue (Agora #136): main's ruleset can require the queue,
   # which tests main + the queued PRs together and merges exactly the
   # commit it tested. The required checks (build + corpus, FreeBSD,
@@ -25,15 +33,21 @@ on:
 # runs used to be cancelled by the next merge, a quarter of all ci.yml
 # job-minutes thrown away, and the commit left untested. A main run that
 # is in progress finishes; GitHub keeps only the newest pending one behind
-# it. A PR's older run is still cancelled by its next push.
+# it. A PR's older run is still cancelled by its next push, and by a
+# `ci:full` label, whose full run replaces it. A `labeled` event for any
+# other label gets a group of its own (its run id), as in macos-tests.yml,
+# so it cancels no run in progress; its jobs are all skipped.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
     name: classify changed paths
     runs-on: ubuntu-latest
+    # A label other than `ci:full` changes nothing a job reads: skipping
+    # this job skips every job that needs it.
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     # In the merge queue, every class runs. A group is several PRs on top
     # of a main that moved since they were tested, so the queue is no
     # place to save minutes by path: running too much is always correct
@@ -66,7 +80,7 @@ jobs:
       # sanitizer corpus, the three unikernel jobs) take 88 of a PR run's
       # 123 job-minutes. The merge queue runs them anyway, on the combined
       # commit that lands, so a PR runs them only when labelled `ci:full`
-      # (add the label, then push). A PR's own run keeps the build, the
+      # (adding the label starts that run). A PR's own run keeps the build, the
       # corpus and the gates: the fast signal, about 35 job-minutes. A
       # skipped required check counts as passed, so the PR can still join
       # the queue. Pushes and the queue always run everything.
@@ -231,6 +245,8 @@ jobs:
     name: shared files are generated (map.tsv, changelog fragments)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # (As `changes`: a label other than `ci:full` changes no file.)
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     steps:
       - uses: actions/checkout@v4
       # formal/corpus/map.tsv is generated where it is read and never
