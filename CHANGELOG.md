@@ -68,6 +68,65 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   more time simulated than taken. The real runtime is untouched (a
   simulation is a different link).
 
+- **`v512` has a 32-bit group** (Agora #116): `nurl_v512_bcast32`,
+  `_rotl32`, the per-128-bit-lane interleaves `_unpacklo32`,
+  `_unpackhi32`, `_unpacklo64` and `_unpackhi64`, and the lane shuffles
+  `_even128` / `_odd128`, two rounds of which transpose four registers'
+  128-bit lanes. They are correct on any target, like the rest of `v512`,
+  and are one AVX-512 instruction each in a `simd v4` clone.
+  `compiler/tests/simd_v512_lanes` checks each one, lane by lane, against
+  hand-worked answers, both legalised and as zmm code.
+- **`v512` has a 64-bit group** (Agora #116): `nurl_v512_bcast64`,
+  `_mul32u` (each lane's low halves multiplied to 64 bits, one VPMULUDQ),
+  and `_shl64` / `_shr64`, the count masked to the lane. They are in
+  `simd_v512_lanes` too: a lane's high half must not reach `_mul32u`, and
+  a shift by 68 is a shift by 4.
+
+- **Clients dial through a `NetDialer` chosen at construction** (Agora #249, DST). `std/net` has `NetDialer` — `net_dialer_kernel` (the default: `tcp_connect_timeout`, allocating nothing), `net_dial d host port timeout_ms`, and `raw net_dialer_over` for any `% NetDialer` — and `std/net_sim.nu` has `netsim_dialer net node`. `http_client_set_dialer` (packages/http-client), `pg_connect_with` / `pg_connect_url_with` (packages/psql) and `redis_connect_with` (packages/redis) take one, so the same client runs over a simulated network unchanged: `compiler/tests/net_sim_clients.nu` drives http-client against an HttpApp and psql against a minimal PostgreSQL server over a NetSim, with no socket opened. TLS through anything but the kernel's dialer is refused until agora #250.
+
+- **TLS runs over std/net's transport seam** (Agora #250, stage 1). std/tls.nu has a `% TlsTransport` (read, write, timeout, write deadline, close): a connection made over one (`tls_attach_over`, `tls_accept_over`) reads and writes its records through it, with the same handshakes, ciphers and session state as over a socket; it has no socket handle and never hands its keys to the kernel (kTLS). std/net.nu adapts its transports to it, so `tcp_starttls` upgrades a connection of a simulated network (std/net_sim.nu) in place and `tls_accept_conn` / the new **`tls_accept_conn_ident`** (a prepared identity, an ALPN list) take the server side over one — where both refused before. **`tls_ident_pem cert_pem key_pem`** loads a server identity from PEM text in memory, the file loader's other half. `compiler/tests/net_sim_tls.nu`: a client and a server handshake and echo over a NetSim, no socket opened. The runtime-socket path is unchanged: callgrind on the TLS server, 13,289 → 13,272 instructions per keep-alive request and 1,546,138 → 1,545,928 per full handshake.
+- **HTTPS on a simulated network** (Agora #250, stage 2). `netsim_listen_tls net node port id alpn` makes a TLS listener on a NetSim node (on std/net's new `raw tcp_listener_over_tls`), so `http_app_serve` serves an HttpApp over HTTPS there; `tcp_conn_complete_tls` / `tcp_accept` run the listener's handshake over a simulated connection, and `tcp_set_timeout` / `tcp_peer_addr` reach the transport under a TLS connection. **`tcp_starttls_until conn name verify deadline_ns`** bounds the whole handshake by a deadline (NetTimeout when it passes), over a runtime socket too. `compiler/tests/net_sim_https.nu`: an HttpApp answers two requests on one TLS connection over a NetSim (strace: no socket); `net_sim_tls.nu`: a partition after the TCP connection is up ends a handshake at its 300 ms deadline, and after the heal a new one goes through.
+
+- **`nurlpkg test --sim [--seeds N|A..B] [--seed S]`: the same tests under
+  many schedules, and any failing one replayed exactly** (Agora #261, DST
+  3/4). Each test is built once as a deterministic simulation (the new
+  `nurl --sim`, on the cooperative runtime with a virtual clock, seeded
+  entropy and a seeded schedule) and run once per seed. A test passes
+  when every seed does; a failing one prints how many seeds it passed,
+  the first seed it failed under, and the line that replays that run byte
+  for byte (`nurlpkg test --sim --seed S tests/x.nu`). `netsim_new` with
+  seed 0 takes the run's seed, so a simulated network varies with the
+  sweep. On the gate's fixture a read–yield–write race on a shared counter
+  fails under 25 of 40 seeds and its replay fails 10 times out of 10,
+  identically, while the atomic version passes all 40; the 40-seed sweep
+  of both takes 20 seconds.
+
+- **The DST flagship scenario** (Agora #262): `compiler/tests/dst_flagship.nu` runs a web service and its database on a simulated network, in one process — three HTTP clients (packages/http-client), an HttpApp whose one route applies an operation in one nurldb transaction (a receipt row and its effect, idempotent by the operation's id), and nurldb (packages/nurldb `serve_on`) — while the harness cuts the service off from the database and then crashes and restarts the database from its log. It checks that every acknowledged operation is there afterwards, that none was applied twice (the balance equals the receipts), and that every client finished. A service broken on purpose (the effect committed outside the receipt's transaction) fails the second check in every run. [docs/SIMULATION.md](docs/SIMULATION.md) is the guide to testing this way; nurldb 0.2.0 gains `client_set_timeout`, which the scenario showed it needed — a client waiting on a server that crashed with its statement in hand waited forever.
+
+- **A server can crash and restart inside one process** (Agora #262, DST 4/4 — the database half). `std/net_sim.nu`'s **`netsim_crash net node`** takes a node down and straight back up, empty, as a host that lost power and rebooted: every socket it had is gone at once with no FIN, so an operation through one finds it closed, its peers learn of it by a reset or their own timeouts, and the node can listen again at once. packages/nurldb's **`serve_on db listener`** serves a listener it is handed (a NetSim node's too) and returns once the listener stops accepting and its connections have ended; **`client_connect_with dialer host port`** dials through a std/net `NetDialer`; **`db_crash db`** drops a database as a killed process leaves it (no checkpoint, dirty pages lost), so reopening its directory recovers from the log. `compiler/tests/net_sim_nurldb_crash.nu`: committed rows survive a crash-restart, a transaction left open does not, the client's next statement fails instead of hanging, and the rebooted node serves on the same port.
+
+- **`RwLocked` (std/rwlock.nu) in the no-libc runtime and under
+  `--sim`, so nurldb links there** (Agora #286, for DST 4/4 #262).
+  `unikernel/runtime_bare.c` now has the hosted `nurl_rwlock_*` with the
+  hosted semantics. A holder that re-reads a lock it already reads is
+  counted. Asking for a lock its holder already has panics with the same
+  message instead of waiting for itself. The try forms take a lock only
+  when that needs no waiting. On the cooperative scheduler, waiters queue
+  in arrival order and an unlock hands the lock straight to the head of
+  the queue: one writer, or every reader up to the next writer. A reader
+  that arrives while a writer waits queues behind it, so readers cannot
+  starve a writer. The main context waits in the same queue. sched_gate
+  asserts these schedules as traces, plus a deadlock scenario and a
+  three panic-not-deadlock scenarios. Five corpus tests move from
+  NEEDS-BARE to PASS in the no-libc run: `rwlock_basic`,
+  `rwlock_relock_panics`, `block_after_cond`, `block_value_scope` and
+  `drop_guard_field_only`. nurldb's own suites pass on the no-libc
+  runtime: bufpool, conc, wal and db. `conc_test` also passes under
+  `--sim` for every seed tried, each seed with its own schedule and the
+  same seed replaying it byte for byte.
+
+- **http-client and psql speak TLS through any dialer** (Agora #289, after #249 and #250): an `https://` request through `http_client_set_dialer` runs its handshake over the connection the dialer made (HTTP/1.1 there; HTTP/3 is not tried), and psql's SSLRequest and upgrade run over it as over a socket — so both run over a simulated network with TLS, where they refused (`HcTls`, `PgTls`). std/net gains **`tls_attach_conn conn name alpn sess verify deadline`** (the client handshake over any connection, returning its `TlsConn`) and **`tcp_starttls_server conn id alpn`** (the server's side of an in-place upgrade, as PostgreSQL's SSLRequest wants). `compiler/tests/net_sim_clients.nu`: https from http-client to an HttpApp on `netsim_listen_tls`; psql declined (prefer → plaintext, require → `PgTls`) and accepted (a query over TLS) by a PostgreSQL that upgrades in place. The kernel path is unchanged: http-client's https keep-alive, 84.3k client instructions per request before and after.
+
 ### Changed
 
 - **Windows test records keep the program's output order** (Agora #256,
@@ -301,6 +360,56 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   microbenchmark (owned structs, Vecs and Strings in a loop under
   `recover`) runs 4.4 % fewer instructions (229.4 M → 219.2 M).
 
+- **formal: a `% Drop` destructor that reads views is inside the calculus
+  (A2-drop.2, Agora #241).** A2-drop.1 covered destructors of types that
+  hold no views. Now `letd` takes any owned value whose type holds no
+  closure. A binding whose type holds views is armed: its destructor reads
+  those views at its scope's end and on the panic path. #224's rule
+  (`DtorSafe`) keeps what they point into alive on every path where the
+  binding may own its value. A new invariant (`MInv.armed`) keeps the
+  views valid whenever the slot owns a value, and the unwind hands them to
+  the destructor. A binding `letd` made gains no view: assigning to it is
+  refused, as is pushing a view into it or passing it as an `inout`
+  argument. `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
+  `A2.no_leak_panic` are re-proven (`formal/check.sh`, Lean 4.35.0,
+  standard axioms only). `formal/CLAIM.md` no longer lists destructors of
+  view-holding types as outside the proof. What stays is A2-drop.3
+  (Agora #253): a value moved out of its `letd` binding is still released
+  without its destructor in the calculus.
+
+- **stdlib/ext/http_pure.nu's plaintext `HttpConn` is a std/net `TcpConn`** (dialed by a `NetDialer`, `hp_conn_open_with`) instead of a raw runtime socket handle. Measured on http-client keep-alive GETs: callgrind +0.35 % instructions per request, the same syscalls and allocations, wall clock within noise.
+
+- packages/nurldb's checkpointer takes no last checkpoint when its server stops: what is committed is in the log, and recovery replays it.
+
+- **Measured numbers live on the `bench-data` branch, and main moves only
+  through the merge queue** (Agora #290). The nine benchmark and fuzz
+  workflows used to push their reports straight to main: bench, http,
+  http2, http3, pq, tls, wasm, http-torture and fuzz. That was about a dozen
+  commits a day, and each one made the merge queue rebuild and re-run every
+  group in flight. The v0.83.0 release group ran three times, once for a
+  bench commit.
+  - The workflows now publish through `tools/bench_data.sh`. If another
+    publisher pushes first, it replays onto the new tip, and tls-bench
+    renders its per-family index on the branch itself.
+  - Only a run of main's code publishes (bench.yml: also a release tag).
+  - nurl-lang.org's build fetches `bench/results/latest.json` from the
+    branch, and the site is rebuilt whenever the bench workflow completes.
+    That also ends a release tag's deploy publishing the previous release's
+    table.
+  - The reports are gone from main's tree and ignored there. The docs link
+    to them on the branch, and `tools/bench_data.sh fetch PATH` copies one
+    into a checkout.
+
+- **The macOS gate runs on `macos-15`** (Agora #302). GitHub retires the
+  `macos-14` image on 2026-11-02, and its scheduled brownouts were
+  already cancelling the macos-tests runs on `main`. From that date the
+  job, and with it release.yml's `verify-ci`, which waits for a green
+  macos-tests run on the tagged commit, could never have passed. The job
+  is pinned to `macos-15` (Apple Silicon), not `macos-latest`, because
+  the image decides which macOS and which Xcode SDK the gate links
+  against; it still builds with Homebrew LLVM. docs/PLATFORMS.md now
+  names macOS 15 as the tested release.
+
 ### Performance
 
 - **ChaCha20's vector kernels run their quarter-rounds in lockstep**
@@ -513,6 +622,142 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   boundaries and powers of two. ECDH shared 56.7 → 53.8 µs, best of six;
   aws-lc measures 49.6–55.6 µs in the same runs.
 
+- **ChaCha20 runs sixteen blocks a pass on AVX-512 CPUs** (Agora #116).
+  The x86-64-v4 clone of ChaCha20's wide pass (`simd v4`, Agora #227) now
+  starts with a sixteen-block kernel over `v512` lanes: one VPROLD a
+  rotate, and the state held in the 32 zmm registers. It then runs the
+  eight-block pass for a 512-byte tail. The kernel sits behind
+  `nurl_cpu_x86_v4()`, which the other clones fold to 0, so they do not
+  compile it. On a Sapphire Rapids class Xeon, best of seven interleaved
+  runs, 16 KB:
+
+  | | ChaCha20 | ChaCha20-Poly1305 seal |
+  |---|---|---|
+  | eight blocks, v4 clone (Agora #227) | 5.19 µs | 8.34 µs |
+  | sixteen blocks | 3.51 µs | 6.64 µs |
+  | aws-lc | | 9.34 µs |
+
+  A program that imports `chacha20poly1305` builds as fast as before
+  through `nurl.sh` (ThinLTO). Its binary has 2 KB more code.
+
+- **Poly1305 runs eight lanes a pass on AVX-512 CPUs** (Agora #116). The
+  vector Poly1305 is `simd v4`. Its x86-64-v4 clone carries one
+  eight-lane chain over `v512`: H ← (H + M) · r^8 per 128 bytes, then
+  r^8 … r^1 per lane for the last group. That takes half the multiply
+  instructions per block of the four-lane kernel's two chains. The
+  128 bytes are loaded so that each half of a register holds the
+  four-lane kernel's lane order. Its multipliers are then the four-lane
+  table's own sets side by side, so the key's table and the code that
+  builds it are unchanged. A 64-byte tail goes to the scalar blocks.
+
+  On a Sapphire Rapids class Xeon, best of five interleaved runs, against
+  the sixteen-block ChaCha20 above:
+
+  | | 16 KB | 1 KB | 320 B |
+  |---|---|---|---|
+  | Poly1305, four lanes | 2.60 µs | 0.283 µs | 0.180 µs |
+  | Poly1305, eight lanes | 1.97 µs | 0.256 µs | 0.188 µs |
+  | ChaCha20-Poly1305 seal, four lanes | 5.65 µs | 0.617 µs | |
+  | ChaCha20-Poly1305 seal, eight lanes | 5.17 µs | 0.585 µs | |
+
+  `simd_dispatch_ir.sh` checks that the eight-lane pass is zmm VPMULUDQ
+  in the v4 clone only.
+
+- **A program that uses ChaCha20 no longer compiles the big-endian
+  kernel** (Agora #116). The module asked the running machine for its
+  byte order, through memory, so the big-endian reference kernel was
+  compiled into every program and never ran. It now reads lane 0 of the
+  v128 (1, 0, 0, 0) as a 64-bit lane. That is a constant LLVM folds with
+  the target's byte order: 1 on x86-64, AArch64, RISC-V and wasm32, 0 on
+  ppc64 and s390x (checked through clang). The kernel stays the reference
+  `chacha20_simd_agree` checks the vector paths against. With both
+  changes, a small program importing `chacha20poly1305` takes 1.59 s of
+  build CPU instead of 1.80 s (`nurl.sh -O2`, no cache, best of eleven),
+  and its binary is 70 KB of code instead of 79 KB. Its wall time is
+  within its run-to-run noise.
+
+- **Off x86-64, nurlc compiles `nurl_cpu_x86_v3()` and
+  `nurl_cpu_x86_v4()` as the 0 they answer there** (Agora #116). This
+  covers AArch64, RISC-V and other `--target=` builds. A body that picks
+  its path on them keeps only the portable one. ChaCha20's wide pass in
+  an AArch64 module no longer carries its sixteen- and eight-block x86
+  loops: the function is 3.1 KB instead of 5.5 KB. An x86-64 module built
+  with `--no-cpu-dispatch` still asks the CPU.
+
+- **X25519 key generation is 10 % faster** (Agora #233). The fixed-base
+  walk reads the clamped scalar as 52 signed radix-32 digits instead of
+  ref10's 64 radix-16 ones: 52 mixed additions and five doublings
+  instead of 64 and four. Each digit picks from a row of sixteen
+  entries, j·1024^k·B, instead of eight. The constant-time scan of a row
+  now reads it 32 bytes at a time in an x86-64-v3 clone of the scan
+  alone (`__xe_pick_w` is `simd`, the walk is not), so the scan of twice
+  the entries hides behind the additions' multiply chain as the old one
+  did. On a Sapphire Rapids class Xeon, best of eight interleaved runs:
+  11.65 → 10.44 µs; a Tiger Lake i7-11850H, 7.72 → 7.10 µs. Shared
+  secrets (the ladder) are unchanged. Compile time and code size are
+  unchanged: only the scan is cloned, not the walk's field arithmetic.
+  **Memory:** the table, built once per process and only in a program
+  that generates X25519 keys, grows by 15 KB, from 24 to 39 KB. It no
+  longer stays in L1d: on Tiger Lake (48 KB L1d) a keygen misses L1d
+  about 243 times instead of 5, about 240 L2 hits or 1.2k cycles. That
+  is inside the measured gain: cycles −10 %, instructions −12 %.
+  `x25519_base_agree` adds the radix-32 recoding's edge scalars.
+
+- **A split build waits on no oversized part** (Agora #235).
+  `nurlc --split` cut the function sequence into runs with a fixed
+  target, sized from bytes every part repeats anyway (module scope and
+  `linkonce_odr` bodies). A run closed only after a function had crossed
+  the target, so the first parts kept their overshoot and the last ones
+  got what was left. Split 12 ways, the compiler's own module had one
+  part of 2.99 MB, holding the 1 MB `gen_call`, and two of 0.64 and
+  0.26 MB. The step waited on the large part.
+
+  The target is now the bytes the parts actually share out, recomputed
+  as each part opens: what is left over the parts left. A run closes
+  before a function when taking it would overshoot more than stopping
+  short does. A part that would define nothing is not written: its
+  `clang` process helped nothing. The runs stay contiguous in emission
+  order.
+
+  The compiler, 12 ways: parts 1.73–2.08 MB, against 0.26–2.99 MB. The
+  slowest part's `clang -O2 -flto=thin -c` takes 1.43 s instead of
+  2.04 s, and total CPU is unchanged. `nurl.sh -O2 compiler/nurlc.nu`
+  (split 12, no cache, 4 cores) takes 21.6–23.4 s instead of
+  24.3–26.2 s. The built programs are not slower: the compiler's own
+  output and speed are unchanged, and ML-DSA's vectors split 12 ways run
+  267 M instructions instead of 297 M.
+  `compiler/tests/split_equivalence.sh` now checks that every part
+  defines a function of its own, and that no part of the compiler holds
+  more than 1.25× the mean unless one function alone is that big.
+
+- **ML-KEM and ML-DSA run their four-way Keccak on AVX-512** (Agora
+  #281). `__kf1600x4`, the permutation behind every four-way
+  SHAKE128/256 (ML-KEM's matrix and noise, ML-DSA's expansion), is
+  `simd v4`. Its x86-64-v4 clone rotates with VPROLQ and folds chi's and
+  theta's three-input logic into VPTERNLOGQ, where the AVX2 clone spends
+  three instructions per 64-bit rotate. Nine four-way permutations take
+  3.4 µs instead of 5.5 µs on a Sapphire Rapids class Xeon. ML-KEM-768
+  encaps is 4.5–7 % faster, decaps 3–7 % and keygen 4–5 %, and ML-DSA-65
+  sign 6 % (verify and keygen unchanged). AVX2-only CPUs run the same
+  code as before.
+
+  The cost is a third clone of the permutation. A program that imports
+  `std/mlkem.nu` or `std/mldsa.nu` takes 0.5–2 % more build CPU (median,
+  `nurl.sh -O2`, no cache). Agora #287 pays it back by taking the
+  SSE2-legalised kernel out of the baseline clone.
+
+- **ML-KEM's noise is one Keccak permutation per four polynomials**
+  (Agora #281). PRF_η(s, N) is SHAKE256 of 33 bytes into 64·η. For
+  η = 2, every ML-KEM-768 and -1024 stream, that fits one rate block,
+  so a group of four now runs through `shake256x4_block` on buffers made
+  once per batch. Before, each group built a four-way sponge object, its
+  two lane vectors and four nonce vectors. Encaps and decaps are about
+  2 % faster, with fewer allocations.
+
+  Together, on the Sapphire Rapids class host: ML-KEM-768 encaps
+  17.4 → 15.9 µs (median of interleaved runs; aws-lc 16.2 µs in the same
+  runs).
+
 ### Fixed
 
 - **An accept already ready when its park takes hold runs next** (Agora
@@ -694,6 +939,110 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
   with trait-object parameters now get the same arity and argument-type
   checks as every other call.
 
+- **A field viewer of a vector element ends when the vector's elements are dropped** (Agora #267). `: S e ( vec_at [S] vs 0 )`, `: String f . e name`, then `( vec_clear [S] vs )` and a read of `f` was accepted and read freed memory: every field viewer survived elements changing, including one whose handle was the dropped element's. It is a compile error now, as a read of `e` already was.
+- **A borrow that is a copy of a binding's own value survives elements changing behind it** (Agora #118). `: LogBuf b ( wguard_get [LogBuf] g )`, `: ( Vec u ) buf . b buf`, a push through `buf`, then a read of `. b start` was refused ("'b' borrows from 'g', which ended"), though only the bytes behind `buf`'s handle changed. So was a copy an identity call hands back (`: ( Vec String ) h ( id vs )`) when the vector was cleared through another such copy. Each borrow now records what its bytes are a copy of. A copy of a binding's own value, or of the value the change went through, reads what it did. What was read out of the elements ends with them.
+
+- **A split build finds its parts by index, so it can no longer lose one
+  on FreeBSD** (Agora #234). `nurl.sh` and `split_equivalence.sh` listed
+  the parts of a `--split` build with a glob (`PREFIX.[0-9]*.ll`), which
+  reads the directory. While other files were created beside them (a
+  parallel build, or clang's temp files), FreeBSD's UFS could move
+  directory entries under a readdir in progress, and the glob skipped a
+  part that existed the whole time. That part's code was then missing
+  from the binary ("undefined symbol: main"), five times in CI on
+  2026-10-31. Parts are now taken by index, 0 to N−1, in the order nurlc
+  writes them, and stale parts are removed by name for every index nurlc
+  can write (0–63).
+
+- **A view stored through an `inout` argument or by a closure is tracked**
+  (Agora #259, probes view_into_* and drop_holder_*_inout* /
+  drop_holder_closure*). A callee that assigned its whole `inout`
+  parameter a literal holding a view parameter (`= w @ V { v }` as its
+  last statement), stored the view into a field of an `inout` struct of
+  views, or took that struct at any argument position, left the caller
+  unaware that its argument now viewed what it passed. So did a closure
+  giving one capture a view of another (`= w @ V { ( string_data b ) }`).
+  When the view's source ended, the argument or capture was still read:
+  heap-use-after-free with no `% Drop` and no panic. These are now
+  dependencies where the call or the closure runs, and a `% Drop` holder
+  gaining a younger view that way is refused as #254 refuses it.
+
+- **A field replaced under a binding read out of it hands that binding
+  its old value, whatever the struct holds** (Agora #265, probes
+  field_replaced_*). `: Inner got . o cur` then `= . o cur …` gives
+  `got` the value the field held, decided by comparing the two values'
+  identity. That identity was the struct's FIRST handle field only, and
+  an `Arc` has none: with an `Arc` first (or only), the old value was
+  dropped under `got`, a heap-use-after-free in safe code. A struct is now
+  identified by its first field that has an identity, and an `Arc`-only
+  struct by its `Arc`'s control block. A binding that took the old value
+  over owns it, and whatever takes the binding on — a literal, an option,
+  a push, a `sink`, the return — moves it. Before, a literal or a return
+  copied it and leaked the original, a push left the binding still
+  dropping what the Vec held, and a literal or a `sink` emptied the
+  field's new value instead.
+
+- **A binding re-bound from a field reader is that field's reader too**
+  (Agora #268, probes field_reader_* and
+  sink_param_field_reader_rebound_returned_in_a_result). A binding read
+  out of a field of a struct the function owns (`: R a . col res`) takes
+  the field out of the struct when it is returned or put in a literal.
+  Re-bound first (`: R b a`, or `= b a`), the new binding was a cursor
+  over `a`, which owns nothing to hand over: returned, bare or inside a
+  result or an option, the struct then dropped the field under the
+  caller (heap-use-after-free in safe code). The re-bound binding now
+  reads the same field and takes it out as `a` would.
+
+- **A struct holding an `Arc` or a `Box` of plain values is no
+  view-holder** (Agora #269, probes arc_field_returned_in_an_option,
+  arc_field_of_a_sink_param_returned_in_an_option,
+  box_field_returned_in_an_option). The borrow checker took every
+  library handle for one that may hold views, so a struct with an
+  `( Arc i )` field was tracked as holding views of what it was built
+  from. Read out of the field, bound and returned inside an option
+  (`: ( Arc i ) x . col a  ^ @ ?( Arc i ) { T x }`), it was refused as
+  "this returns a view of 'col'", although the same shape with a `Vec`,
+  or `^ x` bare, was accepted. A handle now holds views exactly when its
+  type arguments can, as the checker already asked for a call's result.
+  An Arc whose payload holds a view is still refused.
+
+- **A block whose tail is an owner already moved is refused** (Agora #274). `( consume a )` followed by `: String u ? c { … a } { b }`, by the same block as a `??` arm, or by `: String u { … a }` handed the freed `a` on and read it: a value block's tail reached no row the borrow checker looked at. The tail is now read where its block ends, from that block's own path, so a tail that only one path moved stays fine.
+
+- **A payload lent out of a local Vec is copied when it is handed back,
+  however it was matched** (Agora #279, probes
+  enum_payload_lent_out_of_a_local_vec_*, option_bound_from_a_local_vec_get_*,
+  enum_payload_of_a_bound_*). `?? ( vec_get [T] xs 0 ) { T e → ^ e }`,
+  with `xs` a local, copies `e` because the Vec is dropped on the way out.
+  Bound first (`: ?String o ( vec_get … )  ?? o { T e → ^ e }`), or one
+  match deeper (`T m → ?? m { MSome v → ^ v }`), the payload was lent out
+  of the frame instead: a heap-use-after-free in safe code. A payload
+  under an option bound from a call that hands it over was taken from the
+  match's copy only, and the option still dropped it. Both now follow the
+  call the value came out of.
+
+- **An `inout` `% Drop` holder may not view a callee's local, even for a
+  moment** (Agora #284, probes drop_holder_inout_param_given_*). A
+  function handed the caller's view-reading `% Drop` value by `inout`
+  could point it at a local of its own, point it back before returning,
+  and panic in between. The unwind freed the local, then the holder's
+  destructor read it: a heap-use-after-free in safe code. The check for
+  the end state ("an inout parameter keeps no view of a local") never
+  saw it. Such a parameter is now a holder older than every local of the
+  function, and #254's rule refuses it where it gains the view.
+
+- **The PowerShell runner controls no longer abort part-way through
+  a CI run** (Agora #298). `tools/tests/test_compiler_runners.py` ran every
+  pwsh with the job's own `~/.cache`, where pwsh keeps a startup profile
+  (`powershell/StartupProfileData-NonInteractive`) that it reads when it
+  starts and rewrites when it exits. Two pwsh processes exiting at once
+  can leave that file torn (PowerShell/PowerShell#26528). In the failing
+  run, every pwsh start after the control that runs two runners at once
+  aborted with "The given assembly name was invalid": six controls failed,
+  and the ones that expect a failure passed on the abort alone.
+  Each test now has a cache of its own (`XDG_CACHE_HOME` under its
+  temporary root), and each of the two concurrent runners has its own as
+  well, so the controls are hermetic and leave the user's cache alone.
+
 ### Security
 
 - **The JavaScript dependency audit is green again: no package pulls a
@@ -712,22 +1061,22 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Known issues
 
-- **Ten soundness holes are open, each with a fix in progress**:
-  agora #242 (a join or value block bound by `:` and handed on by name,
-  in nine remaining shapes), #259 (a view gained through an `inout`
-  callee or a closure's assignment of a capture), #265 (a struct field
-  bound to a local, then the field replaced), #267 (a field read out of
-  an element borrow outlives the elements' drop), #268 (a field reader
-  re-bound, then handed back), #274 (a block arm of a join whose tail
-  names an owner already moved), #279 (an enum payload lent by `vec_get`
-  out of a local Vec, handed back from a nested match), #280 (a Vec or
-  String field handed to a `sink` stays usable), #284 (an `inout` callee
-  points the caller's `% Drop` holder at its own local, then panics) and
-  #288 (a handle parameter not declared `sink`, handed back inside a
-  result literal, leaks). `docs/LIMITATIONS.md` gives each one's shape
-  and how to stay clear of it. Closed in this release: agora #224, #229,
-  #245, #247, #252, #254, #257 and #264, and the common shapes of #242.
-  A release does not say "no hole is known open" while one is.
+- **Eight soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a Vec or String field handed to a
+  `sink` stays usable), #288 (a handle parameter not declared `sink`,
+  handed back inside a result literal from a `^ ?? r { … }`, leaks when
+  the caller passes a temporary), #292 (a view pushed into a vector
+  through a borrow of it is not recorded on the owner), #293 (an owner's
+  buffer moved through a copy of its handle leaves a slice of it live),
+  #294 (a struct built from an owner and a view of it views its own
+  buffer), #300 (an element lent out of a local Vec, handed back through
+  a binding) and #301 (a view of a String parameter's buffer stored
+  through an `inout` argument). `docs/LIMITATIONS.md` gives each one's
+  shape and how to stay clear of it. Closed in this release: agora #224,
+  #229, #245, #247, #252, #254, #257, #259, #264, #265, #267, #268,
+  #274, #279 and #284, and the common shapes of #242. A release does not
+  say "no hole is known open" while one is.
 
 ## [0.82.0] — 2026-10-31
 
