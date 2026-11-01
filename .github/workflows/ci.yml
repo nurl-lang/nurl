@@ -1048,10 +1048,21 @@ jobs:
           if [ "$CODE" = true ]; then [ "$CORPUS" = success ]; else [ "$CORPUS" = skipped ]; fi
 
   unikernel-nolibc:
-    name: "unikernel: the corpus with no libc"
+    name: "unikernel: the corpus with no libc (shard ${{ matrix.shard }}/2)"
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
+    # Two round-robin shards of the corpus (NOLIBC_SHARD, as the sanitizer
+    # corpus has). One job took 18.6 min against a 20 min limit, the
+    # longest path of the merge queue. Under load it ran past the limit
+    # and was cancelled in every group of 2026-11-01's queue, where a
+    # cancelled non-required job blocks nothing and so went unseen.
+    # Halved, each shard has room, and the queue's critical path is
+    # shorter. The unit gates run once, in shard 1.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     timeout-minutes: 20
     container:
       image: nurllang/ci:ubuntu24-20260821
@@ -1091,9 +1102,12 @@ jobs:
         # produces. NEEDS-* columns are not failures — they are work
         # that has not been done or, for the third-party libraries a
         # unikernel never links, work that never will be.
+        env:
+          NOLIBC_SHARD: ${{ matrix.shard }}/2
         run: ./unikernel/run_nolibc_tests.sh
 
       - name: Fetch cloud-hypervisor (the other PVH loader)
+        if: matrix.shard == 1
         # 4.5 MB static binary, fetched BEFORE the unit gates because
         # one of them (hypervisor_gate) uses it. It boots the SAME
         # artifact QEMU does — both read the PVH note — so this is the
@@ -1114,6 +1128,7 @@ jobs:
           ls -l /dev/kvm 2>/dev/null || echo "no /dev/kvm on this runner"
 
       - name: nolibc + runtime_bare unit gates
+        if: matrix.shard == 1
         run: ./unikernel/tests/run_unit_tests.sh
 
   unikernel-qemu:

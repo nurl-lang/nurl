@@ -38,6 +38,7 @@
 #
 #  Usage:  unikernel/run_nolibc_tests.sh [name …]      (default: all)
 #          NOLIBC_JOBS=N to parallelise
+#          NOLIBC_SHARD=i/n to run the i-th of n round-robin shards
 # ============================================================
 set -uo pipefail
 
@@ -59,6 +60,27 @@ names=("$@")
 if [ ${#names[@]} -eq 0 ]; then
     while IFS= read -r f; do names+=("$(basename "${f%.nu}")"); done \
         < <(find "$TESTS" -maxdepth 1 -name '*.nu' | sort)
+fi
+
+# Optional sharding, so CI can spread the corpus over several runners,
+# as run_san_tests.sh does: NOLIBC_SHARD=i/n (1 <= i <= n) keeps every
+# n-th test of the sorted list, starting at the i-th. Round-robin over
+# sorted names keeps the shards close in cost, and the n shards together
+# are exactly the unsharded set.
+if [ -n "${NOLIBC_SHARD:-}" ]; then
+    if [[ ! "$NOLIBC_SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] \
+        || (( BASH_REMATCH[2] < 1 || BASH_REMATCH[1] < 1 || BASH_REMATCH[1] > BASH_REMATCH[2] )); then
+        echo "NOLIBC_SHARD must be i/n with 1 <= i <= n (got '$NOLIBC_SHARD')" >&2; exit 2
+    fi
+    shard_i=${BASH_REMATCH[1]}; shard_n=${BASH_REMATCH[2]}
+    IFS=$'\n' names=($(printf '%s\n' "${names[@]}" | LC_ALL=C sort)); unset IFS
+    sharded=()
+    for idx in "${!names[@]}"; do
+        (( idx % shard_n == shard_i - 1 )) && sharded+=("${names[$idx]}")
+    done
+    (( ${#sharded[@]} > 0 )) || { echo "shard $NOLIBC_SHARD selects no tests" >&2; exit 2; }
+    echo "Shard $shard_i/$shard_n: ${#sharded[@]} of ${#names[@]} tests"
+    names=("${sharded[@]}")
 fi
 
 one() {
