@@ -4101,6 +4101,39 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     ^ r
 }
 
+// The drop flag of the binding a `??` payload's value is read out of — the
+// matched binding, through payloads of payloads (`__plend`) — as an i1
+// register: the first on the way that has one. `` when none has: a call's
+// result, or a binding that owns its value on every path.
+@ __payload_owner_flag i syms i cg s name → s {
+    : ~ s cur ( nurl_str_cat name `` )
+    : ~ i hops 0
+    ~ < hops 6 {
+        : s up ( nurl_sym_get2 syms cur `__plend` )
+        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { ^ ( nurl_str_cat `` `` ) } {}
+        : s uptr ( mem_udrop_ptr_of syms up )
+        ? & != 0 ( nurl_str_len uptr ) != 0 ( nurl_sym_len2 syms uptr `__live` ) { ^ ( mem_udrop_flag_get syms cg uptr ) } {}
+        = cur ( nurl_str_cat up `` )
+        = hops + hops 1
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Does `^ name` copy its value wherever `name` owns nothing (gen_ret's
+// borrowed-binding rule: a binding with an owner slot of its own, not a
+// parameter's, an option parameter's or a cursor's, whose `__sborrow` is
+// none, `local` or `dyn`, of a type that can be copied)? What it hands
+// back is then its own value or a copy, never a lend of what its value
+// came out of, so it records none (agora #335).
+@ __ret_copies_unowned i syms s name s rty → b {
+    : s rup ( mem_udrop_ptr_of syms name )
+    ? == 0 ( nurl_str_len rup ) { ^ F } {}
+    ? | | != 0 ( nurl_sym_len2 syms rup `__pname` ) != 0 ( nurl_sym_len2 syms rup `__optparam` ) != 0 ( nurl_sym_len2 syms rup `__alias` ) { ^ F } {}
+    ? ! ( __clone_supported rty syms ) { ^ F } {}
+    : s rsb ( nurl_sym_get2 syms rup `__sborrow` )
+    ^ | | == 0 ( nurl_str_len rsb ) ( seq rsb `local` ) ( seq rsb `dyn` )
+}
+
 // …for every (call, roots) pair a binding's value may be a lend of (`__pljk`
 // / `__pljr`, one a line: mem_note_bound_lend).
 @ mem_ret_param_lend_via_all i syms s name → v {
@@ -5440,10 +5473,13 @@ unsafe @ gen_ret i lex i syms i cg → s {
     // its value has an owner slot and leaves as one: agora #209.)
     ? & ( is_ident_tok ret_first_tt ) ! ret_field_copy {
         ? != 0 ( nurl_sym_len2 syms ret_first_val `__pljk` ) {
-            ( mem_ret_param_lend_via_all syms ret_first_val )
+            // (What its value may be a lend of comes back lent only where it
+            // can leave uncopied: not through the borrowed-binding rule below,
+            // which copies it wherever it owns nothing — agora #335.)
+            ? ! ( __ret_copies_unowned syms ret_first_val ( nurl_get_last_type ) ) { ( mem_ret_param_lend_via_all syms ret_first_val ) } {}
             // (A `vec_get` element has an owner slot when it cannot be
             // copied, #203 — flag 0: the Vec owns it until it is taken.)
-            ? | == 0 ( nurl_str_len ( mem_udrop_ptr_of syms ret_first_val ) ) != 0 ( nurl_sym_len2 syms ret_first_val `__vget` ) {
+            ? | == 0 ( nurl_str_len ( mem_udrop_ptr_of syms ret_first_val ) ) ( __vget_live syms ret_first_val ) {
                 : ~ s __pll ( mem_payload_local_lend syms cg ret_first_val )
                 // (Not where it was taken out of its enum above: owned there.)
                 ? & != 0 ( nurl_str_len __pll ) != 0 ( nurl_str_len ret_pl_taken ) {
@@ -5453,12 +5489,21 @@ unsafe @ gen_ret i lex i syms i cg → s {
                     ( nurl_print `  ` ) ( nurl_print __pl2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __pll ) ( nurl_print `, ` ) ( nurl_print __ptn ) ( nurl_print `\n` )
                     = __pll __pl2
                 } {}
+                // (…and only where the binding the payload is read out of owns
+                // nothing on this path. A `: ~` binding given an owned value
+                // on some paths moves that value out as it is: copied there,
+                // the original was freed by no one, its flag cleared by the
+                // move — agora #335.)
+                ? != 0 ( nurl_str_len __pll ) {
+                    : s __pof ( __payload_owner_flag syms cg ret_first_val )
+                    ? != 0 ( nurl_str_len __pof ) { = __pll ( __and_not cg __pll __pof ) } {}
+                } {}
                 ? != 0 ( nurl_str_len __pll ) {
                     : s __plt ( nurl_get_last_type )
                     // (A `vec_get` element of a Vec this frame drops is taken
                     // out of its slot rather than copied: no allocation, and
                     // a value that cannot be copied leaves too.)
-                    : b __plv != 0 ( nurl_sym_len2 syms ret_first_val `__vget` )
+                    : b __plv ( __vget_live syms ret_first_val )
                     ? | __plv ( __clone_supported __plt syms ) {
                         ? __plv { ( mem_vget_consume syms cg ret_first_val __pll ) } { = val ( mem_emit_cloneif cg __plt val __pll ) }
                         : s __plo ( nurl_cg_reg cg )
@@ -5486,8 +5531,15 @@ unsafe @ gen_ret i lex i syms i cg → s {
                         : s __sf ( mem_udrop_flag_get syms cg __pup )
                         : s __snf ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __snf ) ( nurl_print ` = xor i1 ` ) ( nurl_print __sf ) ( nurl_print `, 1\n` )
-                        : s __sc ( nurl_cg_reg cg )
+                        : ~ s __sc ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __sc ) ( nurl_print ` = and i1 ` ) ( nurl_print __sll ) ( nurl_print `, ` ) ( nurl_print __snf ) ( nurl_print `\n` )
+                        // (…nor the binding a payload is read out of, which
+                        // owns it on the paths it was given an owned value:
+                        // the payload's own flag says lent wherever its match
+                        // was over a lend, and a copy there left the original
+                        // freed by no one — agora #335.)
+                        : s __sof ( __payload_owner_flag syms cg ret_first_val )
+                        ? != 0 ( nurl_str_len __sof ) { = __sc ( __and_not cg __sc __sof ) } {}
                         = val ( mem_emit_cloneif cg __slt val __sc )
                         = ret_pl_copied T
                         = ret_pl_own __sc
@@ -16487,7 +16539,7 @@ unsafe @ gen_call i lex i syms i cg → s {
         // at that moment (the buffer may have moved since the vec_get).
         // A callee that STORES the borrowed payload is handed a copy instead
         // (below): then the slot keeps its value.
-        ? & & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_sym_len2 syms bck_arg_val `__vget` ) ( __type_needs_drop at g_root_syms ) {
+        ? & & ( is_ident_tok bck_arg_tt ) ( __vget_live syms bck_arg_val ) ( __type_needs_drop at g_root_syms ) {
             : b __vg_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
             // (A value the callee only keeps in memory it manages by hand
             // stays in its slot: consume_flag.)
@@ -16610,7 +16662,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 } {}
             } {}
             // (…and in an `inout` parameter, the caller's own struct.)
-            ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
+            ? ? fr_h | | | ( nurl_sym_has_word syms `__user_drops__` fr_ptr ) ( __vget_live syms fr_ptr ) fr_glue ( __is_inout_ptr syms fr_ptr ) F {
                 : b fr_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
                 : ~ s zc ( nurl_str_cat `1` `` )
                 ? ! fr_decl {
@@ -16647,7 +16699,7 @@ unsafe @ gen_call i lex i syms i cg → s {
                 } {}
                 // …and in the Vec slot it was read from (`?? ( vec_get v k ) {
                 // T p → ( string_free . p key ) }`), which still holds it.
-                ? != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty zc ) } {}
+                ? ( __vget_live syms fr_ptr ) { ( mem_vget_field_consume syms cg fr_ptr fr_sty fr_idx fr_fty zc ) } {}
                 // …and where a copy read through a pointer came from.
                 ? != 0 ( nurl_sym_len2 syms fr_ptr `__eaddr` ) {
                     : s ea_fp ( nurl_cg_reg cg )
@@ -20644,7 +20696,9 @@ unsafe @ gen_match i lex i syms i cg → s {
                 // A payload of a `vec_get` result reads that Vec slot.
                 ? & pt0_is_opt_bool != 0 ( nurl_sym_len2 syms match_var_name `__vget` )
                 { ( nurl_sym_def syms ( nurl_str_cat pv0 `__vget` ) ( nurl_sym_get2 syms match_var_name `__vget` ) )
-                    ( nurl_sym_def syms ( nurl_str_cat vp0 `__vget` ) ( nurl_sym_get2 syms match_var_name `__vget` ) ) } {}
+                    ( nurl_sym_def syms ( nurl_str_cat vp0 `__vget` ) ( nurl_sym_get2 syms match_var_name `__vget` ) )
+                    ( nurl_sym_def syms ( nurl_str_cat pv0 `__vgetl` ) ( nurl_sym_get2 syms match_var_name `__vgetl` ) )
+                    ( nurl_sym_def syms ( nurl_str_cat vp0 `__vgetl` ) ( nurl_sym_get2 syms match_var_name `__vgetl` ) ) } {}
                 // Phase 2D: a match-arm payload binding OWNS its value just
                 // like a `:` let, so a `% Drop` impl on the payload type must
                 // fire at arm scope exit. Register it here (mirrors gen_let's
@@ -20672,7 +20726,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                         : b __m_slt ( __match_scrut_lent syms match_first_tt match_var_name match_scrut_field )
                         ? | __m_call_lent __m_slt {
                             ( mem_udrop_flag_set syms cg vp0 `0` )
-                            ? | __m_slt == 0 ( nurl_sym_len2 syms match_var_name `__vget` )
+                            ? | __m_slt ! ( __vget_live syms match_var_name )
                             { ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` ) } {}
                         } {}
                         // …and of a call's option: owned exactly when the call
@@ -23856,10 +23910,30 @@ unsafe @ mem_path_to_indices s path → s {
     ( nurl_sym_def syms `__last_vec_get__` ( nurl_str_cat4 c ` ` idx ( nurl_str_cat ` ` ( nurl_llty ( __vec_elem_llvm vty ) ) ) ) )
 }
 
-// A binding of that call's result carries the slot (`: ?T got ( vec_get … )`).
+// A binding of that call's result carries the slot (`: ?T got ( vec_get … )`),
+// and where it was bound: the loops open around it and the binding itself
+// (`__vgetl`, __vget_live; a `??` payload of it inherits both).
 @ mem_note_vget_binding i syms s name i rhs_tt → v {
-    ? & == rhs_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_vec_get__` )
-    { ( nurl_sym_def syms ( nurl_str_cat name `__vget` ) ( nurl_sym_get syms `__last_vec_get__` ) ) } {}
+    ? & == rhs_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_vec_get__` ) {
+        ( nurl_sym_def syms ( nurl_str_cat name `__vget` ) ( nurl_sym_get syms `__last_vec_get__` ) )
+        ( nurl_sym_def syms ( nurl_str_cat name `__vgetl` ) ( nurl_str_cat3 ( nurl_str_int g_loop_nest ) ` ` name ) )
+    } {}
+}
+
+// Does `name`'s `vec_get` slot (`__vget`) still name what it holds, so a
+// take through it may empty the slot? An `=` to the binding it came from
+// ends the slot for the code after it (h4, mem_note_assign_lend), but not
+// on a loop's back edge: a mutable binding bound outside a loop around
+// this use may have been re-pointed by an `=` later in that loop's body,
+// and the slot is then another Vec's. The take would empty the old Vec's
+// slot and hand out the new value as owned (agora #335). A use there is
+// copied, or refused where it cannot be copied, as a lent value is.
+@ __vget_live i syms s name → b {
+    ? == 0 ( nurl_sym_len2 syms name `__vget` ) { ^ F } {}
+    : s l ( nurl_sym_get2 syms name `__vgetl` )
+    ? == 0 ( nurl_str_len l ) { ^ T } {}
+    ? <= g_loop_nest ( nurl_str_to_int ( str_first_word l ) ) { ^ T } {}
+    ^ == 0 ( nurl_sym_len2 syms ( str_first_word ( str_skip_word l ) ) `__mutable` )
 }
 
 // `name` (a vec_get payload) was handed to a consumer: empty its slot when
@@ -40538,7 +40612,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // is taken out of its slot as a consumer argument takes it
         // (mem_vget_consume): left there, its Vec dropped it under the
         // literal (agora #204). (One that can be copied is copied.)
-        ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy != 0 ( nurl_sym_len2 syms fld_first_val `__vget` )
+        ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ( __vget_live syms fld_first_val )
         ( __nc_held_ty ( nurl_sym_get syms fld_first_val ) ) {
             ( mem_vget_consume syms cg fld_first_val `1` )
             = fld_lent ``
@@ -40926,7 +41000,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len __fpl ) {
                     // (A `vec_get` element of a Vec this frame drops is taken
                     // out of its slot, as `^ e` takes it.)
-                    ? != 0 ( nurl_sym_len2 syms fld_first_val `__vget` ) { ( mem_vget_consume syms cg fld_first_val __fpl ) } {
+                    ? ( __vget_live syms fld_first_val ) { ( mem_vget_consume syms cg fld_first_val __fpl ) } {
                         = fval ( mem_emit_cloneif cg fty fval __fpl ) }
                     = fld_lent ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print fld_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __fpl ) ( nurl_print `, 1\n` )
