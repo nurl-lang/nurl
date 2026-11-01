@@ -320,6 +320,51 @@ else
     echo "ok   a write that falls short fails the compile (split and stdout)"
 fi
 
+# The cut itself (#235). Every part defines a function of its own — a part
+# that only repeats declarations and module scope costs a clang process
+# and helps nothing — and the compiler's parts are balanced: none holds
+# more than 1.25× the mean of the function bytes the parts own, unless
+# one function on its own is that big. (The cut used to close a run only
+# after a function crossed a target sized from bytes every part repeats:
+# 12 ways, one part was 1.5× the mean and the last two nearly empty.)
+own_bytes() {  # own_bytes <part.ll>: bytes of the functions it defines alone
+    awk '/^define / && !/^define linkonce_odr/ {p=1} p {b += length($0) + 1} /^}/ {p=0} END {print b + 0}' "$1"
+}
+big_fn() {  # big_fn <part.ll>: bytes of its largest such function
+    awk '/^define / && !/^define linkonce_odr/ {p=1; c=0} p {c += length($0) + 1} /^}/ {if (p && c > m) m = c; p=0} END {print m + 0}' "$1"
+}
+empty=""
+for src in "${PROGRAMS[@]}" compiler/nurlc.nu; do
+    name="$(basename "$src" .nu)"
+    for p in "$WORK/$name.split".[0-9]*.ll; do
+        [[ -f "$p" ]] || continue
+        (( $(own_bytes "$p") > 0 )) || empty="$empty ${name}:$(basename "$p")"
+    done
+done
+if [[ -n "$empty" ]]; then
+    echo "FAIL parts that define nothing:$empty"
+    fails=$((fails + 1))
+else
+    echo "ok   every part of every split defines a function of its own"
+fi
+sizes=() total=0 nparts=0
+for p in "$WORK/nurlc.split".[0-9]*.ll; do
+    b=$(own_bytes "$p"); sizes+=("$b:$(big_fn "$p")"); total=$((total + b)); nparts=$((nparts + 1))
+done
+if (( nparts > 0 )); then
+    mean=$((total / nparts)) over=""
+    for e in "${sizes[@]}"; do
+        b=${e%%:*} f=${e##*:}
+        (( b * 4 > mean * 5 && f * 4 <= mean * 5 )) && over="$over $b"
+    done
+    if [[ -n "$over" ]]; then
+        echo "FAIL the compiler's $nparts parts are unbalanced: mean $mean bytes, over 1.25x:$over"
+        fails=$((fails + 1))
+    else
+        echo "ok   the compiler's $nparts parts are balanced (mean $mean bytes, none over 1.25x)"
+    fi
+fi
+
 if (( fails )); then
     echo "FAIL split_equivalence — $fails failure(s)"
     exit 1

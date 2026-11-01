@@ -22216,6 +22216,12 @@ unsafe @ __blk_leave b val → v {
     } {}
     : i __rb_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
+    // (A value block whose tail is a binding reads it where the block
+    // ends, as a `?` arm's edge row does: its statement's reads are gone by
+    // now, and the walk checks this one against the block's own state —
+    // a binding its path already moved is a use after move, not a value
+    // to hand on. Agora #274.)
+    ? & & & blk_val any == 0 g_did_ret ( is_ident_tok __tail_tt ) { ( bck_note_read __tail_tv ) } {}
     ( bck_block_exit __rb_line )
     // Exits the tail statement handed up. An arm body leaves them to its
     // `?`/`??`; a bare block that is itself a block's tail hands them on;
@@ -31213,7 +31219,16 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                         // before its locals leave scope, as fn_cleanup does: a
                         // value they read or release is still tracked.
                         // Replayed once — a site's flag clears.)
-                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers ( bck_walk_seq + p 1 eb st ) ) ( bck_walk_seq + p 1 eb st ) ( bck_field_int ( bck_rec eb ) 3 ) )
+                        : s bwalk ( bck_walk_seq + p 1 eb st )
+                        // (A value block whose tail is a binding reads it on its
+                        // `endblock` row, which the block's walk does not visit:
+                        // read here, from the block's own state, before its scope
+                        // closes and a body's defers run — gen_block_expr, #274.)
+                        ? & ( bck_row_reads_any eb ) ! ( seq bwalk `!` ) {
+                            : s ebrec ( bck_rec eb )
+                            ( bck_check_moved_reads ( bck_field ebrec 2 ) ( bck_field_int ebrec 3 ) bwalk )
+                        } {}
+                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk ) bwalk ( bck_field_int ( bck_rec eb ) 3 ) )
                     }
                     = g_bck_sc_n - g_bck_sc_n 1
                 }
@@ -69278,6 +69293,41 @@ unsafe @ __sp_rep_masks i n → v {
     }
 }
 
+// A part's share: `rem` bytes still to place, the `extra` the last part
+// also holds, over the `parts` left (at least one byte, so a run takes
+// its first function).
+@ __sp_target i rem i extra i parts → i {
+    ? < parts 1 { ^ + rem extra } {}
+    : i t / + rem extra parts
+    ^ ? > t 1 t 1
+}
+
+// Drop the parts that define nothing: the runs filled parts 0 … `last`,
+// and the group, if any (`pinned` bytes), is in `simd_part`. A part
+// without a function of its own would still cost a clang process and
+// help nothing, so the group's part moves down to follow the runs and
+// g_split_n shrinks to the parts in use — renumbering g_split_part's
+// markers for "dropped" (g_split_n) and "every part" (g_split_n + 1)
+// with it.
+unsafe @ __sp_compact i n i last i simd_part i pinned → v {
+    : i old g_split_n
+    : i grp ? & > pinned 0 > simd_part last + last 1 -1
+    : i want ? >= grp 0 + grp 1 + last 1
+    ? >= want old { ^ v } {}
+    : ~ i fi 0
+    ~ < fi n {
+        : i pk ( nurl_peek # s g_split_part fi )
+        ? == pk old { ( nurl_poke # s g_split_part fi want ) } {
+            ? == pk + old 1 { ( nurl_poke # s g_split_part fi + want 1 ) } {
+                ? == pk simd_part { ( nurl_poke # s g_split_part fi grp ) } {}
+            }
+        }
+        = fi + fi 1
+    }
+    ? >= grp 0 { ( nurl_poke # s g_split_fill grp ( nurl_peek # s g_split_fill simd_part ) ) } {}
+    = g_split_n want
+}
+
 // Partition the indexed module across g_split_n files.
 unsafe @ split_emit_module i n i mlen → v {
     : *u mp # *u # s g_dce_mod
@@ -69299,18 +69349,36 @@ unsafe @ split_emit_module i n i mlen → v {
     // whole (see __sp_pin_simd); the runs below share out the rest.
     : ~ i pinned 0
     ? != 0 ( nurl_str_len g_simd_fns ) { = pinned ( __sp_pin_simd n ) } {}
-    : ~ i target ? > / live g_split_n 1 / live g_split_n 1
-    ? > pinned target {
-        // The group outweighs an even share: it is a part on its own,
-        // and the rest gets as many of the others as the size floor
-        // lets it fill. None at all means the group is (nearly) the
-        // whole module, and one module is what it gets.
-        : i rest - live pinned
-        : ~ i k / rest g_split_min
+    // What the runs share out: the live function bodies that go to one
+    // part — not the module scope and the `linkonce_odr` bodies every
+    // part repeats anyway, nor the pinned group. Counting those made the
+    // target too big for the parts to fill, and on a small module left
+    // parts with nothing of their own (#235).
+    : ~ i shared 0
+    = li 0
+    ~ < li n {
+        : i ls ( nurl_peek # s g_dce_start li )
+        ? & != 0 ( nurl_peek # s g_dce_live li ) == 0 ( nurl_str_starts # s + # i mp ls `define linkonce_odr ` ) {
+            : ~ i lp 0
+            ? != 0 g_sp_pin { = lp ( nurl_peek # s g_sp_pin li ) } {}
+            ? == 0 lp { = shared + shared - ( nurl_peek # s g_dce_end li ) ls } {}
+        } {}
+        = li + li 1
+    }
+    // The runs fill `run_parts` parts; the last of them also holds the
+    // group (`extra` bytes) unless the group outweighs an even share,
+    // when it is a part on its own and the runs get as many of the others
+    // as the size floor lets them fill. None at all means the group is
+    // (nearly) the whole module, and one module is what it gets.
+    : ~ i run_parts g_split_n
+    : ~ i extra pinned
+    ? > pinned / + shared pinned g_split_n {
+        : ~ i k / shared g_split_min
         ? > k - g_split_n 1 { = k - g_split_n 1 } {}
         ? < k 1 { = g_split_n 0 ( __sp_pin_free ) ^ v } {}
         = g_split_n + k 1
-        = target ? > / rest k 1 / rest k 1
+        = run_parts k
+        = extra 0
     } {}
     : i simd_part - g_split_n 1
     = g_split_part # i # s ( nurl_zalloc * n 8 )
@@ -69328,8 +69396,17 @@ unsafe @ split_emit_module i n i mlen → v {
     // back across a boundary that did not have to exist. Contiguous
     // runs are what a hand-written multi-file project looks like. The
     // last run shares its part with the simd group, if there is one.
+    //
+    // A part's target is what is left to share out over the parts left to
+    // fill, recomputed as each opens — a run that came out long does not
+    // starve the ones after it. And a run closes BEFORE a function when
+    // taking it would overshoot the target by more than stopping short
+    // does: a 1 MB function (gen_call) no longer rides on a part that was
+    // nearly full.
     : ~ i cur 0  // part being filled
     : ~ i acc 0  // bytes in it so far
+    : ~ i rem shared  // bytes not yet placed
+    : ~ i target ( __sp_target rem extra run_parts )
     : ~ i fi 0
     ~ < fi n {
         : i st ( nurl_peek # s g_dce_start fi )
@@ -69345,15 +69422,22 @@ unsafe @ split_emit_module i n i mlen → v {
                     ( nurl_poke # s g_split_part fi simd_part )
                     ( nurl_poke # s g_split_fill simd_part + ( nurl_peek # s g_split_fill simd_part ) - en st )
                 } {
-                    ? & >= acc target < cur - g_split_n 1 { = cur + cur 1 = acc 0 } {}
+                    : i sz - en st
+                    ? & & > acc 0 < cur - run_parts 1 > - + acc sz target - target acc {
+                        = cur + cur 1
+                        = acc 0
+                        = target ( __sp_target rem extra - run_parts cur )
+                    } {}
                     ( nurl_poke # s g_split_part fi cur )
-                    ? <= - en st SPLIT_REP_MAX { ( nurl_poke # s g_split_rep fi 1 ) } {}
-                    = acc + acc - en st
+                    ? <= sz SPLIT_REP_MAX { ( nurl_poke # s g_split_rep fi 1 ) } {}
+                    = acc + acc sz
+                    = rem - rem sz
                     ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
                 } } }
         = fi + fi 1
     }
     ( __sp_pin_free )
+    ( __sp_compact n cur simd_part pinned )
     ( __sp_rep_masks n )
     // Register every private global, then attribute it to the parts
     // that name it — module scope first, so a constant a global's own
