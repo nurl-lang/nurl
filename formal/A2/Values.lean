@@ -1,4 +1,5 @@
 import A2.Heap
+import A2.Repl
 
 /-! A2 — the values bindings hold, and the borrows taken from them. -/
 
@@ -141,5 +142,51 @@ theorem derive_lands {m : Mem} {y : Var} {E : Entry} {N N' : Val} {k : Kind}
     simp only [Bool.false_eq_true, ↓reduceIte, List.mem_map]
     obtain ⟨dep, hd, n0, hr, hl⟩ := hbor h
     exact ⟨_, ⟨dep, hd, rfl⟩, n0, hr, lands_comp' hl hk⟩
+
+/-! ### Agora #295: the node a change through a borrow finds -/
+
+/-- A live borrow of a `Vec` whose memory roots own their slots names a node
+    of the tree of one of them, reached as that dependency says; it is the
+    only node a step may find for it (`NodeOf`). -/
+theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry} {t : Ty}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
+    (hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true) :
+    ∃ dep ∈ memDeps Ex.path, ∃ T n0 c d es,
+      m.st x = some ⟨false, some (.href c)⟩ ∧ m.st dep.root = some ⟨true, some T⟩ ∧
+      Top n0 T ∧ Lands dep.kind (.node t c d es) n0 ∧ HrefAt m dep c t Ex.held ∧
+      WFv (.vec t) (.node t c d es) ∧ NodeOf m x dep.root T t c d es ∧
+      ∀ o T' t' c' d' es', NodeOf m x o T' t' c' d' es' →
+        o = dep.root ∧ T' = T ∧ t' = t ∧ c' = c ∧ d' = d ∧ es' = es := by
+  have hos : Ex.mode.ownSlot = false := by rw [hmx]; rfl
+  obtain ⟨v, hv, hok⟩ := hi.bor_val hx hl hos
+  rw [hty] at hok
+  obtain ⟨c, rfl, dep, hdp, hh⟩ := valOK_vec.mp hok
+  obtain ⟨n0, d, es, hr, hla, hw, hvs, hns⟩ := hh
+  have hdm : dep ∈ memDeps Ex.path := by
+    refine List.mem_filter.mpr ⟨hdp, ?_⟩
+    rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> rfl
+  obtain ⟨Er, hEr, hEro⟩ := hro dep hdm
+  obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot dep.root Er hEr
+  have hsl1 : sl.own = true := by rw [hso, hEro]
+  -- an owning root reaches its own tree
+  obtain ⟨T, hT, htop⟩ : ∃ T, m.st dep.root = some ⟨true, some T⟩ ∧ Top n0 T := by
+    rcases hr with ⟨T, h, ht⟩ | ⟨_, _, h, _⟩ | ⟨_, _, _, _, h, _⟩
+    · exact ⟨T, h, ht⟩
+    all_goals rw [hsl] at h; cases h; simp at hsl1
+  have hsub : Sub (.node t c d es) T := hla.sub.trans htop.sub
+  have ha := hi.heap.alloc dep.root T hT
+  have hno : NodeOf m x dep.root T t c d es :=
+    ⟨(ha c (hsub.ids c (by simp))).1, (ha d (hsub.ids d (by simp))).1, hT, Or.inr ⟨hv, hsub⟩⟩
+  refine ⟨dep, hdm, T, n0, c, d, es, hv, hT, htop, hla, ⟨n0, d, es, hr, hla, hw, hvs, hns⟩, hw, hno,
+    fun o T' t' c' d' es' hno' => ?_⟩
+  obtain ⟨_, _, hT', hcase⟩ := hno'
+  rcases hcase with ⟨rfl, _⟩ | ⟨hv', hsub'⟩
+  · rw [hv] at hT'; cases hT'
+  · rw [hv] at hv'; cases hv'
+    obtain ⟨rfl, heq⟩ := owned_unique hi.heap hT' hT hsub' hsub (i := c) (by simp [Val.head])
+      (by simp [Val.head])
+    cases heq
+    rw [hT] at hT'; cases hT'
+    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 end A2

@@ -525,6 +525,21 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- destructor reads them)
       (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
+  /-- Agora #295: a change of a `Vec`'s elements through a borrow `x`, of an
+      element type that holds no views. The change lands in the tree of one
+      of the roots `x` reaches in memory, which the typing cannot tell
+      apart: each of them undergoes `Edit.effAt` of its dependency (`.drop`,
+      or `.realloc` for a push through a copy of a same-typed root's
+      handle), and must allow it, not be lent out, not be what is pushed,
+      and end no view a destructor will read (`killThru`). `x` itself stays
+      live: its node is changed in place. -/
+  | editB {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
+      {D : List Dep} :
+      Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
+      x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op = .push y → y ≠ x) →
+      Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
+      ThruOK Γ1 F op Ex.ty Ex1.path →
+      StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
 
 /-- A function is well-typed when its body is, from its own view of the
     parameters, and ends as its summary says: the result is set and borrows
@@ -554,24 +569,6 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
         (fn.params[i].2.holdsView = false → Ei.held = []))
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
-
-/-- Agora #295, step 4: no rule types a change of elements yet, so a typed
-    statement contains none … -/
-theorem StmtT.hasThru_false {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (h : StmtT P Γ F s Δ) : s.hasThru = false := by
-  induction h <;> simp [Stmt.hasThru, *]
-
-/-- … and a well-typed program has no `ThruFn`: `CallT`'s guard, and the
-    `¬ ThruFn` of destructors, closure interfaces and package codes, hold of
-    every program A2 covers. Step 5's `StmtT.editB` is the first rule that
-    types a change through a borrow. -/
-theorem ProgOK.not_thru {P : Prog} (hP : ProgOK P) {f : Nat} : ¬ ThruFn P f := by
-  intro h
-  induction h with
-  | here hf hb =>
-    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hbody, _⟩ := hP _ (List.mem_of_getElem? hf)
-    rw [hbody.hasThru_false] at hb; cases hb
-  | call _ _ _ ih => exact ih
 
 /-! ### Packages name code of their signature -/
 

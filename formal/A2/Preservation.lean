@@ -1,4 +1,4 @@
-import A2.TypingFacts
+import A2.EditB
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
@@ -82,6 +82,62 @@ theorem CtxRel.keep {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {s s' : Stmt} (hs : s.spi
 theorem CtxRel.anch {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {F : List Var}
     (hanch : RootbAnch Γ F) : RootbAnch Γ' F :=
   hanch_of hanch h.mode h.rootb
+
+/-- A binding moved out: `A2.kill` ends what borrows it, and it is dead. -/
+theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {y : Var} {E : Entry}
+    (hy : Γ y = some E) (hm : E.mode ≠ .rootb) (hyF : y ∉ F) (hpin : NoPin Γ y) :
+    CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
+  (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
+    (CtxRel.setE (Ex := killE .replace false y E) (by simp [A2.kill, hy]) (by simp [killE_mode])
+      (by simp [killE_ty]) (by simp [killE_mode, hm])
+      fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩)
+
+theorem PushArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
+    (h : PushArg Γ F y Ey t D Γ1) (hy : Γ y = some Ey) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
+  cases h with
+  | move _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
+  | int => exact CtxRel.refl _
+  | slice _ => exact CtxRel.refl _
+
+/-! ### Agora #295: what a change through a borrow does to its context -/
+
+theorem EditArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
+  cases h with
+  | push hy _ _ hpa => exact hpa.ctxRel hy hanch
+  | trunc _ => exact CtxRel.refl _
+
+/-- Effects below `replace` on roots that are not lent out keep every borrowed
+    parameter's entry. -/
+theorem CtxRel.killNames {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) :
+    ∀ ds : List Dep, (∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) → CtxRel Γ (A2.killNames ds Γ)
+  | [], _ => CtxRel.refl _
+  | d :: ds, h => by
+    have h1 := CtxRel.killNames hanch ds (fun d' hd' => h d' (List.mem_cons_of_mem _ hd'))
+    exact h1.trans (CtxRel.kill (h1.anch hanch) (h d (by simp)).1 _ _
+      (hmn_of_ne_replace _ (h d (by simp)).2 _))
+
+/-- `StmtT.editB`'s context: every binding keeps its mode and type, and every
+    borrowed parameter its entry. -/
+theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {op : Edit}
+    {Ex Ex1 : Entry} {t : Ty} {D : List Dep} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
+    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op = .push y → y ≠ x) (hx1 : Γ1 x = some Ex1)
+    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
+    CtxRel Γ (A2.setE (killThru op Ex.ty Ex1.path Γ1) x Ex1) := by
+  have h1 := harg.ctxRel hanch
+  have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+  rw [hE1] at hx1 hthru ⊢
+  have h2 : CtxRel Γ1 (killThru op Ex.ty Ex.path Γ1) := by
+    refine CtxRel.killNames (h1.anch hanch) _ fun d hd => ⟨?_, (thruDeps_bound hd).1⟩
+    obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
+    exact (hthru d0 hd0).1
+  obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hx1
+  have hm' : E'.mode = Ex.mode := by rcases hE'c with rfl | rfl <;> rfl
+  have ht' : E'.ty = Ex.ty := by rcases hE'c with rfl | rfl <;> rfl
+  have hv' : E'.vdeps = Ex.vdeps := by rcases hE'c with rfl | rfl <;> rfl
+  have hd' : E'.dbind = Ex.dbind := by rcases hE'c with rfl | rfl <;> rfl
+  exact h1.trans (h2.trans (CtxRel.setE (Ex := E') hE' hm'.symm ht'.symm (by rw [hm', hmx]; simp)
+    (fun hdb => ⟨by rw [hd']; exact hdb, fun d hdd _ => by rw [hv']; exact hdd⟩)))
 
 /-- The leaf of a step: no run-time scope is open in the statement. -/
 theorem Inv.leafAnch {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
@@ -1392,6 +1448,57 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds hdb1) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
+  | @editB Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
+    intro m m' s' hcd hi hst
+    have hanch := hi.leafAnch rfl
+    have hrel := CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
+    have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+    rw [hE1] at hx1 hl1 hthru hrel ⊢
+    -- the roots own their slots, so the change lands in one of their trees
+    have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
+      fun d hd => by
+        obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
+        exact ⟨Er, hEr, hcan.ownSlot⟩
+    have fin : ∀ {m'' : Mem}, MInv m'' (setE (killThru op Ex.ty Ex.path Γ1) x Ex) → m''.nv = m.nv →
+        Covers m'' → Frz F m m'' →
+        ∃ Γ', StmtT P Γ' F .skip (setE (killThru op Ex.ty Ex.path Γ1) x Ex) ∧ Inv m'' Γ' F .skip ∧
+          m.nv ≤ m''.nv ∧ Keep Γ Γ' (.edit true x op) .skip ∧ Frz F m m'' :=
+      fun hinv hnv hcov hfz => ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv]; exact Nat.le_refl _)
+        (by simp [Stmt.vars]) (hrel.anch hanch) rfl hcov trivial, by rw [hnv]; exact Nat.le_refl _,
+        hrel.keep rfl rfl, hfz⟩
+    cases harg with
+    | @push y Ey _ _ _ hy hly htyy hpa =>
+      have hyx' : y ≠ x := hyx y rfl
+      cases hst with
+      | editPush htk hno hr =>
+        obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+          post.inv.thru_owner hx1 hmx hl1 hty hro
+        obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
+        have hoF := (hthru dep hdm).1
+        exact fin (MInv.editB_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hxF hyx' hthru hp
+            hno hr) (by simp [post.nv]) (covers_editPush (covers_takeVal hi.cover htk) hno.2.2.1 hr)
+          (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
+      | editPushRealloc htk hno hr =>
+        obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+          post.inv.thru_owner hx1 hmx hl1 hty hro
+        obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
+        have hoF := (hthru dep hdm).1
+        exact fin (MInv.editB_pushRealloc post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hxF hyx'
+            hthru hp hno hr) (by simp [post.nv])
+          (covers_editPushRealloc (covers_takeVal hi.cover htk) hno.2.2.1 hr)
+          (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
+    | trunc _ =>
+      cases hst with
+      | editTrunc _ hno hfr hr =>
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+          hi.toMInv.thru_owner hx1 hmx hl1 hty hro
+        obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
+        have hoF := (hthru dep hdm).1
+        exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru hno hfr hr) (by simp)
+          (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
+          (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
   | @free Γ F x E t hx hl hm hty hxF hpin =>
     intro m m' s' hcd hi hst
     cases hst with

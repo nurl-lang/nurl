@@ -25,7 +25,7 @@ trait objects, panics and the drop journal; threads are A3.
 | §2.6 | Loop-carried moves | A1 | `StmtT.while`: the body ends in the context it starts in | done |
 | §2.7 | Escape through a callee | A1 / A2 / A3 | `CallT` against the callee's summary: what the result borrows (`lends`) and holds (`rholds`), what the callee stores into `inout` arguments (`outHolds`), its effect bound on each; `FnOK` checks the body against it; a closure handed to a callee is held by its result (`heldOfArgs`) and run as the callee may (`NamesFree`, `mutNames`); threads are A3 | done |
 | §2.8 | Escape through a return | A1 / A2 | `FnOK` (the result depends only on what `lends` / `rholds` name), `callRes` at the call; a call through a package lends from the receiver too (`recvRes`) | done |
-| §2.10 | Views end when their source may reallocate | A1 | `RhsT.view`, `RhsT.sat`; `StmtT.push` (`Eff.realloc` ends views, and element borrows when elements hold views); `PushArg` / `held` (a view in a container is still a view); `outHolds` (a callee storing a view into an argument) | done through an owner or an `inout` binding, and through the forms read as them below; through another borrow (an element of a Vec of Vecs, a field viewer, a join of borrows): agora #295 |
+| §2.10 | Views end when their source may reallocate | A1 / A2 | `RhsT.view`, `RhsT.sat`; `StmtT.push` (`Eff.realloc` ends views, and element borrows when elements hold views); `StmtT.editB` (a push or a truncation through a borrow kills every memory root of its path: `.drop`, or `.realloc` for a push through a same-typed `.self` copy); `PushArg` / `held` (a view in a container is still a view); `outHolds` (a callee storing a view into an argument) | done through an owner, an `inout` binding, or any borrow of elements that hold no views (`StmtT.editB`, agora #295); what stays outside is in `CLAIM.md` |
 | §2.12 | A stored value belongs to its owner | A1 / A2 | `PushArg.move`, `CallT` (`sink`); aggregate literals (`RhsT.pair`, `RhsT.inl`, `RhsT.inr`) move or copy what they store, a field taken out (`takel`, `taker`, `unpair`) moves; a field replaced in place is the struct taken apart (`StmtT.unpair`, an owner or an `inout` struct it may replace) and assigned again (`StmtT.assign`), ending every borrow of the struct | done |
 | §2.13 | A raw string in a value is a view | A1 / A2 | a string view is a `slice` entry (`RhsT.view`) depending on its owner; a view stored in an aggregate or a package makes that value depend on what it views (`ViewsOK`, `held`) | done |
 | §2.11, §7.5 | Closures hold their captures | A2 | `RhsT.pack` (`CapsOK`: captures by handle are depended on, by name held, each read or changed within its bound); `StmtT.callc` (the call through a package: `CallT` on the code with the captures as `inout` arguments of their own, `NamesFree` — a binding a closure may change is changed by the call and reached from no argument but by a closure that changes it the same way — and no argument is such a binding); `sigCtx` / `symNames` (a closure a callee is handed may change the callee's `inout` parameters); `ValOK.pkg` / `envDeps` (the environment); `A2/CAPTURES_DESIGN.md` | done |
@@ -56,8 +56,9 @@ the callee does: Agora #315 was a hole in that summary. A replacing
 callee (`inout replace`) given a copy is no reading: the replacement
 lands in the copy's own slot, so nurlc refuses it (h295, h367–h370). A
 change through any other borrow (an element of a Vec of Vecs, a field
-viewer, a join of borrows, a call's lent result) has no reading yet, and
-is the rest of Agora #295 (`CLAIM.md`).
+viewer, a join of borrows, a call's lent result) needs no reading:
+`StmtT.editB` types it (Agora #295, step 5). What stays outside is in
+`CLAIM.md`.
 
 ## Changes to MEMORY.md and what they do to the proof
 

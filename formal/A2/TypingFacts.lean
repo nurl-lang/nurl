@@ -551,6 +551,33 @@ theorem PushArg.dkeep {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} {
   | int => exact DKeep.refl Γ []
   | slice => exact DKeep.refl Γ []
 
+/-- Agora #295: `x`'s entry after a change's argument is handed over, when
+    the argument is not `x` and `x` is still live: as it was (handing the
+    value over only ends bindings). -/
+theorem EditArg.at_ne {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) {x : Var} (hyx : ∀ y, op = .push y → y ≠ x) {Ex Ex1 : Entry}
+    (hx : Γ x = some Ex) (hx1 : Γ1 x = some Ex1) (hl1 : Ex1.live = true) : Ex1 = Ex := by
+  cases h with
+  | @push y Ey _ _ _ _ _ _ hpa =>
+    cases hpa with
+    | move =>
+      have hne : x ≠ y := fun e => hyx y rfl e.symm
+      simp only [A2.setE, upd_ne _ _ hne, A2.kill, hx, Option.map_some, Option.some.injEq] at hx1
+      subst hx1
+      unfold killE at hl1 ⊢
+      split
+      · rename_i hh; simp [hh] at hl1
+      · rfl
+    | int => rw [hx] at hx1; cases hx1; rfl
+    | slice => rw [hx] at hx1; cases hx1; rfl
+  | trunc => rw [hx] at hx1; cases hx1; rfl
+
+theorem EditArg.dkeep {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) : DKeep Γ Γ1 [] := by
+  cases h with
+  | push hy _ _ hpa => exact hpa.dkeep hy
+  | trunc => exact DKeep.refl _ []
+
 /-- A right-hand side gives no `letd` binding a new view: it only kills, and
     moves a binding out as it is. -/
 theorem RhsT.dkeep {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
@@ -704,6 +731,10 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
+  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+    intro _ _
+    refine (harg.dkeep.killNames _).setE fun _ hos _ _ => ?_
+    rw [harg.at_ne hyx hx hx1 hl1, hmx] at hos; cases hos
 
 /-! ### A2-drop.2: a binding `letd` made stays one -/
 
@@ -751,6 +782,12 @@ theorem PushArg.dstay {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} {
   | move => exact DStay.moveOut hy _ _
   | int => exact DStay.refl Γ []
   | slice => exact DStay.refl Γ []
+
+theorem EditArg.dstay {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
+    (h : EditArg Γ F op t D Γ1) : DStay Γ Γ1 [] := by
+  cases h with
+  | push hy _ _ hpa => exact hpa.dstay hy
+  | trunc => exact DStay.refl _ []
 
 theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
     DStay Γ Γ1 [] := by
@@ -840,6 +877,9 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | catchR _ _ _ _ _ hst _ => exact hst
   | letd hs hx _ hr _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
   | scopeD _ _ _ _ _ _ _ _ ih => exact ih.exitScope
+  | editB hx hmx _ _ _ _ harg _ _ _ _ _ =>
+    refine (harg.dstay.killNames _).setE fun E0 h0 _ hos _ => ?_
+    rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by

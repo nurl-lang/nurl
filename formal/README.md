@@ -130,11 +130,12 @@ as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:
 
-- elements changed through a borrow that is not a copy of one owner's
-  whole handle: an element of a Vec of Vecs, a field viewer, a join of
-  borrows, a call's lent result (Agora #295; `CLAIM.md`). A plain
-  parameter its callee changes and a whole-handle copy read as `inout`
-  and as the owner (`RULES.md`, phase C);
+- of the changes of elements through a borrow (`StmtT.editB`, Agora
+  #295): those whose elements hold views, a pop, a remove or an element
+  set through a borrow, and the extra keeps nurlc allows beside such a
+  change (two parts of one value, a whole copy beside a field viewer;
+  `CLAIM.md`). A plain parameter its callee changes and a whole-handle
+  copy read as `inout` and as the owner (`RULES.md`, phase C);
 - a destructor run wherever a value of its type is dropped (a field, an
   element, a `sink` parameter at its callee's end, the old value of an
   `=`), not only at the end of the binding `letd` made (A2-drop.3, Agora
