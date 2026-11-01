@@ -13,5 +13,6 @@
   the binding itself, and where the old value has no key to tell it
   apart from what a live borrower of it holds (a `??` payload, a cursor):
   an option payload, a library handle such as a Box, a record whose first
-  owned field is an option or a unit-variant enum (Agora #361; #366 gives
-  those types keys).
+  owned field is an option or an enum without a key in every variant, an
+  enum with a variant whose first payload is a number while a later one
+  owns memory (Agora #361; #366 gives those types keys).

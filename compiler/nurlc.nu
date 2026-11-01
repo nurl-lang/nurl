@@ -24165,40 +24165,76 @@ unsafe @ mem_path_to_indices s path → s {
 // live borrower hands nothing over: its old value is simply its own to drop.
 @ __ud_hand_over_keyed i syms s ptr s vt → b {
     : ~ s rest ( nurl_sym_get2 syms ptr `__borrowers` )
-    ? == 0 ( nurl_str_len rest ) { ^ T } {}
-    : s ll ( nurl_llty vt )
-    : b own ? ( __handle_keyed vt ) T ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __handle_keyed ( __wrap_part ll 0 ) ) F
-    ? ! own { ^ F } {}
+    // (Asked only once a live borrower is found: the list keeps every name
+    // ever linked, its scope long over or not.)
+    : ~ b own_asked F
     ~ != 0 ( nurl_str_len rest ) {
         : s b ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            ? ! own_asked {
+                = own_asked T
+                : s ll ( nurl_llty vt )
+                : b own ? ( __handle_keyed vt F ) T ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __handle_keyed ( __wrap_part ll 0 ) F ) F
+                ? ! own { ^ F } {}
+            } {}
             : s bt0 ( nurl_sym_get2 syms b `__udty` )
             : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
-            ? ! ( __handle_keyed bt ) { ^ F } {}
+            ? ! ( __handle_keyed bt F ) { ^ F } {}
         } {}
     }
     ^ T
 }
 
-// Does mem_handle_key find a key for a value of type `ty` that is there
-// whenever the value owns memory: a String's or Vec's buffer, an enum's
-// first payload slot (a variant with none owns nothing), a struct's first
-// handle field's key? Not when that field is an enum: a unit variant there
-// keys nothing while a later field owns memory. Nor an option, a result
-// or a library handle: none of them has a key (agora #361).
-@ __handle_keyed s ty → b {
+// Does mem_handle_key find a key for a value of type `ty` that tells it
+// apart from every other value whenever it owns memory? A String's or a
+// Vec's buffer does. An enum's first payload slot does where it holds an
+// owned pointer (__enum_keyed), and a struct's first handle field's key
+// does — but as a FIELD's key it must be there whatever the field holds,
+// since a later field may own memory (`nonnull`: a unit variant there keys
+// nothing). An option, a result or a library handle has none (agora #361).
+@ __handle_keyed s ty b nonnull → b {
     ? | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
-    ? ( __is_handle_enum ty ) { ^ T } {}
+    ? ( __is_handle_enum ty ) { ^ ( __enum_keyed ty nonnull ) } {}
     ? ! ( __is_owned_struct_ty ty ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i i 0
     ~ < i fc {
         : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __is_value_handle ft ) { ^ & ! ( __is_handle_enum ft ) ( __handle_keyed ft ) } {}
+        ? ( __is_value_handle ft ) { ^ ( __handle_keyed ft T ) } {}
         = i + i 1
     }
     ^ F
+}
+
+// …an enum's: its key is its first payload slot. That slot is the value's
+// own heap pointer — unique to it, never null — when the first payload is
+// boxed or a handle that owns its buffer (enum_payload_storage 3, or 2 with
+// a field that owns memory). A variant whose first payload is a number, a
+// tag or a view keys by that, 0 or one another value has too: no key, if
+// the variant owns memory in a later payload (`A i String`). A variant that
+// owns nothing hands nothing over — unless the key must be there whatever
+// the enum holds (`nonnull`, a record's key field), where it has none.
+@ __enum_keyed s ty b nonnull → b {
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : ~ s scan ( nurl_str_cat ( nurl_sym_get2 g_root_syms sname `__variants` ) `` )
+    ~ != 0 ( nurl_str_len scan ) {
+        : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+        : s pcs ( nurl_sym_get2 g_root_syms vname `__paycount` )
+        : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+        : s p0 ? > pc 0 ( nurl_sym_get g_root_syms ( nurl_str_cat vname `__payload__0` ) ) ``
+        : i st ? > pc 0 ( enum_payload_storage p0 g_root_syms ) 0
+        : b slot_key ? == st 3 T ? == st 2 ( __type_needs_drop p0 g_root_syms ) F
+        ? ! slot_key {
+            ? nonnull { ^ F } {}
+            : ~ i k 0
+            ~ < k pc {
+                ? ( __type_needs_drop ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int k ) ) ) g_root_syms ) { ^ F } {}
+                = k + k 1
+            }
+        } {}
+    }
+    ^ T
 }
 
 // An i8* that identifies an owned value of type `ty` (register `val`): the
