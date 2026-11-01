@@ -10,6 +10,688 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.84.0] — 2026-11-01
+
+### Added
+
+- **`query_value qs key` and `request_query_int req key`** (stdlib/ext/http_request.nu): a query parameter read in place — the first value of `key` as a view of the query's bytes (raw, not percent-decoded), and that value as an integer — with nothing allocated, where `parse_query` decodes every pair into Strings of its own. **`slice_to_int b`** (core/string.nu) is `string_to_int` over a `( Slice u )`.
+
+- **AArch64 SHA-256 primitives** (Agora #102): `nurl_v128_sha256h`,
+  `_sha256h2`, `_sha256su0` and `_sha256su1`, with ARM's semantics
+  (docs/spec.md, the crypto tier table). They are compiled with
+  `+neon,+sha2` and gated on the new runtime probe `nurl_cpu_arm_sha2`
+  (HWCAP_SHA2 / FEAT_SHA256), and asked through `nurl_cpu_has_sha_arm`,
+  a constant false off AArch64. Intel's SHA primitives keep
+  `nurl_cpu_has_sha`, which is a constant false on AArch64.
+  `compiler/tests/crypto_tier_ir.sh` checks the kernel's IR, its
+  machine code and, under qemu-aarch64 where a host has it, its output
+  against `sha256_tier_agree`'s golden, with and without
+  `NURL_CPU_SHA=0`.
+
+- **A streaming JSON writer** (Agora #270). `stdlib/ext/json.nu`'s `JsonWriter` writes a document straight into a `( Vec u )` the caller owns — an HttpResponse body — value by value, with no `Json` values in between: `json_writer`, `jw_obj` / `jw_arr` / `jw_end`, `jw_key`, `jw_str` / `jw_string` / `jw_str_slice`, `jw_int`, `jw_float`, `jw_bool`, `jw_null`, `jw_json` (a `Json` value in place), `jw_raw` / `jw_raw_slice` (text that already is JSON, such as a jsonb cell), and `jw_ok`. The writer keeps the nesting, so the commas and colons are its business; a misuse — a value where an object wants a key, a key in an array, an end with nothing open, a second top-level value — writes nothing and turns `jw_ok` false instead of emitting text that is not JSON. The text is `json_stringify`'s for the same document, byte for byte (one escaper and one number spelling serve both). `compiler/tests/json_writer.nu`, including 2000 strings of every byte value checked against the escaping rules spelled out byte by byte.
+- **`json_write out j`** appends a `Json` value's compact text to a `( Vec u )`, and **`json_parse_slice text`** parses the bytes a `( Slice u )` views (a buffer's window, psql's `pg_row_view` cell) with no copy first. **`string_from_vec bytes`** (core/string.nu) takes a byte buffer over as a String without copying it; **`bytes_extend_slice v s`** (std/bytes.nu) appends the bytes a view holds.
+
+- **`vec_split_off_packed v at` and `vec_with_cap_packed n`** (core/vec.nu; `raw`: for an element type aligned to at most 8). Each makes a Vec whose buffer shares its handle's allocation, the packed layout `string_from_bytes_packed` gives a String:
+  - `vec_split_off_packed` moves the elements `[at, len)` out of `v`, exactly that many;
+  - `vec_with_cap_packed` makes an empty one with room for `n`.
+  
+  That is one allocation instead of two, for a container assembled on a scratch stack and closed once its count is known.
+
+- **`env_temp_dir()`: where temporary files go, on each platform's terms**
+  (Agora #306, `stdlib/ext/env.nu`).
+  - POSIX: `$TMPDIR` when set and non-empty, else `/tmp`.
+  - Windows: what `GetTempPathW` answers, `%TMP%`, else `%TEMP%`, else
+    `%USERPROFILE%`, else the Windows directory. `TMPDIR` is not read there,
+    because Git Bash exports it as a POSIX path a native program cannot open.
+  - The result is never empty and has no trailing separator. A drive or
+    filesystem root is kept as it is.
+  - docs/stdlib/fs.md shows it as the parent for `fs_tempdir`.
+
+### Changed
+
+- **Behaviour change: `JSON_MAX_DEPTH` is 256, was 1024** (Agora #297), as `XML_MAX_DEPTH` and `YAML_MAX_DEPTH` are. A document nested deeper than 256 levels now fails with `Overflow` at the bracket that went past the cap; between 257 and 1024 levels it parsed before. JSONTestSuite's y_/n_ verdicts are unchanged; `i_structure_500_nested_arrays` (implementation-defined) is now refused.
+
+- **`formal/RULES.md`'s change rows are one file per change** (Agora #299). Every ownership PR used to add its row at the end of the table "Changes to MEMORY.md and what they do to the proof", so any two of them conflicted there. Each row now lives in `formal/rules/t<N>.md` after its Agora task (`t0.md` for the changes that had none), and `tools/formal_rules.py --write` writes the table from them in task order at release time, beside `open_list.py`. release.yml checks the table on the tag (`--check`), and CI's shared-files job lints the files on every PR (`--lint`). The 91 existing rows moved into 57 files verbatim.
+
+- **The hole-probe table is generated where it is read, not committed**
+  (Agora #307). `formal/corpus/map.tsv` was derived entirely from the
+  probes' `// map:` lines, yet every PR that added a probe regenerated
+  and committed it: 19 commits touched it in a day, and two such PRs
+  conflicted (github#1418). It is now git-ignored, and
+  `tools/fuzz/holes/map.sh` (POSIX sh and awk, since build.sh needs no
+  Python) writes it from the probes. build.sh writes it before anything
+  reads it, `tools/install-toolchain.sh` and `.bat` write it into the
+  prefix's `docs/formal/corpus/`, and the nurlapi image gets it from its
+  builder's build.sh. webdocs' gen-formal-data reads it through map.sh.
+  CI's shared-files job now runs `map.py --lint`, which checks that every
+  probe has a well-formed `// map:` line, and requires map.sh and map.py
+  to print the same table. A PR that adds a probe adds its `// map:` line
+  and nothing else, so `map.py --write` is no longer a step.
+
+- **A closure cannot give a capture, or its own `inout` parameter, a
+  view** (Agora #312, #272). A closure storing a value that may hold a view
+  of a binding, a parameter, a capture or a local into one of its captures
+  (`= w @ V { ( string_data b ) }`, `= . w v …`, a push or a keep the
+  callee really stores, a call that leaves it viewing another's storage),
+  or into its own `inout` parameter, is refused where it stores it. A
+  closure's type does not say what running it stores, so nothing where it
+  ran followed the view: the eleven shapes of #312 and four through an
+  `inout` parameter were heap-use-after-free in safe code, wherever a copy,
+  a struct field or another closure ran it. The message points at a
+  function's `inout` parameter, which every call follows. Closures that
+  read view-holding captures, change view-free ones or store static
+  literals are accepted as before. This is A2's own rule (CapsOK,
+  Implements), so the claim now covers closures that change captures.
+  #259's `@vp=` and #301's `@vb=` closure dependencies are gone. The
+  first cut of this change dropped #259's `@vp=` dependency before its
+  replacement covered a closure storing a capture that holds views into
+  another capture. Four programs 0.83.0 refused were accepted on main for
+  a day and are refused again (Agora #331).
+
+- **`fs_tempdir "" prefix` and `fs_tempfile "" prefix` create under the
+  platform's temp directory** (Agora #322). An empty `dir` meant the
+  current directory, so a program asking for scratch space wrote it into
+  whatever directory it was started from: a checkout, a home directory, or
+  `C:\Windows\System32` for a Windows service. It now means
+  `env_temp_dir()` (`$TMPDIR` or `/tmp`; on Windows `%TMP%`, `%TEMP%`, …),
+  as in Go's `os.MkdirTemp("", p)` and Python's `tempfile`. Pass `.` for
+  the current directory. A program that relied on `""` creating in the
+  current directory must now pass `.`.
+
+- **A fiber's stack grows as deep as the fiber goes, up to 1 MB** (Agora
+  #328). A fiber's stack was a fixed 64 KB, and how deep a program recurses
+  depends on how it was built. A JSON document at JSON_MAX_DEPTH needs
+  about 12 KB at -O2 but about 256 KB at -O0, where no stack slot is
+  reused, so a debug build overflowed a fiber on input its release build
+  handles. Each fiber now reserves 1 MB of address space (4 MB under
+  `NURL_SAN=1`) and turns into memory only the pages it touches. On Linux
+  and macOS that is commit-on-touch. On Windows the stack grows a page at a
+  time through a guard page, as a thread's does.
+  - Idle fibers cost no more: 10,000 of them stay at 45 MB of RSS on Linux,
+    and on Windows commit 222 MB instead of 672 MB, since the fixed stack
+    was committed whole.
+  - A recycled stack keeps at most its top 64 KB as memory.
+  - Fiber spawn and exit take the same time.
+
+### Performance
+
+- **The HTTP peer benchmark's `/async-db` reads its query parameters in place** (Agora #43), as the Rust peer's `split` does, instead of decoding the whole query into allocated pairs three times per request; psql's cell accessors read a cell's span once. Instructions per `/async-db` request (callgrind, 50 items): 536.9k → 505.9k (hyper + tokio-postgres: 362k); the rest of the gap is the drop journal's per-binding registrations inside a handler (agora #283) and calls the compiler emits with a constant NULL (agora #282).
+
+- **SHA-256 runs on ARMv8's SHA-256 instructions on AArch64** (Agora
+  #102). Graviton, Ampere, Apple and the other ARMv8 cores with the
+  Cryptographic Extension ran the portable rounds. They now run 16
+  SHA256H / SHA256H2 pairs and 12 + 12 SHA256SU0 / SU1 a block, through
+  `__sha256_blocks_ce`. HMAC-SHA-256, HKDF and every TLS transcript hash
+  on such a host go through it. `sha256_cpu_tier` says `armv8-sha2`
+  there, and `NURL_CPU_SHA=0` takes it away as it takes SHA-NI away on
+  x86-64. x86-64 builds are unchanged: the AArch64 kernel's call folds
+  away there, so it costs their build nothing.
+
+- **P-256 scalar multiplies allocate 29 % less** (Agora #225). The
+  scalar is read from its bytes straight into the five limbs the Booth
+  reader uses and reduced mod n by one masked subtraction (up to 32
+  bytes; longer input keeps the byte path), where it went through four
+  temporary byte vectors. The point's 64 output bytes are one reserved
+  write instead of 64 pushes, 32 big-endian bytes decode in place, and
+  the Montgomery form of 1 is a constant instead of a multiply. Keygen
+  runs 3 % fewer instructions; on a Sapphire Rapids class Xeon, best of
+  ten interleaved runs, 13.64 → 13.24 µs.
+
+- **A symbol-table lookup picks its bucket with a mask, not a divide**
+  (Agora #226). The bucket count is a power of two and every hash is a
+  non-negative 32-bit number. So the bucket is the hash's low bits, the same
+  bucket `%` named, and no longer costs a 64-bit divide on every lookup,
+  definition and append.
+  - A self-compile: 1.0 % fewer instructions and 1.5 % fewer cycles.
+  - dst_flagship: 1.0 % fewer instructions.
+  - A 4000-statement body: 1.5 % fewer instructions.
+  - Output is byte-identical (tools/tree_sweep.sh, 3618 files).
+
+- **JSON strings are escaped through a cursor** — the room reserved once and written straight through, as core/string.nu's bulk emitters do — instead of a byte at a time onto a String: `json_stringify` takes 30 % fewer instructions on a 50-object document. `json_pretty` shares the escaper, and `response_set_body_json` writes straight into the body (no String in between).
+- **The HTTP peer benchmark's JSON endpoints use the writer** (bench/http_server.nu), as the Rust peer's serde derive does; the Rust peer now borrows its text columns from the row, as the NURL side takes psql's cell views. Server CPU per request on `/async-db` (50 items, loopback PostgreSQL 16, two workers): 261.9 → 125.7 µs (hyper + tokio-postgres: 105.1).
+
+- **An http-client request costs a fifth fewer instructions** (Agora
+  #277). Three stdlib routines built their strings one byte at a time,
+  through `string_push_char` and its buffer regrowth. The worst was
+  `_hp_blob_has`, which lowercased the caller's whole header blob into
+  a fresh string for each of the three names it looks for.
+  - `url_parse` now copies each component once, from its byte range of
+    the input. The scheme is lowercased in one reserved write.
+  - `url_percent_decode` and `url_query_decode` decode straight from
+    the input's bytes through a reserved cursor. The query decoder used
+    to copy each key and value byte by byte before decoding them.
+  - `_hp_blob_has` (stdlib/ext/http_pure.nu) compares names in place,
+    case folded per byte, from line start to line start. The header
+    parser's `__hp_to_lower` writes its copy in one reserved write.
+
+  Measured with callgrind over 3,000 keep-alive GETs from
+  `packages/http-client` to its test server: 34.4K → 27.6K instructions
+  per request on the client. The parsers' output is unchanged. The new
+  `compiler/tests/url_parse_edges` was checked against the old
+  implementation: '%' escapes cut short at a component's end, '+' in
+  both decoders, '=' and '&' inside a query, empty parts, IPv6 and the
+  scheme's case.
+
+- **A push or an append no longer makes its callers register with the panic
+  journal** (Agora #283). Inside a `recover` extent (every HttpApp handler)
+  the compiler drops the journal registration of every binding that no
+  panic can reach. But every buffer growth went through `alloc_size`'s
+  overflow panic, so nearly every function that pushes or appends counted
+  as "may panic", and so did its callers. A growth whose count is a length
+  plus elements that already exist in memory (a push, an insert, an
+  extend, a string append, a copy, a concatenation) cannot overflow, so it
+  now takes an unchecked path with no panic: `__vec_grow_to`,
+  `_vec_reserve_more`, `_vec_with_room` and `_string_with_room`. A count a
+  caller chose (`vec_with_cap`, `vec_reserve`, `vec_resize_zeroed`,
+  `string_with_cap`, `string_repeat`, `vec_map`'s output) still panics on
+  overflow, as before.
+  - bench/http_server.nu `/async-db?limit=50`: 3.5 % fewer instructions per
+    request; the journal's own share halves (16.6 k → 8.4 k instructions per
+    request under callgrind).
+  - A handler-shaped microbenchmark (recover; 50 rows of jsonb tags parsed,
+    built and stringified): 17.3 % fewer instructions, about 21 % fewer
+    cycles.
+  - No panic, drop or journal semantics change.
+
+- **A value held only across calls that cannot panic is no longer
+  registered with the panic journal** (Agora #283). Inside a `recover`
+  extent the compiler drops a binding's journal registration when no panic
+  can meet it. It used to keep the registration whenever a call that may
+  panic stood anywhere between the binding's start and the end of the
+  function, so a handler's per-row value stayed registered because a
+  bounds-checked read came lines later. It now follows the function's
+  branches from the registration to the binding's end. The decision is per
+  slot, all or nothing, so no forget another registration needs is ever
+  removed. The journal's semantics are unchanged.
+  - `stdlib/ext/json.nu`: the string scans find the first byte that needs
+    attention without a mask built by a computed shift. That shift's range
+    check made every JSON parse and write count as "may panic".
+  - `stdlib/ext/json.nu`: the JsonWriter reads its state through `vec_get`.
+  - `stdlib/ext/json.nu` and `stdlib/std/bytes.nu`: appends of existing
+    bytes reserve through the unchecked growth.
+  - bench/http_server.nu `/async-db?limit=50`: the journal's share falls
+    from 8.4 k to 5.7 k instructions per request. A handler-shaped
+    microbenchmark spends 5 % fewer cycles.
+
+- **json.nu's parser does less per value** (Agora #291):
+  - A step answers whether it succeeded. Values go onto one stack, and a failure records its kind and byte for the root to locate. Before, every value returned a `!Json JsonError`: a value and a four-field error, written whole at each return and copied at every level.
+  - An array or object is one allocation of exactly its members (`vec_split_off_packed`). Before, it was a handle, an 8-slot buffer and a reallocation past eight members; `[]` now keeps 24 bytes, not 152.
+  - A string's end is found sixteen bytes at a time. `nurl_v128_ldn` takes a short string's last bytes, so there is no byte loop at either end, on any alignment.
+  - The whitespace skip stops at the first token byte.
+
+  Results, error positions and line/column, and JSONTestSuite verdicts are unchanged: a differential run over 15,770 documents (the suite plus generated, truncated and mutated ones) prints the same value or error for every one. `bench/json_parse`: 88.1M → 64.2M instructions. A two-string jsonb cell: 126 → 96 ns.
+- **The JSON writer's escaper** copies each run of plain bytes with one partial vector store (the same 16-byte scan). A key goes out with its comma and colon in one reservation. `bytes_push_int` writes through the buffer's control block: one capacity check and one length commit. The HTTP peer benchmark's `/async-db` (50 items): 505.6k → 415.7k instructions per request (hyper + tokio-postgres: 362k); `/json`, `/db`, `/queries` and `/updates` take 1–3 % fewer.
+
+- **A String or `( Vec u )` drop no longer saves six registers first**
+  (Agora #296). `nurl_vec_drop` held its element loop in the same body,
+  so every call pushed six callee-saved registers before it looked at
+  `elem_drop`. A String, a `( Vec u )` and a Json leaf have no element
+  to drop. The element loop is now `nurl__vec_drop_elems`, out of line
+  and tail-called only when there is an `elem_drop`. `nurl_vec_drop`
+  frees the buffer and the control block itself and keeps only the
+  control block across a call. Instructions in `nurl_vec_drop` per call
+  (x86-64, clang 18 -O2, the same with ThinLTO):
+
+  | | before | after |
+  |---|---|---|
+  | String with its own buffer | 41 | 24 |
+  | packed String (data inside the control block) | 33 | 15 |
+  | empty Vec (no buffer) | 30 | 12 |
+  | view (`cap < 0`) | 7 | 9 |
+
+  The entry is now small enough for LTO to inline it at its call sites.
+  Parsing and dropping `{"id":7,"name":"widget","tags":["tag3","tag5"],"price":12.5,"ok":true}`
+  20 000 times (callgrind):
+  the drop functions run 8.92 M instructions instead of 10.40 M (−14 %),
+  and the whole program 102.86 M instead of 104.22 M. A Vec whose
+  elements have a destructor runs two more instructions before its loop.
+  What is freed, and in what order, is unchanged.
+
+- **The "may this drop read a view?" question is answered once per type,
+  not once per path to it** (Agora #305). For each binding, the borrow
+  checker asks whether dropping its type may run a destructor that reads a
+  view. The walk through field types, payloads and elements is capped at
+  depth 8, and it met the same types over and over on the way down:
+  dst_flagship's 494 questions made 750,296 calls for 746 distinct
+  (depth, type) pairs.
+  - A question now keeps its answers in a table of its own, dropped when it
+    is answered. The answers are the same.
+  - dst_flagship compiles in 5.5 % fewer instructions and 2.5 % fewer
+    cycles, with slightly lower peak RSS.
+  - Output is byte-identical (tools/tree_sweep.sh).
+
+- **The flag folder finds the registers to fold by search, not byte by
+  byte** (Agora #305). When nurlc writes out a function whose flags it
+  folds, it used to step through every byte of every line, looking for a `%`
+  outside quotes. It now jumps from one `%` or `"` to the next. A
+  self-compile takes 0.44 % fewer instructions and dst_flagship 0.2 %
+  fewer. Output is byte-identical (tools/tree_sweep.sh, 3618 files).
+
+- **The ownership summaries settle without re-reading every implication on
+  every round** (Agora #305). At the end of a module, nurlc runs its
+  parked summary implications ("this parameter escapes if that callee's
+  does") to a fixed point. Each round re-read every record: five words
+  parsed and copied, the callee's sets looked up.
+  - A chain of trait-object calls (dst_flagship's TlsTransport → NetTransport
+    → NetDialer) settles one link per round, and that program took 23
+    rounds over 600 KB of records.
+  - Now each list is read once, and a round reads only the records whose
+    callee gained a fact since the last read. The sets only grow, so every
+    round ends in the same state, in the same number of rounds.
+  - The resolvers also read the lists in place. Read through the symbol
+    table, each list had been copied into the interner for the rest of the
+    compile: 850 KB in a self-compile.
+  - dst_flagship compiles in 5.1 % fewer instructions (16.42 G → 15.58 G),
+    and a self-compile in 0.3 % fewer. Peak heap is the same for
+    dst_flagship (+10 KB) and 1.05 MB lower for the self-compile.
+  - Output is byte-identical (tools/tree_sweep.sh, 3612 files).
+
+- **A generic instantiation substitutes its type parameters in one pass**
+  (Agora #305). `subst_source` copied the result built so far for every
+  word of a generic body, and stepped through the body by copying all of
+  what was left of it: quadratic in the body's length, once per type
+  parameter per instantiation. It now sizes the result in one pass and
+  writes it in a second, with the same word rules.
+  - dst_flagship compiles in 2.7 % fewer instructions.
+  - Output is byte-identical (tools/tree_sweep.sh, 3620 files).
+
+- **A large program no longer makes nurlc's string interner quadratic**
+  (Agora #310). For every call site, the compiler recorded why a handle
+  might come back out of the call as a whole sentence, `it was passed to
+  '<f>', which may hand its handle back as the result`, and interned it:
+  one string per callee, kept for the whole compile. The symbol hash reads
+  a key's first, middle and last 8 bytes. The callee's name sat between
+  those windows, so every callee with a name of the same length got the
+  same hash, and the interner's probe for any of them walked one chain.
+  - A 20,000-function program spent 52 % of its compile there (one chain
+    of 20,002 strings, up to 57,000 slots long).
+  - A call now records just the callee's name, and the sentence is built
+    only when the borrow checker reports an alias through it.
+  - That program now compiles in half the instructions (17.20 G → 8.55 G)
+    and 2 MB less peak memory.
+  - A self-compile, dst_flagship and a 4000-statement body
+    are each 0.03–0.3 % faster.
+  - Output and diagnostics are byte-identical (tools/tree_sweep.sh, 3604
+    files).
+
+- **The flag folder reads a function's text once, however many rounds it
+  takes** (Agora #326). When a round settles a flag to a constant, the
+  loads it folds can settle further flags, so the folder runs again. Each
+  round re-read the whole function: 2,630 of dst_flagship's functions,
+  12.7 MB of IR, were read a second time. The first round now keeps what
+  the later ones need: the lines whose value read a register not yet
+  known to be constant, the live stores of such a value, and the loads of
+  each flag. A later round restores the flags as the first round left
+  them and re-evaluates only those lines.
+  - dst_flagship compiles in 3.0 % fewer instructions.
+  - Output is byte-identical (tools/tree_sweep.sh, 3672 files).
+
+### Fixed
+
+- **A field a `sink` took cannot be used until it has a value again**
+  (Agora #280; probes vec_field_taken_by_a_sink_then_pushed,
+  string_field_taken_by_a_sink_then_pushed,
+  struct_with_a_taken_field_handed_on_whole,
+  struct_with_a_taken_field_returned_whole and
+  inout_field_taken_by_a_sink_then_used_by_the_caller; tests
+  diag_moved_field and diag_moved_field_inout). `(
+  take . h buf )`, where take's parameter is a `sink`, takes the field's
+  value and leaves the field empty where it lives. A later `( vec_push [u]
+  . h buf … )` or `string_push_str` then dereferenced the null handle, and
+  `bytes_extend_str` spun. All of that was in safe code. A binding in the
+  same place was already refused as a use of a moved value. Now a field
+  is too:
+  - reading or binding it, handing its struct on whole to a call, a store
+    or a `^`, and leaving the function while its struct is an `inout`
+    parameter (the caller would get it back with the field empty), is
+    refused, whether it was taken definitely or on some paths;
+  - a store to the field (`= . h buf …`), or a new value for the struct,
+    makes it usable again;
+  - the struct's other fields stay usable.
+  Nothing is added at run time. Some routes are not refused yet: a take
+  inside a loop, the taken field handed back itself (`^ . h buf`), a path
+  under or over the taken one, a few whole hand-ons, closures made after
+  the take, and a `% Drop` destructor that reads the field (Known issues,
+  agora #351).
+
+- **A parameter a returned literal copies is no longer counted as handed
+  back** (Agora #288; probe
+  parameter_copied_into_a_returned_join_literal_keeps_the_callers_temporary).
+  `@ wrap H h → !H i { … ^ ?? r { T _ → @ !H i { T h } … } }` copies `h`
+  into the literal, since `h` is not `sink` and the literal is an arm's.
+  The §2.8 carrier rule still recorded `h` as returned. wrap's summary
+  then said its result might be its argument, so a caller that passed a
+  temporary (`( wrap ( mk ) )`) never dropped that temporary. That leaked
+  one `H` per call, and in std/tls_server.nu a whole simulated network
+  per accepted connection. A field the literal copies into a value that
+  holds no views is now no carrier. A copy of a type that holds views
+  still carries them.
+
+- **`vec_shrink_to_fit` on a packed buffer** handed realloc (or free, when the Vec was empty) a pointer into the middle of the handle's block. A packed String never reached it; a parsed JSON array or object now can (`?? j { JArr v → ( vec_shrink_to_fit [Json] v ) }`). Such a buffer is already exact, and the call now leaves it as it is.
+
+- **A lend out of a local is copied when it is handed back through any
+  binding** (Agora #300; 22 probes, from
+  local_vec_element_bound_then_returned to
+  vec_payload_of_an_option_owned_on_some_paths_lent_by_a_local_vec_returned,
+  and 5 controls). The walk lets a value lent out of a local of this
+  frame be handed back on the understanding that codegen copies it.
+  Codegen, though, followed the call's lend only through the call itself,
+  a `??` over it, and (#279) an immutable option binding of it. A value
+  that reached the `^` any other way was lent out of a frame that drops
+  it: heap-use-after-free in safe code. The shapes covered:
+  `: String e ( vec_at [String] vs 0 ) ^ e`, also in a generic and for an
+  enum element's payload; a `: ~` binding, re-pointed in arms at a local's
+  element or a parameter's; a re-binding by name; a value block's tail,
+  a call or a binding; a `?` / `??` join whose arm is a payload, a
+  binding or a block ending in one; and a payload matched out of a
+  struct field, nested or of a struct lent by a local Vec.
+  - Each binding now carries the calls its value may be a lend of, with
+    their arguments' roots. They come from a call, a binding by name, a
+    block or try tail, every lending arm of a join, and every later
+    assignment.
+  - A `??` payload inherits them. A payload of a field is lent by the
+    struct, which literals and field stores make the owner of what they
+    are given.
+  - `^` copies the value where one of those calls lent out of a local
+    and the binding owns nothing on that path. The path is then marked
+    owned for the per-call answer.
+  - Where no such call can lend out of a local, the condition folds away
+    at module end, and the IR optimizes to what it was.
+- **A `vec_get` slot is no longer taken through a binding given another
+  value** (Agora #300, h4). `: ~ ?String o ( vec_get [String] vs 0 )`,
+  re-pointed at a parameter's element, and its payload handed back,
+  cleared `vs`'s slot and handed over the parameter's element as owned.
+  An assignment now ends the binding's slot, and the payload is copied
+  instead.
+- **#300's first cut, corrected before the release** (Agora #335,
+  github#1494 and #1507). On main for a day, #300 took a `vec_get`
+  binding's slot after a loop's back edge had re-pointed the binding
+  (heap-use-after-free). It also copied a payload whose owner still moved
+  out (a leak), and refused safe `?` joins of parameter elements in
+  callers.
+  - A take through a slot now asks whether the binding can have been
+    re-pointed on a back edge. A payload is copied only where the binding
+    it is read out of owns nothing on that path.
+  - A binding the return copies records no return lend, but only for a
+    view-free type: a copy of a type that holds views still reads what
+    they view.
+  - An `=` in a match arm written without braces is conditional, like a
+    braced one.
+
+- **A view of a String argument's buffer that a callee leaves in another
+  argument is tracked** (Agora #301, probes string_param_view_* and
+  view_of_a_string_param_into_inout_outlives_source,
+  drop_holder_given_a_string_param_view_through_inout,
+  drop_holder_inout_string_param_view_transitive_then_panics). A function
+  given a struct of views or a Vec of views `inout` and a `String` could
+  leave the first viewing the second's buffer (`= w @ W { ( string_data
+  src ) }`, a field store, a push, or a callee it handed both to). The
+  caller never learned this, and when its String ended the argument still
+  pointed into it: heap-use-after-free in safe code, with or without a
+  `% Drop` and a panic. The callee's borrow walk now records which of its
+  parameters it leaves viewing another's storage. Callers make that
+  argument depend on the String they passed, closures that run such a
+  call included, and a temporary passed there is refused. Walks the
+  module parks run a callee before a caller that waits on its answer.
+  The caller ties the String to its first `inout` argument, or else its
+  first. A callee that leaves another parameter viewing it, recurses
+  through a local holder, or is given the String `inout` is still open,
+  and the same mis-attribution refuses some safe calls (Agora #337,
+  listed in `docs/LIMITATIONS.md`).
+
+- **nurlc's string interner compares an entry's length before its bytes,
+  so a lookup never reads past a stored string** (Agora #304, test
+  intern_collision_lengths). Every name and type the compiler's symbol
+  tables hold is stored once, in an arena, behind a 31-bit hash. A lookup
+  that met an entry with its key's hash compared the key's n bytes before
+  it checked that the entry was n bytes long. For a shorter entry at the
+  end of its arena chunk, that read past the chunk: a heap-buffer-overflow
+  that the sanitized compiler reported on a branch whose stdlib happened to
+  make two names of different lengths collide. And an entry with a NUL
+  inside could match a shorter key. Each entry now carries its length in
+  place of the hash, which the table recomputes from the bytes only when
+  it grows. So a probe compares the length, then exactly that many bytes,
+  in the same memory as before. Two names of different lengths with one
+  hash, `icco0q` and `icl_aaaa2g_x`, are now a corpus test. With every
+  interned string in a chunk of its own size, the old compiler fails it
+  under ASan (READ of size 12) and the fixed one passes.
+
+- **http_cli, nurlpkg and the test corpus use one answer for the temp
+  directory** (Agora #306). They used three, and they disagreed.
+  - http_cli read `TMPDIR`, then `TEMP`/`TMP`, then `/tmp`, on every
+    platform. Under Git Bash on Windows that is an MSYS path.
+  - nurlpkg fell back to the current directory on Windows.
+  - A dozen corpus tests wrote under a hard-coded `/tmp`. On Windows that is
+    `\tmp` on the current drive, which existed only when an earlier test
+    happened to create it, so the outcome depended on test order.
+  - All of them now ask `env_temp_dir`. The tests that still name `/tmp` are
+    Linux-only (inotify, unix sockets, kTLS, symlinks), or never run their
+    path (a compile-error test).
+
+- **A view of a field ends with its struct, and an `inout` holder given a
+  callee local's view is refused** (Agora #309, probes
+  field_view_*_outlives_its_struct, callee_local_*view_given_whole_to_an_inout_holder).
+  A view of a block-local struct's String field kept in an outer value
+  (`= w @ W { ( string_data . h name ) }`, a push into an outer Vec of
+  views, an `inout` callee storing it) was recorded on the field's path,
+  and the struct's scope end never ended it: heap-use-after-free in safe
+  code. A local root (`: String b`) was already refused. A callee
+  assigning its `inout` struct of views, whole, a value viewing one of
+  its own locals faulted the same way where a field store was refused.
+  Both are refused now, the `inout` holder where the callee's body ends.
+  A callee that leaves by `^` is still open (Agora #336, listed in
+  `docs/LIMITATIONS.md`). A view of a match payload's field ends with its
+  arm, as a view of the payload itself already did. That also refuses,
+  for now, a view of a cursor payload's field kept past its arm while
+  the option still owns the payload, which is safe (Agora #336).
+
+- **A binding borrows from what it borrowed on either path of a `?` /
+  `??`** (Agora #311; probes binding_repointed_on_*,
+  option_repointed_on_*). `: ~ String e ( vec_at [String] vs 0 )`, then
+  `? c { = e ( string_from … ) } {}`, then `( vec_clear [String] vs )`
+  and a read of `e`, was accepted, and on the path that kept the element
+  it read freed memory. The same held when both arms re-pointed the
+  binding to different sources and the cleared one was the arm walked
+  first. A join's arms were walked one after the other, and each left
+  its borrow facts to the next. Now each arm starts from the facts the
+  join started from, and past the join a binding borrows from either
+  arm's sources, as A2's `ite` has it. Self-compile is faster too
+  (−0.46 % instructions): the walk copies a row's unchanged fields in
+  one piece when it translates the row.
+
+- **A container argument that is a `?` / `??` join is changed as the
+  binding it selects** (Agora #314; probes container_join_*,
+  container_match_*). `( vec_clear [S] ? == c 1 vs vt )`, or 4096
+  `( vec_push [u] ? == c 1 bs bt 1 )`, recorded no row for `vs` or `bs`.
+  A String read out of an element of `vs`, or a Slice of `bs`'s buffer,
+  read freed memory afterwards, where the same join bound to a name first
+  was refused. The bindings the join's arms select now get the rows a
+  call made with them would. The message says so: "it was one of the
+  values a '?' / '??' argument chose between, passed to 'vec_clear', which
+  may drop or replace what it holds". A join whose arms are field paths
+  is still open, as Agora #360.
+
+- **A callee that grows an element of its parameter is summarised as
+  doing so** (Agora #315; probes callee_grows_*,
+  callee_forwards_its_param_to_one_growing_an_element). A function that
+  pushed into an element of its parameter, or a field of one, through a
+  handle it read out of it (`: ( Vec u ) e ( vec_at p 0 )`, `( vec_push
+  [u] e 1 )`) was summarised as changing nothing. A caller's Slice of
+  that element's buffer read freed memory after the call. Such a handle
+  now counts as the parameter's storage, and a grower handed it may move
+  an element's buffer (new summary g_fn_ireallocs, closed over the
+  calls). At the call, the caller's views into the elements' buffers
+  end, while its element handles and its views of the argument's own
+  buffer stay, as in one function. A handle read past an Arc's payload
+  or a lock's guard is not counted: the payload is frozen, and the lock
+  keeps its value exclusive at run time. A callee that clears inside its
+  parameter's elements is still open as Agora #333. Self-compile
+  instructions and peak memory are unchanged within noise.
+
+- **A binding that owns its value drops it when it is given a lent one**
+  (Agora #317; probes option_owner_given_a_local_vec_get_in_an_arm_drops_its_value,
+  enum_option_owner_given_a_local_vec_get_drops_its_value and two of
+  #1295's h6). `: ~ ?String o ( make )  = o ( vec_get [String] vs 0 )`
+  kept the value `make` handed over whenever the new value was a borrow,
+  in case the borrow was of it, and so leaked it on that path. Now the old
+  value goes by its flag whenever the call lends only out of other
+  owners: its summary is final (or it is `vec_get`), and every argument
+  it may lend from is a parameter, or a local that owns its value and
+  views nothing. The leak remains, as before, where a lend could be of
+  the binding itself, and where the old value has no key to tell it
+  apart from what a live borrower of it holds (a `??` payload, a cursor):
+  an option payload, a library handle such as a Box, a record whose first
+  owned field is an option or an enum without a key in every variant, an
+  enum with a variant whose first payload is a number while a later one
+  owns memory (Agora #361; #366 gives those types keys).
+
+- **A field reader replaced in a loop is accepted again** (Agora #318,
+  guards field_replaced_in_a_loop_reader_pushed_before_it and
+  field_replaced_in_a_loop_reader_returned_before_it). #265 made a store
+  that replaces a field hand its reader the old value. #229's loop-head
+  join then put the reader's borrow back without the marks that make it
+  the field's viewer, so the next round's replace ended the borrow and
+  the next read was refused, though the program runs clean. The join
+  keeps those marks now, but only for a reader that the path back into
+  the head owns outright (the replace handed it the old value). A cursor
+  bound to another borrow on that path stays a plain borrow of both
+  sources (probe loop_swapped_field_viewer_read_after_its_field_replaced).
+- **The hole corpus checks every verdict against its map line.**
+  `tools/fuzz/holes/check.sh` fails on a MISMATCH: a guard the checker
+  starts to refuse, or a probe that runs clean where its map line says
+  it is refused. The two guards above had been refused on main for a day
+  without CI noticing.
+
+- **A `NURL_SAN=1` build no longer overflows a fiber on input its normal
+  build handles** (Agora #319). A fiber's stack was 64 KB in every build.
+  Under AddressSanitizer each frame carries redzones and instrumented
+  locals, so a JSON document at JSON_MAX_DEPTH crashed a fiber with a
+  stack-overflow at -O2 (nurl.sh's default) and at -O0. Sanitized builds
+  now give each fiber 256 KB, in the hosted runtime and the bare one.
+  Normal builds keep 64 KB, so their memory use and speed are unchanged.
+  The sanitizer CI job builds json_deep_fiber with `NURL_SAN=1` at -O2 and
+  -O0; the sanitizer corpus compiles at -O1, where the overflow didn't
+  show.
+
+- **A library handle's clone or share hook may not hand back its
+  argument** (Agora #334). A struct with `S_drop sink` is a handle, and
+  its own `S_clone` or `S_share` makes every copy of one. A hook that
+  returned its argument (`@ X_clone X x → X { ^ x }`), or a new value
+  over its argument's own Vec (`^ @ X { . x v }`), made each copy a second
+  owner of one value: since #288 a literal that copies a parameter that
+  way carries nothing of it, so the caller dropped the temporary it had
+  passed and the copy read it freed. Through a local literal the
+  function kept, it was a heap-use-after-free before #288 too. Such a hook
+  is refused where it is written, with a pointer to a counted share
+  (`shared_clone`, `arc_clone`, `rc_clone`, `rcbox_share`) or a copy of
+  each field. Every hook in the standard library and the packages already
+  does one or the other.
+
+- **A destructor that reads a view is found at any depth** (Agora #340).
+  The borrow checker asks whether dropping a value may run a program's
+  `% Drop` that reads a view (a view it holds whose source dies first is
+  then refused). That walk through the value's fields, elements and
+  payloads stopped at depth 8 and answered "no", so a holder nine layers
+  down, such as nine nested structs or eight and a Vec, was accepted, and
+  its destructor read a freed String (heap-use-after-free). The walk now
+  has no depth limit: it keeps the types it has met, so a type that holds
+  itself ends the search instead.
+
+- **An owner given a value a forwarder lends drops its old value whatever
+  order the functions are defined in** (Agora #344). `= o ( first vs )`,
+  with `first` handing back `vec_get`'s lend, kept `o`'s old value back
+  and leaked it when `first` was defined above its caller. Its lend
+  summary was final only at module end, so the assignment could not tell
+  the lend came from `vs` and not from `o`. Defined below, the call's
+  ownership bit decided and nothing leaked. A lend comes out of an
+  argument, so when every argument is an owner other than `o`, the old
+  value now goes by its flag in both orders.
+
+- **A borrow of a lent value now ends when a forwarder defined above its
+  caller changes that value** (Agora #352). A value lent by a call, such
+  as an element of a Vec of Vecs, handed to a function that clears or
+  replaces it through another function, ended the borrows of its contents
+  only when that function was compiled after the call. A function compiled
+  earlier, and every standard library forwarder (`string_push_str`), had no
+  final summary yet and looked as if it changed nothing. A String borrowed
+  from the element then survived the change and was read after it was
+  freed. The call now records the lent argument for any NURL callee, and
+  the borrow checker decides from the callee's final summary, as it already
+  did for a callee defined later.
+
+- **A closure's store into a field of a captured struct reaches the
+  struct** (Agora #356). The closure capture analysis counted a binding as
+  assigned only when the `=` target was the name itself. A field-path
+  target (`= . w f …`) was skipped, so a captured single-field `: ~` struct
+  was captured by value. The store landed in the closure's own copy and was
+  lost, and an owned value stored that way, such as a String or a Vec,
+  leaked. The root of a field-path target now counts as assigned, so the
+  struct is captured by pointer like any binding a closure assigns.
+
+### Security
+
+- **A deeply nested JSON document crashed the whole process when parsed on a fiber** (Agora #297). `JSON_MAX_DEPTH` was 1024, sized for a thread's 8 MB stack, but every walk of a `Json` value recurses once per level, and a fiber has 64 KB. An async HTTP server parses each request body on one. A body of 250 `[` followed by 250 `]` hit the fiber's guard page with a SIGSEGV that took every connection down: in the parse, which took 352 bytes a level. After Agora #291's parser (64 bytes a level), `json_stringify` still did so from 550 levels, and the drop at the old cap.
+  
+  The cap is now **256**, a behaviour change (see Changed). 256 levels is at most 32 KB of stack for the deepest walk (`__json_emit`, 128 bytes a level), half a fiber's.
+  
+  `compiler/tests/json_deep_fiber.nu` runs the parse, `json_stringify`, `json_pretty`, `json_clone`, `json_eq` and the drop at the cap on a fiber; with the old cap it dies with SIGSEGV.
+
+### Known issues
+
+- **31 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #292 (a view pushed into a vector
+  through a borrow of it is not recorded on the owner), #293 (an owner's
+  buffer moved through a copy of its handle leaves a slice of it live),
+  #294 (a struct built from an owner and a view of it views its own
+  buffer), #332 (a view a closure gives a capture through a local, or a
+  push into a plain Vec parameter), #333 (a callee that clears inside
+  its parameter's elements), #336 (an `inout` holder given whole a view
+  of a callee's own local, when the callee leaves by `^`), #337 (a
+  callee that leaves a parameter other than its first `inout` one
+  viewing a String argument), #338 (an enum with a view variant is taken
+  to hold no view), #339 (a closure called with the capture it changes),
+  #341 (a callee that pushes a literal holding its parameter's view into
+  a Vec it returns), #342 (an option owner given back its own value
+  through a call), #343 (an `inout` option given a lend out of a
+  borrowed Vec parameter), #345 (a view of an Rc's state through one
+  share, replaced through another), #346 (a view parameter stored into
+  an `inout` struct through a local copy), #347 (copying a Vec of views
+  with `vec_extend`, `vec_extend_range`, `vec_clone` or `slice_to_vec`),
+  #348 (a nested field store of a view), #349 (a buffer-moving call
+  handed an element lent by a call), #350 (a change through a `~ e vv`
+  loop's element), #353 (a closure that changes a capture's element
+  through a local of its body), #354 (two readers of one field, then the
+  field replaced), #357 (a field of a match payload handed to a `sink`),
+  #358 (a closure made after a borrow ended), #359 (a closure that
+  changes its own parameter's contents), #360 (a `?` / `??` join whose
+  arms are field paths), #362 (a callee that returns its `( Vec W )`
+  parameter wrapped in a struct literal, where `W` is a `% Drop` holder
+  of views), #363 (a destructor the drop check cannot see), #364 (an
+  enum binding given a new value inside its own match arm), #366 (an
+  owner's old value whose hand-over has no key: kept back (a leak) on a
+  lend path, freed under its borrower on an owned one) and #375 (an
+  option owner given a lend through a forwarder defined above its
+  caller, with an argument that is no plain owner name).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Closed in this release: agora #288, #300, #301, #309, #311, #312,
+  #314, #315, #340, #344, #352, #356. A release does not say "no hole is
+  known open" while one is.
+
+- **Five more soundness holes were open in 0.83.0 already; they were
+  found after its fold** (Agora #309, #311, #312, #314, #315:
+  claude-formal's design maps for #272 and #295, and
+  claude-nurl-developer's #301 work, each reproduced under ASan on
+  main). They are #309 (a view of a block-local struct's field kept in
+  an outer value), #311 (a binding re-pointed on one path of a `?`
+  keeps no borrow source on the other), #312 (a view a closure gives
+  one of its captures by a route nurlc does not record), #314 (a
+  container change through a `?` / `??` join argument) and #315 (a
+  callee that changes what is inside its parameter's elements).
+  `docs/LIMITATIONS.md` lists them with how to stay clear of each,
+  from now on, and 0.83.0's own list missed them.
+
 ## [0.83.0] — 2026-10-31
 
 ### Added
