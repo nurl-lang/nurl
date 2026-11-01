@@ -1,4 +1,4 @@
-ENV	now	2026-10-31T11:45:01Z
+ENV	now	2026-11-01T18:08:41Z
 ENV	host	GitHub Actions ubuntu-latest runner
 ENV	kernel	Linux 7.0.0-1017-azure x86_64
 ENV	cpu	AMD EPYC 9V45 96-Core Processor
@@ -9,9 +9,9 @@ ENV	openssl_ia32cap	unset
 ENV	cores	4
 ENV	srv_cores	0-0
 ENV	gen_cores	1-3
-ENV	commit	19ba7c74e448bad968f518f3b81c13cc39f98625
-ENV	run_url	https://github.com/nurl-lang/nurl/actions/runs/41197725904
-ENV	nurl	v0.82.0-33-g19ba7c74
+ENV	commit	8b035c6f338e73fe57e833690deac07e046b9e3e
+ENV	run_url	https://github.com/nurl-lang/nurl/actions/runs/41334756669
+ENV	nurl	v0.83.0-55-g8b035c6f
 ENV	rust	rustc 1.99.1 (58cf8f9c3 2026-10-13)
 ENV	mode	full
 ENV	secs	hs=15 lat=5 ka=10 client=6 prim_runs=3
@@ -38,115 +38,115 @@ TIER	RSA-2048 PSS sign	ifma
 TIER	HKDF-Expand-Label	sha-ni
 TIER	SHA-256 16 KB	sha-ni
 TIER	AES-128-GCM seal 16 KB	vaes512
-TIER	ChaCha20-Poly1305 seal 16 KB	avx2
-P	NURL	X25519 keygen	9465
-P	NURL	X25519 shared	17680
-P	NURL	P-256 ECDH keygen	8411
-P	NURL	P-256 ECDH shared	36977
-P	NURL	ML-KEM-768 encaps	12069
-P	NURL	ECDSA P-256 sign	11383
-P	NURL	ECDSA P-256 verify	40709
-P	NURL	RSA-2048 PSS sign	247788
-P	NURL	HKDF-Expand-Label	99
-P	NURL	SHA-256 16 KB	7691
-P	NURL	AES-128-GCM seal 16 KB	864
-P	NURL	ChaCha20-Poly1305 seal 16 KB	7479
-P	RUST	X25519 keygen	4928
-P	RUST	X25519 shared	16085
-P	RUST	P-256 ECDH keygen	6461
-P	RUST	P-256 ECDH shared	29276
-P	RUST	ML-KEM-768 encaps	10645
-P	RUST	ECDSA P-256 sign	11502
-P	RUST	ECDSA P-256 verify	34496
-P	RUST	RSA-2048 PSS sign	201754
-P	RUST	HKDF-Expand-Label	191
-P	RUST	SHA-256 16 KB	7778
-P	RUST	AES-128-GCM seal 16 KB	666
-P	RUST	ChaCha20-Poly1305 seal 16 KB	8060
-P	NURL	X25519 keygen	6832
-P	NURL	X25519 shared	17462
-P	NURL	P-256 ECDH keygen	8723
-P	NURL	P-256 ECDH shared	38371
-P	NURL	ML-KEM-768 encaps	11411
-P	NURL	ECDSA P-256 sign	11311
-P	NURL	ECDSA P-256 verify	38728
-P	NURL	RSA-2048 PSS sign	241078
-P	NURL	HKDF-Expand-Label	97
-P	NURL	SHA-256 16 KB	7584
-P	NURL	AES-128-GCM seal 16 KB	840
-P	NURL	ChaCha20-Poly1305 seal 16 KB	7172
-P	RUST	X25519 keygen	4802
-P	RUST	X25519 shared	15417
-P	RUST	P-256 ECDH keygen	6159
-P	RUST	P-256 ECDH shared	27676
-P	RUST	ML-KEM-768 encaps	10197
-P	RUST	ECDSA P-256 sign	10761
-P	RUST	ECDSA P-256 verify	32934
-P	RUST	RSA-2048 PSS sign	195861
+TIER	ChaCha20-Poly1305 seal 16 KB	avx512
+P	NURL	X25519 keygen	6158
+P	NURL	X25519 shared	18145
+P	NURL	P-256 ECDH keygen	8039
+P	NURL	P-256 ECDH shared	34990
+P	NURL	ML-KEM-768 encaps	11144
+P	NURL	ECDSA P-256 sign	11686
+P	NURL	ECDSA P-256 verify	39265
+P	NURL	RSA-2048 PSS sign	260122
+P	NURL	HKDF-Expand-Label	102
+P	NURL	SHA-256 16 KB	7759
+P	NURL	AES-128-GCM seal 16 KB	819
+P	NURL	ChaCha20-Poly1305 seal 16 KB	3506
+P	RUST	X25519 keygen	5012
+P	RUST	X25519 shared	16101
+P	RUST	P-256 ECDH keygen	6418
+P	RUST	P-256 ECDH shared	29749
+P	RUST	ML-KEM-768 encaps	8767
+P	RUST	ECDSA P-256 sign	11269
+P	RUST	ECDSA P-256 verify	34875
+P	RUST	RSA-2048 PSS sign	209123
 P	RUST	HKDF-Expand-Label	193
-P	RUST	SHA-256 16 KB	7838
-P	RUST	AES-128-GCM seal 16 KB	645
-P	RUST	ChaCha20-Poly1305 seal 16 KB	5674
-P	NURL	X25519 keygen	6446
-P	NURL	X25519 shared	17995
-P	NURL	P-256 ECDH keygen	8723
-P	NURL	P-256 ECDH shared	39070
-P	NURL	ML-KEM-768 encaps	11973
-P	NURL	ECDSA P-256 sign	12155
-P	NURL	ECDSA P-256 verify	41982
-P	NURL	RSA-2048 PSS sign	258505
-P	NURL	HKDF-Expand-Label	96
-P	NURL	SHA-256 16 KB	7486
-P	NURL	AES-128-GCM seal 16 KB	802
-P	NURL	ChaCha20-Poly1305 seal 16 KB	7457
-P	RUST	X25519 keygen	4718
-P	RUST	X25519 shared	15310
-P	RUST	P-256 ECDH keygen	6096
-P	RUST	P-256 ECDH shared	27861
-P	RUST	ML-KEM-768 encaps	8816
-P	RUST	ECDSA P-256 sign	10569
-P	RUST	ECDSA P-256 verify	32350
-P	RUST	RSA-2048 PSS sign	201277
-P	RUST	HKDF-Expand-Label	182
-P	RUST	SHA-256 16 KB	7420
-P	RUST	AES-128-GCM seal 16 KB	645
-P	RUST	ChaCha20-Poly1305 seal 16 KB	5581
-M	handshake	ec:x25519:0	NURL	ok=131355 err=0 elapsed_ns=15000000000 bytes=1838970 resumed=0 hs_p50_us=3866 hs_p99_us=4819 hs_p999_us=5619 p50_us=7240 p99_us=8759 p999_us=9608 srv_cpu_ns=14970000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:x25519:0	RUST	ok=135565 err=0 elapsed_ns=15000000000 bytes=1897910 resumed=0 hs_p50_us=3888 hs_p99_us=5580 hs_p999_us=6185 p50_us=6944 p99_us=10302 p999_us=11581 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:x25519:1	NURL	ok=153759 err=0 elapsed_ns=15000000000 bytes=2152626 resumed=153677 hs_p50_us=3231 hs_p99_us=3907 hs_p999_us=4388 p50_us=6205 p99_us=7202 p999_us=7961 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:x25519:1	RUST	ok=151013 err=0 elapsed_ns=15000000000 bytes=2114182 resumed=150905 hs_p50_us=3817 hs_p99_us=5145 hs_p999_us=5681 p50_us=6215 p99_us=9298 p999_us=10715 srv_cpu_ns=14970000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:p256:0	NURL	ok=109704 err=0 elapsed_ns=15000000000 bytes=1535856 resumed=0 hs_p50_us=4668 hs_p99_us=5832 hs_p999_us=6590 p50_us=8706 p99_us=10303 p999_us=11330 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:p256:0	RUST	ok=116562 err=0 elapsed_ns=15000000000 bytes=1631868 resumed=0 hs_p50_us=4156 hs_p99_us=6066 hs_p999_us=6725 p50_us=8084 p99_us=11988 p999_us=12821 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:mlkem:0	NURL	ok=108638 err=0 elapsed_ns=15000000000 bytes=1520932 resumed=0 hs_p50_us=4736 hs_p99_us=5672 hs_p999_us=6421 p50_us=8799 p99_us=9987 p999_us=10662 srv_cpu_ns=14990000000 srv_cores=1 ktls_tx=0
-M	handshake	ec:mlkem:0	RUST	ok=116460 err=0 elapsed_ns=15000000000 bytes=1630440 resumed=0 hs_p50_us=4685 hs_p99_us=6532 hs_p999_us=7230 p50_us=8079 p99_us=12075 p999_us=13532 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	rsa:x25519:0	NURL	ok=42195 err=0 elapsed_ns=15000000000 bytes=590730 resumed=0 hs_p50_us=11928 hs_p99_us=15532 hs_p999_us=16775 p50_us=22490 p99_us=25578 p999_us=27023 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	handshake	rsa:x25519:0	RUST	ok=49542 err=0 elapsed_ns=15000000000 bytes=693588 resumed=0 hs_p50_us=11597 hs_p99_us=17570 hs_p999_us=25025 p50_us=18555 p99_us=31770 p999_us=37081 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
-M	latency	ec:x25519:0	NURL	ok=19470 err=0 elapsed_ns=5000000000 bytes=272580 resumed=0 hs_p50_us=212 hs_p99_us=244 hs_p999_us=562 p50_us=271 p99_us=309 p999_us=722 srv_cpu_ns=2610000000 srv_cores=1 ktls_tx=0
-M	latency	ec:x25519:0	RUST	ok=20879 err=0 elapsed_ns=5000000000 bytes=292306 resumed=0 hs_p50_us=177 hs_p99_us=386 hs_p999_us=717 p50_us=218 p99_us=482 p999_us=964 srv_cpu_ns=2810000000 srv_cores=1 ktls_tx=0
-M	latency	ec:x25519:1	NURL	ok=26889 err=0 elapsed_ns=5000000000 bytes=376446 resumed=26888 hs_p50_us=129 hs_p99_us=178 hs_p999_us=243 p50_us=171 p99_us=238 p999_us=335 srv_cpu_ns=2940000000 srv_cores=1 ktls_tx=0
-M	latency	ec:x25519:1	RUST	ok=26541 err=0 elapsed_ns=5000000000 bytes=371574 resumed=26540 hs_p50_us=125 hs_p99_us=250 hs_p999_us=572 p50_us=166 p99_us=324 p999_us=736 srv_cpu_ns=3240000000 srv_cores=1 ktls_tx=0
-M	latency	ec:p256:0	NURL	ok=16654 err=0 elapsed_ns=5000000000 bytes=233156 resumed=0 hs_p50_us=254 hs_p99_us=297 hs_p999_us=597 p50_us=313 p99_us=360 p999_us=875 srv_cpu_ns=2660000000 srv_cores=1 ktls_tx=0
-M	latency	ec:p256:0	RUST	ok=19090 err=0 elapsed_ns=5000000000 bytes=267260 resumed=0 hs_p50_us=204 hs_p99_us=267 hs_p999_us=286 p50_us=246 p99_us=333 p999_us=353 srv_cpu_ns=2810000000 srv_cores=1 ktls_tx=0
-M	latency	ec:mlkem:0	NURL	ok=16804 err=0 elapsed_ns=5000000000 bytes=235256 resumed=0 hs_p50_us=233 hs_p99_us=416 hs_p999_us=842 p50_us=274 p99_us=523 p999_us=1049 srv_cpu_ns=2570000000 srv_cores=1 ktls_tx=0
-M	latency	ec:mlkem:0	RUST	ok=16501 err=0 elapsed_ns=5000000000 bytes=231014 resumed=0 hs_p50_us=244 hs_p99_us=294 hs_p999_us=322 p50_us=289 p99_us=360 p999_us=409 srv_cpu_ns=2790000000 srv_cores=1 ktls_tx=0
-M	latency	rsa:x25519:0	NURL	ok=10779 err=0 elapsed_ns=5000000000 bytes=150906 resumed=0 hs_p50_us=405 hs_p99_us=664 hs_p999_us=1226 p50_us=447 p99_us=813 p999_us=1529 srv_cpu_ns=3970000000 srv_cores=1 ktls_tx=0
-M	latency	rsa:x25519:0	RUST	ok=12205 err=0 elapsed_ns=5000000000 bytes=170870 resumed=0 hs_p50_us=347 hs_p99_us=559 hs_p999_us=627 p50_us=389 p99_us=601 p999_us=702 srv_cpu_ns=4000000000 srv_cores=1 ktls_tx=0
-M	records	tls:/1k	NURL	ok=1145405 err=0 elapsed_ns=10000000000 bytes=1172894720 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=555 p99_us=617 p999_us=831 srv_cpu_ns=9970000000 srv_cores=1 ktls_tx=0
-M	records	plain:/1k	NURL	ok=1198196 err=0 elapsed_ns=10000000000 bytes=1226952704 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=534 p99_us=579 p999_us=758 srv_cpu_ns=9990000000 srv_cores=1 ktls_tx=0
-M	records	tls:/1k	RUST	ok=1129894 err=0 elapsed_ns=10000000000 bytes=1157011456 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=564 p99_us=861 p999_us=1486 srv_cpu_ns=9980000000 srv_cores=1 ktls_tx=0
-M	records	plain:/1k	RUST	ok=1253752 err=0 elapsed_ns=10000000000 bytes=1283842048 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=516 p99_us=582 p999_us=988 srv_cpu_ns=9990000000 srv_cores=1 ktls_tx=0
-M	bulk	aes128	NURL	ok=30939 err=0 elapsed_ns=10000000000 bytes=32441892864 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=312 p99_us=408 p999_us=897 srv_cpu_ns=9570000000 srv_cores=1 ktls_tx=0
-M	bulk	chacha	NURL	ok=10475 err=0 elapsed_ns=10000000000 bytes=10983833600 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=952 p99_us=1095 p999_us=1230 srv_cpu_ns=9640000000 srv_cores=1 ktls_tx=0
-M	bulk	plain	NURL	ok=64698 err=0 elapsed_ns=10000000000 bytes=67840770048 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=147 p99_us=184 p999_us=211 srv_cpu_ns=9290000000 srv_cores=1 ktls_tx=0
-M	bulk	aes128	RUST	ok=28226 err=0 elapsed_ns=10000000000 bytes=29597106176 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=358 p99_us=448 p999_us=574 srv_cpu_ns=9530000000 srv_cores=1 ktls_tx=0
-M	bulk	chacha	RUST	ok=12870 err=0 elapsed_ns=10000000000 bytes=13495173120 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=782 p99_us=826 p999_us=1126 srv_cpu_ns=9550000000 srv_cores=1 ktls_tx=0
-M	bulk	plain	RUST	ok=66285 err=0 elapsed_ns=10000000000 bytes=69504860160 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=147 p99_us=182 p999_us=201 srv_cpu_ns=9130000000 srv_cores=1 ktls_tx=0
-M	bulk	aes128+ktls	NURL	ok=15326 err=0 elapsed_ns=10000000000 bytes=16070475776 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=630 p99_us=773 p999_us=1913 srv_cpu_ns=7650000000 srv_cores=1 ktls_tx=1
-M	client	full:/	NURL	ok=14115 err=0 elapsed_ns=6000291651 bytes=197610 p50_us=415 p99_us=751 p999_us=1017 
-M	client	full:/	RUST	ok=10855 err=0 elapsed_ns=6000030671 bytes=151970 p50_us=535 p99_us=992 p999_us=1427
-M	client	resume:/	NURL	ok=14369 err=0 elapsed_ns=6000299942 bytes=201166 p50_us=405 p99_us=798 p999_us=1068 
-M	client	resume:/	RUST	ok=12351 err=0 elapsed_ns=6000435954 bytes=172914 p50_us=481 p99_us=532 p999_us=642
-M	client	ka:/1k	NURL	ok=220127 err=0 elapsed_ns=6000010165 bytes=225410048 p50_us=27 p99_us=37 p999_us=40 
-M	client	ka:/1k	RUST	ok=185988 err=0 elapsed_ns=6000005092 bytes=190451712 p50_us=31 p99_us=45 p999_us=133
-M	client	ka:/1m	NURL	ok=14941 err=0 elapsed_ns=6000037382 bytes=15666774016 p50_us=400 p99_us=505 p999_us=725 
-M	client	ka:/1m	RUST	ok=10668 err=0 elapsed_ns=6000675474 bytes=11186208768 p50_us=471 p99_us=851 p999_us=974
+P	RUST	SHA-256 16 KB	7903
+P	RUST	AES-128-GCM seal 16 KB	733
+P	RUST	ChaCha20-Poly1305 seal 16 KB	5972
+P	NURL	X25519 keygen	6158
+P	NURL	X25519 shared	18565
+P	NURL	P-256 ECDH keygen	8262
+P	NURL	P-256 ECDH shared	35717
+P	NURL	ML-KEM-768 encaps	11055
+P	NURL	ECDSA P-256 sign	11663
+P	NURL	ECDSA P-256 verify	39977
+P	NURL	RSA-2048 PSS sign	258165
+P	NURL	HKDF-Expand-Label	102
+P	NURL	SHA-256 16 KB	7911
+P	NURL	AES-128-GCM seal 16 KB	857
+P	NURL	ChaCha20-Poly1305 seal 16 KB	3506
+P	RUST	X25519 keygen	5000
+P	RUST	X25519 shared	16183
+P	RUST	P-256 ECDH keygen	6425
+P	RUST	P-256 ECDH shared	29569
+P	RUST	ML-KEM-768 encaps	8676
+P	RUST	ECDSA P-256 sign	11242
+P	RUST	ECDSA P-256 verify	34379
+P	RUST	RSA-2048 PSS sign	207609
+P	RUST	HKDF-Expand-Label	194
+P	RUST	SHA-256 16 KB	7890
+P	RUST	AES-128-GCM seal 16 KB	693
+P	RUST	ChaCha20-Poly1305 seal 16 KB	5973
+P	NURL	X25519 keygen	6029
+P	NURL	X25519 shared	18168
+P	NURL	P-256 ECDH keygen	8116
+P	NURL	P-256 ECDH shared	35330
+P	NURL	ML-KEM-768 encaps	11045
+P	NURL	ECDSA P-256 sign	11289
+P	NURL	ECDSA P-256 verify	38324
+P	NURL	RSA-2048 PSS sign	256836
+P	NURL	HKDF-Expand-Label	101
+P	NURL	SHA-256 16 KB	7854
+P	NURL	AES-128-GCM seal 16 KB	834
+P	NURL	ChaCha20-Poly1305 seal 16 KB	3491
+P	RUST	X25519 keygen	4920
+P	RUST	X25519 shared	16205
+P	RUST	P-256 ECDH keygen	6504
+P	RUST	P-256 ECDH shared	29266
+P	RUST	ML-KEM-768 encaps	10666
+P	RUST	ECDSA P-256 sign	11225
+P	RUST	ECDSA P-256 verify	33954
+P	RUST	RSA-2048 PSS sign	204582
+P	RUST	HKDF-Expand-Label	192
+P	RUST	SHA-256 16 KB	7821
+P	RUST	AES-128-GCM seal 16 KB	692
+P	RUST	ChaCha20-Poly1305 seal 16 KB	5873
+M	handshake	ec:x25519:0	NURL	ok=128467 err=0 elapsed_ns=15000000000 bytes=1798538 resumed=0 hs_p50_us=3961 hs_p99_us=4824 hs_p999_us=5737 p50_us=7411 p99_us=8763 p999_us=9914 srv_cpu_ns=14970000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:x25519:0	RUST	ok=130884 err=0 elapsed_ns=15000000000 bytes=1832376 resumed=0 hs_p50_us=4249 hs_p99_us=5503 hs_p999_us=6402 p50_us=7175 p99_us=10405 p999_us=12038 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:x25519:1	NURL	ok=152322 err=0 elapsed_ns=15000000000 bytes=2132508 resumed=152224 hs_p50_us=3264 hs_p99_us=3901 hs_p999_us=4795 p50_us=6264 p99_us=7224 p999_us=9049 srv_cpu_ns=14970000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:x25519:1	RUST	ok=147090 err=0 elapsed_ns=15000000000 bytes=2059260 resumed=146968 hs_p50_us=3904 hs_p99_us=5223 hs_p999_us=5935 p50_us=6363 p99_us=9554 p999_us=11125 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:p256:0	NURL	ok=107677 err=0 elapsed_ns=15000000000 bytes=1507478 resumed=0 hs_p50_us=4764 hs_p99_us=5788 hs_p999_us=6433 p50_us=8859 p99_us=10238 p999_us=11258 srv_cpu_ns=14990000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:p256:0	RUST	ok=112391 err=0 elapsed_ns=15000000000 bytes=1573474 resumed=0 hs_p50_us=5125 hs_p99_us=7033 hs_p999_us=10944 p50_us=8312 p99_us=12875 p999_us=15932 srv_cpu_ns=14930000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:mlkem:0	NURL	ok=107512 err=0 elapsed_ns=15000000000 bytes=1505168 resumed=0 hs_p50_us=4759 hs_p99_us=5836 hs_p999_us=6637 p50_us=8875 p99_us=10311 p999_us=11194 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
+M	handshake	ec:mlkem:0	RUST	ok=115171 err=0 elapsed_ns=15000000000 bytes=1612394 resumed=0 hs_p50_us=4954 hs_p99_us=6742 hs_p999_us=8320 p50_us=8155 p99_us=12204 p999_us=14433 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
+M	handshake	rsa:x25519:0	NURL	ok=40069 err=0 elapsed_ns=15000000000 bytes=560966 resumed=0 hs_p50_us=12495 hs_p99_us=18355 hs_p999_us=30815 p50_us=23422 p99_us=33340 p999_us=43789 srv_cpu_ns=14970000000 srv_cores=1 ktls_tx=0
+M	handshake	rsa:x25519:0	RUST	ok=49062 err=0 elapsed_ns=15000000000 bytes=686868 resumed=0 hs_p50_us=9562 hs_p99_us=16683 hs_p999_us=29058 p50_us=18947 p99_us=29917 p999_us=44736 srv_cpu_ns=14980000000 srv_cores=1 ktls_tx=0
+M	latency	ec:x25519:0	NURL	ok=18061 err=0 elapsed_ns=5000000000 bytes=252854 resumed=0 hs_p50_us=220 hs_p99_us=254 hs_p999_us=326 p50_us=281 p99_us=322 p999_us=433 srv_cpu_ns=2630000000 srv_cores=1 ktls_tx=0
+M	latency	ec:x25519:0	RUST	ok=20041 err=0 elapsed_ns=5000000000 bytes=280574 resumed=0 hs_p50_us=202 hs_p99_us=241 hs_p999_us=335 p50_us=261 p99_us=302 p999_us=446 srv_cpu_ns=2820000000 srv_cores=1 ktls_tx=0
+M	latency	ec:x25519:1	NURL	ok=26225 err=0 elapsed_ns=5000000000 bytes=367150 resumed=26224 hs_p50_us=143 hs_p99_us=194 hs_p999_us=317 p50_us=186 p99_us=267 p999_us=417 srv_cpu_ns=2940000000 srv_cores=1 ktls_tx=0
+M	latency	ec:x25519:1	RUST	ok=28614 err=0 elapsed_ns=5000000000 bytes=400596 resumed=28613 hs_p50_us=122 hs_p99_us=185 hs_p999_us=433 p50_us=162 p99_us=249 p999_us=627 srv_cpu_ns=3310000000 srv_cores=1 ktls_tx=0
+M	latency	ec:p256:0	NURL	ok=19296 err=0 elapsed_ns=5000000000 bytes=270144 resumed=0 hs_p50_us=210 hs_p99_us=273 hs_p999_us=614 p50_us=249 p99_us=339 p999_us=860 srv_cpu_ns=2670000000 srv_cores=1 ktls_tx=0
+M	latency	ec:p256:0	RUST	ok=17371 err=0 elapsed_ns=5000000000 bytes=243194 resumed=0 hs_p50_us=239 hs_p99_us=275 hs_p999_us=372 p50_us=301 p99_us=342 p999_us=484 srv_cpu_ns=2830000000 srv_cores=1 ktls_tx=0
+M	latency	ec:mlkem:0	NURL	ok=17152 err=0 elapsed_ns=5000000000 bytes=240128 resumed=0 hs_p50_us=229 hs_p99_us=309 hs_p999_us=637 p50_us=270 p99_us=377 p999_us=920 srv_cpu_ns=2550000000 srv_cores=1 ktls_tx=0
+M	latency	ec:mlkem:0	RUST	ok=17661 err=0 elapsed_ns=5000000000 bytes=247254 resumed=0 hs_p50_us=223 hs_p99_us=358 hs_p999_us=648 p50_us=265 p99_us=465 p999_us=829 srv_cpu_ns=2770000000 srv_cores=1 ktls_tx=0
+M	latency	rsa:x25519:0	NURL	ok=10061 err=0 elapsed_ns=5000000000 bytes=140854 resumed=0 hs_p50_us=439 hs_p99_us=490 hs_p999_us=795 p50_us=503 p99_us=560 p999_us=978 srv_cpu_ns=3920000000 srv_cores=1 ktls_tx=0
+M	latency	rsa:x25519:0	RUST	ok=11136 err=0 elapsed_ns=5000000000 bytes=155904 resumed=0 hs_p50_us=388 hs_p99_us=609 hs_p999_us=786 p50_us=455 p99_us=681 p999_us=1007 srv_cpu_ns=3920000000 srv_cores=1 ktls_tx=0
+M	records	tls:/1k	NURL	ok=1118046 err=0 elapsed_ns=10000000000 bytes=1144879104 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=568 p99_us=667 p999_us=797 srv_cpu_ns=9980000000 srv_cores=1 ktls_tx=0
+M	records	plain:/1k	NURL	ok=1201631 err=0 elapsed_ns=10000000000 bytes=1230470144 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=533 p99_us=613 p999_us=779 srv_cpu_ns=10000000000 srv_cores=1 ktls_tx=0
+M	records	tls:/1k	RUST	ok=1146799 err=0 elapsed_ns=10000000000 bytes=1174322176 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=561 p99_us=630 p999_us=1161 srv_cpu_ns=9980000000 srv_cores=1 ktls_tx=0
+M	records	plain:/1k	RUST	ok=1255292 err=0 elapsed_ns=10000000000 bytes=1285419008 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=519 p99_us=558 p999_us=596 srv_cpu_ns=9990000000 srv_cores=1 ktls_tx=0
+M	bulk	aes128	NURL	ok=32117 err=0 elapsed_ns=10000000000 bytes=33677115392 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=304 p99_us=403 p999_us=417 srv_cpu_ns=9550000000 srv_cores=1 ktls_tx=0
+M	bulk	chacha	NURL	ok=14661 err=0 elapsed_ns=10000000000 bytes=15373172736 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=680 p99_us=750 p999_us=819 srv_cpu_ns=7500000000 srv_cores=1 ktls_tx=0
+M	bulk	plain	NURL	ok=69069 err=0 elapsed_ns=10000000000 bytes=72424095744 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=142 p99_us=172 p999_us=215 srv_cpu_ns=9280000000 srv_cores=1 ktls_tx=0
+M	bulk	aes128	RUST	ok=26288 err=0 elapsed_ns=10000000000 bytes=27564965888 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=381 p99_us=417 p999_us=517 srv_cpu_ns=9540000000 srv_cores=1 ktls_tx=0
+M	bulk	chacha	RUST	ok=13162 err=0 elapsed_ns=10000000000 bytes=13801357312 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=776 p99_us=886 p999_us=1274 srv_cpu_ns=9510000000 srv_cores=1 ktls_tx=0
+M	bulk	plain	RUST	ok=64057 err=0 elapsed_ns=10000000000 bytes=67168632832 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=149 p99_us=246 p999_us=590 srv_cpu_ns=9230000000 srv_cores=1 ktls_tx=0
+M	bulk	aes128+ktls	NURL	ok=15150 err=0 elapsed_ns=10000000000 bytes=15885926400 resumed=0 hs_p50_us=0 hs_p99_us=0 hs_p999_us=0 p50_us=648 p99_us=812 p999_us=838 srv_cpu_ns=7830000000 srv_cores=1 ktls_tx=1
+M	client	full:/	NURL	ok=13849 err=0 elapsed_ns=6000359023 bytes=193886 p50_us=425 p99_us=613 p999_us=959 
+M	client	full:/	RUST	ok=10716 err=0 elapsed_ns=6000167984 bytes=150024 p50_us=546 p99_us=897 p999_us=1292
+M	client	resume:/	NURL	ok=14056 err=0 elapsed_ns=6000391752 bytes=196784 p50_us=417 p99_us=694 p999_us=966 
+M	client	resume:/	RUST	ok=12000 err=0 elapsed_ns=6000191804 bytes=168000 p50_us=494 p99_us=551 p999_us=824
+M	client	ka:/1k	NURL	ok=212310 err=0 elapsed_ns=6000017252 bytes=217405440 p50_us=27 p99_us=39 p999_us=62 
+M	client	ka:/1k	RUST	ok=182421 err=0 elapsed_ns=6000000348 bytes=186799104 p50_us=32 p99_us=44 p999_us=47
+M	client	ka:/1m	NURL	ok=15453 err=0 elapsed_ns=6000346659 bytes=16203644928 p50_us=388 p99_us=421 p999_us=439 
+M	client	ka:/1m	RUST	ok=14720 err=0 elapsed_ns=6000375441 bytes=15435038720 p50_us=403 p99_us=448 p999_us=666
