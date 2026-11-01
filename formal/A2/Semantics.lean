@@ -37,6 +37,20 @@ inductive Sub : Val → Val → Prop
   | pkg {v e : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Sub v e → Sub v (.pkg fs te ms e cs)
 
+/-- `Repl n n' T T'`: `T'` is `T` with one occurrence of `n` replaced by `n'`
+    (a change through a borrowed handle rewrites the node at its cell in its
+    owner's tree; the lemmas are in `Repl.lean`, Agora #295). -/
+inductive Repl (n n' : Val) : Val → Val → Prop
+  | here : Repl n n' n n'
+  | elem {t : Ty} {c d : Nat} {pre post : List Val} {e e' : Val} :
+      Repl n n' e e' → Repl n n' (.node t c d (pre ++ e :: post)) (.node t c d (pre ++ e' :: post))
+  | fst {a a' b : Val} : Repl n n' a a' → Repl n n' (.pair a b) (.pair a' b)
+  | snd {a b b' : Val} : Repl n n' b b' → Repl n n' (.pair a b) (.pair a b')
+  | inl {a a' : Val} : Repl n n' a a' → Repl n n' (.inl a) (.inl a')
+  | inr {a a' : Val} : Repl n n' a a' → Repl n n' (.inr a) (.inr a')
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} {a a' : Val} :
+      Repl n n' a a' → Repl n n' (.pkg fs te ms a cs) (.pkg fs te ms a' cs)
+
 /-- The node with control block `c`, found in an owned tree. -/
 def NodeAt (m : Mem) (c : Nat) (n : Val) : Prop :=
   ∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty d es, n = .node ty c d es
@@ -78,6 +92,13 @@ def VecOf (m : Mem) (x : Var) (t : Ty) (c d : Nat) (es : List Val) : Prop :=
   m.alloc c = true ∧ m.alloc d = true ∧
   (m.st x = some ⟨true, some (.node t c d es)⟩ ∨
    (m.st x = some ⟨false, some (.href c)⟩ ∧ NodeAt m c (.node t c d es)))
+
+/-- The vector `x` names and the slot `o` whose tree `T` holds it: `x`'s own
+    tree (`o = x`), or, for a borrowed `x`, the owned tree its handle points
+    into, at any depth (#295). -/
+def NodeOf (m : Mem) (x o : Var) (T : Val) (t : Ty) (c d : Nat) (es : List Val) : Prop :=
+  m.alloc c = true ∧ m.alloc d = true ∧ m.st o = some ⟨true, some T⟩ ∧
+  ((o = x ∧ T = .node t c d es) ∨ (m.st x = some ⟨false, some (.href c)⟩ ∧ Sub (.node t c d es) T))
 
 inductive Eval (m : Mem) : Expr → Nat → Prop
   | lit {n : Nat} : Eval m (.lit n) n
@@ -233,6 +254,10 @@ def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .taker y => .taker (ρ y)
   | .pack fs te ms y cs => .pack fs te ms (ρ y) (cs.map (fun c => (ρ c.1, c.2)))
 
+def Edit.rename (ρ : Var → Var) : Edit → Edit
+  | .push y => .push (ρ y)
+  | .trunc i => .trunc (i.rename ρ)
+
 def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .skip => .skip
   | .seq a b => .seq (a.rename ρ) (b.rename ρ)
@@ -253,6 +278,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .callc x c j zs s => .callc (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
   | .letd x f r s => .letd (ρ x) f (r.rename ρ) (s.rename ρ)
   | .scopeD x f s => .scopeD (ρ x) f (s.rename ρ)
+  | .edit b x op => .edit b (ρ x) (op.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -403,6 +429,25 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.push x y)
         (.ok ({ m1 with alloc := upd (upd m1.alloc d false) m1.nid true, nid := m1.nid + 1 }.set x
                 ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
+  -- A2-thru (Agora #295): a change of a `Vec`'s elements made through any
+  -- binding that names it rewrites its node where it lies in its owner's tree.
+  | editPush {m m1 : Mem} {b : Bool} {x y o : Var} {v T T' : Val} {t : Ty} {c d : Nat}
+      {es : List Val} :
+      TakeVal m y v m1 → NodeOf m1 x o T t c d es →
+      Repl (.node t c d es) (.node t c d (es ++ [v])) T T' →
+      Step P m (.edit b x (.push y)) (.ok (m1.set o ⟨true, some T'⟩) .skip)
+  | editPushRealloc {m m1 : Mem} {b : Bool} {x y o : Var} {v T T' : Val} {t : Ty} {c d : Nat}
+      {es : List Val} :
+      TakeVal m y v m1 → NodeOf m1 x o T t c d es →
+      Repl (.node t c d es) (.node t c m1.nid (es ++ [v])) T T' →
+      Step P m (.edit b x (.push y))
+        (.ok ({ m1 with alloc := upd (upd m1.alloc d false) m1.nid true, nid := m1.nid + 1 }.set o
+                ⟨true, some T'⟩) .skip)
+  | editTrunc {m : Mem} {b : Bool} {x o : Var} {i : Expr} {n : Nat} {T T' : Val} {t : Ty}
+      {c d : Nat} {es : List Val} {a' : Nat → Bool} :
+      Eval m i n → NodeOf m x o T t c d es → FreesL m.alloc (es.drop n) a' →
+      Repl (.node t c d es) (.node t c d (es.take n)) T T' →
+      Step P m (.edit b x (.trunc i)) (.ok ({ m with alloc := a' }.set o ⟨true, some T'⟩) .skip)
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)

@@ -221,6 +221,13 @@ def Mem.set (m : Mem) (x : Var) (s : Slot) : Mem :=
 def Mem.remove (m : Mem) (x : Var) : Mem :=
   { m with st := upd m.st x none }
 
+/-- A change of a `Vec`'s elements that A2-thru adds (Agora #295): a value
+    moved in at the end, or the elements from the `i`-th on dropped
+    (`vec_clear` is `trunc 0`, `vec_truncate` `trunc i`). -/
+inductive Edit where
+  | push (y : Var)
+  | trunc (i : Expr)
+
 /-- Statements.  `scope`, `rbind`, `frozen` and `catchR` are run-time forms:
     they appear when a binding is made or a function is called, never in
     source. -/
@@ -248,6 +255,9 @@ inductive Stmt where
                                                           -- of its type (`% Drop`, A2-drop)
   | scopeD (x : Var) (f : Nat) (body : Stmt)              -- run time: `x` is bound, and its
                                                           -- destructor runs at the end
+  | edit (thru : Bool) (x : Var) (op : Edit)             -- a change of `x`'s elements (#295):
+                                                          -- `thru` marks one made through a
+                                                          -- borrow; the step ignores it
 
 
 /-- A function.  Its parameters are variables `0 … n-1`, its result slot is

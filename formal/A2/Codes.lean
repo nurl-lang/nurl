@@ -1,4 +1,5 @@
 import A2.Closure
+import A2.Repl
 
 /-! A2 — every package names code of its signature, at every step.
 
@@ -110,6 +111,45 @@ theorem MemCodes.vecOf {P : Prog} {m : Mem} (h : MemCodes P m) {y : Var} {t : Ty
 
 theorem pkgOK_elem {P : Prog} {t : Ty} {c d : Nat} {es : List Val} (h : PkgOK P (.node t c d es))
     {e : Val} (he : e ∈ es) : PkgOK P e := h.child (Child.elem he)
+
+/-- Rewriting a tree at one node keeps its packages' code, when the new
+    node's packages are fine (#295). -/
+theorem Repl.pkgOK_new {P : Prog} {n n' T T' : Val} (hr : Repl n n' T T') (hT : PkgOK P T)
+    (hn' : PkgOK P n') : PkgOK P T' := by
+  induction hr with
+  | here => exact hn'
+  | @elem t c d pre post e e' _ ih =>
+    refine pkgOK_of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | elem hx =>
+      rcases List.mem_append.mp hx with hx | hx
+      · exact hT.child (Child.elem (List.mem_append_left _ hx))
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · exact ih (hT.child (Child.elem (List.mem_append_right _ (List.mem_cons_self ..))))
+        · exact hT.child (Child.elem (List.mem_append_right _ (List.mem_cons_of_mem _ hx)))
+  | fst _ ih =>
+    refine pkgOK_of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | fst => exact ih (hT.child Child.fst)
+    | snd => exact hT.child Child.snd
+  | snd _ ih =>
+    refine pkgOK_of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | fst => exact hT.child Child.fst
+    | snd => exact ih (hT.child Child.snd)
+  | inl _ ih =>
+    refine pkgOK_of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | inl => exact ih (hT.child Child.inl)
+  | inr _ ih =>
+    refine pkgOK_of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | inr => exact ih (hT.child Child.inr)
+  | pkg _ ih =>
+    refine pkgOK_of_children (fun fs te ms e cs h => ?_) (fun x hc => ?_)
+    · cases h; exact hT _ _ _ _ _ (Sub.refl _)
+    · cases hc with
+      | pkg => exact ih (hT.child Child.pkg)
 
 theorem TakeVal.codes {P : Prog} {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1)
     (h : MemCodes P m) : PkgOK P v ∧ MemCodes P m1 := by
@@ -303,6 +343,30 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | free _ _ =>
     intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).set (fun _ e => by cases e), trivial⟩
+  | editPush ht hn hr | editPushRealloc ht hn hr =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := ht.codes hm
+    have hT := hm1.slot hn.2.2.1
+    have hn0 := hT.sub hr.sub
+    refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
+    cases e
+    refine hr.pkgOK_new hT ?_
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | elem he =>
+      rcases List.mem_append.mp he with he | he
+      · exact pkgOK_elem hn0 he
+      · simp at he; subst he; exact hv
+  | editTrunc _ hn _ hr =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    have hT := hm.slot hn.2.2.1
+    have hn0 := hT.sub hr.sub
+    refine ⟨(hm.of_st rfl).set (fun V e => ?_), trivial⟩
+    cases e
+    refine hr.pkgOK_new hT ?_
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | elem he => exact pkgOK_elem hn0 (List.mem_of_mem_take he)
   | panic =>
     intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm

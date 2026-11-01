@@ -167,6 +167,19 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
       m.st x = some ⟨true, some (.node t c d es)⟩ → Touch P m (.push x y) d true
   | free {x : Var} {t : Val} {i : Nat} :
       m.st x = some ⟨true, some t⟩ → i ∈ t.ids → Touch P m (.free x) i true
+  /-- A change of a `Vec`'s elements (#295) writes its node's cell and
+      buffer, wherever the node lies in its owner's tree ... -/
+  | editC {b : Bool} {x o : Var} {op : Edit} {T : Val} {t : Ty} {c d : Nat} {es : List Val} :
+      NodeOf m x o T t c d es → Touch P m (.edit b x op) c true
+  | editD {b : Bool} {x o : Var} {op : Edit} {T : Val} {t : Ty} {c d : Nat} {es : List Val} :
+      NodeOf m x o T t c d es → Touch P m (.edit b x op) d true
+  /-- ... a truncation frees the elements it drops ... -/
+  | editFree {b : Bool} {x o : Var} {i : Expr} {n : Nat} {T : Val} {t : Ty} {c d : Nat}
+      {es : List Val} {a : Nat} :
+      NodeOf m x o T t c d es → Eval m i n → a ∈ idsL (es.drop n) →
+      Touch P m (.edit b x (.trunc i)) a true
+  /-- ... and reads what its length expression reads. -/
+  | editI {b : Bool} {x : Var} {i : Expr} {a : Nat} : EReads m i a → Touch P m (.edit b x (.trunc i)) a false
   | scope {x : Var} {s : Stmt} {i : Nat} {w : Bool} : Touch P m s i w → Touch P m (.scope x s) i w
   /-- A scope's end releases what its binding owns ... -/
   | scopeEnd {x : Var} {t : Val} {i : Nat} :

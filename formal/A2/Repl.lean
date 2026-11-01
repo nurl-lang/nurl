@@ -14,16 +14,8 @@ replacement itself (`here_inv`, by size: a tree is no part of itself). -/
 
 namespace A2
 
-inductive Repl (n n' : Val) : Val → Val → Prop
-  | here : Repl n n' n n'
-  | elem {t : Ty} {c d : Nat} {pre post : List Val} {e e' : Val} :
-      Repl n n' e e' → Repl n n' (.node t c d (pre ++ e :: post)) (.node t c d (pre ++ e' :: post))
-  | fst {a a' b : Val} : Repl n n' a a' → Repl n n' (.pair a b) (.pair a' b)
-  | snd {a b b' : Val} : Repl n n' b b' → Repl n n' (.pair a b) (.pair a b')
-  | inl {a a' : Val} : Repl n n' a a' → Repl n n' (.inl a) (.inl a')
-  | inr {a a' : Val} : Repl n n' a a' → Repl n n' (.inr a) (.inr a')
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} {a a' : Val} :
-      Repl n n' a a' → Repl n n' (.pkg fs te ms a cs) (.pkg fs te ms a' cs)
+-- (`Repl` itself is in `Semantics.lean`, where the steps that rewrite a
+-- tree through a borrowed handle use it.)
 
 /-! ### Sizes: a tree is no part of itself -/
 
@@ -120,6 +112,17 @@ theorem ids_split {T T' : Val} (h : Repl n n' T T') :
   | inr _ ih => simpa using ih
   | pkg _ ih => simpa using ih
 
+/-- An address of the new tree is the new node's, or one the old tree had. -/
+theorem mem_ids {T T' : Val} (h : Repl n n' T T') {i : Nat} (hi : i ∈ T'.ids) :
+    i ∈ n'.ids ∨ i ∈ T.ids := by
+  obtain ⟨A, B, h1, h2⟩ := h.ids_split
+  rw [h2] at hi; rw [h1]
+  simp only [List.mem_append] at hi ⊢
+  rcases hi with (hi | hi) | hi
+  · exact .inr (.inl (.inl hi))
+  · exact .inl hi
+  · exact .inr (.inr hi)
+
 /-- The captured names of the two trees, the same way: what a package
     deeper in the tree captured is untouched around the hole. -/
 theorem names_split {T T' : Val} (h : Repl n n' T T') :
@@ -214,5 +217,19 @@ theorem top {T T' m : Val} (hr : Repl n n' T T') (ht : Top m T) :
       · exact Or.inr ⟨m', Top.pkg ht', hm⟩
 
 end Repl
+
+/-- What a truncation drops is in the node's tree. -/
+theorem ids_drop_sub {t : Ty} {c d : Nat} {es : List Val} {n i : Nat} (hi : i ∈ idsL (es.drop n)) :
+    i ∈ (Val.node t c d es).ids := by
+  obtain ⟨e, he, hie⟩ := mem_idsL_iff.mp hi
+  simp only [ids_node, List.mem_cons]
+  exact .inr (.inr (mem_idsL (List.mem_of_mem_drop he) hie))
+
+/-- The node a `NodeOf` finds lies in its owner's tree. -/
+theorem NodeOf.sub {m : Mem} {x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}
+    (h : NodeOf m x o T t c d es) : Sub (.node t c d es) T := by
+  rcases h.2.2.2 with ⟨_, rfl⟩ | ⟨_, hs⟩
+  · exact Sub.refl _
+  · exact hs
 
 end A2
