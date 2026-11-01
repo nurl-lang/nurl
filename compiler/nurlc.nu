@@ -4534,27 +4534,109 @@ unsafe @ nurl_cg_lbl i h s hint → s {
     : ~ s rest ( nurl_str_cat ix `` )
     ~ != 0 ( nurl_str_len rest ) {
         : i want ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
-        : ~ s at ( nurl_str_cat args `` )
-        : ~ i k 0
-        ~ < k want { = at ( str_skip_word at ) = k + k 1 }
-        : s w ( str_first_word at )
-        ? | | == 0 ( nurl_str_len w ) ( seq w `-` ) ( seq w name ) { ^ F } {}
-        ? ! ( nurl_sym_has_word syms `__fn_param_names__` w ) {
-            : s up ( mem_udrop_ptr_of syms w )
-            ? == 0 ( nurl_str_len up ) { ^ F } {}
-            ? | | | != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms up `__fsrc` ) != 0 ( nurl_sym_len2 syms up `__alias_part` ) != 0 ( nurl_sym_len2 syms w `__vget` ) { ^ F } {}
-            // (One that owns its value on the runs its call says so — `@slot`,
-            // `: ( Vec Msg ) ms ( vec_new [Msg] )` — counts when that call
-            // could lend nothing of `name`'s: no argument is `name` or an
-            // expression this cannot follow.)
-            : s sb ( nurl_sym_get2 syms up `__sborrow` )
-            ? != 0 ( nurl_str_len sb ) {
-                ? != ( nurl_str_get sb 0 ) 64 { ^ F } {}
-                : s rs ( nurl_sym_get2 syms w `__pljr` )
-                ? | ( str_contains_word rs `-` ) ( str_contains_word rs name ) { ^ F } {}
-            } {}
+        : s w0 ( __nth_word args want )
+        // (A field path's binding, where the call had one: g_call_roots —
+        // `( first . bx items )` lends out of bx, agora #375.)
+        : s wr0 ? == 0 ( nurl_str_len g_call_roots ) `` ( __nth_word g_call_roots want )
+        : i wrd ( nurl_str_find wr0 `.` )
+        : s wr ? > wrd 0 ( nurl_str_slice wr0 0 wrd ) ( nurl_str_cat wr0 `` )
+        : s w ? & ( seq w0 `-` ) & != 0 ( nurl_str_len wr ) ! ( seq wr `-` ) wr w0
+        // (A number, a flag — a scalar parameter lends nothing: `( nth vs
+        // 0 )`.)
+        ? ! & ( seq w `-` ) ( __callee_param_scalar syms cn want ) {
+            ? ! ( __lend_owner_other syms name w 0 ) { ^ F } {}
         } {}
     }
+    ^ T
+}
+
+// The `k`-th word of `ws`, `` past the end.
+@ __nth_word s ws i k → s {
+    : ~ s at ( nurl_str_cat ws `` )
+    : ~ i j 0
+    ~ & < j k != 0 ( nurl_str_len at ) { = at ( str_skip_word at ) = j + j 1 }
+    ^ ( str_first_word at )
+}
+
+// Is callee `cn`'s parameter `k` a scalar (`i`, `u`, `f`, `b`, …) — one a
+// lend cannot come out of?
+@ __callee_param_scalar i syms s cn i k → b {
+    : ~ s src ( nurl_sym_get2 syms cn `__ptypes_src` )
+    ? == 0 ( nurl_str_len src ) { = src ( nurl_sym_get2 syms ( bck_generic_base cn ) `__ptypes_src` ) } {}
+    ? == 0 ( nurl_str_len src ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat src `` )
+    : ~ i j 0
+    ~ & < j k != 0 ( nurl_str_len rest ) {
+        : i c ( nurl_str_find rest `;` )
+        = rest ? < c 0 `` ( nurl_str_slice rest + c 1 - - ( nurl_str_len rest ) c 1 )
+        = j + j 1
+    }
+    : i c ( nurl_str_find rest `;` )
+    : s t ( str_first_word ( bck_swap_char ? < c 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 c ) 9 32 ) )
+    ? | == 0 ( nurl_str_len t ) == ( nurl_str_get t 0 ) 40 { ^ F } {}
+    ^ ( __scalar_ty ( nurl_llty ( llvm_type t ) ) )
+}
+
+// …the roots a binding's value may be a lend of (`__pljr`, one line a call,
+// its arguments' roots by position): each one an owner other than `name`
+// by the same test — `: ( Vec Node ) w ( optkids o )  : Node e ( kid0 w )`
+// is a lend of w, which is one of o (agora #375).
+@ __lend_roots_other i syms s name s rs i depth → b {
+    : ~ s rest ( bck_swap_char rs 10 32 )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( __lend_owner_other syms name r + depth 1 ) { ^ F } {}
+    }
+    ^ T
+}
+
+// …and is argument `w` (a binding by name) an owner other than `name` that a
+// lend out of is no part of `name`'s value: a parameter, or a local that
+// owns its value and views nothing (no field source or `vec_get` slot; an
+// owner by its call's answer only where that call could lend nothing of
+// `name`'s). An alias of owners (`: ( Vec String ) al vs`) is the owners it
+// aliases, when each of them is one (agora #375).
+@ __lend_owner_other i syms s name s w i depth → b {
+    ? | | | == 0 ( nurl_str_len w ) ( seq w `-` ) ( seq w name ) > depth 4 { ^ F } {}
+    ? ( nurl_sym_has_word syms `__fn_param_names__` w ) { ^ T } {}
+    : s up ( mem_udrop_ptr_of syms w )
+    // (What w's value may be a lend of, `__pljk`: a binding of a call's lend
+    // — `: Node e ( kid0 . n kids )`, the kid inside `name`'s own value —
+    // carries no other mark. It counts only where its slot owns by that
+    // call's answer, `@slot`, checked below.)
+    : s pk ( nurl_sym_get2 syms w `__pljk` )
+    ? == 0 ( nurl_str_len up ) { ^ F } {}
+    ? | | != 0 ( nurl_sym_len2 syms up `__fsrc` ) != 0 ( nurl_sym_len2 syms up `__alias_part` ) != 0 ( nurl_sym_len2 syms w `__vget` ) { ^ F } {}
+    // (`__alias`: the owners' drop slots.)
+    : s al ( nurl_sym_get2 syms up `__alias` )
+    ? != 0 ( nurl_str_len al ) {
+        : s nup ( mem_udrop_ptr_of syms name )
+        : ~ s ar ( nurl_str_cat al `` )
+        ~ != 0 ( nurl_str_len ar ) {
+            : s t ( str_first_word ar ) = ar ( str_skip_word ar )
+            // (One level, of owners that own what they hold outright: an
+            // alias of an alias, a field's or a call's value, is not
+            // followed.)
+            ? | | | | ( seq t nup ) ( seq t up ) != 0 ( nurl_sym_len2 syms t `__alias` ) != 0 ( nurl_sym_len2 syms t `__fsrc` ) != 0 ( nurl_sym_len2 syms t `__alias_part` ) { ^ F } {}
+            // (An owner by its call's answer, `@slot`, as below: the alias
+            // bound by name carries that call's lend pairs, `__pljr`.)
+            : s tsb ( nurl_sym_get2 syms t `__sborrow` )
+            ? != 0 ( nurl_str_len tsb ) {
+                ? != ( nurl_str_get tsb 0 ) 64 { ^ F } {}
+                ? ! ( __lend_roots_other syms name ( nurl_sym_get2 syms w `__pljr` ) depth ) { ^ F } {}
+            } { ? != 0 ( nurl_str_len pk ) { ^ F } {} }
+        }
+        ^ T
+    } {}
+    // (One that owns its value on the runs its call says so — `@slot`,
+    // `: ( Vec Msg ) ms ( vec_new [Msg] )` — counts when that call could
+    // lend nothing of `name`'s: no argument is `name` or an expression this
+    // cannot follow.)
+    : s sb ( nurl_sym_get2 syms up `__sborrow` )
+    ? != 0 ( nurl_str_len sb ) {
+        ? != ( nurl_str_get sb 0 ) 64 { ^ F } {}
+        ? ! ( __lend_roots_other syms name ( nurl_sym_get2 syms w `__pljr` ) depth ) { ^ F } {}
+    } { ? != 0 ( nurl_str_len pk ) { ^ F } {} }
     ^ T
 }
 
@@ -5340,9 +5422,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
             ? != 0 ( nurl_sym_len2 syms ( str_first_word __nck2 ) `__ret_borrow` ) { ( nurl_sym_def syms `__last_value_borrow__` `1` ) } {}
         } {}
     } {}
+    // (The call's own per-call answer, when hbit is it: below.)
+    : ~ b ret_call_bit F
     ? == ret_eff_tt TT_LPAREN {
         : s cro ( mem_call_retown syms cg )
-        ? != 0 ( nurl_str_len cro ) { = hbit cro } {}
+        ? != 0 ( nurl_str_len cro ) { = hbit cro = ret_call_bit T } {}
         // The callee may lend from an argument this frame owns, which is
         // gone at the return — asked of the callee's summaries at module
         // end, so a generic instance compiled after this function answers
@@ -6188,7 +6272,12 @@ unsafe @ gen_ret i lex i syms i cg → s {
     ? & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
         ? ! ( mem_ret_borrow_of_params syms ret_first_tt ) { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
-        = hbit ( nurl_str_cat `false` `` ) }
+        // (`^ ( g x )` hands back what g did: owned exactly when g's own
+        // per-call answer says so — false wherever it lent. Answered false
+        // here, a forwarder of a function that hands back a fresh value on
+        // some runs and a lend on others leaked the fresh one at every
+        // caller that took it over: agora #375.)
+        = hbit ? ret_call_bit ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
     {}
     // A String / Vec read out of a field or through a cast (`^ . impl
     // value` in arc_get) belongs to whatever holds it: lent, not given.
