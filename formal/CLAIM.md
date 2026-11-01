@@ -43,6 +43,11 @@ the LLVM / C11 memory model rather than redefining it.
   paths, closures and trait objects as packages with captures by handle
   and by name, `inout` of every owning type and a field replaced in place,
   panics with unwinding and `recover`, and the drop journal.
+  A capture by name holds no views. nurlc refuses a closure that gives a
+  capture, or its own `inout` parameter, a view (Agora #312, #331), except
+  by two routes: the view bound to a local of the closure's body first, and
+  a push into a plain Vec parameter of the closure. Programs that take one
+  are outside the claim until Agora #332 lands.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
   Elements change only through their owner or an `inout` binding. nurlc
