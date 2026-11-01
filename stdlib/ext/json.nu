@@ -1496,10 +1496,7 @@ $ `stdlib/std/bytes.nu`
                 ? < k_v n { ( vec_set [Json] v k_v val ) } { ( vec_push [Json] v val ) }
             } {
                 // No match → append fresh pair.
-                : i klen ( nurl_str_len key )
-                : String kc ( string_with_cap klen )
-                ( string_push_str kc key )
-                ( vec_push [Json] v @ Json { JStr kc } )
+                ( vec_push [Json] v @ Json { JStr ( string_from key ) } )
                 ( vec_push [Json] v val )
             }
             ^ T

@@ -350,7 +350,7 @@ $ `stdlib/core/char.nu`
     : ( Vec u ) b ( __sbuf str )
     : i n ( nurl_str_len raw )
     ? > n 0 {
-        ( vec_reserve [u] b n )
+        ( _vec_reserve_more [u] b n )
         : *u src # *u raw
         : *u dst ( vec_data [u] b )
         : i len ( vec_len [u] b )
@@ -378,7 +378,7 @@ $ `stdlib/core/char.nu`
         ^
     } {}
     : ( Vec u ) b ( __sbuf str )
-    ( vec_reserve [u] b 1 )
+    ( _vec_reserve_more [u] b 1 )
     : *u p ( vec_data [u] b )
     : i n ( vec_len [u] b )
     : u zero # u 0
@@ -388,7 +388,7 @@ $ `stdlib/core/char.nu`
 // ── Constructors ────────────────────────────────────────────────────
 
 @ string_new → String {
-    : ( Vec u ) tmp ( vec_with_cap [u] 1 )
+    : ( Vec u ) tmp ( _vec_with_room [u] 1 )
     : *u p ( vec_data [u] tmp )
     : u zero # u 0
     = . p 0 zero
@@ -431,9 +431,19 @@ raw @ string_stash i kind sink String str i max → v {
     ^ @ String { . tmp ctl }
 }
 
+// string_with_cap for `n` bytes that exist elsewhere (a copy's source,
+// the parts of a concatenation): no check, no panic (_vec_with_room).
+@ _string_with_room i n → String {
+    : ( Vec u ) tmp ( _vec_with_room [u] + ? > n 0 n 0 1 )
+    : *u p ( vec_data [u] tmp )
+    : u zero # u 0
+    = . p 0 zero
+    ^ @ String { . tmp ctl }
+}
+
 @ string_from s raw → String {
     : i n ( nurl_str_len raw )
-    : ( Vec u ) tmp ( vec_with_cap [u] + n 1 )
+    : ( Vec u ) tmp ( _vec_with_room [u] + n 1 )
     : *u src # *u raw
     : *u dst ( vec_data [u] tmp )
     ( nurl_memcpy dst src n )
@@ -498,7 +508,7 @@ raw @ string_stash i kind sink String str i max → v {
 // and an extra malloc/free pair.
 @ string_from_bytes * u src i n → String {
     : i len ? > n 0 n 0
-    : ( Vec u ) tmp ( vec_with_cap [u] + len 1 )
+    : ( Vec u ) tmp ( _vec_with_room [u] + len 1 )
     : *u dst ( vec_data [u] tmp )
     ? > len 0 {
         ( nurl_memcpy dst src len )
@@ -693,7 +703,7 @@ raw @ string_commit String str i n → v {
     ? > n 0 {
         : ( Vec u ) b ( __sbuf str )
         : i len ( vec_len [u] b )
-        ( vec_reserve [u] b + n 1 )
+        ( _vec_reserve_more [u] b + n 1 )
         : *u dst ( vec_data [u] b )
         : *u dst_at # *u + # i dst len
         ( nurl_memcpy dst_at src n )
@@ -711,7 +721,7 @@ raw @ string_commit String str i n → v {
     ? > n 0 {
         : ( Vec u ) b ( __sbuf str )
         : i len ( vec_len [u] b )
-        ( vec_reserve [u] b + n 1 )
+        ( _vec_reserve_more [u] b + n 1 )
         : *u dst ( vec_data [u] b )
         : *u dst_at # *u + # i dst len
         ( nurl_memcpy dst_at # *u ( string_data src ) n )
@@ -760,7 +770,7 @@ raw @ string_commit String str i n → v {
 // than it, so the copy never meets a growth.
 @ __string_ctl_set s ctl * u src i n → v {
     : i m ? > n 0 n 0
-    ( _vec_ctl_reserve [u] ctl + m 1 )
+    ( _vec_ctl_reserve_to [u] ctl + m 1 )
     : *u p # *u ( nurl_peek ctl 0 )
     ( nurl_memmove # s p # s src m )
     ( nurl_poke ctl 1 m )
@@ -799,7 +809,7 @@ raw @ string_commit String str i n → v {
 @ string_concat String a String b → String {
     : i la ( string_len a )
     : i lb ( string_len b )
-    : String out ( string_with_cap + la lb )
+    : String out ( _string_with_room + la lb )
     ( string_push_str out ( string_data a ) )
     ( string_push_str out ( string_data b ) )
     ^ out
@@ -955,7 +965,7 @@ raw @ string_commit String str i n → v {
     // Against the room left: `start + n` wraps for a length near i64 max.
     ? > n - slen start { = n - slen start } {}
 
-    : ( Vec u ) tmp ( vec_with_cap [u] + n 1 )
+    : ( Vec u ) tmp ( _vec_with_room [u] + n 1 )
     : *u dst ( vec_data [u] tmp )
     ? > n 0 {
         : *u src # *u ( string_data str )
@@ -973,7 +983,7 @@ raw @ string_commit String str i n → v {
 // reserved cursor instead of n separate `string_push_char` calls.
 @ string_to_lower String str → String {
     : i n ( string_len str )
-    : String out ( string_with_cap n )
+    : String out ( _string_with_room n )
     ? > n 0 {
         : *u src ( vec_data [u] ( __sbuf str ) )
         : *u w ( string_reserve_at out n )
@@ -993,7 +1003,7 @@ raw @ string_commit String str i n → v {
 // like `string_to_lower`.
 @ string_to_upper String str → String {
     : i n ( string_len str )
-    : String out ( string_with_cap n )
+    : String out ( _string_with_room n )
     ? > n 0 {
         : *u src ( vec_data [u] ( __sbuf str ) )
         : *u w ( string_reserve_at out n )
@@ -1012,7 +1022,7 @@ raw @ string_commit String str i n → v {
 // Bytewise reverse. Safe for ASCII; reverses code units, not UTF-8 scalars.
 @ string_reverse String str → String {
     : i n ( string_len str )
-    : String out ( string_with_cap n )
+    : String out ( _string_with_room n )
     ? > n 0 {
         : *u src ( vec_data [u] ( __sbuf str ) )
         : *u w ( string_reserve_at out n )
@@ -1131,7 +1141,7 @@ raw @ string_commit String str i n → v {
     ? == flen 0 { ^ ( string_from ( string_data str ) ) } {}
 
     : i n ( string_len str )
-    : String out ( string_with_cap n )
+    : String out ( _string_with_room n )
     : ~ i start 0
     : ~ b going T
     ~ going {
