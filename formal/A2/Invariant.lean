@@ -407,7 +407,9 @@ def KeepOut (Γ Δ : Ctx) (sp : List Var) : Prop :=
     returns an integer and lends, holds and stores nothing. -/
 def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧
-    fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = []
+    fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧
+    -- a destructor changes no elements through a borrow (Agora #295)
+    ¬ ThruFn P f
 
 inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
@@ -496,7 +498,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- handed to the code as an `inout` argument of its own)
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ →
-      EndOK Δ x → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      EndOK Δ x →
+      -- the interface is not code that changes elements through a borrow
+      -- (Agora #295; nor is the code that runs: `Implements`)
+      ¬ ThruFn P σ → StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -561,7 +566,9 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
   ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
     fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
-    fn.outHolds ⊆ sig.outHolds
+    fn.outHolds ⊆ sig.outHolds ∧
+    -- a closure's code changes no elements through a borrow (Agora #295)
+    ¬ ThruFn P f
 
 /-- A package's code implements its interfaces, method by method. -/
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=

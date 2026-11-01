@@ -481,10 +481,11 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   obtain ⟨hn1, hEn, _⟩ := CallT.names hP hc hi.names
   have hx1 : callPost Γ fn args x = none := by
     have := hdm.1 x; rw [hx] at this; cases h' : callPost Γ fn args x <;> simp_all
-  obtain ⟨fn', hf', hlen, hargs, hnf, hds, _⟩ := hc
+  obtain ⟨fn', hf', hlen, hargs, hnf, hds, _, _, hg⟩ := hc
   rw [hf] at hf'; cases hf'
   exact {
     dsafe := hds
+    thru := fun ht => hg (ThruFn.of_body hf ht)
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen
@@ -513,10 +514,10 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
   cases hst with
   | letcall hf hmx hb =>
     rename_i m1 fn
-    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
-      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩
     have h := callH_of hP hf hx hxF hc' hi
     exact ⟨_, h.typed hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
 
@@ -546,10 +547,10 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
   | letrec hf' _ hmx =>
     rename_i fn'
     rw [hf] at hf'; cases hf'
-    obtain ⟨fn', hf'', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf'', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf''; cases hf''
     have hc' : CallT P Γ F f [] (callRes Γ fn []) (callPost Γ fn []) :=
-      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩
     have hi' : Inv m Γ F (.letcall x f [] k) :=
       hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) trivial trivial trivial
     have h := callH_of hP hf hx hxF hc' hi'

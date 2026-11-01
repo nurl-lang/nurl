@@ -423,10 +423,10 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
   induction ht with
   | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ =>
     cases hS'
-    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl⟩ := hc
+    obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf'; cases hf'
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
-      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl⟩
+      ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩
     have h := callH_of hP hf hx hxF hc' hi
     have hsk : ∀ i (hi : i < fn.params.length), fn.params[i].1 = .sink :=
       fun i hi => (hall _ (List.getElem_mem hi)).1

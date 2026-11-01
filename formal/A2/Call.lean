@@ -120,7 +120,7 @@ theorem callPostAux_domTy {Γ0 : Ctx} {fn : Fn} {args : List Var} :
 
 theorem CallT.domTy {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var}
     {E : Entry} (hc : CallT P Γ F f args E Γ1) : DomTy Γ Γ1 := by
-  obtain ⟨fn, _, hlen, hargs, _, _, _, rfl⟩ := hc
+  obtain ⟨fn, _, hlen, hargs, _, _, _, rfl, _⟩ := hc
   refine DomTy.killNames (callPostAux_domTy _ _ _ _ (fun a ha => ?_) (DomTy.refl Γ)) _
   obtain ⟨i, hi, rfl⟩ := mem_args ha
   obtain ⟨Ea, hEa, _⟩ := hargs i (hlen ▸ hi)
@@ -153,7 +153,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | letd hks hx _ hr _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
-  | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
+  | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
   | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ _ ih =>
     intro _
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
@@ -231,10 +231,6 @@ theorem Entry.clean_vdeps_mem {E : Entry} (hd : E.dbind = true) (hos : E.mode.ow
   · simp only [show E.dbind = true ∧ E.mode.ownSlot = true ∧ E.ty ≠ .int from ⟨hd, hos, hn'⟩]
     simp [memDeps, List.mem_filter, hnm, hn']
   · exact Iff.rfl
-
-/-- The roots of what the arguments hold views of. -/
-def callR (Γ : Ctx) (args : List Var) : List Var :=
-  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held))
 
 /-- What an entry of a type holds, as far as the type can: one that holds no
     closure holds nothing by name. -/
@@ -362,6 +358,9 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
   /-- A2-drop.2: the call ends no view a destructor reads, and changes no
       `letd` binding that holds views. -/
   dsafe   : CallDtorSafe Γ fn.params args
+  /-- Agora #295: a body that changes elements through a borrow, or calls
+      a function that may, is handed no argument that holds views. -/
+  thru    : fn.body.Thru P → callR Γ args = []
 
 theorem derive_roots_cases {y : Var} {E : Entry} {k : Kind} {r : Var} (hr : r ∈ roots (derive y E k)) :
     (r = y ∧ E.mode.isRoot = true) ∨ (E.mode.isRoot = false ∧ r ∈ roots E.vdeps) := by
@@ -779,16 +778,6 @@ theorem clean_id {E : Entry} (h : E.ty ≠ .int ∨ E.mode = .rootb) (hl : E.liv
     fixed: that is its mode and type. -/
 theorem fixed_moveOut (E : Entry) : ({E with live := false, dtor := false} : Entry).fixed ↔ E.fixed := by
   simp [Entry.fixed]
-
-theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
-    r ∈ callR Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ r ∈ roots (memDeps (argE Γ a).held) := by
-  unfold callR
-  simp only [List.mem_flatMap]
-  constructor
-  · rintro ⟨a, ha, hr⟩; split at hr
-    · simp at hr
-    · exact ⟨a, ha, by assumption, hr⟩
-  · rintro ⟨a, ha, hn, hr⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hr⟩
 
 theorem hits_false_dep {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e hv x E = false)
     (hn : E.ty ≠ .int ∨ E.mode = .rootb) (d : Dep) (hd : d ∈ E.vdeps) (hr : d.root = x) :
@@ -3360,6 +3349,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) :
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
   obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn) (sigCtx_names fn)
+    h.thru
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root := by
     intro d0 hd0
