@@ -50,6 +50,15 @@ the LLVM / C11 memory model rather than redefining it.
   #272 lands.
   `Rc` cycles are the standard library's (B); see `README.md` for the
   refinements of the calculus still planned.
+  Elements change only through their owner or an `inout` binding. nurlc
+  also changes them through other copies of a handle. Two of those read
+  as forms the calculus has (`RULES.md`, phase C): a function that
+  changes a Vec or String it takes as a plain parameter, as the standard
+  library's own mutators take theirs, reads as an `inout` parameter, and
+  a change through a copy of one owner's whole handle (`( id vs )`, a
+  cursor) as that owner's own change. A change through any other borrow
+  (an element of a Vec of Vecs, a field viewer, a join of borrows, a
+  call's lent result) is outside the claim until Agora #295 lands.
 - **A3** — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.

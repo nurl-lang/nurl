@@ -25,7 +25,7 @@ trait objects, panics and the drop journal; threads are A3.
 | §2.6 | Loop-carried moves | A1 | `StmtT.while`: the body ends in the context it starts in | done |
 | §2.7 | Escape through a callee | A1 / A2 / A3 | `CallT` against the callee's summary: what the result borrows (`lends`) and holds (`rholds`), what the callee stores into `inout` arguments (`outHolds`), its effect bound on each; `FnOK` checks the body against it; a closure handed to a callee is held by its result (`heldOfArgs`) and run as the callee may (`NamesFree`, `mutNames`); threads are A3 | done |
 | §2.8 | Escape through a return | A1 / A2 | `FnOK` (the result depends only on what `lends` / `rholds` name), `callRes` at the call; a call through a package lends from the receiver too (`recvRes`) | done |
-| §2.10 | Views end when their source may reallocate | A1 | `RhsT.view`, `RhsT.sat`; `StmtT.push` (`Eff.realloc` ends views, and element borrows when elements hold views); `PushArg` / `held` (a view in a container is still a view); `outHolds` (a callee storing a view into an argument) | done |
+| §2.10 | Views end when their source may reallocate | A1 | `RhsT.view`, `RhsT.sat`; `StmtT.push` (`Eff.realloc` ends views, and element borrows when elements hold views); `PushArg` / `held` (a view in a container is still a view); `outHolds` (a callee storing a view into an argument) | done through an owner or an `inout` binding, and through the forms read as them below; through another borrow (an element of a Vec of Vecs, a field viewer, a join of borrows): agora #295 |
 | §2.12 | A stored value belongs to its owner | A1 / A2 | `PushArg.move`, `CallT` (`sink`); aggregate literals (`RhsT.pair`, `RhsT.inl`, `RhsT.inr`) move or copy what they store, a field taken out (`takel`, `taker`, `unpair`) moves; a field replaced in place is the struct taken apart (`StmtT.unpair`, an owner or an `inout` struct it may replace) and assigned again (`StmtT.assign`), ending every borrow of the struct | done |
 | §2.13 | A raw string in a value is a view | A1 / A2 | a string view is a `slice` entry (`RhsT.view`) depending on its owner; a view stored in an aggregate or a package makes that value depend on what it views (`ViewsOK`, `held`) | done |
 | §2.11, §7.5 | Closures hold their captures | A2 | `RhsT.pack` (`CapsOK`: captures by handle are depended on, by name held, each read or changed within its bound); `StmtT.callc` (the call through a package: `CallT` on the code with the captures as `inout` arguments of their own, `NamesFree` — a binding a closure may change is changed by the call and reached from no argument but by a closure that changes it the same way — and no argument is such a binding); `sigCtx` / `symNames` (a closure a callee is handed may change the callee's `inout` parameters); `ValOK.pkg` / `envDeps` (the environment); `A2/CAPTURES_DESIGN.md` | done |
@@ -34,6 +34,30 @@ trait objects, panics and the drop journal; threads are A3.
 | §7.7 | Reference-count cycles | B | `Rc` and its collector are the standard library's `unsafe` base | not started |
 | §6.5 | Threads: `Send`, `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and `% Frozen`, `Atomic`, `PFile`, channels | A3 | A3.0, threads that only move: `SpawnOK` (a spawned function takes only `sink` parameters of types that hold no views), `TStep.spawn` (the arguments move to the new thread, the spawner's slots are left empty, through A2's `CallT`), `Touch` / `Race`, and the configuration invariant `CInv` (each thread A2's `ThreadOK` on its own part of the address space) — `A3.claim` | A3.0 done: `race_shared_vec`, `thread_reads_freed`, `chan_send_then_use`, `slice_crosses_thread`, `thread_captures_owned_string`, `thread_closure_capture_used_after_spawn`, `closure_run_after_its_thread_copy_took_the_capture`, `spawned_closure_arm_payload`; `Arc`, `Mutex` / `Locked`, `RwLocked` and `% Frozen`, `Atomic`, channels, library handles and globals are A3.1–A3.6, not started |
 | §3, §6.4 | `unsafe` boundary and the trusted base | B | — | not started |
+
+## nurlc forms the calculus reads as forms it has (phase C)
+
+Phase C proves that every program nurlc accepts is well-typed in the
+formal rules. For a few of nurlc's forms that proof goes through a
+reading of the form as one the calculus already has, not through a rule
+of its own. These are the readings for a change to a Vec's or a String's
+elements made through something other than its owner (Agora #295, step
+0):
+
+| nurlc form | Read as | Formal rule |
+|---|---|---|
+| A function that changes the elements of a Vec or String it takes as a plain parameter, as the standard library's mutators (`vec_push`, `vec_set`, `vec_clear`, `string_push_*`) take theirs | an `inout b` parameter, `b` the most it does: `realloc` if it only grows it, `drop` if it may drop elements, never `replace` (a plain parameter is not rebound) | `CallT`, `paramOK_inout`, `callPostAux` (the kill by the bound) |
+| A change through a copy of one owner's whole handle (`: x ( id vs )`, `: ~ c vs`, a cursor), to its elements only | the same change made on that owner | `StmtT.push`, `RhsT.pop` |
+| A change through a field path of an owner (`( vec_push [u] . o kids x )`) | the struct taken apart, its field changed, the struct put back (§2.12) | `StmtT.unpair`, `StmtT.push`, `StmtT.assign` |
+| `vec_clear`, `vec_truncate`, `vec_insert`, `vec_remove` | loops of pops and pushes | `RhsT.pop`, `StmtT.push` |
+
+A reading holds only where nurlc's summary of the callee is at least what
+the callee does: Agora #315 was a hole in that summary. A replacing
+callee (`inout replace`) given a copy is no reading: the replacement
+lands in the copy's own slot, so nurlc refuses it (h295, h367–h370). A
+change through any other borrow (an element of a Vec of Vecs, a field
+viewer, a join of borrows, a call's lent result) has no reading yet, and
+is the rest of Agora #295 (`CLAIM.md`).
 
 ## Changes to MEMORY.md and what they do to the proof
 
