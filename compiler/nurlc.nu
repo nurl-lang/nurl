@@ -56345,16 +56345,27 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ? | != 0 ( nurl_str_starts ty `%Vec__` ) != 0 ( nurl_str_starts ty `%Box__` ) {
         ^ ( __drop_may_read_view ( __vec_elem_llvm ty ) )
     } {}
-    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( __drop_may_read_view ( __opt_payload ty ) ) } {}
+    // An option's payload (__opt_payload: an option or a result of one
+    // nested inside, `??W`, `!?W i`), and a result's error side too (`!i
+    // W`), as its drop twin records it (`opterr##`).
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ? ( __drop_may_read_view ( __opt_payload ty ) ) { ^ T } {}
+        : s tw ( __wrap_twin ty )
+        : s et ? == 0 ( nurl_str_len tw ) `` ( nurl_sym_get2 g_impl_name_syms `opterr##` tw )
+        ^ & != 0 ( nurl_str_len et ) ( __drop_may_read_view et )
+    } {}
     // A library handle's own destructor (a map's, a channel's) reads only
     // what it owns: what it holds of the program's — its type arguments,
-    // `libhta##` — is asked instead.
+    // `libhta##`, each parsed as the type it names (`?W` an option of W) —
+    // is asked instead (agora #363).
     ? ( __is_libh ty ) {
         : ~ s rest ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
+        : ~ i k 0
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s dy ? != 0 ( nurl_str_starts w `dyn_` ) ( __dyn_unslug w ) ``
-            ? ( __drop_may_read_view ? != 0 ( nurl_str_len dy ) dy ( nurl_str_cat `%` w ) ) { ^ T } {}
+            : s ta ? != 0 ( nurl_str_starts w `dyn_` ) ( __dyn_unslug w ) ( __libh_targ ty k )
+            ? ( __drop_may_read_view ta ) { ^ T } {}
+            = k + k 1
         }
         ^ F
     } {}
