@@ -67744,8 +67744,10 @@ unsafe @ __dce_print_range i from i to → v {
 // Six words per register: 0 kind (0 none, 1 i1 constant, 2 text alias),
 // 1-2 the constant or the alias's byte range, 3 flag state (0 not a flag,
 // 1 flag, 2 address taken, 3 constant false, 4 constant true), 4 values a
-// live store can leave (bit 1 false, 2 true, 4 unknown), 5 the pending
-// store not yet known to be live (same bits, 0 none).
+// live store can leave (bit 1 false, 2 true, 4 unknown, 8 read), 5 the
+// pending store not yet known to be live (same bits, 0 none; in a first
+// round, a store of an unknown value also carries its g_fold_dstores
+// entry + 1 from bit 3 up).
 : ~ i g_fold_map 0
 : ~ i g_fold_cap 0
 : ~ i g_fold_touched 0
@@ -67760,6 +67762,29 @@ unsafe @ __dce_print_range i from i to → v {
 : ~ i g_fold_jlist 0
 : ~ i g_fold_nj 0
 : ~ i g_fold_jcap 0
+// The record a function's first round keeps, so later rounds need not
+// read its text again (agora #326). A round only learns VALUES: which
+// flags are stores and reads, which stores are live, which flag a slot's
+// registration pairs with, what escapes — all of that is the text's
+// shape, the same in every round. So a later round restores the flags'
+// state from the first round, re-evaluates only the lines whose value read
+// a register not yet known to be constant (g_fold_rlines), re-reads only
+// the live stores that stored one (g_fold_dstores), and folds the loads of
+// flags it settles from the list of them (g_fold_loads).
+: ~ b g_fold_rec F  // recording: the first round
+: ~ b g_fold_dep F  // the line being evaluated read an unknown register
+: ~ i g_fold_rlines 0  // i[2 * n]: [ls, le) of each line to re-evaluate
+: ~ i g_fold_nrl 0
+: ~ i g_fold_rlcap 0
+: ~ i g_fold_dstores 0  // i[3 * n]: flag (-1 while the store may be dead), value range of each store of an unknown value
+: ~ i g_fold_nds 0
+: ~ i g_fold_dscap 0
+: ~ i g_fold_loads 0  // i[2 * n]: register, flag of each load of a flag
+: ~ i g_fold_nld 0
+: ~ i g_fold_ldcap 0
+: ~ i g_fold_fsave 0  // i[2 * nf]: each flag's state and settled-from bits after the first round
+: ~ i g_fold_fscap 0
+: ~ i g_fold_grown 0  // __fold_rec2's new capacity
 : ~ i g_fold_end 0
 : ~ i g_fold_fn_end 0
 : ~ i g_fold_k 0
@@ -68763,6 +68788,63 @@ unsafe @ __fold_reset → v {
     }
     = g_fold_nf 0
     = g_fold_nj 0
+    = g_fold_nrl 0
+    = g_fold_nds 0
+    = g_fold_nld 0
+}
+
+// Append [a, b] (or [a, b, c]) to a record list, growing it.
+unsafe @ __fold_rec2 i list i n i cap i a i b → i {
+    : ~ i l list
+    ? >= n cap {
+        : i ncap ? == cap 0 256 * cap 2
+        : i fresh # i ( nurl_zalloc * ncap 16 )
+        ? != l 0 {
+            ( memcpy # s fresh # s l * n 16 )
+            ( nurl_free # s l )
+        } {}
+        = l fresh
+        = g_fold_grown ncap
+    } { = g_fold_grown cap }
+    ( nurl_poke # s l * n 2 a )
+    ( nurl_poke # s l + * n 2 1 b )
+    ^ l
+}
+
+unsafe @ __fold_rec_line i ls i le → v {
+    = g_fold_rlines ( __fold_rec2 g_fold_rlines g_fold_nrl g_fold_rlcap ls le )
+    = g_fold_rlcap g_fold_grown
+    = g_fold_nrl + g_fold_nrl 1
+}
+
+unsafe @ __fold_rec_load i r i f → v {
+    = g_fold_loads ( __fold_rec2 g_fold_loads g_fold_nld g_fold_ldcap r f )
+    = g_fold_ldcap g_fold_grown
+    = g_fold_nld + g_fold_nld 1
+}
+
+// A store of an unknown value, [x, y), not yet known to be live; its index.
+unsafe @ __fold_rec_dstore i x i y → i {
+    ? >= g_fold_nds g_fold_dscap {
+        : i ncap ? == g_fold_dscap 0 64 * g_fold_dscap 2
+        : i fresh # i ( nurl_zalloc * ncap 24 )
+        ? != g_fold_dstores 0 {
+            ( memcpy # s fresh # s g_fold_dstores * g_fold_nds 24 )
+            ( nurl_free # s g_fold_dstores )
+        } {}
+        = g_fold_dstores fresh
+        = g_fold_dscap ncap
+    } {}
+    ( nurl_poke # s g_fold_dstores * g_fold_nds 3 -1 )
+    ( nurl_poke # s g_fold_dstores + * g_fold_nds 3 1 x )
+    ( nurl_poke # s g_fold_dstores + * g_fold_nds 3 2 y )
+    = g_fold_nds + g_fold_nds 1
+    ^ - g_fold_nds 1
+}
+
+// Store k of g_fold_dstores is live: it stores into flag r.
+unsafe @ __fold_dstore_live i k i r → v {
+    ( nurl_poke # s g_fold_dstores * k 3 r )
 }
 
 // Flag r is read by a journal registration (see g_fold_jlist).
@@ -68834,8 +68916,9 @@ unsafe @ __fold_add_flag i r → v {
 @ __fold_commit i r → v {
     : i pend ( __fold_get r 5 )
     ? != pend 0 {
-        ( __fold_put r 4 | ( __fold_get r 4 ) pend )
+        ( __fold_put r 4 | ( __fold_get r 4 ) & pend 7 )
         ( __fold_put r 5 0 )
+        ? > pend 7 { ( __fold_dstore_live - >> pend 3 1 r ) } {}
     } {}
 }
 
@@ -68871,6 +68954,7 @@ unsafe @ __fold_commit_all → v {
     ? < r 0 { ^ v } {}
     ? != g_fold_end q { ^ v } {}
     : i kind ( __fold_kind r )
+    ? != kind 1 { = g_fold_dep T } {}
     ? != kind 0 {
         = g_fold_k kind
         = g_fold_x ( __fold_get r 1 )
@@ -68929,8 +69013,8 @@ unsafe @ __fold_commit_all → v {
     }
 }
 
-// Flag bookkeeping for one line in pass 1. True when the line was a flag
-// access (it needs no other folding).
+// Flag bookkeeping for one line in pass 1's first round. True when the
+// line was a flag access (it needs no other folding).
 @ __fold_flag_line i ls i le → b {
     ? == 0 g_fold_nf {
         // No flag yet: only an `alloca i1` can start one.
@@ -68995,6 +69079,7 @@ unsafe @ __fold_commit_all → v {
                 ? & >= f 0 != 0 ( __fold_get f 3 ) {
                     ( __fold_commit f )
                     ( __fold_put f 4 | ( __fold_get f 4 ) 8 )
+                    ? g_fold_rec { ( __fold_rec_load r f ) } {}
                     ^ T
                 } {}
             } {}
@@ -69002,8 +69087,12 @@ unsafe @ __fold_commit_all → v {
     } {}
     : i sf ( __fold_store_flag ls le )
     ? & >= sf 0 != 0 ( __fold_get sf 3 ) {
-        ( __fold_operand g_fold_x g_fold_y T )
-        : i bits ? == g_fold_k 1 ? == g_fold_x 1 2 1 4
+        : i vx g_fold_x
+        : i vy g_fold_y
+        ( __fold_operand vx vy T )
+        : ~ i bits ? == g_fold_k 1 ? == g_fold_x 1 2 1 4
+        // A later round reads the value again if the store is live.
+        ? & g_fold_rec == bits 4 { = bits | 4 << + ( __fold_rec_dstore vx vy ) 1 3 } {}
         ( __fold_put sf 5 bits )
         ^ T
     } {}
@@ -69028,9 +69117,18 @@ unsafe @ __fold_commit_all → v {
     ^ F
 }
 
-// Pass 1 over one line [ls, le): decide whether its register folds.
+// One line of a function's first round: its flag bookkeeping, or its
+// value. A value that read a register not yet known to be constant is
+// kept for the rounds after (g_fold_rlines).
 unsafe @ __fold_scan_line i ls i le → v {
     ? ( __fold_flag_line ls le ) { ^ v } {}
+    = g_fold_dep F
+    ( __fold_value_line ls le )
+    ? g_fold_dep { ( __fold_rec_line ls le ) } {}
+}
+
+// The value of line [ls, le), from what is known of the registers it reads.
+unsafe @ __fold_value_line i ls i le → v {
     ? ! ( __fold_at ls `  %r` 4 ) { ^ v } {}
     : i r ( __fold_reg + ls 2 le )
     ? < r 0 { ^ v } {}
@@ -69159,10 +69257,26 @@ unsafe @ __fold_scan_line i ls i le → v {
     } {}
 }
 
-// After pass 1: settle the flags, and fold the loads of the constant
+// After a round: settle the flags, and fold the loads of the constant
 // ones. How many loads folded — a new constant can settle another flag.
-unsafe @ __fold_settle_flags i st i en → i {
+unsafe @ __fold_settle_flags → i {
     ( __fold_commit_all )
+    // The first round: keep each flag's state and the bits no later round
+    // can change (constant stores, reads), for __fold_replay.
+    ? g_fold_rec {
+        ? > * g_fold_nf 2 g_fold_fscap {
+            ? != g_fold_fsave 0 { ( nurl_free # s g_fold_fsave ) } {}
+            = g_fold_fscap + * g_fold_nf 2 64
+            = g_fold_fsave # i ( nurl_alloc * g_fold_fscap 8 )
+        } {}
+        : ~ i j 0
+        ~ < j g_fold_nf {
+            : i fr ( nurl_peek # s g_fold_flist j )
+            ( nurl_poke # s g_fold_fsave * j 2 ( __fold_get fr 3 ) )
+            ( nurl_poke # s g_fold_fsave + * j 2 1 & ( __fold_get fr 4 ) 11 )
+            = j + j 1
+        }
+    } {}
     : ~ i i 0
     : ~ i nconst 0
     ~ < i g_fold_nf {
@@ -69177,25 +69291,47 @@ unsafe @ __fold_settle_flags i st i en → i {
         = i + i 1
     }
     ? == nconst 0 { ^ 0 } {}
+    // The loads of a settled flag, from the first round's list of loads.
     : ~ i folded 0
-    : ~ i p st
-    ~ < p en {
-        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
-        : i le ? < rel 0 en + p rel
-        ? ( __fold_at p `  %r` 4 ) {
-            : i r ( __fold_reg + p 2 le )
-            ? & >= r 0 == 0 ( __fold_kind r ) {
-                : i e g_fold_end
-                ? ( __fold_at e ` = load i1, ` 12 ) {
-                    : i f ( __fold_ptr_reg + e 12 le )
-                    : i fs ( __fold_get f 3 )
-                    ? & & >= f 0 >= fs 3 <= fs 4 { ( __fold_set r 1 - fs 3 0 ) = folded + folded 1 } {}
-                } {}
-            } {}
+    : ~ i k 0
+    ~ < k g_fold_nld {
+        : i r ( nurl_peek # s g_fold_loads * k 2 )
+        ? == 0 ( __fold_kind r ) {
+            : i fs ( __fold_get ( nurl_peek # s g_fold_loads + * k 2 1 ) 3 )
+            ? & >= fs 3 <= fs 4 { ( __fold_set r 1 - fs 3 0 ) = folded + folded 1 } {}
         } {}
-        = p + le 1
+        = k + k 1
     }
     ^ folded
+}
+
+// A round after the first: the flags as the first round left them, the
+// lines whose value can change re-evaluated in order, and each live store
+// of a value the first round did not know read again.
+unsafe @ __fold_replay → v {
+    : ~ i i 0
+    ~ < i g_fold_nf {
+        : i r ( nurl_peek # s g_fold_flist i )
+        ( __fold_put r 3 ( nurl_peek # s g_fold_fsave * i 2 ) )
+        ( __fold_put r 4 ( nurl_peek # s g_fold_fsave + * i 2 1 ) )
+        ( __fold_put r 5 0 )
+        = i + i 1
+    }
+    : ~ i k 0
+    ~ < k g_fold_nrl {
+        ( __fold_value_line ( nurl_peek # s g_fold_rlines * k 2 ) ( nurl_peek # s g_fold_rlines + * k 2 1 ) )
+        = k + k 1
+    }
+    = k 0
+    ~ < k g_fold_nds {
+        : i f ( nurl_peek # s g_fold_dstores * k 3 )
+        ? >= f 0 {
+            ( __fold_operand ( nurl_peek # s g_fold_dstores + * k 3 1 ) ( nurl_peek # s g_fold_dstores + * k 3 2 ) T )
+            : i bits ? == g_fold_k 1 ? == g_fold_x 1 2 1 4
+            ( __fold_put f 4 | ( __fold_get f 4 ) bits )
+        } {}
+        = k + k 1
+    }
 }
 
 @ __fold_puts s t i part → v {
@@ -69396,30 +69532,29 @@ unsafe @ __ir_fold_range i st i en i part → v {
     ? | == g_fold_flags 0 < ( nurl_memmem_range # s + g_dce_mod st - en st `@.__nurl_` 9 ) 0 {
         ( __ir_write_range st en part ) ^ v
     } {}
-    : ~ i round 0
-    : ~ b again T
+    // The first round reads the function's text and keeps what the rounds
+    // after need (g_fold_rec); they read none of it again. The register
+    // folds a round makes stay, and the loads it folds feed the next.
+    = g_fold_nf 0
+    = g_fold_nj 0
+    = g_fold_nrl 0
+    = g_fold_nds 0
+    = g_fold_nld 0
+    = g_fold_rec T
+    : ~ i p st
+    ~ < p en {
+        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
+        : i le ? < rel 0 en + p rel
+        ( __fold_scan_line p le )
+        = p + le 1
+    }
+    : ~ i round 1
+    : ~ b again & > ( __fold_settle_flags ) 0 < round 4
+    = g_fold_rec F
     ~ again {
-        = g_fold_nf 0
-        = g_fold_nj 0
-        : ~ i p st
-        ~ < p en {
-            : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
-            : i le ? < rel 0 en + p rel
-            ( __fold_scan_line p le )
-            = p + le 1
-        }
+        ( __fold_replay )
         = round + round 1
-        = again & > ( __fold_settle_flags st en ) 0 < round 4
-        // A new round starts every flag over; the register folds it
-        // already made stay, and the loads it folded feed the next.
-        ? again {
-            : ~ i i 0
-            ~ < i g_fold_nf {
-                : i r ( nurl_peek # s g_fold_flist i )
-                ( __fold_put r 3 0 ) ( __fold_put r 4 0 ) ( __fold_put r 5 0 )
-                = i + i 1
-            }
-        } {}
+        = again & > ( __fold_settle_flags ) 0 < round 4
     }
     ? == g_fold_nt 0 { ( __ir_write_range st en part ) ^ v } {}
     = g_fold_fn_end en
