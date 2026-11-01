@@ -621,7 +621,7 @@ runners.
 | MCP servers from the checkout | `packages/nurl-mcp/tests/stdio_test.sh` (nurl-mcp built from the tree and driven over stdio as an agent drives it) and `nurlapi/e2e_local.sh --native-only` (the playground server against the checkout's toolchain: native builds, the diagnostics contract, the MCP surface) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
 | HTTP leak + HTTP/2 & HTTP/3 conformance | `tools/leakcheck/run.sh`, `tools/h2spec_gate.sh` (h2spec), and `tools/h3spec_gate.sh` (49/49 h3spec over QUIC) |
-| AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan (CI: targeted controls in one job, the corpus in two parallel shards via `NURL_SAN_SHARD=i/n`) |
+| AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan (CI: targeted controls in one job, the corpus in three parallel shards via `NURL_SAN_SHARD=i/n`) |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
 | unikernel: the corpus with no libc (shard 1/2, 2/2) | the corpus built with no libc at all, plus the nolibc/runtime_bare unit gates — and the x86_64 PVH image under cloud-hypervisor as a second loader |
 | unikernel: the guest under QEMU | the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — devices, network demos, TLS, DNS, disk |
