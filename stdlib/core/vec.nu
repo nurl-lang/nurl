@@ -216,62 +216,79 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     ^ c
 }
 
-// Grow the underlying buffer so that cap >= need. Uses nurl_realloc;
-// safe to call when the current data pointer is null (cap == 0).
+// The capacity a growth to `need` elements moves the buffer to: doubled
+// from cap (from 4 for a view's detach, to at least its length), or 0
+// when the buffer already holds them.
+inline @ __vec_grow_cap s ctl i need → i {
+    : i cap ( __vec_cap_raw ctl )
+    ? < cap 0 {
+        : i len ( __vec_len_raw ctl )
+        ^ ( alloc_grow_cap 4 ? > len need len need )
+    } {}
+    ? < cap need { ^ ( alloc_grow_cap cap need ) } {}
+    ^ 0
+}
+
+// The buffer behind `ctl` moved to one of `bytes` bytes that holds
+// `new_cap` elements of `z` bytes each. Inlined into both growths, so each stays one
+// out-of-line body that its callers call on their slow path only.
+// - A borrowed view (cap < 0) DETACHES: the live elements are copied into
+//   a fresh owned buffer and the source is left untouched. From here on
+//   this is an ordinary owned Vec.
+// - The packed-string layout (string_from_bytes_packed: the data sits in
+//   the control block's own allocation, at ctl+24) is copied out the same
+//   way: realloc() would walk into the middle of another malloc block.
+//   The next free of this Vec then frees both blocks (the packed-aware
+//   vec_free below skips the in-ctl buffer).
+// - A first buffer comes from nurl_alloc, not realloc(NULL, n): the
+//   runtime's small-allocation cache sits behind nurl_alloc/nurl_free,
+//   and a Vec's first buffer is the most recycled block shape there is.
+// - Any other is reallocated.
+inline @ __vec_place s ctl i z i new_cap i bytes → v {
+    : s cur ( __vec_data_raw ctl )
+    : i ctl_end + # i ctl 24
+    ? | < ( __vec_cap_raw ctl ) 0 & != 0 # i cur == # i cur ctl_end {
+        : s fresh ( nurl_alloc bytes )
+        : i copy_bytes * z ( __vec_len_raw ctl )
+        ? > copy_bytes 0 { ( nurl_memcpy fresh cur copy_bytes ) } {}
+        ( nurl_vctl_set ctl 0 # i fresh )
+    } {
+        ? == 0 # i cur {
+            : s fresh ( nurl_alloc bytes )
+            ( nurl_vctl_set ctl 0 # i fresh )
+        } {
+            : s fresh ( nurl_realloc cur bytes )
+            ( nurl_vctl_set ctl 0 # i fresh )
+        }
+    }
+    ( nurl_vctl_set ctl 2 new_cap )
+}
+
+// Grow the buffer so that cap >= need, for a `need` a caller chose (a
+// count that may be anything): a capacity past what memory can hold
+// panics here, before anything is allocated (alloc_size). Safe when the
+// data pointer is null (cap == 0).
 // (Callers test `cap < need` first: this is the slow path, and a call per
 // push / reserve / string seal that only found room cost 8 % of an HTTP
 // server's user time.)
 @ __vec_grow [A] s ctl i need → v {
-    : i cap ( __vec_cap_raw ctl )
-    ? < cap 0 {
-        // Borrowed view: the first growth DETACHES — copy the live
-        // elements into a fresh owned buffer and leave the source
-        // untouched. From here on this is an ordinary owned Vec.
-        : i len ( __vec_len_raw ctl )
-        : i new_cap ( alloc_grow_cap 4 ? > len need len need )
-        : s fresh ( nurl_alloc ( alloc_size Z A new_cap ) )
-        : i copy_bytes * Z A len
-        ? > copy_bytes 0 { ( nurl_memcpy fresh ( __vec_data_raw ctl ) copy_bytes ) } {}
-        ( nurl_vctl_set ctl 0 # i fresh )
-        ( nurl_vctl_set ctl 2 new_cap )
-        ^
-    } {}
-    ? < cap need {
-        // (Checked: a capacity past what memory can hold panics here,
-        // before anything is allocated — alloc_size.)
-        : i new_cap ( alloc_grow_cap cap need )
-        : s cur ( __vec_data_raw ctl )
-        : i bytes ( alloc_size Z A new_cap )
-        // If `cur` lives in the same alloc as ctl (the packed-string
-        // layout from string_from_bytes_packed — data sits at ctl+24),
-        // realloc() would walk into the middle of another malloc block
-        // and crash. Detect that, malloc-copy-out into a fresh buffer
-        // instead; the next free of this Vec then frees both blocks
-        // (the packed-aware vec_free below skips the in-ctl buffer).
-        : i ctl_end + # i ctl 24
-        ? & != 0 # i cur == # i cur ctl_end {
-            : s fresh ( nurl_alloc bytes )
-            : i len ( __vec_len_raw ctl )
-            : i copy_bytes * Z A len
-            ? > copy_bytes 0 { ( nurl_memcpy fresh cur copy_bytes ) } {}
-            ( nurl_vctl_set ctl 0 # i fresh )
-            ( nurl_vctl_set ctl 2 new_cap )
-        } {
-            ? == 0 # i cur {
-                // First growth: nurl_alloc, not realloc(NULL, n) — the
-                // runtime's small-allocation cache sits behind
-                // nurl_alloc/nurl_free, and a Vec's first buffer is the
-                // most recycled block shape there is.
-                : s fresh ( nurl_alloc bytes )
-                ( nurl_vctl_set ctl 0 # i fresh )
-                ( nurl_vctl_set ctl 2 new_cap )
-            } {
-                : s fresh ( nurl_realloc cur bytes )
-                ( nurl_vctl_set ctl 0 # i fresh )
-                ( nurl_vctl_set ctl 2 new_cap )
-            }
-        }
-    } {}
+    : i new_cap ( __vec_grow_cap ctl need )
+    ? > new_cap 0 { ( __vec_place ctl Z A new_cap ( alloc_size Z A new_cap ) ) } {}
+}
+
+// Grow the buffer so that cap >= need, for a `need` that counts elements
+// which exist: the length plus a count of elements already in memory (one
+// pushed value, a source being appended). Its byte size cannot overflow,
+// so there is nothing to check and no panic. cap·Z and the appended
+// count·Z are each the size of memory that exists (below 2^57 bytes on
+// every target), so `need`·Z < 2^58, and doubling to it stays below 2^59.
+// A zero-sized element is 0 bytes for any count. Every push and append
+// reaches here, and inside a `recover` extent a function that no panic can
+// leave journals none of its bindings: a growth that could panic made all
+// of them register (agora #283).
+@ __vec_grow_to [A] s ctl i need → v {
+    : i new_cap ( __vec_grow_cap ctl need )
+    ? > new_cap 0 { ( __vec_place ctl Z A new_cap * Z A new_cap ) } {}
 }
 
 // ── Constructors ────────────────────────────────────────────────────
@@ -285,6 +302,14 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
     : s ctl ( nurl_zalloc 24 )
     : i want ? > n 0 n 0
     ? > want 0 { ( __vec_grow [A] ctl want ) } {}
+    ^ @ ( Vec A ) { ctl }
+}
+
+// vec_with_cap for `n` elements of A that exist elsewhere (a copy's
+// source, a concatenation's parts): no check, no panic (__vec_grow_to).
+@ _vec_with_room [A] i n → ( Vec A ) {
+    : s ctl ( nurl_zalloc 24 )
+    ? > n 0 { ( __vec_grow_to [A] ctl n ) } {}
     ^ @ ( Vec A ) { ctl }
 }
 
@@ -372,6 +397,11 @@ inline @ alloc_grow_pow2 i cap i need i first → i {
 // a handle (core/string.nu's recycled-String paths).
 @ _vec_ctl_reserve [A] s ctl i need → v {
     ? < ( __vec_cap_raw ctl ) need { ( __vec_grow [A] ctl need ) } {}
+}
+
+// …for a `need` that counts elements which exist (__vec_grow_to).
+@ _vec_ctl_reserve_to [A] s ctl i need → v {
+    ? < ( __vec_cap_raw ctl ) need { ( __vec_grow_to [A] ctl need ) } {}
 }
 
 raw @ vec_unstash [A] i kind i n → ( Vec A ) {
@@ -571,7 +601,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     // grow path is too big to inline, and paying a call per push showed
     // up at ~6 % of a parse-heavy profile. The common push is then a
     // load, a compare, a store and a length bump.
-    ? >= len ( __vec_cap_raw ctl ) { ( __vec_grow [A] ctl + len 1 ) } {}
+    ? >= len ( __vec_cap_raw ctl ) { ( __vec_grow_to [A] ctl + len 1 ) } {}
     : *A data # *A ( nurl_vctl_data ctl )
     = . data len x
     ( nurl_vctl_set ctl 1 + len 1 )
@@ -585,7 +615,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? | < w 1 > w 8 { ^ } {}
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ? > + len w ( __vec_cap_raw ctl ) { ( __vec_grow [u] ctl + len w ) } {}
+    ? > + len w ( __vec_cap_raw ctl ) { ( __vec_grow_to [u] ctl + len w ) } {}
     : *u data # *u ( nurl_vctl_data ctl )
     : ~ i k 0
     ~ < k w {
@@ -603,7 +633,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 > idx len { ^ F } {}
-    ? < ( __vec_cap_raw ctl ) + len 1 { ( __vec_grow [A] ctl + len 1 ) } {}
+    ? < ( __vec_cap_raw ctl ) + len 1 { ( __vec_grow_to [A] ctl + len 1 ) } {}
     : *A data # *A ( nurl_vctl_data ctl )
     // Shift right [idx..len) → [idx+1..len+1). Walk from the tail to
     // keep adjacent slots from clobbering each other.
@@ -762,6 +792,16 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     } {}
 }
 
+// vec_reserve for `n` elements that exist elsewhere and are about to be
+// appended (core/string.nu's appends): no check, no panic (__vec_grow_to).
+@ _vec_reserve_more [A] ( Vec A ) v i n → v {
+    ? > n 0 {
+        : s ctl . v ctl
+        : i len ( __vec_len_raw ctl )
+        ? < - ( __vec_cap_raw ctl ) len n { ( __vec_grow_to [A] ctl + len n ) } {}
+    } {}
+}
+
 // Set the length to exactly `n`. Growing zero-fills the new tail with a
 // single `nurl_memset` instead of a push-a-zero loop; shrinking only
 // lowers the length, running no per-element drop, so the same
@@ -833,7 +873,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? <= cnt 0 { ^ } {}
     : s dctl . dst ctl
     : i dlen ( __vec_len_raw dctl )
-    ? < ( __vec_cap_raw dctl ) + dlen cnt { ( __vec_grow [A] dctl + dlen cnt ) } {}
+    ? < ( __vec_cap_raw dctl ) + dlen cnt { ( __vec_grow_to [A] dctl + dlen cnt ) } {}
     : *A ddata # *A ( nurl_vctl_data dctl )
     : *A sdata # *A ( nurl_vctl_data sctl )
     : ~ i i 0
@@ -854,7 +894,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? > n 0 {
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
-        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
+        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow_to [A] dctl + dlen n ) } {}
         : *A ddata # *A ( nurl_vctl_data dctl )
         : *A sdata # *A ( nurl_vctl_data sctl )
         : ~ i i 0
@@ -873,7 +913,7 @@ raw @ vec_stash [A] i kind sink ( Vec A ) v i max → v {
     ? > n 0 {
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
-        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
+        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow_to [A] dctl + dlen n ) } {}
         : *A ddata # *A ( nurl_vctl_data dctl )
         : *A sdata # *A ( nurl_vctl_data sctl )
         : ~ i i 0
@@ -981,7 +1021,7 @@ raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
 @ vec_clone [A] ( Vec A ) v → ( Vec A ) {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : ( Vec A ) out ( vec_with_cap [A] len )
+    : ( Vec A ) out ( _vec_with_room [A] len )
     ? > len 0 {
         : *A src # *A ( nurl_vctl_data ctl )
         : *A dst ( vec_data [A] out )
@@ -1005,7 +1045,7 @@ raw @ vec_with_cap_packed [A] i n → ( Vec A ) {
 @ vec_clone_with [A] ( Vec A ) v ( @ A A ) clone → ( Vec A ) {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    : ( Vec A ) out ( vec_with_cap [A] len )
+    : ( Vec A ) out ( _vec_with_room [A] len )
     ? > len 0 {
         : *A src # *A ( nurl_vctl_data ctl )
         : ~ i i 0
