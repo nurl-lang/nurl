@@ -9,5 +9,10 @@
   value goes by its flag whenever the call lends only out of other
   owners: its summary is final (or it is `vec_get`), and every argument
   it may lend from is a parameter, or a local that owns its value and
-  views nothing. The leak remains, as before, only where a lend could be
-  of the binding itself.
+  views nothing. The leak remains, as before, where a lend could be of
+  the binding itself, and where the old value has no key to tell it
+  apart from what a live borrower of it holds (a `??` payload, a cursor):
+  an option payload, a library handle such as a Box, a record whose first
+  owned field is an option or an enum without a key in every variant, an
+  enum with a variant whose first payload is a number while a later one
+  owns memory (Agora #361; #366 gives those types keys).
