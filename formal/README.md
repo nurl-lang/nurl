@@ -130,9 +130,15 @@ as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:
 
-- a destructor (`% Drop`) of a type that holds views (A2-drop.2, Agora
-  #224's `DtorSafe`). A destructor of a type that holds none is in the
-  calculus, on the normal path and the panic path (A2-drop.1, `CLAIM.md`);
+- elements changed through a borrow that is not a copy of one owner's
+  whole handle: an element of a Vec of Vecs, a field viewer, a join of
+  borrows, a call's lent result (Agora #295; `CLAIM.md`). A plain
+  parameter its callee changes and a whole-handle copy read as `inout`
+  and as the owner (`RULES.md`, phase C);
+- a destructor run wherever a value of its type is dropped (a field, an
+  element, a `sink` parameter at its callee's end, the old value of an
+  `=`), not only at the end of the binding `letd` made (A2-drop.3, Agora
+  #253; `CLAIM.md`, Destructors);
 - `Rc` and its cycle collector, which are the standard library's `unsafe`
   base (phase B).
 
