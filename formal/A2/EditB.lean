@@ -17,7 +17,10 @@ every memory root of `x`'s path (`killThru`). The proof here follows that:
 * every other root of the path only ends what depends on it
   (`MInv.kill_more`), and kills are absorbed (`killNames_absorb`);
 * `x` itself is set back live: its node keeps its cell where it was
-  (`editB_hrefAt`, `MInv.reset`; `MInv.editB_rest` puts these together). -/
+  (`editB_hrefAt`, `MInv.reset`; `MInv.editB_rest` puts these together);
+* A3.1: the blocks are as they were, and the new node's shares are the old
+  node's (`MInv.thru_owner`) or the value's moved in (`Pushed.sh`), so the
+  owner's rewritten tree keeps its shares naming blocks (`SharesIn.repl`). -/
 
 namespace A2
 

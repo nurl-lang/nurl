@@ -192,6 +192,18 @@ rules.
 
 ## A3.1's mechanization (Agora #285)
 
+**Status (first cut, on main with #295's edits).** `check.sh` is green with
+the blocks and shares in A2 and A3: `Mem.blk`, `Blk`, `Val.arc`, `Ty.arc`,
+`ArcIn` / `SharesOK`, `MInv.shares`, `MInv.blocks` and `HeapOK.bpay` hold
+through every step, the edit steps and `StmtT.editB` included (an edit's
+element may be an `arc t`: `SharesIn.repl`, `Pushed.sh`), so
+`A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are
+re-proven over them, with the blocks in A3's `Cfg` (`Cfg.blk`). A share
+frees nothing by itself (`Frees.arc`), and no step changes the blocks yet
+(`Step.blk`). Not yet mechanized: `arcNew`, `arcClone`, `arcGet`, the
+ghost count and the sweep (step 2 below), `Touch`'s atomic `rc` (step 3),
+and the probes (step 4).
+
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the
 block goes into A2 itself. Single-threaded, an `Arc` is a counted
