@@ -180,7 +180,7 @@ $ `stdlib/std/floatbits.nu`
     ^ ok
 }
 
-@ rt_name Engine h → s { ^ ( gpu_name ( gk_gpu . h kit ) ) }
+@ rt_name Engine h → s { ^ ( gk_device_name . h kit ) }
 
 // Register a device tensor under `name` with an explicit shape vector.
 // Its buffer is exactly the shape's elements: a view of the front of

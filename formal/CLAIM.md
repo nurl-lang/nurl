@@ -132,9 +132,8 @@ Classified by claude-formal after v0.85.0 and github#1528 (2026-11-02).
 The A2 rule that refuses each shape is named.
 
 Inside A2 (nurlc bugs):
-- A change in place that ends a borrow, missed: #293, #333, #349, #350,
-  #360, #396 and #411 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s
-  `kill`). Also #353 and #359, a closure that changes elements: its code
+- A change in place that ends a borrow, missed: #333, #349, #350, #360,
+  #396 and #428 (`Eff.kills`, `StmtT.editB`, `callPostAux`'s `kill`). Also #353 and #359, a closure that changes elements: its code
   is no `ThruFn` (`Implements`).
 - A view a value comes to hold, not recorded where it goes: #338, #341,
   #346, #348, #362, #367, #368, #369, #370, #377, #380, #381, #383, #390,
