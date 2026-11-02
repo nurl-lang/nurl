@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.5] — 2026-11-02
+
+### Fixed
+
+- **`rt_name` names the device through `gk_device_name`.** It handed back
+  `( gpu_name ( gk_gpu . h kit ) )`, a view of a temporary `Gpu` the
+  statement made. `gpu_name`'s view of its argument was invisible to the
+  borrow check until NURL's #411 (a `??` payload of a field is part of its
+  binding). `gk_device_name` views the kit's own `Gpu`, so the name lives
+  as long as the engine.
+
 ## [0.12.4] — 2026-10-21
 
 ### Fixed
