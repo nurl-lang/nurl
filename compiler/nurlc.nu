@@ -39156,8 +39156,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 : s f0 ( mem_udrop_flag_get syms cg vp )
                 : s nf0 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print nf0 ) ( nurl_print ` = xor i1 ` ) ( nurl_print f0 ) ( nurl_print `, 1\n` )
-                : s same ( nurl_cg_reg cg )
+                : ~ s same ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = and i1 ` ) ( nurl_print same0 ) ( nurl_print `, ` ) ( nurl_print nf0 ) ( nurl_print `\n` )
+                // (…and only the first such reader: the old value has one
+                // owner. `: String g1 . o name  : String g2 . o name` both
+                // hold it; handed to both, both dropped it — agora #354.)
+                ? != 0 ( nurl_str_len any ) {
+                    : s nt ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print nt ) ( nurl_print ` = xor i1 ` ) ( nurl_print any ) ( nurl_print `, 1\n` )
+                    : s s1 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print s1 ) ( nurl_print ` = and i1 ` ) ( nurl_print same ) ( nurl_print `, ` ) ( nurl_print nt ) ( nurl_print `\n` )
+                    = same s1
+                } {}
                 : s f1 ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print f1 ) ( nurl_print ` = or i1 ` ) ( nurl_print f0 ) ( nurl_print `, ` ) ( nurl_print same ) ( nurl_print `\n` )
                 ( nurl_print `  store i1 ` ) ( nurl_print f1 ) ( nurl_print `, i1* ` ) ( nurl_print ( nurl_sym_get2 syms vp `__live` ) ) ( nurl_print `\n` )
