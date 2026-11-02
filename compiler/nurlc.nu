@@ -2922,6 +2922,11 @@ unsafe @ note_unsafe_item s pos s what → v {
 // those its result may borrow from (bck_call_lend_srcs). `` otherwise.
 : ~ s g_call_roots ``
 : ~ s g_call_lend_roots ``
+// What the call last generated said of itself (gen_call): one of the
+// arguments it may lend is no bare name but may lend (gen_assign's #412
+// refusal); and it may lend at all — for the call it is an argument of.
+: ~ b g_call_lend_unnamed F
+: ~ b g_call_may_lend F
 // What each callee lends (mem_fn_lend_sources), once every summary is
 // final: the deferred walks' memo, 0 outside them.
 : ~ i g_lsrc_memo 0
@@ -15409,6 +15414,10 @@ unsafe @ gen_call i lex i syms i cg → s {
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // …and the positions of the arguments that are no bare name but may
+    // still lend what they read: a field, a join, a call that may lend —
+    // not a literal or a fresh value (agora #412).
+    : ~ s arg_lendy ``
     // The arguments that synchronise themselves (`% Sync`: a Mutex, a
     // Channel, a Locked), noted once an Arc has been seen (§6.5).
     : ~ s __arc_sync ``
@@ -16666,6 +16675,13 @@ unsafe @ gen_call i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        // (A call: one that may lend what it was handed — as the argument's
+        // own call left g_call_may_lend — or one not compiled yet.)
+        ? ( seq bck_arg_nm `-` ) {
+            ? | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend {
+                = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) )
+            } {}
+        } {}
         : s __acs ( __clo_cs_expr syms bck_arg_tt bck_arg_val at )
         // (Built only once an argument carries something: the lists stay
         // empty for the calls — nearly all — that pass nothing of interest;
@@ -17806,6 +17822,14 @@ unsafe @ gen_call i lex i syms i cg → s {
     : s __lend_ix ? != 0 ( nurl_str_starts __lend_cn `vec_get` ) ( nurl_str_cat `0` `` ) ( mem_fn_lent_params syms __lend_cn )
     : s __lend_ids ( bck_ret_alias_idents __lend_ix arg_idents )
     ( nurl_sym_def syms `__last_call_lend_idents__` __lend_ids )
+    // …and whether one of the arguments it may lend or hand back is no bare
+    // name but may lend what it reads (`( id other )`, a field): the names
+    // above are then not all it may lend (gen_assign's refusal, agora
+    // #412) — and whether this call may lend at all, for the call it is an
+    // argument of (arg_lendy).
+    = g_call_lend_unnamed ? == 0 ( nurl_str_len arg_lendy ) F | ( __lend_pos_unnamed __lend_ix arg_lendy ) ( __lend_pos_unnamed __ra_lent arg_lendy )
+    // (The callee not compiled yet: its summary is not known, so it may.)
+    = g_call_may_lend ? | | g_call_lend_unnamed != 0 ( nurl_str_len __lend_ids ) != 0 ( nurl_str_len __ra_ids ) T == 0 ( nurl_sym_len g_fn_compiled call_name )
     // …and, for a decision that cannot wait for the callee's summaries (a
     // generic instance compiled after this caller), the arguments by
     // position and the callee to ask at module end (mem_ret_local_lend).
@@ -39053,7 +39077,33 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // `?String`, dropped its old value and then held it — agora #342.
         // Only there: any other option keeps the call's answer in its slot,
         // `@slot` (mem_udrop_bind_flag), which what copies it reads.)
-        : b __ud_hty | ( __is_handle_ty vt ) & & __ud_may_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
+        // (…and only where the call can hand back nothing BUT this binding's
+        // value — every argument it may lend is this binding, `( id o )`.
+        // One that may lend another argument too, `( pick o other k )`,
+        // answers "lent" on both runs, so no per-run answer here is right:
+        // gated, o kept its old flag over OTHER's value and both dropped it
+        // (agora #412, claude-formal's HOLD on #342); by its flag, the run
+        // that hands back o's own value freed it under o. A2 refuses the
+        // form (formal/rules/t342.md), and so does nurlc now, until an
+        // identity test by key (#366, #419) can answer each run.)
+        : s __ud_lids ( nurl_sym_get syms `__last_call_lend_idents__` )
+        : s __ud_pids ( nurl_sym_get syms `__last_phi_idents__` )
+        // (Every argument it may lend: one that is no bare name — `( id
+        // other )`, a field, `( vec_at … )` — is another.)
+        : b __ud_only_self & & & __ud_may_self | == 0 ( nurl_str_len __ud_lids ) ( __words_all_equal __ud_lids name ) | == 0 ( nurl_str_len __ud_pids ) ( __words_all_equal __ud_pids name ) ! g_call_lend_unnamed
+        : b __ud_optv & != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
+        // (A binding with a drop slot of its own, or an `inout` parameter —
+        // the caller's binding. Whether a `: ~` binding owns its value at
+        // this line is its flag's, at run time: one bound as a cursor or an
+        // alias may have been given a value of its own since.)
+        : b __ud_owns | ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) != 0 ( nurl_str_len __ud_ptr )
+        ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == bck_rhs_tt TT_LPAREN {
+            : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
+            : s __q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
+            : s __q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
+            ( die_stmt lex ( nurl_str_cat3 __q1 __q2 __q3 ) )
+        } {}
+        : b __ud_hty | ( __is_handle_ty vt ) & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
@@ -49629,6 +49679,17 @@ unsafe @ bck_scalar_lty s t → b {
         {}
     }
     out
+}
+
+// Is one of `positions` among gen_call's `arg_lendy` (the arguments that
+// are no bare name and may lend what they read)?
+@ __lend_pos_unnamed s positions s lendy → b {
+    : ~ s rest ( nurl_str_cat positions `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word lendy w ) { ^ T } {}
+    }
+    ^ F
 }
 
 @ bck_max_ret_refdepth s ret_params s arg_refdepths → i {
