@@ -17215,7 +17215,9 @@ unsafe @ gen_call i lex i syms i cg → s {
         // the package changes by name; agora #339). A number or a flag is
         // copied in: nothing is released.
         ? & & & != 0 g_borrowck __callee_shadowed | ( is_ident_tok bck_arg_tt ) != 0 ( nurl_str_len arg_froot ) | ( __is_handle_ty at ) ( __type_needs_drop at syms ) {
-            : s __asg ( nurl_str_cat3 ( nurl_sym_get2 syms fname `__closure_assigns` ) ` ` ( nurl_sym_get2 syms fname `__closure_fldroots` ) )
+            // (A field the closure stores is given back its own value by
+            // identity — #419 — so only a whole new value is refused here.)
+            : s __asg ( nurl_sym_get2 syms fname `__closure_assigns` )
             : s __an ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ( __path_root_name arg_froot )
             ? & > ( nurl_str_len __asg ) 1 ( str_contains_word __asg __an ) {
                 ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
@@ -48947,7 +48949,9 @@ unsafe @ simple_capture_analysis i lex i outer_syms s closure_params → s {
                         ? & ! is_clo_param != 0 ( nurl_str_len bl ) { = is_clo_param ( __cs_bound bl var_name ) } {}
                         ? & & ! is_clo_param == prev2 TT_DOT == prev1 TT_IDENT { = is_clo_param ( __clo_scan_struct_obj outer_syms dot_obj ) } {}
                         // (Read, not the root of a store: agora #358.)
-                        ? & & ! is_clo_param ! fld_root ! ( str_contains_word reads var_name ) { = reads ( nurl_str_cat3 reads ` ` var_name ) } {}
+                        // (…before the body gives it a value of its own: one
+                        // assigned first needs none where the closure is made.)
+                        ? & & & & ! is_clo_param ! fld_root ! ( str_contains_word reads var_name ) ! ( str_contains_word assigned var_name ) ! ( str_contains_word fld_roots var_name ) { = reads ( nurl_str_cat3 reads ` ` var_name ) } {}
                         // The root of a field-path store target.
                         ? fld_root {
                             = fld_root F
