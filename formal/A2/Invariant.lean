@@ -138,6 +138,29 @@ theorem SharesOK.nil_node {m : Mem} {t t1 : Ty} {c d : Nat} : SharesOK m (.vec t
 theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
   fun _ _ _ ha => by rw [ha.hasArc] at h; cases h
 
+/-- A3.1 (with #295): a node whose elements are the old node's or hold
+    shares that name blocks, where the blocks are as they were. -/
+theorem SharesOK.node_mem {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es es' : List Val}
+    (h : SharesOK m (.vec t) (.node t1 c d es)) (hes : ∀ e ∈ es', e ∈ es ∨ SharesOK m t e)
+    (hb : m'.blk = m.blk) : SharesOK m' (.vec t) (.node t2 c' d' es') := fun u k p ha => by
+  cases ha with
+  | child he ha' =>
+    rw [hb]
+    rcases hes _ he with he | he
+    · exact h u k p (.child he ha')
+    · exact he u k p ha'
+
+/-- A3.1 (with #295): a node whose `n`-th element is set to `v` (`vec_set`). -/
+theorem SharesOK.node_set {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es : List Val} {n : Nat}
+    {v : Val} (h : SharesOK m (.vec t) (.node t1 c d es)) (hv : SharesOK m t v) (hb : m'.blk = m.blk) :
+    SharesOK m' (.vec t) (.node t2 c' d' (es.set n v)) := fun u k p ha => by
+  cases ha with
+  | child he ha' =>
+    rw [hb]
+    rcases List.mem_or_eq_of_mem_set he with he | he
+    · exact h u k p (.child he ha')
+    · subst he; exact hv u k p ha'
+
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
 inductive Child : Val → Val → Prop

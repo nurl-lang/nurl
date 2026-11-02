@@ -243,7 +243,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hn.2.1)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st⟩ o ⟨true, some T'⟩) .skip)
+      m1.nv, m1.st, m1.blk⟩ o ⟨true, some T'⟩) .skip)
     rw [union_realloc had]
     exact Step.editPushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) (NodeOf.lift hn a2) hr
   | editTrunc he hn hfr hr =>

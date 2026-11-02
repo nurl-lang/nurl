@@ -1500,7 +1500,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       cases hst with
       | editPush htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
-        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           post.inv.thru_owner hx1 hmx hl1 hty hro
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
@@ -1509,7 +1509,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
       | editPushRealloc htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
-        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           post.inv.thru_owner hx1 hmx hl1 hty hro
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
@@ -1520,7 +1520,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | trunc _ =>
       cases hst with
       | editTrunc _ hno hfr hr =>
-        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           hi.toMInv.thru_owner hx1 hmx hl1 hty hro
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
@@ -1531,7 +1531,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       cases hst with
       | editSet hn _ htk hno hfr hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
-        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           post.inv.thru_owner hx1 hmx hl1 hty hro
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1

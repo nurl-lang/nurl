@@ -156,13 +156,14 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
       m.st x = some ⟨false, some (.href c)⟩ ∧ m.st dep.root = some ⟨true, some T⟩ ∧
       Top n0 T ∧ Lands dep.kind (.node t c d es) n0 ∧ HrefAt m dep c t Ex.held ∧
       WFv (.vec t) (.node t c d es) ∧ NodeOf m x dep.root T t c d es ∧
-      ∀ o T' t' c' d' es', NodeOf m x o T' t' c' d' es' →
-        o = dep.root ∧ T' = T ∧ t' = t ∧ c' = c ∧ d' = d ∧ es' = es := by
+      (∀ o T' t' c' d' es', NodeOf m x o T' t' c' d' es' →
+        o = dep.root ∧ T' = T ∧ t' = t ∧ c' = c ∧ d' = d ∧ es' = es) ∧
+      SharesOK m (.vec t) (.node t c d es) := by
   have hos : Ex.mode.ownSlot = false := by rw [hmx]; rfl
   obtain ⟨v, hv, hok⟩ := hi.bor_val hx hl hos
   rw [hty] at hok
   obtain ⟨c, rfl, dep, hdp, hh⟩ := valOK_vec.mp hok
-  obtain ⟨n0, d, es, hr, hla, hw, hvs, hns⟩ := hh
+  obtain ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩ := hh
   have hdm : dep ∈ memDeps Ex.path := by
     refine List.mem_filter.mpr ⟨hdp, ?_⟩
     rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> rfl
@@ -178,8 +179,8 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
   have ha := hi.heap.alloc dep.root T hT
   have hno : NodeOf m x dep.root T t c d es :=
     ⟨(ha c (hsub.ids c (by simp))).1, (ha d (hsub.ids d (by simp))).1, hT, Or.inr ⟨hv, hsub⟩⟩
-  refine ⟨dep, hdm, T, n0, c, d, es, hv, hT, htop, hla, ⟨n0, d, es, hr, hla, hw, hvs, hns⟩, hw, hno,
-    fun o T' t' c' d' es' hno' => ?_⟩
+  refine ⟨dep, hdm, T, n0, c, d, es, hv, hT, htop, hla, ⟨n0, d, es, hr, hla, hw, hvs, hns, hsh⟩, hw, hno,
+    fun o T' t' c' d' es' hno' => ?_, hsh⟩
   obtain ⟨_, _, hT', hcase⟩ := hno'
   rcases hcase with ⟨rfl, _⟩ | ⟨hv', hsub'⟩
   · rw [hv] at hT'; cases hT'
