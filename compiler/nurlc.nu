@@ -17219,7 +17219,7 @@ unsafe @ gen_call i lex i syms i cg → s {
             // identity — #419 — so only a whole new value is refused here.)
             : s __asg ( nurl_sym_get2 syms fname `__closure_assigns` )
             : s __an ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ( __path_root_name arg_froot )
-            ? & > ( nurl_str_len __asg ) 1 ( str_contains_word __asg __an ) {
+            ? & != 0 ( nurl_str_len __asg ) ( str_contains_word __asg __an ) {
                 ( die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` __an `' is passed to '` ) ( nurl_str_cat4 fname `', a closure that gives '` __an `' a new value by name — inside, the parameter and the capture are one value, and the assignment releases what the parameter still is. Pass a copy that owns its data (string_from, mem_dup), or let the closure take '` ) __an `' as an inout parameter instead of capturing it.` ) )
             } {}
         } {}
@@ -17246,14 +17246,13 @@ unsafe @ gen_call i lex i syms i cg → s {
                 ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms __lb ) ) ) {
                     ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) __rc arg_idx `` ? __arg_join `pendjoin` `pendlend` )
                     ( __clo_effect_note __ln __rc arg_idx )
-                    // (…and what the callee drops or changes of a value lent
-                    // out of a parameter, this function does to that
-                    // parameter: its drop and mutation summaries, agora #443.)
+                    // (…and what the callee drops of a value lent out of a
+                    // parameter, this function drops of that parameter's
+                    // elements: its drop summary, agora #443.)
+                    // (A drop edge only: growing the element's buffer is the
+                    // irealloc edge's, and is not the parameter's own buffer
+                    // moving.)
                     ( __drop_note __ln __rc arg_idx )
-                    ? & & == 0 g_bck_closure_depth == 0 g_rpg_on ( __rprov_param syms __lb ) {
-                        : i __lk ( nurl_sym_word_index syms `__fn_param_names__` __lb )
-                        ? >= __lk 0 { ( __mut_edge_note __lk __rc arg_idx ) } {}
-                    } {}
                 } {}
             }
         } {}
