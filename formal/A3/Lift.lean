@@ -84,7 +84,7 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | expr he => exact EvalR.expr (Eval.lift he a2)
   | new =>
     show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st⟩)
+      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 2, m.nv, m.st, m.blk⟩)
     rw [union_alloc2]
     exact EvalR.new
   | moveOwn hy => exact EvalR.moveOwn hy
@@ -137,6 +137,7 @@ theorem Frees.lift {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : Nat 
   match h with
   | .int => exact Frees.int
   | .view => exact Frees.view
+  | .arc => exact Frees.arc
   | @Frees.node _ _ _ c d _ hc hdd hl =>
     have hdc : d ≠ c := fun e => by subst e; simp [upd] at hdd
     have had : a d = true := by rw [upd_ne _ _ hdc] at hdd; exact hdd
@@ -230,7 +231,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     have had : a2 d = false := hd d (by rw [← TakeVal.alloc ht]; exact hdd)
     refine ⟨_, GhostRel.refl _, ?_⟩
     show Step P _ _ (.ok (Mem.set ⟨union (upd (upd m1.alloc d false) m1.nid true) a2, m1.nid + 1,
-      m1.nv, m1.st⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
+      m1.nv, m1.st, m1.blk⟩ x ⟨true, some (.node t c m1.nid (es ++ [v]))⟩) .skip)
     rw [union_realloc had]
     exact Step.pushRealloc (m1 := liftMem a2 m1) (TakeVal.lift ht a2) hx (union_true a2 hc)
       (union_true a2 hdd)
@@ -258,15 +259,16 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       (Frees.lift hfr fun i h => hd i (by rw [← TakeVal.alloc ht]; exact h))⟩
   | panic => exact Step.panic
   | letrec hfn hp hx =>
-    refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
+    refine ⟨_, GhostRel.scope _ (GhostRel.seq _ (GhostRel.catchR _ ?_ ?_ ?_ ?_ ?_ (GhostRel.refl _))),
       Step.letrec (m := liftMem a2 m) hfn hp hx⟩
+    · rfl
     · rfl
     · rfl
     · rfl
     · exact fun _ h => union_true a2 h
   | catchIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
-    exact ⟨_, GhostRel.catchR _ rfl rfl rfl (fun _ h => h) hg, Step.catchIn hs⟩
+    exact ⟨_, GhostRel.catchR _ rfl rfl rfl rfl (fun _ h => h) hg, Step.catchIn hs⟩
   | catchSkip => exact ⟨_, GhostRel.refl _, Step.catchSkip⟩
   | unpair hy hx hz hne =>
     exact ⟨_, GhostRel.refl _, Step.unpair (m := liftMem a2 m) hy hx hz hne⟩

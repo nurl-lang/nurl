@@ -11,6 +11,7 @@ theorem Frees.other {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   match h with
   | .int => rfl
   | .view => rfl
+  | .arc => rfl
   | .node _ _ hl =>
     simp only [ids_node, List.mem_cons, not_or] at hi
     rw [FreesL.other hl hi.2.2, upd_ne _ _ hi.2.1, upd_ne _ _ hi.1]
@@ -36,6 +37,7 @@ theorem frees_exists {τ : Ty} {T : Val} (hw : WFv τ T) :
   induction hw with
   | int => exact fun a _ _ => ⟨a, Frees.int⟩
   | view => exact fun a _ _ => ⟨a, Frees.view⟩
+  | arc => exact fun a _ _ => ⟨a, Frees.arc⟩
   | node hes ih =>
     rename_i t c d es
     intro a hn ha
@@ -111,7 +113,8 @@ theorem ownedAt_withA {m : Mem} {a : Nat → Bool} {o : Var} {T : Val} :
     whatever happens to the addresses of the tree taken out. -/
 theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : OwnedAt m x T)
     (m' : Mem) (hown : ∀ o U, OwnedAt m' o U → o ≠ x ∧ OwnedAt m o U)
-    (halloc : ∀ i, i ∉ T.ids → m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid) : HeapOK m' where
+    (halloc : ∀ i, i ∉ T.ids → m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid)
+    (hb : m'.blk = m.blk := by rfl) : HeapOK m' where
   nodup o U hU := hh.nodup o U (hown o U hU).2
   disj o1 o2 U1 U2 hne h1 h2 := hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2
   alloc o U hU i hi := by
@@ -120,6 +123,7 @@ theorem HeapOK.without {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (hx : Owned
     obtain ⟨ha, hlt⟩ := hh.alloc o U hU' i hi
     exact ⟨by rw [halloc i hni]; exact ha, Nat.lt_of_lt_of_le hlt hnid⟩
   self o U hU := hh.self o U (hown o U hU).2
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-- Putting a tree into a slot that held none. -/
 theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
@@ -127,7 +131,8 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     (hnx : ∀ U, ¬ OwnedAt m x U)
     (hT : T.ids.Nodup) (hTs : SelfFree T) (hTa : ∀ i ∈ T.ids, m'.alloc i = true ∧ i < m'.nid)
     (hTd : ∀ o U, OwnedAt m o U → ∀ i ∈ T.ids, i ∉ U.ids)
-    (halloc : ∀ o U, OwnedAt m o U → ∀ i ∈ U.ids, m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid) :
+    (halloc : ∀ o U, OwnedAt m o U → ∀ i ∈ U.ids, m'.alloc i = m.alloc i) (hnid : m.nid ≤ m'.nid)
+    (hb : m'.blk = m.blk := by rfl) :
     HeapOK m' where
   nodup o U hU := by
     rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
@@ -148,6 +153,7 @@ theorem HeapOK.put {m : Mem} (hh : HeapOK m) {x : Var} {T : Val} (m' : Mem)
     rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hTs
     · exact hh.self o U h
+  bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
 
 /-! ### Trees that do not view themselves -/
 

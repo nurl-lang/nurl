@@ -28,6 +28,9 @@ inductive WFv : Ty → Val → Prop
   | inr {a b : Ty} {v : Val} : WFv b v → WFv (.sum a b) (.inr v)
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
       WFv te v → WFv (.fn ms) (.pkg fs te ms v cs)
+  /-- A3.1: a share; its block, in memory, holds the payload it carries (in
+      the first cut, one that holds no view). -/
+  | arc {t : Ty} {k : Nat} {p : Val} : WFv t p → t.holdsView = false → WFv (.arc t) (.arc k p)
 
 /-- `v`, a view of element type `s`, is stored in tree `T` of type `τ`. -/
 inductive ViewIn : Ty → Val → Ty → Val → Prop
@@ -40,6 +43,100 @@ inductive ViewIn : Ty → Val → Ty → Val → Prop
   | inr {a b : Ty} {x : Val} {s : Ty} {v : Val} : ViewIn b x s v → ViewIn (.sum a b) (.inr x) s v
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {s : Ty}
       {v : Val} : ViewIn te x s v → ViewIn (.fn ms) (.pkg fs te ms x cs) s v
+
+/-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
+    the `u` it carries, `p`. (Not inside a payload: the block's own shares
+    are the block's.) -/
+inductive ArcIn : Ty → Val → Ty → Nat → Val → Prop
+  | here {u : Ty} {k : Nat} {p : Val} : ArcIn (.arc u) (.arc k p) u k p
+  | child {t t' : Ty} {c d : Nat} {es : List Val} {e : Val} {u : Ty} {k : Nat} {p : Val} :
+      e ∈ es → ArcIn t e u k p → ArcIn (.vec t) (.node t' c d es) u k p
+  | fst {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+      ArcIn a x u k p → ArcIn (.prod a b) (.pair x y) u k p
+  | snd {a b : Ty} {x y : Val} {u : Ty} {k : Nat} {p : Val} :
+      ArcIn b y u k p → ArcIn (.prod a b) (.pair x y) u k p
+  | inl {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn a x u k p → ArcIn (.sum a b) (.inl x) u k p
+  | inr {a b : Ty} {x : Val} {u : Ty} {k : Nat} {p : Val} : ArcIn b x u k p → ArcIn (.sum a b) (.inr x) u k p
+  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)} {u : Ty}
+      {k : Nat} {p : Val} : ArcIn te x u k p → ArcIn (.fn ms) (.pkg fs te ms x cs) u k p
+
+/-- A3.1: every share a tree holds names a block of the store `B` that
+    holds the payload the share carries, of the share's type (the block
+    lives while a share of it is owned; a payload never changes). -/
+def SharesIn (B : Nat → Option Blk) (τ : Ty) (T : Val) : Prop :=
+  ∀ u k p, ArcIn τ T u k p → B k = some ⟨u, p⟩
+
+/-- `SharesIn` over a memory's blocks. -/
+def SharesOK (m : Mem) (τ : Ty) (T : Val) : Prop := SharesIn m.blk τ T
+
+theorem SharesOK.of_blk {m m' : Mem} {τ : Ty} {T : Val} (h : SharesOK m τ T) (hb : m'.blk = m.blk) :
+    SharesOK m' τ T := fun u k p ha => by rw [hb]; exact h u k p ha
+
+theorem SharesOK.fst {m : Mem} {a b : Ty} {x y : Val} (h : SharesOK m (.prod a b) (.pair x y)) :
+    SharesOK m a x := fun u k p ha => h u k p (.fst ha)
+theorem SharesOK.snd {m : Mem} {a b : Ty} {x y : Val} (h : SharesOK m (.prod a b) (.pair x y)) :
+    SharesOK m b y := fun u k p ha => h u k p (.snd ha)
+theorem SharesOK.inl {m : Mem} {a b : Ty} {x : Val} (h : SharesOK m (.sum a b) (.inl x)) :
+    SharesOK m a x := fun u k p ha => h u k p (.inl ha)
+theorem SharesOK.inr {m : Mem} {a b : Ty} {x : Val} (h : SharesOK m (.sum a b) (.inr x)) :
+    SharesOK m b x := fun u k p ha => h u k p (.inr ha)
+theorem SharesOK.elem {m : Mem} {t t' : Ty} {c d : Nat} {es : List Val} {e : Val}
+    (h : SharesOK m (.vec t) (.node t' c d es)) (he : e ∈ es) : SharesOK m t e :=
+  fun u k p ha => h u k p (.child he ha)
+theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
+    {cs : List (Var × PMode × Ty)} (h : SharesOK m (.fn ms) (.pkg fs te ms x cs)) : SharesOK m te x :=
+  fun u k p ha => h u k p (.pkg ha)
+theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
+    m.blk k = some ⟨t, p⟩ := h t k p .here
+
+theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Val} (h : ArcIn τ T u k p) :
+    τ.hasArc = true := by
+  induction h with
+  | here => rfl
+  | child _ _ ih => exact ih
+  | fst _ ih => simp [Ty.hasArc, ih]
+  | snd _ ih => simp [Ty.hasArc, ih]
+  | inl _ ih => simp [Ty.hasArc, ih]
+  | inr _ ih => simp [Ty.hasArc, ih]
+  | pkg _ _ => rfl
+
+/-- A node whose elements are among another's, where the blocks are as
+    they were (a `Vec` that shrank, or that was copied). -/
+theorem SharesOK.node_sub {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es es' : List Val}
+    (h : SharesOK m (.vec t) (.node t1 c d es)) (hsub : ∀ e ∈ es', e ∈ es) (hb : m'.blk = m.blk) :
+    SharesOK m' (.vec t) (.node t2 c' d' es') := fun u k p ha => by
+  cases ha with
+  | child he ha' => rw [hb]; exact h u k p (.child (hsub _ he) ha')
+
+/-- ... and a `Vec` with one element more (`vec_push`). -/
+theorem SharesOK.node_push {m m' : Mem} {t t1 t2 : Ty} {c d c' d' : Nat} {es : List Val} {v : Val}
+    (h : SharesOK m (.vec t) (.node t1 c d es)) (hv : SharesOK m t v) (hb : m'.blk = m.blk) :
+    SharesOK m' (.vec t) (.node t2 c' d' (es ++ [v])) := fun u k p ha => by
+  cases ha with
+  | child he ha' =>
+    rw [hb]
+    rcases List.mem_append.mp he with he | he
+    · exact h u k p (.child he ha')
+    · rw [List.mem_singleton] at he; subst he; exact hv u k p ha'
+
+theorem SharesOK.mk_pair {m : Mem} {a b : Ty} {x y : Val} (hx : SharesOK m a x) (hy : SharesOK m b y) :
+    SharesOK m (.prod a b) (.pair x y) := fun u k p ha => by
+  cases ha with
+  | fst h => exact hx u k p h
+  | snd h => exact hy u k p h
+theorem SharesOK.mk_inl {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m a x) :
+    SharesOK m (.sum a b) (.inl x) := fun u k p ha => by cases ha with | inl h => exact hx u k p h
+theorem SharesOK.mk_inr {m : Mem} {a b : Ty} {x : Val} (hx : SharesOK m b x) :
+    SharesOK m (.sum a b) (.inr x) := fun u k p ha => by cases ha with | inr h => exact hx u k p h
+theorem SharesOK.mk_pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val}
+    {cs : List (Var × PMode × Ty)} (hx : SharesOK m te x) : SharesOK m (.fn ms) (.pkg fs te ms x cs) :=
+  fun u k p ha => by cases ha with | pkg h => exact hx u k p h
+theorem SharesOK.nil_node {m : Mem} {t t1 : Ty} {c d : Nat} : SharesOK m (.vec t) (.node t1 c d []) :=
+  fun u k p ha => by cases ha with | child he _ => cases he
+
+/-- A tree of a type that holds no share holds none to check. -/
+theorem SharesOK.of_noArc {m : Mem} {τ : Ty} {T : Val} (h : τ.hasArc = false) : SharesOK m τ T :=
+  fun _ _ _ ha => by rw [ha.hasArc] at h; cases h
 
 /-- `e` is a part of `t` one level down: an element of a `Vec`, or a field
     of a struct. -/
@@ -104,7 +201,7 @@ def PkgsOK (T : Val) : Prop :=
 def HrefAt (m : Mem) (dep : Dep) (c : Nat) (t : Ty) (H : List Dep) : Prop :=
   ∃ n0 d es, RootNode m dep.root n0 ∧ Lands dep.kind (.node t c d es) n0 ∧
     WFv (.vec t) (.node t c d es) ∧ ViewsOK m (.vec t) (.node t c d es) H ∧
-    NamesIn (.node t c d es) H
+    NamesIn (.node t c d es) H ∧ SharesOK m (.vec t) (.node t c d es)
 
 /-- A borrowed value of type `τ`, depending on `P` and holding `H`.  The parts
     of a borrowed struct are valid through what it depends on or holds. -/
@@ -125,6 +222,10 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
   | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {x : Val} {cs : List (Var × PMode × Ty)}
       {P H : List Dep} :
       ValOK m te x (P ++ envDeps cs H) (envDeps cs H) → ValOK m (.fn ms) (.pkg fs te ms x cs) P H
+  /-- A3.1: a share lent: its block holds the payload it carries, of its
+      type (in the first cut, one that holds no view). -/
+  | arc {t : Ty} {k : Nat} {p : Val} {P H : List Dep} :
+      m.blk k = some ⟨t, p⟩ → WFv t p → t.holdsView = false → ValOK m (.arc t) (.arc k p) P H
 
 section ValOK
 variable {m : Mem} {v : Val} {P H : List Dep}
@@ -196,6 +297,13 @@ def OwnedAt (m : Mem) (x : Var) (t : Val) : Prop := m.st x = some ⟨true, some 
 def SelfFree (T : Val) : Prop :=
   ∀ d o l, Sub (.view d o l) T → ∀ u c es, ¬ Sub (.node u c d es) T
 
+/-- A3.1: every block of the store `B` holds a well-formed tree of a type
+    that holds no views, the shares it holds name blocks of `B` too, and (the
+    first cut) it owns no address. -/
+def BlocksOK (B : Nat → Option Blk) : Prop :=
+  ∀ k bl, B k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧ WFv bl.ty bl.pay ∧
+    SharesIn B bl.ty bl.pay ∧ bl.pay.ids = []
+
 /-- One owner per allocation, every owned address is live, and no owned tree
     views itself. -/
 structure HeapOK (m : Mem) : Prop where
@@ -203,6 +311,9 @@ structure HeapOK (m : Mem) : Prop where
   disj  : ∀ x y t u, x ≠ y → OwnedAt m x t → OwnedAt m y u → ∀ i ∈ t.ids, i ∉ u.ids
   alloc : ∀ x t, OwnedAt m x t → ∀ i ∈ t.ids, m.alloc i = true ∧ i < m.nid
   self  : ∀ x t, OwnedAt m x t → SelfFree t
+  -- A3.1's first cut: a payload owns no address (it holds no allocation),
+  -- and a block's key is no address either (taken from `nid`, never live)
+  bpay  : ∀ k bl, m.blk k = some bl → bl.pay.ids = []
 
 /-- A binding's slot agrees with its entry. -/
 def SlotOK (m : Mem) (E : Entry) (sl : Slot) : Prop :=
@@ -243,7 +354,9 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .rbind _ s => CatchOK m s
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
-      x ∉ s.spine ∧ m0.nv ≤ m.nv ∧ CatchOK m s
+      x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
+      -- A3.1 (so far): no step changes the counted blocks
+      m.blk = m0.blk ∧ CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on
@@ -368,6 +481,13 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
   armed     : ∀ v E sl, Γ v = some E → m.st v = some sl → ArmOK m E sl
+  /-- A3.1: every share an owned tree holds names a live block of its type. -/
+  shares    : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.own = true → sl.val = some T →
+                SharesOK m E.ty T
+  /-- A3.1: a block's payload is a well-formed tree of a type that holds no
+      views, and the shares it holds name blocks too. -/
+  blocks    : ∀ k bl, m.blk k = some bl → bl.ty.ok = true ∧ bl.ty.holdsView = false ∧
+                WFv bl.ty bl.pay ∧ SharesOK m bl.ty bl.pay
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

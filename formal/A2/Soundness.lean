@@ -95,14 +95,14 @@ theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F :
   · exact hno r hr'
 
 /-- The empty store, with variables numbered from `nv` still fresh. -/
-def emptyMem (nv : Nat) : Mem := ⟨fun _ => false, 0, nv, fun _ => none⟩
+def emptyMem (nv : Nat) : Mem := ⟨fun _ => false, 0, nv, fun _ => none, fun _ => none⟩
 
 theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.vars, v < nv) :
     Inv (emptyMem nv) (fun _ => none) [] s where
   dom _ := rfl
   slot _ _ h := by cases h
   heap := ⟨fun _ _ h => (by cases h), fun _ _ _ _ _ h => (by cases h), fun _ _ h => (by cases h),
-    fun _ _ h => (by cases h)⟩
+    fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
   wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
@@ -113,6 +113,8 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
   armed _ _ _ h := by cases h
+  shares _ _ _ _ h := by cases h
+  blocks _ _ h := by cases h
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h

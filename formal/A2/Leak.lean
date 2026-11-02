@@ -12,6 +12,7 @@ theorem Frees.le {a a' : Nat → Bool} {T : Val} (h : Frees a T a') :
   match h with
   | .int => exact hi
   | .view => exact hi
+  | .arc => exact hi
   | @Frees.node _ _ _ c d _ _ _ hl =>
     have := FreesL.le hl hi
     by_cases hd : i = d

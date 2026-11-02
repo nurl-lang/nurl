@@ -173,6 +173,7 @@ theorem Frees.restrict {a a' : Nat → Bool} {T : Val} (h : Frees a T a') {a2 : 
   match h with
   | .int => exact .int
   | .view => exact .view
+  | .arc => exact .arc
   | @Frees.node _ _ _ c d _ hc hd hl =>
     have hdc : d ≠ c := by
       intro e; subst e; simp [upd] at hd
@@ -316,11 +317,11 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | panic => exact ⟨_, .panic, rfl⟩
   | letrec hP hps hx =>
     exact ⟨_, .letrec hP hps hx, rfl,
-      .scope _ (.seq _ (.catchR _ rfl rfl rfl (fun _ hi => of_minus_true hi) (.refl _)))⟩
+      .scope _ (.seq _ (.catchR _ rfl rfl rfl rfl (fun _ hi => of_minus_true hi) (.refl _)))⟩
   | catchIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
-    exact ⟨_, .catchIn h1, rfl, .catchR _ rfl rfl rfl (fun _ hi => hi) hg⟩
+    exact ⟨_, .catchIn h1, rfl, .catchR _ rfl rfl rfl rfl (fun _ hi => hi) hg⟩
   | catchSkip => exact ⟨_, .catchSkip, rfl, .refl _⟩
   | unpair hy hx hz hxz => exact ⟨_, .unpair hy hx hz hxz, rfl, .refl _⟩
   | callc hc hj hP hx hbp =>

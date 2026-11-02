@@ -64,6 +64,9 @@ mutual
 inductive Frees : (Nat → Bool) → Val → (Nat → Bool) → Prop
   | int {a : Nat → Bool} {n : Nat} : Frees a (.int n) a
   | view {a : Nat → Bool} {d o l : Nat} : Frees a (.view d o l) a
+  /-- A3.1: a share frees nothing by itself; the step's sweep frees a block
+      no share reaches. -/
+  | arc {a : Nat → Bool} {k : Nat} {p : Val} : Frees a (.arc k p) a
   | node {a a' : Nat → Bool} {t : Ty} {c d : Nat} {es : List Val} :
       a c = true → upd a c false d = true →
       FreesL (upd (upd a c false) d false) es a' →
@@ -145,6 +148,7 @@ def Val.owns : Val → Bool
   | .inl .. => true
   | .inr .. => true
   | .pkg .. => true
+  | .arc _ _ => true   -- A3.1: a share is owned; dropping it is what counts
   | _ => false
 
 /-- Handing a value on: an owner gives up its value, anything else is
@@ -372,6 +376,11 @@ def envMem (m : Mem) (env : Val) : Mem :=
 inductive Res where
   | ok (m : Mem) (s : Stmt)
   | panic (m : Mem)
+
+/-- The memory a step leaves. -/
+def Res.mem : Res → Mem
+  | .ok m _ => m
+  | .panic m => m
 
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)

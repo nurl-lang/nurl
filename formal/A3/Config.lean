@@ -15,7 +15,7 @@ open A2
 
 /-- Thread `t` with its part `a` of the address space. -/
 def ownView (C : Cfg) (t : Thread) (a : Nat → Bool) : Mem :=
-  { alloc := a, nid := C.nid, nv := t.nv, st := t.st }
+  { alloc := a, nid := C.nid, nv := t.nv, st := t.st, blk := C.blk }
 
 /-- The configuration invariant. -/
 def CInv (P : Prog) (C : Cfg) : Prop :=

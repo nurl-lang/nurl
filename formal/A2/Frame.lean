@@ -264,7 +264,8 @@ theorem SlotOK.dead {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl) (hl
 
 /-- A slot reads memory only through a live entry's dependencies. -/
 theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
-    (hk : E.live = true → ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl := by
+    (hk : E.live = true → ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep)
+    (hb : m'.blk = m.blk := by rfl) : SlotOK m' E sl := by
   obtain ⟨ho, hown, hbor⟩ := h
   refine ⟨ho, fun hos => ?_, fun hos hl => ?_⟩
   · obtain ⟨h1, h2, h3⟩ := hown hos
@@ -273,13 +274,14 @@ theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     refine ⟨T, hT, hv.keep fun dep hd => (hk hl dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
-    refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_)⟩
+    refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_) hb⟩
     · simp [Entry.vdeps, hos, hd]
     · simp [Entry.vdeps, hos, hd]
 
 theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
-    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) : SlotOK m' E sl :=
-  h.keepLive fun _ => hk
+    (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) (hb : m'.blk = m.blk := by rfl) :
+    SlotOK m' E sl :=
+  h.keepLive (fun _ => hk) hb
 
 /-- What the slot of the changed binding holds afterwards, if anything. -/
 def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Prop
@@ -297,7 +299,9 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
         d.kind.isName = false → (d.root = x ∧ Ex'.mode.isRoot = true) ∨
           (d.root ≠ x ∧ ∃ Er, Γ0 d.root = some Er ∧ Er.mode.isRoot = true)) ∧
       (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true) ∧
-      ArmOK m' Ex' sl
+      ArmOK m' Ex' sl ∧
+      -- A3.1: the shares its tree holds name live blocks
+      (sl.own = true → ∀ T, sl.val = some T → SharesOK m' Ex'.ty T)
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -355,7 +359,8 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hdb : ox = none → DbindSafe Γ x)
     (hrem : ox = none → e = .replace)
     (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
-      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = []) :
+      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [])
+    (hblk : m'.blk = m.blk := by rfl) :
     MInv m' (upd (kill e hv x Γ) x ox) := by
   have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
       ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep := by
@@ -413,7 +418,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             rw [hint] at ht; cases ht
           · obtain ⟨w, hw, hok'⟩ := hbor hos hl'
             exact ⟨w, hw, by rw [hint] at hok' ⊢; obtain ⟨n, rfl⟩ := valOK_int.mp hok'; exact .int⟩
-        · refine hslot.keep fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd
+        · refine hslot.keep (fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd) hblk
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb
         · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead
@@ -590,7 +595,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
-      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm⟩ := hox
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm, _⟩ := hox
       rw [hsl'] at hsl; cases hsl; exact harm
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [hst v hvx] at hsl
@@ -607,5 +612,19 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)).vkeep
+  · -- A3.1: an owned tree's shares name live blocks; no change here touches a block
+    intro v E' sl T hv' hsl hown hT
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, hsh⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact hsh hown T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      rw [killE_ty]; exact (hi.shares v E sl T hE hsl hown hT).of_blk hblk
+  · intro k bl hk
+    rw [hblk] at hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, h3, h4.of_blk hblk⟩
 
 end A2

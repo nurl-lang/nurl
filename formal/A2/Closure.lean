@@ -158,6 +158,14 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     · simp only [setE, upd_ne _ _ hwx] at hw
       rw [Mem.set_st, upd_ne _ _ hwx] at hsl
       exact (hi.armed w Ew sl hw hsl).keep fun _ _ _ dep _ => (rootKeep_ext hext dep.root).vkeep
+  · intro w Ew sl T hw hsl hown hT
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl; cases hown
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      rw [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact hi.shares w Ew sl T hw hsl hown hT
+  · exact hi.blocks
 
 /-- The receiver of a call through a package is live. -/
 theorem callT_recv_live {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c : Var} {zs : List Var}
@@ -396,6 +404,10 @@ theorem CtxWF.clean {Γ : Ctx} (hw : CtxWF Γ) : CtxWF (cleanC Γ) where
 
 theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) where
   names := cleanC_names hi.names
+  shares v E sl T hv hsl hown hT := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    rw [clean_ty]; exact hi.shares v E0 sl T h0 hsl hown hT
+  blocks := hi.blocks
   armed v E sl hv hsl := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     intro hd hos T hT
@@ -1880,6 +1892,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           envDeps_mono (List.subset_append_right _ _)
         refine lend_valOK' hwe hpkE (fun t c' d es ht => ⟨⟨c, .view⟩, ?_, _,
           Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩) hvr hnmE
+          (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [htc] at this; exact this.pkg)
           (fun s _ => ViewsOK.mono hsub hvr)
         simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
@@ -1904,7 +1917,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         · exact List.mem_append_right _ (envDeps_sub _ _ hd)
   let mn : Mem := { m with nv := m.nv + 1 }
   have hin : MInv mn Γ :=
-    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self⟩ (Nat.le_succ _)
+    hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.bpay⟩ (Nat.le_succ _)
   have hval : ValOK mn te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
     have hk : ∀ dep : Dep, VKeep m mn dep ∧ HKeep m mn dep := fun dep => by
       have hr : RootKeep m mn dep.root := fun n hn => rootNode_st rfl hn
