@@ -1,5 +1,5 @@
 // field_arg_borrow_then_set: an element borrowed through a field argument (vec_at of `. b items`); vec_set replaces it; the borrow is read.
-// map: §2.12 | A2 | rejected | h82 | element borrowed via struct field (vec_at); vec_set replaces; borrow read
+// map: StmtT.editB | A2 | rejected | h82 | element borrowed via struct field (vec_at); vec_set replaces; borrow read
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 
