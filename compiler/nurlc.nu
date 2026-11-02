@@ -190,7 +190,17 @@
 : ~ s g_clo_node_list ``
 : ~ i g_clo_node_n 0
 : ~ s g_clo_pnode_list ``  // `f#p`: the named functions' closure parameters that have a node
-: ~ i g_clo_closed 0  // 1 once __clo_nodes_close has given every node its members: a node's answers are final
+: ~ i g_clo_closed 0
+// While the parked walks run (resolve_deferred_borrowck), a `dyn` impl whose
+// walk has not answered yet is taken to leave no view (g_vk_assumed names
+// the ones the last answer assumed so of), and each call that relied on it
+// is checked once every walk has run (g_vk_assumptions, `vn|k|h|line|file`;
+// __vk_assumptions_check). Two decorators forwarding to each other are
+// judged by what they really do, not refused because each answer waits on
+// the other's (agora #394).
+: ~ i g_vk_assume_on 0
+: ~ s g_vk_assumed ``
+: ~ s g_vk_assumptions ``  // 1 once __clo_nodes_close has given every node its members: a node's answers are final
 // The bindings and field paths of the function being walked that hold an
 // `Rc` handle, as `name=type` words (bck_note_rc_arg). Every copy of an Rc
 // is the same value, so a call that may drop or replace what one handle
@@ -29379,7 +29389,7 @@ unsafe @ bck_swap_char s str i from i to → s {
 @ __vk_of_d s cal s seen → s {
     ? != 0 ( nurl_sym_len g_fn_vkeeps cal ) { ^ ( nurl_str_cat ( nurl_sym_get g_fn_vkeeps cal ) `` ) } {}
     : s ms ( __indirect_members cal )
-    ? != 0 ( nurl_str_len ms ) { ^ ( __vk_union_of ms ( nurl_str_cat3 seen ` ` cal ) ) } {}
+    ? != 0 ( nurl_str_len ms ) { ^ ( __vk_union_of ms ( nurl_str_cat3 seen ` ` cal ) >= ( nurl_str_find cal `__dyn__` ) 0 ) } {}
     // (A node no closure reached: nothing, once the nodes are final.)
     ? ( __clo_is_node cal ) { ^ ? != 0 g_clo_closed ( nurl_str_cat `:` `` ) ( nurl_str_cat `` `` ) } {}
     : s gb ( bck_generic_base cal )
@@ -29389,7 +29399,10 @@ unsafe @ bck_swap_char s str i from i to → s {
 
 // The union of the answers of callees `fns` (`:h>k …`), or `` when one of
 // them has none yet.
-@ __vk_union_of s fns s seen → s {
+// (`dyn`: the members are a virtual callee's impls — while the parked walks
+// run, one whose walk has not answered yet is assumed to leave no view and
+// noted in g_vk_assumed.)
+unsafe @ __vk_union_of s fns s seen b dyn → s {
     : ~ s rest ( nurl_str_cat fns `` )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
@@ -29397,6 +29410,10 @@ unsafe @ bck_swap_char s str i from i to → s {
         ? ( seq fn `*` ) { ^ ( nurl_str_cat `` `` ) } {}
         ? ( str_contains_word seen fn ) { continue } {}
         : s a ( __vk_of_d fn seen )
+        ? & & == 0 ( nurl_str_len a ) dyn != 0 g_vk_assume_on {
+            ? ! ( str_contains_word g_vk_assumed fn ) { = g_vk_assumed ? == 0 ( nurl_str_len g_vk_assumed ) ( nurl_str_cat fn `` ) ( nurl_str_cat3 g_vk_assumed ` ` fn ) } {}
+            continue
+        } {}
         ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat `` `` ) } {}
         : ~ s ws ( nurl_str_slice a 1 - ( nurl_str_len a ) 1 )
         ~ != 0 ( nurl_str_len ws ) {
@@ -32522,7 +32539,11 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                     // (A `bK.H` row: the callee's answer names holder H for
                     // source K — the pair, as A2's outHolds; agora #337.)
                     : s vk ? vbuf ( __vk_row_k vaix ) ``
+                    ( __vk_assume_reset )
                     : b vkept ? vbuf | | vself_kept & ! vself ( bck_callee_vkeeps vcal vk ( __vk_row_h vaix ) ) & vvirt ( __vk_others_keep vcal vk ( __vk_row_h vaix ) ) | | ( seq vcal `=.` ) & ( bck_callee_keeps vcal vaix ) | ( nurl_sym_has_word g_fn_mutates vcal `0` ) != 0 ( nurl_sym_len g_fn_inout vcal ) ( nurl_sym_has_word g_fn_vcopies vcal vaix )
+                    // (…an answer that assumed an impl not walked yet leaves
+                    // no view: checked once every walk has run.)
+                    ? & vbuf ! vkept { ( __vk_assume_note vcal vk ( __vk_row_h vaix ) ( bck_field_int rec 3 ) ) } {}
                     // (`B`: the owner is a temporary this statement made and
                     // releases after the call — nothing to depend on; one the
                     // callee keeps or takes is the callee's.)
@@ -33212,6 +33233,48 @@ unsafe @ bck_ret_drop_check s st i line → v {
     : s cn ( bck_fn_show g_bck_fn )
     : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `this call of '` cn `' itself hands it '` ) sn ( nurl_str_cat3 `' as argument ` ( nurl_str_int + k 1 ) `, and '` ) ( nurl_str_cat3 cn `' may leave '` hn ) )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 m1 `' viewing that argument's storage (it does where it returns): '` ( nurl_str_cat4 sn `' is released while '` hn `' may still be read. Pass it something that outlives '` ) ( nurl_str_cat hn `', or have the callee keep a copy that owns its data (string_from, slice_to_vec).` ) ) )
+}
+
+unsafe @ __vk_assume_reset → v { = g_vk_assumed `` }
+
+// The answer just asked of `cal` for holder `h` of source `k` (at `line`)
+// assumed some impl leaves no view: record the call, to be checked.
+unsafe @ __vk_assume_note s cal s k i h i line → v {
+    ? == 0 ( nurl_str_len g_vk_assumed ) { ^ v } {}
+    : s e ( nurl_str_cat4 ( nurl_str_cat3 cal `|` k ) ( nurl_str_cat3 `|` ( nurl_str_int h ) `|` ) ( nurl_str_int line ) ( nurl_str_cat `|` ( nurl_sym_get g_bck `file` ) ) )
+    = g_vk_assumptions ? == 0 ( nurl_str_len g_vk_assumptions ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_vk_assumptions `\n` e )
+    = g_vk_assumed ``
+}
+
+// Every walk has run: each call whose answer assumed an impl not walked yet
+// leaves no view is judged by that impl's final answer — refused where it
+// does (agora #394).
+unsafe @ __vk_assumptions_check → v {
+    = g_vk_assume_on 0
+    : ~ s rest ( nurl_str_cat g_vk_assumptions `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s e ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i p1 ( nurl_str_find e `|` )
+        : s cal ( nurl_str_slice e 0 p1 )
+        : s r1 ( nurl_str_slice e + p1 1 - - ( nurl_str_len e ) p1 1 )
+        : i p2 ( nurl_str_find r1 `|` )
+        : s k ( nurl_str_slice r1 0 p2 )
+        : s r2 ( nurl_str_slice r1 + p2 1 - - ( nurl_str_len r1 ) p2 1 )
+        : i p3 ( nurl_str_find r2 `|` )
+        : s h ( nurl_str_slice r2 0 p3 )
+        : s r3 ( nurl_str_slice r2 + p3 1 - - ( nurl_str_len r2 ) p3 1 )
+        : i p4 ( nurl_str_find r3 `|` )
+        : s line ( nurl_str_slice r3 0 p4 )
+        : s file ( nurl_str_slice r3 + p4 1 - - ( nurl_str_len r3 ) p4 1 )
+        : s vk ( __vk_of cal )
+        ? | == 0 ( nurl_str_len vk ) ( str_contains_word ( nurl_str_slice vk 1 - ( nurl_str_len vk ) 1 ) ( nurl_str_cat3 h `>` k ) ) {
+            : s cn ( bck_fn_show cal )
+            ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat4 ( nurl_str_cat3 `this call of '` cn `' may leave argument ` ) ( nurl_str_int + ( nurl_str_to_int h ) 1 ) ( nurl_str_cat3 ` viewing the storage of argument ` ( nurl_str_int + ( nurl_str_to_int k ) 1 ) `: an impl of the method does, ` ) `and what that argument points into can be released while it is read. Pass a source that outlives the holder, or have the impls keep a copy that owns its data (string_from, slice_to_vec).` ) )
+        } {}
+    }
+    = g_vk_assumptions ``
 }
 
 // Is `cal` an indirect callee one of whose members is the function being
@@ -73218,7 +73281,9 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( mem_emit_scratch_flags )
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
+        = g_vk_assume_on 1
         ( resolve_deferred_borrowck )
+        ( __vk_assumptions_check )
         // (After every walk: the payload views are parked by the walks.)
         ( resolve_arc_mut )
         ( resolve_lit_handoffs )
