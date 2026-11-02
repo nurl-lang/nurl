@@ -90,12 +90,18 @@ unsafe @ main → i {
     ( nurl_print ? == . t status ( tx_arp_pending ) `yes` `no` )
     ( nurl_print `\n` )
 
+    // Bounded by the CLOCK, not by a round count, as dhcp.nu learned:
+    // under TCG a busy loop's turn is as fast as the host is idle, and a
+    // loaded host answers later than any fixed number of turns (agora
+    // #320: 2000 turns gave up before QEMU's gateway replied). Each turn
+    // primes the gateway again, so a lost request or reply is asked once
+    // more: the ARP cache sends at most one request a second, three
+    // retries, and stack_arp_prime answers whether the MAC is known.
     : ~ b resolved F
-    : ~ i rounds 0
-    ~ && ! resolved < rounds 2000 {
+    : i deadline + ( ms ) 10000
+    ~ && ! resolved < ( ms ) deadline {
         ( pump nic st out )
-        = resolved ?? ( arp_cache_lookup ( stack_arp st ) ( gw_ip ) ( ms ) ) { T _m → T F → F }
-        = rounds + rounds 1
+        = resolved ( stack_arp_prime st ( gw_ip ) ( ms ) out )
     }
     ( nurl_print `gateway MAC learned over the wire: ` )
     ( nurl_print ? resolved `yes` `no` )
