@@ -193,16 +193,46 @@ rules.
 ## A3.1's mechanization (Agora #285)
 
 **Status (first cut, on main with #295's edits).** `check.sh` is green with
-the blocks and shares in A2 and A3: `Mem.blk`, `Blk`, `Val.arc`, `Ty.arc`,
-`ArcIn` / `SharesOK`, `MInv.shares`, `MInv.blocks` and `HeapOK.bpay` hold
-through every step, the edit steps and `StmtT.editB` included (an edit's
-element may be an `arc t`: `SharesIn.repl`, `Pushed.sh`), so
-`A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are
-re-proven over them, with the blocks in A3's `Cfg` (`Cfg.blk`). A share
-frees nothing by itself (`Frees.arc`), and no step changes the blocks yet
-(`Step.blk`). Not yet mechanized: `arcNew`, `arcClone`, `arcGet`, the
-ghost count and the sweep (step 2 below), `Touch`'s atomic `rc` (step 3),
-and the probes (step 4).
+the blocks, the shares and the three rules in A2 and A3 (steps 1–3 below,
+first cut). `Mem.blk`, `Blk`, `Val.arc`, `Ty.arc`, `ArcIn` / `SharesOK`,
+`MInv.shares`, `MInv.blocks`, `HeapOK.bpay` and `HeapOK.bkey` (a block's
+key is below `nid`) hold through every step, the edit steps and
+`StmtT.editB` included. `A2.memory_safe`, `A2.soundness`,
+`A2.no_leak_end`, `A2.no_leak_panic` and `A3.claim` are re-proven with:
+- `RhsT.arcNew t y` / `EvalR.arcNew`: `y`'s value, of a plain type
+  (`Ty.plain`: integers, and structs, enums and shares of them), moves in
+  as `PushArg` hands it (an owner moves, an integer is copied). It goes
+  into a fresh block at key `nid`, and `nid` moves past it, so a key is
+  never an address. The result is an owned `arc t` share that holds
+  nothing (`out_share`, `rhs_arcNew`).
+- `RhsT.arcClone a` / `EvalR.arcClone`: a read of the share in `a`, owned
+  or lent, gives a new owned share of the same block (`out_arcClone`).
+- `RhsT.arcGet a` / `EvalR.arcGet`: the payload of `a`'s block, lent
+  (`lendOf`, the identity on a plain value, `WFv.plain_lend`). Its entry
+  is `projE a E t`, a field's: a borrow rooted where `a` is, holding `a`'s
+  `held`, so it ends with `a` like any borrow. A plain payload has no
+  handle, so it is valid through any dependency and no borrow lands in a
+  block (`out_arcGet`). The value is read from the block (`m.blk k`),
+  which `SharesOK` says the share carries, so the packages in memory stay
+  the ones the program made (`MInv.blkCodes`).
+- Dropping a share frees nothing (`Frees.arc`). The count is ghost and is
+  not stored. There is no sweep in this cut: a first-cut payload owns no
+  address, so a block no share reaches frees nothing, and keeping it is
+  unobservable (only a share reads a block). The blocks only grow
+  (`BlkLe`: `Step.blk`, `RhsPost.blk`, `CatchOK`, A3's `Grows.blk`).
+  `Covers` counts no payload, and `covers_evalR` reads `HeapOK.bpay`, so
+  `no_leak` is unchanged.
+- In A3, no `Touch` is added. A block's key is no address (`bkey`), every
+  step keeps every block as it was (`Step.blk`: no step writes a payload;
+  `arcNew` writes only at a fresh key), and the count's word is the
+  runtime's, changed atomically. So a clone, a drop or a payload read is
+  no race. Another thread's facts survive a new block (`ThreadOK.grow`,
+  `MInv.grow`). Send: `Ty.arc t` meets `SpawnOK`'s `holdsView = false`
+  (`arc_spawnOK`, `arc_spawnOK_plain`).
+
+Not yet mechanized: the count as a stated invariant, the sweep (needed
+once a payload owns addresses: step 2's second cut, a `Vec` payload), and
+the probes (step 4).
 
 A3.0 settled that A3 imports A2 and runs A2's step on each thread's view,
 so a shared block has to live somewhere A2's step can read. For `Arc` the

@@ -19,6 +19,7 @@ theorem HeapOK.relabel {m m' : Mem} (hh : HeapOK m) (ha : m'.alloc = m.alloc) (h
     rw [ha, hn]; exact hh.alloc p T hp i hi
   self o T hT := by obtain ⟨p, hp⟩ := hsrc o T hT; exact hh.self p T hp
   bpay k bl hk := hh.bpay k bl (by rw [← hb]; exact hk)
+  bkey k bl hk := by rw [hn]; exact hh.bkey k bl (by rw [← hb]; exact hk)
 
 /-- A root whose slot is unchanged reaches the same memory, as long as every
     owned tree is still owned by someone. -/

@@ -523,7 +523,7 @@ theorem HeapOK.editPush {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk⟩
+    fun k bl hk => hh.bpay k bl hk, fun k bl hk => Nat.lt_of_lt_of_le (hh.bkey k bl hk) hNle⟩
   · -- nodup: the hole's addresses give way to the new node's
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT]
@@ -753,7 +753,7 @@ theorem HeapOK.editTrunc {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : T
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
   refine ⟨fun x U hU => ?_, fun x y U V hne hx hy => ?_, fun x U hU i hi => ?_, fun x U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk⟩
+    fun k bl hk => hh.bpay k bl hk, hh.bkey⟩
   · rcases hown x U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact hnT'
     · exact hh.nodup x U h
@@ -1739,7 +1739,7 @@ theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty}
     · cases h2; exact Or.inl ⟨h1, rfl⟩
     · exact Or.inr h
   refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_,
-    fun k bl hk => hh.bpay k bl hk⟩
+    fun k bl hk => hh.bpay k bl hk, hh.bkey⟩
   · -- nodup: the old element's addresses give way to `v`'s
     rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
     · rw [hUT, hT's]
@@ -1803,6 +1803,7 @@ theorem HeapOK.freeV {m : Mem} (hh : HeapOK m) {v : Val}
     exact ⟨by show a' i = true; rw [hf.other (fun h => hdis o U hU i h hi)]; exact ha, hlt⟩
   self o U hU := hh.self o U hU
   bpay k bl hk := hh.bpay k bl hk
+  bkey k bl hk := hh.bkey k bl hk
 
 /-- A slot set to what it holds. -/
 theorem Mem.set_same {m : Mem} {x : Var} {s : Slot} (h : m.st x = some s) : m.set x s = m := by

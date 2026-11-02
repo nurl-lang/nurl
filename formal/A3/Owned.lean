@@ -134,6 +134,11 @@ theorem EvalR.ownedId {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r
   | pack h1 =>
     obtain ⟨a1, b1⟩ := TakeVal.ownedId h1 hb
     exact ⟨fun _ i hi => .inl (a1 i (by simpa using hi)), fun i hi => .inl (b1 i hi)⟩
+  -- A3.1: a share owns no address, and a new block takes none
+  | arcNew h1 _ =>
+    obtain ⟨_, b1⟩ := TakeVal.ownedId h1 hb
+    exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl (b1 i hi)⟩
+  | arcClone _ => exact ⟨fun _ i hi => by simp [Val.ids] at hi, fun i hi => .inl hi⟩
   | _ => exact ⟨fun h => (nomatch h), fun i hi => .inl hi⟩
 
 /-- **Binding parameters**: a `sink` parameter owns what its argument owned,

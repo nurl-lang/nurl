@@ -139,7 +139,9 @@ def CoversBut (m : Mem) (v : Val) (o : Bool) : Prop :=
   ∀ i, m.alloc i = true → (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ (o = true ∧ i ∈ v.ids)
 
 theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
-    (he : EvalR m r (.ok v o m1)) : CoversBut m1 v o := by
+    (he : EvalR m r (.ok v o m1))
+    -- A3.1: a payload owns no address (`HeapOK.bpay`), so what `arc_new` moves into a block does not
+    (hbp : ∀ k bl, m1.blk k = some bl → bl.pay.ids = []) : CoversBut m1 v o := by
   intro i hi
   cases he with
   | expr _ => exact Or.inl (hc i hi)
@@ -206,6 +208,14 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
         · rfl
       exact Or.inr ⟨hv, by simpa using hiU⟩
     · exact Or.inl ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoy, hU⟩), hiU⟩
+  | @arcNew t y w m1 htk _ =>
+    have hw : w.ids = [] := hbp m1.nid ⟨t, w⟩ (by simp)
+    have hi' : m.alloc i = true := by rw [← htk.alloc]; exact hi
+    obtain ⟨o', U, hU, hiU⟩ := hc i hi'
+    rcases htk.owned hU with hU1 | ⟨_, rfl⟩
+    · exact Or.inl ⟨o', U, hU1, hiU⟩
+    · rw [hw] at hiU; cases hiU
+  | arcClone _ | arcGet _ _ => exact Or.inl (hc i hi)
 
 /-- The binding that takes the value in flight owns it. -/
 theorem covers_take {m : Mem} {v : Val} {o : Bool} (hc : CoversBut m v o) {x : Var}

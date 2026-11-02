@@ -70,6 +70,17 @@ def SpawnOK (P : Prog) (spawn : Nat → Bool) : Prop :=
   ∀ f, spawn f = true → ∃ fn, P[f]? = some fn ∧ fn.resTy = .int ∧
     ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false
 
+/-- A3.1, Send: a share crosses to a new thread when its payload holds no
+    views — `SpawnOK`'s question asked of `Ty.arc t`, unchanged.  Every A2
+    type `arc t` meets it (`Ty.ok` asks it of the payload) ... -/
+theorem arc_spawnOK {t : Ty} (h : (Ty.arc t).ok = true) : (Ty.arc t).holdsView = false := by
+  simp only [Ty.ok, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+  exact h.2
+
+/-- ... and so does every share of a first-cut (plain) payload. -/
+theorem arc_spawnOK_plain {t : Ty} (h : t.plain = true) : (Ty.arc t).holdsView = false :=
+  Ty.plain_holdsView h
+
 /-- Moving the arguments out of the spawner: each owns its value, and its
     slot is left empty (its drop flag clear). -/
 inductive MoveArgs : (Var → Option Slot) → List Var → List Val → (Var → Option Slot) → Prop

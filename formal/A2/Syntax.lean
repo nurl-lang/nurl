@@ -65,6 +65,16 @@ def Ty.ok : Ty → Bool
   | .fn _ => true
   | .arc t => t.ok && !t.holdsView   -- A3.1's first cut: a payload holds no views (nor a closure)
 
+/-- A3.1's first cut: what a block's payload may be — integers, and structs,
+    enums and shares of them (`Arc (Arc i)`, h211).  Such a value owns no
+    address, and holds no view and no closure. -/
+def Ty.plain : Ty → Bool
+  | .int => true
+  | .prod a b => a.plain && b.plain
+  | .sum a b => a.plain && b.plain
+  | .arc t => t.plain
+  | _ => false
+
 /-- A type whose values own what they hold: a `Vec` or a struct.  Its
     binding is an owner (or borrows one). -/
 def Ty.owning : Ty → Bool
@@ -197,6 +207,9 @@ inductive Rhs where
                                             -- the environment `y` (of type `te`) moved in, the
                                             -- interfaces `ms`, and the bindings it captures by
                                             -- name: read (`inp`) or changed (`inout b`)
+  | arcNew (t : Ty) (y : Var)  -- A3.1: `arc_new`: `y`'s value (a `t`) moves into a fresh block
+  | arcClone (a : Var)         -- A3.1: `arc_clone`: a new share of the block `a` shares
+  | arcGet (a : Var)           -- A3.1: `arc_get`: the payload of `a`'s block, lent
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -226,7 +239,9 @@ structure Slot where
 
 /-- A3.1: a counted block (`Arc`): its payload, a tree of type `ty` that no
     one writes.  How many shares it has is the number of `Val.arc` leaves
-    naming it (ghost): when none is left, the step's sweep frees it. -/
+    naming it (ghost, so nothing stores it).  In the first cut a payload owns
+    no address, so a block no share reaches frees nothing: no step removes a
+    block (`arcNew` adds one, `BlkLe`). -/
 structure Blk where
   ty  : Ty
   pay : Val

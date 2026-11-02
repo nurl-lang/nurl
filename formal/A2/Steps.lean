@@ -86,7 +86,8 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
                 rcases ownedAt_set.mp hT with ⟨_, h⟩ | ⟨_, h⟩
                 · cases h
                 · exact h)
-              bpay := hi.heap.bpay }
+              bpay := hi.heap.bpay
+              bkey := hi.heap.bkey }
     | true =>
       have hown : E.mode = .own := by
         rcases hout.mode with h | h
@@ -262,7 +263,7 @@ theorem HeapOK.release {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.s
     refine hfr i fun T hT => ?_
     subst hT
     exact fun h => hh.disj o x U T hox hU hx i hi h
-  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU => ?_, fun o U hU => ?_, hh.bpay⟩
+  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU => ?_, fun o U hU => ?_, hh.bpay, hh.bkey⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · exact (hput rfl U rfl).1
     · exact hh.nodup o U h
@@ -388,6 +389,43 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
         exact ⟨d, o, l, rfl, dep, List.mem_append_left _ hd, ha⟩
       · exact wf_append (wf_derive hi hy hl hnint _) (wf_held hi hy hl hnint)
 
+/-- A3.1, `arc_new`: the value taken from `y`, plain, moves into a fresh
+    block, whose key no share names yet; every slot is as it was. -/
+theorem rhs_arcNew {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {v : Val} {D : List Dep}
+    (post : RhsPost m m1 Γ Γ1 F) (pu : Pushed m1 Γ1 t v D) (hpl : t.plain = true) (htok : t.ok = true)
+    (hfr : m1.blk m1.nid = none) :
+    RhsPost m { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ Γ1 F ∧
+    RhsOut { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) } Γ1
+      ⟨.arc t, .own, true, [], [], false, false⟩ (.arc m1.nid v) true := by
+  let m2 : Mem := { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, v⟩) }
+  have hvf := Ty.plain_holdsView hpl
+  have hids : v.ids = [] := pu.wf.plain_ids hpl
+  have hb : BlkLe m1.blk m2.blk := by
+    intro k bl hk
+    have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk; cases hk
+    show upd m1.blk m1.nid _ k = some bl
+    rw [upd_ne _ _ hne]; exact hk
+  have hnew : m2.blk m1.nid = some ⟨t, v⟩ := by simp [m2]
+  have hcases : ∀ k bl, m2.blk k = some bl → (k = m1.nid ∧ bl = ⟨t, v⟩) ∨ (k ≠ m1.nid ∧ m1.blk k = some bl) := by
+    intro k bl hk
+    by_cases hkn : k = m1.nid
+    · subst hkn; rw [hnew] at hk; cases hk; exact Or.inl ⟨rfl, rfl⟩
+    · refine Or.inr ⟨hkn, ?_⟩
+      have : m2.blk k = m1.blk k := by simp [m2, upd_ne _ _ hkn]
+      rw [← this]; exact hk
+  have hheap : HeapOK m2 := HeapOK.mono post.inv.heap rfl (fun _ h => h) (Nat.le_succ _) (fun k bl hk => by
+    rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨hids, Nat.lt_succ_self _⟩
+    · exact ⟨post.inv.heap.bpay k bl h, Nat.lt_succ_of_lt (post.inv.heap.bkey k bl h)⟩)
+  have hB : BlocksIn m2 := fun k bl hk => by
+    rcases hcases k bl hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · exact ⟨htok, hvf, pu.wf, pu.sh.grow hb⟩
+    · obtain ⟨h1, h2, h3, h4⟩ := post.inv.blocks k bl h
+      exact ⟨h1, h2, h3, h4.grow hb⟩
+  refine ⟨⟨post.inv.grow rfl hheap (Nat.le_refl _) hb hB, post.nv, Nat.le_trans post.nid (Nat.le_succ _),
+    post.dom, post.frz, post.rootb, post.cdom, post.cmode, post.dkeep, post.blk.trans hb⟩, ?_⟩
+  exact out_share htok hvf pu.wf hnew
+
 theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : RhsPost m m1 Γ Γ1 F)
     (h2 : RhsPost m1 m2 Γ1 Γ2 F) : RhsPost m m2 Γ Γ2 F where
   inv := h2.inv
@@ -401,7 +439,7 @@ theorem RhsPost.trans {m m1 m2 : Mem} {Γ Γ1 Γ2 : Ctx} {F : List Var} (h1 : Rh
     obtain ⟨E1, h1', hm1, ht1⟩ := h2.cmode x E2 h
     obtain ⟨E0, h0, hm0, ht0⟩ := h1.cmode x E1 h1'
     exact ⟨E0, h0, hm1.trans hm0, ht1.trans ht0⟩
-  blk := h2.blk.trans h1.blk
+  blk := h1.blk.trans h2.blk
   dkeep := h1.dkeep.trans h2.dkeep (fun _ h => h)
 
 theorem RhsPost.root {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (h : RhsPost m m1 Γ Γ1 F) {r : Var}
@@ -549,7 +587,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
   refine ⟨rfl, Or.inl rfl, rfl, by simp [Ty.ok, hok.1, hok.2], fun _ r hr => ?_, fun _ => ⟨rfl,
     WFv.pair pu1.wf pu2.wf, ?_, ?_, ?_, ?_, ?_⟩, (fun h => by cases h),
     fun _ => own_named ((pu1.nok.pushArg hpa2 hzd).append pu2.nok), ?_, ?_,
-    fun _ => SharesOK.mk_pair (pu1.sh.of_blk post2.blk) pu2.sh⟩
+    fun _ => SharesOK.mk_pair (pu1.sh.grow post2.blk) pu2.sh⟩
   · simp only [Entry.vdeps, Mode.ownSlot, ↓reduceIte, List.nil_append] at hr
     exact wf_append (fun r hr => post2.root (pu1.root r hr)) pu2.root r hr
   · intro s x hin
@@ -935,6 +973,20 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
         exact ⟨post, out_part out (by rw [hty]; simp) hwb (Sub.inr (Sub.refl _))
           (fun s x h => by rw [hty]; exact ViewIn.inr h) (by simp) hok.2
           (fun u k p h => by rw [hty]; exact ArcIn.inr h)⟩
+  | arcNew hy hly hty hpl hpa =>
+    cases he with
+    | arcNew htk hfr =>
+      obtain ⟨post, pu⟩ := push_take hi hanch hy hly hty hpa htk
+      exact rhs_arcNew post pu hpl (hty ▸ hi.tyok hy) hfr
+  | arcClone ha hl hty =>
+    cases he with
+    | arcClone hv => exact ⟨RhsPost.same hi, out_arcClone hi ha hl hty hv⟩
+  | arcGet ha hl hty hpl =>
+    cases he with
+    | arcGet hv hbk =>
+      obtain ⟨hk, _, _⟩ := hi.arc_val ha hl hty hv
+      rw [hk] at hbk; cases hbk
+      exact ⟨RhsPost.same hi, out_arcGet hi ha hl hty hpl hv⟩
 
 /-- `= x r`: the right-hand side runs, `x`'s old value is dropped, and `x`
     takes the new one. -/
@@ -1093,11 +1145,11 @@ theorem HeapOK.remove {m : Mem} (hh : HeapOK m) {x : Var} {sl : Slot} (hx : m.st
   | moved =>
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
-      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay⟩
+      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay, hh.bkey⟩
   | borrowed =>
     exact ⟨fun o U h => hh.nodup o U (hown o U h).2,
       fun o1 o2 U1 U2 hne h1 h2 => hh.disj o1 o2 U1 U2 hne (hown o1 U1 h1).2 (hown o2 U2 h2).2,
-      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay⟩
+      fun o U h => hh.alloc o U (hown o U h).2, fun o U h => hh.self o U (hown o U h).2, hh.bpay, hh.bkey⟩
 
 /-- The end of `x`'s scope: its value, if it owns one, is dropped. -/
 theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -1154,7 +1206,8 @@ theorem HeapOK.grow {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es
     intro i h; simp only [ids_node, List.mem_cons]; exact h
   have hlt : ∀ i, (i = c ∨ i = d ∨ i ∈ idsL es) → i < m.nid := fun i h => (halT i (hTids i h)).2
   have hd'cases : d' = d ∨ d' = m.nid := by rcases hre with ⟨h, _⟩ | ⟨h, _⟩ <;> simp [h]
-  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hh.bpay⟩
+  refine ⟨fun o U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o U hU i hi => ?_, fun o U hU => ?_, hh.bpay,
+    fun k bl hk => Nat.lt_of_lt_of_le (hh.bkey k bl hk) hNle⟩
   · rcases hown o U hU with ⟨_, rfl⟩ | ⟨_, h⟩
     · simp only [ids_node, idsL_append, idsL_cons, idsL_nil, List.append_nil, List.nodup_cons,
         List.mem_cons, List.mem_append, not_or, List.nodup_append]
@@ -1799,19 +1852,25 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, h3, h4.of_blk rfl⟩
 
-/-! ### A3.1 (so far): no step changes the counted blocks -/
+/-! ### A3.1: the counted blocks only grow -/
 
 theorem TakeVal.blk {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) : m1.blk = m.blk := by
   cases h <;> rfl
 
 theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m')) :
-    m'.blk = m.blk := by
+    BlkLe m.blk m'.blk := by
   cases h with
-  | pair h1 h2 => exact (TakeVal.blk h2).trans (TakeVal.blk h1)
-  | inl h1 => exact TakeVal.blk h1
-  | inr h1 => exact TakeVal.blk h1
-  | pack h1 => exact TakeVal.blk h1
-  | _ => rfl
+  | pair h1 h2 => exact BlkLe.of_eq ((TakeVal.blk h2).trans (TakeVal.blk h1))
+  | inl h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | inr h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | pack h1 => exact BlkLe.of_eq (TakeVal.blk h1)
+  | @arcNew t y v m1 htk hfr =>
+    intro k bl hk
+    have hk1 : m1.blk k = some bl := by rw [TakeVal.blk htk]; exact hk
+    have hne : k ≠ m1.nid := fun h => by rw [h, hfr] at hk1; cases hk1
+    show upd m1.blk m1.nid _ k = some bl
+    rw [upd_ne _ _ hne]; exact hk1
+  | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
     (h : BindParams m ps as base i m') : m'.blk = m.blk := by
@@ -1821,18 +1880,18 @@ theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {b
   | sink _ _ ih => exact ih
   | inout _ ih => exact ih
 
-theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r.mem.blk = m.blk := by
+theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : BlkLe m.blk r.mem.blk := by
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
     | scopeDIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ ih | scopeDPMoved _ _ ih => exact ih
   | letv _ he | letd _ he | assign _ he _ _ => have := EvalR.blk he; exact this
-  | letcall _ _ hb => have := BindParams.blk hb; exact this
-  | callc _ _ _ _ hb => have := BindParams.blk hb; exact this
-  | push ht _ _ _ => have := TakeVal.blk ht; exact this
-  | pushRealloc ht _ _ _ => have := TakeVal.blk ht; exact this
-  | editPush ht _ _ | editPushRealloc ht _ _ => have := TakeVal.blk ht; exact this
-  | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := TakeVal.blk ht; exact this
-  | _ => rfl
+  | letcall _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
+  | callc _ _ _ _ hb => have := BlkLe.of_eq (BindParams.blk hb); exact this
+  | push ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | pushRealloc ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | editPush ht _ _ | editPushRealloc ht _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => have := BlkLe.of_eq (TakeVal.blk ht); exact this
+  | _ => exact BlkLe.refl _
 
 end A2

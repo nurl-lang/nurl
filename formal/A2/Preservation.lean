@@ -1246,7 +1246,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he) (fun T h => by
+          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1333,7 +1333,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (by rw [hsp]; exact hKOd) hWd hNd hΔd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
-          (covers_take (covers_evalR hi.cover he) (fun T h => by
+          (covers_take (covers_evalR hi.cover he post.inv.heap.bpay) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
           (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
             have hpx : p ≠ x := fun h => by
@@ -1387,7 +1387,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       have post := step_assign hi.toMInv hanch hx hxF hmodes hr hty hxd he hsl hd hpin hds
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
-        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
+        (post.rel.anch hanch) rfl (covers_assign (covers_evalR hi.cover he post.inv.heap.bpay) hsl hd) trivial,
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hcd hi hst
@@ -1807,7 +1807,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · exact hsc
         · exact hsc.weakenOut hm1.wf hm1.names (Or.inr (hw.exitScope x hpx.2.2))
       have hm' : MInv { m with nv := m.nv + 1 } (setE Γ x (Ex.revive x)) :=
-        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.bpay⟩ (Nat.le_succ _)
+        hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.bpay, hm1.heap.bkey⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
         fun _ _ => rfl⟩
@@ -1958,7 +1958,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         by show m.nv ≤ m1.nv + 1; rw [hnv1]; exact Nat.le_succ _,
         ⟨?_, ?_, DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])⟩, ?_⟩
       · exact
-        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.bpay⟩
+        { toMInv := hMu.of_st rfl ⟨hMu.heap.nodup, hMu.heap.disj, hMu.heap.alloc, hMu.heap.self, hMu.heap.bpay, hMu.heap.bkey⟩
             (Nat.le_succ _)
           nvS := fun w hw => by
             simp only [Stmt.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
@@ -2208,7 +2208,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
           catchOK := by
-            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, (Step.blk hst').trans hb0, hi'.catchOK⟩
+            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, hb0.trans (Step.blk hst'), hi'.catchOK⟩
             by_cases hvs : v ∈ s.spine
             · rw [step_gone hst' hck v hvs hv, hlo v hvx (hs.spine_F v hvs)]
             · by_cases hvF : v ∈ F ++ (List.range m0.nv).filter (· ≠ x)
@@ -2242,7 +2242,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · rw [hin v hvs, hlo v hvx (hs.spine_F v hvs)]
           · rw [hout v hvs]; exact hfr v hvs hvx
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
-        hM.of_st hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) (hblk1.trans hi.catchOK.2.2.2.1)
+        hM.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0])
+          (hi.catchOK.2.2.2.1.trans (BlkLe.of_eq hblk1))
+          (fun k bl hk => by
+            have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
+            obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'
+            exact ⟨h1, h2, h3, h4.grow (BlkLe.of_eq (show (m1.set x ⟨false, some (.int 1)⟩).blk = m.blk from hblk1))⟩)
       obtain ⟨E0, h0⟩ := (hKO.2 x Ex hEx).2
       have hxown : ∀ T, ¬ OwnedAt m1 x T := by
         intro T hT
