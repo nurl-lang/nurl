@@ -24428,7 +24428,24 @@ unsafe @ mem_path_to_indices s path → s {
             : s bll ( nurl_llty bt )
             : s bv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print bll ) ( nurl_print `, ` ) ( nurl_print bll ) ( nurl_print `* ` ) ( nurl_print b ) ( nurl_print `\n` )
-            : s bk ( mem_handle_key cg bt bv )
+            : ~ s bk ( mem_handle_key cg bt bv )
+            // (…an option or a result by its payload's, as the owner's:
+            // `: ?String t ( pick o other k )` then `= o t` compared against
+            // nothing, IR clang rejects — agora #425.)
+            ? & == 0 ( nurl_str_len bk ) != 0 ( nurl_str_starts bll `{ i1, ` ) {
+                : s bpt ( __wrap_part bll 0 )
+                ? != 0 ( nurl_str_len bpt ) {
+                    : s bp ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = extractvalue ` ) ( nurl_print bll ) ( nurl_print ` ` ) ( nurl_print bv ) ( nurl_print `, 1\n` )
+                    = bk ( mem_handle_key cg bpt bp )
+                } {}
+            } {}
+            // (__ud_hand_over_keyed vouched for a key on both sides: one
+            // missing is nurlc's bug, reported here, not as IR clang rejects.)
+            ? == 0 ( nurl_str_len bk ) {
+                ( nurl_eprintln ( nurl_str_cat4 `internal error: the hand-over of '` ptr `''s old value has no key for its borrower '` ( nurl_str_cat3 b `' of type ` ( nurl_str_cat bll ` (agora #425) — please report this (https://github.com/nurl-lang/nurl/issues).` ) ) ) )
+                ( nurl_panic `__nurlc_ice__` )
+            } {}
             : s same ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print bk ) ( nurl_print `, ` ) ( nurl_print xk ) ( nurl_print `\n` )
             : s xf ( mem_udrop_flag_get syms cg ptr )
@@ -24472,7 +24489,8 @@ unsafe @ mem_path_to_indices s path → s {
             } {}
             : s bt0 ( nurl_sym_get2 syms b `__udty` )
             : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
-            ? ! ( __handle_keyed bt F ) { ^ F } {}
+            : s btl ( nurl_llty bt )
+            ? ! ? ( __handle_keyed bt F ) T ? != 0 ( nurl_str_starts btl `{ i1, ` ) ( __handle_keyed ( __wrap_part btl 0 ) F ) F { ^ F } {}
         } {}
     }
     ^ T
