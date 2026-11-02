@@ -24612,6 +24612,32 @@ unsafe @ mem_path_to_indices s path → s {
     ^ T
 }
 
+// …that tells two values apart, not only a value from a copy of its
+// handle: a struct is keyed by its first field that keys whatever it holds
+// (__handle_keyed with `nonnull`) — not an enum field whose variant may hold
+// a number (`Tag Id 1`), which a different value holds too, nor an option.
+// `` when it has none. #419's identity test asks it; the hand-over, which
+// compares a value with a copy of its own handle, asks mem_handle_key
+// (agora #431).
+@ mem_identity_key i cg s ty s val → s {
+    ? | | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_handle_enum ty ) { ^ ( mem_handle_key cg ty val ) } {}
+    ? ! ( __is_owned_struct_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? & ( __is_value_handle ft ) ( __handle_keyed ft T ) {
+            : s f ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            ^ ( mem_identity_key cg ft f )
+        } {}
+        = i + i 1
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 // An i8* that identifies an owned value of type `ty` (register `val`): the
 // buffer of a String / Vec, or of a struct's first String / Vec field; ``
 // when there is none.
@@ -39315,8 +39341,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ? ( __is_handle_ty vt ) {
                     : s __ud_ov ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ptr ) ( nurl_print `\n` )
-                    : s __ud_ok ( mem_handle_key cg vt __ud_ov )
-                    : s __ud_nk ( mem_handle_key cg vt store_val )
+                    : s __ud_ok ( mem_identity_key cg vt __ud_ov )
+                    : s __ud_nk ( mem_identity_key cg vt store_val )
                     ? & != 0 ( nurl_str_len __ud_ok ) != 0 ( nurl_str_len __ud_nk ) {
                         = __ud_skey ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __ud_skey ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __ud_nk ) ( nurl_print `, ` ) ( nurl_print __ud_ok ) ( nurl_print `\n` )
