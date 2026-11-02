@@ -239,6 +239,9 @@ theorem touch_owned {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool} (h :
   | editD hn => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (by simp [Val.ids])⟩
   | editFree hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_drop_sub ha)⟩
   | editI he => exact eReads_owned he
+  | editSetFree hlt hn _ ha => exact ⟨_, _, hn.2.2.1, hn.sub.ids _ (ids_get_sub hlt ha)⟩
+  | editSetDrop _ _ _ hy ha => exact ⟨_, _, hy, ha⟩
+  | editSetI he => exact eReads_owned he
   | scope _ ih => exact ih hty.scope
   | scopeEnd hx hi => exact ⟨_, _, hx, hi⟩
   | scopeUnwind hs hx hi => exact ⟨_, _, Step.panic_st hs _ _ hx, hi⟩

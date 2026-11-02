@@ -10,8 +10,10 @@ every memory root of `x`'s path (`killThru`). The proof here follows that:
 * the owner's change of memory, by its effect: `.realloc` for a push through a
   copy of a same-typed root's handle, which is the root's own push
   (`MInv.edit_grow`, from `push_grow`), `.drop` otherwise (`MInv.edit_drop`,
-  from `MInv.change` with `HeapOK.editPush` / `HeapOK.editTrunc`,
-  `NewSlot.edit` and `deep_self_hkeep`);
+  from `MInv.change` with `HeapOK.editPush` / `HeapOK.editTrunc` /
+  `HeapOK.editSet`, `NewSlot.edit` and `deep_self_hkeep`; an element set
+  out of range rewrites the node to itself and frees what it was handed,
+  `HeapOK.freeV`);
 * every other root of the path only ends what depends on it
   (`MInv.kill_more`), and kills are absorbed (`killNames_absorb`);
 * `x` itself is set back live: its node keeps its cell where it was
@@ -1628,5 +1630,247 @@ theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       (by simp) hhv hr hw'
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref
+
+/-! ### An element set (`vec_set`) -/
+
+/-- A part of a node whose `n`-th element is set to `v` is the node itself,
+    a part of the node before, or a part of `v`. -/
+theorem HP_sub_set {w v : Val} {t : Ty} {c d n : Nat} {es : List Val}
+    (h : Sub w (.node t c d (es.set n v))) :
+    w = .node t c d (es.set n v) ∨ Sub w (.node t c d es) ∨ Sub w v := by
+  rcases h.cases' with h | ⟨e, hc, hs⟩
+  · exact Or.inl h
+  · cases hc with
+    | elem he =>
+      rcases List.mem_or_eq_of_mem_set he with h | h
+      · exact Or.inr (Or.inl (Sub.child h hs))
+      · subst h; exact Or.inr (Or.inr hs)
+
+/-- An address of a list of distinct ones whose middle is replaced is the
+    new middle's, or one of the old list's outside its middle. -/
+theorem HS_mem_mid {A X X' B : List Nat} (h : (A ++ X ++ B).Nodup) {i : Nat}
+    (hi : i ∈ A ++ X' ++ B) : i ∈ X' ∨ (i ∈ A ++ X ++ B ∧ i ∉ X) := by
+  rw [List.nodup_append, List.nodup_append] at h
+  obtain ⟨⟨_, _, hAX⟩, _, hAXB⟩ := h
+  rcases List.mem_append.mp hi with hi | hiB
+  · rcases List.mem_append.mp hi with hiA | hiX
+    · exact Or.inr ⟨List.mem_append_left _ (List.mem_append_left _ hiA), fun hX => hAX i hiA i hX rfl⟩
+    · exact Or.inl hiX
+  · exact Or.inr ⟨List.mem_append_right _ hiB,
+      fun hX => hAXB i (List.mem_append_right _ hX) i hiB rfl⟩
+
+/-- An element of a node of an owned tree set to a value that no owner
+    holds, the old element freed: addresses stay distinct, owned once, live
+    and below `nid` (the new tree's are the old one's but the old element's,
+    and `v`'s), and no owned tree views itself (what `T` views is owned in
+    `m`, so it is none of `v`'s). -/
+theorem HeapOK.editSet {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty} {c d n : Nat}
+    {es : List Val} (hT : m.st o = some ⟨true, some T⟩) {v : Val} (hnd : v.ids.Nodup)
+    (hal : ∀ i ∈ v.ids, m.alloc i = true ∧ i < m.nid)
+    (hdis : ∀ o' U, OwnedAt m o' U → ∀ i ∈ v.ids, i ∉ U.ids)
+    (hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v)
+    (hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m o' U ∧ d0 ∈ U.ids)
+    (hn : n < es.length) {a' : Nat → Bool} (hf : Frees m.alloc es[n] a')
+    (hr : Repl (.node t c d es) (.node t c d (es.set n v)) T T') :
+    HeapOK ({ m with alloc := a' }.set o ⟨true, some T'⟩) := by
+  have hnT := hh.nodup o T hT
+  have hvT' : ∀ i ∈ v.ids, i ∉ T.ids := hdis o T hT
+  have hsT : Sub (.node t c d es) T := hr.sub
+  have hfT : ∀ i ∈ es[n].ids, i ∈ T.ids := fun i hi => hsT.ids i (ids_get_sub hn hi)
+  -- the old tree is `P ++ es[n].ids ++ Q`, the new one `P ++ v.ids ++ Q`
+  obtain ⟨A, B, h1, h2⟩ := hr.ids_split
+  obtain ⟨he, he'⟩ := idsL_set hn v
+  have hTs : T.ids = (A ++ c :: d :: idsL (es.take n)) ++ es[n].ids ++
+      (idsL (es.drop (n + 1)) ++ B) := by
+    rw [h1, ids_node, he]; simp only [List.append_assoc, List.cons_append]
+  have hT's : T'.ids = (A ++ c :: d :: idsL (es.take n)) ++ v.ids ++
+      (idsL (es.drop (n + 1)) ++ B) := by
+    rw [h2, ids_node, he']; simp only [List.append_assoc, List.cons_append]
+  have hnT1 := hnT
+  rw [hTs] at hnT1
+  -- an address of the new tree is `v`'s, or the old tree's but not the old element's
+  have hmem : ∀ i ∈ T'.ids, i ∈ v.ids ∨ (i ∈ T.ids ∧ i ∉ es[n].ids) := by
+    intro i hi
+    rw [hT's] at hi
+    rcases HS_mem_mid hnT1 hi with h | ⟨h, h'⟩
+    · exact Or.inl h
+    · exact Or.inr ⟨by rw [hTs]; exact h, h'⟩
+  -- the freed addresses are the old element's, which no other owner has
+  have hA : ∀ i, i ∉ es[n].ids → a' i = m.alloc i := fun i h => hf.other h
+  have hown : ∀ o1 U, OwnedAt ({ m with alloc := a' }.set o ⟨true, some T'⟩) o1 U →
+      (o1 = o ∧ U = T') ∨ (o1 ≠ o ∧ OwnedAt m o1 U) := by
+    intro o1 U hU
+    rcases ownedAt_set.mp hU with ⟨h1, h2⟩ | h
+    · cases h2; exact Or.inl ⟨h1, rfl⟩
+    · exact Or.inr h
+  refine ⟨fun o1 U hU => ?_, fun o1 o2 U1 U2 hne h1 h2 => ?_, fun o1 U hU i hi => ?_, fun o1 U hU => ?_⟩
+  · -- nodup: the old element's addresses give way to `v`'s
+    rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
+    · rw [hUT, hT's]
+      exact HP_nodup_mid hnT1 hnd fun i hi => Or.inr (by rw [← hTs]; exact hvT' i hi)
+    · exact hh.nodup o1 U h
+  · -- disj: the new tree's addresses are the old tree's, or `v`'s
+    have key : ∀ o2 U, o2 ≠ o → OwnedAt m o2 U → ∀ i ∈ T'.ids, i ∉ U.ids := by
+      intro o2 U ho2 hU i hi hiU
+      rcases hmem i hi with hiv | ⟨hiT, _⟩
+      · exact hdis o2 U hU i hiv hiU
+      · exact hh.disj o o2 T U (Ne.symm ho2) hT hU i hiT hiU
+    rcases hown o1 U1 h1 with ⟨ho1, hU1⟩ | ⟨ho1, h1'⟩ <;>
+      rcases hown o2 U2 h2 with ⟨ho2, hU2⟩ | ⟨ho2, h2'⟩
+    · exact absurd (ho1.trans ho2.symm) hne
+    · rw [hU1]; exact key o2 U2 ho2 h2'
+    · rw [hU2]; exact fun i hi hi' => key o1 U1 ho1 h1' i hi' hi
+    · exact hh.disj o1 o2 U1 U2 hne h1' h2'
+  · -- alloc: only the old element's addresses are freed, and it occurs only there
+    show a' i = true ∧ i < m.nid
+    rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨ho1, h⟩
+    · rw [hUT] at hi
+      rcases hmem i hi with hiv | ⟨hiT, hin⟩
+      · obtain ⟨ha, hlt⟩ := hal i hiv
+        exact ⟨by rw [hA i (fun h' => hvT' i hiv (hfT i h'))]; exact ha, hlt⟩
+      · obtain ⟨ha, hlt⟩ := hh.alloc o T hT i hiT
+        exact ⟨by rw [hA i hin]; exact ha, hlt⟩
+    · obtain ⟨ha, hlt⟩ := hh.alloc o1 U h i hi
+      have hin : i ∉ es[n].ids := fun h' => hh.disj o o1 T U (Ne.symm ho1) hT h i (hfT i h') hi
+      exact ⟨by rw [hA i hin]; exact ha, hlt⟩
+  · -- self: every view of the new tree is one of `T`'s, so its buffer is owned in `m`
+    rcases hown o1 U hU with ⟨_, hUT⟩ | ⟨_, h⟩
+    · rw [hUT]
+      intro d0 o0 l0 hv u c0 es0 hnode
+      have hvT0 : Sub (.view d0 o0 l0) T := by
+        rcases HP_view_repl hr hv with h | h
+        · rcases HP_sub_set h with h | h | h
+          · cases h
+          · exact h.trans hsT
+          · exact absurd h (hvv _ _ _)
+        · exact h
+      obtain ⟨o', U', hU', hdU⟩ := hvT d0 o0 l0 hvT0
+      have hsf := hh.self o T hT d0 o0 l0 hvT0
+      rcases HP_node_repl hr hnode with h | ⟨es1, h⟩
+      · rcases HP_sub_set h with h | h | h
+        · injection h with _ _ hd0
+          exact hsf t c es (by rw [hd0]; exact hsT)
+        · exact hsf u c0 es0 (h.trans hsT)
+        · exact hdis o' U' hU' d0 (h.ids d0 (by simp)) hdU
+      · exact hsf u c0 es1 h
+    · exact hh.self o1 U h
+
+/-- Freeing a value no owner holds (an element set out of range) keeps the
+    heap's invariant: no owned address is freed. -/
+theorem HeapOK.freeV {m : Mem} (hh : HeapOK m) {v : Val}
+    (hdis : ∀ o U, OwnedAt m o U → ∀ i ∈ v.ids, i ∉ U.ids) {a' : Nat → Bool}
+    (hf : Frees m.alloc v a') : HeapOK { m with alloc := a' } where
+  nodup o U hU := hh.nodup o U hU
+  disj o1 o2 U1 U2 hne h1 h2 := hh.disj o1 o2 U1 U2 hne h1 h2
+  alloc o U hU i hi := by
+    obtain ⟨ha, hlt⟩ := hh.alloc o U hU i hi
+    exact ⟨by show a' i = true; rw [hf.other (fun h => hdis o U hU i h hi)]; exact ha, hlt⟩
+  self o U hU := hh.self o U hU
+
+/-- A slot set to what it holds. -/
+theorem Mem.set_same {m : Mem} {x : Var} {s : Slot} (h : m.st x = some s) : m.set x s = m := by
+  have hu : upd m.st x (some s) = m.st := by
+    funext v
+    by_cases hv : v = x
+    · subst hv; simp [upd, h]
+    · simp [upd, hv]
+  show { m with st := upd m.st x (some s) } = m
+  rw [hu]
+
+/-- A change whose effect on every root is `.drop` (a truncation, an element
+    set), its node rewritten in place to one of the same cell and buffer,
+    its elements the old ones or well-formed (`hwe`), in a store whose heap
+    stays valid (`hheap`): as `MInv.editB_trunc`. -/
+theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
+    (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
+    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
+    (hdrop : ∀ k s, op.effAt k s = .drop) (hthru : ThruOK Γ1 F op Ex.ty Ex.path)
+    {o : Var} {T T' : Val} {t' : Ty} {c d : Nat} {es es' : List Val} {a' : Nat → Bool}
+    (hno : NodeOf m1 x o T t' c d es)
+    (hheap : HeapOK ({ m1 with alloc := a' }.set o ⟨true, some T'⟩))
+    (hwe : ∀ e ∈ es', e ∈ es ∨ WFv t' e)
+    (hr : Repl (.node t' c d es) (.node t' c d es') T T') :
+    MInv ({ m1 with alloc := a' }.set o ⟨true, some T'⟩)
+      (A2.setE (killThru op Ex.ty Ex.path Γ1) x Ex) := by
+  have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
+    fun d hd => by
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
+      exact ⟨Er, hEr, hcan.ownSlot⟩
+  obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq⟩ :=
+    hi.thru_owner hx hmx hl hty hro
+  obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
+  subst t'
+  obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds⟩ := hthru dep hdm
+  have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
+  have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
+  have hst : ∀ w, w ≠ dep.root → ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩).st w = m1.st w :=
+    fun w hw => by simp [upd_ne _ _ hw]
+  have hT' : ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩).st dep.root = some ⟨true, some T'⟩ := by
+    simp
+  have hw' : WFv (.vec t) (.node t c d es') := by
+    cases hw0 with
+    | node hes => exact WFv.node fun e he => (hwe e he).elim (hes e) id
+  have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv
+  have hown : MInv ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩)
+      (A2.kill (op.effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ1) := by
+    have hd := hdrop dep.kind (decide (Eo.ty = Ex.ty))
+    rw [hd] at hcan hds ⊢
+    exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst hheap (by simp) hhv hr hw'
+  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+    (by rw [hst x hxo]; exact hxs) hhref
+
+/-- `editSet`: the node's `n`-th element is replaced by the value taken in,
+    the old one freed. -/
+theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
+    (hanch : RootbAnch Γ1 F) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
+    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
+    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path)
+    {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D)
+    {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} {a' : Nat → Bool}
+    (hn : n < es.length) (hno : NodeOf m1 x o T t' c d es) (hf : Frees m1.alloc es[n] a')
+    (hr : Repl (.node t' c d es) (.node t' c d (es.set n v)) T T') :
+    MInv ({ m1 with alloc := a' }.set o ⟨true, some T'⟩)
+      (A2.setE (killThru (.set i y) Ex.ty Ex.path Γ1) x Ex) := by
+  have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
+    fun d hd => by
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
+      exact ⟨Er, hEr, hcan.ownSlot⟩
+  obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, htop, hla, _, hw0, _, huniq⟩ :=
+    hi.thru_owner hx hmx hl hty hro
+  obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
+  subst t'
+  obtain ⟨_, _, Eo, hEo, hlo, hcan, _⟩ := hthru dep hdm
+  have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
+    obtain ⟨s, hin⟩ := hp.wf.sub_view hs
+    have := hin.holdsView; rw [hhv] at this; cases this
+  have hvT : ∀ d0 o0 l0, Sub (.view d0 o0 l0) T → ∃ o' U, OwnedAt m1 o' U ∧ d0 ∈ U.ids := by
+    intro d0 o0 l0 hs
+    obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
+    rw [hT0] at h1; cases h1
+    obtain ⟨s, hin⟩ := hwT.sub_view hs
+    obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
+    cases hv1
+    exact ha.owned
+  exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno
+    (HeapOK.editSet hi.heap hT0 hp.nd hp.al hp.dis hvv hvT hn hf hr)
+    (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr (h ▸ hp.wf)) hr
+
+/-- `editSetOOB`: out of range nothing is stored, and the value taken in,
+    which no owner holds, is freed; the node is as it was. -/
+theorem MInv.editB_setOOB {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
+    (hanch : RootbAnch Γ1 F) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
+    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
+    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path)
+    {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D)
+    {o : Var} {T : Val} {t' : Ty} {c d : Nat} {es : List Val} {a' : Nat → Bool}
+    (hno : NodeOf m1 x o T t' c d es) (hf : Frees m1.alloc v a') :
+    MInv { m1 with alloc := a' } (A2.setE (killThru (.set i y) Ex.ty Ex.path Γ1) x Ex) := by
+  have heq : ({ m1 with alloc := a' } : Mem).set o ⟨true, some T⟩ = { m1 with alloc := a' } :=
+    Mem.set_same (m := { m1 with alloc := a' }) hno.2.2.1
+  have hh : HeapOK (({ m1 with alloc := a' } : Mem).set o ⟨true, some T⟩) := by
+    rw [heq]; exact HeapOK.freeV hi.heap hp.dis hf
+  rw [← heq]
+  exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno hh
+    (fun e he => Or.inl he) (Repl.self hno.sub)
 
 end A2

@@ -367,6 +367,23 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | elem he => exact pkgOK_elem hn0 (List.mem_of_mem_take he)
+  | editSet _ _ ht hn _ hr =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    obtain ⟨hv, hm1⟩ := ht.codes hm
+    have hT := hm1.slot hn.2.2.1
+    have hn0 := hT.sub hr.sub
+    refine ⟨(hm1.of_st rfl).set (fun V e => ?_), trivial⟩
+    cases e
+    refine hr.pkgOK_new hT ?_
+    refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with
+    | elem he =>
+      rcases List.mem_or_eq_of_mem_set he with he | he
+      · exact pkgOK_elem hn0 he
+      · subst he; exact hv
+  | editSetOOB _ ht _ _ _ =>
+    intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨(ht.codes hm).2.of_st rfl, trivial⟩
   | panic =>
     intro hm _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm

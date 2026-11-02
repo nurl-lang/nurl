@@ -248,6 +248,24 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
           exact .inr (.inr (mem_idsL (List.mem_of_mem_take he) hie))
       · exact .inl (OwnedId.of_slot hn.2.2.1 hi)
     · exact .inl hi
+  | editSet _ _ ht hn _ hr =>
+    obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · rcases hr.mem_ids hiv with hi | hi
+      · simp only [ids_node, List.mem_cons] at hi
+        rcases hi with hi | hi | hi
+        · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
+        · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i (by simp [hi]))))
+        · obtain ⟨e, he, hie⟩ := mem_idsL_iff.mp hi
+          rcases List.mem_or_eq_of_mem_set he with he | rfl
+          · refine .inl (b1 i (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i ?_)))
+            simp only [ids_node, List.mem_cons]
+            exact .inr (.inr (mem_idsL he hie))
+          · exact .inl (a1 i hie)
+      · exact .inl (b1 i (OwnedId.of_slot hn.2.2.1 hi))
+    · exact .inl (b1 i hi)
+  | editSetOOB _ ht _ _ _ => exact fun i hi => .inl ((TakeVal.ownedId ht hb).2 i hi)
   | panic => exact fun i hi => .inl hi
   | letrec _ _ _ =>
     exact fun i hi => .inl (OwnedId.set_none (OwnedId.set_none (OwnedId.of_nv hi)))

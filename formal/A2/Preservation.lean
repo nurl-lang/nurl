@@ -106,6 +106,7 @@ theorem EditArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : L
   cases h with
   | push hy _ _ hpa => exact hpa.ctxRel hy hanch
   | trunc _ => exact CtxRel.refl _
+  | set _ hy _ _ hpa => exact hpa.ctxRel hy hanch
 
 /-- Effects below `replace` on roots that are not lent out keep every borrowed
     parameter's entry. -/
@@ -121,7 +122,7 @@ theorem CtxRel.killNames {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) :
     borrowed parameter its entry. -/
 theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {op : Edit}
     {Ex Ex1 : Entry} {t : Ty} {D : List Dep} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
-    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op = .push y → y ≠ x) (hx1 : Γ1 x = some Ex1)
+    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
     (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
     CtxRel Γ (A2.setE (killThru op Ex.ty Ex1.path Γ1) x Ex1) := by
   have h1 := harg.ctxRel hanch
@@ -1499,6 +1500,21 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru hno hfr hr) (by simp)
           (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
+    | @set i y Ey _ _ _ _ hy hly htyy hpa =>
+      cases hst with
+      | editSet hn _ htk hno hfr hr =>
+        obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
+        obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq⟩ :=
+          post.inv.thru_owner hx1 hmx hl1 hty hro
+        obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
+        have hoF := (hthru dep hdm).1
+        exact fin (MInv.editB_set post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hp hn hno hfr
+            hr) (by simp [post.nv]) (covers_editSet (covers_takeVal hi.cover htk) hno.2.2.1 hn hfr hr)
+          (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
+      | editSetOOB _ htk hno _ hfr =>
+        obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
+        exact fin (MInv.editB_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hp hno hfr)
+          (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
   | @free Γ F x E t hx hl hm hty hxF hpin =>
     intro m m' s' hcd hi hst
     cases hst with

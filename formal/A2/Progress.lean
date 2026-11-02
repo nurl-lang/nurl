@@ -210,7 +210,7 @@ theorem freesL_exists {τ : Ty} : ∀ {l : List Val}, (∀ e ∈ l, WFv τ e) �
 theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
-    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op = .push y → y ≠ x) (hx1 : Γ1 x = some Ex1)
+    (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
     (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
     ∃ r, Step P m (.edit true x op) r := by
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -244,6 +244,24 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     obtain ⟨a', hfr⟩ := freesL_exists hwe m.alloc hnd hal
     obtain ⟨T', hr⟩ := Repl.exists hsub (.node t c d (es.take n))
     exact ⟨_, Step.editTrunc hev hno hfr hr⟩
+  | set hie hy hly htyy hpa =>
+    obtain ⟨n, hev⟩ := eval_exists hi hie
+    obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly
+    obtain ⟨post, hp⟩ := push_take hi hanch hy hly htyy hpa htk
+    obtain ⟨_, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro
+    by_cases hn : n < es.length
+    · -- the old element is freed
+      have hsn : Sub es[n] T := (Sub.child (List.getElem_mem hn) (Sub.refl _)).trans hno.sub
+      have hwe : WFv t es[n] := by
+        cases hw with
+        | node hes => exact hes _ (List.getElem_mem hn)
+      obtain ⟨a', hfr⟩ := frees_exists hwe m1.alloc (hsn.nodup (post.inv.heap.nodup _ _ hT))
+        (fun i hi' => (post.inv.heap.alloc _ _ hT i (hsn.ids i hi')).1)
+      obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es.set n v))
+      exact ⟨_, Step.editSet hn hev htk hno hfr hr⟩
+    · -- out of range: the value is freed
+      obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
+      exact ⟨_, Step.editSetOOB hev htk hno (by omega) hfr⟩
 
 /-- Progress for every statement but a call, given the call case. -/
 theorem progress {P : Prog}

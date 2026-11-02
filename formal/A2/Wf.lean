@@ -813,12 +813,14 @@ theorem EditArg.domMode {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : 
   cases h with
   | push hy _ _ hpa => exact hpa.domMode hy
   | trunc _ => exact DomMode.refl Γ
+  | set _ hy _ _ hpa => exact hpa.domMode hy
 
 theorem EditArg.wf {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
     (h : EditArg Γ F op t D Γ1) (hw : CtxWF Γ) : CtxWF Γ1 := by
   cases h with
   | push hy hly hty hpa => exact (hpa.wf hw hy hly hty).1
   | trunc _ => exact hw
+  | set _ hy hly hty hpa => exact (hpa.wf hw hy hly hty).1
 
 theorem DomMode.exitScope {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {r : Var} (hrx : r ≠ x)
     {E : Entry} (hr : Γ0 r = some E) : ∃ E', exitScope x Γ r = some E' ∧ E'.mode = E.mode := by

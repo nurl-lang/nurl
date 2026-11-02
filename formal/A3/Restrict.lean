@@ -304,6 +304,15 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     exact ⟨_, .editTrunc (Eval.restrict he hav) (NodeOf.restrict hn hav)
       (FreesL.restrict hfr fun i hi => hav i (OwnedId.of_slot hn.2.2.1 (hn.sub.ids i (ids_drop_sub hi))))
       hr, rfl, .refl _⟩
+  | editSet hlt he ht hn hfr hr =>
+    have hav1 := (TakeVal.avoids ht hb hav).1
+    exact ⟨_, .editSet hlt (Eval.restrict he hav) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav1)
+      (Frees.restrict hfr fun i hi => hav1 i (OwnedId.of_slot hn.2.2.1 (hn.sub.ids i (ids_get_sub hlt hi))))
+      hr, rfl, .refl _⟩
+  | editSetOOB he ht hn hle hfr =>
+    have hav' := TakeVal.avoids ht hb hav
+    exact ⟨_, .editSetOOB (Eval.restrict he hav) (TakeVal.restrict ht a2) (NodeOf.restrict hn hav'.1) hle
+      (Frees.restrict hfr hav'.2), rfl, .refl _⟩
   | panic => exact ⟨_, .panic, rfl⟩
   | letrec hP hps hx =>
     exact ⟨_, .letrec hP hps hx, rfl,

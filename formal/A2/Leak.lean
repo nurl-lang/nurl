@@ -386,4 +386,47 @@ theorem covers_editTrunc {m : Mem} (hc : Covers m) {o : Var} {T T' : Val} {t : T
     · exact Or.inr h
   · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoo, hU⟩), hiU⟩
 
+/-- An element set: the value taken in replaces the element it frees. -/
+theorem covers_editSet {m : Mem} {v : Val} (hc : CoversBut m v true) {o : Var} {T T' : Val}
+    {t : Ty} {c d n : Nat} {es : List Val} (hT : m.st o = some ⟨true, some T⟩) (hn : n < es.length)
+    {a' : Nat → Bool} (hf : Frees m.alloc es[n] a')
+    (hr : Repl (.node t c d es) (.node t c d (es.set n v)) T T') :
+    Covers ({ m with alloc := a' }.set o ⟨true, some T'⟩) := by
+  obtain ⟨A, B, h1, h2⟩ := hr.ids_split
+  obtain ⟨he, he'⟩ := idsL_set hn v
+  have hmine : OwnedAt ({ m with alloc := a' }.set o ⟨true, some T'⟩) o T' :=
+    ownedAt_set.mpr (Or.inl ⟨rfl, rfl⟩)
+  intro i hi
+  simp only [Mem.set_alloc] at hi
+  have hi0 : m.alloc i = true := hf.le hi
+  have hnd : i ∉ es[n].ids := fun h => by rw [hf.freed h] at hi; cases hi
+  rcases hc i hi0 with ⟨o', U, hU, hiU⟩ | ⟨_, hiv⟩
+  · by_cases hoo : o' = o
+    · subst hoo; unfold OwnedAt at hU; rw [hT] at hU; cases hU
+      refine ⟨o', T', hmine, ?_⟩
+      rw [h1] at hiU; rw [h2]
+      simp only [ids_node, he, he', List.mem_append, List.mem_cons] at hiU ⊢
+      rcases hiU with (h | h | h | ((h | h) | h)) | h
+      · exact Or.inl (Or.inl h)
+      · exact Or.inl (Or.inr (Or.inl h))
+      · exact Or.inl (Or.inr (Or.inr (Or.inl h)))
+      · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inl (Or.inl h)))))
+      · exact absurd h hnd
+      · exact Or.inl (Or.inr (Or.inr (Or.inr (Or.inr h))))
+      · exact Or.inr h
+    · exact ⟨o', U, ownedAt_set.mpr (Or.inr ⟨hoo, hU⟩), hiU⟩
+  · refine ⟨o, T', hmine, ?_⟩
+    rw [h2]
+    simp [he', hiv]
+
+/-- An element set out of range: the value taken in is freed. -/
+theorem covers_editSetOOB {m : Mem} {v : Val} (hc : CoversBut m v true) {a' : Nat → Bool}
+    (hf : Frees m.alloc v a') : Covers { m with alloc := a' } := by
+  intro i hi
+  rcases hc i (hf.le hi) with ⟨o', U, hU, hiU⟩ | ⟨_, hiv⟩
+  · exact ⟨o', U, hU, hiU⟩
+  · have := hf.freed hiv
+    change a' i = true at hi
+    rw [this] at hi; cases hi
+
 end A2

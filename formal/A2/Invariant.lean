@@ -525,18 +525,19 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- destructor reads them)
       (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
-  /-- Agora #295: a change of a `Vec`'s elements through a borrow `x`, of an
-      element type that holds no views. The change lands in the tree of one
-      of the roots `x` reaches in memory, which the typing cannot tell
-      apart: each of them undergoes `Edit.effAt` of its dependency (`.drop`,
-      or `.realloc` for a push through a copy of a same-typed root's
-      handle), and must allow it, not be lent out, not be what is pushed,
-      and end no view a destructor will read (`killThru`). `x` itself stays
-      live: its node is changed in place. -/
+  /-- Agora #295: a change of a `Vec`'s elements through a borrow `x` (a
+      push, a truncation or an element set), of an element type that holds
+      no views. The change lands in the tree of one of the roots `x` reaches
+      in memory, which the typing cannot tell apart: each of them undergoes
+      `Edit.effAt` of its dependency (`.drop`, or `.realloc` for a push
+      through a copy of a same-typed root's handle), and must allow it, not
+      be lent out, not be what is stored, and end no view a destructor will
+      read (`killThru`). `x` itself stays live: its node is changed in
+      place. -/
   | editB {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
       {D : List Dep} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
-      x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op = .push y → y ≠ x) →
+      x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
       StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)

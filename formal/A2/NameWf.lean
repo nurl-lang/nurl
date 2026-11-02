@@ -199,6 +199,7 @@ theorem EditArg.names {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : Li
   cases h with
   | push hy hly hty hpa => exact (hpa.names hy hly hty hn).1
   | trunc _ => exact hn
+  | set _ hy hly hty hpa => exact (hpa.names hy hly hty hn).1
 
 theorem popE_named {Γ : Ctx} {y : Var} {E : Entry} (h : DepsNamed Γ E.held) (t : Ty) :
     NameOK Γ (popE y E t) := by

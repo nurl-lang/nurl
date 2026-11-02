@@ -555,7 +555,7 @@ theorem PushArg.dkeep {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} {
     the argument is not `x` and `x` is still live: as it was (handing the
     value over only ends bindings). -/
 theorem EditArg.at_ne {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
-    (h : EditArg Γ F op t D Γ1) {x : Var} (hyx : ∀ y, op = .push y → y ≠ x) {Ex Ex1 : Entry}
+    (h : EditArg Γ F op t D Γ1) {x : Var} (hyx : ∀ y, op.stored = some y → y ≠ x) {Ex Ex1 : Entry}
     (hx : Γ x = some Ex) (hx1 : Γ1 x = some Ex1) (hl1 : Ex1.live = true) : Ex1 = Ex := by
   cases h with
   | @push y Ey _ _ _ _ _ _ hpa =>
@@ -571,12 +571,25 @@ theorem EditArg.at_ne {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : Li
     | int => rw [hx] at hx1; cases hx1; rfl
     | slice => rw [hx] at hx1; cases hx1; rfl
   | trunc => rw [hx] at hx1; cases hx1; rfl
+  | @set _ y Ey _ _ _ _ _ _ _ hpa =>
+    cases hpa with
+    | move =>
+      have hne : x ≠ y := fun e => hyx y rfl e.symm
+      simp only [A2.setE, upd_ne _ _ hne, A2.kill, hx, Option.map_some, Option.some.injEq] at hx1
+      subst hx1
+      unfold killE at hl1 ⊢
+      split
+      · rename_i hh; simp [hh] at hl1
+      · rfl
+    | int => rw [hx] at hx1; cases hx1; rfl
+    | slice => rw [hx] at hx1; cases hx1; rfl
 
 theorem EditArg.dkeep {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
     (h : EditArg Γ F op t D Γ1) : DKeep Γ Γ1 [] := by
   cases h with
   | push hy _ _ hpa => exact hpa.dkeep hy
   | trunc => exact DKeep.refl _ []
+  | set _ hy _ _ hpa => exact hpa.dkeep hy
 
 /-- A right-hand side gives no `letd` binding a new view: it only kills, and
     moves a binding out as it is. -/
@@ -788,6 +801,7 @@ theorem EditArg.dstay {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : Li
   cases h with
   | push hy _ _ hpa => exact hpa.dstay hy
   | trunc => exact DStay.refl _ []
+  | set _ hy _ _ hpa => exact hpa.dstay hy
 
 theorem RhsT.dstay {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (h : RhsT Γ F r E Γ1) :
     DStay Γ Γ1 [] := by

@@ -275,6 +275,12 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   | editTrunc _ hn _ _ =>
     cases hr; intro v h h'
     exact absurd h (Mem.set_bound_ne_none hn.2.2.1 h')
+  | editSet _ _ ht hn _ _ =>
+    cases hr; intro v h h'
+    exact absurd (takeVal_none ht h) (Mem.set_bound_ne_none hn.2.2.1 h')
+  | editSetOOB _ ht _ _ _ =>
+    cases hr; intro v h h'
+    exact absurd (takeVal_none ht h) h'
   | _ => cases hr
 
 /-- A step unbinds the scopes it leaves. -/
