@@ -472,9 +472,39 @@ with the sweep is the phase-D obligation above. `check.sh` is green with:
   dependency (`bor_arcLanded`, `reroot_arcLanded`). The node landings
   keep `InPay` (`bor_lands`, `reroot_landed` and `rootb_anchor` are for
   nodes).
-  `Steps` does not run the sweep yet: that needs `CatchOK`'s `BlkLe` to
-  weaken to the reached blocks, and A3's thread-local runs of A2's
-  `Steps` (`SpawnOld`) to keep sweep-free steps.
+- (e3) **`Steps` runs the sweep at the end of every step** (the cleaner of
+  the two: one place, at a step boundary, where every value is in a slot
+  and `MInv.sweep` applies; a sweep inside the rules would meet values in
+  flight). `Steps.step` continues from `m'.sweep`, `Steps.panic` ends at
+  `m'.sweep`. `Step` itself does not sweep, and `Step.blk` (every step
+  keeps every block) stands. `Steps0` is the sweep-free run, which A3's
+  thread-local runs use (`reach_ok0`; A3's sweep will be the
+  configuration's, over every thread's slots).
+  - `CatchOK`'s `BlkLe m0.blk m.blk` weakens to "the blocks the caller's
+    store reaches outside the frame are kept" (`OutVals`,
+    `Reached.catch`, `CatchOK.sweep`); `catchP` sweeps the typing's
+    `MInv (m0.set x _) Δ` before growing it to the store it returns to.
+  - `Inv.sweep`, and `reach_ok` / `reach_panic` sweep after every step.
+  - `no_leak_end` / `no_leak_panic` no longer read `bpay`: when every slot
+    is gone, nothing reaches any block, so the last sweep left none
+    (`Steps.ok_swept`, `Mem.sweep_empty`), and `Covers` leaves nothing
+    allocated.
+  `bpay` is now read only by `rhs_arcNew` (`arc_new` still asks
+  `Ty.plain`) and by A3 (`PayFree`, `BlocksAt`, `ThreadOK.no_leak`).
+
+**What remains of the second cut.**
+- (d2) `arcNew` asks `t.holdsView = false ∧ t.hasFn = false`: `rhs_arcNew`
+  proves `BlkOwn` for the new block (the moved tree's ids leave `y`'s slot
+  and become the block's: `RhsOut.valOwn` already says they are in no
+  other tree and no payload), `covers_evalR` already counts them, and
+  `HeapOK.bpay` goes. This cannot be green on its own: A3 reads `bpay`.
+- (f) A3 in the same change: payload addresses in no thread's part, a
+  shared read-only part of the address partition (`Touch`, `Avoids`, the
+  restrict / lift lemmas), the configuration-level sweep over all threads'
+  slots (A2's `Step` per thread, `Mem.sweep` with every thread's values as
+  roots), `Touch` with payload reads through landing and the sweep's frees
+  as writes to blocks no thread reaches, `PayFree` dropped, `A3.claim`
+  re-proven.
 
 After that, step (d) is: `Ty.plain` lifted to `holdsView = false ∧
 hasFn = false`, `arcNew` moving a tree into a new block (`BlkOwn` for it),

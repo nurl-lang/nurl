@@ -52,10 +52,13 @@ theorem GhostRel.catchOK {m : Mem} {s s' : Stmt} (h : GhostRel s s') (hc : Catch
   | scopeD _ _ _ ih => exact ih hc
   | rbind _ _ ih => exact ih hc
   | frozen _ _ ih => exact ih hc
-  | catchR _ hst hnv _ hblk _ hg ih =>
+  | @catchR x m0 m0' s s' hst hnv _ hblk _ hg ih =>
     obtain ⟨h1, h2, h3, h4, h5⟩ := hc
     have hsp := hg.spine
-    refine ⟨fun v hv hx => ?_, by rw [hsp]; exact h2, by rw [hnv]; exact h3, by rw [hblk]; exact h4, ih h5⟩
+    have hov : OutVals m0' x s'.spine = OutVals m0 x s.spine := by
+      funext v; simp only [OutVals, hst, hsp]
+    refine ⟨fun v hv hx => ?_, by rw [hsp]; exact h2, by rw [hnv]; exact h3, by rw [hblk, hov]; exact h4,
+      ih h5⟩
     rw [hst]; exact h1 v (by rw [← hsp]; exact hv) hx
 
 theorem GhostRel.pinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : PinOK Γ s) : PinOK Γ s' := by

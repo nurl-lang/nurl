@@ -461,8 +461,15 @@ def Covered (m : Mem) (i : Nat) : Prop := (∃ x t, OwnedAt m x t ∧ i ∈ t.id
 /-- Nothing leaks: every live address is covered. -/
 def Covers (m : Mem) : Prop := ∀ i, m.alloc i = true → Covered m i
 
+/-- A3.1: the values a `recover` frame's store `m0` holds outside the scopes
+    `sp` the frame has opened, and its result `x`. -/
+def OutVals (m0 : Mem) (x : Var) (sp : List Var) (v : Val) : Prop :=
+  ∃ y o, y ∉ sp ∧ y ≠ x ∧ m0.st y = some ⟨o, some v⟩
+
 /-- A `recover` frame returns to its caller's store: every binding outside
-    the frames it has opened (and its result `x`) is as the caller left it. -/
+    the frames it has opened (and its result `x`) is as the caller left it,
+    and (A3.1) so is every block those bindings reach (the sweep keeps
+    them). -/
 def CatchOK (m : Mem) : Stmt → Prop
   | .seq a _ => CatchOK m a
   | .scope _ s => CatchOK m s
@@ -471,8 +478,8 @@ def CatchOK (m : Mem) : Stmt → Prop
   | .frozen _ s => CatchOK m s
   | .catchR x m0 s => (∀ v, v ∉ s.spine → v ≠ x → m.st v = m0.st v) ∧
       x ∉ s.spine ∧ m0.nv ≤ m.nv ∧
-      -- A3.1: the counted blocks only grow (`arcNew`)
-      BlkLe m0.blk m.blk ∧ CatchOK m s
+      (∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x s.spine) m0.blk k → m.blk k = some bl) ∧
+      CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on

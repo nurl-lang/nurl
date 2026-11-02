@@ -2217,7 +2217,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
           catchOK := by
-            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, hb0.trans (Step.blk hst'), hi'.catchOK⟩
+            refine ⟨fun v hv hvx => ?_, hxs', Nat.le_trans hnv0 hnv, fun k bl hk hr => Step.blk hst' k bl
+              (hb0 k bl hk (hr.of_roots fun w ⟨y, o, hy, hyx, h0⟩ _ _ => ⟨y, o, (fun hys => by
+                rw [hlo y hyx (hs.spine_F y hys)] at h0; cases h0), hyx, h0⟩)), hi'.catchOK⟩
             by_cases hvs : v ∈ s.spine
             · rw [step_gone hst' hck v hvs hv, hlo v hvx (hs.spine_F v hvs)]
             · by_cases hvF : v ∈ F ++ (List.range m0.nv).filter (· ≠ x)
@@ -2250,9 +2252,26 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           by_cases hvs : v ∈ s.spine
           · rw [hin v hvs, hlo v hvx (hs.spine_F v hvs)]
           · rw [hout v hvs]; exact hfr v hvs hvx
+      -- A3.1: the blocks the caller's store reaches outside the frame are kept
+      have hbl : BlkLe (m0.set x ⟨false, some (.int 1)⟩).sweep.blk (m1.set x ⟨false, some (.int 1)⟩).blk := by
+        intro k bl hk
+        obtain ⟨hk0, hr⟩ := Mem.sweep_blk.mp hk
+        show m1.blk k = some bl
+        rw [hblk1]
+        refine hb0 k bl hk0 (hr.of_roots fun w ⟨y, o, hy⟩ k' hrf => ?_)
+        by_cases hyx : y = x
+        · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy
+          rcases hrf with ⟨p, hp⟩ | ⟨_, _, ⟨c, hc, _⟩ | ⟨d, o', l, hd, _⟩⟩
+          · cases hp
+          · cases hc
+          · cases hd
+        · simp only [Mem.set_st, upd_ne _ _ hyx] at hy
+          have hd := hM.dom y
+          simp only [Mem.set_st, upd_ne _ _ hyx, hy, Option.isSome_some] at hd
+          obtain ⟨Ey, hEy⟩ := Option.isSome_iff_exists.mp hd
+          exact ⟨y, o, (hKO.2 y Ey hEy).1, hyx, hy⟩
       have hM' : MInv (m1.set x ⟨false, some (.int 1)⟩) Δ :=
-        hM.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0])
-          (hi.catchOK.2.2.2.1.trans (BlkLe.of_eq hblk1))
+        hM.sweep.grow hsteq (hh1.set_bor x _) (by simp [hnv1, hnv0]) hbl
           (fun k bl hk => by
             have hk' : m.blk k = some bl := by rw [← hblk1]; exact hk
             obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk'

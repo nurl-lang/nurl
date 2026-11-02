@@ -109,7 +109,7 @@ theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Me
   | catchR h ih =>
     obtain ⟨h1, h2, h3, h4, h5⟩ := hc'
     have hsp := Redex.spine_eq h hy
-    exact ⟨by rw [hsp]; exact h1, by rw [hsp]; exact h2, h3, h4, ih h5⟩
+    exact ⟨by rw [hsp]; exact h1, by rw [hsp]; exact h2, h3, by rw [hsp]; exact h4, ih h5⟩
   | scopeD _ ih => exact ih hc'
 
 theorem Redex.pinOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {Γ : Ctx} {y y' : Stmt}
@@ -169,11 +169,11 @@ theorem Redex.step {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog}
   | scopeD _ ih => exact Step.scopeDIn ih
 
 theorem Redex.steps {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog} {m m' : Mem}
-    {y y' : Stmt} (hst : Steps P m y (.ok m' y')) : Steps P m (K y) (.ok m' (K y')) := by
+    {y y' : Stmt} (hst : Steps0 P m y (.ok m' y')) : Steps0 P m (K y) (.ok m' (K y')) := by
   generalize hr : (Res.ok m' y') = R at hst
   induction hst with
-  | refl => cases hr; exact Steps.refl
-  | step h1 _ ih => exact Steps.step (h.step h1) (ih hr)
+  | refl => cases hr; exact Steps0.refl
+  | step h1 _ ih => exact Steps0.step (h.step h1) (ih hr)
   | panic _ => cases hr
 
 /-! ### Typing through the frames -/
@@ -607,7 +607,7 @@ theorem dropSeq_run {s0 r0 : Stmt} {K : Stmt → Stmt} (hR : Redex s0 K r0) {P :
     {L : Stmt} {st : Var → Option Slot} {args : List Var} {vs : List Val} {st' : Var → Option Slot}
     (h : MoveArgs st args vs st') :
     ∀ (m : Mem), m.st = st → st x = none → ∀ {a' : Nat → Bool}, FreesL m.alloc vs a' → ∀ {R : Res},
-      Steps P { m with alloc := a', st := st' } (K L) R → Steps P m (K (dropSeq x args L)) R := by
+      Steps0 P { m with alloc := a', st := st' } (K L) R → Steps0 P m (K (dropSeq x args L)) R := by
   induction h with
   | nil =>
     intro m hm _ a' hf R hrest
@@ -636,9 +636,9 @@ theorem dropSeq_run {s0 r0 : Stmt} {K : Stmt → Stmt} (hR : Redex s0 K r0) {P :
         by_cases hyx : y = x
         · subst hyx; simp [upd_ne _ _ hax.symm, hx]
         · simp [upd_ne _ _ hyx]
-      refine Steps.step (hR.step (Step.seqL h1)) (Steps.step (hR.step (Step.seqL h2)) ?_)
+      refine Steps0.step (hR.step (Step.seqL h1)) (Steps0.step (hR.step (Step.seqL h2)) ?_)
       rw [heq]
-      exact Steps.step (hR.step Step.seqSkip) (ih _ rfl hx' hfl hrest)
+      exact Steps0.step (hR.step Step.seqSkip) (ih _ rfl hx' hfl hrest)
 
 /-! ### The spawner after the spawn -/
 
@@ -722,12 +722,12 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   have hxa : x ∉ args := fun hxa => by
     obtain ⟨w, hw⟩ := hmv.owned x hxa
     rw [hx] at hw; cases hw
-  have hrun : Steps P m (K (dropSeq x args (.letv x (.expr (.lit 0)) k)))
+  have hrun : Steps0 P m (K (dropSeq x args (.letv x (.expr (.lit 0)) k)))
       (.ok { m with alloc := a', st := upd st' x (some ⟨false, some (.int 0)⟩) } (K (.scope x k))) :=
     dropSeq_run hR hmv m rfl hx hfl
-      (Steps.step (hR.step (Step.letv (by show st' x = none; rw [hmv.other x hxa]; exact hx)
-        (EvalR.expr Eval.lit))) Steps.refl)
-  obtain ⟨Γ', ht'', hi'', hc'', hcd'', hsc''⟩ := reach_ok hP hPc ht' hcd hsc' hi' hc' hrun
+      (Steps0.step (hR.step (Step.letv (by show st' x = none; rw [hmv.other x hxa]; exact hx)
+        (EvalR.expr Eval.lit))) Steps0.refl)
+  obtain ⟨Γ', ht'', hi'', hc'', hcd'', hsc''⟩ := reach_ok0 hP hPc ht' hcd hsc' hi' hc' hrun
   exact ⟨Γ', F, Δ, ht'', hi'', hcd'', hsc'', hc''⟩
 
 /-- **What moves to the new thread**: one value per parameter, each of its

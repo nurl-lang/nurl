@@ -1,5 +1,6 @@
 import A2.Heap
 import A2.Repl
+import A2.Sweep
 
 /-! A2 — the values bindings hold, and the borrows taken from them. -/
 

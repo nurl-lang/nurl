@@ -16,7 +16,7 @@ theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}
     (h : ThreadOK P m s) {m' : Mem} {s' : Stmt} (hst : Step P m s (.ok m' s')) : ThreadOK P m' s' := by
   obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok hP hPc ht hcd hsc hi hc (.step hst .refl)
+  obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok0 hP hPc ht hcd hsc hi hc (Steps0.step hst Steps0.refl)
   exact ⟨Γ', F, Δ, ht', hi', hcd', hsc', hc'⟩
 
 /-- A2's progress: a thread is finished, or it can step. -/

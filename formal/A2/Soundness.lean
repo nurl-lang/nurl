@@ -42,7 +42,8 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
     obtain ⟨hns0, E, hE⟩ := hk.2.1 v E' hE' hns
     exact absurd (hc v (by rw [hE]; rfl)) hns0
 
-/-- Every configuration a well-typed one reaches is well-typed. -/
+/-- Every configuration a well-typed one reaches is well-typed (A3.1: each
+    step's sweep keeps the invariant, `Inv.sweep`). -/
 theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps P m s (.ok m' s')) :
@@ -53,34 +54,64 @@ theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : 
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
+    exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
+  | panic _ => cases hr
+
+/-- ... and so is every one a thread's own steps reach, with no sweep (A3:
+    the configuration sweeps). -/
+theorem reach_ok0 {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps0 P m s (.ok m' s')) :
+    ∃ Γ', StmtT P Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
+  generalize hr : (Res.ok m' s') = r at hs
+  induction hs generalizing Γ with
+  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
+  | step hst _ ih =>
+    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
     exact ih ht' hcd' hsc' hi' (hc.step hk) hr
   | panic _ => cases hr
 
+/-- A run that ends normally ends at its start or at a swept store. -/
+theorem Steps.ok_swept {P : Prog} {m m' : Mem} {s s' : Stmt} (hs : Steps P m s (.ok m' s')) :
+    m' = m ∨ ∃ m1 : Mem, m' = m1.sweep := by
+  generalize hr : (Res.ok m' s') = r at hs
+  induction hs with
+  | refl => cases hr; exact Or.inl rfl
+  | @step _ m1 _ _ _ _ _ ih =>
+    rcases ih hr with h | h
+    · exact Or.inr ⟨m1, h⟩
+    · exact Or.inr h
+  | panic _ => cases hr
+
 /-- A panic no frame catches leaves an empty store with nothing allocated
-    that nobody owns. -/
+    that nobody owns, and (A3.1) no block: the sweep at its end reaches
+    none. -/
 theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem}
-    (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' ∧ HeapOK m' := by
+    (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' ∧ ∀ k, m'.blk k = none := by
   generalize hr : Res.panic m' = r at hs
   induction hs generalizing Γ with
   | refl => cases hr
   | step hst _ ih =>
     obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd (hi.toMInv.blkCodes P) hsc).1 _ _ rfl
-    exact ih ht' hcd' hsc' hi' (hc.step hk) hr
+    exact ih ht' hcd'.sweep hsc' hi'.sweep (hc.step hk) hr
   | @panic m0 m1 s0 hst =>
     cases hr
-    obtain ⟨hout, hin, hh1, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
-    refine ⟨fun v => ?_, hcov, hh1⟩
-    by_cases hv : v ∈ s0.spine
-    · exact hin v hv
-    · rw [hout v hv]
-      cases h : m0.st v with
-      | none => rfl
-      | some _ =>
-        have := hi.dom v; rw [h] at this
-        exact absurd (hc v (by rw [this]; rfl)) hv
+    obtain ⟨hout, hin, _, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
+    have hnone : ∀ v, m1.st v = none := by
+      intro v
+      by_cases hv : v ∈ s0.spine
+      · exact hin v hv
+      · rw [hout v hv]
+        cases h : m0.st v with
+        | none => rfl
+        | some _ =>
+          have := hi.dom v; rw [h] at this
+          exact absurd (hc v (by rw [this]; rfl)) hv
+    exact ⟨hnone, hcov.sweep, Mem.sweep_empty fun x o v h => by rw [hnone x] at h; cases h⟩
 
 /-- Type soundness: from a well-typed configuration, every reachable
     configuration is finished or can step. -/
@@ -152,12 +183,21 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
   cases ha : m'.alloc i with
   | false => rfl
   | true =>
+    -- no binding is left, so no slot: the last sweep left no block
+    have hnone : ∀ v, m'.st v = none := by
+      intro v
+      cases h : m'.st v with
+      | none => rfl
+      | some _ =>
+        have hd := hi'.dom v; rw [h] at hd
+        exact absurd (hc' v hd) (by simp [Stmt.spine])
     rcases hi'.cover i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
-    · have hd := hi'.dom o
-      unfold OwnedAt at hT
-      rw [hT] at hd
-      exact absurd (hc' o hd) (by simp [Stmt.spine])
-    · rw [hi'.heap.bpay k bl hk] at hik; cases hik
+    · unfold OwnedAt at hT; rw [hnone o] at hT; cases hT
+    · rcases Steps.ok_swept hr with rfl | ⟨m1, rfl⟩
+      · cases hk
+      · rw [Mem.sweep_empty (fun x o v h => by
+          rw [show m1.st x = m1.sweep.st x from rfl, hnone x] at h; cases h) k] at hk
+        cases hk
 
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding
     has freed every allocation too. -/
@@ -165,7 +205,7 @@ theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} 
     (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.panic m')) : ∀ i, m'.alloc i = false := by
-  obtain ⟨hnone, hcov, hh⟩ :=
+  obtain ⟨hnone, hcov, hblk⟩ :=
     reach_panic hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
   intro i
   cases ha : m'.alloc i with
@@ -174,6 +214,6 @@ theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} 
     rcases hcov i ha with ⟨o, T, hT, _⟩ | ⟨k, bl, hk, hik⟩
     · unfold OwnedAt at hT
       rw [hnone o] at hT; cases hT
-    · rw [hh.bpay k bl hk] at hik; cases hik
+    · rw [hblk k] at hk; cases hk
 
 end A2

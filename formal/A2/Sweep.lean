@@ -313,4 +313,75 @@ theorem Mem.sweep_empty {m : Mem} (h : ∀ x o v, m.st x ≠ some ⟨o, some v�
   | none => rfl
   | some bl => exact absurd (Mem.sweep_blk.mp hk).2 (hnr k)
 
+/-- Reachability from other roots, when every root that refers to a block
+    is one of them. -/
+theorem Reached.of_roots {R R' : Val → Prop} {B : Nat → Option Blk} {k : Nat} (h : Reached R B k)
+    (hR : ∀ v, R v → ∀ k', Refers B v k' → R' v) : Reached R' B k := by
+  induction h with
+  | root hv hr => exact .root (hR _ hv _ hr) hr
+  | pay _ hk hr ih => exact .pay ih hk hr
+
+/-- What a `recover` frame's store reached outside the frame, the store
+    reaches: its slots there are the frame's store's, and every block on the
+    way is kept (`CatchOK`). -/
+theorem Reached.catch {m m0 : Mem} {x : Var} {sp : List Var}
+    (hst : ∀ v, v ∉ sp → v ≠ x → m.st v = m0.st v)
+    (hb : ∀ k bl, m0.blk k = some bl → Reached (OutVals m0 x sp) m0.blk k → m.blk k = some bl)
+    {k : Nat} (h : Reached (OutVals m0 x sp) m0.blk k) : Reached m.vals m.blk k := by
+  have hrefers : ∀ {v k}, Reached (OutVals m0 x sp) m0.blk k → Refers m0.blk v k → Refers m.blk v k := by
+    intro v k hk hr
+    rcases hr with h | ⟨bl, hbl, h⟩
+    · exact Or.inl h
+    · exact Or.inr ⟨bl, hb k bl hbl hk, h⟩
+  induction h with
+  | root hv hr =>
+    obtain ⟨y, o, hy, hyx, h0⟩ := hv
+    exact .root ⟨y, o, by rw [hst y hy hyx]; exact h0⟩ (hrefers (.root ⟨y, o, hy, hyx, h0⟩ hr) hr)
+  | pay hr' hk hr ih =>
+    exact .pay ih (hb _ _ hk hr') (hrefers (.pay hr' hk hr) hr)
+
+/-- The sweep keeps what a `recover` frame returns to. -/
+theorem CatchOK.sweep {m : Mem} : ∀ {s : Stmt}, CatchOK m s → CatchOK m.sweep s
+  | .seq a _, h => CatchOK.sweep (s := a) h
+  | .scope _ k, h => CatchOK.sweep (s := k) h
+  | .scopeD _ _ k, h => CatchOK.sweep (s := k) h
+  | .rbind _ k, h => CatchOK.sweep (s := k) h
+  | .frozen _ k, h => CatchOK.sweep (s := k) h
+  | .catchR x m0 k, h => by
+    obtain ⟨h1, h2, h3, h4, h5⟩ := h
+    exact ⟨h1, h2, h3, fun k' bl hk hr => Mem.sweep_blk.mpr ⟨h4 k' bl hk hr, Reached.catch h1 h4 hr⟩,
+      CatchOK.sweep (s := k) h5⟩
+  | .skip, _ => trivial
+  | .letv .., _ => trivial
+  | .letcall .., _ => trivial
+  | .assign .., _ => trivial
+  | .ite .., _ => trivial
+  | .while .., _ => trivial
+  | .push .., _ => trivial
+  | .free .., _ => trivial
+  | .panic, _ => trivial
+  | .letrec .., _ => trivial
+  | .unpair .., _ => trivial
+  | .callc .., _ => trivial
+  | .letd .., _ => trivial
+  | .edit .., _ => trivial
+
+/-- **The sweep keeps the invariant** of a running configuration. -/
+theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweep Γ F s :=
+  { toMInv := hi.toMInv.sweep
+    nvS := hi.nvS
+    nvF := hi.nvF
+    anch := hi.anch
+    spineNd := hi.spineNd
+    spineDom := hi.spineDom
+    catchOK := hi.catchOK.sweep
+    cover := hi.cover.sweep
+    pinOut := hi.pinOut
+    pinIn := hi.pinIn
+    dtorOut := hi.dtorOut
+    dtorIn := hi.dtorIn }
+
+/-- The packages in memory are the slots', which the sweep keeps. -/
+theorem MemCodes.sweep {P : Prog} {m : Mem} (h : MemCodes P m) : MemCodes P m.sweep := h
+
 end A2

@@ -33,8 +33,8 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .frozen _ k, h => CatchOK.of_st hst hnv hb (s := k) h
   | .catchR x m0 k, h => by
     obtain ⟨h1, h2, h3, h4, h5⟩ := h
-    exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv, h4.trans hb,
-      CatchOK.of_st hst hnv hb (s := k) h5⟩
+    exact ⟨fun v hv hx => by rw [hst]; exact h1 v hv hx, h2, Nat.le_trans h3 hnv,
+      fun k' bl hk hr => hb k' bl (h4 k' bl hk hr), CatchOK.of_st hst hnv hb (s := k) h5⟩
   | .skip, _ => trivial
   | .letv .., _ => trivial
   | .letcall .., _ => trivial
